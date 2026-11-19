@@ -49,7 +49,11 @@ fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>,
     let title = crate::dialogs::filter_dialog::title_of(title);
     let key = id.to_owned();
     crate::dialogs::params::open_param(app, id, fields, fixed, move |fields: &mut DialogFields| {
-        ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields))
+        let mut params = params.clone();
+        if key == crate::dialogs::image_processor_ui::COMMAND {
+            crate::dialogs::image_processor_ui::apply_resize_gates(&mut params, fields);
+        }
+        ParamDialog::command(key.clone(), title.clone(), params).values(Bind::bound(fields))
     })
 }
 
@@ -215,11 +219,9 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
             let kept = app.session.prefs().dialogs.get(photocraft_engine::file_cmds::FIT_IMAGE).cloned().unwrap_or_default();
             let size = |key: &str| kept.get(key).and_then(Value::as_u64).filter(|v| (1..=300_000).contains(v)).and_then(|v| i64::try_from(v).ok());
             let enlarge = kept.get("dontEnlarge").and_then(Value::as_bool).unwrap_or(false);
-            plain(vec![
-                Param::new("width", tl!("Width"), ParamKind::int(Some(1), Some(300_000), size("width").unwrap_or(i64::from(w)))).not_remembered(),
-                Param::new("height", tl!("Height"), ParamKind::int(Some(1), Some(300_000), size("height").unwrap_or(i64::from(h)))).not_remembered(),
-                Param::new("dontEnlarge", tl!("Don't Enlarge"), ParamKind::bool(enlarge)).not_remembered(),
-            ])
+            let mut rows = Vec::from(crate::dialogs::fit_image_ui::rows(size("width").unwrap_or(i64::from(w)), size("height").unwrap_or(i64::from(h))));
+            rows.push(Param::new("dontEnlarge", tl!("Don't Enlarge"), ParamKind::bool(enlarge)).not_remembered());
+            plain(rows)
         }
         "file.automate.conditionalModeChange" => {
             let modes = opts(&[
@@ -391,35 +393,49 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                 "transparency",
             ),
         ]),
-        "file.scripts.imageProcessor" => plain(vec![
-            choice(
-                "source",
-                tl!("Source"),
-                opts(&[("current", tl!("Current document")), ("open", tl!("All open documents")), ("folder", tl!("Folder"))]),
-                if doc.is_some() { "current" } else { "folder" },
-            ),
-            folder("input", tl!("Input Folder"), dir.clone()).visible_when("source", "folder"),
-            Param::new("includeSubfolders", tl!("Include All Subfolders"), ParamKind::bool(false)).visible_when("source", "folder"),
-            folder("output", tl!("Output Folder"), format!("{dir}/processed")),
-            Param::section(tl!("File Type")),
-            // One section per format: the checkbox that enables it, then its own options and size.
-            Param::new("jpeg/enabled", tl!("Save as JPEG"), ParamKind::bool(true)),
-            Param::new("jpeg/quality", tl!("Quality"), ParamKind::number(Some(1.0), Some(12.0), 5.0, 1.0, 2)).enabled_when("jpeg/enabled", true),
-            Param::new("jpeg/convertToSrgb", tl!("Convert Profile to sRGB"), ParamKind::bool(false)).enabled_when("jpeg/enabled", true),
-            Param::new("jpeg/resize", tl!("Resize to Fit"), ParamKind::bool(false)).enabled_when("jpeg/enabled", true),
-            Param::new("jpeg/width", tl!("W"), ParamKind::int(Some(1), Some(30_000), 1)).enabled_when("jpeg/resize", true),
-            Param::new("jpeg/height", tl!("H"), ParamKind::int(Some(1), Some(30_000), 1)).enabled_when("jpeg/resize", true),
-            Param::new("psd/enabled", tl!("Save as PSD"), ParamKind::bool(false)),
-            Param::new("psd/maximizeCompatibility", tl!("Maximize Compatibility"), ParamKind::bool(true)).enabled_when("psd/enabled", true),
-            Param::new("psd/resize", tl!("Resize to Fit"), ParamKind::bool(false)).enabled_when("psd/enabled", true),
-            Param::new("psd/width", tl!("W"), ParamKind::int(Some(1), Some(30_000), 1)).enabled_when("psd/resize", true),
-            Param::new("psd/height", tl!("H"), ParamKind::int(Some(1), Some(30_000), 1)).enabled_when("psd/resize", true),
-            Param::new("tiff/enabled", tl!("Save as TIFF"), ParamKind::bool(false)),
-            Param::new("tiff/lzw", tl!("LZW Compression"), ParamKind::bool(false)).enabled_when("tiff/enabled", true),
-            Param::new("tiff/resize", tl!("Resize to Fit"), ParamKind::bool(false)).enabled_when("tiff/enabled", true),
-            Param::new("tiff/width", tl!("W"), ParamKind::int(Some(1), Some(30_000), 1)).enabled_when("tiff/resize", true),
-            Param::new("tiff/height", tl!("H"), ParamKind::int(Some(1), Some(30_000), 1)).enabled_when("tiff/resize", true),
-        ]),
+        "file.scripts.imageProcessor" => {
+            let mut rows = vec![
+                choice(
+                    "source",
+                    tl!("Source"),
+                    opts(&[("current", tl!("Current document")), ("open", tl!("All open documents")), ("folder", tl!("Folder"))]),
+                    if doc.is_some() { "current" } else { "folder" },
+                ),
+                folder("input", tl!("Input Folder"), dir.clone()).visible_when("source", "folder"),
+                Param::new("includeSubfolders", tl!("Include All Subfolders"), ParamKind::bool(false)).visible_when("source", "folder"),
+                folder("output", tl!("Output Folder"), format!("{dir}/processed")),
+                Param::section(tl!("File Type")),
+            ];
+            use crate::dialogs::image_processor_ui::resize_rows;
+            rows.extend([
+                Param::new("jpeg/enabled", tl!("Save as JPEG"), ParamKind::bool(true)),
+                Param::new("jpeg/quality", tl!("Quality"), ParamKind::number(Some(1.0), Some(12.0), 5.0, 1.0, 2)).enabled_when("jpeg/enabled", true),
+                Param::new("jpeg/convertToSrgb", tl!("Convert Profile to sRGB"), ParamKind::bool(false)).enabled_when("jpeg/enabled", true),
+            ]);
+            rows.extend(resize_rows("jpeg"));
+            rows.extend([
+                Param::new("psd/enabled", tl!("Save as PSD"), ParamKind::bool(false)),
+                Param::new("psd/maximizeCompatibility", tl!("Maximize Compatibility"), ParamKind::bool(true)).enabled_when("psd/enabled", true),
+            ]);
+            rows.extend(resize_rows("psd"));
+            rows.extend([
+                Param::new("tiff/enabled", tl!("Save as TIFF"), ParamKind::bool(false)),
+                Param::new("tiff/lzw", tl!("LZW Compression"), ParamKind::bool(false)).enabled_when("tiff/enabled", true),
+            ]);
+            rows.extend(resize_rows("tiff"));
+            rows.extend([
+                Param::new("png/enabled", tl!("Save as PNG"), ParamKind::bool(false)),
+                Param::new("png/convertToSrgb", tl!("Convert Profile to sRGB"), ParamKind::bool(true)).enabled_when("png/enabled", true),
+            ]);
+            rows.extend(resize_rows("png"));
+            rows.extend([
+                Param::new("webp/enabled", tl!("Save as WebP"), ParamKind::bool(false)),
+                Param::new("webp/quality", tl!("Quality"), ParamKind::number(Some(0.0), Some(12.0), 8.0, 1.0, 2)).enabled_when("webp/enabled", true),
+                Param::new("webp/convertToSrgb", tl!("Convert Profile to sRGB"), ParamKind::bool(true)).enabled_when("webp/enabled", true),
+            ]);
+            rows.extend(resize_rows("webp"));
+            plain(rows)
+        }
         "file.automate.batch" => batch_form(app, &dir),
         "select.saveSelection" | "select.loadSelection" | "image.applyImage" | "image.calculations" => channel_form(app, id),
         _ => None,

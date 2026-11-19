@@ -160,3 +160,39 @@ fn legacy_format_and_resize_parameters_still_work() {
     let png = reopen(&files[0]).unwrap();
     assert_eq!((png.size.width, png.size.height), (20, 10));
 }
+
+#[test]
+fn png_and_webp_write_alongside_the_original_formats() {
+    let output = tempfile::tempdir().unwrap();
+    let mut s = Session::new();
+    document(&mut s, "All formats", 8).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let result = s
+        .execute(
+            COMMAND,
+            json!({
+                "source": "current", "output": output.path(),
+                "jpeg": {}, "psd": {}, "tiff": {},
+                "png": {"resize": true, "width": 20, "height": 20},
+                "webp": {"quality": 0, "resize": true, "width": 10, "height": 10}
+            }),
+        )
+        .unwrap();
+    assert_eq!(result["errors"], json!([]), "{result}");
+    for (path, (ext, width, height)) in
+        paths(&result).unwrap().into_iter().zip([("jpg", 40, 20), ("psd", 40, 20), ("tif", 40, 20), ("png", 20, 10), ("webp", 10, 5)])
+    {
+        assert_eq!(path.extension().and_then(|ext| ext.to_str()), Some(ext));
+        let doc = reopen(&path).unwrap();
+        assert_eq!((doc.size.width, doc.size.height), (width, height));
+    }
+    assert_eq!(paths(&result).unwrap().len(), 5);
+    assert!(Arc::ptr_eq(&s.active().unwrap().doc, &before));
+    for extra in [json!({"webp": {"quality": 13}}), json!({"png": {"enabled": false}, "webp": false})] {
+        let mut params = extra;
+        params["source"] = json!("current");
+        params["output"] = json!(output.path().join("unused"));
+        assert!(s.execute(COMMAND, params).is_err());
+        assert!(!output.path().join("unused").exists());
+    }
+}
