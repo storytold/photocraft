@@ -929,13 +929,11 @@ impl PresetStore {
             }
         }
         // Index: group order and deleted built-ins.
-        let hidden: Vec<String> =
-            builtin_names().iter().filter(|n| !presets.iter().any(|p| p.name.eq_ignore_ascii_case(n))).map(|n| n.to_string()).collect();
+        let hidden: Vec<String> = builtin_names().iter().filter(|n| !presets.iter().any(|p| p.name.eq_ignore_ascii_case(n))).map(|n| n.to_string()).collect();
         let groups: Vec<String> = files.into_iter().filter(|f| self.groups.contains_key(f)).collect();
         // The full order is only saved once it differs from the default (built-ins, then the rest).
         let order: Vec<String> = presets.iter().map(|p| p.name.clone()).collect();
-        let default_order: Vec<String> =
-            presets.iter().filter(|p| p.builtin).chain(presets.iter().filter(|p| !p.builtin)).map(|p| p.name.clone()).collect();
+        let default_order: Vec<String> = presets.iter().filter(|p| p.builtin).chain(presets.iter().filter(|p| !p.builtin)).map(|p| p.name.clone()).collect();
         let builtins_in_order = {
             let names = builtin_names();
             let mut it = presets.iter().filter(|p| p.builtin).map(|p| names.iter().position(|n| *n == p.name));
@@ -1143,29 +1141,25 @@ impl Session {
                 }
             }
         }
-        let order_changes = if order.is_empty() {
-            false
-        } else {
-            let pos: HashMap<String, usize> = order.iter().enumerate().map(|(i, name)| (name.to_lowercase(), i)).collect();
-            !self.tools.presets.iter().map(|p| pos.get(&p.name.to_lowercase()).copied().unwrap_or(usize::MAX)).is_sorted()
-        };
-        let changes_presets = order_changes
-            || self.tools.presets.iter().any(|p| p.builtin && hidden_builtins.iter().any(|h| h.eq_ignore_ascii_case(&p.name)))
-            || presets.iter().any(|p| self.tools.presets.iter().find(|x| x.name.eq_ignore_ascii_case(&p.name)).is_none_or(|x| x.builtin && x != p));
-        if changes_presets {
-            let lib = std::sync::Arc::make_mut(&mut self.tools.presets);
-            lib.retain(|p| !(p.builtin && hidden_builtins.iter().any(|h| h.eq_ignore_ascii_case(&p.name))));
-            for p in presets {
-                match lib.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&p.name)) {
-                    Some(x) if x.builtin => *x = p,
-                    Some(_) => {}
-                    None => lib.push(p),
-                }
+        // The list stays shared (`make_mut` is taken at the first write) when the store changes nothing.
+        let hide = |p: &BrushPreset| p.builtin && hidden_builtins.iter().any(|h| h.eq_ignore_ascii_case(&p.name));
+        if self.tools.presets.iter().any(hide) {
+            std::sync::Arc::make_mut(&mut self.tools.presets).retain(|p| !hide(p));
+        }
+        for p in presets {
+            let found = self.tools.presets.iter().position(|x| x.name.eq_ignore_ascii_case(&p.name));
+            match found {
+                Some(i) if self.tools.presets[i].builtin && self.tools.presets[i] != p => std::sync::Arc::make_mut(&mut self.tools.presets)[i] = p,
+                Some(_) => {}
+                None => std::sync::Arc::make_mut(&mut self.tools.presets).push(p),
             }
-            // The saved panel order (stable: presets it doesn't name keep their order, at the end).
-            if !order.is_empty() {
-                let pos: HashMap<String, usize> = order.iter().enumerate().map(|(i, n)| (n.to_lowercase(), i)).collect();
-                lib.sort_by_key(|p| pos.get(&p.name.to_lowercase()).copied().unwrap_or(usize::MAX));
+        }
+        // The saved panel order (stable: presets it doesn't name keep their order, at the end).
+        if !order.is_empty() {
+            let pos: HashMap<String, usize> = order.iter().enumerate().map(|(i, n)| (n.to_lowercase(), i)).collect();
+            let key = |p: &BrushPreset| pos.get(&p.name.to_lowercase()).copied().unwrap_or(usize::MAX);
+            if !self.tools.presets.iter().map(key).is_sorted() {
+                std::sync::Arc::make_mut(&mut self.tools.presets).sort_by_key(key);
             }
         }
         self.preset_store = Some(store);
