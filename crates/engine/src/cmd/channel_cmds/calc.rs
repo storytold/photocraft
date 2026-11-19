@@ -59,6 +59,8 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
             return Ok(());
         }
         let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
+        // Lock Transparent Pixels works as Preserve Transparency, ticked or not.
+        let preserve = preserve || doc.effective_locks(id).transparency;
         let fmt = doc.pixel_format();
         // A fully locked or pixel-locked layer still takes the image, as in the reference
         // application, and keeps its transparency as with Preserve transparency. A lock that comes
