@@ -76,6 +76,7 @@ fn set_expanded(s: &mut Session, p: &Value) -> Result<Value> {
             _ => return Err(EngineError::NoLayer(id)),
         }
     };
+    st.bump_view_revision();
     Ok(json!({"expanded": expanded, "groups": changed}))
 }
 
@@ -119,7 +120,10 @@ mod tests {
         st.saved_revision = st.revision;
         let undo_steps = s.active().unwrap().history.entries().len();
         assert!(expanded(&s, inner) && expanded(&s, outer));
+        let (revision, view) = s.active().map(|st| (st.revision, st.view_revision)).unwrap();
         assert_eq!(s.execute(ID, json!({"layer": inner})).unwrap()["expanded"], false);
+        let st = s.active().unwrap();
+        assert!(st.revision > revision && st.revision - st.view_revision == revision - view, "a view revision: the Layers panel's rows follow it");
         assert!(!expanded(&s, inner) && expanded(&s, outer));
         assert_eq!(s.active().unwrap().history.entries().len(), undo_steps, "no history step");
         assert_eq!(s.active().unwrap().saved_revision, s.active().unwrap().revision, "still clean");

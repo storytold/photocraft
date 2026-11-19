@@ -316,6 +316,17 @@ pub struct Effects {
 /// this up front; `photocraft-format` refuses to save deeper trees.
 pub const MAX_GROUP_DEPTH: usize = 100;
 
+thread_local! {
+    static WALKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times [`Document::walk`] ran on this thread. Count trials read it: a frame that
+/// changes nothing walks no document. Per thread, so tests running beside each other don't count
+/// each other's walks.
+pub fn walks() -> u64 {
+    WALKS.with(std::cell::Cell::get)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Group {
     pub children: Vec<Layer>,
@@ -391,6 +402,43 @@ impl Fill {
             Fill::Pattern { .. } => {}
         }
         self
+    }
+
+    /// A hash of every field: equal fills give equal numbers, so a view keys on it instead of
+    /// comparing or formatting the fill. The patterns name every field, so a new field fails to
+    /// compile here until it is hashed.
+    pub fn fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        let color = |h: &mut std::collections::hash_map::DefaultHasher, c: &Color| {
+            let Color { mode, c, alpha } = c;
+            std::mem::discriminant(mode).hash(h);
+            c.map(f32::to_bits).hash(h);
+            alpha.to_bits().hash(h);
+        };
+        std::mem::discriminant(self).hash(&mut h);
+        match self {
+            Fill::Solid(c) => color(&mut h, c),
+            Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align } => {
+                stops.len().hash(&mut h);
+                for (at, c) in stops {
+                    at.to_bits().hash(&mut h);
+                    color(&mut h, c);
+                }
+                [*angle, *scale, offset.0, offset.1].map(f32::to_bits).hash(&mut h);
+                std::mem::discriminant(style).hash(&mut h);
+                (reverse, dither, align).hash(&mut h);
+                opacity_stops.len().hash(&mut h);
+                opacity_stops.iter().for_each(|(a, b)| [a.to_bits(), b.to_bits()].hash(&mut h));
+                midpoints.len().hash(&mut h);
+                midpoints.iter().for_each(|m| m.to_bits().hash(&mut h));
+            }
+            Fill::Pattern { name, scale, id, angle, link, phase } => {
+                (name, id, link).hash(&mut h);
+                [*scale, *angle, phase.0, phase.1].map(f32::to_bits).hash(&mut h);
+            }
+        }
+        h.finish()
     }
 }
 
@@ -1140,8 +1188,10 @@ impl Document {
         health
     }
 
-    /// Depth-first walk yielding `(path, depth, layer)` bottom-to-top.
+    /// Depth-first walk yielding `(path, depth, layer)` bottom-to-top. Each call counts in
+    /// [`walks`].
     pub fn walk(&self) -> Vec<(LayerPath, usize, &Layer)> {
+        WALKS.with(|n| n.set(n.get() + 1));
         fn rec<'a>(layers: &'a [Layer], prefix: &mut LayerPath, out: &mut Vec<(LayerPath, usize, &'a Layer)>) {
             for (i, l) in layers.iter().enumerate() {
                 prefix.push(i);
@@ -1157,8 +1207,9 @@ impl Document {
         out
     }
 
+    /// Every layer, nested ones included, counted from the layer index.
     pub fn layer_count(&self) -> usize {
-        self.walk().len()
+        self.layers.index().len()
     }
 
     pub fn path_of(&self, id: LayerId) -> Option<LayerPath> {

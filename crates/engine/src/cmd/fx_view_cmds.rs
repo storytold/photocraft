@@ -64,6 +64,7 @@ fn set_expanded(s: &mut Session, p: &Value) -> Result<Value> {
     if !expanded {
         st.fx_collapsed.extend(targets.iter().copied());
     }
+    st.bump_view_revision();
     Ok(json!({"expanded": expanded, "layers": targets.len()}))
 }
 
@@ -102,7 +103,8 @@ mod tests {
         !s.active().unwrap().fx_collapsed.contains(&LayerId(id))
     }
 
-    /// Smart Filters hide and show with the layer's effects, as view state: no document edit, revision or history step.
+    /// Smart Filters hide and show with the layer's effects, as view state: no document edit or history step, and only
+    /// a view revision, which the Layers panel's rows follow.
     #[test]
     fn smart_filters_share_the_effects_disclosure_without_an_edit() {
         let (mut s, a, b) = session();
@@ -111,13 +113,15 @@ mod tests {
         s.execute("image.adjustments.invert", json!({})).unwrap();
         let smart = s.active().unwrap().active_layer.unwrap();
         let doc = s.active().unwrap().doc.clone();
-        let revision = s.active().unwrap().revision;
+        let edits = |s: &Session| s.active().map(|st| (st.revision, st.revision - st.view_revision)).unwrap();
+        let before = edits(&s);
         let steps = s.active().unwrap().history.past_len();
         s.execute(ID, json!({"layer": smart.0, "expanded": false})).unwrap();
         assert!(!open(&s, smart.0));
         assert!(open(&s, b));
         assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
-        assert_eq!(s.active().unwrap().revision, revision);
+        let after = edits(&s);
+        assert!(after.0 > before.0 && after.1 == before.1, "a view revision only: {before:?} -> {after:?}");
         assert_eq!(s.active().unwrap().history.past_len(), steps);
         s.execute(ID, json!({"expanded": false, "all": true})).unwrap();
         assert!(!open(&s, smart.0) && !open(&s, b));

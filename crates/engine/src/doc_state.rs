@@ -170,6 +170,14 @@ impl DocState {
             self.saved_revision = self.revision;
         }
     }
+    /// Move to the next revision for a view-only change (a group opened, an effects list
+    /// collapsed): readers keyed on the revision follow it, pixel caches ignore it through
+    /// `view_revision`, and a clean document stays clean.
+    pub(crate) fn bump_view_revision(&mut self) {
+        self.view_revision += 1;
+        self.bump_revision(self.revision == self.saved_revision);
+        self.last_damage = Some(photocraft_geom::Rect::EMPTY);
+    }
     /// The targeted layers, as history stores them with each state.
     pub(crate) fn layer_target(&self) -> LayerTarget {
         LayerTarget { active: self.active_layer, selected: self.selected_layers.clone() }
