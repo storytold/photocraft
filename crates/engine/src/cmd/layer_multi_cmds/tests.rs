@@ -590,7 +590,7 @@ fn selected_layers_preserve_nested_order_and_stale_state() {
     if let LayerContent::Group(g) = &mut group.content {
         g.expanded = false;
     }
-    doc.layers = vec![a, group, d];
+    doc.layers = vec![a, group, d].into();
     let mut st = DocState::new(doc, None);
     let stale = LayerId(u64::MAX);
     for (active, raw, expected) in [
