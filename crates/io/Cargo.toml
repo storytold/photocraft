@@ -29,6 +29,7 @@ photocraft-doc = { workspace = true }
 photocraft-compose = { workspace = true }
 photocraft-algo = { workspace = true }
 craft-psd = { workspace = true }
+craft = { workspace = true, features = ["imaging"] }
 photocraft-codecs = { workspace = true }
 photocraft-formats = { workspace = true }
 photocraft-raw = { workspace = true }
