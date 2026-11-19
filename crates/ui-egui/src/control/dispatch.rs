@@ -169,7 +169,15 @@ fn execute_command(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRe
             result
         });
     }
-    run_waiting(app, wait, |app| crate::menus::invoke(app, ctx, id, params))
+    // A control-channel menu click is an automation client, not the person at the desktop:
+    // while it runs, its Batch keeps Stop For Errors ending at the first failure instead of
+    // parking on a question the waiting control reply cannot answer (#13667).
+    run_waiting(app, wait, |app| {
+        let previous = std::mem::replace(&mut app.control_invoked, true);
+        let result = crate::menus::invoke(app, ctx, id, params);
+        app.control_invoked = previous;
+        result
+    })
 }
 
 fn jobs_cancel(app: &mut PhotocraftApp, p: &Value) -> Reply {
