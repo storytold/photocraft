@@ -24,6 +24,8 @@ use crate::commands::CommandSpec;
 use crate::{DocState, EngineError, Result, Session};
 
 #[cfg(test)]
+mod calculations_enabled_tests;
+#[cfg(test)]
 mod tests;
 
 // ---------------------------------------------------------------------------------------------
@@ -58,6 +60,15 @@ fn can_split(s: &Session) -> std::result::Result<(), String> {
 fn can_merge(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
     if mergeable(s).len() >= 3 { Ok(()) } else { Err("Merge Channels needs at least three open grayscale documents of the same size".into()) }
+}
+fn can_calculate(s: &Session) -> std::result::Result<(), String> {
+    let d = s.active().ok_or("no document open")?;
+    if d.active_layer.and_then(|id| d.doc.layer(id)).is_some_and(|l| l.frame.is_none() && matches!(&l.content, LayerContent::Group(g) if g.artboard.is_none()))
+    {
+        Err("Calculations is not available for a layer group".into())
+    } else {
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -177,7 +188,7 @@ pub fn specs() -> Vec<CommandSpec> {
             ["Image"],
             None,
             r##"{"source1":{"document","layer","channel","invert"},"source2":{…},"blending":"multiply|…"="multiply","opacity":0..100=100,"scale":1..2=1,"offset":-255..255=0,"mask":{…}?,"result":"newChannel|newDocument|selection"="newChannel","name":str?} (source channel: {"targeted":true} for one targeted colour/alpha, {"name":text} for a literal alpha name, {"color":text} for a colour component; source layer: {"name":text} for a literal layer name)"##,
-            has_doc,
+            can_calculate,
             calculations
         ),
         spec!(
