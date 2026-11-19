@@ -1721,7 +1721,7 @@ impl Session {
         // authorization, validation, floating-selection and admission failures.
         let live_commit = self.live_commit.take();
         self.sync_scratch_state();
-        let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        let spec = crate::registry::spec(id)?;
         // Params are named fields: anything but an object (or null, meaning none) is a caller
         // mistake, not "use every default".
         if !(params.is_object() || params.is_null()) {
