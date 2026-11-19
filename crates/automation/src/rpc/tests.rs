@@ -1186,3 +1186,39 @@ fn doc_place_forwards_high_memory_approval() {
     drop(t);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn doc_close_rejects_non_object_params_without_closing_documents() {
+    let h = session();
+    for _ in 0..2 {
+        assert_eq!(respond(&h, r#"{"method":"doc.new","params":{"width":8,"height":8}}"#)["ok"], true);
+    }
+    let before = h.lock().unwrap().session_list();
+    for params in [json!([]), json!([0]), json!(true), json!(false), json!(1), json!("0")] {
+        let reply = respond(&h, &json!({"method": "doc.close", "params": params}).to_string());
+        assert_eq!(reply["ok"], false, "{params}: {reply}");
+        assert!(reply["error"].as_str().unwrap().contains("doc.close params must be an object"), "{reply}");
+        assert_eq!(h.lock().unwrap().session_list(), before, "invalid params {params} changed the session");
+    }
+
+    // Missing/null params and indices close the active document; an explicit index selects its target.
+    for (params, remaining_index) in
+        [(None, 0), (Some(Value::Null), 0), (Some(json!({})), 0), (Some(json!({"index": null})), 0), (Some(json!({"index": 0})), 1)]
+    {
+        let h = session();
+        for width in [8, 16] {
+            let request = json!({"method": "doc.new", "params": {"width": width, "height": 8}});
+            assert_eq!(respond(&h, &request.to_string())["ok"], true);
+        }
+        let mut expected = h.lock().unwrap().session_list()["documents"][remaining_index].clone();
+        expected["index"] = json!(0);
+        let mut request = json!({"method": "doc.close"});
+        if let Some(params) = params {
+            request["params"] = params;
+        }
+        let reply = respond(&h, &request.to_string());
+        assert_eq!(reply["ok"], true, "{request}: {reply}");
+        assert_eq!(reply["result"]["documents"], json!([expected]), "{request}: {reply}");
+        assert_eq!(reply["result"]["active"], 0, "{reply}");
+    }
+}
