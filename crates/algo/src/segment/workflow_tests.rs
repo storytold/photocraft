@@ -82,16 +82,16 @@ fn quick_selection_workflow_release_comparison() {
 
 #[test]
 fn quick_selection_preserves_textures_low_contrast_and_thin_features() {
-    let (w, h) = (360usize, 280usize);
+    let (w, h) = (180usize, 140usize);
     let canvas = Rect::new(0, 0, w as i32, h as i32);
     for kind in 0..6 {
         let img = RgbImage::from_fn(w, h, |x, y| {
             let inside = if kind == 2 {
-                (x as f32 - 180.0).hypot(y as f32 - 140.0) < 72.0
+                (x as f32 - 90.0).hypot(y as f32 - 70.0) < 36.0
             } else if kind == 3 {
-                y > 130 && y < 145
+                y > 65 && y < 73
             } else {
-                x > 60 && x < 300 && y > 60 && y < 220
+                x > 30 && x < 150 && y > 30 && y < 110
             };
             let t = ((x * 23 + y * 19) % 101) as f32 / 100.0;
             match kind {
@@ -102,7 +102,7 @@ fn quick_selection_preserves_textures_low_contrast_and_thin_features() {
                         [0.4, 0.3 + t * 0.1, 0.2]
                     }
                 }
-                1 => [0.4 + x as f32 / 1800.0, 0.3 + y as f32 / 1400.0, t * 0.02],
+                1 => [0.4 + x as f32 / 900.0, 0.3 + y as f32 / 700.0, t * 0.02],
                 4 => [t, ((x * 7 + y * 31) % 79) as f32 / 78.0, 0.4],
                 5 => [0.4; 3],
                 _ => {
@@ -115,8 +115,9 @@ fn quick_selection_preserves_textures_low_contrast_and_thin_features() {
             }
         });
         let sampler = ImageSampler { img: &img, origin: (0, 0) };
-        for (points, brush) in [(vec![(180.0, 140.0)], 12.0), (vec![(90.0, 140.0), (270.0, 140.0)], 40.0), (vec![(1.0, 1.0), (160.0, 130.0)], 64.0)] {
-            for direct_px in [10_000, 300_000] {
+        for (points, brush) in [(vec![(90.0, 70.0)], 6.0), (vec![(45.0, 70.0), (135.0, 70.0)], 20.0), (vec![(1.0, 1.0), (80.0, 65.0)], 32.0)] {
+            // Scale the coarse-cut threshold with the canvas area; the second case stays direct.
+            for direct_px in [2_500, 300_000] {
                 let tune = quick::Tuning { direct_px, ..quick::Tuning::default() };
                 let old = quick::quick_select_using::<false>(&sampler, canvas, &points, brush, &tune);
                 let new = quick::quick_select_using::<true>(&sampler, canvas, &points, brush, &tune);
