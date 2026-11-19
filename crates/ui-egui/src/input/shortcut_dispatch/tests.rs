@@ -376,17 +376,18 @@ fn every_kind_of_shortcut_dispatches_from_where_focus_usually_is() {
             }
         }
         // Tool letters from the tools panel tooltips ("Brush Tool  (B)"): a letter of one tool and a letter its group
-        // shares take different picks (`pick_tool`); the table checks every letter's tool.
-        if !typing {
-            let shared = |t: &Tool| Tool::ALL.iter().filter(|o| o.key() == t.key()).count() > 1;
-            let one = Tool::ALL.into_iter().find(|t| t.key() != '\0' && !shared(t));
-            let many = Tool::ALL.into_iter().find(|t| t.key() != '\0' && shared(t));
-            for t in one.into_iter().chain(many) {
-                h.state_mut().ui.tool = if t.key() == 'H' { Tool::Move } else { Tool::Hand };
-                press_in_one_frame(&mut h, &t.key().to_string());
-                if h.state().ui.tool.key() != t.key() {
-                    failures.push(format!("{place:?}: tool key {} left {:?}", t.key(), h.state().ui.tool));
-                }
+        // shares take different picks (`pick_tool`); the table checks every letter's tool. In a focused text field the
+        // letter is typed and the tool stays.
+        let shared = |t: &Tool| Tool::ALL.iter().filter(|o| o.key() == t.key()).count() > 1;
+        let one = Tool::ALL.into_iter().find(|t| t.key() != '\0' && !shared(t));
+        let many = Tool::ALL.into_iter().find(|t| t.key() != '\0' && shared(t));
+        for t in one.into_iter().chain(many) {
+            let start = if t.key() == 'H' { Tool::Move } else { Tool::Hand };
+            h.state_mut().ui.tool = start;
+            press_in_one_frame(&mut h, &t.key().to_string());
+            let want = if typing { start } else { t };
+            if h.state().ui.tool.key() != want.key() {
+                failures.push(format!("{place:?}: tool key {} left {:?}, expected a {} tool", t.key(), h.state().ui.tool, want.key()));
             }
         }
     }
