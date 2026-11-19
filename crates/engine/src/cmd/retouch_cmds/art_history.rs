@@ -74,7 +74,7 @@ fn points(p: &Value) -> Result<Vec<[f32; 2]>> {
 
 fn style_of(p: &Value) -> Result<Style> {
     match p.get("style") {
-        None | Some(Value::Null) => Ok(Style::TightMedium),
+        None | Some(Value::Null) => Ok(Style::TightShort),
         Some(v) => {
             let Some(s) = v.as_str() else {
                 return Err(err("unknown Art History style"));
@@ -204,7 +204,8 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let hardness = ranged(p, "hardness", s.tools.brush.hardness * 100.0, 0.0, 100.0)? / 100.0;
     let opacity = ranged(p, "opacity", 100.0, 0.0, 100.0)? / 100.0;
     let flow = ranged(p, "flow", 100.0, 0.0, 100.0)? / 100.0;
-    let area = ranged(p, "area", 50.0, 0.0, 100.0)?;
+    // Area takes 0..500 px, as the reference's field does (#12630).
+    let area = ranged(p, "area", 50.0, 0.0, 500.0)?;
     // Percent of the channel range; 0 (paint everywhere) is the default, as in Photoshop.
     let tolerance = ranged(p, "tolerance", 0.0, 0.0, 100.0)? / 100.0;
     let style = style_of(p)?;
