@@ -48,7 +48,9 @@ impl Host for LinkHost {
         match self.recv() {
             Ok(ToHost::Executed { result }) => result.map_err(HostError),
             Ok(_) => Err(HostError("internal error: the app answered a command with something else".into())),
-            Err(_) => Err(HostError("the app closed the run".into())),
+            // The transport's own reason: a closed channel says "the app closed the run", and a
+            // browser answer the Worker refuses says why.
+            Err(e) => Err(HostError(e)),
         }
     }
 
@@ -67,7 +69,7 @@ impl Host for LinkHost {
         Some(match self.recv() {
             Ok(ToHost::Dialog { answer }) => Ok(answer),
             Ok(_) => Err(HostError("internal error: the app answered a dialog with something else".into())),
-            Err(_) => Err(HostError("the app closed the run".into())),
+            Err(e) => Err(HostError(e)),
         })
     }
 
@@ -96,9 +98,38 @@ pub(crate) fn run(link: Rc<RefCell<dyn Link>>, source: &str, app_name: Option<St
                 match link.recv() {
                     Ok(ToHost::Dialog { answer }) => runner.answer(answer)?,
                     Ok(_) => return Err("internal error: the app answered a dialog with something else".into()),
-                    Err(_) => return Err("the app closed the run".into()),
+                    Err(e) => return Err(e),
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A link whose answers can't be read, for its own reason.
+    struct Unreadable;
+
+    impl Link for Unreadable {
+        fn send(&mut self, _: &FromHost) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn recv(&mut self) -> Result<ToHost, String> {
+            Err("the answer holds more values than a script reads".into())
+        }
+    }
+
+    /// The transport's reason reaches the script; it isn't turned into "the app closed the run".
+    #[test]
+    fn a_receive_error_keeps_the_transports_reason() {
+        let link: Rc<RefCell<dyn Link>> = Rc::new(RefCell::new(Unreadable));
+        let mut host = LinkHost { link };
+        let err = host.execute("session.inspect", serde_json::json!({})).unwrap_err();
+        assert_eq!(err.0, "the answer holds more values than a script reads");
+        let Some(Err(err)) = host.modal(ModalKind::Alert, &serde_json::json!(["x"])) else { panic!("no answer") };
+        assert_eq!(err.0, "the answer holds more values than a script reads");
     }
 }

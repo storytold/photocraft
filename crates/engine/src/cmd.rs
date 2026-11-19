@@ -545,7 +545,7 @@ fn build() -> Vec<CommandSpec> {
             "Layer…",
             ["Layer", "New"],
             Some("Cmd+Shift+N"),
-            r##"{"name":str?,"clipToPrevious":bool=false (Use Previous Layer to Create Clipping Mask; inside a clip group the layer joins it anyway),"color":"none|red|orange|yellow|green|seafoam|blue|indigo|magenta|fuchsia|violet|gray"="none","mode":"Normal|Multiply|…"="Normal","opacity":0..1=1,"fillNeutral":bool=false (fill with the mode's neutral color: modes without one are an error),"position":"above|below"="above" (below: the Layers panel's Cmd/Ctrl-click; never under the Background)} (above the active layer, or the top layer inside it when it is an open group)"##,
+            r##"{"name":str?,"clipToPrevious":bool=false (Use Previous Layer to Create Clipping Mask; inside a clip group the layer joins it anyway),"color":"none|red|orange|yellow|green|seafoam|blue|indigo|magenta|fuchsia|violet|gray"="none","mode":"Normal|Multiply|…"="Normal","opacity":0..1=1,"fillNeutral":bool=false (fill with the mode's neutral color: modes without one are an error),"position":"above|below"="above" (below: the Layers panel's Cmd/Ctrl-click; never under the Background),"group":id? (the top layer inside this group, open or not; not with position)} (above the active layer, or the top layer inside it when it is an open group)"##,
             has_doc,
             crate::new_layer::run
         ),
@@ -554,18 +554,32 @@ fn build() -> Vec<CommandSpec> {
             "Group…",
             ["Layer", "New"],
             None,
-            r##"{"name":text?,"color":"none|red|orange|yellow|green|seafoam|blue|indigo|magenta|fuchsia|violet|gray"="none","mode":str="passThrough" (blend mode),"opacity":0..100=100 (percent),"position":"above|below"="above" (below: the Layers panel's Cmd/Ctrl-click; never under the Background)} (above the active layer, or inside it when it is an open group; clipped when it lands inside a clipping mask)"##,
+            r##"{"name":text?,"color":"none|red|orange|yellow|green|seafoam|blue|indigo|magenta|fuchsia|violet|gray"="none","mode":str="passThrough" (blend mode),"opacity":0..100=100 (percent),"position":"above|below"="above" (below: the Layers panel's Cmd/Ctrl-click; never under the Background),"group":id? (the top layer inside this group, open or not; not with position)} (above the active layer, or inside it when it is an open group; clipped when it lands inside a clipping mask)"##,
             has_doc,
             |s, p| {
-                let opts = crate::group_options::GroupOptions::parse("layer.new.group", p)?;
-                let below = crate::group_options::below("layer.new.group", p)?;
-                let place = if below { crate::layer_place::Place::Below } else { crate::layer_place::Place::Auto };
+                const CMD: &str = "layer.new.group";
+                let opts = crate::group_options::GroupOptions::parse(CMD, p)?;
+                let below = crate::group_options::below(CMD, p)?;
+                let into = crate::new_layer::group_param(CMD, p)?;
+                if into.is_some() && below {
+                    return Err(EngineError::BadParams { cmd: CMD.into(), msg: "give `group` or `position`, not both".into() });
+                }
+                let place = match (into, below) {
+                    (Some(_), _) => crate::layer_place::Place::Into,
+                    (None, true) => crate::layer_place::Place::Below,
+                    (None, false) => crate::layer_place::Place::Auto,
+                };
                 let id = s.edit("New Group", |doc, active| {
                     let name = opts.name.clone().unwrap_or_else(|| doc.next_layer_name("Group"));
                     let mut group = Layer::group(name, vec![]);
                     opts.apply(&mut group);
+                    // Checked inside the edit, so the group can't go away between the check and
+                    // the insert.
+                    if let Some(g) = into {
+                        crate::layer_place::check_into(doc, g, &group).map_err(|msg| EngineError::BadParams { cmd: CMD.into(), msg })?;
+                    }
                     let bg = crate::background_cmds::background_id(doc);
-                    let id = crate::layer_place::insert_new(doc, *active, group, place);
+                    let id = crate::layer_place::insert_new(doc, into.or(*active), group, place);
                     crate::background_cmds::keep_background_at_bottom(bg, doc)?;
                     *active = Some(id);
                     Ok(id)

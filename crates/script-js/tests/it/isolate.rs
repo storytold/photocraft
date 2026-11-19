@@ -480,15 +480,22 @@ fn frame(v: &Value) -> Vec<u8> {
 #[cfg(unix)]
 #[test]
 fn an_untrusted_host_cannot_reach_other_commands_or_oversize_the_app() {
-    for (name, bytes) in [
-        ("other command", frame(&json!({"type": "execute", "id": "file.close", "params": {}}))),
-        ("own history key", frame(&json!({"type": "execute", "id": "session.inspect", "params": {"coalesce": "someone-else"}}))),
-        ("oversize", vec![0xFF, 0xFF, 0xFF, 0x7F]),
-        ("malformed", frame(&json!({"type": "format_disk"}))),
+    for (name, bytes, why) in [
+        // Not in the script command table: refused by its id, whatever its params.
+        ("other command", frame(&json!({"type": "execute", "id": "file.revert", "params": {}})), Some("is not available to scripts")),
+        // In the table, with params it doesn't take.
+        ("bad params", frame(&json!({"type": "execute", "id": "file.close", "params": {}})), None),
+        ("own history key", frame(&json!({"type": "execute", "id": "session.inspect", "params": {"coalesce": "someone-else"}})), None),
+        ("oversize", vec![0xFF, 0xFF, 0xFF, 0x7F], None),
+        ("malformed", frame(&json!({"type": "format_disk"})), None),
     ] {
         let seen = rogue(&bytes);
         report(name, &seen);
-        assert_eq!(failure(&seen).kind, FailureKind::HostViolation, "{name}");
+        let f = failure(&seen);
+        assert_eq!(f.kind, FailureKind::HostViolation, "{name}");
+        if let Some(why) = why {
+            assert!(f.message.contains(why), "{name}: {}", f.message);
+        }
         assert!(seen.elapsed < Duration::from_secs(8), "{name}: {:?}", seen.elapsed);
     }
 }

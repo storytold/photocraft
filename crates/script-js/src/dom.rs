@@ -481,14 +481,14 @@ fn coll_get_by_name(_: &JsValue, args: &[JsValue], c: &Coll, ctx: &mut Context) 
 fn coll_add(_: &JsValue, _: &[JsValue], c: &Coll, ctx: &mut Context) -> JsResult<JsValue> {
     let doc = coll_doc(c);
     let id = if c.which == SETS { "layer.new.group" } else { "layer.new.layer" };
-    let made = edit(ctx, doc, id, json!({}))?;
+    // A group's collection: made inside that group in the same edit, so a group deleted
+    // meanwhile is an error that leaves the document as it was.
+    let params = if c.parent == u64::MAX { json!({}) } else { json!({ "group": c.parent }) };
+    let made = edit(ctx, doc, id, params)?;
     let new = match made["layer"].as_u64() {
         Some(l) => l,
         None => inspect(ctx, doc)?["activeLayer"].as_u64().ok_or_else(|| error("the new layer was not reported"))?,
     };
-    if c.parent != u64::MAX {
-        edit(ctx, doc, "layer.moveTo", json!({ "layer": new, "target": c.parent, "position": "into" }))?;
-    }
     // The document's own collections add beside the active layer, as Photoshop's do: inside
     // the active layer's group when it is in one (scripts move it out with `move` if they want).
     Ok(layer_object(ctx, doc, new)?.into())

@@ -33,18 +33,32 @@ enum Act {
 struct Log {
     starts: Rc<RefCell<Vec<ScriptStart>>>,
     answers: Rc<RefCell<Vec<Value>>>,
-    cancelled: Rc<Cell<bool>>,
+    /// How many times a run was cancelled.
+    cancels: Rc<Cell<usize>>,
+    /// The latest run's own stop flag, for a test to end that run as a dying host would.
+    latest: Rc<RefCell<Option<Rc<Cell<bool>>>>>,
+}
+
+impl Log {
+    /// End the latest run on its next pump, as a host that died would.
+    fn end_latest(&self) {
+        if let Some(stopped) = self.latest.borrow().as_ref() {
+            stopped.set(true);
+        }
+    }
 }
 
 struct Fake {
     acts: VecDeque<Act>,
     waiting: bool,
     log: Log,
+    /// This run's own: a cancelled run doesn't end the next one.
+    stopped: Rc<Cell<bool>>,
 }
 
 impl ScriptRun for Fake {
     fn pump(&mut self, commands: &mut dyn ScriptCommands, _: Duration) -> Vec<ScriptEvent> {
-        if self.log.cancelled.get() {
+        if self.stopped.get() {
             return vec![ScriptEvent::Finished(Err("The script was cancelled.".into()))];
         }
         let mut out = Vec::new();
@@ -85,7 +99,8 @@ impl ScriptRun for Fake {
     }
 
     fn cancel(&mut self) {
-        self.log.cancelled.set(true);
+        self.stopped.set(true);
+        self.log.cancels.set(self.log.cancels.get() + 1);
     }
 }
 
@@ -95,7 +110,9 @@ fn service(programs: Vec<Vec<Act>>, log: &Log) -> StartScriptFn {
     let log = log.clone();
     Box::new(move |start| {
         log.starts.borrow_mut().push(start);
-        Ok(Box::new(Fake { acts: programs.pop_front().unwrap_or_default().into(), waiting: false, log: log.clone() }) as Box<dyn ScriptRun>)
+        let stopped = Rc::new(Cell::new(false));
+        *log.latest.borrow_mut() = Some(stopped.clone());
+        Ok(Box::new(Fake { acts: programs.pop_front().unwrap_or_default().into(), waiting: false, log: log.clone(), stopped }) as Box<dyn ScriptRun>)
     })
 }
 
@@ -299,7 +316,6 @@ fn a_file_picker_answered_after_its_run_stopped_is_dropped() {
     cancel(&mut app);
     settle(&mut app);
     assert!(!app.scripts.running());
-    log.cancelled.set(false);
     start_named(&mut app, "ask.jsx");
     settle(&mut app);
     late.answer_now(&mut app, Picked::Paths(vec![PathBuf::from("/x/a.png")])).unwrap();
@@ -468,7 +484,7 @@ fn a_run_that_ends_while_its_dialog_is_open_ends_and_closes_the_dialog() {
     settle(&mut app);
     assert!(app.scripts.run.as_ref().is_some_and(|a| a.dialog.is_some()));
     // The host died at the dialog: its next pump reports the end.
-    log.cancelled.set(true);
+    log.end_latest();
     tick(&mut app, &egui::Context::default());
     assert!(!app.scripts.running(), "the dead run and its dialog are gone");
     assert!(log.answers.borrow().is_empty());
@@ -494,7 +510,7 @@ fn stopping_the_playback_ends_its_script() {
     settle(&mut app);
     assert!(!app.scripts.running());
     assert!(layer_names(&app).is_empty(), "{:?}", layer_names(&app));
-    assert!(log.cancelled.get());
+    assert_eq!(log.cancels.get(), 1);
 }
 
 /// A command naming its document runs there, whichever document is active when it arrives.
@@ -681,6 +697,11 @@ fn a_run_that_panics_while_pumping_leaves_scripts_usable() {
     assert!(!app.scripts.running(), "and the run with it");
     finish(&mut app, Ok(()));
     assert!(start(&mut app, ScriptStart { name: "next.jsx".into(), source: String::new(), app_name: None }, None).is_ok());
+    // The new run goes on and ends well.
+    settle(&mut app);
+    assert!(!app.scripts.running());
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert!(app.ui.status.contains("next.jsx"), "{}", app.ui.status);
 }
 
 /// A run that panics after a command while an action records leaves that command out of the

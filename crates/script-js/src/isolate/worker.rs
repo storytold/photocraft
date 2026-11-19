@@ -34,8 +34,9 @@ pub const MAILBOX_BYTES: u32 = 32 << 20;
 const EMPTY: i32 = 0;
 /// The page left an answer for the Worker.
 const FULL: i32 = 1;
-/// What the Worker sends once it is listening, before the run starts. Messages that arrive
-/// before then would be lost.
+/// What the Worker sends once it is listening, before the run starts, followed by a space and
+/// when it sent it (`Date.now()`, which the page and the Worker read from one clock). Messages
+/// that arrive before then would be lost.
 const READY: &str = "ready";
 
 /// Longest a Worker may take to load before it says it listens. A Worker whose engine can't load
@@ -43,19 +44,18 @@ const READY: &str = "ready";
 /// until its time limit.
 const START_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// When a Worker was started: by the clock, and by the page's clock that stamps its messages
-/// (`performance.now()`, `None` where there is none to read).
+/// When a Worker was started: by the page's clock, and by `Date.now()`, the clock the Worker
+/// stamps its `READY` with. `overdue`: a [`WorkerTransport::take`] has seen the limit pass.
 #[derive(Clone, Copy)]
 struct Started {
     at: web_time::Instant,
-    page_ms: Option<f64>,
+    epoch_ms: f64,
+    overdue: bool,
 }
 
-/// `performance.now()`: the clock a message event's `timeStamp` is on.
-fn page_now() -> Option<f64> {
-    let performance = Reflect::get(&js_sys::global(), &JsValue::from_str("performance")).ok()?;
-    let now: js_sys::Function = Reflect::get(&performance, &JsValue::from_str("now")).ok()?.dyn_into().ok()?;
-    now.call0(&performance).ok()?.as_f64()
+/// When a `READY` message says the Worker sent it, in `Date.now()` milliseconds.
+fn ready_sent_at(text: &str) -> Option<f64> {
+    text.strip_prefix(READY)?.strip_prefix(' ')?.parse::<f64>().ok().filter(|ms| ms.is_finite())
 }
 
 /// Why scripts can't run in this page.
@@ -119,7 +119,7 @@ pub fn serve_worker(heap: &'static HostAllocator) {
     scope.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
     // The Worker's lifetime; it ends when the page terminates the Worker.
     on_message.forget();
-    let _ = scope.post_message(&JsValue::from_str(READY));
+    let _ = scope.post_message(&JsValue::from_str(&format!("{READY} {}", js_sys::Date::now())));
 }
 
 fn run(scope: &DedicatedWorkerGlobalScope, heap: &'static HostAllocator, data: &JsValue) -> Result<(), String> {
@@ -177,20 +177,22 @@ impl WorkerTransport {
         let on_message = {
             let (inbox, pending, worker, starting) = (inbox.clone(), pending.clone(), worker.clone(), starting.clone());
             Closure::<dyn FnMut(MessageEvent)>::new(move |event: MessageEvent| {
-                let incoming = match event.data().as_string() {
-                    Some(text) if text == READY => {
-                        // Too late by when it arrived (not when the page got to it: a busy page
-                        // handles messages late): left pending, so `take` reports the start limit.
-                        if starting.get().and_then(|s| s.page_ms).is_some_and(|ms| event.time_stamp() - ms > START_LIMIT.as_secs_f64() * 1000.0) {
-                            return;
-                        }
-                        if let Some(start) = pending.borrow_mut().take()
-                            && let Err(e) = worker.post_message(&start)
-                        {
-                            inbox.borrow_mut().push(Incoming::Unavailable(format!("the script Worker could not be started: {}", describe(&e))));
-                        }
+                let text = event.data().as_string();
+                if let Some(sent) = text.as_deref().and_then(ready_sent_at) {
+                    // Too late by when the Worker sent it, not by when the page got to the
+                    // message (a busy page handles messages late): left pending, so `take`
+                    // reports the start limit.
+                    if starting.get().is_some_and(|s| sent - s.epoch_ms > START_LIMIT.as_secs_f64() * 1000.0) {
                         return;
                     }
+                    if let Some(start) = pending.borrow_mut().take()
+                        && let Err(e) = worker.post_message(&start)
+                    {
+                        inbox.borrow_mut().push(Incoming::Unavailable(format!("the script Worker could not be started: {}", describe(&e))));
+                    }
+                    return;
+                }
+                let incoming = match text {
                     Some(text) => Incoming::Message(text, web_time::Instant::now()),
                     None => Incoming::Error("the script Worker sent something that is not text".into()),
                 };
@@ -233,7 +235,7 @@ impl Transport for WorkerTransport {
         Reflect::set(&msg, &JsValue::from_str("mailbox"), &self.mailbox).map_err(|e| describe(&e))?;
         // Sent when the Worker says it listens (see `READY`).
         *self.pending.borrow_mut() = Some(msg);
-        self.starting.set(Some(Started { at: web_time::Instant::now(), page_ms: page_now() }));
+        self.starting.set(Some(Started { at: web_time::Instant::now(), epoch_ms: js_sys::Date::now(), overdue: false }));
         Ok(())
     }
 
@@ -242,10 +244,17 @@ impl Transport for WorkerTransport {
         if self.pending.borrow().is_none() {
             // It said it listens: the start message went out.
             self.starting.set(None);
-        } else if self.starting.get().is_some_and(|s| s.at.elapsed() > START_LIMIT) {
-            self.starting.set(None);
-            self.pending.borrow_mut().take();
-            taken.push(Incoming::Unavailable(format!("the script Worker didn't start within {} s", START_LIMIT.as_secs())));
+        } else if let Some(started) = self.starting.get().filter(|s| s.at.elapsed() > START_LIMIT) {
+            if started.overdue {
+                self.starting.set(None);
+                self.pending.borrow_mut().take();
+                taken.push(Incoming::Unavailable(format!("the script Worker didn't start within {} s", START_LIMIT.as_secs())));
+            } else {
+                // Past the limit by the page's clock, but a `READY` the Worker sent in time may
+                // still wait in the page's message queue (a page busy past the limit): it is
+                // handled before the next take, which decides.
+                self.starting.set(Some(Started { overdue: true, ..started }));
+            }
         }
         taken
     }

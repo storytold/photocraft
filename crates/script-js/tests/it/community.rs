@@ -69,9 +69,17 @@ const COORDINATES: &str = include_str!("community/export_layer_coordinates.jsx")
 #[test]
 fn export_layer_coordinates_runs_to_its_report() {
     let s = layered();
+    // Not the default unit, so putting the units back is seen.
+    s.borrow_mut().execute("prefs.set", json!({"path": "unitsAndRulers.rulers", "value": "inches"})).unwrap();
+    let rulers = |s: &Rc<RefCell<Session>>| s.borrow_mut().execute("prefs.get", json!({"path": "unitsAndRulers.rulers"})).unwrap();
     let folder = if cfg!(windows) { r"C:\coords" } else { "/coords" };
+    let at_picker = RefCell::new(Value::Null);
     let r = run(&s, "Export Layer Coordinates Photoshop.jsx", COORDINATES, |kind, _| match kind {
-        ModalKind::SelectFolder => json!(folder),
+        ModalKind::SelectFolder => {
+            // The script works in pixels: it has set the units by the time it asks.
+            *at_picker.borrow_mut() = rulers(&s);
+            json!(folder)
+        }
         _ => Value::Null,
     });
     assert_eq!(r.end, Ok(()), "{r:?}");
@@ -80,16 +88,17 @@ fn export_layer_coordinates_runs_to_its_report() {
     assert_eq!(r.dialogs[0].1["prompt"], "Save exported coordinates to");
     let report = r.dialogs[1].1[0].as_str().unwrap_or_default();
     let feeds = if cfg!(windows) { "Windows" } else { "Macintosh" };
+    // `Folder.toString()` gives the path with forward slashes.
+    let dir = folder.replace('\\', "/");
     assert!(
-        report.starts_with("Exported 2 layer's coordinates to ") && report.contains("Poster.txt") && report.ends_with(&format!("using {feeds} line feeds.")),
+        report.starts_with(&format!("Exported 2 layer's coordinates to {dir}/Poster.txt ")) && report.ends_with(&format!("using {feeds} line feeds.")),
         "{report}"
     );
     assert_eq!(r.dialogs[1].1[1], "Success!");
     assert!(r.lines.is_empty(), "{:?}", r.lines);
-    // The script puts the ruler units back as it found them.
-    let units = s.borrow_mut().execute("prefs.get", json!({"path": "unitsAndRulers.rulers"})).ok();
-    let before = Session::new().execute("prefs.get", json!({"path": "unitsAndRulers.rulers"})).ok();
-    assert_eq!(units, before);
+    // The script set pixels for its work and puts the units back as it found them.
+    assert_eq!(*at_picker.borrow(), json!("pixels"));
+    assert_eq!(rulers(&s), json!("inches"));
 }
 
 const EXPORT_FAST: &str = include_str!("community/export_layers_to_files_fast.jsx");

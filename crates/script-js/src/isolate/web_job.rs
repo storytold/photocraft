@@ -96,6 +96,10 @@ pub enum WebEvent {
 /// How many of the Worker's messages one [`WebJob::poll`] checks at most.
 const CHECKS_PER_POLL: usize = 64;
 
+/// How long one [`WebJob::poll`] goes on checking the Worker's messages, well inside the page's
+/// frame budget: past it the rest wait for the next poll.
+const CHECK_TIME: Duration = Duration::from_millis(2);
+
 /// One run in a Worker.
 pub struct WebJob<T: Transport> {
     transport: T,
@@ -105,8 +109,8 @@ pub struct WebJob<T: Transport> {
     /// bounds (calls, output and window bytes) however fast the Worker sends.
     events: VecDeque<WebEvent>,
     /// Messages taken from the Worker and not checked yet: each poll checks at most
-    /// [`CHECKS_PER_POLL`], so a large batch is spread over the page's polls (and frames) rather
-    /// than parsed in one. Each keeps its arrival time.
+    /// [`CHECKS_PER_POLL`], for at most [`CHECK_TIME`], so a large batch is spread over the page's
+    /// polls (and frames) rather than parsed in one. Each keeps its arrival time.
     backlog: VecDeque<Incoming>,
     /// Time computed before the current stretch, and since when it computes (`None` while it
     /// waits for an answer).
@@ -214,8 +218,12 @@ impl<T: Transport> WebJob<T> {
                 self.backlog.clear();
                 self.violation(&format!("more than {MAX_ENTRIES} commands, dialogs, output lines and window updates"));
             }
-            for _ in 0..CHECKS_PER_POLL {
-                if self.ending.is_some() {
+            // Bounded by count and by time, checked between messages: a few large window
+            // updates stop a poll as surely as many small lines (one message is always checked,
+            // so a poll always gets on).
+            let started = Instant::now();
+            for n in 0..CHECKS_PER_POLL {
+                if self.ending.is_some() || (n > 0 && started.elapsed() >= CHECK_TIME) {
                     break;
                 }
                 let Some(incoming) = self.backlog.pop_front() else { break };
@@ -539,19 +547,29 @@ mod tests {
         assert!(matches!(j.poll(), Some(WebEvent::Finished(Err(m))) if m.contains("while it waited")));
     }
 
-    /// What the Worker sends is checked as it arrives, so a flood is stopped at the run's bounds
-    /// rather than held until the page gets to it.
+    /// A flood is stopped at the run's bounds: polls hand out no more than the bound allows and
+    /// then the run's end, each poll checking only its share (the frame budget).
     #[test]
-    fn a_flood_of_messages_is_stopped_at_the_bounds_as_it_arrives() {
+    fn a_flood_of_messages_is_stopped_at_the_bounds() {
         let fake = Fake::default();
         let mut j = job(&fake, options());
         let line = "x".repeat(1 << 20);
         for _ in 0..(MAX_OUTPUT_BYTES >> 20) + 8 {
             fake.send(&FromHost::Output { line: line.clone() });
         }
-        assert!(matches!(j.poll(), Some(WebEvent::Finished(Err(m))) if m.contains("of output")), "the first poll ends it");
+        let mut handed = 0usize;
+        let end = loop {
+            match j.poll() {
+                Some(WebEvent::Output(l)) => handed += l.len(),
+                Some(WebEvent::Finished(r)) => break r,
+                Some(other) => panic!("unexpected {other:?}"),
+                None => {}
+            }
+        };
+        assert!(matches!(&end, Err(m) if m.contains("of output")), "{end:?}");
+        assert!(handed <= MAX_OUTPUT_BYTES, "{handed}");
         assert!(*fake.terminated.borrow());
-        assert!(j.events.is_empty());
+        assert!(j.events.is_empty() && j.backlog.is_empty());
     }
 
     /// Output sent just before the end still comes before it.
@@ -673,7 +691,8 @@ mod tests {
             fake.send(&FromHost::Output { line: i.to_string() });
         }
         assert_eq!(j.poll(), Some(WebEvent::Output("0".into())));
-        assert_eq!(j.backlog.len(), CHECKS_PER_POLL * 2, "only one share checked");
+        // At most one share (fewer when the time cap ends the poll first).
+        assert!(j.backlog.len() >= CHECKS_PER_POLL * 2, "only one share checked: {}", j.backlog.len());
         let mut lines = vec!["0".to_owned()];
         while let Some(WebEvent::Output(line)) = j.poll() {
             lines.push(line);

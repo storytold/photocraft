@@ -78,8 +78,9 @@ Artwork shown in the screenshots (all public domain, via Wikimedia Commons; deta
 
 ## Test data (not committed, not shipped)
 
-`corpus/` is gitignored and no test fixtures are committed to the repository, except the small
-synthetic parser fixtures listed under *Synthetic parser test fixtures* below.
+`corpus/` is gitignored and never committed. Other test fixtures can be committed when they are
+permissively licensed, keep their licence file next to them and have a row in this file, such as
+the synthetic parser fixtures and the community scripts listed below.
 `cargo xtask corpus --all` fetches every corpus at the pinned commits in `xtask/src/corpus_pins.rs`
 and verifies each file against the sha256 lists in `xtask/*.sha256`, with the upstream licence
 next to the files:

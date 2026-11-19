@@ -2,7 +2,8 @@
 //! ScriptUI windows and file pickers, and File › Scripts › Scripts Manager.
 //!
 //! The platform starts runs ([`Services::scripts`](crate::Services)): on the desktop each run has
-//! its own script host process, on the web it runs in this thread. Either way the run is pumped
+//! its own script host process, in the browser a dedicated Worker (on a page that isn't
+//! cross-origin isolated the browser service refuses to start one). Either way the run is pumped
 //! once a frame ([`tick`]); the session commands it asks for run there on the app's session, and
 //! what it needs from the user (an alert, a ScriptUI dialog, a file picker) is shown here
 //! ([`show`]) and answered back. One run at a time.

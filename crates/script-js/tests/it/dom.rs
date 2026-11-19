@@ -146,6 +146,23 @@ fn text_position_reads_in_place_and_sets_from_where_the_text_is() {
     assert_eq!(lines, ["10,50 Other", "30"]);
 }
 
+/// Adding through a group's collection after that group is gone fails and makes nothing: the
+/// layer is made inside the group in one edit, not made and then moved.
+#[test]
+fn adding_to_a_deleted_groups_collection_changes_nothing() {
+    let s = session(20, 20);
+    let lines = run(
+        &s,
+        "var d = app.activeDocument, g = d.layerSets.add(), layers = g.artLayers, sets = g.layerSets;
+         g.remove();
+         var n = d.layers.length;
+         try { layers.add(); $.writeln('added'); } catch (e) { $.writeln('refused'); }
+         try { sets.add(); $.writeln('added'); } catch (e) { $.writeln('refused'); }
+         $.writeln(d.layers.length === n);",
+    );
+    assert_eq!(lines, ["refused", "refused", "true"]);
+}
+
 /// A layer's locks read and set as the layer's own: Lock All, pixels, position and transparent
 /// pixels (which the pixels lock includes, so it stays off while that is on).
 #[test]
@@ -475,17 +492,45 @@ fn string_ids_that_collide_are_refused() {
     assert_eq!(lines, ["refused", "true"]);
 }
 
+/// Only names of an identifier's length get an id: each is remembered, so a collision between
+/// two of them is always caught; a longer string is a RangeError, not an id no one checks.
 #[test]
-fn only_identifier_length_string_ids_are_remembered() {
+fn only_identifier_length_string_ids_are_made() {
     let s = session(8, 8);
     let lines = run(
         &s,
         r#"
         var short = stringIDToTypeID('layerName'), long = new Array(5000).join('x');
-        $.writeln(typeIDToStringID(short), ' [', typeIDToStringID(stringIDToTypeID(long)), ']');
+        var r; try { stringIDToTypeID(long); r = 'made'; } catch (e) { r = e instanceof RangeError ? 'range' : String(e); }
+        $.writeln(typeIDToStringID(short), ' ', r, ' ', typeIDToStringID(stringIDToTypeID(new Array(1025).join('y'))).length);
         "#,
     );
-    assert_eq!(lines, ["layerName []"]);
+    assert_eq!(lines, ["layerName range 1024"]);
+}
+
+/// Past the run's count of names a new one gets no id (a RangeError) rather than an id that
+/// could collide unnoticed; names already made still work.
+#[test]
+fn string_ids_past_the_runs_count_of_names_are_refused() {
+    let s = session(8, 8);
+    let lines = run(
+        &s,
+        "var made = 0, r = 'none';
+         try { for (var i = 0; i < 70000; i++) { stringIDToTypeID('n' + i); made++; } } catch (e) { r = e instanceof RangeError ? 'range' : String(e); }
+         $.writeln(made, ' ', r, ' ', stringIDToTypeID('n0') === stringIDToTypeID('n0'));",
+    );
+    assert_eq!(lines, ["65536 range true"]);
+}
+
+/// A saved key name whose ID this run already gave another string is refused on reading, not
+/// read back as that other string's key.
+#[test]
+fn custom_options_whose_saved_name_collides_with_this_runs_are_refused() {
+    let s = session(8, 8);
+    run(&s, "var d = new ActionDescriptor(); d.putString(stringIDToTypeID('costarring'), 'x'); app.putCustomOptions('c', d, true);");
+    let lines = run(&s, "stringIDToTypeID('liquid'); try { app.getCustomOptions('c'); $.writeln('read'); } catch (e) { $.writeln('refused: ' + e.message); }");
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].starts_with("refused: getCustomOptions: the saved name \"costarring\""), "{lines:?}");
 }
 
 #[test]

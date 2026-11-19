@@ -23,6 +23,9 @@ const MAX_KEYS: usize = 1024;
 const MAX_TEXT: usize = 32 << 10;
 /// Longest string id `typeIDToStringID` can give back, in bytes.
 const MAX_ID_TEXT: usize = 1024;
+/// How many strings a run can make ids of (`stringIDToTypeID`); each is remembered, so ids that
+/// collide are always caught.
+const MAX_NAMES: usize = 1 << 16;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Item {
@@ -309,16 +312,24 @@ fn string_id(s: &str) -> u32 {
 
 fn string_to_id(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let s = text(args.first(), ctx)?;
+    // Every string given an id is remembered, so two strings with one id are always caught:
+    // a string too long to be a name, or one past the run's count of names, gets no id at all.
+    if s.len() > MAX_ID_TEXT {
+        return Err(JsNativeError::range().with_message(format!("stringIDToTypeID: a name is at most {MAX_ID_TEXT} bytes")).into());
+    }
     let id = string_id(&s);
     if let Some(r) = ctx.realm().host_defined().get::<Registry>() {
         let mut strings = r.strings.borrow_mut();
-        // Two strings with one id would be one descriptor key: refused rather than mixed up.
-        if let Some(other) = strings.get(&id).filter(|other| **other != s) {
-            return Err(error(format!("stringIDToTypeID: \"{}\" has the same ID as \"{other}\"; use another name", cut_id(&s))));
-        }
-        // Only ids short enough to be identifiers are remembered for `typeIDToStringID`.
-        if strings.len() < 1 << 16 && s.len() <= MAX_ID_TEXT {
-            strings.entry(id).or_insert(s);
+        match strings.get(&id) {
+            Some(known) if *known == s => {}
+            // Two strings with one id would be one descriptor key: refused rather than mixed up.
+            Some(other) => return Err(error(format!("stringIDToTypeID: \"{}\" has the same ID as \"{other}\"; use another name", cut_id(&s)))),
+            None if strings.len() >= MAX_NAMES => {
+                return Err(JsNativeError::range().with_message(format!("stringIDToTypeID: a run can name at most {MAX_NAMES} IDs")).into());
+            }
+            None => {
+                strings.insert(id, s);
+            }
         }
     }
     Ok(JsValue::from(id))
@@ -352,17 +363,28 @@ fn names_of(items: &[(u32, Item)], ctx: &Context) -> serde_json::Map<String, Val
 }
 
 /// Make the strings saved with custom options known again, so `typeIDToStringID` answers for
-/// their keys in a later run. Only a name whose id is its own is taken.
-fn restore_names(names: &Value, ctx: &Context) {
+/// their keys in a later run. Only a name whose id is its own is taken. A saved name whose id
+/// this run already gave another string, or one past the run's count of names, is an error: the
+/// options can't be told apart from that string's.
+fn restore_names(names: &Value, ctx: &Context) -> Result<(), String> {
     let host = ctx.realm().host_defined();
-    let (Some(names), Some(r)) = (names.as_object(), host.get::<Registry>()) else { return };
+    let (Some(names), Some(r)) = (names.as_object(), host.get::<Registry>()) else { return Ok(()) };
     let mut strings = r.strings.borrow_mut();
     for (id, name) in names.iter().take(MAX_KEYS * 3) {
         let (Ok(id), Some(name)) = (id.parse::<u32>(), name.as_str()) else { continue };
-        if name.len() <= MAX_ID_TEXT && string_id(name) == id && strings.len() < 1 << 16 {
-            strings.entry(id).or_insert_with(|| name.to_owned());
+        if name.len() > MAX_ID_TEXT || string_id(name) != id {
+            continue;
+        }
+        match strings.get(&id) {
+            Some(known) if known == name => {}
+            Some(other) => return Err(format!("the saved name \"{}\" has the same ID as \"{other}\", which this run already uses", cut_id(name))),
+            None if strings.len() >= MAX_NAMES => return Err(format!("a run can name at most {MAX_NAMES} IDs")),
+            None => {
+                strings.insert(id, name.to_owned());
+            }
         }
     }
+    Ok(())
 }
 
 // ---------- custom options ----------
@@ -401,7 +423,7 @@ fn get_custom(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     if v.is_null() {
         return Err(error_with_number(ctx, format!("there are no custom options for {key}"), 8500));
     }
-    restore_names(&v["names"], ctx);
+    restore_names(&v["names"], ctx).map_err(|m| error(format!("getCustomOptions: {m}")))?;
     let items: Vec<(u32, Item)> = v["items"].as_array().map(|a| a.iter().take(MAX_KEYS).filter_map(Item::from_json).collect()).unwrap_or_default();
     new_descriptor(ctx, items)
 }

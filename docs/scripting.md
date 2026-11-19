@@ -39,8 +39,8 @@ wait. The page counts the run's time from the messages' arrival, with the clock 
 the Worker waits, so a hidden tab drawing no frames does not eat a run's time. It checks the
 limit each time it polls the run, every frame while one runs, and terminates the Worker on the
 first poll past it; while the page draws no frames the Worker can compute on past the limit
-until the next one. A poll checks at most 64 of the Worker's messages, so a large batch is spread
-over frames; while some wait, each is checked against the limit by when it arrived, and the run
+until the next one. A poll checks at most 64 of the Worker's messages, for at most 2 ms, so a large
+batch is spread over frames; while some wait, each is checked against the limit by when it arrived, and the run
 clock is read again once they are through. A crash in the Worker (a failed allocation, a stack overflow, an engine
 panic) ends that run only. The Worker's stack in its memory is 64 MiB, as the script host's; the browser's own call stack still limits how deeply a script nests there, a little less deeply than on the desktop. A command's answer to
 a script holds at most 32 MiB there (the shared memory the Worker reads it from).
