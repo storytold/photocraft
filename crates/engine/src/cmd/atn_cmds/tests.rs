@@ -3565,7 +3565,10 @@ fn image_size_refuses_to_export_a_step_with_an_unusable_percent() {
 
     // Strict Save Actions reports the step instead of writing a different one; skipping names it.
     let mut s = Session::new();
-    s.actions.list.push(Action::new("Size", vec![("image.imageSize".into(), json!({"resolution": 144, "keepPrintSize": true, "percent": "50"}))]));
+    s.actions
+        .list
+        .push(Action::new("Size", vec![ActionStep::new("image.imageSize", json!({"resolution": 144, "keepPrintSize": true, "percent": "50"}))]))
+        .unwrap();
     let error = s.execute("actions.save", json!({"action": "Size", "skipUnsupported": false})).unwrap_err().to_string();
     assert!(error.contains("image.imageSize"), "{error}");
     let r = s.execute("actions.save", json!({"action": "Size", "skipUnsupported": true})).unwrap();
@@ -3590,7 +3593,7 @@ fn keep_print_size_image_size_survives_a_strict_atn_round_trip() {
     let direct = size(&s);
     assert_eq!(direct, (64, 48, 144.0), "the command resamples to keep the print size");
 
-    s.actions.list.push(Action::new("Size", vec![("image.imageSize".into(), json!({"resolution": 144, "keepPrintSize": true}))]));
+    s.actions.list.push(Action::new("Size", vec![ActionStep::new("image.imageSize", json!({"resolution": 144, "keepPrintSize": true}))])).unwrap();
     let native = s.execute("actions.play", json!({"action": "Size"})).unwrap();
     assert!(native.get("failed").is_none(), "{native}");
     assert_eq!(size(&s), direct, "native playback");
@@ -3605,7 +3608,7 @@ fn keep_print_size_image_size_survives_a_strict_atn_round_trip() {
     let played = t.execute("actions.play", json!({"action": "Size"})).unwrap();
     assert!(played.get("failed").is_none(), "{played}");
     assert_eq!(size(&t), direct, "the .atn round trip must not lose the resizing");
-    assert_eq!(t.actions.list[0].steps[0].1["resample"], "bicubic", "the step says which resampler ran");
+    assert_eq!(t.actions.list.actions()[0].steps[0].params["resample"], "bicubic", "the step says which resampler ran");
 }
 
 #[test]
