@@ -2,10 +2,8 @@ use craft::ui::runtime::commands::CommandRef;
 
 use super::*;
 
-/// Boxed: tests keep several apps alive, and each would otherwise take its full size on the test
-/// thread's stack.
 fn app(tool: Tool) -> Box<PhotocraftApp> {
-    let mut app = Box::new(PhotocraftApp::new(photocraft_engine::Session::new(), Default::default()));
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
     app.ui.tool = tool;
@@ -161,7 +159,7 @@ fn blend_keys_are_taken_by_tools_without_a_mode() {
         assert_eq!(a.ui.tool, tool);
     }
     // A document-less app takes the key and does nothing.
-    let mut none = Box::new(PhotocraftApp::new(photocraft_engine::Session::new(), Default::default()));
+    let mut none = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     none.ui.tool = Tool::Move;
     assert!(key(&mut none, BlendStep::Next));
 }

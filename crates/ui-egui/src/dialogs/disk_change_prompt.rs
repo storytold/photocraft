@@ -30,7 +30,7 @@ pub(crate) fn intercept(app: &mut PhotocraftApp, doc: DocId, path: &str, flat: b
     }
     let prompt = StandardPrompt::changed_on_disk(crate::file_open::display_name(path)).tag(HeldSave { doc, path: path.to_owned(), flat, choices });
     Some(Ok(match alerts::open_prompt(app, prompt) {
-        Ok(id) => json!({"dialog": id, "confirmationPending": true}),
+        Ok(id) => json!({"dialog": id.value(), "confirmationPending": true}),
         Err(_) => json!({"confirmationPending": true}),
     }))
 }

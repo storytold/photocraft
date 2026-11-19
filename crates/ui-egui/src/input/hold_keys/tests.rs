@@ -15,7 +15,7 @@ use crate::canvas::testing;
 use crate::canvas_tool_menu::MenuKind;
 
 /// A 400 × 300 document in the whole app, shown at 100 %, with `tool` selected.
-fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
+fn harness(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
@@ -30,17 +30,17 @@ fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
 }
 
 /// The screen point of the document point (`x`, `y`) in the canvas the app shows.
-fn screen(h: &Harness<'static, PhotocraftApp>, x: f32, y: f32) -> Pos2 {
+fn screen(h: &Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32) -> Pos2 {
     testing::to_screen(h.state(), [f64::from(x), f64::from(y)])
 }
 
 /// The document point at the centre of the shown canvas.
-fn center(h: &Harness<'static, PhotocraftApp>) -> Point {
+fn center(h: &Harness<'static, Box<PhotocraftApp>>) -> Point {
     testing::view(h.state()).expect("the canvas shows a view").center
 }
 
 /// The shown canvas's zoom.
-fn zoom(h: &Harness<'static, PhotocraftApp>) -> f64 {
+fn zoom(h: &Harness<'static, Box<PhotocraftApp>>) -> f64 {
     testing::view(h.state()).expect("the canvas shows a view").zoom
 }
 
@@ -58,7 +58,7 @@ fn platform(m: Modifiers) -> Modifiers {
     out
 }
 
-fn key(h: &mut Harness<'static, PhotocraftApp>, k: Key, pressed: bool, m: Modifiers) {
+fn key(h: &mut Harness<'static, Box<PhotocraftApp>>, k: Key, pressed: bool, m: Modifiers) {
     let m = platform(m);
     h.event(Event::ModifiersChanged(m));
     h.event(Event::Key { key: k, physical_key: None, pressed, repeat: false, modifiers: m });
@@ -67,7 +67,7 @@ fn key(h: &mut Harness<'static, PhotocraftApp>, k: Key, pressed: bool, m: Modifi
 }
 
 /// A quick press and release in one frame (a tool letter held across frames springs, #2672).
-fn tap(h: &mut Harness<'static, PhotocraftApp>, k: Key, m: Modifiers) {
+fn tap(h: &mut Harness<'static, Box<PhotocraftApp>>, k: Key, m: Modifiers) {
     let m = platform(m);
     h.input_mut().events.extend([
         Event::ModifiersChanged(m),
@@ -79,18 +79,18 @@ fn tap(h: &mut Harness<'static, PhotocraftApp>, k: Key, m: Modifiers) {
     h.run_steps(1);
 }
 
-fn button(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, down: bool, m: Modifiers) {
+fn button(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2, down: bool, m: Modifiers) {
     h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: down, modifiers: platform(m) });
     h.run_steps(1);
 }
 
-fn move_to(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32) {
+fn move_to(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32) {
     let p = screen(h, x, y);
     h.event(Event::PointerMoved(p));
     h.run_steps(2);
 }
 
-fn press_at(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32) {
+fn press_at(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32) {
     let p = screen(h, x, y);
     h.event(Event::PointerMoved(p));
     h.run_steps(1);
@@ -98,16 +98,16 @@ fn press_at(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32) {
     move_to(h, x + 8.0, y + 6.0);
 }
 
-fn release(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, m: Modifiers) {
+fn release(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32, m: Modifiers) {
     let p = screen(h, x, y);
     button(h, p, false, m);
 }
 
-fn selection(h: &Harness<'static, PhotocraftApp>) -> Rect {
+fn selection(h: &Harness<'static, Box<PhotocraftApp>>) -> Rect {
     h.state().session.active().unwrap().doc.selection.as_ref().map_or(Rect::EMPTY, |s| s.content_bounds())
 }
 
-fn click(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, m: Modifiers) {
+fn click(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32, m: Modifiers) {
     let p = screen(h, x, y);
     h.event(Event::PointerMoved(p));
     h.run_steps(1);
@@ -117,7 +117,7 @@ fn click(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, m: Modifiers) 
 }
 
 /// Changes only the held modifiers, as pressing or releasing ⌥ / ⌘ does with a key already down.
-fn hold_mods(h: &mut Harness<'static, PhotocraftApp>, m: Modifiers) {
+fn hold_mods(h: &mut Harness<'static, Box<PhotocraftApp>>, m: Modifiers) {
     h.event(Event::ModifiersChanged(platform(m)));
     h.run_steps(1);
 }
@@ -208,7 +208,7 @@ fn space_repositions_the_drag_being_drawn() {
 }
 
 /// The open paths the last frame painted, as their screen points.
-fn painted_paths(h: &Harness<'static, PhotocraftApp>) -> Vec<Vec<Pos2>> {
+fn painted_paths(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<Vec<Pos2>> {
     fn walk(s: &egui::Shape, out: &mut Vec<Vec<Pos2>>) {
         match s {
             egui::Shape::Path(p) if !p.closed => out.push(p.points.clone()),
@@ -253,7 +253,7 @@ fn the_pen_path_being_drawn_stays_visible_while_space_pans() {
     assert_eq!(st.ui.tool, Tool::Pen);
 }
 
-fn rgba(h: &Harness<'static, PhotocraftApp>, x: i32, y: i32) -> [f32; 4] {
+fn rgba(h: &Harness<'static, Box<PhotocraftApp>>, x: i32, y: i32) -> [f32; 4] {
     h.state().session.active().unwrap().doc.layers.last().unwrap().surface().unwrap().rgba(x, y)
 }
 
@@ -293,7 +293,7 @@ fn agents_reposition_a_marquee_with_space() {
 
 /// A red square on a new layer for the ⌘ (Move) tests; Auto-Select, snapping and smart guides
 /// off so the drag offsets are exact.
-fn with_layer(h: &mut Harness<'static, PhotocraftApp>) -> photocraft_doc::LayerId {
+fn with_layer(h: &mut Harness<'static, Box<PhotocraftApp>>) -> photocraft_doc::LayerId {
     let app = h.state_mut();
     app.run("layer.new.layer", json!({})).unwrap();
     let id = app.session.active().unwrap().active_layer.unwrap();
@@ -310,17 +310,17 @@ fn with_layer(h: &mut Harness<'static, PhotocraftApp>) -> photocraft_doc::LayerI
     id
 }
 
-fn bounds(h: &Harness<'static, PhotocraftApp>, id: photocraft_doc::LayerId) -> Rect {
+fn bounds(h: &Harness<'static, Box<PhotocraftApp>>, id: photocraft_doc::LayerId) -> Rect {
     h.state().session.active().unwrap().doc.layer(id).unwrap().surface().unwrap().content_bounds()
 }
 
 /// A drag with `m` held throughout (the modifiers go down before the press, as on a keyboard).
-fn drag_with(h: &mut Harness<'static, PhotocraftApp>, m: Modifiers, x: f32, y: f32, x2: f32, y2: f32) {
+fn drag_with(h: &mut Harness<'static, Box<PhotocraftApp>>, m: Modifiers, x: f32, y: f32, x2: f32, y2: f32) {
     drag_raw(h, platform(m), x, y, x2, y2);
 }
 
 /// [`drag_with`] with the modifiers exactly as given, for one platform's layout on any host.
-fn drag_raw(h: &mut Harness<'static, PhotocraftApp>, m: Modifiers, x: f32, y: f32, x2: f32, y2: f32) {
+fn drag_raw(h: &mut Harness<'static, Box<PhotocraftApp>>, m: Modifiers, x: f32, y: f32, x2: f32, y2: f32) {
     h.event(Event::ModifiersChanged(m));
     h.run_steps(1);
     let p = screen(h, x, y);
@@ -347,10 +347,16 @@ const CTRL_ALT: Modifiers = Modifiers { alt: true, ctrl: true, shift: false, mac
 /// The tools that keep ⌘ for themselves leave the layer alone.
 #[test]
 fn cmd_gives_the_move_tool_only_where_the_tool_does_not_take_cmd() {
-    let moves =
-        [Tool::Brush, Tool::Eraser, Tool::Gradient, Tool::CloneStamp, Tool::Eyedropper, Tool::Move, Tool::RectMarquee, Tool::EllipseMarquee, Tool::Lasso];
+    // The Eraser is left out: it is in the Brush's family (`canvas::tools::family`), which refuses a ⌘ press the same
+    // way for every tool (`PaintTool::takes`); the Elliptical Marquee is the Rectangular one's marquee pass with
+    // another shape (`selection.rs`, `MarqueeKind`).
+    // One app per group, with the tool switched between cases and a fresh layer for each: starting
+    // the whole app dominates the cost of a case.
+    let moves = [Tool::Brush, Tool::Gradient, Tool::CloneStamp, Tool::Eyedropper, Tool::Move, Tool::RectMarquee, Tool::Lasso];
+    let mut h = harness(moves[0]);
     for tool in moves {
-        let mut h = harness(tool);
+        h.state_mut().ui.tool = tool;
+        h.run_steps(1);
         let id = with_layer(&mut h);
         let steps = h.state().session.active().unwrap().history.past_len();
         drag_with(&mut h, Modifiers::COMMAND, 130.0, 130.0, 170.0, 150.0);
@@ -360,26 +366,29 @@ fn cmd_gives_the_move_tool_only_where_the_tool_does_not_take_cmd() {
         assert_eq!(st.history.past_len(), steps + 1, "{tool:?}: one step, nothing painted");
         assert_eq!(h.state().ui.tool, tool, "{tool:?}: the tool is back");
     }
+    // The Crop and Rotate View tools go last, in an app of their own: they leave a pending crop and
+    // a turned view behind.
     let keeps = [
-        Tool::Hand,
-        Tool::RotateView,
-        Tool::Zoom,
-        Tool::Pen,
-        Tool::Rectangle,
-        Tool::Type,
-        Tool::VerticalType,
-        Tool::Crop,
-        Tool::PathSelection,
-        Tool::DirectSelection,
+        vec![Tool::Hand, Tool::Zoom, Tool::Pen, Tool::Rectangle, Tool::Type, Tool::VerticalType, Tool::PathSelection, Tool::DirectSelection],
+        vec![Tool::Crop, Tool::RotateView],
     ];
-    for tool in keeps {
-        let mut h = harness(tool);
-        let id = with_layer(&mut h);
-        drag_with(&mut h, Modifiers::COMMAND, 130.0, 130.0, 170.0, 150.0);
-        assert_eq!(bounds(&h, id), Rect::new(100, 100, 160, 160), "{tool:?}: the layer stays");
-        assert_ne!(h.state().session.active().unwrap().history.undo_label(), Some("Move"), "{tool:?}");
-        assert_eq!(h.state().ui.tool, tool);
+    for group in keeps {
+        let mut h = harness(group[0]);
+        for tool in group {
+            h.state_mut().ui.tool = tool;
+            h.run_steps(1);
+            keeps_the_layer(&mut h, tool);
+        }
     }
+}
+
+/// A ⌘-drag with `tool`, one that keeps ⌘ for itself, leaves a fresh layer where it is.
+fn keeps_the_layer(h: &mut Harness<'static, Box<PhotocraftApp>>, tool: Tool) {
+    let id = with_layer(h);
+    drag_with(h, Modifiers::COMMAND, 130.0, 130.0, 170.0, 150.0);
+    assert_eq!(bounds(h, id), Rect::new(100, 100, 160, 160), "{tool:?}: the layer stays");
+    assert_ne!(h.state().session.active().unwrap().history.undo_label(), Some("Move"), "{tool:?}");
+    assert_eq!(h.state().ui.tool, tool);
 }
 
 /// ⌘⌥-drag duplicates the layer first and moves the copy, as the Move tool's ⌥-drag does. Off
@@ -467,7 +476,7 @@ fn last_stroke(app: &PhotocraftApp) -> serde_json::Value {
 }
 
 /// The `erase` flag of the last brush stroke.
-fn last_stroke_erases(h: &Harness<'static, PhotocraftApp>) -> Option<bool> {
+fn last_stroke_erases(h: &Harness<'static, Box<PhotocraftApp>>) -> Option<bool> {
     last_stroke(h.state())["erase"].as_bool()
 }
 
@@ -625,7 +634,7 @@ fn command_or_alt_space_right_click_opens_no_view_menu() {
 }
 
 /// A right-click at `p` with Space already held (the Hand over the selected tool).
-fn right_click_at(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
+fn right_click_at(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2) {
     h.event(Event::PointerMoved(p));
     h.run_steps(1);
     h.event(Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
@@ -635,7 +644,7 @@ fn right_click_at(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
 }
 
 /// A pending crop frame on the Crop tool, as the held-key test above sets one up: the bottom-right handle dragged in.
-fn with_pending_crop(h: &mut Harness<'static, PhotocraftApp>) {
+fn with_pending_crop(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     drag_with(h, Modifiers::NONE, 400.0, 300.0, 300.0, 200.0);
     h.run_steps(2);
     assert!(crate::crop_ui::pending(h.state()));

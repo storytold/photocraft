@@ -117,6 +117,27 @@ pub fn shortcuts_open(app: &PhotocraftApp) -> bool {
     app.prefs_rt.shortcuts.is_some()
 }
 
+/// The id the control channel knows the dialog by: Edit › Keyboard Shortcuts and Edit › Menus reply with it,
+/// `ui.inspect` lists the dialog under it, and `ui.dialog.cancel` closes it. The dialog draws outside the framework's
+/// dialog host, which has no id for it (#15544).
+pub(crate) const CONTROL_ID: &str = "shortcuts";
+
+/// The reply of a command that opened the dialog.
+pub(crate) fn control_reply() -> Value {
+    json!({"dialog": CONTROL_ID})
+}
+
+/// The dialog as `ui.inspect` lists it among the dialogs while it is open, in the host's entry shape.
+pub(crate) fn inspect(app: &PhotocraftApp) -> Option<Value> {
+    shortcuts_open(app).then(|| json!({"id": CONTROL_ID, "key": "edit.keyboardShortcuts", "parent": null, "fields": {}}))
+}
+
+/// Cancel for a control client, as the dialog's Cancel: the session goes and nothing it edited is saved. False with
+/// the dialog closed.
+pub(crate) fn cancel(app: &mut PhotocraftApp) -> bool {
+    app.prefs_rt.shortcuts.take().is_some()
+}
+
 /// Whether the dialog is recording a chord: the key goes to the recorder and runs nothing, and the
 /// native menu bar pauses its key equivalents.
 pub fn recording(app: &PhotocraftApp) -> bool {
@@ -213,7 +234,7 @@ fn ask_import(app: &mut PhotocraftApp, state: &mut DialogState) {
     let picked = app.pick_file_bytes_filtered(&["kys", "psp", "json"], |app, name, bytes| {
         let text = kys_text(&name, &bytes)?;
         queue_import(app, text);
-        Ok(json!({"dialog": "shortcuts"}))
+        Ok(control_reply())
     });
     if let Err(e) = picked {
         state.show_error(e);
@@ -225,7 +246,8 @@ fn save_text(app: &mut PhotocraftApp, state: &mut DialogState, suggested: &str, 
     // A set name can hold characters a file name can't.
     let name: String = suggested.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c }).collect();
     let saved = app.pick_save(&name, move |app, path| {
-        app.framework.files().write(std::path::Path::new(&path), text.as_bytes()).map_err(|e| e.to_string())?;
+        let write = app.services.write.as_mut().ok_or("no writer configured")?;
+        write(&path, text.as_bytes())?;
         Ok(json!({"path": path}))
     });
     if let Err(e) = saved {
