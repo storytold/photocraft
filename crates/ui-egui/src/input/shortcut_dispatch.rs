@@ -10,7 +10,7 @@
 //! shortcut whose command is disabled in the current state reports why on the status bar instead
 //! of doing nothing silently, as the greyed menu item shows.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use craft::color_ui::ui::SwatchesCommand;
 use craft::keymap::{Binding, Chord, CommandDef, CommandKind, Overrides, Scope};
@@ -159,9 +159,21 @@ fn bridge_of(command: &CommandRef) -> Option<(&'static str, Bridged)> {
     bridged_commands().iter().find(|(bridged, _, _)| bridged == command).map(|(_, id, bridged)| (*id, *bridged))
 }
 
+/// Runtime rows indexed by id, keeping the first row if an id appears more than once.
+fn runtime_by_id() -> &'static HashMap<&'static str, Bridged> {
+    static TABLE: std::sync::OnceLock<HashMap<&'static str, Bridged>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table = HashMap::new();
+        for &(id, bridged) in RUNTIME_COMMANDS {
+            table.entry(id).or_insert(bridged);
+        }
+        table
+    })
+}
+
 /// Whether the runtime defines command `id` (a row of [`RUNTIME_COMMANDS`]).
 pub(crate) fn is_bridged(id: &str) -> bool {
-    RUNTIME_COMMANDS.iter().any(|(bridged, _)| *bridged == id)
+    runtime_by_id().contains_key(id)
 }
 
 /// Whether `id` is a view row of [`RUNTIME_COMMANDS`]: a command the document canvas runs on its view.
@@ -327,7 +339,7 @@ pub(crate) fn command_rows(app: &PhotocraftApp) -> Vec<CommandDef> {
 /// The command of the runtime's keymap that menu row `id` runs: the framework command a row of [`RUNTIME_COMMANDS`]
 /// bridges, the shell command a Window panel item runs (`menus::panel_alias`), else the row's own.
 pub(crate) fn keymap_command(id: &str) -> CommandRef {
-    if let Some((_, bridged)) = RUNTIME_COMMANDS.iter().find(|(bridged, _)| *bridged == id) {
+    if let Some(bridged) = runtime_by_id().get(id) {
         return bridged.command();
     }
     CommandRef::new(crate::menus::panel_alias(id).unwrap_or(id))

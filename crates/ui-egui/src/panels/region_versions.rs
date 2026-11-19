@@ -56,7 +56,7 @@ pub(crate) fn toolbar_drawn(app: &PhotocraftApp, ui: &egui::Ui) -> u64 {
 fn toolbar_with(app: &PhotocraftApp, tokens: usize) -> u64 {
     let quick_mask = app.session.active().is_some_and(|st| st.doc.quick_mask.is_some());
     let opens_start = crate::panel_docking::toolbar_opens(app) == craft::behavior::overlay::Side::Start;
-    let screen_mode = format!("{:?}", app.ui.view.screen_mode);
+    let screen_mode = app.ui.view.screen_mode;
     version(app, (app.session.prefs.rev(), &app.ui.group_tools, app.ui.toolbar_drawer, opens_start, quick_mask, screen_mode, tokens))
 }
 
