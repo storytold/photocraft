@@ -119,6 +119,34 @@ fn is_ui_crate(name: &str) -> bool {
     })
 }
 
+fn is_craft_ui_feature(feature: &str) -> bool {
+    // The facade has no default UI features. These enable its UI, egui integration, or UI-only modules.
+    feature.starts_with("ui-")
+        || feature.starts_with("cloud-ui-")
+        || matches!(feature, "ui" | "cloud-ui" | "theme-editor" | "screen-testing" | "keymap-egui" | "layers" | "menu" | "dialogs")
+}
+
+fn craft_ui_enabled(package: &Value, dependency: &Value, name: &str) -> bool {
+    if name != "craft" {
+        return false;
+    }
+    let alias = dependency["rename"].as_str().unwrap_or(name);
+    let direct = dependency["features"].as_array().into_iter().flatten().filter_map(Value::as_str);
+    // A package feature can also turn on UI through `craft/ui` or `alias?/ui`.
+    let forwarded = package["features"]
+        .as_object()
+        .into_iter()
+        .flat_map(|features| features.values())
+        .filter_map(Value::as_array)
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(|entry| {
+            let (dep, feature) = entry.split_once('/')?;
+            (dep.strip_suffix('?').unwrap_or(dep) == alias).then_some(feature)
+        });
+    direct.chain(forwarded).any(is_craft_ui_feature)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DepKind {
     Normal,
@@ -130,8 +158,10 @@ pub enum DepKind {
 pub struct Dep {
     pub name: String,
     pub kind: DepKind,
-    /// `true` if the dependency is a workspace member.
+    /// `true` for workspace members and local path dependencies.
     pub workspace: bool,
+    /// The dependency is the craft facade with a UI feature enabled.
+    pub craft_ui: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -188,6 +218,9 @@ pub fn check(crates: &[Crate]) -> Vec<Violation> {
             if d.name == c.name {
                 continue;
             }
+            if layer < UI_MIN_LAYER && (is_ui_crate(&d.name) || d.craft_ui) {
+                out.push(Violation::UiBelowL6 { krate: c.name.clone(), dep: d.name.clone(), layer });
+            }
             if d.workspace {
                 if class == Class::Standalone {
                     if standalone_exception(&c.name, &d.name) {
@@ -214,8 +247,6 @@ pub fn check(crates: &[Crate]) -> Vec<Violation> {
                         }
                     }
                 }
-            } else if layer < UI_MIN_LAYER && is_ui_crate(&d.name) {
-                out.push(Violation::UiBelowL6 { krate: c.name.clone(), dep: d.name.clone(), layer });
             }
         }
     }
@@ -240,7 +271,8 @@ pub fn from_metadata(meta: &Value) -> Result<Vec<Crate>, String> {
                 _ => DepKind::Normal,
             };
             let workspace = members.contains(&dname.as_str()) || d["path"].is_string();
-            deps.push(Dep { name: dname, kind, workspace });
+            let craft_ui = craft_ui_enabled(p, d, &dname);
+            deps.push(Dep { name: dname, kind, workspace, craft_ui });
         }
         out.push(Crate { name, deps });
     }
@@ -263,7 +295,7 @@ mod tests {
     use super::*;
 
     fn c(name: &str, deps: &[(&str, DepKind, bool)]) -> Crate {
-        Crate { name: name.into(), deps: deps.iter().map(|(n, k, w)| Dep { name: (*n).into(), kind: *k, workspace: *w }).collect() }
+        Crate { name: name.into(), deps: deps.iter().map(|(n, k, w)| Dep { name: (*n).into(), kind: *k, workspace: *w, craft_ui: false }).collect() }
     }
     use DepKind::*;
 
@@ -391,5 +423,39 @@ mod tests {
         assert!(doc.deps[0].workspace && !doc.deps[1].workspace);
         assert_eq!(doc.deps[2].kind, Dev);
         assert!(check(&g).is_empty());
+    }
+
+    #[test]
+    fn craft_ui_guard_uses_features_for_git_and_path_dependencies() {
+        for path in [None, Some("/x/craft-libs/crates/craft")] {
+            for (features, rename, forwarded, expected) in [
+                (&["imaging", "color-ui", "font-manager"][..], None, None, false),
+                (&["ui"][..], None, None, true),
+                (&["screen-testing"][..], None, None, true),
+                (&["layers"][..], None, None, true),
+                (&["cloud-ui"][..], None, None, true),
+                (&["cloud-ui-cloud"][..], None, None, true),
+                (&["cloud-ui-share"][..], None, None, true),
+                (&["theme-editor"][..], None, None, true),
+                (&["imaging"][..], None, Some("craft/cloud-ui"), true),
+                (&["imaging"][..], Some("facade"), Some("facade?/ui-testing"), true),
+            ] {
+                let meta = serde_json::json!({
+                    "packages": [{
+                        "name": "photocraft-engine",
+                        "features": { "extra": forwarded.as_slice() },
+                        "dependencies": [{
+                            "name": "craft", "rename": rename, "path": path, "features": features
+                        }]
+                    }]
+                });
+                let violations = check(&from_metadata(&meta).unwrap());
+                if expected {
+                    assert!(matches!(&violations[..], [Violation::UiBelowL6 { layer: 5, dep, .. }] if dep == "craft"), "{violations:?}");
+                } else {
+                    assert!(violations.is_empty(), "{violations:?}");
+                }
+            }
+        }
     }
 }
