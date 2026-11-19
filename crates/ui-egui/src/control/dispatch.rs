@@ -71,6 +71,14 @@ fn place_svg(app: &mut PhotocraftApp, params: &Value) -> Reply {
     if !crate::menus::allows(app, &CommandRef::new("file.placeEmbedded")) {
         return err("command is unavailable while a modal dialog is open");
     }
+    if params.get("index").is_some_and(|v| !v.is_null()) {
+        return err("`index` is only supported in headless mode; in bridge mode select the document in the app first");
+    }
+    if let Some(authorize) = app.services.automation_command.as_ref()
+        && let Err(error) = authorize("doc.placeSvg", params)
+    {
+        return err(error);
+    }
     let Some(svg) = params.get("svg").and_then(Value::as_str) else {
         return err("doc.placeSvg requires a string `svg` parameter");
     };
@@ -86,6 +94,8 @@ fn place_svg(app: &mut PhotocraftApp, params: &Value) -> Reply {
     opts.remove("svg");
     opts.remove("name");
     opts.entry("smartObject".to_owned()).or_insert(Value::Bool(true));
+    // Apply any Type box drag in progress before mutating the document, matching `execute_command`.
+    crate::type_box_preview::end_drag(app);
     Reply::from_result(
         photocraft_engine::file_cmds::place_bytes(&mut app.session, &name, svg.as_bytes().to_vec(), None, &Value::Object(opts)).map_err(|e| e.to_string()),
     )

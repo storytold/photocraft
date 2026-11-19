@@ -5,7 +5,7 @@
 //! so the model can inspect and edit the open document directly.
 
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -113,16 +113,18 @@ pub fn spawn(req: RunRequest) -> ActiveRun {
 fn run_worker(req: RunRequest, tx: &Sender<StreamEvent>, cancelled: &AtomicBool, child_slot: &Mutex<Option<Child>>) {
     let temp_dir = make_temp_run_dir();
     let cmd_res = build_command(&req, temp_dir.as_deref());
-    let mut cmd = match cmd_res {
-        Ok(c) => c,
+    let (mut cmd, stdin_prompt) = match cmd_res {
+        Ok(pair) => pair,
         Err(e) => {
             send_wake(tx, &req.ctx, StreamEvent::Error(e));
             send_wake(tx, &req.ctx, StreamEvent::Done);
+            cleanup_temp_dir(temp_dir.as_deref());
             return;
         }
     };
 
-    let mut child = match cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
+    let stdin_cfg = if stdin_prompt.is_some() { Stdio::piped() } else { Stdio::null() };
+    let mut child = match cmd.stdin(stdin_cfg).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
         Ok(c) => c,
         Err(e) => {
             send_wake(tx, &req.ctx, StreamEvent::Error(format!("Failed to launch {}: {e}", req.cli_bin.display())));
@@ -131,6 +133,12 @@ fn run_worker(req: RunRequest, tx: &Sender<StreamEvent>, cancelled: &AtomicBool,
             return;
         }
     };
+
+    if let Some(prompt_text) = stdin_prompt
+        && let Some(mut stdin) = child.stdin.take()
+    {
+        let _ = stdin.write_all(prompt_text.as_bytes());
+    }
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -219,8 +227,16 @@ fn wait_child_cancellable(child_slot: &Mutex<Option<Child>>, cancelled: &AtomicB
     }
 }
 
-fn build_command(req: &RunRequest, temp_dir: Option<&Path>) -> Result<Command, String> {
+/// Whether `path` is a Windows batch shim (`.cmd`/`.bat`), where `cmd.exe` splits arguments
+/// containing newlines and prompts must be delivered via stdin instead.
+fn uses_windows_batch_shim(path: &Path) -> bool {
+    path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("cmd") || ext.eq_ignore_ascii_case("bat"))
+}
+
+fn build_command(req: &RunRequest, temp_dir: Option<&Path>) -> Result<(Command, Option<String>), String> {
     let mut cmd = Command::new(&req.cli_bin);
+    let via_stdin = uses_windows_batch_shim(&req.cli_bin);
+    let mut stdin_prompt = None;
     let system_prompt = "You are embedded inside PhotoCraft, a desktop photo editor. \
         Use the `photocraft` MCP tools (`doc_inspect`, `doc_place_svg`, `command_list`, `command_run`, `command_batch`, etc.) \
         to read the open document and apply requested edits directly. \
@@ -229,7 +245,13 @@ fn build_command(req: &RunRequest, temp_dir: Option<&Path>) -> Result<Command, S
 
     match req.provider {
         AiProvider::Claude => {
-            cmd.arg("-p").arg(&req.prompt).arg("--output-format").arg("stream-json").arg("--verbose").arg("--append-system-prompt").arg(system_prompt);
+            cmd.arg("-p");
+            if via_stdin {
+                stdin_prompt = Some(req.prompt.clone());
+            } else {
+                cmd.arg(&req.prompt);
+            }
+            cmd.arg("--output-format").arg("stream-json").arg("--verbose").arg("--append-system-prompt").arg(system_prompt);
             if let Some(model) = req.model.as_deref().filter(|m| !m.is_empty()) {
                 cmd.arg("--model").arg(model);
             }
@@ -254,7 +276,13 @@ fn build_command(req: &RunRequest, temp_dir: Option<&Path>) -> Result<Command, S
         }
         AiProvider::Gemini => {
             let combined_prompt = format!("{system_prompt}\n\nUser request: {}", req.prompt);
-            cmd.arg("-p").arg(combined_prompt).arg("--output-format").arg("stream-json").env("GEMINI_CLI_TRUST_WORKSPACE", "true");
+            if via_stdin {
+                cmd.arg("-p").arg("");
+                stdin_prompt = Some(combined_prompt);
+            } else {
+                cmd.arg("-p").arg(combined_prompt);
+            }
+            cmd.arg("--output-format").arg("stream-json").env("GEMINI_CLI_TRUST_WORKSPACE", "true");
             if let Some(model) = req.model.as_deref().filter(|m| !m.is_empty()) {
                 cmd.arg("-m").arg(model);
             }
@@ -296,7 +324,7 @@ fn build_command(req: &RunRequest, temp_dir: Option<&Path>) -> Result<Command, S
             }
         }
     }
-    Ok(cmd)
+    Ok((cmd, stdin_prompt))
 }
 
 /// Parse one NDJSON line from `claude --output-format stream-json` or `gemini --output-format stream-json`.
@@ -529,6 +557,76 @@ mod tests {
 
         let internal = r#"{"type":"tool_use","tool_name":"update_topic","parameters":{"strategic_intent":"x"}}"#;
         assert!(parse_stream_line(AiProvider::Gemini, internal).is_empty());
+    }
+
+    #[test]
+    fn batch_shim_delivers_multiline_prompt_via_stdin() {
+        let ctx = egui::Context::default();
+        for (provider, bin) in [(AiProvider::Claude, "C:\\npm\\claude.cmd"), (AiProvider::Gemini, "C:\\npm\\gemini.cmd")] {
+            let req = RunRequest {
+                provider,
+                model: None,
+                cli_bin: PathBuf::from(bin),
+                photocraft_cli: None,
+                live_bridge: None,
+                prompt: "line one\nline two".to_owned(),
+                session_id: None,
+                gemini_api_key: None,
+                anthropic_api_key: None,
+                ctx: ctx.clone(),
+            };
+            let (cmd, stdin_prompt) = build_command(&req, None).unwrap();
+            for arg in cmd.get_args() {
+                let s = arg.to_string_lossy();
+                assert!(!s.contains('\n') && !s.contains('\r'), "arg for {bin} must not contain newlines: {s:?}");
+            }
+            let piped = stdin_prompt.expect("batch shim must pipe prompt via stdin");
+            assert!(piped.contains("line one\nline two"));
+        }
+
+        let exe_req = RunRequest {
+            provider: AiProvider::Claude,
+            model: None,
+            cli_bin: PathBuf::from("C:\\bin\\claude.exe"),
+            photocraft_cli: None,
+            live_bridge: None,
+            prompt: "hello".to_owned(),
+            session_id: None,
+            gemini_api_key: None,
+            anthropic_api_key: None,
+            ctx,
+        };
+        let (_cmd, stdin_prompt) = build_command(&exe_req, None).unwrap();
+        assert!(stdin_prompt.is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_cmd_shim_receives_multiline_prompt_via_stdin() {
+        let dir = make_temp_run_dir().unwrap();
+        let shim = dir.join("echo-stdin.cmd");
+        fs::write(&shim, "@echo off\r\nmore\r\n").unwrap();
+        let req = RunRequest {
+            provider: AiProvider::Gemini,
+            model: None,
+            cli_bin: shim,
+            photocraft_cli: None,
+            live_bridge: None,
+            prompt: "first line\nsecond line".to_owned(),
+            session_id: None,
+            gemini_api_key: None,
+            anthropic_api_key: None,
+            ctx: egui::Context::default(),
+        };
+        let (mut cmd, stdin_prompt) = build_command(&req, Some(&dir)).unwrap();
+        let piped = stdin_prompt.unwrap();
+        let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(piped.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        cleanup_temp_dir(Some(&dir));
+        assert!(out.status.success());
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains("first line") && stdout.contains("second line"), "unexpected stdout: {stdout:?}");
     }
 
     #[test]

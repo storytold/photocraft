@@ -162,7 +162,7 @@ pub(super) fn write_atomic_private(path: &Path, contents: &[u8]) -> Result<(), S
         opts.mode(0o600);
     }
     let mut file = opts.open(&tmp).map_err(|e| format!("Failed to create {}: {e}", tmp.display()))?;
-    if let Err(e) = file.write_all(contents).and_then(|()| file.flush()) {
+    if let Err(e) = file.write_all(contents).and_then(|()| file.flush()).and_then(|()| file.sync_all()) {
         drop(file);
         let _ = fs::remove_file(&tmp);
         return Err(format!("Failed to write {}: {e}", tmp.display()));
@@ -179,6 +179,10 @@ pub(super) fn write_atomic_private(path: &Path, contents: &[u8]) -> Result<(), S
     if let Err(e) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
         return Err(format!("Failed to replace {}: {e}", path.display()));
+    }
+    #[cfg(unix)]
+    if let Ok(dir) = fs::File::open(parent) {
+        let _ = dir.sync_all();
     }
     Ok(())
 }
