@@ -309,12 +309,20 @@ impl PruneCursor {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Surface {
     generation: u64,
     format: PixelFormat,
     default_pixel: Box<[u8]>,
     tiles: BTreeMap<TileCoord, Arc<Tile>>,
+}
+
+impl std::fmt::Debug for Surface {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The generation identifies an edit history. Independently opened copies of the same
+        // document should retain the same content representation.
+        f.debug_struct("Surface").field("format", &self.format).field("default_pixel", &self.default_pixel).field("tiles", &self.tiles).finish()
+    }
 }
 
 /// Use stack storage when it fits, otherwise reuse a dynamically sized sample buffer.
