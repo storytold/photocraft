@@ -2,8 +2,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-#[path = "../support/smart_filter_fixture.rs"]
-mod fixture;
+use crate::smart_filter_fixture as fixture;
 
 use fixture::{Fixture, assert_denied, cube, path_params};
 use photocraft_automation::{Headless, workspace::authorize_desktop_engine_step};
