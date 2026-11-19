@@ -113,7 +113,7 @@ fn blending_edits_one_filter_with_percent_opacity_and_undo_redo() {
         confirm(&mut app, id);
         let changed = filters(&app, layer);
         assert!((changed[0].opacity - 0.01).abs() < 1e-6);
-        assert_eq!(blend_key(changed[0].blend), blend);
+        assert_eq!((changed[0].blend).key().to_string(), blend);
         assert_eq!(serde_json::to_value(&changed[1]).unwrap(), serde_json::to_value(&original[1]).unwrap());
         assert_eq!(photocraft_engine::smart_cmds::contents_of(&app.session.active().unwrap().doc, layer).unwrap(), source);
         assert_eq!(app.session.active().unwrap().doc.layer(layer).unwrap().blend, BlendMode::Normal);
