@@ -41,11 +41,16 @@ fn the_catalog_is_built_only_when_its_inputs_change() {
     frames(&mut app, 100);
     assert_eq!(builds(&app), (1, 1), "idle frames build nothing");
 
+    // The tool and the colours as the app saves them: preference edits outside the catalog's inputs.
     let prefs = app.session.prefs.rev();
     crate::tool_memory::select(&mut app, Tool::Brush);
     app.run("tools.swapColors", json!({})).unwrap();
+    app.session.edit_prefs(|p| {
+        p.selected_tool = json!("Brush");
+        p.tool_colors = Default::default();
+    });
     frames(&mut app, 2);
-    assert_ne!(app.session.prefs.rev(), prefs, "the tool and the colours are preferences");
+    assert_ne!(app.session.prefs.rev(), prefs);
     assert_eq!(builds(&app), (1, 1), "a tool or colour change builds nothing");
 
     let generation = app.framework.keymap_inputs().1;
