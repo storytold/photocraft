@@ -205,8 +205,9 @@ pub fn replayable(id: &str) -> bool {
     // `layer.duplicate` for the copy) and record those: the wrappers look up the last transform in
     // the journal, so they fail where no transform ran yet, e.g. an action played in a new session.
     // Frame selection is not a journaled command (it makes no history step); recording notes it for this.
-    id == "actions.play"
-        || id == "animation.selectFrame"
+    // A Conditional is recorded with its predicate, not the branch it happened to play (or none),
+    // so playback evaluates the condition again on the current document (#7198, #7238).
+    matches!(id, "actions.play" | "actions.conditional" | "animation.selectFrame")
         || (!id.starts_with("actions.")
             // Browse executes its steps through Session::execute, so those concrete
             // commands are already journaled. Recording the wrapper as well replays
