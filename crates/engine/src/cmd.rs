@@ -109,6 +109,8 @@ pub mod history_menu_cmds;
 pub mod history_options_cmds;
 pub mod history_select_cmds;
 pub mod history_source_cmds;
+#[cfg(test)]
+mod hue_saturation_enabled_tests;
 pub mod image_cmds;
 pub mod layer_copy_cmds;
 pub mod layer_css_cmds;
@@ -1310,9 +1312,16 @@ fn build() -> Vec<CommandSpec> {
                 _ => None,
             },
             params,
-            enabled: crate::adjust_cmds::has_adjustable,
+            // Hue/Saturation refuses some modes, a hidden layer and a layer mask (#14749).
+            enabled: match kind {
+                "hueSaturation" => crate::adjust_cmds::hue_saturation_target_enabled,
+                _ => crate::adjust_cmds::has_adjustable,
+            },
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
+                if kind == "hueSaturation" {
+                    crate::adjust_cmds::hue_saturation_refusal(s, p)?;
+                }
                 if matches!(kind.as_str(), "levels" | "curves") {
                     crate::channel_cmds::resolve_tone_target(s, false, p)?;
                 }
