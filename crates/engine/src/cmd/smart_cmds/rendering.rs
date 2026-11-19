@@ -449,7 +449,10 @@ impl<'a> WarningRenderSources<'a> {
         self.srgb.is_some()
     }
 
-    fn image(&mut self, bytes: &Arc<Vec<u8>>, scale: f64, name: [u8; 32]) -> Result<(SourceImage, Vec<String>)> {
+    /// The SVG source rendered at `scale` with its omission warnings; stops with
+    /// [`EngineError::Cancelled`] once `ctl` is cancelled, before the render is converted to the
+    /// document's profile.
+    pub(super) fn image(&mut self, bytes: &Arc<Vec<u8>>, scale: f64, name: [u8; 32], ctl: &Interrupt) -> Result<(SourceImage, Vec<String>)> {
         let doc = self.document;
         // Non-SVG and unavailable sources keep their old fast path without
         // materializing ICC bytes. This immutable document needs the context once.
@@ -472,6 +475,7 @@ impl<'a> WarningRenderSources<'a> {
         WARNING_SOURCE_DECODES.with(|count| count.set(count.get().saturating_add(1)));
         let (buf, warnings) = photocraft_io::svg::rasterize_bounded_with_warnings(bytes, scale as f32, 24_000_000)
             .map_err(|e| other(format!("can't render the SVG smart object: {e}")))?;
+        check(ctl)?;
         // Charge owned native tiles, entry and warning storage, not borrowed encoded bytes.
         // This is a soft memo budget: oversize entries retain the existing uncached path.
         let cost = usize::try_from(photocraft_raster::tile_storage_bytes(buf.rect, &doc.pixel_format()))
@@ -547,7 +551,7 @@ fn render_with_warnings_using_in(sm: &SmartObject, sources: &mut WarningRenderSo
         sm,
         true,
         &mut |_, scale| {
-            let (image, omitted) = sources.image(&bytes, scale, name_key)?;
+            let (image, omitted) = sources.image(&bytes, scale, name_key, &ctl)?;
             check(&ctl)?;
             warnings.extend(omitted);
             Ok(image)
