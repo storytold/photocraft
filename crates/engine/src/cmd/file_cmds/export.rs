@@ -96,8 +96,11 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
             }
         }
 
+        // PNG file names use dashes for spaces (measured); the other formats keep them.
+        let part = |text: &str| if format == "png" { sanitize(text).replace(' ', "-") } else { sanitize(text) };
         // The prefix is optional; only the layer name needs the empty-name fallback.
-        let name = format!("{}_{:04}_{}.{format}", if prefix.is_empty() { String::new() } else { sanitize(&prefix) }, index, sanitize(&l.name));
+        let prefix_part = if prefix.is_empty() { String::new() } else { part(&prefix) };
+        let name = format!("{prefix_part}_{:04}_{}.{format}", index, part(&l.name));
         let (bytes, _warnings) = encode(&one, &name, save)?;
         write(&name, &bytes)?;
         report.files.push(name);

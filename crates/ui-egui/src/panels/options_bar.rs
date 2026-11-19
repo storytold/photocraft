@@ -240,8 +240,14 @@ fn stamp_members(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
         edit_brush(app, &flow, |b, v| b.flow = v);
         return;
     }
-    if matches!(tool, Tool::CloneStamp | Tool::HistoryBrush | Tool::ArtHistoryBrush) {
+    if matches!(tool, Tool::CloneStamp | Tool::HistoryBrush) {
         let opacity = percent_field(ui, tl!("Opacity"), brush.opacity, 1.0..=100.0);
+        edit_brush(app, &opacity, |b, v| b.opacity = v);
+    }
+    // The Art History Brush's Opacity carries the reference's tooltip (#12630).
+    if tool == Tool::ArtHistoryBrush {
+        let opacity = number_field_with_tip(ui, tl!("Opacity"), brush.opacity * 100.0, 1.0..=100.0, "%", Some(tl!("Set opacity for stroke")))
+            .map(|percent| percent / 100.0);
         edit_brush(app, &opacity, |b, v| b.opacity = v);
     }
     if matches!(tool, Tool::CloneStamp | Tool::HistoryBrush) {
@@ -276,9 +282,18 @@ pub(super) fn check(ui: &mut egui::Ui, label: &str, value: &mut bool) {
 /// A number field named `label` over `value` (in `unit` when it is not empty), limited to `range`. The events of this
 /// pass carry the edited value; an emptied field gives none.
 pub(super) fn number_field(ui: &mut egui::Ui, label: &str, value: f32, range: RangeInclusive<f64>, unit: &'static str) -> EditEvents<f32> {
+    number_field_with_tip(ui, label, value, range, unit, None)
+}
+
+/// [`number_field`] with `tip` as the field's tooltip when there is one.
+fn number_field_with_tip(ui: &mut egui::Ui, label: &str, value: f32, range: RangeInclusive<f64>, unit: &'static str, tip: Option<&str>) -> EditEvents<f32> {
     let events = labelled(ui, label, |ui| {
         let field = NumberField::new(label.to_owned(), Bind::given(Some(f64::from(value)))).range(range.clone()).scrub_by_label();
         let field = if unit.is_empty() { field } else { field.unit(unit) };
+        let field = match tip {
+            Some(tip) => field.tooltip(tip.to_owned()),
+            None => field,
+        };
         field.show(ui).events.clone()
     });
     events.unwrap_or_default().filter_map(|v| v.map(|v| v as f32))
