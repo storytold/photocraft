@@ -474,6 +474,58 @@ fn channel_restrictions_round_trip_as_brst() {
     assert!(f.layers().iter().find(|r| r.name() == "a").unwrap().block(b"brst").is_none());
 }
 
+fn channel_restrictions_psd(payload: Vec<u8>) -> Vec<u8> {
+    use craft_psd::{LayerSpec, PixelData, PsdBuilder, TaggedBlock};
+    let mut layer = LayerSpec::new("restricted", 0, 0, 1, 1, PixelData::Rgba8(vec![80, 120, 160, 255]));
+    layer.extra_blocks = vec![TaggedBlock::new(*b"zBef", vec![1, 2, 3, 4]), TaggedBlock::new(*b"brst", payload), TaggedBlock::new(*b"zAft", vec![5, 6, 7, 8])];
+    let mut builder = PsdBuilder::new(1, 1);
+    builder.push_layer(layer);
+    builder.composite(PixelData::Rgba8(vec![80, 120, 160, 255]));
+    builder.to_bytes().unwrap()
+}
+
+#[test]
+fn channel_restrictions_partial_records_preserve_valid_indices_and_neighboring_blocks() {
+    for trailing in [vec![0xaa], vec![0xaa, 0xbb], vec![0xaa, 0xbb, 0xcc]] {
+        // The complete indices are 31, 32, 0, 31: 32 is ignored and 31 is a duplicate.
+        let mut payload = vec![0, 0, 0, 31, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 0, 31];
+        payload.extend(trailing);
+        let bytes = channel_restrictions_psd(payload.clone());
+        let document = import("restrictions.psd", &bytes).unwrap().document;
+        let layer = document.layers.iter().find(|layer| layer.name == "restricted").unwrap();
+        assert_eq!(layer.excluded_channels, 0x8000_0001);
+        assert!(layer.psd_blocks.iter().any(|(key, data)| key == b"brst" && data.as_slice() == payload));
+
+        let saved = export(&document, "restrictions.psd", &ExportOptions::default()).unwrap().bytes;
+        let file = PsdFile::from_bytes(&saved).unwrap();
+        let record = file.layers().iter().find(|record| record.name() == "restricted").unwrap();
+        let preserved: Vec<_> = record.blocks.iter().filter(|block| [*b"zBef", *b"brst", *b"zAft"].contains(&block.key)).collect();
+        assert_eq!(preserved.iter().map(|block| block.key).collect::<Vec<_>>(), vec![*b"zBef", *b"brst", *b"zAft"]);
+        assert_eq!(preserved[0].data, vec![1, 2, 3, 4]);
+        assert_eq!(preserved[1].data, vec![0, 0, 0, 0, 0, 0, 0, 31]);
+        assert_eq!(preserved[2].data, vec![5, 6, 7, 8]);
+        let reopened = import("restrictions.psd", &saved).unwrap().document;
+        assert_eq!(reopened.layers.iter().find(|layer| layer.name == "restricted").unwrap().excluded_channels, 0x8000_0001);
+    }
+}
+
+#[test]
+fn channel_restrictions_without_valid_records_are_omitted() {
+    for payload in [vec![], vec![0xaa], vec![0xaa, 0xbb], vec![0xaa, 0xbb, 0xcc], vec![0, 0, 0, 32, 255, 255, 255, 255]] {
+        let bytes = channel_restrictions_psd(payload);
+        let document = import("restrictions.psd", &bytes).unwrap().document;
+        assert_eq!(document.layers.iter().find(|layer| layer.name == "restricted").unwrap().excluded_channels, 0);
+        let saved = export(&document, "restrictions.psd", &ExportOptions::default()).unwrap().bytes;
+        let file = PsdFile::from_bytes(&saved).unwrap();
+        let record = file.layers().iter().find(|record| record.name() == "restricted").unwrap();
+        assert!(record.block(b"brst").is_none());
+        assert_eq!(record.block(b"zBef").unwrap().data, vec![1, 2, 3, 4]);
+        assert_eq!(record.block(b"zAft").unwrap().data, vec![5, 6, 7, 8]);
+        let reopened = import("restrictions.psd", &saved).unwrap().document;
+        assert_eq!(reopened.layers.iter().find(|layer| layer.name == "restricted").unwrap().excluded_channels, 0);
+    }
+}
+
 /// Advanced Blending maps to `knko` / `infx` / `clbl` / `tsly` / `lmgm` / `vmgm` (one byte +
 /// three of padding), at every depth: non-default values are written, default layers gain no
 /// blocks, and imported blocks are rewritten in place.
