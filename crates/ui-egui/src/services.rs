@@ -508,8 +508,10 @@ pub struct Services {
     /// The file service the app's host answers file picks with (`HostBuilder::files`); `None` in tests that install none.
     pub files: Option<std::sync::Arc<dyn craft::host::Files>>,
     /// The main-thread side of the native file panels, pumped by the app.
+    #[cfg(not(target_arch = "wasm32"))]
     pub file_panels: Option<craft::dialogs::service::FilePanels>,
     /// The opened settings store and what opening it reported; `None` in the web build.
+    #[cfg(not(target_arch = "wasm32"))]
     pub settings: Option<(craft::settings::SettingsStore<photocraft_engine::prefs::SavedPrefs>, craft::settings::LoadReport)>,
     /// Decode a file's bytes into a document (PSD, PNG, JPEG, …).
     pub import: Option<ImportFn>,

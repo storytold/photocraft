@@ -34,7 +34,7 @@ fn display_image_matches_egui_unmultiplied_conversion() {
 
 /// #569: displays 1 (sRGB) and 4 (Display P3) side by side, and a document filled with an
 /// sRGB colour.
-fn app_on_two_displays() -> PhotocraftApp {
+fn app_on_two_displays() -> Box<PhotocraftApp> {
     use photocraft_engine::color_cmds::resolve_profile;
     use photocraft_engine::display_color::Display;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -80,35 +80,6 @@ fn composite_revision(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
 fn redrawn_since(app: &mut PhotocraftApp, ctx: &egui::Context, seen: Revision) -> Option<i64> {
     let prep = CompositePrep::new(app, ctx, 0, None, None).expect("an open document");
     prep.source(app).damage(seen).map(|r| i64::from(r.width()) * i64::from(r.height()))
-}
-
-#[test]
-fn gpu_display_luts_are_per_display() {
-    let _gpu = photocraft_testkit::gpu_lock();
-    let Ok(rs) = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) else {
-        eprintln!("skipping: no GPU adapter");
-        return;
-    };
-    let mut app = app_on_two_displays();
-    app.set_wgpu(rs);
-    let doc = app.session.documents()[0].doc.clone();
-    let key = doc.id.0;
-    // sRGB on the sRGB display needs no LUT; on the P3 display it does.
-    assert_eq!(sync_display_lut(&mut app, &doc, key, Some(1)), 0);
-    assert_eq!(sync_display_lut(&mut app, &doc, key, Some(4)), 3);
-    let gpu = app.gpu.clone().unwrap();
-    let (s1, s4) = (gpu.display_lut_signature(key, 1).unwrap(), gpu.display_lut_signature(key, 4).unwrap());
-    assert_ne!(s1.0, s4.0);
-    assert!(gpu.has_display_lut(key, 4) && !gpu.has_display_lut(key, 1));
-    // Drawing one window leaves the other's LUT alone.
-    for _ in 0..3 {
-        assert_eq!(sync_display_lut(&mut app, &doc, key, Some(1)), 0);
-        assert_eq!(sync_display_lut(&mut app, &doc, key, Some(4)), 3);
-    }
-    assert_eq!((gpu.display_lut_signature(key, 1), gpu.display_lut_signature(key, 4)), (Some(s1), Some(s4)));
-    assert!(gpu.has_display_lut(key, 4));
-    // The shared texture's key is the same for both displays.
-    assert_eq!(texture_key(canvas_display(&app, &doc, Some(1)).0.as_deref(), &doc), texture_key(canvas_display(&app, &doc, Some(4)).0.as_deref(), &doc));
 }
 
 /// The GPU canvas texture of a Multichannel document is filled by the CPU compositor, so its
@@ -165,7 +136,7 @@ fn navigator_damage_updates_match_a_full_thumbnail() {
 }
 
 /// An app with a 64 × 64 white document, a clone source and the Clone Stamp at `size` px.
-fn clone_overlay_app(size: f32) -> PhotocraftApp {
+fn clone_overlay_app(size: f32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.run("cloneSource.set", json!({"source": [16, 16]})).unwrap();
@@ -870,7 +841,7 @@ fn torn_off_document_is_not_drawn_again_in_the_main_window() {
         assert_eq!(app.session.active_index(), Some(0), "{kind:?}: the floated page remains active");
         assert_eq!(main_canvas_document(&app), Some(1), "{kind:?}: the main canvas picks a docked page instead");
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(680.0, 480.0)).with_context(app.ctx().clone()).build_ui_state(
-            |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+            |ui, (app, ready): &mut (Box<PhotocraftApp>, bool)| {
                 if *ready {
                     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
                 }
@@ -941,7 +912,7 @@ fn a_new_window_for_document_keeps_its_own_view() {
     let app_ctx = app.ctx().clone();
     crate::menus::invoke(&mut app, &app_ctx, "window.arrange.newWindowForDocument", json!({})).unwrap();
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 700.0)).with_context(app.ctx().clone()).build_ui_state(
-        |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+        |ui, (app, ready): &mut (Box<PhotocraftApp>, bool)| {
             if *ready {
                 egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
                 extra_windows(app, ui);
@@ -953,7 +924,7 @@ fn a_new_window_for_document_keeps_its_own_view() {
     h.run_steps(4);
     assert!(!h.state().0.ui.document_windows.floating.is_empty(), "the extra window is open");
     let window = first_window(&h.state().0);
-    let window_zoom = |h: &egui_kittest::Harness<'_, (PhotocraftApp, bool)>| h.state().0.ui.window_views[&window].zoom;
+    let window_zoom = |h: &egui_kittest::Harness<'_, (Box<PhotocraftApp>, bool)>| h.state().0.ui.window_views[&window].zoom;
     let before = window_zoom(&h);
     type_zoom(&mut h.state_mut().0.ui.views[0], 300.0);
     h.run_steps(3);
@@ -979,7 +950,7 @@ fn a_tiled_document_follows_navigator_and_status_bar_zoom() {
         let app_ctx = app.ctx().clone();
         crate::menus::invoke(&mut app, &app_ctx, &format!("window.arrange.{layout}"), json!({})).unwrap();
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 700.0)).with_context(app.ctx().clone()).build_ui_state(
-            |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+            |ui, (app, ready): &mut (Box<PhotocraftApp>, bool)| {
                 if *ready {
                     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
                 }
@@ -1033,7 +1004,7 @@ fn a_floating_document_follows_navigator_and_status_bar_zoom() {
     assert!(crate::panel_docking::is_front(h.state(), "navigator"), "the Navigator shows as a panel");
     assert_eq!(h.state().session.active_index(), Some(0), "the floating document is active");
     // The status bar's zoom field (bottom left) and the Navigator's.
-    let fields = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+    let fields = |h: &egui_kittest::Harness<'_, Box<PhotocraftApp>>| {
         // The fields are the nodes named Zoom that show the percentage as their value (a field's group and the Navigator's slider carry the name too).
         let mut f: Vec<egui::Rect> = h
             .query_all_by_label("Zoom")
@@ -1057,8 +1028,9 @@ fn a_floating_document_follows_navigator_and_status_bar_zoom() {
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
         h.event(egui::Event::Text(typed.into()));
         h.key_press(egui::Key::Enter);
-        h.run_steps(2);
-        h.run_steps(58);
+        // The harness steps 1/4 s a frame, so 10 frames after Enter are 2.5 s: well past the 150 ms zoom ease, with
+        // frames after it in which the window could write its view back (60 frames, 15 s, before #15652).
+        h.run_steps(10);
         assert!(h.state().ui.window_views.is_empty(), "the window keeps no copy of the view");
         assert!(
             (h.state().ui.views[0].zoom - want).abs() < 1e-3,
@@ -1097,4 +1069,37 @@ fn free_transform_redraws_only_the_moving_layer_when_the_box_opens_and_closes() 
     let committed = damage_since(&app, 0, (rev, key ^ dk), (rev + 1, 0), dk, (rev, Some(moved))).expect("committing too");
     assert!(committed.contains(20, 20) && committed.contains(139, 49), "{committed:?}");
     assert!(damage_since(&app, 0, (rev, key ^ dk), (rev + 2, 0), dk, (rev + 1, Some(moved))).is_none(), "a later revision isn't ours");
+}
+
+mod gpu_tests {
+    use super::*;
+
+    #[test]
+    fn gpu_display_luts_are_per_display() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let Ok(rs) = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let mut app = app_on_two_displays();
+        app.set_wgpu(rs);
+        let doc = app.session.documents()[0].doc.clone();
+        let key = doc.id.0;
+        // sRGB on the sRGB display needs no LUT; on the P3 display it does.
+        assert_eq!(sync_display_lut(&mut app, &doc, key, Some(1)), 0);
+        assert_eq!(sync_display_lut(&mut app, &doc, key, Some(4)), 3);
+        let gpu = app.gpu.clone().unwrap();
+        let (s1, s4) = (gpu.display_lut_signature(key, 1).unwrap(), gpu.display_lut_signature(key, 4).unwrap());
+        assert_ne!(s1.0, s4.0);
+        assert!(gpu.has_display_lut(key, 4) && !gpu.has_display_lut(key, 1));
+        // Drawing one window leaves the other's LUT alone.
+        for _ in 0..3 {
+            assert_eq!(sync_display_lut(&mut app, &doc, key, Some(1)), 0);
+            assert_eq!(sync_display_lut(&mut app, &doc, key, Some(4)), 3);
+        }
+        assert_eq!((gpu.display_lut_signature(key, 1), gpu.display_lut_signature(key, 4)), (Some(s1), Some(s4)));
+        assert!(gpu.has_display_lut(key, 4));
+        // The shared texture's key is the same for both displays.
+        assert_eq!(texture_key(canvas_display(&app, &doc, Some(1)).0.as_deref(), &doc), texture_key(canvas_display(&app, &doc, Some(4)).0.as_deref(), &doc));
+    }
 }

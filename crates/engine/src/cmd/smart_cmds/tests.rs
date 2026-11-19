@@ -5,6 +5,7 @@ mod selection;
 mod source_flatten;
 mod stack_cache;
 mod svg_profile;
+mod svg_stack_completeness;
 
 const DEPTHS: [u64; 3] = [8, 16, 32];
 const W: i32 = 64;
