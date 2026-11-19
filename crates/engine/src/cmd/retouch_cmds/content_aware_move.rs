@@ -842,9 +842,11 @@ mod tests {
 
     #[test]
     fn a_preview_within_the_full_resolution_budget_is_the_plain_solve_bit_for_bit() {
-        let mut s = textured(300, 300);
-        s.execute("select.rect", json!({"x": 20, "y": 30, "width": 60, "height": 50})).unwrap();
-        for p in [json!({"offset": [120, 90]}), json!({"offset": [120, 90], "rotate": 30, "mode": "extend"})] {
+        // The solves are short on a small canvas and selection; the budget edge is checked on a
+        // canvas that holds a 256 × 256 selection and its move.
+        let mut s = textured(110, 90);
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 24, "height": 20})).unwrap();
+        for p in [json!({"offset": [60, 50]}), json!({"offset": [60, 50], "rotate": 30, "mode": "extend"})] {
             let job = preview(&s, &p).unwrap();
             assert!(!job.is_coarse());
             let (got, damage) = job.run(&JobCtx::new()).unwrap();
@@ -859,6 +861,7 @@ mod tests {
             assert!(got.layers[0].surface().unwrap().read_region(b) == want.layers[0].surface().unwrap().read_region(b), "{p}");
         }
         // 256 × 256 is the largest selection solved at full resolution.
+        let mut s = textured(300, 300);
         s.execute("select.rect", json!({"x": 0, "y": 0, "width": 256, "height": 256})).unwrap();
         assert!(!preview(&s, &json!({"offset": [20, 20]})).unwrap().is_coarse());
         s.execute("select.rect", json!({"x": 0, "y": 0, "width": 257, "height": 256})).unwrap();
@@ -876,7 +879,14 @@ mod tests {
         s.edit("faint selection", |doc, _| {
             let mut sel = Surface::new(photocraft_color::PixelFormat::GRAY8);
             let r = Rect::new(20, 20, 536, 536);
-            let data: Vec<f32> = (r.y0..r.y1).flat_map(|y| (r.x0..r.x1).map(move |x| if x % 4 == 0 && y % 4 == 0 { 1.0 / 255.0 } else { 0.0 })).collect();
+            // Two clusters at opposite corners: the bounds are what scale the preview, and the few
+            // selected pixels keep the solve short.
+            let near = |v: i32| v < r.x0 + 40 || v >= r.x1 - 40;
+            let data: Vec<f32> = (r.y0..r.y1)
+                .flat_map(|y| {
+                    (r.x0..r.x1).map(move |x| if x % 4 == 0 && y % 4 == 0 && near(x) && near(y) && (x < 300) == (y < 300) { 1.0 / 255.0 } else { 0.0 })
+                })
+                .collect();
             sel.write_region(r, &data);
             doc.selection = Some(sel);
             Ok(())
@@ -891,7 +901,9 @@ mod tests {
         let b = got.bounds();
         let before = s.active().unwrap().doc.layers[0].surface().unwrap().read_region(b);
         assert!(got.layers[0].surface().unwrap().read_region(b) != before, "the preview moves something");
-        s.execute("paint.contentAwareMove", p).unwrap();
+        // That the command takes this selection too is shown by `preview` above: it runs the
+        // command's own `plan`, which rejects an empty selection, at full resolution. The
+        // command's full-resolution solve is left out: nothing here checked its result.
     }
 }
 

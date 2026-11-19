@@ -18,7 +18,7 @@ const INTERSECT: &str = "Intersect with selection";
 
 /// A 100 × 100 document with the Quick Selection, while the other selection tools sit on
 /// Intersect — a mode the Quick Selection doesn't have.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 100, "height": 100})).unwrap();
     app.ui.tool = Tool::QuickSelection;
@@ -26,7 +26,7 @@ fn app() -> PhotocraftApp {
     app
 }
 
-fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     use crate::app::framework::BuildApp;
     let mut h = Harness::builder().with_size(vec2(1400.0, 120.0)).build_app(
         |ui, app: &mut PhotocraftApp| {

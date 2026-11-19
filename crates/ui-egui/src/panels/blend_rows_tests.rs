@@ -106,7 +106,7 @@ fn blend_rows_edits_become_previews_and_history_steps() {
 }
 
 /// A document of `width` × `height` with one more layer, the Move tool active, in the real window.
-fn harness(width: u32, height: u32) -> Harness<'static, PhotocraftApp> {
+fn harness(width: u32, height: u32) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
@@ -119,17 +119,17 @@ fn harness(width: u32, height: u32) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn active_blend(h: &Harness<'_, PhotocraftApp>) -> BlendMode {
+fn active_blend(h: &Harness<'_, Box<PhotocraftApp>>) -> BlendMode {
     let st = h.state().session.active().unwrap();
     st.doc.layer(st.active_layer.unwrap()).unwrap().blend
 }
 
-fn list_open(h: &Harness<'_, PhotocraftApp>) -> bool {
+fn list_open(h: &Harness<'_, Box<PhotocraftApp>>) -> bool {
     h.query_all_by_label("Multiply").next().is_some()
 }
 
 /// Opens the Layers panel's Blend Mode list with a click.
-fn open_list(h: &mut Harness<'_, PhotocraftApp>) {
+fn open_list(h: &mut Harness<'_, Box<PhotocraftApp>>) {
     let select = h
         .query_all_by_role(Role::ComboBox)
         .filter(|n| n.accesskit_node().label().as_deref() == Some("Blend Mode"))

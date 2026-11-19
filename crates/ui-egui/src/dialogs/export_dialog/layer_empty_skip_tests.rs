@@ -20,7 +20,7 @@ struct Layers {
 /// 100 x 80 with, bottom to top: Background, `Empty` (no pixels), an Invert adjustment layer,
 /// `Gone` (pixels only past the right edge), `Red` and `Blue` (filled). Its file dialogs stay open
 /// until the test answers them.
-fn app() -> (PhotocraftApp, Layers, Written, Arc<ScriptedFiles>) {
+fn app() -> (Box<PhotocraftApp>, Layers, Written, Arc<ScriptedFiles>) {
     let written = Written::default();
     let capture = written.clone();
     let files = Arc::new(ScriptedFiles::held());
