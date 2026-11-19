@@ -42,6 +42,8 @@ pub struct DocState {
     /// Layers panel: layers whose effects list is collapsed under their row (the fx triangle;
     /// view state, not history). Effects lists start open.
     pub fx_collapsed: Vec<LayerId>,
+    /// See [`DocState::layers_view_revision`].
+    layers_view_revision: u64,
     /// ⌥-click on a layer's eye (`layer.showOnly`): the layer shown alone and every layer's
     /// visibility before, so the next ⌥-click restores it (view state, not history).
     pub show_only: Option<(LayerId, Vec<(LayerId, bool)>)>,
@@ -125,6 +127,7 @@ impl DocState {
             isolated_layers: Vec::new(),
             symmetry: None,
             fx_collapsed: Vec::new(),
+            layers_view_revision: 0,
             show_only: None,
             floating: None,
             color_samplers: Vec::new(),
@@ -195,9 +198,18 @@ impl DocState {
         self.bump_revision(!self.is_dirty());
         self.last_damage = Some(photocraft_geom::Rect::EMPTY);
     }
-    /// Move to the next revision for a view-only change (a group opened, an effects list
-    /// collapsed, a history state deleted): readers keyed on the revision follow it, pixel caches
-    /// ignore it through `view_revision`, and no pixels need drawing again. `keep_clean` as for
+    /// Moves when an effects list or a group in the Layers panel opens or closes. That is view
+    /// state, not an edit, so [`DocState::revision`] stays; the Layers panel's rows key on this.
+    pub fn layers_view_revision(&self) -> u64 {
+        self.layers_view_revision
+    }
+    /// Count an effects list or group opened or closed (see [`Self::layers_view_revision`]).
+    pub(crate) fn note_disclosure_change(&mut self) {
+        self.layers_view_revision += 1;
+    }
+    /// Move to the next revision for a view-only change (channel eyes, a history state deleted,
+    /// Layers panel isolation): readers keyed on the revision follow it, pixel caches ignore it
+    /// through `view_revision`, and no pixels need drawing again. `keep_clean` as for
     /// [`Self::bump_revision`].
     pub(crate) fn bump_view_revision(&mut self, keep_clean: bool) {
         self.view_revision += 1;

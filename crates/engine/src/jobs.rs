@@ -1874,6 +1874,7 @@ impl Session {
                     } else if !st.fx_collapsed.contains(&layer_id) {
                         st.fx_collapsed.push(layer_id);
                     }
+                    st.note_disclosure_change();
                 }
                 self.after_command(id, params, spec.journal, automation, Some(nested_from), pre_selected.as_deref(), &record_before);
                 Ok(Started::Done(v))

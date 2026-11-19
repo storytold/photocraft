@@ -450,14 +450,15 @@ impl LayerTree for PhotoLayers<'_> {
         self.app.canvas_hover_layer
     }
 
-    /// Rows move, open, close or appear only through the layer stack, whose index every write drops, and the
-    /// document's view state (effects lists, isolation), whose changes move the revision. A Type Mask session's
-    /// working text comes and goes outside both, so the rows are walked each pass while it runs.
+    /// Rows move, open, close or appear only through the layer stack, whose index every write drops, the document
+    /// revision (isolation, the selection) and the Layers view revision (effects lists and groups opened or closed).
+    /// A Type Mask session's working text comes and goes outside all three, so the rows are walked each pass while it
+    /// runs.
     fn revision(&self) -> Option<u64> {
         if self.working_text.is_some() {
             return None;
         }
-        Some(Revision::of(&(self.doc().id.0, self.st.revision, self.doc().layers.index().serial())).get())
+        Some(Revision::of(&(self.doc().id.0, self.st.revision, self.st.layers_view_revision(), self.doc().layers.index().serial())).get())
     }
 }
 
