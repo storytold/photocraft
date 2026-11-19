@@ -624,7 +624,8 @@ fn chisel_fields_do_not_depend_on_the_threads() {
     for (k, m) in maps.iter().enumerate() {
         for reach in [3.0f32, 12.0] {
             let one = with_threads(1, || (sharp_edges(m), distance_field_of(m, reach)));
-            for threads in [2, 5, 16] {
+            // 2 threads give groups of several units with a short last one, 16 one unit a group: the two ways `par_units` splits work (#15652).
+            for threads in [2, 16] {
                 let many = with_threads(threads, || (sharp_edges(m), distance_field_of(m, reach)));
                 assert_eq!(one.0.slot, many.0.slot, "map {k} sharp slots on {threads} threads");
                 let edges = |s: &SharpEdges| {
@@ -675,7 +676,8 @@ fn bevel_maps_do_not_depend_on_the_threads() {
                     }
                     let run = || bevel_maps(shape, &b, &light, &tex, &PreparedPatterns::new(&pats, PREPARED_PATTERN_BYTES)).0;
                     let one = with_threads(1, run);
-                    for threads in [2, 5, 16] {
+                    // 2 threads give groups of several units with a short last one, 16 one unit a group: the two ways `par_units` splits work (#15652).
+                    for threads in [2, 16] {
                         let many = with_threads(threads, run);
                         assert_eq!(one.len(), many.len());
                         for (j, (a, m)) in one.iter().zip(&many).enumerate() {

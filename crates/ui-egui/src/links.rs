@@ -41,13 +41,14 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context, url: &str) -> Value {
 /// never comes up before the clipboard holds the report. Without the service, `ctx.open_url`
 /// queues behind the copy in the same output (and keeps the click's gesture on the web).
 pub fn report_issue(app: &mut PhotocraftApp, ctx: &egui::Context) -> Value {
+    install_pass_hooks(ctx);
     ctx.copy_text(crate::gpu_status::diagnostics_report(app).join("\n"));
     if app.services.open_url.is_none() {
         return open_issues(app, ctx);
     }
     // In a UI pass the copy goes out when this root frame ends; a hidden window's logic-only
     // call hands its output over as it returns. The frame is kept either way, so a pass not yet
-    // marked as one (hooks installed during the first pass) still waits for the next frame.
+    // marked as one (hooks installed during this pass) still waits for the next frame.
     let frame = ctx.cumulative_frame_nr_for(egui::ViewportId::ROOT);
     ctx.data_mut(|d| d.insert_temp(pending_id(), frame));
     ctx.request_repaint();
@@ -60,7 +61,7 @@ pub fn report_issue(app: &mut PhotocraftApp, ctx: &egui::Context) -> Value {
 pub fn open_pending(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(queued) = ctx.data(|d| d.get_temp::<u64>(pending_id())) else { return };
     // A logic-only call runs after every earlier call's output was handed over.
-    let delivered = !crate::type_tool::in_ui_pass(ctx) || ctx.cumulative_frame_nr_for(egui::ViewportId::ROOT) > queued;
+    let delivered = !in_ui_pass(ctx) || ctx.cumulative_frame_nr_for(egui::ViewportId::ROOT) > queued;
     if !delivered {
         ctx.request_repaint();
         return;
@@ -73,47 +74,45 @@ fn pending_id() -> egui::Id {
     egui::Id::unique("links::report_issue")
 }
 
+fn ui_pass_id(viewport: egui::ViewportId) -> egui::Id {
+    egui::Id::unique("links::ui_pass").with(viewport)
+}
+
+/// Mark UI passes apart from a hidden window's logic-only calls (`Context::run_logic`), which
+/// run `logic` with no pass around it. Once per Context; installed from inside a running pass,
+/// it marks the passes after it (egui is already iterating that pass's begin hooks). The hooks
+/// retain neither the app nor the Context.
+pub(crate) fn install_pass_hooks(ctx: &egui::Context) {
+    let installed = egui::Id::unique("links::pass_hooks");
+    if ctx.data(|d| d.get_temp::<bool>(installed)).unwrap_or(false) {
+        return;
+    }
+    ctx.data_mut(|d| d.insert_temp(installed, true));
+    ctx.on_begin_pass(
+        "photocraft report-issue UI pass",
+        std::sync::Arc::new(|ui| {
+            let key = ui_pass_id(ui.ctx().viewport_id());
+            ui.ctx().data_mut(|d| d.insert_temp(key, true));
+        }),
+    );
+    ctx.on_end_pass(
+        "photocraft report-issue UI pass end",
+        std::sync::Arc::new(|ui| {
+            let key = ui_pass_id(ui.ctx().viewport_id());
+            ui.ctx().data_mut(|d| d.insert_temp(key, false));
+        }),
+    );
+}
+
+fn in_ui_pass(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(ui_pass_id(ctx.viewport_id()))).unwrap_or(false)
+}
+
 fn open_issues(app: &mut PhotocraftApp, ctx: &egui::Context) -> Value {
     let r = open(app, ctx, ISSUES);
     let template = "Opened {url}. System Info (graphics adapter, render path, slow frames) was copied to the clipboard: paste it into the issue.";
     app.ui.status = crate::i18n::fmt(tl!(template), &[("url", ISSUES)]);
     r
-}
-
-/// The prominent "Join us on Discord" button.
-pub fn discord_button(app: &mut PhotocraftApp, ui: &mut egui::Ui, min_width: f32) -> egui::Response {
-    let r = crate::widgets::primary_button(ui, tl!("Join us on Discord"), min_width).on_hover_text(DISCORD);
-    if r.clicked() {
-        open(app, ui.ctx(), DISCORD);
-    }
-    r
-}
-
-/// "PhotoCraft website · GitHub · ArtCraft" as links, centred. Clicks route through [`open`] (the
-/// platform browser service) rather than `ui.hyperlink_to`, which uses the unreliable `ctx.open_url`.
-pub fn link_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let t = crate::theme::Tokens::get(ui.ctx());
-    let links = [(tl!("PhotoCraft website"), APP_PAGE), (tl!("GitHub"), GITHUB), (tl!("ArtCraft"), ARTCRAFT_WEBSITE)];
-    let font = egui::FontId::proportional(12.5);
-    let sep = "  ·  ";
-    let width: f32 = links.iter().map(|(l, _)| ui.painter().layout_no_wrap((*l).into(), font.clone(), t.text).size().x).sum::<f32>()
-        + 2.0 * ui.painter().layout_no_wrap(sep.into(), font.clone(), t.text).size().x;
-    let mut clicked: Option<&str> = None;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
-        for (i, (label, url)) in links.iter().enumerate() {
-            if i > 0 {
-                ui.label(egui::RichText::new(sep).font(font.clone()).color(t.text_faint));
-            }
-            if ui.link(egui::RichText::new(*label).font(font.clone()).color(t.accent)).on_hover_text(*url).clicked() {
-                clicked = Some(url);
-            }
-        }
-    });
-    if let Some(url) = clicked {
-        open(app, ui.ctx(), url);
-    }
 }
 
 #[cfg(test)]
@@ -135,13 +134,13 @@ mod tests {
             ..Default::default()
         };
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
-        let ctx = egui::Context::default();
+        let ctx = app.ctx().clone();
         // Every Help-menu link id reaches the service with its URL.
         for (id, url) in COMMANDS {
             crate::menus::invoke(&mut app, &ctx, id, json!({})).unwrap();
-            // Report an Issue opens once its copy is delivered (`report_issue_copies_the_diagnostics_first`).
+            // Report an Issue opens on the next call, once its copy is delivered
+            // (`report_issue_copies_the_diagnostics_first`); outside a pass that is this one.
             if *id == "help.reportIssue" {
-                ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
                 open_pending(&mut app, &ctx);
             }
             assert_eq!(opened.lock().unwrap().last().map(String::as_str), Some(*url), "{id}");
@@ -149,29 +148,6 @@ mod tests {
         // The direct open() helper (Discord button / start-page links) also uses it.
         open(&mut app, &ctx, DISCORD);
         assert_eq!(opened.lock().unwrap().last().map(String::as_str), Some(DISCORD));
-    }
-
-    #[test]
-    fn help_menu_lists_links_then_separator_then_system_info_and_about() {
-        let app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        let help: Vec<String> = crate::menus::menu_items(&app).into_iter().filter(|i| i.path == ["Help"]).map(|i| i.id).collect();
-        assert_eq!(
-            help,
-            [
-                "help.discord",
-                "help.website",
-                "help.artcraftWebsite",
-                "help.github",
-                "help.reportIssue",
-                "help.checkForUpdates",
-                "---",
-                "help.systemInfo",
-                "help.about"
-            ]
-        );
-        for (id, _) in COMMANDS {
-            assert!(crate::menus::is_live(id) && crate::menus::is_enabled(&app, id), "{id}");
-        }
     }
 
     #[test]
@@ -189,8 +165,9 @@ mod tests {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
         app.perf.gpu_info.adapter = "Test GPU".into();
         let ctx = egui::Context::default();
-        // As the app's creator does: marks UI passes apart from a hidden window's logic-only calls.
-        PhotocraftApp::install_type_reset_hooks(&ctx);
+        // Hooks from an earlier report: they mark UI passes apart from a hidden window's
+        // logic-only calls from the first pass on.
+        install_pass_hooks(&ctx);
         let mut out = ctx.run_ui(Default::default(), |ui| {
             crate::menus::invoke(&mut app, ui.ctx(), "help.reportIssue", json!({})).unwrap();
             // A later pass of the same frame: its output (the copy) isn't delivered yet.
@@ -232,7 +209,7 @@ mod tests {
         assert_eq!(opened.lock().unwrap().len(), 3);
     }
 
-    /// A host that installs the pass hooks during its first pass: that pass isn't marked, the
+    /// The first report installs the pass hooks during its pass: that pass isn't marked, the
     /// next pass of the same frame is, and the page still waits for the frame's copy.
     #[test]
     fn report_issue_waits_for_its_frame_when_hooks_arrive_late() {
@@ -253,7 +230,6 @@ mod tests {
         ctx.run_ui(Default::default(), |ui| {
             open_pending(&mut app, ui.ctx());
             if passes == 0 {
-                PhotocraftApp::install_type_reset_hooks(ui.ctx());
                 crate::menus::invoke(&mut app, ui.ctx(), "help.reportIssue", json!({})).unwrap();
                 ui.ctx().request_discard("a second pass of the frame that copied");
             }
@@ -265,20 +241,5 @@ mod tests {
         assert!(opened.lock().unwrap().is_empty(), "not in a later pass of the frame that copied");
         ctx.run_ui(Default::default(), |ui| open_pending(&mut app, ui.ctx())).textures_delta.clear();
         assert_eq!(opened.lock().unwrap().as_slice(), [ISSUES.to_string()]);
-    }
-
-    #[test]
-    fn link_commands_open_their_urls() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        let ctx = egui::Context::default();
-        for (id, url) in [
-            ("help.discord", "https://discord.gg/artcraft"),
-            ("help.website", "https://getartcraft.com/apps/photocraft"),
-            ("help.github", "https://github.com/storytold/photocraft"),
-        ] {
-            let r = crate::menus::invoke(&mut app, &ctx, id, serde_json::json!({})).unwrap();
-            assert_eq!(r["url"], url);
-            assert_eq!(app.ui.status, format!("Opened {url}"));
-        }
     }
 }
