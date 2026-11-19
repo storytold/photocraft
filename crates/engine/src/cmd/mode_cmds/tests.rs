@@ -440,6 +440,47 @@ fn indexed_matte_without_transparency_fills_clear_pixels_and_rejects_bad_input_a
 }
 
 #[test]
+fn indexed_exact_rejects_full_opaque_palette_with_clear_pixels_atomically() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 257, "height": 1, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 256 { [x as f32 / 255.0, x as f32 / 255.0, x as f32 / 255.0, 1.0] } else { [0.0; 4] });
+    let before = doc(&s).layers[0].surface().unwrap().to_interleaved(doc(&s).bounds());
+    let history = s.active().unwrap().history.past_len();
+    let revision = s.active().unwrap().revision;
+    let error = s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none", "transparency": true})).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("255") && message.contains("transparent entry"), "{message}");
+    assert_eq!(doc(&s).mode, ColorMode::Rgb);
+    assert!(doc(&s).color_table.is_none());
+    assert_eq!(doc(&s).layers[0].surface().unwrap().to_interleaved(doc(&s).bounds()), before);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+    assert_eq!(s.active().unwrap().revision, revision);
+}
+
+#[test]
+fn indexed_exact_reserves_transparency_only_when_needed_and_available() {
+    for (opaque, clear) in [(255u32, true), (256, false)] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": opaque + u32::from(clear), "height": 1, "background": "transparent"})).unwrap();
+        paint(&mut s, |x, _| if x < opaque as i32 { [x as f32 / 255.0, x as f32 / 255.0, x as f32 / 255.0, 1.0] } else { [0.0; 4] });
+        let result = s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none", "transparency": true})).unwrap();
+        assert_eq!(doc(&s).mode, ColorMode::Indexed);
+        let table = doc(&s).color_table.as_ref().unwrap();
+        assert_eq!(table.colors.len(), 256);
+        assert_eq!(table.transparent, if clear { Some(255) } else { None });
+        assert_eq!(result["transparentIndex"], if clear { json!(255) } else { Value::Null });
+        let surface = doc(&s).layers[0].surface().unwrap();
+        for x in 0..opaque as i32 {
+            let gray = x as f32 / 255.0;
+            assert_eq!(surface.rgba(x, 0), [gray, gray, gray, 1.0]);
+        }
+        if clear {
+            assert_eq!(surface.rgba(opaque as i32, 0)[3], 0.0);
+        }
+    }
+}
+
+#[test]
 fn indexed_exact_transparency_and_sources() {
     // Two colours + transparency: exact palette with a transparent entry.
     let mut s = Session::new();
