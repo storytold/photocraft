@@ -228,6 +228,8 @@ impl PhotocraftApp {
             #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
             live_tokens: theme::live::LiveTokens::from_env(),
         };
+        #[cfg(all(test, not(target_arch = "wasm32")))]
+        photocraft_raster::spill::use_test_volume_space();
         // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
         // The workspace set reads the loaded preferences (and moves the earlier saves into it).
@@ -331,3 +333,6 @@ impl eframe::App for Box<PhotocraftApp> {
 
 #[cfg(test)]
 mod clipboard_tests;
+
+#[cfg(test)]
+mod apply_data_set_alert_tests;

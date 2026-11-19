@@ -343,7 +343,7 @@ pub struct Interface {
     /// The theme id of the light slot.
     #[serde(deserialize_with = "theme_ids::theme")]
     pub light_theme: String,
-    /// Theme ids shown in the appearance button's context menu.
+    /// Theme ids starred in Preferences › Interface; #13581 decides where they show.
     #[serde(deserialize_with = "theme_ids::themes")]
     pub favorite_themes: Vec<String>,
     /// Pasteboard colour in standard screen mode (`canvasCustomColor` when "custom").
@@ -1944,6 +1944,12 @@ impl Session {
     /// The current preferences.
     pub fn prefs(&self) -> &Preferences {
         self.prefs.get()
+    }
+
+    /// Revision of the framework preference section `key`: it moves when an edit changes that
+    /// section.
+    pub fn section_rev(&self, key: &str) -> u64 {
+        self.prefs.section_rev(key)
     }
 
     /// Change preferences and apply the engine-side ones.

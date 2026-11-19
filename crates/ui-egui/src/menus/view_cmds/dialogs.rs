@@ -268,6 +268,15 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
             plain(vec![
                 folder("dir", tl!("Destination"), dir),
                 Param::new("prefix", tl!("File Name Prefix"), ParamKind::text(stem(&name))),
+                // Include Overlapping Areas / Artboard Content Only, right below the prefix, with no caption (#13629).
+                Param::new(
+                    "content",
+                    "",
+                    ParamKind::radio(
+                        opts(&[("overlapping", tl!("Include Overlapping Areas")), ("artboard", tl!("Artboard Content Only"))]),
+                        Some("overlapping".to_owned()),
+                    ),
+                ),
                 // The reference application's list, PSD chosen when the dialog opens (#13635).
                 choice("format", tl!("File Type"), artboard_formats(), "psd"),
                 export_quality(),
