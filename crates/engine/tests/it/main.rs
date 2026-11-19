@@ -77,6 +77,7 @@ mod hdr_gamma_direction;
 mod huge_doc_flatten;
 mod image_size_scale_styles;
 mod image_size_scale_styles_atn;
+mod import_preparation;
 mod integration_batch;
 mod jpeg_exif_resolution;
 mod keyboard_shortcut_bulk;
@@ -132,6 +133,14 @@ mod unsupported_smart_filters;
 mod vector_paste_options;
 mod wand_transparent_copy;
 mod working_rgb_profile;
+mod xcf_import_report;
+mod xcf_native_editing;
+mod xcf_native_effects;
+mod xcf_native_persistence;
+mod xcf_native_relationships;
+mod xcf_native_shapes;
+mod xcf_native_text;
+mod xcf_place_preparation;
 mod xmp_charref;
 
 // Shared by atn_shape_blur and csh_import.

@@ -1,7 +1,7 @@
 use super::filters::smart;
 use super::source::{
-    SourceImage, cache_get, cache_put, convert_svg_source, source_bytes, source_cache_key, source_image_classified, source_surface_from_buffer,
-    svg_source_image_in, vector_scale,
+    SourceImage, cache_get_authorized, cache_put, convert_svg_source, decode_source_classified_in, flattened_source, source_bytes, source_cache_key,
+    source_image_in_context, source_surface_from_buffer, svg_source_image_in, vector_scale,
 };
 use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, JobCtx, Layer, LayerContent, LayerId, PixelFormat, Rect, Result, SmartFilter, SmartObject,
@@ -16,7 +16,6 @@ use std::sync::{Mutex, Weak};
 pub fn stack_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photocraft_doc::StackMode) -> Result<SourceImage> {
     stack_image_with_order(file_name, bytes, fmt, mode, None)
 }
-
 /// Stack source layers with the persisted historical sample interpretation as part of the cache key.
 pub fn stack_image_with_order(
     file_name: &str,
@@ -25,124 +24,18 @@ pub fn stack_image_with_order(
     mode: photocraft_doc::StackMode,
     order: Option<HistoricalXcfSampleOrder>,
 ) -> Result<SourceImage> {
-    stack_image_classified(file_name, bytes, fmt, mode, None, order)
-}
-
-fn stack_image_classified(
-    file_name: &str,
-    bytes: &[u8],
-    fmt: PixelFormat,
-    mode: photocraft_doc::StackMode,
-    svg: Option<bool>,
-    order: Option<HistoricalXcfSampleOrder>,
-) -> Result<SourceImage> {
-    use photocraft_algo::stack::Stat;
-    let mut key = source_cache_key(file_name, bytes, fmt, svg, order);
-    // Use a separate domain from entries that predate plain SVG completeness checks.
-    key.0 = *blake3::hash(&[&key.0[..], b"stack-source-v3:", mode.id().as_bytes()].concat()).as_bytes();
-    if let Some(img) = cache_get(&key) {
-        return Ok(img);
-    }
-    let svg = svg.unwrap_or_else(|| photocraft_io::svg::is_svg(bytes));
-    let doc = super::decode_source_classified(file_name, bytes, svg, order)?;
-    let layers: &[Layer] = match doc.layers.as_slice() {
-        [only] if only.is_group() => only.children().unwrap_or_default(),
-        all => all,
-    };
-    let bounds = doc.bounds();
-    // An SVG opens with one layer per shape, and every visible one gets its own float frame:
-    // they may take 1 GiB together, the SVG import's own budget, before any is rendered.
-    if svg {
-        let visible = u64::try_from(layers.iter().filter(|l| l.visible).count()).unwrap_or(u64::MAX);
-        let frame_bytes = doc.size.area().saturating_mul(16);
-        if visible.saturating_mul(frame_bytes) > 1 << 30 {
-            return Err(EngineError::Other("the SVG has too many shapes for Stack Mode at this size".into()));
-        }
-    }
-    let frames: Vec<Vec<[f32; 4]>> = layers
-        .iter()
-        .filter(|l| l.visible)
-        .map(|l| {
-            let mut one = l.clone();
-            one.blend = BlendMode::Normal;
-            one.clipped = false;
-            photocraft_compose::render_layer(&one, bounds).into_px()
-        })
-        .collect();
-    if frames.is_empty() {
-        return Err(EngineError::Other("the smart object's contents have no visible layers".into()));
-    }
-    let stat = match mode {
-        photocraft_doc::StackMode::Entropy => Stat::Entropy,
-        photocraft_doc::StackMode::Kurtosis => Stat::Kurtosis,
-        photocraft_doc::StackMode::Maximum => Stat::Maximum,
-        photocraft_doc::StackMode::Mean => Stat::Mean,
-        photocraft_doc::StackMode::Median => Stat::Median,
-        photocraft_doc::StackMode::Minimum => Stat::Minimum,
-        photocraft_doc::StackMode::Range => Stat::Range,
-        photocraft_doc::StackMode::Skewness => Stat::Skewness,
-        photocraft_doc::StackMode::StandardDeviation => Stat::StandardDeviation,
-        photocraft_doc::StackMode::Summation => Stat::Summation,
-        photocraft_doc::StackMode::Variance => Stat::Variance,
-    };
-    let buf = photocraft_compose::Buffer { rect: bounds, px: photocraft_algo::stack::combine(&frames, stat) };
-    let img = SourceImage { surface: Arc::new(source_surface_from_buffer(&doc, &buf, fmt)?), bounds };
-    cache_put(key, img.clone());
-    Ok(img)
+    stack_image_in_with_order(file_name, bytes, fmt, mode, photocraft_io::svg::is_svg(bytes), order, &JobCtx::new())
 }
 
 // ---------- rendering ----------
 
 /// Mix a filter's result with its input, without stacking the same pixel coverage twice.
-pub(super) fn blend_surfaces(base: &Surface, top: &Surface, mode: BlendMode, opacity: f32) -> Surface {
-    if opacity <= 0.0 {
-        return base.clone();
-    }
-    let fmt = base.format();
+pub(super) fn blend_surfaces(base: &Surface, top: &Surface, mode: BlendMode, opacity: f32, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Surface> {
     let area = base.content_bounds().union(&top.content_bounds());
-    let mut out = base.clone();
-    if area.is_empty() {
-        return out;
-    }
-    let n = fmt.channels();
-    let (b, t) = (base.read_region(area), top.read_region(area));
-    // Alpha-preserving filters edit the same coverage. A non-Normal filter that
-    // changes coverage (e.g. blur) must also retain input-only pixels and admit
-    // filtered-only pixels, as Photoshop's Smart Filter blend oracles require.
-    // Classify the whole result so unchanged pixels do not switch blend rules
-    // independently at the edge of a blur.
-    let composite_coverage = mode != BlendMode::Normal && fmt.alpha && b.chunks_exact(n).zip(t.chunks_exact(n)).any(|(bp, tp)| bp.last() != tp.last());
-    let mut o = vec![0.0f32; b.len()];
-    for ((bp, tp), op) in b.chunks_exact(n).zip(t.chunks_exact(n)).zip(o.chunks_exact_mut(n)) {
-        let b = photocraft_raster::to_rgba(&fmt, bp);
-        let t = photocraft_raster::to_rgba(&fmt, tp);
-        if composite_coverage {
-            let rgba = photocraft_color::blend::composite(mode, b, t, opacity);
-            photocraft_raster::from_rgba_into(&fmt, rgba, op);
-            continue;
-        }
-        let cb = [b[0], b[1], b[2]];
-        let ct = [t[0], t[1], t[2]];
-        let color = if fmt.sample == photocraft_color::SampleType::F32 {
-            photocraft_color::blend::blend_rgb_hdr(mode, cb, ct)
-        } else {
-            photocraft_color::blend::blend_rgb(mode, cb, ct)
-        };
-        // A filter edits this surface, rather than adding a second source-over layer. Mix
-        // premultiplied results so alpha-preserving filters keep coverage at every opacity,
-        // while Normal-mode filters that change coverage interpolate it too.
-        let a = b[3] + (t[3] - b[3]) * opacity;
-        let mut rgba = [0.0, 0.0, 0.0, a];
-        if a > 0.0 {
-            for c in 0..3 {
-                rgba[c] = (cb[c] * b[3] * (1.0 - opacity) + color[c] * t[3] * opacity) / a;
-            }
-        }
-        photocraft_raster::from_rgba_into(&fmt, rgba, op);
-    }
-    out.write_region(area, &o);
-    out.prune();
-    out
+    photocraft_compose::smart_mix::mix(base, top, area, mode, opacity, ctl).map_err(|error| match error {
+        photocraft_compose::smart_mix::Error::Cancelled => EngineError::Cancelled,
+        _ => EngineError::Other(error.to_string()),
+    })
 }
 
 /// Runs the smart filter stack on the placed (unfiltered) content. A filter the session's
@@ -186,38 +79,36 @@ fn apply_smart_filter(f: &SmartFilter, sm: &SmartObject, cur: &Surface, canvas: 
     // Equalize bypasses `apply_filter_to_surface_in` (the gate there), so check the command first.
     crate::jobs::authorize_render_command(&f.command, &f.params)?;
     let params = crate::distort_cmds::placed_puppet_params(&f.command, &f.params, sm);
-    let rendered = if f.command == "image.adjustments.equalize" {
-        ctx.check()?;
-        crate::adjust_cmds::adjust_as_filter("equalize", &params, cur, sm.filter_mask.as_ref())?
-    } else {
-        crate::filters::apply_filter_to_surface_in(&f.command, &params, cur, canvas, None, extent, ctx)?
-    };
-    let out = match rendered {
-        // Unknown ids (e.g. Photoshop filters we don't implement) leave the pixels alone.
-        Some(out) => out,
-        None => cur.clone(),
-    };
-    if f.blend == BlendMode::Normal && f.opacity >= 1.0 { Ok(out) } else { Ok(blend_surfaces(cur, &out, f.blend, f.opacity.clamp(0.0, 1.0))) }
+    apply_smart_filter_in(f, &params, cur, canvas, extent, sm.filter_mask.as_ref(), ctx)
 }
 
 /// The source placed in document pixels, before any smart filter (uncached test oracle).
 #[cfg(test)]
-pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) -> Result<Surface> {
-    place_with_svg(name, bytes, doc, sm, photocraft_io::svg::is_svg(bytes), &mut |bytes, scale| svg_source_image_in(bytes, doc, scale))
+pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject, ctx: &JobCtx, prepared: Option<&SourceImage>) -> Result<Surface> {
+    let source = RenderSource { name, bytes, is_svg: photocraft_io::svg::is_svg(bytes) };
+    place_with_svg(source, doc, sm, ctx, prepared, &mut |bytes, scale| svg_source_image_in(bytes, doc, scale))
+}
+
+struct RenderSource<'a> {
+    name: &'a str,
+    bytes: &'a [u8],
+    is_svg: bool,
 }
 
 fn place_with_svg(
-    name: &str,
-    bytes: &[u8],
+    source: RenderSource<'_>,
     doc: &Document,
     sm: &SmartObject,
-    is_svg: bool,
+    ctx: &JobCtx,
+    prepared: Option<&SourceImage>,
     svg: &mut impl FnMut(&[u8], f64) -> Result<SourceImage>,
 ) -> Result<Surface> {
+    ctx.check()?;
+    let RenderSource { name, bytes, is_svg } = source;
     let fmt = doc.pixel_format();
     // A vector source is rendered at the placement's scale, and the placement is divided by
     // that scale so the rendered pixels land where the source units would.
-    if sm.stack_mode.is_none() && sm.warp.is_none() && is_svg {
+    if prepared.is_none() && sm.stack_mode.is_none() && sm.warp.is_none() && is_svg {
         let k = vector_scale(sm);
         let img = svg(bytes, k)?;
         return Ok(match &sm.perspective {
@@ -236,11 +127,14 @@ fn place_with_svg(
         });
     }
     let order = sm.historical_xcf_sample_order;
-    let img = match sm.stack_mode {
-        Some(mode) if is_svg => convert_svg_source(stack_image_classified(name, bytes, PixelFormat::RGBA32F, mode, Some(is_svg), order)?, doc)?,
-        None if is_svg => svg(bytes, 1.0)?,
-        Some(mode) => stack_image_classified(name, bytes, fmt, mode, Some(is_svg), order)?,
-        None => source_image_classified(name, bytes, fmt, is_svg, order)?,
+    let img = match prepared {
+        Some(image) => image.clone(),
+        None => match sm.stack_mode {
+            Some(mode) if is_svg => convert_svg_source(stack_image_in_with_order(name, bytes, PixelFormat::RGBA32F, mode, true, order, ctx)?, doc)?,
+            None if is_svg => svg(bytes, 1.0)?,
+            Some(mode) => stack_image_in_with_order(name, bytes, fmt, mode, false, order, ctx)?,
+            None => source_image_in_context(name, bytes, fmt, false, order, ctx)?,
+        },
     };
     // The placed stage is unclipped: a large enough placement (an image scaled to fill a huge
     // frame) would otherwise fill memory before any allocation could fail.
@@ -347,10 +241,11 @@ pub(crate) fn source_box(doc: &Document, sm: &SmartObject) -> Option<[f64; 4]> {
     let fmt = doc.pixel_format();
     let is_svg = photocraft_io::svg::is_svg(&bytes);
     let order = sm.historical_xcf_sample_order;
+    let ctx = JobCtx::new();
     let r = match sm.stack_mode {
         None if is_svg => photocraft_io::svg::bounded_canvas_bounds(&bytes, 24_000_000).ok()?,
-        Some(mode) => stack_image_classified(&name, &bytes, fmt, mode, Some(is_svg), order).ok()?.bounds,
-        None => source_image_classified(&name, &bytes, fmt, is_svg, order).ok()?.bounds,
+        Some(mode) => stack_image_in_with_order(&name, &bytes, fmt, mode, is_svg, order, &ctx).ok()?.bounds,
+        None => source_image_in_context(&name, &bytes, fmt, false, order, &ctx).ok()?.bounds,
     };
     Some([f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1)])
 }
@@ -488,14 +383,15 @@ pub(crate) fn render_with_warnings_using(sm: &SmartObject, sources: &mut Warning
     let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok((None, Vec::new())) };
     if !photocraft_io::svg::is_svg(&bytes) {
         // Keep the same source snapshot for fallback, including authorized linked reads.
-        return render_in_with_source(doc, sm, &JobCtx::new(), Some((name, bytes))).map(|surface| (surface, Vec::new()));
+        return render_with_source_in(doc, sm, &JobCtx::new(), None, Some((name, bytes))).map(|surface| (surface, Vec::new()));
     }
     let name_key = *blake3::hash(name.as_bytes()).as_bytes();
     if !unapplied_filters(sm).is_empty() {
         return Err(other("the smart object has unsupported visible filters"));
     }
     let mut warnings = Vec::new();
-    let placed = place_with_svg(&name, &bytes, doc, sm, true, &mut |_, scale| {
+    let source = RenderSource { name: &name, bytes: &bytes, is_svg: true };
+    let placed = place_with_svg(source, doc, sm, &JobCtx::new(), None, &mut |_, scale| {
         let (image, omitted) = sources.image(&bytes, scale, name_key)?;
         warnings.extend(omitted);
         Ok(image)
@@ -507,72 +403,7 @@ pub(crate) fn render_with_warnings_using(sm: &SmartObject, sources: &mut Warning
 /// is cancelled. Gives the same pixels as [`apply_smart_filters`] on the placed source, but
 /// starts from the deepest stage of the stack already rendered (see [`stack_cache`]).
 pub(super) fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Result<Option<Surface>> {
-    render_in_with_source(doc, sm, ctx, None)
-}
-
-fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapshot: Option<(String, Arc<Vec<u8>>)>) -> Result<Option<Surface>> {
-    // A trusted UI render may have populated these stages. Check authority even on a hit.
-    for filter in sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible) {
-        crate::jobs::authorize_render_command(&filter.command, &filter.params)?;
-    }
-    let Some((name, original)) = snapshot.or_else(|| source_bytes(&doc.metadata, &sm.source)) else { return Ok(None) };
-    let bytes = display_source(sm, &original);
-    let (fmt, canvas) = (doc.pixel_format(), doc.bounds());
-    // Plain SVG uses the original strict vector path. Gzip sources use ordinary
-    // file import and native-size pixels, as existing saved objects expect.
-    let is_svg = photocraft_io::svg::is_svg(&bytes);
-    let mut h = blake3::Hasher::new();
-    h.update(b"smart-placement-v3:");
-    h.update(&stack_cache::placed_key(&name, &bytes, fmt, sm, canvas));
-    if is_svg {
-        h.update(&crate::color_cmds::document_profile(doc).to_bytes());
-    }
-    let placed_key: StageKey = *h.finalize().as_bytes();
-    let placed = || -> Result<Stage> {
-        if let Some(stage) = stack_cache::get(&placed_key) {
-            return Ok(stage);
-        }
-        let surface = place_with_svg(&name, &bytes, doc, sm, is_svg, &mut |bytes, scale| svg_source_image_in(bytes, doc, scale))?;
-        let stage = Stage { extent: canvas.union(&surface.content_bounds()), surface };
-        stack_cache::put(placed_key, &stage);
-        Ok(stage)
-    };
-    let filters: Vec<&SmartFilter> = sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible).collect();
-    if filters.is_empty() {
-        return Ok(Some(placed()?.surface));
-    }
-    let keys: Vec<StageKey> = filters
-        .iter()
-        .scan(placed_key, |key, f| {
-            *key = stack_cache::filter_key(key, f, sm.filter_mask.as_ref());
-            Some(*key)
-        })
-        .collect();
-    let deepest = keys.iter().enumerate().rev().find_map(|(i, key)| stack_cache::get(key).map(|stage| (i + 1, stage)));
-    let (done, mut cur) = match deepest {
-        Some(hit) => hit,
-        None => (0, placed()?),
-    };
-    let n = filters.len() as f32;
-    // The object's bounds, found once: the placed stage may have been evicted from the cache, and
-    // placing it again for every render filter would decode the source each time.
-    let mut object_bounds: Option<Rect> = None;
-    for (i, (f, key)) in filters.iter().zip(&keys).enumerate().skip(done) {
-        ctx.check()?;
-        ctx.progress(i as f32 / n, "");
-        let bounds = match object_bounds {
-            _ if !renders_in_object(f) => canvas,
-            Some(b) => b,
-            None => *object_bounds.insert(filter_bounds(f, &placed()?.surface, canvas)),
-        };
-        cur = Stage { surface: apply_smart_filter(f, sm, &cur.surface, bounds, cur.extent, ctx)?, extent: cur.extent };
-        stack_cache::put(*key, &cur);
-    }
-    ctx.progress(1.0, "");
-    Ok(Some(match sm.filter_mask.as_ref().filter(|m| m.enabled) {
-        Some(m) => photocraft_compose::filter_mask::mix(&placed()?.surface, &cur.surface, m),
-        None => cur.surface,
-    }))
+    render_with_source_in(doc, sm, ctx, None, None)
 }
 
 /// Bytes held by rendered smart filter stages.
@@ -589,10 +420,7 @@ pub fn purge_stack_cache() -> usize {
 /// source and the filters under it, without the filter mask. `Ok(None)` when the source is
 /// unavailable.
 pub fn render_below_filter(doc: &Document, sm: &SmartObject, index: usize) -> Result<Option<Surface>> {
-    let mut below = sm.clone();
-    below.smart_filters.truncate(index);
-    below.filter_mask = None;
-    render(doc, &below)
+    render_below_filter_in(doc, sm, index, &JobCtx::new())
 }
 
 /// Re-renders smart layer `l` (which lives in `doc`) in place. Returns false if its source is
@@ -659,3 +487,285 @@ pub(super) fn refresh_or_fail_in(doc: &mut Document, id: LayerId, ctx: &JobCtx) 
 #[cfg(test)]
 #[path = "tests/source_work.rs"]
 mod source_work_tests;
+
+/// Recheck a cached stack source's stored commands before reuse; cold sources record preparation checks.
+fn stack_image_in_with_order(
+    file_name: &str,
+    bytes: &[u8],
+    fmt: PixelFormat,
+    mode: photocraft_doc::StackMode,
+    is_svg: bool,
+    order: Option<HistoricalXcfSampleOrder>,
+    ctx: &JobCtx,
+) -> Result<SourceImage> {
+    ctx.check()?;
+    let mut key = source_cache_key(file_name, bytes, fmt, is_svg, order);
+    // Keep a distinct domain for sources that have passed strict SVG completeness checks.
+    key.0 = *blake3::hash(&[&key.0[..], b"stack-source-v3:", mode.id().as_bytes()].concat()).as_bytes();
+    if let Some(image) = cache_get_authorized(&key, ctx)? {
+        return Ok(image);
+    }
+    let recording = crate::jobs::render_proof::start()?;
+    let doc = decode_source_classified_in(file_name, bytes, is_svg, order, ctx)?;
+    if is_svg {
+        let layers = match doc.layers.as_slice() {
+            [only] if only.is_group() => only.children().unwrap_or_default(),
+            all => all,
+        };
+        let visible = u64::try_from(layers.iter().filter(|l| l.visible).count()).unwrap_or(u64::MAX);
+        if visible.saturating_mul(doc.size.area().saturating_mul(16)) > 1 << 30 {
+            return Err(other("the SVG has too many shapes for Stack Mode at this size"));
+        }
+    }
+    let img = prepared_source_image(&doc, fmt, Some(mode), ctx)?;
+    cache_put(key, img.clone(), recording.finish(), true);
+    Ok(img)
+}
+
+/// Compose already prepared native contents without decoding or opening a second preparation allowance.
+pub(crate) fn prepared_source_image(doc: &Document, fmt: PixelFormat, mode: Option<photocraft_doc::StackMode>, ctx: &JobCtx) -> Result<SourceImage> {
+    ctx.check()?;
+    let Some(mode) = mode else {
+        let image = SourceImage { surface: Arc::new(flattened_source(doc, fmt)?), bounds: doc.bounds() };
+        ctx.check()?;
+        return Ok(image);
+    };
+    let buf = prepared_stack_buffer(doc, mode, ctx)?;
+    let image = SourceImage { surface: Arc::new(source_surface_from_buffer(doc, &buf, fmt)?), bounds: buf.rect };
+    ctx.check()?;
+    Ok(image)
+}
+
+/// Only statistics belong here; interpreting native U8/F32 or SVG sRGB encoding
+/// belongs to the caller and must happen exactly once after the combination.
+fn prepared_stack_buffer(doc: &Document, mode: photocraft_doc::StackMode, ctx: &JobCtx) -> Result<photocraft_compose::Buffer> {
+    ctx.check()?;
+    use photocraft_algo::stack::Stat;
+    let layers: &[Layer] = match doc.layers.as_slice() {
+        [only] if only.is_group() => only.children().unwrap_or_default(),
+        all => all,
+    };
+    let bounds = doc.bounds();
+    let visible = u64::try_from(layers.iter().filter(|layer| layer.visible).count()).unwrap_or(u64::MAX);
+    let frame_bytes = u64::from(bounds.width()).saturating_mul(u64::from(bounds.height())).saturating_mul(16);
+    // Stack statistics retain one full RGBA frame per visible layer, even for
+    // sparse native inputs. Enforce the existing SVG frame allowance here too,
+    // before any source type can allocate those frames through this shared API.
+    if visible.saturating_mul(frame_bytes) > 1 << 30 {
+        return Err(other("the smart object's visible Stack Mode frames exceed the 1 GiB working allowance"));
+    }
+    let mut frames = Vec::new();
+    for layer in layers.iter().filter(|layer| layer.visible) {
+        ctx.check()?;
+        let mut one = layer.clone();
+        one.blend = BlendMode::Normal;
+        one.clipped = false;
+        frames.push(photocraft_compose::render_layer(&one, bounds).into_px());
+    }
+    if frames.is_empty() {
+        return Err(EngineError::Other("the smart object's contents have no visible layers".into()));
+    }
+    let stat = match mode {
+        photocraft_doc::StackMode::Entropy => Stat::Entropy,
+        photocraft_doc::StackMode::Kurtosis => Stat::Kurtosis,
+        photocraft_doc::StackMode::Maximum => Stat::Maximum,
+        photocraft_doc::StackMode::Mean => Stat::Mean,
+        photocraft_doc::StackMode::Median => Stat::Median,
+        photocraft_doc::StackMode::Minimum => Stat::Minimum,
+        photocraft_doc::StackMode::Range => Stat::Range,
+        photocraft_doc::StackMode::Skewness => Stat::Skewness,
+        photocraft_doc::StackMode::StandardDeviation => Stat::StandardDeviation,
+        photocraft_doc::StackMode::Summation => Stat::Summation,
+        photocraft_doc::StackMode::Variance => Stat::Variance,
+    };
+    let buf = photocraft_compose::Buffer { rect: bounds, px: photocraft_algo::stack::combine(&frames, stat) };
+    ctx.check()?;
+    Ok(buf)
+}
+
+/// Use the same source-depth and profile conversions as the saved SVG Stack Mode renderer.
+/// The caller retains its shared preparation render reservation while this source is composed.
+pub(crate) fn prepared_svg_source_image(source: &Document, parent: &Document, mode: Option<photocraft_doc::StackMode>, ctx: &JobCtx) -> Result<SourceImage> {
+    ctx.check()?;
+    let mode = mode.ok_or_else(|| other("non-Stack SVG preparation must use its original whole-drawing renderer"))?;
+    let image = prepared_source_image(source, PixelFormat::RGBA32F, Some(mode), ctx)?;
+    let image = convert_svg_source(image, parent)?;
+    ctx.check()?;
+    Ok(image)
+}
+
+/// Replay an ordinary native filter with interruption, preserving unknown-filter fallback and native blend/opacity
+/// mixing.
+fn apply_smart_filter_in(
+    f: &SmartFilter,
+    params: &Value,
+    cur: &Surface,
+    canvas: Rect,
+    extent: Rect,
+    mask: Option<&super::LayerMask>,
+    ctx: &JobCtx,
+) -> Result<Surface> {
+    ctx.check()?;
+    let rendered = if f.command == "image.adjustments.equalize" {
+        crate::adjust_cmds::adjust_as_filter("equalize", params, cur, mask)?
+    } else {
+        crate::filters::apply_filter_to_surface_in(&f.command, params, cur, canvas, None, extent, ctx)?
+    };
+    let out = match rendered {
+        // Unknown ids (e.g. Photoshop filters we don't implement) leave the pixels alone.
+        Some(out) => out,
+        None => cur.clone(),
+    };
+    ctx.check()?;
+    let cancelled = || ctx.cancelled();
+    let ctl = photocraft_raster::Interrupt::cancel_only(&cancelled);
+    if f.blend == BlendMode::Normal && f.opacity >= 1.0 { Ok(out) } else { blend_surfaces(cur, &out, f.blend, f.opacity.clamp(0.0, 1.0), &ctl) }
+}
+
+/// Replay against a caller-prepared source using the same cancellation and authorization scope.
+fn render_with_source_in(
+    doc: &Document,
+    sm: &SmartObject,
+    ctx: &JobCtx,
+    prepared: Option<&SourceImage>,
+    snapshot: Option<(String, Arc<Vec<u8>>)>,
+) -> Result<Option<Surface>> {
+    ctx.check()?;
+    // Stored filters can come from a file or another layer. Check before looking up cached
+    // stages too: a trusted UI render may have populated this process-wide cache earlier.
+    for filter in sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible) {
+        crate::jobs::authorize_render_command(&filter.command, &filter.params)?;
+    }
+    let Some((name, bytes)) = snapshot.or_else(|| source_bytes(&doc.metadata, &sm.source)) else { return Ok(None) };
+    let bytes = display_source(sm, &bytes);
+    let (fmt, canvas) = (doc.pixel_format(), doc.bounds());
+    // Even an exact rendered-stage hit must not skip authorization of commands
+    // stored inside its source. Shared preparation supplies this already checked image.
+    let is_svg = photocraft_io::svg::is_svg(&bytes);
+    let decoded_source = if prepared.is_none() && !is_svg {
+        Some(match sm.stack_mode {
+            Some(mode) => stack_image_in_with_order(&name, &bytes, fmt, mode, false, sm.historical_xcf_sample_order, ctx)?,
+            None => source_image_in_context(&name, &bytes, fmt, false, sm.historical_xcf_sample_order, ctx)?,
+        })
+    } else {
+        None
+    };
+    let prepared = prepared.or(decoded_source.as_ref());
+    let mut h = blake3::Hasher::new();
+    h.update(b"smart-placement-v3:");
+    h.update(&stack_cache::placed_key(&name, &bytes, fmt, sm, canvas));
+    if is_svg {
+        h.update(&crate::color_cmds::document_profile(doc).to_bytes());
+    }
+    let placed_key: StageKey = *h.finalize().as_bytes();
+    let placed = || -> Result<Stage> {
+        if let Some(stage) = stack_cache::get(&placed_key) {
+            return Ok(stage);
+        }
+        let source = RenderSource { name: &name, bytes: &bytes, is_svg };
+        let surface = place_with_svg(source, doc, sm, ctx, prepared, &mut |bytes, scale| svg_source_image_in(bytes, doc, scale))?;
+        // Edge pixels repeat at the canvas ∪ placed-content edge, as for layer filters.
+        let stage = Stage { extent: canvas.union(&surface.content_bounds()), surface };
+        stack_cache::put(placed_key, &stage);
+        Ok(stage)
+    };
+    let filters: Vec<&SmartFilter> = sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible).collect();
+    if filters.is_empty() {
+        let surface = placed()?.surface;
+        ctx.check()?;
+        return Ok(Some(surface));
+    }
+    let keys: Vec<StageKey> = filters
+        .iter()
+        .scan(placed_key, |key, f| {
+            *key = stack_cache::filter_key(key, f, sm.filter_mask.as_ref());
+            Some(*key)
+        })
+        .collect();
+    let deepest = keys.iter().enumerate().rev().find_map(|(i, key)| stack_cache::get(key).map(|stage| (i + 1, stage)));
+    let (done, mut cur) = match deepest {
+        Some(hit) => hit,
+        None => (0, placed()?),
+    };
+    let n = filters.len() as f32;
+    // The object's bounds, found once: the placed stage may have been evicted from the cache, and
+    // placing it again for every render filter would decode the source each time.
+    let mut object_bounds: Option<Rect> = None;
+    for (i, (f, key)) in filters.iter().zip(&keys).enumerate().skip(done) {
+        ctx.check()?;
+        ctx.progress(i as f32 / n, "");
+        let bounds = match object_bounds {
+            _ if !renders_in_object(f) => canvas,
+            Some(b) => b,
+            None => *object_bounds.insert(filter_bounds(f, &placed()?.surface, canvas)),
+        };
+        cur = Stage { surface: apply_smart_filter(f, sm, &cur.surface, bounds, cur.extent, ctx)?, extent: cur.extent };
+        stack_cache::put(*key, &cur);
+    }
+    ctx.progress(1.0, "");
+    let surface = match sm.filter_mask.as_ref().filter(|m| m.enabled) {
+        Some(m) => photocraft_compose::filter_mask::mix(&placed()?.surface, &cur.surface, m),
+        None => cur.surface,
+    };
+    ctx.check()?;
+    Ok(Some(surface))
+}
+
+/// The same native prefix render with the importing job's cancellation and authority.
+pub(crate) fn render_below_filter_in(doc: &Document, sm: &SmartObject, index: usize, ctx: &JobCtx) -> Result<Option<Surface>> {
+    render_below_filter_with_source(doc, sm, index, ctx, None)
+}
+
+/// Analyze a filter prefix from the shared preparer's actual prepared source instead of reopening its original bytes.
+pub(crate) fn render_below_filter_with_source(
+    doc: &Document,
+    sm: &SmartObject,
+    index: usize,
+    ctx: &JobCtx,
+    prepared: Option<&SourceImage>,
+) -> Result<Option<Surface>> {
+    ctx.check()?;
+    let mut below = sm.clone();
+    below.smart_filters.truncate(index);
+    below.filter_mask = None;
+    render_with_source_in(doc, &below, ctx, prepared, None)
+}
+
+/// A missing import cache must not silently omit a stored native filter. Valid imported caches
+/// are left alone by the caller, including caches for filters this build cannot reproduce.
+/// Install a cache only after replay from the supplied shared-ledger source succeeds.
+pub(crate) fn prepare_layer_with_source(doc: &Document, layer: &mut Layer, ctx: &JobCtx, prepared: Option<&SourceImage>) -> Result<bool> {
+    if let LayerContent::Smart(sm) = &layer.content {
+        let missing = unapplied_filters(sm);
+        if !missing.is_empty() {
+            return Err(other(format!("cannot prepare native smart layer: unavailable filter(s): {}", missing.join(", "))));
+        }
+    }
+    let LayerContent::Smart(object) = &mut layer.content else { return Ok(false) };
+    match render_with_source_in(doc, object, ctx, prepared, None)? {
+        Some(surface) => {
+            ctx.check()?;
+            object.cache = Some(surface);
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
+#[cfg(test)]
+mod prepared_source_tests {
+    use super::*;
+    use photocraft_geom::Size;
+    #[test]
+    fn native_stack_frames_are_admitted_before_sparse_layer_rendering() {
+        let mut source = Document::new("Sparse stack", Size::new(6000, 4000), super::super::ColorMode::Rgb, super::super::SampleType::F32);
+        for name in ["One", "Two", "Three"] {
+            source.layers.push(Layer::raster(name, source.pixel_format()));
+        }
+        let error = prepared_source_image(&source, source.pixel_format(), Some(photocraft_doc::StackMode::Mean), &JobCtx::new()).unwrap_err();
+        assert!(error.to_string().contains("Stack Mode frames"));
+        let ctx = JobCtx::new();
+        ctx.cancel();
+        assert!(matches!(prepared_source_image(&source, source.pixel_format(), Some(photocraft_doc::StackMode::Mean), &ctx), Err(EngineError::Cancelled)));
+    }
+}

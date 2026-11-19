@@ -40,7 +40,9 @@ pub(super) fn open_as_smart_object(s: &mut Session, p: &Value) -> Result<Value> 
             let bytes = read_file(&path)?;
             ctx.check()?;
             ctx.progress(0.05, "Decoding");
-            let (r, damaged) = import_result_for_open(&name, &bytes, &opts)?;
+            let (mut r, damaged) = import_result_for_open(&name, &bytes, &opts)?;
+            ctx.check()?;
+            crate::import_prepare::prepare_imported_document(&mut r.document, ctx)?;
             ctx.check()?;
             ctx.progress(0.9, "Flattening");
             // The file as one image: the smart object's rendered contents.

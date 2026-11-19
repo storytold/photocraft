@@ -86,7 +86,12 @@ fn svg_stack_does_not_reuse_incomplete_legacy_source_or_filter_stages() {
     let mut poisoned = Surface::new(PixelFormat::RGBA32F);
     poisoned.fill_rect(Rect::new(0, 0, 2, 2), &[0., 1., 0., 1.]);
     let key = old_stack_key(&bytes, PixelFormat::RGBA32F, photocraft_doc::StackMode::Mean);
-    source::cache_put(key, source::SourceImage { surface: Arc::new(poisoned), bounds: Rect::new(0, 0, 2, 2) });
+    source::cache_put(
+        key,
+        source::SourceImage { surface: Arc::new(poisoned), bounds: Rect::new(0, 0, 2, 2) },
+        Some(crate::jobs::render_proof::Proof::default()),
+        true,
+    );
     assert!(stack_image("Stack completeness.svg", &bytes, PixelFormat::RGBA32F, photocraft_doc::StackMode::Mean).is_err());
 
     let mut poisoned = Surface::new(doc.pixel_format());
