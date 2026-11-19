@@ -1359,6 +1359,7 @@ mod tests {
             space_unmeasured: AtomicBool::new(false),
             registry: Mutex::new(Registry { cells: Vec::new(), hand: 0 }),
             config: Mutex::new(Config {
+                query_space: free_space,
                 dir: Some(base.join("growth")),
                 file: None,
                 last_error: None,
