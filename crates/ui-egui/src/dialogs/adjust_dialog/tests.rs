@@ -1647,3 +1647,15 @@ fn selective_color_editor_survives_malformed_params() {
     assert!(row.as_array().is_some_and(|a| a.len() == 4 && a.iter().all(Value::is_number)), "rebuilt as four numbers: {row}");
     assert!(row[1].as_f64().unwrap() > 0.0);
 }
+
+#[test]
+fn gradient_map_open_with_plain_stops_does_not_seed_default_source() {
+    let mut app = app_with_image();
+    app.session.tools.foreground = [0.0, 1.0, 0.0, 1.0];
+    app.session.tools.background = [1.0, 1.0, 0.0, 1.0];
+    let supplied = json!({"stops": [[0.0, "#ff0000"], [1.0, "#0000ff"]]});
+    let id = open_with_params(&mut app, "image.adjustments.gradientMap", &supplied).unwrap();
+    let fields = &app.ui.dialog_mut(id).unwrap().fields;
+    assert!(!fields.contains_key("source"), "plain stops must not be overridden by default source: {fields:?}");
+    assert_eq!(fields["stops"], json!([[0.0, "#ff0000"], [1.0, "#0000ff"]]));
+}

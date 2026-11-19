@@ -1969,6 +1969,27 @@ impl Session {
             "layer.duplicate" => crate::artboard_cmds::recorded_duplicate(self, crate::layer_multi_cmds::recorded_step(self, id, params, pre_selected)),
             "layerComp.apply" => crate::comps_cmds::recorded_apply(self, params),
             "edit.checkSpelling" if crate::type_spell_cmds::records(&params) => crate::type_spell_cmds::recorded_step(&params),
+            "image.adjustments.gradientMap" => {
+                let mut params = crate::layer_multi_cmds::recorded_step(self, id, params, pre_selected);
+                if params.get("stops").is_none_or(Value::is_null) && params.get("source").is_none() {
+                    let c = |x: [f32; 4]| [x[0], x[1], x[2]];
+                    let gm = crate::adjust_params::default_gradient_map(c(self.tools.foreground), c(self.tools.background));
+                    if let Value::Object(resolved) = crate::adjust_params::to_params(&gm) {
+                        if params.is_null() {
+                            params = Value::Object(Default::default());
+                        }
+                        if let Some(m) = params.as_object_mut() {
+                            if let Some(stops) = resolved.get("stops") {
+                                m.insert("stops".into(), stops.clone());
+                            }
+                            if let Some(source) = resolved.get("source") {
+                                m.insert("source".into(), source.clone());
+                            }
+                        }
+                    }
+                }
+                params
+            }
             _ => crate::layer_multi_cmds::recorded_step(self, id, params, pre_selected),
         };
         let params = crate::actions_cmds::recorded_params(self, id, params);

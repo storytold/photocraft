@@ -257,7 +257,8 @@ mod tests {
         write_stops(&mut v, &three);
         assert_eq!(v["source"]["stops"].as_array().map(Vec::len), Some(3));
         assert_eq!(v["source"]["midpoints"], json!([0.3, 0.5]), "the new segment starts halfway");
-        assert_eq!(v["stops"].as_array().map(Vec::len), Some(97), "the baked stops are the engine's to redo");
+        assert_eq!(v["stops"].as_array().map(Vec::len), Some(3), "top-level stops stay synchronized with source stops");
+        assert_eq!(v["stops"], v["source"]["stops"]);
         write_stops(&mut v, &stops);
         assert_eq!(v["source"]["midpoints"], json!([0.3]));
         // Without a source the map's own stops are edited.

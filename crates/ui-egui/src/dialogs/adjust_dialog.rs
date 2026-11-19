@@ -438,6 +438,11 @@ fn seeded_fields(app: &PhotocraftApp, command: &str, mut fields: Map<String, Val
         if kind == "curves" && supplied.get("gray").is_some_and(|v| !v.is_null()) && supplied.get("points").is_none_or(Value::is_null) {
             p.remove("points");
         }
+        // Explicitly supplied plain `stops` without `source` must not be overridden by the
+        // foreground/background default's `source`.
+        if kind == "gradientMap" && supplied.get("stops").is_some_and(|v| !v.is_null()) && supplied.get("source").is_none_or(Value::is_null) {
+            p.remove("source");
+        }
         fields.extend(p);
     }
     fields.extend(supplied);

@@ -1334,7 +1334,7 @@ fn build() -> Vec<CommandSpec> {
                             crate::adjust_params::default_gradient_map(c(s.tools.foreground), c(s.tools.background))
                         });
                         let adj = crate::adjust_params::from_params(&kind, &tone, default_gm.as_ref(), adjust_mode(s, p))?;
-                        if kind == "gradientMap" && p.get("stops").is_none_or(Value::is_null) && p.get("source").is_none_or(Value::is_null) {
+                        if kind == "gradientMap" && p.get("stops").is_none_or(Value::is_null) && p.get("source").is_none() {
                             recorded = Some(record_resolved(&adj));
                         }
                         adj

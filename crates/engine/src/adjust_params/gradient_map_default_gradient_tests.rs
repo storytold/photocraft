@@ -85,3 +85,49 @@ fn adjustment_layer_keeps_black_to_white_default() {
     assert_eq!(stops, &vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])]);
     assert!(source.is_none());
 }
+
+#[test]
+fn smart_filter_with_explicit_null_source_replays_without_error() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16, "depth": 8, "background": "white"})).unwrap();
+    s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+
+    s.tools.foreground = [0.0, 160.0 / 255.0, 0.0, 1.0];
+    s.tools.background = [1.0, 1.0, 0.0, 1.0];
+
+    s.execute("image.adjustments.gradientMap", json!({"source": null})).unwrap();
+
+    let doc = &s.active().unwrap().doc;
+    let id = s.active().unwrap().active_layer.unwrap();
+    let photocraft_doc::LayerContent::Smart(sm) = &doc.layer(id).unwrap().content else {
+        panic!("expected smart object layer");
+    };
+    let sf = &sm.smart_filters[0];
+    assert!(from_params("gradientMap", &sf.params, None, doc.mode).is_ok(), "recorded smart filter params must remain replayable, got {}", sf.params);
+}
+
+#[test]
+fn recorded_action_empty_gradient_map_keeps_colours_when_tool_colours_change() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16, "depth": 8, "background": "white"})).unwrap();
+    s.execute("edit.fill", json!({"color": "#101010"})).unwrap();
+
+    s.tools.foreground = [0.0, 160.0 / 255.0, 0.0, 1.0];
+    s.tools.background = [1.0, 1.0, 0.0, 1.0];
+
+    s.execute("actions.record", json!({"name": "GradientMapEmpty"})).unwrap();
+    s.execute("image.adjustments.gradientMap", json!({})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+
+    let expected = sample_u8_rgb(&s, 2, 2);
+
+    // Undo and change tool colours before replaying the recorded action.
+    s.execute("edit.undo", json!({})).unwrap();
+    s.tools.foreground = [1.0, 0.0, 0.0, 1.0];
+    s.tools.background = [0.0, 0.0, 1.0, 1.0];
+
+    s.execute("actions.play", json!({"action": "GradientMapEmpty"})).unwrap();
+
+    assert_eq!(sample_u8_rgb(&s, 2, 2), expected, "replayed action must keep the colours it was recorded with");
+}
