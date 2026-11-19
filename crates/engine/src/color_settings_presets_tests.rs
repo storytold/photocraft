@@ -3,7 +3,8 @@
 //!
 //! Running a setup sets the process-wide Spot dot gain, which races every test that renders a
 //! Multichannel document. So the command runs here only with setups whose Spot is the default
-//! Dot Gain 20 %; `crates/engine/tests/color_settings_presets.rs` runs all of them in its own binary.
+//! Dot Gain 20 %; `crates/engine/tests/global_state/color_settings_presets.rs` runs all of them
+//! in the `global_state` binary.
 
 use super::*;
 
@@ -116,7 +117,7 @@ fn any_change_makes_it_custom() {
         json!({"intent": "perceptual"}),
         json!({"bpc": false}),
         json!({"dither": false}),
-        // Blend Text Colors Using Gamma too: in `tests/color_settings_presets.rs`, as it is process-wide.
+        // Blend Text Colors Using Gamma too: in `tests/global_state/color_settings_presets.rs`, as it is process-wide.
         json!({"reset": true}),
     ];
     for change in changes {

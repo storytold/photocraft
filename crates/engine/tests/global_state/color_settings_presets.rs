@@ -1,9 +1,9 @@
 //! Edit › Color Settings' named setups (#14229) through the command, every one of them.
 //!
-//! Its own integration-test binary with a single test, for the same reason as `spot_dot_gain.rs`
-//! and `text_gamma.rs`: a setup sets the process-wide Spot dot gain and Blend Text Colors Using
-//! Gamma, which other tests' Multichannel and type renders read. The setups themselves are
-//! checked value by value in `crates/engine/src/color_settings_presets_tests.rs`.
+//! In the `global_state` binary, beside `spot_dot_gain.rs` and `text_gamma.rs`, for the same
+//! reason: a setup sets the process-wide Spot dot gain and Blend Text Colors Using Gamma, which
+//! other tests' Multichannel and type renders read. The setups themselves are checked value by
+//! value in `crates/engine/src/color_settings_presets_tests.rs`.
 
 use photocraft_compose::multichannel::{SPOT_DOT_GAIN, spot_dot_gain};
 use photocraft_compose::psblend::TEXT_GAMMA;
@@ -13,6 +13,7 @@ use serde_json::json;
 
 #[test]
 fn every_setup_runs_and_sets_the_compositor() {
+    let _process = crate::lock(&crate::PROCESS);
     let mut s = Session::new();
     for name in COLOR_SETTINGS_PRESETS {
         // Blend Text Colors Using Gamma off before: a scripted setup turns it on at 1.45.
