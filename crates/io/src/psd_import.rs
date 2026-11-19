@@ -904,7 +904,7 @@ fn be_to_ne_plane(plane: &[u8], s: SampleType, n: usize) -> craft_psd::Result<Ve
 }
 
 pub(crate) fn unicode_names(data: &[u8]) -> Vec<String> {
-    craft_psd_names::unicode_names::records(data)
+    craft_psd::unicode_names::records(data)
         .map(|b| {
             let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c)).collect();
             String::from_utf16_lossy(&units).trim_end_matches('\0').to_string()
