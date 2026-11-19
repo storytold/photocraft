@@ -1481,6 +1481,34 @@ fn app_open_opens_a_directory_pcraft_and_falls_back_for_the_zip_form() {
 }
 
 #[test]
+fn app_open_reports_missing_smart_object_pixels_in_a_directory_pcraft() {
+    use photocraft_doc::{ColorMode, Document, Layer, LayerContent, SampleType, Size, SmartObject, SmartSource};
+    use photocraft_geom::Affine;
+    use serde_json::json;
+
+    let services = crate::Services {
+        automation_open_pcraft: Some(Box::new(|path| {
+            assert_eq!(path, "uncached.pcraft");
+            let mut doc = Document::new("Editable", Size::new(16, 12), ColorMode::Rgb, SampleType::U8);
+            let source = SmartSource::Linked { path: "contents.png".into() };
+            doc.layers.push(Layer::new("Placed art", LayerContent::Smart(SmartObject::new(source, Affine::IDENTITY, None))));
+            Ok(Some((path.to_string(), doc)))
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let ctx = app.ctx().clone();
+    let result = call(&mut app, &ctx, "app.open", json!({"path": "uncached.pcraft"}));
+    let warnings = result["result"]["warnings"].as_array().expect("directory opened");
+    assert_eq!(warnings.len(), 1, "{result}");
+    let warning = warnings[0].as_str().expect("import warning");
+    assert!(warning.contains("Placed art") && warning.contains("no saved render cache"), "{warning}");
+    assert!(app.ui.status.contains(warning), "the status reports the same warning");
+    assert_eq!(app.ui.notices[0].lines, vec![warning]);
+    assert_eq!(app.session.active().unwrap().path, None);
+}
+
+#[test]
 fn app_save_runs_as_a_background_job_and_the_final_reply_carries_the_path() {
     use photocraft_engine::automate_cmds::ScriptBinding;
     use serde_json::json;

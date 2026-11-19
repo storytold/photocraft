@@ -1383,14 +1383,17 @@ fn open_pcraft_directory(app: &mut PhotocraftApp, path: &str) -> Option<Reply> {
     let open = app.services.automation_open_pcraft.as_mut()?;
     match open(path) {
         Ok(Some((name, doc))) => {
+            let warnings = photocraft_io::open_warnings(&doc);
             app.session.add_document(doc, None);
             // Recent files, but no save-back target: the capability writer
             // replaces files, never directories.
             app.push_recent(path);
             app.sync_views();
-            app.ui.status = crate::i18n::fmt(tl!("Opened {name}"), &[("name", &name)]);
+            let title = crate::i18n::fmt(tl!("Opened {name}"), &[("name", &name)]);
+            app.ui.status.clone_from(&title);
             app.ui.status_error = false;
-            Some(ok(json!({"path": path, "name": name, "warnings": []})))
+            crate::notices::io_warnings(app, &title, &warnings);
+            Some(ok(json!({"path": path, "name": name, "warnings": warnings})))
         }
         Ok(None) => None, // a regular file: the bytes path reads the zip form
         Err(e) => Some(err(e)),
