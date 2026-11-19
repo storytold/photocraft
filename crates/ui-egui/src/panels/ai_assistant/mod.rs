@@ -60,13 +60,21 @@ pub struct AiAssistantState {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) anthropic_api_key_draft: String,
     #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) gemini_key_from_env: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) anthropic_key_from_env: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) gemini_key_dirty: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) anthropic_key_dirty: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) keys_loaded: bool,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) detected: Option<providers::DetectedClis>,
     #[cfg(not(target_arch = "wasm32"))]
     runner: Option<providers::ActiveRun>,
     #[cfg(not(target_arch = "wasm32"))]
-    image_gen_rx: Option<std::sync::mpsc::Receiver<gemini_image::ImageGenResult>>,
+    image_gen_job: Option<(photocraft_doc::DocId, std::sync::mpsc::Receiver<gemini_image::ImageGenResult>)>,
 }
 
 impl AiAssistantState {
@@ -74,7 +82,7 @@ impl AiAssistantState {
     pub fn is_running(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.runner.is_some() || self.image_gen_rx.is_some()
+            self.runner.is_some() || self.image_gen_job.is_some()
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -90,7 +98,7 @@ impl AiAssistantState {
                 run.cancel();
                 self.messages.push(ChatMessage { role: ChatRole::System, text: "Stopped.".to_owned(), tool_name: None });
             }
-            if self.image_gen_rx.take().is_some() {
+            if self.image_gen_job.take().is_some() {
                 self.messages.push(ChatMessage { role: ChatRole::System, text: "Stopped image generation.".to_owned(), tool_name: None });
             }
         }
@@ -107,9 +115,13 @@ impl AiAssistantState {
     pub(crate) fn ensure_keys_loaded(&mut self) {
         if !self.keys_loaded {
             self.keys_loaded = true;
-            let loaded = gemini_image::load_keys();
-            self.gemini_api_key_draft = loaded.gemini_api_key;
-            self.anthropic_api_key_draft = loaded.anthropic_api_key;
+            let loaded = gemini_image::load_keys_with_source();
+            self.gemini_api_key_draft = loaded.keys.gemini_api_key;
+            self.anthropic_api_key_draft = loaded.keys.anthropic_api_key;
+            self.gemini_key_from_env = loaded.gemini_from_env;
+            self.anthropic_key_from_env = loaded.anthropic_from_env;
+            self.gemini_key_dirty = false;
+            self.anthropic_key_dirty = false;
         }
     }
 
@@ -127,13 +139,21 @@ impl AiAssistantState {
         if trimmed.is_empty() { None } else { Some(trimmed.to_owned()) }
     }
 
-    /// Generate a photorealistic image via Gemini API (`gemini-2.5-flash-image`) and place it onto the canvas.
+    /// Generate a photorealistic image via Gemini API (`gemini-3.1-flash-image`) and place it onto the canvas.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn generate_image_current(&mut self, ctx: &egui::Context) {
+    pub(crate) fn generate_image_current(&mut self, target_doc: Option<photocraft_doc::DocId>, ctx: &egui::Context) {
         let prompt = self.input.trim().to_owned();
         if prompt.is_empty() || self.is_running() {
             return;
         }
+        let Some(doc_id) = target_doc else {
+            self.messages.push(ChatMessage {
+                role: ChatRole::System,
+                text: "Open or create a document before generating an image.".to_owned(),
+                tool_name: None,
+            });
+            return;
+        };
         let Some(api_key) = self.active_gemini_key() else {
             self.show_connectors = true;
             self.messages.push(ChatMessage {
@@ -150,12 +170,12 @@ impl AiAssistantState {
             text: "gemini-3.1-flash-image".to_owned(),
             tool_name: Some("gemini_generate_image".to_owned()),
         });
-        self.image_gen_rx = Some(gemini_image::spawn_generate(prompt, api_key, ctx.clone()));
+        self.image_gen_job = Some((doc_id, gemini_image::spawn_generate(prompt, api_key, ctx.clone())));
     }
 
     /// Submit `self.input` to the selected subscription CLI.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn send_current(&mut self, ctx: &egui::Context) {
+    pub(crate) fn send_current(&mut self, live_port: Option<u16>, ctx: &egui::Context) {
         let prompt = self.input.trim().to_owned();
         if prompt.is_empty() || self.is_running() {
             return;
@@ -175,11 +195,18 @@ impl AiAssistantState {
             return;
         };
 
+        let live_bridge = live_port.and_then(|port| {
+            let dir = connector::photocraft_config_dir()?;
+            let conn = craft::automation::agents::read_connection(&dir).ok().flatten()?;
+            (conn.port == port).then_some((port, conn.token_file))
+        });
+
         let req = providers::RunRequest {
             provider: self.provider,
             model: (!self.model.trim().is_empty()).then(|| self.model.trim().to_owned()),
             cli_bin,
             photocraft_cli: detected.photocraft_cli.clone(),
+            live_bridge,
             prompt,
             session_id: self.claude_session_id.clone(),
             gemini_api_key,
@@ -244,10 +271,10 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         app.ai_assistant.poll(ctx);
-        let img_res = app.ai_assistant.image_gen_rx.as_ref().and_then(|rx| rx.try_recv().ok());
-        if let Some(res) = img_res {
-            app.ai_assistant.image_gen_rx = None;
-            apply_generated_image(app, res);
+        let img_res = app.ai_assistant.image_gen_job.as_ref().and_then(|(doc_id, rx)| rx.try_recv().ok().map(|res| (*doc_id, res)));
+        if let Some((target_doc, res)) = img_res {
+            app.ai_assistant.image_gen_job = None;
+            apply_generated_image(app, target_doc, res);
             ctx.request_repaint();
         }
     }
@@ -256,15 +283,31 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn apply_generated_image(app: &mut PhotocraftApp, res: gemini_image::ImageGenResult) {
+fn apply_generated_image(app: &mut PhotocraftApp, target_doc: photocraft_doc::DocId, res: gemini_image::ImageGenResult) {
     match res {
         gemini_image::ImageGenResult::Ready { bytes, ext, caption } => {
-            if app.session.active().is_none() {
-                let _ = app.run("file.new", serde_json::json!({"width": 1024, "height": 1024, "name": "Gemini Artwork"}));
+            let Some(target_idx) = app.session.documents().iter().position(|st| st.doc.id == target_doc) else {
+                app.ai_assistant.messages.push(ChatMessage {
+                    role: ChatRole::System,
+                    text: "The target document was closed before the generated image arrived.".to_owned(),
+                    tool_name: None,
+                });
+                return;
+            };
+            let prev_doc = app.session.active().map(|st| st.doc.id);
+            if prev_doc != Some(target_doc) {
+                let _ = app.session.set_active(target_idx);
             }
             let name = format!("gemini-generated.{ext}");
             let opts = serde_json::json!({"fit": true, "smartObject": true});
-            match photocraft_engine::file_cmds::place_bytes(&mut app.session, &name, bytes, None, &opts) {
+            let place_res = photocraft_engine::file_cmds::place_bytes(&mut app.session, &name, bytes, None, &opts);
+            if let Some(prev_id) = prev_doc
+                && prev_id != target_doc
+                && let Some(prev_idx) = app.session.documents().iter().position(|st| st.doc.id == prev_id)
+            {
+                let _ = app.session.set_active(prev_idx);
+            }
+            match place_res {
                 Ok(_) => {
                     let note = caption.unwrap_or_else(|| "Placed generated image onto the canvas as a Smart Object layer.".to_owned());
                     app.ai_assistant.messages.push(ChatMessage { role: ChatRole::Assistant, text: note, tool_name: None });

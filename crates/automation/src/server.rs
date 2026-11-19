@@ -867,6 +867,11 @@ impl PhotocraftMcp {
         if let Some(r) = self.headless_op(move |h| h.place_svg(index, &h_name, &h_svg, &opts_val)).await {
             return to_result(r);
         }
+        // The app's command runs on its active document: an `index` it cannot honour is refused
+        // rather than dropped, matching `doc_replace_smart_object`.
+        if index.is_some() {
+            return Ok(fail("`index` is only supported in headless mode; in bridge mode select the document in the app first"));
+        }
         let Some(b) = self.bridge_client() else {
             return Ok(no_backend());
         };

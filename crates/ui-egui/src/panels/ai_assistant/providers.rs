@@ -7,11 +7,11 @@
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
@@ -80,6 +80,8 @@ pub struct RunRequest {
     pub model: Option<String>,
     pub cli_bin: PathBuf,
     pub photocraft_cli: Option<PathBuf>,
+    /// Live in-app bridge `(port, token_file)` when the app's agent link is active.
+    pub live_bridge: Option<(u16, PathBuf)>,
     pub prompt: String,
     pub session_id: Option<String>,
     pub gemini_api_key: Option<String>,
@@ -134,6 +136,9 @@ fn run_worker(req: RunRequest, tx: &Sender<StreamEvent>, cancelled: &AtomicBool,
     let stderr = child.stderr.take();
     {
         let mut guard = child_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if cancelled.load(Ordering::SeqCst) {
+            let _ = child.kill();
+        }
         *guard = Some(child);
     }
 
@@ -162,10 +167,7 @@ fn run_worker(req: RunRequest, tx: &Sender<StreamEvent>, cancelled: &AtomicBool,
         }
     }
 
-    let exit_status = {
-        let mut guard = child_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        guard.take().and_then(|mut c| c.wait().ok())
-    };
+    let exit_status = wait_child_cancellable(child_slot, cancelled);
     let stderr_text = stderr_handle.and_then(|h| h.join().ok()).unwrap_or_default();
 
     if !cancelled.load(Ordering::SeqCst)
@@ -191,6 +193,32 @@ fn send_wake(tx: &Sender<StreamEvent>, ctx: &egui::Context, ev: StreamEvent) {
     ctx.request_repaint();
 }
 
+/// Poll `child_slot` with short mutex acquisitions so `ActiveRun::cancel` and `Drop` can acquire
+/// the lock promptly and kill the subprocess without deadlocking on a blocking `wait()`.
+fn wait_child_cancellable(child_slot: &Mutex<Option<Child>>, cancelled: &AtomicBool) -> Option<ExitStatus> {
+    loop {
+        let mut guard = child_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let child = guard.as_mut()?;
+        if cancelled.load(Ordering::SeqCst) {
+            let _ = child.kill();
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                *guard = None;
+                return Some(status);
+            }
+            Ok(None) => {
+                drop(guard);
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(_) => {
+                *guard = None;
+                return None;
+            }
+        }
+    }
+}
+
 fn build_command(req: &RunRequest, temp_dir: Option<&Path>) -> Result<Command, String> {
     let mut cmd = Command::new(&req.cli_bin);
     let system_prompt = "You are embedded inside PhotoCraft, a desktop photo editor. \
@@ -213,9 +241,10 @@ fn build_command(req: &RunRequest, temp_dir: Option<&Path>) -> Result<Command, S
             }
             if let (Some(cli), Some(dir)) = (req.photocraft_cli.as_deref(), temp_dir) {
                 let mcp_path = dir.join("mcp.json");
+                let bridge = req.live_bridge.as_ref().map(|(port, token)| (*port, token.as_path()));
                 let cfg = json!({
                     "mcpServers": {
-                        "photocraft": connector::server_entry(cli)
+                        "photocraft": connector::server_entry_with_bridge(cli, bridge)
                     }
                 });
                 let bytes = serde_json::to_vec_pretty(&cfg).map_err(|e| format!("Failed to encode MCP config: {e}"))?;
@@ -225,9 +254,12 @@ fn build_command(req: &RunRequest, temp_dir: Option<&Path>) -> Result<Command, S
         }
         AiProvider::Gemini => {
             let combined_prompt = format!("{system_prompt}\n\nUser request: {}", req.prompt);
-            cmd.arg("-p").arg(combined_prompt).arg("--output-format").arg("stream-json").arg("--yolo").env("GEMINI_CLI_TRUST_WORKSPACE", "true");
+            cmd.arg("-p").arg(combined_prompt).arg("--output-format").arg("stream-json").env("GEMINI_CLI_TRUST_WORKSPACE", "true");
             if let Some(model) = req.model.as_deref().filter(|m| !m.is_empty()) {
                 cmd.arg("-m").arg(model);
+            }
+            if req.photocraft_cli.is_some() {
+                cmd.arg("--allowed-mcp-server-names").arg("photocraft");
             }
             let has_api_key = req.gemini_api_key.as_deref().is_some_and(|k| !k.is_empty());
             if let Some(key) = req.gemini_api_key.as_deref().filter(|k| !k.is_empty()) {
@@ -239,8 +271,21 @@ fn build_command(req: &RunRequest, temp_dir: Option<&Path>) -> Result<Command, S
                 let settings_path = gemini_dir.join("settings.json");
                 let mut cfg = serde_json::Map::new();
                 if let Some(cli) = req.photocraft_cli.as_deref() {
-                    cfg.insert("mcpServers".to_owned(), json!({ "photocraft": connector::server_entry(cli) }));
+                    let bridge = req.live_bridge.as_ref().map(|(port, token)| (*port, token.as_path()));
+                    let mut entry = connector::server_entry_with_bridge(cli, bridge);
+                    if let Some(obj) = entry.as_object_mut() {
+                        // Trust only the PhotoCraft MCP server so `-p` mode can invoke PhotoCraft
+                        // tools without `--yolo` auto-approving arbitrary shell/file actions.
+                        obj.insert("trust".to_owned(), Value::Bool(true));
+                    }
+                    cfg.insert("mcpServers".to_owned(), json!({ "photocraft": entry }));
                 }
+                cfg.insert(
+                    "tools".to_owned(),
+                    json!({
+                        "exclude": ["run_shell_command", "write_file", "replace", "edit", "delete_file", "save_memory"]
+                    }),
+                );
                 if has_api_key {
                     // Override any global `oauth-personal` setting so GEMINI_API_KEY is honored.
                     cfg.insert("security".to_owned(), json!({ "auth": { "selectedType": "gemini-api-key" } }));
@@ -346,7 +391,12 @@ fn summarize_tool_input(input: Option<&Value>) -> String {
     if compact == "{}" || compact == "null" {
         return String::new();
     }
-    if compact.len() > 96 { format!("{}…", &compact[..96]) } else { compact }
+    if compact.len() > 96 {
+        let end = compact.floor_char_boundary(96);
+        format!("{}…", &compact[..end])
+    } else {
+        compact
+    }
 }
 
 /// Strip ANSI escape sequences and noisy CLI startup boilerplate from stderr output.
@@ -424,23 +474,31 @@ fn extra_cli_dirs() -> Vec<PathBuf> {
         dirs.push(home.join(".npm-global/bin"));
         dirs.push(home.join(".cargo/bin"));
     }
+    #[cfg(target_os = "windows")]
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        dirs.push(PathBuf::from(appdata).join("npm"));
+    }
     dirs
 }
 
 fn find_binary(name: &str, extra_dirs: &[PathBuf]) -> Option<PathBuf> {
-    let bin = if cfg!(windows) { format!("{name}.exe") } else { name.to_owned() };
+    let candidates: Vec<String> = if cfg!(windows) { vec![format!("{name}.exe"), format!("{name}.cmd")] } else { vec![name.to_owned()] };
     if let Some(path_var) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&path_var) {
-            let candidate = dir.join(&bin);
-            if candidate.is_file() {
-                return Some(candidate);
+            for bin in &candidates {
+                let candidate = dir.join(bin);
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
             }
         }
     }
     for dir in extra_dirs {
-        let candidate = dir.join(&bin);
-        if candidate.is_file() {
-            return Some(candidate);
+        for bin in &candidates {
+            let candidate = dir.join(bin);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
         }
     }
     None
@@ -471,6 +529,14 @@ mod tests {
 
         let internal = r#"{"type":"tool_use","tool_name":"update_topic","parameters":{"strategic_intent":"x"}}"#;
         assert!(parse_stream_line(AiProvider::Gemini, internal).is_empty());
+    }
+
+    #[test]
+    fn summarizes_multibyte_utf8_tool_input_without_panicking() {
+        let long_turkish = json!({"prompt": "şğüöçıİ".repeat(20)});
+        let summary = summarize_tool_input(Some(&long_turkish));
+        assert!(summary.ends_with('…'));
+        assert!(summary.len() <= 96 + '…'.len_utf8());
     }
 
     #[test]

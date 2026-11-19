@@ -3,8 +3,10 @@
 //! Writes or merges the `photocraft` server entry (`photocraft-cli mcp`) into each client's
 //! configuration file without clobbering existing MCP servers or settings.
 
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value, json};
 
@@ -28,10 +30,44 @@ impl ConnectorTarget {
 
 /// The MCP server entry written into client configs.
 pub fn server_entry(cli_path: &Path) -> Value {
+    server_entry_with_bridge(cli_path, None)
+}
+
+/// The MCP server entry for `cli_path`, optionally targeting a live bridge `(port, token_file)`
+/// directly so the in-app assistant always edits the open window instead of falling back to headless.
+pub fn server_entry_with_bridge(cli_path: &Path, bridge: Option<(u16, &Path)>) -> Value {
+    let mut args = vec!["mcp".to_owned()];
+    if let Some((port, token_file)) = bridge {
+        args.push("--bridge".to_owned());
+        args.push(format!("127.0.0.1:{port}"));
+        args.push("--control-token-file".to_owned());
+        args.push(token_file.to_string_lossy().into_owned());
+    }
     json!({
         "command": cli_path.to_string_lossy(),
-        "args": ["mcp"]
+        "args": args
     })
+}
+
+/// PhotoCraft's per-user settings directory (matching `photocraft_automation::app_dirs`),
+/// used to locate `agent-connection.json` when the in-app bridge is live.
+pub(super) fn photocraft_config_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("PHOTOCRAFT_CONFIG_DIR").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        home_dir().map(|h| h.join("Library/Application Support/Photocraft"))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("Photocraft"))
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| home_dir().map(|h| h.join(".config")));
+        base.map(|b| b.join("photocraft"))
+    }
 }
 
 /// A copyable CLI command or JSON snippet for `target`.
@@ -104,9 +140,46 @@ pub fn merge_mcp_server_file(path: &Path, name: &str, entry: Value) -> Result<()
         fs::create_dir_all(parent).map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
     }
     let pretty = serde_json::to_string_pretty(&merged).map_err(|e| format!("Failed to serialize config: {e}"))?;
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, format!("{pretty}\n")).map_err(|e| format!("Failed to write {}: {e}", tmp.display()))?;
-    fs::rename(&tmp, path).map_err(|e| format!("Failed to replace {}: {e}", path.display()))?;
+    write_atomic_private(path, format!("{pretty}\n").as_bytes())
+}
+
+/// Atomically write `contents` to `path` via an exclusive owner-only (`0600` on Unix) temporary file,
+/// cleaning up the temporary file if writing, permission setting, or replacement fails.
+pub(super) fn write_atomic_private(path: &Path, contents: &[u8]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = path.file_name().and_then(|n| n.to_str()).unwrap_or("config");
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let tmp = parent.join(format!(".{stem}.{}.{stamp}.tmp", std::process::id()));
+
+    let mut opts = OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(&tmp).map_err(|e| format!("Failed to create {}: {e}", tmp.display()))?;
+    if let Err(e) = file.write_all(contents).and_then(|()| file.flush()) {
+        drop(file);
+        let _ = fs::remove_file(&tmp);
+        return Err(format!("Failed to write {}: {e}", tmp.display()));
+    }
+    drop(file);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if let Err(e) = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600)) {
+            let _ = fs::remove_file(&tmp);
+            return Err(format!("Failed to set permissions on {}: {e}", tmp.display()));
+        }
+    }
+    if let Err(e) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!("Failed to replace {}: {e}", path.display()));
+    }
     Ok(())
 }
 

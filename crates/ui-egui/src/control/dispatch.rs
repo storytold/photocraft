@@ -68,6 +68,9 @@ fn engine_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReq
 /// without touching the filesystem (`doc.placeSvg`).
 fn place_svg(app: &mut PhotocraftApp, params: &Value) -> Reply {
     const MAX_SVG_BYTES: usize = 8 * 1024 * 1024;
+    if !crate::menus::allows(app, &CommandRef::new("file.placeEmbedded")) {
+        return err("command is unavailable while a modal dialog is open");
+    }
     let Some(svg) = params.get("svg").and_then(Value::as_str) else {
         return err("doc.placeSvg requires a string `svg` parameter");
     };
@@ -82,6 +85,7 @@ fn place_svg(app: &mut PhotocraftApp, params: &Value) -> Reply {
     let mut opts = params.as_object().cloned().unwrap_or_default();
     opts.remove("svg");
     opts.remove("name");
+    opts.entry("smartObject".to_owned()).or_insert(Value::Bool(true));
     Reply::from_result(
         photocraft_engine::file_cmds::place_bytes(&mut app.session, &name, svg.as_bytes().to_vec(), None, &Value::Object(opts)).map_err(|e| e.to_string()),
     )

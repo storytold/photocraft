@@ -2,13 +2,15 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use craft::ui::buttons::Button;
-#[cfg(not(target_arch = "wasm32"))]
-use craft::ui::contract::Props as _;
 use craft::ui::contract::Show as _;
+#[cfg(not(target_arch = "wasm32"))]
+use craft::ui::contract::{Bind, Props as _};
 use craft::ui::display::Text;
 use craft::ui::runtime::env::Label;
 #[cfg(not(target_arch = "wasm32"))]
-use egui::{Color32, RichText, ScrollArea, TextEdit};
+use craft::ui::text::TextField;
+#[cfg(not(target_arch = "wasm32"))]
+use egui::{Color32, RichText, ScrollArea};
 #[cfg(not(target_arch = "wasm32"))]
 use serde_json::json;
 
@@ -141,13 +143,20 @@ fn draw_model_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 #[cfg(not(target_arch = "wasm32"))]
 fn draw_bridge_status(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let port = app.services.agent_link.as_ref().and_then(|link| link.status().port);
+    let managed_by_launcher = app.services.agent_switch.as_ref().is_some_and(|switch| switch.mcp_flag());
     let mut toggle: Option<bool> = None;
     ui.horizontal_wrapped(|ui| {
         if let Some(p) = port {
             ui.label(RichText::new(format!("MCP Live (127.0.0.1:{p})")).small().color(Color32::from_rgb(90, 190, 120)));
-            if ui.small_button(tl!("Disable")).clicked() {
+            if !managed_by_launcher && ui.small_button(tl!("Disable")).clicked() {
                 toggle = Some(false);
             }
+        } else if managed_by_launcher {
+            ui.label(
+                RichText::new(tl!("MCP bridge off — enable PhotoCraft in ArtCraft Launcher (Settings › AI agents)"))
+                    .small()
+                    .color(Color32::from_rgb(220, 170, 70)),
+            );
         } else {
             ui.label(RichText::new(tl!("MCP bridge off")).small().color(Color32::from_rgb(220, 170, 70)));
             if ui.small_button(tl!("Enable Live Bridge")).clicked() {
@@ -214,26 +223,36 @@ fn draw_connector_section(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 #[cfg(not(target_arch = "wasm32"))]
 fn draw_gemini_key_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     app.ai_assistant.ensure_keys_loaded();
-    let mut save_now = false;
+    let mut save_gemini = false;
+    let mut save_anthropic = false;
 
     ui.label(RichText::new("Gemini API Key (chat + image gen)").small().strong());
     ui.push_id("ai_key_gemini", |ui| {
+        let out = TextField::new(Label::from("Gemini API Key"), Bind::bound(&mut app.ai_assistant.gemini_api_key_draft))
+            .id_salt("ai_gemini_key_input")
+            .masked()
+            .placeholder("AIza... (aistudio.google.com/apikey)")
+            .show(ui);
+        if !out.events.is_empty() {
+            app.ai_assistant.gemini_key_dirty = true;
+            app.ai_assistant.gemini_key_from_env = false;
+        }
         ui.horizontal(|ui| {
-            ui.add(
-                TextEdit::singleline(&mut app.ai_assistant.gemini_api_key_draft)
-                    .id_salt("ai_gemini_key_input")
-                    .password(true)
-                    .desired_width((ui.available_width() - 108.0).max(100.0))
-                    .hint_text("AIza... (aistudio.google.com/apikey)"),
-            );
             if ui.small_button("Paste").clicked()
                 && let Some(text) = super::gemini_image::read_clipboard_text()
             {
-                app.ai_assistant.gemini_api_key_draft = text;
-                save_now = true;
+                match super::gemini_image::validate_api_key(&text) {
+                    Ok(valid) => {
+                        app.ai_assistant.gemini_api_key_draft = valid.to_owned();
+                        app.ai_assistant.gemini_key_dirty = true;
+                        app.ai_assistant.gemini_key_from_env = false;
+                        save_gemini = true;
+                    }
+                    Err(e) => app.ai_assistant.status_banner = Some((false, format!("Clipboard Gemini API key rejected: {e}"))),
+                }
             }
             if ui.small_button("Save").clicked() {
-                save_now = true;
+                save_gemini = true;
             }
         });
     });
@@ -241,35 +260,91 @@ fn draw_gemini_key_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     ui.label(RichText::new("Claude API Key (optional — leave empty for subscription)").small().strong());
     ui.push_id("ai_key_claude", |ui| {
+        let out = TextField::new(Label::from("Claude API Key"), Bind::bound(&mut app.ai_assistant.anthropic_api_key_draft))
+            .id_salt("ai_claude_key_input")
+            .masked()
+            .placeholder("sk-ant-... (optional)")
+            .show(ui);
+        if !out.events.is_empty() {
+            app.ai_assistant.anthropic_key_dirty = true;
+            app.ai_assistant.anthropic_key_from_env = false;
+        }
         ui.horizontal(|ui| {
-            ui.add(
-                TextEdit::singleline(&mut app.ai_assistant.anthropic_api_key_draft)
-                    .id_salt("ai_claude_key_input")
-                    .password(true)
-                    .desired_width((ui.available_width() - 108.0).max(100.0))
-                    .hint_text("sk-ant-... (optional)"),
-            );
             if ui.small_button("Paste").clicked()
                 && let Some(text) = super::gemini_image::read_clipboard_text()
             {
-                app.ai_assistant.anthropic_api_key_draft = text;
-                save_now = true;
+                match super::gemini_image::validate_api_key(&text) {
+                    Ok(valid) => {
+                        app.ai_assistant.anthropic_api_key_draft = valid.to_owned();
+                        app.ai_assistant.anthropic_key_dirty = true;
+                        app.ai_assistant.anthropic_key_from_env = false;
+                        save_anthropic = true;
+                    }
+                    Err(e) => app.ai_assistant.status_banner = Some((false, format!("Clipboard Claude API key rejected: {e}"))),
+                }
             }
             if ui.small_button("Save").clicked() {
-                save_now = true;
+                save_anthropic = true;
             }
         });
     });
 
-    if save_now {
-        let keys = super::gemini_image::AiKeys {
-            gemini_api_key: app.ai_assistant.gemini_api_key_draft.clone(),
-            anthropic_api_key: app.ai_assistant.anthropic_api_key_draft.clone(),
-        };
-        match super::gemini_image::save_keys(&keys) {
-            Ok(_) => app.ai_assistant.status_banner = Some((true, "Saved API keys (0600).".to_owned())),
-            Err(e) => app.ai_assistant.status_banner = Some((false, e)),
+    if save_gemini {
+        persist_single_key(app, true);
+    }
+    if save_anthropic {
+        persist_single_key(app, false);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn persist_single_key(app: &mut PhotocraftApp, is_gemini: bool) {
+    let (label, env_var, draft, from_env, dirty) = if is_gemini {
+        (
+            "Gemini API key",
+            "GEMINI_API_KEY",
+            app.ai_assistant.gemini_api_key_draft.trim().to_owned(),
+            app.ai_assistant.gemini_key_from_env,
+            app.ai_assistant.gemini_key_dirty,
+        )
+    } else {
+        (
+            "Claude API key",
+            "ANTHROPIC_API_KEY",
+            app.ai_assistant.anthropic_api_key_draft.trim().to_owned(),
+            app.ai_assistant.anthropic_key_from_env,
+            app.ai_assistant.anthropic_key_dirty,
+        )
+    };
+    if from_env && !dirty {
+        app.ai_assistant.status_banner = Some((true, format!("{label} is loaded from {env_var}; edit it to save a local override.")));
+        return;
+    }
+    if !draft.is_empty()
+        && let Err(e) = super::gemini_image::validate_api_key(&draft)
+    {
+        app.ai_assistant.status_banner = Some((false, format!("{label} rejected: {e}")));
+        return;
+    }
+    let mut stored = super::gemini_image::load_stored_keys();
+    if is_gemini {
+        stored.gemini_api_key = draft.clone();
+    } else {
+        stored.anthropic_api_key = draft.clone();
+    }
+    match super::gemini_image::save_keys(&stored) {
+        Ok(_) => {
+            if is_gemini {
+                app.ai_assistant.gemini_key_dirty = false;
+                app.ai_assistant.gemini_key_from_env = false;
+            } else {
+                app.ai_assistant.anthropic_key_dirty = false;
+                app.ai_assistant.anthropic_key_from_env = false;
+            }
+            let msg = if draft.is_empty() { format!("Cleared {label}.") } else { format!("Saved {label} (0600).") };
+            app.ai_assistant.status_banner = Some((true, msg));
         }
+        Err(e) => app.ai_assistant.status_banner = Some((false, e)),
     }
 }
 
@@ -299,8 +374,9 @@ fn draw_empty_state(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     });
     if let Some(prompt) = chosen {
+        let live_port = app.services.agent_link.as_ref().and_then(|link| link.status().port);
         app.ai_assistant.input = prompt.to_owned();
-        app.ai_assistant.send_current(ui.ctx());
+        app.ai_assistant.send_current(live_port, ui.ctx());
     }
 }
 
@@ -332,13 +408,14 @@ fn draw_messages(messages: &[ChatMessage], ui: &mut egui::Ui) {
 #[cfg(not(target_arch = "wasm32"))]
 fn draw_composer(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let running = app.ai_assistant.is_running();
-    let resp = ui.add_sized(
-        [ui.available_width(), 44.0],
-        TextEdit::multiline(&mut app.ai_assistant.input).id_salt("ai_prompt_input").hint_text("Ask Claude or Gemini to inspect or edit this image…"),
-    );
+    let out = TextField::new(Label::from("Prompt"), Bind::bound(&mut app.ai_assistant.input))
+        .id_salt("ai_prompt_input")
+        .lines(3)
+        .submits()
+        .placeholder("Ask Claude or Gemini to inspect or edit this image…")
+        .show(ui);
 
-    let enter_send = resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
-    let mut trigger_send = enter_send;
+    let mut trigger_send = out.submitted;
     let mut trigger_image = false;
 
     ui.horizontal(|ui| {
@@ -358,9 +435,11 @@ fn draw_composer(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     });
 
     if trigger_image && !running {
-        app.ai_assistant.generate_image_current(ui.ctx());
+        let target_doc = app.session.active().map(|st| st.doc.id);
+        app.ai_assistant.generate_image_current(target_doc, ui.ctx());
     } else if trigger_send && !running {
-        app.ai_assistant.send_current(ui.ctx());
+        let live_port = app.services.agent_link.as_ref().and_then(|link| link.status().port);
+        app.ai_assistant.send_current(live_port, ui.ctx());
     }
 }
 

@@ -43,34 +43,66 @@ pub struct AiKeys {
     pub anthropic_api_key: String,
 }
 
-/// Load `GEMINI_API_KEY` and `ANTHROPIC_API_KEY` from the environment or the local `0600` key store.
-pub fn load_keys() -> AiKeys {
+/// Loaded API keys together with whether each value came from an environment variable.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LoadedKeys {
+    pub keys: AiKeys,
+    pub gemini_from_env: bool,
+    pub anthropic_from_env: bool,
+}
+
+/// Validate an API key before accepting it from clipboard/UI, persisting it, or passing it to `curl -K -`.
+pub fn validate_api_key(key: &str) -> Result<&str, String> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return Err("API key cannot be empty.".to_owned());
+    }
+    if trimmed.chars().any(|c| c == '"' || c == '\\' || c.is_control()) {
+        return Err("API key contains invalid characters (quotes, backslashes, or control characters).".to_owned());
+    }
+    Ok(trimmed)
+}
+
+/// Read only the persisted keys from `~/.config/photocraft/ai_keys.json` (ignoring environment variables).
+pub fn load_stored_keys() -> AiKeys {
     let file_val = key_store_path().and_then(|p| fs::read_to_string(p).ok()).and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
     let from_file = |field: &str| file_val.as_ref().and_then(|v| v.get(field)).and_then(Value::as_str).map(str::trim).unwrap_or_default().to_owned();
-    let env_or_file =
-        |env_name: &str, field: &str| std::env::var(env_name).ok().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| from_file(field));
-    AiKeys { gemini_api_key: env_or_file("GEMINI_API_KEY", "geminiApiKey"), anthropic_api_key: env_or_file("ANTHROPIC_API_KEY", "anthropicApiKey") }
+    AiKeys { gemini_api_key: from_file("geminiApiKey"), anthropic_api_key: from_file("anthropicApiKey") }
+}
+
+/// Load `GEMINI_API_KEY` and `ANTHROPIC_API_KEY` from the environment or the local `0600` key store,
+/// recording which values originated from environment variables.
+pub fn load_keys_with_source() -> LoadedKeys {
+    let stored = load_stored_keys();
+    let env_key = |env_name: &str| std::env::var(env_name).ok().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
+    let (gemini_api_key, gemini_from_env) = match env_key("GEMINI_API_KEY") {
+        Some(k) => (k, true),
+        None => (stored.gemini_api_key, false),
+    };
+    let (anthropic_api_key, anthropic_from_env) = match env_key("ANTHROPIC_API_KEY") {
+        Some(k) => (k, true),
+        None => (stored.anthropic_api_key, false),
+    };
+    LoadedKeys { keys: AiKeys { gemini_api_key, anthropic_api_key }, gemini_from_env, anthropic_from_env }
 }
 
 /// Persist both optional API keys to the local `0600` key store.
 pub fn save_keys(keys: &AiKeys) -> Result<PathBuf, String> {
-    let path = key_store_path().ok_or_else(|| "Could not locate config directory for API key storage.".to_owned())?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+    let gemini = keys.gemini_api_key.trim();
+    if !gemini.is_empty() {
+        validate_api_key(gemini)?;
     }
+    let anthropic = keys.anthropic_api_key.trim();
+    if !anthropic.is_empty() {
+        validate_api_key(anthropic)?;
+    }
+    let path = key_store_path().ok_or_else(|| "Could not locate config directory for API key storage.".to_owned())?;
     let payload = json!({
-        "geminiApiKey": keys.gemini_api_key.trim(),
-        "anthropicApiKey": keys.anthropic_api_key.trim(),
+        "geminiApiKey": gemini,
+        "anthropicApiKey": anthropic,
     });
     let text = serde_json::to_string_pretty(&payload).map_err(|e| format!("Failed to encode key file: {e}"))?;
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, format!("{text}\n")).map_err(|e| format!("Failed to write {}: {e}", tmp.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
-    }
-    fs::rename(&tmp, &path).map_err(|e| format!("Failed to save {}: {e}", path.display()))?;
+    connector::write_atomic_private(&path, format!("{text}\n").as_bytes())?;
     Ok(path)
 }
 
@@ -105,6 +137,10 @@ pub fn spawn_generate(prompt: String, api_key: String, ctx: egui::Context) -> Re
 }
 
 fn generate_blocking(prompt: &str, api_key: &str) -> ImageGenResult {
+    let api_key = match validate_api_key(api_key) {
+        Ok(k) => k,
+        Err(e) => return ImageGenResult::Error(e),
+    };
     let body = json!({
         "contents": [{ "parts": [{ "text": prompt }] }],
         "generationConfig": {
@@ -146,7 +182,7 @@ fn generate_blocking(prompt: &str, api_key: &str) -> ImageGenResult {
     };
 
     if let Some(mut stdin) = child.stdin.take() {
-        let _ = writeln!(stdin, "header = \"x-goog-api-key: {}\"", api_key.trim());
+        let _ = writeln!(stdin, "header = \"x-goog-api-key: {api_key}\"");
     }
     let output = child.wait_with_output();
     let _ = fs::remove_file(&body_path);
@@ -241,6 +277,17 @@ pub fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validates_api_keys_against_curl_config_injection() {
+        assert_eq!(validate_api_key("  AIzaSyDemo_123-abc  ").unwrap(), "AIzaSyDemo_123-abc");
+        assert!(validate_api_key("").is_err());
+        assert!(validate_api_key("   ").is_err());
+        assert!(validate_api_key("AIza\"bad").is_err());
+        assert!(validate_api_key("AIza\\bad").is_err());
+        assert!(validate_api_key("AIza\nurl = http://evil").is_err());
+        assert!(validate_api_key("AIza\x00bad").is_err());
+    }
 
     #[test]
     fn decodes_standard_base64() {
