@@ -1,12 +1,9 @@
 //! Edit › Keyboard Shortcuts and Menus: the framework's Keyboard Shortcuts dialog over a draft
-//! keymap, with PhotoCraft's Menus tab beside it.
+//! keymap, with PhotoCraft's Menus and Toolbar tabs beside it.
 //!
-//! The session holds everything the dialog edits: the draft keymap, the shortcut sets, the Menus
-//! draft and the text of a set waiting to be reviewed. Cancel drops it and the runtime never saw
-//! a change; OK writes the preferences once ([`save_keys`], then the menus), and the runtime's
-//! keymap follows the new preferences revision (`shortcut_dispatch::overrides`).
-//!
-//! The Toolbar tab is not here: Edit › Toolbar opens the toolbar drawer.
+//! Cancel drops the session's draft. OK saves the keymap and sets ([`save_keys`]), then applies
+//! the menu and toolbar visibility customizations in one preferences command. The toolbar drawer
+//! still owns the toolbar's group layout.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -20,11 +17,12 @@ use craft::ui::pickers::Select;
 use craft::ui::runtime::env::Env;
 use craft::ui::runtime::windows;
 use photocraft_engine::keymap_defs;
-use photocraft_engine::prefs::{MenuCustomization, Preferences};
+use photocraft_engine::prefs::{MenuCustomization, Preferences, ToolbarCustomization};
 use photocraft_engine::shortcut_sets::DEFAULTS_NAME;
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
+use crate::state::Tool;
 
 /// The id of the `.kys` format in the dialog's import and export lists.
 const KYS_FORMAT: &str = "kys";
@@ -43,6 +41,10 @@ pub(crate) struct ShortcutsSession {
     pub(crate) keymap: Keymap,
     /// The Menus tab's draft.
     pub(crate) menus: MenusDraft,
+    /// The Toolbar tab edits the visibility overrides, independent of the group layout.
+    toolbar_hidden: Vec<String>,
+    /// Used to tell whether OK applies a toolbar edit. Other commands can still update preferences.
+    toolbar_hidden_at_open: Vec<String>,
     /// The text of a set to review on the next pass, taken by that pass alone: a second pass of
     /// the same frame finds nothing to review.
     pub(crate) pending_import: Option<String>,
@@ -106,6 +108,8 @@ pub fn open(app: &mut PhotocraftApp, tab: u64) {
         profiles: profiles_of(prefs),
         keymap: draft_keymap(app),
         menus: MenusDraft::of(&prefs.menus),
+        toolbar_hidden: prefs.toolbar.hidden.clone(),
+        toolbar_hidden_at_open: prefs.toolbar.hidden.clone(),
         pending_import: None,
         remembered: BTreeMap::new(),
     };
@@ -162,19 +166,20 @@ fn pass(app: &mut PhotocraftApp, ui: &mut egui::Ui, press_ok: bool) {
     let rows = crate::menus::base_rows(app);
     let options = options();
     let builtins = builtins();
-    let ShortcutsSession { state, profiles, keymap, menus, pending_import, remembered } = &mut session;
+    let ShortcutsSession { state, profiles, keymap, menus, toolbar_hidden, toolbar_hidden_at_open, pending_import, remembered } = &mut session;
     if let Some(text) = pending_import.take() {
         review(ui, state, dialog(keymap, profiles, &builtins, &options), &text, remembered);
     }
     if press_ok {
         dialog(keymap, profiles, &builtins, &options).ok(ui, state);
     }
-    let mut tabs = [menus_tab(&rows, menus)];
+    let mut tabs = [menus_tab(&rows, menus), toolbar_tab(toolbar_hidden)];
     let output = dialog(keymap, profiles, &builtins, &options).tabs(&mut tabs).show(ui, state);
     drop(tabs);
     match output.outcome {
         Some(Outcome::Ok) => {
-            if let Err(e) = save_keys(app, keymap, profiles).and_then(|_| save_menus(app, menus)) {
+            let changed_toolbar = (toolbar_hidden_names(toolbar_hidden) != toolbar_hidden_names(toolbar_hidden_at_open)).then_some(toolbar_hidden.as_slice());
+            if let Err(e) = save_keys(app, keymap, profiles).and_then(|_| save_customizations(app, menus, changed_toolbar)) {
                 app.ui.status = crate::i18n::fmt(tl!("The keyboard shortcuts were not saved: {error}"), &[("error", &e)]);
                 app.ui.status_error = true;
             }
@@ -264,10 +269,49 @@ pub(crate) fn save_keys(app: &mut PhotocraftApp, keymap: &Keymap, profiles: &Pro
     app.run("edit.keyboardShortcuts", call).map_err(|e| e.to_string())
 }
 
-/// Writes the Menus tab's draft to the preferences.
-fn save_menus(app: &mut PhotocraftApp, menus: &MenusDraft) -> Result<Value, String> {
-    let call = json!({"values": {"menus": {"hidden": menus.hidden, "colors": menus.colors}}});
-    app.run("prefs.set", call).map_err(|e| e.to_string())
+/// Saves the Menus and Toolbar tabs together. The toolbar layout is edited in its own drawer.
+fn save_customizations(app: &mut PhotocraftApp, menus: &MenusDraft, toolbar_hidden: Option<&[String]>) -> Result<Value, String> {
+    let mut values = json!({"menus": {"hidden": menus.hidden, "colors": menus.colors}});
+    if let Some(hidden) = toolbar_hidden {
+        values["toolbar.hidden"] = json!(hidden);
+    }
+    app.run("prefs.set", json!({"values": values})).map_err(|e| e.to_string())
+}
+
+/// The visibility overrides ignore order and recognise older tool spellings. Keep unknown names
+/// in the comparison so Restore Defaults can clear them too.
+fn toolbar_hidden_names(hidden: &[String]) -> BTreeSet<String> {
+    hidden.iter().map(|name| ToolbarCustomization::tool_name(name).unwrap_or_else(|| name.clone())).collect()
+}
+
+/// The Toolbar tab changes each tool's visibility override, leaving custom groups and extras in place.
+fn toolbar_tab(hidden: &mut Vec<String>) -> DialogTab<'_> {
+    DialogTab::new("toolbar", tl!("Toolbar"), move |ui| {
+        let mut changed = ui.button(tl!("Restore Defaults")).clicked() && !hidden.is_empty();
+        if changed {
+            hidden.clear();
+        }
+        let hidden_tools = toolbar_hidden_names(hidden);
+        egui::Grid::new("toolbar-visibility").num_columns(2).show(ui, |ui| {
+            for tool in Tool::ALL {
+                let name = format!("{tool:?}");
+                let visible = !hidden_tools.contains(&name);
+                let checkbox = ui.push_id(tool, |ui| Checkbox::new(Bind::given(visible)).label(tl!(tool.label())).show(ui)).inner;
+                if let Some(&visible) = checkbox.events.value() {
+                    if visible {
+                        hidden.retain(|entry| ToolbarCustomization::tool_name(entry).as_deref() != Some(name.as_str()));
+                    } else {
+                        hidden.push(name);
+                    }
+                    changed = true;
+                }
+                let key = tool.key();
+                ui.label(if key == '\0' { String::new() } else { key.to_string() });
+                ui.end_row();
+            }
+        });
+        changed
+    })
 }
 
 /// The Menus tab: a row per menu item with a Visible check and a colour.

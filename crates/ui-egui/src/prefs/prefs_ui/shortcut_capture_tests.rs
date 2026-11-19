@@ -161,3 +161,91 @@ fn a_user_shortcut_wins_over_a_default_it_was_not_moved_from() {
     let log = crate::shortcut_dispatch::take_log(&ctx);
     assert_eq!(log.last().map(|i| i.0.as_str()), Some("select.modify.feather"), "{log:?}");
 }
+
+/// Exercises the PhotoCraft tab body even on a framework pin whose tab strip overflows.
+fn open_toolbar(h: &mut Harness<'_, Box<PhotocraftApp>>) {
+    crate::prefs_ui::open_shortcuts(h.state_mut(), 0);
+    h.state_mut().prefs_rt.shortcuts.as_mut().unwrap().state = craft::menu::shortcuts::DialogState::new().with_tab("toolbar");
+    h.run_steps(5);
+    let session = h.state().prefs_rt.shortcuts.as_ref().unwrap();
+    assert_eq!(session.state.snapshot(&session.keymap).unwrap().tab, "toolbar");
+}
+
+#[test]
+fn shortcuts_toolbar_visibility_is_saved_only_on_ok() {
+    use egui::accesskit::{Role, Toggled};
+    use egui_kittest::kittest::{NodeT as _, Queryable as _};
+
+    let mut h = harness();
+    let app = h.state_mut();
+    app.run(
+        "prefs.set",
+        json!({"path": "toolbar", "value": {
+            "hidden": ["Artboard Tool", "Future Tool"], "toolbar": [["Move", "Artboard"], ["Brush"]], "extras": [["Patch", "Pen"]]
+        }}),
+    )
+    .unwrap();
+    let initial = app.session.prefs().toolbar.clone();
+
+    open_toolbar(&mut h);
+    assert_eq!(h.get_by_role_and_label(Role::CheckBox, "Artboard Tool").accesskit_node().toggled(), Some(Toggled::False));
+    h.get_by_role_and_label(Role::CheckBox, "Move Tool").click();
+    h.run_steps(3);
+    assert_eq!(h.get_by_role_and_label(Role::CheckBox, "Move Tool").accesskit_node().toggled(), Some(Toggled::False));
+    assert_eq!(h.state().session.prefs().toolbar, initial, "edits stay in the draft");
+    h.get_by_label("Cancel").click();
+    h.run_steps(5);
+    assert!(!crate::prefs_ui::shortcuts_open(h.state()));
+    assert_eq!(h.state().session.prefs().toolbar, initial);
+
+    open_toolbar(&mut h);
+    h.get_by_role_and_label(Role::CheckBox, "Artboard Tool").click();
+    h.get_by_role_and_label(Role::CheckBox, "Move Tool").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(5);
+    assert!(!crate::prefs_ui::shortcuts_open(h.state()));
+    let saved = &h.state().session.prefs().toolbar;
+    assert_eq!(saved.hidden, ["Future Tool", "Move"]);
+    assert_eq!(saved.toolbar, initial.toolbar);
+    assert_eq!(saved.extras, initial.extras);
+    assert_eq!(saved.layout().toolbar[0], ["Artboard"]);
+
+    open_toolbar(&mut h);
+    h.get_by_label("Restore Defaults").click();
+    h.run_steps(3);
+    assert_eq!(h.get_by_role_and_label(Role::CheckBox, "Move Tool").accesskit_node().toggled(), Some(Toggled::True));
+    h.get_by_label("OK").click();
+    h.run_steps(5);
+    let saved = &h.state().session.prefs().toolbar;
+    assert!(saved.hidden.is_empty());
+    assert_eq!(saved.toolbar, initial.toolbar);
+    assert_eq!(saved.extras, initial.extras);
+}
+
+#[test]
+fn unchanged_shortcuts_toolbar_draft_preserves_newer_toolbar_settings() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable as _;
+
+    for reverted in [false, true] {
+        let mut h = harness();
+        h.state_mut().run("prefs.set", json!({"path": "toolbar.hidden", "value": ["Artboard Tool"]})).unwrap();
+        if reverted {
+            open_toolbar(&mut h);
+            for _ in 0..2 {
+                h.get_by_role_and_label(Role::CheckBox, "Artboard Tool").click();
+                h.run_steps(3);
+            }
+        } else {
+            crate::prefs_ui::open_shortcuts(h.state_mut(), 0);
+            h.run_steps(5);
+        }
+        // A preferences command can be applied while this dialog is open.
+        h.state_mut().run("prefs.set", json!({"path": "toolbar.hidden", "value": ["Move"]})).unwrap();
+        h.get_by_label("OK").click();
+        h.run_steps(5);
+        assert!(!crate::prefs_ui::shortcuts_open(h.state()));
+        assert_eq!(h.state().session.prefs().toolbar.hidden, ["Move"], "reverted={reverted}");
+    }
+}
