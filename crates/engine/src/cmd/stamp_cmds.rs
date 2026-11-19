@@ -132,7 +132,7 @@ fn stamp_down(s: &mut Session, p: &Value) -> Result<Value> {
         let mut tmp = doc.clone();
         let mut base = lower.clone();
         base.visible = true;
-        tmp.layers = vec![base, upper];
+        tmp.layers = vec![base, upper].into();
         let fmt = doc.pixel_format();
         let fmt = if lower.locks.transparency { fmt } else { PixelFormat::new(fmt.mode, fmt.sample, true) };
         crate::file_cmds::check_flattenable(&tmp, "layer.stampDown")?;
