@@ -100,8 +100,8 @@ pub(crate) fn for_each_layer(layers: &mut [Layer], f: &mut dyn FnMut(&mut Layer)
 /// A document copy needs fresh identities, but its comps and variable definitions must
 /// still target the copied layers. Deliberately leave references to already-deleted
 /// layers untouched so their missing-layer warnings remain meaningful. The same applies
-/// to Last Document State.
-pub(crate) fn reidentify_copied_layers(doc: &mut Document) {
+/// to Last Document State. Returns each copied layer's new id by its old id.
+pub(crate) fn reidentify_copied_layers(doc: &mut Document) -> std::collections::HashMap<LayerId, LayerId> {
     let mut ids = std::collections::HashMap::new();
     for_each_layer(&mut doc.layers, &mut |layer| {
         let previous = layer.id;
@@ -132,6 +132,7 @@ pub(crate) fn reidentify_copied_layers(doc: &mut Document) {
             slice.layer = Some(new_id);
         }
     }
+    ids
 }
 
 /// Scale every size and distance of a style by `k` (Image Size's Scale Styles and Layer Style ›
@@ -1223,9 +1224,24 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         // binding set (defs, data sets and the active index) on the flattened copy.
         doc.variables = photocraft_doc::Variables::default();
     }
-    reidentify_copied_layers(&mut doc);
+    // A full copy starts on the copy of the source's active layer, also inside a group, as the
+    // reference application does (#14596); a merged copy keeps its single layer active. Several
+    // selected layers were not measured, so that copy keeps today's target, its top layer.
+    let merged_only = p.get("mergedOnly").and_then(Value::as_bool).unwrap_or(false);
+    let source_active = d.active_layer.filter(|_| !merged_only && d.selected_layers().len() <= 1);
+    let ids = reidentify_copied_layers(&mut doc);
     let name = doc.name.clone();
     let index = s.add_document(doc, None);
+    if let Some(&active) = source_active.and_then(|id| ids.get(&id)) {
+        s.set_active_layer(Some(active));
+        crate::layer_multi_cmds::reselect(s, vec![active], Some(active));
+        if let Some(st) = s.active_mut() {
+            let target = st.layer_target();
+            if let Some(first) = st.snapshots.first_mut() {
+                first.layers = target;
+            }
+        }
+    }
     Ok(json!({ "document": index, "name": name }))
 }
 
@@ -1325,3 +1341,7 @@ mod image_size_drops_selection_tests;
 
 #[cfg(test)]
 mod canvas_size_noop_history_tests;
+
+#[cfg(test)]
+#[path = "image_cmds/duplicate_active_layer_tests.rs"]
+mod duplicate_active_layer_tests;
