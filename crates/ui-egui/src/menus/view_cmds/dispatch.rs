@@ -8,7 +8,7 @@ use super::screen_mode_names;
 use super::{LANGUAGE, PIXEL_ASPECTS, PhotocraftApp, SCREEN_MODES, Show, SnapTo, Value, json};
 
 /// The ids `panel_docking::command` runs for Window › panels and the Type menu's Character and Paragraph.
-const PANEL_IDS: [&str; 17] = [
+const PANEL_IDS: [&str; 18] = [
     "window.panel.layerComps",
     "window.panel.layers",
     "window.panel.history",
@@ -24,6 +24,7 @@ const PANEL_IDS: [&str; 17] = [
     "window.panel.histogram",
     "window.panel.swatches",
     "window.panel.adjustments",
+    "window.panel.timeline",
     "type.panels.character",
     "type.panels.paragraph",
 ];

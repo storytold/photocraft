@@ -300,6 +300,11 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if crate::screen_picker::busy(app) {
         return;
     }
+    // The Timeline's own keys, while the pointer is over its panel: they take the key before the commands
+    // the keymap fired for it (Space is the Hand tool elsewhere).
+    if crate::timeline_ui::keys(app, ctx) {
+        return;
+    }
     crate::shortcut_dispatch::run_fired(app, ctx, &fired);
     // A held tool letter released: a temporary tool gives the previous one back (#2672).
     crate::spring_tools::tick(app, ctx);

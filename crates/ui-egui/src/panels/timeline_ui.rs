@@ -8,11 +8,11 @@ use craft::timeline::time::{FrameRate, Tick, TimeRange};
 #[cfg(test)]
 use craft::timeline::ui::TransportWords;
 use craft::timeline::ui::{TransportBar, TransportButton};
-use craft::ui::buttons::{Button, IconButton};
+use craft::ui::buttons::IconButton;
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
 use craft::ui::display::{Shade, Text};
 use craft::ui::layout::RowAlign;
-use craft::ui::layout_components::{Row, Stack};
+use craft::ui::layout_components::Row;
 use craft::ui::notices::{Notice, NoticeLayout};
 use craft::ui::runtime::frame::request_repaint_after;
 use craft::ui::style::TypeRole;
@@ -28,6 +28,21 @@ pub struct TimelineUi {
     /// Drives playback; the playhead follows its position while it runs.
     #[serde(skip)]
     clock: PlaybackClock,
+    /// Frame animation: playing back, each frame for its own delay.
+    #[serde(skip)]
+    pub(crate) frame_playing: bool,
+    /// egui time (seconds) of the last frame change of a frame animation's playback.
+    #[serde(skip)]
+    pub(crate) last_time: f64,
+    /// Frame animation: passes through the frames played so far, for a finite loop count.
+    #[serde(skip)]
+    pub(crate) plays_done: u32,
+    /// Frames copied with ⌘C, for ⌘V to paste after the selected frame.
+    #[serde(skip)]
+    pub(crate) clipboard: Vec<std::sync::Arc<photocraft_doc::AnimFrame>>,
+    /// Where the panel was drawn last: the Timeline's keys work while the pointer is over it.
+    #[serde(skip)]
+    pub(crate) panel_rect: Option<egui::Rect>,
 }
 
 /// `PlaybackClock` has no equality; two states are equal when both play or both are stopped.
@@ -38,9 +53,9 @@ impl PartialEq for TimelineUi {
 }
 
 impl TimelineUi {
-    /// Whether playback runs.
+    /// Whether playback runs, of a video timeline or of a frame animation.
     pub fn playing(&self) -> bool {
-        self.clock.is_playing()
+        self.clock.is_playing() || self.frame_playing
     }
 }
 
@@ -49,6 +64,7 @@ impl TimelineUi {
 pub(crate) fn stop(app: &mut PhotocraftApp) {
     let at = app.session.active().and_then(|d| d.doc.timeline.as_ref()).map_or(Tick(0), |tl| FrameRate::from_f64(f64::from(tl.fps)).tick_of(tl.current as i64));
     app.ui.timeline.clock.halt(at);
+    app.ui.timeline.frame_playing = false;
 }
 
 /// The transport row: Play/Pause, Stop, then the frame steps.
@@ -61,24 +77,26 @@ pub(crate) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let now = ui.ctx().input(|i| i.time);
     if app.session.active().is_none() {
         app.ui.timeline.clock.stop(now);
+        app.ui.timeline.frame_playing = false;
         let _ = Notice::new(Tone::Neutral, tl!("Open a document to use the timeline.")).layout(NoticeLayout::Centred).show(ui);
         return;
     }
+    // A document with a frame animation shows its strip of frames, not a video timeline's transport.
+    if app.session.active().is_some_and(|d| d.doc.frame_animation.is_some()) {
+        app.ui.timeline.clock.stop(now);
+        frame_body(app, ui);
+        return;
+    }
+    app.ui.timeline.frame_playing = false;
     let tl = app.session.active().and_then(|d| d.doc.timeline.clone());
     let mut act: Option<(&'static str, Value)> = None;
     let Some(tl) = tl else {
         app.ui.timeline.clock.stop(now);
-        Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| {
-            Stack::new().show(ui, |ui, _| {
-                if clicked(&Button::new(tl!("Create Video Timeline")).show(ui)) {
-                    act = Some(("timeline.create", json!({ "duration": 30, "fps": 30.0 })));
-                }
-                Text::new(tl!("30 frames @ 30 fps")).shade(Shade::Muted).show(ui);
-            });
-        });
-        if let Some((cmd, p)) = act {
-            let _ = app.run(cmd, p);
-        }
+        // Nothing yet: make a frame animation (of nothing, or of the layers) or a video timeline.
+        let ctx = ui.ctx().clone();
+        let mut acts = Vec::new();
+        crate::frame_strip_ui::empty(ui, &mut acts);
+        apply(app, &ctx, acts, false);
         return;
     };
 
@@ -162,6 +180,209 @@ pub(crate) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some((cmd, p)) = act {
         let _ = app.run(cmd, p);
     }
+}
+
+/// The `timeline` panel body of a document with a frame animation: the strip of its frames, with its bar.
+fn frame_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let ctx = ui.ctx().clone();
+    app.ui.timeline.panel_rect = Some(ui.max_rect());
+    let Some((doc, revision, no_damage)) = app.session.active().map(|d| (d.doc.clone(), d.revision, d.last_damage.is_some_and(|r| r.is_empty()))) else {
+        return;
+    };
+    let Some(animation) = doc.frame_animation.as_ref() else { return };
+    let mut acts = Vec::new();
+    let mut toggle_play = false;
+    crate::frame_strip_ui::body(
+        ui,
+        &ctx,
+        crate::frame_strip_ui::Strip {
+            doc: &doc,
+            revision,
+            no_damage,
+            animation,
+            playing: app.ui.timeline.frame_playing,
+            acts: &mut acts,
+            toggle_play: &mut toggle_play,
+        },
+    );
+    apply(app, &ctx, acts, toggle_play);
+    playback(app, &ctx);
+}
+
+/// Carries out what the strip (or the empty panel) asked for.
+fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, acts: Vec<crate::frame_strip_ui::Act>, toggle_play: bool) {
+    if toggle_play {
+        toggle_play_frames(app, ctx);
+    }
+    for (cmd, p) in acts {
+        let _ = app.run(cmd, p);
+        crate::frame_strip_ui::ran(app, ctx, cmd);
+    }
+}
+
+/// Starts or stops playback of the frame animation.
+fn toggle_play_frames(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let starting = !app.ui.timeline.frame_playing;
+    app.ui.timeline.frame_playing = starting;
+    app.ui.timeline.last_time = ctx.input(|i| i.time);
+    app.ui.timeline.plays_done = 0;
+    if starting {
+        restart_if_finished(app, ctx);
+    }
+}
+
+/// Runs a frame-animation command from a key, keeping the thumbnails in step.
+fn act(app: &mut PhotocraftApp, ctx: &egui::Context, cmd: &'static str, params: Value) {
+    let _ = app.run(cmd, params);
+    crate::frame_strip_ui::ran(app, ctx, cmd);
+}
+
+/// Is the pointer over the Timeline panel? Its keys only work there, so Space, the arrows and ⌘C keep their
+/// usual meaning on the canvas and in the other panels. The rect is where the panel last drew: it is cleared
+/// when the panels are hidden (see `clear_panel_rect`).
+fn pointer_over(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
+    crate::panel_docking::is_shown(app, "timeline")
+        && app.ui.timeline.panel_rect.is_some_and(|r| ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| r.contains(p)))
+}
+
+/// Forgets where the panel was drawn, for a frame that doesn't draw it (Shift+Tab hides the panels).
+pub(crate) fn clear_panel_rect(app: &mut PhotocraftApp) {
+    app.ui.timeline.panel_rect = None;
+}
+
+/// Do the Timeline's keys apply now? Not while typing on the canvas, which owns Space and the arrows even with
+/// the pointer resting over the panel.
+pub(crate) fn keys_apply(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
+    app.ui.text_edit.is_none() && pointer_over(app, ctx)
+}
+
+/// Keys for the Timeline, while the pointer is over it (and no text field has the keyboard): Space plays or
+/// pauses; ← → step the selected frame, Home / End jump to the first / last; ⌥← ⌥→ move the selected frame;
+/// ⌘C copies it and ⌘V pastes it after the selected frame; Delete removes it. True when a key was taken.
+pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+    use egui::{Key, Modifiers};
+    if !keys_apply(app, ctx) {
+        return false;
+    }
+    let Some(anim) = app.session.active().and_then(|d| d.doc.frame_animation.clone()) else {
+        return false;
+    };
+    // `consume_key` accepts a press with extra ⇧ or ⌥ held, so ⇧⌘C (Copy Merged), ⌥⌘A (Select All Layers)
+    // and ⇧⌘V (Paste in Place) would be taken as the frame shortcuts: ⇧ and ⌥ must match exactly.
+    let press = |m: Modifiers, k: Key| ctx.input_mut(|i| i.modifiers.shift == m.shift && i.modifiers.alt == m.alt && i.consume_key(m, k));
+    if press(Modifiers::NONE, Key::Space) {
+        toggle_play_frames(app, ctx);
+        return true;
+    }
+    let a = anim;
+    let last = a.frames.len().saturating_sub(1);
+    // Copy and Paste reach egui as clipboard events, not key presses; take both forms.
+    let clip = |ctx: &egui::Context, copy: bool| {
+        ctx.input_mut(|i| {
+            // The clipboard events of ⇧⌘C and ⌥⌘V belong to the commands with those keys.
+            if i.modifiers.shift || i.modifiers.alt {
+                return false;
+            }
+            let n = i.events.len();
+            i.events.retain(|e| if copy { !matches!(e, egui::Event::Copy) } else { !matches!(e, egui::Event::Paste(_)) });
+            n != i.events.len()
+        })
+    };
+    if clip(ctx, true) | press(Modifiers::COMMAND, Key::C) {
+        app.ui.timeline.clipboard = a.frames.get(a.current).cloned().into_iter().collect();
+        return true;
+    }
+    // With no frames copied, ⌘V is left alone for Edit › Paste (an image on the system clipboard, say).
+    if !app.ui.timeline.clipboard.is_empty() && (clip(ctx, false) | press(Modifiers::COMMAND, Key::V)) {
+        let frames: Vec<Value> =
+            app.ui.timeline.clipboard.iter().map(|f| json!({ "delayMs": f.delay_ms, "hidden": f.hidden.iter().map(|l| l.0).collect::<Vec<_>>() })).collect();
+        act(app, ctx, "animation.pasteFrames", json!({ "frames": frames }));
+        return true;
+    }
+    if press(Modifiers::ALT, Key::ArrowLeft) {
+        if a.current > 0 {
+            act(app, ctx, "animation.moveFrame", json!({ "from": a.current, "to": a.current - 1 }));
+        }
+        return true;
+    }
+    if press(Modifiers::ALT, Key::ArrowRight) {
+        if a.current < last {
+            act(app, ctx, "animation.moveFrame", json!({ "from": a.current, "to": a.current + 1 }));
+        }
+        return true;
+    }
+    let target = if press(Modifiers::NONE, Key::ArrowLeft) {
+        Some(a.current.saturating_sub(1))
+    } else if press(Modifiers::NONE, Key::ArrowRight) {
+        Some((a.current + 1).min(last))
+    } else if press(Modifiers::NONE, Key::Home) {
+        Some(0)
+    } else if press(Modifiers::NONE, Key::End) {
+        Some(last)
+    } else {
+        None
+    };
+    if let Some(frame) = target {
+        act(app, ctx, "animation.selectFrame", json!({ "frame": frame }));
+        return true;
+    }
+    if (press(Modifiers::NONE, Key::Delete) || press(Modifiers::NONE, Key::Backspace)) && a.frames.len() > 1 {
+        act(app, ctx, "animation.deleteFrame", json!({}));
+        return true;
+    }
+    false
+}
+
+/// Play pressed with the last frame shown and a finite loop count: start again from the first frame,
+/// or the animation would stop at once.
+fn restart_if_finished(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let at_end = app
+        .session
+        .active()
+        .and_then(|d| d.doc.frame_animation.as_ref())
+        .is_some_and(|a| a.loops != photocraft_doc::LoopCount::Forever && a.frames.len() > 1 && a.current + 1 == a.frames.len());
+    if at_end {
+        let _ = app.run("animation.selectFrame", json!({ "frame": 0 }));
+        crate::frame_strip_ui::ran(app, ctx, "animation.selectFrame");
+    }
+}
+
+/// Frame animation playback: each frame shows for its own delay, then the loop count decides.
+fn playback(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if !app.ui.timeline.frame_playing {
+        return;
+    }
+    // Reads only what it needs, not a copy of the whole animation.
+    let Some((current, len, loops, delay)) = app
+        .session
+        .active()
+        .and_then(|d| d.doc.frame_animation.as_ref())
+        .map(|a| (a.current, a.frames.len(), a.loops, a.frames.get(a.current).map_or(0, |f| f.delay_ms)))
+    else {
+        app.ui.timeline.frame_playing = false;
+        return;
+    };
+    let now = ctx.input(|i| i.time);
+    let period = crate::frame_strip_ui::playback_period(delay);
+    if now - app.ui.timeline.last_time >= period {
+        app.ui.timeline.last_time = now;
+        match crate::frame_strip_ui::next_playback_frame(current, len, loops, app.ui.timeline.plays_done) {
+            // Counted only once the frame has changed: while a background job runs the engine refuses to
+            // select one, and the same tick must not be counted again and again.
+            Some((next, plays)) => {
+                if app.run("animation.selectFrame", json!({ "frame": next })).is_ok() {
+                    app.ui.timeline.plays_done = plays;
+                    crate::frame_strip_ui::ran(app, ctx, "animation.selectFrame");
+                }
+            }
+            None => app.ui.timeline.frame_playing = false,
+        }
+    }
+    // Wake up when the shown frame's time is up, not on every UI frame: a long delay needs no redraws.
+    let shown = app.session.active().and_then(|d| d.doc.frame_animation.as_ref()).map_or(0, |a| a.frames.get(a.current).map_or(0, |f| f.delay_ms));
+    let left = (app.ui.timeline.last_time + crate::frame_strip_ui::playback_period(shown) - now).max(0.0);
+    // The shell's own request: it also runs this body again, which a plain egui repaint of a retained panel doesn't.
+    request_repaint_after(ctx, left);
 }
 
 #[cfg(test)]
