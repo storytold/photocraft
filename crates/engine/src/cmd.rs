@@ -68,6 +68,8 @@ pub mod brush_cmds;
 pub mod brush_key_cmds;
 pub mod brush_preset_cmds;
 pub mod channel_cmds;
+#[cfg(test)]
+mod channel_mixer_refusals_tests;
 pub mod color_cmds;
 pub mod color_to_alpha_cmds;
 pub mod comps_cmds;
@@ -1310,9 +1312,16 @@ fn build() -> Vec<CommandSpec> {
                 _ => None,
             },
             params,
-            enabled: crate::adjust_cmds::has_adjustable,
+            // Channel Mixer refuses some modes, a hidden or fill layer and a layer mask (#14406).
+            enabled: match kind {
+                "channelMixer" => crate::adjust_cmds::channel_mixer_target_enabled,
+                _ => crate::adjust_cmds::has_adjustable,
+            },
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
+                if kind == "channelMixer" {
+                    crate::adjust_cmds::channel_mixer_refusal(s, p)?;
+                }
                 if matches!(kind.as_str(), "levels" | "curves") {
                     crate::channel_cmds::resolve_tone_target(s, false, p)?;
                 }
