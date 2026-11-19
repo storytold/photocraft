@@ -188,7 +188,11 @@ fn shortcuts_toolbar_visibility_is_saved_only_on_ok() {
     let initial = app.session.prefs().toolbar.clone();
 
     open_toolbar(&mut h);
-    assert_eq!(h.get_by_role_and_label(Role::CheckBox, "Artboard Tool").accesskit_node().toggled(), Some(Toggled::False));
+    let move_tool = h.get_by_role_and_label(Role::CheckBox, "Move Tool").rect();
+    let artboard = h.get_by_role_and_label(Role::CheckBox, "Artboard Tool");
+    let row_spacing = artboard.rect().top() - move_tool.top();
+    assert!((0.0..36.0).contains(&row_spacing), "the first two tool labels fit on single lines: {row_spacing} pt between rows");
+    assert_eq!(artboard.accesskit_node().toggled(), Some(Toggled::False));
     h.get_by_role_and_label(Role::CheckBox, "Move Tool").click();
     h.run_steps(3);
     assert_eq!(h.get_by_role_and_label(Role::CheckBox, "Move Tool").accesskit_node().toggled(), Some(Toggled::False));

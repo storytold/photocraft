@@ -292,24 +292,27 @@ fn toolbar_tab(hidden: &mut Vec<String>) -> DialogTab<'_> {
             hidden.clear();
         }
         let hidden_tools = toolbar_hidden_names(hidden);
-        egui::Grid::new("toolbar-visibility").num_columns(2).show(ui, |ui| {
-            for tool in Tool::ALL {
-                let name = format!("{tool:?}");
-                let visible = !hidden_tools.contains(&name);
-                let checkbox = ui.push_id(tool, |ui| Checkbox::new(Bind::given(visible)).label(tl!(tool.label())).show(ui)).inner;
-                if let Some(&visible) = checkbox.events.value() {
-                    if visible {
-                        hidden.retain(|entry| ToolbarCustomization::tool_name(entry).as_deref() != Some(name.as_str()));
-                    } else {
-                        hidden.push(name);
+        for tool in Tool::ALL {
+            ui.push_id(tool, |ui| {
+                ui.horizontal(|ui| {
+                    let name = format!("{tool:?}");
+                    let visible = !hidden_tools.contains(&name);
+                    let checkbox = Checkbox::new(Bind::given(visible)).label(tl!(tool.label())).show(ui);
+                    if let Some(&visible) = checkbox.events.value() {
+                        if visible {
+                            hidden.retain(|entry| ToolbarCustomization::tool_name(entry).as_deref() != Some(name.as_str()));
+                        } else {
+                            hidden.push(name);
+                        }
+                        changed = true;
                     }
-                    changed = true;
-                }
-                let key = tool.key();
-                ui.label(if key == '\0' { String::new() } else { key.to_string() });
-                ui.end_row();
-            }
-        });
+                    let key = tool.key();
+                    if key != '\0' {
+                        ui.label(key.to_string());
+                    }
+                });
+            });
+        }
         changed
     })
 }
