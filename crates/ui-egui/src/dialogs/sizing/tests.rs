@@ -193,7 +193,7 @@ fn image_size_draws_width_and_height_with_values_and_unit() {
     open(h.state_mut(), "image.imageSize").expect("a document is open");
     h.run_steps(6);
 
-    let value_of = |h: &Harness<'static, PhotocraftApp>, label: &str| -> Vec<String> {
+    let value_of = |h: &Harness<'_, Box<PhotocraftApp>>, label: &str| -> Vec<String> {
         h.query_all_by_label(label).filter_map(|n| n.accesskit_node().value().map(|v| v.to_string())).collect()
     };
     for (label, want) in [("Width", "1600"), ("Height", "1000"), ("Resolution", "72")] {
