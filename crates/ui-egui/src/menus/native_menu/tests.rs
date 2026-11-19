@@ -25,7 +25,7 @@ impl Backend for Fake {
     fn attach(&mut self, _dispatch: Dispatch) {}
 }
 
-fn app(doc: bool) -> PhotocraftApp {
+fn app(doc: bool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     if doc {
         app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
@@ -35,7 +35,7 @@ fn app(doc: bool) -> PhotocraftApp {
 }
 
 /// The whole app on its own context, with a Mac menu over a fake backend.
-fn harness(doc: bool) -> (Harness<'static, PhotocraftApp>, Synced, Events) {
+fn harness(doc: bool) -> (Harness<'static, Box<PhotocraftApp>>, Synced, Events) {
     let (synced, events): (Synced, Events) = Default::default();
     let backend = Fake { synced: synced.clone(), events: events.clone() };
     let mut h = Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
@@ -53,7 +53,7 @@ fn harness(doc: bool) -> (Harness<'static, PhotocraftApp>, Synced, Events) {
 }
 
 /// A menu click: the event the backend reports, polled before the frame like the app's input hook does.
-fn click(h: &mut Harness<'static, PhotocraftApp>, events: &Events, id: &str) {
+fn click(h: &mut Harness<'static, Box<PhotocraftApp>>, events: &Events, id: &str) {
     events.borrow_mut().push(Event::Click(CommandRef::new(id)));
     let ctx = h.ctx.clone();
     poll(h.state_mut(), &ctx);
@@ -218,4 +218,22 @@ fn opening_or_closing_a_workspace_without_input_rebuilds_the_menus() {
     let id = app.framework.dialogs.stack().top().unwrap();
     app.framework.dialogs.cancel_by_id(&ctx, id);
     assert_eq!(state_hash(&app, None), closed, "and come back when it is cancelled");
+}
+
+/// The Contextual Task Bar's tick follows the bar when its Hide bar or `ui.set` turns it off without a menu click
+/// (#15489).
+#[test]
+fn the_task_bar_tick_follows_the_bar_hidden_without_a_menu_click() {
+    let (mut h, synced, _) = harness(true);
+    let ticked = |synced: &Synced| {
+        let bar = synced.borrow().last().cloned().expect("menus synced");
+        bar.find(&CommandRef::new("window.panel.contextualTaskBar")).and_then(|it| it.kind.checked())
+    };
+    assert_eq!(ticked(&synced), Some(true));
+    h.state_mut().ui.panels.context_task_bar = false;
+    h.run_steps(2);
+    assert_eq!(ticked(&synced), Some(false), "unticked once the bar is hidden");
+    h.state_mut().ui.panels.context_task_bar = true;
+    h.run_steps(2);
+    assert_eq!(ticked(&synced), Some(true), "ticked again once it shows");
 }

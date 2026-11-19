@@ -7,7 +7,7 @@ use craft::ui::patterns::form_dialogs::HostedParamDialog;
 use craft::ui::runtime::commands::{CommandRef, CommandSet as _, CommandState};
 use photocraft_engine::actions_cmds::ActionStep;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
     app
