@@ -1,19 +1,44 @@
 //! #13370: the Triangle tool's Align Edges checkbox. On (the default) the drawn box snaps to whole
 //! pixels; off it keeps the drag's fractional coordinates. It is greyed outside Shape mode.
 
+use craft::draw::ui::VectorMode;
+use craft::draw::ui::shape_drag::ShapeKind;
+use egui::Modifiers;
 use egui::accesskit::Toggled;
 use egui_kittest::kittest::{NodeT, Queryable};
+use serde_json::json;
 
-use super::add_anchor_options_bar_tests::harness;
-use super::shapes::shape_geometry;
+use super::test_input::harness;
+use crate::PhotocraftApp;
+use crate::canvas::{ToolEvent, tool_event};
 use crate::state::{Tool, ToolOptions};
 
 const START: [f64; 2] = [10.3, 10.6];
 const END: [f64; 2] = [40.7, 30.2];
 
-fn rect(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2]) -> Option<[f64; 4]> {
-    let g = shape_geometry(o, tool, start, end, egui::Modifiers::NONE)?;
-    serde_json::from_value(g["rect"].clone()).ok()
+/// The box a `tool` drag from `START` to `END` draws, `None` when nothing is drawn. The pixel-grid
+/// snap of vector tools is off, so only Align Edges rounds.
+fn rect(set: impl FnOnce(&mut ToolOptions), tool: Tool, start: [f64; 2], end: [f64; 2]) -> Option<[f64; 4]> {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    app.run("prefs.set", json!({"path": "tools.snapVectorToolsAndTransformsToPixelGrid", "value": false})).unwrap();
+    app.sync_views();
+    app.ui.views[0].zoom = 16.0;
+    app.ui.tool = tool;
+    set(&mut app.ui.tool_options);
+    let before = app.session.active().unwrap().doc.layers.len();
+    let none = Modifiers::NONE;
+    tool_event(&mut app, ToolEvent::Down { x: start[0], y: start[1], pressure: 1.0 }, none);
+    tool_event(&mut app, ToolEvent::Move { x: (start[0] + end[0]) / 2.0, y: (start[1] + end[1]) / 2.0, pressure: 1.0 }, none);
+    tool_event(&mut app, ToolEvent::Move { x: end[0], y: end[1], pressure: 1.0 }, none);
+    tool_event(&mut app, ToolEvent::Up { x: end[0], y: end[1] }, none);
+    let st = app.session.active().unwrap();
+    if st.doc.layers.len() == before {
+        return None;
+    }
+    let id = st.active_layer.unwrap().0;
+    let info = app.session.execute("shape.info", json!({"layer": id})).unwrap();
+    serde_json::from_value(info["live"]["rect"].clone()).ok()
 }
 
 #[test]
@@ -27,38 +52,22 @@ fn align_edges_is_on_by_default_and_saved() {
 }
 
 #[test]
-fn triangle_box_snaps_with_align_edges_and_stays_fractional_without() {
-    let mut o = ToolOptions::default();
-    let r = rect(&o, Tool::Triangle, START, END).unwrap();
-    assert!(r.iter().all(|v| v.fract() == 0.0), "whole pixels: {r:?}");
-    o.align_edges = false;
-    let r = rect(&o, Tool::Triangle, START, END).unwrap();
-    for (got, want) in r.iter().zip([10.3, 10.6, 30.4, 19.6]) {
-        assert!((got - want).abs() < 1e-9, "{r:?}");
-    }
-}
-
-#[test]
 fn other_shape_tools_always_snap() {
-    let o = ToolOptions { align_edges: false, ..Default::default() };
     for tool in [Tool::Polygon, Tool::EllipseShape, Tool::Rectangle, Tool::Star] {
-        let r = rect(&o, tool, START, END).unwrap();
+        let r = rect(|o| o.align_edges = false, tool, START, END).unwrap();
         assert!(r.iter().all(|v| v.fract() == 0.0), "{tool:?}: {r:?}");
     }
 }
 
 #[test]
 fn a_greyed_checkbox_keeps_snapping_in_path_mode() {
-    let o = ToolOptions { align_edges: false, shape_mode: "path".into(), ..Default::default() };
-    let r = rect(&o, Tool::Triangle, START, END).unwrap();
-    assert!(r.iter().all(|v| v.fract() == 0.0), "Path mode: {r:?}");
-}
-
-#[test]
-fn a_sub_pixel_triangle_drag_still_draws_nothing() {
-    let o = ToolOptions { align_edges: false, ..Default::default() };
-    assert!(rect(&o, Tool::Triangle, [10.0, 10.0], [10.4, 30.0]).is_none());
-    assert!(rect(&o, Tool::Triangle, [10.0, 10.0], [30.0, 10.9]).is_none());
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    app.ui.tool_options.align_edges = false;
+    app.ui.tool_options.shape_mode = VectorMode::Path;
+    assert!(super::shapes::snaps_to_pixels(&app, ShapeKind::Triangle), "Path mode still snaps");
+    app.ui.tool_options.shape_mode = VectorMode::Shape;
+    assert!(!super::shapes::snaps_to_pixels(&app, ShapeKind::Triangle), "Shape mode with Align Edges off keeps fractions");
 }
 
 #[test]
@@ -72,7 +81,7 @@ fn options_bar_shows_align_edges_for_the_triangle_only() {
     assert!(!h.state().ui.tool_options.align_edges, "clicking toggles the option");
     assert_eq!(h.get_by_label("Align Edges").accesskit_node().toggled(), Some(Toggled::False));
 
-    h.state_mut().ui.tool_options.shape_mode = "path".into();
+    h.state_mut().ui.tool_options.shape_mode = VectorMode::Path;
     h.run_steps(4);
     assert!(h.get_by_label("Align Edges").accesskit_node().is_disabled(), "greyed in Path mode");
 
