@@ -50,12 +50,14 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // Stamp, the Smudge tool and the Art History Brush start with their own measured tips
         // instead, as the whole brush Reset Tool gives them (#11911, #12099, #12671, #12684,
         // #13029, #12601, #12964, #12631); the Art History Brush's is at full opacity (#10263).
-        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp | Tool::Smudge) => {
+        // The Art History Brush's Angle and pressure toggles are its own bar controls, so they
+        // start at 0° and off too, whatever the outgoing brush has (#12629).
+        None if matches!(
+            tool,
+            Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp | Tool::Smudge | Tool::ArtHistoryBrush
+        ) =>
+        {
             fresh_brush(tool, &current)
-        }
-        // Its pressure toggles are not measured, so its first use keeps the outgoing ones (#12631).
-        None if tool == Tool::ArtHistoryBrush => {
-            BrushSettings { pressure_size: current.pressure_size, pressure_opacity: current.pressure_opacity, ..fresh_brush(tool, &current) }
         }
         // The Pencil starts with its own 1 px hard round (#12200) regardless of the Brush, keeping
         // the outgoing opacity.
@@ -71,14 +73,7 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
             };
             // The Remove tool starts at its measured 19 px; the rest is the current brush (#12548).
             let size = if tool == Tool::Remove { REMOVE_TOOL_SIZE } else { current.size };
-            let brush = BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, flow, size, ..current };
-            // The Art History Brush's Angle and pressure toggles are its own bar controls, off and
-            // at 0° until it changes them (#12629), whatever the outgoing brush has.
-            if tool == Tool::ArtHistoryBrush {
-                BrushSettings { angle: fresh.angle, pressure_opacity: fresh.pressure_opacity, pressure_size: fresh.pressure_size, ..brush }
-            } else {
-                brush
-            }
+            BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, flow, size, ..current }
         }
     };
     // The picked preset was the outgoing tool's brush: forget it, so Update Brush can't overwrite
