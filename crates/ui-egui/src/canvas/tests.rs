@@ -1028,8 +1028,9 @@ fn a_floating_document_follows_navigator_and_status_bar_zoom() {
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
         h.event(egui::Event::Text(typed.into()));
         h.key_press(egui::Key::Enter);
-        h.run_steps(2);
-        h.run_steps(58);
+        // The harness steps 1/4 s a frame, so 10 frames after Enter are 2.5 s: well past the 150 ms zoom ease, with
+        // frames after it in which the window could write its view back (60 frames, 15 s, before #15652).
+        h.run_steps(10);
         assert!(h.state().ui.window_views.is_empty(), "the window keeps no copy of the view");
         assert!(
             (h.state().ui.views[0].zoom - want).abs() < 1e-3,

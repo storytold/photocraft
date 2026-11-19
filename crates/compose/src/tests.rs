@@ -404,7 +404,7 @@ fn every_blend_mode_matches_reference_on_opaque_pixels() {
         let mut top = Layer::raster("t", PixelFormat::RGBA32F);
         top.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 2, 2), &source);
         top.blend = mode;
-        d.layers = vec![bottom, top];
+        d.layers = vec![bottom, top].into();
         let got = px(&d, 0, 0);
         // A 32-bit document: Add / Divide don't clip at 1 (Divide gives 0.6 / 0.2 = 3 in red).
         psblend::HDR.with(|h| h.set(true));
@@ -434,7 +434,7 @@ fn full_coverage_adjustment_keeps_its_result_over_huge_hdr_values() {
             dither: false,
             source: None,
         };
-        d.layers = vec![base, Layer::new("look", LayerContent::Adjustment(look))];
+        d.layers = vec![base, Layer::new("look", LayerContent::Adjustment(look))].into();
         let got = px(&d, 0, 0);
         for c in &got[..3] {
             assert!((c - 0.5).abs() < 1e-6, "{v}: {got:?}");
@@ -479,7 +479,7 @@ fn blend_px(depth: SampleType, mode: BlendMode, bottom: [f32; 3], top: [f32; 3])
     let mut t = Layer::raster("t", fmt);
     t.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 1, 1), &photocraft_raster::from_rgba(&fmt, [top[0], top[1], top[2], 1.0]));
     t.blend = mode;
-    d.layers = vec![b, t];
+    d.layers = vec![b, t].into();
     px(&d, 0, 0)
 }
 
@@ -3294,7 +3294,7 @@ fn exposure_scales_32_bit_samples_as_stored() {
         let mut d = Document::new("e", Size::new(1, 1), ColorMode::Rgb, depth);
         let mut l = Layer::raster("px", fmt);
         l.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 1, 1), &[0.2, 0.2, 0.2, 1.0]);
-        d.layers = vec![l, Layer::new("exp", LayerContent::Adjustment(plus_one_stop.clone()))];
+        d.layers = vec![l, Layer::new("exp", LayerContent::Adjustment(plus_one_stop.clone()))].into();
         let got = px(&d, 0, 0)[0];
         assert!((got - want).abs() < 2e-3, "{depth:?}: {got}");
     }
@@ -3384,7 +3384,7 @@ fn float_adjustments_preserve_hdr_range() {
         let mut d = Document::new("HDR", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
         let mut l = Layer::raster("pixels", PixelFormat::RGBA32F);
         l.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 1, 1), &[4.0, 2.0, 0.5, 0.75]);
-        d.layers = vec![l, Layer::new("adjustment", LayerContent::Adjustment(adj.clone()))];
+        d.layers = vec![l, Layer::new("adjustment", LayerContent::Adjustment(adj.clone()))].into();
         let got = px(&d, 0, 0);
         for (a, b) in got[..3].iter().zip(want) {
             assert!((a - b).abs() < 1e-5, "{adj:?}: {got:?} vs {want:?}");

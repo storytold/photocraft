@@ -86,7 +86,11 @@ fn assert_document_size_is_physical(gpu: bool) {
     let Some(mut h) = harness(gpu) else { return };
     h.run_steps(4);
     const DOC: u32 = 60;
-    for ui_scale in ["100", "125", "150", "200"] {
+    // A fractional and an integer UI scale: the canvas sees the scale only as `pixels_per_point` (device px per doc px
+    // = zoom x ppp), and its sampling branches on that product being below 1, whole (or 2 and up) or fractional
+    // (`gpu_canvas::callback::filter_mode`). 125% gives 1.25 and 2.5 at the two zooms, as 150% would; 200% gives 2 and
+    // 4, covering 100%'s 1 and 2, where a dropped ppp could not show anyway (#15652).
+    for ui_scale in ["125", "200"] {
         {
             let app = h.state_mut();
             while app.session.active().is_some() {
