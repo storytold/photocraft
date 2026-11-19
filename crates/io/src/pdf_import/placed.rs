@@ -3,9 +3,10 @@
 //! Photoshop stores a placed PDF's frame (`Sz  `): the box the page was cropped to, in the
 //! units the layer's corners map from. Its default crop for Illustrator artwork is the
 //! artwork's bounding box, not the page. The page is drawn on transparency, cropped to the box
-//! whose proportions match the frame (the artwork's bounds or the whole page; when both do, the
-//! one whose size in points matches the frame at its stored resolution, `Rslt`) and scaled to
-//! fill the frame exactly. Other page boxes (trim, bleed, art) are not tried.
+//! whose proportions match the frame (the artwork's bounds or the whole page) and scaled to fill
+//! the frame exactly. With a stored resolution (`Rslt`) the box must also have the frame's size
+//! in points at it; when both boxes do, the nearer wins. Other page boxes (trim, bleed, art) are
+//! not tried.
 
 use craft_pdf::raster::{self, RenderCache};
 use craft_pdf::syntax::page::Page;
@@ -40,9 +41,10 @@ impl Box2 {
 }
 
 /// The placed page of `bytes`, cropped as it was placed and drawn into a transparent frame (the
-/// stored `Sz  `, rounded up to whole pixels). An error when the PDF can't be drawn or neither
-/// the artwork's bounds nor the page has the frame's proportions: the caller then keeps the
-/// pixels the file was saved with.
+/// stored `Sz  `, rounded up to whole pixels). An error when the PDF can't be drawn completely or
+/// neither the artwork's bounds nor the page has the frame's proportions: the caller then keeps
+/// the pixels the file was saved with. Running out of memory is [`IoError::OutOfMemory`], the
+/// one failure that may not happen again.
 pub fn import_placed(name: &str, bytes: &[u8], placed: &PlacedPdf, ctl: &Interrupt) -> Result<Document, IoError> {
     let (frame_w, frame_h) = placed.frame;
     if !frame_w.is_finite() || !frame_h.is_finite() || frame_w < 1.0 || frame_h < 1.0 {
@@ -52,7 +54,10 @@ pub fn import_placed(name: &str, bytes: &[u8], placed: &PlacedPdf, ctl: &Interru
     if width > raster::MAX_SIDE || height > raster::MAX_SIDE || u64::from(width) * u64::from(height) > raster::MAX_PIXELS {
         return Err(IoError::Unsupported("the placed PDF's frame is too large to draw".into()));
     }
-    let pdf = craft_pdf::open_slice_with_options(bytes, None, &craft_pdf::OpenOptions::default()).map_err(super::open_error)?;
+    let pdf = craft_pdf::open_slice_with_options(bytes, None, &craft_pdf::OpenOptions::default()).map_err(|e| match e {
+        craft_pdf::OpenError::Allocation => IoError::OutOfMemory("the placed PDF needs more memory than is available".into()),
+        e => super::open_error(e),
+    })?;
     let number = placed.page.max(1) as usize;
     let page = pdf.pages().get(number - 1).ok_or_else(|| IoError::Unsupported(format!("the placed PDF has no page {number}")))?;
     let cache = RenderCache::new();
@@ -67,14 +72,37 @@ pub fn import_placed(name: &str, bytes: &[u8], placed: &PlacedPdf, ctl: &Interru
         background: [0; 4],
         color_replacement: None,
     };
-    let rendered = render_page(page, &cache, &options, ctl).map_err(|e| render_error(number, 72.0 * scale[0], e))?;
+    let rendered = render(page, &cache, &options, number, ctl)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let mut surface = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
-    write_raster(&mut surface, 0, width, rendered.bytes(), true, "the placed PDF", ctl)?;
+    write_raster(&mut surface, 0, width, rendered.bytes(), true, "the placed PDF", ctl).map_err(|e| match e {
+        IoError::Unsupported(why) => IoError::OutOfMemory(why),
+        e => e,
+    })?;
     surface.prune();
     let mut doc = Document::new(name, Size::new(width, height), ColorMode::Rgb, SampleType::U8);
     doc.layers.push(Layer::new(format!("Page {number}"), LayerContent::Raster(surface)));
     Ok(doc)
+}
+
+/// [`render_page`] for the placed path: a render missing an image or other content is refused
+/// rather than drawn in place of the saved pixels, and only an allocation failure is
+/// [`IoError::OutOfMemory`].
+fn render<'a>(page: &'a Page<'a>, cache: &RenderCache<'a>, options: &raster::Options, number: usize, ctl: &Interrupt) -> Result<raster::Raster, IoError> {
+    let rendered = render_page(page, cache, options, ctl).map_err(|e| render_failure(number, options.scale[0], e))?;
+    let missing = match rendered.diagnostics {
+        d if d.image_decode_failed => "an image could not be decoded",
+        d if d.content_truncated => "some content was omitted (a decode or memory limit)",
+        _ => return Ok(rendered),
+    };
+    Err(IoError::Unsupported(format!("PDF page {number} can't be drawn completely: {missing}")))
+}
+
+fn render_failure(number: usize, scale: f32, error: raster::Error) -> IoError {
+    match error {
+        raster::Error::Allocation => IoError::OutOfMemory(format!("PDF page {number} needs more memory than is available")),
+        e => render_error(number, 72.0 * f64::from(scale), e),
+    }
 }
 
 /// Whether a `width` × `height` box (in pixels of the render it was measured in) has the
@@ -84,9 +112,16 @@ fn fits(width: f64, height: f64, frame: (f64, f64)) -> bool {
     (height - expected).abs() <= 2.0 + 0.01 * height
 }
 
+/// Whether `b` (in points) is the frame's size at `dpi`, allowing for the antialiased pixel at
+/// each edge of the frame.
+fn sized(b: Box2, frame: (f64, f64), dpi: f64) -> bool {
+    let near = |points: f64, pixels: f64| (points * dpi / 72.0 - pixels).abs() <= 2.0 + 0.01 * pixels;
+    near(b.width(), frame.0) && near(b.height(), frame.1)
+}
+
 /// The box the page was placed with: its artwork's bounds or the whole page, whichever has the
-/// frame's proportions; when both do, the one whose width in points is nearer the frame's at its
-/// stored resolution (the artwork's without one). `None` when neither does.
+/// frame's proportions and, with a stored resolution, its size in points at it (the nearer
+/// when both do). Without a resolution the artwork wins. `None` when neither does.
 fn placed_box<'a>(page: &'a Page<'a>, cache: &RenderCache<'a>, number: usize, placed: &PlacedPdf, ctl: &Interrupt) -> Result<Option<Box2>, IoError> {
     let frame = placed.frame;
     let (page_w, page_h) = page_size(page, number)?;
@@ -101,14 +136,13 @@ fn placed_box<'a>(page: &'a Page<'a>, cache: &RenderCache<'a>, number: usize, pl
         _ => None,
     };
     let page_fits = fits(page_w * probe, page_h * probe, frame);
-    Ok(match (art, page_fits, placed.dpi) {
-        (Some(art), true, Some(dpi)) => {
-            let points = frame.0 * 72.0 / dpi;
-            Some(if (whole.width() / points).ln().abs() < (art.width() / points).ln().abs() { whole } else { art })
+    let candidates = [art, page_fits.then_some(whole)].into_iter().flatten();
+    Ok(match placed.dpi {
+        None => candidates.into_iter().next(),
+        Some(dpi) => {
+            let off = |b: &Box2| (b.width() * dpi / 72.0 / frame.0).ln().abs();
+            candidates.filter(|&b| sized(b, frame, dpi)).min_by(|a, b| off(a).total_cmp(&off(b)))
         }
-        (Some(art), _, _) => Some(art),
-        (None, true, _) => Some(whole),
-        (None, false, _) => None,
     })
 }
 
@@ -154,7 +188,7 @@ fn opaque_bounds<'a>(
     ctl: &Interrupt,
 ) -> Result<Option<Box2>, IoError> {
     let options = raster::Options { scale: [scale as f32; 2], size: Some(size), offset: offset.map(|o| o as f32), background: [0; 4], color_replacement: None };
-    let rendered = render_page(page, cache, &options, ctl).map_err(|e| render_error(number, 72.0 * scale, e))?;
+    let rendered = render(page, cache, &options, number, ctl)?;
     let width = size[0] as usize;
     let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
     for (y, row) in rendered.bytes().chunks_exact(width * 4).enumerate() {

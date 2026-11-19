@@ -5,13 +5,17 @@ use super::*;
 
 /// A 400 × 300 pt artboard with a red 100 × 50 pt rectangle whose top-left is at (100, 50).
 fn artwork() -> Vec<u8> {
-    let content = "1 0 0 rg 100 200 100 50 re f";
-    let objects = [
-        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
-        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents 4 0 R /Resources << >> >>".to_string(),
-        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
-    ];
+    pdf(&["1 0 0 rg 100 200 100 50 re f"])
+}
+
+/// 400 × 300 pt artboards, one per entry of `contents`.
+fn pdf(contents: &[&str]) -> Vec<u8> {
+    let kids: Vec<String> = (0..contents.len()).map(|i| format!("{} 0 R", 3 + 2 * i)).collect();
+    let mut objects = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string(), format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids.join(" "), contents.len())];
+    for (i, content) in contents.iter().enumerate() {
+        objects.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents {} 0 R /Resources << >> >>", 4 + 2 * i));
+        objects.push(format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()));
+    }
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, body) in objects.iter().enumerate() {
@@ -107,4 +111,59 @@ fn convert_to_layers_keeps_a_placed_ai_at_its_placed_bounds() {
     let doc = &s.active().unwrap().doc;
     let LayerContent::Raster(px) = &doc.layers.last().unwrap().content else { panic!("a pixel layer: {:?}", doc.layers.last().unwrap().content.kind_name()) };
     assert_eq!(px.content_bounds(), Rect::new(20, 30, 120, 80));
+}
+
+#[test]
+fn convert_to_layers_keeps_the_saved_pixels_of_a_frame_matching_neither_box() {
+    let (mut s, id) = placed((100.0, 100.0));
+    s.execute("layer.smartObjects.convertToLayers", json!({"layer": id.0})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    let layer = doc.layers.last().unwrap();
+    let LayerContent::Raster(px) = &layer.content else { panic!("a pixel layer: {:?}", layer.content.kind_name()) };
+    assert_eq!(px.content_bounds(), Rect::new(20, 30, 120, 80), "the saved pixels, where they were placed");
+    assert_eq!(px.pixel(70, 55), RED.to_vec());
+    assert_eq!(layer.name, "Logo");
+}
+
+#[test]
+fn convert_to_layers_refuses_saved_pixels_that_show_smart_filters() {
+    let (mut s, id) = placed((100.0, 100.0));
+    let filter = SmartFilter { command: "image.adjustments.invert".into(), params: json!({}), blend: BlendMode::Normal, opacity: 1.0, visible: true };
+    let set_filter = |s: &mut Session, visible: bool| {
+        let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+        let LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("a smart object") };
+        sm.smart_filters = vec![SmartFilter { visible, ..filter.clone() }];
+    };
+    set_filter(&mut s, true);
+    let error = s.execute("layer.smartObjects.convertToLayers", json!({"layer": id.0})).unwrap_err();
+    assert!(error.to_string().contains("rasterize it instead"), "{error}");
+    set_filter(&mut s, false);
+    s.execute("layer.smartObjects.convertToLayers", json!({"layer": id.0})).unwrap();
+}
+
+#[test]
+fn placements_of_different_pages_of_one_pdf_render_their_own_page() {
+    let bytes = Arc::new(pdf(&["1 0 0 rg 100 200 100 50 re f", "0 0 1 rg 100 200 100 50 re f"]));
+    let (mut s, id) = placed((100.0, 50.0));
+    let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let LayerContent::Smart(first) = &mut doc.layer_mut(id).unwrap().content else { panic!("a smart object") };
+    first.source = SmartSource::Embedded { file_name: "Logo.ai".into(), bytes: bytes.clone() };
+    let mut second = first.clone();
+    let mut d = photocraft_io::smart_map::sold_descriptor(second.psd_raw.as_ref().unwrap()).unwrap();
+    d.items.iter_mut().filter(|(k, _)| k.is("PgNm")).for_each(|(_, v)| *v = craft_psd::descriptor::Value::Integer(2));
+    let spec = photocraft_io::smart_map::PlacedSpec {
+        idnt: "logo",
+        placed: "logo",
+        transform: second.transform,
+        perspective: None,
+        size: (100.0, 50.0),
+        dpi: 72.0,
+        warp: None,
+        filter_fx: None,
+    };
+    second.psd_raw = Some(Arc::new(photocraft_io::smart_map::sold_bytes(Some(&d), &spec, &mut vec![])));
+    let doc = &s.active().unwrap().doc;
+    let colour = |sm: &SmartObject| render(doc, sm).unwrap().unwrap().pixel(70, 55);
+    assert_eq!(colour(smart(doc, id).unwrap()), RED.to_vec());
+    assert_eq!(colour(&second), vec![0.0, 0.0, 1.0, 1.0], "page 2's blue artwork, not page 1's from the cache");
 }

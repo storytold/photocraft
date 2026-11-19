@@ -391,6 +391,15 @@ fn source_image_inner(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: Opti
     Ok(img)
 }
 
+/// The page, frame and resolution `sm` placed `bytes` with, when they are a PDF: what
+/// [`placed_source_image`] draws, so whatever caches its result keys on them too.
+pub(super) fn placed_pdf(bytes: &[u8], sm: &SmartObject) -> Option<photocraft_io::smart_map::PlacedPdf> {
+    if !bytes.starts_with(b"%PDF-") {
+        return None;
+    }
+    photocraft_io::smart_map::placed_pdf(&photocraft_io::smart_map::sold_descriptor(sm.psd_raw.as_ref()?)?)
+}
+
 /// [`source_image`], except that a PDF another application placed in a frame of its own is
 /// drawn cropped to that frame ([`photocraft_io::pdf_placement`], #15650).
 pub(super) fn placed_source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, sm: &SmartObject, svg: Option<bool>) -> Result<SourceImage> {
@@ -398,12 +407,7 @@ pub(super) fn placed_source_image(file_name: &str, bytes: &[u8], fmt: PixelForma
         Some(svg) => source_image_classified(file_name, bytes, fmt, svg),
         None => source_image(file_name, bytes, fmt),
     };
-    let placed = bytes
-        .starts_with(b"%PDF-")
-        .then(|| sm.psd_raw.as_ref().and_then(|raw| photocraft_io::smart_map::sold_descriptor(raw)))
-        .flatten()
-        .and_then(|d| photocraft_io::smart_map::placed_pdf(&d));
-    let Some(placed) = placed else { return own() };
+    let Some(placed) = placed_pdf(bytes, sm) else { return own() };
     let mut h = blake3::Hasher::new();
     h.update(b"placed-pdf\0");
     h.update(bytes);
@@ -429,7 +433,9 @@ pub(super) fn placed_source_image(file_name: &str, bytes: &[u8], fmt: PixelForma
         Ok(doc) => doc,
         Err(e) => {
             let why = format!("can't read smart object contents \"{file_name}\": {e}");
-            remember_placement(key.0, Placement::Failed(why.clone()));
+            if !matches!(e, photocraft_io::IoError::OutOfMemory(_)) {
+                remember_placement(key.0, Placement::Failed(why.clone()));
+            }
             return Err(other(why));
         }
     };
@@ -443,7 +449,8 @@ pub(super) fn placed_source_image(file_name: &str, bytes: &[u8], fmt: PixelForma
 enum Placement {
     /// The frame is the PDF's own canvas: PhotoCraft placed it, and it opens as usual.
     Own,
-    /// It couldn't be drawn in its frame, and why. Each try renders the page up to three times.
+    /// It can't be drawn in its frame, and why. Each try renders the page up to three times; a
+    /// try that ran out of memory isn't remembered, so a later render tries again.
     Failed(String),
 }
 

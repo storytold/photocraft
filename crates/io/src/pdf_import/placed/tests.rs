@@ -168,3 +168,52 @@ fn the_default_canvas_is_the_imported_pages_size() {
     }
     assert_eq!(super::super::default_canvas(b"%PDF-1.6\nnot a pdf"), None);
 }
+
+#[test]
+fn with_a_stored_resolution_the_box_must_also_have_the_frames_size() {
+    // The 100 × 50 pt artwork has a 200 × 100 px frame's proportions, but at 72 ppi that frame is
+    // 200 × 100 pt: a larger box of the same shape, around the artwork, that isn't tried.
+    assert!(draw(&artwork(), &PlacedPdf { frame: (200.0, 100.0), page: 1, dpi: Some(72.0) }).is_err());
+    assert!(draw(&artwork(), &PlacedPdf { frame: (200.0, 100.0), page: 1, dpi: Some(144.0) }).is_ok());
+    // Likewise the 400 × 300 pt page and an 800 × 600 px frame.
+    assert!(draw(&artwork(), &PlacedPdf { frame: (800.0, 600.0), page: 1, dpi: Some(72.0) }).is_err());
+    assert!(draw(&artwork(), &PlacedPdf { frame: (800.0, 600.0), page: 1, dpi: Some(144.0) }).is_ok());
+}
+
+/// [`artwork`] with a 10 × 10 pt image over it whose JPEG data can't be decoded.
+fn artwork_with_a_broken_image() -> Vec<u8> {
+    let mut pdf = PdfDocument::with_version("1.5");
+    let pages_id = pdf.new_object_id();
+    let image = pdf.add_object(Stream::new(
+        dictionary! { "Type" => "XObject", "Subtype" => "Image", "Width" => 8, "Height" => 8, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => "DCTDecode" },
+        b"not a jpeg".to_vec(),
+    ));
+    let content = pdf.add_object(Stream::new(dictionary! {}, b"1 0 0 rg 100 200 100 50 re f q 10 0 0 10 120 210 cm /Im0 Do Q".to_vec()));
+    let page = pdf.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "MediaBox" => vec![0.into(), 0.into(), 400.into(), 300.into()],
+        "Contents" => content,
+        "Resources" => dictionary! { "XObject" => dictionary! { "Im0" => image } },
+    });
+    pdf.objects.insert(pages_id, Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1 }));
+    let catalog = pdf.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    pdf.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    pdf.save_to(&mut bytes).expect("writing the PDF");
+    bytes
+}
+
+#[test]
+fn a_page_that_cant_be_drawn_completely_is_refused() {
+    let error = draw(&artwork_with_a_broken_image(), &placed((200.0, 100.0))).unwrap_err();
+    assert!(error.to_string().contains("can't be drawn completely"), "{error}");
+}
+
+#[test]
+fn only_running_out_of_memory_is_out_of_memory() {
+    assert!(matches!(render_failure(1, 1.0, raster::Error::Allocation), IoError::OutOfMemory(_)));
+    for e in [raster::Error::OutputLimit, raster::Error::InvalidPage, raster::Error::BackendPanic] {
+        assert!(matches!(render_failure(1, 1.0, e), IoError::Unsupported(_)));
+    }
+}

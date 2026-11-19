@@ -507,6 +507,9 @@ fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapsho
     if is_svg {
         h.update(&crate::color_cmds::document_profile(doc).to_bytes());
     }
+    if let Some(placed) = super::source::placed_pdf(&bytes, sm) {
+        h.update(format!("placed-pdf:{placed:?}").as_bytes());
+    }
     let placed_key: StageKey = *h.finalize().as_bytes();
     let placed = || -> Result<Stage> {
         if let Some(stage) = stack_cache::get(&placed_key) {

@@ -912,12 +912,13 @@ impl Ex<'_> {
 
     /// The composite of the source `uuid` (an embedded file of this export or of the imported
     /// document) in the document's pixel format, its top-left at the origin; decoded once per
-    /// frame. A PDF placed by another application in a frame of its own (the `sold` block being
-    /// written) is cropped to that frame, the space the placement maps from (#15650).
+    /// placement. A PDF placed by another application in a frame of its own (the `sold` block
+    /// being written) is cropped to that frame, the space the placement maps from (#15650): its
+    /// page and resolution choose the crop, so they key the composite with the frame.
     fn source_composite(&mut self, uuid: &str, sold: &[u8]) -> Option<(std::sync::Arc<Surface>, photocraft_geom::Rect)> {
-        let frame = crate::smart_map::sold_descriptor(sold).and_then(|d| crate::smart_map::stored_size(&d));
-        let key = match frame {
-            Some((w, h)) => format!("{uuid}\0{w}x{h}"),
+        let placed = crate::smart_map::sold_descriptor(sold).and_then(|d| crate::smart_map::placed_pdf(&d));
+        let key = match placed {
+            Some(p) => format!("{uuid}\0{}x{}\0{}\0{:?}", p.frame.0, p.frame.1, p.page, p.dpi),
             None => uuid.to_string(),
         };
         if let Some(c) = self.smart.composites.get(&key) {

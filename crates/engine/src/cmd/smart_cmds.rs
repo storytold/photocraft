@@ -87,11 +87,16 @@ fn decode_source_classified(file_name: &str, bytes: &[u8], svg: bool) -> Result<
 
 /// [`decode_source`] for the smart object `sm`, in the coordinates its placement maps from: a
 /// PDF another application placed in a frame of its own opens cropped to that frame (#15650).
-fn decode_placed_source(file_name: &str, bytes: &[u8], sm: &SmartObject) -> Result<Document> {
-    match sm.psd_raw.as_ref().and_then(|raw| photocraft_io::pdf_placement(bytes, raw)) {
-        Some(placed) => photocraft_io::import_placed_pdf(file_name, bytes, &placed, &photocraft_raster::Interrupt::NONE)
-            .map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}"))),
-        None => decode_source(file_name, bytes),
+/// `None` when it can't be drawn in that frame, so the saved pixels stand in for it; running out
+/// of memory is an error instead.
+fn decode_placed_source(file_name: &str, bytes: &[u8], sm: &SmartObject) -> Result<Option<Document>> {
+    let Some(placed) = sm.psd_raw.as_ref().and_then(|raw| photocraft_io::pdf_placement(bytes, raw)) else {
+        return decode_source(file_name, bytes).map(Some);
+    };
+    match photocraft_io::import_placed_pdf(file_name, bytes, &placed, &photocraft_raster::Interrupt::NONE) {
+        Ok(doc) => Ok(Some(doc)),
+        Err(e @ photocraft_io::IoError::OutOfMemory(_)) => Err(other(format!("can't read smart object contents \"{file_name}\": {e}"))),
+        Err(_) => Ok(None),
     }
 }
 
