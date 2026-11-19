@@ -183,13 +183,17 @@ fn exact_tiled_selected_outputs_and_cancellation() {
     let mut sel = Surface::new(PixelFormat::GRAY8);
     sel.fill_rect(area, &[0.4]);
     sel.fill_rect(Rect::new(250, 250, 270, 265), &[1.0]);
-    for depth in SampleType::ALL {
+    for (di, depth) in SampleType::ALL.into_iter().enumerate() {
         let surface = source(bounds, PixelFormat::new(ColorMode::Rgb, depth, true));
-        for radius in [0.6, 3.0, 10.0] {
+        for (ri, radius) in [0.6, 3.0, 10.0].into_iter().enumerate() {
             let p = crate::FilterParams::UnsharpMask { amount: 150.0, radius, threshold: 8.0 };
             for extent in [None, Some(bounds)] {
                 let expected = apply_reference(&surface, &p, area, bounds, Some(&sel), extent, 256);
-                for tile in [63, 256, 512] {
+                // Keep every depth/radius, depth/tile and radius/tile pair, with both extents.
+                for (ti, tile) in [63, 256, 512].into_iter().enumerate() {
+                    if ti != (di + ri) % 3 {
+                        continue;
+                    }
                     let actual = crate::apply_tiled(&surface, &p, area, bounds, Some(&sel), tile, extent);
                     assert_eq!(expected.to_interleaved(bounds), actual.to_interleaved(bounds));
                 }

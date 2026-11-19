@@ -155,7 +155,7 @@ fn add_abr_presets(s: &mut Session, p: &Value, group: String, imp: photocraft_io
     // in Photoshop, unless `replace` asks to drop that group's own presets first: the group name
     // is only the file name, and the library is outside document history (#10640).
     let group = if p.get("replace").and_then(Value::as_bool).unwrap_or(false) {
-        s.tools.presets.retain(|x| x.builtin || x.group != group);
+        std::sync::Arc::make_mut(&mut s.tools.presets).retain(|x| x.builtin || x.group != group);
         group
     } else {
         // One pass over the library, not one per numbered candidate.
@@ -168,7 +168,7 @@ fn add_abr_presets(s: &mut Session, p: &Value, group: String, imp: photocraft_io
         preset.group.clone_from(&group);
         preset.name = taken.unique(&preset.name);
         names.push(preset.name.clone());
-        s.tools.presets.push(preset);
+        std::sync::Arc::make_mut(&mut s.tools.presets).push(preset);
     }
     s.brush_presets_changed();
     if p.get("select").and_then(Value::as_bool).unwrap_or(false)
@@ -262,7 +262,7 @@ fn import_image(s: &mut Session, p: &Value) -> Result<Value> {
     let (v, w, h) = image_paint(&doc, cmd)?;
     let (brush, tw, th) = crate::brush_cmds::sampled_brush(cmd, &v, w, h)?;
     let name = UniqueNames::new(s.tools.presets.iter().map(|x| x.name.as_str())).unique(&name);
-    s.tools.presets.push(photocraft_paint::BrushPreset {
+    std::sync::Arc::make_mut(&mut s.tools.presets).push(photocraft_paint::BrushPreset {
         name: name.clone(),
         brush: brush.clone(),
         builtin: false,
@@ -541,7 +541,7 @@ mod tests {
         // The user's own brush moved into the group.
         let mut own = s.tools.presets.iter().find(|p| p.group == "Kit").unwrap().clone();
         own.name = "My Ink".into();
-        s.tools.presets.push(own);
+        std::sync::Arc::make_mut(&mut s.tools.presets).push(own);
         let r = s.execute("brush.presets.importAbr", json!({"data": data, "group": "Kit"})).unwrap();
         assert_eq!(r["group"], "Kit (2)");
         let in_group = |s: &Session, g: &str| s.tools.presets.iter().filter(|p| p.group == g).count();

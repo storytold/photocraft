@@ -13,22 +13,24 @@ use super::state::{checked, is_enabled, reveal_label, translated_menu_label};
 use super::{DOCUMENT_ITEM, PhotocraftApp, TOP_MENUS, UI_COMMANDS};
 
 /// Is `id` implemented by the engine or the shell (a live menu item)? Shared by the menus and
-/// the parity report ([`crate::parity`]).
+/// the parity report ([`crate::parity`]). The command gate asks this for every command a pass
+/// resolves, framework commands included, so the hash lookups and prefix tests come first and
+/// the scans of the bridged rows and the workspace commands last.
 pub fn is_live(id: &str) -> bool {
     static UI_IDS: std::sync::OnceLock<std::collections::HashSet<&'static str>> = std::sync::OnceLock::new();
     photocraft_engine::commands::find(id).is_some()
-        || crate::tool_shortcuts::tool(id).is_some()
         || UI_IDS.get_or_init(|| UI_COMMANDS.iter().map(|c| c.0).collect()).contains(id)
+        || id.starts_with(super::DOCUMENT_ITEM)
+        || id == "view.proofSetup.custom"
+        || crate::tool_shortcuts::tool(id).is_some()
         || panel_alias(id).is_some()
         || crate::panel_docking::toggle_panel(id).is_some()
         || workspace_id(id).is_some()
         || proof_preset(id).is_some()
-        || id == "view.proofSetup.custom"
-        || crate::view_cmds::handles(id)
         || crate::analysis::handles(id)
+        || crate::view_cmds::handles(id)
         || crate::shortcut_dispatch::is_bridged(id)
         || crate::workspace_ui::handles(id)
-        || id.starts_with(super::DOCUMENT_ITEM)
 }
 
 /// Commands outside the catalogue that belong right after a catalogue item: `(id, after)`.
