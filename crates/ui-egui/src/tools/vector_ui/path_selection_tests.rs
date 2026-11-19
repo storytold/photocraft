@@ -17,7 +17,7 @@ use crate::direct_select::PathRef;
 use crate::state::Tool;
 use crate::vector_ui::PenPath;
 
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
     let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
@@ -37,7 +37,7 @@ fn command() -> Modifiers {
     }
 }
 
-fn press(h: &mut Harness<'_, PhotocraftApp>, key: Key, m: Modifiers) {
+fn press(h: &mut Harness<'_, Box<PhotocraftApp>>, key: Key, m: Modifiers) {
     h.event(Event::ModifiersChanged(m));
     h.event(Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: m });
     h.event(Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: m });
@@ -46,7 +46,7 @@ fn press(h: &mut Harness<'_, PhotocraftApp>, key: Key, m: Modifiers) {
 }
 
 /// A three-anchor open draft owned by the harness's current document.
-fn triangle(h: &Harness<'_, PhotocraftApp>) -> PenPath {
+fn triangle(h: &Harness<'_, Box<PhotocraftApp>>) -> PenPath {
     PenPath::corners(&[[20.0, 20.0], [120.0, 20.0], [120.0, 80.0]], crate::vector_ui::capture_pen_owner(h.state()))
 }
 
@@ -56,7 +56,7 @@ fn rect_path(x: f64, y: f64, w: f64, h: f64) -> serde_json::Value {
 }
 
 /// The selection's bounds (x, y, width, height), if any.
-fn selection(h: &Harness<'_, PhotocraftApp>) -> Option<[i64; 4]> {
+fn selection(h: &Harness<'_, Box<PhotocraftApp>>) -> Option<[i64; 4]> {
     let r = h.state().session.active()?.doc.selection.as_ref()?.content_bounds();
     Some([r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0].map(i64::from))
 }
@@ -216,7 +216,7 @@ fn without_a_path_it_says_why_and_the_key_can_be_rebound() {
     assert_eq!(selection(&h), Some([10, 10, 20, 20]), "{}", h.state().ui.status);
 }
 
-fn panel(h: &mut Harness<'_, PhotocraftApp>, tab: usize) {
+fn panel(h: &mut Harness<'_, Box<PhotocraftApp>>, tab: usize) {
     let ctx = h.ctx.clone();
     let (req, _) = crate::control::ControlRequest::new(
         "ui.set",
@@ -226,7 +226,7 @@ fn panel(h: &mut Harness<'_, PhotocraftApp>, tab: usize) {
     h.run_steps(4);
 }
 
-fn click(h: &mut Harness<'_, PhotocraftApp>, at: egui::Pos2, modifiers: Modifiers) {
+fn click(h: &mut Harness<'_, Box<PhotocraftApp>>, at: egui::Pos2, modifiers: Modifiers) {
     h.hover_at(at);
     h.event(Event::ModifiersChanged(modifiers));
     h.run_steps(1);
@@ -240,7 +240,7 @@ fn click(h: &mut Harness<'_, PhotocraftApp>, at: egui::Pos2, modifiers: Modifier
 
 /// A Cmd/Ctrl-click on a row's thumbnail, as the Paths panel reports it to the app.
 // PLAN: assumed `paths_panel::apply(app: &mut PhotocraftApp, event: PathsEvent<PathRef>)` (tools-w36)
-fn load(h: &mut Harness<'_, PhotocraftApp>, key: PathRef, operation: SelectionOperation) {
+fn load(h: &mut Harness<'_, Box<PhotocraftApp>>, key: PathRef, operation: SelectionOperation) {
     apply(h.state_mut(), PathsEvent::load_selection(key, operation));
 }
 
@@ -377,7 +377,7 @@ fn cmd_shift_and_alt_enter_use_the_path_selected_in_the_paths_panel() {
 }
 
 /// The selected area in pixels (partly selected pixels count in part).
-fn selected_area(h: &Harness<'_, PhotocraftApp>) -> f32 {
+fn selected_area(h: &Harness<'_, Box<PhotocraftApp>>) -> f32 {
     let d = &h.state().session.active().unwrap().doc;
     d.selection.as_ref().map_or(0.0, |s| s.read_region(d.bounds()).iter().sum())
 }

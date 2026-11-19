@@ -4,7 +4,7 @@ use serde_json::json;
 
 use super::*;
 
-type H = Harness<'static, PhotocraftApp>;
+type H = Harness<'static, Box<PhotocraftApp>>;
 
 /// One 4 × 2 inch document at 100 ppi, with the rulers in `unit`, under a harness whose passes run the dialog host.
 fn harness(unit: &str) -> H {
@@ -15,11 +15,11 @@ fn harness(unit: &str) -> H {
     with_app(app)
 }
 
-fn with_app(app: PhotocraftApp) -> H {
-    Harness::<'static, PhotocraftApp>::builder()
+fn with_app(app: Box<PhotocraftApp>) -> H {
+    Harness::<'static, Box<PhotocraftApp>>::builder()
         .with_context(app.ctx().clone())
         .with_size(egui::vec2(1000.0, 700.0))
-        .build_ui_state(|ui: &mut egui::Ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app)
+        .build_ui_state(|ui: &mut egui::Ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app)
 }
 
 /// Opens New Guide and shows its first pass, which recalls the remembered values.
