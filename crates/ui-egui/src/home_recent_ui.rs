@@ -558,6 +558,7 @@ mod tests {
     fn manual_recent_thumbnails(app: &PhotocraftApp) -> (craft::ui::testing::Frames, std::sync::Arc<craft::host::ManualJobs>) {
         let ctx = app.ctx().clone();
         let jobs = std::sync::Arc::new(craft::host::ManualJobs::new());
+        manual_disk_checks(app);
         // The production accessor uses this same salt; its later options keep this first-created loader.
         Thumbnails::<ThumbKey>::in_context(&ctx, "home-recent", ThumbnailOptions::new().lanes(1).jobs(jobs.clone()));
         let mut frames = craft::ui::testing::Frames::over(ctx);
@@ -590,6 +591,9 @@ mod tests {
         let key = ThumbKey::Recent(path);
         let (mut frames, jobs) = manual_recent_thumbnails(&app);
 
+        recent_thumbnail_pass(&app, &mut frames, &key);
+        assert_eq!(jobs.waiting(), 0, "the decoder waits for the file stat");
+        run_disk_check(&app);
         assert!(matches!(recent_thumbnail_pass(&app, &mut frames, &key), craft::ui::primitives::TextureState::Loading { stand_in: None, .. }));
         assert_eq!(jobs.waiting(), 1, "the real source returned a background decoder, rather than decoding inline");
         assert!(jobs.run_next(), "the queued decoder actually ran to completion");
@@ -613,6 +617,9 @@ mod tests {
         let key = ThumbKey::Recent(path);
         let (mut frames, jobs) = manual_recent_thumbnails(&app);
 
+        recent_thumbnail_pass(&app, &mut frames, &key);
+        assert_eq!(jobs.waiting(), 0, "the decoder waits for the file stat");
+        run_disk_check(&app);
         assert!(matches!(recent_thumbnail_pass(&app, &mut frames, &key), craft::ui::primitives::TextureState::Loading { .. }));
         let before = revision_of(&app, &path_string);
         assert!(jobs.run_next(), "finish the actual decoder before invalidation and before its result is uploaded");
@@ -622,11 +629,12 @@ mod tests {
         // Check invalidation with unchanged metadata first, then make stale and fresh decoder pixels distinct.
         std::fs::write(&path_string, flat_png([20, 100, 60, 255])).unwrap();
 
-        // The former picture may be a stand-in, but it cannot satisfy the invalidated revision as Ready.
         assert!(
-            matches!(recent_thumbnail_pass(&app, &mut frames, &key), craft::ui::primitives::TextureState::Loading { .. }),
-            "the completed old result is not current"
+            !matches!(recent_thumbnail_pass(&app, &mut frames, &key), craft::ui::primitives::TextureState::Ready(_)),
+            "the completed old result is not current while the next stat is pending"
         );
+        run_disk_check(&app);
+        assert!(matches!(recent_thumbnail_pass(&app, &mut frames, &key), craft::ui::primitives::TextureState::Loading { .. }));
         assert_eq!(jobs.waiting(), 1, "the production source requests a replacement decoder");
         assert!(jobs.run_next(), "the replacement decoder completes");
         let state = recent_thumbnail_pass(&app, &mut frames, &key);
