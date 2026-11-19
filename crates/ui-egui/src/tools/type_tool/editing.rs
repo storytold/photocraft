@@ -387,9 +387,10 @@ fn user_ends_the_edit(app: &PhotocraftApp) -> bool {
 
 /// Is the session's layer still the one worked on? Selecting another layer or document commits the
 /// session (#6483); #12050 does not measure that, so it records nothing. A background document's
-/// edit is checked in its own document, where `commit_with` has just made it active - which is why
-/// a document switch cannot be told from an in-place commit here, and still records (#12050 review
-/// c4502824764).
+/// edit is checked in its own document, where [`commit_ending`] has just made it active, so a
+/// document switch cannot be told from an in-place commit here: [`commit_ending`] already found the
+/// switch and passes `by_user` false, which is what keeps the unchanged edit from recording there
+/// (#12050 review c4502824764).
 fn worked_on_layer(app: &PhotocraftApp, ed: &TextEdit) -> bool {
     app.session.active().is_some_and(|st| st.active_layer == Some(LayerId(ed.layer)))
 }
