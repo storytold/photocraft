@@ -136,9 +136,7 @@ fn layers_rows_follow_renames_and_both_toggles() {
 /// With the status bar, the document tabs, the Layers and History panels, an artboard's pasteboard and the Move
 /// tool's snapping on screen, a frame that changes nothing walks no document, rebuilds no layer index and computes
 /// no derived value (title, status, pages, uncovered work, moving layers, History rows); after an edit they are
-/// computed again once, and the next idle frames compute none. The panels' command states
-/// (`panels::registry::states`, run once a frame) still ask some commands' preconditions, which walk; #15709 task a
-/// moves those onto revisions, and until then the trial counts the walks of one such run per frame.
+/// computed again once, and the next idle frames compute none.
 #[test]
 fn idle_frames_walk_no_document() {
     let mut s = Session::new();
@@ -159,14 +157,9 @@ fn idle_frames_walk_no_document() {
     h.run_steps(4);
     let serial = |h: &H| h.state().session.active().unwrap().doc.layers.index().serial();
     let builds = |h: &H| h.state().doc_queries.builds();
-    let states = |h: &H| {
-        let walks = photocraft_doc::walks();
-        drop(crate::panels::registry::states(h.state()));
-        photocraft_doc::walks() - walks
-    };
     let (walks, index, built) = (photocraft_doc::walks(), serial(&h), builds(&h));
     h.run_steps(10);
-    assert_eq!((photocraft_doc::walks() - walks, serial(&h)), (10 * states(&h), index), "idle frames walk nothing outside the command states");
+    assert_eq!((photocraft_doc::walks() - walks, serial(&h)), (0, index), "idle frames walk nothing");
     assert_eq!(builds(&h), built, "idle frames compute nothing");
 
     // The new artboard is the active layer; the fill goes on a pixel layer.
@@ -176,8 +169,8 @@ fn idle_frames_walk_no_document() {
     h.state_mut().run("edit.fill", json!({"contents": "black"})).unwrap();
     h.run_steps(4);
     assert!(builds(&h) > built, "an edit computes the values again");
-    let (per_frame, walks, built) = (states(&h), photocraft_doc::walks(), builds(&h));
+    let (walks, built) = (photocraft_doc::walks(), builds(&h));
     h.run_steps(10);
-    assert_eq!(photocraft_doc::walks() - walks, 10 * per_frame, "after an edit, idle frames walk nothing again");
+    assert_eq!(photocraft_doc::walks() - walks, 0, "after an edit, idle frames walk nothing again");
     assert_eq!(builds(&h), built, "after an edit, idle frames compute nothing again");
 }

@@ -20,7 +20,8 @@ fn bad(msg: impl Into<String>) -> EngineError {
 
 fn has_group(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
-    if d.doc.walk().iter().any(|(_, _, l)| l.is_group()) { Ok(()) } else { Err("the document has no layer groups".into()) }
+    // Groups hold every nested group, so a document with any group has one at the top level.
+    if d.doc.layers.iter().any(|l| l.is_group()) { Ok(()) } else { Err("the document has no layer groups".into()) }
 }
 
 fn opt_bool(p: &Value, key: &str) -> Result<Option<bool>> {
