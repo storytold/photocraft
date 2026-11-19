@@ -25,21 +25,23 @@ fn separate(background: &str, intent: &str, bpc: bool) -> [f32; 4] {
     [px[0], px[1], px[2], px[3]].map(|v| v * 100.0)
 }
 
-/// Within 2.5 % per ink: most land within 2 %; red at the magenta–yellow edge falls between
-/// clipped and unclipped nodes of the profile's tables, which costs up to 2.2 %.
+/// Within 2 % per ink, except Saturation red: that patch lies between nodes of the profile's
+/// table that are clipped to the magenta–yellow edge and nodes that are not, which costs 2.2 %
+/// (a finer table closes it, at three times the profile size). It is held to 2.5 %.
 #[test]
 fn srgb_to_fogra39_matches_the_reference_inks() {
-    let mut worst = (0.0f32, String::new());
+    let mut failures = Vec::new();
     for (background, want) in REFERENCE {
         for ((intent, bpc), want) in INTENTS.into_iter().zip(want) {
             let got = separate(background, intent, bpc);
-            let diff = (0..4).map(|i| (got[i] - want[i]).abs()).fold(0.0f32, f32::max);
-            if diff > worst.0 {
-                worst = (diff, format!("{background} {intent} bpc {bpc}: {got:.1?}, reference {want:?}"));
+            let limit = if (background, intent) == ("#c81e1e", "saturation") { 2.5 } else { 2.0 };
+            // A NaN ink compares false with `>`, so it is failed explicitly.
+            if (0..4).any(|i| (got[i] - want[i]).abs().is_nan() || (got[i] - want[i]).abs() > limit) {
+                failures.push(format!("{background} {intent} bpc {bpc}: {got:.1?}, reference {want:?}, limit {limit}"));
             }
         }
     }
-    assert!(worst.0 <= 2.5, "{} (max {:.1})", worst.1, worst.0);
+    assert!(failures.is_empty(), "{failures:#?}");
 }
 
 #[test]
