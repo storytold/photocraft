@@ -62,9 +62,15 @@ fn the_main_window_title_has_the_prefix() {
     status(&mut app, "copyrighted");
     assert_eq!(window(&app), "*\u{a9} oracle \u{2014} PhotoCraft");
     assert_eq!(crate::panels::title_bar::title_text(&app), "\u{a9} oracle  \u{2022}", "the app-drawn title bar has it too");
-    // With the file name hidden there is no name to prefix.
+    // With the file name hidden the prefix stays, before the app name that stands in for it.
     app.session.prefs.edit(|p| p.interface.show_file_name_in_title = false);
-    assert_eq!(window(&app), "*PhotoCraft");
+    assert_eq!(window(&app), "*\u{a9} PhotoCraft");
+    assert_eq!(crate::panels::title_bar::title_text(&app), "\u{a9} PhotoCraft  \u{2022}");
+    for s in ["publicDomain", "unknown"] {
+        status(&mut app, s);
+        assert_eq!(window(&app), "*PhotoCraft", "{s}");
+        assert_eq!(crate::panels::title_bar::title_text(&app), "PhotoCraft  \u{2022}", "{s}");
+    }
     app.session.prefs.edit(|p| p.interface.show_file_name_in_title = true);
     for s in ["publicDomain", "copyrighted", "unknown"] {
         status(&mut app, s);
@@ -90,6 +96,12 @@ fn undo_and_redo_take_the_main_window_title_prefix_with_them() {
     assert_eq!(window(&app).trim_start_matches('*'), "oracle \u{2014} PhotoCraft");
     assert!(app.session.redo());
     assert_eq!(window(&app).trim_start_matches('*'), "\u{a9} oracle \u{2014} PhotoCraft");
+    // The same with the file name hidden.
+    app.session.prefs.edit(|p| p.interface.show_file_name_in_title = false);
+    assert!(app.session.undo());
+    assert_eq!(window(&app).trim_start_matches('*'), "PhotoCraft");
+    assert!(app.session.redo());
+    assert_eq!(window(&app).trim_start_matches('*'), "\u{a9} PhotoCraft");
 }
 
 #[test]

@@ -32,24 +32,29 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// The title the bar shows: the active document's name with a dot when it has unsaved changes, or the app name with
 /// no document open. With Preferences › Interface › Show File Name In Title off, the file name drops out and the app
-/// name (and the dot) remains, since the tabs already name the file (#5037). The name carries the tab's "© " for a
-/// Copyrighted document (#13993).
+/// name (and the dot) remains, since the tabs already name the file (#5037). A Copyrighted document's title starts
+/// with the tab's "© ", whether the name shows or not (#13993).
 pub(crate) fn title_text(app: &PhotocraftApp) -> String {
     let show_name = app.session.prefs().interface.show_file_name_in_title;
     app.session
         .active()
-        .map(|d| format!("{}{}", if show_name { crate::canvas::tabs::titled_name(d) } else { "PhotoCraft".into() }, if d.is_dirty() { "  •" } else { "" }))
+        .map(|d| {
+            let name = if show_name { d.doc.name.as_str() } else { "PhotoCraft" };
+            format!("{}{name}{}", crate::canvas::tabs::copyright_prefix(d), if d.is_dirty() { "  •" } else { "" })
+        })
         .unwrap_or_else(|| "PhotoCraft".into())
 }
 
 /// The OS window title: the active document's name suffixed with the app name (a `*` prefix
 /// marks unsaved changes, like the `•` in the app-drawn title), or just the app name with no
 /// document open. With Preferences › Interface › Show File Name In Title off, the file name
-/// drops out and only the app name (and the `*`) remains (#5037). A Copyrighted document's name
-/// carries the tab's "© " prefix (#13993).
+/// drops out and only the app name (and the `*`) remains (#5037). A Copyrighted document's name,
+/// or the app name standing in for it, carries the tab's "© " prefix (#13993).
 pub fn window_title(app: &PhotocraftApp) -> String {
     if !app.session.prefs().interface.show_file_name_in_title {
-        return format!("{}PhotoCraft", if app.session.active().is_some_and(|d| d.is_dirty()) { "*" } else { "" });
+        let active = app.session.active();
+        let dirty = if active.is_some_and(|d| d.is_dirty()) { "*" } else { "" };
+        return format!("{dirty}{}PhotoCraft", active.map(crate::canvas::tabs::copyright_prefix).unwrap_or_default());
     }
     app.session
         .active()
