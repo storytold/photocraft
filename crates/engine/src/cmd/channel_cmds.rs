@@ -24,6 +24,8 @@ use crate::commands::CommandSpec;
 use crate::{DocState, EngineError, Result, Session};
 
 #[cfg(test)]
+mod apply_image_lock_transparency_tests;
+#[cfg(test)]
 mod tests;
 
 // ---------------------------------------------------------------------------------------------
@@ -118,6 +120,9 @@ mod spot;
 mod targeting;
 mod tone_target;
 mod view;
+
+#[cfg(test)]
+mod apply_image_locked_layer_tests;
 
 use calc::{apply_image, calculations};
 use manage::{delete_channel, duplicate_channel, move_channel, new_channel, new_spot, options, rename_channel, set_visible};
