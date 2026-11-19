@@ -16,6 +16,28 @@ fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
+/// A new document's initial packet. Opening files and later File Info edits never call this.
+pub fn starting_xmp(doc: &photocraft_doc::Document) -> String {
+    let now = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string();
+    let tool = xml_escape(&format!("PhotoCraft {}", env!("CARGO_PKG_VERSION")));
+    let mut properties = format!(
+        "<xmp:CreatorTool>{tool}</xmp:CreatorTool><xmp:CreateDate>{now}</xmp:CreateDate>\
+         <xmp:ModifyDate>{now}</xmp:ModifyDate><xmp:MetadataDate>{now}</xmp:MetadataDate>\
+         <dc:format>image/vnd.adobe.photoshop</dc:format>"
+    );
+    // Other modes and an untagged document are unmeasured; do not invent values or tag it.
+    if doc.mode == photocraft_color::ColorMode::Rgb {
+        properties.push_str("<photoshop:ColorMode>3</photoshop:ColorMode>");
+    }
+    if doc.icc_profile.is_some() {
+        let profile = xml_escape(&crate::color_cmds::document_profile(doc).description);
+        properties.push_str(&format!("<photoshop:ICCProfile>{profile}</photoshop:ICCProfile>"));
+    }
+    format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{RDF_NS}"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/">{properties}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+    )
+}
+
 fn xml_unescape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
