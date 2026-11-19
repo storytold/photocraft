@@ -866,7 +866,7 @@ fn bitmap_in_bands_matches_one_full_canvas_conversion() {
     let (w, h) = (64u32, 300u32);
     let mut s = session(w, h, 8, "grayscale");
     paint(&mut s, |x, y| {
-        let v = ((x % 509) as f32 / 509.0 * 0.6 + (y as f32 / 300.0) * 0.4).fract();
+        let v = ((x % 61) as f32 / 61.0 * 0.6 + (y as f32 / 300.0) * 0.4).fract();
         [v, v, v, 1.0]
     });
     add_pattern(&mut s, "Cells", 3, 2, &[10, 200, 90, 250, 150, 40]);
@@ -902,6 +902,9 @@ fn bitmap_in_bands_matches_one_full_canvas_conversion() {
         };
         // Grayscale stores 0/1 the way `from_rgba` turns the old RGBA output into gray.
         let want: Vec<f32> = want.iter().map(|g| photocraft_raster::from_rgba(&storage_format(ColorMode::Bitmap), [*g, *g, *g, 1.0])[0]).collect();
+        if method == "threshold" {
+            assert!(want.contains(&0.0) && want.contains(&1.0), "the gradient crosses the threshold");
+        }
         let got = bitmap_pixels(doc(&s));
         let diff = got.iter().zip(&want).filter(|(a, b)| (**a - **b).abs() > 1e-6).count();
         assert_eq!(diff, 0, "{method}: {diff} of {} pixels differ", got.len());
