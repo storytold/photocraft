@@ -28,7 +28,7 @@ use crate::PhotocraftApp;
 /// The key the panel and the filter use for a blend mode: its label folded as the engine's
 /// `blend_from_str` reads it ("normal", "lineardodgeadd").
 pub(crate) fn blend_key(m: BlendMode) -> String {
-    m.label().to_ascii_lowercase().replace([' ', '_', '-', '(', ')'], "")
+    m.key().to_string()
 }
 
 /// The blend mode a panel key names.
@@ -382,13 +382,15 @@ impl LayerTree for PhotoLayers<'_> {
     }
 
     fn blend_modes(&self, group: bool, current: &str) -> Vec<Entry<String>> {
-        let current = blend_of(current).unwrap_or(BlendMode::Normal);
-        let modes: Vec<BlendKeyEntry<String>> =
-            super::layers::blend_options(group, current).into_iter().map(|(m, _)| super::blend_entry(blend_key(m), m)).collect();
-        blend_entries(&modes, |e| {
-            let label = blend_of(&e.key).map_or(e.key.as_str(), |m| tl!(m.label()));
-            Label::from(label.to_string())
-        })
+        let current = BlendMode::from_key(current).or_else(|| blend_of(current)).unwrap_or(BlendMode::Normal);
+        let modes: Vec<BlendKeyEntry<BlendMode>> = super::layers::blend_options(group, current).into_iter().map(|(m, _)| super::blend_entry(m, m)).collect();
+        blend_entries(&modes, |mode| Label::from(tl!(mode.key.label()).to_string()))
+            .into_iter()
+            .map(|entry| match entry.value() {
+                Some(mode) => Entry::new(mode.key().to_string(), entry.label().clone()),
+                None => Entry::separator(),
+            })
+            .collect()
     }
 
     fn footer(&self) -> LayersFooterState {
