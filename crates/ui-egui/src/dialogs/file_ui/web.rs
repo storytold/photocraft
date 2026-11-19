@@ -252,13 +252,28 @@ pub fn open_web(app: &mut PhotocraftApp) -> Option<DialogId> {
         .slices(slices);
     if let Some(t) = doc.timeline.as_ref().filter(|t| t.duration >= 2) {
         dialog = dialog.animation(Animation::new(t.duration as u32, t.fps));
+    } else if let Some(frames) = animation_frames(&doc) {
+        // The dialog plays at one rate: the animation's average delay stands in for the frames' own.
+        let average_ms = doc.frame_animation.as_ref().map_or(100.0, |a| a.duration_ms() as f32 / frames as f32).max(10.0);
+        dialog = dialog.animation(Animation::new(frames as u32, 1000.0 / average_ms));
     }
     Some(app.framework.dialogs.open(dialog))
+}
+
+/// How many frames `doc`'s frame animation has, when it has more than one (a GIF of it is animated).
+pub(super) fn animation_frames(doc: &photocraft_doc::Document) -> Option<usize> {
+    doc.frame_animation.as_ref().map(|a| a.frames.len()).filter(|n| *n > 1)
 }
 
 /// Seek a preview copy, preserving any edits to the source's currently displayed frame.
 pub(super) fn web_frame_document(doc: &photocraft_doc::Document, frame: Option<usize>) -> Result<photocraft_doc::Document, photocraft_engine::EngineError> {
     let Some(frame) = frame else { return Ok(doc.clone()) };
+    // A frame animation shows the layers of that frame; the timeline is seeked through the engine.
+    if animation_frames(doc).is_some() {
+        let mut shown = doc.clone();
+        shown.select_animation_frame(frame);
+        return Ok(shown);
+    }
     let mut preview = photocraft_engine::Session::new();
     preview.add_document(doc.clone(), None);
     preview.execute("timeline.setFrame", json!({"frame": frame}))?;
@@ -294,11 +309,15 @@ fn encode(ctx: &egui::Context, app: &PhotocraftApp, wanted: &WantedVariant, fram
     let ratio = (fw * fh) / (f64::from(w) * f64::from(h)).max(1.0);
     let image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &encoded.rgba);
     let picture = texture(ctx, egui::Id::unique(("web-texture", doc.id.0, index)), image, egui::vec2(fw as f32, fh as f32));
-    let mut variant = WebVariant::new(index, revision, picture, (encoded.bytes as f64 * ratio) as u64).proxy(ratio > 1.001);
+    // An animated GIF is every frame of the animation: the frame on show, times the count, stands in for the file.
+    let frames = if p.get("format").and_then(Value::as_str) == Some("gif") { animation_frames(&doc).unwrap_or(1) } else { 1 };
+    let mut variant = WebVariant::new(index, revision, picture, (encoded.bytes as f64 * ratio) as u64 * frames as u64).proxy(ratio > 1.001);
     if let Some(colors) = encoded.colors {
         variant = variant.colors(colors as u16);
     }
-    if wanted.request.options.format.indexed() {
+    // An animated GIF gives every frame its own colours: one frame's palette would show swatches that edit
+    // nothing of the others, so none is offered.
+    if wanted.request.options.format.indexed() && frames == 1 {
         variant = variant.palette(encoded.palette);
     }
     variant
@@ -347,7 +366,8 @@ pub(super) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if wanted.is_empty() {
         return;
     }
-    let animated = app.session.active().is_some_and(|st| st.doc.timeline.as_ref().is_some_and(|t| t.duration >= 2));
+    // The play row's frame reaches the preview of a video timeline and of a frame animation alike.
+    let animated = app.session.active().is_some_and(|st| st.doc.timeline.as_ref().is_some_and(|t| t.duration >= 2) || animation_frames(&st.doc).is_some());
     let variants: Vec<WebVariant> = wanted.iter().map(|w| encode(ctx, app, w, animated.then_some(frame as usize))).collect();
     if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedSaveForWeb>(id) {
         for variant in variants {

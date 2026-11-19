@@ -50,6 +50,7 @@ pub mod export_estimate;
 mod exr_native;
 pub mod exr_parts;
 mod flat;
+pub mod gif_anim;
 pub mod gradient_bake;
 pub mod guides_map;
 mod png_steps;
@@ -98,9 +99,9 @@ use photocraft_doc::{Adjustment, Document, Layer, LayerContent};
 
 pub use adjust_map::ADJUSTMENT_KEYS;
 pub use flat::{
-    DEFAULT_LOSSY_WEBP_QUALITY, FramesImport, apply_file_encoding, document_to_image, document_to_image_with_renderer, export_flat, export_flat_with_renderer,
-    export_png_streamed_with_renderer, export_preview_png_with_renderer, file_encoding, import_gif_frames, import_tiff_page, import_tiff_page_with_options,
-    import_webp_frames, opaque_surface, tga_alpha_channel_to_transparency, tga_default_bits,
+    DEFAULT_LOSSY_WEBP_QUALITY, FramesImport, MAX_GIF_LAYER_FRAMES, apply_file_encoding, document_to_image, document_to_image_with_renderer, export_flat,
+    export_flat_with_renderer, export_png_streamed_with_renderer, export_preview_png_with_renderer, file_encoding, import_gif_frames, import_tiff_page,
+    import_tiff_page_with_options, import_webp_frames, opaque_surface, tga_alpha_channel_to_transparency, tga_default_bits,
 };
 pub use png_steps::PngImport;
 // Re-exported for the `flat_open_bench` example, which times the tile-building phase of a flat open.
@@ -1201,6 +1202,17 @@ fn export_stages_with_renderer(
         }
         return Ok(res.into());
     }
+    // A document with a frame animation of more than one frame saves as an animated GIF, each frame with its
+    // own delay; a single frame (a new animation has one) is a still, as Save for Web writes it.
+    if ext == "gif"
+        && doc.frame_animation.as_ref().is_some_and(|a| a.frames.len() > 1)
+        && let Some((bytes, mut warnings)) = gif_anim::export(doc, ctl)?
+    {
+        if renderer.is_some() {
+            warnings.push("animated GIF export uses CPU compositor; GPU rendering applies to still formats".into());
+        }
+        return Ok(ExportResult { bytes, warnings }.into());
+    }
     if ext == "pdf" {
         let xmp = if opts.xmp == XmpEmbed::All { doc.metadata.xmp.as_deref() } else { None };
         let mut res = pdf::export_with(doc, opts.pdf_spot_plates, xmp, ctl)?;
@@ -1249,6 +1261,11 @@ fn export_stages_with_renderer(
         ctl.check().map_err(|_| IoError::Cancelled)?;
         if !doc.metadata.text.is_empty() {
             warnings.push("free-form text metadata is not supported by PSD/PSB; it will be dropped".into());
+        }
+        if doc.frame_animation.as_ref().is_some_and(|a| a.frames.len() > 1) {
+            warnings.push(
+                "the frame animation is not saved in a PSD/PSB (the layers are, as the selected frame shows them); save a .pcraft or a GIF to keep it".into(),
+            );
         }
         warnings.extend(tiff_layers::strip_foreign_order_blocks(&mut file));
         if let Some(preview) = preview {
