@@ -267,7 +267,8 @@ mod tests {
             for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
                 let fmt = PixelFormat::new(mode, sample, true);
                 let mut source = Surface::with_default(fmt, &vec![0.3; fmt.channels()]);
-                let bounds = Rect::from_xywh(-128, -128, 512, 256);
+                // 256 x 256 is exactly the U16 table's area threshold (`use_table`), so the table path still runs (#15652).
+                let bounds = Rect::from_xywh(-128, -128, 256, 256);
                 let data: Vec<_> = (0..32 * 24 * fmt.channels())
                     .map(|i| {
                         let v = (i * 37 % 257) as f32 / 256.0;

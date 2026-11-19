@@ -18,13 +18,13 @@
 
 use photocraft_doc::{Document, Guides};
 
-pub use craft_psd_guides::guides::{GUIDE_IDS, GUIDES_V2, GuideV2, ids_count};
+pub use craft_psd::guides::{GUIDE_IDS, GUIDES_V2, GuideV2, ids_count};
 /// Photoshop's default colour continues to follow the app preference.
 pub const DEFAULT_GUIDE_RGB: [u8; 3] = [0x4a, 0xff, 0xff];
 
 /// Decode the shared wire representation; document matching remains app policy.
 pub fn parse_v2(data: &[u8]) -> Option<Vec<GuideV2>> {
-    craft_psd_guides::guides::parse_v2(data).map(Iterator::collect)
+    craft_psd::guides::parse_v2(data).map(Iterator::collect)
 }
 
 /// The document's guides as 1092 would store them, sorted.
