@@ -550,7 +550,12 @@ pub fn begin(app: &mut PhotocraftApp, _ctx: &egui::Context) -> Result<(), String
 
 /// Opens the workspace on `layer` of the active document with `clip` to paste, from `restore`'s planes, paste, strokes
 /// and bar when given (a commit given back), else from the defaults.
-fn open_on(app: &mut PhotocraftApp, layer: LayerId, clip: Option<Clip>, restore: Option<(VanishingPointSession, VanishingPointSettings)>) -> Result<(), String> {
+fn open_on(
+    app: &mut PhotocraftApp,
+    layer: LayerId,
+    clip: Option<Clip>,
+    restore: Option<(VanishingPointSession, VanishingPointSettings)>,
+) -> Result<(), String> {
     if app.ui.transform.is_some() {
         return Err("finish Free Transform first".into());
     }
