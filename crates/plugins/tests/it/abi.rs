@@ -14,7 +14,7 @@ const INVERT: &[u8] = include_bytes!("../fixtures/invert.wasm");
 /// Exercises both full colour groups across multiple bands under default limits, including alpha preservation.
 #[test]
 fn skin_smooth_maximum_colour_groups_fit_the_normal_wasm_budget() {
-    let plugin = Plugin::load(include_bytes!("fixtures/skin-smooth.wasm"), Limits::default()).unwrap();
+    let plugin = Plugin::load(include_bytes!("../fixtures/skin-smooth.wasm"), Limits::default()).unwrap();
     let area = Rect::new(0, 0, 1050, 280);
     let params = json!({"positiveColors":vec![[0.7,0.5,0.4];16],"negativeColors":vec![[0.1,0.2,0.8];16],
         "fine":100,"medium":100,"large":100,"detail":0,"brightness":25});
@@ -612,7 +612,7 @@ fn a_fifo_in_place_of_a_module_file_does_not_block_loading() {
 #[test]
 fn skin_smooth_abi_only_accepts_its_owned_allocations() {
     let engine = wasmi::Engine::default();
-    let module = wasmi::Module::new(&engine, include_bytes!("fixtures/skin-smooth.wasm")).unwrap();
+    let module = wasmi::Module::new(&engine, include_bytes!("../fixtures/skin-smooth.wasm")).unwrap();
     let mut store = wasmi::Store::new(&engine, ());
     let instance = wasmi::Linker::<()>::new(&engine).instantiate_and_start(&mut store, &module).unwrap();
     let memory = instance.get_memory(&store, "memory").unwrap();
