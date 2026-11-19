@@ -222,7 +222,8 @@ fn field_json(fields: &DialogFields, key: &str) -> Option<Value> {
 }
 
 /// The rule a stored component names, or `None` for a literal text row and for a component this
-/// form does not offer (which reads back as its raw text rather than silently vanishing).
+/// form does not offer: it reads back as an empty `None` row and a later store drops it, as it
+/// does the components past the six shown rows.
 fn component_rule(part: &Value) -> Option<&'static str> {
     let rule = part.get("component").and_then(Value::as_str)?;
     NAMING_RULES.iter().find(|(id, _)| *id == rule).map(|(id, _)| *id)
@@ -309,6 +310,11 @@ fn naming_rows_param() -> Param {
                         row.rule = rule.clone();
                         if rule.as_str() != NAMING_NONE {
                             row.text = tl!(rule_label(rule)).to_string();
+                        } else if row.text == tl!(rule_label(&stored.rule)) || row.text == rule_label(&stored.rule) {
+                            // Picking `None` on a rule row empties it: the old rule's LABEL is
+                            // not literal text (read back raw at naming_rows(), shown tl'd on a
+                            // pick — match either). A typed text stays under `None`.
+                            row.text = String::new();
                         }
                     }
                     if index < 5 {

@@ -160,6 +160,40 @@ fn naming_rows_round_trip_components_and_typed_text() {
     assert_eq!(naming_components(&empty), None, "all-None rows store no naming");
 }
 
+/// Independent-review MF2: picking `None` in a rule row clears that row instead of leaving the
+/// old rule's LABEL in the field, which would store as literal text: the droplet keeps only the
+/// extension row, not a `Document Name` text component.
+#[test]
+fn picking_none_in_a_rule_row_leaves_no_label_text_behind() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut app = app();
+    app.session.prefs.edit(|p| p.interface.language = "en".into());
+    crate::i18n::sync_context(app.ctx(), "en");
+    push_rotate(&mut app);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cleared.pcdroplet").to_string_lossy().into_owned();
+    let id = open_create_droplet(&mut app).unwrap();
+    let ctx = app.ctx().clone();
+    set(&mut app, &ctx, id, "path", json!(path));
+    set(&mut app, &ctx, id, "output", json!(dir.path().join("out").to_string_lossy()));
+    let mut h = egui_kittest::Harness::builder()
+        .with_context(ctx)
+        // Tall enough that the rule dropdown's popup shows all 19 entries: `None` sits last and
+        // an offscreen entry is not in the accesskit tree at all.
+        .with_size(egui::vec2(760.0, 1400.0))
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
+    h.run_steps(4);
+    h.query_all_by_role(Role::ComboBox).find(|node| node.value().as_deref() == Some("Document Name")).expect("row 1's rule dropdown").click();
+    h.run_steps(2);
+    h.get_by_label("None").click();
+    h.run_steps(3);
+    let hosted = h.state().framework.dialogs.get_by_id::<HostedParamDialog>(id).expect("the form is still open");
+    let naming = serde_json::to_value(hosted.fields().get("namingComponents").expect("the naming rows")).expect("a field value");
+    assert_eq!(naming, json!([{"component": "extension"}]), "the row whose rule was set to None stores nothing, not its label");
+}
+
 /// Starting Serial # takes 0..9999; a typed 12345, Tab-ed out, takes the closest value 9999 and
 /// the reference alert says so (#13712). The framework words the alert with the dialog's title.
 #[test]
