@@ -76,7 +76,7 @@ fn set_expanded(s: &mut Session, p: &Value) -> Result<Value> {
             _ => return Err(EngineError::NoLayer(id)),
         }
     };
-    st.bump_view_revision();
+    st.bump_view_revision(!st.is_dirty());
     Ok(json!({"expanded": expanded, "groups": changed}))
 }
 

@@ -1,5 +1,5 @@
 use super::moves::{link_groups, recorded_move};
-use super::{DocState, Document, EngineError, Layer, LayerContent, LayerId, Rect, Result, Session, Value, bad, json};
+use super::{DocState, Document, EngineError, Layer, LayerContent, LayerId, Result, Session, Value, bad, json};
 
 // ---------- selection state ----------
 
@@ -62,13 +62,7 @@ pub fn set_selection(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerId>
     st.active_layer = active;
     st.layer_anchor = anchor.or(active);
     crate::fix_selection(st);
-    // Selecting layers is not an edit: keep a clean document clean.
-    let clean = st.saved_revision == st.revision;
-    st.revision += 1;
-    if clean {
-        st.saved_revision = st.revision;
-    }
-    st.last_damage = Some(Rect::EMPTY);
+    st.bump_selection_revision();
     s.note_layer_change(before);
     Ok(())
 }

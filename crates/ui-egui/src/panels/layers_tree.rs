@@ -636,7 +636,7 @@ impl ThumbSource<LayerThumb<LayerId>> for PhotoThumbs<'_> {
                     let shown = crate::solid_fill_ui::thumbnail_color(self.app, self.doc.id, l.id, *color);
                     Revision::of(&(shown.to_rgba8(), 1u8)).get()
                 }
-                LayerContent::Fill(f) => f.fingerprint(),
+                LayerContent::Fill(f) => Revision::of(f).get(),
                 _ => l.surface().map_or(0, generation),
             },
             LayerThumbKind::Mask => l.mask.as_ref().map_or(0, |m| m.surface.generation()),

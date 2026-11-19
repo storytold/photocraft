@@ -403,42 +403,44 @@ impl Fill {
         }
         self
     }
+}
 
-    /// A hash of every field: equal fills give equal numbers, so a view keys on it instead of
-    /// comparing or formatting the fill. The patterns name every field, so a new field fails to
-    /// compile here until it is hashed.
-    pub fn fingerprint(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        let color = |h: &mut std::collections::hash_map::DefaultHasher, c: &Color| {
+/// Hashes every field, consistent with `PartialEq`: an `f32` hashes by its bits, with −0.0 as 0.0 (they compare
+/// equal). A NaN never equals anything, so any hash agrees with `PartialEq`; it hashes by its own bits, so a fill
+/// holding one keeps its hash. The patterns name every field, so a new field fails to compile here until it is hashed.
+impl std::hash::Hash for Fill {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        fn bits(v: f32) -> u32 {
+            if v == 0.0 { 0 } else { v.to_bits() }
+        }
+        fn color<H: std::hash::Hasher>(h: &mut H, c: &Color) {
             let Color { mode, c, alpha } = c;
-            std::mem::discriminant(mode).hash(h);
-            c.map(f32::to_bits).hash(h);
-            alpha.to_bits().hash(h);
-        };
-        std::mem::discriminant(self).hash(&mut h);
+            mode.hash(h);
+            c.map(bits).hash(h);
+            bits(*alpha).hash(h);
+        }
+        std::mem::discriminant(self).hash(h);
         match self {
-            Fill::Solid(c) => color(&mut h, c),
+            Fill::Solid(c) => color(h, c),
             Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align } => {
-                stops.len().hash(&mut h);
+                stops.len().hash(h);
                 for (at, c) in stops {
-                    at.to_bits().hash(&mut h);
-                    color(&mut h, c);
+                    bits(*at).hash(h);
+                    color(h, c);
                 }
-                [*angle, *scale, offset.0, offset.1].map(f32::to_bits).hash(&mut h);
-                std::mem::discriminant(style).hash(&mut h);
-                (reverse, dither, align).hash(&mut h);
-                opacity_stops.len().hash(&mut h);
-                opacity_stops.iter().for_each(|(a, b)| [a.to_bits(), b.to_bits()].hash(&mut h));
-                midpoints.len().hash(&mut h);
-                midpoints.iter().for_each(|m| m.to_bits().hash(&mut h));
+                [*angle, *scale, offset.0, offset.1].map(bits).hash(h);
+                std::mem::discriminant(style).hash(h);
+                (reverse, dither, align).hash(h);
+                opacity_stops.len().hash(h);
+                opacity_stops.iter().for_each(|(a, b)| [bits(*a), bits(*b)].hash(h));
+                midpoints.len().hash(h);
+                midpoints.iter().for_each(|m| bits(*m).hash(h));
             }
             Fill::Pattern { name, scale, id, angle, link, phase } => {
-                (name, id, link).hash(&mut h);
-                [*scale, *angle, phase.0, phase.1].map(f32::to_bits).hash(&mut h);
+                (name, id, link).hash(h);
+                [*scale, *angle, phase.0, phase.1].map(bits).hash(h);
             }
         }
-        h.finish()
     }
 }
 

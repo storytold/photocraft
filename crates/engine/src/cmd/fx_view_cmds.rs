@@ -64,7 +64,7 @@ fn set_expanded(s: &mut Session, p: &Value) -> Result<Value> {
     if !expanded {
         st.fx_collapsed.extend(targets.iter().copied());
     }
-    st.bump_view_revision();
+    st.bump_view_revision(!st.is_dirty());
     Ok(json!({"expanded": expanded, "layers": targets.len()}))
 }
 

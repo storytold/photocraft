@@ -1,7 +1,9 @@
 //! Count trials for what the chrome reads from the document each frame (#15709): a layer thumbnail follows its own
-//! layer's pixels and nothing else, and a frame that changes nothing walks no document.
+//! layer's pixels and nothing else, the Layers rows follow every change they show, and a frame that changes nothing
+//! walks no document and rebuilds nothing derived from it.
 
 use craft::layers::ui::thumbs::{LayerThumb, ThumbContents};
+use craft::layers::ui::tree::LayerTree;
 use craft::ui::primitives::textures::{ThumbRequest, ThumbSource};
 use egui_kittest::Harness;
 use photocraft_doc::{Fill, Layer, LayerContent, LayerId, PixelFormat};
@@ -9,7 +11,7 @@ use photocraft_engine::Session;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::panels::layers_tree::PhotoThumbs;
+use crate::panels::layers_tree::{PhotoLayers, PhotoThumbs};
 use crate::state::Tool;
 
 type H = Harness<'static, Box<PhotocraftApp>>;
@@ -95,9 +97,46 @@ fn thumbnail_revisions_follow_only_their_own_layer() {
     );
 }
 
-/// With the status bar, the document tabs, the Layers panel and the Move tool's snapping on screen, a frame that
-/// changes nothing walks no document and rebuilds no layer index; after an edit the next idle frames walk none
-/// either, so what the chrome derives is rebuilt once per change, not per frame. The panels' command states
+/// The Layers panel walks its rows again only when their revision moves: a rename and both disclosure toggles (a
+/// layer's effects list, a group) move it, idle frames don't.
+#[test]
+fn layers_rows_follow_renames_and_both_toggles() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
+    let a = LayerId(s.execute("layer.new.layer", json!({"name": "A"})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.layerStyle.dropShadow", json!({"layer": a.0})).unwrap();
+    let group = Layer::group("G", vec![Layer::raster("inner", PixelFormat::RGBA8)]);
+    let g = group.id;
+    s.edit("group", |doc, _| {
+        doc.layers.push(group);
+        Ok(())
+    })
+    .unwrap();
+    let mut h = harness(s);
+    let revision = |h: &H| {
+        let app = h.state();
+        PhotoLayers::new(app, app.session.active().unwrap(), &Default::default(), false, None).revision()
+    };
+    let start = revision(&h);
+    assert!(start.is_some());
+    h.run_steps(10);
+    assert_eq!(revision(&h), start, "idle frames keep the rows");
+
+    let moves = |h: &mut H, command: &str, params: serde_json::Value| {
+        let before = revision(h);
+        h.state_mut().run(command, params).unwrap();
+        h.run_steps(2);
+        assert_ne!(revision(h), before, "{command} moves the rows' revision");
+    };
+    moves(&mut h, "layer.renameLayer", json!({"layer": a.0, "name": "Renamed"}));
+    moves(&mut h, "layer.setEffectsExpanded", json!({"layer": a.0, "expanded": false}));
+    moves(&mut h, "layer.setExpanded", json!({"layer": g.0, "expanded": false}));
+}
+
+/// With the status bar, the document tabs, the Layers and History panels, an artboard's pasteboard and the Move
+/// tool's snapping on screen, a frame that changes nothing walks no document, rebuilds no layer index and computes
+/// no derived value (title, status, pages, uncovered work, moving layers, History rows); after an edit they are
+/// computed again once, and the next idle frames compute none. The panels' command states
 /// (`panels::registry::states`, run once a frame) still ask some commands' preconditions, which walk; #15709 task a
 /// moves those onto revisions, and until then the trial counts the walks of one such run per frame.
 #[test]
@@ -113,23 +152,32 @@ fn idle_frames_walk_no_document() {
         Ok(())
     })
     .unwrap();
+    s.execute("layer.new.artboard", json!({"rect": [0, 0, 200, 150]})).unwrap();
     let mut h = harness(s);
+    h.state_mut().run("window.toggle.history", json!({"show": true})).unwrap();
     h.state_mut().ui.tool = Tool::Move;
     h.run_steps(4);
     let serial = |h: &H| h.state().session.active().unwrap().doc.layers.index().serial();
+    let builds = |h: &H| h.state().doc_queries.builds();
     let states = |h: &H| {
         let walks = photocraft_doc::walks();
         drop(crate::panels::registry::states(h.state()));
         photocraft_doc::walks() - walks
     };
-    let (walks, index) = (photocraft_doc::walks(), serial(&h));
+    let (walks, index, built) = (photocraft_doc::walks(), serial(&h), builds(&h));
     h.run_steps(10);
     assert_eq!((photocraft_doc::walks() - walks, serial(&h)), (10 * states(&h), index), "idle frames walk nothing outside the command states");
+    assert_eq!(builds(&h), built, "idle frames compute nothing");
 
+    // The new artboard is the active layer; the fill goes on a pixel layer.
+    let pixels = h.state().session.active().unwrap().doc.layers.iter().find(|l| l.name == "layer 0").unwrap().id;
+    h.state_mut().run("layer.select", json!({"layer": pixels.0})).unwrap();
     h.state_mut().run("select.rect", json!({"x": 10, "y": 10, "width": 50, "height": 40})).unwrap();
     h.state_mut().run("edit.fill", json!({"contents": "black"})).unwrap();
     h.run_steps(4);
-    let (per_frame, walks) = (states(&h), photocraft_doc::walks());
+    assert!(builds(&h) > built, "an edit computes the values again");
+    let (per_frame, walks, built) = (states(&h), photocraft_doc::walks(), builds(&h));
     h.run_steps(10);
     assert_eq!(photocraft_doc::walks() - walks, 10 * per_frame, "after an edit, idle frames walk nothing again");
+    assert_eq!(builds(&h), built, "after an edit, idle frames compute nothing again");
 }

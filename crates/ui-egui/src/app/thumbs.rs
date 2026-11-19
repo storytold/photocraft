@@ -18,7 +18,7 @@ pub(crate) struct SnapshotThumbs<'a> {
 impl<'a> SnapshotThumbs<'a> {
     /// The thumbnails of the snapshots of document `doc` (none when it is not open).
     pub(crate) fn new(app: &'a PhotocraftApp, doc: DocId) -> Self {
-        let snapshots = app.session.documents().iter().find(|st| st.doc.id == doc).map_or(&[][..], |st| &st.snapshots[..]);
+        let snapshots = app.session.documents().iter().find(|st| st.doc.id == doc).map_or(&[][..], |st| st.snapshots());
         Self { doc, snapshots }
     }
 }
