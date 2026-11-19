@@ -55,7 +55,7 @@ fn the_params_doc_lists_all_27_modes_and_the_old_names_still_work() {
 /// The dialog's row writes the Layers panel's keys; each one fades.
 #[test]
 fn every_listed_mode_fades() {
-    for key in BlendMode::LAYER_MODES.map(blend_key) {
+    for key in BlendMode::LAYER_MODES.map(|mode| mode.key().to_string()) {
         let mut s = photocraft_engine::Session::new();
         s.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
         s.execute("edit.fill", json!({"color": "#336699"})).unwrap();

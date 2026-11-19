@@ -37,7 +37,8 @@ pub(crate) fn opacity_param() -> Param {
 pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
     let name = app.session.active().ok_or("no document open")?.doc.next_layer_name("Layer");
     Ok(params::open_param(app, COMMAND, DialogFields::new(), Value::Null, move |fields: &mut DialogFields| {
-        let neutral_modes: Vec<String> = BlendMode::LAYER_MODES.into_iter().filter(|m| neutral_color(*m).is_some()).map(blend_key).collect();
+        let neutral_modes: Vec<String> =
+            BlendMode::LAYER_MODES.into_iter().filter(|m| neutral_color(*m).is_some()).map(|mode| mode.key().to_string()).collect();
         let rows = vec![
             Param::new("name", tl!("Name:"), ParamKind::text(name.clone())),
             Param::new("clipToPrevious", tl!("Use Previous Layer to Create Clipping Mask"), ParamKind::bool(false)),
