@@ -343,7 +343,7 @@ pub struct Interface {
     /// The theme id of the light slot.
     #[serde(deserialize_with = "theme_ids::theme")]
     pub light_theme: String,
-    /// Theme ids shown in the appearance button's context menu.
+    /// Theme ids starred in Preferences › Interface; #13581 decides where they show.
     #[serde(deserialize_with = "theme_ids::themes")]
     pub favorite_themes: Vec<String>,
     /// Pasteboard colour in standard screen mode (`canvasCustomColor` when "custom").
