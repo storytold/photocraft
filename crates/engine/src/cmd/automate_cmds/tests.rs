@@ -1,4 +1,10 @@
 use super::*;
+use crate::actions_cmds::{Action, ActionList, ActionStep, ActionsFile};
+
+/// An `ActionList` holding `actions` in order.
+fn list_of(actions: Vec<Action>) -> ActionList {
+    ActionList::from_file(ActionsFile::new(actions, Vec::new()))
+}
 
 pub(super) fn tmp(name: &str) -> String {
     let d = std::env::temp_dir().join(format!("photocraft-automate-{}-{name}", std::process::id()));
@@ -174,10 +180,11 @@ fn batch_and_droplets_use_the_named_actions_enabled_steps() {
     let dir = tmp("named-actions");
     let inputs = images(&dir, 1, 2, 1);
     let mut s = Session::new();
-    let invert = crate::actions_cmds::Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]);
-    let mut rotate = crate::actions_cmds::Action::new("Rotate", vec![("image.imageRotation.90cw".into(), json!({})), ("file.close".into(), json!({}))]);
+    let invert = crate::actions_cmds::Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))]);
+    let mut rotate =
+        crate::actions_cmds::Action::new("Rotate", vec![ActionStep::new("image.imageRotation.90cw", json!({})), ActionStep::new("file.close", json!({}))]);
     rotate.disabled.insert(1);
-    s.actions.list = vec![invert, rotate];
+    s.actions.list = list_of(vec![invert, rotate]);
     for command in ["file.automate.batch", "file.automate.createDroplet"] {
         for (i, action) in [json!("Rotate"), json!(1)].into_iter().enumerate() {
             let output = format!("{dir}/{command}-{i}");
@@ -202,7 +209,7 @@ fn batch_and_droplets_keep_explicit_steps_and_reject_invalid_sources_before_writ
     let dir = tmp("action-sources");
     let inputs = images(&dir, 1, 2, 1);
     let mut s = Session::new();
-    s.actions.list.push(crate::actions_cmds::Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]));
+    s.actions.list.push(crate::actions_cmds::Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
     for command in ["file.automate.batch", "file.automate.createDroplet"] {
         for (i, source) in [
             json!({"steps": [["image.imageRotation.90cw", {}]], "action": "Missing"}),
@@ -308,13 +315,13 @@ fn droplets_carry_the_actions_their_play_steps_call() {
     let inputs = images(&dir, 2, 40, 20);
     let mut s = Session::new();
     let act = |name: &str, steps: Value| -> Action { serde_json::from_value(json!({"name": name, "steps": steps})).unwrap() };
-    s.actions.list = vec![
+    s.actions.list = list_of(vec![
         act("Unrelated", json!([["image.imageRotation.180", {}]])),
         act("Rotate", json!([["image.imageRotation.90cw", {}]])),
         // Calls Rotate by index (as the panel records it) and itself (caught at run time).
         act("Outer", json!([["actions.play", {"action": 1}]])),
         act("Loop", json!([["actions.play", {"action": "Loop"}]])),
-    ];
+    ]);
     let make = |s: &mut Session, name: &str, steps: Value| {
         let path = format!("{dir}/{name}");
         let out = format!("{dir}/out-{name}");
@@ -340,14 +347,17 @@ fn droplets_carry_the_actions_their_play_steps_call() {
     assert_eq!(r["errors"].as_array().unwrap().len(), inputs.len(), "a self-call fails instead of looping: {r}");
 
     // Retain the copied action's flags as well as its steps.
-    s.actions.list[1].steps.push(("file.close".into(), json!({})));
-    s.actions.list[1].disabled.insert(1);
-    s.actions.list[1].dialogs.insert(0);
-    s.actions.list[1].set = Some("Captured".into());
-    s.actions.list.push(act(
-        "BatchLoop",
-        json!([["file.automate.batch", {"action": "BatchLoop", "input": [inputs[0]], "output": format!("{dir}/loop"), "format": "png"}]]),
-    ));
+    s.actions.list.append_recorded(1, [ActionStep::new("file.close", json!({}))]).unwrap();
+    s.actions.list.set_step(1, 1, false).unwrap();
+    s.actions.list.set_dialog(1, 0, true).unwrap();
+    s.actions.list.assign_set(1, Some("Captured".into())).unwrap();
+    s.actions
+        .list
+        .push(act(
+            "BatchLoop",
+            json!([["file.automate.batch", {"action": "BatchLoop", "input": [inputs[0]], "output": format!("{dir}/loop"), "format": "png"}]]),
+        ))
+        .unwrap();
     for (name, source, expected_names, error) in [
         ("batch-name", json!({"action": "Rotate"}), &["Rotate"][..], None),
         ("batch-index", json!({"action": 1}), &["Rotate"][..], None),
@@ -392,12 +402,12 @@ fn droplets_carry_the_actions_their_play_steps_call() {
             assert!(saved.get("calledActions").is_none(), "{name}: preserve deferred missing-target and legacy policy");
         }
         if let Some(captured) = saved["calledActions"].as_array().and_then(|actions| actions.iter().find(|a| a["name"] == "Rotate")) {
-            assert_eq!(*captured, json!(s.actions.list[1]), "{name}: preserve disabled/dialog/set flags");
+            assert_eq!(*captured, json!(s.actions.list.actions()[1]), "{name}: preserve disabled/dialog/set flags");
         }
         for different in [false, true] {
             let mut replay = Session::new();
             if different {
-                replay.actions.list = vec![Action::new("Unrelated", Vec::new()), Action::new("Rotate", Vec::new())];
+                replay.actions.list = list_of(vec![Action::new("Unrelated", Vec::new()), Action::new("Rotate", Vec::new())]);
             }
             let r = replay
                 .execute("file.automate.runDroplet", json!({"droplet": dp, "input": [inputs[0]], "output": format!("{dir}/outer-{name}-{different}")}))
@@ -432,14 +442,14 @@ fn droplets_preserve_batch_action_namespaces() {
     let input = images(&dir, 1, 40, 20).remove(0);
     for kind in ["inline", "named", "named-set", "mixed", "mixed-two", "caller-null"] {
         let mut maker = Session::new();
-        let mut source = Action::new("Source", vec![("actions.play".into(), json!({"action": 1})), ("file.close".into(), json!({}))]);
+        let mut source = Action::new("Source", vec![ActionStep::new("actions.play", json!({"action": 1})), ActionStep::new("file.close", json!({}))]);
         source.disabled.insert(1);
         source.dialogs.insert(0);
         source.set = Some("Captured".into());
-        maker.actions.list = vec![Action::new("Gap", Vec::new()), Action::new("Outside", Vec::new()), source.clone()];
+        maker.actions.list = list_of(vec![Action::new("Gap", Vec::new()), Action::new("Outside", Vec::new()), source.clone()]);
         let embedded = vec![
             Action::new("LocalGap", Vec::new()),
-            Action::new("Inside", vec![("image.imageRotation.90cw".into(), json!({}))]),
+            Action::new("Inside", vec![ActionStep::new("image.imageRotation.90cw", json!({}))]),
             Action::new("Outside", Vec::new()),
         ];
         let inner = format!("{dir}/{kind}-inner");
@@ -453,7 +463,7 @@ fn droplets_preserve_batch_action_namespaces() {
             }
         }
         if kind == "caller-null" {
-            maker.actions.list[1].steps.push(("image.imageRotation.90cw".into(), json!({})));
+            maker.actions.list.append_recorded(1, [ActionStep::new("image.imageRotation.90cw", json!({}))]).unwrap();
             batch["calledActions"] = Value::Null;
         }
         let mut steps = Vec::new();
@@ -502,7 +512,7 @@ fn droplet_scoped_variants_keep_the_existing_action_limit() {
     let input = images(&dir, 1, 2, 1).remove(0);
     for count in [4095, 4096] {
         let mut maker = Session::new();
-        maker.actions.list = (0..count).map(|i| Action::new(format!("A{i}"), Vec::new())).collect();
+        maker.actions.list = list_of((0..count).map(|i| Action::new(format!("A{i}"), Vec::new())).collect());
         let mut steps: Vec<_> = (0..count).map(|i| json!(["actions.play", {"action": i}])).collect();
         steps.push(
             json!(["file.automate.batch", {"action": 0, "calledActions": [], "input": [input], "output": format!("{dir}/{count}-inner"), "format": "png"}]),
@@ -530,13 +540,13 @@ fn droplets_carry_the_actions_their_conditional_steps_call() {
     let inputs = images(&dir, 2, 40, 20);
     let mut s = Session::new();
     let act = |name: &str, steps: Value| -> Action { serde_json::from_value(json!({"name": name, "steps": steps})).unwrap() };
-    s.actions.list = vec![
+    s.actions.list = list_of(vec![
         act("Unrelated", json!([["image.imageRotation.180", {}]])),
         act("Rotate", json!([["image.imageRotation.90cw", {}]])),
         // The then branch calls Rotate by index, as the panel records it.
         act("Wide", json!([["actions.play", {"action": 1}]])),
         act("Tall", json!([["image.imageRotation.180", {}]])),
-    ];
+    ]);
     let steps = json!([["actions.conditional", {"if": "landscape", "then": "Wide", "else": "Tall"}]]);
     let out = format!("{dir}/out");
     let r = s
@@ -664,18 +674,24 @@ fn a_failed_step_inside_a_called_action_fails_scripts_and_batch() {
     images(&dir, 1, 8, 4);
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
-    s.actions.list.push(Action {
-        name: "Rotate".into(),
-        steps: vec![("image.imageRotation.90cw".into(), json!({}))],
-        disabled: Default::default(),
-        ..Default::default()
-    });
-    s.actions.list.push(Action {
-        name: "Bad".into(),
-        steps: vec![("layer.delete".into(), json!({"layer": u64::MAX}))],
-        disabled: Default::default(),
-        ..Default::default()
-    });
+    s.actions
+        .list
+        .push(Action {
+            name: "Rotate".into(),
+            steps: vec![ActionStep::new("image.imageRotation.90cw", json!({}))],
+            disabled: Default::default(),
+            ..Default::default()
+        })
+        .unwrap();
+    s.actions
+        .list
+        .push(Action {
+            name: "Bad".into(),
+            steps: vec![ActionStep::new("layer.delete", json!({"layer": u64::MAX}))],
+            disabled: Default::default(),
+            ..Default::default()
+        })
+        .unwrap();
     // A script stops at the failed call and reports it.
     let r = s.execute("file.scripts.browse", json!({"steps": [["actions.play", {"action": "Bad"}], ["image.imageRotation.90cw", {}]]})).unwrap();
     assert_eq!(r["ok"], false, "{r}");
@@ -692,7 +708,10 @@ fn a_failed_step_inside_a_called_action_fails_scripts_and_batch() {
     assert!(r["errors"][0]["error"].as_str().unwrap().contains("no such layer"), "{r}");
     // An action that batches itself stops as a recursive call instead of overflowing the stack.
     let inner = json!({"steps": [["actions.play", {"action": "Loop"}]], "input": dir.clone(), "output": format!("{dir}/inner"), "format": "png"});
-    s.actions.list.push(Action { name: "Loop".into(), steps: vec![("file.automate.batch".into(), inner)], disabled: Default::default(), ..Default::default() });
+    s.actions
+        .list
+        .push(Action { name: "Loop".into(), steps: vec![ActionStep::new("file.automate.batch", inner)], disabled: Default::default(), ..Default::default() })
+        .unwrap();
     batch(&mut s, "Loop");
 }
 
@@ -789,12 +808,12 @@ fn droplets_skip_actions_called_only_from_disabled_steps() {
     let mut s = Session::new();
     let mut top = crate::actions_cmds::Action::new(
         "Top",
-        vec![("actions.play".into(), json!({"action": "Skipped"})), ("actions.play".into(), json!({"action": "Used"}))],
+        vec![ActionStep::new("actions.play", json!({"action": "Skipped"})), ActionStep::new("actions.play", json!({"action": "Used"}))],
     );
     top.disabled.insert(0);
-    let used = crate::actions_cmds::Action::new("Used", vec![("image.adjustments.invert".into(), json!({}))]);
-    let skipped = crate::actions_cmds::Action::new("Skipped", vec![("image.imageRotation.90cw".into(), json!({}))]);
-    s.actions.list = vec![skipped, top, used];
+    let used = crate::actions_cmds::Action::new("Used", vec![ActionStep::new("image.adjustments.invert", json!({}))]);
+    let skipped = crate::actions_cmds::Action::new("Skipped", vec![ActionStep::new("image.imageRotation.90cw", json!({}))]);
+    s.actions.list = list_of(vec![skipped, top, used]);
     let r =
         s.execute("file.automate.createDroplet", json!({"path": format!("{dir}/D"), "steps": [["actions.play", {"action": "Top"}]], "shim": false})).unwrap();
     let droplet: Value = serde_json::from_slice(&std::fs::read(r["path"].as_str().unwrap()).unwrap()).unwrap();

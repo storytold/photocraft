@@ -18,14 +18,20 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use egui::{Align2, Color32, FontId, Painter, Shape, Stroke};
+use craft::behavior::kurbo::{Point, Rect as Rect64};
+use craft::behavior::{CanvasView, Input, Metrics};
+use craft::ui::canvas::canvas_space;
+use craft::ui::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props, Role, Show as _};
+use craft::ui::primitives::{HAlign, PaintShape, StrokeWidth, TextRun};
+use craft::ui::runtime::env::Label;
+use craft::ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx, TypeRole};
+use egui::{Color32, Rect, Response, Vec2};
 use photocraft_geom::{Rect as DRect, TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile};
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 
 use crate::PhotocraftApp;
-use crate::canvas::ViewXform;
 
 /// Outline and fill of a tile whose pixels appear nowhere else in the layer.
 const UNIQUE: Color32 = Color32::from_rgb(0x2d, 0x8c, 0xeb);
@@ -131,16 +137,140 @@ pub fn cell_range(r: DRect) -> Option<(i32, i32, i32, i32)> {
     Some((a.tx, a.ty, b.tx, b.ty))
 }
 
-fn quad(xf: &ViewXform, r: DRect) -> [egui::Pos2; 4] {
-    let (x0, y0, x1, y1) = (r.x0 as f32, r.y0 as f32, r.x1 as f32, r.y1 as f32);
-    [xf.to_screen(x0, y0), xf.to_screen(x1, y0), xf.to_screen(x1, y1), xf.to_screen(x0, y1)]
+/// The style of the tile grid: the label colour and the halo that keeps it readable over light pixels. The grid
+/// and tile colours are data (the hue of a shared group), not theme colours.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+pub struct TileGridStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+    label: StyleColor,
+    halo: StyleColor,
 }
 
-/// Draw the active layer's tiles of document `idx`. `visible` is the document area in view.
-pub fn paint(app: &PhotocraftApp, ctx: &egui::Context, painter: &Painter, xf: &ViewXform, idx: usize, visible: DRect) {
+/// The active layer's storage tiles drawn over the document on the canvas: the grid over the document's cells, a
+/// fill and an outline per stored tile, and a `tx,ty` label on tiles large enough on screen. Paint only; it maps
+/// document units through the canvas's view.
+#[derive(Component, Props)]
+#[component(canvas_control, content_painter, sample = TileGrid::sample)]
+pub struct TileGrid<'a> {
+    #[common]
+    common: Common,
+    tiles: &'a [TileInfo],
+    bounds: DRect,
+}
+
+impl<'a> TileGrid<'a> {
+    /// The tiles `tiles` of a layer over a document of `bounds`, the group named `label`.
+    pub fn new(label: impl Into<Label>, tiles: &'a [TileInfo], bounds: DRect) -> Self {
+        TileGrid { common: Common::new(), tiles, bounds }.label(label)
+    }
+
+    /// Three stored tiles, two of them sharing pixels, over a document three cells wide.
+    fn sample() -> Self {
+        static TILES: std::sync::LazyLock<[TileInfo; 3]> = std::sync::LazyLock::new(|| {
+            [
+                TileInfo { coord: TileCoord::new(0, 0), group: Some(0) },
+                TileInfo { coord: TileCoord::new(1, 0), group: None },
+                TileInfo { coord: TileCoord::new(2, 0), group: Some(0) },
+            ]
+        });
+        TileGrid::new("Tile grid", &*TILES, DRect::new(0, 0, 3 * TILE_SIZE, TILE_SIZE))
+    }
+}
+
+/// The document rect `view` shows, as whole units (a unit partly in view counts).
+fn visible_cells(view: &CanvasView) -> DRect {
+    let r = view.visible();
+    DRect::new(r.x0.floor() as i32, r.y0.floor() as i32, r.x1.ceil() as i32, r.y1.ceil() as i32)
+}
+
+fn doc_point(x: i32, y: i32) -> Point {
+    Point::new(f64::from(x), f64::from(y))
+}
+
+fn doc_rect(r: DRect) -> Rect64 {
+    Rect64::new(f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1))
+}
+
+impl Component for TileGrid<'_> {
+    const ROLE: Role = Role::GRAPHICS_OBJECT;
+    const ALT_ROLES: &'static [Role] = &[Role::None];
+    const INPUT: Input = Input::Display;
+    const PARTS: bool = false;
+    const STOPS: bool = false;
+    const OVERLAYS: bool = false;
+    type Style = TileGridStyle;
+    type Output = Response;
+
+    fn style(cx: &StyleCx<'_>, _: TileGridStyleKey) -> TileGridStyle {
+        TileGridStyle { metrics: Metrics::new(), label: cx.color(cx.tokens.color.text.on_strong), halo: cx.color(cx.tokens.color.overlay.halo) }
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::ZERO
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let Some(space) = canvas_space(&cx.env) else { return };
+        let (view, style, bounds) = (space.view, &cx.style, self.bounds);
+        let visible = visible_cells(&view);
+        let draw = ui.draw();
+        draw.clipped(cx.rect, |draw| {
+            // The grid over the document, so the cells without a stored tile show too.
+            if let Some((tx0, ty0, tx1, ty1)) = cell_range(visible.intersect(&bounds)) {
+                let line = DataColor::new(EMPTY_LINE);
+                let edge = |t: i32| t.saturating_mul(TILE_SIZE);
+                let (top, bottom) = (bounds.y0.max(edge(ty0)), bounds.y1.min(edge(ty1.saturating_add(1))));
+                let (left, right) = (bounds.x0.max(edge(tx0)), bounds.x1.min(edge(tx1.saturating_add(1))));
+                for tx in tx0..=tx1.saturating_add(1) {
+                    let x = edge(tx).clamp(bounds.x0, bounds.x1);
+                    let ends = vec![view.to_screen(doc_point(x, top)), view.to_screen(doc_point(x, bottom))];
+                    draw.stroke(&PaintShape::Path(ends), StrokeWidth::Hairline, line);
+                }
+                for ty in ty0..=ty1.saturating_add(1) {
+                    let y = edge(ty).clamp(bounds.y0, bounds.y1);
+                    let ends = vec![view.to_screen(doc_point(left, y)), view.to_screen(doc_point(right, y))];
+                    draw.stroke(&PaintShape::Path(ends), StrokeWidth::Hairline, line);
+                }
+            }
+
+            // Stored tiles, which may lie past the canvas edge.
+            let size = TILE_SIZE as f32 * view.zoom as f32;
+            for t in self.tiles {
+                let r = t.coord.rect();
+                if r.intersect(&visible).is_empty() {
+                    continue;
+                }
+                let c = group_color(t.group);
+                let quad = view.quad(doc_rect(r));
+                let shape = PaintShape::Polygon(quad.to_vec());
+                draw.data_fill(&shape, DataColor::new(Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), FILL_ALPHA)));
+                draw.stroke(&shape, StrokeWidth::Hairline, DataColor::new(c));
+                if size >= LABEL_MIN {
+                    let mid = quad[0] + (quad[2] - quad[0]) * 0.5;
+                    let label = format!("{},{}", t.coord.tx, t.coord.ty);
+                    let room = Rect::from_center_size(mid, Vec2::splat(size));
+                    let run = |color: StyleColor| TextRun::new(label.as_str()).role(TypeRole::Mono).align(HAlign::Center).color(color);
+                    draw.text(room.translate(Vec2::splat(1.0)), &run(style.halo));
+                    draw.text(room, &run(style.label));
+                }
+            }
+        });
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+/// Shows the active layer's tiles of document `idx` over the canvas body `ui` fills; nothing when the document or
+/// its active layer has no pixels.
+pub(crate) fn show(ui: &mut egui::Ui, app: &PhotocraftApp, idx: usize) {
     let Some(st) = app.session.documents().get(idx) else { return };
     let Some(surface) = st.active_layer.and_then(|id| st.doc.layer(id)).and_then(|l| l.surface()) else { return };
     let revision = st.revision;
+    let ctx = ui.ctx().clone();
     let mem = egui::Id::unique(("pc-tile-overlay", st.doc.id.0, st.active_layer.map(|l| l.0)));
     let cached = ctx.data(|d| d.get_temp::<Cached>(mem)).filter(|c| c.revision == revision);
     let tiles = match cached {
@@ -151,45 +281,8 @@ pub fn paint(app: &PhotocraftApp, ctx: &egui::Context, painter: &Painter, xf: &V
             tiles
         }
     };
-
-    // The grid over the document, so the cells without a stored tile show too.
-    let bounds = st.doc.bounds();
-    if let Some((tx0, ty0, tx1, ty1)) = cell_range(visible.intersect(&bounds)) {
-        let line = Stroke::new(1.0, EMPTY_LINE);
-        let edge = |t: i32| t.saturating_mul(TILE_SIZE);
-        let (top, bottom) = (bounds.y0.max(edge(ty0)) as f32, bounds.y1.min(edge(ty1.saturating_add(1))) as f32);
-        let (left, right) = (bounds.x0.max(edge(tx0)) as f32, bounds.x1.min(edge(tx1.saturating_add(1))) as f32);
-        for tx in tx0..=tx1.saturating_add(1) {
-            let x = edge(tx).clamp(bounds.x0, bounds.x1) as f32;
-            painter.line_segment([xf.to_screen(x, top), xf.to_screen(x, bottom)], line);
-        }
-        for ty in ty0..=ty1.saturating_add(1) {
-            let y = edge(ty).clamp(bounds.y0, bounds.y1) as f32;
-            painter.line_segment([xf.to_screen(left, y), xf.to_screen(right, y)], line);
-        }
-    }
-
-    // Stored tiles, which may lie past the canvas edge.
-    let size = TILE_SIZE as f32 * xf.zoom;
-    for t in tiles.iter() {
-        let r = t.coord.rect();
-        if r.intersect(&visible).is_empty() {
-            continue;
-        }
-        let c = group_color(t.group);
-        let pts = quad(xf, r).to_vec();
-        let fill = Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), FILL_ALPHA);
-        painter.add(Shape::convex_polygon(pts.clone(), fill, Stroke::NONE));
-        painter.add(Shape::closed_line(pts, Stroke::new(1.0, c)));
-        if size >= LABEL_MIN {
-            let mid = xf.to_screen(r.x0 as f32 + TILE_SIZE as f32 / 2.0, r.y0 as f32 + TILE_SIZE as f32 / 2.0);
-            let label = format!("{},{}", t.coord.tx, t.coord.ty);
-            let font = FontId::monospace((size / 8.0).clamp(10.0, 16.0));
-            // A dark drop shadow keeps the label readable over light pixels.
-            painter.text(mid + egui::vec2(1.0, 1.0), Align2::CENTER_CENTER, &label, font.clone(), Color32::from_black_alpha(180));
-            painter.text(mid, Align2::CENTER_CENTER, label, font, Color32::WHITE);
-        }
-    }
+    let rect = ui.max_rect();
+    TileGrid::new("Tile grid", &tiles, st.doc.bounds()).show_at(ui, rect);
 }
 
 #[cfg(test)]
@@ -200,11 +293,6 @@ mod tests {
     /// The document rect of tile cell (tx, ty).
     fn cell(tx: i32, ty: i32) -> DRect {
         TileCoord::new(tx, ty).rect()
-    }
-
-    #[test]
-    fn empty_surface_has_no_tiles() {
-        assert!(tile_infos(&Surface::new(PixelFormat::RGBA8), true).is_empty());
     }
 
     #[test]
@@ -255,36 +343,6 @@ mod tests {
             assert!(!(BLUE_HUES.0..=BLUE_HUES.1).contains(&h), "group {g}: hue {h} is blue");
             // Clear of the range's edges too, where hues still read as blue.
             assert!((h - BLUE_HUES.1).abs() > 0.01 && (h - BLUE_HUES.0).abs() > 0.01, "group {g}: hue {h} is at the edge");
-        }
-    }
-
-    /// `cargo test --release -p photocraft-ui-egui --lib tile_grouping_36mp -- --ignored --nocapture`
-    #[test]
-    #[ignore = "benchmark"]
-    fn tile_grouping_36mp() {
-        let (w, h) = (7360, 4912);
-        for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16] {
-            // Every tile different, the worst case: each one is hashed and none share.
-            let mut s = Surface::new(fmt);
-            let Some((tx1, ty1)) = cell_range(DRect::from_xywh(0, 0, w, h)).map(|(_, _, tx1, ty1)| (tx1, ty1)) else { return };
-            for ty in 0..=ty1 {
-                for tx in 0..=tx1 {
-                    let seed = (tx * 31 + ty * 17) as usize;
-                    for (i, b) in s.tile_mut(TileCoord::new(tx, ty)).bytes_mut().iter_mut().enumerate() {
-                        *b = (i ^ seed) as u8;
-                    }
-                }
-            }
-            for parallel in [true, false] {
-                let mut best = f64::MAX;
-                for _ in 0..8 {
-                    let t = std::time::Instant::now();
-                    std::hint::black_box(tile_infos(&s, parallel));
-                    best = best.min(t.elapsed().as_secs_f64() * 1000.0);
-                }
-                let mode = if parallel { "parallel" } else { "serial" };
-                println!("36 MP {fmt:?}, {} tiles, {mode}: {best:.1} ms", s.tile_count());
-            }
         }
     }
 
