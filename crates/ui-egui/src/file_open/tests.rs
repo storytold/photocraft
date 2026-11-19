@@ -17,13 +17,13 @@ type Written = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
 /// warning for names containing "warn", and fails for bytes "bad"; the exporter warns for ".png"
 /// and the writer records what it wrote. Its file picks answer with `answers`, in order; a pick past the
 /// last answer is cancelled.
-fn app_with(answers: Vec<Picked>) -> (PhotocraftApp, Written) {
+fn app_with(answers: Vec<Picked>) -> (Box<PhotocraftApp>, Written) {
     app_over(Arc::new(ScriptedFiles::answering(answers)))
 }
 
 /// [`app_with`] over a file service the test keeps, to read the requests it was asked. The framework takes the
 /// service when the app is built.
-fn app_over(files: Arc<ScriptedFiles>) -> (PhotocraftApp, Written) {
+fn app_over(files: Arc<ScriptedFiles>) -> (Box<PhotocraftApp>, Written) {
     let written: Written = Rc::default();
     let w = written.clone();
     let services = Services {
@@ -568,7 +568,7 @@ fn png_bytes(w: u32, h: u32) -> Vec<u8> {
 }
 
 /// An app with one open document whose canvas showed at (100, 50)–(700, 550) last frame.
-fn app_with_canvas() -> PhotocraftApp {
+fn app_with_canvas() -> Box<PhotocraftApp> {
     let (mut app, _) = app_with(Vec::new());
     app.open_bytes("canvas.psd", b"x").unwrap();
     app.drop_canvas_rect = Some(egui::Rect::from_min_max(egui::pos2(100.0, 50.0), egui::pos2(700.0, 550.0)));

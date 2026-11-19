@@ -10,7 +10,7 @@ use serde_json::json;
 use super::*;
 
 /// A filter dialog over a 256×256 layer, with the preview the canvas computed for it on screen.
-fn filter_dialog_with_preview(background: bool) -> (PhotocraftApp, DialogId) {
+fn filter_dialog_with_preview(background: bool) -> (Box<PhotocraftApp>, DialogId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.background_jobs = background;
     app.run("file.new", serde_json::json!({"width": 256, "height": 256, "background": "#3366cc"})).unwrap();

@@ -17,7 +17,7 @@ const PRESETS: [(&str, &str, &[&str], bool); 6] = [
     ("motion", "Motion", &["properties", "layers"], true),
 ];
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     PhotocraftApp::new(Session::new(), Default::default())
 }
 

@@ -7,17 +7,17 @@ const HEIGHT: f32 = 360.0;
 /// Whether the rail's button for `tool` has the focus. A tool's button is a node inside a node of the same name (the
 /// slot and the button in it), so the name matches two. The name matches whole: "Move Toolbar to the Right" contains
 /// "Move Tool".
-fn focused(harness: &egui_kittest::Harness<'_, PhotocraftApp>, tool: &str) -> bool {
+fn focused(harness: &egui_kittest::Harness<'_, Box<PhotocraftApp>>, tool: &str) -> bool {
     harness.query_all_by_label(tool).any(|node| node.is_focused())
 }
 
 /// The rect of the rail's button for `tool`: the innermost of the nodes carrying its name.
-fn button_rect(harness: &egui_kittest::Harness<'_, PhotocraftApp>, tool: &str) -> egui::Rect {
+fn button_rect(harness: &egui_kittest::Harness<'_, Box<PhotocraftApp>>, tool: &str) -> egui::Rect {
     harness.query_all_by_label(tool).last().unwrap_or_else(|| panic!("no {tool} button")).rect()
 }
 
 /// A harness that draws the toolbar in a window much shorter than its tools, so the rail scrolls.
-fn short_toolbar_harness() -> egui_kittest::Harness<'static, PhotocraftApp> {
+fn short_toolbar_harness() -> egui_kittest::Harness<'static, Box<PhotocraftApp>> {
     let mut ready = false;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     // The supported shortcut preference clears the canvas Tab binding, so Tab is the focus key.

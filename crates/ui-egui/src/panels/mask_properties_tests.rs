@@ -39,7 +39,7 @@ fn session_for(target: Target) -> photocraft_engine::Session {
 }
 
 /// The Properties panel over a session, drawn in the Pro theme.
-fn harness_of(session: photocraft_engine::Session, mask_target: bool, vector_target: bool) -> Harness<'static, PhotocraftApp> {
+fn harness_of(session: photocraft_engine::Session, mask_target: bool, vector_target: bool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(session, crate::Services::default());
     app.ui.mask_target = mask_target;
     app.ui.vector_mask_target = vector_target;
@@ -47,7 +47,7 @@ fn harness_of(session: photocraft_engine::Session, mask_target: bool, vector_tar
         .with_context(app.ctx().clone())
         .with_size(vec2(800.0, 1600.0))
         .with_step_dt(1.0 / 60.0)
-        .build_ui_state(|ui, app: &mut PhotocraftApp| super::properties::panel(app, ui), app);
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| super::properties::panel(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
     frames(&mut h, 4);
     h
@@ -55,7 +55,7 @@ fn harness_of(session: photocraft_engine::Session, mask_target: bool, vector_tar
 
 /// `n` frames as the app's frame runs them: the command states and catalog are published before the input (a command
 /// button's label and enablement), and the commands the frame fired run after it.
-fn frames(h: &mut Harness<'_, PhotocraftApp>, n: usize) {
+fn frames(h: &mut Harness<'_, Box<PhotocraftApp>>, n: usize) {
     for _ in 0..n {
         let ctx = h.ctx.clone();
         h.state_mut().framework_before_input(&ctx);
@@ -65,17 +65,17 @@ fn frames(h: &mut Harness<'_, PhotocraftApp>, n: usize) {
     }
 }
 
-fn harness(target: Target) -> Harness<'static, PhotocraftApp> {
+fn harness(target: Target) -> Harness<'static, Box<PhotocraftApp>> {
     harness_of(session_for(target), matches!(target, Target::Pixel | Target::Adjustment), matches!(target, Target::Vector))
 }
 
-fn mask(h: &Harness<'_, PhotocraftApp>) -> photocraft_doc::LayerMask {
+fn mask(h: &Harness<'_, Box<PhotocraftApp>>) -> photocraft_doc::LayerMask {
     let s = h.state().session.active().unwrap();
     s.doc.layer(s.active_layer.unwrap()).unwrap().mask.clone().unwrap()
 }
 
 /// The Density of the active layer's mask, vector mask or shape.
-fn density(h: &Harness<'_, PhotocraftApp>, target: Target) -> f32 {
+fn density(h: &Harness<'_, Box<PhotocraftApp>>, target: Target) -> f32 {
     let s = h.state().session.active().unwrap();
     let layer = s.doc.layer(s.active_layer.unwrap()).unwrap();
     match target {
@@ -88,7 +88,7 @@ fn density(h: &Harness<'_, PhotocraftApp>, target: Target) -> f32 {
     }
 }
 
-fn history(h: &Harness<'_, PhotocraftApp>) -> usize {
+fn history(h: &Harness<'_, Box<PhotocraftApp>>) -> usize {
     h.state().session.active().unwrap().history.past_len()
 }
 
@@ -115,12 +115,12 @@ fn pixel_mask_properties_follow_target_for_raster_and_adjustment() {
 }
 
 /// Drags the slider named `label` through `fractions` of its track, pressing at the first and releasing at the last.
-fn drag(h: &mut Harness<'_, PhotocraftApp>, label: &str, fractions: &[f32]) {
+fn drag(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str, fractions: &[f32]) {
     drag_with(h, label, fractions, false);
 }
 
 /// The drag of [`drag`]; with `escape` the Escape key is pressed before the release.
-fn drag_with(h: &mut Harness<'_, PhotocraftApp>, label: &str, fractions: &[f32], escape: bool) {
+fn drag_with(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str, fractions: &[f32], escape: bool) {
     let r = h
         .query_all_by_role(egui::accesskit::Role::Slider)
         .find(|n| n.accesskit_node().label().as_deref() == Some(label))
@@ -190,7 +190,7 @@ fn mask_sections_run_their_edit_commands() {
 }
 
 /// Document-wide row of mask coverage (or of the layer's own red channel) across the middle.
-fn row(h: &Harness<'_, PhotocraftApp>, of_mask: bool) -> Vec<f32> {
+fn row(h: &Harness<'_, Box<PhotocraftApp>>, of_mask: bool) -> Vec<f32> {
     let s = h.state().session.active().unwrap();
     let layer = s.doc.layer(s.active_layer.unwrap()).unwrap();
     let surface = if of_mask { &layer.mask.as_ref().unwrap().surface } else { layer.surface().unwrap() };
