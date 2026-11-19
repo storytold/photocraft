@@ -6,7 +6,6 @@ use super::dialogs::front;
 use super::options::{pixel_aspect_ratio, show_slot, snap_slot};
 use super::screen_mode_names;
 use super::{LANGUAGE, PIXEL_ASPECTS, PhotocraftApp, SCREEN_MODES, Show, SnapTo, Value, json};
-use crate::canvas::ViewXform;
 
 /// The ids `panel_docking::command` runs for Window › panels and the Type menu's Character and Paragraph.
 const PANEL_IDS: [&str; 17] = [
@@ -294,58 +293,16 @@ fn flip_horizontal(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> 
     if next == current {
         return Ok(json!(next));
     }
-
-    // Capture the active canvas transform before changing the shared view option. The image
-    // centre, rather than the camera centre, is the visual anchor: the two differ after panning.
-    let xf = ViewXform::active(app);
-    let size = app.session.active().map(|st| [st.doc.size.width, st.doc.size.height]);
-    let index = app.session.active_index();
     app.ui.view.flip_horizontal = next;
 
-    if let (Some(xf), Some(size), Some(index)) = (xf, size, index)
-        && xf.zoom.is_finite()
-        && xf.zoom.abs() > f32::EPSILON
-    {
-        app.ui.views[index].center = center_for_flipped_view(xf, size, next);
+    if let Some(doc) = app.session.active() {
+        let width = doc.doc.size.width as f32;
+        let index = app.session.active_index().unwrap_or(0);
+        if let Some(view) = app.ui.views.get_mut(index) {
+            view.center[0] = width - view.center[0];
+        }
     }
     Ok(json!(next))
-}
-
-/// Camera centre used after flipping.
-///
-/// When the canvas covers at least half the viewport, keep the camera centre: that preserves the
-/// part of the image the user is currently inspecting. When zoomed out, keep the image centre at
-/// the same screen position so the whole canvas remains easy to follow.
-pub(super) fn center_for_flipped_view(xf: ViewXform, size: [u32; 2], flip: bool) -> [f32; 2] {
-    if !(xf.zoom.is_finite() && xf.zoom.abs() > f32::EPSILON) || canvas_coverage(xf, size) >= 0.5 {
-        return xf.center;
-    }
-    let image_center = [size[0] as f32 * 0.5, size[1] as f32 * 0.5];
-    let before = xf.to_screen(image_center[0], image_center[1]);
-    let after_xf = ViewXform { flip, ..xf };
-    let after = after_xf.to_screen(image_center[0], image_center[1]);
-    let camera_delta = after_xf.unmap_vec((after - before) / after_xf.zoom);
-    [xf.center[0] + camera_delta.x, xf.center[1] + camera_delta.y]
-}
-
-/// Approximate the visible canvas coverage using the screen-space bounds of its four corners.
-/// This accounts for zoom, rotation, pixel aspect correction, and panning.
-pub(super) fn canvas_coverage(xf: ViewXform, size: [u32; 2]) -> f32 {
-    let w = size[0] as f32;
-    let h = size[1] as f32;
-    let corners = [xf.to_screen(0.0, 0.0), xf.to_screen(w, 0.0), xf.to_screen(0.0, h), xf.to_screen(w, h)];
-    let min_x = corners.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
-    let min_y = corners.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
-    let max_x = corners.iter().map(|p| p.x).fold(f32::NEG_INFINITY, f32::max);
-    let max_y = corners.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max);
-    let bounds = egui::Rect::from_min_max(egui::pos2(min_x, min_y), egui::pos2(max_x, max_y));
-    let visible = bounds.intersect(xf.rect);
-    let viewport_area = xf.rect.width() * xf.rect.height();
-    if !viewport_area.is_finite() || viewport_area <= 0.0 {
-        return 0.0;
-    }
-    let visible_area = (visible.width().max(0.0)) * (visible.height().max(0.0));
-    (visible_area / viewport_area).clamp(0.0, 1.0)
 }
 
 fn run(app: &mut PhotocraftApp, id: &str, p: &Value) -> Result<Value, String> {
