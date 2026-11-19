@@ -154,6 +154,20 @@ fn indexed_png_keeps_the_document_resolution() {
 }
 
 #[test]
+fn indexed_png_reports_that_it_is_not_interlaced() {
+    // Interlaced was dropped without a word for an Indexed Color document; the RGB path warns.
+    let mut d = doc(ColorMode::Indexed);
+    d.color_table = Some(ColorTable { colors: vec![[0, 0, 0], [255, 0, 0]], transparent: None });
+    let mut opts = photocraft_io::ExportOptions::default();
+    opts.encode.png_interlaced = true;
+    let r = photocraft_io::export(&d, "x.png", &opts).unwrap();
+    assert_eq!((r.bytes[25], r.bytes[28]), (3, 0), "a palette PNG, not interlaced");
+    assert!(r.warnings.iter().any(|w| w.contains("without interlacing")), "{:?}", r.warnings);
+    let plain = photocraft_io::export(&d, "x.png", &Default::default()).unwrap();
+    assert!(!plain.warnings.iter().any(|w| w.contains("interlac")), "{:?}", plain.warnings);
+}
+
+#[test]
 fn indexed_bmp_is_palette_bmp() {
     // The BMP export wrote an Indexed Color document as 24-bit RGB, so reopening it lost the mode (#3869 follow-up).
     let mut d = doc(ColorMode::Indexed);
