@@ -381,6 +381,24 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
             options.insert(k.into(), v.clone());
         }
     }
+    // The Errors dropdown (#13713): the choice becomes the policy Batch already reads, so a droplet
+    // saved without it keeps today's behaviour (go on after a failure, write no log).
+    match p.get("errors") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(mode)) => match mode.as_str() {
+            "stop" => {
+                options.insert("stopOnError".into(), json!(true));
+            }
+            "log" => {
+                options.insert("stopOnError".into(), json!(false));
+                if let Some(path) = p.get("errorLog") {
+                    options.insert("errorLog".into(), path.clone());
+                }
+            }
+            other => return Err(bad(cmd, format!("\"errors\" is \"stop\" or \"log\", not `{other}`"))),
+        },
+        Some(_) => return Err(bad(cmd, "\"errors\" must be \"stop\" or \"log\"")),
+    }
     let mut droplet = json!({"photocraftDroplet": 1, "name": name, "action": {"name": name, "steps": steps_json}, "options": options});
     if !called.is_empty() {
         droplet["calledActions"] = json!(called);
@@ -468,16 +486,33 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
         bp["action"] = name.clone();
     }
     // Override Open is saved with the droplet: a recorded Open then reads each dropped input.
-    for key in ["quality", "overrideOpen"] {
+    for key in ["quality", "overrideOpen", "stopOnError"] {
         if let Some(value) = opts.get(key) {
             bp[key] = value.clone();
         }
     }
+    // A droplet that logs errors writes the log itself, so its frame lines say Droplet (#13713).
+    // Batch is deliberately not given `errorLog`: its own log rules (#13665) stay untouched.
+    let error_log = opts.get("errorLog").and_then(Value::as_str).filter(|path| !path.trim().is_empty()).map(str::to_string);
     if let Some(called) = v.get("calledActions") {
         bp["calledActions"] = called.clone();
     }
     let r = s.execute("file.automate.batch", bp)?;
-    Ok(json!({"droplet": path, "output": output, "files": r["files"], "errors": r["errors"]}))
+    let mut result = json!({"droplet": path, "output": output, "files": r["files"], "errors": r["errors"]});
+    for key in ["stopped", "skipped"] {
+        if let Some(value) = r.get(key) {
+            result[key] = value.clone();
+        }
+    }
+    if let Some(log) = error_log {
+        let none = Vec::new();
+        let entries = crate::file_cmds::error_log_entries(r.get("errors").and_then(Value::as_array).unwrap_or(&none));
+        let bytes = crate::file_cmds::encode_droplet_error_log(entries.iter().map(|(file, error)| (file.as_str(), error.as_str())));
+        if let Err(error) = write_file(&log, &bytes) {
+            result["errorLogError"] = json!(error.to_string());
+        }
+    }
+    Ok(result)
 }
 
 // ---------- Statistics ----------
@@ -668,7 +703,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.createDroplet",
             "Create Droplet…",
             &["File", "Automate"],
-            r##"{"path":str (.pcdroplet),"steps":[[id,params]…]?,"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (with a named action: that set's action of the name),"name":str?,"output":folder?,"format":"same|png|jpg|…"?,"quality":0..12?,"shim":bool=true on Unix (writes <name>.command calling `photocraft-cli droplet`)} → {path, shim} (the actions its Play Action and Conditional steps call are saved in the droplet)"##,
+            r##"{"path":str (.pcdroplet),"steps":[[id,params]…]?,"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (with a named action: that set's action of the name),"name":str?,"output":folder?,"format":"same|png|jpg|…"?,"quality":0..12?,"errors":"stop|log"? (saved with the droplet as Batch's stopOnError and errorLog: stop ends a run at the first failing file, log goes on and writes the file),"errorLog":path? (with errors "log": the log the run writes; blank or absent writes none),"shim":bool=true on Unix (writes <name>.command calling `photocraft-cli droplet`)} → {path, shim} (the actions its Play Action and Conditional steps call are saved in the droplet)"##,
             native,
             create_droplet
         ),
@@ -676,7 +711,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.runDroplet",
             "Run Droplet",
             &[],
-            r##"{"droplet":path,"input":[files or folders],"output":folder? (default: droplet's, else <input folder>/droplet-output)} → {files, errors} (an input whose output name was already written in the run goes to errors)"##,
+            r##"{"droplet":path,"input":[files or folders],"output":folder? (default: droplet's, else <input folder>/droplet-output)} → {files, errors, stopped?, skipped? (with the droplet's stopOnError), errorLogError?} (an input whose output name was already written in the run goes to errors; a droplet saved with errorLog writes its own log with Start Droplet / End Droplet)"##,
             native,
             run_droplet
         ),
@@ -707,6 +742,9 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+#[path = "droplet_errors_tests.rs"]
+mod droplet_errors_tests;
 #[cfg(test)]
 #[path = "droplet_skip_non_images_tests.rs"]
 mod droplet_skip_non_images_tests;

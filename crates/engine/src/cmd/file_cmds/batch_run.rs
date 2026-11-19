@@ -429,12 +429,24 @@ impl BatchPolicy {
 
 /// Photoshop-compatible Batch log encoding, shared by the desktop command and CLI.
 pub fn encode_batch_error_log<'a>(errors: impl IntoIterator<Item = (&'a str, &'a str)>) -> Vec<u8> {
-    let mut body = String::from("Start Batch\r\n\r\n");
+    encode_error_log("Batch", errors)
+}
+
+/// The same encoding with `Droplet` frame lines, for a droplet that logs errors (#13713): only the
+/// two frame lines differ, the entry layout stays the one #13665 measured for Batch.
+pub fn encode_droplet_error_log<'a>(errors: impl IntoIterator<Item = (&'a str, &'a str)>) -> Vec<u8> {
+    encode_error_log("Droplet", errors)
+}
+
+/// One error log: `frame` names the run on the first and last line, and each entry is a `File:` and
+/// an `Error:` line. UTF-16 big-endian with BOM `FE FF` and CRLF (#13665).
+fn encode_error_log<'a>(frame: &str, errors: impl IntoIterator<Item = (&'a str, &'a str)>) -> Vec<u8> {
+    let mut body = format!("Start {frame}\r\n\r\n");
     for (input, reason) in errors {
         let input = native_separators(input);
         body.push_str(&format!("File: \"{input}\"\r\nError: {reason}\r\n\r\n"));
     }
-    body.push_str("End Batch\r\n");
+    body.push_str(&format!("End {frame}\r\n"));
     let mut bytes = vec![0xfe, 0xff];
     for word in body.encode_utf16() {
         bytes.extend_from_slice(&word.to_be_bytes());
@@ -447,10 +459,20 @@ fn native_separators(path: &str) -> String {
     if cfg!(windows) { path.replace('/', "\\") } else { path.to_string() }
 }
 
+/// The `(file, error)` pairs of a run's `errors` values, as an error log writes them.
+pub fn error_log_entries(errors: &[Value]) -> Vec<(String, String)> {
+    errors
+        .iter()
+        .map(|error| {
+            let file = error.get("file").or_else(|| error.get("document")).and_then(Value::as_str).unwrap_or("?");
+            let reason = error.get("error").and_then(Value::as_str).unwrap_or("?");
+            (file.to_string(), reason.to_string())
+        })
+        .collect()
+}
+
 fn write_error_log(path: &str, errors: &[Value]) -> Result<()> {
-    let bytes = encode_batch_error_log(errors.iter().map(|error| {
-        (error.get("file").or_else(|| error.get("document")).and_then(Value::as_str).unwrap_or("?"), error.get("error").and_then(Value::as_str).unwrap_or("?"))
-    }));
+    let bytes = encode_batch_error_log(error_log_entries(errors).iter().map(|(file, error)| (file.as_str(), error.as_str())));
     super::paths::write_file(path, &bytes).map_err(|error| EngineError::Other(format!("error log: {error}")))
 }
 
