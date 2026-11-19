@@ -264,7 +264,7 @@ jobs:
         run: |
           set -euo pipefail
           # `<version>-rust-<profile>-<job>-crates-<os>-<arch>-<run>-<attempt>-...`, newest first.
-          gh cache list --repo "$REPO" --limit 100 --sort created_at --order desc --json id,key \
+          gh cache list --repo "$REPO" --ref refs/heads/main --limit 100 --sort created_at --order desc --json id,key \
             --jq '.[] | "\(.id) \(.key)"' > "$RUNNER_TEMP/caches"
           declare -A kept
           while read -r id key; do
