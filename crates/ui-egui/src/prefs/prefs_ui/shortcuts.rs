@@ -173,7 +173,12 @@ fn pass(app: &mut PhotocraftApp, ui: &mut egui::Ui, press_ok: bool) {
     if press_ok {
         dialog(keymap, profiles, &builtins, &options).ok(ui, state);
     }
-    let mut tabs = [menus_tab(&rows, menus), toolbar_tab(toolbar_hidden)];
+    let toolbar_tools = Tool::ALL.map(|tool| {
+        let command = CommandRef::new(crate::tool_shortcuts::id(tool));
+        let shortcut = keymap.bindings(&command).first().map(|binding| binding.trigger.display(keymap.platform()));
+        (tool, shortcut)
+    });
+    let mut tabs = [menus_tab(&rows, menus), toolbar_tab(toolbar_hidden, &toolbar_tools)];
     let output = dialog(keymap, profiles, &builtins, &options).tabs(&mut tabs).show(ui, state);
     drop(tabs);
     match output.outcome {
@@ -285,14 +290,14 @@ fn toolbar_hidden_names(hidden: &[String]) -> BTreeSet<String> {
 }
 
 /// The Toolbar tab changes each tool's visibility override, leaving custom groups and extras in place.
-fn toolbar_tab(hidden: &mut Vec<String>) -> DialogTab<'_> {
+fn toolbar_tab<'a>(hidden: &'a mut Vec<String>, tools: &'a [(Tool, Option<String>)]) -> DialogTab<'a> {
     DialogTab::new("toolbar", tl!("Toolbar"), move |ui| {
         let mut changed = ui.button(tl!("Restore Defaults")).clicked() && !hidden.is_empty();
         if changed {
             hidden.clear();
         }
         let hidden_tools = toolbar_hidden_names(hidden);
-        for tool in Tool::ALL {
+        for (tool, shortcut) in tools {
             ui.push_id(tool, |ui| {
                 ui.horizontal(|ui| {
                     let name = format!("{tool:?}");
@@ -306,9 +311,8 @@ fn toolbar_tab(hidden: &mut Vec<String>) -> DialogTab<'_> {
                         }
                         changed = true;
                     }
-                    let key = tool.key();
-                    if key != '\0' {
-                        ui.label(key.to_string());
+                    if let Some(shortcut) = shortcut {
+                        ui.label(shortcut);
                     }
                 });
             });

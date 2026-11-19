@@ -171,6 +171,51 @@ fn open_toolbar(h: &mut Harness<'_, Box<PhotocraftApp>>) {
     assert_eq!(session.state.snapshot(&session.keymap).unwrap().tab, "toolbar");
 }
 
+fn toolbar_shows_shortcut(h: &Harness<'_, Box<PhotocraftApp>>, tool: &str, shortcut: &str) -> bool {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT as _, Queryable as _, by};
+
+    let checkbox = h.get_by_role_and_label(Role::CheckBox, tool).rect();
+    h.query_all(by().label(shortcut).include_labels()).any(|node| {
+        let position = node.rect().center();
+        node.accesskit_node().role() == Role::Label && position.x > checkbox.right() && checkbox.y_range().contains(position.y)
+    })
+}
+
+#[test]
+fn shortcuts_toolbar_shows_the_draft_bindings() {
+    let mut h = harness();
+    open_toolbar(&mut h);
+    assert!(toolbar_shows_shortcut(&h, "Move Tool", "V"));
+    assert!(toolbar_shows_shortcut(&h, "Artboard Tool", "V"));
+
+    let move_tool = CommandRef::new("tools.select.move");
+    let single_row = CommandRef::new("tools.select.singleRowMarquee");
+    rebind(h.state_mut(), &move_tool, Binding::parse("Q").unwrap(), Policy::Steal).unwrap();
+    rebind(h.state_mut(), &single_row, Binding::parse("F6").unwrap(), Policy::Steal).unwrap();
+    h.run_steps(3);
+    assert!(toolbar_shows_shortcut(&h, "Move Tool", "Q"), "show the in-dialog edit");
+    assert!(!toolbar_shows_shortcut(&h, "Move Tool", "V"));
+    assert!(toolbar_shows_shortcut(&h, "Single Row Marquee Tool", "F6"), "show a binding for a tool that had no default");
+    assert!(!h.state().session.prefs().shortcuts.contains_key("tools.select.move"), "the draft is not saved yet");
+
+    // A menu command takes the key from the tool. Tools in the same group can share keys.
+    let feather = CommandRef::new("select.modify.feather");
+    rebind(h.state_mut(), &feather, Binding::parse("Q").unwrap(), Policy::Steal).unwrap();
+    h.run_steps(3);
+    assert!(!toolbar_shows_shortcut(&h, "Move Tool", "Q"), "the earlier owner no longer displays the stolen shortcut");
+    assert!(toolbar_shows_shortcut(&h, "Artboard Tool", "V"), "an unrelated tool keeps its default");
+
+    let draft = &mut h.state_mut().prefs_rt.shortcuts.as_mut().unwrap().keymap;
+    assert!(draft.clear(&CommandRef::new("tools.select.artboard")));
+    assert!(draft.reset(&move_tool));
+    assert!(draft.reset(&single_row));
+    h.run_steps(3);
+    assert!(!toolbar_shows_shortcut(&h, "Artboard Tool", "V"), "clearing leaves the shortcut empty");
+    assert!(toolbar_shows_shortcut(&h, "Move Tool", "V"), "resetting restores the default");
+    assert!(!toolbar_shows_shortcut(&h, "Single Row Marquee Tool", "F6"));
+}
+
 #[test]
 fn shortcuts_toolbar_visibility_is_saved_only_on_ok() {
     use egui::accesskit::{Role, Toggled};
