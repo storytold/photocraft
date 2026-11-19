@@ -13,7 +13,6 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 use crate::dialogs::params;
-use crate::panels::layers_tree::blend_key;
 
 /// The command the dialog stands for; it is also the dialog's key.
 pub const COMMAND: &str = "layer.new.layer";
@@ -38,7 +37,8 @@ pub(crate) fn opacity_param() -> Param {
 pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
     let name = app.session.active().ok_or("no document open")?.doc.next_layer_name("Layer");
     Ok(params::open_param(app, COMMAND, DialogFields::new(), Value::Null, move |fields: &mut DialogFields| {
-        let neutral_modes: Vec<String> = BlendMode::LAYER_MODES.into_iter().filter(|m| neutral_color(*m).is_some()).map(blend_key).collect();
+        let neutral_modes: Vec<String> =
+            BlendMode::LAYER_MODES.into_iter().filter(|m| neutral_color(*m).is_some()).map(|mode| mode.key().to_string()).collect();
         let rows = vec![
             Param::new("name", tl!("Name:"), ParamKind::text(name.clone())),
             Param::new("clipToPrevious", tl!("Use Previous Layer to Create Clipping Mask"), ParamKind::bool(false)),
@@ -59,7 +59,7 @@ pub(crate) fn run(app: &mut PhotocraftApp, _ctx: &egui::Context, result: ParamRe
 }
 
 fn mode(f: &DialogFields) -> BlendMode {
-    f.text("mode").and_then(photocraft_engine::commands::blend_from_str).filter(|m| *m != BlendMode::PassThrough).unwrap_or(BlendMode::Normal)
+    f.text("mode").and_then(photocraft_engine::commands::parse_blend).filter(|m| *m != BlendMode::PassThrough).unwrap_or(BlendMode::Normal)
 }
 
 fn flag(f: &DialogFields, k: &str) -> bool {
@@ -150,7 +150,7 @@ mod tests {
         let id = top(&app);
         assert!(set(&mut app, id, "fillNeutral", json!(true)).is_err(), "Normal has no neutral color");
         set(&mut app, id, "name", json!("Dodge & Burn")).unwrap();
-        set(&mut app, id, "mode", json!(blend_key(BlendMode::Overlay))).unwrap();
+        set(&mut app, id, "mode", json!(BlendMode::Overlay.key().to_string())).unwrap();
         set(&mut app, id, "opacity", json!(60.0)).unwrap();
         set(&mut app, id, "color", json!("violet")).unwrap();
         set(&mut app, id, "fillNeutral", json!(true)).unwrap();
