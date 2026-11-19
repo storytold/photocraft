@@ -199,6 +199,7 @@ use placing::{convert, reset_transform, shift_layer, via_copy};
 pub use placing::{layer_to_smart, layers_to_smart, placement};
 #[cfg(test)]
 pub(crate) use rendering::DISPLAY_NATIVE_HASH_BYTES;
+pub(crate) use rendering::refresh_in;
 use rendering::refresh_or_fail;
 #[cfg(test)]
 use rendering::{NativeDigests, blend_surfaces, place, render_in};
