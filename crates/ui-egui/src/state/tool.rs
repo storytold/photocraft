@@ -71,6 +71,8 @@ pub enum Tool {
     EllipseShape,
     Triangle,
     Polygon,
+    /// The shape flyout's Star Tool (#11377): a live polygon shape with a star ratio.
+    Star,
     Line,
     CustomShape,
     Slice,
@@ -79,7 +81,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 68] = [
+    pub const ALL: [Tool; 69] = [
         Tool::Move,
         Tool::Artboard,
         Tool::RectMarquee,
@@ -99,8 +101,8 @@ impl Tool {
         Tool::Count,
         Tool::Brush,
         Tool::Pencil,
-        Tool::MixerBrush,
         Tool::ColorReplacement,
+        Tool::MixerBrush,
         Tool::Eraser,
         Tool::BackgroundEraser,
         Tool::MagicEraser,
@@ -113,8 +115,8 @@ impl Tool {
         Tool::Hand,
         Tool::RotateView,
         Tool::Zoom,
-        Tool::Remove,
         Tool::SpotHealing,
+        Tool::Remove,
         Tool::Healing,
         Tool::Patch,
         Tool::ContentAwareMove,
@@ -143,6 +145,7 @@ impl Tool {
         Tool::EllipseShape,
         Tool::Triangle,
         Tool::Polygon,
+        Tool::Star,
         Tool::Line,
         Tool::CustomShape,
         Tool::Slice,
@@ -218,6 +221,7 @@ impl Tool {
             Tool::EllipseShape => "Ellipse Tool",
             Tool::Triangle => "Triangle Tool",
             Tool::Polygon => "Polygon Tool",
+            Tool::Star => "Star Tool",
             Tool::Line => "Line Tool",
             Tool::CustomShape => "Custom Shape Tool",
         }
@@ -284,9 +288,11 @@ impl Tool {
             Tool::SingleRowMarquee | Tool::SingleColumnMarquee => '\0',
             Tool::Dodge | Tool::Burn | Tool::Sponge => 'O',
             Tool::QuickSelection | Tool::ObjectSelection => 'W',
-            Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => 'P',
+            Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen => 'P',
+            // In the Pen flyout, but P never reaches them.
+            Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => ' ',
             Tool::PathSelection | Tool::DirectSelection => 'A',
-            Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::CustomShape => 'U',
+            Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::Line | Tool::CustomShape => 'U',
         }
     }
     /// Glyph drawn in the toolbar (vector icons come later).
@@ -311,11 +317,22 @@ impl Tool {
             _ => "•",
         }
     }
+    /// The tool `s` names: its variant name, that name without "marquee", or its label, in any case and with spaces,
+    /// `_` and `-` ignored. The first tool of [`Tool::ALL`] a spelling names wins.
     pub fn from_name(s: &str) -> Option<Tool> {
-        let n = s.to_ascii_lowercase().replace([' ', '_', '-'], "");
-        Tool::ALL.into_iter().find(|t| {
-            let a = format!("{t:?}").to_ascii_lowercase();
-            n == a || n == a.replace("marquee", "") || n == t.label().to_ascii_lowercase().replace(' ', "")
-        })
+        // Panels resolve tool names per row as they draw, and the command gate per tool command: one table instead of
+        // formatting every tool's names per lookup.
+        static NAMES: std::sync::OnceLock<std::collections::HashMap<String, Tool>> = std::sync::OnceLock::new();
+        let names = NAMES.get_or_init(|| {
+            let mut names = std::collections::HashMap::new();
+            for t in Tool::ALL {
+                let a = format!("{t:?}").to_ascii_lowercase();
+                for spelling in [a.replace("marquee", ""), t.label().to_ascii_lowercase().replace(' ', ""), a] {
+                    names.entry(spelling).or_insert(t);
+                }
+            }
+            names
+        });
+        names.get(&s.to_ascii_lowercase().replace([' ', '_', '-'], "")).copied()
     }
 }

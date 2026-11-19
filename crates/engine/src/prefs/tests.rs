@@ -103,10 +103,10 @@ fn appearance_defaults_and_legacy_theme_migrate() {
     let p = Preferences::default();
     // New users keep Photoshop's default; following the system is opt-in.
     assert_eq!(p.interface.appearance_mode, AppearanceMode::Dark);
-    assert_eq!(p.interface.dark_theme, DarkTheme::ProMedium);
-    assert_eq!(p.interface.light_theme, LightTheme::ProLight);
+    assert_eq!(p.interface.dark_theme, "craft.artcraft");
+    assert_eq!(p.interface.light_theme, "craft.pro");
     for (theme, mode, dark, light) in
-        [("pro", AppearanceMode::Dark, DarkTheme::Pro, LightTheme::ProLight), ("classic", AppearanceMode::Light, DarkTheme::ProMedium, LightTheme::Classic)]
+        [("pro", AppearanceMode::Dark, "craft.pro", "craft.pro"), ("classic", AppearanceMode::Light, "craft.artcraft", "craft.classic")]
     {
         let mut s = Session::new();
         s.load_prefs_json(&json!({"interface": {"theme": theme}}).to_string()).unwrap();
@@ -116,14 +116,35 @@ fn appearance_defaults_and_legacy_theme_migrate() {
     }
 }
 
+/// The Serbian interface language was saved as `sr` before the catalogs moved to craft-i18n,
+/// where it is `sr-latn`: a saved `sr` (any case) loads as `sr-latn` and is saved as `sr-latn`.
+/// Other codes, and `auto`, load as saved.
+#[test]
+fn a_saved_serbian_language_migrates_to_sr_latn() {
+    for saved in ["sr", "SR"] {
+        let mut s = Session::new();
+        s.load_prefs_json(&json!({"interface": {"language": saved}}).to_string()).unwrap();
+        assert_eq!(s.prefs().interface.language, "sr-latn", "{saved}");
+        let resaved: Value = serde_json::from_str(&s.prefs_to_json()).unwrap();
+        assert_eq!(resaved["interface"]["language"], "sr-latn", "saved under the new code");
+    }
+    for kept in ["sr-latn", "bs", "auto", "en"] {
+        let mut s = Session::new();
+        s.load_prefs_json(&json!({"interface": {"language": kept}}).to_string()).unwrap();
+        assert_eq!(s.prefs().interface.language, kept);
+    }
+}
+
 #[test]
 fn legacy_theme_migration_preserves_saved_theme_slots() {
-    for (legacy, slot, saved) in [("proMedium", "darkTheme", "solarizedDark"), ("studioLight", "lightTheme", "adwaita")] {
+    for (legacy, slot, saved, id) in
+        [("proMedium", "darkTheme", "solarizedDark", "craft.solarized-dark"), ("studioLight", "lightTheme", "adwaita", "craft.adwaita")]
+    {
         let mut interface = json!({"theme": legacy});
         interface[slot] = json!(saved);
         let mut session = Session::new();
         session.load_prefs_json(&json!({"interface": interface}).to_string()).unwrap();
-        assert_eq!(session.prefs_value()["interface"][slot], saved, "explicit {slot} survives migration");
+        assert_eq!(session.prefs_value()["interface"][slot], id, "explicit {slot} survives migration");
     }
 }
 
@@ -133,22 +154,22 @@ fn appearance_choices_validate_and_legacy_theme_still_selects() {
     s.execute("prefs.set", json!({"values": {"interface.appearanceMode": "auto", "interface.darkTheme": "studio", "interface.lightTheme": "classic"}}))
         .unwrap();
     assert_eq!(s.prefs().interface.appearance_mode, AppearanceMode::Auto);
-    assert_eq!(s.prefs().interface.dark_theme, DarkTheme::Studio);
-    assert_eq!(s.prefs().interface.light_theme, LightTheme::Classic);
+    assert_eq!(s.prefs().interface.dark_theme, "craft.studio");
+    assert_eq!(s.prefs().interface.light_theme, "craft.classic");
     let mut restarted = Session::new();
     restarted.load_prefs_json(&s.prefs_to_json()).unwrap();
     assert_eq!(restarted.prefs().interface, s.prefs().interface);
-    assert!(s.execute("prefs.set", json!({"path": "interface.darkTheme", "value": "classic"})).is_err());
+    assert!(s.execute("prefs.set", json!({"path": "interface.darkTheme", "value": ""})).is_err());
     s.execute("prefs.set", json!({"path": "interface.theme", "value": "pro"})).unwrap();
     assert_eq!(s.prefs().interface.appearance_mode, AppearanceMode::Dark);
-    assert_eq!(s.prefs().interface.dark_theme, DarkTheme::Pro);
-    assert_eq!(s.prefs().interface.light_theme, LightTheme::Classic);
+    assert_eq!(s.prefs().interface.dark_theme, "craft.pro");
+    assert_eq!(s.prefs().interface.light_theme, "craft.classic");
     s.execute("prefs.set", json!({"path": "interface", "value": {"theme": "studioLight"}})).unwrap();
     assert_eq!(s.prefs().interface.appearance_mode, AppearanceMode::Light);
-    assert_eq!(s.prefs().interface.light_theme, LightTheme::StudioLight);
-    assert_eq!(s.prefs().interface.dark_theme, DarkTheme::Pro);
+    assert_eq!(s.prefs().interface.light_theme, "craft.studio");
+    assert_eq!(s.prefs().interface.dark_theme, "craft.pro");
     // #2661: the light Pro brightness levels are light themes.
-    for (theme, light) in [("proLightGray", LightTheme::ProLightGray), ("proLight", LightTheme::ProLight)] {
+    for (theme, light) in [("proLightGray", "craft.pro-light-gray"), ("proLight", "craft.pro")] {
         s.execute("prefs.set", json!({"path": "interface.theme", "value": theme})).unwrap();
         assert_eq!(s.prefs().interface.appearance_mode, AppearanceMode::Light);
         assert_eq!(s.prefs().interface.light_theme, light);
@@ -160,19 +181,69 @@ fn appearance_choices_validate_and_legacy_theme_still_selects() {
     }
 }
 
+/// Names PhotoCraft saved before theme ids, in any spelling `ui.set` took, read as ids: in the
+/// slots and the favorites. Old clients still read the single theme: the id the appearance mode
+/// shows.
+#[test]
+fn pre_id_theme_names_read_as_ids_where_they_were_saved() {
+    let mut s = Session::new();
+    let saved = json!({
+        "interface": {"appearanceMode": "dark", "darkTheme": "Pro (Medium Gray)", "lightTheme": "gnome", "favoriteThemes": ["breezeDark"]},
+    });
+    s.load_prefs_json(&saved.to_string()).unwrap();
+    let p = s.prefs();
+    assert_eq!((p.interface.dark_theme.as_str(), p.interface.light_theme.as_str()), ("craft.artcraft", "craft.adwaita"));
+    assert_eq!(p.interface.favorite_themes, ["craft.breeze"]);
+    assert_eq!(s.execute("prefs.get", json!({"path": "interface.theme"})).unwrap(), json!("craft.artcraft"));
+    s.execute("prefs.set", json!({"path": "interface.appearanceMode", "value": "light"})).unwrap();
+    assert_eq!(s.execute("prefs.get", json!({"path": "interface.theme"})).unwrap(), json!("craft.adwaita"));
+}
+
+/// The four Window › Workspace commands that moved to the workspace set keep a binding saved
+/// under their old ids; other `window.workspace.*` ids read as saved.
+#[test]
+fn old_workspace_command_ids_read_as_the_workspace_set_ids() {
+    let mut s = Session::new();
+    let saved = json!({
+        "shortcuts": {"window.workspace.lockWorkspace": "F9", "window.workspace.motion": "F12"},
+        "alternateShortcuts": {"window.workspace.resetWorkspace": ["F10"]},
+        "menus": {"colors": {"window.workspace.newWorkspace": "red"}, "hidden": ["window.workspace.deleteWorkspace", "window.workspace.motion"]}
+    });
+    s.load_prefs_json(&saved.to_string()).unwrap();
+    let p = s.prefs();
+    assert_eq!(p.shortcuts.get("workspace.lock").map(String::as_str), Some("F9"), "{:?}", p.shortcuts);
+    assert_eq!(p.shortcuts.get("window.workspace.motion").map(String::as_str), Some("F12"));
+    assert!(!p.shortcuts.contains_key("window.workspace.lockWorkspace"));
+    assert_eq!(p.alternate_shortcuts.get("workspace.reset"), Some(&vec!["F10".to_string()]), "{:?}", p.alternate_shortcuts);
+    assert_eq!(p.menus.colors.get("workspace.new").map(String::as_str), Some("red"), "{:?}", p.menus.colors);
+    assert_eq!(p.menus.hidden, ["workspace.delete", "window.workspace.motion"]);
+}
+
+#[test]
+fn writing_back_the_got_interface_keeps_a_slot_edit() {
+    for root in [false, true] {
+        let mut s = Session::new();
+        let mut interface = s.execute("prefs.get", json!({"path": "interface"})).unwrap();
+        interface["darkTheme"] = json!("craft.breeze");
+        let set = if root { json!({"path": "", "value": {"interface": interface}}) } else { json!({"path": "interface", "value": interface}) };
+        s.execute("prefs.set", set).unwrap();
+        assert_eq!(s.prefs().interface.dark_theme, "craft.breeze", "root object: {root}");
+    }
+}
+
 #[test]
 fn favorite_themes_persist_and_reject_invalid_lists() {
     let mut s = Session::new();
     assert!(s.prefs().interface.favorite_themes.is_empty());
     s.execute("prefs.set", json!({"path": "interface.favoriteThemes", "value": ["classic", "studio"]})).unwrap();
-    assert_eq!(s.prefs().interface.favorite_themes, vec![Theme::Classic, Theme::Studio]);
+    assert_eq!(s.prefs().interface.favorite_themes, vec!["craft.classic", "craft.studio"]);
     s.execute("prefs.set", json!({"path": "interface.theme", "value": "pro"})).unwrap();
     let mut restored = Session::new();
     restored.load_prefs_json(&s.prefs_to_json()).unwrap();
-    assert_eq!(restored.prefs().interface.favorite_themes, vec![Theme::Classic, Theme::Studio]);
-    for invalid in [json!("classic"), json!(["unknown"]), json!(["classic", "classic"]), json!([23])] {
+    assert_eq!(restored.prefs().interface.favorite_themes, vec!["craft.classic", "craft.studio"]);
+    for invalid in [json!("classic"), json!(["bad id"]), json!(["classic", "classic"]), json!([23])] {
         assert!(s.execute("prefs.set", json!({"path": "interface.favoriteThemes", "value": invalid})).is_err());
-        assert_eq!(s.prefs().interface.favorite_themes, vec![Theme::Classic, Theme::Studio]);
+        assert_eq!(s.prefs().interface.favorite_themes, vec!["craft.classic", "craft.studio"]);
     }
 }
 
@@ -236,7 +307,7 @@ fn reset_one_keyed_override() {
     }
     assert_eq!(s.execute("prefs.get", json!({"path": "shortcuts"})).unwrap(), json!({"edit.redo": "Ctrl+Alt+Y"}));
     assert_eq!(s.execute("prefs.get", json!({"path": "menus.colors"})).unwrap(), json!({"edit.fill": "red"}));
-    assert_eq!(s.execute("prefs.get", json!({"path": "interface.theme"})).unwrap(), json!("studioLight"));
+    assert_eq!(s.execute("prefs.get", json!({"path": "interface.lightTheme"})).unwrap(), json!("craft.studio"));
     assert_eq!(s.prefs().shortcut("edit.undo", undo), undo);
 }
 
@@ -451,11 +522,24 @@ fn menus_and_toolbar_customisation_persist() {
     assert_eq!(back.toolbar.hidden, vec!["Sponge".to_string()]);
 }
 
-/// #5096: Edit › Menus can't hide the way back into itself, Preferences, Save or Exit.
+/// A file with the old flat `toolbar.order` loads cleanly with the default layout and keeps its
+/// hidden tools.
+#[test]
+fn an_old_toolbar_order_key_loads_with_the_default_layout() {
+    let mut old = Session::new();
+    let invalid = old.load_prefs_json(&json!({"toolbar": {"hidden": ["Sponge"], "order": ["Move", "Brush"]}}).to_string()).unwrap();
+    assert!(invalid.is_empty(), "{invalid:?}");
+    assert_eq!(old.prefs().toolbar.toolbar, None);
+    assert_eq!(old.prefs().toolbar.hidden, ["Sponge"]);
+    assert!(old.prefs().get("toolbar.order").is_none());
+}
+
+/// #5096, measured in #14335: Edit › Menus can't hide the way back into itself or File's Close,
+/// Save, Save As, Save a Copy, Clear Recent File List and Exit.
 #[test]
 fn menus_refuse_to_hide_essential_items() {
     let mut s = session();
-    for id in ["edit.menus", "edit.keyboardShortcuts", "edit.preferences.general", "file.save", "file.saveAs", "file.exit"] {
+    for id in ["edit.menus", "file.close", "file.save", "file.saveAs", "file.saveACopy", "file.clearRecent", "file.exit"] {
         assert!(s.execute("edit.menus", json!({"hide": ["edit.fade", id]})).is_err(), "{id}");
         assert!(s.prefs().menus.hidden.is_empty(), "{id}: a refused call changes nothing");
     }
@@ -510,6 +594,20 @@ fn svg_group_rasterization_threshold_is_bounded_by_document_depth() {
     assert_eq!(s.prefs().file_handling.rasterize_svg_groups_deeper_than, 0, "zero disables the preference threshold");
     assert!(s.execute("prefs.set", json!({"path": pref, "value": photocraft_doc::MAX_GROUP_DEPTH + 1})).is_err());
     assert_eq!(s.prefs().file_handling.rasterize_svg_groups_deeper_than, 0, "out-of-range preferences leave the valid value unchanged");
+}
+
+#[test]
+fn tablet_input_pref_defaults_to_windows_ink() {
+    let mut s = session();
+    assert_eq!(s.prefs().tools.tablet_input, TabletInput::WindowsInk);
+    assert_eq!(s.execute("prefs.get", json!({"path": "tools.tabletInput"})).unwrap(), json!("windowsInk"));
+    assert_eq!(choices("tools.tabletInput"), Some(TabletInput::NAMES));
+    s.execute("prefs.set", json!({"path": "tools.tabletInput", "value": "winTab"})).unwrap();
+    assert_eq!(s.prefs().tools.tablet_input, TabletInput::WinTab);
+    for bad in [json!("ink"), json!(1), json!(true), json!(null)] {
+        assert!(s.execute("prefs.set", json!({"path": "tools.tabletInput", "value": bad})).is_err());
+    }
+    assert_eq!(s.prefs().tools.tablet_input, TabletInput::WinTab, "rejected values change nothing");
 }
 
 #[test]
@@ -1026,6 +1124,25 @@ fn a_wrongly_typed_value_resets_only_that_field() {
 }
 
 #[test]
+fn the_removed_enable_animations_preference_still_loads_and_is_unknown() {
+    // #9479: Interface › Enable animations is gone (Photoshop has no such setting). Files saved
+    // with it still load whole, without a reported bad value, and the key isn't written back.
+    let mut s = Session::new();
+    let invalid =
+        s.load_prefs_json(r#"{"version": 2, "interface": {"enableAnimations": false, "showTooltips": false}, "performance": {"historyStates": 20}}"#).unwrap();
+    assert!(invalid.is_empty(), "{invalid:?}");
+    assert!(!s.prefs().interface.show_tooltips, "its neighbours load");
+    assert_eq!(s.prefs().performance.history_states, 20);
+    assert!(!s.prefs_to_json().contains("enableAnimations"));
+    for value in [json!(true), json!(false), json!("nope")] {
+        let e = s.execute("prefs.set", json!({"values": {"interface.enableAnimations": value}})).unwrap_err();
+        assert!(e.to_string().contains("unknown preference"), "{e}");
+        assert!(s.execute("prefs.set", json!({"path": "interface.enableAnimations", "value": value})).is_err());
+    }
+    assert!(s.execute("prefs.get", json!({"path": "interface.enableAnimations"})).is_err());
+}
+
+#[test]
 fn a_wrongly_typed_section_or_colour_setting_resets_only_that_part() {
     let mut s = Session::new();
     let invalid = s
@@ -1080,6 +1197,19 @@ fn the_web_build_caps_memory_usage() {
         assert_eq!(honoured_memory_usage_mb(stored, true), honoured, "web, {stored} MB");
         assert_eq!(honoured_memory_usage_mb(stored, false), stored, "desktop, {stored} MB");
     }
+}
+
+#[test]
+fn paths_with_empty_segments_cannot_skip_the_alternate_shortcut_limit() {
+    let mut prefs = Preferences::default();
+    let many: Vec<String> = (1..=100).map(|n| format!("F{n}")).collect();
+    for path in [".alternateShortcuts", "alternateShortcuts..", ".alternateShortcuts.file.save", "interface..systemTitleBar"] {
+        assert!(prefs.set(path, json!({"file.save": many})).is_err(), "{path}");
+    }
+    assert!(prefs.set("alternateShortcuts.file.save", json!(many)).is_err());
+    assert!(prefs.alternate_shortcuts.is_empty());
+    prefs.alternate_shortcuts.insert("file.save".into(), (1..=100).map(|n| format!("F{n}")).collect());
+    assert!(prefs.alternates("file.save", None).len() <= MAX_ALTERNATES);
 }
 
 /// The effect cache budget is the stored MB in bytes, at least 16 MB (a hand-edited 0 included),
@@ -1151,4 +1281,22 @@ fn an_effect_cache_above_the_cap_loads_clamped_and_does_not_block_apply() {
         s.execute("prefs.set", json!({"path": "", "value": values})).unwrap();
         assert_eq!(s.execute("prefs.get", json!({"path": "fileHandling.recentFileCount"})).unwrap(), json!(7), "{saved} MB");
     }
+}
+
+/// A file from before the agents switch whose Control Port started the control server keeps
+/// it on; one without a port, or that already says, is left as it is.
+#[test]
+fn a_saved_control_port_turns_the_agent_connection_on() {
+    let load = |text: &str| {
+        let mut session = Session::new();
+        session.load_prefs_json(text).unwrap();
+        session.prefs().integrations.clone()
+    };
+    let legacy = load(r#"{"integrations":{"allowAgentControl":true,"controlPort":7878}}"#);
+    assert!(legacy.connect_agents);
+    assert_eq!(legacy.agents.control_port, 7878);
+    assert!(!load(r#"{"integrations":{"controlPort":0}}"#).connect_agents);
+    assert!(!load(r#"{"integrations":{"controlPort":70000}}"#).connect_agents, "not a usable port");
+    assert!(!load(r#"{"integrations":{"controlPort":7878,"connectAgents":false}}"#).connect_agents, "an explicit choice wins");
+    assert!(!load("{}").connect_agents, "off by default");
 }
