@@ -2,10 +2,14 @@ name: CI
 
 # Quality gates for every push to main and every pull request. The Linux and Windows tests run
 # through the suite's shared gate workflow in craft-common-actions (`cargo xtask ci`, split over the
-# gate's jobs); the test variant and the corpus, web and fuzz jobs are PhotoCraft's own.
+# gate's jobs); the test variant and the corpus, web and fuzz jobs are PhotoCraft's own. Every night
+# the Linux gate alone runs a cold build: the safety net for the workspace crates it keeps between
+# runs (`cache-workspace-crates`), and a fresh start for that cache entry.
 on:
   push:
     branches: [main]
+  schedule:
+    - cron: "11 3 * * *"
   pull_request:
     # `labeled` so that adding `full-ci` to an open PR starts a run with Windows in it.
     types: [opened, synchronize, reopened, labeled]
@@ -70,7 +74,7 @@ concurrency:
 jobs:
   # Git dependencies come from github.com/storytold, and Cargo.lock is complete and up to date.
   git-sources:
-    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
+    if: github.event_name != 'schedule' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci')
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
     uses: storytold/craft-common-actions/.github/workflows/git-sources.yml@main
 
@@ -86,7 +90,7 @@ jobs:
   # `windows_skip`: the platform-neutral packages whose Windows tests a pull request skips because nothing it
   # changes reaches them (same script); empty on main and `full-ci`.
   platforms:
-    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
+    if: github.event_name != 'schedule' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci')
     timeout-minutes: 10
     name: select platforms
     runs-on: ubuntu-latest
@@ -145,13 +149,17 @@ jobs:
           fi
 
   # The Linux gate (craft-common-actions gate.yml). Its `lint` leg runs the checks that need no test
-  # build; four test shards each build the tests from the restored cache and run their share
-  # (scripts/ci-test-shard.sh). Shard 1 runs nextest's `gpu` group alone, on lavapipe, and fails on
-  # a skipped GPU comparison (scripts/ci-gpu-lavapipe.py); shards 2-4 split the other tests, and
-  # shard 2 runs the doctests. The `gpu` group is ~2400 test-seconds on 4 slots (~12 min with its
-  # slowest test, ~8 once the five slow UI tests are fixed); the other ~5900 test-seconds over 3
-  # shards are ~8 min each, so a fifth shard would not shorten the gate. Its rust-cache entry is
-  # the one `test (without heif)` restores.
+  # build. The `build` job builds the tests once into a nextest archive (`cargo xtask ci archive`),
+  # uploads it and then runs the doctests; four test shards download the archive and run their
+  # share (scripts/ci-test-shard.sh). Shard 1 runs nextest's `gpu` group alone, on lavapipe, and
+  # fails on a skipped GPU comparison (scripts/ci-gpu-lavapipe.py); shards 2-4 split the other
+  # tests. The `gpu` group is ~840 test-seconds on 4 slots (~3.5 min); the other ~6900
+  # test-seconds over 3 shards are ~8.5-10.5 min each.
+  # The build keeps the compiled workspace crates between runs (`cache-workspace-crates`), so a
+  # pull request rebuilds only the crates its changes reach. Each main run's build job saves a
+  # rolling entry of its own, which `test (without heif)` restores too; `gate-cache-prune` keeps
+  # the newest one. The lint legs keep no cache (`lint-cache: false`): a cold lint leg costs
+  # minutes, and their entries (~1 GB per OS) would not fit the 10 GB cache budget.
   gate:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
@@ -164,36 +172,39 @@ jobs:
       # The tests build with the optional craft-fonts input (crates/text/build.rs), so the
       # Japanese font tests that skip without it run. Same commit as release.yml.
       craft-fonts-ref: cc9269cd8d8258785dac603fba3122e5d2556795
-      # Cargo.toml's dev profile already keeps line tables only.
-      dev-debug: ""
+      # CI test binaries carry no debuginfo and no symbols (CARGO_PROFILE_TEST_STRIP below): a
+      # test build drops from ~19 to ~6.5 GB. A panic still names its file and line; only
+      # backtrace frames lose names and lines. Local builds keep Cargo.toml's line tables.
+      dev-debug: "0"
       cache-version: v2
       env: |
         PHOTOCRAFT_FULL_SWEEP=${{ inputs.full_sweep && '1' || '0' }}
         PHOTOCRAFT_NO_PRINT=1
         LPDEST=photocraft-no-such-printer
+        CARGO_PROFILE_TEST_STRIP=symbols
       timeout-minutes: 100
-      # On main, a `cache warm` leg builds xtask and the tests, as each shard does, and saves the
-      # dependency cache as soon as the build succeeds; the shards then only restore, so a failing
-      # test cannot keep the entry from being saved (craft-common-actions#270). The lint leg keeps
-      # its own entry.
-      warm-command: cargo xtask ci build
+      cache-workspace-crates: true
+      lint-cache: false
+      cold-build: ${{ github.event_name == 'schedule' }}
       # fmt, egui-fork, clippy, layers, panel-commands, scorecard, the wasm32 check and the
       # missing-translations report (`cargo xtask ci lint`, xtask/src/main.rs), and the CI scripts'
       # own tests.
       lint-command: python3 scripts/test-ci-gpu-lavapipe.py && python3 scripts/test-ci-windows-gpu-tests.py && cargo xtask ci lint
+      archive-command: cargo xtask ci archive
+      after-archive-command: cargo xtask ci doctest
       test-shards: 4
       # The tests and panic_hunt with `--locked --features heif` (TEST_TARGETS in xtask/src/main.rs).
       shard-command: bash scripts/ci-test-shard.sh --gpu-shard
 
   # The Windows tests and Clippy on the same gate, when `platforms` says the run needs them: a
-  # `lint` leg runs Clippy, and six shards each build the tests and run their hash partition;
-  # shard 1 also runs the doctests. Windows runs the tests ~1.75x slower than Linux: ~55 min on
-  # one runner, ~9 min per shard. A seventh shard would not shorten the slowest one while its
-  # slowest test alone takes ~9.6 min (the shortcut-dispatch UI test). The browser apps are wasm
-  # targets, so their native tests are left out;
-  # pull requests also leave out photocraft-gpu and the platform-neutral packages nothing they change
-  # reaches (`windows_gpu`, `windows_skip`). The `cache warm` leg (main only) builds what main's
-  # build job builds.
+  # `lint` leg runs Clippy, the `build` job builds the tests once into a nextest archive and then
+  # runs the doctests, and six shards run their slice of the tests from the archive. Windows runs
+  # the tests ~1.75x slower than Linux: ~55 min on one runner, ~9 min per shard. A seventh shard
+  # would not shorten the slowest one while its slowest test alone takes ~9.6 min (the
+  # shortcut-dispatch UI test). The browser apps are wasm targets, so their native tests are left
+  # out; pull requests also leave out photocraft-gpu and the platform-neutral packages nothing they
+  # change reaches (`windows_gpu`, `windows_skip`). Windows keeps a dependency-only cache entry:
+  # its workspace crates would not fit the repository's cache budget beside Linux's.
   windows:
     needs: platforms
     if: needs.platforms.outputs.windows == 'true'
@@ -201,6 +212,7 @@ jobs:
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
       os: '["windows-latest"]'
+      lint-cache: false
       # The all-language UI tests shape real Japanese, Chinese, Korean and Devanagari labels with
       # kittest's strict `MissingGlyphPolicy::Panic`, and a hosted Windows image has no guaranteed
       # Japanese or Simplified Chinese system font. Same pinned central fonts as Linux and release.
@@ -226,17 +238,57 @@ jobs:
         CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS=-Clink-arg=/OPT:NOICF -Clink-arg=/DEBUG:NONE
         PHOTOCRAFT_CI_EXCLUDE=photocraft-web photocraft-web-boot ${{ needs.platforms.outputs.windows_gpu == 'false' && 'photocraft-gpu' || '' }} ${{ needs.platforms.outputs.windows_skip }}
       timeout-minutes: 100
-      warm-command: cargo xtask ci build
       lint-command: cargo xtask ci clippy
+      archive-command: cargo xtask ci archive
+      after-archive-command: cargo xtask ci doctest
       test-shards: 6
       shard-command: bash scripts/ci-test-shard.sh
 
+  # The Linux gate's build job saves a rolling cache entry of its own on every main and nightly run
+  # (`cache-workspace-crates`), about 3.8 GB, and every run restores only the newest. This deletes
+  # the older ones at once instead of leaving them to the 10 GB budget's eviction, which would
+  # evict other entries too.
+  gate-cache-prune:
+    needs: gate
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - name: Delete all but the newest rolling entry of each job and runner
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # `<version>-rust-<profile>-<job>-crates-<os>-<arch>-<run>-<attempt>-...`, newest first.
+          gh cache list --repo "$REPO" --ref refs/heads/main --limit 100 --sort created_at --order desc --json id,key \
+            --jq '.[] | "\(.id) \(.key)"' > "$RUNNER_TEMP/caches"
+          declare -A kept
+          while read -r id key; do
+            [[ "$key" =~ ^.+-rust-[0-9a-f]{64}-(.+-crates-[A-Za-z_]+-[a-z0-9]+)-[0-9]+-[0-9]+- ]] || continue
+            entry=${BASH_REMATCH[1]}
+            if [ -n "${kept[$entry]:-}" ]; then
+              echo "delete $key"
+              gh cache delete "$id" --repo "$REPO"
+            else
+              kept[$entry]=1
+              echo "keep $key"
+            fi
+          done < "$RUNNER_TEMP/caches"
+
   # The same codecs without the optional decoder: HEIC must stay a clear "not in this build" error
-  # for distributors who leave it out. Runs beside the gate and restores the gate's dependency
-  # cache without saving one: the dependencies are the same, and the 10 GB cache budget is tight
-  # (#2688).
+  # for distributors who leave it out. Runs beside the gate and restores the gate's newest rolling
+  # cache entry without saving one: the dependencies are the same, and the 10 GB cache budget is
+  # tight (#2688). Its sources keep their checkout mtimes, so the workspace crates it builds are
+  # rebuilt.
   test-without-heif:
-    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
+    if: github.event_name != 'schedule' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci')
     timeout-minutes: 60
     name: test (without heif)
     # The gate's runner: its cache entry is keyed on the OS.
@@ -245,6 +297,8 @@ jobs:
       # The gate sets these; rust-cache hashes CARGO_* and RUST* variables into its key.
       CARGO_INCREMENTAL: 0
       CARGO_NET_RETRY: 10
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_STRIP: symbols
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
@@ -272,11 +326,12 @@ jobs:
 
       # The gate's own key (the shared action computes it), restore only. The toolchain action
       # exports CARGO_HOME, which the gate's legs do not have; align-environment leaves it out of
-      # the key.
+      # the cache paths.
       - uses: storytold/craft-common-actions/actions/rust-cache@main
         with:
           cache-version: v2
           job: gate
+          cache-workspace-crates: "true"
           align-environment: "true"
 
       - uses: step-security/taiki-e-install-action@76747d22a7567cc4438546a84f11bdf18e670ab8 # v2.87.32
@@ -287,7 +342,7 @@ jobs:
         run: cargo nextest run -p photocraft-io --locked --profile ci
 
   corpus:
-    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
+    if: github.event_name != 'schedule' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci')
     timeout-minutes: 30
     # Real-file corpus tests (cargo feature `corpus`), on every PR and on main. The corpora are
     # pinned in xtask/src/corpus_pins.rs and sha256-verified (xtask/*.sha256) after both a cache
