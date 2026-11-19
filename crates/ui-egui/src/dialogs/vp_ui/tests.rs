@@ -289,7 +289,7 @@ fn tick_until(h: &mut Harness<'static, Box<PhotocraftApp>>, done: impl Fn(&Photo
     let ctx = h.ctx.clone();
     for _ in 0..400 {
         crate::jobs_ui::tick(h.state_mut(), &ctx);
-        if done(&**h.state()) {
+        if done(h.state()) {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
