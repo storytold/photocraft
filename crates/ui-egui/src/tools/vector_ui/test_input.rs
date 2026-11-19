@@ -11,7 +11,7 @@ use crate::state::Tool;
 const WIDTH: f32 = 1280.0;
 
 /// A harness on a 200 × 100 document with `tool` selected.
-pub(super) fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
+pub(super) fn harness(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
     let mut h = Harness::builder().with_size(vec2(WIDTH, 800.0)).build_eframe(move |cc| {
