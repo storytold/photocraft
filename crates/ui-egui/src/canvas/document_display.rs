@@ -443,13 +443,17 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
     // Preferences › General › Zoom with Ctrl + Scroll Wheel. Off, the canvas keeps Photoshop's
     // sideways pan. On, a whole Windows/Linux Ctrl notch zooms about the pointer and Shift+Ctrl
     // takes one zoom-ladder step. A fractional Ctrl wheel stays the canvas's pinch or pan.
+    // The notch is recorded only when this canvas's settle moved the view sideways: that is the
+    // shared wheel service handing the wheel to this canvas (`take_wheel`). A modal, a popup, or a
+    // focused control that kept the wheel leaves the view where it was, so the document does not zoom.
     // Navigator, Liquify and Camera Raw use their own canvases, so they keep the sideways pan.
-    // A measuring pass can be the one that sees the wheel. Remember the notch and apply it on the
-    // pass that keeps the view, so the gesture is not dropped.
+    // A measuring pass can be the one that sees the wheel. The notch is remembered per canvas and
+    // applied on the pass that keeps the view.
     if app.session.prefs().general.ctrl_wheel_zooms
+        && canvas_output.view.as_ref().is_some_and(|after| canvas_took_the_ctrl_pan(&given, after))
         && let Some(notch) = ctrl_mouse_notch_this_pass(pass.ctx, rect)
     {
-        pass.ctx.data_mut(|data| data.insert_temp(ctrl_notch_id(), notch));
+        pass.ctx.data_mut(|data| data.insert_temp(ctrl_notch_id(id), notch));
     }
     // The scroll bars' and the compass's change: the bars drag the view, the compass turns it.
     if let Some(next) = turned.as_ref() {
@@ -461,7 +465,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
         view.set_from(next, ppp);
     }
     // After every other writer, so a scrollbar or tool copy of the pre-zoom view cannot put it back.
-    if !measuring && let Some(notch) = pass.ctx.data_mut(|data| data.remove_temp::<CtrlNotch>(ctrl_notch_id())) {
+    if !measuring && let Some(notch) = pass.ctx.data_mut(|data| data.remove_temp::<CtrlNotch>(ctrl_notch_id(id))) {
         view.zoom = saved_zoom;
         view.center = saved_center;
         apply_ctrl_notch(view, pass, notch);
@@ -509,8 +513,17 @@ struct CtrlNotch {
     at: Pos2,
 }
 
-fn ctrl_notch_id() -> egui::Id {
-    egui::Id::unique("pc-ctrl-wheel-notch")
+fn ctrl_notch_id(canvas: egui::Id) -> egui::Id {
+    egui::Id::unique("pc-ctrl-wheel-notch").with(canvas)
+}
+
+/// The canvas settle moved `before` sideways and left the zoom alone: a Ctrl or Shift+Ctrl wheel
+/// the shared wheel service gave this canvas. Another view change (a fit, a vertical pan, a pinch)
+/// is not this gesture.
+fn canvas_took_the_ctrl_pan(before: &CanvasView, after: &CanvasView) -> bool {
+    let zoom_held = (after.zoom - before.zoom).abs() <= 1e-9 * after.zoom.max(1.0);
+    let sideways = (after.center.x - before.center.x).abs() > 1e-3;
+    zoom_held && sideways
 }
 
 /// Zooms `view` by `notch`, about the pointer, undoing the canvas's own Ctrl pan or pinch for this pass.
