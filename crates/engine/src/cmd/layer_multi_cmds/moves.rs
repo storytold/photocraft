@@ -163,7 +163,7 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     let tile = wrap.then(|| before.bounds());
     // A whole number of canvases changes nothing only when every target is raster samples.
     // Text, shapes and the rest keep the raw delta, so they still move.
-    if tile.is_some_and(|tile| wrapped_delta(dx, dy, tile) == (0, 0) && targets_only_wrap(&before, &roots, mask_target)) {
+    if tile.is_some_and(|tile| wrapped_delta(dx, dy, tile) == (0, 0) && targets_only_wrap(&before, &roots, mask_target, dx, dy)) {
         return Ok(Value::Null);
     }
     let mut shift = (0, 0);
@@ -434,14 +434,55 @@ fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32, wrap: Option<pho
 /// True when a whole-canvas `dx`/`dy` would leave every targeted layer unchanged: each move is
 /// raster samples (or a mask moved alone) folding back onto themselves. A group counts only when
 /// every descendant does. Text, shapes, smart objects, artboards and effect reference points do
-/// not. A linked vector mask on a wrapping layer folds with it.
-fn targets_only_wrap(doc: &Document, roots: &[LayerId], mask_target: bool) -> bool {
+/// not. A linked vector mask on a wrapping layer folds with it. A linked Pattern Overlay on the
+/// content kinds #14960 measured is the exception: the drag preview tiles its grid by the raw
+/// delta, so [`overlay_grid_moves`] keeps a move that would shift that grid (review,
+/// moves.rs:458).
+fn targets_only_wrap(doc: &Document, roots: &[LayerId], mask_target: bool, dx: i32, dy: i32) -> bool {
     let (alone, rest): (Vec<LayerId>, Vec<LayerId>) = roots.iter().copied().partition(|id| mask_target && doc.layer(*id).is_some_and(moves_mask_alone));
     let ids = move_targets(doc, &rest);
     if ids.is_empty() && alone.is_empty() {
         return false;
     }
-    ids.iter().all(|id| doc.layer(*id).is_some_and(|l| subtree_wraps(l, 0, true)))
+    ids.iter().all(|id| doc.layer(*id).is_some_and(|l| subtree_wraps(l, 0, true) && !overlay_grid_moves(doc, l, 0, dx, dy)))
+}
+
+/// Whether the raw `dx`/`dy` shifts the grid of a linked Pattern Overlay on `l` or on a layer
+/// inside it. The drag preview records that delta as the move phase of every raster and group
+/// layer ([`note_move_phase`]) and the overlay tiles from it (#14960); when [`targets_only_wrap`]
+/// folds a whole-canvas move away the commit keeps no phase, and the pattern snaps back from what
+/// the preview showed. The grid only stays where it was when the painted pattern has no scale and
+/// no rotation and its period divides the delta; a scaled or rotated pattern is treated as moved
+/// (the fold would need the rotated lattice, and the preview shows the phase either way). An
+/// overlay that paints nothing, with the pattern missing from the document, cannot diverge.
+fn overlay_grid_moves(doc: &Document, l: &Layer, depth: usize, dx: i32, dy: i32) -> bool {
+    if depth > photocraft_doc::MAX_GROUP_DEPTH {
+        return false;
+    }
+    // Only the content kinds whose overlay grid reads the move phase can move (overlay_anchor),
+    // and only while the style is on; an unlinked overlay tiles from the canvas, not from this layer.
+    if l.effects.enabled
+        && matches!(l.content, LayerContent::Raster(_) | LayerContent::Group(_))
+        && l.effects.items.iter().any(|e| match e {
+            photocraft_doc::Effect::PatternOverlay { name, id, scale, angle, link, .. } => {
+                *link && (*scale != 1.0 || *angle != 0.0 || pattern_period_moves(doc, id, name, dx, dy))
+            }
+            _ => false,
+        })
+    {
+        return true;
+    }
+    if let LayerContent::Group(g) = &l.content {
+        return g.children.iter().any(|c| overlay_grid_moves(doc, c, depth + 1, dx, dy));
+    }
+    false
+}
+
+/// Whether the document pattern `id`/`name` tiles with a period that does not fold `dx`/`dy` away.
+fn pattern_period_moves(doc: &Document, id: &str, name: &str, dx: i32, dy: i32) -> bool {
+    photocraft_doc::pattern::find(&doc.patterns, id, name).is_some_and(|p| {
+        p.width > 0 && p.height > 0 && (i64::from(dx).rem_euclid(i64::from(p.width)) != 0 || i64::from(dy).rem_euclid(i64::from(p.height)) != 0)
+    })
 }
 
 /// Whether `l` and everything inside it wrap as raster samples. The geometry question, which
@@ -1157,6 +1198,44 @@ mod style_phase_tests {
         d
     }
 
+    /// A linked PatternOverlay naming `name`, looked up by name (empty id) like [`linked_overlay`].
+    fn linked_overlay_named(name: &str) -> Effect {
+        Effect::PatternOverlay {
+            common: FxCommon::new(BlendMode::Normal, 1.0),
+            name: name.into(),
+            id: String::new(),
+            scale: 1.0,
+            angle: 0.0,
+            link: true,
+            phase: (0.0, 0.0),
+        }
+    }
+
+    /// A pattern with a 15 px period in both axes: red in columns 0..7 of each tile, blue in
+    /// 8..15. 15 divides neither 40 nor 80, so a whole-canvas move shifts this grid (the review
+    /// input at moves.rs:458).
+    fn stripes15() -> photocraft_doc::Pattern {
+        let mut tile = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+        tile.fill_rect(Rect::new(0, 0, 7, 15), &[1.0, 0.0, 0.0, 1.0]);
+        tile.fill_rect(Rect::new(7, 0, 15, 15), &[0.0, 0.0, 1.0, 1.0]);
+        photocraft_doc::Pattern::new("stripes", tile, 15, 15)
+    }
+
+    /// A session on a 40 x 40 RGB8 document with `stripes15` registered and `layer` above the
+    /// Background, and that layer's id.
+    fn stripes_session(layer: Layer) -> (Session, LayerId) {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 40, "depth": 8, "mode": "rgb", "background": "transparent"})).expect("a document opens");
+        let id = layer.id;
+        s.edit("setup", |doc, _| {
+            doc.patterns.push(stripes15());
+            doc.layers.push(layer);
+            Ok(())
+        })
+        .expect("the layer is set up");
+        (s, id)
+    }
+
     /// The flattened `rect` as one letter per pixel, row-major (W white, R red, G green, B blue,
     /// K black, `?` for anything else), so a test can compare what the compositor painted.
     fn letters(doc: &Document, rect: Rect) -> Vec<char> {
@@ -1297,21 +1376,79 @@ mod style_phase_tests {
         let after = moved_wrapping(&d, &[group_id], 10, 0, false, Some(d.bounds())).expect("the wrapping preview");
         let m = after.layer(group_id).and_then(|g| g.mask.as_ref()).expect("the group mask");
         assert_eq!(m.surface.content_bounds(), Rect::new(80, 10, 85, 20), "the group mask keeps the raw delta, as before");
-        assert!(!targets_only_wrap(&d, &[group_id], false), "a whole-canvas move still changes the reference point");
+        assert!(!targets_only_wrap(&d, &[group_id], false, 80, 0), "a whole-canvas move still changes the reference point");
     }
 
     /// A whole-canvas Pattern Preview move of raster layers changes nothing and is skipped, as on
-    /// `upstream/main`, until a move records a phase: from then on it shifts the overlay grid by the
-    /// raw delta, as the drag preview shows, so it is not skipped. The wrap of a linked mask does not
-    /// depend on that phase.
+    /// `upstream/main`, until it moves something the drag preview shows: a recorded move phase, or
+    /// the grid of a linked Pattern Overlay whose period the raw delta does not fold back onto it.
+    /// The wrap of a linked mask does not depend on that phase.
     #[test]
     fn only_the_skip_check_reads_the_move_phase() {
-        let (before, id) = doc(shape(Rect::new(10, 10, 20, 20)), vec![linked_overlay()]);
-        assert!(targets_only_wrap(&before, &[id], false), "never moved: a whole-canvas move is a no-op");
+        let (before, id) = doc(shape(Rect::new(10, 10, 20, 20)), Vec::new());
+        assert!(targets_only_wrap(&before, &[id], false, 40, 0), "never moved, no overlay: a whole-canvas move is a no-op");
         let after = moved(&before, &[id], 1, 0).expect("the layer moves");
         let l = after.layer(id).expect("the layer");
-        assert!(!targets_only_wrap(&after, &[id], false), "with a move phase the whole-canvas move is not skipped");
+        assert!(!targets_only_wrap(&after, &[id], false, 40, 0), "with a move phase the whole-canvas move is not skipped");
         assert!(subtree_wraps_only(l, 0), "but the layer still wraps as raster samples");
+        // Review (CodeRabbit, moves.rs:458): the FIRST whole-canvas move of a linked overlay is
+        // not skipped either when it shifts the grid: a 15 px period on this 40 px canvas moves
+        // by 10 px. The end-to-end preview-vs-commit check is
+        // `the_first_whole_canvas_wrapping_move_keeps_the_overlay_grid_the_preview_showed`.
+        let (mut grid, gid) = doc(shape(Rect::new(10, 10, 20, 20)), vec![linked_overlay_named("stripes")]);
+        grid.patterns.push(stripes15());
+        assert!(!targets_only_wrap(&grid, &[gid], false, 40, 0), "a linked overlay whose grid shifts keeps the move");
+        let (mut exact, eid) = doc(shape(Rect::new(10, 10, 20, 20)), vec![linked_overlay()]);
+        exact.patterns.push(quad_pattern());
+        assert!(targets_only_wrap(&exact, &[eid], false, 40, 0), "a 20 px grid repeating exactly over the 40 px canvas keeps the skip");
+        let (missing, mid) = doc(shape(Rect::new(10, 10, 20, 20)), vec![linked_overlay_named("stripes")]);
+        assert!(targets_only_wrap(&missing, &[mid], false, 40, 0), "an overlay whose pattern is not in the document paints nothing: the skip stays");
+    }
+
+    /// Review (CodeRabbit, moves.rs:458): a 40 px canvas and a linked pattern with a 15 px
+    /// period. The drag preview of the FIRST whole-canvas move records the raw delta and tiles
+    /// the grid from (40, 0); the commit used to fold that move away and snap the pattern back
+    /// to (0, 0). For a pixel layer and for a group carrying the overlay.
+    #[test]
+    fn the_first_whole_canvas_wrapping_move_keeps_the_overlay_grid_the_preview_showed() {
+        let striped = |l: Layer| {
+            let mut l = l;
+            l.effects.items = vec![linked_overlay_named("stripes")];
+            l
+        };
+        let cases = [
+            ("a pixel layer", striped(Layer::new("Shape", shape(Rect::new(10, 10, 30, 30))))),
+            ("a group", striped(Layer::group("Group", vec![Layer::new("Shape", shape(Rect::new(10, 10, 30, 30)))]))),
+        ];
+        for (what, l) in cases {
+            let (mut s, id) = stripes_session(l);
+            let window = Rect::new(12, 12, 28, 13);
+            let before = open_doc(&s).clone();
+            let preview = moved_wrapping(&before, &[id], 40, 0, false, Some(before.bounds())).expect("the wrapping preview");
+            assert_ne!(letters(&preview, window), letters(&before, window), "{what}: the preview shifts the 15 px grid by the raw 40 px delta");
+            let steps = s.active().expect("a document").history.past_len();
+            s.execute("layer.translate", json!({"layer": id.0, "dx": 40, "dy": 0, "wrap": true})).expect("the wrapping move commits");
+            assert_eq!(phase(open_doc(&s), id), Some((40.0, 0.0)), "{what}: the commit records the phase the preview showed");
+            assert_eq!(s.active().expect("a document").history.past_len(), steps + 1, "{what}: the moved grid is one history step");
+            assert_eq!(letters(open_doc(&s), window), letters(&preview, window), "{what}: the committed pattern is what the preview showed");
+        }
+    }
+
+    /// The other side of the review point: a whole-canvas move of a grid that repeats EXACTLY
+    /// over the canvas (the 20 px #14960 pattern on the 80 px fixture) paints the same picture,
+    /// so it stays the no-op skip it was on `upstream/main` and records no phase. Guard test,
+    /// passes before and after the fix.
+    #[test]
+    fn a_whole_canvas_wrapping_move_of_a_grid_that_repeats_exactly_stays_skipped() {
+        let mut l = Layer::new("Shape", shape(Rect::new(20, 20, 40, 40)));
+        l.effects.items = vec![linked_overlay()];
+        let (mut s, id) = pattern_session(l);
+        let before = open_doc(&s).clone();
+        let steps = s.active().expect("a document").history.past_len();
+        s.execute("layer.translate", json!({"layer": id.0, "dx": 80, "dy": 0, "wrap": true})).expect("the wrapping move");
+        assert_eq!(s.active().expect("a document").history.past_len(), steps, "the grid did not change, so the move stays skipped");
+        assert_eq!(phase(open_doc(&s), id), None, "and it records no phase");
+        assert_eq!(letters(open_doc(&s), Rect::new(22, 22, 38, 23)), letters(&before, Rect::new(22, 22, 38, 23)), "the picture is unchanged");
     }
 
     /// A session on an 80 x 80 RGB8 document with the #14960 pattern registered and `layer` above
