@@ -404,6 +404,11 @@ pub fn build_palette(px: &[[f32; 4]], kind: PaletteKind, colors: usize, forced: 
             if hist.len() > 256 {
                 return Err(format!("the image has {} colours; Exact needs 256 or fewer", hist.len()));
             }
+            // Forced entries absent from the image still consume palette slots.
+            let required = hist.len() + pal.iter().filter(|color| !hist.iter().any(|(existing, _)| existing == *color)).count();
+            if required > 256 {
+                return Err(format!("the image and forced colours need {required} entries; Exact needs 256 or fewer"));
+            }
             hist.iter().map(|h| h.0).collect()
         }
         PaletteKind::SystemMac => mac_palette(),
