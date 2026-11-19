@@ -204,20 +204,20 @@ fn enhance_edge_gives_the_same_rim_in_a_16_bit_document() {
 
 // --- neighbours that must not move --------------------------------------------------------------
 /// Done when, item 2: Enhance Edge off is unchanged, pinned exactly as main measures it: bounds
-/// 99,99,301,251 with 29304 fully selected and 1400 partly (a 191 rim, 64 outside it, 143 corners).
+/// 100,100,300,250 with 29304 fully selected and 696 partly (a 191 rim and the four corners at 143).
+/// The issue wrote 99,99,301,251 with 1400 partly selected; #12922 landed on main while this was in
+/// progress and moved the raw footprint, so the pin holds main's current output, not that older one.
 #[test]
 fn enhance_edge_off_is_unchanged() {
     let mut s = shapes_document(W, H);
     quick_click(&mut s, false);
-    assert_eq!(bounds(&s), [99, 99, 301, 251]);
+    assert_eq!(bounds(&s), [100, 100, 300, 250]);
     let (full, partial, hist) = tally(&s);
     assert_eq!(full, 29304);
-    assert_eq!(partial, 1400);
+    assert_eq!(partial, 696);
     assert_eq!(hist.get(&191), Some(&692), "the inner rim keeps its value 191");
     assert_eq!(hist.get(&143), Some(&4), "the four corners keep their value 143");
-    assert_eq!(hist.get(&64), Some(&692), "the outer rim keeps its value 64");
-    assert_eq!(hist.get(&48), Some(&8));
-    assert_eq!(hist.get(&16), Some(&4));
+    assert_eq!(hist.len(), 2, "nothing else is partly selected: {hist:?}");
 }
 
 /// `refine_surface` also serves Select and Mask, so the refinement itself must keep its results.
