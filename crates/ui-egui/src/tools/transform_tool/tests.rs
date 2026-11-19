@@ -13,10 +13,10 @@ use crate::state::{FreeTransform, SessionWarp};
 
 // ---- Helpers ----
 
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
+type Harness = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 /// An app inside a window, run frame by frame as the desktop app is.
-fn harness(app: PhotocraftApp, size: egui::Vec2) -> Harness {
+fn harness(app: Box<PhotocraftApp>, size: egui::Vec2) -> Harness {
     // The harness runs on the app's own context, so what the app set up on it (the runtime, the command catalog) is there.
     egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(size).with_max_steps(64).with_step_dt(1.0 / 60.0).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
@@ -191,7 +191,7 @@ fn land_jobs(app: &mut PhotocraftApp) {
 /// A smart object placed the way a dropped file is (the last step made it), in Free Transform
 /// and moved 8 px right, with commits running in the background as in the desktop app:
 /// (app, the placed layer, its frame before the move, history steps before the place).
-fn moved_place() -> (PhotocraftApp, LayerId, photocraft_geom::Rect, usize) {
+fn moved_place() -> (Box<PhotocraftApp>, LayerId, photocraft_geom::Rect, usize) {
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
     app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     let steps = app.session.active().unwrap().history.past_len();
@@ -912,7 +912,7 @@ fn right_click_menu_offers_warp_for_a_path() {
 
 // ---- Linked layers ----
 
-fn app_with_square(size: u32, fill: photocraft_geom::Rect) -> PhotocraftApp {
+fn app_with_square(size: u32, fill: photocraft_geom::Rect) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": size, "height": size})).unwrap();
     app.sync_views();
@@ -928,7 +928,7 @@ fn app_with_square(size: u32, fill: photocraft_geom::Rect) -> PhotocraftApp {
 
 /// `app_with_square` (A, red over 8..24) plus B (x 40..56, y 8..24) and C (x 8..24, y 40..56)
 /// over it. A and B are linked; C isn't. Only A is selected, and active: (app, A, B, C).
-fn linked_layers_app() -> (PhotocraftApp, LayerId, LayerId, LayerId) {
+fn linked_layers_app() -> (Box<PhotocraftApp>, LayerId, LayerId, LayerId) {
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
     let a = app.session.active().unwrap().active_layer.unwrap();
     let add = |app: &mut PhotocraftApp, fill: photocraft_geom::Rect| {
@@ -1235,7 +1235,7 @@ fn nested_group_preview_excludes_its_siblings() {
     assert_eq!(image.pixels[8 * image.size[0] + 8], Color32::from_rgb(255, 0, 0), "a sibling in the parent group must not be baked into the moving texture");
 }
 
-fn artboard_preview_app(background: photocraft_doc::ArtboardBackground) -> (PhotocraftApp, LayerId, LayerId) {
+fn artboard_preview_app(background: photocraft_doc::ArtboardBackground) -> (Box<PhotocraftApp>, LayerId, LayerId) {
     use photocraft_doc::{Artboard, Layer};
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
     let st = app.session.active_mut().unwrap();
@@ -1420,7 +1420,7 @@ fn transform_selection_moves_only_the_outline() {
 // ---- Warp ----
 
 /// A 64 px document with a red square over 8..32, in Warp mode on its default grid.
-fn warping_square() -> PhotocraftApp {
+fn warping_square() -> Box<PhotocraftApp> {
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 32, 32));
     let app_ctx = app.ctx().clone();
     begin_warp(&mut app, &app_ctx).unwrap();
@@ -1593,7 +1593,7 @@ fn a_press_on_a_preset_warp_converts_it_only_when_it_grabs_the_grid() {
 // ---- Layer masks (#205) ----
 
 /// `app_with_square` (red over 8..24) plus a reveal-all mask hiding x < 16.
-fn masked_app(linked: bool) -> PhotocraftApp {
+fn masked_app(linked: bool) -> Box<PhotocraftApp> {
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
     app.session.execute("layer.layerMask.revealAll", json!({})).unwrap();
     app.session
@@ -2180,4 +2180,25 @@ fn a_waiting_new_layer_click_keeps_the_layer_it_was_made_on() {
     let at = |id| order.iter().position(|l| *l == id).unwrap();
     assert_eq!(at(new), at(placed) + 1, "the new layer sits right above the layer selected at the click: {order:?}");
     assert_eq!(st.active_layer, Some(new));
+}
+
+/// #15547: once Escape or Enter ends Free Transform, the options bar shows the active tool's members again in the
+/// next frame, not the transform fields.
+#[test]
+fn ending_the_transform_brings_back_the_tools_options_bar() {
+    use egui_kittest::kittest::Queryable as _;
+    for key in [egui::Key::Escape, egui::Key::Enter] {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        app.ui.tool = Tool::Gradient;
+        let mut h = harness(app, egui::vec2(1400.0, 900.0));
+        h.run_steps(4);
+        let ctx = h.ctx.clone();
+        crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
+        h.run_steps(2);
+        assert!(h.query_by_label("Reverse").is_none(), "the transform fields replace the Gradient members");
+        h.key_press(key);
+        h.run_steps(2);
+        assert!(h.state().ui.transform.is_none(), "{key:?} ended the transform");
+        assert!(h.query_by_label("Reverse").is_some(), "after {key:?} the Gradient members are back");
+    }
 }

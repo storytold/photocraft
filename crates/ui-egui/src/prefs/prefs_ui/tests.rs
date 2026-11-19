@@ -39,22 +39,22 @@ fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
 }
 
 /// An app whose preferences live in `files`.
-fn app_on(files: &Arc<MemoryFiles>) -> PhotocraftApp {
+fn app_on(files: &Arc<MemoryFiles>) -> Box<PhotocraftApp> {
     PhotocraftApp::new(photocraft_engine::Session::new(), services_on(files))
 }
 
-pub(super) fn app_with_store() -> (PhotocraftApp, Arc<MemoryFiles>) {
+pub(super) fn app_with_store() -> (Box<PhotocraftApp>, Arc<MemoryFiles>) {
     let files = Arc::new(MemoryFiles::new());
     (app_on(&files), files)
 }
 
 /// An app that starts on a file holding `saved` (the JSON form of the preferences), at the current schema version.
-fn app_with_json(saved: &Value) -> (PhotocraftApp, Arc<MemoryFiles>) {
+fn app_with_json(saved: &Value) -> (Box<PhotocraftApp>, Arc<MemoryFiles>) {
     app_with_json_at(saved, Some(<prefs::SavedPrefs as Settings>::SCHEMA_VERSION))
 }
 
 /// An app that starts on a file holding `saved` with the given `schema_version` (`None`: no version key).
-fn app_with_json_at(saved: &Value, version: Option<u32>) -> (PhotocraftApp, Arc<MemoryFiles>) {
+fn app_with_json_at(saved: &Value, version: Option<u32>) -> (Box<PhotocraftApp>, Arc<MemoryFiles>) {
     let files = Arc::new(MemoryFiles::new());
     seed(&files, saved, version);
     (app_on(&files), files)
@@ -63,7 +63,7 @@ fn app_with_json_at(saved: &Value, version: Option<u32>) -> (PhotocraftApp, Arc<
 /// An app that starts on a legacy `preferences.json` holding `saved` with the given `version` key (`None`: none), the
 /// file the settings store imports on its first run, before it has a `config.toml`. Only the import reads values one by
 /// one and migrates a file by its version; a `config.toml` section that does not fit resets as a whole.
-fn app_with_legacy_json(saved: &Value, version: Option<u32>) -> (PhotocraftApp, Arc<MemoryFiles>) {
+fn app_with_legacy_json(saved: &Value, version: Option<u32>) -> (Box<PhotocraftApp>, Arc<MemoryFiles>) {
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let mut saved = saved.clone();
     if let (Some(map), Some(version)) = (saved.as_object_mut(), version) {
@@ -131,7 +131,7 @@ fn prefs_harness(
     section: &'static str,
     size: egui::Vec2,
     setup: impl FnOnce(&mut PhotocraftApp) + 'static,
-) -> egui_kittest::Harness<'static, PhotocraftApp> {
+) -> egui_kittest::Harness<'static, Box<PhotocraftApp>> {
     let files = files.clone();
     let mut h = egui_kittest::Harness::builder().with_size(size).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
@@ -246,7 +246,7 @@ fn auto_uses_native_system_theme_when_egui_does_not_report_one() {
 }
 
 #[test]
-fn appearance_button_cycles_modes_without_losing_theme_choices() {
+fn next_appearance_mode_cycles_modes_without_losing_theme_choices() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let ctx = app.ctx().clone();
     app.run("prefs.set", json!({"values": {"interface.darkTheme": "studio", "interface.lightTheme": "classic"}})).unwrap();
