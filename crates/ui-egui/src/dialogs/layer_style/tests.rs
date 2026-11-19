@@ -128,7 +128,7 @@ fn row(setup: &[(&str, Value)]) -> (photocraft_engine::Session, LayerStyle) {
     (s, style)
 }
 
-fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
+pub(super) fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1500.0, 1000.0)).with_context(app.ctx().clone()).build_ui_state(
         |ui, app: &mut Box<PhotocraftApp>| {
             app.framework.dialogs.run(ui);
@@ -537,6 +537,63 @@ fn unedited_bevel_shading_keeps_imported_precision() {
             assert_eq!(f64::from(after.size), size, "the unrelated edit still applies");
         }
     }
+}
+
+/// Pattern 5 (#14940): a PSD carries Inner Shadow values outside the page's typed ranges -
+/// `parse_shadow` keeps Dstn, blur and lagl exactly as the file has them - and the hosted page's
+/// OK re-sends every field it models. An untouched OK must not rewrite what the file imported
+/// (Size 300 becoming 250 moves pixels); a field the user did edit still meets the page's clamps.
+#[test]
+fn unedited_inner_shadow_keeps_imported_out_of_range_values() {
+    for typed in [None, Some(40_001.0)] {
+        let mut s = session();
+        s.execute("layer.layerStyle.innerShadow", json!({})).unwrap();
+        s.edit("imported out-of-range values", |doc, active| {
+            let Effect::InnerShadow(sh) = &mut doc.layer_mut(active.unwrap()).unwrap().effects.items[0] else { panic!("inner shadow") };
+            sh.distance = 40_000.0;
+            sh.size = 300.0;
+            sh.angle = 200.0;
+            sh.use_global_light = false;
+            Ok(())
+        })
+        .unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        let mut d = LayerStyleDraft::new(drafted(&s));
+        let shadow = d.style.instances(EffectKind::InnerShadow).next().unwrap();
+        if let Some(distance) = typed {
+            d.set_param(shadow, "distance", StyleValue::Number(distance));
+        }
+        apply(&d.style, id, None, |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
+        let Effect::InnerShadow(after) = &layer_effects(&s)[0] else { panic!("inner shadow") };
+        // The typed distance is past the page's 30000, so an EDITED field is clamped; an untouched
+        // one keeps the imported value.
+        assert_eq!(f64::from(after.distance), typed.map_or(40_000.0, |d| d.min(30_000.0)), "distance {typed:?}");
+        assert_eq!(f64::from(after.size), 300.0, "an untouched Size 300 keeps what the file imported");
+        assert_eq!(f64::from(after.angle), 200.0, "an untouched Angle 200 keeps what the file imported");
+    }
+}
+
+/// The other side of the guard above: while the effect follows the shared light, the Angle field
+/// shows that light and not the effect's own angle, so an untouched OK keeps writing the light's
+/// angle as it did before this change - the imported angle was never what the field showed.
+/// Guard test: it passes before and after the change on purpose.
+#[test]
+fn an_inner_shadow_lit_by_the_global_light_still_takes_the_shown_angle() {
+    let mut s = session();
+    s.execute("layer.layerStyle.innerShadow", json!({})).unwrap();
+    s.edit("imported angle while lit", |doc, active| {
+        let Effect::InnerShadow(sh) = &mut doc.layer_mut(active.unwrap()).unwrap().effects.items[0] else { panic!("inner shadow") };
+        sh.angle = 200.0;
+        sh.use_global_light = true;
+        Ok(())
+    })
+    .unwrap();
+    s.execute("layer.layerStyle.globalLight", json!({"angle": 45.0})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    let d = LayerStyleDraft::new(drafted(&s));
+    apply(&d.style, id, Some(45.0), |cmd, p| s.execute(cmd, p).map_err(|e| e.to_string())).unwrap();
+    let Effect::InnerShadow(after) = &layer_effects(&s)[0] else { panic!("inner shadow") };
+    assert_eq!(f64::from(after.angle), 45.0, "the field showed the light's 45, so OK stores 45");
 }
 
 fn overlay_color(doc: &photocraft_doc::Document, layer: photocraft_doc::LayerId) -> photocraft_color::Color {
