@@ -79,6 +79,8 @@ fn pixel_replacement_harness() -> (tempfile::TempDir, H, String) {
         let png = photocraft_io::export(&source.active().unwrap().doc, "png", &photocraft_io::ExportOptions::default()).unwrap().bytes;
         std::fs::write(dir.path().join(name), png).unwrap();
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    photocraft_raster::spill::use_test_volume_space();
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
     app.run("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
     let layer = app.session.active().unwrap().active_layer.unwrap();

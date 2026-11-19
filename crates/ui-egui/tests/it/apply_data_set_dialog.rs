@@ -18,6 +18,8 @@ const SETS: [&str; 3] = ["Zed", "Data Set 2", "Data Set 3"];
 /// (not in name order) that only set the visibility: Zed hides it, Data Set 2 shows it, Data Set 3
 /// hides it. No set has an image for the pixel variable.
 fn app() -> Box<PhotocraftApp> {
+    #[cfg(not(target_arch = "wasm32"))]
+    photocraft_raster::spill::use_test_volume_space();
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
     app.run("file.new", json!({"width": 64, "height": 64, "background": "white"})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
@@ -318,6 +320,8 @@ fn bad_index_from_the_control_channel_is_refused() {
 /// it on any document) shows an empty list, and Apply only reports why.
 #[test]
 fn no_data_sets_shows_an_empty_list_and_apply_reports_it() {
+    #[cfg(not(target_arch = "wasm32"))]
+    photocraft_raster::spill::use_test_volume_space();
     let mut a = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
     a.run("file.new", json!({"width": 8, "height": 8})).unwrap();
     let mut h = harness(a);
