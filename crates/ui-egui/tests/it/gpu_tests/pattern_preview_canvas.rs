@@ -29,14 +29,17 @@ fn harness() -> Option<Harness> {
     }
 }
 
-/// The colour on screen at document point `at` (which may lie past the document).
-fn sample(h: &mut Harness, at: [f32; 2]) -> [u8; 3] {
+/// The colours on screen at document points `at` (which may lie past the document), read from one settled frame:
+/// the points of one state share a render instead of settling and rendering the same frame again (#15652).
+fn samples<const N: usize>(h: &mut Harness, at: [[f32; 2]; N]) -> [[u8; 3]; N] {
     h.run_steps(6);
     let xf = photocraft_ui_egui::canvas::active_view(h.state()).expect("canvas view");
-    let p = xf.to_screen(craft::behavior::kurbo::Point::new(f64::from(at[0]), f64::from(at[1])));
     let img = h.render().expect("render");
-    let px = img.get_pixel(p.x.round() as u32, p.y.round() as u32);
-    [px[0], px[1], px[2]]
+    at.map(|at| {
+        let p = xf.to_screen(craft::behavior::kurbo::Point::new(f64::from(at[0]), f64::from(at[1])));
+        let px = img.get_pixel(p.x.round() as u32, p.y.round() as u32);
+        [px[0], px[1], px[2]]
+    })
 }
 
 /// View › Pattern Preview, as the menu runs it.
@@ -77,17 +80,15 @@ fn pattern_preview_repeats_the_document_on_gpu_and_cpu_canvases() {
         let path = if flip { "CPU" } else { "GPU" };
         h.state_mut().ui.view.flip_horizontal = flip;
         h.state_mut().ui.view.pattern_preview = false;
-        let off = sample(&mut h, right);
+        let [off, band] = samples(&mut h, [right, [10.0, 50.0]]);
         assert!(!near(off, red) && !near(off, blue), "{path}: pasteboard without Pattern Preview, got {off:?}");
-        assert!(near(sample(&mut h, [10.0, 50.0]), red), "{path}: the document's own band");
+        assert!(near(band, red), "{path}: the document's own band");
         toggle(&mut h);
         assert!(h.state().ui.view.pattern_preview);
-        let got = sample(&mut h, right);
+        let [got, under, diag] = samples(&mut h, [right, below, diagonal]);
         assert!(near(got, red), "{path}: copy to the right shows the left edge, got {got:?}");
-        let got = sample(&mut h, below);
-        assert!(near(got, blue), "{path}: copy below, got {got:?}");
-        let got = sample(&mut h, diagonal);
-        assert!(near(got, blue), "{path}: diagonal copy, got {got:?}");
+        assert!(near(under, blue), "{path}: copy below, got {under:?}");
+        assert!(near(diag, blue), "{path}: diagonal copy, got {diag:?}");
         toggle(&mut h);
         assert!(!h.state().ui.view.pattern_preview);
     }
