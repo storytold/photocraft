@@ -204,9 +204,10 @@ pub fn replayable(id: &str) -> bool {
     // Again and Again on a Copy journal their concrete steps (`edit.transform`, after
     // `layer.duplicate` for the copy) and record those: the wrappers look up the last transform in
     // the journal, so they fail where no transform ran yet, e.g. an action played in a new session.
+    // Frame selection is not a journaled command (it makes no history step); recording notes it for this.
     // A Conditional is recorded with its predicate, not the branch it happened to play (or none),
     // so playback evaluates the condition again on the current document (#7198, #7238).
-    matches!(id, "actions.play" | "actions.conditional")
+    matches!(id, "actions.play" | "actions.conditional" | "animation.selectFrame")
         || (!id.starts_with("actions.")
             // Browse executes its steps through Session::execute, so those concrete
             // commands are already journaled. Recording the wrapper as well replays
@@ -584,6 +585,7 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
         s.actions.list.push(Action { set, ..Action::new(name, Vec::new()) }).map_err(|e| list_error("actions.record", e))?
     };
     s.actions.recording = Some((s.journal.len(), idx));
+    crate::animation_cmds::record_start_frame(s);
     note_automation_edit(s, idx);
     s.actions.take = s.actions.take.wrapping_add(1);
     let name = s.actions.list.action(idx).map(|a| a.name.clone()).unwrap_or_default();
