@@ -60,6 +60,21 @@ fn new_doc() -> Session {
 }
 
 #[test]
+fn focus_stack_that_does_not_fit_leaves_the_document_alone() {
+    let room = Room::new(None);
+    let mut s = new_doc();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("edit.fill", json!({"contents": "color", "color": "#663399"})).unwrap();
+    s.execute("select.allLayers", json!({})).unwrap();
+    assert!(s.is_enabled("edit.autoBlendLayers"));
+    let before = state(&s);
+    room.set(Some(SMALL));
+    let err = s.execute("edit.autoBlendLayers", json!({"method": "stack", "memoryBudget": 25_000_000})).unwrap_err().to_string();
+    assert!(err.contains("Not enough memory to blend the selected layers"), "{err}");
+    assert_eq!(state(&s), before);
+}
+
+#[test]
 fn place_that_does_not_fit_fails_and_leaves_the_document_alone() {
     let room = Room::new(None);
     let dir = tempfile::tempdir().unwrap();

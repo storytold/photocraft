@@ -290,6 +290,12 @@ ln -s photocraft-<version>-linux-x86_64.AppImage photocraft-cli
 
 The `--cli` selector is removed; all remaining arguments, stdin, stdout, stderr and the exit status are passed through. CLI launches skip desktop integration. The symlink form uses the AppImage runtime's `ARGV0`; the normal AppImage name launches the GUI.
 
+### Working memory for focus stacks
+
+The CLI's `edit.autoBlendLayers` command uses a 4 GiB working-buffer budget by default. To raise it for a focus stack, pass a positive integer in bytes with `method: "stack"`. For example, after loading and selecting the source layers, use `--cmd edit.autoBlendLayers --params '{"method":"stack","memoryBudget":5368709120}'` for 5 GiB.
+
+The command accepts a budget above 4 GiB only if it fits within half of detected physical RAM. If RAM cannot be detected, explicit budgets cannot exceed 4 GiB. A smaller addressable allocation limit lowers the maximum further. The command checks its estimate before expanding layers into working buffers. It can fall back to the canvas when the full layer extent exceeds the budget.
+
 ### GPU rendering
 
 PhotoCraft CLI supports optional native GPU acceleration for flat exports and composition in `convert`, `run`, `batch`, `serve`, and headless `mcp`:

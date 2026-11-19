@@ -78,6 +78,30 @@ fn top_dialog(app: &PhotocraftApp) -> DialogId {
 }
 
 #[test]
+fn auto_blend_dialog_uses_the_working_memory_default() {
+    const CMD: &str = "edit.autoBlendLayers";
+    let mut app = new_app();
+    app.run("file.new", json!({"width": 16, "height": 16, "background": "transparent"})).unwrap();
+    for (name, color) in [("First", "#336699"), ("Second", "#996633")] {
+        app.run("layer.new.layer", json!({"name": name})).unwrap();
+        app.run("edit.fill", json!({"color": color})).unwrap();
+    }
+    app.run("select.allLayers", json!({})).unwrap();
+
+    let ctx = app.ctx().clone();
+    crate::menus::invoke(&mut app, &ctx, CMD, json!({})).unwrap();
+    let id = top_dialog(&app);
+    let fields = fields_of(&app, id);
+    assert!(!fields.contains("memoryBudget"), "the CLI parameter must not become a dialog field");
+    assert!(command_params(CMD, &fields).get("memoryBudget").is_none());
+    set(&mut app, id, "method", json!("stack"));
+
+    let before = history(&app);
+    assert!(ok(&mut app, id));
+    assert_eq!(history(&app), before + 1, "Auto-Blend succeeds from the menu using its default budget");
+}
+
+#[test]
 fn color_settings_working_spaces_list_installed_profiles_of_their_space() {
     // #6323: a press condition installed in the system can be the CMYK working space, as in
     // Photoshop's Color Settings; each working-space menu lists only profiles of its space.
