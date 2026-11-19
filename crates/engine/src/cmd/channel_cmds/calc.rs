@@ -101,7 +101,7 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub(super) fn calculations(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "image.calculations";
-    let blending = Blending::parse(p).map_err(|e| bad(cmd, e))?;
+    let blending = Blending::parse_calculations(p).map_err(|e| bad(cmd, e))?;
     let opacity = p.get("opacity").and_then(Value::as_f64).unwrap_or(100.0).clamp(0.0, 100.0) as f32 / 100.0;
     let s1 = source(s, &source_spec(p, "source1", "source1").unwrap_or_else(|| json!({})), cmd, true)?.remove(0);
     let s2 = source(s, &source_spec(p, "source2", "source2").unwrap_or_else(|| json!({})), cmd, true)?.remove(0);
