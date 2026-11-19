@@ -1,5 +1,5 @@
 use super::*;
-use photocraft_doc::{Adjustment, Color, Fill, LayerMask};
+use photocraft_doc::{Adjustment, BlendRange, Color, Fill, LayerMask};
 
 const CANVAS: Size = Size { width: 70, height: 50 };
 
@@ -540,6 +540,8 @@ fn lossy_documents() -> Vec<(&'static str, Document)> {
             with(&move |d| d.layers.push(l.clone()))
         }),
         ("clipped", with(&|d| d.layers[1].clipped = true)),
+        ("channel blending", with(&|d| d.layers[0].excluded_channels = 1)),
+        ("Blend If", with(&|d| d.layers[0].blend_if.set(0, [BlendRange { black: [128, 128], ..BlendRange::FULL }, BlendRange::FULL]))),
         ("fill opacity", with(&|d| d.layers[0].fill_opacity = 0.5)),
         ("pixel lock", with(&|d| d.layers[0].locks.pixels = true)),
         // Not the bottom layer: with its transparency lock, `Base` would become the Background.
@@ -567,6 +569,8 @@ fn plain_documents_lose_nothing() {
     for depth in [SampleType::U8, SampleType::U16] {
         let mut d = doc(depth);
         assert_eq!(losses(&d), Vec::<String>::new(), "{depth:?}");
+        d.layers[0].blend_if.ranges = vec![[BlendRange::FULL; 2]; 4];
+        assert_eq!(losses(&d), Vec::<String>::new(), "{depth:?} full Blend If ranges");
         d.icc_profile = Some(craft_cms::Builtin::Srgb.profile().to_bytes());
         assert_eq!(losses(&d), Vec::<String>::new(), "{depth:?} tagged sRGB");
         assert_eq!(export(&d).unwrap().warnings, Vec::<String>::new());
