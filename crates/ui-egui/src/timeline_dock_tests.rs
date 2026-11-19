@@ -525,7 +525,7 @@ fn onion_skin_ghosts_the_neighbouring_frames_only_while_on() {
     let mut h = harness();
     h.state_mut().run("animation.selectFrame", json!({"frame": 1})).unwrap();
     h.run_steps(3);
-    let ghosts = |h: &Harness<'static, PhotocraftApp>| crate::onion_skin::ghosts(h.state(), &h.ctx, h.state().session.active().unwrap().doc.id).len();
+    let ghosts = |h: &Harness<'static, Box<PhotocraftApp>>| crate::onion_skin::ghosts(h.state(), &h.ctx, h.state().session.active().unwrap().doc.id).len();
     assert_eq!(ghosts(&h), 0, "off by default");
     h.state_mut().ui.timeline.onion = crate::onion_skin::OnionSkin { enabled: true, before: 1, after: 1, opacity: 50 };
     assert_eq!(ghosts(&h), 0, "hidden while its menu is not shown");
