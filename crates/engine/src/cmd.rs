@@ -252,10 +252,13 @@ fn registry() -> &'static Registry {
 
 // ---------- the table ----------
 
+/// A named group of commands: `SPECS` lists them in registry order.
+type Fragment = (&'static str, fn() -> Vec<CommandSpec>);
+
 /// Every table fragment with its name, in registry order. The order is part of the behaviour (menus
 /// list commands in it) and `command_ids.txt` pins it. The `table` fragments are grouped by the
 /// crate that will own them; a menu split between owners has one fragment per contiguous run.
-const SPECS: &[(&str, fn() -> Vec<CommandSpec>)] = &[
+const SPECS: &[Fragment] = &[
     ("store::file_menu", table::store::file_menu::specs),
     ("core::file_menu", table::core::file_menu::specs),
     ("core::edit_menu", table::core::edit_menu::specs),
