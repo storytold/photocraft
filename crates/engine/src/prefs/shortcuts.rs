@@ -131,7 +131,8 @@ pub const TEMPORARY_TOOLS: &[(&str, &str, &str)] = &[
 /// (Shift+Delete on a Mac) for Fill; ⌘+ beside ⌘= for Zoom In; and off the Mac, Ctrl+F4 beside
 /// Ctrl+W for Close (Windows' close-document key; macOS keeps Ctrl+F4 for window focus).
 /// Also Alt+Ctrl+0 beside Ctrl+1 for 100% and F9 beside Alt+F9 for Window > Actions (#11396;
-/// measured on Windows, so the Mac gets the usual Cmd mapping of the first).
+/// measured on Windows, so the Mac gets the usual Cmd mapping of the first). Cmd+Alt+Space beside Alt+Space for the
+/// held Zoom Out, so the two modifiers may go down before Space.
 pub const ALTERNATE_SHORTCUTS: &[(&str, &str)] = &[
     ("edit.cut", "F2"),
     ("edit.copy", "F3"),
@@ -141,6 +142,8 @@ pub const ALTERNATE_SHORTCUTS: &[(&str, &str)] = &[
     ("view.zoomIn", "Cmd++"),
     ("view.actualPixels", "Cmd+Alt+0"),
     ("window.panel.actions", "F9"),
+    // Cmd+Alt held together with Space: Zoom Out, as the Alt that turns a held Cmd+Space Zoom In around.
+    ("tools.temporary.zoomOut", "Cmd+Alt+Space"),
     #[cfg(not(target_os = "macos"))]
     ("file.close", "Cmd+F4"),
 ];
