@@ -9,7 +9,7 @@ use crate::{
 };
 
 /// The app with a recorded Smart Object, in a `width`-point dock and the given theme, ready to click.
-fn harness(width: f32, scale: f32, theme: crate::theme::AppTheme) -> Harness<'static, PhotocraftApp> {
+fn harness(width: f32, scale: f32, theme: crate::theme::AppTheme) -> Harness<'static, Box<PhotocraftApp>> {
     let (app, _) = app(8, "rgb");
     let id = theme.id().clone();
     let mut h =
@@ -33,14 +33,14 @@ fn picker_armed(app: &PhotocraftApp) -> bool {
 
 /// The Curves graph of channel `channel`: the smallest group the dialog labels with it (the editor around it carries
 /// the same label).
-fn curve_graph(h: &Harness<'_, PhotocraftApp>, channel: &str) -> egui::Rect {
+fn curve_graph(h: &Harness<'_, Box<PhotocraftApp>>, channel: &str) -> egui::Rect {
     h.query_all_by_role_and_label(egui::accesskit::Role::Group, channel)
         .map(|node| node.rect())
         .min_by(|a, b| a.area().total_cmp(&b.area()))
         .expect("the Curves graph is shown")
 }
 
-fn click(h: &mut Harness<'_, PhotocraftApp>, at: egui::Pos2) {
+fn click(h: &mut Harness<'_, Box<PhotocraftApp>>, at: egui::Pos2) {
     h.hover_at(at);
     h.run_steps(1);
     h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
@@ -519,7 +519,7 @@ fn rabbit_whole_image_levels_alias_is_visible_and_editable() {
 }
 
 /// A smart object in a `mode` document with `command` recorded as its one smart filter, and its layer id.
-fn adjustment_filter(mode: &str, command: &str, params: serde_json::Value) -> (PhotocraftApp, u64) {
+fn adjustment_filter(mode: &str, command: &str, params: serde_json::Value) -> (Box<PhotocraftApp>, u64) {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 64, "height": 48, "mode": mode})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
@@ -540,7 +540,7 @@ fn recorded(app: &PhotocraftApp, id: u64) -> photocraft_doc::SmartObject {
 }
 
 /// The app in a harness with the editor of the layer's first smart filter open.
-fn edit_first_filter(app: PhotocraftApp, id: u64) -> Harness<'static, PhotocraftApp> {
+fn edit_first_filter(app: Box<PhotocraftApp>, id: u64) -> Harness<'static, Box<PhotocraftApp>> {
     let sm = recorded(&app, id);
     let mut h = Harness::builder()
         .with_context(app.ctx().clone())

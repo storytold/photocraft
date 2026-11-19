@@ -36,7 +36,7 @@ fn file_title(lang: Lang) -> String {
         let mut h = egui_kittest::Harness::builder()
             .with_size(egui::vec2(1200.0, 80.0))
             .with_context(app.ctx().clone())
-            .build_ui_state(|ui, app: &mut PhotocraftApp| crate::menus::menu_bar(app, ui), app);
+            .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::menus::menu_bar(app, ui), app);
         h.run_steps(2);
         h.query_all_by_role(Role::MenuItem).next().and_then(|node| node.accesskit_node().label()).expect("the bar's first title")
     })
@@ -189,11 +189,11 @@ fn korean_glyphs_remain_available_after_repeated_language_switches() {
     });
 }
 
-fn harness() -> egui_kittest::Harness<'static, PhotocraftApp> {
+fn harness() -> egui_kittest::Harness<'static, Box<PhotocraftApp>> {
     harness_with_services(Services::default())
 }
 
-fn harness_with_services(services: Services) -> egui_kittest::Harness<'static, PhotocraftApp> {
+fn harness_with_services(services: Services) -> egui_kittest::Harness<'static, Box<PhotocraftApp>> {
     let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), services);
@@ -308,6 +308,7 @@ fn preferences_preview_does_not_commit_until_applied_and_survives_reload() {
         let fr = lang("fr");
         assert!(text.iter().any(|text| text == tr(fr, "Appearance")), "the draft language must translate the visible window");
         assert!(text.iter().any(|text| text == tr(fr, "Cancel")), "the window buttons must preview the language too");
+        assert!(text.iter().any(|text| text == tr(fr, "Apply")), "Apply must use the draft language without committing it");
         assert!(text.iter().any(|text| text == "File"), "the main window keeps its committed language");
         assert_eq!(h.state().session.prefs().interface.language, "auto");
         assert_eq!(current(), Lang::EN, "preview must not leak to the main window");
@@ -318,8 +319,9 @@ fn preferences_preview_does_not_commit_until_applied_and_survives_reload() {
         assert_eq!(h.state().session.prefs().interface.language, "auto");
         assert_eq!(current(), Lang::EN);
         open_preferences(h.state_mut(), "interface");
-        assert!(set_draft(h.state_mut(), "interface.language", PrefValue::Text("ko".into())));
+        assert!(set_draft(h.state_mut(), "interface.language", PrefValue::Choice("ko".into())));
         apply_window(h.state_mut()).expect("apply");
+        assert_eq!(h.state().session.prefs().interface.language, "ko", "Apply commits the selected language");
         h.step();
         assert_eq!(current(), lang("ko"));
         let saved = h.state().session.prefs_to_json();
@@ -329,7 +331,7 @@ fn preferences_preview_does_not_commit_until_applied_and_survives_reload() {
     });
 }
 
-fn drawn_text(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> Vec<String> {
+fn drawn_text(h: &egui_kittest::Harness<'_, Box<PhotocraftApp>>) -> Vec<String> {
     fn collect(shape: &egui::Shape, text: &mut Vec<String>) {
         match shape {
             egui::Shape::Text(shape) => text.push(shape.galley.job.text.clone()),
