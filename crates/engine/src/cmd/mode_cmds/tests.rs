@@ -481,6 +481,64 @@ fn indexed_exact_reserves_transparency_only_when_needed_and_available() {
 }
 
 #[test]
+fn indexed_exact_failure_restores_a_floating_copy_and_redo() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 258, "height": 1, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 256 { [x as f32 / 255.0, x as f32 / 255.0, x as f32 / 255.0, 1.0] } else { [0.0; 4] });
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 1, "height": 1})).unwrap();
+    s.edit("redo marker", |doc, _| {
+        doc.name.push_str(" changed");
+        Ok(())
+    })
+    .unwrap();
+    assert!(s.undo());
+    s.execute("select.float", json!({"dx": 256, "copy": true})).unwrap();
+    let before = s.active().unwrap().clone();
+    assert!(before.history.can_redo());
+    let piece = crate::float_cmds::floating(&before).unwrap();
+    let pixels = before.doc.layers[0].surface().unwrap().to_interleaved(before.doc.bounds());
+
+    let error = s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none", "transparency": true})).unwrap_err();
+    assert!(error.to_string().contains("255"), "{error}");
+    let after = s.active().unwrap();
+    let restored = crate::float_cmds::floating(after).unwrap();
+    assert_eq!(after.doc.id, before.doc.id);
+    assert_eq!(after.doc.mode, ColorMode::Rgb);
+    assert!(std::sync::Arc::ptr_eq(&after.doc, &before.doc));
+    assert_eq!(after.doc.layers[0].surface().unwrap().to_interleaved(after.doc.bounds()), pixels);
+    assert_eq!((restored.layer, restored.offset, restored.revision, restored.moved), (piece.layer, piece.offset, piece.revision, piece.moved));
+    assert!(std::sync::Arc::ptr_eq(&restored.parts, &piece.parts));
+    assert_eq!(after.revision, before.revision);
+    assert_eq!(after.history.past_len(), before.history.past_len());
+    assert!(after.history.can_redo());
+    assert_eq!(after.active_layer, before.active_layer);
+    assert_eq!(after.selected_layers, before.selected_layers);
+}
+
+#[test]
+fn indexed_exact_success_drops_the_floating_copy_before_counting_colours() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 257, "height": 1, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 256 { [x as f32 / 255.0, x as f32 / 255.0, x as f32 / 255.0, 1.0] } else { [0.0; 4] });
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 1, "height": 1})).unwrap();
+    s.execute("select.float", json!({"dx": 256, "copy": true})).unwrap();
+    let history = s.active().unwrap().history.past_len();
+    let result = s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none", "transparency": true})).unwrap();
+    assert_eq!(doc(&s).mode, ColorMode::Indexed);
+    assert_eq!(doc(&s).color_table.as_ref().unwrap().colors.len(), 256);
+    assert_eq!(result["transparentIndex"], Value::Null);
+    assert!(crate::float_cmds::floating(s.active().unwrap()).is_none());
+    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(256, 0), [0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(s.active().unwrap().history.past_len(), history + 2, "drop and conversion remain separate history steps");
+    assert!(s.undo());
+    assert_eq!(doc(&s).mode, ColorMode::Rgb);
+    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(256, 0)[3], 1.0);
+    assert!(s.undo());
+    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(256, 0)[3], 0.0);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+}
+
+#[test]
 fn indexed_exact_transparency_and_sources() {
     // Two colours + transparency: exact palette with a transparent entry.
     let mut s = Session::new();
