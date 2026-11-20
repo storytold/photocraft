@@ -141,9 +141,8 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, host: CanvasHost,
         (None, None) => (doc.guides.clone(), preference),
     };
     let visible = app.ui.extras.guides && app.ui.view.shows(app.ui.view.show.canvas_guides);
-    let pending = ruler.filter(|_| !previewing);
     // A guide dragged out of a ruler is placed with the guides hidden, and placing it shows them.
-    if !visible && !previewing && pending.is_none() {
+    if !visible && !previewing && ruler.is_none() {
         return None;
     }
     let shown = guides_of(&list, color, guide_line(g.guide_style), app.ui.extras.lock_guides);
