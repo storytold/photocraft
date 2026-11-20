@@ -997,6 +997,8 @@ mod alt_click_tests;
 #[cfg(test)]
 mod artboard_first_board_tests;
 #[cfg(test)]
+mod brush_resize_overlay_tests;
+#[cfg(test)]
 mod stroke_timing_tests;
 
 #[cfg(test)]
