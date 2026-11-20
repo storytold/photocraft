@@ -119,7 +119,103 @@ fn points(p: &Value) -> Vec<(f32, f32)> {
 
 /// Auto-Enhance for Quick Selection: a light edge refinement that flows the edge towards image
 /// edges and removes blockiness.
-const ENHANCE: RefineParams = RefineParams { radius: 4.0, smart_radius: true, smooth: 15.0, feather: 0.0, contrast: 25.0, shift_edge: 0.0 };
+const ENHANCE: RefineParams = RefineParams { radius: 4.0, smart_radius: true, smooth: 10.0, feather: 0.0, contrast: 25.0, shift_edge: 0.0 };
+
+/// Enhance Edge's soft rim (#12923). The reference application's cut is not a hard cut: inside the
+/// edge its coverage stays a hair under fully selected for about three pixels. Measured on a red
+/// rectangle on white, the rim sits at 8-bit 253-254 (the corners a little lower) while the interior
+/// stays fully selected, and the bounds do not move.
+///
+/// A pixel loses [`RIM_DEPTH`] of its coverage times the share of a [`RIM_SIGMA`] neighbourhood
+/// around it that lies outside the cut, so the dip is deepest at the edge, fades inward, deepens
+/// where two edges meet and never reaches past the cut. [`RIM_SIGMA`] is the edge radius Enhance Edge
+/// already looks with, so the rim reaches as far inward as the band it snaps to; [`RIM_DEPTH`] is
+/// fitted to the one configuration the issue measured (a 200 x 150 px rectangle, brush size 30, one
+/// click inside). Every other shape follows the same rule, not a per-shape value.
+const RIM_SIGMA: f32 = ENHANCE.radius;
+const RIM_DEPTH: f32 = 0.01;
+/// Pixels of halo a tile reads around itself. [`matting::gaussian_blur`] truncates its kernel at
+/// three sigma, so this is exactly the reach of the neighbourhood a pixel is measured against.
+/// ceil(3 * sigma) + 1; exact while [`ENHANCE`].radius stays integral.
+const RIM_HALO: i32 = 3 * ENHANCE.radius as i32 + 1;
+
+/// `cut` with the [`RIM_SIGMA`] soft rim inside its edge, as [`RIM_SIGMA`] describes. The cut is
+/// walked one existing tile at a time with [`RIM_HALO`] of halo, so the float buffers cost a tile and
+/// its edge band rather than the selection's bounding box. Pixels past `canvas` repeat the canvas
+/// edge, so a cut that touches the document border keeps its full coverage there.
+fn enhance_rim(cut: &photocraft_raster::Surface, canvas: Rect) -> std::result::Result<photocraft_raster::Surface, photocraft_raster::AllocationError> {
+    let mut out = cut.clone();
+    for (tc, _) in cut.tiles() {
+        let tile = tc.rect().intersect(&canvas);
+        if tile.is_empty() {
+            continue;
+        }
+        let read = tile.inflate(RIM_HALO).intersect(&canvas);
+        let rw = read.width() as usize;
+        let cover = photocraft_algo::selection::mask_from_surface(Some(cut), read);
+        // A pixel can only lose coverage if it is selected itself and something unselected lies
+        // within the blur's reach. The band where those two boxes meet is all of the tile that can
+        // change, and blurring that band instead of the whole tile is what keeps one click on a
+        // selection that covers a large part of the document affordable.
+        let (Some(selected), Some(outside)) = (touched_box(&cover, read, rw, |c| c > 0.0), touched_box(&cover, read, rw, |c| c < 1.0)) else {
+            continue;
+        };
+        let work = outside.inflate(RIM_HALO).intersect(&selected.inflate(RIM_HALO)).intersect(&tile);
+        if work.is_empty() {
+            continue;
+        }
+        // The blur of a pixel of `work` needs [`RIM_HALO`] around it, and `read` is that much around
+        // the tile, so the window is only ever clipped at the canvas - where the blur repeats the
+        // canvas edge, which is what keeps a cut at the document border fully selected there.
+        let win = work.inflate(RIM_HALO).intersect(&read);
+        let (ww, wh) = (win.width() as usize, win.height() as usize);
+        let mut patch = Vec::with_capacity(ww * wh);
+        for ry in 0..wh {
+            let from = ((win.y0 - read.y0) as usize + ry) * rw + (win.x0 - read.x0) as usize;
+            patch.extend_from_slice(cover.get(from..from + ww).unwrap_or_default());
+        }
+        // What the neighbourhood is missing from fully selected is the part of the cut that is not
+        // there, and that is the share of its coverage the rim takes away from a selected pixel.
+        let near = matting::gaussian_blur(&patch, ww, wh, RIM_SIGMA);
+        let mut data = Vec::with_capacity(work.width() as usize * work.height() as usize);
+        let mut touched = false;
+        // `work` lies inside `win` by construction, so every row is there; a wrong length would make
+        // `try_write_region` return an error rather than write a partial band.
+        for y in work.y0..work.y1 {
+            let from = (y - win.y0) as usize * ww + (work.x0 - win.x0) as usize;
+            let to = from + work.width() as usize;
+            let (Some(row), Some(near)) = (patch.get(from..to), near.get(from..to)) else {
+                continue;
+            };
+            for (c, near) in row.iter().zip(near) {
+                // Unselected pixels are left exactly as they are: the rim only takes coverage away.
+                let v = if *c <= 0.0 { 0.0 } else { (c - RIM_DEPTH * (1.0 - *near) * c).clamp(0.0, 1.0) };
+                touched |= v != *c;
+                data.push(v);
+            }
+        }
+        if touched {
+            out.try_write_region(work, &data)?;
+        }
+    }
+    Ok(out)
+}
+
+/// The box of the pixels of `cover` (row-major over `area`, `rw` wide) that `holds`, or `None` when
+/// no pixel does.
+fn touched_box(cover: &[f32], area: Rect, rw: usize, holds: impl Fn(f32) -> bool) -> Option<Rect> {
+    let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    for (i, c) in cover.iter().enumerate() {
+        if holds(*c) {
+            let (y, x) = (area.y0 + (i / rw) as i32, area.x0 + (i % rw) as i32);
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x + 1);
+            y1 = y1.max(y + 1);
+        }
+    }
+    (x1 > x0 && y1 > y0).then(|| Rect::new(x0, y0, x1, y1))
+}
 
 /// Expands a selection around sampled points using image gradients, optionally enhancing edges.
 fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
@@ -139,7 +235,12 @@ fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
         let canvas = doc.bounds();
         let Some(r) = quick::quick_select(smp, canvas, &pts, size) else { return Ok(None) };
         let surface = matting::region_surface(&r);
-        if enhance { matting::refine_surface(smp, &surface, canvas, &ENHANCE, None).map_err(|e| EngineError::Other(e.to_string())) } else { Ok(Some(surface)) }
+        if !enhance {
+            return Ok(Some(surface));
+        }
+        // Enhance Edge: snap the edge to the image, then leave the soft rim the reference measures.
+        let refined = matting::refine_surface(smp, &surface, canvas, &ENHANCE, None).map_err(|e| EngineError::Other(e.to_string()))?;
+        refined.map(|cut| enhance_rim(&cut, canvas)).transpose().map_err(|e| EngineError::Other(e.to_string()))
     })??;
     let Some(region) = region else { return apply(s, "Quick Selection", None, m) };
     let bounds = region.content_bounds();
@@ -252,7 +353,9 @@ impl ObjectFinderCache {
             return None;
         }
         let (px, py) = (x.floor() as i32, y.floor() as i32);
-        self.regions.iter().find(|r| r.at(px, py) >= 0.5).cloned()
+        let region = self.regions.iter().find(|r| r.at(px, py) >= 0.5)?;
+        let can_seed = with_doc_sampler(doc, target, false, |sampler, doc| grabcut::can_seed_object(sampler, doc.bounds(), px, py));
+        can_seed.then(|| region.clone())
     }
 
     /// Remembers `region`, found in `doc` sampling `target`. A different document or pixels
@@ -755,3 +858,6 @@ mod object_mode_refusal_tests;
 mod quick_drop_transparent_tests;
 #[cfg(test)]
 mod quick_group_target_tests;
+
+#[cfg(test)]
+mod quick_enhance_edge_tests;

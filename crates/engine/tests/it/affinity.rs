@@ -13,7 +13,7 @@ fn fixture() -> Vec<u8> {
     let mut src = Session::new();
     src.execute("file.new", json!({"width": 2, "height": 1, "background": "#dc283c"})).unwrap();
     // This observed preview fixture has no XMP packet (or compressed PNG iTXt).
-    Arc::make_mut(&mut src.active_mut().unwrap().doc).metadata.xmp = None;
+    Arc::make_mut(src.active_mut().unwrap().doc_mut()).metadata.xmp = None;
     // Affinity's previews carry no colour profile.
     let mut opts = photocraft_io::ExportOptions::default();
     opts.encode.embed_icc = false;

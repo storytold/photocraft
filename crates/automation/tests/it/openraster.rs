@@ -27,7 +27,7 @@ fn layered_documents_save_reopen_and_save_in_place_as_openraster() {
     let mut h = Headless::trusted_local();
     h.handle("doc.new", json!({"width": 40, "height": 30, "background": "white"})).unwrap();
     // This lossless OpenRaster fixture deliberately has no metadata to drop.
-    std::sync::Arc::make_mut(&mut h.session.active_mut().unwrap().doc).metadata.xmp = None;
+    std::sync::Arc::make_mut(h.session.active_mut().unwrap().doc_mut()).metadata.xmp = None;
     exec(&mut h, "layer.new.layer", json!({}));
     exec(&mut h, "paint.stroke", json!({"points": [[4, 4], [30, 20]], "size": 6, "hardness": 1.0, "color": "#ff0000"}));
     let top = h.session.active().unwrap().doc.layers.last().unwrap().id.0;
@@ -80,7 +80,7 @@ fn an_openraster_file_never_overwrites_what_it_cannot_hold() {
     let mut h = Headless::trusted_local();
     h.handle("doc.new", json!({"width": 40, "height": 30, "background": "white"})).unwrap();
     // This lossless OpenRaster fixture deliberately has no metadata to drop.
-    std::sync::Arc::make_mut(&mut h.session.active_mut().unwrap().doc).metadata.xmp = None;
+    std::sync::Arc::make_mut(h.session.active_mut().unwrap().doc_mut()).metadata.xmp = None;
     exec(&mut h, "layer.new.layer", json!({}));
     exec(&mut h, "paint.stroke", json!({"points": [[4, 4], [30, 20]], "size": 6, "hardness": 1.0, "color": "#ff0000"}));
     h.handle("doc.save", json!({"path": path_str})).unwrap();

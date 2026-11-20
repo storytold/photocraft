@@ -94,7 +94,7 @@ fn clipboard_and_paste_without_a_document_get_fresh_xmp_without_inheriting_metad
         for paste_without_document in [false, true] {
             let mut s = Session::new();
             s.execute("file.new", json!({"width": 3, "height": 2, "depth": depth, "profile": "display-p3"})).unwrap();
-            Arc::make_mut(&mut s.active_mut().unwrap().doc).metadata.xmp = Some("<source-only-metadata/>".into());
+            Arc::make_mut(s.active_mut().unwrap().doc_mut()).metadata.xmp = Some("<source-only-metadata/>".into());
             s.execute("select.all", json!({})).unwrap();
             s.execute("edit.copy", json!({})).unwrap();
             if paste_without_document {
@@ -176,7 +176,7 @@ fn starting_xmp_remains_a_real_openraster_metadata_loss() {
     assert!(!holds_at(&s.active().unwrap().doc, "new.ora"));
     assert!(losses_at(&s.active().unwrap().doc, "new.ora").iter().any(|loss| loss.to_lowercase().contains("metadata")));
     // This is why the explicit metadata-free OpenRaster fixtures clear the starting packet.
-    Arc::make_mut(&mut s.active_mut().unwrap().doc).metadata.xmp = None;
+    Arc::make_mut(s.active_mut().unwrap().doc_mut()).metadata.xmp = None;
     assert!(holds_at(&s.active().unwrap().doc, "new.ora"));
     assert!(losses_at(&s.active().unwrap().doc, "new.ora").is_empty());
 }
