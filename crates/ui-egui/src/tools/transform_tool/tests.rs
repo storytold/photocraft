@@ -131,7 +131,6 @@ fn drag_cylinder(app: &mut PhotocraftApp, id: u64, to: [f64; 7]) {
 #[test]
 fn editing_the_contents_of_a_dropped_file_keeps_the_layer() {
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
-    app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": false})).unwrap();
 
     app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     app.sync_views();
@@ -194,7 +193,6 @@ fn land_jobs(app: &mut PhotocraftApp) {
 /// (app, the placed layer, its frame before the move, history steps before the place).
 fn moved_place() -> (Box<PhotocraftApp>, LayerId, photocraft_geom::Rect, usize) {
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
-    app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": false})).unwrap();
     app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     let steps = app.session.active().unwrap().history.past_len();
     app.session.execute("layer.duplicate", json!({"inPlace": true})).unwrap();

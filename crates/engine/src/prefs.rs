@@ -322,7 +322,7 @@ impl Default for General {
             export_clipboard: true,
             resize_image_during_place: true,
             always_create_smart_objects_when_placing: true,
-            skip_transform_when_placing: true,
+            skip_transform_when_placing: false,
             zoom_with_scroll_wheel: false,
             animated_zoom: true,
             zoom_resizes_windows: false,

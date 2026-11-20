@@ -570,7 +570,6 @@ fn png_bytes(w: u32, h: u32) -> Vec<u8> {
 /// An app with one open document whose canvas showed at (100, 50)–(700, 550) last frame.
 fn app_with_canvas() -> Box<PhotocraftApp> {
     let (mut app, _) = app_with(Vec::new());
-    app.session.execute("prefs.set", serde_json::json!({"path": "general.skipTransformWhenPlacing", "value": false})).unwrap();
     app.open_bytes("canvas.psd", b"x").unwrap();
     app.drop_canvas_rect = Some(egui::Rect::from_min_max(egui::pos2(100.0, 50.0), egui::pos2(700.0, 550.0)));
     app
@@ -1274,7 +1273,7 @@ fn files_dropped_on_the_tabs_open_at_that_slot() {
     assert_eq!(app.session.documents().last().map(|d| d.doc.name.as_str()), Some("last.png"));
 }
 
-
+#[test]
 fn views_and_windows_stay_with_their_documents() {
     let (mut app, _) = app_with(Vec::new());
     for name in ["a.psd", "b.psd", "c.psd", "d.psd"] {
