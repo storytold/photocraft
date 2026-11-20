@@ -105,6 +105,12 @@ struct LastRecord {
     /// Their tiles are no longer counted; they are only held until the next change to the
     /// list, so a rollback can put them back where they were.
     evicted: Vec<(usize, HistoryState)>,
+    /// The redo states it discarded, in list order — linear history only, where recording after a
+    /// step back drops the branch as Photoshop does. Held like `evicted`, with their tiles no
+    /// longer counted, so a rollback can put the branch back: without them `rollback` would leave
+    /// the list short of what it promises, and a command refused after the record would cost the
+    /// user a redo branch it never used (CodeRabbit on #10722).
+    cleared_redo: Vec<HistoryState>,
 }
 
 /// The undo and redo states [`History::clear_states`] removed, and the History Brush source set
@@ -175,6 +181,7 @@ impl History {
         self.next_id = self.next_id.wrapping_add(1);
         self.undo.push_back(HistoryState { label: prev_label, doc: before.clone(), layers: prev_layers, visibility: prev_visibility, id: prev_id });
         let mut moved = 0;
+        let mut cleared_redo = Vec::new();
         if self.non_linear {
             // `redo` holds the next state last; the list order is oldest first. Their tiles stay
             // counted: they only move from the redo side to the undo side.
@@ -186,7 +193,17 @@ impl History {
                 moved += 1;
             }
         } else {
-            self.clear_redo();
+            // The branch is dropped, as Photoshop drops it, but it is kept aside until the next
+            // change to the list so that a rollback of this very record can put it back. Their
+            // tiles stop being counted now, as `evicted`'s do, and are counted again if they
+            // return. `clear_redo` is not used here: it also forgets `last_record`, which is the
+            // thing being written below.
+            if let Some(tiles) = &mut self.tiles {
+                for state in &self.redo {
+                    tiles.remove(&state.doc);
+                }
+            }
+            cleared_redo = std::mem::take(&mut self.redo);
         }
         let mut evicted = Vec::new();
         while self.undo.len() > self.max_states {
@@ -199,7 +216,7 @@ impl History {
             }
             evicted.push((at, state));
         }
-        self.last_record = Some(LastRecord { before, moved, evicted, visibility_capture_before: self.visibility_capture.clone() });
+        self.last_record = Some(LastRecord { before, moved, evicted, cleared_redo, visibility_capture_before: self.visibility_capture.clone() });
     }
 
     pub fn can_undo(&self) -> bool {
@@ -528,18 +545,27 @@ impl History {
 
     /// Take back the most recent [`History::record`] exactly, for a compound command whose later
     /// part failed: the document it replaced becomes current again, the current document is
-    /// dropped (nothing to redo), and in non-linear history the states that record moved from
-    /// the redo side go back there, so the list reads as before the command, with the oldest
-    /// states the state limit or the byte budget dropped for it back too. Returns `None`
-    /// (changing nothing) when something else changed the list since that record, e.g. an undo;
-    /// the caller then falls back to [`History::undo`].
+    /// dropped (nothing to redo), and the redo branch comes back — the states that record moved to
+    /// the undo side in non-linear history, and the ones it discarded in linear history — so the
+    /// list reads as before the command, with the oldest states the state limit or the byte budget
+    /// dropped for it back too. Returns `None` (changing nothing) when something else changed the
+    /// list since that record, e.g. an undo; the caller then falls back to [`History::undo`].
     pub fn rollback(&mut self) -> Option<(Arc<Document>, LayerTarget)> {
         let held = self.last_record.as_ref()?;
         if self.undo.len().saturating_add(held.evicted.len()) <= held.moved {
             return None;
         }
-        let LastRecord { moved, evicted, visibility_capture_before, .. } = self.last_record.take()?;
+        let LastRecord { moved, evicted, cleared_redo, visibility_capture_before, .. } = self.last_record.take()?;
         self.visibility_capture = visibility_capture_before;
+        // The branch the record dropped in linear history comes back, with its tiles counted again.
+        // Empty in non-linear history, where those states were moved rather than dropped and the
+        // `moved` loop below returns them.
+        for state in cleared_redo {
+            if let Some(tiles) = &mut self.tiles {
+                tiles.add(&state.doc);
+            }
+            self.redo.push(state);
+        }
         // Put each back where it was taken off, the last one taken off first.
         for (at, state) in evicted.into_iter().rev() {
             if let Some(tiles) = &mut self.tiles {

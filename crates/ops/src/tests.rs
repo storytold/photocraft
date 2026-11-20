@@ -471,12 +471,21 @@ fn rollback_takes_the_last_record_back_exactly_in_both_modes() {
     // Redoing still walks the kept states.
     let (b, _) = h.redo(d).unwrap();
     assert_eq!(b.name, "b");
-    // Linear: the same as an undo whose redo state is dropped.
+    // Linear: the branch the record dropped comes back too, so the list reads as before the command
+    // in this mode as well. It used to leave nothing to redo — the same as an undo — which made
+    // `rollback` fall short of what it promises, and in the mode that is the default: a command
+    // refused after its record cost the user a redo branch that nothing ever used (CodeRabbit on
+    // #10722).
     let (mut h, mut cur) = stepped_back(false);
+    let redo: Vec<String> = h.redo_labels().map(str::to_string).collect();
     edit(&mut h, &mut cur, "D", |d| d.name = "d".into());
-    assert_eq!(h.rollback().unwrap().0.name, "a");
+    assert!(!h.can_redo(), "recording after a step back drops the branch, as Photoshop does");
+    let (a, _) = h.rollback().unwrap();
+    assert_eq!(a.name, "a");
     assert_eq!(h.entries(), ["Open", "A"]);
-    assert!(!h.can_redo());
+    assert_eq!(h.redo_labels().map(str::to_string).collect::<Vec<_>>(), redo, "the branch is back");
+    // And it is not merely listed: it still redoes, to the state it held.
+    assert_eq!(h.redo(a).unwrap().0.name, "b");
     // Anything else since the record: no rollback (the caller undoes instead).
     let (mut h, mut cur) = stepped_back(true);
     edit(&mut h, &mut cur, "D", |d| d.name = "d".into());

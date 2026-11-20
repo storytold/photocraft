@@ -707,6 +707,35 @@ fn a_command_refused_after_the_gradient_was_painted_takes_the_paint_back() {
     assert!(mask_at(&app.session.active().unwrap().doc, layer, 150) < 0.05, "and it is in the mask");
 }
 
+/// CodeRabbit on #10722, the case left after the rollback: with something to redo, painting the
+/// gradient discards that branch — linear history drops it when a step is recorded after a step
+/// back, as Photoshop does. The rollback has to bring it back, or a command refused for a reason
+/// the precheck could not see costs the user a redo branch that nothing ever used.
+#[test]
+fn a_refused_command_gives_back_the_redo_branch_the_paint_discarded() {
+    let (mut app, layer) = app_on_mask();
+    app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+    app.run("edit.undo", json!({})).unwrap();
+    let st = app.session.active().unwrap();
+    assert!(st.history.can_redo(), "the fill is there to redo");
+    let (redo_label, steps) = (st.history.redo_label().map(str::to_owned), st.history.entries().len());
+
+    // Drawn after the undo, so the line describes the document as it stands and is not stale.
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let err = app.run("edit.fill", json!({"contents": "history", "state": 999_999})).expect_err("the history state does not exist, so the fill is refused");
+    assert!(!err.is_empty(), "with a reason: {err}");
+
+    let st = app.session.active().unwrap();
+    assert!(st.history.can_redo(), "the redo branch is back");
+    assert_eq!(st.history.redo_label().map(str::to_owned), redo_label, "and it is the same branch");
+    assert_eq!(st.history.entries().len(), steps, "with no step left behind for the gradient");
+    assert_eq!(mask::pending(&app), Some(([20.0, 60.0], [120.0, 60.0])), "the gradient is waiting again");
+    assert_eq!(mask_at(&st.doc, layer, 150), 1.0, "the mask is as it was");
+
+    // And the branch is not just listed: it still redoes.
+    app.run("edit.redo", json!({})).expect("the branch redoes");
+}
+
 /// CodeRabbit on #10722: after an undo the pending gradient describes a document that is gone.
 /// `tick` drops such a gradient, but it runs once a frame, so a command arriving before it — the
 /// next step of a played action, a script — would paint the stale line first. The gradient here is
