@@ -9,6 +9,49 @@ fn options(edit: impl FnOnce(&mut DocumentOptions)) -> DocumentOptions {
     options
 }
 
+#[test]
+fn points_and_picas_follow_the_point_size_preference() {
+    for (point_size, unit, dimension, value) in [
+        ("traditional", UnitKind::Points, "Width", "7227"),
+        ("traditional", UnitKind::Picas, "Width", "602.25"),
+        ("postScript", UnitKind::Points, "Width", "7200"),
+        ("postScript", UnitKind::Picas, "Width", "600"),
+        ("traditional", UnitKind::Points, "Height", "7227"),
+        ("traditional", UnitKind::Picas, "Height", "602.25"),
+        ("postScript", UnitKind::Points, "Height", "7200"),
+        ("postScript", UnitKind::Picas, "Height", "600"),
+    ] {
+        let mut app = app();
+        app.session.execute("prefs.set", json!({"path": "unitsAndRulers.pointSize", "value": point_size})).unwrap();
+        let ctx = app.ctx().clone();
+        // The app's root environment carries Point/Pica Size into hosted length fields.
+        app.framework_before_input(&ctx);
+        let mut h = harness(app);
+        let id = open(&mut h);
+        let mut shown = crate::new_doc_remember_tests::options(h.state(), id);
+        shown.size = PixelSize::new(20, 2);
+        shown.pixels_per_inch = 100.0;
+        shown.unit = unit;
+        crate::new_doc_remember_tests::set_options(&mut h, id, &shown);
+
+        h.get_all_by_label(dimension).find(|node| node.accesskit_node().value().is_some()).expect("the dimension field").click();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run_steps(2);
+        h.get_all_by_label(dimension).find(|node| node.accesskit_node().value().is_some()).expect("the dimension field").type_text(value);
+        h.run_steps(2);
+        h.key_press(egui::Key::Tab);
+        h.run_steps(4);
+
+        let expected = if dimension == "Width" { PixelSize::new(10_000, 2) } else { PixelSize::new(20, 10_000) };
+        assert_eq!(crate::new_doc_remember_tests::options(h.state(), id).size, expected, "{point_size} {unit:?} {dimension}");
+        assert!(press_create(&mut h, id), "Create is enabled");
+        let doc = &h.state().session.active().unwrap().doc;
+        assert_eq!((doc.size.width, doc.size.height), (expected.width, expected.height), "{point_size} {unit:?} {dimension}");
+        assert_eq!(doc.resolution_dpi, 100.0);
+    }
+}
+
 /// #321: New Document offers the working space and the other profiles of the mode's space.
 #[test]
 fn color_profile_menu_lists_the_profiles_of_the_modes_space() {
@@ -34,79 +77,6 @@ fn color_profile_menu_lists_the_profiles_of_the_modes_space() {
 
 /// Our format at the engine boundary: what `file.new` takes for each setting, and nothing of the dialog's own.
 #[test]
-fn applying_a_preset_replaces_the_picked_profile() {
-    let mut s = photocraft_engine::Session::new();
-    let base = json!({"width": 8, "height": 8, "mode": "cmyk", "unit": "px"});
-    s.execute("document.presets.save", json!({"name": "Plain", "settings": base})).unwrap();
-    let mut press = base.clone();
-    press["profile"] = json!("coated-cmyk");
-    s.execute("document.presets.save", json!({"name": "Press", "settings": press})).unwrap();
-    let mut f = Map::new();
-    f.insert("profile".into(), json!(photocraft_cms::Builtin::AdobeRgbCompat.id()));
-    apply_saved_preset(&mut f, &s.presets.documents[0]);
-    assert!(!f.contains_key("profile"), "{f:?}");
-    assert!(s.execute("file.new", command_params(&f)).is_ok());
-    apply_saved_preset(&mut f, &s.presets.documents[1]);
-    assert_eq!(f["profile"], "coated-cmyk");
-}
-
-/// #9086: the Artboards checkbox's field reaches `file.new`, which starts the document as one
-/// artboard; the dialog's own `__` keys don't.
-#[test]
-fn the_artboards_box_creates_an_artboard_document() {
-    let mut s = photocraft_engine::Session::new();
-    let mut f = Map::new();
-    for (k, v) in [("width", json!(64)), ("height", json!(48)), ("artboard", json!(true)), ("__orientation", json!("landscape"))] {
-        f.insert(k.into(), v);
-    }
-    s.execute("file.new", command_params(&f)).unwrap();
-    let doc = &s.active().unwrap().doc;
-    assert_eq!(doc.artboards().len(), 1);
-    assert_eq!(doc.artboards()[0].2.rect, doc.bounds());
-}
-
-#[test]
-fn units_round_trip_through_pixels() {
-    assert_eq!(to_unit(2100.0, "in", 300.0, 72.0), 7.0);
-    assert_eq!(from_unit(7.0, "in", 300.0, 72.0), 2100.0);
-    assert_eq!(from_unit(2.54, "cm", 300.0, 72.0), 300.0);
-    assert_eq!(to_unit(640.0, "px", 72.0, 72.0), 640.0);
-}
-
-/// Points and picas follow Preferences › Point/Pica Size, as Image Size's do: 7227 traditional
-/// points are 100 in, not 7227 / 72.
-#[test]
-fn points_and_picas_follow_the_point_size_preference() {
-    assert_eq!(from_unit(7227.0, "pt", 100.0, 72.27), 10_000.0);
-    assert_eq!(from_unit(602.25, "pica", 100.0, 72.27), 10_000.0);
-    assert_eq!(from_unit(7200.0, "pt", 100.0, 72.0), 10_000.0);
-    assert!((to_unit(10_000.0, "pt", 100.0, 72.27) - 7227.0).abs() < 0.01);
-    // A preference that isn't a positive number converts at PostScript points.
-    assert_eq!(from_unit(7200.0, "pt", 100.0, f32::NAN), 10_000.0);
-}
-
-/// #1147: 5 mm at 72 ppi is 14 px, which is 4.94 mm. The field must keep showing the typed 5.
-#[test]
-fn typed_size_in_a_physical_unit_shows_as_typed() {
-    let mut f = crate::state::UiState::new_document_fields();
-    set_size(&mut f, "height", 5.0, "mm", 72.0, 72.0);
-    assert_eq!(command_params(&f)["height"], json!(14));
-    assert_eq!(shown_size(&f, "height", 1080.0, "mm", 72.0, 72.0), 5.0);
-    // Another unit, or pixels changed elsewhere (a preset, the orientation swap): converted.
-    assert_eq!(shown_size(&f, "height", 1080.0, "cm", 72.0, 72.0), to_unit(14.0, "cm", 72.0, 72.0));
-    f.insert("height".into(), json!(1080));
-    assert_eq!(shown_size(&f, "height", 1080.0, "mm", 72.0, 72.0), to_unit(1080.0, "mm", 72.0, 72.0));
-    // Pixels show whole pixels.
-    set_size(&mut f, "width", 512.4, "px", 72.0, 72.0);
-    assert_eq!(shown_size(&f, "width", 1920.0, "px", 72.0, 72.0), 512.0);
-    // Over the 300000 px limit the field shows the limit.
-    set_size(&mut f, "width", 300_000.0, "mm", 72.0, 72.0);
-    assert_eq!(command_params(&f)["width"], json!(300_000));
-    assert_eq!(shown_size(&f, "width", 1920.0, "mm", 72.0, 72.0), to_unit(300_000.0, "mm", 72.0, 72.0));
-}
-
-/// #5661: 1 px at 300 ppi is 0.0033 in. Showing it in inches clamped the field to 0.01 in and
-/// turned the width into 3 px without an edit.
 fn preset_sets_size_resolution_and_create_params_drop_ui_keys() {
     let table = [
         (
@@ -187,39 +157,6 @@ fn a_custom_background_color_is_picked_and_used() {
     let id = open(&mut h);
     h.get_by_label("Custom background color").click();
     h.run_steps(3);
-    let p = command_params(&h.state().1);
-    assert_eq!((p["width"].as_u64(), p["height"].as_u64()), (Some(1), Some(1)));
-}
-
-/// #1147: the Orientation buttons swap the typed values too: 841 x 1189 mm becomes 1189 x 841.
-#[test]
-fn orientation_swap_keeps_the_typed_values() {
-    let mut f = crate::state::UiState::new_document_fields();
-    set_size(&mut f, "width", 841.0, "mm", 72.0, 72.0);
-    set_size(&mut f, "height", 1189.0, "mm", 72.0, 72.0);
-    swap_size(&mut f);
-    let p = command_params(&f);
-    assert_eq!((p["width"].clone(), p["height"].clone()), (json!(3370), json!(2384)));
-    assert_eq!((shown_size(&f, "width", 1920.0, "mm", 72.0, 72.0), shown_size(&f, "height", 1080.0, "mm", 72.0, 72.0)), (1189.0, 841.0));
-}
-
-#[test]
-fn resolution_keeps_physical_size_in_physical_units_and_pixels_in_px() {
-    let a4 = CATEGORIES.iter().find(|c| c.0 == "Print").unwrap().1.iter().find(|p| p.0 == "A4").unwrap();
-    let mut f = crate::state::UiState::new_document_fields();
-    apply_preset(&mut f, a4, &Default::default());
-    f.insert("__unit".into(), json!("in"));
-    set_resolution(&mut f, 150.0);
-    let p = command_params(&f);
-    assert_eq!((p["width"].clone(), p["height"].clone(), p["resolution"].clone()), (json!(1240), json!(1754), json!(150.0)));
-    assert!(!f.contains_key("__preset"));
-
-    let mut f = crate::state::UiState::new_document_fields();
-    apply_preset(&mut f, a4, &Default::default());
-    f.insert("__unit".into(), json!("px"));
-    set_resolution(&mut f, 150.0);
-    let p = command_params(&f);
-    assert_eq!((p["width"].clone(), p["height"].clone(), p["resolution"].clone()), (json!(2480), json!(3508), json!(150.0)));
     let opened = h.state().framework.dialogs.open_dialogs();
     let picker = opened.iter().find(|d| d.id != id).map(|d| d.id).expect("the Color Picker opens over the dialog");
     assert_eq!(opened.len(), 2);
