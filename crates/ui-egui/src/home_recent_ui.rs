@@ -480,6 +480,99 @@ mod tests {
         assert!(loaded.is_none());
     }
 
+    /// Drive the real Home source and store with one explicitly completed background lane.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn recent_thumbnail_pass(app: &PhotocraftApp, frames: &mut craft::ui::testing::Frames, key: &ThumbKey) -> craft::ui::primitives::TextureState {
+        let ctx = app.ctx().clone();
+        let mut state = None;
+        frames.frame(Vec::new(), |_| {
+            state = Some(thumbnails(&ctx).state(&ctx, &source(app, &ctx), key, &ThumbRequest::for_cell(64.0, 1.0), craft::ui::primitives::Priority::VISIBLE));
+        });
+        state.expect("the Home thumbnail caller ran")
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn manual_recent_thumbnails(app: &PhotocraftApp) -> (craft::ui::testing::Frames, std::sync::Arc<craft::host::ManualJobs>) {
+        let ctx = app.ctx().clone();
+        let jobs = std::sync::Arc::new(craft::host::ManualJobs::new());
+        // The production accessor uses this same salt; its later options keep this first-created loader.
+        Thumbnails::<ThumbKey>::in_context(&ctx, "home-recent", ThumbnailOptions::new().lanes(1).jobs(jobs.clone()));
+        let mut frames = craft::ui::testing::Frames::over(ctx);
+        frames.record_paint();
+        (frames, jobs)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn assert_recent_picture(frames: &mut craft::ui::testing::Frames, state: craft::ui::primitives::TextureState, rgba: [u8; 4]) {
+        let craft::ui::primitives::TextureState::Ready(texture) = state else { panic!("the completed decoder must supply a ready picture") };
+        assert_eq!((texture.size.width, texture.size.height), (4, 4));
+        let mut paint = frames.take_paint().expect("texture uploads were recorded");
+        let delta = paint.textures_delta.set.get(&texture.id).and_then(|changes| changes.last()).expect("the real decoder's texture was uploaded");
+        let egui::ImageData::Color(image) = &delta.image;
+        assert_eq!(image.size, [4, 4]);
+        assert!(image.pixels.iter().all(|pixel| pixel.to_array() == rgba), "the picture contains the decoded file's pixels");
+        // The headless test inspected the uploads instead of rendering them.
+        paint.textures_delta.clear();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn recent_thumbnail_loads_in_background_when_background_jobs_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("background.png");
+        std::fs::write(&path, flat_png([20, 60, 100, 255])).unwrap();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.background_jobs = true;
+        app.push_recent(&path.to_string_lossy());
+        let key = ThumbKey::Recent(path);
+        let (mut frames, jobs) = manual_recent_thumbnails(&app);
+
+        assert!(matches!(recent_thumbnail_pass(&app, &mut frames, &key), craft::ui::primitives::TextureState::Loading { stand_in: None, .. }));
+        assert_eq!(jobs.waiting(), 1, "the real source returned a background decoder, rather than decoding inline");
+        assert!(jobs.run_next(), "the queued decoder actually ran to completion");
+        assert_eq!(jobs.waiting(), 0, "no worker remains deferred");
+        let state = recent_thumbnail_pass(&app, &mut frames, &key);
+        assert_recent_picture(&mut frames, state, [20, 60, 100, 255]);
+        assert!(!jobs.run_next(), "the ready picture starts no duplicate job");
+        assert!(thumbnails(app.ctx()).shutdown(std::time::Duration::from_secs(2)), "the completed loader has no running work");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn recent_thumbnail_discards_background_result_if_invalidated_while_loading() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("invalidated.png");
+        std::fs::write(&path, flat_png([100, 20, 60, 255])).unwrap();
+        let path_string = path.to_string_lossy().into_owned();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.background_jobs = true;
+        app.push_recent(&path_string);
+        let key = ThumbKey::Recent(path);
+        let (mut frames, jobs) = manual_recent_thumbnails(&app);
+
+        assert!(matches!(recent_thumbnail_pass(&app, &mut frames, &key), craft::ui::primitives::TextureState::Loading { .. }));
+        let before = revision_of(&app, &path_string);
+        assert!(jobs.run_next(), "finish the actual decoder before invalidation and before its result is uploaded");
+        assert_eq!(jobs.waiting(), 0);
+        lock(&app.thumbnail_cache).invalidate(&path_string);
+        assert_ne!(before, revision_of(&app, &path_string), "invalidation must change the real source's revision");
+        // Check invalidation with unchanged metadata first, then make stale and fresh decoder pixels distinct.
+        std::fs::write(&path_string, flat_png([20, 100, 60, 255])).unwrap();
+
+        // The former picture may be a stand-in, but it cannot satisfy the invalidated revision as Ready.
+        assert!(
+            matches!(recent_thumbnail_pass(&app, &mut frames, &key), craft::ui::primitives::TextureState::Loading { .. }),
+            "the completed old result is not current"
+        );
+        assert_eq!(jobs.waiting(), 1, "the production source requests a replacement decoder");
+        assert!(jobs.run_next(), "the replacement decoder completes");
+        let state = recent_thumbnail_pass(&app, &mut frames, &key);
+        assert_recent_picture(&mut frames, state, [20, 100, 60, 255]);
+        assert_eq!(jobs.waiting(), 0);
+        assert!(!jobs.run_next());
+        assert!(thumbnails(app.ctx()).shutdown(std::time::Duration::from_secs(2)), "both decoder jobs have terminated");
+    }
+
     /// The thumbnail source of a fresh pass over `app`.
     #[cfg(not(target_arch = "wasm32"))]
     fn revision_of(app: &PhotocraftApp, path: &str) -> Revision {

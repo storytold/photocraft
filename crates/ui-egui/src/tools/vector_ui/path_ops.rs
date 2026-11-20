@@ -195,13 +195,13 @@ pub(crate) fn active_shape_path(app: &PhotocraftApp) -> Option<(u64, Path)> {
     }
 }
 
-/// Does ⌫ / Delete delete the work path? With the Pen, Freeform Pen or Path Selection tool, no
-/// path being drawn and the work path the one these tools show and edit (no shape layer or
-/// targeted vector mask in front of it), as in Photoshop (#5702). It was drawn whenever one of
-/// these tools was active, but the key reached Edit › Clear, so it looked impossible to delete.
-/// Direct Selection and the Curvature Pen delete selected anchors in Photoshop, not the path.
+/// Does ⌫ / Delete delete the work path? With the Pen, Freeform Pen, Curvature Pen or Path
+/// Selection tool, no path being drawn and the work path the one these tools show and edit (no
+/// shape layer or targeted vector mask in front of it), as in Photoshop (#5702, #12695). It was
+/// drawn whenever one of these tools was active, but the key reached Edit › Clear, so it looked
+/// impossible to delete. A selected anchor goes first (the overlay's own key).
 pub(crate) fn delete_key_deletes_work_path(app: &PhotocraftApp) -> bool {
-    matches!(app.ui.tool, Tool::Pen | Tool::FreeformPen | Tool::PathSelection)
+    matches!(app.ui.tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::PathSelection)
         && app.ui.pen.is_none()
         && app.ui.transform.is_none()
         && app.ui.view.shows(app.ui.view.show.target_path)
@@ -212,9 +212,9 @@ pub(crate) fn delete_key_deletes_work_path(app: &PhotocraftApp) -> bool {
 /// With Direct Selection and a clicked segment (`[subpath, knot]` it leaves) and no selected
 /// anchor, the segment goes on its own: its anchors stay and the subpath opens there, as in
 /// Photoshop (#13203). With nothing selected, the path Direct Selection targets is deleted: a
-/// saved path, the work path or a vector mask. The work path with the Pen, Freeform Pen or Path
-/// Selection is [`delete_key_deletes_work_path`]. A shape layer's path wasn't measured: the key
-/// keeps deleting the layer.
+/// saved path, the work path or a vector mask. The work path with the Pen, Freeform Pen,
+/// Curvature Pen or Path Selection is [`delete_key_deletes_work_path`]. A shape layer's path
+/// wasn't measured: the key keeps deleting the layer.
 pub(crate) fn delete_key_edits_path(app: &PhotocraftApp) -> Option<(&'static str, Value)> {
     if delete_key_deletes_work_path(app) {
         return Some(("path.delete", json!({"name": "work"})));
