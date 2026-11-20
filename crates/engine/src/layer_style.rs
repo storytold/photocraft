@@ -2,13 +2,14 @@
 
 use photocraft_color::{BlendMode, Color};
 use photocraft_doc::adjust::CurvePoint;
+use photocraft_doc::effects::PATTERN_SCALE_RANGE;
 use photocraft_doc::{
     Bevel, BevelStyle, BevelTechnique, Contour, Effect, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique, Gradient, GradientStyle, Satin, Shadow, StrokeFx,
     StrokePosition,
 };
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, blend_from_str};
+use crate::commands::{CommandSpec, parse_blend};
 use crate::presets::{always, bad};
 use crate::{EngineError, Result, Session};
 
@@ -153,7 +154,7 @@ pub fn effect_defaults(kind: &str) -> Value {
             json!({"blend": "Multiply", "color": "#000000", "opacity": 75, "angle": 120, "useGlobalLight": true, "distance": 5, "choke": 0, "size": 5, "contour": "Linear", "antiAlias": false, "noise": 0})
         }
         "outerGlow" => {
-            json!({"blend": "Screen", "opacity": 75, "color": "#ffffbe", "technique": "softer", "spread": 0, "size": 5, "range": 50, "contour": "Linear", "antiAlias": false, "noise": 0})
+            json!({"blend": "Screen", "opacity": 35, "color": "#ffffff", "technique": "softer", "spread": 0, "size": 7, "range": 50, "contour": "Linear", "antiAlias": false, "noise": 0})
         }
         "innerGlow" => {
             json!({"blend": "Screen", "opacity": 75, "color": "#ffffbe", "technique": "softer", "source": "edge", "choke": 0, "size": 5, "range": 50, "contour": "Linear", "antiAlias": false, "noise": 0})
@@ -511,7 +512,7 @@ pub fn contour_from_param(v: &Value) -> Option<Contour> {
 /// The contours of an `.shc` contour preset file (Contour Editor › Load…), as `contour` params.
 /// Points are rescaled from the file's `0..=255` levels; unusable curves are skipped.
 pub fn contours_from_shc(bytes: &[u8]) -> Result<Vec<Value>> {
-    let file = photocraft_psd::shc::parse(bytes).map_err(|e| EngineError::Other(format!("not a contour file: {e}")))?;
+    let file = craft_psd::shc::parse(bytes).map_err(|e| EngineError::Other(format!("not a contour file: {e}")))?;
     Ok(file
         .into_iter()
         .filter_map(|c| {
@@ -532,7 +533,7 @@ pub fn contour_to_shc(contour: &Contour) -> Result<Vec<u8>> {
 
 /// An `.shc` file holding every contour of `list` (Save Contours…).
 pub fn contour_to_shc_all(list: &[&Contour]) -> Result<Vec<u8>> {
-    let file: Vec<photocraft_psd::shc::ShcContour> = list
+    let file: Vec<craft_psd::shc::ShcContour> = list
         .iter()
         .map(|contour| {
             let (name, points) = match contour {
@@ -542,12 +543,12 @@ pub fn contour_to_shc_all(list: &[&Contour]) -> Result<Vec<u8>> {
             let points = points
                 .iter()
                 .enumerate()
-                .map(|(i, p)| photocraft_psd::shc::ShcPoint { input: p.input * 255.0, output: p.output * 255.0, continuous: !contour.is_corner(i) })
+                .map(|(i, p)| craft_psd::shc::ShcPoint { input: p.input * 255.0, output: p.output * 255.0, continuous: !contour.is_corner(i) })
                 .collect();
-            photocraft_psd::shc::ShcContour { name, points }
+            craft_psd::shc::ShcContour { name, points }
         })
         .collect();
-    photocraft_psd::shc::write(&file).map_err(|e| EngineError::Other(format!("can't write the contour: {e}")))
+    craft_psd::shc::write(&file).map_err(|e| EngineError::Other(format!("can't write the contour: {e}")))
 }
 
 /// An effect of `kind` with its factory settings (before params are applied).
@@ -565,12 +566,15 @@ fn fresh_effect(kind: &str) -> Option<Effect> {
         noise: 0.0,
         knocks_out: !inner,
     };
-    let glow = || Glow {
-        common: FxCommon::new(BlendMode::Screen, 0.75),
-        paint: FxPaint::Color(Color::rgb(1.0, 1.0, 190.0 / 255.0)),
+    // The two glows share their shape, but not their factory values: the Outer Glow starts at
+    // the reference application's white 35 % Size 7 (#14944), the Inner Glow at today's values
+    // until #14917 measures its own.
+    let glow = |inner: bool| Glow {
+        common: FxCommon::new(BlendMode::Screen, if inner { 0.75 } else { 0.35 }),
+        paint: FxPaint::Color(if inner { Color::rgb(1.0, 1.0, 190.0 / 255.0) } else { Color::WHITE }),
         technique: GlowTechnique::Softer,
         spread: 0.0,
-        size: 5.0,
+        size: if inner { 5.0 } else { 7.0 },
         contour: Contour::Linear,
         anti_alias: false,
         range: 0.5,
@@ -581,8 +585,8 @@ fn fresh_effect(kind: &str) -> Option<Effect> {
     Some(match kind {
         "dropShadow" => Effect::DropShadow(shadow(false)),
         "innerShadow" => Effect::InnerShadow(shadow(true)),
-        "outerGlow" => Effect::OuterGlow(glow()),
-        "innerGlow" => Effect::InnerGlow(glow()),
+        "outerGlow" => Effect::OuterGlow(glow(false)),
+        "innerGlow" => Effect::InnerGlow(glow(true)),
         "stroke" => Effect::Stroke(StrokeFx {
             common: FxCommon::new(BlendMode::Normal, 1.0),
             size: 1.0,
@@ -676,6 +680,15 @@ fn overlay_gradient(g: &mut Gradient, p: &Value) {
     if let Some(x) = b_of(p, "reverse") {
         g.reverse = x;
     }
+    // The gradient's centre as a fraction of the layer's bounds, `[x, y]` (0: centred); a drag on
+    // the image with the Layer Style dialog on the page moves it (#10763).
+    if let Some(a) = p.get("offset").and_then(Value::as_array)
+        && let (Some(x), Some(y)) = (a.first().and_then(Value::as_f64), a.get(1).and_then(Value::as_f64))
+        && x.is_finite()
+        && y.is_finite()
+    {
+        g.offset = (x.clamp(-4.0, 4.0) as f32, y.clamp(-4.0, 4.0) as f32);
+    }
 }
 
 /// Applies the params present in `p` onto an existing effect, in the command's
@@ -704,7 +717,7 @@ fn overlay_common(c: &mut FxCommon, p: &Value) {
     if let Some(x) = b_of(p, "enabled") {
         c.enabled = x;
     }
-    if let Some(x) = p.get("blend").and_then(Value::as_str).and_then(blend_from_str) {
+    if let Some(x) = p.get("blend").and_then(Value::as_str).and_then(parse_blend) {
         c.blend = x;
     }
     if let Some(x) = f_of(p, "opacity") {
@@ -712,23 +725,39 @@ fn overlay_common(c: &mut FxCommon, p: &Value) {
     }
 }
 
+/// The Inner Shadow page's typed ranges (#14940): Distance 0..30000 px, Size 0..250 px and an
+/// Angle of -360..360. `layer.layerStyle.innerShadow` follows them, as the epic's measured
+/// clamping table says; the Drop Shadow page's own ranges are #14893.
+const INNER_DISTANCE_RANGE: (f32, f32) = (0.0, 30_000.0);
+const INNER_SIZE_RANGE: (f32, f32) = (0.0, 250.0);
+const INNER_ANGLE_RANGE: (f32, f32) = (-360.0, 360.0);
+
+/// The angle Photoshop stores for an Inner Shadow typed past half a turn: 200 becomes -160 and
+/// -200 becomes 160 (#14940). An angle already inside -180..180 is kept exactly, so in-range
+/// params, imported PSD values and the shared light angle stay as they were (a plain
+/// `rem_euclid` would move a stored 180 to -180).
+fn inner_shadow_angle(a: f32) -> f32 {
+    let a = a.clamp(INNER_ANGLE_RANGE.0, INNER_ANGLE_RANGE.1);
+    if (-180.0..=180.0).contains(&a) { a } else { (a + 180.0).rem_euclid(360.0) - 180.0 }
+}
+
 fn overlay_shadow(s: &mut Shadow, p: &Value, inner: bool) {
     overlay_common(&mut s.common, p);
     overlay_color(p, "color", &mut s.color);
     if let Some(x) = f_of(p, "angle") {
-        s.angle = x;
+        s.angle = if inner { inner_shadow_angle(x) } else { x };
     }
     if let Some(x) = b_of(p, "useGlobalLight") {
         s.use_global_light = x;
     }
     if let Some(x) = f_of(p, "distance") {
-        s.distance = x;
+        s.distance = if inner { x.clamp(INNER_DISTANCE_RANGE.0, INNER_DISTANCE_RANGE.1) } else { x };
     }
     if let Some(x) = f_of(p, if inner { "choke" } else { "spread" }) {
         s.spread = (x / 100.0).clamp(0.0, 1.0);
     }
     if let Some(x) = f_of(p, "size") {
-        s.size = x;
+        s.size = if inner { x.clamp(INNER_SIZE_RANGE.0, INNER_SIZE_RANGE.1) } else { x };
     }
     overlay_contour(p, "contour", &mut s.contour);
     overlay_bool(p, "antiAlias", &mut s.anti_alias);
@@ -795,7 +824,7 @@ fn overlay_pattern(fx: &mut Effect, p: &Value) {
         *id = String::new();
     }
     if let Some(x) = f_of(p, "scale") {
-        *scale = (x / 100.0).clamp(0.01, 10.0);
+        *scale = (x / 100.0).clamp(PATTERN_SCALE_RANGE.0, PATTERN_SCALE_RANGE.1);
     }
     if let Some(x) = f_of(p, "angle") {
         *angle = x;
@@ -873,10 +902,10 @@ fn overlay_bevel(bv: &mut Bevel, p: &Value) {
     }
     overlay_contour(p, "glossContour", &mut bv.gloss_contour);
     overlay_bool(p, "glossAntiAlias", &mut bv.gloss_anti_alias);
-    if let Some(blend) = p.get("highlightBlend").and_then(Value::as_str).and_then(blend_from_str) {
+    if let Some(blend) = p.get("highlightBlend").and_then(Value::as_str).and_then(parse_blend) {
         bv.highlight.blend = blend;
     }
-    if let Some(blend) = p.get("shadowBlend").and_then(Value::as_str).and_then(blend_from_str) {
+    if let Some(blend) = p.get("shadowBlend").and_then(Value::as_str).and_then(parse_blend) {
         bv.shadow.blend = blend;
     }
     overlay_color(p, "highlightColor", &mut bv.highlight_color);
@@ -903,7 +932,7 @@ fn overlay_bevel(bv: &mut Bevel, p: &Value) {
         bv.texture = Some(photocraft_doc::BevelTexture {
             name: t.to_string(),
             id: t.to_string(),
-            scale: (f(p, "textureScale", 100.0) / 100.0).clamp(0.01, 10.0),
+            scale: (f(p, "textureScale", 100.0) / 100.0).clamp(PATTERN_SCALE_RANGE.0, PATTERN_SCALE_RANGE.1),
             depth: (f(p, "textureDepth", 100.0) / 100.0).clamp(-10.0, 10.0),
             invert: b(p, "textureInvert", false),
             link: b(p, "textureLink", true),
@@ -1137,7 +1166,7 @@ pub fn specs() -> Vec<CommandSpec> {
         style_cmd!(
             "innerShadow",
             "Inner Shadow…",
-            r##"{"color":"#rrggbb","opacity":0..100=75,"blend":str,"angle":deg,"distance":px,"choke":0..100,"size":px,"contour":name|curve,"antiAlias":bool,"noise":0..100,"add":bool}"##
+            r##"{"color":"#rrggbb","opacity":0..100=75,"blend":str,"angle":-360..360 (clamped, then wrapped into -180..180: 400 -> 0; the shared light angle of layer.layerStyle.globalLight only wraps: 400 -> 40),"distance":0..30000,"choke":0..100,"size":0..250,"contour":name|curve,"antiAlias":bool,"noise":0..100,"add":bool}"##
         ),
         style_cmd!(
             "outerGlow",
@@ -1255,6 +1284,11 @@ fn delete_effect(s: &mut Session, p: &Value, effect: &Value) -> Result<Value> {
     Ok(Value::Null)
 }
 
+#[cfg(test)]
+mod outer_glow_defaults_tests;
+
+#[cfg(test)]
+mod inner_shadow_ranges_tests;
 #[cfg(test)]
 mod tests;
 

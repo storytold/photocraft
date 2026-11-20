@@ -1,5 +1,7 @@
+use crate::{EngineError, Result};
+
 use super::history::fix_selection;
-use super::{DocState, Document, Session, channel_cmds, smart_cmds};
+use super::{DocState, Document, LayerId, Session, channel_cmds, smart_cmds};
 
 /// Move item `i` of `v` to position `to`, clamped to the end. Returns where it went; `None` when
 /// `i` is out of range.
@@ -15,11 +17,19 @@ pub fn move_item<T>(v: &mut Vec<T>, i: usize, to: usize) -> Option<usize> {
 
 impl Session {
     pub fn new() -> Self {
+        // Commands run through the process-wide registry; the first session installs it, and a
+        // conflicting install reports itself at the first command.
+        let _ = crate::install::install();
         Self::default()
     }
 
     pub fn documents(&self) -> &[DocState] {
         &self.docs
+    }
+
+    /// Changes whenever a document is opened or closed.
+    pub fn documents_generation(&self) -> u64 {
+        self.documents_generation
     }
 
     pub fn active_index(&self) -> Option<usize> {
@@ -34,6 +44,11 @@ impl Session {
         self.active.and_then(|i| self.docs.get_mut(i))
     }
 
+    /// The open document with this id, active or not.
+    pub fn document_mut(&mut self, id: photocraft_doc::DocId) -> Option<&mut DocState> {
+        self.docs.iter_mut().find(|d| d.doc.id == id)
+    }
+
     /// Monotonic active-document generation. It changes when a different document becomes
     /// active, including a switch away and back between two observations; equal values therefore
     /// mean the document was not switched in between.
@@ -41,14 +56,50 @@ impl Session {
         self.active_generation
     }
 
+    /// Change marker: advances at least once whenever the active document or layer changes through
+    /// the `Session` API (see the field). Compare two readings for equality to know whether anything
+    /// changed in between; it is not an exact count of operations. A direct write to
+    /// `DocState::active_layer` through `active_mut()` bypasses it.
+    pub fn active_layer_changes(&self) -> u64 {
+        self.active_layer_changes
+    }
+
     /// Bump [`Self::active_generation`] when the active document id changed. Call after every
     /// assignment to `self.active`.
     pub(crate) fn note_active_change(&mut self) {
         let id = self.active().map(|st| st.doc.id);
         if id != self.active_doc_for_generation {
+            self.active_layer_changes = self.active_layer_changes.wrapping_add(1);
             self.active_doc_for_generation = id;
             self.active_generation = self.active_generation.wrapping_add(1);
         }
+    }
+
+    /// The active document and its active layer, for [`Self::note_layer_change`].
+    pub(crate) fn active_layer_stamp(&self) -> Option<(photocraft_doc::DocId, Option<LayerId>)> {
+        self.active().map(|st| (st.doc.id, st.active_layer))
+    }
+
+    /// Count a change of the active document or layer since `before` (from
+    /// [`Self::active_layer_stamp`]). Every path that can change either calls this after it.
+    pub(crate) fn note_layer_change(&mut self, before: Option<(photocraft_doc::DocId, Option<LayerId>)>) {
+        if self.active_layer_stamp() != before {
+            self.active_layer_changes = self.active_layer_changes.wrapping_add(1);
+        }
+    }
+
+    /// Make `layer` the active document's active layer and nothing else (the selection list and
+    /// anchor are left as they are), counted in [`Self::active_layer_changes`]. Like
+    /// [`Self::select_layer`], not an edit.
+    pub fn set_active_layer(&mut self, layer: Option<LayerId>) {
+        let before = self.active_layer_stamp();
+        if let Some(st) = self.active_mut()
+            && st.active_layer != layer
+        {
+            st.active_layer = layer;
+            st.bump_selection_revision();
+        }
+        self.note_layer_change(before);
     }
 
     pub fn set_active(&mut self, index: usize) -> bool {
@@ -98,19 +149,57 @@ impl Session {
         Some(to)
     }
 
+    /// Resolve a Photoshop action's offset in opening order, returning its current tab index.
+    /// Tab dragging changes `docs`, but must not change which document an imported action edits.
+    /// Offsets wrap at either end; native zero keeps the active document.
+    pub(crate) fn document_at_offset(&self, offset: i64) -> Result<usize> {
+        let id = self.active().ok_or(EngineError::NoDocument)?.doc.id;
+        let active = self.open_document_order.iter().position(|&open| open == id).ok_or(EngineError::NoDocument)?;
+        // Widen before addition so even extreme signed offsets wrap without overflow.
+        let target = (active as i128 + i128::from(offset)).rem_euclid(self.open_document_order.len() as i128) as usize;
+        let id = self.open_document_order.get(target).ok_or(EngineError::NoDocument)?;
+        self.docs.iter().position(|st| st.doc.id == *id).ok_or(EngineError::NoDocument)
+    }
+
+    /// A recorded index is one-based opening order, even after tabs are dragged.
+    pub(crate) fn document_at_index(&self, index: u64) -> Result<usize> {
+        let id = index
+            .checked_sub(1)
+            .and_then(|index| usize::try_from(index).ok())
+            .and_then(|index| self.open_document_order.get(index))
+            .ok_or_else(|| EngineError::Other(format!("no document at opening index {index}")))?;
+        self.docs.iter().position(|st| st.doc.id == *id).ok_or(EngineError::NoDocument)
+    }
+
+    /// Relative opening-order distance between two open documents, for portable action steps.
+    pub(crate) fn document_offset_between(&self, from: photocraft_doc::DocId, to: photocraft_doc::DocId) -> Option<i64> {
+        let from = self.open_document_order.iter().position(|&id| id == from)?;
+        let to = self.open_document_order.iter().position(|&id| id == to)?;
+        i64::try_from(to).ok()?.checked_sub(i64::try_from(from).ok()?)
+    }
+
     /// Add a document (from File → New, an import, etc.) and make it active.
-    /// Preserve its identity unless another open document already owns it.
+    /// Preserve its identity unless an open document or a picked clone source reserves it.
     /// Identity-dependent callers must read the admitted document at the returned index.
     pub fn add_document(&mut self, mut doc: Document, path: Option<String>) -> usize {
+        // A saved copy can reuse a closed source's persisted ID. Give the new tab another ID so
+        // a closed clone source stays invalid until the user explicitly picks a new source.
         // Persisted IDs can overlap the allocator, so check every replacement too.
-        while self.docs.iter().any(|st| st.doc.id == doc.id) {
+        while self.docs.iter().any(|st| st.doc.id == doc.id) || self.presets.clone.slots.iter().any(|slot| slot.document == Some(doc.id)) {
             doc.id = photocraft_doc::DocId::fresh();
         }
+        self.open_document_order.push(doc.id);
         let mut st = DocState::new(doc, path);
         st.history.max_states = self.prefs.get().performance.history_states.max(1) as usize;
-        st.history.max_bytes = self.prefs.get().performance.history_budget_bytes();
+        st.history.max_bytes = self.prefs.get().performance.history_cap_bytes();
         st.history.non_linear = self.prefs.get().history_options.allow_non_linear_history;
+        // History Options › Automatically Create First Snapshot off: no snapshot of the document
+        // as opened, so the History panel starts at the opening state (#2966).
+        if !self.prefs.get().history_options.automatically_create_first_snapshot {
+            st.snapshots_mut().clear();
+        }
         self.docs.push(st);
+        self.documents_generation = self.documents_generation.wrapping_add(1);
         let i = self.docs.len() - 1;
         self.active = Some(i);
         self.note_active_change();
@@ -122,6 +211,11 @@ impl Session {
         self.next_held_open = self.next_held_open.wrapping_add(1);
         self.held_opens.push((self.next_held_open, doc, source_read_only));
         self.next_held_open
+    }
+
+    /// Whether a document held back for its prompt already has `name`.
+    pub(crate) fn held_open_named(&self, name: &str) -> bool {
+        self.held_opens.iter().any(|(_, d, _)| d.name == name)
     }
 
     /// Takes a document a background open held back for the profile prompt: the document and
@@ -141,8 +235,13 @@ impl Session {
             self.cancel_jobs_on(id);
             self.subject_cache.forget_doc(id);
             self.object_finder.forget_doc(id);
+            self.presets.clone.forget_doc(id);
+            self.link_missing.retain(|(d, _)| *d != id.0);
+            self.link_scan = None;
         }
         let d = self.docs.remove(index);
+        self.documents_generation = self.documents_generation.wrapping_add(1);
+        self.open_document_order.retain(|&id| id != d.doc.id);
         self.active = if self.docs.is_empty() {
             None
         } else {
@@ -163,4 +262,27 @@ pub(super) fn fix_active(st: &mut DocState) {
     }
     fix_selection(st);
     channel_cmds::fix_view(st);
+}
+
+#[cfg(test)]
+mod document_generation_tests {
+    use super::Session;
+    use photocraft_color::SampleType;
+    use photocraft_doc::{ColorMode, Document};
+    use photocraft_geom::Size;
+
+    #[test]
+    fn document_generation_tracks_open_and_close_but_not_selection() {
+        let mut session = Session::new();
+        let before = session.documents_generation();
+        session.add_document(Document::new("test", Size::new(2, 2), ColorMode::Rgb, SampleType::U8), None);
+        let opened = session.documents_generation();
+        assert_eq!(opened, before.wrapping_add(1));
+        session.set_active(0);
+        assert_eq!(session.documents_generation(), opened);
+        session.close(0);
+        assert_eq!(session.documents_generation(), opened.wrapping_add(1));
+        session.close(0);
+        assert_eq!(session.documents_generation(), opened.wrapping_add(1));
+    }
 }

@@ -1,5 +1,5 @@
 use super::moves::{link_groups, recorded_move};
-use super::{DocState, Document, EngineError, Layer, LayerContent, LayerId, Rect, Result, Session, Value, bad, json};
+use super::{DocState, Document, EngineError, Layer, LayerContent, LayerId, Result, Session, Value, bad, json};
 
 // ---------- selection state ----------
 
@@ -42,13 +42,12 @@ pub(crate) fn mask_targets(s: &Session, p: &serde_json::Value) -> Result<Vec<Lay
 /// Ids in `ids` that have no ancestor also in `ids` (a selected group already carries its
 /// selected children), bottom-to-top.
 pub(crate) fn top_level(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
-    let walk = doc.walk();
-    let paths: Vec<_> = walk.iter().filter(|(_, _, l)| ids.contains(&l.id)).map(|(p, _, l)| (p.clone(), l.id)).collect();
-    paths.iter().filter(|(p, _)| !paths.iter().any(|(q, _)| q.len() < p.len() && p.starts_with(q))).map(|(_, id)| *id).collect()
+    doc.layers.index().roots(ids)
 }
 
 /// Replace the layer selection without a history step (like [`Session::select_layer`]).
 pub fn set_selection(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerId>, anchor: Option<LayerId>) -> Result<()> {
+    let before = s.active_layer_stamp();
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     if let Some(bad) = ids.iter().chain(active.iter()).find(|id| st.doc.layer(**id).is_none()) {
         return Err(EngineError::NoLayer(*bad));
@@ -63,13 +62,8 @@ pub fn set_selection(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerId>
     st.active_layer = active;
     st.layer_anchor = anchor.or(active);
     crate::fix_selection(st);
-    // Selecting layers is not an edit: keep a clean document clean.
-    let clean = st.saved_revision == st.revision;
-    st.revision += 1;
-    if clean {
-        st.saved_revision = st.revision;
-    }
-    st.last_damage = Some(Rect::EMPTY);
+    st.bump_selection_revision();
+    s.note_layer_change(before);
     Ok(())
 }
 
@@ -133,6 +127,15 @@ pub(super) fn same_named_targets(doc: &photocraft_doc::Document, name: &str, mov
 /// (omitting `layer`) so that the recorded step applies to whatever layer is targeted when
 /// replayed or exported to `.atn` (#7248).
 pub(crate) fn recorded_step(s: &Session, id: &str, p: Value, pre_selected: Option<&[LayerId]>) -> Value {
+    if id == "select.loadSelection"
+        && let Some(layer_id) = p.get("layer").and_then(Value::as_u64).map(LayerId)
+    {
+        return recorded_source_layer(s, p, layer_id);
+    }
+    if crate::actions_record::needs_source_layer(id) {
+        // An explicit layer supplies content, even when it is the sole selection.
+        return p;
+    }
     if id == "layer.select" {
         return recorded_selection(s, p);
     }
@@ -158,6 +161,26 @@ pub(crate) fn recorded_step(s: &Session, id: &str, p: Value, pre_selected: Optio
             fields.remove("layer");
         }
         return p;
+    }
+    p
+}
+
+/// ⌘-clicking another layer's thumbnail loads that layer's transparency. The step refers to the
+/// layer the way the reference application records it, by name (or as the Background), so it
+/// replays in another document and saves to `.atn`. A layer that the name would not find (a
+/// same-named layer above it) keeps its id.
+fn recorded_source_layer(s: &Session, mut p: Value, id: LayerId) -> Value {
+    let Some(doc) = s.active().map(|st| &st.doc) else { return p };
+    let Some(layer) = doc.layer(id) else { return p };
+    let reference = if doc.background().is_some_and(|b| b.id == id) {
+        json!({"background": true})
+    } else if doc.walk().into_iter().rev().find(|(_, _, l)| l.name == layer.name).is_some_and(|(_, _, l)| l.id == id) {
+        json!({"name": layer.name})
+    } else {
+        return p;
+    };
+    if let Some(fields) = p.as_object_mut() {
+        fields.insert("layer".into(), reference);
     }
     p
 }
@@ -221,7 +244,48 @@ fn range_order(layers: &[Layer], include_collapsed: bool, out: &mut Vec<LayerId>
 }
 
 /// `layer.select`: `{"layer": id, "mode": "replace|toggle|range|add|remove"}`.
+/// `layer.select {"layers": [id…]}`: exactly these layers, the last one active (the Layers panel's
+/// Shift-click and Shift+arrow range, which the panel computes from what it shows). The anchor stays
+/// when it is in the set.
+fn select_set(s: &mut Session, list: &Value) -> Result<Value> {
+    let Some(items) = list.as_array().filter(|a| !a.is_empty() && a.len() <= 10_000) else {
+        return Err(bad("layer.select", format!("`layers` is a non-empty list of layer ids, got {list}")));
+    };
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let mut ids = Vec::with_capacity(items.len());
+    for v in items {
+        let id = v.as_u64().map(LayerId).ok_or_else(|| bad("layer.select", format!("`layers` holds layer ids, got {v}")))?;
+        if st.doc.layer(id).is_none() {
+            return Err(EngineError::NoLayer(id));
+        }
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    let active = ids.last().copied();
+    let anchor = st.layer_anchor.filter(|a| ids.contains(a)).or(ids.first().copied());
+    set_selection(s, ids, active, anchor)?;
+    Ok(json!({"selected": selected(s).iter().map(|l| l.0).collect::<Vec<_>>()}))
+}
+
 pub fn select(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(selector @ Value::Object(fields)) = p.get("layer")
+        && (fields.contains_key("index") || fields.contains_key("ordinal"))
+        && crate::commands::recorded_layer(s, selector)?.is_none()
+    {
+        if p.get("name").is_some() || p.get("occurrence").is_some() {
+            return Err(bad("layer.select", "a layer reference cannot be combined with name or occurrence"));
+        }
+        let mode = p.get("mode").and_then(Value::as_str).unwrap_or("replace");
+        if !matches!(mode, "replace" | "toggle" | "range" | "add" | "remove") {
+            return Err(bad("layer.select", format!("unknown mode `{mode}`")));
+        }
+        // A group-end index leaves the active layer, anchor and full selection unchanged.
+        return Ok(json!({"selected": selected(s).iter().map(|id| id.0).collect::<Vec<_>>()}));
+    }
+    if let Some(list) = p.get("layers") {
+        return select_set(s, list);
+    }
     let id = selection_target(s, p)?;
     let mode = p.get("mode").and_then(Value::as_str).unwrap_or("replace");
     let st = s.active().ok_or(EngineError::NoDocument)?;
@@ -291,16 +355,27 @@ pub(super) fn select_all_layers(s: &mut Session) -> Result<Value> {
     Ok(json!({"selected": n}))
 }
 
+/// Select › Find Layers (#10884): as in Photoshop it filters the Layers panel by Name and leaves the
+/// layer selection alone. The reply's `layerFilter` is the Name filter the app applies (`name` only
+/// when one is given) and `selected` lists the layers it matches: part of the name, trimmed and
+/// ignoring case, as the panel matches: every layer for a blank name, which the panel doesn't filter
+/// by (none without a name).
 pub(super) fn find_layers(s: &mut Session, p: &Value) -> Result<Value> {
-    let needle = p.get("name").and_then(Value::as_str).ok_or_else(|| bad("select.findLayers", "missing `name`"))?.to_lowercase();
+    let name = match p.get("name") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_str().ok_or_else(|| bad("select.findLayers", "`name` must be a string"))?),
+    };
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let ids: Vec<LayerId> = d.doc.walk().into_iter().filter(|(_, _, l)| l.name.to_lowercase().contains(&needle)).map(|(_, _, l)| l.id).collect();
-    if ids.is_empty() {
-        return Err(EngineError::Other(format!("no layer name contains \"{needle}\"")));
+    let needle = name.map(|n| n.trim().to_lowercase());
+    let ids: Vec<u64> = match &needle {
+        Some(n) => d.doc.walk().into_iter().filter(|(_, _, l)| l.name.to_lowercase().contains(n.as_str())).map(|(_, _, l)| l.id.0).collect(),
+        None => Vec::new(),
+    };
+    let mut filter = json!({"by": "name"});
+    if let Some(n) = name {
+        filter["name"] = json!(n);
     }
-    let out = ids.iter().map(|l| l.0).collect::<Vec<_>>();
-    set_selection(s, ids, None, None)?;
-    Ok(json!({"selected": out}))
+    Ok(json!({"selected": ids, "layerFilter": filter}))
 }
 
 pub(super) fn select_linked(s: &mut Session) -> Result<Value> {
