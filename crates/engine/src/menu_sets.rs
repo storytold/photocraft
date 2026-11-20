@@ -383,16 +383,27 @@ pub fn set_name_of(file: &Path) -> Option<String> {
 
 /// The file of the set `name` inside the folder `dir`. A set name can come from a Save dialog or a
 /// hand-edited preferences file, so a name that cannot be one file's name is an error here rather
-/// than a path that leaves the folder.
+/// than a path that leaves the folder. Besides the separators and control characters, a name ending
+/// in a dot is refused: a file system drops trailing dots and resolves `.` and `..` per component, so
+/// such a name is not a name of its own (`...` would be written as `...MNU`, whose stem is the name
+/// of the folder's parent, and `Mine.` is one file with `Mine` where trailing dots go). What is
+/// accepted is the whole file name of one file in `dir`, and that file names the set back.
 pub fn path_of(dir: &Path, name: &str) -> Result<PathBuf, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("a set needs a name".into());
     }
-    if name.chars().any(|c| matches!(c, '/' | '\\' | ':') || char::is_control(c)) || name == "." || name == ".." {
+    if name.chars().any(|c| matches!(c, '/' | '\\' | ':') || char::is_control(c)) || name.ends_with('.') || name.ends_with(char::is_whitespace) {
         return Err(format!("`{name}` cannot name a set file"));
     }
-    Ok(dir.join(file_name(name)))
+    let file = file_name(name);
+    let path = dir.join(&file);
+    // Two guards on the joined path: the name is the whole file name of one file in the folder,
+    // nothing in it made a second component, and reading the folder would give this set name back.
+    if path.file_name().and_then(|s| s.to_str()) != Some(file.as_str()) || set_name_of(&path).as_deref() != Some(name) {
+        return Err(format!("`{name}` cannot name a set file"));
+    }
+    Ok(path)
 }
 
 /// The text of the file `path`, refused before it is read when it is bigger than [`MAX_MNU_BYTES`].

@@ -236,8 +236,8 @@ fn menu_sets_are_saved_with_the_preferences_and_an_older_file_loads_without_them
 // ---- the `.mnu` files: the sets as files in the settings directory (#14450) ----
 
 use crate::menu_sets::{
-    self, MAX_MNU_BYTES, MenuSet, REF_ITEMS, color_name, color_number, file_name, folder, from_mnu, read_sets, ref_command, ref_item, set_name_of, to_mnu,
-    write_set,
+    self, MAX_MNU_BYTES, MenuSet, REF_ITEMS, color_name, color_number, file_name, folder, from_mnu, path_of, read_sets, ref_command, ref_item, set_name_of,
+    to_mnu, write_set,
 };
 
 /// A set: its hidden items and its colours, as `saveSet` would store them.
@@ -509,4 +509,41 @@ fn a_file_the_reference_application_wrote_reads_as_a_set() {
     assert_eq!(hidden_of(&read.set), vec!["file.close".to_string(), "layer.mergeVisible".to_string()]);
     assert_eq!(read.set.colors["file.close"], "blue", "both rows of File › Close came together");
     assert!(read.kept.is_empty(), "{read:?}");
+}
+
+#[test]
+fn a_name_that_cannot_be_one_file_name_never_reaches_the_folder() {
+    // A set name can come from a hand-edited preferences file, and `path_of` is the one place that
+    // turns a name into a path. It refuses a name that would not name exactly one file inside the
+    // folder: `.` and `..` are the folder and its parent, and a name ending in a dot is not the
+    // name the folder ends up holding - `...` would become `...MNU`, whose stem is `..`, so the set
+    // written under it could never be read back, rewritten or deleted under the name it was saved
+    // under, and on a file system that drops trailing dots `Mine.` and `Mine` are one file.
+    let (_tmp, dir) = folder_with(&[]);
+    for name in [".", "..", "...", "....", "Mine.", "Mine..", "Web.", "x."] {
+        assert!(path_of(&dir, name).is_err(), "`{name:?}` was taken as a file of the folder");
+    }
+    // The separators, the drive-letter forms and the empty names were refused before and stay so.
+    for name in ["", "   ", "a/b", "a\\b", "C:", "C:\\windows", "a\u{7}b", "/etc/passwd"] {
+        assert!(path_of(&dir, name).is_err(), "`{name:?}` was taken as a file of the folder");
+    }
+}
+
+#[test]
+fn a_name_that_works_names_one_file_and_names_the_set_back() {
+    // The names the row and the Save dialog really produce still get their one file in the folder,
+    // and the file names that set back (`set_name_of(path_of(name)) == name`).
+    let (_tmp, dir) = folder_with(&[]);
+    for name in ["Mine", "Dark Room", "Web.v2", "PhotoCraft Defaults Copy", "Menus (modified)", ".Hidden"] {
+        let want = file_name(name);
+        let path = path_of(&dir, name).expect("`{name}` names a set file");
+        assert_eq!(path, dir.join(&want), "one file inside the folder, not a path through it");
+        assert_eq!(path.file_name().and_then(|s| s.to_str()), Some(want.as_str()), "{name} is the whole file name");
+        assert_eq!(set_name_of(&path).as_deref(), Some(name), "the file names the set back");
+    }
+    // The name is stored trimmed the way `set_name` trims it, so a trailing space is neither part of
+    // the set's name nor part of the file's name.
+    let path = path_of(&dir, "x ").expect("a trimmed name names a file");
+    assert_eq!(path.file_name().and_then(|s| s.to_str()), Some("x.MNU"), "the space went with the trim");
+    assert_eq!(set_name_of(&path).as_deref(), Some("x"));
 }
