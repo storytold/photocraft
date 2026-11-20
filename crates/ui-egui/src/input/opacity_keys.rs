@@ -4,8 +4,9 @@
 //! digits set Opacity too, #11967); with the Gradient or Paint Bucket their
 //! Opacity; with tools that have no opacity of their own (Move, the selection tools, Type…) the
 //! active layer's Opacity (⇧: Fill); with the Background Eraser its Tolerance (#11907); with Color
-//! Replacement its Tolerance (#11927). Tools whose number is a strength or exposure are left alone.
-//! The `tools.smoothing.N` commands (⌥+digit) set the Smoothing of the tools that show it (Brush, Pencil, Eraser; #11892).
+//! Replacement its Tolerance (#11927); with the Mixer Brush its Wet (⇧: Flow, without the Airbrush
+//! swap; #11956). Tools whose number is a strength or exposure are left alone.
+//! The `tools.smoothing.N` commands (⌥+digit) set Smoothing for tools that show it (Brush, Pencil, Eraser; Mixer Brush #11956).
 //!
 //! The keys arrive as fired commands: the framework's `OpacityDigit` set (pair timing in `DigitKeys`) and the app
 //! catalog's `tools.smoothing.N`. Each fired command is applied once by the pass that received it, so a second pass in
@@ -35,6 +36,8 @@ enum Target {
     BgTolerance,
     /// Color Replacement's Tolerance option.
     CrTolerance,
+    /// Mixer Brush Wet and Flow, selected by Shift.
+    MixerBrush,
     /// The active layer's opacity (⇧: fill).
     Layer,
     None,
@@ -47,6 +50,7 @@ fn target(tool: Tool) -> Target {
         Tool::Gradient | Tool::PaintBucket => Target::ToolOpacity,
         Tool::BackgroundEraser => Target::BgTolerance,
         Tool::ColorReplacement => Target::CrTolerance,
+        Tool::MixerBrush => Target::MixerBrush,
         // Their options-bar number is a strength, exposure or tolerance, not this opacity.
         t if t.is_brushlike() || t == Tool::MagicEraser => Target::None,
         _ => Target::Layer,
@@ -63,7 +67,7 @@ fn smoothing_digit(command: &CommandRef) -> Option<u8> {
 
 /// The tools whose options bar has a Smoothing field, which `tools.smoothing.N` sets (#11892).
 fn has_smoothing(tool: Tool) -> bool {
-    matches!(tool, Tool::Brush | Tool::Pencil | Tool::Eraser)
+    matches!(tool, Tool::Brush | Tool::Pencil | Tool::Eraser | Tool::MixerBrush)
 }
 
 /// Applies one fired command if it is a number key or a Smoothing key the current tool takes; two digits pair by the
@@ -116,6 +120,13 @@ fn apply(app: &mut PhotocraftApp, percent: f32, shift: bool) {
         (Target::BgTolerance, false) if percent >= 1.0 => app.ui.tool_options.bg_tolerance = percent,
         // The field starts at 1%; an unmeasured 00 keeps its existing value.
         (Target::CrTolerance, false) if percent >= 1.0 => app.ui.tool_options.cr_tolerance = percent,
+        // Mixer Brush keeps its own Wet/Flow fields and never uses the Airbrush role swap.
+        (Target::MixerBrush, false) => {
+            let _ = app.run("tools.setBrush", json!({ "brush": { "mixer": { "wet": v } } }));
+        }
+        (Target::MixerBrush, true) => {
+            let _ = app.run("tools.setBrush", json!({ "brush": { "mixer": { "flow": v } } }));
+        }
         (Target::Layer, _) => {
             // The locked Background has no opacity or fill.
             let Some(st) = app.session.active() else { return };
