@@ -164,7 +164,7 @@ fn arm_move_transfer(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize)
         }
         let active = app.session.active().and_then(|st| st.active_layer).unwrap_or(active);
         let layers = match app.session.active() {
-            Some(st) if st.is_layer_selected(active) => st.selected_layers(),
+            Some(st) if st.is_layer_selected(active) => st.selected_layers().to_vec(),
             _ => vec![active],
         };
         if !begin(app, ctx, layers, grab) {

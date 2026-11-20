@@ -62,7 +62,7 @@ fn session() -> photocraft_engine::Session {
     s.execute("shape.create", json!({"kind": "rect", "rect": [10, 10, 40, 20], "fill": "#ff0000"})).unwrap();
     rename_active(&mut s, "shape");
 
-    let doc = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let doc = std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut());
     let full = photocraft_geom::Rect::new(0, 0, 64, 48);
     for name in pixel_layers.into_iter().filter(|n| *n != "empty") {
         let l = layer(doc, name);
@@ -111,7 +111,7 @@ fn layer<'a>(doc: &'a mut Document, name: &str) -> &'a mut Layer {
 fn rename_active(s: &mut photocraft_engine::Session, name: &str) {
     let d = s.active_mut().unwrap();
     let id = d.active_layer.unwrap();
-    std::sync::Arc::make_mut(&mut d.doc).layer_mut(id).unwrap().name = name.into();
+    std::sync::Arc::make_mut(d.doc_mut()).layer_mut(id).unwrap().name = name.into();
 }
 
 /// The names `attribute` lists.
