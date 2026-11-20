@@ -79,3 +79,6 @@ mod path_selection_shape_over_saved_path_tests;
 
 #[cfg(test)]
 mod art_history_reset_tip_tests;
+
+#[cfg(test)]
+mod object_selection_not_found_tests;
