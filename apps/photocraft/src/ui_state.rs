@@ -12,8 +12,8 @@
 //! scale_factor, inner_size_points }`. eframe reads the file before any application code, so an
 //! old value cannot be interpreted lazily: [`sanitize`] rewrites it before eframe loads it and
 //! keeps a one-time `ui.ron.pre-0.37` backup. The old panel keys in the egui memory part are
-//! untouched (`panels::panel_state_id` migrates them additively), but this window rewrite is
-//! one-way: after it, a 0.36 build ignores the window entry and opens at its default geometry.
+//! untouched, but this window rewrite is one-way: after it, a 0.36 build ignores the window entry
+//! and opens at its default geometry.
 //! Restoring the backup is the documented rollback.
 
 use std::{collections::HashMap, path::Path};

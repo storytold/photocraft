@@ -760,7 +760,7 @@ fn workspace_psd_saves_embed_no_file_a_linked_smart_object_names() {
     session.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
     session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     let state = session.active_mut().unwrap();
-    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
+    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(state.doc_mut()).layers[0].content else { panic!("smart object") };
     smart.source = SmartSource::Linked { path: outside.to_string_lossy().into_owned() };
     std::fs::write(root.join("in.pcraft"), photocraft_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
     // A trusted export embeds the linked file, as before.
@@ -792,7 +792,7 @@ fn allowed_filters_do_not_rerender_a_smart_object_from_its_linked_file() {
     session.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
     session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     let state = session.active_mut().unwrap();
-    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
+    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(state.doc_mut()).layers[0].content else { panic!("smart object") };
     smart.source = SmartSource::Linked { path: outside.to_string_lossy().into_owned() };
     std::fs::write(root.join("p.pcraft"), photocraft_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
 
@@ -824,7 +824,7 @@ fn workspace_layer_exports_keep_linked_smart_objects_as_pixels() {
     session.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
     session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     let state = session.active_mut().unwrap();
-    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
+    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(state.doc_mut()).layers[0].content else { panic!("smart object") };
     smart.source = SmartSource::Linked { path: outside.to_string_lossy().into_owned() };
     std::fs::write(root.join("in.pcraft"), photocraft_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
 
@@ -912,10 +912,10 @@ fn idle_tcp_daemon_releases_its_port_but_keeps_active_clients() {
         done_tx.send(result).unwrap();
     });
     let addr = ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    let mut client = std::net::TcpStream::connect(addr).unwrap();
+    let client = std::net::TcpStream::connect(addr).unwrap();
     client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-    let mut reader = BufReader::new(client.try_clone().unwrap());
-    writeln!(client, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
+    let mut reader = BufReader::new(&client);
+    writeln!(&client, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
     let auth: Value = serde_json::from_str(&line).unwrap();
@@ -939,14 +939,14 @@ fn tcp_serves_loopback() {
         let _ = serve_tcp("127.0.0.1:0", h, TOKEN.into(), move |a| tx.send(a).unwrap());
     });
     let addr = rx.recv().unwrap();
-    let mut s = std::net::TcpStream::connect(addr).unwrap();
-    writeln!(s, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
-    let mut reader = BufReader::new(s.try_clone().unwrap());
+    let s = std::net::TcpStream::connect(addr).unwrap();
+    writeln!(&s, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
+    let mut reader = BufReader::new(&s);
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
     let auth: Value = serde_json::from_str(&line).unwrap();
     assert_eq!(auth["result"]["authenticated"], true);
-    writeln!(s, r#"{{"id":"a","method":"methods"}}"#).unwrap();
+    writeln!(&s, r#"{{"id":"a","method":"methods"}}"#).unwrap();
     line.clear();
     reader.read_line(&mut line).unwrap();
     let v: Value = serde_json::from_str(&line).unwrap();
@@ -986,15 +986,17 @@ fn tcp_connections_must_authenticate_before_the_deadline_whatever_they_send() {
     drop(slow);
 
     // Authenticates at once, then asks again 300 ms after the deadline.
-    let mut s = std::net::TcpStream::connect(addr).unwrap();
+    let s = std::net::TcpStream::connect(addr).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    writeln!(s, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
-    let mut reader = BufReader::new(s.try_clone().unwrap());
+    writeln!(&s, r#"{{"id":"auth","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
+    // On Windows a socket from `try_clone` is inherited by processes that other tests start,
+    // and the connection then stays open after `s` is dropped. Read and write through `&s`.
+    let mut reader = BufReader::new(&s);
     let mut line = String::new();
     reader.read_line(&mut line).unwrap();
     assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["result"]["authenticated"], true);
     std::thread::sleep(Duration::from_millis(600));
-    writeln!(s, r#"{{"id":"a","method":"methods"}}"#).unwrap();
+    writeln!(&s, r#"{{"id":"a","method":"methods"}}"#).unwrap();
     line.clear();
     reader.read_line(&mut line).unwrap();
     assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["id"], "a");
@@ -1018,11 +1020,11 @@ fn tcp_repeat_auth_reports_already_authenticated_and_keeps_serving() {
         let _ = serve_tcp("127.0.0.1:0", h, TOKEN.into(), move |a| tx.send(a).unwrap());
     });
     let addr = rx.recv().unwrap();
-    let mut s = std::net::TcpStream::connect(addr).unwrap();
-    let mut reader = BufReader::new(s.try_clone().unwrap());
+    let s = std::net::TcpStream::connect(addr).unwrap();
+    let mut reader = BufReader::new(&s);
     let mut line = String::new();
     for id in ["auth", "again"] {
-        writeln!(s, r#"{{"id":"{id}","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
+        writeln!(&s, r#"{{"id":"{id}","method":"auth","params":{{"token":"{TOKEN}"}}}}"#).unwrap();
         line.clear();
         reader.read_line(&mut line).unwrap();
     }
@@ -1030,7 +1032,7 @@ fn tcp_repeat_auth_reports_already_authenticated_and_keeps_serving() {
     assert_eq!(again["id"], "again");
     assert_eq!(again["ok"], false);
     assert_eq!(again["error"], "already authenticated");
-    writeln!(s, r#"{{"id":"m","method":"methods"}}"#).unwrap();
+    writeln!(&s, r#"{{"id":"m","method":"methods"}}"#).unwrap();
     line.clear();
     reader.read_line(&mut line).unwrap();
     let v: Value = serde_json::from_str(&line).unwrap();

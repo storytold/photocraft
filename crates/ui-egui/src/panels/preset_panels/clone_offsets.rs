@@ -1,8 +1,10 @@
 //! Read-only clone geometry shared by the panel, overlay and source marker.
 
 use photocraft_engine::presets::clone_source::{Mapping, resolve};
+use serde_json::{Value, json};
 
-use super::{PhotocraftApp, Tool, Value, json};
+use crate::PhotocraftApp;
+use crate::state::Tool;
 
 /// Remember a document-space preview position when the pointer is over the active canvas.
 /// Retain it while the pointer enters the panel so editing X/Y uses the readout's reference.
@@ -24,7 +26,7 @@ pub(crate) fn remember_clone_cursor(app: &mut PhotocraftApp, at: [f64; 2]) -> bo
 pub fn clone_mapping_at(app: &PhotocraftApp, at: Option<[f64; 2]>) -> Option<Mapping> {
     let slot = app.session.presets.clone.active();
     let source = slot.source?;
-    let start = app.drag.as_ref().filter(|d| matches!(d.tool, Tool::CloneStamp | Tool::Healing)).map(|d| d.start);
+    let start = crate::canvas::paint_tool::stroking(app).filter(|stroke| matches!(stroke.tool, Tool::CloneStamp | Tool::Healing)).map(|stroke| stroke.start);
     let first = start.or(at).or(slot.last_anchor).or(slot.anchor).unwrap_or(source);
     let params = json!({"aligned": app.ui.tool_options.clone_aligned});
     let (map, _) = resolve(&app.session, &params, (first[0], first[1]), "clone.preview").ok()?;

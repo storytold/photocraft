@@ -244,7 +244,7 @@ mod tests {
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 40, "height": 30})).unwrap();
         let opaque = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
-        let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+        let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
         let l = doc.layer_mut(opaque).unwrap();
         let fmt = l.surface().unwrap().format();
         l.content = LayerContent::Raster(photocraft_raster::Surface::with_default(fmt, &[0.2, 0.4, 0.6, 1.0]));

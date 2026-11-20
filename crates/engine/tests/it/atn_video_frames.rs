@@ -4,7 +4,11 @@ use craft_psd::{
     descriptor::{Descriptor, UnicodeString, Value as D},
 };
 use photocraft_doc::{LayerContent, LayerId};
-use photocraft_engine::{Session, actions_cmds::Action, atn_cmds};
+use photocraft_engine::{
+    Session,
+    actions_cmds::{Action, ActionStep},
+    atn_cmds,
+};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -57,7 +61,7 @@ fn fixture(depth: u32) -> (Session, LayerId) {
     let result = s.execute("layer.videoLayers.newBlankVideoLayer", json!({})).unwrap();
     let id = LayerId(result["layer"].as_u64().unwrap());
     let state = s.active_mut().unwrap();
-    let doc = Arc::make_mut(&mut state.doc);
+    let doc = Arc::make_mut(state.doc_mut());
     let mut frames = Vec::new();
     for red in [0.25, 0.5, 0.75] {
         let mut frame = photocraft_raster::Surface::new(doc.pixel_format());
@@ -99,7 +103,7 @@ fn descriptors_and_step_flags_round_trip_including_an_absent_descriptor() {
                 let imported = atn_cmds::import(&file(source)).unwrap();
                 assert!(imported.unsupported.is_empty());
                 let action = &imported.actions[0];
-                assert_eq!(action.steps[0].0, command);
+                assert_eq!(action.steps[0].command, command);
                 assert_eq!(action.disabled.contains(&0), !enabled);
                 assert!(action.dialogs.contains(&0));
                 let back = saved(action);
@@ -154,7 +158,7 @@ fn playback_edits_the_current_frame_and_original_stack_with_undo_redo_at_each_de
 fn deleting_the_last_frame_keeps_its_pixels() {
     let (mut s, id) = fixture(8);
     let state = s.active_mut().unwrap();
-    let doc = Arc::make_mut(&mut state.doc);
+    let doc = Arc::make_mut(state.doc_mut());
     let layer = doc.layer_mut(id).unwrap();
     let video = layer.video.as_mut().unwrap();
     video.frames.truncate(1);
@@ -179,7 +183,7 @@ fn unrepresented_settings_and_descriptor_metadata_stay_complete_kept_steps() {
         for descriptor in [Descriptor::default().with("frame", D::Integer(2)), Descriptor::new("other"), named.clone()] {
             let imported = atn_cmds::import(&file(item(event, Some(descriptor.clone())))).unwrap();
             assert_eq!(imported.unsupported.len(), 1);
-            assert_eq!(imported.actions[0].steps[0].0, "actions.photoshopStep");
+            assert_eq!(imported.actions[0].steps[0].command, "actions.photoshopStep");
             assert_eq!(saved(&imported.actions[0]).descriptor, Some(descriptor));
         }
     }
@@ -196,7 +200,7 @@ fn native_options_and_damaged_absence_metadata_refuse_export() {
             json!({"_atnVideoFrameNoDescriptor":false}),
             json!({"_atnVideoFrameNoDescriptor":"true"}),
         ] {
-            let action = Action::new("Invalid", vec![(command.into(), params)]);
+            let action = Action::new("Invalid", vec![ActionStep::new(command, params)]);
             assert!(atn_cmds::export("Video", &[&action], &[], false).is_err(), "{command}");
         }
     }
