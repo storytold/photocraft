@@ -11,7 +11,7 @@ use crate::state::{ObjectFinderMode, Tool, ToolOptions};
 const DISC: [f64; 2] = [100.0, 80.0];
 
 /// A 200 x 160 document: a red disc (centre 100,80, radius 45) on blue, nothing selected.
-fn app(mode: ObjectFinderMode) -> PhotocraftApp {
+fn app(mode: ObjectFinderMode) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 160})).unwrap();
     app.sync_views();
@@ -85,7 +85,8 @@ fn reset_tool_restores_them() {
 fn assert_idle(app: &mut PhotocraftApp) {
     let u = hover(app, DISC);
     assert!(u.shown.is_none() && !u.busy);
-    let u = update(app, Some(DISC), false, 500.0, &app.ctx().clone());
+    let ctx = app.ctx().clone();
+    let u = update(app, Some(DISC), false, 500.0, &ctx);
     assert!(u.shown.is_none() && !u.busy);
 }
 
@@ -129,7 +130,8 @@ fn manual_refresh_survives_selection_changes_and_leaving() {
     let mut app = app(ObjectFinderMode::Manual);
     refresh(&mut app);
     assert!(hover(&mut app, DISC).shown.is_some());
-    assert!(update(&mut app, None, false, 200.0, &app.ctx().clone()).shown.is_none());
+    let ctx = app.ctx().clone();
+    assert!(update(&mut app, None, false, 200.0, &ctx).shown.is_none());
     app.run("select.all", json!({})).unwrap();
     app.run("select.deselect", json!({})).unwrap();
     assert!(hover(&mut app, DISC).shown.is_some());
