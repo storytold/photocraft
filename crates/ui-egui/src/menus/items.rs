@@ -97,7 +97,7 @@ fn with_english(mut shown: Node, english: &Node) -> Node {
 
 /// The id the model is derived under.
 pub(crate) fn model_id() -> egui::Id {
-    egui::Id::new("photocraft-menu-model")
+    egui::Id::unique("photocraft-menu-model")
 }
 
 /// The model for the app's current state: derived from its [`MenuFacts`], so it is built again only when one of them

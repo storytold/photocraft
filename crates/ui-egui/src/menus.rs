@@ -54,7 +54,9 @@ pub(crate) fn menu_gate(app: &PhotocraftApp) -> (Gate, ModalRules) {
 /// ([`refused`]) apply to them: their keys and menu items are one command.
 pub(crate) fn command_gate(app: &PhotocraftApp) -> CommandGate {
     let (gate, rules) = menu_gate(app);
-    CommandGate::new(GateProps { gate, rules, refused: refused(app) }, |props, command| gated(&props.gate, &props.rules, &props.refused, command))
+    // The refusals follow the rows' rules, so they are derived from the facts the menu model is built from.
+    let refused = craft::ui::runtime::derived::derived(app.ctx(), egui::Id::unique("photocraft-refused-commands"), &facts::MenuFacts::of(app), || refused(app));
+    CommandGate::new(GateProps { gate, rules, refused }, |props, command| gated(&props.gate, &props.rules, &props.refused, command))
 }
 
 /// What the runtime's gate reads: the runtime asks it again only when these change.
@@ -62,7 +64,7 @@ pub(crate) fn command_gate(app: &PhotocraftApp) -> CommandGate {
 struct GateProps {
     gate: Gate,
     rules: ModalRules,
-    refused: Vec<CommandRef>,
+    refused: Arc<Vec<CommandRef>>,
 }
 
 /// [`command_gate`]'s test for one command, for callers that hold no gate.
@@ -130,7 +132,7 @@ mod open_recent_tests {
             app.push_recent(&format!("/tmp/f{i}.png"));
         }
         assert_eq!(app.ui.recent_files.len(), 20, "capped at Recent File List Contains (20)");
-        assert_eq!(app.session.prefs().file_handling.recent_files, app.ui.recent_files, "stored in the preferences");
+        assert_eq!(app.session.prefs().file_handling.recent_files, *app.ui.recent_files, "stored in the preferences");
 
         // Menu lists them under File › Open Recent, with basenames, plus Clear Recent Files.
         *app.ui.recent_files = vec!["/tmp/a.png".into(), "/dir/b.psd".into()];
@@ -154,7 +156,7 @@ mod open_recent_tests {
         }
         invoke(&mut app, &ctx, "file.removeRecent", json!({"path": "/tmp/b.psd"})).unwrap();
         assert_eq!(*app.ui.recent_files, vec!["/tmp/a.png".to_string(), "/tmp/c.tif".to_string()]);
-        assert_eq!(app.session.prefs().file_handling.recent_files, app.ui.recent_files, "removed in the preferences too");
+        assert_eq!(app.session.prefs().file_handling.recent_files, *app.ui.recent_files, "removed in the preferences too");
         invoke(&mut app, &ctx, "file.removeRecent", json!({"path": "/tmp/not-listed.png"})).unwrap();
         assert_eq!(app.ui.recent_files.len(), 2, "a path that isn't listed changes nothing");
         assert!(invoke(&mut app, &ctx, "file.removeRecent", json!({})).is_err(), "needs a path");

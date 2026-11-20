@@ -34,7 +34,9 @@ mod profile_dither;
 pub struct ProofSetup {
     /// What the user asked for (built-in id or path), for display.
     pub name: String,
+    #[plain_data(assume = "craft-cms profile: parsed tables and bytes, no interior mutability")]
     pub profile: Arc<Profile>,
+    #[plain_data(assume = "craft-cms rendering intent: a fieldless enum")]
     pub intent: Intent,
     pub bpc: bool,
     /// Simulate paper colour (absolute colorimetric proof → display, black ink simulated).

@@ -103,13 +103,13 @@ fn the_menu_model_is_built_only_when_a_fact_it_shows_changed() {
 
     let undo = |h: &mut H| {
         let ctx = h.ctx.clone();
-        crate::menus::row(crate::menus::model(h.state_mut(), &ctx).rows(), "edit.undo").map(|row| row.label.clone())
+        crate::menus::row(crate::menus::model(h.state_mut(), &ctx).rows(), "edit.undo").map(|row| row.enabled)
     };
-    let before = undo(&mut h);
+    assert_eq!(undo(&mut h), Some(false), "nothing to undo in a new document");
     h.state_mut().run("layer.new.layer", json!({})).unwrap();
     h.run_steps(1);
     assert_eq!(model_builds(&h), 1, "a new layer builds the model once");
-    assert_ne!(undo(&mut h), before, "and Edit › Undo names it");
+    assert_eq!(undo(&mut h), Some(true), "and Edit › Undo follows it");
 }
 
 #[test]
@@ -122,8 +122,12 @@ fn the_held_menu_model_equals_a_fresh_build_after_each_step() {
         assert!(held == crate::menus::fresh_bar(h.state()), "after {step}, the held menu model is a fresh build");
     };
     let run = |h: &mut H, id: &str, params: serde_json::Value| {
+        h.state_mut().run(id, params).unwrap();
+    };
+    // The shell's own commands, as a menu pick runs them.
+    let pick = |h: &mut H, id: &str| {
         let ctx = h.ctx.clone();
-        crate::menus::invoke(h.state_mut(), &ctx, id, params).unwrap();
+        crate::menus::invoke(h.state_mut(), &ctx, id, json!({})).unwrap();
     };
     held_is_fresh(&mut h, "settling");
     run(&mut h, "layer.new.layer", json!({}));
@@ -134,14 +138,14 @@ fn the_held_menu_model_equals_a_fresh_build_after_each_step() {
     held_is_fresh(&mut h, "redo");
     run(&mut h, "layer.selectBelow", json!({}));
     held_is_fresh(&mut h, "selecting a layer");
-    run(&mut h, "view.rulers", json!({}));
+    pick(&mut h, "view.rulers");
     held_is_fresh(&mut h, "toggling the rulers");
     h.state_mut().ui.recent_files.edit(|files| files.insert(0, "/tmp/recent.psd".into()));
     held_is_fresh(&mut h, "a recent file");
     run(&mut h, "select.all", json!({}));
     run(&mut h, "edit.copy", json!({}));
     held_is_fresh(&mut h, "a copy");
-    run(&mut h, "edit.freeTransform", json!({}));
+    pick(&mut h, "edit.freeTransform");
     held_is_fresh(&mut h, "opening Free Transform");
     h.key_press(egui::Key::Escape);
     held_is_fresh(&mut h, "cancelling Free Transform");

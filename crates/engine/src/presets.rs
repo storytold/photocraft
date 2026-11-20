@@ -204,7 +204,7 @@ impl Session {
             },
             contours: take(&mut m, "contours"),
         };
-        let st = &mut self.presets;
+        let st = &mut *self.presets;
         if let Some(g) = p.gradient {
             st.gradient = g;
         }

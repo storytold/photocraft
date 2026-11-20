@@ -204,7 +204,7 @@ const OTHER_PANELS: [&str; 6] = ["dock", "tools", "options", "modifierKeys", cra
 /// included), so the ticks are worked out again then, and the menu model only when one of them changed.
 fn window_ticks(app: &PhotocraftApp) -> Arc<Vec<bool>> {
     let key = (app.ui.docking.revision(), app.ui.flyout.as_deref());
-    craft::ui::runtime::derived::derived(app.ctx(), egui::Id::new("photocraft-window-ticks"), &key, || {
+    craft::ui::runtime::derived::derived(app.ctx(), egui::Id::unique("photocraft-window-ticks"), &key, || {
         let registry = crate::panels::registry::PANELS.iter().map(|panel| crate::panel_docking::is_checked(app, panel.id));
         let others = OTHER_PANELS.iter().flat_map(|panel| [crate::panel_docking::is_checked(app, panel), crate::panel_docking::is_shown(app, panel)]);
         registry.chain(others).collect()
