@@ -21,6 +21,12 @@ cargo nextest run --archive-file "$NEXTEST_ARCHIVE_FILE" --workspace-remap . --e
 xtask=("$archive/target/debug/xtask" ci tests --from "$archive" --shard "$GATE_SHARD")
 case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) xtask=("$archive/target/debug/xtask.exe" ci tests --from "$archive" --shard "$GATE_SHARD") ;; esac
 
+# The gate builds the real-file corpus tests in (PHOTOCRAFT_CORPUS_TESTS=1, xtask's CORPUS_FEATURES):
+# they fail when the corpus is missing, so a shard fetches it first (pinned commits, sha256-verified).
+if [ "${PHOTOCRAFT_CORPUS_TESTS:-}" = 1 ]; then
+  "${xtask[0]}" corpus --all
+fi
+
 case "${1:-}" in
   "") exec "${xtask[@]}" ;;
   --gpu-shard)

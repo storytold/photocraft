@@ -1,5 +1,7 @@
-//! Layered TIFF against the real-file corpora (feature `corpus`; `cargo xtask test-corpus`):
-//! every PSD that imports is written as a layered TIFF and read back, and the result must equal
+//! Layered TIFF against the real-file corpora (feature `corpus`; `cargo xtask test-corpus`): every
+//! PSD of the run (every file of psd, psd-tools and photoshop with `PHOTOCRAFT_FULL_SWEEP=1`, the
+//! psd-tools sample of `photocraft_testkit::corpus` otherwise) that imports is written as a layered
+//! TIFF and read back, and the result must equal
 //! the PSD round trip of the same document: the same layer structure (count, names, kinds) and
 //! the same render (within one 8-bit step). The layers go through the same PSD mapping in both
 //! directions, so any difference is a bug in the layer-data transcoder or the TIFF glue, not in
@@ -14,22 +16,9 @@
 #![cfg(feature = "corpus")]
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::{Path, PathBuf};
 
 use photocraft_doc::{Document, Layer};
 use photocraft_io::*;
-
-fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            collect(&p, out);
-        } else if p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("psd") || e.eq_ignore_ascii_case("psb")) {
-            out.push(p);
-        }
-    }
-}
 
 fn structure(layers: &[Layer], out: &mut Vec<String>, depth: usize) {
     for l in layers {
@@ -61,15 +50,16 @@ const MAPPED: &[&[u8; 4]] = &[
     b"iOpa", b"clbl", b"infx", b"knko", b"lspf", b"fxrp", b"brst", b"shmd", b"Patt", b"FEid", b"FXid", b"FMsk", b"artb", b"artd", b"cinf",
 ];
 
+/// Files of the psd-tools sample this test takes (the others are Lab or Multichannel).
+const SAMPLE_TESTED_FLOOR: usize = 20;
+
 #[test]
 fn corpus_round_trips_through_layered_tiff() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus");
-    assert!(root.join("psd").is_dir(), "corpus missing: run `cargo xtask corpus --all`");
-    let mut files = Vec::new();
-    for sub in ["psd", "psd-tools", "photoshop"] {
-        collect(&root.join(sub), &mut files);
-    }
-    files.sort();
+    let root = photocraft_testkit::corpus::root();
+    let full = photocraft_testkit::full_sweep();
+    // Six encodes, decodes and renders per file: other runs keep to the psd-tools sample.
+    let dirs: &[&str] = if full { &["psd", "psd-tools", "photoshop"] } else { &["psd-tools"] };
+    let files: Vec<_> = dirs.iter().flat_map(|d| photocraft_testkit::corpus::psd_files(d)).collect();
     assert!(!files.is_empty());
     let (mut tested, mut crashes, mut failures) = (0usize, Vec::new(), Vec::new());
     let mut dropped: std::collections::BTreeMap<String, usize> = Default::default();
@@ -145,5 +135,6 @@ fn corpus_round_trips_through_layered_tiff() {
     }
     assert!(crashes.is_empty(), "crashes: {crashes:?}");
     assert!(failures.is_empty(), "{} failures (see above)", failures.len());
-    assert!(tested > 100, "only {tested} files tested");
+    let floor = if full { 100 } else { SAMPLE_TESTED_FLOOR };
+    assert!(tested >= floor, "only {tested} files tested");
 }

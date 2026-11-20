@@ -7,7 +7,7 @@
 //! geometry (ink bounds and alpha overlap) and is reported; the assertions are loose.
 
 #[cfg(feature = "corpus")]
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[cfg(feature = "corpus")]
 use photocraft_doc::Layer;
@@ -16,21 +16,6 @@ use photocraft_doc::LayerContent;
 use photocraft_geom::Rect;
 #[cfg(feature = "corpus")]
 use photocraft_raster::Surface;
-
-#[cfg(feature = "corpus")]
-fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            collect(&p, out);
-        } else if p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("psd") || e.eq_ignore_ascii_case("psb")) {
-            out.push(p);
-        }
-    }
-}
 
 #[cfg(feature = "corpus")]
 fn walk<'a>(layers: &'a [Layer], out: &mut Vec<&'a Layer>) {
@@ -51,11 +36,7 @@ fn alpha(s: &Surface, r: Rect) -> Vec<f32> {
 #[cfg(feature = "corpus")]
 #[test]
 fn corpus_text_layers() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/psd");
-    assert!(root.is_dir(), "{} is missing: run `cargo xtask corpus --all`", root.display());
-    let mut files = Vec::new();
-    collect(&root, &mut files);
-    files.sort();
+    let files = photocraft_testkit::corpus::all_psd_files("psd");
     let mut engine = photocraft_text::TextEngine::with_system_fonts();
     let (mut n, mut good_geometry) = (0, 0);
     for f in files {
@@ -149,11 +130,9 @@ fn corpus_tysh_lossless() {
 #[cfg(feature = "corpus")]
 #[test]
 fn corpus_photoshop_txt2_survives_an_unedited_save() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/photoshop/text");
-    assert!(root.is_dir(), "{} is missing: run `cargo xtask corpus --photoshop`", root.display());
-    let mut files = Vec::new();
-    collect(&root, &mut files);
-    files.sort();
+    // The run's Photoshop files (its sample, or all with PHOTOCRAFT_FULL_SWEEP=1) of `text/`.
+    let text = photocraft_testkit::corpus::root().join("photoshop/text");
+    let files: Vec<_> = photocraft_testkit::corpus::psd_files("photoshop").into_iter().filter(|f| f.starts_with(&text)).collect();
     let txt2 = |doc: &photocraft_doc::Document| doc.metadata.psd_global_blocks.iter().find(|b| &b.1 == b"Txt2").map(|b| b.2.clone());
     let mut checked = 0;
     for f in &files {
@@ -165,7 +144,7 @@ fn corpus_photoshop_txt2_survives_an_unedited_save() {
         assert!(txt2(&back) == Some(before), "{name}: Txt2 changed on an unedited save");
         checked += 1;
     }
-    assert!(checked > 0, "no Photoshop type files with Txt2 in {}", root.display());
+    assert!(checked > 0, "no Photoshop type files with Txt2 in {}", text.display());
     println!("Txt2 kept byte-for-byte in {checked} Photoshop type files");
 }
 
