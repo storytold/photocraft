@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 
 mod bar;
+pub(crate) mod facts;
 pub mod enable_rules;
 mod invoke;
 mod items;
@@ -296,13 +297,11 @@ mod window_documents_tests {
         if crate::i18n::needs_catalogs() {
             let mut app = app(1);
             let ctx = app.ctx().clone();
-            if let Some(d) = app.session.active_mut() {
-                d.saved_to("/tmp/Layers".into());
-            }
+            app.session.saved_to("/tmp/Layers".into());
             let de = crate::i18n::Lang::from_code("de").unwrap();
             let _lang = crate::i18n::language_scope(de);
             let shown = model(&mut app, &ctx);
-            assert_eq!(row(&shown.rows, "window.document.0").map(|r| r.label.as_str()), Some("Layers"));
+            assert_eq!(row(shown.rows(), "window.document.0").map(|r| r.label.as_str()), Some("Layers"));
         }
     }
 }

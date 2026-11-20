@@ -676,12 +676,12 @@ impl PhotocraftApp {
             // A background save may finish while another document is active (or after its
             // document was closed, when there is nothing left to record).
             let _ = self.with_document(doc, |app| {
-                if let Some(st) = app.session.active_mut()
-                    && arm
-                {
-                    st.saved_to(path.to_string());
+                if arm && app.session.active().is_some() {
+                    app.session.saved_to(path.to_string());
                     // The job locked the document, but record the revision that was written.
-                    st.saved_revision = revision;
+                    if let Some(st) = app.session.active_mut() {
+                        st.saved_revision = revision;
+                    }
                     app.remember_stamp(doc, path);
                     // History Options › Automatically Create New Snapshot When Saving (#2966).
                     photocraft_engine::history_options_cmds::snapshot_on_save(&mut app.session);

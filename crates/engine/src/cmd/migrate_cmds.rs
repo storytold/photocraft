@@ -100,21 +100,21 @@ mod tests {
         });
         std::fs::write(&file, serde_json::to_string(&data).unwrap()).unwrap();
         let prefs_rev = s.prefs.rev();
-        let presets_rev = s.presets.rev;
+        let presets_rev = s.presets.revision();
         let r = s.execute("edit.presets.migratePresets", json!({"path": file.to_string_lossy()})).unwrap();
         assert_eq!(r["added"]["gradients"], 1, "only the new group is added");
         assert_eq!(s.presets.gradients.len(), before + 1);
         assert!(s.presets.gradients.iter().any(|g| g.name == "My Imported Set"));
         assert_eq!(s.prefs.rev(), prefs_rev + 1, "migration marks preferences dirty");
-        assert_eq!(s.presets.rev, presets_rev + 1);
+        assert_ne!(s.presets.revision(), presets_rev);
         // Idempotent: migrating again adds nothing.
         let prefs_rev = s.prefs.rev();
-        let presets_rev = s.presets.rev;
+        let presets_rev = s.presets.revision();
         let saved = s.prefs_to_json();
         let r2 = s.execute("edit.presets.migratePresets", json!({"path": file.to_string_lossy()})).unwrap();
         assert_eq!(r2["migrated"], 0);
         assert_eq!(s.prefs.rev(), prefs_rev, "duplicate groups do not dirty preferences");
-        assert_eq!(s.presets.rev, presets_rev);
+        assert_eq!(s.presets.revision(), presets_rev);
         assert_eq!(s.prefs_to_json(), saved);
         let _ = std::fs::remove_file(file);
     }
@@ -138,11 +138,11 @@ mod tests {
                 }
                 std::fs::write(&file, serde_json::to_string(&data).unwrap()).unwrap();
                 let prefs_rev = s.prefs.rev();
-                let presets_rev = s.presets.rev;
+                let presets_rev = s.presets.revision();
                 let r = s.execute("edit.presets.migratePresets", json!({"path": file.to_string_lossy()})).unwrap();
                 assert_eq!(r["migrated"], 1, "{key}, wrapped={wrapped}");
                 assert_eq!(s.prefs.rev(), prefs_rev + 1, "{key}, wrapped={wrapped}: preferences must be saved");
-                assert_eq!(s.presets.rev, presets_rev + 1);
+                assert_ne!(s.presets.revision(), presets_rev);
                 let saved = s.prefs_to_json();
                 let mut restored = Session::new();
                 restored.load_prefs_json(&saved).unwrap();

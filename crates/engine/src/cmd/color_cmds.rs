@@ -46,9 +46,12 @@ pub struct ProofSetup {
 
 impl Default for ProofSetup {
     fn default() -> Self {
+        // One shared copy of the built-in profile: every proof-state read of a document without its own setup makes a
+        // default, and copying the profile each time costs about half a millisecond.
+        static COATED_CMYK: std::sync::OnceLock<Arc<Profile>> = std::sync::OnceLock::new();
         ProofSetup {
             name: "working-cmyk".into(),
-            profile: Arc::new(Builtin::CoatedCmyk.profile().clone()),
+            profile: Arc::clone(COATED_CMYK.get_or_init(|| Arc::new(Builtin::CoatedCmyk.profile().clone()))),
             intent: Intent::RelativeColorimetric,
             bpc: true,
             simulate_paper: false,
@@ -384,6 +387,11 @@ impl ColorState {
     /// Proofing state of a document (defaults: coated CMYK, relative colorimetric + BPC, off).
     pub fn proof(&self, doc: DocId) -> ProofView {
         self.proofs.get(&doc).cloned().unwrap_or_else(|| ProofView { gamut_threshold: craft_cms::gamut::DEFAULT_THRESHOLD, ..Default::default() })
+    }
+
+    /// The revision of every document's proofing state: it moves with each change to one.
+    pub fn proofs_revision(&self) -> craft_tracked::Revision {
+        self.proofs.revision()
     }
 
     /// Borrow the document's proofing state without cloning its profile or allocating defaults.

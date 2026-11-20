@@ -96,8 +96,6 @@ pub struct PresetState {
     /// The user contour library of the Layer Style dialog (`layer.layerStyle.contours.*`).
     #[plain_data(assume = "document contours: plain numbers")]
     pub contours: Vec<photocraft_doc::Contour>,
-    /// Bumped on every preset change (UIs key thumbnail caches on it).
-    pub rev: u64,
 }
 
 impl Default for PresetState {
@@ -117,7 +115,6 @@ impl Default for PresetState {
             layer_defaults: BTreeMap::new(),
             swatches: craft::color_ui::palette::default_swatches(),
             contours: Vec::new(),
-            rev: 0,
         }
     }
 }
@@ -276,13 +273,12 @@ impl Session {
         if let Some(c) = p.contours.filter(Value::is_array) {
             self.presets.contours = crate::contour_lib_cmds::from_json(&c);
         }
-        self.presets.rev += 1;
     }
 
-    /// Record a preset change: bumps the panel revision and marks the preferences document dirty
+    /// Record a preset change: moves the presets' revision and marks the preferences document dirty
     /// so the shell persists it.
     pub(crate) fn presets_changed(&mut self) {
-        self.presets.rev += 1;
+        self.presets.edit(|_| ());
         self.prefs.edit(|_| ());
     }
 }
