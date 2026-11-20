@@ -92,13 +92,14 @@ fn ending(app: &PhotocraftApp, tool: Tool) -> Option<Ending> {
 /// Each pass applies the commit or cancel its own bar took; a second pass of a frame applies none of the first pass's.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let tool = app.ui.tool;
+    let hint = crate::layer_style::canvas_drag_hint(app);
     let ending = ending(app, tool);
     let mut bar = Bar::new(tl!("Options").to_owned(), BarKind::Options);
     if let Some(ending) = &ending {
         bar = bar.commit_cancel(ending.commit.clone(), ending.cancel.clone());
     }
     // A value control of the bar takes the wheel without a click, as the Mode dropdown and the fields did.
-    let shown = bar.show(ui, |ui, _| with_env(ui, |set| set.wheel = Some(WheelScope::Free), |ui| body(app, ui)));
+    let shown = bar.show(ui, |ui, _| with_env(ui, |set| set.wheel = Some(WheelScope::Free), |ui| body(app, ui, hint)));
     if let Some(ending) = ending {
         answer(app, ui, tool, ending.end, &shown.output);
     }
@@ -133,8 +134,12 @@ fn answer(app: &mut PhotocraftApp, ui: &egui::Ui, tool: Tool, end: End, out: &Ba
 }
 
 /// The bar's members in order: Home, the tool icon, then the active tool's options.
-fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    lead(app, ui);
+fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, hint: Option<&'static str>) {
+    lead(app, ui, hint.is_some());
+    if let Some(hint) = hint {
+        crate::option_cells::hint(ui, hint);
+        return;
+    }
     if app.ui.transform.is_some() {
         crate::transform_tool::options_bar(app, ui);
         return;
@@ -182,7 +187,7 @@ fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 /// The Home button and the tool's icon with its Reset Tool and Reset All Tools menu.
-fn lead(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+fn lead(app: &mut PhotocraftApp, ui: &mut egui::Ui, repositioning: bool) {
     let documents = app.session.documents().len();
     let auto = app.session.prefs().general.auto_show_home_screen;
     let on = app.ui.chrome.shows_home(documents, auto);
@@ -193,7 +198,11 @@ fn lead(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     // The tool picker is greyed while warping, as in the reference.
     let warping = app.ui.transform.as_ref().is_some_and(|t| t.session.warp().is_some());
-    let tool = BarTool::new(icons::tool_icon(app.ui.tool), tl!(app.ui.tool.label()).to_owned()).enabled(!warping).show(ui);
+    let displayed = if repositioning { Tool::Move } else { app.ui.tool };
+    let tool = BarTool::new(icons::tool_icon(displayed), tl!(displayed.label()).to_owned()).enabled(!warping && !repositioning).show(ui);
+    if repositioning {
+        return;
+    }
     // Photoshop: right-click the tool icon for Reset Tool / Reset All Tools.
     let rows = [Entry::new(Reset::Tool, tl!("Reset Tool").to_owned()), Entry::new(Reset::All, tl!("Reset All Tools").to_owned())];
     if let Some(reset) = Menu::context(tl!("Tool").to_owned(), &tool.response).pick(ui, &rows).picked

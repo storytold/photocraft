@@ -11,8 +11,9 @@ use crate::color_picker_ui::PickWindow;
 
 /// The version of the options bar: the Zoom tool's members show the active view, and an open Free Transform shows
 /// its own members in place of the tool's (Escape ends it without a command, #15547).
+/// A Layer Style page can show a canvas drag hint without running a command.
 pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
-    version(app, (view(app), app.ui.transform.is_some()))
+    version(app, (view(app), app.ui.transform.is_some(), crate::layer_style::canvas_drag_hint(app)))
 }
 
 /// The version of the status bar: the zoom readout of the active view, the status message and the item it shows, the
