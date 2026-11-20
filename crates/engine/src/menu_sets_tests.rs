@@ -2,8 +2,10 @@
 //! dropdown on the Menus tab, separate from the keyboard shortcut sets, starting at the built-in
 //! set; the first edit marks it modified; Save only while modified, New always, Delete never for
 //! the built-in set. This file covers the engine half: the named sets in the preferences, the
-//! modified flag the dialog's row reads, and `edit.menus` listing, loading, saving and deleting
-//! sets. The dialog's own row and the `.mnu` files are the next steps of the same issue.
+//! modified flag the dialog's row reads, `edit.menus` listing, loading, saving and deleting sets,
+//! and the `.mnu` files in the settings directory - the measured layout, the numeric command ids
+//! and colour numbers, keeping unknown entries on a rewrite, and a malformed file as an error.
+//! The dialog's own row is `crates/ui-egui/src/prefs/prefs_ui/menu_set_tests.rs`.
 
 use serde_json::{Value, json};
 
@@ -229,4 +231,282 @@ fn menu_sets_are_saved_with_the_preferences_and_an_older_file_loads_without_them
     assert_eq!(r["activeSet"], json!(""));
     assert_eq!(r["sets"], json!([]));
     assert_eq!(r["modified"], json!(true), "edit.fade is hidden, which is not the built-in set");
+}
+
+// ---- the `.mnu` files: the sets as files in the settings directory (#14450) ----
+
+use crate::menu_sets::{
+    self, MAX_MNU_BYTES, MenuSet, REF_ITEMS, color_name, color_number, file_name, folder, from_mnu, read_sets, ref_command, ref_item, set_name_of, to_mnu,
+    write_set,
+};
+
+/// A set: its hidden items and its colours, as `saveSet` would store them.
+fn set(hidden: &[&str], colors: &[(&str, &str)]) -> MenuSet {
+    MenuSet { hidden: hidden.iter().map(|id| (*id).to_owned()).collect(), colors: colors.iter().map(|(id, c)| ((*id).to_owned(), (*c).to_owned())).collect() }
+}
+
+/// A set file named "Mine" holding `rows` between the measured root element's tags.
+fn mnu(rows: &str) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <photocraft-menu-settings version=\"2\" filename=\"$$$/FileName/Presets/MenuCustomization/Mine=Mine\" modified=\"0\">\n\
+         {rows}</photocraft-menu-settings>\n"
+    )
+}
+
+/// One measured row of a set file, in the shape the file is written and read back.
+fn row(id: u32, parent: u32, menu_type: u32, hidden: u32, color: u32) -> String {
+    format!("  <command kind=\"static\" id=\"{id}\" parentMenuID=\"{parent}\" menuType=\"{menu_type}\" hidden=\"{hidden}\" color=\"{color}\"/>\n")
+}
+
+/// A folder with `files` (name, text) written into it.
+fn folder_with(files: &[(&str, &str)]) -> (tempfile::TempDir, std::path::PathBuf) {
+    let tmp = tempfile::tempdir().expect("a temp folder");
+    let dir = folder(tmp.path());
+    std::fs::create_dir_all(&dir).expect("the folder is there");
+    for (name, text) in files {
+        std::fs::write(dir.join(name), text).expect("the file is written");
+    }
+    (tmp, dir)
+}
+
+/// The hidden items of `set`, in name order, so a read can be compared with what was written.
+fn hidden_of(s: &MenuSet) -> Vec<String> {
+    let mut v = s.hidden.clone();
+    v.sort();
+    v
+}
+
+#[test]
+fn a_set_written_to_a_file_reads_back_as_the_same_set() {
+    // The issue's "writes and reads the measured layout": one element per changed item, and every
+    // one of those changes comes back.
+    let s = set(&["file.new", "edit.fade"], &[("edit.fade", "red"), ("layer.mergeVisible", "gray")]);
+    let read = from_mnu(&to_mnu("Darkroom", &s, &[])).expect("what PhotoCraft writes reads back");
+    assert_eq!(hidden_of(&read.set), vec!["edit.fade".to_string(), "file.new".to_string()]);
+    assert_eq!(read.set.colors, s.colors, "both colours came back, gray as number 7");
+    assert!(read.kept.is_empty(), "every row was ours: {read:?}");
+    // And the round trip is stable: writing what was read writes the same file.
+    assert_eq!(to_mnu("Darkroom", &read.set, &read.kept), to_mnu("Darkroom", &s, &[]));
+}
+
+#[test]
+fn the_file_is_the_measured_xml_with_one_element_per_changed_item() {
+    // Root attributes in the measured order, and one `<command>` per changed item only: the set
+    // hides File › New and colours Edit › Fade, so it is exactly those two rows and no third.
+    let text = to_mnu("Darkroom", &set(&["file.new"], &[("edit.fade", "red")]), &[]);
+    assert_eq!(
+        text,
+        concat!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+            "<photocraft-menu-settings version=\"2\" filename=\"$$$/FileName/Presets/MenuCustomization/Darkroom=Darkroom\" modified=\"0\">\n",
+            "  <command kind=\"static\" id=\"10\" parentMenuID=\"2\" menuType=\"0\" hidden=\"1\" color=\"0\"/>\n",
+            "  <command kind=\"static\" id=\"1154\" parentMenuID=\"3\" menuType=\"0\" hidden=\"0\" color=\"1\"/>\n",
+            "</photocraft-menu-settings>\n"
+        ),
+        "the measured layout, attribute order as written there"
+    );
+}
+
+#[test]
+fn a_hidden_item_without_a_colour_is_written_with_colour_zero() {
+    // Measured: "A hidden item without a colour is written with color="0"" - and it reads back as
+    // hidden with no colour, not as a `none` colour entry.
+    let text = to_mnu("Mine", &set(&["file.open"], &[]), &[]);
+    assert!(text.contains(&row(20, 2, 0, 1, 0)), "{text}");
+    let read = from_mnu(&text).expect("the row reads");
+    assert_eq!(hidden_of(&read.set), vec!["file.open".to_string()]);
+    assert!(read.set.colors.is_empty(), "no colour entry for color=0: {:?}", read.set.colors);
+}
+
+#[test]
+fn the_measured_command_numbers_name_our_commands_in_both_directions() {
+    // The ids measured in the issue, and the menu each sits in: 2 File, 3 Edit, 41 Layers panel,
+    // with menuType 1 for the panel menu.
+    let measured = [
+        (10, "file.new", 2, false),
+        (20, "file.open", 2, false),
+        (21, "file.openAs", 2, false),
+        (22, "file.openAsSmartObject", 2, false),
+        (31, "file.close", 2, false),
+        (37, "file.closeAll", 2, false),
+        (46, "file.closeOthers", 2, false),
+        (133, "edit.toggleLastState", 3, false),
+        (1154, "edit.fade", 3, false),
+        (1099, "layer.new.layer", 41, true),
+        (1139, "layer.mergeVisible", 41, true),
+    ];
+    for (number, command, parent, panel) in measured {
+        let item = ref_item(command).unwrap_or_else(|| panic!("{command} has no measured number"));
+        assert_eq!((item.number, item.parent, item.panel), (number, parent, panel), "{command}");
+        assert_eq!(ref_command(number), Some(command), "{number} is {command}");
+    }
+    // Only the measured ids: a row of another number is an unknown entry, not a guess. The file
+    // browser rows (1520, 1530), Paste Special (1298) and the Info panel rows (3127, 7959) name
+    // items PhotoCraft's menu tree has no command for yet.
+    assert_eq!(REF_ITEMS.len(), measured.len(), "no number beyond the measured list");
+    for number in [1520, 1530, 1298, 3127, 7959] {
+        assert_eq!(ref_command(number), None, "{number} is not one of ours");
+    }
+}
+
+#[test]
+fn the_colour_numbers_are_the_measured_zero_to_seven() {
+    // None 0, Red 1, Orange 2, Yellow 3, Green 4, Blue 5, Violet 6, Gray 7. 8 to 11 are #14336's
+    // twelve-entry list, so they are not this issue's table.
+    for (name, number) in [("none", 0), ("red", 1), ("orange", 2), ("yellow", 3), ("green", 4), ("blue", 5), ("violet", 6), ("gray", 7)] {
+        assert_eq!(color_number(name), Some(number), "{name}");
+        assert_eq!(color_name(number), Some(name), "{number}");
+    }
+    for number in [8, 9, 10, 11, 99] {
+        assert_eq!(color_name(number), None, "{number} is #14336's, not ours");
+    }
+    // Every colour of ours writes its own number, so the two directions agree.
+    for (name, number) in [("red", 1), ("orange", 2), ("yellow", 3), ("green", 4), ("blue", 5), ("violet", 6), ("gray", 7)] {
+        let text = to_mnu("Mine", &set(&[], &[("edit.fade", name)]), &[]);
+        assert!(text.contains(&row(1154, 3, 0, 0, number)), "{name} is {number}: {text}");
+        assert_eq!(from_mnu(&text).expect("{name} reads").set.colors["edit.fade"], name);
+    }
+}
+
+#[test]
+fn a_file_holding_rows_we_do_not_know_writes_them_back() {
+    // "Unknown entries are kept when we rewrite a file": the numbers we have no command for, a row
+    // that is not a static one, and an element that is not a command at all all stay as they were.
+    let unknown = [
+        row(1520, 2, 0, 1, 0).trim().to_string(),
+        row(3127, 40, 1, 0, 4).trim().to_string(),
+        "<command kind=\"dynamic\" id=\"10\" parentMenuID=\"2\" menuType=\"0\" hidden=\"1\" color=\"0\"/>".to_string(),
+        "<panel name=\"Layers\"/>".to_string(),
+    ];
+    let text = mnu(&format!("{}{}", row(10, 2, 0, 1, 0), unknown.iter().map(|entry| format!("  {entry}\n")).collect::<String>()));
+    let read = from_mnu(&text).expect("the known row reads and the rest is kept");
+    assert_eq!(hidden_of(&read.set), vec!["file.new".to_string()], "only id 10 is one of ours");
+    assert!(read.set.colors.is_empty(), "3127's colour stayed in its own row: {:?}", read.set.colors);
+    assert_eq!(read.kept, unknown.to_vec(), "kept in the order they were read");
+    // The rewrite holds both our row and every one of theirs, and reads the same way again.
+    let again = from_mnu(&to_mnu("Mine", &read.set, &read.kept)).expect("the rewrite reads back");
+    assert_eq!(again, read, "reading and writing a file is stable");
+}
+
+#[test]
+fn writing_a_set_over_a_file_keeps_the_rows_that_file_held() {
+    // The row's Save overwrites the set's file without a dialog; the entries the file held that we
+    // cannot name do not go with it.
+    let (_tmp, dir) = folder_with(&[("Mine.MNU", &mnu(&row(1520, 2, 0, 1, 0)))]);
+    write_set(&dir, "Mine", &set(&["file.new"], &[])).expect("the file was written");
+    let text = std::fs::read_to_string(dir.join("Mine.MNU")).expect("the set's file");
+    assert!(text.contains(&row(10, 2, 0, 1, 0)), "the new set: {text}");
+    assert!(text.contains(&row(1520, 2, 0, 1, 0)), "the unknown row stayed: {text}");
+    assert_eq!(text.matches("<command").count(), 2, "one row for the one changed item, plus theirs: {text}");
+    assert!(!text.contains("edit.fade"), "the file holds numbers, not our command ids: {text}");
+}
+
+#[test]
+fn xml_that_is_not_a_set_is_an_error_and_not_a_crash() {
+    // The issue's first malformed case.
+    for text in ["", "menus, not xml", "<", "<<<>>>", "<a><b></a>", "\u{0}", "</photocraft-menu-settings>"] {
+        assert!(from_mnu(text).is_err(), "{text:?} read as a set");
+    }
+    // Well-formed XML that is not a menu set file at all (a `.kys` root, say), and a menu set file
+    // of a version we have not measured.
+    assert!(from_mnu("<photoshop-keyboard-shortcuts version=\"2\" />").is_err(), "the wrong root");
+    assert!(from_mnu("<photocraft-menu-settings version=\"3\" />").is_err(), "a version we do not know");
+    assert!(from_mnu("<photocraft-menu-settings />").is_err(), "no version at all");
+}
+
+#[test]
+fn an_unknown_colour_number_is_an_error_and_not_a_crash() {
+    // The issue's second malformed case: the reference's number, or anything that is not one.
+    for color in ["8", "9", "11", "12", "-1", "seven", ""] {
+        let text = mnu(&format!("  <command kind=\"static\" id=\"10\" parentMenuID=\"2\" menuType=\"0\" hidden=\"1\" color=\"{color}\"/>\n"));
+        assert!(from_mnu(&text).is_err(), "colour `{color}` read as a set");
+    }
+    // A hidden value that is not 0 or 1 is malformed the same way; a row without an id, or one
+    // whose id is not a number, is just an entry we do not know.
+    assert!(from_mnu(&mnu("  <command kind=\"static\" id=\"10\" parentMenuID=\"2\" menuType=\"0\" hidden=\"2\" color=\"0\"/>\n")).is_err());
+    let read = from_mnu(&mnu("  <command kind=\"static\" parentMenuID=\"2\" menuType=\"0\" hidden=\"1\" color=\"0\"/>\n  \
+         <command kind=\"static\" id=\"x\" parentMenuID=\"2\" menuType=\"0\" hidden=\"1\" color=\"0\"/>\n"))
+    .expect("unknown rows are kept");
+    assert_eq!(read.kept.len(), 2, "{read:?}");
+    assert!(read.set.hidden.is_empty());
+}
+
+#[test]
+fn a_huge_set_file_is_an_error_and_not_a_crash() {
+    // The issue's third malformed case. The file is well-formed XML: it is simply far larger than
+    // a menu set anyone edits, and is refused without being parsed.
+    let (_tmp, dir) = folder_with(&[("Big.MNU", "")]);
+    let big = format!("{}{}", " ".repeat(MAX_MNU_BYTES + 1024), mnu(&row(10, 2, 0, 1, 0)));
+    std::fs::write(dir.join("Big.MNU"), &big).expect("the big file is written");
+    let (sets, errors) = read_sets(&dir);
+    assert!(sets.is_empty(), "the huge file did not come in: {sets:?}");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let first = &errors[0];
+    assert!(first.contains("Big.MNU"), "{first} names the file");
+    assert!(from_mnu(&big).is_err(), "the same text read directly is refused too");
+    // And the folder is still writable beside it.
+    write_set(&dir, "Mine", &set(&["file.new"], &[])).expect("a set beside a refused file still writes");
+    assert_eq!(read_sets(&dir).0.keys().collect::<Vec<_>>(), vec!["Mine"]);
+}
+
+#[test]
+fn a_broken_file_in_the_folder_is_reported_and_the_others_come_in() {
+    let (_tmp, dir) = folder_with(&[("Good.MNU", &mnu(&row(31, 2, 0, 0, 5))), ("Broken.MNU", "<photocraft-menu-settings"), ("Notes.txt", "not a set")]);
+    let (sets, errors) = read_sets(&dir);
+    assert_eq!(sets.keys().collect::<Vec<_>>(), vec!["Good"], "the readable set came in");
+    assert_eq!(sets["Good"].colors["file.close"], "blue", "id 31 with colour 5");
+    assert_eq!(errors.len(), 1, "{errors:?}: only the malformed .mnu is a problem, not the text file");
+    let first = &errors[0];
+    assert!(first.contains("Broken.MNU"), "{first}");
+    // A file we write and read again is the set it was, named by its own stem.
+    assert_eq!(set_name_of(&dir.join("Good.MNU")).as_deref(), Some("Good"));
+    assert_eq!(file_name("Good"), "Good.MNU");
+    assert_eq!(set_name_of(&dir.join("Notes.txt")).as_deref(), None, "not a set file");
+}
+
+#[test]
+fn the_first_set_makes_the_menu_sets_folder_and_writes_its_file_there() {
+    // The folder is there only when the first set is saved: the settings directory already exists,
+    // the menu-sets folder inside it is made on demand.
+    let tmp = tempfile::tempdir().expect("a temp folder");
+    let dir = folder(tmp.path());
+    assert!(!dir.exists(), "nothing was written yet");
+    write_set(&dir, "Dark Room", &set(&["file.new"], &[("edit.fade", "violet")])).expect("the write made the folder");
+    assert!(dir.is_dir(), "the folder came with it");
+    assert!(dir.join("Dark Room.MNU").is_file(), "the set's file, named by the set");
+    let (sets, errors) = read_sets(&dir);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(sets.keys().collect::<Vec<_>>(), vec!["Dark Room"]);
+    assert_eq!(hidden_of(&sets["Dark Room"]), vec!["file.new".to_string()]);
+    assert_eq!(sets["Dark Room"].colors["edit.fade"], "violet");
+    // Deleting it takes the file, and a file that is already gone is not an error.
+    menu_sets::delete_set(&dir, "Dark Room").expect("the file went");
+    assert!(!dir.join("Dark Room.MNU").exists());
+    assert!(menu_sets::delete_set(&dir, "Dark Room").is_ok(), "already gone is deleted");
+    // A file whose existing text is malformed is not overwritten blind.
+    std::fs::create_dir_all(&dir).expect("the folder is there");
+    std::fs::write(dir.join("Broken.MNU"), "<photocraft-menu-settings").expect("the broken file");
+    assert!(write_set(&dir, "Broken", &set(&["file.new"], &[])).is_err(), "a malformed file is not rewritten");
+    assert_eq!(std::fs::read_to_string(dir.join("Broken.MNU")).expect("still there"), "<photocraft-menu-settings", "the write refused, the file stayed");
+}
+
+#[test]
+fn a_file_the_reference_application_wrote_reads_as_a_set() {
+    // Photoshop's own file: its root name, the byte-order mark its writer puts first, and two rows
+    // for File › Close — a colour and a hide. An item PhotoCraft can colour but not hide (#14335)
+    // still reads as hidden here, which is what the settings-file path does too:
+    // `a_hand_edited_set_leaves_an_item_that_cannot_be_hidden_shown` pins that the menus show it.
+    let text = format!(
+        "\u{feff}<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <photoshop-menu-settings version=\"2\" filename=\"$$$/FileName/Presets/MenuCustomization/My Menus=My Menus\" modified=\"1\">\n{}{}{}\
+         </photoshop-menu-settings>\n",
+        row(31, 2, 0, 0, 5),
+        row(31, 2, 0, 1, 0),
+        row(1139, 41, 1, 1, 0),
+    );
+    let read = from_mnu(&text).expect("the reference application's file reads");
+    assert_eq!(hidden_of(&read.set), vec!["file.close".to_string(), "layer.mergeVisible".to_string()]);
+    assert_eq!(read.set.colors["file.close"], "blue", "both rows of File › Close came together");
+    assert!(read.kept.is_empty(), "{read:?}");
 }

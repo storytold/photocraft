@@ -713,3 +713,234 @@ fn no_of_the_delete_question_keeps_the_set_the_row_and_the_menus() {
     assert_eq!(p.menu_sets.keys().collect::<Vec<_>>(), ["Painting", "Web"], "No removed nothing");
     assert_eq!(p.menu_set, "Painting");
 }
+
+// ---------------------------------------------------------- the `.mnu` files (#14450, slice 4)
+//
+// A set lives as a `.mnu` file in a menu-sets folder of the settings directory: the row's Save on a
+// saved set writes it without a dialog, Save on the built-in set and New ask the Save dialog, which
+// starts in that folder offering "Menu Customization (*.MNU)", Delete takes the file with the set, and
+// the folder's files are sets the row can pick. These tests give the app a settings store of its own
+// (a real temp folder, so `menu_sets::folder` is a real folder) and drive the same row as above.
+
+use photocraft_engine::menu_sets;
+
+/// Two saved sets whose items all have a measured number: Painting hides File › New and colours
+/// Edit › Fade red; Web hides Layers › Merge Visible. Painting is the set in use, as saved.
+fn with_numbered_sets(app: &mut PhotocraftApp) {
+    app.run("edit.menus", json!({"hide": ["file.new"], "color": {"edit.fade": "red"}, "saveSet": "Painting"})).unwrap();
+    app.run("edit.menus", json!({"hide": ["layer.mergeVisible"], "saveSet": "Web"})).unwrap();
+    app.run("edit.menus", json!({"useSet": "Painting"})).unwrap();
+}
+
+/// A harness on an app whose settings store is the folder `dir`, so the menu-sets folder is
+/// `dir/menu-sets` for real. The store's own `config.toml` is never flushed by these tests.
+fn file_harness(files: Arc<ScriptedFiles>, dir: &std::path::Path) -> Harness<'static, Box<PhotocraftApp>> {
+    let dir = dir.to_path_buf();
+    Harness::builder().with_size(vec2(1100.0, 760.0)).with_max_steps(64).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let options = craft::settings::OpenOptions::new(craft::settings::Location::Dir(dir));
+        let services = crate::Services {
+            files: Some(files),
+            settings: Some(craft::settings::SettingsStore::<photocraft_engine::prefs::SavedPrefs>::open_with(options)),
+            ..Default::default()
+        };
+        PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), services)
+    })
+}
+
+/// The measured root element of a PhotoCraft set file for the set `name`.
+fn root(name: &str) -> String {
+    format!("<photocraft-menu-settings version=\"2\" filename=\"$$$/FileName/Presets/MenuCustomization/{name}={name}\" modified=\"0\">")
+}
+
+/// The text of the set file `name` in the settings folder `dir`, or `None` where it is not there.
+fn set_file(dir: &std::path::Path, name: &str) -> Option<String> {
+    std::fs::read_to_string(menu_sets::folder(dir).join(menu_sets::file_name(name))).ok()
+}
+
+/// Puts `text` in the settings folder `dir` as the file of the set `name`, making the folder.
+fn write_set_file(dir: &std::path::Path, name: &str, text: &[u8]) -> std::path::PathBuf {
+    let folder = menu_sets::folder(dir);
+    std::fs::create_dir_all(&folder).expect("the menu-sets folder");
+    let path = folder.join(menu_sets::file_name(name));
+    std::fs::write(&path, text).expect("the set file");
+    path
+}
+
+/// Save on a modified saved set writes its file in the menu-sets folder, without a dialog, and the
+/// file holds one row per changed item — only what the set changed, by the measured numbers.
+#[test]
+fn save_on_a_saved_set_writes_its_file_in_the_menu_sets_folder() {
+    let tmp = tempfile::tempdir().expect("a settings folder");
+    let files = Arc::new(ScriptedFiles::new());
+    let mut h = file_harness(files.clone(), tmp.path());
+    with_numbered_sets(h.state_mut());
+    open_menus(&mut h);
+    show_all(&mut h);
+    button(&h, SAVE).click();
+    h.run_steps(3);
+    assert!(files.requests().is_empty(), "the measured Save on a saved set asks no dialog");
+    assert!(set_file(tmp.path(), "Painting").is_none(), "the file waits for OK, as the preferences do");
+    ok(&mut h);
+    assert!(menu_sets::folder(tmp.path()).is_dir(), "the menu-sets folder came with the first saved set");
+    let text = set_file(tmp.path(), "Painting").expect("Painting's file");
+    assert!(text.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"), "the measured UTF-8 XML: {text}");
+    assert!(text.contains(&root("Painting")), "the root as measured: {text}");
+    assert!(text.contains("id=\"1154\" parentMenuID=\"3\" menuType=\"0\" hidden=\"0\" color=\"1\""), "Edit › Fade kept its red: {text}");
+    assert!(!text.contains("id=\"10\""), "File › New is shown again, so it has no row: {text}");
+    assert_eq!(text.matches("<command").count(), 1, "one element per changed item: {text}");
+}
+
+/// The Save dialog of Save on the built-in set and of New starts in the menu-sets folder, suggests
+/// "<current set name> Copy.MNU" there, and offers the "Menu Customization (*.MNU)" file type.
+#[test]
+fn the_save_dialog_starts_in_the_menu_sets_folder_offering_the_menu_customization_type() {
+    let tmp = tempfile::tempdir().expect("a settings folder");
+    let files = Arc::new(ScriptedFiles::new());
+    let mut h = file_harness(files.clone(), tmp.path());
+    open_menus(&mut h);
+    button(&h, NEW).click();
+    h.run_steps(4);
+    let asked = files.requests();
+    assert_eq!(asked.len(), 1, "New goes to the Save dialog");
+    assert_eq!(asked[0].directory.as_deref(), Some(menu_sets::folder(tmp.path()).as_path()), "the dialog starts in the menu-sets folder");
+    assert_eq!(asked[0].file_name.as_deref(), Some("PhotoCraft Defaults Copy.MNU"), "the measured default name");
+    let names: Vec<&str> = asked[0].filters.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["Menu Customization"], "one file type, as measured");
+    let exts: Vec<&str> = asked[0].filters.iter().flat_map(|f| f.extensions.iter().map(String::as_str)).collect();
+    assert_eq!(exts, ["mnu"], "(*.MNU): {exts:?}");
+    assert_eq!(asked[0].suggested_extension.as_deref(), Some("mnu"), "a name typed without one keeps the set extension");
+}
+
+/// The file the dialog chose is the set's file: it is written where the user sent it, and holds the
+/// menus as they were saved.
+#[test]
+fn a_picked_name_writes_the_set_file_where_the_dialog_chose_it() {
+    let tmp = tempfile::tempdir().expect("a settings folder");
+    let chosen = menu_sets::folder(tmp.path()).join("Darkroom Copy.MNU");
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![chosen.clone()])]));
+    let mut h = file_harness(files.clone(), tmp.path());
+    h.state_mut().run("edit.menus", json!({"hide": ["file.new"], "color": {"layer.mergeVisible": "blue"}})).unwrap();
+    open_menus(&mut h);
+    button(&h, SAVE).click();
+    h.run_steps(4);
+    assert_eq!(row_value(&h), "Darkroom Copy", "the chosen name without its extension names the set");
+    assert!(std::fs::read_to_string(&chosen).is_err(), "the file waits for OK, as the preferences do");
+    ok(&mut h);
+    let text = std::fs::read_to_string(&chosen).expect("OK wrote the file where the dialog chose");
+    assert!(text.contains(&root("Darkroom Copy")), "the set name is the file stem: {text}");
+    assert!(text.contains("id=\"10\" parentMenuID=\"2\" menuType=\"0\" hidden=\"1\" color=\"0\""), "hidden without a colour: {text}");
+    assert!(text.contains("id=\"1139\" parentMenuID=\"41\" menuType=\"1\" hidden=\"0\" color=\"5\""), "the panel item's own colour: {text}");
+    let p = h.state().session.prefs();
+    assert_eq!(p.menu_sets["Darkroom Copy"].hidden, ["file.new"], "and the preferences hold it too");
+}
+
+/// A `.mnu` file the folder holds is a set the row can name: the reference application's own file,
+/// with its root name, its byte-order mark and its numbers, loads as our command ids.
+#[test]
+fn a_set_file_in_the_menu_sets_folder_is_a_set_the_row_can_choose() {
+    let tmp = tempfile::tempdir().expect("a settings folder");
+    let foreign = concat!(
+        "\u{feff}<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+        "<photoshop-menu-settings version=\"2\" filename=\"$$$/FileName/Presets/MenuCustomization/From Photoshop=From Photoshop\" modified=\"0\">\n",
+        "  <command kind=\"static\" id=\"1139\" parentMenuID=\"41\" menuType=\"1\" hidden=\"1\" color=\"0\"/>\n",
+        "</photoshop-menu-settings>\n",
+    );
+    write_set_file(tmp.path(), "From Photoshop", foreign.as_bytes());
+    let mut h = file_harness(Arc::new(ScriptedFiles::new()), tmp.path());
+    open_menus(&mut h);
+    h.get_by_role_and_label(Role::ComboBox, "Set").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("From Photoshop").is_some(), "the folder's file is in the list");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    choose(&mut h, "From Photoshop");
+    assert_eq!(row_value(&h), "From Photoshop");
+    ok(&mut h);
+    let p = h.state().session.prefs();
+    assert_eq!(p.menu_sets["From Photoshop"].hidden, ["layer.mergeVisible"], "the file's number became our command id");
+    assert_eq!(p.menu_set, "From Photoshop", "and it is the set in use");
+    assert_eq!(p.menus.hidden, ["layer.mergeVisible"], "choosing the set loaded its menus");
+}
+
+/// Yes of the Delete question takes the set's file with it, so the folder does not offer the set
+/// back; No leaves the file where it is. Both act at OK, where the row's writes land.
+#[test]
+fn yes_of_the_delete_question_takes_the_set_file_with_it() {
+    let tmp = tempfile::tempdir().expect("a settings folder");
+    let mut h = file_harness(Arc::new(ScriptedFiles::new()), tmp.path());
+    with_numbered_sets(h.state_mut());
+    open_menus(&mut h);
+    show_all(&mut h);
+    button(&h, SAVE).click();
+    h.run_steps(3);
+    assert!(set_file(tmp.path(), "Painting").is_none(), "the row's Save waits for OK, like the preferences");
+    button(&h, DELETE).click();
+    h.run_steps(2);
+    answer(&mut h, NO);
+    ok(&mut h);
+    assert!(set_file(tmp.path(), "Painting").is_some(), "No kept the set and its file");
+    assert!(set_file(tmp.path(), "Web").is_none(), "a set the row never saved has no file: only the row's Save writes one");
+    // The saved file is now the set: reopening reads it, and Delete with Yes takes it away.
+    open_menus(&mut h);
+    assert_eq!(row_value(&h), "Painting", "the folder's file reads back as the saved set");
+    button(&h, DELETE).click();
+    h.run_steps(2);
+    answer(&mut h, YES);
+    ok(&mut h);
+    assert!(set_file(tmp.path(), "Painting").is_none(), "Yes took the file with the set");
+    let p = h.state().session.prefs();
+    assert_eq!(p.menu_sets.keys().collect::<Vec<_>>(), ["Web"], "and the set went from the preferences with it");
+}
+
+/// A file in the folder that does not read is said out loud — the issue's rule that a malformed
+/// `.mnu` is an error, never a crash — and the row still opens with the sets that do read.
+#[test]
+fn a_broken_set_file_in_the_folder_is_said_and_the_row_still_opens() {
+    let tmp = tempfile::tempdir().expect("a settings folder");
+    write_set_file(tmp.path(), "Broken", b"<photocraft-menu-settings version=\"2\"");
+    let text = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+        "<photocraft-menu-settings version=\"2\" filename=\"$$$/FileName/Presets/MenuCustomization/Good=Good\" modified=\"0\">\n",
+        "  <command kind=\"static\" id=\"31\" parentMenuID=\"2\" menuType=\"0\" hidden=\"0\" color=\"5\"/>\n",
+        "</photocraft-menu-settings>\n",
+    );
+    write_set_file(tmp.path(), "Good", text.as_bytes());
+    let mut h = file_harness(Arc::new(ScriptedFiles::new()), tmp.path());
+    open_menus(&mut h);
+    assert_eq!(row_value(&h), DEFAULTS_NAME, "the row opened on the set in use");
+    let line = h.state().ui.status.clone();
+    assert!(h.state().ui.status_error && line.contains("Broken.MNU"), "the unreadable file is named: {line}");
+    h.get_by_role_and_label(Role::ComboBox, "Set").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Good").is_some(), "and the readable one is still a set");
+    assert!(h.query_by_label("Broken").is_none(), "the unreadable file is not a set of garbage");
+}
+
+/// A cancelled dialog writes nothing at all, the set's file included: the row's Save only marks the
+/// file for writing, and OK is what writes it — the same rule slice 2 pinned for the preferences.
+#[test]
+fn a_cancelled_dialog_writes_no_set_file() {
+    let tmp = tempfile::tempdir().expect("a settings folder");
+    let mut h = file_harness(Arc::new(ScriptedFiles::new()), tmp.path());
+    with_numbered_sets(h.state_mut());
+    open_menus(&mut h);
+    show_all(&mut h);
+    button(&h, SAVE).click();
+    h.run_steps(3);
+    crate::prefs_ui::shortcuts::cancel(h.state_mut());
+    h.run_steps(2);
+    assert!(set_file(tmp.path(), "Painting").is_none(), "Cancel reached neither the folder nor the preferences");
+    assert!(!menu_sets::folder(tmp.path()).exists(), "and it did not make the menu-sets folder either");
+    let p = h.state().session.prefs();
+    assert_eq!(p.menu_sets["Painting"].hidden, ["file.new"], "the set is exactly as it was saved");
+    // The same Save, pressed through OK, is what puts the file there.
+    open_menus(&mut h);
+    show_all(&mut h);
+    button(&h, SAVE).click();
+    h.run_steps(3);
+    ok(&mut h);
+    let text = set_file(tmp.path(), "Painting").expect("OK wrote the file the row asked for");
+    assert_eq!(text.matches("<command").count(), 1, "one row for the one changed item left: {text}");
+    assert_eq!(h.state().session.prefs().menu_sets["Painting"].hidden, [] as [String; 0], "and the preferences agree with the file");
+}

@@ -91,6 +91,14 @@ pub(crate) struct MenusDraft {
     /// write (the built-in set, or a name the engine refuses): the picked target, applied once the
     /// Save dialog has answered. `ask_new_name` clears it, so a later Save or New cannot pick it up.
     pub(crate) switch_target: Option<String>,
+    /// Set by the row's Save on a saved set and by Yes of the switch question on one: OK writes that
+    /// set's `.mnu` file in the menu-sets folder, which is where the reference application keeps a set
+    /// it has saved (#14450). The value is the file the Save dialog chose, when there was one, or
+    /// `None` for the set's own file in that folder.
+    pub(crate) file_write: BTreeMap<String, Option<String>>,
+    /// Set by Yes of the Delete question: OK takes that set's `.mnu` file away too, so the folder does
+    /// not offer the set back on the next open (#14450).
+    pub(crate) file_delete: BTreeSet<String>,
 }
 
 impl MenusDraft {
@@ -192,6 +200,8 @@ impl MenusDraft {
         if !self.set.is_empty() && set_name(&self.set).is_ok() {
             let name = self.set.clone();
             self.store(&name);
+            // Yes saves the set the way its Save button does, and the set's file with it.
+            self.file_write.insert(name, None);
             self.choose(target);
         } else if self.sets.len() >= menu_sets::MAX_SETS {
             // The save could only name a set the engine refuses to store: the cap line the row's
@@ -203,10 +213,12 @@ impl MenusDraft {
         }
     }
 
-    /// Yes of the Delete question: the set it named, if that is still the set in use.
+    /// Yes of the Delete question: the set it named, if that is still the set in use. The set's file
+    /// goes with it, since the folder is where a saved set lives (#14450).
     fn delete_named(&mut self, name: &str) {
         if self.set == name {
             self.delete();
+            self.file_delete.insert(name.to_owned());
         }
     }
 }
@@ -281,6 +293,19 @@ pub fn open(app: &mut PhotocraftApp, tab: u64) {
         remembered: BTreeMap::new(),
     };
     app.prefs_rt.shortcuts = Some(session);
+    // The sets the menu-sets folder holds join the row: in the reference application the folder is
+    // where a set lives, so a file is the set of that name, and a set the folder has no file for keeps
+    // the copy the preferences hold. A file that does not read is said out loud, not skipped in
+    // silence (#14450).
+    let (from_files, errors) = read_set_files(app);
+    if let Some(session) = app.prefs_rt.shortcuts.as_mut() {
+        for (name, set) in from_files {
+            session.menus.sets.insert(name, set);
+        }
+    }
+    if let Some(first) = errors.first() {
+        set_line(app, tl!("A menu set file was not read: {error}"), first);
+    }
 }
 
 /// Whether the dialog is open: the runtime's keys step aside for its modal.
@@ -387,7 +412,7 @@ fn pass(app: &mut PhotocraftApp, ui: &mut egui::Ui, press_ok: bool) {
     }
     if menus.ask_name {
         menus.ask_name = false;
-        ask_set_name(app, state, &menus.copy_name());
+        ask_set_name(app, state, &suggested_set_file(app, menus));
     }
     // The two questions the Set row raises are opened here, beside the pass's own Save-dialog ask:
     // the row has been drawn and its draft state is settled, and the host draws the box over the
@@ -518,15 +543,85 @@ fn save_menus(app: &mut PhotocraftApp, menus: &MenusDraft) -> Result<Value, Stri
         app.run("edit.menus", json!({"sets": sets, "activeSet": active})).map_err(|e| e.to_string())?;
     }
     let call = json!({"values": {"menus": {"hidden": menus.hidden, "colors": menus.colors}}});
-    app.run("prefs.set", call).map_err(|e| e.to_string())
+    let written = app.run("prefs.set", call).map_err(|e| e.to_string())?;
+    // OK is also what writes and deletes the sets' `.mnu` files: as with the preferences, nothing the
+    // Set row did reaches the disk before it, so a cancelled dialog leaves the folder alone.
+    write_set_files(app, menus);
+    Ok(written)
+}
+
+/// The `.mnu` files of the sets the row saved, and the files of the sets it deleted, in the menu-sets
+/// folder of the settings directory; a set whose file the Save dialog chose goes where the user sent
+/// it. The write makes the folder when it is not there. A file that cannot be written is said on the
+/// app's status line rather than undoing the preferences write that came before it (#14450).
+fn write_set_files(app: &mut PhotocraftApp, menus: &MenusDraft) {
+    let Some(dir) = sets_folder(app) else { return };
+    for (name, chosen) in &menus.file_write {
+        let Some(set) = menus.sets.get(name) else { continue };
+        let wrote = match chosen {
+            Some(path) => menu_sets::write_set_at(Path::new(path), name, set),
+            None => menu_sets::write_set(&dir, name, set),
+        };
+        if let Err(e) = wrote {
+            set_line(app, tl!("The menu set was not saved: {error}"), &e);
+        }
+    }
+    for name in &menus.file_delete {
+        if let Err(e) = menu_sets::delete_set(&dir, name) {
+            set_line(app, tl!("The menu set was not deleted: {error}"), &e);
+        }
+    }
+}
+
+/// Where a saved set lives as a file: the menu-sets folder of the settings directory
+/// (`menu_sets::folder`), which is where the reference application keeps its sets. `None` where the
+/// app has no settings folder at all — the web build, whose `Services` holds no store, and tests that
+/// open the dialog without one. Without it the row keeps its sets in the preferences only.
+#[cfg(target_arch = "wasm32")]
+fn sets_folder(_: &PhotocraftApp) -> Option<std::path::PathBuf> {
+    None
+}
+
+/// The same on the desktop: the folder of the opened settings store, `menu_sets::SETS_DIR` inside it.
+#[cfg(not(target_arch = "wasm32"))]
+fn sets_folder(app: &PhotocraftApp) -> Option<std::path::PathBuf> {
+    app.services.settings.as_ref().and_then(|(store, _)| store.dir()).map(menu_sets::folder)
+}
+
+/// A Menus-tab set line for the app's status line. The framework draws its in-dialog bars only on its
+/// own tab, so the Menus tab's set problems are said there, as slice 2 established.
+fn set_line(app: &mut PhotocraftApp, subject: &str, error: &str) {
+    app.ui.status = crate::i18n::fmt(subject, &[("error", error)]);
+    app.ui.status_error = true;
+}
+
+/// The sets the menu-sets folder holds, keyed by name, and one message per file that could not be
+/// read. The folder itself is not an error: it comes with the first saved set.
+fn read_set_files(app: &PhotocraftApp) -> (BTreeMap<String, MenuSet>, Vec<String>) {
+    match sets_folder(app) {
+        Some(dir) => menu_sets::read_sets(&dir),
+        None => (BTreeMap::new(), Vec::new()),
+    }
+}
+
+/// The name the Save dialog is given: the measured "<current set name> Copy.MNU", inside the
+/// menu-sets folder when the app has one, so the dialog starts there as measured (#14450). The
+/// extension is part of the name: `ask_set_name` takes the stem, so only `.MNU` is stripped and a
+/// dotted set name (`Web.v2 Copy`) keeps its dots.
+fn suggested_set_file(app: &PhotocraftApp, draft: &MenusDraft) -> String {
+    let name = draft.copy_name();
+    match sets_folder(app) {
+        Some(dir) => dir.join(&name).to_string_lossy().into_owned(),
+        None => name,
+    }
 }
 
 /// Save on the built-in set and New ask for the set's name through the system Save dialog, which
-/// suggests `suggested`; the chosen file's name without its extension names the set, as measured
-/// (#14450). `suggested` therefore ends in `.MNU`: only that extension is stripped, so a dotted set
-/// name (`Web.v2 Copy`) keeps its dots. Writing the `.mnu` file, and starting the dialog in the
-/// menu-sets folder of the settings directory with the "Menu Customization (*.MNU)" type, belong to
-/// that slice: the set is stored with the preferences here, and no file is written.
+/// suggests `suggested` — the menu-sets folder of the settings directory, the "Menu Customization
+/// (*.MNU)" type and the default name "<current set name> Copy.MNU", all as measured. The chosen
+/// file's name without its extension names the set, and the file itself is written there: a saved set
+/// lives as a `.mnu` file, so a set the dialog answered with is stored with the preferences and in
+/// that file (#14450).
 fn ask_set_name(app: &mut PhotocraftApp, state: &mut DialogState, suggested: &str) {
     let asked = app.pick_save(suggested, |app, path| {
         let stem = Path::new(&path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -537,9 +632,12 @@ fn ask_set_name(app: &mut PhotocraftApp, state: &mut DialogState, suggested: &st
             Some(session) => match set_name(&stem) {
                 Ok(name) => {
                     session.menus.store(&name);
+                    // The file the dialog chose is the set's file, and OK writes it: the dialog
+                    // started in the menu-sets folder, so that is where it lands unless the user went
+                    // elsewhere. A cancelled name dialog never reaches here, and writes nothing.
+                    session.menus.file_write.insert(name, Some(path.clone()));
                     // Yes of the switch question was waiting on this name: the save is in, so the
-                    // switch it promised goes ahead. A cancelled name dialog never reaches here, and
-                    // the next Save or New clears the target.
+                    // switch it promised goes ahead. The next Save or New clears the target.
                     if let Some(target) = session.menus.switch_target.take() {
                         session.menus.choose(&target);
                     }
@@ -547,11 +645,11 @@ fn ask_set_name(app: &mut PhotocraftApp, state: &mut DialogState, suggested: &st
                 }
                 Err(e) => Some(e),
             },
+            // The dialog went away with the session: nothing to name and nothing to write.
             None => None,
         };
         if let Some(e) = refused {
-            app.ui.status = crate::i18n::fmt(tl!("The menu set was not saved: {error}"), &[("error", &e)]);
-            app.ui.status_error = true;
+            set_line(app, tl!("The menu set was not saved: {error}"), &e);
         }
         Ok(control_reply())
     });
@@ -671,6 +769,9 @@ fn set_row(ui: &mut egui::Ui, draft: &mut MenusDraft) {
             } else {
                 let name = draft.set.clone();
                 draft.store(&name);
+                // "Save on a modified saved set overwrites its file without a dialog" (#14450): the
+                // file is the set's own in the menu-sets folder, and OK is what writes it.
+                draft.file_write.insert(name, None);
             }
         }
         if new.clicked() {
