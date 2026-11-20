@@ -8,7 +8,8 @@ pub(crate) const SAVE_OPTIONS_OPEN: &str = "Answer the TIFF, Targa, DDS or JPEG 
 /// The format answers a save takes instead of asking: the Targa bits per pixel (`"tgaBits"`),
 /// the DDS options (`"ddsCompression"`, `"ddsMipmaps"`), JPEG Options (`"quality"` 0–12,
 /// `"jpegFormat"`), TIFF Options (`"tiffCompression"`, `"tiffTransparency"`, `"tiffPyramid"`,
-/// `"tiffLayers"`) and a PSD/PSB's Maximize Compatibility (`"maximizeCompatibility"`). `None`
+/// `"tiffLayers"`), a PSD/PSB's Maximize Compatibility (`"maximizeCompatibility"`) and a PDF's
+/// image resolution (`"pdfDownsamplePpi"`, kept as is when unset). `None`
 /// asks in Save As and takes the default in automation saves, which never prompt (Maximize
 /// Compatibility: Preferences › File Handling decides).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -18,6 +19,7 @@ pub struct FormatChoices {
     pub jpeg: Option<jpeg_options_ui::JpegChoice>,
     pub tiff: Option<tiff_options_ui::TiffChoice>,
     pub maximize_compatibility: Option<bool>,
+    pub pdf_downsample_ppi: Option<f32>,
 }
 
 impl FormatChoices {
@@ -29,6 +31,7 @@ impl FormatChoices {
             jpeg: jpeg_options_ui::choice_param(params, cmd)?,
             tiff: tiff_options_ui::choice_param(params, cmd)?,
             maximize_compatibility: maximize_param(params, cmd)?,
+            pdf_downsample_ppi: pdf_downsample_param(params, cmd)?,
         })
     }
 
@@ -41,6 +44,7 @@ impl FormatChoices {
             jpeg: jpeg_options_ui::recorded_choice(params, cmd)?,
             tiff: tiff_options_ui::choice_param(params, cmd)?,
             maximize_compatibility: maximize_param(params, cmd)?,
+            pdf_downsample_ppi: pdf_downsample_param(params, cmd)?,
         })
     }
 
@@ -50,6 +54,7 @@ impl FormatChoices {
             tga_bits: self.tga_bits.or(settings.tga_bits),
             dds: self.dds.unwrap_or(settings.dds),
             psd_maximize_compatibility: self.maximize_compatibility.unwrap_or(settings.psd_maximize_compatibility),
+            pdf_downsample_ppi: self.pdf_downsample_ppi.or(settings.pdf_downsample_ppi),
             ..settings
         };
         let settings = match self.tiff {
@@ -79,12 +84,20 @@ impl FormatChoices {
         if let Some(maximize) = self.maximize_compatibility {
             step["maximizeCompatibility"] = maximize.into();
         }
+        if let Some(ppi) = self.pdf_downsample_ppi {
+            step["pdfDownsamplePpi"] = ppi.into();
+        }
     }
 }
 
 /// `"maximizeCompatibility"` in command or control call `cmd`'s params, read as the engine reads it.
 fn maximize_param(params: &Value, cmd: &str) -> Result<Option<bool>, String> {
     photocraft_engine::file_cmds::maximize_compatibility_param(params, cmd).map_err(|e| e.to_string())
+}
+
+/// `"pdfDownsamplePpi"` in command or control call `cmd`'s params, read as the engine reads it.
+fn pdf_downsample_param(params: &Value, cmd: &str) -> Result<Option<f32>, String> {
+    photocraft_engine::file_cmds::pdf_downsample_ppi_param(params, cmd).map_err(|e| e.to_string())
 }
 
 /// Decode a file: (document, warnings about anything approximated or dropped).
@@ -132,6 +145,9 @@ pub struct ExportSettings {
     /// `.pcraft`: also write the full-size composite (Preferences › File Handling › Save Full-Size
     /// Composite in .pcraft Files; see [`PhotocraftApp::save_settings`]). Off by default.
     pub pcraft_full_composite: bool,
+    /// PDF: the resolution the image is downsampled to when the document's is higher
+    /// ([`photocraft_io::ExportOptions::pdf_downsample_ppi`]); `None` keeps every pixel.
+    pub pdf_downsample_ppi: Option<f32>,
     /// Embed the document's ICC profile when the format supports it. On for Save As and, unless
     /// Export As turns it off, for export.
     pub embed_icc: bool,
@@ -166,6 +182,7 @@ impl Default for ExportSettings {
             image_previews: true,
             psd_maximize_compatibility: true,
             pcraft_full_composite: false,
+            pdf_downsample_ppi: None,
             embed_icc: true,
             embed_metadata: true,
             document_path: None,
@@ -201,6 +218,7 @@ impl ExportSettings {
         opts.image_previews = self.image_previews;
         opts.psd_maximize_compatibility = self.psd_maximize_compatibility;
         opts.pcraft_full_composite = self.pcraft_full_composite;
+        opts.pdf_downsample_ppi = self.pdf_downsample_ppi;
         opts.document_path = self.document_path.clone();
         opts.pcraft_cache = self.pcraft_cache.clone();
         opts.read_linked_files = self.read_linked_files;

@@ -438,6 +438,10 @@ pub struct ExportOptions {
     /// Grayscale or CMYK document loses its plates and a Multichannel document, which has no
     /// image to write, is refused.
     pub pdf_spot_plates: bool,
+    /// PDF: resample each page's image to this many pixels per inch when the document's
+    /// resolution is above it (`"pdfDownsamplePpi"`). `None` by default: the image keeps every
+    /// pixel.
+    pub pdf_downsample_ppi: Option<f32>,
     /// `.pcraft`: request the flattened document at its canvas size as `composite/full.png`
     /// (Preferences › File Handling › Save Full-Size Composite in .pcraft Files). The save may
     /// omit it; check the manifest's `full_composite` member ([`photocraft_format::read_full_composite`]
@@ -461,6 +465,7 @@ impl Default for ExportOptions {
             pcraft_cache: None,
             read_linked_files: true,
             pdf_spot_plates: true,
+            pdf_downsample_ppi: None,
             pcraft_full_composite: false,
         }
     }
@@ -1203,7 +1208,7 @@ fn export_stages_with_renderer(
     }
     if ext == "pdf" {
         let xmp = if opts.xmp == XmpEmbed::All { doc.metadata.xmp.as_deref() } else { None };
-        let mut res = pdf::export_with(doc, opts.pdf_spot_plates, xmp, ctl)?;
+        let mut res = pdf::export_with(doc, opts.pdf_spot_plates, opts.pdf_downsample_ppi, xmp, ctl)?;
         if let Some(r) = renderer {
             res.warnings.push("PDF export uses CPU compositor; GPU rendering applies to flat formats".into());
             res.warnings.extend(r.drain_diagnostics());
