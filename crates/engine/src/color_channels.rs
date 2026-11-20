@@ -200,7 +200,7 @@ fn restrict_surface_impl(before: &Surface, after: &mut Surface, colors: ColorCha
         .map(|(c, _)| *c)
         .chain(before.tiles().filter(|(c, _)| after.tile(**c).is_none()).map(|(c, _)| *c))
         .collect();
-    restrict_coords(before, after, colors, coords)?;
+    restrict_coords(before, after, colors, coords, None)?;
     after.prune();
     Ok(())
 }
@@ -218,10 +218,18 @@ pub fn restrict_region(before: &Surface, after: &mut Surface, colors: ColorChann
             _ => true,
         })
         .collect();
-    restrict_coords(before, after, colors, coords)
+    restrict_coords(before, after, colors, coords, Some(damage))
 }
 
-fn restrict_coords(before: &Surface, after: &mut Surface, colors: ColorChannels, coords: BTreeSet<photocraft_geom::TileCoord>) -> Result<()> {
+/// Restore the unselected components of each tile in `coords`, inside `area` only, or across the
+/// whole tile when `area` is `None`.
+fn restrict_coords(
+    before: &Surface,
+    after: &mut Surface,
+    colors: ColorChannels,
+    coords: BTreeSet<photocraft_geom::TileCoord>,
+    area: Option<photocraft_geom::Rect>,
+) -> Result<()> {
     if before.default_bytes() != after.default_bytes() {
         return Err(EngineError::Other("a colour-channel edit cannot change unstored pixels".into()));
     }
@@ -231,15 +239,27 @@ fn restrict_coords(before: &Surface, after: &mut Surface, colors: ColorChannels,
     if stride == 0 {
         return Err(EngineError::Other("invalid pixel format".into()));
     }
+    let row = (photocraft_geom::TILE_SIZE as usize).saturating_mul(stride);
     for c in coords {
         let old = before.tile(c);
         let old_bytes = old.map(|t| t.bytes());
         let tile = after.try_tile_mut(c).map_err(|e| EngineError::Other(e.to_string()))?;
-        for (i, pixel) in tile.bytes_mut().chunks_exact_mut(stride).enumerate() {
-            let original = old_bytes.as_deref().and_then(|t| t.get(i * stride..(i + 1) * stride)).unwrap_or(before.default_bytes());
-            for (ch, (out, src)) in pixel.chunks_exact_mut(bytes).zip(original.chunks_exact(bytes)).enumerate() {
-                if !colors.contains(ch) {
-                    out.copy_from_slice(src);
+        let tile_rect = c.rect();
+        let part = area.map_or(tile_rect, |a| a.intersect(&tile_rect));
+        if !part.is_empty() {
+            let mut dest = tile.bytes_mut();
+            let (x0, x1) = ((part.x0 - tile_rect.x0) as usize, (part.x1 - tile_rect.x0) as usize);
+            for y in (part.y0 - tile_rect.y0) as usize..(part.y1 - tile_rect.y0) as usize {
+                let span = y.saturating_mul(row).saturating_add(x0.saturating_mul(stride))..y.saturating_mul(row).saturating_add(x1.saturating_mul(stride));
+                let Some(pixels) = dest.get_mut(span.clone()) else { continue };
+                let originals = old_bytes.as_deref().and_then(|t| t.get(span));
+                for (i, pixel) in pixels.chunks_exact_mut(stride).enumerate() {
+                    let original = originals.and_then(|t| t.get(i * stride..(i + 1) * stride)).unwrap_or(before.default_bytes());
+                    for (ch, (out, src)) in pixel.chunks_exact_mut(bytes).zip(original.chunks_exact(bytes)).enumerate() {
+                        if !colors.contains(ch) {
+                            out.copy_from_slice(src);
+                        }
+                    }
                 }
             }
         }
