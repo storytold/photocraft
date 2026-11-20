@@ -89,8 +89,12 @@ fn a_click_on_another_layers_pixels_commits_and_keeps_the_selection() {
     app.ui.extras.rulers = false;
     app.ui.extras.snap = false;
     // "Other" has a blue block at x 120..160, y 120..160; "Paint" a red one at x 20..60, y 20..60.
+    let mut other = None;
     for (name, at, color) in [("Other", 120, "#0000ff"), ("Paint", 20, "#ff0000")] {
         let id = app.run("layer.new.layer", json!({"name": name})).unwrap()["layer"].as_u64().unwrap();
+        if name == "Other" {
+            other = Some(LayerId(id));
+        }
         app.run("layer.select", json!({"layer": id})).unwrap();
         app.run("select.rect", json!({"x": at, "y": at, "width": 40, "height": 40})).unwrap();
         app.run("edit.fill", json!({"contents": "color", "color": color})).unwrap();
@@ -106,6 +110,11 @@ fn a_click_on_another_layers_pixels_commits_and_keeps_the_selection() {
     assert_eq!(steps(&app), before + 1);
     assert_eq!(app.session.active().unwrap().history.entries().last().map(ToString::to_string).as_deref(), Some("Free Transform"));
     assert_eq!(app.session.active().unwrap().selected_layers(), vec![paint], "the selection doesn't change");
+    app.ui.tool = crate::state::Tool::Move;
+    app.ui.tool_options.move_auto_select = true;
+    app.ui.tool_options.move_target = "layer".into();
+    click(&mut app, [140.0, 140.0]);
+    assert_eq!(app.session.active().unwrap().selected_layers(), vec![other.unwrap()], "the second click picks the other layer");
 }
 
 /// A layer linked to the transformed one after the box opened moves with the commit
