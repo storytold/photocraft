@@ -468,6 +468,7 @@ pub(crate) const TAKERS: &[fn(&mut PhotocraftApp, &egui::Context)] = &[
     crate::slice_ui::take,
     crate::crop_presets::take,
     crate::panels::apply_data_set_ui::take,
+    crate::analysis::find_sun::take,
     crate::variables_ui::take,
     crate::actions::dialogs::take_stops,
 ];
