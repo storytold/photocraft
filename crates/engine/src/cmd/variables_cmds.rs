@@ -19,6 +19,24 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document".into())
 }
 
+fn has_data_sets(s: &Session) -> std::result::Result<(), String> {
+    let st = s.active().ok_or_else(|| "no document".to_string())?;
+    if st.doc.variables.data_sets.is_empty() {
+        return Err("no data sets in document".into());
+    }
+    Ok(())
+}
+
+/// File > Import > Variable Data Sets needs variables to fill: without any, every header column
+/// is an unknown name and the import makes empty data sets (#13920).
+fn has_variables(s: &Session) -> std::result::Result<(), String> {
+    let st = s.active().ok_or_else(|| "no document".to_string())?;
+    if st.doc.variables.defs.is_empty() {
+        return Err("no variables in document".into());
+    }
+    Ok(())
+}
+
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
@@ -260,9 +278,52 @@ fn apply_data_set(s: &mut Session, p: &Value) -> Result<Value> {
     let (set, idx) = resolve_set(s, p, "image.applyDataSet")?;
     let vars = s.active().ok_or(EngineError::NoDocument)?.doc.variables.clone();
     authorize_pixel_paths(s, &set)?;
-    s.edit(&format!("Apply Data Set \"{}\"", set.name), |doc, _| apply_to_doc(doc, &vars, &set))?;
+    // One history state named exactly "Apply Data Set", whatever the set is called (#14498).
+    let label = "Apply Data Set";
+    if replaces_locked_text(&s.active().ok_or(EngineError::NoDocument)?.doc, &vars, &set) {
+        // As in the reference application, nothing of the set is applied, but the attempt is
+        // still a history state (one that changes nothing), and the alert names no layer (#14499).
+        s.edit(label, |_, _| Ok(()))?;
+        return Err(EngineError::Other(DATA_SET_LAYER_LOCKED.into()));
+    }
+    s.edit(label, |doc, _| apply_to_doc(doc, &vars, &set))?;
     set_vars(s, |v| v.active = Some(idx))?;
     Ok(json!({"applied": set.name, "index": idx}))
+}
+
+/// The document as `image.applyDataSet {"index": index}` would leave it, built without touching the
+/// session: the Apply Data Set dialog's Preview (#14496). It reads replacement images as the
+/// command does (the same path gate, relative to the document) and fails as a whole, so a set
+/// that can't be applied never gives a partly applied preview.
+pub fn data_set_preview(s: &Session, index: usize) -> Result<Document> {
+    let (set, _) = resolve_set(s, &json!({"index": index}), "image.applyDataSet")?;
+    authorize_pixel_paths(s, &set)?;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let _authorization = crate::jobs::render_authorization_scope(s.authorize);
+    let _document = crate::doc_path::scope(st.path.as_deref().map(std::path::Path::new));
+    // The command refuses a set that replaces locked text and applies none of it (#14499).
+    if replaces_locked_text(&st.doc, &st.doc.variables, &set) {
+        return Err(EngineError::Other(DATA_SET_LAYER_LOCKED.into()));
+    }
+    let mut doc = (*st.doc).clone();
+    apply_to_doc(&mut doc, &st.doc.variables, &set)?;
+    Ok(doc)
+}
+
+/// The reference application's alert when Apply Data Set would replace the text of a layer
+/// under Lock All.
+pub const DATA_SET_LAYER_LOCKED: &str = "Could not apply data set because the layer is locked.";
+
+/// Whether `set` has a Text value for a type layer with its own Lock All. Visibility and Pixel
+/// Replacement values still apply to locked layers, as in the reference application; partial
+/// locks and a locked group were not measured and keep applying (#14499).
+fn replaces_locked_text(doc: &Document, vars: &Variables, set: &DataSet) -> bool {
+    set.values.iter().any(|dv| {
+        matches!(dv.value, VarValue::Text(_))
+            && vars.def(&dv.variable).is_some_and(|def| {
+                matches!(def.kind, VarKind::TextReplacement) && doc.layer(def.layer).is_some_and(|l| l.locks.all && matches!(l.content, LayerContent::Text(_)))
+            })
+    })
 }
 
 /// Resolve a data set from `{name}` or `{index}`.
@@ -315,7 +376,7 @@ pub fn import_data_sets_text(s: &mut Session, text: &str, p: &Value) -> Result<V
             let Some(cell) = cells.get(ci) else { continue };
             let Some(def) = vars.def(var) else { continue };
             let value = match def.kind {
-                VarKind::Visibility => VarValue::Visibility(matches!(cell.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "visible" | "on")),
+                VarKind::Visibility => VarValue::Visibility(cell.trim().eq_ignore_ascii_case("true")),
                 VarKind::PixelReplacement { .. } => VarValue::Pixels(cell.clone()),
                 VarKind::TextReplacement => VarValue::Text(cell.clone()),
             };
@@ -324,7 +385,10 @@ pub fn import_data_sets_text(s: &mut Session, text: &str, p: &Value) -> Result<V
         sets.push(DataSet { name, values });
     }
     let n = sets.len();
-    set_vars(s, |v| v.data_sets = sets)?;
+    s.edit("Import Data Sets", |doc, _| {
+        doc.variables.data_sets = sets;
+        Ok(())
+    })?;
     Ok(json!({"imported": n}))
 }
 
@@ -488,6 +552,9 @@ macro_rules! spec {
     ($id:expr, $label:expr, $menu:expr, $params:expr, $run:expr) => {
         CommandSpec { id: $id, label: $label, menu: $menu, shortcut: None, params: $params, enabled: has_doc, journal: true, run: $run }
     };
+    ($id:expr, $label:expr, $menu:expr, $params:expr, $enabled:expr, $run:expr) => {
+        CommandSpec { id: $id, label: $label, menu: $menu, shortcut: None, params: $params, enabled: $enabled, journal: true, run: $run }
+    };
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -511,6 +578,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Apply Data Set…",
             &["Image"],
             "{name|index} → {applied, index}: sets layer visibility/text/pixels from the data set (one history step)",
+            has_data_sets,
             |s, p| apply_data_set(s, p)
         ),
         spec!(
@@ -518,6 +586,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Variable Data Sets…",
             &["File", "Import"],
             "{path, delimiter?} → {imported}: CSV header = variable names, each row a data set (first column may be the data-set name)",
+            has_variables,
             |s, p| import_data_sets(s, p)
         ),
         spec!(
@@ -525,6 +594,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Data Sets as Files…",
             &["File", "Export"],
             "{dir, format?:png, dataSets?[names], naming?:\"{name}|{index}|{document}\"} → {files,count}: apply each data set and export the flattened document; colliding filenames are rejected before writing (include {index} to disambiguate)",
+            has_data_sets,
             |s, p| export_as_files(s, p)
         ),
         CommandSpec {
@@ -541,4 +611,17 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 #[cfg(test)]
+mod import_history_tests;
+#[cfg(test)]
+mod import_visibility_tests;
+#[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod import_enabled_tests;
+
+#[cfg(test)]
+mod locked_text_layer_tests;
+
+#[cfg(test)]
+mod apply_history_name_tests;

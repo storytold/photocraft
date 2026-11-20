@@ -182,12 +182,35 @@ pub fn resolve(s: &Session, key: &str) -> Option<Pattern> {
 
 pub(crate) fn resolve_param(s: &Session, cmd: &str, p: &Value) -> Result<Pattern> {
     let key = p.get("pattern").and_then(Value::as_str).unwrap_or("");
-    if let Some(pat) = resolve(s, key) {
-        return paintable(cmd, pat);
-    }
-    match library_pattern(s, key).map(|lp| full(s, lp)) {
-        Some(Err(e)) => Err(bad(cmd, e)),
-        _ => Err(bad(cmd, format!("no pattern \"{key}\" (see pattern.list)"))),
+    resolve_or_named(s, key, p).map_err(|e| bad(cmd, e)).and_then(|pat| paintable(cmd, pat))
+}
+
+/// The pattern `key` names, or with a `patternName` in `p` (an imported action's pattern recorded
+/// with both an id and a name) the pattern with id `key`: the active document's, then the
+/// library's, by id alone, and only when that id is installed nowhere the one `patternName`
+/// names, as the reference application plays such a step. The error says why: no such pattern,
+/// or a saved library pattern whose pixels can't be read.
+pub(crate) fn resolve_or_named(s: &Session, key: &str, p: &Value) -> std::result::Result<Pattern, String> {
+    use photocraft_doc::pattern::find;
+    let name = p.get("patternName").and_then(Value::as_str).filter(|n| !n.is_empty());
+    // `find` with an empty name looks up the id alone; both empty find nothing.
+    let in_doc = |id: &str, name: &str| s.active().and_then(|d| find(&d.doc.patterns, id, name)).map(|p| (p, false));
+    let by_key = |k: &str| in_doc(k, k).or_else(|| library_pattern(s, k).map(|p| (p, true)));
+    let found = match name {
+        // The name is a name: another pattern whose id happens to equal it doesn't count.
+        Some(n) => in_doc(key, "")
+            .or_else(|| find(&s.patterns.items, key, "").map(|p| (p, true)))
+            .or_else(|| in_doc("", n))
+            .or_else(|| find(&s.patterns.items, "", n).map(|p| (p, true))),
+        None => by_key(key),
+    };
+    match found {
+        Some((pat, false)) => Ok(pat.clone()),
+        Some((pat, true)) => full(s, pat),
+        None => Err(match name {
+            Some(n) => format!("no pattern \"{n}\" (id \"{key}\"; see pattern.list)"),
+            None => format!("no pattern \"{key}\" (see pattern.list)"),
+        }),
     }
 }
 
@@ -302,6 +325,12 @@ pub fn default_name(s: &Session) -> String {
 const MAX_DEFINE_EDGE: u32 = 8000;
 
 fn define(s: &mut Session, p: &Value) -> Result<Value> {
+    let sample = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format().sample;
+    define_with_max_pixels(s, p, photocraft_doc::pattern::max_paint_pixels(sample))
+}
+
+/// Define a pattern with a bound on its pixel count.
+fn define_with_max_pixels(s: &mut Session, p: &Value, max_px: u64) -> Result<Value> {
     let cmd = "edit.definePattern";
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = &st.doc;
@@ -322,7 +351,6 @@ fn define(s: &mut Session, p: &Value) -> Result<Value> {
     // A pattern the compositor could not hold would define but paint nothing: 8 bits go to the
     // edge limit, 16-bit documents to 33,554,432 px in all, float to 16,777,216 (4096 × 4096).
     let sample = doc.pixel_format().sample;
-    let max_px = photocraft_doc::pattern::max_paint_pixels(sample);
     if u64::from(r.width()) * u64::from(r.height()) > max_px {
         return Err(bad(cmd, format!("patterns in a {}-bit document are limited to {max_px} px in all", sample.bytes() * 8)));
     }
@@ -438,9 +466,28 @@ pub(crate) fn insert_fill_layer(
     let fill = Fill::Pattern { name: pat.name.clone(), scale, id: pat.id.clone(), angle, link, phase };
     let mut l = Layer::new(doc.next_layer_name("Pattern Fill"), LayerContent::Fill(fill));
     crate::commands::mask_new_layer(doc, &mut l, p, "layer.newFillLayer.pattern", default_mask)?;
+    // Like Photoshop, an empty pixel layer selected becomes the fill layer instead of getting one
+    // above it; it keeps its place, opacity and blending, and a name the user gave it.
+    if let Some(id) = *active
+        && crate::stamp_cmds::is_empty_pixel_layer(doc, id)
+    {
+        let target = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+        if is_default_layer_name(&target.name) {
+            target.name = l.name;
+        }
+        target.content = l.content;
+        target.mask = l.mask;
+        target.vector_mask = l.vector_mask;
+        return Ok(id);
+    }
     let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::Auto);
     *active = Some(id);
     Ok(id)
+}
+
+/// A name new layers get ("Layer 3"), so not one the user chose.
+fn is_default_layer_name(name: &str) -> bool {
+    name.strip_prefix("Layer ").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// `layer.newFillLayer.pattern`: a Pattern Fill layer above the active one, masked as the Layers panel's Use Default Masks on Fill Layers option says.
@@ -569,7 +616,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Pattern…",
             menu: &["Layer", "New Fill Layer"],
             shortcut: None,
-            params: r##"{"pattern":id|name?=first library pattern,"scale":1..1000=100,"angle":deg=0,"link":bool=true,"phase":[x,y]?,"path":"work"|saved path name|{…path}? (the active path: becomes the vector mask; else the selection is the layer mask)}"##,
+            params: r##"{"pattern":id|name?=first library pattern,"patternName":name? (then `pattern` is an id; the name is used when no pattern has that id),"scale":1..1000=100,"angle":deg=0,"link":bool=true,"phase":[x,y]?,"path":"work"|saved path name|{…path}? (the active path: becomes the vector mask; else the selection is the layer mask)}"##,
             enabled: has_doc,
             journal: true,
             run: new_fill_layer,
@@ -720,17 +767,22 @@ mod tests {
         assert!(e.contains("16-bit") && e.contains("33554432"), "{e}");
     }
 
-    /// A pattern of the largest area Define Pattern accepts at 8 bits is paintable: held at 4
-    /// bytes a pixel, 256 MB, as the compositor's cap allows, and it renders.
+    /// A pattern at the area limit is paintable and renders; production permits 8000×8000 at 8 bits.
     #[test]
-    fn an_8000_by_8000_pattern_is_defined_and_paints() {
+    fn a_pattern_at_the_area_limit_is_defined_and_paints() {
         let mut s = Session::new();
-        s.execute("file.new", json!({"width": 8000, "height": 8000, "depth": 8})).unwrap();
+        assert_eq!(MAX_DEFINE_EDGE, 8000);
+        assert!(photocraft_doc::pattern::max_paint_pixels(SampleType::U8) >= 8000 * 8000);
+        assert_eq!(photocraft_doc::pattern::working_bytes_for(8000 * 8000, SampleType::U8), 8000 * 8000 * 4);
+        let (side, max_px) = (80, 80 * 80);
+        s.execute("file.new", json!({"width": side, "height": side, "depth": 8})).unwrap();
         s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
-        s.execute("edit.definePattern", json!({"name": "Largest"})).unwrap();
+        assert!(define_with_max_pixels(&mut s, &json!({"name": "Too large"}), max_px - 1).is_err());
+        define_with_max_pixels(&mut s, &json!({"name": "Largest"}), max_px).unwrap();
         let p = s.patterns.items.iter().find(|p| p.name == "Largest").unwrap();
-        assert_eq!((p.width, p.height), (8000, 8000));
-        assert!(p.is_paintable() && p.working_bytes() == 256_000_000);
+        assert_eq!((p.width, p.height), (side, side));
+        // A small pattern uses the expanded float representation, unlike the largest 8-bit one.
+        assert!(p.is_paintable() && p.working_bytes() == max_px * 16);
         s.execute("file.new", json!({"width": 40, "height": 30, "depth": 8})).unwrap();
         s.execute("layer.newFillLayer.pattern", json!({"pattern": "Largest"})).unwrap();
         let [r, g, b, a] = pixel(&s, 5, 5);

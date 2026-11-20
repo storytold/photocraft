@@ -1,12 +1,14 @@
 use super::consts::{CHUNK_UNIFORM, OP_UNIFORM, STRIDE};
 use super::convert::{lut_texture, words};
+use super::pipelines::Pipelines;
 use super::textures::{ResKey, ResidentRef};
-use super::{Arc, HashMap, I, Kernel, NonZeroU64, Rect};
+use super::{Arc, I, Kernel, NonZeroU64, Rect, Unsupported};
 
-/// Pipelines and layouts, shared by cheap clones (wgpu handles are reference counted).
+/// Pipelines and layouts, shared by cheap clones (wgpu handles are reference counted; a sibling
+/// compositor uses the pipelines any of them built).
 #[derive(Clone)]
 pub(crate) struct Kit {
-    pub(crate) pipelines: HashMap<(Kernel, wgpu::TextureFormat), wgpu::RenderPipeline>,
+    pub(crate) pipelines: Arc<Pipelines>,
     pub(crate) bgl0: wgpu::BindGroupLayout,
     pub(crate) bgl1: wgpu::BindGroupLayout,
     pub(crate) dummy: wgpu::TextureView,
@@ -28,9 +30,9 @@ pub(crate) struct MapDraw {
 
 impl Kit {
     /// Record `draws` (each its own render pass) into `encoder`.
-    pub(crate) fn run(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, draws: &[MapDraw]) {
+    pub(crate) fn run(&self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, draws: &[MapDraw]) -> Result<(), Unsupported> {
         if draws.is_empty() {
-            return;
+            return Ok(());
         }
         let mut data = vec![0u8; draws.len() * 2 * STRIDE as usize];
         for (i, d) in draws.iter().enumerate() {
@@ -47,6 +49,7 @@ impl Kit {
         queue.write_buffer(&ubuf, 0, &data);
         let bg0 = uniform_group(device, &self.bgl0, &ubuf);
         for (i, d) in draws.iter().enumerate() {
+            let pipeline = self.pipelines.get(device, d.kernel, d.format)?;
             let lut = d.lut.as_ref().map(|l| {
                 let mut row = [0.0f32; 4096];
                 row[..l.len().min(4096)].copy_from_slice(&l[..l.len().min(4096)]);
@@ -70,12 +73,13 @@ impl Kit {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.pipelines[&(d.kernel, d.format)]);
+            pass.set_pipeline(pipeline);
             pass.set_scissor_rect(d.scissor[0], d.scissor[1], d.scissor[2], d.scissor[3]);
             pass.set_bind_group(0, &bg0, &[(2 * i as u64 * STRIDE) as u32, ((2 * i + 1) as u64 * STRIDE) as u32]);
             pass.set_bind_group(1, &bg1, &[]);
             pass.draw(0..3, 0..1);
         }
+        Ok(())
     }
 }
 

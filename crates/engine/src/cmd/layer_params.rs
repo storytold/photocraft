@@ -1,28 +1,45 @@
 use super::params::bad;
-use super::{BlendMode, Document, EngineError, Layer, LayerId, LayerMask, Result, SampleType, Session, Value};
+use super::{Document, EngineError, Layer, LayerId, LayerMask, Result, SampleType, Session, Value};
 
 /// The layer a command's `"layer"` param names: an id, or a name (the topmost layer of that
 /// name, as Photoshop's "select layer by name" action step finds it, so a loaded action replays
 /// in another document; a name that matches no layer exactly matches regardless of case, so
-/// `"background"` finds the Background). `None` when the param is absent.
+/// `"background"` finds that name). A recorded `{"name":"Layer"}` uses the same lookup.
+/// `{"background":true}` targets the actual Background, independently of its name. `None`
+/// when the param is absent.
 pub(crate) fn explicit_layer(s: &Session, p: &Value) -> Result<Option<LayerId>> {
+    let named = |name: &str| {
+        let d = s.active().ok_or(EngineError::NoDocument)?;
+        let layers = d.doc.walk();
+        let mut top_down = layers.iter().rev();
+        top_down
+            .clone()
+            .find(|(_, _, l)| l.name == name)
+            .or_else(|| top_down.find(|(_, _, l)| l.name.to_lowercase() == name.to_lowercase()))
+            .map(|(_, _, l)| Some(l.id))
+            .ok_or_else(|| EngineError::Other(format!("no layer named \"{name}\"; {}", layer_listing(&d.doc))))
+    };
     match p.get("layer") {
         Some(Value::Number(n)) => {
             n.as_u64().map(|id| Some(LayerId(id))).ok_or_else(|| EngineError::Other(format!("layer id {n} is not a non-negative integer")))
         }
-        Some(Value::String(name)) => {
+        Some(Value::String(name)) => named(name),
+        Some(Value::Object(selector))
+            if selector.len() == 1
+                && let Some(name) = selector.get("name").and_then(Value::as_str) =>
+        {
+            named(name)
+        }
+        // A group end is no layer: fail rather than fall back to the selection.
+        Some(v @ Value::Object(fields)) if fields.contains_key("index") || fields.contains_key("ordinal") => {
+            super::recorded_layer(s, v)?.map(Some).ok_or_else(|| EngineError::Other("a group end is not a layer".into()))
+        }
+        Some(Value::Object(selector)) if selector.len() == 1 && selector.get("background") == Some(&Value::Bool(true)) => {
             let d = s.active().ok_or(EngineError::NoDocument)?;
-            let layers = d.doc.walk();
-            let mut top_down = layers.iter().rev();
-            top_down
-                .clone()
-                .find(|(_, _, l)| l.name == *name)
-                .or_else(|| top_down.find(|(_, _, l)| l.name.to_lowercase() == name.to_lowercase()))
-                .map(|(_, _, l)| Some(l.id))
-                .ok_or_else(|| EngineError::Other(format!("no layer named \"{name}\"; {}", layer_listing(&d.doc))))
+            d.doc.background().map(|l| Some(l.id)).ok_or_else(|| EngineError::Other("the document has no Background layer".into()))
         }
         Some(Value::Null) | None => Ok(None),
-        Some(other) => Err(EngineError::Other(format!("`layer` must be an id or a name, not {other}"))),
+        Some(other) => Err(EngineError::Other(format!("`layer` must be an id, a name, {{\"name\":string}} or {{\"background\":true}}, not {other}"))),
     }
 }
 
@@ -53,12 +70,6 @@ pub(crate) fn layer_param(s: &Session, p: &Value) -> Result<LayerId> {
         Some(id) => Ok(id),
         None => s.active().and_then(|d| d.active_layer).ok_or(EngineError::Other("no active layer".into())),
     }
-}
-
-pub fn blend_from_str(s: &str) -> Option<BlendMode> {
-    let norm = |x: &str| x.to_ascii_lowercase().replace([' ', '_', '-', '(', ')'], "");
-    let want = norm(s);
-    std::iter::once(BlendMode::PassThrough).chain(BlendMode::layer_modes()).find(|m| norm(m.label()) == want || norm(&format!("{m:?}")) == want)
 }
 
 /// The active selection as the mask of a layer being created, or None without a selection.
