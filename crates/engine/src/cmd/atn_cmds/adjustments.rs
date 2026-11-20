@@ -225,6 +225,8 @@ fn color_balance_from(d: &Descriptor) -> Option<Value> {
             out.insert(param.into(), v);
         }
     }
+    // Absent PrsL stays absent here on purpose: a layer edit merges and must not force the key,
+    // and the event path fills the measured default itself (#14417, see events.rs).
     if let Some(b) = get_bool(d, "PrsL") {
         out.insert("preserveLuminosity".into(), b.into());
     }
