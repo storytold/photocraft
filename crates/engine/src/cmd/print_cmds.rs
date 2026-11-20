@@ -1433,8 +1433,13 @@ fn printer_page(_: &mut Session, p: &Value) -> Result<Value> {
             _ => return Err(bad("file.print.page", "orientation is \"portrait\" or \"landscape\"")),
         },
     };
-    let printer = printer_name(p)?;
     let mut settings = printer_settings(p)?;
+    // A driver query is still a call into a printer driver, which can hang (and holds SPOOLER
+    // while it does), so a process that turned printing off asks no driver here either.
+    if printing_disabled() {
+        return Err(other("printing is disabled in this process (disable_printing or PHOTOCRAFT_NO_PRINT); file.print.page asks no printer driver"));
+    }
+    let printer = printer_name(p)?;
     if let Some(landscape) = landscape {
         let base = match settings {
             Some(s) => s,
@@ -1451,11 +1456,14 @@ fn printer_page(_: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
-/// Set once by test harnesses (the panic hunt) so no command in the process can reach a printer.
+/// Set once by test harnesses (the panic hunt) so no command in the process can reach a printer
+/// or its driver: `file.print` and `file.printOneCopy` refuse to spool, and `file.print.page`
+/// refuses to ask a driver for its page.
 static PRINTING_DISABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Refuse to spool anything from this process from now on (tests, fuzzing). The
-/// `PHOTOCRAFT_NO_PRINT` environment variable does the same for a whole shell (CI).
+/// Refuse to spool anything, or ask a printer driver for its page, from this process from now on
+/// (tests, fuzzing). The `PHOTOCRAFT_NO_PRINT` environment variable does the same for a whole
+/// shell (CI).
 pub fn disable_printing() {
     PRINTING_DISABLED.store(true, std::sync::atomic::Ordering::Relaxed);
 }
