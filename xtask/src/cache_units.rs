@@ -63,11 +63,17 @@ pub fn record_xtask() -> Result<(), String> {
 /// Lines that are Cargo's JSON messages go to `record`, every other line to `out`.
 fn route(mut input: impl BufRead, record: &mut impl Write, out: &mut impl Write) -> std::io::Result<()> {
     let mut line = Vec::new();
+    let mut malformed = false;
     while input.read_until(b'\n', &mut line)? != 0 {
         if line.starts_with(b"{\"reason\":") {
-            record.write_all(&line)?;
-            if !line.ends_with(b"\n") {
-                record.write_all(b"\n")?;
+            if serde_json::from_slice::<serde_json::Value>(&line).is_err() {
+                // Keep draining the child so it cannot block on a full stdout pipe.
+                malformed = true;
+            } else {
+                record.write_all(&line)?;
+                if !line.ends_with(b"\n") {
+                    record.write_all(b"\n")?;
+                }
             }
         } else {
             out.write_all(&line)?;
@@ -75,7 +81,8 @@ fn route(mut input: impl BufRead, record: &mut impl Write, out: &mut impl Write)
         line.clear();
     }
     record.flush()?;
-    out.flush()
+    out.flush()?;
+    if malformed { Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "malformed Cargo JSON message")) } else { Ok(()) }
 }
 
 #[cfg(test)]
@@ -100,5 +107,9 @@ mod tests {
         assert!(serde_json::from_slice::<serde_json::Value>(&listing).is_ok());
         listing.truncate(listing.len() - 3);
         assert!(serde_json::from_slice::<serde_json::Value>(&listing).is_err());
+        let (mut record, mut listing) = (Vec::new(), Vec::new());
+        assert!(route(b"{\"reason\":\"compiler-artifact\"\n{\"rust-suites\":{}}\n".as_slice(), &mut record, &mut listing).is_err());
+        assert!(record.is_empty());
+        assert!(serde_json::from_slice::<serde_json::Value>(&listing).is_ok());
     }
 }
