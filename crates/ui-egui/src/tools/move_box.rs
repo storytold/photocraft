@@ -130,7 +130,7 @@ mod tests {
         assert!(app.layer_box.is_none());
         // ⇧ adds the second square, dragged up and left from beyond the right edge.
         drag(&mut app, [70.0, 30.0], [50.0, 20.0], egui::Modifiers::SHIFT);
-        let mut sel = app.session.active().unwrap().selected_layers();
+        let mut sel = app.session.active().unwrap().selected_layers().to_vec();
         sel.sort_unstable_by_key(|l| l.0);
         assert_eq!(sel, ids);
     }
