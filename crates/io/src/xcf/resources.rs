@@ -135,6 +135,7 @@ mod tests {
         use photocraft_doc::import_conversion::ConversionReason;
         let mut source = TestImage::rgb8(1, 1);
         source.version = 26;
+        source.compression = crate::xcf::Compression::None;
         let mut layer = TestLayer::rgba("Saved link pixels", 1, 1, vec![17, 31, 57, 255]);
         let locator = source_link(&"inert".repeat(200), 0);
         let allowance = locator.len();

@@ -13,68 +13,27 @@ fn assert_source_origin(layer: &photocraft_doc::TextLayer, dpi: f32, source: pho
 
 #[cfg(feature = "corpus")]
 mod published {
-    use photocraft_color::Color;
-    use photocraft_doc::text::{CharStyle, Kerning, ParagraphRun, ParagraphStyle, TextDirection, TextRun};
-    use photocraft_doc::{LayerContent, TextLayer};
-    use photocraft_geom::Affine;
+    use photocraft_doc::import_conversion::{ConversionReason, ImportConversion};
+
     #[test]
-    /// Compares published text with independently authored native typography and checks editable native
-    /// persistence.
-    fn published_text_matches_independently_constructed_native_typography_and_reopens() {
+    fn published_text_with_ambiguous_float_paint_keeps_pixels_and_report_after_reopen() {
         for name in ["text.xcf", "text-perceptual.xcf"] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/gimp").join(name);
             let bytes = std::fs::read(path).expect("run cargo xtask corpus --gimp");
-            let doc = photocraft_io::import(name, &bytes).expect("import").document;
-            let LayerContent::Text(actual) = &doc.layers[1].content else { panic!("native text") };
-            // Public generator:24pixel DejaVu Sans at(10,10),300DPI.
-            let style = CharStyle {
-                font_family: "DejaVu Sans".into(),
-                font_style: "Book".into(),
-                postscript_name: Some("DejaVuSans".into()),
-                size_pt: 24. * 72. / 300.,
-                // Both pinned fixtures omit the inactive source kerning flag;
-                // default font shaping still applies metrics kerning.
-                kerning: Kerning::Metrics,
-                language: Some("en-US".into()),
-                ..Default::default()
-            };
-            let mut expected = TextLayer {
-                text: "XCF".into(),
-                transform: Affine::translate(10., 10.),
-                runs: vec![TextRun { len: 3, style }],
-                paragraphs: vec![ParagraphRun { len: 3, style: ParagraphStyle { direction: TextDirection::Ltr, ..Default::default() } }],
-                ..Default::default()
-            };
-            expected.sync_summary();
-            let mut engine = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
-            // Compute the native baseline from independently constructed typography and the
-            // font metrics resolved on this host, never from the imported affine translation.
-            let expected_layout = engine.layout(&expected, doc.resolution_dpi);
-            let [left, top, _, _] = expected_layout.bounds().expect("native logical source typography");
-            expected.transform = Affine::translate(10. - f64::from(left), 10. - f64::from(top));
-            assert_eq!(actual, &expected, "native source mapping for {name}");
-            assert_eq!(actual.color, Color::BLACK);
-            let actual_layout = engine.layout(actual, doc.resolution_dpi);
-            let actual_pixels = photocraft_text::render::rasterize_warped(&actual_layout, &actual.transform, doc.pixel_format(), actual.antialias, None);
-            let expected_pixels =
-                photocraft_text::render::rasterize_warped(&expected_layout, &expected.transform, doc.pixel_format(), expected.antialias, None);
-            assert_eq!(actual_pixels.surface, expected_pixels.surface, "normal native text renderer");
-            if engine.fonts.has_family("DejaVu Sans") {
-                let ink = photocraft_text::render::ink_bounds(&expected_layout).expect("known source font has visible ink");
-                assert!(!actual_pixels.surface.content_bounds().is_empty());
-                // The normal renderer adds a one-pixel apron and rounds its ink rectangle.
-                // Its visible position must track the independently predicted source placement,
-                // rather than merely matching another render at the same wrong baseline.
-                let predicted = [10. + ink[0] - f64::from(left), 10. + ink[1] - f64::from(top)];
-                assert!((f64::from(actual_pixels.rect.x0) - predicted[0]).abs() <= 2.);
-                assert!((f64::from(actual_pixels.rect.y0) - predicted[1]).abs() <= 2.);
-            }
-            drop(engine);
-            super::assert_source_origin(actual, doc.resolution_dpi, Affine::translate(10., 10.));
-            let saved = photocraft_format::save_to_bytes(&doc, &Default::default()).expect("save");
-            let reopened = photocraft_format::load_from_bytes(&saved).expect("reopen");
-            let LayerContent::Text(text) = &reopened.layers[1].content else { panic!("native text on reopen") };
-            assert_eq!(text, &expected);
+            let imported = photocraft_io::import(name, &bytes).expect("import");
+            let document = imported.document;
+            let layer = &document.layers[1];
+            assert_eq!(layer.name, "XCF");
+            assert!(!layer.surface().expect("saved text pixels").content_bounds().is_empty());
+            assert!(imported.warnings.iter().any(|warning| warning.contains("opens as pixels")));
+            let Some(ImportConversion::Report(report)) = document.metadata.import_conversion.as_deref() else { panic!("conversion report") };
+            let text = report.entries.iter().find(|entry| entry.feature_code == "xcf.text").expect("text fallback");
+            assert_eq!(text.reason, ConversionReason::MissingMapping);
+            assert!(text.source_description.contains("source byte-order evidence"));
+            let native = photocraft_format::save_to_bytes(&document, &Default::default()).expect("save");
+            let reopened = photocraft_format::load_from_bytes(&native).expect("reopen");
+            assert_eq!(reopened.layers[1].surface(), layer.surface());
+            assert_eq!(reopened.metadata.import_conversion, document.metadata.import_conversion);
         }
     }
 }

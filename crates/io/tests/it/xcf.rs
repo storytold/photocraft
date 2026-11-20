@@ -105,9 +105,10 @@ fn layers_8bit_open_with_their_properties_and_pixels() {
     assert!((px(s, 15, 31)[3] * 255.0 - alpha(23, 11, 24, 12, 255) as f32).abs() < 0.51);
     // Hidden.
     assert!(!d.layers[3].visible);
-    // The only note: GIMP composites this file in linear light.
-    assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
-    assert!(r.warnings[0].contains("linear light"), "{:?}", r.warnings);
+    // Compositing uses different coverage and color-space rules.
+    assert_eq!(r.warnings.len(), 2, "{:?}", r.warnings);
+    assert!(r.warnings.iter().any(|warning| warning.contains("underlying layers are transparent")));
+    assert!(r.warnings.iter().any(|warning| warning.contains("linear light")));
 }
 
 /// Per mode: our composite of the `legacy-modes-perceptual.xcf` cell against GIMP's. Modes with
@@ -248,17 +249,15 @@ fn indexed_opens_as_rgb_with_a_note() {
 }
 
 #[test]
-/// Verifies the published text fixture opens as editable native type with native preparation required instead
-/// of trusting source pixels.
-fn text_layers_open_as_native_editable_data_without_source_cache() {
-    let r = open("text.xcf");
-    assert_eq!(names(&r.document.layers), ["Background", "XCF"]);
-    assert!(r.warnings.iter().any(|w| w.contains("native text")), "{:?}", r.warnings);
-    let LayerContent::Text(text) = &r.document.layers[1].content else { panic!("expected native text") };
-    assert_eq!(text.text, "XCF");
-    assert_eq!(text.font_family, "DejaVu Sans");
-    assert!((text.size_pt - 24.0 * 72.0 / r.document.resolution_dpi).abs() < 0.001);
-    assert!(text.cache.is_none(), "the host prepares native typography after its final color policy");
+fn saved_text_pixels_match_gimp_when_source_float_paint_is_ambiguous() {
+    for (name, tolerance) in [("text.xcf", 80. / 255.), ("text-perceptual.xcf", 2. / 255.)] {
+        let r = open(name);
+        assert_eq!(names(&r.document.layers), ["Background", "XCF"]);
+        assert!(r.document.layers[1].surface().is_some());
+        let png = name.replace(".xcf", ".png");
+        let (worst, over, at) = composite_error(&r.document, &png, tolerance);
+        assert_eq!(over, 0., "{name}: difference {worst} at {at}");
+    }
 }
 
 #[test]

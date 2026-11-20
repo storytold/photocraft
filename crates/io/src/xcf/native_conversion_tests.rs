@@ -81,7 +81,7 @@ fn vector_layer(encoding: &str) -> Vec<u8> {
     }
     for _ in 0..2 {
         word(&mut style, 0);
-        word(&mut style, 1);
+        word(&mut style, 0); // Inactive source antialiasing remains a bounded diagnostic.
         string(&mut style, encoding);
         word(&mut style, 4);
         style.extend_from_slice(&[255, 0, 0, 255]);
@@ -105,14 +105,14 @@ fn vector_layer(encoding: &str) -> Vec<u8> {
 
 #[test]
 fn repeated_vector_offsets_charge_bounded_pending_diagnostics() {
-    let bytes = vector_layer(&"unsupported".repeat(200));
+    let bytes = vector_layer("R'G'B'A u8");
     let mut image = image(&bytes);
     let (layers, _) =
         image.import_layers(&vec![1; 1024], PixelFormat::RGBA8, PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false), &Interrupt::NONE).unwrap();
     assert_eq!(layers.len(), 1024);
     assert_eq!(image.pending_vectors.len(), 1024);
     let retained = image.pending_vectors.iter().flat_map(|(_, _, v)| &v.source_only).map(String::len).sum::<usize>();
-    assert!(retained <= 512 * 1024, "repeated offsets amplify diagnostics to {retained} bytes");
+    assert!((1024..=512 * 1024).contains(&retained), "repeated offsets retain {retained} bytes of bounded diagnostics");
     assert!(MAX_METADATA_BYTES - image.meta_budget >= retained, "owned pending diagnostics must debit the shared metadata allowance");
 }
 

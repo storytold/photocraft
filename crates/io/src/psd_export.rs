@@ -1045,7 +1045,11 @@ impl Ex<'_> {
             // layer. A linked file we can't decode is not embedded.
             // Historical byte order affects samples, not geometry. Decode the drawable on
             // demand in source_composite if the smart filters actually need its pixels.
-            let geometry = crate::smart_xcf_order::geometry(file_name, bytes, order, &self.ctl).map_err(|error| error.to_string());
+            let geometry = if order.is_some() {
+                crate::smart_xcf_order::geometry(file_name, bytes, order, &self.ctl).map_err(|error| error.to_string())
+            } else {
+                crate::linked::source_geometry(file_name, bytes, &self.ctl)
+            };
             self.ctl.check().map_err(|_| "export cancelled".to_string())?;
             let (size, dpi) = match geometry {
                 Ok(geometry) => geometry,

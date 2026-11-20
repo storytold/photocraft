@@ -42,6 +42,8 @@ XCF import.
 | Compression | none, RLE, zlib; gzip, bzip2 and XZ transport wrappers |
 | XCF versions | 0 to 26 (GIMP 1.x to 3.2); newer files open with a note, unknown parts skipped |
 
+Text and vector layers with active paint that cannot be decoded, including writer-endian float colours without byte-order evidence, keep their saved pixels.
+
 Saved paths, guides and supported editing-view selections are imported. Floating pixels remain separate raster layers. Unsupported layer effects and optional records are disclosed in the conversion report. Retention limits omit optional data while preserving usable pixels; structural and pixel allocation limits still reject unsafe inputs.
 
 ## Blend modes

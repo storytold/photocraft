@@ -188,7 +188,7 @@ fn exporter_with_interrupt<'a>(doc: &Document, ctl: Interrupt<'a>) -> Ex<'a> {
 }
 
 #[test]
-fn psd_source_conversion_decoding_and_composite_caches_distinguish_sample_order() {
+fn psd_geometry_and_lazy_composite_caches_distinguish_sample_order() {
     let bytes = xcf(true);
     let doc = document(SmartSource::Embedded { file_name: "same.xcf".into(), bytes: Arc::new(bytes.clone()) }, None);
     let mut ex = exporter(&doc);
@@ -203,7 +203,7 @@ fn psd_source_conversion_decoding_and_composite_caches_distinguish_sample_order(
         assert!((actual[0] - f32::from(expected) / 65535.).abs() <= 1. / 65535., "{order}: {actual:?}");
     }
     assert_eq!(ex.smart.converted.len(), 2);
-    assert_eq!(ex.smart.docs.len(), 2);
+    assert!(ex.smart.docs.is_empty(), "historical sources retain geometry and optional composites without retaining their decoded documents");
     assert_eq!(ex.smart.composites.len(), 2);
     assert!(ex.embed_hashed(contents, "same.xcf", &bytes, true, hash, None).is_err(), "an unchosen source must not reuse an approved interpretation");
     assert_eq!(ex.smart.converted.len(), 3);

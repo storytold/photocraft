@@ -92,7 +92,7 @@ enum Trigger {
 
 /// The reader checks once per 64 tiles. Cancel on the second check after its layer progress:
 /// 64 real tiles have decoded, while the second half remains unread.
-fn during_decode<R: std::fmt::Debug>(trigger: Trigger, operation: impl FnOnce(Interrupt<'_>) -> R) -> R {
+fn during_decode<R>(trigger: Trigger, operation: impl FnOnce(Interrupt<'_>) -> R) -> R {
     let polls = AtomicUsize::new(0);
     let cancelled = AtomicBool::new(false);
     let armed = AtomicBool::new(matches!(trigger, Trigger::Poll(_)));
@@ -126,7 +126,7 @@ fn during_decode<R: std::fmt::Debug>(trigger: Trigger, operation: impl FnOnce(In
         Trigger::Layer(_) => 2,
         Trigger::Poll(count) => count,
     };
-    assert_eq!(polls.load(Ordering::Relaxed), target, "the source decoder must observe cancellation before completion: {result:?}");
+    assert_eq!(polls.load(Ordering::Relaxed), target, "the source reader must observe cancellation before completion");
     assert!(cancelled.load(Ordering::Relaxed));
     assert!(armed.load(Ordering::Relaxed), "reach the source layer before cancelling");
     assert!(!completed.load(Ordering::Relaxed), "do not finish decoding the source before noticing cancellation");
@@ -191,10 +191,10 @@ fn cancelled_source_conversion_and_composite_do_not_cache_fallbacks_or_copied_so
     for (order, little) in [(Order::LittleEndian, true), (Order::BigEndian, false)] {
         let bytes = Arc::new(tiled_source(7, little));
         let doc = document(SmartSource::Embedded { file_name: "source.xcf".into(), bytes: bytes.clone() }, Some(order));
-        during_decode(Trigger::Layer(0.05), |ctl| {
+        during_decode(Trigger::Poll(5), |ctl| {
             let mut ex = exporter_with_interrupt(&doc, ctl);
             assert!(ex.embed_hashed(smart(&doc).contents_id, "source.xcf", &bytes, false, embed_source_hash(&bytes), Some(order)).is_err());
-            assert!(ex.smart.add.is_empty(), "a cancelled embedded decode must not fall back to copying its source");
+            assert!(ex.smart.add.is_empty(), "a cancelled geometry probe must not fall back to copying its source");
             assert!(ex.smart.docs.is_empty());
             assert!(ex.smart.converted.is_empty(), "cancellation is not a cached unsupported-source result");
         });
@@ -244,7 +244,15 @@ fn cancelled_source_conversion_and_composite_do_not_cache_fallbacks_or_copied_so
 #[test]
 fn public_psd_encoding_cancels_before_a_model_can_be_written_and_controls_are_byte_identical() {
     for (order, little) in [(Order::LittleEndian, true), (Order::BigEndian, false)] {
-        let doc = document(SmartSource::Embedded { file_name: "source.xcf".into(), bytes: Arc::new(tiled_source(7, little)) }, Some(order));
+        let mut doc = document(SmartSource::Embedded { file_name: "source.xcf".into(), bytes: Arc::new(tiled_source(7, little)) }, Some(order));
+        let LayerContent::Smart(smart) = &mut doc.layers[0].content else { panic!("smart object fixture") };
+        smart.smart_filters.push(photocraft_doc::SmartFilter {
+            command: "filter.blur.gaussianBlur".into(),
+            params: serde_json::json!({"radius": 2.0}),
+            blend: photocraft_color::BlendMode::Normal,
+            opacity: 1.0,
+            visible: true,
+        });
         let opts = crate::ExportOptions { image_previews: false, ..Default::default() };
         let mut output = std::io::Cursor::new(Vec::new());
         let result = during_decode(Trigger::Layer(0.05 * crate::PSD_MODEL_DONE), |ctl| crate::encode_with(&doc, "psd", &opts, &ctl));

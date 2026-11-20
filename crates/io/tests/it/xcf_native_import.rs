@@ -177,21 +177,17 @@ fn cancellation_during_a_real_layered_import_does_not_publish_a_partial_result()
     assert!(matches!(photocraft_io::import_with("layers-8bit.xcf", &bytes, &ctl), Err(photocraft_io::IoError::Cancelled)));
 }
 
-/// Check published text becomes editable native typography without using source raster pixels as its cache, and retain historical configuration inertly.
+/// The published float paint has no byte-order evidence. Keep the source
+/// configuration available for inspection along with the saved appearance.
 #[test]
-fn published_text_becomes_native_editable_data_with_inert_configuration() {
-    use photocraft_doc::import_conversion::{ConversionDisposition as D, ImportConversion};
+fn published_text_preserves_saved_pixels_and_inert_configuration() {
+    use photocraft_doc::import_conversion::{ConversionReason, ImportConversion};
     let doc = open("text-perceptual.xcf");
-    let LayerContent::Text(text) = &doc.layers[1].content else { panic!("native editable text") };
-    assert_eq!(text.text, "XCF");
-    assert!(text.cache.is_none(), "source pixels are never a valid native editable-text cache");
+    let pixels = doc.layers[1].surface().expect("saved source text pixels");
     let Some(ImportConversion::Report(report)) = doc.metadata.import_conversion.as_deref() else { panic!("missing report") };
-    assert!(
-        report
-            .entries
-            .iter()
-            .any(|e| e.feature_code == "xcf.text" && e.disposition == D::NativeApproximation && e.native_description.contains("editable text"))
-    );
+    assert!(report.entries.iter().any(|e| {
+        e.feature_code == "xcf.text" && e.reason == ConversionReason::MissingMapping && e.native_description.contains("preserved as a native raster")
+    }));
     assert!(
         report.attachments.iter().any(|a| a.bytes.windows(b"gimp-text-layer".len()).any(|w| w == b"gimp-text-layer")),
         "the published source text configuration is retained without execution"
@@ -199,10 +195,7 @@ fn published_text_becomes_native_editable_data_with_inert_configuration() {
     let native = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
     let reopened = photocraft_format::load_from_bytes(&native).unwrap();
     assert_eq!(doc.metadata.import_conversion, reopened.metadata.import_conversion);
-    let LayerContent::Text(reopened_text) = &reopened.layers[1].content else { panic!("reopened editable text") };
-    assert_eq!(text.text, reopened_text.text);
-    assert_eq!(text.runs, reopened_text.runs);
-    assert_eq!(text.transform, reopened_text.transform);
+    assert_eq!(reopened.layers[1].surface(), Some(pixels));
 }
 
 /// Verify native reopen preserves the conversion report, warns once and returns an ordinary writable native document.

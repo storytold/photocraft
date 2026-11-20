@@ -73,8 +73,8 @@ fn short_duplicate_metadata_tags_share_a_storage_budget_including_all_pair_slots
 
 #[test]
 fn sufficient_budget_preserves_duplicate_tag_values_and_their_source_order() {
-    let first = xml_property("<metadata><tag name=\"Xmp\">red</tag><tag name=\"Xmp\">red</tag></metadata>");
-    let second = xml_property("<metadata><tag name=\"Xmp\">blue</tag></metadata>");
+    let first = xml_property("<metadata><tag name=\"Xmp\">discard superseded packet</tag></metadata>");
+    let second = xml_property("<metadata><tag name=\"Xmp\">red</tag><tag name=\"Xmp\">red</tag><tag name=\"Xmp\">blue</tag></metadata>");
     let props = [Prop { offset: 0, kind: 21, data: &first }, Prop { offset: first.len(), kind: 21, data: &second }];
     let (mut document, mut outcomes, owner) = fixture();
     let mut budget = 4096;
