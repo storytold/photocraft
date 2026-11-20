@@ -208,7 +208,7 @@ fn rotate_arbitrary_turns_unlinked_layer_masks() {
             assert!(at(4, 4) < 0.1, "{depth}-bit, grouped {grouped}: nothing left at the old place");
             // Rotate 180° and a crop turned by 180° over the whole canvas give the same mask.
             for (id_, p) in [("image.imageRotation.180", json!({})), ("image.crop", json!({"x": 0, "y": 0, "width": 40, "height": 30, "angle": 180}))] {
-                s.active_mut().unwrap().doc = base.clone();
+                *s.active_mut().unwrap().doc_mut() = base.clone();
                 s.execute(id_, p).unwrap();
                 let turned = mask(&s);
                 for y in 0..30 {
@@ -219,10 +219,10 @@ fn rotate_arbitrary_turns_unlinked_layer_masks() {
                 }
             }
             // 90° pins the direction too (180° is its own inverse).
-            s.active_mut().unwrap().doc = base.clone();
+            *s.active_mut().unwrap().doc_mut() = base.clone();
             s.execute("image.rotation.arbitrary", json!({"angle": 90, "interpolation": "nearest"})).unwrap();
             let arbitrary = mask(&s);
-            s.active_mut().unwrap().doc = base.clone();
+            *s.active_mut().unwrap().doc_mut() = base.clone();
             s.execute("image.imageRotation.90cw", json!({})).unwrap();
             let turned = mask(&s);
             for y in 0..40 {
@@ -860,13 +860,13 @@ fn bitmap_pixels(d: &Document) -> Vec<f32> {
 
 #[test]
 fn bitmap_in_bands_matches_one_full_canvas_conversion() {
-    // #8477: the composite is converted in bands (32768 px wide: 256 rows each, so 300 rows are
-    // two). Diffusion carries its error across the band edge, and pattern, halftone and custom
+    // #8477: 300 rows cross a 256-row compositor band. Diffusion carries its error across the
+    // band edge, and pattern, halftone and custom
     // pattern stay anchored to the image's rows: the result equals one full-canvas conversion.
-    let (w, h) = (32_768u32, 300u32);
+    let (w, h) = (64u32, 300u32);
     let mut s = session(w, h, 8, "grayscale");
     paint(&mut s, |x, y| {
-        let v = ((x % 509) as f32 / 509.0 * 0.6 + (y as f32 / 300.0) * 0.4).fract();
+        let v = ((x % 61) as f32 / 61.0 * 0.6 + (y as f32 / 300.0) * 0.4).fract();
         [v, v, v, 1.0]
     });
     add_pattern(&mut s, "Cells", 3, 2, &[10, 200, 90, 250, 150, 40]);
@@ -888,7 +888,7 @@ fn bitmap_in_bands_matches_one_full_canvas_conversion() {
         if method == "customPattern" {
             p["pattern"] = json!("Cells");
         }
-        s.execute("image.mode.bitmap", p.clone()).unwrap();
+        bitmap_in_bands(&mut s, &p, 256).unwrap();
         let want = match method {
             "halftone" => {
                 let cell = (before.resolution_dpi / 53.0).max(2.0);
@@ -902,6 +902,9 @@ fn bitmap_in_bands_matches_one_full_canvas_conversion() {
         };
         // Grayscale stores 0/1 the way `from_rgba` turns the old RGBA output into gray.
         let want: Vec<f32> = want.iter().map(|g| photocraft_raster::from_rgba(&storage_format(ColorMode::Bitmap), [*g, *g, *g, 1.0])[0]).collect();
+        if method == "threshold" {
+            assert!(want.contains(&0.0) && want.contains(&1.0), "the gradient crosses the threshold");
+        }
         let got = bitmap_pixels(doc(&s));
         let diff = got.iter().zip(&want).filter(|(a, b)| (**a - **b).abs() > 1e-6).count();
         assert_eq!(diff, 0, "{method}: {diff} of {} pixels differ", got.len());

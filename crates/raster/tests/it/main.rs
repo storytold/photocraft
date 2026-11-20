@@ -14,5 +14,7 @@ pub(crate) static SCRATCH: Mutex<()> = Mutex::new(());
 
 /// Takes one of the locks above; a failed test that held it does not fail the next.
 pub(crate) fn lock(lock: &'static Mutex<()>) -> MutexGuard<'static, ()> {
-    lock.lock().unwrap_or_else(PoisonError::into_inner)
+    let guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
+    photocraft_raster::spill::use_test_volume_space();
+    guard
 }

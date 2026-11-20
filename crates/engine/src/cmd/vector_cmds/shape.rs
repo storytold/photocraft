@@ -726,7 +726,7 @@ fn combine_targets(s: &Session, p: &Value, narrow: &[&str]) -> Result<Option<Vec
     }
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let sel = d.selected_layers();
-    let ids = crate::layer_multi_cmds::top_level(&d.doc, &sel);
+    let ids = crate::layer_multi_cmds::top_level(&d.doc, sel);
     let ids: Vec<LayerId> = ids.into_iter().filter(|id| d.doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Shape(_)))).collect();
     Ok((ids.len() > 1).then_some(ids))
 }
