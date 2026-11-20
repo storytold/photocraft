@@ -1133,7 +1133,7 @@ fn inline_drops_stay_with_their_document_when_the_tab_changes() {
 
 /// An app whose Layers panel showed three layers last frame: rows 100..120, 120..140 and 140..160
 /// (top to bottom) at x 800..1000, with a 4px gap above the middle one.
-fn app_with_layers_list() -> (PhotocraftApp, Vec<photocraft_doc::LayerId>) {
+fn app_with_layers_list() -> (Box<PhotocraftApp>, Vec<photocraft_doc::LayerId>) {
     let mut app = app_with_canvas();
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
@@ -1159,8 +1159,8 @@ fn app_with_layers_list() -> (PhotocraftApp, Vec<photocraft_doc::LayerId>) {
 /// selected layer; over the empty space under the list it goes below the last row.
 #[test]
 fn a_drop_on_the_layers_list_targets_the_row_under_the_pointer() {
-    let ctx = egui::Context::default();
     let (app, rows) = app_with_layers_list();
+    let ctx = app.ctx().clone();
     let at = |y| Some(egui::pos2(900.0, y));
     let over = |app: &PhotocraftApp, y| app.layers_drop_at(&ctx, at(y).unwrap());
     assert_eq!(over(&app, 110.0), Some(Some(RowSlot::Above(rows[0]))));
@@ -1175,8 +1175,8 @@ fn a_drop_on_the_layers_list_targets_the_row_under_the_pointer() {
 /// before), the first above the row, and the active layer plays no part.
 #[test]
 fn files_dropped_on_a_layers_row_keep_their_order_and_ignore_the_active_layer() {
-    let ctx = egui::Context::default();
     let (mut app, rows) = app_with_layers_list();
+    let ctx = app.ctx().clone();
     // The selected layer is the top one; the drop is on the bottom row.
     let (target, bottom) = (rows[0], rows[2]);
     assert_eq!(app.session.active().unwrap().active_layer, Some(target));
@@ -1200,8 +1200,8 @@ fn files_dropped_on_a_layers_row_keep_their_order_and_ignore_the_active_layer() 
 /// A first file that fails to land doesn't lose the row: the next one goes where it would have.
 #[test]
 fn a_failed_first_file_leaves_the_layers_row_to_the_next() {
-    let ctx = egui::Context::default();
     let (mut app, rows) = app_with_layers_list();
+    let ctx = app.ctx().clone();
     let bottom = rows[2];
     let files = vec![dropped("bad.png", Ok(b"bad".to_vec())), dropped("good.png", Ok(png_bytes(4, 4)))];
     let to = DropTo::Layers(app.layers_drop_at(&ctx, egui::pos2(900.0, 150.0)).flatten());
@@ -1218,8 +1218,8 @@ fn a_failed_first_file_leaves_the_layers_row_to_the_next() {
 /// the one before.
 #[test]
 fn files_dropped_under_the_last_layers_row_go_below_it_in_order() {
-    let ctx = egui::Context::default();
     let (mut app, rows) = app_with_layers_list();
+    let ctx = app.ctx().clone();
     let files = vec![dropped("first.png", Ok(png_bytes(4, 4))), dropped("second.png", Ok(png_bytes(2, 2)))];
     let to = DropTo::Layers(app.layers_drop_at(&ctx, egui::pos2(900.0, 300.0)).flatten());
     app.open_dropped(&ctx, files, to);

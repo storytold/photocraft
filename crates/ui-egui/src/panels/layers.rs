@@ -98,7 +98,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let slots = out.hovered.map(|id| vec![(list, id)]).unwrap_or_default();
         app.drop_layers = Some(crate::file_open::DropLayers { doc: doc_id, frame: ctx.cumulative_frame_nr(), list, slots });
         let zone = craft::ui::contract::DropZone::new(ui.layer_id(), list);
-        if let Some((files, at)) = craft::ui::runtime::drag::zone_target(ui, egui::Id::new("layers-file-drop"), zone, &LayersFileDrop(list)) {
+        if let Some((files, at)) = craft::ui::runtime::drag::zone_target(ui, egui::Id::unique("layers-file-drop"), zone, &LayersFileDrop(list)) {
             let slot = app.layers_drop_at(&ctx, at).flatten();
             app.open_dropped(&ctx, files.files, crate::file_open::DropTo::Layers(slot));
         }
