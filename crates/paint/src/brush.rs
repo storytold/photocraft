@@ -531,11 +531,13 @@ pub struct Smoothing {
     pub enabled: bool,
     /// 0..1.
     pub amount: f32,
-    /// Lazy-mouse: paint only when the pointer pulls a string of `amount × 100 px` taut.
+    /// Lazy-mouse: paint only when the pointer pulls a string of `amount × 300 px` taut
+    /// ([`crate::dynamics::MAX_STRING_PX`], screen pixels before Adjust for Zoom).
     pub pulled_string: bool,
     /// Keep catching up with the pointer while it pauses (uses point timestamps).
     pub catch_up: bool,
-    /// Finish the stroke at the last pointer position.
+    /// Finish the stroke at the last pointer position. No effect in Pulled String Mode, where the
+    /// stroke ends the string's length behind the pointer (measured, #11888).
     pub catch_up_on_end: bool,
     /// Divide the string length by the view zoom (the command's `zoom` param).
     pub adjust_for_zoom: bool,
@@ -778,10 +780,35 @@ impl BrushSettings {
     }
 }
 
+/// Keeps the pre-#12169 rate of 20 dabs per second for a saved Airbrush preset with no rate.
+pub fn deserialize_preset_brush<'de, D: serde::Deserializer<'de>>(d: D) -> Result<BrushSettings, D::Error> {
+    fn present_build_up_rate<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f32>, D::Error> {
+        f32::deserialize(d).map(Some)
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SavedBrush {
+        #[serde(default, deserialize_with = "present_build_up_rate")]
+        build_up_rate: Option<f32>,
+        #[serde(flatten)]
+        brush: BrushSettings,
+    }
+
+    let SavedBrush { mut brush, build_up_rate } = SavedBrush::deserialize(d)?;
+    if let Some(rate) = build_up_rate {
+        brush.build_up_rate = rate;
+    } else if brush.build_up {
+        brush.build_up_rate = 20.0;
+    }
+    Ok(brush)
+}
+
 /// A named brush preset (session tool state; serde round-trips).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BrushPreset {
     pub name: String,
+    #[serde(deserialize_with = "deserialize_preset_brush")]
     pub brush: BrushSettings,
     /// Shipped with PhotoCraft (built-ins can be deleted from a session but are regenerated on reset).
     #[serde(default)]
