@@ -178,7 +178,7 @@ fn quick_select_a_one_pixel_brush_selects_a_small_patch() {
 fn quick_select_a_click_at_the_canvas_edge_stays_a_clipped_disc() {
     let (w, h, full, part) = measure(&click(&white_document(), (795.5, 100.5), 100.0));
     assert_eq!((w, h), (56, 103), "clipped at x = 800");
-    assert!((4100..4400).contains(&full) && (200..320).contains(&part), "{full} full, {part} partial");
+    assert_eq!((full, part), (4276, 266), "clipped disc: fully and partly selected pixels");
 }
 
 /// Neighbour (a document that works at full resolution, *not measured* by the issue): the click
@@ -202,7 +202,7 @@ fn quick_select_a_click_on_a_noisy_uniform_area_stays_a_disc() {
     });
     let (w, h, full, part) = measure(&click(&img, (400.0, 100.0), 30.0));
     assert_eq!((w, h), (32, 32), "size 30 on a slightly noisy white field stays a disc");
-    assert!((600..700).contains(&full) && (120..220).contains(&part), "{full} full, {part} partial");
+    assert_eq!((full, part), (648, 164), "noisy disc: fully and partly selected pixels");
 }
 
 /// The half pixel phase: the issue's click coordinates name a pixel, and a click that lands
