@@ -94,3 +94,27 @@ fn the_hint_and_the_pick_belong_to_the_satin_page() {
     assert_eq!(canvas_input::armed(&app), Some(DialogPick::ShadowDrag));
     assert_eq!(canvas_input::drag_hint(&app), None);
 }
+
+/// One drag through the zero vector keeps the Angle shown, not the one captured at the press.
+#[test]
+fn a_continuing_drag_through_the_zero_vector_keeps_the_displayed_angle() {
+    let (mut app, id, fx) = satin();
+    let mut base = None;
+    canvas_input::drag_satin(&mut app, &mut base, [0.0, 0.0]);
+    canvas_input::drag_satin(&mut app, &mut base, [30.0, 0.0]);
+    assert_eq!(shown(&app, id, fx), (146.0, 36.0));
+    canvas_input::drag_satin(&mut app, &mut base, [0.0, -20.0]);
+    assert_eq!(shown(&app, id, fx), (146.0, 1.0));
+}
+
+/// A plain press, or a drag back to where it began, keeps fractional values as they were.
+#[test]
+fn no_travel_keeps_fractional_values() {
+    let (mut app, id, fx) = satin();
+    edit(&mut app, id, |d| {
+        d.set_param(fx, "angle", StyleValue::Number(90.5));
+        d.set_param(fx, "distance", StyleValue::Number(20.75));
+    });
+    drag(&mut app, [0.0, 0.0]);
+    assert_eq!(shown(&app, id, fx), (90.5, 20.75));
+}
