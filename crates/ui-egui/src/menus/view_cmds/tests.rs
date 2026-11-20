@@ -83,6 +83,26 @@ fn names_in(dir: &std::path::Path) -> Vec<String> {
     names
 }
 
+#[test]
+fn layered_exr_menu_exports_through_its_options_form() {
+    let (mut app, ctx) = app_with(1);
+    let key = photocraft_engine::exr_cmds::LAYERED_EXR;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("layers.exr");
+    let dialog = open_form(&mut app, &ctx, key);
+    assert_eq!(fields(&app, dialog)["composite"], true);
+    assert_eq!(fields(&app, dialog)["compression"], "zip");
+    set(&mut app, &ctx, dialog, "path", json!(path));
+    set(&mut app, &ctx, dialog, "compression", json!("none"));
+    app.run("file.new", json!({"width": 140, "height": 80})).unwrap();
+    confirm(&mut app, &ctx, dialog).unwrap();
+    frame(&mut app, &ctx);
+    let parts = photocraft_io::exr_parts::entries(&std::fs::read(path).unwrap()).unwrap();
+    assert!(parts.iter().any(|entry| entry.name == "Beauty" && entry.width == 100), "{parts:?}");
+    assert_eq!(app.session.active().unwrap().doc.size.width, 140, "export leaves the current tab active");
+    assert!(app.session.active().unwrap().path.is_none(), "a layered EXR is an export copy");
+}
+
 /// One frame of the app on `ctx`.
 fn frame(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut output = ctx.run_ui(Default::default(), |ui| {

@@ -35,4 +35,8 @@ With several layers or artboards selected in the **Layers** panel, both commands
 
 ## Keep your layers
 
-Exporting makes a flat copy. To keep the layers, use **File › Save As…** with **PSD Document** or **PhotoCraft**; see [Open and save files](open-and-save-files.md).
+To keep the editable PhotoCraft document, use **File › Save As…** with **PSD Document** or **PhotoCraft**. See [Open and save files](open-and-save-files.md).
+
+To interchange raster layers from an RGB document, choose **File › Export › Layered OpenEXR…**. Pick a `.exr` destination and a lossless compression method. The default writes all raster layers and a **Beauty** part with the visible composite. Choose **Selected Layers Only** to export the current selection, or clear **Include Composite** to omit Beauty. Unsupported layer types are reported in the export warnings and can still appear in Beauty.
+
+Open the EXR in PhotoCraft to restore the raster layers, their groups and blend settings. EXR stores linear RGB with premultiplied alpha, so color beneath fully transparent pixels is discarded. The exporter writes a tile at a time. Rendering Beauty can use additional memory for effects that span tiles.

@@ -166,6 +166,13 @@ impl AuthorizedWorkspace {
         self.write_stream(path, &mut |w| w.write_all(bytes))
     }
 
+    /// Compare the two request spellings below the write root without ambient file access.
+    pub(crate) fn same_write_destination(&self, requested: &str, existing: &str) -> Result<bool, AutomationError> {
+        let requested = request_path(requested, self.write.as_ref())?;
+        let Some(root) = &self.write else { return Ok(false) };
+        Ok(scoped_path(existing, root)?.as_deref().and_then(|existing| path_beneath_root(&requested, existing)).is_some_and(|mut rest| rest.next().is_none()))
+    }
+
     /// [`Self::write`] with the file's bytes produced by `write` straight into the temporary
     /// file (it may seek back to patch lengths), so a large PSD/PSB is never held in memory
     /// whole (#5333). The same refusals, the same atomic replace.
