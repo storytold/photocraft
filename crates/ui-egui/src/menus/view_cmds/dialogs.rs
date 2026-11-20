@@ -257,21 +257,7 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                 Param::new("dontEnlarge", tl!("Don't Enlarge"), ParamKind::bool(enlarge)).not_remembered(),
             ])
         }
-        "file.automate.conditionalModeChange" => {
-            let modes = opts(&[
-                ("any", tl!("Any")),
-                ("rgb", tl!("RGB Color")),
-                ("grayscale", tl!("Grayscale")),
-                ("cmyk", tl!("CMYK Color")),
-                ("lab", tl!("Lab Color")),
-                ("indexed", tl!("Indexed Color")),
-                ("bitmap", tl!("Bitmap")),
-                ("duotone", tl!("Duotone")),
-                ("multichannel", tl!("Multichannel")),
-            ]);
-            let targets = opts(&[("rgb", tl!("RGB Color")), ("grayscale", tl!("Grayscale")), ("cmyk", tl!("CMYK Color")), ("lab", tl!("Lab Color"))]);
-            plain(vec![choice("from", tl!("From"), modes, "any"), choice("to", tl!("To"), targets, "rgb")])
-        }
+        crate::dialogs::conditional_mode_change_dialog::COMMAND => plain(crate::dialogs::conditional_mode_change_dialog::rows()),
         "file.export.layersToFiles" => {
             let (_, _, name) = doc?;
             plain(vec![

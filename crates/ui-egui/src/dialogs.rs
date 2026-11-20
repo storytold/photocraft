@@ -702,6 +702,7 @@ pub(crate) mod color_picker_preview;
 pub mod color_picker_ui;
 pub mod color_range_ui;
 pub mod color_table_ui;
+pub(crate) mod conditional_mode_change_dialog;
 pub mod count_group_name_ui;
 pub mod credits;
 pub mod dds_options_ui;
@@ -746,6 +747,8 @@ mod paths_export_document_bounds_tests;
 pub(crate) mod pattern_fill_ui;
 pub mod preset_group_prompt;
 pub mod rasterize_prompt;
+#[cfg(test)]
+mod scale_effects_layout_tests;
 pub mod screen_picker;
 pub mod select_mask_ui;
 pub mod shape_dialog;
