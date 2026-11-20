@@ -462,7 +462,7 @@ pub fn specs() -> Vec<CommandSpec> {
 /// Run another command's implementation from inside a preset command (checks `enabled`, but
 /// doesn't journal it: the outer command is what an action replays).
 pub(crate) fn call(s: &mut Session, id: &str, p: Value) -> Result<Value> {
-    let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+    let spec = crate::registry::spec(id)?;
     (spec.enabled)(s).map_err(|why| EngineError::Disabled(id.to_string(), why))?;
     // A nested command answers to the session's authorization hook like a direct call.
     if let Some(gate) = s.authorize {
