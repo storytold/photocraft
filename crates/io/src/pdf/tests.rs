@@ -193,6 +193,20 @@ fn the_page_measures_at_the_document_resolution() {
     assert!(has(&out.bytes, "/MediaBox [0 0 72.00 36.00]"), "300 px at 300 dpi is one inch");
 }
 
+/// Downsampling (#9642) halves the image's pixels, keeps the page and doesn't fade its border.
+#[test]
+fn a_downsampled_image_keeps_the_page_and_its_edges() {
+    let mut d = doc(ColorMode::Rgb);
+    d.size = Size { width: 8, height: 4 };
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
+    d.layers = vec![Layer::new("Red", LayerContent::Raster(solid(fmt, 0, 0, 8, 4, &[1.0, 0.0, 0.0, 1.0])))].into();
+    d.resolution_dpi = 144.0;
+    let out = export_with(&d, true, Some(72.0), None, &Interrupt::NONE).unwrap();
+    assert!(has(&out.bytes, "/Width 4 /Height 2"), "half the pixels at half the resolution");
+    assert!(has(&out.bytes, "/MediaBox [0 0 4.00 2.00]"), "8 × 4 px at 144 ppi is still 4 × 2 pt");
+    assert_eq!(stream_after(&out.bytes, "/Subtype /Image"), [255, 0, 0].repeat(4 * 2), "solid red up to the border");
+}
+
 #[test]
 fn an_embedded_profile_travels_as_iccbased() {
     let mut d = doc(ColorMode::Rgb);
