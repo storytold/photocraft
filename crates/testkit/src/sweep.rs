@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The cases of a long sweep that this run covers. By default a run takes one of `parts` slices,
 /// chosen by the UTC date, so every case runs at least once every `parts` days.
-/// `PHOTOCRAFT_FULL_SWEEP=1` runs every case, and `PHOTOCRAFT_SWEEP_PART=<n>` replays slice `n`;
+/// A full sweep ([`crate::full_sweep`]) runs every case, and `PHOTOCRAFT_SWEEP_PART=<n>` replays slice `n`;
 /// [`Sweep::new`] prints the slice it picked.
 #[derive(Debug, Clone, Copy)]
 pub struct Sweep {
@@ -14,7 +14,7 @@ pub struct Sweep {
 
 impl Sweep {
     pub fn new(parts: u64) -> Self {
-        if std::env::var_os("PHOTOCRAFT_FULL_SWEEP").is_some_and(|v| v == "1") {
+        if crate::full_sweep() {
             eprintln!("full sweep (PHOTOCRAFT_FULL_SWEEP=1)");
             return Self { part: 0, parts: 1 };
         }

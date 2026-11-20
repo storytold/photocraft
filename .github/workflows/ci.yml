@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       full_sweep:
-        description: "Run every testkit sweep case (runtime comparison and integration validation)"
+        description: "Run every testkit sweep case and every corpus file, as the nightly run does (runtime comparison and integration validation)"
         type: boolean
         default: false
       color_range:
@@ -58,7 +58,9 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  PHOTOCRAFT_FULL_SWEEP: ${{ inputs.full_sweep && '1' || '0' }}
+  # Every case of the long test sweeps and every corpus file (photocraft-testkit `full_sweep`): the
+  # nightly run and manual runs with `full_sweep`. Other runs take a sweep part and the corpus samples.
+  PHOTOCRAFT_FULL_SWEEP: ${{ (inputs.full_sweep || github.event_name == 'schedule') && '1' || '0' }}
   # No test or fuzz run may print a page: the engine refuses to spool, and if something ever
   # bypasses that, lp fails loudly on a printer that does not exist.
   PHOTOCRAFT_NO_PRINT: "1"
@@ -191,7 +193,7 @@ jobs:
       dev-debug: "0"
       cache-version: v2
       env: |
-        PHOTOCRAFT_FULL_SWEEP=${{ inputs.full_sweep && '1' || '0' }}
+        PHOTOCRAFT_FULL_SWEEP=${{ (inputs.full_sweep || github.event_name == 'schedule') && '1' || '0' }}
         PHOTOCRAFT_NO_PRINT=1
         LPDEST=photocraft-no-such-printer
         CARGO_PROFILE_TEST_STRIP=symbols
@@ -247,7 +249,7 @@ jobs:
       # identical-code folding and PDBs; the link arguments in build.rs (/DELAYLOAD, delayimp.lib)
       # are lld-link options too.
       env: |
-        PHOTOCRAFT_FULL_SWEEP=${{ inputs.full_sweep && '1' || '0' }}
+        PHOTOCRAFT_FULL_SWEEP=${{ (inputs.full_sweep || github.event_name == 'schedule') && '1' || '0' }}
         PHOTOCRAFT_NO_PRINT=1
         LPDEST=photocraft-no-such-printer
         CARGO_TARGET_DIR=D:\t
