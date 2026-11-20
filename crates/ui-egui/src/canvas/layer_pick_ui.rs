@@ -115,8 +115,15 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
             let w = (widest + 2.0 * ui.spacing().button_padding.x + 8.0).clamp(140.0, 360.0);
             ui.set_width(w);
             ui.spacing_mut().item_spacing.y = 0.0;
-            // A long list scrolls instead of running off the screen.
-            egui::ScrollArea::vertical().max_height((screen.height() - 24.0).max(48.0)).show(ui, |ui| {
+            // A long list scrolls instead of running off the screen. `max_height` alone is an upper
+            // bound that the area's own available height still caps — in a freshly opened area that
+            // is 400 points, so a taller menu scrolled on a screen with room to spare (CodeRabbit on
+            // #10498). The height the rows need, up to the same bound, is therefore asked for
+            // outright: below the bound the list is as tall as its rows and does not scroll, above
+            // it the scroller gets the whole height the screen allows.
+            let cap = (screen.height() - 24.0).max(48.0);
+            let rows = 22.0 * menu.layers.len() as f32;
+            egui::ScrollArea::vertical().max_height(cap).min_scrolled_height(rows.min(cap)).show(ui, |ui| {
                 ui.set_width(w);
                 for (layer, name) in &menu.layers {
                     let b = egui::Button::selectable(Some(*layer) == active, name.as_str()).truncate().min_size(egui::vec2(w, 22.0));
@@ -340,6 +347,27 @@ mod tests {
         assert!(rect.height() >= 12.0 * 22.0, "every row fits: {rect:?}");
         assert!(rect.bottom() <= 700.0 + 0.5 && rect.top() >= 0.0, "on the screen: {rect:?}");
         for i in 1..=12 {
+            let row = h.get_by_label(&format!("Layer {i}")).rect();
+            assert!(row.top() >= rect.top() - 0.5 && row.bottom() <= rect.bottom() + 0.5, "Layer {i} is in view: {row:?} in {rect:?}");
+        }
+    }
+
+    /// CodeRabbit on #10498: a fresh egui area starts at 400 points, and a scroll area inside one
+    /// cannot grow past the height it was first laid out at — so a menu taller than that would
+    /// scroll on a screen with room to spare. The test above cannot catch it: twelve rows are 264
+    /// points and never reach the ceiling. Twenty-five rows are 550, well past it and still inside
+    /// a 700-point screen, so every row is expected to be in view without scrolling.
+    #[test]
+    fn a_menu_taller_than_a_fresh_areas_four_hundred_points_uses_the_screen() {
+        let (mut a, ..) = app();
+        a.ui.layer_menu = Some(LayerMenu { pos: [300.0, 20.0], layers: (1..=25).map(|i| (i, format!("Layer {i}"))).collect() });
+        let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(|ui, app: &mut PhotocraftApp| show(app, ui.ctx()), a);
+        h.run_steps(4);
+        let rect = h.ctx.memory(|m| m.area_rect(menu_id())).expect("the menu is shown");
+        assert!(rect.height() > 400.0, "the menu is past a fresh area's 400 points: {rect:?}");
+        assert!(rect.height() >= 25.0 * 22.0, "and every row fits in it: {rect:?}");
+        assert!(rect.bottom() <= 700.0 + 0.5 && rect.top() >= 0.0, "on the screen: {rect:?}");
+        for i in [1, 13, 25] {
             let row = h.get_by_label(&format!("Layer {i}")).rect();
             assert!(row.top() >= rect.top() - 0.5 && row.bottom() <= rect.bottom() + 0.5, "Layer {i} is in view: {row:?} in {rect:?}");
         }
