@@ -80,6 +80,35 @@ fn assert_unchanged(session: &Session, before: &(Arc<photocraft_doc::Document>, 
     assert_eq!(names(session), ["Keep A", "Keep B"]);
 }
 
+fn session_with_dataset_variable() -> Session {
+    let mut session = Session::new();
+    session.execute("file.new", json!({"width": 32, "height": 24})).unwrap();
+    let (dataset, title) = session
+        .edit("Create template layers", |doc, active| {
+            let dataset = Layer::new("DataSet", LayerContent::Text(TextLayer { text: "D".into(), ..Default::default() }));
+            let title = Layer::new("Title", LayerContent::Text(TextLayer { text: "T".into(), ..Default::default() }));
+            let ids = (dataset.id, title.id);
+            *active = Some(title.id);
+            doc.layers.extend([dataset, title]);
+            Ok(ids)
+        })
+        .unwrap();
+    session
+        .execute(
+            "image.variables.define",
+            json!({"defs": [
+                {"name": "DataSet", "layer": dataset.0, "type": "textReplacement"},
+                {"name": "Title", "layer": title.0, "type": "textReplacement"}
+            ]}),
+        )
+        .unwrap();
+    session
+}
+
+fn imported_value(listed: &serde_json::Value, variable: &str) -> serde_json::Value {
+    listed["dataSets"][0]["values"].as_array().unwrap().iter().find(|value| value["variable"] == variable).unwrap()["value"].clone()
+}
+
 #[test]
 fn extra_header_column_is_refused_and_keeps_existing_sets() {
     let mut session = template();
@@ -169,6 +198,39 @@ fn named_column_and_execute_path_use_the_same_sentences() {
     let err = session.execute(IMPORT_DATA_SETS, json!({"path": path})).unwrap_err();
     refused(err, "There were too many variable names in the first line of the text file.");
     assert_eq!(names(&session), ["Keep A", "Keep B"]);
+}
+
+#[test]
+fn duplicate_header_is_refused_and_keeps_existing_sets() {
+    let mut session = template();
+    let before = snapshot(&session);
+    let err = import_data_sets_text(&mut session, "Title,Title,Photo\nOne,Two,a.png\n", &json!({})).unwrap_err();
+    refused(err, "There were too many variable names in the first line of the text file.");
+    assert_unchanged(&session, &before);
+}
+
+#[test]
+fn defined_dataset_variable_imports_as_a_column_in_any_order() {
+    for csv in ["DataSet,Title\nValue,Text\n", "Title,DataSet\nText,Value\n"] {
+        let mut session = session_with_dataset_variable();
+        let imported = import_data_sets_text(&mut session, csv, &json!({})).unwrap();
+        assert_eq!(imported, json!({"imported": 1}), "{csv}");
+        let listed = session.execute("variables.list", json!({})).unwrap();
+        assert_eq!(listed["dataSets"][0]["name"], "Data Set 1", "{csv}");
+        assert_eq!(imported_value(&listed, "DataSet"), json!("Value"), "{csv}");
+        assert_eq!(imported_value(&listed, "Title"), json!("Text"), "{csv}");
+    }
+}
+
+#[test]
+fn named_column_still_works_when_dataset_is_a_variable() {
+    let mut session = session_with_dataset_variable();
+    let imported = import_data_sets_text(&mut session, "DataSet,DataSet,Title\nRow,Value,Text\n", &json!({})).unwrap();
+    assert_eq!(imported, json!({"imported": 1}));
+    let listed = session.execute("variables.list", json!({})).unwrap();
+    assert_eq!(listed["dataSets"][0]["name"], "Row");
+    assert_eq!(imported_value(&listed, "DataSet"), json!("Value"));
+    assert_eq!(imported_value(&listed, "Title"), json!("Text"));
 }
 
 #[test]

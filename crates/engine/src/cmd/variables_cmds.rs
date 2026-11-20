@@ -356,6 +356,25 @@ fn parse_data_sets_fail(sentence: impl Into<String>) -> EngineError {
     bad(IMPORT_DATA_SETS, format!("{PARSE_DATA_SETS} {}", sentence.into()))
 }
 
+/// First column names the data set when it is blank, or `DataSet` that is not a defined variable.
+/// A defined variable of that name is a column when the header is the same width as the
+/// definitions; one extra column is still the data-set name.
+fn header_names_the_sets(header: &[String], vars: &Variables) -> bool {
+    let Some(first) = header.first() else {
+        return false;
+    };
+    if first.trim().is_empty() {
+        return true;
+    }
+    if !first.eq_ignore_ascii_case("dataset") {
+        return false;
+    }
+    if vars.def(first).is_none() {
+        return true;
+    }
+    header.len() == vars.defs.len().saturating_add(1)
+}
+
 /// The body of `file.import.variableDataSets` over CSV text already read: automation reads the
 /// file beneath its read root and hands the text over (#3216).
 ///
@@ -371,7 +390,7 @@ pub fn import_data_sets_text(s: &mut Session, text: &str, p: &Value) -> Result<V
     if header.is_empty() {
         return Err(bad(IMPORT_DATA_SETS, "empty CSV"));
     }
-    let named = header.first().is_some_and(|h| h.trim().is_empty() || h.eq_ignore_ascii_case("dataset"));
+    let named = header_names_the_sets(&header, &vars);
     let start = usize::from(named);
     let var_headers = header.get(start..).unwrap_or(&[]);
     if var_headers.len() > vars.defs.len() {
@@ -380,9 +399,12 @@ pub fn import_data_sets_text(s: &mut Session, text: &str, p: &Value) -> Result<V
     if var_headers.len() < vars.defs.len() {
         return Err(parse_data_sets_fail("There were not enough variable names in the first line of the text file."));
     }
-    for name in var_headers {
+    for (i, name) in var_headers.iter().enumerate() {
         if vars.def(name).is_none() {
             return Err(parse_data_sets_fail(format!("The name '{name}' is not a variable in the current document.")));
+        }
+        if var_headers.iter().take(i).any(|seen| seen == name) {
+            return Err(parse_data_sets_fail("There were too many variable names in the first line of the text file."));
         }
     }
     let mut sets = Vec::new();
