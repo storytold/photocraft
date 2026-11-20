@@ -159,7 +159,7 @@ fn tone_of(tool: Tool) -> TrailTone {
 pub(crate) fn feed(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]]) {
     let Some(st) = app.session.active() else { return };
     let size = [st.doc.size.width, st.doc.size.height];
-    let brush = app.session.tools.brush.clone();
+    let brush = (*app.session.tools.brush).clone();
     let trail = app.trail.get_or_insert_with(|| Trail::new(size).toned(tone_of(tool)));
     if tool == Tool::QuickSelection {
         trail.feed(points, brush.size);

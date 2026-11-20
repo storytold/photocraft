@@ -349,9 +349,10 @@ fn next_snapshots_generation() -> u64 {
 pub struct ToolState {
     pub foreground: [f32; 4],
     pub background: [f32; 4],
-    pub brush: photocraft_paint::BrushSettings,
-    /// Brush presets (built-ins plus user presets; see `brush.presets.*`).
-    pub presets: Arc<Vec<photocraft_paint::BrushPreset>>,
+    /// Tracked, so a view that shows the brush keys on its revision: every write through `&mut` moves it.
+    pub brush: craft_tracked::Tracked<photocraft_paint::BrushSettings>,
+    /// Brush presets (built-ins plus user presets; see `brush.presets.*`), tracked as the brush is.
+    pub presets: craft_tracked::Tracked<Arc<Vec<photocraft_paint::BrushPreset>>>,
     /// Bumped whenever `presets` changes ([`Session::brush_presets_changed`]); the preset store
     /// syncs when it moves.
     pub presets_rev: u64,
@@ -448,11 +449,11 @@ impl Default for ToolState {
             foreground: Self::PIXEL_COLORS[0],
             background: Self::PIXEL_COLORS[1],
             // Photoshop's Brush tool starts at 10 % Smoothing.
-            brush: photocraft_paint::BrushSettings {
+            brush: craft_tracked::Tracked::new(photocraft_paint::BrushSettings {
                 smoothing: photocraft_paint::brush::Smoothing { amount: 0.1, ..Default::default() },
                 ..Default::default()
-            },
-            presets: photocraft_paint::presets::builtin_shared(),
+            }),
+            presets: craft_tracked::Tracked::new(photocraft_paint::presets::builtin_shared()),
             presets_rev: 0,
             mixer: Default::default(),
             brush_gesture: None,

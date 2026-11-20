@@ -206,7 +206,7 @@ fn lead(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// The Mode, Opacity and Flow of the stamp tools, Healing and Art History: the tool's own brush's, kept per tool like its
 /// size. Art History has no Mode (the engine paints Normal) and no Flow.
 fn stamp_members(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
-    let brush = app.session.tools.brush.clone();
+    let brush = (*app.session.tools.brush).clone();
     // An Indexed Color document names the Clone Stamp's and the Pattern Stamp's Normal "Threshold"
     // (#12613, #12887); the other entries weren't measured there.
     let indexed = app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Indexed);
@@ -257,7 +257,7 @@ fn stamp_members(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
             .tooltip(tl!("Always use Pressure for Opacity. When off, Brush Preset controls pressure").to_owned())
             .show(ui);
         if let Some(on) = pressure.value().copied() {
-            let before = app.session.tools.brush.clone();
+            let before = (*app.session.tools.brush).clone();
             let mut after = before.clone();
             after.pressure_opacity = on;
             let key = pressure.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e));
@@ -275,7 +275,7 @@ fn stamp_members(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
 fn edit_brush(app: &mut PhotocraftApp, events: &EditEvents<f32>, set: impl Fn(&mut BrushSettings, f32)) {
     for event in events.iter() {
         let Some(value) = event.landed() else { continue };
-        let before = app.session.tools.brush.clone();
+        let before = (*app.session.tools.brush).clone();
         let mut after = before.clone();
         set(&mut after, *value);
         crate::brush_panel::commit_keyed(app, &before, &after, crate::history_keys::coalesce("brush", event));

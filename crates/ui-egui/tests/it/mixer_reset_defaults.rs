@@ -148,9 +148,9 @@ fn switching_back_keeps_the_mixers_edited_brush() {
     pick(&mut app, Tool::MixerBrush);
     reset(&mut app);
     scramble(&mut app);
-    let edited = app.session.tools.brush.clone();
+    let edited = (*app.session.tools.brush).clone();
     pick(&mut app, Tool::Brush);
-    let brush = app.session.tools.brush.clone();
+    let brush = (*app.session.tools.brush).clone();
     pick(&mut app, Tool::MixerBrush);
     assert_eq!(app.session.tools.brush, edited);
     pick(&mut app, Tool::Brush);
@@ -218,7 +218,7 @@ fn first_use_without_reset_keeps_existing_inheritance() {
     let mut app = app();
     pick(&mut app, Tool::Blur);
     scramble(&mut app);
-    let old = app.session.tools.brush.clone();
+    let old = (*app.session.tools.brush).clone();
     pick(&mut app, Tool::MixerBrush);
     let expected = BrushSettings { mode: BlendMode::Normal, smoothing: photocraft_paint::Smoothing { amount: 0.1, ..Default::default() }, ..old };
     assert_eq!(app.session.tools.brush, expected);

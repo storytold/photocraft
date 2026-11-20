@@ -454,7 +454,7 @@ fn presets_save_appends_at_the_end_and_update_overwrites_in_place() {
 #[test]
 fn a_failed_set_brush_leaves_no_current_preset_behind() {
     let mut s = session(10, 10);
-    let before = s.tools.brush.clone();
+    let before = (*s.tools.brush).clone();
     // A rejected brush (a wrong-typed size) must not record the preset it came with.
     assert!(s.execute("tools.setBrush", json!({"preset": "Chalk", "brush": {"size": "big"}})).is_err());
     assert_eq!(s.tools.current_preset, None);
@@ -653,8 +653,8 @@ fn define_brush_from_selection_survives_allocation_failure() {
     // panic or an OOM abort.
     let mut s = session(40, 40);
     s.execute("select.rect", json!({"x": 5, "y": 5, "width": 20, "height": 20})).unwrap();
-    let brush_before = s.tools.brush.clone();
-    let presets_before = s.tools.presets.clone();
+    let brush_before = (*s.tools.brush).clone();
+    let presets_before = (*s.tools.presets).clone();
     let history_before = s.active().unwrap().history.past_len();
     crate::allocation::fail_next_for_test();
     let result = s.execute("brush.defineFromSelection", json!({"name": "Blob"}));
@@ -674,8 +674,8 @@ fn define_brush_from_selection_survives_failure_of_the_second_allocation() {
     let mut s = session(40, 40);
     s.execute("select.rect", json!({"x": 5, "y": 5, "width": 20, "height": 20})).unwrap();
     let pixels_before = surface(&s);
-    let brush_before = s.tools.brush.clone();
-    let presets_before = s.tools.presets.clone();
+    let brush_before = (*s.tools.brush).clone();
+    let presets_before = (*s.tools.presets).clone();
     let history_before = s.active().unwrap().history.past_len();
     crate::allocation::fail_after_for_test(1);
     let result = s.execute("brush.defineFromSelection", json!({"name": "Blob"}));
@@ -693,8 +693,8 @@ fn define_brush_from_selection_propagates_compositor_allocation_error_transactio
     let mut s = session(40, 40);
     s.execute("select.rect", json!({"x": 5, "y": 5, "width": 20, "height": 20})).unwrap();
     let doc = s.active().unwrap().doc.clone();
-    let brush_before = s.tools.brush.clone();
-    let presets_before = s.tools.presets.clone();
+    let brush_before = (*s.tools.brush).clone();
+    let presets_before = (*s.tools.presets).clone();
     let history_before = s.active().unwrap().history.past_len();
     let result = define_from_selection_with_renderer(&mut s, &json!({"name": "Blob"}), |_, _, _| {
         Err(photocraft_compose::RenderBandsError::Allocation(photocraft_raster::AllocationError::NotEnoughMemory { bytes: 64 }))
@@ -954,14 +954,14 @@ fn pose_axes_commands_keep_minimal_patches_legacy_alias_and_preset_replay() {
     let input = StrokePoint { tilt_x: 13.0, tilt_y: -27.0, pressure: 0.71, rotation: 67.0, ..Default::default() };
     s.execute("tools.setBrush", json!({"brush": {"pose": {"enabled": true, "tiltX": 45, "tiltY": -18, "overrideTilt": true}}})).unwrap();
     assert_eq!(photocraft_paint::dynamics::apply_pose(&s.tools.brush, input), StrokePoint { tilt_x: 45.0, tilt_y: -18.0, ..input });
-    let before = s.tools.brush.clone();
+    let before = (*s.tools.brush).clone();
     s.execute("tools.setBrush", json!({"pose": {"overrideTiltX": false}})).unwrap();
     assert_eq!(
         photocraft_paint::dynamics::apply_pose(&s.tools.brush, input),
         StrokePoint { tilt_y: -18.0, ..input },
         "turning X off retains Y override and live X input"
     );
-    let mixed = s.tools.brush.clone();
+    let mixed = (*s.tools.brush).clone();
     assert_eq!(brush_patch(&before, &mixed), json!({"pose": {"overrideTiltX": false}}), "the derived combined flag must not enter an axis-only patch");
     let wire = s.execute("brush.get", json!({})).unwrap();
     assert_eq!(wire["pose"]["overrideTiltX"], false);
@@ -985,7 +985,7 @@ fn pose_axes_commands_keep_minimal_patches_legacy_alias_and_preset_replay() {
 #[test]
 fn pose_axes_invalid_flags_fail_atomically() {
     let mut s = session(100, 80);
-    let before = s.tools.brush.clone();
+    let before = (*s.tools.brush).clone();
     let n = s.journal.len();
     for pose in [
         json!({"overrideTiltX": "yes"}),
@@ -1036,7 +1036,7 @@ fn new_brush_controls_round_trip_through_set_brush() {
     s.execute("tools.setBrush", json!({"preset": "Chalk"})).unwrap();
     assert!(s.tools.brush.shape_dynamics.brush_projection && s.tools.brush.locks.texture);
     // Wrong types are errors and leave the brush alone.
-    let before = s.tools.brush.clone();
+    let before = (*s.tools.brush).clone();
     for bad in
         [json!({"spacingEnabled": 3}), json!({"locks": {"texture": "yes"}}), json!({"mixer": {"wet": "wet"}}), json!({"shapeDynamics": {"tiltScale": []}})]
     {
@@ -1207,7 +1207,7 @@ fn out_of_range_scatter_is_rejected_and_the_maximum_still_paints() {
     for (j, shown) in [(1e38, "1e38"), (10.01, "10.01"), (1e39, "inf"), (-1.0, "-1.0")] {
         for (patch, what) in [(scatter(j), "scatter"), (dual(j), "dual brush scatter")] {
             let mut s = new();
-            let before = s.tools.brush.clone();
+            let before = (*s.tools.brush).clone();
             let err = s.execute("tools.setBrush", json!({ "brush": patch.clone() })).unwrap_err();
             let msg = err.to_string();
             assert!(matches!(err, EngineError::BadParams { .. }) && msg.contains(what) && msg.contains(shown), "{j}: {msg}");
@@ -1366,7 +1366,7 @@ fn set_brush_takes_a_per_dynamic_curve_and_a_patch_resets_it() {
     let mut s = session(20, 20);
     let curve = json!([[0.0, 0.0], [0.5, 0.2], [1.0, 1.0]]);
     s.execute("tools.setBrush", json!({"shapeDynamics": {"enabled": true, "size": {"control": "penPressure", "curve": curve}}})).unwrap();
-    let with = s.tools.brush.clone();
+    let with = (*s.tools.brush).clone();
     assert_eq!(with.shape_dynamics.size.curve.points(), vec![[0.0, 0.0], [0.5, 0.2], [1.0, 1.0]]);
     assert!(with.transfer.opacity.curve.is_linear(), "other dynamics keep their own curve");
     // The panel's diff back to linear is a real patch, and applying it restores the linear curve.

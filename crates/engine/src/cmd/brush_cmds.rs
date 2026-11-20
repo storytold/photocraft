@@ -200,7 +200,7 @@ fn find_preset<'a>(s: &'a Session, name: &str, cmd: &str) -> Result<&'a BrushPre
 /// Resolve the brush for a stroke command: session brush ← `preset` ← `brush` ← legacy scalar
 /// params; colours from the session; seed from `seed` or the points.
 pub fn resolve_brush(s: &Session, p: &Value, cmd: &str) -> Result<BrushSettings> {
-    let mut b = s.tools.brush.clone();
+    let mut b = (*s.tools.brush).clone();
     if let Some(name) = p.get("preset").and_then(Value::as_str) {
         b = find_preset(s, name, cmd)?.picked_over(&s.tools.brush);
     }
@@ -1016,9 +1016,9 @@ fn name_param(p: &Value, cmd: &str) -> Result<String> {
 
 /// Replace the preset of that name, or append it at the end of the list.
 fn upsert(s: &mut Session, preset: BrushPreset) {
-    match std::sync::Arc::make_mut(&mut s.tools.presets).iter_mut().find(|x| x.name.eq_ignore_ascii_case(&preset.name)) {
+    match std::sync::Arc::make_mut(&mut *s.tools.presets).iter_mut().find(|x| x.name.eq_ignore_ascii_case(&preset.name)) {
         Some(x) => *x = preset,
-        None => std::sync::Arc::make_mut(&mut s.tools.presets).push(preset),
+        None => std::sync::Arc::make_mut(&mut *s.tools.presets).push(preset),
     }
     s.brush_presets_changed();
 }
@@ -1028,7 +1028,7 @@ fn presets_save(s: &mut Session, p: &Value) -> Result<Value> {
     let name = name_param(p, cmd)?;
     let mut brush = match p.get("brush").filter(|v| v.is_object()) {
         Some(patch) => merge_brush(&s.tools.brush, patch, cmd)?,
-        None => s.tools.brush.clone(),
+        None => (*s.tools.brush).clone(),
     };
     // The New Brush Preset dialog's boxes; without them the preset captures what it always did.
     let captures = PresetCaptures { size: flag(p, "captureSize", true), tool_settings: flag(p, "toolSettings", true), color: flag(p, "color", false) };
@@ -1046,7 +1046,7 @@ fn presets_delete(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "brush.presets.delete";
     let name = name_param(p, cmd)?;
     let before = s.tools.presets.len();
-    std::sync::Arc::make_mut(&mut s.tools.presets).retain(|x| !x.name.eq_ignore_ascii_case(&name));
+    std::sync::Arc::make_mut(&mut *s.tools.presets).retain(|x| !x.name.eq_ignore_ascii_case(&name));
     if s.tools.presets.len() == before {
         return Err(bad(cmd, format!("no brush preset named `{name}`")));
     }
@@ -1077,9 +1077,9 @@ fn presets_update(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let brush = match p.get("brush").filter(|v| v.is_object()) {
         Some(patch) => merge_brush(&s.tools.brush, patch, cmd)?,
-        None => s.tools.brush.clone(),
+        None => (*s.tools.brush).clone(),
     };
-    let pr = std::sync::Arc::make_mut(&mut s.tools.presets)
+    let pr = std::sync::Arc::make_mut(&mut *s.tools.presets)
         .iter_mut()
         .find(|x| x.name.eq_ignore_ascii_case(&name))
         .ok_or_else(|| bad(cmd, format!("no brush preset named `{name}`")))?;
@@ -1212,7 +1212,7 @@ fn define_from_selection_with_renderer(
     }
     let (brush, tw, th) = sampled_brush(cmd, &v, w, h)?;
     upsert(s, BrushPreset { name: name.clone(), brush: brush.clone(), builtin: false, group: String::new(), folder: Vec::new(), captures: Default::default() });
-    s.tools.brush = brush;
+    *s.tools.brush = brush;
     s.tools.current_preset = Some(name.clone());
     s.tools.brush_changed();
     Ok(json!({ "name": name, "width": tw, "height": th }))
@@ -1253,7 +1253,7 @@ pub(crate) fn sampled_brush(cmd: &str, v: &[f32], w: usize, h: usize) -> Result<
 
 pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "tools.setBrush";
-    let mut b = s.tools.brush.clone();
+    let mut b = (*s.tools.brush).clone();
     let mut picked = None;
     let mut picked_color = None;
     if let Some(name) = p.get("preset").and_then(Value::as_str) {
@@ -1373,7 +1373,7 @@ pub fn restored_settings(s: &Session, v: &Value) -> Option<BrushSettings> {
 pub fn restore_brush(s: &mut Session) {
     let v = s.prefs().last_brush.clone();
     let Some(b) = v.get("brush").and_then(|b| restored_settings(s, b)) else { return };
-    s.tools.brush = b;
+    *s.tools.brush = b;
     s.tools.current_preset = v.get("preset").and_then(Value::as_str).map(str::to_string);
     // What was just restored is exactly what the preferences hold: nothing new to write.
     s.tools.brush_saved_rev = s.tools.brush_rev;

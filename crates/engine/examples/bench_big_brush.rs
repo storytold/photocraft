@@ -65,7 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut s = Session::new();
             s.execute("file.new", json!({"width": w, "height": h, "background": "white"}))?;
             s.execute("layer.new.layer", json!({"name": "paint"}))?;
-            s.tools.brush = brush.clone();
+            *s.tools.brush = brush.clone();
             // A 4K canvas fit to a 4K screen with panels: about 45 %.
             let zoom = 0.45;
             // Each frame brings four pen samples, 11.2 px apart across (a brisk stroke at 120 Hz),

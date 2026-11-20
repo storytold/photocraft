@@ -37,7 +37,7 @@ impl PickerInput {
     /// while a preset of that name exists, so a deleted preset does not stay picked.
     pub(crate) fn of(app: &PhotocraftApp, env: &Env) -> Self {
         let tools = &app.session.tools;
-        let brush = tools.brush.clone();
+        let brush = (*tools.brush).clone();
         let current = tools
             .current_preset
             .as_deref()
@@ -70,7 +70,7 @@ fn take_state(app: &mut PhotocraftApp) -> BrushPickerState<BrushKey> {
 fn commit_edits<T>(app: &mut PhotocraftApp, events: &EditEvents<T>, set: impl Fn(&mut BrushSettings, &T)) {
     for event in events.iter() {
         let Some(value) = event.landed() else { continue };
-        let before = app.session.tools.brush.clone();
+        let before = (*app.session.tools.brush).clone();
         let mut after = before.clone();
         set(&mut after, value);
         // A `Set` has no key and is its own command.
@@ -87,7 +87,7 @@ pub(crate) fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, input: PickerI
         b.roundness = v.roundness as f32;
     });
     if let Some(back) = out.reverted {
-        let now = app.session.tools.brush.clone();
+        let now = (*app.session.tools.brush).clone();
         let mut after = now.clone();
         after.size = back.diameter as f32;
         if let Some(h) = back.hardness {

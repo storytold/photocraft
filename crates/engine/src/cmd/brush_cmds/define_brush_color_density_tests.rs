@@ -145,8 +145,8 @@ fn command_density_applies_alpha_before_gray_and_selection_once() {
         assert!((half - opaque).abs() <= 1.0 / 65535.0);
 
         let mut transparent = rgb_source(32, [0.0, 0.0, 1.0, 0.0]);
-        let brush = transparent.tools.brush.clone();
-        let presets = transparent.tools.presets.clone();
+        let brush = (*transparent.tools.brush).clone();
+        let presets = (*transparent.tools.presets).clone();
         let err = transparent.execute(command, json!({"name": "Transparent colour"})).unwrap_err();
         assert!(err.to_string().contains("contain no paint"), "{err}");
         assert_eq!(transparent.tools.brush, brush);
@@ -301,8 +301,8 @@ fn sampled_trcs_cannot_hide_non_finite_contributing_channels() {
                 assert_eq!(stored, rgba.map(f32::to_bits), "non-finite values must reach the source read unchanged");
                 let doc = s.active().unwrap().doc.clone();
                 let history = s.active().unwrap().history.past_len();
-                let brush = s.tools.brush.clone();
-                let presets = s.tools.presets.clone();
+                let brush = (*s.tools.brush).clone();
+                let presets = (*s.tools.presets).clone();
                 let current = s.tools.current_preset.clone();
                 let revision = s.tools.brush_rev;
                 let journal = s.journal.clone();

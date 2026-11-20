@@ -164,8 +164,8 @@ fn a_hidden_black_source_over_white_or_transparency_is_empty_and_does_not_replac
             })
             .unwrap();
             s.execute("brush.presets.save", json!({"name": "Kept"})).unwrap();
-            let brush = s.tools.brush.clone();
-            let presets = s.tools.presets.clone();
+            let brush = (*s.tools.brush).clone();
+            let presets = (*s.tools.presets).clone();
             let current = s.tools.current_preset.clone();
             let doc = s.active().unwrap().doc.clone();
             let history = s.active().unwrap().history.past_len();
@@ -234,8 +234,8 @@ fn composite_storage_is_counted_with_density_and_mask_before_any_allocation() {
             let height = (crate::allocation::MAX_DENSE_BYTES / (bytes * u64::from(WIDTH))) as u32;
             let mut s = sparse_budget_source(WIDTH, height, selected);
             let doc = s.active().unwrap().doc.clone();
-            let brush = s.tools.brush.clone();
-            let presets = s.tools.presets.clone();
+            let brush = (*s.tools.brush).clone();
+            let presets = (*s.tools.presets).clone();
             let current = s.tools.current_preset.clone();
             let history = s.active().unwrap().history.past_len();
             crate::allocation::fail_next_for_test();
@@ -263,8 +263,8 @@ fn compositor_allocation_boundary_failure_preserves_source_and_preset_state() {
             }
             let doc = s.active().unwrap().doc.clone();
             let history = s.active().unwrap().history.past_len();
-            let brush = s.tools.brush.clone();
-            let presets = s.tools.presets.clone();
+            let brush = (*s.tools.brush).clone();
+            let presets = (*s.tools.presets).clone();
             let current = s.tools.current_preset.clone();
             crate::allocation::fail_after_for_test(if selected { 2 } else { 1 });
             let result = s.execute(command, json!({"name": "Compositor allocation failure"}));
@@ -294,8 +294,8 @@ fn a_banded_capture_that_fits_the_budget_is_not_charged_for_a_full_rgba_canvas()
             assert!(pixels * (sample_bytes + 16) > crate::allocation::MAX_DENSE_BYTES, "a full-plane estimate would incorrectly reject this fixture");
             let mut s = sparse_budget_source(WIDTH, height, selected);
             let doc = s.active().unwrap().doc.clone();
-            let brush = s.tools.brush.clone();
-            let presets = s.tools.presets.clone();
+            let brush = (*s.tools.brush).clone();
+            let presets = (*s.tools.presets).clone();
             // Refuse the first real allocation, after verifying that the budget allowed it.
             crate::allocation::fail_next_for_test();
             let result = s.execute(command, json!({"name": "Fits with bands"}));
@@ -386,8 +386,8 @@ fn selection_buffer_failure_preserves_source_and_preset_state() {
         s.execute("select.rect", json!({"x": 0, "y": 0, "width": 200, "height": 150})).unwrap();
         let doc = s.active().unwrap().doc.clone();
         let history = s.active().unwrap().history.past_len();
-        let brush = s.tools.brush.clone();
-        let presets = s.tools.presets.clone();
+        let brush = (*s.tools.brush).clone();
+        let presets = (*s.tools.presets).clone();
         let current = s.tools.current_preset.clone();
         crate::allocation::fail_after_for_test(1);
         let result = s.execute(command, json!({"name": "Selection buffer failure"}));

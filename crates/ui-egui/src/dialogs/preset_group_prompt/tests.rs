@@ -74,7 +74,7 @@ impl Fixture {
         match kind {
             Kind::Brushes => {
                 assert_eq!(original.as_array().unwrap().len(), 2);
-                std::sync::Arc::make_mut(&mut app.session.tools.presets).iter_mut().find(|p| p.group == stem).unwrap().brush.size = 77.0;
+                std::sync::Arc::make_mut(&mut *app.session.tools.presets).iter_mut().find(|p| p.group == stem).unwrap().brush.size = 77.0;
             }
             Kind::Gradients => {
                 assert_eq!(original[0]["items"].as_array().unwrap().len(), 2);

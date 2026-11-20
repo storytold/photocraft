@@ -169,7 +169,7 @@ pub(crate) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// a `Set` is a step of its own, `Begin` changes nothing.
 fn set_size(app: &mut PhotocraftApp, event: &EditEvent<f64>) {
     let Some(&size) = event.landed() else { return };
-    let before = app.session.tools.brush.clone();
+    let before = (*app.session.tools.brush).clone();
     let mut after = before.clone();
     after.size = size as f32;
     commit_keyed(app, &before, &after, crate::history_keys::coalesce("brush", event));

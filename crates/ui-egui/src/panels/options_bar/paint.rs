@@ -215,7 +215,7 @@ pub(super) fn members(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) ->
     crate::brush_picker::show_field(ui, app, !block);
     crate::brush_picker::settings_toggle(ui, app);
 
-    let brush_before = app.session.tools.brush.clone();
+    let brush_before = (*app.session.tools.brush).clone();
     let before = paint_values(app, tool, &brush_before);
     let mut values = before.clone();
     let mut eraser = eraser_mode_of(&app.ui.tool_options.eraser_mode);
