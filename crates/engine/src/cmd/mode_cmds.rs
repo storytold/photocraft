@@ -915,7 +915,7 @@ mod rotate_canvas_selection_tests;
 mod tests;
 
 #[cfg(test)]
+mod color_table_index_tests;
+#[cfg(test)]
 #[path = "rotate_canvas_interpolation_pref_tests.rs"]
 mod rotate_canvas_interpolation_pref_tests;
-#[cfg(test)]
-mod color_table_index_tests;
