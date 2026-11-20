@@ -7,7 +7,6 @@
 //! draft as `StyleValue::Other` so everything the dialog doesn't model (gradient strokes, imported
 //! contours, PSD data) survives an apply.
 
-use photocraft_engine::color_cmds::ColorExt;
 use photocraft_engine::presets::PresetsExt;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;

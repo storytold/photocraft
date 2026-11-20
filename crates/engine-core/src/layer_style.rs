@@ -1,6 +1,5 @@
 //! `layer.layerStyle.*` commands: add/replace layer effects on a layer.
 
-use crate::color_cmds::ColorExt;
 use crate::presets::PresetsExt;
 use photocraft_color::{BlendMode, Color};
 use photocraft_doc::adjust::CurvePoint;

@@ -6,7 +6,6 @@
 //! boxes are document pixels. Every edit re-renders the layer with `photocraft-text` and
 //! regenerates its PSD `TySh` data, so the layer saves as editable text.
 
-use crate::color_cmds::ColorExt;
 use std::sync::Arc;
 
 use photocraft_color::{Color, ColorMode, PixelFormat};
