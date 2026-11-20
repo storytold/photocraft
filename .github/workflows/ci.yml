@@ -191,7 +191,7 @@ jobs:
       # fmt, egui-fork, clippy, layers, panel-commands, scorecard, the wasm32 check and the
       # missing-translations report (`cargo xtask ci lint`, xtask/src/main.rs), and the CI scripts'
       # own tests.
-      lint-command: python3 scripts/test-ci-gpu-lavapipe.py && python3 scripts/test-ci-windows-gpu-tests.py && python3 scripts/test-ci-test-times.py && python3 scripts/test-ci-toolchain-bump.py && cargo xtask ci lint
+      lint-command: python3 scripts/test-ci-gpu-lavapipe.py && python3 scripts/test-ci-windows-gpu-tests.py && python3 scripts/test-ci-test-times.py && python3 scripts/test-ci-toolchain-bump.py && python3 scripts/test-ci-clear-rolling-cache.py && cargo xtask ci lint
       archive-command: cargo xtask ci archive --gpu-shard
       after-archive-command: cargo xtask ci doctest
       test-shards: 4
@@ -284,6 +284,31 @@ jobs:
             ^windows( / build \(.*\))?$
             ^web build and wasm size gate$
             ^corpus tests$
+
+  # The nightly cold run never restores the rolling crates entry, so the old entry is only overlap
+  # while the cold run saves its own: two entries of about 4 GB, which with the others go over the
+  # 10 GB cache limit and get the Windows, web and corpus entries evicted. This deletes the old
+  # entries when the build job starts saving (scripts/ci-clear-rolling-cache.py).
+  cold-cache-clear:
+    name: cold cache clear
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    continue-on-error: true
+    permissions:
+      actions: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Delete the old rolling entries before the save
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci-clear-rolling-cache.py
 
   # The same codecs without the optional decoder: HEIC must stay a clear "not in this build" error
   # for distributors who leave it out. Runs beside the gate and restores the gate's newest rolling
