@@ -119,7 +119,7 @@ fn dropping_a_panel_just_above_or_below_the_document_tabs_leaves_it_floating() {
                 .rect()
         };
         let from = tab_named("Layers").center();
-        let document = tab_named("Untitled-1");
+        let document = tab_named("Untitled");
         let to = Pos2::new(document.center().x, if above { document.top() - 1.0 } else { document.bottom() + 1.0 });
         let button = |pos, pressed| egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
         h.event(egui::Event::PointerMoved(from));
