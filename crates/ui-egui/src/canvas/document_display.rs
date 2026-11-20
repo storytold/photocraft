@@ -671,7 +671,11 @@ mod tests {
                 // as long as the bar is thick, before each track.
                 let arrow = vertical.rect().width();
                 let top = vertical.rect().top() - arrow;
-                assert!((top - view.rect.top()).abs() < 0.5, "the vertical bar's top arrow starts at the view's top, below the ruler: {top} vs {}", view.rect.top());
+                assert!(
+                    (top - view.rect.top()).abs() < 0.5,
+                    "the vertical bar's top arrow starts at the view's top, below the ruler: {top} vs {}",
+                    view.rect.top()
+                );
             }
             let room = |length: f32, document: f64| if overscroll { f64::from(length) - document } else { 0.0 };
             let x_room = room(view.rect.width(), 400.0);
