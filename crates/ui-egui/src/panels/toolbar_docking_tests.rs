@@ -87,3 +87,53 @@ fn flyouts_open_to_the_right_at_the_left_edge() {
     assert!(button.left() < 80.0, "the toolbar is at the left window edge: {button:?}");
     assert!(row.left() >= button.right() - 0.5, "the flyout opens to the right of the button: row {row:?}, button {button:?}");
 }
+
+#[test]
+fn the_floating_toolbar_switches_between_one_and_two_columns() {
+    let mut h = harness();
+    h.state_mut().run("window.panel.float", json!({"panel": TOOLBAR, "column": true, "x": 350, "y": 90})).expect("the Tools palette floats");
+    h.run_steps(4);
+
+    let steps = |app: &PhotocraftApp| {
+        app.ui.docking.layout.floating.iter().find(|window| window.panels().any(|panel| panel == TOOLBAR)).and_then(|window| window.column.steps)
+    };
+    assert_eq!(steps(h.state()), Some(1));
+    for (label, expected) in [("Show in two columns", 2), ("Show in one column", 1)] {
+        h.query_by_label(label).expect("the floating palette's column button").click();
+        h.run_steps(4);
+        assert_eq!(steps(h.state()), Some(expected));
+    }
+}
+
+#[test]
+fn dropping_a_panel_just_above_or_below_the_document_tabs_leaves_it_floating() {
+    use craft::behavior::dock::PanelPlace;
+    use egui::accesskit::Role;
+
+    for above in [true, false] {
+        let mut h = harness();
+        let tab_named = |name: &str| {
+            h.query_all_by_role(Role::Tab)
+                .find(|tab| tab.accesskit_node().label().is_some_and(|label| label.contains(name)))
+                .expect("the tab is visible")
+                .rect()
+        };
+        let from = tab_named("Layers").center();
+        let document = tab_named("Untitled-1");
+        let to = Pos2::new(document.center().x, if above { document.top() - 1.0 } else { document.bottom() + 1.0 });
+        let button = |pos, pressed| egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        h.event(egui::Event::PointerMoved(from));
+        h.run_steps(1);
+        h.event(button(from, true));
+        h.run_steps(1);
+        for step in 1..=4 {
+            h.event(egui::Event::PointerMoved(from.lerp(to, step as f32 / 4.0)));
+            h.run_steps(2);
+        }
+        h.event(button(to, false));
+        h.run_steps(4);
+
+        let place = h.state().ui.docking.layout.place(&"layers".to_owned());
+        assert!(matches!(place, Some(PanelPlace::Floating { .. })), "drop at {to:?}, above the tabs: {above}, place: {place:?}");
+    }
+}
