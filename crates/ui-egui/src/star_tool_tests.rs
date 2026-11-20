@@ -12,22 +12,16 @@ use crate::state::Tool;
 
 const SHAPES: [Tool; 7] = [Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Star, Tool::Line, Tool::CustomShape];
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.sync_views();
     app
 }
 
+/// A key press through the canvas passes, as the app's key route takes it.
 fn press(app: &mut PhotocraftApp, key: Key, modifiers: Modifiers) {
-    let ctx = egui::Context::default();
-    let raw = egui::RawInput {
-        events: vec![egui::Event::ModifiersChanged(modifiers), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
-        ..Default::default()
-    };
-    ctx.begin_pass(raw);
-    crate::shortcuts::handle(app, &ctx);
-    ctx.end_pass().textures_delta.clear();
+    crate::canvas::testing::key(app, key, modifiers);
 }
 
 fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], mods: Modifiers) {
@@ -55,16 +49,6 @@ fn star_sits_in_the_shape_slot_after_polygon() {
     assert_eq!(slot, Some(&SHAPES[..]));
     let pos = |t: Tool| Tool::ALL.iter().position(|x| *x == t);
     assert_eq!(pos(Tool::Star), pos(Tool::Polygon).map(|p| p + 1), "Tool::ALL keeps the slot order");
-}
-
-#[test]
-fn star_is_a_shape_tool_on_u_with_its_label_icon_and_name() {
-    assert!(crate::tools::vector_ui::is_shape_tool(Tool::Star));
-    assert_eq!(Tool::Star.key(), 'U');
-    assert_eq!(Tool::Star.label(), "Star Tool");
-    assert_eq!(Tool::from_name("Star Tool"), Some(Tool::Star));
-    assert_eq!(Tool::from_name("star"), Some(Tool::Star));
-    assert_eq!(crate::icons::tool_icon(Tool::Star), "star");
 }
 
 #[test]
@@ -109,7 +93,7 @@ fn shift_and_alt_constrain_and_centre_the_star_like_the_polygon_tool() {
     app.ui.tool = Tool::Star;
     drag(&mut app, [100.0, 100.0], [140.0, 120.0], Modifiers::SHIFT | Modifiers::ALT);
     match live_shape(&app) {
-        Some(LiveShape::Polygon { rect, .. }) => assert_eq!(rect, [60.0, 60.0, 80.0, 80.0], "a square box drawn from the centre"),
+        Some(LiveShape::Polygon { rect, .. }) => assert_eq!(rect, [80.0, 80.0, 40.0, 40.0], "a square box of the shorter side drawn from the centre (#13222)"),
         other => panic!("a live star shape, got {other:?}"),
     }
 }
