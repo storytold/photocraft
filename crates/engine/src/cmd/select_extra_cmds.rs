@@ -78,7 +78,7 @@ fn select_sky(s: &mut Session, p: &Value) -> Result<Value> {
 fn isolate_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     let on = p.get("on").and_then(Value::as_bool).unwrap_or(st.isolated_layers.is_empty());
-    st.isolated_layers = if on { st.selected_layers() } else { Vec::new() };
+    st.isolated_layers = if on { st.selected_layers().to_vec() } else { Vec::new() };
     // A filter of the Layers panel's rows, but turning it on or off marks the document modified.
     st.bump_view_revision(false);
     Ok(json!({ "isolated": !st.isolated_layers.is_empty(), "layers": st.isolated_layers.iter().map(|l| l.0).collect::<Vec<_>>() }))
