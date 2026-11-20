@@ -1,20 +1,25 @@
 //! The content versions of the settling regions (`Lazy::content`): the shell's options bar and status bar, and every
 //! docked panel body. A version covers the app data its region shows that can change while no input reaches
-//! the region: what a command changes, the active document and layer and the tool in every version; the brush and the
-//! colours only in the regions that show them, so a drag that edits one (a brush Size slider, a Color slider) runs
-//! those regions and leaves the rest settled; and what a region shows of the canvas view, a job or the pointer. Input
-//! inside a region runs it whatever its version, and so does a repaint it asks for itself.
+//! the region: what a command changes, the active document and layer and the tool in every version; the brush, the
+//! colours and the type defaults only in the regions that show them, so a drag that edits one (a brush Size slider, a
+//! Color slider) runs those regions and leaves the rest settled; what a region shows of the canvas view, a job or the
+//! pointer; and what an edit elsewhere changes without a command, such as a box or pin dragged on the canvas or an
+//! adjustment's live preview. Input inside a region runs it whatever its version, and so does a repaint it asks for
+//! itself.
 
 use std::hash::{Hash, Hasher};
 
 use super::{PhotocraftApp, chrome_ui};
 use crate::color_picker_ui::PickWindow;
 
-/// The version of the options bar: the Zoom tool's members show the active view, and an open Free Transform shows
-/// its own members in place of the tool's (Escape ends it without a command, #15547). The painting tools' members
-/// show the brush and its presets, the gradient, shape and Mixer Brush members the colours.
+/// The version of the options bar: the Zoom tool's members show the active view, and an open Free Transform, Puppet
+/// Warp or Perspective Warp shows its own members in place of the tool's, with what a drag on the canvas changes (the
+/// box, the picked pin, the planes; Escape ends them without a command, #15547). The painting tools' members show the
+/// brush and its presets, the gradient, shape, type and Mixer Brush members the colours, and the type members the type
+/// defaults.
 pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
-    version(app, (view(app), app.ui.transform.is_some(), brush(app), colours(app)))
+    let sessions = (crate::transform_tool::bar_key(app), crate::puppet_ui::bar_key(app), crate::perspective_ui::bar_key(app));
+    version(app, (view(app), sessions, brush(app), colours(app), type_defaults(app)))
 }
 
 /// The version of the status bar: the zoom readout of the active view, the status message and the item it shows, the
@@ -29,10 +34,11 @@ pub(crate) fn status_bar(app: &PhotocraftApp) -> u64 {
 /// The version of panel `id`'s body. The Navigator shows the active view, the Info panel the pointer's document pixel
 /// and the zoom it samples at, the Clone Source panel the pairing at the last hover point, the Modifier Keys panel the
 /// latched keys, which their use releases, the Properties panel the colour its well's open Color Picker previews and
-/// the answer that picker left. Brush Settings and Brushes show the brush and its presets; Color, Swatches, Gradients
-/// and the Gradient Editor show the colours, and so does Properties (a shape layer's fill and stroke swatches, a
-/// gradient fill's Foreground and Background stops, the adjustment editors' swatches). Every other panel shows only what
-/// every version holds.
+/// the answer that picker left, the Histogram the adjustment preview it counts. Brush Settings and Brushes show the
+/// brush and its presets; Color, Swatches, Gradients and the Gradient Editor show the colours, and so do Properties (a
+/// shape layer's fill and stroke swatches, a gradient fill's Foreground and Background stops, the adjustment editors'
+/// swatches) and Character (the colour of new type is the foreground). Character and Paragraph show the type
+/// defaults. Every other panel shows only what every version holds.
 pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
     match id {
         "navigator" => version(app, view(app)),
@@ -41,6 +47,9 @@ pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
         "modifierKeys" => version(app, app.ui.shell.latched),
         "properties" => version(app, (crate::color_picker_ui::window_picker_state(app, PickWindow::Properties), colours(app))),
         "brushSettings" | "brushes" => version(app, brush(app)),
+        "histogram" => version(app, adjustment_preview(app)),
+        "character" => version(app, (colours(app), type_defaults(app))),
+        "paragraph" => version(app, type_defaults(app)),
         "color" | "swatches" | "gradients" | "gradientEditor" => version(app, colours(app)),
         _ => version(app, ()),
     }
@@ -82,6 +91,19 @@ fn version(app: &PhotocraftApp, extra: impl Hash) -> u64 {
 /// The brush and its presets, for the regions that show them: their revisions move with every change of either.
 fn brush(app: &PhotocraftApp) -> (u64, u64) {
     (app.session.tools.brush_rev, app.session.tools.presets_rev)
+}
+
+/// The Type tool's defaults for new type, for the regions that show them with no type target: an edit in one of them
+/// with nothing targeted changes the defaults and runs no command.
+fn type_defaults(app: &PhotocraftApp) -> impl Hash + '_ {
+    let o = &app.ui.tool_options;
+    (&o.type_font, &o.type_style, o.type_size.to_bits(), &o.type_aa, &o.type_align, &o.type_direction, &o.type_style_defaults)
+}
+
+/// The adjustment preview the Histogram counts while it shows: an adjustment layer's Properties drag (its proposed
+/// values) or an Image › Adjustments dialog's preview. Both change on every move with no command until the release.
+fn adjustment_preview(app: &PhotocraftApp) -> impl Hash + '_ {
+    (app.live_adjust.as_ref(), crate::adjust_preview::shown_key(app))
 }
 
 /// The foreground and background colours, for the regions that show them.
@@ -126,17 +148,31 @@ mod tests {
         changed("the colours", &|app| app.session.tools.foreground[0] = 0.25, &mut app);
     }
 
-    /// The brush and the colours move the versions of the regions that show them and of no other, so a drag that edits
-    /// one leaves the rest settled; a version that missed one would replay a stale region.
+    /// The brush, the colours, the type defaults and an adjustment's live preview move the versions of the regions that
+    /// show them and of no other, so a drag that edits one leaves the rest settled; a version that missed one would
+    /// replay a stale region.
     #[test]
     fn the_brush_and_the_colours_move_only_the_regions_that_show_them() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         let regions = |app: &PhotocraftApp| -> Vec<(&'static str, u64)> {
-            let mut all: Vec<(&'static str, u64)> =
-                ["layers", "history", "navigator", "properties", "brushSettings", "brushes", "color", "swatches", "gradients", "gradientEditor"]
-                    .into_iter()
-                    .map(|id| (id, panel(app, id)))
-                    .collect();
+            let mut all: Vec<(&'static str, u64)> = [
+                "layers",
+                "history",
+                "navigator",
+                "histogram",
+                "properties",
+                "character",
+                "paragraph",
+                "brushSettings",
+                "brushes",
+                "color",
+                "swatches",
+                "gradients",
+                "gradientEditor",
+            ]
+            .into_iter()
+            .map(|id| (id, panel(app, id)))
+            .collect();
             all.extend([("optionsBar", options_bar(app)), ("statusBar", status_bar(app)), ("toolbar", toolbar_with(app, 1))]);
             all
         };
@@ -153,6 +189,10 @@ mod tests {
         let presets = moved(&mut app, &|app| app.session.tools.presets_rev += 1);
         assert_eq!(presets, ["brushSettings", "brushes", "optionsBar"], "the brush presets");
         let colours = moved(&mut app, &|app| app.session.tools.background[2] = 0.5);
-        assert_eq!(colours, ["properties", "color", "swatches", "gradients", "gradientEditor", "optionsBar", "toolbar"], "the colours");
+        assert_eq!(colours, ["properties", "character", "color", "swatches", "gradients", "gradientEditor", "optionsBar", "toolbar"], "the colours");
+        let type_defaults = moved(&mut app, &|app| app.ui.tool_options.type_size += 1.0);
+        assert_eq!(type_defaults, ["character", "paragraph", "optionsBar"], "the type defaults");
+        let preview = moved(&mut app, &|app| app.live_adjust = Some((photocraft_doc::LayerId(1), serde_json::json!({"brightness": 10}))));
+        assert_eq!(preview, ["histogram"], "an adjustment layer's live preview");
     }
 }

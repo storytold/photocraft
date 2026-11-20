@@ -933,6 +933,8 @@ mod move_bar_distribute_gear_tests;
 #[cfg(test)]
 mod doc_revision_trials;
 #[cfg(test)]
+mod region_version_trials;
+#[cfg(test)]
 mod layer_thumb_bounds_tests;
 #[cfg(test)]
 mod mask_thumb_refresh_tests;
