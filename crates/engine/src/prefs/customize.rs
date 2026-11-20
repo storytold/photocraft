@@ -316,45 +316,57 @@ fn apply_shortcut_changes(
     Ok(true)
 }
 
-/// Edit › Menus: hide/show items and give them colours.
+/// Edit › Menus: hide/show items and give them colours, and the named menu sets around them
+/// (`crate::menu_sets`: load one, save the menus as one, delete one, switch the one in use).
 pub(super) fn menus(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "edit.menus";
     let ids = |k: &str| -> Vec<String> {
         p.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
     };
-    const COLORS: [&str; 8] = ["none", "red", "orange", "yellow", "green", "blue", "violet", "gray"];
     if let Some(m) = p.get("color").and_then(Value::as_object) {
         for v in m.values() {
-            if let Some(c) = v.as_str().filter(|c| !COLORS.contains(c)) {
-                return Err(bad("edit.menus", format!("unknown colour `{c}` ({})", COLORS.join("|"))));
+            if let Some(c) = v.as_str().filter(|c| !crate::menu_sets::COLORS.contains(c)) {
+                return Err(bad(cmd, format!("unknown colour `{c}` ({})", crate::menu_sets::COLORS.join("|"))));
             }
         }
     }
     let (hide, show) = (ids("hide"), ids("show"));
     if let Some(id) = hide.iter().find(|id| !MenuCustomization::hideable(id)) {
-        return Err(bad("edit.menus", format!("`{id}` can't be hidden")));
+        return Err(bad(cmd, format!("`{id}` can't be hidden")));
     }
-    s.edit_prefs(|pr| {
-        if p.get("reset").and_then(Value::as_bool) == Some(true) {
-            pr.menus = MenuCustomization::default();
+    // Every change lands at once, after all of it has been validated: a bad set name leaves the
+    // menus and the saved sets as they were.
+    let mut next = s.prefs().clone();
+    // A set loads first, so the call's own hide / show / colour changes apply on top of it.
+    crate::menu_sets::load(&mut next, p).map_err(|e| bad(cmd, e))?;
+    if p.get("reset").and_then(Value::as_bool) == Some(true) {
+        next.menus = MenuCustomization::default();
+    }
+    for id in hide {
+        if !next.menus.hidden.contains(&id) {
+            next.menus.hidden.push(id);
         }
-        for id in hide {
-            if !pr.menus.hidden.contains(&id) {
-                pr.menus.hidden.push(id);
-            }
-        }
-        pr.menus.hidden.retain(|h| !show.contains(h));
-        if let Some(m) = p.get("color").and_then(Value::as_object) {
-            for (id, v) in m {
-                match v.as_str() {
-                    Some(c) if c != "none" => {
-                        pr.menus.colors.insert(id.clone(), c.to_string());
-                    }
-                    _ => {
-                        pr.menus.colors.remove(id);
-                    }
+    }
+    next.menus.hidden.retain(|h| !show.contains(h));
+    if let Some(m) = p.get("color").and_then(Value::as_object) {
+        for (id, v) in m {
+            match v.as_str() {
+                Some(c) if c != "none" => {
+                    next.menus.colors.insert(id.clone(), c.to_string());
+                }
+                _ => {
+                    next.menus.colors.remove(id);
                 }
             }
         }
-    });
-    Ok(serde_json::to_value(&s.prefs().menus).unwrap_or_default())
+    }
+    // Then the sets are saved, deleted or switched, from the menus as they now stand.
+    crate::menu_sets::store(&mut next, p).map_err(|e| bad(cmd, e))?;
+    s.edit_prefs(|pr| *pr = next);
+    let prefs = s.prefs();
+    let mut out = serde_json::to_value(&prefs.menus).unwrap_or_default();
+    if let (Some(o), Value::Object(sets)) = (out.as_object_mut(), crate::menu_sets::describe(prefs)) {
+        o.extend(sets);
+    }
+    Ok(out)
 }
