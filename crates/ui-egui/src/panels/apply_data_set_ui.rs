@@ -235,7 +235,7 @@ fn revert(app: &mut PhotocraftApp) {
     if let Some(st) = app.session.document_mut(p.doc)
         && st.revision == p.revision
     {
-        st.doc = p.original;
+        *st.doc_mut() = p.original;
         shown(st, p.was_clean);
     }
 }
