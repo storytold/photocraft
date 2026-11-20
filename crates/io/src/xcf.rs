@@ -20,10 +20,6 @@ type Result<T> = std::result::Result<T, IoError>;
 #[cfg(test)]
 pub(crate) const MAX_SIDE: u32 = craft_xcf::MAX_SIDE;
 pub(crate) const MAX_PIXEL_BYTES: usize = craft_xcf::MAX_PIXEL_BYTES;
-#[cfg(test)]
-const MAX_STRING: usize = craft_xcf::MAX_STRING;
-#[cfg(test)]
-const TILE: u32 = craft_xcf::TILE;
 
 fn invalid(message: impl Into<String>) -> IoError {
     IoError::Xcf(message.into())
@@ -301,7 +297,7 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     }
 
     let mut document = Document::new(name, Size::new(image.width, image.height), mode, depth);
-    document.layers = layers;
+    document.layers = layers.into();
     document.channels = channels;
     document.selection = selection;
     if let Some((x, y)) = image.resolution.filter(|(x, _)| *x > 0.0 && *x < 1.0e6) {

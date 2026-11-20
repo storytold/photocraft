@@ -10,13 +10,13 @@
 
 use std::sync::Arc;
 
+use craft_psd::resources::ids;
+use craft_psd::tiff::{ByteOrder, ImageSourceData, resources_from_bytes, resources_to_bytes};
+use craft_psd::{ColorMode as PsdMode, Compression, Header, ImageData, ImageResource, ResolutionInfo};
 use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType as CSample};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{AlphaChannel, Document};
 use photocraft_geom::Rect;
-use craft_psd::resources::ids;
-use craft_psd::tiff::{ByteOrder, ImageSourceData, resources_from_bytes, resources_to_bytes};
-use craft_psd::{ColorMode as PsdMode, Compression, Header, ImageData, ImageResource, ResolutionInfo};
 use photocraft_raster::Surface;
 
 use crate::flat::{csample, encode_image, image_to_document, layout_for, single_layer, try_buffer};
@@ -380,7 +380,7 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     } else {
         doc
     };
-    let (mut file, w) = crate::with_span(ctl, 0.0, TIFF_MODEL_DONE, |ctl| crate::psd_export::document_to_psd_interruptible(doc, &psd_opts, ctl));
+    let (mut file, w) = crate::with_span(ctl, 0.0, TIFF_MODEL_DONE, |ctl| crate::psd_export::document_to_psd_interruptible(doc, &psd_opts, ctl))?;
     // A cancelled conversion stops early with an incomplete model: never encode it.
     ctl.check().map_err(|_| IoError::Cancelled)?;
     warnings.extend(w);
@@ -391,7 +391,7 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     let (layers, w) = match tiff_image_source(doc, &mut file, save_transparency && has_alpha).into_bytes(order) {
         Err(craft_psd::PsdError::LimitExceeded(_)) if !force_psb => {
             let psb_opts = PsdExportOptions { force_psb: true, ..psd_opts };
-            let (psb, w) = crate::with_span(ctl, 0.0, TIFF_MODEL_DONE, |ctl| crate::psd_export::document_to_psd_interruptible(doc, &psb_opts, ctl));
+            let (psb, w) = crate::with_span(ctl, 0.0, TIFF_MODEL_DONE, |ctl| crate::psd_export::document_to_psd_interruptible(doc, &psb_opts, ctl))?;
             ctl.check().map_err(|_| IoError::Cancelled)?;
             warnings.extend(w);
             warnings.push("layer data exceeds 4 GB; written with PSB-sized lengths, which some readers do not open".into());
