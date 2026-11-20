@@ -3,9 +3,9 @@ use super::{
     screen_picker, shortcuts, smart_svg_ui, tool_memory, transform_tool, type_tool, updates_ui, view_cmds, work_area,
 };
 use craft::ui::contract::Bind;
-use craft::ui::runtime::env::{Env, WindowKey};
+use craft::ui::runtime::env::WindowKey;
 use craft::ui::runtime::windows::WindowHost;
-use craft::ui::shell::{AppShell, ShellWords, Slot, SlotSize, slots};
+use craft::ui::shell::{AppShell, slots};
 
 impl PhotocraftApp {
     /// Close this frame's stage record (`frame_stages`): keep it if it was slow, and hand it to
@@ -224,12 +224,7 @@ impl PhotocraftApp {
         let panels_on = &self.ui.panels;
         let (menu_bar, options_bar, status_bar) = (panels_on.menu_bar, panels_on.options_bar, panels_on.status_bar);
         let window_title = panels::title_bar::window_title(self);
-        let options_slot = Slot::new(slots::OPTIONS)
-            .visible(options_bar && !home)
-            .reveal()
-            .size(SlotSize::OptionsBar)
-            .label(Env::of(ui).words::<ShellWords>().options.clone());
-        let versions = (panels::region_versions::options_bar(self), panels::region_versions::status_bar(self));
+        let versions = (panels::region_versions::options_bar(self), panels::region_versions::status_bar(self), panels::region_versions::title_bar(self));
         // The shell binds a copy of the mode, since `show` takes the app too; the copy goes back
         // to the view after the pass.
         let mut mode = self.ui.view.screen_mode;
@@ -238,7 +233,8 @@ impl PhotocraftApp {
             .window_title(window_title)
             .screen_mode(Bind::bound(&mut mode))
             .title_bar_if(menu_bar, |ui, _cx, app| panels::title_bar(app, ui))
-            .top(options_slot, |ui, _cx, app| panels::options_bar(app, ui))
+            .content(slots::TITLE, versions.2)
+            .options_bar(options_bar && !home, |ui, _cx, app| panels::options_bar(app, ui))
             .content(slots::OPTIONS, versions.0)
             .status(status_bar && !home, |ui, _cx, app| panels::status_bar(app, ui))
             .content(slots::STATUS, versions.1)

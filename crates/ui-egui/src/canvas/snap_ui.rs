@@ -63,7 +63,7 @@ fn moving_set(app: &PhotocraftApp) -> Vec<LayerId> {
     {
         let moving = app.doc_queries.moving(&app.session, st, || {
             let selected = st.selected_layers();
-            let whole = crate::move_ui::with_descendants(&st.doc, &move_targets(&st.doc, &selected));
+            let whole = crate::move_ui::with_descendants(&st.doc, &move_targets(&st.doc, selected));
             MovingLayers { selected: selected.into(), whole: whole.into() }
         });
         // Selected pixels float off the selected layers alone (a floating piece never snaps to its own layer), so
