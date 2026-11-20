@@ -92,12 +92,18 @@ pub(crate) fn settings_opened(ctx: &egui::Context) {
     ctx.data_mut(|data| {
         let generation = data.get_temp_mut_or_default::<u64>(generation_id());
         *generation = generation.wrapping_add(1);
-        data.remove_temp::<SettingsAction>(settings_action_id());
+        data.remove::<SettingsAction>(settings_action_id());
     });
 }
 
 pub(crate) fn take_settings_action(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId) {
-    let Some(action) = ctx.data_mut(|data| data.remove_temp::<SettingsAction>(settings_action_id())) else { return };
+    let action = ctx.data_mut(|data| {
+        let id = settings_action_id();
+        let action = data.get_temp::<SettingsAction>(id)?;
+        data.remove::<SettingsAction>(id);
+        Some(action)
+    });
+    let Some(action) = action else { return };
     let result = pick_settings(app, id, action);
     if let Err(error) = result
         && error != crate::file_dialog::CANCELLED
