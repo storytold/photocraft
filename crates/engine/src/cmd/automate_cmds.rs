@@ -515,7 +515,13 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
         let none = Vec::new();
         let entries = crate::file_cmds::error_log_entries(r.get("errors").and_then(Value::as_array).unwrap_or(&none));
         let bytes = crate::file_cmds::encode_droplet_error_log(entries.iter().map(|(file, error)| (file.as_str(), error.as_str())));
-        if let Err(error) = write_file(&log, &bytes) {
+        // The log may never replace a file of its own run: the same rule Batch applies to its log
+        // (#13665), checked here against the dropped inputs and the results the run just wrote.
+        let written: Vec<String> =
+            r.get("files").and_then(Value::as_array).map(|files| files.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
+        if inputs.iter().chain(written.iter()).any(|file| crate::file_cmds::same_destination(&log, file)) {
+            result["errorLogError"] = json!(crate::file_cmds::ERROR_LOG_CONFLICT);
+        } else if let Err(error) = write_file(&log, &bytes) {
             result["errorLogError"] = json!(error.to_string());
         }
     }
