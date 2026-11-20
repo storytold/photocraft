@@ -67,7 +67,7 @@ PhotoCraft is a native image editor in Rust (egui/eframe on wgpu; the web build 
 
 Layout, by layer (`cargo xtask layers` checks it; register new crates in `xtask/src/layers.rs`):
 
-- `crates/geom color raster psd codecs tablet`: L0. `doc`: L1. `ops paint algo text vector`: L2. `compose gpu format`: L3. `io plugins`: L4. `engine`: L5, the session and command registry. `ui-egui automation`: L6, the egui shell and MCP server.
+- `crates/geom color raster`: L0, with the standalone L0 crates `ipp raw tablet` (no workspace dependencies). `doc`: L1. `ops paint algo text vector`: L2. `compose gpu format`: L3. `io plugins`: L4. `engine`: L5, the session and command registry. `ui-egui automation`: L6, the egui shell and MCP server. `testkit` and `oil-round-proof` are test helpers.
 - `apps/photocraft` (desktop), `apps/photocraft-cli` (headless CLI, MCP), `apps/photocraft-web`, `xtask/`.
 - Every action is an engine command; ids match `crates/ui-egui/src/menu_catalog.rs`, which makes the menu item live. Panels dispatch command ids.
 
@@ -86,7 +86,7 @@ cargo xtask test-corpus      # psd, io, codecs, compose, gpu, text, format
 
 Conventions and paths:
 
-- `unsafe` is allowed only in `crates/tablet/src/macos.rs` and `windows.rs`; the workspace sets `unsafe_code = "forbid"`. Every new crate sets `[lints] workspace = true`.
+- `unsafe` is allowed only in `crates/tablet/src/macos.rs` and `windows.rs`; the workspace sets `unsafe_code = "forbid"`. The example plug-in in `examples/plugins/` is outside the workspace and uses `unsafe` for the WebAssembly host calls. Every new crate sets `[lints] workspace = true`.
 - Attribution file: `ATTRIBUTION.md`. Fonts come from storytold/craft-fonts through `CRAFT_FONTS_DIR` (`docs/development.md` > Fonts).
 - Test corpora: storytold/photocraft-corpus, fetched into `corpus/` by `cargo xtask corpus --all` at the pins in `xtask/src/corpus_pins.rs`.
 - Feature names are recorded in `docs/feature-names.md`.

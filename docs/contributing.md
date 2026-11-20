@@ -51,7 +51,7 @@
 ```text
 crates/
   geom color raster          L0 foundation (geometry, pixel formats + blend math, COW tiles); ICC colour management is craft-cms (craft-libs)
-  psd codecs                 L0 standalone format crates (no workspace deps; publishable)
+  ipp raw                    L0 standalone crates (no workspace deps): CUPS printing client, camera-raw develop
   tablet                     L0 standalone pen tablet input (macOS AppKit, X11 XInput2, Windows barrel button); the one isolated unsafe crate
   doc                        L1 document model (layers, masks, adjustments, effects, smart objects: pure data)
   ops paint algo text vector L2 history, brush engine, imaging algorithms, type engine, paths/shapes
@@ -59,7 +59,7 @@ crates/
   io plugins                 L4 document <-> PSD / flat formats; sandboxed WebAssembly plug-ins
   engine                     L5 Session + command registry (every action is a command)
   ui-egui automation         L6 egui shell (thin: all actions go through the engine); MCP server
-  testkit                    test helpers
+  testkit oil-round-proof    test helpers
 apps/
   photocraft                 desktop app (eframe/wgpu), TCP control server
   photocraft-cli             headless CLI (convert/info/run/batch/commands/mcp)
@@ -94,7 +94,7 @@ When parity rises, raise `FLOOR` in `crates/ui-egui/src/parity.rs` (never lower 
 cargo test -p <crates you touched>
 cargo clippy -p <crates> --all-targets -- -D warnings
 cargo xtask layers
-cargo xtask panel-commands  # if you touched ui-egui: click handlers dispatch command ids (rule 1)
+cargo xtask panel-commands  # if you touched ui-egui: click handlers dispatch command ids (AGENTS.md rule 14)
 cargo xtask wasm            # if you touched L0–L6
 cargo xtask parity          # if you added commands; commit the regenerated docs/parity-checklist.md
 cargo test -p photocraft-engine --test panic_hunt -- --ignored   # hostile-input sweep over every command
