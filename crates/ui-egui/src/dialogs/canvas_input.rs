@@ -293,7 +293,7 @@ pub(crate) fn cursor(app: &PhotocraftApp, pick: DialogPick) -> Cursor {
             pipette(badge)
         }
         DialogPick::CurvesPoint => pipette(None),
-        DialogPick::ShadowDrag | DialogPick::GradientDrag | DialogPick::PatternPhase => Cursor::System(CursorIcon::Move),
+        DialogPick::ShadowDrag | DialogPick::SatinDrag | DialogPick::GradientDrag | DialogPick::PatternPhase => Cursor::System(CursorIcon::Move),
         DialogPick::Locator => Cursor::Painted(PaintedCursor::Locator),
     }
 }
