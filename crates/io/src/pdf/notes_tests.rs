@@ -17,7 +17,7 @@ fn doc_with(notes: Vec<Note>, dpi: f32) -> Document {
     let mut s = Surface::new(fmt);
     let px: Vec<f32> = [1.0, 1.0, 1.0, 1.0].iter().copied().cycle().take(600 * 400 * 4).collect();
     s.write_region(Rect::from_xywh(0, 0, 600, 400), &px);
-    d.layers = vec![Layer::new("Paper", LayerContent::Raster(s))];
+    d.layers = vec![Layer::new("Paper", LayerContent::Raster(s))].into();
     d.resolution_dpi = dpi;
     d.notes = notes;
     d
