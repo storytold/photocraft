@@ -248,7 +248,41 @@ fn change_path(app: &mut PhotocraftApp, change: &PathEdit, refs: &[PathRef], too
         }
         // A hit right at a segment's end is an anchor (anchors win the hit test), so `t` is inside.
         PathEdit::InsertAnchor { segment, t, by, .. } => add_and_move(app, r, "add-anchor", *segment, *t, [by.x, by.y], false),
+        // Add Anchor Point's drag: the new smooth anchor with its handles pulled out, as the Pen does (#12707).
+        PathEdit::PullAnchor { segment, t, out, in_ctrl, .. } => add_and_pull(app, r, *segment, *t, *out, *in_ctrl),
         _ => {}
+    }
+}
+
+/// `path.addAnchor` on the segment leaving `segment`, then the out handle of the new anchor (`knot + 1`) at `out`
+/// with the in handle opposite it (a smooth knot), or at `in_ctrl` once ⌥ broke the pair; one history step.
+fn add_and_pull(
+    app: &mut PhotocraftApp,
+    r: PathRef,
+    segment: KnotRef,
+    t: f64,
+    out: craft::behavior::kurbo::Point,
+    in_ctrl: Option<craft::behavior::kurbo::Point>,
+) {
+    let key = format!("add-anchor-{}", app.ui.alloc_id());
+    let add = json!({"subpath": segment.subpath, "knot": segment.knot, "t": t, "coalesce": key});
+    if command(app, r, "path.addAnchor", add).is_none() {
+        return;
+    }
+    let at = json!({"subpath": segment.subpath, "knot": segment.knot + 1});
+    let mut convert = at.clone();
+    convert["out"] = json!([out.x, out.y]);
+    convert["coalesce"] = json!(key);
+    if command(app, r, "path.convertPoint", convert).is_none() {
+        return;
+    }
+    if let Some(to) = in_ctrl {
+        let mut handle = at;
+        handle["handle"] = json!("in");
+        handle["to"] = json!([to.x, to.y]);
+        handle["independent"] = json!(true);
+        handle["coalesce"] = json!(key);
+        command(app, r, "path.moveHandle", handle);
     }
 }
 

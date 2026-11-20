@@ -181,8 +181,8 @@ fn added_at(path: &Path, at: Point) -> (Path, [usize; 2]) {
     (p, added)
 }
 
-/// #8653: a drag from the click moves the anchor it adds, handles and all; the
-/// add and the move are one history step, for the Add Anchor Point tool and the Pen's Auto Add.
+/// #8653: a drag from the click moves the anchor the Pen's Auto Add adds, handles and all; for the Add Anchor Point
+/// tool it pulls the new anchor's handles out instead (#12707). The add and the drag are one history step.
 #[test]
 fn dragging_from_an_add_moves_the_new_anchor_in_one_step() {
     for tool in [Tool::AddAnchorPoint, Tool::Pen] {
@@ -192,8 +192,15 @@ fn dragging_from_an_add_moves_the_new_anchor_in_one_step() {
         let on = photocraft_vector::edit::eval(&before.subpaths[0].segments()[0], 0.5);
         drag(&mut app, [on.x, on.y], [on.x + 5.0, on.y + 15.0]);
         let (mut want, k) = added_at(&before, on);
-        photocraft_vector::edit::move_anchors(&mut want, &[k], [5.0, 15.0]).unwrap();
-        assert_close(&work(&app), &want, &format!("{tool:?}: the new anchor moved with its handles"));
+        if tool == Tool::AddAnchorPoint {
+            let knot = &mut want.subpaths[k[0]].knots[k[1]];
+            let out = Point::new(knot.anchor.x + 5.0, knot.anchor.y + 15.0);
+            *knot = photocraft_doc::Knot::smooth(knot.anchor, Point::new(2.0 * knot.anchor.x - out.x, 2.0 * knot.anchor.y - out.y), out);
+            assert_close(&work(&app), &want, "AddAnchorPoint: the new anchor's handles pulled out");
+        } else {
+            photocraft_vector::edit::move_anchors(&mut want, &[k], [5.0, 15.0]).unwrap();
+            assert_close(&work(&app), &want, &format!("{tool:?}: the new anchor moved with its handles"));
+        }
         assert_smooth(&work(&app).subpaths[0].knots[1]);
         assert_eq!(steps(&app), n + 1, "{tool:?}: one step");
         assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Add Anchor Point"));
