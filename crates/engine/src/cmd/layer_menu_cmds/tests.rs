@@ -548,7 +548,7 @@ fn stack_modes_render_from_the_nested_layers() {
         let g = Layer::new("stack", LayerContent::Group(photocraft_doc::Group { children: kids, expanded: true, artboard: None, frame_stroke: None }));
         let smart = crate::smart_cmds::layer_to_smart(doc, &g)?;
         let id = smart.id;
-        doc.layers = vec![smart];
+        doc.layers = vec![smart].into();
         *active = Some(id);
         Ok(())
     })

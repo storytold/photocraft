@@ -16,6 +16,7 @@ pub mod comps;
 pub mod effects;
 pub mod frame;
 pub mod import_conversion;
+pub mod layer_tree;
 pub mod mode;
 pub mod pattern;
 pub mod slices;
@@ -38,7 +39,7 @@ pub use effects::{
     GradientStyle, Satin, Shadow, StrokeFx, StrokePosition,
 };
 pub use frame::Frame;
-pub use mode::{ColorTable, Duotone, DuotoneInk, StackMode};
+pub use mode::{ColorIndices, ColorTable, Duotone, DuotoneInk, StackMode};
 pub use pattern::Pattern;
 pub use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 pub use photocraft_geom::{Affine, Rect, Size};
@@ -315,6 +316,17 @@ pub struct Effects {
 /// this up front; `photocraft-format` refuses to save deeper trees.
 pub const MAX_GROUP_DEPTH: usize = 100;
 
+thread_local! {
+    static WALKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times [`Document::walk`] ran on this thread. Count trials read it: a frame that
+/// changes nothing walks no document. Per thread, so tests running beside each other don't count
+/// each other's walks.
+pub fn walks() -> u64 {
+    WALKS.with(std::cell::Cell::get)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Group {
     pub children: Vec<Layer>,
@@ -390,6 +402,45 @@ impl Fill {
             Fill::Pattern { .. } => {}
         }
         self
+    }
+}
+
+/// Hashes every field, consistent with `PartialEq`: an `f32` hashes by its bits, with −0.0 as 0.0 (they compare
+/// equal). A NaN never equals anything, so any hash agrees with `PartialEq`; it hashes by its own bits, so a fill
+/// holding one keeps its hash. The patterns name every field, so a new field fails to compile here until it is hashed.
+impl std::hash::Hash for Fill {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        fn bits(v: f32) -> u32 {
+            if v == 0.0 { 0 } else { v.to_bits() }
+        }
+        fn color<H: std::hash::Hasher>(h: &mut H, c: &Color) {
+            let Color { mode, c, alpha } = c;
+            mode.hash(h);
+            c.map(bits).hash(h);
+            bits(*alpha).hash(h);
+        }
+        std::mem::discriminant(self).hash(h);
+        match self {
+            Fill::Solid(c) => color(h, c),
+            Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align } => {
+                stops.len().hash(h);
+                for (at, c) in stops {
+                    bits(*at).hash(h);
+                    color(h, c);
+                }
+                [*angle, *scale, offset.0, offset.1].map(bits).hash(h);
+                std::mem::discriminant(style).hash(h);
+                (reverse, dither, align).hash(h);
+                opacity_stops.len().hash(h);
+                opacity_stops.iter().for_each(|(a, b)| [bits(*a), bits(*b)].hash(h));
+                midpoints.len().hash(h);
+                midpoints.iter().for_each(|m| bits(*m).hash(h));
+            }
+            Fill::Pattern { name, scale, id, angle, link, phase } => {
+                (name, id, link).hash(h);
+                [*scale, *angle, phase.0, phase.1].map(bits).hash(h);
+            }
+        }
     }
 }
 
@@ -901,7 +952,7 @@ pub struct Document {
     pub depth: SampleType,
     pub icc_profile: Option<Arc<Vec<u8>>>,
     /// Bottom-to-top.
-    pub layers: Vec<Layer>,
+    pub layers: layer_tree::LayerTree,
     pub channels: Vec<AlphaChannel>,
     pub guides: Guides,
     /// The rulers' zero point in document pixels (`[x, y]`), dragged from the ruler corner. The
@@ -930,6 +981,10 @@ pub struct Document {
     pub patterns: Vec<Pattern>,
     /// Indexed Color palette (Image › Mode › Color Table). Set while `mode` is Indexed.
     pub color_table: Option<ColorTable>,
+    /// Each pixel's Color Table index where it is known (recorded by opening a palette PNG, the
+    /// Indexed Color conversion and Color Table), so entries of one colour keep their own pixels
+    /// (#14342).
+    pub color_indices: Option<ColorIndices>,
     /// Duotone inks. Set while `mode` is Duotone.
     pub duotone: Option<Duotone>,
     /// Window › Layer Comps, top to bottom as listed in the panel.
@@ -1004,7 +1059,7 @@ impl Document {
             mode,
             depth,
             icc_profile: None,
-            layers: Vec::new(),
+            layers: Default::default(),
             channels: Vec::new(),
             guides: Guides::default(),
             ruler_origin: [0.0, 0.0],
@@ -1018,6 +1073,7 @@ impl Document {
             quick_mask_unselected: false,
             patterns: Vec::new(),
             color_table: None,
+            color_indices: None,
             duotone: None,
             layer_comps: Vec::new(),
             last_applied_comp: None,
@@ -1088,8 +1144,8 @@ impl Document {
     }
 
     /// Every pixel surface the document holds: layer pixels and caches, masks, smart filter
-    /// masks, video frames (including the originals), channels, the quick mask, patterns and
-    /// the selection. History snapshots and saves cover exactly these tiles.
+    /// masks, video frames (including the originals), channels, the quick mask, the Color Table
+    /// indices, patterns and the selection. History snapshots and saves cover exactly these tiles.
     pub fn for_each_surface(&self, mut visit: impl FnMut(&Surface)) {
         for (_, _, layer) in self.walk() {
             if let Some(surface) = layer.surface() {
@@ -1115,6 +1171,10 @@ impl Document {
         for channel in self.channels.iter().chain(&self.quick_mask) {
             visit(&channel.surface);
         }
+        if let Some(c) = &self.color_indices {
+            visit(&c.pixels);
+            visit(&c.indices);
+        }
         for pattern in &self.patterns {
             visit(&pattern.surface);
         }
@@ -1139,8 +1199,10 @@ impl Document {
         health
     }
 
-    /// Depth-first walk yielding `(path, depth, layer)` bottom-to-top.
+    /// Depth-first walk yielding `(path, depth, layer)` bottom-to-top. Each call counts in
+    /// [`walks`].
     pub fn walk(&self) -> Vec<(LayerPath, usize, &Layer)> {
+        WALKS.with(|n| n.set(n.get() + 1));
         fn rec<'a>(layers: &'a [Layer], prefix: &mut LayerPath, out: &mut Vec<(LayerPath, usize, &'a Layer)>) {
             for (i, l) in layers.iter().enumerate() {
                 prefix.push(i);
@@ -1156,23 +1218,13 @@ impl Document {
         out
     }
 
+    /// Every layer, nested ones included, counted from the layer index.
     pub fn layer_count(&self) -> usize {
-        self.walk().len()
+        self.layers.index().len()
     }
 
     pub fn path_of(&self, id: LayerId) -> Option<LayerPath> {
-        fn rec(layers: &[Layer], id: LayerId, path: &mut LayerPath) -> bool {
-            for (i, l) in layers.iter().enumerate() {
-                path.push(i);
-                if l.id == id || l.children().is_some_and(|ch| rec(ch, id, path)) {
-                    return true;
-                }
-                path.pop();
-            }
-            false
-        }
-        let mut path = Vec::new();
-        rec(&self.layers, id, &mut path).then_some(path)
+        self.layers.index().path(id).map(<[usize]>::to_vec)
     }
 
     /// The locks in force on the layer at `path`: its own and those of every group around it,
@@ -1211,10 +1263,7 @@ impl Document {
     }
 
     pub fn layer(&self, id: LayerId) -> Option<&Layer> {
-        fn rec(layers: &[Layer], id: LayerId) -> Option<&Layer> {
-            layers.iter().find_map(|l| if l.id == id { Some(l) } else { l.children().and_then(|ch| rec(ch, id)) })
-        }
-        rec(&self.layers, id)
+        self.layer_at(self.layers.index().path(id)?)
     }
 
     pub fn layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {
@@ -1392,6 +1441,32 @@ mod tests {
         assert_eq!(d.unused_link_group(), Some(1));
         with(&mut d, &[0, 1, 2, 4, u64::MAX]);
         assert_eq!(d.unused_link_group(), Some(3));
+    }
+
+    /// Id lookups share one index per document state: 100 lookups on 200 layers build it once,
+    /// an edit builds it once more, and a clone built after the edit has its own.
+    #[test]
+    fn layer_lookups_share_one_index_per_state() {
+        let mut d = doc();
+        for i in 0..199 {
+            d.layers.push(Layer::raster(format!("l{i}"), PixelFormat::RGBA8));
+        }
+        let ids: Vec<LayerId> = d.layers.iter().map(|l| l.id).collect();
+        let first = d.layers.index().serial();
+        for i in 0..100 {
+            let id = ids[i * 2];
+            assert_eq!(d.layer(id).unwrap().id, id);
+            assert_eq!(d.path_of(id), Some(vec![i * 2]));
+        }
+        assert_eq!(d.layers.index().serial(), first);
+        assert!(d.shift(ids[10], 1));
+        assert_eq!(d.path_of(ids[10]), Some(vec![11]));
+        let second = d.layers.index().serial();
+        assert_ne!(second, first);
+        d.layer_mut(ids[3]).unwrap().name = "x".into();
+        let copy = d.clone();
+        assert_ne!(copy.layers.index().serial(), d.layers.index().serial());
+        assert_eq!(copy.layer(ids[3]).unwrap().name, "x");
     }
 
     #[test]
