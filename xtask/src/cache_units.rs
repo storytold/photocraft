@@ -31,6 +31,23 @@ pub fn run(mut cmd: Command, what: &str) -> Result<(), String> {
     if status.success() { Ok(()) } else { Err(format!("{what}: exited with {status}")) }
 }
 
+/// Capture non-Cargo output while recording Cargo messages, for a command whose output is data.
+pub fn capture(mut cmd: Command, what: &str) -> Result<Vec<u8>, String> {
+    eprintln!("$ {what}");
+    let mut record = file().map(|file| OpenOptions::new().create(true).append(true).open(&file).map_err(|e| format!("{}: {e}", file.display()))).transpose()?;
+    let mut child = cmd.stdout(Stdio::piped()).spawn().map_err(|e| format!("{what}: failed to spawn: {e}"))?;
+    let stdout = child.stdout.take().expect("piped stdout");
+    let mut output = Vec::new();
+    let routed = if let Some(record) = &mut record {
+        route(BufReader::new(stdout), record, &mut output)
+    } else {
+        std::io::copy(&mut BufReader::new(stdout), &mut output).map(|_| ())
+    };
+    let status = child.wait().map_err(|e| format!("{what}: {e}"))?;
+    routed.map_err(|e| format!("{what}: reading output: {e}"))?;
+    if status.success() { Ok(output) } else { Err(format!("{what}: exited with {status}")) }
+}
+
 /// Records xtask's own units: `cargo xtask` builds it before it can record anything, and an
 /// unrecorded unit is trimmed from the entry and rebuilt next run. The build is fresh, so this only
 /// prints the messages.
@@ -72,5 +89,16 @@ mod tests {
         route(input.as_bytes(), &mut record, &mut out).unwrap();
         assert_eq!(String::from_utf8(record).unwrap(), "{\"reason\":\"compiler-artifact\",\"fresh\":true}\n{\"reason\":\"build-finished\",\"success\":true}\n");
         assert_eq!(String::from_utf8(out).unwrap(), "running 3 tests\ntest a ... ok\n");
+    }
+
+    #[test]
+    fn mixed_nextest_listing_keeps_json_separate_and_rejects_truncation() {
+        let input = b"{\"reason\":\"compiler-artifact\",\"fresh\":false}\n{\"rust-suites\":{}}\n";
+        let (mut record, mut listing) = (Vec::new(), Vec::new());
+        route(input.as_slice(), &mut record, &mut listing).unwrap();
+        assert_eq!(record, b"{\"reason\":\"compiler-artifact\",\"fresh\":false}\n");
+        assert!(serde_json::from_slice::<serde_json::Value>(&listing).is_ok());
+        listing.truncate(listing.len() - 3);
+        assert!(serde_json::from_slice::<serde_json::Value>(&listing).is_err());
     }
 }
