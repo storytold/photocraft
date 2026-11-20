@@ -401,7 +401,7 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     }
     let fmt = PixelFormat::new(ColorMode::Rgb, depth, true);
     let mut document = Document::new(name, Size::new(w, h), ColorMode::Rgb, depth);
-    document.layers = build(nodes, &reader.images, fmt, &mut reader.budget, ctl)?;
+    document.layers = build(nodes, &reader.images, fmt, &mut reader.budget, ctl)?.into();
     let xres = image.xres;
     let yres = image.yres;
     if xres > 0.0 && xres < 1.0e6 {

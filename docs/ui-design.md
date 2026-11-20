@@ -19,7 +19,7 @@
 
 Both Breeze themes are our own values close to Plasma's (not a copy of its colour schemes) and put text readability first: every text colour holds 4.5:1 on every surface and on hovered, pressed and selected states (`theme.rs` tests), so their secondary text, accent and status colours are darker (Light) or lighter (Dark) than Breeze's own, and the primary button is a deeper blue with white text.
 
-Edit → Preferences → Interface shows an Appearance Mode selector (Sync with system, Dark, Light) above separate light and dark theme cards with PhotoCraft editor previews and radio choices. Auto is opt-in and follows the operating system while the app is running. On Linux it reads the desktop portal once and then listens for its `SettingChanged` signal (no polling, and the UI repaints only when the value changes); `gsettings` runs at most once at start-up, by absolute path, when the portal gives no answer. A missing system appearance falls back to Dark. New installs keep Photoshop's default: Dark mode with Pro Medium (Pro Light is the saved light theme). Existing saved single-theme preferences migrate to a fixed Dark or Light mode with their chosen theme. The header appearance button cycles Auto → Light → Dark; its icon shows a monitor, moon or sun for the selected mode. Window → Theme and `ui.set {"theme":"classic"}` select a theme and fix the mode to its light or dark family.
+Edit → Preferences → Interface shows an Appearance Mode selector (Sync with system, Dark, Light) above separate light and dark theme cards with PhotoCraft editor previews and radio choices. Auto is opt-in and follows the operating system while the app is running. On Linux it reads the desktop portal once and then listens for its `SettingChanged` signal (no polling, and the UI repaints only when the value changes); `gsettings` runs at most once at start-up, by absolute path, when the portal gives no answer. A missing system appearance falls back to Dark. New installs keep Photoshop's default: Dark mode with Pro Medium (Pro Light is the saved light theme). Existing saved single-theme preferences migrate to a fixed Dark or Light mode with their chosen theme. Window → Appearance → Next Mode cycles Auto → Light → Dark. Window → Theme and `ui.set {"theme":"classic"}` select a theme and fix the mode to its light or dark family.
 
 Window → Theme and macOS PhotoCraft → Appearance also offer Sync with system. Its checkmark follows the saved Auto mode rather than the displayed palette; choosing a manual theme selects its fixed appearance mode.
 
@@ -28,8 +28,8 @@ The toolbar's foreground and background colour chips follow the `Tokens::round_c
 ## Rules
 
 - **Colours and radii come from tokens.** Read them with `Tokens::get(ctx)`; never hard-code a colour in a widget.
-- **Shared widgets live in `widgets.rs`:** `card` (panel group; Pro renders a Photoshop tab strip), `value_field`, `slider`/`slider_row`, `toggle`/`checkbox`, `primary_button`/`secondary_button`, `dropdown` (with a chevron icon), `hairline`/`vline`, `elided_label`, `label_column_width`/`column_label`.
-- **A label never overflows its row.** Wrap by default. Beside a fixed-width control, or anywhere the row cannot reflow, use `widgets::elided_label(ui, text, max_w)`: a longer translation shrinks with `…` and shows the full string on hover instead of running over its neighbours (#3580). A *redundant* caption may be dropped on a narrow dock where its control already carries the meaning (e.g. the Layers lock icons); an *essential* one elides. This mirrors Photoshop: a fixed layout with elision and tooltips, not per-locale reflow. A dialog's right-aligned label column ("Width:", "Contents:" in front of the fields) uses `widgets::label_column_width(ui, labels, min_w, max_w)` once per body and `widgets::column_label(ui, text, w)` per row: the column widens to the longest translation up to a cap that still leaves room for the fields, and elides past it (#9635). Never paint a right-aligned label without bounding it on the left.
+- **Shared widgets are framework components:** `Section` and `PaneFrame` (panel group), `TabStrip`, `NumberField`, `Slider`, `Switch`/`Checkbox`, `Button`, `Select` (with a chevron icon), `Divider`, `FooterBar`, `LabelColumn`/`Field`, `ColorChoice`/`Swatch`, `AngleDial`.
+- **A label never overflows its row.** Wrap by default. Beside a fixed-width control, or anywhere the row cannot reflow, use `Text` elision with a maximum width: a longer translation shrinks with `…` and shows the full string on hover instead of running over its neighbours (#3580). A *redundant* caption may be dropped on a narrow dock where its control already carries the meaning (e.g. the Layers lock icons); an *essential* one elides. This mirrors Photoshop: a fixed layout with elision and tooltips, not per-locale reflow. A dialog's right-aligned label column ("Width:", "Contents:" in front of the fields) uses `LabelColumn` with a `Field` per row: the column widens to the longest translation up to a cap that still leaves room for the fields, and elides past it (#9635). Never paint a right-aligned label without bounding it on the left.
 - **Icons:** Lucide SVGs in `assets/icons` (ISC licence), embedded via `icon_data.rs`. Regenerate that file when you add icons.
 - **Fonts:** Inter (UI) and JetBrains Mono (numbers), both OFL. Named families `medium` and `semibold` are available via `theme::medium()` and `theme::semibold()`.
 - **Photoshop layout grammar (Pro):**
@@ -71,7 +71,7 @@ samples and visible selection; opening the editor alone never changes a shape. I
 numeric input leaves the last valid style in effect. Fill and Stroke use clickable swatches
 that open Photoshop's paint popover (paint types, Color Picker button, Recently Used Colors, swatch
 folders, the Gradient tab; updated 2026-10-27), preserving alpha and offering No Color. Every other colour swatch
-(`widgets::color_edit_button*`: Photo Filter, Black & White tint, Gradient Map stops, Content-Aware
+(`ColorChoice`/`Swatch`: Photo Filter, Black & White tint, Gradient Map stops, Content-Aware
 Fill overlay, Filter Gallery glow, Save for Web colour table) opens the full Color Picker dialog,
 never egui's built-in picker. The style
 button remains available when no stroke is set; deliberately choosing a stroke colour or
@@ -100,11 +100,10 @@ missing-glyph boxes. Check every new panel with the offscreen snapshot tool (`do
 
 ## Title bar
 
-The app's top bar (`panels::title_bar`) starts with the brand mark (the app icon, `brand.rs`), then the menus, the document title and the workspace controls, like Photoshop's Ps tile and menu row.
+The app's top bar (`panels::title_bar`) starts with the brand mark (the app icon, `brand.rs`), then the menus and the document title, like Photoshop's Ps tile and menu row. Nothing else sits at its far end: the workspace switcher, command search and appearance mode live in Window › Workspace, Edit › Search and Window › Appearance.
 
-- **Windows and Linux:** the window has no OS decorations, so there is one bar, not two stacked. The top bar is the title bar (`titlebar.rs`): Minimize, Maximize/Restore and Close (red on hover, `caption_close` tokens) sit flush in the window's top-right corner, the free gap between the menus and the controls drags the window and a double-click there maximizes it, and invisible 5 pt edges (12 pt corners) resize it. Close runs File › Exit, so unsaved documents are asked about first.
+- **Windows and Linux:** the window has no OS decorations, so there is one bar, not two stacked. The top bar is the title bar (`titlebar.rs`): Minimize, Maximize/Restore and Close (red on hover, `caption_close` tokens) sit flush in the window's top-right corner, the free gap between the menus and the caption buttons drags the window and a double-click there maximizes it, and invisible 5 pt edges (12 pt corners) resize it. Close runs File › Exit, so unsaved documents are asked about first.
 - **macOS:** the traffic lights sit over the integrated title strip (`integrated_titlebar`).
-- **Narrow windows** drop controls that are also in a menu before anything overlaps: the theme toggle (Preferences), then search (Edit › Search), then the workspace switcher narrows (Window › Workspace).
 
 ## Compact tool controls
 
@@ -132,9 +131,9 @@ Horizontal and vertical ruler ticks, labels and pointer markers are clipped to t
 strips. Their intersection is a clear origin square, including when the view is panned, flipped
 or rotated; the origin square retains its ruler-unit context menu.
 
-An embedding application's `panels.menu_bar` and `panels.rail` flags belong to its current
-session. Restoring a saved workspace or remembered panel layout preserves both flags, including
-when the serialized layout contains their values. Panel visibility, dock layout, tabs and Timeline
+An embedding application's `panels.menu_bar` flag belongs to its current session. Restoring a
+saved workspace or remembered panel layout preserves it, including when the serialized layout
+contains its value. Panel visibility, dock layout, tabs and Timeline
 visibility follow the saved layout.
 
 The Pro status bar's Document Dimensions readout follows Preferences › Units & Rulers › Rulers,
@@ -144,7 +143,7 @@ and picas. The readout retains the document's pixels-per-inch value.
 
 `menu_catalog.rs` holds Photoshop's menu tree (standard command names, order, separators, default shortcuts). Items whose id matches an engine or UI command are live; others render disabled until implemented. Give new commands the catalogue's id (for example `image.imageSize`) and they light up in the right place automatically.
 
-Menus never run off the window: the menu bar's menus and submenus scroll with arrows (`menu_nav::level`), and long right-click menus (Layers, canvas tools, Channels, Paths, document tabs) wrap their rows in `widgets::menu_scroll`, so they move up to fit and scroll only when taller than the visible window.
+Menus never run off the window: the menu bar's menus and submenus scroll with arrows (`menu_nav::level`), and long right-click menus (Layers, canvas tools, Channels, Paths, document tabs) use framework menu strips, so they move up to fit and scroll only when taller than the visible window.
 
 ## Automation for visual checks
 
@@ -240,7 +239,7 @@ Languages shipped (`complete_menus` marks a catalog that covers every menu strin
   never from another product's localisation resources.
 
 Localised so far: menus, the command palette, dialogs and panels (literals wrapped in `tl!("…")`;
-widgets such as `checkbox`, `slider_row`, `dropdown` and the buttons translate their labels
+components such as `Checkbox`, `Slider`, `Select` and `Button` translate their labels
 themselves). A string with no entry in a catalog shows in English; `cargo xtask i18n-report`
 lists the missing strings per language, and `cargo xtask ci` prints that list without failing.
 Not translated: status-bar

@@ -9,5 +9,6 @@ mod float_roundtrip;
 mod frame_stroke;
 mod layer_labels;
 mod roundtrip;
+mod scratch_retry;
 mod smart_contents;
 mod triangle_live;

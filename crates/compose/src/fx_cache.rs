@@ -1,7 +1,7 @@
 use super::composite::texture_ctx;
 use super::ctx::{Ctx, PREPARE_DEPTH};
-use super::extents::{effect_shape, effect_source_bounds};
-use super::{Layer, LayerContent, Rect, Surface, advanced, effects};
+use super::extents::{effect_shape_with, effect_source_bounds};
+use super::{BufferAlloc, InfallibleBufferAlloc, Layer, LayerContent, Rect, Surface, advanced, effects};
 
 // ---------------------------------------------------------------------------------------------
 // Layer-effect map cache
@@ -207,6 +207,13 @@ const MAX_FX_BUILD_BYTES: u64 = if cfg!(target_pointer_width = "64") { 4 << 30 }
 /// canvas grown likewise; see [`effect_region`]), built once per layer state and shared by every
 /// tile. `rect` is what the caller composites the layer over (see [`effect_region`]).
 pub(crate) fn effect_maps(layer: &Layer, rect: Rect, cx: &Ctx) -> std::sync::Arc<effects::FxMaps> {
+    match effect_maps_with(layer, rect, cx, &InfallibleBufferAlloc) {
+        Ok(maps) => maps,
+        Err(never) => match never {},
+    }
+}
+
+pub(crate) fn effect_maps_with<A: BufferAlloc>(layer: &Layer, rect: Rect, cx: &Ctx, alloc: &A) -> Result<std::sync::Arc<effects::FxMaps>, A::Error> {
     use std::hash::{Hash, Hasher};
     let (mut region, clipped) = effect_region(layer, rect, cx);
     // Non-local effects keep their whole source region, which a few distant pixels stretch over
@@ -217,8 +224,8 @@ pub(crate) fn effect_maps(layer: &Layer, rect: Rect, cx: &Ctx) -> std::sync::Arc
     }
     static NO_CACHE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *NO_CACHE.get_or_init(|| std::env::var_os("PHOTOCRAFT_FX_NOCACHE").is_some()) {
-        let shape = if region.is_empty() { Vec::new() } else { effect_shape(layer, region, cx) };
-        return std::sync::Arc::new(effects::build_maps_prepared(layer, shape, region, &cx.light, &texture_ctx(layer, region, cx), cx.patterns));
+        let shape = if region.is_empty() { Vec::new() } else { effect_shape_with(layer, region, cx, alloc)? };
+        return Ok(std::sync::Arc::new(effects::build_maps_prepared(layer, shape, region, &cx.light, &texture_ctx(layer, region, cx), cx.patterns)));
     }
     let mut h = std::collections::hash_map::DefaultHasher::new();
     cx.layer_keys.identity(layer, cx.doc).hash(&mut h);
@@ -227,15 +234,22 @@ pub(crate) fn effect_maps(layer: &Layer, rect: Rect, cx: &Ctx) -> std::sync::Arc
     let key = h.finish();
     // Prepared for this render (see `prepare_effects`): no global lookup, no build.
     if let Some((m, _)) = cx.fx_maps.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
-        return m.clone();
+        return Ok(m.clone());
     }
-    let maps = cached_effect_maps(layer, region, key, cx);
-    cx.fx_maps.lock().unwrap_or_else(|e| e.into_inner()).entry(key).or_insert((maps, clipped)).0.clone()
+    let maps = cached_effect_maps_with(layer, region, key, cx, alloc)?;
+    Ok(cx.fx_maps.lock().unwrap_or_else(|e| e.into_inner()).entry(key).or_insert((maps, clipped)).0.clone())
 }
 
-fn build_fx_slot_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx, slot: &FxSlot) -> std::sync::Arc<effects::FxMaps> {
+fn build_fx_slot_maps_with<A: BufferAlloc>(
+    layer: &Layer,
+    region: Rect,
+    key: u64,
+    cx: &Ctx,
+    slot: &FxSlot,
+    alloc: &A,
+) -> Result<std::sync::Arc<effects::FxMaps>, A::Error> {
     let generation = photocraft_raster::spill::read_error_generation();
-    let shape: Vec<f32> = if region.is_empty() { Vec::new() } else { effect_shape(layer, region, cx) };
+    let shape: Vec<f32> = if region.is_empty() { Vec::new() } else { effect_shape_with(layer, region, cx, alloc)? };
     let maps = effects::build_maps_prepared(layer, shape, region, &cx.light, &texture_ctx(layer, region, cx), cx.patterns);
     let mut pin = Vec::new();
     let mut readable = true;
@@ -248,7 +262,7 @@ fn build_fx_slot_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx, slot: &Fx
     let maps = std::sync::Arc::new(maps);
     if !readable || photocraft_raster::spill::check_since(generation).is_err() {
         // Built from a scratch placeholder: use it for this frame, never cache it.
-        return maps;
+        return Ok(maps);
     }
     if slot.set(FxEntry { maps: maps.clone(), _pin: pin, bytes }).is_ok() {
         // Counted exactly once, by the build that filled the slot, and only while the
@@ -259,7 +273,7 @@ fn build_fx_slot_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx, slot: &Fx
         }
     }
     // A concurrent build that finished first wins, so every tile shares one map.
-    slot.get().map_or(maps, |e| e.maps.clone())
+    Ok(slot.get().map_or(maps, |e| e.maps.clone()))
 }
 
 fn evict_fx_cache_over_budget(key: u64) {
@@ -291,7 +305,7 @@ fn evict_fx_cache_over_budget(key: u64) {
 /// the same layer; had it blocked on a once-init held further up its own stack, it would deadlock.
 /// Instead a miss builds the maps here and the first finished build is kept. Renders build every
 /// layer's maps before their parallel tiles (`prepare_effects`), so tiles rarely miss.
-fn cached_effect_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx) -> std::sync::Arc<effects::FxMaps> {
+fn cached_effect_maps_with<A: BufferAlloc>(layer: &Layer, region: Rect, key: u64, cx: &Ctx, alloc: &A) -> Result<std::sync::Arc<effects::FxMaps>, A::Error> {
     let slot = {
         let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
         if let Some(s) = c.map.get(&key) {
@@ -305,9 +319,25 @@ fn cached_effect_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx) -> std::s
     };
     let maps = match slot.get() {
         Some(e) => e.maps.clone(),
-        None => build_fx_slot_maps(layer, region, key, cx, &slot),
+        None => match build_fx_slot_maps_with(layer, region, key, cx, &slot, alloc) {
+            Ok(maps) => maps,
+            Err(error) => {
+                // Allocation failures never publish a partial cache entry. If another renderer
+                // finished the same slot while this one failed, use that complete result.
+                let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(entry) = slot.get() {
+                    entry.maps.clone()
+                } else {
+                    if c.map.get(&key).is_some_and(|current| std::sync::Arc::ptr_eq(current, &slot)) {
+                        c.map.remove(&key);
+                        c.order.retain(|candidate| *candidate != key);
+                    }
+                    return Err(error);
+                }
+            }
+        },
     };
     // Evict the oldest entries over budget (never the one just used).
     evict_fx_cache_over_budget(key);
-    maps
+    Ok(maps)
 }
