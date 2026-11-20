@@ -199,8 +199,11 @@ fn restore_extras(app: &mut PhotocraftApp, id: &str) {
 /// Makes workspace `id` current: its layout replaces the live one, its captured extras are restored, the dock's
 /// layout is remembered. The host's chrome flags (menu bar, rail) stay as the host has them.
 pub fn select(app: &mut PhotocraftApp, id: &str) -> Result<(), String> {
+    let switched = app.workspaces.set.current != id;
     app.workspaces.set.select(id, &mut app.ui.docking).map_err(refused)?;
-    crate::dock::finish_recovery(app);
+    if switched {
+        crate::dock::finish_recovery(app);
+    }
     restore_extras(app, id);
     crate::dock::persist(app);
     store(app);

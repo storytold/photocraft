@@ -115,8 +115,14 @@ fn choosing_or_resetting_to_the_same_arrangement_replaces_the_unreadable_layout(
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.prefs.edit(|p| p.workspace.remember_workspace_changes = true);
     let default = snapshot(&app);
+    let named = crate::workspace_ui::save(&mut app, "Same arrangement").unwrap();
     let mut saved = default.clone();
     saved["docking"] = json!({"version": 99, "fromFuture": [1, 2, 3]});
+    app.session.prefs.edit(|p| p.panel_layout = saved.clone());
+    restore(&mut app);
+    crate::workspace_ui::select(&mut app, &named).unwrap();
+    assert_eq!(snapshot(&app), saved, "reselecting the same workspace without a layout change keeps the original");
+
     for command in ["window.workspace.essentials", "workspace.reset"] {
         app.session.prefs.edit(|p| p.panel_layout = saved.clone());
         restore(&mut app);
