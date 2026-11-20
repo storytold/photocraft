@@ -83,7 +83,7 @@ fn convert_to_layers_unpacks_full_canvas_shapes_in_a_4k_document() {
     s.execute("file.new", json!({"width": 3840, "height": 2160})).unwrap();
     let placed = crate::file_cmds::place_bytes(&mut s, "Full.svg", svg.into_bytes(), None, &json!({"smartObject": true})).unwrap();
     let id = LayerId(placed["layer"].as_u64().unwrap());
-    let LayerContent::Smart(sm) = &mut Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().content else { panic!("smart") };
+    let LayerContent::Smart(sm) = &mut Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(id).unwrap().content else { panic!("smart") };
     sm.transform = Affine { m: [10.0, 0.0, 0.0, 10.0, 0.0, 0.0] };
     s.execute("layer.smartObjects.convertToLayers", json!({"layer": id.0})).unwrap();
 }

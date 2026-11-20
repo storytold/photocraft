@@ -102,8 +102,8 @@ fn sizes_zero_three_and_ten_keep_the_measured_profiles() {
 /// Every other case is bit-for-bit what it was: these are the coverage ramps and whole-map hashes
 /// `glow_map` gave on upstream/main c162cb6d6 before the fix, copied out of the probe run. They pin
 /// that the Size 1 kernel is taken only by the Softer Outer Glow of Size 1 with Spread 0 — Sizes 0,
-/// 0.5, 1.5, 2, 3, 10, 20 and 250, the Precise technique at Size 1, a Size 1 glow with Spread 50 %
-/// and the Inner Glow of Size 1 (#14924 keeps its own ticket) all keep today's map.
+/// 0.5, 1.5, 2, 3, 10, 20 and 250 and the Precise technique at Size 1, a Size 1 glow with Spread
+/// 50 % and the Inner Glow of Size 1 (main's #14924 arm, re-pinned below) all keep main's map.
 #[test]
 fn other_cases_are_unchanged() {
     let pin = |m: &Map, want: &[f64]| {
@@ -160,10 +160,13 @@ fn other_cases_are_unchanged() {
     assert_eq!(spread.get(200, 74), 1.0, "a spread Size 1 glow keeps its hard ring");
     assert_eq!(spread.get(200, 73), 0.0);
     assert_eq!(bit_hash(&spread), 0xac14_bc4f_e034_6225, "the spread Size 1 map moved");
-    // The Inner Glow of Size 1 (#14924) is not this ticket: it still draws nothing.
+    // The Inner Glow of Size 1 (#14924) landed on main after these pins were written: its Softer
+    // Edge arm now takes the same Size 1 taps, a quarter coverage on the first pixel inside the
+    // edge that Range 50 % doubles to a half. Re-pinned to main's map; this branch's `!inner`
+    // gate must not move it from there.
     let inner = glow_map(&document_shape(), &glow(1.0, 0.0), true, (0, 0));
-    assert_eq!(inner.get(200, 75), 0.0, "an inner glow of Size 1 still stays empty inside the edge");
-    assert_eq!(bit_hash(&inner), 0xe94d_157b_1934_6225, "the Size 1 inner glow map moved");
+    assert_eq!(inner.get(200, 75), 0.5, "the inner glow of Size 1 keeps main's #14924 ring");
+    assert_eq!(bit_hash(&inner), 0x257e_c850_ed34_6225, "the Size 1 inner glow map moved off main's #14924 map");
     assert_eq!(bit_hash(&glow_map(&document_shape(), &glow(7.0, 0.0), true, (0, 0))), 0x8af6_374a_dbf8_ef49, "the Size 7 inner glow map moved");
 }
 

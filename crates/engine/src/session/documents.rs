@@ -96,7 +96,7 @@ impl Session {
         if let Some(st) = self.active_mut()
             && st.active_layer != layer
         {
-            st.active_layer = layer;
+            st.set_active_layer(layer);
             st.bump_selection_revision();
         }
         self.note_layer_change(before);
@@ -258,7 +258,7 @@ impl Session {
 
 pub(super) fn fix_active(st: &mut DocState) {
     if st.active_layer.is_none_or(|id| st.doc.layer(id).is_none()) {
-        st.active_layer = st.doc.top_layer();
+        st.set_active_layer(st.doc.top_layer());
     }
     fix_selection(st);
     channel_cmds::fix_view(st);

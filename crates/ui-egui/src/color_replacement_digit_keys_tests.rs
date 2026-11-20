@@ -148,13 +148,17 @@ fn real_app_keys_set_tolerance_and_modifiers_leave_all_options_alone() {
     assert_eq!(layer(h.state()), before.2);
 }
 
-/// Keep the old Background Eraser fixture's unrelated no-target tools without reviving the removed file.
+/// Keep the existing isolation checks while Magic Eraser now has its own digit target (#11999).
 #[test]
-fn other_tools_without_digit_targets_still_ignore_digits() {
+fn other_tools_keep_their_current_digit_targets() {
     for tool in [Tool::Dodge, Tool::Smudge, Tool::MagicEraser] {
         let mut a = app(tool);
         let before = (a.session.tools.brush.clone(), layer(&a), a.ui.tool_options.clone());
+        let mut expected = before.clone();
+        if tool == Tool::MagicEraser {
+            expected.2.magic_eraser_opacity = 30.0;
+        }
         press(&mut a, 3, false, 0.0);
-        assert_eq!((a.session.tools.brush.clone(), layer(&a), a.ui.tool_options.clone()), before);
+        assert_eq!((a.session.tools.brush.clone(), layer(&a), a.ui.tool_options.clone()), expected);
     }
 }
