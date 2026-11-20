@@ -4,6 +4,7 @@
 use super::*;
 use crate::panels::registry::TOOLBAR;
 use craft::behavior::dock::{Action, DockPlacement, Target};
+use craft::ui::rails::ToolRail;
 use egui::{PointerButton, Pos2, Rect};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -16,6 +17,7 @@ fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(SIZE).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::AppTheme::pro());
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
+        app.run("prefs.set", json!({"path": "interface.language", "value": "en"})).expect("set the fixture's label language");
         app.run("file.new", json!({"width": 64, "height": 64})).expect("new document");
         app
     });
@@ -44,6 +46,20 @@ fn right_click(h: &mut Harness<'static, Box<PhotocraftApp>>, rect: Rect) {
         h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
         h.run_steps(1);
     }
+    h.run_steps(4);
+}
+
+fn drag(h: &mut Harness<'static, Box<PhotocraftApp>>, from: Pos2, to: Pos2) {
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    h.event(egui::Event::PointerMoved(from));
+    h.run_steps(1);
+    h.event(button(from, true));
+    h.run_steps(1);
+    for step in 1..=4 {
+        h.event(egui::Event::PointerMoved(from.lerp(to, step as f32 / 4.0)));
+        h.run_steps(2);
+    }
+    h.event(button(to, false));
     h.run_steps(4);
 }
 
@@ -89,20 +105,29 @@ fn flyouts_open_to_the_right_at_the_left_edge() {
 }
 
 #[test]
-fn the_floating_toolbar_switches_between_one_and_two_columns() {
+fn the_floating_toolbar_switches_columns_by_its_header_button() {
     let mut h = harness();
     h.state_mut().run("window.panel.float", json!({"panel": TOOLBAR, "column": true, "x": 350, "y": 90})).expect("the Tools palette floats");
     h.run_steps(4);
 
-    let steps = |app: &PhotocraftApp| {
-        app.ui.docking.layout.floating.iter().find(|window| window.panels().any(|panel| panel == TOOLBAR)).and_then(|window| window.column.steps)
+    let placement = |app: &PhotocraftApp| {
+        let window = app.ui.docking.layout.floating.iter().find(|window| window.panels().any(|panel| panel == TOOLBAR)).expect("floating Tools");
+        (window.rect, window.column.steps)
     };
-    assert_eq!(steps(h.state()), Some(1));
-    for (label, expected) in [("Show in two columns", 2), ("Show in one column", 1)] {
-        h.query_by_label(label).expect("the floating palette's column button").click();
-        h.run_steps(4);
-        assert_eq!(steps(h.state()), Some(expected));
-    }
+    assert_eq!(placement(h.state()).1, Some(1));
+    h.query_by_label("Show in two columns").expect("the floating palette's column button").click();
+    h.run_steps(4);
+    let (rect, steps) = placement(h.state());
+    assert_eq!(steps, Some(2));
+
+    let grid = ToolRail::<crate::state::Tool>::dock_grid(&h.ctx, 2);
+    let grip = Pos2::new(rect.left() + grid.width(2) - 1.0, rect.top() + 50.0);
+    drag(&mut h, grip, grip - egui::vec2(grid.step * 1.6, 0.0));
+    assert_eq!(placement(h.state()).1, Some(2), "dragging an edge leaves Tools at two columns");
+
+    h.query_by_label("Show in one column").expect("the floating palette's column button").click();
+    h.run_steps(4);
+    assert_eq!(placement(h.state()).1, Some(1));
 }
 
 #[test]
@@ -121,17 +146,7 @@ fn dropping_a_panel_just_above_or_below_the_document_tabs_leaves_it_floating() {
         let from = tab_named("Layers").center();
         let document = tab_named("Untitled");
         let to = Pos2::new(document.center().x, if above { document.top() - 1.0 } else { document.bottom() + 1.0 });
-        let button = |pos, pressed| egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
-        h.event(egui::Event::PointerMoved(from));
-        h.run_steps(1);
-        h.event(button(from, true));
-        h.run_steps(1);
-        for step in 1..=4 {
-            h.event(egui::Event::PointerMoved(from.lerp(to, step as f32 / 4.0)));
-            h.run_steps(2);
-        }
-        h.event(button(to, false));
-        h.run_steps(4);
+        drag(&mut h, from, to);
 
         let place = h.state().ui.docking.layout.place(&"layers".to_owned());
         assert!(matches!(place, Some(PanelPlace::Floating { .. })), "drop at {to:?}, above the tabs: {above}, place: {place:?}");
