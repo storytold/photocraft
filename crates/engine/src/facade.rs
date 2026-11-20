@@ -11,6 +11,7 @@ use std::ops::{Deref, DerefMut};
 
 /// The session type the engine hands to callbacks (a job's `apply`, for example). [`Session`]
 /// dereferences to it, so `&mut Session` passes wherever `&mut CoreSession` is asked for.
+/// `CoreSession::new()` and `default()` install no commands: an app constructs [`Session`].
 pub use photocraft_engine_core::Session as CoreSession;
 pub use photocraft_engine_core::*;
 

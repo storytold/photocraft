@@ -19,9 +19,12 @@ without a session installs first with `crate::install()`.
             files and of directories that disappeared, not new files at the old `src/` root)
             into `crates/engine-core/src`, except the top crate's `facade.rs`;
           - rewrites core's tests, which covers the branch's new tests;
-          - applies the branch's added and removed lines of `crates/engine/Cargo.toml`, per
-            section, to `crates/engine-core/Cargo.toml`: the dependencies live there. Resolve a
-            conflict in `crates/engine/Cargo.toml` by taking main's version first.
+          - applies the branch's added and removed entries of `crates/engine/Cargo.toml`, per
+            section, to the manifests: dependencies live in `crates/engine-core/Cargo.toml`, and
+            dev-dependencies go to the manifest whose tests or examples the branch touches (both
+            when it touches both or neither). Resolve a conflict in `crates/engine/Cargo.toml` by
+            taking main's version first. Entries are copied whole (multi-line values, comments
+            above them, `[dependencies.x]` tables).
 
 Core's tests, in test code only (`#[cfg(test)]` modules and items):
   `Session::new()` -> `crate::session()`;
@@ -29,7 +32,7 @@ Core's tests, in test code only (`#[cfg(test)]` modules and items):
   readers in READERS) and creates no session gets `crate::install().unwrap();` as its first line.
   `Session` leaves a `use crate::...`/`use super::...` line that the rewrite left it unused in.
 Running either mode twice gives the same result. Run `cargo fmt --all` after it: dropping an unused
-`Session` import can leave the others out of rustfmt's order. What it cannot do is listed at the end.
+`Session` import can leave the others out of rustfmt's order. What it cannot do is printed at the end of every run.
 """
 import argparse, os, re, sys
 
@@ -42,7 +45,9 @@ TOP_OWN = {"facade.rs"}
 OLD_CARGO = "crates/engine/Cargo.toml"
 CORE_CARGO = "crates/engine-core/Cargo.toml"
 
-SESSION_NEW = re.compile(r"\b(?:crate::)?Session::new\(\)")
+# `Session::new()` and `Session::default()` behind any lowercase module path (`crate::`, `super::`,
+# `session::`): the whole match becomes `crate::session()`.
+SESSION_NEW = re.compile(r"(?<![\w:])(?:[a-z_][a-z0-9_]*::)*Session::(?:new|default)\(\)")
 # Functions that read the command registry with no session to show an install happened.
 READERS = re.compile(
     r"\b(?:commands|cmd|registry)::(?:find|command_specs)\s*\(|\bcommand_specs\s*\(|"
@@ -188,49 +193,140 @@ def sections(text):
     return out
 
 
-def cargo_lines(base, head):
-    """The branch's Cargo.toml edits: {section: (added, removed)}, dependency lines only."""
-    b, h = git_show(base, OLD_CARGO), git_show(head, OLD_CARGO)
-    if b is None or h is None:
-        return {}
-    bs, hs = dict(sections(b)), dict(sections(h))
-    key = re.compile(r"^\s*[A-Za-z0-9_-]+\s*=")
-    out = {}
-    for sec in set(bs) | set(hs):
-        before, after = [x for x in bs.get(sec, []) if key.match(x)], [x for x in hs.get(sec, []) if key.match(x)]
-        added, removed = [x for x in after if x not in before], [x for x in before if x not in after]
-        if added or removed:
-            out[sec] = (added, removed)
+DEP_TABLE = re.compile(r"^\[(?:target\..*\.)?(?:dev-|build-)?dependencies\.[^\]]+\]$")
+KEY = re.compile(r"^\s*([A-Za-z0-9_.\"-]+)\s*=")
+
+
+def depth(line):
+    """Net opened brackets of a TOML line, ignoring strings and comments."""
+    line = re.sub(r'"(?:[^"\\]|\\.)*"|\'[^\']*\'', "", line)
+    line = line.split("#")[0]
+    return sum(line.count(c) for c in "{[") - sum(line.count(c) for c in "}]")
+
+
+def entries(lines):
+    """[(name, first, end, body)] of a section's `key = value` entries. `first` includes the comment
+    lines right above the key; a value that spans lines runs to its closing bracket."""
+    out, i, comment_from = [], 0, None
+    while i < len(lines):
+        line = lines[i]
+        if line.lstrip().startswith("#"):
+            comment_from = i if comment_from is None else comment_from
+            i += 1
+            continue
+        m = KEY.match(line)
+        if not m:
+            comment_from = None
+            i += 1
+            continue
+        end, d = i + 1, depth(line)
+        while d > 0 and end < len(lines):
+            d += depth(lines[end])
+            end += 1
+        out.append((m.group(1), i if comment_from is None else comment_from, end, lines[i:end]))
+        comment_from = None
+        i = end
     return out
 
 
-def apply_cargo(edits):
-    if not edits:
+def cargo_edits(base, head):
+    """The branch's Cargo.toml edits: [(op, header, name, text_lines, body)] with op add/remove/table_add/table_remove/table_change."""
+    b, h = git_show(base, OLD_CARGO), git_show(head, OLD_CARGO)
+    if b is None or h is None:
         return []
-    secs = sections(open(CORE_CARGO).read())
+    bs, hs = dict(sections(b)), dict(sections(h))
+    ops = []
+    for sec in sorted(set(bs) | set(hs)):
+        if DEP_TABLE.match(sec):
+            if sec not in bs:
+                ops.append(("table_add", sec, "", hs[sec], hs[sec]))
+            elif sec not in hs:
+                ops.append(("table_remove", sec, "", bs[sec], bs[sec]))
+            elif bs[sec] != hs[sec]:
+                ops.append(("table_change", sec, "", hs[sec], hs[sec]))
+            continue
+        be = {n: (f, e, body) for n, f, e, body in entries(bs.get(sec, []))}
+        he = {n: (f, e, body) for n, f, e, body in entries(hs.get(sec, []))}
+        for n, (f, e, body) in he.items():
+            if n not in be or be[n][2] != body:
+                ops.append(("add", sec, n, hs[sec][f:e], body))
+        for n, (f, e, body) in be.items():
+            if n not in he:
+                ops.append(("remove", sec, n, bs[sec][f:e], body))
+    return ops
+
+
+def trim_end(lines):
+    end = len(lines)
+    while end and not lines[end - 1].strip():
+        end -= 1
+    return end
+
+
+def apply_cargo(path, ops):
+    """Applies `ops` to the manifest at `path`; returns what it could not do."""
     problems = []
-    for sec, (added, removed) in sorted(edits.items()):
-        target = next((lines for header, lines in secs if header == sec), None)
-        if target is None:
-            secs.append((sec, []))
-            target = secs[-1][1]
-        for line in removed:
-            if line in target:
-                target.remove(line)
-        for line in added:
-            name = line.split("=")[0].strip()
-            if any(l.split("=")[0].strip() == name for l in target if "=" in l):
-                if line not in target:
-                    problems.append(f"{CORE_CARGO} {sec}: `{name}` is there already in another form; the branch has `{line.strip()}`")
+    secs = sections(open(path).read())
+    for op, sec, name, text, body in ops:
+        where = f"{path} {sec}"
+        found = next((lines for header, lines in secs if header == sec), None)
+        if op.startswith("table_"):
+            if op == "table_remove":
+                secs[:] = [(h, l) for h, l in secs if h != sec]
+            elif found is None:
+                secs.append((sec, text))
+            elif trim_end(found) and [x for x in found if x.strip()] != [x for x in text if x.strip()]:
+                problems.append(f"{where}: the table is there already in another form; the branch has {len(text)} lines for it")
+            continue
+        if found is None:
+            if op == "remove":
                 continue
-            end = len(target)
-            while end and not target[end - 1].strip():
-                end -= 1
-            target.insert(end, line)
-        print(f"{CORE_CARGO} {sec}: +{len(added)} -{len(removed)}")
+            secs.append((sec, []))
+            found = secs[-1][1]
+        have = next((e for e in entries(found) if e[0] == name), None)
+        if op == "remove":
+            if have is None:
+                continue
+            if have[3] != body:
+                problems.append(f"{where}: `{name}` changed on main since the branch's base; the branch removes it, remove it by hand")
+                continue
+            del found[have[1] : have[2]]
+        elif have is not None:
+            if have[3] != body:
+                problems.append(f"{where}: `{name}` is there already in another form; the branch has `{body[0].strip()}`")
+        else:
+            at = trim_end(found)
+            found[at:at] = text
     text = "\n".join(([] if not secs[0][1] else ["\n".join(secs[0][1])]) + [h + "\n" + "\n".join(lines) for h, lines in secs[1:]])
-    open(CORE_CARGO, "w").write(text if text.endswith("\n") else text + "\n")
+    open(path, "w").write(text if text.endswith("\n") else text + "\n")
     return problems
+
+
+def route_cargo(base, head, ops):
+    """{manifest: ops}. Dev-dependencies go to the manifest whose tests or examples the branch touches,
+    both when it touches both or neither; everything else to core. A normal dependency the branch adds
+    while it touches the top's tests or examples is also a dev-dependency of the top. An added feature
+    is not forwarded by the top: reported."""
+    files = git("diff", "--name-only", base, head).split()
+    core = any(f.startswith(OLD_SRC + "/") for f in files)
+    top = any(f.startswith(("crates/engine/tests/", "crates/engine/examples/")) for f in files)
+    both = core == top
+    out = {CORE_CARGO: [], OLD_CARGO: []}
+    notes = []
+    for op in ops:
+        kind, sec, name, text, body = op
+        if "dev-dependencies" in sec:
+            if both or core:
+                out[CORE_CARGO].append(op)
+            if both or top:
+                out[OLD_CARGO].append(op)
+            continue
+        out[CORE_CARGO].append(op)
+        if sec == "[dependencies]" and kind == "add" and top:
+            out[OLD_CARGO].append((kind, "[dev-dependencies]", name, text, body))
+        if sec == "[features]" and kind == "add":
+            notes.append(f"{OLD_CARGO} [features]: the branch adds `{name}`; the top crate forwards features, so add `{name} = [\"photocraft-engine-core/{name}\"]` there")
+    return out, notes
 
 
 def branch(base, head):
@@ -238,8 +334,25 @@ def branch(base, head):
         sys.exit(f"{CORE_SRC} is missing: rebase onto the split first")
     problems = stray_files()
     rewrite_tests(CORE_SRC)
-    problems += apply_cargo(cargo_lines(base, head))
+    routed, notes = route_cargo(base, head, cargo_edits(base, head))
+    problems += notes
+    for path, ops in routed.items():
+        if ops:
+            problems += apply_cargo(path, ops)
+            print(f"{path}: {len(ops)} edits")
     return problems
+
+
+CANNOT_DO = """
+What this script cannot do:
+  - Registry readers reached through another function. A test that calls `bindable_items`, a `menu_item_*`
+    function, `command_hints` or the like before it creates a session gets an install line only when the
+    reader or a helper in its own file is in READERS; CI's per-process runs find the rest ("NotInstalled").
+  - Cargo edits the top crate needs beyond the routing above: features it must forward (listed as NOT DONE),
+    and a dependency used by both `tests/` and core's tests when the branch's changes don't show it.
+  - Conflicted files: an unmerged path stops `git mv` part-way; resolve conflicts, then run it again.
+  - Non-test code: a new production `Session::new()` is left alone on purpose.
+"""
 
 
 def main():
@@ -255,6 +368,7 @@ def main():
     problems = split() if a.mode == "split" else branch(a.base, a.head)
     for line in problems or []:
         print("NOT DONE  " + line)
+    print(CANNOT_DO)
 
 
 if __name__ == "__main__":

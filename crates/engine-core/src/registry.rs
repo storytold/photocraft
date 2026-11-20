@@ -40,7 +40,7 @@ pub struct Install {
 
 /// Install `install` for this process. Installing the same tables again (the same names in the
 /// same order) does nothing. Different tables are refused with [`EngineError::InstallConflict`],
-/// and from then on every command fails with it and the registry lists nothing.
+/// and from then on every command fails with it and the registry readers ([`command_specs`], [`find`]) panic with it.
 pub fn install(install: Install) -> Result<()> {
     INSTALLED.install(install)
 }
