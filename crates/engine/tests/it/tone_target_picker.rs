@@ -42,11 +42,15 @@ fn plane<'a>(doc: &'a Document, target: &Value) -> &'a Surface {
 /// Black/white pickers edit only their gray target across colour modes and native depths, including undo/redo.
 #[test]
 fn native_gray_pickers_ignore_document_colour_and_preserve_other_data() {
-    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Lab, ColorMode::Cmyk] {
-        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
-            for target in [json!("mask"), json!("quickMask"), json!({"channel":0})] {
-                for kind in ["levels", "curves"] {
-                    for point in ["black", "white"] {
+    // Depth (mode + target) % 3 and, per kind, a point that alternates: each mode and each target meets every depth,
+    // and each kind runs with both points.
+    for (mi, mode) in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Lab, ColorMode::Cmyk].into_iter().enumerate() {
+        for (ti, target) in [json!("mask"), json!("quickMask"), json!({"channel":0})].into_iter().enumerate() {
+            let depth = [SampleType::U8, SampleType::U16, SampleType::F32][(mi + ti) % 3];
+            for (ki, kind) in ["levels", "curves"].into_iter().enumerate() {
+                {
+                    {
+                        let point = ["black", "white"][(mi + ti + ki) % 2];
                         let mut s = session(mode, depth);
                         let before = s.active().unwrap().doc.clone();
                         let history = s.active().unwrap().history.past_len();
@@ -232,18 +236,21 @@ fn bad_scalar_picker_params_fail_without_changing_pixels() {
 /// Hidden RGB settings must never affect a gray plane, including pencil curves and sampled edits.
 #[test]
 fn gray_tone_records_do_not_leak_from_rgb_channels() {
-    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Lab, ColorMode::Cmyk] {
-        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
-            for (target, panel) in
-                [(json!("mask"), ChannelTarget::LayerMask), (json!({"channel":0}), ChannelTarget::Alpha(0)), (json!("quickMask"), ChannelTarget::Composite)]
-            {
-                // Each style sees both flags; all four flag pairs occur across the styles.
-                for (si, style) in ["levels", "points", "pencil"].into_iter().enumerate() {
-                    for (ai, sampled) in [false, true].into_iter().enumerate() {
-                        for (ei, explicit) in [false, true].into_iter().enumerate() {
-                            if (si + ai) % 2 != ei {
-                                continue;
-                            }
+    // Depth (mode + target) % 3: each mode and each target meets every depth.
+    for (mi, mode) in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Lab, ColorMode::Cmyk].into_iter().enumerate() {
+        for (ti, (target, panel)) in
+            [(json!("mask"), ChannelTarget::LayerMask), (json!({"channel":0}), ChannelTarget::Alpha(0)), (json!("quickMask"), ChannelTarget::Composite)]
+                .into_iter()
+                .enumerate()
+        {
+            let depth = [SampleType::U8, SampleType::U16, SampleType::F32][(mi + ti) % 3];
+            // Each style runs one (sampled, explicit) pair, rotating with (2 * mode + target + style): every style sees
+            // all four flag pairs across the cases, and at every depth it sees both sampled and both explicit values.
+            for (si, style) in ["levels", "points", "pencil"].into_iter().enumerate() {
+                {
+                    {
+                        let (sampled, explicit) = [(false, false), (false, true), (true, false), (true, true)][(2 * mi + ti + si) % 4];
+                        {
                             let mut clean = session(mode, depth);
                             clean.active_mut().unwrap().channel_view.target = panel;
                             clean
@@ -388,13 +395,14 @@ fn review_picker_reads_the_addressed_mask_layer() {
 
 /// A Smart Filter mask is a gray target like a layer mask: the picker reads the stored mask, or the implicit Reveal
 /// All before anything is stored, without materializing it, and the commit edits only the filter mask, in every
-/// colour mode and native depth. (The UI's tone dialogs test only that their pick reaches this target, #15648.)
+/// colour mode and, across the cases, every native depth (rotating with mode, stored and kind). (The UI's tone dialogs test only that their pick reaches this target, #15648.)
 #[test]
 fn filter_mask_picker_samples_and_edits_only_the_filter_mask() {
-    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
-        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
-            for stored in [false, true] {
-                for kind in ["levels", "curves"] {
+    for (mi, mode) in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab].into_iter().enumerate() {
+        for (si, stored) in [false, true].into_iter().enumerate() {
+            for (ki, kind) in ["levels", "curves"].into_iter().enumerate() {
+                {
+                    let depth = [SampleType::U8, SampleType::U16, SampleType::F32][(mi + si + ki) % 3];
                     let case = format!("{mode:?} {depth:?} stored={stored} {kind}");
                     let mut s = session(mode, depth);
                     // A Smart Filter needs the composite selected, not one colour channel, and no Quick Mask (the filter

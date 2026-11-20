@@ -43,6 +43,8 @@ fn profile() -> Arc<Vec<u8>> {
             craft_cms::synth::cmyk_profile(&craft_cms::synth::CmykParams {
                 description: "Test Uncoated".into(),
                 tvi: [0.26, 0.26, 0.26, 0.3],
+                grid_a2b: 5,
+                grid_b2a: 9,
                 ..Default::default()
             })
             .unwrap()

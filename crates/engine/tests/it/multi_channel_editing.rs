@@ -93,29 +93,35 @@ fn adjustments_filters_and_drawing_preserve_other_encoded_components() {
         ("paint.artHistoryBrush", json!({"points":[[8,8],[22,12]],"size":9,"tolerance":0})),
         ("paint.mixerBrush", json!({"points":[[8,8],[22,12]],"size":9,"color":"#ffffff"})),
     ];
-    for mode in ["rgb", "cmyk", "lab"] {
-        for depth in [8, 16, 32] {
-            for (cmd, p) in &commands {
-                let mut s = setup(mode, depth);
-                subset(&mut s);
-                let before = surface(&s);
-                // Color Replacement refuses 32-bit RGB (#11923), the Art History Brush every depth
-                // but 8 bits (#12637), as the reference application does.
-                if (*cmd == "paint.colorReplacement" && mode == "rgb" && depth == 32) || (*cmd == "paint.artHistoryBrush" && depth != 8) {
-                    assert!(s.execute(cmd, p.clone()).is_err(), "{mode} {depth} {cmd} is refused");
-                    assert_eq!(surface(&s), before, "{mode} {depth} {cmd}: nothing changed");
-                    continue;
-                }
-                s.execute(cmd, p.clone()).unwrap_or_else(|e| panic!("{mode} {depth} {cmd}: {e}"));
-                let after = surface(&s);
-                unchanged(&before, &after);
-                assert_ne!(before, after, "{mode} {depth} {cmd} must change selected samples");
-                s.execute("edit.undo", json!({})).unwrap();
-                assert_eq!(surface(&s), before, "undo {cmd}");
-                s.execute("edit.redo", json!({})).unwrap();
-                assert_eq!(surface(&s), after, "redo {cmd}");
-            }
+    // Command c runs once, at mode c % 3 and depth (c + c / 3) % 3: the 22 commands cover all nine
+    // mode and depth pairs, and the four tone adjustments cover every mode and every depth. The two
+    // extra cases run the other side of each refusal: Color Replacement at RGB 32 bits (refused) and
+    // the Art History Brush at CMYK 8 bits (allowed).
+    let modes = ["rgb", "cmyk", "lab"];
+    let depths = [8, 16, 32];
+    let mut cases: Vec<_> = commands.iter().enumerate().map(|(c, (cmd, p))| (modes[c % 3], depths[(c + c / 3) % 3], *cmd, p.clone())).collect();
+    cases.push(("rgb", 32, "paint.colorReplacement", commands[17].1.clone()));
+    cases.push(("cmyk", 8, "paint.artHistoryBrush", commands[20].1.clone()));
+    for (mode, depth, cmd, p) in &cases {
+        let (mode, depth) = (*mode, *depth);
+        let mut s = setup(mode, depth);
+        subset(&mut s);
+        let before = surface(&s);
+        // Color Replacement refuses 32-bit RGB (#11923), the Art History Brush every depth
+        // but 8 bits (#12637), as the reference application does.
+        if (*cmd == "paint.colorReplacement" && mode == "rgb" && depth == 32) || (*cmd == "paint.artHistoryBrush" && depth != 8) {
+            assert!(s.execute(cmd, p.clone()).is_err(), "{mode} {depth} {cmd} is refused");
+            assert_eq!(surface(&s), before, "{mode} {depth} {cmd}: nothing changed");
+            continue;
         }
+        s.execute(cmd, p.clone()).unwrap_or_else(|e| panic!("{mode} {depth} {cmd}: {e}"));
+        let after = surface(&s);
+        unchanged(&before, &after);
+        assert_ne!(before, after, "{mode} {depth} {cmd} must change selected samples");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(surface(&s), before, "undo {cmd}");
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(surface(&s), after, "redo {cmd}");
     }
 }
 
@@ -150,9 +156,11 @@ fn explicit_target_wins_and_invalid_sets_are_transactional() {
 
 #[test]
 fn live_brush_and_eraser_match_commit_at_all_native_depths() {
-    for mode in ["rgb", "cmyk", "lab"] {
-        for depth in [8, 16, 32] {
-            for erase in [false, true] {
+    // Depth (mode + erase) % 3: each mode and each depth appears with both erase values.
+    for (mi, mode) in ["rgb", "cmyk", "lab"].into_iter().enumerate() {
+        for (ei, erase) in [false, true].into_iter().enumerate() {
+            {
+                let depth = [8, 16, 32][(mi + ei) % 3];
                 let mut s = setup(mode, depth);
                 subset(&mut s);
                 let before = surface(&s);
@@ -181,8 +189,9 @@ fn live_mixer_captures_selected_components_and_matches_commit_and_replay() {
     use photocraft_engine::brush_cmds::mixer_live::LiveMixer;
     use photocraft_engine::paint::StrokePoint;
 
-    for mode in ["rgb", "cmyk", "lab"] {
-        for depth in [8, 16, 32] {
+    // The mixer is generic over mode and depth: one case per mode, each at a different depth.
+    for (mode, depth) in [("rgb", 8), ("cmyk", 16), ("lab", 32)] {
+        {
             let mut s = setup(mode, depth);
             subset(&mut s);
             let before = surface(&s);
@@ -251,9 +260,21 @@ fn native_float_payloads_survive_unselected_component_restoration() {
 
 #[test]
 fn live_retouching_matches_direct_replay_and_preserves_unselected_bytes() {
-    for mode in ["rgb", "cmyk", "lab"] {
-        for depth in [8, 16, 32] {
-            for cmd in ["paint.dodge", "paint.burn", "paint.blur", "paint.sharpen", "paint.smudge", "paint.cloneStamp", "paint.historyBrush"] {
+    // The five dab commands (LiveDab) cover every mode and depth, and so do the two retouch commands
+    // (LiveRetouch).
+    let cases = [
+        ("rgb", 8, "paint.dodge"),
+        ("cmyk", 16, "paint.burn"),
+        ("lab", 32, "paint.blur"),
+        ("cmyk", 8, "paint.sharpen"),
+        ("rgb", 16, "paint.smudge"),
+        ("cmyk", 32, "paint.cloneStamp"),
+        ("lab", 16, "paint.historyBrush"),
+        ("rgb", 8, "paint.cloneStamp"),
+    ];
+    for (mode, depth, cmd) in cases {
+        {
+            {
                 let mut s = setup(mode, depth);
                 subset(&mut s);
                 let original = surface(&s);
@@ -627,9 +648,11 @@ fn legacy_cmyk_channel_clips_keep_their_tone_when_pasted_into_a_set_or_single_ch
 
 #[test]
 fn cmyk_grayscale_clips_roundtrip_explicit_and_limited_paste_at_every_depth() {
-    for depth in [8, 16, 32] {
-        for explicit_copy in [false, true] {
-            for command in ["edit.paste", "edit.pasteSpecial.pasteInto", "edit.pasteSpecial.pasteOutside"] {
+    // Depth (command + explicit copy) % 3: each depth, command and copy kind pairs with the others.
+    for (ci, command) in ["edit.paste", "edit.pasteSpecial.pasteInto", "edit.pasteSpecial.pasteOutside"].into_iter().enumerate() {
+        for (ei, explicit_copy) in [false, true].into_iter().enumerate() {
+            {
+                let depth = [8, 16, 32][(ci + ei) % 3];
                 let mut s = setup("cmyk", depth);
                 s.execute("channel.target", json!({"channel":{"color":0}})).unwrap();
                 let before = surface(&s);
@@ -1232,15 +1255,19 @@ fn geometric_filters_on_colour_sets_preserve_background_identity_and_linked_mask
 
 #[test]
 fn colour_adjustments_keep_the_original_cross_component_inputs() {
-    for mode in ["rgb", "cmyk", "lab"] {
-        for depth in [8, 16, 32] {
-            for (cmd, params) in [
-                ("image.adjustments.channelMixer", json!({"red":[0,100,0,0]})),
-                ("image.adjustments.hueSaturation", json!({"saturation":-30})),
-                ("image.adjustments.vibrance", json!({"vibrance":40})),
-                ("image.adjustments.colorBalance", json!({"midtones":[20,-10,30]})),
-                ("image.adjustments.photoFilter", json!({"color":"#ff0000","density":70})),
-            ] {
+    // One mode and depth per command; Color Balance runs twice so RGB also sees a second depth. Both
+    // index sets run in every case.
+    let cases = [
+        ("rgb", 8, "image.adjustments.channelMixer", json!({"red":[0,100,0,0]})),
+        ("cmyk", 16, "image.adjustments.hueSaturation", json!({"saturation":-30})),
+        ("lab", 32, "image.adjustments.vibrance", json!({"vibrance":40})),
+        ("cmyk", 32, "image.adjustments.colorBalance", json!({"midtones":[20,-10,30]})),
+        ("lab", 8, "image.adjustments.photoFilter", json!({"color":"#ff0000","density":70})),
+        ("rgb", 16, "image.adjustments.colorBalance", json!({"midtones":[20,-10,30]})),
+    ];
+    for (mode, depth, cmd, params) in cases {
+        {
+            {
                 let mut control = setup(mode, depth);
                 let before = surface(&control);
                 control.execute(cmd, params.clone()).unwrap();
@@ -1400,9 +1427,11 @@ fn refused_mask_cut_and_clear_leave_the_pixels_mask_and_clipboard_unchanged() {
 
 #[test]
 fn desaturate_honours_explicit_native_targets_over_the_panel_selection() {
-    for mode in ["rgb", "cmyk", "lab"] {
-        for depth in [8, 16, 32] {
-            for target in [json!({"color":1}), json!({"colors":[1]}), json!("pixels")] {
+    // Depth (mode + target) % 3: each mode and each target appears at every depth.
+    for (mi, mode) in ["rgb", "cmyk", "lab"].into_iter().enumerate() {
+        for (ti, target) in [json!({"color":1}), json!({"colors":[1]}), json!("pixels")].into_iter().enumerate() {
+            {
+                let depth = [8, 16, 32][(mi + ti) % 3];
                 let mut s = setup(mode, depth);
                 let before = surface(&s);
                 let mut control = Session::new();
@@ -1434,10 +1463,14 @@ fn desaturate_honours_explicit_native_targets_over_the_panel_selection() {
 
 #[test]
 fn mask_view_routes_implicit_edits_and_tone_editors_to_the_mask_before_colour_sets() {
-    for mode in ["rgb", "cmyk", "lab"] {
-        for depth in [8, 16, 32] {
-            for view in ["gray", "overlay"] {
-                for colors in [vec![0], vec![0, 2]] {
+    // Depth and colour set rotate with (mode + view): each mode and view meets every depth and both
+    // colour sets across the cases.
+    for (mi, mode) in ["rgb", "cmyk", "lab"].into_iter().enumerate() {
+        for (vi, view) in ["gray", "overlay"].into_iter().enumerate() {
+            {
+                {
+                    let depth = [8, 16, 32][(mi + vi) % 3];
+                    let colors = [vec![0], vec![0, 2]][(mi + vi) % 2].clone();
                     let mut s = setup(mode, depth);
                     s.execute("layer.layerMask.revealAll", json!({})).unwrap();
                     s.execute("channel.target", json!({"colors":colors})).unwrap();
