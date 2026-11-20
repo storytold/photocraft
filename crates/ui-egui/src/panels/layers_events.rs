@@ -594,13 +594,23 @@ pub(crate) fn selection_actions(change: SelectionChange<LayerId>, selected: &[La
     }
 }
 
+/// The layer ids a `layer.select` payload names: the single `layer`, or every id of the `layers`
+/// list a multi-row selection carries.
+fn select_param_ids(p: &Value) -> Vec<u64> {
+    match p.get("layer").and_then(Value::as_u64) {
+        Some(id) => vec![id],
+        None => p.get("layers").and_then(Value::as_array).map(|ids| ids.iter().filter_map(Value::as_u64).collect()).unwrap_or_default(),
+    }
+}
+
 /// Runs the actions in order: a type session commits before a select, the mask targets switch,
 /// `Value::Null` params (and the fill layers that open a dialog) run as the menu item does.
 pub(crate) fn run_actions(app: &mut PhotocraftApp, ctx: &egui::Context, actions: Vec<Action>) {
     for (id, p) in actions {
-        // A row click commits even when it selects the layer already being edited (#5584).
+        // A row click commits even when it selects the layer already being edited (#5584); a
+        // multi-row selection that leaves the edited layer out is a layer switch (#6483).
         if id == "layer.select" && app.ui.text_edit.is_some() {
-            crate::type_tool::commit(app);
+            crate::type_tool::commit_before_selecting(app, &select_param_ids(&p));
         }
         if id == "ui.maskTarget" {
             app.end_filter_mask_view();
