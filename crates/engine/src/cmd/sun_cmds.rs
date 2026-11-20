@@ -101,6 +101,7 @@ fn find_sun(s: &mut Session, p: &Value) -> Result<Value> {
         "heading": heading,
         "direction": frame.from_sphere(turned),
         "equirectangular": size.width() == size.height().saturating_mul(2),
+        "linear": sky.linear,
         "light": {
             "measured": light.measured,
             "clipped": light.clipped,
@@ -124,7 +125,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Find Sun…",
         menu: &["Image", "Analysis"],
         shortcut: None,
-        params: r##"{"at":[x,y]? (document px: measure the sun there instead of finding it),"frame":"yUpLeftHanded|yUpRightHanded|zUpRightHanded"="yUpLeftHanded","heading":degrees=0 (the sky turned so its centre faces this far right),"exposure":number=1 (scales intensity)} → found, clear, position, azimuth, elevation, direction (in frame), light {measured, clipped, colour "#RRGGBB", colourLinear, kelvin, intensity}, lightRotation {quaternion [x,y,z,w], euler [x,y,z]} (yUpLeftHanded only)"##,
+        params: r##"{"at":[x,y]? (document px: measure the sun there instead of finding it),"frame":"yUpLeftHanded|yUpRightHanded|zUpRightHanded"="yUpLeftHanded","heading":degrees=0 (the sky turned so its centre faces this far right),"exposure":number=1 (scales intensity)} → found, clear, position, azimuth, elevation, direction (in frame), linear (a 32-bit document), light {measured, clipped, colour "#RRGGBB", colourLinear, kelvin, intensity}, lightRotation {quaternion [x,y,z,w], euler [x,y,z]} (yUpLeftHanded only)"##,
         enabled,
         run: find_sun,
         journal: false,

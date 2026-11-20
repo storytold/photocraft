@@ -59,7 +59,8 @@ pub struct Found {
 pub struct Light {
     /// Measured from the pixels (true) or estimated from the sky (false).
     pub measured: bool,
-    /// A 32-bit image whose sun is clipped, so it could only be estimated.
+    /// A 32-bit image whose sun is clipped (it reaches white but no further), so it could only be
+    /// estimated. False when nothing near the sun is that bright, as on a spot the user picked.
     pub clipped: bool,
     /// Linear RGB, largest channel 1.
     pub colour: [f64; 3],
@@ -308,7 +309,7 @@ pub fn measure(sky: &Sky<'_>, sun: [f64; 3]) -> Option<Light> {
         let intensity = if elevation <= 0.0 { 0.0 } else { direct_normal / (PI * luma(colour)) };
         (colour, intensity)
     };
-    Some(Light { measured, clipped: sky.linear && !measured, colour, intensity, kelvin: linear_to_kelvin(colour), elevation })
+    Some(Light { measured, clipped: sky.linear && !measured && peak >= 0.9, colour, intensity, kelvin: linear_to_kelvin(colour), elevation })
 }
 
 /// Linear sRGB of a black body at `kelvin` (1667–25000 K), largest channel 1: the Planckian

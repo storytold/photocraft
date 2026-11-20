@@ -2,10 +2,14 @@
 //! in the axis convention the user picks, and a matching directional light, each with a Copy
 //! button. The dialog only shows what `image.analysis.findSun` returns; it reruns the command when
 //! an option or the document changes, and changes nothing itself.
+//!
+//! While it is the top dialog, a click or drag on the image puts the sun there (the command's
+//! `at`), for when the brightest area is not the sun (`DialogPick::Sun`), and the canvas marks the
+//! sun the dialog is showing. Find Automatically goes back to the found one.
 
 use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft::ui::contract::{Bind, CanvasGesture, Entry, Props as _, Sampler as _, Show as _};
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft::ui::display::{Shade, Text};
 use craft::ui::notices::{Notice, NoticeLayout};
@@ -39,17 +43,20 @@ pub(crate) struct SunOptions {
     frame: String,
     heading: Option<f64>,
     exposure: Option<f64>,
+    /// Where the user put the sun, in document pixels; `None` finds it.
+    #[serde(default)]
+    at: Option<[f64; 2]>,
 }
 
 impl Default for SunOptions {
     fn default() -> Self {
-        SunOptions { frame: FRAMES[0].0.to_string(), heading: Some(0.0), exposure: Some(1.0) }
+        SunOptions { frame: FRAMES[0].0.to_string(), heading: Some(0.0), exposure: Some(1.0), at: None }
     }
 }
 
 impl SunOptions {
     fn params(&self) -> Value {
-        json!({"frame": self.frame, "heading": self.heading.unwrap_or(0.0), "exposure": self.exposure.unwrap_or(1.0).max(0.0)})
+        json!({"frame": self.frame, "heading": self.heading.unwrap_or(0.0), "exposure": self.exposure.unwrap_or(1.0).max(0.0), "at": self.at})
     }
 }
 
@@ -62,6 +69,8 @@ pub(crate) struct FindSunDialog {
     computed: Option<(SunOptions, DocId, u64)>,
     /// Text a Copy button asked for, until [`take`] puts it on the clipboard.
     copied: Option<String>,
+    /// The active document's canvas, which takes a press through the dialog's modal layer to put the sun.
+    canvas: Option<egui::Id>,
 }
 
 fn number(v: &Value) -> f64 {
@@ -95,7 +104,7 @@ fn body(ui: &mut egui::Ui, options: &mut SunOptions, result: &Result<Value, Stri
         }
     };
     let note = if r["picked"].as_bool() == Some(true) {
-        None
+        Some((Tone::Info, tl!("The sun is where you put it.")))
     } else if r["found"].as_bool() != Some(true) {
         Some((Tone::Warn, tl!("No light found in the image.")))
     } else if r["clear"].as_bool() != Some(true) {
@@ -110,7 +119,13 @@ fn body(ui: &mut egui::Ui, options: &mut SunOptions, result: &Result<Value, Stri
         Notice::new(Tone::Warn, label(tl!("This image is not 2:1, so the result treats it as a full sphere anyway."))).layout(NoticeLayout::Inline).show(ui);
     }
     let p = &r["position"];
-    Text::new(label(&format!("{}: {:.0}, {:.0} px", tl!("Position"), number(&p[0]), number(&p[1])))).show(ui);
+    ui.horizontal(|ui| {
+        Text::new(label(&format!("{}: {:.0}, {:.0} px", tl!("Position"), number(&p[0]), number(&p[1])))).show(ui);
+        if options.at.is_some() && Button::new(label(tl!("Find Automatically"))).show(ui).clicked() {
+            options.at = None;
+        }
+    });
+    Text::new(label(tl!("Wrong spot? Click or drag on the sun in the image."))).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
     Text::new(label(&format!("{}: {:.2}°   {}: {:.2}°", tl!("Azimuth"), number(&r["azimuth"]), tl!("Elevation"), number(&r["elevation"])))).show(ui);
 
     let entries: Vec<Entry<String>> = FRAMES.iter().map(|(key, name, _)| Entry::new((*key).to_string(), label(tl!(name)))).collect();
@@ -164,6 +179,10 @@ fn body(ui: &mut egui::Ui, options: &mut SunOptions, result: &Result<Value, Stri
         )
     } else if number(&r["elevation"]) <= 0.0 {
         tl!("The sun is below the horizon, so there is no direct sunlight to match.")
+    } else if r["linear"].as_bool() == Some(true) && light["clipped"].as_bool() != Some(true) {
+        tl!(
+            "Nothing here is much brighter than the sky, so the intensity is estimated from the sky's brightness with a clear-sky model, and the colour from the sun's height."
+        )
     } else if light["clipped"].as_bool() == Some(true) {
         tl!(
             "The sun is clipped in this image, so its real brightness is lost. The intensity is estimated from the sky's brightness with a clear-sky model, and the colour from the sun's height."
@@ -184,9 +203,14 @@ impl StackDialog for FindSunDialog {
     }
 
     fn show(&mut self, ui: &mut egui::Ui, _stack: &DialogStack) -> Option<DialogResult<()>> {
-        let FindSunDialog { options, result, copied, .. } = self;
+        let FindSunDialog { options, result, copied, canvas, .. } = self;
+        let canvas = *canvas;
         let shown =
-            FormDialog::new(label(tl!("Find Sun")), Bind::bound(options)).ok_label(label(tl!("Done"))).alt_resets(false).show(ui, |ui, _form, options| {
+            FormDialog::new(label(tl!("Find Sun")), Bind::bound(options)).ok_label(label(tl!("Done"))).alt_resets(false).show(ui, |ui, form, options| {
+                if let Some(canvas) = canvas {
+                    form.pass_canvas_gesture(canvas, CanvasGesture::PRIMARY);
+                    form.keep_view_open(canvas);
+                }
                 body(ui, options, result, copied);
                 true
             });
@@ -207,6 +231,7 @@ impl StackDialog for FindSunDialog {
             "frame": self.options.frame,
             "heading": self.options.heading,
             "exposure": self.options.exposure,
+            "at": self.options.at,
             "result": self.result.as_ref().ok(),
             "error": self.result.as_ref().err(),
         }))
@@ -223,6 +248,15 @@ impl StackDialog for FindSunDialog {
             "exposure" => {
                 self.options.exposure = Some(value.as_f64().filter(|e| *e >= 0.0).ok_or_else(|| format!("field `exposure` takes a number ≥ 0, got {value}"))?);
             }
+            "at" => {
+                self.options.at = match &value {
+                    Value::Null => None,
+                    v => {
+                        let xy = v.as_array().filter(|a| a.len() == 2).and_then(|a| Some([a[0].as_f64()?, a[1].as_f64()?]));
+                        Some(xy.ok_or_else(|| format!("field `at` takes [x, y] in document pixels or null, got {value}"))?)
+                    }
+                };
+            }
             _ => return Err(format!("the Find Sun dialog has no field `{field}`")),
         }
         ctx.request_repaint();
@@ -233,10 +267,12 @@ impl StackDialog for FindSunDialog {
 /// Opens the dialog for the active document.
 pub(crate) fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
     app.session.active().ok_or_else(|| tl!("No document is open.").to_string())?;
-    let options = app.find_sun_options.clone();
+    // A sun put by hand belongs to the image it was put on.
+    let options = SunOptions { at: None, ..app.find_sun_options.clone() };
     let result = app.run(COMMAND, options.params());
     let computed = app.session.active().map(|st| (options.clone(), st.doc.id, st.revision));
-    Ok(app.framework.dialogs.open(FindSunDialog { options, result, computed, copied: None }))
+    let canvas = app.session.active_index().map(|idx| crate::canvas::document_display::CanvasHost::primary(app, idx).canvas_id());
+    Ok(app.framework.dialogs.open(FindSunDialog { options, result, computed, copied: None, canvas }))
 }
 
 /// The dialog's result pump (a `TAKERS` row): puts a Copy button's text on the clipboard, and
@@ -265,4 +301,27 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
         dialog.computed = Some(now);
         ctx.request_repaint();
     }
+}
+
+/// A press or drag step at `at` (document pixels) on the image with the dialog on top: the sun goes
+/// there, and the next pump measures it. A point off the document is the dialog's press but moves
+/// nothing.
+pub(crate) fn place(app: &mut PhotocraftApp, at: [f64; 2]) -> bool {
+    let Some(size) = app.session.active().map(|st| st.doc.bounds()) else { return false };
+    let Some(dialog) = app.framework.dialogs.get_mut::<FindSunDialog>() else { return false };
+    let inside = (0.0..=f64::from(size.width())).contains(&at[0]) && (0.0..=f64::from(size.height())).contains(&at[1]);
+    if inside {
+        dialog.options.at = Some(at);
+        app.ctx().request_repaint();
+    }
+    true
+}
+
+/// The sun the canvas marks: where the user put it, or else the dialog's last result.
+pub(crate) fn marker(app: &PhotocraftApp) -> Option<[f64; 2]> {
+    let dialog = app.framework.dialogs.get::<FindSunDialog>()?;
+    dialog.options.at.or_else(|| {
+        let p = &dialog.result.as_ref().ok()?["position"];
+        Some([p[0].as_f64()?, p[1].as_f64()?])
+    })
 }

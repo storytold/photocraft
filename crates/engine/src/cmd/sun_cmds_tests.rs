@@ -73,6 +73,7 @@ fn at_measures_where_it_is_told_instead_of_the_brightest_spot() {
     let r = s.execute("image.analysis.findSun", json!({"at": [W / 4, H / 4]})).unwrap();
     assert!(r["picked"].as_bool().unwrap());
     assert!((r["azimuth"].as_f64().unwrap() + 90.0).abs() < 1.0, "{}", r["azimuth"]);
-    // Nothing bright there: an estimate, not the real sun's measured light.
+    // Nothing bright there: an estimate, not the real sun's measured light, and not a clipped sun either.
     assert_eq!(r["light"]["measured"], json!(false));
+    assert_eq!(r["light"]["clipped"], json!(false));
 }
