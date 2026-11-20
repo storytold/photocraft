@@ -114,7 +114,7 @@ mod tests {
                 .env("CARGO_TARGET_DIR", dir.join("target"))
                 .env("CARGO_BUILD_BUILD_DIR", dir.join("target"))
                 .env("CARGO_NET_OFFLINE", "true")
-                .args(["nextest", "list", "--message-format", "json", "--cargo-message-format", "json-render-diagnostics"])
+                .args(["nextest", "list", "--list-type", "binaries-only", "--message-format", "json", "--cargo-message-format", "json-render-diagnostics"])
                 .output()
                 .unwrap();
             assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
@@ -126,7 +126,7 @@ mod tests {
         route(first.stdout.as_slice(), &mut record, &mut listing).unwrap();
         assert!(String::from_utf8_lossy(&record).contains("compiler-artifact"));
         let json: serde_json::Value = serde_json::from_slice(&listing).unwrap();
-        assert_eq!(json["test-count"], 1);
+        assert_eq!(json["rust-binaries"].as_object().unwrap().len(), 1);
         let second = list();
         assert!(!String::from_utf8_lossy(&second.stderr).contains("Compiling"));
         std::fs::remove_dir_all(dir).unwrap();
