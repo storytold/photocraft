@@ -206,6 +206,8 @@ pub(crate) struct ExportOpen {
     /// The newest request made, with the working profile it was made under: a change of the working
     /// profile alters the preview of an untagged document without changing the settings.
     last: Option<(u64, ExportOptions, Option<String>)>,
+    /// The folder a played step recorded ([`open_recorded`]): its save dialog starts there.
+    folder: Option<PathBuf>,
 }
 
 /// One preview request being answered: the proxy preview first, then the exact size estimate.
@@ -261,17 +263,43 @@ fn stem_of(name: &str) -> String {
 pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
     let st = app.session.active().ok_or("no document")?;
     let (stem, size) = (stem_of(&st.doc.name), st.doc.size);
-    open_sized(app, stem, None, PixelSize::new(size.width, size.height), Vec::new())
+    open_sized(app, stem, None, PixelSize::new(size.width, size.height), Vec::new(), None)
+}
+
+/// A played Export As step with its dialog on (#15945): the dialog opens on the step's recorded settings, its file
+/// named and its save dialog started in the folder as recorded, and exports as File › Export › Export As… does. The
+/// remembered settings neither replace the recorded ones nor take them on, as when the step plays without its dialog.
+pub(crate) fn open_recorded(app: &mut PhotocraftApp, params: &Value) -> Result<DialogId, String> {
+    if app.export_open.is_some() {
+        return Err("Export As is already open".into());
+    }
+    let st = app.session.active().ok_or("no document")?;
+    let path = params.get("path").and_then(Value::as_str).map(std::path::Path::new);
+    let stem = path.and_then(std::path::Path::file_stem).map_or_else(|| stem_of(&st.doc.name), |s| s.to_string_lossy().into_owned());
+    let folder = path.and_then(std::path::Path::parent).filter(|dir| !dir.as_os_str().is_empty()).map(std::path::Path::to_path_buf);
+    let options = options_of(&params.as_object().map(settings_of).unwrap_or_default());
+    let size = st.doc.size;
+    open_sized(app, stem, None, PixelSize::new(size.width, size.height), Vec::new(), Some((options, folder)))
 }
 
 /// The dialog fitted to a `source`-sized document or layer. Fitting the document first would
 /// replace a remembered pixel size the document can't take with the percent, even when the layer
-/// can take it.
-fn open_sized(app: &mut PhotocraftApp, stem: String, title: Option<String>, source: PixelSize, layers: Vec<LayerId>) -> Result<DialogId, String> {
+/// can take it. `recorded` are a played step's settings and folder ([`open_recorded`]), which the
+/// dialog opens with instead of the remembered ones.
+fn open_sized(
+    app: &mut PhotocraftApp,
+    stem: String,
+    title: Option<String>,
+    source: PixelSize,
+    layers: Vec<LayerId>,
+    recorded: Option<(ExportOptions, Option<PathBuf>)>,
+) -> Result<DialogId, String> {
     let prefs = app.session.prefs().export.clone();
     let mut options = ExportOptions::default();
     options.quality = u8::try_from(prefs.jpeg_quality.clamp(1, 100)).unwrap_or(85);
     options.lossless = prefs.webp_lossless;
+    let played = recorded.is_some();
+    let (options, folder) = recorded.unwrap_or((options, None));
     let mut defaults = ExportFormatDefaults::default();
     defaults.jpeg_quality = u8::try_from(prefs.jpeg_quality.clamp(1, 100)).unwrap_or(85);
     defaults.webp_quality = u8::try_from(prefs.webp_quality.clamp(1, 100)).unwrap_or(85);
@@ -289,9 +317,11 @@ fn open_sized(app: &mut PhotocraftApp, stem: String, title: Option<String>, sour
         .defaults(defaults)
         .methods(RESAMPLE_CHOICES.to_vec())
         .presets(preset_library(app))
-        .remember(REMEMBER)
         // The browser build's file dialog answers no folder, so Scale All exports one size at a time there.
         .folder_export(!cfg!(target_arch = "wasm32"));
+    if !played {
+        dialog = dialog.remember(REMEMBER);
+    }
     if let Some(title) = title {
         dialog = dialog.title(title);
     }
@@ -305,6 +335,7 @@ fn open_sized(app: &mut PhotocraftApp, stem: String, title: Option<String>, sour
         picking: false,
         work: None,
         last: None,
+        folder,
     });
     Ok(id)
 }
@@ -317,7 +348,7 @@ pub fn open_layer(app: &mut PhotocraftApp, layer: LayerId) -> Result<DialogId, S
     // the layer exports at.
     let template = "Export As: {name}";
     let title = crate::i18n::fmt(tl!(template), &[("name", &ldoc.name)]);
-    open_sized(app, stem_of(&ldoc.name), Some(title), PixelSize::new(ldoc.size.width, ldoc.size.height), vec![layer])
+    open_sized(app, stem_of(&ldoc.name), Some(title), PixelSize::new(ldoc.size.width, ldoc.size.height), vec![layer], None)
 }
 
 /// Layer › Export As… with several layers (artboards, say) selected: the same dialog, then one
@@ -336,7 +367,7 @@ pub fn open_layers(app: &mut PhotocraftApp, layers: &[LayerId]) -> Result<Dialog
     let stem = export_name(&stem_of(&st.doc.name));
     let template = "Export As: {n} layers";
     let title = crate::i18n::fmt(tl!(template), &[("n", &layers.len().to_string())]);
-    open_sized(app, stem, Some(title), PixelSize::new(ldoc.size.width, ldoc.size.height), layers.to_vec())
+    open_sized(app, stem, Some(title), PixelSize::new(ldoc.size.width, ldoc.size.height), layers.to_vec(), None)
 }
 
 /// What a several-layer export says when no selected layer has pixels, as in the reference
@@ -848,7 +879,8 @@ fn drive(app: &mut PhotocraftApp, ctx: &egui::Context, open: &mut ExportOpen) ->
     }
     if let Some(request) = pick {
         let key = request.key.clone();
-        let suggested = request.file_name.clone().unwrap_or_default();
+        let name = request.file_name.clone().unwrap_or_default();
+        let suggested = open.folder.as_ref().map_or_else(|| name.clone(), |dir| dir.join(&name).to_string_lossy().into_owned());
         let answer = move |app: &mut PhotocraftApp, path: String| -> Result<Value, String> {
             if let Some(open) = app.export_open.as_mut() {
                 open.picking = false;

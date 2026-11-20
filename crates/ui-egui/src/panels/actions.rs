@@ -28,6 +28,7 @@ pub(crate) mod menu_item;
 pub(crate) mod playback;
 pub(crate) mod record_again;
 pub(crate) mod runner;
+pub(crate) mod save_dialog;
 
 #[cfg(test)]
 pub(crate) use runner::play_targets;
@@ -52,6 +53,8 @@ mod playback_tests;
 mod record_again_tests;
 #[cfg(test)]
 mod runner_tests;
+#[cfg(test)]
+mod save_dialog_tests;
 #[cfg(test)]
 mod stop_tests;
 #[cfg(test)]

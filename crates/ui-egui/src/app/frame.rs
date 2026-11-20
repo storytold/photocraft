@@ -214,6 +214,8 @@ impl PhotocraftApp {
         paint_mouse::sync_tool_brush(self);
         // Step by Step and Pause For: play an action's next step once its wait is over (Esc ends it).
         crate::actions::playback::tick(self, &ctx);
+        // A save step's dialogs closed: its action continues or stops (#15945).
+        crate::actions::save_dialog::tick(self);
         // View › Screen Mode › Full Screen Mode: only the image, on black (F or Esc returns).
         if screen_picker::busy(self) {
             ui.disable();
