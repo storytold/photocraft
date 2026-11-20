@@ -46,7 +46,7 @@ fn app() -> (Box<PhotocraftApp>, Layers, Written, Arc<ScriptedFiles>) {
     let gone = active(&app);
     {
         let st = app.session.active_mut().unwrap();
-        let doc = Arc::make_mut(&mut st.doc);
+        let doc = Arc::make_mut(st.doc_mut());
         let surface = doc.layer_mut(gone).unwrap().surface_mut().unwrap();
         let red = photocraft_raster::from_rgba(&surface.format(), [1.0, 0.0, 0.0, 1.0]);
         surface.fill_rect(Rect::new(150, 0, 190, 40), &red);
@@ -69,7 +69,7 @@ fn answer(app: &mut PhotocraftApp, files: &ScriptedFiles, path: &std::path::Path
 #[test]
 fn quick_export_skips_the_same_layers() {
     let (mut app, l, written, files) = app();
-    app.session.active_mut().unwrap().selected_layers = vec![l.empty, l.red, l.adjustment, l.blue, l.gone];
+    *app.session.active_mut().unwrap().selection_mut() = vec![l.empty, l.red, l.adjustment, l.blue, l.gone];
     quick_export_selected_layers_png(&mut app).unwrap();
     answer(&mut app, &files, std::path::Path::new("quick.png"));
     assert_eq!(*written.borrow(), ["quick.png", "quick-2-Blue.png"]);
@@ -84,8 +84,8 @@ fn nothing_left_to_export_writes_nothing_and_says_why() {
     let f = json!({"format": "png", "scale": 100}).as_object().unwrap().clone();
     no_asset(export_layers(&mut app, &f, &empties, "/out").unwrap_err());
     let st = app.session.active_mut().unwrap();
-    st.selected_layers = empties.to_vec();
-    st.active_layer = Some(l.gone);
+    *st.selection_mut() = empties.to_vec();
+    st.set_active_layer(Some(l.gone));
     no_asset(quick_export_selected_layers_png(&mut app).unwrap_err());
     assert!(files.requests().is_empty(), "no file dialog was asked for");
     assert!(written.borrow().is_empty());

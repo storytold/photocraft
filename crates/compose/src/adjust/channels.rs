@@ -183,6 +183,13 @@ pub(super) fn lab_denorm(n: [f32; 3]) -> [f32; 3] {
 /// Neutral a or b as Lab surfaces store it ((0 + 128) / 255).
 pub const LAB_NEUTRAL: f32 = 128.0 / 255.0;
 
+/// Lightness-preserving neutral gray for an sRGB Gradient Map stop colour in an 8/16-bit
+/// Grayscale document: keeps the colour's CIE L* instead of Rec. 601 luma.
+pub(super) fn gray_from_srgb_lightness(c: [f32; 3]) -> [f32; 3] {
+    let l = srgb_to_lab(c)[0];
+    [lab_to_srgb([l, 0.0, 0.0])[0]; 3]
+}
+
 /// An adjustment Photoshop evaluates on a Lab document's own channels, as an operation on one
 /// pixel's stored L, a, b (normalised as Lab surfaces store them: L / 100, (a + 128) / 255,
 /// (b + 128) / 255) in a document of `depth`: Invert and Posterize (each channel), Threshold

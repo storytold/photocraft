@@ -551,8 +551,8 @@ impl LayerSelection {
     }
 
     fn set(self, st: &mut crate::DocState) {
-        st.active_layer = self.active;
-        st.selected_layers = self.selected;
+        st.set_active_layer(self.active);
+        *st.selection_mut() = self.selected;
         st.layer_anchor = self.anchor;
         crate::channel_cmds::fix_view(st);
     }
@@ -1721,7 +1721,7 @@ impl Session {
         // authorization, validation, floating-selection and admission failures.
         let live_commit = self.live_commit.take();
         self.sync_scratch_state();
-        let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        let spec = crate::registry::spec(id)?;
         // Params are named fields: anything but an object (or null, meaning none) is a caller
         // mistake, not "use every default".
         if !(params.is_object() || params.is_null()) {
@@ -1801,7 +1801,7 @@ impl Session {
         self.jobs.spawn = background;
         // Commands this one runs on its own behalf journal after this mark (#3067).
         let nested_from = self.journal.len();
-        let pre_selected = if self.actions.recording.is_some() { self.active().map(|st| st.selected_layers()) } else { None };
+        let pre_selected = if self.actions.recording.is_some() { self.active().map(|st| st.selected_layers().to_vec()) } else { None };
         let mut record_before = crate::actions_record::Before::capture(self);
         // A replayable command is recorded as one step, so recording pauses while it runs: an
         // action it plays (a script step) must not flush the steps it ran so far into the action
@@ -1874,6 +1874,7 @@ impl Session {
                     } else if !st.fx_collapsed.contains(&layer_id) {
                         st.fx_collapsed.push(layer_id);
                     }
+                    st.note_disclosure_change();
                 }
                 self.after_command(id, params, spec.journal, automation, Some(nested_from), pre_selected.as_deref(), &record_before);
                 Ok(Started::Done(v))
@@ -1901,6 +1902,7 @@ impl Session {
         if st.revision - from > 1 {
             st.last_damage = crate::layer_multi_cmds::step_damage(before, &st.doc);
             st.damage_span = Some((from, st.revision));
+            st.record_damage();
         }
         #[cfg(any(test, debug_assertions))]
         if st.last_damage.is_none()
@@ -1934,6 +1936,7 @@ impl Session {
         let extra = photocraft_compose::relayout_damage(before, &st.doc);
         if !extra.is_empty() {
             st.last_damage = Some(d.union(&extra));
+            st.record_damage();
         }
     }
 
