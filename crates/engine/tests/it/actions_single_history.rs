@@ -876,8 +876,8 @@ fn recorded_user_purge_undo_case(suffix: bool) {
             assert!(result.get("failed").is_none(), "singleState={single_state}, prefix={prefix}, suffix={suffix}: {result}");
             let st = s.active().unwrap();
             let after = st.doc.clone();
-            let boundary = st.snapshots.last().unwrap().doc.clone();
-            let snapshot = st.snapshots.last().unwrap().id;
+            let boundary = st.snapshots().last().unwrap().doc.clone();
+            let snapshot = st.snapshots().last().unwrap().id;
             assert_eq!(boundary.layers[0].surface().unwrap().rgba(0, 0), if prefix { [0.0, 0.0, 1.0, 1.0] } else { [0.0, 1.0, 0.0, 1.0] });
             assert!(st.history.row_of(old[removed].0).is_none(), "Purge Undo's removed predecessor returned");
             assert!(st.history.row_of(old[0].0).is_some());
