@@ -526,16 +526,25 @@ fn build_tests(o: &CiOptions) -> Result<(), String> {
 }
 
 /// `cargo nextest list --profile ci --message-format json` of the test build, with `args`.
-fn nextest_list(o: &CiOptions, args: &[&str]) -> Result<serde_json::Value, String> {
+fn nextest_list(o: &CiOptions, args: &[&str], record: bool) -> Result<serde_json::Value, String> {
     let mut c = cargo();
     c.args(["nextest", "list", "--profile", "ci", "--message-format", "json"]).args(test_build_args(&o.exclude)).args(args);
-    let what = shown(&c);
-    eprintln!("$ {what}");
-    let out = c.stderr(Stdio::inherit()).output().map_err(|e| format!("{what}: failed to spawn: {e}"))?;
-    if !out.status.success() {
-        return Err(format!("{what}: exited with {}", out.status));
+    let record = record.then(cache_units::file).flatten();
+    if record.is_some() {
+        c.args(["--cargo-message-format", "json-render-diagnostics"]);
     }
-    serde_json::from_slice(&out.stdout).map_err(|e| format!("{what}: bad JSON: {e}"))
+    let what = shown(&c);
+    let out = if let Some(file) = record {
+        cache_units::capture_recorded(c, &what, &file)?
+    } else {
+        eprintln!("$ {what}");
+        let out = c.stderr(Stdio::inherit()).output().map_err(|e| format!("{what}: failed to spawn: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("{what}: exited with {}", out.status));
+        }
+        out.stdout
+    };
+    serde_json::from_slice(&out).map_err(|e| format!("{what}: bad JSON: {e}"))
 }
 
 /// The gate's build job with per-shard archives: builds the tests, lists them, plans which binaries
@@ -550,7 +559,7 @@ fn build_shard_archives(o: &CiOptions, dir: &Path, name: &str, shards: usize, gp
     });
     let times = shards::Times::parse(&text, os)?;
     // The build itself, and every binary it made.
-    let built = nextest_list(o, &["--list-type", "binaries-only"])?;
+    let built = nextest_list(o, &["--list-type", "binaries-only"], true)?;
     let ids: Vec<String> = built.get("rust-binaries").and_then(serde_json::Value::as_object).ok_or("nextest list: no rust-binaries")?.keys().cloned().collect();
     // With a GPU shard every binary is listed against the gpu group; otherwise only the split ones.
     let filter = if gpu_shard {
@@ -559,7 +568,7 @@ fn build_shard_archives(o: &CiOptions, dir: &Path, name: &str, shards: usize, gp
         let split: Vec<String> = shards::binaries_to_list(&ids, &times, shards).iter().map(|b| format!("binary_id(={b})")).collect();
         if split.is_empty() { "none()".to_string() } else { split.join(" | ") }
     };
-    let listing = nextest_list(o, &["--run-ignored", "all", "-E", &filter])?;
+    let listing = nextest_list(o, &["--run-ignored", "all", "-E", &filter], false)?;
     let (binaries, target) = shards::parse_listing(&listing, gpu_shard)?;
     let plan = shards::plan(&binaries, &times, shards, gpu_shard)?;
     eprint!("{}", plan.summary());
