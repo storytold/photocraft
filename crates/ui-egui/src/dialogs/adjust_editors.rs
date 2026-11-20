@@ -10,6 +10,7 @@
 //! The function reads no input and drains no queue: a second pass in one frame shows the value as the first left it and
 //! reports only its own events and asks.
 
+use photocraft_engine::presets::PresetsExt;
 use std::sync::Arc;
 
 use craft::behavior::{EditEvent, EditEvents, Mixed};
@@ -434,7 +435,7 @@ pub fn gradient_presets(app: &PhotocraftApp) -> Vec<GradientGroup> {
         StopColor::Rgb(rgb) => *rgb,
     };
     app.session
-        .presets
+        .presets()
         .gradients
         .iter()
         .map(|group| {

@@ -8,7 +8,7 @@
 //! were when last seen; the layers of a file whose stamp moved are re-rendered from it, one
 //! Update Modified Content undo step per file. The desktop app takes the stamps every two seconds
 //! and when its window comes back to the front, on a worker thread so a file on a slow network
-//! share never holds up the interface ([`Session::start_link_scan`], [`Session::poll_link_scan`]);
+//! share never holds up the interface ([`LinkWatchExt::start_link_scan`](crate::link_watch::LinkWatchExt::start_link_scan), [`LinkWatchExt::poll_link_scan`](crate::link_watch::LinkWatchExt::poll_link_scan));
 //! `layer.smartObjects.updateChanged` takes them on the spot (CLI, agents).
 //!
 //! Stamps are kept per document: one in the background is looked at when it comes to the front.

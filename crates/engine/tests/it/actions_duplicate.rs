@@ -1,4 +1,5 @@
 //! Duplicate keeps action identities, complete settings and per-step flags stable.
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionColor, ActionList, ActionStep, ActionsFile},
@@ -27,7 +28,7 @@ fn action_copies_follow_the_source_without_retargeting_calls_or_function_keys() 
     source.set = Some("Retouch".into());
     source.color = ActionColor::from_name("red");
     let foreign = json!({"actions": [{"name": "Foreign", "steps": [["actions.play", {"action": 1}]]}]});
-    s.actions.list = list_of(vec![
+    s.actions_mut().list = list_of(vec![
         source.clone(),
         Action::new("Target", vec![ActionStep::new("select.all", json!({}))]),
         Action::new(
@@ -47,13 +48,13 @@ fn action_copies_follow_the_source_without_retargeting_calls_or_function_keys() 
     let revision = s.active().unwrap().revision;
     let result = s.execute("actions.duplicate", json!({"action": "Source"})).unwrap();
     assert_eq!(result["index"], 1);
-    assert_eq!(s.actions.list.actions().iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["Source", "Source copy", "Target", "Caller"]);
+    assert_eq!(s.actions().list.actions().iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["Source", "Source copy", "Target", "Caller"]);
     let mut expected = source;
     expected.name = "Source copy".into();
     expected.steps[0].params["action"] = json!(2);
-    assert_eq!(s.actions.list.actions()[1], expected);
-    assert_eq!(s.actions.list.actions()[0].steps[0].params["action"], 2);
-    let caller = &s.actions.list.actions()[3];
+    assert_eq!(s.actions().list.actions()[1], expected);
+    assert_eq!(s.actions().list.actions()[0].steps[0].params["action"], 2);
+    let caller = &s.actions().list.actions()[3];
     assert_eq!(caller.steps[0].params["action"], 2);
     assert_eq!(caller.steps[1].params["action"], 4);
     assert_eq!(caller.steps[2].params["action"], 2.0);
@@ -66,9 +67,9 @@ fn action_copies_follow_the_source_without_retargeting_calls_or_function_keys() 
     assert!(played.get("failed").is_none(), "{played}");
     assert!(s.active().unwrap().doc.selection.is_some(), "the copied call still plays Target rather than itself");
     s.execute("actions.duplicate", json!({"action": 0})).unwrap();
-    assert_eq!(s.actions.list.actions()[1].name, "Source copy 2");
-    assert_eq!(s.actions.list.actions()[2].name, "Source copy");
-    assert_eq!(s.actions.list.actions()[1].steps[0].params["action"], 3);
+    assert_eq!(s.actions().list.actions()[1].name, "Source copy 2");
+    assert_eq!(s.actions().list.actions()[2].name, "Source copy");
+    assert_eq!(s.actions().list.actions()[1].steps[0].params["action"], 3);
 }
 
 #[test]
@@ -81,23 +82,23 @@ fn step_copies_preserve_payloads_and_shift_both_flag_columns() {
     );
     a.disabled.extend([0, 2]);
     a.dialogs.extend([0, 1]);
-    s.actions.list.push(a).unwrap();
+    s.actions_mut().list.push(a).unwrap();
     let revision = s.active().unwrap().revision;
     let result = s.execute("actions.duplicate", json!({"action": 0, "step": 0})).unwrap();
     assert_eq!(result["step"], 1);
     assert_eq!(result["index"], 0);
-    let a = &s.actions.list.actions()[0];
+    let a = &s.actions().list.actions()[0];
     assert_eq!(a.name, "Steps");
     assert_eq!(a.steps[0], a.steps[1]);
     assert_eq!(a.disabled.iter().copied().collect::<Vec<_>>(), [0, 1, 3]);
     assert_eq!(a.dialogs.iter().copied().collect::<Vec<_>>(), [0, 1, 2]);
     s.execute("actions.duplicate", json!({"action": 0, "step": 2})).unwrap();
-    assert!(s.actions.list.actions()[0].steps[2].params.is_null());
-    assert!(s.actions.list.actions()[0].steps[3].params.is_null(), "copying does not normalize null settings to an empty object");
-    let mut edited = s.actions.list.actions()[0].steps[1].clone();
+    assert!(s.actions().list.actions()[0].steps[2].params.is_null());
+    assert!(s.actions().list.actions()[0].steps[3].params.is_null(), "copying does not normalize null settings to an empty object");
+    let mut edited = s.actions().list.actions()[0].steps[1].clone();
     edited.params["layer"] = json!(99);
-    s.actions.list.replace_step(0, 1, edited).unwrap();
-    assert_eq!(s.actions.list.actions()[0].steps[0].params, payload, "the copy owns its settings");
+    s.actions_mut().list.replace_step(0, 1, edited).unwrap();
+    assert_eq!(s.actions().list.actions()[0].steps[0].params, payload, "the copy owns its settings");
     assert_eq!(s.active().unwrap().revision, revision);
 }
 
@@ -106,7 +107,7 @@ fn invalid_copies_do_not_flush_recording_and_valid_step_copies_keep_recording() 
     let mut s = session();
     s.execute("actions.record", json!({"name": "Recording"})).unwrap();
     s.execute("select.all", json!({})).unwrap();
-    let before = s.actions.list.clone();
+    let before = s.actions().list.clone();
     let recording = s.recording.target;
     let revision = s.active().unwrap().revision;
     for params in [
@@ -118,19 +119,19 @@ fn invalid_copies_do_not_flush_recording_and_valid_step_copies_keep_recording() 
         json!({"action": 0, "step": "x"}),
     ] {
         assert!(s.execute("actions.duplicate", params.clone()).is_err(), "{params}");
-        assert_eq!(s.actions.list, before);
+        assert_eq!(s.actions().list, before);
         assert_eq!(s.recording.target, recording);
         assert_eq!(s.active().unwrap().revision, revision);
     }
     s.execute("actions.duplicate", json!({"action": 0, "step": 0})).unwrap();
-    assert_eq!(s.actions.list.actions()[0].steps, vec![ActionStep::new("select.all", json!({})); 2]);
+    assert_eq!(s.actions().list.actions()[0].steps, vec![ActionStep::new("select.all", json!({})); 2]);
     assert!(s.recording.target.is_some());
     s.execute("select.deselect", json!({})).unwrap();
     s.execute("actions.stop", json!({})).unwrap();
-    assert_eq!(s.actions.list.actions()[0].steps.len(), 3);
-    s.actions.list.push(Action::new("Edit during playback", vec![ActionStep::new("actions.duplicate", json!({"action": 0}))])).unwrap();
-    let before = s.actions.list.clone();
+    assert_eq!(s.actions().list.actions()[0].steps.len(), 3);
+    s.actions_mut().list.push(Action::new("Edit during playback", vec![ActionStep::new("actions.duplicate", json!({"action": 0}))])).unwrap();
+    let before = s.actions().list.clone();
     let played = s.execute("actions.play", json!({"action": "Edit during playback"})).unwrap();
     assert!(played["failed"]["error"].as_str().is_some_and(|e| e.contains("playback")), "{played}");
-    assert_eq!(s.actions.list, before);
+    assert_eq!(s.actions().list, before);
 }

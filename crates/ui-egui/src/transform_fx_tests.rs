@@ -2,6 +2,7 @@
 //! canvas: at every bit depth and colour mode, for pixel layers and groups, following edits made
 //! while the box is open, and matching what the commit leaves.
 
+use photocraft_engine::color_cmds::ColorExt;
 use egui::ColorImage;
 use photocraft_doc::{Layer, LayerId};
 use serde_json::json;
@@ -71,7 +72,7 @@ fn styled_texture_tracks_monitor_changes_without_recoloring_effect_inputs() {
     begin(&mut app);
     let raw = composite(&app, 1.0).unwrap().0;
     for monitor in ["srgb", "display-p3", "srgb"] {
-        app.session.color.settings.monitor_profile = monitor.into();
+        app.session.color_mut().settings.monitor_profile = monitor.into();
         crate::canvas::testing::frame(&mut app);
         assert_eq!(composite(&app, 1.0).unwrap().0.pixels, raw.pixels, "monitor={monitor}: effects still use document colors");
     }

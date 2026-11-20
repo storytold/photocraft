@@ -8,6 +8,7 @@
 //! [`answer_for`]; a window the app holds itself opens one with [`open_for_window`] and pulls the
 //! answer with [`answer_for_window`].
 
+use photocraft_engine::color_cmds::ColorExt;
 use craft::cms::convert::CmykConverter;
 use craft::color_ui::ui::{ColorPickerDialog, ColorPickerResult, PickedColor};
 use craft::theme::{ModelValues, Srgba};
@@ -164,7 +165,7 @@ pub(crate) fn same_inks(a: [f32; 4], b: [f32; 4]) -> bool {
 
 /// The CMYK converter of the document colour settings; the built-in coated one when the profile is unusable.
 fn converter(app: &PhotocraftApp) -> CmykConverter {
-    CmykConverter::new(app.session.color.working(photocraft_doc::ColorMode::Cmyk)).ok().unwrap_or_else(|| CmykConverter::coated().clone())
+    CmykConverter::new(app.session.color().working(photocraft_doc::ColorMode::Cmyk)).ok().unwrap_or_else(|| CmykConverter::coated().clone())
 }
 
 /// Opens `dialog` for `target` with the app's picker features, under `parent` when it has one.

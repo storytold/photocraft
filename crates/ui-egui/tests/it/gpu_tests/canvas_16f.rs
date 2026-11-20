@@ -3,6 +3,7 @@
 //! documents keep their `Rgba8Unorm` texture byte for byte. Skips when there is no GPU adapter or
 //! it can't render to `Rgba16Float`.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

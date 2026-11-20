@@ -1,6 +1,7 @@
 //! Each kind of place that follows a path stored in a document goes through [`super::resolve`]: a
 //! link to another computer is never followed, and a relative link next to the document is.
 
+use crate::link_watch::LinkWatchExt;
 use std::path::{Path, PathBuf};
 
 use photocraft_doc::{LayerContent, LayerId, SmartSource};

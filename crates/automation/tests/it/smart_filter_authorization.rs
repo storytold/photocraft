@@ -1,4 +1,5 @@
 //! Stored smart-filter parameters must not grant automation ambient filesystem access.
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -44,7 +45,7 @@ fn action_playback_cannot_hide_a_smart_filter_path_edit() {
     let (mut h, layer) = f.setup(false);
     let doc = h.session.active().unwrap().doc.clone();
     h.session
-        .actions
+        .actions_mut()
         .list
         .push(Action::new(
             "edit filter",

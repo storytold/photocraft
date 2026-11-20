@@ -2,6 +2,7 @@
 
 #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
 mod gpu_tests {
+    use photocraft_engine::color_cmds::ColorExt;
     use std::fs;
 
     use photocraft_codecs::decode;

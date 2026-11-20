@@ -8,6 +8,7 @@
 //! document. Pixels are converted to the destination's colour profile (Color Settings' intent and
 //! black point compensation) and bit depth, as Photoshop converts dragged layers.
 
+use crate::color_cmds::ColorExt;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use photocraft_color::ColorMode;
@@ -111,7 +112,7 @@ pub(crate) fn adapt_copies(s: &Session, copies: &mut Document, dest: &Document) 
     }
     if (copies.mode, &copies.icc_profile) != (dest.mode, &dest.icc_profile) {
         let profile = crate::color_cmds::document_profile(dest);
-        crate::color_cmds::convert_document(copies, &profile, s.color.settings.intent(), s.color.settings.bpc)?;
+        crate::color_cmds::convert_document(copies, &profile, s.color().settings.intent(), s.color().settings.bpc)?;
     }
     if copies.depth != dest.depth {
         crate::image_cmds::for_each_surface(&mut copies.layers, true, &mut |surf, _| {

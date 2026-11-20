@@ -1,3 +1,4 @@
+use crate::color_cmds::ColorExt;
 use super::*;
 use photocraft_color::SampleType;
 

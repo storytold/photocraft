@@ -1,3 +1,4 @@
+use photocraft_engine::actions_cmds::ActionsExt;
 use super::*;
 use std::sync::{Arc, Mutex};
 
@@ -174,7 +175,7 @@ fn action_vector_paste_reads_the_current_svg_source() {
     let mut app = PhotocraftApp::new(Session::new(), services);
     app.run("file.new", json!({"width": 24, "height": 20})).unwrap();
     app.session
-        .actions
+        .actions_mut()
         .list
         .push(photocraft_engine::actions_cmds::Action::new("SVG", vec![photocraft_engine::actions_cmds::ActionStep::new("edit.paste", json!({"as": "shape"}))]))
         .unwrap();

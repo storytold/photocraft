@@ -1,5 +1,6 @@
 //! The measured Perspective Warp descriptor shape through ATN conversion and action playback.
 
+use photocraft_engine::actions_cmds::ActionsExt;
 use craft_psd::{
     atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem},
     descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D},
@@ -171,7 +172,7 @@ fn action_playback_matches_the_native_raster_warp() {
         let decoy = actual.active().unwrap().active_layer.unwrap();
         let decoy_before = actual.active().unwrap().doc.layer(decoy).unwrap().clone();
         for action in imported(fixture(Some("Facade")), false, true).actions {
-            actual.actions.list.push(action).unwrap();
+            actual.actions_mut().list.push(action).unwrap();
         }
         actual.execute("actions.play", json!({"action":0})).unwrap();
         direct.execute(COMMAND, json!({"planes":planes(),"layer":"Facade","target":"pixels"})).unwrap();
@@ -193,7 +194,7 @@ fn active_smart_object_playback_matches_the_native_filter() {
         s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     }
     for action in imported(fixture(None), false, true).actions {
-        actual.actions.list.push(action).unwrap();
+        actual.actions_mut().list.push(action).unwrap();
     }
     actual.execute("actions.play", json!({"action":0})).unwrap();
     direct.execute("layer.smartObjects.perspectiveWarp", json!({"planes":planes()})).unwrap();

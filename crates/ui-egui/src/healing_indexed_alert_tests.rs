@@ -2,6 +2,7 @@
 //! reference application's alert with OK and change neither the clone source, the pixels nor the
 //! History. RGB documents keep healing, and the Clone Stamp (not measured) keeps setting its source.
 
+use photocraft_engine::presets::PresetsExt;
 use egui::Modifiers;
 use serde_json::json;
 
@@ -27,7 +28,7 @@ type State = (Option<[f64; 2]>, Option<[f64; 2]>, Vec<f32>, usize);
 fn state(app: &PhotocraftApp) -> State {
     let st = app.session.active().unwrap();
     let pixels = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().read_region(st.doc.bounds());
-    (app.ui.clone_source, app.session.presets.clone.active().source, pixels, st.history.past_len())
+    (app.ui.clone_source, app.session.presets().clone.active().source, pixels, st.history.past_len())
 }
 
 /// The alert is up once; OK closes it and leaves `before` as it was.

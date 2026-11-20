@@ -73,6 +73,7 @@ pub(crate) fn new_params(app: &PhotocraftApp, tool: Tool) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use photocraft_engine::presets::PresetsExt;
     use super::*;
 
     fn app() -> Box<PhotocraftApp> {
@@ -132,7 +133,7 @@ mod tests {
         let p = new_params(&app, Tool::RectMarquee);
         let r = app.run("tool.presets.new", p).unwrap();
         let name = r["name"].as_str().unwrap().to_string();
-        let stored = app.session.presets.tool_presets.iter().find(|t| t.name == name).unwrap().options["toolOptions"].as_object().unwrap().clone();
+        let stored = app.session.presets().tool_presets.iter().find(|t| t.name == name).unwrap().options["toolOptions"].as_object().unwrap().clone();
         assert_eq!(stored["feather"], json!(5.0));
         assert!(stored.keys().all(|k| !k.starts_with("crop") && !k.starts_with("move")), "{stored:?}");
         let mut flipped = serde_json::to_value(&app.ui.tool_options).unwrap();

@@ -16,6 +16,7 @@
 //! `--depth 16` or `--depth 32` converts the document to that bit depth after opening (the
 //! conversion is part of "open"), e.g. a 36 MP 16-bit refresh: `--size 7360x4912 --depth 16 --op refresh`.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::time::Instant;
 
 use eframe::egui_wgpu::RenderState;

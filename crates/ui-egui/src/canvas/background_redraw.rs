@@ -15,6 +15,7 @@
 //! going back to a state drawn a moment ago (⌥-click on an eye and again, an undo and its redo)
 //! uploads those blocks instead of compositing every layer again.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::collections::VecDeque;
 #[cfg(test)]
 use std::sync::atomic::AtomicU64;
@@ -232,7 +233,7 @@ impl KeptComposites {
 /// application setting, not part of the document. Read from the session's settings, which the
 /// engine keeps in step with the process-wide value compose reads (`psblend::set_text_gamma`).
 fn text_gamma(app: &PhotocraftApp) -> u32 {
-    app.session.color.settings.blend_text_gamma.to_bits()
+    app.session.color().settings.blend_text_gamma.to_bits()
 }
 
 /// Bytes kept composites of document `doc` may hold: what Memory Usage leaves beside its pixels

@@ -3,6 +3,7 @@
 //! Shift+letter steps through a key's tools in layout order across slots, an empty toolbar is
 //! allowed, `reset` brings back the default layout, and older settings still load.
 
+use photocraft_engine::prefs::SavedPrefsExt;
 use egui::{Key, Modifiers, vec2};
 use egui_kittest::kittest::Queryable;
 use photocraft_engine::prefs::{DEFAULT_TOOLBAR, Preferences, ToolbarCustomization};

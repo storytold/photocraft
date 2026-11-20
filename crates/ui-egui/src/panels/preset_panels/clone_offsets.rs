@@ -1,5 +1,6 @@
 //! Read-only clone geometry shared by the panel, overlay and source marker.
 
+use photocraft_engine::presets::PresetsExt;
 use photocraft_engine::presets::clone_source::{Mapping, resolve};
 use serde_json::{Value, json};
 
@@ -24,7 +25,7 @@ pub(crate) fn remember_clone_cursor(app: &mut PhotocraftApp, at: [f64; 2]) -> bo
 
 /// Resolve the exact sampling geometry without storing a painting anchor or changing a source.
 pub fn clone_mapping_at(app: &PhotocraftApp, at: Option<[f64; 2]>) -> Option<Mapping> {
-    let slot = app.session.presets.clone.active();
+    let slot = app.session.presets().clone.active();
     let source = slot.source?;
     let start = crate::canvas::paint_tool::stroking(app).filter(|stroke| matches!(stroke.tool, Tool::CloneStamp | Tool::Healing)).map(|stroke| stroke.start);
     let first = start.or(at).or(slot.last_anchor).or(slot.anchor).unwrap_or(source);

@@ -11,6 +11,7 @@
 //! `ui.inspect` shows it, `ui.dialog.confirm` imports as a new group, `ui.dialog.set` with
 //! `"choice": "alternate"` then `ui.dialog.confirm` replaces, and `ui.dialog.cancel` imports nothing.
 
+use photocraft_engine::presets::PresetsExt;
 use craft::ui::dialog::{PromptAnswer, PromptChoice, StandardPrompt};
 use serde_json::{Value, json};
 
@@ -33,7 +34,7 @@ pub(crate) struct PresetClash(Held);
 fn clashing(app: &PhotocraftApp, cmd: &str, group: &str) -> usize {
     match cmd {
         "brush.presets.importAbr" => app.session.tools.presets.iter().filter(|x| !x.builtin && x.group == group).count(),
-        "gradient.presets.importGrd" => app.session.presets.gradients.iter().filter(|g| g.name == group).map(|g| g.items.len()).sum(),
+        "gradient.presets.importGrd" => app.session.presets().gradients.iter().filter(|g| g.name == group).map(|g| g.items.len()).sum(),
         _ => 0,
     }
 }

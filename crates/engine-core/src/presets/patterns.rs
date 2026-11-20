@@ -4,6 +4,7 @@
 //! Groups hold pattern **ids**. Library patterns that are in no group (newly defined or imported)
 //! are shown in a trailing "Patterns" group; ids whose pattern was deleted are dropped.
 
+use crate::presets::PresetsExt;
 use photocraft_doc::{Fill, LayerContent};
 use serde_json::{Value, json};
 
@@ -23,7 +24,7 @@ pub fn builtin_groups() -> Vec<Group<String>> {
 /// Bring the groups in line with the library (see the module docs).
 pub fn sync(s: &mut Session) {
     let lib: Vec<String> = s.patterns.items.iter().map(|p| p.id.clone()).collect();
-    let groups = &mut s.presets.pattern_groups;
+    let groups = &mut s.presets_mut().pattern_groups;
     for g in groups.iter_mut() {
         g.items.retain(|id| lib.contains(id));
     }
@@ -36,14 +37,14 @@ pub fn sync(s: &mut Session) {
 
 /// The selected pattern, if it is still in the library.
 pub fn current(s: &Session) -> Option<&photocraft_doc::Pattern> {
-    let id = s.presets.pattern.as_deref()?;
+    let id = s.presets().pattern.as_deref()?;
     s.patterns.items.iter().find(|p| p.id == id)
 }
 
 fn list(s: &mut Session, _: &Value) -> Result<Value> {
     sync(s);
     let groups: Vec<Value> = s
-        .presets
+        .presets()
         .pattern_groups
         .iter()
         .map(|g| {
@@ -73,8 +74,8 @@ fn active_pattern_fill(s: &Session) -> Option<photocraft_doc::LayerId> {
 fn select(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "pattern.presets.select";
     let pat = pattern_key(s, p, CMD)?;
-    s.presets.pattern = Some(pat.id.clone());
-    s.presets.rev += 1;
+    s.presets_mut().pattern = Some(pat.id.clone());
+    s.presets_mut().rev += 1;
     let mut out = json!({"pattern": pat.id, "name": pat.display_name()});
     if p.get("applyToLayer").and_then(Value::as_bool).unwrap_or(true)
         && let Some(id) = active_pattern_fill(s)
@@ -106,11 +107,11 @@ fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
     let id = r.get("pattern").and_then(Value::as_str).unwrap_or_default().to_string();
     sync(s);
     if let Some(g) = str_param(p, "group") {
-        for gr in &mut s.presets.pattern_groups {
+        for gr in &mut s.presets_mut().pattern_groups {
             gr.items.retain(|x| *x != id);
         }
-        let gi = group_index(&mut s.presets.pattern_groups, Some(g));
-        s.presets.pattern_groups[gi].items.push(id.clone());
+        let gi = group_index(&mut s.presets_mut().pattern_groups, Some(g));
+        s.presets_mut().pattern_groups[gi].items.push(id.clone());
     }
     s.presets_changed();
     Ok(json!({"pattern": id}))
@@ -155,8 +156,8 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
         "deleteGroup" => {
             // Deleting a folder deletes its patterns, as in Photoshop.
             let g = req_str(p, "group", CMD)?;
-            let i = s.presets.pattern_groups.iter().position(|x| x.name == g).ok_or_else(|| bad(CMD, format!("no group \"{g}\"")))?;
-            let gone = s.presets.pattern_groups.remove(i);
+            let i = s.presets().pattern_groups.iter().position(|x| x.name == g).ok_or_else(|| bad(CMD, format!("no group \"{g}\"")))?;
+            let gone = s.presets_mut().pattern_groups.remove(i);
             s.patterns.items.retain(|q| !gone.items.contains(&q.id));
             json!({"group": g, "deleted": gone.items.len()})
         }
@@ -165,9 +166,9 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
             let id = crate::pattern_cmds::resolve_id(s, key).ok_or_else(|| bad(CMD, format!("no pattern \"{key}\"")))?;
             let mut q = p.clone();
             q["preset"] = json!(id);
-            edit_groups(&mut s.presets.pattern_groups, "move", &q, CMD)?
+            edit_groups(&mut s.presets_mut().pattern_groups, "move", &q, CMD)?
         }
-        a => edit_groups(&mut s.presets.pattern_groups, a, p, CMD)?,
+        a => edit_groups(&mut s.presets_mut().pattern_groups, a, p, CMD)?,
     };
     sync(s);
     s.presets_changed();

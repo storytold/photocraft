@@ -1,6 +1,7 @@
 //! The Gradient Editor panel (`gradientEditor`). With a gradient fill layer selected it shows that layer's gradient
 //! (the Properties rows); without one it edits the gradient the Gradient tool paints with.
 
+use photocraft_engine::presets::PresetsExt;
 use craft::behavior::EditEvent;
 // The stop bar is craft-color's.
 use craft::color_ui::ui::gradient::{GradientEditor, StopRef, StopRows, StopRules};
@@ -39,7 +40,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// pass in one frame gets no pointer input, so its editor reports no event and applies nothing again.
 fn tool_gradient(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
-    let mut shown = app.gradient.preset.clone().unwrap_or_else(|| stops::of_preset(&app.session.presets.gradient, fg, bg));
+    let mut shown = app.gradient.preset.clone().unwrap_or_else(|| stops::of_preset(&app.session.presets().gradient, fg, bg));
     let sampler = stops::sampler(fg, bg);
 
     let sampled = (0..shown.color.len()).find_map(|i| crate::screen_picker::take(app, ("gradient-editor", i)));

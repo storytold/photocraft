@@ -162,6 +162,7 @@ pub(crate) fn run_import(app: &mut PhotocraftApp, cmd: &str, what: &str, stem: &
 
 #[cfg(test)]
 mod tests {
+    use photocraft_engine::presets::PresetsExt;
     use std::sync::Arc;
 
     use craft::host::{PickKind, Picked, ScriptedFiles};
@@ -255,7 +256,7 @@ mod tests {
             GrdGradient { name: "Ember".into(), stops: vec![stop(0.0, GrdColor::Foreground), stop(1.0, GrdColor::Rgb([1.0, 0.0, 0.0]))], ..Default::default() };
         let grd = write(&[ember]);
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        let groups = |app: &PhotocraftApp, g: &str| app.session.presets.gradients.iter().filter(|x| x.name == g).count();
+        let groups = |app: &PhotocraftApp, g: &str| app.session.presets().gradients.iter().filter(|x| x.name == g).count();
         open(&mut app, "Fire.grd", &grd).unwrap().unwrap();
         assert_eq!(groups(&app, "Fire"), 1);
         assert!(prompt(&app).is_none(), "a new group imports without asking");

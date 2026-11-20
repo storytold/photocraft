@@ -1,4 +1,5 @@
 //! Recorded Type > Create Work Path preserves its descriptor and uses native glyph outlines.
+use photocraft_engine::actions_cmds::ActionsExt;
 use craft_psd::{
     atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem},
     descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D},
@@ -101,9 +102,9 @@ fn playback_matches_native_path_and_preserves_text_with_undo_redo() {
                 d.items.reverse();
                 d.name = UnicodeString::new_nul("Recorded path");
             }
-            recorded.actions.list = ActionList::from_file(ActionsFile::new(load(item(d)).actions, Vec::new()));
+            recorded.actions_mut().list = ActionList::from_file(ActionsFile::new(load(item(d)).actions, Vec::new()));
             if noncanonical {
-                assert!(recorded.actions.list.actions()[0].steps[0].params.get(SOURCE).is_some());
+                assert!(recorded.actions().list.actions()[0].steps[0].params.get(SOURCE).is_some());
             }
             let result = recorded.execute("actions.play", json!({"action":0})).unwrap();
             assert_eq!(result["ran"], 1);
@@ -163,7 +164,7 @@ fn non_text_and_no_document_playback_fail_without_edits() {
             s.execute("file.new", json!({"width":8,"height":8})).unwrap();
         }
         let before = s.active().map(|st| (st.doc.clone(), st.history.past_len()));
-        s.actions.list = ActionList::from_file(ActionsFile::new(load(item(descriptor())).actions, Vec::new()));
+        s.actions_mut().list = ActionList::from_file(ActionsFile::new(load(item(descriptor())).actions, Vec::new()));
         let result = s.execute("actions.play", json!({"action":0})).unwrap();
         assert_eq!(result["ran"], 0);
         assert!(result.get("failed").is_some(), "{result}");

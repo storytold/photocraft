@@ -1,3 +1,4 @@
+use crate::preset_store::PresetStoreExt;
 use super::{CustomShape, Deserialize, Document, EngineError, LayerContent, LayerId, Path, Result, Serialize, Session, Value, bad, json, str_or};
 
 // ------------------------------------------------------------------ Define Brush / Custom Shape

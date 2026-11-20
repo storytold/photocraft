@@ -62,6 +62,7 @@ mod tablet;
 mod ui_state;
 mod window_frame;
 
+use photocraft_engine::print_cmds::PrintExt;
 use photocraft_engine::Session;
 use photocraft_ui_egui::PhotocraftApp;
 use photocraft_ui_egui::Prefix;
@@ -554,7 +555,7 @@ fn main() -> eframe::Result {
             #[cfg(target_os = "linux")]
             let session = {
                 let mut session = Session::new();
-                session.print_spooler = print_portal::spooler();
+                *session.print_spooler_mut() = print_portal::spooler();
                 session
             };
             #[cfg(not(target_os = "linux"))]
@@ -817,6 +818,7 @@ pub(crate) fn no_child_spawns() -> std::sync::RwLockWriteGuard<'static, ()> {
 
 #[cfg(test)]
 mod tests {
+    use photocraft_engine::prefs::SavedPrefsExt;
     /// Schema-probe `ui.ron` shapes *reconstructed* from the documented 0.14/0.15/0.37 layouts,
     /// not recorded machine saves: 0.14 and 0.15 both store the flat window entry, which the
     /// first 0.37 launch rewrites; a 0.37 file is left alone. Keeping all three probes makes a

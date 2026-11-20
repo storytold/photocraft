@@ -17,7 +17,7 @@
 //!
 //! The built-in groups are our own (clean-room): colours, styles and shapes were designed here,
 //! not copied from Photoshop's presets. User edits persist with the preferences document: see
-//! [`PresetState::to_json`] (saved under `"presets"` by [`Session::prefs_to_json`]).
+//! [`PresetState::to_json`] (saved under `"presets"` by [`SavedPrefsExt::prefs_to_json`](crate::prefs::SavedPrefsExt::prefs_to_json)).
 
 pub mod clone_source;
 pub mod gradients;

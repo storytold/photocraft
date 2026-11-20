@@ -235,7 +235,7 @@ pub struct ToolState {
     pub brush: photocraft_paint::BrushSettings,
     /// Brush presets (built-ins plus user presets; see `brush.presets.*`).
     pub presets: Arc<Vec<photocraft_paint::BrushPreset>>,
-    /// Bumped whenever `presets` changes ([`Session::brush_presets_changed`]); the preset store
+    /// Bumped whenever `presets` changes ([`PresetStoreExt::brush_presets_changed`](crate::preset_store::PresetStoreExt::brush_presets_changed)); the preset store
     /// syncs when it moves.
     pub presets_rev: u64,
     /// Mixer Brush paint carried between strokes.

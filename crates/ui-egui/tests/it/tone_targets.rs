@@ -1,4 +1,5 @@
 //! Levels/Curves must use the same grayscale target in their controls, pickers and commands.
+use photocraft_engine::actions_cmds::ActionsExt;
 use craft::automation::actions::ActionStep;
 use craft::automation::ui::actions::ActionSelection;
 use craft::ui::dialog::DialogId;
@@ -139,7 +140,7 @@ fn next_case(h: &mut Harness<'static, Box<PhotocraftApp>>, from: &Session, filte
     app.session.add_document(doc, None);
     app.session.select_layer(st.active_layer.unwrap()).unwrap();
     app.session.active_mut().unwrap().channel_view = st.channel_view.clone();
-    app.session.actions = from.actions.clone();
+    *app.session.actions_mut() = from.actions().clone();
     app.ui.mask_target = false;
     app.ui.vector_mask_target = false;
     app.ui.filter_mask_target = filter_mask;
@@ -286,12 +287,12 @@ fn add_action(app: &mut PhotocraftApp, name: &str, command: impl Into<String>, p
     if dialog {
         action.dialogs.insert(0);
     }
-    app.session.actions.list.push(action).unwrap();
+    app.session.actions_mut().list.push(action).unwrap();
 }
 
 /// The parameters the first step of the first action is recorded with.
 fn recorded_params(h: &Harness<'static, Box<PhotocraftApp>>) -> Value {
-    h.state().session.actions.list.to_file().actions[0].steps[0].params.clone()
+    h.state().session.actions().list.to_file().actions[0].steps[0].params.clone()
 }
 
 /// Plays `action` on `h`, which pauses at its dialog.

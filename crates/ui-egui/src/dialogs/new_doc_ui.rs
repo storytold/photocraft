@@ -2,6 +2,8 @@
 //! last created settings, carries the colour picker, the saved presets and the recent list between the dialog and the
 //! engine, and runs `file.new` with what Create answers.
 
+use photocraft_engine::presets::PresetsExt;
+use photocraft_engine::color_cmds::ColorExt;
 use craft::behavior::PixelSize;
 use craft::theme::Srgba;
 use craft::ui::contract::{Bind, SaveKey};
@@ -64,7 +66,7 @@ pub(crate) fn open(app: &mut PhotocraftApp) -> DialogId {
         dialog
     })
     .saved(saved_library(app))
-    .recent(app.session.presets.recent_documents.iter().map(to_options).collect());
+    .recent(app.session.presets().recent_documents.iter().map(to_options).collect());
     app.framework.dialogs.open(dialog)
 }
 
@@ -153,7 +155,7 @@ fn listed_pixel_aspect(app: &PhotocraftApp, id: &str) -> String {
 /// The engine's saved document presets as the dialog's library, in the engine's order.
 fn saved_library(app: &PhotocraftApp) -> PresetLibrary<DocumentOptions> {
     let mut library = PresetLibrary::new();
-    for preset in &app.session.presets.documents {
+    for preset in &app.session.presets().documents {
         let mut options = to_options(&preset.settings);
         options.name.clone_from(&preset.name);
         if library.add(&GroupPath::root(), &preset.name, options).is_err() {
@@ -174,7 +176,7 @@ pub(crate) fn profiles(app: &PhotocraftApp) -> Vec<ColorProfiles> {
             let space = photocraft_engine::color_cmds::mode_space(*mode);
             let mut others: Vec<String> = craft::cms::Builtin::ALL.iter().filter(|b| b.profile().color_space == space).map(|b| b.id().to_string()).collect();
             others.extend(installed.iter().filter(|i| i.is_destination() && i.color_space == space).map(|i| i.path.clone()));
-            ColorProfiles::new(*dialog_mode, app.session.color.working(*mode).description.clone(), others)
+            ColorProfiles::new(*dialog_mode, app.session.color().working(*mode).description.clone(), others)
         })
         .collect()
 }

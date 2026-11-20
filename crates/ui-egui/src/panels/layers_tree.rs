@@ -2,6 +2,7 @@
 //! `LayerTree` over the active document), `PhotoThumbs` (its thumbnails), the settings and filter
 //! conversions, and the row menus as entries.
 
+use photocraft_engine::link_watch::LinkWatchExt;
 use std::collections::HashSet;
 use std::sync::Arc;
 

@@ -4,6 +4,7 @@
 //! ceiling, so a mapping regression (or a new unmapped event in the corpus) shows up here.
 #![cfg(feature = "corpus")]
 
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::path::{Path, PathBuf};
 
 use photocraft_engine::Session;
@@ -133,7 +134,7 @@ fn atn_corpus_loads_saves_and_reloads() {
         steps += n_steps;
         unsupported += n_unsupported;
         println!("{name}: {} actions, {n_steps} steps, {n_unsupported} kept Photoshop steps {events:?}", loaded["actions"].as_array().map_or(0, Vec::len));
-        let first: Vec<_> = s.actions.list.actions().iter().map(exported_action).collect();
+        let first: Vec<_> = s.actions().list.actions().iter().map(exported_action).collect();
         let saved = match s.execute("actions.save", json!({"set": loaded["set"]})) {
             Ok(v) => v,
             Err(e) => {
@@ -144,12 +145,12 @@ fn atn_corpus_loads_saves_and_reloads() {
         let bytes = photocraft_engine::paint::tile::b64_decode(saved["data"].as_str().unwrap_or("")).unwrap_or_default();
         let mut t = Session::new();
         match t.execute("actions.load", json!({"data": photocraft_engine::paint::tile::b64_encode(&bytes)})) {
-            Ok(_) if t.actions.list.actions() == first.as_slice() => {}
+            Ok(_) if t.actions().list.actions() == first.as_slice() => {}
             Ok(_) => {
                 // Name the first step that differs, so a mapping asymmetry is quick to find.
                 let detail = first
                     .iter()
-                    .zip(t.actions.list.actions())
+                    .zip(t.actions().list.actions())
                     .flat_map(|(a, b)| a.steps.iter().zip(&b.steps).enumerate().map(move |(i, (x, y))| (a.name.as_str(), i, x, y)))
                     .find(|(_, _, x, y)| x != y)
                     .map(|(action, i, x, y)| format!("`{action}` step {}: {} {} → {} {}", i + 1, x.command, x.params, y.command, y.params))

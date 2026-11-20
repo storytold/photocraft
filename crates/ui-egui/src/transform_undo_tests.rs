@@ -2,6 +2,7 @@
 //! drag one step) and never reach the document under the open box; and the
 //! handles have a generous grab radius, so a press just off a corner scales instead of rotating.
 
+use photocraft_engine::actions_cmds::ActionsExt;
 use egui::{Key, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
 use serde_json::json;
@@ -138,9 +139,9 @@ fn undo_steps_back_through_the_transform_not_the_document() {
     // Outside the transform, ⌘Z is the document's Undo again.
     key(&mut h, Modifiers::COMMAND, Key::Z);
     assert_eq!(width(&h), 100, "the committed transform is undone");
-    assert_eq!(h.state().session.actions.list.sets().len(), 1);
+    assert_eq!(h.state().session.actions().list.sets().len(), 1);
     key(&mut h, Modifiers::COMMAND, Key::Z);
-    assert!(h.state().session.actions.list.sets().is_empty(), "the preceding library edit is next");
+    assert!(h.state().session.actions().list.sets().is_empty(), "the preceding library edit is next");
 }
 
 /// `engine.execute` over the control channel (and MCP, which goes through it) as a programmatic

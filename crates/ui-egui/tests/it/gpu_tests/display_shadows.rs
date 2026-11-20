@@ -4,6 +4,7 @@
 //! profiles and expected values implement ICC.1:2010 Annex F.3's matrix/TRC equations.
 //! A uniform 33³ display LUT used to make input sRGB 1–7 noticeably too dark.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::sync::Arc;
 
 use craft::cms::{Builtin, Profile, curve::Curve};
@@ -160,7 +161,7 @@ fn gpu_display_shadows_match_independent_icc_reference_at_all_depths() {
                 PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
                 let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
                 app.set_wgpu(cc.wgpu_render_state.as_ref().expect("render state").clone());
-                app.session.color.set_displays(Ok(vec![Display {
+                app.session.color_mut().set_displays(Ok(vec![Display {
                     id: 1,
                     name: "Synthetic display".into(),
                     frame: [0.0, 0.0, 1000.0, 700.0],

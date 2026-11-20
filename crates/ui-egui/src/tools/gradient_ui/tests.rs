@@ -1,3 +1,4 @@
+use photocraft_engine::presets::PresetsExt;
 use super::*;
 use crate::canvas::ToolEvent;
 
@@ -148,11 +149,11 @@ fn preview_shows_the_drag_before_commit() {
 #[test]
 fn the_editor_edits_the_current_gradient_without_a_layer() {
     let mut h = super::editor_tests::editor(false);
-    let before = h.state().session.presets.gradient.stops.len();
+    let before = h.state().session.presets().gradient.stops.len();
     let doc = h.state().session.active().unwrap().doc.clone();
     let history = h.state().session.active().unwrap().history.past_len();
     super::editor_tests::add_stop(&mut h);
-    assert_eq!(h.state().session.presets.gradient.stops.len(), before + 1, "the stop went into the current gradient");
+    assert_eq!(h.state().session.presets().gradient.stops.len(), before + 1, "the stop went into the current gradient");
     assert_eq!(h.state().session.active().unwrap().doc, doc, "the document is untouched");
     assert_eq!(h.state().session.active().unwrap().history.past_len(), history, "no history step");
 }

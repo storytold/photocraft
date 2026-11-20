@@ -5,6 +5,7 @@
 //! The engine keeps what lies outside the list: the action shortcuts before and after, and where
 //! each document's history stood, so Edit › Undo offers the library undo only while no document
 //! edit came after it.
+use crate::actions_cmds::ActionsExt;
 use std::collections::BTreeMap;
 
 use craft::automation::actions::{ActionList, ActionListError, LibraryEdit};
@@ -86,7 +87,7 @@ fn check_library_size(list: &ActionList, cmd: &str) -> Result<()> {
 /// save it, then makes it the list and keeps what its undo restores outside the list.
 /// `shortcuts` replaces every action shortcut (`None` keeps them).
 pub(crate) fn publish_library<R>(s: &mut Session, cmd: &str, shortcuts: Option<Shortcuts>, edit: impl FnOnce(&mut ActionList) -> R) -> Result<R> {
-    let mut list = s.actions.list.clone();
+    let mut list = s.actions().list.clone();
     let result = edit(&mut list);
     let kind = list.library_undo().ok_or_else(|| bad(cmd, "not an Actions library command"))?;
     check_library_size(&list, cmd)?;
@@ -111,24 +112,24 @@ pub(crate) fn publish_library<R>(s: &mut Session, cmd: &str, shortcuts: Option<S
         alternates: before.1,
         after_shortcuts: after.0,
         after_alternates: after.1,
-        replaced_before_attachment: s.actions.replaced_before_attachment,
+        replaced_before_attachment: s.actions().replaced_before_attachment,
     };
     if replacing && s.preset_store().is_none() {
-        s.actions.replaced_before_attachment = true;
+        s.actions_mut().replaced_before_attachment = true;
     }
-    s.actions.list = list;
-    s.actions.library_undo = Some(Box::new(undo));
+    s.actions_mut().list = list;
+    s.actions_mut().library_undo = Some(Box::new(undo));
     Ok(result)
 }
 
 pub(super) fn clear(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "actions.clearAll";
     confirmed_idle(s, p, CMD)?;
-    let count = s.actions.list.actions().len();
+    let count = s.actions().list.actions().len();
     let prefs = s.prefs();
     let keys = prefs.shortcuts.keys().chain(prefs.alternate_shortcuts.keys()).any(|id| is_action_key(id));
     // Before the store attaches, an empty list still clears the stored library.
-    if count != 0 || !s.actions.list.sets().is_empty() || keys || (s.preset_store().is_none() && !s.actions.replaced_before_attachment) {
+    if count != 0 || !s.actions().list.sets().is_empty() || keys || (s.preset_store().is_none() && !s.actions().replaced_before_attachment) {
         publish_library(s, CMD, Some(Shortcuts::new()), ActionList::clear_all)?;
     }
     Ok(json!({"cleared": count}))
@@ -152,10 +153,10 @@ pub(super) fn reset(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(bad(CMD, "`mode` must be append or replace")),
     };
     // Appended beside a set of that name, the defaults get a set of their own (`PhotoCraft Basics 2`).
-    let set = if append { crate::preset_import_cmds::UniqueNames::new_exact(s.actions.list.sets()).unique(BASICS_SET) } else { BASICS_SET.to_owned() };
+    let set = if append { crate::preset_import_cmds::UniqueNames::new_exact(s.actions().list.sets()).unique(BASICS_SET) } else { BASICS_SET.to_owned() };
     let defaults = basics(&set);
     let merged = publish_library(s, CMD, (!append).then(Shortcuts::new), |list| list.reset(defaults, append, |_, _| {}))?;
-    let names: Vec<&str> = merged.added.iter().map(|&index| s.actions.list.actions()[index].name.as_str()).collect();
+    let names: Vec<&str> = merged.added.iter().map(|&index| s.actions().list.actions()[index].name.as_str()).collect();
     Ok(json!({"set": set, "appended": append, "actions": names}))
 }
 
@@ -172,10 +173,10 @@ fn undo_state(s: &Session) -> Result<&LibraryUndo> {
     const CMD: &str = "actions.undoLibrary";
     idle(s, CMD)?;
     let undo = s
-        .actions
+        .actions()
         .library_undo
         .as_deref()
-        .filter(|undo| s.actions.list.library_undo() == Some(undo.edit))
+        .filter(|undo| s.actions().list.library_undo() == Some(undo.edit))
         .ok_or_else(|| list_error(CMD, ActionListError::NothingToUndo))?;
     if action_bindings(&s.prefs().shortcuts) != undo.after_shortcuts || action_bindings(&s.prefs().alternate_shortcuts) != undo.after_alternates {
         return Err(bad(CMD, "Actions shortcuts changed after the library edit"));
@@ -203,10 +204,10 @@ pub(super) fn undo_enabled(s: &Session) -> std::result::Result<(), String> {
 pub(super) fn undo(s: &mut Session, _: &Value) -> Result<Value> {
     const CMD: &str = "actions.undoLibrary";
     undo_state(s)?;
-    let undo = s.actions.library_undo.take().ok_or_else(|| list_error(CMD, ActionListError::NothingToUndo))?;
-    s.actions.list.undo_library().map_err(|error| list_error(CMD, error))?;
+    let undo = s.actions_mut().library_undo.take().ok_or_else(|| list_error(CMD, ActionListError::NothingToUndo))?;
+    s.actions_mut().list.undo_library().map_err(|error| list_error(CMD, error))?;
     if s.preset_store().is_none() {
-        s.actions.replaced_before_attachment = undo.replaced_before_attachment;
+        s.actions_mut().replaced_before_attachment = undo.replaced_before_attachment;
     }
     replace_bindings(s, undo.shortcuts, undo.alternates);
     Ok(json!({"undone": true}))

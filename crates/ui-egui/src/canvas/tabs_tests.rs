@@ -1,6 +1,7 @@
 //! The document tab strip in the whole app: tabs follow their documents through Save As, Ctrl+Tab cycles them in
 //! document order, and the tab text names the target (real tree).
 
+use photocraft_engine::actions_cmds::ActionsExt;
 use egui::accesskit::Role;
 use egui::vec2;
 use egui_kittest::Harness;
@@ -112,7 +113,7 @@ fn ctrl_tab_records_a_relative_document_switch() {
     h.key_press_modifiers(ctrl(), egui::Key::Tab);
     h.run_steps(2);
     h.state_mut().run("actions.stop", json!({})).unwrap();
-    let steps = &h.state().session.actions.list.action(0).expect("the recorded action").steps;
+    let steps = &h.state().session.actions().list.action(0).expect("the recorded action").steps;
     assert_eq!(steps, &[ActionStep::new("document.activate", json!({"offset": -1}))]);
 }
 

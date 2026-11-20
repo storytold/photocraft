@@ -307,10 +307,10 @@ pub struct Session {
     /// Each open document's linked smart objects' files: size and modification time when last
     /// seen ([`link_watch`]).
     pub link_stamps: std::collections::HashMap<(u64, String), state::Stamp>,
-    /// The stamps being taken on a worker thread ([`Session::start_link_scan`]).
+    /// The stamps being taken on a worker thread ([`LinkWatchExt::start_link_scan`](crate::link_watch::LinkWatchExt::start_link_scan)).
     pub link_scan: Option<state::LinkScan>,
     /// Each open document's linked smart objects' files that were not there when last looked at
-    /// ([`Session::missing_links`]).
+    /// ([`LinkWatchExt::missing_links`](crate::link_watch::LinkWatchExt::missing_links)).
     link_missing: std::collections::HashSet<(u64, String)>,
     /// A finished live stroke offered to the `paint.stroke` / `paint.pencil` that commits it
     /// ([`Session::offer_live_stroke`]).

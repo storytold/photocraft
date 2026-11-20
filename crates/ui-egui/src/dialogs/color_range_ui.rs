@@ -9,6 +9,7 @@
 //! full resolution (one history step). Reduced previews approximate fine detail and effects.
 //! Cancel never touches the document, so the previous selection stays as it was.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -197,7 +198,7 @@ fn query_key(app: &PhotocraftApp, params: &Value) -> u64 {
     // This runs several times per frame, including mere pointer motion. Debug-formatting a
     // ProofView serializes the whole ICC profile/LUT; proof() also clones the default profile.
     // Borrow the state and use the profile's memoized content hash instead.
-    let proof = app.session.active().and_then(|st| app.session.color.proof_ref(st.doc.id));
+    let proof = app.session.active().and_then(|st| app.session.color().proof_ref(st.doc.id));
     proof.is_some().hash(&mut key);
     if let Some(proof) = proof {
         let setup = &proof.setup;
@@ -255,7 +256,7 @@ fn proxy_mask(app: &PhotocraftApp, proxy: &Document, k: u32, params: &Value) -> 
         return Ok(mask);
     }
     if params.get("select").and_then(Value::as_str) == Some("outOfGamut") {
-        let pv = app.session.color.proof(proxy.id);
+        let pv = app.session.color().proof(proxy.id);
         let (m, _) = photocraft_engine::color_cmds::gamut_mask(proxy, &pv.setup, pv.gamut_threshold).map_err(|e| e.to_string())?;
         let invert = params.get("invert").and_then(Value::as_bool).unwrap_or(false);
         let mut mask: Vec<f32> = m.iter().map(|v| f32::from(*v) / 255.0).map(|v| if invert { 1.0 - v } else { v }).collect();
@@ -307,7 +308,7 @@ fn report(app: &mut PhotocraftApp, error: Option<String>) {
 fn thumbnail(app: &PhotocraftApp, proxy: &Document) -> Result<Arc<SharedPicture>, String> {
     let (w, h) = (proxy.size.width as usize, proxy.size.height as usize);
     let buf = photocraft_compose::thumbnail_buffer(proxy, proxy.size.width.max(proxy.size.height));
-    let thumb = app.session.color.canvas_display(proxy).map_err(|e| e.to_string())?.to_rgba8(&buf);
+    let thumb = app.session.color().canvas_display(proxy).map_err(|e| e.to_string())?.to_rgba8(&buf);
     let size = [thumb.width as usize, thumb.height as usize];
     if size != [w, h] || thumb.pixels.len() != w * h * 4 {
         return Err(format!("the image thumbnail is {}×{}, expected {w}×{h}", thumb.width, thumb.height));
