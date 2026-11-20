@@ -134,7 +134,7 @@ fn synthetic(depth: SampleType) -> Document {
         g.artboard =
             Some(Artboard { rect: Rect::new(40, 0, 80, 40), background: ArtboardBackground::Custom(Color::rgb(0.0, 1.0, 0.0)), preset: String::new() });
     }
-    d.layers = vec![g1, g2];
+    d.layers = vec![g1, g2].into();
     let states = capture_states(&d);
     d.layer_comps.push(LayerComp {
         id: 11,
