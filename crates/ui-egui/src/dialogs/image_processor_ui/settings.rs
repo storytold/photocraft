@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::fmt::Write;
 
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue};
-use craft_xml::{Doctype, Limits, Node, Options};
+use craft_xml::{Doctype, Event, Limits, Node, Options};
 
 pub(super) const MAX_BYTES: usize = 256 * 1024;
 
@@ -118,15 +118,17 @@ pub(super) fn decode(bytes: &[u8]) -> Result<DialogFields, String> {
     if bytes.len() > MAX_BYTES {
         return Err(too_large());
     }
-    std::str::from_utf8(bytes).map_err(|_| tl!("Image Processor settings must be UTF-8.").to_string())?;
+    let text = std::str::from_utf8(bytes).map_err(|_| tl!("Image Processor settings must be UTF-8.").to_string())?;
     let options = Options { doctype: Doctype::Reject, pis: true, ..Options::default() }.strict().with_limits(Limits {
         max_input: MAX_BYTES,
         max_depth: 32,
         max_nodes: 4096,
         ..Limits::default()
     });
-    let root =
-        options.parse(bytes).map_err(|error| crate::i18n::fmt(tl!("Could not read Image Processor settings: {error}"), &[("error", &error.to_string())]))?;
+    if text.contains('&') {
+        validate_references(text.strip_prefix('\u{feff}').unwrap_or(text), &options)?;
+    }
+    let root = options.parse(bytes).map_err(xml_error)?;
     if root.name != ROOT || root.attr("xmlns").is_some_and(|ns| !ns.is_empty()) {
         return Err(tl!("This file does not contain Image Processor settings.").into());
     }
@@ -150,6 +152,26 @@ pub(super) fn decode(bytes: &[u8]) -> Result<DialogFields, String> {
         }
     }
     Ok(updates)
+}
+
+fn xml_error(error: craft_xml::Error) -> String {
+    crate::i18n::fmt(tl!("Could not read Image Processor settings: {error}"), &[("error", &error.to_string())])
+}
+
+/// The shared reader accepts bare ampersands even in strict mode. Its event spans let us
+/// check the original text and attributes without treating CDATA, comments or instructions as XML text.
+fn validate_references(text: &str, options: &Options<'_>) -> Result<(), String> {
+    let mut events = options.events(text.as_bytes());
+    while let Some(event) = events.next().map_err(xml_error)? {
+        if !matches!(event, Event::Text(_) | Event::Start { .. }) {
+            continue;
+        }
+        let raw = text.get(events.span()).ok_or_else(|| invalid(ROOT))?;
+        if raw.split('&').skip(1).any(|tail| tail.split_once(';').and_then(|(name, _)| craft_xml::entity(name)).is_none()) {
+            return Err(tl!("Image Processor settings contain an unescaped ampersand.").into());
+        }
+    }
+    Ok(())
 }
 
 fn parse_value(kind: Kind, text: Cow<'_, str>, current: bool) -> Option<FieldValue> {

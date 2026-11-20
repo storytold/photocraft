@@ -94,6 +94,9 @@ fn invalid_settings_are_rejected() {
         "<ImageProcessor><tiff>tr<something/>ue</tiff></ImageProcessor>",
         "<ImageProcessor><icc>false</icc><icc>true</icc></ImageProcessor>",
         "<ImageProcessor><source>&bad;</source></ImageProcessor>",
+        "<ImageProcessor><dest>A & B</dest></ImageProcessor>",
+        "<ImageProcessor><dest>A &amp</dest></ImageProcessor>",
+        "<ImageProcessor><future label='A & B'/></ImageProcessor>",
         "<ImageProcessor/><Another/>",
     ] {
         assert!(settings::decode(invalid.as_bytes()).is_err(), "{invalid}");
@@ -101,6 +104,19 @@ fn invalid_settings_are_rejected() {
     assert!(settings::decode(&[0xff]).is_err());
     assert!(settings::decode(&vec![b' '; settings::MAX_BYTES + 1]).is_err());
     assert!(settings::encode(&DialogFields::from_pairs([("input", "bad\0path")])).is_err());
+}
+
+#[test]
+fn escaped_ampersands_and_literal_cdata_remain_valid() {
+    let xml = concat!(
+        "\u{feff}<ImageProcessor><!-- A & B --><?note A & B?>",
+        "<future label='A &amp; B'/>",
+        "<dest>A &amp; B &#38; C &amp;amp;</dest>",
+        "<source><![CDATA[A & B]]></source></ImageProcessor>",
+    );
+    let fields = settings::decode(xml.as_bytes()).unwrap();
+    assert_eq!(fields.text("output"), Some("A & B & C &amp;"));
+    assert_eq!(fields.text("input"), Some("A & B"));
 }
 
 type AppHarness = Harness<'static, Box<PhotocraftApp>>;
@@ -228,14 +244,14 @@ fn malformed_and_cancelled_picks_leave_the_form_unchanged() {
     assert_eq!(h.state().framework.dialogs.stack().top(), Some(id));
 
     let path = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(path.path(), b"<ImageProcessor><useopen>true</useopen><q>wrong</q></ImageProcessor>").unwrap();
+    std::fs::write(path.path(), b"<ImageProcessor><useopen>true</useopen><dest>A & B</dest></ImageProcessor>").unwrap();
     click(&mut h, "Load…");
     files.answer(Picked::Paths(vec![path.path().to_path_buf()])).unwrap();
     h.run_steps(3);
     assert_eq!(fields(&h, id), &original);
     let alert = h.state().framework.dialogs.stack().top().unwrap();
     assert_ne!(alert, id, "an error is shown over the form");
-    assert!(h.state().ui.status.contains("Invalid Image Processor setting: q"));
+    assert!(h.state().ui.status.contains("unescaped ampersand"));
 }
 
 #[test]
