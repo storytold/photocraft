@@ -33,7 +33,7 @@ XL are missing (gap G10). Remaining: 300–500 h including PSD fidelity.
 | BMP | R/W | yes | yes | 8-bit; palette BMPs open in Indexed Color mode and Indexed Color documents save as palette BMPs (no transparency) |
 | WebP | R/W | yes | yes | Lossless and our own lossy VP8 encoder; ICC/EXIF/XMP (the CLI's `--metadata none` leaves the document XMP out, #9466); Save keeps an opened file lossy (at its quality) or lossless (#2399); Save for Web (Legacy) writes it too, lossy at its Quality or lossless, a format Photoshop's legacy dialog lacks (#6391). File › Open keeps an animation's first frame; New Video Layer from File and Video Frames to Layers take every frame, with the timeline rate from the durations (#1198) |
 | AVIF | R/W | no (#463) | optional feature, off by default | |
-| JPEG XL | R/W | yes (pure-Rust jxl-oxide through craft-jxl, `jxl` feature, on in releases); also inside DNG | no | 8/16-bit and 32-bit float; first frame; CMYK refused; ICC, Exif and XMP; Brotli metadata boxes bounded |
+| JPEG XL | R/W | yes (pure-Rust jxl-oxide through craft-jxl, `jxl` feature, on in releases); also inside DNG | yes, lossless (8/16-bit; Save As, Export As and the CLI) | 8/16-bit and 32-bit float; first frame; CMYK refused; ICC, Exif and XMP; Brotli metadata boxes bounded |
 | HEIF/HEIC | R/W(HEIF) | yes (pure-Rust heic-rs, `heif` feature, on in releases) | no | 8/16-bit |
 | OpenEXR | R/W | yes | yes | f16/f32; deep EXR and Cryptomatte readers (`corpus/exr`) |
 | Radiance HDR | R/W | yes | yes | f32 |
