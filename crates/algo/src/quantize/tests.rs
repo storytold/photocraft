@@ -299,6 +299,37 @@ fn quantize_with_transparent_entry_makes_matching_pixels_transparent() {
 }
 
 #[test]
+fn explicit_entry_loses_an_exact_tie_to_another_entry() {
+    // "1st index as transparent" with the default forced blackWhite puts the auto white ahead of
+    // the forced white. An explicit transparent entry still takes an opaque pixel of its colour,
+    // but only when it is strictly closer: on an exact tie another entry wins, so a second pass
+    // over such a table does not punch the white out (#7320).
+    let pal = vec![[255, 255, 255], [0, 0, 0], [255, 255, 255]];
+    let mut px = vec![
+        [1.0, 1.0, 1.0, 1.0], // opaque white: ties between 0 and 2 → the other entry (2)
+        [1.0, 1.0, 1.0, 0.0], // clear → the entry (0)
+    ];
+    let idx = quantize(&mut px, 2, &pal, Dither::None, 1.0, AlphaMode::Explicit(0));
+    assert_eq!(idx, [2, 0]);
+    assert_eq!(px[0], [1.0, 1.0, 1.0, 1.0], "the opaque white stays opaque");
+    assert_eq!(px[1], [1.0, 1.0, 1.0, 0.0]);
+
+    // The entry is still taken when nothing else is as close: the only entry of its colour, or a
+    // strictly nearer one.
+    let only = vec![[255, 255, 255], [0, 0, 0]];
+    let mut px = vec![[1.0, 1.0, 1.0, 1.0]];
+    let idx = quantize(&mut px, 1, &only, Dither::None, 1.0, AlphaMode::Explicit(0));
+    assert_eq!(idx, [0]);
+    assert_eq!(px[0][3], 0.0, "the only entry of that colour is still taken");
+
+    let nearer = vec![[255, 255, 255], [250, 250, 250]];
+    let mut px = vec![[250.0 / 255.0, 250.0 / 255.0, 250.0 / 255.0, 1.0]];
+    let idx = quantize(&mut px, 1, &nearer, Dither::None, 1.0, AlphaMode::Explicit(0));
+    assert_eq!(idx, [1], "a strictly nearer entry wins over the transparent one");
+    assert_eq!(px[0][3], 1.0);
+}
+
+#[test]
 fn carrying_entry_never_takes_an_opaque_pixel() {
     // The entry Indexed Color appends stores clear pixels only. Its colour is white (a
     // duplicate of the forced white), so without the exclusion an opaque white pixel would tie

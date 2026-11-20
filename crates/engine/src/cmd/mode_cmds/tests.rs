@@ -1652,6 +1652,62 @@ fn transparent_first_keeps_opaque_white() {
 }
 
 #[test]
+fn color_table_keeps_opaque_white_after_a_transparent_first_conversion() {
+    // The dialog seeds `transparent: 0` from the document, so Color Table must not re-index an
+    // opaque white onto the transparent entry that shares its colour: any edit re-indexes every
+    // pixel (review 5941965522). Index 1 is the forced black, not the forced white.
+    let mut s = white_and_clear();
+    s.execute("image.mode.indexedColor", json!({"dither": "none", "transparentFirst": true})).unwrap();
+    let table = doc(&s).color_table.clone().unwrap();
+    assert_eq!(table.transparent, Some(0));
+    assert_eq!(table.colors[0], [255, 255, 255], "the auto entry heads the table");
+    assert_ne!(table.colors[1], [255, 255, 255], "the forced white is another entry");
+    s.execute("image.mode.colorTable", json!({"entries": {"1": "#123456"}})).unwrap();
+    let surf = doc(&s).layers[0].surface().unwrap();
+    assert_eq!(surf.rgba(1, 1), [1.0, 1.0, 1.0, 1.0], "the opaque white stays opaque");
+    assert_eq!(surf.rgba(6, 1)[3], 0.0, "clear pixels stay transparent");
+}
+
+#[test]
+fn color_table_re_indexes_by_nearest_when_the_indices_are_gone() {
+    // The recorded indices hold only while the layer has exactly the recorded tiles, so any later
+    // edit sends Color Table down the nearest-colour path. An opaque white must still not take the
+    // transparent entry that shares its colour (#7320, review 5941965522).
+    let mut s = white_and_clear();
+    s.execute("image.mode.indexedColor", json!({"dither": "none", "transparentFirst": true})).unwrap();
+    let table = doc(&s).color_table.clone().unwrap();
+    assert_eq!(table.transparent, Some(0));
+    let id = doc(&s).layers[0].id;
+    let holds_now = |s: &Session| {
+        let l = &doc(s).layers[0];
+        doc(s).color_indices.as_ref().is_some_and(|k| l.surface().is_some_and(|p| k.holds(id, p)))
+    };
+    assert!(holds_now(&s), "the conversion recorded indices");
+    // A stroke drops them; the white columns are left untouched.
+    s.execute("paint.stroke", json!({"points": [[6, 1]], "size": 1, "color": "#000000"})).unwrap();
+    assert!(!holds_now(&s), "the stroke dropped the indices");
+    s.execute("image.mode.colorTable", json!({"entries": {"1": "#123456"}})).unwrap();
+    let surf = doc(&s).layers[0].surface().unwrap();
+    assert_eq!(surf.rgba(1, 1), [1.0, 1.0, 1.0, 1.0], "the opaque white stays opaque");
+}
+
+#[test]
+fn a_second_indexed_color_pass_keeps_opaque_white() {
+    // Indexed Color ▸ Palette: Custom… seeds `paletteColors` and `transparent` from the document,
+    // so pressing OK sends an explicit `transparent: 0` on the table the first pass produced: the
+    // opaque white must stay opaque, not be punched out (review 5941965522).
+    let mut s = white_and_clear();
+    s.execute("image.mode.indexedColor", json!({"dither": "none", "transparentFirst": true})).unwrap();
+    let table = doc(&s).color_table.clone().unwrap();
+    assert_eq!(table.transparent, Some(0));
+    let colors: Vec<String> = table.colors.iter().map(|c| format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])).collect();
+    s.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": colors, "transparent": 0, "dither": "none"})).unwrap();
+    let surf = doc(&s).layers[0].surface().unwrap();
+    assert_eq!(surf.rgba(1, 1), [1.0, 1.0, 1.0, 1.0], "the opaque white stays opaque");
+    assert_eq!(surf.rgba(6, 1)[3], 0.0, "clear pixels stay transparent");
+}
+
+#[test]
 fn auto_transparent_entry_does_not_clear_near_white() {
     // The auto-appended white takes clear pixels only: a near-white opaque pixel with no closer
     // real entry maps to the nearest table colour and stays opaque.

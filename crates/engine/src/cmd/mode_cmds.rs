@@ -658,8 +658,10 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
                     i
                 } else {
                     // A known index past the table stays: its pixel shows black until the table
-                    // grows back over it.
-                    indices.get(k).map_or_else(|| old.nearest(rgb), |&i| usize::from(i))
+                    // grows back over it. An unknown one takes the nearest entry that is not the
+                    // transparent entry on a tie (`nearest_opaque`), so a duplicate of that
+                    // entry's colour ahead of it cannot clear an opaque pixel (#7320).
+                    indices.get(k).map_or_else(|| old.nearest_opaque(rgb), |&i| usize::from(i))
                 };
                 if let Some(w) = written.get_mut(k) {
                     *w = i as u8;

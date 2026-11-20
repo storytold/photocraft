@@ -485,6 +485,16 @@ pub fn quantize(px: &mut [[f32; 4]], w: usize, pal: &[Rgb8], dither: Dither, amo
     // same distance would otherwise clear an opaque pixel that has a real entry of its colour.
     let nearest = |c: [f32; 3]| match mode {
         AlphaMode::Carries(t) => lookup.find_excluding(c.map(|v| v * 255.0), t),
+        // An opaque pixel of the transparent entry's own colour becomes clear — but only when that
+        // entry really is the closest. On an exact tie another entry wins, so a table holding the
+        // same colour twice (the auto transparent entry placed ahead of a real one by "1st index
+        // as transparent") keeps such a pixel opaque; `t` is taken only when it is strictly closer.
+        AlphaMode::Explicit(t) => {
+            let q = c.map(|v| v * 255.0);
+            let other = lookup.find_excluding(q, t);
+            let at = |i: usize| pal.get(i).map_or(f32::MAX, |e| nearest::distance(q, e.map(f32::from)));
+            if other != t && at(other) <= at(t) { other } else { t }
+        }
         _ => lookup.find(c.map(|v| v * 255.0)),
     };
     quantize_with(px, w, pal, dither, amount, mode, nearest)
