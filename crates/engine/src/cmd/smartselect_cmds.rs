@@ -136,6 +136,7 @@ const RIM_SIGMA: f32 = ENHANCE.radius;
 const RIM_DEPTH: f32 = 0.01;
 /// Pixels of halo a tile reads around itself. [`matting::gaussian_blur`] truncates its kernel at
 /// three sigma, so this is exactly the reach of the neighbourhood a pixel is measured against.
+/// ceil(3 * sigma) + 1; exact while [`ENHANCE`].radius stays integral.
 const RIM_HALO: i32 = 3 * ENHANCE.radius as i32 + 1;
 
 /// `cut` with the [`RIM_SIGMA`] soft rim inside its edge, as [`RIM_SIGMA`] describes. The cut is
