@@ -191,7 +191,7 @@ fn select_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
     })?;
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     if st.active_layer == snap.layers.active {
-        st.selected_layers.clone_from(&snap.layers.selected);
+        st.selection_mut().clone_from(&snap.layers.selected);
         crate::fix_selection(st);
     }
     Ok(json!({ "snapshot": snap.id, "name": snap.name }))

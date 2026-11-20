@@ -99,7 +99,7 @@ fn refreshing_type_layers_takes_no_history_step() {
     // Stale pixels, and a document saved in this state.
     {
         let st = s.active_mut().unwrap();
-        let Some(Layer { content: LayerContent::Text(t), .. }) = Arc::make_mut(&mut st.doc).layer_mut(id) else { panic!("not a type layer") };
+        let Some(Layer { content: LayerContent::Text(t), .. }) = Arc::make_mut(st.doc_mut()).layer_mut(id) else { panic!("not a type layer") };
         t.cache = None;
         st.saved_revision = st.revision;
     }
@@ -448,6 +448,22 @@ fn custom_name_survives_text_edits() {
     // A name given with the edit wins over the text.
     s.execute("type.edit", json!({"layer": id, "text": "Again", "name": "Footer"})).unwrap();
     assert_eq!(layer_name_of(&s, id), "Footer");
+}
+
+#[test]
+fn paragraph_box_edit_damage_stays_within_old_and_new_ink() {
+    let mut s = session();
+    let id =
+        s.execute("type.create", json!({"x": 10, "y": 20, "text": "A paragraph with several words", "size": 20, "box": [10, 20, 120, 70]})).unwrap()["layer"]
+            .as_u64()
+            .unwrap();
+    let before = text_layer(&s, id).cache.unwrap().content_bounds();
+    s.execute("type.edit", json!({"layer": id, "box": [10, 20, 65, 70]})).unwrap();
+    let after = text_layer(&s, id).cache.unwrap().content_bounds();
+    let ink = before.union(&after);
+    let damage = s.active().unwrap().last_damage.unwrap();
+    assert!(!damage.is_empty());
+    assert_eq!(damage.intersect(&ink), damage);
 }
 
 #[test]

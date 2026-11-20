@@ -85,7 +85,7 @@ fn undo_and_redo_restore_the_targeted_layers() {
     let mut s = session_with_doc();
     let target = |s: &Session| {
         let st = s.active().unwrap();
-        (st.active_layer.unwrap(), st.selected_layers())
+        (st.active_layer.unwrap(), st.selected_layers().to_vec())
     };
     let select = |s: &mut Session, id: LayerId, mode: &str| {
         let steps = s.active().unwrap().history.past_len();

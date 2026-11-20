@@ -371,7 +371,7 @@ fn apply_image_of_a_cmyk_composite_onto_rgb_keeps_black() {
     {
         let d = s.active_mut().unwrap();
         let id = d.active_layer.unwrap();
-        let surf = std::sync::Arc::make_mut(&mut d.doc).layer_mut(id).unwrap().surface_mut().unwrap();
+        let surf = std::sync::Arc::make_mut(d.doc_mut()).layer_mut(id).unwrap().surface_mut().unwrap();
         let n = surf.format().channels();
         let mut k = vec![0.0; 20 * 20 * n];
         k.chunks_exact_mut(n).for_each(|p| p[3] = 1.0);
@@ -394,7 +394,7 @@ fn apply_image_of_a_cmyk_composite_onto_an_alpha_channel_takes_its_luminosity() 
         {
             let d = s.active_mut().unwrap();
             let id = d.active_layer.unwrap();
-            let surf = std::sync::Arc::make_mut(&mut d.doc).layer_mut(id).unwrap().surface_mut().unwrap();
+            let surf = std::sync::Arc::make_mut(d.doc_mut()).layer_mut(id).unwrap().surface_mut().unwrap();
             let n = surf.format().channels();
             let mut k = vec![1.0; 20 * 20 * n];
             k.chunks_exact_mut(n).for_each(|p| p[..3].fill(0.0));

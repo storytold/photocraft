@@ -118,7 +118,7 @@ mod quick_drop_transparent_tests {
     fn the_background_loses_only_the_brush_disc() {
         let mut s = issue_document();
         let d = s.active_mut().unwrap();
-        d.active_layer = Some(d.doc.layers[0].id);
+        d.set_active_layer(Some(d.doc.layers[0].id));
         marquee(&mut s, [50, 50, 350, 300]);
         click(&mut s, [70.0, 280.0], "subtract", false);
         assert!(at(&s, 70, 280) < 0.5, "the disc is subtracted");
@@ -240,7 +240,7 @@ mod quick_group_target_tests {
         // The disc a click on a flat area gives: Background active, which is white everywhere.
         let mut flat = issue_document();
         let d = flat.active_mut().unwrap();
-        d.active_layer = Some(d.doc.layers[0].id);
+        d.set_active_layer(Some(d.doc.layers[0].id));
         assert_eq!(active_kind(&flat), "Pixel");
         click(&mut flat, RED2_CLICK, false);
         let disc = coverage(&flat);

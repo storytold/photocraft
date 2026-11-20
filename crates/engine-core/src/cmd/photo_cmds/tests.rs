@@ -318,7 +318,7 @@ fn crop_and_straighten_refuses_a_selection_under_half_coverage() {
     s.add_document(doc_from("scan", &px, w, h, SampleType::U8), None);
     let mut m = Surface::new(photocraft_color::PixelFormat::GRAY8);
     m.fill_rect(Rect::new(270, 160, 460, 320), &[0.3]);
-    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).selection = Some(m);
+    std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).selection = Some(m);
     let e = s.execute("file.automate.cropAndStraightenPhotos", json!({})).unwrap_err();
     assert!(e.to_string().contains("50%"), "{e}");
     assert_eq!(s.documents().len(), 1);

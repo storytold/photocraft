@@ -107,7 +107,7 @@ fn an_unset_popup_stays_unset_under_image_size() {
     // An all-zero popup means "none stored": PSD export writes its default popup for it, so Image
     // Size must not turn it into a 0 × 0 rectangle somewhere else.
     let mut s = session(600, 400);
-    let doc = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let doc = std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut());
     doc.notes.push(photocraft_doc::Note { position: [100.0, 100.0], ..Default::default() });
     s.execute("image.imageSize", json!({"width": 300, "height": 200})).unwrap();
     let n = note(&s, 0);

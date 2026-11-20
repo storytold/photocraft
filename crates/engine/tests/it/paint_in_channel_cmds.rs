@@ -1125,7 +1125,7 @@ mod tests {
         assert!(err.to_string().contains("flatten"), "{err}");
         assert_eq!(s.documents().len(), 1, "the layered document stays open");
         assert_eq!(doc(&s).layers.len(), 2, "with its layers");
-        std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layers[1].visible = false;
+        std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).layers[1].visible = false;
         assert!(s.execute("channel.split", json!({})).is_err(), "a hidden second layer still counts");
         assert_eq!((s.documents().len(), doc(&s).layers.len()), (1, 2));
         s.execute("layer.flattenImage", json!({})).unwrap();
@@ -1139,7 +1139,7 @@ mod tests {
         assert_eq!(s.execute("channel.split", json!({})).unwrap()["documents"].as_array().unwrap().len(), 3);
         // A lone group is a layer the split would lose.
         let mut s = session();
-        std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layers = vec![Layer::group("Group 1", vec![])].into();
+        std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).layers = vec![Layer::group("Group 1", vec![])].into();
         assert!(!s.is_enabled("channel.split"));
         assert!(s.execute("channel.split", json!({})).is_err());
         assert_eq!(s.documents().len(), 1);

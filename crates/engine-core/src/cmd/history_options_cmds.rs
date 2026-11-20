@@ -173,10 +173,12 @@ pub(crate) fn delete_state(s: &mut Session, i: usize, current: usize) -> Result<
         crate::carry_visibility(&st.doc, &mut d, &changed);
     }
     let damage = crate::layer_multi_cmds::step_damage(&d, &st.doc);
-    st.doc = d;
+    *st.doc_mut() = d;
     crate::restore_target(st, layers);
     st.revision += 1;
+    st.record_unknown_damage();
     st.last_damage = damage;
+    st.record_damage();
     Ok(())
 }
 

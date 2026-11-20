@@ -1195,7 +1195,7 @@ fn link_layers_never_reuses_a_group_when_the_largest_id_is_u64_max() {
     // A stored document can carry any id; `max + 1` once overflowed here.
     let st = s.active_mut().unwrap();
     for id in [c, d] {
-        std::sync::Arc::make_mut(&mut st.doc).layer_mut(id).unwrap().link_group = Some(u64::MAX);
+        std::sync::Arc::make_mut(st.doc_mut()).layer_mut(id).unwrap().link_group = Some(u64::MAX);
     }
     select_all(&mut s, &[a, b]);
     assert_eq!(s.execute("layer.linkLayers", json!({})).unwrap()["linked"], true);
