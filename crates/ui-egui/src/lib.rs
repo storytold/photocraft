@@ -96,7 +96,6 @@ mod tools;
 pub(crate) use app::adjustment_layer_active;
 #[cfg(test)]
 use app::layer_thumb_frame;
-pub use app::surface_fingerprint;
 pub use canvas::artboard_ui;
 pub(crate) use canvas::background_redraw;
 pub(crate) use canvas::cam_preview;
@@ -291,6 +290,7 @@ pub use tools::stroke_trail;
 pub use tools::symmetry_ui;
 use tools::tool_reset;
 pub use tools::transform_fx;
+pub use tools::transform_task_bar;
 pub use tools::transform_tool;
 use tools::type_box_preview;
 use tools::type_font_preview;
@@ -371,6 +371,8 @@ pub struct PhotocraftApp {
     pub(crate) patch_preview: Option<patch_preview::PatchPreview>,
     /// Content-Aware Move drag or box shown with its result (`cam_preview`).
     pub(crate) cam_preview: Option<cam_preview::CamPreview>,
+    /// Image › Apply Data Set…'s Preview: the set shown in the document (`apply_data_set_ui`).
+    pub(crate) data_set_preview: panels::apply_data_set_ui::PreviewState,
     /// The Brush or Pencil erase key is held this frame (`hold_keys::erase_held`, #3439).
     held_erase: bool,
     /// Position and pen pressure at the last stroke's endpoint: ⇧-click interpolates from them (#178, #2827).
@@ -612,6 +614,8 @@ pub struct PhotocraftApp {
     /// Snap targets of the active document, derived data keyed on (document, revision,
     /// `SnapOptions`, excluded layers); `snap_ui::snap` reads and refills it through `&self`.
     pub(crate) snap_cache: std::sync::Mutex<Option<snap_ui::SnapCache>>,
+    /// What the chrome derives from each open document, kept per document revision (`app::doc_queries`).
+    pub(crate) doc_queries: app::doc_queries::DocQueries,
     /// The saved workspaces and the one shown (`workspace_ui`).
     pub workspaces: workspace_ui::Workspaces,
     /// Autosave timing and its retry state (`prefs_ui`).
@@ -819,6 +823,8 @@ mod home_chrome_tests;
 mod pen_variants_tests;
 
 #[cfg(test)]
+mod color_replacement_digit_keys_tests;
+#[cfg(test)]
 mod color_replacement_tests;
 #[cfg(test)]
 mod home_recent_gate_tests;
@@ -862,6 +868,8 @@ mod layer_props_ui_tests;
 mod notice_text_tests;
 #[cfg(test)]
 mod transform_switch_tests;
+#[cfg(test)]
+mod transform_task_bar_tests;
 #[cfg(test)]
 mod transform_undo_tests;
 
@@ -929,6 +937,8 @@ mod move_outline_tests;
 #[cfg(test)]
 mod move_bar_distribute_gear_tests;
 
+#[cfg(test)]
+mod doc_revision_trials;
 #[cfg(test)]
 mod layer_thumb_bounds_tests;
 #[cfg(test)]

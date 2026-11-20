@@ -601,7 +601,7 @@ fn editing_psd_type_shows_our_layout_and_cancel_restores_it() {
     if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
         t.cache = Some(moved.clone());
     }
-    st.doc = std::sync::Arc::new(doc);
+    *st.doc_mut() = std::sync::Arc::new(doc);
     st.revision += 1;
     let steps = app.session.active().unwrap().history.entries().len();
     let mut h = harness(1.0, app);
@@ -1798,7 +1798,7 @@ mod multi_layer_formatting {
         editing(&mut app, ids[0]);
         assert_eq!(checks(&mut app), ["type.antiAlias.none", "type.orientation.vertical"]);
         app.ui.text_edit = None;
-        app.session.active_mut().unwrap().active_layer = Some(ids[1]);
+        app.session.active_mut().unwrap().set_active_layer(Some(ids[1]));
         assert_eq!(checks(&mut app), ["type.antiAlias.crisp", "type.orientation.horizontal"]);
     }
 
@@ -2164,7 +2164,7 @@ fn justify_buttons_are_greyed_on_point_text() {
     let justify = ["Justify last left", "Justify last centered", "Justify last right", "Justify all"];
     let area = |app: &mut PhotocraftApp| {
         app.run("type.create", json!({"text": "one two three four five six", "size": 24, "x": 300, "y": 420})).unwrap();
-        std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).work_path =
+        std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).work_path =
             Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(300.0, 300.0), (600.0, 300.0), (600.0, 500.0), (300.0, 500.0)])]));
         app.run("type.fillPath", json!({})).unwrap();
     };
@@ -2381,7 +2381,7 @@ fn an_unselected_work_path_is_not_an_area_target() {
     // Type tool, so a click inside it is plain point text; its outline still takes type on a
     // path, as before area type (#5180).
     let mut app = new_app();
-    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).work_path =
+    std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).work_path =
         Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(300.0, 300.0), (700.0, 300.0), (700.0, 500.0), (300.0, 500.0)])]));
     app.ui.selected_path = None;
     assert!(path_target(&app, 500.0, 400.0).is_none(), "inside a hidden work path");
