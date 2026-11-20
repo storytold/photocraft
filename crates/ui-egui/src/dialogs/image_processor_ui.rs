@@ -3,10 +3,12 @@
 //! per-format objects the command takes and refuses an OK with no format ticked.
 
 use craft::host::{PickRequest, Picked};
+use craft::theme::Variant;
+use craft::ui::buttons::Button;
+use craft::ui::contract::{LeastWidth, Props as _, Show as _, TooltipSpec, clicked};
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{HostedParamDialog, ParamDialog, ParamResult};
 use craft::ui::runtime::env::Label;
-use craft::ui::sections::{DialogRole, FooterBar, FooterButton};
 use serde_json::{Map, Value};
 
 use crate::PhotocraftApp;
@@ -76,12 +78,14 @@ fn generation_id() -> egui::Id {
 pub(crate) fn settings_footer(dialog: ParamDialog<'_>) -> ParamDialog<'_> {
     dialog.ok_label(Label::from(tl!("Run"))).shaped(|dialog| {
         dialog.footer(|ui, _| {
-            let buttons = [
-                FooterButton::new(tl!("Load…"), DialogRole::Other).tooltip(tl!("Load a settings file from disk")),
-                FooterButton::new(tl!("Save…"), DialogRole::Other).tooltip(tl!("Save the current dialog settings to disk")),
-            ];
-            if let Some(action) = FooterBar::buttons(buttons).show_footer(ui).picked.and_then(|index| [SettingsAction::Load, SettingsAction::Save].get(index)) {
-                ui.ctx().data_mut(|data| data.insert_temp(settings_action_id(), *action));
+            for (action, label, tip) in [
+                (SettingsAction::Load, tl!("Load…"), tl!("Load a settings file from disk")),
+                (SettingsAction::Save, tl!("Save…"), tl!("Save the current dialog settings to disk")),
+            ] {
+                let button = Button::new(label).variant(Variant::SECONDARY).least_width(LeastWidth::DialogButton).tooltip(TooltipSpec::new(tip));
+                if clicked(&button.show(ui)) {
+                    ui.ctx().data_mut(|data| data.insert_temp(settings_action_id(), action));
+                }
             }
         })
     })

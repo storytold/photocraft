@@ -180,7 +180,11 @@ fn the_footer_saves_and_loads_pending_values_without_running_image_processor() {
         set(&mut h, id, key, value);
     }
     h.run_steps(3);
-    h.get_by_role_and_label(egui::accesskit::Role::Button, "Run");
+    let buttons = ["Load…", "Save…", "Cancel", "Run"].map(|label| h.get_by_role_and_label(egui::accesskit::Role::Button, label).rect());
+    for (index, button) in buttons.iter().enumerate() {
+        assert!(button.is_positive(), "button {index} is visible");
+        assert!(buttons.iter().skip(index + 1).all(|other| !button.intersects(*other)), "footer buttons must not overlap");
+    }
     let original = fields(&h, id).clone();
     click(&mut h, "Save…");
     let request = files.requests().pop().unwrap();
