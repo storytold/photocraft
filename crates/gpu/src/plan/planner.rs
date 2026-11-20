@@ -792,6 +792,14 @@ impl<'a> Planner<'a> {
         if !adjustment_on_gpu(adj, self.cx.mode) {
             return Err(Unsupported(format!("{} on CMYK/Lab channels (evaluated on the CPU)", adj.label())));
         }
+        // An 8/16-bit Grayscale Gradient Map keeps each stop colour's CIE L* (compose::adjust::
+        // gray_from_srgb_lightness); the shader's LUT lookup returns the stop colour itself.
+        if matches!(adj, Adjustment::GradientMap { .. })
+            && self.cx.mode == photocraft_color::ColorMode::Grayscale
+            && self.cx.depth != photocraft_color::SampleType::F32
+        {
+            return Err(Unsupported("Gradient Map in an 8/16-bit Grayscale document (evaluated on the CPU)".into()));
+        }
         if let Adjustment::GradientMap { stops, .. } = adj {
             check_gradient_stops(stops)?;
         }

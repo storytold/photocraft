@@ -445,8 +445,12 @@ pub fn spread_split(size: f32, spread: f32) -> (f32, f32) {
 pub(super) fn shadow_map(shape: &Map, s: &Shadow, light: &GlobalLight, inner: bool, origin: (i32, i32)) -> Map {
     let angle = if s.use_global_light { light.angle } else { s.angle };
     let (dx, dy) = offset(angle, s.distance);
+    // #14934: an Anti-aliased Inner Shadow builds its map from the shape off-centre (`aa_shift`).
+    // Only the inner branch was measured, so a Drop Shadow keeps today's map (#14881 is its own),
+    // and `aa_shift` leaves every Choke that dilates and every Size whose blur is the identity.
+    let aa = aa_shift(inner && s.anti_alias, &s.contour, s.size, s.spread);
     let src = if inner { shape.clone().map(|a| 1.0 - a) } else { shape.clone() };
-    let mut m = src.shifted(dx, dy, if inner { 1.0 } else { 0.0 });
+    let mut m = src.shifted(dx + aa, dy + aa, if inner { 1.0 } else { 0.0 });
     let (r, bw) = spread_split(s.size, s.spread);
     m = dilate(&m, r);
     blur(&mut m, bw);
@@ -472,6 +476,13 @@ pub(super) fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -
     let aa = if inner || g.technique == GlowTechnique::Precise { 0.0 } else { aa_shift(g.anti_alias, &g.contour, g.size, g.spread) };
     let src = if aa < 0.0 { src.shifted(aa, aa, 0.0) } else { src };
     let mut m = match g.technique {
+        GlowTechnique::Softer if inner && g.source == GlowSource::Edge && g.size == 1.0 && g.spread == 0.0 => {
+            // A width-one box blur leaves no coverage inside the edge. The Size 1 taps
+            // put quarter coverage on the first pixel, which Range 50% doubles (#14924).
+            let mut m = src;
+            super::blur::size_one_blur(&mut m);
+            m
+        }
         GlowTechnique::Precise => {
             // Coverage falls linearly from 0.5 at the edge to 0 at `size + 1` px (centre to
             // centre), solid within the spread / choke: after the default 50 % Range that is
