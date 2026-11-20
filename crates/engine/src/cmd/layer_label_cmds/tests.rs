@@ -21,7 +21,7 @@ fn fixture(depth: u8) -> (Session, [LayerId; 4]) {
             let outer_id = outer.id;
             let other = Layer::raster("Other", doc.pixel_format());
             let other_id = other.id;
-            doc.layers = vec![outer, other];
+            doc.layers = vec![outer, other].into();
             Ok([outer_id, inner_id, leaf_id, other_id])
         })
         .unwrap();
