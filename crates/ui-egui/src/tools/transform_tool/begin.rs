@@ -358,7 +358,7 @@ pub(crate) fn moving_texel(app: &PhotocraftApp, p: [i32; 2]) -> (Option<Color32>
 
 /// The Layers panel's selection, sorted, as a layer's box records it when it opens (#11101).
 pub(super) fn selected_now(app: &PhotocraftApp) -> Option<Vec<LayerId>> {
-    let mut ids = app.session.active()?.selected_layers();
+    let mut ids = app.session.active()?.selected_layers().to_vec();
     ids.sort_unstable();
     Some(ids)
 }

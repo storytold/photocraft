@@ -222,7 +222,7 @@ impl TranslateSteps {
         let tiles: Vec<(TileCoord, Arc<Tile>)> =
             if whole_tiles { Vec::new() } else { ShiftBuilder::sources(&src, content).map(|(c, t)| (*c, Arc::clone(t))).collect() };
         let out =
-            Surface { generation: super::fresh_surface_generation(), format: src.format, default_pixel: src.default_pixel.clone(), tiles: Default::default() };
+            Surface { generation: super::unassigned_generation(), format: src.format, default_pixel: src.default_pixel.clone(), tiles: Default::default() };
         Self {
             sources: tiles.len(),
             scan: tiles.into_iter(),
@@ -276,7 +276,7 @@ impl TranslateSteps {
                 return Some(std::mem::replace(
                     &mut self.out,
                     Surface {
-                        generation: super::fresh_surface_generation(),
+                        generation: super::unassigned_generation(),
                         format: self.src.format,
                         default_pixel: self.src.default_pixel.clone(),
                         tiles: Default::default(),

@@ -75,6 +75,8 @@ pub struct EditState {
     pub custom_shapes: Vec<CustomShape>,
     /// Find and Replace Text position and the query it belongs to.
     pub find_cursor: Option<FindCursor>,
+    /// First layer visited in the current Find Next round (so wrapping stops before it).
+    pub find_start: Option<LayerId>,
 }
 
 /// Commands whose result Edit › Fade can blend back against the previous state.
@@ -314,9 +316,9 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
                     // absurd tree).
                     b.folder.retain(|f| !f.trim().is_empty());
                     b.folder.truncate(crate::brush_preset_cmds::MAX_FOLDER_DEPTH);
-                    match s.tools.presets.iter_mut().find(|x| x.name == b.name) {
+                    match std::sync::Arc::make_mut(&mut s.tools.presets).iter_mut().find(|x| x.name == b.name) {
                         Some(x) => *x = b,
-                        None => s.tools.presets.push(b),
+                        None => std::sync::Arc::make_mut(&mut s.tools.presets).push(b),
                     }
                     nb += 1;
                 }
@@ -479,3 +481,7 @@ mod caf_new_layer_name_tests;
 #[cfg(test)]
 #[path = "edit_menu_cmds/find_replace_change_tests.rs"]
 mod find_replace_change_tests;
+
+#[cfg(test)]
+#[path = "edit_menu_cmds/find_replace_order_tests.rs"]
+mod find_replace_order_tests;
