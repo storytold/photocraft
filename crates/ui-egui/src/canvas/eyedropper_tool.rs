@@ -20,7 +20,6 @@ use super::document_display::CanvasHost;
 use super::sampling;
 use super::tools::{FamilyTool, ToolScope};
 use crate::PhotocraftApp;
-use crate::state::Tool;
 
 /// The gesture's flags, kept in `CanvasTools::eyedropper`.
 #[derive(Debug, Default)]
