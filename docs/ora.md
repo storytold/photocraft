@@ -2,8 +2,8 @@
 
 PhotoCraft opens and saves OpenRaster (`.ora`), the layered format Krita, MyPaint, GIMP, Pinta
 and others share. File › Open, recent files, drops, Save and Save As, the CLI (`convert`, `info`,
-`batch`) and automation (`doc.open`, `doc.save`, MCP) all use the same reader and writer in
-`photocraft-io`. The browser build accepts `.ora` too. A file is recognised by its `mimetype`
+`batch`) and automation (`doc.open`, `doc.save`, MCP) all use the same import and export in
+`photocraft-io`, on craft-libs' `craft-ora` archive reader and writer. The browser build accepts `.ora` too. A file is recognised by its `mimetype`
 entry, so an OpenRaster file with another extension still opens as one.
 
 ## What is kept
@@ -49,12 +49,13 @@ Hard Mix open as Photoshop's Soft Light and Hard Mix, which differ slightly, wit
 
 ## Limits and safety
 
-The reader takes the archive with the bounded ZIP reader of `photocraft-format` (no ZIP64,
-CRC-checked), parses `stack.xml` with `roxmltree` (16 MiB cap), and decodes each layer image
-through `photocraft-codecs` with size limits. Canvases are at most 300,000 px a side, at most
-8,192 layers and groups, nesting at most `MAX_GROUP_DEPTH` deep, and 1 GiB of decoded pixels in
-total. Malformed archives, XML, numbers and images return errors; truncated and corrupted files
-are covered by tests.
+The shared `craft-ora` reader and writer use `craft-zip` for the archive (including ZIP64
+directories and CRC-checked entry reads, with at most 100,000 entries) and `craft-xml` for
+`stack.xml`. The XML has a 16 MiB input limit and 512-level nesting limit. A layer image entry may
+inflate to at most 512 MiB; decoded pixels across the document are limited to 1 GiB. Canvases are
+at most 300,000 px a side, at most 8,192 layers and groups, and nesting at most
+`MAX_GROUP_DEPTH` deep. Malformed archives, XML, numbers and images return errors; truncated and
+corrupted files are covered by tests.
 
 ## Verification
 

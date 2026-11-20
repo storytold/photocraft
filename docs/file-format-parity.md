@@ -99,7 +99,7 @@ D5100 colour profile. Counts and the G14 estimate are unchanged.
 ### Affinity import notes (moved from `roadmap.md`)
 
 2026-10-08: Affinity `.af`, `.afdesign`, `.afphoto` and `.afpub` documents (container versions
-8–12) open **natively** ([format notes](../crates/affinity/README.md)): pages and artboards, layers
+8–12) open **natively** ([format notes](https://github.com/storytold/craft-libs/blob/main/crates/affinity/README.md)): pages and artboards, layers
 and groups, curves and geometric shapes with fills, gradients and strokes, text as type layers,
 placed images as smart objects, pixel layers and masks, as an 8-bit RGB document without a source
 save path. Measured against the thumbnail Affinity embeds in each file, 21 pinned public documents
@@ -131,7 +131,7 @@ remaining gaps in #1606 stay tracked with per-sample corpus ceilings.
 | Gradients `.grd` | R/W | R/W | |
 | Patterns `.pat` | R/W | R/W | |
 | Swatches `.aco`, `.act`, `.ase` | R/W | R/W | FILE-215-14; `.act` also from Image › Mode › Color Table Load…/Save… (`psd/src/act.rs`) |
-| LUTs `.cube` / `.3dl` / `.look` | R/W (Export Color Lookup) | R/W / R / R | `cms/src/lutfile.rs` |
+| LUTs `.cube` / `.3dl` / `.look` | R/W (Export Color Lookup) | R/W / R / R | `craft-cms` `src/lutfile.rs` |
 | Keyboard shortcuts `.kys` | R/W | R/W | `engine/src/kys.rs` (`write`: Edit › Keyboard Shortcuts › Export…, rows carry our id; Photoshop reading our files is unverified) |
 | ICC profiles | R | R | Own CMS |
 | Actions `.atn` ([reference](atn.md)) | R/W | R/W | `psd/src/atn.rs` reads version 12 and 16 sets and writes version 16 (exact round trip for version 16; version 12 legacy bare identifiers, reference classes and object-array values keep their meaning; trailing bytes remain a warning, #10699). `engine/src/cmd/atn_cmds/` maps the reference application's events to commands (supported event IDs listed in [atn.md](atn.md); one recognized-but-disabled event), including Apply Layer Comp by name (#7101), recorded layer indexes/ordinals and indexed moves, opening-order document indexes and comp index/ID/ordinal references (#10701), recorded classic `GrMp` with fractional RGB stops and `RplC` with explicit Lab sample bounds (#10607); other steps kept verbatim. Save As maps to `file.saveAs`/`file.saveACopy` for a file destination (#7102). Panel menu, CLI `batch --actions set.atn`, `actions.load`/`actions.save`. Version 7 and MacBinary wrappers remain unsupported; version 12 coverage uses synthetic fixtures. |

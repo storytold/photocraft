@@ -885,7 +885,7 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "Photomerge needs two or more images"));
     }
     let focal_param = p.get("focalLength").and_then(Value::as_f64).filter(|f| *f > 0.0);
-    let doc_name = format!("Untitled_Panorama{}", s.documents().len() + 1);
+    let doc_name = crate::file_cmds::untitled_name("Untitled_Panorama", |n| s.documents().iter().any(|d| d.doc.name == n) || s.held_open_named(n));
     // A background job when started with `Session::start` (#210): alignment, warping and
     // blending run on a worker, checking for cancellation between stages and images.
     crate::jobs::run(
@@ -967,7 +967,8 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
                 let check_cancel = || ctx.check();
                 let opt = BlendOptions { seamless: true, gains: true, geometry: geo, budget: Some(remaining_band_budget) };
                 let b = seam_blend(warped, canvas, &order, opt, Some(&check_cancel))?;
-                for (k, (px, mask)) in b.layers.into_iter().enumerate() {
+                // `children[0]` is the bottom layer, and the first source goes on top.
+                for (k, (px, mask)) in b.layers.into_iter().enumerate().rev() {
                     let mut l = Layer::new(srcs[placed[k]].name.clone(), LayerContent::Raster(px));
                     let mut m = LayerMask::hide_all();
                     m.surface = mask;
@@ -982,7 +983,7 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
                     doc.layers.push(Layer::new("Content-Aware Fill", LayerContent::Raster(filled)));
                 }
             } else {
-                for (k, px) in warped.into_iter().enumerate() {
+                for (k, px) in warped.into_iter().enumerate().rev() {
                     doc.layers.push(Layer::new(srcs[placed[k]].name.clone(), LayerContent::Raster(px)));
                 }
             }
@@ -1208,7 +1209,7 @@ fn merge_to_hdr(s: &mut Session, p: &Value) -> Result<Value> {
         q[3] = 1.0;
     }
     let mut doc = Document::new(format!("Untitled_HDR{}", s.documents().len() + 1), Size::new(w as u32, h as u32), ColorMode::Rgb, depth);
-    doc.icc_profile = if depth == SampleType::F32 { Some(photocraft_cms::builtin::Builtin::LinearSrgb.profile().to_bytes()) } else { icc };
+    doc.icc_profile = if depth == SampleType::F32 { Some(craft_cms::builtin::Builtin::LinearSrgb.profile().to_bytes()) } else { icc };
     let fmt = doc.pixel_format();
     let n = fmt.channels();
     let mut data = vec![0.0f32; w * h * n];
@@ -1408,4 +1409,9 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 #[cfg(test)]
+mod photomerge_layer_order_tests;
+#[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod photomerge_name_tests;
