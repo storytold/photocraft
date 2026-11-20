@@ -41,7 +41,7 @@ fn steps(app: &PhotocraftApp) -> usize {
 }
 
 /// The open dialogs drawn over `app`, as the window shows them.
-fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
+pub(crate) fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(900.0, 700.0)).build_ui_state(
         |ui, app: &mut Box<PhotocraftApp>| {
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
@@ -157,7 +157,7 @@ fn an_unknown_warp_style_opens_at_none_with_the_layers_values() {
     if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
         t.warp = Some(TextWarp { style: "warpCustom".into(), value: 12.0, horizontal_distortion: -5.0, vertical_distortion: 7.0, horizontal: false });
     }
-    st.doc = std::sync::Arc::new(doc);
+    *st.doc_mut() = std::sync::Arc::new(doc);
     let (_, fields) = open(&mut app);
     assert_eq!(shown(&fields), ("none", 12.0, -5.0, 7.0, "vertical"));
 }

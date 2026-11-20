@@ -126,11 +126,11 @@ impl crate::DocState {
     pub fn saved_to(&mut self, path: String) {
         let name = file_name(&path);
         if self.doc.name != name {
-            Arc::make_mut(&mut self.doc).name = name;
+            Arc::make_mut(self.doc_mut()).name = name;
         }
         // The file now holds just this document, whatever the one it was opened from held.
         if self.doc.file_encoding.source_images.is_some() {
-            Arc::make_mut(&mut self.doc).file_encoding.source_images = None;
+            Arc::make_mut(self.doc_mut()).file_encoding.source_images = None;
         }
         self.path = Some(path);
         self.saved_revision = self.revision;
@@ -484,6 +484,10 @@ mod batch_serial_skip_failed_tests;
 #[cfg(test)]
 #[path = "file_cmds/open_as_error_name_tests.rs"]
 mod open_as_error_name_tests;
+
+#[cfg(test)]
+#[path = "file_cmds/place_resolution_tests.rs"]
+mod place_resolution_tests;
 
 #[cfg(test)]
 mod aces_exr_tests {
