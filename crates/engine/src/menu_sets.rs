@@ -531,14 +531,57 @@ pub fn write_set(dir: &Path, name: &str, set: &MenuSet) -> Result<(), String> {
 /// Write `set` to the file `path`, making its folder when it is not there. A file already there is
 /// rewritten with its unknown entries kept, which is what "keeps unknown entries when it rewrites a
 /// file" means for a Save over an existing set; a file there that does not read is left alone rather
-/// than overwritten blind.
+/// than overwritten blind. The write itself is atomic ([`atomic_write`]): the folder's file is a whole
+/// set file before and after, never a truncated start of the new one, so a crash between the two
+/// cannot leave a file that the next Save would refuse.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_set_at(path: &Path, name: &str, set: &MenuSet) -> Result<(), String> {
     let kept = if path.is_file() { from_mnu(&read_text(path)?)?.kept } else { Vec::new() };
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
-    std::fs::write(path, to_mnu(name, set, &kept)).map_err(|e| format!("{}: {e}", path.display()))
+    atomic_write(path, &to_mnu(name, set, &kept), &|from, to| std::fs::rename(from, to))
+}
+
+/// The staging name for one write: `{path}.{pid}-{n}.photocraft-tmp`, a name beside the target that
+/// nothing else is using, as `prefs::files::sibling` makes one. The extension is not `.MNU`, so a
+/// staged file is never read back as a set even for the moment it stands in the folder.
+#[cfg(not(target_arch = "wasm32"))]
+fn staged_beside(path: &Path) -> std::io::Result<(PathBuf, std::fs::File)> {
+    for n in 0..1000u32 {
+        let staged = PathBuf::from(format!("{}.{}-{n}.photocraft-tmp", path.display(), std::process::id()));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&staged) {
+            Ok(file) => return Ok((staged, file)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::other("no free name beside it"))
+}
+
+/// Write `text` to `path` the way the settings files are written: staged in a new file in the same
+/// folder and moved in over the target, so the target is a whole file at every moment - the old bytes
+/// until the move and the new ones after it, never half of either. Anything that fails takes the
+/// staged file with it, so a refused write leaves the folder as it was. `rename` is `std::fs::rename`;
+/// a test refuses the move to see what the target ends up as.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn atomic_write(path: &Path, text: &str, rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>) -> Result<(), String> {
+    use std::io::Write;
+    let (staged, mut file) = match staged_beside(path) {
+        Ok(staged) => staged,
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    if let Err(e) = file.write_all(text.as_bytes()).and_then(|()| file.sync_all()) {
+        drop(file);
+        let _ = std::fs::remove_file(&staged);
+        return Err(format!("{}: {e}", path.display()));
+    }
+    drop(file);
+    if let Err(e) = rename(&staged, path) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(format!("{}: {e}", path.display()));
+    }
+    Ok(())
 }
 
 /// Write the set `name` to its file in the folder `dir`; no file system, no file.

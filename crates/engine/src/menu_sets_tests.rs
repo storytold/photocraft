@@ -236,8 +236,8 @@ fn menu_sets_are_saved_with_the_preferences_and_an_older_file_loads_without_them
 // ---- the `.mnu` files: the sets as files in the settings directory (#14450) ----
 
 use crate::menu_sets::{
-    self, MAX_MNU_BYTES, MenuSet, REF_ITEMS, color_name, color_number, file_name, folder, from_mnu, merged_with_prefs, path_of, read_sets, ref_command,
-    ref_item, set_name_of, to_mnu, write_set,
+    self, MAX_MNU_BYTES, MenuSet, REF_ITEMS, atomic_write, color_name, color_number, file_name, folder, from_mnu, merged_with_prefs, path_of, read_sets,
+    ref_command, ref_item, set_name_of, to_mnu, write_set,
 };
 
 /// A set: its hidden items and its colours, as `saveSet` would store them.
@@ -575,6 +575,29 @@ fn a_set_write_leaves_one_file_in_the_folder_and_no_staging_behind() {
     assert!(text.contains(&row(10, 2, 0, 1, 0)), "the new set is whole: {text}");
     assert!(text.contains(&row(1520, 2, 0, 1, 0)), "and the row the file held is still there: {text}");
     assert!(from_mnu(&text).is_ok(), "what the folder holds reads as a set");
+}
+
+#[test]
+fn a_refused_move_leaves_the_old_file_and_no_staging() {
+    // The other half of the atomic write: the staged file is moved in over the target, so a move that
+    // is refused - the one moment a crash can catch a write - leaves the previous bytes whole rather
+    // than a truncated beginning of the new text, and takes its staging file with it. This names the
+    // function the move goes through, so it was written with that function and does not compile
+    // without it; the successful case above runs the same code through `write_set`.
+    let (_tmp, dir) = folder_with(&[("Mine.MNU", &mnu(&row(1520, 2, 0, 1, 0)))]);
+    let path = dir.join("Mine.MNU");
+    let before = std::fs::read_to_string(&path).expect("the old file");
+    let half = "menu set text that never arrives";
+    let e = atomic_write(&path, half, &|_, _| Err(std::io::Error::other("the move is refused"))).expect_err("the move was refused");
+    assert!(e.contains("Mine.MNU"), "{e}");
+    assert_eq!(std::fs::read_to_string(&path).expect("the target is still readable"), before, "the old bytes, not part of the new text");
+    let left: Vec<String> = std::fs::read_dir(&dir).expect("the folder").flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(left, vec!["Mine.MNU".to_string()], "the staged file went with the refusal");
+    // And the same path with a real move writes the whole new file, once.
+    atomic_write(&path, half, &|from, to| std::fs::rename(from, to)).expect("the move went through");
+    assert_eq!(std::fs::read_to_string(&path).expect("the new file"), half);
+    let left: Vec<String> = std::fs::read_dir(&dir).expect("the folder").flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(left, vec!["Mine.MNU".to_string()], "and no staging file was left behind");
 }
 
 #[test]
