@@ -1201,3 +1201,31 @@ fn the_folder_s_sets_join_the_row_only_up_to_the_engine_s_cap() {
     assert!(!p.menu_sets.contains_key("Folder Set 63"), "the file past the cap never reached the preferences");
     assert!(h.state().prefs_rt.shortcuts.is_none(), "the dialog closed on its writes, not on a refused call");
 }
+
+/// OK writes each subject it was asked to write: the shortcut call and the menus are separate, and a
+/// refused `edit.keyboardShortcuts` must not take the Menus tab's staged sets, hidden items, colours
+/// and set-file writes down with it. The line that is said names the write that actually failed.
+/// The repro: a hand-edited settings file holds an action's function key the engine cannot store, so
+/// the shortcut write is refused; the menus edit still lands.
+#[test]
+fn ok_writes_the_menus_even_when_the_keyboard_shortcuts_are_refused() {
+    let mut h = harness(Arc::new(ScriptedFiles::new()));
+    let broken = format!("{}Broken", photocraft_engine::actions_cmds::PLAY_SHORTCUT_PREFIX);
+    h.state_mut().session.edit_prefs(|p| {
+        // `save_keys` copies the actions' function keys back out of the preferences, so this entry is
+        // in OK's shortcut payload whatever the dialog's rows hold.
+        p.shortcuts.insert(broken.clone(), "Cmd+Banana+Q".into());
+        p.menus.hidden = vec!["edit.fade".into()];
+    });
+    open_menus(&mut h);
+    show_all(&mut h);
+    ok(&mut h);
+    let p = h.state().session.prefs();
+    assert!(p.menus.hidden.is_empty(), "the Menus tab's write landed even though the shortcuts were refused: {:?}", p.menus.hidden);
+    assert_eq!(p.shortcuts.get(&broken).map(String::as_str), Some("Cmd+Banana+Q"), "the refused shortcut call changed no binding");
+    let line = h.state().ui.status.clone();
+    assert!(h.state().ui.status_error, "the refused write is said as an error");
+    assert!(line.contains("is not a valid shortcut") && line.contains("Cmd+Banana+Q"), "and it names the shortcut failure: {line}");
+    assert!(!line.contains("The menus were not saved"), "the menus were saved, so nothing claims they were not: {line}");
+    assert!(h.state().prefs_rt.shortcuts.is_none(), "OK closed the dialog on the writes it could make");
+}

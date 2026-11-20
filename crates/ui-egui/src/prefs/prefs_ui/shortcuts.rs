@@ -416,12 +416,15 @@ fn pass(app: &mut PhotocraftApp, ui: &mut egui::Ui, press_ok: bool) {
     drop(tabs);
     match output.outcome {
         Some(Outcome::Ok) => {
-            // The failure line names the write that failed: shortcuts and menus are separate subjects.
-            let failure = save_keys(app, keymap, profiles)
-                .err()
-                .map(|e| (tl!("The keyboard shortcuts were not saved: {error}"), e))
-                .or_else(|| save_menus(app, menus).err().map(|e| (tl!("The menus were not saved: {error}"), e)));
-            if let Some((subject, e)) = failure {
+            // The failure line names the write that failed: shortcuts and menus are separate
+            // subjects, and each of them is written whatever the other one did. A refused
+            // `edit.keyboardShortcuts` says its line, but it does not take the Menus tab's sets,
+            // hidden items, colours and staged set files down with it - the rule slice 2 set for a
+            // stale set entry and for a file that could not be written is that OK says what it could
+            // not do rather than skipping the rest of its writes.
+            let keys_failure = save_keys(app, keymap, profiles).err().map(|e| (tl!("The keyboard shortcuts were not saved: {error}"), e));
+            let menus_failure = save_menus(app, menus).err().map(|e| (tl!("The menus were not saved: {error}"), e));
+            if let Some((subject, e)) = keys_failure.or(menus_failure) {
                 app.ui.status = crate::i18n::fmt(subject, &[("error", &e)]);
                 app.ui.status_error = true;
             }
