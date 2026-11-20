@@ -17,7 +17,7 @@ use photocraft_doc::{Document, Fill, GradientStyle, Layer, LayerContent, LayerId
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, blend_from_str, check_pixels_unlocked, layer_param};
+use crate::commands::{CommandSpec, check_pixels_unlocked, layer_param, parse_blend};
 use crate::presets::gradients::{GradientPreset, transparency_param};
 use crate::{EngineError, Result, Session};
 
@@ -287,7 +287,7 @@ pub fn apply_set(layer: &Layer, f: &Fill, canvas: Rect, p: &Value, fg: [f32; 4],
 
 /// The Gradient Fill layer `gradient.fill.create` adds to `doc` for `p` (also the canvas's live
 /// preview of a Gradient tool drag): laid out on the canvas, so the handles land exactly where
-/// the drag was, and masked by the selection (Photoshop keeps the selection, as a mask).
+/// the drag was, and masked by the selection (`create` then drops the selection, #12196).
 pub fn new_layer(s: &Session, doc: &Document, p: &Value) -> Result<Layer> {
     const CMD: &str = CREATE;
     let from = point(CMD, p, "from")?.ok_or_else(|| bad(CMD, "missing `from` [x, y]"))?;
@@ -300,7 +300,7 @@ pub fn new_layer(s: &Session, doc: &Document, p: &Value) -> Result<Layer> {
     let opacity = num(p, "opacity").unwrap_or(100.0).clamp(0.0, 100.0) / 100.0;
     let blend = match p.get("mode").and_then(Value::as_str) {
         None | Some("") => photocraft_color::BlendMode::Normal,
-        Some(m) => blend_from_str(m).ok_or_else(|| bad(CMD, format!("unknown blend mode `{m}`")))?,
+        Some(m) => parse_blend(m).ok_or_else(|| bad(CMD, format!("unknown blend mode `{m}`")))?,
     };
     let canvas = doc.bounds();
     if canvas.is_empty() {
@@ -322,6 +322,7 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
         new_layer(s, &d.doc, p)?
     };
     let id = s.edit("New Gradient Fill Layer", |doc, active| {
+        doc.selection = None;
         let id = crate::layer_place::insert_new(doc, *active, layer, crate::layer_place::Place::AutoEditable);
         *active = Some(id);
         Ok(id)
@@ -596,3 +597,7 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "gradient_fill_selection_tests.rs"]
+mod gradient_fill_selection_tests;

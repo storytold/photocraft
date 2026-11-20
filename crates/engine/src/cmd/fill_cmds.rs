@@ -11,7 +11,7 @@ use photocraft_geom::{Rect, TILE_SIZE};
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde_json::{Value, json};
 
-use crate::commands::{blend_from_str, color_param, layer_param};
+use crate::commands::{color_param, layer_param, parse_blend};
 use crate::{EngineError, Result, Session};
 
 const CMD: &str = "edit.fill";
@@ -66,7 +66,7 @@ fn contents(p: &Value) -> Result<&str> {
 fn mode(p: &Value) -> Result<BlendMode> {
     match p.get("mode") {
         None | Some(Value::Null) => Ok(BlendMode::Normal),
-        Some(Value::String(m)) => blend_from_str(m).filter(|m| *m != BlendMode::PassThrough).ok_or_else(|| bad(format!("unknown blend mode `{m}`"))),
+        Some(Value::String(m)) => parse_blend(m).filter(|m| *m != BlendMode::PassThrough).ok_or_else(|| bad(format!("unknown blend mode `{m}`"))),
         Some(v) => Err(bad(format!("`mode` must be a blend mode name, not {v}"))),
     }
 }
@@ -106,7 +106,8 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     let restore = contents == "history";
     let source = match contents {
         "foreground" => color_source(s, s.tools.foreground),
-        "background" => color_source(s, s.tools.background),
+        // As the document takes the swatch: its gray profile's value in a Grayscale document (#11940).
+        "background" => color_source(s, crate::color_cmds::swatch_in_doc(s, s.tools.background)),
         "color" => color_source(s, color_param(CMD, p, "color", s.tools.foreground)?),
         "black" => Source::Color([0.0, 0.0, 0.0, 1.0]),
         "gray" => Source::Color([128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0]),
