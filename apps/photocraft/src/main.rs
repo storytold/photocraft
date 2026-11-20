@@ -63,7 +63,6 @@ mod ui_state;
 mod window_frame;
 
 use photocraft_engine::Session;
-use photocraft_engine::print_cmds::PrintExt;
 use photocraft_ui_egui::PhotocraftApp;
 use photocraft_ui_egui::Prefix;
 use photocraft_ui_egui::window_policy::{self, Backend, Frame, TitleBarPref};
@@ -554,6 +553,7 @@ fn main() -> eframe::Result {
             }
             #[cfg(target_os = "linux")]
             let session = {
+                use photocraft_engine::print_cmds::PrintExt;
                 let mut session = Session::new();
                 *session.print_spooler_mut() = print_portal::spooler();
                 session
