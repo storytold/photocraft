@@ -327,14 +327,8 @@ pub fn from_mnu(text: &str) -> Result<Mnu, String> {
     // declarations that give a prefix its meaning, comments, processing instructions and CDATA
     // sections. What it cannot keep - a reference name it does not know, and the declarations of a
     // foreign root we do not write - is named in the tests, not claimed.
-    let options = craft_xml::Options {
-        doctype: craft_xml::Doctype::Reject,
-        comments: true,
-        pis: true,
-        cdata: true,
-        ..craft_xml::Options::default()
-    }
-    .with_limits(craft_xml::Limits { max_input: MAX_MNU_BYTES, max_depth: 8, ..craft_xml::Limits::DEFAULT });
+    let options = craft_xml::Options { doctype: craft_xml::Doctype::Reject, comments: true, pis: true, cdata: true, ..craft_xml::Options::default() }
+        .with_limits(craft_xml::Limits { max_input: MAX_MNU_BYTES, max_depth: 8, ..craft_xml::Limits::DEFAULT });
     let root = options.parse(body.as_bytes()).map_err(|e| format!("menu set file: {e}"))?;
     if !root.local().ends_with(ROOT_SUFFIX) {
         return Err(format!("not a menu set file: its root element is <{}>", root.local()));

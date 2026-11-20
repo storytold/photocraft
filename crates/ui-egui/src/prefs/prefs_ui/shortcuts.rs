@@ -307,8 +307,8 @@ pub fn open(app: &mut PhotocraftApp, tab: u64) {
             session.menus.sets.insert(name, menu_sets::merged_with_prefs(&file, held.as_ref()));
         }
     }
-    if let Some(first) = errors.first() {
-        set_line(app, tl!("A menu set file was not read: {error}"), first);
+    if !errors.is_empty() {
+        set_lines(app, tl!("A menu set file was not read: {error}"), &errors);
     }
 }
 
@@ -556,10 +556,13 @@ fn save_menus(app: &mut PhotocraftApp, menus: &MenusDraft) -> Result<Value, Stri
 
 /// The `.mnu` files of the sets the row saved, and the files of the sets it deleted, in the menu-sets
 /// folder of the settings directory; a set whose file the Save dialog chose goes where the user sent
-/// it. The write makes the folder when it is not there. A file that cannot be written is said on the
-/// app's status line rather than undoing the preferences write that came before it (#14450).
+/// it, and Delete takes it away there. The write makes the folder when it is not there. Files that
+/// cannot be written or deleted are said on the app's status line rather than undoing the preferences
+/// write that came before it, and several of them are said together: five broken files are five sets,
+/// not one (#14450).
 fn write_set_files(app: &mut PhotocraftApp, menus: &MenusDraft) {
     let Some(dir) = sets_folder(app) else { return };
+    let mut refused_write = Vec::new();
     for (name, chosen) in &menus.file_write {
         let Some(set) = menus.sets.get(name) else { continue };
         let wrote = match chosen {
@@ -567,14 +570,23 @@ fn write_set_files(app: &mut PhotocraftApp, menus: &MenusDraft) {
             None => menu_sets::write_set(&dir, name, set),
         };
         if let Err(e) = wrote {
-            set_line(app, tl!("The menu set was not saved: {error}"), &e);
+            refused_write.push(e);
         }
     }
+    set_lines(app, tl!("The menu set was not saved: {error}"), &refused_write);
+    let mut refused_delete = Vec::new();
     for name in &menus.file_delete {
-        if let Err(e) = menu_sets::delete_set(&dir, name) {
-            set_line(app, tl!("The menu set was not deleted: {error}"), &e);
+        // The file the Save dialog chose for a set IS that set's file: Delete takes it away where it
+        // stands rather than only looking in the menu-sets folder, which may hold no copy of it at all.
+        let taken = match menus.file_write.get(name) {
+            Some(Some(path)) => menu_sets::delete_set_at(Path::new(path)),
+            _ => menu_sets::delete_set(&dir, name),
+        };
+        if let Err(e) = taken {
+            refused_delete.push(e);
         }
     }
+    set_lines(app, tl!("The menu set was not deleted: {error}"), &refused_delete);
 }
 
 /// Where a saved set lives as a file: the menu-sets folder of the settings directory
@@ -597,6 +609,14 @@ fn sets_folder(app: &PhotocraftApp) -> Option<std::path::PathBuf> {
 fn set_line(app: &mut PhotocraftApp, subject: &str, error: &str) {
     app.ui.status = crate::i18n::fmt(subject, &[("error", error)]);
     app.ui.status_error = true;
+}
+
+/// The same line for several set problems at once: the first one in full, and how many more there
+/// were. One problem is said as before; none at all says nothing.
+fn set_lines(app: &mut PhotocraftApp, subject: &str, errors: &[String]) {
+    let Some((first, rest)) = errors.split_first() else { return };
+    let said = if rest.is_empty() { first.clone() } else { crate::i18n::fmt(tl!("{error} and {n} more"), &[("error", first), ("n", &rest.len().to_string())]) };
+    set_line(app, subject, &said);
 }
 
 /// The sets the menu-sets folder holds, keyed by name, and one message per file that could not be

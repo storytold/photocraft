@@ -979,6 +979,72 @@ fn a_set_file_speaks_only_for_the_items_it_numbers_and_the_preferences_fill_the_
     assert_eq!(p.menus.hidden, ["edit.copy", "edit.paste"], "and nothing from the menus in use");
 }
 
+/// Yes of the Delete question takes the file the row was going to write for that set, where the Save
+/// dialog chose to put it - not only the file the menu-sets folder would have held. The picked path is
+/// that set's file.
+#[test]
+fn yes_of_the_delete_question_takes_the_file_the_dialog_chose() {
+    let tmp = tempfile::tempdir().expect("a settings folder");
+    // A file outside the menu-sets folder, already holding an older copy of the set: the Save dialog
+    // picks exactly this name, so this is the set's file.
+    let chosen = tmp.path().join("Elsewhere.MNU");
+    std::fs::write(&chosen, b"an older copy of the set, written elsewhere").expect("the file the dialog will pick");
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![chosen.clone()])]));
+    let mut h = file_harness(files, tmp.path());
+    h.state_mut().run("edit.menus", json!({"hide": ["file.new"]})).unwrap();
+    open_menus(&mut h);
+    button(&h, SAVE).click();
+    h.run_steps(4);
+    assert_eq!(row_value(&h), "Elsewhere", "the picked name named the set");
+    button(&h, DELETE).click();
+    h.run_steps(2);
+    answer(&mut h, YES);
+    ok(&mut h);
+    assert!(!chosen.exists(), "the Delete took the set's own file, where it stands");
+    assert!(set_file(tmp.path(), "Elsewhere").is_none(), "the folder never got a copy of its own");
+    let p = h.state().session.prefs();
+    assert!(!p.menu_sets.contains_key("Elsewhere"), "and the set went from the preferences with it");
+}
+
+/// Three files in the folder that do not read are said as three: the first named in full and how many
+/// more there were, so one broken file does not hide two.
+#[test]
+fn several_unreadable_set_files_are_said_together() {
+    let tmp = tempfile::tempdir().expect("a settings folder");
+    write_set_file(tmp.path(), "Broken One", b"<photocraft-menu-settings version=\"2\"");
+    write_set_file(tmp.path(), "Broken Two", b"menus, not xml");
+    write_set_file(tmp.path(), "Broken Three", b"<photocraft-menu-settings version=\"3\" />");
+    let mut h = file_harness(Arc::new(ScriptedFiles::new()), tmp.path());
+    open_menus(&mut h);
+    let line = h.state().ui.status.clone();
+    assert!(h.state().ui.status_error, "the line is an error line");
+    assert!(line.contains("Broken One.MNU"), "the first is named: {line}");
+    assert!(line.contains("and 2 more"), "and the other two are counted, not left unsaid: {line}");
+}
+
+/// The same at OK, for writes that failed: both refusals are said, not only the one that happened last.
+#[test]
+fn two_sets_whose_files_cannot_be_written_are_said_together() {
+    let tmp = tempfile::tempdir().expect("a settings folder");
+    let one = tmp.path().join("Blocked One.MNU");
+    let two = tmp.path().join("Blocked Two.MNU");
+    std::fs::create_dir(&one).expect("a folder in the way of the first set's file");
+    std::fs::create_dir(&two).expect("and in the way of the second's");
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![one.clone()]), Picked::Paths(vec![two.clone()])]));
+    let mut h = file_harness(files, tmp.path());
+    h.state_mut().run("edit.menus", json!({"hide": ["file.new"]})).unwrap();
+    open_menus(&mut h);
+    button(&h, SAVE).click();
+    h.run_steps(4);
+    assert_eq!(row_value(&h), "Blocked One", "the first pick named its set");
+    button(&h, NEW).click();
+    h.run_steps(4);
+    ok(&mut h);
+    let line = h.state().ui.status.clone();
+    assert!(h.state().ui.status_error, "the line is an error line");
+    assert!(line.contains("and 1 more"), "both refused writes are said: {line}");
+}
+
 /// Where the file and the preferences disagree about an item the file does number, the file wins:
 /// the folder is where a saved set lives, so its row is the newer word on that item. Items the file
 /// has no row for keep the preferences' copy.
