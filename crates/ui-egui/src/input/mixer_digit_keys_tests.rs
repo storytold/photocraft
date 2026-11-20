@@ -185,13 +185,17 @@ fn real_app_keys_set_only_mixer_wet_flow_and_smoothing_with_either_airbrush_mode
     }
 }
 
-/// Keep the unrelated no-target controls without restoring the removed raw-key test helper.
+/// Preserve all isolation checks, including Color Replacement Tolerance now on main.
 #[test]
-fn other_tools_without_digit_targets_still_ignore_digits() {
+fn other_tools_keep_their_current_digit_targets() {
     for tool in [Tool::ColorReplacement, Tool::MagicEraser, Tool::Dodge, Tool::Smudge] {
         let mut a = app(tool);
         let before = (a.session.tools.brush.clone(), layer(&a), a.ui.tool_options.clone());
+        let mut expected = before.clone();
+        if tool == Tool::ColorReplacement {
+            expected.2.cr_tolerance = 30.0;
+        }
         press(&mut a, 3, false, 0.0);
-        assert_eq!((a.session.tools.brush.clone(), layer(&a), a.ui.tool_options.clone()), before);
+        assert_eq!((a.session.tools.brush.clone(), layer(&a), a.ui.tool_options.clone()), expected);
     }
 }
