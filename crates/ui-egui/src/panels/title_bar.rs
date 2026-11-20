@@ -40,7 +40,7 @@ pub(crate) fn title_text(app: &PhotocraftApp) -> String {
         .active()
         .map(|d| {
             let name = if show_name { d.doc.name.as_str() } else { "PhotoCraft" };
-            format!("{}{name}{}", crate::canvas::tabs::copyright_prefix(d), if d.is_dirty() { "  •" } else { "" })
+            format!("{}{name}{}", crate::canvas::tabs::copyright_prefix(app, d), if d.is_dirty() { "  •" } else { "" })
         })
         .unwrap_or_else(|| "PhotoCraft".into())
 }
@@ -54,11 +54,11 @@ pub fn window_title(app: &PhotocraftApp) -> String {
     if !app.session.prefs().interface.show_file_name_in_title {
         let active = app.session.active();
         let dirty = if active.is_some_and(|d| d.is_dirty()) { "*" } else { "" };
-        return format!("{dirty}{}PhotoCraft", active.map(crate::canvas::tabs::copyright_prefix).unwrap_or_default());
+        return format!("{dirty}{}PhotoCraft", active.map(|d| crate::canvas::tabs::copyright_prefix(app, d)).unwrap_or_default());
     }
     app.session
         .active()
-        .map(|d| format!("{}{} \u{2014} PhotoCraft", if d.is_dirty() { "*" } else { "" }, crate::canvas::tabs::titled_name(d)))
+        .map(|d| format!("{}{} \u{2014} PhotoCraft", if d.is_dirty() { "*" } else { "" }, crate::canvas::tabs::titled_name(app, d)))
         .unwrap_or_else(|| "PhotoCraft".into())
 }
 

@@ -234,18 +234,18 @@ pub(crate) fn tab_title_at(app: &PhotocraftApp, i: usize, zoom: f32) -> String {
     let layer = active_layer.map(|l| format!("{}, ", l.name)).unwrap_or_default();
     // A save in progress: "name @ 100% (Layer 1, RGB/16) - Saving 45%", as Photoshop does (#3389).
     let saving = crate::jobs_ui::save_progress(app, st.doc.id).map(|s| format!(" - {s}")).unwrap_or_default();
-    format!("{} @ {}% ({layer}{model}/{}){saving}", titled_name(st), fmt_zoom(zoom), st.doc.depth.bits())
+    format!("{} @ {}% ({layer}{model}/{}){saving}", titled_name(app, st), fmt_zoom(zoom), st.doc.depth.bits())
 }
 
 /// The document's name as its tab and window title show it: "© name" when File Info marks it
 /// Copyrighted, as Photoshop does (#13821).
-pub(crate) fn titled_name(st: &photocraft_engine::DocState) -> String {
-    format!("{}{}", copyright_prefix(st), st.doc.name)
+pub(crate) fn titled_name(app: &PhotocraftApp, st: &photocraft_engine::DocState) -> String {
+    format!("{}{}", copyright_prefix(app, st), st.doc.name)
 }
 
 /// "© " when File Info marks the document Copyrighted, otherwise nothing.
-pub(crate) fn copyright_prefix(st: &photocraft_engine::DocState) -> &'static str {
-    if photocraft_engine::file_cmds::copyright_marked(st.doc.metadata.xmp.as_deref()) { "\u{a9} " } else { "" }
+pub(crate) fn copyright_prefix(app: &PhotocraftApp, st: &photocraft_engine::DocState) -> &'static str {
+    if app.doc_queries.copyrighted(&app.session, st) { "\u{a9} " } else { "" }
 }
 
 /// The documents with a tab in the main window, in document order: every one not floating in its own window.
