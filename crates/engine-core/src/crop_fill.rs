@@ -185,12 +185,12 @@ fn fill_layer(doc: &mut Document, id: Result<LayerId>, cov: &Coverage, own_pixel
         // added target may widen its sampling envelope; its hole and output stay unchanged.
         let usable = |x, y| label(x, y) == 0 && (!own_pixels || has_pixel(x, y));
         let sampling_bounds = if let Some(donor_bounds) = donor_bounds {
-            let window = crate::fill_cmds::sampling_window(*bounds, canvas).intersect(&donor_bounds);
+            let window = crate::content_sampling::sampling_window(*bounds, canvas).intersect(&donor_bounds);
             if contains_donor(window, usable) { *bounds } else { widened_sampling_bounds(*bounds, donor_bounds, canvas, n)? }
         } else {
             *bounds
         };
-        let (window, px) = crate::fill_cmds::content_aware_native(
+        let (window, px) = crate::content_sampling::content_aware_native(
             surf,
             sampling_bounds,
             canvas,
@@ -239,7 +239,7 @@ fn contains_donor(bounds: Rect, usable: impl Fn(i32, i32) -> bool) -> bool {
 /// Widens the sampling envelope to include distant donors, after pricing the actual float read.
 fn widened_sampling_bounds(piece: Rect, donors: Rect, canvas: Rect, channels: usize) -> Result<Rect> {
     let expanded = piece.union(&donors);
-    let window = crate::fill_cmds::sampling_window(expanded, canvas);
+    let window = crate::content_sampling::sampling_window(expanded, canvas);
     let bytes = (window.width() as usize)
         .checked_mul(window.height() as usize)
         .and_then(|pixels| pixels.checked_mul(channels))

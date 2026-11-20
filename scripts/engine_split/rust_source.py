@@ -70,8 +70,10 @@ def mask(src):
 
 def block_end(masked, start):
     """The index after the item that starts at `start`: its brace block, or its `;`."""
-    i = start
-    while i < len(masked) and masked[i] not in "{;":
+    i, nest = start, 0
+    while i < len(masked) and (nest or masked[i] not in "{;"):
+        # A `;` inside brackets (`[f32; 4]` in a signature) doesn't end the item.
+        nest += {"(": 1, "[": 1, ")": -1, "]": -1}.get(masked[i], 0)
         i += 1
     if i >= len(masked) or masked[i] == ";":
         return i + 1

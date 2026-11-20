@@ -1,9 +1,14 @@
-use super::*;
-use crate::brush_cmds::LiveStroke;
+//! Symmetry presets: validated whole, mirrored in the live preview as in the commit at every depth.
+
 use photocraft_doc::{Layer, LayerMask};
+use photocraft_engine::Session;
+use photocraft_engine::brush_cmds::LiveStroke;
+use photocraft_paint::StrokePoint;
+use photocraft_paint::symmetry::SymmetryMode;
+use serde_json::{Value, json};
 
 fn session(depth: u8, mode: &str) -> Session {
-    let mut s = crate::session();
+    let mut s = Session::new();
     s.execute("file.new", json!({"width":81,"height":61,"depth":depth,"mode":mode,"background":"white"})).unwrap();
     s
 }
@@ -19,7 +24,7 @@ fn presets_validate_atomically_and_leave_document_paths_and_history_untouched() 
         let p = s.active().unwrap().symmetry.as_ref().unwrap().preset().unwrap();
         assert_eq!(p.center, [40.5, 30.5]);
         assert_eq!(p.rotation, 0.0);
-        assert_eq!(crate::inspect::document(s.active().unwrap())["symmetry"]["mode"], mode.id());
+        assert_eq!(photocraft_engine::inspect::document(s.active().unwrap())["symmetry"]["mode"], mode.id());
         assert_eq!(s.active().unwrap().doc, before);
         assert_eq!((s.active().unwrap().history.past_len(), s.active().unwrap().revision), (history, revision));
     }
@@ -48,13 +53,13 @@ fn presets_validate_atomically_and_leave_document_paths_and_history_untouched() 
     s.execute("paint.symmetryFromPath", json!({"name":"work"})).unwrap();
     assert_eq!(s.active().unwrap().symmetry.as_ref().unwrap().path_source(), Some("work"));
     s.execute("paint.symmetryDisable", json!({})).unwrap();
-    assert!(crate::inspect::document(s.active().unwrap())["symmetry"].is_null());
+    assert!(photocraft_engine::inspect::document(s.active().unwrap())["symmetry"].is_null());
     s.execute("paint.setSymmetry", json!({"mode":"vertical"})).unwrap();
     s.execute("file.new", json!({"width":10,"height":20})).unwrap();
     assert!(s.active().unwrap().symmetry.is_none());
     assert!(s.set_active(0));
     assert!(s.active().unwrap().symmetry.is_some());
-    let mut empty = crate::session();
+    let mut empty = Session::new();
     assert!(!empty.is_enabled("paint.setSymmetry"));
     assert!(empty.execute("paint.setSymmetry", json!({"mode":"vertical"})).is_err());
 }

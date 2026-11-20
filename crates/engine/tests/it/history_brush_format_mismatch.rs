@@ -4,15 +4,15 @@
 
 use serde_json::{Value, json};
 
-use crate::Session;
-use crate::retouch_cmds::LiveRetouch;
+use photocraft_engine::Session;
+use photocraft_engine::retouch_cmds::LiveRetouch;
 
 const MODE: &str = "Could not use the history brush because the current color mode does not match that of the history state.";
 const DEPTH: &str = "Could not use the history brush because the current bit depth does not match that of the history state.";
 
 /// Rows Open (white), Fill (red): row 1 is the red state.
 fn session(mode: &str, depth: u64) -> Session {
-    let mut s = crate::session();
+    let mut s = Session::new();
     s.execute("file.new", json!({"width": 24, "height": 16, "mode": mode, "depth": depth, "background": "white"})).unwrap();
     s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
     s

@@ -176,13 +176,13 @@ fn a_right_angle_rotation_moves_points() {
 
 #[test]
 fn flips_and_right_angle_turns_keep_points_on_their_pixel() {
-    use crate::canvas_geom::Turn;
-    for (id, turn) in [
-        ("image.imageRotation.flipCanvasHorizontal", Turn::FlipHorizontal),
-        ("image.imageRotation.flipCanvasVertical", Turn::FlipVertical),
-        ("image.imageRotation.180", Turn::Rotate180),
-        ("image.imageRotation.90cw", Turn::Cw90),
-        ("image.imageRotation.90ccw", Turn::Ccw90),
+    // Where pixel (3, 3) of the 100×80 canvas lands after each turn.
+    for (id, (x, y)) in [
+        ("image.imageRotation.flipCanvasHorizontal", (96, 3)),
+        ("image.imageRotation.flipCanvasVertical", (3, 76)),
+        ("image.imageRotation.180", (96, 76)),
+        ("image.imageRotation.90cw", (76, 3)),
+        ("image.imageRotation.90ccw", (3, 96)),
     ] {
         // A black pixel at (3, 3) of a white 100×80 document, with a point on it.
         let mut s = session();
@@ -195,7 +195,6 @@ fn flips_and_right_angle_turns_keep_points_on_their_pixel() {
         .unwrap();
         s.execute("view.colorSamplers.add", json!({"x": 3, "y": 3})).unwrap();
         s.execute(id, json!({})).unwrap();
-        let (x, y) = turn.pixel_map(100, 80)(3, 3);
         let p = points(&mut s);
         assert_eq!(p.len(), 1, "{id}");
         assert_eq!(p[0]["position"], json!([f64::from(x) + 0.5, f64::from(y) + 0.5]), "{id}");

@@ -475,7 +475,7 @@ fn edit_tiles(
         .into_par_iter()
         .map(|tc| -> crate::Result<Option<(photocraft_geom::TileCoord, Option<Arc<Tile>>)>> {
             let tr = tc.rect().intersect(&area);
-            let mask = selection.map(|m| crate::fill_cmds::Mask::of(m, tc));
+            let mask = selection.map(|m| crate::pixel_fill::Mask::of(m, tc));
             let full = tr == tc.rect() && mask.as_ref().is_none_or(|m| m.full(tr));
             let current = surf.tile(tc);
             match whole(full) {

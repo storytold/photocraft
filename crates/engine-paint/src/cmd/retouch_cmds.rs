@@ -189,7 +189,7 @@ fn parse_brush(s: &Session, p: &Value, cmd: &str) -> Result<(Stroke, Option<Laye
     if flag(p, "eraseToHistory", false) && (flag(p, "pencil", false) || flag(p, "block", false)) {
         brush = crate::brush_cmds::pencil_shape(brush, p)?;
     }
-    crate::brush_cmds::validate_brush(&brush, cmd)?;
+    crate::brush_defs::validate_brush(&brush, cmd)?;
     if crate::channel_cmds::is_channel_target(p) {
         return Ok((Stroke { brush, points: pts }, None));
     }
@@ -238,6 +238,7 @@ mod dab;
 mod heal;
 mod sampling;
 
+pub(crate) use crate::content_sampling::{SampleLayers, composite_region};
 pub use clone::{LiveRetouch, clone_destination_preview, clone_preview, clone_preview_periodic, healing_preview, healing_preview_periodic};
 use clone::{blend_param, clamp_samples, clone_stamp};
 pub(crate) use dab::DabEffect;
@@ -249,7 +250,37 @@ use dab::dab_cmd;
 use heal::proximity_source_patch;
 use heal::{heal_region, healing_brush, history_brush, history_source, spot_healing};
 use sampling::sample;
-pub(crate) use sampling::{SampleLayers, composite_region};
+
+/// The session's offer of a finished live retouching stroke.
+pub trait LiveRetouchExt {
+    /// [`LiveStrokeExt::offer_live_stroke`](crate::brush_cmds::LiveStrokeExt::offer_live_stroke)
+    /// for a live Clone Stamp or History Brush stroke, taken by the `paint.cloneStamp` /
+    /// `paint.historyBrush` it was drawn for. Refused for the Healing Brush (it blends on release)
+    /// and when the brush, layer or clone source changed during the stroke.
+    fn offer_live_retouch(&mut self, live: LiveRetouch) -> Result<()>;
+
+    /// [`LiveStrokeExt::offer_live_stroke`](crate::brush_cmds::LiveStrokeExt::offer_live_stroke)
+    /// for a live Dodge, Burn, Sponge, Blur, Sharpen or Smudge stroke, taken by the command it was
+    /// drawn for: the stroke's finishing dabs are run first. Refused when the brush, tool options
+    /// or layer changed during the stroke.
+    fn offer_live_dab(&mut self, live: LiveDab) -> Result<()>;
+}
+
+impl LiveRetouchExt for Session {
+    fn offer_live_retouch(&mut self, live: LiveRetouch) -> Result<()> {
+        let commit = live.into_commit(self)?;
+        self.live_commit = Some(commit);
+        Ok(())
+    }
+
+    fn offer_live_dab(&mut self, live: LiveDab) -> Result<()> {
+        // A refused offer withdraws the previous one too.
+        self.live_commit = None;
+        let commit = live.into_commit(self)?;
+        self.live_commit = Some(commit);
+        Ok(())
+    }
+}
 
 /// Retouching command specs.
 pub fn specs() -> Vec<CommandSpec> {

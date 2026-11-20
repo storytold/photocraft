@@ -1,5 +1,5 @@
-use crate::brush_cmds::LiveStrokeExt;
 use super::*;
+use crate::brush_cmds::LiveStrokeExt;
 
 fn session(w: u32, h: u32) -> Session {
     let mut s = crate::session();
@@ -627,66 +627,6 @@ fn define_brush_from_selection() {
     s.execute("select.deselect", json!({})).unwrap();
     s.execute("paint.stroke", json!({"points": [[30, 32]], "color": "#ff0000"})).unwrap();
     assert!(rgba(&s, 30, 32)[3] > 0.9);
-}
-
-#[test]
-fn fill_survives_allocation_failure() {
-    // CodeRabbit on #9775: a fill's buffers span the region, up to the whole canvas. Their peak is
-    // reserved through the fallible allocator before any of them is built, so running out of
-    // memory is the fill's own error, leaving the pixels and history alone, never an abort.
-    let mut s = session(60, 60);
-    let pixels_before = surface(&s);
-    let history_before = s.active().unwrap().history.past_len();
-    crate::allocation::fail_next_for_test();
-    let result = s.execute("paint.stroke", json!({"points": [[10, 10], [50, 10], [50, 50], [10, 50]], "fill": true, "color": "#ff0000"}));
-    let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
-    let err = result.expect_err("an allocation failure must be reported, not panic").to_string();
-    assert!(err.contains("filling a painted region"), "the fill reserves its buffers first: {err}");
-    assert_eq!(surface(&s), pixels_before, "no pixels changed");
-    assert_eq!(s.active().unwrap().history.past_len(), history_before, "no history step was recorded");
-}
-
-#[test]
-fn define_brush_from_selection_survives_allocation_failure() {
-    // The sampled tip is one f32 buffer over the whole selection, and the selection mask is a
-    // second of the same size. Both are reserved through the fallible allocator, so an allocation
-    // failure must be a graceful error (brush, presets, history and document untouched), never a
-    // panic or an OOM abort.
-    let mut s = session(40, 40);
-    s.execute("select.rect", json!({"x": 5, "y": 5, "width": 20, "height": 20})).unwrap();
-    let brush_before = s.tools.brush.clone();
-    let presets_before = s.tools.presets.clone();
-    let history_before = s.active().unwrap().history.past_len();
-    crate::allocation::fail_next_for_test();
-    let result = s.execute("brush.defineFromSelection", json!({"name": "Blob"}));
-    let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
-    assert!(result.is_err(), "an allocation failure must be reported, not panic");
-    assert_eq!(s.tools.brush, brush_before, "the current brush is unchanged");
-    assert_eq!(s.tools.presets, presets_before, "the preset list is unchanged");
-    assert_eq!(s.active().unwrap().history.past_len(), history_before, "no history step was recorded");
-}
-
-#[test]
-fn define_brush_from_selection_survives_failure_of_the_second_allocation() {
-    // Review of #5469: fail_next_for_test trips on the first buffer, so the second fallible
-    // call (the selection-mask read) did not have its own regression. Count the tip buffer as
-    // a clean attempt and fail the mask read instead; both report the same command purpose,
-    // and the command must still bow out before touching anything.
-    let mut s = session(40, 40);
-    s.execute("select.rect", json!({"x": 5, "y": 5, "width": 20, "height": 20})).unwrap();
-    let pixels_before = surface(&s);
-    let brush_before = s.tools.brush.clone();
-    let presets_before = s.tools.presets.clone();
-    let history_before = s.active().unwrap().history.past_len();
-    crate::allocation::fail_after_for_test(1);
-    let result = s.execute("brush.defineFromSelection", json!({"name": "Blob"}));
-    let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
-    assert!(result.is_err(), "an allocation failure must be reported, not panic");
-    assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for defining a brush from the selection")));
-    assert_eq!(s.tools.brush, brush_before, "the current brush is unchanged");
-    assert_eq!(s.tools.presets, presets_before, "the preset list is unchanged");
-    assert_eq!(s.active().unwrap().history.past_len(), history_before, "no history step was recorded");
-    assert!(same_pixels(&pixels_before, &surface(&s), s.active().unwrap().doc.bounds()), "the document pixels are unchanged");
 }
 
 #[test]

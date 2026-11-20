@@ -309,14 +309,14 @@ fn erode(w: usize, h: usize, m: &[bool], r: usize) -> Vec<bool> {
 }
 
 /// Where a fill samples from around `r`: Photoshop's Content-Aware window
-/// ([`crate::fill_cmds::sampling_window`]), at most [`MAX_MARGIN`] pixels around `r`.
+/// ([`crate::content_sampling::sampling_window`]), at most [`MAX_MARGIN`] pixels around `r`.
 pub(super) fn window(r: Rect, canvas: Rect) -> Rect {
     window_within(r, canvas, MAX_MARGIN)
 }
 
 /// [`window`] with at most `margin` pixels around `r`.
 fn window_within(r: Rect, canvas: Rect, margin: i32) -> Rect {
-    crate::fill_cmds::sampling_window(r, canvas).intersect(&r.inflate(margin))
+    crate::content_sampling::sampling_window(r, canvas).intersect(&r.inflate(margin))
 }
 
 /// The pixels a step works on: the targeted surface, or with Sample All Layers the visible

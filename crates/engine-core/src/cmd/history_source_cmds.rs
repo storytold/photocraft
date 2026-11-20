@@ -85,7 +85,7 @@ fn parse(st: &DocState, p: &Value, cmd: &str) -> Result<Option<HistorySource>> {
 /// size is refused rather than painting shifted pixels (after Crop, Canvas Size or Image Size):
 /// Photoshop refuses too, "the current canvas size does not match that of the history state"
 /// (its message as users report it; Adobe's help doesn't document the case).
-pub(crate) fn paint_source(st: &DocState, p: &Value, cmd: &str) -> Result<Arc<Document>> {
+pub fn paint_source(st: &DocState, p: &Value, cmd: &str) -> Result<Arc<Document>> {
     checked_source(st, p, cmd)?.map_err(|why| {
         EngineError::Other(match why {
             SourceRefusal::NoSource => "the History Brush source was deleted: set a new source in the History panel".into(),
@@ -99,7 +99,7 @@ pub(crate) fn paint_source(st: &DocState, p: &Value, cmd: &str) -> Result<Arc<Do
 
 /// Why [`checked_source`] found no source to paint from, so each tool can word it (#12638).
 #[derive(Debug)]
-pub(crate) enum SourceRefusal {
+pub enum SourceRefusal {
     /// No `state` or `snapshot` passed, and the History panel's source was deleted.
     NoSource,
     /// The source has another canvas size than the document.
@@ -108,7 +108,7 @@ pub(crate) enum SourceRefusal {
 
 /// [`paint_source`] with the refusal left to the caller: bad params and a `state` or `snapshot`
 /// that is gone are errors, the two refusals the tools word themselves are the inner `Err`.
-pub(crate) fn checked_source(st: &DocState, p: &Value, cmd: &str) -> Result<std::result::Result<Arc<Document>, SourceRefusal>> {
+pub fn checked_source(st: &DocState, p: &Value, cmd: &str) -> Result<std::result::Result<Arc<Document>, SourceRefusal>> {
     let doc = match parse(st, p, cmd)? {
         Some(src) => source_of(st, src).ok_or_else(|| EngineError::Other("that history state or snapshot is gone".into()))?,
         None => match source(st).and_then(|src| source_of(st, src)) {
@@ -126,7 +126,7 @@ pub(crate) fn checked_source(st: &DocState, p: &Value, cmd: &str) -> Result<std:
 /// the History Brush's pairs were measured (RGB to Grayscale, a depth change), so any other change,
 /// or both at once, converts the source as before. Document modes are compared: the pixel format
 /// reads Indexed and Multichannel as RGB.
-pub(crate) fn refuse_other_format(st: &DocState, source: &Document) -> Result<()> {
+pub fn refuse_other_format(st: &DocState, source: &Document) -> Result<()> {
     let (mode_differs, depth_differs) = (source.mode != st.doc.mode, source.depth != st.doc.depth);
     if source.mode == ColorMode::Rgb && st.doc.mode == ColorMode::Grayscale && !depth_differs {
         return Err(EngineError::Other("Could not use the history brush because the current color mode does not match that of the history state.".into()));
@@ -416,7 +416,3 @@ mod tests {
         assert_eq!(s.execute(CMD, json!({"snapshot": 0})).unwrap()["snapshot"], 0);
     }
 }
-
-#[cfg(test)]
-#[path = "history_brush_format_mismatch_tests.rs"]
-mod history_brush_format_mismatch_tests;

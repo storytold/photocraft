@@ -55,7 +55,7 @@ TRAITS = {
 }
 
 # Names a crate's root defines itself, which its import block must not bring from core.
-OWN = {"cmd", "commands", "install", "session", "command_tables", "register"}
+OWN = {"cmd", "install", "session", "command_tables", "register"}
 
 
 def crate_src(crate):
@@ -242,21 +242,41 @@ def finish(crate, moved):
 
 
 def import_names(crate, files=None):
+    """(names the crate's code reaches as `crate::x` that it doesn't define, the subset only its
+    tests reach)."""
+    from rust_source import in_test, test_regions
+
+    lib = f"{crate_src(crate)}/lib.rs"
+    regions = test_regions(lib) if os.path.exists(lib) else {}
     files = files if files is not None else list(rust_files([crate_src(crate)]))
     own = OWN | {u.split("/")[-1] for u in units(crate)}
-    names = set()
+    used, in_code = set(), set()
     for f in files:
         masked = mask(read(f))
-        names |= set(re.findall(r"\bcrate::([A-Za-z_][A-Za-z0-9_]*)", masked))
+        ranges = regions.get(f, [])
+        hits = [(m.start(), m.group(1)) for m in re.finditer(r"\bcrate::([A-Za-z_][A-Za-z0-9_]*)", masked)]
         for m in re.finditer(r"\buse crate::\{([^}]*)\}", masked):
-            names |= {n for n in re.findall(r"(?:^|,)\s*([A-Za-z_][A-Za-z0-9_]*)", m.group(1))}
-    return sorted(n for n in names if n not in own and n != "self")
+            hits += [(m.start(), n) for n in re.findall(r"(?:^|,)\s*([A-Za-z_][A-Za-z0-9_]*)", m.group(1))]
+        for pos, n in hits:
+            if n in own or n == "self":
+                continue
+            used.add(n)
+            if not in_test(ranges, pos):
+                in_code.add(n)
+    return sorted(in_code), sorted(used - in_code)
+
+
+def import_block(crate):
+    code, tests = import_names(crate)
+    out = "use photocraft_engine_core::{" + ", ".join(code) + "};"
+    if tests:
+        out += "\n#[cfg(test)]\nuse photocraft_engine_core::{" + ", ".join(tests) + "};"
+    return out
 
 
 def imports(crate):
-    names = import_names(crate)
     print("// The core items this crate's code names as `crate::x` (photocraft#15710).")
-    print("use photocraft_engine_core::{" + ", ".join(names) + "};")
+    print(import_block(crate))
 
 
 def crate_ids(crate):
@@ -300,12 +320,9 @@ def branch(crate, base, head):
     # Import block names the moved code now needs.
     lib = f"{crate_src(crate)}/lib.rs"
     lt = read(lib)
-    m = re.search(r"use photocraft_engine_core::\{([^}]*)\};", lt)
+    m = re.search(r"use photocraft_engine_core::\{[^}]*\};(?:\n#\[cfg\(test\)\]\nuse photocraft_engine_core::\{[^}]*\};)?", lt)
     if m:
-        have = {n.strip() for n in m.group(1).split(",") if n.strip()}
-        want = sorted(have | set(import_names(crate)))
-        if want != sorted(have):
-            write(lib, lt[: m.start()] + "use photocraft_engine_core::{" + ", ".join(want) + "};" + lt[m.end() :])
+        write(lib, lt[: m.start()] + import_block(crate) + lt[m.end() :])
     # Tests in core that run the crate's commands.
     ids = crate_ids(crate)
     pat = re.compile(r'"(' + "|".join(re.escape(i) for i in sorted(ids)) + r')"') if ids else None
@@ -319,11 +336,93 @@ def branch(crate, base, head):
     report(not_done)
 
 
-PRIVATE_DEF = re.compile(r"^([ \t]*(?:#\[[^\n]*\]\s*)*)(?:pub\((?:crate|super|in [^)]*)\)\s+)?(?=(?:const\s+|async\s+|unsafe\s+)*(?:fn|struct|enum|const|static|type|trait|mod|use)\b|\w+\s*:)", re.M)
+USE_STMT = re.compile(r"^([ \t]*)(?:pub(?:\([^)]*\))?\s+)?use\s+", re.M)
+
+
+def widen(text, pos, end):
+    """`text` with the item named at `pos`..`end` made `pub`: its definition line, or for a name in
+    a `use` list, its own `pub use` line beside the list."""
+    masked = mask(text)
+    stmt = None
+    for m in USE_STMT.finditer(masked, 0, pos):
+        stmt = m
+    if stmt is not None:
+        semi = masked.find(";", stmt.start())
+        if stmt.start() < pos < semi and ";" not in masked[stmt.end() : pos]:
+            body = text[stmt.end() : semi]
+            name = text[pos:end]
+            if "{" not in body:
+                head = text[stmt.start() : stmt.end()]
+                return text[: stmt.start()] + stmt.group(1) + "pub use " + text[stmt.end() :] if not head.lstrip().startswith("pub use") else text
+            if "{" in body[body.index("{") + 1 : body.rindex("}")]:
+                return None
+            prefix = body[: body.index("{")]
+            # Edit only at and after `pos`, so the offsets of earlier names stay valid.
+            after = re.match(r"\s*,\s*", text[end:semi])
+            if after:
+                text = text[:pos] + text[end + after.end() :]
+            else:
+                before = re.search(r",\s*$", text[stmt.end() : pos])
+                if not before:
+                    return None
+                text = text[: stmt.end() + before.start()] + text[end:]
+            masked = mask(text)
+            semi = masked.find(";", stmt.start())
+            line_end = text.index("\n", semi) + 1
+            if re.fullmatch(r"\{\s*\}", text[stmt.end() + len(prefix) : semi].strip() or "{}"):
+                return text[: stmt.start()] + f"{stmt.group(1)}pub use {prefix}{name};\n" + text[line_end:]
+            return text[:line_end] + f"{stmt.group(1)}pub use {prefix}{name};\n" + text[line_end:]
+    ls = text.rfind("\n", 0, pos) + 1
+    le = text.find("\n", pos)
+    line = text[ls:le]
+    new = re.sub(r"^(\s*)(?:pub\((?:crate|super|in [^)]*)\)\s+)?(?!pub\b)", r"\1pub ", line, count=1)
+    return text[:ls] + new + text[le:]
+
+
+def child_module(f, name):
+    src = read(f)
+    for d in MOD_DECL.finditer(mask(src)):
+        if d.group(2) == name:
+            return module_file(f, name, src[d.start(1) : d.end(1)])
+    return None
+
+
+def reexported(d):
+    """(file, ("chars", start, end)) of the definition a refused `pub use` names."""
+    m = re.search(r"`([A-Za-z_][A-Za-z0-9_]*)`", d["message"])
+    spans = [s for c in d.get("children", []) for s in c.get("spans", [])] + [s for s in d.get("spans", []) if s.get("is_primary")]
+    spans = [s for s in spans if s["file_name"].startswith(CORE + "/")]
+    if not m or not spans:
+        return None
+    name, f = m.group(1), spans[0]["file_name"]
+    text = read(f)
+    line = text.split("\n")[spans[0]["line_start"] - 1]
+    um = re.search(r"use\s+((?:[a-z_][a-z0-9_]*::)+)(?:\{[^}]*\b" + name + r"\b|" + name + r"\b)", line)
+    if not um:
+        return None
+    segs = [x for x in um.group(1).split("::") if x]
+    cur = f
+    for seg in segs:
+        if seg == "crate":
+            cur = f"{CORE}/lib.rs"
+        elif seg == "super":
+            return None
+        else:
+            cur = child_module(cur, seg)
+            if cur is None:
+                return None
+    src = read(cur)
+    dm = re.search(r"^[ \t]*(?:pub\([a-z]+\)\s+)?(?:const\s+|async\s+)*(?:fn|struct|enum|const|static|type|trait|mod)\s+(" + name + r")\b", src, re.M)
+    if not dm:
+        um2 = re.search(r"^[ \t]*(?:pub\([a-z]+\)\s+)?use\s[^;]*\b(" + name + r")\b[^;]*;", mask(src), re.M)
+        if not um2:
+            return None
+        return cur, ("chars", um2.start(1), um2.end(1))
+    return cur, ("chars", dm.start(1), dm.end(1))
 
 
 def fix(stream):
-    widened = set()
+    defs_by_file = {}
     left = []
     for line in stream:
         line = line.strip()
@@ -337,6 +436,14 @@ def fix(stream):
             continue
         d = msg["message"]
         code = (d.get("code") or {}).get("code")
+        if code in ("E0364", "E0365"):
+            # A `pub use` of an item that is only `pub(crate)` where it is defined.
+            target = reexported(d)
+            if target:
+                defs_by_file.setdefault(target[0], set()).add(target[1])
+            else:
+                left.append(d.get("rendered", d["message"]).splitlines()[0])
+            continue
         if code not in ("E0603", "E0624", "E0616"):
             continue
         defs = [s for c in d.get("children", []) for s in c.get("spans", []) if "defined here" in (c.get("message") or "") or "private" in (c.get("message") or "")]
@@ -346,22 +453,24 @@ def fix(stream):
             left.append(d.get("rendered", d["message"]).splitlines()[0])
             continue
         sp = defs[0]
-        widened.add((sp["file_name"], sp["line_start"]))
-    by_file = {}
-    for f, ln in widened:
-        by_file.setdefault(f, set()).add(ln)
+        defs_by_file.setdefault(sp["file_name"], set()).add(("bytes", sp["byte_start"], sp["byte_end"]))
     n = 0
-    for f, lines in by_file.items():
-        src = read(f).split("\n")
-        for ln in sorted(lines):
-            i = ln - 1
-            new = re.sub(r"^(\s*)(?:pub\((?:crate|super|in [^)]*)\)\s+)?(?!pub\b)", r"\1pub ", src[i], count=1)
-            new = re.sub(r"^(\s*)pub pub ", r"\1pub ", new)
-            if new != src[i]:
-                src[i] = new
+    for f, spans in defs_by_file.items():
+        text = read(f)
+        raw = text.encode("utf-8")
+        for kind, b0, b1 in sorted(spans, key=lambda x: x[1] if x[0] == "bytes" else len(text[: x[1]].encode("utf-8")), reverse=True):
+            if kind == "bytes":
+                c0, c1 = len(raw[:b0].decode("utf-8", "ignore")), len(raw[:b1].decode("utf-8", "ignore"))
+            else:
+                c0, c1 = b0, b1
+            new = widen(text, c0, c1)
+            if new is None:
+                left.append(f"{f}: `{text[c0:c1]}` in a nested use list")
+            elif new != text:
+                text = new
                 n += 1
-        write(f, "\n".join(src))
-    print(f"widened {n} definitions in {len(by_file)} files")
+        write(f, text)
+    print(f"widened {n} items in {len(defs_by_file)} files")
     for l in sorted(set(left)):
         print("BY HAND:", l)
     report([])

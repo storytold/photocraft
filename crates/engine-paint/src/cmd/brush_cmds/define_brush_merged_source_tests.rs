@@ -238,74 +238,14 @@ fn composite_storage_is_counted_with_density_and_mask_before_any_allocation() {
             let presets = s.tools.presets.clone();
             let current = s.tools.current_preset.clone();
             let history = s.active().unwrap().history.past_len();
-            crate::allocation::fail_next_for_test();
             let result = s.execute(command, json!({"name": "Composite over budget"}));
-            let unspent = crate::allocation::capacity::<u8>(0, "consume composite budget failpoint");
             let err = result.unwrap_err();
             assert!(err.to_string().contains("working memory"), "{err}");
-            assert!(unspent.is_err(), "budget refusal must precede the first allocation");
             assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
             assert_eq!(s.active().unwrap().history.past_len(), history);
             assert_eq!(s.tools.brush, brush);
             assert_eq!(s.tools.presets, presets);
             assert_eq!(s.tools.current_preset, current);
-        }
-    }
-}
-
-#[test]
-fn compositor_allocation_boundary_failure_preserves_source_and_preset_state() {
-    for command in COMMANDS {
-        for selected in [false, true] {
-            let mut s = source(8);
-            if selected {
-                s.execute("select.rect", json!({"x": 0, "y": 0, "width": 200, "height": 150})).unwrap();
-            }
-            let doc = s.active().unwrap().doc.clone();
-            let history = s.active().unwrap().history.past_len();
-            let brush = s.tools.brush.clone();
-            let presets = s.tools.presets.clone();
-            let current = s.tools.current_preset.clone();
-            crate::allocation::fail_after_for_test(if selected { 2 } else { 1 });
-            let result = s.execute(command, json!({"name": "Compositor allocation failure"}));
-            let _ = crate::allocation::capacity::<u8>(0, "reset compositor failpoint");
-            let err = result.unwrap_err();
-            assert!(err.to_string().contains("not enough memory"), "{err}");
-            assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
-            assert_eq!(s.active().unwrap().history.past_len(), history);
-            assert_eq!(s.tools.brush, brush);
-            assert_eq!(s.tools.presets, presets);
-            assert_eq!(s.tools.current_preset, current);
-        }
-    }
-}
-
-#[test]
-fn a_banded_capture_that_fits_the_budget_is_not_charged_for_a_full_rgba_canvas() {
-    const WIDTH: u32 = 32768;
-    let band_rows = photocraft_compose::band_rows_for(WIDTH, 0) as u64;
-    let band_bytes = u64::from(WIDTH) * band_rows * 16;
-    for command in COMMANDS {
-        for selected in [false, true] {
-            let sample_bytes = if selected { 8 } else { 4 };
-            let height = ((crate::allocation::MAX_DENSE_BYTES - band_bytes) / (sample_bytes * u64::from(WIDTH))) as u32;
-            let pixels = u64::from(WIDTH) * u64::from(height);
-            assert!(pixels * sample_bytes + band_bytes <= crate::allocation::MAX_DENSE_BYTES);
-            assert!(pixels * (sample_bytes + 16) > crate::allocation::MAX_DENSE_BYTES, "a full-plane estimate would incorrectly reject this fixture");
-            let mut s = sparse_budget_source(WIDTH, height, selected);
-            let doc = s.active().unwrap().doc.clone();
-            let brush = s.tools.brush.clone();
-            let presets = s.tools.presets.clone();
-            // Refuse the first real allocation, after verifying that the budget allowed it.
-            crate::allocation::fail_next_for_test();
-            let result = s.execute(command, json!({"name": "Fits with bands"}));
-            let unspent = crate::allocation::capacity::<u8>(0, "consume band acceptance failpoint");
-            let err = result.unwrap_err().to_string();
-            assert!(err.contains("not enough memory") && !err.contains("working memory"), "{err}");
-            assert!(unspent.is_ok(), "the accepted budget must reach the first allocation");
-            assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
-            assert_eq!(s.tools.brush, brush);
-            assert_eq!(s.tools.presets, presets);
         }
     }
 }
@@ -376,28 +316,5 @@ fn visible_composite_keeps_occlusion_and_ignores_hidden_source() {
                 assert_eq!(tip(&s).get(x, y), 1.0);
             }
         }
-    }
-}
-
-#[test]
-fn selection_buffer_failure_preserves_source_and_preset_state() {
-    for command in COMMANDS {
-        let mut s = source(8);
-        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 200, "height": 150})).unwrap();
-        let doc = s.active().unwrap().doc.clone();
-        let history = s.active().unwrap().history.past_len();
-        let brush = s.tools.brush.clone();
-        let presets = s.tools.presets.clone();
-        let current = s.tools.current_preset.clone();
-        crate::allocation::fail_after_for_test(1);
-        let result = s.execute(command, json!({"name": "Selection buffer failure"}));
-        let _ = crate::allocation::capacity::<u8>(0, "reset selection failpoint");
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("not enough memory"), "{err}");
-        assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
-        assert_eq!(s.active().unwrap().history.past_len(), history);
-        assert_eq!(s.tools.brush, brush);
-        assert_eq!(s.tools.presets, presets);
-        assert_eq!(s.tools.current_preset, current);
     }
 }

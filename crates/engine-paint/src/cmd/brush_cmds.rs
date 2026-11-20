@@ -11,13 +11,17 @@ use photocraft_geom::Rect;
 use photocraft_paint::mixer::MixerSettings;
 use photocraft_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement, color_replacement_effect};
 use photocraft_paint::tile::PREVIEW_SIDE;
-use photocraft_paint::{
-    BrushPreset, BrushSettings, GrayTile, Pattern, PresetCaptures, StoredTile, Stroke, StrokePoint, StrokeRenderer, TipShape, render_stroke_clipped,
-};
+use photocraft_paint::{BrushPreset, BrushSettings, Pattern, PresetCaptures, StoredTile, Stroke, StrokePoint, StrokeRenderer, TipShape, render_stroke_clipped};
+// The sampled-tip tile type, which the tests build tips from.
+#[cfg(test)]
+use photocraft_paint::GrayTile;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
+pub use crate::brush_defs::MAX_TIP;
+use crate::brush_defs::{sampled_brush, validate_brush};
 use crate::commands::{CommandSpec, has_paintable, is_mask_target, paint_surface};
+use crate::preset_store::forget_deleted_preset;
 use crate::{EngineError, Result, Session};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -167,31 +171,6 @@ pub fn merge_brush(base: &BrushSettings, patch: &Value, cmd: &str) -> Result<Bru
         out.resize_with_dual_brush(new_size);
     }
     Ok(out)
-}
-
-/// Rejects brush sizes and Scatter amounts outside their documented ranges, before a brush is
-/// stored or painted with.
-pub(crate) fn validate_brush(brush: &BrushSettings, cmd: &str) -> Result<()> {
-    let max = photocraft_paint::MAX_BRUSH_SIZE;
-    if !brush.size.is_finite() || brush.size > max {
-        return Err(bad(cmd, format!("brush size must be finite and at most {max} px")));
-    }
-    if brush.dual_brush.enabled && (!brush.dual_brush.size.is_finite() || brush.dual_brush.size > max) {
-        return Err(bad(cmd, format!("dual brush size must be finite and at most {max} px")));
-    }
-    // Scatter may exceed 1 (100 %) but not the 1000 % maximum: a huge amount pushed dab centres to
-    // infinity (#977). `{:?}` keeps 1e38 short and shows infinity as `inf`.
-    let scatter_max = photocraft_paint::MAX_SCATTER;
-    let in_range = |v: f32| (0.0..=scatter_max).contains(&v);
-    let sc = brush.scattering.scatter.jitter;
-    if brush.scattering.enabled && !in_range(sc) {
-        return Err(bad(cmd, format!("scatter amount {sc:?} is out of range: it must be between 0 and {scatter_max} (1000 %)")));
-    }
-    let ds = brush.dual_brush.scatter;
-    if brush.dual_brush.enabled && !in_range(ds) {
-        return Err(bad(cmd, format!("dual brush scatter amount {ds:?} is out of range: it must be between 0 and {scatter_max} (1000 %)")));
-    }
-    Ok(())
 }
 
 fn find_preset<'a>(s: &'a Session, name: &str, cmd: &str) -> Result<&'a BrushPreset> {
@@ -541,11 +520,27 @@ fn fill_region(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt
                 }
             }
             let coverage = photocraft_algo::selection::mask_to_surface(&cov, bounds);
-            crate::fill_cmds::blend_color_mask(surf, bounds, color, picked, &coverage, mode, opacity, lock)?;
+            crate::pixel_fill::blend_color_mask(surf, bounds, color, picked, &coverage, mode, opacity, lock)?;
             Ok(bounds)
         })
     })?;
     Ok(damage_json(s, dmg))
+}
+
+/// The session's offer of a finished live Brush, Eraser or Pencil stroke.
+pub trait LiveStrokeExt {
+    /// Offer a finished live stroke to the next command: a `paint.stroke` / `paint.pencil` whose
+    /// params match it exactly takes its pixels instead of rendering the stroke again (its result
+    /// then says `"fromLive": true`); any other command drops the offer. The command still runs
+    /// through the normal dispatch, so authorization, the journal and history are unchanged.
+    fn offer_live_stroke(&mut self, live: LiveStroke) -> Result<()>;
+}
+
+impl LiveStrokeExt for Session {
+    fn offer_live_stroke(&mut self, live: LiveStroke) -> Result<()> {
+        self.live_commit = Some(live.into_commit()?);
+        Ok(())
+    }
 }
 
 /// A `paint.stroke` rendered while it is drawn, onto a copy of the active document, so the canvas
@@ -983,17 +978,6 @@ fn presets_delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "count": s.tools.presets.len() }))
 }
 
-/// After preset `name` was deleted (here or in Edit › Presets › Preset Manager): the current
-/// brush no longer comes from a preset, and the library is saved.
-pub(crate) fn forget_deleted_preset(s: &mut Session, name: &str) {
-    if s.tools.current_preset.as_ref().is_some_and(|c| c.eq_ignore_ascii_case(name)) {
-        s.tools.current_preset = None;
-        // The remembered brush names the preset it was picked from: the name went away.
-        s.tools.brush_changed();
-    }
-    s.brush_presets_changed();
-}
-
 /// Overwrite an existing preset with the current brush (or the current brush plus a `brush`
 /// patch), in place: no new preset, the position, name and group stay. The preset defaults to the
 /// one the current brush was picked from. A built-in that is updated becomes the user's preset
@@ -1037,9 +1021,6 @@ fn has_selection_and_pixels(s: &Session) -> std::result::Result<(), String> {
     s.active().ok_or("no document")?;
     Ok(())
 }
-
-/// Largest sampled tip side (like Photoshop's 5000 px limit, kept smaller for preset size).
-pub const MAX_TIP: u32 = 2500;
 
 fn define_from_selection(s: &mut Session, p: &Value) -> Result<Value> {
     define_from_selection_with_renderer(s, p, |doc, area, sink| photocraft_compose::try_render_bands(doc, area, 0, sink))
@@ -1145,39 +1126,6 @@ fn define_from_selection_with_renderer(
     s.tools.current_preset = Some(name.clone());
     s.tools.brush_changed();
     Ok(json!({ "name": name, "width": tw, "height": th }))
-}
-
-/// A sampled-tip brush from a paint-amount map (`w`×`h`, row-major, 0 = no paint, 1 = full):
-/// cropped to the painted extent, at most [`MAX_TIP`] px a side. Shared by Define Brush Preset
-/// and importing an image file as a brush (`brush.presets.importImage`).
-pub(crate) fn sampled_brush(cmd: &str, v: &[f32], w: usize, h: usize) -> Result<(BrushSettings, u32, u32)> {
-    let at = |x: usize, y: usize| v.get(y * w + x).copied().unwrap_or(0.0);
-    // Crop to the painted extent.
-    let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
-    for y in 0..h {
-        for x in 0..w {
-            if at(x, y) > 1e-4 {
-                x0 = x0.min(x);
-                y0 = y0.min(y);
-                x1 = x1.max(x + 1);
-                y1 = y1.max(y + 1);
-            }
-        }
-    }
-    if x1 <= x0 || y1 <= y0 {
-        return Err(bad(cmd, "the pixels contain no paint (all white or transparent)"));
-    }
-    let (tw, th) = ((x1 - x0) as u32, (y1 - y0) as u32);
-    if tw.max(th) > MAX_TIP {
-        return Err(bad(cmd, format!("too large for a brush tip ({tw}×{th}; max {MAX_TIP} px)")));
-    }
-    let mut data = Vec::with_capacity((tw * th) as usize);
-    for y in y0..y1 {
-        data.extend((x0..x1).map(|x| at(x, y)));
-    }
-    let tip = GrayTile::from_f32(tw, th, &data);
-    let brush = BrushSettings { tip: TipShape::Sampled(tip), size: tw.max(th) as f32, spacing: 0.25, pressure_size: false, ..BrushSettings::default() };
-    Ok((brush, tw, th))
 }
 
 pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {

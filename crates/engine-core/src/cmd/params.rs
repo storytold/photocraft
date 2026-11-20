@@ -82,7 +82,7 @@ pub(crate) fn cmyk_param(cmd: &str, p: &Value, key: &str) -> Result<Option<[f32;
     }
 }
 
-pub(crate) fn color_param(cmd: &str, p: &Value, key: &str, default: [f32; 4]) -> Result<[f32; 4]> {
+pub fn color_param(cmd: &str, p: &Value, key: &str, default: [f32; 4]) -> Result<[f32; 4]> {
     Ok(match p.get(key) {
         Some(Value::Array(a)) if a.len() >= 3 => {
             let mut out = [0.0, 0.0, 0.0, 1.0];
@@ -96,7 +96,7 @@ pub(crate) fn color_param(cmd: &str, p: &Value, key: &str, default: [f32; 4]) ->
     })
 }
 
-pub(crate) fn parse_hex(s: &str) -> Option<[f32; 4]> {
+pub fn parse_hex(s: &str) -> Option<[f32; 4]> {
     let s = s.trim_start_matches('#');
     // `from_str_radix` accepts a leading '+', so "+f" would read as 0x0f.
     if !s.bytes().all(|c| c.is_ascii_hexdigit()) {

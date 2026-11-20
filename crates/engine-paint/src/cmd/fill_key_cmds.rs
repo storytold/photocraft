@@ -15,8 +15,8 @@ use serde_json::{Map, Value, json};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
-/// The fill-key command ids (routed to the Channels panel target like `edit.fill`).
-pub const IDS: [&str; 5] = ["edit.fillForeground", "edit.fillBackground", "edit.fillForegroundPreserve", "edit.fillBackgroundPreserve", "edit.fillHistory"];
+/// The fill-key command ids.
+pub use crate::channel_cmds::FILL_KEY_IDS as IDS;
 
 const PARAMS: &str = r##"{"layer":id|name?,"target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i}?}"##;
 

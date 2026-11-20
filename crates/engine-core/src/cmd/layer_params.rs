@@ -65,7 +65,7 @@ pub(crate) fn layer_listing(doc: &Document) -> String {
 }
 
 /// The layer a command targets: [`explicit_layer`], else the active layer.
-pub(crate) fn layer_param(s: &Session, p: &Value) -> Result<LayerId> {
+pub fn layer_param(s: &Session, p: &Value) -> Result<LayerId> {
     match explicit_layer(s, p)? {
         Some(id) => Ok(id),
         None => s.active().and_then(|d| d.active_layer).ok_or(EngineError::Other("no active layer".into())),

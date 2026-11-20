@@ -1,4 +1,6 @@
 use super::*;
+use photocraft_geom::TILE_SIZE;
+use photocraft_raster::Surface;
 use serde_json::json;
 
 fn session() -> Session {
@@ -183,12 +185,6 @@ fn timing_24mp() {
     s.execute("select.rect", json!({"x": 100, "y": 100, "width": 5000, "height": 3000})).unwrap();
     time(&mut s, "colour, 15 MP rectangle selection", json!({}));
     s.execute("select.deselect", json!({})).unwrap();
-    // The old per-pixel f32 path, for comparison.
-    let st = s.active().unwrap();
-    let mut surf = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().clone();
-    let t = std::time::Instant::now();
-    crate::pixels::try_fill_surface(&mut surf, Rect::new(0, 0, 6000, 4000), [0.2, 0.4, 0.6, 1.0], None, false).unwrap();
-    println!("{:<48} {:>8.1} ms", "fallible fill_surface, no selection", t.elapsed().as_secs_f64() * 1000.0);
 }
 
 #[test]

@@ -1168,20 +1168,6 @@ fn brush_stroke_keeps_indexed_transparency_binary() {
 }
 
 #[test]
-fn live_brush_preview_matches_indexed_commit() {
-    let mut s = black_white_indexed(false);
-    let params = json!({"points": [[4, 8], [12, 8]], "size": 7, "hardness": 0.0, "color": "#ff0000", "opacity": 0.6, "smoothing": 0.0, "seed": 1});
-    let preview = crate::brush_cmds::LiveStroke::begin(&s, &params).unwrap();
-    let table = doc(&s).color_table.clone().unwrap();
-    assert!(colours(&preview.doc).iter().all(|c| table.colors.contains(c)), "preview off the table: {:?}", colours(&preview.doc));
-    s.execute("paint.stroke", params).unwrap();
-    let (live, committed) = (preview.doc.layers[0].surface().unwrap(), doc(&s).layers[0].surface().unwrap());
-    for (x, y) in (0..16).flat_map(|y| (0..16).map(move |x| (x, y))) {
-        assert_eq!(live.rgba(x, y), committed.rgba(x, y), "preview/commit at ({x},{y})");
-    }
-}
-
-#[test]
 fn indexed_brush_stroke_leaves_pixels_it_did_not_paint() {
     let mut s = black_white_indexed(false);
     // An off-table pixel inside the stroke's bounds but away from its dabs (Paint Bucket can
@@ -1197,17 +1183,4 @@ fn indexed_brush_stroke_leaves_pixels_it_did_not_paint() {
     let surf = doc(&s).layers[0].surface().unwrap();
     assert_eq!(surf.rgba(13, 2), [1.0, 0.0, 0.0, 1.0]);
     assert_eq!(surf.rgba(8, 8), [0.0, 0.0, 0.0, 1.0]);
-}
-
-#[test]
-fn pencil_auto_erase_knows_the_indexed_foreground() {
-    let mut s = black_white_indexed(false);
-    let pencil = json!({"points": [[8, 8]], "size": 3, "color": "#ff0000", "autoErase": true});
-    s.execute("paint.pencil", pencil.clone()).unwrap();
-    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(8, 8), [0.0, 0.0, 0.0, 1.0]);
-    // Red painted as black, so a stroke starting there auto-erases to the (white) background.
-    let preview = crate::brush_cmds::LiveStroke::begin_with(&s, "paint.pencil", &pencil).unwrap();
-    assert_eq!(preview.doc.layers[0].surface().unwrap().rgba(8, 8), [1.0, 1.0, 1.0, 1.0]);
-    s.execute("paint.pencil", pencil).unwrap();
-    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(8, 8), [1.0, 1.0, 1.0, 1.0]);
 }

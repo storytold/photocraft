@@ -11,7 +11,7 @@ mod tone;
 mod tone_dialog_tests;
 
 pub use crate::state::ColorChannels;
-pub(crate) use crate::state::Restriction;
+pub use crate::state::Restriction;
 
 /// An explicit colour target, checked before command dispatch and allocation.
 pub fn explicit(p: &Value, count: usize) -> Result<Option<ColorChannels>> {

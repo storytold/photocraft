@@ -87,7 +87,7 @@ pub fn resolve(s: &Session, key: &str) -> Option<Pattern> {
     full(s, library_pattern(s, key)?).ok()
 }
 
-pub(crate) fn resolve_param(s: &Session, cmd: &str, p: &Value) -> Result<Pattern> {
+pub fn resolve_param(s: &Session, cmd: &str, p: &Value) -> Result<Pattern> {
     let key = p.get("pattern").and_then(Value::as_str).unwrap_or("");
     resolve_or_named(s, key, p).map_err(|e| bad(cmd, e)).and_then(|pat| paintable(cmd, pat))
 }
@@ -346,7 +346,7 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// A pattern's scale, angle, link and phase from `p`. The angle is normalised to (-180, 180];
 /// a non-finite angle or a phase beyond ±`MAX_PHASE` is an error (it would render NaN).
-pub(crate) fn placement(cmd: &str, p: &Value) -> Result<(f32, f32, bool, (f32, f32))> {
+pub fn placement(cmd: &str, p: &Value) -> Result<(f32, f32, bool, (f32, f32))> {
     let scale = p.get("scale").and_then(Value::as_f64).unwrap_or(100.0) as f32;
     let max = crate::pattern_fill_cmds::MAX_PHASE;
     let a = p.get("phase").and_then(Value::as_array);
@@ -376,7 +376,7 @@ pub(crate) fn insert_fill_layer(
     // Like Photoshop, an empty pixel layer selected becomes the fill layer instead of getting one
     // above it; it keeps its place, opacity and blending, and a name the user gave it.
     if let Some(id) = *active
-        && crate::stamp_cmds::is_empty_pixel_layer(doc, id)
+        && crate::layer_place::is_empty_pixel_layer(doc, id)
     {
         let target = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         if is_default_layer_name(&target.name) {

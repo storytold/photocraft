@@ -246,11 +246,11 @@ enum SpotType {
 ///
 /// Photoshop 25.4 (measured): a dab changes exactly the brush's footprint, and Content-Aware takes
 /// its texture from around it, as Edit › Fill does from its window
-/// ([`crate::fill_cmds::sampling_window`] of the stroke's bounds), which is what this samples.
+/// ([`crate::content_sampling::sampling_window`] of the stroke's bounds), which is what this samples.
 fn spot_heal_surface(surf: &mut Surface, pre: &Document, stroke: &Stroke, kind: SpotType, all: bool, sel: Option<&Surface>, lock: bool) -> Result<Rect> {
     let (bounds, cov) = coverage("paint.spotHealing", stroke)?;
     let size = stroke.brush.size;
-    let region_rect = crate::fill_cmds::sampling_window(bounds, pre.bounds());
+    let region_rect = crate::content_sampling::sampling_window(bounds, pre.bounds());
     if region_rect.is_empty() {
         return Ok(Rect::EMPTY);
     }

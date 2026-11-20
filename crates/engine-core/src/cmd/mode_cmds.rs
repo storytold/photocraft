@@ -569,13 +569,13 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// The colour table painting on `p`'s target must stay inside: an Indexed Color document's,
 /// when the target is layer pixels (masks and channels are gray, not indexed).
-pub(crate) fn paint_color_table(doc: &Document, p: &Value) -> Option<ColorTable> {
+pub fn paint_color_table(doc: &Document, p: &Value) -> Option<ColorTable> {
     let pixels = crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels;
     doc.color_table.clone().filter(|_| pixels && doc.mode == ColorMode::Indexed)
 }
 
 /// The colour `c` paints as in a document with `table` (see [`keep_in_color_table`]).
-pub(crate) fn table_color(table: &ColorTable, c: [f32; 4]) -> [f32; 4] {
+pub fn table_color(table: &ColorTable, c: [f32; 4]) -> [f32; 4] {
     let mut px = [c];
     if !table.colors.is_empty() {
         quantize::quantize(&mut px, 1, &table.colors, Dither::None, 0.0, table.transparent.map(usize::from));
@@ -587,7 +587,7 @@ pub(crate) fn table_color(table: &ColorTable, c: [f32; 4]) -> [f32; 4] {
 /// Map the pixels of `r` that the stroke changed (they differ from `pre`) to their nearest
 /// colour-table entry, as the Indexed Color conversion does with no dither, so painting never
 /// leaves the table (#8669). One tile at a time: a long stroke's bounds can span the canvas.
-pub(crate) fn keep_in_color_table(table: &ColorTable, pre: &Surface, surf: &mut Surface, r: Rect) {
+pub fn keep_in_color_table(table: &ColorTable, pre: &Surface, surf: &mut Surface, r: Rect) {
     if table.colors.is_empty() {
         return;
     }

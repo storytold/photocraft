@@ -357,7 +357,7 @@ pub fn wrapped_delta(dx: i32, dy: i32, tile: photocraft_geom::Rect) -> (i32, i32
 
 /// `photocraft_algo::resample::translate_surface` with the content scan cached per tile (a Move
 /// drag shifts the same layers every frame; scanning them each time cost more than the copy).
-pub(crate) fn shift_surface(s: &photocraft_raster::Surface, dx: i32, dy: i32) -> photocraft_raster::Surface {
+pub fn shift_surface(s: &photocraft_raster::Surface, dx: i32, dy: i32) -> photocraft_raster::Surface {
     s.translated(dx, dy, photocraft_compose::bounds::content_bounds(s))
 }
 

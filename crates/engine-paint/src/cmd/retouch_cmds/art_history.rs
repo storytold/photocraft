@@ -164,7 +164,7 @@ fn stamp_region(
 }
 
 /// The reference application's alerts for the refusals below (#12638); a hidden target is
-/// [`crate::hidden_target::ART_HISTORY_HIDDEN`].
+/// [`photocraft_engine_core::hidden_target::ART_HISTORY_HIDDEN`].
 pub const LOCKED: &str = "Could not use the art history brush because the layer is locked.";
 pub const GROUP: &str = "Could not use the art history brush because the pixels in a group cannot be edited without merging the group.";
 pub const LACKS_LAYER: &str = "Could not use the art history brush because the history state lacks a corresponding layer.";

@@ -1,16 +1,10 @@
-use super::{Document, Footprint, LayerId, PixelFormat, Rect, Region, Result, Surface, Value, bad, flag, from_rgba_into, string, targets_pixels};
+pub(super) use crate::content_sampling::{SampleLayers, composite_region};
+
+use super::{Document, Footprint, LayerId, PixelFormat, Rect, Region, Result, Surface, Value, bad, flag, string, targets_pixels};
 
 // ---------------------------------------------------------------------------------------------
 // Sampling sources
 // ---------------------------------------------------------------------------------------------
-
-/// Which pixels Clone Stamp / Healing Brush sample.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SampleLayers {
-    Current,
-    CurrentAndBelow,
-    All,
-}
 
 pub(super) fn sample_layers(p: &Value, cmd: &str) -> Result<SampleLayers> {
     match string(p, "sampleLayer", "current") {
@@ -19,34 +13,6 @@ pub(super) fn sample_layers(p: &Value, cmd: &str) -> Result<SampleLayers> {
         "all" => Ok(SampleLayers::All),
         o => Err(bad(cmd, format!("unknown sampleLayer `{o}` (current|currentAndBelow|all)"))),
     }
-}
-
-/// Composite pixels of `rect` in `fmt` (native channels): the whole document, or the target layer
-/// and everything below it.
-pub(crate) fn composite_region(pre: &Document, id: Option<LayerId>, which: SampleLayers, rect: Rect, fmt: PixelFormat) -> Region {
-    let mut doc = pre.clone();
-    if which == SampleLayers::CurrentAndBelow
-        && let Some(id) = id
-    {
-        // Hide everything composited after (above) the target in the bottom-to-top walk.
-        let walk: Vec<(Vec<usize>, LayerId)> = pre.walk().into_iter().map(|(p, _, l)| (p, l.id)).collect();
-        if let Some(pos) = walk.iter().position(|(_, l)| *l == id) {
-            for (path, _) in &walk[pos + 1..] {
-                if let Some(l) = doc.layer_at_mut(path) {
-                    l.visible = false;
-                }
-            }
-        }
-    }
-    let buf = photocraft_compose::render(&doc, rect);
-    let n = fmt.channels();
-    let mut out = Region::new(rect, n);
-    let mut enc = [0.0f32; 8];
-    for (i, px) in buf.px.iter().enumerate() {
-        from_rgba_into(&fmt, *px, &mut enc);
-        out.data[i * n..(i + 1) * n].copy_from_slice(&enc[..n]);
-    }
-    out
 }
 
 /// Pixels to sample at `rect` (document coordinates, already offset to the source position).
