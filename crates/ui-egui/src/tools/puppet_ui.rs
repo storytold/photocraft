@@ -366,19 +366,6 @@ pub fn canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, at: egui::Rect) {
     }
 }
 
-/// A key of what the options bar shows of the open session: the options, Show Mesh, the notice, the selected pin's
-/// depth and rotation and whether there are pins. A pin added, picked or turned on the canvas changes them without a
-/// command, so the options bar's content version holds this key.
-pub(crate) fn bar_key(app: &PhotocraftApp) -> Option<u64> {
-    use std::hash::{Hash, Hasher};
-    let s = app.distort.puppet.as_ref()?;
-    let (options, pins) = (s.warp.options(), s.warp.pins());
-    let picked = s.warp.selected().first().and_then(|&i| pins.get(i).map(|pin| (i, pin.depth, pin.angle.map(f64::to_bits))));
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    (options.mode, options.density, options.expansion.to_bits(), s.warp.show_mesh(), &s.notice, picked, pins.is_empty()).hash(&mut hasher);
-    Some(hasher.finish())
-}
-
 /// The options bar: Mode, Density, Expansion, Show Mesh, the selected pin's depth and rotation, Remove All Pins,
 /// commit and cancel.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {

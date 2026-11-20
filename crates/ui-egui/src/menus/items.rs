@@ -62,6 +62,16 @@ pub struct MenuModel {
 }
 
 impl MenuModel {
+    /// [`crate::native_menu::state_hash`] of the state this model was built from.
+    pub(super) fn state(&self) -> u64 {
+        self.state
+    }
+
+    /// Copies of the English labels and titles, for a lookup that cannot borrow the model.
+    pub(super) fn english_names(&self) -> (HashMap<(String, String), String>, HashMap<String, String>) {
+        (self.english.clone(), self.english_titles.clone())
+    }
+
     /// The English label of the row that runs `command`.
     pub(super) fn english_label(&self, command: &CommandRef) -> Option<String> {
         self.english.get(&command_key(command)).cloned()
@@ -74,7 +84,7 @@ impl MenuModel {
 }
 
 /// The key of a command in the English-name map: its id and its parameters, since one id (`app.theme`) runs many rows.
-fn command_key(command: &CommandRef) -> (String, String) {
+pub(super) fn command_key(command: &CommandRef) -> (String, String) {
     (command.id.clone(), command.params.to_string())
 }
 
