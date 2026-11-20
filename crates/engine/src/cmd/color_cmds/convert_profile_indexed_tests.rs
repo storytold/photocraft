@@ -166,3 +166,46 @@ fn image_mode_rgb_still_leaves_indexed() {
     assert_eq!(doc(&s).mode, ColorMode::Rgb);
     assert!(doc(&s).color_table.is_none());
 }
+
+/// CodeRabbit on #16016: coordinates that share one tile still share one converted tile, so a large
+/// filled document converts that tile once.
+#[test]
+fn shared_tiles_stay_shared() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 2048, "height": 1024, "background": "#c81e1e"})).unwrap();
+    s.execute("edit.assignProfile", json!({"profile": "srgb"})).unwrap();
+    s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none", "transparency": false})).unwrap();
+    s.edit("share one tile", |doc, _| {
+        let surf = doc.layers[0].surface_mut().unwrap();
+        let first = surf.tiles().next().map(|(_, t)| t.clone()).unwrap();
+        let coords: Vec<_> = surf.tiles().map(|(c, _)| *c).collect();
+        surf.put_tiles(coords.into_iter().map(|c| (c, first.clone())));
+        Ok(())
+    })
+    .unwrap();
+    let distinct = |s: &Session| {
+        let surf = doc(s).layers[0].surface().unwrap();
+        let mut seen: Vec<_> = surf.tiles().map(|(_, t)| std::sync::Arc::as_ptr(t)).collect();
+        seen.sort();
+        seen.dedup();
+        (seen.len(), surf.tile_count())
+    };
+    let (before, count) = distinct(&s);
+    assert!(count > 1 && before == 1, "{before} distinct of {count}");
+    to_adobe(&mut s, json!({}));
+    assert_eq!(distinct(&s), (1, count));
+    assert_eq!(pixels(&s).first(), table(&s).first(), "the converted red");
+}
+
+/// CodeRabbit on #16016: a layer whose indices were recorded keeps them inside a group too.
+#[test]
+fn a_grouped_layer_keeps_its_color_indices() {
+    let mut s = indexed(8);
+    let layer = doc(&s).layers[0].id;
+    s.execute("layer.groupLayers", json!({"layer": layer})).unwrap();
+    assert!(doc(&s).layers.iter().all(|l| l.id != layer), "the layer is inside a group");
+    assert!(doc(&s).color_indices.as_ref().is_some_and(|k| k.holds(layer, doc(&s).layer(layer).unwrap().surface().unwrap())));
+    to_adobe(&mut s, json!({}));
+    let d = doc(&s);
+    assert!(d.color_indices.as_ref().is_some_and(|k| k.holds(layer, d.layer(layer).unwrap().surface().unwrap())));
+}

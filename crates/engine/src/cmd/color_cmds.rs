@@ -1156,9 +1156,11 @@ fn convert_indexed_profile(doc: &mut Document, dst: &Profile, intent: Intent, bp
     }
     // Indices that held for the old pixels still hold for the converted ones: every pixel keeps
     // its entry, only the colours changed.
-    let held = doc.color_indices.as_ref().map(|k| k.layer).filter(|&id| {
-        doc.layers.iter().find(|l| l.id == id).and_then(|l| l.surface()).is_some_and(|surf| doc.color_indices.as_ref().is_some_and(|k| k.holds(id, surf)))
-    });
+    let held = doc
+        .color_indices
+        .as_ref()
+        .map(|k| k.layer)
+        .filter(|&id| doc.layer(id).and_then(|l| l.surface()).is_some_and(|surf| doc.color_indices.as_ref().is_some_and(|k| k.holds(id, surf))));
     let remap = |px: &mut [f32]| {
         let [r, g, b] = [0, 1, 2].map(|k| px.get(k).copied().unwrap_or(0.0));
         let key = [r, g, b].map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
@@ -1178,7 +1180,7 @@ fn convert_indexed_profile(doc: &mut Document, dst: &Profile, intent: Intent, bp
     }
     convert_style_colors(&mut doc.text_styles, &mut |c| convert_color(c, ColorMode::Rgb, ColorMode::Rgb, &t));
     if let Some(id) = held {
-        let pixels = doc.layers.iter().find(|l| l.id == id).and_then(|l| l.surface()).cloned();
+        let pixels = doc.layer(id).and_then(|l| l.surface()).cloned();
         if let (Some(k), Some(pixels)) = (doc.color_indices.as_mut(), pixels) {
             k.pixels = pixels;
         }
@@ -1189,6 +1191,8 @@ fn convert_indexed_profile(doc: &mut Document, dst: &Profile, intent: Intent, bp
 
 /// `s` with `f` applied to each pixel's samples (colour channels first, alpha after), the
 /// untouched default pixel included, in the same format. Non-RGB surfaces are returned unchanged.
+/// As in [`convert_surface`], each distinct tile is mapped once and coordinates that shared it
+/// share the result.
 fn remap_rgb_surface(s: &Surface, f: &(dyn Fn(&mut [f32]) + Sync)) -> Surface {
     use rayon::prelude::*;
     let sf = s.format();
@@ -1199,28 +1203,49 @@ fn remap_rgb_surface(s: &Surface, f: &(dyn Fn(&mut [f32]) + Sync)) -> Surface {
     let mut dp = s.default_pixel();
     f(&mut dp);
     let mut out = Surface::with_default(sf, &dp);
-    let tiles: Vec<_> = s.tiles().map(|(c, t)| (*c, t.clone())).collect();
-    let mapped: Vec<Vec<u8>> = tiles
-        .par_iter()
-        .map(|(_, t)| {
-            let mut bytes = t.bytes().to_vec();
-            let mut px = vec![0.0f32; n];
-            for i in 0..bytes.len() / sf.bytes_per_pixel().max(1) {
-                for (k, v) in px.iter_mut().enumerate() {
-                    *v = photocraft_color::read_sample(&bytes, sf.sample, i * n + k);
-                }
-                f(&mut px);
-                for (k, v) in px.iter().enumerate() {
-                    photocraft_color::write_sample(&mut bytes, sf.sample, i * n + k, *v);
-                }
-            }
-            bytes
+    let mut distinct: Vec<Arc<photocraft_raster::Tile>> = Vec::new();
+    let mut slot: std::collections::HashMap<*const photocraft_raster::Tile, usize> = std::collections::HashMap::new();
+    let tiles: Vec<(photocraft_geom::TileCoord, usize)> = s
+        .tiles()
+        .map(|(c, tile)| {
+            let i = *slot.entry(Arc::as_ptr(tile)).or_insert_with(|| {
+                distinct.push(tile.clone());
+                distinct.len() - 1
+            });
+            (*c, i)
         })
         .collect();
-    for ((c, _), bytes) in tiles.iter().zip(mapped) {
-        let mut tile = out.tile_mut(*c).bytes_mut();
-        if tile.len() == bytes.len() {
-            tile.copy_from_slice(&bytes);
+    let map_tile = |tile: &Arc<photocraft_raster::Tile>| {
+        let mut bytes = tile.bytes().to_vec();
+        let mut px = vec![0.0f32; n];
+        for i in 0..bytes.len() / sf.bytes_per_pixel().max(1) {
+            for (k, v) in px.iter_mut().enumerate() {
+                *v = photocraft_color::read_sample(&bytes, sf.sample, i * n + k);
+            }
+            f(&mut px);
+            for (k, v) in px.iter().enumerate() {
+                photocraft_color::write_sample(&mut bytes, sf.sample, i * n + k, *v);
+            }
+        }
+        bytes
+    };
+    let mut mapped = Vec::with_capacity(distinct.len());
+    for batch in distinct.chunks(32) {
+        let staged: Vec<Vec<u8>> = batch.par_iter().map(map_tile).collect();
+        for bytes in staged {
+            let coord = photocraft_geom::TileCoord::new(0, 0);
+            let mut surface = Surface::new(sf);
+            let mut tile = surface.tile_mut(coord).bytes_mut();
+            if tile.len() == bytes.len() {
+                tile.copy_from_slice(&bytes);
+            }
+            drop(tile);
+            mapped.push(surface.tile(coord).cloned());
+        }
+    }
+    for (coord, index) in tiles {
+        if let Some(Some(tile)) = mapped.get(index) {
+            out.put_tiles([(coord, tile.clone())]);
         }
     }
     out
