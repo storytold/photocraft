@@ -36,7 +36,7 @@ fn refused(name: &str, bytes: &[u8]) -> String {
     let mut s = session();
     let past = s.active().unwrap().history.past_len();
     let dirty = s.active().unwrap().is_dirty();
-    let e = import_notes_from(&mut s, name, bytes).expect_err(name).to_string();
+    let e = import_notes_from(&mut s, name, bytes, "").expect_err(name).to_string();
     let a = s.active().unwrap();
     assert_eq!(a.history.past_len(), past, "{name}: no history step");
     assert_eq!(a.is_dirty(), dirty, "{name}: the document stays unmodified");
@@ -71,7 +71,7 @@ fn a_file_with_notes_still_imports() {
     for (name, bytes) in [("a.pcraft", pcraft(2)), ("a.psd", psd(2))] {
         let mut s = session();
         let past = s.active().unwrap().history.past_len();
-        let r = import_notes_from(&mut s, name, &bytes).unwrap();
+        let r = import_notes_from(&mut s, name, &bytes, "").unwrap();
         assert_eq!(r["imported"], 2, "{name}");
         assert_eq!(s.active().unwrap().doc.notes.len(), 2, "{name}");
         assert_eq!(s.active().unwrap().history.past_len(), past + 1, "{name}");
@@ -93,7 +93,7 @@ fn a_memory_refusal_keeps_its_own_message() {
     let (mut s, bytes) = (session(), pcraft(2));
     let past = s.active().unwrap().history.past_len();
     crate::allocation::fail_next_for_test();
-    let e = import_notes_from(&mut s, "a.pcraft", &bytes).unwrap_err().to_string();
+    let e = import_notes_from(&mut s, "a.pcraft", &bytes, "").unwrap_err().to_string();
     assert!(e.starts_with("not enough memory for importing document"), "{e}");
     assert_eq!(s.active().unwrap().history.past_len(), past);
     assert!(s.active().unwrap().doc.notes.is_empty());

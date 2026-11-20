@@ -77,13 +77,13 @@ fn an_import_reports_outside_and_keeps_the_history_step() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 1200, "height": 1600})).unwrap();
     let before = s.active().unwrap().history.past_len();
-    let r = import_notes_from(&mut s, "notes.pcraft", &bytes).unwrap();
+    let r = import_notes_from(&mut s, "notes.pcraft", &bytes, "").unwrap();
     assert_eq!(r["imported"], json!(3));
     assert_eq!(r["outside"], json!(true));
     assert_eq!(s.active().unwrap().history.past_len(), before + 1);
     assert_eq!(s.active().unwrap().doc.notes[2].position, [2328.0, 1480.0]);
     s.execute("file.new", json!({"width": 300, "height": 200})).unwrap();
-    let r = import_notes_from(&mut s, "notes.pcraft", &bytes).unwrap();
+    let r = import_notes_from(&mut s, "notes.pcraft", &bytes, "").unwrap();
     assert_eq!(r["outside"], json!(false));
 }
 
@@ -119,20 +119,30 @@ fn pdf_with_popup() -> Vec<u8> {
 fn a_pdf_popup_keeps_its_size_in_canvas_pixels() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 900, "height": 1200})).unwrap();
-    import_notes_from(&mut s, "notes.pdf", &pdf_with_popup()).unwrap();
+    import_notes_from(&mut s, "notes.pdf", &pdf_with_popup(), "").unwrap();
     let n = &s.active().unwrap().doc.notes[0];
     // 1200 px / 800 pt = 1.5 px per point.
     assert_eq!(n.position, [150.0, 132.0]);
     assert_eq!((n.popup[2] - n.popup[0], n.popup[3] - n.popup[1]), (90.0, 90.0), "60 pt popup is 90 px");
 }
 
-/// CodeRabbit on #14798: a build without a clock gives no import date; the notes keep their own
-/// rather than losing them to an empty string.
+/// CodeRabbit and davidmann4 on #14798: a PDF's notes take the import time the caller passes (the
+/// desktop's local clock, the web's browser clock), whatever date they had in the file. An empty
+/// time (one chrono could not represent) leaves them their own.
 #[test]
-fn without_a_clock_the_notes_keep_their_own_dates() {
+fn pdf_notes_take_the_callers_import_time() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 900, "height": 1200})).unwrap();
+    import_notes_from(&mut s, "notes.pdf", &pdf_with_popup(), "D:20261114120000+00'00'").unwrap();
+    assert_eq!(s.active().unwrap().doc.notes[0].modified, "D:20261114120000+00'00'");
     let own = Note { modified: "D:20250101000000Z".into(), ..Default::default() };
-    assert_eq!(pdf_notes_for_canvas(vec![own.clone()], "", 1.0)[0].modified, "D:20250101000000Z");
-    assert_eq!(pdf_notes_for_canvas(vec![own], "D:20261114120000Z", 1.0)[0].modified, "D:20261114120000Z");
+    assert_eq!(pdf_notes_for_canvas(vec![own], "", 1.0)[0].modified, "D:20250101000000Z");
+}
+
+/// The web shell's import time: the browser clock's seconds as a UTC PDF date.
+#[test]
+fn the_utc_import_time_is_a_pdf_date() {
+    assert_eq!(super::pdf_date_utc(1_763_121_600), "D:20251114120000+00'00'");
 }
 
 /// CodeRabbit on #14798: only a header at the very start (or, in a file named .pdf, within the

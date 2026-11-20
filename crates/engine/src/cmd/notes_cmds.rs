@@ -26,8 +26,9 @@ fn has_notes(s: &Session) -> std::result::Result<(), String> {
 pub const DEFAULT_NOTE_COLOR: [f32; 3] = [1.0, 1.0, 131.0 / 255.0];
 
 /// The PDF date (`D:YYYYMMDDHHMMSS+HH'mm'`) Photoshop stores in a note: local time with its
-/// offset from UTC (#11795), through chrono. Empty without a clock (the web build).
-fn pdf_date() -> String {
+/// offset from UTC (#11795), through chrono. Empty without a clock (the web build), whose shell
+/// passes [`pdf_date_utc`] of the browser clock instead.
+pub fn pdf_date() -> String {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let now = chrono::Local::now();
@@ -39,8 +40,13 @@ fn pdf_date() -> String {
     }
 }
 
+/// The PDF date of `unix_seconds` in UTC: the import time where the build has no local clock (the
+/// web shell, from the browser's clock). Empty for a time chrono cannot represent.
+pub fn pdf_date_utc(unix_seconds: i64) -> String {
+    chrono::DateTime::from_timestamp(unix_seconds, 0).map(|at| pdf_date_at(&at)).unwrap_or_default()
+}
+
 /// [`pdf_date`] for the moment `at`: its own wall-clock time and UTC offset.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn pdf_date_at<Tz: chrono::TimeZone>(at: &chrono::DateTime<Tz>) -> String
 where
     Tz::Offset: std::fmt::Display,
@@ -187,7 +193,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     let path = p.get("path").and_then(Value::as_str).ok_or_else(|| bad(CMD, "pass `path` (.pdf, .psd, .psb or .pcraft)"))?;
     let bytes = read(path)?;
     let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
-    import_notes_from(s, &name, &bytes)
+    import_notes_from(s, &name, &bytes, &pdf_date())
 }
 
 /// Photoshop's alert when a source gives no notes: one without any, or one it cannot read as a
@@ -205,15 +211,17 @@ fn source_error(name: &str, error: photocraft_io::IoError) -> EngineError {
     }
 }
 
-/// File › Import › Notes… from file bytes (what a file picker returns).
-pub fn import_notes_from(s: &mut Session, name: &str, bytes: &[u8]) -> Result<Value> {
+/// File › Import › Notes… from file bytes (what a file picker returns). `now` is the import time as
+/// a PDF date, from the caller's clock: [`pdf_date`] on the desktop, [`pdf_date_utc`] of the
+/// browser clock on the web (davidmann4 on #14798).
+pub fn import_notes_from(s: &mut Session, name: &str, bytes: &[u8], now: &str) -> Result<Value> {
     // A PDF's notes are its first page's text annotations, placed by the page's height and dated
     // with the import, as the reference application does (#11796). PSD, PSB and .pcraft keep
     // their own dates.
     let target_height = f64::from(s.active().ok_or(EngineError::NoDocument)?.doc.size.height);
     let (src_notes, source_height) = if is_pdf(name, bytes) {
         let (notes, height) = photocraft_io::pdf::read_notes(bytes).map_err(|e| EngineError::Other(format!("{name}: {e}")))?;
-        (pdf_notes_for_canvas(notes, &pdf_date(), target_height / height), height)
+        (pdf_notes_for_canvas(notes, now, target_height / height), height)
     } else {
         // The steps of `file_cmds::import`, with the io error still typed for `source_error`.
         crate::allocation::checkpoint("importing document")?;
@@ -239,8 +247,8 @@ pub fn import_notes_from(s: &mut Session, name: &str, bytes: &[u8]) -> Result<Va
 
 /// A PDF's notes ready to place on a canvas `scale` canvas pixels per page point high: each popup's
 /// size in canvas pixels (the page's own is in points; the placement keeps sizes as they are), and
-/// the import's date on each note (`now`, empty where the build has no clock: the notes then keep
-/// their own).
+/// the import's date on each note (`now`; an empty one, a time chrono could not represent, leaves
+/// the notes their own).
 fn pdf_notes_for_canvas(notes: Vec<Note>, now: &str, scale: f64) -> Vec<Note> {
     notes
         .into_iter()
