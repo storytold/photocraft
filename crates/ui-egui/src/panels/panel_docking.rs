@@ -175,6 +175,11 @@ impl DockPanels<String> for Panels<'_> {
         body(self.app, ui, panel);
     }
 
+    /// Each group's header and tab strip and each column's bar settle as the panel bodies do.
+    fn spec_version(&self) -> Option<u64> {
+        Some(super::region_versions::dock_chrome(self.app))
+    }
+
     fn content(&self, panel: &String) -> Option<u64> {
         match panel.as_str() {
             // The canvas shows state that changes without a command: the view, redraw progress, animation and job overlays.

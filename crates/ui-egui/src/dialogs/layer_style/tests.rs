@@ -716,3 +716,77 @@ fn style_click_does_not_mutate_document_until_confirm() {
     ok(h.state_mut(), id);
     assert_eq!(layer_effects(&h.state().session).len(), 1);
 }
+
+/// #14944: the Outer Glow page is grouped Photoshop-style - Noise right under Opacity, the rows of
+/// the Structure, Elements and Quality blocks. The hosted page draws `specs()` rows in order, so
+/// the page order is pinned here; the group TITLES belong to the framework's page (craft-libs has
+/// no header row on an effect page yet) and the other pages keep the framework's order (#14917 is
+/// the Inner Glow's own ticket).
+#[test]
+fn the_outer_glow_page_rows_group_noise_under_opacity() {
+    let row_keys = |want: &str| {
+        specs(&blend_keys(), &Map::new(), 120.0)
+            .into_iter()
+            .find(|s| s.kind.key() == want)
+            .expect("the spec for the kind")
+            .fields
+            .iter()
+            .map(|f| f.key.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(row_keys("outerGlow"), ["blend", "opacity", "noise", "color", "technique", "spread", "size", "contour", "range"]);
+    assert_eq!(
+        row_keys("innerGlow"),
+        ["blend", "opacity", "color", "technique", "source", "choke", "size", "contour", "range", "noise"],
+        "the Inner Glow page stays as it is"
+    );
+    assert_eq!(
+        row_keys("dropShadow"),
+        ["blend", "color", "opacity", "angle", "useGlobalLight", "distance", "spread", "size", "contour", "noise", "knocksOut"],
+        "the Drop Shadow page stays as it is"
+    );
+}
+
+/// #14944: a new Outer Glow opens at the reference application's factory values, and OK stores
+/// exactly those.
+#[test]
+fn a_new_outer_glow_opens_at_the_factory_values_and_ok_keeps_them() {
+    let mut app = app_with_layer(32);
+    let id = open(&mut app, Some(EffectKind::OuterGlow.key())).unwrap();
+    let glow = first_of(&app, id, EffectKind::OuterGlow);
+    let style = &draft(&app, id).style;
+    assert_eq!(text(style, glow, "blend").as_deref(), Some("Screen"));
+    assert_eq!(text(style, glow, "technique").as_deref(), Some("softer"));
+    assert_eq!(
+        (num(style, glow, "opacity"), num(style, glow, "spread"), num(style, glow, "size"), num(style, glow, "range")),
+        (Some(35.0), Some(0.0), Some(7.0), Some(50.0)),
+        "the page's own seed"
+    );
+    assert_eq!(style.effect(glow).and_then(|e| e.params.bool("antiAlias")), Some(false));
+    let Some(StyleValue::Color(c)) = param(style, glow, "color") else { panic!("the colour row loads as a colour") };
+    assert_eq!(color_picker_ui::hex(c.to_rgb_array()), "#ffffff", "the page's own colour");
+    ok(&mut app, id);
+    let Effect::OuterGlow(g) = &layer_effects(&app.session)[0] else { panic!("{:?}", layer_effects(&app.session)) };
+    assert!((g.common.opacity * 100.0 - 35.0).abs() < 1e-4 && (g.size - 7.0).abs() < 1e-4, "OK stored {g:?}");
+    let FxPaint::Color(c) = &g.paint else { panic!("{:?}", g.paint) };
+    assert_eq!(hex(c), "#ffffff", "OK stored the colour");
+}
+
+/// #14944: the factory values never reach an Outer Glow the layer already carries: the page shows
+/// its own values and OK keeps them, as it does for a glow read from a PSD or `.pcraft`.
+#[test]
+fn an_existing_outer_glow_is_edited_with_its_own_values() {
+    let mut app = app_with_layer(32);
+    app.run("layer.layerStyle.outerGlow", json!({"opacity": 75, "color": "#ffffbe", "size": 5})).unwrap();
+    let id = open(&mut app, Some(EffectKind::OuterGlow.key())).unwrap();
+    let glow = first_of(&app, id, EffectKind::OuterGlow);
+    let style = &draft(&app, id).style;
+    assert_eq!((num(style, glow, "opacity"), num(style, glow, "size")), (Some(75.0), Some(5.0)), "the page shows what the layer has");
+    let Some(StyleValue::Color(c)) = param(style, glow, "color") else { panic!("the colour row loads as a colour") };
+    assert_eq!(color_picker_ui::hex(c.to_rgb_array()), "#ffffbe");
+    ok(&mut app, id);
+    let Effect::OuterGlow(g) = &layer_effects(&app.session)[0] else { panic!("no outer glow") };
+    assert!((g.common.opacity * 100.0 - 75.0).abs() < 1e-4 && (g.size - 5.0).abs() < 1e-4, "OK kept {g:?}");
+    let FxPaint::Color(c) = &g.paint else { panic!("{:?}", g.paint) };
+    assert_eq!(hex(c), "#ffffbe", "OK kept the colour");
+}
