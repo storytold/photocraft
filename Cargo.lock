@@ -6301,7 +6301,6 @@ dependencies = [
  "craft",
  "craft-cms",
  "craft-image-codecs",
- "craft-svg",
  "craft-update",
  "craft-xml",
  "eframe",
@@ -6338,7 +6337,6 @@ dependencies = [
  "winsafe",
  "wl-clipboard-rs",
  "x11rb",
- "xcap",
  "zbus",
 ]
 
@@ -6380,7 +6378,6 @@ dependencies = [
  "photocraft-io",
  "photocraft-raster",
  "photocraft-raw",
- "pollster 1.0.1",
  "rmcp",
  "rustix 1.1.5",
  "schemars",
@@ -6388,7 +6385,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
- "wgpu",
 ]
 
 [[package]]
@@ -6409,7 +6405,6 @@ dependencies = [
  "photocraft-io",
  "photocraft-raster",
  "photocraft-raw",
- "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
