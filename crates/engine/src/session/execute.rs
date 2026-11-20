@@ -67,7 +67,7 @@ impl Session {
     /// Complete for the commands in [`PRECHECKED`]: there it accepts what `execute` accepts, but
     /// for the group nesting limit (a test holds the two together). For others it checks only what they share.
     pub fn precheck(&mut self, id: &str, params: &Value) -> Result<()> {
-        let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        let spec = crate::registry::spec(id)?;
         if !(params.is_object() || params.is_null()) {
             return Err(EngineError::BadParams { cmd: id.to_string(), msg: "params must be a JSON object".into() });
         }
@@ -105,9 +105,10 @@ impl Session {
         id == "image.adjustments.colorLookup" && channel_cmds::is_channel_target(params)
     }
 
-    /// What `dispatch` checks once the params are valid and a floating selection has dropped:
-    /// the precondition (on a named layer for commands that take one), a job running on the
-    /// document, a hidden target. The run params (the Channels panel's target filled in) when it
+    /// What `dispatch` checks once the params are valid, before a floating selection drops (so a
+    /// refused command leaves it floating) and again after: the precondition (on a named layer
+    /// for commands that take one), a job running on the document, a hidden target, the Magic
+    /// Eraser's colour-mode alert. The run params (the Channels panel's target filled in) when it
     /// may run.
     pub(crate) fn admit(&mut self, id: &str, spec: &commands::CommandSpec, params: &Value) -> Result<Value> {
         let run_params = channel_cmds::inject_target(self, id, commands::inject_kind(id, params.clone()));
@@ -124,6 +125,13 @@ impl Session {
         if let Some(why) = hidden_target::refusal(self, id, params) {
             return Err(EngineError::Other(why.into()));
         }
+        // The Magic Eraser's alert for an Indexed Color or Bitmap document (#12032), the same
+        // error its `run` gives: checked here too, so a floating selection stays floating (#13169).
+        if id == "paint.magicEraser"
+            && let Some(why) = self.active().and_then(|st| crate::eraser_cmds::magic_eraser_refusal(&st.doc))
+        {
+            return Err(EngineError::Other(why.into()));
+        }
         Ok(run_params)
     }
 
@@ -133,7 +141,7 @@ impl Session {
     }
 
     /// [`Self::is_enabled`] for a call with `params`: their `"target"` can enable a command, as a
-    /// targeted layer mask enables Image › Adjustments › Invert on an adjustment layer (#780).
+    /// targeted layer mask enables Image Ã¢â‚¬Âº Adjustments Ã¢â‚¬Âº Invert on an adjustment layer (#780).
     pub fn is_enabled_with(&self, id: &str, params: &Value) -> bool {
         // An unknown id is disabled; its reason would rank every command id for "did you mean".
         commands::find(id).is_some_and(|spec| self.spec_disabled_reason(spec, id, params).is_none())
@@ -147,7 +155,10 @@ impl Session {
 
     /// [`Self::disabled_reason`] for a call with `params`.
     pub fn disabled_reason_with(&self, id: &str, params: &Value) -> Option<String> {
-        let Some(spec) = commands::find(id) else { return Some(EngineError::UnknownCommand(id.into()).to_string()) };
+        let spec = match crate::registry::spec(id) {
+            Ok(spec) => spec,
+            Err(e) => return Some(e.to_string()),
+        };
         self.spec_disabled_reason(spec, id, params)
     }
 
@@ -262,14 +273,14 @@ impl Session {
     }
 
     /// Apply a change of layer visibility (and nothing else): a history state when History
-    /// Options › Make Layer Visibility Changes Undoable is on (the default, as in Photoshop),
+    /// Options Ã¢â‚¬Âº Make Layer Visibility Changes Undoable is on (the default, as in Photoshop),
     /// otherwise the document changes without one, so the History panel and Undo skip it.
     pub fn edit_visibility<R>(&mut self, label: &str, f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>) -> Result<R> {
         let record = self.visibility_undoable();
         self.edit_with(label, record, f)
     }
 
-    /// History Options › Make Layer Visibility Changes Undoable.
+    /// History Options Ã¢â‚¬Âº Make Layer Visibility Changes Undoable.
     pub fn visibility_undoable(&self) -> bool {
         self.prefs().history_options.make_layer_visibility_changes_undoable
     }
@@ -411,7 +422,7 @@ impl Session {
 }
 
 /// A Bitmap document holds only black and white, so Photoshop greys out its filters and its
-/// Image › Adjustments, all but Invert (#10484), filter plug-ins included (`plugin.run`; the
+/// Image Ã¢â‚¬Âº Adjustments, all but Invert (#10484), filter plug-ins included (`plugin.run`; the
 /// other `plugin.*` commands manage plug-ins). Catalogue queries still answer.
 fn bitmap_mode_refusal(s: &Session, id: &str, params: &Value) -> Option<&'static str> {
     let edits = (id.starts_with("filter.") || id.starts_with("image.adjustments.") || id == crate::plugin_cmds::RUN)
