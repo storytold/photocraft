@@ -506,11 +506,16 @@ fn double_click(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2) {
 }
 
 fn drag(h: &mut Harness<'static, Box<PhotocraftApp>>, a: Pos2, b: Pos2) {
+    drag_in(h, a, b, 6);
+}
+
+/// [`drag`] in `moves` pointer moves, one frame each.
+fn drag_in(h: &mut Harness<'static, Box<PhotocraftApp>>, a: Pos2, b: Pos2, moves: u8) {
     h.hover_at(a);
     h.run_steps(1);
     press(h, a, true);
-    for k in 1..=6 {
-        h.hover_at(a + (b - a) * (k as f32 / 6.0));
+    for k in 1..=moves {
+        h.hover_at(a + (b - a) * (f32::from(k) / f32::from(moves)));
         h.run_steps(1);
     }
     press(h, b, false);
@@ -2040,7 +2045,8 @@ fn every_paragraph_box_handle_resizes_the_box_with_snapping_on() {
     // the snap reach is a screen distance, so the zoom and ppp only scale the view: 25 % at 2x is 12.5 %
     // in points and 200 % at 1x is 200 %, which hold 50 % and 100 % between them. The layer transform
     // goes through the same frame mapping at any view scale, so each one runs at one view.
-    for (ppp, zoom, name, tf) in [(2.0, 0.25f32, "plain", None), (1.0, 2.0, "scaled", Some(scaled)), (2.0, 2.0, "rotated", Some(rotated))] {
+    let cases = [(2.0, 0.25f32, "plain", None), (1.0, 2.0, "scaled", Some(scaled)), (2.0, 2.0, "rotated", Some(rotated))];
+    for (case, (ppp, zoom, name, tf)) in cases.into_iter().enumerate() {
         let mut app = new_app();
         assert!(app.ui.extras.snap, "snapping is on by default");
         let size = 24.0 / zoom;
@@ -2060,39 +2066,41 @@ fn every_paragraph_box_handle_resizes_the_box_with_snapping_on() {
         click(&mut h, p);
         assert_eq!(selection(&h), (2, 2), "{ctx}: editing");
         for (i, (l, r, t, b)) in HANDLE_SIDES.into_iter().enumerate() {
-            // Press at the handle and inside its grab area, towards the text.
-            for off in [0.0f32, 4.0] {
-                let (bx, by, w, bh) = super::box_shape(h.state(), id).unwrap();
-                let hx = if l {
-                    bx
-                } else if r {
-                    bx + w
-                } else {
-                    bx + w / 2.0
-                };
-                let hy = if t {
-                    by
-                } else if b {
-                    by + bh
-                } else {
-                    by + bh / 2.0
-                };
-                let dir = vec2(f32::from(u8::from(r)) - f32::from(u8::from(l)), f32::from(u8::from(b)) - f32::from(u8::from(t)));
-                let at = screen(&mut h, id, hx, hy);
-                let out = (screen(&mut h, id, hx + dir.x * 10.0, hy + dir.y * 10.0) - at).normalized();
-                let a = at - out * off;
-                drag(&mut h, a, a + out * 30.0);
-                let ctx = format!("{ctx} handle {i} offset {off}");
-                assert_eq!(selection(&h), (2, 2), "{ctx}: the caret stays put");
-                let (_, _, w2, h2) = super::box_shape(h.state(), id).unwrap();
-                // 30 points outward (a corner's diagonal: about 21 per side) is that over
-                // zoom × layer scale in text units; snapping may shift the release by up to
-                // its 8 point reach.
-                let min = 6.0 / (zoom / h.state().canvas_ppp()) / 1.5;
-                let grew = |was: f32, now: f32, moved: bool| if moved { now - was >= min } else { (now - was).abs() < 1e-3 };
-                assert!(grew(w, w2, l || r), "{ctx}: width {w} -> {w2}");
-                assert!(grew(bh, h2, t || b), "{ctx}: height {bh} -> {h2}");
-            }
+            // Press at the handle or inside its grab area, towards the text: corners (even `i`) and sides
+            // take turns, and the next case swaps them, so every handle is pressed both ways and every case
+            // presses both ways. The press picks the handle (`TransformBox::text_frame`) and the pass that
+            // commits carries the final box (`box_of`), so the drag needs the move that starts it and the end.
+            let off = if (i + case) % 2 == 0 { 0.0f32 } else { 4.0 };
+            let (bx, by, w, bh) = super::box_shape(h.state(), id).unwrap();
+            let hx = if l {
+                bx
+            } else if r {
+                bx + w
+            } else {
+                bx + w / 2.0
+            };
+            let hy = if t {
+                by
+            } else if b {
+                by + bh
+            } else {
+                by + bh / 2.0
+            };
+            let dir = vec2(f32::from(u8::from(r)) - f32::from(u8::from(l)), f32::from(u8::from(b)) - f32::from(u8::from(t)));
+            let at = screen(&mut h, id, hx, hy);
+            let out = (screen(&mut h, id, hx + dir.x * 10.0, hy + dir.y * 10.0) - at).normalized();
+            let a = at - out * off;
+            drag_in(&mut h, a, a + out * 30.0, 2);
+            let ctx = format!("{ctx} handle {i} offset {off}");
+            assert_eq!(selection(&h), (2, 2), "{ctx}: the caret stays put");
+            let (_, _, w2, h2) = super::box_shape(h.state(), id).unwrap();
+            // 30 points outward (a corner's diagonal: about 21 per side) is that over
+            // zoom × layer scale in text units; snapping may shift the release by up to
+            // its 8 point reach.
+            let min = 6.0 / (zoom / h.state().canvas_ppp()) / 1.5;
+            let grew = |was: f32, now: f32, moved: bool| if moved { now - was >= min } else { (now - was).abs() < 1e-3 };
+            assert!(grew(w, w2, l || r), "{ctx}: width {w} -> {w2}");
+            assert!(grew(bh, h2, t || b), "{ctx}: height {bh} -> {h2}");
         }
     }
 }

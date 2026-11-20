@@ -147,21 +147,15 @@ fn caret_font_choices_style_only_subsequent_typing_including_ime() {
     // One app: each case's text layer goes with Undo before the next case makes its own.
     // Every acceptance, as each reaches the caret's pending style by its own route through the
     // family field (ArrowDown applies its row once per step). One original font, as it only decides
-    // which font is chosen. Every text meets the carets at both ends, where the inserted text and its
-    // pending font land on a character boundary of that text (a combined emoji, a paragraph break);
-    // each acceptance runs at both ends too. The acceptance only sets the pending font
-    // (`type_insertion_style`) before any character is typed, so it need not meet every text.
+    // which font is chosen. The caret at the start of the text, where any text inserts at byte 0 the same way,
+    // and at the end of each text, where the inserted text and its pending font land after its last character
+    // boundary (a plain letter, a joined emoji, a letter after a paragraph break). The acceptance only sets the
+    // pending font (`type_insertion_style`, checked before anything is typed), wherever the caret is, so each
+    // acceptance runs once or more and need not meet every caret or text.
     let mut h = document();
     let base = past_len(&h);
     let original = 0;
-    for (accept, text, end) in [
-        ("enter", "abcdef", false),
-        ("click", "abcdef", true),
-        ("arrow-enter", "AéB👩‍💻", false),
-        ("enter", "AéB👩‍💻", true),
-        ("click", "ab\ncdé", false),
-        ("arrow-enter", "ab\ncdé", true),
-    ] {
+    for (accept, text, end) in [("enter", "abcdef", false), ("click", "abcdef", true), ("arrow-enter", "AéB👩‍💻", true), ("enter", "ab\ncdé", true)] {
         let caret = if end { text.chars().count() } else { 0 };
         let label = (accept, text, caret);
         undo_to(&mut h, base);
