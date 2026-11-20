@@ -123,6 +123,7 @@ pub(crate) fn options_of(f: &Map<String, Value>) -> ExportOptions {
             "bicubicSharper" => Resample::BicubicSharper,
             "bilinear" => Resample::Bilinear,
             "nearest" => Resample::NearestNeighbor,
+            "preserveDetails" => Resample::PreserveDetails,
             _ => Resample::Automatic,
         };
     }
@@ -152,6 +153,7 @@ pub(crate) fn settings_from(options: &ExportOptions, source: PixelSize) -> Map<S
         Resample::BicubicSharper => "bicubicSharper",
         Resample::Bilinear => "bilinear",
         Resample::NearestNeighbor => "nearest",
+        Resample::PreserveDetails => "preserveDetails",
         // The dialog offers only `RESAMPLE_CHOICES`; a method outside it cannot be chosen.
         _ => DEFAULT_RESAMPLE,
     };
@@ -225,9 +227,17 @@ fn dialog_formats() -> Vec<ExportFormat> {
     formats
 }
 
-/// The resample methods the engine's Image Size implements, in `export_resample`'s order.
-const RESAMPLE_CHOICES: [Resample; 6] =
-    [Resample::Automatic, Resample::Bicubic, Resample::BicubicSmoother, Resample::BicubicSharper, Resample::Bilinear, Resample::NearestNeighbor];
+/// The resample methods the engine's Image Size implements, Preserve Details included (#13737). The framework lists
+/// them in its own order.
+const RESAMPLE_CHOICES: [Resample; 7] = [
+    Resample::Automatic,
+    Resample::Bicubic,
+    Resample::BicubicSmoother,
+    Resample::BicubicSharper,
+    Resample::Bilinear,
+    Resample::NearestNeighbor,
+    Resample::PreserveDetails,
+];
 
 /// The saved export presets as the dialog's library: the engine's list in its order, each preset's
 /// settings read with [`options_of`].
@@ -379,7 +389,7 @@ pub fn quick_export_selected_layers_png(app: &mut PhotocraftApp) -> Result<Value
     }
     // Capture all sources before showing the dialog: changing selection or document while it
     // is open cannot change which layers get exported.
-    let docs = exportable_layers(&st.doc, &layers)?;
+    let docs = exportable_layers(&st.doc, layers)?;
     let suggested = format!("{}.png", export_name(&st.doc.name));
     app.pick_export(&suggested, move |app, path| {
         if !path.to_ascii_lowercase().ends_with(".png") {
@@ -1297,6 +1307,8 @@ fn quick_export(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
     Ok(r)
 }
 
+#[cfg(test)]
+mod preserve_details_tests;
 #[cfg(test)]
 mod srgb_default_tests;
 #[cfg(test)]
