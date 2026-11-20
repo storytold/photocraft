@@ -10,7 +10,9 @@
 //! shortcut whose command is disabled in the current state reports why on the status bar instead
 //! of doing nothing silently, as the greyed menu item shows.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
+
+use rustc_hash::FxHashMap;
 
 use craft::color_ui::ui::SwatchesCommand;
 use craft::keymap::{Binding, Chord, CommandDef, CommandKind, Overrides, Scope};
@@ -159,9 +161,21 @@ fn bridge_of(command: &CommandRef) -> Option<(&'static str, Bridged)> {
     bridged_commands().iter().find(|(bridged, _, _)| bridged == command).map(|(_, id, bridged)| (*id, *bridged))
 }
 
+/// Runtime rows indexed by id, keeping the first row if an id appears more than once.
+fn runtime_by_id() -> &'static FxHashMap<&'static str, Bridged> {
+    static TABLE: std::sync::OnceLock<FxHashMap<&'static str, Bridged>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table = FxHashMap::default();
+        for &(id, bridged) in RUNTIME_COMMANDS {
+            table.entry(id).or_insert(bridged);
+        }
+        table
+    })
+}
+
 /// Whether the runtime defines command `id` (a row of [`RUNTIME_COMMANDS`]).
 pub(crate) fn is_bridged(id: &str) -> bool {
-    RUNTIME_COMMANDS.iter().any(|(bridged, _)| *bridged == id)
+    runtime_by_id().contains_key(id)
 }
 
 /// Whether `id` is a view row of [`RUNTIME_COMMANDS`]: a command the document canvas runs on its view.
@@ -208,17 +222,31 @@ fn binding(text: &str) -> Option<Binding> {
 
 /// The menu path of command `id`: its menu, then its label.
 fn menu_path(id: &str) -> Option<Vec<String>> {
-    let (menu, label): (&[&str], &str) = crate::menu_catalog::CATALOG
-        .iter()
-        .find(|c| c.3 == id)
-        .map(|c| (c.0, c.1))
-        .or_else(|| crate::menus::UI_COMMANDS.iter().find(|c| c.0 == id && !c.2.is_empty()).map(|c| (c.2, c.1)))?;
-    Some(menu.iter().chain([&label]).map(|part| (*part).to_string()).collect())
+    let (menu, label) = menu_paths().get(id)?;
+    Some(menu.iter().chain([label]).map(|part| (*part).to_string()).collect())
 }
 
-/// Adds `def` unless an earlier source gave its id or the runtime defines it.
-fn push_row(rows: &mut Vec<CommandDef>, seen: &mut HashSet<String>, def: CommandDef) {
-    if !is_bridged(&def.command.id) && seen.insert(def.command.id.clone()) {
+/// Each command's menu and label: the catalogue's first row of the command, else the first shell command of that id
+/// that has a menu.
+fn menu_paths() -> &'static HashMap<&'static str, (&'static [&'static str], &'static str)> {
+    static PATHS: std::sync::OnceLock<HashMap<&'static str, (&'static [&'static str], &'static str)>> = std::sync::OnceLock::new();
+    PATHS.get_or_init(|| {
+        let mut paths = HashMap::new();
+        for &(menu, label, _, id) in crate::menu_catalog::CATALOG {
+            paths.entry(id).or_insert((menu, label));
+        }
+        for &(id, label, menu, _) in crate::menus::UI_COMMANDS.iter().filter(|c| !c.2.is_empty()) {
+            paths.entry(id).or_insert((menu, label));
+        }
+        paths
+    })
+}
+
+/// Adds `def` unless an earlier source gave its id or the runtime defines it. `index` holds each row's place in
+/// `rows` by its id.
+fn push_row(rows: &mut Vec<CommandDef>, index: &mut HashMap<String, usize>, def: CommandDef) {
+    if !is_bridged(&def.command.id) && !index.contains_key(&def.command.id) {
+        index.insert(def.command.id.clone(), rows.len());
         rows.push(def);
     }
 }
@@ -229,18 +257,18 @@ fn push_row(rows: &mut Vec<CommandDef>, seen: &mut HashSet<String>, def: Command
 /// ([`RUNTIME_COMMANDS`]) are not rows. The Keyboard Shortcuts dialog lists exactly these rows.
 pub(crate) fn command_rows(app: &PhotocraftApp) -> Vec<CommandDef> {
     let mut rows: Vec<CommandDef> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
     let app_row = |id: &str, label: &str| CommandDef::new(CommandRef::new(id), label, Scope::app());
 
     // The tool letters, and the Shift+letter step of each group.
     for def in crate::tool_shortcuts::defs(app) {
-        push_row(&mut rows, &mut seen, def);
+        push_row(&mut rows, &mut index, def);
     }
     for (letter, first) in crate::tool_shortcuts::group_letters() {
         let label = format!("Next {}", first.label());
         let mut def = app_row(&next_in_group_id(letter), &label).with_path(vec!["Tools".into(), label.clone()]);
         def.defaults.extend(binding(&format!("Shift+{}", letter.to_ascii_uppercase())));
-        push_row(&mut rows, &mut seen, def);
+        push_row(&mut rows, &mut index, def);
     }
     // The held erase key is momentary; the hand and zoom keys are the runtime's.
     for &(id, label, key) in photocraft_engine::prefs::TEMPORARY_TOOLS {
@@ -249,7 +277,7 @@ pub(crate) fn command_rows(app: &PhotocraftApp) -> Vec<CommandDef> {
         }
         let mut def = app_row(id, label).with_kind(CommandKind::Momentary).with_path(vec!["Tools".into(), "Temporary".into(), label.into()]);
         def.defaults.extend(binding(key));
-        push_row(&mut rows, &mut seen, def);
+        push_row(&mut rows, &mut index, def);
     }
     // Alt+1 … Alt+0 set the brush smoothing (press only). The opacity and blend digits are command sets of the
     // framework (`OpacityDigit`, `BlendStep`, `BlendShortcut`), so they are no rows here.
@@ -258,7 +286,7 @@ pub(crate) fn command_rows(app: &PhotocraftApp) -> Vec<CommandDef> {
         let label = format!("Brush Smoothing {}%", digit * 10);
         let mut def = app_row(&format!("tools.smoothing.{key}"), &label).with_path(vec!["Tools".into(), "Smoothing".into(), label.clone()]);
         def.defaults.extend(binding(&format!("Alt+{key}")));
-        push_row(&mut rows, &mut seen, def);
+        push_row(&mut rows, &mut index, def);
     }
 
     // The engine's and the shell's commands, with the menu paths the shell knows.
@@ -267,43 +295,43 @@ pub(crate) fn command_rows(app: &PhotocraftApp) -> Vec<CommandDef> {
         if def.paths.is_empty() {
             def.paths.extend(menu_path(&def.command.id));
         }
-        push_row(&mut rows, &mut seen, def);
+        push_row(&mut rows, &mut index, def);
     }
 
     // Live menu items whose command has no row yet carry the catalogue's key.
     for &(_, label, shortcut, id) in crate::menu_catalog::CATALOG {
         // A Window panel item runs its shell command (`menus::panel_alias`), which has the row.
-        let owner = crate::menus::panel_alias(id).filter(|alias| seen.contains(*alias)).unwrap_or(id);
+        let owner = crate::menus::panel_alias(id).filter(|alias| index.contains_key(*alias)).unwrap_or(id);
         if label == "---" || !crate::menus::is_live(id) {
             continue;
         }
-        if seen.contains(owner) {
+        if let Some(&at) = index.get(owner) {
             // An engine row that names no key takes the catalogue's.
             if let Some(key) = shortcut.and_then(binding)
-                && let Some(row) = rows.iter_mut().find(|row| row.command.id == owner && row.defaults.is_empty())
+                && rows[at].defaults.is_empty()
             {
-                row.defaults.push(key);
+                rows[at].defaults.push(key);
             }
             continue;
         }
         let mut def = app_row(id, label.trim_end_matches('…'));
         def.paths.extend(menu_path(id));
         def.defaults.extend(shortcut.and_then(binding));
-        push_row(&mut rows, &mut seen, def);
+        push_row(&mut rows, &mut index, def);
     }
     // Recorded actions run on their own key (the user's assignment is an override).
     for action in app.session.actions.list.actions() {
         let id = crate::actions::shortcut_id(&action.name);
-        push_row(&mut rows, &mut seen, app_row(&id, &action.name).with_path(vec!["Actions".into(), action.name.clone()]));
+        push_row(&mut rows, &mut index, app_row(&id, &action.name).with_path(vec!["Actions".into(), action.name.clone()]));
     }
 
     // A command's alternate keys (#3665: F3 is Copy as well as ⌘C), after every main key.
     for &(id, key) in photocraft_engine::prefs::ALTERNATE_SHORTCUTS {
         let Some(alternate) = binding(key) else { continue };
-        if let Some(def) = rows.iter_mut().find(|d| d.command.id == id)
-            && !def.defaults.contains(&alternate)
+        if let Some(&at) = index.get(id)
+            && !rows[at].defaults.contains(&alternate)
         {
-            def.defaults.push(alternate);
+            rows[at].defaults.push(alternate);
         }
     }
     // Photoshop: ⌥ added to an adjustment's own key opens it at its last settings (⌥⌘L, ⌥⌘M, #8900); Layer › New › Layer's
@@ -314,12 +342,12 @@ pub(crate) fn command_rows(app: &PhotocraftApp) -> Vec<CommandDef> {
         }
     }
     // Edit in Quick Mask Mode is a button in the tool rail's footer, which shows its command's icon.
-    if let Some(def) = rows.iter_mut().find(|d| d.command.id == crate::panels::QUICK_MASK) {
-        def.icon = Some("square-dashed".into());
+    if let Some(&at) = index.get(crate::panels::QUICK_MASK) {
+        rows[at].icon = Some("square-dashed".into());
     }
     // Smart Objects › Reveal in Finder names this platform's file manager, in the list as in the menu.
-    if let Some(def) = rows.iter_mut().find(|d| d.command.id == "layer.smartObjects.revealInFinder") {
-        def.label = crate::menus::reveal_label().into();
+    if let Some(&at) = index.get("layer.smartObjects.revealInFinder") {
+        rows[at].label = crate::menus::reveal_label().into();
     }
     rows
 }
@@ -327,7 +355,7 @@ pub(crate) fn command_rows(app: &PhotocraftApp) -> Vec<CommandDef> {
 /// The command of the runtime's keymap that menu row `id` runs: the framework command a row of [`RUNTIME_COMMANDS`]
 /// bridges, the shell command a Window panel item runs (`menus::panel_alias`), else the row's own.
 pub(crate) fn keymap_command(id: &str) -> CommandRef {
-    if let Some((_, bridged)) = RUNTIME_COMMANDS.iter().find(|(bridged, _)| *bridged == id) {
+    if let Some(bridged) = runtime_by_id().get(id) {
         return bridged.command();
     }
     CommandRef::new(crate::menus::panel_alias(id).unwrap_or(id))
@@ -350,25 +378,19 @@ pub(crate) fn bridged_rows() -> Vec<CommandDef> {
 }
 
 /// The app's command catalog over `rows` ([`command_rows`]). The runtime rebuilds its keymap when `generation`
-/// changes, so the holder takes a new one only when [`same_rows`] says the rows differ from the held ones. It
-/// compares where the menu model rebuilds, which covers a new action and a tool list change.
-// PLAN: hub-w1's `framework_before_input` holds the rows and the generation, and calls this in place of `catalog(app)`.
+/// changes, so the holder (`framework_before_input`) takes a new one only when it rebuilds the rows: when the actions
+/// list's revision moved.
 pub(crate) fn catalog(rows: Vec<CommandDef>, generation: u64) -> Option<AppCatalog> {
     // `command_rows` gives each id once and every row the app scope, the two things `new` refuses; a refusal leaves the
     // runtime with no app catalog.
     AppCatalog::new(rows, generation).ok()
 }
 
-/// Whether two row lists describe the same commands, labels, paths and keys.
-pub(crate) fn same_rows(a: &[CommandDef], b: &[CommandDef]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| serde_json::to_value(x).ok() == serde_json::to_value(y).ok())
-}
-
 /// The user's bindings for the runtime's keymap: Edit › Keyboard Shortcuts changes (`prefs.shortcuts`,
 /// `prefs.alternate_shortcuts`), the panel alias rule (#1272), and each row of [`RUNTIME_COMMANDS`] with its
 /// effective keys, so the framework command carries PhotoCraft's keys. The pane moves stay unbound
-/// (`app::framework`: PhotoCraft binds F6 and Shift+F6).
-pub(crate) fn overrides(app: &PhotocraftApp) -> Overrides {
+/// (`app::framework`: PhotoCraft binds F6 and Shift+F6). `rows` are the app's catalog rows ([`command_rows`]).
+pub(crate) fn overrides(app: &PhotocraftApp, rows: &[CommandDef]) -> Overrides {
     let prefs = app.session.prefs();
     // PLAN: `keymap_defs::prefs_overrides` is top-w20's tp.PT25 row, assumed as `prefs_overrides(&Preferences) -> Overrides`.
     let mut overrides = photocraft_engine::keymap_defs::prefs_overrides(prefs);
@@ -409,7 +431,7 @@ pub(crate) fn overrides(app: &PhotocraftApp) -> Overrides {
     // A key an action holds is the action's alone (it is checked before every command's key, as in Photoshop): the
     // command that has it by default keeps its other keys.
     if !taken.is_empty() {
-        for row in command_rows(app) {
+        for row in rows {
             let id = row.command.id.as_str();
             if id.starts_with(crate::actions::SHORTCUT_PREFIX) || is_bridged(id) {
                 continue;
@@ -477,7 +499,7 @@ pub(crate) fn delete_key_command(app: &PhotocraftApp, id: String) -> String {
 pub(crate) fn clip_key_releases(app: &PhotocraftApp) -> bool {
     let Some(st) = app.session.active() else { return false };
     let selected = st.selected_layers();
-    let clips = match selected.as_slice() {
+    let clips = match selected {
         [] => return false,
         [one] => std::slice::from_ref(one),
         [_lowest, above @ ..] => above,
@@ -658,8 +680,8 @@ fn run_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Fired) {
         }
     }
     if id == EditCommands::Delete.id() {
-        // A finished work path shown by the Pen or Path Selection, or the path or segment Direct Selection targets:
-        // ⌫/Delete edits the path, as in Photoshop (#5702, #13203), never Edit › Clear on the pixels under it.
+        // A finished work path shown by a Pen or Path Selection, or the path or segment Direct Selection targets:
+        // ⌫/Delete edits the path, as in Photoshop (#5702, #12695, #13203), never Edit › Clear on the pixels under it.
         if let Some((command, params)) = crate::vector_ui::delete_key_edits_path(app) {
             if let Err(e) = app.run(command, params) {
                 app.ui.status = e;
