@@ -630,7 +630,7 @@ mod damage_log_tests {
         let with_effect = st.damage_since(before).unwrap();
         assert!(with_effect.width() > ink.width());
         // An empty layer shows no pixels, so removing its effect is pixel-neutral.
-        std::sync::Arc::make_mut(&mut st.doc).layers[0].effects.items.clear();
+        std::sync::Arc::make_mut(st.doc_mut()).layers[0].effects.items.clear();
         st.bump_revision(false);
         st.last_damage = Some(Rect::EMPTY);
         st.record_damage();
