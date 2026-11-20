@@ -89,9 +89,11 @@ pub fn web_palette() -> Vec<Rgb8> {
     v
 }
 
-/// Classic Mac OS system palette: the web cube plus 10-step red, green, blue and gray ramps.
+/// Classic Mac OS system palette: the web cube plus 10-step red, green, blue and gray ramps. The
+/// table runs from white down through the cube (FFFFFF, FFFFCC, FFFF99, …), then the four ramps,
+/// and ends with black (#14344).
 pub fn mac_palette() -> Vec<Rgb8> {
-    let mut v = web_palette();
+    let mut v: Vec<Rgb8> = web_palette().into_iter().skip(1).rev().collect();
     // Ramps use the values between cube steps (17-unit spacing, skipping multiples of 51).
     let steps: Vec<u8> = (1..=15u8).map(|k| k * 17).filter(|x| x % 51 != 0).collect();
     for &s in steps.iter().rev() {
@@ -106,11 +108,13 @@ pub fn mac_palette() -> Vec<Rgb8> {
     for &s in steps.iter().rev() {
         v.push([s, s, s]);
     }
+    v.push([0, 0, 0]);
     v.truncate(256);
     v
 }
 
-/// Windows default palette: the 20 static system colours plus the web cube and a gray ramp.
+/// Windows default palette: the 20 static system colours plus the web cube and a gray ramp. The
+/// table starts with black and the static colours and ends with white (#14344).
 pub fn windows_palette() -> Vec<Rgb8> {
     let mut v: Vec<Rgb8> = vec![
         [0, 0, 0],
@@ -132,20 +136,21 @@ pub fn windows_palette() -> Vec<Rgb8> {
         [0, 0, 255],
         [255, 0, 255],
         [0, 255, 255],
-        [255, 255, 255],
     ];
+    const WHITE: Rgb8 = [255, 255, 255];
     for c in web_palette() {
-        if !v.contains(&c) {
+        if c != WHITE && !v.contains(&c) {
             v.push(c);
         }
     }
     let mut g = 8u8;
-    while v.len() < 256 {
+    while v.len() < 255 {
         if !v.contains(&[g, g, g]) {
             v.push([g, g, g]);
         }
         g = g.wrapping_add(12);
     }
+    v.push(WHITE);
     v
 }
 
