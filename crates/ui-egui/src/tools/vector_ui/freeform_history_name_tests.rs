@@ -230,8 +230,11 @@ fn control_pointer_strokes_commit_only_on_release_with_the_freeform_label() {
             assert_step(&app, n, "Freeform Pen");
         }
         if mode == VectorMode::Path {
-            // A further stroke starting at the selected open path's endpoint has the same name.
+            // Select the endpoint through the temporary Direct Selection tool before continuing it.
             assert_eq!(app.ui.selected_path.as_deref(), Some("work"));
+            testing::click(&mut app, [110.0, 100.0], egui::Modifiers::COMMAND);
+            assert_eq!(app.ui.direct_selection.target, Some(crate::direct_select::PathRef::Work));
+            assert!(!app.ui.direct_selection.anchors.is_empty());
             let n = steps(&app);
             call(&mut app, json!({"events": [{"kind": "down", "x": 110, "y": 100}, {"kind": "move", "x": 150, "y": 150}]}));
             assert_eq!(steps(&app), n);

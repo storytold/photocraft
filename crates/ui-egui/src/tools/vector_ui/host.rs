@@ -117,14 +117,17 @@ fn configure(app: &PhotocraftApp, state: &mut VectorTools) -> Which {
 }
 
 /// The Vector family's tool for one pass: the selected tool, configured from the app.
-pub(crate) fn tool<'a>(scope: &'a ToolScope<'a>, state: &'a mut VectorTools, _host: CanvasHost) -> FamilyTool<'a> {
+pub(crate) fn tool<'a>(scope: &'a ToolScope<'a>, state: &'a mut VectorTools, host: CanvasHost) -> FamilyTool<'a> {
     let which = scope.with_app(|app| configure(app, state));
     // `&mut T` is a `CanvasTool` where `T` is (R92): the selected tool runs as it is.
     match which {
         Which::Pen => Box::new(&mut state.pen),
         Which::Anchors(tool) => Box::new(AnchorTool::new(tool).draft(&mut state.pen)),
         Which::Shapes => Box::new(&mut state.shapes),
-        Which::Freeform => Box::new(&mut state.freeform),
+        Which::Freeform => {
+            scope.with_app(|app| state.freeform.work_path_ends(app, host.idx));
+            Box::new(&mut state.freeform)
+        }
         Which::PathSelection => Box::new(PathSelectionPass { scope, tool: &mut state.path_selection }),
     }
 }
@@ -173,7 +176,11 @@ pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut VectorTools, _response:
     if let Some((points, straight, owner, target)) = state.freeform.take_finished()
         && target.is_none_or(|t| t.valid(app))
     {
-        pen::freeform_finish_owned(app, &points, &straight, owner);
+        if let Some(subpath) = state.freeform.take_continuation() {
+            pen::freeform_finish_continued(app, &points, &straight, owner, Some(subpath));
+        } else {
+            pen::freeform_finish_owned(app, &points, &straight, owner);
+        }
     }
     // PLAN: assumed `PathSelectionTool::owned_by(&mut self, owner: Option<VectorOwner>)` (tools-w35, R94).
     for event in state.path_selection.take_events() {
