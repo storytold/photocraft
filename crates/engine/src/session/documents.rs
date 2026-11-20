@@ -44,6 +44,11 @@ impl Session {
         self.active.and_then(|i| self.docs.get_mut(i))
     }
 
+    /// The open document with this id, active or not.
+    pub fn document_mut(&mut self, id: photocraft_doc::DocId) -> Option<&mut DocState> {
+        self.docs.iter_mut().find(|d| d.doc.id == id)
+    }
+
     /// Monotonic active-document generation. It changes when a different document becomes
     /// active, including a switch away and back between two observations; equal values therefore
     /// mean the document was not switched in between.
@@ -91,7 +96,7 @@ impl Session {
         if let Some(st) = self.active_mut()
             && st.active_layer != layer
         {
-            st.active_layer = layer;
+            st.set_active_layer(layer);
             st.bump_selection_revision();
         }
         self.note_layer_change(before);
@@ -253,7 +258,7 @@ impl Session {
 
 pub(super) fn fix_active(st: &mut DocState) {
     if st.active_layer.is_none_or(|id| st.doc.layer(id).is_none()) {
-        st.active_layer = st.doc.top_layer();
+        st.set_active_layer(st.doc.top_layer());
     }
     fix_selection(st);
     channel_cmds::fix_view(st);
