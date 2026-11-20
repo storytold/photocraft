@@ -93,6 +93,10 @@ pub(super) fn native_pixels(doc: &Document, layer: Option<LayerId>) -> Result<(V
     let r = doc.bounds();
     let fmt = doc.pixel_format();
     let n = fmt.channels();
+    // The source is read as dense samples over the whole canvas, whatever tiles it stores, then
+    // returned as `n` native f32 samples per pixel. Refuse a canvas past the working budget
+    // before reading (an empty canvas can be 300000 px a side).
+    let out = (n as u64).saturating_mul(4);
     match layer {
         Some(id) => {
             let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
@@ -105,6 +109,7 @@ pub(super) fn native_pixels(doc: &Document, layer: Option<LayerId>) -> Result<(V
                     return Err(EngineError::Other(format!("layer \"{}\" has no pixels", l.name)));
                 }
             };
+            crate::allocation::check_dense(r, (s.channels() as u64).saturating_mul(4).saturating_add(out), "reading this channel source")?;
             if s.format() == fmt {
                 return Ok((s.read_region(r), n));
             }
@@ -113,6 +118,8 @@ pub(super) fn native_pixels(doc: &Document, layer: Option<LayerId>) -> Result<(V
             Ok((raw.chunks_exact(sf.channels()).flat_map(|p| from_rgba(&fmt, to_rgba(&sf, p))).collect(), n))
         }
         None => {
+            // The composite is straight RGBA f32.
+            crate::allocation::check_dense(r, 16u64.saturating_add(out), "reading this channel source")?;
             let buf = photocraft_compose::render(doc, r);
             Ok((buf.px.iter().flat_map(|p| from_rgba(&fmt, *p)).collect(), n))
         }
@@ -152,6 +159,13 @@ fn ref_planes(doc: &Document, layer: Option<LayerId>, active: Option<LayerId>, r
     let colors = color_count(doc);
     Ok(match r {
         ChanRef::Composite | ChanRef::Color(_) => {
+            // After `native_pixels` returns its `n` samples per pixel, the colour planes (and for
+            // one channel the toned plane) are built beside them: check that peak first, as
+            // `native_pixels` only checks its own.
+            let n = doc.pixel_format().channels() as u64;
+            let toned = u64::from(matches!(r, ChanRef::Color(_)));
+            let planes = (colors as u64).saturating_add(toned).saturating_mul(4);
+            crate::allocation::check_dense(area, n.saturating_mul(4).saturating_add(planes), "reading this channel source")?;
             let (px, n) = native_pixels(doc, layer)?;
             let planes: Vec<Vec<f32>> = (0..colors).map(|c| px.chunks_exact(n).map(|p| p[c]).collect()).collect();
             match r {
@@ -283,8 +297,8 @@ pub(super) fn source(s: &Session, p: &Value, cmd: &str, gray: bool) -> Result<Ve
 // ---------------------------------------------------------------------------------------------
 // Blending (Apply Image / Calculations)
 
-/// Apply Image / Calculations blending: the separable layer modes plus Add and Subtract with
-/// scale and offset.
+/// Apply Image / Calculations blending: the separable layer modes, Darker Color and Lighter Color,
+/// plus Add and Subtract with scale and offset.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Blending {
     Mode(BlendMode),
@@ -300,16 +314,33 @@ impl Blending {
         match name.to_ascii_lowercase().as_str() {
             "add" => Ok(Blending::Add { scale, offset }),
             "subtract" => Ok(Blending::Subtract { scale, offset }),
-            other => match crate::commands::blend_from_str(other) {
-                Some(m) if m.is_separable() && !matches!(m, BlendMode::Dissolve | BlendMode::PassThrough) => Ok(Blending::Mode(m)),
+            other => match crate::commands::parse_blend(other) {
+                Some(m)
+                    if (m.is_separable() || matches!(m, BlendMode::DarkerColor | BlendMode::LighterColor))
+                        && !matches!(m, BlendMode::Dissolve | BlendMode::PassThrough) =>
+                {
+                    Ok(Blending::Mode(m))
+                }
                 _ => Err(format!("unsupported blending `{other}`")),
             },
         }
     }
 
-    /// Blend `top` (the source) onto `base` (the target).
+    /// Darker Color or Lighter Color: they take the whole pixel from whichever side has the lower
+    /// or higher luminosity, so a colour target blends them per pixel, not with [`Self::apply`].
+    pub fn whole_pixel(self) -> Option<BlendMode> {
+        match self {
+            Blending::Mode(m @ (BlendMode::DarkerColor | BlendMode::LighterColor)) => Some(m),
+            _ => None,
+        }
+    }
+
+    /// Blend `top` (the source) onto `base` (the target). On one plane Darker Color and Lighter
+    /// Color are Darken and Lighten.
     pub fn apply(self, base: f32, top: f32) -> f32 {
         match self {
+            Blending::Mode(BlendMode::DarkerColor) => blend_channel(BlendMode::Darken, base, top),
+            Blending::Mode(BlendMode::LighterColor) => blend_channel(BlendMode::Lighten, base, top),
             Blending::Mode(m) => blend_channel(m, base, top),
             Blending::Add { scale, offset } => (base + top) / scale + offset,
             Blending::Subtract { scale, offset } => (base - top) / scale + offset,

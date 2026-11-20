@@ -2,19 +2,23 @@
 //! the document was opened from it or last saved to it (#6596). Replace writes the document over
 //! it anyway; Cancel leaves the file and the document as they are, and File › Save As keeps both.
 //!
-//! The prompt is an ordinary dialog in the UI state: `ui.dialog.confirm` replaces the file and
+//! The prompt is a `StandardPrompt` on the dialog host: `ui.dialog.confirm` replaces the file and
 //! `ui.dialog.cancel` keeps it. Recorded actions and automation saves don't ask.
 
+use craft::ui::dialog::{PromptAnswer, PromptChoice, StandardPrompt};
 use photocraft_doc::DocId;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
+use super::alerts;
 use crate::PhotocraftApp;
-use crate::state::DialogKind;
 
-const MARK: &str = "__diskChanged";
-
-pub fn owns(fields: &Map<String, Value>) -> bool {
-    fields.contains_key(MARK)
+/// The save the prompt holds back: `doc` to `path`, with the format answers a script gave. `flat` is
+/// a flat file confirmed in the Save dialog.
+pub(crate) struct HeldSave {
+    doc: DocId,
+    pub(crate) path: String,
+    flat: bool,
+    choices: crate::FormatChoices,
 }
 
 /// Opens the prompt instead of saving `doc` to its own file at `path` when another app changed
@@ -24,38 +28,42 @@ pub(crate) fn intercept(app: &mut PhotocraftApp, doc: DocId, path: &str, flat: b
     if !app.changed_on_disk(doc, path) {
         return None;
     }
-    if app.ui.dialogs.iter().any(|d| owns(&d.fields)) {
-        return Some(Ok(json!({"confirmationPending": true})));
-    }
-    let name = crate::file_open::display_name(path);
-    let message = crate::i18n::fmt(tl!("{name} was changed by another app after it was opened or saved here."), &[("name", name.as_str())]);
-    let mut fields = json!({MARK: true, "__label": "Save", "message": message, "document": doc.0, "path": path, "flat": flat});
-    // A script's Targa, DDS or JPEG answer is kept for the save Replace writes.
-    choices.record(&mut fields);
-    let id = app.ui.open_dialog(DialogKind::Command, fields.as_object().cloned().unwrap_or_default());
-    Some(Ok(json!({"dialog": id, "confirmationPending": true})))
+    let prompt = StandardPrompt::changed_on_disk(crate::file_open::display_name(path)).tag(HeldSave { doc, path: path.to_owned(), flat, choices });
+    Some(Ok(match alerts::open_prompt(app, prompt) {
+        Ok(id) => json!({"dialog": id.value(), "confirmationPending": true}),
+        Err(_) => json!({"confirmationPending": true}),
+    }))
 }
 
-pub fn body(ui: &mut egui::Ui, fields: &Map<String, Value>) {
-    ui.label(fields.get("message").and_then(Value::as_str).unwrap_or_default());
-    ui.add_space(6.0);
-    ui.label(tl!("Replace it with this document, or cancel and use File › Save As to keep both."));
+/// The `PROMPTS` entry: Replace runs the save the prompt held back, Cancel leaves the file. `false`
+/// for another family's answer.
+pub(crate) fn answer(app: &mut PhotocraftApp, _ctx: &egui::Context, answer: &mut PromptAnswer) -> bool {
+    let Some(held) = answer.take_tag::<HeldSave>() else { return false };
+    if answer.choice == PromptChoice::Proceed {
+        let result = replace(app, held);
+        alerts::report(app, result);
+    }
+    true
 }
 
 /// Replace: the save the prompt held back.
-pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
-    let doc = fields.get("document").and_then(Value::as_u64).map(DocId).ok_or(tl!("The document is closed"))?;
-    let path = fields.get("path").and_then(Value::as_str).unwrap_or_default().to_string();
-    let flat = fields.get("flat").and_then(Value::as_bool) == Some(true);
-    let choices = crate::FormatChoices::from_step(&Value::Object(fields.clone()), "file.save")?;
+fn replace(app: &mut PhotocraftApp, held: HeldSave) -> Result<Value, String> {
+    let HeldSave { doc, path, flat, choices } = held;
     app.with_document(doc, |app| {
         if flat {
             let from = app.session.journal.len();
             let r = app.save_to(path.clone(), choices)?;
             app.journal_as_plain_save(&path, from);
             Ok(r)
-        } else {
+        } else if app.session.active().is_some_and(|st| crate::saves_flat_in_place(&st.doc, &path)) {
+            // Its own flat file: a JPEG, TIFF, Targa or DDS texture asks its format's options next (#2223).
+            app.save_flat_in_place(path, choices)
+        } else if app.session.active().is_some_and(|st| photocraft_engine::file_cmds::holds_at(&st.doc, &path)) {
             app.save_in_place(path, crate::FormatChoices::default())
+        } else {
+            // The document changed while the prompt was open and its file can't keep it any more:
+            // Save As, never a write over the original with less (#5733).
+            app.save_dialog_flow(None, choices, true)
         }
     })
 }

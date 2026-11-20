@@ -537,12 +537,16 @@ pub fn remap_surface(s: &Surface, map: impl Fn(i32, i32) -> (i32, i32)) -> Surfa
     let r = s.content_bounds();
     let mut out = Surface::with_default(s.format(), &s.default_pixel());
     let n = s.channels();
-    let raw = s.read_region(r);
-    let w = r.width() as usize;
-    for (i, px) in raw.chunks_exact(n).enumerate() {
-        let (x, y) = (r.x0 + (i % w) as i32, r.y0 + (i / w) as i32);
-        let (nx, ny) = map(x, y);
-        out.write_pixel(nx, ny, px);
+    // Tile by tile: unstored pixels read as the default `out` already has, and the content
+    // bounds of a sparse surface can span a grid of mostly nothing.
+    for tr in s.tiles().map(|(c, _)| c.rect().intersect(&r)).filter(|t| !t.is_empty()) {
+        let raw = s.read_region(tr);
+        let w = tr.width() as usize;
+        for (i, px) in raw.chunks_exact(n).enumerate() {
+            let (x, y) = (tr.x0 + (i % w) as i32, tr.y0 + (i / w) as i32);
+            let (nx, ny) = map(x, y);
+            out.write_pixel(nx, ny, px);
+        }
     }
     out
 }
@@ -554,7 +558,7 @@ pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> Layer {
     let mut tmp = Document::new("merge", doc.size, format.mode, format.sample);
     // The pair is read (and a CMYK one separated again) through the document's own profile.
     tmp.icc_profile = doc.icc_profile.clone();
-    tmp.layers = stack;
+    tmp.layers = stack.into();
     // A Background stays canvas-sized; any other layer keeps the pixels outside the canvas (#5067).
     let s = if doc.is_background(lower.id) { composite_layers(&tmp, format, None) } else { composite_layers_uncropped(&tmp, format) };
     let mut merged = Layer::new(lower.name.clone(), LayerContent::Raster(s));

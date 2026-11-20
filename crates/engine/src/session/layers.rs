@@ -5,6 +5,7 @@ use crate::TypeLayerRef;
 impl Session {
     /// Replace the active document's active layer without creating a history step.
     pub fn select_layer(&mut self, id: LayerId) -> Result<()> {
+        let before = self.active_layer_stamp();
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
         if st.doc.layer(id).is_none() {
             return Err(EngineError::NoLayer(id));
@@ -13,13 +14,8 @@ impl Session {
         st.selected_layers = vec![id];
         st.layer_anchor = Some(id);
         channel_cmds::fix_view(st);
-        // Selecting a layer is not an edit: keep a clean document clean.
-        let clean = st.saved_revision == st.revision;
-        st.revision += 1;
-        if clean {
-            st.saved_revision = st.revision;
-        }
-        st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+        st.bump_selection_revision();
+        self.note_layer_change(before);
         Ok(())
     }
 
@@ -28,6 +24,7 @@ impl Session {
     /// is no layer selected. Selected layers that are gone are dropped; an active layer that is
     /// gone is an error and changes nothing. Like [`Self::select_layer`], not an edit.
     pub fn restore_layer_selection(&mut self, active: Option<LayerId>, selected: &[LayerId], anchor: Option<LayerId>) -> Result<()> {
+        let before = self.active_layer_stamp();
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
         if let Some(id) = active
             && st.doc.layer(id).is_none()
@@ -39,12 +36,8 @@ impl Session {
         st.layer_anchor = anchor.filter(|_| active.is_some());
         fix_selection(st);
         channel_cmds::fix_view(st);
-        let clean = st.saved_revision == st.revision;
-        st.revision += 1;
-        if clean {
-            st.saved_revision = st.revision;
-        }
-        st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+        st.bump_selection_revision();
+        self.note_layer_change(before);
         Ok(())
     }
 
@@ -72,9 +65,9 @@ impl Session {
             // font arrived, so its type layers get the same refresh, or returning to it brings the
             // fallback-font pixels back. While it still is the open document, it shares the
             // refreshed one; once edited, it is refreshed on its own, layers the edit removed too.
-            let first_is_doc = st.snapshots.iter().any(|s| s.id == 0 && Arc::ptr_eq(&s.doc, &st.doc));
+            let first_is_doc = st.snapshots().iter().any(|s| s.id == 0 && Arc::ptr_eq(&s.doc, &st.doc));
             if !first_is_doc
-                && let Some(first) = st.snapshots.iter_mut().find(|s| s.id == 0)
+                && let Some(first) = st.snapshots_mut().iter_mut().find(|s| s.id == 0)
                 && let Some(doc) = refresh_text_layers(&first.doc, &ids(true))
             {
                 first.doc = Arc::new(doc);
@@ -91,7 +84,7 @@ impl Session {
             }
             let Some(doc) = refresh_text_layers(&st.doc, &open) else { continue };
             let doc = Arc::new(doc);
-            if first_is_doc && let Some(first) = st.snapshots.iter_mut().find(|s| s.id == 0) {
+            if first_is_doc && let Some(first) = st.snapshots_mut().iter_mut().find(|s| s.id == 0) {
                 first.doc = doc.clone();
             }
             let clean = st.saved_revision == st.revision;
