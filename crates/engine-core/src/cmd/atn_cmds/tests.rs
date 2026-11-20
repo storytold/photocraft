@@ -6442,15 +6442,15 @@ fn every_mapped_command_exports_and_imports_back() {
     assert!(unexpected.is_empty(), "add round-trip cases for {unexpected:?}");
     // Every command the table names exists.
     // (Save is the desktop shell's: recorded by it, replayed by it, written by Batch.)
-    // Paint commands are registered by the engine's paint crate, not by core.
-    let mut paint: Vec<&str> = EVENTS
+    // Paint and vector commands are registered by their crates, not by core.
+    let mut other_crate: Vec<&str> = EVENTS
         .iter()
         .flat_map(|e| e.ids.iter().copied())
         .filter(|id| crate::commands::find(id).is_none() && !crate::actions_cmds::shell_save_command(id) && !crate::actions_cmds::shell_view_command(id))
         .collect();
-    paint.sort_unstable();
-    paint.dedup();
-    assert_eq!(paint, PAINT_COMMANDS, "the .atn table names a command no engine crate registers");
+    other_crate.sort_unstable();
+    other_crate.dedup();
+    assert_eq!(other_crate, OTHER_CRATE_COMMANDS, "the .atn table names a command no engine crate registers");
 }
 
 /// #7103: Photoshop records switching to another open document as a `select` of `Dcmn` by
@@ -6633,5 +6633,5 @@ fn blend_if_with_the_recorded_effects_scale_saves_back_unchanged() {
     assert_eq!(imp.actions[0].steps.iter().map(|st| st.command.as_str()).collect::<Vec<_>>(), [PHOTOSHOP_STEP], "{:?}", imp.actions[0].steps);
 }
 
-/// Commands the .atn table names that the engine's paint crate registers.
-const PAINT_COMMANDS: [&str; 4] = ["edit.fill", "layer.stampVisible", "paint.bucket", "paint.gradient"];
+/// Commands the .atn table names that the engine's paint and vector crates register.
+const OTHER_CRATE_COMMANDS: [&str; 6] = ["edit.fill", "image.trap", "layer.stampVisible", "layerComp.apply", "paint.bucket", "paint.gradient"];

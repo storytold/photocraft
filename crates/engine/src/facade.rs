@@ -20,7 +20,8 @@ pub use photocraft_engine_paint::{
 };
 // The vector-area commands' modules, likewise.
 pub use photocraft_engine_vector::{
-    align_cmds, comps_cmds, layer_css_cmds, layer_xmp_cmds, notes_cmds, path_edit_cmds, rasterize_style_cmds, smart_svg_cmds, trap_cmds, type_area_cmds, type_caret_cmds, type_mask_cmds, type_styles_cmds,
+    align_cmds, comps_cmds, layer_css_cmds, layer_xmp_cmds, notes_cmds, path_edit_cmds, rasterize_style_cmds, smart_svg_cmds, trap_cmds, type_area_cmds,
+    type_caret_cmds, type_mask_cmds, type_styles_cmds,
 };
 
 mod install;
@@ -37,7 +38,8 @@ pub mod commands {
         stamp_cmds,
     };
     pub use photocraft_engine_vector::cmd::{
-        align_cmds, comps_cmds, layer_css_cmds, layer_xmp_cmds, notes_cmds, path_edit_cmds, rasterize_style_cmds, smart_svg_cmds, trap_cmds, type_area_cmds, type_caret_cmds, type_mask_cmds, type_styles_cmds,
+        align_cmds, comps_cmds, layer_css_cmds, layer_xmp_cmds, notes_cmds, path_edit_cmds, rasterize_style_cmds, smart_svg_cmds, trap_cmds, type_area_cmds,
+        type_caret_cmds, type_mask_cmds, type_styles_cmds,
     };
 }
 pub use commands as cmd;

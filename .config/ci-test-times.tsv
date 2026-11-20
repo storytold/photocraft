@@ -14,8 +14,9 @@ bin	linux	photocraft-color	37	1.30
 bin	linux	photocraft-compose	496	84.36
 bin	linux	photocraft-compose::it	9	0.33
 bin	linux	photocraft-doc	85	2.03
-bin	linux	photocraft-engine-core	3464	601.79
+bin	linux	photocraft-engine-core	3275	569.01
 bin	linux	photocraft-engine-paint	626	349.00
+bin	linux	photocraft-engine-vector	189	32.78
 bin	linux	photocraft-engine::global_state	26	16.07
 bin	linux	photocraft-engine::it	741	420.69
 bin	linux	photocraft-engine::panic_hunt	2	21.80
@@ -948,8 +949,9 @@ bin	windows	photocraft-color	37	1.66
 bin	windows	photocraft-compose	496	85.94
 bin	windows	photocraft-compose::it	9	0.49
 bin	windows	photocraft-doc	85	3.26
-bin	windows	photocraft-engine-core	3449	716.31
+bin	windows	photocraft-engine-core	3260	676.84
 bin	windows	photocraft-engine-paint	626	244.23
+bin	windows	photocraft-engine-vector	189	39.47
 bin	windows	photocraft-engine::global_state	25	10.04
 bin	windows	photocraft-engine::it	741	380.02
 bin	windows	photocraft-engine::panic_hunt	2	18.80

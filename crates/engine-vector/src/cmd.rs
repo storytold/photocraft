@@ -1,9 +1,5 @@
 //! The vector-area commands, one module per area.
 
-macro_rules! cmd {
-    ($($spec:tt)*) => { photocraft_engine_core::command_spec!($($spec)*) };
-}
-
 pub mod align_cmds;
 pub mod comps_cmds;
 pub mod layer_css_cmds;

@@ -386,11 +386,6 @@ impl<'a> WarningRenderSources<'a> {
         Self { budget, limit, ..Self::new(document) }
     }
 
-    #[cfg(test)]
-    pub(crate) fn profile_initialized(&self) -> bool {
-        self.srgb.is_some()
-    }
-
     fn image(&mut self, bytes: &Arc<Vec<u8>>, scale: f64, name: [u8; 32]) -> Result<(SourceImage, Vec<String>)> {
         let doc = self.document;
         // Non-SVG and unavailable sources keep their old fast path without
