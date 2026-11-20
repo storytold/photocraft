@@ -69,6 +69,8 @@ mod gradient_options_bar_mode_tests;
 #[cfg(test)]
 mod line_tool_defaults_tests;
 #[cfg(test)]
+mod object_selection_gear_tests;
+#[cfg(test)]
 mod object_selection_mode_tests;
 #[cfg(test)]
 mod path_selection_ctrl_direct_tests;
@@ -80,3 +82,5 @@ mod quick_selection_mode_bar_tests;
 #[cfg(test)]
 mod art_history_reset_tip_tests;
 
+#[cfg(test)]
+mod object_selection_not_found_tests;
