@@ -377,10 +377,23 @@ pub(super) fn image_with_work<'a>(
                                 retention_limited = true;
                                 continue;
                             }
-                            if let Ok(xml) = std::str::from_utf8(data.strip_suffix(&[0]).unwrap_or(data))
-                                && let Ok(tree) = parse_xml(xml)
-                                && tree.root_element().has_tag_name("metadata")
-                            {
+                            let Ok(xml) = std::str::from_utf8(data.strip_suffix(&[0]).unwrap_or(data)) else { continue };
+                            let tree = match parse_xml(xml, ctl) {
+                                Ok(tree) => tree,
+                                Err(crate::IoError::Cancelled) => return Err(crate::IoError::Cancelled),
+                                Err(error) => {
+                                    outcomes.notice(
+                                        owner,
+                                        "xcf.metadata_xml",
+                                        if matches!(error, crate::IoError::Unsupported(_)) { Reason::RetentionLimit } else { Reason::InvalidOptionalData },
+                                        (error.to_string(), "Optional XML metadata skipped; saved image pixels retained".into()),
+                                        Some("skipped optional XML metadata; saved image pixels were preserved"),
+                                        warnings,
+                                    )?;
+                                    continue;
+                                }
+                            };
+                            if tree.root_element().has_tag_name("metadata") {
                                 for node in tree.root_element().children().filter(|n| n.has_tag_name("tag")) {
                                     ctl.check().map_err(|_| super::IoError::Cancelled)?;
                                     if node.attribute("encoding").is_some() {
@@ -452,9 +465,16 @@ pub(super) fn image_with_work<'a>(
     Ok(())
 }
 
-/// Parse bounded optional metadata XML with the parser defaults that reject DTD processing.
-fn parse_xml(xml: &str) -> std::result::Result<roxmltree::Document<'_>, roxmltree::Error> {
-    roxmltree::Document::parse_with_options(xml, roxmltree::ParsingOptions { nodes_limit: 4096, ..Default::default() })
+/// Admit XML parser work before allocating a DOM for optional metadata.
+fn parse_xml<'a>(xml: &'a str, ctl: &photocraft_raster::Interrupt<'_>) -> Result<roxmltree::Document<'a>> {
+    super::xml_work::admit(xml, "source metadata", super::MAX_METADATA_BYTES, super::MAX_DEPTH, ctl)?;
+    let tree =
+        roxmltree::Document::parse_with_options(xml, roxmltree::ParsingOptions { nodes_limit: 4096, ..Default::default() }).map_err(|error| match error {
+            roxmltree::Error::NodesLimitReached => crate::IoError::Unsupported("source metadata exceeds the bounded XML node allowance".into()),
+            _ => super::invalid(format!("invalid source metadata: {error}")),
+        })?;
+    ctl.check().map_err(|_| crate::IoError::Cancelled)?;
+    Ok(tree)
 }
 
 /// Debit optional metadata bytes only when the complete requested amount fits.

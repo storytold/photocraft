@@ -50,6 +50,7 @@ thread_local! {
     static PATH_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static PATH_STRINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static PATH_POINTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(super) static VECTOR_STYLE_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 pub(super) struct DecodedPath {
@@ -137,6 +138,8 @@ fn paint(c: &mut Cursor<'_>, notes: &mut Vec<String>) -> Result<Fill> {
 /// Modified vector pixels must remain a raster fallback rather than using this
 /// shape. Every successful shape starts without a source raster cache.
 pub(super) fn vector_style(data: &[u8]) -> Result<VectorStyle> {
+    #[cfg(test)]
+    VECTOR_STYLE_DECODES.with(|count| count.set(count.get().saturating_add(1)));
     let mut c = Cursor { b: data, pos: 0, wide: false };
     let modified = boolean(&mut c)?;
     let path_tattoo = c.u32()?;

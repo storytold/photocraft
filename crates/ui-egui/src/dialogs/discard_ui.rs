@@ -418,6 +418,43 @@ pub(crate) fn authorize_save(app: &PhotocraftApp, from_control: bool) -> Result<
     }
 }
 
+/// The id the control channel knows the prompt by: `ui.inspect` lists it under this id, and `ui.dialog.confirm` and
+/// `ui.dialog.cancel` answer it by it (docs/control-protocol.md, #4920, #15544).
+pub const CONTROL_ID: &str = "discard";
+
+/// The host's id of the open question, for a control request naming [`CONTROL_ID`].
+pub(crate) fn host_id(app: &PhotocraftApp) -> Option<craft::ui::dialog::DialogId> {
+    app.framework.dialogs.get::<UnsavedChangesDialog>().map(craft::ui::dialog::StackDialog::id)
+}
+
+/// Lists the open question in `dialogs` (the host's `ui.inspect` entries) under [`CONTROL_ID`], its fields adding the
+/// command it holds back, the document it asks about, how many are left to answer, the choices `ui.dialog.confirm`
+/// takes and the default one.
+pub(crate) fn describe(app: &PhotocraftApp, dialogs: &mut Value) {
+    let Some(key) = host_id(app).map(|id| id.value().to_string()) else { return };
+    let Some(entry) = dialogs.as_array_mut().and_then(|list| list.iter_mut().find(|d| d["id"] == key.as_str())) else { return };
+    entry["id"] = json!(CONTROL_ID);
+    let Some(p) = app.discard.as_ref() else { return };
+    let name = p.docs.first().and_then(|&doc| index_of(app, doc)).and_then(|i| app.session.documents().get(i)).map(|d| d.doc.name.clone());
+    let reverts = p.id == "file.revert";
+    let choices: &[&str] = match (reverts, p.docs.len() > 1) {
+        (true, _) => &["dontSave", "cancel"],
+        (false, false) => &["save", "dontSave", "cancel"],
+        (false, true) => &["save", "saveAll", "dontSave", "dontSaveAll", "cancel"],
+    };
+    let described = json!({
+        "command": p.id,
+        "document": name,
+        "remaining": p.docs.len(),
+        "choices": choices,
+        "default": if reverts { "dontSave" } else { "save" },
+    });
+    match entry.get_mut("fields").and_then(Value::as_object_mut) {
+        Some(fields) => fields.extend(described.as_object().cloned().unwrap_or_default()),
+        None => entry["fields"] = described,
+    }
+}
+
 /// The command the prompt holds back and its params, for the automation policy to see before a
 /// control client answers it.
 pub fn pending_command(app: &PhotocraftApp) -> Option<(String, Value)> {

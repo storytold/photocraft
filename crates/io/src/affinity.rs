@@ -203,7 +203,7 @@ impl Builder<'_> {
             l.locks.position = true;
             layers.insert(0, l);
         }
-        self.doc.layers = layers;
+        self.doc.layers = layers.into();
         Ok(())
     }
 

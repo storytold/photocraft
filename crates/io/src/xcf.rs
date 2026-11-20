@@ -25,6 +25,7 @@ mod layers;
 mod samples;
 mod wire;
 mod work_budget;
+mod xml_work;
 // Parsed fields stay inert until native mapping slices land.
 #[cfg(test)]
 mod coverage_tests;
@@ -143,6 +144,7 @@ struct Image<'a> {
     /// offsets referencing one record with a large name would otherwise allocate an owned
     /// copy per reference, multiplying a small file into gigabytes of retained metadata.
     meta_budget: usize,
+    vector_style_work_left: usize,
     /// Nonrefundable effect decoding work shared across all drawable/coverage owners.
     effect_decode_work: effects::DecodeWork,
     /// Nonrefundable configuration and inherited attribute work across all text owners.
@@ -1082,6 +1084,7 @@ fn import_with_sample_order_and_parasite_work(
         colormap,
         budget: MAX_PIXEL_BYTES,
         meta_budget: MAX_METADATA_BYTES,
+        vector_style_work_left: MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),
         parasite_work,
@@ -1168,7 +1171,7 @@ fn import_with_sample_order_and_parasite_work(
     let (channels, selection) = image.import_channels(&channel_ptrs, mask_fmt, ctl)?;
 
     let mut document = Document::new(name, Size::new(w, h), mode, depth);
-    document.layers = layers;
+    document.layers = layers.into();
     document.channels = channels;
     document.selection = selection;
     metadata::image_with_work(

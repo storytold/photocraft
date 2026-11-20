@@ -217,6 +217,7 @@ fn full_report_coverage_inventory_still_warns_without_reading_optional_source() 
         colormap: Vec::new(),
         budget: 0,
         meta_budget: 0,
+        vector_style_work_left: crate::xcf::MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),
         parasite_work: Default::default(),

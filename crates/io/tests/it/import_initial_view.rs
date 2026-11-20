@@ -52,11 +52,11 @@ fn initial_view_validates_native_ids_masks_channels_and_sampler_capacity() {
 fn initial_view_rejects_ambiguous_ids_and_excessive_hierarchy() {
     let mut doc = Document::new("Invalid hierarchy", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
     let layer = Layer::raster("Repeated", doc.pixel_format());
-    doc.layers = vec![layer.clone(), layer];
+    doc.layers = vec![layer.clone(), layer].into();
     assert!(NativeInitialView::default().validate(&doc).is_err());
     doc.layers.truncate(1);
     for _ in 0..=photocraft_doc::MAX_GROUP_DEPTH {
-        doc.layers = vec![Layer::group("Nested", std::mem::take(&mut doc.layers))];
+        doc.layers = vec![Layer::group("Nested", std::mem::take(&mut *doc.layers))].into();
     }
     assert!(NativeInitialView::default().validate(&doc).is_err());
 }

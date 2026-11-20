@@ -73,6 +73,7 @@ fn image(bytes: &[u8]) -> Image<'_> {
         colormap: Vec::new(),
         budget: MAX_PIXEL_BYTES,
         meta_budget: MAX_METADATA_BYTES,
+        vector_style_work_left: crate::xcf::MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),
         parasite_work: Default::default(),
@@ -184,7 +185,7 @@ fn unavailable_native_vector_colors_preserve_the_saved_raster() {
     let mut image = image(&bytes);
     let (layers, _) = image.import_layers(&[1], PixelFormat::RGBA8, PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false), &Interrupt::NONE).unwrap();
     let mut document = Document::new("Vector", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
-    document.layers = layers;
+    document.layers = layers.into();
     if let LayerContent::Raster(pixels) = &mut document.layers[0].content {
         pixels.write_region(Rect::new(0, 0, 1, 1), &[1., 0., 0., 1.]);
     }

@@ -97,7 +97,7 @@ fn rgb_layers_and_off_canvas_pixels_match_native_data_in_both_source_spaces() {
         screen.blend = BlendMode::Screen;
         let mut hidden = raster("Hidden", fmt, 10, 10, (28, 2), 11, false);
         hidden.visible = false;
-        expected.layers = vec![bg, multiply, screen, hidden];
+        expected.layers = vec![bg, multiply, screen, hidden].into();
         compare(open(name), expected);
     }
 }
@@ -117,7 +117,7 @@ fn isolated_and_pass_through_groups_match_native_groups() {
     let mut group = Layer::group("Group", vec![multiply, nested]);
     group.blend = BlendMode::Normal;
     group.opacity = 0.7;
-    expected.layers = vec![bg, group, raster("Top", fmt, 12, 8, (26, 20), 9, false)];
+    expected.layers = vec![bg, group, raster("Top", fmt, 12, 8, (26, 20), 9, false)].into();
     compare(open("groups-perceptual.xcf"), expected);
 }
 
@@ -126,7 +126,7 @@ fn isolated_and_pass_through_groups_match_native_groups() {
 fn gray16_matches_native_gray16_without_reducing_to_rgb8() {
     let mut expected = Document::new("Native", Size::new(40, 30), ColorMode::Grayscale, SampleType::U16);
     let fmt = expected.pixel_format();
-    expected.layers = vec![raster("Background", fmt, 40, 30, (0, 0), 0, true), raster("Gray alpha", fmt, 20, 15, (10, 8), 9, false)];
+    expected.layers = vec![raster("Background", fmt, 40, 30, (0, 0), 0, true), raster("Gray alpha", fmt, 20, 15, (10, 8), 9, false)].into();
     compare(open("gray16.xcf"), expected);
 }
 
@@ -156,7 +156,7 @@ fn enabled_and_disabled_masks_remain_native_coverage_masks() {
         density: 1.0,
         feather: 0.0,
     });
-    expected.layers = vec![bg, masked, disabled];
+    expected.layers = vec![bg, masked, disabled].into();
     compare(open("mask-perceptual.xcf"), expected);
 }
 

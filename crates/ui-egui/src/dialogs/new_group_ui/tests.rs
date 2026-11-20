@@ -36,7 +36,7 @@ fn ok_creates_the_group_with_the_options_in_one_step_and_cancel_changes_nothing(
     let id = open(&mut app, NEW_GROUP);
     set(&mut app, id, "name", json!("Sky")).unwrap();
     set(&mut app, id, "color", json!("blue")).unwrap();
-    set(&mut app, id, "mode", json!(crate::panels::layers_tree::blend_key(BlendMode::Multiply))).unwrap();
+    set(&mut app, id, "mode", json!(BlendMode::Multiply.key().to_string())).unwrap();
     set(&mut app, id, "opacity", json!(60.0)).unwrap();
     crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
     assert_eq!(steps(&app), initial + 1, "one history step");

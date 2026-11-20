@@ -1,6 +1,11 @@
 use super::*;
 use std::cell::Cell;
 
+fn check_markup_namespace_work(markup: &str, work_left: usize) -> Result<()> {
+    let limits = craft_xml::Limits { max_input: super::super::MAX_STRING, max_depth: MAX_DEPTH, max_attrs: 256, ..Default::default() };
+    super::super::xml_work::check_namespace_work(markup, "source text markup", limits, work_left, &photocraft_raster::Interrupt::NONE)
+}
+
 fn attributes(count: usize) -> String {
     (0..count).map(|index| format!("a{index}='inert' ")).collect()
 }

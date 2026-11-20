@@ -6,6 +6,10 @@ use super::{
     conversion, finish, invalid, label, metadata, paths, place, props, resources, text, write_pixels,
 };
 
+// Each vector style can construct two color transforms, even for a small ICC
+// profile. Charge fixed work as well as the bytes whose parsing/copying it drives.
+pub(super) const VECTOR_STYLE_BASE_WORK: usize = 4 << 10;
+
 #[cfg(test)]
 mod alpha_budget_tests;
 
@@ -587,6 +591,50 @@ impl<'a> Image<'a> {
         }
     }
 
+    fn layer_vector_style(&mut self, layer: photocraft_doc::LayerId, outcome: usize, data: &[u8], ctl: &Interrupt<'_>) -> Result<()> {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        let work = data.len().saturating_add(VECTOR_STYLE_BASE_WORK);
+        if !super::work_budget::WorkBudget::new(&mut self.vector_style_work_left).keep_remaining(work) {
+            return self.outcomes.notice(
+                outcome,
+                "xcf.vector_layer",
+                ConversionReason::RetentionLimit,
+                ("Document vector-style decode-work allowance exhausted".into(), "Vector style skipped; saved raster pixels retained".into()),
+                Some("reached the shared vector-style decode-work allowance and opens as saved pixels"),
+                &mut self.warnings,
+            );
+        }
+        let style = paths::vector_style(data);
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        match style {
+            Ok(style) => {
+                let strings = style.source_only.iter().try_fold(
+                    std::mem::size_of::<paths::VectorStyle>().saturating_add(style.source_only.capacity().saturating_mul(std::mem::size_of::<String>())),
+                    |bytes, note| bytes.checked_add(note.capacity()),
+                );
+                // Reused source records still create distinct owned diagnostics.
+                if let Some(remaining) = strings.and_then(|strings| self.meta_budget.checked_sub(strings)) {
+                    self.meta_budget = remaining;
+                    self.pending_vectors.push((layer, outcome, style));
+                } else {
+                    self.metadata_limit(outcome, "xcf.vector_layer", "Editable vector metadata exceeds the remaining allowance; saved raster pixels retained")?;
+                }
+            }
+            Err(error) => self.outcomes.notice(
+                outcome,
+                "xcf.vector_layer",
+                if matches!(error, IoError::Unsupported(_)) { ConversionReason::MissingMapping } else { ConversionReason::InvalidOptionalData },
+                (
+                    format!("Source vector style could not be translated: {error}"),
+                    "Stored pixels preserved as a native raster; source style remains inert".into(),
+                ),
+                Some("has unsupported or invalid vector paint and opens as pixels"),
+                &mut self.warnings,
+            )?,
+        }
+        Ok(())
+    }
+
     /// Reads a layer structure, and whether GIMP composites it in linear light.
     pub(super) fn layer(&mut self, ordinal: usize, ptr: usize, fmt: PixelFormat, mask_fmt: PixelFormat, ctl: &Interrupt<'_>) -> Result<Option<(Node, bool)>> {
         let mut c = self.c.at(ptr);
@@ -751,36 +799,7 @@ impl<'a> Image<'a> {
             && !group
             && let Some(property) = lprops.iter().rev().find(|p| p.kind == 47)
         {
-            match paths::vector_style(property.data) {
-                Ok(style) => {
-                    let strings = style.source_only.iter().try_fold(
-                        std::mem::size_of::<paths::VectorStyle>().saturating_add(style.source_only.capacity().saturating_mul(std::mem::size_of::<String>())),
-                        |bytes, note| bytes.checked_add(note.capacity()),
-                    );
-                    // Reused source records still create distinct owned diagnostics.
-                    if let Some(remaining) = strings.and_then(|strings| self.meta_budget.checked_sub(strings)) {
-                        self.meta_budget = remaining;
-                        self.pending_vectors.push((layer.id, outcome, style));
-                    } else {
-                        self.metadata_limit(
-                            outcome,
-                            "xcf.vector_layer",
-                            "Editable vector metadata exceeds the remaining allowance; saved raster pixels retained",
-                        )?;
-                    }
-                }
-                Err(error) => self.outcomes.notice(
-                    outcome,
-                    "xcf.vector_layer",
-                    if matches!(error, IoError::Unsupported(_)) { ConversionReason::MissingMapping } else { ConversionReason::InvalidOptionalData },
-                    (
-                        format!("Source vector style could not be translated: {error}"),
-                        "Stored pixels preserved as a native raster; source style remains inert".into(),
-                    ),
-                    Some("has unsupported or invalid vector paint and opens as pixels"),
-                    &mut self.warnings,
-                )?,
-            }
+            self.layer_vector_style(layer.id, outcome, property.data, ctl)?;
         }
         if text && !group && !parasites_limited {
             self.layer_text(&mut layer, &lprops, (x, y), outcome, ctl)?;

@@ -15,6 +15,7 @@ fn image(bytes: &[u8]) -> Image<'_> {
         colormap: Vec::new(),
         budget: 16 + usize::try_from(photocraft_raster::tile_storage_bytes(Rect::new(0, 0, 1, 1), &PixelFormat::RGBA8)).unwrap(),
         meta_budget: META_ALLOWANCE,
+        vector_style_work_left: crate::xcf::MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),
         parasite_work: Default::default(),
@@ -122,7 +123,7 @@ fn malformed_auxiliary_header_refunds_only_provisional_metadata_for_repeated_own
         && entry.disposition == ConversionDisposition::SkippedNonessential
         && entry.source.record_offset == Some(malformed as u64)));
     let mut document = Document::new("Refunded optional header", photocraft_geom::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
-    document.layers = layers;
+    document.layers = layers.into();
     document.metadata.import_conversion = Some(Arc::new(conversion));
     let saved = photocraft_format::save_to_bytes(&document, &Default::default()).unwrap();
     assert_eq!(photocraft_format::load_from_bytes(&saved).unwrap().metadata.import_conversion, document.metadata.import_conversion);

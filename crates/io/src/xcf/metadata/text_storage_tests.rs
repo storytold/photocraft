@@ -116,7 +116,13 @@ fn metadata_tag_admission_observes_cancellation_during_a_single_xml_property() {
     let pixels = document.layers.clone();
     let mut budget = 1 << 20;
     let polls = AtomicUsize::new(0);
-    let cancel = || polls.fetch_add(1, Ordering::Relaxed) >= 16;
+    let count_preflight = || {
+        polls.fetch_add(1, Ordering::Relaxed);
+        false
+    };
+    parse_xml(&xml, &Interrupt::cancel_only(&count_preflight)).unwrap();
+    let preflight_polls = polls.swap(0, Ordering::Relaxed);
+    let cancel = || polls.fetch_add(1, Ordering::Relaxed) >= preflight_polls + 16;
     let result =
         image(&mut document, &props, 26, &mut Default::default(), &mut outcomes, owner, &mut budget, &mut Default::default(), &Interrupt::cancel_only(&cancel));
     assert!(matches!(result, Err(crate::IoError::Cancelled)));

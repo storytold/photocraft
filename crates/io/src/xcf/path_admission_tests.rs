@@ -1,4 +1,4 @@
-use super::tests::{W, hierarchy};
+use super::tests::{TestImage, TestLayer, W, hierarchy};
 use super::*;
 use photocraft_doc::import_conversion::ImportConversion;
 
@@ -13,6 +13,7 @@ fn image(bytes: &[u8]) -> Image<'_> {
         colormap: Vec::new(),
         budget: MAX_PIXEL_BYTES,
         meta_budget: MAX_METADATA_BYTES,
+        vector_style_work_left: crate::xcf::MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),
         parasite_work: Default::default(),
@@ -337,6 +338,56 @@ fn vector_geometry_copy_shortage_keeps_raster_and_reports_retention_limit() {
             assert_eq!(image.meta_budget, 0);
         }
     }
+}
+
+#[test]
+fn vector_style_work_counts_each_layer_reference_before_decoding() {
+    let profile = craft_cms::Builtin::DisplayP3.profile().to_bytes();
+    let mut style = W { out: Vec::new(), wide: false };
+    for value in [0, 7, 1, 0] {
+        style.u32(value);
+    }
+    for _ in 0..2 {
+        style.u32(0); // Solid paint.
+        style.u32(1); // Antialias.
+        style.string("R'G'B'A u8");
+        style.u32(4);
+        style.out.extend([11, 84, 151, 255]);
+        style.u32(profile.len() as u32);
+        style.out.extend_from_slice(&profile);
+        style.string("");
+    }
+    for value in [1f32.to_bits(), 0, 0, 4f32.to_bits(), 0] {
+        style.u32(value);
+    }
+    let saved = vec![17, 31, 57, 255];
+    let mut fixture = TestImage::rgb8(1, 1);
+    fixture.version = 26;
+    fixture.compression = Compression::None;
+    let mut layer = TestLayer::rgba("Vector", 1, 1, saved.clone());
+    layer.props.push((47, style.out.clone()));
+    fixture.layers.push(layer);
+    let bytes = fixture.write();
+    let mut cursor = Cursor { b: &bytes, pos: 30, wide: true };
+    props_version(&mut cursor, Some(26)).unwrap();
+    let ptr = cursor.ptr().unwrap();
+
+    let mut decoder = image(&bytes);
+    decoder.vector_style_work_left = style.out.len() + layers::VECTOR_STYLE_BASE_WORK;
+    paths::VECTOR_STYLE_DECODES.with(|count| count.set(0));
+    let (layers, _) =
+        decoder.import_layers(&[ptr, ptr], PixelFormat::RGBA8, PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false), &Interrupt::NONE).unwrap();
+    assert_eq!(decoder.vector_style_work_left, 0);
+    assert_eq!(paths::VECTOR_STYLE_DECODES.with(std::cell::Cell::get), 1);
+    assert_eq!(decoder.pending_vectors.len(), 1);
+    assert_eq!(layers.len(), 2);
+    let expected: Vec<_> = saved.iter().map(|&v| f32::from(v) / 255.).collect();
+    assert!(layers.iter().all(|layer| layer.surface().unwrap().pixel(0, 0) == expected));
+    assert!(decoder.warnings.finish().iter().any(|warning| warning.contains("vector-style decode-work allowance")));
+    let ImportConversion::Report(report) = decoder.outcomes.finish().unwrap() else { panic!("conversion report") };
+    let limited = report.entries.iter().find(|entry| entry.feature_code == "xcf.vector_layer" && entry.reason == ConversionReason::RetentionLimit).unwrap();
+    assert_eq!(limited.source.ordinal, 1);
+    assert!(report.attachments.iter().any(|attachment| attachment.bytes.as_slice() == style.out));
 }
 
 fn raster_with_path_tail(tail: &[u8]) -> Vec<u8> {

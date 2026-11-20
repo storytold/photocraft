@@ -54,7 +54,9 @@ impl Session {
             st.history.set_current_layers(target.clone());
             // The opened snapshot predates this one-time view handoff. Update its target only
             // while it still holds this exact admitted document, never an older edited state.
-            if let Some(snapshot) = st.snapshots.iter_mut().find(|snapshot| snapshot.id == 0 && Arc::ptr_eq(&snapshot.doc, &st.doc)) {
+            if let Some(index) = st.snapshots().iter().position(|snapshot| snapshot.id == 0 && Arc::ptr_eq(&snapshot.doc, &st.doc))
+                && let Some(snapshot) = st.snapshots_mut().get_mut(index)
+            {
                 snapshot.layers = target;
             }
         }
@@ -121,7 +123,7 @@ mod initial_view_tests {
         assert_eq!(state.channel_view, default_view.channel_view);
         assert_eq!(state.color_samplers, default_view.color_samplers);
         assert_eq!((state.revision, state.saved_revision, state.history.past_len()), (default_view.revision, default_view.saved_revision, 0));
-        assert_eq!(state.snapshots.first().unwrap().layers, default_view.snapshots.first().unwrap().layers);
+        assert_eq!(state.snapshots().first().unwrap().layers, default_view.snapshots().first().unwrap().layers);
         let saved = photocraft_format::save_to_bytes(&state.doc, &Default::default()).unwrap();
         let reopened = photocraft_io::import("retained.pcraft", &saved).unwrap();
         assert!(reopened.initial_view.is_none());
@@ -198,8 +200,8 @@ mod initial_view_tests {
             assert_eq!(admitted.channel_view.target, crate::channel_cmds::ChannelTarget::Composite);
             assert!(!session.tools.mask_targeted);
             assert_eq!(admitted.history.past_len(), 0);
-            assert_eq!(admitted.snapshots.first().unwrap().layers.active, default_layer);
-            assert_eq!(admitted.snapshots.first().unwrap().layers.selected, admitted.selected_layers);
+            assert_eq!(admitted.snapshots().first().unwrap().layers.active, default_layer);
+            assert_eq!(admitted.snapshots().first().unwrap().layers.selected, admitted.selected_layers);
             assert_eq!(admitted.doc.layers[0].surface().unwrap().pixel(0, 0), expected_pixels.pixel(0, 0));
             for (state, previous) in session.documents().iter().zip(before) {
                 assert!(Arc::ptr_eq(&state.doc, &previous.doc));
@@ -447,7 +449,7 @@ mod initial_view_tests {
             assert_eq!(st.revision, before.revision);
             assert_eq!(st.saved_revision, before.saved_revision);
             assert_eq!(st.history.past_len(), before.history.past_len());
-            assert_eq!(st.snapshots.first().unwrap().layers, before.snapshots.first().unwrap().layers);
+            assert_eq!(st.snapshots().first().unwrap().layers, before.snapshots().first().unwrap().layers);
         }
     }
 

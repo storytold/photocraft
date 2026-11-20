@@ -60,6 +60,7 @@ fn image(bytes: &[u8], work: DecodeWork) -> Image<'_> {
         colormap: Vec::new(),
         budget: MAX_PIXEL_BYTES,
         meta_budget: MAX_METADATA_BYTES,
+        vector_style_work_left: crate::xcf::MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         parasite_work: Default::default(),
         text_decode_work: work,
@@ -124,7 +125,7 @@ fn file_attribute_work_survives_same_pointer_and_distinct_owners_with_raster_per
             let failed_config = if distinct { &configs[2] } else { &configs[0] };
             assert!(details.attachments.iter().any(|attachment| attachment.bytes.windows(failed_config.len()).any(|part| part == failed_config.as_slice())));
             let mut doc = Document::new("File work", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
-            doc.layers = layers;
+            doc.layers = layers.into();
             doc.metadata.import_conversion = Some(std::sync::Arc::new(report));
             let saved = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
             let reopened = photocraft_format::load_from_bytes(&saved).unwrap();

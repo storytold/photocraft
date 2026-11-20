@@ -14,6 +14,7 @@ fn image(bytes: &[u8], metadata: usize) -> Image<'_> {
         colormap: Vec::new(),
         budget: MAX_PIXEL_BYTES,
         meta_budget: metadata,
+        vector_style_work_left: crate::xcf::MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),
         parasite_work: Default::default(),
@@ -201,7 +202,7 @@ fn omitted_auxiliary_mask_names_keep_inventory_and_later_pixels_with_persistent_
         "the child effect remains inventoried after its mask name is omitted"
     );
     let mut document = Document::new("Retained pixels", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
-    document.layers = layers;
+    document.layers = layers.into();
     persist(document, image, &["xcf.coverage_effect_mask_name"]);
 }
 
@@ -237,7 +238,7 @@ fn optional_layer_names_paths_and_vector_notes_keep_all_saved_rasters_after_meta
     }
     assert!(image.pending_vectors.is_empty(), "an inadmissible editable style cannot replace saved pixels");
     let mut document = Document::new("Usable raster", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
-    document.layers = layers;
+    document.layers = layers.into();
     persist(document, image, &["xcf.item_path", "xcf.vector_layer", "xcf.layer_name"]);
 }
 
@@ -260,7 +261,7 @@ fn channel_and_mask_names_and_effect_lists_are_optional_to_valid_coverage_pixels
         assert_eq!(layer.surface().unwrap().pixel(0, 0), vec![17. / 255., 31. / 255., 57. / 255., 1.]);
     }
     let mut document = Document::new("Usable coverage", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
-    document.layers = layers;
+    document.layers = layers.into();
     document.channels = channels;
     persist(document, image, &["xcf.channel_name", "xcf.mask_name", "xcf.coverage_effect"]);
 }
@@ -297,7 +298,7 @@ fn coverage_inventory_exhaustion_at_each_work_stage_preserves_a_later_raster_and
         let (layers, _) = image.import_layers(&[later], PixelFormat::RGBA8, PixelFormat::GRAY8, &Interrupt::NONE).unwrap();
         assert_eq!(layers[0].surface().unwrap().pixel(0, 0), vec![17. / 255., 31. / 255., 57. / 255., 1.]);
         let mut document = Document::new("Later raster", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
-        document.layers = layers;
+        document.layers = layers.into();
         // The mask-header stage may use its narrower feature code.
         let features: &[&str] =
             if allowance == work + visit + effect_bytes + mask_bytes - 1 { &["xcf.coverage_effect_mask"] } else { &["xcf.coverage_effect"] };
@@ -356,7 +357,7 @@ fn valid_effect_config_quota_is_retention_loss_not_malformed_and_keeps_later_ras
         let (layers, _) = image.import_layers(&[later], PixelFormat::RGBA8, PixelFormat::GRAY8, &Interrupt::NONE).unwrap();
         assert_eq!(layers[0].surface().unwrap().pixel(0, 0), vec![17. / 255., 31. / 255., 57. / 255., 1.]);
         let mut document = Document::new("Config quota preserves raster", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
-        document.layers = layers;
+        document.layers = layers.into();
         persist(document, image, &["xcf.coverage_effect"]);
     }
     let mut malformed_budget = MAX_METADATA_BYTES;

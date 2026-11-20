@@ -65,6 +65,35 @@ fn optional_invalid_xml_and_comment_remain_inert() {
     assert_eq!(report.attachments.len(), 3);
 }
 
+#[test]
+fn metadata_xml_admission_preserves_pixels_and_reports_skipped_tags() {
+    use photocraft_doc::import_conversion::{ConversionReason, ImportConversion};
+    let expected = vec![17. / 255., 31. / 255., 57. / 255., 1.];
+    let with_attributes = |count| {
+        let attributes: String = (0..count).map(|index| format!(" a{index}='x'")).collect();
+        format!("<metadata{attributes}><tag name='Xmp.dc.title'>Title</tag></metadata>")
+    };
+    let declarations: String = (0..1500).map(|index| format!("<other xmlns:p{index}='urn:p{index}'/>")).collect();
+    let with_namespaces = format!("<metadata>{declarations}<tag name='Xmp.dc.title'>Title</tag></metadata>");
+    for (xml, limit) in [(with_attributes(256), None), (with_attributes(257), Some("attribute-parse")), (with_namespaces, Some("namespace-parse"))] {
+        let mut image = TestImage::rgb8(1, 1);
+        image.layers.push(TestLayer::rgba("Saved pixels", 1, 1, vec![17, 31, 57, 255]));
+        image.image_props.push((21, parasite("gimp-image-metadata", xml.as_bytes())));
+        let result = open(&image.write());
+        assert_eq!(result.document.layers[0].surface().unwrap().pixel(0, 0), expected);
+        let title = result.document.metadata.text.iter().any(|(name, value)| name == "Xmp.dc.title" && value == "Title");
+        assert_eq!(title, limit.is_none());
+        if let Some(limit) = limit {
+            assert!(result.warnings.iter().any(|warning| warning.contains("skipped optional XML metadata")));
+            let Some(ImportConversion::Report(report)) = result.document.metadata.import_conversion.as_deref() else { panic!("conversion report") };
+            assert!(report.entries.iter().any(|entry| entry.feature_code == "xcf.metadata_xml"
+                && entry.reason == ConversionReason::RetentionLimit
+                && entry.source_description.contains(limit)));
+            assert!(report.attachments.iter().any(|attachment| attachment.bytes.ends_with(xml.as_bytes())));
+        }
+    }
+}
+
 /// Check historical guide domains, valid DPI and unsupported unit disclosures against the native metadata policy.
 #[test]
 fn guides_resolution_and_units_follow_native_limits_and_documented_versions() {

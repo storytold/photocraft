@@ -14,6 +14,7 @@ fn image(bytes: &[u8], metadata: usize) -> Image<'_> {
         colormap: Vec::new(),
         budget: MAX_PIXEL_BYTES,
         meta_budget: metadata,
+        vector_style_work_left: crate::xcf::MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),
         parasite_work: Default::default(),
@@ -91,7 +92,7 @@ fn duplicate_terminated_effect_lists_preserve_raster_mask_channel_and_native_pix
     assert_eq!(layers.iter().find_map(|layer| layer.mask.as_ref()).unwrap().surface.pixel(0, 0), vec![128. / 255.]);
     assert_eq!(channels[0].surface.pixel(0, 0), vec![128. / 255.]);
     let mut document = Document::new("Usable pixels", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
-    document.layers = layers;
+    document.layers = layers.into();
     document.channels = channels;
     persist(&mut document, image);
     let Some(ImportConversion::Report(report)) = document.metadata.import_conversion.as_deref() else { panic!("report") };
@@ -234,7 +235,7 @@ fn repeated_discarded_configs_leave_the_exact_retained_allowance_for_accepted_da
     let (layers, _) = image.import_layers(&[later], PixelFormat::RGBA8, PixelFormat::GRAY8, &Interrupt::NONE).unwrap();
     assert_eq!(layers[0].surface().unwrap().pixel(0, 0), vec![17. / 255., 31. / 255., 57. / 255., 1.]);
     let mut document = Document::new("Later raster", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
-    document.layers = layers;
+    document.layers = layers.into();
     persist(&mut document, image);
 }
 

@@ -34,7 +34,7 @@ use photocraft_raster::Surface;
 use serde_json::{Value, json};
 use stack_cache::{Stage, StageKey};
 
-use crate::commands::{CommandSpec, blend_from_str, layer_param};
+use crate::commands::{CommandSpec, layer_param, parse_blend};
 use crate::jobs::JobCtx;
 use crate::{EngineError, Result, Session};
 

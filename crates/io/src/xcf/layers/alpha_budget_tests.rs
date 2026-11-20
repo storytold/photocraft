@@ -79,6 +79,7 @@ fn image(bytes: &[u8], budget: usize, base_type: u32, precision: Precision) -> I
         colormap: Vec::new(),
         budget,
         meta_budget: MAX_METADATA_BYTES,
+        vector_style_work_left: crate::xcf::MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),
         parasite_work: Default::default(),
