@@ -664,7 +664,8 @@ mod tests {
             let track = horizontal.rect();
             let thumb_center = vertical.rect().center();
             if rulers {
-                assert!(vertical.rect().top() < view.rect.top(), "the visible view is inset below the rulers");
+                // As in 0.23.1, the scroll bars run along the view inside the rulers.
+                assert!((vertical.rect().top() - view.rect.top()).abs() < 0.5, "the vertical scroll bar starts at the view's top, below the ruler");
             }
             let room = |length: f32, document: f64| if overscroll { f64::from(length) - document } else { 0.0 };
             let x_room = room(view.rect.width(), 400.0);
