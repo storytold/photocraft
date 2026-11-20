@@ -132,7 +132,7 @@ jobs:
           else
             echo "web=false" >> "$GITHUB_OUTPUT"
           fi
-          if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/|crates/(ui-egui|text|gpu|tablet|heif|format)/|Cargo\.lock$|craft-i18n\.rev$|(.*/)?build\.rs$|\.cargo/config\.toml$|\.config/nextest\.toml$|xtask/|scripts/ci-test-shard\.sh$|\.github/workflows/ci\.yml$)'; then
+          if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/|crates/(ui-egui|text|gpu|tablet|heif|format)/|Cargo\.lock$|craft-i18n\.rev$|(.*/)?build\.rs$|\.cargo/config\.toml$|\.config/nextest\.toml$|\.config/ci-test-times\.tsv$|xtask/|scripts/ci-test-shard\.sh$|\.github/workflows/ci\.yml$)'; then
             echo "windows=true" >> "$GITHUB_OUTPUT"
           else
             echo "windows=false" >> "$GITHUB_OUTPUT"
@@ -149,15 +149,17 @@ jobs:
           fi
 
   # The Linux gate (craft-common-actions gate.yml). Its `lint` leg runs the checks that need no test
-  # build. The `build` job builds the tests once into a nextest archive (`cargo xtask ci archive`),
-  # uploads it and then runs the doctests; four test shards download the archive and run their
-  # share (scripts/ci-test-shard.sh). Shard 1 runs nextest's `gpu` group alone, on lavapipe, and
+  # build. The `build` job builds the tests once and writes one nextest archive per shard
+  # (`cargo xtask ci archive`, `shard-archives`), each with only the test binaries that shard runs,
+  # balanced by .config/ci-test-times.tsv (xtask/src/shards.rs); it uploads them and then runs the
+  # doctests. Each of the four test shards downloads its own archive and runs it
+  # (scripts/ci-test-shard.sh). Shard 1 runs nextest's `gpu` group alone, on lavapipe, and
   # fails on a skipped GPU comparison (scripts/ci-gpu-lavapipe.py); shards 2-4 split the other
   # tests. The `gpu` group is ~840 test-seconds on 4 slots (~3.5 min); the other ~6900
   # test-seconds over 3 shards are ~8.5-10.5 min each.
   # The build keeps the compiled workspace crates between runs (`cache-workspace-crates`), so a
   # pull request rebuilds only the crates its changes reach. Each main run's build job saves a
-  # rolling entry of its own, which `test (without heif)` restores too; `gate-cache-prune` keeps
+  # rolling entry of its own, which `test (without heif)` restores too; `cache-prune` keeps
   # the newest one. The lint legs keep no cache (`lint-cache: false`): a cold lint leg costs
   # minutes, and their entries (~1 GB per OS) would not fit the 10 GB cache budget.
   gate:
@@ -189,16 +191,18 @@ jobs:
       # fmt, egui-fork, clippy, layers, panel-commands, scorecard, the wasm32 check and the
       # missing-translations report (`cargo xtask ci lint`, xtask/src/main.rs), and the CI scripts'
       # own tests.
-      lint-command: python3 scripts/test-ci-gpu-lavapipe.py && python3 scripts/test-ci-windows-gpu-tests.py && cargo xtask ci lint
-      archive-command: cargo xtask ci archive
+      lint-command: python3 scripts/test-ci-gpu-lavapipe.py && python3 scripts/test-ci-windows-gpu-tests.py && python3 scripts/test-ci-test-times.py && cargo xtask ci lint
+      archive-command: cargo xtask ci archive --gpu-shard
       after-archive-command: cargo xtask ci doctest
       test-shards: 4
+      shard-archives: true
       # The tests and panic_hunt with `--locked --features heif` (TEST_TARGETS in xtask/src/main.rs).
       shard-command: bash scripts/ci-test-shard.sh --gpu-shard
 
   # The Windows tests and Clippy on the same gate, when `platforms` says the run needs them: a
-  # `lint` leg runs Clippy, the `build` job builds the tests once into a nextest archive and then
-  # runs the doctests, and six shards run their slice of the tests from the archive. Windows runs
+  # `lint` leg runs Clippy, the `build` job builds the tests once into one nextest archive per shard
+  # (as on Linux, without a GPU shard) and then runs the doctests, and six shards each run their own
+  # archive. Windows runs
   # the tests ~1.75x slower than Linux: ~55 min on one runner, ~9 min per shard. A seventh shard
   # would not shorten the slowest one while its slowest test alone takes ~9.6 min (the
   # shortcut-dispatch UI test). The browser apps are wasm targets, so their native tests are left
@@ -242,16 +246,24 @@ jobs:
       archive-command: cargo xtask ci archive
       after-archive-command: cargo xtask ci doctest
       test-shards: 6
+      shard-archives: true
       shard-command: bash scripts/ci-test-shard.sh
 
-  # The Linux gate's build job saves a rolling cache entry of its own on every main and nightly run
-  # (`cache-workspace-crates`), about 3.8 GB, and every run restores only the newest. This deletes
-  # the older ones at once instead of leaving them to the 10 GB budget's eviction, which would
-  # evict other entries too.
-  gate-cache-prune:
-    needs: gate
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-    timeout-minutes: 5
+  # Keeps one Actions cache entry per family on main, so the repository stays within its 10 GB
+  # budget and GitHub never evicts an entry a run still needs (an evicted Windows entry makes the
+  # Windows build cold, about 60 instead of 21 minutes). It runs beside the run's jobs and prunes
+  # each time a job that saves an entry finishes: the gate's build jobs (the Linux rolling entry,
+  # about 4 GB, and the Windows dependency entry), web and corpus. A skipped job is listed under its
+  # own name (a skipped reusable-workflow call under the caller job's), so a run that skips one
+  # still ends. No `needs`: the gate is one reusable call, and waiting for it would leave the
+  # replaced entry in place until every shard has run. A failed prune warns instead of failing the
+  # run, and cache-prune.yml prunes again after every attempt, re-runs of failed jobs included.
+  cache-prune:
+    name: cache prune
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    # A cold Windows build takes about an hour, and the watch ends when it does; `watch-minutes`
+    # ends it before this limit.
+    timeout-minutes: 120
     runs-on: ubuntu-24.04
     permissions:
       actions: write
@@ -260,27 +272,18 @@ jobs:
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
-      - name: Delete all but the newest rolling entry of each job and runner
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          # `<version>-rust-<profile>-<job>-crates-<os>-<arch>-<run>-<attempt>-...`, newest first.
-          gh cache list --repo "$REPO" --ref refs/heads/main --limit 100 --sort created_at --order desc --json id,key \
-            --jq '.[] | "\(.id) \(.key)"' > "$RUNNER_TEMP/caches"
-          declare -A kept
-          while read -r id key; do
-            [[ "$key" =~ ^.+-rust-[0-9a-f]{64}-(.+-crates-[A-Za-z_]+-[a-z0-9]+)-[0-9]+-[0-9]+- ]] || continue
-            entry=${BASH_REMATCH[1]}
-            if [ -n "${kept[$entry]:-}" ]; then
-              echo "delete $key"
-              gh cache delete "$id" --repo "$REPO"
-            else
-              kept[$entry]=1
-              echo "keep $key"
-            fi
-          done < "$RUNNER_TEMP/caches"
+      - name: Prune replaced cache entries
+        uses: storytold/craft-common-actions/actions/cache-prune@main
+        continue-on-error: true
+        with:
+          watch: true
+          watch-minutes: 110
+          content-keys: corpus
+          saving-jobs: |
+            ^gate( / build \(.*\))?$
+            ^windows( / build \(.*\))?$
+            ^web build and wasm size gate$
+            ^corpus tests$
 
   # The same codecs without the optional decoder: HEIC must stay a clear "not in this build" error
   # for distributors who leave it out. Runs beside the gate and restores the gate's newest rolling
@@ -426,6 +429,10 @@ jobs:
       # package.sh runs Trunk's release builds, validates relative URLs, cuts the wasm into
       # parts, checks the 24 MiB per-file limit and exercises the packaging step release.yml uses.
       - name: Build and verify browser release
+        env:
+          # Pull requests skip wasm-opt --converge (minutes slower); main keeps it, so the size
+          # gate on a PR measures a slightly larger wasm than main produces.
+          PHOTOCRAFT_WEB_WASM_OPT_CONVERGE: ${{ github.event_name == 'pull_request' && '0' || '1' }}
         run: packaging/web/package.sh
       - name: Report wasm size
         if: success()

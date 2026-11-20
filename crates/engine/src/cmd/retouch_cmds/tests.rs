@@ -474,6 +474,74 @@ fn sponge_reduces_and_increases_saturation() {
 }
 
 #[test]
+fn sponge_rgb_single_dab_matches_reference_at_integer_depths() {
+    for depth in [8, 16] {
+        for (mode, flow, vibrance, input, expected) in [
+            ("desaturate", 50, true, [220, 170, 140], [213, 170, 144]),
+            ("desaturate", 100, false, [200, 40, 40], [178, 49, 49]),
+            ("saturate", 50, false, [230, 200, 40], [238, 202, 11]),
+            ("saturate", 100, true, [40, 160, 60], [39, 184, 64]),
+        ] {
+            let [r, g, b] = input.map(|v| v as f32 / 255.0);
+            let mut s = session(64, 64, depth, "rgb");
+            paint_layer(&mut s, |_, _| [r, g, b, 1.0]);
+            let before = rgba(&s, 32, 32);
+            s.execute(
+                "paint.sponge",
+                json!({"points": [[32, 32]], "size": 40, "hardness": 100, "spacing": 25, "flow": flow, "mode": mode, "vibrance": vibrance}),
+            )
+            .unwrap();
+            let [r, g, b, a] = rgba(&s, 32, 32);
+            let actual = [r, g, b].map(|v| (v * 255.0).round() as i32);
+            assert!(actual.into_iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 2), "{depth}-bit {mode}, Flow {flow}, Vibrance {vibrance}: {actual:?}");
+            assert_eq!(a, before[3]);
+            assert_eq!(rgba(&s, 0, 0), before);
+            assert_eq!(s.active().unwrap().history.undo_label(), Some("Sponge Tool"));
+            assert!(s.undo());
+            assert_eq!(rgba(&s, 32, 32), before);
+        }
+    }
+}
+
+#[test]
+fn sponge_single_dab_uses_the_requested_spacing() {
+    for depth in [8, 16] {
+        for spacing in [25, 50, 100] {
+            let mut s = session(64, 64, depth, "rgb");
+            paint_layer(&mut s, |_, _| [0.8, 0.4, 0.2, 1.0]);
+            let [r0, _, b0, a0] = rgba(&s, 32, 32);
+            s.execute(
+                "paint.sponge",
+                json!({"points": [[32, 32]], "size": 40, "hardness": 100, "spacing": spacing, "flow": 100, "mode": "desaturate", "vibrance": false}),
+            )
+            .unwrap();
+            let [r, _, b, a] = rgba(&s, 32, 32);
+            let expected = (r0 - b0) * 0.8f32.powf(spacing as f32 / 25.0);
+            assert!(((r - b) - expected).abs() < 2.0 / 255.0, "{depth}-bit, spacing {spacing}: {} vs {expected}", r - b);
+            assert_eq!(a, a0);
+        }
+    }
+}
+
+#[test]
+fn sponge_float_rgb_and_lab_keep_the_existing_transfer() {
+    for (depth, mode) in [(32, "rgb"), (8, "lab")] {
+        let mut s = session(64, 64, depth, mode);
+        paint_layer(&mut s, |_, _| [200.0 / 255.0, 40.0 / 255.0, 40.0 / 255.0, 1.0]);
+        let [r, g, b, a] = rgba(&s, 32, 32);
+        let [r, g, b] = sponge([r, g, b], 1.0 - 0.75f32.powf(0.25), false, true);
+        let doc = &s.active().unwrap().doc;
+        let fmt = doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().format();
+        let mut expected = Surface::new(fmt);
+        expected.write_region(Rect::new(0, 0, 1, 1), &photocraft_raster::from_rgba(&fmt, [r, g, b, a]));
+        s.execute("paint.sponge", json!({"points": [[32, 32]], "size": 40, "hardness": 100, "spacing": 25, "flow": 50})).unwrap();
+        for (actual, expected) in rgba(&s, 32, 32).into_iter().zip(expected.rgba(0, 0)) {
+            assert!((actual - expected).abs() <= 1e-6, "{mode} {depth}-bit: {actual} vs {expected}");
+        }
+    }
+}
+
+#[test]
 fn blur_reduces_local_variance_and_sharpen_increases_it() {
     for depth in [8u64, 16] {
         let mut s = session(60, 30, depth, "rgb");
@@ -2187,6 +2255,11 @@ live_coordinate_regression!(
 fn live_dodge_matches_the_commit_across_cells() {
     let mut s = session(200, 90, 32, "rgb");
     paint_layer(&mut s, texture);
+    // About the cells' summation order, not smoothing: the live stroke is compared before its
+    // release, and with the brush's default smoothing lag (#11888) the commit's end catch-up runs
+    // from the trailing brush along most of the last segment. Live against commit with smoothing
+    // is the hand-off tests' "smoothing" case.
+    s.tools.brush.smoothing.enabled = false;
     let all = [[10.0, 40.0], [100.0, 60.0], [180.0, 40.0], [60.0, 30.0], [150.0, 70.0]];
     let pts = |v: &[[f64; 2]]| v.iter().map(|q| StrokePoint::new(q[0], q[1], 1.0)).collect::<Vec<_>>();
     let opts = |p: &[[f64; 2]]| json!({"points": p, "size": 40, "hardness": 30, "exposure": 60, "range": "midtones"});
@@ -2318,7 +2391,7 @@ fn live_dab_batches_match_the_accumulating_renderer() {
         });
         let id = s.active().unwrap().active_layer.unwrap();
         let pre = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().clone();
-        for case in ["soft", "hard", "sampled", "dynamics", "smoothing"] {
+        for case in ["soft", "hard", "sampled", "dynamics", "smoothing", "smoothing_catch_up"] {
             s.tools.brush = BrushSettings::default();
             match case {
                 "sampled" => s.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(9, 7, |x, y| ((x * 3 + y) % 11) as f32 / 10.0)),
@@ -2339,6 +2412,10 @@ fn live_dab_batches_match_the_accumulating_renderer() {
                     b.texture.pattern = photocraft_paint::Pattern::Tile(GrayTile::from_fn(3, 3, |x, y| (x + y) as f32 / 4.0));
                 }
                 "smoothing" => s.tools.brush.smoothing.amount = 0.65,
+                "smoothing_catch_up" => {
+                    s.tools.brush.smoothing.amount = 0.65;
+                    s.tools.brush.smoothing.catch_up_on_end = true;
+                }
                 _ => {}
             }
             let points = [
