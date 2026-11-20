@@ -111,3 +111,38 @@ mod tests {
         assert_eq!(gray.channel.unwrap().name, "Saved");
     }
 }
+
+#[cfg(test)]
+mod rabbit_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Unsupported vector-mask tone edits refuse the command without touching layer pixels.
+    #[test]
+    fn rabbit_vector_mask_tone_commands_refuse_pixel_fallback() {
+        for (kind, params) in [("levels", json!({"gamma":2})), ("curves", json!({"points":[[0,255],[255,0]]}))] {
+            let mut s = crate::session();
+            s.execute("file.new", json!({"width":8,"height":8})).unwrap();
+            crate::tests::fill_active(&mut s, None, "#404040");
+            s.execute("layer.vectorMask.revealAll", json!({})).unwrap();
+            s.execute("channel.target", json!({"channel":"vectorMask"})).unwrap();
+            let before = s.active().unwrap().doc.clone();
+            let history = s.active().unwrap().history.past_len();
+            assert!(resolve_tone_target(&s, false, &params).is_err());
+            let command = format!("image.adjustments.{kind}");
+            assert!(s.execute(&command, params.clone()).is_err());
+            assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc));
+            assert_eq!(s.active().unwrap().history.past_len(), history);
+            let mut explicit = params;
+            explicit["target"] = json!("pixels");
+            s.execute(&command, explicit).unwrap();
+            let after = &s.active().unwrap().doc;
+            assert_eq!(before.layers.len(), after.layers.len());
+            assert!(
+                before.layers.iter().zip(&after.layers).all(|(a, b)| a.mask == b.mask && a.vector_mask == b.vector_mask),
+                "an explicit pixel target must preserve both masks"
+            );
+            assert!(before.layers.iter().zip(&after.layers).any(|(a, b)| a.content != b.content), "an explicit pixel target must change raster content");
+        }
+    }
+}

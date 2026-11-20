@@ -522,38 +522,22 @@ mod stylize_tests {
     use craft_psd::descriptor::{Descriptor, UnicodeString, Value as D};
     use photocraft_engine::Session;
 
-    use serde_json::{Value, json};
+    use serde_json::json;
 
     use photocraft_engine::actions_cmds::ActionStep;
 
     use photocraft_engine::actions_cmds::ActionsExt;
 
-    #[allow(dead_code)] // each fixture spells out its whole row; the tests that moved here read some of the fields
     struct Fixture {
         code: &'static str,
-        name: &'static str,
-        id: &'static str,
-        default: Descriptor,
-        defaults: Value,
         changed: Descriptor,
-        changes: Value,
     }
 
-    /// Independent descriptor fixtures spell out measured key order, types, values and defaults.
+    /// Independent descriptor fixtures spell out measured key order, types and values.
     fn fixtures() -> Vec<Fixture> {
         vec![
             Fixture {
                 code: "Extr",
-                name: "extrude",
-                id: "filter.stylize.extrude",
-                default: desc("null")
-                    .with("ExtS", D::Integer(30))
-                    .with("ExtD", D::Integer(30))
-                    .with("ExtF", D::Boolean(false))
-                    .with("ExtM", D::Boolean(false))
-                    .with("ExtT", enm("ExtT", "Blks"))
-                    .with("ExtR", enm("ExtR", "Rndm")),
-                defaults: json!({"size":30,"depth":30,"solidFrontFaces":false,"maskIncompleteBlocks":false,"type":"blocks","depthMode":"random"}),
                 changed: desc("null")
                     .with("ExtS", D::Integer(42))
                     .with("ExtD", D::Integer(91))
@@ -561,81 +545,22 @@ mod stylize_tests {
                     .with("ExtM", D::Boolean(true))
                     .with("ExtT", enm("ExtT", "Pyrm"))
                     .with("ExtR", enm("ExtR", "LvlB")),
-                changes: json!({"size":42,"depth":91,"solidFrontFaces":true,"maskIncompleteBlocks":true,"type":"pyramids","depthMode":"levelBased"}),
             },
-            Fixture {
-                code: "TrcC",
-                name: "traceContour",
-                id: "filter.stylize.traceContour",
-                default: desc("null").with("Lvl ", D::Integer(128)).with("Edg ", enm("CntE", "Upr ")),
-                defaults: json!({"level":128,"edge":"upper"}),
-                changed: desc("null").with("Lvl ", D::Integer(43)).with("Edg ", enm("CntE", "Lwr ")),
-                changes: json!({"level":43,"edge":"lower"}),
-            },
-            Fixture {
-                code: "Wnd ",
-                name: "wind",
-                id: "filter.stylize.wind",
-                default: desc("null").with("WndM", enm("WndM", "Wnd ")).with("Drct", enm("Drct", "Left")),
-                defaults: json!({"method":"wind","direction":"fromRight"}),
-                changed: desc("null").with("WndM", enm("WndM", "Stgr")).with("Drct", enm("Drct", "Rght")),
-                changes: json!({"method":"stagger","direction":"fromLeft"}),
-            },
-            Fixture {
-                code: "Tls ",
-                name: "tiles",
-                id: "filter.stylize.tiles",
-                default: desc("null").with("TlNm", D::Integer(10)).with("TlOf", D::Integer(10)).with("FlCl", enm("FlCl", "FlBc")),
-                defaults: json!({"count":10,"maxOffset":10,"fill":"background"}),
-                changed: desc("null").with("TlNm", D::Integer(17)).with("TlOf", D::Integer(23)).with("FlCl", enm("FlCl", "FlFr")),
-                changes: json!({"count":17,"maxOffset":23,"fill":"foreground"}),
-            },
+            Fixture { code: "TrcC", changed: desc("null").with("Lvl ", D::Integer(43)).with("Edg ", enm("CntE", "Lwr ")) },
+            Fixture { code: "Wnd ", changed: desc("null").with("WndM", enm("WndM", "Stgr")).with("Drct", enm("Drct", "Rght")) },
+            Fixture { code: "Tls ", changed: desc("null").with("TlNm", D::Integer(17)).with("TlOf", D::Integer(23)).with("FlCl", enm("FlCl", "FlFr")) },
             Fixture {
                 code: "ClrH",
-                name: "colorHalftone",
-                id: "filter.pixelate.colorHalftone",
-                default: desc("null")
-                    .with("Rds ", D::Integer(8))
-                    .with("Ang1", D::Integer(108))
-                    .with("Ang2", D::Integer(162))
-                    .with("Ang3", D::Integer(90))
-                    .with("Ang4", D::Integer(45)),
-                defaults: json!({"maxRadius":8,"channel1":108,"channel2":162,"channel3":90,"channel4":45}),
                 changed: desc("null")
                     .with("Rds ", D::Integer(12))
                     .with("Ang1", D::Integer(-10000))
                     .with("Ang2", D::Integer(10000))
                     .with("Ang3", D::Integer(-721))
                     .with("Ang4", D::Integer(1001)),
-                changes: json!({"maxRadius":12,"channel1":-10000,"channel2":10000,"channel3":-721,"channel4":1001}),
             },
-            Fixture {
-                code: "Mztn",
-                name: "mezzotint",
-                id: "filter.pixelate.mezzotint",
-                default: desc("null").with("MztT", enm("MztT", "FnDt")),
-                defaults: json!({"type":"fineDots"}),
-                changed: desc("null").with("MztT", enm("MztT", "LngS")),
-                changes: json!({"type":"longStrokes"}),
-            },
-            Fixture {
-                code: "Msc ",
-                name: "mosaic",
-                id: "filter.pixelate.mosaic",
-                default: desc("null").with("ClSz", px(2.0)),
-                defaults: json!({"cellSize":2}),
-                changed: desc("null").with("ClSz", px(31.5)),
-                changes: json!({"cellSize":31.5}),
-            },
-            Fixture {
-                code: "Pntl",
-                name: "pointillize",
-                id: "filter.pixelate.pointillize",
-                default: desc("null").with("ClSz", D::Integer(5)),
-                defaults: json!({"cellSize":5}),
-                changed: desc("null").with("ClSz", D::Integer(19)),
-                changes: json!({"cellSize":19}),
-            },
+            Fixture { code: "Mztn", changed: desc("null").with("MztT", enm("MztT", "LngS")) },
+            Fixture { code: "Msc ", changed: desc("null").with("ClSz", px(31.5)) },
+            Fixture { code: "Pntl", changed: desc("null").with("ClSz", D::Integer(19)) },
         ]
     }
 
@@ -1175,10 +1100,6 @@ mod tests {
             ..Default::default()
         }
     }
-
-    /// A local absolute map path on this platform: playback may read only such a path.
-    #[cfg(windows)]
-    const LOCAL_MAP: &str = r"C:\máp.psd";
 
     /// A Pattern Fill step whose `Ptrn` holds `id` and `name`, as the reference application records it.
     fn pattern_fill_step(id: &str, name: &str) -> AtnItem {

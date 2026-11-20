@@ -646,3 +646,181 @@ fn tip_adapter_matches_shared_codec_and_keeps_preview_limit() {
         assert_eq!(decode_tip_max(&shared, t.width).unwrap(), t);
     }
 }
+
+fn cache(s: &Session) -> TipCacheStats {
+    s.preset_store().unwrap().tip_cache()
+}
+
+#[test]
+fn corrupt_and_oversized_files_are_skipped_with_a_warning() {
+    let dir = TempDir::new("corrupt");
+    let (mut s, _) = session(&dir);
+    std::sync::Arc::make_mut(&mut s.tools.presets).push(sampled("Good", "Fine", tip8(8, 8, 1)));
+    std::sync::Arc::make_mut(&mut s.tools.presets).push(sampled("Lost", "Broken tip", tip16(9, 9, 2)));
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    let be = DirBackend::new(&dir.0);
+    be.write("junk-00000000.pcbrushes", b"{not json").unwrap();
+    be.write("wrong-00000000.pcbrushes", br#"{"format":"other","version":1,"group":"x","presets":[]}"#).unwrap();
+    // Corrupt the 16-bit tip of "Broken tip".
+    let h = tip_hash(&tip16(9, 9, 2));
+    be.write(&tip_file(&h), b"PCTIP1\x10garbage").unwrap();
+    let (mut t, w) = session(&dir);
+    assert_eq!(w.len(), 2, "{w:?}");
+    assert!(photocraft_paint::presets::find(&t.tools.presets, "Good").is_some());
+    // Full tips load when a brush is used (#1843): the broken one fails then, not at start.
+    assert!(photocraft_paint::presets::find(&t.tools.presets, "Lost").is_some());
+    let mut lost = photocraft_paint::presets::find(&t.tools.presets, "Lost").unwrap().brush.clone();
+    let e = t.load_brush_tips(&mut lost).unwrap_err();
+    assert!(e.contains(&h), "{e}");
+    let mut good = photocraft_paint::presets::find(&t.tools.presets, "Good").unwrap().brush.clone();
+    t.load_brush_tips(&mut good).unwrap();
+    // The broken files are left alone for the user (never deleted by a sync).
+    std::sync::Arc::make_mut(&mut t.tools.presets).push(sampled("Another", "Fine", tip8(8, 8, 3)));
+    t.brush_presets_changed();
+    t.sync_preset_store();
+    let files = dir.files();
+    assert!(files.contains(&"junk-00000000.pcbrushes".to_string()) && files.contains(&tip_file(&h)), "{files:?}");
+
+    // Oversized files are refused without reading them whole.
+    let mem = MemBackend::default();
+    mem.files.lock().unwrap().insert("big-00000000.pcbrushes".into(), vec![b' '; MAX_GROUP_BYTES as usize + 1]);
+    mem.files.lock().unwrap().insert(INDEX_FILE.into(), b"[1,2".to_vec());
+    let o = open(Box::new(mem));
+    assert!(o.presets.is_empty());
+    assert_eq!(o.warnings.len(), 2, "{:?}", o.warnings);
+}
+
+#[test]
+fn a_store_without_previews_makes_them_once_and_then_loads_lazily() {
+    // A store written before #1843: group files without tip sizes, no preview files.
+    let mem = MemBackend::default();
+    let tips = [tip16(300, 200, 1), tip8(40, 40, 2)];
+    let hashes: Vec<String> = tips.iter().map(tip_hash).collect();
+    for (t, h) in tips.iter().zip(&hashes) {
+        mem.write(&tip_file(h), &encode_tip(t)).unwrap();
+    }
+    let group = json!({"format": GROUP_FORMAT, "version": 1, "group": "Old", "presets": [
+        {"name": "Old A", "brush": {"size": 30}, "tips": {"tip": hashes[0], "texture": hashes[1]}},
+        {"name": "Old B", "brush": {"size": 12}, "tips": {"tip": hashes[1]}},
+    ]});
+    let file = group_file_name("Old");
+    mem.write(&file, &serde_json::to_vec(&group).unwrap()).unwrap();
+
+    let mut s = crate::session();
+    let w = s.attach_preset_store(open(Box::new(mem.clone())));
+    assert!(w.is_empty(), "{w:?}");
+    let a = photocraft_paint::presets::find(&s.tools.presets, "Old A").unwrap().clone();
+    assert!(matches!(&a.brush.tip, TipShape::Stored(r) if (r.width, r.height) == (300, 200) && !r.is_loaded()));
+    assert!(matches!(&a.brush.texture.pattern, Pattern::Stored(r) if r.key == hashes[1]));
+    // Attaching rewrote the group with sizes and previews.
+    let rewritten: serde_json::Value = serde_json::from_slice(&mem.read(&file, MAX_GROUP_BYTES).unwrap()).unwrap();
+    assert_eq!(rewritten["tips"][&hashes[0]]["width"], 300);
+    assert_eq!(rewritten["presets"][0]["brush"]["size"], 30.0);
+    // The next start reads previews only and changes nothing.
+    let files = mem.list().unwrap();
+    let mut t = crate::session();
+    assert!(t.attach_preset_store(open(Box::new(mem.clone()))).is_empty());
+    assert_eq!(mem.list().unwrap(), files);
+    assert_eq!(user(&t), user(&s));
+    let mut old_a = photocraft_paint::presets::find(&t.tools.presets, "Old A").unwrap().brush.clone();
+    t.load_brush_tips(&mut old_a).unwrap();
+    assert_eq!(old_a.tip.bitmap(), Some(&tips[0]));
+    assert_eq!(old_a.texture.pattern.bitmap(), Some(&tips[1]));
+    assert_eq!(cache(&t).decodes, 2);
+    // Exported presets embed the full bitmaps, as before.
+    let out = t.execute("edit.presets.exportImportPresets", json!({"action": "export"})).unwrap();
+    let back: Vec<BrushPreset> = serde_json::from_value(out["data"]["brushes"].clone()).unwrap();
+    let a = back.iter().find(|p| p.name == "Old A").unwrap();
+    assert_eq!(a.brush.tip, TipShape::Sampled(tips[0].clone()));
+    assert_eq!(a.brush.texture.pattern, Pattern::Tile(tips[1].clone()));
+}
+
+/// A large pattern opens as a small preview (texture libraries run to gigabytes) and is read at
+/// full size when it is used; its preview file goes with it on delete.
+#[test]
+fn large_patterns_load_on_use() {
+    let dir = TempDir::new("patterns-large");
+    let (mut s, _) = session(&dir);
+    s.execute("file.new", json!({"width": 300, "height": 200})).unwrap();
+    crate::tests::fill_active(&mut s, None, "#ffffff");
+    crate::tests::fill_active(&mut s, Some(photocraft_geom::Rect::new(250, 150, 300, 200)), "#ff0000");
+    s.execute("edit.definePattern", json!({"name": "Big"})).unwrap();
+    assert_eq!(dir.files().iter().filter(|f| f.ends_with(".preview.pat")).count(), 1);
+
+    let (mut t, w) = session(&dir);
+    assert!(w.is_empty(), "{w:?}");
+    let held = t.patterns.items.iter().find(|p| p.name == "Big").unwrap();
+    assert!(held.width <= PATTERN_PREVIEW_SIDE && held.height <= PATTERN_PREVIEW_SIDE, "held as a preview: {}x{}", held.width, held.height);
+    let listed = t.execute("pattern.list", json!({})).unwrap();
+    let big = listed.as_array().unwrap().iter().find(|p| p["name"] == "Big").unwrap();
+    assert_eq!((big["width"].as_u64(), big["height"].as_u64()), (Some(300), Some(200)), "the list reports the full size");
+    // Checks that only need the pattern's id (Pattern Stamp's enabled state) don't read its file.
+    let id = t.patterns.items.iter().find(|p| p.name == "Big").unwrap().id.clone();
+    let file = dir.0.join(patterns::file_name_for_test(&id));
+    let moved = file.with_extension("moved");
+    std::fs::rename(&file, &moved).unwrap();
+    assert_eq!(crate::pattern_cmds::resolve_id(&t, "Big"), Some(id.clone()));
+    assert!(crate::pattern_cmds::resolve(&t, "Big").is_none(), "the full pixels come from the file");
+    std::fs::rename(&moved, &file).unwrap();
+    let full = crate::pattern_cmds::resolve(&t, "Big").unwrap();
+    assert_eq!((full.width, full.height), (300, 200));
+    assert!(full.surface.pixel(280, 180)[1] < 0.01 && full.surface.pixel(10, 10)[1] > 0.99, "full pixels");
+    // Once read, it is kept: using it again doesn't read the file.
+    std::fs::rename(&file, &moved).unwrap();
+    assert_eq!(crate::pattern_cmds::resolve(&t, "Big").map(|p| p.width), Some(300));
+    std::fs::rename(&moved, &file).unwrap();
+    // A Pattern Fill layer gets the full pattern into the document.
+    t.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
+    t.execute("layer.newFillLayer.pattern", json!({"pattern": "Big"})).unwrap();
+    let doc_pat = &t.active().unwrap().doc.patterns[0];
+    assert_eq!((doc_pat.width, doc_pat.height), (300, 200));
+    // Exporting the library writes full pixels too.
+    let out = dir.0.join("export.pat");
+    t.execute("pattern.export", json!({"path": out.to_string_lossy()})).unwrap();
+    let back = photocraft_io::pattern_map::read_pat(&std::fs::read(&out).unwrap()).unwrap();
+    assert!(back.iter().any(|p| p.name == "Big" && p.width == 300));
+    std::fs::remove_file(&out).unwrap();
+
+    t.execute("pattern.delete", json!({"pattern": "Big"})).unwrap();
+    assert!(!dir.files().iter().any(|f| f.starts_with("pattern-")), "{:?}", dir.files());
+}
+
+/// A corrupt pattern file is skipped with a warning and left on disk; the others load, and later
+/// saves never delete or overwrite it. A corrupt index is never overwritten.
+#[test]
+fn corrupt_pattern_files_are_skipped_and_kept() {
+    let dir = TempDir::new("patterns-corrupt");
+    let (mut s, _) = session(&dir);
+    define_pattern(&mut s, "Grit", "#202020", 8);
+    define_pattern(&mut s, "Paper", "#f0e0c0", 12);
+    let grit = s.patterns.items.iter().find(|p| p.name == "Grit").unwrap().id.clone();
+    let file = dir.0.join(patterns::file_name_for_test(&grit));
+    std::fs::write(&file, b"not a pattern").unwrap();
+
+    let (mut t, w) = session(&dir);
+    assert!(w.iter().any(|w| w.contains("Grit")), "{w:?}");
+    assert_eq!(user_patterns(&t), [("Paper".to_string(), 12)]);
+    define_pattern(&mut t, "Ink", "#000000", 4);
+    assert_eq!(std::fs::read(&file).unwrap(), b"not a pattern", "the unreadable file is left alone");
+    let index = std::fs::read_to_string(dir.0.join(PATTERNS_FILE)).unwrap();
+    assert!(index.contains("Grit") && index.contains("Ink"), "{index}");
+
+    std::fs::write(dir.0.join(PATTERNS_FILE), b"{").unwrap();
+    let (mut u, w) = session(&dir);
+    assert!(w.iter().any(|w| w.contains(PATTERNS_FILE)), "{w:?}");
+    assert!(user_patterns(&u).is_empty());
+    define_pattern(&mut u, "Late", "#808080", 4);
+    assert_eq!(std::fs::read(dir.0.join(PATTERNS_FILE)).unwrap(), b"{", "an unreadable index is never overwritten");
+}
+
+fn define_pattern(s: &mut Session, name: &str, color: &str, width: u32) {
+    s.execute("file.new", json!({"width": width, "height": 6})).unwrap();
+    crate::tests::fill_active(s, None, color);
+    s.execute("edit.definePattern", json!({"name": name})).unwrap();
+}
+
+fn user_patterns(s: &Session) -> Vec<(String, u32)> {
+    let builtins: Vec<String> = crate::pattern_cmds::builtin().into_iter().map(|p| p.id).collect();
+    s.patterns.items.iter().filter(|p| !builtins.contains(&p.id)).map(|p| (p.name.clone(), p.width)).collect()
+}

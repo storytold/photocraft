@@ -369,3 +369,74 @@ fn null_params_export_native_defaults() {
         assert!(export_item(id, &Value::Null, "Group D").is_some(), "{id}");
     }
 }
+
+/// Trace levels are whole numbers 0..255: imports clamp to that range and play like the clamped direct command.
+#[test]
+fn trace_levels_clamp_on_import_and_play_at_the_boundary() {
+    for level in [i32::MIN, -1, 0, 128, 255, 256, 300, i32::MAX] {
+        let clamped = level.clamp(0, 255);
+        for (edge, name) in [("Lwr ", "lower"), ("Upr ", "upper")] {
+            let descriptor = desc("null").with("Lvl ", D::Integer(level)).with("Edg ", enm("CntE", edge));
+            let mut item = code_item("TrcC", descriptor);
+            item.with_dialog = true;
+            let mut imported = load_items(vec![item]);
+            assert_eq!(imported.actions().list.actions()[0].steps[0].command, "filter.stylize.traceContour", "{level}/{name}");
+            assert_eq!(imported.actions().list.actions()[0].steps[0].params["level"], clamped);
+            let saved = saved_items(&mut imported);
+            let expected = desc("null").with("Lvl ", D::Integer(clamped)).with("Edg ", enm("CntE", edge));
+            assert_eq!(saved[0].descriptor.as_ref().unwrap().to_bytes(), expected.to_bytes());
+            assert!(saved[0].with_dialog);
+            for depth in [8, 16, 32] {
+                let mut direct = crate::session();
+                prepare_pattern(&mut imported, depth, "rgb");
+                prepare_pattern(&mut direct, depth, "rgb");
+                let played = imported.execute("actions.play", json!({"action":"A"})).unwrap();
+                assert!(played.get("failed").is_none(), "{level}/{name}/{depth}: {played}");
+                direct.execute("filter.stylize.traceContour", json!({"level":level.clamp(0,255),"edge":name})).unwrap();
+                assert_eq!(pixels(&imported), pixels(&direct), "{level}/{name}/{depth}");
+            }
+        }
+    }
+    for level in [0, 128, 255] {
+        assert!(export_item("filter.stylize.traceContour", &json!({"level":level}), "Group D").is_some(), "{level}");
+    }
+    for level in [json!(-1), json!(256), json!(255.5), json!(2147483648.0)] {
+        assert!(export_item("filter.stylize.traceContour", &json!({"level":level}), "Group D").is_none(), "{level}");
+    }
+}
+
+/// A nonuniform image and nondefault tool colors expose differences hidden by flat inputs.
+fn prepare_pattern(s: &mut Session, depth: u32, mode: &str) {
+    s.execute("file.new", json!({"width":32,"height":24,"depth":depth,"mode":mode,"background":"#102030"})).unwrap();
+    crate::tests::fill_active(s, Some(photocraft_geom::Rect::new(3, 2, 17, 13)), "#ee9922");
+    s.execute("tools.setColors", json!({"foreground":"#e83a91","background":"#148fca"})).unwrap();
+}
+
+fn pixels(s: &Session) -> Vec<[f32; 4]> {
+    photocraft_compose::render(&s.active().unwrap().doc, photocraft_geom::Rect::new(0, 0, 32, 24)).into_px()
+}
+
+/// Saving omitted native params preserves their actual command behavior, not Photoshop's defaults.
+#[test]
+fn native_and_measured_defaults_stay_distinct_through_playback() {
+    use photocraft_algo::FilterParams;
+    let mosaic = load_items(vec![code_item("Msc ", desc("null"))]);
+    let measured = &mosaic.actions().list.actions()[0].steps[0].params;
+    assert!(matches!(crate::filters::params_for("filter.pixelate.mosaic",&json!({})),Some(FilterParams::Mosaic{cell_size}) if cell_size==10.0));
+    assert!(matches!(crate::filters::params_for("filter.pixelate.mosaic",measured),Some(FilterParams::Mosaic{cell_size}) if cell_size==2.0));
+    let trace = load_items(vec![code_item("TrcC", desc("null"))]);
+    let measured = &trace.actions().list.actions()[0].steps[0].params;
+    assert!(matches!(crate::filters_ext::params_for("filter.stylize.traceContour", &json!({})), Some(FilterParams::TraceContour { upper: false, .. })));
+    assert!(matches!(crate::filters_ext::params_for("filter.stylize.traceContour", measured), Some(FilterParams::TraceContour { upper: true, .. })));
+    for id in ["filter.pixelate.mosaic", "filter.stylize.traceContour"] {
+        let item = export_item(id, &json!({}), "Group D").unwrap();
+        let mut imported = load_items(vec![item]);
+        let mut native = crate::session();
+        prepare_pattern(&mut imported, 8, "rgb");
+        prepare_pattern(&mut native, 8, "rgb");
+        native.execute(id, json!({})).unwrap();
+        let result = imported.execute("actions.play", json!({"action":"A"})).unwrap();
+        assert!(result.get("failed").is_none(), "{id}: {result}");
+        assert_eq!(pixels(&imported), pixels(&native), "{id}");
+    }
+}
