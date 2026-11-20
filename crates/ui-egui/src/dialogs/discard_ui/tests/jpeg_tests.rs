@@ -103,7 +103,7 @@ fn save_as_to_a_jpeg_asks_for_jpeg_options() {
 #[test]
 fn resaving_an_opened_jpeg_starts_at_its_own_quality() {
     let (mut h, writes) = jpeg_app("copy.jpg");
-    std::sync::Arc::make_mut(&mut h.state_mut().session.active_mut().unwrap().doc).file_encoding.jpeg_quality = Some(95);
+    std::sync::Arc::make_mut(h.state_mut().session.active_mut().unwrap().doc_mut()).file_encoding.jpeg_quality = Some(95);
     h.state_mut().run("actions.record", json!({})).unwrap();
     h.state_mut().save_as(Some("p.jpg".into())).unwrap();
     h.run_steps(2);
@@ -304,7 +304,7 @@ fn an_opened_jpeg_starts_at_its_own_quality_and_the_last_format() {
     let ctx = h.ctx.clone();
     let before = Remembered { quality: Some(3), jpeg_format: Some("progressive".into()) };
     set_saved_value(&ctx, &REMEMBER_KEY, before.clone());
-    std::sync::Arc::make_mut(&mut h.state_mut().session.active_mut().unwrap().doc).file_encoding.jpeg_quality = Some(95);
+    std::sync::Arc::make_mut(h.state_mut().session.active_mut().unwrap().doc_mut()).file_encoding.jpeg_quality = Some(95);
     h.state_mut().save_as(Some("p.jpg".into())).unwrap();
     h.run_steps(2);
     assert_eq!(shown(&h), (11, "progressive".to_string()));

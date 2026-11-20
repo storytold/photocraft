@@ -157,6 +157,26 @@ fn bulk_load_keeps_cancel_empty_and_single_file_behavior() {
     assert!(!app.ui.status_error);
 }
 
+#[test]
+/// The row is grey while a recording runs, and a keyboard or control-channel route must not open
+/// the picker anyway: `actions.load` refuses a recording, so the panel says so before asking for a
+/// file instead of after the person has chosen one.
+fn load_dialog_refuses_a_running_recording_before_asking_for_a_file() {
+    let fake = Arc::new(ScriptedFiles::answering([Picked::Contents(vec![("set.atn".into(), action_set_bytes("Loaded", "Incoming"))])]));
+    let mut app = super::runner_tests::disk_app(fake.clone());
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    app.run("actions.record", json!({"name": "Rec"})).unwrap();
+    let error = files::load_dialog(&mut app).unwrap_err();
+    settle(&mut app);
+    assert!(fake.requests().is_empty(), "no file was asked for: {error}");
+    assert!(!app.file_dialog_open(), "the picker stays closed: {error}");
+    assert_eq!(names(&app), ["Rec"], "the recording keeps its action: {error}");
+    app.run("actions.stop", json!({})).unwrap();
+    files::load_dialog(&mut app).unwrap();
+    settle(&mut app);
+    assert_eq!(names(&app), ["Rec", "Incoming"], "idle: the same path loads");
+}
+
 /// Save Actions… after a click on set B's folder row saves set B, not the first action's set.
 #[test]
 fn save_actions_with_a_set_selected_saves_that_set() {
