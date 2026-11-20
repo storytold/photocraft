@@ -1065,7 +1065,7 @@ fn cross_document_group_paste_renders_shapes_on_destination_canvas() {
             s.execute("layer.layerStyle.dropShadow", json!({"size":4,"distance":3})).unwrap();
             ids.push(s.active().unwrap().active_layer.unwrap());
         }
-        s.active_mut().unwrap().selected_layers = ids;
+        *s.active_mut().unwrap().selection_mut() = ids;
         s.execute("layer.groupLayers", json!({})).unwrap();
         s.execute("edit.copy", json!({})).unwrap();
         s.execute("file.new", json!({"width":800,"height":600,"depth":depth})).unwrap();

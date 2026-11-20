@@ -3591,3 +3591,139 @@ fn sibling_compositors_have_independent_residency_and_configuration() {
     assert!(g.comp.resident_bytes() > 0);
     assert_ne!(g.comp.resident_budget(), sibling.resident_budget());
 }
+
+// ---------------------------------------------------------------------------------------------
+// #14934: the Inner Shadow's Anti-aliased checkbox has to reach the GPU map program too.
+
+/// The Gaussian contour as the built-in preset carries it - the contour #14934 measures with.
+fn gaussian_contour() -> Contour {
+    let pts: [(f32, f32); 11] = [
+        (0.0, 0.0),
+        (0.117, 0.023),
+        (0.172, 0.055),
+        (0.234, 0.117),
+        (0.305, 0.234),
+        (0.383, 0.414),
+        (0.523, 0.688),
+        (0.617, 0.812),
+        (0.703, 0.891),
+        (0.805, 0.953),
+        (1.0, 1.0),
+    ];
+    Contour::Custom {
+        name: "Gaussian".into(),
+        points: pts.iter().map(|(input, output)| Cp { input: *input, output: *output }).collect(),
+        corners: (0..pts.len()).map(|i| i > 0 && i < pts.len() - 1).collect(),
+    }
+}
+
+/// The issue's test document with the Inner Shadow's Size, Choke, Distance and Anti-aliased as given.
+fn inner_shadow_doc(size: f32, spread: f32, distance: f32, anti_aliased: bool) -> Document {
+    let (w, h) = (400u32, 300u32);
+    let mut d = Document::new("14934", Size::new(w, h), ColorMode::Rgb, SampleType::U8);
+    let area = Rect::from_xywh(0, 0, w, h);
+    let mut bg = Layer::raster("Background", PixelFormat::RGBA8);
+    let white: Vec<f32> = (0..(w * h)).flat_map(|_| [1.0f32, 1.0, 1.0, 1.0]).collect();
+    bg.surface_mut().unwrap().write_region(area, &white);
+    let mut px = Layer::raster("pixels", PixelFormat::RGBA8);
+    let orange: Vec<f32> = (0..h)
+        .flat_map(|y| (0..w).map(move |x| if (75..225).contains(&y) && (100..300).contains(&x) { [1.0f32, 0.501_960_8, 0.0, 1.0] } else { [0.0; 4] }))
+        .flatten()
+        .collect();
+    px.surface_mut().unwrap().write_region(area, &orange);
+    px.effects.items = vec![Effect::InnerShadow(Shadow {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        color: Color::BLACK,
+        angle: 0.0,
+        use_global_light: false,
+        distance,
+        spread,
+        size,
+        contour: gaussian_contour(),
+        anti_alias: anti_aliased,
+        noise: 0.0,
+        knocks_out: false,
+    })];
+    d.layers = vec![bg, px].into();
+    d
+}
+
+/// The issue's test document: 400 x 300 px, 72 ppi, RGB 8 bit, white Background, a pixel layer
+/// with an orange (255, 128, 0) rectangle at x 100..=299, y 75..=224 carrying a black Inner Shadow
+/// (Normal 100 %, Use Global Light off, Size 10, Distance 0, Choke 0, Noise 0, Contour Gaussian)
+/// with the Anti-aliased checkbox as given.
+fn inner_shadow_issue_doc(anti_aliased: bool) -> Document {
+    inner_shadow_doc(10.0, 0.0, 0.0, anti_aliased)
+}
+
+/// The nine G levels inwards from each of the issue's four edges of a 400 x 300 flatten.
+fn inner_shadow_ramps(px: &[[f32; 4]]) -> [Vec<f32>; 4] {
+    let g = |x: i32, y: i32| px[(y * 400 + x) as usize][1] * 255.0;
+    let line = |first: (i32, i32), step: (i32, i32)| (0..9).map(|k| g(first.0 + k * step.0, first.1 + k * step.1)).collect();
+    [line((200, 75), (0, 1)), line((100, 150), (1, 0)), line((200, 224), (0, -1)), line((299, 150), (-1, 0))]
+}
+
+/// Done when (#14934): the GPU map program honours the Anti-aliased checkbox like the CPU. The
+/// whole document (its 400 x 300 canvas also runs the paged 256 px compositor, where the sub-pixel
+/// shift has to inflate the map windows) matches the CPU reference within one 8-bit step, and the
+/// GPU's four edge ramps land on the issue's measured profile within 3 levels - which the
+/// Anti-aliased-off render does not, on the top/left and the bottom/right edge each.
+#[test]
+fn anti_aliased_inner_shadow_matches_the_cpu_ramps() {
+    let Some(mut g) = gpu() else { return };
+    let on = inner_shadow_issue_doc(true);
+    let off = inner_shadow_issue_doc(false);
+    check(&mut g, &on, "#14934 inner shadow, Anti-aliased");
+    check(&mut g, &off, "#14934 inner shadow, Anti-aliased off");
+    let gpu_on = render_to_vec(&mut g.comp, &g.device, &g.queue, &on, on.bounds()).expect("gpu render, Anti-aliased");
+    let gpu_off = render_to_vec(&mut g.comp, &g.device, &g.queue, &off, off.bounds()).expect("gpu render, Anti-aliased off");
+    let tl: &[f32] = &[65.0, 89.0, 107.0, 118.0, 124.0, 126.0, 127.0, 127.0, 128.0];
+    let br: &[f32] = &[49.0, 74.0, 96.0, 112.0, 121.0, 125.0, 126.0, 127.0, 128.0];
+    for ((side, got), want) in ["top", "left", "bottom", "right"].iter().zip(inner_shadow_ramps(&gpu_on)).zip([tl, tl, br, br]) {
+        for (d, (got, want)) in got.iter().zip(want).enumerate() {
+            assert!((got - want).abs() <= 3.0, "GPU {side} edge, {d} px in: {got:.1} vs measured {want}");
+        }
+    }
+    let ramps_on = inner_shadow_ramps(&gpu_on);
+    let ramps_off = inner_shadow_ramps(&gpu_off);
+    assert!(
+        (ramps_on[0][0] - ramps_off[0][0]).abs() > 3.0,
+        "Anti-aliased moved nothing on the GPU's top edge: on {:.1}, off {:.1}",
+        ramps_on[0][0],
+        ramps_off[0][0]
+    );
+    assert!(
+        (ramps_on[2][0] - ramps_off[2][0]).abs() > 3.0,
+        "Anti-aliased moved nothing on the GPU's bottom edge: on {:.1}, off {:.1}",
+        ramps_on[2][0],
+        ramps_off[2][0]
+    );
+}
+
+/// Review finding (#14934): with Choke above 0 the CPU recomputes its chamfer dilation distance on
+/// the sub-pixel offset map (`effects::blur::dilate`), while `B::spread_blur` dilates the distance
+/// field of the unshifted shape shifted by whole pixels only, so the two compositors part by the
+/// third of a pixel the offset adds. The Size 1 and Size 2 / Choke 50 % rows are the other
+/// neighbours the review names: there the blur has width 1, the identity, so the offset would be
+/// the whole map. #14934 measured Choke 0 with a wider blur, so the offset is gated off at all of
+/// them and this check pins the two compositors stay equal - while Choke 4 %, which dilates
+/// nothing, keeps the offset and still has to agree. The last two rows pin where the offset stays
+/// on at a Distance other than the measured 0: there the shift stage carries a whole-pixel light
+/// offset plus the third of a pixel, which is the case the gate leaves on the anti-aliased path,
+/// and the same pair at Choke 50 % stays gated at that Distance too.
+#[test]
+fn anti_aliased_inner_shadow_gated_neighbours_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for (size, spread, distance, what) in [
+        (10.0, 0.5, 0.0, "Size 10 Choke 50 %"),
+        (10.0, 0.05, 0.0, "Size 10 Choke 5 %"),
+        (2.0, 0.5, 0.0, "Size 2 Choke 50 %"),
+        (1.0, 0.0, 0.0, "Size 1"),
+        (2.0, 0.0, 0.0, "Size 2 Choke 0 (offset on: both compositors shift the map the same way)"),
+        (10.0, 0.04, 0.0, "Size 10 Choke 4 % (dilates nothing, offset on)"),
+        (10.0, 0.0, 5.0, "Size 10 Choke 0 at Distance 5 (offset on, whole-pixel light offset)"),
+        (10.0, 0.5, 5.0, "Size 10 Choke 50 % at Distance 5 (still gated)"),
+    ] {
+        check(&mut g, &inner_shadow_doc(size, spread, distance, true), &format!("#14934 inner shadow, {what}, Anti-aliased"));
+    }
+}

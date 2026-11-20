@@ -118,7 +118,7 @@ fn the_move_tool_shows_and_drags_the_widgets_with_its_transform_controls() {
     app.ui.tool_options.move_show_transform = true;
     testing::frame(&mut app);
     assert_eq!(corner_targets(&app).len(), 2);
-    let before = app.session.active().unwrap().selected_layers();
+    let before = app.session.active().unwrap().selected_layers().to_vec();
     let n = steps(&app);
     drag(&mut app, [125.0, 35.0], [130.0, 40.0]);
     assert_eq!(radii_of(&app, ids[1]), [20.0; 4]);
