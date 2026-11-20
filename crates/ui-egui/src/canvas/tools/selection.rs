@@ -80,6 +80,18 @@ impl SelectionTools {
         }
     }
 
+    /// The outline the Rectangular or Elliptical Marquee being dragged shows, in document points, clipped to the
+    /// `size` canvas, the only area it can select; `None` with no marquee to show (a Single Row or Column line is already on
+    /// the canvas and is the shared tool's own to paint).
+    pub(crate) fn marquee_outline(&self, size: PixelSize) -> Option<Vec<Point>> {
+        let kind = self.marquee.marquee_kind();
+        if !matches!(kind, MarqueeKind::Rectangle | MarqueeKind::Ellipse) {
+            return None;
+        }
+        let SelectPhase::Marquee { rect: Some(rect), .. } = self.marquee.phase() else { return None };
+        Some(super::marquee_outline::clipped(rect, kind == MarqueeKind::Ellipse, f64::from(size.width), f64::from(size.height)))
+    }
+
     /// The whole-pixel offset of the selection drag in progress, from the tool that runs it.
     pub(crate) fn drag_offset(&self) -> Option<(i32, i32)> {
         [self.marquee.phase(), self.lasso.phase(), self.polygon.phase(), self.magnetic.phase(), self.wand.drag.phase()].into_iter().find_map(drag_delta)
@@ -393,7 +405,20 @@ impl CanvasTool for SelectionPass<'_> {
         self.with(|t| t.key(key, cx))
     }
 
+    /// A Rectangular or Elliptical Marquee being dragged paints its outline clipped to the canvas; the rest paint
+    /// as their tool does.
     fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
+        if self.which == Which::Marquee
+            && let Some(outline) = self.state.borrow().marquee_outline(self.probe.size())
+        {
+            if let Some(space) = cx.space()
+                && outline.len() > 2
+            {
+                let points: Vec<_> = outline.into_iter().map(|at| space.view.to_screen(at)).collect();
+                cx.marching_ants(&points, true);
+            }
+            return;
+        }
         self.with(|t| t.paint(draw, cx));
     }
 

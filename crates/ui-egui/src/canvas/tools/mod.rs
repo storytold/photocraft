@@ -10,6 +10,7 @@
 // the adapter `run` calls (`crop::pass`, `crop::finish`); the `mod` line is declared here.
 pub(crate) mod crop;
 pub(crate) mod dialog;
+pub(crate) mod marquee_outline;
 pub(crate) mod move_tool;
 pub(crate) mod retouch;
 pub(crate) mod selection;

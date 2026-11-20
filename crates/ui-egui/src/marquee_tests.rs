@@ -405,3 +405,25 @@ fn selected_pixels_move_off_the_background_but_not_off_a_fully_locked_layer() {
         close_dialogs(&mut app);
     }
 }
+
+/// A marquee dragged from the pasteboard shows its outline only over the canvas, the area it can select: the box is
+/// cut along the canvas edges, so the ants never run over the pasteboard.
+#[test]
+fn a_marquee_from_the_pasteboard_shows_its_outline_only_on_the_canvas() {
+    use craft::behavior::PixelSize;
+    use craft::behavior::kurbo::Point;
+    for tool in [Tool::RectMarquee, Tool::EllipseMarquee] {
+        let mut h = harness(tool);
+        h.state_mut().ui.extras.snap = false;
+        press_at(&mut h, -60.0, -40.0, Modifiers::NONE);
+        move_to(&mut h, 100.0, 80.0);
+        let outline = h.state().canvas_tools.selection.marquee_outline(PixelSize::new(400, 300)).expect("a marquee is being dragged");
+        assert!(outline.len() > 2, "{tool:?}: {outline:?}");
+        assert!(outline.iter().all(|p| (0.0..=400.0).contains(&p.x) && (0.0..=300.0).contains(&p.y)), "{tool:?}: {outline:?}");
+        if tool == Tool::RectMarquee {
+            assert_eq!(outline, [Point::new(0.0, 0.0), Point::new(100.0, 0.0), Point::new(100.0, 80.0), Point::new(0.0, 80.0)]);
+        }
+        release_at(&mut h, 100.0, 80.0, Modifiers::NONE);
+        assert!(h.state().canvas_tools.selection.marquee_outline(PixelSize::new(400, 300)).is_none(), "{tool:?}: released");
+    }
+}
