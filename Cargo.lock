@@ -1852,7 +1852,7 @@ dependencies = [
 [[package]]
 name = "craft-ipp"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=e7873217287876f76a045550369c90a541693c33#e7873217287876f76a045550369c90a541693c33"
+source = "git+https://github.com/storytold/craft-libs?rev=18ff4ad4ded2203cb1676158f647c36c10723ff1#18ff4ad4ded2203cb1676158f647c36c10723ff1"
 
 [[package]]
 name = "craft-jpeg"
