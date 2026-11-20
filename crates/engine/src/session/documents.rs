@@ -17,11 +17,19 @@ pub fn move_item<T>(v: &mut Vec<T>, i: usize, to: usize) -> Option<usize> {
 
 impl Session {
     pub fn new() -> Self {
+        // Commands run through the process-wide registry; the first session installs it, and a
+        // conflicting install reports itself at the first command.
+        let _ = crate::install::install();
         Self::default()
     }
 
     pub fn documents(&self) -> &[DocState] {
         &self.docs
+    }
+
+    /// Changes whenever a document is opened or closed.
+    pub fn documents_generation(&self) -> u64 {
+        self.documents_generation
     }
 
     pub fn active_index(&self) -> Option<usize> {
@@ -34,6 +42,11 @@ impl Session {
 
     pub fn active_mut(&mut self) -> Option<&mut DocState> {
         self.active.and_then(|i| self.docs.get_mut(i))
+    }
+
+    /// The open document with this id, active or not.
+    pub fn document_mut(&mut self, id: photocraft_doc::DocId) -> Option<&mut DocState> {
+        self.docs.iter_mut().find(|d| d.doc.id == id)
     }
 
     /// Monotonic active-document generation. It changes when a different document becomes
@@ -76,11 +89,15 @@ impl Session {
     }
 
     /// Make `layer` the active document's active layer and nothing else (the selection list and
-    /// anchor are left as they are), counted in [`Self::active_layer_changes`].
+    /// anchor are left as they are), counted in [`Self::active_layer_changes`]. Like
+    /// [`Self::select_layer`], not an edit.
     pub fn set_active_layer(&mut self, layer: Option<LayerId>) {
         let before = self.active_layer_stamp();
-        if let Some(st) = self.active_mut() {
+        if let Some(st) = self.active_mut()
+            && st.active_layer != layer
+        {
             st.active_layer = layer;
+            st.bump_selection_revision();
         }
         self.note_layer_change(before);
     }
@@ -179,9 +196,10 @@ impl Session {
         // History Options › Automatically Create First Snapshot off: no snapshot of the document
         // as opened, so the History panel starts at the opening state (#2966).
         if !self.prefs.get().history_options.automatically_create_first_snapshot {
-            st.snapshots.clear();
+            st.snapshots_mut().clear();
         }
         self.docs.push(st);
+        self.documents_generation = self.documents_generation.wrapping_add(1);
         let i = self.docs.len() - 1;
         self.active = Some(i);
         self.note_active_change();
@@ -222,6 +240,7 @@ impl Session {
             self.link_scan = None;
         }
         let d = self.docs.remove(index);
+        self.documents_generation = self.documents_generation.wrapping_add(1);
         self.open_document_order.retain(|&id| id != d.doc.id);
         self.active = if self.docs.is_empty() {
             None
@@ -243,4 +262,27 @@ pub(super) fn fix_active(st: &mut DocState) {
     }
     fix_selection(st);
     channel_cmds::fix_view(st);
+}
+
+#[cfg(test)]
+mod document_generation_tests {
+    use super::Session;
+    use photocraft_color::SampleType;
+    use photocraft_doc::{ColorMode, Document};
+    use photocraft_geom::Size;
+
+    #[test]
+    fn document_generation_tracks_open_and_close_but_not_selection() {
+        let mut session = Session::new();
+        let before = session.documents_generation();
+        session.add_document(Document::new("test", Size::new(2, 2), ColorMode::Rgb, SampleType::U8), None);
+        let opened = session.documents_generation();
+        assert_eq!(opened, before.wrapping_add(1));
+        session.set_active(0);
+        assert_eq!(session.documents_generation(), opened);
+        session.close(0);
+        assert_eq!(session.documents_generation(), opened.wrapping_add(1));
+        session.close(0);
+        assert_eq!(session.documents_generation(), opened.wrapping_add(1));
+    }
 }

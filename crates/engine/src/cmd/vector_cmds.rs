@@ -26,7 +26,7 @@ use photocraft_geom::{Affine, Point, Rect};
 use photocraft_vector as vector;
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, blend_from_str};
+use crate::commands::{CommandSpec, parse_blend};
 use crate::{EngineError, Result, Session};
 
 /// Keys PSD uses for a shape layer's vector data; dropped when a shape is rasterized.
