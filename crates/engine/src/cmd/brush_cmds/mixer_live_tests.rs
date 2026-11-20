@@ -312,7 +312,7 @@ fn mixer_prepared_offer_is_dropped_on_every_early_dispatch_failure() {
             1 => s.execute("paint.mixerBrush", json!("invalid params")),
             2 => s.execute("unknown.command", p),
             _ => {
-                s.active_mut().unwrap().active_layer = None;
+                s.active_mut().unwrap().set_active_layer(None);
                 s.execute("paint.mixerBrush", p)
             }
         };

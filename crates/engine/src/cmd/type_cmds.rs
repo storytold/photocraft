@@ -736,7 +736,7 @@ pub(crate) fn format_targets(s: &Session, p: &Value) -> Result<Vec<LayerId>> {
             .map(|v| v.as_u64().map(LayerId).ok_or_else(|| EngineError::Other("layers must contain layer IDs".into())))
             .collect::<Result<Vec<_>>>()?
     } else {
-        st.selected_layers()
+        st.selected_layers().to_vec()
     };
     let mut targets = Vec::new();
     for id in ids {

@@ -298,7 +298,7 @@ fn save_in_place_skips_files_it_would_write_back_with_less() {
 fn save_in_place_skips_alpha_profiles_and_layer_state_the_file_would_drop() {
     let (mut app, written) = app_with(vec![Picked::Cancelled; 3]);
     let ctx = egui::Context::default();
-    let edit = |app: &mut PhotocraftApp, f: &dyn Fn(&mut Document)| f(std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc));
+    let edit = |app: &mut PhotocraftApp, f: &dyn Fn(&mut Document)| f(std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut()));
     // An RGB layer with transparency: DPX keeps its alpha, so it is written back.
     app.open_file("/pics/rgb.dpx", b"x").unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
