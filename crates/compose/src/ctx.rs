@@ -1,6 +1,6 @@
 use super::content::empty_in;
-use super::fx_cache::{effect_maps, fx_over_budget, layer_identity};
-use super::{Buffer, Document, Layer, LayerContent, Rect, adjust, advanced, effects, pattern};
+use super::fx_cache::{effect_maps_with, fx_over_budget, layer_identity};
+use super::{Buffer, BufferAlloc, Document, InfallibleBufferAlloc, Layer, LayerContent, Rect, adjust, advanced, effects, pattern};
 
 type VectorMaskSlot = std::sync::Arc<std::sync::OnceLock<photocraft_vector::CompiledVectorMask>>;
 
@@ -183,22 +183,33 @@ pub(crate) const PREPARE_DEPTH: u32 = 64;
 /// `rect` before tiles render in parallel, layers concurrently on native targets, each build
 /// inside `setting` (the tiles' thread-local colour setting). Tiles then only read finished maps:
 /// none builds one while others need it (#276), and none duplicates another's build. Builds never
-/// wait on each other (`cached_effect_maps`), so building them in parallel can't deadlock.
+/// wait on each other (`cached_effect_maps_with`), so building them in parallel can't deadlock.
 pub(crate) fn prepare_effects(layers: &[Layer], rect: Rect, cx: &Ctx, setting: impl Fn(&mut dyn FnMut()) + Sync) {
+    let _ = prepare_effects_with(layers, rect, cx, &InfallibleBufferAlloc, |build| {
+        let mut infallible = || match build() {
+            Ok(()) => (),
+            Err(never) => match never {},
+        };
+        setting(&mut infallible);
+        Ok(())
+    });
+}
+
+/// Fallible counterpart of [`prepare_effects`], used by the compositor before it starts tiles.
+pub(crate) fn prepare_effects_with<A, F>(layers: &[Layer], rect: Rect, cx: &Ctx, alloc: &A, setting: F) -> Result<(), A::Error>
+where
+    A: BufferAlloc + Sync,
+    F: Fn(&mut dyn FnMut() -> Result<(), A::Error>) -> Result<(), A::Error> + Sync,
+{
     let mut todo = Vec::new();
     effect_layers(layers, rect, 0, &mut todo);
-    let build = |l: &std::borrow::Cow<Layer>| {
-        setting(&mut || {
-            let _ = effect_maps(l, rect, cx);
-        });
-    };
+    let build = |l: &std::borrow::Cow<Layer>| setting(&mut || effect_maps_with(l, rect, cx, alloc).map(|_| ()));
     #[cfg(not(target_arch = "wasm32"))]
     if todo.len() > 1 {
         use rayon::prelude::*;
-        todo.par_iter().for_each(build);
-        return;
+        return todo.par_iter().try_for_each(build);
     }
-    todo.iter().for_each(build);
+    todo.iter().try_for_each(build)
 }
 
 /// The visible layers of `layers` (groups included) with effects that can reach `rect`.
