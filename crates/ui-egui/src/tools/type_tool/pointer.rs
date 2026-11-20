@@ -342,6 +342,9 @@ impl CanvasTool for TypeTool<'_> {
         self.scope.with_app(|app| match hover_path_target(app, at.x, at.y, cx.mods.shift, press) {
             Some(PathClick::Area { .. }) => Cursor::from(PaintedCursor::type_on(false)),
             Some(PathClick::OnPath { .. }) => Cursor::from(PaintedCursor::type_on(true)),
+            // The Vertical Type tool's I-beam lies on its side inside a dotted box, over text too; the
+            // Vertical Type Mask tool's has no box (#12063).
+            None if app.ui.tool == crate::state::Tool::VerticalType => Cursor::from(PaintedCursor::outline(super::vertical_cursor::rings())),
             None if app.ui.tool.is_vertical_type() => Cursor::System(CursorIcon::VerticalText),
             None => Cursor::System(CursorIcon::Text),
         })

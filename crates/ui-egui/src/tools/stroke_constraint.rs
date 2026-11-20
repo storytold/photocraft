@@ -25,6 +25,11 @@ use crate::state::Tool;
 /// Screen points the pointer must travel before a ⇧-constrained stroke locks its direction.
 const LOCK_DISTANCE: f64 = 3.0;
 
+/// View points of rounding slack for a Brush axis tie. Pointer positions and the view centre
+/// are f32, so converting each point to document coordinates can perturb equal deltas.
+/// A thousandth of a point is well below a physical input pixel at normal display scales.
+const AXIS_TIE_TOLERANCE: f64 = 0.001;
+
 /// A ⇧ constraint in progress: its origin and, once locked, the unit direction of the line.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Axis {
@@ -80,10 +85,10 @@ pub fn project(origin: [f64; 2], dir: [f64; 2], p: [f64; 2]) -> [f64; 2] {
 
 /// The direction a ⇧-constrained drag locks to, in `mode`. None means "not decided yet": the
 /// pointer has not moved, or `Snap::Axis` met an exact 45° tie.
-fn lock_dir(mode: Snap, origin: [f64; 2], p: [f64; 2]) -> Option<[f64; 2]> {
+fn lock_dir(mode: Snap, origin: [f64; 2], p: [f64; 2], zoom: f64) -> Option<[f64; 2]> {
     match mode {
         Snap::Degrees45 => snapped_dir(origin, p, std::f64::consts::FRAC_PI_4),
-        Snap::Axis => axis_dir(origin, p),
+        Snap::Axis => axis_dir(origin, p, AXIS_TIE_TOLERANCE / zoom),
     }
 }
 
@@ -91,15 +96,15 @@ fn lock_dir(mode: Snap, origin: [f64; 2], p: [f64; 2]) -> Option<[f64; 2]> {
 /// movement (#11889). An exact 45° tie decides neither axis, so it returns None and the drag stays
 /// on its start point -- as in the reference application, where a 45° ⇧-drag paints only its start
 /// dab. The lock is retried on the next point, so any later movement breaks the tie.
-fn axis_dir(origin: [f64; 2], p: [f64; 2]) -> Option<[f64; 2]> {
-    let (dx, dy) = (p[0] - origin[0], p[1] - origin[1]);
+fn axis_dir(origin: [f64; 2], p: [f64; 2], tolerance: f64) -> Option<[f64; 2]> {
+    let (dx, dy) = ((p[0] - origin[0]).abs(), (p[1] - origin[1]).abs());
     if !(dx.is_finite() && dy.is_finite()) || dx.hypot(dy) < 1e-9 {
         return None;
     }
-    if dx.abs() == dy.abs() {
+    if (dx - dy).abs() <= tolerance {
         return None;
     }
-    Some(if dx.abs() > dy.abs() { [1.0, 0.0] } else { [0.0, 1.0] })
+    Some(if dx > dy { [1.0, 0.0] } else { [0.0, 1.0] })
 }
 
 /// `p` moved onto the nearest 45° ray from `origin` (the Gradient tool's ⇧).
@@ -126,11 +131,12 @@ pub fn constrain(tool: Tool, axis: &mut Option<Axis>, start: [f64; 2], last: [f6
     let mode = snap_mode(tool);
     let a = axis.get_or_insert(Axis { origin: last, dir: None });
     if a.dir.is_none() {
-        let reach = LOCK_DISTANCE / f64::from(zoom.max(1e-3));
+        let zoom = f64::from(zoom.max(1e-3));
+        let reach = LOCK_DISTANCE / zoom;
         if (p[0] - a.origin[0]).hypot(p[1] - a.origin[1]) < reach {
             return a.origin;
         }
-        a.dir = lock_dir(mode, a.origin, p);
+        a.dir = lock_dir(mode, a.origin, p, zoom);
     }
     match a.dir {
         Some(d) => project(a.origin, d, p),
@@ -217,6 +223,40 @@ mod tests {
         assert!(close(constrain(Tool::Move, &mut None, o, o, [30.0, 12.0], true, 1.0), [30.0, 12.0]));
     }
 
+    #[test]
+    fn brush_ties_survive_fractional_view_rounding() {
+        use craft::behavior::CanvasView;
+        use egui::{Rect as ScreenRect, pos2, vec2};
+
+        let rect = ScreenRect::from_min_size(pos2(20.0, 14.0), vec2(1039.0, 587.0));
+        let cases = [
+            (CanvasView::new(rect, Point::new(256.0, 256.0), 0.73), pos2(527.0, 297.0)),
+            (CanvasView::new(rect, Point::new(740.0, 230.0), 1.17), pos2(24.0 + 1.0 / 32768.0, 280.0)),
+        ];
+        for (view, at) in cases {
+            let start = view.to_doc(at);
+            let origin = [start.x, start.y];
+            for (sx, sy) in [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+                let end = view.to_doc(at + vec2(sx * 24.0, sy * 24.0));
+                let mut axis = None;
+                let next = |axis: &mut Option<Axis>, p: Point| constrain(Tool::Brush, axis, origin, origin, [p.x, p.y], true, view.zoom as f32);
+                assert_eq!(next(&mut axis, end), origin, "exact diagonal at {at:?}, zoom {} signs {sx}/{sy}", view.zoom);
+                assert_eq!(axis.unwrap().dir, None, "a diagonal keeps the lock undecided");
+
+                let wider = view.to_doc(at + vec2(sx * 24.0, sy * 23.0));
+                assert_eq!(next(&mut axis, wider), [wider.x, start.y], "a one-point difference breaks the tie horizontally");
+                assert_eq!(axis.unwrap().dir, Some([1.0, 0.0]));
+
+                let taller = view.to_doc(at + vec2(sx * 23.0, sy * 24.0));
+                assert_eq!(next(&mut None, taller), [start.x, taller.y], "a one-point difference still locks vertically");
+                let p = constrain(Tool::Pencil, &mut None, origin, origin, [end.x, end.y], true, view.zoom as f32);
+                let dx = (p[0] - start.x) * f64::from(sx);
+                let dy = (p[1] - start.y) * f64::from(sy);
+                assert!(dx > 10.0 && (dx - dy).abs() < 1e-9, "the Pencil keeps snapping diagonally");
+            }
+        }
+    }
+
     fn app() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 120, "height": 120, "background": "transparent"})).unwrap();
@@ -232,6 +272,40 @@ mod tests {
 
     fn alpha(app: &PhotocraftApp, x: i32, y: i32) -> f32 {
         app.session.documents()[0].doc.layers[0].surface().unwrap().rgba(x, y)[3]
+    }
+
+    #[test]
+    fn fractional_zoom_shift_drag_leaves_only_the_brush_dab() {
+        let mut app = app();
+        app.ui.tool = Tool::Brush;
+        app.sync_views();
+        app.ui.views[0].zoom = 0.73;
+        app.ui.views[0].center = [60.0, 60.0];
+        app.ui.views[0].clear_pending();
+        crate::canvas::testing::shown(&mut app);
+        let view = crate::canvas::testing::view(&app).expect("the canvas shows the document");
+        let center = view.rect.center().round();
+        let (start, end) = (13..30)
+            .find_map(|offset| {
+                let at = center - egui::vec2(17.0, offset as f32);
+                let from = view.to_doc(at);
+                let to = view.to_doc(at + egui::vec2(22.0, 22.0));
+                ((to.x - from.x).abs() != (to.y - from.y).abs()).then_some((from, to))
+            })
+            .expect("a screen diagonal whose mapped deltas round differently");
+
+        let shift = egui::Modifiers::SHIFT;
+        let before = app.session.documents()[0].history.past_len();
+        tool_event(&mut app, ToolEvent::Down { x: start.x, y: start.y, pressure: 1.0 }, shift);
+        tool_event(&mut app, ToolEvent::Move { x: end.x, y: end.y, pressure: 1.0 }, shift);
+        tool_event(&mut app, ToolEvent::Up { x: end.x, y: end.y }, shift);
+
+        let points = last_stroke_points(&app);
+        assert!(points.iter().all(|&p| close(p, [start.x, start.y])), "a diagonal paints only its start: {points:?}");
+        assert_eq!(app.session.documents()[0].history.past_len(), before + 1, "the dab is one undo step");
+        let (x, y) = (start.x.floor() as i32, start.y.floor() as i32);
+        let coverage = alpha(&app, x, y);
+        assert!(coverage > 0.5, "the dab at {start:?} covers its centre pixel ({x}, {y}): {coverage}");
     }
 
     #[test]

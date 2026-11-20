@@ -21,7 +21,7 @@ fn fixture(depth: u8) -> (Session, [LayerId; 4]) {
             let outer_id = outer.id;
             let other = Layer::raster("Other", doc.pixel_format());
             let other_id = other.id;
-            doc.layers = vec![outer, other];
+            doc.layers = vec![outer, other].into();
             Ok([outer_id, inner_id, leaf_id, other_id])
         })
         .unwrap();
@@ -35,7 +35,7 @@ fn layer_color_groups_and_overlapping_selection_are_one_undo_step() {
         let (mut s, [outer, inner, leaf, other]) = fixture(depth);
         crate::layer_multi_cmds::set_selection(&mut s, vec![outer, leaf], Some(leaf), Some(outer)).unwrap();
         let before = s.active().unwrap().doc.clone();
-        let selected = s.active().unwrap().selected_layers();
+        let selected = s.active().unwrap().selected_layers().to_vec();
         let past = s.active().unwrap().history.past_len();
         let r = s.execute(ID, json!({"color": "seafoam"})).unwrap();
         assert_eq!(r["layers"], json!([outer.0, inner.0, leaf.0]));
