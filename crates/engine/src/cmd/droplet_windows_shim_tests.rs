@@ -81,27 +81,42 @@ fn install_stub(root: &str, subdir: &str, exe: &str) -> String {
 
 #[cfg(windows)]
 /// One Explorer-shaped launcher run, `cmd /d /c ""launcher" "input""`, with faked CLI locations:
-/// `local` / `machine` become `%LOCALAPPDATA%` / `%ProgramFiles%` (empty = defined, nothing in
-/// it), `path_dir` is the only PATH entry, `cli_env` sets `PHOTOCRAFT_CLI`. Returns what the CLI
-/// recorded and everything cmd itself printed.
+/// `local` / `machine` / `x86` become `%LOCALAPPDATA%` / `%ProgramFiles%` /
+/// `%ProgramFiles(x86)%` (empty = defined, nothing in it), `path_dir` is the only PATH entry,
+/// `cli_env` sets `PHOTOCRAFT_CLI`. Returns what the CLI recorded and everything cmd itself
+/// printed.
 fn run_lookup_probe(
     launcher: &str,
     input: &str,
     local: Option<&str>,
     machine: Option<&str>,
+    x86: Option<&str>,
     path_dir: Option<&str>,
     cli_env: Option<&str>,
 ) -> (String, String) {
     use std::os::windows::process::CommandExt;
     let captured = format!(r"{launcher}.captured.txt");
     let _ = std::fs::remove_file(&captured);
-    // cmd.exe sets %ProgramFiles% from the registry when it starts, so a per-machine install
-    // folder cannot be faked in the child's environment: a one-line wrapper sets it inside the
-    // same cmd process and calls the launcher with the same quoted argument.
+    // cmd.exe sets %ProgramFiles% and %ProgramFiles(x86)% from the registry when it starts, so a
+    // per-machine install folder cannot be faked in the child's environment: a one-line wrapper
+    // sets them inside the same cmd process and calls the launcher with the same quoted argument.
     let mut invoked = launcher.to_string();
-    if let Some(machine) = machine.filter(|m| !m.is_empty()) {
+    let has_machine = machine.is_some_and(|m| !m.is_empty());
+    let has_x86 = x86.is_some_and(|x| !x.is_empty());
+    if has_machine || has_x86 {
         let wrapper = format!(r"{launcher}.wrapper.cmd");
-        std::fs::write(&wrapper, format!("@echo off\r\nset \"ProgramFiles={machine}\"\r\ncall \"{launcher}\" \"{input}\"\r\n")).unwrap();
+        let mut sets = String::new();
+        if has_machine {
+            sets.push_str(&format!("set \"ProgramFiles={machine}\"\r\n", machine = machine.unwrap_or_default()));
+        }
+        if has_x86 {
+            sets.push_str(&format!("set \"ProgramFiles(x86)={x86}\"\r\n", x86 = x86.unwrap_or_default()));
+        } else {
+            // No fake asked for: clear the registry's own folder, so a PhotoCraft installed on the
+            // test machine can never be what a leg below the one under test picks.
+            sets.push_str("set \"ProgramFiles(x86)=\"\r\n");
+        }
+        std::fs::write(&wrapper, format!("@echo off\r\n{sets}call \"{launcher}\" \"{input}\"\r\n")).unwrap();
         invoked = wrapper;
     }
     let arg_line = if invoked == launcher { format!(" \"{input}\"") } else { String::new() };
@@ -109,6 +124,7 @@ fn run_lookup_probe(
     cmd.raw_arg(format!("/d /c \"\"{invoked}\"{arg_line}\""))
         .env("LOCALAPPDATA", local.unwrap_or(""))
         .env("ProgramFiles", machine.unwrap_or(""))
+        .env("ProgramFiles(x86)", x86.unwrap_or(""))
         .env("PATH", path_dir.unwrap_or(r"C:\Windows\System32"))
         .env("STUB_OUT", &captured)
         .env_remove("PC_CLI");
@@ -315,6 +331,7 @@ fn windows_launcher_finds_the_cli_in_the_per_user_install_folder_before_path() {
         &input,
         Some(&format!(r"{dir}\fake-local")),
         Some(&format!(r"{dir}\fake-progfiles")),
+        None,
         Some(&format!(r"{dir}\fake-path")),
         None,
     );
@@ -332,6 +349,7 @@ fn windows_launcher_finds_the_cli_in_the_per_user_install_folder_before_path() {
         &input,
         Some(&format!(r"{dir}\fake-local")),
         Some(&format!(r"{dir}\fake-progfiles")),
+        None,
         Some(&format!(r"{dir}\fake-path")),
         Some(&stub),
     );
@@ -360,12 +378,70 @@ fn windows_launcher_falls_back_to_the_per_machine_install_folder() {
         &input,
         Some(&format!(r"{dir}\fake-local")),
         Some(&format!(r"{dir}\fake-progfiles")),
+        None,
         Some(&format!(r"{dir}\fake-path")),
         None,
     );
     let lines: Vec<&str> = captured.split('\n').collect();
     assert_eq!(lines.len(), 4, "one CLI must run and get 3 arguments; it recorded {captured:?}, cmd said: {report}");
     assert!(lines[0].ends_with(r"fake-progfiles\ArtCraft\PhotoCraft\photocraft-cli.exe"), "the per-machine install folder beats PATH; it picked {captured:?}");
+    assert_eq!(lines[1..].join("\n"), wanted, "the droplet and the dropped path reach the picked CLI");
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_launcher_falls_back_to_the_x86_per_machine_install_folder() {
+    // The 64-bit MSI's default per-machine folder is `%ProgramFiles(x86)%\ArtCraft\PhotoCraft`
+    // (packaging/windows/install-policy.wxi: CraftDefaultMachineFolder on VersionNT64), and a
+    // native 64-bit cmd.exe resolves `%ProgramFiles%` to the 64-bit folder, so that install is
+    // only found when both machine folders are searched (#13718, review thread 4637631427).
+    // Red at f81bf94ca: with only `%ProgramFiles%` searched the launcher fell through to the
+    // decoy CLI on PATH, which is where a drop on such an install failed.
+    let dir = tmp("install-lookup-x86");
+    let stub = cli_stub_who(&dir);
+    create(&dir, format!("{dir}/Rotate"), None);
+    let launcher = format!(r"{dir}\Rotate.cmd");
+    std::fs::write(format!(r"{dir}\a.png"), "x").unwrap();
+    std::fs::create_dir_all(format!(r"{dir}\fake-local")).unwrap();
+    std::fs::create_dir_all(format!(r"{dir}\fake-progfiles")).unwrap();
+    install_stub(&format!(r"{dir}\fake-x86"), r"ArtCraft\PhotoCraft", &stub);
+    std::fs::create_dir_all(format!(r"{dir}\fake-path")).unwrap();
+    std::fs::copy(&stub, format!(r"{dir}\fake-path\photocraft-cli.exe")).unwrap();
+    let input = format!(r"{dir}\a.png");
+    let wanted = format!("droplet\n{}\\Rotate.pcdroplet\n{input}", dir);
+
+    let (captured, report) = run_lookup_probe(
+        &launcher,
+        &input,
+        Some(&format!(r"{dir}\fake-local")),
+        Some(&format!(r"{dir}\fake-progfiles")),
+        Some(&format!(r"{dir}\fake-x86")),
+        Some(&format!(r"{dir}\fake-path")),
+        None,
+    );
+    let lines: Vec<&str> = captured.split('\n').collect();
+    assert_eq!(lines.len(), 4, "one CLI must run and get 3 arguments; it recorded {captured:?}, cmd said: {report}");
+    assert!(lines[0].ends_with(r"fake-x86\ArtCraft\PhotoCraft\photocraft-cli.exe"), "the x86 per-machine install folder beats PATH; it picked {captured:?}");
+    assert_eq!(lines[1..].join("\n"), wanted, "the droplet and the dropped path reach the picked CLI");
+
+    // Both machine folders hold a CLI: the 64-bit one keeps its place, so the lookup order is
+    // PHOTOCRAFT_CLI, per-user, per-machine 64-bit, per-machine x86, PATH.
+    install_stub(&format!(r"{dir}\fake-progfiles"), r"ArtCraft\PhotoCraft", &stub);
+    let (captured, report) = run_lookup_probe(
+        &launcher,
+        &input,
+        Some(&format!(r"{dir}\fake-local")),
+        Some(&format!(r"{dir}\fake-progfiles")),
+        Some(&format!(r"{dir}\fake-x86")),
+        Some(&format!(r"{dir}\fake-path")),
+        None,
+    );
+    let lines: Vec<&str> = captured.split('\n').collect();
+    assert_eq!(lines.len(), 4, "one CLI must run and get 3 arguments; it recorded {captured:?}, cmd said: {report}");
+    assert!(
+        lines[0].ends_with(r"fake-progfiles\ArtCraft\PhotoCraft\photocraft-cli.exe"),
+        "the 64-bit per-machine folder is searched before the x86 one; it picked {captured:?}"
+    );
     assert_eq!(lines[1..].join("\n"), wanted, "the droplet and the dropped path reach the picked CLI");
 }
 

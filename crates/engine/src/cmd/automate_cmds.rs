@@ -435,9 +435,15 @@ exec "$cli" droplet {quoted_abs} "$@"
 /// then never reach the batch parser or the console codepage.
 /// The CLI is looked up like the macOS shim looks up its app bundle: `PHOTOCRAFT_CLI` first,
 /// then the per-user install folder (`%LOCALAPPDATA%\Programs\ArtCraft\PhotoCraft`), then the
-/// per-machine one (`%ProgramFiles%\ArtCraft\PhotoCraft`), then PATH. The installer puts
-/// `photocraft-cli.exe` in the install folder and does not add that folder to PATH, so a
-/// PATH-only lookup fails on a default install.
+/// per-machine ones (`%ProgramFiles%\ArtCraft\PhotoCraft` and, on 64-bit Windows, the folder the
+/// MSI really installs into, `%ProgramFiles(x86)%\ArtCraft\PhotoCraft`), then PATH. The installer
+/// puts `photocraft-cli.exe` in the install folder and does not add that folder to PATH, so a
+/// PATH-only lookup fails on a default install; and a native 64-bit `cmd.exe` resolves
+/// `%ProgramFiles%` to the 64-bit folder, so the 32-bit install is only found when both machine
+/// folders are searched (`packaging/windows/install-policy.wxi`: `CraftDefaultMachineFolder` uses
+/// `[%ProgramFiles(x86)]` when `VersionNT64`). Each candidate is its own flat line and the
+/// `if exist` operand is quoted whole, so the `)` of the variable name never reaches the parser
+/// unquoted.
 /// Kept limitation, pinned by `windows_launcher_splits_an_unquoted_dropped_path`: Explorer
 /// quotes a dropped path only when it contains a space, so an unquoted path carrying `&` or
 /// `^` is already split or unescaped while cmd.exe parses the command line that starts the
@@ -454,8 +460,9 @@ fn write_shim(droplet: &str) -> Result<String> {
     let shim = format!("{base}.cmd");
     let user_cli = r"%LOCALAPPDATA%\Programs\ArtCraft\PhotoCraft\photocraft-cli.exe";
     let machine_cli = r"%ProgramFiles%\ArtCraft\PhotoCraft\photocraft-cli.exe";
+    let machine_x86_cli = r"%ProgramFiles(x86)%\ArtCraft\PhotoCraft\photocraft-cli.exe";
     let body = format!(
-        "@echo off\r\nrem PhotoCraft droplet: drop files and folders on this file to run the stored action on them.\r\nrem The CLI, in order: PHOTOCRAFT_CLI, per-user install folder, per-machine install folder, PATH.\r\nset \"PC_CLI=\"\r\nif defined PHOTOCRAFT_CLI set \"PC_CLI=%PHOTOCRAFT_CLI%\"\r\nif not defined PC_CLI if exist \"{user_cli}\" set \"PC_CLI={user_cli}\"\r\nif not defined PC_CLI if exist \"{machine_cli}\" set \"PC_CLI={machine_cli}\"\r\nif not defined PC_CLI set \"PC_CLI=photocraft-cli\"\r\n\"%PC_CLI%\" droplet \"%~dp0%~n0{ext}\" %*\r\n"
+        "@echo off\r\nrem PhotoCraft droplet: drop files and folders on this file to run the stored action on them.\r\nrem The CLI, in order: PHOTOCRAFT_CLI, per-user install folder, per-machine install folder, per-machine 32-bit install folder, PATH.\r\nset \"PC_CLI=\"\r\nif defined PHOTOCRAFT_CLI set \"PC_CLI=%PHOTOCRAFT_CLI%\"\r\nif not defined PC_CLI if exist \"{user_cli}\" set \"PC_CLI={user_cli}\"\r\nif not defined PC_CLI if exist \"{machine_cli}\" set \"PC_CLI={machine_cli}\"\r\nif not defined PC_CLI if exist \"{machine_x86_cli}\" set \"PC_CLI={machine_x86_cli}\"\r\nif not defined PC_CLI set \"PC_CLI=photocraft-cli\"\r\n\"%PC_CLI%\" droplet \"%~dp0%~n0{ext}\" %*\r\n"
     );
     crate::file_cmds::write_file(&shim, body.as_bytes())?;
     Ok(shim)
