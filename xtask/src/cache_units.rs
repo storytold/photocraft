@@ -31,6 +31,19 @@ pub fn run(mut cmd: Command, what: &str) -> Result<(), String> {
     if status.success() { Ok(()) } else { Err(format!("{what}: exited with {status}")) }
 }
 
+/// Capture non-Cargo output while recording Cargo messages, for a command whose output is data.
+pub fn capture_recorded(mut cmd: Command, what: &str, file: &std::path::Path) -> Result<Vec<u8>, String> {
+    eprintln!("$ {what}");
+    let mut record = OpenOptions::new().create(true).append(true).open(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let mut child = cmd.stdout(Stdio::piped()).spawn().map_err(|e| format!("{what}: failed to spawn: {e}"))?;
+    let stdout = child.stdout.take().expect("piped stdout");
+    let mut output = Vec::new();
+    let routed = route(BufReader::new(stdout), &mut record, &mut output);
+    let status = child.wait().map_err(|e| format!("{what}: {e}"))?;
+    routed.map_err(|e| format!("{what}: reading output: {e}"))?;
+    if status.success() { Ok(output) } else { Err(format!("{what}: exited with {status}")) }
+}
+
 /// Records xtask's own units: `cargo xtask` builds it before it can record anything, and an
 /// unrecorded unit is trimmed from the entry and rebuilt next run. The build is fresh, so this only
 /// prints the messages.
@@ -72,5 +85,68 @@ mod tests {
         route(input.as_bytes(), &mut record, &mut out).unwrap();
         assert_eq!(String::from_utf8(record).unwrap(), "{\"reason\":\"compiler-artifact\",\"fresh\":true}\n{\"reason\":\"build-finished\",\"success\":true}\n");
         assert_eq!(String::from_utf8(out).unwrap(), "running 3 tests\ntest a ... ok\n");
+    }
+
+    #[test]
+    fn mixed_nextest_listing_keeps_json_separate_and_rejects_truncation() {
+        let input = b"{\"reason\":\"compiler-artifact\",\"fresh\":false}\n{\"rust-suites\":{}}\n";
+        let (mut record, mut listing) = (Vec::new(), Vec::new());
+        route(input.as_slice(), &mut record, &mut listing).unwrap();
+        assert_eq!(record, b"{\"reason\":\"compiler-artifact\",\"fresh\":false}\n");
+        assert!(serde_json::from_slice::<serde_json::Value>(&listing).is_ok());
+        listing.truncate(listing.len() - 3);
+        assert!(serde_json::from_slice::<serde_json::Value>(&listing).is_err());
+    }
+
+    #[test]
+    fn real_nextest_list_records_build_without_rebuilding() {
+        if !crate::nextest_available() {
+            eprintln!("cargo-nextest unavailable; skipping mixed-stream integration test");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("photocraft-cache-units-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"cache-unit-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "#[test] fn one() {}\n").unwrap();
+        let list = || {
+            let out = crate::cargo()
+                .current_dir(&dir)
+                .env("CARGO_TARGET_DIR", dir.join("target"))
+                .env("CARGO_BUILD_BUILD_DIR", dir.join("target"))
+                .env("CARGO_NET_OFFLINE", "true")
+                .env("NEXTEST_PROFILE", "ci")
+                .args([
+                    "nextest",
+                    "list",
+                    "--profile",
+                    "default",
+                    "--list-type",
+                    "binaries-only",
+                    "--message-format",
+                    "json",
+                    "--cargo-message-format",
+                    "json-render-diagnostics",
+                ])
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            out
+        };
+        for expected_fresh in [false, true] {
+            let output = list();
+            let (mut record, mut listing) = (Vec::new(), Vec::new());
+            route(output.stdout.as_slice(), &mut record, &mut listing).unwrap();
+            let artifacts: Vec<serde_json::Value> = record
+                .split(|&b| b == b'\n')
+                .filter(|line| !line.is_empty())
+                .map(|line| serde_json::from_slice(line).unwrap())
+                .filter(|message: &serde_json::Value| message["reason"] == "compiler-artifact")
+                .collect();
+            assert!(!artifacts.is_empty());
+            assert!(artifacts.iter().all(|message| message["fresh"].as_bool() == Some(expected_fresh)));
+            let json: serde_json::Value = serde_json::from_slice(&listing).unwrap();
+            assert_eq!(json["rust-binaries"].as_object().unwrap().len(), 1);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
