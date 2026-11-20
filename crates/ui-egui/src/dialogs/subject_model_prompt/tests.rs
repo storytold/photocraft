@@ -32,7 +32,7 @@ impl SubjectModel for StandIn {
     }
 }
 
-fn make_app(model: Option<Arc<StandIn>>) -> PhotocraftApp {
+fn make_app(model: Option<Arc<StandIn>>) -> Box<PhotocraftApp> {
     let mut s = Session::new();
     s.execute("file.new", json!({"width":16,"height":16})).unwrap();
     let model = model.map(|m| m as photocraft_engine::subject_model::SharedSubjectModel);

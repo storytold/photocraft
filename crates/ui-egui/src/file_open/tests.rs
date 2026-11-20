@@ -17,13 +17,13 @@ type Written = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
 /// warning for names containing "warn", and fails for bytes "bad"; the exporter warns for ".png"
 /// and the writer records what it wrote. Its file picks answer with `answers`, in order; a pick past the
 /// last answer is cancelled.
-fn app_with(answers: Vec<Picked>) -> (PhotocraftApp, Written) {
+fn app_with(answers: Vec<Picked>) -> (Box<PhotocraftApp>, Written) {
     app_over(Arc::new(ScriptedFiles::answering(answers)))
 }
 
 /// [`app_with`] over a file service the test keeps, to read the requests it was asked. The framework takes the
 /// service when the app is built.
-fn app_over(files: Arc<ScriptedFiles>) -> (PhotocraftApp, Written) {
+fn app_over(files: Arc<ScriptedFiles>) -> (Box<PhotocraftApp>, Written) {
     let written: Written = Rc::default();
     let w = written.clone();
     let services = Services {
@@ -298,7 +298,7 @@ fn save_in_place_skips_files_it_would_write_back_with_less() {
 fn save_in_place_skips_alpha_profiles_and_layer_state_the_file_would_drop() {
     let (mut app, written) = app_with(vec![Picked::Cancelled; 3]);
     let ctx = egui::Context::default();
-    let edit = |app: &mut PhotocraftApp, f: &dyn Fn(&mut Document)| f(std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc));
+    let edit = |app: &mut PhotocraftApp, f: &dyn Fn(&mut Document)| f(std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut()));
     // An RGB layer with transparency: DPX keeps its alpha, so it is written back.
     app.open_file("/pics/rgb.dpx", b"x").unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
@@ -568,7 +568,7 @@ fn png_bytes(w: u32, h: u32) -> Vec<u8> {
 }
 
 /// An app with one open document whose canvas showed at (100, 50)–(700, 550) last frame.
-fn app_with_canvas() -> PhotocraftApp {
+fn app_with_canvas() -> Box<PhotocraftApp> {
     let (mut app, _) = app_with(Vec::new());
     app.open_bytes("canvas.psd", b"x").unwrap();
     app.drop_canvas_rect = Some(egui::Rect::from_min_max(egui::pos2(100.0, 50.0), egui::pos2(700.0, 550.0)));

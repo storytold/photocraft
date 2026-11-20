@@ -20,12 +20,12 @@ const YELLOW: [f32; 4] = [1.0, 1.0, 0.0, 1.0];
 
 /// The measured test document: 800 x 500, red (top left), green (top right), blue (bottom left)
 /// and yellow (bottom right) quadrants with a black square in the middle; the Perspective Crop tool.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 500})).unwrap();
     app.sync_views();
     app.ui.tool = Tool::PerspectiveCrop;
-    let surf = Arc::make_mut(&mut app.session.active_mut().unwrap().doc).layers[0].surface_mut().unwrap();
+    let surf = Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).layers[0].surface_mut().unwrap();
     for (x, y, c) in [(0, 0, RED), (400, 0, GREEN), (0, 250, BLUE), (400, 250, YELLOW)] {
         surf.fill_rect(photocraft_geom::Rect::from_xywh(x, y, 400, 250), &c);
     }

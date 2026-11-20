@@ -1,2 +1,16 @@
 [alias]
 xtask = "run -p xtask --"
+# Archive and doctest jobs do not need the framework's lockfile and translation checks.
+xtask-gate = "run --locked -p xtask --no-default-features -- ci"
+
+# wgpu's GL backend (glutin_wgl_sys) imports opengl32.dll, so every binary that links wgpu loads
+# it at start, and a process that has loaded it takes about 60 ms longer to exit (#15444): every
+# test process and every app exit on DX12 or Vulkan. Delay-loaded, it loads on the first WGL
+# call, which only the GL backend makes. Here rather than in a build script, because a link
+# argument from a build script reaches only its own package's binaries, and every package whose
+# binaries link wgpu would need one. Cargo joins these with `CARGO_TARGET_<triple>_RUSTFLAGS`
+# (CI, packaging); only `RUSTFLAGS` replaces them. The print DLLs' delay-loads stay in the app's
+# and CLI's build.rs: without those the exe doesn't start on some Windows images (#5884), so
+# they must hold for any cargo invocation, also one that never reads this file.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-Clink-arg=/DELAYLOAD:opengl32.dll", "-Clink-arg=delayimp.lib"]

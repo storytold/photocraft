@@ -134,7 +134,7 @@ impl PaintResize {
 
     /// The falloff preview at the press point, shown in the canvas body (`brush_feedback::show`). Nothing while no
     /// resize runs.
-    pub(crate) fn show_preview(&self, ui: &mut egui::Ui, app: &PhotocraftApp) {
+    pub(crate) fn show_preview(&self, ui: &mut egui::Ui, app: &PhotocraftApp, rect: egui::Rect) {
         // The brush already holds the resize's current values: each step is applied as it comes.
         let brush = &app.session.tools.brush;
         let (radius, hardness) = (brush.size / 2.0, brush.hardness);
@@ -142,7 +142,7 @@ impl PaintResize {
         let reach = photocraft_paint::tip_reach(radius, hardness).max(core);
         let falloff = TipFalloff::sampled(f64::from(core), f64::from(reach), |d| photocraft_paint::tip_falloff(d as f32, radius, hardness));
         if let Some(preview) = self.resize.preview(&falloff) {
-            preview.show(ui);
+            preview.show_at(ui, rect);
         }
     }
 

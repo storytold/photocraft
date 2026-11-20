@@ -54,7 +54,7 @@ fn boxes(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<([f64; 4], [f64; 4])> 
         !d.is_background(*id) && !selected.iter().any(|s| *s == *id || d.path_of(*id).zip(d.path_of(*s)).is_some_and(|(p, q)| p.starts_with(&q)))
     });
     let boxes = a.map(|a| (a, hovered.and_then(|id| crate::snap_ui::tree_rect(d, id)).unwrap_or(canvas)));
-    app.move_distance = Some(Cache { doc, revision, at, group, selected, boxes });
+    app.move_distance = Some(Cache { doc, revision, at, group, selected: selected.to_vec(), boxes });
     boxes
 }
 
@@ -122,7 +122,7 @@ mod tests {
 
     /// The `snap_ui` test document: a target box at (300..350, 200..260) and the selected mover
     /// at (40..90, 40..80) on a 400×300 canvas.
-    fn app_with_boxes() -> PhotocraftApp {
+    fn app_with_boxes() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
         app.run("layer.new.layer", json!({"name": "target"})).unwrap();

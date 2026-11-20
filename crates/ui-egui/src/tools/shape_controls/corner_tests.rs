@@ -15,7 +15,7 @@ const NONE: Modifiers = Modifiers::NONE;
 
 /// A 200 × 260 document at 100 % with a live rectangle at (40, 40), 120 × 80, radii 20. The radius is above
 /// the widgets' inset, so a widget sits at the centre of its corner's arc: (60, 60) for the top left.
-fn app(tool: Tool) -> PhotocraftApp {
+fn app(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 200, "height": 260})).unwrap();
     app.sync_views();
@@ -66,7 +66,7 @@ fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) {
 /// Live rectangles, bottom first: (20, 20) 60 × 40 radii 15, (110, 20) 70 × 50 radii 15, and (20, 120) 80 × 60
 /// radii 0, the last one left unselected. Radii of 15 are above the widgets' inset: the top-left widgets sit at
 /// (35, 35) and (125, 35).
-fn three(tool: Tool) -> (PhotocraftApp, Vec<photocraft_doc::LayerId>) {
+fn three(tool: Tool) -> (Box<PhotocraftApp>, Vec<photocraft_doc::LayerId>) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 200, "height": 260})).unwrap();
     app.sync_views();
@@ -118,7 +118,7 @@ fn the_move_tool_shows_and_drags_the_widgets_with_its_transform_controls() {
     app.ui.tool_options.move_show_transform = true;
     testing::frame(&mut app);
     assert_eq!(corner_targets(&app).len(), 2);
-    let before = app.session.active().unwrap().selected_layers();
+    let before = app.session.active().unwrap().selected_layers().to_vec();
     let n = steps(&app);
     drag(&mut app, [125.0, 35.0], [130.0, 40.0]);
     assert_eq!(radii_of(&app, ids[1]), [20.0; 4]);

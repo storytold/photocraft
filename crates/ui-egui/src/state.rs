@@ -28,7 +28,7 @@ pub use color_panel::ColorPanelState;
 pub use panel_state::{CurvesEditorState, PointCurveDrag, PointCurveState};
 pub use text_edit::{TextEdit, TypeInsertionStyle, TypeTransform};
 pub use tool::Tool;
-pub use tool_options::{SampleAllLayers, ToolOptions};
+pub use tool_options::{ObjectFinderMode, SampleAllLayers, ToolOptions};
 use tool_options::{default_brush_tool, yes};
 pub use transform::{CamTransform, ContentAwareOptions, Extras, FreeTransform, MadeLayer, SessionWarp};
 

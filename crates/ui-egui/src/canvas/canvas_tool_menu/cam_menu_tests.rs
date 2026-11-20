@@ -1,7 +1,7 @@
 use super::tests::open_here;
 use super::*;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
     app.ui.tool = Tool::ContentAwareMove;
@@ -28,7 +28,7 @@ fn content_aware_move_boundary_modes_and_overlay_guards() {
 
     // Excluded color modes return false and release a non-held color HUD.
     for mode in [ColorMode::Bitmap, ColorMode::Duotone, ColorMode::Multichannel] {
-        std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).mode = mode;
+        std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).mode = mode;
         crate::color_hud::open(&mut app, [12.0, 12.0], false);
         assert!(!open_here(&mut app, Tool::ContentAwareMove, [6.0, 6.0]));
         assert!(app.ui.color_hud.is_none());

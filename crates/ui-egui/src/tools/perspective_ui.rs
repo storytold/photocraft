@@ -186,6 +186,12 @@ pub fn canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, at: egui::Rect) {
     }
 }
 
+/// What the options bar shows of the open session: the mode and the plane count. A plane drawn on the canvas changes
+/// them without a command, so the options bar's content version holds them.
+pub(crate) fn bar_key(app: &PhotocraftApp) -> Option<(PlaneMode, usize)> {
+    app.distort.perspective.as_ref().map(|s| (s.warp.mode(), s.warp.planes().len()))
+}
+
 /// The options bar: the Layout and Warp tabs, the plane count and Remove Planes or the straighten buttons, commit and
 /// cancel.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -205,7 +211,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 mod tests {
     use super::*;
 
-    fn perspective_app() -> PhotocraftApp {
+    fn perspective_app() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.session.execute("file.new", json!({"width": 200, "height": 120, "depth": 8})).unwrap();
         app.session.execute("layer.new.layer", json!({})).unwrap();

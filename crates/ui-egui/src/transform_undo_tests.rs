@@ -12,12 +12,12 @@ use crate::state::Tool;
 
 /// A 400 × 300 document with a 100 × 60 red rectangle on its own layer at (100, 100), the Move
 /// tool active, at 100 %.
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     harness_tool(Tool::Move)
 }
 
 /// The same document with a chosen tool selected (e.g. Hand, #2302).
-fn harness_tool(tool: Tool) -> Harness<'static, PhotocraftApp> {
+fn harness_tool(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
@@ -42,12 +42,12 @@ fn harness_tool(tool: Tool) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn screen(h: &mut Harness<'static, PhotocraftApp>, p: [f64; 2]) -> Pos2 {
+fn screen(h: &mut Harness<'static, Box<PhotocraftApp>>, p: [f64; 2]) -> Pos2 {
     crate::canvas::testing::to_screen(h.state_mut(), p)
 }
 
 /// Press at document point `from`, drag to `to` in a few steps and release.
-fn drag(h: &mut Harness<'static, PhotocraftApp>, from: [f64; 2], to: [f64; 2]) {
+fn drag(h: &mut Harness<'static, Box<PhotocraftApp>>, from: [f64; 2], to: [f64; 2]) {
     let (a, b) = (screen(h, from), screen(h, to));
     h.event(egui::Event::PointerMoved(a));
     h.run_steps(1);
@@ -61,21 +61,21 @@ fn drag(h: &mut Harness<'static, PhotocraftApp>, from: [f64; 2], to: [f64; 2]) {
     h.run_steps(3);
 }
 
-fn begin(h: &mut Harness<'static, PhotocraftApp>) {
+fn begin(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
     h.run_steps(2);
 }
 
-fn quad(h: &Harness<'static, PhotocraftApp>) -> [[f64; 2]; 4] {
+fn quad(h: &Harness<'static, Box<PhotocraftApp>>) -> [[f64; 2]; 4] {
     h.state().ui.transform.as_ref().expect("transforming").session.quad().map(|p| [p.x, p.y])
 }
 
-fn history(h: &Harness<'static, PhotocraftApp>) -> usize {
+fn history(h: &Harness<'static, Box<PhotocraftApp>>) -> usize {
     h.state().session.active().unwrap().history.entries().len()
 }
 
-fn key(h: &mut Harness<'static, PhotocraftApp>, m: Modifiers, k: Key) {
+fn key(h: &mut Harness<'static, Box<PhotocraftApp>>, m: Modifiers, k: Key) {
     h.key_press_modifiers(m, k);
     h.run_steps(2);
 }
@@ -145,7 +145,7 @@ fn undo_steps_back_through_the_transform_not_the_document() {
 
 /// `engine.execute` over the control channel (and MCP, which goes through it) as a programmatic
 /// caller: the result's `ok` flag.
-fn execute(h: &mut Harness<'static, PhotocraftApp>, command: &str) -> bool {
+fn execute(h: &mut Harness<'static, Box<PhotocraftApp>>, command: &str) -> bool {
     let ctx = h.ctx.clone();
     let (req, _rx) = crate::control::ControlRequest::new("engine.execute", json!({"command": command}));
     let crate::control::Reply::Done(reply) = crate::control::handle(h.state_mut(), &ctx, &req) else {
@@ -183,7 +183,7 @@ fn automation_undo_steps_through_the_transform() {
     assert_eq!(history(&h), steps - 1, "the fill is undone");
 }
 
-fn width(h: &Harness<'static, PhotocraftApp>) -> u32 {
+fn width(h: &Harness<'static, Box<PhotocraftApp>>) -> u32 {
     let st = h.state().session.active().unwrap();
     st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds().width()
 }
@@ -222,7 +222,7 @@ fn holding_space_still_pans_while_transforming() {
     begin(&mut h);
     let q0 = quad(&h);
     let center0 = h.state().ui.views[0].center;
-    let space = |h: &mut Harness<'static, PhotocraftApp>, down: bool| {
+    let space = |h: &mut Harness<'static, Box<PhotocraftApp>>, down: bool| {
         h.event(egui::Event::Key { key: Key::Space, physical_key: None, pressed: down, repeat: false, modifiers: Modifiers::NONE });
         h.run_steps(1);
     };
@@ -255,7 +255,7 @@ fn transform_preview_stays_visible_while_panning() {
             _ => false,
         }
     }
-    let has_preview = |h: &Harness<'static, PhotocraftApp>| h.output().shapes.iter().any(|clipped| shows(&clipped.shape, texture));
+    let has_preview = |h: &Harness<'static, Box<PhotocraftApp>>| h.output().shapes.iter().any(|clipped| shows(&clipped.shape, texture));
     assert!(has_preview(&h), "the transformed pixels are visible before panning");
 
     let center0 = h.state().ui.views[0].center;
@@ -330,7 +330,7 @@ fn free_transform_opens_on_the_selection_and_moves_it_with_the_pixels() {
 }
 
 /// The harness's red layer plus a blue 50 × 50 one at (250, 200), both selected (#3592).
-fn two_selected(h: &mut Harness<'static, PhotocraftApp>) -> (u64, u64) {
+fn two_selected(h: &mut Harness<'static, Box<PhotocraftApp>>) -> (u64, u64) {
     let app = h.state_mut();
     let red = app.session.active().unwrap().active_layer.unwrap().0;
     app.run("layer.new.layer", json!({})).unwrap();
@@ -344,7 +344,7 @@ fn two_selected(h: &mut Harness<'static, PhotocraftApp>) -> (u64, u64) {
     (red, blue)
 }
 
-fn bounds(h: &Harness<'static, PhotocraftApp>, id: u64) -> photocraft_geom::Rect {
+fn bounds(h: &Harness<'static, Box<PhotocraftApp>>, id: u64) -> photocraft_geom::Rect {
     let st = h.state().session.active().unwrap();
     st.doc.layer(photocraft_doc::LayerId(id)).unwrap().surface().unwrap().content_bounds()
 }
@@ -414,7 +414,7 @@ fn a_locked_layer_in_the_selection_refuses_the_box() {
 }
 
 /// Sets the open box's corners through the session, as a typed field would.
-fn set_quad(h: &mut Harness<'static, PhotocraftApp>, quad: [[f64; 2]; 4]) {
+fn set_quad(h: &mut Harness<'static, Box<PhotocraftApp>>, quad: [[f64; 2]; 4]) {
     h.state_mut().ui.transform.as_mut().expect("transforming").edit_box(|b| b.quad = quad.map(|[x, y]| (x, y).into()));
 }
 
@@ -441,7 +441,7 @@ fn free_transform_a_copy_duplicates_every_selected_layer_and_moves_the_copies() 
     let mut h = harness();
     let (red, blue) = two_selected(&mut h);
     let steps = history(&h);
-    let count = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().doc.walk().len();
+    let count = |h: &Harness<'static, Box<PhotocraftApp>>| h.state().session.active().unwrap().doc.walk().len();
     let n = count(&h);
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransformCopy", json!({})).unwrap();
