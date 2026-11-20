@@ -1276,7 +1276,7 @@ fn the_saved_brush_owner_follows_the_saved_last_brush() {
     crate::tool_memory::persist(&mut app, &ctx);
     // The Brush's tip becomes a big sampled one, then the Blur tool takes over that brush (the Eraser has its own
     // starting tip since #11936).
-    app.session.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(400, 300, |x, y| ((x * y) % 7) as f32 / 7.0));
+    app.session.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(400, 300, |x, y| ((x * y) % 7) as f32 / 7.0)).into();
     app.session.tools.brush_changed();
     app.ui.tool = Tool::Blur;
     crate::paint_mouse::sync_tool_brush(&mut app);
@@ -1292,7 +1292,7 @@ fn the_saved_brush_owner_follows_the_saved_last_brush() {
     assert_eq!(app2.session.tools.brush.size, 77.0);
 
     // Once the Blur tool's brush is saved, the Blur tool owns it in the preferences too.
-    app.session.tools.brush.tip = TipShape::Round;
+    app.session.tools.brush.tip = TipShape::Round.into();
     app.session.tools.brush.size = 33.0;
     app.session.tools.brush_changed();
     crate::last_brush::persist(&mut app, &ctx);

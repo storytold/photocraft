@@ -4,7 +4,7 @@ use photocraft_doc::Layer;
 const COMMANDS: [&str; 2] = ["edit.defineBrushPreset", "brush.defineFromSelection"];
 
 fn tip(s: &Session) -> &GrayTile {
-    let TipShape::Sampled(tip) = &s.tools.brush.tip else { panic!("expected a sampled tip") };
+    let TipShape::Sampled(tip) = &*s.tools.brush.tip else { panic!("expected a sampled tip") };
     tip
 }
 

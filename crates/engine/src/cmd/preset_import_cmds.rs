@@ -509,7 +509,7 @@ mod tests {
         assert_eq!(r["imported"], json!(["Hard Round 2", "9 px Round"]));
         assert_eq!(s.tools.presets.len(), before + 2);
         assert!(s.tools.presets.iter().filter(|p| p.group == "Legacy").all(|p| !p.builtin));
-        assert!(matches!(s.tools.brush.tip, photocraft_paint::TipShape::Sampled(_)));
+        assert!(matches!(*s.tools.brush.tip, photocraft_paint::TipShape::Sampled(_)));
         // Re-import with `replace` replaces the group.
         s.execute("brush.presets.importAbr", json!({"data": data, "group": "Legacy", "replace": true})).unwrap();
         assert_eq!(s.tools.presets.len(), before + 2);
@@ -758,11 +758,11 @@ mod tests {
         let r = s.execute("brush.presets.importImage", json!({"data": data, "fileName": "Stamp.png"})).unwrap();
         assert_eq!(r, json!({"name": "Stamp", "width": 10, "height": 6}), "cropped to the dark block");
         let pr = s.tools.presets.iter().find(|p| p.name == "Stamp").unwrap();
-        let TipShape::Sampled(tip) = &pr.brush.tip else { panic!("sampled tip expected") };
+        let TipShape::Sampled(tip) = &*pr.brush.tip else { panic!("sampled tip expected") };
         assert_eq!((tip.width, tip.height), (10, 6));
         assert!((pr.brush.size - 10.0).abs() < 1e-6);
         assert_eq!(s.tools.current_preset.as_deref(), Some("Stamp"), "the imported brush is current");
-        assert!(matches!(s.tools.brush.tip, TipShape::Sampled(_)));
+        assert!(matches!(*s.tools.brush.tip, TipShape::Sampled(_)));
         // A second import keeps the first: a new name, and `select: false` leaves the brush alone.
         let r = s.execute("brush.presets.importImage", json!({"data": data, "fileName": "Stamp.png", "select": false})).unwrap();
         assert_eq!(r["name"], "Stamp 2");

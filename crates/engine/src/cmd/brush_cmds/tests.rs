@@ -571,7 +571,7 @@ fn an_uncaptured_preset_size_keeps_dual_brush_proportions() {
 fn set_brush_keeps_untouched_bitmaps_and_replaces_touched_ones() {
     let tile = |w, h, k: u32| GrayTile::from_fn(w, h, move |x, y| ((x * k + y) % 5) as f32 / 4.0);
     let base = BrushSettings {
-        tip: TipShape::Sampled(tile(900, 700, 3)),
+        tip: TipShape::Sampled(tile(900, 700, 3)).into(),
         dual_brush: photocraft_paint::DualBrush { tip: TipShape::Sampled(tile(30, 20, 2)), ..Default::default() },
         texture: photocraft_paint::Texture { pattern: photocraft_paint::Pattern::Tile(tile(64, 64, 1)), ..Default::default() },
         ..Default::default()
@@ -591,13 +591,13 @@ fn set_brush_keeps_untouched_bitmaps_and_replaces_touched_ones() {
         cmd,
     )
     .unwrap();
-    assert_eq!((&b.tip, &b.dual_brush.tip), (&TipShape::Round, &TipShape::Round));
+    assert_eq!((&*b.tip, &b.dual_brush.tip), (&TipShape::Round, &TipShape::Round));
     assert!(matches!(b.texture.pattern, photocraft_paint::Pattern::Procedural { size: 32, .. }));
     // A section replaced by a non-object is an error, not a silently kept bitmap.
     assert!(merge_brush(&base, &json!({"dualBrush": 3}), cmd).is_err());
     assert!(merge_brush(&base, &json!(null), cmd).is_err());
     // Speed: a panel edit on a big imported tip doesn't base64 the tip.
-    let big = BrushSettings { tip: TipShape::Sampled(tile(2500, 2500, 7)), ..Default::default() };
+    let big = BrushSettings { tip: TipShape::Sampled(tile(2500, 2500, 7)).into(), ..Default::default() };
     let t0 = std::time::Instant::now();
     for i in 0..10 {
         merge_brush(&big, &json!({"size": 10 + i}), cmd).unwrap();
@@ -620,7 +620,7 @@ fn define_brush_from_selection() {
     let r = s.execute("brush.defineFromSelection", json!({"name": "Blob"})).unwrap();
     assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(6), Some(4)));
     assert_eq!(s.tools.brush.size, 6.0);
-    assert!(matches!(&s.tools.brush.tip, TipShape::Sampled(t) if t.width == 6 && t.height == 4 && t.get(0, 0) == 1.0));
+    assert!(matches!(&*s.tools.brush.tip, TipShape::Sampled(t) if t.width == 6 && t.height == 4 && t.get(0, 0) == 1.0));
     assert!(s.tools.presets.iter().any(|p| p.name == "Blob"));
     // Paint with it.
     s.execute("select.deselect", json!({})).unwrap();

@@ -996,7 +996,7 @@ fn presets_list(s: &mut Session, p: &Value) -> Result<Value> {
                 "builtin": pr.builtin,
                 "size": pr.brush.size,
                 "hardness": pr.brush.hardness,
-                "tip": match &pr.brush.tip { TipShape::Round => "round", TipShape::Sampled(_) | TipShape::Stored(_) => "sampled" },
+                "tip": match &*pr.brush.tip { TipShape::Round => "round", TipShape::Sampled(_) | TipShape::Stored(_) => "sampled" },
             });
             if full {
                 // Full settings embed the bitmaps: load stored tips (a tip that can't be loaded
@@ -1247,7 +1247,7 @@ pub(crate) fn sampled_brush(cmd: &str, v: &[f32], w: usize, h: usize) -> Result<
         data.extend((x0..x1).map(|x| at(x, y)));
     }
     let tip = GrayTile::from_f32(tw, th, &data);
-    let brush = BrushSettings { tip: TipShape::Sampled(tip), size: tw.max(th) as f32, spacing: 0.25, pressure_size: false, ..BrushSettings::default() };
+    let brush = BrushSettings { tip: TipShape::Sampled(tip).into(), size: tw.max(th) as f32, spacing: 0.25, pressure_size: false, ..BrushSettings::default() };
     Ok((brush, tw, th))
 }
 
@@ -1298,7 +1298,12 @@ pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
             s.tools.foreground = c;
         }
     }
-    let before = std::mem::replace(&mut *s.tools.brush, b);
+    let mut before = std::mem::replace(&mut *s.tools.brush, b);
+    // A brush the call built anew holds a new tip source: when the tip is the one it had, it keeps its revision, so the
+    // views that show the tip replay.
+    if s.tools.brush.tip == before.tip {
+        std::mem::swap(&mut s.tools.brush.tip, &mut before.tip);
+    }
     // A coalesced gesture (one slider drag) journals as one call: remember the brush it started from.
     let key = p.get("coalesce").and_then(Value::as_str).filter(|_| p.get("preset").is_none() && p.get("reset").is_none());
     let continuing = |s: &Session, k: &str| {
@@ -1342,7 +1347,7 @@ fn remembered_brush(s: &Session) -> Option<Value> {
 pub fn remembered_settings(b: &BrushSettings) -> Option<Value> {
     let (tip, dual, pattern) = (ref_tip(&b.tip)?, ref_tip(&b.dual_brush.tip)?, ref_pattern(&b.texture.pattern)?);
     let mut c = b.clone();
-    (c.tip, c.dual_brush.tip, c.texture.pattern) = (tip, dual, pattern);
+    (c.tip, c.dual_brush.tip, c.texture.pattern) = (tip.into(), dual, pattern);
     serde_json::to_value(&c).ok()
 }
 
@@ -1402,7 +1407,7 @@ fn ref_pattern(p: &Pattern) -> Option<Pattern> {
 fn light_json(b: &BrushSettings, skip: (bool, bool, bool)) -> Value {
     let mut c = b.clone();
     if skip.0 {
-        c.tip = TipShape::Round;
+        c.tip = TipShape::Round.into();
     }
     if skip.1 {
         c.dual_brush.tip = TipShape::Round;

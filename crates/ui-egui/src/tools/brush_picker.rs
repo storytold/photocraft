@@ -31,23 +31,38 @@ pub(crate) struct PickerInput {
     rows: Vec<craft::ui::patterns::presets::PresetRow<BrushKey>>,
     current: Option<BrushKey>,
     values: BrushPickerValues,
-    brush: BrushSettings,
+    tip: TipShape,
+    face: BrushFace,
+}
+
+/// What the picker shows of the brush besides its tip: the head's values and the tip picture's shape.
+#[derive(Clone, Copy, MemoProps)]
+struct BrushFace {
+    size: f32,
+    hardness: f32,
+    angle: f32,
+    roundness: f32,
+}
+
+impl BrushFace {
+    fn of(brush: &BrushSettings) -> Self {
+        Self { size: brush.size, hardness: brush.hardness, angle: brush.angle, roundness: brush.roundness }
+    }
 }
 
 impl PickerInput {
     /// The rows, the current preset and the brush values as the app holds them now.
     pub(crate) fn of(app: &PhotocraftApp, env: &Env) -> Self {
         let tools = &app.session.tools;
-        Self::new(tools.presets.as_slice(), &tools.brush, current_key(tools), app.ui.brush_picker_state.parts, env)
+        Self::new(tools.presets.as_slice(), &tools.brush.tip, BrushFace::of(&tools.brush), current_key(tools), app.ui.brush_picker_state.parts, env)
     }
 
-    /// The rows of `presets` with the card `parts`, `current` picked, and the values of `brush`.
-    fn new(presets: &[BrushPreset], brush: &BrushSettings, current: Option<BrushKey>, parts: BrushCardParts, env: &Env) -> Self {
-        let brush = brush.clone();
-        let round = brush.tip == TipShape::Round;
-        let values = BrushPickerValues::new(f64::from(brush.size), round.then_some(f64::from(brush.hardness)))
-            .with_tip(TipAngle::new(f64::from(brush.angle), f64::from(brush.roundness)));
-        Self { rows: preset_rows(presets, env, parts), current, values, brush }
+    /// The rows of `presets` with the card `parts`, `current` picked, and the brush's `tip` and `face`.
+    fn new(presets: &[BrushPreset], tip: &TipShape, face: BrushFace, current: Option<BrushKey>, parts: BrushCardParts, env: &Env) -> Self {
+        let round = *tip == TipShape::Round;
+        let values = BrushPickerValues::new(f64::from(face.size), round.then_some(f64::from(face.hardness)))
+            .with_tip(TipAngle::new(f64::from(face.angle), f64::from(face.roundness)));
+        Self { rows: preset_rows(presets, env, parts), current, values, tip: tip.clone(), face }
     }
 
     /// Every row's key, in list order.
@@ -62,7 +77,7 @@ impl PickerInput {
             .import()
             .gear_rows(gear_rows)
             .resizable(SaveKey::new("photocraft.brush_picker"))
-            .tip(std::sync::Arc::new(tip_paint(&self.brush)))
+            .tip(std::sync::Arc::new(tip_paint(&self.tip, (self.face.hardness, self.face.angle, self.face.roundness))))
     }
 }
 
@@ -125,8 +140,8 @@ pub(crate) fn show_at(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
     let mut input = PickerInput::of(app, &env);
     let mut open = true;
     let background_eraser = app.ui.tool == Tool::BackgroundEraser;
-    let row_before = input.brush.clone();
-    let mut row_brush = input.brush.clone();
+    let row_before = (*app.session.tools.brush).clone();
+    let mut row_brush = row_before.clone();
     let mut tolerance = app.ui.tool_options.bg_tolerance_control.clone();
     let mut key = None;
     let out = {
@@ -148,11 +163,13 @@ pub(crate) fn show_at(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
     }
 }
 
-/// Every input of the options bar's picker field: the presets and the brush it shows, and the picker's view state.
+/// Every input of the options bar's picker field: the presets, what it shows of the brush (its tip and face), and the
+/// picker's view state.
 #[derive(MemoProps)]
 struct FieldProps<'a> {
     presets: &'a Tracked<Arc<Vec<BrushPreset>>>,
-    brush: &'a Tracked<BrushSettings>,
+    tip: &'a Tracked<TipShape>,
+    face: BrushFace,
     current: Option<BrushKey>,
     enabled: bool,
     state: &'a mut Tracked<BrushPickerState<BrushKey>>,
@@ -163,14 +180,15 @@ struct FieldProps<'a> {
 struct FieldEvent(BrushPresetPickerOutput<BrushKey>, Vec<BrushKey>);
 
 /// The closed picker field of the options bar, which opens the popover. `enabled` is false for the Eraser in Block
-/// mode, which paints with no brush. A memoized view: it runs when the presets, the brush, the current preset or the
-/// picker's state change, while its popover is open, or when input reaches it.
+/// mode, which paints with no brush. A memoized view: it runs when the presets, the brush's tip or face, the current
+/// preset or the picker's state change, while its popover is open, or when input reaches it.
 pub(crate) fn show_field(ui: &mut egui::Ui, app: &mut PhotocraftApp, enabled: bool) {
     let mut sent = Vec::new();
     let tools = &app.session.tools;
     let props = FieldProps {
         presets: &tools.presets,
-        brush: &tools.brush,
+        tip: &tools.brush.tip,
+        face: BrushFace::of(&tools.brush),
         current: current_key(tools),
         enabled,
         state: &mut app.ui.brush_picker_state,
@@ -185,7 +203,7 @@ pub(crate) fn show_field(ui: &mut egui::Ui, app: &mut PhotocraftApp, enabled: bo
 /// The picker field's view.
 fn field_view(props: &mut FieldProps<'_>, ui: &mut egui::Ui) {
     let env = Env::of(ui);
-    let mut input = PickerInput::new(props.presets.as_slice(), props.brush, props.current.clone(), props.state.parts, &env);
+    let mut input = PickerInput::new(props.presets.as_slice(), props.tip, props.face, props.current.clone(), props.state.parts, &env);
     let out = input.picker(bind_tracked!(props.state)).enabled(props.enabled).show(ui);
     let keys = if out.picks.is_empty() { Vec::new() } else { input.keys() };
     props.out.send(FieldEvent(out, keys));

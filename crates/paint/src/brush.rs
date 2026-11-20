@@ -7,6 +7,7 @@
 //! Units: sizes are pixels, angles are degrees, every percentage is a 0..1 fraction (scatter and
 //! texture scale may exceed 1, like Photoshop's 1000 % scatter).
 
+use craft_tracked::Tracked;
 use photocraft_color::BlendMode;
 use serde::{Deserialize, Serialize};
 
@@ -589,7 +590,10 @@ pub struct BrushSettings {
     #[plain_data(assume = "a fieldless enum of blend modes")]
     pub mode: BlendMode,
     // --- Brush Tip Shape ---
-    pub tip: TipShape,
+    /// Tracked on its own, so a reader that shows the tip (a picker's tip picture) knows by its revision whether the
+    /// tip changed, without comparing bitmaps. `tools.setBrush` keeps the tip's revision when it leaves the tip as it
+    /// is.
+    pub tip: Tracked<TipShape>,
     /// Degrees, counter-clockwise.
     pub angle: f32,
     /// 0..1 (1 = circle).
@@ -647,7 +651,7 @@ impl Default for BrushSettings {
             erase: false,
             behind: false,
             mode: BlendMode::Normal,
-            tip: TipShape::Round,
+            tip: Tracked::new(TipShape::Round),
             angle: 0.0,
             roundness: 1.0,
             flip_x: false,

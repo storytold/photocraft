@@ -185,7 +185,7 @@ fn every_section_round_trips_through_set_brush() {
 fn patches_are_minimal_and_skip_unchanged_bitmaps() {
     let tip = TipShape::Sampled(GrayTile::from_fn(400, 300, |x, y| ((x * y) % 7) as f32 / 7.0));
     let old = BrushSettings {
-        tip: tip.clone(),
+        tip: tip.clone().into(),
         texture: paint::Texture { pattern: Pattern::Tile(GrayTile::from_fn(64, 64, |x, _| x as f32 / 64.0)), ..Default::default() },
         ..Default::default()
     };
@@ -195,7 +195,7 @@ fn patches_are_minimal_and_skip_unchanged_bitmaps() {
     assert_eq!(brush_patch(&old, &new), json!({"shapeDynamics": {"enabled": true}}));
     assert_eq!(brush_patch(&old, &old), json!({}));
     // A changed tip is sent whole.
-    let new = BrushSettings { tip: TipShape::Round, ..old.clone() };
+    let new = BrushSettings { tip: TipShape::Round.into(), ..old.clone() };
     assert_eq!(brush_patch(&old, &new), json!({"tip": "round"}));
     // Applying any of these through the engine gives back `new`.
     let mut app = app();
@@ -447,7 +447,7 @@ fn every_section_draws_without_issuing_commands() {
             for i in 0..SECTIONS.len() {
                 edit_section(i, &mut b);
             }
-            b.tip = TipShape::Sampled(GrayTile::from_fn(50, 40, |x, y| ((x ^ y) & 1) as f32));
+            b.tip = TipShape::Sampled(GrayTile::from_fn(50, 40, |x, y| ((x ^ y) & 1) as f32)).into();
             *h.state_mut().session.tools.brush = b.clone();
             let n = h.state().session.journal.len();
             h.run_steps(4);

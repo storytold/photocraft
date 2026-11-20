@@ -320,7 +320,7 @@ impl Pane<'_> {
         if let Some(name) = self.tip_grid(ui, "brush-tip-grid", selected)
             && let Some((tip, size, hardness, angle, roundness, spacing)) = self.preset_tip(&name)
         {
-            (b.tip, b.size, b.hardness, b.angle, b.roundness, b.spacing) = (tip, size, hardness, angle, roundness, spacing);
+            (b.tip, b.size, b.hardness, b.angle, b.roundness, b.spacing) = (tip.into(), size, hardness, angle, roundness, spacing);
             self.out.picked = Some(name);
             return;
         }
@@ -338,7 +338,7 @@ impl Pane<'_> {
             b.angle = tip.degrees as f32;
             b.roundness = tip.roundness as f32;
         }
-        let round = matches!(b.tip, TipShape::Round);
+        let round = matches!(*b.tip, TipShape::Round);
         self.field(ui, tl!("Hardness"), &mut b.hardness, d.hardness, AMOUNT, round);
         self.spacing(ui, b, d.spacing);
     }

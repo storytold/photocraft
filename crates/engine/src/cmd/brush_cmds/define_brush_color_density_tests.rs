@@ -76,7 +76,7 @@ fn rgb_source(depth: u32, rgba: [f32; 4]) -> Session {
 }
 
 fn tip(s: &Session) -> &GrayTile {
-    let TipShape::Sampled(tip) = &s.tools.brush.tip else { panic!("expected a sampled tip") };
+    let TipShape::Sampled(tip) = &*s.tools.brush.tip else { panic!("expected a sampled tip") };
     tip
 }
 

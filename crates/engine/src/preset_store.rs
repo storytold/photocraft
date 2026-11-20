@@ -402,7 +402,7 @@ fn settings_only(b: &mut BrushSettings) -> BrushSettings {
 fn set_stored(b: &mut BrushSettings, refs: [Option<StoredTile>; 3]) {
     let [tip, dual, texture] = refs;
     if let Some(r) = tip {
-        b.tip = TipShape::Stored(r);
+        b.tip = TipShape::Stored(r).into();
     }
     if let Some(r) = dual {
         b.dual_brush.tip = TipShape::Stored(r);
@@ -1236,7 +1236,7 @@ impl Session {
             }
             Ok(())
         };
-        if let TipShape::Stored(r) = &mut b.tip {
+        if let TipShape::Stored(r) = &mut *b.tip {
             load(r)?;
         }
         if let TipShape::Stored(r) = &mut b.dual_brush.tip {
@@ -1261,11 +1261,11 @@ fn link_stored_tips(st: &PresetStore, b: &mut BrushSettings) -> bool {
         st.tips.contains_key(&h).then(|| StoredTile { key: h, width: g.width, height: g.height, preview: Arc::new(g.preview(PREVIEW_SIDE)), full: None })
     };
     let mut linked = false;
-    if let TipShape::Sampled(g) = &b.tip
+    if let TipShape::Sampled(g) = &*b.tip
         && let Some(r) = link(g)
-        && let TipShape::Sampled(g) = std::mem::take(&mut b.tip)
+        && let TipShape::Sampled(g) = std::mem::take(&mut *b.tip)
     {
-        b.tip = TipShape::Stored(StoredTile { full: Some(Arc::new(g)), ..r });
+        b.tip = TipShape::Stored(StoredTile { full: Some(Arc::new(g)), ..r }).into();
         linked = true;
     }
     if let TipShape::Sampled(g) = &b.dual_brush.tip

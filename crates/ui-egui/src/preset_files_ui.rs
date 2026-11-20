@@ -299,7 +299,7 @@ mod tests {
         }
         assert!(!app.ui.status_error, "{}", app.ui.status);
         assert_eq!(app.session.tools.current_preset.as_deref(), Some("Leaf"));
-        let TipShape::Sampled(tip) = &app.session.tools.brush.tip else { panic!("sampled tip expected") };
+        let TipShape::Sampled(tip) = &*app.session.tools.brush.tip else { panic!("sampled tip expected") };
         assert_eq!((tip.width, tip.height), (3, 8));
         assert!(is_shown(&app, "brushes"), "the Brushes tab shows the new brush");
     }

@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "transfer": {"enabled": true, "opacity": pressure, "flow": pressure},
         }))?,
     };
-    base.tip = TipShape::Sampled(tip(70, 73, 1));
+    *base.tip = TipShape::Sampled(tip(70, 73, 1));
     base.dual_brush.tip = TipShape::Sampled(tip(100, 97, 2));
     let mut no_dual = base.clone();
     no_dual.dual_brush.enabled = false;

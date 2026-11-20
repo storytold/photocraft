@@ -396,9 +396,9 @@ mod tests {
         let c = t.clone();
         assert!(std::sync::Arc::ptr_eq(&t.data, &c.data));
         assert_eq!(t, c);
-        let brush = crate::brush::BrushSettings { tip: crate::brush::TipShape::Sampled(t.clone()), ..Default::default() };
+        let brush = crate::brush::BrushSettings { tip: crate::brush::TipShape::Sampled(t.clone()).into(), ..Default::default() };
         let copy = brush.clone();
-        let crate::brush::TipShape::Sampled(ct) = &copy.tip else { panic!("sampled") };
+        let crate::brush::TipShape::Sampled(ct) = &*copy.tip else { panic!("sampled") };
         assert!(std::sync::Arc::ptr_eq(&t.data, &ct.data), "the settings' clone shares the tip");
     }
 
