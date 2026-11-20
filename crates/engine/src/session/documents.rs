@@ -17,6 +17,9 @@ pub fn move_item<T>(v: &mut Vec<T>, i: usize, to: usize) -> Option<usize> {
 
 impl Session {
     pub fn new() -> Self {
+        // Commands run through the process-wide registry; the first session installs it, and a
+        // conflicting install reports itself at the first command.
+        let _ = crate::install::install();
         Self::default()
     }
 
@@ -39,6 +42,11 @@ impl Session {
 
     pub fn active_mut(&mut self) -> Option<&mut DocState> {
         self.active.and_then(|i| self.docs.get_mut(i))
+    }
+
+    /// The open document with this id, active or not.
+    pub fn document_mut(&mut self, id: photocraft_doc::DocId) -> Option<&mut DocState> {
+        self.docs.iter_mut().find(|d| d.doc.id == id)
     }
 
     /// Monotonic active-document generation. It changes when a different document becomes
@@ -81,11 +89,15 @@ impl Session {
     }
 
     /// Make `layer` the active document's active layer and nothing else (the selection list and
-    /// anchor are left as they are), counted in [`Self::active_layer_changes`].
+    /// anchor are left as they are), counted in [`Self::active_layer_changes`]. Like
+    /// [`Self::select_layer`], not an edit.
     pub fn set_active_layer(&mut self, layer: Option<LayerId>) {
         let before = self.active_layer_stamp();
-        if let Some(st) = self.active_mut() {
+        if let Some(st) = self.active_mut()
+            && st.active_layer != layer
+        {
             st.active_layer = layer;
+            st.bump_selection_revision();
         }
         self.note_layer_change(before);
     }
@@ -184,7 +196,7 @@ impl Session {
         // History Options › Automatically Create First Snapshot off: no snapshot of the document
         // as opened, so the History panel starts at the opening state (#2966).
         if !self.prefs.get().history_options.automatically_create_first_snapshot {
-            st.snapshots.clear();
+            st.snapshots_mut().clear();
         }
         self.docs.push(st);
         self.documents_generation = self.documents_generation.wrapping_add(1);
