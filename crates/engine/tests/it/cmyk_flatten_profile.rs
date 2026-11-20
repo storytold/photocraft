@@ -2,9 +2,9 @@
 //! inks of a CMYK document tagged with a profile other than the built-in one (#3778).
 //!
 //! A document whose composite is one plain pixel layer keeps its inks exactly, as in Photoshop
-//! (black generation and inks outside the display gamut included). Merges of several layers are
-//! composited in RGB and separated back through the profile the layers were read with, so they
-//! keep the inks up to that round trip's residual instead of moving every pixel.
+//! (black generation and inks outside the display gamut included). Merges that go through the RGB
+//! composite are separated back through the profile the layers were read with, so they keep the
+//! inks up to that round trip's residual instead of moving every pixel.
 
 use std::sync::Arc;
 
@@ -158,16 +158,24 @@ fn flatten_of_a_partly_transparent_layer_still_composites_over_white() {
     }
 }
 
-/// Merges of several layers go through the RGB composite: separations the profile reproduces
-/// come back within this (the profile's own RGB round trip, a few levels), where reading with
-/// the document's profile and separating with the built-in one moved them by tens of levels.
+/// Merges that go through the RGB composite: separations the profile reproduces come back within
+/// this (the profile's own RGB round trip, a few levels), where reading with the document's
+/// profile and separating with the built-in one moved them by tens of levels.
 const ROUND_TRIP: f32 = 10.0 / 255.0;
+
+/// A copy of the Background above it in Luminosity. Plain Normal layers mix on their inks without
+/// any profile; Luminosity makes the merge composite in RGB and separate back, and a colour's
+/// luminosity over itself leaves it unchanged, so only that separation can move the inks.
+fn luminosity_copy(s: &mut Session) {
+    s.execute("layer.duplicate", json!({})).unwrap();
+    s.execute("layer.setProps", json!({"blend": "Luminosity"})).unwrap();
+}
 
 #[test]
 fn merge_down_separates_through_the_document_profile() {
     for depth in [8, 16] {
         let [d, _] = drift(depth, true, |s| {
-            s.execute("layer.new.layer", json!({})).unwrap();
+            luminosity_copy(s);
             s.execute("layer.mergeDown", json!({})).unwrap();
         });
         assert!(d <= ROUND_TRIP, "{depth}-bit Merge Down: inks moved by {d}");
@@ -178,7 +186,7 @@ fn merge_down_separates_through_the_document_profile() {
 fn merge_visible_separates_through_the_document_profile() {
     for depth in [8, 16] {
         let [d, _] = drift(depth, true, |s| {
-            s.execute("layer.new.layer", json!({})).unwrap();
+            luminosity_copy(s);
             s.execute("layer.mergeVisible", json!({})).unwrap();
         });
         assert!(d <= ROUND_TRIP, "{depth}-bit Merge Visible: inks moved by {d}");
