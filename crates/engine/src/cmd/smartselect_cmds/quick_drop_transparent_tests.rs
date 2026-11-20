@@ -118,7 +118,7 @@ fn sample_all_layers_keeps_the_transparent_frame() {
 fn the_background_loses_only_the_brush_disc() {
     let mut s = issue_document();
     let d = s.active_mut().unwrap();
-    d.active_layer = Some(d.doc.layers[0].id);
+    d.set_active_layer(Some(d.doc.layers[0].id));
     marquee(&mut s, [50, 50, 350, 300]);
     click(&mut s, [70.0, 280.0], "subtract", false);
     assert!(at(&s, 70, 280) < 0.5, "the disc is subtracted");

@@ -78,12 +78,31 @@ fn composite_damage_since_the_shown_revision_follows_each_event() {
         app.run("select.rect", json!({"x": 2, "y": 1, "width": 3, "height": 2})).unwrap();
         app
     };
-    let cases: [(&str, Step, Want); 3] = [
+    let cases: [(&str, Step, Want); 5] = [
         ("nothing changed", |_| {}, Want::Nothing),
+        (
+            "two pixel-neutral layer selections",
+            |app| {
+                let id = app.session.active().unwrap().active_layer.unwrap();
+                app.session.select_layer(id).unwrap();
+                app.session.select_layer(id).unwrap();
+            },
+            Want::Nothing,
+        ),
         (
             "a fill inside the selection",
             |app| {
                 app.run("edit.fill", json!({"color": "#cc2200"})).unwrap();
+            },
+            Want::Covers(PixelRect::new(2, 1, 5, 3)),
+        ),
+        (
+            "a fill followed by pixel-neutral selections",
+            |app| {
+                app.run("edit.fill", json!({"color": "#cc2200"})).unwrap();
+                let id = app.session.active().unwrap().active_layer.unwrap();
+                app.session.select_layer(id).unwrap();
+                app.session.select_layer(id).unwrap();
             },
             Want::Covers(PixelRect::new(2, 1, 5, 3)),
         ),
@@ -96,6 +115,108 @@ fn composite_damage_since_the_shown_revision_follows_each_event() {
         ),
     ];
     check_damage(setup, |app, ctx, since| pass(&CompositePrep::new(app, ctx, 0, None, None).unwrap().source(app), since), &cases);
+}
+
+#[test]
+fn neutral_revisions_preserve_a_prior_bounded_pixel_change() {
+    let mut app = app_with(16, 8, "#336699");
+    app.run("select.rect", json!({"x": 2, "y": 1, "width": 3, "height": 2})).unwrap();
+    let ctx = app.ctx().clone();
+    let before = CompositePrep::new(&mut app, &ctx, 0, None, None).unwrap().source(&app).revision();
+    app.run("edit.fill", json!({"color": "#cc2200"})).unwrap();
+    let expected = app.session.active().unwrap().last_damage.unwrap();
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    app.session.select_layer(id).unwrap();
+    app.session.select_layer(id).unwrap();
+    let damage = CompositePrep::new(&mut app, &ctx, 0, None, None).unwrap().source(&app).damage(before).unwrap();
+    let expected = PixelRect::new(expected.x0, expected.y0, expected.x1, expected.y1);
+    assert_eq!(damage.intersect(&expected), damage);
+    assert_eq!(damage.intersect(&PixelRect::new(2, 1, 5, 3)), PixelRect::new(2, 1, 5, 3));
+}
+
+#[test]
+fn history_damage_includes_effect_reach_only_once() {
+    let mut app = app_with(1024, 1024, "transparent");
+    app.session
+        .edit("add effect", |doc, _| {
+            doc.layers.last_mut().unwrap().effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+            Ok(())
+        })
+        .unwrap();
+    assert!(photocraft_compose::effects::margin(app.session.active().unwrap().doc.layers.last().unwrap()) > 0);
+    app.run("select.rect", json!({"x": 300, "y": 300, "width": 3, "height": 2})).unwrap();
+    let ctx = app.ctx().clone();
+    let before = CompositePrep::new(&mut app, &ctx, 0, None, None).unwrap().source(&app).revision();
+    let doc_revision = app.session.active().unwrap().revision;
+    app.run("edit.fill", json!({"color": "#cc2200"})).unwrap();
+    let damage = app.session.active().unwrap().damage_since(doc_revision).unwrap();
+    assert!(!damage.is_empty());
+    assert!(damage.x0 > 0 && damage.y0 > 0 && damage.x1 < 1024 && damage.y1 < 1024);
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    app.session.select_layer(id).unwrap();
+    app.session.select_layer(id).unwrap();
+    let actual = CompositePrep::new(&mut app, &ctx, 0, None, None).unwrap().source(&app).damage(before).unwrap();
+    assert_eq!(actual, PixelRect::new(damage.x0, damage.y0, damage.x1, damage.y1));
+}
+
+#[test]
+fn display_converts_no_more_than_the_recorded_damage() {
+    use craft::behavior::{CanvasView, kurbo::Point};
+    use craft::ui::canvas::{Canvas, RasterDisplay};
+    use craft::ui::contract::{Show as _, ShowContainer as _};
+    use craft::ui::testing::Fixture;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    struct Counted<'a> {
+        source: PhotoComposite<'a>,
+        pixels: &'a Cell<usize>,
+    }
+    impl RasterSource for Counted<'_> {
+        fn size(&self) -> PixelSize {
+            self.source.size()
+        }
+        fn revision(&self) -> Revision {
+            self.source.revision()
+        }
+        fn damage(&self, since: Revision) -> Option<PixelRect> {
+            self.source.damage(since)
+        }
+        fn read(&self, region: PixelRect, factor: u32, out: &mut ColorImage) {
+            self.pixels.set(self.pixels.get() + out.pixels.len());
+            self.source.read(region, factor, out);
+        }
+    }
+
+    let app = Rc::new(RefCell::new(app_with(16, 8, "#336699")));
+    app.borrow_mut().run("select.rect", json!({"x": 2, "y": 1, "width": 3, "height": 2})).unwrap();
+    let pixels = Rc::new(Cell::new(0));
+    let (shown_app, shown_pixels) = (Rc::clone(&app), Rc::clone(&pixels));
+    let view = CanvasView::new(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(160.0, 80.0)), Point::new(8.0, 4.0), 1.0);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut app = shown_app.borrow_mut();
+        let prep = CompositePrep::new(&mut app, ui.ctx(), 0, None, None).unwrap();
+        let source = Counted { source: prep.source(&app), pixels: &shown_pixels };
+        Canvas::new("Document").view(view).show(ui, |ui, body| {
+            RasterDisplay::new("Picture", &source).show_at(ui, body.rect);
+        });
+    });
+    fixture.room(egui::vec2(160.0, 80.0));
+    fixture.settle();
+    pixels.set(0);
+    let id = app.borrow().session.active().unwrap().active_layer.unwrap();
+    app.borrow_mut().session.select_layer(id).unwrap();
+    app.borrow_mut().session.select_layer(id).unwrap();
+    fixture.frame(Vec::new());
+    assert_eq!(pixels.get(), 0, "neutral revisions need no conversion");
+    app.borrow_mut().run("edit.fill", json!({"color": "#cc2200"})).unwrap();
+    let damage = app.borrow().session.active().unwrap().last_damage.unwrap();
+    app.borrow_mut().session.select_layer(id).unwrap();
+    app.borrow_mut().session.select_layer(id).unwrap();
+    pixels.set(0);
+    fixture.frame(Vec::new());
+    let area = (damage.width() as usize) * (damage.height() as usize);
+    assert!(pixels.get() > 0 && pixels.get() <= area, "converted {} pixels for {damage:?}", pixels.get());
 }
 
 #[test]
