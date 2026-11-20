@@ -4,8 +4,9 @@
 
 use std::ops::RangeInclusive;
 
-use craft::behavior::{EditEvents, NumberCodec};
+use craft::behavior::{EditEvents, IconId, NumberCodec};
 use craft::ui::bars::{Bar, BarHome, BarKind, BarOutput, BarTool};
+use craft::ui::buttons::ToggleButton;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
@@ -240,9 +241,28 @@ fn stamp_members(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
         edit_brush(app, &flow, |b, v| b.flow = v);
         return;
     }
-    if matches!(tool, Tool::CloneStamp | Tool::HistoryBrush | Tool::ArtHistoryBrush) {
+    if matches!(tool, Tool::CloneStamp | Tool::HistoryBrush) {
         let opacity = percent_field(ui, tl!("Opacity"), brush.opacity, 1.0..=100.0);
         edit_brush(app, &opacity, |b, v| b.opacity = v);
+    }
+    // The Art History Brush's Opacity carries the reference's tooltip (#12630), and its Pressure
+    // for Opacity follows right after it, as measured (#12629).
+    if tool == Tool::ArtHistoryBrush {
+        let opacity = number_field_with_tip(ui, tl!("Opacity"), brush.opacity * 100.0, 1.0..=100.0, "%", Some(tl!("Set opacity for stroke")))
+            .map(|percent| percent / 100.0);
+        edit_brush(app, &opacity, |b, v| b.opacity = v);
+        let pressure = ToggleButton::new(tl!("Always use pressure for opacity"), Bind::given(brush.pressure_opacity))
+            .icon(IconId::new("target"))
+            .icon_only()
+            .tooltip(tl!("Always use Pressure for Opacity. When off, Brush Preset controls pressure").to_owned())
+            .show(ui);
+        if let Some(on) = pressure.value().copied() {
+            let before = app.session.tools.brush.clone();
+            let mut after = before.clone();
+            after.pressure_opacity = on;
+            let key = pressure.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e));
+            crate::brush_panel::commit_keyed(app, &before, &after, key);
+        }
     }
     if matches!(tool, Tool::CloneStamp | Tool::HistoryBrush) {
         let flow = percent_field(ui, tl!("Flow"), brush.flow, 1.0..=100.0);
@@ -276,9 +296,18 @@ pub(super) fn check(ui: &mut egui::Ui, label: &str, value: &mut bool) {
 /// A number field named `label` over `value` (in `unit` when it is not empty), limited to `range`. The events of this
 /// pass carry the edited value; an emptied field gives none.
 pub(super) fn number_field(ui: &mut egui::Ui, label: &str, value: f32, range: RangeInclusive<f64>, unit: &'static str) -> EditEvents<f32> {
+    number_field_with_tip(ui, label, value, range, unit, None)
+}
+
+/// [`number_field`] with `tip` as the field's tooltip when there is one.
+fn number_field_with_tip(ui: &mut egui::Ui, label: &str, value: f32, range: RangeInclusive<f64>, unit: &'static str, tip: Option<&str>) -> EditEvents<f32> {
     let events = labelled(ui, label, |ui| {
         let field = NumberField::new(label.to_owned(), Bind::given(Some(f64::from(value)))).range(range.clone()).scrub_by_label();
         let field = if unit.is_empty() { field } else { field.unit(unit) };
+        let field = match tip {
+            Some(tip) => field.tooltip(tip.to_owned()),
+            None => field,
+        };
         field.show(ui).events.clone()
     });
     events.unwrap_or_default().filter_map(|v| v.map(|v| v as f32))
@@ -325,3 +354,7 @@ pub(super) fn pct_action(target: &Value, key: &str, pct: f32, coalesce: Option<S
 #[cfg(test)]
 #[path = "../pattern_stamp_opacity_flow_tests.rs"]
 mod pattern_stamp_opacity_flow_tests;
+
+#[cfg(test)]
+#[path = "art_history_bar_controls_tests.rs"]
+mod art_history_bar_controls_tests;

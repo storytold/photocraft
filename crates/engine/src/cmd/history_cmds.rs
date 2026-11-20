@@ -112,7 +112,7 @@ fn new_document(s: &mut Session, p: &Value) -> Result<Value> {
 fn snapshot_index(s: &Session, cmd: &str, p: &Value) -> Result<usize> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let id = p.get("snapshot").and_then(Value::as_u64).ok_or_else(|| bad(cmd, "`snapshot` must be a snapshot id"))?;
-    st.snapshots.iter().position(|snap| snap.id == id).ok_or_else(|| bad(cmd, format!("no snapshot {id}")))
+    st.snapshots().iter().position(|snap| snap.id == id).ok_or_else(|| bad(cmd, format!("no snapshot {id}")))
 }
 
 /// The name `history.newSnapshot` gives a snapshot without one: "Snapshot N" (the New Snapshot
@@ -145,7 +145,7 @@ fn new_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
     let one_layer = |doc: &Document, layer: Layer| {
         let mut doc = doc.clone();
         let id = layer.id;
-        doc.layers = vec![layer];
+        doc.layers = vec![layer].into();
         (Arc::new(doc), LayerTarget { active: Some(id), selected: vec![id] })
     };
     let (doc, layers) = match from {
@@ -165,9 +165,9 @@ fn new_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
     st.next_snapshot = id.saturating_add(1);
     // An action's New Snapshot with "replace existing": a snapshot of that name gives way.
     if p.get("replaceExisting").and_then(Value::as_bool) == Some(true) {
-        st.snapshots.retain(|snap| snap.name != name);
+        st.snapshots_mut().retain(|snap| snap.name != name);
     }
-    st.snapshots.push(Snapshot { id, name: name.clone(), doc, layers });
+    st.snapshots_mut().push(Snapshot { id, name: name.clone(), doc, layers });
     Ok(json!({ "snapshot": id, "name": name }))
 }
 
@@ -179,7 +179,7 @@ fn select_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
     if s.active_job().is_some() {
         return Err(EngineError::Other("the document is busy with a background job".into()));
     }
-    let snap = s.active().and_then(|st| st.snapshots.get(i).cloned()).ok_or(EngineError::NoDocument)?;
+    let snap = s.active().and_then(|st| st.snapshots().get(i).cloned()).ok_or(EngineError::NoDocument)?;
     s.edit(&snap.name, |doc, active| {
         // Keep the identity (colour state, views and caches are keyed by it) and the tab name.
         let (id, name) = (doc.id, doc.name.clone());
@@ -203,7 +203,7 @@ fn rename_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
     let i = snapshot_index(s, CMD, p)?;
     let name = name_param(CMD, p)?.ok_or_else(|| bad(CMD, "`name` is required"))?;
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
-    let snap = st.snapshots.get_mut(i).ok_or_else(|| bad(CMD, "no such snapshot"))?;
+    let snap = st.snapshots_mut().get_mut(i).ok_or_else(|| bad(CMD, "no such snapshot"))?;
     snap.name.clone_from(&name);
     Ok(json!({ "snapshot": snap.id, "name": name }))
 }
@@ -213,8 +213,8 @@ fn delete_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "history.deleteSnapshot";
     let i = snapshot_index(s, CMD, p)?;
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
-    let snap = st.snapshots.remove(i);
-    Ok(json!({ "snapshot": snap.id, "snapshots": st.snapshots.len() }))
+    let snap = st.snapshots_mut().remove(i);
+    Ok(json!({ "snapshot": snap.id, "snapshots": st.snapshots().len() }))
 }
 
 /// A state other than the oldest exists to delete: a past or the current one, and with Allow
@@ -520,12 +520,12 @@ mod tests {
         let base = with.active().unwrap().memory_bytes();
         with.execute("history.newSnapshot", json!({"from": "mergedLayers"})).unwrap();
         let st = with.active().unwrap();
-        let flat = tile_bytes(&st.snapshots.last().unwrap().doc);
+        let flat = tile_bytes(&st.snapshots().last().unwrap().doc);
         assert!(flat > 0);
         assert_eq!(st.memory_bytes(), base + flat);
         // Room for the document's tiles and four fill tiles.
         let cur = tile_bytes(&st.doc);
-        let fill = tile_bytes(&Document { layers: st.doc.layers[1..].to_vec(), ..(*st.doc).clone() });
+        let fill = tile_bytes(&Document { layers: st.doc.layers[1..].to_vec().into(), ..(*st.doc).clone() });
         assert!(flat <= fill, "the flattened tile is no bigger than a fill's");
         let budget = cur + 4 * fill;
         for s in [&mut with, &mut without] {
@@ -549,11 +549,11 @@ mod tests {
         s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
         let st = s.active().unwrap();
         // The snapshot's green layer tile, now only in it and the last state.
-        let shared = tile_bytes(&Document { layers: st.snapshots.last().unwrap().doc.layers[1..].to_vec(), ..(*st.doc).clone() });
+        let shared = tile_bytes(&Document { layers: st.snapshots().last().unwrap().doc.layers[1..].to_vec().into(), ..(*st.doc).clone() });
         let all = st.history.unique_bytes(&st.doc);
         let r = s.execute("edit.purge.histories", json!({})).unwrap();
         assert_eq!(r["bytes"], json!(all - shared), "the green tile stays with the snapshot");
-        assert_eq!(s.active().unwrap().snapshots.len(), 2, "the first snapshot and the new one");
+        assert_eq!(s.active().unwrap().snapshots().len(), 2, "the first snapshot and the new one");
     }
 
     #[test]
