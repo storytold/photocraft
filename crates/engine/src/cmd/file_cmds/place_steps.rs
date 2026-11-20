@@ -33,6 +33,7 @@ pub(crate) struct PlaceSteps {
     stage: Stage,
     /// Where the placed image lands, known once it is decoded.
     plan: Plan,
+    warnings: Vec<String>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -63,7 +64,7 @@ impl PlaceSteps {
     /// `fine` cuts the work into pieces of a few milliseconds, as a session without worker
     /// threads needs; without it each stage is one unit of work.
     pub(crate) fn new(input: PlaceInput, fine: bool) -> Self {
-        Self { input, bytes: Arc::new(Vec::new()), fine, stage: Stage::Decode, plan: Plan::default() }
+        Self { input, bytes: Arc::new(Vec::new()), fine, stage: Stage::Decode, plan: Plan::default(), warnings: Vec::new() }
     }
 
     /// An import error as the engine reports it: a cancel stays one and a refused memory budget
@@ -157,6 +158,7 @@ impl PlaceSteps {
                 self.input.name
             )));
         }
+        self.warnings = imported.warnings;
         let src = imported.document;
         let (w, h) = (src.size.width as f64, src.size.height as f64);
         let (cw, ch) = self.input.canvas;
@@ -171,6 +173,19 @@ impl PlaceSteps {
             Some(c) if c.len() == 2 => (c[0].as_f64().unwrap_or(cw / 2.0), c[1].as_f64().unwrap_or(ch / 2.0)),
             _ => (cw / 2.0, ch / 2.0),
         };
+        // `scale` is the caller's: bound the resampled size before allocating it (a frame's image
+        // renders through its smart object, which has its own budget). Resampling rounds the far
+        // output edges outward; an unresampled placement keeps its size.
+        if self.input.frame.is_none() {
+            let (ow, oh) = if (scale - 1.0).abs() > 1e-9 { ((w * scale).ceil(), (h * scale).ceil()) } else { (w, h) };
+            let scaled = ow * oh;
+            if scaled.is_nan() || scaled > photocraft_compose::MAX_RENDER_PIXELS as f64 {
+                return Err(EngineError::BadParams {
+                    cmd: self.input.command().into(),
+                    msg: format!("scaling {w}×{h} by {scale} makes an image too large to place"),
+                });
+            }
+        }
         let (dx, dy) = ((center.0 - w * scale / 2.0).round(), (center.1 - h * scale / 2.0).round());
         self.plan = Plan { w, h, scale, dx, dy };
         // A frame's image renders through its smart object, which refuses a placement past the
@@ -239,7 +254,13 @@ impl PlaceSteps {
             if let Some(doc) = &input.doc {
                 ctx.progress(0.9, "Rendering");
                 ctx.check()?;
-                if let Some(sharp) = crate::smart_cmds::render(doc, &so)? {
+                let (sharp, warnings) = crate::smart_cmds::render_with_warnings(doc, &so)?;
+                for warning in warnings {
+                    if !self.warnings.contains(&warning) {
+                        self.warnings.push(warning);
+                    }
+                }
+                if let Some(sharp) = sharp {
                     so.cache = Some(sharp);
                 }
             }
@@ -251,7 +272,16 @@ impl PlaceSteps {
             let px = px.ok_or_else(|| EngineError::Other(format!("{}: a frame's image must be a smart object", input.name)))?;
             LayerContent::Raster(px)
         };
-        Ok(Prepared { content, layer_name: stem(&input.name), label, scale, bounds, smart, frame: input.frame.as_ref().map(|(id, _)| *id) })
+        Ok(Prepared {
+            warnings: std::mem::take(&mut self.warnings),
+            content,
+            layer_name: stem(&input.name),
+            label,
+            scale,
+            bounds,
+            smart,
+            frame: input.frame.as_ref().map(|(id, _)| *id),
+        })
     }
 }
 

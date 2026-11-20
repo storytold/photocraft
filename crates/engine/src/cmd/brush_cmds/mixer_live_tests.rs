@@ -110,7 +110,8 @@ fn mixer_live_current_layer_matches_reference_and_cancels() {
         &mut state,
         None,
         false,
-    );
+    )
+    .unwrap();
     let live = LiveMixer::begin(&s, &p).unwrap();
     let id = s.active().unwrap().active_layer.unwrap();
     let actual = live.doc.layer(id).unwrap().surface().unwrap().read_region(s.active().unwrap().doc.bounds());
@@ -255,7 +256,9 @@ fn mixer_rejects_malformed_load_and_retains_or_reloads_paint() {
     }
     assert!(s.execute("brush.mixer.load", json!({"color":[1e300,0,0,1]})).is_err());
     s.execute("brush.mixer.load", json!({"color":"#ff0000"})).unwrap();
-    s.execute("paint.mixerBrush", json!({"points":[[40,40],[80,40]],"size":10,"loadAfterStroke":false,"cleanAfterStroke":false,"load":10})).unwrap();
+    // The load lasts for a length of stroke (390 px at Load 1 %), so the stroke runs back and forth.
+    let long = json!([[10, 40], [180, 40], [10, 40], [180, 40], [10, 40]]);
+    s.execute("paint.mixerBrush", json!({"points":long,"size":10,"loadAfterStroke":false,"cleanAfterStroke":false,"load":1})).unwrap();
     assert!(s.tools.mixer.amount > 0.0 && s.tools.mixer.amount < 1.0);
     s.execute("paint.mixerBrush", json!({"points":[[40,40],[80,40]],"size":10,"loadAfterStroke":true,"load":10})).unwrap();
     assert_eq!(s.tools.mixer.amount, 1.0);
@@ -282,7 +285,7 @@ fn mixer_large_tip_retains_off_canvas_paint_and_commits_the_live_result() {
 #[test]
 fn mixer_long_segments_are_interpolated_and_replay_matches_live() {
     let mut s = fixture(PixelFormat::RGBA8);
-    let p = json!({"points":[[20,48],[5020,48]],"seed":71,"size":2,"sampleAllLayers":false,"wet":0,"mix":0,"load":100,"color":"#ff0000"});
+    let p = json!({"points":[[20,48],[5020,48]],"seed":71,"size":2,"sampleAllLayers":false,"wet":0,"mix":0,"load":100,"color":"#ff0000","brush":{"smoothing":{"catchUpOnEnd":true}}});
     let live = LiveMixer::begin(&s, &p).unwrap();
     let id = s.active().unwrap().active_layer.unwrap();
     let expected = live.doc.layer(id).unwrap().surface().unwrap().clone();

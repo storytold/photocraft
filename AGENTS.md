@@ -78,7 +78,7 @@ PhotoCraft is an open-source, native, Photoshop-comparable image editor written 
 
 ```text
 crates/
-  geom cms color raster      L0 foundation (geometry, ICC colour management, pixel formats + blend math, COW tiles)
+  geom color raster          L0 foundation (geometry, pixel formats + blend math, COW tiles); ICC colour management is craft-cms (craft-libs)
   psd codecs                 L0 standalone format crates (no workspace deps; publishable)
   tablet                     L0 standalone pen tablet input (macOS AppKit, X11 XInput2, Windows barrel button); the one isolated unsafe crate
   doc                        L1 document model (layers, masks, adjustments, effects, smart objects: pure data)
@@ -96,7 +96,7 @@ apps/
 xtask/                       cargo xtask layers | wasm | ci | stats | corpus | test-corpus | parity | perf | scorecard
 ```
 
-**Layering is enforced** by `cargo xtask layers`. A crate may depend only on lower layers. `psd`, `codecs` and `cms` depend on nothing in the workspace. Nothing below `ui-egui` may use egui, eframe, winit or rfd. A new crate must be registered in `xtask/src/layers.rs`.
+**Layering is enforced** by `cargo xtask layers`. A crate may depend only on lower layers. `psd` and `codecs` depend on nothing in the workspace. Nothing below `ui-egui` may use egui, eframe, winit or rfd. A new crate must be registered in `xtask/src/layers.rs`.
 
 ## 3. Golden rules
 
@@ -114,15 +114,16 @@ People trust PhotoCraft with their work, and a crash loses it. A malformed file,
 - **Enforced by clippy.** `clippy.toml` allows `unwrap`/`expect`/`panic` in tests only. Clean production crate roots carry `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]`; every new workspace crate must also include `[lints] workspace = true` in `Cargo.toml` to inherit `[workspace.lints]`.
 
 1. **Everything is a command.** New user-visible behaviour = a command in the engine (`crates/engine/src/*_cmds.rs`, registered in `commands.rs`) with id, label, menu path, shortcut, params doc, `enabled` and `run`, plus tests. The UI, CLI, control channel and MCP all dispatch commands by id. Use the **exact id from `crates/ui-egui/src/menu_catalog.rs`** and the menu item goes live automatically. Only pure view/window state (zoom, panels, screen mode) belongs to the shell (`menus.rs` `UI_COMMANDS`).
-2. **No format or colour assumptions.** Bit depth (8/16/32f) and colour model (RGB/Gray/CMYK/Lab…) are runtime data. Never introduce a `u8`-only pixel path in public APIs. Never assume sRGB: colour conversions go through `photocraft-cms` (`Transform`, `transform::cached`). Test at several depths.
+2. **No format or colour assumptions.** Bit depth (8/16/32f) and colour model (RGB/Gray/CMYK/Lab…) are runtime data. Never introduce a `u8`-only pixel path in public APIs. Never assume sRGB: colour conversions go through `craft-cms` (`Transform`, `transform::cached`). Test at several depths.
 3. **Clean-room.** We studied Photoshop and other proprietary editors for *behaviour and look only*. Never copy their code, shaders, profiles or assets. Implement from public specs (Adobe PSD spec, ICC, ISO 32000 blend modes, papers) and observation. Third-party assets must be permissively licensed, keep their license file next to them, and get a row in `ATTRIBUTION.md` (path, title, author, source, license) in the same change; so do original assets. The ArtCraft logos in `docs/brand/` are not open source (`docs/brand/LICENSE-brand.txt`). **Never commit font files:** fonts live in [storytold/craft-fonts](https://github.com/storytold/craft-fonts). PhotoCraft uses it through the optional build input `CRAFT_FONTS_DIR=<craft-fonts checkout>` (read by `crates/text/build.rs`, exposed as `photocraft_text::CRAFT_FONTS`; empty without it, and everything must still work). Build with it: `CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo build`; details in `docs/development.md` › Fonts.
 4. **Tests are the gate.** Every change comes with tests. Format crates use round-trip, synthetic-generator, oracle and fuzz tests. Keep the PSD corpus results and the parity floor (`crates/ui-egui/src/parity.rs`) from regressing.
 5. **The UI is thin and data-driven.** UI state lives in `ui-egui/src/state.rs` (serde), so the control channel can read and drive it. Colours and radii come from `theme::Tokens`, never hard-coded.
-6. **Verify UI changes visually.** Render offscreen with `cargo run -p photocraft-ui-egui --example snapshot` (no window, no focus stealing), or launch with `--control` and take `ui.screenshot`. Look at the PNG. Demo images must be public-domain art, never personal photos. When fetching assets, never put a person's name, email or other personal details in requests (User-Agent, headers, URLs); use a generic `Photocraft-dev` User-Agent.
+6. **Verify UI changes visually.** Render offscreen with `cargo run -p photocraft-ui-egui --example snapshot` (no window, no focus stealing), or launch with `--control` and take `ui.screenshot`. Look at the PNG. **Screenshots that show a PR's change (before/after evidence) go in the PR description, never in the repo:** `docs/images/` holds only images the README or a doc displays (a doc's own before/after comparison included), so a PR adds an image there only together with the doc that shows it. Demo images must be public-domain art, never personal photos. When fetching assets, never put a person's name, email or other personal details in requests (User-Agent, headers, URLs); use a generic `Photocraft-dev` User-Agent.
 7. **Never break wasm.** L0–L6 must `cargo check --target wasm32-unknown-unknown` (run `cargo xtask wasm`). File-system code is `cfg(not(target_arch = "wasm32"))` or goes through the platform services.
 8. **Performance is a feature.** Benchmark heavy operations on a 24–36 MP image in release. Work per tile in parallel (rayon), skip empty tiles, never scan a full surface per frame (cache per revision), and record before/after timings in the dev log.
 
 9. **Never panic on input** (see *Never crash* above). A command's `run` closure and anything it calls must return `Err`, never panic, for *any* params or document state: validate params, check bounds before indexing or dividing, and reject absurd sizes before allocating. The `panic_hunt` integration test fuzzes every command with adversarial params and must stay green.
+10. **Our features use our own names.** Labels, menus, dialogs, messages, tooltips, help, READMEs, release text and every translation never name a feature with another company's product, technology or distinctive feature name. Ordinary descriptive words that several unrelated products use for the same thing (`Layers`, `Crop`) are fine. Parity means the same place and behaviour, not the same name. Follow [standards/naming.md](https://github.com/storytold/craft-contrib/blob/main/standards/naming.md) ([RFC-0029](https://github.com/storytold/craft-contrib/blob/main/rfcs/0029-other-companies-names.md)): take the name from its names list, run its check for any other new or changed name and record it in the pull request and in `docs/feature-names.md`, and when the check does not settle it, do not ship the name. Change labels only: command ids, preference keys and stored values keep their names, and the old label stays as a hidden search alias. File formats and compatibility names stay accurate (`Open PSD`).
 
 ## 4. Picking work
 
@@ -160,6 +161,8 @@ cargo xtask test-corpus     # if you touched psd, io, codecs, compose, gpu, text
 ```
 
 While iterating, run less and keep the full commands above as the final gate: `cargo test -p <crate> --lib --tests` skips the examples and doctests plain `cargo test` builds every time (ui-egui has 11 examples), and `cargo test -p <crate> --test <file>` runs one integration-test file. `cargo nextest run` runs tests in parallel across binaries; see `docs/development.md` › Faster test loops.
+
+**MCP in tests and agent sessions: `photocraft-cli mcp --headless`.** Plain `photocraft-cli mcp` works in the open PhotoCraft window while the ArtCraft Launcher's agents switch is on, and then may start PhotoCraft on the developer's machine when it is closed. Scripts, tests and agents that want a session without a window pass `--headless` (or use `photocraft-cli serve`); a test that runs the CLI also gives it its own settings, launcher and flags folders (`PHOTOCRAFT_CONFIG_DIR`, `CRAFT_MCP_DIR`, `CRAFT_FLAGS_FILE`, as `crate::command()` in `apps/photocraft-cli/tests/it/main.rs` does). To drive the running app on purpose, use `--control` (`docs/development.md`).
 
 **Test corpora.** Real-file corpora live in `corpus/` (gitignored, never committed), fetched at pinned commits and sha256-verified by `cargo xtask corpus --all`: our Photoshop- and GIMP-authored oracles from https://github.com/storytold/photocraft-corpus plus psd-tools, ag-psd and PngSuite from their upstreams. Pins: `xtask/src/corpus_pins.rs`. The corpus tests are opt-in (cargo feature `corpus`): plain `cargo test` skips them, and with the feature on a missing corpus fails ("run `cargo xtask corpus --all`"). `cargo xtask test-corpus` fetches and runs them all. CI always runs them (the `corpus` job, cached by pin). Never commit corpus files; new oracles go to photocraft-corpus (its `AGENTS.md`), then a pin bump here. Details: `docs/development.md` › Test corpora.
 
@@ -212,3 +215,7 @@ If the field has a PSD equivalent, map it in `crates/io` too, and keep unknown P
 - Workflows in `.github/workflows/` call the shared workflows in [`storytold/craft-common-actions`](https://github.com/storytold/craft-common-actions) at `@main`, with their inputs and secrets. No other jobs: if no shared workflow does what's needed, it doesn't go here.
 - Don't add or change CI in a feature or fix PR. If the existing workflows can't build or test a change, link an existing craft-common-actions issue or PR, or open a new issue, or a PR only for a small fix that is safe for every app and does not increase CI time.
 - Some workflow files here still run their own jobs. Don't add to them. Moving a job into craft-common-actions is its own task, never part of another PR, and the job stays here until a shared workflow runs it.
+
+## Shared-library reuse
+
+Before implementing file formats, codecs, protocols or reusable UI components, check [storytold/craft-libs](https://github.com/storytold/craft-libs) and relevant open PRs; reuse or extend shared APIs instead of duplicating app-local implementations. Keep app-specific policy and adapters local, preserve behavior and format fidelity, security and resource limits, repository layering and regression tests, and document any shared-API gap rather than silently reducing functionality.

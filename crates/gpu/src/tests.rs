@@ -132,31 +132,26 @@ fn half_roundtrip() {
     }
 }
 
-/// #9173: no two pipeline build jobs share a shader, so no FXC blob is shared across threads.
+/// #9173: no two kernels' pipelines share a shader, so no FXC blob is shared across threads.
 #[test]
-fn build_jobs_share_no_shader() {
+fn kernel_pipelines_share_no_shader() {
     use super::consts::{MAP16, MAP32};
-    use super::kit::{build_jobs, vertex_shader};
-    let jobs = build_jobs(wgpu::TextureFormat::Rgba32Float);
+    use super::pipelines::{table, vertex_shader};
+    let jobs = table(wgpu::TextureFormat::Rgba32Float);
     let mut seen = std::collections::HashSet::new();
     for job in &jobs {
-        let fragments: std::collections::HashSet<_> = job.keys.iter().filter_map(|k| k.0.entry()).collect();
-        for f in fragments {
-            assert!(seen.insert(f.to_string()), "fragment shader {f} is built by two jobs");
-        }
+        let f = job.kernel.entry().expect("a drawn kernel");
+        assert!(seen.insert(f.to_string()), "fragment shader {f} is built by two kernels");
         assert!(seen.insert(job.vertex.clone()), "vertex entry {} is shared", job.vertex);
     }
-    // Every drawn pipeline is still built, in the same formats.
-    let keys: Vec<_> = jobs.iter().flat_map(|job| job.keys.iter().copied()).collect();
-    let plain = Kernel::DRAWN.iter().filter(|k| !k.is_map()).count();
-    assert_eq!(keys.len(), plain + 2 * (Kernel::DRAWN.len() - plain));
+    // Every drawn kernel has its pipelines, in the same formats.
     for k in Kernel::DRAWN {
-        let formats: Vec<_> = keys.iter().filter(|key| key.0 == k).map(|key| key.1).collect();
+        let formats: Vec<_> = jobs.iter().filter(|job| job.kernel == k).flat_map(|job| job.formats.iter().copied()).collect();
         let want = if k.is_map() { vec![MAP32, MAP16] } else { vec![wgpu::TextureFormat::Rgba32Float] };
         assert_eq!(formats, want, "{k:?}");
     }
-    // The vertex module validates and has every job's entry point.
-    let src = vertex_shader(&jobs);
+    // The vertex module validates and has every kernel's entry point.
+    let src = vertex_shader(jobs.iter().map(|job| job.vertex.as_str()));
     let module = wgpu::naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
     wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::empty())
         .validate(&module)
@@ -167,7 +162,7 @@ fn build_jobs_share_no_shader() {
     // The fragment module has no vertex stage, so the build can't fall back to one shared `vs`.
     let compose = wgpu::naga::front::wgsl::parse_str(SHADER).unwrap_or_else(|e| panic!("{}", e.emit_to_string(SHADER)));
     let shared: Vec<_> = compose.entry_points.iter().filter(|ep| ep.stage == wgpu::naga::ShaderStage::Vertex).map(|ep| ep.name.as_str()).collect();
-    assert!(shared.is_empty(), "compose.wgsl has a vertex entry point every job would share: {shared:?}");
+    assert!(shared.is_empty(), "compose.wgsl has a vertex entry point every kernel would share: {shared:?}");
 }
 
 #[test]
@@ -359,11 +354,12 @@ fn sixteen_and_thirty_two_bit_fast_paths_match_the_general_one() {
 /// the built-in CMYK profile and with a document's own (which the worker threads enter).
 #[test]
 fn colour_managed_tiles_match_the_per_pixel_conversion() {
-    use photocraft_cms::synth::{CmykParams, cmyk_profile};
+    use craft_cms::synth::{CmykParams, cmyk_profile};
     use photocraft_color::ColorMode;
     use photocraft_color::convert::{CmykSpace, with_cmyk_space};
     let icc = Arc::new(
         cmyk_profile(&CmykParams { description: "GPU test CMYK".into(), tvi: [0.26, 0.26, 0.26, 0.3], grid_a2b: 5, grid_b2a: 9, ..Default::default() })
+            .unwrap()
             .to_bytes(),
     );
     let own = CmykSpace::for_profile(Some(&icc));

@@ -135,14 +135,10 @@ pub(crate) fn fix_view(st: &mut DocState) {
     }
 }
 
-/// Bump the revision for a view-only change without dirtying a clean document.
+/// Bump the revision for a view-only change without dirtying a clean document. The channels
+/// shown change the picture, so the whole canvas is drawn again.
 pub(super) fn touch(st: &mut DocState) {
-    let clean = st.saved_revision == st.revision;
-    st.revision += 1;
-    st.view_revision += 1;
-    if clean {
-        st.saved_revision = st.revision;
-    }
+    st.bump_view_revision(!st.is_dirty());
     st.last_damage = None;
 }
 

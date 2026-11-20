@@ -49,7 +49,7 @@ fn prepare(bytes: &[u8]) -> Result<(Document, Vec<String>)> {
     if imported.document.layers.is_empty() {
         return Err(bad("the SVG contains no drawable objects"));
     }
-    imported.document.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes());
+    imported.document.icc_profile = Some(craft_cms::Builtin::Srgb.profile().to_bytes());
     Ok((imported.document, imported.warnings))
 }
 
@@ -217,11 +217,11 @@ pub(super) fn paste(s: &mut Session, p: &Value, mode: Mode) -> Result<Value> {
     copies.layers = if mode == Mode::Shape {
         let layer = shape(&copies)?;
         shape_budget(layer, &destination, dx, dy)?;
-        vec![layer.duplicate()]
+        vec![layer.duplicate()].into()
     } else {
         let image = crate::smart_cmds::svg_source_image(&bytes, PixelFormat::new(ColorMode::Rgb, SampleType::F32, true), 1.0)?;
         copies.depth = SampleType::F32;
-        vec![Layer::new("Pasted SVG", LayerContent::Raster((*image.surface).clone()))]
+        vec![Layer::new("Pasted SVG", LayerContent::Raster((*image.surface).clone()))].into()
     };
     crate::layer_copy_cmds::adapt_copies(s, &mut copies, &destination)?;
     crate::layer_copy_cmds::translate_copies(&mut copies, &destination, dx, dy);
