@@ -471,6 +471,10 @@ pub(crate) static PURGE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(
 mod tests;
 
 #[cfg(test)]
+#[path = "edit_menu_cmds/caf_select_all_tests.rs"]
+mod caf_select_all_tests;
+
+#[cfg(test)]
 #[path = "edit_menu_cmds/fade_visibility_tests.rs"]
 mod fade_visibility_tests;
 

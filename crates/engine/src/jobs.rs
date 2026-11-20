@@ -1975,7 +1975,11 @@ impl Session {
         if let Some(st) = self.active_mut() {
             crate::mask_view_cmds::fix(st);
         }
-        crate::edit_menu_cmds::after_command(self, id, &params);
+        // A command that left the document as it was (Content-Aware Fill with the whole canvas
+        // selected, #14253) made no step for Edit › Fade to fade.
+        if !before.kept(self) {
+            crate::edit_menu_cmds::after_command(self, id, &params);
+        }
         crate::automate_cmds::after_command(self, id);
         self.sync_preset_store();
         if !journal {
