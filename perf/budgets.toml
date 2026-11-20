@@ -110,15 +110,6 @@ args = ["4", "2", "--reps", "5"]
 quick_args = ["2", "0.25", "--reps", "3"]
 note = "synthetic Photomerge multi-band blend; resident-set peak includes input/output buffers"
 
-# Pen cursor native bitmap and warm cache benchmark (#9122)
-[[bench]]
-name = "cursor_bench"
-package = "photocraft-ui-egui"
-requires = "crates/ui-egui/examples/cursor_bench.rs"
-args = ["--moves", "1000", "--reps", "5"]
-quick_args = ["--moves", "200", "--reps", "2"]
-note = "native Pen cursor rasterization, warm lookup, and painted baseline (#9122)"
-
 # ---- #209: interactive edits on layered documents (20 MP, styled layers) ---------------------
 
 [[scenario]]
@@ -911,8 +902,43 @@ metric = "max"
 budget_ms = 16
 enforce = true  # #11103: max 43.2 ms before (a mip level built in the frame), 0.09 ms after (2026-11-11)
 
+# ---- #15465: Pen cursor after the shared framework migration ----------------------------------
+
+[[bench]]
+name = "pen_cursor_bench"
+package = "photocraft-ui-egui"
+quick_args = ["--quick"]
+note = "Pen hover through the shared canvas host at 125% pixel density: native image generation and reuse, plus painted fallback; CPU frame without OS cursor upload or GPU presentation"
+
 [[scenario]]
 id = "P92"
+title = "Pen native cursor generation at 125% pixel density"
+issue = 15465
+bench = "pen_cursor_bench"
+row = "Pen native cursor, cold"
+budget_ms = 2.0
+enforce = false  # advisory until measured on the nightly runner
+
+[[scenario]]
+id = "P93"
+title = "Pen native cursor movement at 125% pixel density"
+issue = 15465
+bench = "pen_cursor_bench"
+row = "Pen native cursor, warm"
+budget_ms = 0.25
+enforce = false  # advisory until measured on the nightly runner
+
+[[scenario]]
+id = "P94"
+title = "Pen painted cursor movement at 125% pixel density"
+issue = 15465
+bench = "pen_cursor_bench"
+row = "Pen painted cursor"
+budget_ms = 0.25
+enforce = false  # advisory until measured on the nightly runner
+
+[[scenario]]
+id = "P95"
 title = "Filter dialog preview publish at k 1, 36 MP (display + texels)"
 issue = 5772
 bench = "interactive_bench"
@@ -921,10 +947,10 @@ budget_ms = 16
 enforce = false  # 64 ms measured 2026-10-24 (worst step, RTX 4090 Laptop): the whole result is converted
 
 [[scenario]]
-id = "P93"
-title = "Filter dialog preview window texture at k 1, 36 MP"
+id = "P96"
+title = "Filter dialog preview window texture at k 1, 36 MP (whole image)"
 issue = 5772
 bench = "interactive_bench"
-row = "filter preview window texture, k 1"
+row = "filter preview window texture, k 1 (whole image)"
 budget_ms = 16
-enforce = false  # met on an RTX 4090 Laptop (worst step 3.2 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
+enforce = false  # not measured since the framework's preview pane (2026-11-20): the window's texture is now the whole image, not its view (3.2 ms cropped, 2026-10-24)

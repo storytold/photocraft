@@ -49,6 +49,20 @@ fn estimates_preserve_last_successful_export_settings() {
 
 /// The next launch's dialog seeds from the preferences: `file_menu` is not saved, so a complete
 /// export remembers its settings in `prefs.dialogs` too, as Fill and the filter dialogs do.
+/// Stored slices past the resolve limit are reported by the estimate as well as by the export.
+#[test]
+fn the_estimate_reports_ignored_slices() {
+    let mut s = session(8);
+    s.edit("slices", |doc, _| {
+        let n = photocraft_doc::slices::MAX_RESOLVED_SLICES + 2;
+        doc.slices.list = (0..n).map(|i| photocraft_doc::Slice { id: i as u32 + 1, rect: Rect::new(0, 0, 8, 8), ..Default::default() }).collect();
+        Ok(())
+    })
+    .unwrap();
+    let estimate = s.execute("file.export.saveForWebLegacy", json!({"format": "png24"})).unwrap();
+    assert!(estimate["warnings"].as_array().unwrap().iter().any(|w| w.as_str().is_some_and(|w| w.starts_with("2 stored slices"))), "{estimate}");
+}
+
 #[test]
 fn a_complete_export_remembers_its_settings_in_the_preferences() {
     let dir = tmp("remember_settings");
@@ -867,7 +881,7 @@ fn image_assets_keep_full_artboards() {
         let board =
             photocraft_doc::Artboard { rect: Rect::new(4, 6, 44, 36), background: photocraft_doc::ArtboardBackground::Transparent, preset: String::new() };
         let group = photocraft_doc::Group { children: vec![logo], expanded: true, artboard: Some(board), frame_stroke: None };
-        doc.layers = vec![Layer::new("board.png", LayerContent::Group(group))];
+        doc.layers = vec![Layer::new("board.png", LayerContent::Group(group))].into();
         Ok(())
     })
     .unwrap();
@@ -906,7 +920,7 @@ fn image_assets_refuse_empty_artboards() {
         };
         let empty = photocraft_doc::Group { children: vec![], expanded: true, artboard: Some(board(0)), frame_stroke: None };
         let off = photocraft_doc::Group { children: vec![outside], expanded: true, artboard: Some(board(24)), frame_stroke: None };
-        doc.layers = vec![Layer::new("empty.png", LayerContent::Group(empty)), Layer::new("off.png", LayerContent::Group(off))];
+        doc.layers = vec![Layer::new("empty.png", LayerContent::Group(empty)), Layer::new("off.png", LayerContent::Group(off))].into();
         Ok(())
     })
     .unwrap();
