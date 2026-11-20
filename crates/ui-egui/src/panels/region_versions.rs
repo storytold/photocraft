@@ -12,16 +12,18 @@ use std::hash::{Hash, Hasher};
 use super::{PhotocraftApp, chrome_ui};
 use crate::color_picker_ui::PickWindow;
 
-/// The version of the options bar: the Zoom tool's members show the active view, and an open Free Transform, Puppet
-/// Warp or Perspective Warp shows its own members in place of the tool's, with what a drag on the canvas changes (the
-/// box, the picked pin, the planes; Escape ends them without a command, #15547). The Crop tool's members show its
-/// options and frame state, which its contextual task bar and the canvas change without a command. The painting tools'
-/// members show the brush and its presets, the gradient, shape, type and Mixer Brush members the colours, and the type
-/// members the type defaults.
+/// The version of the options bar: every tool option (`app.ui.tool_options`, all of which the bar shows; keys, the
+/// canvas menu, the canvas and its task bars, panels and presets write them without a command), the commit and cancel
+/// cells and hints of an edit the canvas opens or ends ([`options_bar::edit_key`](super::options_bar::edit_key)), the
+/// Zoom tool's view, and an open Free Transform, Puppet Warp or Perspective Warp, which shows its own members in place
+/// of the tool's, with what a drag on the canvas changes (the box, the picked pin, the planes; Escape ends them without
+/// a command, #15547), the Crop tool's frame state, the type members' caret or selection, the brush and its presets and
+/// the colours.
 pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
     let sessions =
         (crate::transform_tool::bar_key(app), crate::puppet_ui::bar_key(app), crate::perspective_ui::bar_key(app), crate::crop_ui::bar::bar_key(app));
-    version(app, (view(app), sessions, brush(app), colours(app), type_defaults(app)))
+    let shown = (serialized(&app.ui.tool_options), super::options_bar::edit_key(app), text_target(app));
+    version(app, (view(app), sessions, shown, brush(app), colours(app)))
 }
 
 /// The version of the title bar: the title it shows (the active document's name and its unsaved mark), the language
@@ -54,25 +56,32 @@ pub(crate) fn status_bar(app: &PhotocraftApp) -> u64 {
     version(app, (view(app), &app.ui.status, app.ui.status_error, &app.ui.chrome.status_info, render_path, redraw, job, app.session.jobs().len()))
 }
 
-/// The version of panel `id`'s body. The Navigator shows the active view, the Info panel the pointer's document pixel
-/// and the zoom it samples at, the Clone Source panel the pairing at the last hover point, the Modifier Keys panel the
+/// The version of panel `id`'s body. The Navigator shows the active view, the Layers panel the layer the Move tool's
+/// rollover outlines on the canvas, the Info panel the pointer's document pixel,
+/// the zoom and the Eyedropper's Sample Size it samples at and the Crop tool's frame size, the Clone Source panel the pairing at the last hover point, the Modifier Keys panel the
 /// latched keys, which their use releases, the Properties panel the colour its well's open Color Picker previews and
 /// the answer that picker left, the Histogram the adjustment preview it counts. Brush Settings and Brushes show the
 /// brush and its presets; Color, Swatches, Gradients and the Gradient Editor show the colours, and so do Properties (a
 /// shape layer's fill and stroke swatches, a gradient fill's Foreground and Background stops, the adjustment editors'
 /// swatches) and Character (the colour of new type is the foreground). Character and Paragraph show the type
-/// defaults. Every other panel shows only what every version holds.
+/// defaults, and they and Properties the values at the caret or selection of the type being edited, which Glyphs
+/// inserts at. Every other panel shows only what every version holds.
 pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
     match id {
         "navigator" => version(app, view(app)),
-        "info" => version(app, (app.hover_doc.map(|at| at.map(f64::to_bits)), app.current_zoom().to_bits())),
+        "layers" => version(app, app.canvas_hover_layer),
+        "info" => {
+            let crop = crate::crop_ui::info_size(app).map(|size| size.map(f64::to_bits));
+            version(app, (app.hover_doc.map(|at| at.map(f64::to_bits)), app.current_zoom().to_bits(), app.ui.tool_options.eyedropper.size.pixels(), crop))
+        }
         "cloneSource" => version(app, app.ui.presets_ui.clone_cursor.map(|(document, at)| (document, at.map(f64::to_bits)))),
         "modifierKeys" => version(app, app.ui.shell.latched),
-        "properties" => version(app, (crate::color_picker_ui::window_picker_state(app, PickWindow::Properties), colours(app))),
+        "properties" => version(app, (crate::color_picker_ui::window_picker_state(app, PickWindow::Properties), colours(app), text_target(app))),
         "brushSettings" | "brushes" => version(app, brush(app)),
         "histogram" => version(app, adjustment_preview(app)),
-        "character" => version(app, (colours(app), type_defaults(app))),
-        "paragraph" => version(app, type_defaults(app)),
+        "character" => version(app, (colours(app), type_defaults(app), text_target(app))),
+        "paragraph" => version(app, (type_defaults(app), text_target(app))),
+        "glyphs" => version(app, text_target(app)),
         "color" | "swatches" | "gradients" | "gradientEditor" => version(app, colours(app)),
         _ => version(app, ()),
     }
@@ -99,15 +108,37 @@ fn toolbar_with(app: &PhotocraftApp, tokens: usize) -> u64 {
 }
 
 /// What every region may show, joined with `extra`: the commands run (any of them may change anything), the active
-/// document, its revision and its active layers, and the tool.
+/// document, its revision, its active layers and which part of them is targeted (the layer mask, the vector mask, a
+/// filter mask, the selected path; the Layers, Channels, Paths and Properties panels and the canvas set it without a
+/// command), and the tool.
 fn version(app: &PhotocraftApp, extra: impl Hash) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     app.commands_run.hash(&mut hasher);
     app.session.active_generation().hash(&mut hasher);
     app.session.active_layer_changes().hash(&mut hasher);
     app.session.active().map(|st| st.revision).hash(&mut hasher);
+    (app.ui.mask_target, app.ui.vector_mask_target, app.ui.filter_mask_target, &app.ui.selected_path).hash(&mut hasher);
     app.ui.tool.hash(&mut hasher);
     extra.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// A hash of `value` through its serialized form, which holds every stored field: for app state whose type has no
+/// `Hash` (floats, framework types).
+fn serialized(value: &impl serde::Serialize) -> u64 {
+    struct HashWriter<'a>(&'a mut std::collections::hash_map::DefaultHasher);
+    impl std::io::Write for HashWriter<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.write(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    // Writing to a hasher cannot fail, and every tool option serializes (they are saved).
+    let _ = serde_json::to_writer(HashWriter(&mut hasher), value);
     hasher.finish()
 }
 
@@ -121,6 +152,12 @@ fn brush(app: &PhotocraftApp) -> (u64, u64) {
 fn type_defaults(app: &PhotocraftApp) -> impl Hash + '_ {
     let o = &app.ui.tool_options;
     (&o.type_font, &o.type_style, o.type_size.to_bits(), &o.type_aa, &o.type_align, &o.type_direction, &o.type_style_defaults)
+}
+
+/// The caret and selection of the type being edited: the type members, Character, Paragraph and Properties show the
+/// values there, and a click, a drag or an arrow key on the canvas moves them without a command.
+fn text_target(app: &PhotocraftApp) -> Option<(u64, Option<u64>, usize, usize)> {
+    app.ui.text_edit.as_ref().map(|edit| (edit.layer, edit.document, edit.caret, edit.anchor))
 }
 
 /// The adjustment preview the Histogram counts while it shows: an adjustment layer's Properties drag (its proposed
@@ -182,10 +219,12 @@ mod tests {
                 "layers",
                 "history",
                 "navigator",
+                "info",
                 "histogram",
                 "properties",
                 "character",
                 "paragraph",
+                "glyphs",
                 "brushSettings",
                 "brushes",
                 "color",
@@ -220,7 +259,36 @@ mod tests {
         assert_eq!(ratio, ["optionsBar"], "a crop ratio picked in the task bar");
         let straighten = moved(&mut app, &|app| crate::crop_ui::toggle_straighten(app));
         assert_eq!(straighten, ["optionsBar"], "Straighten pressed in the task bar");
+        let opacity = moved(&mut app, &|app| app.ui.tool_options.fill_opacity = 50.0);
+        assert_eq!(opacity, ["optionsBar"], "a tool option a key sets");
+        let sample = moved(&mut app, &|app| app.ui.tool_options.eyedropper.size = craft::color_ui::ui::SampleSize::Avg5);
+        assert_eq!(sample, ["info", "optionsBar"], "the Sample Size the canvas menu picks");
+        app.ui.tool = Tool::Type;
+        let edit = |caret| crate::state::TextEdit { layer: 1, document: None, caret, anchor: 0, session: String::new(), created: false, mask: false };
+        app.ui.text_edit = Some(edit(0));
+        let caret = moved(&mut app, &|app| app.ui.text_edit = Some(edit(2)));
+        assert_eq!(caret, ["properties", "character", "paragraph", "glyphs", "optionsBar"], "the caret moved in the type being edited");
+        let rollover = moved(&mut app, &|app| app.canvas_hover_layer = Some(photocraft_doc::LayerId(1)));
+        assert_eq!(rollover, ["layers"], "the Move tool's rollover on the canvas");
+        let all = regions(&app).len();
+        let mask = moved(&mut app, &|app| app.ui.mask_target = true);
+        assert_eq!(mask.len(), all, "the layer mask targeted in a panel: {mask:?}");
+        let path = moved(&mut app, &|app| app.ui.selected_path = Some("work".into()));
+        assert_eq!(path.len(), all, "a path selected on the canvas: {path:?}");
         let preview = moved(&mut app, &|app| app.live_adjust = Some((photocraft_doc::LayerId(1), serde_json::json!({"brightness": 10}))));
         assert_eq!(preview, ["histogram"], "an adjustment layer's live preview");
+    }
+
+    /// A command a key fires is a command run, as one from a menu is: the opacity and blend keys and the Artboard,
+    /// Slice and panel commands change what a settled region shows without going through `menus::invoke`.
+    #[test]
+    fn a_fired_command_moves_every_version() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let before = (options_bar(&app), panel(&app, "layers"), status_bar(&app));
+        let fired = crate::blend_keys::test_fired(craft::draw::ui::artboard::ArtboardCommand::AddNew.into());
+        crate::shortcut_dispatch::run_fired(&mut app, &egui::Context::default(), &[fired]);
+        assert!(app.ui.artboard_tool.adding, "Add New Artboard ran");
+        let after = (options_bar(&app), panel(&app, "layers"), status_bar(&app));
+        assert!(after.0 != before.0 && after.1 != before.1 && after.2 != before.2, "every version moved");
     }
 }
