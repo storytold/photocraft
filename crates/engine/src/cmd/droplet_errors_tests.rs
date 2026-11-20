@@ -110,6 +110,27 @@ fn the_errors_choice_is_only_stop_or_log() {
     assert!(error.to_string().contains("errors"), "{error}");
 }
 
+/// A log path that is not a string is refused where it is stored, the way Batch's own policy parse
+/// refuses it: a droplet never carries a log a later run would silently drop (no log, no error).
+/// A null stays "not given", as everywhere else in this command.
+#[test]
+fn a_log_path_that_is_not_a_string_is_refused() {
+    let dir = tmp("store-log-type");
+    let error = Session::new()
+        .execute(
+            "file.automate.createDroplet",
+            json!({"path": format!("{dir}/Typed"), "steps": failing_steps(), "output": format!("{dir}/out"), "shim": false, "errors": "log", "errorLog": 42}),
+        )
+        .unwrap_err();
+    assert!(matches!(error, crate::EngineError::BadParams { .. }), "{error}");
+    assert!(error.to_string().contains("errorLog"), "{error}");
+    assert!(!std::path::Path::new(&format!("{dir}/Typed.pcdroplet")).exists(), "nothing was stored");
+    let dp = failing_droplet(&dir, json!({"errors": "log", "errorLog": null}));
+    let saved: Value = serde_json::from_slice(&std::fs::read(dp).unwrap()).unwrap();
+    assert!(saved["options"].get("errorLog").is_none(), "null means not given: {saved}");
+    assert_eq!(saved["options"].get("stopOnError"), Some(&json!(false)), "{saved}");
+}
+
 // ---------------------------------------------------------------- stop at the first failure
 
 /// Stop for Errors reaches Batch: the failing file is the last one the run touches.

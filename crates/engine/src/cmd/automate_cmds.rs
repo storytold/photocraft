@@ -391,8 +391,15 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
             }
             "log" => {
                 options.insert("stopOnError".into(), json!(false));
-                if let Some(path) = p.get("errorLog") {
-                    options.insert("errorLog".into(), path.clone());
+                // Type-checked where it is stored, the way Batch's own policy parse reads it: a run
+                // takes the saved value with `as_str`, so a number saved here would later write no
+                // log and report no error. `null` stays "not given", as elsewhere in this command.
+                match p.get("errorLog") {
+                    None | Some(Value::Null) => {}
+                    Some(path @ Value::String(_)) => {
+                        options.insert("errorLog".into(), path.clone());
+                    }
+                    Some(_) => return Err(bad(cmd, "\"errorLog\" must be a file path string")),
                 }
             }
             other => return Err(bad(cmd, format!("\"errors\" is \"stop\" or \"log\", not `{other}`"))),
