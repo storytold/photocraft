@@ -12,7 +12,7 @@ pub(crate) fn target(app: &PhotocraftApp) -> Option<(u64, Option<[usize; 2]>)> {
     let id = st
         .active_layer
         .filter(|id| text_layer(&st.doc, *id).is_some())
-        .or_else(|| st.selected_layers().into_iter().find(|id| text_layer(&st.doc, *id).is_some()))?;
+        .or_else(|| st.selected_layers().iter().copied().find(|id| text_layer(&st.doc, *id).is_some()))?;
     Some((id.0, None))
 }
 
@@ -43,7 +43,7 @@ pub(crate) fn formatting_params(app: &PhotocraftApp) -> Option<serde_json::Value
         return Some(params);
     }
     let st = app.session.active()?;
-    let layers: Vec<u64> = st.selected_layers().into_iter().filter(|id| text_layer(&st.doc, *id).is_some()).map(|id| id.0).collect();
+    let layers: Vec<u64> = st.selected_layers().iter().copied().filter(|id| text_layer(&st.doc, *id).is_some()).map(|id| id.0).collect();
     (!layers.is_empty()).then(|| json!({"layers": layers}))
 }
 
