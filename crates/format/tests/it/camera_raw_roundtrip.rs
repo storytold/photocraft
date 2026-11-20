@@ -66,7 +66,7 @@ fn pcraft_roundtrips_camera_raw_smart_filter_params() {
         LayerContent::Smart(SmartObject {
             contents_id: SmartContentsId::fresh(),
             vector_preview: None,
-            source: SmartSource::Embedded { file_name: "inner.png".into(), bytes: vec![1, 2, 3, 4] },
+            source: SmartSource::Embedded { file_name: "inner.png".into(), bytes: std::sync::Arc::new(vec![1, 2, 3, 4]) },
             transform: Affine::IDENTITY,
             smart_filters: vec![SmartFilter {
                 command: "filter.cameraRaw".into(),
