@@ -372,6 +372,8 @@ pub(crate) struct PlaceInput {
     pub(super) linked: Option<String>,
     pub(super) params: Value,
     pub(super) canvas: (f64, f64),
+    /// The document's resolution (ppi): a placed file keeps its physical size in it.
+    pub(super) ppi: f64,
     pub(super) fmt: PixelFormat,
     pub(super) opts: photocraft_io::ImportOptions,
     /// Preferences ▸ General ▸ Resize Image During Place, unless the params say otherwise.
@@ -429,6 +431,7 @@ impl PlaceInput {
         Ok(Self {
             name: name.to_string(),
             canvas,
+            ppi: f64::from(d.doc.resolution_dpi),
             fmt: d.doc.pixel_format(),
             opts,
             // The implicit `fit` is Preferences ▸ General ▸ Resize Image During Place (on by default).
