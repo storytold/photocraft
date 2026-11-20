@@ -16,10 +16,14 @@ pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
 }
 
 /// The version of the title bar: the title it shows (the active document's name and its unsaved mark), the language
-/// its menu titles are in and whether the menus are in the bar (not in the macOS menu bar). An open menu is an overlay
-/// and runs as it is shown.
+/// its menu titles are in, whether the menus are in the bar (not in the macOS menu bar) and whether the bar takes the
+/// menu keys (F10, Alt, Alt+letter), which a dialog or the shortcut recorder holds back: a dialog closed with Escape
+/// runs no command, and the bar registers for the keys again only when it runs. An open menu is an overlay and runs as
+/// it is shown.
 pub(crate) fn title_bar(app: &PhotocraftApp) -> u64 {
-    version(app, (super::title_bar::title_text(app), crate::i18n::current().code(), app.services.native_menu.is_none()))
+    let (gate, _) = crate::menus::menu_gate(app);
+    let keys = (gate.modal, gate.recording_shortcut);
+    version(app, (super::title_bar::title_text(app), crate::i18n::current().code(), app.services.native_menu.is_none(), keys))
 }
 
 /// The version of what the dock's chrome (each group's header and tab strip, each column's bar) shows of the panels
