@@ -202,13 +202,17 @@ fn caf_unrepresented_descriptors_are_kept_and_never_partially_play() {
 /// Known native defaults become explicit values; unsupported defaults/options cannot disappear.
 #[test]
 fn caf_native_exports_preserve_effective_defaults_and_refuse_unrepresented_options() {
-    for p in [json!({"sampling":"rectangular","output":"new"}), json!({"sampling":"rectangular","output":"new","seed":1,"target":"pixels"}), params()] {
+    for p in [
+        json!({"sampling":"rectangular","sampleAllLayers":false,"output":"new"}),
+        json!({"sampling":"rectangular","sampleAllLayers":false,"output":"new","seed":1,"target":"pixels"}),
+        params(),
+    ] {
         let a = load(exported(p).unwrap().descriptor.unwrap());
         assert_eq!(a.steps, vec![ActionStep::new(CMD, params())]);
     }
     let mut current = params();
     current["output"] = json!("current");
-    for p in [json!({"sampling":"rectangular"}), current.clone()] {
+    for p in [json!({"sampling":"rectangular","sampleAllLayers":false}), current.clone()] {
         let a = load(exported(p).unwrap().descriptor.unwrap());
         assert_eq!(a.steps, vec![ActionStep::new(CMD, current.clone())]);
     }
@@ -238,12 +242,16 @@ fn caf_native_exports_preserve_effective_defaults_and_refuse_unrepresented_optio
     let mut defaults = params();
     defaults["sampling"] = json!("auto");
     defaults["output"] = json!("current");
-    let a = load(exported(json!({})).unwrap().descriptor.unwrap());
+    let a = load(exported(json!({"sampleAllLayers":false})).unwrap().descriptor.unwrap());
     assert_eq!(a.steps, vec![ActionStep::new(CMD, defaults.clone())]);
     defaults["output"] = json!("new");
-    let a = load(exported(json!({"output":"new"})).unwrap().descriptor.unwrap());
+    let a = load(exported(json!({"sampleAllLayers":false,"output":"new"})).unwrap().descriptor.unwrap());
     assert_eq!(a.steps, vec![ActionStep::new(CMD, defaults)]);
     assert!(exported(json!([])).is_none());
+    // Without `sampleAllLayers` an empty layer samples the composite, and a recorded false would not.
+    for p in [json!({}), json!({"output":"new"}), json!({"colorAdaptation":"none"}), json!({"sampling":"rectangular"})] {
+        assert!(exported(p.clone()).is_none(), "unrepresented sampling: {p}");
+    }
 }
 
 fn session(depth: u32) -> Session {

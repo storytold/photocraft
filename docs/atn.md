@@ -436,7 +436,8 @@ Descriptor types, source identity and key order survive save while its native se
 unchanged. Editing a supported setting exports the new values in canonical form instead of
 restoring stale source values; malformed preservation data still refuses export.
 Native export writes the seven keys explicitly, including the command's own defaults (Auto
-sampling, Current Layer output).
+sampling, Current Layer output). A native step without `sampleAllLayers` refuses export: on an
+empty layer the command then samples the visible composite, which neither recorded value says.
 
 Steps that carry only some of the seven keys (not measured), unknown settings and malformed
 or repeated fields remain complete kept steps. Native layer targets, sampling/fill edits and

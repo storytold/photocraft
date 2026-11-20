@@ -56,7 +56,9 @@ fn recorded(d: &Descriptor) -> Option<Value> {
     Some(Value::Object(p))
 }
 
-/// Write only represented native options, making their defaults explicit in all seven fields.
+/// Write only represented native options, making their defaults explicit in all seven fields. A step without
+/// `sampleAllLayers` is refused: the command then samples the composite when the layer is empty, which neither
+/// recorded value says.
 fn descriptor(p: &Value) -> Option<Descriptor> {
     let object = p.as_object()?;
     if !super::events::pixel_target(p)
@@ -68,6 +70,9 @@ fn descriptor(p: &Value) -> Option<Descriptor> {
     if let Some(remembered) = p.get(REMEMBERED) {
         // Values next to the mark would be dropped by an empty descriptor.
         return (remembered.as_bool() == Some(true) && !PARAMS.iter().any(|param| object.contains_key(*param))).then(|| desc("null"));
+    }
+    if !object.contains_key(PARAMS[1]) {
+        return None;
     }
     let enumeration = |key: &str, param: &str, table: &[(&str, &str)], default: &str| {
         let value = match p.get(param) {
