@@ -110,12 +110,14 @@ fn offset_fast_path_matches_the_per_channel_oracle() {
     for (mode, n, alpha) in layouts {
         let src = image(win, n, alpha);
         let ctx = Ctx { bounds: win, mode, alpha };
-        for radius in [0.1f32, 1.0, 3.0, 12.0, 17.5] {
+        // Centre only, unit stride, and a coarse stride for both qualities. At 13 the inner
+        // rectangle still has pixels, so coarse offsets exercise the fast path too.
+        for radius in [0.1f32, 3.0, 13.0] {
             let ri = f32::ceil(radius) as i32;
             // The usual tile (the window less the halo), the whole window, and one sticking out of it.
             let inner = Rect::new(win.x0 + ri, win.y0 + ri, win.x1 - ri, win.y1 - ri);
             for out in [inner, win, Rect::new(-12, -9, 10, 8), Rect::EMPTY] {
-                // Quality only sets the offset stride: Low a coarse one, High every offset at these radii (#15652).
+                // Quality selects the offset stride; both paths are compared to the oracle.
                 for quality in [BlurQuality::Low, BlurQuality::High] {
                     for sm in [SmartBlurMode::Normal, SmartBlurMode::EdgeOnly, SmartBlurMode::OverlayEdge] {
                         for threshold in [8.0, 60.0] {
