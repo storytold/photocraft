@@ -24,6 +24,7 @@ mod healing_reset_tip;
 mod interactive_bench_reporting;
 mod layout_perf;
 mod magnetic_lasso_right_click;
+mod mixer_reset_defaults;
 mod paint_bucket_all_layers;
 mod pending_remove_pointer;
 mod radial_blur_center;
