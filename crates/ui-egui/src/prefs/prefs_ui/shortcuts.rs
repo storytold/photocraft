@@ -10,19 +10,23 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use craft::behavior::IconId;
 use craft::keymap::import::kys;
 use craft::keymap::{Builtins, CommandRef, ImportOptions, Keymap, NoneDefined, Overrides, Profiles, Scopes, reserved};
 use craft::menu::Row;
 use craft::menu::shortcuts::{Area, ConflictMode, DialogState, DialogTab, Format, Options, Outcome, ShortcutWords, ShortcutsDialog, kys_error_text};
+use craft::ui::buttons::IconButton;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
 use craft::ui::pickers::Select;
 use craft::ui::runtime::env::Env;
 use craft::ui::runtime::windows;
 use photocraft_engine::keymap_defs;
+use photocraft_engine::menu_sets::{self, MenuSet};
 use photocraft_engine::prefs::{MenuCustomization, Preferences};
-use photocraft_engine::shortcut_sets::DEFAULTS_NAME;
+use photocraft_engine::shortcut_sets::{DEFAULTS_NAME, set_name};
 use serde_json::{Map, Value, json};
+use std::path::Path;
 
 use crate::PhotocraftApp;
 
@@ -50,16 +54,94 @@ pub(crate) struct ShortcutsSession {
     pub(crate) remembered: BTreeMap<String, CommandRef>,
 }
 
-/// What the Menus tab edits: the hidden items and the colour of each item, by command id.
+/// What the Menus tab edits: the hidden items and the colour of each item, by command id, plus the
+/// named sets the Set row keeps (#14450) and the one in use ("" is the built-in set).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct MenusDraft {
     pub(crate) hidden: BTreeSet<String>,
     pub(crate) colors: BTreeMap<String, String>,
+    /// The saved sets as the dialog edits them, keyed by name; the same shape the preferences keep.
+    pub(crate) sets: BTreeMap<String, MenuSet>,
+    /// The set the row names as the one in use; "" is the built-in set.
+    pub(crate) set: String,
+    /// Set by Save on the built-in set and by New: the pass asks the file service for a name once.
+    pub(crate) ask_name: bool,
+    /// Set by anything that changed `sets` or `set`: OK writes them through `edit.menus`.
+    pub(crate) sets_changed: bool,
 }
 
 impl MenusDraft {
     fn of(menus: &MenuCustomization) -> Self {
-        MenusDraft { hidden: menus.hidden.iter().cloned().collect(), colors: menus.colors.clone() }
+        MenusDraft { hidden: menus.hidden.iter().cloned().collect(), colors: menus.colors.clone(), ..Default::default() }
+    }
+
+    /// The draft the Menus tab starts from: the menus in use, the saved sets, and the set in use.
+    fn of_prefs(prefs: &Preferences) -> Self {
+        MenusDraft { sets: prefs.menu_sets.clone(), set: prefs.menu_set.clone(), ..MenusDraft::of(&prefs.menus) }
+    }
+
+    /// The draft's menus as a set: what Save stores.
+    fn menus(&self) -> MenuSet {
+        MenuSet { hidden: self.hidden.iter().cloned().collect(), colors: self.colors.clone() }
+    }
+
+    /// Do the draft's menus differ from the saved copy of the set in use? The row's "(modified)"
+    /// and Save's enablement read this; the engine compares the same way (`menu_sets::differs`).
+    fn modified(&self) -> bool {
+        menu_sets::differs(&self.sets, &self.set, &self.menus())
+    }
+
+    /// The set in use as the row shows it: the built-in set's name for "", with "(modified)" while
+    /// the menus differ from it. The first edit renames it in place, as measured (#14450).
+    fn shown_name(&self) -> String {
+        let base = if self.set.is_empty() { DEFAULTS_NAME.to_string() } else { self.set.clone() };
+        if self.modified() { format!("{base} (modified)") } else { base }
+    }
+
+    /// The Save dialog's default name: the shown name plus " Copy" ("<defaults> (modified) Copy",
+    /// "<defaults> Copy"), as measured (#14450).
+    fn copy_name(&self) -> String {
+        format!("{} Copy", self.shown_name())
+    }
+
+    /// Whether Save can store the menus as they stand: the set is modified, and its name is one the
+    /// engine would take. A name from a hand-edited settings file may not be, and Save could not
+    /// write it; the built-in set needs a name from the Save dialog, so it has nothing to check.
+    fn can_save(&self) -> bool {
+        self.modified() && (self.set.is_empty() || set_name(&self.set).is_ok())
+    }
+
+    /// Choose the set `name` ("" or the built-in name: the built-in set) and load its menus into
+    /// the rows, dropping unsaved edits as the reference's "No" does; the Yes / No / Cancel box is
+    /// the next slice.
+    fn choose(&mut self, name: &str) {
+        // The built-in entry's value is ""; a hand-edited settings file can also hold a set named
+        // like the built-in one, and the built-in entry still gives the built-in menus.
+        let built_in = name.is_empty() || name.eq_ignore_ascii_case(DEFAULTS_NAME);
+        // `set_entries` builds every saved entry out of `sets`, so a picked name that is not the
+        // built-in one is one of them; anything else reads as the built-in set rather than guessing.
+        let loaded = if built_in { None } else { self.sets.get(name).cloned() };
+        let set = loaded.unwrap_or_default();
+        self.hidden = set.hidden.iter().cloned().collect();
+        self.colors = set.colors.clone();
+        self.set = if built_in { String::new() } else { name.to_string() };
+        self.sets_changed = true;
+    }
+
+    /// Store the menus as they now stand in the set `name` and use it: Save on a saved set, and
+    /// what a name from the Save dialog becomes.
+    fn store(&mut self, name: &str) {
+        self.sets.insert(name.to_owned(), self.menus());
+        self.set = name.to_owned();
+        self.sets_changed = true;
+    }
+
+    /// Delete the saved set in use and move the row back to the built-in set; the menus on screen
+    /// stay, as the engine's `deleteSet` leaves them (#14450).
+    fn delete(&mut self) {
+        self.sets.remove(&self.set);
+        self.set.clear();
+        self.sets_changed = true;
     }
 }
 
@@ -110,7 +192,7 @@ pub fn open(app: &mut PhotocraftApp, tab: u64) {
         state: if tab == 1 { DialogState::new().with_tab("menus") } else { DialogState::new() },
         profiles: profiles_of(prefs),
         keymap: draft_keymap(app),
-        menus: MenusDraft::of(&prefs.menus),
+        menus: MenusDraft::of_prefs(prefs),
         pending_import: None,
         remembered: BTreeMap::new(),
     };
@@ -214,6 +296,10 @@ fn pass(app: &mut PhotocraftApp, ui: &mut egui::Ui, press_ok: bool) {
         Some(Outcome::Remembered(answers)) => remembered.extend(answers),
         _ => {}
     }
+    if menus.ask_name {
+        menus.ask_name = false;
+        ask_set_name(app, state, &menus.copy_name());
+    }
     if state.is_open() {
         app.prefs_rt.shortcuts = Some(session);
     }
@@ -290,10 +376,95 @@ pub(crate) fn save_keys(app: &mut PhotocraftApp, keymap: &Keymap, profiles: &Pro
     app.run("edit.keyboardShortcuts", call).map_err(|e| e.to_string())
 }
 
-/// Writes the Menus tab's draft to the preferences.
+/// Writes the Menus tab's draft to the preferences: the menus in use as the tab has always written
+/// them, and, once the Set row touched them, the saved sets and the one in use through `edit.menus`
+/// — the params slice 1 added, which check the set names, colours and hideable ids.
 fn save_menus(app: &mut PhotocraftApp, menus: &MenusDraft) -> Result<Value, String> {
+    if menus.sets_changed {
+        let sets: Map<String, Value> = menus.sets.iter().map(|(name, set)| (name.clone(), json!({"hidden": set.hidden, "colors": set.colors}))).collect();
+        app.run("edit.menus", json!({"sets": sets, "activeSet": menus.set})).map_err(|e| e.to_string())?;
+    }
     let call = json!({"values": {"menus": {"hidden": menus.hidden, "colors": menus.colors}}});
     app.run("prefs.set", call).map_err(|e| e.to_string())
+}
+
+/// Save on the built-in set and New ask for the set's name through the system Save dialog, which
+/// suggests `suggested`; the chosen file's name without its extension names the set, as measured
+/// (#14450). Writing the `.mnu` file, and starting the dialog in the menu-sets folder of the
+/// settings directory with the "Menu Customization (*.MNU)" type, belong to that slice: the set is
+/// stored with the preferences here, and no file is written.
+fn ask_set_name(app: &mut PhotocraftApp, state: &mut DialogState, suggested: &str) {
+    let asked = app.pick_save(suggested, |app, path| {
+        let stem = Path::new(&path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        if let Some(session) = app.prefs_rt.shortcuts.as_mut() {
+            // The engine's own name rules: a name it would refuse (empty, overlong, the built-in
+            // one) is an error in the dialog, not a set the row could never select.
+            match set_name(&stem) {
+                Ok(name) => session.menus.store(&name),
+                Err(e) => session.state.show_error(e),
+            }
+        }
+        Ok(control_reply())
+    });
+    if let Err(e) = asked {
+        state.show_error(e);
+    }
+}
+
+/// The Menus tab's Set row: the set dropdown with the built-in set first and "(modified)" on the
+/// one in use, and Save, New and Delete as icon buttons with the measured tooltips and enablement
+/// (#14450). The framework's own Set row stays on its tab, so this row is PhotoCraft's.
+fn set_row(ui: &mut egui::Ui, draft: &mut MenusDraft) {
+    let entries = set_entries(draft);
+    let mut picked = draft.set.clone();
+    ui.horizontal(|ui| {
+        ui.label(tl!("Set:"));
+        Select::new(tl!("Set").to_string(), Bind::bound(&mut picked), &entries).show(ui);
+        let save = IconButton::new(IconId::new("save"))
+            .label(tl!("Save all changes to the current set of menus"))
+            .tooltip(tl!("Save all changes to the current set of menus"))
+            .enabled(draft.can_save())
+            .show(ui);
+        let new = IconButton::new(IconId::new("plus"))
+            .label(tl!("Create a new set based on the current set of menus"))
+            .tooltip(tl!("Create a new set based on the current set of menus"))
+            .show(ui);
+        let delete = IconButton::new(IconId::new("trash"))
+            .label(tl!("Delete the current set of menus"))
+            .tooltip(tl!("Delete the current set of menus"))
+            .enabled(!draft.set.is_empty())
+            .show(ui);
+        // The pick and the buttons are read after the row was drawn, as the framework's row does.
+        if picked != draft.set {
+            draft.choose(&picked);
+        }
+        if save.clicked() {
+            if draft.set.is_empty() {
+                // The built-in set has no saved copy: the name comes from the Save dialog.
+                draft.ask_name = true;
+            } else {
+                let name = draft.set.clone();
+                draft.store(&name);
+            }
+        }
+        if new.clicked() {
+            draft.ask_name = true;
+        }
+        if delete.clicked() {
+            draft.delete();
+        }
+    });
+}
+
+/// The dropdown's entries: the built-in set first (its value is "", the engine's name for it), then
+/// the saved sets by name. Only the set in use carries "(modified)", as measured (#14450). A
+/// hand-edited settings file can hold a set named like the built-in one; it keeps its own row here,
+/// and `MenusDraft::can_save` keeps Save off a name the engine would refuse.
+fn set_entries(draft: &MenusDraft) -> Vec<Entry<String>> {
+    let shown = draft.shown_name();
+    let mut entries = vec![Entry::new(String::new(), if draft.set.is_empty() { shown.clone() } else { DEFAULTS_NAME.to_string() })];
+    entries.extend(draft.sets.keys().map(|name| Entry::new(name.clone(), if *name == draft.set { shown.clone() } else { name.clone() })));
+    entries
 }
 
 /// The Menus tab: a row per menu item with a Visible check and a colour.
@@ -305,6 +476,7 @@ fn menus_tab<'a>(rows: &'a [Row], draft: &'a mut MenusDraft) -> DialogTab<'a> {
 /// customization, so a hidden item is listed here to be shown again.
 fn menus_body(ui: &mut egui::Ui, rows: &[Row], draft: &mut MenusDraft) -> bool {
     let before = draft.clone();
+    set_row(ui, draft);
     if ui.button(tl!("Show All Menu Items")).clicked() {
         draft.hidden.clear();
     }
