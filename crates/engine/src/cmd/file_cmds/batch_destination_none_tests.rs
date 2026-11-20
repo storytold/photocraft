@@ -256,13 +256,15 @@ fn batch_destination_none_lists_an_unreadable_input_in_its_error_log() {
     assert_eq!(result["documents"], json!(1), "the readable input still ran: {result}");
     assert_eq!(s.documents().len(), 1, "and stayed open");
     assert_eq!(top_left_pixel(&s.active().unwrap().doc), [0.0, 1.0, 1.0, 1.0]);
-    // Photoshop's Batch log encoding: UTF-16 LE with a BOM, one File/Error pair per failure.
+    // Photoshop's Batch log encoding, as main's format test pins it: UTF-16 BE with a BOM, one File/Error pair per failure.
     let bytes = std::fs::read(&log).unwrap();
-    assert!(bytes.starts_with(&[0xff, 0xfe]), "the log keeps its UTF-16 LE BOM");
-    let words: Vec<u16> = bytes[2..].chunks(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
+    assert!(bytes.starts_with(&[0xfe, 0xff]), "the log keeps its UTF-16 BE BOM");
+    let words: Vec<u16> = bytes[2..].chunks(2).map(|pair| u16::from_be_bytes([pair[0], pair[1]])).collect();
     let text = String::from_utf16(&words).unwrap();
-    assert!(text.contains(&format!("File: \"{corrupt}\"")), "the open failure is in the log: {text}");
-    assert!(!text.contains(&format!("File: \"{good}\"")), "the file that opened is not an error: {text}");
+    // The log names paths with the platform separators, as main's format test pins it; the run's input keeps them as given.
+    let logged = |path: &str| format!("File: \"{}\"", path.replace('/', std::path::MAIN_SEPARATOR_STR));
+    assert!(text.contains(&logged(&corrupt)), "the open failure is in the log: {text}");
+    assert!(!text.contains(&logged(&good)), "the file that opened is not an error: {text}");
 }
 
 /// A folder source with no eligible image is an empty run, not a Source: Opened Files run: the
