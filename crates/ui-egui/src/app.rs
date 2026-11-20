@@ -71,6 +71,7 @@ impl PhotocraftApp {
             menu_model: None,
             toolbar_slots: Default::default(),
             move_preview: None,
+            move_drop: None,
             move_hover: None,
             move_distance: None,
             object_finder: None,
