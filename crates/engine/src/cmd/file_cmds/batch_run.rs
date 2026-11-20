@@ -140,27 +140,36 @@ pub(crate) fn process_files(
     f: &dyn Fn(&mut Session) -> Result<()>,
 ) -> Value {
     let inputs: Vec<BatchInput> = inputs.iter().map(|path| BatchInput { path: path.clone(), rel_dir: String::new() }).collect();
-    process_tree(s, &inputs, output, format, save, suffix, &|scratch, _| f(scratch).map(|()| false))
+    process_tree(s, &inputs, output, format, save, TreeNaming::Suffix(suffix), &|scratch, _| f(scratch).map(|()| false))
+}
+
+pub(super) enum TreeNaming<'a> {
+    Suffix(&'a str),
+    Unique,
 }
 
 /// [`process_files`] for inputs from subfolders: each result goes to its input's relative folder
 /// under `output` (created as needed), so `a/x.png` and `b/x.png` don't collide. `f` gets the
 /// output path and returns `true` when it wrote the result there itself (Batch writes what a
 /// recorded save marked); otherwise the active document is saved after it.
-pub(crate) fn process_tree(
+pub(super) fn process_tree(
     s: &Session,
     inputs: &[BatchInput],
     output: &str,
     format: &str,
     save: SaveOpts,
-    suffix: &str,
+    naming: TreeNaming<'_>,
     f: &dyn Fn(&mut Session, &str) -> Result<bool>,
 ) -> Value {
+    let (suffix, unique) = match naming {
+        TreeNaming::Suffix(suffix) => (suffix, false),
+        TreeNaming::Unique => ("", true),
+    };
     let outputs = inputs.iter().map(|BatchInput { path, rel_dir }| {
         let ext = if format == "same" { same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
         (path.as_str(), join(&join(output, rel_dir), &format!("{}{suffix}.{ext}", stem(path))))
     });
-    process_outputs(s, outputs, save, f)
+    process_outputs(s, outputs, save, unique, f)
 }
 
 /// The extension a batch output takes with Format "Same": the input's own, except for formats
@@ -240,6 +249,7 @@ fn process_outputs<'a>(
     s: &Session,
     outputs: impl IntoIterator<Item = (&'a str, String)>,
     save: SaveOpts,
+    unique: bool,
     f: &dyn Fn(&mut Session, &str) -> Result<bool>,
 ) -> Value {
     // The scratch sessions have default preferences; a raw opens at the user's Raw Defaults.
@@ -256,9 +266,16 @@ fn process_outputs<'a>(
         f(scratch, out).map_err(FileFailure::from)
     };
     for (path, out) in outputs {
-        let r = process_one(raw_ppi, path, &out, save, ProcessOptions { format: None, written: Some(&written), ctx: None, input: None }, &run);
+        let options = ProcessOptions { format: None, written: (!unique).then_some(&written), ctx: None, input: None, unique };
+        let r = process_one(raw_ppi, path, &out, save, options, &run);
         match r {
-            Ok(()) => {
+            Ok(Some(PublishedOutput { path: out, warning })) => {
+                if let Some(warning) = warning {
+                    errors.push(json!({"file": path, "output": out, "error": warning}));
+                }
+                files.push(out);
+            }
+            Ok(None) => {
                 written.record(&out, path);
                 files.push(out);
             }
@@ -311,9 +328,9 @@ pub(super) fn process_document_copies(
         let notices = std::cell::RefCell::new(Vec::new());
         let input = InputPolicy { prepare: &prepare, notices: &notices };
         let run = |scratch: &mut Session, out: &str| f(scratch, out).map_err(FileFailure::from);
-        let options = ProcessOptions { format: Some(&ext), written: Some(&written), ctx: None, input: Some(&input) };
+        let options = ProcessOptions { format: Some(&ext), written: Some(&written), ctx: None, input: Some(&input), unique: false };
         match process_one(s.prefs().raw_defaults.resolution, &path, &out, save, options, &run) {
-            Ok(()) => {
+            Ok(_) => {
                 written.record(&out, &path);
                 files.push(out);
             }
@@ -333,6 +350,7 @@ struct ProcessOptions<'a> {
     written: Option<&'a OutputClaims>,
     ctx: Option<&'a crate::jobs::JobCtx>,
     input: Option<&'a InputPolicy<'a>>,
+    unique: bool,
 }
 
 /// Open and process one scratch input, collecting opening diagnostics even on failure.
@@ -344,12 +362,12 @@ fn process_one(
     save: SaveOpts,
     options: ProcessOptions<'_>,
     f: &dyn Fn(&mut Session, &str) -> std::result::Result<bool, FileFailure>,
-) -> std::result::Result<(), FileFailure> {
+) -> std::result::Result<Option<PublishedOutput>, FileFailure> {
     if let Some(written) = options.written {
         written.check(out).map_err(EngineError::Other)?;
     }
     let mut scratch = Session::new();
-    let result = (|| -> std::result::Result<(), FileFailure> {
+    let result = (|| -> std::result::Result<Option<PublishedOutput>, FileFailure> {
         if let Some(input) = options.input {
             (input.prepare)(&mut scratch, path)?;
         } else {
@@ -364,7 +382,7 @@ fn process_one(
         if saved_by_action {
             // The action's saved snapshot is already written: a cancel or Esc arriving now stops the
             // inputs after this one, not this result.
-            return Ok(());
+            return Ok(None);
         }
         if let Some(ctx) = options.ctx {
             ctx.check()?;
@@ -373,6 +391,12 @@ fn process_one(
             }
         }
         let d = scratch.active().ok_or(EngineError::NoDocument)?;
+        if options.unique {
+            let (bytes, warnings) = encode(&d.doc, out, save)?;
+            let actual = save_unique_output(out, &bytes)?;
+            record_export_warnings(&mut scratch, &actual.path, warnings);
+            return Ok(Some(actual));
+        }
         let warnings = if let Some(format) = options.format {
             let ext = if format == "same" { same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
             if let Some(ctx) = options.ctx { save_batch_doc(&d.doc, out, &ext, save, ctx)? } else { save_doc_as(&d.doc, out, &ext, save)? }
@@ -380,12 +404,53 @@ fn process_one(
             save_doc(&d.doc, out, save)?
         };
         record_export_warnings(&mut scratch, out, warnings);
-        Ok(())
+        Ok(None)
     })();
     if let Some(input) = options.input {
         input.notices.borrow_mut().extend(scratch.batch_open_notices.take().unwrap_or_default());
     }
     result
+}
+
+struct PublishedOutput {
+    path: String,
+    warning: Option<String>,
+}
+
+/// Claim a destination atomically so another process creating it during export cannot lose its file.
+#[cfg(not(target_arch = "wasm32"))]
+fn save_unique_output(out: &str, bytes: &[u8]) -> Result<PublishedOutput> {
+    use std::{fs, io::ErrorKind, path::Path};
+
+    let path = Path::new(out);
+    let dir = path.parent().filter(|dir| !dir.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(dir).map_err(|error| EngineError::Other(format!("{}: {error}", dir.display())))?;
+    let name = file_name(out);
+    let prefix = out.strip_suffix(&name).unwrap_or_default();
+    let (stem, extension) = name.rsplit_once('.').unwrap_or((&name, ""));
+    for suffix in 0..=100_000 {
+        let candidate = if suffix == 0 { out.to_owned() } else { format!("{prefix}{stem}_{suffix}.{extension}") };
+        let path = Path::new(&candidate);
+        // Avoid staging encoded bytes when the name is already visibly occupied, including
+        // directories and dangling symlinks. The publication still checks the name atomically.
+        match fs::symlink_metadata(path) {
+            Ok(_) => continue,
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(EngineError::Other(format!("{candidate}: {error}"))),
+        }
+        match photocraft_format::write_noreplace(path, bytes) {
+            Ok(()) => return Ok(PublishedOutput { path: candidate, warning: None }),
+            Err(error) if error.published => return Ok(PublishedOutput { path: candidate, warning: Some(error.to_string()) }),
+            Err(error) if error.error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(EngineError::Other(format!("{candidate}: {error}"))),
+        }
+    }
+    Err(EngineError::Other(format!("{out}: no free output name through suffix _100000")))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn save_unique_output(out: &str, _bytes: &[u8]) -> Result<PublishedOutput> {
+    Err(EngineError::Other(format!("cannot write {out}: no file system on the web")))
 }
 
 /// Encode before the Batch write checkpoint. Esc accepted during an action or encode therefore
@@ -429,16 +494,22 @@ impl BatchPolicy {
 
 /// Photoshop-compatible Batch log encoding, shared by the desktop command and CLI.
 pub fn encode_batch_error_log<'a>(errors: impl IntoIterator<Item = (&'a str, &'a str)>) -> Vec<u8> {
-    let mut body = String::from("Batch Start\r\n\r\n");
+    let mut body = String::from("Start Batch\r\n\r\n");
     for (input, reason) in errors {
+        let input = native_separators(input);
         body.push_str(&format!("File: \"{input}\"\r\nError: {reason}\r\n\r\n"));
     }
-    body.push_str("Batch End\r\n");
-    let mut bytes = vec![0xff, 0xfe];
+    body.push_str("End Batch\r\n");
+    let mut bytes = vec![0xfe, 0xff];
     for word in body.encode_utf16() {
-        bytes.extend_from_slice(&word.to_le_bytes());
+        bytes.extend_from_slice(&word.to_be_bytes());
     }
     bytes
+}
+
+/// Paths in the log use the platform's separators: backslashes on Windows, also for a folder given with `/`.
+fn native_separators(path: &str) -> String {
+    if cfg!(windows) { path.replace('/', "\\") } else { path.to_string() }
 }
 
 fn write_error_log(path: &str, errors: &[Value]) -> Result<()> {
@@ -477,9 +548,16 @@ fn validate_error_log(policy: &BatchPolicy, inputs: impl IntoIterator<Item = Str
 /// identities once for the whole plan, so aliases and large folder batches stay safe and linear.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn validate_flat_outputs(outputs: &[(String, String)]) -> Result<()> {
+    validate_written_outputs(outputs, &|_| true)
+}
+
+/// [`validate_flat_outputs`] for the outputs at the indices `written` accepts: every input stays a
+/// source, but an input that fails before it is opened writes nothing to its name.
+#[cfg(not(target_arch = "wasm32"))]
+fn validate_written_outputs(outputs: &[(String, String)], written: &dyn Fn(usize) -> bool) -> Result<()> {
     let sources: std::collections::HashMap<_, _> =
         outputs.iter().enumerate().filter_map(|(index, (input, _))| std::fs::canonicalize(input).ok().map(|identity| (identity, index))).collect();
-    for (index, (_, output)) in outputs.iter().enumerate() {
+    for (index, (_, output)) in outputs.iter().enumerate().filter(|(index, _)| written(*index)) {
         let identity = super::paths::destination_identity(std::path::Path::new(output))
             .ok_or_else(|| EngineError::BadParams { cmd: "file.automate.batch".into(), msg: format!("output path cannot be resolved safely: {output}") })?;
         if sources.get(&identity).is_some_and(|&source_index| source_index != index) {
@@ -548,7 +626,7 @@ fn process_batch_outputs_with(
             path,
             out,
             save,
-            ProcessOptions { format: Some(format), written: check_duplicates.then_some(&written), ctx: Some(ctx), input },
+            ProcessOptions { format: Some(format), written: check_duplicates.then_some(&written), ctx: Some(ctx), input, unique: false },
             f,
         );
         if result.is_ok() {
@@ -595,7 +673,7 @@ fn process_batch_outputs_with(
         ctx.publish_batch_preview(path, None);
         done = index + 1;
         match result {
-            Ok(()) => {
+            Ok(_) => {
                 files.push(out.clone());
             }
             Err(error) => {
@@ -905,7 +983,16 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         return result;
     }
     let check_duplicates = recorded_output_guard(p);
-    let names = if save_and_close { None } else { batch_naming::plan(&inputs, &output, &format, p)? };
+    // A folder input the opener will refuse fails before its action starts, so it takes no serial.
+    let counts = |input: &BatchInput| {
+        #[cfg(not(target_arch = "wasm32"))]
+        if check_folder_format && !super::paths::openable_name(&input.path) {
+            return false;
+        }
+        let _ = (input, check_folder_format);
+        true
+    };
+    let names = if save_and_close { None } else { batch_naming::plan_counting(&inputs, &output, &format, p, &counts)? };
     let mut save = SaveOpts::from_params(s, p, cmd)?;
     if save_and_close {
         save.tiff_layers = save_close_tiff_layers;
@@ -933,8 +1020,10 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
-    validate_flat_outputs(&outputs)?;
-    validate_error_log(&policy, outputs.iter().map(|(path, _)| path.clone()), outputs.iter().map(|(_, path)| path.clone()))?;
+    validate_written_outputs(&outputs, &|index| inputs.get(index).is_none_or(counts))?;
+    // Every input is protected; a refused input's name is never written, so the log may take it.
+    let written = outputs.iter().zip(&inputs).filter(|(_, input)| counts(input)).map(|((_, path), _)| path.clone());
+    validate_error_log(&policy, outputs.iter().map(|(path, _)| path.clone()), written)?;
     let was_playing = nested;
     #[cfg(test)]
     let history_observer = s.batch_history_observer;
