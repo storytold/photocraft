@@ -942,6 +942,8 @@ mod chrome_settle_trials;
 #[cfg(test)]
 mod doc_revision_trials;
 #[cfg(test)]
+mod drag_settle_trials;
+#[cfg(test)]
 mod layer_thumb_bounds_tests;
 #[cfg(test)]
 mod mask_thumb_refresh_tests;
