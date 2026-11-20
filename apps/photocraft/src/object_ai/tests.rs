@@ -129,3 +129,50 @@ fn live_model_returns_a_mask_of_the_picture_size() {
     let answer = model.segment(&req, &|| false).unwrap();
     assert_eq!(answer.mask.len(), (info.width * info.height) as usize);
 }
+
+/// One job at a time per model: a second selection waits for the first, and one cancelled while it
+/// waited starts nothing, so a cancel never reaches another selection's job.
+#[test]
+fn a_selection_waits_for_the_running_one_and_starts_nothing_once_cancelled() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Barrier, Mutex};
+    let running = Mutex::new(());
+    let started = AtomicUsize::new(0);
+    let cancel_second = AtomicBool::new(false);
+    let inside = Barrier::new(2);
+    std::thread::scope(|scope| {
+        let _first = scope.spawn(|| {
+            one_at_a_time(&running, &|| false, || {
+                started.fetch_add(1, Ordering::SeqCst);
+                inside.wait();
+                // The second selection is cancelled while this one runs.
+                while !cancel_second.load(Ordering::SeqCst) {
+                    std::thread::yield_now();
+                }
+                Ok(())
+            })
+        });
+        inside.wait();
+        let second = scope.spawn(|| {
+            one_at_a_time(&running, &|| cancel_second.load(Ordering::SeqCst), || {
+                started.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        });
+        cancel_second.store(true, Ordering::SeqCst);
+        assert_eq!(second.join().unwrap(), Err("Cancelled.".to_owned()));
+    });
+    assert_eq!(started.load(Ordering::SeqCst), 1, "the cancelled selection started no job");
+}
+
+#[test]
+fn a_selection_that_is_not_cancelled_runs_after_the_other() {
+    let running = std::sync::Mutex::new(());
+    assert_eq!(one_at_a_time(&running, &|| false, || Ok(7)), Ok(7));
+    // A poisoned lock (a run that panicked) does not block the next one.
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _held = running.lock().unwrap();
+        panic!("a run that panicked");
+    }));
+    assert_eq!(one_at_a_time(&running, &|| false, || Ok(8)), Ok(8));
+}

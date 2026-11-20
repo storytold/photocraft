@@ -18,9 +18,10 @@ use crate::object_model::{ObjectModel, SegmentRequest};
 pub(super) const MODEL_LONG_SIDE: u32 = 2048;
 /// Most pixels of a crop the model path accepts, before any downscaling.
 const MODEL_MAX_PIXELS: u64 = 1 << 27;
-/// Crops above this many pixels skip the full-resolution edge refinement (its working memory is
-/// dozens of bytes a pixel).
-const GUIDE_MAX_PIXELS: u64 = 1 << 26;
+/// Crops above this many pixels skip the full-resolution edge refinement. Its working memory is
+/// about a hundred bytes a pixel (twenty `f32` planes, the RGB guide and the coverage), so this
+/// keeps it under about 1 GiB.
+const GUIDE_MAX_PIXELS: u64 = 1 << 23;
 /// The crop around a rectangle extends by at least this many pixels on every side.
 const CROP_MARGIN_MIN: u32 = 16;
 
@@ -182,7 +183,9 @@ pub(super) fn select(s: &mut Session, p: &Value, prompt: Prompt, all_layers: boo
         if !answer.matched {
             return Ok(None);
         }
-        Ok(region_from_mask(crop, &answer.mask, sw, sh, guide.as_ref(), hard))
+        let region = region_from_mask(crop, &answer.mask, sw, sh, guide.as_ref(), hard);
+        ctx.check()?;
+        Ok(region)
     };
     let apply_found = move |s: &mut Session, region: Option<Region>| -> Result<Value> {
         if s.active().map(|d| d.doc.id) != Some(doc_id) {
@@ -193,7 +196,7 @@ pub(super) fn select(s: &mut Session, p: &Value, prompt: Prompt, all_layers: boo
         tag(&mut out, method, None);
         Ok(out)
     };
-    crate::jobs::run(s, "Object Selection", false, work, apply_found)
+    crate::jobs::run(s, "Object Selection", true, work, apply_found)
 }
 
 /// Adds which method selected (and why the model was passed over, if it was) to a result.

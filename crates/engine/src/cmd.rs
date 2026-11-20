@@ -1,6 +1,6 @@
 //! The command registry. Ids follow Photoshop's menu structure (see the parity checklist).
 
-use photocraft_color::{BlendMode, Color, ColorMode, SampleType};
+use photocraft_color::{Color, ColorMode, SampleType};
 use photocraft_doc::{Adjustment, Document, Fill, Layer, LayerContent, LayerId, LayerMask, Size};
 use photocraft_geom::{Rect, TILE_SIZE};
 use photocraft_raster::Surface;
@@ -175,7 +175,6 @@ mod type_indexed_mode_tests;
 pub mod type_mask_cmds;
 pub mod type_spell_cmds;
 pub mod type_styles_cmds;
-pub mod updates_cmds;
 pub(super) mod variables_cmds;
 mod vector_clipboard;
 pub mod vector_cmds;
@@ -190,13 +189,13 @@ use adjust_params::{adjust_mode, destructive_adjust, doc_mode, new_adjustment};
 pub use adjust_params::{adjustment_from_params, adjustment_kind};
 pub(crate) use enabled::{always, check_all_unlocked, check_pixels_unlocked, has_paintable, is_mask_target, paint_surface};
 use enabled::{can_redo, can_undo, has_doc, has_layer, has_pixel_or_channel, has_selection};
-pub use layer_params::blend_from_str;
 pub(crate) use layer_params::{NEW_LAYER_PATH, explicit_layer, layer_listing, layer_panel_option, layer_param, mask_at_depth, mask_new_layer, selection_mask};
 pub(crate) use layer_references::{recorded_drop, recorded_layer};
 use ops::{arrange, merge_group, move_mask, set_mask, set_mask_and_deselect};
 pub(crate) use ops::{layer_copy, translate_layer, translate_layer_wrapped};
 use params::{bad, set_clipped};
 pub(crate) use params::{check_f32_values, cmyk_param, color_param, int, int_i32, parse_hex, u32_id, u32_id_param};
+pub use photocraft_color::blend::parse_blend;
 
 pub fn command_specs() -> &'static [CommandSpec] {
     &registry().specs
@@ -263,6 +262,7 @@ impl Registry {
     }
 }
 
+/// The command registry, built on first use and shared for the rest of the process.
 fn registry() -> &'static Registry {
     static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
     REGISTRY.get_or_init(|| Registry::new(build()))
@@ -270,6 +270,7 @@ fn registry() -> &'static Registry {
 
 // ---------- the table ----------
 
+/// Every command this module owns, in menu order: the table the registry is built from once.
 #[allow(clippy::too_many_lines)]
 /// Register the core file, edit, layer and document commands.
 fn build() -> Vec<CommandSpec> {
@@ -382,7 +383,7 @@ fn build() -> Vec<CommandSpec> {
             "edit.clear",
             "Clear",
             ["Edit"],
-            Some("Delete"),
+            None,
             r##"{"target":"mask"|{"color":i}|{"colors":[i,…]}?=Channels panel target,"layer":id|name?=active} (a targeted mask, channel or Quick Mask is cleared alone)"##,
             has_pixel_or_channel,
             |s, p| {
@@ -424,9 +425,16 @@ fn build() -> Vec<CommandSpec> {
         ),
         // Select
         cmd!("select.all", "All", ["Select"], Some("Cmd+A"), "{}", has_doc, |s, _| {
+            // With the active layer on an artboard (the board itself or a layer inside it), Select
+            // All selects that board, as Photoshop does; otherwise the whole canvas (#10258).
+            let active = s.active().and_then(|d| d.active_layer);
             s.edit("Select All", |doc, _| {
+                let board = active.and_then(|id| doc.artboard_of(id)).and_then(|id| doc.layer(id)).and_then(|l| l.artboard()).map(|a| a.rect);
+                // A board the canvas no longer reaches (cropped away) selects the canvas, never an
+                // empty selection that would block painting.
+                let area = board.map(|r| r.intersect(&doc.bounds())).filter(|r| !r.is_empty()).unwrap_or_else(|| doc.bounds());
                 let mut m = Surface::new(photocraft_color::PixelFormat::GRAY8);
-                m.fill_rect(doc.bounds(), &[1.0]);
+                m.fill_rect(area, &[1.0]);
                 doc.selection = Some(m);
                 Ok(())
             })?;
@@ -652,7 +660,7 @@ fn build() -> Vec<CommandSpec> {
             "Select Layer",
             [],
             None,
-            r##"{"layer":id|str|{"index":uint}|{"ordinal":"Trgt|Frwr|Bckw|Frnt|Back"} | "name":str,"occurrence":index?,"mode":"replace|toggle|range|add|remove"="replace"} (typed references use the recorded full layer stack; name occurrence: zero-based document walk order; required for duplicate names; toggle = ⌘-click, range = ⇧-click, remove = deselect it, keeping at least one)"##,
+            r##"{"layer":id|str|{"index":uint}|{"ordinal":"Trgt|Frwr|Bckw|Frnt|Back"} | "name":str,"occurrence":index?,"mode":"replace|toggle|range|add|remove"="replace"} | {"layers":[id,…]} (layers: exactly these selected, the last active; typed references use the recorded full layer stack; name occurrence: zero-based document walk order; required for duplicate names; toggle = ⌘-click, range = ⇧-click, remove = deselect it, keeping at least one)"##,
             has_doc,
             crate::layer_multi_cmds::select
         ),
@@ -718,7 +726,7 @@ fn build() -> Vec<CommandSpec> {
                     // The Background has no opacity, fill or blend mode: like Photoshop, setting
                     // one that changes its look turns it into a normal layer ("Layer 0") first.
                     let num = |k: &str| p.get(k).and_then(Value::as_f64).is_some_and(|v| v < 1.0);
-                    let blends = p.get("blend").and_then(Value::as_str).and_then(blend_from_str).is_some_and(|b| b != photocraft_color::BlendMode::Normal);
+                    let blends = p.get("blend").and_then(Value::as_str).and_then(parse_blend).is_some_and(|b| b != photocraft_color::BlendMode::Normal);
                     for &id in &ids {
                         if num("opacity") || num("fill") || blends {
                             crate::extra_cmds::background_to_layer(doc, id);
@@ -737,7 +745,7 @@ fn build() -> Vec<CommandSpec> {
                             l.fill_opacity = v;
                         }
                         if let Some(v) = p.get("blend").and_then(Value::as_str) {
-                            let b = blend_from_str(v).ok_or_else(|| bad("layer.setProps", format!("unknown blend mode `{v}`")))?;
+                            let b = parse_blend(v).ok_or_else(|| bad("layer.setProps", format!("unknown blend mode `{v}`")))?;
                             // Pass Through is a group's mode only, as in Photoshop.
                             if b == photocraft_color::BlendMode::PassThrough && !l.is_group() {
                                 return Err(bad("layer.setProps", format!("Pass Through applies to groups only; layer {} isn't one", l.id.0)));
@@ -886,7 +894,7 @@ fn build() -> Vec<CommandSpec> {
                 bg.locks.position = true;
                 *crate::pixels_mut(&mut bg)? = photocraft_compose::flatten_to_surface(doc, fmt, Some([1.0, 1.0, 1.0]));
                 *active = Some(bg.id);
-                doc.layers = vec![bg];
+                doc.layers = vec![bg].into();
                 Ok(())
             })?;
             Ok(Value::Null)
@@ -1401,7 +1409,6 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::layer_multi_cmds::specs());
     v.extend(crate::layer_copy_cmds::specs());
     v.extend(crate::prefs::specs());
-    v.extend(crate::updates_cmds::specs());
     v.extend(crate::edit_menu_cmds::specs());
     v.extend(crate::fill_key_cmds::specs());
     v.extend(crate::sample_cmds::specs());

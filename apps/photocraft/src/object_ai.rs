@@ -47,6 +47,10 @@ pub fn model() -> Option<Arc<dyn ObjectModel>> {
 pub struct SharedObjectModel {
     tools: AppTools,
     status: Mutex<Option<(Instant, Option<String>)>>,
+    /// Held while a job runs. `AppTools`' canceller stops every job its `run` is waiting for, so one
+    /// job at a time per model keeps a cancel to the selection that asked for it: another selection,
+    /// on this document or another, waits its turn instead of being stopped with it.
+    running: Mutex<()>,
 }
 
 impl SharedObjectModel {
@@ -57,7 +61,7 @@ impl SharedObjectModel {
 
     /// Over `tools` (tests build them over a store of their own).
     pub fn with_tools(tools: AppTools) -> Self {
-        Self { tools, status: Mutex::new(None) }
+        Self { tools, status: Mutex::new(None), running: Mutex::new(()) }
     }
 
     fn fresh_status(&self) -> Option<String> {
@@ -97,12 +101,23 @@ impl ObjectModel for SharedObjectModel {
         let plan = self.tools.plan(TOOL, request)?;
         let ledger = ConsentLedger::default();
         refuse_off_computer(&plan, &ledger)?;
-        let outputs = run_watched(&self.tools, &plan, &ledger, cancelled)?;
+        let outputs = one_at_a_time(&self.running, cancelled, || run_watched(&self.tools, &plan, &ledger, cancelled))?;
         answer_from_outputs(&outputs, req.width, req.height)
     }
 }
 
-/// Runs `plan`, asking the job to stop when `cancelled` turns true.
+/// Runs `run` while holding `running`, so no other job of the model runs meanwhile. A selection
+/// cancelled while it waited for another's job starts nothing.
+fn one_at_a_time<R>(running: &Mutex<()>, cancelled: &(dyn Fn() -> bool + Sync), run: impl FnOnce() -> Result<R, String>) -> Result<R, String> {
+    let _running = running.lock().unwrap_or_else(PoisonError::into_inner);
+    if cancelled() {
+        return Err("Cancelled.".to_owned());
+    }
+    run()
+}
+
+/// Runs `plan`, asking the job to stop when `cancelled` turns true. The caller holds the model's
+/// `running` lock, so the job is the only one the canceller reaches.
 fn run_watched(tools: &AppTools, plan: &Plan, ledger: &ConsentLedger, cancelled: &(dyn Fn() -> bool + Sync)) -> Result<Vec<Output>, String> {
     let canceller = tools.canceller();
     let done = AtomicBool::new(false);
