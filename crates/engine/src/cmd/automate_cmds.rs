@@ -432,8 +432,17 @@ exec "$cli" droplet {quoted_abs} "$@"
 /// and folders as arguments, so the launcher forwards them (`%*`) to the CLI. The body is
 /// pure ASCII and names the droplet through the launcher's own location (`%~dp0%~n0`) rather
 /// than embedding the path: spaces, `&`, `^`, `%` and non-ASCII characters in either path
-/// then never reach the batch parser or the console codepage. `PHOTOCRAFT_CLI` picks the CLI,
-/// otherwise PATH (no app-bundle layout to look up on Windows, unlike the macOS shim).
+/// then never reach the batch parser or the console codepage.
+/// The CLI is looked up like the macOS shim looks up its app bundle: `PHOTOCRAFT_CLI` first,
+/// then the per-user install folder (`%LOCALAPPDATA%\Programs\ArtCraft\PhotoCraft`), then the
+/// per-machine one (`%ProgramFiles%\ArtCraft\PhotoCraft`), then PATH. The installer puts
+/// `photocraft-cli.exe` in the install folder and does not add that folder to PATH, so a
+/// PATH-only lookup fails on a default install.
+/// Kept limitation, pinned by `windows_launcher_splits_an_unquoted_dropped_path`: Explorer
+/// quotes a dropped path only when it contains a space, so an unquoted path carrying `&` or
+/// `^` is already split or unescaped while cmd.exe parses the command line that starts the
+/// launcher - before its first line runs. No batch body can undo that; see the PR discussion
+/// about a `.lnk` launcher, which hands the paths to the exe directly.
 #[cfg(windows)]
 fn write_shim(droplet: &str) -> Result<String> {
     let abs = std::fs::canonicalize(droplet).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| droplet.to_string());
@@ -443,8 +452,10 @@ fn write_shim(droplet: &str) -> Result<String> {
     // (trimming both suffixes would self-locate a `Rotate.pcdroplet` that does not exist).
     let base = abs.strip_suffix(ext).unwrap_or(abs.as_str());
     let shim = format!("{base}.cmd");
+    let user_cli = r"%LOCALAPPDATA%\Programs\ArtCraft\PhotoCraft\photocraft-cli.exe";
+    let machine_cli = r"%ProgramFiles%\ArtCraft\PhotoCraft\photocraft-cli.exe";
     let body = format!(
-        "@echo off\r\nrem PhotoCraft droplet: drop files and folders on this file to run the stored action on them.\r\nif defined PHOTOCRAFT_CLI (set \"PC_CLI=%PHOTOCRAFT_CLI%\") else (set \"PC_CLI=photocraft-cli\")\r\n\"%PC_CLI%\" droplet \"%~dp0%~n0{ext}\" %*\r\n"
+        "@echo off\r\nrem PhotoCraft droplet: drop files and folders on this file to run the stored action on them.\r\nrem The CLI, in order: PHOTOCRAFT_CLI, per-user install folder, per-machine install folder, PATH.\r\nset \"PC_CLI=\"\r\nif defined PHOTOCRAFT_CLI set \"PC_CLI=%PHOTOCRAFT_CLI%\"\r\nif not defined PC_CLI if exist \"{user_cli}\" set \"PC_CLI={user_cli}\"\r\nif not defined PC_CLI if exist \"{machine_cli}\" set \"PC_CLI={machine_cli}\"\r\nif not defined PC_CLI set \"PC_CLI=photocraft-cli\"\r\n\"%PC_CLI%\" droplet \"%~dp0%~n0{ext}\" %*\r\n"
     );
     crate::file_cmds::write_file(&shim, body.as_bytes())?;
     Ok(shim)

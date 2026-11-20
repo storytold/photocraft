@@ -23,6 +23,109 @@ fn create(dir: &str, path: String, shim: Option<bool>) -> Value {
 }
 
 #[cfg(windows)]
+/// Compile a photocraft-cli stand-in that writes what it receives to `%STUB_OUT%`. It must be
+/// a real exe: cmd re-parses the command line of a called batch file, so a `.cmd` stand-in
+/// would not show what the CLI actually gets.
+fn compile_stub(dir: &str, name: &str, src: &str) -> String {
+    let stub_rs = format!(r"{dir}\{name}.rs");
+    let stub_exe = format!(r"{dir}\{name}.exe");
+    std::fs::write(&stub_rs, src).unwrap();
+    let rustc = std::path::Path::new(env!("CARGO")).with_file_name("rustc");
+    let build = std::process::Command::new(rustc)
+        .arg("--edition")
+        .arg("2021")
+        .arg("--crate-name")
+        .arg("cli_stub")
+        .arg("-O")
+        .arg(&stub_rs)
+        .arg("-o")
+        .arg(&stub_exe)
+        .output()
+        .unwrap();
+    assert!(build.status.success(), "stub build: {}", String::from_utf8_lossy(&build.stderr));
+    stub_exe
+}
+
+#[cfg(windows)]
+/// Stand-in recording only the arguments, one per line.
+fn cli_stub(dir: &str) -> String {
+    compile_stub(
+        dir,
+        "cli stub",
+        "fn main() {\n    let a: Vec<String> = std::env::args().collect();\n    std::fs::write(std::env::var(\"STUB_OUT\").unwrap(), a[1..].join(\"\\n\")).unwrap();\n}\n",
+    )
+}
+
+#[cfg(windows)]
+/// Stand-in whose first line is the exe that ran, so one capture file also shows WHICH
+/// photocraft-cli.exe the launcher picked.
+fn cli_stub_who(dir: &str) -> String {
+    compile_stub(
+        dir,
+        "cli who",
+        "fn main() {\n    let a: Vec<String> = std::env::args().collect();\n    let who = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();\n    let mut out = vec![who];\n    out.extend(a[1..].iter().cloned());\n    std::fs::write(std::env::var(\"STUB_OUT\").unwrap(), out.join(\"\\n\")).unwrap();\n}\n",
+    )
+}
+
+#[cfg(windows)]
+/// Copy the stand-in to `<root>\<subdir>\photocraft-cli.exe`, as an installer would: the
+/// subdir is `Programs\ArtCraft\PhotoCraft` under LOCALAPPDATA and `ArtCraft\PhotoCraft`
+/// under Program Files.
+fn install_stub(root: &str, subdir: &str, exe: &str) -> String {
+    let dir = format!(r"{root}\{subdir}");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe_at = format!(r"{dir}\photocraft-cli.exe");
+    std::fs::copy(exe, &exe_at).unwrap();
+    exe_at
+}
+
+#[cfg(windows)]
+/// One Explorer-shaped launcher run, `cmd /d /c ""launcher" "input""`, with faked CLI locations:
+/// `local` / `machine` become `%LOCALAPPDATA%` / `%ProgramFiles%` (empty = defined, nothing in
+/// it), `path_dir` is the only PATH entry, `cli_env` sets `PHOTOCRAFT_CLI`. Returns what the CLI
+/// recorded and everything cmd itself printed.
+fn run_lookup_probe(
+    launcher: &str,
+    input: &str,
+    local: Option<&str>,
+    machine: Option<&str>,
+    path_dir: Option<&str>,
+    cli_env: Option<&str>,
+) -> (String, String) {
+    use std::os::windows::process::CommandExt;
+    let captured = format!(r"{launcher}.captured.txt");
+    let _ = std::fs::remove_file(&captured);
+    // cmd.exe sets %ProgramFiles% from the registry when it starts, so a per-machine install
+    // folder cannot be faked in the child's environment: a one-line wrapper sets it inside the
+    // same cmd process and calls the launcher with the same quoted argument.
+    let mut invoked = launcher.to_string();
+    if let Some(machine) = machine.filter(|m| !m.is_empty()) {
+        let wrapper = format!(r"{launcher}.wrapper.cmd");
+        std::fs::write(&wrapper, format!("@echo off\r\nset \"ProgramFiles={machine}\"\r\ncall \"{launcher}\" \"{input}\"\r\n")).unwrap();
+        invoked = wrapper;
+    }
+    let arg_line = if invoked == launcher { format!(" \"{input}\"") } else { String::new() };
+    let mut cmd = std::process::Command::new("cmd.exe");
+    cmd.raw_arg(format!("/d /c \"\"{invoked}\"{arg_line}\""))
+        .env("LOCALAPPDATA", local.unwrap_or(""))
+        .env("ProgramFiles", machine.unwrap_or(""))
+        .env("PATH", path_dir.unwrap_or(r"C:\Windows\System32"))
+        .env("STUB_OUT", &captured)
+        .env_remove("PC_CLI");
+    match cli_env {
+        Some(cli) => {
+            cmd.env("PHOTOCRAFT_CLI", cli);
+        }
+        None => {
+            cmd.env_remove("PHOTOCRAFT_CLI");
+        }
+    }
+    let out = cmd.output().unwrap();
+    let text = std::fs::read_to_string(&captured).unwrap_or_default();
+    (text, format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+}
+
+#[cfg(windows)]
 #[test]
 fn windows_create_droplet_default_writes_a_runnable_cmd_launcher() {
     let dir = tmp("default");
@@ -132,22 +235,7 @@ fn windows_launcher_runs_the_cli_on_every_dropped_path() {
     // A tiny photocraft-cli stand-in, compiled with the toolchain running this test: it writes
     // the arguments it receives to a file. It must be a real exe, because calling a batch file
     // through cmd re-parses its command line and would not show what the CLI gets.
-    let stub_rs = format!(r"{nasty}\cli stub.rs");
-    let stub_exe = format!(r"{nasty}\cli stub.exe");
-    std::fs::write(&stub_rs, "fn main() {\n    let a: Vec<String> = std::env::args().collect();\n    std::fs::write(std::env::var(\"STUB_OUT\").unwrap(), a[1..].join(\"\\n\")).unwrap();\n}\n").unwrap();
-    let rustc = std::path::Path::new(env!("CARGO")).with_file_name("rustc");
-    let build = std::process::Command::new(rustc)
-        .arg("--edition")
-        .arg("2021")
-        .arg("--crate-name")
-        .arg("cli_stub")
-        .arg("-O")
-        .arg(&stub_rs)
-        .arg("-o")
-        .arg(&stub_exe)
-        .output()
-        .unwrap();
-    assert!(build.status.success(), "stub build: {}", String::from_utf8_lossy(&build.stderr));
+    let stub_exe = cli_stub(&nasty);
 
     let inputs = [format!(r"{nasty}\img 100% & café (1)^.png"), format!(r"{dir}\bang ! second.jpg"), format!(r"{dir}\some folder & (x)")];
     std::fs::write(&inputs[0], "x").unwrap();
@@ -157,6 +245,8 @@ fn windows_launcher_runs_the_cli_on_every_dropped_path() {
     // `cmd /d /c ""launcher" "path" …"`. (Spawning the batch directly with
     // `Command::new(launcher).arg(…)` goes through the CRT batch trampoline's own escaping,
     // documented as not safe for cmd metacharacters; Explorer builds the line itself.)
+    // Explorer quotes a dropped path only when it contains a space, which is what this line
+    // pins; the unquoted form is pinned by `windows_launcher_splits_an_unquoted_dropped_path`.
     let quoted: Vec<String> = inputs.iter().map(|p| format!("\"{p}\"")).collect();
     let output = std::process::Command::new("cmd.exe")
         .raw_arg(format!("/d /c \"\"{launcher}\" {}\"", quoted.join(" ")))
@@ -199,4 +289,135 @@ fn windows_launcher_self_location_survives_a_double_extension_name() {
     assert!(text.contains("%~dp0%~n0.json"), "{text}");
     let self_located = format!("{}.json", shim.strip_suffix(".cmd").unwrap());
     assert_eq!(std::fs::canonicalize(&self_located).unwrap(), std::fs::canonicalize(&droplet).unwrap(), "the launcher self-locates the droplet on disk");
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_launcher_finds_the_cli_in_the_per_user_install_folder_before_path() {
+    // The Windows installer puts photocraft-cli.exe in the install folder and does not add it
+    // to PATH, so on a default install a drop must find it there (#13718, comment 7025990366).
+    // Order: PHOTOCRAFT_CLI, per-user install, per-machine install, PATH.
+    let dir = tmp("install-lookup");
+    let stub = cli_stub_who(&dir);
+    create(&dir, format!("{dir}/Rotate"), None);
+    let launcher = format!(r"{dir}\Rotate.cmd");
+    std::fs::write(format!(r"{dir}\a.png"), "x").unwrap();
+    install_stub(&format!(r"{dir}\fake-local"), r"Programs\ArtCraft\PhotoCraft", &stub);
+    install_stub(&format!(r"{dir}\fake-progfiles"), r"ArtCraft\PhotoCraft", &stub);
+    // A decoy on PATH: the only CLI a PATH-only lookup finds, which is what the launcher did.
+    std::fs::create_dir_all(format!(r"{dir}\fake-path")).unwrap();
+    std::fs::copy(&stub, format!(r"{dir}\fake-path\photocraft-cli.exe")).unwrap();
+    let input = format!(r"{dir}\a.png");
+    let wanted = format!("droplet\n{}\\Rotate.pcdroplet\n{input}", dir);
+
+    let (captured, report) = run_lookup_probe(
+        &launcher,
+        &input,
+        Some(&format!(r"{dir}\fake-local")),
+        Some(&format!(r"{dir}\fake-progfiles")),
+        Some(&format!(r"{dir}\fake-path")),
+        None,
+    );
+    let lines: Vec<&str> = captured.split('\n').collect();
+    assert_eq!(lines.len(), 4, "one CLI must run and get 3 arguments; it recorded {captured:?}, cmd said: {report}");
+    assert!(
+        lines[0].ends_with(r"fake-local\Programs\ArtCraft\PhotoCraft\photocraft-cli.exe"),
+        "the per-user install folder beats the per-machine one and PATH; it picked {captured:?}"
+    );
+    assert_eq!(lines[1..].join("\n"), wanted, "the droplet and the dropped path reach the picked CLI");
+
+    // PHOTOCRAFT_CLI keeps the first place even when both install folders hold a CLI.
+    let (captured, report) = run_lookup_probe(
+        &launcher,
+        &input,
+        Some(&format!(r"{dir}\fake-local")),
+        Some(&format!(r"{dir}\fake-progfiles")),
+        Some(&format!(r"{dir}\fake-path")),
+        Some(&stub),
+    );
+    assert!(captured.split('\n').next().unwrap_or_default().ends_with(r"cli who.exe"), "PHOTOCRAFT_CLI still wins; it picked {captured:?}, cmd said: {report}");
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_launcher_falls_back_to_the_per_machine_install_folder() {
+    // Per-user install folder exists but holds no CLI: the per-machine Program Files folder
+    // is tried before PATH.
+    let dir = tmp("install-lookup-machine");
+    let stub = cli_stub_who(&dir);
+    create(&dir, format!("{dir}/Rotate"), None);
+    let launcher = format!(r"{dir}\Rotate.cmd");
+    std::fs::write(format!(r"{dir}\a.png"), "x").unwrap();
+    std::fs::create_dir_all(format!(r"{dir}\fake-local")).unwrap();
+    install_stub(&format!(r"{dir}\fake-progfiles"), r"ArtCraft\PhotoCraft", &stub);
+    std::fs::create_dir_all(format!(r"{dir}\fake-path")).unwrap();
+    std::fs::copy(&stub, format!(r"{dir}\fake-path\photocraft-cli.exe")).unwrap();
+    let input = format!(r"{dir}\a.png");
+    let wanted = format!("droplet\n{}\\Rotate.pcdroplet\n{input}", dir);
+
+    let (captured, report) = run_lookup_probe(
+        &launcher,
+        &input,
+        Some(&format!(r"{dir}\fake-local")),
+        Some(&format!(r"{dir}\fake-progfiles")),
+        Some(&format!(r"{dir}\fake-path")),
+        None,
+    );
+    let lines: Vec<&str> = captured.split('\n').collect();
+    assert_eq!(lines.len(), 4, "one CLI must run and get 3 arguments; it recorded {captured:?}, cmd said: {report}");
+    assert!(lines[0].ends_with(r"fake-progfiles\ArtCraft\PhotoCraft\photocraft-cli.exe"), "the per-machine install folder beats PATH; it picked {captured:?}");
+    assert_eq!(lines[1..].join("\n"), wanted, "the droplet and the dropped path reach the picked CLI");
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_launcher_splits_an_unquoted_dropped_path() {
+    // Written as the byte-exact expectation first: red on 2b269d479, the CLI recorded
+    // `...\pics\a` (the `&` split the line) and `...\pics\xy.png` (cmd ate the caret).
+    // File Explorer quotes a dropped path only when it contains a space, so the unquoted forms
+    // below reach cmd.exe exactly as Explorer's command line for a drop does. cmd splits and
+    // unescapes that line while it PARSES it, before the launcher's first line runs, so no
+    // batch body can recover the path. Tried: a shift loop that re-quotes each `%1` (it forwards
+    // the same cut argument, and its delayed expansion also swallows everything between two `!`
+    // of a path like `po!p.png`, which the bare `%*` form passes today), and a `%CMDCMDLINE%`
+    // rewrite (copying that variable splits the line a second time and yields merged tokens).
+    // A `.lnk` launcher - Explorer then hands the paths straight to the exe - is the way out,
+    // and writing a Shell Link is a decision for the maintainers.
+    let dir = tmp("unquoted-drop");
+    let stub = cli_stub(&dir);
+    let pics = format!(r"{dir}\pics");
+    std::fs::create_dir_all(&pics).unwrap();
+    create(&dir, format!("{dir}/Rotate"), None);
+    let launcher = format!(r"{dir}\Rotate.cmd");
+    let ampersand = format!(r"{pics}\a&b.png");
+    let caret = format!(r"{pics}\x^y.png");
+    std::fs::write(&ampersand, "x").unwrap();
+    std::fs::write(&caret, "x").unwrap();
+    let captured = format!(r"{dir}\captured.txt");
+    let drop = |line: &str| -> (Vec<String>, String) {
+        use std::os::windows::process::CommandExt;
+        let _ = std::fs::remove_file(&captured);
+        let output = std::process::Command::new("cmd.exe")
+            .raw_arg(format!("/d /c \"\"{launcher}\" {line}\""))
+            .env("PHOTOCRAFT_CLI", &stub)
+            .env("STUB_OUT", &captured)
+            .output()
+            .unwrap();
+        let text = std::fs::read_to_string(&captured).unwrap_or_default();
+        (text.split('\n').map(str::to_string).collect(), String::from_utf8_lossy(&output.stderr).into_owned())
+    };
+
+    // `&`: the CLI is called with the part before the ampersand, and cmd runs the rest as a
+    // second command. The path of the dropped file never arrives.
+    let (lines, stderr) = drop(&ampersand);
+    assert_eq!(lines.len(), 3, "an unquoted & drop reaches the CLI as ONE truncated argument, cmd stderr: {stderr}");
+    assert_eq!(lines[0], "droplet", "the launcher still calls the CLI's droplet subcommand");
+    assert_eq!(lines[1], format!(r"{dir}\Rotate.pcdroplet"), "the launcher's own droplet self-location is unaffected");
+    assert_eq!(lines[2], format!(r"{pics}\a"), "cmd cut the dropped path at the &");
+    assert!(stderr.contains("'b.png' is not recognized"), "cmd treated the rest of the path as a command: {stderr}");
+
+    // `^`: one argument reaches the CLI, with the caret removed by the parser.
+    let (lines, stderr) = drop(&caret);
+    assert_eq!(lines.len(), 3, "cmd ate the caret of an unquoted x^y.png, cmd stderr: {stderr}");
+    assert_eq!(lines[2], format!(r"{pics}\xy.png"), "the path arrives unescaped, so the CLI cannot find it");
 }
