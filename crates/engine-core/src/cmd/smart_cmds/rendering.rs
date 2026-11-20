@@ -343,7 +343,7 @@ pub(super) fn display_source(sm: &SmartObject, bytes: &Arc<Vec<u8>>) -> Arc<Vec<
 /// whole-drawing path, so its box only needs the canvas bounds: no editable layer caches are
 /// built, and a drawing whose layer caches exceed the budget still gets a warp frame. Stack Mode
 /// keeps the strict layered import it renders with.
-pub fn source_box(doc: &Document, sm: &SmartObject) -> Option<[f64; 4]> {
+pub(crate) fn source_box(doc: &Document, sm: &SmartObject) -> Option<[f64; 4]> {
     let (name, bytes) = source_bytes(&doc.metadata, &sm.source)?;
     let bytes = display_source(sm, &bytes);
     let fmt = doc.pixel_format();
@@ -394,15 +394,9 @@ impl<'a> WarningRenderSources<'a> {
         Self { document, srgb: None, entries: VecDeque::new(), budget: if cfg!(target_arch = "wasm32") { 128 << 20 } else { 384 << 20 }, limit, bytes: 0 }
     }
 
-    /// Sources that keep at most `limit` entries and `budget` bytes of rendered output.
-    pub fn with_limits(document: &'a Document, budget: usize, limit: usize) -> Self {
+    #[cfg(test)]
+    pub(crate) fn with_limits(document: &'a Document, budget: usize, limit: usize) -> Self {
         Self { budget, limit, ..Self::new(document) }
-    }
-
-    /// Whether the document's color context has been needed yet: it is built on the first SVG
-    /// source only, so non-SVG and missing sources never pay for it.
-    pub fn profile_initialized(&self) -> bool {
-        self.srgb.is_some()
     }
 
     fn image(&mut self, bytes: &Arc<Vec<u8>>, scale: f64, name: [u8; 32]) -> Result<(SourceImage, Vec<String>)> {

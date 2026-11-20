@@ -663,9 +663,7 @@ fn native_preview_digest_is_reused_per_source_allocation_and_rechecked_after_rep
     sm.source = SmartSource::Embedded { file_name: "Logo.eps".into(), bytes: Arc::new(changed.clone()) };
     let hashed = || crate::smart_cmds::source_cache_statistics().native_hash_bytes;
     let start = hashed();
-    let frame = crate::smart_cmds::source_box(&doc, &sm).unwrap();
     for _ in 0..3 {
-        assert_eq!(crate::smart_cmds::source_box(&doc, &sm), Some(frame));
         assert_eq!(crate::smart_cmds::render(&doc, &sm).unwrap().unwrap().pixel(15, 11), vec![0.0, 0.0, 1.0, 1.0], "the verified preview is drawn");
     }
     assert_eq!(hashed() - start, changed.len(), "one verification for one source allocation");

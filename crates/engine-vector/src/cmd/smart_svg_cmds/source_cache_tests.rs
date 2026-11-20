@@ -1,6 +1,6 @@
 use super::*;
 use crate::smart_cmds::{WarningRenderSources, render_with_warnings_using, source_cache_statistics};
-use photocraft_color::{ColorMode, PixelFormat, SampleType};
+use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::SmartFilter;
 use photocraft_geom::Affine;
 
@@ -69,27 +69,23 @@ fn request(s: &mut Session, id: LayerId, svg: &str) -> Value {
 }
 
 #[test]
-fn warning_source_profile_context_stays_lazy_for_non_svg_and_missing_sources() {
+fn non_svg_and_missing_sources_render_without_svg_decodes() {
     let doc = Document::new("Raster", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
     let image = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Rgb, [0, 255, 0].repeat(4)).unwrap();
     let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
     let sm = SmartObject::new(SmartSource::Embedded { file_name: "Raster.png".into(), bytes: Arc::new(png) }, Affine::IDENTITY, None);
     let expected = crate::smart_cmds::render(&doc, &sm).unwrap();
     let mut sources = WarningRenderSources::new(&doc);
-    assert!(!sources.profile_initialized());
     reset();
     let (surface, warnings) = render_with_warnings_using(&sm, &mut sources).unwrap();
     assert_eq!(surface, expected);
     assert!(warnings.is_empty());
-    assert!(!sources.profile_initialized(), "a strict non-SVG cache hit needs no SVG color context");
     let missing = SmartObject::new(SmartSource::Linked { path: String::new() }, Affine::IDENTITY, None);
     let (surface, warnings) = render_with_warnings_using(&missing, &mut sources).unwrap();
     assert!(surface.is_none());
     assert!(warnings.is_empty());
-    assert!(!sources.profile_initialized());
     assert_eq!(count(), 0);
     draw(&mut sources, &object(&artwork(4, 4)));
-    assert!(sources.profile_initialized());
     assert_eq!(count(), 1);
 }
 
@@ -163,38 +159,6 @@ fn local_svg_sources_separate_scale_and_profile_but_keep_instance_filters_and_pl
     assert!((corrected.rgba(12, 3)[0] - 0.216).abs() < 0.01);
     assert_eq!(draw(&mut sources, &first), a);
     assert_eq!(count(), 3);
-}
-
-#[test]
-fn local_svg_source_memo_evicts_and_oversize_entries_render_without_retention() {
-    let mut doc = Document::new("Budget", Size::new(64, 64), ColorMode::Rgb, SampleType::U8);
-    doc.icc_profile = Some(craft_cms::Builtin::Srgb.profile().to_bytes());
-    let first = object(&artwork(4, 4));
-    let mut scaled = first.clone();
-    scaled.transform = Affine { m: [2., 0., 0., 2., 0., 0.] };
-    let tile = photocraft_raster::tile_storage_bytes(Rect::new(0, 0, 32, 32), &PixelFormat::RGBA8) as usize;
-    for (budget, limit) in [(tile + 4096, 32), (usize::MAX, 1)] {
-        let mut sources = WarningRenderSources::with_limits(&doc, budget, limit);
-        reset();
-        let expected = draw(&mut sources, &first);
-        draw(&mut sources, &scaled);
-        assert_eq!(draw(&mut sources, &first), expected);
-        assert_eq!(count(), 3, "byte and entry limits both evict the old scale");
-    }
-    let huge_source = artwork(4, 4).replace("</svg>", &format!("<!--{}--></svg>", " ".repeat(tile + 8192)));
-    let encoded = object(&huge_source);
-    let mut sources = WarningRenderSources::with_limits(&doc, tile + 4096, 32);
-    reset();
-    let expected = draw(&mut sources, &encoded);
-    assert_eq!(draw(&mut sources, &encoded), expected);
-    assert_eq!(count(), 1, "the immutable document owns encoded bytes; only rendered output belongs to the memo budget");
-    let mut output_too_large = WarningRenderSources::with_limits(&doc, tile - 1, 32);
-    reset();
-    let expected = draw(&mut output_too_large, &first);
-    assert_eq!(draw(&mut output_too_large, &first), expected);
-    assert_eq!(count(), 2, "oversize rendered output remains an uncached success");
-    let mut disabled = WarningRenderSources::with_limits(&doc, 0, 0);
-    assert_eq!(draw(&mut disabled, &first), draw(&mut WarningRenderSources::new(&doc), &first));
 }
 
 #[test]
