@@ -166,7 +166,11 @@ fn linux_auto_prefers_a_working_adapter_over_nvk_gm108() {
     let cases = [nvk, intel_gl, lavapipe];
     assert_eq!(pick(&cases, Auto, Os::Other), Some(0), "without the workaround, discrete NVK wins");
     assert_eq!(pick_with_nvk_workaround(&cases, Auto, Os::Other, true, wgpu::PowerPreference::HighPerformance), Some((1, true)));
-    assert_eq!(pick_with_nvk_workaround(&cases, Auto, Os::Other, false, wgpu::PowerPreference::HighPerformance), Some((0, false)), "explicit selection stays unchanged");
+    assert_eq!(
+        pick_with_nvk_workaround(&cases, Auto, Os::Other, false, wgpu::PowerPreference::HighPerformance),
+        Some((0, false)),
+        "explicit selection stays unchanged"
+    );
     // An alternative without surface support is not an alternative.
     let mut unavailable = intel_gl;
     unavailable.surface_ok = false;
