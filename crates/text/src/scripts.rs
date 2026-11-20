@@ -336,14 +336,6 @@ pub fn font_has_glyph_outline(font: &skrifa::FontRef<'_>, c: char) -> bool {
     outline.draw(settings, &mut pen).is_ok() && pen.segments > 0
 }
 
-/// Whether face `index` of `bytes` really contains an outline for character `c` (or is whitespace).
-/// Fonts whose character map maps `c` but lack an outline or whose outline has no contours (empty/ghost glyphs) return `false`.
-/// `false` for an out-of-range face or data that doesn't parse. Never panics.
-pub fn face_has_glyph_outline(bytes: &[u8], index: u32, c: char) -> bool {
-    let Ok(font) = skrifa::FontRef::from_index(bytes, index) else { return false };
-    font_has_glyph_outline(&font, c)
-}
-
 pub fn face_covers(bytes: &[u8], index: u32, c: char) -> bool {
     use skrifa::MetadataProvider;
 
@@ -413,10 +405,10 @@ mod tests {
         assert!(candidates(Script::Thai, &[]).is_empty());
     }
 
-    /// Verifies that `face_has_glyph_outline` checks drawable contours, allows mapped whitespace
-    /// without an outline, and rejects unmapped whitespace as well as empty or corrupt fonts.
+    /// Verifies that `font_has_glyph_outline` checks drawable contours, allows mapped whitespace
+    /// without an outline, and rejects unmapped whitespace.
     #[test]
-    fn face_has_glyph_outline_checks_drawable_contours_and_whitespace() {
+    fn font_has_glyph_outline_checks_drawable_contours_and_whitespace() {
         use skrifa::MetadataProvider;
 
         let inter = crate::fonts::INTER_REGULAR.as_slice();
@@ -431,14 +423,11 @@ mod tests {
         assert!(font.charmap().map('\t').is_none(), "Inter does not map tab");
         assert!(font.charmap().map('\u{3000}').is_none(), "Inter does not map ideographic space");
 
-        assert!(face_has_glyph_outline(inter, 0, 'A'));
-        assert!(face_has_glyph_outline(inter, 0, ' '));
-        assert!(!face_has_glyph_outline(inter, 0, '\t'));
-        assert!(!face_has_glyph_outline(inter, 0, '\u{3000}'));
-        assert!(!face_has_glyph_outline(inter, 0, 'ส'));
-        assert!(!face_has_glyph_outline(inter, 1, 'A'));
-        assert!(!face_has_glyph_outline(b"", 0, 'A'));
-        assert!(!face_has_glyph_outline(b"", 0, ' '));
+        assert!(font_has_glyph_outline(&font, 'A'));
+        assert!(font_has_glyph_outline(&font, ' '));
+        assert!(!font_has_glyph_outline(&font, '\t'));
+        assert!(!font_has_glyph_outline(&font, '\u{3000}'));
+        assert!(!font_has_glyph_outline(&font, 'ส'));
     }
 
     #[test]
