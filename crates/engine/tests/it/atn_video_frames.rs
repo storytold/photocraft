@@ -61,7 +61,7 @@ fn fixture(depth: u32) -> (Session, LayerId) {
     let result = s.execute("layer.videoLayers.newBlankVideoLayer", json!({})).unwrap();
     let id = LayerId(result["layer"].as_u64().unwrap());
     let state = s.active_mut().unwrap();
-    let doc = Arc::make_mut(&mut state.doc);
+    let doc = Arc::make_mut(state.doc_mut());
     let mut frames = Vec::new();
     for red in [0.25, 0.5, 0.75] {
         let mut frame = photocraft_raster::Surface::new(doc.pixel_format());
@@ -158,7 +158,7 @@ fn playback_edits_the_current_frame_and_original_stack_with_undo_redo_at_each_de
 fn deleting_the_last_frame_keeps_its_pixels() {
     let (mut s, id) = fixture(8);
     let state = s.active_mut().unwrap();
-    let doc = Arc::make_mut(&mut state.doc);
+    let doc = Arc::make_mut(state.doc_mut());
     let layer = doc.layer_mut(id).unwrap();
     let video = layer.video.as_mut().unwrap();
     video.frames.truncate(1);

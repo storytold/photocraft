@@ -1,8 +1,6 @@
 use super::*;
 use photocraft_doc::vector::Subpath;
 
-static PURGE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 fn session(depth: u32) -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 64, "height": 48, "depth": depth, "background": "white"})).unwrap();
@@ -323,7 +321,7 @@ fn content_aware_fill_huge_area_neither_panics_nor_wraps() {
 fn huge_selection(size: (u32, u32), rects: &[Rect]) -> Session {
     let mut s = blob_session(8);
     let st = s.active_mut().unwrap();
-    let doc = std::sync::Arc::make_mut(&mut st.doc);
+    let doc = std::sync::Arc::make_mut(st.doc_mut());
     doc.size = photocraft_geom::Size::new(size.0, size.1);
     let mut sel = Surface::new(PixelFormat::GRAY8);
     for r in rects {

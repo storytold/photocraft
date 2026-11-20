@@ -1422,3 +1422,45 @@ fn convert_region_to_the_same_format_shares_tiles() {
     let (a, b) = (part.tile(TileCoord::new(0, 0)).unwrap(), src.tile(TileCoord::new(0, 0)).unwrap());
     assert!(Arc::ptr_eq(a, b));
 }
+
+/// Extending a region conversion with new tiles gives it a new generation; covering nothing new
+/// keeps the old one.
+#[test]
+fn convert_region_into_advances_the_generation_only_when_it_adds_tiles() {
+    for to in [PixelFormat::RGBA8, PixelFormat::new(ColorMode::Grayscale, SampleType::U16, true)] {
+        let src = region_convert_source(PixelFormat::RGBA8);
+        let mut part = src.convert_region(to, Rect::new(10, 10, 20, 20));
+        let before = part.generation();
+        src.convert_region_into(&mut part, Rect::new(12, 12, 18, 18));
+        assert_eq!(part.generation(), before, "{to:?}: nothing new");
+        src.convert_region_into(&mut part, Rect::new(TILE_SIZE + 1, 1, TILE_SIZE + 5, 5));
+        assert_ne!(part.generation(), before, "{to:?}: new tile");
+    }
+}
+
+#[test]
+fn generations_follow_mutations_and_remain_shared_by_unmodified_clones() {
+    let mut original = Surface::new(PixelFormat::RGBA8);
+    let initial = original.generation();
+    let copy = original.clone();
+    assert_eq!(copy.generation(), initial);
+    let region = Rect::new(0, 0, 1, 1);
+    let _ = original.read_region(region);
+    assert_eq!(original.generation(), initial);
+    original.write_pixel(0, 0, &[1.0, 0.0, 0.0, 1.0]);
+    assert_ne!(original.generation(), initial);
+    assert_eq!(copy.generation(), initial);
+    assert_ne!(original.read_region(region), copy.read_region(region));
+    let changed = original.generation();
+    original.map_color(|v| v * 0.5);
+    assert_ne!(original.generation(), changed);
+    let mapped = original.generation();
+    original.prune();
+    assert_ne!(original.generation(), mapped);
+    let before_tile = original.generation();
+    let old_copy = original.clone();
+    original.tile_mut(TileCoord { tx: 0, ty: 0 }).bytes_mut()[0] ^= 0xff;
+    assert_ne!(original.generation(), before_tile);
+    assert_eq!(old_copy.generation(), before_tile);
+    assert_ne!(original.read_region(region), old_copy.read_region(region));
+}
