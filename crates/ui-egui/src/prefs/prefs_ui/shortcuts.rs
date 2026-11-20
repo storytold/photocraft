@@ -18,6 +18,7 @@ use craft::menu::shortcuts::{Area, ConflictMode, DialogState, DialogTab, Format,
 use craft::ui::buttons::IconButton;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft::ui::dialog::{PromptAnswer, PromptChoice, StandardPrompt};
 use craft::ui::pickers::Select;
 use craft::ui::runtime::env::Env;
 use craft::ui::runtime::windows;
@@ -29,12 +30,22 @@ use serde_json::{Map, Value, json};
 use std::path::Path;
 
 use crate::PhotocraftApp;
+use crate::dialogs::alerts;
 
 /// The id of the `.kys` format in the dialog's import and export lists.
 const KYS_FORMAT: &str = "kys";
 
 /// The colours Edit › Menus gives an item; `none` is no colour.
 const COLORS: [&str; 8] = ["none", "red", "orange", "yellow", "green", "blue", "violet", "gray"];
+
+/// The Set row's two questions (#14450). The switch question's text says "shortcuts" on the Menus
+/// tab too, as measured, double space and all; the Delete question names the set in its place.
+const SWITCH_ASK: &str = "Selecting a different set will result in a loss of all unsaved shortcuts.  Save your changes before switching sets?";
+const DELETE_ASK: &str = "Are you sure you want to send {name} to the recycle bin?";
+
+/// Both boxes carry the dialog's own name as their title, as measured for the switch question. The
+/// Delete box's title is not measured, and this is the title the reference gives the box next to it.
+const BOX_TITLE: &str = "Keyboard Shortcuts and Menus";
 
 /// The open Keyboard Shortcuts and Menus dialog, at `app.prefs_rt.shortcuts`.
 pub(crate) struct ShortcutsSession {
@@ -71,6 +82,15 @@ pub(crate) struct MenusDraft {
     pub(crate) cap_refused: bool,
     /// Set by anything that changed `sets` or `set`: OK writes them through `edit.menus`.
     pub(crate) sets_changed: bool,
+    /// Set by picking another entry while the rows differ from the set in use: the pass asks the
+    /// switch question before anything moves (#14450).
+    pub(crate) ask_switch: Option<String>,
+    /// Set by a Delete click: the pass asks the Delete question before the set goes (#14450).
+    pub(crate) ask_delete: bool,
+    /// Set with `ask_name` by Yes of the switch question, when the set in use has no saved copy to
+    /// write (the built-in set, or a name the engine refuses): the picked target, applied once the
+    /// Save dialog has answered. `ask_new_name` clears it, so a later Save or New cannot pick it up.
+    pub(crate) switch_target: Option<String>,
 }
 
 impl MenusDraft {
@@ -118,6 +138,8 @@ impl MenusDraft {
     /// engine stores (`menu_sets::MAX_SETS`): a 65th name could only produce sets the engine
     /// refuses to write, so the pass shows the engine's cap line and the dialog stays open.
     fn ask_new_name(&mut self) {
+        // A Save or New click is its own ask: it never carries a switch the row did not finish.
+        self.switch_target = None;
         if self.sets.len() >= menu_sets::MAX_SETS {
             self.cap_refused = true;
         } else {
@@ -126,8 +148,8 @@ impl MenusDraft {
     }
 
     /// Choose the set `name` ("" or the built-in name: the built-in set) and load its menus into
-    /// the rows, dropping unsaved edits as the reference's "No" does; the Yes / No / Cancel box is
-    /// the next slice.
+    /// the rows, dropping unsaved edits: what the switch question's "No" does, and what a pick of an
+    /// unmodified set does without asking (#14450).
     fn choose(&mut self, name: &str) {
         // The built-in entry's value is ""; a hand-edited settings file can also hold a set named
         // like the built-in one, and the built-in entry still gives the built-in menus.
@@ -157,7 +179,53 @@ impl MenusDraft {
         self.set.clear();
         self.sets_changed = true;
     }
+
+    /// Yes of the switch question: save the rows as they stand, then switch to `target`. A saved set
+    /// takes the write straight away — the measured rule that Save on a saved set overwrites it
+    /// without a dialog — while the built-in set, and a name from a hand-edited settings file that
+    /// the engine would refuse, can only get their name from the Save dialog: there the switch waits
+    /// on `switch_target`, and a cancelled name dialog leaves the row on its set and its edits
+    /// (#14450, and #14326's measurement of the same box on the other tab).
+    fn save_then_switch(&mut self, target: &str) {
+        if !self.set.is_empty() && set_name(&self.set).is_ok() {
+            let name = self.set.clone();
+            self.store(&name);
+            self.choose(target);
+        } else if self.sets.len() >= menu_sets::MAX_SETS {
+            // The save could only name a set the engine refuses to store: the cap line the row's
+            // own New shows, and the row does not move.
+            self.cap_refused = true;
+        } else {
+            self.ask_name = true;
+            self.switch_target = Some(target.to_owned());
+        }
+    }
+
+    /// Yes of the Delete question: the set it named, if that is still the set in use.
+    fn delete_named(&mut self, name: &str) {
+        if self.set == name {
+            self.delete();
+        }
+    }
 }
+
+/// The Menus tab's question about unsaved edits, asked when the row picks another set while the
+/// rows differ from the set in use (#14450). Its tag names the set the row picked: the switch each
+/// answer acts on.
+pub(crate) struct SetSwitch {
+    target: String,
+}
+
+/// The Menus tab's Delete question (#14450): "Are you sure you want to send <name> to the recycle
+/// bin?". Its tag names the set whose Delete was clicked, so an answer only deletes that set.
+pub(crate) struct SetDelete {
+    name: String,
+}
+
+/// The switch question's "Don't show again", kept under `Preferences::dialogs` with the other
+/// prompts' (`alerts::dismissed` / `alerts::remember_skip`). The reference asks it on both tabs of
+/// this dialog, so one key covers the question; the Delete question has no such box.
+pub const SWITCH_PREF: &str = "edit.menus.switchSet";
 
 /// The built-in sets: PhotoCraft's defaults.
 fn builtins() -> [(&'static str, Overrides); 1] {
@@ -319,6 +387,25 @@ fn pass(app: &mut PhotocraftApp, ui: &mut egui::Ui, press_ok: bool) {
         menus.ask_name = false;
         ask_set_name(app, state, &menus.copy_name());
     }
+    // The two questions the Set row raises are opened here, beside the pass's own Save-dialog ask:
+    // the row has been drawn and its draft state is settled, and the host draws the box over the
+    // dialog in this same frame. The draft is left where it was: only the answer moves the row.
+    if let Some(target) = menus.ask_switch.take() {
+        if alerts::dismissed(app, SWITCH_PREF) {
+            // The box was silenced by a ticked "Don't show again": the switch goes ahead, and its
+            // unsaved edits go with it, as the reference's "No" does them.
+            menus.choose(&target);
+        } else {
+            ask_switch_set(app, &target);
+        }
+    }
+    if menus.ask_delete {
+        menus.ask_delete = false;
+        // Delete is greyed for the built-in set, so there is a saved set to ask about.
+        if !menus.set.is_empty() {
+            ask_delete_set(app, &menus.set);
+        }
+    }
     if menus.cap_refused {
         menus.cap_refused = false;
         // The framework's in-dialog bars are drawn only on its own tab, so the Menus tab's refusal
@@ -447,6 +534,12 @@ fn ask_set_name(app: &mut PhotocraftApp, state: &mut DialogState, suggested: &st
             Some(session) => match set_name(&stem) {
                 Ok(name) => {
                     session.menus.store(&name);
+                    // Yes of the switch question was waiting on this name: the save is in, so the
+                    // switch it promised goes ahead. A cancelled name dialog never reaches here, and
+                    // the next Save or New clears the target.
+                    if let Some(target) = session.menus.switch_target.take() {
+                        session.menus.choose(&target);
+                    }
                     None
                 }
                 Err(e) => Some(e),
@@ -462,6 +555,77 @@ fn ask_set_name(app: &mut PhotocraftApp, state: &mut DialogState, suggested: &st
     if let Err(e) = asked {
         state.show_error(e);
     }
+}
+
+/// The switch question the Menus tab holds a pick of another set behind (#14450): the measured
+/// title, text (it says "shortcuts" on this tab too) and Yes / No / Cancel, with the measured
+/// "Don't show again" box. Its tag names the picked set, so the answer applies the switch that was
+/// held back; the row stays on its own set while the box waits.
+///
+/// The buttons carry the roles the framework's own Yes / No / Cancel question gives them (`unsaved.rs`
+/// in `storytold/craft-libs`): `Proceed` is Yes and is the default button Enter answers, `Cancel` is
+/// the box's Cancel and answers Escape and the close action, and `Alternate` is No. The footer places
+/// its buttons by role, so Windows stands them Yes, Cancel, No: the reference's literal Yes, No,
+/// Cancel order is not expressible through a hosted `StandardPrompt` (see the PR text).
+fn ask_switch_set(app: &mut PhotocraftApp, target: &str) {
+    let prompt = StandardPrompt::custom(tl!(SWITCH_ASK).to_owned())
+        .title(tl!(BOX_TITLE).to_owned())
+        .button(PromptChoice::Proceed, tl!("Yes").to_owned())
+        .button(PromptChoice::Alternate, tl!("No").to_owned())
+        .button(PromptChoice::Cancel, tl!("Cancel").to_owned())
+        .dont_show_again()
+        .tag(SetSwitch { target: target.to_owned() });
+    // An `Err` is a question already open (this one or another family's): the row keeps its set and
+    // the next pick asks again.
+    let _ = alerts::open_prompt(app, prompt);
+}
+
+/// The Delete question for the set `name` (#14450): the measured text naming the set, [Yes] [No].
+/// Yes removes the set, No (and Escape, and the close action) keeps it. The reference shows no
+/// "Don't show again" box here, so this question has none.
+fn ask_delete_set(app: &mut PhotocraftApp, name: &str) {
+    let message = crate::i18n::fmt(tl!(DELETE_ASK), &[("name", name)]);
+    let prompt = StandardPrompt::custom(message)
+        .title(tl!(BOX_TITLE).to_owned())
+        .button(PromptChoice::Proceed, tl!("Yes").to_owned())
+        .button(PromptChoice::Cancel, tl!("No").to_owned())
+        .tag(SetDelete { name: name.to_owned() });
+    let _ = alerts::open_prompt(app, prompt);
+}
+
+/// The `PROMPTS` row for the Menus tab's two questions. The switch question: Yes saves the rows as
+/// they stand and then loads the picked set, No loads it and drops the unsaved edits, and its Cancel
+/// keeps set and edits; a ticked "Don't show again" goes to the dialog preferences. The Delete
+/// question: Yes removes the set it named, anything else keeps it. `false` for another family's
+/// answer.
+pub(crate) fn answer(app: &mut PhotocraftApp, _ctx: &egui::Context, answer: &mut PromptAnswer) -> bool {
+    if let Some(SetSwitch { target }) = answer.take_tag::<SetSwitch>() {
+        let (choice, skip) = (answer.choice, answer.skip);
+        // The dialog can have closed while the box waited (its Cancel, `ui.dialog.cancel`): the
+        // answer then writes nothing, since the draft it belongs to is gone.
+        if let Some(session) = app.prefs_rt.shortcuts.as_mut() {
+            match choice {
+                PromptChoice::Proceed => session.menus.save_then_switch(&target),
+                PromptChoice::Alternate => session.menus.choose(&target),
+                _ => {}
+            }
+        }
+        // The framework reports the check box only with its default button, so a tick is kept with
+        // Yes; No and Cancel leave the question asked again next time.
+        if skip {
+            alerts::remember_skip(app, SWITCH_PREF);
+        }
+        return true;
+    }
+    if let Some(SetDelete { name }) = answer.take_tag::<SetDelete>() {
+        if answer.choice == PromptChoice::Proceed
+            && let Some(session) = app.prefs_rt.shortcuts.as_mut()
+        {
+            session.menus.delete_named(&name);
+        }
+        return true;
+    }
+    false
 }
 
 /// The Menus tab's Set row: the set dropdown with the built-in set first and "(modified)" on the
@@ -489,7 +653,13 @@ fn set_row(ui: &mut egui::Ui, draft: &mut MenusDraft) {
             .show(ui);
         // The pick and the buttons are read after the row was drawn, as the framework's row does.
         if picked != draft.set {
-            draft.choose(&picked);
+            if draft.modified() {
+                // Unsaved edits: the row does not move. The pass asks the switch question, and only
+                // its Yes or No loads the picked set (#14450).
+                draft.ask_switch = Some(picked);
+            } else {
+                draft.choose(&picked);
+            }
         }
         if save.clicked() {
             if draft.set.is_empty() {
@@ -504,7 +674,8 @@ fn set_row(ui: &mut egui::Ui, draft: &mut MenusDraft) {
             draft.ask_new_name();
         }
         if delete.clicked() {
-            draft.delete();
+            // Delete is greyed for the built-in set, so there is a saved set to ask about.
+            draft.ask_delete = true;
         }
     });
 }

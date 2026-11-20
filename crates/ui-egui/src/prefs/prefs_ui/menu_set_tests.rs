@@ -5,9 +5,11 @@
 //! on the built-in set and New go to the system Save dialog, whose default name is "<current set
 //! name> Copy" and whose file name, without the extension, names the new set.
 //!
-//! The switch-set message box (Yes / No / Cancel) and the Delete confirmation are the next slice,
-//! so these rows show switching dropping the unsaved edits, which is what the reference application
-//! does after its "No".
+//! The switch-set message box (Yes / No / Cancel and "Don't show again") and the Delete
+//! confirmation are here too (#14450, slice 3): both are `StandardPrompt`s on the app's dialog
+//! host, opened by the pass that saw the click and answered through `dialogs::PROMPTS`. Switching
+//! an unmodified set still asks nothing; switching a modified one asks, and only its "No" (and
+//! "Yes" after the save) loads the other set.
 
 use std::sync::Arc;
 
@@ -17,9 +19,10 @@ use egui::vec2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_engine::menu_sets::{DEFAULTS_NAME, MAX_SETS, modified};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::shortcuts::press_ok;
+use super::shortcuts::{SWITCH_PREF, SetDelete, SetSwitch};
 use crate::PhotocraftApp;
 
 /// The row's three icon buttons, by their measured tooltips: an icon button's label is its
@@ -27,6 +30,15 @@ use crate::PhotocraftApp;
 const SAVE: &str = "Save all changes to the current set of menus";
 const NEW: &str = "Create a new set based on the current set of menus";
 const DELETE: &str = "Delete the current set of menus";
+
+/// The two message boxes' buttons, and the switch box's measured text and check box (the double
+/// space after "shortcuts." is in the reference's text too).
+const YES: &str = "Yes";
+const NO: &str = "No";
+const CANCEL: &str = "Cancel";
+const AGAIN: &str = "Don't show again";
+const SWITCH_ASK: &str = "Selecting a different set will result in a loss of all unsaved shortcuts.  Save your changes before switching sets?";
+const TITLE: &str = "Keyboard Shortcuts and Menus";
 
 /// A harness on a fresh app whose file service answers picks from `files`.
 fn harness(files: Arc<ScriptedFiles>) -> Harness<'static, Box<PhotocraftApp>> {
@@ -67,14 +79,41 @@ fn greyed<'a>(h: &'a Harness<'_, Box<PhotocraftApp>>, label: &'a str) -> bool {
     button(h, label).accesskit_node().is_disabled()
 }
 
-/// Chooses the set `label` in the dropdown, as picking its row does.
-fn choose(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str) {
+/// Opens the dropdown and picks the entry `label`, as its row does. This alone does not answer a
+/// switch question that the pick opens. The row is clicked, not focused and confirmed with Enter:
+/// the held Enter would answer the question's default button as soon as it opens.
+fn pick(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str) {
     h.get_by_role_and_label(Role::ComboBox, "Set").click();
     h.run_steps(2);
-    h.get_by_label(label).focus();
+    h.get_by_label(label).click();
     h.run_steps(2);
-    h.key_press(egui::Key::Enter);
+}
+
+/// Whether the switch question is open.
+fn asked(h: &Harness<'_, Box<PhotocraftApp>>) -> bool {
+    h.query_by_label(SWITCH_ASK).is_some()
+}
+
+/// Presses the open message box's button `label`.
+fn answer(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str) {
+    h.get_by_role_and_label(Role::Button, label).click();
     h.run_steps(2);
+}
+
+/// The open question of the family `T` (`SetSwitch` or `SetDelete`), for the field the test wants
+/// to set the way automation does.
+fn question<T: std::any::Any>(app: &PhotocraftApp) -> Option<craft::ui::dialog::DialogId> {
+    crate::dialogs::alerts::prompt_tagged::<T>(app)
+}
+
+/// Chooses the set `label`, answering the switch question "No" when the pick opens one: that drops
+/// the unsaved edits and loads the set, which is what the reference's "No" does. A switch from an
+/// unmodified set asks nothing, so this is today's pick for that case.
+fn choose(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str) {
+    pick(h, label);
+    if asked(h) {
+        answer(h, NO);
+    }
 }
 
 /// Shows every menu item, which is an edit of the menus in use.
@@ -176,20 +215,24 @@ fn delete_is_greyed_for_the_built_in_set_and_live_for_a_saved_one() {
     assert!(greyed(&h, DELETE), "an edit does not make the built-in set deletable");
 }
 
-/// Choosing another set loads that set's menus into the rows; OK writes them and the set in use.
+/// Choosing another set while the rows are as saved loads its menus without a question; while they
+/// differ it asks first, and its "No" loads them anyway. OK writes them and the set in use.
 #[test]
-fn choosing_another_set_loads_its_menus_and_ok_uses_it() {
+fn choosing_another_set_asks_only_when_modified_and_no_loads_its_menus_and_ok_uses_it() {
     let mut h = harness(Arc::new(ScriptedFiles::new()));
     with_saved_sets(h.state_mut());
     open_menus(&mut h);
     assert_eq!(h.state().session.prefs().menus.hidden, ["edit.fade"], "Painting's menus are in use");
-    choose(&mut h, "Web");
+    pick(&mut h, "Web");
+    assert!(!asked(&h), "the rows are as saved, so the switch asks nothing");
     assert_eq!(row_value(&h), "Web");
     assert!(greyed(&h, SAVE), "and Web is unmodified as the rows stand");
     show_all(&mut h);
     assert_eq!(row_value(&h), "Web (modified)");
-    choose(&mut h, DEFAULTS_NAME);
-    assert_eq!(row_value(&h), DEFAULTS_NAME, "the unsaved edit went with the switch, as it does after the reference's No");
+    pick(&mut h, DEFAULTS_NAME);
+    assert!(asked(&h), "the unsaved edit makes the switch ask");
+    answer(&mut h, NO);
+    assert_eq!(row_value(&h), DEFAULTS_NAME, "the unsaved edit went with the switch, as after the reference's No");
     assert!(greyed(&h, SAVE));
     ok(&mut h);
     let p = h.state().session.prefs();
@@ -283,8 +326,8 @@ fn new_always_asks_for_a_name_and_saves_the_menus_in_use_under_it() {
     assert!(!modified(p));
 }
 
-/// Delete drops the set with OK and moves the row back to the built-in set, which is greyed again;
-/// the menus on screen stay, as the engine's `deleteSet` leaves them.
+/// Delete asks first; its Yes drops the set, and OK moves the row back to the built-in set, which
+/// is greyed again; the menus on screen stay, as the engine's `deleteSet` leaves them.
 #[test]
 fn delete_removes_the_set_with_ok_and_leaves_the_menus_on_screen() {
     let files = Arc::new(ScriptedFiles::new());
@@ -292,8 +335,11 @@ fn delete_removes_the_set_with_ok_and_leaves_the_menus_on_screen() {
     with_saved_sets(h.state_mut());
     open_menus(&mut h);
     button(&h, DELETE).click();
-    h.run_steps(3);
-    assert!(files.requests().is_empty(), "the Delete confirmation is the next slice");
+    h.run_steps(2);
+    assert!(files.requests().is_empty(), "Delete goes to a message box, not to the file service");
+    assert!(question::<SetDelete>(h.state()).is_some(), "the confirmation asks first");
+    assert_eq!(row_value(&h), "Painting", "nothing is deleted while the box waits");
+    answer(&mut h, YES);
     assert_eq!(row_value(&h), "PhotoCraft Defaults (modified)", "the row is back at the built-in set; the shown menus still hide Edit › Fade");
     assert!(greyed(&h, DELETE), "and Delete is greyed again");
     ok(&mut h);
@@ -319,7 +365,8 @@ fn a_cancelled_name_dialog_changes_nothing() {
     assert_eq!(p.menu_sets.keys().collect::<Vec<_>>(), ["Painting", "Web"], "and the sets");
 }
 
-/// Cancel drops everything the row did, including a deleted set: the runtime never saw a change.
+/// Cancel drops everything the row did, including a set its Delete question confirmed: the runtime
+/// never saw a change.
 #[test]
 fn cancel_drops_a_set_the_row_deleted() {
     let mut h = harness(Arc::new(ScriptedFiles::new()));
@@ -327,6 +374,7 @@ fn cancel_drops_a_set_the_row_deleted() {
     open_menus(&mut h);
     button(&h, DELETE).click();
     h.run_steps(2);
+    answer(&mut h, YES);
     assert_eq!(row_value(&h), "PhotoCraft Defaults (modified)", "the row moved to the built-in set");
     crate::prefs_ui::shortcuts::cancel(h.state_mut());
     h.run_steps(2);
@@ -437,4 +485,207 @@ fn a_picked_name_the_engine_refuses_shows_an_error_and_stores_no_set() {
     let p = h.state().session.prefs();
     assert_eq!(p.menu_sets.keys().collect::<Vec<_>>(), ["Painting", "Web"], "OK wrote the sets as they stood");
     assert!(h.state().prefs_rt.shortcuts.is_none(), "and closed the dialog on its writes, not on a refusal");
+}
+
+// ---------------------------------------------------------------- the two message boxes (#14450, slice 3)
+
+/// Answers the open question the way automation does: `set_json_field` picks the button and
+/// `dialogs::confirm` presses it. Used where a label would be ambiguous ("Cancel" is also the
+/// dialog's own button).
+fn answer_by_choice(h: &mut Harness<'_, Box<PhotocraftApp>>, id: craft::ui::dialog::DialogId, choice: &str) {
+    let ctx = h.ctx.clone();
+    h.state_mut().framework.dialogs.set_json_field(&ctx, id, "choice", json!(choice)).unwrap();
+    crate::dialogs::confirm(h.state_mut(), &ctx, id).unwrap();
+    h.run_steps(2);
+}
+
+/// The switch question's measured box: its text, title, three buttons and check box, and nothing
+/// switched while it waits.
+#[test]
+fn switching_a_modified_set_asks_with_yes_no_cancel_and_a_check_box() {
+    let mut h = harness(Arc::new(ScriptedFiles::new()));
+    with_saved_sets(h.state_mut());
+    open_menus(&mut h);
+    let titles = h.query_all_by_label(TITLE).count();
+    let cancels = h.query_all_by_label(CANCEL).count();
+    show_all(&mut h);
+    pick(&mut h, "Web");
+    assert!(asked(&h), "the measured text, double space and all");
+    assert!(question::<SetSwitch>(h.state()).is_some(), "the box is the switch question");
+    assert!(h.query_all_by_label(TITLE).count() > titles, "the box carries the dialog's title");
+    for label in [YES, NO] {
+        assert!(!h.get_by_role_and_label(Role::Button, label).accesskit_node().is_disabled(), "{label} is live");
+    }
+    assert_eq!(h.query_all_by_label(CANCEL).count(), cancels + 1, "the box adds a Cancel button of its own");
+    assert!(h.query_by_label(AGAIN).is_some(), "and the Don't show again check box");
+    assert_eq!(row_value(&h), "Painting (modified)", "nothing switched while the box waits");
+}
+
+/// No drops the unsaved edits and loads the other set, as measured.
+#[test]
+fn no_of_the_switch_question_drops_the_edits_and_loads_the_other_set() {
+    let mut h = harness(Arc::new(ScriptedFiles::new()));
+    with_saved_sets(h.state_mut());
+    open_menus(&mut h);
+    show_all(&mut h);
+    pick(&mut h, "Web");
+    assert!(asked(&h));
+    answer(&mut h, NO);
+    assert!(!asked(&h), "the box closed on the answer");
+    assert_eq!(row_value(&h), "Web", "the other set loaded");
+    assert!(greyed(&h, SAVE), "and the dropped edit is gone: Web is as saved again");
+    ok(&mut h);
+    let p = h.state().session.prefs();
+    assert_eq!(p.menu_set, "Web", "the set in use is what OK writes");
+    assert_eq!(p.menus.hidden, ["edit.fade", "layer.mergeVisible"], "Web's menus are the ones in use");
+    assert_eq!(p.menu_sets["Painting"].hidden, ["edit.fade"], "No did not save the edit into its set");
+}
+
+/// Cancel (the box's own button) stays on the current set with its edits.
+#[test]
+fn cancel_of_the_switch_question_keeps_the_set_and_its_edits() {
+    let mut h = harness(Arc::new(ScriptedFiles::new()));
+    with_saved_sets(h.state_mut());
+    open_menus(&mut h);
+    show_all(&mut h);
+    pick(&mut h, "Web");
+    let id = question::<SetSwitch>(h.state()).expect("the switch question");
+    answer_by_choice(&mut h, id, "cancel");
+    assert!(!asked(&h), "the box closed on the answer");
+    assert_eq!(row_value(&h), "Painting (modified)", "the row stayed on its set, marker and all");
+    assert!(!greyed(&h, SAVE), "and Save is still live: the edit is there to save");
+    ok(&mut h);
+    let p = h.state().session.prefs();
+    assert_eq!(p.menu_set, "Painting", "the set in use did not move");
+    assert!(p.menus.hidden.is_empty(), "the rows' edit reached the preferences as any other OK would");
+    assert_eq!(p.menu_sets["Painting"].hidden, ["edit.fade"], "the saved set kept its copy");
+    assert!(modified(p), "and the row still reads modified when it reopens");
+}
+
+/// Yes on a modified saved set stores it first, without a file dialog (the measured Save rule for
+/// a saved set), and then loads the other set.
+#[test]
+fn yes_of_the_switch_question_saves_a_modified_saved_set_and_switches() {
+    let files = Arc::new(ScriptedFiles::new());
+    let mut h = harness(files.clone());
+    with_saved_sets(h.state_mut());
+    open_menus(&mut h);
+    show_all(&mut h);
+    pick(&mut h, "Web");
+    answer(&mut h, YES);
+    assert!(files.requests().is_empty(), "a saved set saves without the Save dialog");
+    assert_eq!(row_value(&h), "Web", "and the switch went ahead");
+    assert!(greyed(&h, SAVE));
+    ok(&mut h);
+    let p = h.state().session.prefs();
+    assert!(p.menu_sets["Painting"].hidden.is_empty(), "Yes stored the rows as they stood into Painting first");
+    assert_eq!(p.menu_set, "Web");
+    assert_eq!(p.menus.hidden, ["edit.fade", "layer.mergeVisible"], "Web's menus are the ones in use");
+}
+
+/// Yes on the modified built-in set cannot overwrite it: the save asks the system Save dialog for a
+/// name, "<current set name> Copy" as its default, and the switch follows once the name is in.
+#[test]
+fn yes_on_the_modified_built_in_set_asks_for_a_name_and_then_switches() {
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec!["My Menus.MNU".into()])]));
+    let mut h = harness(files.clone());
+    h.state_mut().run("edit.menus", json!({"hide": ["edit.fade"], "saveSet": "Painting"})).unwrap();
+    h.state_mut().run("edit.menus", json!({"useSet": "", "hide": ["layer.mergeVisible"]})).unwrap();
+    open_menus(&mut h);
+    assert_eq!(row_value(&h), "PhotoCraft Defaults (modified)", "the built-in set is in use, with an edit");
+    pick(&mut h, "Painting");
+    assert!(asked(&h));
+    answer(&mut h, YES);
+    h.run_steps(3);
+    let asked_files = files.requests();
+    assert_eq!(asked_files.len(), 1, "Yes on the built-in set asks the Save dialog for a name");
+    assert_eq!(asked_files[0].file_name.as_deref(), Some("PhotoCraft Defaults (modified) Copy"), "the measured default name");
+    assert_eq!(row_value(&h), "Painting", "and the switch followed the name");
+    ok(&mut h);
+    let p = h.state().session.prefs();
+    assert_eq!(p.menu_sets["My Menus"].hidden, ["layer.mergeVisible"], "the edits were saved under the picked name");
+    assert_eq!(p.menu_sets["Painting"].hidden, ["edit.fade"], "the set switched to is unchanged");
+    assert_eq!(p.menu_set, "Painting");
+    assert_eq!(p.menus.hidden, ["edit.fade"], "Painting's menus are the ones in use");
+    assert!(!modified(p), "and the rows match the set they loaded");
+}
+
+/// A name dialog cancelled after Yes keeps the current set and its edits, and leaves nothing
+/// waiting behind it: the next Save stores under the name it is answered with and moves the row
+/// there, not to the set the cancelled switch was heading for.
+#[test]
+fn yes_whose_name_dialog_is_cancelled_keeps_the_set_and_its_edits() {
+    let files = Arc::new(ScriptedFiles::answering([Picked::Cancelled, Picked::Paths(vec!["My Menus.MNU".into()])]));
+    let mut h = harness(files.clone());
+    with_saved_sets(h.state_mut());
+    h.state_mut().run("edit.menus", json!({"useSet": "", "hide": ["layer.mergeVisible"]})).unwrap();
+    crate::prefs_ui::shortcuts::cancel(h.state_mut());
+    open_menus(&mut h);
+    assert_eq!(row_value(&h), "PhotoCraft Defaults (modified)", "the built-in set, with an edit");
+    pick(&mut h, "Web");
+    answer(&mut h, YES);
+    h.run_steps(3);
+    assert_eq!(files.requests().len(), 1, "Yes asked the Save dialog for a name");
+    assert_eq!(row_value(&h), "PhotoCraft Defaults (modified)", "the cancelled dialog switched nothing");
+    button(&h, SAVE).click();
+    h.run_steps(4);
+    assert_eq!(files.requests().len(), 2, "Save on the built-in set asked its own name");
+    assert_eq!(row_value(&h), "My Menus", "and the row moved to that name, not to the set the switch was heading for");
+    ok(&mut h);
+    let p = h.state().session.prefs();
+    assert_eq!(p.menu_set, "My Menus");
+    assert_eq!(p.menu_sets["My Menus"].hidden, ["layer.mergeVisible"], "the edit was saved once, under the picked name");
+    assert_eq!(p.menu_sets["Web"].hidden, ["edit.fade", "layer.mergeVisible"], "Web is as saved");
+}
+
+/// The "Don't show again" box, ticked with Yes, is kept with the other dialog preferences: the next
+/// switch asks nothing and switches at once.
+#[test]
+fn dont_show_again_on_the_switch_question_skips_it_for_the_next_switch() {
+    let mut h = harness(Arc::new(ScriptedFiles::new()));
+    with_saved_sets(h.state_mut());
+    open_menus(&mut h);
+    show_all(&mut h);
+    pick(&mut h, "Web");
+    let ctx = h.ctx.clone();
+    let id = question::<SetSwitch>(h.state()).expect("the switch question");
+    h.state_mut().framework.dialogs.set_json_field(&ctx, id, "skip", json!(true)).unwrap();
+    answer(&mut h, YES);
+    assert_eq!(row_value(&h), "Web", "Yes saved the modified set and switched");
+    let kept = h.state().session.prefs().dialogs.get(SWITCH_PREF).and_then(|v| v.get("skip")).and_then(Value::as_bool);
+    assert_eq!(kept, Some(true), "the ticked box is kept with the other dialog preferences");
+    // The next switch: no box, and the edits go as they do after the reference's No.
+    show_all(&mut h);
+    pick(&mut h, DEFAULTS_NAME);
+    assert!(!asked(&h), "the next switch asks nothing");
+    assert_eq!(row_value(&h), DEFAULTS_NAME, "and it went ahead at once");
+    ok(&mut h);
+    let p = h.state().session.prefs();
+    assert!(p.menu_set.is_empty(), "the built-in set is in use");
+    assert!(p.menus.hidden.is_empty(), "its menus are the ones in use");
+    assert_eq!(p.menu_sets["Web"].hidden, ["edit.fade", "layer.mergeVisible"], "Web kept its saved copy");
+}
+
+/// Delete asks with the measured question, naming the set, and only Yes removes anything; its No
+/// keeps the set, the row and the menus. The question is not one to silence, so it has no check box.
+#[test]
+fn no_of_the_delete_question_keeps_the_set_the_row_and_the_menus() {
+    let mut h = harness(Arc::new(ScriptedFiles::new()));
+    with_saved_sets(h.state_mut());
+    open_menus(&mut h);
+    button(&h, DELETE).click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Are you sure you want to send Painting to the recycle bin?").is_some(), "the measured question names the set");
+    assert!(question::<SetDelete>(h.state()).is_some(), "the box is the Delete question");
+    assert!(!h.get_by_role_and_label(Role::Button, YES).accesskit_node().is_disabled(), "Yes is live");
+    assert!(!h.get_by_role_and_label(Role::Button, NO).accesskit_node().is_disabled(), "No is live");
+    assert!(h.query_by_label(AGAIN).is_none(), "no Don't show again box on this question");
+    assert_eq!(row_value(&h), "Painting", "nothing is deleted while the box waits");
+    answer(&mut h, NO);
+    assert_eq!(row_value(&h), "Painting", "No keeps the set in use");
+    assert!(!greyed(&h, DELETE), "and Delete is still live");
+    ok(&mut h);
+    let p = h.state().session.prefs();
+    assert_eq!(p.menu_sets.keys().collect::<Vec<_>>(), ["Painting", "Web"], "No removed nothing");
+    assert_eq!(p.menu_set, "Painting");
 }
