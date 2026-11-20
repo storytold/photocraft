@@ -229,6 +229,8 @@ pub(crate) fn effect_maps_with<A: BufferAlloc>(layer: &Layer, rect: Rect, cx: &C
     }
     let mut h = std::collections::hash_map::DefaultHasher::new();
     cx.layer_keys.identity(layer, cx.doc).hash(&mut h);
+    // Converting a layer can reuse its exact tiles and ID but change how its stroke reads alpha.
+    std::mem::discriminant(&layer.content).hash(&mut h);
     (region.x0, region.y0, region.x1, region.y1).hash(&mut h);
     (cx.light.angle.to_bits(), cx.light.altitude.to_bits()).hash(&mut h);
     let key = h.finish();
