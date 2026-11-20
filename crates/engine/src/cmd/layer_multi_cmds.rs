@@ -71,7 +71,7 @@ fn can_link(s: &Session) -> std::result::Result<(), String> {
 }
 fn has_linked(s: &Session) -> std::result::Result<(), String> {
     let d = doc_state(s)?;
-    if link_groups(&d.doc, &d.selected_layers()).is_empty() { Err("the selected layers are not linked".into()) } else { Ok(()) }
+    if link_groups(&d.doc, d.selected_layers()).is_empty() { Err("the selected layers are not linked".into()) } else { Ok(()) }
 }
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -97,8 +97,8 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("select.deselectLayers", "Deselect Layers", &["Select"], None, "{}", has_doc, |s, _| {
             set_selection(s, Vec::new(), None, None)?;
             if let Some(st) = s.active_mut() {
-                st.active_layer = None;
-                st.selected_layers.clear();
+                st.set_active_layer(None);
+                st.selection_mut().clear();
             }
             Ok(Value::Null)
         }),
