@@ -444,7 +444,7 @@ impl WebShell {
                 }
             });
         }
-        served_fonts::install(&mut self.app, arrived);
+        served_fonts::install(&mut self.app, ctx, arrived);
     }
 }
 
