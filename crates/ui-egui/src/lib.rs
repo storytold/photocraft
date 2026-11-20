@@ -941,6 +941,8 @@ mod move_outline_tests;
 mod move_bar_distribute_gear_tests;
 
 #[cfg(test)]
+mod brush_picker_memo_trials;
+#[cfg(test)]
 mod brush_settle_trials;
 #[cfg(test)]
 mod chrome_settle_trials;

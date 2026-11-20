@@ -15,23 +15,24 @@ use craft::draw::ui::brush_settings::TipAngle;
 use craft::ui::buttons::{Button, ToggleButton};
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, MemoProps, MemoView, Outbox, Props as _, SaveKey, Show as _, Tracked, bind_tracked};
+use craft::ui::patterns::presets::PresetSource;
 use craft::ui::runtime::env::Env;
-use photocraft_engine::BrushSettings;
 use photocraft_engine::paint::{BrushPreset, MAX_BRUSH_SIZE, TipShape};
+use photocraft_engine::{BrushSettings, ToolState};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::brush_panel::brushes::{BrushKey, current_key, preset_rows, run_picks, tip_paint};
+use crate::brush_panel::brushes::{BrushKey, brush_source, current_key, run_picks, tip_paint};
 use crate::brush_panel::commit_keyed;
 use crate::state::Tool;
 
 /// Everything one pass of the picker reads from the app, built once so the canvas popup and the bar field show the same
 /// thing.
-pub(crate) struct PickerInput {
-    rows: Vec<craft::ui::patterns::presets::PresetRow<BrushKey>>,
+pub(crate) struct PickerInput<'a> {
+    source: PresetSource<'a, BrushKey>,
     current: Option<BrushKey>,
     values: BrushPickerValues,
-    tip: TipShape,
+    tip: &'a TipShape,
     face: BrushFace,
 }
 
@@ -50,35 +51,43 @@ impl BrushFace {
     }
 }
 
-impl PickerInput {
-    /// The rows, the current preset and the brush values as the app holds them now.
-    pub(crate) fn of(app: &PhotocraftApp, env: &Env) -> Self {
-        let tools = &app.session.tools;
-        Self::new(tools.presets.as_slice(), &tools.brush.tip, BrushFace::of(&tools.brush), current_key(tools), app.ui.brush_picker_state.parts, env)
+impl<'a> PickerInput<'a> {
+    /// The presets with the card `parts`, the current preset and the brush values as `tools` hold them now.
+    pub(crate) fn of(tools: &'a ToolState, parts: BrushCardParts) -> Self {
+        Self::new(&tools.presets, &tools.brush.tip, BrushFace::of(&tools.brush), current_key(tools), parts)
     }
 
-    /// The rows of `presets` with the card `parts`, `current` picked, and the brush's `tip` and `face`.
-    fn new(presets: &[BrushPreset], tip: &TipShape, face: BrushFace, current: Option<BrushKey>, parts: BrushCardParts, env: &Env) -> Self {
+    /// The presets of `presets` with the card `parts`, `current` picked, and the brush's `tip` and `face`.
+    fn new(presets: &'a Tracked<Arc<Vec<BrushPreset>>>, tip: &'a TipShape, face: BrushFace, current: Option<BrushKey>, parts: BrushCardParts) -> Self {
         let round = *tip == TipShape::Round;
         let values = BrushPickerValues::new(f64::from(face.size), round.then_some(f64::from(face.hardness)))
             .with_tip(TipAngle::new(f64::from(face.angle), f64::from(face.roundness)));
-        Self { rows: preset_rows(presets, env, parts), current, values, tip: tip.clone(), face }
+        Self { source: brush_source(presets, parts), current, values, tip, face }
     }
 
-    /// Every row's key, in list order.
-    fn keys(&self) -> Vec<BrushKey> {
-        self.rows.iter().map(|r| r.key.clone()).collect()
+    /// Every row's key, in list order, in the scope of `ui`.
+    fn keys(&self, ui: &egui::Ui) -> Vec<BrushKey> {
+        self.source.rows(ui.ctx(), &Env::of(ui)).iter().map(|r| r.key.clone()).collect()
     }
 
     /// The framework picker over this input and the picker's view `state`.
-    pub(crate) fn picker<'a>(&'a mut self, state: Bind<'a, BrushPickerState<BrushKey>>) -> BrushPresetPicker<'a, BrushKey> {
-        BrushPresetPicker::new(tl!("Brush Preset"), Bind::bound(&mut self.current), &self.rows, state, self.values)
+    pub(crate) fn picker<'p>(&'p mut self, state: Bind<'p, BrushPickerState<BrushKey>>) -> BrushPresetPicker<'p, BrushKey> {
+        BrushPresetPicker::new(tl!("Brush Preset"), Bind::bound(&mut self.current), &self.source, state, self.values)
             .max_diameter(f64::from(MAX_BRUSH_SIZE))
             .import()
             .gear_rows(gear_rows)
             .resizable(SaveKey::new("photocraft.brush_picker"))
-            .tip(std::sync::Arc::new(tip_paint(&self.tip, (self.face.hardness, self.face.angle, self.face.roundness))))
+            .tip(Arc::new(tip_paint(self.tip, (self.face.hardness, self.face.angle, self.face.roundness))))
     }
+}
+
+/// The Background Eraser's own rows under the compact picker's head: the brush and the tolerance they edit, and the
+/// brush as it was before the pass.
+struct EraserRows {
+    before: BrushSettings,
+    brush: BrushSettings,
+    tolerance: String,
+    key: Option<String>,
 }
 
 /// Sends each event of a head edit as a `tools.setBrush`; the events of one gesture share the coalesce key, so the
@@ -136,26 +145,28 @@ pub(crate) fn show_at(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
         close(app);
         return;
     }
-    let env = Env::of(ui);
-    let mut input = PickerInput::of(app, &env);
     let mut open = true;
-    let background_eraser = app.ui.tool == Tool::BackgroundEraser;
-    let row_before = (*app.session.tools.brush).clone();
-    let mut row_brush = row_before.clone();
-    let mut tolerance = app.ui.tool_options.bg_tolerance_control.clone();
-    let mut key = None;
-    let out = {
+    let mut eraser = (app.ui.tool == Tool::BackgroundEraser).then(|| {
+        let brush = (*app.session.tools.brush).clone();
+        EraserRows { before: brush.clone(), brush, tolerance: app.ui.tool_options.bg_tolerance_control.clone(), key: None }
+    });
+    let (out, keys) = {
+        let mut input = PickerInput::of(&app.session.tools, app.ui.brush_picker_state.parts);
         let picker = input.picker(bind_tracked!(app.ui.brush_picker_state)).open_at(egui::pos2(at[0], at[1]), Bind::bound(&mut open));
-        let picker =
-            if background_eraser { picker.compact(true).rows(|ui| key = crate::bg_eraser_popup::rows(ui, &mut row_brush, &mut tolerance)) } else { picker };
-        picker.show(ui)
+        let picker = match eraser.as_mut() {
+            Some(rows) => picker.compact(true).rows(|ui| rows.key = crate::bg_eraser_popup::rows(ui, &mut rows.brush, &mut rows.tolerance)),
+            None => picker,
+        };
+        let out = picker.show(ui);
+        let keys = if out.picks.is_empty() { Vec::new() } else { input.keys(ui) };
+        (out, keys)
     };
     let closed = !open || !out.open;
-    apply(app, ui.ctx(), &input.keys(), out);
-    if background_eraser {
-        commit_keyed(app, &row_before, &row_brush, key);
-        if app.ui.tool_options.bg_tolerance_control != tolerance {
-            app.ui.tool_options.bg_tolerance_control = tolerance;
+    apply(app, ui.ctx(), &keys, out);
+    if let Some(rows) = eraser {
+        commit_keyed(app, &rows.before, &rows.brush, rows.key);
+        if app.ui.tool_options.bg_tolerance_control != rows.tolerance {
+            app.ui.tool_options.bg_tolerance_control = rows.tolerance;
         }
     }
     if closed {
@@ -202,10 +213,9 @@ pub(crate) fn show_field(ui: &mut egui::Ui, app: &mut PhotocraftApp, enabled: bo
 
 /// The picker field's view.
 fn field_view(props: &mut FieldProps<'_>, ui: &mut egui::Ui) {
-    let env = Env::of(ui);
-    let mut input = PickerInput::new(props.presets.as_slice(), props.tip, props.face, props.current.clone(), props.state.parts, &env);
+    let mut input = PickerInput::new(props.presets, props.tip, props.face, props.current.clone(), props.state.parts);
     let out = input.picker(bind_tracked!(props.state)).enabled(props.enabled).show(ui);
-    let keys = if out.picks.is_empty() { Vec::new() } else { input.keys() };
+    let keys = if out.picks.is_empty() { Vec::new() } else { input.keys(ui) };
     props.out.send(FieldEvent(out, keys));
 }
 

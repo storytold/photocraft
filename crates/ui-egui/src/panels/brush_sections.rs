@@ -15,12 +15,12 @@ use craft::ui::form::{Field, SliderField, SliderFieldLayout};
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::patterns::presets::{PresetBrowser, PresetEvent, PresetState, PresetView};
 use craft::ui::pickers::Select;
-use craft::ui::runtime::env::{Env, UnitKind};
+use craft::ui::runtime::env::UnitKind;
 use egui::Ui;
 use photocraft_engine::BrushSettings;
 use photocraft_engine::paint::{self, BrushPreset, Control, Dynamic, MAX_BRUSH_SIZE, MaskMode, Pattern, PatternStyle, TipShape};
 
-use super::brush_panel::brushes::{BrushKey, preset_rows};
+use super::brush_panel::brushes::{BrushKey, brush_source};
 use super::preset_browser::pattern_picker;
 use crate::PhotocraftApp;
 use crate::history_keys;
@@ -194,9 +194,9 @@ impl Pane<'_> {
     /// name.
     fn tip_grid(&mut self, ui: &mut Ui, id: &'static str, selected: Option<BrushKey>) -> Option<String> {
         let parts = BrushCardParts::ALL.set(BrushCardPart::Name, false).set(BrushCardPart::Stroke, false);
-        let rows = preset_rows(self.app.session.tools.presets.as_slice(), &Env::of(ui), parts);
+        let source = brush_source(&self.app.session.tools.presets, parts);
         let mut state = PresetState::<BrushKey>::new();
-        let mut browser = PresetBrowser::new(tl!("Brush tips"), Bind::bound(&mut state), &rows)
+        let mut browser = PresetBrowser::new(tl!("Brush tips"), Bind::bound(&mut state), &source)
             .browser_id(egui::Id::unique(id))
             .view_lock(PresetView::Grid)
             .toolbar(false)

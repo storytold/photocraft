@@ -9,7 +9,7 @@ use craft::behavior::{EditEvent, EditEvents, GesturePhase};
 use craft::draw::ui::brush_presets::{BrushCardParts, BrushPick, BrushRowPaint, BrushesPanel, brush_row};
 use craft::keymap::Mods;
 use craft::ui::contract::{Bind, MemoProps, MemoView, Outbox, PlainData, ReorderMove, Tracked, bind_tracked};
-use craft::ui::patterns::presets::{PresetEvent, PresetRow, PresetState, PresetView};
+use craft::ui::patterns::presets::{PresetEvent, PresetFns, PresetRow, PresetSource, PresetState, PresetView};
 use craft::ui::primitives::ContentPainterCx;
 use craft::ui::primitives::textures::TextureCache;
 use craft::ui::runtime::env::Env;
@@ -84,15 +84,14 @@ fn picture(cx: &ContentPainterCx, rect: Rect, key: impl Hash + 'static, image: i
     cx.picture(texture, rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), 0.0);
 }
 
-/// How one preset paints its tip and its stroke; the framework texture store caches both by signature. A signature
-/// is taken when the row paints: rows built and never painted (the closed Brush Preset chip's, a measuring run's,
-/// rows out of view) take none.
+/// How one preset paints its tip and its stroke; the framework texture store caches both by signature. Both
+/// signatures are taken here, once per build of the rows, so a paint only reads them.
 fn paint_of(b: &BrushSettings) -> BrushRowPaint {
     let brush = b.clone();
+    let stroke_sig = brush_preview::preview_sig(b);
     BrushRowPaint::new(tip_paint(&b.tip, (b.hardness, b.angle, b.roundness)), move |cx, rect| {
         let color = Tokens::get(cx.painter.ctx()).text;
         let size = [rect.width().round().clamp(1.0, 1024.0) as usize, rect.height().round().clamp(1.0, 1024.0) as usize];
-        let stroke_sig = brush_preview::preview_sig(&brush);
         picture(cx, rect, ("brushes-stroke", stroke_sig, size, color), || brush_preview::stroke_image(&brush, size, color));
     })
 }
@@ -101,11 +100,22 @@ fn paint_of(b: &BrushSettings) -> BrushRowPaint {
 /// colour: a preset's thumbnail and the Brush Preset chip's current tip.
 pub(crate) fn tip_paint(tip: &TipShape, shape: (f32, f32, f32)) -> impl Fn(&ContentPainterCx, Rect) + Send + Sync + 'static {
     let tip = tip.clone();
+    let tip_key = brush_preview::tip_sig(&tip, shape.0, shape.1, shape.2, (false, false));
     move |cx, rect| {
         let color = Tokens::get(cx.painter.ctx()).text;
-        let tip_key = brush_preview::tip_sig(&tip, shape.0, shape.1, shape.2, (false, false));
         picture(cx, rect, ("brushes-tip", tip_key, color), || brush_preview::tip_image(&tip, shape, 36, color));
     }
+}
+
+/// The presets of the brush lists: every preset of `presets` in the engine's panel order, each row showing the card
+/// `parts`. The rows are built once per presets revision and parts.
+pub(crate) fn brush_source(presets: &Tracked<Arc<Vec<BrushPreset>>>, parts: BrushCardParts) -> PresetSource<'_, BrushKey> {
+    PresetSource::new((presets, parts), PresetFns::new(brush_rows))
+}
+
+/// The rows of [`brush_source`].
+fn brush_rows(input: &(&Tracked<Arc<Vec<BrushPreset>>>, BrushCardParts), env: &Env) -> Vec<PresetRow<BrushKey>> {
+    preset_rows(input.0.as_slice(), env, input.1)
 }
 
 /// The rows of every preset in the engine's panel order (the order `,` and `.` step through): a
@@ -194,17 +204,16 @@ pub(crate) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// The Brushes panel's view.
 fn show_panel(props: &mut BrushesProps<'_>, ui: &mut egui::Ui) {
-    let env = Env::of(ui);
-    let rows = preset_rows(props.presets.as_slice(), &env, parts_of(props.state.view));
+    let source = brush_source(props.presets, parts_of(props.state.view));
     let mut panel =
-        BrushesPanel::new(tl!("Brushes"), &rows, bind_tracked!(props.state), Bind::bound(&mut props.diameter), f64::from(MAX_BRUSH_SIZE)).import(true);
+        BrushesPanel::new(tl!("Brushes"), &source, bind_tracked!(props.state), Bind::bound(&mut props.diameter), f64::from(MAX_BRUSH_SIZE)).import(true);
     if let Some(current) = props.current.clone() {
         panel = panel.selected(current);
     }
     let out = panel.show(ui);
     props.out.send(BrushesEvent::Size(out.diameter.events));
     if !out.picks.is_empty() {
-        let keys = rows.iter().map(|row| row.key.clone()).collect();
+        let keys = source.rows(ui.ctx(), &Env::of(ui)).iter().map(|row| row.key.clone()).collect();
         props.out.send(BrushesEvent::Picks(out.picks, keys));
     }
 }
