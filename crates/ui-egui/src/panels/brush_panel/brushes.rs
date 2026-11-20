@@ -83,13 +83,15 @@ fn picture(cx: &ContentPainterCx, rect: Rect, key: impl Hash + 'static, image: i
     cx.picture(texture, rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), 0.0);
 }
 
-/// How one preset paints its tip and its stroke; the framework texture store caches both by signature.
+/// How one preset paints its tip and its stroke; the framework texture store caches both by signature. A signature
+/// is taken when the row paints: rows built and never painted (the closed Brush Preset chip's, a measuring run's,
+/// rows out of view) take none.
 fn paint_of(b: &BrushSettings) -> BrushRowPaint {
-    let stroke_sig = brush_preview::preview_sig(b);
     let brush = b.clone();
     BrushRowPaint::new(tip_paint(b), move |cx, rect| {
         let color = Tokens::get(cx.painter.ctx()).text;
         let size = [rect.width().round().clamp(1.0, 1024.0) as usize, rect.height().round().clamp(1.0, 1024.0) as usize];
+        let stroke_sig = brush_preview::preview_sig(&brush);
         picture(cx, rect, ("brushes-stroke", stroke_sig, size, color), || brush_preview::stroke_image(&brush, size, color));
     })
 }
@@ -99,9 +101,9 @@ fn paint_of(b: &BrushSettings) -> BrushRowPaint {
 pub(crate) fn tip_paint(b: &BrushSettings) -> impl Fn(&ContentPainterCx, Rect) + Send + Sync + 'static {
     let tip = b.tip.clone();
     let shape = (b.hardness, b.angle, b.roundness);
-    let tip_key = brush_preview::tip_sig(&tip, shape.0, shape.1, shape.2, (false, false));
     move |cx, rect| {
         let color = Tokens::get(cx.painter.ctx()).text;
+        let tip_key = brush_preview::tip_sig(&tip, shape.0, shape.1, shape.2, (false, false));
         picture(cx, rect, ("brushes-tip", tip_key, color), || brush_preview::tip_image(&tip, shape, 36, color));
     }
 }
