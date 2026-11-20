@@ -544,7 +544,7 @@ mod damage_log_tests {
         let mut doc = Document::new("test", Size::new(40, 40), ColorMode::Rgb, SampleType::U8);
         let mut layer = photocraft_doc::Layer::raster("empty", photocraft_color::PixelFormat::RGBA8);
         layer.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
-        doc.layers = vec![layer];
+        doc.layers = vec![layer].into();
         let mut st = DocState::new(doc, None);
         let before = st.revision;
         let ink = Rect::new(10, 10, 12, 12);
@@ -568,7 +568,7 @@ mod damage_log_tests {
         for _ in 0..256 {
             group = photocraft_doc::Layer::group("group", vec![group]);
         }
-        doc.layers = vec![group];
+        doc.layers = vec![group].into();
         let mut st = DocState::new(doc, None);
         let before = st.revision;
         st.bump_revision(false);
