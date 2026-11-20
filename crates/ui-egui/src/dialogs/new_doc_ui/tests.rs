@@ -1,6 +1,6 @@
 use super::*;
 use crate::new_doc_remember_tests::{app, fields, harness, open, press_create};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 /// The default settings with `edit` applied.
 fn options(edit: impl FnOnce(&mut DocumentOptions)) -> DocumentOptions {
