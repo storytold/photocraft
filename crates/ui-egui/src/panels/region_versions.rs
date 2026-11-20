@@ -23,7 +23,7 @@ pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
     let sessions =
         (crate::transform_tool::bar_key(app), crate::puppet_ui::bar_key(app), crate::perspective_ui::bar_key(app), crate::crop_ui::bar::bar_key(app));
     let shown = (serialized(&app.ui.tool_options), super::options_bar::edit_key(app), text_target(app));
-    version(app, (view(app), sessions, shown, brush(app), colours(app)))
+    version(app, (view(app), sessions, shown, brush(app), colours(app), app.session.prefs().workspace.narrow_options_bar()))
 }
 
 /// The version of the title bar: the title it shows (the active document's name and its unsaved mark), the language

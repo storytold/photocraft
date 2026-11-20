@@ -2,13 +2,13 @@
 
 use std::ops::RangeInclusive;
 
-use craft::behavior::PixelSize;
 use craft::behavior::geometry::{Constraint, SelectionOperation};
+use craft::behavior::{IconId, PixelSize};
 use craft::imaging::ui::select::{SelectionOpWords, selection_operations};
 use craft::ui::bars::ConstraintFields;
-use craft::ui::buttons::{Button, ToggleButton};
+use craft::ui::buttons::{Button, IconButton, ToggleButton};
 use craft::ui::choice::{Checkbox, Segmented};
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing, clicked};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
 use craft::ui::display::{Divider, Shade, Text};
 use craft::ui::form::Field;
 use craft::ui::runtime::commands::{CommandRef, CommandState};
@@ -118,8 +118,21 @@ pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandSta
 }
 
 /// The Select and Mask… button; its enabled state is [`command_states`]'.
-fn select_and_mask(ui: &mut egui::Ui) {
-    Button::command(SELECT_AND_MASK).show(ui);
+fn select_and_mask(app: &PhotocraftApp, ui: &mut egui::Ui) {
+    if app.session.prefs().workspace.narrow_options_bar() {
+        IconButton::command(IconId::new("layer_mask"), SELECT_AND_MASK).tooltip(label("Select and Mask…")).show(ui);
+    } else {
+        Button::command(SELECT_AND_MASK).show(ui);
+    }
+}
+
+/// The Select Subject action shared by the selection tools.
+pub(crate) fn select_subject(app: &mut PhotocraftApp, ui: &mut egui::Ui, empty: &str) {
+    let compact = app.session.prefs().workspace.narrow_options_bar();
+    if crate::option_cells::action(ui, label("Select Subject"), IconId::new("object_select"), true, compact).clicked() {
+        let result = app.run("select.subject", serde_json::json!({}));
+        crate::retouch_ui::report_smart_result(app, result, empty);
+    }
 }
 
 /// The marquee's Style, Width, swap and Height cells over the stored tool options.
@@ -185,7 +198,7 @@ fn marquee(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
     // A single row or column has no style or size: Photoshop greys them.
     constraint_fields(app, ui, matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee));
     divider(ui);
-    select_and_mask(ui);
+    select_and_mask(app, ui);
 }
 
 /// A faint hint after the members.
@@ -205,7 +218,7 @@ fn lasso(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
         magnetic_settings(app, ui);
         divider(ui);
     }
-    select_and_mask(ui);
+    select_and_mask(app, ui);
     let enter = crate::shortcuts::pretty("Enter");
     // The framework's selection tools own the open outline the hints follow.
     if tool == Tool::MagneticLasso {
@@ -285,12 +298,8 @@ fn wand(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.ui.tool_options.sample_all.magic_wand = next;
     }
     divider(ui);
-    let subject = Button::new(label("Select Subject")).show(ui);
-    if clicked(&subject.response) {
-        let result = app.run("select.subject", serde_json::json!({}));
-        crate::retouch_ui::report_smart_result(app, result, tl!("No subject found — try Object Selection or the Lasso"));
-    }
-    select_and_mask(ui);
+    select_subject(app, ui, tl!("No subject found — try Object Selection or the Lasso"));
+    select_and_mask(app, ui);
 }
 
 /// Shows the members of `tool`'s bar; false for a tool without selection members.

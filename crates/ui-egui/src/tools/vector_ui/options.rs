@@ -1,11 +1,10 @@
-use craft::behavior::EditEvent;
+use craft::behavior::{EditEvent, IconId};
 use craft::color_ui::ui::Paint;
 use craft::draw::ui::pen::PathOptionsPopover;
 use craft::draw::ui::shape::{self as fw, Arrowheads, ArrowheadsPopover, ShapePanel, StrokeCells, VectorMode, VectorModeSelect};
 use craft::theme::Srgba;
-use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::{Divider, Text};
 use craft::ui::layout_components::Row;
 use craft::ui::runtime::env::{Label, UnitKind};
@@ -245,9 +244,10 @@ fn make_buttons(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let has_mask_path = has_path && !(pending && super::path_ops::targeted_vector_mask(app).is_some());
     // Make: Shape turns the path into a shape layer with the shape fill and stroke.
     let has_shape_path = pending || super::path_ops::shape_source_path(app).is_some();
-    let selection = clicked(&Button::new(label(tl!("Selection…"))).enabled(has_path).show(ui));
-    let mask = clicked(&Button::new(label(tl!("Mask"))).enabled(has_mask_path).show(ui));
-    let shape = clicked(&Button::new(label(tl!("Shape"))).enabled(has_shape_path).show(ui));
+    let compact = app.session.prefs().workspace.narrow_options_bar();
+    let selection = crate::option_cells::action(ui, label(tl!("Selection…")), IconId::new("rect_dashed"), has_path, compact).clicked();
+    let mask = crate::option_cells::action(ui, label(tl!("Mask")), IconId::new("layer_mask"), has_mask_path, compact).clicked();
+    let shape = crate::option_cells::action(ui, label(tl!("Shape")), IconId::new("vector-shape"), has_shape_path, compact).clicked();
     let made = if selection {
         crate::canvas_tool_menu::pen_dialogs::make_selection(app)
     } else if mask {
