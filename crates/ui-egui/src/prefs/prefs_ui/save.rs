@@ -178,7 +178,7 @@ fn link_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let focused = ctx.input(|i| i.focused);
     let was_focused: bool = ctx.data(|d| d.get_temp(focus_key)).unwrap_or(focused);
     ctx.data_mut(|d| d.insert_temp(focus_key, focused));
-    let has_links = app.session.active().is_some_and(|d| !photocraft_engine::link_watch::linked_files(&d.doc).is_empty());
+    let has_links = app.session.active().is_some_and(|d| app.doc_queries.has_linked_files(&app.session, d));
     if !has_links {
         return;
     }
@@ -212,6 +212,11 @@ fn autosave(app: &mut PhotocraftApp, now: Instant) {
                 autosave_failed(app, failed);
             }
         }
+    }
+    // Apply Data Set's Preview is not the document: autosave waits until the preview ends, and
+    // the timer keeps what is due for the next tick.
+    if crate::panels::apply_data_set_ui::previewing(app) {
+        return;
     }
     let docs: Vec<AutosaveDoc> = app.session.documents().iter().map(|d| AutosaveDoc { id: d.doc.id.0, revision: d.revision, dirty: d.is_dirty() }).collect();
     let due = app.autosave.due(now, docs);
