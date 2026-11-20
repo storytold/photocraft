@@ -662,7 +662,7 @@ fn main() -> eframe::Result {
             // for the whole run instead.
             app.services.agent_switch = Some(craft::automation::agents::AgentSwitch::watch(photocraft_automation::agent_link::LAUNCHER_APP_ID, {
                 let ctx = cc.egui_ctx.clone();
-                craft::host::Wake::new(move || ctx.request_repaint())
+                move || ctx.request_repaint()
             }));
             let link = if let Some((listener, token, _)) = control {
                 let host = craft::ui::runtime::windows::WindowHost::of(&cc.egui_ctx);

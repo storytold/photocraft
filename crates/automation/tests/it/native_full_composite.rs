@@ -79,7 +79,7 @@ fn scripted_native_saves_keep_assigned_display_p3_profile_and_samples() {
             let mut surface = photocraft_raster::Surface::new(doc.pixel_format());
             surface.write_pixel(0, 0, &[0.25, 0.5, 0.75, 1.0]);
             surface.write_pixel(1, 0, &[0.8, 0.2, 0.1, 0.4]);
-            doc.layers = vec![photocraft_doc::Layer::new("Samples", photocraft_doc::LayerContent::Raster(surface))];
+            doc.layers = vec![photocraft_doc::Layer::new("Samples", photocraft_doc::LayerContent::Raster(surface))].into();
             Ok(())
         })
         .unwrap();
