@@ -1,4 +1,4 @@
-//! Edit â€º Menus â€º Set: named menu sets, as in Photoshop. The customization in use stays in
+//! Edit › Menus › Set: named menu sets, as in Photoshop. The customization in use stays in
 //! [`Preferences::menus`] (what the menus read); a set is a saved copy of it,
 //! `Preferences::menu_sets` keyed by name, and `Preferences::menu_set` names the one in use
 //! ("" for the built-in set, [`DEFAULTS_NAME`]). The menus differ from the set in use after an
@@ -31,7 +31,7 @@ use crate::prefs::{MenuCustomization, Preferences};
 pub const DEFAULTS_NAME: &str = crate::shortcut_sets::DEFAULTS_NAME;
 /// Saved sets are small; the cap keeps a hostile settings file or call bounded.
 pub const MAX_SETS: usize = crate::shortcut_sets::MAX_SETS;
-/// The colours Edit â€º Menus gives an item; `none` is no colour. The reference application's
+/// The colours Edit › Menus gives an item; `none` is no colour. The reference application's
 /// twelve-entry list is #14336, not #14450.
 pub const COLORS: [&str; 8] = ["none", "red", "orange", "yellow", "green", "blue", "violet", "gray"];
 
@@ -188,7 +188,7 @@ pub const MAX_MNU_BYTES: usize = 1 << 20;
 /// The most set files one folder read takes, as [`MAX_SETS`] bounds the saved sets.
 pub const MAX_SET_FILES: usize = MAX_SETS;
 /// PhotoCraft's name in the root element, lower case, as the reference application spells its own:
-/// `<photocraft-menu-settings â€¦>`.
+/// `<photocraft-menu-settings …>`.
 const APP_NAME: &str = "photocraft";
 /// What the root element's name ends with, in both applications.
 const ROOT_SUFFIX: &str = "-menu-settings";
@@ -256,7 +256,7 @@ pub fn color_name(number: u32) -> Option<&'static str> {
     usize::try_from(number).ok().and_then(|at| COLORS.get(at)).copied()
 }
 
-/// What a `.mnu` file holds: the set the rows we know describe, and the entries we cannot name â€” a
+/// What a `.mnu` file holds: the set the rows we know describe, and the entries we cannot name — a
 /// row with a number of theirs, a `<command>` that is not a static one, and any other element. A
 /// rewrite writes those back as they were read, which is what the issue asks for.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -330,8 +330,8 @@ pub fn from_mnu(text: &str) -> Result<Mnu, String> {
 }
 
 /// The `.mnu` text of the set `name`: the measured root element, one row per changed item that has a
-/// measured number ([`REF_ITEMS`]) â€” hidden items and coloured items, in the file's own numeric order
-/// â€” and then `kept`, the entries a file held that PhotoCraft cannot name. An item of ours without a
+/// measured number ([`REF_ITEMS`]) — hidden items and coloured items, in the file's own numeric order
+/// — and then `kept`, the entries a file held that PhotoCraft cannot name. An item of ours without a
 /// measured number has no row to write, so it lives in the preferences until it gets one.
 pub fn to_mnu(name: &str, set: &MenuSet, kept: &[String]) -> String {
     let root = format!("{APP_NAME}{ROOT_SUFFIX}");
@@ -362,7 +362,7 @@ pub fn to_mnu(name: &str, set: &MenuSet, kept: &[String]) -> String {
     out
 }
 
-/// The folder `settings` â€” the settings directory â€” keeps its menu sets in.
+/// The folder `settings` — the settings directory — keeps its menu sets in.
 pub fn folder(settings: &Path) -> PathBuf {
     settings.join(SETS_DIR)
 }
