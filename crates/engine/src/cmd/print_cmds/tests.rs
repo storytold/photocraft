@@ -789,6 +789,34 @@ fn disabled_printing_never_spools() {
     assert!(r["command"].is_array(), "{r}");
 }
 
+/// #15847: after `disable_printing`, `file.print.page` asks no driver, neither for the default
+/// printer nor for a named one's page, so a stuck spooler can't keep `SPOOLER` held for the rest
+/// of the process. A bad orientation is still that error.
+#[test]
+fn disabled_printing_asks_no_driver_for_a_page() {
+    super::disable_printing();
+    let mut s = Session::new();
+    for p in [json!({}), json!({"printer": "Anything", "orientation": "landscape"})] {
+        let e = s.execute("file.print.page", p.clone()).unwrap_err().to_string();
+        assert!(e.contains("printer queries are disabled"), "{p}: {e}");
+    }
+    let e = s.execute("file.print.page", json!({"orientation": "sideways"})).unwrap_err().to_string();
+    assert!(e.contains("orientation"), "{e}");
+}
+
+/// `PHOTOCRAFT_NO_PRINT` stops spooling, not reading a page (#10067 reads driver settings under
+/// it). Off Windows the driver route answers without a spooler, so no real driver is asked.
+#[cfg(not(windows))]
+#[test]
+fn the_no_print_environment_still_reads_a_page() {
+    if !in_child("cmd::print_cmds::tests::the_no_print_environment_still_reads_a_page", &[("PHOTOCRAFT_NO_PRINT", "1")]) {
+        return;
+    }
+    let mut s = Session::new();
+    let e = s.execute("file.print.page", json!({"printer": "Anything"})).unwrap_err().to_string();
+    assert!(!e.contains("disabled"), "{e}");
+}
+
 #[test]
 fn printers_lists_the_spooler_destinations_without_a_document() {
     let mut s = Session::new();
