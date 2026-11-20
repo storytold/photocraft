@@ -393,6 +393,9 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
 
 /// Dispatch UI actions and dialogs, falling back to the engine for other commands.
 pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    // File › Save and the unsaved-changes prompt's Save write from here without `run`: they must
+    // not write Apply Data Set's Preview either. The dialog shows it again on the next frame.
+    crate::panels::apply_data_set_ui::end_preview(app);
     if let Some(result) = crate::smart_svg_ui::intercept(app, id, &params) {
         return result;
     }

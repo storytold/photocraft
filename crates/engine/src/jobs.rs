@@ -1721,7 +1721,7 @@ impl Session {
         // authorization, validation, floating-selection and admission failures.
         let live_commit = self.live_commit.take();
         self.sync_scratch_state();
-        let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        let spec = crate::registry::spec(id)?;
         // Params are named fields: anything but an object (or null, meaning none) is a caller
         // mistake, not "use every default".
         if !(params.is_object() || params.is_null()) {
@@ -1874,6 +1874,7 @@ impl Session {
                     } else if !st.fx_collapsed.contains(&layer_id) {
                         st.fx_collapsed.push(layer_id);
                     }
+                    st.note_disclosure_change();
                 }
                 self.after_command(id, params, spec.journal, automation, Some(nested_from), pre_selected.as_deref(), &record_before);
                 Ok(Started::Done(v))
