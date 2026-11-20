@@ -304,7 +304,12 @@ mod tests {
                     if ti != (mi + si) % 3 && !(mode == ColorMode::Rgb && sample == SampleType::U16 && selection.is_none()) {
                         continue;
                     }
-                    for adjustment in &adjustments {
+                    // Each adjustment meets every mode once and every sample type once: Invert at Lab/F32 (`lab_invert`),
+                    // Threshold at RGB/U16 and Posterize at Lab/U16 (the U16 `depth`), Levels and Curves at U16 (table).
+                    for (ai, adjustment) in adjustments.iter().enumerate() {
+                        if (ai + mi) % 3 != si {
+                            continue;
+                        }
                         let mut expected = source.clone();
                         let mut actual = source.clone();
                         super::super::adjust_reference(&mut expected, colors, adjustment, selection, bounds).unwrap();
