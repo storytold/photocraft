@@ -117,11 +117,12 @@ pub(super) fn mask_style_from_active_layer(app: &PhotocraftApp) -> Option<serde_
     if !c.font_style.is_empty() {
         p["fontStyle"] = json!(c.font_style);
     }
-    let size = json!(c.size_pt * shown_scale(app));
-    // A size the document carries that is not a finite number stays out, so the tool's own size
-    // applies, as it does today.
-    if finite_style_value(&size) {
-        p["size"] = size;
+    let size = c.size_pt * shown_scale(app);
+    // Gate the f32 itself: `json!` turns a non-finite size into `null`, `finite_style_value`
+    // accepts `null`, and `type.create` then refuses the whole click. A document carrying such a
+    // size keeps the tool's own, as it does for a family or style the layer does not name.
+    if size.is_finite() {
+        p["size"] = json!(size);
     }
     Some(p)
 }

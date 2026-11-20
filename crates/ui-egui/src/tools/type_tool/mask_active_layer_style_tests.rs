@@ -270,6 +270,35 @@ fn a_layer_that_names_no_family_or_style_gives_only_its_size() {
     assert_eq!(mask_style(&app), ("Tool Font".into(), "Regular".into(), 80.0), "the size is taken, the empty names are not");
 }
 
+/// A document as a corrupt file can leave it: the active layer's runs carry `bad` as their size, a
+/// value no `type` command writes (the commands keep the size within 0.1-1296 pt).
+fn corrupt_layer_size(app: &mut PhotocraftApp, id: LayerId, bad: f32) {
+    let st = app.session.active_mut().unwrap();
+    let mut doc = (*st.doc).clone();
+    if let Some(photocraft_doc::LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
+        t.size_pt = bad;
+        for r in &mut t.runs {
+            r.style.size_pt = bad;
+        }
+    }
+    st.doc = std::sync::Arc::new(doc);
+    st.revision += 1;
+}
+
+/// The corrupt-document case: a layer size that is not a finite number. It stays out of the create
+/// parameters, so the mask still starts - at the tool's own size, with the layer's font and style
+/// taken as measured. Red without the gate on the finite product: the size becomes JSON `null`,
+/// `type.create` refuses it, and the click does nothing at all.
+#[test]
+fn a_non_finite_layer_size_keeps_the_tool_size() {
+    for bad in [f32::NAN, f32::INFINITY] {
+        let (mut app, id) = txt_active(80.0);
+        corrupt_layer_size(&mut app, id, bad);
+        mask(&mut app, (60.0, 300.0), "MASK");
+        assert_eq!(mask_style(&app), ("Inter".into(), "Bold".into(), 48.0), "the tool's size, not a null the engine rejects ({bad})");
+    }
+}
+
 /// Not measured: whether the tool options themselves change afterwards. Today they do not, and
 /// they still do not. Guard test: passes before and after the change.
 #[test]
