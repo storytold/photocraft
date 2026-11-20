@@ -329,6 +329,9 @@ const ART_HISTORY_HOLD_MS: f64 = 16.0;
 /// New strokes per hold: about 4 s of them, when the reference application's growth has stopped
 /// (the Area circle is covered).
 const ART_HISTORY_HOLD_MAX: usize = 250;
+/// A press held still for less than this (ms) is a click, which paints at its point alone, as
+/// Shift-click does (#12627); a longer hold starts its new strokes counted from the press.
+const ART_HISTORY_CLICK_MS: f64 = 200.0;
 
 /// The points an Art History Brush press commits. Where the pointer was held still (its repeats,
 /// `canvas::stroke_wants_time`), new strokes keep starting inside the circle of diameter Area
@@ -383,7 +386,8 @@ fn art_history_points(app: &PhotocraftApp, points: &[[f64; 3]], o: &crate::state
         let t = app.stylus.point_ms(i);
         match &mut hold {
             Some((h, since, n)) if near(q, h) => {
-                let due = (((t - *since) / ART_HISTORY_HOLD_MS) as usize).min(ART_HISTORY_HOLD_MAX);
+                let held = t - *since;
+                let due = if held < ART_HISTORY_CLICK_MS { 0 } else { ((held / ART_HISTORY_HOLD_MS) as usize).min(ART_HISTORY_HOLD_MAX) };
                 while *n < due && room > 0 {
                     let kf = (k + 1) as f64;
                     let (a, d) = ((kf * R2.0).fract() * std::f64::consts::TAU, r * (kf * R2.1).fract().sqrt());
