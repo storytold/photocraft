@@ -295,12 +295,16 @@ pub fn open(app: &mut PhotocraftApp, tab: u64) {
     app.prefs_rt.shortcuts = Some(session);
     // The sets the menu-sets folder holds join the row: in the reference application the folder is
     // where a set lives, so a file is the set of that name, and a set the folder has no file for keeps
-    // the copy the preferences hold. A file that does not read is said out loud, not skipped in
-    // silence (#14450).
+    // the copy the preferences hold. A file speaks only for the items its rows number: the row's set
+    // is that file merged with the preferences' copy, which keeps every item the file has no row for
+    // (`menu_sets::merged_with_prefs`). Reading the file whole instead would empty a set whose changes
+    // are on items we have no measured number for - the file of such a set holds no rows at all. A
+    // file that does not read is said out loud, not skipped in silence (#14450).
     let (from_files, errors) = read_set_files(app);
     if let Some(session) = app.prefs_rt.shortcuts.as_mut() {
-        for (name, set) in from_files {
-            session.menus.sets.insert(name, set);
+        for (name, file) in from_files {
+            let held = session.menus.sets.get(&name).cloned();
+            session.menus.sets.insert(name, menu_sets::merged_with_prefs(&file, held.as_ref()));
         }
     }
     if let Some(first) = errors.first() {

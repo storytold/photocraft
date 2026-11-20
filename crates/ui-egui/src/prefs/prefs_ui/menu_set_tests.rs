@@ -944,3 +944,68 @@ fn a_cancelled_dialog_writes_no_set_file() {
     assert_eq!(text.matches("<command").count(), 1, "one row for the one changed item left: {text}");
     assert_eq!(h.state().session.prefs().menu_sets["Painting"].hidden, [] as [String; 0], "and the preferences agree with the file");
 }
+
+/// A set's file speaks for the items it numbers and for nothing else: the copy the preferences hold
+/// stays authoritative for items with no row in `REF_ITEMS`. The repro: hide Edit › Copy and Edit ›
+/// Paste - neither has a measured number, so the file of "Mine" holds no row at all - Save the
+/// modified built-in set under that name through the dialog, OK, and open the row again.
+#[test]
+fn a_set_file_speaks_only_for_the_items_it_numbers_and_the_preferences_fill_the_rest() {
+    let tmp = tempfile::tempdir().expect("a settings folder");
+    let chosen = menu_sets::folder(tmp.path()).join("Mine.MNU");
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![chosen])]));
+    let mut h = file_harness(files, tmp.path());
+    h.state_mut().run("edit.menus", json!({"hide": ["edit.copy", "edit.paste"]})).unwrap();
+    open_menus(&mut h);
+    button(&h, SAVE).click();
+    h.run_steps(4);
+    assert_eq!(row_value(&h), "Mine", "the picked file names the new set");
+    ok(&mut h);
+    let text = set_file(tmp.path(), "Mine").expect("OK wrote Mine's file");
+    assert_eq!(text.matches("<command").count(), 0, "neither item has a measured number, so the file holds no row: {text}");
+    assert_eq!(h.state().session.prefs().menu_sets["Mine"].hidden, ["edit.copy", "edit.paste"], "the preferences hold both");
+    // Reopening reads the folder: the file has nothing to say about these two items, so the set is
+    // still the one that was saved and the row is not "modified" beside it.
+    open_menus(&mut h);
+    assert_eq!(row_value(&h), "Mine", "the thinner file did not replace the saved set");
+    // And choosing away and back keeps both items: choosing a set loads its stored copy, so an empty
+    // file must not become an empty set.
+    choose(&mut h, DEFAULTS_NAME);
+    choose(&mut h, "Mine");
+    assert_eq!(row_value(&h), "Mine", "Mine still reads as saved");
+    ok(&mut h);
+    let p = h.state().session.prefs();
+    assert_eq!(p.menu_sets["Mine"].hidden, ["edit.copy", "edit.paste"], "reopening lost nothing from the set");
+    assert_eq!(p.menus.hidden, ["edit.copy", "edit.paste"], "and nothing from the menus in use");
+}
+
+/// Where the file and the preferences disagree about an item the file does number, the file wins:
+/// the folder is where a saved set lives, so its row is the newer word on that item. Items the file
+/// has no row for keep the preferences' copy.
+#[test]
+fn a_file_row_decides_its_own_item_and_the_preferences_keep_the_rest() {
+    let tmp = tempfile::tempdir().expect("a settings folder");
+    let text = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+        "<photocraft-menu-settings version=\"2\" filename=\"$$$/FileName/Presets/MenuCustomization/Mine=Mine\" modified=\"0\">\n",
+        "  <command kind=\"static\" id=\"10\" parentMenuID=\"2\" menuType=\"0\" hidden=\"0\" color=\"4\"/>\n",
+        "</photocraft-menu-settings>\n",
+    );
+    write_set_file(tmp.path(), "Mine", text.as_bytes());
+    let mut h = file_harness(Arc::new(ScriptedFiles::new()), tmp.path());
+    // The preferences' copy of Mine hides File › New (the file shows it and colours it green) and
+    // hides Edit › Copy, which the file has no number for.
+    h.state_mut()
+        .run("edit.menus", json!({"sets": {"Mine": {"hidden": ["file.new", "edit.copy"], "colors": {"edit.paste": "red"}}}, "activeSet": "Mine"}))
+        .unwrap();
+    h.state_mut().run("edit.menus", json!({"useSet": "Mine"})).unwrap();
+    open_menus(&mut h);
+    assert_eq!(row_value(&h), "Mine (modified)", "the folder's row is the newer word on File › New, so the menus in use differ from the merged set");
+    choose(&mut h, DEFAULTS_NAME);
+    choose(&mut h, "Mine");
+    ok(&mut h);
+    let p = h.state().session.prefs();
+    assert_eq!(p.menu_sets["Mine"].hidden, ["edit.copy"], "the file's row for File › New won, the unnumbered item stayed: {:?}", p.menu_sets["Mine"].hidden);
+    assert_eq!(p.menu_sets["Mine"].colors["edit.paste"], "red", "an item the file has no row for keeps its colour");
+    assert_eq!(p.menu_sets["Mine"].colors["file.new"], "green", "the file's own row brings its own colour");
+}

@@ -236,8 +236,8 @@ fn menu_sets_are_saved_with_the_preferences_and_an_older_file_loads_without_them
 // ---- the `.mnu` files: the sets as files in the settings directory (#14450) ----
 
 use crate::menu_sets::{
-    self, MAX_MNU_BYTES, MenuSet, REF_ITEMS, color_name, color_number, file_name, folder, from_mnu, path_of, read_sets, ref_command, ref_item, set_name_of,
-    to_mnu, write_set,
+    self, MAX_MNU_BYTES, MenuSet, REF_ITEMS, color_name, color_number, file_name, folder, from_mnu, merged_with_prefs, path_of, read_sets, ref_command,
+    ref_item, set_name_of, to_mnu, write_set,
 };
 
 /// A set: its hidden items and its colours, as `saveSet` would store them.
@@ -509,6 +509,44 @@ fn a_file_the_reference_application_wrote_reads_as_a_set() {
     assert_eq!(hidden_of(&read.set), vec!["file.close".to_string(), "layer.mergeVisible".to_string()]);
     assert_eq!(read.set.colors["file.close"], "blue", "both rows of File › Close came together");
     assert!(read.kept.is_empty(), "{read:?}");
+}
+
+#[test]
+fn a_file_and_the_preferences_copy_of_a_name_make_one_set() {
+    // The file speaks for the items its rows number; the preferences speak for the items it has no
+    // row for. This is the engine half of the row's open(): a file read whole instead would lose
+    // every change of a set whose items have no measured number.
+    let file = set(&["file.new", "edit.fade"], &[("layer.mergeVisible", "gray")]);
+    let prefs = set(&["edit.copy", "file.new"], &[("edit.paste", "red"), ("edit.fade", "blue")]);
+    let merged = merged_with_prefs(&file, Some(&prefs));
+    assert_eq!(
+        hidden_of(&merged),
+        vec!["edit.copy".to_string(), "edit.fade".to_string(), "file.new".to_string()],
+        "Edit › Copy has no row so the preferences keep it; the file's rows decide File › New and Edit › Fade"
+    );
+    assert_eq!(merged.colors.get("edit.paste").map(String::as_str), Some("red"), "an item with no row keeps its colour");
+    assert_eq!(merged.colors.get("layer.mergeVisible").map(String::as_str), Some("gray"), "a file row brings its own colour");
+    assert!(!merged.colors.contains_key("edit.fade"), "the file's row for Edit › Fade carries no colour, so the preferences' blue does not survive it");
+    // A row that shows an item again overrides the preferences' hide of it: the file's row is the
+    // whole word on its own item, both attributes of it.
+    let file = set(&[], &[("edit.fade", "red")]);
+    let prefs = set(&["edit.fade", "edit.copy"], &[]);
+    let merged = merged_with_prefs(&file, Some(&prefs));
+    assert_eq!(hidden_of(&merged), vec!["edit.copy".to_string()], "the file shows Edit › Fade again: {merged:?}");
+    assert_eq!(merged.colors.get("edit.fade").map(String::as_str), Some("red"));
+    // The repro: a set whose every change is on unnumbered items writes a file that holds no row.
+    let written = to_mnu("Mine", &set(&["edit.copy", "edit.paste"], &[]), &[]);
+    assert_eq!(written.matches("<command").count(), 0, "no row for either item: {written}");
+    let from_file = from_mnu(&written).expect("our own file reads");
+    assert!(from_file.set.hidden.is_empty() && from_file.set.colors.is_empty(), "the file alone is an empty set: {from_file:?}");
+    let merged = merged_with_prefs(&from_file.set, Some(&set(&["edit.copy", "edit.paste"], &[])));
+    assert_eq!(hidden_of(&merged), vec!["edit.copy".to_string(), "edit.paste".to_string()], "with the preferences' copy both are there");
+    // Where the preferences hold no copy, the file is the whole set, and a file that reads as nothing
+    // gives nothing rather than guessing.
+    let merged = merged_with_prefs(&set(&["file.open"], &[("edit.fade", "blue")]), None);
+    assert_eq!(hidden_of(&merged), vec!["file.open".to_string()]);
+    assert_eq!(merged.colors.get("edit.fade").map(String::as_str), Some("blue"));
+    assert_eq!(merged_with_prefs(&set(&[], &[]), None), MenuSet::default(), "a file with no rows is an empty set");
 }
 
 #[test]

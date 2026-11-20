@@ -172,6 +172,31 @@ pub fn describe(p: &Preferences) -> Value {
     })
 }
 
+/// The set the file of a name describes, filled in from the copy the preferences hold under that
+/// name: a `.mnu` file speaks for the items it numbers ([`REF_ITEMS`]) and for nothing else, so an
+/// item with no row in it keeps what the preferences say about it. Without this, a set whose changes
+/// are all on unnumbered items would be written as a file with no rows and read back as an empty
+/// set, which is data lost. `prefs` is `None` where the preferences hold no such set: there the file
+/// is all there is to go by, and it is its set as read.
+pub fn merged_with_prefs(file: &MenuSet, prefs: Option<&MenuSet>) -> MenuSet {
+    let Some(prefs) = prefs else { return normalized(file) };
+    let numbered = |id: &str| REF_ITEMS.iter().any(|item| item.command == id);
+    let mut merged = MenuSet::default();
+    for id in prefs.hidden.iter().filter(|id| !numbered(id)) {
+        merged.hidden.push(id.clone());
+    }
+    for id in file.hidden.iter().filter(|id| numbered(id)) {
+        merged.hidden.push(id.clone());
+    }
+    for (id, color) in prefs.colors.iter().filter(|(id, _)| !numbered(id)) {
+        merged.colors.insert(id.clone(), color.clone());
+    }
+    for (id, color) in file.colors.iter().filter(|(id, _)| numbered(id)) {
+        merged.colors.insert(id.clone(), color.clone());
+    }
+    normalized(&merged)
+}
+
 // ---- the `.mnu` files: the sets as files in the settings directory (#14450) ----
 
 use std::path::{Path, PathBuf};
