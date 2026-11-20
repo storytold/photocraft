@@ -8,7 +8,7 @@ use crate::state::Tool;
 use serde_json::json;
 
 /// Create a session whose initial history state is white and whose current canvas is black.
-fn app_with_history_source() -> PhotocraftApp {
+fn app_with_history_source() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     // State 0 ("New"): white 160x160 RGB canvas, which is the default history source.
     app.run("file.new", json!({"width": 160, "height": 160, "background": "white"})).unwrap();

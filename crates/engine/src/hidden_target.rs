@@ -13,6 +13,9 @@ use crate::Session;
 /// Photoshop's alert text.
 pub const HIDDEN: &str = "Could not complete your request because the target layer is hidden.";
 
+/// The Art History Brush's own alert text (#12638).
+pub const ART_HISTORY_HIDDEN: &str = "Could not use the art history brush because the target layer is hidden.";
+
 /// Commands that paint on, fill or move the target layer.
 const GATED: &[&str] = &[
     "paint.stroke",
@@ -117,7 +120,10 @@ pub fn refusal(s: &Session, id: &str, params: &Value) -> Option<&'static str> {
         return None;
     }
     let layer = layer_of(s, id, &params)?;
-    (st.doc.layer(layer).is_some() && !shown(&st.doc, layer)).then_some(HIDDEN)
+    // The Art History Brush's text was measured on a layer's pixels only.
+    let pixels = crate::channel_cmds::target_of(&params) == crate::channel_cmds::Target::Pixels;
+    let why = if id == "paint.artHistoryBrush" && pixels { ART_HISTORY_HIDDEN } else { HIDDEN };
+    (st.doc.layer(layer).is_some() && !shown(&st.doc, layer)).then_some(why)
 }
 
 /// [`refusal`] for menu enablement: Photoshop greys a filter out on a hidden layer, while the

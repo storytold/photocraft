@@ -382,15 +382,15 @@ zip_cases! {
 
 #[test]
 fn directory_bundle_roundtrip_all_modes() {
-    for mode in MODES {
-        for depth in SampleType::ALL {
-            let doc = rich_doc(mode, depth);
-            let dir = temp_dir("dir");
-            PcraftWriter::new().save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
-            assert!(dir.join("manifest.json").is_file());
-            assert_eq!(load_path(&dir).unwrap(), doc, "{mode:?} {depth:?}");
-            std::fs::remove_dir_all(dir).unwrap();
-        }
+    // The directory bundle runs the zip save's `prepare` and object encoding and differs only in the container, which
+    // does not depend on mode or depth: every mode x depth is `zip_cases!` above (#15652).
+    for (mode, depth) in [(ColorMode::Rgb, SampleType::U8), (ColorMode::Lab, SampleType::F32)] {
+        let doc = rich_doc(mode, depth);
+        let dir = temp_dir("dir");
+        PcraftWriter::new().save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
+        assert!(dir.join("manifest.json").is_file());
+        assert_eq!(load_path(&dir).unwrap(), doc, "{mode:?} {depth:?}");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
 
@@ -461,11 +461,11 @@ fn group_depth(layers: &[Layer]) -> usize {
 /// [`rich_doc`] with its layers wrapped in groups until they are nested `levels` deep.
 fn nested_doc(levels: usize, depth: SampleType) -> Document {
     let mut doc = rich_doc(ColorMode::Rgb, depth);
-    let mut layers = std::mem::take(&mut doc.layers);
+    let mut layers = std::mem::take(&mut *doc.layers);
     for i in group_depth(&layers)..levels {
         layers = vec![Layer::group(format!("Level {i}"), layers)];
     }
-    doc.layers = layers;
+    doc.layers = layers.into();
     assert_eq!(group_depth(&doc.layers), levels);
     doc
 }
