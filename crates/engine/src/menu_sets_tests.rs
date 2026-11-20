@@ -129,6 +129,25 @@ fn the_dialogs_ok_sends_every_set_and_the_one_in_use() {
 }
 
 #[test]
+fn modified_flag_ignores_the_none_colour_sentinel() {
+    // `"none"` is the colour picker's no-colour choice, not a colour: the `color` param removes the
+    // entry rather than storing one. A saved set may still carry one (the dialog's OK sends what it
+    // has), and then asking for no colour again is a no-op that must not mark the set modified, nor
+    // leave a phantom colour in the menus.
+    let mut s = Session::new();
+    s.execute("edit.menus", json!({"sets": {"A": {"colors": {"edit.fill": "none"}}}})).unwrap();
+    let r = menus(&mut s, json!({"useSet": "A"}));
+    assert_eq!(r["colors"], json!({}), "the sentinel is not a colour in the menus");
+    let r = menus(&mut s, json!({"color": {"edit.fill": "none"}}));
+    assert_eq!(r["colors"], json!({}), "asking for no colour again changes nothing");
+    assert_eq!(r["modified"], json!(false), "that no-op is not an edit to A, so no \"(modified)\"");
+    assert_eq!(menus(&mut s, json!({}))["modified"], json!(false), "and the plain read agrees");
+    // A colour the set does not have still marks it, so the flag keeps working.
+    let r = menus(&mut s, json!({"color": {"edit.fill": "red"}}));
+    assert_eq!(r["modified"], json!(true), "a new colour is an edit");
+}
+
+#[test]
 fn re_listed_items_in_another_order_are_not_a_change() {
     // The marker compares the sets, not the order they were edited in.
     let mut s = Session::new();

@@ -35,11 +35,15 @@ pub const COLORS: [&str; 8] = ["none", "red", "orange", "yellow", "green", "blue
 /// and the live menus share one shape instead of two that have to be kept in step.
 pub type MenuSet = MenuCustomization;
 
-/// `menus` with its hidden items deduplicated and in a stable order. The order items were hidden
-/// in is not part of a set, and a set written by a call or a hand-edited file is stored like
-/// this so comparing the two sides means anything.
+/// `menus` with its hidden items deduplicated and in a stable order, and without the `none` colour
+/// sentinel. The order items were hidden in is not part of a set, and a set written by a call or a
+/// hand-edited file is stored like this so comparing the two sides means anything. `none` is the
+/// picker's no-colour choice, not a colour: `prefs::customize::menus` removes the entry for it, so
+/// a set that kept one would differ from the menus it just loaded and the row would read
+/// "(modified)" after a call that changed nothing.
 fn normalized(menus: &MenuSet) -> MenuSet {
-    MenuSet { hidden: menus.hidden.iter().cloned().collect::<BTreeSet<_>>().into_iter().collect(), colors: menus.colors.clone() }
+    let colors = menus.colors.iter().filter(|(_, c)| c.as_str() != "none").map(|(id, c)| (id.clone(), c.clone())).collect();
+    MenuSet { hidden: menus.hidden.iter().cloned().collect::<BTreeSet<_>>().into_iter().collect(), colors }
 }
 
 /// The menus `p` uses now, as a set: what `saveSet` stores.
