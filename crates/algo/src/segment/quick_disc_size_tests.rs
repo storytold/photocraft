@@ -117,8 +117,9 @@ fn quick_select_the_disc_core_matches_photoshop_pixel_counts() {
     let (w100, f100, p100) = disc(100.0);
     assert!(within(f5, 9, 5.0), "size 5: {f5} fully selected, Photoshop 9 within 5 % ({w5} wide, {p5} partial)");
     assert!(within(f100, 7519, 5.0), "size 100: {f100} fully selected, Photoshop 7519 within 5 % ({w100} wide, {p100} partial)");
-    // Size 30 misses 5 % by 1.1 points: the disc that gives Photoshop's 33 px bounds fully covers
-    // 657 pixels and 640 at 0.1 px less, so a round click cannot land on 619 at that width.
+    // Size 30 misses 5 % by 1.1 points: a core of the brush radius 15 fully covers 657 pixels and
+    // the largest core inside 5 % is radius 14.95 with 649, while Photoshop's 619 belongs to a core
+    // radius of about 14.65 - a round click cannot sit on 619 and still span 33 px.
     assert!(within(f30, 619, 8.0), "size 30: {f30} fully selected, Photoshop 619 ({w30} wide, {p30} partial)");
     assert_eq!((f5, f30, f100), (9, 657, 7661), "fully selected pixels");
 }
