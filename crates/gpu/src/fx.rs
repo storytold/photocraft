@@ -255,9 +255,10 @@ impl B {
         self.stages.push(s);
     }
 
+    /// `invert` flips the coverage after the contour (`fs_mfinish` mode 2), as the CPU's `satin_map` (#14981).
     fn finish_lut(&mut self, a: In, b: Option<In>, invert: bool, lut: Option<Vec<f32>>, times_shape: bool, out: usize) {
         let flag = |v: bool| f32::from(u8::from(v));
-        let mut s = stage(Kernel::MFinish, Some(a), b, [flag(b.is_some()), flag(invert), flag(lut.is_some()), flag(times_shape)], 0);
+        let mut s = stage(Kernel::MFinish, Some(a), b, [flag(b.is_some()), 2.0 * flag(invert), flag(lut.is_some()), flag(times_shape)], 0);
         s.lut = lut.map(Arc::new);
         if times_shape {
             s.s = Some(In::Shape);

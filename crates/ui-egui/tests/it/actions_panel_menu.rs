@@ -16,7 +16,7 @@ use photocraft_ui_egui::{
 use serde_json::{Value, json};
 
 /// A real dialog host over one selected action in a set.
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(Session::new(), Default::default());
     app.background_jobs = false;
     app.run("file.new", json!({"width":16,"height":12})).unwrap();
@@ -41,7 +41,7 @@ fn control(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: V
 }
 
 /// Fire the panel menu row of `command` as a click on it would.
-fn fire(h: &mut Harness<'static, PhotocraftApp>, command: ActionsPanelCommands) -> Value {
+fn fire(h: &mut Harness<'static, Box<PhotocraftApp>>, command: ActionsPanelCommands) -> Value {
     let ctx = h.ctx.clone();
     let reply = control(h.state_mut(), &ctx, "ui.menu.invoke", json!({"id": CommandRef::from(command).id}));
     h.run_steps(3);

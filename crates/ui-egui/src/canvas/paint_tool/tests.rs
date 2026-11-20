@@ -44,7 +44,7 @@ fn trail(app: &PhotocraftApp) -> Option<&crate::tools::stroke_trail::Trail> {
 }
 
 /// A whole-document canvas at 100 % in a harness, for tests that feed several moves in one pass.
-fn harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn harness(mut app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     app.sync_views();
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(900.0, 600.0)).with_step_dt(1.0 / 60.0).build_app(
         |ui, app: &mut PhotocraftApp| {
@@ -66,11 +66,11 @@ fn harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn at(h: &Harness<'static, PhotocraftApp>, x: f64, y: f64) -> Pos2 {
+fn at(h: &Harness<'static, Box<PhotocraftApp>>, x: f64, y: f64) -> Pos2 {
     testing::to_screen(h.state(), [x, y])
 }
 
-fn mixer_app() -> PhotocraftApp {
+fn mixer_app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width":120,"height":60,"background":"#00ff00"})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
@@ -215,9 +215,14 @@ fn mixer_drag_shows_actual_mixed_paint_before_release_and_alt_never_paints() {
 #[test]
 fn mixer_release_includes_a_new_endpoint_and_deferred_frame_samples() {
     for failed in [false, true] {
-        let mut h = harness(mixer_app());
+        let mut app = mixer_app();
+        // Smoothing off: this is about which points reach the commit, and the Mixer Brush's
+        // first-use 10 % lag (measured, #11888) would hold the brush short of the release point.
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        app.run("tools.setBrush", json!({"brush": {"smoothing": {"amount": 0.0}}})).unwrap();
+        let mut h = harness(app);
         let before = h.state().session.active().unwrap().doc.clone();
-        let p = |h: &Harness<'static, PhotocraftApp>, x: f64| at(h, x, 30.0);
+        let p = |h: &Harness<'static, Box<PhotocraftApp>>, x: f64| at(h, x, 30.0);
         let start = p(&h, 20.0);
         h.event(egui::Event::PointerMoved(start));
         h.run_steps(1);
@@ -289,7 +294,7 @@ fn mixer_background_window_keeps_and_commits_control_strokes() {
     let steps = app.session.active().unwrap().history.past_len();
     let mut h = harness(app);
     let ctx = h.ctx.clone();
-    let pointer = |h: &mut Harness<'static, PhotocraftApp>, events: serde_json::Value| {
+    let pointer = |h: &mut Harness<'static, Box<PhotocraftApp>>, events: serde_json::Value| {
         let (request, _reply) = crate::control::ControlRequest::new("ui.pointer", json!({"tool":"mixerBrush","events": events}));
         let _ = crate::control::handle(h.state_mut(), &ctx, &request);
         // Every pass of the unfocused window runs the queued input.
@@ -371,7 +376,10 @@ fn live_stroke_uses_pen_tilt_and_redraws_partially() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     let ctx = app.ctx().clone();
     app.run("file.new", json!({"width": 4097, "height": 90, "background": "transparent"})).unwrap();
-    let tilt = json!({"size": 30, "hardness": 1.0, "spacing": 0.05, "shapeDynamics": {"enabled": true, "size": {"control": "penTilt"}}});
+    // Smoothing off: the default 10 % lag (measured, #11888) on wall-clock times would leave the
+    // preview's tail anywhere short of the release, so the comparison below couldn't hold.
+    let tilt =
+        json!({"size": 30, "hardness": 1.0, "spacing": 0.05, "smoothing": {"amount": 0.0}, "shapeDynamics": {"enabled": true, "size": {"control": "penTilt"}}});
     app.run("tools.setBrush", json!({ "brush": tilt })).unwrap();
     app.ui.tool = Tool::Brush;
     let mut seen = composite_revision(&mut app, &ctx, 0, None);
@@ -390,14 +398,13 @@ fn live_stroke_uses_pen_tilt_and_redraws_partially() {
     let (a, b) = (doc.layers[0].surface().unwrap(), shown.layers[0].surface().unwrap());
     // 60° tilt shrinks the dab well below 30 px: the preview shows that size, as committed.
     assert!(a.rgba(500, 45)[3] > 0.5 && a.rgba(500, 45 + 12)[3] == 0.0);
-    // (The smoothed tail catches up to the end point only when the stroke finishes.)
     assert!((0..90).all(|y| (0..700).all(|x| a.rgba(x, y) == b.rgba(x, y))), "commit matches the preview");
 }
 
 /// Brush drag along y = 40 with one canvas frame per pointer move; returns the document the
 /// canvas showed at the last move, the committed one, and whether the release refreshed only
 /// the stroke's rectangle.
-fn drag_frames(smoothing: f32, xs: &[f64]) -> (std::sync::Arc<Document>, std::sync::Arc<Document>, bool, PhotocraftApp) {
+fn drag_frames(smoothing: f32, xs: &[f64]) -> (std::sync::Arc<Document>, std::sync::Arc<Document>, bool, Box<PhotocraftApp>) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     let ctx = app.ctx().clone();
     testing::still_clock(&mut app);

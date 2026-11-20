@@ -23,7 +23,7 @@ const MASKS: [Tool; 2] = [Tool::HorizontalTypeMask, Tool::VerticalTypeMask];
 /// A committed type layer made with `type_tool` and, active above it, an empty layer, with no
 /// selection and `tool` in hand.
 fn typed(type_tool: Tool, tool: Tool) -> (Box<PhotocraftApp>, LayerId) {
-    let mut app = Box::new(new_app());
+    let mut app = new_app();
     app.run("select.deselect", json!({})).unwrap();
     app.ui.tool = type_tool;
     click(&mut app, 100.0, 200.0, Modifiers::NONE);

@@ -715,8 +715,9 @@ fn layer_via_copy_and_cut_deselect_in_one_step() {
 }
 
 /// #2777: with several layers selected and no pixel selection, Layer via Copy (Cmd+J) copies
-/// every selected layer in one step, each copy above its original and the copies selected.
-/// With a pixel selection it still copies the active layer's selected pixels only.
+/// every selected layer in one step, the copies stacked above the topmost selected original in
+/// the originals' order (#11915), and the copies selected. With a pixel selection it still copies
+/// the active layer's selected pixels only.
 #[test]
 fn layer_via_copy_duplicates_every_selected_layer() {
     let mut s = session();
@@ -728,11 +729,12 @@ fn layer_via_copy_duplicates_every_selected_layer() {
     s.execute("layer.new.layerViaCopy", json!({})).unwrap();
     let st = s.active().unwrap();
     let ids: Vec<LayerId> = st.doc.layers.iter().map(|l| l.id).collect();
-    assert_eq!(ids.len(), 5, "background, a, a copy, b, b copy");
-    assert_eq!((ids[1], ids[3]), (a, b), "each copy sits above its original");
-    let mut selected = st.selected_layers();
-    selected.sort_by_key(|l| l.0);
-    assert_eq!(selected, vec![ids[2], ids[4]], "the copies become the selection");
+    assert_eq!(ids.len(), 5, "background, a, b, a copy, b copy");
+    assert_eq!((ids[1], ids[2]), (a, b), "the originals keep their order");
+    assert_eq!(st.selected_layers(), vec![ids[3], ids[4]], "the copies become the selection, in document order");
+    let surface = |id: LayerId| st.doc.layer(id).unwrap().surface().unwrap();
+    assert_eq!(surface(ids[3]), surface(a), "the first copy came from a");
+    assert_eq!(surface(ids[4]), surface(b), "the second copy came from b");
     assert_eq!(st.history.past_len(), steps + 1, "one undo step");
     assert!(s.undo());
     s.execute("layer.select", json!({"layer": b.0})).unwrap();
@@ -1926,9 +1928,10 @@ fn paste_onto_a_smaller_artboard_keeps_the_offset_and_the_board_clips_the_rest()
     assert!(!(px(315, 35)[0] > 0.99 && px(315, 35)[1] < 0.01), "clipped past S's edge");
 }
 
-/// A pasted layer that joins a board keeps its own clipping while the board already holds a layer
-/// it can clip to, and drops it on an empty board (#10538 review): a clipped group copied whole
-/// from board A and pasted onto smaller boards S (holding a layer) and E (empty).
+/// A clipped group copied without its base is released, including when it joins a board that
+/// already holds a layer (#9736, #9833): Copy drops the clip so the paste does not attach to
+/// whatever it lands on. #10538 used to keep the clip when the destination board already had a
+/// layer; that no longer applies once the base is left behind.
 #[test]
 fn a_clipped_paste_joining_a_board_stays_clipped_only_over_a_layer() {
     let (mut s, red, a, _b) = two_boards();
@@ -1958,7 +1961,7 @@ fn a_clipped_paste_joining_a_board_stays_clipped_only_over_a_layer() {
         let id = st.active_layer.unwrap();
         (st.doc.artboard_of(id), st.doc.layer(id).unwrap().clipped)
     };
-    assert_eq!(paste_on(&mut s, sb), (Some(sb), true), "S holds a layer to clip to");
+    assert_eq!(paste_on(&mut s, sb), (Some(sb), false), "released even though S holds a layer");
     assert_eq!(paste_on(&mut s, eb), (Some(eb), false), "E is empty");
 }
 

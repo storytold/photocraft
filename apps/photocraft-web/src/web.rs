@@ -362,7 +362,7 @@ async fn fetch_bytes(url: &str, integrity: Option<&str>) -> Result<Vec<u8>, Stri
 /// Wraps the app to read dropped files asynchronously (browsers can't read them synchronously,
 /// so the app's own drop path can't handle them) and feed them through the inboxes.
 struct WebShell {
-    app: PhotocraftApp,
+    app: Box<PhotocraftApp>,
     /// Dropped files to open as documents.
     inbox: Inbox,
     /// Dropped files to place on the active document's canvas.

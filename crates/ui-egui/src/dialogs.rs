@@ -13,19 +13,6 @@ use serde_json::Value;
 
 use crate::PhotocraftApp;
 
-/// Routes native automation requests without pulling native control services into the web build.
-pub(crate) fn workspace_ui(app: &mut PhotocraftApp, ctx: &egui::Context, key: &str, ui: &Value) -> Result<Value, String> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        crate::control::dialogs::workspace_ui(app, ctx, key, ui)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = (app, ctx, key, ui);
-        Err("UI automation is unavailable in the web build".into())
-    }
-}
-
 /// What a family of the hosted dialogs does with each result, and who owns which dialog key.
 pub(crate) mod params {
     use std::path::{Path, PathBuf};
@@ -480,6 +467,7 @@ pub(crate) const TAKERS: &[fn(&mut PhotocraftApp, &egui::Context)] = &[
     crate::layers_panel_ui::take,
     crate::slice_ui::take,
     crate::crop_presets::take,
+    crate::panels::apply_data_set_ui::take,
     crate::variables_ui::take,
     crate::actions::dialogs::take_stops,
 ];
@@ -673,7 +661,7 @@ fn convert_blend_mode(key: &str, value: &mut Value) {
     }
     let Some(mode) = value.get_mut("mode") else { return };
     if let Some(blend) = mode.as_str().and_then(crate::panels::layers_tree::blend_of) {
-        *mode = Value::String(crate::panels::layers_tree::blend_key(blend));
+        *mode = Value::String(blend.key().to_string());
     }
 }
 

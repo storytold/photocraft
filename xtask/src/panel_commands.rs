@@ -43,7 +43,8 @@ pub struct Allowed {
     pub reason: &'static str,
 }
 
-/// Temporary exceptions for direct mutations in panel click handlers.
+/// Existing click handlers that change the document directly. Shrink only: each entry is a
+/// follow-up (route it through an engine command), never a place to park new code.
 pub const ALLOWLIST: &[Allowed] = &[];
 
 /// A click handler that changes the document or its history without a command id.

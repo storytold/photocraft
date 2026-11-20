@@ -4,7 +4,7 @@ use crate::state::Tool;
 use crate::{PhotocraftApp, Services, color_picker_ui};
 use serde_json::json;
 
-fn chart(depth: u32) -> PhotocraftApp {
+fn chart(depth: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
     app.run("file.new", json!({"width":16,"height":8,"mode":"cmyk","depth":depth,"background":"white"})).unwrap();
     app.session

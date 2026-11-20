@@ -19,7 +19,7 @@ fn quad(app: &PhotocraftApp) -> [[f64; 2]; 4] {
 
 /// A 200 × 200 document with a red block (x 20..60, y 20..60) on layer "Paint", Free Transform
 /// open on it, and the box moved 10 px to the right as in the measurement.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 200, "background": "white"})).unwrap();
     app.sync_views();
@@ -59,6 +59,17 @@ fn a_click_outside_the_box_on_the_image_keeps_it_open() {
 fn a_click_on_the_pasteboard_commits_one_free_transform_step() {
     for p in [[-30.0, 100.0], [100.0, -30.0], [230.0, 100.0], [100.0, 230.0]] {
         let mut app = app();
+        // This oracle addresses the canvas at these same four document points.
+        // The floating task bar can cover them; use the real Window command to
+        // expose the pasteboard without changing the click or bypassing its route.
+        let app_ctx = app.ctx().clone();
+        crate::menus::invoke(&mut app, &app_ctx, "window.panel.contextualTaskBar", json!({"on": false})).unwrap();
+        assert!(!app.ui.panels.context_task_bar);
+        crate::canvas::testing::shown(&mut app);
+        let view = crate::canvas::testing::view(&app).expect("the canvas shows the original click point");
+        let point = crate::canvas::testing::to_screen(&app, p);
+        assert!(view.rect.contains(point), "the unchanged pasteboard point reaches the real canvas: {p:?}");
+        assert!(crate::transform_task_bar::shown_rect(&app, &app_ctx).is_none(), "the bar cannot own this canvas click");
         let before = steps(&app);
         click(&mut app, p);
         assert!(app.ui.transform.is_none(), "{p:?}");
