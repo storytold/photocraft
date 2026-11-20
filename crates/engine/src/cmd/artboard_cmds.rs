@@ -1166,5 +1166,8 @@ mod overlapping_areas_tests;
 mod pdf_page_order_tests;
 
 #[cfg(test)]
+#[path = "artboard_cmds/pdf_include_name_tests.rs"]
+mod pdf_include_name_tests;
+#[cfg(test)]
 #[path = "artboard_cmds/tests.rs"]
 mod tests;
