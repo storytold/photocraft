@@ -45,20 +45,9 @@ pub(crate) fn geometry(
     _order: Option<HistoricalXcfSampleOrder>,
     ctl: &photocraft_raster::Interrupt,
 ) -> Result<((f64, f64), f64), crate::IoError> {
-    geometry_for_embedding(name, bytes, false, ctl)
-}
-
-pub(crate) fn geometry_for_embedding(
-    name: &str,
-    bytes: &[u8],
-    require_order: bool,
-    ctl: &photocraft_raster::Interrupt,
-) -> Result<((f64, f64), f64), crate::IoError> {
     ctl.check().map_err(|_| crate::IoError::Cancelled)?;
-    // Geometry needs no sample interpretation. A new external source must still
-    // have a choice if its header declares historically ambiguous pixel bytes.
-    let geometry = if require_order { crate::xcf::source_geometry_requiring_order(name, bytes, ctl)? } else { crate::xcf::source_geometry(name, bytes, ctl)? };
-    if let Some(geometry) = geometry {
+    // Geometry needs no sample interpretation. This is a prefix probe.
+    if let Some(geometry) = crate::xcf::source_geometry(name, bytes, ctl)? {
         return Ok(geometry);
     }
     let result = crate::linked::source_geometry(name, bytes, ctl).map_err(crate::IoError::Unsupported);

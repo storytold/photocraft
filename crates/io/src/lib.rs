@@ -704,6 +704,16 @@ pub fn historical_xcf_sample_order_request_with(
     Ok(request)
 }
 
+/// Retain a caller's sample-order option only when these bytes need that choice.
+pub fn applicable_historical_xcf_sample_order(
+    name: &str,
+    bytes: &[u8],
+    order: Option<HistoricalXcfSampleOrder>,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<Option<HistoricalXcfSampleOrder>, IoError> {
+    if order.is_some() && historical_xcf_sample_order_request_with(name, bytes, ctl)?.is_some() { Ok(order) } else { Ok(None) }
+}
+
 /// The user's settings that shape an import.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImportOptions {

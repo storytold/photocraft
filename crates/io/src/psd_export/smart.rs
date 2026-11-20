@@ -18,7 +18,15 @@ pub(super) fn contents_uuid(contents_id: SmartContentsId, bytes: &[u8]) -> Strin
 
 type OwnedSourceHash = (std::sync::Arc<Vec<u8>>, [u8; 32]);
 type SourceKey = (String, Option<photocraft_doc::HistoricalXcfSampleOrder>);
-type ConversionKey = (SmartContentsId, [u8; 32], bool, Option<photocraft_doc::HistoricalXcfSampleOrder>);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) enum SourceOrigin {
+    Embedded,
+    External,
+    #[cfg(not(target_arch = "wasm32"))]
+    VerifiedExternal,
+}
+
+type ConversionKey = (SmartContentsId, [u8; 32], SourceOrigin, Option<photocraft_doc::HistoricalXcfSampleOrder>);
 type Composite = Option<(std::sync::Arc<Surface>, photocraft_geom::Rect)>;
 
 #[cfg(test)]

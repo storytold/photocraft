@@ -108,14 +108,14 @@ fn pending_sources_charge_retained_and_incoming_capacity_after_truncation() {
     buffer.extend([1u8, 2, 3, 4]);
     buffer.truncate(1);
     let first = Arc::new(buffer);
-    let held = hold_with_budget(&mut s, "first.xcf".into(), first.clone(), question, Default::default(), 200).unwrap();
+    let held = hold_with_budget(&mut s, "first.xcf".into(), first.clone(), question, Default::default(), false, 200).unwrap();
     let mut buffer = Vec::with_capacity(128);
     buffer.push(0);
-    assert!(hold_with_budget(&mut s, "second.xcf".into(), Arc::new(buffer), question, Default::default(), 200).is_err());
+    assert!(hold_with_budget(&mut s, "second.xcf".into(), Arc::new(buffer), question, Default::default(), false, 200).is_err());
     assert_eq!(s.jobs.historical_xcf.len(), 1, "the earlier source survives the refused second allocation");
     let mut buffer = Vec::with_capacity(512);
     buffer.push(0);
-    assert!(hold_with_budget(&mut Session::new(), "large.xcf".into(), Arc::new(buffer), question, Default::default(), 200).is_err());
+    assert!(hold_with_budget(&mut Session::new(), "large.xcf".into(), Arc::new(buffer), question, Default::default(), false, 200).is_err());
     assert!(s.cancel_historical_xcf_open(held["heldHistoricalXcfOpen"].as_u64().unwrap()));
     assert_eq!(Arc::strong_count(&first), 1);
 }

@@ -604,7 +604,7 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
 }
 
 /// Handle menu commands that need a shell action or a parameter dialog before execution.
-pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
+pub(super) fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if id == "file.closeAll" || id == "file.closeOthers" {
         // Keep the remaining document's view (views are index-aligned with documents).
         let keep = app.session.active_index().and_then(|i| app.ui.views.get(i).cloned());
@@ -652,23 +652,7 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                 Err(e) => return Some(Err(e)),
             };
             let linked = id == "file.placeLinked";
-            let ctx = ctx.clone();
-            Some(app.pick_file_bytes(move |app, name, bytes| {
-                if app.ui.transform.is_some() {
-                    return Err("Commit or cancel the transform first".into());
-                }
-                app.refocus(doc)?;
-                let linked = linked.then(|| name.clone());
-                let result = app.place_bytes(&name, bytes, linked)?;
-                if !result.get("pending").and_then(Value::as_bool).unwrap_or(false) {
-                    crate::notices::io_result_warnings(app, &result, &name);
-                }
-                // In the background, Free Transform starts when the layer has landed.
-                if result.get("frame").and_then(Value::as_u64).is_none() && !crate::jobs_ui::track_place(app, &name, &result) {
-                    crate::transform_tool::begin_placed(app, &ctx)?;
-                }
-                Ok(result)
-            }))
+            Some(app.pick_file_bytes(move |app, name, bytes| crate::dialogs::historical_replace::pick_place(app, doc, name, bytes, linked)))
         }
         "layer.smartObjects.replaceContents" => {
             let target = match crate::dialogs::historical_replace::target(app) {

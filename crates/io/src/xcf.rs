@@ -978,11 +978,7 @@ fn read_image_metadata_with_work<'a>(
 }
 
 pub(crate) fn source_geometry(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Option<((f64, f64), f64)>> {
-    geometry::source_geometry(name, bytes, false, ctl)
-}
-
-pub(crate) fn source_geometry_requiring_order(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Option<((f64, f64), f64)>> {
-    geometry::source_geometry(name, bytes, true, ctl)
+    geometry::source_geometry(name, bytes, ctl)
 }
 
 /// Imports XCF with an explicit historical sample-order decision, preserving native data and durable

@@ -195,7 +195,7 @@ fn psd_geometry_and_lazy_composite_caches_distinguish_sample_order() {
     let contents = smart(&doc).contents_id;
     let hash = embed_source_hash(&bytes);
     for (order, expected) in [(Order::LittleEndian, 0x1234u16), (Order::BigEndian, 0x3412u16)] {
-        let source = ex.embed_hashed(contents, "same.xcf", &bytes, true, hash, Some(order)).unwrap();
+        let source = ex.embed_hashed(contents, "same.xcf", &bytes, SourceOrigin::External, hash, Some(order)).unwrap();
         assert_eq!(source.size, (1., 1.));
         let (surface, bounds) = ex.source_composite(&source.uuid, Some(order)).unwrap();
         assert_eq!(bounds, Rect::new(0, 0, 1, 1));
@@ -205,7 +205,10 @@ fn psd_geometry_and_lazy_composite_caches_distinguish_sample_order() {
     assert_eq!(ex.smart.converted.len(), 2);
     assert!(ex.smart.docs.is_empty(), "historical sources retain geometry and optional composites without retaining their decoded documents");
     assert_eq!(ex.smart.composites.len(), 2);
-    assert!(ex.embed_hashed(contents, "same.xcf", &bytes, true, hash, None).is_err(), "an unchosen source must not reuse an approved interpretation");
+    assert!(
+        ex.embed_hashed(contents, "same.xcf", &bytes, SourceOrigin::External, hash, None).is_err(),
+        "an unchosen source must not reuse an approved interpretation"
+    );
     assert_eq!(ex.smart.converted.len(), 3);
     let uuid = contents_uuid(contents, &bytes);
     assert!(ex.source_composite(&uuid, None).is_none());
@@ -274,5 +277,39 @@ fn changed_linked_xcf_is_not_written_with_its_old_sample_order() {
     assert!(record.block(b"SoLd").is_none());
     assert!(record.block(&crate::smart_xcf_order::PSD_KEY).is_none());
     let reopened = crate::import("checked.psd", &file.to_bytes().unwrap()).unwrap();
+    assert!(matches!(reopened.document.layers[0].content, LayerContent::Raster(_)));
+}
+
+#[test]
+fn unverified_external_compressed_xcf_needs_complete_validation_to_embed() {
+    use std::io::Write;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("updated.xcf.gz");
+    let mut raw = xcf(false);
+    raw[26..30].copy_from_slice(&150u32.to_be_bytes()); // Unambiguous RGB8.
+    raw[101..105].copy_from_slice(&4u32.to_be_bytes());
+    raw.truncate(133);
+    raw[129..].copy_from_slice(&[17, 31, 57, 255]);
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(&raw).unwrap();
+    let mut bytes = encoder.finish().unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+
+    let doc = document(SmartSource::Linked { path: path.to_string_lossy().into_owned() }, None);
+    let options = PsdExportOptions { read_linked_files: true, ..Default::default() };
+    let (valid, warnings) = document_to_psd_with(&doc, &options).unwrap();
+    assert!(warnings.iter().any(|warning| warning.contains("was embedded")));
+    assert!(valid.layer_info.as_ref().unwrap().layers[0].block(b"SoLd").is_some());
+
+    bytes.truncate(bytes.len() - 4);
+    assert_eq!(crate::smart_xcf_order::geometry("updated.xcf.gz", &bytes, None, &Interrupt::NONE).unwrap(), ((1., 1.), 72.));
+    assert!(crate::import("updated.xcf.gz", &bytes).is_err());
+    std::fs::write(&path, bytes).unwrap();
+    let (exported, warnings) = document_to_psd_with(&doc, &options).unwrap();
+    assert!(warnings.iter().any(|warning| warning.contains("not an image PhotoCraft can open")));
+    assert!(!warnings.iter().any(|warning| warning.contains("was embedded")));
+    assert!(exported.layer_info.as_ref().unwrap().layers[0].block(b"SoLd").is_none());
+    let reopened = crate::import("exported.psd", &exported.to_bytes().unwrap()).unwrap();
     assert!(matches!(reopened.document.layers[0].content, LayerContent::Raster(_)));
 }

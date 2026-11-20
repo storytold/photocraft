@@ -517,3 +517,47 @@ fn relink_picker_reuses_identical_bytes_and_asks_for_different_source_bytes() {
     assert_eq!(object(&app).historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::LittleEndian));
     assert!(matches!(&object(&app).source, SmartSource::Linked { path } if path == different.to_str().unwrap()));
 }
+
+#[test]
+fn desktop_place_and_open_as_smart_object_resume_the_picked_historical_source() {
+    for command in ["file.placeEmbedded", "file.placeLinked", "file.openAsSmartObject"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("picked.xcf");
+        let original = fixture::historical_pixel(true);
+        std::fs::write(&path, &original).unwrap();
+        let mut app = app(vec![Some(Picked::Paths(vec![path.clone()]))], HistoricalXcfSampleOrder::BigEndian);
+        let before = app.session.active().unwrap().doc.clone();
+        crate::menus::invoke(&mut app, &egui::Context::default(), command, json!({})).unwrap();
+        app.poll_file_dialog();
+        app.poll_file_dialog();
+        assert!(!app.ui.status_error, "{command}: {}", app.ui.status);
+        assert_eq!(app.session.documents().len(), 1, "{command}");
+        assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc), "{command}");
+        let dialog = dialogs(&app)
+            .into_iter()
+            .find(|dialog| {
+                let field = if command == "file.openAsSmartObject" { "__historicalXcfOpen" } else { FIELD };
+                dialog.fields.contains_key(field)
+            })
+            .expect("order prompt");
+        assert!(dialog.fields["historicalXcfSampleOrder"].is_null());
+        if command != "file.placeLinked" {
+            std::fs::write(&path, fixture::historical_pixel(false)).unwrap();
+        }
+        set_order(&mut app, dialog.id, json!("little-endian"));
+        confirm(&mut app, dialog.id).unwrap();
+        let active = app.session.active().unwrap();
+        let LayerContent::Smart(placed) = &active.doc.layer(active.active_layer.unwrap()).unwrap().content else { panic!("placed source") };
+        match &placed.source {
+            SmartSource::Embedded { bytes, .. } => assert_eq!(bytes.as_slice(), original, "{command}"),
+            SmartSource::Linked { path: linked } => {
+                assert_eq!(std::path::Path::new(linked), path);
+                assert_eq!(placed.historical_xcf_link_digest, Some(photocraft_io::linked::historical_xcf_digest(&original)));
+            }
+        }
+        assert_eq!(placed.historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::LittleEndian), "{command}");
+        assert_eq!(placed.cache.as_ref().unwrap().pixel(0, 0), [0x1234 as f32 / 65535., 0x4567 as f32 / 65535., 0x89ab as f32 / 65535., 1.], "{command}");
+        assert_eq!(app.session.documents().len(), if command == "file.openAsSmartObject" { 2 } else { 1 });
+        assert!(app.prompt_order.is_empty());
+    }
+}

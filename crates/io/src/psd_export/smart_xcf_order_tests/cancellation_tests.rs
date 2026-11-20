@@ -180,7 +180,7 @@ fn geometry_without_order_cancels_in_header_and_conversion_still_cancels_in_pixe
     // embed_hashed and convert_source contribute three checks before the legacy import.
     during_decode(Trigger::Poll(prefix + 3 + 2), |ctl| {
         let mut ex = exporter_with_interrupt(&doc, ctl);
-        assert!(ex.embed_hashed(smart(&doc).contents_id, "ordinary.xcf", &bytes, false, embed_source_hash(&bytes), None).is_err());
+        assert!(ex.embed_hashed(smart(&doc).contents_id, "ordinary.xcf", &bytes, SourceOrigin::Embedded, embed_source_hash(&bytes), None).is_err());
         assert!(ex.smart.add.is_empty());
         assert!(ex.smart.converted.is_empty());
     });
@@ -193,7 +193,7 @@ fn cancelled_source_conversion_and_composite_do_not_cache_fallbacks_or_copied_so
         let doc = document(SmartSource::Embedded { file_name: "source.xcf".into(), bytes: bytes.clone() }, Some(order));
         during_decode(Trigger::Poll(5), |ctl| {
             let mut ex = exporter_with_interrupt(&doc, ctl);
-            assert!(ex.embed_hashed(smart(&doc).contents_id, "source.xcf", &bytes, false, embed_source_hash(&bytes), Some(order)).is_err());
+            assert!(ex.embed_hashed(smart(&doc).contents_id, "source.xcf", &bytes, SourceOrigin::Embedded, embed_source_hash(&bytes), Some(order)).is_err());
             assert!(ex.smart.add.is_empty(), "a cancelled geometry probe must not fall back to copying its source");
             assert!(ex.smart.docs.is_empty());
             assert!(ex.smart.converted.is_empty(), "cancellation is not a cached unsupported-source result");
@@ -231,11 +231,11 @@ fn cancelled_source_conversion_and_composite_do_not_cache_fallbacks_or_copied_so
         let cancel = || cancelled.load(Ordering::Relaxed);
         let mut warm = exporter_with_interrupt(&doc, Interrupt::cancel_only(&cancel));
         let hash = embed_source_hash(&bytes);
-        let source = warm.embed_hashed(smart(&doc).contents_id, "source.xcf", &bytes, false, hash, Some(order)).unwrap();
+        let source = warm.embed_hashed(smart(&doc).contents_id, "source.xcf", &bytes, SourceOrigin::Embedded, hash, Some(order)).unwrap();
         assert!(warm.source_composite(&source.uuid, Some(order)).is_some());
         let cached = (warm.smart.converted.len(), warm.smart.composites.len());
         cancelled.store(true, Ordering::Relaxed);
-        assert!(warm.embed_hashed(smart(&doc).contents_id, "source.xcf", &bytes, false, hash, Some(order)).is_err());
+        assert!(warm.embed_hashed(smart(&doc).contents_id, "source.xcf", &bytes, SourceOrigin::Embedded, hash, Some(order)).is_err());
         assert!(warm.source_composite(&source.uuid, Some(order)).is_none());
         assert_eq!((warm.smart.converted.len(), warm.smart.composites.len()), cached);
     }

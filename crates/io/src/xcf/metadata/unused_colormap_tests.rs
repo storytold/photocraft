@@ -177,3 +177,28 @@ fn overlapping_palette_end_markers_use_drawable_table_framing() {
         }
     }
 }
+
+#[test]
+fn overlapping_non_end_headers_keep_the_real_resolution_and_drawable_tables() {
+    for version in [3, 11, 26] {
+        let mut image = TestImage::rgb8(1, 1);
+        image.version = version;
+        // A two-color legacy length stops immediately before the embedded 19.
+        // That makes the color tail and the actual DPI tag look like (19, 19).
+        image.image_props.push((1, vec![0, 0, 0, 2, 255, 64, 0, 0, 0, 19]));
+        image.image_props.push((19, [240f32.to_be_bytes(); 2].concat()));
+        image.layers.push(TestLayer::rgba("Visible", 1, 1, vec![17, 31, 57, 255]));
+        image.channels.push(("Coverage", vec![64], false));
+        let mut source = image.write();
+        let palette_payload = if version < 4 { 26 } else { 30 } + 9 + 8;
+        source[palette_payload - 4..palette_payload].copy_from_slice(&6u32.to_be_bytes());
+        let result = crate::import("competing-property.xcf", &source).unwrap();
+        assert_eq!(result.document.resolution_dpi, 240.);
+        assert_eq!(result.document.layers[0].surface().unwrap().pixel(0, 0), [17. / 255., 31. / 255., 57. / 255., 1.]);
+        assert_eq!(result.document.channels[0].surface.pixel(0, 0), [64. / 255.]);
+        let wrapped = crabz2::compress(&source, crabz2::Level::default());
+        for (name, bytes) in [("competing-property.xcf", source), ("competing-property.xcf.bz2", wrapped)] {
+            assert_eq!(crate::xcf::source_geometry(name, &bytes, &photocraft_raster::Interrupt::NONE).unwrap(), Some(((1., 1.), 240.)));
+        }
+    }
+}

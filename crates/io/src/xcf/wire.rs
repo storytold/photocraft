@@ -143,8 +143,8 @@ pub(super) trait PropertyInput {
 
     /// Only full import can validate target offsets. The geometry probe may
     /// stop at image-property END even for a truncated drawable stream.
-    fn prefers_repaired_end(&self, _declared: usize, _repaired: usize, _version: u32, _ctl: &photocraft_raster::Interrupt<'_>) -> Result<bool> {
-        Ok(false)
+    fn compare_palette_tables(&self, _declared: usize, _repaired: usize, _version: u32, _ctl: &photocraft_raster::Interrupt<'_>) -> Result<Option<bool>> {
+        Ok(None)
     }
 }
 
@@ -163,12 +163,14 @@ impl PropertyInput for Cursor<'_> {
         Ok(self.b.get(start..end))
     }
 
-    fn prefers_repaired_end(&self, declared: usize, repaired: usize, version: u32, ctl: &photocraft_raster::Interrupt<'_>) -> Result<bool> {
+    fn compare_palette_tables(&self, declared: usize, repaired: usize, version: u32, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Option<bool>> {
         let tables_fit = |offset| {
-            let Some(start) = self.pos.checked_add(offset).and_then(|offset| offset.checked_add(8)) else { return Ok(false) };
+            let Some(start) = self.pos.checked_add(offset) else { return Ok(false) };
             drawable_tables_fit(self.at(start), version, ctl)
         };
-        Ok(!tables_fit(declared)? && tables_fit(repaired)?)
+        let declared = tables_fit(declared)?;
+        let repaired = tables_fit(repaired)?;
+        Ok((declared != repaired).then_some(repaired))
     }
 }
 
@@ -236,14 +238,7 @@ pub(super) fn property_payload(
                 4 + colors * components
             } else if version != 0 && (1..=256).contains(&colors) && declared == colors + 4 {
                 let repaired = 4 + colors * components;
-                let declared_header = input.peek(declared - 4, 8)?;
-                let declared_end = declared_header == Some(&[0; 8]);
-                let declared_plausible = plausible_property(declared_header);
-                let repaired_header = input.peek(repaired - 4, 8)?;
-                let repaired_end = repaired_header == Some(&[0; 8]);
-                if (!declared_plausible && plausible_property(repaired_header))
-                    || (declared_end && repaired_end && input.prefers_repaired_end(declared - 4, repaired - 4, version, ctl)?)
-                {
+                if repair_palette_boundary(input, declared - 4, repaired - 4, version, ctl)? {
                     repaired
                 } else {
                     // Keep the declared boundary when both interpretations fit.
@@ -281,6 +276,81 @@ pub(super) fn property_payload(
         return Err(invalid(format!("property {kind} declares {length} bytes")));
     }
     Ok(length - prefix)
+}
+
+/// Resolve only the historical count-sized palette ambiguity. Inspect a bounded
+/// property prefix before accepting a header that could be overlapping RGB bytes.
+fn repair_palette_boundary(
+    input: &mut impl PropertyInput,
+    declared: usize,
+    repaired: usize,
+    version: u32,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<bool> {
+    if !plausible_property(input.peek(repaired, 8)?) {
+        return Ok(false);
+    }
+    if !plausible_property(input.peek(declared, 8)?) {
+        return Ok(true);
+    }
+
+    let declared = palette_continuation(input, declared, ctl)?;
+    let repaired = palette_continuation(input, repaired, ctl)?;
+    if let (Some(left), Some(right)) = (declared.end, repaired.end)
+        && let Some(preference) = input.compare_palette_tables(left, right, version, ctl)?
+    {
+        return Ok(preference);
+    }
+    // The geometry probe can stop before drawable data. An exact fixed-size
+    // record is stronger evidence than an overlapping header with an odd size.
+    Ok(repaired.end.is_some() && (declared.invalid || repaired.unusual_lengths < declared.unusual_lengths))
+}
+
+#[derive(Default)]
+struct PaletteContinuation {
+    end: Option<usize>,
+    unusual_lengths: usize,
+    invalid: bool,
+}
+
+fn palette_continuation(input: &mut impl PropertyInput, mut offset: usize, ctl: &photocraft_raster::Interrupt<'_>) -> Result<PaletteContinuation> {
+    const MAX_PREFIX: usize = 64 * 1024;
+    let mut continuation = PaletteContinuation::default();
+    for _ in 0..64 {
+        ctl.check().map_err(|_| super::IoError::Cancelled)?;
+        if offset > MAX_PREFIX - 8 {
+            break;
+        }
+        let Some(header) = input.peek(offset, 8)? else {
+            continuation.invalid = true;
+            break;
+        };
+        let Some(kind) = be_u32(header) else { break };
+        let Some(length) = header.get(4..).and_then(be_u32).map(|n| n as usize) else { break };
+        if kind == 0 {
+            if length == 0 {
+                continuation.end = Some(offset + 8);
+            } else {
+                continuation.invalid = true;
+            }
+            break;
+        }
+        // These records have their own historical length rules. A probe that
+        // cannot establish their framing gives no evidence against this boundary.
+        if matches!(kind, 1 | 24 | 48) {
+            break;
+        }
+        if length > MAX_PAYLOAD {
+            continuation.invalid = true;
+            break;
+        }
+        if matches!((kind, length), (17, 0 | 2..) | (19, 0..=7 | 9..)) {
+            continuation.unusual_lengths += 1;
+        }
+        // The established payload limit and prefix cap bound this addition.
+        offset += 8 + length;
+    }
+    Ok(continuation)
 }
 
 /// A bounded neighboring header is evidence for a palette boundary.

@@ -54,6 +54,8 @@ pub(super) fn relink_to_file(s: &mut Session, p: &Value) -> Result<Value> {
             Some(explicit) => explicit,
             None => relink_sample_order(s, id, &bytes)?,
         };
+        let order = photocraft_io::applicable_historical_xcf_sample_order(&path, &bytes, order, &photocraft_raster::Interrupt::NONE)
+            .map_err(|error| other(error.to_string()))?;
         (order, order.map(|_| digest))
     } else {
         (None, None)
@@ -148,6 +150,8 @@ fn replace_contents_bytes_with_order(
     order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
 ) -> Result<Value> {
     decode_source_with_order(file_name, &bytes, order)?; // fail before touching the document
+    let order = photocraft_io::applicable_historical_xcf_sample_order(file_name, &bytes, order, &photocraft_raster::Interrupt::NONE)
+        .map_err(|error| other(error.to_string()))?;
     set_shared_source(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes: Arc::new(bytes) }, order, None)
 }
 

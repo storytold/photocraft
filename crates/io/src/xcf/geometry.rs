@@ -7,11 +7,11 @@ use super::{Interrupt, IoError, Result, invalid, metadata, read_header, read_ver
 /// Unclaimed input stays available to the ordinary non-XCF geometry reader. This
 /// prefix query stops at image-property END: it does not validate unread drawable
 /// bytes, compression trailers or tails. Complete import still validates them.
-pub(super) fn source_geometry(name: &str, bytes: &[u8], require_order: bool, ctl: &Interrupt<'_>) -> Result<Option<((f64, f64), f64)>> {
-    transport::with_xcf_prefix(name, bytes, ctl, |reader| scan(reader, require_order, ctl))
+pub(super) fn source_geometry(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Option<((f64, f64), f64)>> {
+    transport::with_xcf_prefix(name, bytes, ctl, |reader| scan(reader, ctl))
 }
 
-fn scan(reader: &mut dyn Read, require_order: bool, ctl: &Interrupt<'_>) -> Result<((f64, f64), f64)> {
+fn scan(reader: &mut dyn Read, ctl: &Interrupt<'_>) -> Result<((f64, f64), f64)> {
     // Use the shared version/header validators, including legacy 26-byte headers.
     let mut bytes = [0; 30];
     read(reader, bytes.get_mut(..14).ok_or_else(|| invalid("invalid geometry header range"))?)?;
@@ -20,9 +20,6 @@ fn scan(reader: &mut dyn Read, require_order: bool, ctl: &Interrupt<'_>) -> Resu
     let length = if version >= 4 { 30 } else { 26 };
     read(reader, bytes.get_mut(14..length).ok_or_else(|| invalid("invalid geometry header range"))?)?;
     let (_, header) = read_header(bytes.get(..length).ok_or_else(|| invalid("invalid geometry header length"))?)?;
-    if require_order && let Some(request) = super::sample_order_request(header.version, header.precision)? {
-        return Err(IoError::HistoricalXcfSampleOrderRequired(request));
-    }
     let mut input = Stream::new(reader);
     let mut dpi = 72.;
     let mut count = 0;

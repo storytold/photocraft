@@ -658,6 +658,7 @@ impl Default for Jobs {
 
 #[path = "historical_xcf_open.rs"]
 mod historical_xcf_open;
+pub(crate) use historical_xcf_open::hold_smart_object;
 
 impl Jobs {
     /// Does a job started now run on a worker thread? (Not inline, and not stepped on this thread.)

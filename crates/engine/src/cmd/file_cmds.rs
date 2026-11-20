@@ -57,6 +57,7 @@ pub(crate) use open::{PlaceInput, apply_place, import, import_with_options, tag_
 use open::{approve_memory, close_all, close_others, open_as, place, revert};
 pub use open_as_smart_object::admit_as_smart_object;
 use open_as_smart_object::open_as_smart_object;
+pub(crate) use open_as_smart_object::resume_smart_object;
 use paths::is_file;
 pub(crate) use paths::openable_name;
 pub use paths::{
@@ -320,7 +321,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open as Smart Object…",
             &["File"],
             None,
-            r##"{"path":str,"confirmDamage":bool=false (a damaged PSD waits for an answer, as File > Open's does),"approveHighMemory":bool=false,"historicalXcfSampleOrder":"little-endian|big-endian"? (required for unmarked multibyte XCF7–11; never inferred)} (opens the file as a new untitled document named "<file name without its last extension>-N" with the file's size, resolution, colour mode, bit depth and profile, holding one embedded smart object layer named after the file) → {document, docId, name, layer, warnings, color, smartObject} (or {held, name, warnings, color, damaged, smartObject} while a prompt waits)"##,
+            r##"{"path":str,"confirmDamage":bool=false (a damaged PSD waits for an answer, as File > Open's does),"askHistoricalXcfSampleOrder":bool=false (hold the source and return a historical question if needed),"approveHighMemory":bool=false,"historicalXcfSampleOrder":"little-endian|big-endian"? (required for unmarked multibyte XCF7–11; never inferred)} (opens the file as a new untitled document named "<file name without its last extension>-N" with the file's size, resolution, colour mode, bit depth and profile, holding one embedded smart object layer named after the file) → {document, docId, name, layer, warnings, color, smartObject} (or {held, name, warnings, color, damaged, smartObject} while a profile/damage prompt waits, or {heldHistoricalXcfOpen, historicalXcfSampleOrderRequired} while a sample-order prompt waits)"##,
             native,
             open_as_smart_object
         ),

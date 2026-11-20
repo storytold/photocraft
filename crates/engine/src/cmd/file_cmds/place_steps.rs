@@ -253,7 +253,11 @@ impl PlaceSteps {
                 None => SmartSource::Embedded { file_name: file_name(&input.name), bytes: Arc::clone(&self.bytes) },
             };
             let mut so = SmartObject::new(source, placement, px);
-            so.historical_xcf_sample_order = input.opts.historical_xcf_sample_order;
+            so.historical_xcf_sample_order = ctx
+                .stage(0.95, 1., "Placing", |ctl| {
+                    photocraft_io::applicable_historical_xcf_sample_order(&input.name, &self.bytes, input.opts.historical_xcf_sample_order, ctl)
+                })
+                .map_err(|error| self.io_error(error))?;
             if input.linked.is_some() && so.historical_xcf_sample_order.is_some() {
                 so.historical_xcf_link_digest = Some(*blake3::hash(&self.bytes).as_bytes());
             }

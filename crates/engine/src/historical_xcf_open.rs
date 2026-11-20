@@ -12,6 +12,7 @@ pub(super) struct Held {
     name: String,
     bytes: Arc<Vec<u8>>,
     options: photocraft_io::ImportOptions,
+    smart_object: bool,
 }
 
 pub(super) fn hold(
@@ -21,7 +22,17 @@ pub(super) fn hold(
     question: photocraft_io::HistoricalXcfSampleOrderRequest,
     options: photocraft_io::ImportOptions,
 ) -> Result<Value> {
-    hold_with_budget(s, name, bytes, question, options, MAX_HELD_BYTES)
+    hold_with_budget(s, name, bytes, question, options, false, MAX_HELD_BYTES)
+}
+
+pub(crate) fn hold_smart_object(
+    s: &mut Session,
+    path: String,
+    bytes: Arc<Vec<u8>>,
+    question: photocraft_io::HistoricalXcfSampleOrderRequest,
+    options: photocraft_io::ImportOptions,
+) -> Result<Value> {
+    hold_with_budget(s, path, bytes, question, options, true, MAX_HELD_BYTES)
 }
 
 fn hold_with_budget(
@@ -30,6 +41,7 @@ fn hold_with_budget(
     bytes: Arc<Vec<u8>>,
     question: photocraft_io::HistoricalXcfSampleOrderRequest,
     options: photocraft_io::ImportOptions,
+    smart_object: bool,
     byte_budget: usize,
 ) -> Result<Value> {
     // A truncated Vec still owns its allocation. Charging its length would let retained
@@ -40,7 +52,7 @@ fn hold_with_budget(
     }
     let id = s.jobs.next_historical_xcf.checked_add(1).ok_or_else(|| EngineError::Other("historical source identity limit reached".into()))?;
     s.jobs.next_historical_xcf = id;
-    s.jobs.historical_xcf.push(Held { id, name, bytes, options });
+    s.jobs.historical_xcf.push(Held { id, name, bytes, options, smart_object });
     Ok(json!({"heldHistoricalXcfOpen":id,"historicalXcfSampleOrderRequired":{"version":question.version,"bitsPerSample":question.bits_per_sample}}))
 }
 
@@ -78,7 +90,11 @@ impl Session {
         let bytes = Arc::clone(&held.bytes);
         let mut options = held.options;
         options.historical_xcf_sample_order = Some(order);
-        let started = self.start_open_for_user_with_options(&name, OpenSource::Bytes(bytes), &options, background)?;
+        let started = if held.smart_object {
+            crate::file_cmds::resume_smart_object(self, name, bytes, options, background)?
+        } else {
+            self.start_open_for_user_with_options(&name, OpenSource::Bytes(bytes), &options, background)?
+        };
         self.jobs.historical_xcf.retain(|held| held.id != id);
         Ok(started)
     }
