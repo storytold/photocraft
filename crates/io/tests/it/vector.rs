@@ -128,6 +128,39 @@ fn clipping_path_resource_2999_unchanged_flatness_only_and_new_export() {
 }
 
 #[test]
+fn clipping_path_resource_2999_duplicate_and_rename_parity() {
+    let mut d = doc();
+    d.paths.push(NamedPath { name: "Outline".into(), path: path(), psd_raw: None });
+    d.paths.push(NamedPath { name: "Other".into(), path: path(), psd_raw: None });
+    d.clipping_path = Some(photocraft_doc::ClippingPath { name: "Outline".into(), flatness: 1.0 });
+
+    let fresh_bytes = export(&d, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let mut file = craft_psd::PsdFile::from_bytes(&fresh_bytes).unwrap();
+    let last_payload = b"\x07Outline\x00\x03\x00\x00\x00\x00\x00\x01".to_vec();
+    file.resources.push(craft_psd::ImageResource::new(2999, last_payload.clone()));
+
+    let mut imported = import("x.psd", &file.to_bytes().unwrap()).unwrap().document;
+    assert_eq!(imported.clipping_path.as_ref().unwrap().flatness, 3.0);
+
+    // Unchanged relative to the last matching 2999 resource preserves its bytes.
+    let unchanged = export(&imported, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let unchanged_2999: Vec<_> = craft_psd::PsdFile::from_bytes(&unchanged).unwrap().resources.into_iter().filter(|r| r.id == 2999).map(|r| r.data).collect();
+    assert_eq!(unchanged_2999.last().unwrap(), &last_payload);
+
+    // Flatness edit updates the fixed-point field while preserving the trailing fill-rule bytes.
+    imported.clipping_path.as_mut().unwrap().flatness = 4.0;
+    let edited = export(&imported, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let edited_2999: Vec<_> = craft_psd::PsdFile::from_bytes(&edited).unwrap().resources.into_iter().filter(|r| r.id == 2999).map(|r| r.data).collect();
+    assert_eq!(edited_2999.last().unwrap(), b"\x07Outline\x00\x04\x00\x00\x00\x00\x00\x01");
+
+    // Renaming the clipping path drops the old 2999 resources and emits a fresh one.
+    imported.clipping_path = Some(photocraft_doc::ClippingPath { name: "Other".into(), flatness: 2.0 });
+    let renamed = export(&imported, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let renamed_2999: Vec<_> = craft_psd::PsdFile::from_bytes(&renamed).unwrap().resources.into_iter().filter(|r| r.id == 2999).map(|r| r.data).collect();
+    assert_eq!(renamed_2999, vec![b"\x05Other\x00\x02\x00\x00".to_vec()]);
+}
+
+#[test]
 fn shape_layer_typed_roundtrip() {
     let mut d = doc();
     let sh = ShapeLayer {

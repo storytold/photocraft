@@ -310,10 +310,32 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
     });
     let top = *ids.last().ok_or_else(|| EngineError::Other("Auto-Blend needs two or more layers".into()))?;
     let label = "Auto-Blend Layers";
+    // The Background can't have a mask. In a two-layer panorama Photoshop leaves it the
+    // Background, unmasked under the other layer (#14214); otherwise (not measured yet) it
+    // becomes a normal layer first, as when adding a mask to it (#5745).
+    let keep_background = method == "panorama" && ids.len() == 2;
+    // The kept Background shows wherever it has pixels, so the other layer shows only where it
+    // doesn't: hidden over the canvas the Background fills, as measured; past the canvas its
+    // seam weights stay as they were.
+    let mut weights = weights;
+    let bg_alpha = ids.iter().zip(&alpha).find(|(id, _)| keep_background && doc.is_background(**id)).map(|(_, a)| a);
+    if let Some(bg_alpha) = bg_alpha {
+        for (id, wt) in ids.iter().zip(weights.iter_mut()) {
+            if !doc.is_background(*id) {
+                for (v, a) in wt.iter_mut().zip(bg_alpha) {
+                    *v *= 1.0 - a;
+                }
+            }
+        }
+    }
     let (new_layer, depth_layer) = s.edit(label, |doc, active| {
         for (id, wt) in ids.iter().zip(&weights) {
-            // The Background can't have a mask: it becomes a normal layer first, as in Photoshop.
-            crate::extra_cmds::background_to_layer_for_mask(doc, *id);
+            if doc.is_background(*id) {
+                if keep_background {
+                    continue;
+                }
+                crate::extra_cmds::background_to_layer_for_mask(doc, *id);
+            }
             let l = doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?;
             let mut mask = LayerMask::hide_all();
             mask.surface.write_region(area, wt);
@@ -374,3 +396,6 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod auto_blend_background_tests;
