@@ -67,6 +67,33 @@ fn empty_stores_preserve_shared_builtin_presets() {
 }
 
 #[test]
+fn saved_airbrush_group_keeps_legacy_and_explicit_rates_across_reopen() {
+    let mem = MemBackend::default();
+    let group = json!({"format": GROUP_FORMAT, "version": 1, "group": "Airbrush", "presets": [
+        {"name": "Legacy Airbrush", "brush": {"buildUp": true}},
+        {"name": "Custom Airbrush", "brush": {"buildUp": true, "buildUpRate": 35}},
+        {"name": "Regular Brush", "brush": {}},
+    ]});
+    mem.write(&group_file_name("Airbrush"), &serde_json::to_vec(&group).unwrap()).unwrap();
+
+    let mut s = Session::new();
+    let warnings = s.attach_preset_store(open(Box::new(mem.clone())));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(s.tools.brush.build_up_rate, 10.0);
+    for (name, build_up, rate) in [("Regular Brush", false, 10.0), ("Custom Airbrush", true, 35.0), ("Legacy Airbrush", true, 20.0)] {
+        s.execute("tools.setBrush", json!({"preset": name})).unwrap();
+        assert_eq!(s.tools.brush.build_up, build_up);
+        assert_eq!(s.tools.brush.build_up_rate, rate);
+    }
+
+    s.execute("brush.presets.save", json!({"name": "Resaved Airbrush"})).unwrap();
+    let mut reopened = Session::new();
+    assert!(reopened.attach_preset_store(open(Box::new(mem))).is_empty());
+    reopened.execute("tools.setBrush", json!({"preset": "Resaved Airbrush"})).unwrap();
+    assert_eq!(reopened.tools.brush.build_up_rate, 20.0);
+}
+
+#[test]
 fn sessions_have_no_store_by_default() {
     let mut s = Session::new();
     assert!(s.preset_store.is_none(), "headless sessions must stay hermetic");
