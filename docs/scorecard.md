@@ -128,9 +128,9 @@ Corpus floors (`crates/io/tests/it/corpus.rs`): the enforced minimums; the corpu
 
 | Corpus | Directory | Files | Oracle pass floor | Round-trip floor |
 |---|---|---:|---:|---:|
-| io corpus | `psd` | 170 | 148 | 169 |
-| psd-tools corpus | `psd-tools` | 309 | 249 | 308 |
-| photoshop oracles | `photoshop` | 258 | 190 | 258 |
+| io corpus | `corpus/psd` | 170 | 148 | 169 |
+| psd-tools corpus | `corpus/psd-tools` | 309 | 249 | 308 |
+| photoshop oracles | `corpus/photoshop` | 258 | 190 | 258 |
 
 | Id | Target | Status | Issue | Note |
 |---|---|---|---|---|
