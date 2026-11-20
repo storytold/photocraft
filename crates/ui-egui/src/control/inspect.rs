@@ -92,8 +92,6 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
     let task_bar_rect = app.ui.task_bar_shown.filter(|_| {
         crate::crop_task_bar::eligible(app)
             || crate::tools::type_tool::task_bar::eligible(app)
-            || crate::tools::place_action_bar::eligible(app)
-            || crate::tools::transform_task_bar::eligible(app)
     });
     // The one open canvas context menu, told apart by its kind.
     let menu = app.ui.canvas_tool_menu.as_ref();
