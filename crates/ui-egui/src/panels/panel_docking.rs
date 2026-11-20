@@ -152,11 +152,7 @@ fn spec(app: &PhotocraftApp, panel: &str) -> PanelSpec {
     if panel == TOOLBAR {
         // The toolbar floats in the main window, as production's: its tooltips, tool flyouts and Edit Toolbar drawer
         // open beside the one-button-wide rail, which its own OS window would clip.
-        let mut grid = ToolRail::<crate::state::Tool>::dock_grid(app.ctx(), super::toolbar::cells(app));
-        if matches!(app.ui.docking.layout.place(&panel.to_owned()), Some(PanelPlace::Floating { .. })) {
-            grid.most = grid.most.min(2);
-        }
-        spec = spec.grid(grid).allow_native(false).allow_float_resize(false);
+        spec = spec.grid(ToolRail::<crate::state::Tool>::dock_grid(app.ctx(), super::toolbar::cells(app))).allow_native(false).allow_float_resize(false);
     }
     spec
 }
