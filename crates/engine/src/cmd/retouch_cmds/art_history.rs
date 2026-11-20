@@ -74,7 +74,7 @@ fn points(p: &Value) -> Result<Vec<[f32; 2]>> {
 
 fn style_of(p: &Value) -> Result<Style> {
     match p.get("style") {
-        None | Some(Value::Null) => Ok(Style::TightMedium),
+        None | Some(Value::Null) => Ok(Style::TightShort),
         Some(v) => {
             let Some(s) = v.as_str() else {
                 return Err(err("unknown Art History style"));
@@ -163,6 +163,85 @@ fn stamp_region(
     }
 }
 
+/// The reference application's alerts for the refusals below (#12638); a hidden target is
+/// [`crate::hidden_target::ART_HISTORY_HIDDEN`].
+pub const LOCKED: &str = "Could not use the art history brush because the layer is locked.";
+pub const GROUP: &str = "Could not use the art history brush because the pixels in a group cannot be edited without merging the group.";
+pub const LACKS_LAYER: &str = "Could not use the art history brush because the history state lacks a corresponding layer.";
+pub const CANVAS_SIZE: &str = "Could not use the art history brush because the current canvas size does not match that of the history state.";
+pub const NO_SOURCE: &str = "Could not use the art history brush because no history state has been designated as the source for painting.";
+
+/// The command's precondition: a pixel layer, as the other retouching tools, with the alert text
+/// when a group is active.
+pub(super) fn enabled(s: &Session) -> std::result::Result<(), String> {
+    super::has_pixel_layer(s).map_err(|why| if crate::active_layer_of(s).is_ok_and(|l| l.is_group()) { GROUP.into() } else { why })
+}
+
+/// The targeted layer's pixels can't be painted: a group's (also one with a mask, which the
+/// precondition lets through for its mask), or Lock All or Lock Image Pixels, refused with the
+/// alert texts. A mask or channel target keeps the shared checks (not measured).
+fn refuse_layer(s: &Session, id: Option<photocraft_doc::LayerId>, p: &Value) -> Result<()> {
+    let (Some(id), Some(st)) = (id, s.active()) else { return Ok(()) };
+    let Some(layer) = st.doc.layer(id).filter(|_| pixel_target(p)) else { return Ok(()) };
+    if layer.is_group() {
+        return Err(EngineError::Other(GROUP.into()));
+    }
+    let locks = st.doc.effective_locks(id);
+    if locks.all || locks.pixels { Err(EngineError::Other(LOCKED.into())) } else { Ok(()) }
+}
+
+fn pixel_target(p: &Value) -> bool {
+    crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels
+}
+
+/// The source the stroke paints from, the History Brush's (the `state` or `snapshot` passed, else
+/// the History panel's source, through the shared [`super::history_source`]), refused with the
+/// alert texts: no source, then another canvas size, then another colour mode or a depth but 8
+/// bits ([`refuse_format`]), then a target layer the source state lacks. A mask or channel target
+/// keeps the History Brush's texts for the source refusals (not measured).
+fn source_surface(s: &Session, id: Option<photocraft_doc::LayerId>, p: &Value) -> Result<photocraft_raster::Surface> {
+    use crate::history_source_cmds::{SourceRefusal, checked_source, paint_source};
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let pixels = pixel_target(p);
+    let doc = if pixels {
+        checked_source(st, p, CMD)?.map_err(|why| {
+            EngineError::Other(
+                match why {
+                    SourceRefusal::NoSource => NO_SOURCE,
+                    SourceRefusal::CanvasSize { .. } => CANVAS_SIZE,
+                }
+                .into(),
+            )
+        })?
+    } else {
+        paint_source(st, p, CMD)?
+    };
+    refuse_format(&st.doc, &doc)?;
+    super::history_source(s, id, p, CMD)
+        .map_err(|e| if pixels && crate::channel_cmds::read_target_surface(&doc, id, p).is_err() { EngineError::Other(LACKS_LAYER.into()) } else { e })
+}
+
+/// A source of another colour mode, then any document but an 8-bit one, refused with the reference
+/// application's alert texts (#12637). The 16-bit text was seen with one layer only; two layers,
+/// or a depth change after the source, showed "not directly editable", so that text covers every
+/// other 16-bit case.
+fn refuse_format(doc: &photocraft_doc::Document, source: &photocraft_doc::Document) -> Result<()> {
+    use photocraft_color::SampleType;
+    let why = if source.mode != doc.mode {
+        "the current color mode does not match that of the history state."
+    } else {
+        match doc.depth {
+            SampleType::U8 => return Ok(()),
+            SampleType::F32 => "it does not work with 32 bit per channel images (convert image to 8 or 16 bit per channel to edit).",
+            SampleType::U16 if source.depth == doc.depth && doc.layer_count() == 1 => {
+                "it does not work with 16 bit per channel images (convert image to 8 bit per channel to edit)."
+            }
+            SampleType::U16 => "the pixel data for this layer is not directly editable.",
+        }
+    };
+    Err(EngineError::Other(format!("Could not use the art history brush because {why}")))
+}
+
 /// Run `paint.artHistoryBrush`.
 pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let _ = object(p)?;
@@ -183,7 +262,8 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let hardness = ranged(p, "hardness", s.tools.brush.hardness * 100.0, 0.0, 100.0)? / 100.0;
     let opacity = ranged(p, "opacity", 100.0, 0.0, 100.0)? / 100.0;
     let flow = ranged(p, "flow", 100.0, 0.0, 100.0)? / 100.0;
-    let area = ranged(p, "area", 50.0, 0.0, 100.0)?;
+    // Area takes 0..500 px, as the reference's field does (#12630).
+    let area = ranged(p, "area", 50.0, 0.0, 500.0)?;
     // Percent of the channel range; 0 (paint everywhere) is the default, as in Photoshop.
     let tolerance = ranged(p, "tolerance", 0.0, 0.0, 100.0)? / 100.0;
     let style = style_of(p)?;
@@ -194,9 +274,9 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (stroke, id) = parse_brush(s, p, CMD)?;
     let _ = stroke;
-    // The same source as the History Brush: the `state` or `snapshot` passed, else the History
-    // panel's source, refused after a canvas size change.
-    let src_surface = super::history_source(s, id, p, CMD)?;
+    refuse_layer(s, id, p)?;
+    // Compare document modes: the pixel format reads Indexed and Multichannel as RGB (#12826).
+    let src_surface = source_surface(s, id, p)?;
     // Truncating a huge row index only changes the seed.
     let seed = RNG_SEED ^ p.get("state").and_then(Value::as_u64).map_or(0, |i| i as u32);
     let dabs = art_history::place_dabs(&pts, size, area, style, seed).map_err(|e| match e {
@@ -215,8 +295,8 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(err("stroke too large"));
     }
 
-    // Nothing written (every dab under the tolerance, outside the selection or on locked
-    // transparency): a no-op stroke, with no history step.
+    // A stroke that writes nothing even at tolerance 0 (wholly outside the selection, locked
+    // transparency) is a quiet no-op; one the tolerance alone holds back adds an unchanged state (#12636).
     let mut nothing_written = false;
     let dmg = run_stroke(s, "Art History Brush", id, p, |_, surf, sel, lock| {
         let fmt = surf.format();
@@ -232,6 +312,10 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
         let sel_mask = selection_mask(sel, outer);
         let n = stamp_region(&mut dest, &src_reg, &dabs, hardness, opacity, flow, tolerance, sel_mask.as_deref(), lock, alpha_index(&fmt))?;
         if n == 0 {
+            // `dest` is unchanged, so the same stroke at tolerance 0 tells whether it would paint.
+            if tolerance > 0.0 && stamp_region(&mut dest, &src_reg, &dabs, hardness, opacity, flow, 0.0, sel_mask.as_deref(), lock, alpha_index(&fmt))? > 0 {
+                return Ok(Rect::EMPTY);
+            }
             nothing_written = true;
             return Err(err("the stroke changed no pixel"));
         }
@@ -242,7 +326,7 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
         Err(_) if nothing_written => return Ok(json!({ "damage": Value::Null })),
         r => r?,
     };
-    Ok(json!({ "damage": damage_json(dmg) }))
+    Ok(json!({ "damage": if dmg.is_empty() { Value::Null } else { damage_json(dmg) } }))
 }
 
 #[cfg(test)]
@@ -290,9 +374,10 @@ mod tests {
         s.execute("paint.artHistoryBrush", p)
     }
 
+    /// 8-bit only: other depths are refused (#12637).
     #[test]
-    fn restores_open_state_at_every_depth_and_undoes() {
-        for (depth, mode) in [(8u64, "rgb"), (16, "rgb"), (32, "rgb"), (16, "gray")] {
+    fn restores_open_state_in_8_bit_modes_and_undoes() {
+        for (depth, mode) in [(8u64, "rgb"), (8, "gray")] {
             let mut s = session(48, 32, depth, mode);
             paint_layer(&mut s, |_, _| [0.1, 0.8, 0.2, 1.0]);
             s.execute("edit.fill", json!({"color": "#2030c0"})).unwrap();
@@ -331,14 +416,15 @@ mod tests {
     }
 
     #[test]
-    fn stroke_under_the_tolerance_records_no_step() {
+    fn stroke_under_the_tolerance_records_an_unchanged_step() {
         let mut s = session(48, 32, 8, "rgb");
         paint_layer(&mut s, |_, _| [0.5, 0.5, 0.5, 1.0]);
         paint_layer(&mut s, |_, _| [0.6, 0.6, 0.6, 1.0]);
         let steps = s.active().unwrap().history.past_len();
         let r = stroke(&mut s, json!({"state": 1, "tolerance": 50})).unwrap();
         assert!(r["damage"].is_null(), "{r}");
-        assert_eq!(s.active().unwrap().history.past_len(), steps);
+        assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+        assert_eq!(s.active().unwrap().history.undo_label(), Some("Art History Brush"));
         assert!((rgba(&s, 24, 16)[0] - 0.6).abs() < 0.01);
     }
 
@@ -388,7 +474,8 @@ mod tests {
     }
 
     /// A stroke that writes nothing (wholly outside the selection, or on transparent pixels
-    /// with Lock Transparency) does nothing, as with the tolerance: no error, no History step.
+    /// with Lock Transparency) does nothing, unlike one the tolerance holds back: no error, no
+    /// History step.
     #[test]
     fn a_stroke_that_writes_nothing_is_a_quiet_no_op() {
         let mut s = session(48, 32, 8, "rgb");
@@ -435,31 +522,29 @@ mod tests {
         before.iter().enumerate().map(|(i, b)| (0..4).map(|c| (rgba(s, 8 + i as i32, 16)[c] - b[c]).abs()).sum::<f32>()).sum()
     }
 
-    /// The stroke's Opacity scales how far it restores the source, at every depth; omitted = 100.
+    /// The stroke's Opacity scales how far it restores the source; omitted = 100.
     #[test]
-    fn opacity_scales_the_stroke_at_every_depth() {
-        for depth in [8u64, 16, 32] {
-            let setup = || {
-                let mut s = session(48, 32, depth, "rgb");
-                s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
-                s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
-                s
-            };
-            let row = |s: &Session| (8..41).map(|x| rgba(s, x, 16)).collect::<Vec<_>>();
-            let diff = |extra: Value| {
-                let mut s = setup();
-                let before = row(&s);
-                stroke(&mut s, extra).unwrap();
-                row_diff(&s, &before)
-            };
-            let none = diff(json!({"state": 1, "opacity": 0}));
-            let half = diff(json!({"state": 1, "opacity": 50}));
-            let full = diff(json!({"state": 1, "opacity": 100}));
-            let omitted = diff(json!({"state": 1}));
-            assert_eq!(none, 0.0, "opacity 0 leaves the pixels alone at depth {depth}");
-            assert!(half > 0.0 && half < full, "depth {depth}: half {half} full {full}");
-            assert_eq!(omitted, full, "omitted opacity is 100 at depth {depth}");
-        }
+    fn opacity_scales_the_stroke() {
+        let setup = || {
+            let mut s = session(48, 32, 8, "rgb");
+            s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+            s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+            s
+        };
+        let row = |s: &Session| (8..41).map(|x| rgba(s, x, 16)).collect::<Vec<_>>();
+        let diff = |extra: Value| {
+            let mut s = setup();
+            let before = row(&s);
+            stroke(&mut s, extra).unwrap();
+            row_diff(&s, &before)
+        };
+        let none = diff(json!({"state": 1, "opacity": 0}));
+        let half = diff(json!({"state": 1, "opacity": 50}));
+        let full = diff(json!({"state": 1, "opacity": 100}));
+        let omitted = diff(json!({"state": 1}));
+        assert_eq!(none, 0.0, "opacity 0 leaves the pixels alone");
+        assert!(half > 0.0 && half < full, "half {half} full {full}");
+        assert_eq!(omitted, full, "omitted opacity is 100");
     }
 
     #[test]
@@ -525,3 +610,19 @@ mod tests {
         assert!(s.is_enabled("paint.artHistoryBrush"));
     }
 }
+
+#[cfg(test)]
+#[path = "art_history_noop_state_tests.rs"]
+mod art_history_noop_state_tests;
+
+#[cfg(test)]
+#[path = "art_history_mode_mismatch_tests.rs"]
+mod art_history_mode_mismatch_tests;
+
+#[cfg(test)]
+#[path = "art_history_depth_tests.rs"]
+mod art_history_depth_tests;
+
+#[cfg(test)]
+#[path = "art_history_refusal_tests.rs"]
+mod refusal_tests;

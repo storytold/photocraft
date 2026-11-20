@@ -11,6 +11,12 @@ use super::{
 
 pub(super) const RANGE_LABELS: [&str; 6] = ["Reds", "Yellows", "Greens", "Cyans", "Blues", "Magentas"];
 
+/// The range picker's swatches in order (#14753): Master, then the six colour ranges.
+pub(super) const SWATCH_LABELS: [&str; 7] = ["Master", "Red", "Yellow", "Green", "Cyan", "Blue", "Magenta"];
+
+/// A range swatch's diameter, in points.
+const SWATCH: f32 = 18.0;
+
 /// The Saturation slider's track: grey to the hue at full saturation (UI-217-16).
 pub(super) fn saturation_track(hue_deg: f32) -> [Color32; 2] {
     [Color32::from_gray(128), hue_color(hue_deg)]
@@ -38,19 +44,192 @@ pub(super) fn move_hue_range_handle(bounds: [f32; 4], k: usize, deg: f32) -> [f3
     b
 }
 
+/// The range handle a press at `x` grabs, given the four handles' x positions on a bar `w` wide:
+/// the nearest within 10 points, or within a third of the gap to the next handle on that side, so
+/// the middle third of a narrow zone still drags the zone (at least 3 points, for handles that
+/// coincide). The bar is a hue circle: the next handle past an edge is the first from the other.
+pub(super) fn hue_range_handle_at(xs: [f32; 4], x: f32, w: f32) -> Option<u8> {
+    let k = nearest(&xs, x)?;
+    let (xk, d) = (xs[k as usize], x - xs[k as usize]);
+    let gap = xs
+        .iter()
+        .enumerate()
+        .filter(|&(j, _)| j != k as usize)
+        .map(|(_, &o)| if d >= 0.0 { (o - xk).rem_euclid(w) } else { (xk - o).rem_euclid(w) })
+        .fold(f32::INFINITY, f32::min);
+    (d.abs() < (gap / 3.0).clamp(3.0, 10.0)).then_some(k)
+}
+
+/// Which zone of a colour range a hue `deg` falls in, between its handles: 0 = the left fade
+/// (between the first two), 1 = the fully-on span, 2 = the right fade; `None` outside the range.
+pub(super) fn hue_range_zone(bounds: [f32; 4], deg: f32) -> Option<u8> {
+    let b = HueRange::canonical_bounds(bounds);
+    let rel = (deg - b[0]).rem_euclid(360.0);
+    let (one, two, three) = (b[1] - b[0], b[2] - b[0], b[3] - b[0]);
+    if rel <= one {
+        Some(0)
+    } else if rel <= two {
+        Some(1)
+    } else if rel <= three {
+        Some(2)
+    } else {
+        None
+    }
+}
+
+/// A drag of `delta` degrees on a zone of a colour range (#9252), as in Photoshop: the left fade
+/// moves the two left handles, the fully-on span all four, the right fade the two right handles;
+/// a side never crosses the other or grows the range past a turn.
+pub(super) fn move_hue_range_zone(start: [f32; 4], zone: u8, delta: f32) -> [f32; 4] {
+    let b = HueRange::canonical_bounds(start);
+    if !delta.is_finite() {
+        return b;
+    }
+    let moved = match zone {
+        0 => {
+            let d = delta.min(b[2] - b[1]).max(b[3] - 359.0 - b[0]);
+            [b[0] + d, b[1] + d, b[2], b[3]]
+        }
+        1 => b.map(|v| v + delta),
+        2 => {
+            let d = delta.max(b[1] - b[2]).min(b[0] + 359.0 - b[3]);
+            [b[0], b[1], b[2] + d, b[3] + d]
+        }
+        _ => b,
+    };
+    HueRange::canonical_bounds(moved)
+}
+
 /// The spectrum bar after the adjustment (what each hue becomes), sampled at `n` hues.
 fn adjusted_spectrum(v: &Value, n: usize) -> Vec<Color32> {
+    let hues: Vec<[f32; 3]> = (0..n).map(|i| photocraft_color::convert::hsb_to_rgb([i as f32 / (n - 1).max(1) as f32 * 360.0, 1.0, 1.0])).collect();
+    adjusted_colors(v, &hues)
+}
+
+/// What the adjustment `v` makes of each colour in `rgb`.
+fn adjusted_colors(v: &Value, rgb: &[[f32; 3]]) -> Vec<Color32> {
     let adj = photocraft_engine::commands::adjustment_from_params("hueSaturation", v);
-    let rect = photocraft_geom::Rect::new(0, 0, n as i32, 1);
-    let px = (0..n)
-        .map(|i| {
-            let c = photocraft_color::convert::hsb_to_rgb([i as f32 / (n - 1).max(1) as f32 * 360.0, 1.0, 1.0]);
-            [c[0], c[1], c[2], 1.0]
-        })
-        .collect();
+    let rect = photocraft_geom::Rect::new(0, 0, rgb.len() as i32, 1);
+    let px = rgb.iter().map(|c| [c[0], c[1], c[2], 1.0]).collect();
     let mut buf = photocraft_compose::Buffer { rect, px };
     photocraft_compose::adjust::apply(&adj, &mut buf);
     buf.px.iter().map(|p| color32([p[0], p[1], p[2]])).collect()
+}
+
+/// The centre of a colour range: the middle of its fully-on span, in 0..360.
+fn range_centre(bounds: [f32; 4]) -> f32 {
+    let b = HueRange::canonical_bounds(bounds);
+    ((b[1] + b[2]) / 2.0).rem_euclid(360.0)
+}
+
+/// The label above the Hue field (#14753): the centre of colour range `range` (1 = Reds …
+/// 6 = Magentas) and, once its Hue moves it, where it goes ("0° / 30°"); none for Master (0).
+pub(super) fn range_centre_label(v: &Value, range: usize) -> Option<String> {
+    let i = range.checked_sub(1)?;
+    let o = &v[*HUE_RANGES.get(i)?];
+    let c = range_centre(nums(o, "range", HueRange::neutral(i).bounds)).round();
+    let h = num(o, "hue", 0.0).round();
+    // `+ 0.0` turns a -0 into 0, so no "-0°".
+    let deg = |d: f32| format!("{:.0}°", d.rem_euclid(360.0) + 0.0);
+    Some(if h == 0.0 { deg(c) } else { format!("{} / {}", deg(c), deg(c + h)) })
+}
+
+/// What colour range `i` (0 = Reds … 5 = Magentas) shows on its swatch (#14753): the colour at its
+/// centre and, once its own Hue, Saturation or Lightness is not zero, what they make of it.
+pub(super) fn range_swatch(v: &Value, i: usize) -> (Color32, Option<Color32>) {
+    let Some(key) = HUE_RANGES.get(i) else { return (Color32::TRANSPARENT, None) };
+    let o = &v[*key];
+    let c = range_centre(nums(o, "range", HueRange::neutral(i).bounds));
+    let before = photocraft_color::convert::hsb_to_rgb([c, 1.0, 1.0]);
+    let edited = ["hue", "saturation", "lightness"].iter().any(|k| num(o, k, 0.0) != 0.0);
+    let after = edited.then(|| {
+        // This range alone: Master and the other ranges don't change its swatch.
+        let mut only = json!({});
+        only[*key] = o.clone();
+        adjusted_colors(&only, &[before]).first().copied().unwrap_or(Color32::TRANSPARENT)
+    });
+    (color32(before), after)
+}
+
+/// The colorize colour, as Colorize makes a mid grey (#14753).
+pub(super) fn colorize_color(v: &Value) -> Color32 {
+    adjusted_colors(v, &[[0.5; 3]]).first().copied().unwrap_or(Color32::TRANSPARENT)
+}
+
+/// Half a disc of radius `r` at `c`: the left half or the right one.
+fn half_disc(p: &egui::Painter, c: egui::Pos2, r: f32, left: bool, fill: Color32) {
+    let start = if left { std::f32::consts::FRAC_PI_2 } else { -std::f32::consts::FRAC_PI_2 };
+    let pts = (0..=16).map(|k| start + std::f32::consts::PI * k as f32 / 16.0).map(|a| c + vec2(a.cos(), a.sin()) * r).collect();
+    p.add(egui::Shape::convex_polygon(pts, fill, Stroke::NONE));
+}
+
+/// A hue wheel of radius `r` at `c`, red at the top: the Master swatch.
+fn hue_wheel(p: &egui::Painter, c: egui::Pos2, r: f32) {
+    let at = |deg: f32| {
+        let a = (deg - 90.0).to_radians();
+        c + vec2(a.cos(), a.sin()) * r
+    };
+    for k in 0..36 {
+        let (a, z) = (k as f32 * 10.0, (k + 1) as f32 * 10.0);
+        // Each wedge overlaps the next by a little, so no background shows through the seams.
+        p.add(egui::Shape::convex_polygon(vec![c, at(a - 0.5), at(z + 0.5)], hue_color(a + 5.0), Stroke::NONE));
+    }
+}
+
+/// The range picker (#14753): seven round swatches, Master (a hue wheel) then the six colour
+/// ranges, the selected one ringed; a click selects that range. An edited range shows its colour
+/// before and after, split down the middle, with a dot under it. Colorize collapses the row into
+/// one disc in the colorize colour.
+fn range_swatches(ui: &mut egui::Ui, v: &Value, range: &mut usize, colorize: bool) {
+    let t = Tokens::get(ui.ctx());
+    let size = vec2(SWATCH, SWATCH + 6.0);
+    let r = SWATCH / 2.0 - 2.0;
+    let centre = |rect: Rect| pos2(rect.center().x, rect.top() + SWATCH / 2.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        if colorize {
+            let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
+            ui.painter().circle(centre(rect), r, colorize_color(v), Stroke::new(1.0, t.field_border));
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, tl!("Colorize")));
+            return;
+        }
+        let swatches: Vec<(Rect, egui::Response)> = SWATCH_LABELS.iter().map(|_| ui.allocate_exact_size(size, Sense::click())).collect();
+        if let Some(i) = swatches.iter().position(|(_, resp)| resp.clicked()) {
+            *range = i;
+        }
+        let p = ui.painter();
+        for (i, ((rect, resp), label)) in swatches.into_iter().zip(SWATCH_LABELS).enumerate() {
+            let c = centre(rect);
+            if i == 0 {
+                hue_wheel(p, c, r);
+            } else {
+                match range_swatch(v, i - 1) {
+                    (before, Some(after)) => {
+                        half_disc(p, c, r, true, before);
+                        half_disc(p, c, r, false, after);
+                        p.circle_filled(pos2(c.x, rect.bottom() - 1.5), 1.5, t.text_dim);
+                    }
+                    (before, None) => {
+                        p.circle_filled(c, r, before);
+                    }
+                }
+            }
+            let selected = i == *range;
+            if selected {
+                p.circle_stroke(c, r + 1.0, Stroke::new(2.0, t.text));
+            } else {
+                p.circle_stroke(c, r, Stroke::new(1.0, t.field_border));
+            }
+            // Keyboard focus gets its own accent ring, clear of the selection ring, so tabbing to
+            // a swatch shows where Space or Enter will act without moving the selection.
+            if resp.has_focus() {
+                p.circle_stroke(c, r + 3.0, Stroke::new(1.0, t.accent));
+            }
+            let label = tl!(label);
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, selected, label));
+            resp.on_hover_text(label);
+        }
+    });
 }
 
 pub(super) fn spectrum_bar(p: &egui::Painter, r: Rect, colors: &[Color32]) {
@@ -70,10 +249,7 @@ pub(super) fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) ->
     if colorize {
         range = 0;
     }
-    ui.horizontal(|ui| {
-        let opts: Vec<(usize, &str)> = std::iter::once((0, tl!("Master"))).chain(RANGE_LABELS.iter().enumerate().map(|(i, l)| (i + 1, *l))).collect();
-        ui.add_enabled_ui(!colorize, |ui| widgets::dropdown(ui, &format!("{range_id:?}"), tl!("Range"), &mut range, &opts, 120.0));
-    });
+    range_swatches(ui, v, &mut range, colorize);
     ui.data_mut(|d| d.insert_temp(range_id, range));
     let mut e = Edit::default();
     let hue_grad = widgets::hue_stops();
@@ -105,6 +281,10 @@ pub(super) fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) ->
         let key = HUE_RANGES[range - 1];
         if !v.get(key).is_some_and(Value::is_object) {
             v[key] = json!({});
+        }
+        if let Some(centre) = range_centre_label(v, range) {
+            // One row, right-aligned: a bare right-to-left layout would centre it in all the height left.
+            ui.horizontal(|ui| ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(RichText::new(centre).color(t.text_dim))));
         }
         let mut o = v[key].clone();
         let mut sub = Edit::default();
@@ -177,17 +357,44 @@ pub(super) fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) ->
             p.rect_filled(Rect::from_center_size(pos2(x, mid), vec2(5.0, 12.0)), 1.0, fill);
             p.rect_stroke(Rect::from_center_size(pos2(x, mid), vec2(5.0, 12.0)), 1.0, Stroke::new(1.0, t.text_dim), StrokeKind::Inside);
         }
+        ui.data_mut(|d| d.insert_temp(cx.mem.with("hs-range-bars"), bars));
         let drag_id = cx.mem.with("hs-range-drag");
+        let zone_id = cx.mem.with("hs-range-zone");
         let mut which: Option<u8> = ui.data(|d| d.get_temp(drag_id)).flatten();
+        // A press between the handles drags a zone (#9252): its zone, the bounds and x it began at.
+        let mut zone: Option<(u8, [f32; 4], f32)> = ui.data(|d| d.get_temp(zone_id)).flatten();
         if bresp.is_pointer_button_down_on()
             && ui.input(|i| i.pointer.primary_pressed())
             && let Some(pos) = ui.input(|i| i.pointer.press_origin())
         {
-            which = nearest(&b.map(xof), pos.x).filter(|k| (xof(b[*k as usize]) - pos.x).abs() < 10.0);
+            which = hue_range_handle_at(b.map(xof), pos.x, w);
+            zone = if which.is_none() { hue_range_zone(b, deg_of(pos.x)).map(|z| (z, b, pos.x)) } else { None };
         }
-        if bresp.is_pointer_button_down_on()
-            && let (Some(k), Some(pos)) = (which, ui.input(|i| i.pointer.interact_pos()))
-        {
+        // The release frame applies its position too: a move and a release that land in one frame
+        // would otherwise commit the bounds from before the move. It ends where the button let go,
+        // not where the pointer went after that in the same frame.
+        let released_at = ui.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, .. } => Some(*pos),
+                _ => None,
+            })
+        });
+        let live = bresp.is_pointer_button_down_on() || released_at.is_some();
+        let drag_pos = released_at.or_else(|| ui.input(|i| i.pointer.interact_pos()));
+        if live && let (Some((z, start, x0)), Some(pos)) = (zone, drag_pos) {
+            let before = b;
+            b = move_hue_range_zone(start, z, (pos.x - x0) / w * 360.0);
+            if b != before {
+                v[key]["range"] = json!(b.map(|x| x.round()));
+                e.changed = true;
+            }
+        }
+        if zone.is_some() && !bresp.is_pointer_button_down_on() {
+            zone = None;
+            e.commit = true;
+        }
+        ui.data_mut(|d| d.insert_temp(zone_id, zone));
+        if live && let (Some(k), Some(pos)) = (which, drag_pos) {
             let k = k as usize;
             let deg = deg_of(pos.x);
             let before = b;
@@ -208,3 +415,7 @@ pub(super) fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) ->
     }
     e
 }
+
+#[cfg(test)]
+#[path = "hue_saturation_swatches_tests.rs"]
+mod swatches_tests;
