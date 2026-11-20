@@ -6,7 +6,8 @@
 //! Every parameter is validated: a bad one is an error, never a panic.
 
 use photocraft_algo::content_aware::FillOptions;
-use photocraft_color::BlendMode;
+use photocraft_color::{BlendMode, ColorMode, SampleType};
+use photocraft_doc::Document;
 use photocraft_geom::{Rect, TILE_SIZE};
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde_json::{Value, json};
@@ -71,6 +72,34 @@ fn mode(p: &Value) -> Result<BlendMode> {
     }
 }
 
+/// The blend modes the reference application greys in its Fill, Stroke and Fade Mode lists for a document of `mode`
+/// at `depth` (#13806, #14647). Combinations it wasn't measured in (Grayscale 16/32, Lab 16, CMYK 16, Multichannel,
+/// Duotone…) grey none.
+pub fn greyed_modes(mode: ColorMode, depth: SampleType) -> &'static [BlendMode] {
+    use BlendMode::*;
+    match (mode, depth) {
+        (ColorMode::Grayscale, SampleType::U8) => &[DarkerColor, LighterColor, Hue, Saturation, Color, Luminosity],
+        (ColorMode::Lab, SampleType::U8) => &[Darken, ColorBurn, Lighten, ColorDodge, Difference, Exclusion, Subtract, Divide],
+        (ColorMode::Rgb, SampleType::F32) => {
+            &[ColorBurn, LinearBurn, Screen, ColorDodge, Overlay, SoftLight, HardLight, VividLight, LinearLight, PinLight, HardMix, Exclusion]
+        }
+        _ => &[],
+    }
+}
+
+/// An error for `cmd` when `blend` is one of [`greyed_modes`] for `doc`: the dialogs never offer it there.
+pub(crate) fn check_mode_available(cmd: &str, doc: &Document, blend: BlendMode) -> Result<()> {
+    if !greyed_modes(doc.mode, doc.depth).contains(&blend) {
+        return Ok(());
+    }
+    let model = match doc.mode {
+        ColorMode::Rgb => "RGB".to_string(),
+        ColorMode::Cmyk => "CMYK".to_string(),
+        other => format!("{other:?}"),
+    };
+    Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("{} is not available in {model} {}-bit documents", blend.label(), doc.depth.bits()) })
+}
+
 /// Opacity in percent (0–100) → 0..1.
 fn opacity(p: &Value) -> Result<f32> {
     match p.get("opacity") {
@@ -99,6 +128,7 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     let channel = crate::channel_cmds::is_channel_target(p);
     let id = if channel { None } else { Some(layer_param(s, p)?) };
     let st = s.active().ok_or(EngineError::NoDocument)?;
+    check_mode_available(CMD, &st.doc, mode)?;
     let doc_bounds = st.doc.bounds();
     let sel = st.doc.selection.clone();
     let area = sel.as_ref().map_or(doc_bounds, |m| m.content_bounds().intersect(&doc_bounds));
@@ -526,3 +556,6 @@ fn blend_tile(bytes: &mut [u8], fmt: &photocraft_color::PixelFormat, origin: Rec
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod mode_by_document_tests;

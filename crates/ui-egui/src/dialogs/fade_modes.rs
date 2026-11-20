@@ -4,30 +4,14 @@
 
 use craft::ui::patterns::form_dialogs::Param;
 use craft::ui::runtime::env::Label;
-use photocraft_color::{BlendMode, ColorMode, SampleType};
 
 use crate::PhotocraftApp;
 
 pub(crate) const COMMAND: &str = "edit.fade";
 
-/// The modes the reference application greys in its Fade dialog for a document of `mode` at `depth`. Combinations it
-/// wasn't measured in (Grayscale 16/32, Lab 16, CMYK 16, Multichannel, Duotone…) grey none.
-pub(crate) fn greyed(mode: ColorMode, depth: SampleType) -> &'static [BlendMode] {
-    use BlendMode::*;
-    match (mode, depth) {
-        (ColorMode::Grayscale, SampleType::U8) => &[DarkerColor, LighterColor, Hue, Saturation, Color, Luminosity],
-        (ColorMode::Lab, SampleType::U8) => &[Darken, ColorBurn, Lighten, ColorDodge, Difference, Exclusion, Subtract, Divide],
-        (ColorMode::Rgb, SampleType::F32) => {
-            &[ColorBurn, LinearBurn, Screen, ColorDodge, Overlay, SoftLight, HardLight, VividLight, LinearLight, PinLight, HardMix, Exclusion]
-        }
-        _ => &[],
-    }
-}
-
 /// The Mode row of the Fade dialog, labelled `label`: the blend list with the active document's greyed modes disabled.
 pub(crate) fn param(app: &PhotocraftApp, label: Label) -> Param {
-    let greyed = app.session.active().map_or(&[][..], |st| greyed(st.doc.mode, st.doc.depth));
-    super::blend_options::blend_param("mode", label, false, BlendMode::Normal).disabled_options(greyed.iter().map(|m| (*m).key().to_string()))
+    super::blend_options::document_mode_param(app, label)
 }
 
 #[cfg(test)]
