@@ -56,7 +56,7 @@ fn document_with(d: &DocState, detail: bool) -> Value {
         "layers": doc.layers.iter().rev().map(|l| layer_sel(l, &selected, &instances, Some(&doc.metadata), detail)).collect::<Vec<_>>(),
         "history": d.history.entries(),
         "historySource": crate::history_source_cmds::source_json(d),
-        "snapshots": d.snapshots.iter().map(|snap| json!({"id": snap.id, "name": snap.name})).collect::<Vec<_>>(),
+        "snapshots": d.snapshots().iter().map(|snap| json!({"id": snap.id, "name": snap.name})).collect::<Vec<_>>(),
         "canUndo": d.history.can_undo(),
         "canRedo": d.history.can_redo(),
         "revision": d.revision,

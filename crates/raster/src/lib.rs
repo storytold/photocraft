@@ -309,12 +309,25 @@ impl PruneCursor {
     }
 }
 
-#[derive(Clone)]
 pub struct Surface {
-    generation: u64,
+    /// 0 means no number assigned yet; see [`Surface::generation`].
+    generation: std::sync::atomic::AtomicU64,
     format: PixelFormat,
     default_pixel: Box<[u8]>,
     tiles: BTreeMap<TileCoord, Arc<Tile>>,
+}
+
+impl Clone for Surface {
+    fn clone(&self) -> Self {
+        // Read first so the clone and the original share one number: they hold the same pixels.
+        let generation = self.generation();
+        Self {
+            generation: std::sync::atomic::AtomicU64::new(generation),
+            format: self.format,
+            default_pixel: self.default_pixel.clone(),
+            tiles: self.tiles.clone(),
+        }
+    }
 }
 
 impl std::fmt::Debug for Surface {
@@ -601,14 +614,29 @@ fn fresh_surface_generation() -> u64 {
     NEXT_SURFACE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// A generation slot with no number yet; the first [`Surface::generation`] read assigns one.
+fn unassigned_generation() -> std::sync::atomic::AtomicU64 {
+    std::sync::atomic::AtomicU64::new(0)
+}
+
 impl Surface {
-    /// Equal generations identify the same pixel state, including across clones.
+    /// Equal generations identify the same pixel state, including across clones. Numbers are
+    /// assigned on first read after a mutation, so writes never touch the shared counter.
     pub fn generation(&self) -> u64 {
-        self.generation
+        use std::sync::atomic::Ordering::Relaxed;
+        let current = self.generation.load(Relaxed);
+        if current != 0 {
+            return current;
+        }
+        let fresh = fresh_surface_generation();
+        match self.generation.compare_exchange(0, fresh, Relaxed, Relaxed) {
+            Ok(_) => fresh,
+            Err(assigned) => assigned,
+        }
     }
 
     fn note_mutation(&mut self) {
-        self.generation = fresh_surface_generation();
+        *self.generation.get_mut() = 0;
     }
 
     /// Reads a region into a newly allocated buffer, returning an error instead of aborting if
@@ -672,7 +700,7 @@ impl Surface {
 
     /// Transparent/zero surface.
     pub fn new(format: PixelFormat) -> Self {
-        Self { generation: fresh_surface_generation(), format, default_pixel: vec![0u8; format.bytes_per_pixel()].into_boxed_slice(), tiles: BTreeMap::new() }
+        Self { generation: unassigned_generation(), format, default_pixel: vec![0u8; format.bytes_per_pixel()].into_boxed_slice(), tiles: BTreeMap::new() }
     }
 
     /// Surface whose untouched pixels read as `pixel` (normalised channel values).
@@ -1397,8 +1425,7 @@ impl Surface {
     /// `content` must hold every pixel that isn't the default one (`content_bounds`, say): only
     /// tiles it reaches are kept.
     pub fn translated(&self, dx: i32, dy: i32, content: Rect) -> Surface {
-        let mut out =
-            Surface { generation: fresh_surface_generation(), format: self.format, default_pixel: self.default_pixel.clone(), tiles: BTreeMap::new() };
+        let mut out = Surface { generation: unassigned_generation(), format: self.format, default_pixel: self.default_pixel.clone(), tiles: BTreeMap::new() };
         let sources = || self.tiles.iter().filter(move |(c, _)| !c.rect().intersect(&content).is_empty());
         if dx % TILE_SIZE == 0 && dy % TILE_SIZE == 0 {
             let (tx, ty) = (dx / TILE_SIZE, dy / TILE_SIZE);
