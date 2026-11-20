@@ -201,6 +201,48 @@ pub(crate) fn recorded_duplicate(s: &Session, mut p: Value) -> Value {
     p
 }
 
+/// [`fit_canvas`] for New Artboard and Artboard from Group, as the reference application grows
+/// the canvas for them (#14565): a board past an
+/// edge grows the canvas on that side by the whole old canvas width or height, and one past the
+/// left or top edge shifts the document by that growth (800 x 600 with a board at -100,-50 gives
+/// 1600 x 1200, everything shifted +800,+600). A board more than one canvas past an edge (not
+/// measured) grows it as far as the board reaches, so the board still fits. Falls back to
+/// [`fit_canvas`] when that growth would pass the largest canvas. Artboard from Layers, and moving
+/// or resizing a board, keep [`fit_canvas`]'s exact growth (not measured; the Artboard tool's
+/// Auto-size Canvas included).
+#[must_use = "pass the shift to `follow_shift`, or the Color Samplers and symmetry stay behind (#9302)"]
+pub(crate) fn fit_canvas_for_new_board(doc: &mut Document) -> (i32, i32) {
+    let max = i64::from(crate::document_preset_cmds::MAX_DIMENSION);
+    let boards: Vec<Rect> = doc.artboards().iter().map(|b| b.2.rect).collect();
+    // How far the canvas grows before and after its `len` on one axis, or `None` past the limit.
+    let grow = |edges: &dyn Fn(&Rect) -> (i32, i32), len: u32| {
+        let len = i64::from(len);
+        let (lo, hi) = boards.iter().map(edges).fold((0, len), |(lo, hi), (a, b)| (lo.min(i64::from(a)), hi.max(i64::from(b))));
+        let before = if lo < 0 { len.max(-lo) } else { 0 };
+        let after = if hi > len { len.max(hi - len) } else { 0 };
+        let total = u32::try_from(before + len + after).ok().filter(|t| i64::from(*t) <= max)?;
+        Some((i32::try_from(before).ok()?, total))
+    };
+    let (Some((sx, w)), Some((sy, h))) = (grow(&|r| (r.x0, r.x1), doc.size.width), grow(&|r| (r.y0, r.y1), doc.size.height)) else {
+        return fit_canvas(doc);
+    };
+    // `translate_doc` checks before it moves anything, so a refusal leaves the document as is.
+    if (sx, sy) != (0, 0) && crate::image_cmds::translate_doc(doc, "artboard", sx, sy).is_err() {
+        return fit_canvas(doc);
+    }
+    let size = Size::new(w, h);
+    if size != doc.size {
+        doc.size = size;
+        // Shape pixels are cut at the canvas (#2389), as in `fit_canvas`.
+        crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
+    }
+    (sx, sy)
+}
+
+#[cfg(test)]
+#[path = "artboard_cmds/from_group_canvas_growth_tests.rs"]
+mod from_group_canvas_growth_tests;
+
 /// Grow the canvas so every artboard fits. Photoshop's artboard documents grow in every
 /// direction: a board left of or above the origin shifts the whole document (boards, their
 /// contents, guides, paths…) right/down by its overhang, then the canvas grows to show it. An
@@ -323,7 +365,7 @@ fn new_artboard(s: &mut Session, p: &Value) -> Result<Value> {
         if take {
             move_background_into(doc, id);
         }
-        let shift = fit_canvas(doc);
+        let shift = fit_canvas_for_new_board(doc);
         *active = Some(id);
         Ok((id, shift))
     })?;
@@ -373,7 +415,7 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
         // A hidden group keeps today's measure (not measured in the reference).
         let rect = if l.visible { shown_children_bounds(l) } else { crate::layer_multi_cmds::layer_bounds(l) }.unwrap_or(canvas);
         set_artboard(l, Artboard { rect, background, preset });
-        let shift = fit_canvas(doc);
+        let shift = fit_canvas_for_new_board(doc);
         *active = Some(id);
         Ok((rect, shift))
     })?;
