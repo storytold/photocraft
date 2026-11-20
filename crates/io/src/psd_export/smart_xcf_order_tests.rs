@@ -252,3 +252,27 @@ fn unfiltered_historical_export_uses_geometry_without_decoding_drawables() {
     let placed = crate::smart_map::parse_sold(&record.block(b"SoLd").unwrap().data).unwrap();
     assert_eq!(crate::smart_map::stored_size(&placed.descriptor), Some((1., 1.)));
 }
+
+#[test]
+fn changed_linked_xcf_is_not_written_with_its_old_sample_order() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("historical.xcf");
+    let approved = xcf(true);
+    std::fs::write(&path, &approved).unwrap();
+    let mut doc = document(SmartSource::Linked { path: path.to_string_lossy().into_owned() }, Some(Order::LittleEndian));
+    let LayerContent::Smart(smart) = &mut doc.layers[0].content else { panic!("smart fixture") };
+    smart.historical_xcf_link_digest = Some(crate::linked::historical_xcf_digest(&approved));
+    let options = PsdExportOptions { read_linked_files: true, ..Default::default() };
+    let (file, warnings) = document_to_psd_with(&doc, &options).unwrap();
+    assert!(warnings.iter().any(|warning| warning.contains("was embedded")));
+    assert!(file.layer_info.as_ref().unwrap().layers[0].block(b"SoLd").is_some());
+
+    std::fs::write(&path, xcf(false)).unwrap();
+    let (file, warnings) = document_to_psd_with(&doc, &options).unwrap();
+    assert!(warnings.iter().any(|warning| warning.contains("relink and choose")));
+    let record = &file.layer_info.as_ref().unwrap().layers[0];
+    assert!(record.block(b"SoLd").is_none());
+    assert!(record.block(&crate::smart_xcf_order::PSD_KEY).is_none());
+    let reopened = crate::import("checked.psd", &file.to_bytes().unwrap()).unwrap();
+    assert!(matches!(reopened.document.layers[0].content, LayerContent::Raster(_)));
+}

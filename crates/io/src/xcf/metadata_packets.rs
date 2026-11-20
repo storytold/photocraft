@@ -187,6 +187,23 @@ fn xmp(tree: &roxmltree::Document<'_>) -> Option<String> {
 /// Classic TIFF IFD0 ASCII fields already supported by native TIFF metadata.
 /// No dimensions, orientation, profiles, maker notes or unknown binary types
 /// are guessed from source display strings.
+/// Admit the classic TIFF header, first IFD entries and its trailing next-IFD word.
+pub(super) fn has_exif_directory(raw: &[u8]) -> bool {
+    let Some(header) = raw.first_chunk::<8>() else { return false };
+    let [a, b, c, d, p0, p1, p2, p3] = *header;
+    let little = match [a, b, c, d] {
+        [b'I', b'I', 42, 0] => true,
+        [b'M', b'M', 0, 42] => false,
+        _ => return false,
+    };
+    let word = [p0, p1, p2, p3];
+    let offset = if little { u32::from_le_bytes(word) } else { u32::from_be_bytes(word) } as usize;
+    let Some(directory) = raw.get(offset..).filter(|_| offset >= 8) else { return false };
+    let Some(count) = directory.first_chunk::<2>() else { return false };
+    let entries = if little { u16::from_le_bytes(*count) } else { u16::from_be_bytes(*count) };
+    directory.len() >= 2 + usize::from(entries) * 12 + 4
+}
+
 fn exif(tree: &roxmltree::Document<'_>) -> Option<Vec<u8>> {
     let mut fields: BTreeMap<u16, &str> = BTreeMap::new();
     let mut duplicate = std::collections::BTreeSet::new();

@@ -21,6 +21,7 @@ use crate::{EngineError, Result, Session};
 fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: bool) -> Result<Vec<Layer>> {
     let (name, bytes) = authorized_source_bytes(s, "layer.smartObjects.convertToLayers", &doc.metadata, &sm.source)?
         .ok_or_else(|| other("the smart object's contents are unavailable (missing linked file?)"))?;
+    photocraft_io::linked::check_historical_xcf_digest(sm.historical_xcf_link_digest, &bytes).map_err(other)?;
     let mut src = decode_source_with_order(&name, &bytes, sm.historical_xcf_sample_order)?;
     let mode = doc.pixel_format().mode;
     if src.pixel_format().mode != mode || src.icc_profile != doc.icc_profile {

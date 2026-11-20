@@ -108,3 +108,46 @@ fn legacy_short_palette_lengths_leave_rgb_and_gray_drawables_aligned() {
         assert_eq!(crate::xcf::source_geometry("legacy-palette.xcf", &encoded, &photocraft_raster::Interrupt::NONE).unwrap(), Some(((1., 1.), 72.)));
     }
 }
+
+#[test]
+fn a_declared_unused_palette_boundary_can_precede_a_valid_dpi_record() {
+    for base in [0, 1] {
+        let mut image = TestImage::rgb8(1, 1);
+        image.version = 26;
+        image.base_type = base;
+        image.image_props.push((1, vec![0, 0, 0, 1, 57]));
+        image.image_props.push((19, [240f32.to_be_bytes(); 2].concat()));
+        let mut layer = TestLayer::rgba("Visible", 1, 1, if base == 0 { vec![17, 31, 57, 255] } else { vec![57, 255] });
+        if base == 1 {
+            layer.kind = 3;
+        }
+        image.layers.push(layer);
+        let bytes = image.write();
+        let imported = crate::import("short-palette.xcf", &bytes).unwrap();
+        assert_eq!(imported.document.resolution_dpi, 240.);
+        assert!(!imported.document.layers[0].surface().unwrap().content_bounds().is_empty());
+        let wrapped = crabz2::compress(&bytes, crabz2::Level::default());
+        for (name, data) in [("short-palette.xcf", bytes), ("short-palette.xcf.bz2", wrapped)] {
+            assert_eq!(crate::xcf::source_geometry(name, &data, &photocraft_raster::Interrupt::NONE).unwrap(), Some(((1., 1.), 240.)));
+        }
+    }
+}
+
+#[test]
+fn version_zero_uses_one_byte_per_index_and_the_historical_gray_ramp() {
+    let mut image = TestImage::rgb8(2, 1);
+    image.version = 0;
+    image.base_type = 2;
+    image.image_props.push((1, vec![0, 0, 0, 3, 87, 65, 43]));
+    image.image_props.push((19, [96f32.to_be_bytes(); 2].concat()));
+    let mut layer = TestLayer::rgba("Indexed", 2, 1, vec![1, 255, 2, 255]);
+    layer.kind = 5;
+    image.layers.push(layer);
+    let bytes = image.write();
+    let imported = crate::import("version-zero.xcf", &bytes).unwrap();
+    assert_eq!(imported.document.resolution_dpi, 96.);
+    let pixels = imported.document.layers[0].surface().unwrap();
+    assert_eq!(pixels.pixel(0, 0), [1. / 255., 1. / 255., 1. / 255., 1.]);
+    assert_eq!(pixels.pixel(1, 0), [2. / 255., 2. / 255., 2. / 255., 1.]);
+    assert_eq!(crate::xcf::source_geometry("version-zero.xcf", &bytes, &photocraft_raster::Interrupt::NONE).unwrap(), Some(((2., 1.), 96.)));
+}

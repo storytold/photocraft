@@ -66,7 +66,7 @@ pub(super) fn channel_overlay(channel: &mut AlphaChannel, props: &[Prop<'_>]) ->
         && p.data.len() == 12
     {
         let rgb = be_f32(p.data).zip(p.data.get(4..).and_then(be_f32)).zip(p.data.get(8..).and_then(be_f32));
-        if let Some(((r, g), b)) = rgb.filter(|&((r, g), b)| [r, g, b].iter().all(|c| c.is_finite())) {
+        if let Some(((r, g), b)) = rgb.filter(|&((r, g), b)| [r, g, b].iter().all(|c| (0.0..=1.0).contains(c))) {
             channel.color = Color::rgb(r, g, b);
             handled.push(38);
         }
@@ -373,7 +373,7 @@ pub(super) fn image_with_work<'a>(
             "exif-data" => {
                 let raw = data.strip_prefix(b"Exif\0\0").unwrap_or(data);
                 // Native EXIF is a TIFF payload. Other legacy container layouts stay inert.
-                if raw.starts_with(b"II\x2a\0") || raw.starts_with(b"MM\0\x2a") {
+                if super::metadata_packets::has_exif_directory(raw) {
                     if charge(budget, raw.len()) {
                         doc.metadata.exif = Some(std::sync::Arc::new(raw.to_vec()));
                     } else {

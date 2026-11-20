@@ -225,6 +225,7 @@ fn full_report_coverage_inventory_still_warns_without_reading_optional_source() 
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),
         parasite_work: Default::default(),
+        report_parasite_work: Default::default(),
         point_text_work_left: crate::xcf::text::POINT_LAYOUT_WORK_UNITS,
         warnings: Default::default(),
         outcomes,

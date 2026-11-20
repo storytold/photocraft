@@ -152,6 +152,7 @@ struct Image<'a> {
     text_decode_work: text::DecodeWork,
     /// Borrowed optional metadata scans share work across image, layer and report passes.
     parasite_work: wire::ParasiteWork,
+    report_parasite_work: wire::ParasiteWork,
     /// Cumulative optional point-origin shaping work; independent of retained metadata.
     point_text_work_left: usize,
     warnings: Warnings,
@@ -425,13 +426,13 @@ impl<'a> Image<'a> {
 
     /// A channel structure (a layer mask, the selection or an extra channel) as one-channel
     /// pixels, with its properties.
-    fn channel(&mut self, ptr: usize, layer_size: Option<(u32, u32)>, ctl: &Interrupt<'_>) -> Result<Channel<'a>> {
+    fn channel(&mut self, ptr: usize, expected: (u32, u32), layer_mask: bool, ctl: &Interrupt<'_>) -> Result<Channel<'a>> {
         let mut c = self.c.at(ptr);
         let (width, height) = (c.u32()?, c.u32()?);
-        if let Some((lw, lh)) = layer_size
-            && (width, height) != (lw, lh)
-        {
-            return Err(invalid(format!("layer mask dimensions {width}x{height} differ from the layer's {lw}x{lh}")));
+        if (width, height) != expected {
+            let (expected_width, expected_height) = expected;
+            let (channel, owner) = if layer_mask { ("layer mask", "layer") } else { ("image channel", "canvas") };
+            return Err(invalid(format!("{channel} dimensions {width}x{height} differ from the {owner}'s {expected_width}x{expected_height}")));
         }
         let (name, name_limited) = self.metadata_name(&mut c, "Channel")?;
         let props = props(&mut c)?;
@@ -901,13 +902,23 @@ struct ImageMetadata<'a> {
 }
 
 /// Indexed palette validity is essential; unused palette bytes remain optional source data.
-fn palette_colors(data: &[u8]) -> Result<&[[u8; 3]]> {
+fn palette_count(data: &[u8], version: u32) -> Result<usize> {
     let n = be_u32(data).ok_or_else(|| invalid("the palette is missing its color count"))? as usize;
-    let size = n.checked_mul(3).and_then(|bytes| bytes.checked_add(4)).ok_or_else(|| invalid("palette size overflow"))?;
-    if n > 256 || data.len() != size {
-        return Err(invalid("the palette must contain its declared count of at most 256 RGB colors"));
+    let components = if version == 0 { 1 } else { 3 };
+    if n > 256 || data.len() != 4 + n * components {
+        return Err(invalid("the palette does not contain its declared count of at most 256 colors"));
     }
-    Ok(data.get(4..).unwrap_or(&[]).as_chunks::<3>().0)
+    Ok(n)
+}
+
+fn palette_colors(data: &[u8], version: u32) -> Result<Vec<[u8; 3]>> {
+    let n = palette_count(data, version)?;
+    if version == 0 {
+        // Early writers did not serialize usable RGB entries.
+        Ok((0..n).map(|value| [value as u8; 3]).collect())
+    } else {
+        Ok(data.get(4..).unwrap_or(&[]).as_chunks::<3>().0.to_vec())
+    }
 }
 
 /// Decode only drawable prerequisites here; native metadata conversion consumes the retained properties later.
@@ -932,7 +943,7 @@ fn read_image_metadata_with_work<'a>(
     let mut parasites_limited = false;
     for p in &image_props {
         match p.kind {
-            1 if indexed => colormap = palette_colors(p.data)?.to_vec(),
+            1 if indexed => colormap = palette_colors(p.data, version)?,
             17 => {
                 compression = match p.data.first() {
                     Some(0) => Compression::None,
@@ -967,7 +978,11 @@ fn read_image_metadata_with_work<'a>(
 }
 
 pub(crate) fn source_geometry(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Option<((f64, f64), f64)>> {
-    geometry::source_geometry(name, bytes, ctl)
+    geometry::source_geometry(name, bytes, false, ctl)
+}
+
+pub(crate) fn source_geometry_requiring_order(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Option<((f64, f64), f64)>> {
+    geometry::source_geometry(name, bytes, true, ctl)
 }
 
 /// Imports XCF with an explicit historical sample-order decision, preserving native data and durable
@@ -978,7 +993,7 @@ pub(crate) fn import_with_sample_order(
     selected_order: Option<crate::HistoricalXcfSampleOrder>,
     ctl: &Interrupt<'_>,
 ) -> Result<ImportResult> {
-    import_with_sample_order_and_parasite_work(name, bytes, selected_order, wire::ParasiteWork::default(), ctl)
+    import_with_sample_order_and_parasite_work(name, bytes, selected_order, wire::ParasiteWork::default(), wire::ParasiteWork::default(), ctl)
 }
 
 /// Keep the same scan allowance from prerequisite color selection through all owner/report scans.
@@ -987,6 +1002,7 @@ fn import_with_sample_order_and_parasite_work(
     bytes: &[u8],
     selected_order: Option<crate::HistoricalXcfSampleOrder>,
     parasite_work: wire::ParasiteWork,
+    report_parasite_work: wire::ParasiteWork,
     ctl: &Interrupt<'_>,
 ) -> Result<ImportResult> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -1095,6 +1111,7 @@ fn import_with_sample_order_and_parasite_work(
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),
         parasite_work,
+        report_parasite_work,
         point_text_work_left: crate::xcf::text::POINT_LAYOUT_WORK_UNITS,
         warnings,
         outcomes: conversion::Outcomes::new(version)?,
@@ -1168,12 +1185,12 @@ fn import_with_sample_order_and_parasite_work(
     for property in &image_props {
         if property.kind == 21 {
             let handled: &[&str] = if fallback_reason.is_some() { &[] } else { &["icc-profile"] };
-            if image.outcomes.parasites_with_work(image_outcome, property.offset, property.data, handled, &mut image.parasite_work, ctl)? {
+            if image.outcomes.parasites_with_work(image_outcome, property.offset, property.data, handled, &mut image.report_parasite_work, ctl)? {
                 image.warnings.note("Image parasite scan work exceeded its file allowance; optional source records were omitted; see the conversion report");
             }
         } else if property.kind != 17 && (property.kind != 1 || base_type != 2) {
             let reason = match property.kind {
-                1 if palette_colors(property.data).is_ok() => ConversionReason::NativePolicy,
+                1 if palette_count(property.data, version).is_ok() => ConversionReason::NativePolicy,
                 1 => ConversionReason::InvalidOptionalData,
                 18 | 19 => ConversionReason::NativePolicy,
                 // GIMP's nonzero item identifier and standard dialog units are
@@ -1188,7 +1205,7 @@ fn import_with_sample_order_and_parasite_work(
         }
     }
     let (layers, linear_compositing) = image.import_layers(&layer_ptrs, fmt, mask_fmt, ctl)?;
-    let (channels, selection) = image.import_channels(&channel_ptrs, mask_fmt, ctl)?;
+    let (channels, selection) = image.import_channels(&channel_ptrs, (w, h), mask_fmt, ctl)?;
 
     document.layers = layers.into();
     document.channels = channels;
@@ -1319,25 +1336,32 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                 }
             };
             source.name = effect.name.into();
-            let mut notes = Vec::new();
+            let mut notes: Vec<_> = effect.errors.iter().take(4).map(|error| error[..error.floor_char_boundary(128)].to_owned()).collect();
+            let mut malformed = !effect.errors.is_empty();
             if !effect.icon.is_empty() {
                 notes.push("Source icon identity remains inert presentation metadata".into());
             }
             for argument in &effect.arguments {
+                malformed |= matches!(argument.value, effects::ArgumentValue::Invalid { .. });
+                if notes.len() >= 8 {
+                    continue;
+                }
+                let name = &argument.name[..argument.name.floor_char_boundary(128)];
                 match &argument.value {
                     effects::ArgumentValue::String(value) => notes.push(format!(
                         "Stored string argument {} ({} bytes) remains bounded source configuration; source strings grant no external resource access",
-                        argument.name,
+                        name,
                         value.len()
                     )),
                     effects::ArgumentValue::Config(config) => {
-                        notes.push(format!("Stored configuration {} ({} bytes) was decoded only as bounded data", argument.name, config.raw.len()))
+                        notes.push(format!("Stored configuration {name} ({} bytes) was decoded only as bounded data", config.raw.len()))
                     }
                     effects::ArgumentValue::Unknown { kind, bytes } => {
-                        notes.push(format!("Unknown argument {} type {kind} ({} bytes) is retained inert", argument.name, bytes.len()))
+                        notes.push(format!("Unknown argument {name} type {kind} ({} bytes) is retained inert", bytes.len()))
                     }
                     effects::ArgumentValue::Invalid { kind, bytes, message } => {
-                        notes.push(format!("Invalid argument {} type {kind} ({} bytes): {message}", argument.name, bytes.len()))
+                        let message = &message[..message.floor_char_boundary(128)];
+                        notes.push(format!("Invalid argument {name} type {kind} ({} bytes): {message}", bytes.len()))
                     }
                     _ => {}
                 }
@@ -1346,11 +1370,9 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                 notes.push(format!("Native document blending/coverage applies; stored blend space {}, composite space {}, composite mode {}, clip {}, region {} are historical", effect.blend_space, effect.composite_space, effect.composite_mode, effect.clip, effect.region));
             }
             let disposition = ConversionDisposition::RetainedUnapplied;
-            let reason = ConversionReason::MissingMapping;
-            let native = format!(
-                "Effect not applied; usable separate native content preserved. Native effect mapping is not implemented; stored configuration remains inert. {}",
-                notes.join("; ")
-            );
+            let reason = if malformed { ConversionReason::InvalidOptionalData } else { ConversionReason::MissingMapping };
+            let explanation = if malformed { "Effect contains invalid optional fields or arguments." } else { "This effect has no native mapping." };
+            let native = format!("{explanation} Usable native owner content preserved and stored effect configuration retained inert. {}", notes.join("; "));
             let outcome = image.outcomes.push(ConversionEntry {
                 feature_code: "xcf.layer_effect".into(),
                 source,
@@ -1537,12 +1559,11 @@ fn import_paths_with_work<'a>(
         image.initial_view.selected_path = None;
         image.path_tattoos.values_mut().for_each(|index| *index = None);
     }
+    let mut disclosed_multiple_selections = false;
     for (ordinal, offset, path, raw) in records {
         let index = document.paths.len();
         let name = path.named.name.clone();
-        if path.selected && !incomplete_identity {
-            image.initial_view.selected_path = Some(index);
-        }
+        let multiple_selections = path.selected && !incomplete_identity && image.initial_view.selected_path.replace(index).is_some();
         if let Some(tattoo) = path.tattoo {
             image
                 .path_tattoos
@@ -1572,6 +1593,27 @@ fn import_paths_with_work<'a>(
             .into(),
             attachments: Vec::new(),
         })?;
+        if path.invalid_selection_marker {
+            image.outcomes.notice(
+                outcome,
+                "xcf.path_selection",
+                ConversionReason::InvalidOptionalData,
+                ("Saved path selection marker has a nonempty payload".into(), "Path geometry preserved; malformed marker ignored".into()),
+                Some("has an invalid saved path selection marker"),
+                &mut image.warnings,
+            )?;
+        }
+        if multiple_selections && !disclosed_multiple_selections {
+            disclosed_multiple_selections = true;
+            image.outcomes.notice(
+                outcome,
+                "xcf.path_selection",
+                ConversionReason::NativeLimitation,
+                ("Multiple source paths were selected".into(), "PhotoCraft restores the last valid selection and keeps all usable paths".into()),
+                Some("is among multiple selected paths; PhotoCraft restores only the last valid selection"),
+                &mut image.warnings,
+            )?;
+        }
         if let Some(raw) = raw {
             image.outcomes.property(outcome, 25, offset, raw)?;
         }

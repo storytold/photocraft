@@ -57,6 +57,7 @@ pub(super) struct DecodedPath {
     pub named: NamedPath,
     pub tattoo: Option<u32>,
     pub selected: bool,
+    pub invalid_selection_marker: bool,
     /// Source flags, pressure/tilt, parasites or unsupported stroke records.
     pub source_only: bool,
     /// False when an unsupported stroke was omitted, independently of harmless source-only metadata.
@@ -380,6 +381,7 @@ fn vectors_inner(data: &[u8], ctl: &photocraft_raster::Interrupt<'_>) -> Result<
             named: NamedPath { name, path, psd_raw: None },
             tattoo: (tattoo != 0).then_some(tattoo),
             selected: i == active,
+            invalid_selection_marker: false,
             source_only: source_only || visible != 0 || linked != 0 || parasites != 0,
             geometry_complete: complete,
         });
@@ -495,6 +497,7 @@ fn legacy_inner(data: &[u8], ctl: &photocraft_raster::Interrupt<'_>) -> Result<V
             named: NamedPath { name, path: native_path(subpaths), psd_raw: None },
             tattoo,
             selected: index == active,
+            invalid_selection_marker: false,
             source_only: linked != 0 || state != 0,
             geometry_complete: true,
         });
@@ -541,12 +544,14 @@ fn standalone_inner(c: &Cursor<'_>, offset: usize, ctl: &photocraft_raster::Inte
     let properties = props(&mut p)?;
     let mut tattoo = None;
     let mut selected = false;
+    let mut invalid_selection_marker = false;
     let mut source_only = false;
     for property in properties {
         match property.kind {
             20 if property.data.len() == 4 => tattoo = super::be_u32(property.data).filter(|n| *n != 0),
             20 => return Err(invalid("saved path tattoo must contain exactly four bytes")),
-            43 => selected = true,
+            43 if property.data.is_empty() => selected = true,
+            43 => invalid_selection_marker = true,
             _ => source_only = true,
         }
     }
@@ -559,7 +564,14 @@ fn standalone_inner(c: &Cursor<'_>, offset: usize, ctl: &photocraft_raster::Inte
     if p.pos != raw.len() {
         return Err(invalid("standalone path payload length mismatch"));
     }
-    Ok(DecodedPath { named: NamedPath { name, path, psd_raw: None }, tattoo, selected, source_only: source_only || extra, geometry_complete: complete })
+    Ok(DecodedPath {
+        named: NamedPath { name, path, psd_raw: None },
+        tattoo,
+        selected,
+        invalid_selection_marker,
+        source_only: source_only || extra,
+        geometry_complete: complete,
+    })
 }
 
 #[cfg(test)]

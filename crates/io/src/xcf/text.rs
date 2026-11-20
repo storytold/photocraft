@@ -763,6 +763,11 @@ pub(super) fn decode_with_work(
         layer.text = scalar(&fields, "text")?.unwrap_or("").into();
         layer.runs.push(TextRun { len: layer.text.len(), style });
     }
+    if spacing.abs() > 0.1 {
+        for run in &mut layer.runs {
+            disable_spacing_ligatures(&mut run.style);
+        }
+    }
     // Resolve markup sizes first: inherited leading based on the base size can
     // make large markup lines overlap despite positive source extra spacing.
     if extra_leading != 0.0 {
@@ -1579,12 +1584,7 @@ fn markup_runs_with_attribute_allowance(
             // Pango disables standard/contextual ligatures for a letter-spacing
             // attribute, including zero. Resolve this after every inherited feature
             // request: native explicit features otherwise override the ligature flag.
-            style.ligatures = false;
-            for feature in &mut style.features {
-                if matches!(feature.tag.as_str(), "liga" | "clig") {
-                    feature.value = 0;
-                }
-            }
+            disable_spacing_ligatures(&mut style);
         }
         let bytes = std::mem::size_of::<TextRun>().saturating_add(value.len()).saturating_add(style_allocation(&style));
         allowance =
@@ -1597,3 +1597,12 @@ fn markup_runs_with_attribute_allowance(
 
 #[cfg(test)]
 mod tests;
+
+fn disable_spacing_ligatures(style: &mut CharStyle) {
+    style.ligatures = false;
+    for feature in &mut style.features {
+        if matches!(feature.tag.as_str(), "liga" | "clig") {
+            feature.value = 0;
+        }
+    }
+}

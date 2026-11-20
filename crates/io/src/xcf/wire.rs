@@ -139,6 +139,7 @@ fn props_charged<'a>(
 pub(super) trait PropertyInput {
     fn word(&mut self) -> Result<u32>;
     fn discard(&mut self, length: usize) -> Result<()>;
+    fn peek(&mut self, offset: usize, length: usize) -> Result<Option<&[u8]>>;
 }
 
 impl PropertyInput for Cursor<'_> {
@@ -148,6 +149,12 @@ impl PropertyInput for Cursor<'_> {
 
     fn discard(&mut self, length: usize) -> Result<()> {
         self.skip(length)
+    }
+
+    fn peek(&mut self, offset: usize, length: usize) -> Result<Option<&[u8]>> {
+        let start = self.pos.checked_add(offset).ok_or_else(|| invalid("property lookahead overflow"))?;
+        let end = start.checked_add(length).ok_or_else(|| invalid("property lookahead overflow"))?;
+        Ok(self.b.get(start..end))
     }
 }
 
@@ -167,16 +174,23 @@ pub(super) fn property_header(input: &mut impl PropertyInput, count: usize) -> R
 /// still unread, so the geometry probe can inspect DPI without retaining other properties.
 pub(super) fn property_payload(input: &mut impl PropertyInput, kind: u32, declared: usize, version: Option<u32>, indexed: bool) -> Result<usize> {
     let (length, prefix) = match (kind, version) {
-        // Old XCFs can declare n+4 for 3n+4 bytes. For optional palettes, only
-        // repair that recognized length when the count fits an XCF colormap.
-        (1, _) if indexed || declared >= 4 => {
+        (1, Some(version)) if indexed || declared >= 4 => {
             let colors = input.word()? as usize;
-            if !indexed && (colors > 256 || declared != colors + 4) {
-                (declared, 4)
+            let components = if version == 0 { 1 } else { 3 };
+            let length = if indexed {
+                if colors > 256 {
+                    return Err(invalid("a colormap exceeds 256 colors"));
+                }
+                4 + colors * components
+            } else if version != 0 && (1..=256).contains(&colors) && declared == colors + 4 {
+                let repaired = 4 + colors * components;
+                // The declared boundary wins when both continuations look valid.
+                // This keeps an incomplete unused palette from consuming another property.
+                if plausible_property(input.peek(declared - 4, 8)?) || !plausible_property(input.peek(repaired - 4, 8)?) { declared } else { repaired }
             } else {
-                let length = colors.checked_mul(3).and_then(|n| n.checked_add(4)).ok_or_else(|| invalid("colormap overflow"))?;
-                (length, 4)
-            }
+                declared
+            };
+            (length, 4)
         }
         // Both variants fit MAX_PAYLOAD because each individual string is bounded.
         (24, Some(version)) => {
@@ -187,11 +201,17 @@ pub(super) fn property_payload(input: &mut impl PropertyInput, kind: u32, declar
             return Ok(0);
         }
         // PROP_LINK_LAYER can declare four bytes too few (#8857).
-        (48, _) => {
-            input.discard(4)?;
-            discard_property_string(input)?;
-            input.discard(8)?;
-            return Ok(0);
+        (48, _) if (12..=MAX_STRING + 16).contains(&declared) => {
+            let name_len = input.peek(4, 4)?.and_then(be_u32).map(|n| n as usize);
+            let repaired = declared + 4;
+            let length = if let Some(name_len) = name_len.filter(|n| *n <= MAX_STRING && *n + 16 == repaired)
+                && (name_len == 0 || input.peek(8 + name_len - 1, 1)?.is_some_and(|end| end == [0]))
+            {
+                repaired
+            } else {
+                declared
+            };
+            (length, 0)
         }
         _ => (declared, 0),
     };
@@ -199,6 +219,20 @@ pub(super) fn property_payload(input: &mut impl PropertyInput, kind: u32, declar
         return Err(invalid(format!("property {kind} declares {length} bytes")));
     }
     Ok(length - prefix)
+}
+
+/// A bounded neighboring header is evidence for a palette boundary.
+fn plausible_property(bytes: Option<&[u8]>) -> bool {
+    let Some(bytes) = bytes else { return false };
+    let kind = be_u32(bytes);
+    let length = bytes.get(4..).and_then(be_u32);
+    match (kind, length) {
+        (Some(0), Some(0)) => true,
+        (Some(17), Some(n)) => (1..=MAX_PAYLOAD).contains(&(n as usize)),
+        (Some(19), Some(n)) => (8..=MAX_PAYLOAD).contains(&(n as usize)),
+        (Some(1..=49), Some(n)) => n as usize <= MAX_PAYLOAD,
+        _ => false,
+    }
 }
 
 fn discard_property_string(input: &mut impl PropertyInput) -> Result<()> {

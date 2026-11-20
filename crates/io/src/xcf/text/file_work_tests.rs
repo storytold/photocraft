@@ -64,6 +64,7 @@ fn image(bytes: &[u8], work: DecodeWork) -> Image<'_> {
         link_work_left: crate::xcf::MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         parasite_work: Default::default(),
+        report_parasite_work: Default::default(),
         text_decode_work: work,
         point_text_work_left: POINT_LAYOUT_WORK_UNITS,
         warnings: Warnings::default(),

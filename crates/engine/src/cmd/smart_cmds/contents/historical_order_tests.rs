@@ -292,3 +292,53 @@ fn relink_invalid_order_reports_its_command_before_attempting_file_io() {
     assert!(matches!(error, EngineError::BadParams { cmd, .. } if cmd == "layer.smartObjects.relinkToFile"));
     assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
 }
+
+#[test]
+fn changed_historical_links_refuse_decode_and_storage_commands_atomically() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("historical.xcf");
+    let output = dir.path().join("wrong.pcraft");
+    let approved = fixture::historical_pixel(true);
+    std::fs::write(&source, &approved).unwrap();
+    let mut s = session();
+    let placed = s.execute("file.placeLinked", json!({"path":source,"historicalXcfSampleOrder":"little-endian"})).unwrap();
+    let id = LayerId(placed["layer"].as_u64().unwrap());
+    let before = s.active().unwrap().doc().clone();
+    std::fs::write(&source, fixture::historical_pixel(false)).unwrap();
+    for command in ["editContents", "convertToLayers", "exportContents", "convertToEmbedded", "embedAllLinked", "convertToLinked", "newSmartObjectViaCopy"] {
+        let error = s.execute(&format!("layer.smartObjects.{command}"), json!({"layer":id.0,"path":output})).unwrap_err();
+        assert!(error.to_string().contains("relink and choose"), "{command}: {error}");
+        assert!(Arc::ptr_eq(&before, s.active().unwrap().doc()), "{command} changed the parent");
+        assert!(!output.exists());
+        assert_eq!(s.documents().len(), 1);
+    }
+    std::fs::write(&source, &approved).unwrap();
+    s.execute("layer.smartObjects.embedAllLinked", json!({})).unwrap();
+    let object = object(&s, id);
+    assert_eq!(object.historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::LittleEndian));
+    assert!(object.historical_xcf_link_digest.is_none());
+    assert!(matches!(&object.source, SmartSource::Embedded { bytes, .. } if bytes.as_slice() == approved));
+}
+
+#[test]
+fn historical_relink_confirmation_authenticates_the_picked_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let original = dir.path().join("original.xcf");
+    let picked = dir.path().join("picked.xcf");
+    let little = fixture::historical_pixel(true);
+    let big = fixture::historical_pixel(false);
+    std::fs::write(&original, &little).unwrap();
+    std::fs::write(&picked, &little).unwrap();
+    let mut s = session();
+    let placed = s.execute("file.placeLinked", json!({"path":original,"historicalXcfSampleOrder":"little-endian"})).unwrap();
+    let id = LayerId(placed["layer"].as_u64().unwrap());
+    let before = s.active().unwrap().doc().clone();
+    let expected = photocraft_io::linked::historical_xcf_digest(&little);
+    std::fs::write(&picked, &big).unwrap();
+    let error = s.execute(RELINK, json!({"layer":id.0,"path":picked,"historicalXcfSampleOrder":"little-endian","expectedSourceDigest":expected})).unwrap_err();
+    assert!(error.to_string().contains("changed after it was picked"));
+    assert!(Arc::ptr_eq(&before, s.active().unwrap().doc()));
+    let expected = photocraft_io::linked::historical_xcf_digest(&big);
+    s.execute(RELINK, json!({"layer":id.0,"path":picked,"historicalXcfSampleOrder":"big-endian","expectedSourceDigest":expected})).unwrap();
+    assert_eq!(object(&s, id).historical_xcf_link_digest, Some(expected));
+}

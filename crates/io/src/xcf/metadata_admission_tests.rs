@@ -229,7 +229,7 @@ fn channel_and_mask_names_and_effect_lists_are_optional_to_valid_coverage_pixels
     let later = layer(&mut w, "Later", &[], 0);
     let mut image = image(&w.out, 0);
     let (layers, _) = image.import_layers(&[first, later], PixelFormat::RGBA8, PixelFormat::GRAY8, &Interrupt::NONE).unwrap();
-    let (channels, selection) = image.import_channels(&[alpha], PixelFormat::GRAY8, &Interrupt::NONE).unwrap();
+    let (channels, selection) = image.import_channels(&[alpha], (1, 1), PixelFormat::GRAY8, &Interrupt::NONE).unwrap();
     assert!(selection.is_none());
     assert_eq!(layers.len(), 2);
     let masked = layers.iter().find(|layer| layer.mask.is_some()).unwrap();

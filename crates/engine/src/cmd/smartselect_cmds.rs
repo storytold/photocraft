@@ -10,6 +10,7 @@ use photocraft_algo::segment::{Sampler, SurfaceSampler, focus, grabcut, quick, s
 use photocraft_algo::selection::{Region, SelectionMode, combine_region};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, LayerMask};
 use photocraft_geom::Rect;
+use photocraft_raster::to_rgba;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -217,8 +218,24 @@ fn touched_box(cover: &[f32], area: Rect, rw: usize, holds: impl Fn(f32) -> bool
     (x1 > x0 && y1 > y0).then(|| Rect::new(x0, y0, x1, y1))
 }
 
+/// The reference application's Quick Selection alert in the modes it refuses (#12934).
+/// Multichannel and Duotone weren't measured and keep selecting.
+pub fn quick_mode_refusal(mode: photocraft_color::ColorMode) -> Option<&'static str> {
+    use photocraft_color::ColorMode;
+    match mode {
+        ColorMode::Indexed => {
+            Some("Could not use the Quick Selection because it does not work with Indexed Color images (convert image to RGB Color mode to edit).")
+        }
+        ColorMode::Bitmap => Some("Could not use the Quick Selection because it does not work with Bitmap images (convert image to Grayscale mode to edit)."),
+        _ => None,
+    }
+}
+
 /// Expands a selection around sampled points using image gradients, optionally enhancing edges.
 fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(why) = s.active().and_then(|d| quick_mode_refusal(d.doc.mode)) {
+        return Err(EngineError::Other(why.into()));
+    }
     let pts = points(p);
     if pts.is_empty() {
         return Err(bad("select.quick", "needs at least one point"));
@@ -505,6 +522,23 @@ fn object_edge<'a>(canvas: Rect, p: &Value, region: Option<&'a Region>) -> Optio
     Some(if b(p, "hardEdge", true) { Cow::Borrowed(region) } else { Cow::Owned(soften_edge(region, canvas)) })
 }
 
+/// Does sampling `layer` (unless `all_layers`) find no pixel at all in `area`? Unlike
+/// [`empty_sampled_area`] this also reads the pixels, so a transparent gap inside the layer's
+/// content bounds counts as empty too.
+fn no_sampled_pixels(doc: &Document, layer: Option<LayerId>, all_layers: bool, area: Rect) -> bool {
+    let Some(surf) = sampled_target(doc, layer, all_layers).and_then(|id| doc.layer(id)).and_then(Layer::surface) else {
+        return false;
+    };
+    let r = surf.content_bounds().intersect(&area);
+    let fmt = surf.format();
+    // Bands of rows, so a huge rectangle is not read whole when its first pixels are opaque.
+    const BAND: i32 = 64;
+    (r.y0..r.y1).step_by(BAND as usize).all(|y| {
+        let band = Rect { y0: y, y1: (y + BAND).min(r.y1), ..r };
+        surf.read_region(band).chunks_exact(fmt.channels()).all(|q| to_rgba(&fmt, q)[3] <= 0.0)
+    })
+}
+
 /// `select.object` with `"point"`: the Object Finder's object under the point (cached).
 fn object_at_point(s: &mut Session, p: &Value, (x, y): (f32, f32)) -> Result<Value> {
     let all_layers = b(p, "sampleAllLayers", false);
@@ -552,6 +586,11 @@ fn object_selection(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(why) = s.active().and_then(|d| object_mode_refusal(d.doc.mode)) {
         return Err(EngineError::Other(why.into()));
     }
+    let record_empty = match p.get("recordEmptyArea") {
+        None => false,
+        Some(Value::Bool(v)) => *v,
+        Some(_) => return Err(bad("select.object", "`recordEmptyArea` must be true or false")),
+    };
     if p.get("rect").is_none()
         && let Some(pt) = point_param(p)
     {
@@ -560,6 +599,12 @@ fn object_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let rect = rect_param(p).ok_or_else(|| bad("select.object", "needs \"rect\": [x, y, w, h] or \"point\": [x, y]"))?;
     let all_layers = b(p, "sampleAllLayers", false);
     let d = s.active().ok_or(EngineError::NoDocument)?;
+    // The tool's drag over an empty area: the reference application finds nothing but still
+    // records the step (#12861); scripts keep the #5246 error.
+    if record_empty && no_sampled_pixels(&d.doc, d.active_layer, all_layers, rect) {
+        let selected = s.edit("Object Selection", |doc, _| Ok(doc.selection.is_some()))?;
+        return Ok(json!({ "selected": selected, "changed": false }));
+    }
     check_sampled_pixels(&d.doc, d.active_layer, all_layers, rect)?;
     let canvas = d.doc.bounds();
     let found = with_sampler(s, all_layers, |smp, doc| grabcut::object_select(smp, doc.bounds(), rect, 160_000))?;
@@ -814,7 +859,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.object",
             "Object Selection",
             [],
-            r##"{"rect":[x,y,w,h] | "point":[x,y],"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=false,"hardEdge":bool=true} (point: the Object Finder's object under the point, as hovering previews it; hardEdge off: a softer rim, up to one pixel further out on the left and top and two on the right and bottom)"##,
+            r##"{"rect":[x,y,w,h] | "point":[x,y],"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=false,"hardEdge":bool=true,"recordEmptyArea":bool=false} (point: the Object Finder's object under the point, as hovering previews it; hardEdge off: a softer rim, up to one pixel further out on the left and top and two on the right and bottom; recordEmptyArea: a rect where the sampled layer has no pixels answers changed: false and records an "Object Selection" History step that leaves the selection as it is instead of the error, as the tool's drag does)"##,
             has_doc,
             object_selection
         ),
@@ -858,6 +903,9 @@ mod object_mode_refusal_tests;
 mod quick_drop_transparent_tests;
 #[cfg(test)]
 mod quick_group_target_tests;
+
+#[cfg(test)]
+mod quick_mode_refusal_tests;
 
 #[cfg(test)]
 mod quick_enhance_edge_tests;

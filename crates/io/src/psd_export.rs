@@ -690,7 +690,9 @@ impl Ex<'_> {
                 if self.ctl.check().is_err() {
                     return;
                 }
-                raw.retain(|(k, _)| !matches!(k, b"SoLd" | b"PlLd" | b"SoLE"));
+                raw.retain(|(key, data)| {
+                    !matches!(key, b"SoLd" | b"PlLd" | b"SoLE") && (key != &crate::smart_xcf_order::PSD_KEY || crate::smart_xcf_order::parse(data).is_none())
+                });
                 self.warnings.push(format!("layer \"{}\": smart object written as pixels ({e})", l.name));
                 return;
             }
@@ -906,6 +908,7 @@ impl Ex<'_> {
                     // Regular files only, in bounded reads: a link to a FIFO would block the save
                     // and one to a device such as `/dev/zero` would never end (#8601).
                     let bytes = photocraft_format::read_file(&file).map_err(|e| format!("the linked file {path} can't be read: {e}"))?;
+                    crate::linked::check_historical_xcf_digest(sm.historical_xcf_link_digest, &bytes).map_err(str::to_owned)?;
                     let name = path.rsplit(['/', '\\']).next().unwrap_or(path).to_string();
                     let source = self.embed(sm.contents_id, &name, &bytes, true, sm.historical_xcf_sample_order)?;
                     self.warnings.push(format!("the linked smart object {name} was embedded (PSD export keeps no external links)"));
@@ -1045,8 +1048,8 @@ impl Ex<'_> {
             // layer. A linked file we can't decode is not embedded.
             // Historical byte order affects samples, not geometry. Decode the drawable on
             // demand in source_composite if the smart filters actually need its pixels.
-            let geometry = if order.is_some() {
-                crate::smart_xcf_order::geometry(file_name, bytes, order, &self.ctl).map_err(|error| error.to_string())
+            let geometry = if order.is_some() || crate::import_compression(bytes).is_some() {
+                crate::smart_xcf_order::geometry_for_embedding(file_name, bytes, linked && order.is_none(), &self.ctl).map_err(|error| error.to_string())
             } else {
                 crate::linked::source_geometry(file_name, bytes, &self.ctl)
             };

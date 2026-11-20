@@ -1188,7 +1188,8 @@ fn linked_layers_open_cached_pixels_with_short_or_correct_property_lengths() {
 }
 
 #[test]
-fn truncated_and_oversized_link_layer_fields_are_errors() {
+fn truncated_link_frames_fail_and_oversized_locators_keep_saved_pixels() {
+    use photocraft_doc::import_conversion::ImportConversion;
     let mut payload = W { out: Vec::new(), wide: true };
     payload.u32(1);
     payload.string("assets/label.svg");
@@ -1210,8 +1211,16 @@ fn truncated_and_oversized_link_layer_fields_are_errors() {
     for len in [(MAX_STRING + 1) as u32, u32::MAX] {
         let mut oversized = bytes.clone();
         oversized[start + 4..start + 8].copy_from_slice(&len.to_be_bytes());
-        assert!(open(&oversized).is_err(), "path length {len}");
+        let imported = open(&oversized).unwrap();
+        assert_eq!(pixel(&imported.document.layers[0], 0, 0), [0.2, 0.4, 0.6, 1.0]);
+        let ImportConversion::Report(report) = imported.document.metadata.import_conversion.as_deref().unwrap() else { panic!("report") };
+        assert!(report.entries.iter().any(|e| e.feature_code == "xcf.link_layer" && e.reason == ConversionReason::InvalidOptionalData));
     }
+    img.layers[0].props = vec![(48, [1u32.to_be_bytes(), u32::MAX.to_be_bytes()].concat())];
+    let imported = open(&img.write()).unwrap();
+    assert_eq!(pixel(&imported.document.layers[0], 0, 0), [0.2, 0.4, 0.6, 1.0]);
+    let ImportConversion::Report(report) = imported.document.metadata.import_conversion.as_deref().unwrap() else { panic!("report") };
+    assert!(report.entries.iter().any(|e| e.feature_code == "xcf.link_layer" && e.reason == ConversionReason::InvalidOptionalData));
 }
 
 #[test]
@@ -1565,6 +1574,7 @@ pub(super) fn decoder_image(bytes: &[u8]) -> Image<'_> {
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),
         parasite_work: Default::default(),
+        report_parasite_work: Default::default(),
         point_text_work_left: super::text::POINT_LAYOUT_WORK_UNITS,
         warnings: Warnings::default(),
         outcomes: conversion::Outcomes::new(26).unwrap(),
@@ -1642,7 +1652,7 @@ fn malformed_selection_marker_does_not_steal_the_document_selection() {
     }
     let mut image = decoder_image(&w.out);
     let mask = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
-    let (alpha, selection) = image.import_channels(&pointers, mask, &Interrupt::NONE).unwrap();
+    let (alpha, selection) = image.import_channels(&pointers, (1, 1), mask, &Interrupt::NONE).unwrap();
     assert_eq!(alpha.len(), 1);
     assert_eq!(alpha[0].name, "Alpha");
     assert_eq!(alpha[0].surface.pixel(0, 0), [64. / 255.]);

@@ -134,7 +134,8 @@ fn embed_all_linked(s: &mut Session, _p: &Value) -> Result<Value> {
     }
     let mut sources = Vec::with_capacity(ids.len());
     for id in &ids {
-        let src = &smart(doc, *id)?.source;
+        let sm = smart(doc, *id)?;
+        let src = &sm.source;
         let (file_name, bytes) = source_bytes(&doc.metadata, src).ok_or_else(|| {
             let path = match src {
                 SmartSource::Linked { path } => path.as_str(),
@@ -142,13 +143,16 @@ fn embed_all_linked(s: &mut Session, _p: &Value) -> Result<Value> {
             };
             other(format!("the linked file can't be read: {path}"))
         })?;
+        photocraft_io::linked::check_historical_xcf_digest(sm.historical_xcf_link_digest, &bytes).map_err(other)?;
         sources.push(SmartSource::Embedded { file_name, bytes });
     }
     let parent = doc.id;
     let contents: Vec<SmartContentsId> = ids.iter().map(|id| smart(doc, *id).map(|sm| sm.contents_id)).collect::<Result<_>>()?;
     s.edit("Embed All Linked", |doc, _| {
         for (id, src) in ids.iter().zip(sources) {
-            smart_mut(doc, *id)?.source = src;
+            let sm = smart_mut(doc, *id)?;
+            sm.source = src;
+            sm.historical_xcf_link_digest = None;
             refresh_or_fail(doc, *id)?;
         }
         Ok(())
@@ -289,7 +293,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.smartObjects.relinkToFile",
             "Relink to File…",
             SO,
-            r##"{"layer":id?,"path":str,"historicalXcfSampleOrder":"little-endian"|"big-endian"|null?} (absent carries the stored choice only to byte-identical content; null clears it)"##,
+            r##"{"layer":id?,"path":str,"historicalXcfSampleOrder":"little-endian"|"big-endian"|null?,"expectedSourceDigest":[32 BLAKE3 bytes]?} (absent order carries it only to byte-identical content; null clears it)"##,
             has_smart,
             relink_to_file
         ),
@@ -323,8 +327,9 @@ pub fn specs() -> Vec<CommandSpec> {
             unpack::convert_to_layers
         ),
         spec!("layer.smartObjects.convertToEmbedded", "Embed Linked", SO, r##"{"layer":id?}"##, has_linked, |s, p| {
-            set_source(s, p, "Convert to Embedded", true, |meta, src| {
-                let (file_name, bytes) = source_bytes(meta, src).ok_or_else(|| other("the linked file can't be read"))?;
+            set_source(s, p, "Convert to Embedded", true, |meta, sm| {
+                let (file_name, bytes) = source_bytes(meta, &sm.source).ok_or_else(|| other("the linked file can't be read"))?;
+                photocraft_io::linked::check_historical_xcf_digest(sm.historical_xcf_link_digest, &bytes).map_err(other)?;
                 Ok(SmartSource::Embedded { file_name, bytes })
             })
         }),
@@ -344,8 +349,9 @@ pub fn specs() -> Vec<CommandSpec> {
             has_smart,
             |s, p| {
                 let path = path_param("layer.smartObjects.convertToLinked", p)?.to_string();
-                set_source(s, p, "Convert to Linked", false, |meta, src| {
-                    let (_, bytes) = source_bytes(meta, src).ok_or_else(|| other("the smart object's contents are unavailable"))?;
+                set_source(s, p, "Convert to Linked", false, |meta, sm| {
+                    let (_, bytes) = source_bytes(meta, &sm.source).ok_or_else(|| other("the smart object's contents are unavailable"))?;
+                    photocraft_io::linked::check_historical_xcf_digest(sm.historical_xcf_link_digest, &bytes).map_err(other)?;
                     crate::file_cmds::write_file(&path, &bytes)?;
                     Ok(SmartSource::Linked { path })
                 })

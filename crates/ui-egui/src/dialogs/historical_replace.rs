@@ -236,14 +236,11 @@ fn apply_source(
     check(app, target)?;
     let result = app.with_document(target.doc, |app| {
         if relink {
-            #[cfg(not(target_arch = "wasm32"))]
-            if order.is_some() {
-                let current = photocraft_format::read_file_limited(std::path::Path::new(name), bytes.len() as u64).map_err(|error| error.to_string())?;
-                if current != bytes {
-                    return Err("the linked source changed after it was picked; select it again".into());
-                }
-            }
-            return app.run("layer.smartObjects.relinkToFile", json!({"layer":target.layer.0,"path":name,"historicalXcfSampleOrder":order}));
+            let expected = order.map(|_| photocraft_io::linked::historical_xcf_digest(&bytes));
+            return app.run(
+                "layer.smartObjects.relinkToFile",
+                json!({"layer":target.layer.0,"path":name,"historicalXcfSampleOrder":order,"expectedSourceDigest":expected}),
+            );
         }
         photocraft_engine::smart_cmds::replace_contents_from_bytes(
             &mut app.session,

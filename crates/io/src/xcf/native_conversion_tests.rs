@@ -187,6 +187,7 @@ fn deferred_effect_mask_has_an_explicit_omission_outcome() {
     for value in ["Masked", "", "gegl:nop", "1"] {
         string(&mut bytes, value);
     }
+    bytes.extend_from_slice(&[33u32.to_be_bytes(), 4u32.to_be_bytes(), f32::NAN.to_be_bytes()].concat());
     bytes.extend_from_slice(&[0; 8]); // End properties.
     let mask_offset = bytes.len() + 8;
     bytes.extend_from_slice(&(mask_offset as u64).to_be_bytes());
@@ -214,6 +215,9 @@ fn deferred_effect_mask_has_an_explicit_omission_outcome() {
     image.pending_effects.push(PendingLayerEffects { layer: id, owner, bounds: Rect::new(0, 0, 1, 1), pointers: vec![1] });
     import_native_effects(&mut document, &mut image, &Interrupt::NONE).unwrap();
     let photocraft_doc::import_conversion::ImportConversion::Report(report) = image.outcomes.finish().unwrap() else { panic!("typed report") };
+    let effect = report.entries.iter().find(|e| e.feature_code == "xcf.layer_effect").unwrap();
+    assert_eq!(effect.reason, ConversionReason::InvalidOptionalData);
+    assert!(effect.native_description.contains("effect opacity"));
     let mask = report.entries.iter().find(|e| e.feature_code == "xcf.layer_effect.mask").expect("referenced mask was not retained and must be reported");
     assert_eq!(mask.disposition, ConversionDisposition::SkippedNonessential);
     assert!(mask.native_description.contains("not retained"));

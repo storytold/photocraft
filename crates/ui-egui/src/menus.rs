@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use craft::keymap::CommandRef;
 use craft::menu::{Gate, ModalRules, PendingRule};
-use craft::ui::runtime::commands::CommandGate; // PLAN: assumed re-export path of `CommandGate`
+use craft::ui::contract::MemoProps;
+use craft::ui::runtime::commands::CommandGate;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -50,8 +51,15 @@ pub(crate) fn menu_gate(app: &PhotocraftApp) -> (Gate, ModalRules) {
 /// ([`refused`]) apply to them: their keys and menu items are one command.
 pub(crate) fn command_gate(app: &PhotocraftApp) -> CommandGate {
     let (gate, rules) = menu_gate(app);
-    let refused = refused(app);
-    CommandGate::new(move |c| gated(&gate, &rules, &refused, c))
+    CommandGate::new(GateProps { gate, rules, refused: refused(app) }, |props, command| gated(&props.gate, &props.rules, &props.refused, command))
+}
+
+/// What the runtime's gate reads: the runtime asks it again only when these change.
+#[derive(MemoProps)]
+struct GateProps {
+    gate: Gate,
+    rules: ModalRules,
+    refused: Vec<CommandRef>,
 }
 
 /// [`command_gate`]'s test for one command, for callers that hold no gate.

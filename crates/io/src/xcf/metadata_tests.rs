@@ -170,8 +170,8 @@ fn active_layer_mask_is_a_one_time_native_target() {
 /// Construct independent channel metadata and declared dimensions for overlay, selection and extent validation tests.
 fn channel_file(props: &[(u32, Vec<u8>)], declared_size: (u32, u32)) -> Vec<u8> {
     let mut w = W::new(11);
-    w.u32(5);
-    w.u32(4);
+    w.u32(2);
+    w.u32(1);
     w.u32(0);
     w.u32(150);
     w.prop(17, &[0]);
@@ -218,12 +218,15 @@ fn channel_overlay_and_active_target_use_native_channel_data() {
     assert!(import("bad.xcf", &channel_file(&props, (3, 1)), &Interrupt::NONE).is_err());
 }
 
-/// Preserve finite extended overlay colors while invalid float color or opacity fields remain inert with safe native fallback.
+/// Invalid float colors or opacity remain inert and leave the byte overlay in use.
 #[test]
-fn finite_extended_overlay_colors_are_preserved_and_nonfinite_optional_values_stay_inert() {
+fn out_of_range_and_nonfinite_overlays_keep_the_byte_fallback() {
+    use photocraft_doc::import_conversion::{ConversionReason, ImportConversion};
     let props = vec![(16, vec![64, 128, 255]), (38, [(-0.25f32).to_be_bytes(), 1.5f32.to_be_bytes(), f32::MAX.to_be_bytes()].concat())];
     let result = open(&channel_file(&props, (2, 1)));
-    assert_eq!(result.document.channels[0].color, photocraft_color::Color::rgb(-0.25, 1.5, f32::MAX));
+    assert_eq!(result.document.channels[0].color, photocraft_color::Color::rgb(64.0 / 255.0, 128.0 / 255.0, 1.0));
+    let Some(ImportConversion::Report(report)) = result.document.metadata.import_conversion.as_deref() else { panic!("report") };
+    assert!(report.entries.iter().any(|e| e.feature_code == "xcf.source_property.38" && e.reason == ConversionReason::InvalidOptionalData));
     let bad = vec![
         (16, vec![64, 128, 255]),
         (38, [f32::NAN.to_be_bytes(), 0f32.to_be_bytes(), 0f32.to_be_bytes()].concat()),
@@ -550,4 +553,27 @@ fn reaching_reporting_allowance_does_not_discard_selected_native_comment() {
     let imported = open(&source.write());
     assert_eq!(imported.document.metadata.text, [("Comment".to_owned(), "Usable comment".to_owned())]);
     assert_eq!(imported.document.layers[0].surface().unwrap().pixel(0, 0), [17. / 255., 31. / 255., 57. / 255., 1.]);
+}
+
+#[test]
+fn a_selection_must_match_the_canvas_even_when_its_hierarchy_matches_the_channel() {
+    let mut bytes = channel_file(&[(4, Vec::new())], (2, 1));
+    bytes[14..18].copy_from_slice(&1u32.to_be_bytes());
+    let error = import("wrong-channel.xcf", &bytes, &Interrupt::NONE).err().unwrap();
+    assert!(error.to_string().contains("image channel dimensions 2x1 differ from the canvas's 1x1"), "{error}");
+}
+
+#[test]
+fn a_truncated_raw_exif_directory_leaves_xml_synthesis_available() {
+    use photocraft_doc::import_conversion::ImportConversion;
+    let mut source = TestImage::rgb8(1, 1);
+    let raw = b"II\x2a\0\x08\0\0\0\x01\0";
+    let xml = br#"<metadata><tag name="Exif.Image.Artist">Synthetic Artist</tag></metadata>"#;
+    source.image_props.push((21, parasite("exif-data", raw)));
+    source.image_props.push((21, parasite("gimp-image-metadata", xml)));
+    let result = open(&source.write());
+    let exif = result.document.metadata.exif.as_ref().unwrap();
+    assert!(exif.windows(b"Synthetic Artist".len()).any(|window| window == b"Synthetic Artist"));
+    let Some(ImportConversion::Report(report)) = result.document.metadata.import_conversion.as_deref() else { panic!("report") };
+    assert!(report.attachments.iter().any(|attachment| attachment.bytes.ends_with(raw)));
 }

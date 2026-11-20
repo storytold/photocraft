@@ -1690,3 +1690,12 @@ fn save_types_list_the_document_formats_then_the_rest_by_name() {
     let formats = names.iter().position(|name| *name == "Brushes").expect("the app's own resources");
     assert!(names[2..formats].is_sorted_by_key(key), "{:?}", &names[2..formats]);
 }
+
+#[test]
+fn desktop_open_filters_include_bzip2_and_xz_xcf_suffixes() {
+    let (_, gimp) = filters::OPEN_FILTERS.iter().find(|(name, _)| *name == "GIMP").unwrap();
+    for extension in ["bz2", "xcfbz2", "xz", "xcfxz"] {
+        assert!(filters::OPEN_EXTS.contains(&extension));
+        assert!(gimp.contains(&extension));
+    }
+}

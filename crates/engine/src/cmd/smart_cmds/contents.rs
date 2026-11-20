@@ -25,7 +25,7 @@ pub fn relink_sample_order(s: &Session, id: LayerId, candidate: &[u8]) -> Result
     let old = smart(doc, id)?;
     let Some(order) = old.historical_xcf_sample_order else { return Ok(None) };
     let same = if let Some(digest) = old.historical_xcf_link_digest {
-        digest == *blake3::hash(candidate).as_bytes()
+        digest == photocraft_io::linked::historical_xcf_digest(candidate)
     } else {
         embedded_source_bytes(&doc.metadata, &old.source).is_some_and(|(_, bytes)| bytes.as_slice() == candidate)
     };
@@ -34,18 +34,27 @@ pub fn relink_sample_order(s: &Session, id: LayerId, candidate: &[u8]) -> Result
 
 pub(super) fn relink_to_file(s: &mut Session, p: &Value) -> Result<Value> {
     let explicit = p.get("historicalXcfSampleOrder").map(|_| crate::file_cmds::historical_xcf_sample_order(p, RELINK)).transpose()?;
+    let expected = p
+        .get("expectedSourceDigest")
+        .filter(|value| !value.is_null())
+        .map(|value| <[u8; 32] as serde::Deserialize>::deserialize(value).map_err(|_| bad(RELINK, "expectedSourceDigest must be an array of 32 bytes")))
+        .transpose()?;
     let path = path_param(RELINK, p)?.to_string();
     let id = layer_param(s, p)?;
     let state = s.active().ok_or(EngineError::NoDocument)?;
     let needs_identity = explicit.map_or_else(|| smart(state.doc(), id).map(|old| old.historical_xcf_sample_order.is_some()), |order| Ok(order.is_some()))?;
-    let (order, digest) = if needs_identity {
+    let (order, digest) = if needs_identity || expected.is_some() {
         let resolved = crate::doc_path::resolve(&path).map_err(|error| crate::doc_path::refusal("link", &path, error))?;
         let bytes = photocraft_format::read_file(&resolved).map_err(|error| other(format!("can't read {path}: {error}")))?;
+        let digest = photocraft_io::linked::historical_xcf_digest(&bytes);
+        if expected.is_some_and(|expected| expected != digest) {
+            return Err(other("the linked source changed after it was picked; select it again"));
+        }
         let order = match explicit {
             Some(explicit) => explicit,
             None => relink_sample_order(s, id, &bytes)?,
         };
-        (order, order.map(|_| *blake3::hash(&bytes).as_bytes()))
+        (order, order.map(|_| digest))
     } else {
         (None, None)
     };
@@ -59,13 +68,13 @@ pub(super) fn set_source(
     p: &Value,
     label: &str,
     keep_psd: bool,
-    make: impl FnOnce(&Metadata, &SmartSource) -> Result<SmartSource>,
+    make: impl FnOnce(&Metadata, &photocraft_doc::SmartObject) -> Result<SmartSource>,
 ) -> Result<Value> {
     let id = layer_param(s, p)?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let old = smart(doc, id)?;
     let order = old.historical_xcf_sample_order;
-    let new = make(&doc.metadata, &old.source)?;
+    let new = make(&doc.metadata, old)?;
     let digest = if order.is_some() && matches!(new, SmartSource::Linked { .. }) {
         old.historical_xcf_link_digest.or_else(|| embedded_source_bytes(&doc.metadata, &old.source).map(|(_, bytes)| *blake3::hash(&bytes).as_bytes()))
     } else {
@@ -165,8 +174,9 @@ pub(super) fn export_contents(s: &mut Session, p: &Value) -> Result<Value> {
         crate::file_cmds::write_file(path, &bytes)?;
         return Ok(json!({"path": path, "fileName": name, "bytes": bytes.len(), "converted": false}));
     }
-    let order = smart(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?.historical_xcf_sample_order;
-    let contents = decode_source_with_order(&name, &bytes, order)?;
+    let source = smart(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
+    photocraft_io::linked::check_historical_xcf_digest(source.historical_xcf_link_digest, &bytes).map_err(other)?;
+    let contents = decode_source_with_order(&name, &bytes, source.historical_xcf_sample_order)?;
     let r = photocraft_io::export(&contents, path, &photocraft_io::ExportOptions { read_linked_files: s.authorize.is_none(), ..Default::default() })
         .map_err(|e| other(format!("can't export the contents as {}: {e}", base_name(path))))?;
     crate::file_cmds::write_file(path, &r.bytes)?;
@@ -189,6 +199,7 @@ pub(super) fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let source = &sm.source;
     let (name, bytes) = authorized_source_bytes(s, "layer.smartObjects.editContents", &st.doc.metadata, source)?
         .ok_or_else(|| other("the smart object's contents are unavailable"))?;
+    photocraft_io::linked::check_historical_xcf_digest(sm.historical_xcf_link_digest, &bytes).map_err(other)?;
     let mut child = decode_source_with_order(&name, &bytes, sm.historical_xcf_sample_order)?;
     // Bundles keep their document id; each open copy needs its own.
     child.id = DocId::fresh();

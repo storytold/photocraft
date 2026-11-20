@@ -1,3 +1,4 @@
+use super::super::source_geometry;
 use super::*;
 use crate::HistoricalXcfSampleOrder as Order;
 use std::io::Write;
@@ -170,10 +171,12 @@ fn geometry_stream_matches_shared_irregular_property_framing() {
     string(b"source.xcf\0", &mut link);
     link.extend(317u32.to_be_bytes());
     link.extend(193u32.to_be_bytes());
-    // Only indexed images consume the historical palette length workaround.
+    // Test both known repairs and declared framing for malformed optional records.
     let mut cases: Vec<(u32, u32, u32, u32, Vec<u8>)> = vec![(7, 2, 1, 6, colormap.clone()), (26, 0, 48, (link.len() - 4) as u32, link)];
+    cases.push((26, 0, 48, 8, [0u32.to_be_bytes(), u32::MAX.to_be_bytes()].concat()));
     for base_type in [0, 1] {
         cases.push((7, base_type, 1, colormap.len() as u32, colormap.clone()));
+        cases.push((7, base_type, 1, 6, colormap.clone()));
         // Unused malformed contents still use their correctly declared framing.
         cases.push((7, base_type, 1, 4, u32::MAX.to_be_bytes().to_vec()));
     }
@@ -222,17 +225,15 @@ fn geometry_stream_checks_legacy_headers_and_property_string_limits() {
     for (name, bytes) in std::iter::once(("source.xcf", legacy.clone())).chain(wrappers(&legacy)) {
         assert_eq!(source_geometry(name, &bytes, &Interrupt::NONE).unwrap(), Some(((317., 193.), 144.)));
     }
-    for kind in [24u32, 48] {
-        let mut bytes = header(&[]);
-        bytes.truncate(bytes.len() - 8);
-        bytes.extend(kind.to_be_bytes());
-        bytes.extend(0u32.to_be_bytes());
-        bytes.extend(vec![0; if kind == 24 { 8 } else { 4 }]);
-        bytes.extend(((super::super::MAX_STRING + 1) as u32).to_be_bytes());
-        for (name, bytes) in std::iter::once(("source.xcf", bytes.clone())).chain(wrappers(&bytes)) {
-            let error = source_geometry(name, &bytes, &Interrupt::NONE).unwrap_err();
-            assert!(error.to_string().contains("string"), "kind {kind}, {name}: {error}");
-        }
+    let mut bytes = header(&[]);
+    bytes.truncate(bytes.len() - 8);
+    bytes.extend(24u32.to_be_bytes());
+    bytes.extend(0u32.to_be_bytes());
+    bytes.extend([0; 8]);
+    bytes.extend(((super::super::MAX_STRING + 1) as u32).to_be_bytes());
+    for (name, bytes) in std::iter::once(("source.xcf", bytes.clone())).chain(wrappers(&bytes)) {
+        let error = source_geometry(name, &bytes, &Interrupt::NONE).unwrap_err();
+        assert!(error.to_string().contains("string"), "{name}: {error}");
     }
 }
 
@@ -297,4 +298,26 @@ fn geometry_24mp_f32_header_vs_full_decode_benchmark() {
         full.as_nanos() / 3,
         header.as_nanos() / 1000
     );
+}
+
+#[test]
+fn psd_export_uses_wrapped_modern_xcf_geometry_without_a_sample_order() {
+    use photocraft_doc::{ColorMode, Document, Layer, LayerContent, SampleType, SmartObject, SmartSource};
+    use photocraft_geom::{Affine, Rect, Size};
+    use photocraft_raster::Surface;
+    let mut modern = header(&[dpi(240., 240.)]);
+    modern[9..14].copy_from_slice(b"v026\0");
+    for (name, bytes) in wrappers(&modern) {
+        assert!(crate::import(name, &bytes).is_err(), "the test source cannot be fully decoded");
+        let mut doc = Document::new("Geometry only", Size::new(4, 3), ColorMode::Rgb, SampleType::U8);
+        let mut cache = Surface::new(doc.pixel_format());
+        cache.write_region(Rect::new(0, 0, 1, 1), &[1., 0., 0., 1.]);
+        let source = SmartSource::Embedded { file_name: name.into(), bytes: std::sync::Arc::new(bytes) };
+        doc.layers.push(Layer::new("Wrapped XCF", LayerContent::Smart(SmartObject::new(source, Affine::IDENTITY, Some(cache)))));
+        let exported = crate::export(&doc, "probe.psd", &Default::default()).unwrap();
+        let psd = craft_psd::PsdFile::from_bytes(&exported.bytes).unwrap();
+        let record = &psd.layer_info.unwrap().layers[0];
+        let placed = crate::smart_map::parse_sold(&record.block(b"SoLd").unwrap().data).unwrap();
+        assert_eq!(crate::smart_map::stored_size(&placed.descriptor), Some((317., 193.)), "{name}");
+    }
 }

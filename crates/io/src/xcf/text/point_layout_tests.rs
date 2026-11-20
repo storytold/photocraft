@@ -226,6 +226,7 @@ fn repeated_point_layers_exhaust_only_layout_work_and_report_raster_fallback() {
         link_work_left: crate::xcf::MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         parasite_work: Default::default(),
+        report_parasite_work: Default::default(),
         text_decode_work: Default::default(),
         point_text_work_left: 0,
         warnings: Warnings::default(),

@@ -25,7 +25,19 @@ fn source(data: &[u8], owners: usize) -> Vec<u8> {
 }
 
 fn import(bytes: &[u8], limit: usize) -> crate::ImportResult {
-    crate::xcf::import_with_sample_order_and_parasite_work("work.xcf", bytes, None, ParasiteWork::with_limit(limit), &Interrupt::NONE).unwrap()
+    import_with_limits(bytes, limit, limit)
+}
+
+fn import_with_limits(bytes: &[u8], native: usize, report: usize) -> crate::ImportResult {
+    crate::xcf::import_with_sample_order_and_parasite_work(
+        "work.xcf",
+        bytes,
+        None,
+        ParasiteWork::with_limit(native),
+        ParasiteWork::with_limit(report),
+        &Interrupt::NONE,
+    )
+    .unwrap()
 }
 
 fn assert_pixels_and_loss(imported: &crate::ImportResult, owners: usize) {
@@ -119,19 +131,19 @@ fn limited_text_parasite_flags_keep_pixels_for_repeated_and_distinct_owners() {
         }
         PARASITE_RECORD_READS.with(|count| count.set(0));
         let imported = import(&bytes, 300);
-        assert!(PARASITE_RECORD_READS.with(std::cell::Cell::get) <= 300 / 24);
+        assert!(PARASITE_RECORD_READS.with(std::cell::Cell::get) <= 600 / 24);
         assert_pixels_and_loss(&imported, 16);
     }
 }
 
 #[test]
-fn handled_report_parasites_share_the_flag_scan_allowance_without_flooding_the_report() {
+fn handled_report_parasites_use_an_independent_bounded_scan() {
     let mut one = Vec::new();
     let cost = record(&mut one, b"gimphoto-clipped", b"");
     let data = one.repeat(8);
     PARASITE_RECORD_READS.with(|count| count.set(0));
-    let imported = import(&source(&data, 1), cost * 10);
-    assert_eq!(PARASITE_RECORD_READS.with(std::cell::Cell::get), 10, "eight flag records leave only two report records");
+    let imported = import_with_limits(&source(&data, 1), cost * 8, cost * 2);
+    assert_eq!(PARASITE_RECORD_READS.with(std::cell::Cell::get), 10, "eight flag records and two independent report records");
     assert!(imported.document.layers[0].clipped, "known flags remain usable when report scanning is limited");
     assert_pixels_and_loss(&imported, 1);
 }
@@ -205,4 +217,33 @@ fn parasite_work_limits_stay_distinct_from_malformed_prefixes_and_cancellation()
     let mut work = ParasiteWork::default();
     assert!(matches!(scan_parasites_with_work(&data, &mut work, &Interrupt::cancel_only(&cancel), |_| Ok(true)), Err(crate::IoError::Cancelled)));
     assert!(work.remaining() < super::super::MAX_METADATA_BYTES * 4);
+}
+
+#[test]
+fn image_and_earlier_layer_report_scans_cannot_spend_later_text_admission() {
+    for image_owner in [false, true] {
+        let mut image = TestImage::rgb8(1, 1);
+        image.version = 26;
+        let mut large = Vec::new();
+        let large_cost = record(&mut large, b"unused", &[0; 512]);
+        let mut text_property = Vec::new();
+        let text_cost = record(&mut text_property, b"gimp-text-layer", br#"(text "Editable") (font-size 12)"#);
+        let mut text = TestLayer::rgba("Text", 1, 1, vec![17, 31, 57, 255]);
+        text.props.push((21, text_property));
+        image.layers.push(text);
+        if image_owner {
+            image.image_props.push((21, large));
+        } else {
+            let mut earlier = TestLayer::rgba("Earlier report", 1, 1, vec![0, 0, 0, 255]);
+            earlier.props.push((21, large));
+            image.layers.push(earlier);
+        }
+        let native = large_cost * if image_owner { 2 } else { 1 } + text_cost * 2;
+        let imported = import_with_limits(&image.write(), native, 64);
+        let layer = imported.document.layers.iter().find(|layer| layer.name == "Text").unwrap();
+        let photocraft_doc::LayerContent::Text(text) = &layer.content else { panic!("report work discarded native text for image owner {image_owner}") };
+        assert_eq!(text.text, "Editable");
+        let Some(ImportConversion::Report(report)) = imported.document.metadata.import_conversion.as_deref() else { panic!("report") };
+        assert!(report.entries.iter().any(|entry| entry.reason == ConversionReason::RetentionLimit), "the separate report allowance was exhausted");
+    }
 }

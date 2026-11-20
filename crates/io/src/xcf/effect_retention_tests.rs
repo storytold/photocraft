@@ -61,7 +61,7 @@ fn duplicate_terminated_effect_lists_preserve_raster_mask_channel_and_native_pix
     let later = layer(&mut w, 0, &[]);
     let mut image = image(&w.out, 4096);
     let (layers, _) = image.import_layers(&[first, later], PixelFormat::RGBA8, PixelFormat::GRAY8, &Interrupt::NONE).unwrap();
-    let (channels, selection) = image.import_channels(&[alpha], PixelFormat::GRAY8, &Interrupt::NONE).unwrap();
+    let (channels, selection) = image.import_channels(&[alpha], (1, 1), PixelFormat::GRAY8, &Interrupt::NONE).unwrap();
     assert!(selection.is_none());
     assert_eq!(layers.len(), 2);
     for layer in &layers {

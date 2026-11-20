@@ -15,9 +15,10 @@ pub(super) fn link(bytes: &[u8]) -> Result<Link<'_>> {
     let mut c = Cursor { b: bytes, pos: 0, wide: false };
     let flags = c.u32()?;
     let locator = c.string_bytes()?;
+    let terminated = bytes.get(..c.pos).is_some_and(|framed| framed.ends_with(&[0]));
     let (width, height) = (c.u32()?, c.u32()?);
-    if c.pos != bytes.len() || locator.is_empty() || width == 0 || height == 0 {
-        return Err(invalid("invalid link-layer locator or dimensions"));
+    if c.pos != bytes.len() || locator.is_empty() || !terminated {
+        return Err(invalid("invalid link-layer locator or framing"));
     }
     Ok(Link { flags, locator, width, height })
 }
@@ -284,7 +285,10 @@ mod tests {
     fn missing_link_pixels_and_invalid_optional_placement_are_reported_without_external_reads() {
         let mut image = TestImage::rgb8(1, 1);
         let mut layer = TestLayer::rgba("Unavailable", 1, 1, Vec::new());
-        layer.props = vec![(48, source_link("../../missing.png", 0)), (49, vec![0])];
+        let mut locator = source_link("../../missing.png", 0);
+        let dimensions = locator.len() - 8;
+        locator[dimensions..].fill(0);
+        layer.props = vec![(48, locator), (49, vec![0])];
         image.layers.push(layer);
         let result = import("unavailable.xcf", &image.write(), &Interrupt::NONE).unwrap();
         let Some(ImportConversion::Report(report)) = result.document.metadata.import_conversion.as_deref() else { panic!("report") };

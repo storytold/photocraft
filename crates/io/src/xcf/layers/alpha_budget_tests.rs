@@ -84,6 +84,7 @@ fn image(bytes: &[u8], budget: usize, base_type: u32, precision: Precision) -> I
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),
         parasite_work: Default::default(),
+        report_parasite_work: Default::default(),
         point_text_work_left: crate::xcf::text::POINT_LAYOUT_WORK_UNITS,
         warnings: Warnings::default(),
         outcomes: conversion::Outcomes::new(11).unwrap(),

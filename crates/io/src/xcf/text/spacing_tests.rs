@@ -111,3 +111,24 @@ fn base_letter_spacing_omits_the_source_dead_zone_but_markup_does_not() {
     let style = &decode(config, 72., (0, 0)).unwrap().layer.runs[0].style;
     assert!(style.tracking > 0.);
 }
+
+#[test]
+fn base_letter_spacing_disables_ligatures_in_plain_and_markup_runs() {
+    for (source, markup) in [("(text \"ffi\")", false), ("(markup \"<markup><span font_features='liga=1,clig=1'>ffi</span></markup>\")", true)] {
+        for (spacing, expected) in [(0., true), (0.1, true), (1., false), (-1., false)] {
+            let config = format!("{source} (font-size 20) (letter-spacing {spacing})");
+            let layer = decode(config.as_bytes(), 72., (0, 0)).unwrap().layer;
+            assert_eq!(layer.runs[0].style.ligatures, expected);
+            if markup {
+                assert!(
+                    layer.runs[0]
+                        .style
+                        .features
+                        .iter()
+                        .filter(|feature| matches!(feature.tag.as_str(), "liga" | "clig"))
+                        .all(|feature| feature.value == u16::from(expected))
+                );
+            }
+        }
+    }
+}

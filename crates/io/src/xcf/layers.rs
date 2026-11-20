@@ -86,14 +86,21 @@ impl<'a> Image<'a> {
     }
 
     /// Decode saved selection and alpha coverage, retaining duplicate markers and applying native view hints once.
-    pub(super) fn import_channels(&mut self, pointers: &[usize], mask_fmt: PixelFormat, ctl: &Interrupt<'_>) -> Result<(Vec<AlphaChannel>, Option<Surface>)> {
+    pub(super) fn import_channels(
+        &mut self,
+        pointers: &[usize],
+        canvas: (u32, u32),
+        mask_fmt: PixelFormat,
+        ctl: &Interrupt<'_>,
+    ) -> Result<(Vec<AlphaChannel>, Option<Surface>)> {
         let precision = self.precision;
         // Channels: the selection and the extras.
         let mut channels = Vec::new();
         let mut selection = None;
         for (ordinal, &ptr) in pointers.iter().enumerate() {
             ctl.check().map_err(|_| IoError::Cancelled)?;
-            let Channel { name, properties: cprops, pixels: px, effects: coverage_effects, name_limited, effects_limited } = self.channel(ptr, None, ctl)?;
+            let Channel { name, properties: cprops, pixels: px, effects: coverage_effects, name_limited, effects_limited } =
+                self.channel(ptr, canvas, false, ctl)?;
             let mut surface = Surface::new(mask_fmt);
             write_pixels(&mut surface, &px, 0, 0, &mut self.budget)?;
             let is_selection = metadata::active(&cprops, 4);
@@ -512,7 +519,7 @@ impl<'a> Image<'a> {
     pub(super) fn retain_layer_properties(&mut self, outcome: usize, properties: &[Prop<'a>], ctl: &Interrupt<'_>) -> Result<()> {
         for property in properties {
             if property.kind == 21 {
-                if self.outcomes.parasites_with_work(outcome, property.offset, property.data, &["gimphoto-clipped"], &mut self.parasite_work, ctl)? {
+                if self.outcomes.parasites_with_work(outcome, property.offset, property.data, &["gimphoto-clipped"], &mut self.report_parasite_work, ctl)? {
                     self.metadata_limit(outcome, "xcf.parasite_work", "Layer parasite reporting exceeded the shared scan-work allowance")?;
                 }
             } else if !matches!(property.kind, 6 | 7 | 8 | 9 | 10 | 11 | 15 | 20 | 28 | 29 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 | 48) {
@@ -816,7 +823,7 @@ impl<'a> Image<'a> {
         self.retain_layer_properties(outcome, &lprops, ctl)?;
         if mptr != 0 {
             let Channel { name: mname, properties: mprops, pixels: px, effects: coverage_effects, name_limited, effects_limited } =
-                self.channel(mptr, Some((lw, lh)), ctl)?;
+                self.channel(mptr, (lw, lh), true, ctl)?;
             let mut surface = Surface::new(mask_fmt);
             write_pixels(&mut surface, &px, x, y, &mut self.budget)?;
             let mask_outcome = self.outcomes.push(ConversionEntry {

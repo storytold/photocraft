@@ -343,6 +343,7 @@ pub(super) fn display_source(sm: &SmartObject, bytes: &Arc<Vec<u8>>) -> Arc<Vec<
 /// keeps the strict layered import it renders with.
 pub(crate) fn source_box(doc: &Document, sm: &SmartObject) -> Option<[f64; 4]> {
     let (name, bytes) = source_bytes(&doc.metadata, &sm.source)?;
+    photocraft_io::linked::check_historical_xcf_digest(sm.historical_xcf_link_digest, &bytes).ok()?;
     let bytes = display_source(sm, &bytes);
     let fmt = doc.pixel_format();
     let is_svg = photocraft_io::svg::is_svg(&bytes);
@@ -516,9 +517,7 @@ fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapsho
         crate::jobs::authorize_render_command(&filter.command, &filter.params)?;
     }
     let Some((name, original)) = snapshot.or_else(|| source_bytes(&doc.metadata, &sm.source)) else { return Ok(None) };
-    if sm.historical_xcf_link_digest.is_some_and(|expected| expected != native_digest(&original)) {
-        return Err(other("the linked historical XCF bytes changed; relink and choose their sample byte order"));
-    }
+    photocraft_io::linked::check_historical_xcf_digest(sm.historical_xcf_link_digest, &original).map_err(other)?;
     let bytes = display_source(sm, &original);
     let (fmt, canvas) = (doc.pixel_format(), doc.bounds());
     // Plain SVG uses the original strict vector path. Gzip sources use ordinary

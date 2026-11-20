@@ -539,3 +539,26 @@ fn unaddressable_optional_path_offset_keeps_raster_and_disables_path_identity() 
     assert!(imported.warnings.iter().any(|warning| warning.contains("path")));
     assert_eq!(imported.document.layers[0].surface().unwrap().pixel(0, 0), [17. / 255., 31. / 255., 57. / 255., 1.]);
 }
+
+#[test]
+fn selected_path_markers_preserve_geometry_and_disclose_multiple_selections() {
+    for malformed in [false, true] {
+        let (mut w, offsets) = standalone_pointer_image(2);
+        let at = w.out.len();
+        w.patch(offsets[1], at);
+        w.string("Second path");
+        let mut payload = W { out: Vec::new(), wide: false };
+        payload.prop(43, if malformed { &[1] } else { &[] });
+        payload.end();
+        payload.u32(1);
+        payload.u32(0);
+        w.u32(payload.out.len() as u32);
+        w.out.extend(payload.out);
+        let imported = import("path-selection.xcf", &w.out, &Interrupt::NONE).unwrap();
+        assert_eq!(imported.document.paths.len(), 2);
+        assert_eq!(imported.initial_view.unwrap().selected_path, Some(usize::from(!malformed)));
+        let ImportConversion::Report(report) = imported.document.metadata.import_conversion.as_deref().unwrap() else { panic!("report") };
+        let expected = if malformed { ConversionReason::InvalidOptionalData } else { ConversionReason::NativeLimitation };
+        assert!(report.entries.iter().any(|e| e.feature_code == "xcf.path_selection" && e.reason == expected));
+    }
+}
