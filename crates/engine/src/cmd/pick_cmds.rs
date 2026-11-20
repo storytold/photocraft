@@ -197,7 +197,7 @@ fn select_in_rect(s: &mut Session, p: &Value) -> Result<Value> {
         other => return Err(EngineError::BadParams { cmd: "layer.selectInRect".into(), msg: format!("unknown mode `{other}`") }),
     };
     if !hits.is_empty() || (clear_on_empty && !add) {
-        let mut ids = if add { s.active().map(|st| st.selected_layers()).unwrap_or_default() } else { Vec::new() };
+        let mut ids = if add { s.active().map(|st| st.selected_layers().to_vec()).unwrap_or_default() } else { Vec::new() };
         ids.extend(hits.iter().filter(|id| !ids.contains(id)).copied().collect::<Vec<_>>());
         crate::layer_multi_cmds::set_selection(s, ids, hits.first().copied(), hits.first().copied())?;
     }
