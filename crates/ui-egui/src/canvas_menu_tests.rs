@@ -57,7 +57,7 @@ fn tap(h: &mut Harness<'_, Box<PhotocraftApp>>, at: Pos2, modifiers: Modifiers, 
 fn document_state(h: &Harness<'_, Box<PhotocraftApp>>) -> impl PartialEq + use<> {
     let state = h.state().session.active().unwrap();
     let strokes = h.state().session.journal.iter().filter(|(id, _)| id == "paint.stroke").count();
-    (state.doc.clone(), state.revision, state.history.past_len(), state.active_layer, state.selected_layers(), strokes)
+    (state.doc.clone(), state.revision, state.history.past_len(), state.active_layer, state.selected_layers().to_vec(), strokes)
 }
 
 fn is_open(h: &Harness<'_, Box<PhotocraftApp>>, popup: Popup) -> bool {
