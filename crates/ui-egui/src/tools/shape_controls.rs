@@ -189,6 +189,8 @@ fn show_box(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect) {
         .rotate_zone(RotateZone::Band)
         .reference_point(false)
         .inside_moves(false)
+        // The arrows stay the tool's: Path Selection nudges the selected components with them (#10920).
+        .session_arrows(false)
         .centre_mark(app.ui.tool == Tool::EllipseShape)
         .id_salt((BOX_LABEL, salt));
     if let Some(line) = line {

@@ -46,8 +46,8 @@ fn nothing_selected(app: &PhotocraftApp) {
     assert_eq!(app.ui.direct_selection, DirectSelection::default());
 }
 
-/// Until Path Selection has its own arrow-key nudge (#10920), an arrow key must move nothing once
-/// the components are deselected.
+/// Path Selection's arrow keys nudge only selected components (#10920): once the components are
+/// deselected, an arrow key moves nothing.
 fn arrow_moves_nothing(app: &mut PhotocraftApp) {
     let (before, n) = (path_1(app), steps(app));
     press(app, Key::ArrowRight, Modifiers::NONE);
