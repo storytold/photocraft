@@ -12,7 +12,7 @@
 use craft::behavior::{Cursor, CursorIcon, IconId, PaintedCursor};
 use craft::color_ui::ui::ColorPickerDialog;
 use craft::draw::ui::pattern::PatternFillDialog;
-use craft::imaging::layer_style::{EffectKind, EffectSpec, LayerStylePage, StyleValue};
+use craft::imaging::layer_style::{EffectKind, EffectSpec};
 use craft::imaging::ui::adjust::TonePicker;
 use craft::imaging::ui::color_range::HostedColorRange;
 use craft::imaging::ui::layer_style::HostedLayerStyle;
@@ -75,7 +75,7 @@ pub(crate) fn armed(app: &PhotocraftApp) -> Option<DialogPick> {
         if draft.drags_shadow() {
             return Some(DialogPick::ShadowDrag);
         }
-        if draft.selected_kind() == Some(EffectKind::Satin) {
+        if draft.drags_satin() {
             return Some(DialogPick::SatinDrag);
         }
         return draft.drags_gradient().then_some(DialogPick::GradientDrag);
@@ -203,47 +203,19 @@ pub(crate) fn drag_shadow(app: &mut PhotocraftApp, _start: [f64; 2], total: [f64
 pub(crate) fn drag_hint(app: &PhotocraftApp) -> Option<&'static str> {
     let top = app.framework.dialogs.stack().top()?;
     let draft = app.framework.dialogs.get_by_id::<HostedLayerStyle>(top)?.draft();
-    (draft.selected_kind() == Some(EffectKind::Satin)).then(|| tl!("Click and drag to adjust the satin effect."))
+    draft.drags_satin().then(|| tl!("Click and drag to adjust the satin effect."))
 }
 
-/// A drag step with a Satin page selected in Layer Style (#14985). `base` is the satin's angle and distance as shown
-/// at the press, which the press itself passes as `None` with a zero `total`; `total` is the pointer's travel since, in
-/// document pixels. The offset vector (−cos angle, sin angle) × distance follows the pointer; the new distance is its
-/// length truncated to a whole pixel (1 to 250) and the new angle its direction truncated toward zero to a whole degree,
-/// the angle shown kept when the vector collapses. A Satin never uses Global Light, so only this instance's `angle` and
-/// `distance` change. No travel keeps the values as they were, fractions included.
-pub(crate) fn drag_satin(app: &mut PhotocraftApp, base: &mut Option<(f64, f64)>, total: [f64; 2]) -> bool {
+/// A drag step with a Satin page selected in Layer Style (#14985). `start` is true on the press, `total` the pointer's
+/// travel since it in document pixels; the draft sets the Angle and Distance (the maths lives in craft-libs). `false`
+/// when no Satin page is selected; `true` when the page took the step, even if nothing changed.
+pub(crate) fn drag_satin(app: &mut PhotocraftApp, start: bool, total: [f64; 2]) -> bool {
     let Some(dialog) = app.framework.dialogs.get_mut::<HostedLayerStyle>() else { return false };
     let draft = dialog.draft_mut();
-    let LayerStylePage::Effect(id) = draft.page else { return false };
-    if draft.selected_kind() != Some(EffectKind::Satin) {
+    if !draft.drags_satin() {
         return false;
     }
-    let Some(instance) = draft.style.effect(id) else { return false };
-    let shown = instance.params.over(&EffectSpec::photoshop(EffectKind::Satin).defaults);
-    let shown_angle = shown.number("angle").unwrap_or(90.0);
-    let shown_distance = shown.number("distance").unwrap_or(50.0);
-    let (angle, distance) = *base.get_or_insert((shown_angle, shown_distance));
-    if total == [0.0, 0.0] {
-        draft.set_param(id, "angle", StyleValue::Number(angle));
-        draft.set_param(id, "distance", StyleValue::Number(distance));
-        return true;
-    }
-    let a = angle.to_radians();
-    let (ox, oy) = (-a.cos() * distance + total[0], a.sin() * distance + total[1]);
-    let d = ox.hypot(oy);
-    if !d.is_finite() {
-        return true;
-    }
-    let new_angle = if d >= 0.5 {
-        let deg = oy.atan2(-ox).to_degrees();
-        // Truncation, so a hair under a whole degree from float noise (89.999999…) must not drop one.
-        (deg + 1e-9 * deg.signum()).trunc()
-    } else {
-        shown_angle
-    };
-    draft.set_param(id, "angle", StyleValue::Number(new_angle));
-    draft.set_param(id, "distance", StyleValue::Number(d.trunc().clamp(1.0, 250.0)));
+    draft.drag_satin(&EffectSpec::photoshop(EffectKind::Satin).defaults, start, total);
     true
 }
 
@@ -269,7 +241,7 @@ pub(crate) fn locate(app: &mut PhotocraftApp, at: [f64; 2]) -> bool {
 
 /// The end of a gesture of `pick`: a Layer Style drag ends. The other picks have nothing to end.
 pub(crate) fn release(app: &mut PhotocraftApp, pick: DialogPick) {
-    if matches!(pick, DialogPick::ShadowDrag | DialogPick::GradientDrag)
+    if matches!(pick, DialogPick::ShadowDrag | DialogPick::SatinDrag | DialogPick::GradientDrag)
         && let Some(dialog) = app.framework.dialogs.get_mut::<HostedLayerStyle>()
     {
         dialog.draft_mut().end_drag();

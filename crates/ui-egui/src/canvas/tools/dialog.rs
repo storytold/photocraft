@@ -27,8 +27,6 @@ pub(crate) struct DialogTools {
     mods: Mods,
     /// The Pattern Fill drag, from its press to its release.
     phase: Option<PhaseDrag>,
-    /// The Satin's angle and distance as shown at the press of its drag (#14985).
-    satin: Option<(f64, f64)>,
 }
 
 /// The pointer's document point: the one mapping from screen points to document units for the canvas tools of
@@ -87,10 +85,7 @@ impl CanvasTool for DialogTool<'_> {
                 DialogPick::Locator => (canvas_input::locate(app, at), true),
                 DialogPick::ShadowDrag => (canvas_input::drag_shadow(app, at, [0.0, 0.0]), false),
                 DialogPick::GradientDrag => (canvas_input::drag_gradient(app, at, [0.0, 0.0]), false),
-                DialogPick::SatinDrag => {
-                    state.satin = None;
-                    (canvas_input::drag_satin(app, &mut state.satin, [0.0, 0.0]), false)
-                }
+                DialogPick::SatinDrag => (canvas_input::drag_satin(app, true, [0.0, 0.0]), false),
                 DialogPick::PatternPhase => {
                     state.phase = pattern_fill_ui::press(app, at);
                     (state.phase.is_some(), false)
@@ -128,7 +123,7 @@ impl CanvasTool for DialogTool<'_> {
                 canvas_input::drag_gradient(app, start, total);
             }
             DialogPick::SatinDrag => {
-                canvas_input::drag_satin(app, &mut state.satin, total);
+                canvas_input::drag_satin(app, false, total);
             }
             DialogPick::PatternPhase => {
                 // `false`: a pick change, an unlink or an outside phase change ended the gesture.
@@ -154,7 +149,6 @@ impl CanvasTool for DialogTool<'_> {
             }
             canvas_input::release(app, pick);
         });
-        self.state.satin = None;
         self.state.press = None;
         self.state.pick = None;
     }
