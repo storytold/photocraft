@@ -660,13 +660,23 @@ fn refresh_keeping_saved(doc: &mut Document, id: LayerId, before: &Warp, after: 
     }
 }
 
-/// Whether warps `a` and `b` map their contents alike: their surfaces agree to a hundredth of a
-/// pixel over a 16 × 16 grid.
+/// Whether warps `a` and `b` map their contents alike. Between the knots of either mesh both
+/// surfaces are bicubic, and a bicubic is fixed by its values at the thirds of its cell, so
+/// agreeing there to a hundredth of a pixel bounds the difference everywhere (to under three
+/// hundredths), however small the patch an edit rebuilt.
 fn same_surface(a: &Warp, b: &Warp) -> bool {
     let (a, b) = (a.to_mesh(1, 1), b.to_mesh(1, 1));
-    let steps = (0..=16).map(|i| f64::from(i) / 16.0);
-    steps.clone().all(|s| {
-        steps.clone().all(|t| {
+    let thirds = |x: &[f64], y: &[f64]| {
+        let mut knots: Vec<f64> = x.iter().chain(y).copied().filter(|k| k.is_finite()).collect();
+        knots.sort_by(f64::total_cmp);
+        knots.dedup();
+        let mut at: Vec<f64> = knots.windows(2).flat_map(|w| [w[0], w[0] + (w[1] - w[0]) / 3.0, w[0] + 2.0 * (w[1] - w[0]) / 3.0]).collect();
+        at.extend(knots.last());
+        at
+    };
+    let (ss, ts) = (thirds(&a.us, &b.us), thirds(&a.vs, &b.vs));
+    ss.iter().all(|&s| {
+        ts.iter().all(|&t| {
             let (p, q) = (a.eval(s, t), b.eval(s, t));
             (p[0] - q[0]).hypot(p[1] - q[1]) < 0.01
         })

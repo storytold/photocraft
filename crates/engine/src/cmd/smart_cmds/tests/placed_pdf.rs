@@ -196,6 +196,24 @@ fn warp_grid_that_reshapes_an_edited_mesh_fails_rather_than_keep_mismatched_pixe
     assert_eq!(cache(&s, id).content_bounds(), Rect::new(20, 30, 120, 80), "the edit is undone");
 }
 
+#[test]
+fn removing_a_split_that_drops_an_edit_inside_one_small_patch_fails() {
+    let (mut s, id) = placed((100.0, 100.0));
+    s.active_mut().unwrap().active_layer = Some(id);
+    s.execute("edit.transform.warpGrid", json!({"size": 64})).unwrap();
+    let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("a smart object") };
+    let mesh = sm.warp.as_mut().and_then(|w| w.mesh.as_mut()).expect("a 64 × 64 mesh");
+    // The second handle of the column patch over [31/64, 32/64], on the row at t = 1/2. Removing
+    // the split at 1/2 rebuilds that column from the other handles, so the bend is lost, but only
+    // between 31/64 and 32/64, where no point of a 1/16 grid lies.
+    let nx = 3 * 64 + 1;
+    mesh.points[96 * nx + 95][1] += 5.0;
+    let error = s.execute("edit.transform.removeWarpSplit", json!({})).unwrap_err();
+    assert!(error.to_string().contains("cropped"), "{error}");
+    assert_eq!(cache(&s, id).content_bounds(), Rect::new(20, 30, 120, 80), "the edit is undone");
+}
+
 fn deny_invert(id: &str, _: &serde_json::Value) -> crate::Result<()> {
     if id == "image.adjustments.invert" { Err(EngineError::Other("invert isn't allowed here".into())) } else { Ok(()) }
 }
