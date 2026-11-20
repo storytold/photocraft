@@ -15,33 +15,35 @@ use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
-fn new_app() -> PhotocraftApp {
+fn new_app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
     app
 }
 
 /// The options bar with `tool` active.
-fn bar_with(app: PhotocraftApp, tool: Tool) -> Harness<'static, PhotocraftApp> {
+fn bar_with(app: Box<PhotocraftApp>, tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = app;
     app.ui.tool = tool;
-    let mut h =
-        Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1800.0, 300.0)).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
+    let mut h = Harness::builder()
+        .with_context(app.ctx().clone())
+        .with_size(vec2(1800.0, 300.0))
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::panels::options_bar(app, ui), app);
     h.run_steps(4);
     h
 }
 
-fn bar() -> Harness<'static, PhotocraftApp> {
+fn bar() -> Harness<'static, Box<PhotocraftApp>> {
     bar_with(new_app(), Tool::Triangle)
 }
 
 /// The Radius fields the bar shows.
-fn radius_fields(h: &Harness<'static, PhotocraftApp>) -> usize {
+fn radius_fields(h: &Harness<'static, Box<PhotocraftApp>>) -> usize {
     h.query_all_by_role(Role::SpinButton).filter(|n| n.accesskit_node().label().as_deref() == Some("Radius")).count()
 }
 
 /// Types `text` into Radius, then Tabs out of it.
-fn type_radius(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
+fn type_radius(h: &mut Harness<'static, Box<PhotocraftApp>>, text: &str) {
     h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius")).expect("the Radius field").click();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
@@ -52,11 +54,11 @@ fn type_radius(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
 }
 
 /// How many alerts are open.
-fn alerts(h: &Harness<'static, PhotocraftApp>) -> usize {
+fn alerts(h: &Harness<'static, Box<PhotocraftApp>>) -> usize {
     crate::dialogs::alerts::alerts(h.state()).len()
 }
 
-fn radius(h: &Harness<'static, PhotocraftApp>) -> f32 {
+fn radius(h: &Harness<'static, Box<PhotocraftApp>>) -> f32 {
     h.state().ui.tool_options.triangle_corner_radius
 }
 
