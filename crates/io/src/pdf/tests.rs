@@ -28,7 +28,7 @@ fn doc(mode: ColorMode) -> Document {
     let fmt = PixelFormat::new(mode, SampleType::F32, true);
     let bg = paper(mode);
     let mut d = Document::new("t.pdf", Size { width: 4, height: 2 }, mode, SampleType::F32);
-    d.layers = vec![Layer::new("Paper", LayerContent::Raster(solid(fmt, 0, 0, 4, 2, &bg)))];
+    d.layers = vec![Layer::new("Paper", LayerContent::Raster(solid(fmt, 0, 0, 4, 2, &bg)))].into();
     d
 }
 
@@ -187,7 +187,7 @@ fn the_page_measures_at_the_document_resolution() {
     let mut d = doc(ColorMode::Rgb);
     d.size = Size { width: 300, height: 150 };
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
-    d.layers = vec![Layer::new("Paper", LayerContent::Raster(solid(fmt, 0, 0, 300, 150, &[1.0, 1.0, 1.0, 1.0])))];
+    d.layers = vec![Layer::new("Paper", LayerContent::Raster(solid(fmt, 0, 0, 300, 150, &[1.0, 1.0, 1.0, 1.0])))].into();
     d.resolution_dpi = 300.0;
     let out = export(&d, true, &Interrupt::NONE).unwrap();
     assert!(has(&out.bytes, "/MediaBox [0 0 72.00 36.00]"), "300 px at 300 dpi is one inch");
@@ -495,7 +495,7 @@ fn unicode_text_over_a_photo_extracts_through_a_pdf_reader() {
     d.size = Size { width: 128, height: 48 };
     let fmt = d.pixel_format();
     // Synthetic photo-like backdrop; no personal image or third-party asset.
-    d.layers = vec![Layer::new("Photo", LayerContent::Raster(solid(fmt, 0, 0, 128, 48, &[0.2, 0.4, 0.6, 1.0])))];
+    d.layers = vec![Layer::new("Photo", LayerContent::Raster(solid(fmt, 0, 0, 128, 48, &[0.2, 0.4, 0.6, 1.0])))].into();
     let text = "café Ω 😀";
     d.layers.push(Layer::new(
         "Text",
@@ -599,7 +599,7 @@ fn a_text_layer_refused_at_emission_keeps_the_upper_vectors_and_stays_raster() {
     let mut d = doc(ColorMode::Rgb);
     d.size = Size { width: 128, height: 48 };
     let fmt = d.pixel_format();
-    d.layers = vec![Layer::new("Paper", LayerContent::Raster(solid(fmt, 0, 0, 128, 48, &[1.0, 1.0, 1.0, 1.0])))];
+    d.layers = vec![Layer::new("Paper", LayerContent::Raster(solid(fmt, 0, 0, 128, 48, &[1.0, 1.0, 1.0, 1.0])))].into();
     // A box too short for its paragraph: the layout hides the overflow, so `prepare` accepts
     // the layer (its checks only see placed clusters) while emission refuses it, because the
     // hidden, unpainted source text would otherwise show up in the selection plane.

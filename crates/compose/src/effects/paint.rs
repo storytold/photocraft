@@ -194,9 +194,16 @@ pub fn hash_noise(x: i64, y: i64) -> f32 {
 }
 
 /// Effect noise (Photoshop's Noise slider): monochrome speckle in the coverage,
-/// applied after the contour. `amount` is 0..=1; 0 leaves the map untouched. The speckle is
-/// scaled by the coverage, so it fades out with the effect instead of lighting up the blur's
-/// near-zero tail out to the edge of its rectangular reach (#7833).
+/// applied after the contour. `amount` is 0..=1; 0 leaves the map untouched. In a falloff a
+/// pixel drops out entirely with probability `min(1, amount x (1 - v) x (0.22 + 0.024 / v))`
+/// and otherwise its coverage deepens by up to `1 + 2 x amount` (measured on the Inner Shadow
+/// and Outer Glow falloff bands, #14936 and #14952: the reference application scatters far
+/// stronger than the multiplicative jitter, which never removed a band pixel at Noise 50).
+/// The dropout probability grows as coverage falls, so the speckle fades out with the effect
+/// instead of lighting up the blur's near-zero tail out to the edge of its rectangular reach
+/// (#7833); pixels with no coverage are never touched. Solid coverage (>= 0.95, e.g. a big
+/// drop shadow's interior) keeps today's multiplicative jitter: the issues measure falloff
+/// bands only, and jittering the interior is a behaviour they do not ask to change.
 pub(super) fn noise(m: &mut Map, amount: f32, x0: i32, y0: i32) {
     if !amount.is_finite() || amount <= 0.0 {
         return;
@@ -208,7 +215,16 @@ pub(super) fn noise(m: &mut Map, amount: f32, x0: i32, y0: i32) {
                 continue;
             }
             let n = hash_noise(i64::from(x0 + x as i32), i64::from(y0 + y as i32));
-            *v = (*v * (1.0 + (n - 0.5) * 2.0 * amount)).clamp(0.0, 1.0);
+            if *v >= 0.95 {
+                *v = (*v * (1.0 + (n - 0.5) * 2.0 * amount)).clamp(0.0, 1.0);
+                continue;
+            }
+            let kill = (amount * (1.0 - *v) * (0.22 + 0.024 / *v)).min(1.0);
+            if n < kill {
+                *v = 0.0;
+            } else {
+                *v = (*v * (1.0 + 2.0 * amount * n)).clamp(0.0, 1.0);
+            }
         }
     }
 }
@@ -399,6 +415,13 @@ pub(super) fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -
     // 1 − the edge glow, for both techniques).
     let src = if inner { shape.clone().map(|a| 1.0 - a) } else { shape.clone() };
     let mut m = match g.technique {
+        GlowTechnique::Softer if inner && g.source == GlowSource::Edge && g.size == 1.0 && g.spread == 0.0 => {
+            // A width-one box blur leaves no coverage inside the edge. The Size 1 taps
+            // put quarter coverage on the first pixel, which Range 50% doubles (#14924).
+            let mut m = src;
+            super::blur::size_one_blur(&mut m);
+            m
+        }
         GlowTechnique::Precise => {
             // Coverage falls linearly from 0.5 at the edge to 0 at `size + 1` px (centre to
             // centre), solid within the spread / choke: after the default 50 % Range that is

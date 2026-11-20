@@ -143,10 +143,12 @@ fn set_view(s: &mut Session, p: &Value) -> Result<Value> {
         // A view change: redraw without recompositing, and keep a clean document clean.
         let clean = st.saved_revision == st.revision;
         st.revision += 1;
+        st.record_unknown_damage();
         if clean {
             st.saved_revision = st.revision;
         }
         st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+        st.record_damage();
     }
     let v = current(st);
     Ok(json!({"layer": layer.0, "mode": mode_name(v.filter(|v| v.layer == layer && v.filter == filter)), "mask": if filter { "filter" } else { "layer" }}))

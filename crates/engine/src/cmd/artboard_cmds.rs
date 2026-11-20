@@ -192,7 +192,7 @@ pub(crate) fn place_copy(doc: &mut Document, id: LayerId) -> Result<(i32, i32)> 
 /// Alt-drag copy of a plain layer must stay exportable to .atn (#7200).
 pub(crate) fn recorded_duplicate(s: &Session, mut p: Value) -> Value {
     let Some(st) = s.active() else { return p };
-    if st.selected_layers().into_iter().any(|id| st.doc.layer(id).is_some_and(|l| l.artboard().is_some())) {
+    if st.selected_layers().iter().copied().any(|id| st.doc.layer(id).is_some_and(|l| l.artboard().is_some())) {
         return p;
     }
     if let Some(fields) = p.as_object_mut() {
@@ -370,7 +370,8 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(EngineError::Other("artboards are made from a top-level layer group".into()));
         }
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        let rect = crate::layer_multi_cmds::layer_bounds(l).unwrap_or(canvas);
+        // A hidden group keeps today's measure (not measured in the reference).
+        let rect = if l.visible { shown_children_bounds(l) } else { crate::layer_multi_cmds::layer_bounds(l) }.unwrap_or(canvas);
         set_artboard(l, Artboard { rect, background, preset });
         let shift = fit_canvas(doc);
         *active = Some(id);
@@ -379,6 +380,16 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
     follow_shift(s, shift);
     crate::layer_multi_cmds::set_selection(s, vec![id], Some(id), Some(id))?;
     Ok(json!({"layer": id.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
+}
+
+/// [`layer_multi_cmds::layer_bounds`](crate::layer_multi_cmds::layer_bounds) of what shows: a
+/// group unions only its visible children, so hidden layers (and a hidden group's children) don't
+/// size the board Artboard from Group makes (#14553).
+fn shown_children_bounds(l: &Layer) -> Option<Rect> {
+    match l.children() {
+        Some(children) => children.iter().filter(|c| c.visible).filter_map(shown_children_bounds).reduce(|a, b| a.union(&b)),
+        None => crate::layer_multi_cmds::layer_bounds(l),
+    }
 }
 
 /// The layers' union bounds, or the canvas when they have none: the board Artboard from Layers
@@ -643,7 +654,7 @@ pub fn artboard_document(doc: &Document, id: LayerId) -> Result<Option<Document>
     let mut one = doc.clone();
     one.name = l.name.clone();
     one.size = Size::new(r.width(), r.height());
-    one.layers = vec![group];
+    one.layers = vec![group].into();
     one.channels.clear();
     one.selection = None;
     one.quick_mask = None;
@@ -659,10 +670,126 @@ pub fn artboard_document(doc: &Document, id: LayerId) -> Result<Option<Document>
     Ok(Some(one))
 }
 
+/// Include Overlapping Areas: each visible artboard stacked above board `id` that overlaps it, as
+/// the reference application writes it into the board's file: a plain group (no longer an
+/// artboard) holding its layers over a new pixel layer "Background for <board>" filled with the
+/// board's background where the two boards overlap, in source coordinates and bottom to top. A
+/// group whose layers reach past its own board (effects, pixels outside the board, adjustments)
+/// gets a hard mask to its board, which the artboard clipped them to.
+///
+/// The artboard painted its background beneath the group and then composited the group (its
+/// blend mode, opacity, effects and masks) over it. A board with any of those keeps them on a
+/// group of its own inside the plain group, above the background, so they still apply to its
+/// layers only and its own mask keeps its feather and Layer Mask Hides Effects setting; the plain
+/// group then carries nothing but the board clip.
+fn overlapping_boards(doc: &Document, id: LayerId, rect: Rect) -> Vec<Layer> {
+    let above = doc.layers.iter().skip_while(|l| l.id != id).skip(1);
+    let mut out = Vec::new();
+    for l in above.filter(|l| l.visible) {
+        let Some(ab) = l.artboard().cloned() else { continue };
+        let overlap = ab.rect.intersect(&rect);
+        if overlap.is_empty() {
+            continue;
+        }
+        let mut board = l.clone();
+        if let LayerContent::Group(g) = &mut board.content {
+            g.artboard = None;
+            cut_pixels(&mut g.children, overlap, 0);
+        }
+        let bg = ab.background.rgba();
+        let mut group = if stacks_like_its_layers(&board) {
+            board
+        } else {
+            board.clipped = false;
+            let mut plain = Layer::group(l.name.clone(), vec![board]);
+            plain.label = l.label;
+            plain
+        };
+        if let (Some(bg), Some(children)) = (bg, group.children_mut()) {
+            let fmt = doc.pixel_format();
+            let mut surf = Surface::new(fmt);
+            surf.fill_rect(overlap, &photocraft_raster::from_rgba(&fmt, bg));
+            children.insert(0, Layer::new(format!("Background for {}", l.name), LayerContent::Raster(surf)));
+        }
+        // With the background in place: its pixels widen what the group's layers can reach.
+        let reach = photocraft_compose::change_bounds(&group, doc.bounds());
+        if reach.is_none_or(|r| !ab.rect.contains_rect(&r)) {
+            let mut mask = photocraft_doc::LayerMask::reveal_all();
+            mask.surface = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
+            mask.surface.fill_rect(ab.rect, &[1.0]);
+            group.mask = Some(mask);
+        }
+        out.push(group);
+    }
+    out
+}
+
+/// Whether artboard `board` (already a plain group) composites over its background exactly as
+/// its layers stacked over that background in one pass-through group do: pass-through (a Normal
+/// group renders its layers on their own first, so a Multiply or Screen layer in it never blends
+/// with the background), and no effects, masks, opacity, Blend If or other blending options of
+/// its own, nor a mask the board clip would replace.
+fn stacks_like_its_layers(board: &Layer) -> bool {
+    board.blend == photocraft_color::BlendMode::PassThrough
+        && board.opacity >= 1.0
+        && board.fill_opacity >= 1.0
+        && board.mask.is_none()
+        && board.vector_mask.is_none()
+        && board.frame.is_none()
+        && board.excluded_channels == 0
+        && board.blend_if == photocraft_doc::BlendIf::default()
+        && board.advanced == photocraft_doc::AdvancedBlending::default()
+        && !photocraft_compose::effects::has_effects(board)
+}
+
+/// Cuts the pixel layers in `layers` (and in groups inside them, `depth` levels down so far) to
+/// `keep`, as the reference application cuts an overlapping board's layers to the file. Layers
+/// whose pixels can't be cut stay whole; the group's mask still hides what lies past its board.
+/// A layer with effects, or inside a group with effects, stays whole too: pixels outside `keep`
+/// can cast a shadow or glow into it.
+fn cut_pixels(layers: &mut [Layer], keep: Rect, depth: usize) {
+    const MAX_DEPTH: usize = 64;
+    for l in layers {
+        if photocraft_compose::effects::has_effects(l) {
+            continue;
+        }
+        match &mut l.content {
+            LayerContent::Group(g) if depth < MAX_DEPTH => cut_pixels(&mut g.children, keep, depth + 1),
+            LayerContent::Raster(surf) => {
+                let r = surf.content_bounds().intersect(&keep);
+                let mut cut = Surface::with_default(surf.format(), &surf.default_pixel());
+                if !r.is_empty() {
+                    let Ok(px) = surf.try_read_region(r) else { continue };
+                    if cut.try_write_region(r, &px).is_err() {
+                        continue;
+                    }
+                }
+                *surf = cut;
+            }
+            _ => {}
+        }
+    }
+}
+
 /// [`artboard_document`] for each chosen board, all built before any file is written so a
-/// board that can't be exported fails the export without leaving a partial set behind.
-fn chosen_documents(doc: &Document, p: &Value) -> Result<Vec<Document>> {
-    chosen_artboards(doc, p).into_iter().filter_map(|id| artboard_document(doc, id).transpose()).collect()
+/// board that can't be exported fails the export without leaving a partial set behind. With
+/// `overlapping`, each file also holds the boards above that overlap it ([`overlapping_boards`]).
+fn chosen_documents(doc: &Document, p: &Value, overlapping: bool) -> Result<Vec<Document>> {
+    let mut out = Vec::new();
+    for id in chosen_artboards(doc, p) {
+        let Some(mut one) = artboard_document(doc, id)? else { continue };
+        if overlapping && let Some(r) = doc.layer(id).and_then(|l| l.artboard()).map(|a| a.rect) {
+            // `artboard_document` has checked that the board's origin negates.
+            let (dx, dy) = (r.x0.saturating_neg(), r.y0.saturating_neg());
+            for mut group in overlapping_boards(doc, id, r) {
+                crate::commands::translate_layer(doc, &mut group, dx, dy);
+                crate::vector_cmds::translate_vectors(doc, &mut group, f64::from(dx), f64::from(dy));
+                one.layers.push(group);
+            }
+        }
+        out.push(one);
+    }
+    Ok(out)
 }
 
 /// The artboards an export covers: `"artboards": [ids]`, else all, top of the Layers panel first.
@@ -735,8 +862,16 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let save = SaveOpts::from_params(s, p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
+    let overlapping = match p.get("content") {
+        None | Some(Value::Null) => true,
+        Some(v) => match v.as_str() {
+            Some("overlapping") => true,
+            Some("artboard") => false,
+            _ => return Err(bad(cmd, format!("`content` must be \"overlapping\" or \"artboard\", not {v}"))),
+        },
+    };
     let doc = d.doc.clone();
-    let boards = chosen_documents(&doc, p)?;
+    let boards = chosen_documents(&doc, p, overlapping)?;
     let names: Vec<&str> = boards.iter().map(|one| one.name.as_str()).collect();
     let mut files = Vec::new();
     for (one, name) in boards.iter().zip(artboard_file_stems(&prefix, &names, HYPHENATED_FORMATS.contains(&format.as_str()))) {
@@ -806,7 +941,7 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let mut pages = Vec::new();
     // Pages go bottom artboard of the Layers panel first, as in the reference application (#13643);
     // `chosen_documents` lists them top first, the order Artboards to Files keeps.
-    for one in chosen_documents(&doc, p)?.into_iter().rev() {
+    for one in chosen_documents(&doc, p, false)?.into_iter().rev() {
         let buf = photocraft_compose::flatten(&one).over_background([1.0, 1.0, 1.0]);
         let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
         let mut flat = Document::new(&one.name, one.size, ColorMode::Rgb, SampleType::U8);
@@ -883,7 +1018,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToFiles",
             "Artboards to Files…",
             &["File", "Export"],
-            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name ("" = none),"artboards":[id]? (default all),"quality":0..12?} → {files} (one "<prefix><artboard name>.<format>" per board, no separator or index added: spaces become "-" in PNG, JPEG, BMP, Targa and TIFF and stay in PSD and other formats, characters a file name can't hold become "_", and a name an earlier board already took, ignoring case, gets "-2", "-3"…)"##,
+            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name ("" = none),"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's file also shows the visible boards above it where they overlap it, each as a plain group with a \"Background for <board>\" layer; artboard: Artboard Content Only),"artboards":[id]? (default all),"quality":0..12?} → {files} (one "<prefix><artboard name>.<format>" per board, no separator or index added: spaces become "-" in PNG, JPEG, BMP, Targa and TIFF and stay in PSD and other formats, characters a file name can't hold become "_", and a name an earlier board already took, ignoring case, gets "-2", "-3"…)"##,
             export_artboards,
             artboards_to_files
         ),
@@ -904,6 +1039,13 @@ mod file_names_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/first_board_background_tests.rs"]
 mod first_board_background_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/from_group_hidden_bounds_tests.rs"]
+mod from_group_hidden_bounds_tests;
+
+#[cfg(test)]
+#[path = "artboard_cmds/overlapping_areas_tests.rs"]
+mod overlapping_areas_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/pdf_page_order_tests.rs"]
 mod pdf_page_order_tests;
