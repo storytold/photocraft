@@ -27,6 +27,7 @@ const GATED: &[&str] = &[
     "paint.cloneStamp",
     "paint.healingBrush",
     "paint.spotHealing",
+    "paint.redEye",
     "paint.patch",
     "paint.dodge",
     "paint.burn",

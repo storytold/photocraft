@@ -38,7 +38,7 @@ fn mode_tool_name(tool: Tool) -> Option<&'static str> {
 }
 
 /// The tool's name in the alerts, for the tools whose wording was measured: the Brush, the
-/// Sharpen tool (#12952), the Sponge (#13030), the Smudge tool (#12965), the Art History Brush
+/// Sharpen tool (#12952), the Sponge (#13030), the Smudge tool (#12965), the Red Eye tool (#12574), the Art History Brush
 /// (#12638) and the Classic gradient (the live Gradient makes a fill layer and isn't measured, #12017).
 pub fn tool_name(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     match tool {
@@ -46,6 +46,7 @@ pub fn tool_name(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
         Tool::Sharpen => Some(tl!("sharpen tool")),
         Tool::Sponge => Some(tl!("sponge tool")),
         Tool::Smudge => Some(tl!("smudge tool")),
+        Tool::RedEye => Some(tl!("red eye removal tool")),
         Tool::ArtHistoryBrush => Some(tl!("art history brush")),
         Tool::Gradient if app.ui.tool_options.gradient_classic => Some(tl!("gradient tool")),
         _ => None,
@@ -81,8 +82,29 @@ pub fn alert(app: &PhotocraftApp, tool: Tool, hidden: bool) -> Option<String> {
         return (!hidden && pixel_layer && layer_refusal(app, tool) == Some(LOCKED)).then(|| tl!(REMOVE_LOCKED).to_string());
     }
     let name = tool_name(app, tool)?;
-    let template = if hidden { HIDDEN } else { layer_refusal(app, tool)? };
+    let template = if hidden {
+        HIDDEN
+    } else if tool == Tool::RedEye {
+        layer_refusal(app, tool).or_else(|| red_eye_target_refusal(app))?
+    } else {
+        layer_refusal(app, tool)?
+    };
     Some(crate::i18n::fmt(tl!(template), &[("tool", name)]))
+}
+
+/// The Red Eye tool's two refusals past the layer's own (#12574): the target is a layer mask or an
+/// adjustment layer, or several layers are selected.
+fn red_eye_target_refusal(app: &PhotocraftApp) -> Option<&'static str> {
+    use photocraft_engine::redeye_cmds::{MANY_LAYERS_REFUSAL, NOT_PIXEL_REFUSAL};
+    let st = app.session.active()?;
+    let adjustment = st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| matches!(l.content, photocraft_doc::LayerContent::Adjustment(_)));
+    if adjustment || crate::canvas::paint_target(app) == json!("mask") {
+        Some(NOT_PIXEL_REFUSAL)
+    } else if st.selected_layers().len() > 1 {
+        Some(MANY_LAYERS_REFUSAL)
+    } else {
+        None
+    }
 }
 
 /// [`GROUP`] or [`LOCKED`] when `tool` can't paint the active layer's pixels.
@@ -104,7 +126,7 @@ fn layer_refusal(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
 /// Art History Brush Lock Image Pixels as well (measured for them; the Brush keeps today's
 /// behaviour there).
 fn locked(locks: photocraft_doc::Locks, tool: Tool) -> bool {
-    locks.all || (matches!(tool, Tool::Sharpen | Tool::Sponge | Tool::Smudge | Tool::ArtHistoryBrush) && locks.pixels)
+    locks.all || (matches!(tool, Tool::Sharpen | Tool::Sponge | Tool::Smudge | Tool::RedEye | Tool::ArtHistoryBrush) && locks.pixels)
 }
 
 #[cfg(test)]
@@ -126,3 +148,7 @@ mod remove_hidden_layer_tests;
 #[cfg(test)]
 #[path = "art_history_refusal_alert_tests.rs"]
 mod art_history_refusal_alert_tests;
+
+#[cfg(test)]
+#[path = "../red_eye_refusal_alerts_tests.rs"]
+mod red_eye_refusal_alerts_tests;
