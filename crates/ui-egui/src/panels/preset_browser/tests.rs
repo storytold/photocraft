@@ -114,3 +114,58 @@ fn preset_drops_map_through_the_ruler_inset() {
     let doc = crate::canvas::document_display::doc_point_at(&app, centre).expect("the canvas centre is on the document");
     assert!((doc.x - 32.0).abs() < 1.0 && (doc.y - 24.0).abs() < 1.0, "the canvas centre is the document centre: {doc:?}");
 }
+
+// ------------------------------------------------------------------ Custom Shape picker (#13468)
+
+/// Every `ShapeView` maps to a view and a zoom in the browser's thumbnail range: Text Only is the
+/// framework's closest match, List at the smallest zoom (it has no "no thumbnail" row).
+#[test]
+fn shape_picker_view_state_maps_every_mode() {
+    let range = THUMB_RANGE.range();
+    let (small, large) = (*range.start(), *range.end());
+    let cases = [
+        (ShapeView::TextOnly, (PresetView::List, small)),
+        (ShapeView::SmallThumbnail, (PresetView::Grid, small)),
+        (ShapeView::LargeThumbnail, (PresetView::Grid, large)),
+        (ShapeView::SmallList, (PresetView::List, small)),
+        (ShapeView::LargeList, (PresetView::List, large)),
+    ];
+    for (view, expected) in cases {
+        assert_eq!(shape_picker_view_state(view), expected, "{view:?}");
+    }
+}
+
+fn add_shape(app: &mut PhotocraftApp, name: &str) {
+    app.run("shape.presets.new", json!({"name": name, "path": "M 0 0 L 10 0 L 10 10 L 0 10 Z"})).unwrap();
+}
+
+fn has_shape(app: &PhotocraftApp, name: &str) -> bool {
+    photocraft_engine::presets::shapes::all_groups(&app.session).iter().any(|g| g.items.iter().any(|s| s.name == name))
+}
+
+/// The picker's own right-click events (native Rename/Move to/Delete) run the matching engine command, and the
+/// Custom Shape tool's current shape follows a rename of itself and clears on its own delete, leaving another
+/// shape's rename or delete alone.
+#[test]
+fn picker_events_run_their_command_and_the_current_shape_follows_or_clears() {
+    let mut app = app();
+    add_shape(&mut app, "A");
+    add_shape(&mut app, "B");
+    app.ui.presets_ui.custom_shape = "A".into();
+
+    apply_picker_events(&mut app, vec![PresetEvent::rename(item("B"), "C")]);
+    assert!(has_shape(&app, "C") && !has_shape(&app, "B"), "the rename ran");
+    assert_eq!(app.ui.presets_ui.custom_shape, "A", "renaming another shape leaves the current one alone");
+
+    apply_picker_events(&mut app, vec![PresetEvent::Delete(item("C"))]);
+    assert!(!has_shape(&app, "C"), "the delete ran");
+    assert_eq!(app.ui.presets_ui.custom_shape, "A", "deleting another shape leaves the current one alone");
+
+    apply_picker_events(&mut app, vec![PresetEvent::rename(item("A"), "Z")]);
+    assert!(has_shape(&app, "Z"));
+    assert_eq!(app.ui.presets_ui.custom_shape, "Z", "the current shape follows its own rename");
+
+    apply_picker_events(&mut app, vec![PresetEvent::Delete(item("Z"))]);
+    assert!(!has_shape(&app, "Z"));
+    assert!(app.ui.presets_ui.custom_shape.is_empty(), "the current shape clears on its own delete");
+}
