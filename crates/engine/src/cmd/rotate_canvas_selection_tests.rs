@@ -64,7 +64,7 @@ fn a_no_op_angle_keeps_the_selection_and_adds_no_step() {
 #[test]
 fn the_flag_false_path_of_crop_and_straighten_still_warps_the_selection() {
     let mut s = session();
-    crate::mode_cmds::rotate_arbitrary_with(&mut s, &json!({"angle": 30, "direction": "cw"}), false).unwrap();
+    crate::mode_cmds::rotate_arbitrary_with(&mut s, &json!({"angle": 30, "direction": "cw"}), false, false).unwrap();
     let b = selection_bounds(&s).expect("selection warped, not dropped");
     assert!(b.x1 > b.x0 && b.y1 > b.y0, "{b:?}");
     assert_ne!(b, original());

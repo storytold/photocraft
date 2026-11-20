@@ -66,7 +66,7 @@ fn image_size_scales_strokes_once_and_undo_restores_them() {
 fn grouped_strokes_scale_up_and_unchanged_size_is_a_noop() {
     let (mut s, id) = shape_session(8);
     s.edit("Group", |doc, _| {
-        let children = std::mem::take(&mut doc.layers);
+        let children = std::mem::take(&mut *doc.layers);
         doc.layers.push(photocraft_doc::Layer::group("Outer", vec![photocraft_doc::Layer::group("Inner", children)]));
         Ok(())
     })

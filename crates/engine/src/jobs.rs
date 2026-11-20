@@ -1721,7 +1721,7 @@ impl Session {
         // authorization, validation, floating-selection and admission failures.
         let live_commit = self.live_commit.take();
         self.sync_scratch_state();
-        let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        let spec = crate::registry::spec(id)?;
         // Params are named fields: anything but an object (or null, meaning none) is a caller
         // mistake, not "use every default".
         if !(params.is_object() || params.is_null()) {
@@ -1763,6 +1763,12 @@ impl Session {
         }
         crate::param_check::check(spec, &params)?;
         crate::filters::validate_params(id, &params)?;
+        // A command that may not run leaves a floating selection floating (#13169): it is refused
+        // before the piece drops, without a History step. One that may run is checked again
+        // below, once the piece has dropped, on the pixels and selection it will change.
+        if crate::float_cmds::drops_for(self, id) {
+            self.admit(id, spec, &params)?;
+        }
         // A floating selection drops before any other command (Undo puts it back instead).
         if let Some(v) = crate::float_cmds::before_command(self, id)? {
             return Ok(Started::Done(v));
@@ -1868,6 +1874,7 @@ impl Session {
                     } else if !st.fx_collapsed.contains(&layer_id) {
                         st.fx_collapsed.push(layer_id);
                     }
+                    st.note_disclosure_change();
                 }
                 self.after_command(id, params, spec.journal, automation, Some(nested_from), pre_selected.as_deref(), &record_before);
                 Ok(Started::Done(v))

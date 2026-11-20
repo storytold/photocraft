@@ -2,7 +2,7 @@ use super::params::{color, f64p, layer_id, op_from, parse_path, path_json};
 use super::shape::{map_path, map_shape, transform_shape, with_shape};
 use super::{
     Affine, BlendMode, ClippingPath, Color, Document, EngineError, LayerContent, LayerId, NamedPath, Path, Rect, Result, SelectionMode, Session, Value, bad,
-    blend_from_str, json, sel, vector,
+    json, parse_blend, sel, vector,
 };
 
 // ---------------------------------------------------------------------------
@@ -444,7 +444,7 @@ pub(super) fn path_fill(s: &mut Session, p: &Value) -> Result<Value> {
     let rgb = c.to_rgb();
     let src = [rgb[0], rgb[1], rgb[2], c.alpha];
     let opacity = (f64p(p, "opacity").unwrap_or(100.0) / 100.0).clamp(0.0, 1.0) as f32;
-    let mode = p.get("mode").and_then(Value::as_str).and_then(blend_from_str).unwrap_or(BlendMode::Normal);
+    let mode = p.get("mode").and_then(Value::as_str).and_then(parse_blend).unwrap_or(BlendMode::Normal);
     let feather = f64p(p, "feather").unwrap_or(0.0) as f32;
     let aa = p.get("antiAlias").and_then(Value::as_bool).unwrap_or(true);
     let id = layer_id(s, p)?;
