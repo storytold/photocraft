@@ -4,8 +4,9 @@
 
 use std::ops::RangeInclusive;
 
-use craft::behavior::{EditEvents, NumberCodec};
+use craft::behavior::{EditEvents, IconId, NumberCodec};
 use craft::ui::bars::{Bar, BarHome, BarKind, BarOutput, BarTool};
+use craft::ui::buttons::ToggleButton;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
@@ -43,8 +44,8 @@ impl Reset {
 }
 
 /// What the bar's commit and cancel buttons end.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum End {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum End {
     /// The Transform Symmetry session.
     Symmetry,
     /// The live crop.
@@ -84,6 +85,13 @@ fn ending(app: &PhotocraftApp, tool: Tool) -> Option<Ending> {
         tool if is_type_tool(tool) && app.ui.text_edit.is_some() => pair(End::Type, tl!("Commit any current edits"), tl!("Cancel any current edits")),
         tool => crate::retouch_ui::bar::pending(app, tool).map(|p| Ending { end: End::Retouch, commit: p.commit, cancel: p.cancel }),
     }
+}
+
+/// A key of the bar's commit and cancel cells and of the open outline its hints follow: the canvas opens and ends these
+/// edits (a type session, a crop frame, a removal stroke, a lasso outline) without a command, so the options bar's
+/// content version holds this key.
+pub(crate) fn edit_key(app: &PhotocraftApp) -> (Option<End>, bool) {
+    (ending(app, app.ui.tool).map(|ending| ending.end), app.canvas_tools.selection.outline_open())
 }
 
 /// The options bar of the active tool. It is the same arrangement in every theme.
@@ -244,11 +252,24 @@ fn stamp_members(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
         let opacity = percent_field(ui, tl!("Opacity"), brush.opacity, 1.0..=100.0);
         edit_brush(app, &opacity, |b, v| b.opacity = v);
     }
-    // The Art History Brush's Opacity carries the reference's tooltip (#12630).
+    // The Art History Brush's Opacity carries the reference's tooltip (#12630), and its Pressure
+    // for Opacity follows right after it, as measured (#12629).
     if tool == Tool::ArtHistoryBrush {
         let opacity = number_field_with_tip(ui, tl!("Opacity"), brush.opacity * 100.0, 1.0..=100.0, "%", Some(tl!("Set opacity for stroke")))
             .map(|percent| percent / 100.0);
         edit_brush(app, &opacity, |b, v| b.opacity = v);
+        let pressure = ToggleButton::new(tl!("Always use pressure for opacity"), Bind::given(brush.pressure_opacity))
+            .icon(IconId::new("target"))
+            .icon_only()
+            .tooltip(tl!("Always use Pressure for Opacity. When off, Brush Preset controls pressure").to_owned())
+            .show(ui);
+        if let Some(on) = pressure.value().copied() {
+            let before = app.session.tools.brush.clone();
+            let mut after = before.clone();
+            after.pressure_opacity = on;
+            let key = pressure.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e));
+            crate::brush_panel::commit_keyed(app, &before, &after, key);
+        }
     }
     if matches!(tool, Tool::CloneStamp | Tool::HistoryBrush) {
         let flow = percent_field(ui, tl!("Flow"), brush.flow, 1.0..=100.0);
@@ -340,3 +361,7 @@ pub(super) fn pct_action(target: &Value, key: &str, pct: f32, coalesce: Option<S
 #[cfg(test)]
 #[path = "../pattern_stamp_opacity_flow_tests.rs"]
 mod pattern_stamp_opacity_flow_tests;
+
+#[cfg(test)]
+#[path = "art_history_bar_controls_tests.rs"]
+mod art_history_bar_controls_tests;

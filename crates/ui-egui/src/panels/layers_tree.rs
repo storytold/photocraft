@@ -120,7 +120,7 @@ impl<'a> PhotoLayers<'a> {
         let Some(active) = self.st.active_layer else { return Vec::new() };
         let selection = self.st.selected_layers();
         if selection.len() > 1 && selection.contains(&active) {
-            selection.into_iter().filter(|id| *id == active || !self.doc().is_background(*id)).collect()
+            selection.iter().copied().filter(|id| *id == active || !self.doc().is_background(*id)).collect()
         } else {
             vec![active]
         }
@@ -180,12 +180,7 @@ impl LayerTree for PhotoLayers<'_> {
     }
 
     fn parent(&self, id: &LayerId) -> Option<LayerId> {
-        let mut path = self.doc().path_of(*id)?;
-        path.pop();
-        if path.is_empty() {
-            return None;
-        }
-        self.doc().layer_at(&path).map(|l| l.id)
+        self.doc().layers.index().parent(*id)
     }
 
     fn is_open(&self, id: &LayerId) -> bool {
@@ -216,13 +211,8 @@ impl LayerTree for PhotoLayers<'_> {
         };
         let mut info = LayerInfo::new(l.name.clone(), kind);
         info.visible = l.visible;
-        let mut hidden = !l.visible;
-        let mut at = self.parent(id);
-        while let Some(p) = at {
-            hidden |= self.layer(&p).is_some_and(|g| !g.visible);
-            at = self.parent(&p);
-        }
-        info.dimmed = hidden;
+        let index = doc.layers.index();
+        info.dimmed = !l.visible || std::iter::successors(index.parent(*id), |p| index.parent(*p)).any(|p| self.layer(&p).is_some_and(|g| !g.visible));
         info.label = ui_label(l.label);
         let mut locks = LayerLocks::default();
         locks.transparency = l.locks.transparency;
@@ -305,7 +295,7 @@ impl LayerTree for PhotoLayers<'_> {
             Some(l) if ui.mask_target && l.mask.is_some() => LayerPart::LayerMask,
             _ => LayerPart::Pixels,
         };
-        let mut selection = LayerSelection::new(self.st.selected_layers(), active, target);
+        let mut selection = LayerSelection::new(self.st.selected_layers().to_vec(), active, target);
         selection.sub_row = self.selected_filter().and_then(|(layer, index)| {
             let id = LayerId(layer);
             let row = match index {
@@ -376,15 +366,20 @@ impl LayerTree for PhotoLayers<'_> {
     }
 
     fn blend_modes(&self, group: bool, current: &str) -> Vec<Entry<String>> {
+        static CACHE: crate::i18n::LangCache<(bool, BlendMode), Vec<Entry<String>>> = crate::i18n::LangCache::new();
         let current = BlendMode::from_key(current).or_else(|| blend_of(current)).unwrap_or(BlendMode::Normal);
-        let modes: Vec<BlendKeyEntry<BlendMode>> = super::layers::blend_options(group, current).into_iter().map(|(m, _)| super::blend_entry(m, m)).collect();
-        blend_entries(&modes, |mode| Label::from(tl!(mode.key.label()).to_string()))
-            .into_iter()
-            .map(|entry| match entry.value() {
-                Some(mode) => Entry::new(mode.key().to_string(), entry.label().clone()),
-                None => Entry::separator(),
-            })
-            .collect()
+        let current = if current.has_psd_equivalent() { BlendMode::Normal } else { current };
+        CACHE.get_or_build((group, current), || {
+            let modes: Vec<BlendKeyEntry<BlendMode>> =
+                super::layers::blend_options(group, current).into_iter().map(|(m, _)| super::blend_entry(m, m)).collect();
+            blend_entries(&modes, |mode| Label::from(tl!(mode.key.label()).to_string()))
+                .into_iter()
+                .map(|entry| match entry.value() {
+                    Some(mode) => Entry::new(mode.key().to_string(), entry.label().clone()),
+                    None => Entry::separator(),
+                })
+                .collect()
+        })
     }
 
     fn footer(&self) -> LayersFooterState {
@@ -407,18 +402,23 @@ impl LayerTree for PhotoLayers<'_> {
                 crate::i18n::fmt(tl!("Add a mask  (from the selection; {key} inverts)"), &[("key", &crate::shortcuts::pretty("Alt"))])
             }
         });
-        let mut adjustments: Vec<Entry<String>> = photocraft_engine::command_specs()
-            .iter()
-            .filter(|c| c.id.starts_with("layer.newAdjustmentLayer."))
-            .map(|c| Entry::new(c.id.to_string(), tl!(c.label).trim_end_matches('…').to_string()))
-            .collect();
-        adjustments.push(Entry::separator());
-        adjustments.push(Entry::new("layer.newFillLayer.solidColor".to_string(), tl!("Solid Color…").to_string()));
-        adjustments.push(Entry::new("layer.newFillLayer.gradient".to_string(), tl!("Gradient…").to_string()));
-        adjustments.push(Entry::new("layer.newFillLayer.pattern".to_string(), tl!("Pattern…").to_string()));
+        type FooterMenus = (Vec<Entry<String>>, Vec<Entry<String>>);
+        static MENUS: crate::i18n::LangCache<(), FooterMenus> = crate::i18n::LangCache::new();
+        let (adjustments, styles) = MENUS.get_or_build((), || {
+            let mut adjustments: Vec<Entry<String>> = photocraft_engine::command_specs()
+                .iter()
+                .filter(|c| c.id.starts_with("layer.newAdjustmentLayer."))
+                .map(|c| Entry::new(c.id.to_string(), tl!(c.label).trim_end_matches('…').to_string()))
+                .collect();
+            adjustments.push(Entry::separator());
+            adjustments.push(Entry::new("layer.newFillLayer.solidColor".to_string(), tl!("Solid Color…").to_string()));
+            adjustments.push(Entry::new("layer.newFillLayer.gradient".to_string(), tl!("Gradient…").to_string()));
+            adjustments.push(Entry::new("layer.newFillLayer.pattern".to_string(), tl!("Pattern…").to_string()));
+            let mut styles = vec![Entry::new(String::new(), tl!("Blending Options…").to_string()), Entry::separator()];
+            styles.extend(crate::layer_style::KINDS.iter().map(|&(kind, label)| Entry::new(kind.to_string(), format!("{}…", tl!(label)))));
+            (adjustments, styles)
+        });
         footer.adjustment_menu = adjustments;
-        let mut styles = vec![Entry::new(String::new(), tl!("Blending Options…").to_string()), Entry::separator()];
-        styles.extend(crate::layer_style::KINDS.iter().map(|&(kind, label)| Entry::new(kind.to_string(), format!("{}…", tl!(label)))));
         footer.style_menu = styles;
         footer
     }
@@ -460,17 +460,15 @@ impl LayerTree for PhotoLayers<'_> {
         self.app.canvas_hover_layer
     }
 
+    /// Rows move, open, close or appear only through the layer stack, whose index every write drops, the document
+    /// revision (isolation, the selection) and the Layers view revision (effects lists and groups opened or closed).
+    /// A Type Mask session's working text comes and goes outside all three, so the rows are walked each pass while it
+    /// runs.
     fn revision(&self) -> Option<u64> {
         if self.working_text.is_some() {
             return None;
         }
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        self.st.revision.hash(&mut h);
-        self.doc().id.0.hash(&mut h);
-        self.st.fx_collapsed.hash(&mut h);
-        self.st.isolated_layers.hash(&mut h);
-        Some(h.finish())
+        Some(Revision::of(&(self.doc().id.0, self.st.revision, self.st.layers_view_revision(), self.doc().layers.index().serial())).get())
     }
 }
 
@@ -632,10 +630,6 @@ impl<'a> PhotoThumbs<'a> {
             _ => Some(l),
         }
     }
-
-    fn size_bits(&self) -> u64 {
-        u64::from(self.doc.size.width) << 40 ^ u64::from(self.doc.size.height) << 16
-    }
 }
 
 fn rgba8(c: [f32; 4]) -> [u8; 4] {
@@ -645,25 +639,26 @@ fn rgba8(c: [f32; 4]) -> [u8; 4] {
 impl ThumbSource<LayerThumb<LayerId>> for PhotoThumbs<'_> {
     fn revision(&self, key: &LayerThumb<LayerId>, _request: &ThumbRequest) -> Revision {
         let Some(l) = self.source(key) else { return Revision::new(0) };
-        let clip = u64::from(key.contents == ThumbContents::LayerBounds) << 63;
-        let bits = match key.kind {
+        let clip = key.contents == ThumbContents::LayerBounds;
+        let generation = |s: &photocraft_raster::Surface| s.generation();
+        let shown = match key.kind {
             LayerThumbKind::Pixels | LayerThumbKind::FrameContent => match &l.content {
                 LayerContent::Fill(Fill::Solid(color)) => {
                     let shown = crate::solid_fill_ui::thumbnail_color(self.app, self.doc.id, l.id, *color);
                     Revision::of(&(shown.to_rgba8(), 1u8)).get()
                 }
-                LayerContent::Fill(f) => Revision::of(&format!("{f:?}")).get(),
-                _ => l.surface().map_or(0, crate::app::surface_fingerprint) ^ clip,
+                LayerContent::Fill(f) => Revision::of(f).get(),
+                _ => l.surface().map_or(0, generation),
             },
-            LayerThumbKind::Mask => l.mask.as_ref().map_or(0, |m| crate::app::surface_fingerprint(&m.surface)),
+            LayerThumbKind::Mask => l.mask.as_ref().map_or(0, |m| m.surface.generation()),
             LayerThumbKind::VectorMask => l.vector_mask.as_ref().map_or(0, crate::mask_thumbs_ui::vector_fingerprint),
             LayerThumbKind::SmartFilterMask => match &l.content {
-                LayerContent::Smart(sm) => sm.filter_mask.as_ref().map_or(1, |m| crate::app::surface_fingerprint(&m.surface)),
+                LayerContent::Smart(sm) => sm.filter_mask.as_ref().map_or(1, |m| m.surface.generation()),
                 _ => 0,
             },
             _ => 0,
         };
-        Revision::new(bits ^ self.size_bits())
+        Revision::of(&(shown, clip, self.doc.size.width, self.doc.size.height))
     }
 
     fn render(&self, key: &LayerThumb<LayerId>, request: &ThumbRequest) -> ThumbRender {

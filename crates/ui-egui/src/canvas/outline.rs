@@ -12,7 +12,7 @@ pub(crate) struct SurfaceMask<'a> {
 }
 
 impl<'a> SurfaceMask<'a> {
-    /// The mask `surface` of a document `size` pixels large. `revision` is the mask's own fingerprint (its tiles), not
+    /// The mask `surface` of a document `size` pixels large. `revision` is the mask's own (its surface generation), not
     /// the document's, so an edit elsewhere in the document keeps the overlay's trace.
     pub(crate) fn new(surface: &'a Surface, revision: u64, size: [u32; 2]) -> Self {
         SurfaceMask { surface, revision, size }
