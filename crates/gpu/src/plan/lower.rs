@@ -289,7 +289,9 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
         }
         Adjustment::GradientMap { stops, reverse, dither, .. } => {
             p[0][0] = if *reverse { 1.0 } else { 0.0 };
-            p[0][1] = if *dither { 1.0 } else { 0.0 };
+            // 1.0: slope-scaled noise (8-bit only, as on the CPU); 2.0: the ordered dither every
+            // other depth keeps.
+            p[0][1] = if *dither { if depth == photocraft_color::SampleType::U8 { 1.0 } else { 2.0 } } else { 0.0 };
             let s4: Vec<(f32, [f32; 4])> = stops.iter().map(|(t, c)| (*t, [c[0], c[1], c[2], 1.0])).collect();
             let rows = lut_rows(|r, t| if s4.is_empty() { t } else { sample_stops4(&s4, t)[r] }, 3);
             (13, p, Some(rows))

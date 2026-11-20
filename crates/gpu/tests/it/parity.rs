@@ -831,6 +831,17 @@ fn adjustment_layers() {
         // Threshold: whole 16-bit samples against the level in 16 bits, or the float luminosity.
         d.layers.push(Layer::new("th", LayerContent::Adjustment(Adjustment::Threshold { level: 0.5 })));
         check(&mut g, &d, &format!("threshold {depth:?}"));
+        // Gradient Map dither: the ordered dither, since the slope-scaled noise is 8-bit only
+        // (compose::adjust). A stop a third of the way in, so the slope varies across the ramp
+        // and a wrong dither mode would show.
+        let gm = Adjustment::GradientMap {
+            stops: vec![(0.0, [0.0, 0.0, 0.0]), (0.3, [0.9, 0.2, 0.1]), (1.0, [1.0, 1.0, 1.0])],
+            reverse: false,
+            dither: true,
+            source: None,
+        };
+        d.layers.push(Layer::new("gm", LayerContent::Adjustment(gm)));
+        check(&mut g, &d, &format!("gradient map dither {depth:?}"));
     }
     for adj in adjustments() {
         for (mode, opacity, masked) in [(BlendMode::Normal, 1.0, false), (BlendMode::Multiply, 0.7, true)] {

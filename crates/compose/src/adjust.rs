@@ -21,12 +21,12 @@ pub use channels::{
     lab_stored_op, stored_channel_adjustment, stored_channels, threshold_white,
 };
 use channels::{apply_lab, legacy_brightness_contrast, legacy_brightness_contrast_hdr};
-use color::gradient;
 pub use color::{
     BalanceCurve, VIBRANCE_BOOST, VIBRANCE_GREY, bayer4, black_white_gray, color_balance_channel, colorize_saturation, hdr_saturation_factor, hsl_to_rgb,
     hue_range_tables, hue_saturation, hue_saturation_in, lut3d_sample, photo_filter_matrix, range_lightness, rgb_to_hsl, selective_color,
     selective_color_weights, vibrance_lin, vibrance_px,
 };
+use color::{gradient, gradient_dither};
 #[cfg(test)]
 use tone::LUT_SIZE;
 pub(crate) use tone::apply_tone;
@@ -261,7 +261,32 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
                 }
                 let mut o = gradient(stops, t);
                 if *dither {
-                    let d = bayer4(x0 + (i % w) as i32, y0 + (i / w) as i32) / 255.0;
+                    let (px, py) = (x0 + (i % w) as i32, y0 + (i / w) as i32);
+                    // The slope-scaled noise is the 8-bit fix for banding (#14700): 16- and 32-bit
+                    // documents keep the ordered dither they had, and so does an unrounded buffer
+                    // (`None`), which has no levels to band.
+                    let d = if depth == Some(SampleType::U8) {
+                        let (a, _b) = gradient_dither(px, py);
+                        let eps = 1.0 / 255.0;
+                        let c_lo = gradient(stops, (t - eps).max(0.0));
+                        let c_hi = gradient(stops, (t + eps).min(1.0));
+                        let span = ((t + eps).min(1.0) - (t - eps).max(0.0)).max(1e-6);
+                        let slope = (0..3).fold(0.0f32, |m, ch| m.max((c_hi[ch] - c_lo[ch]).abs() / span));
+                        let amp = if slope < 0.50 {
+                            0.50 + 1.85 * slope
+                        } else if slope < 1.00 {
+                            1.425 + 1.39 * (slope - 0.50)
+                        } else if slope < 1.45 {
+                            2.16 + 0.52 * (slope - 1.00)
+                        } else if slope < 2.30 {
+                            3.42
+                        } else {
+                            2.95 + 3.05 * (slope - 2.30).min(1.75)
+                        } / 255.0;
+                        a * amp
+                    } else {
+                        bayer4(px, py) / 255.0
+                    };
                     o = o.map(|v| (v + d).clamp(0.0, 1.0));
                 }
                 p[..3].copy_from_slice(&o);
@@ -396,6 +421,8 @@ mod lookup_tests {
     }
 }
 
+#[cfg(test)]
+mod gradient_map_dither_tests;
 #[cfg(test)]
 mod tone_tests;
 
