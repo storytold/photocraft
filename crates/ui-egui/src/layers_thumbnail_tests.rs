@@ -31,7 +31,7 @@ fn active(h: &H) -> Option<String> {
 
 fn selected(h: &H) -> Vec<String> {
     let st = h.state().session.active().unwrap();
-    st.selected_layers().into_iter().map(|id| st.doc.layer(id).unwrap().name.clone()).collect()
+    st.selected_layers().iter().copied().map(|id| st.doc.layer(id).unwrap().name.clone()).collect()
 }
 
 /// The selection's bounds as (x, y, width, height).

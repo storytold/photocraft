@@ -359,7 +359,7 @@ fn save_for_web_writes_the_picked_file_when_the_name_changed() {
         set_option(&mut app, id, "format", json!(WebFormat::Png24));
         answer_path(&mut app, id, &target);
         if rename {
-            Arc::make_mut(&mut app.session.active_mut().unwrap().doc).name = "renamed".into();
+            Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).name = "renamed".into();
         }
         confirm(&mut app, id);
         assert!(std::path::Path::new(&target).exists(), "rename {rename}: {target}");
