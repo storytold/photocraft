@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Rust stable (1.95+). Add the web target with `rustup target add wasm32-unknown-unknown`.
+- Rust: `rust-toolchain.toml` names the release CI builds with, and rustup installs it with the web target on first use (`rust-version` in Cargo.toml is the oldest release the sources support, 1.95).
 - macOS, Windows or Linux. On Linux, install the windowing, GL and GTK development packages:
   - Debian/Ubuntu: `sudo apt install libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev`
   - Fedora/RHEL: `sudo dnf install libxkbcommon-devel wayland-devel libX11-devel libXrandr-devel libXi-devel mesa-libGL-devel gtk3-devel`
