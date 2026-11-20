@@ -461,11 +461,11 @@ fn group_depth(layers: &[Layer]) -> usize {
 /// [`rich_doc`] with its layers wrapped in groups until they are nested `levels` deep.
 fn nested_doc(levels: usize, depth: SampleType) -> Document {
     let mut doc = rich_doc(ColorMode::Rgb, depth);
-    let mut layers = std::mem::take(&mut doc.layers);
+    let mut layers = std::mem::take(&mut *doc.layers);
     for i in group_depth(&layers)..levels {
         layers = vec![Layer::group(format!("Level {i}"), layers)];
     }
-    doc.layers = layers;
+    doc.layers = layers.into();
     assert_eq!(group_depth(&doc.layers), levels);
     doc
 }

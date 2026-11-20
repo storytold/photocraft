@@ -147,7 +147,7 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let picked = s.tools.picked_cmyk([color[0], color[1], color[2]]);
     let mode = match p.get("mode") {
         None | Some(Value::Null) => photocraft_color::BlendMode::Normal,
-        Some(Value::String(m)) => crate::commands::blend_from_str(m)
+        Some(Value::String(m)) => crate::commands::parse_blend(m)
             .filter(|m| *m != photocraft_color::BlendMode::PassThrough)
             .ok_or_else(|| EngineError::BadParams { cmd: "edit.stroke".into(), msg: format!("unknown blend mode `{m}`") })?,
         Some(v) => return Err(EngineError::BadParams { cmd: "edit.stroke".into(), msg: format!("mode must be a blend mode name, not {v}") }),

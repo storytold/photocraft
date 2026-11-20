@@ -64,7 +64,7 @@ fn bake_one(s: &mut Session, id: LayerId, key: &str) -> Result<bool> {
         if !area.is_empty() {
             // Render the layer on its own with the document's settings (mode, depth, global
             // light, patterns), then put the real stack back.
-            let stack = std::mem::replace(&mut doc.layers, vec![alone]);
+            let stack = std::mem::replace(&mut doc.layers, vec![alone].into());
             let buf = photocraft_compose::render(doc, area);
             doc.layers = stack;
             let n = fmt.channels();

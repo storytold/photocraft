@@ -1,45 +1,24 @@
 use super::{Document, ImageResource, TaggedBlock};
 
 pub(crate) fn legacy_name(s: &str) -> Vec<u8> {
-    s.chars().map(|c| if c.is_ascii() && !c.is_ascii_control() { c as u8 } else { b'?' }).take(255).collect()
+    craft_psd::resources::encode_legacy_name(s)
 }
 
 pub(crate) fn unicode_names_resource(names: &[&str]) -> Vec<u8> {
-    let mut v = Vec::new();
-    for n in names {
-        let units: Vec<u16> = n.encode_utf16().chain(std::iter::once(0)).collect();
-        v.extend_from_slice(&(units.len() as u32).to_be_bytes());
-        for u in units {
-            v.extend_from_slice(&u.to_be_bytes());
-        }
-    }
-    v
+    craft_psd::unicode_names::write(names.iter().copied())
 }
 
 pub(crate) fn pascal_names_resource(names: &[&str]) -> Vec<u8> {
-    let mut v = Vec::new();
-    for n in names {
-        let b = legacy_name(n);
-        let n = b.len().min(255);
-        v.push(n as u8);
-        v.extend_from_slice(&b[..n]);
-    }
-    // No per-string pad: Photoshop's resource 1006 for "Spot Color 1" is 13 bytes
-    // (length byte + 12 characters). The 8BIM container pads an odd resource separately.
-    v
+    craft_psd::channel_resources::pascal_names(names.iter().copied())
 }
 
 pub(crate) fn guides_resource(doc: &Document) -> Vec<u8> {
-    let mut v = Vec::new();
-    v.extend_from_slice(&1u32.to_be_bytes());
-    v.extend_from_slice(&576u32.to_be_bytes());
-    v.extend_from_slice(&576u32.to_be_bytes());
     let n = doc.guides.horizontal.len() + doc.guides.vertical.len();
-    v.extend_from_slice(&(n as u32).to_be_bytes());
-    for (list, dir) in [(&doc.guides.vertical, 0u8), (&doc.guides.horizontal, 1u8)] {
+    let mut v = Vec::with_capacity(16 + n * 5);
+    v.extend_from_slice(&craft_psd::guides::header_v1(576, 576, n as u32));
+    for (list, direction) in [(&doc.guides.vertical, 0u8), (&doc.guides.horizontal, 1u8)] {
         for p in list {
-            v.extend_from_slice(&((p * 32.0).round() as i32).to_be_bytes());
-            v.push(dir);
+            v.extend_from_slice(&craft_psd::guides::GuideV1 { location: (p * 32.0).round() as i32, direction }.to_bytes());
         }
     }
     v
@@ -68,20 +47,12 @@ pub(crate) fn path_resources(doc: &Document, warnings: &mut Vec<String>) -> Vec<
         out.push(ImageResource::new(WORK_PATH, path_to_records(wp, w, h).to_bytes()));
     }
     let raw_clip = doc.metadata.psd_resources.iter().find(|(id, _, _)| *id == CLIPPING_PATH);
-    let raw_name = raw_clip.map(|(_, _, d)| {
-        let n = usize::from(d.first().copied().unwrap_or(0));
-        d.get(1..1 + n).map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default()
-    });
+    let raw_name = raw_clip.map(|(_, _, d)| String::from_utf8_lossy(craft_psd::path::clipping_path_name(d).unwrap_or_default()).into_owned());
     if let Some(c) = &doc.clipping_path
         && raw_name.as_deref() != Some(c.name.as_str())
     {
         // Pascal name, then flatness as 16.16 fixed (best effort; see vector_map docs).
-        let mut data = vec![0u8];
-        let name = legacy_name(&c.name);
-        data[0] = name.len() as u8;
-        data.extend_from_slice(&name);
-        data.extend_from_slice(&((c.flatness.max(0.0) * 65536.0) as u32).to_be_bytes());
-        out.push(ImageResource::new(CLIPPING_PATH, data));
+        out.push(ImageResource::new(CLIPPING_PATH, craft_psd::path::clipping_path_resource(&c.name, c.flatness)));
     }
     out
 }
@@ -98,8 +69,7 @@ pub(crate) fn keep_imported_resource(doc: &Document, id: u16, data: &[u8]) -> bo
     }
     // A preserved clipping-path resource is only valid while it names the current one.
     if id == crate::vector_map::CLIPPING_PATH {
-        let n = usize::from(data.first().copied().unwrap_or(0));
-        let raw_name = data.get(1..1 + n).map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+        let raw_name = String::from_utf8_lossy(craft_psd::path::clipping_path_name(data).unwrap_or_default());
         return doc.clipping_path.as_ref().is_some_and(|c| c.name == raw_name);
     }
     true
