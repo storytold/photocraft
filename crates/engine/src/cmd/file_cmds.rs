@@ -126,11 +126,11 @@ impl crate::DocState {
     pub fn saved_to(&mut self, path: String) {
         let name = file_name(&path);
         if self.doc.name != name {
-            Arc::make_mut(&mut self.doc).name = name;
+            Arc::make_mut(self.doc_mut()).name = name;
         }
         // The file now holds just this document, whatever the one it was opened from held.
         if self.doc.file_encoding.source_images.is_some() {
-            Arc::make_mut(&mut self.doc).file_encoding.source_images = None;
+            Arc::make_mut(self.doc_mut()).file_encoding.source_images = None;
         }
         self.path = Some(path);
         self.saved_revision = self.revision;
@@ -389,7 +389,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Batch…",
             &["File", "Automate"],
             None,
-            r##"{"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (for a named action),"steps":[[commandId,params]|{"command":id,"params":{}}…] (a recorded action; a Save, Save As or Save a Copy step marks the document written to output, in this command's format and options: as the save found it if it was closed or another document is active at the end, else as the action leaves it; with no such step, the active document at the end),"source":"folder|open"="folder" (open runs on live documents),"input":folder|[paths] (folder source),"errorLog":path? (blank disables it),"suppressOpenOptions":bool=false (use caller RAW defaults and fully supported prior XMP without a dialog; unsupported prior settings or unanswerable profile questions fail the input),"suppressWarnings":bool=false (apply caller opening policy without profile questions; import diagnostics remain in notices),"overrideOpen":bool=false (execute action Open steps with the current input path, retaining other Open options; without an executed Open the input fails),"includeNonImages":bool=false (folder inputs report unsupported files as per-file errors instead of skipping them; arrays are unchanged),"includeSubfolders":bool=false (a folder input also takes the images in its subfolders, up to 32 levels and 100000 files; ordinary outputs are flat; namingComponents can retain subfolders when flatOutput is false),"destination":"folder|saveAndClose"="folder" (Save and Close writes the same source path/format; rejects already-open sources and changed result document identity),"output":folder? (required only for folder; omit for Save and Close),"format":"same|png|jpg|psd|tiff|…"="same" (Save and Close requires same),"quality":0..12?,"jpegFormat":"baseline|optimized|progressive"?,"namingComponents":[{"component":choice}|{"text":str}]? (up to six; the exact filename, with no automatic extension),"compatibility":{"macintosh":bool,"windows":bool,"unix":bool}?,"flatOutput":bool=false (structured naming only; put every result directly under output, dropping its subfolder path; duplicate output names make later results error entries),"overrideSaveAs":bool? (recorded routing; requires a directly represented Save configuration),"stopOnError":bool=false (report the first failed input and stop; earlier outputs remain saved),"naming":string? (blank keeps source names; {name}/{NAME}/{Name}, {serial}/{serial:1..4}, {letter}/{LETTER}, {date} and date formats, {ext}/{EXT}; template determines the whole filename),"startingSerial":1..4294967295=1 (input position, including failed inputs),"tiffLayers":bool? (Folder default false; Save and Close default true, with false refused when TIFF layer data would be lost),"tiffCompression":"none|lzw|zip"?,"tiffTransparency":bool?,"tiffPyramid":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain),"maximizeCompatibility":bool? (PSD/PSB: write the real merged image; unset, Preferences > File Handling > Maximize PSD and PSB File Compatibility),"pdfSpotPlates":bool=true (PDF: spot channels as overprinting Separation plates after the image; a Multichannel document as plates alone, so false refuses it),"calledActions":[{"name","steps"}…]? (internal action references; default: the session's; a named source is selected from the caller)} → {files, errors, stopped?, skipped?, errorLog?, documents?} (structured naming, includeNonImages and Save and Close refuse duplicate results; ordinary native templates keep the later result)"##,
+            r##"{"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (for a named action),"steps":[[commandId,params]|{"command":id,"params":{}}…] (a recorded action; a Save, Save As or Save a Copy step marks the document written to output, in this command's format and options: as the save found it if it was closed or another document is active at the end, else as the action leaves it; with no such step, the active document at the end),"source":"folder|open"="folder" (open runs on live documents),"input":folder|[paths] (folder source),"errorLog":path? (blank disables it),"suppressOpenOptions":bool=false (use caller RAW defaults and fully supported prior XMP without a dialog; unsupported prior settings or unanswerable profile questions fail the input),"suppressWarnings":bool=false (apply caller opening policy without profile questions; import diagnostics remain in notices),"overrideOpen":bool=false (execute action Open steps with the current input path, retaining other Open options; without an executed Open the input fails),"includeNonImages":bool=false (folder inputs report unsupported files as per-file errors instead of skipping them; arrays are unchanged),"includeSubfolders":bool=false (a folder input also takes the images in its subfolders, up to 32 levels and 100000 files; ordinary outputs are flat; namingComponents can retain subfolders when flatOutput is false),"destination":"folder|saveAndClose"="folder" (Save and Close writes the same source path/format; rejects already-open sources and changed result document identity),"output":folder? (required only for folder; omit for Save and Close),"format":"same|png|jpg|psd|tiff|…"="same" (Save and Close requires same),"quality":0..12?,"jpegFormat":"baseline|optimized|progressive"?,"namingComponents":[{"component":choice}|{"text":str}]? (up to six; the exact filename, with no automatic extension),"compatibility":{"macintosh":bool,"windows":bool,"unix":bool}?,"flatOutput":bool=false (structured naming only; put every result directly under output, dropping its subfolder path; duplicate output names make later results error entries),"overrideSaveAs":bool? (recorded routing; requires a directly represented Save configuration),"stopOnError":bool=false (report the first failed input and stop; earlier outputs remain saved),"naming":string? (blank keeps source names; {name}/{NAME}/{Name}, {serial}/{serial:1..4}, {letter}/{LETTER}, {date} and date formats, {ext}/{EXT}; template determines the whole filename),"startingSerial":1..4294967295=1 (position among the inputs; a folder input the opener refuses by name, with includeNonImages, does not use up a number, while an input that fails later, in its import, action or save, still does),"tiffLayers":bool? (Folder default false; Save and Close default true, with false refused when TIFF layer data would be lost),"tiffCompression":"none|lzw|zip"?,"tiffTransparency":bool?,"tiffPyramid":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain),"maximizeCompatibility":bool? (PSD/PSB: write the real merged image; unset, Preferences > File Handling > Maximize PSD and PSB File Compatibility),"pdfSpotPlates":bool=true (PDF: spot channels as overprinting Separation plates after the image; a Multichannel document as plates alone, so false refuses it),"calledActions":[{"name","steps"}…]? (internal action references; default: the session's; a named source is selected from the caller)} → {files, errors, stopped?, skipped?, errorLog?, documents?} (structured naming, includeNonImages and Save and Close refuse duplicate results; ordinary native templates keep the later result)"##,
             native,
             batch
         ),
@@ -458,8 +458,16 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests;
 
 #[cfg(test)]
+#[path = "file_cmds/batch_log_format_tests.rs"]
+mod batch_log_format_tests;
+
+#[cfg(test)]
 #[path = "file_cmds/export_clut_cube_header_tests.rs"]
 mod export_clut_cube_header_tests;
+
+#[cfg(test)]
+#[path = "file_cmds/layers_to_files_png_names_tests.rs"]
+mod layers_to_files_png_names_tests;
 
 #[cfg(test)]
 #[path = "file_cmds/place_job_tests.rs"]
@@ -470,8 +478,16 @@ mod place_job_tests;
 mod open_as_smart_object_tests;
 
 #[cfg(test)]
+#[path = "file_cmds/batch_serial_skip_failed_tests.rs"]
+mod batch_serial_skip_failed_tests;
+
+#[cfg(test)]
 #[path = "file_cmds/open_as_error_name_tests.rs"]
 mod open_as_error_name_tests;
+
+#[cfg(test)]
+#[path = "file_cmds/place_resolution_tests.rs"]
+mod place_resolution_tests;
 
 #[cfg(test)]
 mod aces_exr_tests {

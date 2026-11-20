@@ -141,3 +141,57 @@ fn sampling_all_layers_still_finds_the_ramp() {
     assert_eq!(r["changed"], true);
     assert!(cov(&s, 120, 400) >= 0.5 && cov(&s, 480, 440) >= 0.5);
 }
+
+const HOLE: [u32; 2] = [242, 217];
+
+/// A 1 px hole is transparent on the selected layer and opaque in the composite.
+fn one_pixel_hole() -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": W, "height": H, "background": "transparent"})).unwrap();
+    for hole in [false, true] {
+        if hole {
+            s.execute("layer.new.layer", json!({})).unwrap();
+        }
+        paint_new_layer(&mut s, W, H, |x, y| {
+            let first_object = (110..370).contains(&x) && (110..290).contains(&y);
+            let second_object = (530..590).contains(&x) && (390..445).contains(&y);
+            if second_object || (first_object && !(hole && [x, y] == HOLE)) { [0.75, 0.1, 0.1, 1.0] } else { [0.0; 4] }
+        });
+    }
+    s
+}
+
+#[test]
+fn object_finder_click_samples_the_single_pixel_before_downsampling() {
+    let mut s = one_pixel_hole();
+    let before = s.active().unwrap().history.past_len();
+    let result = s.execute("select.object", json!({"point": HOLE})).unwrap();
+    assert_eq!(result["changed"], false);
+    assert!(s.active().unwrap().doc.selection.is_none());
+    assert_eq!(s.active().unwrap().history.past_len(), before);
+    assert!(s.object_finder.is_empty());
+
+    // The same pixel is opaque with Sample All Layers. The repeat can reuse the cached object.
+    for _ in 0..2 {
+        let result = s.execute("select.object", json!({"point": HOLE, "sampleAllLayers": true})).unwrap();
+        assert_eq!(result["changed"], true);
+        assert_eq!(cov(&s, HOLE[0] as i32, HOLE[1] as i32), 1.0);
+        assert_eq!(s.object_finder.len(), 1);
+    }
+}
+
+#[test]
+fn object_finder_cache_checks_the_single_pixel_before_reusing_a_region() {
+    let mut s = one_pixel_hole();
+    let result = s.execute("select.object", json!({"point": [241, 217]})).unwrap();
+    assert_eq!(result["changed"], true);
+    assert_eq!(s.object_finder.len(), 1);
+    let before = s.active().unwrap().history.past_len();
+    let doc = s.active().unwrap().doc.clone();
+
+    let result = s.execute("select.object", json!({"point": HOLE})).unwrap();
+    assert_eq!(result["changed"], false);
+    assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
+    assert_eq!(s.active().unwrap().history.past_len(), before);
+    assert_eq!(s.object_finder.len(), 1);
+}

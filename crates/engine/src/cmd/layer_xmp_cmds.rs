@@ -78,6 +78,7 @@ fn xmp_metadata(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(st) = s.active_mut() {
             // Saved metadata only; no canvas pixels need recompositing.
             st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+            st.record_damage();
         }
     }
     Ok(json!({"layer": id.0, "rawData": new, "changed": changed}))
