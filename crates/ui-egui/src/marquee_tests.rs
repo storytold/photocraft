@@ -427,3 +427,31 @@ fn a_marquee_from_the_pasteboard_shows_its_outline_only_on_the_canvas() {
         assert!(h.state().canvas_tools.selection.marquee_outline(PixelSize::new(400, 300)).is_none(), "{tool:?}: released");
     }
 }
+
+/// An oval dragged from the pasteboard keeps the part past the canvas: moved fully onto the canvas it is the whole
+/// oval, the same as one drawn there, not one cut where the canvas edge was.
+#[test]
+fn an_oval_from_the_pasteboard_is_whole_once_moved_onto_the_canvas() {
+    let new_app = || {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+        app.sync_views();
+        app.ui.extras.snap = false;
+        app.ui.view.show.smart_guides = false;
+        app.ui.tool = Tool::EllipseMarquee;
+        app
+    };
+    let selection = |app: &PhotocraftApp| app.session.active().unwrap().doc.selection.clone().expect("a selection");
+    let mut app = new_app();
+    drag(&mut app, [-100.0, 100.0], [100.0, 220.0], Modifiers::NONE);
+    assert!(selection(&app).content_bounds().x0 < 0, "the left half is kept: {:?}", selection(&app).content_bounds());
+    // A press inside the oval drags its outline.
+    drag(&mut app, [50.0, 160.0], [200.0, 160.0], Modifiers::NONE);
+    let moved = selection(&app);
+    let mut there = new_app();
+    drag(&mut there, [50.0, 100.0], [250.0, 220.0], Modifiers::NONE);
+    let there = selection(&there);
+    let b = there.content_bounds();
+    assert_eq!(moved.content_bounds(), b);
+    assert_eq!(moved.read_region(b), there.read_region(b), "pixel for pixel");
+}

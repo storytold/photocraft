@@ -63,32 +63,39 @@ pub fn specs() -> Vec<CommandSpec> {
                 // Options bar: anti-aliased ellipse edges (4x4 supersampled) and Feather (applied to the new shape only).
                 let aa = p.get("antiAlias").and_then(Value::as_bool).unwrap_or(true);
                 let feather = p.get("feather").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 1000.0) as f32;
+                let line = p.get("line").is_some();
                 s.edit(step, |doc, _| {
                     let area = doc.bounds();
-                    // A marquee dragged past the canvas stops at its edge (Photoshop); the ellipse
-                    // keeps the dragged shape and is only cut there.
+                    // A rectangle dragged past the canvas stops at its edge. An ellipse keeps its
+                    // whole dragged shape, the part past the canvas included, so moving the
+                    // selection back onto the canvas shows the full oval rather than one cut where
+                    // the canvas ended.
+                    let work = if ellipse && !line { off_canvas_reach(area) } else { area };
                     use photocraft_algo::selection as sel;
                     let shape = if ellipse {
-                        sel::ellipse_surface(r, area, aa)
+                        sel::ellipse_surface(r, work, aa)
                     } else {
                         let mut s = Surface::new(photocraft_color::PixelFormat::GRAY8);
                         s.fill_rect(r.intersect(&area), &[1.0]);
                         s
                     };
-                    if feather > 0.0 {
-                        let window = selection_cmds::feather_window(r, area, feather);
-                        let m = sel::feather(&sel::mask_from_surface(Some(&shape), window), window.width() as usize, window.height() as usize, feather);
-                        doc.selection = selection_cmds::combine_band(doc.selection.as_ref(), &m, window, sel::SelectionMode::parse(&mode));
-                        return Ok(());
-                    }
                     let old = doc.selection.take();
-                    let combined = match (mode.as_str(), old) {
-                        ("add", Some(o)) => sel::combine_sparse(&o, &shape, area, |a, b| a.max(b)),
-                        ("subtract", Some(o)) => sel::combine_sparse(&o, &shape, area, |a, b| a * (1.0 - b)),
-                        ("intersect", Some(o)) => sel::combine_surfaces(&o, &shape, area, |a, b| a.min(b)),
-                        // With no existing selection, neither operation can select new pixels.
-                        ("subtract" | "intersect", None) => Surface::new(photocraft_color::PixelFormat::GRAY8),
-                        _ => shape,
+                    let combined = if feather > 0.0 {
+                        let window = selection_cmds::feather_window(r, work, feather);
+                        let m = sel::feather(&sel::mask_from_surface(Some(&shape), window), window.width() as usize, window.height() as usize, feather);
+                        let Some(banded) = selection_cmds::combine_band(old.as_ref(), &m, window, sel::SelectionMode::parse(&mode)) else {
+                            return Ok(());
+                        };
+                        banded
+                    } else {
+                        match (mode.as_str(), old) {
+                            ("add", Some(o)) => sel::combine_sparse(&o, &shape, work, |a, b| a.max(b)),
+                            ("subtract", Some(o)) => sel::combine_sparse(&o, &shape, work, |a, b| a * (1.0 - b)),
+                            ("intersect", Some(o)) => sel::combine_surfaces(&o, &shape, work, |a, b| a.min(b)),
+                            // With no existing selection, neither operation can select new pixels.
+                            ("subtract" | "intersect", None) => Surface::new(photocraft_color::PixelFormat::GRAY8),
+                            _ => shape,
+                        }
                     };
                     // Sparse Add/Subtract keeps untouched pixels outside the canvas. Only pixels
                     // inside the document count when deciding whether a selection remains.
@@ -118,3 +125,15 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
     ]
 }
+
+/// How far past the canvas `area` an elliptical selection keeps its shape: one canvas width and
+/// height past each edge. The bound caps the tiles a drag far onto the pasteboard, or an absurd
+/// `width`/`height` from an agent, can allocate.
+fn off_canvas_reach(area: Rect) -> Rect {
+    let (w, h) = (i32::try_from(area.width()).unwrap_or(i32::MAX), i32::try_from(area.height()).unwrap_or(i32::MAX));
+    Rect::new(area.x0.saturating_sub(w), area.y0.saturating_sub(h), area.x1.saturating_add(w), area.y1.saturating_add(h))
+}
+
+#[cfg(test)]
+#[path = "select_menu_ellipse_off_canvas_tests.rs"]
+mod ellipse_off_canvas_tests;
