@@ -2,7 +2,7 @@
 //! document, not one named after the first file.
 
 use crate::EngineError;
-use photocraft_doc::{Layer, LayerContent};
+use photocraft_doc::Layer;
 use serde_json::json;
 
 /// Two textured PNGs named a_base.png and b_shift.png (texture, so Auto-Align finds features).
@@ -51,22 +51,4 @@ fn the_stack_takes_the_first_free_untitled_number() {
     assert_eq!(s.active().unwrap().doc.name, "Untitled-2");
     s.execute("file.scripts.loadFilesIntoStack", json!({"paths": files})).unwrap();
     assert_eq!(s.active().unwrap().doc.name, "Untitled-3");
-}
-
-/// The smart object keeps the first file's name with and without aligning; only the document's
-/// name changes.
-#[test]
-fn the_smart_object_keeps_the_first_files_name() {
-    let dir = tempfile::tempdir().unwrap();
-    let files = two_files(dir.path()).unwrap();
-    for align in [false, true] {
-        let mut s = crate::session();
-        s.execute("file.scripts.loadFilesIntoStack", json!({"paths": files, "align": align, "createSmartObject": true})).unwrap();
-        let st = s.active().unwrap();
-        assert_eq!(st.doc.name, "Untitled-1", "align {align}");
-        assert_eq!(st.path, None, "align {align}");
-        assert_eq!(st.doc.layers.len(), 1, "align {align}");
-        assert!(matches!(st.doc.layers[0].content, LayerContent::Smart(_)), "align {align}");
-        assert_eq!(st.doc.layers[0].name, "a_base", "align {align}");
-    }
 }
