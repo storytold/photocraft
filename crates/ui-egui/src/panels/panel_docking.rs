@@ -721,21 +721,17 @@ pub(crate) fn close_transient_on_launch(app: &mut PhotocraftApp, workspace: &mut
 pub(crate) fn loaded(saved: &Value) -> (Workspace, bool) {
     let default = registry::default_workspace();
     let toolbar = TOOLBAR.to_owned();
-    let mut predates_toolbar = false;
-    let mut workspace = match saved.get("docking") {
+    let (mut workspace, predates_toolbar) = match saved.get("docking") {
         Some(docking) if !docking.is_null() => match serde_json::from_value::<Workspace>(docking.clone()) {
             Ok(workspace) if !newer(docking) && workspace.validate().is_ok() => {
-                predates_toolbar = !workspace.layout.contains(&toolbar) && !workspace.hidden.iter().any(|(panel, _)| *panel == toolbar);
-                workspace
+                let predates_toolbar = !workspace.layout.contains(&toolbar) && !workspace.hidden.iter().any(|(panel, _)| *panel == toolbar);
+                (workspace, predates_toolbar)
             }
             // The unversioned bare Layout predates Workspace. It has no Workspace envelope to preserve.
             _ if docking.get("version").is_none() && docking.get("layout").is_none() && docking.get("root").is_some() => return (default, false),
             _ => return (default, true),
         },
-        _ => {
-            predates_toolbar = true;
-            migrated(saved, &default)
-        }
+        _ => (migrated(saved, &default), true),
     };
     workspace.reconcile(|panel: &String| registry::registered(panel), |panel: &String| permissions(panel), &default);
     if predates_toolbar {
