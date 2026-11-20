@@ -270,7 +270,7 @@ fn resident_pages_and_sharp_footprints_match_rendered_ink() {
         assert!(gpu.upload_page(PageUpload { key, page: 1, size, depth, factor: 8, core: Rect::from_xywh(96, 0, 32, 16), buf: &coarse }));
         let stale = gpu.sampling(key, size, 1.0, 1, [0.0; 2]);
         let mut fine = Buffer::filled(Rect::from_xywh(96, 0, 32, 16), [0.0, 0.0, 1.0, 1.0]);
-        for row in fine.px.chunks_exact_mut(32) {
+        for row in fine.px.as_chunks_mut::<32>().0 {
             row[1] = [1.0, 0.0, 0.0, 1.0];
         }
         assert!(gpu.upload_page(PageUpload { key, page: 1, size, depth, factor: 1, core: fine.rect, buf: &fine }));
@@ -282,7 +282,7 @@ fn resident_pages_and_sharp_footprints_match_rendered_ink() {
         // Exact 4x sample x100.625 has zero weight for red column101. At 4.5x the
         // device pixel centred on the edge has positive weights for both columns.
         let mut tex = Buffer::filled(Rect::from_xywh(0, 0, 128, 16), [0.0, 0.0, 1.0, 1.0]);
-        for row in tex.px.chunks_exact_mut(128) {
+        for row in tex.px.as_chunks_mut::<128>().0 {
             row[101] = [1.0, 0.0, 0.0, 1.0];
         }
         for scale in [4.0, 4.5] {
