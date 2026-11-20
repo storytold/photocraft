@@ -165,18 +165,38 @@ fn linux_auto_prefers_a_working_adapter_over_nvk_gm108() {
     let lavapipe = cand(0x10005, T::Cpu, B::Vulkan);
     let cases = [nvk, intel_gl, lavapipe];
     assert_eq!(pick(&cases, Auto, Os::Other), Some(0), "without the workaround, discrete NVK wins");
-    assert_eq!(pick_with_nvk_workaround(&cases, Auto, Os::Other, true), Some((1, true)));
-    assert_eq!(pick_with_nvk_workaround(&cases, Auto, Os::Other, false), Some((0, false)), "explicit selection stays unchanged");
+    assert_eq!(pick_with_nvk_workaround(&cases, Auto, Os::Other, true, wgpu::PowerPreference::HighPerformance), Some((1, true)));
+    assert_eq!(pick_with_nvk_workaround(&cases, Auto, Os::Other, false, wgpu::PowerPreference::HighPerformance), Some((0, false)), "explicit selection stays unchanged");
     // An alternative without surface support is not an alternative.
     let mut unavailable = intel_gl;
     unavailable.surface_ok = false;
-    assert_eq!(pick_with_nvk_workaround(&[nvk, unavailable], Auto, Os::Other, true), Some((0, false)));
+    assert_eq!(pick_with_nvk_workaround(&[nvk, unavailable], Auto, Os::Other, true, wgpu::PowerPreference::HighPerformance), Some((0, false)));
     // If the only safe device is software Vulkan, use it instead of the corrupting NVK GPU.
-    assert_eq!(pick_with_nvk_workaround(&[nvk, lavapipe], Auto, Os::Other, true), Some((1, true)));
-    assert_eq!(pick_with_nvk_workaround(&[nvk], Auto, Os::Other, true), Some((0, false)));
+    assert_eq!(pick_with_nvk_workaround(&[nvk, lavapipe], Auto, Os::Other, true, wgpu::PowerPreference::HighPerformance), Some((1, true)));
+    assert_eq!(pick_with_nvk_workaround(&[nvk], Auto, Os::Other, true, wgpu::PowerPreference::HighPerformance), Some((0, false)));
     // Without the affected adapter, automatic ranking is completely unchanged.
-    assert_eq!(pick_with_nvk_workaround(&[intel_gl, lavapipe], Auto, Os::Other, true), Some((0, false)));
-    assert_eq!(pick_with_nvk_workaround(&[], Auto, Os::Other, true), None);
+    assert_eq!(pick_with_nvk_workaround(&[intel_gl, lavapipe], Auto, Os::Other, true, wgpu::PowerPreference::HighPerformance), Some((0, false)));
+    assert_eq!(pick_with_nvk_workaround(&[], Auto, Os::Other, true, wgpu::PowerPreference::HighPerformance), None);
+}
+
+#[test]
+fn linux_auto_honors_power_preference_without_bypassing_nvk_fallback() {
+    use wgpu::{Backend as B, DeviceType as T, PowerPreference as P};
+    let intel = cand(INTEL, T::IntegratedGpu, B::Gl);
+    let nvidia = cand(NVIDIA, T::DiscreteGpu, B::Vulkan);
+    let adapters = [intel, nvidia];
+
+    // Automatic selection respects low-power requests on unaffected hardware.
+    assert_eq!(pick_with_nvk_workaround(&adapters, Auto, Os::Other, true, P::LowPower), Some((0, false)));
+    assert_eq!(pick_with_nvk_workaround(&adapters, Auto, Os::Other, true, P::HighPerformance), Some((1, false)));
+
+    // A high-performance request still falls back when NVK/GM108 is the preferred GPU.
+    let mut affected = nvidia;
+    affected.nvk_gm108 = true;
+    let affected_adapters = [intel, affected];
+    assert_eq!(pick_with_nvk_workaround(&affected_adapters, Auto, Os::Other, true, P::HighPerformance), Some((0, true)));
+    // With low power the Intel adapter already wins, so no workaround is reported.
+    assert_eq!(pick_with_nvk_workaround(&affected_adapters, Auto, Os::Other, true, P::LowPower), Some((0, false)));
 }
 
 #[test]
