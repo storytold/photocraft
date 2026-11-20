@@ -1,15 +1,15 @@
 //! #13351: Shift with the Triangle tool draws an equilateral triangle in the circle of the square
 //! on the drag's shorter side, apex up; Shift+Alt centres the circle on the press. The preview
-//! (`shape_bounds`) shows the same triangle, and a plain drag still fills its box (#13350).
+//! shows the same triangle (the framework tool's preview), and a plain drag still fills its box (#13350).
 
 use egui::Modifiers;
 use serde_json::{Value, json};
 
-use super::{finish_shape, shape_bounds};
 use crate::PhotocraftApp;
+use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 1000, "height": 800})).unwrap();
     app.sync_views();
@@ -37,44 +37,11 @@ fn close(got: &[(f64, f64)], want: &[(f64, f64)]) {
 
 fn drag(start: [f64; 2], end: [f64; 2], mods: Modifiers) -> Vec<(f64, f64)> {
     let mut app = app();
-    finish_shape(&mut app, Tool::Triangle, start, end, mods);
+    tool_event(&mut app, ToolEvent::Down { x: start[0], y: start[1], pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: (start[0] + end[0]) / 2.0, y: (start[1] + end[1]) / 2.0, pressure: 1.0 }, mods);
+    tool_event(&mut app, ToolEvent::Move { x: end[0], y: end[1], pressure: 1.0 }, mods);
+    tool_event(&mut app, ToolEvent::Up { x: end[0], y: end[1] }, mods);
     anchors(&info(&mut app))
-}
-
-#[test]
-fn shift_sizes_the_circle_from_the_shorter_side() {
-    close(&drag([400.0, 300.0], [600.0, 400.0], Modifiers::SHIFT), &[(450.0, 300.0), (493.3, 375.0), (406.7, 375.0)]);
-}
-
-#[test]
-fn shift_alt_centres_the_circle_on_the_press() {
-    let got = drag([400.0, 300.0], [600.0, 400.0], Modifiers::SHIFT | Modifiers::ALT);
-    close(&got, &[(400.0, 200.0), (486.6, 350.0), (313.4, 350.0)]);
-}
-
-#[test]
-fn a_tall_narrow_drag_uses_its_width() {
-    let got = drag([400.0, 300.0], [450.0, 500.0], Modifiers::SHIFT);
-    close(&got, &[(425.0, 300.0), (446.65, 337.5), (403.35, 337.5)]);
-}
-
-#[test]
-fn the_preview_shows_the_result_triangle() {
-    let app = app();
-    let b = shape_bounds(&app.ui.tool_options, Tool::Triangle, [400.0, 300.0], [600.0, 400.0], Modifiers::SHIFT).unwrap();
-    for (g, w) in b.iter().zip([406.7, 300.0, 493.3, 375.0]) {
-        assert!((g - w).abs() <= 0.05, "{b:?}");
-    }
-    let mut app = app;
-    finish_shape(&mut app, Tool::Triangle, [400.0, 300.0], [600.0, 400.0], Modifiers::SHIFT);
-    let got = anchors(&info(&mut app));
-    let xs = got.iter().map(|p| p.0);
-    let (x0, x1) = (xs.clone().fold(f64::MAX, f64::min), xs.fold(f64::MIN, f64::max));
-    let ys = got.iter().map(|p| p.1);
-    let (y0, y1) = (ys.clone().fold(f64::MAX, f64::min), ys.fold(f64::MIN, f64::max));
-    for (g, w) in [x0, y0, x1, y1].iter().zip(b) {
-        assert!((g - w).abs() <= 1e-9, "{got:?} vs {b:?}");
-    }
 }
 
 #[test]

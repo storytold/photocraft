@@ -4,6 +4,10 @@ use super::refs::{Blending, bad, doc_index, mask_plane, source, source_spec};
 use super::targeting::{Target, is_channel_target, is_spot_target, target_of, target_surface};
 use super::{AlphaChannel, ColorMode, EngineError, Result, SelectionMode, Session, Value, json, sel};
 
+#[cfg(test)]
+#[path = "apply_image_preserve_tests.rs"]
+mod apply_image_preserve_tests;
+
 // ---------------------------------------------------------------------------------------------
 // Apply Image / Calculations
 
@@ -55,8 +59,21 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
             return Ok(());
         }
         let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
+        // Lock Transparent Pixels works as Preserve Transparency, ticked or not.
+        let preserve = preserve || doc.effective_locks(id).transparency;
         let fmt = doc.pixel_format();
-        let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
+        // A fully locked or pixel-locked layer still takes the image, as in the reference
+        // application, and keeps its transparency as with Preserve transparency. A lock that comes
+        // from a group around it still refuses, through `paint_surface`.
+        let own = doc.layer(id).map(|l| l.locks).unwrap_or_default();
+        let groups = doc.path_of(id).map_or_else(Default::default, |p| doc.locks_at(p.get(..p.len().saturating_sub(1)).unwrap_or_default()));
+        let locked = (own.pixels || own.all) && !(groups.pixels || groups.all);
+        let preserve = preserve || locked;
+        let surf = if locked {
+            doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.surface_mut().ok_or_else(|| EngineError::Other("not a pixel layer".into()))?
+        } else {
+            crate::commands::paint_surface(doc, id, &Value::Null)?
+        };
         let sf = surf.format();
         if sf != fmt {
             return Err(EngineError::Other("the target layer's format doesn't match the document".into()));
@@ -66,11 +83,9 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
         let mut v = surf.read_region(area);
         for (i, px) in v.chunks_exact_mut(n).enumerate() {
             let base_a = if sf.alpha { px[colors].clamp(0.0, 1.0) } else { 1.0 };
-            let mut w = weight(i);
-            if preserve {
-                w *= base_a;
-            }
-            if w <= 0.0 {
+            let w = weight(i);
+            // Preserve Transparency leaves transparent pixels as they are.
+            if w <= 0.0 || (preserve && base_a <= 0.0) {
                 continue;
             }
             // Painted over the layer like a brush: the blend only acts where the layer has
@@ -85,8 +100,17 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
                 let k = if src_mode == ColorMode::Cmyk && sf.mode != ColorMode::Cmyk { src.get(3).map_or(1.0, |pl| tone(src_mode, pl[i])) } else { 1.0 };
                 let top = if src.len() > 1 { tone(src_mode, src.get(c).unwrap_or(&src[0])[i]) * k } else { src[0][i] };
                 let base = tone(sf.mode, *b);
-                let blended = top + (blending.apply(base, top) - top) * base_a;
-                *b = tone(sf.mode, if preserve { base + (blended - base) * w } else { (w * blended + base_a * (1.0 - w) * base) / out_a });
+                // With Preserve Transparency the colour takes the full blend and only the alpha
+                // stays the layer's (a pixel at 50% alpha turns fully to the source in Normal).
+                *b = tone(
+                    sf.mode,
+                    if preserve {
+                        base + (blending.apply(base, top) - base) * w
+                    } else {
+                        let blended = top + (blending.apply(base, top) - top) * base_a;
+                        (w * blended + base_a * (1.0 - w) * base) / out_a
+                    },
+                );
             }
             if sf.alpha {
                 px[colors] = out_a;

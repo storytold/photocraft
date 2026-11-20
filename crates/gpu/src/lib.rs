@@ -118,9 +118,6 @@ pub struct Compositor {
     /// out of memory.
     fail_allocs: u32,
     acc_format: wgpu::TextureFormat,
-    /// Whether the effect-map pipelines could be built (else documents with layer effects are
-    /// [`Unsupported`] and use the CPU compositor).
-    effect_maps: bool,
     /// `CmykSpace::id` of the document being encoded (0: built-in coated CMYK).
     cmyk: u64,
     /// The device's health (see [`Compositor::set_health`]); `None` = assumed healthy.
@@ -141,6 +138,7 @@ mod encode;
 mod fx_passes;
 mod kit;
 mod paging;
+mod pipelines;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod readback;
 mod setup;
