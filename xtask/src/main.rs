@@ -529,12 +529,13 @@ fn build_tests(o: &CiOptions) -> Result<(), String> {
 fn nextest_list(o: &CiOptions, args: &[&str], record: bool) -> Result<serde_json::Value, String> {
     let mut c = cargo();
     c.args(["nextest", "list", "--profile", "ci", "--message-format", "json"]).args(test_build_args(&o.exclude)).args(args);
-    if record && cache_units::file().is_some() {
+    let record = record.then(cache_units::file).flatten();
+    if record.is_some() {
         c.args(["--cargo-message-format", "json-render-diagnostics"]);
     }
     let what = shown(&c);
-    let out = if record {
-        cache_units::capture(c, &what)?
+    let out = if let Some(file) = record {
+        cache_units::capture_recorded(c, &what, &file)?
     } else {
         eprintln!("$ {what}");
         let out = c.stderr(Stdio::inherit()).output().map_err(|e| format!("{what}: failed to spawn: {e}"))?;

@@ -32,17 +32,13 @@ pub fn run(mut cmd: Command, what: &str) -> Result<(), String> {
 }
 
 /// Capture non-Cargo output while recording Cargo messages, for a command whose output is data.
-pub fn capture(mut cmd: Command, what: &str) -> Result<Vec<u8>, String> {
+pub fn capture_recorded(mut cmd: Command, what: &str, file: &std::path::Path) -> Result<Vec<u8>, String> {
     eprintln!("$ {what}");
-    let mut record = file().map(|file| OpenOptions::new().create(true).append(true).open(&file).map_err(|e| format!("{}: {e}", file.display()))).transpose()?;
+    let mut record = OpenOptions::new().create(true).append(true).open(file).map_err(|e| format!("{}: {e}", file.display()))?;
     let mut child = cmd.stdout(Stdio::piped()).spawn().map_err(|e| format!("{what}: failed to spawn: {e}"))?;
     let stdout = child.stdout.take().expect("piped stdout");
     let mut output = Vec::new();
-    let routed = if let Some(record) = &mut record {
-        route(BufReader::new(stdout), record, &mut output)
-    } else {
-        std::io::copy(&mut BufReader::new(stdout), &mut output).map(|_| ())
-    };
+    let routed = route(BufReader::new(stdout), &mut record, &mut output);
     let status = child.wait().map_err(|e| format!("{what}: {e}"))?;
     routed.map_err(|e| format!("{what}: reading output: {e}"))?;
     if status.success() { Ok(output) } else { Err(format!("{what}: exited with {status}")) }
@@ -63,17 +59,11 @@ pub fn record_xtask() -> Result<(), String> {
 /// Lines that are Cargo's JSON messages go to `record`, every other line to `out`.
 fn route(mut input: impl BufRead, record: &mut impl Write, out: &mut impl Write) -> std::io::Result<()> {
     let mut line = Vec::new();
-    let mut malformed = false;
     while input.read_until(b'\n', &mut line)? != 0 {
         if line.starts_with(b"{\"reason\":") {
-            if serde_json::from_slice::<serde_json::Value>(&line).is_err() {
-                // Keep draining the child so it cannot block on a full stdout pipe.
-                malformed = true;
-            } else {
-                record.write_all(&line)?;
-                if !line.ends_with(b"\n") {
-                    record.write_all(b"\n")?;
-                }
+            record.write_all(&line)?;
+            if !line.ends_with(b"\n") {
+                record.write_all(b"\n")?;
             }
         } else {
             out.write_all(&line)?;
@@ -81,8 +71,7 @@ fn route(mut input: impl BufRead, record: &mut impl Write, out: &mut impl Write)
         line.clear();
     }
     record.flush()?;
-    out.flush()?;
-    if malformed { Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "malformed Cargo JSON message")) } else { Ok(()) }
+    out.flush()
 }
 
 #[cfg(test)]
@@ -107,9 +96,39 @@ mod tests {
         assert!(serde_json::from_slice::<serde_json::Value>(&listing).is_ok());
         listing.truncate(listing.len() - 3);
         assert!(serde_json::from_slice::<serde_json::Value>(&listing).is_err());
+    }
+
+    #[test]
+    fn real_nextest_list_records_build_without_rebuilding() {
+        if !crate::nextest_available() {
+            eprintln!("cargo-nextest unavailable; skipping mixed-stream integration test");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("photocraft-cache-units-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"cache-unit-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "#[test] fn one() {}\n").unwrap();
+        let list = || {
+            let out = crate::cargo()
+                .current_dir(&dir)
+                .env("CARGO_TARGET_DIR", dir.join("target"))
+                .env("CARGO_BUILD_BUILD_DIR", dir.join("target"))
+                .env("CARGO_NET_OFFLINE", "true")
+                .args(["nextest", "list", "--message-format", "json", "--cargo-message-format", "json-render-diagnostics"])
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            out
+        };
+        let first = list();
+        assert!(String::from_utf8_lossy(&first.stderr).contains("Compiling"));
         let (mut record, mut listing) = (Vec::new(), Vec::new());
-        assert!(route(b"{\"reason\":\"compiler-artifact\"\n{\"rust-suites\":{}}\n".as_slice(), &mut record, &mut listing).is_err());
-        assert!(record.is_empty());
-        assert!(serde_json::from_slice::<serde_json::Value>(&listing).is_ok());
+        route(first.stdout.as_slice(), &mut record, &mut listing).unwrap();
+        assert!(String::from_utf8_lossy(&record).contains("compiler-artifact"));
+        let json: serde_json::Value = serde_json::from_slice(&listing).unwrap();
+        assert_eq!(json["test-count"], 1);
+        let second = list();
+        assert!(!String::from_utf8_lossy(&second.stderr).contains("Compiling"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
