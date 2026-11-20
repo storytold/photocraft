@@ -1229,3 +1229,41 @@ fn ok_writes_the_menus_even_when_the_keyboard_shortcuts_are_refused() {
     assert!(!line.contains("The menus were not saved"), "the menus were saved, so nothing claims they were not: {line}");
     assert!(h.state().prefs_rt.shortcuts.is_none(), "OK closed the dialog on the writes it could make");
 }
+
+/// The queued set-file operations are resolved per set name at OK, not by running every write and
+/// then every delete: a Delete the user answered Yes to, followed by a Save that makes the same name
+/// again before OK, leaves that set's file standing with the new set in it. A Delete with no later
+/// Save still takes the file away, which `yes_of_the_delete_question_takes_the_set_file_with_it` and
+/// `yes_of_the_delete_question_takes_the_file_the_dialog_chose` pin.
+#[test]
+fn a_set_recreated_under_a_deleted_name_keeps_its_file_through_ok() {
+    let tmp = tempfile::tempdir().expect("a settings folder");
+    let text = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+        "<photocraft-menu-settings version=\"2\" filename=\"$$$/FileName/Presets/MenuCustomization/Painting=Painting\" modified=\"0\">\n",
+        "  <command kind=\"static\" id=\"10\" parentMenuID=\"2\" menuType=\"0\" hidden=\"1\" color=\"0\"/>\n",
+        "</photocraft-menu-settings>\n",
+    );
+    write_set_file(tmp.path(), "Painting", text.as_bytes());
+    // The recreation answers the Save dialog with exactly that file: one name, one path, two queued
+    // operations.
+    let same = menu_sets::folder(tmp.path()).join("Painting.MNU");
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![same.clone()])]));
+    let mut h = file_harness(files, tmp.path());
+    open_menus(&mut h);
+    choose(&mut h, "Painting");
+    assert_eq!(row_value(&h), "Painting", "the folder's file is the set the row works on");
+    button(&h, DELETE).click();
+    h.run_steps(2);
+    answer(&mut h, YES);
+    assert_eq!(row_value(&h), format!("{DEFAULTS_NAME} (modified)"), "the Delete moved the row back to the built-in set and left its menus on screen");
+    button(&h, SAVE).click();
+    h.run_steps(4);
+    assert_eq!(row_value(&h), "Painting", "and the same name is a set again before OK");
+    ok(&mut h);
+    let kept = std::fs::read_to_string(&same).expect("the later Save won: the file stands, not written and then deleted");
+    assert!(kept.contains("id=\"10\" parentMenuID=\"2\" menuType=\"0\" hidden=\"1\" color=\"0\""), "it holds the recreated set: {kept}");
+    let p = h.state().session.prefs();
+    assert_eq!(p.menu_set, "Painting", "and the set is in the preferences again");
+    assert_eq!(p.menu_sets.keys().collect::<Vec<_>>(), ["Painting"], "one set of that name, not a leftover");
+}

@@ -595,8 +595,16 @@ fn write_set_files(app: &mut PhotocraftApp, menus: &MenusDraft) {
         }
     };
     let mut refused_write = Vec::new();
+    // The two queues are keyed by set name and carry no order of their own, so they are resolved per
+    // name on what the draft ends with: a name whose set is there again at OK - deleted, and made
+    // again under that name before the dialog closed - is written, and its queued delete is skipped.
+    // A name whose set is gone keeps its write skipped, since there is no set left to write, and its
+    // delete runs. Writing every queued file and then deleting every queued file took away the file of
+    // a set the user had just made again (#14450).
+    let mut set_still_there: BTreeSet<&str> = BTreeSet::new();
     for name in menus.file_write.keys() {
         let Some(set) = menus.sets.get(name) else { continue };
+        set_still_there.insert(name.as_str());
         let wrote = match own_file(name) {
             Some(path) => menu_sets::write_set_at(&path, name, set),
             None => menu_sets::write_set(&dir, name, set),
@@ -608,6 +616,9 @@ fn write_set_files(app: &mut PhotocraftApp, menus: &MenusDraft) {
     set_lines(app, tl!("The menu set was not saved: {error}"), &refused_write);
     let mut refused_delete = Vec::new();
     for name in &menus.file_delete {
+        if set_still_there.contains(name.as_str()) {
+            continue;
+        }
         // A set's own file is the one to take away, wherever it stands: the file the Save dialog sent
         // it to, or the one the folder scan found it in. Looking only in the menu-sets folder can find
         // no file at all, and the set comes back from the folder on the next open.
