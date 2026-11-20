@@ -6,7 +6,7 @@ pub(crate) fn desaturate_adjustment() -> Adjustment {
 }
 
 /// Image menu: Desaturate.
-pub(crate) fn specs() -> Vec<CommandSpec> {
+pub fn specs() -> Vec<CommandSpec> {
     vec![cmd!(
         "image.adjustments.desaturate",
         "Desaturate",

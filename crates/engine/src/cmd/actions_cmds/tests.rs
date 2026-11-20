@@ -980,7 +980,7 @@ fn named_selection_preserves_modes_and_duplicate_occurrences() {
         json!({"name":"Photo","layer":first.0}),
         json!({"layer":first.0,"occurrence":0}),
     ] {
-        let before = s.active().unwrap().selected_layers();
+        let before = s.active().unwrap().selected_layers().to_vec();
         assert!(s.execute("layer.select", p.clone()).is_err(), "{p}");
         assert_eq!(s.active().unwrap().selected_layers(), before);
     }
