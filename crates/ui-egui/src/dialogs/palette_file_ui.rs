@@ -155,7 +155,7 @@ pub fn controls_row(command: &'static str, label: Label) -> Param {
                 // Mark the entry the click landed on; clicking the marked entry clears it, as the
                 // switch does.
                 if transparent == Some(i) {
-                    fields.remove(TRANSPARENT);
+                    clear_transparent(fields);
                 } else {
                     materialize(fields, command, key, &pad_to(&colors, i));
                     fields.set(TRANSPARENT, FieldValue::Int(i as i64));
@@ -402,6 +402,16 @@ pub fn set_transparent(fields: &mut DialogFields, transparent: Option<u64>) {
     }
 }
 
+/// The user cleared the table's transparent entry (a click on the marked cell with "Set Transparent"
+/// on): send `transparent: null`, the command's "no transparent entry", which makes the clear pixels
+/// take that entry's colour.
+///
+/// The key must be present and null. Dropping it reads as "not given", and the command then keeps
+/// the document's entry — the dialog showed the entry cleared and OK changed nothing (#7320).
+pub fn clear_transparent(fields: &mut DialogFields) {
+    fields.set(TRANSPARENT, FieldValue::Json(serde_json::Value::Null));
+}
+
 /// The open document's colour table: its entries and its transparent entry index.
 pub fn document_table(app: &PhotocraftApp) -> Option<(Vec<[u8; 3]>, Option<u64>)> {
     let t = app.session.active()?.doc.color_table.clone()?;
@@ -446,6 +456,32 @@ pub fn encode_file(path: &str, colors: &[[u8; 3]], transparent: Option<u64>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A cancel has to reach the command: the key must be present and null, because a dropped key
+    /// reads as "not given" and the command then keeps the document's entry, so the dialog showed
+    /// the entry cleared while OK changed nothing (#7320).
+    #[test]
+    fn cancelling_the_transparent_entry_sends_null_not_a_missing_key() {
+        let colors = vec![[1, 2, 3], [4, 5, 6]];
+        let mut f = DialogFields::new();
+        set_table(&mut f, COLORS_FIELD, &colors);
+        set_transparent(&mut f, Some(0));
+        // Color Table opens with the Table menu on Custom, the only state where the table applies.
+        f.set("table", FieldValue::Text("custom".into()));
+        clear_transparent(&mut f);
+        assert_eq!(f.int(TRANSPARENT), None, "the grid no longer marks an entry");
+        let params = crate::dialogs::filter_dialog::command_params(crate::color_table_ui::COMMAND, &f);
+        assert_eq!(params.get(TRANSPARENT), Some(&serde_json::Value::Null), "the command is told to clear the entry");
+        // Marking an entry still sends its index.
+        f.set(TRANSPARENT, FieldValue::Int(1));
+        let params = crate::dialogs::filter_dialog::command_params(crate::color_table_ui::COMMAND, &f);
+        assert_eq!(params.get(TRANSPARENT), Some(&serde_json::json!(1)));
+        // Seeding a dialog (the document has no entry) still leaves the key out, so the command
+        // keeps its own behaviour instead of being told to clear anything.
+        let mut seeded = DialogFields::new();
+        set_transparent(&mut seeded, None);
+        assert!(!seeded.contains(TRANSPARENT));
+    }
 
     #[test]
     fn hex_round_trips_through_the_field() {
