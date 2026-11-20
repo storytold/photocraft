@@ -132,15 +132,21 @@ mod tests {
             assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
             out
         };
-        let first = list();
-        assert!(String::from_utf8_lossy(&first.stderr).contains("Compiling"));
-        let (mut record, mut listing) = (Vec::new(), Vec::new());
-        route(first.stdout.as_slice(), &mut record, &mut listing).unwrap();
-        assert!(String::from_utf8_lossy(&record).contains("compiler-artifact"));
-        let json: serde_json::Value = serde_json::from_slice(&listing).unwrap();
-        assert_eq!(json["rust-binaries"].as_object().unwrap().len(), 1);
-        let second = list();
-        assert!(!String::from_utf8_lossy(&second.stderr).contains("Compiling"));
+        for expected_fresh in [false, true] {
+            let output = list();
+            let (mut record, mut listing) = (Vec::new(), Vec::new());
+            route(output.stdout.as_slice(), &mut record, &mut listing).unwrap();
+            let artifacts: Vec<serde_json::Value> = record
+                .split(|&b| b == b'\n')
+                .filter(|line| !line.is_empty())
+                .map(|line| serde_json::from_slice(line).unwrap())
+                .filter(|message: &serde_json::Value| message["reason"] == "compiler-artifact")
+                .collect();
+            assert!(!artifacts.is_empty());
+            assert!(artifacts.iter().all(|message| message["fresh"].as_bool() == Some(expected_fresh)));
+            let json: serde_json::Value = serde_json::from_slice(&listing).unwrap();
+            assert_eq!(json["rust-binaries"].as_object().unwrap().len(), 1);
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
