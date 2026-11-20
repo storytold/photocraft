@@ -447,7 +447,7 @@ fn texels_of_a_part_match_the_texels_of_a_copy() {
     let buf = photocraft_compose::Buffer { rect, px };
     for format in [FORMAT, FORMAT_HIGH] {
         for part in [photocraft_geom::Rect::new(0, 3, 1, 4), photocraft_geom::Rect::new(10, 20, 700, 790), rect] {
-            let copy = crate::filter_preview_ui::crop(&buf, part);
+            let copy = crate::canvas::filter_preview::crop(&buf, part);
             assert_eq!(texels_of_part(format, &buf, part), Some(canvas_texels(format, &copy.px)), "{format:?} {part:?}");
         }
         assert_eq!(texels_of_part(format, &buf, rect.inflate(1)), None, "not covered");

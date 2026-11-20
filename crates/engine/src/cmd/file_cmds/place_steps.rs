@@ -33,6 +33,7 @@ pub(crate) struct PlaceSteps {
     stage: Stage,
     /// Where the placed image lands, known once it is decoded.
     plan: Plan,
+    warnings: Vec<String>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -63,7 +64,7 @@ impl PlaceSteps {
     /// `fine` cuts the work into pieces of a few milliseconds, as a session without worker
     /// threads needs; without it each stage is one unit of work.
     pub(crate) fn new(input: PlaceInput, fine: bool) -> Self {
-        Self { input, bytes: Arc::new(Vec::new()), fine, stage: Stage::Decode, plan: Plan::default() }
+        Self { input, bytes: Arc::new(Vec::new()), fine, stage: Stage::Decode, plan: Plan::default(), warnings: Vec::new() }
     }
 
     /// An import error as the engine reports it: a cancel stays one and a refused memory budget
@@ -157,15 +158,20 @@ impl PlaceSteps {
                 self.input.name
             )));
         }
+        self.warnings = imported.warnings;
         let src = imported.document;
         let (w, h) = (src.size.width as f64, src.size.height as f64);
         let (cw, ch) = self.input.canvas;
         let p = &self.input.params;
+        // A file at a higher resolution than the document keeps its physical size: 300 ppi into
+        // 72 ppi comes in at 0.24 (#14105). Before the fit to the canvas, which only a file still
+        // larger than the canvas at that size gets. A frame's image is sized by the frame.
+        let base = if self.input.frame.is_none() { physical_scale(f64::from(src.resolution_dpi), self.input.ppi) } else { 1.0 };
         let scale = match f64_param(p, "scale") {
             Some(k) => (k / 100.0).max(1e-4),
             None if self.input.frame.is_some() && self.input.fit => (cw / w).max(ch / h),
-            None if self.input.fit && (w > cw || h > ch) => (cw / w).min(ch / h),
-            None => 1.0,
+            None if self.input.fit && (w * base > cw || h * base > ch) => (cw / w).min(ch / h),
+            None => base,
         };
         let center = match p.get("center").and_then(Value::as_array) {
             Some(c) if c.len() == 2 => (c[0].as_f64().unwrap_or(cw / 2.0), c[1].as_f64().unwrap_or(ch / 2.0)),
@@ -252,7 +258,13 @@ impl PlaceSteps {
             if let Some(doc) = &input.doc {
                 ctx.progress(0.9, "Rendering");
                 ctx.check()?;
-                if let Some(sharp) = crate::smart_cmds::render(doc, &so)? {
+                let (sharp, warnings) = crate::smart_cmds::render_with_warnings(doc, &so)?;
+                for warning in warnings {
+                    if !self.warnings.contains(&warning) {
+                        self.warnings.push(warning);
+                    }
+                }
+                if let Some(sharp) = sharp {
                     so.cache = Some(sharp);
                 }
             }
@@ -264,8 +276,24 @@ impl PlaceSteps {
             let px = px.ok_or_else(|| EngineError::Other(format!("{}: a frame's image must be a smart object", input.name)))?;
             LayerContent::Raster(px)
         };
-        Ok(Prepared { content, layer_name: stem(&input.name), label, scale, bounds, smart, frame: input.frame.as_ref().map(|(id, _)| *id) })
+        Ok(Prepared {
+            warnings: std::mem::take(&mut self.warnings),
+            content,
+            layer_name: stem(&input.name),
+            label,
+            scale,
+            bounds,
+            smart,
+            frame: input.frame.as_ref().map(|(id, _)| *id),
+        })
     }
+}
+
+/// The scale that gives a file at `src_ppi` its physical size in a document at `doc_ppi`: below 1
+/// for a file at the higher resolution, else 1 (a file at a lower resolution places at its pixel
+/// size, as one with no resolution stored does).
+fn physical_scale(src_ppi: f64, doc_ppi: f64) -> f64 {
+    if doc_ppi > 0.0 && src_ppi > doc_ppi && src_ppi.is_finite() { doc_ppi / src_ppi } else { 1.0 }
 }
 
 impl StepWork<Prepared> for PlaceSteps {

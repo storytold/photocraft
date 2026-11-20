@@ -18,7 +18,7 @@ fn render_state() -> Option<eframe::egui_wgpu::RenderState> {
 }
 
 /// A `depth`-bit document of coloured stripes with Solarize's dialog open, previewed at 100 %.
-fn previewing(rs: eframe::egui_wgpu::RenderState, depth: u32) -> PhotocraftApp {
+fn previewing(rs: eframe::egui_wgpu::RenderState, depth: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.set_wgpu(rs);
     app.background_jobs = false;
@@ -156,8 +156,8 @@ fn the_canvas_shows_the_full_resolution_preview_before_and_after_a_pan() {
     let Some(rs) = render_state() else { return };
     let renderer = egui_kittest::wgpu::WgpuTestRenderer::from_render_state(rs);
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).with_pixels_per_point(1.0).renderer(renderer).build_eframe(|cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ALL[0]);
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
         app.set_wgpu(cc.wgpu_render_state.clone().unwrap());
         app.run("file.new", json!({"width": 4000, "height": 3000})).unwrap();
         app.run("edit.fill", json!({"color": "#1a33e6"})).unwrap();
