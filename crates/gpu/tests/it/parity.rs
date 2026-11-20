@@ -78,7 +78,7 @@ fn hdr_adjustments_preserve_range_and_cpu_parity() {
         let mut d = Document::new("HDR adjustments", Size::new(3, 1), ColorMode::Rgb, SampleType::F32);
         let mut layer = Layer::raster("pixels", PixelFormat::RGBA32F);
         layer.surface_mut().unwrap().write_region(Rect::new(0, 0, 3, 1), &[4.0, 2.0, 0.5, 1.0, -0.1, 3.0, 0.25, 0.75, 0.0, 0.0, 0.0, 1.0]);
-        d.layers = vec![layer, Layer::new("adjustment", LayerContent::Adjustment(adj.clone()))];
+        d.layers = vec![layer, Layer::new("adjustment", LayerContent::Adjustment(adj.clone()))].into();
         let cpu = photocraft_compose::flatten(&d);
         assert!(cpu.px[0][0] > 1.0, "HDR reference unexpectedly clipped: {adj:?}");
         check(&mut g, &d, &format!("HDR {adj:?}"));
@@ -1011,7 +1011,7 @@ fn hard_stop_fill_fallback_respects_caches_and_visibility() {
         assert_gradient_fallback(&d);
         let mut clipped = Layer::new("clipped", LayerContent::Fill(fill));
         clipped.clipped = true;
-        d.layers = vec![Layer::new("base", LayerContent::Fill(Fill::Solid(Color::WHITE))), clipped];
+        d.layers = vec![Layer::new("base", LayerContent::Fill(Fill::Solid(Color::WHITE))), clipped].into();
         assert_gradient_fallback(&d);
         d.layers.push(Layer::new("cover", LayerContent::Fill(Fill::Solid(Color::WHITE))));
         assert!(photocraft_gpu::plan(&d).is_ok(), "occluded gradients are not sampled");
@@ -1703,6 +1703,10 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
         points: vec![Cp { input: 0.0, output: 1.0 }, Cp { input: 0.4, output: 0.4 }, Cp { input: 1.0, output: 0.0 }],
         corners: vec![],
     };
+    // The same contour under a high light, deep (altitude 69, 358 %): the unmapped flat shading
+    // stays the neutral, so only the slope facing away glints, on both renderers.
+    let mut bevel_gloss_high_alt = bevel_gloss_high.clone();
+    (bevel_gloss_high_alt.use_global_light, bevel_gloss_high_alt.angle, bevel_gloss_high_alt.altitude, bevel_gloss_high_alt.depth) = (false, 146.0, 69.0, 3.58);
     vec![
         ("drop shadow", vec![Effect::DropShadow(shadow(BlendMode::Multiply, 0.75, 120.0, 6.0, 8.0, 0.0))]),
         ("drop shadow spread contour", vec![Effect::DropShadow(ds_contour)]),
@@ -1795,6 +1799,7 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
         ),
         ("bevel contour own light", vec![Effect::BevelEmboss(bevel_contour)]),
         ("bevel gloss starting high", vec![Effect::BevelEmboss(bevel_gloss_high)]),
+        ("bevel gloss starting high, high light", vec![Effect::BevelEmboss(bevel_gloss_high_alt)]),
         ("satin", vec![Effect::Satin(satin)]),
         ("satin inverted contour", vec![Effect::Satin(satin_inv)]),
         ("stroke outside colour", vec![Effect::Stroke(stroke(4.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(0.95, 0.85, 0.1))))]),
@@ -3040,7 +3045,7 @@ fn lab_documents_mix_in_lab() {
     a.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 2, 1), &photocraft_raster::from_rgba(&fmt, [0.0, 0.0, 1.0, 1.0]));
     let mut b = Layer::raster("b", fmt);
     b.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 2, 1), &photocraft_raster::from_rgba(&fmt, [1.0, 1.0, 0.0, 0.5]));
-    d.layers = vec![a, b];
+    d.layers = vec![a, b].into();
     let p = photocraft_compose::flatten(&d).px[0];
     assert!((p[0] - 0.5).abs() > 0.05 || (p[2] - 0.5).abs() > 0.05, "{p:?}");
 }
@@ -3545,7 +3550,7 @@ fn integration_adjustment_fill_opacity_masks_and_hdr_match_cpu() {
                             &[coverage],
                         );
                         layer.mask = Some(mask);
-                        d.layers = vec![base, layer];
+                        d.layers = vec![base, layer].into();
                         check(&mut g, &d, &format!("combined {mode:?} fill={fill} opacity={opacity} mask={coverage} clipped={clipped}"));
                     }
                 }
@@ -3565,7 +3570,7 @@ fn integration_adjustment_fill_opacity_masks_and_hdr_match_cpu() {
         dither: false,
         source: None,
     };
-    d.layers = vec![base, Layer::new("lookup", LayerContent::Adjustment(look))];
+    d.layers = vec![base, Layer::new("lookup", LayerContent::Adjustment(look))].into();
     check(&mut g, &d, "HDR full coverage with bounded result");
 }
 

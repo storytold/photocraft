@@ -28,7 +28,7 @@ fn copyrighted_puts_the_copyright_sign_before_the_name() {
     assert_eq!(title(&app), "oracle @ 100% (RGB/8)");
     status(&mut app, "copyrighted");
     assert_eq!(title(&app), "\u{a9} oracle @ 100% (RGB/8)");
-    assert_eq!(titled_name(&app.session.documents()[0]), "\u{a9} oracle", "the floating window's title has it too");
+    assert_eq!(titled_name(&app, &app.session.documents()[0]), "\u{a9} oracle", "the floating window's title has it too");
 }
 
 #[test]
@@ -40,7 +40,7 @@ fn public_domain_and_unknown_show_no_prefix() {
     status(&mut app, "copyrighted");
     status(&mut app, "unknown");
     assert_eq!(title(&app), "oracle @ 100% (RGB/8)");
-    assert_eq!(titled_name(&app.session.documents()[0]), "oracle");
+    assert_eq!(titled_name(&app, &app.session.documents()[0]), "oracle");
 }
 
 #[test]
@@ -76,7 +76,7 @@ fn a_file_opened_with_the_mark_already_set_shows_the_prefix() {
     ];
     for (xmp, marked) in packets {
         let mut app = app();
-        std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).metadata.xmp = Some(xmp.into());
+        std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).metadata.xmp = Some(xmp.into());
         let want = if marked { "\u{a9} oracle @ 100% (RGB/8)" } else { "oracle @ 100% (RGB/8)" };
         assert_eq!(title(&app), want, "{xmp}");
     }
@@ -90,7 +90,7 @@ fn changing_the_status_of_an_opened_document_clears_every_attribute_form() {
         );
         for steps in [&["unknown"][..], &["publicDomain", "unknown"]] {
             let mut app = app();
-            std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).metadata.xmp = Some(xmp.clone().into());
+            std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).metadata.xmp = Some(xmp.clone().into());
             assert!(title(&app).starts_with("\u{a9} "), "{attr:?}");
             for &s in steps {
                 status(&mut app, s);
@@ -116,13 +116,13 @@ fn the_name_inside_other_text_is_neither_read_nor_removed() {
     ];
     for desc in quoted {
         let mut app = app();
-        std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).metadata.xmp = Some(format!("{RDF}{desc}{END}").into());
+        std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).metadata.xmp = Some(format!("{RDF}{desc}{END}").into());
         assert!(title(&app).starts_with("oracle @ "), "text is not the mark: {desc}");
     }
     // Beside a real attribute: the status change removes the attribute and keeps the headline.
     let mut app = app();
     let xmp = format!("{RDF}<rdf:Description rdf:about=\"\" {headline}\n   xmpRights:Marked='True'/>{END}");
-    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).metadata.xmp = Some(xmp.into());
+    std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).metadata.xmp = Some(xmp.into());
     assert!(title(&app).starts_with("\u{a9} "));
     status(&mut app, "unknown");
     assert!(title(&app).starts_with("oracle @ "), "{}", title(&app));
