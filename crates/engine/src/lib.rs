@@ -26,7 +26,7 @@ pub mod hidden_target;
 pub mod inspect;
 pub mod installed_profiles;
 pub mod jobs;
-pub mod kys;
+pub mod keymap_defs;
 pub mod layer_place;
 pub mod layer_style;
 pub mod link_watch;
@@ -45,7 +45,7 @@ pub mod select_mask_edits;
 pub mod shell_commands;
 pub mod shortcut_sets;
 pub mod snap;
-pub use variables_cmds::{export_data_sets_with, import_data_sets_text};
+pub use variables_cmds::{DATA_SET_LAYER_LOCKED, data_set_preview, export_data_sets_with, import_data_sets_text};
 pub use video_cmds::render_video_with;
 
 use std::sync::Arc;
@@ -62,6 +62,8 @@ pub use photocraft_paint::BrushSettings;
 pub mod cmd;
 mod doc_state;
 mod error;
+mod install;
+pub mod registry;
 mod session;
 
 pub use cmd as commands;
@@ -121,12 +123,12 @@ pub use cmd::layer_xmp_cmds;
 pub use cmd::lens_cmds;
 pub use cmd::magnetic_cmds;
 pub use cmd::mask_view_cmds;
-use cmd::migrate_cmds;
+pub use cmd::migrate_cmds;
 pub use cmd::mode_cmds;
 pub use cmd::multichannel_cmds;
 pub use cmd::notes_cmds;
 pub use cmd::paint_cmds;
-use cmd::path_edit_cmds;
+pub use cmd::path_edit_cmds;
 pub use cmd::pattern_cmds;
 pub use cmd::pattern_fill_cmds;
 pub use cmd::perspective_crop_cmds;
@@ -152,9 +154,9 @@ pub use cmd::stamp_cmds;
 pub use cmd::style_asl_cmds;
 pub use cmd::swatch_cmds;
 pub use cmd::symmetry_cmds;
-use cmd::timeline_cmds;
+pub use cmd::timeline_cmds;
 pub use cmd::transform_cmds;
-use cmd::trap_cmds;
+pub use cmd::trap_cmds;
 pub use cmd::type_area_cmds;
 pub use cmd::type_caret_cmds;
 pub use cmd::type_cmds;
@@ -162,15 +164,14 @@ pub use cmd::type_extra_cmds;
 pub use cmd::type_mask_cmds;
 pub use cmd::type_spell_cmds;
 pub use cmd::type_styles_cmds;
-pub use cmd::updates_cmds;
-use cmd::variables_cmds;
+pub use cmd::variables_cmds;
 pub use cmd::vector_cmds;
-use cmd::video_cmds;
+pub use cmd::video_cmds;
 pub use cmd::vp_cmds;
 pub use cmd::warp_cmds;
 pub use cmd::web_cmds;
-use cmd::wia_cmds;
-pub use doc_state::{CopiedStyle, DocState, PRECHECKED, ToolState};
+pub use cmd::wia_cmds;
+pub use doc_state::{CopiedStyle, DocState, PRECHECKED, ToolState, selected_in};
 pub use error::{EngineError, Result};
 pub use session::move_item;
 use session::restore_target;
@@ -202,6 +203,7 @@ pub(crate) fn active_layer_of(s: &Session) -> std::result::Result<&photocraft_do
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
+    documents_generation: u64,
     /// Override Open belongs only to one Batch scratch session, never to caller preferences.
     pub(crate) batch_open: Option<file_cmds::BatchOpen>,
     /// Import diagnostics retained by a Batch scratch that suppresses only profile prompts.
@@ -261,8 +263,6 @@ pub struct Session {
     filter_mask_layer: Option<LayerId>,
     /// Edit › Preferences, keyboard shortcuts, menu and toolbar customisation (see `prefs`).
     pub prefs: prefs::PrefsStore,
-    /// Release checks use an injected platform transport; no network I/O in the engine.
-    pub updates: updates_cmds::Updates,
     /// Edit menu state: Fade source, custom shape library (see `edit_menu_cmds`).
     pub edit_state: edit_menu_cmds::EditState,
     /// The pattern library (Window › Patterns; see `pattern.*`).

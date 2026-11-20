@@ -88,3 +88,7 @@ mod color_button_tests;
 #[cfg(test)]
 #[path = "widgets/numeric_input_tests.rs"]
 mod numeric_input_tests;
+
+#[cfg(test)]
+#[path = "widgets/point_curve_hit_radius_tests.rs"]
+mod point_curve_hit_radius_tests;
