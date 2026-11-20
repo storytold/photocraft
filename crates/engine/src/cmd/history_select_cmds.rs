@@ -76,6 +76,7 @@ fn select_state(s: &mut Session, p: &Value) -> Result<Value> {
     crate::restore_target(st, layers);
     st.bump_revision(keep_clean);
     st.last_damage = damage;
+    st.record_damage();
     if at != target {
         // Not reached (the bounds were checked): the document is consistent at the state reached.
         return Err(EngineError::Other(format!("the history stopped at state {at}")));

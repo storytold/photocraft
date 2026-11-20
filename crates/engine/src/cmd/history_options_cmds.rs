@@ -176,7 +176,9 @@ pub(crate) fn delete_state(s: &mut Session, i: usize, current: usize) -> Result<
     st.doc = d;
     crate::restore_target(st, layers);
     st.revision += 1;
+    st.record_unknown_damage();
     st.last_damage = damage;
+    st.record_damage();
     Ok(())
 }
 

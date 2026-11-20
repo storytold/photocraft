@@ -140,6 +140,7 @@ pub(crate) fn fix_view(st: &mut DocState) {
 pub(super) fn touch(st: &mut DocState) {
     st.bump_view_revision(!st.is_dirty());
     st.last_damage = None;
+    st.record_damage();
 }
 
 // ---------------------------------------------------------------------------------------------

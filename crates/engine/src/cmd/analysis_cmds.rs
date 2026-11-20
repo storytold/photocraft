@@ -223,10 +223,12 @@ fn set_quiet(s: &mut Session, f: impl FnOnce(&mut Document)) -> Result<()> {
     st.doc = Arc::new(d);
     let clean = st.saved_revision == st.revision;
     st.revision += 1;
+    st.record_unknown_damage();
     if clean {
         st.saved_revision = st.revision;
     }
     st.last_damage = Some(Rect::EMPTY);
+    st.record_damage();
     Ok(())
 }
 
@@ -275,6 +277,7 @@ pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Sess
             st.color_samplers = samplers;
             st.symmetry = symmetry;
             st.revision += 1;
+            st.record_unknown_damage();
             // A failed compound does not make an otherwise untouched document dirty.
             if was_clean {
                 st.saved_revision = st.revision;
@@ -282,6 +285,7 @@ pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Sess
             // This revision's damage; `Session::dispatch` reports the command's whole span (nothing,
             // when the inner commands had changed pixels and the restore took them back).
             st.last_damage = crate::layer_multi_cmds::step_damage(&failed, &st.doc);
+            st.record_damage();
             Err(e)
         }
     };

@@ -43,6 +43,7 @@ fn with_timeline(s: &mut Session, f: impl FnOnce(&mut Option<Timeline>)) -> Resu
     photocraft_raster::spill::check_since(generation).and_then(|()| doc.scratch_health()).map_err(EngineError::Other)?;
     st.doc = Arc::new(doc);
     st.revision += 1;
+    st.record_unknown_damage();
     info(s)
 }
 

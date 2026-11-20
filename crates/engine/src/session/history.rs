@@ -32,10 +32,12 @@ impl Session {
                 restore_target(st, layers);
                 let clean = !st.is_dirty();
                 st.revision += 1;
+                st.record_unknown_damage();
                 if clean {
                     st.saved_revision = st.revision;
                 }
                 st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+                st.record_damage();
                 true
             }
             Some((mut d, layers)) => {
@@ -54,6 +56,7 @@ impl Session {
                 restore_target(st, layers);
                 st.bump_revision(keep_clean);
                 st.last_damage = damage;
+                st.record_damage();
                 true
             }
             None => false,
@@ -92,6 +95,7 @@ impl Session {
                 restore_target(st, layers);
                 st.bump_revision(keep_clean);
                 st.last_damage = damage;
+                st.record_damage();
                 true
             }
             None => false,
@@ -142,6 +146,7 @@ impl Session {
         restore_target(st, layers);
         st.bump_revision(keep_clean);
         st.last_damage = damage;
+        st.record_damage();
         true
     }
 }
