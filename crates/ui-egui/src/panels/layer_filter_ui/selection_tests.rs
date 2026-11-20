@@ -1,16 +1,16 @@
-//! #10879: applying a Layers panel filter deselects the selected layers it hides, against the
-//! cases measured in Photoshop.
+//! #10879: setting a Layers panel filter deselects the selected layers it hides, against the cases
+//! measured in Photoshop. The panel's own filter row does the same in craft-layers; these set the
+//! filter as the control channel's `ui.set {layerFilter}` does: through `patched` and `apply`.
 
 use egui::vec2;
 use egui_kittest::Harness;
 use photocraft_doc::LayerId;
-use serde_json::json;
+use serde_json::{Value, json};
 
-use super::FilterBy;
 use crate::PhotocraftApp;
 
 /// "Red" and "Deep Pixel" (pixel layers) and "Hello" (type) over the Background, in the panel.
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Red"})).unwrap();
@@ -19,26 +19,17 @@ fn harness() -> Harness<'static, PhotocraftApp> {
     s.execute("layer.setProps", json!({"layer": text, "name": "Hello"})).unwrap();
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        PhotocraftApp::new(s, crate::Services::default())
+        PhotocraftApp::with_context(cc.egui_ctx.clone(), s, crate::Services::default())
     });
     h.run_steps(8);
     h
 }
 
-fn id(h: &Harness<'_, PhotocraftApp>, name: &str) -> LayerId {
-    h.state()
-        .session
-        .active()
-        .unwrap()
-        .doc
-        .walk()
-        .into_iter()
-        .find(|(_, _, l)| l.name == name)
-        .map(|(_, _, l)| l.id)
-        .unwrap_or_else(|| panic!("no layer {name}"))
+fn id(h: &Harness<'_, Box<PhotocraftApp>>, name: &str) -> LayerId {
+    h.state().session.active().unwrap().doc.walk().into_iter().find(|(_, _, l)| l.name == name).map(|(_, _, l)| l.id).unwrap()
 }
 
-fn select(h: &mut Harness<'_, PhotocraftApp>, names: &[&str]) {
+fn select(h: &mut Harness<'_, Box<PhotocraftApp>>, names: &[&str]) {
     for (i, name) in names.iter().enumerate() {
         let layer = id(h, name).0;
         h.state_mut().session.execute("layer.select", json!({"layer": layer, "mode": if i == 0 { "replace" } else { "add" }})).unwrap();
@@ -47,92 +38,58 @@ fn select(h: &mut Harness<'_, PhotocraftApp>, names: &[&str]) {
 }
 
 /// The selected layers' names, bottom to top, and the active layer's.
-fn selection(h: &Harness<'_, PhotocraftApp>) -> (Vec<String>, Option<String>) {
+fn selection(h: &Harness<'_, Box<PhotocraftApp>>) -> (Vec<String>, Option<String>) {
     let st = h.state().session.active().unwrap();
     let name = |id: LayerId| st.doc.layer(id).unwrap().name.clone();
-    (st.selected_layers().into_iter().map(name).collect(), st.active_layer.map(name))
+    (st.selected_layers().iter().copied().map(name).collect(), st.active_layer.map(name))
 }
 
-fn none() -> (Vec<String>, Option<String>) {
-    (Vec::new(), None)
-}
-
-#[test]
-fn a_filter_that_hides_the_selected_layer_deselects_it_and_turning_it_off_keeps_that() {
-    let mut h = harness();
-    select(&mut h, &["Red"]);
-    h.state_mut().ui.layer_filter = vec!["type".into()];
-    h.run_steps(4);
-    assert_eq!(selection(&h), none(), "Kind › Type hides Red: no layer is selected");
-    h.state_mut().ui.layer_filter.clear();
-    h.run_steps(4);
-    assert_eq!(selection(&h), none(), "turning the filter off does not bring the selection back");
-}
-
-/// Batch 16 review: a filter already on when the row is first drawn (set before the panel drew,
-/// as `ui.set {layerFilter}` can) deselects the layers it hides too.
-#[test]
-fn a_filter_on_before_the_rows_first_draw_deselects_the_hidden_layers() {
-    let mut s = photocraft_engine::Session::new();
-    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
-    s.execute("layer.new.layer", json!({"name": "Red"})).unwrap();
-    s.execute("type.create", json!({"text": "Hello", "x": 4, "y": 20, "size": 12})).unwrap();
-    let red = s.active().unwrap().doc.walk().into_iter().find(|(_, _, l)| l.name == "Red").map(|(_, _, l)| l.id).unwrap();
-    s.execute("layer.select", json!({"layer": red.0})).unwrap();
-    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let mut app = PhotocraftApp::new(s, crate::Services::default());
-        app.ui.layer_filter = vec!["type".into()];
-        app
-    });
-    h.run_steps(8);
-    assert_eq!(selection(&h), none(), "Kind › Type hides Red from the first draw on");
+enum Step {
+    /// The `ui.set {layerFilter}` patch, applied to the filter.
+    Filter(Value),
+    /// Select these layers (the last one active).
+    Select(&'static [&'static str]),
 }
 
 #[test]
-fn a_filter_that_lists_none_of_the_selected_layers_deselects_them_all() {
-    let mut h = harness();
-    select(&mut h, &["Hello", "Deep Pixel"]);
-    h.state_mut().ui.layer_filter_by = FilterBy::SmartObject;
-    h.state_mut().ui.layer_filter_smart = vec!["embedded".into()];
-    h.run_steps(4);
-    assert_eq!(selection(&h), none(), "Smart Object › Embedded matches neither");
-}
-
-#[test]
-fn the_listed_layers_stay_selected_and_one_of_them_becomes_active() {
-    let mut h = harness();
-    select(&mut h, &["Red", "Hello", "Deep Pixel"]);
-    assert_eq!(selection(&h).1.as_deref(), Some("Deep Pixel"));
-    h.state_mut().ui.layer_filter = vec!["type".into()];
-    h.run_steps(4);
-    assert_eq!(selection(&h), (vec!["Hello".to_string()], Some("Hello".to_string())));
-    let history = h.state().session.active().unwrap().history.entries().len();
-    // Changing the criteria while the filter is on acts again: Name "zzzz" lists nothing.
-    h.state_mut().ui.layer_filter_by = FilterBy::Name;
-    h.state_mut().ui.layer_filter_name = "zzzz".into();
-    h.run_steps(4);
-    assert_eq!(selection(&h), none());
-    assert_eq!(h.state().session.active().unwrap().history.entries().len(), history, "deselecting is no history step");
-}
-
-#[test]
-fn a_layer_selected_while_the_filter_hides_it_stays_selected() {
-    let mut h = harness();
-    select(&mut h, &["Hello"]);
-    h.state_mut().ui.layer_filter = vec!["type".into()];
-    h.run_steps(4);
-    assert_eq!(selection(&h).0, ["Hello"]);
-    select(&mut h, &["Red"]);
-    assert_eq!(selection(&h).0, ["Red"], "the filter only acts when it is applied");
-}
-
-#[test]
-fn a_filter_set_through_the_control_channel_deselects_too() {
-    let mut h = harness();
-    select(&mut h, &["Red"]);
-    let f = super::patched(&h.state().ui, &json!({"by": "name", "name": "hello"})).unwrap();
-    super::apply(&mut h.state_mut().ui, f);
-    h.run_steps(4);
-    assert_eq!(selection(&h), none());
+fn setting_a_filter_deselects_the_layers_it_hides() {
+    use Step::*;
+    type Case = (&'static str, &'static [&'static str], Vec<(Step, &'static [&'static str], Option<&'static str>)>);
+    let cases: Vec<Case> = vec![
+        (
+            "Kind › Type hides Red; turning the filter off does not bring the selection back",
+            &["Red"],
+            vec![(Filter(json!({"kinds": ["type"]})), &[], None), (Filter(json!({"kinds": []})), &[], None)],
+        ),
+        ("Smart Object › Embedded lists neither", &["Hello", "Deep Pixel"], vec![(Filter(json!({"by": "smartObject", "smart": ["embedded"]})), &[], None)]),
+        (
+            "the listed layers stay selected, one of them active; new criteria act again",
+            &["Red", "Hello", "Deep Pixel"],
+            vec![(Filter(json!({"kinds": ["type"]})), &["Hello"], Some("Hello")), (Filter(json!({"by": "name", "name": "zzzz"})), &[], None)],
+        ),
+        ("Name hides Red", &["Red"], vec![(Filter(json!({"by": "name", "name": "hello"})), &[], None)]),
+        (
+            "a layer selected while the filter hides it stays selected: the filter acts only when it changes",
+            &["Hello"],
+            vec![(Filter(json!({"kinds": ["type"]})), &["Hello"], Some("Hello")), (Select(&["Red"]), &["Red"], Some("Red"))],
+        ),
+    ];
+    for (case, start, steps) in cases {
+        let mut h = harness();
+        select(&mut h, start);
+        let history = h.state().session.active().unwrap().history.entries().len();
+        for (step, selected, active) in steps {
+            match step {
+                Filter(patch) => {
+                    let filter = crate::layer_filter_ui::patched(&h.state().ui.layer_filter, &patch).unwrap();
+                    crate::layer_filter_ui::apply(h.state_mut(), filter);
+                }
+                Select(names) => select(&mut h, names),
+            }
+            h.run_steps(4);
+            let want = (selected.iter().map(|s| s.to_string()).collect::<Vec<_>>(), active.map(str::to_string));
+            assert_eq!(selection(&h), want, "{case}");
+        }
+        assert_eq!(h.state().session.active().unwrap().history.entries().len(), history, "{case}: deselecting is no history step");
+    }
 }

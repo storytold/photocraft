@@ -6,6 +6,12 @@ pub enum EngineError {
     /// Displays with the nearest registered ids, if any ([`command_hints`], #3674).
     #[error("unknown command `{id}`{hint}", id = .0, hint = command_hints::unknown_command_hint(.0))]
     UnknownCommand(String),
+    /// A session ran a command before the process installed any command tables.
+    #[error("no commands are installed in this process: create the session with `Session::new()`, which installs them")]
+    NotInstalled,
+    /// An install named other command tables than the one already in place; table `at` differs.
+    #[error("different command tables are already installed: table {at} is `{installed}`, not `{requested}`")]
+    InstallConflict { at: usize, installed: String, requested: String },
     #[error("command `{0}` is not available right now: {1}")]
     Disabled(String, String),
     #[error("invalid parameters for `{cmd}`: {msg}")]
@@ -76,7 +82,7 @@ fn memory_limit_for(is_wasm32: bool, is_32_bit: bool) -> BuildMemoryLimit {
 /// The text after "hard limit": where the limit comes from and, where another build could open
 /// the file, where to get it. Its sentences stand apart so the action isn't lost in the cause.
 fn build_limit_scope(limit: BuildMemoryLimit) -> String {
-    let releases = crate::updates_cmds::RELEASES;
+    let releases = crate::build_info::RELEASES;
     match limit {
         BuildMemoryLimit::Measured => " on this machine".to_owned(),
         BuildMemoryLimit::Desktop32Bit => format!(
@@ -144,6 +150,19 @@ pub(crate) fn io_open_error(name: &str, error: photocraft_io::IoError) -> Engine
     }
 }
 
+/// [`io_open_error`] for Open As: `name` is the real file name and `as_ext` the format asked for,
+/// so a file that cannot be read as it says so instead of naming a made-up `<stem>.<as>` file.
+pub(crate) fn io_open_as_error(name: &str, as_ext: &str, error: photocraft_io::IoError) -> EngineError {
+    match io_open_error(name, error) {
+        EngineError::Other(message) => {
+            let detail = message.strip_prefix(&format!("{name}: ")).unwrap_or(&message);
+            let format = as_ext.trim_start_matches('.').to_ascii_uppercase();
+            EngineError::Other(format!("\"{name}\" could not be opened as {format}: {detail}"))
+        }
+        other => other,
+    }
+}
+
 impl From<photocraft_raster::AllocationError> for EngineError {
     fn from(error: photocraft_raster::AllocationError) -> Self {
         Self::Other(format!("not enough memory for this operation ({error}); the document was not changed"))
@@ -186,7 +205,7 @@ mod tests {
     #[test]
     fn hard_budget_scope_text_per_build() {
         assert_eq!(build_limit_scope(BuildMemoryLimit::Measured), " on this machine");
-        let releases = crate::updates_cmds::RELEASES;
+        let releases = crate::build_info::RELEASES;
         assert_eq!(
             build_limit_scope(BuildMemoryLimit::Desktop32Bit),
             format!(
