@@ -99,6 +99,21 @@ fn reset_after_changing_only_the_mode_keeps_todays_defaults() {
     assert_eq!(values(&h, id), at(100.0, "normal"), "a second Reset too");
 }
 
+/// An Opacity typed back to 100 is the user's change, not a Reset's: Reset then returns to the last confirmed values
+/// (CodeRabbit on #15104).
+#[test]
+fn reset_after_typing_100_returns_to_the_last_confirmed_values() {
+    let mut h = harness();
+    let id = invert_and_open_fade(&mut h);
+    set(&mut h, id, 20, "normal");
+    click(&mut h, "OK");
+    let id = invert_and_open_fade(&mut h);
+    assert_eq!(values(&h, id), at(20.0, "normal"));
+    set(&mut h, id, 100, "normal");
+    alt_reset(&mut h);
+    assert_eq!(values(&h, id), at(20.0, "normal"));
+}
+
 #[test]
 fn on_a_first_open_reset_returns_to_100_normal() {
     let mut h = harness();
