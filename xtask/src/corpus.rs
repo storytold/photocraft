@@ -24,10 +24,10 @@ const HEIF_CRATES: &[&str] = &["photocraft-io"];
 
 /// Paths whose changes make `test-corpus --changed` run (the file-format and rendering crates,
 /// and the engine's `.atn` import and export).
-const CRITICAL: &[&str] = &["crates/io/", "crates/compose/", "crates/gpu/", "crates/text/", "crates/format/", "crates/raw/", "crates/engine/src/cmd/atn_cmds"];
+const CRITICAL: &[&str] = &["crates/io/", "crates/compose/", "crates/gpu/", "crates/text/", "crates/format/", "crates/raw/", "crates/engine/src/cmd/atn_cmds/"];
 
 fn is_critical(path: &str) -> bool {
-    CRITICAL.iter().any(|prefix| path.starts_with(prefix))
+    path == "crates/engine/src/cmd/atn_cmds.rs" || CRITICAL.iter().any(|prefix| path.starts_with(prefix))
 }
 
 /// `cargo xtask corpus [--all | --pngsuite | --download | --psd | --psd-tools | --heif | --exr | --pixls | --affinity | --atn | --photoshop [--local] | --gimp [--local]] [--update-manifest]`
