@@ -186,10 +186,6 @@ test	linux	photocraft-compose	6.21	tests::one_colour_areas_reduce_like_composite
 test	linux	photocraft-compose	1.78	tests::shapeless_effects_render_the_same_in_bands_and_parts
 test	linux	photocraft-compose	1.97	viewport::tests::reduced_pages_match_averaging_every_composited_pixel
 test	linux	photocraft-doc	1.10	slices::tests::nested_slices_resolve_in_bounded_work
-test	linux	photocraft-engine-core	1.28	cmd::align_cmds::tests::auto_align_keeps_a_locked_layer_as_the_reference
-test	linux	photocraft-engine-core	1.03	cmd::align_cmds::tests::auto_align_moves_the_background_as_a_normal_layer
-test	linux	photocraft-engine-core	4.96	cmd::align_cmds::tests::auto_align_registers_a_smooth_bracket_by_intensity
-test	linux	photocraft-engine-core	1.88	cmd::align_cmds::tests::auto_align_rejects_unrelated_layers_instead_of_guessing_a_pose
 test	linux	photocraft-engine-core	1.24	cmd::atn_cmds::render_tests::render_actions_match_direct_filters_and_undo
 test	linux	photocraft-engine-core	1.72	cmd::atn_cmds::stylize_tests::imported_group_d_playback_matches_direct_commands_across_modes_and_depths
 test	linux	photocraft-engine-core	1.27	cmd::automate_cmds::tests::droplet_scoped_variants_keep_the_existing_action_limit
@@ -263,6 +259,10 @@ test	linux	photocraft-engine-paint	2.52	cmd::retouch_cmds::tests::sample_all_lay
 test	linux	photocraft-engine-paint	24.30	cmd::retouch_cmds::tests::spot_healing_keeps_film_grain_through_overlapping_strokes
 test	linux	photocraft-engine-paint	5.05	cmd::retouch_cmds::tests::spot_healing_removes_blemish_all_types
 test	linux	photocraft-engine-paint	1.46	cmd::retouch_cmds::tests::the_tools_the_reference_application_does_not_wrap_stop_at_the_canvas_edge
+test	linux	photocraft-engine-vector	1.28	cmd::align_cmds::tests::auto_align_keeps_a_locked_layer_as_the_reference
+test	linux	photocraft-engine-vector	1.03	cmd::align_cmds::tests::auto_align_moves_the_background_as_a_normal_layer
+test	linux	photocraft-engine-vector	4.96	cmd::align_cmds::tests::auto_align_registers_a_smooth_bracket_by_intensity
+test	linux	photocraft-engine-vector	1.88	cmd::align_cmds::tests::auto_align_rejects_unrelated_layers_instead_of_guessing_a_pose
 test	linux	photocraft-engine-core	2.95	cmd::selection_cmds::color_range_window_tests::cropped_range_matches_full_canvas_combinations_with_soft_holes_and_clipped_masks
 test	linux	photocraft-engine-core	1.76	cmd::selection_cmds::modify_window::tests::cropped_commands_match_full_canvas_reads_padding_and_writeback
 test	linux	photocraft-engine-core	5.95	cmd::selection_cmds::tests::windowed_tool_feather_matches_full_canvas

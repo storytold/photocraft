@@ -7,7 +7,7 @@ use super::{Document, EngineError, Layer, LayerId, LayerMask, Result, SampleType
 /// `"background"` finds that name). A recorded `{"name":"Layer"}` uses the same lookup.
 /// `{"background":true}` targets the actual Background, independently of its name. `None`
 /// when the param is absent.
-pub(crate) fn explicit_layer(s: &Session, p: &Value) -> Result<Option<LayerId>> {
+pub fn explicit_layer(s: &Session, p: &Value) -> Result<Option<LayerId>> {
     let named = |name: &str| {
         let d = s.active().ok_or(EngineError::NoDocument)?;
         let layers = d.doc.walk();

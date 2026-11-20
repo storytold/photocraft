@@ -6560,6 +6560,7 @@ dependencies = [
  "photocraft-doc",
  "photocraft-engine-core",
  "photocraft-engine-paint",
+ "photocraft-engine-vector",
  "photocraft-format",
  "photocraft-geom",
  "photocraft-io",
@@ -6633,6 +6634,35 @@ dependencies = [
  "photocraft-io",
  "photocraft-paint",
  "photocraft-raster",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "photocraft-engine-vector"
+version = "0.23.1"
+dependencies = [
+ "base64 0.22.1",
+ "blake3",
+ "chrono",
+ "craft-cms",
+ "craft-image-codecs 0.1.0 (git+https://github.com/storytold/craft-libs?rev=bafb4522899d9f814a07dad636cdefcbf705dead)",
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=bafb4522899d9f814a07dad636cdefcbf705dead)",
+ "flate2",
+ "photocraft-algo",
+ "photocraft-color",
+ "photocraft-compose",
+ "photocraft-doc",
+ "photocraft-engine-core",
+ "photocraft-format",
+ "photocraft-geom",
+ "photocraft-io",
+ "photocraft-paint",
+ "photocraft-raster",
+ "photocraft-testkit",
+ "photocraft-text",
+ "photocraft-vector",
  "rayon",
  "serde",
  "serde_json",

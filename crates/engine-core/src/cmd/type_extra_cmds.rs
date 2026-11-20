@@ -73,7 +73,7 @@ fn has_defaults(s: &Session) -> std::result::Result<(), String> {
 
 /// Edits a type layer as one history step and re-renders it. `f` gets the document's resolution
 /// (dpi).
-pub(crate) fn with_text<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut TextLayer, f32) -> Result<R>) -> Result<R> {
+pub fn with_text<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut TextLayer, f32) -> Result<R>) -> Result<R> {
     let id = layer_param(s, p)?;
     check_text_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
     let typed = typed_name(s, id);
@@ -431,7 +431,7 @@ pub fn type_path(t: &TextLayer) -> Option<Path> {
 
 /// Puts an edited [`type_path`] back into `t` (its text space), keeping where the type starts and
 /// which side it runs on. It must still be one subpath with two or more points.
-pub(crate) fn set_type_path(t: &mut TextLayer, edited: &Path) -> Result<()> {
+pub fn set_type_path(t: &mut TextLayer, edited: &Path) -> Result<()> {
     let TextShape::Path { start, end, flip, .. } = &t.shape else { return Err(EngineError::Other("the type layer is not on a path".into())) };
     let (start, end, flip) = (*start, *end, *flip);
     let [sub] = edited.subpaths.as_slice() else { return Err(EngineError::Other("type on a path follows one path".into())) };

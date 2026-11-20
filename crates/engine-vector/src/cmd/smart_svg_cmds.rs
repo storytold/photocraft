@@ -462,6 +462,4 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 #[cfg(test)]
-mod source_cache_tests;
-#[cfg(test)]
 mod tests;

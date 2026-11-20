@@ -357,7 +357,7 @@ struct WarningSource {
 /// One command's bounded source-space renders. Placement, warp, filters and masks
 /// are instance-specific and must never be cached here. Weak identity pins only the
 /// allocation header; the borrowed document owns encoded bytes throughout the command.
-pub(crate) struct WarningRenderSources<'a> {
+pub struct WarningRenderSources<'a> {
     document: &'a Document,
     srgb: Option<bool>,
     entries: VecDeque<WarningSource>,
@@ -373,7 +373,7 @@ thread_local! {
 }
 
 impl<'a> WarningRenderSources<'a> {
-    pub(crate) fn new(document: &'a Document) -> Self {
+    pub fn new(document: &'a Document) -> Self {
         #[cfg(test)]
         let limit = WARNING_SOURCE_LIMIT.with(|limit| limit.get().unwrap_or(32));
         #[cfg(not(test))]
@@ -458,7 +458,7 @@ impl<'a> WarningRenderSources<'a> {
 }
 
 /// Reuse only warning-aware source pixels during one shared-content update.
-pub(crate) fn render_with_warnings_using(sm: &SmartObject, sources: &mut WarningRenderSources<'_>) -> Result<(Option<Surface>, Vec<String>)> {
+pub fn render_with_warnings_using(sm: &SmartObject, sources: &mut WarningRenderSources<'_>) -> Result<(Option<Surface>, Vec<String>)> {
     let doc = sources.document;
     if sm.vector_preview.is_some() || sm.stack_mode.is_some() {
         return render(doc, sm).map(|surface| (surface, Vec::new()));

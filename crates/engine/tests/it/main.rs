@@ -51,6 +51,7 @@ mod convert_profile_dither;
 mod convert_profile_options;
 mod copy_shape_placement;
 mod corpus_atn;
+mod corpus_notes;
 mod crop_content_aware;
 mod crop_content_aware_layers;
 mod crop_delete_off_background;

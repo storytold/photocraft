@@ -85,8 +85,6 @@ pub mod mode_cmds;
 pub mod multichannel_cmds;
 #[cfg(test)]
 mod new_document_history_name_tests;
-#[cfg(test)]
-mod notes_stored_values_tests;
 mod ops;
 mod params;
 pub mod pattern_cmds;
@@ -144,14 +142,18 @@ pub use enabled::is_mask_target;
 pub use enabled::paint_surface;
 use enabled::{can_redo, can_undo, has_doc, has_layer, has_selection};
 pub use layer_params::layer_param;
-pub(crate) use layer_params::{NEW_LAYER_PATH, explicit_layer, layer_listing, layer_panel_option, mask_at_depth, mask_new_layer, selection_mask};
+pub(crate) use layer_params::{NEW_LAYER_PATH, layer_listing, layer_panel_option, mask_at_depth, mask_new_layer, selection_mask};
+pub use layer_params::explicit_layer;
 pub(crate) use layer_references::{recorded_drop, recorded_layer};
 use ops::{arrange, merge_group, move_mask, set_mask, set_mask_and_deselect};
-pub(crate) use ops::{layer_copy, translate_layer, translate_layer_wrapped};
+pub(crate) use ops::{layer_copy, translate_layer_wrapped};
+pub use ops::translate_layer;
 pub use params::color_param;
 pub use params::parse_hex;
 use params::{bad, set_clipped};
-pub(crate) use params::{check_f32_values, cmyk_param, int, int_i32, u32_id, u32_id_param};
+pub(crate) use params::{check_f32_values, cmyk_param, int, int_i32};
+pub use params::u32_id;
+pub use params::u32_id_param;
 pub use photocraft_color::blend::parse_blend;
 
 pub use crate::registry::{CommandSpec, list_entry, list_entry_matches, search_keywords};

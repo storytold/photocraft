@@ -9,7 +9,7 @@ use super::{
 // Document paths
 // ---------------------------------------------------------------------------
 
-pub(crate) fn is_work(name: Option<&str>) -> bool {
+pub fn is_work(name: Option<&str>) -> bool {
     name.is_none_or(|n| n.is_empty() || n.eq_ignore_ascii_case("work") || n == "Work Path")
 }
 
@@ -37,7 +37,7 @@ pub(super) fn resolve_path(s: &Session, name: Option<&str>) -> Result<Path> {
 
 /// The path an edit targets, except a shape layer's (edit those with [`with_shape`], which
 /// re-renders them): `layer`'s vector mask when given, else the work path or a saved path.
-pub(crate) fn path_mut<'a>(doc: &'a mut Document, name: &str, layer: Option<LayerId>) -> Result<&'a mut Path> {
+pub fn path_mut<'a>(doc: &'a mut Document, name: &str, layer: Option<LayerId>) -> Result<&'a mut Path> {
     if let Some(id) = layer {
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         return l.vector_mask.as_mut().map(|vm| &mut vm.path).ok_or_else(|| EngineError::Other("active layer has no shape path or vector mask".into()));

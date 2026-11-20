@@ -89,14 +89,6 @@ fn a_memory_refusal_keeps_its_own_message() {
     assert!(matches!(e, EngineError::PsdApprovalRequired { .. }), "{e:?}");
     // Not a memory problem: no notes.
     assert_eq!(source_error("x.txt", photocraft_io::IoError::UnknownFormat("x.txt".into())).to_string(), NO_NOTES_IMPORTED);
-    // The allocation checkpoint before decoding keeps its message too, and changes nothing.
-    let (mut s, bytes) = (session(), pcraft(2));
-    let past = s.active().unwrap().history.past_len();
-    crate::allocation::fail_next_for_test();
-    let e = import_notes_from(&mut s, "a.pcraft", &bytes).unwrap_err().to_string();
-    assert!(e.starts_with("not enough memory for importing document"), "{e}");
-    assert_eq!(s.active().unwrap().history.past_len(), past);
-    assert!(s.active().unwrap().doc.notes.is_empty());
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -394,14 +394,6 @@ mod tests {
         let n = &s.active().unwrap().doc.notes[0];
         assert_eq!(n.text, "from pcraft");
         assert!(n.position[0] <= 84.0 && n.position[1] <= 60.0);
-        // A PSD with notes (corpus sample, feature `corpus`) appends two more.
-        #[cfg(feature = "corpus")]
-        {
-            let psd = concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus/psd/ag-psd/read-write/annotations/src.psd");
-            assert!(std::path::Path::new(psd).exists(), "{psd} is missing: run `cargo xtask corpus --all`");
-            s.execute("file.import.notes", json!({"path": psd})).unwrap();
-            assert_eq!(s.active().unwrap().doc.notes.len(), 3);
-        }
         // A file without notes is an error.
         let empty = dir.join("b.pcraft");
         src.notes.clear();

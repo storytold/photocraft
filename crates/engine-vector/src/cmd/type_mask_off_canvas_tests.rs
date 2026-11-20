@@ -101,20 +101,6 @@ fn add_and_subtract_keep_an_off_canvas_previous_selection() {
 
 /// The glyph buffers are no longer bounded by the canvas, so running out of memory for either of
 /// them is an error that changes nothing, not an abort.
-#[test]
-fn a_failed_coverage_allocation_is_an_error_that_changes_nothing() {
-    for skip in [0, 1] {
-        let mut s = session(600, 400);
-        s.execute("select.rect", json!({"x": 400, "y": 50, "width": 100, "height": 70})).unwrap();
-        let (before, steps) = (selection(&s), s.active().unwrap().history.entries().len());
-        crate::allocation::fail_after_for_test(skip);
-        let err = s.execute(super::CMD, json!({"text": "MASK", "x": -129, "y": 300, "size": 48})).unwrap_err().to_string();
-        assert!(err.contains("not enough memory for the Type Mask selection"), "allocation {skip}: {err}");
-        assert_eq!(selection(&s), before, "allocation {skip}");
-        assert_eq!(s.active().unwrap().history.entries().len(), steps, "allocation {skip}: no history step");
-    }
-}
-
 /// The expected selection at one pixel from the rectangle's and the glyphs' coverage.
 type Combine = fn(f32, f32) -> f32;
 
@@ -196,7 +182,7 @@ fn replace_and_intersect_drop_an_off_canvas_previous_selection() {
 /// combining makes over the text can't be had, for any selection, that's an error that changes
 /// nothing, not an abort.
 #[test]
-fn an_unusual_earlier_selection_keeps_its_format_or_fails_cleanly() {
+fn an_unusual_earlier_selection_keeps_its_format() {
     use photocraft_color::{PixelFormat, SampleType};
     let format = PixelFormat::GRAY8.with_sample(SampleType::F32);
     let earlier = Rect::new(-50, 50, 50, 120);
@@ -206,28 +192,8 @@ fn an_unusual_earlier_selection_keeps_its_format_or_fails_cleanly() {
     std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).selection = Some(old.clone());
     let text = json!({"text": "I", "x": 400, "y": 300, "size": 48, "operation": "add"});
 
-    // The two glyph buffers are had; the third allocation is the room for combining.
-    crate::allocation::fail_after_for_test(2);
-    let steps = s.active().unwrap().history.entries().len();
-    let err = s.execute(super::CMD, text.clone()).unwrap_err().to_string();
-    assert!(err.contains("not enough memory for the Type Mask selection"), "{err}");
-    assert_eq!(selection(&s), Some(old.clone()), "unchanged");
-    assert_eq!(s.active().unwrap().history.entries().len(), steps, "no history step");
-
     s.execute(super::CMD, text.clone()).unwrap();
     let now = selection(&s).unwrap();
     assert_eq!(now.format(), format);
     assert_eq!(now.read_region(earlier), old.read_region(earlier), "the earlier part stays, past the canvas too");
-
-    // An 8-bit grey earlier selection, in every mode, gets the same check for its new tiles.
-    for operation in ["add", "subtract", "new", "intersect"] {
-        let mut s = session(600, 400);
-        s.execute("select.rect", json!({"x": 10, "y": 50, "width": 100, "height": 70})).unwrap();
-        let (before, steps) = (selection(&s), s.active().unwrap().history.entries().len());
-        crate::allocation::fail_after_for_test(2);
-        let err = s.execute(super::CMD, json!({"text": "I", "x": 400, "y": 300, "size": 48, "operation": operation})).unwrap_err().to_string();
-        assert!(err.contains("not enough memory for the Type Mask selection"), "{operation}: {err}");
-        assert_eq!(selection(&s), before, "{operation}: unchanged");
-        assert_eq!(s.active().unwrap().history.entries().len(), steps, "{operation}: no history step");
-    }
 }

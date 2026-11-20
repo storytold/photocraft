@@ -220,7 +220,7 @@ pub(super) fn merge_layers(s: &mut Session) -> Result<Value> {
 
 /// Next visible layer row below the deleted target, then rows above in reverse order.
 /// Group headers precede their children in the UI, unlike Document::walk's storage order.
-pub(crate) fn deletion_neighbours(doc: &Document, target: LayerId) -> Vec<LayerId> {
+pub fn deletion_neighbours(doc: &Document, target: LayerId) -> Vec<LayerId> {
     let rows = |expand_all: bool| {
         let mut stack: Vec<&Layer> = doc.layers.iter().collect();
         let mut order = Vec::new();
