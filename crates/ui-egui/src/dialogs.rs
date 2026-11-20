@@ -467,6 +467,7 @@ pub(crate) const TAKERS: &[fn(&mut PhotocraftApp, &egui::Context)] = &[
     crate::layers_panel_ui::take,
     crate::slice_ui::take,
     crate::crop_presets::take,
+    crate::panels::apply_data_set_ui::take,
     crate::variables_ui::take,
     crate::actions::dialogs::take_stops,
 ];
@@ -660,7 +661,7 @@ fn convert_blend_mode(key: &str, value: &mut Value) {
     }
     let Some(mode) = value.get_mut("mode") else { return };
     if let Some(blend) = mode.as_str().and_then(crate::panels::layers_tree::blend_of) {
-        *mode = Value::String(crate::panels::layers_tree::blend_key(blend));
+        *mode = Value::String(blend.key().to_string());
     }
 }
 

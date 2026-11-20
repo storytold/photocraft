@@ -52,7 +52,7 @@ fn library_tip_bytes(s: &Session) -> (usize, u64, u64) {
             previews += g.data.len() as u64 * 2;
         }
     };
-    for p in &s.tools.presets {
+    for p in s.tools.presets.iter() {
         let b = &p.brush;
         for t in [&b.tip, &b.dual_brush.tip] {
             match t {

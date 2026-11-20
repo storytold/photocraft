@@ -81,6 +81,89 @@ pub enum Tool {
 }
 
 impl Tool {
+    /// Stable identifier used by tool-selection commands.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Move => "move",
+            Self::Artboard => "artboard",
+            Self::RectMarquee => "rectMarquee",
+            Self::EllipseMarquee => "ellipseMarquee",
+            Self::SingleRowMarquee => "singleRowMarquee",
+            Self::SingleColumnMarquee => "singleColumnMarquee",
+            Self::Lasso => "lasso",
+            Self::PolygonLasso => "polygonLasso",
+            Self::MagneticLasso => "magneticLasso",
+            Self::MagicWand => "magicWand",
+            Self::Crop => "crop",
+            Self::PerspectiveCrop => "perspectiveCrop",
+            Self::Eyedropper => "eyedropper",
+            Self::ColorSampler => "colorSampler",
+            Self::Ruler => "ruler",
+            Self::Note => "note",
+            Self::Count => "count",
+            Self::Brush => "brush",
+            Self::Pencil => "pencil",
+            Self::MixerBrush => "mixerBrush",
+            Self::ColorReplacement => "colorReplacement",
+            Self::Eraser => "eraser",
+            Self::BackgroundEraser => "backgroundEraser",
+            Self::MagicEraser => "magicEraser",
+            Self::Gradient => "gradient",
+            Self::PaintBucket => "paintBucket",
+            Self::Type => "type",
+            Self::VerticalType => "verticalType",
+            Self::HorizontalTypeMask => "horizontalTypeMask",
+            Self::VerticalTypeMask => "verticalTypeMask",
+            Self::Hand => "hand",
+            Self::RotateView => "rotateView",
+            Self::Zoom => "zoom",
+            Self::Remove => "remove",
+            Self::SpotHealing => "spotHealing",
+            Self::Healing => "healing",
+            Self::Patch => "patch",
+            Self::ContentAwareMove => "contentAwareMove",
+            Self::RedEye => "redEye",
+            Self::CloneStamp => "cloneStamp",
+            Self::PatternStamp => "patternStamp",
+            Self::HistoryBrush => "historyBrush",
+            Self::ArtHistoryBrush => "artHistoryBrush",
+            Self::Blur => "blur",
+            Self::Sharpen => "sharpen",
+            Self::Smudge => "smudge",
+            Self::Dodge => "dodge",
+            Self::Burn => "burn",
+            Self::Sponge => "sponge",
+            Self::QuickSelection => "quickSelection",
+            Self::ObjectSelection => "objectSelection",
+            Self::Pen => "pen",
+            Self::FreeformPen => "freeformPen",
+            Self::CurvaturePen => "curvaturePen",
+            Self::AddAnchorPoint => "addAnchorPoint",
+            Self::DeleteAnchorPoint => "deleteAnchorPoint",
+            Self::ConvertPoint => "convertPoint",
+            Self::PathSelection => "pathSelection",
+            Self::DirectSelection => "directSelection",
+            Self::Rectangle => "rectangle",
+            Self::EllipseShape => "ellipseShape",
+            Self::Triangle => "triangle",
+            Self::Polygon => "polygon",
+            Self::Star => "star",
+            Self::Line => "line",
+            Self::CustomShape => "customShape",
+            Self::Slice => "slice",
+            Self::SliceSelect => "sliceSelect",
+            Self::Frame => "frame",
+        }
+    }
+
+    /// Resolve an exact tool identifier.
+    pub fn from_id(id: &str) -> Option<Self> {
+        static IDS: std::sync::OnceLock<std::collections::HashMap<&'static str, Tool>> = std::sync::OnceLock::new();
+        IDS.get_or_init(|| Self::ALL.into_iter().filter(|tool| Self::from_name(tool.id()) == Some(*tool)).map(|tool| (tool.id(), tool)).collect())
+            .get(id)
+            .copied()
+    }
+
     pub const ALL: [Tool; 69] = [
         Tool::Move,
         Tool::Artboard,

@@ -312,7 +312,7 @@ pub(super) fn save_a_copy(s: &mut Session, p: &Value) -> Result<Value> {
         // "Layers" unchecked in Save a Copy: write the flattened image.
         let fmt = doc.pixel_format();
         let px = flattened_checked(&doc, fmt, "file.saveACopy")?;
-        doc.layers = vec![Layer::new("Background", LayerContent::Raster(px))];
+        doc.layers = vec![Layer::new("Background", LayerContent::Raster(px))].into();
     }
     let warnings = save_doc(&doc, &path, SaveOpts::from_params(s, p, "file.saveACopy")?)?;
     Ok(json!({"path": path, "warnings": warnings}))

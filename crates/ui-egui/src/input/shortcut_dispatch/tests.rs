@@ -1,6 +1,9 @@
 //! #127: every shortcut the UI displays (menu items, shell commands, tool tooltips) dispatches its
-//! command, or the item is visibly disabled with a reason — through the whole app, with a
-//! realistic layered document, from the places focus usually is.
+//! command, or the item is visibly disabled with a reason, in the whole app with a realistic layered
+//! document. Every shortcut's command is fired into the dispatcher directly; one shortcut of each kind
+//! of key and route is pressed from the places focus usually is (#15678).
+
+use std::collections::HashSet;
 
 use craft::keymap::Chord;
 use craft::ui::runtime::focus;
@@ -204,11 +207,146 @@ fn displayed(app: &PhotocraftApp) -> Vec<(String, String, bool)> {
     v
 }
 
-/// Press every displayed shortcut from each place focus usually is: each dispatches its command,
-/// or the menu shows it disabled and the press reports why. (Dry run: File › Exit, Open, Help
+/// The way [`super::run_fired`] takes a fired command `id`: a row of [`super::RUNTIME_COMMANDS`] by its kind, a tool
+/// letter, a Shift+letter group step, a recorded action, else an app command through [`super::dispatch_as`].
+fn route(id: &str) -> String {
+    if let Some((_, bridged)) = super::RUNTIME_COMMANDS.iter().find(|(row, _)| *row == id) {
+        let kind = format!("{bridged:?}");
+        return kind.split('(').next().unwrap_or(&kind).to_string();
+    }
+    if crate::tool_shortcuts::tool(id).is_some() {
+        "tool".into()
+    } else if super::next_in_group_letter(id).is_some() {
+        "group".into()
+    } else if id.starts_with(crate::actions::SHORTCUT_PREFIX) {
+        "action".into()
+    } else {
+        "app".into()
+    }
+}
+
+/// What a press of `chord` shares with every other chord of its group: the keyboard path (the runtime's key stage,
+/// a focused field's typing rule, a focused component's held keys) depends on the kind of key and the modifiers,
+/// not on the command. Letters, digits and function keys are one kind each; every other key is its own kind.
+fn key_kind(chord: &Chord) -> String {
+    let key = chord.key;
+    let kind = if key.is_letter() {
+        "letter".to_string()
+    } else if key.is_digit() {
+        "digit".to_string()
+    } else if key.is_function_key() {
+        "function".to_string()
+    } else {
+        format!("{key:?}")
+    };
+    let m = chord.mods;
+    format!("{kind} cmd={} ctrl={} alt={} shift={}", m.cmd, m.ctrl, m.alt, m.shift)
+}
+
+/// Every live displayed shortcut (id, text) and its chord.
+fn live_chords(app: &PhotocraftApp) -> Vec<(String, String, Chord)> {
+    displayed(app)
+        .into_iter()
+        .filter(|(_, _, live)| *live)
+        .map(|(id, sc, _)| {
+            let chord = Chord::parse(&sc).unwrap_or_else(|_| panic!("{id}: unparsable {sc}"));
+            (id, sc, chord)
+        })
+        .collect()
+}
+
+/// One displayed shortcut per (route, kind of key, modifiers): the shortcuts whose press goes the same way.
+fn representatives(app: &PhotocraftApp) -> Vec<(String, String, Chord)> {
+    let mut seen = HashSet::new();
+    live_chords(app).into_iter().filter(|(id, _, chord)| seen.insert((route(id), key_kind(chord)))).collect()
+}
+
+/// The command the runtime fires for `chord`, shown for menu row `id`: the row's own command when the keymap shows
+/// the chord for it (no other command wins it where the binding applies), else the key's holder.
+fn fired_by(ctx: &egui::Context, id: &str, chord: &Chord) -> Option<craft::ui::runtime::commands::CommandRef> {
+    let own = super::keymap_command(id);
+    if craft::ui::runtime::commands::chord(ctx, &own) == Some(*chord) {
+        return Some(own);
+    }
+    // `holder` answers with no panel active; it falls back to a panel's binding when no unscoped command holds the key.
+    craft::ui::runtime::commands::holder(ctx, chord)
+}
+
+/// Every displayed shortcut runs its menu item's command, or the menu shows the item disabled and the shortcut
+/// says why: the keymap's command for each chord is fired into [`super::run_fired`] as a key press, with no key
+/// events and no frames between them. The keyboard's way to the keymap is the same for every chord of a kind, and
+/// [`every_kind_of_shortcut_dispatches_from_where_focus_usually_is`] presses one of each. The view, screen-mode,
+/// momentary, Swatches and Workspace rows run in the runtime, the canvas or the shell instead of `run_fired`; that
+/// test presses one of each kind of key for them. Every tool letter picks a tool of that letter.
+#[test]
+fn every_displayed_shortcut_runs_its_menu_item() {
+    use craft::ui::runtime::commands::{FirePhase, FireSource, Fired};
+    let mut h = harness();
+    set_dry_run(&h.ctx, true);
+    put_focus(&mut h, Place::Canvas);
+    let ctx = h.ctx.clone();
+    let items = crate::menus::menu_rows(h.state());
+    let chords = live_chords(h.state());
+    assert!(chords.len() > 100, "the menus show their shortcuts: {}", chords.len());
+    let fire = |h: &mut Harness<'_, Box<PhotocraftApp>>, command| {
+        super::run_fired(h.state_mut(), &ctx, &[Fired::new(command, FireSource::Key, FirePhase::Press, 0.0)]);
+        take_log(&ctx)
+    };
+    let mut failures = Vec::new();
+    let mut fired = 0;
+    for (id, sc, chord) in &chords {
+        let Some(command) = fired_by(&ctx, id, chord) else {
+            failures.push(format!("{sc} ({id}) runs nothing"));
+            continue;
+        };
+        match route(id).as_str() {
+            "View" | "Momentary" | "ScreenMode" | "Swatches" | "Workspace" => {
+                if command != super::keymap_command(id) {
+                    failures.push(format!("{sc} ({id}) fires {command:?}"));
+                }
+                continue;
+            }
+            "tool" | "group" => {
+                let want = crate::tool_shortcuts::tool(id).map(Tool::key).or_else(|| super::next_in_group_letter(id));
+                fire(&mut h, command);
+                if Some(h.state().ui.tool.key()) != want {
+                    failures.push(format!("{sc} ({id}) left {:?}", h.state().ui.tool));
+                }
+                continue;
+            }
+            _ => {}
+        }
+        let enabled = items.iter().find(|i| i.command.id == *id).map_or_else(|| crate::menus::is_enabled(h.state(), id), |i| i.enabled);
+        fired += 1;
+        match fire(&mut h, command).as_slice() {
+            [(bound, Outcome::Ran)] if same(id, bound) && enabled => {}
+            [(bound, Outcome::Disabled(why))] if same(id, bound) && !enabled && !why.is_empty() => {}
+            other => failures.push(format!("{sc} ({id}, menu enabled: {enabled}) -> {other:?}")),
+        }
+    }
+    assert!(fired > 80, "most displayed shortcuts go through run_fired: {fired}");
+    for t in Tool::ALL.into_iter().filter(|t| t.key() != '\0') {
+        let chord = Chord::parse(&t.key().to_string()).unwrap_or_else(|_| panic!("tool key {}", t.key()));
+        let Some(command) = craft::ui::runtime::commands::holder(&ctx, &chord) else {
+            failures.push(format!("tool key {} runs nothing", t.key()));
+            continue;
+        };
+        h.state_mut().ui.tool = if t.key() == 'H' { Tool::Move } else { Tool::Hand };
+        fire(&mut h, command);
+        if h.state().ui.tool.key() != t.key() {
+            failures.push(format!("tool key {} left {:?}", t.key(), h.state().ui.tool));
+        }
+    }
+    assert!(failures.is_empty(), "{} shortcut failures:\n{}", failures.len(), failures.join("\n"));
+}
+
+/// Press one displayed shortcut of each (route, kind of key, modifiers) from each place focus usually is: each
+/// dispatches its command, or the menu shows it disabled and the press reports why; a focused field keeps its typing
+/// keys and a focused component the keys it holds. The other shortcuts of a group take the same path to a different
+/// row of the table [`every_displayed_shortcut_runs_its_menu_item`] checks. (Dry run: File › Exit, Open, Help
 /// links… resolve and check enablement without running.)
 #[test]
-fn every_displayed_shortcut_dispatches_from_where_focus_usually_is() {
+fn every_kind_of_shortcut_dispatches_from_where_focus_usually_is() {
     let mut failures = Vec::new();
     for place in [Place::Canvas, Place::LayersRow, Place::FocusedWidget, Place::OpacityField] {
         let mut h = harness();
@@ -216,11 +354,7 @@ fn every_displayed_shortcut_dispatches_from_where_focus_usually_is() {
         put_focus(&mut h, place);
         let typing = WindowHost::of(&h.ctx).typing();
         let items = crate::menus::menu_rows(h.state());
-        for (id, sc, live) in displayed(h.state()) {
-            if !live {
-                continue;
-            }
-            let chord = Chord::parse(&sc).unwrap_or_else(|_| panic!("{id}: unparsable {sc}"));
+        for (id, sc, chord) in representatives(h.state()) {
             // A press the focused component holds (the Layers rows' stacking and visibility keys)
             // is the component's and reaches no app command.
             let held = focus_holds(&h.ctx, chord);
@@ -241,14 +375,19 @@ fn every_displayed_shortcut_dispatches_from_where_focus_usually_is() {
                 other => failures.push(format!("{place:?}: {sc} ({id}, menu enabled: {enabled}) -> {other:?}")),
             }
         }
-        // Tool letters from the tools panel tooltips ("Brush Tool  (B)").
-        if !typing {
-            for t in Tool::ALL.into_iter().filter(|t| t.key() != '\0') {
-                h.state_mut().ui.tool = if t.key() == 'H' { Tool::Move } else { Tool::Hand };
-                press_in_one_frame(&mut h, &t.key().to_string());
-                if h.state().ui.tool.key() != t.key() {
-                    failures.push(format!("{place:?}: tool key {} left {:?}", t.key(), h.state().ui.tool));
-                }
+        // Tool letters from the tools panel tooltips ("Brush Tool  (B)"): a letter of one tool and a letter its group
+        // shares take different picks (`pick_tool`); the table checks every letter's tool. In a focused text field the
+        // letter is typed and the tool stays.
+        let shared = |t: &Tool| Tool::ALL.iter().filter(|o| o.key() == t.key()).count() > 1;
+        let one = Tool::ALL.into_iter().find(|t| t.key() != '\0' && !shared(t));
+        let many = Tool::ALL.into_iter().find(|t| t.key() != '\0' && shared(t));
+        for t in one.into_iter().chain(many) {
+            let start = if t.key() == 'H' { Tool::Move } else { Tool::Hand };
+            h.state_mut().ui.tool = start;
+            press_in_one_frame(&mut h, &t.key().to_string());
+            let want = if typing { start } else { t };
+            if h.state().ui.tool.key() != want.key() {
+                failures.push(format!("{place:?}: tool key {} left {:?}, expected a {} tool", t.key(), h.state().ui.tool, want.key()));
             }
         }
     }
