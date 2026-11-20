@@ -109,6 +109,98 @@ pub fn sponge(c: [f32; 3], amount: f32, saturate: bool, vibrance: bool) -> [f32;
     compress_gamut([l + (c[0] - l) * k, l + (c[1] - l) * k, l + (c[2] - l) * k], l)
 }
 
+/// Compound a reference dab's gain, with closed forms for common spacings.
+#[inline]
+fn sponge_gain(gain: f32, steps: f32) -> f32 {
+    match steps {
+        0.5 => gain.sqrt(),
+        1.0 => gain,
+        2.0 => gain * gain,
+        4.0 => {
+            let squared = gain * gain;
+            squared * squared
+        }
+        _ => gain.powf(steps),
+    }
+}
+
+/// Sum the local affine response over the dab's fractional number of reference steps.
+#[inline]
+fn sponge_affine_scale(change: f32, steps: f32) -> f32 {
+    let gain = 1.0 + change;
+    match steps {
+        0.5 => 1.0 / (gain.sqrt() + 1.0),
+        2.0 => gain + 1.0,
+        4.0 => (gain + 1.0) * (gain * gain + 1.0),
+        // The first terms of ((1 + change)^steps - 1) / change avoid cancellation near zero.
+        _ if change.abs() < 0.001 => {
+            let second = (steps - 1.0) * (steps - 2.0) / 6.0;
+            steps * (1.0 + change * (0.5 * (steps - 1.0) + change * second))
+        }
+        _ => (gain.powf(steps) - 1.0) / change,
+    }
+}
+
+/// Adjust a normalized RGB dab using the measured RGB Sponge response (#12972, #12973).
+/// `coverage` includes Flow and the brush falloff. `spacing` is in brush diameters.
+pub fn sponge_rgb(c: [f32; 3], coverage: f32, spacing: f32, saturate: bool, vibrance: bool) -> [f32; 3] {
+    let [r, g, b] = c;
+    let lo = r.min(g).min(b);
+    let hi = r.max(g).max(b);
+    let chroma = hi - lo;
+    if coverage <= 0.0 || chroma <= f32::EPSILON {
+        return c;
+    }
+
+    let flow = coverage.min(1.0);
+    // The measured dab covers a quarter of a brush diameter along the stroke. Scale its gain
+    // multiplicatively so the same distance gets the same strength from more or fewer dabs.
+    let steps = 4.0 * spacing.clamp(0.01, 1.0);
+    let grey = luma(c);
+    if !vibrance {
+        let reference_gain = if saturate { 1.0 + 0.4 * flow } else { 1.0 - 0.2 * flow };
+        let mut gain = sponge_gain(reference_gain, steps);
+        if saturate {
+            // Limit the gain before applying it to all three channels, using the same luma pivot.
+            let shadow = grey - lo;
+            if gain * shadow > grey {
+                gain = grey / shadow;
+            }
+            let highlight = hi - grey;
+            if gain * highlight > 1.0 - grey {
+                gain = (1.0 - grey) / highlight;
+            }
+        }
+        return c.map(|v| grey + (v - grey) * gain);
+    }
+
+    // Vibrance changes the channel extrema asymmetrically. The shadow response tapers near
+    // black and near grey. The highlight response is limited by headroom in Saturate and by
+    // brightness and chroma in Desaturate. Fit those bounds to the measured single dabs.
+    let mid = r.min(g).max(r.max(g).min(b));
+    let shadow = (((lo - 0.125).max(0.0) / 12.0) + (mid - lo) * 0.025).min(chroma / 6.0).min(lo);
+    let (low, high) = if saturate {
+        let highlight = (0.4 * (1.0 - hi)).min(0.5 * (hi - grey));
+        ((lo - flow * shadow).max(0.0), hi + flow * highlight)
+    } else {
+        let weight = (0.5 * lo / hi).max(0.2);
+        let highlight = (0.06 * hi + 0.03 * lo).min(weight * (hi - grey));
+        (lo + flow * shadow, hi - flow * highlight)
+    };
+    // Compose the measured affine response for this dab's distance, holding its locally
+    // computed coefficients fixed, then cap the endpoints at the RGB gamut.
+    let (low, high) = if steps == 1.0 {
+        (low, high)
+    } else {
+        let change = ((high - hi) - (low - lo)) / chroma;
+        let scale = sponge_affine_scale(change, steps);
+        ((lo + (low - lo) * scale).max(0.0), (hi + (high - hi) * scale).min(1.0))
+    };
+    // One affine map keeps the intermediate channel in the same position within the span.
+    let gain = (high - low).max(0.0) / chroma;
+    c.map(|v| low + (v - lo) * gain)
+}
+
 /// Gaussian blur of the window `[x0, x1) × [y0, y1)` of an interleaved `w × h × ch` buffer, reading
 /// neighbours with edge clamping. With an alpha channel (`alpha = Some(index)`), colour is blurred
 /// premultiplied so transparent pixels don't bleed their (meaningless) colour. Returns the window's
@@ -353,3 +445,10 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "retouch_sponge_desaturate_tests.rs"]
+mod sponge_desaturate_tests;
+#[cfg(test)]
+#[path = "retouch_sponge_saturate_tests.rs"]
+mod sponge_saturate_tests;
