@@ -181,7 +181,11 @@ fn worker_preview_matches_the_synchronous_render_and_ends_on_the_latest_settings
     assert_eq!(last["previewPending"], false);
     let now = shown(&app);
     assert_eq!((now.exposure, now.highlights, now.shadows), (1.0, -60.0, 45.0));
-    // PLAN: the develop `Job` cannot be run outside the runtime, so the frame is compared with a fresh dialog's develop of the same settings, not a direct `ProxyJob::run`.
+    // The runtime owns the real job; its published pixels must also match the synchronous proxy calculation.
+    let synchronous = session(&app).source.proxy_job(&now).run();
+    assert_eq!(processed(&app), synchronous.px, "the real worker develops exactly the same proxy pixels");
+    assert_eq!(session(&app).source.developed().unwrap().after_histogram.channels, synchronous.histogram.channels);
+    assert!(craft::ui::runtime::pending::finish_jobs(&ctx, std::time::Duration::from_secs(30)), "all actual preview jobs have terminated");
     assert_eq!(
         last["histogram"],
         single_develop_histogram(json!({"exposure": 1.0, "highlights": -60, "shadows": 45})),
@@ -189,23 +193,125 @@ fn worker_preview_matches_the_synchronous_render_and_ends_on_the_latest_settings
     );
 }
 
+/// An old job held after its real cancellation check. Drop always releases it and drains its queue, including on
+/// an assertion failure; all waits have bounds. This never substitutes for the production menu or develop job.
+#[cfg(not(target_arch = "wasm32"))]
+struct HeldPreview {
+    ctx: egui::Context,
+    release: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    timed_out: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl HeldPreview {
+    fn release_and_finish(&self) -> bool {
+        let (released, wake) = &*self.release;
+        *released.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+        wake.notify_all();
+        craft::ui::runtime::pending::finish_jobs(&self.ctx, std::time::Duration::from_secs(30))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for HeldPreview {
+    fn drop(&mut self) {
+        let _ = self.release_and_finish();
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn hold_old_preview(app: &PhotocraftApp) -> (HeldPreview, std::sync::mpsc::Receiver<u64>) {
+    let release = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let timed_out = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (arrived, waiting) = std::sync::mpsc::channel();
+    let held = HeldPreview { ctx: app.ctx().clone(), release: release.clone(), timed_out: timed_out.clone() };
+    *session(app).source.before_preview_publish.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(move |order, settings| {
+        if settings.highlights != -80.0 {
+            return;
+        }
+        let _ = arrived.send(order);
+        let (released, wake) = &*release;
+        let released = released.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (released, _) =
+            wake.wait_timeout_while(released, std::time::Duration::from_secs(30), |released| !*released).unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !*released {
+            timed_out.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }));
+    (held, waiting)
+}
+
+/// Observe only the newer publication: `settle` deliberately waits for the older held job too.
+#[cfg(not(target_arch = "wasm32"))]
+fn wait_for_newer_preview(app: &mut PhotocraftApp, order: u64) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        frame(app);
+        if session(app)
+            .source
+            .developed()
+            .is_some_and(|result| result.revision > order && result.settings.exposure == -1.0 && result.settings.highlights == 0.0)
+        {
+            return;
+        }
+        assert!(std::time::Instant::now() < deadline, "the real newer request must publish while the older job is held");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
 /// An older develop that lands after a newer request must not replace the frame of the newer
 /// settings.
 #[test]
 fn a_stale_worker_never_replaces_a_newer_synchronous_render() {
-    let (mut app, ctx) = worker_app();
-    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"highlights": -80}}})).unwrap().unwrap();
-    // The develop of the older request is running.
-    frame(&mut app);
-    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"highlights": 0, "exposure": -1.0}}})).unwrap().unwrap();
-    settle(&mut app);
-    let landed = describe(&app);
-    std::thread::sleep(std::time::Duration::from_millis(200));
-    frame(&mut app);
-    frame(&mut app);
-    let later = describe(&app);
-    assert_eq!((&later["previewRevision"], &later["histogram"]), (&landed["previewRevision"], &landed["histogram"]), "nothing replaced the newer frame");
-    assert_eq!(landed["histogram"], single_develop_histogram(json!({"exposure": -1.0})), "the frame shown is the one for the latest settings");
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let (mut app, ctx) = worker_app();
+        let (held, arrived) = hold_old_preview(&app);
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"highlights": -80}}})).unwrap().unwrap();
+        frame(&mut app);
+        let old_order = arrived.recv_timeout(std::time::Duration::from_secs(10)).expect("the real old request passed cancellation and reached publication");
+        assert!(session(&app).source.pending(), "the old job remains live at the gate");
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"highlights": 0, "exposure": -1.0}}})).unwrap().unwrap();
+        wait_for_newer_preview(&mut app, old_order);
+        let landed = describe(&app);
+        let shown_pixels = processed(&app);
+        assert_eq!(landed["previewPending"], true, "observing the new publication did not release the older job");
+        assert!(landed["previewRevision"].as_u64().unwrap() > old_order);
+        assert!(held.release_and_finish(), "every actual queued or running develop has terminated");
+        assert!(!held.timed_out.load(std::sync::atomic::Ordering::Relaxed), "the old result was released by the test, not its deadline");
+        frame(&mut app);
+        frame(&mut app);
+        let later = describe(&app);
+        assert_eq!(later["previewPending"], false);
+        assert_eq!(
+            (&later["previewRevision"], &later["histogram"]),
+            (&landed["previewRevision"], &landed["histogram"]),
+            "the old result reached publication last and did not replace the newer frame"
+        );
+        assert_eq!(processed(&app), shown_pixels, "the old result did not replace the displayed proxy pixels");
+        assert_eq!(
+            session(&app).source.proxy_job(&shown(&app)).run().px,
+            shown_pixels,
+            "the pixels still match a synchronous develop of the control channel's settings"
+        );
+        assert_eq!(landed["histogram"], single_develop_histogram(json!({"exposure": -1.0})), "the frame shown is the one for the latest settings");
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let (mut app, ctx) = worker_app();
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"highlights": -80}}})).unwrap().unwrap();
+        // The develop of the older request is running.
+        frame(&mut app);
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"highlights": 0, "exposure": -1.0}}})).unwrap().unwrap();
+        settle(&mut app);
+        let landed = describe(&app);
+        assert!(craft::ui::runtime::pending::finish_jobs(&ctx, std::time::Duration::from_secs(30)), "all preview jobs have terminated");
+        frame(&mut app);
+        frame(&mut app);
+        let later = describe(&app);
+        assert_eq!((&later["previewRevision"], &later["histogram"]), (&landed["previewRevision"], &landed["histogram"]), "nothing replaced the newer frame");
+        assert_eq!(landed["histogram"], single_develop_histogram(json!({"exposure": -1.0})), "the frame shown is the one for the latest settings");
+    }
 }
 
 #[test]
@@ -709,9 +815,9 @@ fn auto_tone_of_a_never_shown_raw_matches_the_dialogs() {
     app.run("layer.new.layer", json!({})).unwrap();
     let st = app.session.active_mut().unwrap();
     let id = st.doc.layers.iter().find(|l| l.surface().is_some()).unwrap().id;
-    st.active_layer = Some(id);
+    st.set_active_layer(Some(id));
     let document = st.doc.id;
-    let Some(photocraft_doc::LayerContent::Raster(s)) = std::sync::Arc::make_mut(&mut st.doc).layer_mut(id).map(|l| &mut l.content) else {
+    let Some(photocraft_doc::LayerContent::Raster(s)) = std::sync::Arc::make_mut(st.doc_mut()).layer_mut(id).map(|l| &mut l.content) else {
         panic!("a pixel layer")
     };
     let format = s.format();
