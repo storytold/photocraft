@@ -174,12 +174,31 @@ impl PresetState {
     }
 }
 
-impl Session {
+/// The session's presets: its [`PresetState`] (a session slot of this module), restoring them and
+/// recording changes.
+pub trait PresetsExt {
+    /// Window › Gradients, Patterns (groups), Styles, Shapes, Tool Presets and Clone Source.
+    fn presets(&self) -> &PresetState;
+    /// The presets, to change them.
+    fn presets_mut(&mut self) -> &mut PresetState;
     /// Restore presets saved by [`PresetState::to_json`]. Missing or malformed sets keep their
     /// defaults (presets are never worth refusing to start over). Each set loads on its own: the
     /// shell writes back only the keys that changed, so one damaged set would otherwise discard
     /// every other set, saved document presets included, at each launch (#5602).
-    pub fn load_presets_json(&mut self, v: Value) {
+    fn load_presets_json(&mut self, v: Value);
+    /// Record a preset change: bumps the panel revision and marks the preferences document dirty
+    /// so the shell persists it.
+    fn presets_changed(&mut self);
+}
+
+impl PresetsExt for Session {
+    fn presets(&self) -> &PresetState {
+        self.slot::<PresetState>()
+    }
+    fn presets_mut(&mut self) -> &mut PresetState {
+        self.slot_mut::<PresetState>()
+    }
+    fn load_presets_json(&mut self, v: Value) {
         let Value::Object(mut m) = v else { return };
         fn take<T: serde::de::DeserializeOwned>(m: &mut serde_json::Map<String, Value>, key: &str) -> Option<T> {
             m.remove(key).filter(|v| !v.is_null()).and_then(|v| serde_json::from_value(v).ok())
@@ -204,7 +223,10 @@ impl Session {
             },
             contours: take(&mut m, "contours"),
         };
-        let st = &mut self.presets;
+        if let Some(c) = p.custom_shapes {
+            self.edit_state.custom_shapes = c;
+        }
+        let st = self.presets_mut();
         if let Some(g) = p.gradient {
             st.gradient = g;
         }
@@ -259,27 +281,22 @@ impl Session {
         if let Some(e) = p.export_presets {
             st.export_presets = crate::export_preset_cmds::load(e);
         }
-        if let Some(c) = p.custom_shapes {
-            self.edit_state.custom_shapes = c;
-        }
         if let Some(d) = p.layer_defaults {
             st.layer_defaults = d;
         }
         if let Some(mut g) = p.swatches {
             // A hand-edited preferences file can't make the library unbounded.
             crate::swatch_cmds::cap_library(&mut g);
-            self.presets.swatches = g;
+            st.swatches = g;
         }
         if let Some(c) = p.contours.filter(Value::is_array) {
-            self.presets.contours = crate::contour_lib_cmds::from_json(&c);
+            st.contours = crate::contour_lib_cmds::from_json(&c);
         }
-        self.presets.rev += 1;
+        st.rev += 1;
     }
 
-    /// Record a preset change: bumps the panel revision and marks the preferences document dirty
-    /// so the shell persists it.
-    pub(crate) fn presets_changed(&mut self) {
-        self.presets.rev += 1;
+    fn presets_changed(&mut self) {
+        self.presets_mut().rev += 1;
         self.prefs.edit(|_| ());
     }
 }

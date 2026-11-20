@@ -14,7 +14,7 @@ pub(super) fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
 
 fn prefs_get(s: &mut Session, p: &Value) -> Result<Value> {
     let path = p.get("path").and_then(Value::as_str).unwrap_or("");
-    let v = s.prefs_view();
+    let v = super::saved::prefs_view(s);
     get_path(&v, path).cloned().ok_or_else(|| bad("prefs.get", format!("unknown preference `{path}`")))
 }
 
@@ -34,7 +34,7 @@ fn prefs_set(s: &mut Session, p: &Value) -> Result<Value> {
     let (saved_prefs, saved_color) = (s.prefs().clone(), s.color.settings.clone());
     let mut color_changed = false;
     for (path, v) in &changes {
-        match s.set_pref(path, v.clone(), false) {
+        match super::saved::set_pref(s, path, v.clone(), false) {
             Ok(touched) => color_changed |= touched,
             Err(e) => {
                 s.prefs.edit(|p| *p = saved_prefs);
@@ -56,7 +56,7 @@ fn prefs_set(s: &mut Session, p: &Value) -> Result<Value> {
         photocraft_compose::multichannel::set_spot_dot_gain(s.color.settings.spot_dot_gain);
     }
     s.apply_prefs();
-    let view = s.prefs_view();
+    let view = super::saved::prefs_view(s);
     let out: Map<String, Value> = changes.iter().map(|(k, _)| (k.clone(), get_path(&view, k).cloned().unwrap_or(Value::Null))).collect();
     Ok(Value::Object(out))
 }
@@ -79,7 +79,7 @@ fn prefs_reset(s: &mut Session, p: &Value) -> Result<Value> {
             let defaults = serde_json::to_value(crate::color_cmds::ColorSettings::default()).map_err(|e| bad("prefs.reset", e.to_string()))?;
             let key = path.strip_prefix("colorSettings.").unwrap_or(path);
             let def = get_path(&defaults, key).cloned().ok_or_else(|| bad("prefs.reset", format!("unknown preference `{path}`")))?;
-            s.set_pref(path, def, true).map_err(|e| bad("prefs.reset", e))?;
+            super::saved::set_pref(s, path, def, true).map_err(|e| bad("prefs.reset", e))?;
         }
         None => {
             s.color.settings = Default::default();

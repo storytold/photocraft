@@ -1362,12 +1362,28 @@ fn profile_mismatch(s: &mut Session, p: &Value) -> Result<Value> {
     }
 }
 
-impl Session {
+/// Colour management on a session: its [`ColorState`] (a session slot of this module) and opening
+/// documents under the Color Settings policy.
+pub trait ColorExt {
+    /// Colour management state: proofing, monitor profiles, display transforms.
+    fn color(&self) -> &ColorState;
+    /// Colour management state, to change it.
+    fn color_mut(&mut self) -> &mut ColorState;
     /// Add a document read from a file, applying the Color Settings policy first (preserve,
     /// convert to the working space, or discard the embedded profile). Returns the document
     /// index and a report (`action`, `mismatch`, `ask`) the UI can turn into a prompt.
-    pub fn open_document(&mut self, mut doc: Document, path: Option<String>) -> (usize, Value) {
-        let report = self.color.open_policy(&mut doc, self.prefs().file_handling.ignore_exif_profile_tag);
+    fn open_document(&mut self, doc: Document, path: Option<String>) -> (usize, Value);
+}
+
+impl ColorExt for Session {
+    fn color(&self) -> &ColorState {
+        self.slot::<ColorState>()
+    }
+    fn color_mut(&mut self) -> &mut ColorState {
+        self.slot_mut::<ColorState>()
+    }
+    fn open_document(&mut self, mut doc: Document, path: Option<String>) -> (usize, Value) {
+        let report = self.color().open_policy(&mut doc, self.prefs().file_handling.ignore_exif_profile_tag);
         (self.add_document(doc, path), report)
     }
 }

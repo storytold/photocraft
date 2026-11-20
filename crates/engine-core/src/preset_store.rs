@@ -513,15 +513,19 @@ pub trait PresetStoreExt {
     fn preset_store(&self) -> Option<&PresetStore>;
     /// The preset store slot, to attach or change the store.
     fn preset_store_mut(&mut self) -> &mut Option<PresetStore>;
-}
-
-impl PresetStoreExt for Session {
-    fn preset_store(&self) -> Option<&PresetStore> {
-        self.slot::<Option<PresetStore>>().as_ref()
-    }
-    fn preset_store_mut(&mut self) -> &mut Option<PresetStore> {
-        self.slot_mut::<Option<PresetStore>>()
-    }
+    /// Record a brush preset change (create, delete, rename, import…): the attached store, if
+    /// any, syncs after the running command.
+    fn brush_presets_changed(&mut self);
+    /// Attach a loaded store: merge its presets into the library (a stored preset replaces the
+    /// built-in of the same name; presets created before the store finished loading win), hide
+    /// deleted built-ins, then sync. Returns the load warnings.
+    fn attach_preset_store(&mut self, opened: Opened) -> Vec<String>;
+    /// Write pending brush preset, Actions and pattern changes to the attached store (no-op without one).
+    fn sync_preset_store(&mut self);
+    /// Load the stored tips of `b` (a preset's settings picked as the tool's brush, or exported) so
+    /// it paints with its full bitmaps. Tips already loaded or embedded are left alone. Fails when
+    /// a tip can't be loaded: its file is missing or corrupt, or there is no preset store.
+    fn load_brush_tips(&self, b: &mut BrushSettings) -> Result<(), String>;
 }
 
 /// The persistent brush preset store attached to a session (see the module docs).
@@ -1124,17 +1128,18 @@ fn builtin_names() -> &'static [String] {
     NAMES.get_or_init(|| photocraft_paint::presets::builtin_shared().iter().map(|p| p.name.clone()).collect())
 }
 
-impl Session {
-    /// Record a brush preset change (create, delete, rename, import…): the attached store, if
-    /// any, syncs after the running command.
-    pub fn brush_presets_changed(&mut self) {
+impl PresetStoreExt for Session {
+    fn preset_store(&self) -> Option<&PresetStore> {
+        self.slot::<Option<PresetStore>>().as_ref()
+    }
+    fn preset_store_mut(&mut self) -> &mut Option<PresetStore> {
+        self.slot_mut::<Option<PresetStore>>()
+    }
+    fn brush_presets_changed(&mut self) {
         self.tools.presets_rev += 1;
     }
 
-    /// Attach a loaded store: merge its presets into the library (a stored preset replaces the
-    /// built-in of the same name; presets created before the store finished loading win), hide
-    /// deleted built-ins, then sync. Returns the load warnings.
-    pub fn attach_preset_store(&mut self, opened: Opened) -> Vec<String> {
+    fn attach_preset_store(&mut self, opened: Opened) -> Vec<String> {
         let Opened { store, presets, hidden_builtins, order, mut warnings, actions: disk, action_ids, patterns } = opened;
         let builtins = crate::pattern_cmds::builtin();
         for l in patterns {
@@ -1225,8 +1230,7 @@ impl Session {
         warnings
     }
 
-    /// Write pending brush preset, Actions and pattern changes to the attached store (no-op without one).
-    pub fn sync_preset_store(&mut self) {
+    fn sync_preset_store(&mut self) {
         let rev = self.tools.presets_rev;
         // Out of its slot while it reads the session's presets, actions and patterns.
         let Some(mut st) = self.preset_store_mut().take() else { return };
@@ -1244,10 +1248,7 @@ impl Session {
         *self.preset_store_mut() = Some(st);
     }
 
-    /// Load the stored tips of `b` (a preset's settings picked as the tool's brush, or exported) so
-    /// it paints with its full bitmaps. Tips already loaded or embedded are left alone. Fails when
-    /// a tip can't be loaded: its file is missing or corrupt, or there is no preset store.
-    pub fn load_brush_tips(&self, b: &mut BrushSettings) -> Result<(), String> {
+    fn load_brush_tips(&self, b: &mut BrushSettings) -> Result<(), String> {
         let load = |r: &mut StoredTile| -> Result<(), String> {
             if r.full.is_none() {
                 let st = self.preset_store().ok_or_else(|| format!("brush tip {} is not available: no preset store is attached", r.key))?;
