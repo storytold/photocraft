@@ -1102,7 +1102,11 @@ fn blend_if_weight(this_px: vec4<f32>, under: vec4<f32>) -> f32 {
         } else {
             // compose::blend_if_gray: (30 R + 59 G + 11 B) / 100, rounded half down on whole levels.
             let sum = 30.0 * v.r + 59.0 * v.g + 11.0 * v.b;
-            let gray = select(sum / 100.0, floor((sum + 49.0) / 100.0), all(v == round(v)));
+            var gray = sum / 100.0;
+            if (all(v == round(v))) {
+                // Float division can undershoot an integer before floor, e.g. 9700 / 100.
+                gray = f32((u32(sum) + 49u) / 100u);
+            }
             k = k * bi_weight(0u, s, gray) * bi_weight(1u, s, v.r) * bi_weight(2u, s, v.g) * bi_weight(3u, s, v.b);
         }
         if (k <= 0.0) {
@@ -1549,8 +1553,9 @@ fn bevel_part(p: vec2<i32>, depth: f32, region: f32) -> f32 {
     let shade = (n.x * op.p0.x + n.y * op.p0.y + n.z * op.p0.z) / len;
     let se = op.p0.w;
     var k = shade - se;
-    // effects::bevel_maps: the gloss contour maps the shading, a flat face's as the neutral (#7360).
-    if (op.p1.w > 0.5) { k = lut(0, shade) - lut(0, se); }
+    // effects::bevel_maps: the gloss contour maps the shading; a flat face's unmapped shading
+    // stays the neutral (#7360).
+    if (op.p1.w > 0.5) { k = lut(0, shade) - se; }
     var v = 0.0;
     if (op.p1.z > 0.5) {
         if (k <= 0.0) { v = clamp(-k / max(se, 1e-3), 0.0, 1.0) * region; }

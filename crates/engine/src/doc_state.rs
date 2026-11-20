@@ -42,6 +42,8 @@ pub struct DocState {
     /// Layers panel: layers whose effects list is collapsed under their row (the fx triangle;
     /// view state, not history). Effects lists start open.
     pub fx_collapsed: Vec<LayerId>,
+    /// See [`DocState::layers_view_revision`].
+    layers_view_revision: u64,
     /// ⌥-click on a layer's eye (`layer.showOnly`): the layer shown alone and every layer's
     /// visibility before, so the next ⌥-click restores it (view state, not history).
     pub show_only: Option<(LayerId, Vec<(LayerId, bool)>)>,
@@ -55,8 +57,10 @@ pub struct DocState {
     /// History panel snapshots, oldest first (`history.newSnapshot`, #2966): the first (id 0) is
     /// the document as opened (unless History Options › Automatically Create First Snapshot is
     /// off). Kept for the session only, as in Photoshop: not history states,
-    /// and not saved with the document.
-    pub snapshots: Vec<history_cmds::Snapshot>,
+    /// and not saved with the document. Changed only through [`DocState::snapshots_mut`].
+    snapshots: Vec<history_cmds::Snapshot>,
+    /// See [`DocState::snapshots_generation`].
+    snapshots_generation: u64,
     /// The id the next snapshot gets; ids are never reused, so deleting one keeps the others.
     pub(crate) next_snapshot: u64,
     /// The snapshot the latest save added (History Options › Automatically Create New Snapshot
@@ -69,6 +73,10 @@ pub struct DocState {
     /// type layer keeps such a name although it looks like a copy's ("Title copy 2"), while a
     /// name Duplicate Layer made still follows the text (#9023). Kept for the session only.
     pub(crate) typed_names: std::collections::HashMap<LayerId, String>,
+    /// The count of steps whose damage was not empty: pixel thumbnails (the Channels panel's composite and colour
+    /// rows) change only when it moves, so a selection-only or view-only step keeps them. Written only by
+    /// `Session::dispatch` and the job apply path.
+    pub pixel_revision: u64,
 }
 
 impl DocState {
@@ -119,23 +127,39 @@ impl DocState {
             isolated_layers: Vec::new(),
             symmetry: None,
             fx_collapsed: Vec::new(),
+            layers_view_revision: 0,
             show_only: None,
             floating: None,
             color_samplers: Vec::new(),
             snapshots: vec![first],
+            snapshots_generation: next_snapshots_generation(),
             next_snapshot: 1,
             save_snapshot: None,
             source_snapshot: None,
             typed_names: Default::default(),
+            pixel_revision: 0,
         }
+    }
+    /// The History panel snapshots, oldest first.
+    pub fn snapshots(&self) -> &[history_cmds::Snapshot] {
+        &self.snapshots
+    }
+    /// The snapshots to change: [`Self::snapshots_generation`] moves.
+    pub fn snapshots_mut(&mut self) -> &mut Vec<history_cmds::Snapshot> {
+        self.snapshots_generation = next_snapshots_generation();
+        &mut self.snapshots
+    }
+    /// A number that identifies the snapshot list: every [`Self::snapshots_mut`] takes a fresh
+    /// one, clones keep it, and no two lists that differ share one. With
+    /// [`photocraft_ops::History::generation`] it says when the History panel's rows change.
+    pub fn snapshots_generation(&self) -> u64 {
+        self.snapshots_generation
     }
     /// The selected layers in bottom-to-top document order, always including the active layer.
     /// Robust against stale state: ids no longer in the document are skipped, and if the active
     /// layer was changed without updating the set, the selection is just the active layer.
     pub fn selected_layers(&self) -> Vec<LayerId> {
-        let Some(active) = self.active_layer else { return Vec::new() };
-        let set: &[LayerId] = if self.selected_layers.contains(&active) { &self.selected_layers } else { std::slice::from_ref(&active) };
-        self.doc.walk().into_iter().map(|(_, _, l)| l.id).filter(|id| set.contains(id)).collect()
+        selected_in(&self.doc, self.active_layer, &self.selected_layers)
     }
     pub fn is_layer_selected(&self, id: LayerId) -> bool {
         self.active_layer == Some(id) || (self.active_layer.is_some_and(|a| self.selected_layers.contains(&a)) && self.selected_layers.contains(&id))
@@ -167,10 +191,40 @@ impl DocState {
             self.saved_revision = self.revision;
         }
     }
+    /// Move to the next revision for a change of the layer selection, which is not an edit:
+    /// readers keyed on the revision follow it, a clean document stays clean, and no pixels need
+    /// drawing again.
+    pub(crate) fn bump_selection_revision(&mut self) {
+        self.bump_revision(!self.is_dirty());
+        self.last_damage = Some(photocraft_geom::Rect::EMPTY);
+    }
+    /// Moves when an effects list or a group in the Layers panel opens or closes. That is view
+    /// state, not an edit, so [`DocState::revision`] stays; the Layers panel's rows key on this.
+    pub fn layers_view_revision(&self) -> u64 {
+        self.layers_view_revision
+    }
+    /// Count an effects list or group opened or closed (see [`Self::layers_view_revision`]).
+    pub(crate) fn note_disclosure_change(&mut self) {
+        self.layers_view_revision += 1;
+    }
+    /// Move to the next revision for a view-only change (channel eyes, a history state deleted,
+    /// Layers panel isolation): readers keyed on the revision follow it, pixel caches ignore it
+    /// through `view_revision`, and no pixels need drawing again. `keep_clean` as for
+    /// [`Self::bump_revision`].
+    pub(crate) fn bump_view_revision(&mut self, keep_clean: bool) {
+        self.view_revision += 1;
+        self.bump_revision(keep_clean);
+        self.last_damage = Some(photocraft_geom::Rect::EMPTY);
+    }
     /// The targeted layers, as history stores them with each state.
     pub(crate) fn layer_target(&self) -> LayerTarget {
         LayerTarget { active: self.active_layer, selected: self.selected_layers.clone() }
     }
+}
+
+fn next_snapshots_generation() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// App-wide tool state that commands read (foreground colour, brush…).
@@ -180,7 +234,7 @@ pub struct ToolState {
     pub background: [f32; 4],
     pub brush: photocraft_paint::BrushSettings,
     /// Brush presets (built-ins plus user presets; see `brush.presets.*`).
-    pub presets: Vec<photocraft_paint::BrushPreset>,
+    pub presets: Arc<Vec<photocraft_paint::BrushPreset>>,
     /// Bumped whenever `presets` changes ([`Session::brush_presets_changed`]); the preset store
     /// syncs when it moves.
     pub presets_rev: u64,
@@ -234,6 +288,19 @@ impl ToolState {
     /// background (reveal-paint first).
     pub const MASK_COLORS: [[f32; 4]; 2] = [[1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]];
 
+    /// The pixel colour pair a fresh session starts with: black foreground, white background.
+    pub const PIXEL_COLORS: [[f32; 4]; 2] = [[0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]];
+
+    /// The swatches as `Preferences::tool_colors` keeps them: the pixel pair, the mask pair and the CMYK picks.
+    pub fn saved_colors(pairs: [[[f32; 4]; 2]; 2], cmyk_picks: &[([f32; 3], [f32; 4])]) -> serde_json::Value {
+        let [[foreground, background], [mask_foreground, mask_background]] = pairs;
+        serde_json::json!({
+            "foreground": foreground, "background": background,
+            "maskForeground": mask_foreground, "maskBackground": mask_background,
+            "cmykPicks": cmyk_picks,
+        })
+    }
+
     /// Note that `brush` or `current_preset` changed. Every setter of either (commands and the
     /// shell's tool-switch paths) calls this; the last-brush persistence only serialises when the
     /// revision has moved since the stored value ([`Self::brush_saved_rev`]).
@@ -261,14 +328,14 @@ impl ToolState {
 impl Default for ToolState {
     fn default() -> Self {
         Self {
-            foreground: [0.0, 0.0, 0.0, 1.0],
-            background: [1.0, 1.0, 1.0, 1.0],
+            foreground: Self::PIXEL_COLORS[0],
+            background: Self::PIXEL_COLORS[1],
             // Photoshop's Brush tool starts at 10 % Smoothing.
             brush: photocraft_paint::BrushSettings {
                 smoothing: photocraft_paint::brush::Smoothing { amount: 0.1, ..Default::default() },
                 ..Default::default()
             },
-            presets: photocraft_paint::presets::builtin(),
+            presets: photocraft_paint::presets::builtin_shared(),
             presets_rev: 0,
             mixer: Default::default(),
             brush_gesture: None,
@@ -304,3 +371,73 @@ pub struct CopiedStyle {
 /// Cut aren't: whether they have anything to copy (a selection over transparent pixels, a group
 /// or fill layer) is known only when they run.
 pub const PRECHECKED: &[&str] = &["layer.new.layer", "layer.new.group", "layer.new.groupFromLayers", "layer.new.layerFromBackground"];
+
+/// The selected layers of `doc` whose active layer is `active` and whose selection set is `selected`, in bottom-to-top
+/// order ([`DocState::selected_layers`]), taken from the document's layer index rather than a walk, for a reader that holds the document without its editing state.
+pub fn selected_in(doc: &Document, active: Option<LayerId>, selected: &[LayerId]) -> Vec<LayerId> {
+    let Some(active) = active else { return Vec::new() };
+    let set: &[LayerId] = if selected.contains(&active) { selected } else { std::slice::from_ref(&active) };
+    // Paths from the document's layer index order layers as the walk does (depth-first, bottom-to-top).
+    let index = doc.layers.index();
+    let mut ids: Vec<LayerId> = set.iter().copied().filter(|id| index.path(*id).is_some()).collect();
+    ids.sort_unstable_by(|a, b| index.path(*a).cmp(&index.path(*b)));
+    ids.dedup();
+    ids
+}
+
+#[cfg(test)]
+mod selected_tests {
+    use super::selected_in;
+    use photocraft_doc::{ColorMode, Document, Layer, LayerId, PixelFormat, SampleType, Size};
+
+    fn raster(name: &str) -> Layer {
+        Layer::raster(name, PixelFormat::RGBA8)
+    }
+
+    /// The answer before the layer index: filter the depth-first walk by the selection set.
+    fn by_walk(doc: &Document, active: Option<LayerId>, selected: &[LayerId]) -> Vec<LayerId> {
+        let Some(active) = active else { return Vec::new() };
+        let set: &[LayerId] = if selected.contains(&active) { selected } else { std::slice::from_ref(&active) };
+        doc.walk().into_iter().map(|(_, _, l)| l.id).filter(|id| set.contains(id)).collect()
+    }
+
+    /// `a`, group `g` (`b`, group `h` (`c`), `d`), `e`: nested groups mixed with root layers.
+    fn mixed() -> (Document, Vec<LayerId>) {
+        let mut doc = Document::new("t", Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+        let (a, b, c, d, e) = (raster("a"), raster("b"), raster("c"), raster("d"), raster("e"));
+        let h = Layer::group("h", vec![c.clone()]);
+        let g = Layer::group("g", vec![b.clone(), h.clone(), d.clone()]);
+        let ids = [&a, &g, &b, &h, &c, &d, &e].map(|l| l.id).to_vec();
+        doc.layers = vec![a, g, e].into();
+        (doc, ids)
+    }
+
+    #[test]
+    fn selection_order_matches_the_walk_through_edits() {
+        let (mut doc, ids) = mixed();
+        let stale = LayerId::fresh();
+        let sets: Vec<Vec<LayerId>> =
+            vec![vec![ids[6], ids[4], ids[0]], vec![ids[5], ids[2], ids[1], ids[3]], vec![ids[4], ids[4], ids[0], stale], vec![ids[0]], vec![]];
+        let check = |doc: &Document| {
+            let first = doc.layers.index().serial();
+            for set in &sets {
+                for active in [None, Some(ids[0]), Some(ids[4]), Some(ids[6]), Some(stale)] {
+                    assert_eq!(selected_in(doc, active, set), by_walk(doc, active, set));
+                }
+            }
+            assert_eq!(doc.layers.index().serial(), first, "no rebuild while the document is unchanged");
+        };
+        check(&doc);
+        // Reorder: move `e` to the bottom, then a layer inside a group.
+        doc.shift(ids[6], -2);
+        check(&doc);
+        doc.shift(ids[5], -1);
+        check(&doc);
+        // Add and delete.
+        doc.insert_above(Some(ids[4]), raster("new"));
+        check(&doc);
+        doc.remove(ids[3]);
+        check(&doc);
+        assert_eq!(selected_in(&doc, Some(ids[0]), &[ids[0], ids[3], ids[4]]), vec![ids[0]], "deleted layers are skipped");
+    }
+}
