@@ -174,6 +174,12 @@ pub(super) fn rules() -> Vec<SettingRule> {
     ] {
         tweak(&mut rules, path, |r| r.custom());
     }
+    // The Actions discovery folder is a native path row (Browse plus Open Location). The web build has no folder.
+    if cfg!(target_arch = "wasm32") {
+        tweak(&mut rules, "fileHandling.actionsFolder", |r| r.hidden());
+    } else {
+        tweak(&mut rules, "fileHandling.actionsFolder", |r| r.label("").custom());
+    }
     // The favourite fonts are the user's library, not a Type setting.
     tweak(&mut rules, "type.favoriteFonts", |r| r.keep_on_reset());
 
