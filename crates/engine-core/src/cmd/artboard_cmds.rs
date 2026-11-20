@@ -1566,3 +1566,7 @@ mod pdf_zip_encoding_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "artboards_to_pdf_icc_tests.rs"]
+mod artboards_to_pdf_icc_tests;
