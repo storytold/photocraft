@@ -177,8 +177,8 @@ impl DockPanels<String> for Panels<'_> {
 
     fn content(&self, panel: &String) -> Option<u64> {
         match panel.as_str() {
-            // The canvas shows state that changes without a command: the view, redraw progress, animation and job overlays.
-            CANVAS => None,
+            // The canvas and AI Assistant show state that changes without a command: view, redraws, streaming chat.
+            CANVAS | "aiAssistant" => None,
             TOOLBAR => Some(super::region_versions::toolbar(self.app)),
             _ => Some(super::region_versions::panel(self.app, panel)),
         }

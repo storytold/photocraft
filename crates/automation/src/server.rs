@@ -159,6 +159,31 @@ pub struct ImportDataSetsParams {
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct PlaceSvgParams {
+    /// Complete inline SVG markup (must contain an `<svg` root element with `viewBox` / dimensions).
+    pub svg: String,
+    /// Optional layer name (`.svg` is appended automatically if omitted; default `"artwork.svg"`).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Document index from `session_list` (default: the active document).
+    #[serde(default)]
+    pub index: Option<usize>,
+    /// Scale percentage (e.g. `100` for 100%).
+    #[serde(default)]
+    pub scale: Option<f64>,
+    /// Fit to canvas size (default: PhotoCraft's Resize Image During Place preference).
+    #[serde(default)]
+    pub fit: Option<bool>,
+    /// Optional `[x, y]` canvas placement center in pixels.
+    #[serde(default)]
+    pub center: Option<[f64; 2]>,
+    /// Keep as a vector Smart Object layer (default: true).
+    #[serde(default, rename = "smartObject", alias = "smart_object")]
+    pub smart_object: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NewParams {
     #[serde(default)]
     pub width: Option<u32>,
@@ -817,6 +842,42 @@ impl PhotocraftMcp {
             return to_result(r);
         }
         self.run_command("file.placeEmbedded".into(), bridge_params, true).await
+    }
+
+    #[tool(
+        description = "Place inline SVG artwork onto the active document as a crisp vector Smart Object layer. Use this for detailed illustrations, icons, logos, scenes, and complex multi-path graphics with Bezier curves, gradients, and shadows in a single call — no filesystem access needed."
+    )]
+    async fn doc_place_svg(&self, Parameters(p): Parameters<PlaceSvgParams>) -> Result<CallToolResult, McpError> {
+        let mut opts = serde_json::Map::new();
+        if let Some(scale) = p.scale {
+            opts.insert("scale".into(), json!(scale));
+        }
+        if let Some(fit) = p.fit {
+            opts.insert("fit".into(), json!(fit));
+        }
+        if let Some(center) = p.center {
+            opts.insert("center".into(), json!(center));
+        }
+        opts.insert("smartObject".into(), json!(p.smart_object.unwrap_or(true)));
+        let name = p.name.unwrap_or_else(|| "artwork.svg".to_owned());
+        let svg = p.svg;
+        let index = p.index;
+        let opts_val = Value::Object(opts.clone());
+        let (h_name, h_svg) = (name.clone(), svg.clone());
+        if let Some(r) = self.headless_op(move |h| h.place_svg(index, &h_name, &h_svg, &opts_val)).await {
+            return to_result(r);
+        }
+        // The app's command runs on its active document: an `index` it cannot honour is refused
+        // rather than dropped, matching `doc_replace_smart_object`.
+        if index.is_some() {
+            return Ok(fail("`index` is only supported in headless mode; in bridge mode select the document in the app first"));
+        }
+        let Some(b) = self.bridge_client() else {
+            return Ok(no_backend());
+        };
+        opts.insert("svg".into(), Value::String(svg));
+        opts.insert("name".into(), Value::String(name));
+        to_result(b.call("doc.placeSvg", Value::Object(opts)).await)
     }
 
     #[tool(

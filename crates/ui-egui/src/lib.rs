@@ -692,6 +692,8 @@ pub struct PhotocraftApp {
     last_frame_start_ms: f64,
     /// Background job bookkeeping: opening tabs, control replies waiting on a job.
     pub jobs: jobs_ui::JobsUi,
+    /// In-app AI Assistant panel state (Claude & Gemini subscription CLIs + MCP connectors).
+    pub(crate) ai_assistant: panels::ai_assistant::AiAssistantState,
     #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
     live_tokens: theme::live::LiveTokens,
 }

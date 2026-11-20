@@ -90,6 +90,7 @@ impl PhotocraftApp {
         transform_tool::end_if_left(self);
         prefs_ui::tick(self, ctx, std::time::Instant::now());
         updates_ui::tick(self);
+        panels::ai_assistant::tick(self, ctx);
         monitor_status::poll_frame(self, ctx, frame);
         // Control requests and persisted preferences can change the language in this frame.
         i18n::sync_context(ctx, &self.session.prefs().interface.language);
