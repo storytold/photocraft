@@ -110,7 +110,7 @@ pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "source must be folder, current or open".into() }),
     };
     let output = str_param(p, "output", cmd)?.to_string();
-    if p.get("format").is_none() && ["jpeg", "psd", "tiff"].iter().any(|key| p.get(key).is_some()) {
+    if p.get("format").is_none() && IMAGE_PROCESSOR_FORMATS.iter().any(|(key, _)| p.get(key).is_some()) {
         return image_processor_formats(s, p, source, &output);
     }
     let format = p.get("format").and_then(Value::as_str).unwrap_or("jpg");
@@ -148,6 +148,7 @@ pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
 
 const IMAGE_PROCESSOR: &str = "file.scripts.imageProcessor";
 const IMAGE_PROCESSOR_NO_FORMAT: &str = "You must save to at least one file type.";
+pub const IMAGE_PROCESSOR_FORMATS: [(&str, &str); 5] = [("jpeg", "jpg"), ("psd", "psd"), ("tiff", "tif"), ("png", "png"), ("webp", "webp")];
 
 fn image_processor_param(message: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: IMAGE_PROCESSOR.into(), msg: message.into() }
@@ -168,10 +169,14 @@ fn processor_bool(options: &Value, key: &str, default: bool) -> Result<bool> {
 }
 
 fn processor_number(options: &Value, key: &str, default: f64, max: f64) -> Result<f64> {
+    processor_number_in(options, key, default, 1.0, max)
+}
+
+fn processor_number_in(options: &Value, key: &str, default: f64, min: f64, max: f64) -> Result<f64> {
     match options.get(key) {
         None => Ok(default),
         Some(value) => {
-            value.as_f64().filter(|n| (1.0..=max).contains(n)).ok_or_else(|| image_processor_param(format!("{key} must be a number from 1 to {max}")))
+            value.as_f64().filter(|n| (min..=max).contains(n)).ok_or_else(|| image_processor_param(format!("{key} must be a number from {min} to {max}")))
         }
     }
 }
@@ -196,10 +201,12 @@ fn processor_format(s: &Session, key: &str, extension: &'static str, options: &V
     let (params, srgb) = match key {
         "jpeg" => (json!({"quality": processor_number(options, "quality", 5.0, 12.0)?}), processor_bool(options, "convertToSrgb", false)?),
         "psd" => (json!({"maximizeCompatibility": processor_bool(options, "maximizeCompatibility", true)?}), false),
-        _ => {
+        "tiff" => {
             let compression = if processor_bool(options, "lzw", false)? { "lzw" } else { "none" };
             (json!({"tiffLayers": true, "tiffCompression": compression}), false)
         }
+        "webp" => (json!({"quality": processor_number_in(options, "quality", 8.0, 0.0, 12.0)?}), processor_bool(options, "convertToSrgb", false)?),
+        _ => (Value::Null, processor_bool(options, "convertToSrgb", false)?),
     };
     let save = SaveOpts::from_params(s, &params, IMAGE_PROCESSOR)?;
     Ok(Some(ProcessorFormat { extension, save, fit, srgb }))
@@ -213,7 +220,7 @@ enum ProcessorInputs<'a> {
 fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -> Result<Value> {
     // Resolve all settings and collect inputs before a format can write any files.
     let mut formats = Vec::new();
-    for (key, extension) in [("jpeg", "jpg"), ("psd", "psd"), ("tiff", "tif")] {
+    for (key, extension) in IMAGE_PROCESSOR_FORMATS {
         if let Some(options) = p.get(key)
             && let Some(format) = processor_format(s, key, extension, options)?
         {
@@ -244,7 +251,7 @@ fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -
                 fit_image(scratch, fit)?;
             }
             if format.srgb {
-                scratch.execute("edit.convertToProfile", json!({"profile": "srgb", "flatten": true}))?;
+                scratch.execute("edit.convertToProfile", json!({"profile": "srgb", "flatten": format.extension == "jpg"}))?;
             }
             Ok(false)
         };

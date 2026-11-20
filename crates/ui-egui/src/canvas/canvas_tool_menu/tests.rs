@@ -848,3 +848,42 @@ fn crop_menu_rows_act_like_the_options_bar() {
     assert_eq!(frame_of(&app), None);
     assert_eq!(app.session.active().unwrap().doc.size, size);
 }
+
+#[test]
+fn zoom_menu_steps_respect_the_clicked_point_preference() {
+    for animated in [false, true] {
+        for center_on_point in [false, true] {
+            for command in ["view.zoomIn", "view.zoomOut"] {
+                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+                app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+                app.ui.tool = Tool::Zoom;
+                app.run(
+                    "prefs.set",
+                    json!({"values": {
+                        "general.animatedZoom": animated, "tools.zoomClickedPointToCenter": center_on_point, "tools.overscroll": true
+                    }}),
+                )
+                .unwrap();
+                let mut h = harness(app);
+                let ctx = h.ctx.clone();
+                crate::menus::invoke(h.state_mut(), &ctx, "view.actualPixels", json!({})).unwrap();
+                h.run_steps(4);
+                h.input_mut().time = Some(ctx.input(|i| i.time) + 0.5);
+                h.step();
+                let (old_center, old_zoom) = view_of(h.state()).unwrap();
+                let point = [300.0, 100.0];
+                let at = screen_of(h.state(), point);
+                right_click(&mut h, at, Modifiers::NONE);
+                pick(h.state_mut(), command);
+                h.run_steps(4);
+                h.input_mut().time = Some(ctx.input(|i| i.time) + 0.5);
+                h.step();
+                let (center, zoom) = view_of(h.state()).unwrap();
+                let expected = if center_on_point { craft::behavior::kurbo::Point::new(300.0, 100.0) } else { old_center };
+                assert_ne!(zoom, old_zoom);
+                assert!(center.distance(expected) < 1.0, "{command}, animated {animated}: {center:?} should be {expected:?}");
+                assert_eq!(h.state().session.active().unwrap().history.past_len(), 0);
+            }
+        }
+    }
+}

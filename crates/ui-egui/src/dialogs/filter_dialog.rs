@@ -621,6 +621,9 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
     if command == crate::dialogs::image_processor_ui::COMMAND {
         crate::dialogs::image_processor_ui::nest(&mut map);
     }
+    if command == crate::dialogs::fit_image_ui::COMMAND {
+        crate::dialogs::fit_image_ui::command_values(fields, &mut map);
+    }
     params_of(&map)
 }
 

@@ -64,3 +64,48 @@ fn run_dispatches_all_enabled_formats_with_their_own_dimensions() {
     sizes.sort();
     assert_eq!(sizes, [("jpg".into(), 20, 10), ("psd".into(), 10, 5), ("tif".into(), 40, 20)]);
 }
+
+#[test]
+fn processor_dialog_restores_png_and_webp_without_requiring_jpeg() {
+    let (mut app, ctx, id) = open();
+    let output = tempfile::tempdir().unwrap();
+    for (key, value) in [
+        ("output", json!(output.path())),
+        ("jpeg/enabled", json!(false)),
+        ("png/enabled", json!(true)),
+        ("webp/enabled", json!(true)),
+        ("webp/quality", json!(12)),
+    ] {
+        set(&mut app, &ctx, id, key, value);
+    }
+    crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
+    let mut formats = Vec::new();
+    for file in std::fs::read_dir(output.path()).unwrap() {
+        let path = file.unwrap().path();
+        let bytes = std::fs::read(&path).unwrap();
+        let doc = photocraft_io::import(path.to_str().unwrap(), &bytes).unwrap().document;
+        assert_eq!((doc.size.width, doc.size.height), (40, 20));
+        formats.push(path.extension().unwrap().to_string_lossy().into_owned());
+    }
+    formats.sort();
+    assert_eq!(formats, ["png", "webp"]);
+}
+
+#[test]
+fn dimensions_need_both_switches_for_every_format() {
+    use craft::ui::patterns::form_dialogs::DialogFields;
+    for (format, _) in super::IMAGE_PROCESSOR_FORMATS {
+        let mut values = DialogFields::new();
+        for (enabled, resize) in [(false, true), (true, false), (true, true), (false, false)] {
+            values.set(format!("{format}/enabled"), enabled);
+            values.set(format!("{format}/resize"), resize);
+            let mut rows = super::resize_rows(format);
+            super::apply_resize_gates(&mut rows, &values);
+            assert_eq!(rows[0].enabled(&values), enabled, "{format} resize");
+            for row in &rows[1..] {
+                assert_eq!(row.enabled(&values), enabled && resize, "{format} {}", row.key);
+            }
+            assert_eq!(values.bool(&format!("{format}/resize")), Some(resize));
+        }
+    }
+}
