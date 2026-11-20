@@ -560,7 +560,7 @@ fn edit_history_name(s: &Session, id: LayerId, p: &Value) -> &'static str {
         _ => None,
     });
     let Some(o) = p.as_object() else { return EDIT };
-    let mut changed = o.keys().map(String::as_str).filter(|k| !matches!(*k, "layer" | "coalesce") && !k.starts_with("__"));
+    let mut changed = o.keys().map(String::as_str).filter(|k| !matches!(*k, "layer" | "coalesce" | "historyName") && !k.starts_with("__"));
     let line = matches!(live, Some(LiveShape::Line { .. } | LiveShape::ArrowLine { .. }));
     match (changed.next(), changed.next()) {
         (Some("arrowStart"), None) if line => "Change Arrowhead Start",
@@ -579,7 +579,15 @@ pub(super) fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
     let fg = s.tools.foreground;
     let fgc = Color::rgba(fg[0], fg[1], fg[2], fg[3]);
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
-    let label = edit_history_name(s, id, p);
+    let label = match p.get("historyName") {
+        None | Some(Value::Null) => edit_history_name(s, id, p),
+        Some(_) if p.get("path").is_none() => return Err(bad(CMD, "`historyName` requires `path`")),
+        Some(name) => match name.as_str() {
+            Some("New Anchor Point") => "New Anchor Point",
+            Some("Close Path") => "Close Path",
+            _ => return Err(bad(CMD, "`historyName` must be \"New Anchor Point\" or \"Close Path\"")),
+        },
+    };
     with_shape(s, id, label, |sh, layer| {
         if let Some(v) = p.get("path") {
             sh.path = parse_path(v).map_err(|e| bad(CMD, e))?;
