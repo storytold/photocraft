@@ -1131,3 +1131,73 @@ fn yes_of_the_switch_question_saves_to_the_file_the_dialog_chose() {
     let p = h.state().session.prefs();
     assert_eq!(p.menu_set, "Web", "and the switch it promised came after the save");
 }
+
+/// A set the menu-sets folder was found holding keeps that very file: the folder's own name for it,
+/// not the name `path_of` builds back from the set name. A file the folder lists as `Darkroom.mnu`
+/// is Darkroom's file, and a Save on the set writes it there rather than starting a second file.
+#[test]
+fn a_set_the_folder_found_is_saved_back_to_the_file_it_was_found_in() {
+    let tmp = tempfile::tempdir().expect("a settings folder");
+    let folder = menu_sets::folder(tmp.path());
+    std::fs::create_dir_all(&folder).expect("the menu-sets folder");
+    // The extension as the folder's own list spells it; the measured one is "MNU".
+    let found = folder.join("Darkroom.mnu");
+    let text = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+        "<photocraft-menu-settings version=\"2\" filename=\"$$$/FileName/Presets/MenuCustomization/Darkroom=Darkroom\" modified=\"0\">\n",
+        "  <command kind=\"static\" id=\"10\" parentMenuID=\"2\" menuType=\"0\" hidden=\"1\" color=\"0\"/>\n",
+        "</photocraft-menu-settings>\n",
+    );
+    std::fs::write(&found, text).expect("the set file the folder holds");
+    let mut h = file_harness(Arc::new(ScriptedFiles::new()), tmp.path());
+    open_menus(&mut h);
+    choose(&mut h, "Darkroom");
+    assert_eq!(row_value(&h), "Darkroom", "the folder's file is a set the row can use");
+    show_all(&mut h);
+    button(&h, SAVE).click();
+    h.run_steps(3);
+    assert!(std::fs::read_to_string(&found).expect("the file the folder found").contains("id=\"10\""), "the row's Save waits for OK, like any other");
+    ok(&mut h);
+    let left: Vec<String> = std::fs::read_dir(&folder).expect("the menu-sets folder").flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(left, vec!["Darkroom.mnu".to_string()], "the write went to the file the folder scan found, not to a name of the set's own");
+    let kept = std::fs::read_to_string(&found).expect("the found file is still there");
+    assert!(!kept.contains("id=\"10\""), "and it holds the set as the row saved it: File › New is shown again: {kept}");
+    assert!(kept.contains(&root("Darkroom")), "the set keeps its name: {kept}");
+}
+
+/// File discovery cannot make the OK payload bigger than the engine's cap: with the preferences
+/// holding one set and the folder holding `MAX_SETS` files, the set that does not fit never reaches
+/// the row, the engine's own cap line says why, and OK still writes what the row does carry. A set
+/// the preferences hold is not the one dropped.
+#[test]
+fn the_folder_s_sets_join_the_row_only_up_to_the_engine_s_cap() {
+    let tmp = tempfile::tempdir().expect("a settings folder");
+    let folder = menu_sets::folder(tmp.path());
+    std::fs::create_dir_all(&folder).expect("the menu-sets folder");
+    for n in 0..MAX_SETS {
+        let name = format!("Folder Set {n:02}");
+        let body = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<photocraft-menu-settings version=\"2\" filename=\"$$$/FileName/Presets/MenuCustomization/{name}={name}\" modified=\"0\">\n</photocraft-menu-settings>\n"
+        );
+        std::fs::write(folder.join(menu_sets::file_name(&name)), body).expect("a set file the folder holds");
+    }
+    let mut h = file_harness(Arc::new(ScriptedFiles::new()), tmp.path());
+    h.state_mut().session.edit_prefs(|p| {
+        p.menu_sets.insert("Held By Prefs".into(), Default::default());
+    });
+    open_menus(&mut h);
+    let session = h.state().prefs_rt.shortcuts.as_ref().expect("the dialog is open");
+    assert_eq!(session.menus.sets.len(), MAX_SETS, "the row never holds more sets than the engine stores: {:?}", session.menus.sets.keys().collect::<Vec<_>>());
+    assert!(session.menus.sets.contains_key("Held By Prefs"), "a set the preferences hold is not the one dropped");
+    assert!(!session.menus.sets.contains_key("Folder Set 63"), "the file past the cap is not offered: {:?}", session.menus.sets.keys().collect::<Vec<_>>());
+    let line = h.state().ui.status.clone();
+    assert!(h.state().ui.status_error && line.contains(&format!("at most {MAX_SETS} menu sets")), "the engine's cap line says why: {line}");
+    // The row can still commit what it carries: choosing a set marks the draft, and OK's payload fits.
+    choose(&mut h, "Folder Set 00");
+    ok(&mut h);
+    let p = h.state().session.prefs();
+    assert_eq!(p.menu_sets.len(), MAX_SETS, "OK wrote the sets the row carried, no 65th with it: {:?}", p.menu_sets.keys().collect::<Vec<_>>());
+    assert!(p.menu_sets.contains_key("Held By Prefs"), "and the preferences' own set is among them");
+    assert!(!p.menu_sets.contains_key("Folder Set 63"), "the file past the cap never reached the preferences");
+    assert!(h.state().prefs_rt.shortcuts.is_none(), "the dialog closed on its writes, not on a refused call");
+}

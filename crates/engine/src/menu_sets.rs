@@ -476,11 +476,27 @@ fn read_text(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// The sets in the menu-sets folder `dir`, keyed by set name, with one message per file that could
-/// not be read. A folder that is not there holds nothing and says nothing: the first Save makes it.
+/// One set file the menu-sets folder holds: the set its name gives, the file it was read at, and the
+/// set its rows describe. The path is part of it because a set name does not reproduce it:
+/// [`set_name_of`] takes the stem and [`path_of`] puts the measured [`SETS_EXT`] back, so a file the
+/// folder lists as `Darkroom.mnu` is not the file that set's name would name. Whoever saves the set
+/// back needs the path it was found at, or it gets a second file beside it (#14450).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SetFile {
+    /// The set the file's name gives, as [`set_name_of`] reads it.
+    pub name: String,
+    /// The file as the folder lists it.
+    pub path: PathBuf,
+    /// The set the file's rows describe, as [`from_mnu`] read it.
+    pub set: MenuSet,
+}
+
+/// The set files the menu-sets folder `dir` holds, each with the set name its file gives and the path
+/// it was read at, with one message per file that could not be read. A folder that is not there holds
+/// nothing and says nothing: the first Save makes it.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn read_sets(dir: &Path) -> (BTreeMap<String, MenuSet>, Vec<String>) {
-    let mut sets = BTreeMap::new();
+pub fn read_sets(dir: &Path) -> (Vec<SetFile>, Vec<String>) {
+    let mut sets = Vec::new();
     let mut errors = Vec::new();
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -502,7 +518,7 @@ pub fn read_sets(dir: &Path) -> (BTreeMap<String, MenuSet>, Vec<String>) {
     for (name, path) in files {
         match read_text(&path).and_then(|text| from_mnu(&text).map_err(|e| format!("{}: {e}", path.display()))) {
             Ok(file) => {
-                sets.insert(name, file.set);
+                sets.push(SetFile { name, path, set: file.set });
             }
             Err(e) => errors.push(e),
         }
@@ -510,10 +526,10 @@ pub fn read_sets(dir: &Path) -> (BTreeMap<String, MenuSet>, Vec<String>) {
     (sets, errors)
 }
 
-/// The sets in the menu-sets folder `dir`; nothing, where there is no file system.
+/// The set files in the menu-sets folder `dir`; nothing, where there is no file system.
 #[cfg(target_arch = "wasm32")]
-pub fn read_sets(_: &Path) -> (BTreeMap<String, MenuSet>, Vec<String>) {
-    (BTreeMap::new(), Vec::new())
+pub fn read_sets(_: &Path) -> (Vec<SetFile>, Vec<String>) {
+    (Vec::new(), Vec::new())
 }
 
 /// Write the set `name` to its file in the folder `dir`.

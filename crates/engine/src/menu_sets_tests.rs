@@ -502,15 +502,15 @@ fn a_huge_set_file_is_an_error_and_not_a_crash() {
     assert!(from_mnu(&big).is_err(), "the same text read directly is refused too");
     // And the folder is still writable beside it.
     write_set(&dir, "Mine", &set(&["file.new"], &[])).expect("a set beside a refused file still writes");
-    assert_eq!(read_sets(&dir).0.keys().collect::<Vec<_>>(), vec!["Mine"]);
+    assert_eq!(read_sets(&dir).0.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["Mine"]);
 }
 
 #[test]
 fn a_broken_file_in_the_folder_is_reported_and_the_others_come_in() {
     let (_tmp, dir) = folder_with(&[("Good.MNU", &mnu(&row(31, 2, 0, 0, 5))), ("Broken.MNU", "<photocraft-menu-settings"), ("Notes.txt", "not a set")]);
-    let (sets, errors) = read_sets(&dir);
-    assert_eq!(sets.keys().collect::<Vec<_>>(), vec!["Good"], "the readable set came in");
-    assert_eq!(sets["Good"].colors["file.close"], "blue", "id 31 with colour 5");
+    let (files, errors) = read_sets(&dir);
+    assert_eq!(files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["Good"], "the readable set came in");
+    assert_eq!(files[0].set.colors["file.close"], "blue", "id 31 with colour 5");
     assert_eq!(errors.len(), 1, "{errors:?}: only the malformed .mnu is a problem, not the text file");
     let first = &errors[0];
     assert!(first.contains("Broken.MNU"), "{first}");
@@ -530,11 +530,11 @@ fn the_first_set_makes_the_menu_sets_folder_and_writes_its_file_there() {
     write_set(&dir, "Dark Room", &set(&["file.new"], &[("edit.fade", "violet")])).expect("the write made the folder");
     assert!(dir.is_dir(), "the folder came with it");
     assert!(dir.join("Dark Room.MNU").is_file(), "the set's file, named by the set");
-    let (sets, errors) = read_sets(&dir);
+    let (files, errors) = read_sets(&dir);
     assert!(errors.is_empty(), "{errors:?}");
-    assert_eq!(sets.keys().collect::<Vec<_>>(), vec!["Dark Room"]);
-    assert_eq!(hidden_of(&sets["Dark Room"]), vec!["file.new".to_string()]);
-    assert_eq!(sets["Dark Room"].colors["edit.fade"], "violet");
+    assert_eq!(files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["Dark Room"]);
+    assert_eq!(hidden_of(&files[0].set), vec!["file.new".to_string()]);
+    assert_eq!(files[0].set.colors["edit.fade"], "violet");
     // Deleting it takes the file, and a file that is already gone is not an error.
     menu_sets::delete_set(&dir, "Dark Room").expect("the file went");
     assert!(!dir.join("Dark Room.MNU").exists());
@@ -554,8 +554,8 @@ fn a_folder_wearing_a_set_file_s_name_is_left_alone() {
     let dir = folder(tmp.path());
     std::fs::create_dir_all(dir.join("Mine.MNU")).expect("a folder wearing a set file's name");
     std::fs::write(dir.join("Good.MNU"), mnu(&row(31, 2, 0, 0, 5))).expect("a real set file");
-    let (sets, errors) = read_sets(&dir);
-    assert_eq!(sets.keys().collect::<Vec<_>>(), vec!["Good"], "the subfolder is not a set: {sets:?}");
+    let (files, errors) = read_sets(&dir);
+    assert_eq!(files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["Good"], "the subfolder is not a set: {files:?}");
     assert!(errors.is_empty(), "and it is not a file that could not be read: {errors:?}");
     // The same name as a set to write is an error rather than a crash: the folder is in the way.
     assert!(write_set(&dir, "Mine", &set(&["file.new"], &[])).is_err(), "a folder is in the way of that set's file");
@@ -693,4 +693,20 @@ fn a_name_that_works_names_one_file_and_names_the_set_back() {
     let path = path_of(&dir, "x ").expect("a trimmed name names a file");
     assert_eq!(path.file_name().and_then(|s| s.to_str()), Some("x.MNU"), "the space went with the trim");
     assert_eq!(set_name_of(&path).as_deref(), Some("x"));
+}
+
+/// A set file is reported at the name the folder lists it under, which the set's own name does not
+/// always reproduce: `set_name_of` takes the stem and `path_of` puts the measured extension back, so
+/// on a case-sensitive file system `Darkroom.mnu` and `Darkroom.MNU` are two different files. The
+/// dialog needs the path a set was found at to save it back into its own file (#14450).
+#[test]
+fn a_set_file_is_read_at_the_name_the_folder_lists_it_under() {
+    let (_tmp, dir) = folder_with(&[("Darkroom.mnu", &mnu(&row(31, 2, 0, 0, 5)))]);
+    let (files, errors) = read_sets(&dir);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert_eq!(files[0].name, "Darkroom", "the stem names the set");
+    assert_eq!(files[0].path, dir.join("Darkroom.mnu"), "the path is the file as the folder lists it");
+    assert_eq!(files[0].set.colors["file.close"], "blue", "and the set its rows describe comes through");
+    assert_ne!(files[0].path, path_of(&dir, "Darkroom").expect("`Darkroom` names a set file"), "which is not the file the set's name would name");
 }

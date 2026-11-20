@@ -27,7 +27,7 @@ use photocraft_engine::menu_sets::{self, MenuSet};
 use photocraft_engine::prefs::{MenuCustomization, Preferences};
 use photocraft_engine::shortcut_sets::{DEFAULTS_NAME, set_name};
 use serde_json::{Map, Value, json};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::PhotocraftApp;
 use crate::dialogs::alerts;
@@ -92,10 +92,17 @@ pub(crate) struct MenusDraft {
     /// Save dialog has answered. `ask_new_name` clears it, so a later Save or New cannot pick it up.
     pub(crate) switch_target: Option<String>,
     /// Set by the row's Save on a saved set and by Yes of the switch question on one: OK writes that
-    /// set's `.mnu` file in the menu-sets folder, which is where the reference application keeps a set
-    /// it has saved (#14450). The value is the file the Save dialog chose, when there was one, or
-    /// `None` for the set's own file in that folder.
+    /// set's `.mnu` file, which is where the reference application keeps a set it has saved (#14450).
+    /// The value is the file the Save dialog chose, when there was one, or `None` for the set's own
+    /// file; a set that never picked one goes to the menu-sets folder, and one the folder was found
+    /// holding goes back to that file (`file_paths`). A re-save of a set keeps the destination it
+    /// already has rather than replacing it.
     pub(crate) file_write: BTreeMap<String, Option<String>>,
+    /// Set when the menu-sets folder is read at open: the file each discovered set was found in, as
+    /// the folder lists it. Save and Delete of such a set take that file, because the set's own name
+    /// does not always reproduce it — a folder that lists `Darkroom.mnu` has that file, not the
+    /// `Darkroom.MNU` `menu_sets::path_of` would name (#14450).
+    pub(crate) file_paths: BTreeMap<String, PathBuf>,
     /// Set by Yes of the Delete question: OK takes that set's `.mnu` file away too, so the folder does
     /// not offer the set back on the next open (#14450).
     pub(crate) file_delete: BTreeSet<String>,
@@ -304,9 +311,21 @@ pub fn open(app: &mut PhotocraftApp, tab: u64) {
     // file that does not read is said out loud, not skipped in silence (#14450).
     let (from_files, errors) = read_set_files(app);
     if let Some(session) = app.prefs_rt.shortcuts.as_mut() {
-        for (name, file) in from_files {
-            let held = session.menus.sets.get(&name).cloned();
-            session.menus.sets.insert(name, menu_sets::merged_with_prefs(&file, held.as_ref()));
+        for file in from_files {
+            let held = session.menus.sets.get(&file.name).cloned();
+            if held.is_none() && session.menus.sets.len() >= menu_sets::MAX_SETS {
+                // The folder holds more sets than the engine stores. An entry past the cap could only
+                // make OK's `edit.menus` replacement be refused - and then nothing the Menus tab
+                // carried would be written - so it never reaches the row, and the engine's own cap
+                // line says why. The sets the preferences hold are never the ones dropped.
+                session.menus.cap_refused = true;
+                continue;
+            }
+            // The file the folder was found holding IS that set's file: Save and Delete go to it,
+            // rather than to the file the set's name would suggest and which a folder spelling the
+            // extension differently does not hold.
+            session.menus.file_paths.insert(file.name.clone(), file.path);
+            session.menus.sets.insert(file.name.clone(), menu_sets::merged_with_prefs(&file.set, held.as_ref()));
         }
     }
     if !errors.is_empty() {
@@ -556,19 +575,27 @@ fn save_menus(app: &mut PhotocraftApp, menus: &MenusDraft) -> Result<Value, Stri
     Ok(written)
 }
 
-/// The `.mnu` files of the sets the row saved, and the files of the sets it deleted, in the menu-sets
-/// folder of the settings directory; a set whose file the Save dialog chose goes where the user sent
-/// it, and Delete takes it away there. The write makes the folder when it is not there. Files that
-/// cannot be written or deleted are said on the app's status line rather than undoing the preferences
-/// write that came before it, and several of them are said together: five broken files are five sets,
-/// not one (#14450).
+/// The `.mnu` files of the sets the row saved, and the files of the sets it deleted: the file the Save
+/// dialog chose for a set, else the file the menu-sets folder was found holding it in, else the set's
+/// own file in that folder, which is where the reference application keeps its sets. The write makes
+/// the folder when it is not there. Files that cannot be written or deleted are said on the app's
+/// status line rather than undoing the preferences write that came before it, and several of them are
+/// said together: five broken files are five sets, not one (#14450).
 fn write_set_files(app: &mut PhotocraftApp, menus: &MenusDraft) {
     let Some(dir) = sets_folder(app) else { return };
+    // The file of a set, as the draft knows it: the one its Save dialog answered with, or the one the
+    // folder scan found it in. `None` leaves it to the folder's own name for the set.
+    let own_file = |name: &str| -> Option<PathBuf> {
+        match menus.file_write.get(name) {
+            Some(Some(path)) => Some(PathBuf::from(path)),
+            _ => menus.file_paths.get(name).cloned(),
+        }
+    };
     let mut refused_write = Vec::new();
-    for (name, chosen) in &menus.file_write {
+    for name in menus.file_write.keys() {
         let Some(set) = menus.sets.get(name) else { continue };
-        let wrote = match chosen {
-            Some(path) => menu_sets::write_set_at(Path::new(path), name, set),
+        let wrote = match own_file(name) {
+            Some(path) => menu_sets::write_set_at(&path, name, set),
             None => menu_sets::write_set(&dir, name, set),
         };
         if let Err(e) = wrote {
@@ -578,11 +605,12 @@ fn write_set_files(app: &mut PhotocraftApp, menus: &MenusDraft) {
     set_lines(app, tl!("The menu set was not saved: {error}"), &refused_write);
     let mut refused_delete = Vec::new();
     for name in &menus.file_delete {
-        // The file the Save dialog chose for a set IS that set's file: Delete takes it away where it
-        // stands rather than only looking in the menu-sets folder, which may hold no copy of it at all.
-        let taken = match menus.file_write.get(name) {
-            Some(Some(path)) => menu_sets::delete_set_at(Path::new(path)),
-            _ => menu_sets::delete_set(&dir, name),
+        // A set's own file is the one to take away, wherever it stands: the file the Save dialog sent
+        // it to, or the one the folder scan found it in. Looking only in the menu-sets folder can find
+        // no file at all, and the set comes back from the folder on the next open.
+        let taken = match own_file(name) {
+            Some(path) => menu_sets::delete_set_at(&path),
+            None => menu_sets::delete_set(&dir, name),
         };
         if let Err(e) = taken {
             refused_delete.push(e);
@@ -621,12 +649,13 @@ fn set_lines(app: &mut PhotocraftApp, subject: &str, errors: &[String]) {
     set_line(app, subject, &said);
 }
 
-/// The sets the menu-sets folder holds, keyed by name, and one message per file that could not be
-/// read. The folder itself is not an error: it comes with the first saved set.
-fn read_set_files(app: &PhotocraftApp) -> (BTreeMap<String, MenuSet>, Vec<String>) {
+/// The set files the menu-sets folder holds, each with the name its file gives and the path it stands
+/// at, and one message per file that could not be read. The folder itself is not an error: it comes
+/// with the first saved set.
+fn read_set_files(app: &PhotocraftApp) -> (Vec<menu_sets::SetFile>, Vec<String>) {
     match sets_folder(app) {
         Some(dir) => menu_sets::read_sets(&dir),
-        None => (BTreeMap::new(), Vec::new()),
+        None => (Vec::new(), Vec::new()),
     }
 }
 
