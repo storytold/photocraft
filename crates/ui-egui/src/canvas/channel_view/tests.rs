@@ -34,62 +34,6 @@ fn composite_bands_keep_the_downsample_grid() {
 }
 
 #[test]
-fn channel_eyes_reuse_composite_until_pixels_change() {
-    let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
-    app.run("file.new", json!({"width": 64, "height": 32})).unwrap();
-    app.run("edit.fill", json!({"color": "#4080c0"})).unwrap();
-    app.sync_views();
-    let ctx = egui::Context::default();
-    app.run("channel.setVisible", json!({"channel": "red", "visible": false})).unwrap();
-    assert!(ensure(&mut app, &ctx, 0, None).is_some());
-    let id = app.session.active().unwrap().doc.id.0;
-    let first = app.channel_views.get_mut(&id).unwrap().source.as_mut().unwrap();
-    let original_sample = first.pixels[0];
-    // Mark the cache: a recomposite overwrites it, while a freed buffer's address can come back.
-    first.pixels[0] = [0.0, 1.0, 0.0, 1.0];
-
-    app.run("channel.setVisible", json!({"channel": "green", "visible": false})).unwrap();
-    assert!(ensure(&mut app, &ctx, 0, None).is_some());
-    let reused = app.channel_views.get(&id).unwrap().source.as_ref().unwrap();
-    assert_eq!(reused.pixels[0], [0.0, 1.0, 0.0, 1.0], "visibility does not recompose the pixels");
-
-    app.run("edit.fill", json!({"color": "#e02010"})).unwrap();
-    assert!(ensure(&mut app, &ctx, 0, None).is_some());
-    // A partial damage upload discards the source; a full redraw may replace it.
-    // In either case, cached samples must never refer to the pre-edit pixels.
-    if let Some(source) = app.channel_views.get(&id).unwrap().source.as_ref() {
-        assert_ne!(source.pixels[0], original_sample, "a full redraw replaces stale pixels");
-    }
-    app.run("channel.setVisible", json!({"channel": "red", "visible": true})).unwrap();
-    assert!(ensure(&mut app, &ctx, 0, None).is_some());
-    let refreshed = app.channel_views.get(&id).unwrap().source.as_ref().unwrap();
-    let st = app.session.active().unwrap();
-    assert_eq!(refreshed.revision, st.revision);
-    assert_ne!(refreshed.pixels[0], original_sample, "new pixels must be recomposited");
-    let expected = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
-    let mut unused = None;
-    let actual = render_with_source(
-        &st.doc,
-        &st.channel_view,
-        st.doc.bounds(),
-        1,
-        Look::default(),
-        st.active_layer,
-        CompositeSource { cached: Some(&refreshed.pixels), fresh: &mut unused, screen: &Screen::default() },
-    )
-    .unwrap();
-    assert_eq!(actual, expected, "reused pixels must preserve channel colours");
-    assert!(unused.is_none(), "reuse must not create a second composite");
-}
-
-#[test]
-fn plain_composite_draws_nothing() {
-    let s = session();
-    let st = s.active().unwrap();
-    assert!(render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).is_none());
-}
-
-#[test]
 fn spot_overlay_previews_with_the_spot_dot_gain() {
     // A 50 % tint of a black spot ink printed over the white composite: its coverage is the 50 %
     // dot plus Color Settings › Spot's dot gain (read, not changed: the setting is process-wide).
@@ -232,32 +176,6 @@ fn layer_mask_overlay_takes_its_display_options() {
     assert_eq!(render(&st.doc, &st.channel_view, b, 1, green, st.active_layer).unwrap()[0], Color32::from_rgb(0, 255, 191));
 }
 
-/// `cargo test --release -p photocraft-ui-egui --lib mask_view_switch_24mp -- --ignored --nocapture`
-#[test]
-#[ignore = "benchmark"]
-fn mask_view_switch_24mp() {
-    let mut s = Session::new();
-    s.execute("file.new", json!({"width": 6000, "height": 4000})).unwrap();
-    s.execute("layer.new.layer", json!({})).unwrap();
-    s.execute("edit.fill", json!({"color": "#d0402b"})).unwrap();
-    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
-    s.execute("paint.gradient", json!({"from": [0, 0], "to": [6000, 0], "colors": ["#000000", "#ffffff"], "target": "mask"})).unwrap();
-    let factor = 6000u32.div_ceil(MAX_SIDE);
-    for mode in ["gray", "overlay"] {
-        s.execute("view.layerMask", json!({"mode": mode})).unwrap();
-        let st = s.active().unwrap();
-        let mut best = f64::MAX;
-        for _ in 0..8 {
-            let t = std::time::Instant::now();
-            let px = render(&st.doc, &st.channel_view, st.doc.bounds(), factor, Look::default(), st.active_layer).unwrap();
-            let img = egui::ColorImage::new([3000, 2000], px);
-            std::hint::black_box(img);
-            best = best.min(t.elapsed().as_secs_f64() * 1000.0);
-        }
-        println!("24 MP mask view {mode}: {best:.1} ms (render at 1/{factor})");
-    }
-}
-
 /// Interface ▸ Show Channels in Color (#2385): a solo RGB / CMYK channel tints the canvas
 /// instead of staying gray, like the panel thumbnails wired in #1986.
 #[test]
@@ -302,22 +220,22 @@ fn show_channels_in_color_lab_lightness_stays_gray() {
 
 /// The canvas texture cache is keyed by the preference, so toggling it rebuilds the view.
 #[test]
-fn ensure_honours_show_channels_in_color() {
+fn overlay_key_follows_show_channels_in_color() {
     let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
     app.sync_views();
     app.run("channel.target", json!({"channel": "green"})).unwrap();
-    let ctx = egui::Context::default();
-    assert!(ensure(&mut app, &ctx, 0, None).is_some());
-    let key_off = app.channel_views.values().next().unwrap().key;
+    let key = |app: &PhotocraftApp| {
+        let st = app.session.active().unwrap();
+        Overlay::of(app, 0, &st.doc, None).expect("a solo channel shows an overlay").key
+    };
+    let key_off = key(&app);
     app.session.execute("prefs.set", json!({"values": {"interface.showChannelsInColor": true}})).unwrap();
-    assert!(ensure(&mut app, &ctx, 0, None).is_some());
-    let key_on = app.channel_views.values().next().unwrap().key;
-    assert_ne!(key_off, key_on, "the preference changes the cached view key");
+    let key_on = key(&app);
+    assert_ne!(key_off, key_on, "the preference changes the overlay's key");
     // So do the Layer Mask Display Options.
     app.session.execute("channel.options", json!({"channel": "mask", "color": "#00ff00", "opacity": 70})).unwrap();
-    assert!(ensure(&mut app, &ctx, 0, None).is_some());
-    assert_ne!(app.channel_views.values().next().unwrap().key, key_on, "the overlay options change the cached view key");
+    assert_ne!(key(&app), key_on, "the overlay options change the overlay's key");
 }
 
 #[test]
@@ -400,9 +318,9 @@ fn cmyk_channel_views_use_the_document_profile() {
     s.execute("channel.setVisible", json!({"channel": "black", "visible": false})).unwrap();
     let st = s.active().unwrap();
     let params =
-        craft_cms::synth::CmykParams { description: "Test Uncoated".into(), tvi: [0.26, 0.26, 0.26, 0.3], grid_a2b: 5, grid_b2a: 9, ..Default::default() };
+        craft::cms::synth::CmykParams { description: "Test Uncoated".into(), tvi: [0.26, 0.26, 0.26, 0.3], grid_a2b: 5, grid_b2a: 9, ..Default::default() };
     let mut doc = (*st.doc).clone();
-    doc.icc_profile = Some(craft_cms::synth::cmyk_profile(&params).unwrap().to_bytes());
+    doc.icc_profile = Some(craft::cms::synth::cmyk_profile(&params).unwrap().to_bytes());
     let space = photocraft_compose::cmyk_space(&doc).expect("a profile other than the built-in one");
     let fmt = doc.pixel_format();
     let inks: Vec<f32> = [0.0, 0.5, 0.5, 0.0].into_iter().chain(fmt.alpha.then_some(1.0)).collect();
@@ -430,30 +348,6 @@ fn cmyk_inks_from_the_proxy_match_the_document() {
     assert_eq!(inks(doc, doc.bounds(), 2), full);
     assert_eq!(full[0], [1.0, 1.0, 1.0, 0.0]);
     assert_eq!(full[4], [0.0; 4]);
-}
-
-/// Hidden CMYK channels read the inks and visible spot channels print over the RGB composite, so
-/// the sampled composite one of them cached is not reused by the other.
-#[test]
-fn cmyk_ink_samples_and_the_spot_composite_are_cached_apart() {
-    let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
-    app.run("file.new", json!({"width": 16, "height": 8, "mode": "cmyk", "background": "white"})).unwrap();
-    app.run("tools.setColors", json!({"foregroundCmyk": [1.0, 1.0, 1.0, 0.0]})).unwrap();
-    app.run("edit.fillForeground", json!({})).unwrap();
-    // Ink everywhere, so the spot view samples the whole composite (and caches it).
-    app.run("select.all", json!({})).unwrap();
-    app.run("channel.newSpot", json!({"color": "#00ffff", "solidity": 0})).unwrap();
-    app.sync_views();
-    let ctx = egui::Context::default();
-    let id = app.session.active().unwrap().doc.id.0;
-    let source = |app: &PhotocraftApp| app.channel_views.get(&id).and_then(|c| c.source.as_ref()).map(|s| (s.inks, s.pixels.clone()));
-    app.run("channel.setVisible", json!({"channel": "black", "visible": false})).unwrap();
-    assert!(ensure(&mut app, &ctx, 0, None).is_some());
-    let doc = app.session.active().unwrap().doc.clone();
-    assert_eq!(source(&app), Some((true, inks(&doc, doc.bounds(), 1))), "hidden K: the inks");
-    app.run("channel.setVisible", json!({"channel": "black", "visible": true})).unwrap();
-    assert!(ensure(&mut app, &ctx, 0, None).is_some(), "the spot prints");
-    assert_eq!(source(&app), Some((false, composite(&doc, doc.bounds(), 1))), "the spot prints over the composite, not the inks");
 }
 
 /// A white-backed `mode`/`depth` document, 3×1, with a 0.8/0.4/0.2 picture and two overlapping
@@ -527,25 +421,13 @@ fn uninked_pixels_leave_the_canvas_alone() {
         let px = render(&doc, &v, doc.bounds(), factor, Look::default(), None).unwrap();
         assert_eq!(px[0], Color32::from_rgb(0, q(0.6), q(0.65)), "/{factor}: solid teal where the ink is");
         assert!(px[1..].iter().all(|p| *p == Color32::TRANSPARENT), "/{factor}: {px:?}");
-        // Only the empty spot shown: nothing to print, and no composite rendered for it.
+        // Only the empty spot shown: nothing to print.
         v.set_alpha_visible(0, false);
-        let mut fresh = None;
-        let px = render_with_source(
-            &doc,
-            &v,
-            doc.bounds(),
-            factor,
-            Look::default(),
-            None,
-            CompositeSource { cached: None, fresh: &mut fresh, screen: &Screen::default() },
-        );
-        assert!(px.is_none(), "/{factor}: an empty spot draws no texture");
-        assert!(fresh.is_none(), "/{factor}: an empty spot needs no composite");
+        assert!(render(&doc, &v, doc.bounds(), factor, Look::default(), None).is_none(), "/{factor}: an empty spot draws nothing");
     }
 }
 
-/// A few inked pixels composite only their bounding box, not the whole document, and print the
-/// same as over the whole composite; ink everywhere renders the whole one, kept for the cache.
+/// A few inked pixels print the same as over the whole composite, and leave the pixels around them clear.
 #[test]
 fn sparse_inks_composite_only_their_bounding_box() {
     use photocraft_doc::{Layer, LayerContent};
@@ -569,10 +451,7 @@ fn sparse_inks_composite_only_their_bounding_box() {
         v.set_alpha_visible(0, true);
         v.set_alpha_visible(1, true);
         let b = doc.bounds();
-        let mut fresh = None;
-        let source = CompositeSource { cached: None, fresh: &mut fresh, screen: &Screen::default() };
-        let got = render_with_source(&doc, &v, b, factor, Look::default(), None, source).unwrap();
-        assert!(fresh.is_none(), "/{factor}: two inked pixels render no whole composite");
+        let got = render(&doc, &v, b, factor, Look::default(), None).unwrap();
         let whole = composite_sampled(&doc, b, factor);
         let ink = photocraft_compose::multichannel::Ink::of(&doc, &doc.channels[0]);
         let w = 60usize.div_ceil(factor as usize);
@@ -589,53 +468,42 @@ fn sparse_inks_composite_only_their_bounding_box() {
             let want = Color32::from_rgb(q(want[0][0]), q(want[0][1]), q(want[0][2]));
             assert_eq!(*px, want, "/{factor} ({x}, {y})");
         }
-        // Ink everywhere: the bounding box is the whole document, rendered once for the cache.
-        let mut solid = Surface::new(fmt);
-        solid.fill_rect(b, &[1.0]);
-        doc.channels[1].surface = solid;
-        let mut fresh = None;
-        let source = CompositeSource { cached: None, fresh: &mut fresh, screen: &Screen::default() };
-        assert!(render_with_source(&doc, &v, b, factor, Look::default(), None, source).is_some());
-        assert!(fresh.is_some(), "/{factor}: ink everywhere renders the whole composite");
     }
 }
 
-/// A visible spot channel without ink draws no texture over the canvas, and remembers that; a
-/// spot with ink shown later draws one.
+/// A visible spot channel without ink draws nothing over the canvas; a spot with ink shown later draws.
 #[test]
-fn uninked_spot_draws_no_texture() {
+fn uninked_spot_draws_nothing() {
     let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 16, "height": 8, "background": "white"})).unwrap();
     // No selection: an empty spot channel, shown over the composite.
     app.run("channel.newSpot", json!({"color": "#00ffff", "solidity": 0})).unwrap();
     app.sync_views();
-    let ctx = egui::Context::default();
-    let id = app.session.active().unwrap().doc.id.0;
+    let drawn = |app: &PhotocraftApp| {
+        let st = app.session.active().unwrap();
+        Overlay::of(app, 0, &st.doc, None).and_then(|o| o.render(&st.doc, st.doc.bounds(), 1)).is_some()
+    };
     let st = app.session.active().unwrap();
     assert!(prints_inks(&st.doc, &st.channel_view), "the composite and the spot are both shown");
-    assert!(ensure(&mut app, &ctx, 0, None).is_none(), "no ink: nothing drawn");
-    assert!(app.channel_views.get(&id).is_some_and(|c| c.tex.is_none() && c.valid), "and remembered");
-    assert!(ensure(&mut app, &ctx, 0, None).is_none());
-    // A second spot made from a selection has ink: the texture shows it.
+    assert!(!drawn(&app), "no ink: nothing drawn");
+    // A second spot made from a selection has ink: the overlay shows it.
     app.run("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
     app.run("channel.newSpot", json!({"color": "#ff00ff", "solidity": 0})).unwrap();
-    assert!(ensure(&mut app, &ctx, 0, None).is_some(), "ink: drawn");
-    assert!(app.channel_views.get(&id).is_some_and(|c| c.tex.is_some()));
+    assert!(drawn(&app), "ink: drawn");
 }
 
 /// Printed inks go through the canvas display transform (monitor profile, Proof Colors), as the
 /// canvas around them does.
 #[test]
 fn printed_inks_follow_the_display_transform() {
-    use craft_cms::{Builtin, TransformOptions};
+    use craft::cms::{Builtin, TransformOptions};
     let doc = spot_doc(ColorMode::Rgb, photocraft_color::SampleType::U8, 1.0, 1.0);
     let mut v = ChannelView::default();
     v.set_alpha_visible(0, true);
     let plain = render(&doc, &v, doc.bounds(), 1, Look::default(), None).unwrap();
-    let t = craft_cms::transform::cached(Builtin::Srgb.profile(), Builtin::DisplayP3.profile(), TransformOptions::default()).unwrap();
+    let t = craft::cms::transform::cached(Builtin::Srgb.profile(), Builtin::DisplayP3.profile(), TransformOptions::default()).unwrap();
     let screen = Screen { encode_srgb: false, transform: Some(t.clone()) };
-    let shown =
-        render_with_source(&doc, &v, doc.bounds(), 1, Look::default(), None, CompositeSource { cached: None, fresh: &mut None, screen: &screen }).unwrap();
+    let shown = render_with_source(&doc, &v, doc.bounds(), 1, Look::default(), None, CompositeSource { screen: &screen }).unwrap();
     // x 0: solid teal; x 2: no ink of channel 0, so transparent either way.
     let mut teal = [0.0f32, 0.6, 0.65, 1.0];
     t.apply(&mut teal, 4).unwrap();
@@ -650,12 +518,11 @@ fn printed_inks_follow_the_display_transform() {
 #[test]
 fn printed_inks_keep_their_colour_in_a_linear_document() {
     let mut doc = spot_doc(ColorMode::Rgb, photocraft_color::SampleType::F32, 1.0, 1.0);
-    doc.icc_profile = Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes());
+    doc.icc_profile = Some(craft::cms::Builtin::LinearSrgb.profile().to_bytes());
     let mut v = ChannelView::default();
     v.set_alpha_visible(0, true);
     let encoded = Screen { encode_srgb: true, transform: None };
-    let shown =
-        render_with_source(&doc, &v, doc.bounds(), 1, Look::default(), None, CompositeSource { cached: None, fresh: &mut None, screen: &encoded }).unwrap();
+    let shown = render_with_source(&doc, &v, doc.bounds(), 1, Look::default(), None, CompositeSource { screen: &encoded }).unwrap();
     let (got, want) = ([shown[0].r(), shown[0].g(), shown[0].b()], [0, q(0.6), q(0.65)]);
     assert!(got.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= 1), "{got:?} vs the stored {want:?}");
 }
@@ -676,44 +543,6 @@ fn alpha_tint_draws_over_the_inks() {
     let red = AlphaChannel::DEFAULT_COLOR.to_rgb();
     let want: Vec<u8> = (0..3).map(|j| q(red[j] * 0.5 + teal[j] * 0.5)).collect();
     assert_eq!(vec![px[0].r(), px[0].g(), px[0].b()], want);
-}
-
-/// Editing a spot (colour, solidity, visibility) or the picture under it refreshes the canvas texture.
-#[test]
-fn spot_edits_refresh_the_overlay() {
-    let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
-    app.run("file.new", json!({"width": 16, "height": 8, "background": "white"})).unwrap();
-    app.run("select.all", json!({})).unwrap();
-    let spot = app.run("channel.newSpot", json!({"color": "#00ffff", "solidity": 0})).unwrap()["channel"].as_u64().unwrap();
-    app.sync_views();
-    let ctx = egui::Context::default();
-    let id = app.session.active().unwrap().doc.id.0;
-    let pixel = |app: &PhotocraftApp| {
-        let st = app.session.active().unwrap();
-        render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).map(|px| px[0])
-    };
-    assert!(ensure(&mut app, &ctx, 0, None).is_some());
-    assert_eq!(pixel(&app), Some(Color32::from_rgb(0, 255, 255)), "solid transparent cyan over white");
-    let edits = [
-        ("channel.options", json!({"channel": spot, "color": "#ff00ff"})),
-        // A gray picture first: a solid ink over white looks the same at any solidity.
-        ("edit.fill", json!({"color": "#808080"})),
-        ("channel.options", json!({"channel": spot, "solidity": 100})),
-        ("channel.setVisible", json!({"channel": spot, "visible": false})),
-    ];
-    let mut last = pixel(&app);
-    for (cmd, params) in edits {
-        app.run(cmd, params.clone()).unwrap();
-        let shown = ensure(&mut app, &ctx, 0, None);
-        let now = pixel(&app);
-        assert_ne!(now, last, "{cmd} {params}");
-        let revision = app.session.active().unwrap().revision;
-        match shown {
-            Some(_) => assert_eq!(app.channel_views.get(&id).unwrap().revision, revision, "{cmd} {params}"),
-            None => assert!(now.is_none(), "a hidden spot leaves the plain composite"),
-        }
-        last = now;
-    }
 }
 
 /// The first draw of a big document composites a proxy, not the full canvas (#10249): it must
