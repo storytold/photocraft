@@ -213,6 +213,11 @@ fn autosave(app: &mut PhotocraftApp, now: Instant) {
             }
         }
     }
+    // Apply Data Set's Preview is not the document: autosave waits until the preview ends, and
+    // the timer keeps what is due for the next tick.
+    if crate::panels::apply_data_set_ui::previewing(app) {
+        return;
+    }
     // Saved or closed documents drop their recovery data, and so does turning Autosave off: the
     // copies already kept (on the web, in the browser's storage) are removed, not left behind.
     // With Autosave off every document counts as clean, so `due` discards each tracked copy.

@@ -853,11 +853,6 @@ fn parse_opts(rest: &[&str]) -> Result<Opts, String> {
     Ok(o)
 }
 
-fn target_dir() -> Result<PathBuf, String> {
-    let m = crate::metadata()?;
-    m.get("target_directory").and_then(Value::as_str).map(PathBuf::from).ok_or_else(|| "cargo metadata: no target_directory".into())
-}
-
 fn write(path: &Path, text: &str) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
@@ -880,7 +875,7 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     }
     let mode = if o.quick { "quick" } else { "full" };
     let threshold = o.threshold.unwrap_or(budgets.settings.regression_pct);
-    let target = target_dir()?;
+    let target = crate::target_dir()?;
     let out_dir = target.join("perf");
 
     // Which benches run in this mode.
