@@ -3133,7 +3133,7 @@ fn named_batch_limits_nesting_and_keeps_the_callers_state() {
         let before = s.actions().clone();
         let error = s.execute("file.automate.batch", params.clone()).unwrap_err();
         assert!(error.to_string().contains("nesting exceeds 16"), "{error}");
-        assert_eq!(s.actions(), before);
+        assert_eq!(*s.actions(), before);
         assert!(!std::path::Path::new(&output).exists());
 
         s.recording.playing = 0;
@@ -3228,7 +3228,7 @@ fn named_batch_allows_nested_work_and_preserves_authorization() {
             let saved = photocraft_io::import("red.png", &std::fs::read(join(&inner, "red.png")).unwrap()).unwrap().document;
             assert_eq!(photocraft_compose::render(&saved, Rect::new(1, 1, 2, 2)).px[0], [0.0, 1.0, 1.0, 1.0]);
         }
-        assert_eq!(s.actions(), before);
+        assert_eq!(*s.actions(), before);
     }
 }
 

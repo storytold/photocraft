@@ -136,7 +136,7 @@ fn set_duplication_preserves_metadata_call_targets_and_empty_folder_order() {
     let original = empty.actions().clone();
     for params in [json!({"set":"Missing"}), json!({"set":"E","action":0}), json!({"set":false})] {
         assert!(empty.execute("actions.duplicate", params).is_err());
-        assert_eq!(empty.actions(), original);
+        assert_eq!(*empty.actions(), original);
     }
 }
 
@@ -172,7 +172,7 @@ fn inserted_menu_events_roundtrip_absent_settings_and_stateless_items_execute() 
         [json!({"action":"A","id":"layer.setProps"}), json!({"action":"A","id":"file.open"}), json!({"action":"A","id":"image.imageSize","params":{"width":4}})]
     {
         assert!(s.execute("actions.insertMenuItem", params).is_err());
-        assert_eq!(s.actions(), original);
+        assert_eq!(*s.actions(), original);
     }
     let mut raw = craft_psd::atn::AtnFile::default();
     raw.actions.push(craft_psd::atn::AtnAction {

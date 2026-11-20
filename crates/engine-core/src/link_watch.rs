@@ -66,7 +66,7 @@ pub(crate) fn update_changed(s: &mut Session, _: &Value) -> Result<Value> {
     // Drop a look still running on a worker thread. It stamped the files before this one, and
     // applying it later would replace this look's result.
     s.link_scan = None;
-    s.apply_link_stamps(doc, now)
+    apply_link_stamps(s, doc, now)
 }
 
 /// [`linked_files`] of `st`'s document with the file each path resolves to, or `None` for a path
@@ -219,6 +219,7 @@ mod tests {
     use photocraft_geom::Rect;
     use serde_json::json;
 
+    use super::LinkWatchExt;
     use crate::{EngineError, Session};
 
     fn dir(name: &str) -> std::path::PathBuf {
