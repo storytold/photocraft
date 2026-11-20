@@ -27,23 +27,28 @@ enum Destination {
 }
 
 /// The destination the `document` field names; one rule for the held OK's check and for the run.
+/// The field holds the document's id, looked up again here, so closing or reordering tabs while
+/// the dialog is open never sends the copy to whichever document took the chosen one's place.
 fn destination(app: &PhotocraftApp, fields: &DialogFields) -> Result<Destination, String> {
     match fields.text("document") {
         Some("new") => Ok(Destination::New),
-        Some(index) => index
-            .parse::<usize>()
-            .ok()
-            .filter(|i| *i < app.session.documents().len())
-            .map(Destination::Document)
-            .ok_or_else(|| tl!("no destination document").to_string()),
+        Some(id) => {
+            let id = id.parse::<u64>().map_err(|_| tl!("no destination document").to_string())?;
+            app.session
+                .documents()
+                .iter()
+                .position(|d| d.doc.id.0 == id)
+                .map(Destination::Document)
+                .ok_or_else(|| tl!("The destination document is no longer open. Choose another one.").to_string())
+        }
         None => Err(tl!("no destination document").to_string()),
     }
 }
 
 /// Opens the dialog on the selected layers. The document and the selection are captured for [`check`].
 pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
-    let index = app.session.active_index().ok_or("no document")?;
     let st = app.session.active().ok_or("no document")?;
+    let source = st.doc.id.0;
     let selected = st.selected_layers();
     let layer = st.active_layer.and_then(|id| st.doc.layer(id)).ok_or("no active layer")?;
     let captured = json!({"document": st.doc.id.0, "selected": selected.iter().map(|id| id.0).collect::<Vec<_>>()});
@@ -55,18 +60,33 @@ pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
     } else {
         (tl!("Duplicate Layer…"), Some(st.doc.copy_name(&layer.name)))
     };
-    let mut options: Vec<(String, Label)> = app.session.documents().iter().enumerate().map(|(i, d)| (i.to_string(), Label::from(d.doc.name.clone()))).collect();
+    let mut options: Vec<(String, Label)> = destinations(app).into_iter().map(|(key, name)| (key, Label::from(name))).collect();
     options.push(("new".to_string(), Label::from(tl!("New"))));
     Ok(params::open_param(app, KEY, DialogFields::new(), captured, move |fields: &mut DialogFields| {
         let mut rows = Vec::new();
         if let Some(name) = &name {
             rows.push(Param::new("name", tl!("As:"), ParamKind::text(name.clone())));
         }
-        rows.push(Param::new("document", tl!("Document"), ParamKind::choice(options.clone(), Some(index.to_string()))));
+        rows.push(Param::new("document", tl!("Document"), ParamKind::choice(options.clone(), Some(source.to_string()))));
         // Photoshop's document `Name` starts empty; the engine defaults it when empty, and it is only there for a new document.
         rows.push(Param::new("documentName", tl!("Name:"), ParamKind::text("")).visible_when("document", "new"));
         ParamDialog::command(KEY, title, rows).values(Bind::bound(fields))
     }))
+}
+
+/// The Destination › Document entries before New: the open documents in tab order, keyed by
+/// their document id, without those `layer.copyToDocument` refuses (Indexed Color and the other modes
+/// outside `layered`), as Photoshop leaves them out (#14612). The source stays: copying within it
+/// is a plain duplicate.
+pub(crate) fn destinations(app: &PhotocraftApp) -> Vec<(String, String)> {
+    let source = app.session.active_index();
+    app.session
+        .documents()
+        .iter()
+        .enumerate()
+        .filter(|(i, d)| Some(*i) == source || photocraft_engine::layer_copy_cmds::layered(d.doc.mode))
+        .map(|(_, d)| (d.doc.id.0.to_string(), d.doc.name.clone()))
+        .collect()
 }
 
 /// Refuses an OK after the document, the selection or the destination changed, so the dialog stays open with the reason.
@@ -135,6 +155,19 @@ mod tests {
     fn names(app: &PhotocraftApp, i: usize) -> Vec<String> {
         app.session.documents()[i].doc.walk().into_iter().map(|(_, _, l)| l.name.clone()).collect()
     }
+    /// The Document choice's value for the document at tab `i`: its id.
+    fn key(app: &PhotocraftApp, i: usize) -> serde_json::Value {
+        json!(app.session.documents()[i].doc.id.0.to_string())
+    }
+    /// Poster (active, with Ink), Card and Spare.
+    fn three_docs() -> Box<PhotocraftApp> {
+        let mut app = make_app();
+        for name in ["Card", "Spare"] {
+            app.session.execute("file.new", json!({"width":8,"height":8,"name":name})).unwrap();
+        }
+        app.session.set_active(0);
+        app
+    }
 
     #[test]
     fn the_menu_opens_the_dialog_and_ok_duplicates_under_the_typed_name() {
@@ -155,7 +188,8 @@ mod tests {
         app.session.execute("file.new", json!({"width":8,"height":8,"name":"Card"})).unwrap();
         app.session.set_active(0);
         let dialog = invoke(&mut app);
-        set(&mut app, dialog, "document", json!("1")).unwrap();
+        let pick = key(&app, 1);
+        set(&mut app, dialog, "document", pick).unwrap();
         confirm(&mut app, &ctx, dialog).unwrap();
         assert_eq!(app.session.documents()[0].doc.layer_count(), 2);
         assert!(names(&app, 1).contains(&"Ink copy".to_string()));
@@ -177,7 +211,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_destination_without_a_name_defaults_it_and_refuses_a_dead_index() {
+    fn a_new_destination_without_a_name_defaults_it_and_refuses_an_unknown_document() {
         let mut app = make_app();
         let ctx = app.ctx().clone();
         let dialog = invoke(&mut app);
@@ -185,8 +219,8 @@ mod tests {
         confirm(&mut app, &ctx, dialog).unwrap();
         assert_eq!(app.session.documents()[1].doc.name, "Poster copy");
         let dialog = invoke(&mut app);
-        // Either the select refuses the index or the held OK does.
-        if set(&mut app, dialog, "document", json!("7")).is_ok() {
+        // Either the select refuses the id or the held OK does.
+        if set(&mut app, dialog, "document", json!(u64::MAX.to_string())).is_ok() {
             assert!(confirm(&mut app, &ctx, dialog).is_err());
         }
         assert_eq!(app.session.documents().len(), 2);
@@ -202,4 +236,54 @@ mod tests {
         assert!(app.framework.dialogs.stack().contains(dialog), "the dialog stays open");
         assert_eq!(app.session.documents()[0].doc.layer_count(), 2, "nothing was copied");
     }
+
+    /// The choice names a document, not a tab position: reordering tabs or closing another
+    /// document while the dialog is open still copies into the one picked.
+    #[test]
+    fn the_picked_document_receives_the_copy_after_tabs_move_or_close() {
+        for change in ["move", "close"] {
+            let mut app = three_docs();
+            let ctx = app.ctx().clone();
+            let dialog = invoke(&mut app);
+            let pick = key(&app, 2);
+            set(&mut app, dialog, "document", pick).unwrap();
+            if change == "move" {
+                // Spare to the front: Card now sits where Spare was.
+                app.session.move_document(2, 0).unwrap();
+            } else {
+                // Card closes: Spare moves up into its place.
+                app.session.close(1).unwrap();
+            }
+            confirm(&mut app, &ctx, dialog).unwrap();
+            let docs = app.session.documents();
+            let spare = docs.iter().position(|d| d.doc.name == "Spare").unwrap();
+            let spare_names: Vec<_> = docs[spare].doc.walk().into_iter().map(|(_, _, l)| l.name.clone()).collect();
+            assert!(spare_names.contains(&"Ink copy".to_string()), "{change}: Spare receives the copy: {spare_names:?}");
+            if let Some(card) = docs.iter().position(|d| d.doc.name == "Card") {
+                assert_eq!(docs[card].doc.layer_count(), 1, "{change}: Card is untouched");
+            }
+            let poster = docs.iter().position(|d| d.doc.name == "Poster").unwrap();
+            assert_eq!(docs[poster].doc.layer_count(), 2, "{change}: the source is untouched");
+        }
+    }
+
+    /// Closing the picked document refuses OK with the reason and keeps the dialog open.
+    #[test]
+    fn a_closed_destination_refuses_and_keeps_the_dialog() {
+        let mut app = three_docs();
+        let ctx = app.ctx().clone();
+        let dialog = invoke(&mut app);
+        let pick = key(&app, 2);
+        set(&mut app, dialog, "document", pick).unwrap();
+        app.session.close(2).unwrap();
+        let err = confirm(&mut app, &ctx, dialog).unwrap_err();
+        assert!(err.contains("no longer open"), "{err}");
+        assert!(app.framework.dialogs.stack().contains(dialog), "the dialog stays open");
+        assert_eq!(app.session.documents()[1].doc.layer_count(), 1, "Card, now in Spare's place, is untouched");
+        assert_eq!(app.session.documents()[0].doc.layer_count(), 2, "nothing was copied");
+    }
 }
+
+#[cfg(test)]
+#[path = "duplicate_layer_indexed_tests.rs"]
+mod duplicate_layer_indexed_tests;

@@ -171,7 +171,7 @@ pub use cmd::vp_cmds;
 pub use cmd::warp_cmds;
 pub use cmd::web_cmds;
 pub use cmd::wia_cmds;
-pub use doc_state::{CopiedStyle, DocState, PRECHECKED, ToolState, selected_in};
+pub use doc_state::{CopiedStyle, DocState, DocStateInputs, PRECHECKED, ToolState, selected_in};
 pub use error::{EngineError, Result};
 pub use session::move_item;
 use session::restore_target;
@@ -224,7 +224,7 @@ pub struct Session {
     /// `restore_layer_selection`, `layer_multi_cmds::set_selection`, `set_active_layer`, undo / redo /
     /// rollback, document switches). Compare two readings for equality to know whether anything
     /// changed in between; it is not an exact count of operations (one operation may advance it
-    /// more than once). Writing `DocState::active_layer` directly bypasses it.
+    /// more than once). Calling `DocState::set_active_layer` directly bypasses it.
     active_layer_changes: u64,
     pub tools: ToolState,
     /// Log of executed commands (for action recording and debugging).

@@ -201,7 +201,7 @@ pub fn disabled(app: &crate::PhotocraftApp, id: &str) -> bool {
     }
     // Only these commands depend on the selection; skip walking the layers for the rest.
     if selection_targets(id).is_some() || id == "layer.new.groupFromLayers" {
-        return disabled_for_selection(&st.doc, &st.selected_layers(), active, id);
+        return disabled_for_selection(&st.doc, st.selected_layers(), active, id);
     }
     disabled_for(&st.doc, active, id)
 }

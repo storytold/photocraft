@@ -158,7 +158,7 @@ pub fn build(spec: Spec) -> (Document, Handles) {
         let mut doc = (*st.doc).clone();
         let l = photo_layer(name, fmt, r, seed);
         let id = doc.insert_above(None, l);
-        st.doc = std::sync::Arc::new(doc);
+        *st.doc_mut() = std::sync::Arc::new(doc);
         exec(s, "layer.select", json!({"layer": id.0}));
         id_of(&exec(s, "layer.smartObjects.convertToSmartObject", json!({"layer": id.0})))
     };
@@ -185,7 +185,7 @@ pub fn build(spec: Spec) -> (Document, Handles) {
         l.mask = Some(m);
         l.effects.items = vec![gradient_overlay([0.1, 0.1, 0.3], [0.9, 0.5, 0.2])];
         let id = doc.insert_above(None, l);
-        st.doc = std::sync::Arc::new(doc);
+        *st.doc_mut() = std::sync::Arc::new(doc);
         id
     };
     let headline = text(&mut s, px(240.0), px(800.0), "Make things that last", fonts[3], pt(160.0), [1.0, 1.0, 1.0], json!({}));

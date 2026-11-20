@@ -239,6 +239,13 @@ fn brst_round_trip() {
 }
 
 #[test]
+fn brst_ignores_truncated_and_trailing_bytes() {
+    assert_eq!(super::parse_brst(&[]), 0);
+    assert_eq!(super::parse_brst(&[0, 0, 0]), 0);
+    assert_eq!(super::parse_brst(&[0, 0, 0, 2, 0xff, 0xee]), 0b100);
+}
+
+#[test]
 fn placed_layer_warp_is_read() {
     use craft_psd::descriptor::ObjectArray;
     use photocraft_geom::warp::WarpStyle;

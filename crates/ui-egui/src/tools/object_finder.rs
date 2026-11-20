@@ -11,6 +11,12 @@
 //! pixels, so an edit drops it. The preview itself is keyed by document revision, sampled layer and
 //! Sample All Layers, and clears when the pointer leaves the canvas, the tool changes, a button
 //! goes down or the option is off. Quality of the object found is out of scope here (#2788).
+//!
+//! The options bar has a Refresh button and a gear menu (#12857): Object Finder on/off, Object
+//! Subtract (stored only) and Object Finder Mode. Auto Refresh re-analyses after every edit, as
+//! above. Manual Refresh keeps the analysed pixels (`Finder::basis`) across the pointer leaving,
+//! a tool switch and selection-only changes; it analyses nothing until Refresh is clicked
+//! ([`refresh`]): not on the first hover, on another document, or after a pixel edit.
 
 use std::sync::Arc;
 
@@ -23,7 +29,7 @@ use photocraft_engine::smartselect_cmds::{empty_sampled_area, find_object, sampl
 
 use crate::PhotocraftApp;
 use crate::canvas::tools::in_gesture;
-use crate::state::Tool;
+use crate::state::{ObjectFinderMode, Tool};
 
 /// Seconds the pointer must rest before an object is looked up.
 pub const DEBOUNCE: f64 = 0.12;
@@ -53,6 +59,8 @@ pub(crate) struct Finder {
     shown: Option<Arc<Region>>,
     /// The hover mask of `shown`, with the object it was made from.
     mask: Option<(Arc<Region>, HoverMask)>,
+    /// The document whose pixels were last analysed (Manual Refresh compares against it).
+    basis: Arc<Document>,
 }
 
 /// What [`update`] decided.
@@ -95,7 +103,7 @@ fn mask_of(r: &Region) -> HoverMask {
 pub(crate) fn update(app: &mut PhotocraftApp, at: Option<[f64; 2]>, pressed: bool, now: f64, ctx: &egui::Context) -> Update {
     let at = at.filter(|p| p[0].is_finite() && p[1].is_finite());
     let (Some(at), true) = (at, active(app, pressed)) else {
-        app.object_finder = None;
+        idle(app);
         return Update::default();
     };
     let Some(st) = app.session.active() else { return Update::default() };
@@ -104,10 +112,24 @@ pub(crate) fn update(app: &mut PhotocraftApp, at: Option<[f64; 2]>, pressed: boo
     let (doc, revision, layer) = (st.doc.id, st.revision, st.active_layer);
     let px = [at[0].floor() as i32, at[1].floor() as i32];
     let fresh = app.object_finder.as_ref().is_some_and(|f| f.doc == doc && f.revision == revision && f.target == target && f.all_layers == all_layers);
-    if !fresh {
-        app.object_finder = Some(Finder { doc, revision, target, all_layers, at: px, since: now, job: None, misses: Vec::new(), shown: None, mask: None });
-    }
     let doc_arc = Arc::clone(&st.doc);
+    if !fresh {
+        let manual = app.ui.tool_options.object_finder_mode == ObjectFinderMode::Manual;
+        match app.object_finder.as_mut() {
+            // Manual Refresh: a selection-only change keeps the analysis, a pixel edit makes it stale.
+            Some(f) if manual && f.doc == doc => {
+                if f.target == target && f.all_layers == all_layers && photocraft_engine::layer_multi_cmds::same_pixels(&f.basis, &doc_arc) {
+                    f.revision = revision;
+                } else {
+                    return Update::default();
+                }
+            }
+            // Manual Refresh analyses nothing until Refresh is clicked: no finder yet, or one kept
+            // for another document, waits for [`refresh`] (#12857).
+            _ if manual => return Update::default(),
+            _ => app.object_finder = start(app),
+        }
+    }
     // The click reports an empty sampled layer; the hover says so too instead of showing nothing.
     let here = photocraft_geom::Rect::from_xywh(px[0], px[1], 1, 1);
     if doc_arc.bounds().contains(px[0], px[1]) && empty_sampled_area(&doc_arc, layer, all_layers, here).is_some() {
@@ -197,9 +219,50 @@ fn spawn(doc: Arc<Document>, layer: Option<LayerId>, all_layers: bool, px: [i32;
     Job { at: px, doc, rx }
 }
 
+/// Drops the preview. Auto Refresh forgets the finder; Manual Refresh keeps the analysed
+/// pixels so the pointer leaving or a tool switch doesn't lose them.
+fn idle(app: &mut PhotocraftApp) {
+    if app.ui.tool_options.object_finder_mode == ObjectFinderMode::Manual
+        && let Some(f) = app.object_finder.as_mut()
+    {
+        f.shown = None;
+        f.job = None;
+        f.mask = None;
+        f.misses.clear();
+    } else {
+        app.object_finder = None;
+    }
+}
+
 /// Clears the preview (a tool switch or an edit made elsewhere is caught by [`update`] too).
 pub(crate) fn clear(app: &mut PhotocraftApp) {
-    app.object_finder = None;
+    idle(app);
+}
+
+/// The options bar's Refresh button: the next [`update`] analyses the current pixels. Under
+/// Manual Refresh this is the only way a finder starts.
+pub(crate) fn refresh(app: &mut PhotocraftApp) {
+    app.object_finder = start(app);
+}
+
+/// A new finder for the active document's current pixels, sampled layer and Sample All Layers.
+/// Its pointer position is unset, so the first hover starts the debounce.
+fn start(app: &PhotocraftApp) -> Option<Finder> {
+    let st = app.session.active()?;
+    let all_layers = app.ui.tool_options.sample_all.object_selection;
+    Some(Finder {
+        doc: st.doc.id,
+        revision: st.revision,
+        target: sampled_target(&st.doc, st.active_layer, all_layers),
+        all_layers,
+        at: [i32::MIN, i32::MIN],
+        since: 0.0,
+        job: None,
+        misses: Vec::new(),
+        shown: None,
+        mask: None,
+        basis: Arc::clone(&st.doc),
+    })
 }
 
 /// Updates the preview for this frame and shows the highlight. `at` is the pointer in document
