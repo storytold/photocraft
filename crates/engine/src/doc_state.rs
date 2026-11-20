@@ -42,6 +42,8 @@ pub struct DocState {
     /// Layers panel: layers whose effects list is collapsed under their row (the fx triangle;
     /// view state, not history). Effects lists start open.
     pub fx_collapsed: Vec<LayerId>,
+    /// See [`DocState::layers_view_revision`].
+    layers_view_revision: u64,
     /// ⌥-click on a layer's eye (`layer.showOnly`): the layer shown alone and every layer's
     /// visibility before, so the next ⌥-click restores it (view state, not history).
     pub show_only: Option<(LayerId, Vec<(LayerId, bool)>)>,
@@ -55,8 +57,10 @@ pub struct DocState {
     /// History panel snapshots, oldest first (`history.newSnapshot`, #2966): the first (id 0) is
     /// the document as opened (unless History Options › Automatically Create First Snapshot is
     /// off). Kept for the session only, as in Photoshop: not history states,
-    /// and not saved with the document.
-    pub snapshots: Vec<history_cmds::Snapshot>,
+    /// and not saved with the document. Changed only through [`DocState::snapshots_mut`].
+    snapshots: Vec<history_cmds::Snapshot>,
+    /// See [`DocState::snapshots_generation`].
+    snapshots_generation: u64,
     /// The id the next snapshot gets; ids are never reused, so deleting one keeps the others.
     pub(crate) next_snapshot: u64,
     /// The snapshot the latest save added (History Options › Automatically Create New Snapshot
@@ -123,16 +127,33 @@ impl DocState {
             isolated_layers: Vec::new(),
             symmetry: None,
             fx_collapsed: Vec::new(),
+            layers_view_revision: 0,
             show_only: None,
             floating: None,
             color_samplers: Vec::new(),
             snapshots: vec![first],
+            snapshots_generation: next_snapshots_generation(),
             next_snapshot: 1,
             save_snapshot: None,
             source_snapshot: None,
             typed_names: Default::default(),
             pixel_revision: 0,
         }
+    }
+    /// The History panel snapshots, oldest first.
+    pub fn snapshots(&self) -> &[history_cmds::Snapshot] {
+        &self.snapshots
+    }
+    /// The snapshots to change: [`Self::snapshots_generation`] moves.
+    pub fn snapshots_mut(&mut self) -> &mut Vec<history_cmds::Snapshot> {
+        self.snapshots_generation = next_snapshots_generation();
+        &mut self.snapshots
+    }
+    /// A number that identifies the snapshot list: every [`Self::snapshots_mut`] takes a fresh
+    /// one, clones keep it, and no two lists that differ share one. With
+    /// [`photocraft_ops::History::generation`] it says when the History panel's rows change.
+    pub fn snapshots_generation(&self) -> u64 {
+        self.snapshots_generation
     }
     /// The selected layers in bottom-to-top document order, always including the active layer.
     /// Robust against stale state: ids no longer in the document are skipped, and if the active
@@ -170,10 +191,40 @@ impl DocState {
             self.saved_revision = self.revision;
         }
     }
+    /// Move to the next revision for a change of the layer selection, which is not an edit:
+    /// readers keyed on the revision follow it, a clean document stays clean, and no pixels need
+    /// drawing again.
+    pub(crate) fn bump_selection_revision(&mut self) {
+        self.bump_revision(!self.is_dirty());
+        self.last_damage = Some(photocraft_geom::Rect::EMPTY);
+    }
+    /// Moves when an effects list or a group in the Layers panel opens or closes. That is view
+    /// state, not an edit, so [`DocState::revision`] stays; the Layers panel's rows key on this.
+    pub fn layers_view_revision(&self) -> u64 {
+        self.layers_view_revision
+    }
+    /// Count an effects list or group opened or closed (see [`Self::layers_view_revision`]).
+    pub(crate) fn note_disclosure_change(&mut self) {
+        self.layers_view_revision += 1;
+    }
+    /// Move to the next revision for a view-only change (channel eyes, a history state deleted,
+    /// Layers panel isolation): readers keyed on the revision follow it, pixel caches ignore it
+    /// through `view_revision`, and no pixels need drawing again. `keep_clean` as for
+    /// [`Self::bump_revision`].
+    pub(crate) fn bump_view_revision(&mut self, keep_clean: bool) {
+        self.view_revision += 1;
+        self.bump_revision(keep_clean);
+        self.last_damage = Some(photocraft_geom::Rect::EMPTY);
+    }
     /// The targeted layers, as history stores them with each state.
     pub(crate) fn layer_target(&self) -> LayerTarget {
         LayerTarget { active: self.active_layer, selected: self.selected_layers.clone() }
     }
+}
+
+fn next_snapshots_generation() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// App-wide tool state that commands read (foreground colour, brush…).
