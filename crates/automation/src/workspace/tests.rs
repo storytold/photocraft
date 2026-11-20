@@ -683,6 +683,7 @@ fn filesystem_commands_fail_closed() {
         "measurementLog.export",
         "layer.videoLayers.reloadFrame",
         "edit.colorSettings",
+        "edit.importProfile",
     ] {
         assert!(authorize_engine_command(id, &serde_json::json!({})).is_err());
     }
