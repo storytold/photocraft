@@ -9,7 +9,7 @@
 //! cargo run --release -p photocraft-ui-egui --example large_file_bench -- [--reps 3] [--only psd|psb] [--cache DIR] [--clean] [--json out.json]
 //! ```
 //!
-//! The fixtures (`photocraft_psd::fixtures`, about 6.4 GB together) are generated once into
+//! The fixtures (`craft_psd::fixtures`, about 6.4 GB together) are generated once into
 //! `--cache` (default: `$PHOTOCRAFT_FIXTURE_DIR`, else `fixtures/` in the target directory next
 //! to this binary) and kept for the next run; `--clean` removes them afterwards. Each row also
 //! records the peak resident memory of its opens. Needs about 30 GB of memory for the PSB.
@@ -17,10 +17,13 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use craft_psd::fixtures::{PSB_4GB, PSD_2GB, Streamed};
 use photocraft_engine::Session;
-use photocraft_psd::fixtures::{PSB_4GB, PSD_2GB, Streamed};
 use photocraft_testkit::perf::{RssSampler, row};
 use serde_json::json;
+
+#[path = "support/bench_import.rs"]
+mod bench_import;
 
 fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
@@ -35,10 +38,11 @@ fn default_cache() -> PathBuf {
 }
 
 /// Opens `path` like File › Open: read, decode, open in a session. Returns the session (the
-/// caller drops it outside the timing) and whether a sampled pixel came back right.
+/// caller drops it outside the timing) and whether a sampled pixel came back right. The import
+/// runs under the benchmark memory budget (see `support/bench_import.rs`).
 fn open(case: &Streamed, path: &std::path::Path) -> Result<(Session, bool), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let doc = photocraft_io::import(&case.file_name(), &bytes).map_err(|e| e.to_string())?.document;
+    let doc = bench_import::import(&case.file_name(), &bytes)?.document;
     drop(bytes);
     let mut s = Session::new();
     s.open_document(doc, Some(path.display().to_string()));
@@ -82,6 +86,7 @@ fn main() {
         }
         let mut samples = Vec::new();
         let mut peak = None;
+        let mut failed = false;
         for _ in 0..reps {
             sampler.reset();
             let t = Instant::now();
@@ -92,6 +97,7 @@ fn main() {
                     println!("{name:<44} {ms:>9.0} ms   peak RSS {:>6} MB{}", sampler.peak().unwrap_or(0) >> 20, if ok { "" } else { "   WRONG PIXELS" });
                     if !ok {
                         errors.push(json!({"name": name, "error": "the opened document's pixels don't match the fixture"}));
+                        failed = true;
                         break;
                     }
                     samples.push(ms);
@@ -100,26 +106,34 @@ fn main() {
                 Err(e) => {
                     println!("{name}: {e}");
                     errors.push(json!({"name": name, "error": e}));
+                    failed = true;
                     break;
                 }
             }
         }
-        if !samples.is_empty() {
+        // A case that failed in any repetition has no timing row, only its error: `cargo xtask
+        // perf` takes a row over an error of the same name.
+        if !failed && !samples.is_empty() {
             rows.push(row(name, &samples, peak, None));
         }
         if clean {
             let _ = std::fs::remove_file(&path);
         }
     }
+    let mut reported = false;
     if let Some(out) = arg(&args, "--json") {
         let context =
             json!({"reps": reps, "cache": dir.display().to_string(), "errors": errors, "threads": std::thread::available_parallelism().map(|n| n.get()).ok()});
         let report = photocraft_testkit::perf::report("large_file_bench", context, rows, Some(&sampler));
-        if let Err(e) = photocraft_testkit::perf::write_report(&out, &report) {
-            eprintln!("{e}");
+        match photocraft_testkit::perf::write_report(&out, &report) {
+            Ok(()) => reported = true,
+            Err(e) => eprintln!("{e}"),
         }
     }
-    if !errors.is_empty() {
+    // A written report carries each failed row's reason, and `cargo xtask perf` fails that row
+    // with it. A non-zero exit would make it discard the report, failing every row of this bench
+    // with only "exited with exit status: 1".
+    if !errors.is_empty() && !reported {
         std::process::exit(1);
     }
 }

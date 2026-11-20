@@ -558,7 +558,7 @@ pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> Layer {
     let mut tmp = Document::new("merge", doc.size, format.mode, format.sample);
     // The pair is read (and a CMYK one separated again) through the document's own profile.
     tmp.icc_profile = doc.icc_profile.clone();
-    tmp.layers = stack;
+    tmp.layers = stack.into();
     // A Background stays canvas-sized; any other layer keeps the pixels outside the canvas (#5067).
     let s = if doc.is_background(lower.id) { composite_layers(&tmp, format, None) } else { composite_layers_uncropped(&tmp, format) };
     let mut merged = Layer::new(lower.name.clone(), LayerContent::Raster(s));

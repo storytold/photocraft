@@ -24,7 +24,7 @@ pub(super) fn new_adjustment(s: &mut Session, adj: Adjustment, p: &Value, cmd: &
         None | Some(Value::Null) => BlendMode::Normal,
         Some(v) => {
             let m = v.as_str().ok_or_else(|| bad("`mode` must be a blend mode name".into()))?;
-            crate::commands::blend_from_str(m).filter(|b| *b != BlendMode::PassThrough).ok_or_else(|| bad(format!("unknown layer blend mode `{m}`")))?
+            crate::commands::parse_blend(m).filter(|b| *b != BlendMode::PassThrough).ok_or_else(|| bad(format!("unknown layer blend mode `{m}`")))?
         }
     };
     let clip = match p.get("clipToPrevious") {
