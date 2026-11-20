@@ -510,7 +510,10 @@ fn canvas_controls(
     if !app.ui.view.hides_chrome() {
         let size = app.session.documents()[host.idx].doc.size;
         let bounds = Rect64::from_origin_size(Point::ZERO, Size::new(f64::from(size.width), f64::from(size.height)));
-        CanvasScrollbars::new("Scroll bars", Bind::bound(&mut shown), bounds).overscroll(app.session.prefs().tools.overscroll).show_at(ui, rect);
+        CanvasScrollbars::new("Scroll bars", Bind::bound(&mut shown), bounds)
+            .overscroll(app.session.prefs().tools.overscroll)
+            .document_chrome()
+            .show_at(ui, rect);
     }
     if RotateView::visible(shown.rotation) {
         let mut rotation = shown.rotation;
