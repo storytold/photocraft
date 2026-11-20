@@ -1946,6 +1946,12 @@ impl Session {
         self.prefs.get()
     }
 
+    /// Revision of the framework preference section `key`: it moves when an edit changes that
+    /// section.
+    pub fn section_rev(&self, key: &str) -> u64 {
+        self.prefs.section_rev(key)
+    }
+
     /// Change preferences and apply the engine-side ones.
     pub fn edit_prefs<R>(&mut self, f: impl FnOnce(&mut Preferences) -> R) -> R {
         let r = self.prefs.edit(f);

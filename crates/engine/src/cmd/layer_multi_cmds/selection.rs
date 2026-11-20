@@ -1,5 +1,5 @@
 use super::moves::{link_groups, recorded_move};
-use super::{DocState, Document, EngineError, Layer, LayerContent, LayerId, Rect, Result, Session, Value, bad, json};
+use super::{DocState, Document, EngineError, Layer, LayerContent, LayerId, Result, Session, Value, bad, json};
 
 // ---------- selection state ----------
 
@@ -42,9 +42,7 @@ pub(crate) fn mask_targets(s: &Session, p: &serde_json::Value) -> Result<Vec<Lay
 /// Ids in `ids` that have no ancestor also in `ids` (a selected group already carries its
 /// selected children), bottom-to-top.
 pub(crate) fn top_level(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
-    let walk = doc.walk();
-    let paths: Vec<_> = walk.iter().filter(|(_, _, l)| ids.contains(&l.id)).map(|(p, _, l)| (p.clone(), l.id)).collect();
-    paths.iter().filter(|(p, _)| !paths.iter().any(|(q, _)| q.len() < p.len() && p.starts_with(q))).map(|(_, id)| *id).collect()
+    doc.layers.index().roots(ids)
 }
 
 /// Replace the layer selection without a history step (like [`Session::select_layer`]).
@@ -64,13 +62,7 @@ pub fn set_selection(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerId>
     st.active_layer = active;
     st.layer_anchor = anchor.or(active);
     crate::fix_selection(st);
-    // Selecting layers is not an edit: keep a clean document clean.
-    let clean = st.saved_revision == st.revision;
-    st.revision += 1;
-    if clean {
-        st.saved_revision = st.revision;
-    }
-    st.last_damage = Some(Rect::EMPTY);
+    st.bump_selection_revision();
     s.note_layer_change(before);
     Ok(())
 }

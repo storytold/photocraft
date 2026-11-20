@@ -237,3 +237,22 @@ fn the_task_bar_tick_follows_the_bar_hidden_without_a_menu_click() {
     h.run_steps(2);
     assert_eq!(ticked(&synced), Some(true), "ticked again once it shows");
 }
+
+/// The menus follow the preferences they show, even when they change without input (settings merged from another
+/// instance), and not the tool and colour preferences the app saves on every change.
+#[test]
+fn the_menu_state_follows_the_preferences_the_rows_show() {
+    let mut app = app(false);
+    let shown = state_hash(&app, None);
+    app.session.edit_prefs(|p| {
+        p.selected_tool = json!("Brush");
+        p.tool_colors = Default::default();
+    });
+    assert_eq!(state_hash(&app, None), shown, "the saved tool and colours are not in the menus");
+
+    app.session.edit_prefs(|p| p.menus.hidden.push("filter.blur.gaussian".into()));
+    let hidden = state_hash(&app, None);
+    assert_ne!(hidden, shown, "Edit › Menus hides a row");
+    app.session.edit_prefs(|p| p.export.quick_export_format = photocraft_engine::prefs::QuickExportFormat::Jpg);
+    assert_ne!(state_hash(&app, None), hidden, "the Quick Export label names the format");
+}

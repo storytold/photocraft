@@ -82,15 +82,19 @@ pub(crate) fn set_status_item(chrome: &mut ChromeState, item: StatusItem) {
 }
 
 /// What the status bar readout knows about the active document. Items without a value here show a dash.
+/// The document's values are computed once per document revision and language.
 pub(crate) fn status_values(app: &PhotocraftApp) -> StatusValues {
-    let mut values = StatusValues::default();
-    let Some(st) = app.session.active() else { return values };
-    let doc: &Document = &st.doc;
-    values.document_sizes = Some(document_sizes(doc));
-    values.document_profile = Some(format!("{} ({}bpc)", profile_name(doc), doc.depth.bits()));
-    values.document_dimensions = Some(PixelSize::new(doc.size.width, doc.size.height));
-    values.document_resolution = Some(f64::from(doc.resolution_dpi));
-    values.layer_count = Some(doc.layer_count());
+    let Some(st) = app.session.active() else { return StatusValues::default() };
+    let mut values = app.doc_queries.status(&app.session, st, || {
+        let doc: &Document = &st.doc;
+        let mut values = StatusValues::default();
+        values.document_sizes = Some(document_sizes(doc));
+        values.document_profile = Some(format!("{} ({}bpc)", profile_name(doc), doc.depth.bits()));
+        values.document_dimensions = Some(PixelSize::new(doc.size.width, doc.size.height));
+        values.document_resolution = Some(f64::from(doc.resolution_dpi));
+        values.layer_count = Some(doc.layer_count());
+        values
+    });
     values.current_tool = Some(super::tool_commands::command_of(app.ui.tool).into());
     values
 }
