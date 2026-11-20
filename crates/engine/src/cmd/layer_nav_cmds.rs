@@ -157,7 +157,7 @@ mod tests {
             assert_eq!(active(&s), want);
         }
         s.execute("layer.selectBottom", json!({})).unwrap();
-        assert_eq!((active(&s), s.active().unwrap().selected_layers()), (bg, vec![bg]));
+        assert_eq!((active(&s), s.active().unwrap().selected_layers().to_vec()), (bg, vec![bg]));
         s.execute("layer.selectTop", json!({})).unwrap();
         assert_eq!(active(&s), d);
     }

@@ -509,7 +509,7 @@ fn undo_and_redo_restore_the_targeted_layers() {
     let mut s = session_with_doc();
     let target = |s: &Session| {
         let st = s.active().unwrap();
-        (st.active_layer.unwrap(), st.selected_layers())
+        (st.active_layer.unwrap(), st.selected_layers().to_vec())
     };
     let select = |s: &mut Session, id: LayerId, mode: &str| {
         let steps = s.active().unwrap().history.past_len();
@@ -1937,7 +1937,7 @@ fn restore_layer_selection_puts_back_what_still_exists() {
     s.active_mut().unwrap().saved_revision = s.active().unwrap().revision;
     s.restore_layer_selection(Some(b), &[a, gone, b], Some(a)).unwrap();
     let st = s.active().unwrap();
-    assert_eq!((st.active_layer, st.selected_layers(), st.layer_anchor), (Some(b), vec![a, b], Some(a)));
+    assert_eq!((st.active_layer, st.selected_layers().to_vec(), st.layer_anchor), (Some(b), vec![a, b], Some(a)));
     assert_eq!(st.saved_revision, st.revision, "selection is not an edit");
     let snap = |s: &Session| {
         let st = s.active().unwrap();
@@ -1948,7 +1948,7 @@ fn restore_layer_selection_puts_back_what_still_exists() {
     assert_eq!(snap(&s), before, "an error changes nothing");
     s.restore_layer_selection(None, &[a], Some(a)).unwrap();
     let st = s.active().unwrap();
-    assert_eq!((st.active_layer, st.selected_layers(), st.layer_anchor), (None, vec![], None), "no layer selected");
+    assert_eq!((st.active_layer, st.selected_layers().to_vec(), st.layer_anchor), (None, vec![], None), "no layer selected");
     assert!(Session::new().restore_layer_selection(None, &[], None).is_err(), "no document");
 }
 
