@@ -87,6 +87,8 @@ jobs:
   # Pull requests run them only when they change the GPU crate, a workspace crate it builds on, any
   # package manifest, or a file outside the workspace packages other than documentation
   # (scripts/ci-windows-gpu-tests.py, #15247); the Linux gate runs them on every pull request, and main runs them on Windows too.
+  # `linux_skip`: the packages the Linux gate leaves out of its test build because nothing a pull request changes
+  # reaches them (same rule, every package but photocraft-gpu); empty on main, the nightly run and `full-ci`.
   # `windows_skip`: the platform-neutral packages whose Windows tests a pull request skips because nothing it
   # changes reaches them (same script); empty on main and `full-ci`.
   platforms:
@@ -98,6 +100,7 @@ jobs:
       windows: ${{ steps.pick.outputs.windows }}
       windows_gpu: ${{ steps.pick.outputs.windows_gpu }}
       windows_skip: ${{ steps.pick.outputs.windows_skip }}
+      linux_skip: ${{ steps.pick.outputs.linux_skip }}
       web: ${{ steps.pick.outputs.web }}
     steps:
       - name: Harden runner
@@ -119,6 +122,7 @@ jobs:
               echo "windows=true"
               echo "windows_gpu=true"
               echo "windows_skip="
+              echo "linux_skip="
               echo "web=true"
             } >> "$GITHUB_OUTPUT"
             exit 0
@@ -142,6 +146,11 @@ jobs:
           if [ "$gpu" = false ]; then
             echo "::notice::photocraft-gpu's tests are skipped on Windows: this pull request changes nothing they are built from (the Linux gate still runs them)."
           fi
+          linux_skip=$(python3 scripts/ci-windows-gpu-tests.py --skip-linux "$BASE")
+          echo "linux_skip=$linux_skip" >> "$GITHUB_OUTPUT"
+          if [ -n "$linux_skip" ]; then
+            echo "::notice::Tests of packages the pull request does not reach are skipped on Linux (main runs them all): $linux_skip"
+          fi
           skip=$(python3 scripts/ci-windows-gpu-tests.py --skip-neutral "$BASE")
           echo "windows_skip=$skip" >> "$GITHUB_OUTPUT"
           if [ -n "$skip" ]; then
@@ -163,7 +172,9 @@ jobs:
   # the newest one. The lint legs keep no cache (`lint-cache: false`): a cold lint leg costs
   # minutes, and their entries (~1 GB per OS) would not fit the 10 GB cache budget.
   gate:
-    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
+    # `platforms` is skipped on the nightly run, which tests everything.
+    needs: platforms
+    if: ${{ !cancelled() && contains(fromJSON('["success", "skipped"]'), needs.platforms.result) && (github.event.action != 'labeled' || github.event.label.name == 'full-ci') }}
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
@@ -184,6 +195,7 @@ jobs:
         PHOTOCRAFT_NO_PRINT=1
         LPDEST=photocraft-no-such-printer
         CARGO_PROFILE_TEST_STRIP=symbols
+        PHOTOCRAFT_CI_EXCLUDE=${{ needs.platforms.outputs.linux_skip }}
       timeout-minutes: 100
       cache-workspace-crates: true
       lint-cache: false
