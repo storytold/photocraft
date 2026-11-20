@@ -8,10 +8,10 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
-use crate::state::{DialogKind, Tool};
+use crate::state::Tool;
 
 struct Fixture {
-    app: PhotocraftApp,
+    app: Box<PhotocraftApp>,
     background: LayerId,
     layers: [LayerId; 3],
 }
@@ -45,7 +45,7 @@ impl Fixture {
     }
 
     fn assert_selected(&self, expected: &[LayerId]) {
-        let mut actual = self.app.session.active().unwrap().selected_layers();
+        let mut actual = self.app.session.active().unwrap().selected_layers().to_vec();
         let mut expected = expected.to_vec();
         actual.sort_unstable_by_key(|id| id.0);
         expected.sort_unstable_by_key(|id| id.0);
@@ -66,7 +66,7 @@ impl Fixture {
         }
         tool_event(&mut self.app, ToolEvent::Up { x: to[0], y: to[1] }, mods);
         assert!(self.app.layer_box.is_none(), "release ends the marquee");
-        assert!(self.app.ui.dialogs.iter().all(|d| d.kind != DialogKind::Error), "no move-lock dialog");
+        assert!(self.app.framework.dialogs.open_dialogs().is_empty(), "no move-lock alert on the host stack");
         assert!(!self.app.ui.status_error, "{}", self.app.ui.status);
     }
 

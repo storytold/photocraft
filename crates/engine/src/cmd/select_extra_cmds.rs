@@ -78,8 +78,9 @@ fn select_sky(s: &mut Session, p: &Value) -> Result<Value> {
 fn isolate_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     let on = p.get("on").and_then(Value::as_bool).unwrap_or(st.isolated_layers.is_empty());
-    st.isolated_layers = if on { st.selected_layers() } else { Vec::new() };
-    st.revision += 1;
+    st.isolated_layers = if on { st.selected_layers().to_vec() } else { Vec::new() };
+    // A filter of the Layers panel's rows, but turning it on or off marks the document modified.
+    st.bump_view_revision(false);
     Ok(json!({ "isolated": !st.isolated_layers.is_empty(), "layers": st.isolated_layers.iter().map(|l| l.0).collect::<Vec<_>>() }))
 }
 
@@ -89,13 +90,9 @@ pub fn isolation_shows(doc: &Document, isolated: &[LayerId], id: LayerId) -> boo
     if isolated.is_empty() || isolated.contains(&id) {
         return true;
     }
-    fn contains(l: &photocraft_doc::Layer, set: &[LayerId]) -> bool {
-        match &l.content {
-            photocraft_doc::LayerContent::Group(g) => g.children.iter().any(|c| set.contains(&c.id) || contains(c, set)),
-            _ => false,
-        }
-    }
-    doc.layer(id).is_some_and(|l| contains(l, isolated))
+    // `id` is an ancestor of an isolated layer: walk each one's parents in the layer index.
+    let index = doc.layers.index();
+    isolated.iter().any(|&iso| std::iter::successors(index.parent(iso), |&p| index.parent(p)).any(|p| p == id))
 }
 
 // ---------------------------------------------------------------- Transform Selection
@@ -366,6 +363,38 @@ mod tests {
         let r = s.execute("select.isolateLayers", json!({})).unwrap();
         assert_eq!(r["isolated"], json!(false));
         assert!(s.active().unwrap().isolated_layers.is_empty());
+    }
+
+    /// Isolation lists a layer's groups around it, as the subtree scan it replaced did, on a
+    /// nested stack: the isolated layer, every group that holds it, nothing else.
+    #[test]
+    fn isolation_lists_the_groups_around_an_isolated_layer() {
+        use photocraft_doc::{Layer, PixelFormat};
+        fn by_scan(doc: &Document, isolated: &[LayerId], id: LayerId) -> bool {
+            fn contains(l: &Layer, set: &[LayerId]) -> bool {
+                l.children().is_some_and(|ch| ch.iter().any(|c| set.contains(&c.id) || contains(c, set)))
+            }
+            isolated.is_empty() || isolated.contains(&id) || doc.layer(id).is_some_and(|l| contains(l, isolated))
+        }
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 20, "height": 20})).unwrap();
+        let (inner, deep, side) =
+            (Layer::raster("deep", PixelFormat::RGBA8), Layer::raster("side", PixelFormat::RGBA8), Layer::raster("loose", PixelFormat::RGBA8));
+        let ids = [inner.id, deep.id, side.id];
+        s.edit("nest", |doc, _| {
+            let mid = Layer::group("mid", vec![deep, side]);
+            doc.layers.push(Layer::group("outer", vec![mid, Layer::group("empty", Vec::new())]));
+            doc.layers.push(inner);
+            Ok(())
+        })
+        .unwrap();
+        let doc = &s.active().unwrap().doc;
+        let all: Vec<LayerId> = doc.walk().into_iter().map(|(_, _, l)| l.id).collect();
+        for isolated in [vec![], vec![ids[1]], vec![ids[0], ids[2]], vec![LayerId(u64::MAX)]] {
+            for &id in &all {
+                assert_eq!(isolation_shows(doc, &isolated, id), by_scan(doc, &isolated, id), "{id:?} under {isolated:?}");
+            }
+        }
     }
 
     fn rect_sel() -> Session {
