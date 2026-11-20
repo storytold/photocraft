@@ -317,6 +317,14 @@ pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandSta
         .collect()
 }
 
+/// What [`command_states`] reads: the active document and its revision (the selected slice resolves from its
+/// slices), the selected slice's number and the lock.
+pub(crate) fn command_states_key(app: &PhotocraftApp) -> crate::app::framework::StatesKey {
+    let revision = app.session.active().map_or(u64::MAX, |st| st.revision);
+    let selected = app.ui.slices.selected.map_or(u64::MAX, |n| n as u64);
+    [app.session.active_generation(), revision, selected, u64::from(app.session.file_menu.slices_locked)]
+}
+
 /// Runs a fired slice command; whether it was one.
 pub(crate) fn run_fired(app: &mut PhotocraftApp, _ctx: &egui::Context, command: &CommandRef) -> bool {
     let Some(command) = SliceCommand::from_ref(command) else { return false };

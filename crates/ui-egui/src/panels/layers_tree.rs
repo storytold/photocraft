@@ -180,12 +180,7 @@ impl LayerTree for PhotoLayers<'_> {
     }
 
     fn parent(&self, id: &LayerId) -> Option<LayerId> {
-        let mut path = self.doc().path_of(*id)?;
-        path.pop();
-        if path.is_empty() {
-            return None;
-        }
-        self.doc().layer_at(&path).map(|l| l.id)
+        self.doc().layers.index().parent(*id)
     }
 
     fn is_open(&self, id: &LayerId) -> bool {
@@ -216,13 +211,8 @@ impl LayerTree for PhotoLayers<'_> {
         };
         let mut info = LayerInfo::new(l.name.clone(), kind);
         info.visible = l.visible;
-        let mut hidden = !l.visible;
-        let mut at = self.parent(id);
-        while let Some(p) = at {
-            hidden |= self.layer(&p).is_some_and(|g| !g.visible);
-            at = self.parent(&p);
-        }
-        info.dimmed = hidden;
+        let index = doc.layers.index();
+        info.dimmed = !l.visible || std::iter::successors(index.parent(*id), |p| index.parent(*p)).any(|p| self.layer(&p).is_some_and(|g| !g.visible));
         info.label = ui_label(l.label);
         let mut locks = LayerLocks::default();
         locks.transparency = l.locks.transparency;
@@ -460,17 +450,15 @@ impl LayerTree for PhotoLayers<'_> {
         self.app.canvas_hover_layer
     }
 
+    /// Rows move, open, close or appear only through the layer stack, whose index every write drops, the document
+    /// revision (isolation, the selection) and the Layers view revision (effects lists and groups opened or closed).
+    /// A Type Mask session's working text comes and goes outside all three, so the rows are walked each pass while it
+    /// runs.
     fn revision(&self) -> Option<u64> {
         if self.working_text.is_some() {
             return None;
         }
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        self.st.revision.hash(&mut h);
-        self.doc().id.0.hash(&mut h);
-        self.st.fx_collapsed.hash(&mut h);
-        self.st.isolated_layers.hash(&mut h);
-        Some(h.finish())
+        Some(Revision::of(&(self.doc().id.0, self.st.revision, self.st.layers_view_revision(), self.doc().layers.index().serial())).get())
     }
 }
 
@@ -632,10 +620,6 @@ impl<'a> PhotoThumbs<'a> {
             _ => Some(l),
         }
     }
-
-    fn size_bits(&self) -> u64 {
-        u64::from(self.doc.size.width) << 40 ^ u64::from(self.doc.size.height) << 16
-    }
 }
 
 fn rgba8(c: [f32; 4]) -> [u8; 4] {
@@ -645,25 +629,26 @@ fn rgba8(c: [f32; 4]) -> [u8; 4] {
 impl ThumbSource<LayerThumb<LayerId>> for PhotoThumbs<'_> {
     fn revision(&self, key: &LayerThumb<LayerId>, _request: &ThumbRequest) -> Revision {
         let Some(l) = self.source(key) else { return Revision::new(0) };
-        let clip = u64::from(key.contents == ThumbContents::LayerBounds) << 63;
-        let bits = match key.kind {
+        let clip = key.contents == ThumbContents::LayerBounds;
+        let generation = |s: &photocraft_raster::Surface| s.generation();
+        let shown = match key.kind {
             LayerThumbKind::Pixels | LayerThumbKind::FrameContent => match &l.content {
                 LayerContent::Fill(Fill::Solid(color)) => {
                     let shown = crate::solid_fill_ui::thumbnail_color(self.app, self.doc.id, l.id, *color);
                     Revision::of(&(shown.to_rgba8(), 1u8)).get()
                 }
-                LayerContent::Fill(f) => Revision::of(&format!("{f:?}")).get(),
-                _ => l.surface().map_or(0, crate::app::surface_fingerprint) ^ clip,
+                LayerContent::Fill(f) => Revision::of(f).get(),
+                _ => l.surface().map_or(0, generation),
             },
-            LayerThumbKind::Mask => l.mask.as_ref().map_or(0, |m| crate::app::surface_fingerprint(&m.surface)),
+            LayerThumbKind::Mask => l.mask.as_ref().map_or(0, |m| m.surface.generation()),
             LayerThumbKind::VectorMask => l.vector_mask.as_ref().map_or(0, crate::mask_thumbs_ui::vector_fingerprint),
             LayerThumbKind::SmartFilterMask => match &l.content {
-                LayerContent::Smart(sm) => sm.filter_mask.as_ref().map_or(1, |m| crate::app::surface_fingerprint(&m.surface)),
+                LayerContent::Smart(sm) => sm.filter_mask.as_ref().map_or(1, |m| m.surface.generation()),
                 _ => 0,
             },
             _ => 0,
         };
-        Revision::new(bits ^ self.size_bits())
+        Revision::of(&(shown, clip, self.doc.size.width, self.doc.size.height))
     }
 
     fn render(&self, key: &LayerThumb<LayerId>, request: &ThumbRequest) -> ThumbRender {
