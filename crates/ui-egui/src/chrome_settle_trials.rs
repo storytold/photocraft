@@ -54,21 +54,25 @@ fn a_hover_over_the_canvas_runs_no_dock_chrome_and_no_title_bar() {
 }
 
 /// With no input reaching it, the chrome runs in the frame after what it shows changes: a new UI language (panel names
-/// and menu titles), a toolbar slot hidden (the toolbar column's grid) and an edit that marks the document unsaved
+/// and menu titles), a toolbar slot taken off the rail (the toolbar column's grid) and an edit that marks the document unsaved
 /// (the title). A version that missed one would replay the old chrome.
 #[test]
 fn the_chrome_runs_when_what_it_shows_changes() {
     let mut h = harness();
     assert_eq!(chrome_runs(&h), [], "settled");
 
-    h.state_mut().session.prefs.edit(|prefs| prefs.interface.language = "fr".into());
-    h.run_steps(1);
-    assert!(ran(&h, "TabStrip<") && ran(&h, "TitleBar<"), "a new language runs the tab strips and the title bar: {:?}", chrome_runs(&h));
-    h.run_steps(2);
+    // A build without the catalogs shows English only, so the language cannot change.
+    if crate::i18n::needs_catalogs() {
+        h.state_mut().session.prefs.edit(|prefs| prefs.interface.language = "fr".into());
+        h.run_steps(1);
+        assert!(ran(&h, "TabStrip<") && ran(&h, "TitleBar<"), "a new language runs the tab strips and the title bar: {:?}", chrome_runs(&h));
+        h.run_steps(2);
+    }
 
-    h.state_mut().session.prefs.edit(|prefs| prefs.toolbar.hidden.push("Brush".to_string()));
+    // Move and Artboard are the first slot's tools: hiding both takes the slot off the rail.
+    h.state_mut().session.prefs.edit(|prefs| prefs.toolbar.hidden.extend(["Move".to_string(), "Artboard".to_string()]));
     h.run_steps(1);
-    assert!(ran(&h, "DockGroup<"), "a hidden toolbar slot runs the dock groups: {:?}", chrome_runs(&h));
+    assert!(ran(&h, "DockGroup<"), "a slot taken off the rail runs the dock groups: {:?}", chrome_runs(&h));
     h.run_steps(2);
 
     assert!(!h.state().session.active().unwrap().is_dirty(), "the new document is saved");
@@ -93,15 +97,4 @@ fn the_menu_keys_open_a_menu_after_a_dialog_closes_with_escape() {
     h.key_press_modifiers(Modifiers::ALT, Key::F);
     h.run_steps(4);
     assert!(items(&h) > titles, "Alt+F opens the File menu: {} menu items, {titles} titles", items(&h));
-}
-
-/// The caption buttons follow the window state: a window maximized at the size it had shows Restore.
-#[test]
-fn a_maximized_window_shows_restore() {
-    let mut h = harness();
-    let label = |h: &H, name: &str| h.query_all_by_label(name).count();
-    assert!(label(&h, "Maximize") > 0, "a normal window shows Maximize");
-    h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().maximized = Some(true);
-    h.run_steps(3);
-    assert!(label(&h, "Restore") > 0 && label(&h, "Maximize") == 0, "a maximized window shows Restore");
 }

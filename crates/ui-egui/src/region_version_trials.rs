@@ -109,7 +109,7 @@ fn a_new_foreground_shows_in_the_character_panel() {
     let well = |h: &H| {
         h.query_all_by_role(Role::ColorWell)
             .find(|n| n.accesskit_node().label().is_some_and(|l| l == "Text color") && panels.contains(n.rect().center()))
-            .and_then(|n| n.accesskit_node().value().map(str::to_owned))
+            .and_then(|n| n.accesskit_node().value().map(|v| v.to_string()))
     };
     assert_eq!(well(&h).as_deref(), Some("#000000"), "new type is black, the default foreground");
     h.state_mut().run("tools.setColors", json!({"foreground": [1.0, 0.0, 0.0, 1.0]})).unwrap();
