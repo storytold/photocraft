@@ -1,4 +1,5 @@
-//! The command registry. Ids follow Photoshop's menu structure (see the parity checklist).
+//! The engine's commands and the helpers they share. Ids follow Photoshop's menu structure (see
+//! the parity checklist).
 
 use photocraft_color::{Color, ColorMode, SampleType};
 use photocraft_doc::{Adjustment, Document, Fill, Layer, LayerContent, LayerId, LayerMask, Size};
@@ -7,25 +8,6 @@ use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::{EngineError, Result, Session, inspect, pixels};
-
-type Run = fn(&mut Session, &Value) -> Result<Value>;
-type Enabled = fn(&Session) -> std::result::Result<(), String>;
-
-/// Metadata + implementation for one command.
-pub struct CommandSpec {
-    pub id: &'static str,
-    pub label: &'static str,
-    /// Menu placement, e.g. `["Layer", "New"]`. Empty = not in menus.
-    pub menu: &'static [&'static str],
-    /// Default shortcut in egui-style notation (`Cmd+Shift+N`), mapped per platform by the UI.
-    pub shortcut: Option<&'static str>,
-    /// Human/agent-readable parameter description (JSON-ish).
-    pub params: &'static str,
-    pub enabled: Enabled,
-    pub run: Run,
-    /// Record in the session journal (false for queries).
-    pub journal: bool,
-}
 
 macro_rules! cmd {
     ($id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
@@ -49,8 +31,6 @@ pub mod brush_preset_cmds;
 pub mod channel_cmds;
 pub mod color_cmds;
 pub mod color_to_alpha_cmds;
-#[cfg(test)]
-mod command_order_tests;
 pub mod comps_cmds;
 pub mod contour_lib_cmds;
 #[cfg(test)]
@@ -105,7 +85,7 @@ pub mod layer_xmp_cmds;
 pub mod lens_cmds;
 pub mod magnetic_cmds;
 pub mod mask_view_cmds;
-pub(super) mod migrate_cmds;
+pub mod migrate_cmds;
 pub mod mode_cmds;
 pub mod multichannel_cmds;
 #[cfg(test)]
@@ -116,7 +96,7 @@ mod notes_stored_values_tests;
 mod ops;
 pub mod paint_cmds;
 mod params;
-pub(super) mod path_edit_cmds;
+pub mod path_edit_cmds;
 pub mod pattern_cmds;
 pub mod pattern_fill_cmds;
 pub mod perspective_crop_cmds;
@@ -131,6 +111,11 @@ pub mod rasterize_style_cmds;
 pub mod redeye_cmds;
 pub mod render_cmds;
 pub mod retouch_cmds;
+#[cfg(test)]
+mod rotate_canvas_bitmap_tests;
+
+#[cfg(test)]
+mod rotate_canvas_guides_tests;
 pub mod sample_cmds;
 #[cfg(test)]
 mod sample_zoom_box_tests;
@@ -146,10 +131,10 @@ pub mod stamp_cmds;
 pub mod style_asl_cmds;
 pub mod swatch_cmds;
 pub mod symmetry_cmds;
-mod table;
-pub(super) mod timeline_cmds;
+pub mod table;
+pub mod timeline_cmds;
 pub mod transform_cmds;
-pub(super) mod trap_cmds;
+pub mod trap_cmds;
 pub mod type_area_cmds;
 pub mod type_caret_cmds;
 pub mod type_cmds;
@@ -159,14 +144,14 @@ mod type_indexed_mode_tests;
 pub mod type_mask_cmds;
 pub mod type_spell_cmds;
 pub mod type_styles_cmds;
-pub(super) mod variables_cmds;
+pub mod variables_cmds;
 mod vector_clipboard;
 pub mod vector_cmds;
-pub(super) mod video_cmds;
+pub mod video_cmds;
 pub mod vp_cmds;
 pub mod warp_cmds;
 pub mod web_cmds;
-pub(super) mod wia_cmds;
+pub mod wia_cmds;
 
 pub(crate) use adjust_params::inject_kind;
 use adjust_params::{adjust_mode, destructive_adjust, doc_mode, new_adjustment};
@@ -181,250 +166,8 @@ use params::{bad, set_clipped};
 pub(crate) use params::{check_f32_values, cmyk_param, color_param, int, int_i32, parse_hex, u32_id, u32_id_param};
 pub use photocraft_color::blend::parse_blend;
 
-pub fn command_specs() -> &'static [CommandSpec] {
-    &registry().specs
-}
-
-/// One `command.list` / `engine.commands` row for `c`, given why it can't run now (`None` = it can).
-/// `disabledReason` is that message; `needsDocument` is true when the reason is that no document is
-/// open (#3664), so an agent can tell "open or create a document first" from a precondition that a
-/// document alone won't meet (a selection, an empty clipboard).
-pub fn list_entry(s: &Session, c: &CommandSpec, reason: Option<String>) -> Value {
-    let needs_document =
-        s.active().is_none() && reason.as_deref().is_some_and(|r| ["no document", "no active document", "no open document"].iter().any(|p| r.starts_with(p)));
-    let mut entry = json!({
-        "id": c.id, "label": c.label, "menu": c.menu, "shortcut": c.shortcut, "params": c.params,
-        "enabled": reason.is_none(), "disabledReason": reason, "needsDocument": needs_document,
-    });
-    if let (Some(k), Some(o)) = (search_keywords(c.id), entry.as_object_mut()) {
-        o.insert("keywords".into(), json!(k));
-    }
-    entry
-}
-
-/// Other names a command is looked for by, beyond its id and label: the Photoshop tools and
-/// options it stands for (#5060). `select.rect` is also the Elliptical and Single Row/Column
-/// Marquee, which an agent searches for as "ellipse" or "marquee". The RAW Develop filter and
-/// RAW Defaults keep Photoshop's "Camera Raw" name as a search alias only: the menus and windows
-/// say "RAW Develop" (#12403).
-pub(crate) const SEARCH_KEYWORDS: &[(&str, &str)] = &[
-    ("select.rect", "Rectangular Marquee, Elliptical Marquee (\"ellipse\":true), ellipse, oval, circle, Single Row/Column Marquee (\"line\")"),
-    ("filter.cameraRaw", "Camera Raw Filter"),
-    ("edit.preferences.rawDefaults", "Camera Raw Defaults"),
-];
-
-/// [`SEARCH_KEYWORDS`] of command `id`, if it has any.
-pub fn search_keywords(id: &str) -> Option<&'static str> {
-    SEARCH_KEYWORDS.iter().find(|(k, _)| *k == id).map(|(_, words)| *words)
-}
-
-/// Does a [`list_entry`] row match a command-list filter (`commands --filter`, `engine.commands`,
-/// MCP `command_list`)? Its id, label or keywords contain `needle`, ignoring case.
-pub fn list_entry_matches(entry: &Value, needle: &str) -> bool {
-    let needle = needle.to_lowercase();
-    ["id", "label", "keywords"].iter().any(|k| entry.get(*k).and_then(Value::as_str).is_some_and(|v| v.to_lowercase().contains(&needle)))
-}
-
-pub fn find(id: &str) -> Option<&'static CommandSpec> {
-    let registry = registry();
-    registry.by_id.get(id).and_then(|&index| registry.specs.get(index))
-}
-
-struct Registry {
-    specs: Vec<CommandSpec>,
-    by_id: std::collections::HashMap<&'static str, usize>,
-}
-
-impl Registry {
-    fn new(specs: Vec<CommandSpec>) -> Self {
-        let mut by_id = std::collections::HashMap::with_capacity(specs.len());
-        for (index, spec) in specs.iter().enumerate() {
-            // Preserve the linear lookup's first-match behavior if an id is duplicated.
-            by_id.entry(spec.id).or_insert(index);
-        }
-        Self { specs, by_id }
-    }
-}
-
-/// The command registry, built on first use and shared for the rest of the process.
-fn registry() -> &'static Registry {
-    static REGISTRY: std::sync::OnceLock<Registry> = std::sync::OnceLock::new();
-    REGISTRY.get_or_init(|| Registry::new(build()))
-}
-
-// ---------- the table ----------
-
-/// A named group of commands: `SPECS` lists them in registry order.
-type Fragment = (&'static str, fn() -> Vec<CommandSpec>);
-
-/// Every table fragment with its name, in registry order. The order is part of the behaviour (menus
-/// list commands in it) and `command_ids.txt` pins it. The `table` fragments are grouped by the
-/// crate that will own them; a menu split between owners has one fragment per contiguous run.
-const SPECS: &[Fragment] = &[
-    ("store::file_menu", table::store::file_menu::specs),
-    ("core::file_menu", table::core::file_menu::specs),
-    ("core::edit_menu", table::core::edit_menu::specs),
-    ("paint::edit_menu", table::paint::edit_menu::specs),
-    ("model::edit_menu", table::model::edit_menu::specs),
-    ("core::select_menu", table::core::select_menu::specs),
-    ("model::layer_menu", table::model::layer_menu::specs_before_gradient),
-    ("store::layer_menu", table::store::layer_menu::specs),
-    ("model::layer_menu", table::model::layer_menu::specs_after_gradient),
-    ("model::image_menu", table::model::image_menu::specs),
-    ("image::image_menu", table::image::image_menu::specs),
-    ("paint::stroke", table::paint::stroke::specs),
-    ("core::tools", table::core::tools::specs),
-    ("core::queries", table::core::queries::specs),
-    ("image::adjustments", table::image::adjustments::specs),
-    ("layer_style", crate::layer_style::specs),
-    ("contour_lib_cmds", crate::contour_lib_cmds::specs),
-    ("layer_list_cmds", crate::layer_list_cmds::specs),
-    ("filters", crate::filters::specs),
-    ("filters_ext", crate::filters_ext::specs),
-    ("color_to_alpha_cmds", crate::color_to_alpha_cmds::specs),
-    ("gallery_cmds", crate::gallery_cmds::specs),
-    ("gradient_fill_cmds", crate::gradient_fill_cmds::specs),
-    ("solid_fill_cmds", crate::solid_fill_cmds::specs),
-    ("pattern_fill_cmds", crate::pattern_fill_cmds::specs),
-    ("type_cmds", crate::type_cmds::specs),
-    ("type_mask_cmds", crate::type_mask_cmds::specs),
-    ("transform_cmds", crate::transform_cmds::specs),
-    ("float_cmds", crate::float_cmds::specs),
-    ("vector_cmds", crate::vector_cmds::specs),
-    ("path_edit_cmds", crate::path_edit_cmds::specs),
-    ("smartselect_cmds", crate::smartselect_cmds::specs),
-    ("cutout_cmds", crate::cutout_cmds::specs),
-    ("symmetry_cmds", crate::symmetry_cmds::specs),
-    ("edit_cmds", crate::edit_cmds::specs),
-    ("smart_svg_cmds", crate::smart_svg_cmds::specs),
-    ("color_cmds", crate::color_cmds::specs),
-    ("brush_cmds", crate::brush_cmds::specs),
-    ("brush_preset_cmds", crate::brush_preset_cmds::specs),
-    ("eraser_cmds", crate::eraser_cmds::specs),
-    ("preset_import_cmds", crate::preset_import_cmds::specs),
-    ("style_asl_cmds", crate::style_asl_cmds::specs),
-    ("atn_cmds", crate::atn_cmds::specs),
-    ("actions_edit_cmds", crate::actions_edit_cmds::specs),
-    ("swatch_cmds", crate::swatch_cmds::specs),
-    ("retouch_cmds", crate::retouch_cmds::specs),
-    ("redeye_cmds", crate::redeye_cmds::specs),
-    ("image_cmds", crate::image_cmds::specs),
-    ("perspective_crop_cmds", crate::perspective_crop_cmds::specs),
-    ("selection_cmds", crate::selection_cmds::specs),
-    ("magnetic_cmds", crate::magnetic_cmds::specs),
-    ("select_extra_cmds", crate::select_extra_cmds::specs),
-    ("paint_cmds", crate::paint_cmds::specs),
-    ("extra_cmds", crate::extra_cmds::specs),
-    ("background_cmds", crate::background_cmds::specs),
-    ("file_cmds", crate::file_cmds::specs),
-    ("exr_cmds", crate::exr_cmds::specs),
-    ("type_extra_cmds", crate::type_extra_cmds::specs),
-    ("type_area_cmds", crate::type_area_cmds::specs),
-    ("type_styles_cmds", crate::type_styles_cmds::specs),
-    ("type_spell_cmds", crate::type_spell_cmds::specs),
-    ("type_caret_cmds", crate::type_caret_cmds::specs),
-    ("smart_cmds", crate::smart_cmds::specs),
-    ("layer_multi_cmds", crate::layer_multi_cmds::specs),
-    ("layer_copy_cmds", crate::layer_copy_cmds::specs),
-    ("prefs", crate::prefs::specs),
-    ("edit_menu_cmds", crate::edit_menu_cmds::specs),
-    ("fill_key_cmds", crate::fill_key_cmds::specs),
-    ("sample_cmds", crate::sample_cmds::specs),
-    ("face_cmds", crate::face_cmds::specs),
-    ("sampler_cmds", crate::sampler_cmds::specs),
-    ("brush_key_cmds", crate::brush_key_cmds::specs),
-    ("stamp_cmds", crate::stamp_cmds::specs),
-    ("align_cmds", crate::align_cmds::specs),
-    ("photo_cmds", crate::photo_cmds::specs),
-    ("lens_cmds", crate::lens_cmds::specs),
-    ("vp_cmds", crate::vp_cmds::specs),
-    ("channel_cmds", crate::channel_cmds::specs),
-    ("adjust_cmds", crate::adjust_cmds::specs),
-    ("layer_menu_cmds", crate::layer_menu_cmds::specs),
-    ("layer_label_cmds", crate::layer_label_cmds::specs),
-    ("layer_css_cmds", crate::layer_css_cmds::specs),
-    ("layer_xmp_cmds", crate::layer_xmp_cmds::specs),
-    ("mode_cmds", crate::mode_cmds::specs),
-    ("multichannel_cmds", crate::multichannel_cmds::specs),
-    ("pattern_cmds", crate::pattern_cmds::specs),
-    ("warp_cmds", crate::warp_cmds::specs),
-    ("comps_cmds", crate::comps_cmds::specs),
-    ("artboard_cmds", crate::artboard_cmds::specs),
-    ("distort_cmds", crate::distort_cmds::specs),
-    ("analysis_cmds", crate::analysis_cmds::specs),
-    ("notes_cmds", crate::notes_cmds::specs),
-    ("font_library_cmds", crate::font_library_cmds::specs),
-    ("history_cmds", crate::history_cmds::specs),
-    ("history_options_cmds", crate::history_options_cmds::specs),
-    ("history_menu_cmds", crate::history_menu_cmds::specs),
-    ("history_source_cmds", crate::history_source_cmds::specs),
-    ("history_select_cmds", crate::history_select_cmds::specs),
-    ("proof_sim", crate::proof_sim::specs),
-    ("presets", crate::presets::specs),
-    ("document_preset_cmds", crate::document_preset_cmds::specs),
-    ("export_preset_cmds", crate::export_preset_cmds::specs),
-    ("render_cmds", crate::render_cmds::specs),
-    ("slice_cmds", crate::slice_cmds::specs),
-    ("web_cmds", crate::web_cmds::specs),
-    ("automate_cmds", crate::automate_cmds::specs),
-    ("print_cmds", crate::print_cmds::specs),
-    ("installed_profiles", crate::installed_profiles::specs),
-    ("pick_cmds", crate::pick_cmds::specs),
-    ("layer_nav_cmds", crate::layer_nav_cmds::specs),
-    ("frame_cmds", crate::frame_cmds::specs),
-    ("migrate_cmds", crate::migrate_cmds::specs),
-    ("trap_cmds", crate::trap_cmds::specs),
-    ("timeline_cmds", crate::timeline_cmds::specs),
-    ("video_cmds", crate::video_cmds::specs),
-    ("jobs", crate::jobs::specs),
-    ("wia_cmds", crate::wia_cmds::specs),
-    ("rasterize_style_cmds", crate::rasterize_style_cmds::specs),
-    ("variables_cmds", crate::variables_cmds::specs),
-    ("plugin_cmds", crate::plugin_cmds::specs),
-    ("group_view_cmds", crate::group_view_cmds::specs),
-    ("fx_view_cmds", crate::fx_view_cmds::specs),
-    ("fx_visibility_cmds", crate::fx_visibility_cmds::specs),
-    ("mask_view_cmds", crate::mask_view_cmds::specs),
-    ("layer_mask_props_cmds", crate::layer_mask_props_cmds::specs),
-    ("actions_cmds", crate::actions_cmds::specs),
-];
-
-/// Every registered command, in the order of SPECS.
-fn build() -> Vec<CommandSpec> {
-    let specs = SPECS.iter().flat_map(|(_, specs)| specs());
-    // The dispatch guard's unit test needs a command that panics on purpose (REL-3).
-    #[cfg(test)]
-    let specs = specs.chain(std::iter::once(test_panic_command()));
-    specs.collect()
-}
-
-/// A command whose `run` panics on purpose, so the last-resort guard in `jobs::dispatch`
-/// can be tested (REL-3). Test builds only: `commands::build` pushes it under `cfg(test)`.
-#[cfg(test)]
-fn test_panic_command() -> CommandSpec {
-    #[allow(clippy::panic)]
-    fn run(_: &mut Session, _: &Value) -> Result<Value> {
-        panic!("test: this command panicked on purpose")
-    }
-    CommandSpec { id: "test.panic", label: "Test Panic", menu: &[], shortcut: None, params: r##"{}"##, enabled: |_: &Session| Ok(()), run, journal: false }
-}
-
-#[cfg(test)]
-mod registry_tests {
-    use super::*;
-
-    #[test]
-    fn duplicate_ids_keep_the_first_spec_and_listing_order() {
-        let mut built = build().into_iter();
-        let first = built.next().unwrap();
-        let mut second = built.next().unwrap();
-        let id = first.id;
-        second.id = id;
-        let registry = Registry::new(vec![first, second]);
-        assert_eq!(registry.by_id.get(id), Some(&0));
-        assert_eq!(registry.specs.len(), 2);
-    }
-}
+pub use crate::install::{command_specs, find};
+pub use crate::registry::{CommandSpec, list_entry, list_entry_matches, search_keywords};
 
 #[cfg(test)]
 mod set_props_tests {
