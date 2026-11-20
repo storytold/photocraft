@@ -43,6 +43,7 @@ fn gradient_overlay_hint_replaces_the_hand_options() {
     const HINT: &str = "Click and drag to reposition the gradient.";
     let mut h = app_with_tool(Tool::Hand);
     assert!(h.query_by_label("Scroll All Windows").is_some());
+    h.state_mut().run("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
     let id = super::open(h.state_mut(), Some("gradientOverlay")).unwrap();
     h.run_steps(8);
     assert_move_hint(&h, HINT);
@@ -59,6 +60,15 @@ fn gradient_overlay_hint_replaces_the_hand_options() {
     assert!(h.query_by_label(HINT).is_none());
     assert!(h.query_by_label("Scroll All Windows").is_some());
     assert_eq!(h.state().ui.tool, Tool::Hand, "the prior tool is preserved after OK");
+}
+
+#[test]
+fn gradient_overlay_on_an_empty_layer_keeps_the_hand_options() {
+    let mut h = app_with_tool(Tool::Hand);
+    super::open(h.state_mut(), Some("gradientOverlay")).unwrap();
+    h.run_steps(8);
+    assert!(h.query_by_label("Click and drag to reposition the gradient.").is_none());
+    assert!(h.query_by_label("Scroll All Windows").is_some());
 }
 
 #[test]

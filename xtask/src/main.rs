@@ -3,6 +3,7 @@
 //! Pure Rust (std + serde_json). External tools (`cargo`, `curl`, `tar`) are
 //! invoked through `std::process::Command`.
 
+mod cache_units;
 mod cargo_env;
 mod corpus;
 mod corpus_pins;
@@ -13,6 +14,7 @@ mod panel_commands;
 mod perf;
 mod pinned;
 mod scorecard;
+mod shards;
 mod stats;
 mod test_binaries;
 mod version;
@@ -35,13 +37,17 @@ commands:
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates (one call, plus
                   one per optional web feature)
   test            workspace tests (cargo nextest when installed, else cargo test), then doctests
-  ci [lint | archive | build | tests [--from <dir>] [--gpu | --no-gpu] | <step>]
+  ci [lint | archive [--gpu-shard] | build | tests [--from <dir> [--shard <k>]] [--gpu | --no-gpu] | <step>]
                   the CI gate: fmt --check, egui-fork, clippy -D warnings, layers, panel-commands, scorecard --check,
                   tests (nextest --profile ci), panic_hunt, doctests, wasm and the i18n-report, with --locked
                   --features heif (stops at first failure). The gate splits it over its jobs: `lint` runs the
                   steps that need no test build; `archive` builds the tests into the nextest archive at
-                  $NEXTEST_ARCHIVE_FILE (the gate's build job, which then runs `doctest`); `tests --from <dir>` runs the tests from that archive
-                  extracted to <dir> (without --from it builds them); `tests` runs the tests and panic_hunt on the partition in
+                  $NEXTEST_ARCHIVE_FILE (the gate's build job, which then runs `doctest`), or with $NEXTEST_ARCHIVE_DIR one
+                  archive per gate shard ($GATE_SHARDS of them, at $NEXTEST_ARCHIVE_DIR/<k>/$NEXTEST_ARCHIVE_NAME), each
+                  with only the test binaries that shard runs, balanced by .config/ci-test-times.tsv (`--gpu-shard`: shard 1
+                  takes the binaries with gpu-group tests); `tests --from <dir>` runs the tests from that archive
+                  extracted to <dir> (without --from it builds them; `--shard <k>`: shard k's part of the split binaries,
+                  from the plan the archive carries); `tests` runs the tests and panic_hunt on the partition in
                   $NEXTEST_PARTITION (`--gpu`: all of nextest's gpu test group, whatever the partition, each
                   test's output shown;
                   `--no-gpu`: every other test); `doctest` runs the doctests; `build` only builds what `tests`
@@ -135,6 +141,12 @@ pub fn metadata() -> Result<serde_json::Value, String> {
         return Err(format!("cargo metadata failed:\n{}", String::from_utf8_lossy(&out.stderr)));
     }
     serde_json::from_slice(&out.stdout).map_err(|e| format!("cargo metadata: bad JSON: {e}"))
+}
+
+/// The workspace's cargo target directory.
+pub fn target_dir() -> Result<PathBuf, String> {
+    let m = metadata()?;
+    m.get("target_directory").and_then(serde_json::Value::as_str).map(PathBuf::from).ok_or_else(|| "cargo metadata: no target_directory".into())
 }
 
 /// Two egui revisions in one build give two incompatible `Ui` types, so the workspace's egui
@@ -286,13 +298,26 @@ struct CiOptions {
     build_only: bool,
     /// The nextest partition the test steps run ($NEXTEST_PARTITION with `ci tests`).
     partition: Option<String>,
-    /// `ci archive`: build the tests into this nextest archive instead of running them.
-    archive: Option<PathBuf>,
+    /// `ci archive`: build the tests into nextest archives instead of running them.
+    archive: Option<Archive>,
     /// `ci tests --from <dir>`: run the tests from a nextest archive extracted to this directory.
     from: Option<PathBuf>,
+    /// `ci tests --from <dir> --shard <k>`: the archive is gate shard k's (1-based), and the plan it
+    /// carries says which part of the split binaries it runs.
+    shard: Option<usize>,
     selection: Selection,
     /// Workspace packages left out of the test build and the doctests ($PHOTOCRAFT_CI_EXCLUDE).
     exclude: Vec<String>,
+}
+
+/// The archives `ci archive` writes.
+#[derive(Clone, Debug, PartialEq)]
+enum Archive {
+    /// One archive of every test binary ($NEXTEST_ARCHIVE_FILE).
+    File(PathBuf),
+    /// One archive per gate shard, at `<dir>/<k>/<name>`, each with only the binaries that shard
+    /// runs (xtask/src/shards.rs).
+    Shards { dir: PathBuf, name: String, shards: usize, gpu_shard: bool },
 }
 
 type StepFn = fn(&CiOptions) -> Result<(), String>;
@@ -330,8 +355,11 @@ fn step_clippy(_: &CiOptions) -> Result<(), String> {
 fn step_doctest(o: &CiOptions) -> Result<(), String> {
     let mut c = cargo();
     c.arg("test").args(gate_args(&o.exclude)).arg("--doc");
+    if cache_units::file().is_some() {
+        c.args(["--message-format", "json-render-diagnostics"]);
+    }
     let what = shown(&c);
-    run(c, &what)
+    cache_units::run(c, &what)
 }
 
 fn step_i18n(_: &CiOptions) -> Result<(), String> {
@@ -385,9 +413,10 @@ fn read_gpu_filter() -> Result<String, String> {
 
 /// The nextest command line of a test step. `panic_hunt` runs only the engine's `#[ignore]`d panic
 /// hunt (AGENTS.md Rule 9), with the same build arguments as the tests, so nothing rebuilds. `gpu` is
-/// the group's filter, read only when the selection needs it. nextest's `ci` profile terminates
-/// hung tests and repeats every failure at the end of the log (.config/nextest.toml).
-fn nextest_args(o: &CiOptions, panic_hunt: bool, gpu: Option<&str>) -> Vec<String> {
+/// the group's filter, read only when the selection needs it. `shard` is the filterset of the shard's
+/// part of the split binaries (`ci tests --shard`). nextest's `ci` profile terminates hung tests and
+/// repeats every failure at the end of the log (.config/nextest.toml).
+fn nextest_args(o: &CiOptions, panic_hunt: bool, gpu: Option<&str>, shard: Option<&str>) -> Vec<String> {
     let mut args: Vec<String> = ["nextest", "run", "--profile", "ci"].map(String::from).to_vec();
     let mut filters = Vec::new();
     if panic_hunt {
@@ -413,8 +442,10 @@ fn nextest_args(o: &CiOptions, panic_hunt: bool, gpu: Option<&str>) -> Vec<Strin
     if let Some(partition) = &o.partition {
         args.extend(["--partition".to_string(), partition.clone()]);
     }
-    // A partition or a selection may hold no panic hunt; the shard that does runs it.
-    if panic_hunt && (o.partition.is_some() || o.selection != Selection::All) {
+    // A partition or a selection may hold no panic hunt; the shard that does runs it. A shard of the
+    // build job's plan may hold no runnable test at all; the build job checked that every test runs
+    // on exactly one shard.
+    if (panic_hunt && (o.partition.is_some() || o.selection != Selection::All)) || o.shard.is_some() {
         args.extend(["--no-tests", "warn"].map(String::from));
     }
     match (o.selection, gpu) {
@@ -424,6 +455,9 @@ fn nextest_args(o: &CiOptions, panic_hunt: bool, gpu: Option<&str>) -> Vec<Strin
         }
         (Selection::NoGpu, Some(gpu)) => filters.push(format!("not ({gpu})")),
         _ => {}
+    }
+    if let Some(filter) = shard {
+        filters.push(format!("({filter})"));
     }
     if !filters.is_empty() {
         args.extend(["-E".to_string(), filters.join(" & ")]);
@@ -449,7 +483,11 @@ fn step_tests(o: &CiOptions, panic_hunt: bool) -> Result<(), String> {
         }
     } else {
         let gpu = if o.selection == Selection::All { None } else { Some(read_gpu_filter()?) };
-        c.args(nextest_args(o, panic_hunt, gpu.as_deref()));
+        let shard = match (&o.from, o.shard) {
+            (Some(from), Some(k)) => read_shard_filter(from, k, o.selection)?,
+            _ => None,
+        };
+        c.args(nextest_args(o, panic_hunt, gpu.as_deref(), shard.as_deref()));
     }
     let what = shown(&c);
     run(c, &what)
@@ -458,17 +496,111 @@ fn step_tests(o: &CiOptions, panic_hunt: bool) -> Result<(), String> {
 /// Builds the test steps' binaries without running them: what every shard builds, so the cache
 /// warm-up's entry covers each shard's build.
 fn build_tests(o: &CiOptions) -> Result<(), String> {
+    cache_units::record_xtask()?;
+    let recording = cache_units::file().is_some();
     let mut c = cargo();
     match &o.archive {
-        Some(file) => {
+        Some(Archive::File(file)) => {
+            // A shard plan left in the target directory by a per-shard build would go into this
+            // archive (.config/nextest.toml) and mislead its shards.
+            let plan = target_dir()?.join(shards::PLAN_FILE);
+            match std::fs::remove_file(&plan) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(format!("{}: {e}", plan.display())),
+                _ => {}
+            }
             c.args(["nextest", "archive", "--profile", "ci"]).args(test_build_args(&o.exclude)).arg("--archive-file").arg(file);
+            if recording {
+                c.args(["--cargo-message-format", "json-render-diagnostics"]);
+            }
         }
+        Some(Archive::Shards { dir, name, shards, gpu_shard }) => return build_shard_archives(o, dir, name, *shards, *gpu_shard),
         None => {
             c.args(["test", "--no-run"]).args(test_build_args(&o.exclude));
+            if recording {
+                c.args(["--message-format", "json-render-diagnostics"]);
+            }
         }
     }
     let what = shown(&c);
-    run(c, &what)
+    cache_units::run(c, &what)
+}
+
+/// `cargo nextest list --profile ci --message-format json` of the test build, with `args`.
+fn nextest_list(o: &CiOptions, args: &[&str]) -> Result<serde_json::Value, String> {
+    let mut c = cargo();
+    c.args(["nextest", "list", "--profile", "ci", "--message-format", "json"]).args(test_build_args(&o.exclude)).args(args);
+    let what = shown(&c);
+    eprintln!("$ {what}");
+    let out = c.stderr(Stdio::inherit()).output().map_err(|e| format!("{what}: failed to spawn: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("{what}: exited with {}", out.status));
+    }
+    serde_json::from_slice(&out.stdout).map_err(|e| format!("{what}: bad JSON: {e}"))
+}
+
+/// The gate's build job with per-shard archives: builds the tests, lists them, plans which binaries
+/// (and which parts of the split ones) each shard runs, writes the plan into the target directory
+/// (every archive carries it, .config/nextest.toml) and writes each shard's archive.
+fn build_shard_archives(o: &CiOptions, dir: &Path, name: &str, shards: usize, gpu_shard: bool) -> Result<(), String> {
+    let os = if cfg!(windows) { "windows" } else { "linux" };
+    let times_path = root().join(shards::TIMES_FILE);
+    let text = std::fs::read_to_string(&times_path).unwrap_or_else(|e| {
+        eprintln!("warning: {}: {e}; every binary and test gets the default weight", times_path.display());
+        String::new()
+    });
+    let times = shards::Times::parse(&text, os)?;
+    // The build itself, and every binary it made.
+    let built = nextest_list(o, &["--list-type", "binaries-only"])?;
+    let ids: Vec<String> = built.get("rust-binaries").and_then(serde_json::Value::as_object).ok_or("nextest list: no rust-binaries")?.keys().cloned().collect();
+    // With a GPU shard every binary is listed against the gpu group; otherwise only the split ones.
+    let filter = if gpu_shard {
+        read_gpu_filter()?
+    } else {
+        let split: Vec<String> = shards::binaries_to_list(&ids, &times, shards).iter().map(|b| format!("binary_id(={b})")).collect();
+        if split.is_empty() { "none()".to_string() } else { split.join(" | ") }
+    };
+    let listing = nextest_list(o, &["--run-ignored", "all", "-E", &filter])?;
+    let (binaries, target) = shards::parse_listing(&listing, gpu_shard)?;
+    let plan = shards::plan(&binaries, &times, shards, gpu_shard)?;
+    eprint!("{}", plan.summary());
+    let plan_path = target.join(shards::PLAN_FILE);
+    let json = serde_json::to_string_pretty(&plan).map_err(|e| format!("shard plan: {e}"))?;
+    std::fs::write(&plan_path, json).map_err(|e| format!("{}: {e}", plan_path.display()))?;
+    for (k, shard) in plan.shards.iter().enumerate() {
+        let file = dir.join((k + 1).to_string()).join(name);
+        std::fs::create_dir_all(dir.join((k + 1).to_string())).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let mut c = cargo();
+        c.args(["nextest", "archive", "--profile", "ci"])
+            .args(test_build_args(&o.exclude))
+            .arg("-E")
+            .arg(shard.archive_filter())
+            .arg("--archive-file")
+            .arg(&file);
+        run(c, &format!("cargo nextest archive (shard {}: {} binaries) --archive-file {}", k + 1, shard.binaries.len(), file.display()))?;
+    }
+    Ok(())
+}
+
+/// Shard `k`'s filterset from the plan its archive carries, extracted to `from`, once the plan is
+/// checked against the archive and the selection.
+fn read_shard_filter(from: &Path, k: usize, selection: Selection) -> Result<Option<String>, String> {
+    let read = |path: PathBuf| -> Result<String, String> { std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display())) };
+    let plan_path = from.join("target").join(shards::PLAN_FILE);
+    let plan: shards::Plan = serde_json::from_str(&read(plan_path.clone())?).map_err(|e| format!("{}: {e}", plan_path.display()))?;
+    let metadata_path = from.join("target").join("nextest").join("binaries-metadata.json");
+    let metadata: serde_json::Value = serde_json::from_str(&read(metadata_path.clone())?).map_err(|e| format!("{}: {e}", metadata_path.display()))?;
+    let gpu = match selection {
+        Selection::All => None,
+        Selection::Gpu => Some(true),
+        Selection::NoGpu => Some(false),
+    };
+    let shard = shards::shard_to_run(&plan, k, gpu, &shards::archived_binaries(&metadata)?)?;
+    eprintln!(
+        "shard {k}: {} test binaries{}",
+        shard.binaries.len(),
+        if shard.parts.is_empty() { String::new() } else { format!(", part of {}", shard.parts.keys().cloned().collect::<Vec<_>>().join(", ")) }
+    );
+    Ok(shard.filter())
 }
 
 /// nextest does not run doctests.
@@ -493,7 +625,8 @@ fn ci_exclude() -> Vec<String> {
 /// The steps `cargo xtask ci <args>` runs, and how: no argument runs every step; a part (`lint`,
 /// `build`, `tests`) runs the steps of one gate job; a step's name runs that step.
 fn ci_from_args(args: &[&str], exclude: Vec<String>) -> Result<(CiPlan, CiOptions), String> {
-    let mut options = CiOptions { build_only: false, partition: None, archive: None, from: None, selection: Selection::All, exclude };
+    let mut options = CiOptions { build_only: false, partition: None, archive: None, from: None, shard: None, selection: Selection::All, exclude };
+    let mut gpu_shard = false;
     let mut what = None;
     let mut it = args.iter();
     while let Some(&arg) = it.next() {
@@ -502,14 +635,25 @@ fn ci_from_args(args: &[&str], exclude: Vec<String>) -> Result<(CiPlan, CiOption
                 let dir = it.next().ok_or("--from needs the directory the archive was extracted to")?;
                 options.from = Some(std::path::absolute(dir).map_err(|e| format!("--from {dir}: {e}"))?);
             }
+            "--shard" => {
+                let k = it.next().ok_or("--shard needs the shard's number")?;
+                options.shard = Some(k.parse().ok().filter(|&k| k > 0).ok_or_else(|| format!("--shard {k}: not a shard number"))?);
+            }
+            "--gpu-shard" => gpu_shard = true,
             "--gpu" => options.selection = Selection::Gpu,
             "--no-gpu" => options.selection = Selection::NoGpu,
             _ if what.is_none() && !arg.starts_with('-') => what = Some(arg),
             _ => return Err(format!("ci: unexpected argument `{arg}`")),
         }
     }
-    if (options.selection != Selection::All || options.from.is_some()) && what != Some("tests") {
-        return Err("ci: --from, --gpu and --no-gpu go with `ci tests`".into());
+    if (options.selection != Selection::All || options.from.is_some() || options.shard.is_some()) && what != Some("tests") {
+        return Err("ci: --from, --shard, --gpu and --no-gpu go with `ci tests`".into());
+    }
+    if options.shard.is_some() && options.from.is_none() {
+        return Err("ci: --shard runs a shard's archive: give its directory with --from".into());
+    }
+    if gpu_shard && what != Some("archive") {
+        return Err("ci: --gpu-shard goes with `ci archive`".into());
     }
     let parts: &[Part] = match what {
         None => &[Part::Lint, Part::Test, Part::Doc],
@@ -521,13 +665,15 @@ fn ci_from_args(args: &[&str], exclude: Vec<String>) -> Result<(CiPlan, CiOption
         // The gate's build job: the tests into the archive at $NEXTEST_ARCHIVE_FILE, which also
         // carries this xtask (.config/nextest.toml).
         Some("archive") => {
-            let file = std::env::var_os("NEXTEST_ARCHIVE_FILE").ok_or("ci archive: set NEXTEST_ARCHIVE_FILE to the archive to write")?;
-            options.archive = Some(file.into());
+            options.archive = Some(archive_from_env(gpu_shard, |k| std::env::var(k).ok())?);
             options.build_only = true;
             &[Part::Test]
         }
         Some("tests") => {
-            options.partition = tests_partition(options.selection, std::env::var("NEXTEST_PARTITION").ok());
+            // A shard's archive holds only its binaries, and its plan says the rest.
+            if options.shard.is_none() {
+                options.partition = tests_partition(options.selection, std::env::var("NEXTEST_PARTITION").ok());
+            }
             &[Part::Test]
         }
         Some(step) => {
@@ -539,6 +685,22 @@ fn ci_from_args(args: &[&str], exclude: Vec<String>) -> Result<(CiPlan, CiOption
         }
     };
     Ok((ci_plan(parts, options.build_only), options))
+}
+
+/// The archives `ci archive` writes: one per gate shard where the gate's build job sets
+/// $NEXTEST_ARCHIVE_DIR (with $NEXTEST_ARCHIVE_NAME and $GATE_SHARDS), else one at
+/// $NEXTEST_ARCHIVE_FILE.
+fn archive_from_env(gpu_shard: bool, var: impl Fn(&str) -> Option<String>) -> Result<Archive, String> {
+    let Some(dir) = var("NEXTEST_ARCHIVE_DIR").filter(|d| !d.is_empty()) else {
+        if gpu_shard {
+            return Err("ci archive --gpu-shard writes per-shard archives: set NEXTEST_ARCHIVE_DIR".into());
+        }
+        let file = var("NEXTEST_ARCHIVE_FILE").ok_or("ci archive: set NEXTEST_ARCHIVE_FILE to the archive to write")?;
+        return Ok(Archive::File(file.into()));
+    };
+    let name = var("NEXTEST_ARCHIVE_NAME").ok_or("ci archive: NEXTEST_ARCHIVE_DIR needs NEXTEST_ARCHIVE_NAME")?;
+    let shards = var("GATE_SHARDS").and_then(|n| n.parse().ok()).filter(|&n| n > 0).ok_or("ci archive: NEXTEST_ARCHIVE_DIR needs GATE_SHARDS")?;
+    Ok(Archive::Shards { dir: dir.into(), name, shards, gpu_shard })
 }
 
 /// The partition `ci tests` runs. The gate sets $NEXTEST_PARTITION on every shard leg, and the shard
@@ -619,21 +781,45 @@ mod ci_tests {
             build_only: false,
             archive: None,
             from: None,
+            shard: None,
             partition: Some("hash:2/3".into()),
             selection: Selection::NoGpu,
             exclude: vec!["photocraft-web".into()],
         };
         let build = "--workspace --locked --features heif --exclude photocraft-web --lib --bins --tests";
-        let args = nextest_args(&options, false, Some("package(g)")).join(" ");
+        let args = nextest_args(&options, false, Some("package(g)"), None).join(" ");
         assert_eq!(args, format!("nextest run --profile ci {build} --partition hash:2/3 -E not (package(g))"));
         let gpu = CiOptions { selection: Selection::Gpu, partition: None, ..options.clone() };
-        let hunt = nextest_args(&gpu, true, Some("package(g)")).join(" ");
+        let hunt = nextest_args(&gpu, true, Some("package(g)"), None).join(" ");
         assert!(hunt.contains("--run-ignored only") && hunt.contains("--no-tests warn") && hunt.contains("--success-output immediate"), "{hunt}");
         assert!(hunt.ends_with("-E binary_id(photocraft-engine::panic_hunt) & (package(g))"), "{hunt}");
         // The whole run keeps nextest's default: a panic hunt that matches nothing fails.
         let here = CiOptions { partition: None, selection: Selection::All, ..options };
-        assert!(!nextest_args(&here, true, None).join(" ").contains("--no-tests"));
+        assert!(!nextest_args(&here, true, None, None).join(" ").contains("--no-tests"));
         assert_eq!(test_build_args(&here.exclude).join(" "), build);
+    }
+
+    #[test]
+    fn a_shard_archive_runs_its_part_and_no_partition() {
+        let (_, options) = ci_from_args(&["tests", "--from", "x", "--shard", "2", "--no-gpu"], Vec::new()).unwrap();
+        assert_eq!((options.shard, options.partition.as_deref()), (Some(2), None));
+        let args = nextest_args(&options, true, Some("package(g)"), Some("not (binary_id(=ui))")).join(" ");
+        assert!(args.contains("--no-tests warn") && !args.contains("--partition"), "{args}");
+        assert!(args.ends_with("-E binary_id(photocraft-engine::panic_hunt) & not (package(g)) & (not (binary_id(=ui)))"), "{args}");
+        // A shard may hold no runnable test; the build job's plan check guarantees the coverage.
+        assert!(nextest_args(&options, false, None, None).join(" ").contains("--no-tests warn"));
+        assert!(ci_from_args(&["tests", "--shard", "2"], Vec::new()).is_err(), "--shard without --from");
+        assert!(ci_from_args(&["tests", "--from", "x", "--shard", "0"], Vec::new()).is_err());
+        assert!(ci_from_args(&["lint", "--gpu-shard"], Vec::new()).is_err());
+
+        fn env(vars: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+            move |k| vars.iter().find(|v| v.0 == k).map(|v| v.1.to_string())
+        }
+        let shards = &[("NEXTEST_ARCHIVE_DIR", "/a"), ("NEXTEST_ARCHIVE_NAME", "n.tar.zst"), ("GATE_SHARDS", "4"), ("NEXTEST_ARCHIVE_FILE", "/f")];
+        assert_eq!(archive_from_env(true, env(shards)).unwrap(), Archive::Shards { dir: "/a".into(), name: "n.tar.zst".into(), shards: 4, gpu_shard: true });
+        assert_eq!(archive_from_env(false, env(&[("NEXTEST_ARCHIVE_FILE", "/f")])).unwrap(), Archive::File("/f".into()));
+        assert!(archive_from_env(true, env(&[("NEXTEST_ARCHIVE_FILE", "/f")])).is_err());
+        assert!(archive_from_env(false, env(&[("NEXTEST_ARCHIVE_DIR", "/a"), ("NEXTEST_ARCHIVE_NAME", "n")])).is_err());
     }
 
     #[test]

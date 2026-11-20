@@ -1,7 +1,7 @@
 use crate::cmd::{CommandSpec, Rect, Surface, TILE_SIZE, Value, bad, has_doc, has_selection, int_i32, selection_cmds};
 
 /// Select menu: All, Deselect, Inverse and rectangular selections.
-pub(crate) fn specs() -> Vec<CommandSpec> {
+pub fn specs() -> Vec<CommandSpec> {
     vec![
         // Select
         cmd!("select.all", "All", ["Select"], Some("Cmd+A"), "{}", has_doc, |s, _| {

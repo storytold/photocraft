@@ -35,9 +35,12 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 failure-output = "immediate-final"
 # The gate's shards run the tests from a nextest archive (`cargo xtask ci archive`) and start them
 # with the xtask binary the archive carries, so a shard builds nothing. Only one of the two exists.
+# With per-shard archives, each also carries the plan of which tests each shard runs
+# (xtask/src/shards.rs).
 archive.include = [
     { path = "debug/xtask", relative-to = "target", depth = 0, on-missing = "ignore" },
     { path = "debug/xtask.exe", relative-to = "target", depth = 0, on-missing = "ignore" },
+    { path = "gate-shards.json", relative-to = "target", depth = 0, on-missing = "ignore" },
 ]
 
 # Keep phase timings for the remaining expensive Windows GPU regressions visible. This does
