@@ -290,8 +290,10 @@ fn publish_filter_preview(
                 // Shown through the preview's own colour management, as the result will be: Assign
                 // and Convert to Profile change the profile (and Convert the mode), not the pixels.
                 let (display, _) = canvas_display(app, &result, None);
-                gpu.upload_buffer_full(key, &texture_buffer(display.as_deref(), &buffer), doc.depth);
-                uploaded = result.bounds();
+                // Recorded only when it went up, so a failed upload is retried rather than taken as shown.
+                if gpu.upload_buffer_full(key, &texture_buffer(display.as_deref(), &buffer), doc.depth) {
+                    uploaded = result.bounds();
+                }
             }
         }
         app.perf.record("filter-preview", result.size.area(), ms, crate::gpu_canvas::now_ms() - t0);

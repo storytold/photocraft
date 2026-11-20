@@ -227,3 +227,21 @@ fn a_failed_upload_is_not_recorded() {
     upload_filter_preview_view(&mut app, key, DRect::new(300, 200, 900, 600));
     assert!(app.filter_preview.as_ref().unwrap().uploaded.is_empty(), "nothing is on the texture");
 }
+
+/// A preview published while its whole upload fails (a GPU fault) records nothing as uploaded, so the
+/// view's upload tries again rather than taking the texture as shown.
+#[test]
+fn a_failed_whole_upload_is_not_recorded() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.set_wgpu(rs);
+    app.background_jobs = false;
+    app.run("file.new", json!({"width": 2400, "height": 2200})).unwrap();
+    crate::filter_dialog::open(&mut app, "filter.stylize.solarize").unwrap();
+    app.ui.views.get_mut(0).expect("the new document's view").zoom = 0.25;
+    app.gpu_health().unwrap().mark(photocraft_gpu::Fault::Error("Validation Error".into()));
+    let (k, _, _) = ensure_filter_preview(&mut app, 0, &egui::Context::default()).expect("a preview");
+    assert_eq!(k, 2, "a reduced preview, which goes up whole");
+    assert!(app.filter_preview.as_ref().unwrap().uploaded.is_empty(), "nothing is on the texture");
+}
