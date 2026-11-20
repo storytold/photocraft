@@ -2,6 +2,8 @@
 
 mod actions_duplicate;
 mod actions_panel_menu;
+mod apply_data_set_dialog;
+mod apply_data_set_preview;
 mod batch_export_options;
 mod brush_reset_defaults;
 mod camera_raw_histogram;
