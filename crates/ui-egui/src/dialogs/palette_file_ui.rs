@@ -222,7 +222,9 @@ pub fn sample(app: &mut PhotocraftApp, id: DialogId, at: [f64; 2]) -> bool {
     let Some([r, g, b, a]) = crate::canvas::composite_color_alpha(app, at[0], at[1]) else {
         return true; // Off the image: nothing to highlight, the pipette stays armed.
     };
-    let entry = if a > 0.0 { match_entry(&colors, [r, g, b]) } else { transparent };
+    // An opaque pixel cannot be using the entry that only carries clear pixels, so it is passed as
+    // `skip` and loses an exact tie (#7320); a clear pixel is that entry by definition.
+    let entry = if a > 0.0 { match_entry(&colors, [r, g, b], transparent) } else { transparent };
     if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id)
         && let Some(entry) = entry
     {
@@ -248,22 +250,26 @@ fn transparent_of(fields: &DialogFields) -> Option<usize> {
 
 /// The palette entry matching `target` (0..=1 channels): an exact match after rounding, else the
 /// nearest by squared 8-bit distance (a dithered edge's colour). `None` for an empty table.
-pub fn match_entry(colors: &[[u8; 3]], target: [f32; 3]) -> Option<usize> {
+///
+/// `skip` is the document's transparent entry, passed for an **opaque** pixel: that pixel cannot
+/// be using the entry which only carries clear pixels, so on an exact tie another entry wins and
+/// `skip` is returned only when nothing else is as close — otherwise a table holding the same
+/// colour twice (the auto transparent entry ahead of a real one, #7320) would highlight the
+/// transparent cell for an opaque pixel.
+pub fn match_entry(colors: &[[u8; 3]], target: [f32; 3], skip: Option<usize>) -> Option<usize> {
     if colors.is_empty() {
         return None;
     }
     let t = target.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
-    colors.iter().position(|c| *c == t).or_else(|| {
-        colors
-            .iter()
-            .enumerate()
-            .map(|(i, c)| {
-                let d = (0..3).map(|k| (i32::from(c[k]) - i32::from(t[k])).pow(2) as u32).sum::<u32>();
-                (d, i)
-            })
-            .min_by_key(|(d, _)| *d)
-            .map(|(_, i)| i)
-    })
+    let dist = |c: &[u8; 3]| (0..3).map(|k| (i32::from(c[k]) - i32::from(t[k])).pow(2) as u32).sum::<u32>();
+    // Ties keep the lower index, as the exact-match lookup did.
+    let best = colors.iter().enumerate().filter(|(i, _)| Some(*i) != skip).map(|(i, c)| (dist(c), i)).min_by_key(|(d, _)| *d);
+    match (best, skip) {
+        (Some((d, _)), Some(s)) if colors.get(s).is_some_and(|c| dist(c) < d) => Some(s),
+        (Some((_, i)), _) => Some(i),
+        (None, Some(s)) => Some(s),
+        (None, None) => None,
+    }
 }
 
 /// A click on entry `i` with the "Set Transparent" switch off: the shown table becomes the
@@ -538,11 +544,30 @@ mod tests {
     #[test]
     fn the_pipette_matches_an_entry_exactly_then_by_distance() {
         let colors = [[255, 0, 0], [0, 128, 0], [10, 20, 30]];
-        assert_eq!(match_entry(&colors, [1.0, 0.0, 0.0]), Some(0));
-        assert_eq!(match_entry(&colors, [0.0, 128.0 / 255.0, 0.0]), Some(1));
-        assert_eq!(match_entry(&colors, [0.05, 0.1, 0.12]), Some(2), "closest to the dark entry");
-        assert_eq!(match_entry(&colors, [0.9, 0.1, 0.1]), Some(0), "closer to red than to the dark entry");
-        assert_eq!(match_entry(&colors, [5.0, -3.0, 0.0]), Some(0), "out-of-range channels clamp");
-        assert_eq!(match_entry(&[], [0.5, 0.5, 0.5]), None, "an empty table matches nothing");
+        assert_eq!(match_entry(&colors, [1.0, 0.0, 0.0], None), Some(0));
+        assert_eq!(match_entry(&colors, [0.0, 128.0 / 255.0, 0.0], None), Some(1));
+        assert_eq!(match_entry(&colors, [0.05, 0.1, 0.12], None), Some(2), "closest to the dark entry");
+        assert_eq!(match_entry(&colors, [0.9, 0.1, 0.1], None), Some(0), "closer to red than to the dark entry");
+        assert_eq!(match_entry(&colors, [5.0, -3.0, 0.0], None), Some(0), "out-of-range channels clamp");
+        assert_eq!(match_entry(&[], [0.5, 0.5, 0.5], None), None, "an empty table matches nothing");
+    }
+
+    /// An opaque pixel of the transparent entry's colour highlights the other entry of that colour,
+    /// not the transparent cell — the tie the "1st index as transparent" switch exposes (#7320).
+    /// The transparent entry is still matched when nothing else is as close, and a clear pixel
+    /// never reaches here at all (the caller returns the transparent entry itself).
+    #[test]
+    fn the_pipette_does_not_highlight_the_transparent_entry_for_an_opaque_pixel() {
+        // White at index 0 (the transparent entry) ahead of the forced white at index 2.
+        let colors = [[255, 255, 255], [0, 0, 0], [255, 255, 255]];
+        assert_eq!(match_entry(&colors, [1.0, 1.0, 1.0], Some(0)), Some(2), "the tie goes to the other white");
+        assert_eq!(match_entry(&colors, [1.0, 1.0, 1.0], None), Some(0), "without the skip, the lower index wins");
+        // The transparent entry is the only entry of its colour: it is still the match.
+        let only = [[255, 255, 255], [0, 0, 0]];
+        assert_eq!(match_entry(&only, [1.0, 1.0, 1.0], Some(0)), Some(0));
+        // A strictly nearer entry wins regardless of the skip.
+        assert_eq!(match_entry(&colors, [0.0, 0.0, 0.0], Some(0)), Some(1));
+        // Skipping an index past the table changes nothing.
+        assert_eq!(match_entry(&colors, [0.0, 0.0, 0.0], Some(9)), Some(1));
     }
 }
