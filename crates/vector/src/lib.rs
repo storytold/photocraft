@@ -741,6 +741,10 @@ impl CompiledShape {
                         continue;
                     }
                     let clip = if *inside { *f } else { 1.0 - *f };
+                    if clip <= 0.0 {
+                        *c = 0.0;
+                        continue;
+                    }
                     let scale = self
                         .pixel_rectangle
                         .map_or(*scale, |bounds| pixel_align::rectangle_coverage_scale(bounds, rect.x0 + (i % w) as i32, rect.y0 + (i / w) as i32));
@@ -748,6 +752,9 @@ impl CompiledShape {
                 }
             }
             self.pixel_dash_caps.sharpen_dash_caps(rect, &mut cov, self.pixel_dash_threshold, r, self.pixel_dash_bias.as_ref(), self.pixel_dash_centers);
+            if let Some(bounds) = self.pixel_rectangle.filter(|_| self.pixel_dash_bias.is_some()) {
+                pixel_align::restore_rectangle_dash_corners(bounds, rect, &mut cov, r);
+            }
             for (i, (o, c)) in out.iter_mut().zip(&cov).enumerate() {
                 if *c <= 0.0 {
                     continue;

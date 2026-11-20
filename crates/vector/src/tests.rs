@@ -1790,3 +1790,22 @@ fn align_edges_half_ties_choose_increasing_coordinates() {
     let large_integer = 4_503_599_627_370_497.0;
     assert_eq!(super::pixel_align::snap_edge(large_integer), large_integer);
 }
+
+#[test]
+fn pixel_aligned_half_pixel_dashes_keep_inner_corners_and_clip_outside() {
+    let rect = Rect::new(0, 0, 40, 40);
+    let shape = ShapeLayer {
+        path: shapes::rect(10.5, 10.5, 20.0, 20.0),
+        use_aligned_rendering: true,
+        stroke: Some(ShapeStroke { width: 1.0, dashes: vec![100.0, 1.0], ..Default::default() }),
+        ..Default::default()
+    };
+    let pixels = CompiledShape::new(&shape, DEFAULT_TOLERANCE, rect).render_rgba(rect);
+    let alpha = |x: usize, y: usize| pixels[y * 40 + x][3];
+    for (x, y) in [(11, 11), (12, 11), (11, 12)] {
+        assert_eq!(alpha(x, y), 1.0, "inside corner at {x},{y}");
+    }
+    for (x, y) in [(10, 11), (11, 10), (10, 10)] {
+        assert_eq!(alpha(x, y), 0.0, "outside corner at {x},{y}");
+    }
+}

@@ -402,6 +402,31 @@ pub(crate) fn rectangle_bounds(shape: &ShapeLayer, tolerance: (f64, f64)) -> Opt
     shape.path.control_bounds()
 }
 
+/// At a half-pixel tie the inward row can have no source coverage near a guarded endpoint.
+/// Sample the original dashed outline on its centerline so a dash gap still stays empty.
+pub(crate) fn restore_rectangle_dash_corners((x0, y0, x1, y1): (f64, f64, f64, f64), rect: Rect, coverage: &mut [f32], stroke: &crate::raster::Rasterizer) {
+    let (left, top, right, bottom) = (snap_edge(x0) as i32, snap_edge(y0) as i32, snap_edge(x1) as i32, snap_edge(y1) as i32);
+    for (x, sx, dx) in [(left, x0, 1i32), (right.saturating_sub(1), x1, -1)] {
+        for (y, sy, dy) in [(top, y0, 1i32), (bottom.saturating_sub(1), y1, -1)] {
+            for (px, py, horizontal) in [(x, y, true), (x, y, false), (x.saturating_add(dx), y, true), (x, y.saturating_add(dy), false)] {
+                if px < left || px >= right || py < top || py >= bottom || px < rect.x0 || px >= rect.x1 || py < rect.y0 || py >= rect.y1 {
+                    continue;
+                }
+                let (edge, row, side) = if horizontal { (sy, py, dy) } else { (sx, px, dx) };
+                if !same(f64::from(row) + 0.5 - edge, f64::from(side)) {
+                    continue;
+                }
+                let i = (py - rect.y0) as usize * rect.width() as usize + (px - rect.x0) as usize;
+                let Some(value) = coverage.get_mut(i).filter(|v| **v == 0.0) else { continue };
+                let cell = Rect::new(px, py, px + 1, py + 1);
+                let probe = |pixel: i32, low: f64, high: f64| (f64::from(pixel) + 0.5).max(low).min(high) - f64::from(pixel);
+                let offset = if horizontal { (probe(px, x0, x1), sy - f64::from(py)) } else { (sx - f64::from(px), probe(py, y0, y1)) };
+                *value = stroke.point_samples(cell, offset).first().copied().unwrap_or(0.0);
+            }
+        }
+    }
+}
+
 /// Normalize the selected interior row using its actual normal-axis coverage. This keeps
 /// quantized PSD edges opaque without rounding the path used for dash lengths and phase.
 pub(crate) fn rectangle_coverage_scale((x0, y0, x1, y1): (f64, f64, f64, f64), x: i32, y: i32) -> f32 {
@@ -413,7 +438,8 @@ pub(crate) fn rectangle_coverage_scale((x0, y0, x1, y1): (f64, f64, f64, f64), x
             normal = normal.min(0.5 + (edge - rounded) * if inside_positive { 1.0 } else { -1.0 });
         }
     }
-    (1.0 / normal) as f32
+    let scale = normal.recip() as f32;
+    if scale.is_finite() { scale } else { 1.0 }
 }
 
 /// Bound actual tessellated joins, including sharp interior cusps. Source control

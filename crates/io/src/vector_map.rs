@@ -559,7 +559,7 @@ pub fn shape_blocks(sh: &ShapeLayer, raw: &mut Vec<([u8; 4], Vec<u8>)>, w: u32, 
     let find = |raw: &Vec<([u8; 4], Vec<u8>)>, k: &[u8; 4]| raw.iter().position(|(key, _)| key == k);
     // The layer's Align Edges setting, not the stroke's Stroke Adjust setting.
     match find(raw, b"sn2P") {
-        Some(i) if aligned_rendering(&raw[i].1) == Some(sh.use_aligned_rendering) => {}
+        Some(i) if aligned_rendering(&raw[i].1).unwrap_or(false) == sh.use_aligned_rendering => {}
         Some(i) => raw[i].1 = u32::from(sh.use_aligned_rendering).to_be_bytes().to_vec(),
         None if sh.use_aligned_rendering => raw.push((*b"sn2P", 1u32.to_be_bytes().to_vec())),
         None => {}
@@ -884,6 +884,15 @@ mod align_edges_tests {
     fn align_edges_psd_layer_flag_accepts_nonzero_and_rejects_truncated_data() {
         for bytes in [vec![], vec![1], vec![0, 0, 1], vec![0, 0, 0, 1, 1]] {
             assert_eq!(aligned_rendering(&bytes), None);
+            let mut shape = ShapeLayer::default();
+            shape_from_blocks(&mut shape, &|key| (key == b"sn2P").then(|| bytes.clone()), 64, 64, 72.0);
+            assert!(!shape.use_aligned_rendering);
+            let mut raw = vec![(*b"sn2P", bytes.clone())];
+            shape_blocks(&shape, &mut raw, 64, 64, 72.0);
+            assert_eq!(raw[0].1, bytes);
+            shape.use_aligned_rendering = true;
+            shape_blocks(&shape, &mut raw, 64, 64, 72.0);
+            assert_eq!(raw[0].1, 1u32.to_be_bytes());
         }
         for value in [1u32, 2, u32::MAX] {
             let data = value.to_be_bytes().to_vec();
