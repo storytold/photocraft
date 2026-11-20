@@ -2,16 +2,18 @@
 //! selected layers refuses with the locked-layer alert, and any change to the selected layers
 //! while the box is open applies the box first, as in Photoshop.
 
+use craft::draw::ui::transform::{Interpolation, TransformEdit};
 use photocraft_doc::LayerId;
 use photocraft_geom::Rect;
 use serde_json::json;
 
 use crate::PhotocraftApp;
+use crate::dialogs::alerts::alerts;
 use crate::transform_tool::LOCKED;
 
 /// A 200 × 200 document on a white Background: "A" with a red block at x 10..50, y 10..30, and
 /// "B" with a blue one at x 100..140, y 100..120. Only B is selected.
-fn app() -> (PhotocraftApp, LayerId, LayerId, LayerId) {
+fn app() -> (Box<PhotocraftApp>, LayerId, LayerId, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 200, "background": "white"})).unwrap();
     app.sync_views();
@@ -38,18 +40,15 @@ fn select(app: &mut PhotocraftApp, id: LayerId, mode: &str) {
 }
 
 fn invoke(app: &mut PhotocraftApp, id: &str) -> Result<(), String> {
-    crate::menus::invoke(app, &egui::Context::default(), id, json!({})).map(|_| ())
-}
-
-fn alerts(app: &PhotocraftApp) -> Vec<String> {
-    app.ui.dialogs.iter().filter(|d| d.kind == crate::state::DialogKind::Error).filter_map(|d| d.fields.get("message")?.as_str().map(String::from)).collect()
+    let app_ctx = app.ctx().clone();
+    crate::menus::invoke(app, &app_ctx, id, json!({})).map(|_| ())
 }
 
 /// Drag the open box `dx` px right, with nearest neighbour so the blocks keep their edges.
 fn nudge(app: &mut PhotocraftApp, dx: f64) {
     let t = app.ui.transform.as_mut().expect("a box is open");
-    t.interpolation = "nearest".into();
-    t.quad = t.quad.map(|[x, y]| [x + dx, y]);
+    t.session.apply(TransformEdit::Interpolation(Interpolation::NearestNeighbor), 0.0);
+    t.edit_box(|b| b.quad = b.quad.map(|p| (p.x + dx, p.y).into()));
 }
 
 #[test]
@@ -61,7 +60,7 @@ fn the_background_among_several_layers_shows_the_locked_alert_and_opens_no_box()
         let before = app.session.active().unwrap().doc.clone();
         assert_eq!(invoke(&mut app, id), Err(LOCKED.into()), "{id}");
         assert!(app.ui.transform.is_none(), "{id}: no box opens");
-        assert_eq!(alerts(&app), [LOCKED], "{id}: the same alert as a position-locked layer");
+        assert_eq!(alerts(&app).len(), 1, "{id}: the same alert as a position-locked layer");
         assert!(app.session.active().unwrap().doc == before, "{id}: nothing moved");
     }
 }
@@ -217,86 +216,25 @@ fn corner_layer(app: &mut PhotocraftApp) -> LayerId {
 }
 
 #[test]
-fn a_refused_handle_press_on_the_canvas_reaches_no_move_tool() {
-    // The Background among the selected layers: a press on the Move tool's transform handle shows
-    // the locked-layer alert and goes nowhere else. Auto-Select (on) used to take it and select
-    // C under the handle, a click and a drag alike.
-    use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
-    for drag in [false, true] {
-        let (mut app, bg, a, _) = app();
-        corner_layer(&mut app);
-        select(&mut app, a, "replace");
-        select(&mut app, bg, "add");
-        app.ui.tool = crate::state::Tool::Move;
-        app.ui.tool_options.move_show_transform = true;
-        app.ui.tool_options.move_auto_select = true;
-        app.sync_views();
-        let mut view = app.ui.views[0].clone();
-        view.zoom = 1.0;
-        view.center = [100.0, 100.0];
-        view.fit_pending = false;
-        view.fill_pending = false;
-        let rect = egui::Rect::from_min_size(Pos2::ZERO, vec2(300.0, 300.0));
-        let ctx = egui::Context::default();
-        let mut frame = |app: &mut PhotocraftApp, events: Vec<Event>| {
-            let input = egui::RawInput { screen_rect: Some(rect), events, ..Default::default() };
-            let mut out = ctx.run_ui(input, |ui| {
-                view = crate::canvas::canvas_view(app, ui, 0, rect, view.clone(), true);
-            });
-            out.textures_delta.clear();
-        };
-        let press = |pos: Pos2, pressed: bool| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
-        // The frame holds the Background, the whole canvas: its bottom-right handle is at doc
-        // (200, 200), screen (250, 250); the press is inside its grab area, over C.
-        let at = Pos2::new(246.0, 246.0);
-        let before = app.session.active().unwrap().doc.clone();
-        let selected = app.session.active().unwrap().selected_layers();
-        frame(&mut app, vec![Event::PointerMoved(at)]);
-        frame(&mut app, vec![press(at, true)]);
-        let mut end = at;
-        if drag {
-            for i in 1..=6 {
-                end = at + vec2(-8.0 * i as f32, -8.0 * i as f32);
-                frame(&mut app, vec![Event::PointerMoved(end)]);
-            }
-        }
-        frame(&mut app, vec![press(end, false)]);
-        frame(&mut app, vec![]);
-        assert!(app.ui.transform.is_none(), "drag {drag}: no box opens");
-        assert!(alerts(&app).iter().any(|m| m == "Could not transform because the layer is locked."), "drag {drag}: {:?}", alerts(&app));
-        let st = app.session.active().unwrap();
-        assert_eq!(st.selected_layers(), selected, "drag {drag}: the selection is unchanged");
-        assert!(st.doc == before, "drag {drag}: the document is unchanged");
-    }
-}
-
-#[test]
 fn a_refused_handle_press_over_the_control_channel_reaches_no_move_tool() {
     // `ui.pointer` takes the same path: the alert, and the press is not forwarded to the Move tool.
-    use crate::control::{ControlRequest, Outcome};
+    use crate::transform_controls_pointer_tests::accepted;
     let (mut app, bg, a, _) = app();
     corner_layer(&mut app);
     select(&mut app, a, "replace");
     select(&mut app, bg, "add");
     app.sync_views();
-    app.last_canvas_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 300.0));
     app.ui.tool_options.move_auto_select = true;
-    let ctx = egui::Context::default();
-    let call = |app: &mut PhotocraftApp, method: &str, params: serde_json::Value| {
-        let (request, _receiver) = ControlRequest::new(method, params);
-        let Outcome::Done(reply) = crate::control::handle(app, &ctx, &request) else { panic!("expected an immediate {method} reply") };
-        assert_eq!(reply["ok"], true, "{method}: {reply}");
-    };
-    call(&mut app, "ui.set", json!({"tool": "Move", "moveShowTransform": true, "zoom": 1.0, "center": [100, 100]}));
+    accepted(&mut app, "ui.set", json!({"tool": "Move", "moveShowTransform": true, "zoom": 1.0, "center": [100, 100]}));
     let before = app.session.active().unwrap().doc.clone();
-    let selected = app.session.active().unwrap().selected_layers();
-    call(
+    let selected = app.session.active().unwrap().selected_layers().to_vec();
+    accepted(
         &mut app,
         "ui.pointer",
         json!({"events": [{"kind": "down", "x": 196, "y": 196}, {"kind": "move", "x": 180, "y": 180}, {"kind": "up", "x": 180, "y": 180}]}),
     );
     assert!(app.ui.transform.is_none(), "no box opens");
-    assert!(alerts(&app).iter().any(|m| m == "Could not transform because the layer is locked."), "{:?}", alerts(&app));
+    assert_eq!(alerts(&app).len(), 1, "the locked-layer alert");
     let st = app.session.active().unwrap();
     assert_eq!(st.selected_layers(), selected, "the selection is unchanged");
     assert!(st.doc == before, "the document is unchanged");

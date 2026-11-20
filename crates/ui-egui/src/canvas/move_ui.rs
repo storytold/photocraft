@@ -20,8 +20,8 @@ use crate::state::Tool;
 /// rather than the whole layer, with `tool` in effect? With a selection, as in Photoshop; a layer
 /// whose pixels can't float (type, shape, Smart Object, group, position-locked), a hidden layer or
 /// several selected layers still move whole, as without one. The canvas cursor asks before the
-/// press, and a pointer event passes `canvas::event_tool`, which also sees a ⌘ sent with the event
-/// (#2768).
+/// press, and the ⌘ stand-in (the host's `StandInKey::Command`) runs the Move tool for a press made
+/// with ⌘ held, also when ⌘ comes with the event (#2768).
 pub(crate) fn moves_selected_pixels_with(app: &PhotocraftApp, tool: Tool) -> bool {
     let Some(st) = app.session.active() else { return false };
     tool == Tool::Move
@@ -49,10 +49,7 @@ fn float_selected_as(app: &mut PhotocraftApp, copy: bool, dx: f64, dy: f64, step
     let floating = app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some());
     let dropped = if copy && floating { app.run("select.drop", json!({})) } else { Ok(json!(null)) };
     match dropped.and_then(|_| app.run("select.float", json!({"dx": dx, "dy": dy, "copy": copy, "stepName": step_name}))) {
-        Ok(_) => {
-            crate::snap_ui::follow_cut(app);
-            true
-        }
+        Ok(_) => true,
         Err(e) => {
             app.ui.status = e;
             app.ui.status_error = true;
@@ -198,22 +195,16 @@ pub(crate) fn pattern_wrap(app: &PhotocraftApp, mut args: serde_json::Value) -> 
     args
 }
 
-/// The whole-pixel offset of the current Move drag on document `idx`, if one is under way.
+/// The whole-pixel offset of the current Move drag on document `idx`, if one is under way. The
+/// tool's ΔX/ΔY readout shows the same value (#5727); Free Transform shows its own.
 fn drag_offset(app: &PhotocraftApp) -> Option<(i32, i32)> {
-    let d = app.drag.as_ref().filter(|d| d.tool == Tool::Move)?;
-    let end = d.points.last().map_or(d.start, |p| [p[0], p[1]]);
-    let dx = (end[0] - d.start[0]).round().clamp(-1e7, 1e7) as i32;
-    let dy = (end[1] - d.start[1]).round().clamp(-1e7, 1e7) as i32;
-    Some((dx, dy))
+    app.canvas_tools.mover.offset()
 }
 
-/// The ΔX/ΔY values shown beside the pointer while the Move tool drags layers or selected pixels,
-/// as in Photoshop (#5727): the whole pixels the release will move them. Free Transform shows its
-/// own (`transform_tool::live_readout`). `None` until the pointer moves.
-pub(crate) fn offset_readout(app: &PhotocraftApp) -> Option<[String; 2]> {
-    app.drag.as_ref().filter(|d| d.points.len() > 1)?;
-    let (dx, dy) = drag_offset(app)?;
-    Some([dx, dy].map(|v| format!("{v} px")))
+/// The offset of the drag in progress: the selection tools' drag of the selection, else the Move
+/// tool's drag of the selected pixels.
+fn drag_delta(app: &PhotocraftApp) -> (i32, i32) {
+    app.canvas_tools.selection.drag_offset().or_else(|| app.canvas_tools.mover.offset()).unwrap_or((0, 0))
 }
 
 /// The document to show while a Move drag is under way on document `idx`: the moving layers at
@@ -245,7 +236,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     }
     let fresh = app.move_preview.as_ref().is_some_and(|p| p.doc == doc_id && p.revision == revision);
     if !fresh {
-        let ids = photocraft_engine::layer_multi_cmds::move_targets(&doc, &st.selected_layers());
+        let ids = photocraft_engine::layer_multi_cmds::move_targets(&doc, st.selected_layers());
         if ids.is_empty() {
             return None;
         }
@@ -297,11 +288,20 @@ fn shape_reach(l: &photocraft_doc::Layer, canvas: Rect) -> Option<Rect> {
     Some(b.inflate(m))
 }
 
-/// `ids` and every layer inside them (groups move their contents).
+/// `ids` and every layer inside them (groups move their contents), in document order. Only the
+/// subtrees of `ids` are visited.
 pub(crate) fn with_descendants(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
-    let walk = doc.walk();
-    let roots: Vec<_> = walk.iter().filter(|(_, _, l)| ids.contains(&l.id)).map(|(p, _, _)| p.as_slice()).collect();
-    walk.iter().filter(|(p, _, _)| roots.iter().any(|r| p.starts_with(r))).map(|(_, _, l)| l.id).collect()
+    fn push(l: &photocraft_doc::Layer, out: &mut Vec<LayerId>) {
+        out.push(l.id);
+        l.children().into_iter().flatten().for_each(|c| push(c, out));
+    }
+    let mut out = Vec::new();
+    for id in doc.layers.index().roots(ids) {
+        if let Some(l) = doc.layer(id) {
+            push(l, &mut out);
+        }
+    }
+    out
 }
 
 /// Where the canvas shows layer `id` of document `doc` at `revision` relative to where it is: the
@@ -316,10 +316,10 @@ pub(crate) fn shown_layer_offset(app: &PhotocraftApp, doc: DocId, revision: u64,
     p.offsets.last().copied()
 }
 
-/// A floating selection's offset plus a drag of it in progress (`canvas::selection_drag_delta`).
+/// A floating selection's offset plus a drag of it in progress ([`drag_delta`]).
 pub(crate) fn floating_offset(app: &PhotocraftApp) -> Option<(i32, i32)> {
     let f = photocraft_engine::float_cmds::floating(app.session.active()?)?;
-    let d = crate::canvas::selection_drag_delta(app).unwrap_or((0, 0));
+    let d = drag_delta(app);
     Some((f.offset.0 + d.0, f.offset.1 + d.1))
 }
 
@@ -356,7 +356,7 @@ fn floating_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u
     let shown = app.move_preview.as_ref()?.offsets.last() != Some(&offset);
     if shown {
         let t0 = crate::gpu_canvas::now_ms();
-        let d = photocraft_engine::float_cmds::displayed(st, crate::canvas::selection_drag_delta(app).unwrap_or((0, 0)))?;
+        let d = photocraft_engine::float_cmds::displayed(st, drag_delta(app))?;
         let d = photocraft_engine::mode_cmds::display_document(&d).unwrap_or(d);
         let p = app.move_preview.as_mut()?;
         p.shown = Some(Arc::new(d));

@@ -239,6 +239,13 @@ fn brst_round_trip() {
 }
 
 #[test]
+fn brst_ignores_truncated_and_trailing_bytes() {
+    assert_eq!(super::parse_brst(&[]), 0);
+    assert_eq!(super::parse_brst(&[0, 0, 0]), 0);
+    assert_eq!(super::parse_brst(&[0, 0, 0, 2, 0xff, 0xee]), 0b100);
+}
+
+#[test]
 fn placed_layer_warp_is_read() {
     use craft_psd::descriptor::ObjectArray;
     use photocraft_geom::warp::WarpStyle;
@@ -349,7 +356,7 @@ fn tysh_preservation_fallback_survives_missing_descriptor() {
 
 #[test]
 fn oversized_tysh_preserves_fallback_geometry_without_decoding_text() {
-    let mut bytes = vec![0u8; craft_psd_tysh::text::envelope::MAX_BYTES + 1];
+    let mut bytes = vec![0u8; craft_psd::text::envelope::MAX_BYTES + 1];
     let expected = [1.0f64, 0.0, 0.0, 1.0, 25.0, 30.0];
     for (i, v) in expected.iter().enumerate() {
         bytes[2 + i * 8..10 + i * 8].copy_from_slice(&v.to_be_bytes());

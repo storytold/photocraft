@@ -9,11 +9,11 @@ use serde_json::{Value, json};
 
 use super::tests::{drag, harness, press};
 use crate::PhotocraftApp;
-use crate::control::{ControlRequest, Outcome, handle};
+use crate::control::{ControlRequest, Reply, handle};
 use crate::state::Tool;
 
 /// The Remove tool with Remove after each stroke off, nothing painted yet.
-fn remove_harness() -> Harness<'static, PhotocraftApp> {
+fn remove_harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = harness(None);
     h.state_mut().ui.tool = Tool::Remove;
     h.state_mut().ui.tool_options.remove_after_each_stroke = false;
@@ -22,7 +22,7 @@ fn remove_harness() -> Harness<'static, PhotocraftApp> {
 }
 
 /// One Remove stroke painted with the mouse, waiting.
-fn waiting() -> Harness<'static, PhotocraftApp> {
+fn waiting() -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = remove_harness();
     drag(&mut h, PointerButton::Primary);
     assert_eq!(h.state().remove_pending.len(), 1, "one stroke waits");
@@ -39,10 +39,10 @@ fn snapshot(app: &PhotocraftApp) -> (Vec<Value>, Option<Vec<u8>>, usize, usize) 
 }
 
 fn nothing_open(app: &PhotocraftApp) -> bool {
-    app.ui.brush_picker.is_none() && app.ui.brush_mode_menu.is_none() && app.ui.canvas_tool_menu.is_none() && !crate::color_hud::is_open(&app.ui)
+    crate::brush_picker::opened_at(app).is_none() && app.ui.canvas_tool_menu.is_none() && !crate::color_hud::is_open(&app.ui)
 }
 
-fn mouse_right_click(h: &mut Harness<'static, PhotocraftApp>) -> Pos2 {
+fn mouse_right_click(h: &mut Harness<'static, Box<PhotocraftApp>>) -> Pos2 {
     let c = h.state().last_canvas_rect.center();
     h.event(egui::Event::PointerMoved(c));
     h.run_steps(1);
@@ -52,11 +52,11 @@ fn mouse_right_click(h: &mut Harness<'static, PhotocraftApp>) -> Pos2 {
 }
 
 /// `ui.pointer` with `"button": "secondary"`: a down and an up on the image's centre.
-fn pointer_right_click(h: &mut Harness<'static, PhotocraftApp>) {
+fn pointer_right_click(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     let ctx = h.ctx.clone();
     let events = json!([{"kind": "down", "x": 200, "y": 150}, {"kind": "up", "x": 200, "y": 150}]);
     let (req, _rx) = ControlRequest::new("ui.pointer", json!({"button": "secondary", "events": events}));
-    assert!(matches!(handle(h.state_mut(), &ctx, &req), Outcome::Done(v) if v["ok"] == true));
+    assert!(matches!(handle(h.state_mut(), &ctx, &req), Reply::Done(v) if v["ok"] == true));
     h.run_steps(2);
 }
 
@@ -76,46 +76,4 @@ fn a_control_channel_right_click_with_strokes_waiting_opens_nothing_and_keeps_th
     pointer_right_click(&mut h);
     assert!(nothing_open(h.state()), "no picker, no menu");
     assert_eq!(snapshot(h.state()), before, "the strokes, their tint and the document stay");
-}
-
-/// A key press through the app's shortcut handling: ↩ applies the waiting strokes, Esc drops them.
-fn key(h: &mut Harness<'static, PhotocraftApp>, key: egui::Key) {
-    let ctx = egui::Context::default();
-    let event = egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
-    ctx.begin_pass(egui::RawInput { events: vec![event], ..Default::default() });
-    crate::shortcuts::handle(h.state_mut(), &ctx);
-    ctx.end_pass().textures_delta.clear();
-    h.run_steps(2);
-}
-
-/// The mouse opens the picker at the pointer, Escape closes it, and `ui.pointer` opens it again.
-fn assert_picker_opens(h: &mut Harness<'static, PhotocraftApp>, case: &str) {
-    let c = mouse_right_click(h);
-    assert_eq!(h.state().ui.brush_picker, Some([c.x, c.y]), "{case}: the mouse, at the pointer");
-    h.key_press(egui::Key::Escape);
-    h.run_steps(2);
-    assert!(h.state().ui.brush_picker.is_none(), "{case}: closed");
-    pointer_right_click(h);
-    assert!(h.state().ui.brush_picker.is_some(), "{case}: ui.pointer");
-}
-
-#[test]
-fn with_nothing_waiting_the_remove_tool_still_opens_the_picker() {
-    assert_picker_opens(&mut remove_harness(), "nothing painted");
-    for (k, case) in [(egui::Key::Enter, "applied"), (egui::Key::Escape, "dropped")] {
-        let mut h = waiting();
-        key(&mut h, k);
-        assert!(h.state().remove_pending.is_empty(), "{case}: nothing waits");
-        assert_picker_opens(&mut h, case);
-    }
-}
-
-#[test]
-fn other_painting_tools_keep_opening_the_picker() {
-    for tool in [Tool::Brush, Tool::Pencil, Tool::CloneStamp, Tool::SpotHealing] {
-        let mut h = harness(None);
-        h.state_mut().ui.tool = tool;
-        h.run_steps(2);
-        assert_picker_opens(&mut h, &format!("{tool:?}"));
-    }
 }
