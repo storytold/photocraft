@@ -2,7 +2,6 @@
 //! checked against them.
 
 use super::*;
-use crate::actions_cmds::ActionsExt;
 use photocraft_geom::TILE_SIZE;
 
 fn session(w: u32, h: u32) -> Session {

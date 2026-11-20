@@ -1,9 +1,8 @@
 //! Tests that run painting commands, moved from the engine-core `history_source_cmds` tests: 10 test(s).
 
+const CMD: &str = "history.setSource";
 use photocraft_engine::{EngineError, Session};
 use serde_json::{Value, json};
-
-use photocraft_engine::history_source_cmds::*;
 
 /// A white 8×8 document filled red, then green: rows Open, Fill (red), Fill (green).
 fn session() -> Session {

@@ -1,9 +1,9 @@
 //! Tests that run painting commands, moved from the engine-core `smartselect_cmds` tests: 16 test(s).
 
 mod quick_drop_transparent_tests {
-    use photocraft_algo::segment::{Sampler, quick};
+
     use photocraft_engine::Session;
-    use photocraft_engine::smartselect_cmds::*;
+
     use serde_json::{Value, json};
 
     const W: i32 = 800;
@@ -170,9 +170,9 @@ mod quick_drop_transparent_tests {
 }
 
 mod quick_group_target_tests {
-    use photocraft_algo::segment::{Sampler, quick};
+
     use photocraft_engine::Session;
-    use photocraft_engine::smartselect_cmds::*;
+
     use serde_json::{Value, json};
 
     const W: i32 = 800;
@@ -293,7 +293,7 @@ mod quick_group_target_tests {
 }
 
 mod tests {
-    use photocraft_algo::segment::{Sampler, subject};
+
     use photocraft_doc::LayerId;
     use photocraft_engine::Session;
     use photocraft_engine::smartselect_cmds::*;

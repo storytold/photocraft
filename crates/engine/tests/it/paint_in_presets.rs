@@ -1,23 +1,13 @@
 //! Tests that run painting commands, moved from the engine-core `presets` tests: 12 test(s).
 
-use photocraft_engine::prefs::SavedPrefsExt;
-
-use photocraft_engine::presets::PresetsExt;
-
 use serde_json::json;
 
 use photocraft_engine::Session;
-
-use photocraft_doc::LayerId;
 
 fn session(depth: u32) -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 64, "height": 48, "depth": depth})).unwrap();
     s
-}
-
-fn active(s: &Session) -> LayerId {
-    s.active().unwrap().active_layer.unwrap()
 }
 
 fn layer_px(s: &Session, x: i32, y: i32) -> Vec<f32> {

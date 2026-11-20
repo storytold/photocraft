@@ -1,7 +1,5 @@
 //! Tests that run painting commands, moved from the engine-core `selection_cmds` tests: 5 test(s).
 
-use photocraft_engine::color_cmds::ColorExt;
-use photocraft_geom::Rect;
 use serde_json::json;
 
 use photocraft_engine::Session;

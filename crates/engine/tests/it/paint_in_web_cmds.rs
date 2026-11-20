@@ -3,8 +3,6 @@
 use photocraft_engine::Session;
 use serde_json::json;
 
-use photocraft_engine::web_cmds::*;
-
 fn tmp(name: &str) -> String {
     let d = std::env::temp_dir().join(format!("photocraft-quick-jpg-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);

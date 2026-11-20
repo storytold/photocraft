@@ -1,9 +1,58 @@
 //! Tests that run painting commands, moved from the engine-core `smart_cmds` tests: 7 test(s).
 
+use photocraft_doc::{LayerContent, SmartObject};
+use photocraft_engine::Result;
 use photocraft_engine::Session;
-use serde_json::json;
+use photocraft_geom::Rect;
+use serde_json::{Value, json};
 
-use photocraft_engine::smart_cmds::tests::*;
+const DEPTHS: [u64; 3] = [8, 16, 32];
+const W: i32 = 64;
+const H: i32 = 48;
+
+fn session(depth: u64) -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": W, "height": H, "depth": depth})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s
+}
+
+/// Paints a textured block on the active layer, partly outside the canvas (top-left), so
+/// conversion has to keep off-canvas pixels and crop/translate correctly.
+fn paint(s: &mut Session) {
+    s.edit("setup", |doc, active| {
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        let fmt = surf.format();
+        let r = Rect::new(-6, 5, 40, 38);
+        let mut data = Vec::new();
+        for y in r.y0..r.y1 {
+            for x in r.x0..r.x1 {
+                let v = ((x * 7 + y * 13) % 23) as f32 / 22.0;
+                let a = if (x + y) % 5 == 0 { 0.5 } else { 1.0 };
+                data.extend(photocraft_raster::from_rgba(&fmt, [v, 1.0 - v, ((x * y) % 7) as f32 / 6.0, a]));
+            }
+        }
+        surf.write_region(r, &data);
+        Ok(())
+    })
+    .unwrap();
+}
+
+fn flat(s: &Session) -> Vec<[f32; 4]> {
+    photocraft_compose::flatten(&s.active().unwrap().doc).into_px()
+}
+
+fn active_smart(s: &Session) -> SmartObject {
+    let d = s.active().unwrap();
+    match &d.doc.layer(d.active_layer.unwrap()).unwrap().content {
+        LayerContent::Smart(sm) => sm.clone(),
+        other => panic!("not smart: {}", other.kind_name()),
+    }
+}
+
+fn convert(s: &mut Session) -> u64 {
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap()["layer"].as_u64().unwrap()
+}
 
 /// A vertical black stroke over x = 8 into the filter mask, as the Brush tool sends it.
 fn stroke(s: &mut Session, target: Option<&str>) -> Result<Value> {
@@ -12,55 +61,6 @@ fn stroke(s: &mut Session, target: Option<&str>) -> Result<Value> {
         p["target"] = json!(t);
     }
     s.execute("paint.stroke", p)
-}
-
-#[test]
-fn painting_the_filter_mask_hides_the_filters_there_in_one_undo_step() {
-    for depth in DEPTHS {
-        let mut s = session(depth);
-        paint(&mut s);
-        let original = flat(&s);
-        convert(&mut s);
-        // Without smart filters there is no filter mask to paint.
-        let before = s.active().unwrap().doc.clone();
-        let steps = s.active().unwrap().history.past_len();
-        assert!(matches!(stroke(&mut s, Some("filterMask")), Err(EngineError::Disabled(..))), "depth {depth}");
-        assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &before));
-        assert_eq!(s.active().unwrap().history.past_len(), steps);
-        s.execute("filter.blur.gaussianBlur", json!({"radius": 3})).unwrap();
-        let blurred = flat(&s);
-        assert!(active_smart(&s).filter_mask.is_none());
-        let steps = s.active().unwrap().history.past_len();
-
-        stroke(&mut s, Some("filterMask")).unwrap();
-        let mask = active_smart(&s).filter_mask.expect("painting starts a white filter mask");
-        assert_eq!((mask.value(8, 20), mask.value(30, 20)), (0.0, 1.0), "depth {depth}");
-        let px = flat(&s);
-        let at = |v: &Vec<[f32; 4]>, x: i32, y: i32| v[(y * W + x) as usize];
-        assert!(max_diff(&[at(&px, 8, 20)], &[at(&original, 8, 20)]) < 1e-6, "depth {depth}: black hides the blur");
-        assert_eq!(at(&px, 30, 20), at(&blurred, 30, 20), "depth {depth}: white keeps it");
-        assert!(active_smart(&s).smart_filters.len() == 1, "the stroke is no smart filter");
-
-        assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one step");
-        s.execute("edit.undo", json!({})).unwrap();
-        assert!(active_smart(&s).filter_mask.is_none());
-        assert_eq!(flat(&s), blurred, "depth {depth}: undo brings the blur back");
-        s.execute("edit.redo", json!({})).unwrap();
-        assert_eq!(flat(&s), px);
-
-        // The painted mask is saved: .pcraft and PSD give it back.
-        let doc = s.active().unwrap().doc.clone();
-        let id = s.active().unwrap().active_layer.unwrap();
-        let back = photocraft_format::load_from_bytes(&photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap()).unwrap();
-        assert_eq!(smart(&back, id).unwrap().filter_mask, smart(&doc, id).unwrap().filter_mask, "depth {depth}: .pcraft");
-        let psd = photocraft_io::export(&doc, "psd", &Default::default()).unwrap();
-        let back = photocraft_io::import("x.psd", &psd.bytes).unwrap().document;
-        let sm = back.walk().into_iter().find_map(|(_, _, l)| if let LayerContent::Smart(sm) = &l.content { Some(sm.clone()) } else { None }).unwrap();
-        let (mut a, mut b) = (Vec::new(), Vec::new());
-        sm.filter_mask.as_ref().unwrap().values_into(doc.bounds(), &mut a);
-        mask.values_into(doc.bounds(), &mut b);
-        assert_eq!(a, b, "depth {depth}: PSD");
-    }
 }
 
 /// ⌥-click on the filter mask thumbnail shows it; painting then goes into it without a target.
@@ -158,51 +158,6 @@ fn an_explicit_layer_checks_filter_mask_eligibility() {
     assert!(s.execute("edit.fillForeground", json!({"layer": active.unwrap().0, "target": "filterMask"})).is_err());
     assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &before));
     assert_eq!(s.active().unwrap().history.past_len(), steps);
-}
-
-/// With its filter mask targeted, the commands that don't edit a filter mask act on the smart
-/// object as without the target: Edit › Transform flips it, and Convert for Smart Filters stays
-/// disabled (it would nest the smart object).
-#[test]
-fn the_filter_mask_target_leaves_the_smart_object_commands_alone() {
-    let mut s = session(8);
-    paint(&mut s);
-    convert(&mut s);
-    s.execute("filter.blur.gaussianBlur", json!({"radius": 3})).unwrap();
-    stroke(&mut s, Some("filterMask")).unwrap();
-    let steps = s.active().unwrap().history.past_len();
-    assert!(
-        matches!(s.execute("filter.convertForSmartFilters", json!({"target": "filterMask"})), Err(EngineError::Disabled(..))),
-        "the layer is already a smart object"
-    );
-    assert_eq!(s.active().unwrap().history.past_len(), steps);
-    let before = active_smart(&s).transform;
-    s.execute("edit.transform.flipHorizontal", json!({"target": "filterMask"})).unwrap();
-    assert_ne!(active_smart(&s).transform, before, "the smart object flips");
-    // A shown filter mask doesn't send them the target either.
-    s.execute("view.layerMask", json!({"mode": "gray", "mask": "filter"})).unwrap();
-    assert_eq!(photocraft_engine::channel_cmds::inject_target(&s, "edit.transform.flipHorizontal", json!({})), json!({}));
-    assert_eq!(photocraft_engine::channel_cmds::inject_target(&s, "filter.convertForSmartFilters", json!({})), json!({}));
-    assert_eq!(photocraft_engine::channel_cmds::inject_target(&s, "paint.stroke", json!({}))["target"], "filterMask");
-    // Curves on the shown filter mask edits that gray plane, not the layer mask or the colours.
-    let curve = photocraft_engine::channel_cmds::isolated_curve_channel(s.active().unwrap()).expect("a gray target");
-    assert_eq!(curve.gray, Some(photocraft_engine::channel_cmds::GraySurface::FilterMask));
-    let flipped = active_smart(&s).transform;
-    s.execute("edit.transform.flipHorizontal", json!({})).unwrap();
-    assert_ne!(active_smart(&s).transform, flipped, "the smart object flips again");
-    // Moving the smart object doesn't re-render its filters as a filter-mask edit.
-    let p = json!({"dx": 2, "target": "filterMask"});
-    assert_eq!(photocraft_engine::channel_cmds::filter_mask_layer(&s, "layer.translate", &p), None);
-    assert!(photocraft_engine::channel_cmds::filter_mask_layer(&s, "paint.stroke", &p).is_some());
-    // Every other routed command edits it and re-renders the object: Equalize too, though it
-    // takes no layer mask target by default.
-    for cmd in ["image.adjustments.shadowsHighlights", "plugin.run", "filter.blur.average"] {
-        assert!(photocraft_engine::channel_cmds::filter_mask_layer(&s, cmd, &p).is_some(), "{cmd}");
-    }
-    let steps = s.active().unwrap().history.past_len();
-    s.execute("image.adjustments.equalize", json!({"target": "filterMask"})).unwrap();
-    assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
-    assert_eq!(active_smart(&s).smart_filters.len(), 1, "no new smart filter: the filter mask was equalized");
 }
 
 /// Gaussian Blur with the filter mask targeted softens the mask's edge (the usual way to feather

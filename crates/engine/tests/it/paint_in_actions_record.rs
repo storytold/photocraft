@@ -1,6 +1,5 @@
 //! Tests that run painting commands, moved from the engine-core `actions_record` tests: 2 test(s).
 
-use photocraft_doc::LayerContent;
 use photocraft_doc::LayerId;
 
 use serde_json::{Value, json};

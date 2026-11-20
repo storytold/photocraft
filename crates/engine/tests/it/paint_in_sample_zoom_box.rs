@@ -1,7 +1,5 @@
 //! Tests that run painting commands, moved from the engine-core `sample_zoom_box` tests: 8 test(s).
 
-use photocraft_doc::Size;
-use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
 use photocraft_engine::Session;

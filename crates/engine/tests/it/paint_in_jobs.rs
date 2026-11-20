@@ -1,8 +1,5 @@
 //! Tests that run painting commands, moved from the engine-core `jobs` tests: 2 test(s).
 
-use photocraft_engine::actions_cmds::ActionsExt;
-use photocraft_engine::color_cmds::ColorExt;
-
 use std::time::{Duration, Instant};
 
 use serde_json::json;

@@ -1,11 +1,8 @@
 //! Tests that run painting commands, moved from the engine-core `layer_place` tests: 4 test(s).
 
-use photocraft_doc::Layer;
 use photocraft_doc::{Document, LayerId};
 
 use serde_json::{Value, json};
-
-use photocraft_engine::*;
 
 use photocraft_engine::Session;
 

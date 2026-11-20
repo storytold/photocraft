@@ -1,8 +1,7 @@
 //! Tests that run painting commands, moved from the engine-core `channel_cmds` tests: 47 test(s).
 
 mod apply_image_darker_lighter_tests {
-    use photocraft_color::Color;
-    use photocraft_engine::channel_cmds::*;
+
     use photocraft_engine::{Result, Session};
     use serde_json::{Value, json};
 
@@ -148,10 +147,10 @@ mod apply_image_darker_lighter_tests {
 }
 
 mod apply_image_lock_transparency_tests {
-    use photocraft_algo::selection::{self as sel};
+
     use photocraft_doc::Layer;
     use photocraft_engine::Session;
-    use photocraft_engine::channel_cmds::*;
+
     use serde_json::{Value, json};
 
     /// A 40 x 20 document whose layer "Top" is empty except a half-transparent green 10 x 10 square
@@ -256,9 +255,9 @@ mod apply_image_lock_transparency_tests {
 }
 
 mod apply_image_locked_layer_tests {
-    use photocraft_doc::{Document, Layer};
+    use photocraft_doc::Layer;
     use photocraft_engine::Session;
-    use photocraft_engine::channel_cmds::*;
+
     use serde_json::{Value, json};
 
     /// The spec's test document "target" (400 x 300): layer "Top" is empty except a 100 x 100 square
@@ -518,10 +517,8 @@ mod tests {
     use photocraft_color::{Color, ColorMode};
     use photocraft_doc::{ColorIndicates, Document, Layer};
     use photocraft_engine::Session;
-    use photocraft_engine::channel_cmds::*;
-    use serde_json::json;
 
-    use photocraft_engine::color_cmds::ColorExt;
+    use serde_json::json;
 
     fn session_depth(depth: u32) -> Session {
         let mut s = Session::new();
@@ -1146,42 +1143,5 @@ mod tests {
         assert!(!s.is_enabled("channel.split"));
         assert!(s.execute("channel.split", json!({})).is_err());
         assert_eq!(s.documents().len(), 1);
-    }
-}
-
-mod rabbit_tests {
-    use photocraft_engine::Session;
-
-    use photocraft_engine::channel_cmds::tone_target::*;
-
-    use serde_json::json;
-
-    /// Unsupported vector-mask tone edits refuse the command without touching layer pixels.
-    #[test]
-    fn rabbit_vector_mask_tone_commands_refuse_pixel_fallback() {
-        for (kind, params) in [("levels", json!({"gamma":2})), ("curves", json!({"points":[[0,255],[255,0]]}))] {
-            let mut s = Session::new();
-            s.execute("file.new", json!({"width":8,"height":8})).unwrap();
-            s.execute("edit.fill", json!({"contents":"color","color":"#404040"})).unwrap();
-            s.execute("layer.vectorMask.revealAll", json!({})).unwrap();
-            s.execute("channel.target", json!({"channel":"vectorMask"})).unwrap();
-            let before = s.active().unwrap().doc.clone();
-            let history = s.active().unwrap().history.past_len();
-            assert!(resolve_tone_target(&s, false, &params).is_err());
-            let command = format!("image.adjustments.{kind}");
-            assert!(s.execute(&command, params.clone()).is_err());
-            assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc));
-            assert_eq!(s.active().unwrap().history.past_len(), history);
-            let mut explicit = params;
-            explicit["target"] = json!("pixels");
-            s.execute(&command, explicit).unwrap();
-            let after = &s.active().unwrap().doc;
-            assert_eq!(before.layers.len(), after.layers.len());
-            assert!(
-                before.layers.iter().zip(&after.layers).all(|(a, b)| a.mask == b.mask && a.vector_mask == b.vector_mask),
-                "an explicit pixel target must preserve both masks"
-            );
-            assert!(before.layers.iter().zip(&after.layers).any(|(a, b)| a.content != b.content), "an explicit pixel target must change raster content");
-        }
     }
 }

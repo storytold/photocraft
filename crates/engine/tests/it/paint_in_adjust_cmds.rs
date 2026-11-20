@@ -1,8 +1,6 @@
 //! Tests that run painting commands, moved from the engine-core `adjust_cmds` tests: 2 test(s).
 
-use photocraft_doc::{Document, Rect};
 use photocraft_engine::Session;
-use photocraft_engine::adjust_cmds::*;
 use serde_json::json;
 
 const DEPTHS: [u64; 3] = [8, 16, 32];
@@ -34,16 +32,6 @@ fn paint(s: &mut Session, f: impl Fn(i32, i32) -> [f32; 4]) {
 fn rgba(s: &Session, x: i32, y: i32) -> [f32; 4] {
     let d = s.active().unwrap();
     d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().rgba(x, y)
-}
-
-/// Every pixel of the active layer, row by row.
-fn pixels(s: &Session) -> Vec<[f32; 4]> {
-    let b = doc(s).bounds();
-    (b.y0..b.y1).flat_map(|y| (b.x0..b.x1).map(move |x| (x, y))).map(|(x, y)| rgba(s, x, y)).collect()
-}
-
-fn doc(s: &Session) -> &Document {
-    &s.active().unwrap().doc
 }
 
 fn mask_at(s: &Session, x: i32, y: i32) -> f32 {

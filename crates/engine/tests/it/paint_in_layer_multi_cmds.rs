@@ -1,30 +1,10 @@
 //! Tests that run painting commands, moved from the engine-core `layer_multi_cmds` tests: 12 test(s).
 
 mod tests {
-    use photocraft_doc::{Document, LayerId};
+    use photocraft_doc::LayerId;
     use photocraft_engine::Session;
     use photocraft_geom::Rect;
     use serde_json::json;
-
-    use photocraft_engine::layer_multi_cmds::*;
-
-    fn session(depth: u32) -> Session {
-        let mut s = Session::new();
-        s.execute("file.new", json!({"width": 100, "height": 80, "depth": depth})).unwrap();
-        s
-    }
-
-    fn doc(s: &Session) -> &Document {
-        &s.active().unwrap().doc
-    }
-
-    fn bounds(s: &Session, id: LayerId) -> Rect {
-        layer_bounds(doc(s).layer(id).unwrap()).unwrap()
-    }
-
-    fn sel(s: &Session) -> Vec<LayerId> {
-        selected(s)
-    }
 
     /// #7538: `selection: true` moves the selection with the layers in the same step, as the Move
     /// tool does with several layers selected; without it the selection stays.
@@ -65,7 +45,7 @@ mod tile_damage_tests {
     use photocraft_engine::Session;
     use photocraft_engine::layer_multi_cmds::*;
     use photocraft_geom::Rect;
-    use serde_json::{Value, json};
+    use serde_json::json;
 
     use photocraft_engine::actions_cmds::ActionsExt;
 

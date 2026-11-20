@@ -1,7 +1,6 @@
 //! Tests that run painting commands, moved from the engine-core `layer_copy_cmds` tests: 16 test(s).
 
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
-use photocraft_engine::color_cmds::ColorExt;
 
 use photocraft_doc::{Document, LayerContent, LayerId, Pattern};
 
@@ -360,8 +359,4 @@ fn a_copied_group_cannot_nest_the_destination_past_the_group_depth_limit() {
     let e = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [group.0]})).unwrap_err();
     assert!(e.to_string().contains("deeper than"), "{e}");
     assert_eq!(*doc(&s, 1), before, "nothing was copied");
-}
-
-fn close(a: f32, b: f32) -> bool {
-    (a - b).abs() <= 1e-4 * b.abs().max(1.0)
 }

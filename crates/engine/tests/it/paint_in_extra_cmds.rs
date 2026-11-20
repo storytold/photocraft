@@ -2,7 +2,6 @@
 
 use photocraft_doc::{Document, Layer, LayerContent};
 use photocraft_engine::Session;
-use photocraft_engine::extra_cmds::*;
 use photocraft_geom::Rect;
 use serde_json::json;
 

@@ -1,11 +1,10 @@
 //! Tests that run painting commands, moved from the engine-core `history_select_cmds` tests: 6 test(s).
 
+const CMD: &str = "history.selectState";
 use photocraft_engine::Session;
 use serde_json::json;
 
 use std::sync::Arc;
-
-use photocraft_engine::history_select_cmds::*;
 
 /// A document with four steps after Open, each targeting different layers.
 fn session() -> Session {

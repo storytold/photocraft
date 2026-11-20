@@ -1,5 +1,6 @@
 //! Tests that run painting commands, moved from the engine-core `adjust_params` tests: 11 test(s).
 
+const MAX_FITTED_POINTS: usize = 16;
 use photocraft_color::ColorMode;
 use photocraft_doc::Adjustment;
 use photocraft_doc::adjust::{CURVE_MAP_LEN, CurvePoint, ToneSpace};

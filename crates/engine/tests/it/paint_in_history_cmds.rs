@@ -1,11 +1,8 @@
 //! Tests that run painting commands, moved from the engine-core `history_cmds` tests: 15 test(s).
 
-use photocraft_doc::{Document, Layer};
-use photocraft_engine::{Result, Session};
+use photocraft_doc::Document;
+use photocraft_engine::Session;
 use serde_json::{Value, json};
-use std::sync::Arc;
-
-use photocraft_engine::history_cmds::*;
 
 /// A document with three steps after Open: entries Open, New Layer, Fill, Fill.
 fn session() -> Session {

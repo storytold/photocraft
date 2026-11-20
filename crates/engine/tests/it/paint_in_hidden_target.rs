@@ -1,8 +1,5 @@
 //! Tests that run painting commands, moved from the engine-core `hidden_target` tests: 4 test(s).
 
-use photocraft_doc::LayerId;
-use serde_json::Value;
-
 use serde_json::json;
 
 use photocraft_engine::hidden_target::HIDDEN;

@@ -1,6 +1,5 @@
 //! Tests that run painting commands, moved from the engine-core `mask_view_cmds` tests: 7 test(s).
 
-use photocraft_doc::LayerId;
 use photocraft_engine::Session;
 use photocraft_engine::mask_view_cmds::*;
 use serde_json::{Value, json};

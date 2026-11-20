@@ -1,21 +1,11 @@
 //! Tests that run painting commands, moved from the engine-core `mode_cmds` tests: 5 test(s).
 
 use photocraft_color::ColorMode;
-use photocraft_doc::{Document, LayerContent, Size};
+use photocraft_doc::{Document, Size};
 use photocraft_engine::Session;
-use photocraft_engine::mode_cmds::*;
 use serde_json::json;
 
-use photocraft_engine::color_cmds::ColorExt;
-
 use photocraft_geom::Rect;
-
-fn session(w: u32, h: u32, depth: u64, mode: &str) -> Session {
-    let mut s = Session::new();
-    s.execute("file.new", json!({"width": w, "height": h, "depth": depth, "mode": mode})).unwrap();
-    paint(&mut s, |x, y| [x as f32 / w as f32, y as f32 / h as f32, 0.5, 1.0]);
-    s
-}
 
 fn paint(s: &mut Session, f: impl Fn(i32, i32) -> [f32; 4]) {
     s.edit("setup", |doc, active| {

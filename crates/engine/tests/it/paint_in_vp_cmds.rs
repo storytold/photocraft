@@ -1,6 +1,6 @@
 //! Tests that run painting commands, moved from the engine-core `vp_cmds` tests: 4 test(s).
 
-use photocraft_algo::vanishing::{VpPlane, paste};
+use photocraft_algo::vanishing::VpPlane;
 use photocraft_doc::LayerId;
 use photocraft_engine::Session;
 use photocraft_geom::Rect;

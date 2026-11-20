@@ -5,8 +5,6 @@ use serde_json::json;
 
 use std::sync::Arc;
 
-use photocraft_engine::history_menu_cmds::*;
-
 /// A document with three steps after Open: entries Open, New Layer, Fill, Fill.
 fn session() -> Session {
     let mut s = Session::new();

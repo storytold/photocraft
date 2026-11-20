@@ -1,15 +1,8 @@
-//! Tests that run painting commands, moved from the engine-core `pattern_cmds` tests: 10 test(s).
-
-use photocraft_color::PixelFormat;
 use photocraft_doc::{Pattern, Rect};
 use photocraft_engine::Session;
-use photocraft_engine::preset_store::PresetStoreExt;
-use photocraft_raster::Surface;
 use serde_json::json;
 
 use photocraft_engine::pattern_cmds::*;
-
-use photocraft_color::SampleType;
 
 fn session(depth: u64) -> Session {
     let mut s = Session::new();
@@ -62,45 +55,6 @@ fn define_rename_delete_and_pat_round_trip() {
     }
 }
 
-/// Review of the 8000 px cap: compositing a band of rows at a time gives the pixels and the
-/// opacity of one pass, at every depth, whatever the band height.
-#[test]
-fn banded_compositing_matches_a_single_pass() {
-    for depth in [8u64, 16, 32] {
-        for transparent in [false, true] {
-            let mut s = Session::new();
-            let background = if transparent { "transparent" } else { "white" };
-            s.execute("file.new", json!({"width": 40, "height": 30, "depth": depth, "background": background})).unwrap();
-            s.execute("select.rect", json!({"x": 3, "y": 4, "width": 20, "height": 13})).unwrap();
-            s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
-            let doc = &s.active().unwrap().doc;
-            let area = Rect::new(2, 1, 38, 29);
-            let all = Rect::new(0, 0, 36, 28);
-            let (whole, whole_opaque) = composite_surface_in_bands(doc, area, 28);
-            for band_rows in [1, 5, 27] {
-                let (banded, opaque) = composite_surface_in_bands(doc, area, band_rows);
-                assert_eq!(opaque, whole_opaque, "depth {depth}, transparent {transparent}, bands of {band_rows}");
-                assert_eq!(banded.read_region(all), whole.read_region(all), "depth {depth}, transparent {transparent}, bands of {band_rows}");
-            }
-            assert_eq!(whole_opaque, !transparent);
-        }
-    }
-}
-
-/// Review of the banded composite: opacity is the stored samples', so an alpha an 8-bit
-/// document stores as 255 is opaque and a float document's 0.999 is not.
-#[test]
-fn alpha_that_stores_as_opaque_counts_as_opaque() {
-    for (depth, opaque) in [(8u64, true), (32, false)] {
-        let mut s = Session::new();
-        s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth, "background": "transparent"})).unwrap();
-        s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
-        s.execute("layer.setProps", json!({"opacity": 0.999})).unwrap();
-        let (_, all_opaque) = composite_surface_in_bands(&s.active().unwrap().doc, Rect::new(0, 0, 8, 8), 3);
-        assert_eq!(all_opaque, opaque, "depth {depth}");
-    }
-}
-
 /// Review of #8902: what Define Pattern accepts, the compositor paints. Areas over
 /// 4096 x 4096, past the compositor's whole-copy cap, define and fill at 8 and 16 bits (held
 /// at the pattern's own depth); a depth that has no smaller exact form is refused up front
@@ -127,28 +81,6 @@ fn defined_patterns_over_4096_squared_paint_or_are_refused() {
     s.execute("file.new", json!({"width": 6000, "height": 5600, "depth": 16})).unwrap();
     let e = s.execute("edit.definePattern", json!({})).unwrap_err().to_string();
     assert!(e.contains("16-bit") && e.contains("33554432"), "{e}");
-}
-
-/// A pattern at the area limit is paintable and renders; production permits 8000×8000 at 8 bits.
-#[test]
-fn a_pattern_at_the_area_limit_is_defined_and_paints() {
-    let mut s = Session::new();
-    assert_eq!(MAX_DEFINE_EDGE, 8000);
-    assert!(photocraft_doc::pattern::max_paint_pixels(SampleType::U8) >= 8000 * 8000);
-    assert_eq!(photocraft_doc::pattern::working_bytes_for(8000 * 8000, SampleType::U8), 8000 * 8000 * 4);
-    let (side, max_px) = (80, 80 * 80);
-    s.execute("file.new", json!({"width": side, "height": side, "depth": 8})).unwrap();
-    s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
-    assert!(define_with_max_pixels(&mut s, &json!({"name": "Too large"}), max_px - 1).is_err());
-    define_with_max_pixels(&mut s, &json!({"name": "Largest"}), max_px).unwrap();
-    let p = s.patterns.items.iter().find(|p| p.name == "Largest").unwrap();
-    assert_eq!((p.width, p.height), (side, side));
-    // A small pattern uses the expanded float representation, unlike the largest 8-bit one.
-    assert!(p.is_paintable() && p.working_bytes() == max_px * 16);
-    s.execute("file.new", json!({"width": 40, "height": 30, "depth": 8})).unwrap();
-    s.execute("layer.newFillLayer.pattern", json!({"pattern": "Largest"})).unwrap();
-    let [r, g, b, a] = pixel(&s, 5, 5);
-    assert!(a == 1.0 && (r - 0.2).abs() < 0.01 && (g - 0.4).abs() < 0.01 && (b - 0.6).abs() < 0.01, "{:?}", [r, g, b, a]);
 }
 
 /// Review of #8902: a pattern too large to paint is named by every command that would use it

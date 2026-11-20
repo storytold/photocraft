@@ -1,11 +1,9 @@
 //! Tests that run painting commands, moved from the engine-core `history_options_cmds` tests: 11 test(s).
 
+const CMD: &str = "history.options";
 use photocraft_engine::Session;
-use photocraft_engine::history_cmds::Snapshot;
 
 use photocraft_engine::history_options_cmds::*;
-
-use photocraft_engine::prefs::SavedPrefsExt;
 
 use serde_json::json;
 

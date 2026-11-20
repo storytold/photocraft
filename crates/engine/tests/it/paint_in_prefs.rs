@@ -1,12 +1,7 @@
 //! Tests that run painting commands, moved from the engine-core `prefs` tests: 2 test(s).
 
 use photocraft_engine::Session;
-use photocraft_engine::prefs::*;
 use serde_json::json;
-
-use photocraft_engine::color_cmds::ColorExt;
-
-use photocraft_engine::prefs::SavedPrefsExt;
 
 fn session() -> Session {
     let mut s = Session::new();

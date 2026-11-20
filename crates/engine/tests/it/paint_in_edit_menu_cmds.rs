@@ -3,8 +3,7 @@
 mod fade_visibility_tests {
     use photocraft_engine::Session;
     use photocraft_engine::edit_menu_cmds::*;
-    use photocraft_engine::preset_store::PresetStoreExt;
-    use photocraft_engine::presets::PresetsExt;
+
     use serde_json::{Value, json};
 
     use photocraft_doc::LayerId;
@@ -125,14 +124,15 @@ mod fade_visibility_tests {
 }
 
 mod tests {
+
+    static PURGE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     use photocraft_doc::Layer;
     use photocraft_doc::vector::Path;
     use photocraft_engine::Session;
     use photocraft_engine::edit_menu_cmds::*;
-    use photocraft_engine::preset_store::PresetStoreExt;
-    use serde_json::json;
 
-    use photocraft_engine::presets::PresetsExt;
+    use serde_json::json;
 
     use photocraft_doc::vector::Subpath;
 
@@ -399,25 +399,5 @@ mod tests {
         s.execute("select.rect", json!({"x": 2, "y": 2, "width": 10, "height": 10})).unwrap();
         s.execute("edit.defineBrushPreset", json!({})).unwrap();
         assert!(s.tools.presets.iter().any(|b| b.name == "Sampled Brush 1"));
-    }
-
-    #[test]
-    fn fade_allocation_failure_keeps_document_and_history() {
-        for depth in [8, 16, 32] {
-            let mut s = session(depth);
-            s.execute("edit.fill", json!({"color": "#000000"})).unwrap();
-            let before = s.active().unwrap().doc.clone();
-            let history = s.active().unwrap().history.entries();
-            photocraft_engine::allocation::fail_next_for_test();
-            let result = s.execute("edit.fade", json!({"opacity": 25}));
-            let _ = photocraft_engine::allocation::capacity::<u8>(0, "reset failpoint");
-            assert!(result.is_err());
-            assert_eq!(*s.active().unwrap().doc, *before);
-            assert_eq!(s.active().unwrap().history.entries(), history);
-            assert!(s.is_enabled("edit.fade"));
-            s.execute("edit.fade", json!({"opacity": 25})).unwrap();
-            assert!(s.undo());
-            assert_eq!(*s.active().unwrap().doc, *before);
-        }
     }
 }

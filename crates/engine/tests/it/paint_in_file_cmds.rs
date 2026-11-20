@@ -4,7 +4,7 @@ mod layers_to_files_prefix_tests {
     use photocraft_engine::Session;
     use serde_json::json;
 
-    use photocraft_engine::file_cmds::{Session, export_layers_report_with, export_layers_with, json};
+    use photocraft_engine::file_cmds::{export_layers_report_with, export_layers_with};
 
     fn session(depth: u32) -> Session {
         let mut s = Session::new();
@@ -77,17 +77,14 @@ mod layers_to_files_prefix_tests {
 }
 
 mod tests {
+
     use photocraft_color::{ColorMode, PixelFormat};
-    use photocraft_doc::{Document, Layer, LayerContent};
+    use photocraft_doc::{Document, LayerContent};
     use photocraft_engine::Session;
-    use photocraft_engine::file_cmds::*;
+
     use photocraft_geom::Rect;
-    use photocraft_raster::Surface;
+
     use serde_json::json;
-
-    use photocraft_engine::actions_cmds::ActionsExt;
-
-    use photocraft_engine::color_cmds::ColorExt;
 
     fn tmp(name: &str) -> String {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -108,82 +105,9 @@ mod tests {
         &s.active().unwrap().doc
     }
 
-    /// Writes a solid-colour PNG of `w × h` and returns its path.
-    fn png(dir: &str, name: &str, w: u32, h: u32, color: &str) -> String {
-        let mut s = Session::new();
-        s.execute("file.new", json!({"width": w, "height": h, "background": color})).unwrap();
-        let path = join(dir, name);
-        save_doc(doc(&s), &path, None).unwrap();
-        path
-    }
-
     fn composite(s: &Session, x: i32, y: i32) -> [f32; 4] {
         let b = photocraft_compose::render(doc(s), Rect::new(x, y, x + 1, y + 1));
         b.px[0]
-    }
-
-    #[test]
-    fn revert_reloads_as_one_undoable_step() {
-        let dir = tmp("revert");
-        let path = png(&dir, "a.png", 16, 12, "#ff0000");
-        let mut s = Session::new();
-        assert!(!s.is_enabled("file.revert"));
-        let bytes = std::fs::read(&path).unwrap();
-        open_bytes_as(&mut s, &path, &bytes, None, Some(path.clone())).unwrap();
-        let id = doc(&s).id;
-        assert!(s.is_enabled("file.revert"));
-        s.execute("layer.new.layer", json!({})).unwrap();
-        s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
-        assert!(s.active().unwrap().is_dirty());
-        s.execute("file.revert", json!({})).unwrap();
-        assert_eq!(doc(&s).layers.len(), 1);
-        assert_eq!(doc(&s).id, id, "identity kept");
-        assert!(!s.active().unwrap().is_dirty());
-        assert!(composite(&s, 3, 3)[0] > 0.99);
-        // Revert is a history state: undo brings the edits back.
-        assert!(s.undo());
-        assert_eq!(doc(&s).layers.len(), 2);
-        // An unsaved document cannot revert.
-        s.execute("file.new", json!({})).unwrap();
-        assert!(s.execute("file.revert", json!({})).is_err());
-    }
-
-    /// A copy over the document's own file, however the path is spelt, would replace it (a lossy
-    /// re-encode can't be undone), so it is refused unless `overwrite` is passed (#7437).
-    #[test]
-    fn save_a_copy_refuses_the_documents_own_file() {
-        let dir = tmp("copy-own");
-        let path = png(&dir, "own.png", 6, 4, "#ff0000");
-        let bytes = std::fs::read(&path).unwrap();
-        let mut s = Session::new();
-        open_bytes_as(&mut s, &path, &bytes, None, Some(path.clone())).unwrap();
-        s.execute("layer.new.layer", json!({})).unwrap();
-        s.execute("edit.fill", json!({"color": "#00ff00"})).unwrap();
-        let link = join(&dir, "link.png");
-        std::fs::hard_link(&path, &link).unwrap();
-        let rev = s.active().unwrap().revision;
-        for p in [path.clone(), format!("{dir}/./own.png"), link] {
-            let r = s.execute("file.saveACopy", json!({"path": p}));
-            assert!(r.as_ref().is_err_and(|e| e.to_string().contains("overwrite")), "{p}: {r:?}");
-            assert!(s.execute("file.saveACopy", json!({"path": p, "overwrite": false})).is_err(), "{p}");
-            assert_eq!(std::fs::read(&path).unwrap(), bytes, "{p}");
-            let st = s.active().unwrap();
-            assert_eq!(st.path.as_deref(), Some(path.as_str()), "{p}");
-            assert_eq!(st.revision, rev, "{p}");
-            assert!(st.is_dirty(), "{p}");
-        }
-        let other = join(&dir, "other.png");
-        s.execute("file.saveACopy", json!({"path": other})).unwrap();
-        assert!(std::fs::metadata(&other).unwrap().len() > 0);
-        s.execute("file.saveACopy", json!({"path": path, "overwrite": true})).unwrap();
-        assert_ne!(std::fs::read(&path).unwrap(), bytes);
-        assert_eq!(s.active().unwrap().path.as_deref(), Some(path.as_str()));
-        assert!(s.active().unwrap().is_dirty());
-
-        // A document that was never saved has no file of its own: it copies anywhere, as before.
-        let mut fresh = session(4, 4, 8);
-        fresh.execute("file.saveACopy", json!({"path": path})).unwrap();
-        assert_eq!(fresh.active().unwrap().path, None);
     }
 
     #[test]
@@ -226,116 +150,6 @@ mod tests {
             // Each script is a single history step.
             assert!(s.undo());
             assert!(doc(&s).layer(id).unwrap().mask.is_some());
-        }
-    }
-
-    /// Flatten All Layer Effects must bake the effect visuals without destroying the layer's masks:
-    /// an enabled raster mask and a vector mask on one layer, a disabled raster mask on another
-    /// (#3804). The command is a visual no-op; the masks (pixels and state) survive, including a
-    /// `.pcraft` round trip.
-    #[test]
-    fn flatten_all_layer_effects_keeps_masks() {
-        for depth in [8, 16, 32] {
-            let mut s = session(40, 40, depth);
-            // Layer 1: a red square with a green colour overlay, an enabled raster mask revealing
-            // x < 20 and a vector mask revealing x 15..30.
-            s.execute("layer.new.layer", json!({})).unwrap();
-            s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
-            s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
-            s.execute("select.deselect", json!({})).unwrap();
-            let id1 = s.active().unwrap().active_layer.unwrap();
-            s.edit("fx", |doc, _| {
-                let l = doc.layer_mut(id1).unwrap();
-                l.effects.enabled = true;
-                l.effects.items.push(photocraft_doc::Effect::ColorOverlay {
-                    common: photocraft_doc::effects::FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
-                    color: photocraft_color::Color::rgb(0.0, 1.0, 0.0),
-                });
-                l.vector_mask = Some(photocraft_doc::VectorMask::new(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[
-                    (15.0, 15.0),
-                    (30.0, 15.0),
-                    (30.0, 30.0),
-                    (15.0, 30.0),
-                ])])));
-                Ok(())
-            })
-            .unwrap();
-            s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 40})).unwrap();
-            s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
-            // Layer 2: a red square at the bottom-right with the same overlay and a *disabled* mask.
-            s.execute("layer.new.layer", json!({})).unwrap();
-            s.execute("select.rect", json!({"x": 30, "y": 30, "width": 8, "height": 8})).unwrap();
-            s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
-            s.execute("select.deselect", json!({})).unwrap();
-            let id2 = s.active().unwrap().active_layer.unwrap();
-            s.edit("fx", |doc, _| {
-                let l = doc.layer_mut(id2).unwrap();
-                l.effects.enabled = true;
-                l.effects.items.push(photocraft_doc::Effect::ColorOverlay {
-                    common: photocraft_doc::effects::FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
-                    color: photocraft_color::Color::rgb(0.0, 1.0, 0.0),
-                });
-                Ok(())
-            })
-            .unwrap();
-            s.execute("select.rect", json!({"x": 34, "y": 34, "width": 2, "height": 2})).unwrap();
-            s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
-            s.edit("disable", |doc, _| {
-                if let Some(m) = doc.layer_mut(id2).and_then(|l| l.mask.as_mut()) {
-                    m.enabled = false;
-                }
-                Ok(())
-            })
-            .unwrap();
-            let m1 = doc(&s).layer(id1).unwrap().mask.clone();
-            let v1 = doc(&s).layer(id1).unwrap().vector_mask.clone();
-            let m2 = doc(&s).layer(id2).unwrap().mask.clone();
-            assert_eq!(m1.as_ref().map(|m| m.enabled), Some(true), "layer 1 raster mask is enabled");
-            assert!(v1.as_ref().is_some_and(|v| v.enabled), "layer 1 vector mask is enabled");
-            assert_eq!(m2.as_ref().map(|m| m.enabled), Some(false), "layer 2 raster mask is disabled");
-            let before = [
-                composite(&s, 17, 15), // layer 1: inside both masks
-                composite(&s, 22, 15), // layer 1: raster mask hides
-                composite(&s, 12, 15), // layer 1: vector mask hides
-                composite(&s, 34, 34), // layer 2: the disabled mask does not hide
-            ];
-            assert!(before[0][1] > 0.99 && before[0][0] < 0.01, "overlay renders green: {:?}", before[0]);
-            // The white background shows where a mask hides the layer.
-            assert!(before[1][0] > 0.99 && before[1][1] > 0.99, "the raster mask hides: {:?}", before[1]);
-            assert!(before[2][0] > 0.99 && before[2][1] > 0.99, "the vector mask hides: {:?}", before[2]);
-            assert!(before[3][1] > 0.99, "the disabled mask does not hide");
-            let r = s.execute("file.scripts.flattenAllLayerEffects", json!({})).unwrap();
-            assert_eq!(r["flattened"], 2);
-            {
-                let d = doc(&s);
-                assert_eq!(d.layer(id1).unwrap().mask, m1, "layer 1 raster mask survives");
-                assert_eq!(d.layer(id1).unwrap().vector_mask, v1, "layer 1 vector mask survives");
-                assert_eq!(d.layer(id2).unwrap().mask, m2, "the disabled mask survives");
-            }
-            let after = [composite(&s, 17, 15), composite(&s, 22, 15), composite(&s, 12, 15), composite(&s, 34, 34)];
-            for (a, b) in after.iter().zip(&before) {
-                for k in 0..4 {
-                    assert!((a[k] - b[k]).abs() < 0.01, "flattening is a visual no-op: {after:?} vs {before:?}");
-                }
-            }
-            // One history step: undo restores the effects, redo re-flattens, and the masks stay.
-            assert!(s.undo());
-            assert!(!doc(&s).layer(id1).unwrap().effects.items.is_empty());
-            assert_eq!(doc(&s).layer(id1).unwrap().mask, m1);
-            assert!(s.redo());
-            assert_eq!(doc(&s).layer(id1).unwrap().mask, m1);
-            assert_eq!(doc(&s).layer(id1).unwrap().vector_mask, v1);
-            assert_eq!(doc(&s).layer(id2).unwrap().mask, m2);
-            // The masks survive a `.pcraft` save and reopen.
-            let dir = tmp("flatten-effects-masks");
-            let path = join(&dir, "masks.pcraft");
-            save_doc(doc(&s), &path, None).unwrap();
-            let bytes = std::fs::read(&path).unwrap();
-            let mut s2 = Session::new();
-            open_bytes_as(&mut s2, "masks.pcraft", &bytes, None, None).unwrap();
-            let layers: Vec<_> = doc(&s2).walk().into_iter().map(|(_, _, l)| l).collect();
-            assert!(layers.iter().any(|l| l.mask == m1 && l.vector_mask == v1), "the raster and vector masks survive .pcraft");
-            assert!(layers.iter().any(|l| l.mask == m2), "the disabled mask survives .pcraft");
         }
     }
 

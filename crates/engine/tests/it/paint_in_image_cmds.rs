@@ -1,7 +1,7 @@
 //! Tests that run painting commands, moved from the engine-core `image_cmds` tests: 12 test(s).
 
 mod canvas_size_center_offset_tests {
-    use photocraft_doc::Size;
+
     use serde_json::{Value, json};
 
     use photocraft_engine::Session;
@@ -79,26 +79,11 @@ mod canvas_size_center_offset_tests {
 }
 
 mod tests {
-    use photocraft_doc::{Document, Effect, Size};
+    use photocraft_doc::{Document, Size};
     use photocraft_engine::Session;
-    use photocraft_engine::image_cmds::*;
+
     use photocraft_geom::Rect;
     use serde_json::json;
-
-    fn session() -> Session {
-        let mut s = Session::new();
-        s.execute("file.new", json!({"width": 40, "height": 20})).unwrap();
-        s.execute("layer.new.layer", json!({})).unwrap();
-        s.edit("paint", |doc, active| {
-            let l = doc.layer_mut(active.unwrap()).unwrap();
-            l.surface_mut().unwrap().fill_rect(Rect::new(10, 5, 20, 15), &[1.0, 0.0, 0.0, 1.0]);
-            l.mask = Some(photocraft_doc::LayerMask::reveal_all());
-            l.effects.items.push(Effect::default_drop_shadow());
-            Ok(())
-        })
-        .unwrap();
-        s
-    }
 
     fn doc(s: &Session) -> &Document {
         &s.active().unwrap().doc

@@ -2,7 +2,6 @@
 
 use photocraft_doc::Document;
 use photocraft_engine::Session;
-use photocraft_engine::multichannel_cmds::*;
 use serde_json::json;
 
 fn session(mode: &str, depth: u64) -> Session {

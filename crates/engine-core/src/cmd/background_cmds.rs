@@ -105,22 +105,6 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests {
     use super::*;
 
-    /// Bottom to top: Layer 0 (the old Background, now a normal layer), A, B. A has a 4×4 red
-    /// square at (2, 2); the rest of it is transparent.
-    fn session(depth: u32) -> (Session, [LayerId; 3]) {
-        let mut s = crate::session();
-        s.execute("file.new", json!({"width": 16, "height": 12, "depth": depth})).unwrap();
-        s.execute("layer.new.layerFromBackground", json!({})).unwrap();
-        let l0 = doc(&s).layers[0].id;
-        let id = |s: &mut Session, name: &str| LayerId(s.execute("layer.new.layer", json!({"name": name})).unwrap()["layer"].as_u64().unwrap());
-        let a = id(&mut s, "A");
-        s.execute("select.rect", json!({"x": 2, "y": 2, "width": 4, "height": 4})).unwrap();
-        s.execute("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
-        s.execute("select.deselect", json!({})).unwrap();
-        let b = id(&mut s, "B");
-        (s, [l0, a, b])
-    }
-
     fn doc(s: &Session) -> &Document {
         &s.active().unwrap().doc
     }

@@ -1,10 +1,9 @@
 //! Tests that run painting commands, moved from the engine-core `background_cmds` tests: 3 test(s).
 
-use photocraft_doc::{Document, Layer, LayerId};
+const CMD: &str = "layer.new.backgroundFromLayer";
+use photocraft_doc::{Document, LayerId};
 use photocraft_engine::Session;
 use serde_json::json;
-
-use photocraft_engine::background_cmds::*;
 
 use photocraft_geom::Rect;
 

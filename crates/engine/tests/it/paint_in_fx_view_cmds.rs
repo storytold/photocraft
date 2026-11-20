@@ -1,10 +1,9 @@
 //! Tests that run painting commands, moved from the engine-core `fx_view_cmds` tests: 3 test(s).
 
+const ID: &str = "layer.setEffectsExpanded";
 use photocraft_doc::LayerId;
 use photocraft_engine::Session;
 use serde_json::json;
-
-use photocraft_engine::fx_view_cmds::*;
 
 fn session() -> (Session, u64, u64) {
     let mut s = Session::new();

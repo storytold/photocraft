@@ -1,9 +1,8 @@
 //! Tests that run painting commands, moved from the engine-core `artboard_cmds` tests: 2 test(s).
 
-use photocraft_color::Color;
-use photocraft_doc::{Document, Layer, LayerId, Size};
+const GAP: i32 = 100;
+use photocraft_doc::{Document, Layer, LayerId};
 use photocraft_engine::Session;
-use photocraft_engine::artboard_cmds::*;
 use serde_json::json;
 
 use photocraft_geom::Rect;

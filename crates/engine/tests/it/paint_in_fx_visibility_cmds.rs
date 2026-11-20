@@ -1,9 +1,8 @@
 //! Tests that run painting commands, moved from the engine-core `fx_visibility_cmds` tests: 6 test(s).
 
+const ID: &str = "layer.setEffectsVisible";
 use photocraft_engine::Session;
 use serde_json::json;
-
-use photocraft_engine::fx_visibility_cmds::*;
 
 use photocraft_doc::LayerId;
 

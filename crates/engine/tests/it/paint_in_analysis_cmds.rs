@@ -2,8 +2,6 @@
 
 use photocraft_doc::Document;
 use photocraft_engine::Session;
-use photocraft_engine::analysis_cmds::*;
-use rayon::prelude::*;
 use serde_json::json;
 use std::sync::Arc;
 

@@ -5,8 +5,6 @@ use photocraft_engine::actions_cmds::*;
 
 use photocraft_engine::actions_cmds::ActionsExt;
 
-use photocraft_engine::preset_store::PresetStoreExt;
-
 use serde_json::json;
 
 fn pixel(s: &Session, layer: usize, x: i32, y: i32) -> Vec<f32> {

@@ -1,10 +1,8 @@
 //! Tests that run painting commands, moved from the engine-core `vector_cmds` tests: 2 test(s).
 
-use photocraft_doc::{Document, Path};
+use photocraft_doc::Document;
 use photocraft_engine::Session;
 use serde_json::json;
-
-use photocraft_engine::vector_cmds::*;
 
 fn session(w: u32, h: u32, depth: u32) -> Session {
     let mut s = Session::new();

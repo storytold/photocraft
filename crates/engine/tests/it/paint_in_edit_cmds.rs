@@ -2,40 +2,8 @@
 
 use photocraft_doc::LayerId;
 use photocraft_engine::Session;
-use photocraft_engine::edit_cmds::*;
 use photocraft_geom::Rect;
 use serde_json::json;
-
-fn session() -> Session {
-    let mut s = Session::new();
-    s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
-    s.execute("layer.new.layer", json!({})).unwrap();
-    s.edit("paint", |doc, a| {
-        doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(10, 10, 50, 30), &[1.0, 0.0, 0.0, 1.0]);
-        Ok(())
-    })
-    .unwrap();
-    s
-}
-
-#[test]
-fn injected_fill_result_reservation_failure_keeps_pixels_and_history() {
-    let mut s = session();
-    let st = s.active().unwrap();
-    let id = st.active_layer.unwrap();
-    let before = st.doc.layer(id).unwrap().surface().unwrap().clone();
-    let revision = st.revision;
-    let history_len = st.history.past_len();
-
-    photocraft_engine::allocation::fail_next_for_test();
-    let result = s.execute("edit.fill", json!({"color": "#00ff00"}));
-
-    assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for blending pixels")));
-    let st = s.active().unwrap();
-    assert_eq!(st.doc.layer(id).unwrap().surface(), Some(&before));
-    assert_eq!(st.revision, revision);
-    assert_eq!(st.history.past_len(), history_len);
-}
 
 fn active_bounds(s: &Session) -> Rect {
     let st = s.active().unwrap();

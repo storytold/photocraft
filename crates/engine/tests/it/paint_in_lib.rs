@@ -4,7 +4,6 @@ use photocraft_doc::LayerId;
 use photocraft_engine::Session;
 use photocraft_engine::*;
 use serde_json::Value;
-use std::sync::Arc;
 
 use serde_json::json;
 

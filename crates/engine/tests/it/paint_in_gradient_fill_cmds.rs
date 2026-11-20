@@ -1,7 +1,6 @@
 //! Tests that run painting commands, moved from the engine-core `gradient_fill_cmds` tests: 2 test(s).
 
 use photocraft_engine::gradient_fill_cmds::*;
-use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 
 use photocraft_engine::Session;

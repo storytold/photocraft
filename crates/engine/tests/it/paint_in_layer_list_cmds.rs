@@ -1,9 +1,8 @@
 //! Tests that run painting commands, moved from the engine-core `layer_list_cmds` tests: 1 test(s).
 
+const ID: &str = "layer.list";
 use photocraft_engine::Session;
 use serde_json::json;
-
-use photocraft_engine::layer_list_cmds::*;
 
 fn session_with_doc() -> Session {
     let mut s = Session::new();

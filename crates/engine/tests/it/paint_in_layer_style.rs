@@ -1,19 +1,10 @@
 //! Tests that run painting commands, moved from the engine-core `layer_style` tests: 7 test(s).
 
 mod inner_shadow_ranges_tests {
-    use photocraft_engine::layer_style::*;
-    use photocraft_engine::presets::PresetsExt;
 
     use photocraft_engine::Session;
 
     use serde_json::json;
-
-    fn session(width: u32, height: u32) -> Session {
-        let mut s = Session::new();
-        s.execute("file.new", json!({"width": width, "height": height, "background": "white"})).unwrap();
-        s.execute("layer.new.layer", json!({})).unwrap();
-        s
-    }
 
     /// #14940: in-range values keep today's pixels. The measured far-distance case (Size 0,
     /// Distance 500 on a 200 x 150 px layer) paints the whole layer with the shadow colour; these
@@ -42,8 +33,6 @@ mod inner_shadow_ranges_tests {
 }
 
 mod outer_glow_defaults_tests {
-    use photocraft_engine::layer_style::*;
-    use photocraft_engine::presets::PresetsExt;
 
     use photocraft_engine::Session;
 
@@ -58,13 +47,6 @@ mod outer_glow_defaults_tests {
         s.execute("select.rect", json!({"x": 100, "y": 75, "width": 200, "height": 150})).unwrap();
         s.execute("edit.fill", json!({"contents": "color", "color": "#ff8000"})).unwrap();
         s.execute("select.deselect", json!({})).unwrap();
-        s
-    }
-
-    fn session() -> Session {
-        let mut s = Session::new();
-        s.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
-        s.execute("layer.new.layer", json!({})).unwrap();
         s
     }
 
@@ -88,12 +70,10 @@ mod outer_glow_defaults_tests {
 }
 
 mod tests {
-    use photocraft_doc::{Bevel, Effect, Satin};
-    use photocraft_engine::layer_style::*;
+    use photocraft_doc::Effect;
+
     use photocraft_engine::{EngineError, Session};
     use serde_json::Value;
-
-    use photocraft_engine::presets::PresetsExt;
 
     use serde_json::json;
 

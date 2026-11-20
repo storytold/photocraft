@@ -1,11 +1,7 @@
 //! Tests that run painting commands, moved from the engine-core `preset_import_cmds` tests: 3 test(s).
 
 use photocraft_engine::Session;
-use photocraft_engine::preset_store::PresetStoreExt;
-use photocraft_engine::presets::PresetsExt;
-use serde_json::{Value, json};
-
-use photocraft_engine::preset_import_cmds::*;
+use serde_json::json;
 
 use craft_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v6, write_v12};
 
