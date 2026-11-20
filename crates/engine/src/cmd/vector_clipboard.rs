@@ -217,11 +217,11 @@ pub(super) fn paste(s: &mut Session, p: &Value, mode: Mode) -> Result<Value> {
     copies.layers = if mode == Mode::Shape {
         let layer = shape(&copies)?;
         shape_budget(layer, &destination, dx, dy)?;
-        vec![layer.duplicate()]
+        vec![layer.duplicate()].into()
     } else {
         let image = crate::smart_cmds::svg_source_image(&bytes, PixelFormat::new(ColorMode::Rgb, SampleType::F32, true), 1.0)?;
         copies.depth = SampleType::F32;
-        vec![Layer::new("Pasted SVG", LayerContent::Raster((*image.surface).clone()))]
+        vec![Layer::new("Pasted SVG", LayerContent::Raster((*image.surface).clone()))].into()
     };
     crate::layer_copy_cmds::adapt_copies(s, &mut copies, &destination)?;
     crate::layer_copy_cmds::translate_copies(&mut copies, &destination, dx, dy);

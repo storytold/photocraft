@@ -371,6 +371,28 @@ pub fn current() -> Lang {
     CURRENT.get()
 }
 
+type LangEntries<K, V> = std::collections::HashMap<(&'static str, usize, K), V>;
+
+/// Values built for a language and a caller-provided key. Catalog identity keeps test and
+/// preview catalogs separate even when they use the same language code.
+pub(crate) struct LangCache<K, V> {
+    entries: std::sync::OnceLock<std::sync::Mutex<LangEntries<K, V>>>,
+}
+
+impl<K: Eq + std::hash::Hash, V: Clone> LangCache<K, V> {
+    pub const fn new() -> Self {
+        Self { entries: std::sync::OnceLock::new() }
+    }
+
+    pub fn get_or_build(&self, key: K, build: impl FnOnce() -> V) -> V {
+        let lang = current();
+        let catalog = std::ptr::from_ref(lang.i18n()) as usize;
+        let mut entries =
+            self.entries.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new())).lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        entries.entry((lang.code(), catalog, key)).or_insert_with(build).clone()
+    }
+}
+
 /// Temporarily draw in another language, restoring the previous one even on unwinding.
 /// Preferences previews use this without changing the saved setting or other dialogs.
 pub fn with_language<R>(lang: Lang, draw: impl FnOnce() -> R) -> R {

@@ -141,7 +141,7 @@ fn multi_copy_ids(d: &crate::DocState) -> Vec<LayerId> {
     if selected.len() < 2 {
         return Vec::new();
     }
-    crate::layer_multi_cmds::top_level(&d.doc, &selected)
+    crate::layer_multi_cmds::top_level(&d.doc, selected)
 }
 
 /// Every selected layer, whole ([`multi_copy_ids`]), in a scratch document: Paste recreates them
@@ -789,7 +789,7 @@ fn merge_visible(s: &mut Session) -> Result<Value> {
                 out.push(l);
             }
         }
-        doc.layers = out;
+        doc.layers = out.into();
         *active = Some(mid);
         Ok(())
     })?;

@@ -134,7 +134,7 @@ fn stack(depth: u32) -> Session {
         let group = Layer::new("Stack", LayerContent::Group(Group { children, expanded: true, artboard: None, frame_stroke: None }));
         let smart = photocraft_engine::smart_cmds::layer_to_smart(doc, &group)?;
         *active = Some(smart.id);
-        doc.layers = vec![smart];
+        doc.layers = vec![smart].into();
         Ok(())
     })
     .unwrap();
