@@ -543,6 +543,16 @@ fn specs(keys: &HashMap<String, String>, user: &Map<String, Value>, light: f32) 
         .filter_map(|(key, _)| {
             let kind = EffectKind::from_key(key)?;
             let mut spec = EffectSpec::photoshop(kind).with_blend_keys(keys);
+            if kind == EffectKind::OuterGlow {
+                // #14944: Photoshop groups the Outer Glow rows Structure / Elements / Quality and
+                // puts Noise right under Opacity. The hosted page draws the spec's rows in order,
+                // so the host moves the row; the group titles belong to the framework's page.
+                if let Some(noise) = spec.fields.iter().position(|f| f.key == "noise") {
+                    let field = spec.fields.remove(noise);
+                    let after = spec.fields.iter().position(|f| f.key == "opacity").unwrap_or(0);
+                    spec.fields.insert(after + 1, field);
+                }
+            }
             spec.defaults = style_params(kind, &fresh_params(key, light, user.get(*key)), None).over(&spec.defaults);
             Some(spec)
         })
