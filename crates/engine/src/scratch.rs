@@ -112,6 +112,28 @@ mod native {
             assert!(private.upgrade().is_none());
             drop(weak);
         }
+
+        #[test]
+        fn preferences_use_fixed_scratch_capacity_in_an_isolated_process() {
+            const CHILD: &str = "PHOTOCRAFT_SCRATCH_CAPACITY_TEST_CHILD";
+            if std::env::var_os(CHILD).is_none() {
+                let status = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "scratch::native::tests::preferences_use_fixed_scratch_capacity_in_an_isolated_process"])
+                    .env(CHILD, "1")
+                    .status()
+                    .unwrap();
+                assert!(status.success(), "isolated scratch test failed: {status}");
+                return;
+            }
+
+            // If configure uses this query even once, it pauses for lack of room. This catches an
+            // override that is missing or is installed after configuring the scratch directory.
+            photocraft_raster::spill::set_volume_space_for_tests(|_| Some((0, 64 << 30)));
+            super::super::configure(&crate::prefs::Preferences::default());
+            assert!(!photocraft_raster::spill::paused());
+            let room = (32_u64 << 30) - (64_u64 << 30) / 20;
+            assert_eq!(photocraft_raster::spill::scratch_capacity(), Some(room - room / 64));
+        }
     }
 }
 
