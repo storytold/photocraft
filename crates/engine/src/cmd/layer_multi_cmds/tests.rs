@@ -1770,24 +1770,25 @@ fn duplicating_several_layers_stacks_the_copies_above_the_originals() {
     assert_eq!(doc(&s).layers.iter().map(|l| l.id).collect::<Vec<_>>(), vec![background, lower, upper]);
 }
 
-/// #11915: only sibling layers get one block of copies. A selected layer inside a group keeps its
-/// copy in that group, directly above the original, even when a top-level layer is selected too,
-/// so no copy ever leaves its group.
+/// #14631: layers from different groups get one block of copies too, as measured: the copy of a
+/// layer inside a group leaves it and joins the block above the topmost selected original
+/// (`outer copy | inner copy | outer | G{inner} | Background`, top to bottom).
 #[test]
-fn duplicating_layers_from_different_parents_keeps_each_copy_in_its_group() {
+fn duplicating_layers_from_different_parents_stacks_one_block_above_the_topmost() {
     let mut s = session(8);
     let background = doc(&s).layers[0].id;
-    let inner = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
+    let inner = rect_layer(&mut s, Rect::new(0, 0, 3, 3));
     let gid = LayerId(s.execute("layer.groupLayers", json!({"layer": inner.0})).unwrap()["layer"].as_u64().unwrap());
-    let outer = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
+    let outer = rect_layer(&mut s, Rect::new(2, 2, 6, 6));
     select_all(&mut s, &[inner, outer]);
     let r = s.execute("layer.duplicate", json!({})).unwrap();
     let copies: Vec<LayerId> = r["layers"].as_array().unwrap().iter().map(|v| LayerId(v.as_u64().unwrap())).collect();
     assert_eq!(copies.len(), 2);
     let children: Vec<LayerId> = doc(&s).layer(gid).unwrap().children().unwrap().iter().map(|l| l.id).collect();
-    assert_eq!(children, vec![inner, copies[0]], "the grouped layer's copy stays in the group");
+    assert_eq!(children, vec![inner], "the grouped layer's copy leaves the group");
     let stack: Vec<LayerId> = doc(&s).layers.iter().map(|l| l.id).collect();
-    assert_eq!(stack, vec![background, gid, outer, copies[1]], "the top-level layer's copy stays at the root");
+    assert_eq!(stack, vec![background, gid, outer, copies[0], copies[1]], "the copies are one block above the topmost original");
+    assert_eq!((bounds(&s, copies[0]), bounds(&s, copies[1])), (bounds(&s, inner), bounds(&s, outer)), "in the originals' order");
     assert!(sel(&s).iter().all(|id| copies.contains(id)));
 }
 
@@ -1807,11 +1808,11 @@ fn duplicating_nested_siblings_stacks_their_copies_above_them() {
     assert_eq!(children, vec![a, b, copies[0], copies[1]], "the copies are one block above the originals inside the group");
 }
 
-/// #11915: a copy never takes a different clipping base. A clipped layer copied without its base
-/// stays directly above its original (clipped to the same base) rather than joining the block and
-/// clipping to an unrelated sibling.
+/// #14631: a clipped layer copied without its base joins the block and keeps its clipping flag, so
+/// its copy clips to the layer below it in the block, as measured (`other copy | clipped copy
+/// (clipped) | other | clipped (clipped) | base | Background`, top to bottom).
 #[test]
-fn duplicating_a_clipped_layer_without_its_base_keeps_its_base() {
+fn duplicating_a_clipped_layer_without_its_base_joins_the_block() {
     let mut s = session(8);
     let background = doc(&s).layers[0].id;
     let base = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
@@ -1824,8 +1825,10 @@ fn duplicating_a_clipped_layer_without_its_base_keeps_its_base() {
     let copies: Vec<LayerId> = r["layers"].as_array().unwrap().iter().map(|v| LayerId(v.as_u64().unwrap())).collect();
     assert_eq!(copies.len(), 2);
     let stack: Vec<LayerId> = doc(&s).layers.iter().map(|l| l.id).collect();
-    assert_eq!(stack, vec![background, base, clipped, copies[0], other, copies[1]], "each copy is above its original");
-    assert_eq!(crate::clip_group::base_of(doc(&s), copies[0]), Some(base), "the copy still clips to the original base");
+    assert_eq!(stack, vec![background, base, clipped, other, copies[0], copies[1]], "the copies are one block above the topmost original");
+    assert!(doc(&s).layer(copies[0]).unwrap().clipped, "the clipped layer's copy keeps its clipping flag");
+    assert_eq!(crate::clip_group::base_of(doc(&s), copies[0]), Some(other), "so it clips to the layer below it in the block");
+    assert_eq!(crate::clip_group::base_of(doc(&s), clipped), Some(base), "the original keeps its base");
 }
 
 #[test]

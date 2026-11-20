@@ -264,11 +264,10 @@ pub fn delete_selected(s: &mut Session) -> Result<Value> {
     Ok(json!({"deleted": sel.len()}))
 }
 
-/// Duplicate Layer with several layers selected: the copies of sibling layers form one block above
-/// the topmost selected original, in the originals' order, as Photoshop does (#11915); a selection
-/// spanning groups keeps each copy directly above its original, so no copy leaves its group, and a
-/// clipped layer copied without its base keeps its copy above the original so the copy keeps that
-/// base. The copies become the selection. Artboard copies go beside their boards unless `in_place`
+/// Duplicate Layer with several layers selected: the copies form one block above the topmost
+/// selected original, in the originals' order, as the reference application does (#11915), also
+/// for a selection spanning groups and for a clipped layer copied without its base (#14631). The
+/// copies become the selection. Artboard copies go beside their boards unless `in_place`
 /// ([`crate::artboard_cmds::place_copy`]). `label` names the history step (Layer via Copy reuses
 /// this path, #2777).
 pub fn duplicate_selected(s: &mut Session, in_place: bool, label: &str) -> Result<Value> {
@@ -278,14 +277,13 @@ pub fn duplicate_selected(s: &mut Session, in_place: bool, label: &str) -> Resul
     let mut shift = (0i32, 0i32);
     let (copies, active) = s.edit(label, |doc, active| {
         let ids = top_level(doc, &sel);
-        // Copies of sibling layers go above the topmost selected original as one block, keeping
-        // their originals' order, as Photoshop does (#11915). Layers from different groups keep a
-        // copy directly above each original, so no copy leaves its group; artboard copies are
-        // placed beside their boards one by one (below). So does a clipped copy whose own base is
-        // not copied with it: the block would give it a different base and change its pixels.
-        let block = same_siblings(doc, &ids)
-            && !ids.iter().any(|id| doc.layer(*id).is_some_and(|l| l.artboard().is_some()))
-            && ids.iter().all(|id| doc.layer(*id).is_none_or(|l| !l.clipped || crate::clip_group::base_of(doc, *id).is_some_and(|base| ids.contains(&base))));
+        // The copies go above the topmost selected original as one block, keeping their
+        // originals' order, as the reference application does (#11915, measured in #14631). That
+        // holds across groups too: the copy of a layer from another group leaves it and joins the
+        // block in the topmost original's parent. A clipped copy whose base is not copied keeps
+        // its clipping flag and clips to what the block puts below it. Only artboard copies are
+        // placed beside their boards one by one (below).
+        let block = !ids.iter().any(|id| doc.layer(*id).is_some_and(|l| l.artboard().is_some()));
         let mut above = ids.last().copied();
         let mut copies = Vec::new();
         let mut new_active = None;
@@ -316,20 +314,6 @@ pub fn duplicate_selected(s: &mut Session, in_place: bool, label: &str) -> Resul
     let out = copies.iter().map(|l| l.0).collect::<Vec<_>>();
     reselect(s, copies, active);
     Ok(json!({"layers": out, "layer": active.map(|l| l.0)}))
-}
-
-/// True when two or more layers in `ids` all share one parent (they are siblings), so copies of
-/// them can be inserted as one block above the topmost of them (#11915). Fewer than two ids, or an
-/// id that is not in `doc`, means false.
-fn same_siblings(doc: &Document, ids: &[LayerId]) -> bool {
-    let [first, rest @ ..] = ids else { return false };
-    let Some(mut parent) = doc.path_of(*first) else { return false };
-    parent.pop();
-    rest.iter().all(|id| {
-        let Some(mut path) = doc.path_of(*id) else { return false };
-        path.pop();
-        path == parent
-    })
 }
 
 /// Link groups of fresh copies, as the reference application does (measured, #11217): a copy of
