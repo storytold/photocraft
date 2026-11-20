@@ -861,7 +861,7 @@ fn video_and_isolate_events_use_current_document_state() {
 
         let mut s = fixture(&[None, None, None], &[0, 2]);
         let before = s.active().unwrap().doc.clone();
-        let ids = s.active().unwrap().selected_layers();
+        let ids = s.active().unwrap().selected_layers().to_vec();
         let history = s.active().unwrap().history.past_len();
         load_targeted(&mut s, "isolateLayers", "select.isolateLayers", explicit);
         play(&mut s);
