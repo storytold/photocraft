@@ -114,7 +114,19 @@ mod tests {
                 .env("CARGO_TARGET_DIR", dir.join("target"))
                 .env("CARGO_BUILD_BUILD_DIR", dir.join("target"))
                 .env("CARGO_NET_OFFLINE", "true")
-                .args(["nextest", "list", "--list-type", "binaries-only", "--message-format", "json", "--cargo-message-format", "json-render-diagnostics"])
+                .env("NEXTEST_PROFILE", "ci")
+                .args([
+                    "nextest",
+                    "list",
+                    "--profile",
+                    "default",
+                    "--list-type",
+                    "binaries-only",
+                    "--message-format",
+                    "json",
+                    "--cargo-message-format",
+                    "json-render-diagnostics",
+                ])
                 .output()
                 .unwrap();
             assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
