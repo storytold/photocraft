@@ -472,8 +472,9 @@ fn pasteboards(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: Rect, idx: usiz
         Pasteboard::new(label, &page).border(border).show_at(ui, rect);
         return;
     }
-    let shown = super::display_doc(app, idx).0;
-    let uncovered = super::artboard_ui::uncovered(&shown);
+    let (shown, revision) = super::display_doc(app, idx);
+    let Some(st) = app.session.documents().get(idx) else { return };
+    let uncovered = app.doc_queries.uncovered(&app.session, st, revision, || super::artboard_ui::uncovered(&shown));
     Pasteboard::new(label, &pages).border(border).uncovered(&uncovered).show_at(ui, rect);
 }
 
@@ -571,6 +572,9 @@ fn canvas_controls(
     // One contextual task bar per window: the active document's tile carries it, not the tile drawn last.
     if app.session.active_index() == Some(host.idx) {
         crate::crop_task_bar::show(app, ui, rect);
+        if primary {
+            crate::transform_task_bar::show(app, ui, rect);
+        }
         crate::frame_tool::task_bar::show(ui, app, rect);
     }
     crate::crop_ui::each_pass(app);
