@@ -15,7 +15,6 @@ use photocraft_color::BlendMode;
 use photocraft_doc::{Layer, LayerId};
 use serde_json::json;
 
-use super::layers_tree::blend_key;
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
@@ -28,7 +27,7 @@ fn opacity(e: EditEvent<f64>) -> LayersEvent<LayerId> {
 }
 
 fn key(m: BlendMode) -> String {
-    blend_key(m)
+    m.key().to_string()
 }
 
 fn label() -> Arc<str> {

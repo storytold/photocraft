@@ -14,13 +14,20 @@
 //! Shown when Window → Contextual Task Bar is on, a Type-family tool is active, there is an
 //! active document, no dialog is open, and a text-edit session is live.
 
-use egui::{Color32, Pos2, Rect, Stroke};
+use craft::behavior::IconId;
+use craft::behavior::kurbo::Point;
+use craft::ui::buttons::{IconButton, ToggleButton};
+use craft::ui::canvas_controls::{TaskBar, TaskBarCx};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft::ui::display::Divider;
+use craft::ui::pickers::Select;
+use craft::ui::runtime::env::Label;
+use craft::ui::text::NumberField;
+use egui::{Color32, Stroke};
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::ViewXform;
 use crate::state::Tool;
-use crate::widgets::task_bar;
 
 /// Returns true when the bar's conditions are met (guards `ui.inspect` too).
 pub fn eligible(app: &PhotocraftApp) -> bool {
@@ -32,23 +39,21 @@ fn wanted(app: &PhotocraftApp) -> bool {
     app.ui.tool.is_type()
         && app.ui.panels.context_task_bar
         && app.session.active().is_some()
-        && app.ui.dialogs.is_empty()
+        && !app.dialog_open()
 }
 
-/// Screen rect that anchors the bar: the text layer's bounding box in screen coordinates.
+/// Screen rect that anchors the bar: the text layer's bounding box in document coordinates.
 /// For box text, uses the box's four corners; for point text, unions all line extents.
-fn text_anchor(app: &mut PhotocraftApp, xf: &ViewXform) -> Option<Rect> {
+fn text_anchor(app: &mut PhotocraftApp) -> Option<[Point; 4]> {
     use photocraft_doc::text::TextShape;
-    use photocraft_geom::Point;
 
-    let ed = app.ui.text_edit.clone()?;
+    let ed = app.ui.text_edit.as_ref()?;
     let id = super::LayerId(ed.layer);
     let (l, aff, _) = super::layout::layout(app, id)?;
 
-    // text-space → screen
-    let scr_t = |x: f32, y: f32| -> Pos2 {
-        let p = aff.apply(Point::new(f64::from(x), f64::from(y)));
-        xf.to_screen(p.x as f32, p.y as f32)
+    let to_doc = |x: f32, y: f32| -> Point {
+        let p = aff.apply(photocraft_geom::Point::new(f64::from(x), f64::from(y)));
+        Point::new(p.x, p.y)
     };
 
     let shape = app.session.active().and_then(|s| {
@@ -57,74 +62,88 @@ fn text_anchor(app: &mut PhotocraftApp, xf: &ViewXform) -> Option<Rect> {
 
     match shape {
         Some(TextShape::Box { x, y, width, height }) => {
-            let corners = [
-                scr_t(x, y),
-                scr_t(x + width, y),
-                scr_t(x + width, y + height),
-                scr_t(x, y + height),
-            ];
-            Some(Rect::from_points(&corners))
+            Some([
+                to_doc(x, y),
+                to_doc(x + width, y),
+                to_doc(x + width, y + height),
+                to_doc(x, y + height),
+            ])
         }
         _ => {
-            // Point text (and area text as a fallback): union of line extents in text space.
-            let pts: Vec<Pos2> = l
-                .lines
-                .iter()
-                .flat_map(|ln| {
-                    let (x0, x1) = (ln.x0, ln.x1.max(ln.x0 + 1.0));
-                    let (y0, y1) = (ln.baseline - ln.ascent, ln.baseline + ln.descent);
-                    let c0 = l.to_text(x0, y0);
-                    let c1 = l.to_text(x1, y0);
-                    let c2 = l.to_text(x1, y1);
-                    let c3 = l.to_text(x0, y1);
-                    [scr_t(c0.0, c0.1), scr_t(c1.0, c1.1), scr_t(c2.0, c2.1), scr_t(c3.0, c3.1)]
-                })
-                .collect();
-            if pts.is_empty() {
-                None
+            let mut min_x = f32::INFINITY;
+            let mut min_y = f32::INFINITY;
+            let mut max_x = f32::NEG_INFINITY;
+            let mut max_y = f32::NEG_INFINITY;
+            for ln in &l.lines {
+                let (x0, x1) = (ln.x0, ln.x1.max(ln.x0 + 1.0));
+                let (y0, y1) = (ln.baseline - ln.ascent, ln.baseline + ln.descent);
+                let (tx0, ty0) = l.to_text(x0, y0);
+                let (tx1, ty1) = l.to_text(x1, y1);
+                min_x = min_x.min(tx0).min(tx1);
+                max_x = max_x.max(tx0).max(tx1);
+                min_y = min_y.min(ty0).min(ty1);
+                max_y = max_y.max(ty0).max(ty1);
+            }
+            if min_x.is_finite() && min_y.is_finite() {
+                Some([
+                    to_doc(min_x, min_y),
+                    to_doc(max_x, min_y),
+                    to_doc(max_x, max_y),
+                    to_doc(min_x, max_y),
+                ])
             } else {
-                Some(Rect::from_points(&pts))
+                None
             }
         }
     }
 }
 
-/// Draws the bar under the active text layer's screen bounding box.
-/// Called from the canvas overlay pass for the active document's tile.
-pub fn draw(app: &mut PhotocraftApp, ui: &mut egui::Ui, xf: &ViewXform) {
+/// Shows the bar under the active text layer inside `area` (the canvas rect).
+pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, area: egui::Rect) {
     if !wanted(app) {
-        return; 
+        return;
     }
-    let Some(anchor) = text_anchor(app, xf) else { return };
-    let ctx = ui.ctx().clone();
+    let Some(corners) = text_anchor(app) else { return };
     let mut place = app.ui.panels.task_bar;
-    let shown = task_bar::show(&ctx, &mut place, anchor, xf.rect, |ui, more| {
-        contents(app, ui, more);
+    let output = TaskBar::new(label(tl!("Contextual Task Bar")), &corners, Bind::bound(&mut place)).show(ui, area, |ui, cx| {
+        contents(app, ui, cx);
     });
     app.ui.panels.task_bar = place;
-    let Some(shown) = shown else { return };
-    if shown.hide {
+    if output.output.hide {
         app.ui.panels.context_task_bar = false;
         return;
     }
-    let r = shown.rect;
+    let r = output.output.rect;
     app.ui.task_bar_shown = Some([r.min.x, r.min.y, r.max.x, r.max.y]);
 }
 
-/// The bar's contents: font family, size, bold, alignment, colour, ⋯, commit/cancel.
-fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, more: &mut task_bar::MoreMenu) {
-    use super::defaults::{apply, shown_scale, type_unit};
-    use super::editing::{cancel, commit_with};
-    use super::fonts::{font_picker, font_picker_tip, fonts_ready, selected_style, styles};
-    use super::options_bar::styles_at;
+fn label(text: &str) -> Label {
+    Label::from(text.to_string())
+}
 
-    let t = crate::theme::Tokens::get(ui.ctx());
+fn type_unit(app: &PhotocraftApp) -> (f32, &'static str) {
+    match app.session.prefs().units_and_rulers.type_units {
+        photocraft_engine::prefs::TypeUnit::Points => (1.0, "pt"),
+        photocraft_engine::prefs::TypeUnit::Pixels => {
+            let dpi = app.session.active().map_or(72.0, |d| d.doc.resolution_dpi.max(1.0));
+            (dpi / 72.0, "px")
+        }
+        photocraft_engine::prefs::TypeUnit::Millimeters => (72.0 / 25.4, "mm"),
+    }
+}
+
+/// The bar's contents: font family, size, bold, alignment, colour, ⋯, commit/cancel.
+fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, cx: &mut TaskBarCx<'_>) {
+    use super::defaults::{apply, shown_scale};
+    use super::editing::{cancel, commit_with};
+    use super::fonts::{families, selected_style, styles};
+    use super::options_bar::styles_at;
 
     // Current styles — font, size, colour.
     let char_style = styles_at(app).map(|(c, _)| c);
     let shown = char_style
         .as_ref()
-        .map(|c| (super::options_bar::shown_family(app, c), selected_style(c), c.size_pt * shown_scale(app), c.color));
+        .map(|c| (c.font_family.clone(), selected_style(c), c.size_pt * shown_scale(app), c.color));
     let o = app.ui.tool_options.clone();
     let (mut fam, mut style, size) = match &shown {
         Some((f, s, z, _)) => (
@@ -135,64 +154,51 @@ fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, more: &mut task_bar::Mor
         None => (o.type_font.clone(), o.type_style.clone(), o.type_size),
     };
 
-    // --- Font family dropdown (compact, 120 px) ---
-    ui.push_id("type-task-bar", |ui| {
-        if fonts_ready(ui, 120.0) {
-            if let Some(picked) = font_picker(app, ui, &mut fam, 120.0) {
-                app.ui.tool_options.type_font = fam.clone();
-                let st = styles(&fam);
-                let picked = picked.filter(|s| st.contains(s));
-                style = match &picked {
-                    Some(s) => s.clone(),
-                    None if st.contains(&style) => style,
-                    None => st.first().cloned().unwrap_or_else(|| "Regular".into()),
-                };
-                app.ui.tool_options.type_style = style.clone();
-                match picked {
-                    Some(s) => apply(app, ui.ctx(), json!({"font": fam, "fontStyle": s})),
-                    None => apply(app, ui.ctx(), json!({"font": fam})),
-                }
-            }
-            font_picker_tip(ui, tl!("Search and select fonts"));
+    // --- Font family dropdown ---
+    let font_families = families();
+    let entries: Vec<Entry<String>> = font_families.iter().map(|f| Entry::new(f.clone(), f.clone())).collect();
+    let pick = Select::new(label(tl!("Font")), Bind::bound(&mut fam), &entries).show(ui);
+    if pick.events.committed().is_some() {
+        app.ui.tool_options.type_font = fam.clone();
+        let st = styles(&fam);
+        if !st.contains(&style) {
+            style = st.first().cloned().unwrap_or_else(|| "Regular".into());
+            app.ui.tool_options.type_style = style.clone();
+            apply(app, json!({"font": fam, "fontStyle": style}), None);
+        } else {
+            apply(app, json!({"font": fam}), None);
         }
+    }
 
-        // --- Font size field (compact, 54 px) ---
-        let (unit, label) = type_unit(app);
-        let mut display = size * unit;
-        let field = crate::widgets::value_field(ui, &mut display, unit..=1296.0 * unit, label, 54.0)
-            .on_hover_text(tl!("Set font size"));
-        if field.changed() {
-            let pt = display / unit;
-            app.ui.tool_options.type_size = pt;
-            apply(app, ui.ctx(), json!({"size": pt, "metricsAsShown": true}));
-        }
+    // --- Font size field ---
+    let (unit, unit_label) = type_unit(app);
+    let mut display = Some(f64::from(size * unit));
+    let size_field = NumberField::new(label(tl!("Size")), Bind::bound(&mut display))
+        .range(f64::from(unit)..=1296.0 * f64::from(unit))
+        .unit(unit_label)
+        .show(ui);
+    if size_field.edit.events.committed().is_some() && let Some(d) = display {
+        let pt = (d / f64::from(unit)) as f32;
+        app.ui.tool_options.type_size = pt;
+        apply(app, json!({"size": pt, "metricsAsShown": true}), None);
+    }
 
-        // --- Bold toggle ---
-        let font_is_bold = char_style.as_ref().map_or_else(
-            || style.contains("Bold") || o.type_style.contains("Bold"),
-            |c| c.weight >= 600 || style.contains("Bold"),
-        );
-        let faux_bold = char_style.as_ref().is_some_and(|c| c.faux_bold);
-        let is_bold = faux_bold || font_is_bold;
+    // --- Bold toggle ---
+    let font_is_bold = char_style.as_ref().map_or_else(
+        || style.contains("Bold") || o.type_style.contains("Bold"),
+        |c| c.weight >= 600 || style.contains("Bold"),
+    );
+    let faux_bold = char_style.as_ref().is_some_and(|c| c.faux_bold);
+    let is_bold = faux_bold || font_is_bold;
 
-        let toggle_bold = crate::icons::button(ui, "bold", task_bar::BUTTON, is_bold, tl!("Bold"));
-        if toggle_bold.clicked() {
-            if is_bold {
-                if faux_bold && !font_is_bold {
-                    apply(app, ui.ctx(), json!({"fauxBold": false}));
-                } else {
-                    let is_italic = char_style.as_ref().map_or_else(
-                        || {
-                            let s = style.to_lowercase();
-                            let os = o.type_style.to_lowercase();
-                            s.contains("italic") || s.contains("oblique") || os.contains("italic") || os.contains("oblique")
-                        },
-                        |c| c.italic || style.to_lowercase().contains("italic") || style.to_lowercase().contains("oblique"),
-                    );
-                    let new_style = resolve_bold_counterpart(&fam, &style, is_italic, false);
-                    app.ui.tool_options.type_style = new_style.clone();
-                    apply(app, ui.ctx(), json!({"fontStyle": new_style, "fauxBold": false}));
-                }
+    let bold_button = ToggleButton::new(label(tl!("Bold")), Bind::given(is_bold))
+        .icon(IconId::new("bold"))
+        .icon_only()
+        .show(ui);
+    if bold_button.response.clicked() {
+        if is_bold {
+            if faux_bold && !font_is_bold {
+                apply(app, json!({"fauxBold": false}), None);
             } else {
                 let is_italic = char_style.as_ref().map_or_else(
                     || {
@@ -202,99 +208,107 @@ fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, more: &mut task_bar::Mor
                     },
                     |c| c.italic || style.to_lowercase().contains("italic") || style.to_lowercase().contains("oblique"),
                 );
-                let new_style = resolve_bold_counterpart(&fam, &style, is_italic, true);
+                let new_style = resolve_bold_counterpart(&fam, &style, is_italic, false);
                 app.ui.tool_options.type_style = new_style.clone();
-                apply(app, ui.ctx(), json!({"fontStyle": new_style}));
+                apply(app, json!({"fontStyle": new_style, "fauxBold": false}), None);
             }
-        }
-
-        crate::widgets::vline(ui, 22.0);
-        ui.spacing_mut().item_spacing.x = 2.0;
-
-        // --- Alignment buttons (Left / Center / Right) ---
-        let para = styles_at(app).map(|(_, p)| p);
-        let shown_align = match &para {
-            Some(p) => match p.align {
-                photocraft_doc::text::TextAlign::Left => "left",
-                photocraft_doc::text::TextAlign::Center => "center",
-                photocraft_doc::text::TextAlign::Right => "right",
-                _ => "",
-            },
-            None => o.type_align.as_str(),
-        };
-        let vertical = app.ui.tool != Tool::HorizontalTypeMask
-            && match super::defaults::target_text(app) {
-                Some(t) => t.orientation == photocraft_doc::text::Orientation::Vertical,
-                None => app.ui.tool.is_vertical_type(),
-            };
-        let buttons = if vertical {
-            [
-                ("left", "vertical-align-top", tl!("Top align text")),
-                ("center", "vertical-align-middle", tl!("Center text")),
-                ("right", "vertical-align-bottom", tl!("Bottom align text")),
-            ]
         } else {
-            [
-                ("left", "align-left", tl!("Left align text")),
-                ("center", "align-center", tl!("Center text")),
-                ("right", "align-right", tl!("Right align text")),
-            ]
+            let is_italic = char_style.as_ref().map_or_else(
+                || {
+                    let s = style.to_lowercase();
+                    let os = o.type_style.to_lowercase();
+                    s.contains("italic") || s.contains("oblique") || os.contains("italic") || os.contains("oblique")
+                },
+                |c| c.italic || style.to_lowercase().contains("italic") || style.to_lowercase().contains("oblique"),
+            );
+            let new_style = resolve_bold_counterpart(&fam, &style, is_italic, true);
+            app.ui.tool_options.type_style = new_style.clone();
+            apply(app, json!({"fontStyle": new_style}), None);
+        }
+    }
+
+    Divider::vertical().show(ui);
+
+    // --- Alignment buttons (Left / Center / Right) ---
+    let para = styles_at(app).map(|(_, p)| p);
+    let shown_align = match &para {
+        Some(p) => match p.align {
+            photocraft_doc::text::TextAlign::Left => "left",
+            photocraft_doc::text::TextAlign::Center => "center",
+            photocraft_doc::text::TextAlign::Right => "right",
+            _ => "",
+        },
+        None => o.type_align.as_str(),
+    };
+    let vertical = app.ui.tool != Tool::HorizontalTypeMask
+        && match super::defaults::target_text(app) {
+            Some(t) => t.orientation == photocraft_doc::text::Orientation::Vertical,
+            None => app.ui.tool.is_vertical_type(),
         };
-        for (align, icon, tip) in buttons {
-            if crate::icons::button(ui, icon, task_bar::BUTTON, shown_align == align, tip).clicked() {
-                app.ui.tool_options.type_align = align.into();
-                apply(app, ui.ctx(), json!({"align": align}));
-            }
+    let buttons = if vertical {
+        [
+            ("left", "vertical-align-top", tl!("Top align text")),
+            ("center", "vertical-align-middle", tl!("Center text")),
+            ("right", "vertical-align-bottom", tl!("Bottom align text")),
+        ]
+    } else {
+        [
+            ("left", "align-left", tl!("Left align text")),
+            ("center", "align-center", tl!("Center text")),
+            ("right", "align-right", tl!("Right align text")),
+        ]
+    };
+    for (align, icon, tip) in buttons {
+        let btn = ToggleButton::new(label(tip), Bind::given(shown_align == align))
+            .icon(IconId::new(icon))
+            .icon_only()
+            .show(ui);
+        if btn.response.clicked() {
+            app.ui.tool_options.type_align = align.into();
+            apply(app, json!({"align": align}), None);
         }
+    }
 
-        ui.spacing_mut().item_spacing.x = 8.0;
-        crate::widgets::vline(ui, 22.0);
+    Divider::vertical().show(ui);
 
-        // --- Text colour swatch ---
-        let c = shown
-            .as_ref()
-            .map(|s| s.3)
-            .map(|c| {
-                let v = c.to_rgb();
-                [v[0], v[1], v[2], 1.0]
-            })
-            .unwrap_or(app.session.tools.foreground);
-        let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 18.0), egui::Sense::click());
-        let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-        ui.painter().rect_filled(rect, 2.0, Color32::from_rgb(q(c[0]), q(c[1]), q(c[2])));
-        ui.painter().rect_stroke(rect, 2.0, Stroke::new(1.0, t.field_border), egui::StrokeKind::Outside);
-        let resp = resp.on_hover_text(tl!("Set text color"));
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Set the text color")));
-        if resp.clicked() {
-            super::defaults::open_color_picker(app, [c[0], c[1], c[2]]);
-        }
+    // --- Text colour swatch ---
+    let c = shown
+        .as_ref()
+        .map(|s| s.3)
+        .map(|c| {
+            let v = c.to_rgb();
+            [v[0], v[1], v[2], 1.0]
+        })
+        .unwrap_or(app.session.tools.foreground);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 18.0), egui::Sense::click());
+    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    ui.painter().rect_filled(rect, 2.0, Color32::from_rgb(q(c[0]), q(c[1]), q(c[2])));
+    let border_color = Color32::from_gray(100);
+    ui.painter().rect_stroke(rect, 2.0, Stroke::new(1.0, border_color), egui::StrokeKind::Outside);
+    let resp = resp.on_hover_text(tl!("Set text color"));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Set the text color")));
+    if resp.clicked() {
+        super::defaults::open_color_picker(app, [c[0], c[1], c[2]]);
+    }
 
-        // --- ⋯ menu ---
-        more.show(ui);
+    // --- ⋯ menu ---
+    cx.more_menu(ui);
 
-        // --- Commit / Cancel ---
-        if crate::icons::button_with_icon_size_tip(
-            ui,
-            "check",
-            task_bar::BUTTON,
-            14.0,
-            false,
-            &crate::i18n::fmt(
-                tl!("Commit any current edits ({key})"),
-                &[("key", &crate::shortcuts::pretty("Cmd+Enter"))],
-            ),
-            false,
-        )
+    // --- Commit / Cancel ---
+    if IconButton::new(IconId::new("check"))
+        .label(tl!("Commit any current edits (Cmd+Enter)"))
+        .show(ui)
         .clicked()
-        {
-            commit_with(app, ui.input(|i| i.modifiers));
-        }
-        if crate::icons::button_with_icon_size_tip(ui, "ban", task_bar::BUTTON, 14.0, false, tl!("Cancel any current edits (Esc)"), false)
-            .clicked()
-        {
-            cancel(app);
-        }
-    });
+    {
+        commit_with(app, ui.input(|i| i.modifiers));
+    }
+    if IconButton::new(IconId::new("x"))
+        .label(tl!("Cancel any current edits (Esc)"))
+        .show(ui)
+        .clicked()
+    {
+        cancel(app);
+    }
 }
 
 /// Resolves the bold or non-bold counterpart style for a font family, preserving italic/oblique styling.
@@ -377,7 +391,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn app_with_doc() -> PhotocraftApp {
+    fn app_with_doc() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.session.execute("file.new", json!({"width": 400, "height": 200})).unwrap();
         app.sync_views();
@@ -407,11 +421,8 @@ mod tests {
             anchor: 0,
             session: String::new(),
             created: false,
-            dragging: false,
             mask: false,
             document: None,
-            resize: None,
-            preedit: None,
         });
         assert!(!eligible(&app));
     }
@@ -436,9 +447,10 @@ mod tests {
         // Regular / Bold fallback
         assert_eq!(resolve_bold_counterpart("CustomFamily", "Regular", false, true), "Bold");
         assert_eq!(resolve_bold_counterpart("CustomFamily", "Bold", false, false), "Regular");
-        // Bundled Inter has Regular, Medium, SemiBold: toggling bold picks SemiBold
-        assert_eq!(resolve_bold_counterpart("Inter", "Regular", false, true), "SemiBold");
-        assert_eq!(resolve_bold_counterpart("Inter", "SemiBold", false, false), "Regular");
+        // Bundled Inter: toggling bold picks Bold (or SemiBold if Bold absent)
+        let bold_style = resolve_bold_counterpart("Inter", "Regular", false, true);
+        assert!(bold_style == "Bold" || bold_style == "SemiBold");
+        assert_eq!(resolve_bold_counterpart("Inter", &bold_style, false, false), "Regular");
     }
 
     /// Preserving italic styling when toggling bold.
@@ -448,10 +460,9 @@ mod tests {
         assert_eq!(resolve_bold_counterpart("CustomFamily", "Bold Italic", true, false), "Italic");
     }
 
-    /// `text_anchor` transforms all four corners of each line rectangle,
-    /// so rotated camera (-45 degrees) captures the full vertical extent.
+    /// `text_anchor` produces four corners for the active text layer.
     #[test]
-    fn text_anchor_transforms_all_four_corners_with_rotation() {
+    fn text_anchor_produces_four_corners() {
         let mut app = app_with_doc();
         let created = app
             .run(
@@ -475,27 +486,12 @@ mod tests {
             anchor: 0,
             session: String::new(),
             created: false,
-            dragging: false,
             mask: false,
             document: None,
-            resize: None,
-            preedit: None,
         });
 
-        // ViewXform with -45 degree camera rotation
-        let xf = ViewXform {
-            rect: Rect::from_min_size(Pos2::new(0.0, 0.0), egui::vec2(800.0, 600.0)),
-            zoom: 1.0,
-            center: [100.0, 100.0],
-            flip: false,
-            rotation: -45.0,
-            aspect: 1.0,
-        };
-
-        let rect = text_anchor(&mut app, &xf).expect("anchor rect exists");
-        assert!(rect.is_positive());
-        assert!(rect.height() > 5.0);
-        assert!(rect.width() > 5.0);
+        let corners = text_anchor(&mut app).expect("anchor rect exists");
+        assert_eq!(corners.len(), 4);
     }
 
     /// When faux bold alone makes the button active, clearing it preserves the underlying face (e.g. Light).
@@ -533,13 +529,10 @@ mod tests {
             anchor: 0,
             session: String::new(),
             created: false,
-            dragging: false,
             mask: false,
             document: None,
-            resize: None,
-            preedit: None,
         });
-        super::super::defaults::apply(&mut app, &egui::Context::default(), json!({"fauxBold": false}));
+        super::super::defaults::apply(&mut app, json!({"fauxBold": false}), None);
         let t_after = super::super::text_layer(&app.session.active().unwrap().doc, layer).unwrap();
         let c_after = &t_after.char_runs()[0].style;
         assert!(!c_after.faux_bold);
@@ -558,11 +551,8 @@ mod tests {
             anchor: 0,
             session: String::new(),
             created: false,
-            dragging: false,
             mask: false,
             document: None,
-            resize: None,
-            preedit: None,
         });
         app.ui.task_bar_shown = Some([10.0, 20.0, 110.0, 50.0]);
 

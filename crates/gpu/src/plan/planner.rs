@@ -320,7 +320,9 @@ impl<'a> Planner<'a> {
         p.flags = F_BLEND_IF;
         p.params = blend_if_params(&layer.blend_if);
         let one_channel = self.cx.mode != photocraft_color::ColorMode::Rgb;
-        p.extra = [f32::from(u8::from(one_channel)), f32::from(u8::from(own.is_none())), 0.0, 0.0];
+        // compose::blend_if_weight: split points fade over both ends in 8-bit RGB documents (#14855).
+        let levels = self.cx.depth == photocraft_color::SampleType::U8 && !one_channel;
+        p.extra = [f32::from(u8::from(one_channel)), f32::from(u8::from(own.is_none())), f32::from(u8::from(levels)), 0.0];
         Ok(self.emit(p))
     }
 
