@@ -500,7 +500,7 @@ pub(super) fn show_selection(
     let floated = super::tools::selection::floating_outline(app, idx);
     let selection = floated.as_ref().or(doc.selection.as_ref())?;
     let wrapped = floated.is_none().then(|| crate::move_ui::wrapped_selection_offset(app, idx)).flatten();
-    let mask = super::outline::SurfaceMask::new(selection, crate::app::surface_fingerprint(selection), [doc.size.width, doc.size.height]).wrapped(wrapped);
+    let mask = super::outline::SurfaceMask::new(selection, selection.generation(), [doc.size.width, doc.size.height]).wrapped(wrapped);
     let offset = if wrapped.is_some() { [0, 0] } else { ants.map_or([0, 0], |(x, y)| [x, y]) };
     let mut overlay = SelectionOverlay::new(label.to_owned(), &mask).visible(ants.is_some()).offset(offset);
     if let Some(map) = crate::transform_tool::selection_map(app, doc.id) {
