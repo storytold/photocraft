@@ -17,7 +17,7 @@ fn camera_raw_filter_preserves_identity_alpha_and_smart_filter_parity() {
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 16, "height": 16})).unwrap();
     s.execute("edit.fill", json!({"contents": "color", "color": "#4080c0", "opacity": 50.0})).unwrap();
-    s.execute("select.none", json!({})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
 
     let before = active_pixel(&s, 8, 8);
     assert!((before[3] - 0.5).abs() < 0.02, "expected ~50% alpha: {before:?}");
@@ -42,7 +42,7 @@ fn camera_raw_filter_preserves_identity_alpha_and_smart_filter_parity() {
     smart_session.execute("layer.new.layer", json!({})).unwrap();
     smart_session.execute("select.rect", json!({"x": 0, "y": 0, "width": 16, "height": 16})).unwrap();
     smart_session.execute("edit.fill", json!({"contents": "color", "color": "#4080c0", "opacity": 50.0})).unwrap();
-    smart_session.execute("select.none", json!({})).unwrap();
+    smart_session.execute("select.deselect", json!({})).unwrap();
     smart_session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
 
     s.execute("filter.cameraRaw", params.clone()).unwrap();
