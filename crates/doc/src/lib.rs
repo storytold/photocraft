@@ -445,7 +445,7 @@ impl std::hash::Hash for Fill {
         std::mem::discriminant(self).hash(h);
         match self {
             Fill::Solid(c) => color(h, c),
-            Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align } => {
+            Fill::Gradient { stops, angle, scale, style, reverse, opacity_stops, midpoints, offset, dither, align, interpolation } => {
                 stops.len().hash(h);
                 for (at, c) in stops {
                     bits(*at).hash(h);
@@ -458,6 +458,22 @@ impl std::hash::Hash for Fill {
                 opacity_stops.iter().for_each(|(a, b)| [bits(*a), bits(*b)].hash(h));
                 midpoints.len().hash(h);
                 midpoints.iter().for_each(|m| bits(*m).hash(h));
+                interpolation.is_some().hash(h);
+                if let Some(source) = interpolation {
+                    let effects::GradientInterpolation { method, smoothness, stops, midpoints, opacity_stops, opacity_midpoints } = &**source;
+                    (method, bits(*smoothness)).hash(h);
+                    stops.len().hash(h);
+                    for (at, c) in stops {
+                        bits(*at).hash(h);
+                        color(h, c);
+                    }
+                    opacity_stops.len().hash(h);
+                    opacity_stops.iter().for_each(|(a, b)| [bits(*a), bits(*b)].hash(h));
+                    for list in [midpoints, opacity_midpoints] {
+                        list.len().hash(h);
+                        list.iter().for_each(|m| bits(*m).hash(h));
+                    }
+                }
             }
             Fill::Pattern { name, scale, id, angle, link, phase } => {
                 (name, id, link).hash(h);
