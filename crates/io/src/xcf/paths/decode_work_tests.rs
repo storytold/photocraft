@@ -113,7 +113,7 @@ fn image_path_properties_and_standalone_records_use_one_work_allowance() {
     let mut work = DecodeWork { bytes_left: vectors.len() + legacy.len() + standalone.len() };
     reset();
     assert_eq!(vectors_with_work(&vectors, &mut work, &Interrupt::NONE).unwrap().unwrap()[0].named.name, "modern");
-    assert_eq!(legacy_with_work(&legacy, &mut work, &Interrupt::NONE).unwrap().unwrap()[0].named.name, "legacy");
+    assert_eq!(legacy_with_work(&legacy, &mut work, &Interrupt::NONE).unwrap().unwrap().0[0].named.name, "legacy");
     assert_eq!(standalone_with_work(&cursor(&standalone), 0, &mut work, &Interrupt::NONE).unwrap().unwrap().named.name, "standalone");
     assert_eq!((work.bytes_left, counts()), (0, (3, 3, 8)));
     assert!(vectors_with_work(&vectors, &mut work, &Interrupt::NONE).unwrap().is_none());

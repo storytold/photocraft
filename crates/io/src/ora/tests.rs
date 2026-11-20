@@ -584,3 +584,13 @@ fn plain_documents_lose_nothing() {
     cmyk.mode = ColorMode::Cmyk;
     assert_eq!(losses(&cmyk).len(), 1, "a document OpenRaster can't hold at all");
 }
+
+#[test]
+fn grouped_layer_warnings_keep_the_first_distinct_names_and_exact_total() {
+    let mut warnings = Warnings::default();
+    for name in ["D", "D", "B", "A", "E", "C", "E", "F", "G", "G"] {
+        warnings.layer(name, "stored effects");
+    }
+    warnings.layer("D", "other warning");
+    assert_eq!(warnings.finish(), ["stored effects (\"D\", \"B\", \"A\", \"E\", \"C\" and 2 more)", "other warning (\"D\")"]);
+}

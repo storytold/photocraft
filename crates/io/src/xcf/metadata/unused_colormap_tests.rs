@@ -151,3 +151,29 @@ fn version_zero_uses_one_byte_per_index_and_the_historical_gray_ramp() {
     assert_eq!(pixels.pixel(1, 0), [2. / 255., 2. / 255., 2. / 255., 1.]);
     assert_eq!(crate::xcf::source_geometry("version-zero.xcf", &bytes, &photocraft_raster::Interrupt::NONE).unwrap(), Some(((2., 1.), 96.)));
 }
+
+#[test]
+fn overlapping_palette_end_markers_use_drawable_table_framing() {
+    for version in [3, 11, 26] {
+        for extra_color_bytes in [false, true] {
+            let mut image = TestImage::rgb8(1, 1);
+            image.version = version;
+            let mut palette = vec![0, 0, 0, 1, 255];
+            if extra_color_bytes {
+                palette.extend([0, 0]);
+            }
+            image.image_props.push((1, palette.clone()));
+            image.layers.push(TestLayer::rgba("Visible", 1, 1, vec![17, 31, 57, 255]));
+            image.channels.push(("Coverage", vec![64], false));
+            let mut bytes = image.write();
+            let payload = if version < 4 { 26 } else { 30 } + 9 + 8;
+            bytes[payload - 4..payload].copy_from_slice(&5u32.to_be_bytes());
+            let result = crate::import("overlapping-end.xcf", &bytes).unwrap();
+            assert_eq!(result.document.layers[0].surface().unwrap().pixel(0, 0), [17. / 255., 31. / 255., 57. / 255., 1.]);
+            assert_eq!(result.document.channels[0].surface.pixel(0, 0), [64. / 255.]);
+            let Some(ImportConversion::Report(report)) = result.document.metadata.import_conversion.as_deref() else { panic!("report") };
+            let retained = report.entries.iter().find(|entry| entry.feature_code == "xcf.source_property.1").unwrap();
+            assert!(retained.attachments.iter().any(|&index| report.attachments[index as usize].bytes.as_slice() == palette));
+        }
+    }
+}

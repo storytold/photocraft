@@ -1459,12 +1459,17 @@ fn import_paths_with_work<'a>(
                 limit = Some((ordinal, property.offset, "saved-path count or remaining document metadata allowance"));
                 break 'admission;
             }
-            let paths = match if property.kind == 23 {
+            let (paths, source_count) = match if property.kind == 23 {
                 paths::legacy_with_work(property.data, work, ctl)
             } else {
-                paths::vectors_with_work(property.data, work, ctl)
+                paths::vectors_with_work(property.data, work, ctl).map(|paths| {
+                    paths.map(|paths| {
+                        let count = paths.len();
+                        (paths, count)
+                    })
+                })
             } {
-                Ok(Some(paths)) => paths,
+                Ok(Some(batch)) => batch,
                 Ok(None) => {
                     limit = Some((ordinal, property.offset, "saved-path decoding work allowance"));
                     break 'admission;
@@ -1479,13 +1484,14 @@ fn import_paths_with_work<'a>(
             };
             for path in paths {
                 ctl.check().map_err(|_| IoError::Cancelled)?;
+                let source_ordinal = ordinal + path.source_index;
                 if records.len() >= MAX_CHANNELS || admit_path(&mut image.meta_budget, &path).is_err() {
-                    limit = Some((ordinal, property.offset, "saved-path count or remaining document metadata allowance"));
+                    limit = Some((source_ordinal, property.offset, "saved-path count or remaining document metadata allowance"));
                     break 'admission;
                 }
-                records.push((ordinal, property.offset, path, None));
-                ordinal += 1;
+                records.push((source_ordinal, property.offset, path, None));
             }
+            ordinal += source_count;
         }
         for &offset in pointers {
             ctl.check().map_err(|_| IoError::Cancelled)?;

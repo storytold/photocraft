@@ -1,6 +1,8 @@
 //! Bounded metadata data translation. Source tag names select a finite public
 //! schema, never XML instructions, a network namespace lookup or executable code.
+use super::metadata::plain_tag_text;
 use photocraft_doc::Document;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 const DC: &str = "http://purl.org/dc/elements/1.1/";
@@ -89,11 +91,17 @@ fn language(value: &str) -> Option<(&str, &str)> {
 }
 
 /// Validate an RDF language alternative as a whole, rejecting duplicate languages and placing `x-default` first.
-fn language_alternatives<'a>(values: &[&'a str]) -> Option<Vec<(&'a str, &'a str)>> {
+fn language_alternatives<'a>(values: &'a [Cow<'_, str>]) -> Option<Vec<(&'a str, &'a str)>> {
     let mut parsed = values.iter().map(|value| language(value)).collect::<Option<Vec<_>>>()?;
-    let unique: std::collections::BTreeSet<_> = parsed.iter().map(|(lang, _)| *lang).collect();
+    let unique: std::collections::BTreeSet<_> = parsed.iter().map(|(lang, _)| lang.to_ascii_lowercase()).collect();
     if unique.len() != parsed.len() {
         return None;
+    }
+    // Preserve the source spelling of ordinary language tags.
+    for (lang, _) in &mut parsed {
+        if lang.eq_ignore_ascii_case("x-default") {
+            *lang = "x-default";
+        }
     }
     parsed.sort_by_key(|(lang, _)| *lang != "x-default");
     Some(parsed)
@@ -103,12 +111,12 @@ fn language_alternatives<'a>(values: &[&'a str]) -> Option<Vec<(&'a str, &'a str
 /// invalid language alternatives and source binary values do not become RDF.
 fn xmp(tree: &roxmltree::Document<'_>) -> Option<String> {
     let root = tree.root_element();
-    let mut groups: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for tag in root.children().filter(|n| n.has_tag_name("tag") && n.attribute("encoding").is_none() && !n.children().any(|child| child.is_element())) {
-        let (Some(key), Some(value)) = (tag.attribute("name"), tag.text()) else {
-            continue;
-        };
-        if schema(key).is_some() {
+    let mut groups: BTreeMap<&str, Vec<Cow<'_, str>>> = BTreeMap::new();
+    for tag in root.children().filter(|n| n.has_tag_name("tag")) {
+        if let Some(key) = tag.attribute("name")
+            && schema(key).is_some()
+            && let Some(value) = plain_tag_text(tag)
+        {
             groups.entry(key).or_default().push(value);
         }
     }
@@ -151,7 +159,7 @@ fn xmp(tree: &roxmltree::Document<'_>) -> Option<String> {
                 append(&mut out, ">")?;
                 for value in values {
                     append(&mut out, "<rdf:li>")?;
-                    escape(&mut out, value)?;
+                    escape(&mut out, &value)?;
                     append(&mut out, "</rdf:li>")?;
                 }
                 append(&mut out, "</rdf:")?;
@@ -205,14 +213,10 @@ pub(super) fn has_exif_directory(raw: &[u8]) -> bool {
 }
 
 fn exif(tree: &roxmltree::Document<'_>) -> Option<Vec<u8>> {
-    let mut fields: BTreeMap<u16, &str> = BTreeMap::new();
+    let mut fields: BTreeMap<u16, Cow<'_, str>> = BTreeMap::new();
     let mut duplicate = std::collections::BTreeSet::new();
-    for tag in
-        tree.root_element().children().filter(|n| n.has_tag_name("tag") && n.attribute("encoding").is_none() && !n.children().any(|child| child.is_element()))
-    {
-        let (Some(key), Some(value)) = (tag.attribute("name"), tag.text()) else {
-            continue;
-        };
+    for tag in tree.root_element().children().filter(|n| n.has_tag_name("tag")) {
+        let Some(key) = tag.attribute("name") else { continue };
         let id = match key {
             "Exif.Image.ImageDescription" => 270,
             "Exif.Image.Make" => 271,
@@ -223,6 +227,7 @@ fn exif(tree: &roxmltree::Document<'_>) -> Option<Vec<u8>> {
             "Exif.Image.Copyright" => 33432,
             _ => continue,
         };
+        let Some(value) = plain_tag_text(tag) else { continue };
         if !value.is_ascii() || value.as_bytes().contains(&0) || value.len() > MAX_PACKET {
             continue;
         }

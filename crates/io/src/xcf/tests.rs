@@ -1660,3 +1660,32 @@ fn malformed_selection_marker_does_not_steal_the_document_selection() {
     let ImportConversion::Report(report) = image.outcomes.finish().unwrap() else { panic!("report") };
     assert!(report.entries.iter().any(|entry| entry.feature_code == "xcf.source_property.4" && entry.reason == ConversionReason::InvalidOptionalData));
 }
+
+#[test]
+fn malformed_layer_markers_keep_rasters_and_do_not_shift_group_indices() {
+    let item_path = |indices: [u32; 2]| indices.into_iter().flat_map(u32::to_be_bytes).collect::<Vec<_>>();
+    let mut group = TestLayer::rgba("First group", 1, 1, Vec::new());
+    group.props.push((29, Vec::new()));
+    let mut malformed = TestLayer::rgba("Recovered raster", 1, 1, vec![17, 31, 57, 255]);
+    let mut partial = item_path([0, 0]);
+    partial.push(128);
+    malformed.props.extend([(29, vec![1]), (30, partial)]);
+    let mut later = TestLayer::rgba("Second group", 1, 1, Vec::new());
+    later.props.push((29, Vec::new()));
+    let mut child = TestLayer::rgba("Valid child", 1, 1, vec![67, 43, 31, 255]);
+    child.props.push((30, item_path([1, 0])));
+    let mut image = TestImage::rgb8(1, 1);
+    image.layers.extend([group, malformed, later, child]);
+
+    let result = open(&image.write()).unwrap();
+    assert_eq!(result.document.layers.len(), 3);
+    let raster = layer_at(&result.document.layers, "Recovered raster");
+    assert_eq!(raster.surface().unwrap().pixel(0, 0), [17. / 255., 31. / 255., 57. / 255., 1.]);
+    assert!(layer_at(&result.document.layers, "First group").children().unwrap().is_empty());
+    assert_eq!(layer_at(&result.document.layers, "Second group").children().unwrap()[0].name, "Valid child");
+    use photocraft_doc::import_conversion::ImportConversion;
+    let Some(ImportConversion::Report(report)) = result.document.metadata.import_conversion.as_deref() else { panic!("report") };
+    for code in ["xcf.source_property.29", "xcf.source_property.30"] {
+        assert!(report.entries.iter().any(|entry| entry.feature_code == code && entry.reason == ConversionReason::InvalidOptionalData));
+    }
+}

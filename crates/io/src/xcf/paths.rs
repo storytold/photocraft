@@ -54,6 +54,7 @@ thread_local! {
 }
 
 pub(super) struct DecodedPath {
+    pub source_index: usize,
     pub named: NamedPath,
     pub tattoo: Option<u32>,
     pub selected: bool,
@@ -378,6 +379,7 @@ fn vectors_inner(data: &[u8], ctl: &photocraft_raster::Interrupt<'_>) -> Result<
         }
         let Geometry { path, source_only, complete } = strokes(&mut c, n, &mut budget, ctl)?;
         out.push(DecodedPath {
+            source_index: i,
             named: NamedPath { name, path, psd_raw: None },
             tattoo: (tattoo != 0).then_some(tattoo),
             selected: i == active,
@@ -398,18 +400,19 @@ fn vectors_inner(data: &[u8], ctl: &photocraft_raster::Interrupt<'_>) -> Result<
 #[cfg(test)]
 pub(super) fn legacy(data: &[u8]) -> Result<Vec<DecodedPath>> {
     legacy_with_work(data, &mut DecodeWork::default(), &photocraft_raster::Interrupt::NONE)?
+        .map(|(paths, _)| paths)
         .ok_or_else(|| crate::IoError::Unsupported("saved-path source-work allowance exhausted".into()))
 }
 
 /// None declines optional geometry before allocation once file work is spent.
-pub(super) fn legacy_with_work(data: &[u8], work: &mut DecodeWork, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Option<Vec<DecodedPath>>> {
+pub(super) fn legacy_with_work(data: &[u8], work: &mut DecodeWork, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Option<(Vec<DecodedPath>, usize)>> {
     if !work.admit(data.len(), ctl)? {
         return Ok(None);
     }
     legacy_inner(data, ctl).map(Some)
 }
 
-fn legacy_inner(data: &[u8], ctl: &photocraft_raster::Interrupt<'_>) -> Result<Vec<DecodedPath>> {
+fn legacy_inner(data: &[u8], ctl: &photocraft_raster::Interrupt<'_>) -> Result<(Vec<DecodedPath>, usize)> {
     let mut c = Cursor { b: data, pos: 0, wide: false };
     let active = c.u32()? as usize;
     let n = count(&mut c, MAX_PATHS, "legacy path")?;
@@ -436,6 +439,9 @@ fn legacy_inner(data: &[u8], ctl: &photocraft_raster::Interrupt<'_>) -> Result<V
             }
             _ => return Err(invalid("unsupported legacy path record version")),
         };
+        if points == 0 {
+            continue;
+        }
         if closed > 1 {
             return Err(invalid("invalid legacy path closure"));
         }
@@ -494,6 +500,7 @@ fn legacy_inner(data: &[u8], ctl: &photocraft_raster::Interrupt<'_>) -> Result<V
             start = end;
         }
         out.push(DecodedPath {
+            source_index: index,
             named: NamedPath { name, path: native_path(subpaths), psd_raw: None },
             tattoo,
             selected: index == active,
@@ -505,7 +512,7 @@ fn legacy_inner(data: &[u8], ctl: &photocraft_raster::Interrupt<'_>) -> Result<V
     if c.pos != data.len() {
         return Err(invalid("trailing legacy path bytes"));
     }
-    Ok(out)
+    Ok((out, n))
 }
 
 /// A standalone version-18+ path, bounded by its declared payload length.
@@ -565,6 +572,7 @@ fn standalone_inner(c: &Cursor<'_>, offset: usize, ctl: &photocraft_raster::Inte
         return Err(invalid("standalone path payload length mismatch"));
     }
     Ok(DecodedPath {
+        source_index: 0,
         named: NamedPath { name, path, psd_raw: None },
         tattoo,
         selected,
@@ -626,6 +634,42 @@ mod tests {
         assert_eq!(k.out_ctrl, Point::new(6.0, 7.0));
         assert_eq!(p.named.path.control_bounds(), Some((-4.5, -3.0, 25.0, 9.0)));
     }
+    #[test]
+    fn empty_legacy_records_are_skipped_without_renumbering_later_path_sources() {
+        use crate::xcf::tests::TestImage;
+        use photocraft_doc::import_conversion::ImportConversion;
+        for (active, selection) in [(1, None), (2, Some(1))] {
+            let mut data = Vec::new();
+            u(&mut data, active);
+            u(&mut data, 4);
+            for (name, version, points) in [("First", 1, 2), ("Empty marked active", 2, 0), ("Later", 3, 2), ("Last empty", 3, 0)] {
+                string(&mut data, name);
+                u(&mut data, 0);
+                data.push(0);
+                for value in [0, points, version] {
+                    u(&mut data, value);
+                }
+                if version >= 2 {
+                    u(&mut data, 0);
+                }
+                if version == 3 {
+                    u(&mut data, 52);
+                }
+                for value in [[1, 0, 0], [2, 0, 0]].into_iter().take(points as usize).flatten() {
+                    u(&mut data, value);
+                }
+            }
+            let mut source = TestImage::rgb8(1, 1);
+            source.image_props.push((23, data));
+            let imported = crate::import("legacy-empty-path.xcf", &source.write()).unwrap();
+            assert_eq!(imported.document.paths.iter().map(|path| path.name.as_str()).collect::<Vec<_>>(), ["First", "Later"]);
+            assert_eq!(imported.initial_view.as_ref().and_then(|view| view.selected_path), selection);
+            let Some(ImportConversion::Report(report)) = imported.document.metadata.import_conversion.as_deref() else { panic!("report") };
+            let entry = report.entries.iter().find(|entry| entry.source.name == "Later").unwrap();
+            assert_eq!(entry.source.ordinal, 2);
+        }
+    }
+
     /// Verify standalone path records consume complete framing and reject every truncated prefix.
     #[test]
     fn standalone_is_framed_and_rejects_every_truncation() {

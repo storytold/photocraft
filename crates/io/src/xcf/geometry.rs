@@ -32,7 +32,7 @@ fn scan(reader: &mut dyn Read, require_order: bool, ctl: &Interrupt<'_>) -> Resu
             return Ok(((f64::from(header.width), f64::from(header.height)), f64::from(dpi)));
         };
         count += 1;
-        let remaining = wire::property_payload(&mut input, kind, declared, Some(header.version), header.base_type == 2)?;
+        let remaining = wire::property_payload(&mut input, kind, declared, Some(header.version), header.base_type == 2, ctl)?;
         if kind == 19 && remaining >= 8 {
             let mut pair = [0; 8];
             input.read_exact(&mut pair)?;

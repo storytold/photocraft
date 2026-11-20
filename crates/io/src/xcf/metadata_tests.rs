@@ -75,7 +75,15 @@ fn metadata_xml_admission_preserves_pixels_and_reports_skipped_tags() {
     };
     let declarations: String = (0..1500).map(|index| format!("<other xmlns:p{index}='urn:p{index}'/>")).collect();
     let with_namespaces = format!("<metadata>{declarations}<tag name='Xmp.dc.title'>Title</tag></metadata>");
-    for (xml, limit) in [(with_attributes(256), None), (with_attributes(257), Some("attribute-parse")), (with_namespaces, Some("namespace-parse"))] {
+    let with_equals = format!("<metadata><tag name='Xmp.dc.title'>Title</tag><tag name='Xmp.xmp.Label'>{}</tag></metadata>", "=".repeat(70_000));
+    let with_comment = format!("<metadata><tag name='Xmp.dc.title'>Title</tag><!-- {} --></metadata>", "<".repeat(70_000));
+    for (xml, limit) in [
+        (with_attributes(256), None),
+        (with_attributes(257), Some("attribute-parse")),
+        (with_namespaces, Some("namespace-parse")),
+        (with_equals, Some("parser reservation")),
+        (with_comment, Some("parser reservation")),
+    ] {
         let mut image = TestImage::rgb8(1, 1);
         image.layers.push(TestLayer::rgba("Saved pixels", 1, 1, vec![17, 31, 57, 255]));
         image.image_props.push((21, parasite("gimp-image-metadata", xml.as_bytes())));
@@ -576,4 +584,61 @@ fn a_truncated_raw_exif_directory_leaves_xml_synthesis_available() {
     assert!(exif.windows(b"Synthetic Artist".len()).any(|window| window == b"Synthetic Artist"));
     let Some(ImportConversion::Report(report)) = result.document.metadata.import_conversion.as_deref() else { panic!("report") };
     assert!(report.attachments.iter().any(|attachment| attachment.bytes.ends_with(raw)));
+}
+
+#[test]
+fn split_plain_metadata_is_complete_in_native_text_xmp_and_exif() {
+    let xml = br#"<metadata>
+      <tag name="Xmp.xmp.Label">North<!-- note --> America</tag>
+      <tag name="Exif.Image.Artist">AB<?note here?>CD</tag>
+      <tag name="Xmp.xmp.Rating">1<nested>2</nested>3</tag>
+      <tag name="Xmp.dc.title">lang=&quot;en-US&quot; Title</tag>
+      <tag name="Xmp.dc.title">lang=&quot;EN-us&quot; Alternate</tag>
+      <tag name="Xmp.dc.description">lang=&quot;fr-CA&quot; Description</tag>
+      <tag name="Xmp.dc.description">lang=&quot;X-DEFAULT&quot; Default</tag>
+    </metadata>"#;
+    let mut image = TestImage::rgb8(1, 1);
+    image.image_props.push((21, parasite("gimp-image-metadata", xml)));
+    let result = open(&image.write());
+    let metadata = &result.document.metadata;
+    assert!(metadata.text.iter().any(|(name, value)| name == "Xmp.xmp.Label" && value == "North America"));
+    assert!(metadata.text.iter().any(|(name, value)| name == "Exif.Image.Artist" && value == "ABCD"));
+    assert!(!metadata.text.iter().any(|(name, _)| name == "Xmp.xmp.Rating"));
+    assert_eq!(metadata.text.iter().filter(|(name, _)| name == "Xmp.dc.title").count(), 2);
+    let xmp = metadata.xmp.as_deref().unwrap();
+    assert!(xmp.contains("<xmp:Label>North America</xmp:Label>"));
+    assert!(!xmp.contains("<dc:title>") && !xmp.contains("<xmp:Rating>"));
+    assert!(xmp.contains("<rdf:li xml:lang=\"x-default\">Default</rdf:li><rdf:li xml:lang=\"fr-CA\">Description</rdf:li>"));
+    assert!(metadata.exif.as_ref().unwrap().windows(5).any(|bytes| bytes == b"ABCD\0"));
+}
+
+#[test]
+fn an_oversized_float_opacity_property_keeps_the_channel_byte_fallback() {
+    let mut w = W::new(11);
+    for value in [1, 1, 0, 150] {
+        w.u32(value);
+    }
+    w.prop(17, &[0]);
+    w.end();
+    w.ptr(0);
+    let channel_slot = w.slot();
+    w.ptr(0);
+    let channel = w.out.len();
+    w.patch(channel_slot, channel);
+    w.u32(1);
+    w.u32(1);
+    w.string("Saved coverage");
+    w.prop_u32(6, 255);
+    w.prop(33, &0.25f32.to_be_bytes());
+    w.prop(33, &[0.5f32.to_be_bytes(), [7; 4]].concat());
+    w.end();
+    let hierarchy_slot = w.slot();
+    let coverage = hierarchy(&mut w, 1, 1, 1, &[64], Compression::None);
+    w.patch(hierarchy_slot, coverage);
+    let result = open(&w.out);
+    assert_eq!(result.document.channels[0].opacity, 1.);
+    assert_eq!(result.document.channels[0].surface.pixel(0, 0), [64. / 255.]);
+    use photocraft_doc::import_conversion::ImportConversion;
+    let Some(ImportConversion::Report(report)) = result.document.metadata.import_conversion.as_deref() else { panic!("report") };
+    assert!(report.entries.iter().any(|entry| entry.feature_code == "xcf.source_property.33" && entry.reason == ConversionReason::InvalidOptionalData));
 }

@@ -141,8 +141,14 @@ impl<'a> Image<'a> {
             let mut channel = AlphaChannel::new(name, surface);
             let handled = metadata::channel_overlay(&mut channel, &cprops);
             for property in &cprops {
-                if property.kind == 4 && !property.data.is_empty() {
-                    self.outcomes.property_with_reason(channel_outcome, 4, property.offset, property.data, ConversionReason::InvalidOptionalData)?;
+                if (property.kind == 4 && !property.data.is_empty()) || (property.kind == 33 && property.data.len() != 4) {
+                    self.outcomes.property_with_reason(
+                        channel_outcome,
+                        property.kind,
+                        property.offset,
+                        property.data,
+                        ConversionReason::InvalidOptionalData,
+                    )?;
                 } else if !matches!(property.kind, 4 | 20) && !handled.contains(&property.kind) {
                     let reason = match property.kind {
                         3 | 8 => ConversionReason::NativePolicy,
@@ -522,6 +528,8 @@ impl<'a> Image<'a> {
                 if self.outcomes.parasites_with_work(outcome, property.offset, property.data, &["gimphoto-clipped"], &mut self.report_parasite_work, ctl)? {
                     self.metadata_limit(outcome, "xcf.parasite_work", "Layer parasite reporting exceeded the shared scan-work allowance")?;
                 }
+            } else if (property.kind == 29 && !property.data.is_empty()) || (property.kind == 30 && !property.data.len().is_multiple_of(4)) {
+                self.outcomes.property_with_reason(outcome, property.kind, property.offset, property.data, ConversionReason::InvalidOptionalData)?;
             } else if !matches!(property.kind, 6 | 7 | 8 | 9 | 10 | 11 | 15 | 20 | 28 | 29 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 | 48) {
                 let reason = match property.kind {
                     5 => {
@@ -661,7 +669,9 @@ impl<'a> Image<'a> {
         let lprops = props(&mut c)?;
         let hptr = c.ptr()?;
         let mptr = c.ptr()?;
+        let before_effect_pointers = self.meta_budget;
         let (effect_pointers, effects_limited) = if self.version >= 20 { self.optional_effect_pointers(&mut c, ctl)? } else { (Vec::new(), false) };
+        let effect_pointer_storage = before_effect_pointers - self.meta_budget;
         let alpha = match kind {
             0 | 2 | 4 => false,
             1 | 3 | 5 => true,
@@ -679,6 +689,7 @@ impl<'a> Image<'a> {
         let mut expanded = true;
         let mut path = Vec::new();
         let mut path_limited = false;
+        let mut invalid_path = false;
         let mut text = false;
         let mut vector = false;
         let mut link = false;
@@ -710,11 +721,16 @@ impl<'a> Image<'a> {
                 26 => text = true,
                 20 => tattoo = (v != 0).then_some(v),
                 28 => locks.pixels = v != 0,
-                29 => group = true,
-                30 => {
+                29 if p.data.is_empty() => group = true,
+                30 if p.data.len().is_multiple_of(4) => {
                     let (retained, limited) = self.retained_item_path(p.data);
                     path = retained;
                     path_limited |= limited;
+                    invalid_path = false;
+                }
+                30 => {
+                    path.clear();
+                    invalid_path = true;
                 }
                 31 => expanded = v & 1 != 0,
                 32 => locks.position = v != 0,
@@ -868,6 +884,8 @@ impl<'a> Image<'a> {
             if let Some(bounds) = frame {
                 self.pending_effects.push(PendingLayerEffects { layer: layer.id, owner: outcome, bounds, pointers: effect_pointers });
             } else {
+                drop(effect_pointers);
+                self.meta_budget += effect_pointer_storage;
                 // This frame belongs only to optional stages, not to the already
                 // admitted owner pixels. Never discard a usable image for it.
                 self.outcomes.warning(
@@ -890,7 +908,7 @@ impl<'a> Image<'a> {
                 })?;
             }
         }
-        let path_omitted = path_limited && path.is_empty();
+        let path_omitted = invalid_path || (path_limited && path.is_empty());
         Ok(Some((Node { layer, source_ordinal: ordinal, path, path_omitted, group, children: Vec::new(), outcome }, linear)))
     }
 }

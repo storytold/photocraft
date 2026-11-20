@@ -8,10 +8,22 @@ use crate::IoError;
 
 const MAX_ATTRIBUTES: usize = 256;
 const PARSE_WORK: usize = 1 << 20;
+// roxmltree 0.21 sizes its initial node and attribute vectors from raw
+// '<' and '=' counts, including occurrences in text, comments and values.
+const MAX_INITIAL_XML_SLOTS: usize = 64 * 1024;
 
 pub(super) fn admit(xml: &str, label: &str, max_input: usize, max_depth: usize, ctl: &Interrupt<'_>) -> Result<()> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    if xml.len() > max_input || craft_svg::guard::too_wide(xml, MAX_ATTRIBUTES, PARSE_WORK) {
+    if xml.len() > max_input {
+        return Err(IoError::Unsupported(format!("{label} exceeds the bounded XML byte allowance")));
+    }
+    let mut slots_left = MAX_INITIAL_XML_SLOTS;
+    for chunk in xml.as_bytes().chunks(4096) {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        let slots = chunk.iter().filter(|&&byte| matches!(byte, b'<' | b'=')).count();
+        slots_left = slots_left.checked_sub(slots).ok_or_else(|| IoError::Unsupported(format!("{label} exceeds the bounded XML parser reservation")))?;
+    }
+    if craft_svg::guard::too_wide(xml, MAX_ATTRIBUTES, PARSE_WORK) {
         return Err(IoError::Unsupported(format!("{label} exceeds the bounded XML attribute-parse allowance")));
     }
     ctl.check().map_err(|_| IoError::Cancelled)?;

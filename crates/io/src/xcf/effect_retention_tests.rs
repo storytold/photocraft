@@ -210,6 +210,9 @@ fn repeated_discarded_configs_leave_the_exact_retained_allowance_for_accepted_da
         })
         .unwrap();
     image.inventory_coverage_effects(owner, &[repeated], &Interrupt::NONE).unwrap();
+    let coverage = image.outcomes.entry(owner + 1).unwrap();
+    assert_eq!(coverage.feature_code, "xcf.coverage_effect");
+    assert!(coverage.source_description.contains(&format!("4 ordered arguments ({} config bytes, 0 string bytes)", raw.len())));
     let (layers, _) = image.import_layers(&[later], PixelFormat::RGBA8, PixelFormat::GRAY8, &Interrupt::NONE).unwrap();
     assert_eq!(layers[0].surface().unwrap().pixel(0, 0), vec![17. / 255., 31. / 255., 57. / 255., 1.]);
     let mut document = Document::new("Later raster", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
@@ -234,4 +237,31 @@ fn rejected_optional_lists_spend_shared_scan_work_across_owners() {
         assert_eq!(image.effect_decode_work.stats().0, remaining);
         assert_eq!(cursor.pos, offset);
     }
+}
+
+#[test]
+fn invalid_frame_refunds_pointer_storage_for_later_layer_names_without_refunding_work() {
+    let mut w = W { out: vec![0; 4], wide: true };
+    let frame = w.out.len();
+    for word in [u32::MAX, 1, 1] {
+        w.u32(word);
+    }
+    w.string("Frame");
+    w.prop(29, &[]);
+    w.end();
+    w.ptr(0);
+    w.ptr(0);
+    pointer_list(&mut w, &[1]);
+    let raster = layer(&mut w, 0, &[]);
+
+    let budget = 5 + 4 * std::mem::size_of::<u64>();
+    let mut reader = image(&w.out, budget);
+    reader.effect_decode_work = effects::DecodeWork::with_limit(24);
+    reader.layer(0, frame, PixelFormat::RGBA8, PixelFormat::GRAY8, &Interrupt::NONE).unwrap();
+    assert_eq!(reader.meta_budget, budget - 5, "only the admitted name remains charged");
+    assert_eq!(reader.effect_decode_work.stats().0, 8, "the discarded pointer and its terminator still cost work");
+    assert!(reader.pending_effects.is_empty());
+    let (node, _) = reader.layer(1, raster, PixelFormat::RGBA8, PixelFormat::GRAY8, &Interrupt::NONE).unwrap().unwrap();
+    assert_eq!(node.layer.name, "Raster");
+    assert_eq!(reader.effect_decode_work.stats().0, 0);
 }

@@ -75,7 +75,9 @@ pub(super) fn channel_overlay(channel: &mut AlphaChannel, props: &[Prop<'_>]) ->
         channel.opacity = v as f32 / 255.0;
         handled.push(6);
     }
-    if let Some(v) = props.iter().rev().find(|p| p.kind == 33).and_then(|p| be_f32(p.data)).filter(|v| v.is_finite() && (0.0..=1.0).contains(v)) {
+    if let Some(v) =
+        props.iter().rev().find(|p| p.kind == 33).and_then(|p| p.data.as_array::<4>().map(|word| f32::from_be_bytes(*word))).filter(|v| (0.0..=1.0).contains(v))
+    {
         channel.opacity = v;
         handled.push(33);
     }
@@ -412,10 +414,10 @@ pub(super) fn image_with_work<'a>(
                             metadata_incomplete = true;
                             continue;
                         }
-                        if let (Some(key), Some(value)) = (node.attribute("name"), node.text())
+                        if let (Some(key), Some(value)) = (node.attribute("name"), plain_tag_text(node))
                             && matches!(key.split('.').next(), Some("Exif" | "Xmp" | "Iptc"))
                         {
-                            let omitted = !push_text(doc, key, value, &mut text_storage, budget);
+                            let omitted = !push_text(doc, key, &value, &mut text_storage, budget);
                             metadata_incomplete |= omitted;
                             retention_limited |= omitted;
                         }
@@ -474,6 +476,31 @@ pub(super) fn image_with_work<'a>(
 }
 
 /// Admit XML parser work before allocating a DOM for optional metadata.
+/// Borrow a single segment and bound copies before joining split text nodes.
+pub(super) fn plain_tag_text<'a>(tag: roxmltree::Node<'a, '_>) -> Option<std::borrow::Cow<'a, str>> {
+    use std::borrow::Cow;
+
+    if tag.attribute("encoding").is_some() || tag.children().any(|child| child.is_element()) {
+        return None;
+    }
+    let mut text = tag.children().filter(|child| child.is_text()).filter_map(|child| child.text());
+    let first = text.next()?;
+    let Some(second) = text.next() else { return Some(Cow::Borrowed(first)) };
+    let total = text.clone().try_fold(first.len().checked_add(second.len())?, |total, next| total.checked_add(next.len()))?;
+    // The XML preflight limits the whole packet to this size, including tags.
+    if total > super::MAX_METADATA_BYTES {
+        return None;
+    }
+    let mut joined = String::new();
+    joined.try_reserve_exact(total).ok()?;
+    joined.push_str(first);
+    joined.push_str(second);
+    for segment in text {
+        joined.push_str(segment);
+    }
+    Some(Cow::Owned(joined))
+}
+
 fn parse_xml<'a>(xml: &'a str, ctl: &photocraft_raster::Interrupt<'_>) -> Result<roxmltree::Document<'a>> {
     super::xml_work::admit(xml, "source metadata", super::MAX_METADATA_BYTES, super::MAX_DEPTH, ctl)?;
     let tree =

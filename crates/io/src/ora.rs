@@ -173,7 +173,13 @@ fn composite_op(op: &str, layer: &str, warnings: &mut Warnings) -> BlendMode {
 #[derive(Default)]
 pub(crate) struct Warnings {
     general: Vec<String>,
-    per_layer: Vec<(String, Vec<String>)>,
+    per_layer: Vec<(String, LayerWarning)>,
+}
+
+#[derive(Default)]
+struct LayerWarning {
+    names: std::collections::HashSet<String>,
+    first_names: Vec<String>,
 }
 
 impl Warnings {
@@ -183,22 +189,27 @@ impl Warnings {
         }
     }
     pub(crate) fn layer(&mut self, layer: &str, message: &str) {
-        match self.per_layer.iter_mut().find(|(m, _)| m == message) {
-            Some((_, layers)) => {
-                if !layers.iter().any(|l| l == layer) {
-                    layers.push(layer.to_string());
-                }
+        let warning = match self.per_layer.iter_mut().find(|(m, _)| m == message) {
+            Some((_, warning)) => warning,
+            None => {
+                self.per_layer.push((message.to_string(), LayerWarning::default()));
+                let Some((_, warning)) = self.per_layer.last_mut() else { return };
+                warning
             }
-            None => self.per_layer.push((message.to_string(), vec![layer.to_string()])),
+        };
+        if !warning.names.contains(layer) {
+            warning.names.insert(layer.to_string());
+            if warning.first_names.len() < 5 {
+                warning.first_names.push(format!("\"{layer}\""));
+            }
         }
     }
     pub(crate) fn finish(self) -> Vec<String> {
         let mut out = self.general;
-        for (message, layers) in self.per_layer {
-            let shown: Vec<String> = layers.iter().take(5).map(|l| format!("\"{l}\"")).collect();
-            let more = layers.len().saturating_sub(5);
+        for (message, warning) in self.per_layer {
+            let more = warning.names.len().saturating_sub(warning.first_names.len());
             let tail = if more > 0 { format!(" and {more} more") } else { String::new() };
-            out.push(format!("{} ({}{tail})", message, shown.join(", ")));
+            out.push(format!("{} ({}{tail})", message, warning.first_names.join(", ")));
         }
         out
     }

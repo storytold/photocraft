@@ -131,3 +131,35 @@ fn pango_hex_widths_and_strikethrough_aliases_preserve_native_style() {
     }
     assert!(markup_runs("<markup><span strikethrough='unknown'>X</span></markup>", &CharStyle::default(), &HashMap::new(), 72., &mut Vec::new()).is_err());
 }
+
+#[test]
+fn named_markup_weights_share_the_font_description_aliases_and_keep_numeric_validation() {
+    for (source, expected, clamped) in [
+        ("thin", 100, false),
+        ("EXTRA-LIGHT", 200, false),
+        ("demiLight", 350, false),
+        ("regular", 400, false),
+        ("Demi-Bold", 600, false),
+        ("Bold", 700, false),
+        ("extrabold", 800, false),
+        ("black", 900, false),
+        ("ultraheavy", 900, true),
+        ("extra-heavy", 900, true),
+        ("ultra-black", 900, true),
+        ("ExtraBlack", 900, true),
+        ("125", 125, false),
+        ("1000", 900, true),
+    ] {
+        for attribute in ["weight", "font_weight"] {
+            let xml = format!("<markup><span {attribute}='{source}'>A</span></markup>");
+            let mut notes = Vec::new();
+            let (_, runs) = markup_runs(&xml, &CharStyle::default(), &HashMap::new(), 72., &mut notes).unwrap();
+            assert_eq!(runs[0].style.weight, expected, "{attribute}={source}");
+            assert_eq!(!notes.is_empty(), clamped, "{attribute}={source}");
+        }
+    }
+    for bad in ["nonsense", "-500", "1001"] {
+        let xml = format!("<markup><span weight='{bad}'>A</span></markup>");
+        assert!(markup_runs(&xml, &CharStyle::default(), &HashMap::new(), 72., &mut Vec::new()).is_err());
+    }
+}

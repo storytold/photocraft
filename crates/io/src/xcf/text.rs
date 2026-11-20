@@ -1095,29 +1095,11 @@ fn font_description(source: &str, style: &mut CharStyle, dpi: f64, apply_size: b
             words.pop();
         }
     }
-    const OPTIONS: &[&str] = &[
+    const FACE_OPTIONS: &[&str] = &[
         "normal",
         "roman",
-        "regular",
         "italic",
         "oblique",
-        "thin",
-        "ultralight",
-        "extralight",
-        "light",
-        "semilight",
-        "demilight",
-        "book",
-        "medium",
-        "semibold",
-        "demibold",
-        "bold",
-        "ultrabold",
-        "extrabold",
-        "heavy",
-        "black",
-        "ultrablack",
-        "extrablack",
         "smallcaps",
         "ultracondensed",
         "extracondensed",
@@ -1128,7 +1110,13 @@ fn font_description(source: &str, style: &mut CharStyle, dpi: f64, apply_size: b
         "extraexpanded",
         "ultraexpanded",
     ];
-    let suffix = words.iter().rposition(|word| !OPTIONS.contains(&word.to_ascii_lowercase().replace('-', "").as_str())).map_or(0, |index| index + 1);
+    let suffix = words
+        .iter()
+        .rposition(|word| {
+            let option = word.to_ascii_lowercase().replace('-', "");
+            !FACE_OPTIONS.contains(&option.as_str()) && named_pango_weight(&option).is_none()
+        })
+        .map_or(0, |index| index + 1);
     let style_names = words.split_off(suffix);
     // A complete font description supplies normal defaults for omitted face options;
     // it must not accidentally inherit the preceding span's bold/italic face identity.
@@ -1146,20 +1134,6 @@ fn font_description(source: &str, style: &mut CharStyle, dpi: f64, apply_size: b
                 style.italic = false;
             }
             "italic" | "oblique" => style.italic = true,
-            "thin" => style.weight = 100,
-            "ultralight" | "extralight" => style.weight = 200,
-            "light" => style.weight = 300,
-            "semilight" | "demilight" => style.weight = 350,
-            "book" => style.weight = 380,
-            "medium" => style.weight = 500,
-            "semibold" | "demibold" => style.weight = 600,
-            "bold" => style.weight = 700,
-            "ultrabold" | "extrabold" => style.weight = 800,
-            "heavy" | "black" => style.weight = 900,
-            "ultrablack" | "extrablack" => {
-                style.weight = 900;
-                note(notes, "Source ultra-black font weight becomes native maximum 900 weight".into());
-            }
             "smallcaps" => style.caps = Caps::SmallCaps,
             "ultracondensed" => style.horizontal_scale = 0.5,
             "extracondensed" => style.horizontal_scale = 0.625,
@@ -1169,7 +1143,10 @@ fn font_description(source: &str, style: &mut CharStyle, dpi: f64, apply_size: b
             "expanded" => style.horizontal_scale = 1.25,
             "extraexpanded" => style.horizontal_scale = 1.5,
             "ultraexpanded" => style.horizontal_scale = 2.,
-            _ => break,
+            _ => {
+                let Some(weight) = named_pango_weight(&option) else { break };
+                style.weight = native_pango_weight(weight, notes);
+            }
         }
     }
     if !style_names.is_empty() {
@@ -1189,6 +1166,32 @@ fn font_description(source: &str, style: &mut CharStyle, dpi: f64, apply_size: b
         return Err(crate::IoError::Unsupported("font description size is outside the native editable range".into()));
     }
     Ok(())
+}
+
+/// Named weights shared by GIMP's font descriptions and Pango markup.
+fn named_pango_weight(normalized: &str) -> Option<u16> {
+    Some(match normalized {
+        "thin" => 100,
+        "ultralight" | "extralight" => 200,
+        "light" => 300,
+        "semilight" | "demilight" => 350,
+        "book" => 380,
+        "normal" | "regular" => 400,
+        "medium" => 500,
+        "semibold" | "demibold" => 600,
+        "bold" => 700,
+        "ultrabold" | "extrabold" => 800,
+        "heavy" | "black" => 900,
+        "ultraheavy" | "extraheavy" | "ultrablack" | "extrablack" => 1000,
+        _ => return None,
+    })
+}
+
+fn native_pango_weight(weight: u16, notes: &mut Vec<String>) -> u16 {
+    if weight > 900 {
+        note(notes, "Source ultra-black font weight becomes native maximum 900 weight".into());
+    }
+    weight.min(900)
 }
 
 struct InheritedMarkupAttributes<'a> {
@@ -1429,28 +1432,19 @@ fn markup_runs_with_attribute_allowance(
                         style.font_family = a.value().into();
                     }
                     "weight" | "font_weight" => {
-                        style.weight = match a.value() {
-                            "bold" => 700,
-                            "normal" => 400,
-                            "ultralight" => 200,
-                            "light" => 300,
-                            "semilight" => 350,
-                            "book" => 380,
-                            "medium" => 500,
-                            "semibold" => 600,
-                            "ultrabold" => 800,
-                            "heavy" => 900,
-                            s => {
-                                let weight = s.parse::<u16>().map_err(|_| invalid("invalid markup weight"))?;
-                                if weight > 1000 {
-                                    return Err(crate::IoError::Unsupported("source numeric font weight needs an explicit native conversion".into()));
-                                }
-                                if !(100..=900).contains(&weight) {
-                                    note(notes, "Source numeric font weight becomes the nearest editable native endpoint in100..900".into());
-                                }
-                                weight.clamp(100, 900)
+                        let normalized = a.value().to_ascii_lowercase().replace('-', "");
+                        style.weight = if let Some(weight) = named_pango_weight(&normalized) {
+                            native_pango_weight(weight, notes)
+                        } else {
+                            let weight = a.value().parse::<u16>().map_err(|_| invalid("invalid markup weight"))?;
+                            if weight > 1000 {
+                                return Err(crate::IoError::Unsupported("source numeric font weight needs an explicit native conversion".into()));
                             }
-                        }
+                            if !(100..=900).contains(&weight) {
+                                note(notes, "Source numeric font weight becomes the nearest editable native endpoint in100..900".into());
+                            }
+                            weight.clamp(100, 900)
+                        };
                     }
                     "style" | "font_style" => {
                         style.italic = match a.value() {

@@ -42,8 +42,13 @@ fn hierarchy_alpha_synthesis_checks_layout_and_cancellation_without_clamping_hdr
     assert_eq!(hdr.hierarchy_with_alpha(pointer, 3, false, true, &Interrupt::NONE).unwrap().data, [-0.25, 3.5, f32::MIN_POSITIVE, 1., 0.75, -2., 7., 1.]);
     assert_eq!(hdr.budget, 0);
     for (base_type, channels, coverage) in [(0, 0, false), (0, 4, false), (1, 2, false), (2, 2, false), (0, 3, true)] {
-        let mut invalid = image(&bytes, 64, base_type, Precision::GAMMA8);
-        assert!(invalid.hierarchy_with_alpha(pointer, channels, coverage, true, &Interrupt::NONE).is_err());
+        let mut matching = W { out: vec![0; 4], wide: true };
+        let pointer = hierarchy(&mut matching, 1, 1, channels, &vec![57; channels], Compression::None);
+        let mut invalid = image(&matching.out, 64, base_type, Precision::GAMMA8);
+        assert!(matches!(
+            invalid.hierarchy_with_alpha(pointer, channels, coverage, true, &Interrupt::NONE),
+            Err(IoError::Xcf(message)) if message == "opaque alpha synthesis does not match the drawable color layout"
+        ));
         assert_eq!(invalid.budget, 64);
     }
     for (width, height, bpp) in [(0, 1, 12), (u32::MAX, u32::MAX, 12), (2, 1, 11)] {

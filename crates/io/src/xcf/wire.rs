@@ -126,7 +126,7 @@ fn props_charged<'a>(
         let offset = c.pos;
         let Some((kind, declared)) = property_header(c, out.len())? else { return Ok(out) };
         let mut framing = c.at(c.pos);
-        let remaining = property_payload(&mut framing, kind, declared, version, palette_from_count)?;
+        let remaining = property_payload(&mut framing, kind, declared, version, palette_from_count, ctl)?;
         let len = (framing.pos - c.pos).checked_add(remaining).ok_or_else(|| invalid("property size overflow"))?;
         charge(len)?;
         let data = c.take(len)?;
@@ -140,6 +140,12 @@ pub(super) trait PropertyInput {
     fn word(&mut self) -> Result<u32>;
     fn discard(&mut self, length: usize) -> Result<()>;
     fn peek(&mut self, offset: usize, length: usize) -> Result<Option<&[u8]>>;
+
+    /// Only full import can validate target offsets. The geometry probe may
+    /// stop at image-property END even for a truncated drawable stream.
+    fn prefers_repaired_end(&self, _declared: usize, _repaired: usize, _version: u32, _ctl: &photocraft_raster::Interrupt<'_>) -> Result<bool> {
+        Ok(false)
+    }
 }
 
 impl PropertyInput for Cursor<'_> {
@@ -156,6 +162,45 @@ impl PropertyInput for Cursor<'_> {
         let end = start.checked_add(length).ok_or_else(|| invalid("property lookahead overflow"))?;
         Ok(self.b.get(start..end))
     }
+
+    fn prefers_repaired_end(&self, declared: usize, repaired: usize, version: u32, ctl: &photocraft_raster::Interrupt<'_>) -> Result<bool> {
+        let tables_fit = |offset| {
+            let Some(start) = self.pos.checked_add(offset).and_then(|offset| offset.checked_add(8)) else { return Ok(false) };
+            drawable_tables_fit(self.at(start), version, ctl)
+        };
+        Ok(!tables_fit(declared)? && tables_fit(repaired)?)
+    }
+}
+
+/// Inspect the table framing without retaining or following any offset. A
+/// required drawable must lie after the tables and have space for a header.
+fn drawable_tables_fit(mut cursor: Cursor<'_>, version: u32, ctl: &photocraft_raster::Interrupt<'_>) -> Result<bool> {
+    let mut first_drawable = cursor.b.len();
+    for limit in [super::MAX_LAYERS, super::MAX_CHANNELS] {
+        for count in 0..=limit {
+            ctl.check().map_err(|_| super::IoError::Cancelled)?;
+            let Ok(pointer) = cursor.ptr() else { return Ok(false) };
+            if pointer == 0 {
+                break;
+            }
+            if count == limit || pointer < cursor.pos || pointer.checked_add(12).is_none_or(|end| end > cursor.b.len()) {
+                return Ok(false);
+            }
+            first_drawable = first_drawable.min(pointer);
+        }
+    }
+    if version >= 18 {
+        // Standalone paths are optional. Validate their table's terminator,
+        // without requiring every optional path target to be valid.
+        for count in 0..=super::MAX_CHANNELS {
+            ctl.check().map_err(|_| super::IoError::Cancelled)?;
+            let Ok(pointer) = cursor.ptr_wire() else { return Ok(false) };
+            if pointer == 0 || count == super::MAX_CHANNELS {
+                break;
+            }
+        }
+    }
+    Ok(cursor.pos <= first_drawable)
 }
 
 pub(super) fn property_header(input: &mut impl PropertyInput, count: usize) -> Result<Option<(u32, usize)>> {
@@ -172,7 +217,14 @@ pub(super) fn property_header(input: &mut impl PropertyInput, count: usize) -> R
 
 /// Consume only the bytes needed to determine framing. Return the payload bytes
 /// still unread, so the geometry probe can inspect DPI without retaining other properties.
-pub(super) fn property_payload(input: &mut impl PropertyInput, kind: u32, declared: usize, version: Option<u32>, indexed: bool) -> Result<usize> {
+pub(super) fn property_payload(
+    input: &mut impl PropertyInput,
+    kind: u32,
+    declared: usize,
+    version: Option<u32>,
+    indexed: bool,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<usize> {
     let (length, prefix) = match (kind, version) {
         (1, Some(version)) if indexed || declared >= 4 => {
             let colors = input.word()? as usize;
@@ -184,9 +236,19 @@ pub(super) fn property_payload(input: &mut impl PropertyInput, kind: u32, declar
                 4 + colors * components
             } else if version != 0 && (1..=256).contains(&colors) && declared == colors + 4 {
                 let repaired = 4 + colors * components;
-                // The declared boundary wins when both continuations look valid.
-                // This keeps an incomplete unused palette from consuming another property.
-                if plausible_property(input.peek(declared - 4, 8)?) || !plausible_property(input.peek(repaired - 4, 8)?) { declared } else { repaired }
+                let declared_header = input.peek(declared - 4, 8)?;
+                let declared_end = declared_header == Some(&[0; 8]);
+                let declared_plausible = plausible_property(declared_header);
+                let repaired_header = input.peek(repaired - 4, 8)?;
+                let repaired_end = repaired_header == Some(&[0; 8]);
+                if (!declared_plausible && plausible_property(repaired_header))
+                    || (declared_end && repaired_end && input.prefers_repaired_end(declared - 4, repaired - 4, version, ctl)?)
+                {
+                    repaired
+                } else {
+                    // Keep the declared boundary when both interpretations fit.
+                    declared
+                }
             } else {
                 declared
             };
