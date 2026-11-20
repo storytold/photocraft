@@ -5,7 +5,7 @@
 #   ROOT                    workspace root
 #   VERSION                 [workspace.package] version from Cargo.toml (override: PHOTOCRAFT_VERSION)
 #   DIST                    output directory for release artifacts (default: $ROOT/dist/release)
-#   PHOTOCRAFT_BUILD_SHA    git commit baked into the binaries (see crates/engine/src/build_info.rs)
+#   PHOTOCRAFT_BUILD_SHA    git commit baked into the binaries (see crates/engine-core/src/build_info.rs)
 #   PHOTOCRAFT_BUILD_DATE   UTC build date, YYYY-MM-DD
 #   CARGO_TARGET_DIR        cargo's target dir (default: $ROOT/target)
 

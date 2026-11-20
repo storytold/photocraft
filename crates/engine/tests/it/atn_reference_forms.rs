@@ -126,7 +126,8 @@ fn indexes_and_ordinals_use_the_recorded_stack_with_or_without_background() {
         let first = u32::from(!background);
         let expected = [Some("Base"), Some("L1"), Some("L2"), None, Some("Gchild"), Some("G"), Some("L3")];
         for (offset, name) in expected.into_iter().enumerate() {
-            s.execute("layer.select", json!({"layer":layer(&s,"L2")})).unwrap();
+            let pick = json!({"layer":layer(&s,"L2")});
+            s.execute("layer.select", pick).unwrap();
             let reference = index("Lyr ", first + offset as u32);
             let action = select(reference.clone());
             roundtrip(&action, &reference, None);
@@ -134,7 +135,8 @@ fn indexes_and_ordinals_use_the_recorded_stack_with_or_without_background() {
             assert_eq!(s.active().unwrap().active_layer.unwrap().0, layer(&s, name.unwrap_or("L2")));
         }
         for (code, expected) in [("Trgt", "L2"), ("Frwr", "Gchild"), ("Bckw", "L1"), ("Frnt", "L3"), ("Back", "Base")] {
-            s.execute("layer.select", json!({"layer":layer(&s,"L2")})).unwrap();
+            let pick = json!({"layer":layer(&s,"L2")});
+            s.execute("layer.select", pick).unwrap();
             let reference = ordinal(code);
             let action = select(reference.clone());
             roundtrip(&action, &reference, None);
@@ -154,8 +156,10 @@ fn indexes_and_ordinals_use_the_recorded_stack_with_or_without_background() {
 #[test]
 fn group_end_does_not_replace_the_current_selection() {
     let mut s = scene(true);
-    s.execute("layer.select", json!({"layer":layer(&s,"L1")})).unwrap();
-    s.execute("layer.select", json!({"layer":layer(&s,"L2"),"mode":"add"})).unwrap();
+    let pick = json!({"layer":layer(&s,"L1")});
+    s.execute("layer.select", pick).unwrap();
+    let pick = json!({"layer":layer(&s,"L2"),"mode":"add"});
+    s.execute("layer.select", pick).unwrap();
     for modifier in [None, Some("addToSelection"), Some("removeFromSelection"), Some("addToSelectionContinuous")] {
         let mut d = Descriptor::new("null").with("null", D::Reference(vec![index("Lyr ", 3)]));
         if let Some(modifier) = modifier {
@@ -233,8 +237,10 @@ fn indexed_moves_follow_the_measured_boundary_table() {
 #[test]
 fn indexed_move_preserves_multiple_selected_sources() {
     let mut s = scene(true);
-    s.execute("layer.select", json!({"layer":layer(&s,"L1")})).unwrap();
-    s.execute("layer.select", json!({"layer":layer(&s,"L2"),"mode":"add"})).unwrap();
+    let pick = json!({"layer":layer(&s,"L1")});
+    s.execute("layer.select", pick).unwrap();
+    let pick = json!({"layer":layer(&s,"L2"),"mode":"add"});
+    s.execute("layer.select", pick).unwrap();
     let before = selection(&s);
     let action = moved(ordinal("Trgt"), index("Lyr ", 6));
     roundtrip(&action, &ordinal("Trgt"), Some(&index("Lyr ", 6)));
@@ -480,8 +486,10 @@ fn empty_comp_list_index_is_noop() {
 #[test]
 fn group_end_index_never_targets_the_selection() {
     let mut s = scene(true);
-    s.execute("layer.select", json!({"layer":layer(&s,"L1")})).unwrap();
-    s.execute("layer.select", json!({"layer":layer(&s,"L2"),"mode":"add"})).unwrap();
+    let pick = json!({"layer":layer(&s,"L1")});
+    s.execute("layer.select", pick).unwrap();
+    let pick = json!({"layer":layer(&s,"L2"),"mode":"add"});
+    s.execute("layer.select", pick).unwrap();
     let past = s.active().unwrap().history.past_len();
     let doc = s.active().unwrap().doc.clone();
     assert!(s.execute("layer.translate", json!({"layer":{"index":3},"dx":1,"dy":0})).is_err());
@@ -506,7 +514,8 @@ fn forward_ordinal_precondition_checks_the_resolved_layer() {
     s.execute("edit.fill", json!({"contents":"color","color":"#000000"})).unwrap();
     s.execute("type.create", json!({"text":"C","size":2})).unwrap();
     s.execute("layer.renameLayer", json!({"name":"C"})).unwrap();
-    s.execute("layer.select", json!({"layer":layer(&s,"A")})).unwrap();
+    let pick = json!({"layer":layer(&s,"A")});
+    s.execute("layer.select", pick).unwrap();
     s.execute("channel.target", json!({"colors":[0]})).unwrap();
     let b = photocraft_doc::LayerId(layer(&s, "B"));
     let before = s.active().unwrap().doc.layer(b).cloned();

@@ -126,6 +126,8 @@ fn shared_svg_update_decodes_one_source_for_equal_scale_and_keeps_warning_caches
 
 #[test]
 fn local_svg_sources_separate_scale_and_profile_but_keep_instance_filters_and_placement() {
+    // Reads the command registry before any session exists.
+    crate::install().unwrap();
     let mut doc = Document::new("Profile", Size::new(64, 64), ColorMode::Rgb, SampleType::F32);
     doc.icc_profile = Some(craft_cms::Builtin::Srgb.profile().to_bytes());
     let mut linear = doc.clone();

@@ -97,7 +97,10 @@ fn read_optional(path: &Path) -> Result<Option<String>, String> {
 
 fn source_keys(root: &Path) -> Result<BTreeSet<Key>, String> {
     let ui_sources = source_files(&root.join("crates/ui-egui/src"))?;
-    let engine_sources = source_files(&root.join("crates/engine/src"))?;
+    let mut engine_sources = Vec::new();
+    for dir in engine_source_dirs(root)? {
+        engine_sources.extend(source_files(&dir)?);
+    }
     let mut keys = tl_keys(&ui_sources);
     keys.extend(plural_keys(&ui_sources));
 
@@ -191,6 +194,20 @@ fn quoted_field(block: &str, field: &str) -> Option<String> {
     let rest = rest.strip_prefix('"')?;
     let end = rest.find('"')?;
     Some(rest.get(..end)?.to_string())
+}
+
+/// The `src` directory of every engine crate (`crates/engine`, `crates/engine-core`, ...).
+fn engine_source_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let crates = root.join("crates");
+    let entries = fs::read_dir(&crates).map_err(|e| format!("{}: {e}", crates.display()))?;
+    let mut dirs: Vec<PathBuf> = entries
+        .flatten()
+        .filter(|e| e.file_name().to_str().is_some_and(|n| n == "engine" || n.starts_with("engine-")))
+        .map(|e| e.path().join("src"))
+        .filter(|p| p.is_dir())
+        .collect();
+    dirs.sort();
+    Ok(dirs)
 }
 
 fn source_files(root: &Path) -> Result<Vec<(PathBuf, String)>, String> {

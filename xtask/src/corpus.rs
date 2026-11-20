@@ -15,7 +15,7 @@ use crate::pinned::{PinnedCorpus, USER_AGENT};
 use crate::{cargo, root, run};
 
 /// Crates with corpus tests (behind their `corpus` feature).
-pub const CORPUS_CRATES: &[&str] = &["photocraft-io", "photocraft-engine"];
+pub const CORPUS_CRATES: &[&str] = &["photocraft-io", "photocraft-engine-core", "photocraft-engine"];
 /// Opt-in corpus crates: fetched and tested only with `test-corpus --pixls`.
 pub const PIXLS_CRATES: &[&str] = &["photocraft-raw"];
 
@@ -24,7 +24,8 @@ const HEIF_CRATES: &[&str] = &["photocraft-io"];
 
 /// Paths whose changes make `test-corpus --changed` run (the file-format and rendering crates,
 /// and the engine's `.atn` import and export).
-const CRITICAL: &[&str] = &["crates/io/", "crates/compose/", "crates/gpu/", "crates/text/", "crates/format/", "crates/raw/", "crates/engine/src/atn_cmds"];
+const CRITICAL: &[&str] =
+    &["crates/io/", "crates/compose/", "crates/gpu/", "crates/text/", "crates/format/", "crates/raw/", "crates/engine-core/src/cmd/atn_cmds"];
 /// `cargo xtask corpus [--all | --pngsuite | --download | --psd | --psd-tools | --heif | --exr | --pixls | --affinity | --atn | --photoshop [--local] | --gimp [--local]] [--update-manifest]`
 pub fn cmd(args: &[&str]) -> Result<(), String> {
     let update = args.contains(&"--update-manifest");

@@ -1424,6 +1424,8 @@ fn group_layers_from_index_reference_stays_implicit() {
 
 #[test]
 fn unsupported_shapes_become_photoshop_steps_not_errors() {
+    // Reads the command registry before any session exists.
+    crate::install().unwrap();
     // Image size in two different percentages, a Paint Bucket click in percent of the canvas, a
     // move in percent, an unknown adjustment class.
     let items = vec![

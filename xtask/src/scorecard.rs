@@ -23,7 +23,7 @@ use crate::perf;
 
 pub const OUT: &str = "docs/scorecard.md";
 const CORPUS_RS: &str = "crates/io/tests/it/corpus.rs";
-const PREFS_RS: &str = "crates/engine/src/prefs.rs";
+const PREFS_RS: &str = "crates/engine-core/src/prefs.rs";
 
 // ---- checklists ------------------------------------------------------------------------------
 
@@ -376,7 +376,7 @@ fn audit_sources(root: &Path) -> Vec<(PathBuf, String)> {
     walk(&root.join("apps"), &mut files);
     files.sort();
     let model = root.join(PREFS_RS);
-    let prefs_dir = root.join("crates/engine/src/prefs");
+    let prefs_dir = root.join("crates/engine-core/src/prefs");
     files
         .into_iter()
         .filter(|p| *p != model && !p.starts_with(&prefs_dir))

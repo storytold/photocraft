@@ -16,10 +16,10 @@ pub fn move_item<T>(v: &mut Vec<T>, i: usize, to: usize) -> Option<usize> {
 }
 
 impl Session {
+    /// A session on the process's command registry. It installs nothing itself: the process
+    /// installs the commands first (`photocraft_engine::Session::new()`, or an engine crate's
+    /// `install()` or `session()`), and scratch sessions inside commands use that install.
     pub fn new() -> Self {
-        // Commands run through the process-wide registry; the first session installs it, and a
-        // conflicting install reports itself at the first command.
-        let _ = crate::install::install();
         Self::default()
     }
 

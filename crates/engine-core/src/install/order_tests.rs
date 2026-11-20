@@ -1,6 +1,6 @@
 use super::TABLES;
 
-const HINT: &str = "\nadd the id to src/install/command_ids.txt, or run this test with PHOTOCRAFT_WRITE_COMMAND_IDS=1 and review the diff";
+const HINT: &str = "\nadd the id to crates/engine-core/src/install/command_ids.txt, or run this test with PHOTOCRAFT_WRITE_COMMAND_IDS=1 and review the diff";
 
 /// Menus, the Command Palette and the automation docs list commands in registry order, so the
 /// order is part of the behaviour. `command_ids.txt` pins it; regenerate the file from main when
