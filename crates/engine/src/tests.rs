@@ -990,7 +990,7 @@ fn command_list_filter_finds_the_raw_commands_by_their_photoshop_name() {
 /// Every keyword entry names a real command, so a renamed id can't leave one behind.
 #[test]
 fn search_keywords_name_real_commands() {
-    for (id, words) in crate::commands::SEARCH_KEYWORDS {
+    for (id, words) in crate::registry::SEARCH_KEYWORDS {
         assert!(crate::commands::find(id).is_some(), "keywords for unknown command {id}");
         assert!(!words.trim().is_empty(), "{id}");
     }
