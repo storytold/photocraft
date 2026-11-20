@@ -103,11 +103,13 @@ fn a_click_on_another_layers_pixels_commits_and_keeps_the_selection() {
     let paint = app.session.active().unwrap().active_layer.unwrap();
     let app_ctx = app.ctx().clone();
     crate::menus::invoke(&mut app, &app_ctx, "edit.freeTransform", json!({})).unwrap();
-    shift_right(&mut app);
+    app.ui.transform.as_mut().unwrap().edit_box(|b| *b = b.scaled_about_pivot(2.0, 2.0));
     let before = steps(&app);
     click(&mut app, [140.0, 140.0]);
     assert!(app.ui.transform.is_none(), "committed");
     assert_eq!(steps(&app), before + 1);
+    let bounds = app.session.active().unwrap().doc.layer(paint).unwrap().surface().unwrap().content_bounds();
+    assert_eq!(bounds, photocraft_geom::Rect::new(0, 0, 80, 80), "the resized pixels are committed");
     assert_eq!(app.session.active().unwrap().history.entries().last().map(ToString::to_string).as_deref(), Some("Free Transform"));
     assert_eq!(app.session.active().unwrap().selected_layers(), vec![paint], "the selection doesn't change");
     app.ui.tool = crate::state::Tool::Move;
