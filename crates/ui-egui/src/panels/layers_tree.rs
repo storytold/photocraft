@@ -120,7 +120,7 @@ impl<'a> PhotoLayers<'a> {
         let Some(active) = self.st.active_layer else { return Vec::new() };
         let selection = self.st.selected_layers();
         if selection.len() > 1 && selection.contains(&active) {
-            selection.into_iter().filter(|id| *id == active || !self.doc().is_background(*id)).collect()
+            selection.iter().copied().filter(|id| *id == active || !self.doc().is_background(*id)).collect()
         } else {
             vec![active]
         }
@@ -295,7 +295,7 @@ impl LayerTree for PhotoLayers<'_> {
             Some(l) if ui.mask_target && l.mask.is_some() => LayerPart::LayerMask,
             _ => LayerPart::Pixels,
         };
-        let mut selection = LayerSelection::new(self.st.selected_layers(), active, target);
+        let mut selection = LayerSelection::new(self.st.selected_layers().to_vec(), active, target);
         selection.sub_row = self.selected_filter().and_then(|(layer, index)| {
             let id = LayerId(layer);
             let row = match index {
@@ -366,15 +366,20 @@ impl LayerTree for PhotoLayers<'_> {
     }
 
     fn blend_modes(&self, group: bool, current: &str) -> Vec<Entry<String>> {
+        static CACHE: crate::i18n::LangCache<(bool, BlendMode), Vec<Entry<String>>> = crate::i18n::LangCache::new();
         let current = BlendMode::from_key(current).or_else(|| blend_of(current)).unwrap_or(BlendMode::Normal);
-        let modes: Vec<BlendKeyEntry<BlendMode>> = super::layers::blend_options(group, current).into_iter().map(|(m, _)| super::blend_entry(m, m)).collect();
-        blend_entries(&modes, |mode| Label::from(tl!(mode.key.label()).to_string()))
-            .into_iter()
-            .map(|entry| match entry.value() {
-                Some(mode) => Entry::new(mode.key().to_string(), entry.label().clone()),
-                None => Entry::separator(),
-            })
-            .collect()
+        let current = if current.has_psd_equivalent() { BlendMode::Normal } else { current };
+        CACHE.get_or_build((group, current), || {
+            let modes: Vec<BlendKeyEntry<BlendMode>> =
+                super::layers::blend_options(group, current).into_iter().map(|(m, _)| super::blend_entry(m, m)).collect();
+            blend_entries(&modes, |mode| Label::from(tl!(mode.key.label()).to_string()))
+                .into_iter()
+                .map(|entry| match entry.value() {
+                    Some(mode) => Entry::new(mode.key().to_string(), entry.label().clone()),
+                    None => Entry::separator(),
+                })
+                .collect()
+        })
     }
 
     fn footer(&self) -> LayersFooterState {
@@ -397,18 +402,23 @@ impl LayerTree for PhotoLayers<'_> {
                 crate::i18n::fmt(tl!("Add a mask  (from the selection; {key} inverts)"), &[("key", &crate::shortcuts::pretty("Alt"))])
             }
         });
-        let mut adjustments: Vec<Entry<String>> = photocraft_engine::command_specs()
-            .iter()
-            .filter(|c| c.id.starts_with("layer.newAdjustmentLayer."))
-            .map(|c| Entry::new(c.id.to_string(), tl!(c.label).trim_end_matches('…').to_string()))
-            .collect();
-        adjustments.push(Entry::separator());
-        adjustments.push(Entry::new("layer.newFillLayer.solidColor".to_string(), tl!("Solid Color…").to_string()));
-        adjustments.push(Entry::new("layer.newFillLayer.gradient".to_string(), tl!("Gradient…").to_string()));
-        adjustments.push(Entry::new("layer.newFillLayer.pattern".to_string(), tl!("Pattern…").to_string()));
+        type FooterMenus = (Vec<Entry<String>>, Vec<Entry<String>>);
+        static MENUS: crate::i18n::LangCache<(), FooterMenus> = crate::i18n::LangCache::new();
+        let (adjustments, styles) = MENUS.get_or_build((), || {
+            let mut adjustments: Vec<Entry<String>> = photocraft_engine::command_specs()
+                .iter()
+                .filter(|c| c.id.starts_with("layer.newAdjustmentLayer."))
+                .map(|c| Entry::new(c.id.to_string(), tl!(c.label).trim_end_matches('…').to_string()))
+                .collect();
+            adjustments.push(Entry::separator());
+            adjustments.push(Entry::new("layer.newFillLayer.solidColor".to_string(), tl!("Solid Color…").to_string()));
+            adjustments.push(Entry::new("layer.newFillLayer.gradient".to_string(), tl!("Gradient…").to_string()));
+            adjustments.push(Entry::new("layer.newFillLayer.pattern".to_string(), tl!("Pattern…").to_string()));
+            let mut styles = vec![Entry::new(String::new(), tl!("Blending Options…").to_string()), Entry::separator()];
+            styles.extend(crate::layer_style::KINDS.iter().map(|&(kind, label)| Entry::new(kind.to_string(), format!("{}…", tl!(label)))));
+            (adjustments, styles)
+        });
         footer.adjustment_menu = adjustments;
-        let mut styles = vec![Entry::new(String::new(), tl!("Blending Options…").to_string()), Entry::separator()];
-        styles.extend(crate::layer_style::KINDS.iter().map(|&(kind, label)| Entry::new(kind.to_string(), format!("{}…", tl!(label)))));
         footer.style_menu = styles;
         footer
     }

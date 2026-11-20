@@ -324,7 +324,7 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
                 Ok(())
             })?;
             if let Some(st) = s.active_mut() {
-                st.selected_layers = st.active_layer.into_iter().collect();
+                *st.selection_mut() = st.active_layer.into_iter().collect();
             }
         }
     }
