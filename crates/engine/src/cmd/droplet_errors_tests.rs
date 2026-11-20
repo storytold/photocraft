@@ -289,3 +289,22 @@ fn an_error_log_naming_an_input_or_a_planned_output_never_replaces_it() {
     let refused = r["errorLogError"].as_str().unwrap_or_default().to_owned();
     assert!(refused.contains("errorLog") && refused.contains("must not replace an input or batch output"), "{r}");
 }
+
+/// #13713 review: the guard above missed one file of its own run, the `.pcdroplet` being executed.
+/// It is never a dropped input (a folder scan takes images only) and never a batch result, so a
+/// droplet saved with its log aimed at its own name erased its own definition: the next run of that
+/// droplet found UTF-16 log bytes where the steps were. The definition's bytes must stay.
+#[test]
+fn an_error_log_naming_the_droplet_file_itself_never_replaces_it() {
+    let dir = tmp("log-self");
+    let (a, b) = inputs(&dir);
+    let dp = failing_droplet(&dir, json!({"errors": "log", "errorLog": format!("{dir}/Fails.pcdroplet")}));
+    let definition = std::fs::read(&dp).unwrap();
+    assert_eq!(dp, format!("{dir}/Fails.pcdroplet"), "the log was aimed at the droplet's own path");
+    let r = Session::new().execute("file.automate.runDroplet", json!({"droplet": dp.clone(), "input": [a, b]})).unwrap();
+    assert_eq!(std::fs::read(&dp).unwrap(), definition, "{dp} still holds the droplet definition, not the log");
+    let refused = r["errorLogError"].as_str().unwrap_or_default().to_owned();
+    assert!(refused.contains("errorLog") && refused.contains("must not replace an input or batch output"), "{r}");
+    let again = Session::new().execute("file.automate.runDroplet", json!({"droplet": dp.clone(), "input": [a]})).unwrap();
+    assert_eq!(again["errors"].as_array().map(Vec::len), Some(1), "the droplet is still runnable: {again}");
+}
