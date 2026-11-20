@@ -3,16 +3,10 @@ use super::{Arc, Document, History, LayerId, LayerTarget, channel_cmds, float_cm
 /// Per-document editing state.
 #[derive(Clone, Debug)]
 pub struct DocState {
-    pub doc: Arc<Document>,
+    inputs: DocStateInputs,
+    selected_cache: std::sync::OnceLock<Vec<LayerId>>,
     pub history: History,
-    /// The primary ("key") layer: what single-layer commands act on. Always a member of
-    /// `selected_layers` when set.
-    pub active_layer: Option<LayerId>,
-    /// Every selected layer in the Layers panel (⌘/⇧-click), in selection order. Like
-    /// `active_layer`, selecting is not a history step, but undo and redo restore the layers each
-    /// state targeted when the next step was taken; see [`DocState::selected_layers`].
-    pub selected_layers: Vec<LayerId>,
-    /// Anchor of ⇧-click range selection (the last plainly or ⌘-clicked layer).
+    /// Anchor of range selection (the last plainly or command-clicked layer).
     pub layer_anchor: Option<LayerId>,
     pub path: Option<String>,
     /// An Affinity document (or its preview) must not acquire the native source as its Save path.
@@ -31,6 +25,8 @@ pub struct DocState {
     /// whose whole span `last_damage` covers. Written only by `Session::dispatch`; any later
     /// revision makes it stale, so [`DocState::damage_from`] falls back to one revision.
     pub(crate) damage_span: Option<(u64, u64)>,
+    /// Bounded revision spans; unknown damage remains unknown when spans are combined.
+    damage_log: std::collections::VecDeque<(u64, u64, Option<photocraft_geom::Rect>)>,
     /// Coalescing key of the latest history step (see [`Session::execute`]'s `coalesce` param).
     pub coalesce: Option<String>,
     /// Channels panel: targeted channel and eye toggles (view state, not history).
@@ -42,6 +38,8 @@ pub struct DocState {
     /// Layers panel: layers whose effects list is collapsed under their row (the fx triangle;
     /// view state, not history). Effects lists start open.
     pub fx_collapsed: Vec<LayerId>,
+    /// See [`DocState::layers_view_revision`].
+    layers_view_revision: u64,
     /// ⌥-click on a layer's eye (`layer.showOnly`): the layer shown alone and every layer's
     /// visibility before, so the next ⌥-click restores it (view state, not history).
     pub show_only: Option<(LayerId, Vec<(LayerId, bool)>)>,
@@ -55,8 +53,10 @@ pub struct DocState {
     /// History panel snapshots, oldest first (`history.newSnapshot`, #2966): the first (id 0) is
     /// the document as opened (unless History Options › Automatically Create First Snapshot is
     /// off). Kept for the session only, as in Photoshop: not history states,
-    /// and not saved with the document.
-    pub snapshots: Vec<history_cmds::Snapshot>,
+    /// and not saved with the document. Changed only through [`DocState::snapshots_mut`].
+    snapshots: Vec<history_cmds::Snapshot>,
+    /// See [`DocState::snapshots_generation`].
+    snapshots_generation: u64,
     /// The id the next snapshot gets; ids are never reused, so deleting one keeps the others.
     pub(crate) next_snapshot: u64,
     /// The snapshot the latest save added (History Options › Automatically Create New Snapshot
@@ -75,19 +75,37 @@ pub struct DocState {
     pub pixel_revision: u64,
 }
 
+/// Read-only document and layer selection inputs. Mutations go through `DocState` methods.
+#[derive(Clone, Debug)]
+pub struct DocStateInputs {
+    /// The current document.
+    pub doc: Arc<Document>,
+    /// The primary layer for single-layer commands.
+    pub active_layer: Option<LayerId>,
+    /// The raw selection in selection order. Undo and redo restore it with the target state.
+    pub selected_layers: Vec<LayerId>,
+}
+
+impl std::ops::Deref for DocState {
+    type Target = DocStateInputs;
+    fn deref(&self) -> &Self::Target {
+        &self.inputs
+    }
+}
+
 impl DocState {
     /// Trim the history to its budget, counting the tiles only History panel snapshots hold
     /// against it too (#4530). Returns how many states were dropped.
     pub fn trim_history(&mut self) -> usize {
         let snaps: Vec<&Document> = self.snapshots.iter().map(|s| &*s.doc).collect();
-        self.history.trim_with(&self.doc, &snaps)
+        self.history.trim_with(&self.inputs.doc, &snaps)
     }
 
     /// Pixel bytes of the document, the tiles only its history holds and the tiles only its
     /// History panel snapshots hold; embedded smart object contents count too.
     pub fn memory_bytes(&self) -> usize {
         let snaps: Vec<&Document> = self.snapshots.iter().map(|s| &*s.doc).collect();
-        self.history.pixel_bytes(&self.doc).saturating_add(self.history.extra_bytes(&self.doc, &snaps))
+        self.history.pixel_bytes(&self.inputs.doc).saturating_add(self.history.extra_bytes(&self.inputs.doc, &snaps))
     }
 
     pub fn new(doc: Document, path: Option<String>) -> Self {
@@ -105,10 +123,9 @@ impl DocState {
         // panel's top row can always bring it back (#2966).
         let first = history_cmds::Snapshot { id: 0, name: doc.name.clone(), doc: doc.clone(), layers: target };
         Self {
-            doc,
+            inputs: DocStateInputs { doc, active_layer, selected_layers: active_layer.into_iter().collect() },
+            selected_cache: std::sync::OnceLock::new(),
             history,
-            active_layer,
-            selected_layers: active_layer.into_iter().collect(),
             layer_anchor: active_layer,
             path,
             source_read_only: false,
@@ -118,15 +135,18 @@ impl DocState {
             view_revision: 0,
             last_damage: None,
             damage_span: None,
+            damage_log: Default::default(),
             coalesce: None,
             channel_view,
             isolated_layers: Vec::new(),
             symmetry: None,
             fx_collapsed: Vec::new(),
+            layers_view_revision: 0,
             show_only: None,
             floating: None,
             color_samplers: Vec::new(),
             snapshots: vec![first],
+            snapshots_generation: next_snapshots_generation(),
             next_snapshot: 1,
             save_snapshot: None,
             source_snapshot: None,
@@ -134,11 +154,59 @@ impl DocState {
             pixel_revision: 0,
         }
     }
-    /// The selected layers in bottom-to-top document order, always including the active layer.
-    /// Robust against stale state: ids no longer in the document are skipped, and if the active
-    /// layer was changed without updating the set, the selection is just the active layer.
-    pub fn selected_layers(&self) -> Vec<LayerId> {
-        selected_in(&self.doc, self.active_layer, &self.selected_layers)
+    /// The History panel snapshots, oldest first.
+    pub fn snapshots(&self) -> &[history_cmds::Snapshot] {
+        &self.snapshots
+    }
+    /// The snapshots to change: [`Self::snapshots_generation`] moves.
+    pub fn snapshots_mut(&mut self) -> &mut Vec<history_cmds::Snapshot> {
+        self.snapshots_generation = next_snapshots_generation();
+        &mut self.snapshots
+    }
+    /// A number that identifies the snapshot list: every [`Self::snapshots_mut`] takes a fresh
+    /// one, clones keep it, and no two lists that differ share one. With
+    /// [`photocraft_ops::History::generation`] it says when the History panel's rows change.
+    pub fn snapshots_generation(&self) -> u64 {
+        self.snapshots_generation
+    }
+    /// The current document.
+    pub fn doc(&self) -> &Arc<Document> {
+        &self.inputs.doc
+    }
+    /// Consume the state and return its document without cloning its Arc.
+    pub fn into_document(self) -> Arc<Document> {
+        self.inputs.doc
+    }
+    /// Mutable access invalidates the ordered selection, including on document replacement.
+    pub fn doc_mut(&mut self) -> &mut Arc<Document> {
+        self.selected_cache.take();
+        &mut self.inputs.doc
+    }
+    /// The active layer, if any.
+    pub fn active_layer(&self) -> Option<LayerId> {
+        self.inputs.active_layer
+    }
+    /// Set the active layer and invalidate the held ordered selection.
+    pub fn set_active_layer(&mut self, active: Option<LayerId>) {
+        if self.inputs.active_layer != active {
+            self.selected_cache.take();
+            self.inputs.active_layer = active;
+        }
+    }
+    /// The raw selection in selection order.
+    pub fn selection(&self) -> &[LayerId] {
+        &self.inputs.selected_layers
+    }
+    /// Mutate the raw selection, invalidating the held ordered selection before access.
+    pub fn selection_mut(&mut self) -> &mut Vec<LayerId> {
+        self.selected_cache.take();
+        &mut self.inputs.selected_layers
+    }
+    /// Selected layers in bottom-to-top document order, including the active layer.
+    /// Missing IDs are skipped; if the active layer is not in the raw selection, only it is used.
+    /// The first read after a mutation builds the held slice; later reads reuse it.
+    pub fn selected_layers(&self) -> &[LayerId] {
+        self.selected_cache.get_or_init(|| selected_in(&self.inputs.doc, self.inputs.active_layer, &self.inputs.selected_layers))
     }
     pub fn is_layer_selected(&self, id: LayerId) -> bool {
         self.active_layer == Some(id) || (self.active_layer.is_some_and(|a| self.selected_layers.contains(&a)) && self.selected_layers.contains(&id))
@@ -153,6 +221,73 @@ impl DocState {
     pub(crate) fn keeps_clean(&self, before: &Document) -> bool {
         self.saved_revision == self.revision && layer_multi_cmds::selection_only_change(before, &self.doc)
     }
+    /// Damage since `revision`, or `None` when a revision is missing or has unknown damage.
+    pub fn damage_since(&self, revision: u64) -> Option<photocraft_geom::Rect> {
+        if revision == self.revision {
+            return Some(photocraft_geom::Rect::EMPTY);
+        }
+        let mut at = revision;
+        let mut total = photocraft_geom::Rect::EMPTY;
+        for &(from, to, damage) in &self.damage_log {
+            if to <= at {
+                continue;
+            }
+            if from > at || to > self.revision {
+                return None;
+            }
+            let damage = damage?;
+            total = if total.is_empty() {
+                damage
+            } else if damage.is_empty() {
+                total
+            } else {
+                total.union(&damage)
+            };
+            at = to;
+            if at == self.revision {
+                return Some(total);
+            }
+        }
+        None
+    }
+
+    fn record_damage_span(&mut self, from: u64, to: u64, damage: Option<photocraft_geom::Rect>) {
+        while self.damage_log.back().is_some_and(|(_, end, _)| *end > from) {
+            self.damage_log.pop_back();
+        }
+        const MAX_SPANS: usize = 64;
+        if self.damage_log.len() == MAX_SPANS {
+            self.damage_log.pop_front();
+        }
+        self.damage_log.push_back((from, to, damage));
+    }
+
+    /// Record the current revision conservatively until its damage has been determined.
+    pub(crate) fn record_unknown_damage(&mut self) {
+        self.last_damage = None;
+        self.record_damage_span(self.revision.saturating_sub(1), self.revision, None);
+    }
+
+    /// Record the latest revision or command span after its damage has been determined.
+    pub(crate) fn record_damage(&mut self) {
+        // Keep the effect reach at the time of the edit: later pixel-neutral revisions can
+        // change which effects are visible without changing this already-painted damage.
+        // The existing growth walk is recursive, so refuse a bounded answer on hostile depth.
+        fn bounded(layers: &[photocraft_doc::Layer], depth: usize) -> bool {
+            depth < 256 && layers.iter().all(|layer| layer.children().is_none_or(|children| bounded(children, depth + 1)))
+        }
+        let damage = self.last_damage.and_then(|r| {
+            if r.is_empty() {
+                Some(r)
+            } else if bounded(&self.doc.layers, 0) {
+                Some(layer_multi_cmds::grow_hint(&self.doc, r))
+            } else {
+                None
+            }
+        });
+        self.record_damage_span(self.damage_from(), self.revision, damage);
+    }
+
     /// The revision [`DocState::last_damage`] is measured from: the revision before the command
     /// that made it, or the previous revision. A canvas that showed any revision from this one
     /// up to (not including) `revision` needs only `last_damage` redrawn.
@@ -166,14 +301,47 @@ impl DocState {
     /// revision with it.
     pub(crate) fn bump_revision(&mut self, keep_clean: bool) {
         self.revision += 1;
+        self.record_unknown_damage();
         if keep_clean {
             self.saved_revision = self.revision;
         }
+    }
+    /// Move to the next revision for a change of the layer selection, which is not an edit:
+    /// readers keyed on the revision follow it, a clean document stays clean, and no pixels need
+    /// drawing again.
+    pub(crate) fn bump_selection_revision(&mut self) {
+        self.bump_revision(!self.is_dirty());
+        self.last_damage = Some(photocraft_geom::Rect::EMPTY);
+        self.record_damage();
+    }
+    /// Moves when an effects list or a group in the Layers panel opens or closes. That is view
+    /// state, not an edit, so [`DocState::revision`] stays; the Layers panel's rows key on this.
+    pub fn layers_view_revision(&self) -> u64 {
+        self.layers_view_revision
+    }
+    /// Count an effects list or group opened or closed (see [`Self::layers_view_revision`]).
+    pub(crate) fn note_disclosure_change(&mut self) {
+        self.layers_view_revision += 1;
+    }
+    /// Move to the next revision for a view-only change (channel eyes, a history state deleted,
+    /// Layers panel isolation): readers keyed on the revision follow it, pixel caches ignore it
+    /// through `view_revision`, and no pixels need drawing again. `keep_clean` as for
+    /// [`Self::bump_revision`].
+    pub(crate) fn bump_view_revision(&mut self, keep_clean: bool) {
+        self.view_revision += 1;
+        self.bump_revision(keep_clean);
+        self.last_damage = Some(photocraft_geom::Rect::EMPTY);
+        self.record_damage();
     }
     /// The targeted layers, as history stores them with each state.
     pub(crate) fn layer_target(&self) -> LayerTarget {
         LayerTarget { active: self.active_layer, selected: self.selected_layers.clone() }
     }
+}
+
+fn next_snapshots_generation() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// App-wide tool state that commands read (foreground colour, brush…).
@@ -183,7 +351,7 @@ pub struct ToolState {
     pub background: [f32; 4],
     pub brush: photocraft_paint::BrushSettings,
     /// Brush presets (built-ins plus user presets; see `brush.presets.*`).
-    pub presets: Vec<photocraft_paint::BrushPreset>,
+    pub presets: Arc<Vec<photocraft_paint::BrushPreset>>,
     /// Bumped whenever `presets` changes ([`Session::brush_presets_changed`]); the preset store
     /// syncs when it moves.
     pub presets_rev: u64,
@@ -284,7 +452,7 @@ impl Default for ToolState {
                 smoothing: photocraft_paint::brush::Smoothing { amount: 0.1, ..Default::default() },
                 ..Default::default()
             },
-            presets: photocraft_paint::presets::builtin(),
+            presets: photocraft_paint::presets::builtin_shared(),
             presets_rev: 0,
             mixer: Default::default(),
             brush_gesture: None,
@@ -322,9 +490,201 @@ pub struct CopiedStyle {
 pub const PRECHECKED: &[&str] = &["layer.new.layer", "layer.new.group", "layer.new.groupFromLayers", "layer.new.layerFromBackground"];
 
 /// The selected layers of `doc` whose active layer is `active` and whose selection set is `selected`, in bottom-to-top
-/// order ([`DocState::selected_layers`]), for a reader that holds the document without its editing state.
+/// order ([`DocState::selected_layers`]), taken from the document's layer index rather than a walk, for a reader that holds the document without its editing state.
 pub fn selected_in(doc: &Document, active: Option<LayerId>, selected: &[LayerId]) -> Vec<LayerId> {
     let Some(active) = active else { return Vec::new() };
     let set: &[LayerId] = if selected.contains(&active) { selected } else { std::slice::from_ref(&active) };
-    doc.walk().into_iter().map(|(_, _, l)| l.id).filter(|id| set.contains(id)).collect()
+    // Paths from the document's layer index order layers as the walk does (depth-first, bottom-to-top).
+    let index = doc.layers.index();
+    let mut ids: Vec<LayerId> = set.iter().copied().filter(|id| index.path(*id).is_some()).collect();
+    ids.sort_unstable_by(|a, b| index.path(*a).cmp(&index.path(*b)));
+    ids.dedup();
+    ids
+}
+
+#[cfg(test)]
+mod selected_tests {
+    use super::selected_in;
+    use photocraft_doc::{ColorMode, Document, Layer, LayerId, PixelFormat, SampleType, Size};
+
+    fn raster(name: &str) -> Layer {
+        Layer::raster(name, PixelFormat::RGBA8)
+    }
+
+    /// The answer before the layer index: filter the depth-first walk by the selection set.
+    fn by_walk(doc: &Document, active: Option<LayerId>, selected: &[LayerId]) -> Vec<LayerId> {
+        let Some(active) = active else { return Vec::new() };
+        let set: &[LayerId] = if selected.contains(&active) { selected } else { std::slice::from_ref(&active) };
+        doc.walk().into_iter().map(|(_, _, l)| l.id).filter(|id| set.contains(id)).collect()
+    }
+
+    /// `a`, group `g` (`b`, group `h` (`c`), `d`), `e`: nested groups mixed with root layers.
+    fn mixed() -> (Document, Vec<LayerId>) {
+        let mut doc = Document::new("t", Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+        let (a, b, c, d, e) = (raster("a"), raster("b"), raster("c"), raster("d"), raster("e"));
+        let h = Layer::group("h", vec![c.clone()]);
+        let g = Layer::group("g", vec![b.clone(), h.clone(), d.clone()]);
+        let ids = [&a, &g, &b, &h, &c, &d, &e].map(|l| l.id).to_vec();
+        doc.layers = vec![a, g, e].into();
+        (doc, ids)
+    }
+
+    #[test]
+    fn held_selection_tracks_mutations_and_reuses_storage() {
+        use super::DocState;
+        use std::sync::Arc;
+        let (doc, ids) = mixed();
+        let mut st = DocState::new(doc, None);
+        st.set_active_layer(Some(ids[0]));
+        *st.selection_mut() = vec![ids[6], ids[0], ids[6], LayerId::fresh()];
+        assert_eq!(st.selected_layers(), &[ids[0], ids[6]]);
+        let ptr = st.selected_layers().as_ptr();
+        let serial = st.doc.layers.index().serial();
+        st.set_active_layer(Some(ids[0]));
+        assert_eq!(st.selected_layers().as_ptr(), ptr, "setting the same active layer keeps the cache");
+        for _ in 0..100 {
+            assert_eq!(st.selected_layers().as_ptr(), ptr);
+            assert_eq!(st.doc.layers.index().serial(), serial);
+        }
+        Arc::make_mut(st.doc_mut()).shift(ids[6], -2);
+        assert_eq!(st.selected_layers(), &[ids[6], ids[0]]);
+        Arc::make_mut(st.doc_mut()).remove(ids[6]);
+        assert_eq!(st.selected_layers(), &[ids[0]]);
+        st.set_active_layer(Some(ids[4]));
+        assert_eq!(st.selected_layers(), &[ids[4]]);
+        st.set_active_layer(None);
+        assert!(st.selected_layers().is_empty());
+        let (replacement, other) = mixed();
+        *st.doc_mut() = Arc::new(replacement);
+        st.set_active_layer(Some(other[6]));
+        *st.selection_mut() = vec![other[6], other[0]];
+        assert_eq!(st.selected_layers(), &[other[0], other[6]]);
+    }
+
+    #[test]
+    fn selection_order_matches_the_walk_through_edits() {
+        let (mut doc, ids) = mixed();
+        let stale = LayerId::fresh();
+        let sets: Vec<Vec<LayerId>> =
+            vec![vec![ids[6], ids[4], ids[0]], vec![ids[5], ids[2], ids[1], ids[3]], vec![ids[4], ids[4], ids[0], stale], vec![ids[0]], vec![]];
+        let check = |doc: &Document| {
+            let first = doc.layers.index().serial();
+            for set in &sets {
+                for active in [None, Some(ids[0]), Some(ids[4]), Some(ids[6]), Some(stale)] {
+                    assert_eq!(selected_in(doc, active, set), by_walk(doc, active, set));
+                }
+            }
+            assert_eq!(doc.layers.index().serial(), first, "no rebuild while the document is unchanged");
+        };
+        check(&doc);
+        // Reorder: move `e` to the bottom, then a layer inside a group.
+        doc.shift(ids[6], -2);
+        check(&doc);
+        doc.shift(ids[5], -1);
+        check(&doc);
+        // Add and delete.
+        doc.insert_above(Some(ids[4]), raster("new"));
+        check(&doc);
+        doc.remove(ids[3]);
+        check(&doc);
+        assert_eq!(selected_in(&doc, Some(ids[0]), &[ids[0], ids[3], ids[4]]), vec![ids[0]], "deleted layers are skipped");
+    }
+}
+
+#[cfg(test)]
+mod damage_log_tests {
+    use super::DocState;
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_doc::Document;
+    use photocraft_geom::{Rect, Size};
+
+    #[test]
+    fn revision_helpers_keep_empty_damage_and_signal_view_changes() {
+        let doc = Document::new("test", Size::new(40, 40), ColorMode::Rgb, SampleType::U8);
+        let mut st = DocState::new(doc, None);
+        let before = st.revision;
+        let view = st.view_revision;
+        st.bump_selection_revision();
+        st.bump_view_revision(true);
+        assert_eq!(st.damage_since(before), Some(Rect::EMPTY));
+        assert_eq!(st.view_revision, view + 1);
+        assert!(!st.is_dirty());
+        // A channel view changes the displayed pixels, even though it is view-only.
+        st.last_damage = None;
+        st.record_damage();
+        assert_eq!(st.damage_since(before), None);
+    }
+
+    #[test]
+    fn damage_keeps_the_effect_reach_that_existed_at_the_edit() {
+        let mut doc = Document::new("test", Size::new(40, 40), ColorMode::Rgb, SampleType::U8);
+        let mut layer = photocraft_doc::Layer::raster("empty", photocraft_color::PixelFormat::RGBA8);
+        layer.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+        doc.layers = vec![layer].into();
+        let mut st = DocState::new(doc, None);
+        let before = st.revision;
+        let ink = Rect::new(10, 10, 12, 12);
+        st.bump_revision(false);
+        st.last_damage = Some(ink);
+        st.record_damage();
+        let with_effect = st.damage_since(before).unwrap();
+        assert!(with_effect.width() > ink.width());
+        // An empty layer shows no pixels, so removing its effect is pixel-neutral.
+        std::sync::Arc::make_mut(st.doc_mut()).layers[0].effects.items.clear();
+        st.bump_revision(false);
+        st.last_damage = Some(Rect::EMPTY);
+        st.record_damage();
+        assert_eq!(st.damage_since(before), Some(with_effect));
+    }
+
+    #[test]
+    fn deeply_nested_effect_growth_falls_back_to_full_damage() {
+        let mut doc = Document::new("test", Size::new(20, 20), ColorMode::Rgb, SampleType::U8);
+        let mut group = photocraft_doc::Layer::group("leaf", Vec::new());
+        for _ in 0..256 {
+            group = photocraft_doc::Layer::group("group", vec![group]);
+        }
+        doc.layers = vec![group].into();
+        let mut st = DocState::new(doc, None);
+        let before = st.revision;
+        st.bump_revision(false);
+        st.last_damage = Some(Rect::new(1, 1, 2, 2));
+        st.record_damage();
+        assert_eq!(st.damage_since(before), None);
+    }
+
+    #[test]
+    fn damage_spans_union_and_unknown_or_evicted_spans_force_a_full_redraw() {
+        let mut st = DocState::new(Document::new("test", Size::new(20, 20), ColorMode::Rgb, SampleType::U8), None);
+        let start = st.revision;
+        let first = Rect::new(1, 2, 4, 5);
+        let second = Rect::new(8, 9, 11, 12);
+        st.bump_revision(false);
+        assert_eq!(st.damage_since(start), None);
+        st.last_damage = Some(first);
+        st.record_damage();
+        st.bump_revision(false);
+        st.last_damage = Some(Rect::EMPTY);
+        st.record_damage();
+        st.bump_revision(false);
+        st.last_damage = Some(second);
+        st.record_damage();
+        let combined = st.damage_since(start).unwrap();
+        assert_eq!(combined.intersect(&first), first);
+        assert_eq!(combined.intersect(&second), second);
+        st.bump_revision(false);
+        assert_eq!(st.damage_since(start), None);
+        for _ in 0..65 {
+            st.bump_revision(false);
+            st.last_damage = Some(Rect::EMPTY);
+            st.record_damage();
+        }
+        assert_eq!(st.damage_since(start), None);
+        let current = st.revision;
+        st.revision += 1; // A caller bypassed the recording API.
+        st.bump_revision(false);
+        st.last_damage = Some(Rect::EMPTY);
+        st.record_damage();
+        assert_eq!(st.damage_since(current), None);
+    }
 }
