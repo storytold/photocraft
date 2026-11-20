@@ -1075,3 +1075,59 @@ fn a_file_row_decides_its_own_item_and_the_preferences_keep_the_rest() {
     assert_eq!(p.menu_sets["Mine"].colors["edit.paste"], "red", "an item the file has no row for keeps its colour");
     assert_eq!(p.menu_sets["Mine"].colors["file.new"], "green", "the file's own row brings its own colour");
 }
+
+/// The file the Save dialog chose stays that set's file: the row's Save on a saved set re-queues
+/// the set for writing, and that must not throw the chosen destination away and send the set back to
+/// the menu-sets folder. The mirror of `yes_of_the_delete_question_takes_the_file_the_dialog_chose`,
+/// for the Save half.
+#[test]
+fn a_second_save_on_a_set_keeps_the_file_the_dialog_chose() {
+    let tmp = tempfile::tempdir().expect("a settings folder");
+    // Outside the menu-sets folder: the folder's own name for the set is a different file.
+    let chosen = tmp.path().join("Elsewhere.MNU");
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![chosen.clone()])]));
+    let mut h = file_harness(files, tmp.path());
+    h.state_mut().run("edit.menus", json!({"hide": ["file.new"]})).unwrap();
+    open_menus(&mut h);
+    // The built-in set has no saved copy: the name and the file come from the Save dialog.
+    button(&h, SAVE).click();
+    h.run_steps(4);
+    assert_eq!(row_value(&h), "Elsewhere", "the picked name named the set");
+    // A second edit and a second Save, which asks no dialog: the set's file is the one already chosen.
+    show_all(&mut h);
+    button(&h, SAVE).click();
+    h.run_steps(3);
+    assert!(!chosen.exists(), "the second Save still waits for OK, like the first");
+    ok(&mut h);
+    let text = std::fs::read_to_string(&chosen).expect("OK wrote the set where the dialog chose it, not back in the menu-sets folder");
+    assert!(set_file(tmp.path(), "Elsewhere").is_none(), "the menu-sets folder got no copy of a set the dialog put elsewhere");
+    assert!(text.contains(&root("Elsewhere")), "the file is that set's: {text}");
+    assert_eq!(text.matches("<command").count(), 0, "the file holds the set as the second Save left it: {text}");
+}
+
+/// Yes of the switch question saves the set the way its Save button does, so it too keeps the file
+/// the Save dialog chose for that set instead of re-queuing it to the menu-sets folder.
+#[test]
+fn yes_of_the_switch_question_saves_to_the_file_the_dialog_chose() {
+    let tmp = tempfile::tempdir().expect("a settings folder");
+    let chosen = tmp.path().join("Elsewhere.MNU");
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![chosen.clone()])]));
+    let mut h = file_harness(files, tmp.path());
+    h.state_mut().run("edit.menus", json!({"sets": {"Web": {"hidden": ["layer.mergeVisible"], "colors": {}}}, "activeSet": ""})).unwrap();
+    h.state_mut().run("edit.menus", json!({"hide": ["file.new"]})).unwrap();
+    open_menus(&mut h);
+    assert_eq!(row_value(&h), format!("{DEFAULTS_NAME} (modified)"), "the built-in set was edited, so Save asks for a name");
+    button(&h, SAVE).click();
+    h.run_steps(4);
+    assert_eq!(row_value(&h), "Elsewhere", "the picked file named the set");
+    show_all(&mut h);
+    pick(&mut h, "Web");
+    answer(&mut h, YES);
+    ok(&mut h);
+    let text = std::fs::read_to_string(&chosen).expect("Yes saved the set into the file the dialog chose");
+    assert!(set_file(tmp.path(), "Elsewhere").is_none(), "and not into a file of the folder's own naming");
+    assert!(text.contains(&root("Elsewhere")), "the file is that set's: {text}");
+    assert_eq!(text.matches("<command").count(), 0, "the file holds the rows as Yes left them: {text}");
+    let p = h.state().session.prefs();
+    assert_eq!(p.menu_set, "Web", "and the switch it promised came after the save");
+}

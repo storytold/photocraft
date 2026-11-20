@@ -200,8 +200,10 @@ impl MenusDraft {
         if !self.set.is_empty() && set_name(&self.set).is_ok() {
             let name = self.set.clone();
             self.store(&name);
-            // Yes saves the set the way its Save button does, and the set's file with it.
-            self.file_write.insert(name, None);
+            // Yes saves the set the way its Save button does, and the set's file with it. A file the
+            // Save dialog already chose for that set stays its file: only a set with no chosen file
+            // is queued to the menu-sets folder, so a re-save cannot send one elsewhere back.
+            self.file_write.entry(name).or_insert(None);
             self.choose(target);
         } else if self.sets.len() >= menu_sets::MAX_SETS {
             // The save could only name a set the engine refuses to store: the cap line the row's
@@ -794,8 +796,9 @@ fn set_row(ui: &mut egui::Ui, draft: &mut MenusDraft) {
                 let name = draft.set.clone();
                 draft.store(&name);
                 // "Save on a modified saved set overwrites its file without a dialog" (#14450): the
-                // file is the set's own in the menu-sets folder, and OK is what writes it.
-                draft.file_write.insert(name, None);
+                // file is the one that set already has - the one the Save dialog chose for it, or the
+                // menu-sets folder's own if it never picked one - and OK is what writes it.
+                draft.file_write.entry(name).or_insert(None);
             }
         }
         if new.clicked() {
