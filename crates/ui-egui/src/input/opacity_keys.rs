@@ -375,6 +375,30 @@ mod tests {
         assert_eq!(values(&h), original, "one Undo restores both Fill values");
     }
 
+    #[test]
+    fn layer_digit_keys_apply_to_more_than_ten_thousand_selected_layers() {
+        use photocraft_doc::{ColorMode, Document, Layer, SampleType, Size};
+
+        let mut a = app(Tool::Move);
+        let mut doc = Document::new("Large selection", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+        doc.layers.extend((0..10_002).map(|_| Layer::group("Group", Vec::new())));
+        let selected: Vec<_> = doc.layers.iter().take(10_001).map(|layer| layer.id).collect();
+        a.session.add_document(doc, None);
+        let st = a.session.active_mut().unwrap();
+        st.active_layer = selected.last().copied();
+        st.selected_layers = selected;
+        let before = st.history.past_len();
+
+        assert!(fire(&mut a, D::OpacityFive, 0.0));
+        let st = a.session.active().unwrap();
+        assert!(st.doc.layers.iter().take(10_001).all(|layer| layer.opacity == 0.5));
+        assert_eq!(st.doc.layers.last().unwrap().opacity, 1.0);
+        assert_eq!(st.history.past_len(), before + 1);
+
+        assert!(a.session.undo());
+        assert!(a.session.active().unwrap().doc.layers.iter().all(|layer| layer.opacity == 1.0));
+    }
+
     /// Through the whole app: number keys and ⇧[ ⇧] from the canvas (no widget focused).
     #[test]
     fn keys_work_in_the_app() {
