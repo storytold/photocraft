@@ -5,6 +5,11 @@ use super::planes::{channel_format, next_alpha_name, plane_surface, read_plane, 
 use super::refs::{Blending, bad, doc_index, mask_plane, source, source_spec};
 use super::targeting::{Target, is_channel_target, is_spot_target, target_of, target_surface};
 use super::{AlphaChannel, ColorMode, EngineError, Result, SelectionMode, Session, Value, json, sel};
+use photocraft_color::blend::blend_rgb;
+
+#[cfg(test)]
+#[path = "apply_image_preserve_tests.rs"]
+mod apply_image_preserve_tests;
 
 // ---------------------------------------------------------------------------------------------
 // Apply Image / Calculations
@@ -32,6 +37,8 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
     let src = source(s, &src_spec, cmd, src_mode == ColorMode::Cmyk && (is_channel_target(p) || target_of(p) == Target::Mask))?;
     let mask = mask_plane(s, p, cmd)?;
     let layer = s.active().and_then(|d| d.active_layer);
+    // With only some colour channels targeted each one is a plane of its own.
+    let color_targets = crate::color_channels::target(s, p)?;
     s.edit("Apply Image", |doc, _| {
         let area = doc.bounds();
         let selection = doc.selection.as_ref().map(|m| sel::mask_from_surface(Some(m), area));
@@ -67,11 +74,24 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
             return Ok(());
         }
         let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
+        // Lock Transparent Pixels works as Preserve Transparency, ticked or not.
+        let preserve = preserve || doc.effective_locks(id).transparency;
         let fmt = doc.pixel_format();
         // The document's own mode, read before `paint_surface` borrows the doc: the pixel format
         // folds Indexed and Multichannel to Rgb, and only plain RGB was measured (#14490).
         let doc_mode = doc.mode;
-        let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
+        // A fully locked or pixel-locked layer still takes the image, as in the reference
+        // application, and keeps its transparency as with Preserve transparency. A lock that comes
+        // from a group around it still refuses, through `paint_surface`.
+        let own = doc.layer(id).map(|l| l.locks).unwrap_or_default();
+        let groups = doc.path_of(id).map_or_else(Default::default, |p| doc.locks_at(p.get(..p.len().saturating_sub(1)).unwrap_or_default()));
+        let locked = (own.pixels || own.all) && !(groups.pixels || groups.all);
+        let preserve = preserve || locked;
+        let surf = if locked {
+            doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.surface_mut().ok_or_else(|| EngineError::Other("not a pixel layer".into()))?
+        } else {
+            crate::commands::paint_surface(doc, id, &Value::Null)?
+        };
         let sf = surf.format();
         if sf != fmt {
             return Err(EngineError::Other("the target layer's format doesn't match the document".into()));
@@ -97,14 +117,17 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
             && src_doc_mode == ColorMode::Rgb
             && mask.is_none()
             && selection.is_none();
+        // Darker Color / Lighter Color compare RGB luminosity; one plane takes Darken / Lighten.
+        let whole = blending.whole_pixel().filter(|_| colors > 1 && color_targets.is_none_or(|t| t.len() >= colors));
+        if whole.is_some() && sf.mode != ColorMode::Rgb {
+            return Err(EngineError::Other(format!("Darker Color and Lighter Color need an RGB or one-channel target, not {:?}", sf.mode)));
+        }
         let mut v = surf.read_region(area);
         for (i, px) in v.chunks_exact_mut(n).enumerate() {
             let base_a = if sf.alpha { px[colors].clamp(0.0, 1.0) } else { 1.0 };
-            let mut w = weight(i);
-            if preserve {
-                w *= base_a;
-            }
-            if w <= 0.0 {
+            let w = weight(i);
+            // Preserve Transparency leaves transparent pixels as they are.
+            if w <= 0.0 || (preserve && base_a <= 0.0) {
                 continue;
             }
             // Painted over the layer like a brush: the blend only acts where the layer has
@@ -116,20 +139,35 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
             // A CMYK composite onto another mode darkens each tone by its Black, so Black
             // alone stays black.
             let k = if src_mode == ColorMode::Cmyk && sf.mode != ColorMode::Cmyk { src.get(3).map_or(1.0, |pl| tone(src_mode, pl[i])) } else { 1.0 };
-            let top_at = |c: usize| if src.len() > 1 { tone(src_mode, src.get(c).unwrap_or(&src[0])[i]) * k } else { src[0][i] };
+            let top_of = |c: usize| if src.len() > 1 { tone(src_mode, src.get(c).unwrap_or(&src[0])[i]) * k } else { src[0][i] };
             // The truncation only replaces today's rounding where the blend is what lands on the
             // pixel: at full weight (opacity 100 %, no mask, no selection) and on an opaque
             // pixel, and only when every source sample blended here is a whole 8-bit level --
             // the measured reference divides whole levels, composites and mask planes can carry
             // fractions through an 8-bit document, and those cases are not measured (#14490).
             // Attenuated blends keep the old rounding as well.
-            let lands_whole = truncates && w >= 1.0 && base_a >= 1.0 && (0..colors).all(|c| whole_level_at_8bit(top_at(c)));
+            let lands_whole = truncates && w >= 1.0 && base_a >= 1.0 && (0..colors).all(|c| whole_level_at_8bit(top_of(c)));
+            // The whole pixel comes from the side Darker / Lighter Color picks; channels never mix.
+            let picked = whole.and_then(|m| {
+                let base = [px.first()?, px.get(1)?, px.get(2)?].map(|&b| tone(sf.mode, b));
+                Some(blend_rgb(m, base, [top_of(0), top_of(1), top_of(2)]))
+            });
             for (c, b) in px[..colors].iter_mut().enumerate() {
-                let top = top_at(c);
+                let top = top_of(c);
                 let base = tone(sf.mode, *b);
                 let applied = if lands_whole { blending.apply_truncated_at_8bit(base, top) } else { blending.apply(base, top) };
-                let blended = top + (applied - top) * base_a;
-                *b = tone(sf.mode, if preserve { base + (blended - base) * w } else { (w * blended + base_a * (1.0 - w) * base) / out_a });
+                let mixed = picked.and_then(|p| p.get(c).copied()).unwrap_or(applied);
+                // With Preserve Transparency the colour takes the full blend and only the alpha
+                // stays the layer's (a pixel at 50% alpha turns fully to the source in Normal).
+                *b = tone(
+                    sf.mode,
+                    if preserve {
+                        base + (mixed - base) * w
+                    } else {
+                        let blended = top + (mixed - top) * base_a;
+                        (w * blended + base_a * (1.0 - w) * base) / out_a
+                    },
+                );
             }
             if sf.alpha {
                 px[colors] = out_a;
@@ -145,6 +183,10 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
 pub(super) fn calculations(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "image.calculations";
     let blending = Blending::parse(p).map_err(|e| bad(cmd, e))?;
+    // Not offered by Calculations yet (a separate item); Apply Image only.
+    if blending.whole_pixel().is_some() {
+        return Err(bad(cmd, format!("unsupported blending `{}`", p.get("blending").and_then(Value::as_str).unwrap_or_default().to_ascii_lowercase())));
+    }
     let opacity = p.get("opacity").and_then(Value::as_f64).unwrap_or(100.0).clamp(0.0, 100.0) as f32 / 100.0;
     let s1 = source(s, &source_spec(p, "source1", "source1").unwrap_or_else(|| json!({})), cmd, true)?.remove(0);
     let s2 = source(s, &source_spec(p, "source2", "source2").unwrap_or_else(|| json!({})), cmd, true)?.remove(0);

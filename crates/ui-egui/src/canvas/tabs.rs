@@ -234,13 +234,13 @@ pub(crate) fn tab_title_at(app: &PhotocraftApp, i: usize, zoom: f32) -> String {
     let layer = active_layer.map(|l| format!("{}, ", l.name)).unwrap_or_default();
     // A save in progress: "name @ 100% (Layer 1, RGB/16) - Saving 45%", as Photoshop does (#3389).
     let saving = crate::jobs_ui::save_progress(app, st.doc.id).map(|s| format!(" - {s}")).unwrap_or_default();
-    format!("{} @ {}% ({layer}{model}/{}){saving}", titled_name(st), fmt_zoom(zoom), st.doc.depth.bits())
+    format!("{} @ {}% ({layer}{model}/{}){saving}", titled_name(app, st), fmt_zoom(zoom), st.doc.depth.bits())
 }
 
 /// The document's name as its tab and window title show it: "© name" when File Info marks it
 /// Copyrighted, as Photoshop does (#13821).
-pub(crate) fn titled_name(st: &photocraft_engine::DocState) -> String {
-    let copyrighted = photocraft_engine::file_cmds::copyright_marked(st.doc.metadata.xmp.as_deref());
+pub(crate) fn titled_name(app: &PhotocraftApp, st: &photocraft_engine::DocState) -> String {
+    let copyrighted = app.doc_queries.copyrighted(&app.session, st);
     format!("{}{}", if copyrighted { "\u{a9} " } else { "" }, st.doc.name)
 }
 

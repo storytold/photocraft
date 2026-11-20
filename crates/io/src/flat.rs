@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType as CSample};
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{AlphaChannel, Document, Layer, LayerContent};
+use photocraft_doc::{AlphaChannel, ColorIndices, Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_raster::{AllocationError, Interrupt, PruneCursor, RowWriteError, Surface};
 
@@ -127,6 +127,9 @@ fn import_flat_impl_with_options(
         }
     };
     apply_flat_format(&mut r, bytes, format, img.as_ref())?;
+    if format == Some(Format::Png) {
+        read_png_indices(&mut r, bytes, ctl)?;
+    }
     Ok(r)
 }
 
@@ -238,7 +241,8 @@ impl FlatBuilder {
 
     /// The document, after copying and pruning whatever is left: the one-shot result and the last
     /// step of a stepped one. Like the one-shot import, it records how many images the file holds
-    /// when the decoder read only the first, so Save doesn't write over the rest (#5733).
+    /// when the decoder read only the first, so Save doesn't write over the rest (#5733). A palette
+    /// PNG's indices are left to [`PngIndices`].
     pub(crate) fn finish(mut self, bytes: &[u8], format: Option<Format>) -> Result<ImportResult, IoError> {
         let copied = self.copy_done();
         while !self.copy_done() {
@@ -258,9 +262,135 @@ impl FlatBuilder {
     }
 }
 
+/// Each pixel's palette index in the palette PNG `bytes`, opened as `doc`, read again a band of
+/// rows per [`PngIndices::step`], so Color Table can tell entries of one colour apart (#14342).
+/// No indices, and Color Table falls back to the nearest entry, when the document's one layer
+/// doesn't show each pixel's entry at the file's place for it (an EXIF orientation turned the
+/// pixels, which colours alone can't show when entries repeat, or a colour conversion changed
+/// them), or when the file is interlaced (not read here). One row at a time, into tiles one band
+/// of rows at a time: next to the layer, only the indices themselves (a byte per pixel) and one
+/// band are held. None either when memory can't hold them: the open's own memory check didn't
+/// count them.
+pub(crate) struct PngIndices<B: AsRef<[u8]>> {
+    reader: png::Reader<std::io::Cursor<B>>,
+    table: photocraft_doc::ColorTable,
+    layer: photocraft_doc::LayerId,
+    surface: Surface,
+    map: Surface,
+    band: Vec<u8>,
+    shown: Vec<[u8; 4]>,
+    bits: usize,
+    width: u32,
+    height: i32,
+    y: i32,
+}
+
+impl<B: AsRef<[u8]>> PngIndices<B> {
+    /// Starts reading `bytes` for `doc`'s indices; `None` when they can't be recorded, or needn't
+    /// be.
+    pub(crate) fn new(bytes: B, doc: &Document) -> Option<Self> {
+        let table = doc.color_table.as_ref()?;
+        // Only entries that share a colour need the file. When every entry has its own colour,
+        // each pixel's colour names its entry and Color Table's nearest entry finds it, so the
+        // pass over all the file's rows is skipped.
+        let mut colors = table.colors.clone();
+        colors.sort_unstable();
+        if !colors.windows(2).any(|w| w[0] == w[1]) {
+            return None;
+        }
+        let [layer] = doc.layers.as_slice() else { return None };
+        let surface = layer.surface()?;
+        let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+        decoder.set_transformations(png::Transformations::IDENTITY);
+        decoder.set_ignore_text_chunk(true);
+        let reader = decoder.read_info().ok()?;
+        let info = reader.info();
+        let (w, h, bits) = (info.width, info.height, info.bit_depth as usize);
+        if info.color_type != png::ColorType::Indexed || info.interlaced || !matches!(bits, 1 | 2 | 4 | 8) || (w, h) != (doc.size.width, doc.size.height) {
+            return None;
+        }
+        let width = usize::try_from(w).ok()?;
+        let band_len = width.checked_mul(usize::try_from(TILE_SIZE).ok()?)?;
+        // The index surface's whole tiles, the band, and the row of the layer read beside it.
+        let needed = tile_bytes(w, h, 1).saturating_add(u64::from(w).saturating_mul(TILE_SIZE as u64 + 4));
+        crate::memory::check_fits(w, h, needed, crate::memory::available()).ok()?;
+        let mut band = Vec::new();
+        band.try_reserve_exact(band_len).ok()?;
+        let mut shown = Vec::new();
+        shown.try_reserve_exact(width).ok()?;
+        shown.resize(width, [0u8; 4]);
+        Some(Self {
+            reader,
+            table: table.clone(),
+            layer: layer.id,
+            surface: surface.clone(),
+            map: Surface::new(PixelFormat::GRAY8),
+            band,
+            shown,
+            bits,
+            width: w,
+            height: i32::try_from(h).ok()?,
+            y: 0,
+        })
+    }
+
+    /// Reads the next band of rows into the indices: `Some(true)` once every row is read (then
+    /// [`Self::finish`]), `Some(false)` while rows are left, `None` when no indices can be recorded.
+    pub(crate) fn step(&mut self) -> Option<bool> {
+        let Self { reader, table, surface, map, band, shown, bits, width, height, y, .. } = self;
+        let (bits, w, band_y) = (*bits, *width, *y);
+        while *y < *height && *y - band_y < TILE_SIZE {
+            let row = reader.next_row().ok()??;
+            surface.read_rgba8_into(Rect::from_xywh(0, *y, w, 1), shown);
+            for (x, px) in shown.iter().enumerate() {
+                let bit = x * bits;
+                let byte = *row.data().get(bit / 8)?;
+                let i = (byte >> (8 - bits - bit % 8)) & (0xff >> (8 - bits));
+                let entry = table.colors.get(usize::from(i))?;
+                let ok = if px[3] == 0 { table.transparent == Some(i) } else { px[..3] == entry[..] };
+                if !ok {
+                    return None;
+                }
+                band.push(i);
+            }
+            *y += 1;
+        }
+        map.try_write_interleaved(Rect::from_xywh(0, band_y, w, u32::try_from(*y - band_y).ok()?), band).ok()?;
+        band.clear();
+        Some(*y == *height)
+    }
+
+    /// The indices, once [`Self::step`] has read every row.
+    pub(crate) fn finish(mut self) -> Option<ColorIndices> {
+        // An eXIf after the pixels counts too.
+        self.reader.finish().ok()?;
+        if self.reader.info().exif_metadata.as_deref().is_some_and(|e| codecs::exif_orientation(e) != 1) || self.y != self.height {
+            return None;
+        }
+        Some(ColorIndices { layer: self.layer, pixels: self.surface, indices: self.map })
+    }
+}
+
+/// The indices of a palette PNG opened as `r` (see [`PngIndices`]), read with a cancel check
+/// between bands of rows.
+fn read_png_indices(r: &mut ImportResult, bytes: &[u8], ctl: &Interrupt) -> Result<(), IoError> {
+    let Some(mut read) = PngIndices::new(bytes, &r.document) else { return Ok(()) };
+    loop {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        match read.step() {
+            Some(false) => {}
+            Some(true) => break,
+            None => return Ok(()),
+        }
+    }
+    r.document.color_indices = read.finish();
+    Ok(())
+}
+
 /// What every flat format does to the document of its pixels: the palette mode, the save
 /// settings, a Targa's alpha channel and the profile an untagged image needs. `img` is the
-/// decoded image, when the document was built from one (a streamed PNG has none).
+/// decoded image, when the document was built from one (a streamed PNG has none). A palette
+/// PNG's indices are read after it, by [`PngIndices`], which a stepped import can step.
 pub(crate) fn apply_flat_format(r: &mut ImportResult, bytes: &[u8], format: Option<Format>, img: Option<&Image>) -> Result<(), IoError> {
     // A palette BMP, PNG or GIF opens in Indexed Color mode with its colour table, as in
     // Photoshop (#3802, #4804, #7886). A GIF is always palette-based: the first frame's table.
@@ -2639,7 +2769,7 @@ mod streamed_png_tests {
         let mut top = layer(&doc, &[(Rect::new(40, 100, 260, 650), &[0.2, 0.7, 0.3, 0.5])]);
         top.opacity = 0.7;
         top.blend = BlendMode::Multiply;
-        doc.layers = vec![bottom, top];
+        doc.layers = vec![bottom, top].into();
         assert!(opaque_bottom(&doc));
         for xmp in [XmpEmbed::All, XmpEmbed::None] {
             let r = same_as_whole(&doc, 256, &ExportOptions { xmp, ..Default::default() });
@@ -2652,14 +2782,14 @@ mod streamed_png_tests {
         // Transparent RGBA, opaque CMYK (written as sRGB through its profile), 16-bit gray and
         // float RGB out of range (written with 16 bits, clipped, with the warning).
         let mut rgba = Document::new("rgba", Size::new(130, 333), ColorMode::Rgb, SampleType::U8);
-        rgba.layers = vec![layer(&rgba, &[(Rect::new(10, 20, 120, 300), &[0.3, 0.6, 0.9, 0.4])])];
+        rgba.layers = vec![layer(&rgba, &[(Rect::new(10, 20, 120, 300), &[0.3, 0.6, 0.9, 0.4])])].into();
         let mut cmyk = Document::new("cmyk", Size::new(97, 211), ColorMode::Cmyk, SampleType::U8);
         cmyk.icc_profile = Some(craft_cms::Builtin::CoatedCmyk.profile().to_bytes());
-        cmyk.layers = vec![layer(&cmyk, &[(cmyk.bounds(), &[0.3, 0.6, 0.1, 0.2, 1.0]), (Rect::new(0, 50, 97, 99), &[0.0, 0.9, 0.9, 0.0, 1.0])])];
+        cmyk.layers = vec![layer(&cmyk, &[(cmyk.bounds(), &[0.3, 0.6, 0.1, 0.2, 1.0]), (Rect::new(0, 50, 97, 99), &[0.0, 0.9, 0.9, 0.0, 1.0])])].into();
         let mut gray = Document::new("gray", Size::new(64, 190), ColorMode::Grayscale, SampleType::U16);
-        gray.layers = vec![layer(&gray, &[(gray.bounds(), &[0.25, 1.0]), (Rect::new(0, 0, 64, 77), &[0.6123, 1.0])])];
+        gray.layers = vec![layer(&gray, &[(gray.bounds(), &[0.25, 1.0]), (Rect::new(0, 0, 64, 77), &[0.6123, 1.0])])].into();
         let mut hdr = Document::new("hdr", Size::new(50, 120), ColorMode::Rgb, SampleType::F32);
-        hdr.layers = vec![layer(&hdr, &[(hdr.bounds(), &[1.5, 0.25, -0.1, 1.0])])];
+        hdr.layers = vec![layer(&hdr, &[(hdr.bounds(), &[1.5, 0.25, -0.1, 1.0])])].into();
         for doc in [&rgba, &cmyk, &gray, &hdr] {
             assert!(single_layer(doc).is_some(), "{}", doc.name);
             same_as_whole(doc, 37, &ExportOptions::default());
@@ -2681,7 +2811,7 @@ mod streamed_png_tests {
             density: 1.0,
             feather: 0.0,
         });
-        doc.layers = vec![bottom, layer(&doc, &[(Rect::new(0, 0, 40, 40), &[1.0, 0.0, 0.0, 1.0])])];
+        doc.layers = vec![bottom, layer(&doc, &[(Rect::new(0, 0, 40, 40), &[1.0, 0.0, 0.0, 1.0])])].into();
         assert!(!opaque_bottom(&doc));
         let whole = decoded(&export_flat(&doc, Format::Png, &ExportOptions::default()).unwrap().bytes);
         let streamed = decoded(&export_png_streamed(&doc, &ExportOptions::default(), &Interrupt::NONE, 256).unwrap().bytes);
@@ -2699,7 +2829,7 @@ mod streamed_png_tests {
         let mut hole = layer(&doc, &[(Rect::new(8, 800, 56, 960), &[1.0, 1.0, 1.0, 1.0])]);
         hole.fill_opacity = 0.0;
         hole.advanced.knockout = photocraft_doc::Knockout::Deep;
-        doc.layers = vec![bottom, hole];
+        doc.layers = vec![bottom, hole].into();
         assert!(opaque_bottom(&doc));
         assert!(stream_png(&doc, &ExportOptions::default(), &Interrupt::NONE, false, 256, &mut 0.0).unwrap().is_none());
         let r = same_as_whole(&doc, 256, &ExportOptions::default());
@@ -2717,7 +2847,7 @@ mod streamed_png_tests {
     #[test]
     fn interlacing_is_turned_off_with_a_warning() {
         let mut doc = Document::new("interlaced", Size::new(40, 30), ColorMode::Rgb, SampleType::U8);
-        doc.layers = vec![layer(&doc, &[(doc.bounds(), &[0.5, 0.5, 0.5, 1.0])])];
+        doc.layers = vec![layer(&doc, &[(doc.bounds(), &[0.5, 0.5, 0.5, 1.0])])].into();
         let mut opts = ExportOptions::default();
         opts.encode.png_interlaced = true;
         let r = export_png_streamed(&doc, &opts, &Interrupt::NONE, 7).unwrap();
@@ -2729,7 +2859,7 @@ mod streamed_png_tests {
     #[test]
     fn a_cancelled_stream_stops_with_cancelled() {
         let mut doc = Document::new("cancel", Size::new(40, 30), ColorMode::Rgb, SampleType::U8);
-        doc.layers = vec![layer(&doc, &[(doc.bounds(), &[0.5, 0.5, 0.5, 1.0])])];
+        doc.layers = vec![layer(&doc, &[(doc.bounds(), &[0.5, 0.5, 0.5, 1.0])])].into();
         let yes = || true;
         let r = export_png_streamed(&doc, &ExportOptions::default(), &Interrupt::cancel_only(&yes), 7);
         assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
@@ -3078,6 +3208,20 @@ mod fused_tile_tests {
         assert!(matches!(r, Err(IoError::Cancelled)));
         let r = import_flat_with("t", broken, &Interrupt::NONE);
         assert!(matches!(&r, Err(e) if !matches!(e, IoError::Cancelled)), "{:?}", r.map(|_| ()));
+    }
+
+    #[test]
+    fn a_cancel_while_a_palette_png_is_read_for_its_indices_fails_the_open() {
+        // Red, white, white: two entries share a colour, so once the pixels are built the open
+        // reads the file again for each pixel's entry (#14342). A cancel raised then still counts.
+        let png = codecs::encode_png_indexed(4, 2, &[0, 1, 2, 2, 0, 1, 2, 2], &[[255, 0, 0], [255, 255, 255], [255, 255, 255]], None, None, None).unwrap();
+        let last = std::sync::Mutex::new(0.0f32);
+        let progress = |f: f32| *last.lock().unwrap() = f;
+        let pixels_built = || *last.lock().unwrap() >= 0.95;
+        let r = import_flat_with("t.png", &png, &Interrupt::new(&pixels_built, &progress));
+        assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
+        let r = import_flat_with("t.png", &png, &Interrupt::NONE).unwrap();
+        assert!(r.document.color_indices.is_some(), "the file was read for its indices");
     }
 
     #[test]
