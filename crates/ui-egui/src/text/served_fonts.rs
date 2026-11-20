@@ -104,7 +104,7 @@ pub fn install(app: &mut PhotocraftApp, ctx: &egui::Context, delivered: Vec<(Str
 /// then its layers may have been edited (a PSD layer re-rendered) or deleted (#6087).
 fn pick(session: &photocraft_engine::Session, families: &[String], layers: &mut Vec<TypeLayerRef>) {
     for st in session.documents() {
-        let first = st.snapshots.iter().find(|s| s.id == 0).map(|s| &s.doc);
+        let first = st.snapshots().iter().find(|s| s.id == 0).map(|s| &s.doc);
         // While it still is the open document, a layer picked there is picked in the snapshot too
         // (without checking it twice): a busy document is refreshed later, and by then a finished
         // job can have moved the open document on.
