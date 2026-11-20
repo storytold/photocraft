@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
-"""Moves rust-toolchain.toml to the newest stable Rust release.
+"""Prints the newest stable Rust release when it is newer than rust-toolchain.toml's channel.
 
-    python3 scripts/ci-toolchain-bump.py            prints the newest stable release when it is newer than the file's
-    python3 scripts/ci-toolchain-bump.py --write V  sets the file's channel to V
-
-CI's nightly run (ci.yml `toolchain-bump`) runs both and opens a pull request that changes only
-rust-toolchain.toml. Prints nothing when the file is current.
+CI's nightly run (ci.yml `toolchain-check`) warns with it. Prints nothing when the file is current.
 """
 
 import re
@@ -16,7 +12,6 @@ from pathlib import Path
 
 FILE = Path(__file__).resolve().parent.parent / 'rust-toolchain.toml'
 MANIFEST = 'https://static.rust-lang.org/dist/channel-rust-stable.toml'
-CHANNEL = re.compile(r'^(channel\s*=\s*")([^"]*)(")', re.M)
 RELEASE = re.compile(r'^\d+\.\d+\.\d+$')
 
 
@@ -45,16 +40,7 @@ def newer(file_text, manifest_text):
     return stable
 
 
-def with_channel(file_text, version):
-    if not RELEASE.match(version):
-        raise ValueError(f'not a release: {version!r}')
-    return CHANNEL.sub(lambda m: m.group(1) + version + m.group(3), file_text, count=1)
-
-
 def main(argv):
-    if argv[:1] == ['--write']:
-        FILE.write_text(with_channel(FILE.read_text(), argv[1]))
-        return
     with urllib.request.urlopen(MANIFEST, timeout=30) as response:
         stable = newer(FILE.read_text(), response.read().decode())
     if stable:

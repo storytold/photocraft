@@ -824,30 +824,25 @@ jobs:
           name: dry-mixer-performance
           path: dry-mixer-perf.txt
 
-  # After the nightly cold run passes, a newer stable Rust release gets a pull request that changes
-  # only rust-toolchain.toml (a file the workflow token may change; it may not change workflow
-  # files). Pull requests the token opens start no checks, so the branch also gets a dispatched run
-  # of this workflow, which runs the whole gate on it. A failed step warns: tomorrow's run tries again.
-  toolchain-bump:
-    name: toolchain bump
+  # After the nightly cold run passes, a warning (annotation and job summary) says when a newer stable
+  # Rust release than rust-toolchain.toml's exists. It needs no permission and changes nothing: a bump
+  # is a pull request that changes the file's `channel` by hand.
+  toolchain-check:
+    name: toolchain check
     needs: gate
     if: github.event_name == 'schedule' && needs.gate.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     continue-on-error: true
-    permissions:
-      contents: write
-      pull-requests: write
-      actions: write
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Open the bump pull request
-        env:
-          GH_TOKEN: ${{ github.token }}
+        with:
+          persist-credentials: false
+      - name: Compare the pinned release with stable
         run: |
           set -euo pipefail
           version=$(python3 scripts/ci-toolchain-bump.py)
@@ -855,15 +850,6 @@ jobs:
             echo "rust-toolchain.toml is current"
             exit 0
           fi
-          branch="toolchain-$version"
-          if [ -n "$(gh pr list --head "$branch" --state all --json number --jq '.[].number')" ]; then
-            echo "$branch already has a pull request"
-            exit 0
-          fi
-          python3 scripts/ci-toolchain-bump.py --write "$version"
-          git -c user.name=github-actions -c user.email=41898282+github-actions[bot]@users.noreply.github.com \
-            commit -q -m "Build with Rust $version" rust-toolchain.toml
-          git push origin "HEAD:refs/heads/$branch"
-          gh pr create --head "$branch" --base main --title "Build with Rust $version" \
-            --body "Moves rust-toolchain.toml to Rust $version, the newest stable release. A pull request opened with the workflow token starts no checks; the run dispatched on this branch is its check. The first main run after the merge builds cold once."
-          gh workflow run ci.yml --ref "$branch"
+          msg="Rust $version is the newest stable release; rust-toolchain.toml pins an older one. Change its channel in a pull request to move."
+          echo "::warning title=Newer Rust release::$msg"
+          echo "$msg" >> "$GITHUB_STEP_SUMMARY"

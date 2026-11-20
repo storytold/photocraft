@@ -21,9 +21,6 @@ class TestBump(unittest.TestCase):
     def test_a_pin_that_is_not_a_release_moves_to_stable(self):
         self.assertEqual(bump.newer(FILE.replace('1.100.0', 'stable'), manifest('1.100.0')), '1.100.0')
 
-    def test_writing_changes_only_the_channel(self):
-        self.assertEqual(bump.with_channel(FILE, '1.101.0'), FILE.replace('1.100.0', '1.101.0'))
-
 
 if __name__ == '__main__':
     unittest.main()
