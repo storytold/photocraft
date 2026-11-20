@@ -125,6 +125,14 @@ impl Session {
         self.precondition(spec, &channel_cmds::inject_target(self, id, params.clone())).err().or_else(|| self.job_conflict(id, spec.journal))
     }
 
+    /// Why a background job on the active document stops `id` now, if one does. The Frame tool's
+    /// press uses this to keep the job-conflict message while the Bitmap/Indexed refusal stays
+    /// silent (#13886).
+    pub fn job_conflict_reason(&self, id: &str) -> Option<String> {
+        let spec = commands::find(id)?;
+        self.job_conflict(id, spec.journal)
+    }
+
     /// The command's own precondition for a call with `params` (their target filled in).
     fn precondition(&self, spec: &commands::CommandSpec, params: &Value) -> std::result::Result<(), String> {
         if let Some(why) = color_channels::refusal(self, spec.id, params) {
