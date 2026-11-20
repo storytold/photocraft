@@ -213,6 +213,11 @@ fn autosave(app: &mut PhotocraftApp, now: Instant) {
             }
         }
     }
+    // Apply Data Set's Preview is not the document: autosave waits until the preview ends, and
+    // the timer keeps what is due for the next tick.
+    if crate::panels::apply_data_set_ui::previewing(app) {
+        return;
+    }
     let docs: Vec<AutosaveDoc> = app.session.documents().iter().map(|d| AutosaveDoc { id: d.doc.id.0, revision: d.revision, dirty: d.is_dirty() }).collect();
     let due = app.autosave.due(now, docs);
     if let Some(discard) = app.services.discard_autosave.as_mut() {
