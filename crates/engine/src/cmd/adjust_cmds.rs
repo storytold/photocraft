@@ -403,7 +403,7 @@ pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface, histogram_
         })?;
     } else if kind == "desaturate" {
         let mode = surf.format().mode;
-        if crate::pixels::adjust_surface(&mut out, &crate::commands::desaturate_adjustment(), None, mode).is_err() {
+        if crate::pixels::adjust_surface(&mut out, &super::table::image::image_menu::desaturate_adjustment(), None, mode).is_err() {
             return Ok(None);
         }
     } else if kind == "equalize" {
@@ -652,7 +652,7 @@ fn hdr_toning(s: &mut Session, p: &Value) -> Result<Value> {
         bg.locks.position = true;
         crate::pixels_mut(&mut bg)?.write_region(doc.bounds(), &data);
         *active = Some(bg.id);
-        doc.layers = vec![bg];
+        doc.layers = vec![bg].into();
         doc.selection = None;
         Ok(())
     })?;

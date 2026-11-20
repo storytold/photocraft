@@ -159,7 +159,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect)
             && let Some(selection) = st.doc.selection.as_ref()
             && let Some(h) = t.session.homography()
         {
-            let mask = SurfaceMask::new(selection, crate::app::surface_fingerprint(selection), [st.doc.size.width, st.doc.size.height]);
+            let mask = SurfaceMask::new(selection, selection.generation(), [st.doc.size.width, st.doc.size.height]);
             // A scale and rotate box has no horizon: the map always answers.
             SelectionOverlay::new(tl!("Content-Aware Move").to_owned(), &mask)
                 .offset(t.offset)

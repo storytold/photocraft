@@ -48,3 +48,10 @@ pub(super) fn pen_option(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         option(app, ui, target, true);
     }
 }
+
+/// Shape mode edits paint; Path mode keeps the selected layer and paint defaults untouched.
+pub(crate) fn shape_option(app: &mut PhotocraftApp, ui: &mut egui::Ui, target: Option<LayerId>, paint: bool) {
+    if paint {
+        option(app, ui, target, true);
+    }
+}

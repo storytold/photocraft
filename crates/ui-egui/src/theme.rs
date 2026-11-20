@@ -961,7 +961,7 @@ pub fn install_fonts(ctx: &egui::Context) {
 /// `medium` and `semibold` families, JetBrains Mono for numbers. The framework puts egui's default
 /// faces after them, for symbols Inter lacks, and orders the craft-fonts faces this build embeds
 /// (`cjk_fonts::craft_faces`) by `ui_language`. A web build's served faces and their fetcher come
-/// from `served_fonts::serve`.
+/// from `served_fonts::serve`; runtime-manifest deliveries use its owned fallback cache.
 fn ui_fonts(ctx: &egui::Context, ui_language: &str) -> UiFonts<'static> {
     use craft::ui::fonts::{Emoji, Family, FontRef, I18nScripts, SEMIBOLD};
     let (proportional, monospace, medium, semibold) = (FontRef::proportional(), FontRef::monospace(), FontRef::named("medium"), FontRef::named(SEMIBOLD));
@@ -987,13 +987,20 @@ fn ui_fonts(ctx: &egui::Context, ui_language: &str) -> UiFonts<'static> {
         .craft_faces(&crate::cjk_fonts::craft_faces())
         .ui_language(ui_language)
         .emoji(emoji);
+    // Headless passes cannot wait for the native index's repaint before strict glyph checks.
+    // Use the same system faces, with a blocking lookup only in the test fixture.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    if let Some(provider) = craft::ui::fonts::system_font_provider(ui_language) {
+        fonts = fonts.system_provider(provider);
+    }
     if let Some(locale) = crate::cjk_fonts::os_locale() {
         fonts = fonts.os_locale(locale);
     }
     if let Some(served) = crate::served_fonts::served(ctx) {
         fonts = fonts.served_faces(&served.faces).fetcher(served.fetcher);
     }
-    faces.into_iter().fold(fonts, |fonts, (name, data, families)| fonts.app_face(&name, data, &families))
+    let fonts = faces.into_iter().fold(fonts, |fonts, (name, data, families)| fonts.app_face(&name, data, &families));
+    crate::served_fonts::append_loaded(ctx, fonts, ui_language)
 }
 
 /// Installs the craft runtime on `ctx` with the font stack (see [`install_fonts`]) and the root

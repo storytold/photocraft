@@ -346,9 +346,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
         // An `Err` is the alert that was not opened because one is already up.
         let _ = app.framework.dialogs.open_unless_open(HostedAlert::new(alert));
     }
-    if paint {
-        crate::vector_ui::alignment::option(app, ui, target.as_ref().map(|s| s.layer), true);
-    }
+    crate::vector_ui::alignment::shape_option(app, ui, target.as_ref().map(|s| s.layer), paint);
     if tool == Tool::CustomShape {
         crate::preset_panels::shape_picker(app, ui);
     }

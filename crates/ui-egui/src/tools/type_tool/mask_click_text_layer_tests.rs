@@ -22,7 +22,7 @@ const MASKS: [Tool; 2] = [Tool::HorizontalTypeMask, Tool::VerticalTypeMask];
 
 /// A committed type layer made with `type_tool` and, active above it, an empty layer, with no
 /// selection and `tool` in hand.
-fn typed(type_tool: Tool, tool: Tool) -> (PhotocraftApp, LayerId) {
+fn typed(type_tool: Tool, tool: Tool) -> (Box<PhotocraftApp>, LayerId) {
     let mut app = new_app();
     app.run("select.deselect", json!({})).unwrap();
     app.ui.tool = type_tool;
@@ -36,7 +36,7 @@ fn typed(type_tool: Tool, tool: Tool) -> (PhotocraftApp, LayerId) {
 }
 
 /// [`typed`] horizontal text, and the point on its glyphs between "T" and "X".
-fn txt(tool: Tool) -> (PhotocraftApp, LayerId, (f64, f64)) {
+fn txt(tool: Tool) -> (Box<PhotocraftApp>, LayerId, (f64, f64)) {
     let (mut app, id) = typed(Tool::Type, tool);
     let y = 185.0;
     let x = (100..200)
@@ -60,6 +60,13 @@ fn layers(app: &PhotocraftApp) -> usize {
 
 #[test]
 fn a_type_mask_click_on_text_edits_that_layer_as_the_type_tool_does() {
+    // This unoptimized fixture moves several full app/harness states through two frames.
+    // Windows test threads have only 2 MiB; reserve a bounded stack for the fixture,
+    // keeping all three tools and their full frame/history assertions enabled.
+    std::thread::Builder::new().stack_size(8 * 1024 * 1024).spawn(check_type_mask_click_on_text).unwrap().join().unwrap();
+}
+
+fn check_type_mask_click_on_text() {
     let escape = key(egui::Key::Escape, Modifiers::NONE);
     let mut states = Vec::new();
     for tool in [Tool::Type, Tool::HorizontalTypeMask, Tool::VerticalTypeMask] {

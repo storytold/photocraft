@@ -3,8 +3,8 @@
 //! Eraser they set the brush's Opacity (⇧: Flow, swapped while airbrush build-up is on; the Pencil has no Flow, so its ⇧
 //! digits set Opacity too, #11967); with the Gradient or Paint Bucket their
 //! Opacity; with tools that have no opacity of their own (Move, the selection tools, Type…) the
-//! active layer's Opacity (⇧: Fill); with the Background Eraser its Tolerance (#11907). Tools whose
-//! number is a strength or exposure are left alone.
+//! active layer's Opacity (⇧: Fill); with the Background Eraser its Tolerance (#11907); with Color
+//! Replacement its Tolerance (#11927). Tools whose number is a strength or exposure are left alone.
 //! The `tools.smoothing.N` commands (⌥+digit) set the Smoothing of the tools that show it (Brush, Pencil, Eraser; #11892).
 //!
 //! The keys arrive as fired commands: the framework's `OpacityDigit` set (pair timing in `DigitKeys`) and the app
@@ -33,6 +33,8 @@ enum Target {
     ToolOpacity,
     /// The Background Eraser's Tolerance option.
     BgTolerance,
+    /// Color Replacement's Tolerance option.
+    CrTolerance,
     /// The active layer's opacity (⇧: fill).
     Layer,
     None,
@@ -44,6 +46,7 @@ fn target(tool: Tool) -> Target {
         Tool::Pencil => Target::Brush { flow: false },
         Tool::Gradient | Tool::PaintBucket => Target::ToolOpacity,
         Tool::BackgroundEraser => Target::BgTolerance,
+        Tool::ColorReplacement => Target::CrTolerance,
         // Their options-bar number is a strength, exposure or tolerance, not this opacity.
         t if t.is_brushlike() || t == Tool::MagicEraser => Target::None,
         _ => Target::Layer,
@@ -111,6 +114,8 @@ fn apply(app: &mut PhotocraftApp, percent: f32, shift: bool) {
         (Target::ToolOpacity, false) => app.ui.tool_options.fill_opacity = percent,
         // The Tolerance field starts at 1%; `00` (0%) keeps today's value rather than guessing.
         (Target::BgTolerance, false) if percent >= 1.0 => app.ui.tool_options.bg_tolerance = percent,
+        // The field starts at 1%; an unmeasured 00 keeps its existing value.
+        (Target::CrTolerance, false) if percent >= 1.0 => app.ui.tool_options.cr_tolerance = percent,
         (Target::Layer, _) => {
             // The locked Background has no opacity or fill.
             let Some(st) = app.session.active() else { return };
@@ -132,16 +137,16 @@ mod tests {
     use OpacityDigit as D;
     use egui::{Event, Key};
 
-    fn app(tool: Tool) -> PhotocraftApp {
+    fn app(tool: Tool) -> Box<PhotocraftApp> {
         prepared(PhotocraftApp::new(photocraft_engine::Session::new(), Default::default()), tool)
     }
 
     /// The app on `ctx`, a harness's context that has the framework installed.
-    fn app_on(ctx: egui::Context, tool: Tool) -> PhotocraftApp {
+    fn app_on(ctx: egui::Context, tool: Tool) -> Box<PhotocraftApp> {
         prepared(PhotocraftApp::with_context(ctx, photocraft_engine::Session::new(), Default::default()), tool)
     }
 
-    fn prepared(mut app: PhotocraftApp, tool: Tool) -> PhotocraftApp {
+    fn prepared(mut app: Box<PhotocraftApp>, tool: Tool) -> Box<PhotocraftApp> {
         app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
         app.run("layer.new.layer", json!({})).unwrap();
         app.ui.tool = tool;
@@ -314,7 +319,7 @@ mod tests {
             a
         });
         h.run_steps(4);
-        let key = |h: &mut Harness<'_, PhotocraftApp>, k: Key, m: egui::Modifiers| {
+        let key = |h: &mut Harness<'_, Box<PhotocraftApp>>, k: Key, m: egui::Modifiers| {
             h.event(Event::Key { key: k, physical_key: Some(k), pressed: true, repeat: false, modifiers: m });
             h.event(Event::Key { key: k, physical_key: Some(k), pressed: false, repeat: false, modifiers: m });
             h.run_steps(2);
