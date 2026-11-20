@@ -95,6 +95,33 @@ fn preset_outputs(app: &mut PhotocraftApp, ratio: Option<CropRatioChange>, new_p
     }
 }
 
+/// A key of what the bar shows of the Crop tool: the options, Straighten, Reset, the Selection entry and the ✓ and ⊘
+/// cells. The task bar's preset list, Straighten and Cancel, the tool's keys and a drag of the frame change them
+/// without a command, so the options bar's content version holds this key. The options are hashed through their
+/// serialized form, which holds every stored field.
+pub(crate) fn bar_key(app: &PhotocraftApp) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    if app.ui.tool != Tool::Crop {
+        return None;
+    }
+    struct HashWriter<'a>(&'a mut std::collections::hash_map::DefaultHasher);
+    impl std::io::Write for HashWriter<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.write(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let settings = &app.ui.tool_options.crop;
+    serde_json::to_writer(HashWriter(&mut hasher), settings).ok()?;
+    let tool = &app.canvas_tools.crop.tool;
+    (tool.straighten_armed(), tool.modified(), tool.shows_selection_entry(settings), commits_shown(app)).hash(&mut hasher);
+    Some(hasher.finish())
+}
+
 /// The ✓ and ⊘ cells show while a crop is pending or the frame was edited.
 pub(crate) fn commits_shown(app: &PhotocraftApp) -> bool {
     app.ui.tool == Tool::Crop && (super::pending(app) || app.canvas_tools.crop.tool.modified())

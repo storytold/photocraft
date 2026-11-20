@@ -14,11 +14,13 @@ use crate::color_picker_ui::PickWindow;
 
 /// The version of the options bar: the Zoom tool's members show the active view, and an open Free Transform, Puppet
 /// Warp or Perspective Warp shows its own members in place of the tool's, with what a drag on the canvas changes (the
-/// box, the picked pin, the planes; Escape ends them without a command, #15547). The painting tools' members show the
-/// brush and its presets, the gradient, shape, type and Mixer Brush members the colours, and the type members the type
-/// defaults.
+/// box, the picked pin, the planes; Escape ends them without a command, #15547). The Crop tool's members show its
+/// options and frame state, which its contextual task bar and the canvas change without a command. The painting tools'
+/// members show the brush and its presets, the gradient, shape, type and Mixer Brush members the colours, and the type
+/// members the type defaults.
 pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
-    let sessions = (crate::transform_tool::bar_key(app), crate::puppet_ui::bar_key(app), crate::perspective_ui::bar_key(app));
+    let sessions =
+        (crate::transform_tool::bar_key(app), crate::puppet_ui::bar_key(app), crate::perspective_ui::bar_key(app), crate::crop_ui::bar::bar_key(app));
     version(app, (view(app), sessions, brush(app), colours(app), type_defaults(app)))
 }
 
@@ -169,9 +171,9 @@ mod tests {
         changed("the colours", &|app| app.session.tools.foreground[0] = 0.25, &mut app);
     }
 
-    /// The brush, the colours, the type defaults and an adjustment's live preview move the versions of the regions that
-    /// show them and of no other, so a drag that edits one leaves the rest settled; a version that missed one would
-    /// replay a stale region.
+    /// The brush, the colours, the type defaults, the Crop options and an adjustment's live preview move the versions of
+    /// the regions that show them and of no other, so a drag that edits one leaves the rest settled; a version that
+    /// missed one would replay a stale region.
     #[test]
     fn the_brush_and_the_colours_move_only_the_regions_that_show_them() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -213,6 +215,11 @@ mod tests {
         assert_eq!(colours, ["properties", "character", "color", "swatches", "gradients", "gradientEditor", "optionsBar", "toolbar"], "the colours");
         let type_defaults = moved(&mut app, &|app| app.ui.tool_options.type_size += 1.0);
         assert_eq!(type_defaults, ["character", "paragraph", "optionsBar"], "the type defaults");
+        app.ui.tool = Tool::Crop;
+        let ratio = moved(&mut app, &|app| app.ui.tool_options.crop.ratio = craft::draw::ui::crop::CROP_RATIOS[1]);
+        assert_eq!(ratio, ["optionsBar"], "a crop ratio picked in the task bar");
+        let straighten = moved(&mut app, &|app| crate::crop_ui::toggle_straighten(app));
+        assert_eq!(straighten, ["optionsBar"], "Straighten pressed in the task bar");
         let preview = moved(&mut app, &|app| app.live_adjust = Some((photocraft_doc::LayerId(1), serde_json::json!({"brightness": 10}))));
         assert_eq!(preview, ["histogram"], "an adjustment layer's live preview");
     }
