@@ -128,7 +128,7 @@ fn selection_segments(app: &PhotocraftApp) -> Vec<craft::imaging::trace::Segment
     let doc = &app.session.active().unwrap().doc;
     let selection = doc.selection.as_ref().unwrap();
     let offset = crate::move_ui::wrapped_selection_offset(app, 0);
-    let mask = crate::outline::SurfaceMask::new(selection, crate::app::surface_fingerprint(selection), [doc.size.width, doc.size.height]).wrapped(offset);
+    let mask = crate::outline::SurfaceMask::new(selection, selection.generation(), [doc.size.width, doc.size.height]).wrapped(offset);
     let mut segments = outline(&mask, mask.content_bounds(), 1);
     if offset.is_none() {
         let (dx, dy) = super::super::tools::selection::shown_offset(app).unwrap_or((0, 0));
