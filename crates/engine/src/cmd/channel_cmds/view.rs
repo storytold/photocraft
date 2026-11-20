@@ -98,6 +98,9 @@ pub(crate) fn fix_view(st: &mut DocState) {
     let n = st.doc.channels.len();
     let colors = color_count(&st.doc);
     let quick = st.doc.quick_mask.is_some();
+    let active = st.active_layer.and_then(|id| st.doc.layer(id));
+    let missing_layer_mask = active.is_none_or(|l| l.mask.is_none());
+    let missing_vector_mask = active.is_none_or(|l| l.vector_mask.is_none());
     {
         let v = &mut st.channel_view;
         v.alpha_visible.truncate(n);
@@ -106,10 +109,10 @@ pub(crate) fn fix_view(st: &mut DocState) {
         match v.target {
             ChannelTarget::Alpha(i) if i >= n => v.target = ChannelTarget::Composite,
             ChannelTarget::Color(k) if k >= colors || colors < 2 => v.target = ChannelTarget::Composite,
-            ChannelTarget::LayerMask if st.active_layer.and_then(|id| st.doc.layer(id)).is_none_or(|l| l.mask.is_none()) => {
+            ChannelTarget::LayerMask if missing_layer_mask => {
                 v.target = ChannelTarget::Composite;
             }
-            ChannelTarget::VectorMask if st.active_layer.and_then(|id| st.doc.layer(id)).is_none_or(|l| l.vector_mask.is_none()) => {
+            ChannelTarget::VectorMask if missing_vector_mask => {
                 v.target = ChannelTarget::Composite;
             }
             _ => {}
@@ -140,6 +143,7 @@ pub(crate) fn fix_view(st: &mut DocState) {
 pub(super) fn touch(st: &mut DocState) {
     st.bump_view_revision(!st.is_dirty());
     st.last_damage = None;
+    st.record_damage();
 }
 
 // ---------------------------------------------------------------------------------------------

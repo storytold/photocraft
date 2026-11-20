@@ -109,7 +109,7 @@ pub(crate) fn refresh(s: &mut Session) {
     if changes.is_empty() {
         return;
     }
-    let doc = Arc::make_mut(&mut st.doc);
+    let doc = Arc::make_mut(st.doc_mut());
     for (id, r) in changes {
         match r {
             Some(r) => {

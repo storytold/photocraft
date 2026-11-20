@@ -553,6 +553,9 @@ fn canvas_controls(
     // One contextual task bar per window: the active document's tile carries it, not the tile drawn last.
     if app.session.active_index() == Some(host.idx) {
         crate::crop_task_bar::show(app, ui, rect);
+        if primary {
+            crate::transform_task_bar::show(app, ui, rect);
+        }
         crate::frame_tool::task_bar::show(ui, app, rect);
     }
     crate::crop_ui::each_pass(app);

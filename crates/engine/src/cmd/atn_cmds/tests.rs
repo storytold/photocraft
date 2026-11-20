@@ -4969,7 +4969,7 @@ fn mapped_background_property_survives_export_and_playback() {
     assert_eq!(get_list(atn::parse(&bytes).unwrap().actions[0].items[0].descriptor.as_ref().unwrap(), "null"), Some(&[r][..]));
     let mut s = Session::new();
     s.execute("file.new", json!({"width":4,"height":4,"background":"white"})).unwrap();
-    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layers[0].name = "Hintergrund".into();
+    std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).layers[0].name = "Hintergrund".into();
     s.execute("layer.new.layer", json!({"name":"Background"})).unwrap();
     let ActionStep { command: id, params: p } = &loaded.actions[0].steps[0];
     s.execute(id, p.clone()).unwrap();

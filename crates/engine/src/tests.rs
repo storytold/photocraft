@@ -470,7 +470,7 @@ fn subtract_clears_selection_when_only_disjoint_off_canvas_pixels_remain() {
     selection.fill_rect(Rect::new(-4, 10, 0, 14), &[1.0]);
     selection.fill_rect(Rect::new(20, 10, 24, 14), &[1.0]);
     selection.fill_rect(Rect::new(64, 10, 68, 14), &[1.0]);
-    Arc::make_mut(&mut s.active_mut().unwrap().doc).selection = Some(selection);
+    Arc::make_mut(s.active_mut().unwrap().doc_mut()).selection = Some(selection);
 
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 64, "height": 48, "mode": "subtract"})).unwrap();
 
@@ -481,7 +481,7 @@ fn subtract_clears_selection_when_only_disjoint_off_canvas_pixels_remain() {
 fn subtract_clears_selection_with_nonzero_default_when_canvas_is_empty() {
     use photocraft_raster::Surface;
     let mut s = session_with_doc();
-    Arc::make_mut(&mut s.active_mut().unwrap().doc).selection = Some(Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[1.0]));
+    Arc::make_mut(s.active_mut().unwrap().doc_mut()).selection = Some(Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[1.0]));
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 64, "height": 48, "mode": "subtract"})).unwrap();
     assert!(s.active().unwrap().doc.selection.is_none());
 }
@@ -509,7 +509,7 @@ fn undo_and_redo_restore_the_targeted_layers() {
     let mut s = session_with_doc();
     let target = |s: &Session| {
         let st = s.active().unwrap();
-        (st.active_layer.unwrap(), st.selected_layers())
+        (st.active_layer.unwrap(), st.selected_layers().to_vec())
     };
     let select = |s: &mut Session, id: LayerId, mode: &str| {
         let steps = s.active().unwrap().history.past_len();
@@ -1937,18 +1937,18 @@ fn restore_layer_selection_puts_back_what_still_exists() {
     s.active_mut().unwrap().saved_revision = s.active().unwrap().revision;
     s.restore_layer_selection(Some(b), &[a, gone, b], Some(a)).unwrap();
     let st = s.active().unwrap();
-    assert_eq!((st.active_layer, st.selected_layers(), st.layer_anchor), (Some(b), vec![a, b], Some(a)));
+    assert_eq!((st.active_layer, st.selected_layers().to_vec(), st.layer_anchor), (Some(b), vec![a, b], Some(a)));
     assert_eq!(st.saved_revision, st.revision, "selection is not an edit");
     let snap = |s: &Session| {
         let st = s.active().unwrap();
-        (st.active_layer, st.selected_layers(), st.layer_anchor, st.revision, st.saved_revision)
+        (st.active_layer, st.selected_layers().to_vec(), st.layer_anchor, st.revision, st.saved_revision)
     };
     let before = snap(&s);
     assert!(matches!(s.restore_layer_selection(Some(gone), &[gone], None), Err(EngineError::NoLayer(_))));
     assert_eq!(snap(&s), before, "an error changes nothing");
     s.restore_layer_selection(None, &[a], Some(a)).unwrap();
     let st = s.active().unwrap();
-    assert_eq!((st.active_layer, st.selected_layers(), st.layer_anchor), (None, vec![], None), "no layer selected");
+    assert_eq!((st.active_layer, st.selected_layers().to_vec(), st.layer_anchor), (None, vec![], None), "no layer selected");
     assert!(Session::new().restore_layer_selection(None, &[], None).is_err(), "no document");
 }
 
@@ -1962,7 +1962,7 @@ fn history_states_share_large_document_payloads() {
     s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
     let raw_id = {
         let st = s.active_mut().unwrap();
-        let doc = std::sync::Arc::make_mut(&mut st.doc);
+        let doc = std::sync::Arc::make_mut(st.doc_mut());
         doc.metadata.xmp = Some("x".repeat(1 << 20).into());
         doc.duotone = Some(Duotone { inks: vec![DuotoneInk::new("Black", [0.0; 3])], psd_raw: Some(vec![7u8; 1 << 16].into()) });
         let layer = Layer::new("kept", LayerContent::Adjustment(Adjustment::Unsupported { psd_key: "abcd".into(), raw: vec![9u8; 1 << 16].into() }));
