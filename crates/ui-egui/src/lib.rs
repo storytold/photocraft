@@ -76,6 +76,8 @@ pub use craft::window::{
     Prefix,
     policy::{self as window_policy, Backend, Decision, Frame, TitleBarPref},
 };
+#[cfg(target_arch = "wasm32")]
+pub use file_dialog::{FileDialogAnswer, FileDialogFn, FileDialogReply, FileDialogRequest};
 pub use file_open::OsEvent;
 pub use state::{Tool, UiState};
 
@@ -94,7 +96,6 @@ mod tools;
 pub(crate) use app::adjustment_layer_active;
 #[cfg(test)]
 use app::layer_thumb_frame;
-pub use app::surface_fingerprint;
 pub use canvas::artboard_ui;
 pub(crate) use canvas::background_redraw;
 pub(crate) use canvas::cam_preview;
@@ -289,6 +290,7 @@ pub use tools::stroke_trail;
 pub use tools::symmetry_ui;
 use tools::tool_reset;
 pub use tools::transform_fx;
+pub use tools::transform_task_bar;
 pub use tools::transform_tool;
 use tools::type_box_preview;
 use tools::type_font_preview;
@@ -349,6 +351,8 @@ pub struct PhotocraftApp {
     /// The menu bar's rows and the English text of its titles, rebuilt when their inputs change
     /// (`menus::MenuModel`).
     pub(crate) menu_model: Option<menus::MenuModel>,
+    /// The toolbar's slots for the stored layout (`tool_commands::ToolbarSlots`).
+    pub(crate) toolbar_slots: panels::tool_commands::ToolbarSlots,
     /// Move tool drag shown live (`move_ui`).
     pub(crate) move_preview: Option<move_ui::MovePreview>,
     /// Move tool › Show Highlight on Rollover: the last hover answer (`move_hover`).
@@ -367,6 +371,8 @@ pub struct PhotocraftApp {
     pub(crate) patch_preview: Option<patch_preview::PatchPreview>,
     /// Content-Aware Move drag or box shown with its result (`cam_preview`).
     pub(crate) cam_preview: Option<cam_preview::CamPreview>,
+    /// Image › Apply Data Set…'s Preview: the set shown in the document (`apply_data_set_ui`).
+    pub(crate) data_set_preview: panels::apply_data_set_ui::PreviewState,
     /// The Brush or Pencil erase key is held this frame (`hold_keys::erase_held`, #3439).
     held_erase: bool,
     /// Position and pen pressure at the last stroke's endpoint: ⇧-click interpolates from them (#178, #2827).
@@ -608,6 +614,8 @@ pub struct PhotocraftApp {
     /// Snap targets of the active document, derived data keyed on (document, revision,
     /// `SnapOptions`, excluded layers); `snap_ui::snap` reads and refills it through `&self`.
     pub(crate) snap_cache: std::sync::Mutex<Option<snap_ui::SnapCache>>,
+    /// What the chrome derives from each open document, kept per document revision (`app::doc_queries`).
+    pub(crate) doc_queries: app::doc_queries::DocQueries,
     /// The saved workspaces and the one shown (`workspace_ui`).
     pub workspaces: workspace_ui::Workspaces,
     /// Autosave timing and its retry state (`prefs_ui`).
@@ -799,6 +807,8 @@ mod navigator_gpu_tests;
 
 #[cfg(test)]
 mod color_swatch_tests;
+#[cfg(test)]
+mod dialog_title_ellipsis_tests;
 
 #[cfg(test)]
 mod profile_open_tests;
@@ -812,6 +822,8 @@ mod home_chrome_tests;
 #[cfg(test)]
 mod pen_variants_tests;
 
+#[cfg(test)]
+mod color_replacement_digit_keys_tests;
 #[cfg(test)]
 mod color_replacement_tests;
 #[cfg(test)]
@@ -856,6 +868,8 @@ mod layer_props_ui_tests;
 mod notice_text_tests;
 #[cfg(test)]
 mod transform_switch_tests;
+#[cfg(test)]
+mod transform_task_bar_tests;
 #[cfg(test)]
 mod transform_undo_tests;
 
@@ -924,6 +938,8 @@ mod move_outline_tests;
 mod move_bar_distribute_gear_tests;
 
 #[cfg(test)]
+mod doc_revision_trials;
+#[cfg(test)]
 mod layer_thumb_bounds_tests;
 #[cfg(test)]
 mod mask_thumb_refresh_tests;
@@ -987,6 +1003,8 @@ mod polygon_lasso_tests;
 #[cfg(test)]
 mod window_frame_tests;
 
+#[cfg(test)]
+mod artboards_overlap_dialog_tests;
 #[cfg(test)]
 mod browse_field_tests;
 #[cfg(test)]

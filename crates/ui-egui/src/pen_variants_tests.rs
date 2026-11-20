@@ -10,7 +10,7 @@ use crate::canvas::{ToolEvent, testing, tool_event};
 use crate::state::Tool;
 use craft::draw::ui::VectorMode;
 
-fn app(tool: Tool) -> PhotocraftApp {
+fn app(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 300, "height": 200})).unwrap();
     app.ui.tool = tool;

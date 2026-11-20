@@ -11,7 +11,7 @@ use crate::{PhotocraftApp, Services};
 /// Frames a harness may take to settle: opening the list loads the rows' samples over several passes.
 const SETTLE_STEPS: u64 = 64;
 
-fn app_with_layer() -> PhotocraftApp {
+fn app_with_layer() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
     app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
     app.run("type.create", json!({"text": "Sample", "font": "Inter", "size": 18})).unwrap();
@@ -21,7 +21,7 @@ fn app_with_layer() -> PhotocraftApp {
 }
 
 /// The options bar over `app`, on the app's own context.
-fn bar_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn bar_harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     // The full app frame: the app takes the window's context on its first pass.
     Harness::builder().with_size(vec2(1600.0, 1000.0)).with_max_steps(SETTLE_STEPS).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::AppTheme::pro());
@@ -29,12 +29,12 @@ fn bar_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     })
 }
 
-fn field<'a>(h: &'a Harness<'static, PhotocraftApp>) -> egui_kittest::Node<'a> {
+fn field<'a>(h: &'a Harness<'static, Box<PhotocraftApp>>) -> egui_kittest::Node<'a> {
     h.query_all_by_label("Font family").next().expect("the family field")
 }
 
 /// Opens the family field and types `name` into it.
-fn type_family(h: &mut Harness<'static, PhotocraftApp>, name: &str) {
+fn type_family(h: &mut Harness<'static, Box<PhotocraftApp>>, name: &str) {
     field(h).click();
     h.run();
     field(h).type_text(name);
@@ -155,7 +155,7 @@ fn options_bar_hover_previews_with_the_character_picker_also_shown() {
     });
     h.run_steps(8);
     let layer = h.state().session.active().unwrap().active_layer.unwrap();
-    let font = |h: &mut Harness<'static, PhotocraftApp>| {
+    let font = |h: &mut Harness<'static, Box<PhotocraftApp>>| {
         let (shown, _) = crate::canvas::display_doc(h.state_mut(), 0);
         let LayerContent::Text(t) = &shown.layer(layer).unwrap().content else { panic!("type layer") };
         t.char_runs()[0].style.font_family.clone()
