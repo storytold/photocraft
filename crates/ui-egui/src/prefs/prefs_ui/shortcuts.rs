@@ -121,10 +121,12 @@ impl MenusDraft {
         if self.modified() { format!("{base} (modified)") } else { base }
     }
 
-    /// The Save dialog's default name: the shown name plus " Copy" ("<defaults> (modified) Copy",
-    /// "<defaults> Copy"), as measured (#14450).
+    /// The Save dialog's default name: the shown name plus " Copy", ending in the extension the
+    /// set's name drops ("<defaults> (modified) Copy.MNU", "<defaults> Copy.MNU"), as measured
+    /// (#14450). The extension is part of the name: a set named `Web.v2` would otherwise come back
+    /// from `file_stem()` as `Web` and replace an existing `Web` set.
     fn copy_name(&self) -> String {
-        format!("{} Copy", self.shown_name())
+        format!("{} Copy.MNU", self.shown_name())
     }
 
     /// Whether Save can store the menus as they stand: the set is modified, and its name is one the
@@ -521,9 +523,10 @@ fn save_menus(app: &mut PhotocraftApp, menus: &MenusDraft) -> Result<Value, Stri
 
 /// Save on the built-in set and New ask for the set's name through the system Save dialog, which
 /// suggests `suggested`; the chosen file's name without its extension names the set, as measured
-/// (#14450). Writing the `.mnu` file, and starting the dialog in the menu-sets folder of the
-/// settings directory with the "Menu Customization (*.MNU)" type, belong to that slice: the set is
-/// stored with the preferences here, and no file is written.
+/// (#14450). `suggested` therefore ends in `.MNU`: only that extension is stripped, so a dotted set
+/// name (`Web.v2 Copy`) keeps its dots. Writing the `.mnu` file, and starting the dialog in the
+/// menu-sets folder of the settings directory with the "Menu Customization (*.MNU)" type, belong to
+/// that slice: the set is stored with the preferences here, and no file is written.
 fn ask_set_name(app: &mut PhotocraftApp, state: &mut DialogState, suggested: &str) {
     let asked = app.pick_save(suggested, |app, path| {
         let stem = Path::new(&path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();

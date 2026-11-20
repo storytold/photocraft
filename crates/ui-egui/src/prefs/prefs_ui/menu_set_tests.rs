@@ -3,7 +3,7 @@
 //! the built-in set first and the saved sets after it, names the set in use "(modified)" while the
 //! menus differ from it, and Save / New / Delete follow the measured enablement and tooltips. Save
 //! on the built-in set and New go to the system Save dialog, whose default name is "<current set
-//! name> Copy" and whose file name, without the extension, names the new set.
+//! name> Copy.MNU" and whose file name, without the extension, names the new set.
 //!
 //! The switch-set message box (Yes / No / Cancel and "Don't show again") and the Delete
 //! confirmation are here too (#14450, slice 3): both are `StandardPrompt`s on the app's dialog
@@ -278,7 +278,7 @@ fn ok_writes_the_menus_but_only_save_writes_them_into_the_set() {
 }
 
 /// Save on the modified built-in set asks the system Save dialog for a name: the default is
-/// "<current set name> Copy", and the chosen file's name without the extension names the set.
+/// "<current set name> Copy.MNU", and the chosen file's name without the extension names the set.
 #[test]
 fn save_on_the_built_in_set_asks_for_a_name_and_the_file_names_the_set() {
     let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec!["My Menus.MNU".into()])]));
@@ -290,7 +290,7 @@ fn save_on_the_built_in_set_asks_for_a_name_and_the_file_names_the_set() {
     h.run_steps(4);
     let asked = files.requests();
     assert_eq!(asked.len(), 1, "Save on the built-in set goes to the Save dialog");
-    assert_eq!(asked[0].file_name.as_deref(), Some("PhotoCraft Defaults (modified) Copy"), "the measured default name");
+    assert_eq!(asked[0].file_name.as_deref(), Some("PhotoCraft Defaults (modified) Copy.MNU"), "the measured default name");
     assert_eq!(row_value(&h), "My Menus", "the set name is the file name without the extension");
     assert!(greyed(&h, SAVE), "the new set holds the menus as they are");
     assert!(!greyed(&h, DELETE), "and it is a saved set, so Delete is live");
@@ -313,7 +313,7 @@ fn new_always_asks_for_a_name_and_saves_the_menus_in_use_under_it() {
     h.run_steps(4);
     let asked = files.requests();
     assert_eq!(asked.len(), 1, "New goes to the Save dialog");
-    assert_eq!(asked[0].file_name.as_deref(), Some("PhotoCraft Defaults Copy"), "the measured default name of an unmodified set");
+    assert_eq!(asked[0].file_name.as_deref(), Some("PhotoCraft Defaults Copy.MNU"), "the measured default name of an unmodified set");
     assert_eq!(row_value(&h), "Copy Of Defaults");
     assert!(greyed(&h, SAVE), "the new set is exactly the menus in use");
     ok(&mut h);
@@ -324,6 +324,30 @@ fn new_always_asks_for_a_name_and_saves_the_menus_in_use_under_it() {
         "New saved the built-in menus"
     );
     assert!(!modified(p));
+}
+
+/// A dotted set name survives the Save dialog's name: the default carries the `.MNU` extension, so
+/// the chosen file's name without its extension is `Web.v2 Copy` and not the `Web` a stem of
+/// `Web.v2 Copy` would leave. The existing `Web` set stays exactly as saved.
+#[test]
+fn a_new_set_from_a_dotted_set_name_keeps_the_whole_name_and_leaves_the_shorter_one() {
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec!["Web.v2 Copy.MNU".into()])]));
+    let mut h = harness(files.clone());
+    h.state_mut().run("edit.menus", json!({"hide": ["edit.fade"], "saveSet": "Web"})).unwrap();
+    h.state_mut().run("edit.menus", json!({"hide": ["layer.mergeVisible"], "saveSet": "Web.v2"})).unwrap();
+    open_menus(&mut h);
+    assert_eq!(row_value(&h), "Web.v2", "the dotted set is in use, as saved");
+    button(&h, NEW).click();
+    h.run_steps(4);
+    let asked = files.requests();
+    assert_eq!(asked.len(), 1, "New goes to the Save dialog");
+    assert_eq!(asked[0].file_name.as_deref(), Some("Web.v2 Copy.MNU"), "the default name carries the extension the stem strips");
+    assert_eq!(row_value(&h), "Web.v2 Copy", "the new set keeps the whole dotted name");
+    ok(&mut h);
+    let p = h.state().session.prefs();
+    assert_eq!(p.menu_sets.keys().collect::<Vec<_>>(), ["Web", "Web.v2", "Web.v2 Copy"], "no set is replaced by the stem of the dotted name");
+    assert_eq!(p.menu_sets["Web"].hidden, ["edit.fade"], "the shorter name's set is untouched");
+    assert_eq!(p.menu_set, "Web.v2 Copy", "the new set is the one in use");
 }
 
 /// Delete asks first; its Yes drops the set, and OK moves the row back to the built-in set, which
@@ -599,7 +623,7 @@ fn yes_on_the_modified_built_in_set_asks_for_a_name_and_then_switches() {
     h.run_steps(3);
     let asked_files = files.requests();
     assert_eq!(asked_files.len(), 1, "Yes on the built-in set asks the Save dialog for a name");
-    assert_eq!(asked_files[0].file_name.as_deref(), Some("PhotoCraft Defaults (modified) Copy"), "the measured default name");
+    assert_eq!(asked_files[0].file_name.as_deref(), Some("PhotoCraft Defaults (modified) Copy.MNU"), "the measured default name");
     assert_eq!(row_value(&h), "Painting", "and the switch followed the name");
     ok(&mut h);
     let p = h.state().session.prefs();
