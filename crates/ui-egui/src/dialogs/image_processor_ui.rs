@@ -66,11 +66,11 @@ enum SettingsAction {
 }
 
 fn settings_action_id() -> egui::Id {
-    egui::Id::new((COMMAND, "settings-action"))
+    egui::Id::unique("pc-image-processor-settings-action")
 }
 
 fn generation_id() -> egui::Id {
-    egui::Id::new((COMMAND, "generation"))
+    egui::Id::unique("pc-image-processor-settings-generation")
 }
 
 pub(crate) fn settings_footer(dialog: ParamDialog<'_>) -> ParamDialog<'_> {
@@ -152,7 +152,7 @@ fn load_settings(app: &mut PhotocraftApp, id: DialogId, picked: Picked) -> Resul
     let fields = settings::decode(&bytes)?;
     if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id) {
         for (key, value) in fields.iter() {
-            dialog.set_field(key.clone(), value.clone());
+            dialog.set_field(key, value.clone());
         }
     }
     Ok(Value::Null)
