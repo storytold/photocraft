@@ -116,8 +116,19 @@ fn choose(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str) {
     }
 }
 
-/// Shows every menu item, which is an edit of the menus in use.
+/// Presses the tab's own `Show All Menu Items` button, and holds the pointer over it for a pass
+/// first. PhotoCraft draws that button itself (`menus_body`'s `ui.button`), and since the craft-libs
+/// repin that landed on `main` (`e7e877ac5`, with its note that a modal cover now shows and absorbs
+/// hits from its first pass) a press that arrives in the same pass as the pointer's first touch of
+/// one of our own widgets is absorbed by the cover and does nothing - at two passes, and at four and
+/// six after a reopen. Move over it, let the pass run, press: the click then lands at every pass
+/// count measured (two, three, four, six; on the open and on a reopen). The framework's own controls
+/// in this dialog - the Set combo, the three icon buttons - take the press without the hover pass,
+/// which is why only the tests that edit the rows were red. A hand always moves before it presses;
+/// `click` alone teleports, and production code needed no change.
 fn show_all(h: &mut Harness<'_, Box<PhotocraftApp>>) {
+    h.get_by_label("Show All Menu Items").hover();
+    h.run_steps(1);
     h.get_by_label("Show All Menu Items").click();
     h.run_steps(2);
 }
