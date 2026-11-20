@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 const ROLES: [(&str, usize, usize); 4] = [("foreground", 0, 0), ("background", 0, 1), ("maskForeground", 1, 0), ("maskBackground", 1, 1)];
 
-fn rgb_key(rgb: [f32; 3]) -> String {
+pub(super) fn rgb_key(rgb: [f32; 3]) -> String {
     rgb.map(|v| format!("{:08x}", if v == 0.0 { 0 } else { v.to_bits() })).join("-")
 }
 

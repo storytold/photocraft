@@ -177,6 +177,7 @@ pub(super) fn merge(base: &Value, ours: &Value, theirs: &Value) -> Value {
         if let Some(fields) = value.as_object_mut() {
             fields.remove("savedRoleInks");
             fields.remove("savedPickEntries");
+            fields.remove("cmykPickOrder");
         }
         value
     };
@@ -184,5 +185,38 @@ pub(super) fn merge(base: &Value, ours: &Value, theirs: &Value) -> Value {
     let ours = serde_json::json!({"toolColors":normalized(ours)});
     let mut theirs = serde_json::json!({"toolColors":normalized(theirs)});
     merge_changes(&base, &ours, &mut theirs);
-    theirs["toolColors"].take()
+    let mut colors = theirs["toolColors"].take();
+    // The merged list determines recency. Independent ranks could reorder it on the next load.
+    let order: serde_json::Map<String, Value> = colors["cmykPicks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(rank, entry)| {
+            let rgb = serde_json::from_value::<[f32; 3]>(entry.get(0)?.clone()).ok()?;
+            Some((super::tool_colors::rgb_key(rgb), serde_json::json!(rank)))
+        })
+        .collect();
+    colors["cmykPickOrder"] = Value::Object(order);
+    colors
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge;
+    use serde_json::json;
+
+    #[test]
+    fn merged_pick_recency_survives_an_unchanged_merge() {
+        let a = json!([[1.0, 0.0, 0.0], [0.0, 1.0, 1.0, 0.0]]);
+        let b = json!([[0.0, 1.0, 0.0], [1.0, 0.0, 1.0, 0.0]]);
+        let c = json!([[0.0, 0.0, 1.0], [1.0, 1.0, 0.0, 0.0]]);
+        let base = json!({"cmykPicks": [a, b]});
+        let local = json!({"cmykPicks": [b, a]});
+        let remote = json!({"cmykPicks": [a, b, c]});
+        let merged = merge(&base, &local, &remote);
+
+        assert_eq!(merged["cmykPicks"], json!([b, c, a]));
+        assert_eq!(merge(&merged, &merged, &merged), merged);
+    }
 }
