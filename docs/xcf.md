@@ -116,10 +116,8 @@ supplies version 10. Every source was independently saved, reopened twice and ch
 its original formula and stored bytes. The v8 and v10 files use the writers' internal zlib
 compression; the U16 samples are asymmetric. Synthetic checks cover both orders across 7–11.
 These isolated runtimes qualify historical development formats; they are not PhotoCraft
-dependencies, and stable-source coverage is separate. The publicly
-pinned corpus currently contains 14 XCF originals and their 14 rendered references. Expanded
-source fixtures are proposed in [corpus PR #9](https://github.com/storytold/photocraft-corpus/pull/9);
-upstream acceptance and an immutable pin/manifest update are still required for ordinary CI.
+dependencies, and stable-source coverage is separate. The public corpus includes these
+historical witnesses and the expanded fixtures from [corpus PR #9](https://github.com/storytold/photocraft-corpus/pull/9).
 
 Open notices summarize material differences. The read-only **Import Conversion Report** lists
 native equivalents, native approximations and unapplied source features per item; automation
@@ -202,12 +200,12 @@ Unit tests (`crates/io/src/xcf/tests.rs`) build XCF files from the specification
 writer and check every compression, precisions, pointer widths, groups by item path, masks,
 channels, the colour map, parasites, limits and malformed input.
 
-Real files come from GIMP 3.2.6 itself: `gimp/` of [photocraft-corpus](https://github.com/storytold/photocraft-corpus)
-(generator `tools/gimp-xcf/xcf_fixtures.py`, run inside GIMP), fetched into `corpus/gimp/` by
-`cargo xtask corpus --gimp` (28 files, 251 KB): procedural layers the tests regenerate sample for
-sample, and for each file GIMP's own merged rendering as a PNG. `crates/io/tests/it/xcf.rs` (feature
-`corpus`, run by `cargo xtask test-corpus -p io`) checks the layer data against the formulas and our
-composite against GIMP's:
+Real files from GIMP 3.2.6 and historical versions live in `gimp/` of
+[photocraft-corpus](https://github.com/storytold/photocraft-corpus). Run
+`cargo xtask corpus --gimp` to fetch and verify 54 XCF originals, their 54 PNG previews, one linked-resource
+PNG, and three compressed wrappers. `crates/io/tests/it/xcf.rs` (feature `corpus`, run by
+`cargo xtask test-corpus -p photocraft-io`) checks the baseline layer data against the authoring formulas
+and compares PhotoCraft's composite with GIMP's.
 
 | File | Composite vs GIMP |
 |---|---|
@@ -233,13 +231,8 @@ source-family acceptance. Native counterpart tests validate PhotoCraft rendering
 `.pcraft` persistence; GIMP-rendered images document source differences rather than define a
 second compositing model.
 
-The additional `xcf_source_evidence` suite consumes unpublished, independently saved XCF
-fixtures for precision, profiles, text, paths, vectors, floating/linked content and effects.
-Its tests are explicitly ignored pending publication and an upstream corpus pin update.
-Running that suite with `--ignored` currently requires those additional local corpus files;
-it cannot yet be reproduced from the public pin alone. Local passes do not accept those
-source families as complete.
-
-The ignored genuine historical-source test also accepts `PHOTOCRAFT_XCF_SOURCE_CORPUS_DIR`
-pointing to the authoring checkout's `gimp/` directory. This test-only override allows explicit
-local qualification without changing the ordinary corpus cache or upstream fetch defaults.
+The `xcf_source_evidence` suite uses the same public pin to check independently saved XCF
+fixtures for precision, profiles, text, paths, vectors, floating and linked content, and effects.
+The historical high-depth test checks real producer files using their independently verified
+sample order. For local producer qualification, set `PHOTOCRAFT_XCF_SOURCE_CORPUS_DIR` to the
+authoring checkout's `gimp/` directory.

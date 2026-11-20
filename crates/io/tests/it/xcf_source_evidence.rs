@@ -1,4 +1,4 @@
-//! Independently saved GIMP 3.2.6 sources awaiting public corpus publication/pinning.
+//! Independently saved GIMP sources from the pinned public corpus.
 //! Expected values come from original authoring inputs, not importer-produced snapshots.
 //! PNGs are source previews, never a native-rendering/HDR equivalence oracle.
 #![cfg(feature = "corpus")]
@@ -10,7 +10,7 @@ use photocraft_geom::{Affine, Point, Rect};
 /// Resolves an explicit corpus fixture path for source-evidence tests that require published assets.
 fn fixture(name: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/gimp").join(name);
-    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}; requires expanded public upstream XCF corpus pin (T081)", path.display()))
+    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}; run cargo xtask corpus --gimp", path.display()))
 }
 /// Imports a corpus source and requires a usable native document rather than accepting a warning-only
 /// outcome.
@@ -65,7 +65,6 @@ fn text_source_origin(doc: &Document, text: &photocraft_doc::TextLayer, expected
 }
 
 #[test]
-#[ignore = "Requires expanded upstream XCF corpus pin (T081)"]
 /// Checks independently saved precision cases against known sample values, placement and native persistence.
 fn saved_precision_samples_preserve_signed_hdr_rounding_offsets_and_native_reopen() {
     let cases: [(&str, usize, usize, &[f64], bool); 4] = [
@@ -109,7 +108,6 @@ fn saved_precision_samples_preserve_signed_hdr_rounding_offsets_and_native_reope
 }
 
 #[test]
-#[ignore = "Requires expanded upstream XCF corpus pin (T081)"]
 /// Verifies standard compressed wrappers produce the same native precision data as the underlying saved XCF.
 fn saved_standard_wrappers_open_the_same_native_precision_data() {
     let raw = open("precision-u32-nonlinear");
@@ -129,7 +127,6 @@ fn saved_standard_wrappers_open_the_same_native_precision_data() {
 }
 
 #[test]
-#[ignore = "Requires expanded upstream XCF corpus pin (T081)"]
 /// Checks original profile colorants and stored literal samples against native transfer/profile policy.
 fn saved_original_profile_colorants_and_literal_samples_follow_native_transfer_policy() {
     for model in ["rgb", "gray"] {
@@ -168,7 +165,6 @@ fn saved_original_profile_colorants_and_literal_samples_follow_native_transfer_p
 }
 
 #[test]
-#[ignore = "Requires expanded upstream XCF corpus pin (T081)"]
 /// Verifies Unicode box text becomes editable native type while a destructively modified text cache remains
 /// pixels.
 fn saved_unicode_fixed_markup_is_native_type_and_modified_cache_stays_pixels() {
@@ -193,7 +189,6 @@ fn saved_unicode_fixed_markup_is_native_type_and_modified_cache_stays_pixels() {
 }
 
 #[test]
-#[ignore = "Requires locally authored named-color source or expanded upstream XCF corpus pin"]
 /// Checks named source markup colors become ordinary editable native text runs with explicit expected paint.
 fn saved_named_markup_colors_become_native_editable_runs() {
     let doc = open("text-named-markup-colors");
@@ -268,7 +263,6 @@ fn check_paths(doc: &Document, legacy_open_handles: bool) {
     }
 }
 #[test]
-#[ignore = "Requires expanded upstream XCF corpus pin (T081)"]
 /// Verifies fractional paths and vector stroke remain editable while modified vector pixels keep their raster
 /// fallback.
 fn saved_fractional_paths_vector_stroke_and_modified_pixels_stay_native() {
@@ -302,7 +296,6 @@ fn saved_fractional_paths_vector_stroke_and_modified_pixels_stay_native() {
 }
 
 #[test]
-#[ignore = "Requires expanded upstream XCF corpus pin (T081)"]
 /// Checks saved floating content stays a separate native pixel layer rather than being silently anchored.
 fn saved_floating_pixels_remain_separate_editable_layers_without_anchoring() {
     for kind in ["rgb", "channel"] {
@@ -334,7 +327,6 @@ fn saved_floating_pixels_remain_separate_editable_layers_without_anchoring() {
 }
 
 #[test]
-#[ignore = "Requires expanded upstream XCF corpus pin (T081)"]
 /// Verifies a stored relative link remains inert metadata while its stored pixels and native channel are
 /// usable.
 fn saved_relative_link_uses_stored_pixels_and_metadata_channel_stays_native() {
@@ -388,7 +380,6 @@ fn native_filters(layers: &[Layer]) -> Vec<SmartFilter> {
     layers.iter().filter_map(|l| if let LayerContent::Smart(s) = &l.content { Some(s.smart_filters.iter()) } else { None }).flatten().cloned().collect()
 }
 #[test]
-#[ignore = "Requires expanded upstream XCF corpus pin (T081)"]
 /// Checks saved effect controls, owner scope, masks and disabled stages against independent native
 /// structures.
 fn saved_effect_owner_parameters_scope_masks_and_disabled_stages_are_native_data() {
@@ -480,7 +471,6 @@ fn saved_effect_owner_parameters_scope_masks_and_disabled_stages_are_native_data
 }
 
 #[test]
-#[ignore = "Requires expanded upstream XCF corpus pin (T081)"]
 /// Verifies active curve anchors, channel order and the native alpha table persist with their single mask
 /// envelope.
 fn saved_active_per_channel_curve_anchors_and_native_alpha_table_survive_native_save() {
@@ -539,7 +529,6 @@ fn saved_active_per_channel_curve_anchors_and_native_alpha_table_survive_native_
 }
 
 #[test]
-#[ignore = "Requires expanded upstream XCF corpus pin (T081)"]
 /// Checks genuine historical v19 font objects, named cubic paths and precision survive native conversion and
 /// reopen.
 fn historical_v19_font_objects_named_cubic_paths_and_precision_are_native_and_persist() {
@@ -574,7 +563,6 @@ fn historical_v19_font_objects_named_cubic_paths_and_precision_are_native_and_pe
 }
 
 #[test]
-#[ignore = "Requires expanded upstream XCF corpus pin (T081)"]
 /// Verifies application-authored graph cases retain original pixels inside ordinary native
 /// contents.
 fn application_authored_graphs_preserve_original_pixels_as_native_contents() {
@@ -631,7 +619,6 @@ fn application_authored_graphs_preserve_original_pixels_as_native_contents() {
 }
 
 #[test]
-#[ignore = "Requires expanded upstream XCF corpus pin (T081)"]
 /// Checks genuine v0 string-font and legacy path records become editable native data rather than opaque-only
 /// history.
 fn genuine_v0_string_font_and_legacy_property_path_are_editable_native_data() {

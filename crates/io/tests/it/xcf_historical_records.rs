@@ -278,7 +278,6 @@ fn link_rename_monitor_bits_stay_inert_while_legacy_movement_is_a_separate_nativ
 
 #[cfg(feature = "corpus")]
 #[test]
-#[ignore = "Requires independently authored historical sources absent from the official corpus pin (T088)"]
 /// Verifies historical high-depth import uses explicit byte-order provenance and preserves editable native
 /// data after reopen.
 fn genuine_historical_highdepth_sources_use_explicit_provenance_order_and_editable_native_reopen() {
@@ -304,8 +303,7 @@ fn genuine_historical_highdepth_sources_use_explicit_provenance_order_and_editab
         for (suffix, depth) in [("u16-asymmetric", SampleType::U16), ("float", SampleType::F32)] {
             let name = format!("historical-{producer}-v{version:03}-{suffix}-{compression}.xcf");
             let path = root.join(&name);
-            let source = std::fs::read(&path)
-                .unwrap_or_else(|e| panic!("{}: {e}; needs original producer fixtures absent from the official corpus pin", path.display()));
+            let source = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}; run cargo xtask corpus --gimp", path.display()));
             assert_eq!(&source[..14], format!("gimp xcf v{version:03}\0").as_bytes());
             assert!(matches!(photocraft_io::import(&name, &source), Err(IoError::HistoricalXcfSampleOrderRequired(_))));
             let options = ImportOptions { historical_xcf_sample_order: Some(HistoricalXcfSampleOrder::LittleEndian), ..Default::default() };
