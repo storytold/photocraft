@@ -4785,37 +4785,70 @@ fn mapped_recording(event: &str, descriptor: Descriptor) -> Imported {
     import(&atn::write(&one_action(vec![item(event, event, Some(descriptor))])).unwrap()).unwrap()
 }
 
-/// #15185: Image > Duplicate recorded as a Make of the current document must bind to the
-/// existing duplicate command instead of stopping the action as "Make (Photoshop)".
+/// The duplicate the reference application records is the `Dplc` event: it maps to the
+/// existing duplicate command, carries the recorded `Nm  ` name and the `Mrgd`
+/// merged-contents flag, and `Mrgd` true gives a copy with a single layer.
 #[test]
-fn make_of_the_current_document_imports_as_the_duplicate_command() {
-    let d = desc("null").with("null", target_ref("Dcmn")).with("Nm  ", text("Mattifier copy"));
-    let loaded = mapped_recording("Mk  ", d);
+fn dplc_document_duplicate_plays_a_one_layer_copy() {
+    let d = desc("null").with("null", target_ref("Dcmn")).with("Nm  ", text("Mattifier copy")).with("Mrgd", D::Boolean(true));
+    let loaded = mapped_recording("Dplc", d);
     assert!(loaded.unsupported.is_empty(), "{:?}", loaded.unsupported);
-    assert_eq!(loaded.actions[0].steps, vec![ActionStep::new("image.duplicate", json!({"name": "Mattifier copy"}))]);
+    assert_eq!(loaded.actions[0].steps, vec![ActionStep::new("image.duplicate", json!({"name": "Mattifier copy", "mergedOnly": true}))]);
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Ink"})).unwrap();
+    let items = vec![item(
+        "Dplc",
+        "Duplicate",
+        Some(desc("null").with("null", target_ref("Dcmn")).with("Nm  ", text("Mattifier copy")).with("Mrgd", D::Boolean(true))),
+    )];
+    let r = s.execute("actions.load", json!({"data": set_of("Dplc", vec![("A", items)])})).unwrap();
+    assert_eq!(r["unsupported"], json!([]), "{r}");
+    let r = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert!(r.get("failed").is_none(), "{r}");
+    assert_eq!(s.documents().len(), 2, "the Dplc duplicated the document");
+    let st = s.active().unwrap();
+    assert_eq!(st.doc.name, "Mattifier copy", "the recorded name reaches the copy");
+    assert_eq!(st.doc.layers.len(), 1, "Mrgd true gives a one-layer copy");
 }
 
-/// A document referenced by its recorded title duplicates like the `Dplc` handler does.
+/// #15185, measured in the reference application: a Make aimed at a document is NOT a
+/// document duplicate there. `Mk  ` with a single `Dcmn` reference to the target ordinal,
+/// with or without `Nm  ` and `Mrgd`, the same document referenced by its recorded title,
+/// and the `Dcmn` class with `Usng` = the target document all answer "The command Make is
+/// not currently available" and make no copy. They stay kept Photoshop steps here, as they
+/// do for every other Make shape: the whole descriptor is kept and reported as unsupported,
+/// and it saves back unchanged.
 #[test]
-fn make_of_a_document_by_name_imports_as_the_duplicate_command() {
-    let d = desc("null").with("null", D::Reference(vec![ReferenceItem::Name { class: class("Dcmn"), name: UnicodeString::new_nul("Mattifier.tif") }]));
-    let loaded = mapped_recording("Mk  ", d);
-    assert!(loaded.unsupported.is_empty(), "{:?}", loaded.unsupported);
-    assert_eq!(loaded.actions[0].steps, vec![ActionStep::new("image.duplicate", json!({}))]);
+fn make_document_duplicate_forms_stay_kept_steps() {
+    let by_name = || D::Reference(vec![ReferenceItem::Name { class: class("Dcmn"), name: UnicodeString::new_nul("Mattifier.tif") }]);
+    for d in [
+        // The target document by ordinal, with and without the optional keys.
+        desc("null").with("null", target_ref("Dcmn")),
+        desc("null").with("null", target_ref("Dcmn")).with("Nm  ", text("Mattifier copy")),
+        desc("null").with("null", target_ref("Dcmn")).with("Mrgd", D::Boolean(true)),
+        desc("null").with("null", target_ref("Dcmn")).with("Nm  ", text("Mattifier copy")).with("Mrgd", D::Boolean(true)),
+        // The document referenced by its recorded title.
+        desc("null").with("null", by_name()),
+        desc("null").with("null", by_name()).with("Nm  ", text("Mattifier copy")).with("Mrgd", D::Boolean(false)),
+        // The class form naming the target document in `Usng`.
+        desc("null").with("null", class_ref("Dcmn")).with("Usng", target_ref("Dcmn")),
+    ] {
+        let loaded = mapped_recording("Mk  ", d.clone());
+        assert_eq!(loaded.actions[0].steps.len(), 1, "{:?}", d.items);
+        assert_eq!(loaded.actions[0].steps[0].command, PHOTOSHOP_STEP, "no duplicate command for {:?}", d.items);
+        assert_eq!(loaded.unsupported.iter().map(|u| u.step).collect::<Vec<_>>(), [0], "{:?}", d.items);
+        let (saved, skipped) = export("Mk", &[&loaded.actions[0]], &[], false).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        assert_eq!(atn::parse(&saved).unwrap().actions[0].items[0].descriptor.as_ref(), Some(&d), "saves back unchanged: {:?}", d.items);
+    }
 }
 
-/// The merged-contents form carries its `Mrgd` flag to the command's `mergedOnly` param.
+/// What that means at playback, the point of the change: the Mattifier shape of #15185 stops
+/// at the Make, as it does in the reference application, instead of making a copy and
+/// running Flatten Image and Convert Mode on it.
 #[test]
-fn make_document_duplicate_merged_flag_imports_as_merged_only() {
-    let d = desc("null").with("null", target_ref("Dcmn")).with("Mrgd", D::Boolean(true));
-    let loaded = mapped_recording("Mk  ", d);
-    assert!(loaded.unsupported.is_empty(), "{:?}", loaded.unsupported);
-    assert_eq!(loaded.actions[0].steps, vec![ActionStep::new("image.duplicate", json!({"mergedOnly": true}))]);
-}
-
-/// The Mattifier shape of #15185: after the Make, Flatten Image and CMYK Color keep playing.
-#[test]
-fn make_document_duplicate_keeps_the_action_running() {
+fn make_document_duplicate_stops_the_action() {
     let items = vec![
         item("Mk  ", "Make", Some(desc("null").with("null", target_ref("Dcmn")).with("Nm  ", text("Mattifier copy")))),
         item("FltI", "Flatten Image", None),
@@ -4825,95 +4858,38 @@ fn make_document_duplicate_keeps_the_action_running() {
     s.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Ink"})).unwrap();
     let r = s.execute("actions.load", json!({"data": set_of("Mattifier", vec![("A", items)])})).unwrap();
-    assert_eq!(r["unsupported"], json!([]), "{r}");
+    assert_eq!(r["unsupported"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(s.actions.list.actions()[0].steps[0].command, PHOTOSHOP_STEP, "{r}");
     let r = s.execute("actions.play", json!({"action": "A"})).unwrap();
-    assert!(r.get("failed").is_none(), "{r}");
-    assert_eq!(s.documents().len(), 2, "the Make step duplicated the document");
+    assert_eq!(r["failed"]["id"], PHOTOSHOP_STEP, "{r}");
+    assert_eq!(s.documents().len(), 1, "the kept Make step made no copy");
     let st = s.active().unwrap();
-    assert_eq!(st.doc.name, "Mattifier copy");
-    assert_eq!(st.doc.mode, photocraft_color::ColorMode::Cmyk, "CMYK Color ran on the copy");
-    assert_eq!(st.doc.layers.len(), 1, "Flatten Image ran on the copy");
+    assert_eq!(st.doc.mode, photocraft_color::ColorMode::Rgb, "Convert Mode never ran after the stopped step");
+    assert_eq!(st.doc.layers.len(), 2, "Flatten Image never ran after the stopped step");
 }
 
-/// The mapped step survives a strict Save Actions: nothing skipped, and loading the saved
-/// bytes gives the same step again.
+/// A kept step carries the descriptor as bytes, so every recorded `Nm  ` name comes back
+/// exactly as it was read: an unpaired surrogate is not replaced with U+FFFD and no NUL is
+/// dropped, because no name is ever converted into a command parameter.
 #[test]
-fn make_document_duplicate_round_trips_through_save() {
-    let d = desc("null").with("null", target_ref("Dcmn")).with("Nm  ", text("Copy")).with("Mrgd", D::Boolean(true));
-    let loaded = mapped_recording("Mk  ", d);
-    assert_eq!(loaded.actions[0].steps, vec![ActionStep::new("image.duplicate", json!({"name": "Copy", "mergedOnly": true}))]);
-    let (saved, skipped) = export("Dup", &[&loaded.actions[0]], &[], false).unwrap();
-    assert!(skipped.is_empty(), "{skipped:?}");
-    assert_eq!(import(&saved).unwrap().actions[0].steps, loaded.actions[0].steps);
-}
-
-/// A recorded `Nm  ` the mapping cannot carry without changing it - an unpaired surrogate
-/// would become U+FFFD, trailing NULs would be dropped - keeps the Photoshop step, so the
-/// original name saves back byte for byte.
-#[test]
-fn make_document_duplicate_name_must_round_trip() {
-    for (name, mapped) in [
-        (UnicodeString::new_nul("Mattifier copy"), true),
-        (UnicodeString::new("Mattifier copy"), true),
-        (UnicodeString(vec![0xD800]), false),
-        (UnicodeString(vec![u16::from(b'C'), 0xD800, 0]), false),
-        (UnicodeString(vec![u16::from(b'C'), 0, 0]), false),
+fn make_document_duplicate_name_round_trips_through_the_kept_step() {
+    for name in [
+        UnicodeString::new_nul("Mattifier copy"),
+        UnicodeString::new("Mattifier copy"),
+        UnicodeString(vec![0x0041, 0x0000, 0x0042]),
+        UnicodeString(vec![0xD800]),
+        UnicodeString(vec![u16::from(b'C'), 0xD800, 0]),
+        UnicodeString(vec![u16::from(b'C'), 0, 0]),
     ] {
         let d = desc("null").with("null", target_ref("Dcmn")).with("Nm  ", D::Text(name.clone()));
         let loaded = mapped_recording("Mk  ", d);
-        let step = &loaded.actions[0].steps[0];
-        if mapped {
-            assert!(loaded.unsupported.is_empty(), "{name:?}");
-            assert_eq!(step.command, "image.duplicate", "{name:?}");
-            assert_eq!(step.params["name"], "Mattifier copy", "{name:?}");
-        } else {
-            assert_eq!(step.command, PHOTOSHOP_STEP, "{name:?}");
-            let (saved, skipped) = export("Dup", &[&loaded.actions[0]], &[], false).unwrap();
-            assert!(skipped.is_empty(), "{name:?}: {skipped:?}");
-            let raw = atn::parse(&saved).unwrap();
-            let back = raw.actions[0].items[0].descriptor.as_ref().unwrap().get("Nm  ");
-            assert_eq!(back, Some(&D::Text(name.clone())), "{name:?}");
-        }
+        assert_eq!(loaded.actions[0].steps[0].command, PHOTOSHOP_STEP, "{name:?}");
+        let (saved, skipped) = export("Dup", &[&loaded.actions[0]], &[], false).unwrap();
+        assert!(skipped.is_empty(), "{name:?}: {skipped:?}");
+        let raw = atn::parse(&saved).unwrap();
+        let back = raw.actions[0].items[0].descriptor.as_ref().unwrap().get("Nm  ");
+        assert_eq!(back, Some(&D::Text(name.clone())), "{name:?}");
     }
-}
-
-/// `to_string_lossy` strips only TRAILING NULs, so a name with an embedded NUL converts
-/// unchanged: the guard must not reject it, and the recorded name reaches the copied document.
-#[test]
-fn make_document_duplicate_embedded_nul_name_reaches_the_copy() {
-    let units = || UnicodeString(vec![0x0041, 0x0000, 0x0042]);
-    let d = desc("null").with("null", target_ref("Dcmn")).with("Nm  ", D::Text(units()));
-    let loaded = mapped_recording("Mk  ", d);
-    assert!(loaded.unsupported.is_empty(), "{:?}", loaded.unsupported);
-    assert_eq!(loaded.actions[0].steps, vec![ActionStep::new("image.duplicate", json!({"name": "A\0B"}))]);
-    let mut s = Session::new();
-    s.execute("file.new", json!({"width": 8, "height": 6, "name": "Nul"})).unwrap();
-    let items = vec![item("Mk  ", "Make", Some(desc("null").with("null", target_ref("Dcmn")).with("Nm  ", D::Text(units()))))];
-    let r = s.execute("actions.load", json!({"data": set_of("Nul", vec![("A", items)])})).unwrap();
-    assert_eq!(r["unsupported"], json!([]), "{r}");
-    let r = s.execute("actions.play", json!({"action": "A"})).unwrap();
-    assert!(r.get("failed").is_none(), "{r}");
-    assert_eq!(s.documents().len(), 2, "the Make duplicated the document");
-    assert_eq!(s.active().unwrap().doc.name, "A\0B", "the embedded NUL survives import, mapping and play");
-}
-
-/// A recorded Make whose `Nm  ` name equals a document that is already open duplicates under
-/// that name: the command takes the recorded name as it is and never picks the source by
-/// name, so nothing is guessed from a spelling (pattern 9, the fail-closed lesson of #11565).
-#[test]
-fn make_document_duplicate_name_may_collide_with_an_open_document() {
-    let mut s = Session::new();
-    s.execute("file.new", json!({"width": 8, "height": 6, "name": "Mattifier copy"})).unwrap();
-    s.execute("file.new", json!({"width": 8, "height": 6, "name": "Source"})).unwrap();
-    let items = vec![item("Mk  ", "Make", Some(desc("null").with("null", target_ref("Dcmn")).with("Nm  ", text("Mattifier copy"))))];
-    let r = s.execute("actions.load", json!({"data": set_of("Dup", vec![("A", items)])})).unwrap();
-    assert_eq!(r["unsupported"], json!([]), "{r}");
-    let r = s.execute("actions.play", json!({"action": "A"})).unwrap();
-    assert!(r.get("failed").is_none(), "{r}");
-    assert_eq!(s.documents().len(), 3, "the Make duplicated the active document");
-    assert_eq!(s.active().unwrap().doc.name, "Mattifier copy", "the recorded name is used unchanged");
-    assert_eq!(s.documents().iter().filter(|d| d.doc.name == "Mattifier copy").count(), 2, "no numbered rename");
-    assert_eq!(s.documents().iter().filter(|d| d.doc.name == "Source").count(), 1, "the other document keeps its name");
 }
 
 /// Every other Make aimed at a document keeps today's behaviour: a complete kept step; the

@@ -460,70 +460,13 @@ fn duplicate_layer_from_descriptor(d: &Descriptor) -> Option<Mapped> {
     Some(step("layer.duplicate", Value::Object(params)))
 }
 
-/// Whether a `Dcmn` reference names the document being played on: the target ordinal, or
-/// the document by its recorded title (the `Dplc` duplicate handler plays that on the
-/// active document too). References picking another open document (index, id, offset,
-/// another ordinal) have no equivalent and stay kept steps.
-fn current_document_reference(r: &[ReferenceItem]) -> bool {
-    match target(r) {
-        Target::Ordinal(o) => o == "Trgt",
-        Target::Name(_) => true,
-        _ => false,
-    }
-}
-
-/// The params of Image > Duplicate recorded as a Make (#15185): the new document's
-/// optional `Nm  ` name and the optional `Mrgd` merged-contents flag. Any other key, or
-/// a present value of the wrong type or one the conversion would change, keeps the whole
-/// step instead. A key that appears twice also keeps the step: craft-psd keeps every
-/// parsed item, and the command has one target, one name and one flag, so a second item
-/// of a key would be dropped without a rule saying which one wins.
-fn document_duplicate_params(d: &Descriptor) -> Option<Map<String, Value>> {
-    let mut params = Map::new();
-    let mut references = 0;
-    for (k, v) in &d.items {
-        if k.is("null") {
-            // The caller reads the first reference; a second one names a target the params
-            // cannot carry.
-            references += 1;
-            if references > 1 {
-                return None;
-            }
-            continue;
-        }
-        if k.is("Nm  ") {
-            // The value of THIS item: a descriptor lookup would read the first `Nm  ` and let
-            // an unpaired surrogate (U+FFFD) or dropped trailing NULs go unremarked next to a
-            // readable name.
-            let D::Text(name) = v else { return None };
-            let name = exact_text(name)?;
-            if params.insert("name".into(), name.into()).is_some() {
-                return None;
-            }
-        } else if k.is("Mrgd") {
-            let D::Boolean(merged) = v else { return None };
-            if params.insert("mergedOnly".into(), (*merged).into()).is_some() {
-                return None;
-            }
-        } else {
-            return None;
-        }
-    }
-    Some(params)
-}
-
-/// Image > Duplicate (#15185): a Make of the current document, without the `Usng` layer
-/// reference that makes it the Duplicate Layer form mapped by
-/// [`duplicate_layer_from_descriptor`]. It binds to the existing duplicate command so
-/// the steps recorded after it keep playing; every other Make aimed at a document
-/// returns None here and stays a kept step.
-fn document_duplicate_from_descriptor(d: &Descriptor) -> Option<Mapped> {
-    let r = get_ref(d, "null")?;
-    if ref_class(r).as_deref() != Some("Dcmn") || r.len() != 1 || !current_document_reference(r) {
-        return None;
-    }
-    Some(step("image.duplicate", Value::Object(document_duplicate_params(d)?)))
-}
+// A Make aimed at a whole document is not a document duplicate. Measured in the reference
+// application, `Mk  ` with a `Dcmn` target - the target ordinal with or without `Nm  ` and
+// `Mrgd`, the document by its recorded title, or the `Dcmn` class with `Usng` = the target
+// document - answers "The command Make is not currently available" and makes no copy, so
+// mapping it here would keep playing steps the reference never reaches. Those shapes fall
+// through to the kept Photoshop step below; only the `Dplc` event duplicates a document
+// (see `steps_layer::duplicate_from`, #15185).
 
 fn mask_from_descriptor(d: &Descriptor) -> Option<Mapped> {
     let Some(D::Class(c)) = d.get("Nw  ") else { return None };
@@ -641,9 +584,6 @@ pub(super) fn make_from(d: &Descriptor) -> Mapped {
         return none("type.convertToShape");
     }
     if let Some(mapped) = duplicate_layer_from_descriptor(d) {
-        return mapped;
-    }
-    if let Some(mapped) = document_duplicate_from_descriptor(d) {
         return mapped;
     }
     if let Some(mapped) = mask_from_descriptor(d) {
