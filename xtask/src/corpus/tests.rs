@@ -13,6 +13,18 @@ fn changed_atn_modules_trigger_corpus_tests() {
 }
 
 #[test]
+fn similarly_named_atn_siblings_do_not_trigger_corpus_tests() {
+    for path in [
+        "crates/engine/src/cmd/atn_cmds_extra.rs",
+        "crates/engine/src/cmd/atn_cmds_old/tests.rs",
+        "crates/engine/src/cmd/atn_cmds.rs.bak",
+        "crates/engine/src/cmd/atn_cmds",
+    ] {
+        assert!(!is_critical(path), "{path}");
+    }
+}
+
+#[test]
 fn existing_critical_sources_still_trigger_corpus_tests() {
     for path in [
         "crates/io/src/ora.rs",
