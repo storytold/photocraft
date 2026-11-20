@@ -73,7 +73,18 @@ pub fn rotated_size(size: Size, deg: f64) -> Size {
 }
 
 pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
-    rotate_arbitrary_with(s, p, true, true)
+    // #14465: with no `interpolation` param the resampling comes from Preferences ›
+    // General › Image Interpolation; the preference's own names feed `Interp::parse`, so
+    // Nearest Neighbor and Bilinear act as the `nearest`/`bilinear` params do and the
+    // *not measured* variants (Bicubic Automatic/Sharper/Smoother, Preserve Details)
+    // resample as Bicubic, as today. The param stays for scripts and actions (#7630).
+    // The direct callers keep the old default through `rotate_arbitrary_with`: the Crop
+    // tool's rotated crop and Straighten pass no param and still rotate Bicubic.
+    let mut p = p.as_object().cloned().unwrap_or_default();
+    if p.get("interpolation").and_then(Value::as_str).is_none() {
+        p.insert("interpolation".into(), json!(s.prefs().general.image_interpolation.name()));
+    }
+    rotate_arbitrary_with(s, &Value::Object(p), true, true)
 }
 
 /// [`rotate_arbitrary`]; `image_rotation` is true on the Image Rotation path and decides two
@@ -96,6 +107,32 @@ pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: 
     };
     if deg.rem_euclid(360.0).abs() < 1e-9 {
         return Ok(json!({"width": s.active().map(|d| d.doc.size.width), "height": s.active().map(|d| d.doc.size.height)}));
+    }
+    use crate::canvas_geom::{self, Turn};
+    let turn = match deg.rem_euclid(360.0) {
+        90.0 => Some(Turn::Cw90),
+        180.0 => Some(Turn::Rotate180),
+        270.0 => Some(Turn::Ccw90),
+        _ => None,
+    };
+    if image_rotation
+        && let Some(turn) = turn
+        && let Some(st) = s.active()
+        && !st.doc.has_artboards()
+    {
+        let a = turn.affine(f64::from(st.doc.size.width), f64::from(st.doc.size.height));
+        let half = Affine::translate(0.5, 0.5);
+        s.set_canvas_map(a, half.then(&a).then(&Affine::translate(-0.5, -0.5)));
+        let size = s.edit("Rotate Canvas", |doc, _| {
+            // Clear the selection before the exact turn so it is dropped in the same history step.
+            doc.selection = None;
+            canvas_geom::keeping_count_points(doc, |doc| canvas_geom::turn_canvas(doc, turn));
+            if !keep_guides {
+                doc.guides = Default::default();
+            }
+            Ok(doc.size)
+        })?;
+        return Ok(json!({"width": size.width, "height": size.height}));
     }
     // The Background stays opaque, whatever the background colour's alpha.
     let bg = [s.tools.background[0], s.tools.background[1], s.tools.background[2], 1.0];
@@ -840,7 +877,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.rotation.arbitrary",
             "Arbitrary…",
             ["Image", "Image Rotation"],
-            r##"{"angle":-359.99..359.99=0,"direction":"cw|ccw"="cw","interpolation":"bicubic|bilinear|nearest"="bicubic"}"##,
+            r##"{"angle":-359.99..359.99=0,"direction":"cw|ccw"="cw","interpolation":"bicubic|bilinear|nearest" (absent: Preferences › General › Image Interpolation; its not-measured variants resample as bicubic)}"##,
             rotate_arbitrary_enabled,
             rotate_arbitrary
         ),
@@ -898,6 +935,9 @@ pub fn display_document(doc: &Document) -> Option<Document> {
 }
 
 #[cfg(test)]
+#[path = "rotate_canvas_right_angle_tests.rs"]
+mod rotate_canvas_right_angle_tests;
+#[cfg(test)]
 #[path = "rotate_canvas_selection_tests.rs"]
 mod rotate_canvas_selection_tests;
 #[cfg(test)]
@@ -905,3 +945,6 @@ mod tests;
 
 #[cfg(test)]
 mod color_table_index_tests;
+#[cfg(test)]
+#[path = "rotate_canvas_interpolation_pref_tests.rs"]
+mod rotate_canvas_interpolation_pref_tests;
