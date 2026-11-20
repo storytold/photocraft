@@ -3,6 +3,7 @@
 //! Pure Rust (std + serde_json). External tools (`cargo`, `curl`, `tar`) are
 //! invoked through `std::process::Command`.
 
+mod cache_units;
 mod cargo_env;
 mod corpus;
 mod corpus_pins;
@@ -330,8 +331,11 @@ fn step_clippy(_: &CiOptions) -> Result<(), String> {
 fn step_doctest(o: &CiOptions) -> Result<(), String> {
     let mut c = cargo();
     c.arg("test").args(gate_args(&o.exclude)).arg("--doc");
+    if cache_units::file().is_some() {
+        c.args(["--message-format", "json-render-diagnostics"]);
+    }
     let what = shown(&c);
-    run(c, &what)
+    cache_units::run(c, &what)
 }
 
 fn step_i18n(_: &CiOptions) -> Result<(), String> {
@@ -458,17 +462,25 @@ fn step_tests(o: &CiOptions, panic_hunt: bool) -> Result<(), String> {
 /// Builds the test steps' binaries without running them: what every shard builds, so the cache
 /// warm-up's entry covers each shard's build.
 fn build_tests(o: &CiOptions) -> Result<(), String> {
+    cache_units::record_xtask()?;
+    let recording = cache_units::file().is_some();
     let mut c = cargo();
     match &o.archive {
         Some(file) => {
             c.args(["nextest", "archive", "--profile", "ci"]).args(test_build_args(&o.exclude)).arg("--archive-file").arg(file);
+            if recording {
+                c.args(["--cargo-message-format", "json-render-diagnostics"]);
+            }
         }
         None => {
             c.args(["test", "--no-run"]).args(test_build_args(&o.exclude));
+            if recording {
+                c.args(["--message-format", "json-render-diagnostics"]);
+            }
         }
     }
     let what = shown(&c);
-    run(c, &what)
+    cache_units::run(c, &what)
 }
 
 /// nextest does not run doctests.
