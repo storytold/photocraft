@@ -195,7 +195,7 @@ fn colour_set_source_budget_is_checked_before_capture_or_allocation() {
     let mut s = session(ColorMode::Rgb, SampleType::F32);
     let mut doc = (*s.active().unwrap().doc).clone();
     doc.size = photocraft_doc::Size::new(16384, 16384);
-    s.active_mut().unwrap().doc = std::sync::Arc::new(doc);
+    *s.active_mut().unwrap().doc_mut() = std::sync::Arc::new(doc);
     let st = s.active().unwrap();
     let before = st.doc.clone();
     let params = json!({"target":{"colors":[0,2]},"dx":1});

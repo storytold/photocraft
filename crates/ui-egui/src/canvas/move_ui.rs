@@ -458,7 +458,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         let generation = photocraft_raster::spill::read_error_generation();
         let ids = match channel {
             Some((id, _)) => vec![id],
-            None => photocraft_engine::layer_multi_cmds::move_targets(&doc, &st.selected_layers()),
+            None => photocraft_engine::layer_multi_cmds::move_targets(&doc, st.selected_layers()),
         };
         if ids.is_empty() {
             return None;

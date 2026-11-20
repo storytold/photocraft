@@ -786,7 +786,7 @@ mod tests {
                 a.run("view.layerMask", json!({"mode":"overlay"})).unwrap();
             }
             if target == 0 {
-                a.session.active_mut().unwrap().active_layer = None;
+                a.session.active_mut().unwrap().set_active_layer(None);
             }
             let before = a.session.active().unwrap().doc.clone();
             let ctx = egui::Context::default();

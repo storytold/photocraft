@@ -158,7 +158,7 @@ fn moving_box(app: &PhotocraftApp, pixels: bool) -> Option<[f64; 4]> {
     if crate::move_ui::color_target(app).is_some() {
         return st.active_layer.and_then(|id| crate::snap_ui::tree_rect(&st.doc, id));
     }
-    photocraft_engine::layer_multi_cmds::move_targets(&st.doc, &st.selected_layers())
+    photocraft_engine::layer_multi_cmds::move_targets(&st.doc, st.selected_layers())
         .into_iter()
         .filter_map(|id| crate::snap_ui::tree_rect(&st.doc, id))
         .reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])])

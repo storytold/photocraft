@@ -746,7 +746,7 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
         && let Some(st) = app.session.close(index)
     {
         let read_only = st.source_read_only;
-        let doc = Arc::try_unwrap(st.doc).unwrap_or_else(|d| (*d).clone());
+        let doc = Arc::try_unwrap(st.into_document()).unwrap_or_else(|d| (*d).clone());
         crate::open_prompt::arrive(app, held(doc, read_only, None, true));
         return Ok(());
     }

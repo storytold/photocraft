@@ -336,8 +336,8 @@ fn selected_layers_keep_a_channel_transform_isolated_and_warp_available() {
     let mut other = photocraft_doc::Layer::raster("other", photocraft_color::PixelFormat::RGBA8);
     other.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(32, 8, 48, 24), &[0., 1., 0., 1.]);
     let second = other.id;
-    Arc::make_mut(&mut st.doc).layers.push(other);
-    st.selected_layers = vec![first, second];
+    Arc::make_mut(st.doc_mut()).layers.push(other);
+    *st.selection_mut() = vec![first, second];
     app.run("channel.target", json!({"channel":"green"})).unwrap();
     app.run("channel.setVisible", json!({"channel":"composite","visible":true})).unwrap();
     let before = app.session.active().unwrap().doc.layer(second).unwrap().surface().unwrap().to_interleaved(photocraft_geom::Rect::new(0, 0, 64, 64));

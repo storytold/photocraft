@@ -832,7 +832,7 @@ fn saved_channel_explicit_targets_need_no_active_layer() {
             Ok(())
         })
         .unwrap();
-        s.active_mut().unwrap().active_layer = None;
+        s.active_mut().unwrap().set_active_layer(None);
         let mut p = match command {
             "edit.transform" => json!({"matrix":[1,0,0,1,2,0]}),
             "edit.transform.warp" => json!({"style":"arc","bend":20}),
@@ -1160,7 +1160,7 @@ fn colour_source_collection_respects_memory_usage_before_capture_even_for_tiny_o
     for (size, colors) in [(Size::new(2048, 2048), vec![0, 2]), (Size::new(12, 8193), vec![0, 1, 2])] {
         for command in ["edit.transform", "edit.transform.warp"] {
             let mut s = session(ColorMode::Rgb, SampleType::F32);
-            Arc::make_mut(&mut s.active_mut().unwrap().doc).size = size;
+            Arc::make_mut(s.active_mut().unwrap().doc_mut()).size = size;
             let st = s.active().unwrap();
             let before = st.doc.clone();
             let history = st.history.past_len();

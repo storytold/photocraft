@@ -98,6 +98,10 @@ pub(crate) fn fix_view(st: &mut DocState) {
     let n = st.doc.channels.len();
     let colors = color_count(&st.doc);
     let previous_target = st.channel_view.target;
+    let quick = st.doc.quick_mask.is_some();
+    let active = st.active_layer.and_then(|id| st.doc.layer(id));
+    let missing_layer_mask = active.is_none_or(|l| l.mask.is_none());
+    let missing_vector_mask = active.is_none_or(|l| l.vector_mask.is_none());
     {
         let v = &mut st.channel_view;
         v.alpha_visible.truncate(n);
@@ -106,10 +110,10 @@ pub(crate) fn fix_view(st: &mut DocState) {
         match v.target {
             ChannelTarget::Alpha(i) if i >= n => v.target = ChannelTarget::Composite,
             ChannelTarget::Color(k) if k >= colors || colors < 2 => v.target = ChannelTarget::Composite,
-            ChannelTarget::LayerMask if st.active_layer.and_then(|id| st.doc.layer(id)).is_none_or(|l| l.mask.is_none()) => {
+            ChannelTarget::LayerMask if missing_layer_mask => {
                 v.target = ChannelTarget::Composite;
             }
-            ChannelTarget::VectorMask if st.active_layer.and_then(|id| st.doc.layer(id)).is_none_or(|l| l.vector_mask.is_none()) => {
+            ChannelTarget::VectorMask if missing_vector_mask => {
                 v.target = ChannelTarget::Composite;
             }
             _ => {}
@@ -126,7 +130,7 @@ pub(crate) fn fix_view(st: &mut DocState) {
     // Composite must not leave an empty canvas; an intentional all-hidden view with a still-
     // valid target, or another visible mask/channel, keeps its existing eyes.
     let v = &st.channel_view;
-    let other_shown = (0..n).any(|i| v.alpha_shown(i)) || (st.doc.quick_mask.is_some() && !v.quick_mask_hidden) || v.shown_layer_mask(&st.doc).is_some();
+    let other_shown = (0..n).any(|i| v.alpha_shown(i)) || (quick && !v.quick_mask_hidden) || v.shown_layer_mask(&st.doc).is_some();
     if previous_target != v.target && v.visible_colors(colors) == 0 && !other_shown {
         st.channel_view.color_hidden.clear();
     }
@@ -137,6 +141,7 @@ pub(crate) fn fix_view(st: &mut DocState) {
 pub(super) fn touch(st: &mut DocState) {
     st.bump_view_revision(!st.is_dirty());
     st.last_damage = None;
+    st.record_damage();
 }
 
 // ---------------------------------------------------------------------------------------------

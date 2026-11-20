@@ -1737,9 +1737,9 @@ fn retained_paint_captures_the_complete_colour_set_and_layer() {
     let points = parse_points(&params, "paint.stroke").unwrap();
     assert!(offer.matches(&s, "paint.stroke", &params, &points));
     let first = s.active().unwrap().active_layer.unwrap();
-    s.active_mut().unwrap().active_layer = Some(photocraft_doc::LayerId(u64::MAX));
+    s.active_mut().unwrap().set_active_layer(Some(photocraft_doc::LayerId(u64::MAX)));
     assert!(!offer.matches(&s, "paint.stroke", &params, &points));
-    s.active_mut().unwrap().active_layer = Some(first);
+    s.active_mut().unwrap().set_active_layer(Some(first));
     params["target"] = json!({"colors":[0,1]});
     assert!(!offer.matches(&s, "paint.stroke", &params, &points));
 }
