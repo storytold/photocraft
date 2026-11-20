@@ -648,9 +648,10 @@ pub const NO_SELECTION_MENU: &[Row] = &[
 ];
 
 /// Photoshop's generic layer menu, in its order for a pixel layer without a selection: the Count
-/// tool's canvas menu on a marker or off one (#11772), and the Red Eye and Object Selection
-/// (#12866) tools' without a selection. Each row is enabled as the Layers panel menu enables it
-/// for the active layer (`menus::is_enabled`) and runs like the menu item.
+/// tool's canvas menu on a marker or off one (#11772), the Red Eye and Object Selection (#12866)
+/// tools' without a selection, and the Horizontal Type tool's away from text (#12042). Each row is
+/// enabled as the Layers panel menu enables it for the active layer (`menus::is_enabled`) and runs
+/// like the menu item.
 pub const COUNT_MENU: &[Row] = &[
     Some(("Blending Options…", "layer.layerStyle.blendingOptions")),
     None,
@@ -952,9 +953,17 @@ fn red_eye_measured(app: &PhotocraftApp, doc: Option<[f64; 2]>) -> bool {
     })
 }
 
+/// The Horizontal Type tool's off-text right-click, where the reference application measured the
+/// layer menu (#12042): no active selection. With one, its right-click keeps opening nothing
+/// (that case is not measured).
+fn type_off_text_measured(app: &PhotocraftApp) -> bool {
+    app.session.active().is_some_and(|st| st.doc.selection.is_none())
+}
+
 /// Tools whose plain canvas right-click opens a menu: the selection tools' actions, the
-/// Content-Aware Move menu, the path menu, the Color Sampler's, the Red Eye tool's and the shape
-/// tools' (in Shape mode only: [`open`] checks it).
+/// Content-Aware Move menu, the path menu, the Color Sampler's, the Red Eye tool's, the shape
+/// tools' (in Shape mode only: [`open`] checks it) and the Horizontal Type tool's layer menu away
+/// from text (also gated by [`open`], #12042).
 pub fn applies(tool: Tool) -> bool {
     matches!(
         tool,
@@ -973,6 +982,9 @@ pub fn applies(tool: Tool) -> bool {
             | Tool::ColorSampler
             // The layer menu (#11772).
             | Tool::Count
+            // The layer menu away from text (#12042); Vertical Type and the Type Mask tools are
+            // not measured and stay on their no-menu path.
+            | Tool::Type
             // Sample Size and Copy Color (#11747).
             | Tool::Eyedropper
             | Tool::ContentAwareMove
@@ -1091,7 +1103,7 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
                 if menu.has_path { SHAPE_MENU } else { SHAPE_MENU_NO_PATH }
             } else if sampler_menu(menu) {
                 SAMPLER_MENU
-            } else if menu.tool == Tool::Count {
+            } else if matches!(menu.tool, Tool::Count | Tool::Type) {
                 COUNT_MENU
             } else if matches!(menu.tool, Tool::RedEye | Tool::ObjectSelection) {
                 if menu.has_selection { MEASURED_SELECTION_MENU } else { COUNT_MENU }
@@ -1427,7 +1439,8 @@ pub fn open_at(app: &mut PhotocraftApp, tool: Tool, mods: Mods, at: Pos2, doc: [
 /// what the rows need: the misspelled word, the type layer, the saved crop presets, the layers
 /// under the point, the sampler, the eyedropper's colour, the point entry. `false` (and nothing
 /// open) when the menu has nothing to show: a non-finite point, a crop that isn't pending, no layers,
-/// a tool without the menu, Content-Aware Move outside RGB, Gray and Lab, an unmeasured Red Eye.
+/// a tool without the menu, Content-Aware Move outside RGB, Gray and Lab, an unmeasured Red Eye, or
+/// a Type tool off text with a selection (#12042).
 pub fn open(app: &mut PhotocraftApp, tool: Tool, kind: MenuKind, at: Pos2, doc: [f64; 2], point: Option<(PathRef, BezierHit)>) -> bool {
     if !at.x.is_finite() || !at.y.is_finite() || !doc.iter().all(|v| v.is_finite()) {
         return false;
@@ -1513,6 +1526,9 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, kind: MenuKind, at: Pos2, doc: 
                 return false;
             }
             if tool == Tool::RedEye && !red_eye_measured(app, Some(doc)) {
+                return false;
+            }
+            if tool == Tool::Type && !type_off_text_measured(app) {
                 return false;
             }
             if shape_tool_menu(tool) && !shape_menu_measured(app) {
@@ -1867,6 +1883,9 @@ mod make_selection_dialog_tests;
 
 #[cfg(test)]
 mod type_layer_menu_tests;
+
+#[cfg(test)]
+mod type_off_text_tests;
 
 #[cfg(test)]
 mod add_anchor_menu_tests;
