@@ -153,25 +153,29 @@ pub fn blend_if_active(layer: &Layer, mode: photocraft_color::ColorMode) -> bool
 /// How much of a pixel shows through `layer`'s Blend If ranges, given the layer's own colour
 /// (`this`, `None` where the layer has no content of its own there) and the colour beneath it
 /// (`under`, `None` where nothing is beneath). Every range multiplies in.
-fn blend_if_weight(layer: &Layer, mode: photocraft_color::ColorMode, this: Option<[f32; 4]>, under: Option<[f32; 4]>) -> f32 {
+fn blend_if_weight(layer: &Layer, cx: &Ctx, this: Option<[f32; 4]>, under: Option<[f32; 4]>) -> f32 {
     use photocraft_color::ColorMode as M;
     let bi = &layer.blend_if;
+    // 8-bit RGB documents fade split points over both ends (#14855); deeper documents and the
+    // one-channel modes (not measured) keep the plain ramp.
+    let levels = cx.depth == photocraft_color::SampleType::U8 && cx.mode == M::Rgb;
+    let w = |r: photocraft_doc::BlendRange, v: f32| if levels { r.weight_8bit(v) } else { r.weight(v) };
     let mut k = 1.0;
     for (side, px) in [this, under].into_iter().enumerate() {
         let Some(p) = px else { continue };
         let v = |c: usize| blend_if_level(p[c]);
-        match mode {
+        match cx.mode {
             // Gray, then R, G, B.
             M::Rgb => {
                 let gray = blend_if_gray(v(0), v(1), v(2));
-                k *= bi.get(0)[side].weight(gray);
+                k *= w(bi.get(0)[side], gray);
                 for c in 0..3 {
-                    k *= bi.get(c + 1)[side].weight(v(c));
+                    k *= w(bi.get(c + 1)[side], v(c));
                 }
             }
             // One channel: the PSD spec marks the composite-gray entry irrelevant here, so the
             // channel's own entry carries the setting; both are honoured.
-            _ => k *= bi.get(0)[side].weight(v(0)) * bi.get(1)[side].weight(v(0)),
+            _ => k *= w(bi.get(0)[side], v(0)) * w(bi.get(1)[side], v(0)),
         }
         if k <= 0.0 {
             return 0.0;
@@ -243,7 +247,7 @@ fn apply_blend_if_with<A: BufferAlloc>(layer: &Layer, before: &Buffer, out: &mut
             None => Some(*p),
         };
         let under = Some(*b).filter(|q| q[3] > 0.0);
-        let k = blend_if_weight(layer, cx.mode, this, under);
+        let k = blend_if_weight(layer, cx, this, under);
         if k >= 1.0 {
             continue;
         }
@@ -826,3 +830,7 @@ fn blend_span_g(dst: &mut [[f32; 4]], src: &[[f32; 4]], x0: i32, y: i32, mode: B
         *b = blend::composite_gamma(mode, *b, s, opacity, gamma);
     }
 }
+
+#[cfg(test)]
+#[path = "blend_if_split_fade_tests.rs"]
+mod blend_if_split_fade_tests;

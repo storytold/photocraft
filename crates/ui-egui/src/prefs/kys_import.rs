@@ -14,7 +14,7 @@
 use craft::keymap::import::kys;
 use craft::menu::shortcuts::{ImportOffer, OfferAnswer, OfferRecord};
 use craft::ui::dialog::{DialogResult, StartupStage};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::PhotocraftApp;
 use crate::prefs_ui::shortcuts::{draft_keymap, import_options, kys_text, profiles_of, queue_import, save_keys};
@@ -28,7 +28,7 @@ pub const IMPORTED_PREF: &str = "photoshopShortcuts";
 pub fn open_bytes(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Result<Value, String> {
     let text = kys_text(name, bytes)?;
     queue_import(app, text);
-    Ok(json!({"dialog": "shortcuts"}))
+    Ok(crate::prefs_ui::shortcuts::control_reply())
 }
 
 fn remember(app: &mut PhotocraftApp, record: &OfferRecord) {

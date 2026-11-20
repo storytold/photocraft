@@ -16,7 +16,7 @@ fn fixture(groups: &[Option<u64>], selected: &[usize]) -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
     let st = s.active_mut().unwrap();
-    let doc = Arc::make_mut(&mut st.doc);
+    let doc = Arc::make_mut(st.doc_mut());
     doc.layers = groups
         .iter()
         .enumerate()
@@ -166,8 +166,8 @@ fn invalid_link_state_fails_without_editing() {
     }
     for active in [None, Some(LayerId(u64::MAX))] {
         let st = s.active_mut().unwrap();
-        st.active_layer = active;
-        st.selected_layers = active.into_iter().collect();
+        st.set_active_layer(active);
+        *st.selection_mut() = active.into_iter().collect();
         assert!(s.execute("layer.linkLayers", json!({"linked": false})).is_err());
         assert_eq!(s.active().unwrap().doc, before);
         assert_eq!(s.active().unwrap().history.past_len(), history);
@@ -343,7 +343,7 @@ fn scan_fixture() -> Session {
     s.execute("file.new", json!({"width": 480, "height": 340, "background": "#fafafa"})).unwrap();
     let st = s.active_mut().unwrap();
     let id = st.active_layer.unwrap();
-    let surface = Arc::make_mut(&mut st.doc).layer_mut(id).unwrap().surface_mut().unwrap();
+    let surface = Arc::make_mut(st.doc_mut()).layer_mut(id).unwrap().surface_mut().unwrap();
     for (x, y, w, h, color) in [(40, 60, 160, 110, [0.6, 0.1, 0.1, 1.0]), (290, 180, 150, 120, [0.1, 0.2, 0.6, 1.0])] {
         surface.fill_rect(photocraft_doc::Rect::new(x, y, x + w, y + h), &color);
     }
@@ -381,18 +381,22 @@ fn crop_parent_refuses_ineligible_layers_without_document_or_history_changes() {
         let mut s = scan_fixture();
         let st = s.active_mut().unwrap();
         let id = st.active_layer.unwrap();
-        let doc = Arc::make_mut(&mut st.doc);
-        match case {
-            "missing" => st.active_layer = None,
-            "stale" => st.active_layer = Some(LayerId::fresh()),
-            "hidden" => doc.layer_mut(id).unwrap().visible = false,
-            "pixels" => doc.layer_mut(id).unwrap().locks.pixels = true,
-            "indexed" => doc.mode = photocraft_doc::ColorMode::Indexed,
-            _ => {
-                let mut group = Layer::group("Parent", std::mem::take(&mut doc.layers));
-                group.visible = case != "hidden-parent";
-                group.locks.all = case == "locked-parent";
-                doc.layers.push(group);
+        if case == "missing" {
+            st.set_active_layer(None);
+        } else if case == "stale" {
+            st.set_active_layer(Some(LayerId::fresh()));
+        } else {
+            let doc = Arc::make_mut(st.doc_mut());
+            match case {
+                "hidden" => doc.layer_mut(id).unwrap().visible = false,
+                "pixels" => doc.layer_mut(id).unwrap().locks.pixels = true,
+                "indexed" => doc.mode = photocraft_doc::ColorMode::Indexed,
+                _ => {
+                    let mut group = Layer::group("Parent", std::mem::take(&mut doc.layers));
+                    group.visible = case != "hidden-parent";
+                    group.locks.all = case == "locked-parent";
+                    doc.layers.push(group);
+                }
             }
         }
         let before = s.active().unwrap().doc.clone();
@@ -460,7 +464,7 @@ fn artboard_fixture() -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 12, "height": 10, "background": "transparent"})).unwrap();
     let st = s.active_mut().unwrap();
-    let doc = Arc::make_mut(&mut st.doc);
+    let doc = Arc::make_mut(st.doc_mut());
     let mut child = Layer::raster("Pixels", doc.pixel_format());
     let surface = child.surface_mut().unwrap();
     for rect in [photocraft_doc::Rect::new(2, 2, 3, 3), photocraft_doc::Rect::new(5, 5, 6, 6)] {
@@ -468,7 +472,7 @@ fn artboard_fixture() -> Session {
     }
     let group = Layer::group("Group", vec![child]);
     let id = group.id;
-    doc.layers = vec![group];
+    doc.layers = vec![group].into();
     s.restore_layer_selection(Some(id), &[id], Some(id)).unwrap();
     s
 }
@@ -497,8 +501,8 @@ fn artboard_recorded_flags_and_guides_roundtrip_without_resizing() {
     for (background, expected) in [(1, [1.0, 1.0, 1.0, 1.0]), (2, [0.0, 0.0, 0.0, 1.0]), (3, [0.0; 4]), (4, [0.25, 0.5, 0.75, 1.0])] {
         for flag in [None, Some(0), Some(1), Some(2), Some(3), Some(-1), Some(7)] {
             let mut s = artboard_fixture();
-            Arc::make_mut(&mut s.active_mut().unwrap().doc).guides.horizontal.push(3.0);
-            Arc::make_mut(&mut s.active_mut().unwrap().doc).guides.vertical.push(4.0);
+            Arc::make_mut(s.active_mut().unwrap().doc_mut()).guides.horizontal.push(3.0);
+            Arc::make_mut(s.active_mut().unwrap().doc_mut()).guides.vertical.push(4.0);
             let before = s.active().unwrap().doc.clone();
             let id = s.active().unwrap().active_layer.unwrap();
             let mut d = artboard_descriptor(background, vec![D::Integer(2), D::Integer(99999)], D::Integer(flag.unwrap_or(1)));
@@ -548,7 +552,7 @@ fn artboard_target_only_form_keeps_existing_native_group_behavior() {
 fn artboard_from_group_replaces_the_previous_layer_selection() {
     let mut s = artboard_fixture();
     let group = s.active().unwrap().active_layer.unwrap();
-    let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
     let other = Layer::raster("Other", doc.pixel_format());
     let id = other.id;
     doc.layers.push(other);
@@ -689,7 +693,7 @@ fn artboard_background_edit_roundtrips_without_replaying_recorded_geometry() {
         let mut s = artboard_fixture();
         let initial_background = if kind == 1 { "black" } else { "white" };
         s.execute("layer.new.artboardFromGroup", json!({"background":initial_background})).unwrap();
-        Arc::make_mut(&mut s.active_mut().unwrap().doc).guides.horizontal.push(3.0);
+        Arc::make_mut(s.active_mut().unwrap().doc_mut()).guides.horizontal.push(3.0);
         let before = s.active().unwrap().doc.clone();
         let id = s.active().unwrap().active_layer.unwrap();
         assert_eq!(
@@ -826,7 +830,7 @@ fn rasterize_all_event_visits_nested_and_top_level_smart_layers() {
         let mut s = smart_fixture(&png("#0000ff"));
         let first = s.active().unwrap().active_layer.unwrap();
         s.execute("layer.smartObjects.newSmartObjectViaCopy", json!({})).unwrap();
-        let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+        let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
         let nested = doc.remove(first).unwrap();
         doc.layers.push(Layer::group("Nested", vec![nested]));
         let before = s.active().unwrap().doc.clone();
@@ -857,7 +861,7 @@ fn video_and_isolate_events_use_current_document_state() {
 
         let mut s = fixture(&[None, None, None], &[0, 2]);
         let before = s.active().unwrap().doc.clone();
-        let ids = s.active().unwrap().selected_layers();
+        let ids = s.active().unwrap().selected_layers().to_vec();
         let history = s.active().unwrap().history.past_len();
         load_targeted(&mut s, "isolateLayers", "select.isolateLayers", explicit);
         play(&mut s);
@@ -925,7 +929,7 @@ fn make_type_shape_roundtrips_and_converts_actual_glyphs_with_undo() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 128, "height": 80, "background": "white"})).unwrap();
     let id = LayerId(s.execute("type.create", json!({"text": "oil", "size": 24, "x": 8, "y": 48})).unwrap()["layer"].as_u64().unwrap());
-    Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().psd_blocks.push((*b"TySh", Arc::new(vec![1, 2, 3])));
+    Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(id).unwrap().psd_blocks.push((*b"TySh", Arc::new(vec![1, 2, 3])));
     let before = s.active().unwrap().doc.clone();
     assert_eq!(load(&mut s, &file("Mk  ", make_type_descriptor()))["unsupported"], json!([]));
     assert_eq!(s.actions.list.actions()[0].steps, [ActionStep::new("type.convertToShape", json!({}))]);
