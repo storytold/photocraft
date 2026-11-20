@@ -12,7 +12,7 @@ use photocraft_algo::quantize::{self, BitmapMethod, Dither, Forced, HalftoneShap
 use photocraft_algo::transform::{Homography, Interp};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::adjust::CurvePoint;
-use photocraft_doc::{ColorTable, Document, Duotone, DuotoneInk, Layer, LayerContent, LayerId, Size};
+use photocraft_doc::{ColorIndices, ColorTable, Document, Duotone, DuotoneInk, Layer, LayerContent, LayerId, Size};
 use photocraft_geom::{Affine, Rect};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -42,13 +42,23 @@ fn str_or<'a>(p: &'a Value, key: &str, default: &'a str) -> &'a str {
 
 type Enabled = std::result::Result<(), String>;
 
-fn has_doc(s: &Session) -> Enabled {
-    s.active().map(|_| ()).ok_or_else(|| "no document open".into())
-}
-
 fn mode_is(s: &Session, modes: &[ColorMode], what: &str) -> Enabled {
     let d = s.active().ok_or("no document open")?;
     if modes.contains(&d.doc.mode) { Ok(()) } else { Err(format!("{what} (the document is {:?})", d.doc.mode)) }
+}
+
+/// #14509, measured: in a Bitmap document only Arbitrary is greyed in the Image Rotation
+/// submenu - 180, the two 90 turns and both flips stay available - and a scripted call answers
+/// this sentence with the document unchanged. The Crop tool's straighten shares
+/// [`rotate_arbitrary_with`] but was not measured in Bitmap, so only this spec's gate names it.
+const BITMAP_ROTATE_REFUSAL: &str = "Could not complete the command because it does not work with Bitmap images (convert image to Grayscale mode to edit).";
+
+fn rotate_arbitrary_enabled(s: &Session) -> Enabled {
+    let d = s.active().ok_or("no document open")?;
+    if d.doc.mode == ColorMode::Bitmap {
+        return Err(BITMAP_ROTATE_REFUSAL.into());
+    }
+    Ok(())
 }
 
 // ---------- Image Rotation › Arbitrary ----------
@@ -63,14 +73,16 @@ pub fn rotated_size(size: Size, deg: f64) -> Size {
 }
 
 pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
-    rotate_arbitrary_with(s, p, true)
+    rotate_arbitrary_with(s, p, true, true)
 }
 
 /// [`rotate_arbitrary`]; `image_rotation` is true on the Image Rotation path and decides two
 /// things there: count points stay where they were (#11762) and the selection is dropped, in the
 /// same history step, so one undo brings it back (#14507). The Crop tool's straighten turn and the
 /// Ruler's Straighten pass false: they move count points with the image and warp the selection.
-pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: bool) -> Result<Value> {
+/// `keep_guides` turns the guides with the canvas (#14508, measured for Image Rotation > Arbitrary)
+/// instead of dropping them, as the turned Crop and the Straighten still do (not measured there).
+pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: bool, keep_guides: bool) -> Result<Value> {
     const CMD: &str = "image.rotation.arbitrary";
     // At full precision: an f32 angle can grow the canvas 1 px past what `rotated_size` gives callers.
     let angle = p.get("angle").and_then(Value::as_f64).unwrap_or(0.0);
@@ -140,6 +152,7 @@ pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: 
             // What Free Transform leaves alone: unlinked vector masks, gradient angles, artboards…
             crate::canvas_geom::transform_layer_geometry(l, &a, false, dpi);
         }
+        let guides_before = doc.guides.clone();
         if image_rotation {
             crate::canvas_geom::keeping_count_points(doc, |doc| crate::canvas_geom::transform_doc_marks(doc, &a));
         } else {
@@ -156,7 +169,31 @@ pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: 
         // Type, shapes and smart objects re-render from their new geometry; type in a missing
         // font keeps its turned pixels.
         crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All);
-        doc.guides = Default::default();
+        // #14508: the turn keeps its guides. A right angle goes through transform_doc_marks
+        // above, which swaps orientation and position exactly as the reference measures
+        // (90° clockwise: a vertical guide at x=100 becomes a horizontal one at y=100). Any
+        // other angle follows the measured rule: each guide's edge point (the vertical guide's
+        // point on the top edge, the horizontal one's on the left) turns about the old centre
+        // while the UNROUNDED turned bounding box sits flush at the new canvas's origin - on a
+        // 400x300 canvas turned 30° that lands x=100 at 236.60 and y=50 at 43.30, both within
+        // 0.15 px of the reference's 236.49 and 43.19 (the exact rule is not settled, so no
+        // further refinement is guessed). The content itself is centred in the ROUNDED canvas,
+        // so on a non-right angle the guides hug the unrounded geometry, up to a pixel off the
+        // painted edge - as measured. Guide COLOURS for a turned canvas were not measured and
+        // stay cleared as today; guides that end up off the new canvas follow the same rule
+        // continued, they are kept. The turned Crop and Straighten pass keep_guides=false: not
+        // measured there, so they drop guides exactly as they do today.
+        if !keep_guides {
+            doc.guides = Default::default();
+        } else if sn.abs() > 1e-9 && cs.abs() > 1e-9 {
+            let (ow, oh) = (f64::from(old.width), f64::from(old.height));
+            let gw = ow * cs.abs() + oh * sn.abs();
+            let gh = ow * sn.abs() + oh * cs.abs();
+            let txf = gw / 2.0 - (cs * cx - sn * cy);
+            let tyf = gh / 2.0 - (sn * cx + cs * cy);
+            doc.guides.vertical = guides_before.vertical.iter().map(|x| cs * *x + txf).collect();
+            doc.guides.horizontal = guides_before.horizontal.iter().map(|y| cs * *y + tyf).collect();
+        }
         Ok(new)
     })?;
     Ok(json!({"width": size.width, "height": size.height}))
@@ -241,13 +278,14 @@ fn single_layer_surface(doc: &mut Document, active: &mut Option<LayerId>, mode: 
         *surf = pixels;
     }
     *active = Some(l.id);
-    doc.layers = vec![l];
+    doc.layers = vec![l].into();
     for ch in doc.channels.iter_mut() {
         let f = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
         ch.surface = ch.surface.convert(PixelFormat { alpha: ch.surface.format().alpha, ..f });
     }
     doc.quick_mask = None;
     doc.color_table = None;
+    doc.color_indices = None;
     doc.duotone = None;
 }
 
@@ -367,9 +405,12 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
             None
         };
         let w = doc.size.width as usize;
-        quantize::quantize(&mut px, w, &pal, dither, amount, transparent);
+        let indices = quantize::quantize(&mut px, w, &pal, dither, amount, transparent);
         single_layer(doc, active, ColorMode::Indexed, &px, if transparent.is_some() { "Index" } else { "Background" }, transparent.is_none());
         doc.color_table = Some(ColorTable { colors: pal.clone(), transparent: transparent.map(|t| t as u8) });
+        // Each pixel's index is known here: keep it for Color Table (#14342).
+        let bounds = doc.bounds();
+        doc.color_indices = doc.layers.first().and_then(|l| ColorIndices::new(l.id, l.surface()?, bounds, &indices));
         Ok((pal.len(), transparent))
     })?;
     Ok(json!({"colors": pal_len, "transparentIndex": transparent}))
@@ -465,7 +506,15 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
     let out = report(&table);
     s.edit("Color Table", |doc, _| {
         let old = cur.clone();
-        for surf in doc.layers.iter_mut().filter_map(Layer::surface_mut) {
+        // A pixel keeps its index where it is known, so entries of one colour keep their own
+        // pixels; elsewhere it takes the nearest entry (#14342). The indices written here are
+        // known afterwards, for the recorded layer (Indexed documents have one).
+        let known = doc.color_indices.take();
+        let has_pixels = |id: LayerId| doc.layers.iter().any(|l| l.id == id && l.surface().is_some());
+        let record = known.as_ref().map(|k| k.layer).filter(|&id| has_pixels(id)).or_else(|| doc.layers.iter().find(|l| l.surface().is_some()).map(|l| l.id));
+        for l in doc.layers.iter_mut() {
+            let id = l.id;
+            let Some(surf) = l.surface_mut() else { continue };
             let r = surf.content_bounds();
             if r.is_empty() {
                 continue;
@@ -473,7 +522,9 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
             let fmt = surf.format();
             let n = fmt.channels();
             let mut data = surf.read_region(r);
-            for q in data.chunks_exact_mut(n) {
+            let indices = known.as_ref().and_then(|k| k.known(id, surf, r)).unwrap_or_default();
+            let mut written = vec![0u8; if record == Some(id) { data.len() / n } else { 0 }];
+            for (k, q) in data.chunks_exact_mut(n).enumerate() {
                 let c = photocraft_raster::to_rgba(&fmt, q);
                 let rgb = [c[0], c[1], c[2]];
                 let i = if c[3] <= 0.0 {
@@ -483,8 +534,13 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
                     }
                     i
                 } else {
-                    old.nearest(rgb)
+                    // A known index past the table stays: its pixel shows black until the table
+                    // grows back over it.
+                    indices.get(k).map_or_else(|| old.nearest(rgb), |&i| usize::from(i))
                 };
+                if let Some(w) = written.get_mut(k) {
+                    *w = i as u8;
+                }
                 let alpha = if table.transparent == Some(i as u8) {
                     0.0
                 } else if c[3] <= 0.0 {
@@ -492,13 +548,17 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
                 } else {
                     c[3]
                 };
-                let nc = if i < table.colors.len() { table.rgb(i) } else { table.rgb(table.nearest([c[0], c[1], c[2]])) };
+                // An index past a shrunk table has no colour: black, as in Photoshop (#14342).
+                let nc = table.rgb(i);
                 let mut enc = [0.0f32; 8];
                 let m = photocraft_raster::from_rgba_into(&fmt, [nc[0], nc[1], nc[2], alpha], &mut enc);
                 q.copy_from_slice(&enc[..m]);
             }
             surf.write_region(r, &data);
             surf.prune();
+            if record == Some(id) {
+                doc.color_indices = ColorIndices::new(id, surf, r, &written);
+            }
         }
         doc.color_table = Some(table.clone());
         Ok(())
@@ -600,6 +660,11 @@ fn custom_pattern_map(s: &Session, cmd: &str, p: &Value) -> Result<(Vec<f32>, us
 }
 
 fn bitmap(s: &mut Session, p: &Value) -> Result<Value> {
+    bitmap_in_bands(s, p, 0)
+}
+
+/// Convert with the requested compositor band height (zero chooses its normal budget).
+fn bitmap_in_bands(s: &mut Session, p: &Value, band_rows: i32) -> Result<Value> {
     const CMD: &str = "image.mode.bitmap";
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let input = f64::from(d.doc.resolution_dpi.max(1.0));
@@ -674,7 +739,7 @@ fn bitmap(s: &mut Session, p: &Value) -> Result<Value> {
         let n = fmt.channels();
         let mut out = Surface::new(fmt);
         let (mut gray, mut data) = (Vec::new(), Vec::new());
-        let _ = photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> std::result::Result<(), std::convert::Infallible> {
+        let _ = photocraft_compose::render_bands(doc, doc.bounds(), band_rows, |band| -> std::result::Result<(), std::convert::Infallible> {
             gray.clear();
             gray.extend(band.px.iter().map(|q| {
                 // Over white, as the flattened image.
@@ -776,7 +841,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Arbitrary…",
             ["Image", "Image Rotation"],
             r##"{"angle":-359.99..359.99=0,"direction":"cw|ccw"="cw","interpolation":"bicubic|bilinear|nearest"="bicubic"}"##,
-            has_doc,
+            rotate_arbitrary_enabled,
             rotate_arbitrary
         ),
         spec!(
@@ -837,3 +902,6 @@ pub fn display_document(doc: &Document) -> Option<Document> {
 mod rotate_canvas_selection_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod color_table_index_tests;
