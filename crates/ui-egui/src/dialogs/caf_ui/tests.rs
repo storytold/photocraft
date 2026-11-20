@@ -332,6 +332,41 @@ fn a_background_fill_remembers_its_settings_only_when_its_job_is_applied() {
     }
 }
 
+/// After a restart an empty recorded step still plays with the last fill's settings: the startup move of the dialogs'
+/// memories leaves the engine's copy in the preferences (#14254).
+#[test]
+fn an_empty_recorded_step_plays_with_the_last_settings_after_a_restart() {
+    use craft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
+    use craft_psd::descriptor::{Descriptor, UnicodeString};
+    let mut app = app_with_selection();
+    open(&mut app).unwrap();
+    ui(&mut app, json!({"output": "current", "commit": true})).unwrap();
+    close_all(&mut app);
+    let prefs = app.session.prefs().clone();
+
+    // A new app over the saved preferences, moved as startup does.
+    let mut restarted = app_with_selection();
+    restarted.session.edit_prefs(|p| *p = prefs);
+    restarted.framework.move_memories(&mut restarted.session);
+    let item = AtnItem {
+        event: AtnEvent::name("cafWorkspace"),
+        dictionary: b"Content-Aware Fill".to_vec(),
+        descriptor: Some(Descriptor::new("null")),
+        ..Default::default()
+    };
+    let file = AtnFile {
+        name: UnicodeString::new_nul("S"),
+        actions: vec![AtnAction { name: UnicodeString::new_nul("A"), items: vec![item], ..Default::default() }],
+        ..Default::default()
+    };
+    let imported = photocraft_engine::atn_cmds::import(&craft_psd::atn::write(&file).unwrap()).unwrap();
+    restarted.session.actions.list.push(imported.actions.into_iter().next().unwrap()).unwrap();
+    let layers = restarted.session.active().unwrap().doc.layers.len();
+    let result = restarted.session.execute("actions.play", json!({"action": 0})).unwrap();
+    assert_eq!(result["ran"], 1, "{result}");
+    assert_eq!(restarted.session.active().unwrap().doc.layers.len(), layers, "Current Layer, not a new layer");
+}
+
 /// The engine's sampling area over the plan's rectangle (what the fill samples) and its fill area.
 fn engine_source(app: &PhotocraftApp) -> (Rect, Vec<bool>, Vec<bool>) {
     let c = app.caf.as_ref().unwrap();
