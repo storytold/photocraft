@@ -215,8 +215,15 @@ impl PhotocraftApp {
                 if id == photocraft_engine::exr_cmds::LAYERED_EXR
                     && let Some(path) = reply.get("path").and_then(Value::as_str)
                 {
-                    let warnings: Vec<_> =
-                        reply.get("warnings").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
+                    let warnings: Vec<_> = reply
+                        .get("warnings")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(crate::i18n::t)
+                        .map(str::to_owned)
+                        .collect();
                     let what = crate::i18n::fmt(tl!("Exported {name}"), &[("name", &crate::file_open::display_name(path))]);
                     self.ui.status.clone_from(&what);
                     notices::io_warnings(self, &what, &warnings);

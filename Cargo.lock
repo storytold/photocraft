@@ -6486,6 +6486,7 @@ dependencies = [
  "pollster 1.0.1",
  "rmcp",
  "rustix 1.1.5",
+ "same-file",
  "schemars",
  "serde",
  "serde_json",

@@ -27,7 +27,7 @@ fn exr_bool(p: &Value, key: &str, default: bool) -> Result<bool> {
     }
 }
 
-fn layered_exr_options(s: &Session, p: &Value) -> Result<LayeredExrOptions> {
+fn layered_exr_options(s: &Session, p: &Value, warnings: &mut Vec<String>) -> Result<LayeredExrOptions> {
     let selected = exr_bool(p, "selectedOnly", false)?;
     let state = s.active().ok_or(EngineError::NoDocument)?;
     let layers = match p.get("layers") {
@@ -44,11 +44,15 @@ fn layered_exr_options(s: &Session, p: &Value) -> Result<LayeredExrOptions> {
             )
         }
         None if selected => {
-            let ids = state.selected_layers();
+            let selection = state.selected_layers();
+            let ids: Vec<_> = selection.iter().copied().filter(|id| state.doc.layer(*id).is_some_and(photocraft_io::is_layered_exr_raster)).collect();
             if ids.is_empty() {
-                return Err(bad_layered_exr("select one or more layers first"));
+                return Err(bad_layered_exr("select one or more RGB raster layers first"));
             }
-            Some(ids.to_vec())
+            if ids.len() < selection.len() {
+                warnings.push("Only selected RGB raster layers were exported as editable pixels".into());
+            }
+            Some(ids)
         }
         None => None,
     };
@@ -75,11 +79,11 @@ pub fn export_layered_exr_with(s: &Session, p: &Value, write: impl FnOnce(&str, 
         return Err(bad_layered_exr("`path` must end in .exr"));
     }
     exr_bool(p, "overwrite", false)?;
-    let opts = layered_exr_options(s, p)?;
-    let d = s.active().ok_or(EngineError::NoDocument)?;
     let mut warnings = Vec::new();
+    let opts = layered_exr_options(s, p, &mut warnings)?;
+    let d = s.active().ok_or(EngineError::NoDocument)?;
     write(path, &mut |out| {
-        warnings = photocraft_io::write_layered_exr(&d.doc, out, &opts, &Interrupt::NONE).map_err(std::io::Error::other)?;
+        warnings.extend(photocraft_io::write_layered_exr(&d.doc, out, &opts, &Interrupt::NONE).map_err(std::io::Error::other)?);
         Ok(())
     })?;
     Ok(json!({"path": path, "warnings": warnings}))
@@ -184,7 +188,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Layered OpenEXR…",
             &["File", "Export"],
             None,
-            r##"{"path":str (.exr),"composite":bool=true (include the composite part),"layers":[layerId]? (default all eligible layers),"selectedOnly":bool=false (use current layer selection instead of layers),"compression":"none|rle|zips|zip|piz"="zip","overwrite":bool=false (replace the document's own file)} → {path,warnings}"##,
+            r##"{"path":str (.exr),"composite":bool=true (include the composite part),"layers":[layerId]? (default all eligible layers),"selectedOnly":bool=false (export eligible layers from the current selection),"compression":"none|rle|zips|zip|piz"="zip","overwrite":bool=false (replace the document's own file)} → {path,warnings}"##,
             can_export_layered_exr,
             export_layered_exr
         ),

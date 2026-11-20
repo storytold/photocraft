@@ -6,9 +6,9 @@ use std::io::{Seek, Write};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use craft_cms::{Builtin, ColorSpace, Intent, Profile, Transform};
 use craft_exr::decode::{Compression, Error, SampleType, Window};
-use craft_exr::layer_stack::{ATTRIBUTE_NAME, Layer as StackLayer, LayerContent as StackContent, LayerStack, PixelRef, PixelSampling};
+use craft_exr::layer_stack::{ATTRIBUTE_NAME, Layer as StackLayer, LayerContent as StackContent, LayerStack, PixelRef, PixelSampling, SampleDepth};
 use craft_exr::write::{Channel, Metadata, Part, RowSamples, TilePart, TileWriter, write_tiles};
-use photocraft_color::ColorMode;
+use photocraft_color::{ColorMode, SampleType as DocSample, convert::srgb_to_linear};
 use photocraft_compose::{Buffer, RenderBandsError};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId};
 use photocraft_geom::{Rect, TILE_SIZE};
@@ -93,7 +93,12 @@ pub fn write_layered_exr(
     let manifest = if layers.is_empty() {
         None
     } else {
-        let stack = LayerStack { layers, original_blend_profile: Some(profile_id) };
+        let depth = match doc.depth {
+            DocSample::U8 => SampleDepth::U8,
+            DocSample::U16 => SampleDepth::U16,
+            DocSample::F32 => SampleDepth::F32,
+        };
+        let stack = LayerStack { layers, original_blend_profile: Some(profile_id), original_sample_depth: Some(depth) };
         Some(stack.to_attribute().map_err(|e| IoError::Unsupported(e.to_string()))?)
     };
     let first = manifest.as_deref().map(|manifest| [(ATTRIBUTE_NAME, manifest)]);
@@ -113,7 +118,8 @@ pub fn write_layered_exr(
         })
         .collect();
     let linear = Builtin::LinearSrgb.profile();
-    let transform = (!profile.same_colors(linear))
+    let srgb = profile.same_colors(Builtin::Srgb.profile());
+    let transform = (!srgb && !profile.same_colors(linear))
         .then(|| Transform::new(&profile, linear, Intent::RelativeColorimetric, false))
         .transpose()
         .map_err(|e| IoError::Unsupported(e.to_string()))?;
@@ -133,6 +139,12 @@ pub fn write_layered_exr(
                 transform.apply(pixels.px.as_flattened_mut(), 4).map_err(|e| IoError::Unsupported(e.to_string()))?;
             }
             for [r, g, b, a] in &mut pixels.px {
+                if srgb {
+                    // Match import's signed extension, including out-of-gamut negative HDR values.
+                    for v in [&mut *r, &mut *g, &mut *b] {
+                        *v = srgb_to_linear(v.abs()).copysign(*v);
+                    }
+                }
                 *r *= *a;
                 *g *= *a;
                 *b *= *a;
@@ -197,9 +209,7 @@ fn sources<'a>(doc: &'a Document, opts: &LayeredExrOptions) -> Result<(Vec<Sourc
         if selected.as_ref().is_some_and(|ids| !ids.contains(&layer.id)) {
             continue;
         }
-        if let LayerContent::Raster(surface) = &layer.content
-            && surface.format().mode == ColorMode::Rgb
-        {
+        if is_layered_exr_raster(layer) {
             unmatched.remove(&layer.id);
             for depth in 1..=path.len() {
                 if let Some(ancestor) = doc.layer_at(&path[..depth]) {
@@ -266,6 +276,11 @@ fn sources<'a>(doc: &'a Document, opts: &LayeredExrOptions) -> Result<(Vec<Sourc
         warnings.push(format!("{missing_clip_bases} layer(s) exported without clipping because their base layers are absent"));
     }
     Ok((sources, layers, warnings))
+}
+
+/// Whether a layer can supply an editable raster part in a layered OpenEXR export.
+pub fn is_layered_exr_raster(layer: &Layer) -> bool {
+    matches!(&layer.content, LayerContent::Raster(surface) if surface.format().mode == ColorMode::Rgb)
 }
 
 fn has_exported_clip_base(doc: &Document, path: &[usize], included: &HashSet<LayerId>) -> bool {

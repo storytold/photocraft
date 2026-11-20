@@ -6,7 +6,7 @@ use std::io::{Read, Seek};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use craft_cms::{Builtin, ColorSpace, Intent, Profile, Transform, curve::Curve, math};
 use craft_exr::decode::{Limits, PartInfo, SampleType as ExrSample, Window};
-use craft_exr::layer_stack::{ATTRIBUTE_NAME, LayerContent as StackContent, LayerStack, PixelRef, PixelSampling};
+use craft_exr::layer_stack::{ATTRIBUTE_NAME, LayerContent as StackContent, LayerStack, PixelRef, PixelSampling, SampleDepth};
 use craft_exr::seek::{self, Index, Request, Stats, Stop};
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType, convert::linear_to_srgb};
 use photocraft_doc::{Document, Group, Layer, LayerContent};
@@ -48,6 +48,12 @@ pub(crate) fn import<R: Read + Seek>(name: &str, source: &mut R, opts: &ImportOp
         return Err(invalid("conflicting layer-stack attributes"));
     }
     let Some(stack) = LayerStack::parse(text).map_err(invalid)? else { return Ok(None) };
+    let depth = match stack.original_sample_depth {
+        Some(SampleDepth::U8) => SampleType::U8,
+        Some(SampleDepth::U16) => SampleType::U16,
+        Some(SampleDepth::F32) | None => SampleType::F32,
+    };
+    let format = Document::pixel_format_for(ColorMode::Rgb, depth);
     let mut warnings = Vec::new();
     let source_profile = linear_profile(index.chromaticities())?;
     let profile = match stack.original_blend_profile.as_deref() {
@@ -71,11 +77,16 @@ pub(crate) fn import<R: Read + Seek>(name: &str, source: &mut R, opts: &ImportOp
         .iter()
         .map(|layer| match &layer.content {
             StackContent::Group => Ok(None),
-            StackContent::Raster { pixels, .. } => raster_plan(index.parts(), pixels, display).map(Some),
+            StackContent::Raster { pixels, .. } => raster_plan(index.parts(), pixels, display, format).map(Some),
         })
         .collect::<Result<Vec<_>, _>>()?;
     let scratch_expected = spill::enabled();
-    let tile_bytes = plans.iter().flatten().map(|p| p.rect.tile_count()).fold(0u64, u64::saturating_add).saturating_mul((TILE_SIZE as u64).pow(2) * 16);
+    let tile_bytes = plans
+        .iter()
+        .flatten()
+        .map(|p| p.rect.tile_count())
+        .fold(0u64, u64::saturating_add)
+        .saturating_mul((TILE_SIZE as u64).pow(2) * format.bytes_per_pixel() as u64);
     if tile_bytes > limits.max_bytes {
         return Err(IoError::OutOfMemory(format!("editable EXR tile storage exceeds the {}-byte import limit", limits.max_bytes)));
     }
@@ -104,7 +115,7 @@ pub(crate) fn import<R: Read + Seek>(name: &str, source: &mut R, opts: &ImportOp
         children.entry(spec.parent).or_default().push((spec.id, layer));
         ctl.progress(0.05 + 0.9 * (i + 1) as f32 / layer_count as f32);
     }
-    let mut document = Document::new(name, Size::new(display.width, display.height), ColorMode::Rgb, SampleType::F32);
+    let mut document = Document::new(name, Size::new(display.width, display.height), ColorMode::Rgb, depth);
     document.icc_profile = Some(profile.to_bytes());
     document.layers = assemble(None, &mut children).into();
     Ok(Some(ImportResult { document, warnings, source_read_only: false, preview_only: false }))
@@ -192,9 +203,10 @@ struct RasterPlan {
     part: usize,
     channels: Vec<(usize, usize)>,
     rect: Rect,
+    format: PixelFormat,
 }
 
-fn raster_plan(parts: &[PartInfo], pixels: &PixelRef, display: Window) -> Result<RasterPlan, IoError> {
+fn raster_plan(parts: &[PartInfo], pixels: &PixelRef, display: Window, format: PixelFormat) -> Result<RasterPlan, IoError> {
     let (part, prefix) = match pixels {
         PixelRef::Part { name } => {
             let mut found = parts.iter().filter(|p| p.name.as_ref() == Some(name));
@@ -205,7 +217,8 @@ fn raster_plan(parts: &[PartInfo], pixels: &PixelRef, display: Window) -> Result
             (part, None)
         }
         PixelRef::ChannelGroup { part, prefix } => {
-            (parts.get(*part as usize).ok_or_else(|| invalid(format!("part {part} for channel group {prefix} is missing")))?, Some(prefix.as_str()))
+            let part = parts.get(*part as usize).ok_or_else(|| invalid(format!("part {part} for channel group {prefix} is missing")))?;
+            (part, (!prefix.is_empty()).then_some(prefix.as_str()))
         }
     };
     if part.deep {
@@ -233,7 +246,7 @@ fn raster_plan(parts: &[PartInfo], pixels: &PixelRef, display: Window) -> Result
     if rect.width() != window.width || rect.height() != window.height {
         return Err(invalid("layer bounds are out of range"));
     }
-    Ok(RasterPlan { part: part.index, channels, rect })
+    Ok(RasterPlan { part: part.index, channels, rect, format })
 }
 
 impl RasterPlan {
@@ -257,7 +270,7 @@ impl RasterPlan {
         let estimate = index.estimate(&req).map_err(read_error)?;
         let _working = memory::try_reserve(estimate.working_bytes).map_err(IoError::OutOfMemory)?;
         let expected = |value: usize| invalid(format!("unexpected EXR layer band size {value}"));
-        let mut surface = Surface::new(PixelFormat::RGBA32F);
+        let mut surface = Surface::new(self.format);
         seek::read_bands_try(
             source,
             index,
@@ -315,6 +328,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn import_reads_an_empty_channel_group_as_bare_rgb() {
+        let window = Window { x: 0, y: 0, width: 1, height: 1 };
+        let channels = ["R", "G", "B"].map(|name| Channel { name, sample: ExrSample::F32 });
+        let parts = [Part { name: Some("source"), data_window: window, channels: &channels, compression: Compression::Zip1 }];
+        let layer = StackLayer {
+            id: 1,
+            name: "Unprefixed".into(),
+            parent: None,
+            visible: true,
+            blend: "normal".into(),
+            opacity: 1.0,
+            fill_opacity: 1.0,
+            clipped: false,
+            content: StackContent::Raster { pixels: PixelRef::ChannelGroup { part: 0, prefix: String::new() }, sampling: PixelSampling::Raw },
+        };
+        let attr = LayerStack { layers: vec![layer], original_blend_profile: None, original_sample_depth: None }.to_attribute().unwrap();
+        let attributes = [(ATTRIBUTE_NAME, attr.as_str())];
+        let metadata = Metadata { chromaticities: Some(REC709), text_attributes: &[&attributes] };
+        let mut encoded = Cursor::new(Vec::new());
+        let expected = [0.25, 0.5, 0.75, 1.0];
+        write_scanlines_with_metadata(&mut encoded, window, &parts, &metadata, |_, _, channel, mut samples| {
+            if let RowSamples::F32(values) = &mut samples {
+                values.fill(expected[channel]);
+            }
+            Ok(samples.len())
+        })
+        .unwrap();
+
+        let doc = crate::import("unprefixed.exr", encoded.get_ref()).unwrap().document;
+        assert_eq!(doc.layers[0].name, "Unprefixed");
+        assert_eq!(doc.layers[0].surface().unwrap().rgba(0, 0), expected);
+    }
+
+    #[test]
     fn import_rebuilds_group_and_preserves_off_canvas_hdr_rgba() {
         let display = Window { x: 8, y: 4, width: 4, height: 3 };
         let crop = Window { x: 7, y: 5, width: 2, height: 1 };
@@ -346,7 +393,7 @@ mod tests {
             clipped: true,
             content: StackContent::Raster { pixels: PixelRef::ChannelGroup { part: 1, prefix: "Paint 2".into() }, sampling: PixelSampling::Baked },
         };
-        let attr = LayerStack { layers: vec![layer, group], original_blend_profile: Some("srgb".into()) }.to_attribute().unwrap();
+        let attr = LayerStack { layers: vec![layer, group], original_blend_profile: Some("srgb".into()), original_sample_depth: None }.to_attribute().unwrap();
         let attributes = [(ATTRIBUTE_NAME, attr.as_str())];
         let metadata = Metadata { chromaticities: Some(REC709), text_attributes: &[&attributes, &[]] };
         let mut encoded = Cursor::new(Vec::new());
@@ -361,6 +408,7 @@ mod tests {
         let result = crate::import("layers.exr", encoded.get_ref()).unwrap();
         let doc = result.document;
         assert_eq!(doc.size, Size::new(4, 3));
+        assert_eq!(doc.depth, SampleType::F32);
         assert_eq!(doc.icc_profile, Some(Builtin::Srgb.profile().to_bytes()));
         assert_eq!(doc.layers.len(), 1);
         let group = &doc.layers[0];
@@ -372,6 +420,7 @@ mod tests {
         assert!(!paint.visible && paint.clipped);
         assert_eq!((paint.blend, paint.opacity, paint.fill_opacity), (BlendMode::Multiply, 0.5, 0.25));
         let LayerContent::Raster(surface) = &paint.content else { panic!("expected pixels") };
+        assert_eq!(surface.format(), PixelFormat::RGBA32F);
         let p = surface.rgba(-1, 1);
         assert!((p[0] - linear_to_srgb(1.5)).abs() < 1e-5);
         assert!((p[1] - linear_to_srgb(0.25)).abs() < 1e-5);

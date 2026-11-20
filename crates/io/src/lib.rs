@@ -51,7 +51,7 @@ mod exr_native;
 pub mod exr_parts;
 mod layered_exr;
 mod layered_exr_import;
-pub use layered_exr::{LayeredExrCompression, LayeredExrOptions, write_layered_exr};
+pub use layered_exr::{LayeredExrCompression, LayeredExrOptions, is_layered_exr_raster, write_layered_exr};
 mod flat;
 pub mod gradient_bake;
 pub mod guides_map;

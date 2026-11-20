@@ -651,6 +651,12 @@ fn layered_exr_command_stages_only_inside_the_write_root() {
     h.handle("doc.open", json!({"path": "inside.exr"})).unwrap();
     assert!(export(&mut h, json!({"path": file})).unwrap_err().to_string().contains("document's own file"));
     assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    let alias = root.join("alias.exr");
+    std::fs::hard_link(&file, &alias).unwrap();
+    assert!(export(&mut h, json!({"path": "alias.exr"})).unwrap_err().to_string().contains("document's own file"));
+    assert_eq!(std::fs::read(&alias).unwrap(), bytes);
+    export(&mut h, json!({"path": "alias.exr", "overwrite": true})).unwrap();
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
     drop(h);
     std::fs::remove_dir_all(base).unwrap();
 }

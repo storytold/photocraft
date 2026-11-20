@@ -58,6 +58,49 @@ fn layered_exr_reopens_nested_layers_and_preserves_blending() {
     assert_channels(after.px.as_flattened(), before.px.as_flattened());
 }
 
+#[test]
+fn layered_exr_keeps_integer_linear_dodge_at_the_original_depth() {
+    for format in [PixelFormat::RGBA8, PixelFormat::RGBA16] {
+        let mut doc = Document::new("Additive light", Size::new(1, 1), ColorMode::Rgb, format.sample);
+        let mut base = Layer::raster("Base", format);
+        base.surface_mut().unwrap().fill_rect(doc.bounds(), &[0.8, 0.6, 0.0, 1.0]);
+        let mut light = Layer::raster("Light", format);
+        light.surface_mut().unwrap().fill_rect(doc.bounds(), &[0.7, 0.1, 0.213_45, 1.0]);
+        light.blend = BlendMode::LinearDodge;
+        doc.layers.push(base);
+        doc.layers.push(light);
+        let before = photocraft_compose::render(&doc, doc.bounds());
+        assert_eq!(before.px[0][0], 1.0, "integer Linear Dodge saturates");
+
+        let mut file = Cursor::new(Vec::new());
+        write_layered_exr(&doc, &mut file, &LayeredExrOptions::default(), &Interrupt::NONE).unwrap();
+        let reopened = import("light.exr", file.get_ref()).unwrap().document;
+        assert_eq!(reopened.depth, format.sample);
+        for (original, restored) in doc.layers.iter().zip(reopened.layers.iter()) {
+            let (original, restored) = (original.surface().unwrap(), restored.surface().unwrap());
+            assert_eq!(restored.format(), format);
+            assert_eq!(restored.rgba(0, 0), original.rgba(0, 0));
+        }
+        let after = photocraft_compose::render(&reopened, reopened.bounds());
+        assert_channels(after.px.as_flattened(), before.px.as_flattened());
+    }
+}
+
+#[test]
+fn layered_exr_keeps_signed_srgb_hdr_pixels() {
+    let mut doc = Document::new("HDR", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+    let mut layer = Layer::raster("Signed", PixelFormat::RGBA32F);
+    let pixel = [-0.5, -0.025, 1.5, 0.4];
+    layer.surface_mut().unwrap().fill_rect(doc.bounds(), &pixel);
+    doc.layers.push(layer);
+
+    let mut file = Cursor::new(Vec::new());
+    write_layered_exr(&doc, &mut file, &LayeredExrOptions::default(), &Interrupt::NONE).unwrap();
+    let reopened = import("signed.exr", file.get_ref()).unwrap().document;
+    assert_eq!(reopened.depth, SampleType::F32);
+    assert_channels(&reopened.layers[0].surface().unwrap().rgba(0, 0), &pixel);
+}
+
 fn assert_channels(actual: &[f32], expected: &[f32]) {
     assert_eq!(actual.len(), expected.len());
     for (a, e) in actual.iter().zip(expected) {
