@@ -26,6 +26,12 @@ impl From<&ExportArgs> for ExportOptions {
             o.encode.tiff_compression = c;
         }
         o.encode.tiff_pyramid = a.tiff_pyramid;
+        if let Some(b) = a.tiff_byte_order {
+            o.encode.tiff_byte_order = b;
+        }
+        if let Some(p) = a.tiff_pixel_order {
+            o.encode.tiff_pixel_order = p;
+        }
         if let Some(f) = a.jpeg_format {
             o.encode.jpeg_format = f;
         }
