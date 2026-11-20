@@ -337,7 +337,12 @@ pub fn pick(adapters: &[Candidate], backend: GpuBackend, os: Os) -> Option<usize
 fn pick_with_power(adapters: &[Candidate], backend: GpuBackend, os: Os, power: wgpu::PowerPreference) -> Option<usize> {
     let usable = |a: &&Candidate| a.surface_ok;
     let any_wanted = adapters.iter().filter(usable).any(|a| a.wanted);
-    adapters.iter().enumerate().filter(|(_, a)| a.surface_ok && (a.wanted || !any_wanted)).min_by_key(|(i, a)| (rank(a, backend, os, power), *i)).map(|(i, _)| i)
+    adapters
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.surface_ok && (a.wanted || !any_wanted))
+        .min_by_key(|(i, a)| (rank(a, backend, os, power), *i))
+        .map(|(i, _)| i)
 }
 
 /// Apply the NVK/GM108 workaround only for automatic selection on Linux. Explicit backend
@@ -468,7 +473,8 @@ pub fn configure(setup: &mut egui_wgpu::WgpuSetup, plan: &Plan, os: Os, wanted: 
                         }
                     })
                     .collect();
-                let (i, nvk_avoided) = pick_with_nvk_workaround(&cands, backend, os, linux_auto_nvk, power).ok_or_else(|| "no graphics adapter found".to_string())?;
+                let (i, nvk_avoided) =
+                    pick_with_nvk_workaround(&cands, backend, os, linux_auto_nvk, power).ok_or_else(|| "no graphics adapter found".to_string())?;
                 if nvk_avoided {
                     let selected = adapters[i].get_info();
                     let message = format!(
