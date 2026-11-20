@@ -6,7 +6,7 @@ use crate::panels::registry::TOOLBAR;
 use craft::behavior::dock::{Action, DockPlacement, Target};
 use egui::{PointerButton, Pos2, Rect};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
 const SIZE: egui::Vec2 = egui::vec2(1200.0, 800.0);
