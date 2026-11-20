@@ -116,7 +116,12 @@ fn detect_locale() -> Option<String> {
     if let Some(v) = env("PHOTOCRAFT_LOCALE") {
         return Some(v);
     }
-    if let Some(v) = os_locale() {
+    // Test processes run by cargo-nextest (`NEXTEST` set) skip the OS query: each test is its own
+    // process, and on Windows the query starts a `reg.exe` child every time (#15377 did the same
+    // for the system font scan). They then see the same locale on every machine.
+    if std::env::var_os("NEXTEST").is_none()
+        && let Some(v) = os_locale()
+    {
         return Some(v);
     }
     ["LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"].iter().find_map(|k| env(k)).map(|v| v.split(':').next().unwrap_or("").to_string())
@@ -166,73 +171,13 @@ fn os_locale() -> Option<String> {
 }
 
 /// First entry of `AppleLanguages` in a binary property list (macOS `.GlobalPreferences.plist`).
-/// A minimal, bounds-checked reader of the documented `bplist00` format; `None` on anything else.
+/// The shared selective reader does not expand unrelated preference values. Invalid input or
+/// exhausted budgets keeps the existing environment-locale fallback; no OS policy moves here.
 pub fn bplist_first_language(b: &[u8]) -> Option<String> {
-    if b.len() < 40 || !b.starts_with(b"bplist00") {
-        return None;
-    }
-    let t = b.get(b.len() - 32..)?;
-    let offset_size = *t.get(6)? as usize;
-    let ref_size = *t.get(7)? as usize;
-    let be = |s: &[u8]| s.iter().fold(0u64, |a, &x| (a << 8) | x as u64);
-    let num_objects = usize::try_from(be(t.get(8..16)?)).ok()?;
-    let top = usize::try_from(be(t.get(16..24)?)).ok()?;
-    let table = usize::try_from(be(t.get(24..32)?)).ok()?;
-    if !(1..=8).contains(&offset_size) || !(1..=8).contains(&ref_size) || num_objects > b.len() {
-        return None;
-    }
-    let offset = |obj: usize| -> Option<usize> {
-        if obj >= num_objects {
-            return None;
-        }
-        let at = table.checked_add(obj.checked_mul(offset_size)?)?;
-        usize::try_from(be(b.get(at..at.checked_add(offset_size)?)?)).ok()
-    };
-    // (marker high nibble, count, start of payload)
-    let header = |obj: usize| -> Option<(u8, usize, usize)> {
-        let at = offset(obj)?;
-        let m = *b.get(at)?;
-        let (kind, low) = (m >> 4, (m & 0x0F) as usize);
-        if low != 0x0F || !matches!(kind, 0x5 | 0x6 | 0xA | 0xD) {
-            return Some((kind, low, at + 1));
-        }
-        let im = *b.get(at + 1)?;
-        if im >> 4 != 0x1 {
-            return None;
-        }
-        let n = 1usize.checked_shl((im & 0x0F) as u32)?;
-        let count = usize::try_from(be(b.get(at + 2..at.checked_add(2 + n)?)?)).ok()?;
-        Some((kind, count, at + 2 + n))
-    };
-    let string = |obj: usize| -> Option<String> {
-        let (kind, n, start) = header(obj)?;
-        match kind {
-            0x5 => b.get(start..start.checked_add(n)?).map(|s| String::from_utf8_lossy(s).into_owned()),
-            0x6 => {
-                let s = b.get(start..start.checked_add(n.checked_mul(2)?)?)?;
-                Some(String::from_utf16_lossy(&s.as_chunks::<2>().0.iter().map(|p| u16::from_be_bytes(*p)).collect::<Vec<_>>()))
-            }
-            _ => None,
-        }
-    };
-    let obj_ref = |at: usize| -> Option<usize> { usize::try_from(be(b.get(at..at.checked_add(ref_size)?)?)).ok() };
-    let (kind, n, start) = header(top)?;
-    if kind != 0xD {
-        return None;
-    }
-    for i in 0..n {
-        let key = obj_ref(start.checked_add(i.checked_mul(ref_size)?)?)?;
-        if string(key).as_deref() != Some("AppleLanguages") {
-            continue;
-        }
-        let val = obj_ref(start.checked_add(n.checked_add(i)?.checked_mul(ref_size)?)?)?;
-        let (akind, an, astart) = header(val)?;
-        if akind != 0xA || an == 0 {
-            return None;
-        }
-        return string(obj_ref(astart)?).filter(|s| !s.is_empty());
-    }
-    None
+    craft_plist::first_string_in_array(b, "AppleLanguages", craft_plist::Limits { max_input_bytes: 4 << 20, ..Default::default() })
+        .ok()
+        .flatten()
+        .filter(|s| !s.is_empty())
 }
 
 /// Family names (as the Type tool's font database knows them) per script, most preferred first.
@@ -577,7 +522,12 @@ fn family_name_matches(font: &skrifa::FontRef<'_>, family: &str, budget: &mut us
 fn face_tables_are_readable(font: &skrifa::raw::FontRef<'_>) -> bool {
     let directory = font.table_directory();
     let records = directory.table_records();
-    !records.is_empty() && records.len() == usize::from(directory.num_tables()) && records.iter().all(|record| font.table_data(record.tag()).is_some())
+    // Each record's own range against the file, in one pass: `table_data(tag)` searches the
+    // (unsorted) directory per tag, which is quadratic in the table count.
+    let len = u64::try_from(font.data().len()).unwrap_or(u64::MAX);
+    !records.is_empty()
+        && records.len() == usize::from(directory.num_tables())
+        && records.iter().all(|record| u64::from(record.offset()) + u64::from(record.length()) <= len)
 }
 
 /// Whether face `index` of a font file or collection has a complete, in-bounds table directory.
@@ -604,7 +554,7 @@ pub fn font_file_is_readable(bytes: &[u8]) -> bool {
 
     match FileRef::new(bytes) {
         Ok(FileRef::Font(font)) => face_tables_are_readable(&font),
-        Ok(FileRef::Collection(faces)) => faces.iter().any(|face| face.is_ok_and(|font| face_tables_are_readable(&font))),
+        Ok(FileRef::Collection(faces)) => faces.iter().take(MAX_COLLECTION_FACES).any(|face| face.is_ok_and(|font| face_tables_are_readable(&font))),
         Err(_) => false,
     }
 }
@@ -885,6 +835,28 @@ mod tests {
         assert!(!font_file_is_readable(&missing_table), "a complete directory cannot point outside the file");
     }
 
+    #[test]
+    fn a_directory_of_many_tables_is_validated_in_one_pass() {
+        // 60000 distinct tags, all in range: a per-tag directory search would be quadratic.
+        let n = 60_000u32;
+        let mut font = 0x0001_0000u32.to_be_bytes().to_vec();
+        font.extend((n as u16).to_be_bytes());
+        font.extend([0u8; 6]);
+        let data_at = 12 + 16 * n;
+        for i in 0..n {
+            font.extend([b'a' + (i / 26 / 26 / 26 % 26) as u8, b'a' + (i / 26 / 26 % 26) as u8, b'a' + (i / 26 % 26) as u8, b'a' + (i % 26) as u8]);
+            font.extend(0u32.to_be_bytes());
+            font.extend(data_at.to_be_bytes());
+            font.extend(4u32.to_be_bytes());
+        }
+        font.extend([0u8; 4]);
+        let start = std::time::Instant::now();
+        assert!(font_file_is_readable(&font));
+        assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
+        font[20..24].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert!(!font_file_is_readable(&font));
+    }
+
     /// A readable collection can contain a malformed non-selected face, so the file-level check
     /// must not stand in for validating the face a caller selects. The selected face keeps a valid
     /// `cmap` (coverage succeeds) and `name` (family lookup succeeds) while another table points
@@ -978,5 +950,35 @@ mod flatpak_tests {
         assert!(
             files.iter().any(|file| file.path == std::path::Path::new("/run/host/fonts/truetype/droid/DroidSansFallbackFull.ttf") && file.family.is_empty())
         );
+    }
+}
+
+#[cfg(test)]
+mod shared_plist_tests {
+    use super::bplist_first_language;
+    fn fixture(value: &[u8], first: &[u8]) -> Vec<u8> {
+        // Unrelated invalid marker is intentionally not traversed, as with the old locale reader.
+        let objects: [&[u8]; 6] = [&[0xd2, 1, 2, 3, 4], b"\x55Other", b"\x5eAppleLanguages", &[0xff], value, first];
+        let mut bytes = b"bplist00".to_vec();
+        let mut offsets = Vec::new();
+        for o in objects {
+            offsets.push(bytes.len() as u8);
+            bytes.extend_from_slice(o);
+        }
+        let table = bytes.len() as u64;
+        bytes.extend_from_slice(&offsets);
+        bytes.extend_from_slice(&[0, 0, 0, 0, 0, 0, 1, 1]);
+        bytes.extend_from_slice(&6u64.to_be_bytes());
+        bytes.extend_from_slice(&0u64.to_be_bytes());
+        bytes.extend_from_slice(&table.to_be_bytes());
+        bytes
+    }
+    #[test]
+    fn selective_locale_parity() {
+        assert_eq!(bplist_first_language(&fixture(&[0xa1, 5], b"\x55ja-JP")).as_deref(), Some("ja-JP"));
+        assert_eq!(bplist_first_language(&fixture(&[0xa1, 5], b"\x50")), None);
+        assert_eq!(bplist_first_language(&fixture(&[0xc1, 5], b"\x55ja-JP")), None);
+        assert_eq!(bplist_first_language(&fixture(&[0xa0], b"\x55ja-JP")), None);
+        assert_eq!(bplist_first_language(&vec![0; (4 << 20) + 1]), None);
     }
 }

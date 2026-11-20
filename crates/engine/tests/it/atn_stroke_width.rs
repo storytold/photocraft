@@ -1,7 +1,7 @@
 //! #7671: exported Stroke widths must have the same effect as command execution.
-use photocraft_engine::actions_cmds::Action;
+use craft_psd::{atn, descriptor::Value as D};
+use photocraft_engine::actions_cmds::{Action, ActionList, ActionStep, ActionsFile};
 use photocraft_engine::{Session, atn_cmds};
-use photocraft_psd::{atn, descriptor::Value as D};
 use serde_json::{Value, json};
 
 /// Synthetic colours and partial transparency make lost edge pixels observable at every depth.
@@ -33,7 +33,7 @@ fn check_pixels(widths: &[(f64, u32)]) {
         for location in ["inside", "center", "outside"] {
             for &(width, effective) in widths {
                 let params = json!({"width": width, "color": "#d03060", "location": location, "opacity": 63, "mode": "multiply"});
-                let action = Action::new("Stroke", vec![("edit.stroke".into(), params.clone())]);
+                let action = Action::new("Stroke", vec![ActionStep::new("edit.stroke", params.clone())]);
                 let mut direct = fixture(depth);
                 let before = pixels(&direct);
                 direct.execute("edit.stroke", params.clone()).unwrap();
@@ -54,7 +54,7 @@ fn check_pixels(widths: &[(f64, u32)]) {
                 }
 
                 let mut native = fixture(depth);
-                native.actions.list.push(action.clone());
+                native.actions.list.push(action.clone()).unwrap();
                 native.execute("actions.play", json!({"action": "Stroke"})).unwrap();
                 assert_eq!(pixels(&native), expected);
 
@@ -65,10 +65,10 @@ fn check_pixels(widths: &[(f64, u32)]) {
                 assert!(imported.warnings.is_empty());
                 assert_eq!(imported.actions.len(), 1);
                 assert_eq!(imported.actions[0].steps.len(), 1);
-                assert_eq!(imported.actions[0].steps[0].0, "edit.stroke");
-                let imported_width = imported.actions[0].steps[0].1["width"].clone();
+                assert_eq!(imported.actions[0].steps[0].command, "edit.stroke");
+                let imported_width = imported.actions[0].steps[0].params["width"].clone();
                 let mut replay = fixture(depth);
-                replay.actions.list = imported.actions;
+                replay.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
                 replay.execute("actions.play", json!({"action": "Stroke"})).unwrap();
                 if pixels(&replay) != expected {
                     lost.push(format!("depth {depth}, {location}, width {width} -> {imported_width}, expected {effective}"));
@@ -114,7 +114,7 @@ fn descriptor_width_matches_defaults_limits_and_other_stroke_options() {
         if let Some(width) = width {
             params["width"] = width;
         }
-        let action = Action::new("Stroke", vec![("edit.stroke".into(), params.clone())]);
+        let action = Action::new("Stroke", vec![ActionStep::new("edit.stroke", params.clone())]);
         let (bytes, skipped) = atn_cmds::export("Widths", &[&action], &[], false).unwrap();
         assert!(skipped.is_empty());
         let file = atn::parse(&bytes).unwrap();
@@ -123,7 +123,7 @@ fn descriptor_width_matches_defaults_limits_and_other_stroke_options() {
         let imported = atn_cmds::import(&bytes).unwrap();
         assert!(imported.unsupported.is_empty());
         assert!(imported.warnings.is_empty());
-        let p = &imported.actions[0].steps[0].1;
+        let p = &imported.actions[0].steps[0].params;
         assert_eq!(p["width"].as_f64(), Some(f64::from(effective)));
         for key in ["color", "location", "preserveTransparency"] {
             assert_eq!(p[key], params[key]);
@@ -134,22 +134,22 @@ fn descriptor_width_matches_defaults_limits_and_other_stroke_options() {
         let mut direct = fixture(8);
         direct.execute("edit.stroke", params).unwrap();
         let mut replay = fixture(8);
-        replay.actions.list = imported.actions;
+        replay.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
         replay.execute("actions.play", json!({"action": "Stroke"})).unwrap();
         assert_eq!(pixels(&replay), pixels(&direct));
     }
     // A null parameter object is also a valid call to the command with its default width.
-    let action = Action::new("Default", vec![("edit.stroke".into(), Value::Null)]);
+    let action = Action::new("Default", vec![ActionStep::new("edit.stroke", Value::Null)]);
     let (bytes, skipped) = atn_cmds::export("Widths", &[&action], &[], false).unwrap();
     assert!(skipped.is_empty());
     let imported = atn_cmds::import(&bytes).unwrap();
     assert!(imported.unsupported.is_empty());
     assert!(imported.warnings.is_empty());
-    assert_eq!(imported.actions[0].steps[0].1["width"].as_f64(), Some(1.0));
+    assert_eq!(imported.actions[0].steps[0].params["width"].as_f64(), Some(1.0));
     let mut direct = fixture(8);
     direct.execute("edit.stroke", Value::Null).unwrap();
     let mut replay = fixture(8);
-    replay.actions.list = imported.actions;
+    replay.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
     replay.execute("actions.play", json!({"action": "Default"})).unwrap();
     assert_eq!(pixels(&replay), pixels(&direct));
 }
@@ -158,7 +158,7 @@ fn descriptor_width_matches_defaults_limits_and_other_stroke_options() {
 #[test]
 fn stroke_mask_and_channel_targets_are_still_refused_and_reported() {
     for target in [json!("mask"), json!("quickMask"), json!({"channel": 0})] {
-        let action = Action::new("Targeted", vec![("edit.stroke".into(), json!({"width": 2.4, "target": target}))]);
+        let action = Action::new("Targeted", vec![ActionStep::new("edit.stroke", json!({"width": 2.4, "target": target}))]);
         assert!(atn_cmds::export("Widths", &[&action], &[], false).is_err());
         let (bytes, skipped) = atn_cmds::export("Widths", &[&action], &[], true).unwrap();
         assert_eq!(skipped, vec![atn_cmds::Skipped { action: "Targeted".into(), step: 0, id: "edit.stroke".into() }]);
