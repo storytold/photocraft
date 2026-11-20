@@ -93,6 +93,10 @@ fn reset_after_changing_only_the_mode_keeps_todays_defaults() {
     set(&mut h, id, 20, "multiply");
     alt_reset(&mut h);
     assert_eq!(values(&h, id), at(100.0, "normal"));
+    // The 100 % that Reset wrote is not an Opacity change of the user's: a second Reset keeps 100 % Normal
+    // (CodeRabbit on #15104).
+    alt_reset(&mut h);
+    assert_eq!(values(&h, id), at(100.0, "normal"), "a second Reset too");
 }
 
 #[test]

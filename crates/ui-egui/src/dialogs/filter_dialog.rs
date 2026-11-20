@@ -9,6 +9,7 @@
 //! parameters scaled by the proxy factor), so what you preview is what you get.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use craft::host::{PickRequest, Picked};
 use craft::ui::contract::Bind;
@@ -501,8 +502,16 @@ fn fade_opening_opacity(app: &PhotocraftApp, command: &str, reset: &DialogFields
 /// Fade's Reset once the Opacity was changed from the one it opened with: the values it opened with (the last
 /// confirmed Fade's), not 100 % Normal, as the reference application does (#13812). `reset` without Opacity and Mode
 /// leaves those at their opening values. A Reset after changing only the Mode wasn't measured and keeps `reset`.
-fn fade_reset(reset: &DialogFields, fields: &DialogFields, opened: Option<f64>) -> DialogFields {
-    if fields.number("opacity") == opened {
+///
+/// `restores_opening` holds that choice across the dialog's builds. Values at `reset`'s own Opacity and Mode are what
+/// a schema Reset wrote, not an edit, so they keep the earlier choice: otherwise the 100 % a Reset wrote would read as
+/// a changed Opacity and send the next Reset to the opening values (CodeRabbit on #15104).
+fn fade_reset(reset: &DialogFields, fields: &DialogFields, opened: Option<f64>, restores_opening: &AtomicBool) -> DialogFields {
+    let at_reset = fields.number("opacity") == reset.number("opacity") && fields.get("mode") == reset.get("mode");
+    if !at_reset {
+        restores_opening.store(fields.number("opacity") != opened, Ordering::Relaxed);
+    }
+    if !restores_opening.load(Ordering::Relaxed) {
         return reset.clone();
     }
     let mut kept = reset.clone();
@@ -532,9 +541,10 @@ fn builder(
     let key = command.to_owned();
     let canvas = app.session.active_index().map(|idx| crate::canvas::document_display::CanvasHost::primary(app, idx).canvas_id());
     let fade_opened = (command == super::fade_modes::COMMAND).then(|| fade_opening_opacity(app, command, &reset));
+    let restores_opening = Arc::new(AtomicBool::new(false));
     move |fields: &mut DialogFields| {
         let reset = match fade_opened {
-            Some(opened) => fade_reset(&reset, fields, opened),
+            Some(opened) => fade_reset(&reset, fields, opened, &restores_opening),
             None => reset.clone(),
         };
         let mut dialog = ParamDialog::command(key.clone(), title.clone(), params.clone())
