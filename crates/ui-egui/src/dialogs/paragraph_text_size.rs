@@ -10,9 +10,14 @@
 //! cannot make. A drag upwards or to the left of its start keeps today's rule (the box is the
 //! rectangle between the two points), and Cancel beyond closing the dialog is not specified.
 //!
+//! The Vertical Type Mask tool's rule (#12090) reuses this dialog: a drag with no selection is
+//! drawn from the centre, as with the marquee, so it opens through [`open_centred`] prefilled
+//! with twice the dragged size, and OK centres the box on the drag start.
+//!
 //! The dialog is a hosted parameter dialog with a key of its own, so `ui.inspect`, `ui.dialog.set`
-//! and `ui.dialog.confirm` drive it like the other parameter dialogs. The drag's top-left and the
-//! document it was made in are not fields: they are the family's captured value, read by [`run`].
+//! and `ui.dialog.confirm` drive it like the other parameter dialogs. The drag's anchor — the
+//! top-left, or the centre for [`open_centred`] — and the document it was made in are not fields:
+//! they are the family's captured value, read by [`run`].
 
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamResult};
@@ -47,8 +52,21 @@ fn build(w: f64, h: f64) -> impl for<'b> Fn(&'b mut DialogFields) -> ParamDialog
 /// drag was made in are captured for [`run`]: OK creates the text only while that document is
 /// still the active one.
 pub fn open(app: &mut PhotocraftApp, at: [f64; 2], w: f64, h: f64) -> DialogId {
+    open_with(app, at, w, h, false)
+}
+
+/// Open the dialog centred on `(x, y)` — the Vertical Type Mask tool's Alt+drag start (#12090):
+/// the fields prefill the size to place, `(w, h)` is twice the dragged size there, and OK centres
+/// the box on `(x, y)`, so fields edited in the dialog keep the box centred on the drag start.
+pub fn open_centred(app: &mut PhotocraftApp, at: [f64; 2], w: f64, h: f64) -> DialogId {
+    open_with(app, at, w, h, true)
+}
+
+/// The shared open: `centred` goes into the captured state next to the anchor point.
+fn open_with(app: &mut PhotocraftApp, at: [f64; 2], w: f64, h: f64, centred: bool) -> DialogId {
     let captured = json!({
         "at": [at[0], at[1]],
+        "centred": centred,
         "document": app.session.active().map(|st| json!(st.doc.id)).unwrap_or(Value::Null),
     });
     let fields = DialogFields::from_pairs([(WIDTH, FieldValue::Number(w)), (HEIGHT, FieldValue::Number(h))]);
@@ -73,6 +91,11 @@ pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context, result: ParamResult) {
         crate::dialogs::alerts::report_error(app, "the Paragraph Text Size dialog has no size");
         return;
     };
+    // `open_with` always captures the anchor rule; the default keeps the plain top-left rule.
+    let centred = captured.get("centred").and_then(Value::as_bool).unwrap_or(false);
+    // #12090: a centred drag places the box by its centre on the captured point, so fields
+    // edited in the dialog keep it centred there; the plain rule puts the top-left at it.
+    let (x, y) = if centred { (x - w / 2.0, y - h / 2.0) } else { (x, y) };
     let mut p = crate::type_tool::create_params(app);
     p["box"] = json!([x, y, w, h]);
     // A refused create already said why in the status bar, as the gesture's own create does.

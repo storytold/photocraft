@@ -130,3 +130,6 @@ mod locked_layer_alert_tests;
 mod ime_tests;
 #[cfg(test)]
 mod mask_escape_tests;
+
+#[cfg(test)]
+mod vertical_mask_alt_drag_tests;
