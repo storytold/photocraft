@@ -1424,6 +1424,12 @@ fn printers(s: &mut Session, _: &Value) -> Result<Value> {
 }
 
 fn printer_page(_: &mut Session, p: &Value) -> Result<Value> {
+    page_of_printer(p, printing_disabled())
+}
+
+/// `file.print.page` with printing turned off or not (`disabled`). A test passes `false` to reach the printer route,
+/// which `printing_disabled` never is once a test of the process or CI's `PHOTOCRAFT_NO_PRINT` turned it off.
+fn page_of_printer(p: &Value, disabled: bool) -> Result<Value> {
     // Checked before the printer, so a bad value is the error whether or not a printer answers.
     let landscape = match p.get("orientation").filter(|v| !v.is_null()) {
         None => None,
@@ -1436,7 +1442,7 @@ fn printer_page(_: &mut Session, p: &Value) -> Result<Value> {
     let mut settings = printer_settings(p)?;
     // A driver query is still a call into a printer driver, which can hang (and holds SPOOLER
     // while it does), so a process that turned printing off asks no driver here either.
-    if printing_disabled() {
+    if disabled {
         return Err(other("printing is disabled in this process (disable_printing or PHOTOCRAFT_NO_PRINT); file.print.page asks no printer driver"));
     }
     let printer = printer_name(p)?;
