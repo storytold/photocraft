@@ -494,6 +494,14 @@ pub(crate) fn prepare(s: &Session, id: &str, p: &Value) -> Value {
     out
 }
 
+/// The `run_params` hook: Shape Blur by an installed shape's id or name records the geometry it
+/// ran with, as the filter's own prepared params carry it, so the journal (Last Filter, recorded
+/// actions) replays where that shape is not installed. The run resolved it already, so it can't
+/// fail here.
+pub(crate) fn journal_shape_path(s: &Session, id: &str, p: &mut Value) {
+    let _ = resolve_shape_path(s, id, p);
+}
+
 /// Keep portable custom-shape geometry in recorded params. Kernel preparation stays in the job.
 pub(crate) fn resolve_shape_path(s: &Session, id: &str, p: &mut Value) -> Result<()> {
     if id == "filter.blur.shapeBlur" && p.get("shapePath").is_none() && ["shapeId", "shapeName"].iter().any(|key| p.get(key).is_some_and(|v| !v.is_null())) {

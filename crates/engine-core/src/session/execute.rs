@@ -69,7 +69,9 @@ impl Session {
             return Err(EngineError::BadParams { cmd: id.to_string(), msg: "params must be a JSON object".into() });
         }
         crate::param_check::check(spec, params)?;
-        crate::filters::validate_params(id, params)?;
+        for check in &crate::registry::hooks().check_params {
+            check(self, id, params)?;
+        }
         if id == "layer.new.layer" {
             crate::new_layer::parse(params)?;
         }
@@ -400,7 +402,7 @@ impl Session {
 /// Image › Adjustments, all but Invert (#10484), filter plug-ins included (`plugin.run`; the
 /// other `plugin.*` commands manage plug-ins). Catalogue queries still answer.
 fn bitmap_mode_refusal(s: &Session, id: &str, params: &Value) -> Option<&'static str> {
-    let edits = (id.starts_with("filter.") || id.starts_with("image.adjustments.") || id == crate::plugin_cmds::RUN)
+    let edits = (id.starts_with("filter.") || id.starts_with("image.adjustments.") || id == "plugin.run")
         && id != "image.adjustments.invert"
         && !id.ends_with(".list")
         // Only the Filter Gallery answers `{"list": true}` with its catalogue; other commands ignore it.

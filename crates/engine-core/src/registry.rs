@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 
 use serde_json::{Value, json};
 
+use crate::hooks::Hooks;
 use crate::{EngineError, Result, Session};
 
 type Run = fn(&mut Session, &Value) -> Result<Value>;
@@ -36,11 +37,15 @@ pub struct Install {
     /// Registry order: these tables in turn, each in its own order. Menus, the Command Palette
     /// and `command.list` list commands in it.
     pub commands: Vec<Table>,
+    /// The pipeline hooks of the crates whose tables these are.
+    pub hooks: Hooks,
 }
 
 /// Install `install` for this process. Installing the same tables again (the same names in the
 /// same order) does nothing. Different tables are refused with [`EngineError::InstallConflict`],
 /// and from then on every command fails with it and the registry readers ([`command_specs`], [`find`]) panic with it.
+/// Only the tables are compared: each crate's `register` adds its hooks with its tables, so the
+/// same tables come with the same hooks.
 pub fn install(install: Install) -> Result<()> {
     INSTALLED.install(install)
 }
@@ -61,15 +66,31 @@ pub fn find(id: &str) -> Option<&'static CommandSpec> {
     installed().get(id)
 }
 
+/// The installed pipeline hooks.
+///
+/// # Panics
+/// Before an install, or after a conflicting one.
+pub(crate) fn hooks() -> &'static Hooks {
+    match INSTALLED.installed() {
+        Ok(install) => &install.hooks,
+        Err(e) => fail(e),
+    }
+}
+
 /// The process's registry, for the readers that have no error to report: reading commands before
 /// any install is a bug in the caller, and an empty list would let a loop over the commands check
 /// nothing.
-#[allow(clippy::panic, reason = "the readers' signatures have no error; the message names the install the caller missed")]
 fn installed() -> &'static Registry {
     match INSTALLED.registry() {
         Ok(registry) => registry,
-        Err(e) => panic!("{e}"),
+        Err(e) => fail(e),
     }
+}
+
+/// Reading the install before there is one, or after a conflicting one, is a bug in the caller.
+#[allow(clippy::panic, reason = "the readers' signatures have no error; the message names the install the caller missed")]
+fn fail(e: EngineError) -> ! {
+    panic!("{e}")
 }
 
 /// The installed command `id`, for running it: [`EngineError::NotInstalled`] before an install,
@@ -120,23 +141,23 @@ pub fn list_entry_matches(entry: &Value, needle: &str) -> bool {
 
 static INSTALLED: InstallCell = InstallCell::new();
 
-/// A process's install: the first install's tables, the registry built from them on first use,
+/// A process's install: the first install, the registry built from its tables on first use,
 /// and the conflict a later install with other tables raised.
 struct InstallCell {
-    tables: OnceLock<Vec<Table>>,
+    installed: OnceLock<Install>,
     registry: OnceLock<Registry>,
     conflict: OnceLock<EngineError>,
 }
 
 impl InstallCell {
     const fn new() -> Self {
-        Self { tables: OnceLock::new(), registry: OnceLock::new(), conflict: OnceLock::new() }
+        Self { installed: OnceLock::new(), registry: OnceLock::new(), conflict: OnceLock::new() }
     }
 
     fn install(&self, install: Install) -> Result<()> {
-        let mut requested = Some(install.commands);
-        let installed = self.tables.get_or_init(|| requested.take().unwrap_or_default());
-        let Some(requested) = requested else { return Ok(()) };
+        let mut requested = Some(install);
+        let installed = &self.installed.get_or_init(|| requested.take().unwrap_or_default()).commands;
+        let Some(Install { commands: requested, .. }) = requested else { return Ok(()) };
         let name = |tables: &[Table], at: usize| tables.get(at).map_or_else(|| "(none)".to_string(), |t| t.0.to_string());
         let Some(at) = (0..installed.len().max(requested.len())).find(|&at| installed.get(at).map(|t| t.0) != requested.get(at).map(|t| t.0)) else {
             return Ok(());
@@ -146,12 +167,16 @@ impl InstallCell {
         Err(conflict)
     }
 
-    fn registry(&self) -> Result<&Registry> {
+    fn installed(&self) -> Result<&Install> {
         if let Some(conflict) = self.conflict.get() {
             return Err(conflict.clone());
         }
-        let tables = self.tables.get().ok_or(EngineError::NotInstalled)?;
-        Ok(self.registry.get_or_init(|| Registry::new(build(tables))))
+        self.installed.get().ok_or(EngineError::NotInstalled)
+    }
+
+    fn registry(&self) -> Result<&Registry> {
+        let install = self.installed()?;
+        Ok(self.registry.get_or_init(|| Registry::new(build(&install.commands))))
     }
 }
 
@@ -219,12 +244,12 @@ mod tests {
         let cell = InstallCell::new();
         assert!(matches!(cell.registry(), Err(EngineError::NotInstalled)));
 
-        cell.install(Install { commands: vec![a] }).unwrap();
+        cell.install(Install { commands: vec![a], ..Install::default() }).unwrap();
         assert!(cell.registry().unwrap().get("a.one").is_some());
-        cell.install(Install { commands: vec![a] }).unwrap();
+        cell.install(Install { commands: vec![a], ..Install::default() }).unwrap();
         assert!(cell.registry().unwrap().get("a.one").is_some(), "the same tables again change nothing");
 
-        let conflict = cell.install(Install { commands: vec![a, b] }).unwrap_err();
+        let conflict = cell.install(Install { commands: vec![a, b], ..Install::default() }).unwrap_err();
         assert_eq!(conflict, EngineError::InstallConflict { at: 1, installed: "(none)".into(), requested: "b".into() });
         assert_eq!(cell.registry().err(), Some(conflict), "every later lookup reports the conflict");
     }
