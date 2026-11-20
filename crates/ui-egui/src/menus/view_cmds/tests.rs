@@ -127,7 +127,8 @@ fn layered_exr_menu_exports_the_raster_in_a_mixed_selection_and_warns() {
     let reopened = photocraft_io::import("selected.exr", &std::fs::read(path).unwrap()).unwrap().document;
     assert_eq!(reopened.layers.len(), 1);
     assert!(reopened.layers[0].surface().is_some());
-    assert!(app.ui.notices.last().unwrap().lines.iter().any(|line| line.contains("Only selected RGB raster layers")));
+    let notices = crate::notices::shown(&app, &ctx);
+    assert!(notices.iter().any(|(_, lines, _)| lines.iter().any(|line| line.contains("Only selected RGB raster layers"))), "{notices:?}");
     assert!(app.run(key, json!({"path": dir.path().join("explicit.exr"), "layers": [raster.0, group_id.0]})).is_err());
 }
 
