@@ -213,7 +213,7 @@ fn sync(app: &mut PhotocraftApp, wanted: Option<usize>) {
     };
     let Some(st) = app.session.active_mut() else { return };
     let was_clean = !st.is_dirty();
-    let original = std::mem::replace(&mut st.doc, Arc::new(previewed));
+    let original = std::mem::replace(st.doc_mut(), Arc::new(previewed));
     shown(st, was_clean);
     app.data_set_preview.shown = Some(Preview { doc: original.id, index, original, revision: st.revision, was_clean });
 }
@@ -235,7 +235,7 @@ fn revert(app: &mut PhotocraftApp) {
     if let Some(st) = app.session.document_mut(p.doc)
         && st.revision == p.revision
     {
-        st.doc = p.original;
+        *st.doc_mut() = p.original;
         shown(st, p.was_clean);
     }
 }
