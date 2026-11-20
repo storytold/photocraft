@@ -270,7 +270,7 @@ pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult,
     }
     let mode = if gray_only { ColorMode::Grayscale } else { ColorMode::Rgb };
     let mut doc = Document::new(name, Size::new(max.0, max.1), mode, DocSample::F32);
-    doc.layers = layers;
+    doc.layers = layers.into();
     // OpenEXR holds linear, scene-referred values (Y is linear luminance): use the profile
     // matching the selected parts' mode, as File › Open does.
     doc.icc_profile = Some(if gray_only { craft_cms::builtin::linear_gray().to_bytes() } else { Builtin::LinearSrgb.profile().to_bytes() });
