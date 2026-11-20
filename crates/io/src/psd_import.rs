@@ -1190,7 +1190,7 @@ fn read_initial_metadata(
             crate::vector_map::WORK_PATH => doc.work_path = crate::vector_map::path_from_resource(&resource.data, header.width, header.height),
             crate::vector_map::CLIPPING_PATH => {
                 let name = String::from_utf8_lossy(craft_psd::path::clipping_path_name(&resource.data).unwrap_or_default()).into_owned();
-                doc.clipping_path = Some(photocraft_doc::ClippingPath { name, flatness: 0.0 });
+                doc.clipping_path = Some(photocraft_doc::ClippingPath { name, flatness: crate::vector_map::clipping_flatness(&resource.data) });
                 doc.metadata.psd_resources.push((resource.id, String::from_utf8_lossy(&resource.name).into_owned(), Arc::new(resource.data.clone())));
             }
             crate::channel_map::ALPHA_IDENTIFIERS if !multichannel => {}
