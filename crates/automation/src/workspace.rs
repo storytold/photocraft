@@ -260,7 +260,7 @@ fn written_kind(name: &str) -> bool {
 
 /// Whether `name`'s extension names an image format PhotoCraft opens: a codec's or a camera raw's.
 /// A file with such a name that is not a [`written_kind`] is refused whatever its bytes: a camera
-/// raw (`.dng`, `.nef`) starts like a TIFF and a JPEG-LS file like a JPEG, and neither is written.
+/// raw (`.dng`, `.nef`) starts like a TIFF and is not written.
 fn opened_kind(name: &str) -> bool {
     let Some((_, ext)) = name.rsplit_once('.') else { return false };
     matches!(photocraft_formats::from_extension(ext), Some(photocraft_formats::Format::Raw)) || photocraft_codecs::from_extension(ext).is_some()
@@ -268,7 +268,7 @@ fn opened_kind(name: &str) -> bool {
 
 /// Whether export writes files with extension `ext` through an image codec. Export looks the
 /// extension up in `photocraft_formats` and takes that format's raster codec, so a codec the
-/// registry has no entry for (JPEG-LS) is not written even when the codec can encode it.
+/// registry has no entry for is not written even when the codec can encode it.
 fn exported_codec(ext: &str) -> bool {
     photocraft_formats::from_extension(ext).and_then(photocraft_formats::Format::raster_codec).is_some_and(|format| format.caps().write)
 }

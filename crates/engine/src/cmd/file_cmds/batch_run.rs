@@ -177,7 +177,7 @@ pub(super) fn process_tree(
 /// every file), GIMP files (`gz` is the last extension of `.xcf.gz`), Photoshop templates and the
 /// codec formats without a writer in this build. Those are saved as PSD, the format Photoshop's
 /// Save As offers for a raw. Formats the codecs read that are missing from `photocraft_formats`,
-/// the registry export looks writers up in (JPEG-LS, JPEG 2000), are saved as PSD too.
+/// the registry export looks writers up in (JPEG 2000), are saved as PSD too.
 /// An input whose file name has no extension (a dot in a folder name doesn't count) is saved as PNG.
 /// The format Batch's "Save in the same format" writes for `path`: its own, or PSD for a file
 /// PhotoCraft only opens.
@@ -213,8 +213,8 @@ fn same_format_takes_the_file_names_extension() {
         }
     }
     // A folder batch opens every format the codecs read; those export has no registry entry for,
-    // such as JPEG-LS and JPEG 2000, are saved as PSD.
-    assert_eq!(same_format("/in/scan.jls"), "psd");
+    // such as JPEG 2000, are saved as PSD. JPEG-LS has a registry entry that writes.
+    assert_eq!(same_format("/in/scan.jls"), "jls");
     assert_eq!(same_format("/in/scan.jp2"), "psd");
     for f in photocraft_codecs::Format::ALL.into_iter().filter(|f| f.caps().read) {
         for ext in f.extensions() {

@@ -154,31 +154,16 @@ fn write_stream_seeks_back_and_keeps_the_original_on_failure() {
 
 /// #14355: files PhotoCraft can read but never writes (notes, data, rich text, read-only image
 /// formats such as XPM or DICOM) are not "a kind PhotoCraft writes", by name or by their bytes (#9439).
-/// JPEG-LS has an encoder in the codecs but no export entry, so it is read-only too, also when
-/// metadata segments put its frame header past the first bytes, or about 192 KiB in. A camera
-/// raw starts like a TIFF and is refused by its name.
+/// JPEG 2000 has a decoder in the codecs but no export entry, so it is read-only too, also when
+/// its bytes start like a JPEG. A camera raw starts like a TIFF and is refused by its name.
 #[test]
 fn write_refuses_to_replace_files_photocraft_reads_but_does_not_write() {
     let (inside, _, workspace) = roots("read-only-kinds");
-    let jpeg_ls_after_metadata = |segments: usize, len: u16| {
-        let mut bytes = b"\xFF\xD8".to_vec();
-        for _ in 0..segments {
-            bytes.extend_from_slice(&[0xFF, 0xE1]);
-            bytes.extend_from_slice(&len.to_be_bytes());
-            bytes.resize(bytes.len() + usize::from(len) - 2, 0);
-        }
-        bytes.extend_from_slice(b"\xFF\xF7 keep");
-        bytes
-    };
-    let (some_metadata, large_metadata) = (jpeg_ls_after_metadata(1, 1000), jpeg_ls_after_metadata(3, u16::MAX));
-    let files: [(&str, &[u8]); 14] = [
-        ("scan.jls", b"keep"),
-        ("LOG", b"\xFF\xD8\xFF\xF7 keep"),
-        ("SCAN", &some_metadata),
-        ("SCAN2", &large_metadata),
+    let files: [(&str, &[u8]); 11] = [
+        ("scan.jp2", b"keep"),
         ("IMG_0001.dng", b"II*\x00\x08\x00\x00\x00 keep"),
         ("IMG_0002.NEF", b"MM\x00*\x00\x00\x00\x08 keep"),
-        ("photo.jls", b"\xFF\xD8\xFF\xE0\x00\x02\xFF\xC0 keep"),
+        ("photo.jp2", b"\xFF\xD8\xFF\xE0\x00\x02\xFF\xC0 keep"),
         ("notes.md", b"# keep"),
         ("data.csv", b"a,b\n1,2\n"),
         ("letter.rtf", b"{\\rtf1 keep}"),
@@ -197,6 +182,31 @@ fn write_refuses_to_replace_files_photocraft_reads_but_does_not_write() {
         .collect();
     assert!(replaced.is_empty(), "replaced: {replaced:?}");
     assert!(temp_files(&inside).is_empty());
+}
+
+/// Export writes JPEG-LS, so a `.jls` file can be saved over, and so can a file without an
+/// extension whose frame header is JPEG-LS's, also when metadata segments put that header past
+/// the first bytes, or about 192 KiB in.
+#[test]
+fn write_replaces_jpeg_ls_files() {
+    let (inside, _, workspace) = roots("jpeg-ls");
+    let jpeg_ls_after_metadata = |segments: usize, len: u16| {
+        let mut bytes = b"\xFF\xD8".to_vec();
+        for _ in 0..segments {
+            bytes.extend_from_slice(&[0xFF, 0xE1]);
+            bytes.extend_from_slice(&len.to_be_bytes());
+            bytes.resize(bytes.len() + usize::from(len) - 2, 0);
+        }
+        bytes.extend_from_slice(b"\xFF\xF7 keep");
+        bytes
+    };
+    let (some_metadata, large_metadata) = (jpeg_ls_after_metadata(1, 1000), jpeg_ls_after_metadata(3, u16::MAX));
+    let files: [(&str, &[u8]); 4] = [("scan.jls", b"keep"), ("LOG", b"\xFF\xD8\xFF\xF7 keep"), ("SCAN", &some_metadata), ("SCAN2", &large_metadata)];
+    for (name, bytes) in files {
+        std::fs::write(inside.join(name), bytes).unwrap();
+        workspace.write(name, b"\x89PNG\r\n\x1a\n").unwrap();
+        assert_eq!(std::fs::read(inside.join(name)).unwrap(), b"\x89PNG\r\n\x1a\n", "{name}");
+    }
 }
 
 /// A file without an extension that starts like a JPEG and reaches a scan before any frame
