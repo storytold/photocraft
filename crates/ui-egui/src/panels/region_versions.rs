@@ -15,6 +15,23 @@ pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
     version(app, (view(app), app.ui.transform.is_some()))
 }
 
+/// The version of the title bar: the title it shows (the active document's name and its unsaved mark), the language
+/// its menu titles are in and whether the menus are in the bar (not in the macOS menu bar). An open menu is an overlay
+/// and runs as it is shown.
+pub(crate) fn title_bar(app: &PhotocraftApp) -> u64 {
+    version(app, (super::title_bar::title_text(app), crate::i18n::current().code(), app.services.native_menu.is_none()))
+}
+
+/// The version of what the dock's chrome (each group's header and tab strip, each column's bar) shows of the panels
+/// (`DockPanels::spec_version`): their names in the UI language and the toolbar's grid, whose cells are the visible
+/// toolbar slots. Every other part of a panel's spec, its permissions and whether its menu has rows are fixed per
+/// registered panel. The chrome shows no document data, so this version holds nothing of [`version`].
+pub(crate) fn dock_chrome(app: &PhotocraftApp) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (crate::i18n::current().code(), super::toolbar::cells(app)).hash(&mut hasher);
+    hasher.finish()
+}
+
 /// The version of the status bar: the zoom readout of the active view, the status message and the item it shows, the
 /// render-path note, and the progress of the background redraw and of the job in view.
 pub(crate) fn status_bar(app: &PhotocraftApp) -> u64 {
