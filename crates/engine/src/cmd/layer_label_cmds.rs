@@ -31,7 +31,7 @@ fn set_label(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let roots = match crate::commands::explicit_layer(s, p)? {
         Some(id) => vec![id],
-        None => st.selected_layers(),
+        None => st.selected_layers().to_vec(),
     };
     if roots.is_empty() {
         return Err(bad("no layer selected"));

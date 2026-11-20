@@ -131,7 +131,7 @@ fn consolidate(s: &mut Session, group: &ActionHistory) {
         history.max_bytes = st.history.max_bytes;
         history.non_linear = st.history.non_linear;
         if st.doc.as_ref() == before.doc.as_ref() {
-            st.doc = before.doc.clone();
+            *st.doc_mut() = before.doc.clone();
             st.coalesce = before.coalesce.clone();
             if before.clean && st.saved_revision == before.saved_revision {
                 st.saved_revision = st.revision;

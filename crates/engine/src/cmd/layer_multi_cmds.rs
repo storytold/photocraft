@@ -97,8 +97,8 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("select.deselectLayers", "Deselect Layers", &["Select"], None, "{}", has_doc, |s, _| {
             set_selection(s, Vec::new(), None, None)?;
             if let Some(st) = s.active_mut() {
-                st.active_layer = None;
-                st.selected_layers.clear();
+                st.set_active_layer(None);
+                st.selection_mut().clear();
             }
             Ok(Value::Null)
         }),
