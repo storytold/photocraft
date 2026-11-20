@@ -242,7 +242,17 @@ fn color_run(app: &mut PhotocraftApp, ctx: &egui::Context, command: &CommandRef)
 
 /// The entry of panel `id`.
 pub(crate) fn entry(id: &str) -> Option<&'static PanelEntry> {
-    PANELS.iter().find(|panel| panel.id == id)
+    static BY_ID: std::sync::OnceLock<std::collections::HashMap<&'static str, &'static PanelEntry>> = std::sync::OnceLock::new();
+    BY_ID
+        .get_or_init(|| {
+            let mut panels = std::collections::HashMap::new();
+            for panel in PANELS {
+                panels.entry(panel.id).or_insert(panel);
+            }
+            panels
+        })
+        .get(id)
+        .copied()
 }
 
 /// The id of the panel `name` names: its id or its label, in any case. The canvas is not a registered panel.

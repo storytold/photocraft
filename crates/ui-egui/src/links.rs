@@ -18,7 +18,16 @@ pub const COMMANDS: &[(&str, &str)] =
     &[("help.discord", DISCORD), ("help.website", APP_PAGE), ("help.artcraftWebsite", ARTCRAFT_WEBSITE), ("help.github", GITHUB), ("help.reportIssue", ISSUES)];
 
 pub fn url_for(id: &str) -> Option<&'static str> {
-    COMMANDS.iter().find(|c| c.0 == id).map(|c| c.1)
+    static URLS: std::sync::OnceLock<std::collections::HashMap<&'static str, &'static str>> = std::sync::OnceLock::new();
+    URLS.get_or_init(|| {
+        let mut urls = std::collections::HashMap::new();
+        for &(id, url) in COMMANDS {
+            urls.entry(id).or_insert(url);
+        }
+        urls
+    })
+    .get(id)
+    .copied()
 }
 
 /// Open `url` in the system browser (a new tab on the web) and note it in the status bar. Prefers
