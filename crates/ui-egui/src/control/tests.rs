@@ -986,11 +986,11 @@ fn preferences_apply_is_available_over_control_without_closing() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let ctx = app.ctx().clone();
     let r = call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "edit.preferences.interface"}));
-    // The Preferences window is held by the app; control addresses it by the id `ui.inspect` lists
-    // and the reply names it by its key.
+    // The Preferences window is held by the app; control addresses it by the id `ui.inspect` lists,
+    // and the reply names it by that id (#15544).
     let listed = dialogs(&mut app, &ctx);
     let window = listed.iter().find(|d| d["key"] == "preferences").expect("the Preferences window is listed");
-    assert_eq!(r["result"]["dialog"], window["key"], "{r}");
+    assert_eq!(r["result"]["dialog"], window["id"], "{r}");
     let id = window["id"].clone();
     let mut values = window["fields"]["values"].clone();
     values["interface"]["uiScale"] = json!("200");
@@ -1354,7 +1354,8 @@ fn dirty_close_prompted() -> (Box<PhotocraftApp>, egui::Context, std::rc::Rc<std
 fn answer_save(app: &mut PhotocraftApp, ctx: &egui::Context, synthetic: bool) -> Result<(), String> {
     let prompt = top_dialog(app, ctx)["id"].clone();
     if synthetic {
-        let id = craft::automation::dialogs::dialog_id(&app.framework.dialogs, &json!({"dialog": prompt})).expect("the prompt is listed");
+        assert_eq!(prompt, crate::discard_ui::CONTROL_ID, "the prompt is listed as discard");
+        let id = crate::discard_ui::host_id(app).expect("the prompt is open");
         app.automation_input = true;
         let r = crate::dialogs::confirm(app, ctx, id);
         app.automation_input = false;
@@ -2222,4 +2223,109 @@ fn shift_right_menu_choose_rejects_bad_choices_and_sets_the_tool() {
     // Magic Eraser has no menu.
     shift_right(&mut app, "magicEraser");
     assert!(inspect(&app, &ctx)["brushModeMenu"].is_null());
+}
+
+/// A fresh app with a document, as a control client finds it, and the context the control channel runs on.
+fn app_with_document() -> (Box<PhotocraftApp>, egui::Context) {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.sync_views();
+    let ctx = app.ctx().clone();
+    (app, ctx)
+}
+
+/// The id `ui.menu.invoke {id, wait: false}` replied for the dialog it opened.
+fn invoked_dialog(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str) -> Value {
+    let reply = call(app, ctx, "ui.menu.invoke", json!({"id": id, "wait": false}));
+    assert_eq!(reply["ok"], true, "{id}: {reply}");
+    crate::canvas::testing::frame(app);
+    reply["result"]["dialog"].clone()
+}
+
+/// #15544: Keyboard Shortcuts and Menus is listed under the id its menu items reply with, and
+/// `ui.dialog.cancel` with that id closes it, so a control client is never stuck behind it.
+#[test]
+fn keyboard_shortcuts_is_listed_and_cancelled_by_the_id_invoke_replies() {
+    for command in ["edit.keyboardShortcuts", "edit.menus"] {
+        let (mut app, ctx) = app_with_document();
+        let id = invoked_dialog(&mut app, &ctx, command);
+        assert!(id.is_string(), "{command}: the reply names the dialog: {id}");
+        let listed = dialogs(&mut app, &ctx);
+        assert!(listed.iter().any(|d| d["id"] == id), "{command}: {id} is listed in {listed:?}");
+        assert_eq!(call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "select.all"}))["ok"], false, "{command}: the dialog is modal");
+        let cancelled = call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": id}));
+        assert_eq!(cancelled["ok"], true, "{command}: {cancelled}");
+        assert!(!crate::prefs_ui::shortcuts_open(&app), "{command}: Cancel closed it");
+        assert!(dialogs(&mut app, &ctx).is_empty());
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": id}))["ok"], false, "{command}: nothing left to cancel");
+        let next = call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "select.all"}));
+        assert_eq!(next["ok"], true, "{command}: commands run again: {next}");
+    }
+}
+
+/// #15544: Preferences replies with the id `ui.inspect` lists it under, and cancelling that id closes it.
+#[test]
+fn preferences_replies_with_the_id_it_is_listed_under() {
+    let (mut app, ctx) = app_with_document();
+    let id = invoked_dialog(&mut app, &ctx, "edit.preferences.interface");
+    let listed = dialogs(&mut app, &ctx);
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0]["id"], id, "the reply is the listed id");
+    assert_eq!(listed[0]["key"], "preferences");
+    let cancelled = call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": id}));
+    assert_eq!(cancelled["ok"], true, "{cancelled}");
+    crate::canvas::testing::frame(&mut app);
+    assert!(dialogs(&mut app, &ctx).is_empty());
+    assert_eq!(call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "select.all"}))["ok"], true);
+}
+
+/// #15544: Select › Color Range… replies with the bare id, as every other dialog does, not a `Result` around it.
+#[test]
+fn color_range_replies_with_the_bare_dialog_id() {
+    let (mut app, ctx) = app_with_document();
+    let id = invoked_dialog(&mut app, &ctx, "select.colorRange");
+    assert!(id.is_string(), "a bare id, not a wrapper: {id}");
+    assert_eq!(top_dialog(&mut app, &ctx)["id"], id);
+    assert_eq!(top_dialog(&mut app, &ctx)["key"], "select.colorRange");
+    let cancelled = call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": id}));
+    assert_eq!(cancelled["ok"], true, "{cancelled}");
+    assert!(dialogs(&mut app, &ctx).is_empty());
+}
+
+/// #15544: the unsaved-changes prompt is listed as `"discard"` with the command it holds back, the document it
+/// asks about, how many are left and the choices, and `ui.dialog.confirm` / `ui.dialog.cancel` take that id
+/// (docs/control-protocol.md).
+#[test]
+fn the_unsaved_changes_prompt_is_listed_as_discard_and_answered_by_that_id() {
+    let (mut app, ctx) = app_with_document();
+    app.run("layer.new.layer", json!({})).unwrap();
+    let prompt = |app: &mut PhotocraftApp| dialogs(app, &ctx).into_iter().find(|d| d["id"] == "discard");
+    assert!(prompt(&mut app).is_none());
+    // Close the changed document: the prompt is listed; Cancel keeps the document.
+    assert_eq!(call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "file.close"}))["ok"], true);
+    crate::canvas::testing::frame(&mut app);
+    let listed = prompt(&mut app).unwrap_or_else(|| panic!("listed as discard: {:?}", dialogs(&mut app, &ctx)));
+    let name = app.session.active().unwrap().doc.name.clone();
+    assert_eq!(listed["fields"]["command"], "file.close");
+    assert_eq!(listed["fields"]["document"], name.as_str());
+    assert_eq!(listed["fields"]["remaining"], 1);
+    assert_eq!(listed["fields"]["choices"], json!(["save", "dontSave", "cancel"]));
+    // Its rect is keyed by that id too, as `rects` keys every hosted dialog by its `dialogs` id; others keep theirs.
+    let host = crate::discard_ui::host_id(&app).expect("the prompt is open");
+    assert_eq!(super::inspect::dialog_key(&app, host), "discard");
+    let other = egui::Id::unique("another dialog");
+    assert_eq!(super::inspect::dialog_key(&app, other), other.value().to_string());
+    let cancelled = call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": "discard"}));
+    assert_eq!(cancelled["ok"], true, "{cancelled}");
+    crate::canvas::testing::frame(&mut app);
+    assert!(prompt(&mut app).is_none());
+    assert_eq!(app.session.documents().len(), 1, "Cancel keeps the document");
+    assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": "discard"}))["ok"], false, "nothing left to answer");
+    // Don't Save by that id closes it.
+    assert_eq!(call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "file.close"}))["ok"], true);
+    crate::canvas::testing::frame(&mut app);
+    let answered = call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog": "discard", "choice": "dontSave"}));
+    assert_eq!(answered["ok"], true, "{answered}");
+    crate::canvas::testing::frame(&mut app);
+    assert!(app.session.documents().is_empty(), "Don't Save closed the document");
 }

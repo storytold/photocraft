@@ -376,6 +376,19 @@ fn keeps_floating(id: &str) -> bool {
     ) || ["view.", "window.", "help.", "prefs."].iter().any(|p| id.starts_with(p))
 }
 
+/// Commands that step the history over a floating piece instead of dropping it: Undo, Redo and
+/// the History panel's steps and states ([`before_command`] puts the piece back or keeps it).
+fn steps_over_piece(id: &str) -> bool {
+    matches!(id, "edit.undo" | "history.stepBackward" | "edit.redo" | "history.stepForward" | "history.selectState")
+}
+
+/// Will [`before_command`] drop a floating piece for command `id`? `Session::dispatch` checks
+/// whether such a command may run before the drop, so a refused one leaves the piece floating:
+/// no drop, no History step, the selection where it was (#13169).
+pub(crate) fn drops_for(s: &Session, id: &str) -> bool {
+    s.active().is_some_and(|st| floating(st).is_some()) && !steps_over_piece(id) && !keeps_floating(id)
+}
+
 /// Before any command (`Session::dispatch`): Undo puts a floating piece back (and is used up:
 /// returns its result); every other command but the floating ones drops it first.
 pub(crate) fn before_command(s: &mut Session, id: &str) -> Result<Option<Value>> {
