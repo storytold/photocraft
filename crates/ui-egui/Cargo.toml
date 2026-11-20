@@ -41,6 +41,7 @@ egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
 eframe = { workspace = true, features = ["wgpu", "accesskit", "clipboard"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+roxmltree = "0.21"
 # The tables of craft-host's `SectionStore` (`app/framework.rs`); already linked through craft-host.
 toml = { version = "1.1", default-features = false, features = ["std", "serde"] }
 log = { workspace = true }

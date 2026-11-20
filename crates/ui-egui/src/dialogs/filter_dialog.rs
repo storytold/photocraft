@@ -519,6 +519,9 @@ fn builder(
             dialog = dialog
                 .extra_buttons(vec![("load".to_owned(), Label::from(tl!("Load…").to_string())), ("save".to_owned(), Label::from(tl!("Save…").to_string()))]);
         }
+        if key == crate::dialogs::image_processor_ui::COMMAND {
+            dialog = crate::dialogs::image_processor_ui::settings_footer(dialog);
+        }
         dialog
     }
 }
@@ -535,6 +538,9 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Result<DialogId, String> 
     let id = crate::dialogs::params::open_param(app, command, fields, captured, build);
     if command == MATCH_COLOR {
         reconcile_match_color(app);
+    }
+    if command == crate::dialogs::image_processor_ui::COMMAND {
+        crate::dialogs::image_processor_ui::settings_opened(app.ctx());
     }
     Ok(id)
 }
