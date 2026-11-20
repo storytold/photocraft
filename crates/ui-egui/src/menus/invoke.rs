@@ -523,9 +523,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         "select.findLayers" => crate::layer_filter_ui::find::invoke(app, params),
         // Photoshop's "Select and Mask…" is the engine's select.refineEdge.
         // Select › Color Range… from the menu: the dialog (with params: the engine directly).
-        "select.colorRange" if params.as_object().is_none_or(|o| o.is_empty()) => {
-            Ok(json!({"dialog": crate::color_range_ui::open(app).map(|dialog| dialog.value().to_string())}))
-        }
+        "select.colorRange" if params.as_object().is_none_or(|o| o.is_empty()) => crate::color_range_ui::open(app).map(dialog_reply),
         // Layer › New Fill Layer › Pattern… from the menu: the Pattern Fill dialog (with params:
         // the engine directly).
         photocraft_engine::pattern_fill_cmds::CREATE if params.as_object().is_none_or(|o| o.is_empty()) => {
