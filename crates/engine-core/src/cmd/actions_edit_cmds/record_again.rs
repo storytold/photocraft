@@ -15,7 +15,7 @@ pub struct RecordAgainTarget {
 /// Resolve only executable steps, without flushing recording or editing the library.
 pub fn target(s: &Session, p: &Value) -> Result<RecordAgainTarget> {
     not_playing(s, COMMAND)?;
-    if s.actions.recording.is_some() {
+    if s.recording.target.is_some() {
         return Err(bad(COMMAND, "stop recording before recording a step again"));
     }
     if let Some(revision) = p.get("revision") {

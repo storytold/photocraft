@@ -102,7 +102,7 @@ pub(crate) fn stop(app: &mut PhotocraftApp) -> bool {
 pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(timer) = app.paused_playbacks.timer else { return };
     let esc = !app.dialog_open() && crate::window_keys::take_escape(ctx);
-    let changed = timer.rev != app.session.actions.list.revision() || app.session.actions.recording.is_some();
+    let changed = timer.rev != app.session.actions.list.revision() || app.session.recording.target.is_some();
     if esc || changed || !app.paused_playbacks.paused.contains_key(&timer.token) {
         stop(app);
         return;

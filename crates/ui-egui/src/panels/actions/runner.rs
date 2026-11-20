@@ -673,7 +673,7 @@ fn restore_recording(app: &mut PhotocraftApp, owner: Option<&Value>) {
     let list = app.session.actions.list.actions();
     let target = if list.get(idx).is_some_and(|a| a.name == into) { Some(idx) } else { list.iter().position(|a| a.name == into) };
     if let Some(idx) = target
-        && app.session.actions.recording.is_none()
+        && app.session.recording.target.is_none()
     {
         actions_cmds::restore_recording(&mut app.session, idx, name, from);
     }

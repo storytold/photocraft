@@ -44,7 +44,7 @@ pub(crate) fn enabled(s: &Session) -> std::result::Result<(), String> {
 
 fn idle(s: &Session, cmd: &str) -> Result<()> {
     not_playing(s, cmd)?;
-    if s.actions.recording.is_some() {
+    if s.recording.target.is_some() {
         return Err(bad(cmd, "stop recording before changing the Actions library"));
     }
     Ok(())

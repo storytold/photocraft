@@ -36,16 +36,16 @@ fn allow_tool_recording(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.allowToolRecording";
     not_playing(s, cmd)?;
     let enabled = match p.get("enabled") {
-        None | Some(Value::Null) => !s.actions.record_tools,
+        None | Some(Value::Null) => !s.recording.record_tools,
         Some(Value::Bool(enabled)) => *enabled,
         Some(_) => return Err(bad(cmd, "`enabled` must be true or false")),
     };
-    if enabled != s.actions.record_tools {
-        if s.actions.recording.is_some() && s.tool_stroke_job_running() {
+    if enabled != s.recording.record_tools {
+        if s.recording.target.is_some() && s.tool_stroke_job_running() {
             return Err(bad(cmd, "wait for the current tool stroke before changing recording"));
         }
         flush_recording(s)?;
-        s.actions.record_tools = enabled;
+        s.recording.record_tools = enabled;
     }
     Ok(json!({"enabled": enabled}))
 }
@@ -104,7 +104,7 @@ fn insert(s: &mut Session, p: &Value) -> Result<Value> {
     if at > len {
         return Err(bad(cmd, format!("`at` {at} is past the last step ({len})")));
     }
-    if s.actions.recording.is_some_and(|(_, i)| i == idx) {
+    if s.recording.target.is_some_and(|(_, i)| i == idx) {
         flush_recording(s)?;
     }
     let is_stop = id == crate::atn_cmds::STOP_MESSAGE;
@@ -139,7 +139,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         if step >= len {
             return Err(bad(cmd, "step is out of range"));
         }
-        if s.actions.recording.is_some_and(|(_, i)| i == idx) {
+        if s.recording.target.is_some_and(|(_, i)| i == idx) {
             flush_recording(s)?;
         }
         s.actions.list.duplicate_step(idx, step).map_err(|e| list_error(cmd, e))?;
@@ -148,7 +148,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         result["index"] = json!(idx);
         return Ok(result);
     }
-    if s.actions.recording.is_some() {
+    if s.recording.target.is_some() {
         return Err(bad(cmd, "stop recording before duplicating an action"));
     }
     let at = s.actions.list.duplicate_action(idx, shift_action_calls).map_err(|e| list_error(cmd, e))?;
@@ -159,7 +159,7 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
 /// Copy the named group represented by main, including a session-only empty New Set.
 fn duplicate_set(s: &mut Session, source: &str) -> Result<Value> {
     let cmd = "actions.duplicate";
-    if s.actions.recording.is_some() {
+    if s.recording.target.is_some() {
         return Err(bad(cmd, "stop recording before duplicating a set"));
     }
     let sets = set_names(s);
@@ -190,7 +190,7 @@ fn dialog(s: &mut Session, p: &Value) -> Result<Value> {
     if step.is_some_and(|step| step >= len) {
         return Err(bad(cmd, "step is out of range"));
     }
-    if s.actions.recording.is_some_and(|(_, i)| i == idx) {
+    if s.recording.target.is_some_and(|(_, i)| i == idx) {
         flush_recording(s)?;
     }
     let action = &s.actions.list.actions()[idx];

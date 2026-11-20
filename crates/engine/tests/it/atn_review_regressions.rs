@@ -1059,15 +1059,15 @@ fn batch_carries_script_limits_and_restores_balanced_depth() {
     let step = json!({"command":"file.scripts.browse","params":{"steps":[{"command":"select.all"}]}});
     for (depth, spending, allowed) in [(16, 0, false), (1, photocraft_engine::actions_cmds::MAX_PLAYBACK_STEPS - 1, false), (1, 2, true)] {
         let mut s = Session::new();
-        s.actions.script_depth = depth;
-        s.actions.script_steps = spending;
+        s.recording.script_depth = depth;
+        s.recording.script_steps = spending;
         let result = s.execute("file.automate.batch",json!({"input":[input,input],"output":dir.path().join("out"),"steps":[step],"namingComponents":[{"component":"serial2"},{"component":"extension"}]})).unwrap();
         assert_eq!(result["errors"].as_array().unwrap().is_empty(), allowed, "{result}");
-        assert_eq!(s.actions.script_depth, depth);
+        assert_eq!(s.recording.script_depth, depth);
         if depth == 1 {
             // Per input: the Batch's direct step (the nested script), then that script's one step
             // unless the playback limit refuses it.
-            assert_eq!(s.actions.script_steps, spending + if allowed { 4 } else { 2 });
+            assert_eq!(s.recording.script_steps, spending + if allowed { 4 } else { 2 });
         }
     }
 }
