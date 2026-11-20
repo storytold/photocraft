@@ -492,7 +492,8 @@ pub struct SetFile {
 }
 
 /// The set files the menu-sets folder `dir` holds, each with the set name its file gives and the path
-/// it was read at, with one message per file that could not be read. A folder that is not there holds
+/// it was read at, with one message per file that could not be read and one per file that names a
+/// set an earlier file already named ([`first_per_set_name`]). A folder that is not there holds
 /// nothing and says nothing: the first Save makes it.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_sets(dir: &Path) -> (Vec<SetFile>, Vec<String>) {
@@ -511,6 +512,7 @@ pub fn read_sets(dir: &Path) -> (Vec<SetFile>, Vec<String>) {
         .filter_map(|entry| set_name_of(&entry.path()).map(|name| (name, entry.path())))
         .collect();
     files.sort();
+    let mut files = first_per_set_name(files, &mut errors);
     if files.len() > MAX_SET_FILES {
         errors.push(format!("{}: more than {MAX_SET_FILES} set files, the rest were left out", dir.display()));
         files.truncate(MAX_SET_FILES);
@@ -524,6 +526,27 @@ pub fn read_sets(dir: &Path) -> (Vec<SetFile>, Vec<String>) {
         }
     }
     (sets, errors)
+}
+
+/// Of the folder's sorted set-file list, keep the first file per set name and say each dropped one
+/// through the `errors` lines. A case-sensitive folder can hold `x.mnu` and `x.MNU` side by side,
+/// and [`set_name_of`] names both sets `x`; sets are keyed by name everywhere above the folder, so
+/// reading both would union the two files into one set and keep only the later path: the earlier
+/// file could never be saved back to or deleted, and a Delete would leave it to offer the set back.
+/// The compare is the case-insensitive one [`set_name_of`] already makes on the extension, so the
+/// kept file is the first in the folder's sorted order and the pair is named in the error line.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn first_per_set_name(files: Vec<(String, PathBuf)>, errors: &mut Vec<String>) -> Vec<(String, PathBuf)> {
+    let mut kept: Vec<(String, PathBuf)> = Vec::with_capacity(files.len());
+    for (name, path) in files {
+        match kept.iter().find(|(first, _)| first.eq_ignore_ascii_case(&name)) {
+            Some((_, first_path)) => {
+                errors.push(format!("{} and {} name the same set - only the first is used", first_path.display(), path.display()));
+            }
+            None => kept.push((name, path)),
+        }
+    }
+    kept
 }
 
 /// The set files in the menu-sets folder `dir`; nothing, where there is no file system.

@@ -1135,6 +1135,8 @@ fn yes_of_the_switch_question_saves_to_the_file_the_dialog_chose() {
 /// A set the menu-sets folder was found holding keeps that very file: the folder's own name for it,
 /// not the name `path_of` builds back from the set name. A file the folder lists as `Darkroom.mnu`
 /// is Darkroom's file, and a Save on the set writes it there rather than starting a second file.
+/// Its Delete says the same: Yes of the Delete question takes the found file away, whatever it is
+/// spelled as, and the set does not stand in the folder under the name's own spelling.
 #[test]
 fn a_set_the_folder_found_is_saved_back_to_the_file_it_was_found_in() {
     let tmp = tempfile::tempdir().expect("a settings folder");
@@ -1163,6 +1165,22 @@ fn a_set_the_folder_found_is_saved_back_to_the_file_it_was_found_in() {
     let kept = std::fs::read_to_string(&found).expect("the found file is still there");
     assert!(!kept.contains("id=\"10\""), "and it holds the set as the row saved it: File › New is shown again: {kept}");
     assert!(kept.contains(&root("Darkroom")), "the set keeps its name: {kept}");
+    // Its Delete says the same. Yes takes the very file the folder was found holding - spelled as
+    // the folder spells it - away, rather than aiming at `Darkroom.MNU`, the file the set's own
+    // name would name and this folder does not hold. On a case-insensitive folder the two spellings
+    // are one file and no aim can miss; on a case-sensitive one (CI) an aim at the wrong spelling
+    // would leave the found file standing, and the listing below says it went.
+    open_menus(&mut h);
+    assert_eq!(row_value(&h), "Darkroom", "the saved file reads back as the set in use");
+    button(&h, DELETE).click();
+    h.run_steps(2);
+    answer(&mut h, YES);
+    ok(&mut h);
+    assert!(!found.exists(), "the Delete took the differently spelled file the folder was found holding");
+    let left: Vec<String> = std::fs::read_dir(&folder).expect("the menu-sets folder").flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert!(left.is_empty(), "and nothing stands under the set name's own spelling either: {left:?}");
+    let p = h.state().session.prefs();
+    assert!(!p.menu_sets.contains_key("Darkroom"), "the set went from the preferences with the file");
 }
 
 /// File discovery cannot make the OK payload bigger than the engine's cap: with the preferences

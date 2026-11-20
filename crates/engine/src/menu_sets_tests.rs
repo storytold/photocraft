@@ -236,8 +236,8 @@ fn menu_sets_are_saved_with_the_preferences_and_an_older_file_loads_without_them
 // ---- the `.mnu` files: the sets as files in the settings directory (#14450) ----
 
 use crate::menu_sets::{
-    self, MAX_MNU_BYTES, MenuSet, REF_ITEMS, atomic_write, color_name, color_number, file_name, folder, from_mnu, merged_with_prefs, path_of, read_sets,
-    ref_command, ref_item, set_name_of, to_mnu, write_set,
+    self, MAX_MNU_BYTES, MenuSet, REF_ITEMS, atomic_write, color_name, color_number, file_name, first_per_set_name, folder, from_mnu, merged_with_prefs,
+    path_of, read_sets, ref_command, ref_item, set_name_of, to_mnu, write_set,
 };
 
 /// A set: its hidden items and its colours, as `saveSet` would store them.
@@ -709,4 +709,67 @@ fn a_set_file_is_read_at_the_name_the_folder_lists_it_under() {
     assert_eq!(files[0].path, dir.join("Darkroom.mnu"), "the path is the file as the folder lists it");
     assert_eq!(files[0].set.colors["file.close"], "blue", "and the set its rows describe comes through");
     assert_ne!(files[0].path, path_of(&dir, "Darkroom").expect("`Darkroom` names a set file"), "which is not the file the set's name would name");
+}
+
+/// A case-sensitive folder can hold `x.mnu` and `x.MNU` side by side, and both name the set `x`.
+/// The row keys sets by name, so only the first file (in sort order) is read and the pair is said
+/// as an error: reading both would union two files into one set and keep only the later path, so
+/// the earlier file could never be saved back to or deleted, and a Delete would resurrect the set
+/// from it (#14450, round-3 nit). Windows cannot make this folder - its file system folds case, so
+/// the two spellings are one file - hence the helper itself is tested here and the folder pair on a
+/// case-sensitive runner below.
+#[test]
+fn the_dedupe_keeps_the_first_file_of_a_case_colliding_name_and_says_the_rest() {
+    let dir = std::path::Path::new("menu-sets");
+    let files = vec![
+        ("Darkroom".to_string(), dir.join("Darkroom.MNU")),
+        ("Darkroom".to_string(), dir.join("Darkroom.mnu")),
+        ("darkroom".to_string(), dir.join("darkroom.MNU")),
+        ("Mine".to_string(), dir.join("Mine.MNU")),
+    ];
+    let mut errors = Vec::new();
+    let kept = first_per_set_name(files, &mut errors);
+    assert_eq!(
+        kept.iter().map(|(_, path)| path.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>(),
+        vec!["Darkroom.MNU".to_string(), "Mine.MNU".to_string()],
+        "one file per set name, the first in sort order"
+    );
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    let first = &errors[0];
+    assert!(first.contains("Darkroom.MNU") && first.contains("Darkroom.mnu"), "{first} names the pair");
+    assert!(first.contains("name the same set"), "{first}");
+    assert!(first.contains("only the first is used"), "{first}");
+    assert!(errors[1].contains("Darkroom.MNU") && errors[1].contains("darkroom.MNU"), "{:?}", errors[1]);
+}
+
+/// The same rule end to end, on a folder that really holds both spellings. Windows refuses to make
+/// the pair - `x.MNU` and `x.mnu` are one file there - so this runs on case-sensitive runners only.
+#[cfg(not(windows))]
+#[test]
+fn two_case_colliding_files_in_one_folder_are_one_set_and_are_said() {
+    let (_tmp, dir) = folder_with(&[("x.MNU", &mnu(&row(10, 2, 0, 1, 0))), ("x.mnu", &mnu(&row(31, 2, 0, 0, 5)))]);
+    let (files, errors) = read_sets(&dir);
+    assert_eq!(files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["x"], "one set, from the first file in sort order");
+    assert_eq!(files[0].path, dir.join("x.MNU"), "{:?}", files[0]);
+    assert_eq!(hidden_of(&files[0].set), vec!["file.new".to_string()], "the first file's rows, not a union of both");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let first = &errors[0];
+    assert!(first.contains("x.MNU") && first.contains("x.mnu"), "{first} names the pair");
+    assert!(first.contains("name the same set"), "{first}");
+}
+
+/// The Windows guard the pair above cannot be: the file system itself folds the extension case, so
+/// the menu-sets folder can never hold two spellings of one set name. This pins that practical
+/// half honestly: writing `x.MNU` over the standing `x.mnu` rewrites one file, and the folder
+/// reads back as one set with nothing said.
+#[cfg(windows)]
+#[test]
+fn a_case_insensitive_folder_cannot_hold_two_spellings_of_one_set_name() {
+    let (_tmp, dir) = folder_with(&[("x.mnu", &mnu(&row(10, 2, 0, 1, 0)))]);
+    std::fs::write(dir.join("x.MNU"), mnu(&row(31, 2, 0, 0, 5))).expect("the second spelling is the same file");
+    let left: Vec<String> = std::fs::read_dir(&dir).expect("the folder").flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(left, vec!["x.mnu".to_string()], "one file, under the name it was made with: {left:?}");
+    let (files, errors) = read_sets(&dir);
+    assert_eq!(files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["x"], "one set");
+    assert!(errors.is_empty(), "{errors:?}");
 }
