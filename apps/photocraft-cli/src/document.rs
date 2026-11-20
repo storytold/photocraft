@@ -42,10 +42,20 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
     let (input, output) = (&a.input, &a.output);
     let opts = ExportOptions::from(&a.export);
     refuse_overwriting_input(a.in_place, input, output)?;
+    // Import PDF's answers (`--page`, `--image`, `--resolution`, …) open one page or image;
+    // `--pdf-dpi`/`--pdf-pages`/`--pdf-editable` open the pages as artboards. They pick different
+    // imports.
+    let pdf = a.pdf.options()?;
+    if pdf.is_some() && (a.pdf_dpi.is_some() || a.pdf_pages.is_some() || a.pdf_editable) {
+        return Err(CliError::Other(
+            "--pdf-dpi, --pdf-pages and --pdf-editable open the pages as artboards; --page, --image, --resolution, --crop, --mode, --depth and --no-antialias open one page or image: use one set".into(),
+        ));
+    }
     let import_opts = photocraft_io::ImportOptions {
         psd_high_memory_approved: a.approve_high_memory,
         pdf_dpi: a.pdf_dpi.unwrap_or(300.0),
         pdf_pages: a.pdf_pages.as_deref().map(parse_pdf_pages).transpose()?,
+        pdf,
         pdf_editable: a.pdf_editable,
         ..Default::default()
     };
@@ -74,7 +84,8 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
 pub(crate) fn info(a: &InfoArgs, out: &mut dyn Write) -> Result {
     let file = &a.file;
     let mut h = Headless::trusted_local();
-    let opened = h.open_with_approval(file, a.approve_high_memory)?;
+    let import_opts = photocraft_io::ImportOptions { psd_high_memory_approved: a.approve_high_memory, pdf: a.pdf.options()?, ..Default::default() };
+    let opened = h.open_with_options(file, &import_opts)?;
     let mut doc = match (a.detail, h.session.active()) {
         (true, Some(st)) => photocraft_engine::inspect::document_detail(st),
         _ => h.inspect(None)?,

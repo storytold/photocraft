@@ -67,7 +67,7 @@ mod pcraft_cache;
 pub mod pdf;
 #[cfg(all(feature = "pdf-editable", not(target_arch = "wasm32")))]
 mod pdf_editable;
-mod pdf_import;
+pub mod pdf_import;
 mod pdn;
 pub use pcraft_cache::PcraftExportCache;
 pub mod pixels;
@@ -166,6 +166,9 @@ pub enum IoError {
     /// An SVG that does not parse (or is too large to rasterise).
     #[error("SVG: {0}")]
     Svg(String),
+    /// A PDF that can't be read or rasterised (see [`pdf_import`]).
+    #[error("PDF: {0}")]
+    Pdf(String),
     /// The file could not be read.
     #[error("{0}")]
     Read(String),
@@ -545,12 +548,13 @@ pub fn import_preflight(name: &str, bytes: &[u8]) -> ImportPreflight {
             | photocraft_formats::Format::Svgz
             | photocraft_formats::Format::Pdf,
         ) => ImportPreflight::Unbounded,
+        _ if is_pdf_input(name, bytes) => ImportPreflight::Unbounded,
         _ => ImportPreflight::Flat,
     }
 }
 
-/// Imports a file. PSD/PSB, Affinity containers and camera raws are detected by magic; everything
-/// else is decoded with `photocraft-codecs`.
+/// Imports a file. PSD/PSB, Affinity containers, PDFs and camera raws are detected by magic;
+/// everything else is decoded with `photocraft-codecs`.
 pub fn import(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
     import_with_svg_group_depth(name, bytes, photocraft_doc::MAX_GROUP_DEPTH)
 }
@@ -578,7 +582,7 @@ pub fn import_with_svg_group_depth_and_interrupt(
 }
 
 /// The user's settings that shape an import.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ImportOptions {
     /// SVG groups nested deeper than this are rasterised.
     pub max_group_depth: usize,
@@ -612,6 +616,9 @@ pub struct ImportOptions {
     /// Optional estimate limit for high-memory approval. When set, approval only applies if
     /// the fresh preflight estimate does not exceed this amount.
     pub psd_approved_estimate: Option<u64>,
+    /// How a PDF page opens (the Import PDF dialog's answers); Photoshop's defaults when `None`:
+    /// page 1, Bounding Box, 300 ppi, RGB, 8 bits, anti-aliased.
+    pub pdf: Option<pdf_import::PdfOpenOptions>,
 }
 
 impl Default for ImportOptions {
@@ -627,6 +634,7 @@ impl Default for ImportOptions {
             pdf_editable: false,
             psd_high_memory_approved: false,
             psd_approved_estimate: None,
+            pdf: None,
         }
     }
 }
@@ -941,6 +949,8 @@ pub(crate) enum Route {
     GzippedXcf,
     Pdn,
     Raw,
+    /// A PDF, through the Import PDF options.
+    Pdf,
     Svg,
     /// A `.psd`/`.psb`/`.psdt` with no raster signature.
     NamedPsd,
@@ -961,7 +971,9 @@ pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
         Some(photocraft_formats::Format::Xcf) => Route::Xcf,
         Some(photocraft_formats::Format::Pdn) => Route::Pdn,
         Some(photocraft_formats::Format::Raw) => Route::Raw,
+        Some(photocraft_formats::Format::Pdf) => Route::Pdf,
         Some(photocraft_formats::Format::Svg | photocraft_formats::Format::Svgz) => Route::Svg,
+        _ if is_pdf_input(name, bytes) => Route::Pdf,
         _ => Route::Flat,
     }
 }
@@ -986,6 +998,8 @@ fn route_forced(ext: &str) -> Route {
         Route::Pdn
     } else if ext == "raw" || raw::EXTENSIONS.contains(&ext.as_str()) {
         Route::Raw
+    } else if matches!(ext.as_str(), "pdf" | "ai") {
+        Route::Pdf
     } else if matches!(ext.as_str(), "svg" | "svgz") {
         Route::Svg
     } else {
@@ -1003,25 +1017,7 @@ fn import_stages(
     opts: &ImportOptions,
     damaged: &mut bool,
 ) -> Result<ImportResult, IoError> {
-    let selected = if let Some(ext) = as_ext {
-        let ext = ext.trim_start_matches('.').to_ascii_lowercase();
-        if matches!(ext.as_str(), "pdf" | "ai") {
-            return pdf_import::import(name, bytes, opts, ctl);
-        }
-        route_forced(&ext)
-    } else {
-        // SVG content wins over a misleading `.pdf` suffix, matching the preflight (which checks SVG
-        // before PDF).
-        if is_svg_input(name, bytes) {
-            return svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth);
-        }
-        // PDF (craft-pdf, pure Rust). `.ai` files that start with `%PDF-` are PDFs and take this
-        // importer too; a recognized raster signature wins over a misleading `.pdf` suffix.
-        if photocraft_formats::detect(name, bytes) == Some(photocraft_formats::Format::Pdf) {
-            return pdf_import::import(name, bytes, opts, ctl);
-        }
-        route(name, bytes)
-    };
+    let selected = if let Some(ext) = as_ext { route_forced(ext) } else { route(name, bytes) };
     match selected {
         Route::Pcraft => {
             let document = photocraft_format::load_from_bytes(bytes)?;
@@ -1041,9 +1037,39 @@ fn import_stages(
                 raw::import_raw_demosaic(name, bytes, opts.demosaic)
             }
         }
+        Route::Pdf => {
+            // Without Import PDF answers, a one-image PDF opens like a picture, as in Photoshop;
+            // any other opens every page (or `pdf_pages`) as an artboard at `pdf_dpi`.
+            let Some(chosen) = opts.pdf.as_ref() else {
+                if pdf_import::opens_as_image(bytes, None) {
+                    return pdf_import::import_pdf(name, bytes, &pdf_import::PdfOpenOptions::default(), ctl);
+                }
+                // Rasterised pages stay untitled, so Save can't replace the PDF with them, and
+                // are named after the file (`name` may be its path).
+                let mut r = pdf_import::import(name, bytes, opts, ctl)?;
+                r.source_read_only = true;
+                r.document.name = pdf_import::page_name(name, None, 1, 1);
+                return Ok(r);
+            };
+            // What Import PDF answers open (a page, an embedded image) is untitled, as in Photoshop:
+            // only a one-image PDF opened directly, like a picture, takes the PDF as its file.
+            let mut r = pdf_import::import_pdf(name, bytes, chosen, ctl)?;
+            r.source_read_only = true;
+            Ok(r)
+        }
         Route::Svg => svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth),
         Route::Flat => flat::import_flat_with_options(name, bytes, opts, ctl),
     }
+}
+
+/// Whether `name`'s `bytes` open as a PDF: a file that starts with `%PDF-`, or one with the marker
+/// later in its first kilobyte (after a byte-order mark or a shell line, as the specification
+/// allows) that the SVG and raster importers don't take (an SVG may mention `%PDF-1.4` in a
+/// comment near its start). A `.pdf` name with no other signature is a PDF too, so a damaged one
+/// gets the PDF importer's error. `.ai` files that start with `%PDF-` are PDFs.
+pub fn is_pdf_input(name: &str, bytes: &[u8]) -> bool {
+    bytes.starts_with(b"%PDF-")
+        || ((pdf_import::is_pdf(bytes) || has_extension(name, "pdf")) && !is_svg_input(name, bytes) && photocraft_codecs::detect(bytes).is_none())
 }
 
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).
@@ -1431,6 +1457,7 @@ mod tests {
         assert_eq!(import_preflight("x.svg", b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"), ImportPreflight::Unbounded);
         assert_eq!(import_preflight("x.pcraft", b"PCF1"), ImportPreflight::Unbounded);
         assert_eq!(import_preflight("x.afphoto", b"Affinity"), ImportPreflight::Unbounded);
+        assert_eq!(import_preflight("x.pdf", b"%PDF-1.7"), ImportPreflight::Unbounded);
         // A Photoshop extension whose bytes are a readable flat image follows the image.
         assert_eq!(import_preflight("misnamed.psd", png), ImportPreflight::Flat);
     }
@@ -1630,7 +1657,7 @@ mod tests {
         assert!(!is_svg_input("drawing.svg", pdf));
         assert!(!is_svg_input("drawing.svgz", pdf));
         assert!(is_svg_input("drawing.svg", b"<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>"));
-        assert_eq!(crate::route("drawing.svg", pdf), crate::Route::Flat);
+        assert_eq!(crate::route("drawing.svg", pdf), crate::Route::Pdf);
     }
 
     /// `.ai` files that start with `%PDF-` are PDFs: both preflight and dispatch send them to the
