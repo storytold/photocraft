@@ -392,7 +392,7 @@ fn stop_rejects_huge_indices_without_panicking() {
 /// The active fill layer's fill replaced by `f` (as a PSD import leaves it).
 fn set_active_fill(s: &mut Session, f: Fill) {
     let id = s.active().unwrap().active_layer.unwrap();
-    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().content = LayerContent::Fill(f);
+    std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(id).unwrap().content = LayerContent::Fill(f);
 }
 
 /// A fill as PSD import leaves a Photoshop gradient with Smoothness 100: three stops (the first
