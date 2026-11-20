@@ -78,11 +78,20 @@ fn hdr_adjustments_preserve_range_and_cpu_parity() {
         let mut d = Document::new("HDR adjustments", Size::new(3, 1), ColorMode::Rgb, SampleType::F32);
         let mut layer = Layer::raster("pixels", PixelFormat::RGBA32F);
         layer.surface_mut().unwrap().write_region(Rect::new(0, 0, 3, 1), &[4.0, 2.0, 0.5, 1.0, -0.1, 3.0, 0.25, 0.75, 0.0, 0.0, 0.0, 1.0]);
-        d.layers = vec![layer, Layer::new("adjustment", LayerContent::Adjustment(adj.clone()))];
+        d.layers = vec![layer, Layer::new("adjustment", LayerContent::Adjustment(adj.clone()))].into();
         let cpu = photocraft_compose::flatten(&d);
         assert!(cpu.px[0][0] > 1.0, "HDR reference unexpectedly clipped: {adj:?}");
         check(&mut g, &d, &format!("HDR {adj:?}"));
     }
+}
+
+/// Phase timings for diagnosing expensive parity checks; nextest shows them only for the
+/// selected slow Windows tests, without changing their timeout or pass criteria.
+fn timed<T>(what: &str, run: impl FnOnce() -> T) -> T {
+    let start = std::time::Instant::now();
+    let result = run();
+    eprintln!("parity phase {what}: {:?}", start.elapsed());
+    result
 }
 
 /// The default adapter, or the one wgpu's `WGPU_BACKEND` and `WGPU_DX12_COMPILER` choose: e.g.
@@ -92,7 +101,7 @@ fn hdr_adjustments_preserve_range_and_cpu_parity() {
 fn gpu() -> Option<Gpu> {
     let lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let required = std::env::var_os("WGPU_BACKEND").is_some();
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let instance = crate::instance();
     let adapter = match pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) {
         Ok(a) => a,
         Err(e) => {
@@ -126,8 +135,8 @@ fn gpu() -> Option<Gpu> {
             None
         }
     };
-    let comp = compositor()?;
-    let mut paged = compositor()?;
+    let comp = timed("compositor creation", compositor)?;
+    let mut paged = comp.sibling();
     paged.set_texture_limit(PAGED_LIMIT);
     Some(Gpu { device, queue, comp, paged, _lock: lock })
 }
@@ -136,7 +145,7 @@ fn gpu() -> Option<Gpu> {
 /// The returned guard holds [`GPU_LOCK`] until the device is dropped.
 fn any_device() -> Option<(wgpu::Adapter, wgpu::Device, wgpu::Queue, std::sync::MutexGuard<'static, ()>)> {
     let lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let adapter = pollster::block_on(wgpu::Instance::default().request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+    let adapter = pollster::block_on(crate::instance().request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
     Some((adapter, device, queue, lock))
 }
@@ -208,10 +217,11 @@ fn worst_diff(cpu: &[[f32; 4]], gpu: &[[f32; 4]]) -> (f32, usize) {
 /// GPU (whole textures, then pages) vs CPU over `rect`: Err with the worst pixel if over the
 /// tolerance, else the stats of the unpaged render.
 fn diff_rect(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result<photocraft_gpu::Stats, String> {
-    let cpu = photocraft_compose::render(doc, rect);
+    let cpu = timed("CPU reference", || photocraft_compose::render(doc, rect));
     let mut first = None;
     for (label, comp) in [("", &mut g.comp), (" (paged)", &mut g.paged)] {
-        let (out, stats) = photocraft_gpu::render_to_vec_stats(comp, &g.device, &g.queue, doc, rect).map_err(|e| format!("{what}{label}: {e}"))?;
+        let (out, stats) = timed(&format!("{what}{label} GPU render/readback"), || photocraft_gpu::render_to_vec_stats(comp, &g.device, &g.queue, doc, rect))
+            .map_err(|e| format!("{what}{label}: {e}"))?;
         let worst = worst_diff(&cpu.px, &out);
         let w = rect.width() as usize;
         let (x, y) = (rect.x0 + (worst.1 % w) as i32, rect.y0 + (worst.1 / w) as i32);
@@ -380,7 +390,7 @@ fn prefix_follows_an_edit_up_the_stack_and_stays_exact() {
 #[test]
 fn chunks_keep_their_own_checkpoint_after_a_partial_refresh() {
     let Some(mut g) = gpu() else { return };
-    let mut uncached = Compositor::try_new_with_format(&g.device, wgpu::TextureFormat::Rgba32Float).unwrap();
+    let mut uncached = g.comp.sibling();
     uncached.set_texture_limit(PAGED_LIMIT);
     uncached.set_composite_cache_budget(0);
     let mut doc = base_doc(600, 300);
@@ -464,27 +474,31 @@ fn root_checkpoints_keep_clipping_groups_and_adjustments_whole() {
 fn disjoint_partial_damages_admit_whole_chunks_not_damage_rects() {
     let Some(mut g) = gpu() else { return };
     let mut doc = base_doc(600, 300);
-    doc.layers.push(noise_layer("middle", PixelFormat::RGBA8, doc.bounds(), 2, 0.2));
-    doc.layers.push(noise_layer("top", PixelFormat::RGBA8, doc.bounds(), 3, 0.2));
+    // Each layer in a pass of its own (`alone`): batched into one run, the stack has no
+    // checkpoint below the top layer, so no render would capture and the byte count could not
+    // grow whatever the admission did.
+    doc.layers.push(alone(noise_layer("middle", PixelFormat::RGBA8, doc.bounds(), 2, 0.2)));
+    doc.layers.push(alone(noise_layer("top", PixelFormat::RGBA8, doc.bounds(), 3, 0.2)));
     check(&mut g, &doc, "warm");
+    // Each series paints 8 rectangles. The second series' rectangles are all new (7 px across
+    // and 65 px down from the first's) but in the same chunk (the 600 x 300 document is one
+    // chunk at `CHUNK`), so a cache entry per damage rectangle would add 8 entries. (The four
+    // series of 24 this replaces painted the same 24 rectangles every time.)
     let strokes = |g: &mut Gpu, doc: &Document, pass: i32| {
-        for i in 0..24u32 {
-            let x = 40 + ((i + pass as u32 * 13) % 8) * 60;
-            let y = 30 + (i / 8) * 60;
-            diff_rect(g, doc, Rect::new(x as i32, y as i32, x as i32 + 40, y as i32 + 30), "stroke").unwrap();
+        for i in 0..8 {
+            let (x, y) = (40 + i * 60 + pass * 7, 30 + pass * 65);
+            diff_rect(g, doc, Rect::new(x, y, x + 40, y + 30), "stroke").unwrap();
         }
     };
-    for pass in 0..2 {
-        doc.layers[2].opacity = 0.3 + pass as f32 * 0.1;
-        strokes(&mut g, &doc, pass);
-    }
-    // The same grid chunks hold every stroke: no entry-per-rectangle growth between passes.
+    doc.layers[2].opacity = 0.3;
+    strokes(&mut g, &doc, 0);
+    // The same grid chunks hold every stroke: no entry-per-rectangle growth between series.
     let bytes = g.comp.composite_cache_bytes();
     assert!(bytes > 0);
-    for pass in 2..4 {
-        doc.layers[2].opacity = 0.3 + pass as f32 * 0.1;
-        strokes(&mut g, &doc, pass);
-    }
+    // 0.6, the last opacity the four series this replaces left, so what follows renders the
+    // same document as before.
+    doc.layers[2].opacity = 0.6;
+    strokes(&mut g, &doc, 1);
     assert_eq!(g.comp.composite_cache_bytes(), bytes, "partial damages must not add entries");
     // A full-canvas render still populates the whole chunks, and the top edit afterwards hits.
     check(&mut g, &doc, "full refresh after strokes");
@@ -626,6 +640,47 @@ fn special_eight_fill_matches_cpu() {
     }
 }
 
+/// The same for adjustment layers (#9501): the GPU's adjustment mix takes Fill inside the special
+/// eight's blend, as compose's adjustment branch does, with a mask and Opacity on top.
+#[test]
+fn special_eight_fill_on_adjustment_layers_matches_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let special = [
+        BlendMode::ColorBurn,
+        BlendMode::LinearBurn,
+        BlendMode::ColorDodge,
+        BlendMode::LinearDodge,
+        BlendMode::VividLight,
+        BlendMode::LinearLight,
+        BlendMode::HardMix,
+        BlendMode::Difference,
+    ];
+    for mode in special {
+        for fill in [0.3, 0.6] {
+            let mut d = base_doc(64, 48);
+            d.layers[0] = noise_layer("bg", PixelFormat::RGBA8, Rect::from_xywh(0, 0, 64, 48), 5, 1.0);
+            let mut l = Layer::new("invert", LayerContent::Adjustment(Adjustment::Invert));
+            l.blend = mode;
+            l.opacity = 0.7;
+            l.fill_opacity = fill;
+            d.layers.push(l);
+            check(&mut g, &d, &format!("adjustment {mode:?} fill {fill}"));
+            // CodeRabbit on #9512: clipped to a pixel layer, the adjustment takes Fill as
+            // coverage on both paths (compose's clipped branch, the planner's `atop`).
+            let mut d = base_doc(64, 48);
+            d.layers[0] = noise_layer("bg", PixelFormat::RGBA8, Rect::from_xywh(0, 0, 64, 48), 5, 1.0);
+            d.layers.push(noise_layer("base", PixelFormat::RGBA8, Rect::from_xywh(8, 6, 40, 30), 9, 1.0));
+            let mut l = Layer::new("invert", LayerContent::Adjustment(Adjustment::Invert));
+            l.blend = mode;
+            l.opacity = 0.7;
+            l.fill_opacity = fill;
+            l.clipped = true;
+            d.layers.push(l);
+            check(&mut g, &d, &format!("clipped adjustment {mode:?} fill {fill}"));
+        }
+    }
+}
+
 #[test]
 fn xor_rounding_on_half_float_targets() {
     let Some((_adapter, device, queue, _lock)) = any_device() else { return };
@@ -688,8 +743,13 @@ fn adjustments() -> Vec<Adjustment> {
         Adjustment::PhotoFilter { color: [0.2, 0.6, 0.9], density: 0.3, preserve_luminosity: false },
         Adjustment::BlackWhite { weights: [40.0, 60.0, 40.0, 60.0, 20.0, 80.0], tint: None },
         Adjustment::BlackWhite { weights: [70.0, 20.0, 50.0, 10.0, 90.0, 30.0], tint: Some([0.9, 0.7, 0.5]) },
-        Adjustment::GradientMap { stops: vec![(0.0, [0.1, 0.0, 0.3]), (0.5, [0.9, 0.3, 0.1]), (1.0, [1.0, 1.0, 0.8])], reverse: false, dither: false },
-        Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: true, dither: true },
+        Adjustment::GradientMap {
+            stops: vec![(0.0, [0.1, 0.0, 0.3]), (0.5, [0.9, 0.3, 0.1]), (1.0, [1.0, 1.0, 0.8])],
+            reverse: false,
+            dither: false,
+            source: None,
+        },
+        Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 0.0]), (1.0, [1.0, 1.0, 1.0])], reverse: true, dither: true, source: None },
         Adjustment::ColorBalance { shadows: [20.0, -10.0, 5.0], midtones: [-15.0, 10.0, 30.0], highlights: [0.0, 5.0, -20.0], preserve_luminosity: true },
         Adjustment::ColorBalance { shadows: [10.0, 0.0, 0.0], midtones: [0.0, 0.0, 0.0], highlights: [0.0, 0.0, 10.0], preserve_luminosity: false },
         Adjustment::SelectiveColor { relative: true, adjustments: selective() },
@@ -845,6 +905,18 @@ fn groups_masks_and_clipping() {
         d.layers.extend([base, clip]);
         check(&mut g, &d, "clipped Dissolve opacity/fill CPU/GPU parity");
     }
+    // #4921: a clipped Dissolve layer keeps binary coverage at partial opacity/fill.
+    for (opacity, fill) in [(0.4, 1.0), (0.8, 0.5)] {
+        let mut d = base_doc(56, 44);
+        let base = noise_layer("base", PixelFormat::RGBA8, Rect::new(5, 6, 48, 40), 45, 0.0);
+        let mut clip = noise_layer("dissolve clip", PixelFormat::RGBA8, d.bounds(), 46, 0.0);
+        clip.clipped = true;
+        clip.blend = BlendMode::Dissolve;
+        clip.opacity = opacity;
+        clip.fill_opacity = fill;
+        d.layers.extend([base, clip]);
+        check(&mut g, &d, "clipped Dissolve CPU/GPU parity");
+    }
     // Clipped group base (isolated) with a clipped layer.
     let mut d = base_doc(56, 44);
     let mut gb = Layer::group("gb", vec![child(18, BlendMode::Normal)]);
@@ -891,7 +963,7 @@ fn hard_stop_gradients_match_cpu_or_fall_back() {
                 Ok(out) => out,
                 Err(e) => {
                     assert!(e.0.contains("coincident gradient stops"), "{e}");
-                    photocraft_compose::render(&d, d.bounds()).px
+                    photocraft_compose::render(&d, d.bounds()).into_px()
                 }
             };
             let worst = worst_diff(&cpu.px, &out);
@@ -939,7 +1011,7 @@ fn hard_stop_fill_fallback_respects_caches_and_visibility() {
         assert_gradient_fallback(&d);
         let mut clipped = Layer::new("clipped", LayerContent::Fill(fill));
         clipped.clipped = true;
-        d.layers = vec![Layer::new("base", LayerContent::Fill(Fill::Solid(Color::WHITE))), clipped];
+        d.layers = vec![Layer::new("base", LayerContent::Fill(Fill::Solid(Color::WHITE))), clipped].into();
         assert_gradient_fallback(&d);
         d.layers.push(Layer::new("cover", LayerContent::Fill(Fill::Solid(Color::WHITE))));
         assert!(photocraft_gpu::plan(&d).is_ok(), "occluded gradients are not sampled");
@@ -993,6 +1065,7 @@ fn hard_stop_effects_and_gradient_maps_request_cpu() {
             stops: vec![(0.0, [0.0; 3]), (0.5, [1.0; 3]), (0.5, [0.0; 3]), (1.0, [1.0; 3])],
             reverse: false,
             dither: false,
+            source: None,
         }),
     ));
     assert_gradient_fallback(&d);
@@ -1259,7 +1332,7 @@ fn growing_layer_keeps_its_resident_tiles() {
             let what = format!("{fmt:?} dab {i}");
             let s = diff_rect(&mut g, &d, d.bounds(), &what).unwrap_or_else(|e| panic!("{e}"));
             assert!(s.tiles_uploaded <= 2, "{what}: only the dab's tiles upload: {s:?}");
-            let mut fresh = Compositor::try_new_with_format(&g.device, wgpu::TextureFormat::Rgba32Float).unwrap();
+            let mut fresh = g.comp.sibling();
             let want = render_to_vec(&mut fresh, &g.device, &g.queue, &d, d.bounds()).unwrap();
             assert!(render_to_vec(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).unwrap() == want, "{what}: same pixels as a fresh upload");
         }
@@ -1275,6 +1348,30 @@ use photocraft_doc::{
     Bevel, BevelStyle, BevelTechnique, Contour, Effect, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique, Gradient, Pattern, Satin, Shadow, StrokeFx,
     StrokePosition,
 };
+
+/// #14983: the Size 1 Satin transition agrees with the CPU across whole textures and pages.
+#[test]
+fn satin_size_one_gpu_matches_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let mut doc = Document::new("Satin size 1", Size::new(400, 300), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::new("Background", LayerContent::Fill(Fill::Solid(Color::WHITE))));
+    let mut layer = Layer::raster("Orange", PixelFormat::RGBA8);
+    layer.surface_mut().unwrap().fill_rect(Rect::new(100, 75, 300, 225), &[1.0, 128.0 / 255.0, 0.0, 1.0]);
+    layer.effects.items.push(Effect::Satin(Satin {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        color: Color::BLACK,
+        angle: 90.0,
+        distance: 20.0,
+        size: 1.0,
+        contour: Contour::Linear,
+        anti_alias: true,
+        invert: false,
+    }));
+    doc.layers.push(layer);
+
+    let stats = diff_rect(&mut g, &doc, doc.bounds(), "Satin size 1").unwrap();
+    assert_eq!(stats.fx_programs, 1, "the GPU built the Satin effect map");
+}
 
 /// An anti-aliased blob (disc plus a soft-edged bar and a hole) with partially transparent parts,
 /// so effects see real edge coverage, concavities and interior alpha.
@@ -1332,23 +1429,31 @@ fn small_layers_composite_over_their_bounds() {
     check(&mut g, &big, "small layers across chunks");
 }
 
+/// One compositor is enough: at 16 x 12 the document is one page and one chunk under the whole
+/// texture limit and under [`PAGED_LIMIT`] alike, and both draw it through the same `run_cell`.
+/// The paged run this replaces reported the same `Stats`, field for field (1202 passes, 2401
+/// tiles uploaded, 1 flush, 1 chunk, 1 cell).
 #[test]
-fn many_layers_submit_inside_one_chunk() {
+fn many_layers_submit_inside_one_chunk_whole() {
     // P12: a refresh recorded every pass of a page cell into one command buffer, and with a few
     // hundred layers Metal ran out of command buffers (device lost, "pc_compose_uniforms is
     // invalid"). 1200 layers need well over 1000 passes in the document's only chunk: each is
     // masked, so it is drawn in a pass of its own rather than batched with its neighbours.
     let Some(mut g) = gpu() else { return };
-    let mut d = base_doc(64, 48);
+    // Submission count, not image area, triggers the command-buffer exhaustion.
+    // Keep all 1200 masked passes and blend modes, with a smaller pixel oracle.
+    let mut d = base_doc(16, 12);
     let modes: Vec<BlendMode> = BlendMode::layer_modes().collect();
     for (i, mode) in modes.iter().copied().cycle().take(1200).enumerate() {
-        let mut l = noise_layer("l", PixelFormat::RGBA8, Rect::from_xywh(0, 0, 64, 48), 500 + i as u32, 0.0);
+        let mut l = noise_layer("l", PixelFormat::RGBA8, Rect::from_xywh(0, 0, 16, 12), 500 + i as u32, 0.0);
         l.blend = mode;
         l.opacity = 0.9;
-        l.mask = Some(mask(Rect::from_xywh(0, 0, 64, 48), 3000 + i as u32, 1.0));
+        l.mask = Some(mask(Rect::from_xywh(0, 0, 16, 12), 3000 + i as u32, 1.0));
         d.layers.push(l);
     }
-    let stats = diff_rect(&mut g, &d, d.bounds(), "1200 layers").unwrap_or_else(|e| panic!("{e}"));
+    let cpu = photocraft_compose::render(&d, d.bounds());
+    let (out, stats) = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).unwrap();
+    assert!(worst_diff(&cpu.px, &out).0 <= TOL, "1200 layers");
     assert_eq!(stats.layers_batched, 0, "{stats:?}");
     assert_eq!(stats.chunks, 1);
     assert!(stats.flushes > 0, "{stats:?}");
@@ -1561,6 +1666,11 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
     ds_global.use_global_light = true;
     let mut og_contour = glow(FxPaint::Color(Color::rgb(1.0, 0.9, 0.2)), GlowTechnique::Softer, 9.0, 0.0, GlowSource::Edge);
     og_contour.contour = contour();
+    // #11361: a flat "always 100 %" contour paints a solid band up to the glow's reach on both
+    // renderers, not the whole effect rectangle.
+    let flat = Contour::Custom { name: "flat".into(), points: vec![Cp { input: 0.0, output: 1.0 }, Cp { input: 1.0, output: 1.0 }], corners: vec![] };
+    let og_flat_precise = Glow { contour: flat.clone(), ..glow(FxPaint::Color(Color::rgb(0.2, 0.9, 1.0)), GlowTechnique::Precise, 4.0, 0.0, GlowSource::Edge) };
+    let og_flat_softer = Glow { contour: flat, ..glow(FxPaint::Color(Color::rgb(0.2, 0.9, 1.0)), GlowTechnique::Softer, 10.0, 0.0, GlowSource::Edge) };
     let mut satin_inv = Satin {
         common: FxCommon::new(BlendMode::Multiply, 0.6),
         color: Color::rgb(0.3, 0.0, 0.4),
@@ -1593,6 +1703,10 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
         points: vec![Cp { input: 0.0, output: 1.0 }, Cp { input: 0.4, output: 0.4 }, Cp { input: 1.0, output: 0.0 }],
         corners: vec![],
     };
+    // The same contour under a high light, deep (altitude 69, 358 %): the unmapped flat shading
+    // stays the neutral, so only the slope facing away glints, on both renderers.
+    let mut bevel_gloss_high_alt = bevel_gloss_high.clone();
+    (bevel_gloss_high_alt.use_global_light, bevel_gloss_high_alt.angle, bevel_gloss_high_alt.altitude, bevel_gloss_high_alt.depth) = (false, 146.0, 69.0, 3.58);
     vec![
         ("drop shadow", vec![Effect::DropShadow(shadow(BlendMode::Multiply, 0.75, 120.0, 6.0, 8.0, 0.0))]),
         ("drop shadow spread contour", vec![Effect::DropShadow(ds_contour)]),
@@ -1602,6 +1716,8 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
         ("inner shadow choke", vec![Effect::InnerShadow(shadow(BlendMode::Normal, 0.9, 300.0, 3.0, 7.0, 0.4))]),
         ("outer glow softer", vec![Effect::OuterGlow(glow(FxPaint::Color(Color::rgb(1.0, 0.9, 0.2)), GlowTechnique::Softer, 10.0, 0.3, GlowSource::Edge))]),
         ("outer glow contour", vec![Effect::OuterGlow(og_contour)]),
+        ("outer glow flat contour precise", vec![Effect::OuterGlow(og_flat_precise)]),
+        ("outer glow flat contour softer", vec![Effect::OuterGlow(og_flat_softer)]),
         ("outer glow precise gradient", vec![Effect::OuterGlow(glow(FxPaint::Gradient(gradient()), GlowTechnique::Precise, 8.0, 0.25, GlowSource::Edge))]),
         (
             "outer glow softer gradient",
@@ -1658,7 +1774,7 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
             vec![Effect::BevelEmboss(Bevel { technique: BevelTechnique::ChiselHard, ..bevel(BevelStyle::PillowEmboss, false, 7.0, 0.0) })],
         ),
         ("bevel emboss smooth wide", vec![Effect::BevelEmboss(bevel(BevelStyle::Emboss, true, 21.0, 0.0))]),
-        ("bevel stroke emboss", vec![Effect::BevelEmboss(bevel(BevelStyle::StrokeEmboss, true, 6.0, 0.0))]),
+        // Stroke Emboss is composited on the CPU (`plan::tests::stroke_emboss_defers_to_the_cpu`, #8639).
         (
             "bevel texture",
             vec![Effect::BevelEmboss(Bevel {
@@ -1683,6 +1799,7 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
         ),
         ("bevel contour own light", vec![Effect::BevelEmboss(bevel_contour)]),
         ("bevel gloss starting high", vec![Effect::BevelEmboss(bevel_gloss_high)]),
+        ("bevel gloss starting high, high light", vec![Effect::BevelEmboss(bevel_gloss_high_alt)]),
         ("satin", vec![Effect::Satin(satin)]),
         ("satin inverted contour", vec![Effect::Satin(satin_inv)]),
         ("stroke outside colour", vec![Effect::Stroke(stroke(4.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(0.95, 0.85, 0.1))))]),
@@ -1787,8 +1904,19 @@ fn fx_check(g: &mut Gpu, doc: &Document, what: &str) -> photocraft_gpu::Stats {
 fn layer_effects_every_kind() {
     let Some(mut g) = gpu() else { return };
     let mut failures = Vec::new();
+    // On the GPU a 16-bit document differs only in the layer upload
+    // (`convert::rgb_gray16_to_f16`) and in what that input does to Dissolve's threshold and to
+    // pattern pixels: 16 bits run every Dissolve and pattern case, and the full stack (every kind
+    // at once) for the rest. Every case runs at 8 bits.
+    let depth_sensitive = |fx: &[Effect]| {
+        let text = format!("{fx:?}");
+        text.contains("Dissolve") || text.contains("Pattern")
+    };
     for depth in [SampleType::U8, SampleType::U16] {
         for (name, fx) in effect_cases() {
+            if depth == SampleType::U16 && name != "full stack" && !depth_sensitive(&fx) {
+                continue;
+            }
             let mut d = fx_doc(96, 80, depth);
             d.patterns.push(checker_pattern());
             let mut l = blob("fx", d.pixel_format(), 46.0, 40.0, 22.0, [0.9, 0.4, 0.2]);
@@ -1797,6 +1925,55 @@ fn layer_effects_every_kind() {
             if let Err(e) = fx_diff(&mut g, &d, &format!("{name} {depth:?}")) {
                 failures.push(e);
             }
+        }
+    }
+    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+}
+
+/// A Normal inside or center stroke replaces the layer beneath it instead of blending with it
+/// (#6513): opaque red under a 50 % green stroke ends as green at 50 % alpha, on the GPU as on
+/// the CPU (`effects.rs`: `layer * (1 - coverage) + stroke * opacity * coverage`).
+#[test]
+fn semi_transparent_normal_stroke_knocks_out_the_layer_beneath_it() {
+    let Some(mut g) = gpu() else { return };
+    let mut failures = Vec::new();
+    for position in [StrokePosition::Inside, StrokePosition::Center] {
+        for (opacity, paint) in
+            [(0.5, FxPaint::Color(Color::rgb(0.0, 1.0, 0.0))), (0.5, FxPaint::Gradient(gradient())), (1.0, FxPaint::Color(Color::rgb(0.0, 1.0, 0.0)))]
+        {
+            let mut d = Document::new("fx", Size::new(48, 48), ColorMode::Rgb, SampleType::U8);
+            let mut l = Layer::raster("red", d.pixel_format());
+            l.surface_mut().unwrap().fill_rect(Rect::new(12, 12, 36, 36), &[1.0, 0.0, 0.0, 1.0]);
+            let mut st = stroke(4.0, position, paint);
+            st.common.opacity = opacity;
+            l.effects.items = vec![Effect::Stroke(st)];
+            d.layers.push(l);
+            let what = format!("{position:?} stroke at {opacity}");
+            // The CPU reference itself: the edge pixel is the stroke colour at the stroke's alpha.
+            let cpu = photocraft_compose::render(&d, d.bounds());
+            if matches!(d.layers[0].effects.items.first(), Some(Effect::Stroke(StrokeFx { paint: FxPaint::Color(_), .. }))) && opacity < 1.0 {
+                let px = cpu.px[24 * 48 + 12];
+                if (px[1] - 1.0).abs() > 0.01 || px[0] > 0.01 || (px[3] - 0.5).abs() > 0.01 {
+                    failures.push(format!("{what}: CPU edge pixel {px:?}, want [0, 1, 0, 0.5]"));
+                }
+            }
+            if let Err(e) = fx_diff(&mut g, &d, &what) {
+                failures.push(e);
+            }
+        }
+    }
+    // Lab documents replace the layer the same way (no CIELAB mix).
+    for position in [StrokePosition::Inside, StrokePosition::Center] {
+        let mut d = Document::new("lab", Size::new(48, 40), ColorMode::Lab, SampleType::U16);
+        let fmt = d.pixel_format();
+        d.layers.push(noise_layer("bg", fmt, Rect::new(0, 0, 48, 40), 81, 0.7));
+        let mut fx = blob("fx", fmt, 24.0, 20.0, 12.0, [0.7, 0.3, 0.2]);
+        let mut st = stroke(4.0, position, FxPaint::Color(Color::rgb(0.1, 0.8, 0.3)));
+        st.common.opacity = 0.5;
+        fx.effects.items = vec![Effect::Stroke(st)];
+        d.layers.push(fx);
+        if let Err(e) = fx_diff(&mut g, &d, &format!("lab {position:?} stroke at 0.5")) {
+            failures.push(e);
         }
     }
     assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
@@ -1822,6 +1999,12 @@ fn exterior_effects_merge_from_the_shape_at_any_fill() {
     ];
     for depth in [SampleType::U8, SampleType::U16] {
         for (name, fx) in &stacks {
+            // The merge (`effect_exterior`, `fs_fxmerge`) has no depth branch on the GPU or the
+            // CPU: depth only changes how the layer is uploaded (`convert::rgb_gray16_to_f16`). The
+            // stack with both effects covers that at 16 bits; every stack runs at 8 bits.
+            if depth == SampleType::U16 && *name != "shadow and glow" {
+                continue;
+            }
             for (opacity, fill, blend) in [
                 (1.0, 1.0, BlendMode::Normal),
                 (0.8, 0.6, BlendMode::Normal),
@@ -2122,6 +2305,55 @@ fn stroke_effects_on_filled_and_stroked_shapes() {
     }
 }
 
+/// Whole-level gray rounds half down at Blend If cutoffs; fractional gray retains its precision.
+#[test]
+fn blend_if_gray_rounding_at_whole_levels() {
+    use photocraft_doc::BlendRange;
+    let Some(mut g) = gpu() else { return };
+    // Exact .51, half-down ties, and nearby values from the CPU gray-rounding oracle.
+    for (rgb, gray) in [
+        ([29u8, 141, 42], 97u8),
+        ([65, 0, 0], 19),
+        ([66, 0, 0], 20),
+        ([0, 0, 250], 27),
+        ([0, 0, 251], 28),
+        ([123, 126, 151], 128),
+        ([120, 129, 149], 128),
+        ([121, 129, 149], 129),
+    ] {
+        let c = rgb.map(|v| f32::from(v) / 255.0);
+        for side in 0..2 {
+            for cut in [gray, gray + 1] {
+                let color = [c[0], c[1], c[2], 1.0];
+                let other = [1.0, 0.0, 1.0, 1.0];
+                let pixels = if side == 0 { [other, color] } else { [color, other] };
+                let mut d = Document::new("gray rounding", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+                for px in pixels {
+                    let mut l = Layer::raster("pixel", PixelFormat::RGBA8);
+                    l.surface_mut().unwrap().write_region(d.bounds(), &px);
+                    d.layers.push(l);
+                }
+                let mut ranges = [BlendRange::FULL; 2];
+                ranges[side] = BlendRange { black: [cut, cut], white: [255, 255] };
+                d.layers[1].blend_if.set(0, ranges);
+                let expected = pixels[usize::from(cut == gray)];
+                assert_eq!(photocraft_compose::render(&d, d.bounds()).px[0], expected);
+                check(&mut g, &d, &format!("gray {rgb:?}, side {side}, black {cut}"));
+            }
+        }
+    }
+
+    // Deeper colors between whole levels retain fractional gray: 115.3875, not 115.
+    let mut d = Document::new("fractional gray", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+    for px in [[0.25, 0.5, 0.75, 1.0], [1.0; 4]] {
+        let mut l = Layer::raster("pixel", PixelFormat::RGBA32F);
+        l.surface_mut().unwrap().write_region(d.bounds(), &px);
+        d.layers.push(l);
+    }
+    d.layers[1].blend_if.set(0, [BlendRange::FULL, BlendRange { black: [115, 116], white: [255, 255] }]);
+    check(&mut g, &d, "fractional gray");
+}
+
 /// Blend If on the GPU matches `compose::apply_blend_if` (#4395): this-layer and underlying
 /// ranges, hard and split points, per channel, on raster, masked, adjustment and clipped layers,
 /// with channel restrictions, and in grayscale. Hard points are compared on 8-bit documents only:
@@ -2175,6 +2407,8 @@ fn blend_if() {
             // An adjustment judged by its result, and a clipped layer.
             let mut adj = Layer::new("inv", LayerContent::Adjustment(Adjustment::Invert));
             adj.blend_if.set(e, pair);
+            // Judged by its result before Opacity (#9542).
+            adj.opacity = 0.4;
             d.layers[1] = l.clone();
             d.layers[1].blend_if = Default::default();
             d.layers.push(adj);
@@ -2192,6 +2426,25 @@ fn blend_if() {
     l.blend_if.set(1, [r(60, 120, 255, 255), r(0, 0, 140, 200)]);
     d.layers.push(l);
     check(&mut g, &d, "gray blend if");
+}
+
+/// A Pass Through group with Blend If renders isolated on the GPU as on the CPU (#9554): an
+/// adjustment inside it leaves the layers beneath alone.
+#[test]
+fn pass_through_group_with_blend_if_is_isolated() {
+    use photocraft_doc::BlendRange;
+    let Some(mut g) = gpu() else { return };
+    for gated in [true, false] {
+        let mut d = base_doc(64, 48);
+        d.layers[0] = noise_layer("bg", PixelFormat::RGBA8, Rect::from_xywh(0, 0, 64, 48), 5, 1.0);
+        let mut grp = Layer::group("group", vec![Layer::new("inv", LayerContent::Adjustment(Adjustment::Invert))]);
+        grp.blend = BlendMode::PassThrough;
+        if gated {
+            grp.blend_if.set(1, [BlendRange::FULL, BlendRange { black: [0, 0], white: [110, 110] }]);
+        }
+        d.layers.push(grp);
+        check(&mut g, &d, &format!("pass-through group, Blend If {gated}"));
+    }
 }
 
 #[test]
@@ -2609,6 +2862,27 @@ fn closed_documents_release_their_pattern_textures() {
     check(&mut g, &a, "the pattern is uploaded again after being forgotten");
 }
 
+/// A pattern whose RGBA32F texture would pass the per-pattern cap (Define Pattern accepts 8-bit
+/// ones up to 8000 x 8000) is declined by the GPU path and painted by the CPU compositor, which
+/// holds a large 8-bit pattern at a quarter of the texture's size.
+#[test]
+fn a_pattern_too_large_for_a_gpu_texture_falls_back_to_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let mut d = Document::new("big pattern", Size::new(8, 6), ColorMode::Rgb, SampleType::U8);
+    // 100 MB as RGBA8, 400 MB as an RGBA32F texture.
+    let surface = photocraft_raster::Surface::with_default(PixelFormat::RGBA8, &[1.0, 0.0, 0.0, 1.0]);
+    let pat = Pattern { id: "big".into(), name: "big".into(), width: 5000, height: 5000, surface };
+    assert!(pat.is_paintable());
+    d.layers.push(Layer::new(
+        "pattern",
+        LayerContent::Fill(Fill::Pattern { name: pat.name.clone(), id: pat.id.clone(), scale: 1.0, angle: 0.0, link: true, phase: (0.0, 0.0) }),
+    ));
+    d.patterns.push(pat);
+    assert!(render_to_vec(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).is_err(), "the GPU path declines it");
+    assert_eq!(g.comp.pattern_cache_bytes(), 0, "nothing was uploaded");
+    assert!(photocraft_compose::flatten(&d).px.iter().all(|p| *p == [1.0, 0.0, 0.0, 1.0]), "the CPU compositor paints it");
+}
+
 /// #4971: pattern textures are bounded while their documents stay open, by a byte budget and
 /// by age. What the current frame paints with is never dropped.
 #[test]
@@ -2688,7 +2962,7 @@ fn pattern_cache_tracks_source_format_and_cow_tiles() {
 fn pattern_fill_layers() {
     let Some(mut g) = gpu() else { return };
     let pat = checker_pattern();
-    for (link, scale, angle, masked) in [(true, 1.0, 0.0, false), (false, 0.7, 25.0, true), (true, 1.6, -40.0, false)] {
+    for (link, scale, angle, masked) in [(true, 1.0, 0.0, false), (false, 0.7, 25.0, true), (true, 1.6, -40.0, false), (true, 0.3, 10.0, false)] {
         let mut d = base_doc(70, 50);
         d.patterns.push(pat.clone());
         let fill = Fill::Pattern { name: pat.name.clone(), id: pat.id.clone(), scale, angle, link, phase: (3.0, -2.0) };
@@ -2771,7 +3045,7 @@ fn lab_documents_mix_in_lab() {
     a.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 2, 1), &photocraft_raster::from_rgba(&fmt, [0.0, 0.0, 1.0, 1.0]));
     let mut b = Layer::raster("b", fmt);
     b.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 2, 1), &photocraft_raster::from_rgba(&fmt, [1.0, 1.0, 0.0, 0.5]));
-    d.layers = vec![a, b];
+    d.layers = vec![a, b].into();
     let p = photocraft_compose::flatten(&d).px[0];
     assert!((p[0] - 0.5).abs() > 0.05 || (p[2] - 0.5).abs() > 0.05, "{p:?}");
 }
@@ -2813,15 +3087,16 @@ fn rgba16f_fallback_path_renders() {
 
 #[test]
 fn unbuildable_pipelines_are_an_error_not_a_panic() {
-    // The app falls back to the CPU compositor on Err; a panic here would crash it (as FXC once
-    // did on D3D12). A depth format can't be a colour target, so its pipelines fail to build.
+    // The app builds every pipeline up front and falls back to the CPU compositor on Err; a panic
+    // here would crash it (as FXC once did on D3D12). A depth format can't be a colour target, so
+    // its pipelines fail to build.
     let Some((adapter, device, _, _lock)) = any_device() else { return };
-    let e = Compositor::try_new_with_format(&device, wgpu::TextureFormat::Depth32Float).err().expect("depth target must fail");
+    let e = Compositor::try_new_with_format_threads(&device, wgpu::TextureFormat::Depth32Float, 4).err().expect("depth target must fail");
     assert!(e.0.contains("pipelines"), "{e}");
     // The format the app picks builds (effect maps the adapter can't render are left out, not fatal).
     let f = Compositor::preferred_acc_format(&adapter);
     if adapter.get_texture_format_features(f).allowed_usages.contains(wgpu::TextureUsages::RENDER_ATTACHMENT) {
-        assert!(Compositor::try_new_with_format(&device, f).is_ok());
+        assert!(Compositor::try_new_with_format_threads(&device, f, 4).is_ok());
     }
 }
 
@@ -2829,30 +3104,50 @@ fn unbuildable_pipelines_are_an_error_not_a_panic() {
 
 /// A document several pages wide under [`PAGED_LIMIT`]: pixel layers crossing page borders (one
 /// masked, one off-canvas), a big effect layer whose region exceeds the limit (maps built per
-/// page cell), a type layer with a shadow, an adjustment, a clipped group and a gradient fill.
+/// page cell), a type layer with a shadow across a border, an adjustment, a clipped group and a
+/// gradient fill. 1100 x 900 (5 x 4 pages) for the residency and budget tests, whose views and
+/// ratios are measured on it.
 fn big_doc() -> Document {
-    let (w, h) = (1100, 900);
+    big_doc_sized(false)
+}
+
+/// [`big_doc`] at 660 x 580, 3 x 3 pages, with every layer moved and sized to cross the same
+/// borders: the middle cell has page borders on all four sides and the four inner page corners,
+/// so it holds every border and corner case of the larger document at about 40 % of its pixels.
+fn small_big_doc() -> Document {
+    big_doc_sized(true)
+}
+
+fn big_doc_sized(small: bool) -> Document {
+    // Each geometry as (1100 x 900 value, 660 x 580 value).
+    let pick = |large: [i32; 4], reduced: [i32; 4]| {
+        let [x0, y0, x1, y1] = if small { reduced } else { large };
+        Rect::new(x0, y0, x1, y1)
+    };
+    let (w, h) = if small { (660, 580) } else { (1100, 900) };
     let mut d = fx_doc(w, h, SampleType::U8);
     // Right over the background: adjustment results round to 8 bits, which would turn sub-LSB
     // float differences of blends beneath into whole steps.
     let mut adj = Layer::new("invert", LayerContent::Adjustment(Adjustment::Invert));
     adj.opacity = 0.6;
-    adj.mask = Some(mask(Rect::new(240, 0, 800, 520), 83, 0.0));
+    adj.mask = Some(mask(pick([240, 0, 800, 520], [240, 0, 560, 520]), 83, 0.0));
     d.layers.push(adj);
-    let mut top = noise_layer("top", PixelFormat::RGBA8, Rect::new(-30, 200, 700, 820), 81, 0.0);
+    let mut top = noise_layer("top", PixelFormat::RGBA8, pick([-30, 200, 700, 820], [-30, 200, 620, 600]), 81, 0.0);
     top.blend = BlendMode::Multiply;
-    top.mask = Some(mask(Rect::new(100, 240, 600, 700), 82, 1.0));
+    top.mask = Some(mask(pick([100, 240, 600, 700], [100, 240, 500, 540]), 82, 1.0));
     d.layers.push(top);
     let stack = effect_cases().into_iter().find(|(n, _)| *n == "full stack").unwrap().1;
-    let mut big = blob("big", d.pixel_format(), 520.0, 450.0, 330.0, [0.9, 0.4, 0.2]);
+    let (bx, by, br) = if small { (330.0, 290.0, 200.0) } else { (520.0, 450.0, 330.0) };
+    let mut big = blob("big", d.pixel_format(), bx, by, br, [0.9, 0.4, 0.2]);
     big.effects.items = stack;
     big.effects.items.push(Effect::OuterGlow(glow(FxPaint::Color(Color::rgb(0.2, 1.0, 0.6)), GlowTechnique::Softer, 40.0, 0.2, GlowSource::Edge)));
     d.layers.push(big);
-    let mut text = as_text(blob("type", d.pixel_format(), 900.0, 150.0, 90.0, [0.1, 0.2, 0.9]));
+    let (tx, ty, tr) = if small { (560.0, 120.0, 60.0) } else { (900.0, 150.0, 90.0) };
+    let mut text = as_text(blob("type", d.pixel_format(), tx, ty, tr, [0.1, 0.2, 0.9]));
     text.effects.items = vec![Effect::DropShadow(shadow(BlendMode::Multiply, 0.8, 135.0, 12.0, 20.0, 0.0))];
     d.layers.push(text);
-    let a = noise_layer("ga", PixelFormat::RGBA8, Rect::new(200, 500, 1000, 880), 84, 0.6);
-    let mut c = noise_layer("gc", PixelFormat::RGBA8, Rect::new(0, 600, 1100, 700), 85, 0.0);
+    let a = noise_layer("ga", PixelFormat::RGBA8, pick([200, 500, 1000, 880], [150, 400, 620, 570]), 84, 0.6);
+    let mut c = noise_layer("gc", PixelFormat::RGBA8, pick([0, 600, 1100, 700], [0, 450, 660, 520]), 85, 0.0);
     c.clipped = true;
     c.blend = BlendMode::Screen;
     let mut grp = Layer::group("g", vec![a, c]);
@@ -2870,20 +3165,20 @@ fn big_doc() -> Document {
 fn documents_larger_than_the_texture_limit() {
     let _gamma = TEXT_GAMMA.lock().unwrap_or_else(|e| e.into_inner());
     let Some(mut g) = gpu() else { return };
-    let mut d = big_doc();
+    let mut d = small_big_doc();
     assert!(g.paged.supports(&d).is_ok());
     // Every pass sees page borders, and effect maps and blurs crossing them.
     check(&mut g, &d, "big document");
     let s = photocraft_gpu::render_to_vec_stats(&mut g.paged, &g.device, &g.queue, &d, d.bounds()).unwrap().1;
-    assert!(s.cells >= 20 && s.chunks == s.cells, "{s:?}");
-    // A viewport off the page grid covers only its cells.
-    let view = Rect::new(300, 330, 790, 610);
+    assert!(s.cells >= 9 && s.chunks == s.cells, "{s:?}");
+    // A viewport off the page grid covers only its cells (3 x 2).
+    let view = Rect::new(200, 230, 530, 430);
     diff_rect(&mut g, &d, view, "viewport").unwrap_or_else(|e| panic!("{e}"));
     let s = photocraft_gpu::render_to_vec_stats(&mut g.paged, &g.device, &g.queue, &d, view).unwrap().1;
     assert_eq!(s.cells, 6, "{s:?}");
     // A dab across a page corner on the effect layer, and an edit elsewhere.
-    d.layers[3].surface_mut().unwrap().fill_rect(Rect::new(500, 490, 530, 530), &[0.1, 0.1, 0.9, 1.0]);
-    d.layers[2].surface_mut().unwrap().fill_rect(Rect::new(250, 250, 270, 270), &[0.0, 0.0, 0.0, 0.0]);
+    d.layers[3].surface_mut().unwrap().fill_rect(Rect::new(240, 240, 270, 270), &[0.1, 0.1, 0.9, 1.0]);
+    d.layers[2].surface_mut().unwrap().fill_rect(Rect::new(500, 250, 520, 270), &[0.0, 0.0, 0.0, 0.0]);
     check(&mut g, &d, "after dabs");
     let s = photocraft_gpu::render_to_vec_stats(&mut g.paged, &g.device, &g.queue, &d, d.bounds()).unwrap().1;
     assert_eq!((s.tiles_uploaded, s.fx_shapes), (0, 0), "nothing changed since the last render: {s:?}");
@@ -2893,15 +3188,18 @@ fn documents_larger_than_the_texture_limit() {
 fn pages_are_evicted_under_the_budget() {
     let _gamma = TEXT_GAMMA.lock().unwrap_or_else(|e| e.into_inner());
     let Some(mut g) = gpu() else { return };
-    let mut d = big_doc();
+    let mut d = small_big_doc();
     check(&mut g, &d, "warm");
     let all = g.paged.resident_bytes();
     // A budget of one page: everything but the cell being drawn is evicted as the render goes.
     let page = u64::from(g.paged.page_size()).pow(2) * 4;
     g.paged.set_resident_budget(page);
-    for round in 0..3 {
-        let cpu = photocraft_compose::flatten(&d);
-        let (out, s) = photocraft_gpu::render_to_vec_stats(&mut g.paged, &g.device, &g.queue, &d, d.bounds()).unwrap();
+    // Round 0 evicts from a warm, fully resident state; round 1 brings back pages evicted with
+    // the edits made meanwhile (a third round repeated round 1).
+    for round in 0..2 {
+        let cpu = timed("eviction CPU reference", || photocraft_compose::flatten(&d));
+        let (out, s) =
+            timed("eviction GPU render/readback", || photocraft_gpu::render_to_vec_stats(&mut g.paged, &g.device, &g.queue, &d, d.bounds())).unwrap();
         let worst = worst_diff(&cpu.px, &out);
         assert!(worst.0 <= TOL, "round {round}: max diff {:.2}/255 at {}", worst.0 * 255.0, worst.1);
         assert!(s.evicted > 0, "round {round}: {s:?}");
@@ -3003,7 +3301,7 @@ fn the_focused_view_stays_resident_after_a_full_refresh() {
     let _gamma = TEXT_GAMMA.lock().unwrap_or_else(|e| e.into_inner());
     let Some(g) = gpu() else { return };
     let d = big_doc();
-    let mut comp = Compositor::try_new_with_format(&g.device, wgpu::TextureFormat::Rgba32Float).unwrap();
+    let mut comp = g.comp.sibling();
     // Exercise input-page residency itself: prefix hits can legitimately skip those pages.
     comp.set_composite_cache_budget(0);
     comp.set_texture_limit(PAGED_LIMIT);
@@ -3022,7 +3320,7 @@ fn the_focused_view_stays_resident_after_a_full_refresh() {
         assert!(s.evicted > 0, "{s:?}");
         let (out, s) = photocraft_gpu::render_to_vec_stats(&mut comp, &g.device, &g.queue, &d, view).unwrap();
         assert_eq!(s.tiles_uploaded, 0, "{s:?}");
-        let cpu = photocraft_compose::render(&d, view);
+        let cpu = timed("focused-view CPU reference", || photocraft_compose::render(&d, view));
         assert!(worst_diff(&cpu.px, &out).0 <= TOL);
     }
 }
@@ -3032,7 +3330,7 @@ fn layer_pages_that_just_miss_borrow_the_effect_map_share() {
     let _gamma = TEXT_GAMMA.lock().unwrap_or_else(|e| e.into_inner());
     let Some(g) = gpu() else { return };
     let d = big_doc();
-    let mut comp = Compositor::try_new_with_format(&g.device, wgpu::TextureFormat::Rgba32Float).unwrap();
+    let mut comp = g.comp.sibling();
     comp.set_texture_limit(PAGED_LIMIT);
     let need = comp.working_set(&d, d.bounds());
     // Pages get three quarters of the budget and effect maps an eighth: at 5/4 of the need the
@@ -3083,6 +3381,33 @@ fn pass_through_clipping_base_with_an_adjustment() {
     clip.clipped = true;
     d.layers.push(clip);
     check(&mut g, &d, "pass-through clipping base with an adjustment");
+}
+
+/// Dissolve's adjustment/effect decisions use document coordinates, even in offset regions
+/// and in the paged compositor. The clipped path comes from #4992.
+#[test]
+fn dissolve_adjustments_and_effects_match_cpu_in_offset_regions() {
+    let Some(mut g) = gpu() else { return };
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for effects in [false, true] {
+            let mut d = Document::new("Dissolve", Size::new(300, 280), ColorMode::Rgb, depth);
+            d.layers.push(noise_layer("base", d.pixel_format(), Rect::new(0, 0, 300, 280), 19, 0.4));
+            let mut layer = if effects {
+                let mut l = noise_layer("effect", d.pixel_format(), Rect::new(-8, 13, 290, 270), 27, 0.6);
+                l.effects.items = vec![Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 0.7), color: Color::rgb(0.2, 0.8, 0.4) }];
+                l
+            } else {
+                Layer::new("adjustment", LayerContent::Adjustment(Adjustment::Invert))
+            };
+            layer.blend = BlendMode::Dissolve;
+            layer.opacity = 0.37;
+            layer.mask = Some(mask(Rect::new(11, 7, 287, 265), 43, 0.0));
+            d.layers.push(layer);
+            let label = format!("Dissolve effects={effects} {depth:?}");
+            fx_check(&mut g, &d, &label);
+            diff_rect(&mut g, &d, Rect::new(17, 23, 281, 269), &label).unwrap();
+        }
+    }
 }
 
 /// Transparency Shapes Layer off changes the special eight's blend (the layer's alpha blends as
@@ -3192,4 +3517,77 @@ fn dissolve_clipped_adjustment_matches_cpu() {
         check(&mut g, &d, &format!("clipped Dissolve adjustment {fmt:?}"));
         diff_rect(&mut g, &d, Rect::new(250, 1, 270, 20), "clipped adjustment offset region").unwrap_or_else(|e| panic!("{e}"));
     }
+}
+
+/// Integration of #9509 and #9512: coverage endpoints, Fill, masks and clipping share the CPU oracle.
+#[test]
+fn integration_adjustment_fill_opacity_masks_and_hdr_match_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for clipped in [false, true] {
+        for mode in [BlendMode::Normal, BlendMode::ColorDodge, BlendMode::LinearBurn] {
+            for fill in [0.0, 0.5, 1.0] {
+                for opacity in [0.5, 1.0] {
+                    for coverage in [0.5, 1.0] {
+                        let mut d = Document::new("combined adjustment", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+                        let mut base = Layer::raster("base", PixelFormat::RGBA32F);
+                        base.surface_mut().unwrap().write_pixel(0, 0, &[0.25, 0.5, 0.75, 1.0]);
+                        let look = Adjustment::ColorLookup {
+                            name: "half".into(),
+                            lut: Some(std::sync::Arc::new(vec![0.5; 24])),
+                            size: 2,
+                            tetrahedral: false,
+                            dither: false,
+                            source: None,
+                        };
+                        let mut layer = Layer::new("adjust", LayerContent::Adjustment(look));
+                        layer.blend = mode;
+                        layer.clipped = clipped;
+                        layer.fill_opacity = fill;
+                        layer.opacity = opacity;
+                        let mut mask = LayerMask::reveal_all();
+                        mask.surface = photocraft_raster::Surface::with_default(
+                            PixelFormat { mode: ColorMode::Grayscale, sample: SampleType::F32, alpha: false },
+                            &[coverage],
+                        );
+                        layer.mask = Some(mask);
+                        d.layers = vec![base, layer].into();
+                        check(&mut g, &d, &format!("combined {mode:?} fill={fill} opacity={opacity} mask={coverage} clipped={clipped}"));
+                    }
+                }
+            }
+        }
+    }
+    // The existing GPU harness requires float32 accumulation. The CPU regression separately
+    // covers 1e8 inputs, beyond the range of half-float source textures on some adapters.
+    let mut d = Document::new("HDR full coverage", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+    let mut base = Layer::raster("HDR", PixelFormat::RGBA32F);
+    base.surface_mut().unwrap().write_pixel(0, 0, &[1.0e4, 1.0e4, 1.0e4, 1.0]);
+    let look = Adjustment::ColorLookup {
+        name: "half".into(),
+        lut: Some(std::sync::Arc::new(vec![0.5; 24])),
+        size: 2,
+        tetrahedral: false,
+        dither: false,
+        source: None,
+    };
+    d.layers = vec![base, Layer::new("lookup", LayerContent::Adjustment(look))].into();
+    check(&mut g, &d, "HDR full coverage with bounded result");
+}
+
+/// Siblings share only immutable GPU objects, not resident pages or document caches.
+#[test]
+fn sibling_compositors_have_independent_residency_and_configuration() {
+    let Some(mut g) = gpu() else { return };
+    let d = base_doc(300, 300);
+    let mut sibling = g.comp.sibling();
+    assert_eq!(sibling.resident_bytes(), 0);
+    sibling.set_texture_limit(PAGED_LIMIT);
+    sibling.set_resident_budget(0);
+    let (out, _) = photocraft_gpu::render_to_vec_stats(&mut sibling, &g.device, &g.queue, &d, d.bounds()).unwrap();
+    assert!(worst_diff(&photocraft_compose::render(&d, d.bounds()).px, &out).0 <= TOL);
+    assert_eq!(g.comp.resident_bytes(), 0, "the original has not rendered");
+    let (out, _) = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).unwrap();
+    assert!(worst_diff(&photocraft_compose::render(&d, d.bounds()).px, &out).0 <= TOL);
+    assert!(g.comp.resident_bytes() > 0);
+    assert_ne!(g.comp.resident_budget(), sibling.resident_budget());
 }

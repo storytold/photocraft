@@ -87,7 +87,7 @@ pub struct Developed {
     pub warnings: Vec<String>,
 }
 
-/// Linearization + black/white scaling for one sample (pre white balance), 0..1.
+/// Linearization + black/white scaling for one sample (pre white balance), without clipping.
 pub(crate) struct Scale<'a> {
     s: &'a Sensor,
     lin: Option<&'a [u16]>,
@@ -102,19 +102,107 @@ impl<'a> Scale<'a> {
     #[inline]
     pub(crate) fn value(&self, x: usize, y: usize, sample: usize) -> f32 {
         let s = self.s;
-        let raw = s.data[(y * s.width + x) * s.samples + sample];
-        let v = match self.lin {
-            Some(l) => f32::from(l.get(usize::from(raw)).or_else(|| l.last()).copied().unwrap_or(raw)),
-            None => f32::from(raw),
+        let index = (y * s.width + x) * s.samples + sample;
+        let v = if let Some(samples) = &s.float_data {
+            samples[index]
+        } else {
+            let raw = s.data[index];
+            match self.lin {
+                Some(l) => f32::from(l.get(usize::from(raw)).or_else(|| l.last()).copied().unwrap_or(raw)),
+                None => f32::from(raw),
+            }
         };
         let black = s.black.at(x.saturating_sub(s.active.x), y.saturating_sub(s.active.y), sample, s.samples);
         let white = s.white[sample.min(2)];
         let range = white - black;
-        if range.is_nan() || range < 1.0 {
+        // Floating-point sensor levels use source units: a valid white-minus-black
+        // range may be smaller than one. Only invalid or nonpositive ranges fail.
+        if !range.is_finite() || range <= 0.0 {
             return 0.0;
         }
         let n = (v - black) / range;
-        if n.is_finite() { n } else { 0.0 }
+        let mut n = if n.is_finite() { n } else { 0.0 };
+        let (ax, ay) = (x.saturating_sub(s.active.x), y.saturating_sub(s.active.y));
+        for p in s.polynomials.iter().filter(|p| p.covers(ax, ay, sample)) {
+            n = p.eval(f64::from(n)) as f32;
+        }
+        n
+    }
+}
+
+/// Row `y` of a LinearRaw (3-sample or monochrome) frame from column `x0` on, `row.len() / 3`
+/// pixels: [`Scale::value`] times the white balance, clipped. Monochrome data fills all three
+/// channels with its one sample.
+///
+/// The black level of a row depends on the column only through the repeat pattern, so (when
+/// there are no per-column deltas) it is worked out once per row and phase instead of per sample.
+fn fill_linear_row(sc: &Scale, mult: &[f32; 3], x0: usize, y: usize, row: &mut [f32]) {
+    let s = sc.s;
+    let spp = s.samples;
+    let w = row.len() / 3;
+    if s.float_data.is_some() {
+        for (i, px) in row.as_chunks_mut::<3>().0.iter_mut().enumerate() {
+            for k in 0..3 {
+                px[k] = (sc.value(x0 + i, y, k.min(spp.saturating_sub(1))) * mult[k]).clamp(0.0, 1.0);
+            }
+        }
+        return;
+    }
+    let bl = &s.black;
+    let cols = bl.cols.max(1);
+    if !bl.delta_h.is_empty() || !bl.delta_v.is_empty() || x0 < s.active.x || cols > 16 || !matches!(spp, 1 | 3) || !s.polynomials.is_empty() {
+        for (i, px) in row.as_chunks_mut::<3>().0.iter_mut().enumerate() {
+            for k in 0..3 {
+                px[k] = (sc.value(x0 + i, y, k.min(spp.saturating_sub(1))) * mult[k]).clamp(0.0, 1.0);
+            }
+        }
+        return;
+    }
+    // Black level and range per column phase and channel.
+    let ay = y.saturating_sub(s.active.y);
+    let table: Vec<[(f32, f32); 3]> = (0..cols)
+        .map(|p| {
+            [0, 1, 2].map(|k| {
+                let sample = k.min(spp - 1);
+                let black = bl.at(p, ay, sample, spp);
+                (black, s.white[sample.min(2)] - black)
+            })
+        })
+        .collect();
+    let src = &s.data[(y * s.width + x0) * spp..(y * s.width + x0 + w) * spp];
+    let phase = (x0 - s.active.x) % cols;
+    let lin = |raw: u16| match sc.lin {
+        Some(l) => f32::from(l.get(usize::from(raw)).or_else(|| l.last()).copied().unwrap_or(raw)),
+        None => f32::from(raw),
+    };
+    match spp {
+        3 => fill_samples(row, src.as_chunks::<3>().0.iter().copied(), &table, phase, mult, lin),
+        _ => fill_samples(row, src.iter().map(|r| [*r; 3]), &table, phase, mult, lin),
+    }
+}
+
+/// The pixels of [`fill_linear_row`]: `raw` gives each pixel's three raw values (the one sample
+/// of monochrome data three times), `table` the black level and range per column phase.
+#[inline(always)]
+fn fill_samples(row: &mut [f32], raw: impl Iterator<Item = [u16; 3]>, table: &[[(f32, f32); 3]], phase: usize, mult: &[f32; 3], lin: impl Fn(u16) -> f32) {
+    let mut phase = phase;
+    for (px, raw) in row.as_chunks_mut::<3>().0.iter_mut().zip(raw) {
+        let t = &table[phase];
+        phase = if phase + 1 == table.len() { 0 } else { phase + 1 };
+        for k in 0..3 {
+            let (black, range) = t[k];
+            // One comparison keeps this per-sample loop as cheap as before. It gives the same
+            // result as the `!range.is_finite() || range <= 0.0` test of `Scale::value`: NaN and
+            // nonpositive ranges fail it, and a +inf range divides a finite numerator to 0 (or to
+            // NaN for an infinite one, which the finiteness check maps to 0).
+            let n = if range > 0.0 {
+                let n = (lin(raw[k]) - black) / range;
+                if n.is_finite() { n } else { 0.0 }
+            } else {
+                0.0
+            };
+            px[k] = (n * mult[k]).clamp(0.0, 1.0);
+        }
     }
 }
 
@@ -205,7 +293,7 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
     if c.is_empty()
         || c.x.checked_add(c.width).is_none_or(|x| x > s.width)
         || c.y.checked_add(c.height).is_none_or(|y| y > s.height)
-        || samples.is_none_or(|n| s.data.len() < n)
+        || samples.is_none_or(|n| s.sample_count() < n)
     {
         return Err(RawError::malformed("crop lies outside the sensor data"));
     }
@@ -293,13 +381,7 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
     let linear_rows = |y0: usize, chunk: &mut [f32]| {
         for (r, row) in chunk.chunks_exact_mut(w * 3).enumerate() {
             let y = c.y + y0 + r;
-            for i in 0..w {
-                for k in 0..3 {
-                    // Monochrome: the one sample in all three channels.
-                    let sample = k.min(s.samples.saturating_sub(1));
-                    row[i * 3 + k] = (sc.value(c.x + i, y, sample) * mult[k]).clamp(0.0, 1.0);
-                }
-            }
+            fill_linear_row(&sc, &mult, c.x, y, row);
             for k in 0..s.samples.min(3) {
                 if let Some(g) = gain_row(s, y, c.x, w, k) {
                     for (i, g) in g.into_iter().enumerate() {
@@ -323,8 +405,16 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
             let period = if cfa.width % 2 == 0 { cfa.width.max(2) } else { cfa.width * 2 };
             let fill_row = |iy: usize, row: &mut [f32]| {
                 let y = c.y + iy;
-                if periodic {
+                let fill_scalar = |row: &mut [f32]| {
+                    for (i, v) in row.iter_mut().enumerate() {
+                        let x = c.x + i;
+                        let ch = usize::from(cfa.color(x, y)).min(2);
+                        *v = (sc.value(x, y, 0) * mult[ch]).clamp(0.0, 1.0);
+                    }
+                };
+                if periodic && s.float_data.is_none() && s.polynomials.is_empty() {
                     // Per column of the period: black and the combined scale × white-balance gain.
+                    let mut finite_gains = true;
                     let k: Vec<(f32, f32)> = (0..period)
                         .map(|p| {
                             let x = c.x + p;
@@ -332,33 +422,41 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                             let range = s.white[0] - black;
                             // A non-finite black (a BlackLevel DOUBLE beyond f32) gives 0, as
                             // `Scale::value` does, instead of (raw - inf) * 0 = NaN.
-                            if !(range >= 1.0 && black.is_finite()) {
+                            if !(range.is_finite() && range > 0.0 && black.is_finite()) {
                                 return (0.0, 0.0);
                             }
-                            (black, mult[usize::from(cfa.color(x, y)).min(2)] / range)
+                            let gain = mult[usize::from(cfa.color(x, y)).min(2)] / range;
+                            // Scalar normalization rejects a non-finite quotient before
+                            // white balance. A finite gain alone does not prove that
+                            // every U16 numerator divided by this range stays finite.
+                            finite_gains &= gain.is_finite() && ((0.0 - black) / range).is_finite() && ((f32::from(u16::MAX) - black) / range).is_finite();
+                            (black, gain)
                         })
                         .collect();
-                    let src = &s.data[y * s.width + c.x..y * s.width + c.x + w];
-                    let ks = k.iter().cycle();
-                    match &sc.lin {
-                        None => {
-                            for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
-                                *v = ((f32::from(raw) - black) * gain).clamp(0.0, 1.0);
+                    // Tiny positive ranges can overflow either the combined gain
+                    // or scalar U16 normalization. Select the scalar row once;
+                    // keep the ordinary fast pixel loop intact.
+                    if finite_gains {
+                        let src = &s.data[y * s.width + c.x..y * s.width + c.x + w];
+                        let ks = k.iter().cycle();
+                        match &sc.lin {
+                            None => {
+                                for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
+                                    *v = ((f32::from(raw) - black) * gain).clamp(0.0, 1.0);
+                                }
+                            }
+                            Some(l) => {
+                                for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
+                                    let lin = f32::from(l.get(usize::from(raw)).or_else(|| l.last()).copied().unwrap_or(raw));
+                                    *v = ((lin - black) * gain).clamp(0.0, 1.0);
+                                }
                             }
                         }
-                        Some(l) => {
-                            for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
-                                let lin = f32::from(l.get(usize::from(raw)).or_else(|| l.last()).copied().unwrap_or(raw));
-                                *v = ((lin - black) * gain).clamp(0.0, 1.0);
-                            }
-                        }
+                    } else {
+                        fill_scalar(row);
                     }
                 } else {
-                    for (i, v) in row.iter_mut().enumerate() {
-                        let x = c.x + i;
-                        let ch = usize::from(cfa.color(x, y)).min(2);
-                        *v = (sc.value(x, y, 0) * mult[ch]).clamp(0.0, 1.0);
-                    }
+                    fill_scalar(row);
                 }
                 // Lens-shading gain maps, after the white-balance clip so clipped
                 // highlights stay neutral.
@@ -707,6 +805,10 @@ pub(crate) fn source_xy(o: u16, w: usize, h: usize, x2: usize, y2: usize) -> (us
     }
 }
 
+/// Side of the square tiles orientations 5-8, which swap rows and columns, move at a time: both
+/// sides of a tile stay in L1 instead of one of them being walked a column at a time.
+const TILE: usize = 32;
+
 /// Applies a TIFF orientation (1–8) to interleaved RGB.
 pub(crate) fn orient(src: Vec<u16>, w: usize, h: usize, o: u16) -> (Vec<u16>, usize, usize) {
     if !(2..=8).contains(&o) {
@@ -715,25 +817,44 @@ pub(crate) fn orient(src: Vec<u16>, w: usize, h: usize, o: u16) -> (Vec<u16>, us
     let swap = o >= 5;
     let (ow, oh) = if swap { (h, w) } else { (w, h) };
     let mut out = vec![0u16; src.len()];
-    let band = par::band_rows(ow);
-    par::chunks_mut(&mut out, band * ow * 3, |b, chunk| {
-        for (r, row) in chunk.chunks_exact_mut(ow * 3).enumerate() {
-            let y2 = b * band + r;
-            for x2 in 0..ow {
-                let (x, y) = match o {
-                    2 => (w - 1 - x2, y2),
-                    3 => (w - 1 - x2, h - 1 - y2),
-                    4 => (x2, h - 1 - y2),
-                    5 => (y2, x2),
-                    6 => (y2, h - 1 - x2),
-                    7 => (w - 1 - y2, h - 1 - x2),
-                    _ => (w - 1 - y2, x2),
-                };
-                let i = (y * w + x) * 3;
-                row[x2 * 3..x2 * 3 + 3].copy_from_slice(&src[i..i + 3]);
+    if swap {
+        // Output pixel (x2, y2) is source pixel `base + x2 * sx + y2 * sy` (see `source_xy`).
+        let (base, sx, sy): (isize, isize, isize) = match o {
+            5 => (0, w as isize, 1),
+            6 => (((h - 1) * w) as isize, -(w as isize), 1),
+            7 => ((h * w - 1) as isize, -(w as isize), -1),
+            _ => ((w - 1) as isize, w as isize, -1),
+        };
+        let px = src.as_chunks::<3>().0;
+        par::chunks_mut(&mut out, TILE * ow * 3, |b, chunk| {
+            let rows = chunk.len() / (ow * 3);
+            for x0 in (0..ow).step_by(TILE) {
+                let x1 = (x0 + TILE).min(ow);
+                for r in 0..rows {
+                    let y2 = (b * TILE + r) as isize;
+                    for (x2, d) in (x0..x1).zip(chunk[(r * ow + x0) * 3..(r * ow + x1) * 3].as_chunks_mut::<3>().0) {
+                        *d = px[(base + x2 as isize * sx + y2 * sy) as usize];
+                    }
+                }
             }
-        }
-    });
+        });
+    } else {
+        let band = par::band_rows(ow);
+        par::chunks_mut(&mut out, band * ow * 3, |b, chunk| {
+            for (r, row) in chunk.chunks_exact_mut(ow * 3).enumerate() {
+                let y2 = b * band + r;
+                for x2 in 0..ow {
+                    let (x, y) = match o {
+                        2 => (w - 1 - x2, y2),
+                        3 => (w - 1 - x2, h - 1 - y2),
+                        _ => (x2, h - 1 - y2),
+                    };
+                    let i = (y * w + x) * 3;
+                    row[x2 * 3..x2 * 3 + 3].copy_from_slice(&src[i..i + 3]);
+                }
+            }
+        });
+    }
     (out, ow, oh)
 }
 
@@ -756,6 +877,7 @@ mod tests {
             height: h,
             samples,
             data,
+            float_data: None,
             cfa,
             linearization: None,
             black: BlackLevels::uniform(64.0),
@@ -767,6 +889,7 @@ mod tests {
             orientation: 1,
             baseline_exposure: 0.0,
             gain_maps: Vec::new(),
+            polynomials: Vec::new(),
             tone_curve: vec![[0.18, 0.3], [1.0, 1.0]],
             black_point: 0.0,
             warnings: Vec::new(),
@@ -1001,6 +1124,64 @@ mod tests {
     }
 
     #[test]
+    fn linear_fill_gives_the_bits_of_the_per_sample_scale() {
+        // 3-sample and monochrome frames, black patterns, deltas, a table, an offset crop.
+        for samples in [1usize, 3] {
+            for (rows, cols, deltas) in [(1, 1, false), (2, 2, false), (1, 3, false), (2, 1, true), (1, 17, false), (4, 4, false)] {
+                for table in [false, true] {
+                    let (w, h) = (53, 9);
+                    let mut s = test_sensor(w, h, None, samples);
+                    s.active = crate::Rect::new(2, 1, w - 2, h - 1);
+                    s.black.rows = rows;
+                    s.black.cols = cols;
+                    s.black.values = (0..rows * cols * samples).map(|i| 40.0 + (i * 7 % 23) as f32 + 0.25 * (i % 3) as f32).collect();
+                    if deltas {
+                        s.black.delta_h = (0..w).map(|i| (i % 5) as f32).collect();
+                        s.black.delta_v = (0..h).map(|i| 0.5 * i as f32).collect();
+                    }
+                    s.white = [4000.0, 3900.5, 0.5];
+                    if table {
+                        s.linearization = Some((0..3000u32).map(|i| (i * 3 / 2) as u16).collect());
+                    }
+                    let sc = Scale::new(&s);
+                    let mult = [1.3f32, 0.9, f32::INFINITY];
+                    for x0 in [0usize, 2, 5] {
+                        let n = w - x0 - 1;
+                        for y in 0..h {
+                            let mut got = vec![0.0f32; n * 3];
+                            fill_linear_row(&sc, &mult, x0, y, &mut got);
+                            let want: Vec<f32> =
+                                (0..n * 3).map(|j| (sc.value(x0 + j / 3, y, (j % 3).min(samples - 1)) * mult[j % 3]).clamp(0.0, 1.0)).collect();
+                            assert!(
+                                got.iter().zip(&want).all(|(a, b)| a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan())),
+                                "{samples} samples, black {rows}x{cols}, table {table}, x0 {x0}, row {y}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_orientation_moves_each_pixel_to_its_source_position() {
+        // Sizes around the tile side (and 1-pixel strips), all eight orientations.
+        for (w, h) in [(1, 1), (1, 70), (70, 1), (31, 33), (32, 32), (33, 31), (65, 97), (100, 37)] {
+            let src: Vec<u16> = (0..w * h).flat_map(|i| [i as u16, (i >> 4) as u16 ^ 0x5a5a, !(i as u16)]).collect();
+            for o in 1..=8 {
+                let (out, ow, oh) = orient(src.clone(), w, h, o);
+                assert_eq!((ow, oh), if o >= 5 { (h, w) } else { (w, h) });
+                for y2 in 0..oh {
+                    for x2 in 0..ow {
+                        let (x, y) = source_xy(o, w, h, x2, y2);
+                        assert_eq!(out[(y2 * ow + x2) * 3..][..3], src[(y * w + x) * 3..][..3], "{w}x{h} orientation {o} at {x2},{y2}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn orientations() {
         // 3×2 image, pixel value = index.
         let src: Vec<u16> = (0..6).flat_map(|i| [i, i, i]).collect();
@@ -1016,5 +1197,238 @@ mod tests {
         assert_eq!(px(&orient(src.clone(), 3, 2, 8).0), vec![2, 5, 1, 4, 0, 3]);
         assert_eq!(px(&orient(src.clone(), 3, 2, 5).0), vec![0, 3, 1, 4, 2, 5]);
         assert_eq!(px(&orient(src, 3, 2, 7).0), vec![5, 2, 4, 1, 3, 0]);
+    }
+
+    mod scale_review_tests {
+        use super::*;
+
+        fn float_sensor(values: &[f32], black: f32, white: f32) -> Sensor {
+            let mut sensor = test_sensor(values.len(), 1, None, 1);
+            sensor.data.clear();
+            sensor.float_data = Some(values.to_vec());
+            sensor.black = crate::BlackLevels::uniform(black);
+            sensor.white = [white; 3];
+            sensor.tone_curve.clear();
+            sensor
+        }
+
+        #[test]
+        fn fractional_float_levels_normalize_exactly_without_early_clipping() {
+            for (black, white, values, expected) in [
+                (0., 0.5, vec![-0.25, 0., 0.125, 0.25, 0.5, 0.75], vec![-0.5, 0., 0.25, 0.5, 1., 1.5]),
+                (0.25, 0.75, vec![0., 0.25, 0.5, 0.75, 1.], vec![-0.5, 0., 0.5, 1., 1.5]),
+            ] {
+                let sensor = float_sensor(&values, black, white);
+                let scale = Scale::new(&sensor);
+                let actual: Vec<_> = (0..values.len()).map(|x| scale.value(x, 0, 0)).collect();
+                assert_eq!(actual, expected);
+                let mut row = vec![0.; values.len() * 3];
+                fill_linear_row(&scale, &[1.; 3], 0, 0, &mut row);
+                let clipped: Vec<_> = expected.iter().flat_map(|value| [value.clamp(0., 1.); 3]).collect();
+                assert_eq!(row, clipped, "clipping remains at the existing develop boundary");
+            }
+        }
+
+        #[test]
+        fn invalid_ranges_and_nonfinite_samples_keep_the_existing_zero_fallback() {
+            for (black, white) in
+                [(0., 0.), (0.5, 0.25), (0., f32::NAN), (0., f32::INFINITY), (0., f32::NEG_INFINITY), (f32::NAN, 0.5), (f32::INFINITY, f32::INFINITY)]
+            {
+                let sensor = float_sensor(&[0.25], black, white);
+                assert_eq!(Scale::new(&sensor).value(0, 0, 0), 0.);
+            }
+            let sensor = float_sensor(&[f32::NAN, f32::INFINITY, f32::NEG_INFINITY], 0., 0.5);
+            for x in 0..3 {
+                assert_eq!(Scale::new(&sensor).value(x, 0, 0), 0.);
+            }
+        }
+
+        #[test]
+        fn integer_unit_ranges_black_subtraction_and_linearization_remain_unchanged() {
+            let mut sensor = test_sensor(3, 1, None, 1);
+            sensor.data = vec![0, 1, 2];
+            sensor.black = crate::BlackLevels::uniform(0.);
+            sensor.white = [1.; 3];
+            assert_eq!((0..3).map(|x| Scale::new(&sensor).value(x, 0, 0)).collect::<Vec<_>>(), [0., 1., 2.]);
+            sensor.data = vec![64, 1024, 4000];
+            sensor.black = crate::BlackLevels::uniform(64.);
+            sensor.white = [4000.; 3];
+            assert_eq!((0..3).map(|x| Scale::new(&sensor).value(x, 0, 0)).collect::<Vec<_>>(), [0., 960. / 3936., 1.]);
+            sensor.data = vec![0, 1, 2];
+            sensor.linearization = Some(vec![0, 64, 128]);
+            sensor.black = crate::BlackLevels::uniform(0.);
+            sensor.white = [128.; 3];
+            assert_eq!((0..3).map(|x| Scale::new(&sensor).value(x, 0, 0)).collect::<Vec<_>>(), [0., 0.5, 1.]);
+        }
+
+        #[test]
+        fn fractional_integer_monochrome_rows_match_scalar_and_keep_clipping_at_the_row_boundary() {
+            let mut sensor = test_sensor(3, 1, None, 1);
+            sensor.data = vec![0, 1, 2];
+            sensor.black = crate::BlackLevels::uniform(0.75);
+            sensor.white = [1.25; 3];
+            for linearization in [None, Some(vec![0, 1, 2])] {
+                sensor.linearization = linearization;
+                let scale = Scale::new(&sensor);
+                let scalar: Vec<_> = (0..3).map(|x| scale.value(x, 0, 0)).collect();
+                assert_eq!(scalar, [-1.5, 0.5, 2.5], "scalar values remain unclipped");
+                let mut row = [0.; 9];
+                fill_linear_row(&scale, &[1.; 3], 0, 0, &mut row);
+                assert_eq!(row, [0., 0., 0., 0.5, 0.5, 0.5, 1., 1., 1.]);
+                assert_eq!(row.to_vec(), scalar.iter().flat_map(|value| [value.clamp(0., 1.); 3]).collect::<Vec<_>>());
+            }
+        }
+
+        #[test]
+        fn fractional_integer_periodic_cfa_rows_match_forced_scalar_development() {
+            let mut periodic = test_sensor(16, 12, crate::Cfa::bayer("RGGB"), 1);
+            periodic.data = (0..16 * 12).map(|i| (i % 3) as u16).collect();
+            periodic.black = crate::BlackLevels { rows: 2, cols: 2, values: vec![0.75, 1., 1., 0.75], delta_h: vec![], delta_v: vec![] };
+            periodic.white = [1.25; 3];
+            periodic.tone_curve.clear();
+            let options = DevelopOptions { white_balance: WhiteBalance::Multipliers([1.; 3]), demosaic: Demosaic::Bilinear, ..Default::default() };
+            for linearization in [None, Some(vec![0, 1, 2])] {
+                periodic.linearization = linearization;
+                let mut scalar = periodic.clone();
+                // Zero column deltas preserve every black level but select the
+                // existing Scale::value row path rather than periodic gains.
+                scalar.black.delta_h = vec![0.; scalar.width];
+                for fused in [false, true] {
+                    let expected = develop(&scalar, &options, fused).unwrap();
+                    let actual = develop(&periodic, &options, fused).unwrap();
+                    assert!(expected.rgb.iter().any(|&value| value > 0), "the independent scalar reference must contain visible pixels");
+                    assert_eq!(actual.rgb, expected.rgb, "periodic and scalar rows, fused={fused}");
+                }
+            }
+        }
+
+        #[test]
+        fn subnormal_integer_cfa_ranges_use_scalar_rows_when_periodic_gains_overflow() {
+            let tiny = f32::from_bits(1);
+            let options = DevelopOptions { white_balance: WhiteBalance::Multipliers([1.; 3]), demosaic: Demosaic::Bilinear, ..Default::default() };
+            for (black, white, raw, expected_scale) in [(0., tiny, 1u16, 0.), (-tiny, 0., 0u16, 1.)] {
+                let mut periodic = test_sensor(8, 8, crate::Cfa::bayer("RGGB"), 1);
+                periodic.data.fill(raw);
+                periodic.black = crate::BlackLevels::uniform(black);
+                periodic.white = [white; 3];
+                periodic.tone_curve.clear();
+                assert_eq!(Scale::new(&periodic).value(0, 0, 0), expected_scale);
+                let mut scalar = periodic.clone();
+                scalar.black.delta_h = vec![0.; scalar.width];
+                for fused in [false, true] {
+                    let expected = develop(&scalar, &options, fused).unwrap();
+                    let actual = develop(&periodic, &options, fused).unwrap();
+                    assert_eq!(actual.rgb, expected.rgb, "subnormal scalar normalization, raw={raw}, fused={fused}");
+                    if expected_scale == 0. {
+                        assert!(actual.rgb.iter().all(|&value| value == 0));
+                    } else {
+                        assert!(actual.rgb.iter().all(|&value| value > 0), "the valid scalar result must not be replaced by black");
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn finite_periodic_gains_preserve_scalar_sanitization_of_overflowing_u16_normalization() {
+            let options = DevelopOptions { white_balance: WhiteBalance::Multipliers([1.; 3]), demosaic: Demosaic::Bilinear, ..Default::default() };
+            for (white, raw, expected_scale) in [(1e-38f32, u16::MAX, 0f32), (4095., 2048u16, 2048. / 4095.)] {
+                assert!((1.0f32 / white).is_finite(), "this case must not rely on the existing non-finite-gain fallback");
+                let mut periodic = test_sensor(8, 8, crate::Cfa::bayer("RGGB"), 1);
+                periodic.data.fill(raw);
+                periodic.black = crate::BlackLevels::uniform(0.);
+                periodic.white = [white; 3];
+                periodic.tone_curve.clear();
+                assert_eq!(Scale::new(&periodic).value(0, 0, 0), expected_scale);
+                let mut scalar = periodic.clone();
+                // A zero column delta selects the independent scalar row without
+                // changing any level, sample, white balance or colour policy.
+                scalar.black.delta_h = vec![0.; scalar.width];
+                for fused in [false, true] {
+                    let expected = develop(&scalar, &options, fused).unwrap();
+                    let actual = develop(&periodic, &options, fused).unwrap();
+                    assert_eq!(actual.rgb, expected.rgb, "finite gain, white={white}, raw={raw}, fused={fused}");
+                    if expected_scale == 0. {
+                        assert!(actual.rgb.iter().all(|&value| value == 0), "overflowing scalar normalization must not become white");
+                    } else {
+                        assert!(actual.rgb.iter().any(|&value| value > 0), "ordinary finite normalization must retain visible pixels");
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn integer_row_paths_reject_nonfinite_and_nonpositive_ranges_like_scalar() {
+            for (black, white) in
+                [(0., 0.), (1., 0.5), (0., f32::NAN), (0., f32::INFINITY), (0., f32::NEG_INFINITY), (f32::NAN, 1.), (f32::INFINITY, f32::INFINITY)]
+            {
+                let mut sensor = test_sensor(8, 8, None, 1);
+                sensor.data.fill(1);
+                sensor.black = crate::BlackLevels::uniform(black);
+                sensor.white = [white; 3];
+                let scale = Scale::new(&sensor);
+                assert_eq!(scale.value(0, 0, 0), 0.);
+                let mut row = [1.; 24];
+                fill_linear_row(&scale, &[1.; 3], 0, 0, &mut row);
+                assert_eq!(row, [0.; 24]);
+                sensor.cfa = crate::Cfa::bayer("RGGB");
+                sensor.tone_curve.clear();
+                let options = DevelopOptions { white_balance: WhiteBalance::Multipliers([1.; 3]), demosaic: Demosaic::Bilinear, ..Default::default() };
+                let periodic = develop(&sensor, &options, false).unwrap();
+                sensor.black.delta_h = vec![0.; sensor.width];
+                let scalar = develop(&sensor, &options, false).unwrap();
+                assert_eq!(periodic.rgb, scalar.rgb);
+                assert!(periodic.rgb.iter().all(|&value| value == 0));
+            }
+        }
+
+        /// Independent TIFF/DNG strip layout: three little-endian IEEE754 binary32
+        /// monochrome samples, with explicit fractional WhiteLevel and no calibration.
+        fn fractional_white_dng() -> Vec<u8> {
+            use crate::testgen::{TiffBuilder, Val};
+            let mut file = TiffBuilder::default();
+            let pixels = file.blob([0f32, 0.25, 0.5].iter().flat_map(|value| value.to_le_bytes()).collect());
+            let image = file.ifd(vec![
+                (256, Val::Long(vec![3])),
+                (257, Val::Long(vec![1])),
+                (258, Val::Short(vec![32])),
+                (259, Val::Short(vec![1])),
+                (262, Val::Short(vec![34892])),
+                (273, Val::Blobs(vec![pixels])),
+                (277, Val::Short(vec![1])),
+                (278, Val::Long(vec![1])),
+                (279, Val::Long(vec![12])),
+                (339, Val::Short(vec![3])),
+                (50706, Val::Byte(vec![1, 4, 0, 0])),
+                (50714, Val::Double(vec![0.])),
+                (50717, Val::Double(vec![0.5])),
+            ]);
+            file.chain = vec![image];
+            file.build()
+        }
+
+        #[test]
+        fn fractional_white_float_dng_develops_black_half_gray_and_white_instead_of_all_black() {
+            let bytes = fractional_white_dng();
+            let sensor = crate::decode(&bytes, &crate::Limits::default()).unwrap();
+            assert_eq!(sensor.float_data.as_deref(), Some([0., 0.25, 0.5].as_slice()));
+            assert_eq!(sensor.white, [0.5; 3]);
+            assert!(sensor.is_monochrome());
+            let options = DevelopOptions { white_balance: WhiteBalance::Multipliers([1.; 3]), ..Default::default() };
+            let developed = crate::develop(&bytes, &options).unwrap();
+            assert_eq!((developed.width, developed.height), (3, 1));
+            assert_eq!(developed.rgb.len(), 9);
+            for (pixel, expected) in developed.rgb.as_chunks::<3>().0.iter().zip([0u16, 44590, 65535]) {
+                // Half linear gray is 0.5^(1/1.8), with at most one output code
+                // of rounding/interpolation in the existing gamma-1.8 LUT.
+                if expected == 0 || expected == u16::MAX {
+                    assert!(pixel.iter().all(|actual| *actual == expected), "{pixel:?} vs {expected}");
+                } else {
+                    assert!(pixel.iter().all(|actual| actual.abs_diff(expected) <= 1), "{pixel:?} vs {expected}");
+                }
+            }
+            let mut broken = sensor;
+            broken.float_data.as_mut().unwrap().pop();
+            assert!(matches!(develop_sensor(&broken, &options), Err(RawError::Malformed(_))), "a truncated buffer remains a data error, never silently black");
+        }
     }
 }

@@ -35,14 +35,17 @@
 //! changes asynchronously. Gradient presets, including imported `.grd` groups, are small and persist with
 //! the preferences document (`presets.gradients`).
 //!
+//! The pattern library (imported `.pat` and defined patterns, not the built-ins) lives there too:
+//! `patterns.json` plus one `.pat` file per pattern, see [`patterns`].
+//!
 //! The Actions list (`actions.json`, see [`crate::actions_cmds`]) lives in the same directory.
 //! A missing file is an empty list. A corrupt or oversized file is skipped with a warning.
 //! Headless sessions have no store, so their actions stay in memory.
 //!
-//! So do the patterns the user defined or imported (`patterns.pat`, Photoshop's own pattern file
-//! format, #9317): the whole user library in its order, rewritten when its ids, names or order
-//! change. The built-in patterns are regenerated on start and never written. Like `actions.json`,
-//! a file that fails to load is warned about and never overwritten.
+//! Patterns use `patterns.json` and lazily loaded per-pattern assets. On first startup a
+//! valid legacy `patterns.pat` is migrated by writing assets before the atomic index commit.
+//! Legacy and corrupt data are preserved; an existing index is authoritative even when corrupt.
+//! A failed migration leaves the legacy library usable and retries at the next startup.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
@@ -53,6 +56,11 @@ use photocraft_paint::{BrushPreset, BrushSettings, GrayTile, Pattern, PresetCapt
 use serde::{Deserialize, Serialize};
 
 use crate::Session;
+use crate::actions_cmds::{ActionList, ActionsFile, name_id_shortcuts};
+use craft::automation::actions::ActionsFileError;
+
+mod patterns;
+pub use patterns::{Loaded as LoadedPattern, MAX_PATTERN_BYTES, PATTERNS_FILE, PREVIEW_SIDE as PATTERN_PREVIEW_SIDE};
 
 /// Group file extension.
 pub const GROUP_EXT: &str = "pcbrushes";
@@ -73,23 +81,21 @@ pub const ACTIONS_FILE: &str = "actions.json";
 /// Largest Actions file read or written.
 pub const MAX_ACTIONS_BYTES: u64 = 16 << 20;
 /// The user's pattern library (`.pat`).
-pub const PATTERNS_FILE: &str = "patterns.pat";
+pub const LEGACY_PATTERNS_FILE: &str = "patterns.pat";
 /// Largest pattern library read or written.
 pub const MAX_PATTERNS_BYTES: u64 = 256 << 20;
 /// The whole store never grows beyond this; further groups are skipped with a warning.
 pub const MAX_STORE_BYTES: u64 = 2 << 30;
 /// Largest tip side accepted from disk.
-pub const MAX_TIP_SIDE: u32 = 16384;
+pub const MAX_TIP_SIDE: u32 = craft_pcraft_tip::tip::MAX_SIDE;
 /// Largest tip sample count accepted from disk (64 Mi samples).
-pub const MAX_TIP_SAMPLES: u64 = 1 << 26;
+pub const MAX_TIP_SAMPLES: u64 = craft_pcraft_tip::tip::MAX_SAMPLES;
 /// Most group files loaded.
 pub const MAX_GROUPS: usize = 4096;
 /// Most presets loaded from one group file.
 pub const MAX_PRESETS_PER_GROUP: usize = 50_000;
 
 const GROUP_FORMAT: &str = "photocraft-brush-group";
-const TIP_MAGIC: &[u8; 6] = b"PCTIP1";
-const TIP_HEADER: usize = 6 + 1 + 4 + 4;
 
 /// Where the store's files live. File names are relative (`name.pcbrushes`, `tips/x.pctip`).
 pub trait PresetBackend: Send {
@@ -216,7 +222,14 @@ impl PresetBackend for DirBackend {
         let path = self.path(name)?;
         let dir = path.parent().ok_or_else(|| format!("{name}: no parent directory"))?;
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        photocraft_format::atomic_write(&path, bytes).map_err(|e| format!("{name}: {e}"))
+        // The document writer follows a symlink to the file it points at on purpose; a preset
+        // entry is managed by this store, and a link someone put there would carry the write
+        // outside the directory the store confines itself to.
+        if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(format!("{name}: a symbolic link is not a preset file"));
+        }
+        // No-follow: a link swapped in after the check above is replaced, never written through.
+        photocraft_format::atomic_write_no_follow(&path, bytes).map_err(|e| format!("{name}: {e}"))
     }
     fn remove(&self, name: &str) -> Result<(), String> {
         match std::fs::remove_file(self.path(name)?) {
@@ -245,34 +258,9 @@ fn tip_hash(t: &GrayTile) -> String {
     h.finalize().to_hex()[..32].to_string()
 }
 
-/// `PCTIP1`, bits (8|16), width, height (u32 LE), then the zlib-deflated samples.
+/// Encode the shared PCTIP1 envelope, preserving lossless 8/16-bit samples.
 pub fn encode_tip(t: &GrayTile) -> Vec<u8> {
-    use std::io::Write;
-    let eight = t.data.iter().all(|v| v % 257 == 0);
-    let mut out = Vec::with_capacity(TIP_HEADER + t.data.len() / 4);
-    out.extend_from_slice(TIP_MAGIC);
-    out.push(if eight { 8 } else { 16 });
-    out.extend_from_slice(&t.width.to_le_bytes());
-    out.extend_from_slice(&t.height.to_le_bytes());
-    // Level 3: zlib-rs level 1 writes static Huffman blocks only, 13-30% bigger than miniz's level 1.
-    let mut z = flate2::write::ZlibEncoder::new(out, flate2::Compression::new(3));
-    let mut buf = Vec::with_capacity(8192);
-    let mut ok = true;
-    for chunk in t.data.chunks(4096) {
-        buf.clear();
-        if eight {
-            buf.extend(chunk.iter().map(|v| (v / 257) as u8));
-        } else {
-            for v in chunk {
-                buf.extend_from_slice(&v.to_le_bytes());
-            }
-        }
-        ok &= z.write_all(&buf).is_ok();
-    }
-    match z.finish() {
-        Ok(v) if ok => v,
-        _ => Vec::new(),
-    }
+    craft_pcraft_tip::tip::encode(t.width, t.height, &t.data)
 }
 
 /// Inverse of [`encode_tip`]; any malformed, truncated or oversized input is an error.
@@ -282,34 +270,8 @@ pub fn decode_tip(bytes: &[u8]) -> Result<GrayTile, String> {
 
 /// [`decode_tip`] refusing (before inflating anything) a bitmap with a side over `max_side`.
 fn decode_tip_max(bytes: &[u8], max_side: u32) -> Result<GrayTile, String> {
-    let head = bytes.get(..TIP_HEADER).ok_or("truncated tip header")?;
-    if &head[..6] != TIP_MAGIC {
-        return Err("not a PhotoCraft tip".into());
-    }
-    let bits = head[6];
-    let u32_at = |i: usize| u32::from_le_bytes([head[i], head[i + 1], head[i + 2], head[i + 3]]);
-    let (w, h) = (u32_at(7), u32_at(11));
-    if w == 0 || h == 0 || w > MAX_TIP_SIDE.min(max_side) || h > MAX_TIP_SIDE.min(max_side) {
-        return Err(format!("bad tip size {w}×{h}"));
-    }
-    let n = u64::from(w) * u64::from(h);
-    if n > MAX_TIP_SAMPLES {
-        return Err(format!("tip too large ({w}×{h})"));
-    }
-    let bytes_per = match bits {
-        8 => 1u64,
-        16 => 2,
-        b => return Err(format!("unsupported tip depth {b}")),
-    };
-    let want = n * bytes_per;
-    let mut raw = Vec::with_capacity(want as usize);
-    flate2::read::ZlibDecoder::new(&bytes[TIP_HEADER..]).take(want + 1).read_to_end(&mut raw).map_err(|e| format!("tip data: {e}"))?;
-    if raw.len() as u64 != want {
-        return Err(format!("tip data has {} bytes, expected {want}", raw.len()));
-    }
-    let data: Vec<u16> =
-        if bits == 8 { raw.iter().map(|&v| u16::from(v) * 257).collect() } else { raw.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect() };
-    Ok(GrayTile { width: w, height: h, data: data.into() })
+    let tip = craft_pcraft_tip::tip::decode_with_max_side(bytes, max_side)?;
+    Ok(GrayTile { width: tip.width, height: tip.height, data: tip.data.into() })
 }
 
 // ------------------------------------------------------------------ group files
@@ -556,17 +518,18 @@ pub struct PresetStore {
     /// Tip hash → file size, for every tip file the store owns.
     tips: HashMap<String, u64>,
     index: Option<IndexFile>,
-    /// [`crate::actions_cmds::ActionState::rev`] last written (or loaded).
+    /// [`ActionList::revision`] last written (or loaded).
     actions_rev: u64,
     /// `actions.json` exists but failed to load: left on disk untouched, so it is never written.
     actions_skipped: bool,
-    /// [`patterns_key`] of the user patterns last written (or loaded).
-    patterns_key: u64,
-    /// `patterns.pat` exists but failed to load: left on disk untouched, so it is never written.
-    patterns_skipped: bool,
+    /// The pattern files and index (`patterns.json`).
+    patterns: patterns::PatternFiles,
     warnings: Vec<String>,
     /// Full tips loaded for brushes in use (behind a lock so `&Session` paths can load).
     cache: Mutex<TipCache>,
+    /// The stored pattern last read in full, so painting with it again doesn't re-read its file
+    /// (a texture can be tens of megabytes). One: the pattern in use.
+    pattern_cache: Mutex<Option<photocraft_doc::Pattern>>,
 }
 
 /// A loaded store: the presets on disk plus what the session should hide.
@@ -581,9 +544,12 @@ pub struct Opened {
     /// Files that were skipped (corrupt, oversized, missing tips).
     pub warnings: Vec<String>,
     /// Recorded actions (`actions.json`). Empty when the file is missing or unreadable.
-    pub actions: Vec<crate::actions_cmds::Action>,
-    /// User patterns (`patterns.pat`), in library order. Empty when the file is missing or unreadable.
-    pub patterns: Vec<photocraft_doc::Pattern>,
+    pub actions: ActionList,
+    /// The stored action ids of a PhotoCraft file and the names loading gave them, for the
+    /// shortcut keys attaching moves to names ([`MergedFile::ids`](craft::automation::actions::MergedFile::ids)).
+    action_ids: Vec<(String, String)>,
+    /// Imported and defined patterns (`patterns.json`), in library order; large ones as previews.
+    pub patterns: Vec<patterns::Loaded>,
 }
 
 /// Load a store (any thread; the desktop app does this in the background at start).
@@ -659,10 +625,8 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
 
     let loaded_actions = load_actions(backend.as_ref(), &mut warnings);
     let actions_skipped = loaded_actions.is_none();
-    let actions = loaded_actions.unwrap_or_default();
-    let loaded_patterns = load_patterns(backend.as_ref(), &mut warnings);
-    let patterns_skipped = loaded_patterns.is_none();
-    let patterns = loaded_patterns.unwrap_or_default();
+    let (actions, action_ids) = loaded_actions.unwrap_or_default();
+    let (patterns, pattern_files) = patterns::load(backend.as_ref(), &mut warnings);
     let mut store = PresetStore {
         backend,
         synced_rev: None,
@@ -672,10 +636,10 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
         index: None,
         actions_rev: 0,
         actions_skipped,
-        patterns_key: patterns_key(&patterns, 0),
-        patterns_skipped,
+        patterns: pattern_files,
         warnings: Vec::new(),
         cache: Mutex::new(TipCache { limit: TIP_CACHE_BYTES, ..Default::default() }),
+        pattern_cache: Mutex::new(None),
     };
     let mut presets = Vec::new();
     for (file, size, g) in parsed {
@@ -731,58 +695,37 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
     let hidden_builtins = index.as_ref().map(|i| i.hidden_builtins.clone()).unwrap_or_default();
     let order = index.as_ref().map(|i| i.order.clone()).unwrap_or_default();
     store.index = index;
-    Opened { store, presets, hidden_builtins, order, warnings, actions, patterns }
-}
-
-/// `patterns.pat`: a missing file is no patterns. Anything else unreadable is a warning.
-/// The saved patterns; `None` when `patterns.pat` exists but could not be loaded.
-fn load_patterns(backend: &dyn PresetBackend, warnings: &mut Vec<String>) -> Option<Vec<photocraft_doc::Pattern>> {
-    let bytes = match backend.read(PATTERNS_FILE, MAX_PATTERNS_BYTES) {
-        Ok(b) => b,
-        Err(e) if missing_file(&e) => return Some(Vec::new()),
-        Err(e) => {
-            warnings.push(format!("patterns: {PATTERNS_FILE} skipped: {e}"));
-            return None;
-        }
-    };
-    match photocraft_io::pattern_map::read_pat(&bytes) {
-        Ok(p) => Some(p),
-        Err(e) => {
-            warnings.push(format!("patterns: {PATTERNS_FILE} skipped: {e}"));
-            None
-        }
-    }
-}
-
-/// What decides whether the user patterns need rewriting: their ids, names, sizes and order, and
-/// the library's [`pixels_rev`](crate::pattern_cmds::PatternLibrary::pixels_rev) (pixels replaced
-/// under the same id).
-fn patterns_key(patterns: &[photocraft_doc::Pattern], pixels_rev: u64) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    for p in patterns {
-        (&p.id, &p.name, p.width, p.height).hash(&mut h);
-    }
-    patterns.len().hash(&mut h);
-    pixels_rev.hash(&mut h);
-    h.finish()
+    Opened { store, presets, hidden_builtins, order, warnings, actions, action_ids, patterns }
 }
 
 /// `actions.json`: a missing file is an empty list. Anything else unreadable is a warning.
-/// The saved actions; `None` when `actions.json` exists but could not be loaded.
-fn load_actions(backend: &dyn PresetBackend, warnings: &mut Vec<String>) -> Option<Vec<crate::actions_cmds::Action>> {
+/// The saved actions, with the stored action ids their calls were moved off
+/// ([`name_id_calls`](crate::actions_cmds::name_id_calls)); `None` when `actions.json` exists but
+/// could not be loaded.
+fn load_actions(backend: &dyn PresetBackend, warnings: &mut Vec<String>) -> Option<(ActionList, Vec<(String, String)>)> {
     let bytes = match backend.read(ACTIONS_FILE, MAX_ACTIONS_BYTES) {
         Ok(b) => b,
-        Err(e) if missing_file(&e) => return Some(Vec::new()),
+        Err(e) if missing_file(&e) => return Some((ActionList::new(), Vec::new())),
         Err(e) => {
             warnings.push(format!("actions: {ACTIONS_FILE} skipped: {e}"));
             return None;
         }
     };
-    match serde_json::from_slice::<crate::actions_cmds::ActionsFile>(&bytes) {
-        Ok(file) if file.version == 1 => Some(file.actions),
+    let text = match std::str::from_utf8(&bytes) {
+        Ok(text) => text,
+        Err(e) => {
+            warnings.push(format!("actions: {ACTIONS_FILE} skipped: {e}"));
+            return None;
+        }
+    };
+    match ActionsFile::from_json(text) {
         Ok(file) => {
-            warnings.push(format!("actions: {ACTIONS_FILE} skipped: unsupported version {}", file.version));
+            let (mut list, merged) = ActionList::load(file);
+            crate::actions_cmds::name_id_calls(&mut list, &merged.ids);
+            Some((list, merged.ids))
+        }
+        Err(ActionsFileError::Version(version)) => {
+            warnings.push(format!("actions: {ACTIONS_FILE} skipped: unsupported version {version}"));
             None
         }
         Err(e) => {
@@ -880,6 +823,11 @@ pub fn open_dir_async(root: std::path::PathBuf) -> std::sync::mpsc::Receiver<Ope
 }
 
 impl PresetStore {
+    /// `actions.json` exists but could not be read: it is left as it is and never written.
+    pub fn actions_load_failed(&self) -> bool {
+        self.actions_skipped
+    }
+
     /// Warnings from writes since the last call (the shell shows them in the status bar).
     pub fn take_warnings(&mut self) -> Vec<String> {
         std::mem::take(&mut self.warnings)
@@ -931,7 +879,7 @@ impl PresetStore {
     /// Bring the files in line with `presets` (built-ins skipped): write changed groups, delete
     /// removed ones and their unreferenced tips, update the index. The bitmaps of every group
     /// written become stored tiles (#1843): the files hold them, so the presets keep previews only.
-    pub fn sync(&mut self, presets: &mut [BrushPreset]) {
+    pub fn sync(&mut self, presets: &mut std::sync::Arc<Vec<BrushPreset>>) {
         // User presets by group, in first-appearance order.
         let mut order: Vec<(String, Vec<usize>)> = Vec::new();
         for (i, p) in presets.iter().enumerate().filter(|(_, p)| !p.builtin) {
@@ -958,7 +906,7 @@ impl PresetStore {
                 ));
                 continue;
             }
-            let mut items: Vec<&mut BrushPreset> = presets.iter_mut().filter(|p| !p.builtin && p.group == *group).collect();
+            let mut items: Vec<&mut BrushPreset> = std::sync::Arc::make_mut(presets).iter_mut().filter(|p| !p.builtin && p.group == *group).collect();
             if let Err(e) = self.write_group(&file, group, &mut items) {
                 self.warnings.push(format!("Couldn't save brush presets `{}`: {e}", if group.is_empty() { "(ungrouped)" } else { group }));
             }
@@ -1097,10 +1045,34 @@ impl PresetStore {
         Ok(())
     }
 
+    /// Write the pattern library's changes (see [`patterns`]).
+    pub fn sync_patterns(&mut self, library: &crate::pattern_cmds::PatternLibrary) {
+        let changed = self.patterns.pixels_rev != library.pixels_rev;
+        patterns::sync(self.backend.as_ref(), &mut self.patterns, library, &mut self.warnings);
+        let cache = self.pattern_cache.get_mut().unwrap_or_else(PoisonError::into_inner);
+        if changed || cache.as_ref().is_some_and(|p| !self.patterns.index.iter().any(|e| e.id == p.id)) {
+            *cache = None;
+        }
+    }
+
+    /// The full pixels of a stored pattern the library holds as a preview: the last one read is
+    /// kept, so only switching patterns reads a file.
+    pub fn load_pattern(&self, id: &str) -> Result<photocraft_doc::Pattern, String> {
+        let mut cache = self.pattern_cache.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(p) = cache.as_ref().filter(|p| p.id == id) {
+            return Ok(p.clone());
+        }
+        let entry = self.patterns.index.iter().find(|e| e.id == id).ok_or_else(|| format!("pattern {id} is not in the preset store"))?;
+        let p = patterns::load_full(self.backend.as_ref(), entry)?;
+        *cache = Some(p.clone());
+        Ok(p)
+    }
+
     /// Write the Actions list when `rev` differs from the last load or write.
     /// An oversized list is warned once and not retried. An I/O error is warned and retried
     /// on the next command.
-    pub fn sync_actions(&mut self, list: &[crate::actions_cmds::Action], rev: u64) {
+    pub fn sync_actions(&mut self, list: &ActionList) {
+        let rev = list.revision();
         if self.actions_rev == rev {
             return;
         }
@@ -1109,9 +1081,8 @@ impl PresetStore {
             self.actions_rev = rev;
             return;
         }
-        let file = crate::actions_cmds::ActionsFile { version: 1, actions: list.to_vec() };
-        let bytes = match serde_json::to_vec_pretty(&file) {
-            Ok(b) => b,
+        let bytes = match list.to_file().to_json() {
+            Ok(text) => text.into_bytes(),
             Err(e) => {
                 self.warnings.push(format!("Couldn't save actions: {e}"));
                 self.actions_rev = rev;
@@ -1130,52 +1101,9 @@ impl PresetStore {
     }
 }
 
-impl PresetStore {
-    /// Write the user patterns (the library minus the built-ins) when they changed since the last
-    /// load or write. An oversized library is warned once per change and not written. An I/O
-    /// error is warned and retried on the next command.
-    pub fn sync_patterns(&mut self, library: &[photocraft_doc::Pattern], pixels_rev: u64) {
-        let builtins = crate::pattern_cmds::builtin();
-        let user: Vec<photocraft_doc::Pattern> = library.iter().filter(|p| !crate::pattern_cmds::is_pristine_builtin(p, &builtins)).cloned().collect();
-        let key = patterns_key(&user, pixels_rev);
-        if self.patterns_key == key {
-            return;
-        }
-        self.patterns_key = key;
-        if self.patterns_skipped {
-            self.warnings.push(format!("Couldn't save patterns: {PATTERNS_FILE} could not be read, so it was left unchanged"));
-            return;
-        }
-        if user.is_empty() {
-            if let Err(e) = self.backend.remove(PATTERNS_FILE) {
-                self.warnings.push(format!("Couldn't save patterns: {e}"));
-                // Try again after the next command.
-                self.patterns_key = key.wrapping_add(1);
-            }
-            return;
-        }
-        let bytes = match photocraft_io::pattern_map::write_pat(&user) {
-            Ok(b) => b,
-            Err(e) => {
-                self.warnings.push(format!("Couldn't save patterns: {e}"));
-                return;
-            }
-        };
-        if bytes.len() as u64 > MAX_PATTERNS_BYTES {
-            self.warnings.push(format!("patterns: the pattern library is too large to save ({} MB limit)", MAX_PATTERNS_BYTES >> 20));
-            return;
-        }
-        if let Err(e) = self.backend.write(PATTERNS_FILE, &bytes) {
-            self.warnings.push(format!("Couldn't save patterns: {e}"));
-            // Try again after the next command.
-            self.patterns_key = key.wrapping_add(1);
-        }
-    }
-}
-
 fn builtin_names() -> &'static [String] {
     static NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-    NAMES.get_or_init(|| photocraft_paint::presets::builtin().into_iter().map(|p| p.name).collect())
+    NAMES.get_or_init(|| photocraft_paint::presets::builtin_shared().iter().map(|p| p.name.clone()).collect())
 }
 
 impl Session {
@@ -1189,54 +1117,81 @@ impl Session {
     /// built-in of the same name; presets created before the store finished loading win), hide
     /// deleted built-ins, then sync. Returns the load warnings.
     pub fn attach_preset_store(&mut self, opened: Opened) -> Vec<String> {
-        let Opened { store, presets, hidden_builtins, order, mut warnings, actions: disk, patterns } = opened;
-        // Saved patterns join the library after the built-ins, and a saved built-in (replaced by
-        // an import or renamed) takes the shipped one's place; a pattern defined or imported
-        // before the store finished loading keeps its place (and the same id isn't added twice).
+        let Opened { store, presets, hidden_builtins, order, mut warnings, actions: disk, action_ids, patterns } = opened;
         let builtins = crate::pattern_cmds::builtin();
-        for p in patterns {
-            match self.patterns.items.iter_mut().find(|q| q.id == p.id) {
-                Some(q) if crate::pattern_cmds::is_pristine_builtin(q, &builtins) => *q = p,
-                // The earlier copy wins; other pixels than the saved ones must still be written,
-                // which its id, name and size don't show.
+        for l in patterns {
+            let id = l.pattern.id.clone();
+            match self.patterns.items.iter_mut().find(|q| q.id == id) {
+                Some(q) if crate::pattern_cmds::is_pristine_builtin(q, &builtins) => {
+                    *q = l.pattern;
+                    if let Some(size) = l.full {
+                        self.patterns.stored.insert(id, size);
+                    }
+                }
                 Some(q) => {
-                    if q.surface != p.surface {
+                    if q.surface != l.pattern.surface {
                         self.patterns.pixels_rev += 1;
                     }
                 }
-                None => self.patterns.items.push(p),
+                None => {
+                    if let Some(size) = l.full {
+                        self.patterns.stored.insert(id, size);
+                    }
+                    self.patterns.items.push(l.pattern);
+                }
             }
         }
-        let lib = &mut self.tools.presets;
-        lib.retain(|p| !(p.builtin && hidden_builtins.iter().any(|h| h.eq_ignore_ascii_case(&p.name))));
+        // The list stays shared (`make_mut` is taken at the first write) when the store changes nothing.
+        let hide = |p: &BrushPreset| p.builtin && hidden_builtins.iter().any(|h| h.eq_ignore_ascii_case(&p.name));
+        if self.tools.presets.iter().any(hide) {
+            std::sync::Arc::make_mut(&mut self.tools.presets).retain(|p| !hide(p));
+        }
         for p in presets {
-            match lib.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&p.name)) {
-                Some(x) if x.builtin => *x = p,
+            let found = self.tools.presets.iter().position(|x| x.name.eq_ignore_ascii_case(&p.name));
+            match found {
+                Some(i) if self.tools.presets[i].builtin && self.tools.presets[i] != p => std::sync::Arc::make_mut(&mut self.tools.presets)[i] = p,
                 Some(_) => {}
-                None => lib.push(p),
+                None => std::sync::Arc::make_mut(&mut self.tools.presets).push(p),
             }
         }
         // The saved panel order (stable: presets it doesn't name keep their order, at the end).
         if !order.is_empty() {
             let pos: HashMap<String, usize> = order.iter().enumerate().map(|(i, n)| (n.to_lowercase(), i)).collect();
-            lib.sort_by_key(|p| pos.get(&p.name.to_lowercase()).copied().unwrap_or(usize::MAX));
+            let key = |p: &BrushPreset| pos.get(&p.name.to_lowercase()).copied().unwrap_or(usize::MAX);
+            if !self.tools.presets.iter().map(key).is_sorted() {
+                std::sync::Arc::make_mut(&mut self.tools.presets).sort_by_key(key);
+            }
         }
         self.preset_store = Some(store);
-        // In-memory actions (created before the store finished loading) win on name. Disk-only
-        // names are appended. An empty session takes the disk list and does not rewrite it.
-        if self.actions.list.is_empty() {
-            self.actions.list = disk;
-            self.actions.rev = 1;
+        // Clear All, Reset or Replace before the store loaded made the session's list the whole
+        // library: it keeps its undo and the ordinary sync writes it over the stored one.
+        // Otherwise in-memory actions (created before the store finished loading) win on name and
+        // disk-only names are appended. An empty session takes the disk list and does not rewrite
+        // it, unless loading moved stored ids to names: that is written once.
+        if std::mem::take(&mut self.actions.replaced_before_attachment) {
+            // The command replaced the action shortcuts too: the stored ids' keys have no action.
+            name_id_shortcuts(self, &[]);
+        } else if self.actions.list.actions().is_empty() && self.actions.list.sets().is_empty() {
+            self.actions.list.replace(disk);
+            name_id_shortcuts(self, &action_ids);
             if let Some(st) = self.preset_store.as_mut() {
-                st.actions_rev = 1;
+                st.actions_rev = self.actions.list.revision();
+            }
+            if !action_ids.is_empty() {
+                self.actions.list.touch();
             }
         } else {
-            for action in disk {
-                if !self.actions.list.iter().any(|have| have.name == action.name) {
-                    self.actions.list.push(action);
-                }
+            name_id_shortcuts(self, &action_ids);
+            let ActionsFile { actions, sets, .. } = disk.to_file();
+            for action in actions {
+                // A name the session already has is refused: the session's wins.
+                let _ = self.actions.list.push(action);
             }
-            self.actions.rev = self.actions.rev.saturating_add(1).max(1);
+            for set in sets {
+                let _ = self.actions.list.new_set(&set);
+            }
+            // The merged list differs from the file even when nothing was added.
+            self.actions.list.touch();
         }
         self.brush_presets_changed();
         self.sync_preset_store();
@@ -1254,7 +1209,6 @@ impl Session {
     /// Write pending brush preset, Actions and pattern changes to the attached store (no-op without one).
     pub fn sync_preset_store(&mut self) {
         let rev = self.tools.presets_rev;
-        let actions_rev = self.actions.rev;
         if let Some(st) = self.preset_store.as_mut() {
             if st.synced_rev != Some(rev) {
                 st.sync(&mut self.tools.presets);
@@ -1265,8 +1219,8 @@ impl Session {
                     self.tools.brush_changed();
                 }
             }
-            st.sync_actions(&self.actions.list, actions_rev);
-            st.sync_patterns(&self.patterns.items, self.patterns.pixels_rev);
+            st.sync_actions(&self.actions.list);
+            st.sync_patterns(&self.patterns);
         }
     }
 

@@ -69,20 +69,20 @@ fn delete_state(s: &mut Session, p: &Value) -> Result<Value> {
     if i == 0 {
         return Err(bad(CMD, "the oldest state can't be deleted"));
     }
+    let rows = crate::actions_cmds::history_rows(s);
     if non_linear {
         crate::history_options_cmds::delete_state(s, i, current)?;
-        let entries = s.active().ok_or(EngineError::NoDocument)?.history.entries();
-        return Ok(json!({ "states": entries.len(), "current": entries.last() }));
-    }
-    // Step back to the state before `i`; the steps from `i` on are then redo states.
-    for _ in i..=current {
-        if !s.undo() {
-            return Err(EngineError::Other("the history can't step back right now".into()));
+    } else {
+        // Step back to the state before `i`; the steps from `i` on are then redo states.
+        for _ in i..=current {
+            if !s.undo() {
+                return Err(EngineError::Other("the history can't step back right now".into()));
+            }
         }
+        s.active_mut().ok_or(EngineError::NoDocument)?.history.clear_redo();
     }
-    let st = s.active_mut().ok_or(EngineError::NoDocument)?;
-    st.history.clear_redo();
-    let entries = st.history.entries();
+    crate::actions_cmds::reconcile_history_removal(s, &rows);
+    let entries = s.active().ok_or(EngineError::NoDocument)?.history.entries();
     Ok(json!({ "states": entries.len(), "current": entries.last() }))
 }
 
@@ -112,7 +112,7 @@ fn new_document(s: &mut Session, p: &Value) -> Result<Value> {
 fn snapshot_index(s: &Session, cmd: &str, p: &Value) -> Result<usize> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let id = p.get("snapshot").and_then(Value::as_u64).ok_or_else(|| bad(cmd, "`snapshot` must be a snapshot id"))?;
-    st.snapshots.iter().position(|snap| snap.id == id).ok_or_else(|| bad(cmd, format!("no snapshot {id}")))
+    st.snapshots().iter().position(|snap| snap.id == id).ok_or_else(|| bad(cmd, format!("no snapshot {id}")))
 }
 
 /// The name `history.newSnapshot` gives a snapshot without one: "Snapshot N" (the New Snapshot
@@ -145,7 +145,7 @@ fn new_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
     let one_layer = |doc: &Document, layer: Layer| {
         let mut doc = doc.clone();
         let id = layer.id;
-        doc.layers = vec![layer];
+        doc.layers = vec![layer].into();
         (Arc::new(doc), LayerTarget { active: Some(id), selected: vec![id] })
     };
     let (doc, layers) = match from {
@@ -163,7 +163,11 @@ fn new_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
     let name = name.unwrap_or_else(|| next_snapshot_name(st));
     let id = st.next_snapshot;
     st.next_snapshot = id.saturating_add(1);
-    st.snapshots.push(Snapshot { id, name: name.clone(), doc, layers });
+    // An action's New Snapshot with "replace existing": a snapshot of that name gives way.
+    if p.get("replaceExisting").and_then(Value::as_bool) == Some(true) {
+        st.snapshots_mut().retain(|snap| snap.name != name);
+    }
+    st.snapshots_mut().push(Snapshot { id, name: name.clone(), doc, layers });
     Ok(json!({ "snapshot": id, "name": name }))
 }
 
@@ -175,7 +179,7 @@ fn select_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
     if s.active_job().is_some() {
         return Err(EngineError::Other("the document is busy with a background job".into()));
     }
-    let snap = s.active().and_then(|st| st.snapshots.get(i).cloned()).ok_or(EngineError::NoDocument)?;
+    let snap = s.active().and_then(|st| st.snapshots().get(i).cloned()).ok_or(EngineError::NoDocument)?;
     s.edit(&snap.name, |doc, active| {
         // Keep the identity (colour state, views and caches are keyed by it) and the tab name.
         let (id, name) = (doc.id, doc.name.clone());
@@ -199,7 +203,7 @@ fn rename_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
     let i = snapshot_index(s, CMD, p)?;
     let name = name_param(CMD, p)?.ok_or_else(|| bad(CMD, "`name` is required"))?;
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
-    let snap = st.snapshots.get_mut(i).ok_or_else(|| bad(CMD, "no such snapshot"))?;
+    let snap = st.snapshots_mut().get_mut(i).ok_or_else(|| bad(CMD, "no such snapshot"))?;
     snap.name.clone_from(&name);
     Ok(json!({ "snapshot": snap.id, "name": name }))
 }
@@ -209,8 +213,8 @@ fn delete_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "history.deleteSnapshot";
     let i = snapshot_index(s, CMD, p)?;
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
-    let snap = st.snapshots.remove(i);
-    Ok(json!({ "snapshot": snap.id, "snapshots": st.snapshots.len() }))
+    let snap = st.snapshots_mut().remove(i);
+    Ok(json!({ "snapshot": snap.id, "snapshots": st.snapshots().len() }))
 }
 
 /// A state other than the oldest exists to delete: a past or the current one, and with Allow
@@ -284,7 +288,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "New Snapshot",
             menu: &[],
             shortcut: None,
-            params: r##"{"name":str?="Snapshot N","from":"fullDocument"|"mergedLayers"|"currentLayer"="fullDocument"} → {snapshot,name}: a named copy of the document for the session (not a history state)"##,
+            params: r##"{"name":str?="Snapshot N","from":"fullDocument"|"mergedLayers"|"currentLayer"="fullDocument","replaceExisting":bool=false (drop snapshots of the same name first)} → {snapshot,name}: a named copy of the document for the session (not a history state)"##,
             enabled: has_doc,
             run: new_snapshot,
             journal: true,
@@ -368,7 +372,7 @@ mod tests {
         let mut s = session();
         let first = s.active().unwrap().history.state(0).unwrap();
         s.execute("history.deleteState", json!({"state": 1})).unwrap();
-        assert_eq!(entries(&s), vec!["Open".to_string()]);
+        assert_eq!(entries(&s), vec!["New".to_string()]);
         assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &first));
         assert!(!s.active().unwrap().history.can_redo());
         // Redo states after an undo go too.
@@ -443,6 +447,31 @@ mod tests {
     }
 
     #[test]
+    fn replace_existing_snapshot_and_clear_history() {
+        let mut s = session();
+        s.execute("history.newSnapshot", json!({"name": "Result"})).unwrap();
+        s.execute("history.newSnapshot", json!({"name": "Other"})).unwrap();
+        s.execute("history.newSnapshot", json!({"name": "Result", "replaceExisting": true})).unwrap();
+        let opening = json!({"id": 0, "name": s.active().unwrap().doc.name});
+        assert_eq!(snapshots(&s), json!([opening, {"id": 2, "name": "Other"}, {"id": 3, "name": "Result"}]));
+        let kept_snapshots = snapshots(&s);
+        let history_before = entries(&s);
+        let pixel = top_pixel(&s);
+        s.execute("history.clear", json!({})).unwrap();
+        assert_eq!(entries(&s).len(), 1, "only the current state is left");
+        assert!(s.active().unwrap().history.can_undo(), "the current Clear History remains undoable");
+        assert_eq!(top_pixel(&s), pixel, "the document is unchanged");
+        assert_eq!(snapshots(&s), kept_snapshots, "opening and named snapshots stay unchanged");
+        // Current History menu semantics refuse a second clear; snapshots remain independent.
+        assert!(s.execute("history.clear", json!({})).is_err());
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(entries(&s), history_before, "Undo restores the cleared states");
+        assert_eq!(snapshots(&s), kept_snapshots, "Undo also preserves every snapshot");
+        assert_eq!(top_pixel(&s), pixel);
+        assert!(Session::new().execute("history.clear", json!({})).is_err(), "no document");
+    }
+
+    #[test]
     fn select_snapshot_returns_to_it_as_one_undoable_state() {
         let mut s = session();
         s.execute("history.newSnapshot", json!({})).unwrap();
@@ -480,7 +509,7 @@ mod tests {
     }
 
     fn tile_bytes(doc: &Document) -> usize {
-        doc.layers.iter().filter_map(|l| l.surface()).flat_map(|s| s.tiles().map(|(_, t)| t.bytes().len())).sum()
+        doc.layers.iter().filter_map(|l| l.surface()).flat_map(|s| s.tiles().map(|(_, t)| t.len())).sum()
     }
 
     /// A Merged Layers snapshot is a flattened copy only it holds (#4530): it counts in the
@@ -491,12 +520,12 @@ mod tests {
         let base = with.active().unwrap().memory_bytes();
         with.execute("history.newSnapshot", json!({"from": "mergedLayers"})).unwrap();
         let st = with.active().unwrap();
-        let flat = tile_bytes(&st.snapshots.last().unwrap().doc);
+        let flat = tile_bytes(&st.snapshots().last().unwrap().doc);
         assert!(flat > 0);
         assert_eq!(st.memory_bytes(), base + flat);
         // Room for the document's tiles and four fill tiles.
         let cur = tile_bytes(&st.doc);
-        let fill = tile_bytes(&Document { layers: st.doc.layers[1..].to_vec(), ..(*st.doc).clone() });
+        let fill = tile_bytes(&Document { layers: st.doc.layers[1..].to_vec().into(), ..(*st.doc).clone() });
         assert!(flat <= fill, "the flattened tile is no bigger than a fill's");
         let budget = cur + 4 * fill;
         for s in [&mut with, &mut without] {
@@ -520,11 +549,11 @@ mod tests {
         s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
         let st = s.active().unwrap();
         // The snapshot's green layer tile, now only in it and the last state.
-        let shared = tile_bytes(&Document { layers: st.snapshots.last().unwrap().doc.layers[1..].to_vec(), ..(*st.doc).clone() });
+        let shared = tile_bytes(&Document { layers: st.snapshots().last().unwrap().doc.layers[1..].to_vec().into(), ..(*st.doc).clone() });
         let all = st.history.unique_bytes(&st.doc);
         let r = s.execute("edit.purge.histories", json!({})).unwrap();
         assert_eq!(r["bytes"], json!(all - shared), "the green tile stays with the snapshot");
-        assert_eq!(s.active().unwrap().snapshots.len(), 2, "the first snapshot and the new one");
+        assert_eq!(s.active().unwrap().snapshots().len(), 2, "the first snapshot and the new one");
     }
 
     #[test]

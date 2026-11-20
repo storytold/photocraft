@@ -7,12 +7,14 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod actions_record;
 pub mod adjust_params;
 mod allocation;
 pub mod build_info;
 mod canvas_geom;
 mod channel_clip;
 mod clip_group;
+pub mod color_channels;
 mod crop_fill;
 pub mod display_color;
 pub mod doc_path;
@@ -24,10 +26,13 @@ pub mod hidden_target;
 pub mod inspect;
 pub mod installed_profiles;
 pub mod jobs;
-pub mod kys;
+pub mod keymap_defs;
 pub mod layer_place;
 pub mod layer_style;
 pub mod link_watch;
+pub mod malloc_tuning;
+pub mod memory;
+pub mod memory_gate;
 pub mod new_layer;
 mod param_check;
 mod pixels;
@@ -35,11 +40,12 @@ pub mod prefs;
 pub mod preset_store;
 pub mod presets;
 pub mod proof_sim;
+mod scratch;
 pub mod select_mask_edits;
 pub mod shell_commands;
 pub mod shortcut_sets;
 pub mod snap;
-pub use variables_cmds::{export_data_sets_with, import_data_sets_text};
+pub use variables_cmds::{DATA_SET_LAYER_LOCKED, data_set_preview, export_data_sets_with, import_data_sets_text};
 pub use video_cmds::render_video_with;
 
 use std::sync::Arc;
@@ -56,6 +62,8 @@ pub use photocraft_paint::BrushSettings;
 pub mod cmd;
 mod doc_state;
 mod error;
+mod install;
+pub mod registry;
 mod session;
 
 pub use cmd as commands;
@@ -91,7 +99,7 @@ pub use cmd::fill_cmds;
 pub use cmd::fill_key_cmds;
 pub use cmd::float_cmds;
 pub use cmd::font_library_cmds;
-use cmd::frame_cmds;
+pub use cmd::frame_cmds;
 pub use cmd::fx_view_cmds;
 pub use cmd::fx_visibility_cmds;
 pub use cmd::gallery_cmds;
@@ -104,6 +112,7 @@ pub use cmd::history_select_cmds;
 pub use cmd::history_source_cmds;
 pub use cmd::image_cmds;
 pub use cmd::layer_copy_cmds;
+pub use cmd::layer_css_cmds;
 pub use cmd::layer_label_cmds;
 pub use cmd::layer_list_cmds;
 pub use cmd::layer_mask_props_cmds;
@@ -114,12 +123,12 @@ pub use cmd::layer_xmp_cmds;
 pub use cmd::lens_cmds;
 pub use cmd::magnetic_cmds;
 pub use cmd::mask_view_cmds;
-use cmd::migrate_cmds;
+pub use cmd::migrate_cmds;
 pub use cmd::mode_cmds;
 pub use cmd::multichannel_cmds;
 pub use cmd::notes_cmds;
 pub use cmd::paint_cmds;
-use cmd::path_edit_cmds;
+pub use cmd::path_edit_cmds;
 pub use cmd::pattern_cmds;
 pub use cmd::pattern_fill_cmds;
 pub use cmd::perspective_crop_cmds;
@@ -138,15 +147,16 @@ pub use cmd::select_extra_cmds;
 pub use cmd::selection_cmds;
 pub use cmd::slice_cmds;
 pub use cmd::smart_cmds;
+pub use cmd::smart_svg_cmds;
 pub use cmd::smartselect_cmds;
 pub use cmd::solid_fill_cmds;
 pub use cmd::stamp_cmds;
 pub use cmd::style_asl_cmds;
 pub use cmd::swatch_cmds;
 pub use cmd::symmetry_cmds;
-use cmd::timeline_cmds;
+pub use cmd::timeline_cmds;
 pub use cmd::transform_cmds;
-use cmd::trap_cmds;
+pub use cmd::trap_cmds;
 pub use cmd::type_area_cmds;
 pub use cmd::type_caret_cmds;
 pub use cmd::type_cmds;
@@ -154,19 +164,28 @@ pub use cmd::type_extra_cmds;
 pub use cmd::type_mask_cmds;
 pub use cmd::type_spell_cmds;
 pub use cmd::type_styles_cmds;
-pub use cmd::updates_cmds;
-use cmd::variables_cmds;
+pub use cmd::variables_cmds;
 pub use cmd::vector_cmds;
-use cmd::video_cmds;
+pub use cmd::video_cmds;
 pub use cmd::vp_cmds;
 pub use cmd::warp_cmds;
 pub use cmd::web_cmds;
-use cmd::wia_cmds;
-pub use doc_state::{CopiedStyle, DocState, PRECHECKED, ToolState};
+pub use cmd::wia_cmds;
+pub use doc_state::{CopiedStyle, DocState, PRECHECKED, ToolState, selected_in};
 pub use error::{EngineError, Result};
 pub use session::move_item;
 use session::restore_target;
 pub(crate) use session::{carry_visibility, fix_selection, visibility_changes};
+
+/// A type layer for [`Session::refresh_type_layers`]: in the open document, or in its first
+/// History snapshot (the document as opened) when `first_snapshot`. The caller picks each against
+/// that version of the layer, which may differ from the open one or be gone from it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TypeLayerRef {
+    pub doc: photocraft_doc::DocId,
+    pub layer: LayerId,
+    pub first_snapshot: bool,
+}
 
 /// The pixels of a raster layer (typically one a command just created), as an error instead
 /// of a panic if the layer has none.
@@ -184,6 +203,15 @@ pub(crate) fn active_layer_of(s: &Session) -> std::result::Result<&photocraft_do
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
+    documents_generation: u64,
+    /// Override Open belongs only to one Batch scratch session, never to caller preferences.
+    pub(crate) batch_open: Option<file_cmds::BatchOpen>,
+    /// Import diagnostics retained by a Batch scratch that suppresses only profile prompts.
+    pub(crate) batch_open_notices: Option<Vec<Value>>,
+    /// Frozen RAW workflow settings for one noninteractive Batch input.
+    pub(crate) batch_raw_open: Option<prefs::RawDefaults>,
+    /// Admitted document identities in opening order, independent of visual-tab reordering.
+    open_document_order: Vec<photocraft_doc::DocId>,
     active: Option<usize>,
     /// Monotonic counter, bumped whenever a different document becomes active (including a
     /// switch away and back inside one pass). UI work that must not cross documents (control
@@ -191,11 +219,27 @@ pub struct Session {
     active_generation: u64,
     /// The document id [`Self::active_generation`] was last bumped for.
     active_doc_for_generation: Option<photocraft_doc::DocId>,
+    /// Change marker: advances at least once whenever the active document or layer changes through
+    /// the `Session` API (commands via `execute`, `start` and finished jobs, `select_layer`,
+    /// `restore_layer_selection`, `layer_multi_cmds::set_selection`, `set_active_layer`, undo / redo /
+    /// rollback, document switches). Compare two readings for equality to know whether anything
+    /// changed in between; it is not an exact count of operations (one operation may advance it
+    /// more than once). Writing `DocState::active_layer` directly bypasses it.
+    active_layer_changes: u64,
     pub tools: ToolState,
     /// Log of executed commands (for action recording and debugging).
     pub journal: Vec<(String, Value)>,
+    /// Text layer changed by the last journal entry, for folding Type tool keystrokes.
+    typed_layer: Option<(photocraft_doc::DocId, LayerId)>,
     /// Coalescing key of the command being executed.
     coalesce_request: Option<String>,
+    /// The outer action's original document/history states, independent of command transactions.
+    action_history: Option<actions_cmds::ActionHistory>,
+    /// Weak leases expire when every copy of a suspended continuation is abandoned.
+    paused_action_history: Vec<std::sync::Weak<()>>,
+    /// Tests observe the actual scratch-session boundary without retaining it or changing output.
+    #[cfg(test)]
+    batch_history_observer: Option<fn(&Session)>,
     /// Pixels copied with Edit › Copy / Cut (shared by all documents, like Photoshop).
     pub clipboard: Option<edit_cmds::Clip>,
     /// Layer › Layer Style › Copy Layer Style: the effects and the Blending Options
@@ -213,14 +257,12 @@ pub struct Session {
     /// Quick Mask Options (colour, opacity, colour indicates) used when entering Quick Mask.
     pub quick_mask_options: channel_cmds::QuickMaskOptions,
     /// Colour channel the running command may change (a single colour channel is targeted).
-    color_restrict: Option<usize>,
+    color_restrict: Option<color_channels::Restriction>,
     /// Smart object whose filter mask the running command edits (`"target":"filterMask"`): each
     /// edit re-renders it, in the same history step.
     filter_mask_layer: Option<LayerId>,
     /// Edit › Preferences, keyboard shortcuts, menu and toolbar customisation (see `prefs`).
     pub prefs: prefs::PrefsStore,
-    /// Release checks use an injected platform transport; no network I/O in the engine.
-    pub updates: updates_cmds::Updates,
     /// Edit menu state: Fade source, custom shape library (see `edit_menu_cmds`).
     pub edit_state: edit_menu_cmds::EditState,
     /// The pattern library (Window › Patterns; see `pattern.*`).
@@ -242,6 +284,12 @@ pub struct Session {
     /// the same check a top-level request sees. `None` runs everything, which is what a local
     /// UI and `photocraft-cli run` do.
     pub authorize: Option<fn(&str, &serde_json::Value) -> Result<()>>,
+    /// The gate automation runs under in this process (the desktop's policy). An action
+    /// automation wrote ([`actions_cmds::Action::automation`]) plays under it when no gate is
+    /// installed, as when the user presses its key, so it never gets the user's file access.
+    /// `None` when there is no automation policy to keep (headless sessions gate everything
+    /// with `authorize`).
+    pub automation_gate: Option<fn(&str, &serde_json::Value) -> Result<()>>,
     /// A further route for File › Print when neither `lp` nor a CUPS server over IPP is
     /// reachable (the XDG Print portal in a Flatpak); see `print_cmds::Spooler`.
     pub print_spooler: Option<print_cmds::Spooler>,
@@ -264,6 +312,9 @@ pub struct Session {
     pub link_stamps: std::collections::HashMap<(u64, String), link_watch::Stamp>,
     /// The stamps being taken on a worker thread ([`Session::start_link_scan`]).
     pub link_scan: Option<link_watch::LinkScan>,
+    /// Each open document's linked smart objects' files that were not there when last looked at
+    /// ([`Session::missing_links`]).
+    link_missing: std::collections::HashSet<(u64, String)>,
     /// Select Subject's last result, reused while the pixels are unchanged (#2865).
     subject_cache: smartselect_cmds::SubjectCache,
     /// Object Selection's Object Finder results (#4087), shared by the hover preview and the
@@ -277,14 +328,55 @@ pub struct Session {
     /// document, source read-only)`. The shell takes them with [`Session::take_held_open`].
     held_opens: Vec<(u64, Document, bool)>,
     next_held_open: u64,
+    pub(crate) pending_preflights: Vec<jobs::PendingPsdPreflight>,
+    next_pending_preflight: u64,
+    /// Shared native memory supervision, owned and stopped by the last session using it.
+    scratch_runtime: Option<scratch::Runtime>,
+    /// [`photocraft_raster::spill::epoch`] when History's byte limits were last applied: a
+    /// scratch disk that pauses or resumes changes the limit ([`Session::sync_scratch_state`]).
+    scratch_epoch: u64,
+    /// The document before the latest [`Session::edit`] of the running command, which
+    /// [`Session::hint_damage`] checks a hint against. Set by `edit`, taken by `hint_damage`,
+    /// dropped when the command ends. Debug and test builds only.
+    #[cfg(any(test, debug_assertions))]
+    hint_before: Option<Arc<Document>>,
+    /// Damage hints that missed a tile their edit changed ([`Session::hint_damage`]): each one a
+    /// command reporting too narrow a redraw area (#4053). Counted in debug and test builds only;
+    /// tests read it.
+    pub damage_misses: usize,
+    /// Commands that left the whole document to redraw (`last_damage` None) while changing under
+    /// 25 % of it ([`Session::dispatch`]). Counted in debug and test builds only; tests read it.
+    pub whole_redraws: usize,
 }
 
 #[cfg(test)]
+mod brush_pressure_size_default_tests;
+#[cfg(test)]
+mod embed_all_linked_tests;
+#[cfg(test)]
+mod eraser_gray_background_tests;
+#[cfg(test)]
 mod fill_layer_mode_tests;
 #[cfg(test)]
+mod mixer_indexed_bitmap_tests;
+
+#[cfg(test)]
+mod mixer_toggle_commands_tests;
+#[cfg(test)]
 mod pattern_mode_tests;
+#[cfg(test)]
+mod second_keys_zoom_actions_tests;
 #[cfg(test)]
 mod tests;
 
 #[cfg(test)]
 mod fx_mode_tests;
+
+#[cfg(test)]
+mod dense_budget_tests;
+
+#[cfg(test)]
+mod brush_clear_background_tests;
+pub mod command_hints;
+#[cfg(test)]
+mod pencil_auto_erase_exact_tests;

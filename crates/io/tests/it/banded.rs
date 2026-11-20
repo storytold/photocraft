@@ -43,7 +43,12 @@ fn layered_png_export_spans_bands() {
             let r = export(&d, "x.png", &ExportOptions::default()).unwrap();
             let img = photocraft_codecs::decode(&r.bytes).unwrap();
             assert_eq!(img.layout().has_alpha(), alpha < 1.0, "{depth:?} alpha {alpha}");
-            let got: Vec<f32> = img.to_rgba_f32().iter().map(|v| (v * scale).round()).collect();
+            let got: Vec<f32> = img
+                .to_rgba_f32(&photocraft_codecs::Limits::default())
+                .expect("the fixture fits the default decoded-image limits")
+                .iter()
+                .map(|v| (v * scale).round())
+                .collect();
             assert!(got == composite_q(&d, scale), "{depth:?} alpha {alpha}: pixels differ");
         }
     }
@@ -70,7 +75,12 @@ fn single_layer_native_export_strips_opaque_alpha() {
     let img = photocraft_codecs::decode(&r.bytes).unwrap();
     assert_eq!(img.sample_type(), photocraft_codecs::SampleType::U16);
     assert!(img.layout().has_alpha());
-    let got: Vec<f32> = img.to_rgba_f32().iter().map(|v| (v * 65535.0).round()).collect();
+    let got: Vec<f32> = img
+        .to_rgba_f32(&photocraft_codecs::Limits::default())
+        .expect("the fixture fits the default decoded-image limits")
+        .iter()
+        .map(|v| (v * 65535.0).round())
+        .collect();
     assert_eq!(got, composite_q(&d, 65535.0), "active vector mask: pixels differ");
 }
 
@@ -79,10 +89,10 @@ fn psd_merged_image_matches_composite_and_drops_near_opaque_alpha() {
     // Alpha 0.999 rounds to 255: no alpha channel, so the merged image must not be matted.
     for alpha in [1.0, 0.999, 0.5] {
         let d = layered(400, 300, SampleType::U8, alpha);
-        let file = document_to_psd(&d);
+        let file = document_to_psd(&d).unwrap();
         assert_eq!(file.merged_has_alpha(), alpha < 0.99, "alpha {alpha}");
         let merged = merged_composite(&file).unwrap();
-        let want = photocraft_compose::flatten(&d).px;
+        let want = photocraft_compose::flatten(&d).into_px();
         let m = merged.iter().zip(&want).flat_map(|(a, b)| (0..4).map(move |i| (a[i] - b[i]).abs())).fold(0.0f32, f32::max);
         // Un-matting divides the 8-bit rounding error by alpha.
         assert!(m <= 1.0 / (255.0 * alpha) + 1e-4, "alpha {alpha}: max diff {m}");

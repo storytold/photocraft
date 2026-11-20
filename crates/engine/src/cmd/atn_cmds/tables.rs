@@ -47,8 +47,8 @@ const BLEND_MODES: &[(&str, &str)] = &[
     ("color", "Color"),
     ("Lmns", "Luminosity"),
     ("luminosity", "Luminosity"),
-    ("PsTh", "Pass Through"),
     ("passThrough", "Pass Through"),
+    ("PsTh", "Pass Through"),
 ];
 
 pub(super) fn blend_label(ps: &str) -> Option<&'static str> {
@@ -56,7 +56,7 @@ pub(super) fn blend_label(ps: &str) -> Option<&'static str> {
 }
 
 pub(super) fn blend_ps(label: &str) -> Option<&'static str> {
-    crate::commands::blend_from_str(label).and_then(|m| BLEND_MODES.iter().find(|(_, v)| crate::commands::blend_from_str(v) == Some(m))).map(|(k, _)| *k)
+    crate::commands::parse_blend(label).and_then(|m| BLEND_MODES.iter().find(|(_, v)| crate::commands::parse_blend(v) == Some(m))).map(|(k, _)| *k)
 }
 
 /// Photoshop ↔ PhotoCraft value tables; Photoshop codes compare without their space padding.
@@ -125,7 +125,8 @@ pub(super) const OFFSET_FILL: &[(&str, &str)] = &[("Wrp ", "wrap"), ("Rpt ", "re
 
 pub(super) const TRIM: &[(&str, &str)] = &[("Trns", "transparent"), ("topLeftPixelColor", "topLeft"), ("bottomRightPixelColor", "bottomRight")];
 
-pub(super) const EXTENSION: &[(&str, &str)] = &[("Bckg", "background"), ("Frgd", "foreground"), ("Wht ", "white"), ("Blck", "black"), ("Trns", "transparent")];
+pub(super) const EXTENSION: &[(&str, &str)] =
+    &[("Bckg", "background"), ("FrgC", "foreground"), ("Frgd", "foreground"), ("Wht ", "white"), ("Blck", "black"), ("Trns", "transparent")];
 
 pub(super) const FILL_CONTENTS: &[(&str, &str)] = &[
     ("FrgC", "foreground"),
@@ -138,9 +139,9 @@ pub(super) const FILL_CONTENTS: &[(&str, &str)] = &[
     ("contentAware", "contentAware"),
 ];
 
-pub(super) const STROKE_LOCATION: &[(&str, &str)] = &[("Insd", "inside"), ("Cntr", "center"), ("OtsF", "outside")];
+pub(super) const STROKE_LOCATION: &[(&str, &str)] = &[("Insd", "inside"), ("Cntr", "center"), ("Otsd", "outside"), ("OtsF", "outside")];
 
-pub(super) const INTENT: &[(&str, &str)] = &[("Img ", "perceptual"), ("Clrm", "relative"), ("Grp ", "saturation"), ("AbsC", "absolute")];
+pub(super) const INTENT: &[(&str, &str)] = &[("Img ", "perceptual"), ("Clrm", "relative"), ("Grp ", "saturation"), ("AClr", "absolute"), ("AbsC", "absolute")];
 
 pub(super) const PROFILES: &[(&str, &str)] =
     &[("sRGB IEC61966-2.1", "srgb"), ("Display P3", "display-p3"), ("Adobe RGB (1998)", "adobe-rgb-compat"), ("ProPhoto RGB", "prophoto-compat")];

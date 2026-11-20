@@ -289,6 +289,65 @@ fn grabcut_trimap_on_disc() {
 }
 
 #[test]
+fn grabcut_small_disc_mask_is_pinned() {
+    // The mask GrabCut produced with the push/relabel solver, before the switch to BK. Min-cut
+    // ties may break differently between solvers, so any drift here is a visible change.
+    let (img, _) = disc_scene(32, 24, 16.0, 12.0, 8.0, 3);
+    let mut tri = vec![grabcut::BG; img.w * img.h];
+    for y in 2..22 {
+        for x in 6..26 {
+            tri[y * img.w + x] = grabcut::PR_FG;
+        }
+    }
+    grabcut::grabcut(&img, &mut tri, 8).unwrap();
+    let got: Vec<String> = tri.chunks(img.w).map(|r| r.iter().map(|t| if *t == grabcut::PR_FG || *t == grabcut::FG { '#' } else { '.' }).collect()).collect();
+    let want = [
+        "................................",
+        "................................",
+        "................................",
+        "................................",
+        ".............######.............",
+        "...........##########...........",
+        "..........############..........",
+        ".........##############.........",
+        ".........##############.........",
+        "........################........",
+        "........################........",
+        "........################........",
+        "........################........",
+        "........################........",
+        "........################........",
+        ".........##############.........",
+        ".........##############.........",
+        "..........############..........",
+        "...........##########...........",
+        ".............######.............",
+        "................................",
+        "................................",
+        "................................",
+        "................................",
+    ];
+    assert_eq!(got, want);
+}
+
+#[test]
+fn grabcut_large_disc_mask_is_pinned() {
+    // 5168 free nodes with terminal links both ways, so the pre-BK solver was push/relabel here.
+    // The count and FNV-1a hash are of the mask that push/relabel produced at the merge base.
+    let (img, _) = disc_scene(96, 80, 48.0, 40.0, 26.0, 3);
+    let mut tri = vec![grabcut::BG; img.w * img.h];
+    for y in 6..74 {
+        for x in 10..86 {
+            tri[y * img.w + x] = grabcut::PR_FG;
+        }
+    }
+    grabcut::grabcut(&img, &mut tri, 8).unwrap();
+    let fg: Vec<bool> = tri.iter().map(|t| *t == grabcut::PR_FG || *t == grabcut::FG).collect();
+    let hash = fg.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3));
+    assert_eq!((fg.iter().filter(|b| **b).count(), hash), (2128, 0x62fd_c64a_0ee4_4e75));
+}
+
+#[test]
 fn object_select_disc_full_resolution() {
     let (img, truth) = disc_scene(200, 160, 100.0, 80.0, 50.0, 2);
     let s = ImageSampler { img: &img, origin: (0, 0) };
@@ -903,6 +962,148 @@ fn select_subject_leaves_a_background_coloured_gap_open() {
     assert!(v > 0.9, "IoU {v}");
 }
 
+/// A portrait on a light wall shading down the picture: dark hair, a face, a neck and a
+/// torso of colour `shirt` running off the bottom edge (as most portraits are cropped). With
+/// `floor`, the torso ends on a dark table that fills the bottom quarter, the full width (so it
+/// runs up the picture's sides too). Returns (image, truth, the torso).
+fn portrait_scene(seed: u64, shirt: [f32; 3], floor: bool) -> (RgbImage, Vec<bool>, Vec<bool>) {
+    let (w, h) = (240usize, 200usize);
+    let mut rng = Rng::new(seed);
+    let mut img = RgbImage::new(w, h);
+    let mut truth = vec![false; w * h];
+    let mut torso = vec![false; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let (fx, fy) = (x as f32, y as f32);
+            let hair = ((fx - 120.0) / 30.0).powi(2) + ((fy - 52.0) / 27.0).powi(2) <= 1.0;
+            let face = ((fx - 120.0) / 26.0).powi(2) + ((fy - 66.0) / 32.0).powi(2) <= 1.0;
+            let neck = (109..131).contains(&x) && (90..112).contains(&y);
+            // Shoulders widening towards the bottom, wider than the head's box.
+            let half = 40.0 + (fy - 110.0) * 0.8;
+            let body = y >= 110 && (fx - 120.0).abs() <= half && (!floor || y < 150);
+            let table = floor && y >= 150;
+            let n = 0.012 * rng.normal();
+            let i = y * w + x;
+            truth[i] = hair || face || neck || body;
+            torso[i] = body && !neck;
+            let wall = 0.95 - 0.07 * fy / h as f32;
+            img.px[i] = if table {
+                [0.35, 0.22, 0.12]
+            } else if face {
+                [0.88, 0.71, 0.59]
+            } else if hair {
+                [0.24, 0.16, 0.12]
+            } else if neck {
+                [0.84, 0.67, 0.55]
+            } else if body {
+                shirt
+            } else {
+                [wall, wall - 0.01, wall - 0.04]
+            }
+            .map(|v| (v + n).clamp(0.0, 1.0));
+        }
+    }
+    (img, truth, torso)
+}
+
+#[test]
+fn select_subject_keeps_a_low_contrast_part_that_runs_off_the_edge() {
+    // A cream shirt on a near-white wall, cut off by the bottom edge: it used to train the
+    // backdrop model and be fixed as background there, so only the head was selected.
+    let (img, truth, torso) = portrait_scene(3, [0.92, 0.85, 0.72], false);
+    let s = ImageSampler { img: &img, origin: (0, 0) };
+    let reg = subject::select_subject(&s, Rect::new(0, 0, 240, 200)).unwrap();
+    let c = coverage(&reg, &torso, 240, 200);
+    assert!(c > 0.9, "the torso is part of the subject: covered {c}");
+    let v = iou(&reg, &truth, 240, 200);
+    assert!(v > 0.9, "IoU {v}");
+}
+
+#[test]
+fn select_subject_leaves_a_table_along_the_bottom_edge_out() {
+    // The same figure behind a table that fills the bottom of the picture: the table also runs
+    // off the edge, but it is not the subject.
+    let (img, truth, _) = portrait_scene(3, [0.12, 0.2, 0.45], true);
+    let s = ImageSampler { img: &img, origin: (0, 0) };
+    let reg = subject::select_subject(&s, Rect::new(0, 0, 240, 200)).unwrap();
+    let table: Vec<bool> = (0..240 * 200).map(|i| i / 240 >= 150).collect();
+    let t = coverage(&reg, &table, 240, 200);
+    assert!(t < 0.1, "the table stays unselected: covered {t}");
+    let v = iou(&reg, &truth, 240, 200);
+    assert!(v > 0.9, "IoU {v}");
+}
+
+#[test]
+fn select_subject_leaves_a_nearby_single_edge_object_out() {
+    // A horizontal door-frame piece enters only from the left and stops just short of the
+    // shoulder. It is large enough to be considered by the edge release heuristic.
+    let (mut img, truth, _) = low_contrast_figure(7);
+    let (w, h) = (240, 200);
+    let mut frame = vec![false; w * h];
+    for y in 48..56 {
+        for x in 0..77 {
+            frame[y * w + x] = true;
+            img.px[y * w + x] = [0.32, 0.24, 0.16];
+        }
+    }
+    let reg = subject::select_subject(&ImageSampler { img: &img, origin: (0, 0) }, Rect::new(0, 0, w as i32, h as i32)).unwrap();
+    let subject_coverage = coverage(&reg, &truth, w, h);
+    let frame_coverage = coverage(&reg, &frame, w, h);
+    assert!(subject_coverage > 0.85, "subject coverage {subject_coverage}");
+    assert!(frame_coverage < 0.1, "door-frame coverage {frame_coverage}");
+}
+
+#[test]
+fn select_subject_ignores_a_stray_pixel_at_the_edge() {
+    // One white pixel in the corner (a dead pixel, a speck of dust) is not the subject running
+    // out of the picture: it stays unselected and the subject is found as without it.
+    let canvas = Rect::new(0, 0, 200, 160);
+    for seed in 1..=8 {
+        let (mut img, truth) = disc_scene(200, 160, 100.0, 80.0, 45.0, seed);
+        img.px[0] = [1.0, 1.0, 1.0];
+        let reg = subject::select_subject(&ImageSampler { img: &img, origin: (0, 0) }, canvas).unwrap();
+        assert!(reg.at(0, 0) < 0.5, "seed {seed}: the stray pixel is selected");
+        let v = iou(&reg, &truth, 200, 160);
+        assert!(v > 0.9, "seed {seed}: IoU {v}");
+    }
+}
+
+#[test]
+fn select_subject_keeps_a_small_detached_part_next_to_the_subject() {
+    // A standing figure whose head is apart from its body (the neck too thin to survive the
+    // working resolution): the head is under a fifth of the body's size but part of the subject.
+    let (w, h) = (300usize, 200usize);
+    let mut rng = Rng::new(9);
+    let mut img = RgbImage::new(w, h);
+    let mut truth = vec![false; w * h];
+    let mut head = vec![false; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let (fx, fy) = (x as f32, y as f32);
+            let is_head = ((fx - 150.0) / 9.0).powi(2) + ((fy - 40.0) / 11.0).powi(2) <= 1.0;
+            let body = (128..172).contains(&x) && (55..170).contains(&y);
+            let n = 0.012 * rng.normal();
+            let i = y * w + x;
+            truth[i] = is_head || body;
+            head[i] = is_head;
+            img.px[i] = if is_head {
+                [0.88, 0.7, 0.58]
+            } else if body {
+                [0.75, 0.15, 0.15]
+            } else {
+                [0.55, 0.72, 0.9]
+            }
+            .map(|v| (v + n).clamp(0.0, 1.0));
+        }
+    }
+    let s = ImageSampler { img: &img, origin: (0, 0) };
+    let reg = subject::select_subject(&s, Rect::new(0, 0, w as i32, h as i32)).unwrap();
+    let c = coverage(&reg, &head, w, h);
+    assert!(c > 0.9, "the head is part of the subject: covered {c}");
+    let v = iou(&reg, &truth, w, h);
+    assert!(v > 0.9, "IoU {v}");
+}
+
 #[test]
 fn antialias_blends_edge_pixels_with_their_neighbourhood() {
     // A lone selected pixel keeps most of its coverage and its neighbours get half of a ninth;
@@ -1067,4 +1268,88 @@ fn hole_fill_without_specks_fills_object_coloured_holes_only() {
     let out = fill_holes_by_model(&mask, &img, &fg, &bg, 0.0, 0.05);
     assert!(out[25 * w + 25], "a speck of the object's colour fills");
     assert!(!out[10 * w + 10], "a speck of the background's colour stays open");
+}
+
+/// Energy of a labelling: data costs plus the contrast weights of separated 8-neighbours.
+fn grid_energy(img: &RgbImage, cf: &[f32], cb: &[f32], cut: &[bool], weight: impl Fn(f32) -> f32) -> f64 {
+    let (w, h) = (img.w as i32, img.h as i32);
+    let mut e = 0.0f64;
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) as usize;
+            e += f64::from(if cut[i] { cf[i] } else { cb[i] });
+            for (dx, dy, len) in NB {
+                let (nx, ny) = (x + dx, y + dy);
+                if nx >= 0 && nx < w && ny < h {
+                    let j = (ny * w + nx) as usize;
+                    if cut[i] != cut[j] {
+                        e += f64::from(weight(d2(img.px[i], img.px[j])) / len);
+                    }
+                }
+            }
+        }
+    }
+    e
+}
+
+#[test]
+fn bk_and_default_grid_cut_tie_reaches_the_same_energy() {
+    // Hard background down the left edge, hard foreground down the right, uniform pixels and equal
+    // data costs: a vertical cut at any column separates the borders at the same energy, so only
+    // the solvers' tie-breaking decides the labelling.
+    let (w, h) = (120usize, 100usize);
+    let img = RgbImage::from_fn(w, h, |_, _| [0.5, 0.5, 0.5]);
+    let (cf, cb) = (vec![1.0f32; w * h], vec![1.0f32; w * h]);
+    let fixed: Vec<u8> = (0..w * h)
+        .map(|i| match i % w {
+            0 => HARD_BG,
+            x if x == w - 1 => HARD_FG,
+            _ => FREE,
+        })
+        .collect();
+    let weight = |_: f32| 2.0;
+    // Two distinct candidate labellings (vertical cuts at different columns) tie at the minimum.
+    let split = |col: usize| -> Vec<bool> { (0..w * h).map(|i| i % w >= col).collect() };
+    let (e30, e90) = (grid_energy(&img, &cf, &cb, &split(30), weight), grid_energy(&img, &cf, &cb, &split(90), weight));
+    assert!((e30 - e90).abs() <= 1e-6 * e30.abs().max(1.0), "candidates must tie: {e30} vs {e90}");
+    assert_ne!(split(30), split(90));
+    let a = grid_cut_cancellable(&img, &cf, &cb, &fixed, weight, &|| false).expect("default cut");
+    let b = grid_cut_bk_cancellable(&img, &cf, &cb, &fixed, weight, &|| false).expect("bk cut");
+    let (ea, eb) = (grid_energy(&img, &cf, &cb, &a, weight), grid_energy(&img, &cf, &cb, &b, weight));
+    assert!((ea - e30).abs() <= 1e-3 * e30.abs().max(1.0), "default {ea} is not the tied minimum {e30}");
+    assert!((eb - e30).abs() <= 1e-3 * e30.abs().max(1.0), "bk {eb} is not the tied minimum {e30}");
+    // The solvers may pick different minimum cuts here; only the energy is guaranteed.
+    assert!(a.iter().any(|&l| l) && b.iter().any(|&l| l), "both label the foreground border");
+}
+
+#[test]
+fn bk_and_default_grid_cut_reach_the_same_minimum_energy() {
+    // Large enough (>= 4096 free nodes, both terminals) that the default solver is push/relabel.
+    let (w, h) = (120usize, 100usize);
+    let mut rng = Rng::new(7);
+    let img = RgbImage::from_fn(w, h, |x, y| {
+        let inside = (x as f32 - 60.0).powi(2) + (y as f32 - 50.0).powi(2) < 1600.0;
+        let base = if inside { [0.8, 0.3, 0.2] } else { [0.2, 0.4, 0.7] };
+        base.map(|v| v + 0.08 * rng.normal())
+    });
+    let cf: Vec<f32> = img.px.iter().map(|p| 4.0 * d2(*p, [0.8, 0.3, 0.2])).collect();
+    let cb: Vec<f32> = img.px.iter().map(|p| 4.0 * d2(*p, [0.2, 0.4, 0.7])).collect();
+    let fixed: Vec<u8> = (0..w * h)
+        .map(|i| {
+            if i % w == 0 {
+                HARD_BG
+            } else if i == (50 * w + 60) {
+                HARD_FG
+            } else {
+                FREE
+            }
+        })
+        .collect();
+    let weight = |d: f32| 50.0 * (-8.0 * d).exp();
+    let a = grid_cut_cancellable(&img, &cf, &cb, &fixed, weight, &|| false).expect("default cut");
+    let b = grid_cut_bk_cancellable(&img, &cf, &cb, &fixed, weight, &|| false).expect("bk cut");
+    let (ea, eb) = (grid_energy(&img, &cf, &cb, &a, weight), grid_energy(&img, &cf, &cb, &b, weight));
+    assert!((ea - eb).abs() <= 1e-3 * ea.abs().max(1.0), "default {ea} vs bk {eb}");
+    assert_eq!(a, b, "same labelling, not just the same energy");
+    assert!(grid_cut_bk_cancellable(&img, &cf, &cb, &fixed, weight, &|| true).is_none(), "BK honours cancel");
 }

@@ -1,11 +1,17 @@
-//! Shape fill and stroke swatches shared by the options bar and the Properties panel.
+//! Shape fill and stroke paints shared by the options bar and the Properties panel.
 
-use egui::{Color32, Sense, Stroke, vec2};
-
+use craft::color_ui::palette::SwatchGroup;
+use craft::color_ui::ui::{GradientPreview, Paint, PaintChip, PaintChipOutput, SwatchKey};
+use craft::draw::stroke::StrokeStyle;
+use craft::draw::ui::GradientRef;
+use craft::draw::ui::shape::{ShapeAppearance, ShapePaint};
+use craft::theme::Srgba;
+use craft::ui::contract::{Bind, Show as _};
+use craft::ui::patterns::presets::PresetState;
 use serde_json::{Value, json};
 
-use crate::shape_gradient_ui::{self as shape_gradient, GradientChoices};
-use crate::theme::Tokens;
+use crate::shape_gradient_ui::ShapeGradients;
+use crate::shape_stroke_ui::StrokeOptions;
 
 pub(crate) fn color_of(f: &photocraft_doc::Fill) -> Option<[f32; 4]> {
     match f {
@@ -17,6 +23,16 @@ pub(crate) fn color_of(f: &photocraft_doc::Fill) -> Option<[f32; 4]> {
 pub(crate) fn rgba_of(c: &photocraft_doc::Color) -> [f32; 4] {
     let [r, g, b] = c.to_rgb();
     [r, g, b, c.alpha]
+}
+
+/// A float RGBA colour as the framework's colour.
+pub(crate) fn srgba(c: [f32; 4]) -> Srgba {
+    Srgba::new(c[0], c[1], c[2], c[3])
+}
+
+/// The framework's colour as float RGBA.
+pub(crate) fn rgba(c: Srgba) -> [f32; 4] {
+    [c.r, c.g, c.b, c.a]
 }
 
 /// A solid or gradient paint exactly as `shape.create` / `shape.edit` take it: float RGBA, the
@@ -37,175 +53,143 @@ pub(crate) fn paint_param(f: &photocraft_doc::Fill) -> Value {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum PaintChange {
     Color([f32; 4]),
-    /// A `Fill::Gradient` (the swatch's Gradient tab).
+    /// A `Fill::Gradient` (the chip's Gradient tab).
     Gradient(photocraft_doc::Fill),
     None,
 }
 
-pub(crate) fn rgba32(c: [f32; 4]) -> Color32 {
-    let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    Color32::from_rgba_unmultiplied(b(c[0]), b(c[1]), b(c[2]), b(c[3]))
+/// The chip's preview of a gradient fill: its stops by position, ascending.
+pub(crate) fn gradient_preview(fill: &photocraft_doc::Fill) -> GradientPreview {
+    let photocraft_doc::Fill::Gradient { stops, reverse, .. } = fill else { return GradientPreview::new(Vec::new()) };
+    let mut ramp: Vec<(f32, Srgba)> = stops.iter().map(|(p, c)| (p.clamp(0.0, 1.0), srgba(rgba_of(c)))).collect();
+    ramp.sort_by(|a, b| a.0.total_cmp(&b.0));
+    GradientPreview::new(ramp).reversed(*reverse)
 }
 
-pub(crate) fn picker_color(c: [f32; 4]) -> egui::ecolor::Hsva {
-    let linear = egui::ecolor::linear_from_gamma;
-    let display = c.map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 });
-    egui::ecolor::Hsva::from_rgba_unmultiplied(linear(display[0]), linear(display[1]), linear(display[2]), display[3])
-}
-
-pub(crate) fn picker_rgba(hsva: egui::ecolor::Hsva) -> [f32; 4] {
-    let [r, g, b, a] = hsva.to_rgba_unmultiplied();
-    let gamma = egui::ecolor::gamma_from_linear;
-    [gamma(r), gamma(g), gamma(b), a]
-}
-
-/// The shared compact picker keeps the float RGB paint and its alpha. Color32 is only display
-/// data: opening the picker must never quantize an existing high-depth colour or enable paint.
-pub(crate) fn swatch(
-    ui: &mut egui::Ui,
-    fill: Option<&photocraft_doc::Fill>,
-    fallback: [f32; 4],
-    tip: &str,
-    gradients: &mut GradientChoices,
-) -> Option<PaintChange> {
-    let t = Tokens::get(ui.ctx());
-    let (r, resp) = ui.allocate_exact_size(vec2(30.0, 22.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ColorWell, ui.is_enabled(), tip));
-    let current = fill.and_then(color_of);
-    crate::widgets::checker(ui.painter(), r.shrink(1.0), 4.0);
-    match (current, fill) {
-        (Some(c), _) => {
-            ui.painter().rect_filled(r.shrink(1.0), t.radius_sm, rgba32(c));
-        }
-        (None, Some(photocraft_doc::Fill::Gradient { stops, .. })) if !stops.is_empty() => {
-            // Gradient fills preview as a left-to-right ramp through their stops.
-            let rgb = |c: &photocraft_doc::Color| {
-                let v = c.to_rgba8();
-                Color32::from_rgba_unmultiplied(v[0], v[1], v[2], v[3])
-            };
-            let mut mesh = egui::Mesh::default();
-            let mut ramp: Vec<(f32, Color32)> = stops.iter().map(|(p, c)| (p.clamp(0.0, 1.0), rgb(c))).collect();
-            ramp.insert(0, (0.0, ramp[0].1));
-            ramp.push((1.0, ramp[ramp.len() - 1].1));
-            for (i, (p, c)) in ramp.iter().enumerate() {
-                let x = r.left() + r.width() * p;
-                mesh.colored_vertex(egui::pos2(x, r.top()), *c);
-                mesh.colored_vertex(egui::pos2(x, r.bottom()), *c);
-                if i > 0 {
-                    let k = (i as u32) * 2;
-                    mesh.add_triangle(k - 2, k - 1, k);
-                    mesh.add_triangle(k - 1, k, k + 1);
-                }
-            }
-            ui.painter().add(mesh);
-        }
-        (None, Some(_)) => {}
-        (None, None) => {
-            ui.painter().rect_filled(r.shrink(1.0), t.radius_sm, t.field);
-            ui.painter().line_segment([r.shrink(3.0).left_bottom(), r.shrink(3.0).right_top()], Stroke::new(1.5, t.danger));
-        }
-    };
-    let border = if resp.has_focus() {
-        t.accent
-    } else if resp.hovered() {
-        t.text_dim
-    } else {
-        t.field_border
-    };
-    ui.painter().rect_stroke(r, t.radius_sm, Stroke::new(1.0, border), egui::StrokeKind::Inside);
-    let resp = resp.on_hover_text(tip);
-    let screen_id = resp.id.with("screen-color");
-    let original = current.unwrap_or(fallback);
-    let sampled = |rgb: [f32; 3]| PaintChange::Color([rgb[0], rgb[1], rgb[2], original[3]]);
-    let mut out = crate::screen_picker::take(ui.ctx(), screen_id).map(sampled);
-    let cache = resp.id.with("shape-paint-hsva");
-    let mut hsva = ui
-        .data(|d| d.get_temp::<([f32; 4], egui::ecolor::Hsva)>(cache))
-        .filter(|(previous, _)| *previous == original)
-        .map_or_else(|| picker_color(original), |(_, hsva)| hsva);
-    if let Some(PaintChange::Color(color)) = out {
-        hsva = picker_color(color);
+/// The paint a chip shows for `fill` (`None` is No Color). A pattern shows as No Color: shapes
+/// do not offer one.
+pub(crate) fn paint_of(fill: Option<&photocraft_doc::Fill>) -> Paint {
+    match fill {
+        Some(photocraft_doc::Fill::Solid(c)) => Paint::Solid(srgba(rgba_of(c))),
+        Some(f @ photocraft_doc::Fill::Gradient { .. }) => Paint::Gradient(gradient_preview(f)),
+        _ => Paint::None,
     }
-    let gradient = fill.filter(|f| matches!(f, photocraft_doc::Fill::Gradient { .. }));
-    let popup_id = resp.id;
-    let shown = crate::widgets::swatch_popup(&resp).show(|ui| {
-        ui.horizontal(|ui| {
-            if ui.selectable_label(fill.is_none(), tl!("No Color")).clicked() && fill.is_some() {
-                out = Some(PaintChange::None);
-            }
-            if ui.selectable_label(current.is_some(), tl!("Solid")).clicked() && current.is_none() {
-                out = Some(PaintChange::Color(original));
-            }
-            if ui.selectable_label(gradient.is_some(), tl!("Gradient")).clicked() && gradient.is_none() {
-                out = Some(PaintChange::Gradient(gradients.default_fill()));
-            }
-        });
-        ui.separator();
-        if let Some(g) = gradient {
-            if let Some(edited) = shape_gradient::gradient_tab(ui, g, gradients, popup_id) {
-                out = Some(PaintChange::Gradient(edited));
-            }
-            return;
-        }
-        let before = picker_rgba(hsva);
-        if egui::color_picker::color_picker_hsva_2d(ui, &mut hsva, egui::color_picker::Alpha::OnlyBlend) {
-            let color = picker_rgba(hsva);
-            // egui's HSV gamma/linear round trip can move a float by an ulp without input.
-            if color.iter().zip(before).any(|(a, b)| (a - b).abs() > 0.000001) {
-                out = Some(PaintChange::Color(color));
-            }
-        }
-        ui.horizontal(|ui| {
-            let label = ui.label(egui::RichText::new("#").color(t.text_dim));
-            let id = resp.id.with("shape-paint-hex");
-            let selected = match out {
-                Some(PaintChange::Color(color)) => color,
-                _ => original,
-            };
-            // Keep incomplete typing across frames; deriving the field from the colour each
-            // frame would discard every keystroke until all six digits were present.
-            let mut text = ui.data(|d| d.get_temp::<([f32; 4], String)>(id)).filter(|(previous, _)| *previous == selected).map_or_else(
-                || crate::color_picker_ui::hex([selected[0], selected[1], selected[2]]).trim_start_matches('#').to_ascii_uppercase(),
-                |(_, text)| text,
-            );
-            let response = crate::widgets::text_field(ui, id, &mut text, "RRGGBB", 90.0, true).labelled_by(label.id);
-            if response.changed()
-                && let Some(rgb) = crate::color_picker_ui::parse_hex(&text)
-            {
-                let color = [rgb[0], rgb[1], rgb[2], selected[3]];
-                out = Some(PaintChange::Color(color));
-                hsva = picker_color(color);
-            }
-            if response.has_focus() {
-                let color = match out {
-                    Some(PaintChange::Color(color)) => color,
-                    _ => selected,
-                };
-                ui.data_mut(|d| d.insert_temp(id, (color, text)));
-            } else {
-                ui.data_mut(|d| d.remove::<([f32; 4], String)>(id));
-            }
-        });
-        if let Some(rgb) = crate::screen_picker::button(ui, screen_id) {
-            out = Some(sampled(rgb));
-            hsva = picker_color([rgb[0], rgb[1], rgb[2], original[3]]);
-        }
-    });
-    // The gradient a swatch's popup closes on joins the Gradient tab's Recent row.
-    let open_key = popup_id.with("open");
-    let was_open = ui.data(|d| d.get_temp::<bool>(open_key)).unwrap_or(false);
-    let open = shown.is_some();
-    if was_open
-        && !open
-        && let Some(g) = gradient
-    {
-        gradients.remember(g);
+}
+
+/// The gradient a chip's `preview` stands for over `base` (the chip's [`ChipLibrary::gradient`]): `base` itself when
+/// the preview shows its stops and direction, so the stops keep their colour models; otherwise `base` with the
+/// preview's stops and direction, its angle, style and the other fields kept.
+pub(crate) fn gradient_fill(preview: &GradientPreview, base: &photocraft_doc::Fill) -> photocraft_doc::Fill {
+    if gradient_preview(base) == *preview {
+        return base.clone();
     }
-    ui.data_mut(|d| d.insert_temp(open_key, open));
-    let cached_color = match out {
-        Some(PaintChange::Color(color)) => color,
-        _ => original,
-    };
-    ui.data_mut(|d| d.insert_temp(cache, (cached_color, hsva)));
-    out
+    let stops = preview.stops.iter().map(|(t, c)| (*t, photocraft_doc::Color::rgba(c.r, c.g, c.b, c.a))).collect();
+    match base {
+        photocraft_doc::Fill::Gradient { .. } => {
+            let mut merged = base.clone();
+            if let photocraft_doc::Fill::Gradient { stops: kept, reverse, .. } = &mut merged {
+                *kept = stops;
+                *reverse = preview.reverse;
+            }
+            merged
+        }
+        _ => photocraft_doc::Fill::gradient(stops, 90.0, 1.0, photocraft_doc::GradientStyle::Linear, preview.reverse),
+    }
+}
+
+/// The `shape.edit` parameter of a chip's `paint`: a colour as float RGBA, a gradient as [`gradient_fill`] over
+/// `base` gives it, `null` for No Color or a paint the shape tools do not offer (a pattern or picture).
+pub(crate) fn fill_param(paint: &Paint, base: &photocraft_doc::Fill) -> Value {
+    match paint {
+        Paint::Solid(c) => json!(rgba(*c)),
+        Paint::Gradient(preview) => paint_param(&gradient_fill(preview, base)),
+        _ => Value::Null,
+    }
+}
+
+/// The colour of a solid `paint`, for the Recently Used Colors.
+pub(crate) fn solid_rgb(paint: &Paint) -> Option<[f32; 3]> {
+    match paint {
+        Paint::Solid(c) => Some([c.r, c.g, c.b]),
+        _ => None,
+    }
+}
+
+/// What the Shape Properties panel and the shape options bar show for shape layer `sh`; `locked` disables every field.
+pub(crate) fn appearance_of(sh: &photocraft_doc::ShapeLayer, locked: bool) -> ShapeAppearance {
+    let width = sh.stroke.as_ref().map_or(0.0, |s| s.width);
+    let style = sh.stroke.as_ref().map(|s| StrokeStyle::from(&StrokeOptions::from(s))).unwrap_or_default();
+    ShapeAppearance::new(paint_of(sh.fill.as_ref()), paint_of(sh.stroke.as_ref().map(|s| &s.paint)), f64::from(width)).stroke_style(style).locked(locked)
+}
+
+/// What the Fill and Stroke chips offer beside the paint, for the shape options bar and the Shape Properties panel
+/// alike: the Recently Used Colors, the swatch library, the full Color Picker and the Gradient tab.
+pub(crate) struct ChipLibrary<'a> {
+    recent: &'a [Srgba],
+    swatches: &'a [SwatchGroup],
+    folders: &'a mut PresetState<SwatchKey>,
+    gradients: ShapeGradients<'a>,
+    gradient_state: &'a mut PresetState<GradientRef>,
+    /// The chips' paints as the bar or panel shows them, fill then stroke.
+    current: [Option<photocraft_doc::Fill>; 2],
+    /// What a switch to the Gradient tab sets.
+    default_gradient: photocraft_doc::Fill,
+    /// The gradients the chips' editors produced this pass, fill then stroke.
+    edited: [Option<photocraft_doc::Fill>; 2],
+}
+
+impl<'a> ChipLibrary<'a> {
+    /// The library over `recent` colours, the swatch `swatches` with their open `folders`, the `gradients` store and
+    /// its list state; `current` is the fill and the stroke paint shown.
+    pub(crate) fn new(
+        recent: &'a [Srgba],
+        swatches: &'a [SwatchGroup],
+        folders: &'a mut PresetState<SwatchKey>,
+        gradients: ShapeGradients<'a>,
+        gradient_state: &'a mut PresetState<GradientRef>,
+        current: [Option<photocraft_doc::Fill>; 2],
+    ) -> Self {
+        let default_gradient = gradients.default_fill();
+        ChipLibrary { recent, swatches, folders, gradients, gradient_state, current, default_gradient, edited: [None, None] }
+    }
+
+    /// The gradient chip `which` stands for: the one its editor produced this pass, else its own gradient, else the
+    /// default gradient.
+    pub(crate) fn gradient(&self, which: ShapePaint) -> photocraft_doc::Fill {
+        let slot = slot(which);
+        self.edited[slot]
+            .clone()
+            .or_else(|| self.current[slot].clone().filter(|f| matches!(f, photocraft_doc::Fill::Gradient { .. })))
+            .unwrap_or_else(|| self.default_gradient.clone())
+    }
+}
+
+/// A chip's place in [`ChipLibrary`]'s pairs: 0 the fill, 1 the stroke.
+fn slot(which: ShapePaint) -> usize {
+    match which {
+        ShapePaint::Stroke => 1,
+        _ => 0,
+    }
+}
+
+/// The Fill or Stroke chip `which` with what `library` offers; a gradient edited in its Gradient tab is kept in the
+/// library for [`ChipLibrary::gradient`].
+pub(crate) fn decorate_chip<'c>(chip: PaintChip<'c>, which: ShapePaint, library: &'c mut ChipLibrary<'_>, ui: &mut egui::Ui) -> PaintChipOutput {
+    let from = library.gradient(which);
+    let default_preview = gradient_preview(&library.default_gradient);
+    let ChipLibrary { recent, swatches, folders, gradients, gradient_state, edited, .. } = library;
+    let edited = &mut edited[slot(which)];
+    let folders: &mut PresetState<SwatchKey> = folders;
+    chip.recent(recent)
+        .swatches(swatches, Bind::bound(folders))
+        .full_picker(true)
+        .gradient_editor(default_preview, move |ui: &mut egui::Ui| {
+            // A second run in the same pass starts from what the first produced.
+            let base = edited.clone().unwrap_or_else(|| from.clone());
+            let picked = crate::shape_gradient_ui::editor(ui, &base, gradients, Bind::bound(&mut **gradient_state))?;
+            let preview = gradient_preview(&picked);
+            *edited = Some(picked);
+            Some(preview)
+        })
+        .show(ui)
 }
