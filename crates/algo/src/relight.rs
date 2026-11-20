@@ -560,7 +560,7 @@ mod tests {
             })
             .collect();
         s.write_interleaved(bounds, &bytes);
-        let p = Params { angle: 180.0, elevation: 30.0, intensity: 90.0, ambient: 12.0, warmth: 0.0, softness: 25.0 };
+        let p = Params { angle: 180.0, elevation: 30.0, intensity: 90.0, ambient: 12.0, warmth: 0.0, softness: 25.0, lights: vec![] };
         let reach = read_radius(sigma(p.softness, bounds));
         assert!(luma_band_rows(bounds, reach, 20_000).is_some());
         let src = Image::read_clamped(&s, bounds.inflate(reach), bounds);
