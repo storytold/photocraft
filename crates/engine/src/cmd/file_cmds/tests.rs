@@ -4739,3 +4739,35 @@ fn save_and_close_refuses_a_read_only_source() {
         assert_eq!(std::fs::read(&source).unwrap(), bytes, "overrideOpen {override_open}: the source is unchanged");
     }
 }
+
+/// Batch runs each input in a scratch session; an Object Selection step with `"method":"model"`
+/// must reach the model of the session that started the Batch.
+#[test]
+fn batch_steps_use_the_session_object_model() {
+    use crate::object_model::{ObjectModel, SegmentAnswer, SegmentRequest};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Counting(AtomicUsize);
+    impl ObjectModel for Counting {
+        fn unavailable(&self) -> Option<String> {
+            None
+        }
+        fn segment(&self, req: &SegmentRequest, _cancelled: &(dyn Fn() -> bool + Sync)) -> std::result::Result<SegmentAnswer, String> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            let n = (req.width as usize) * (req.height as usize);
+            Ok(SegmentAnswer { mask: vec![255; n], matched: true })
+        }
+    }
+
+    let dir = tmp("batch-object-model");
+    let input = png(&dir, "a.png", 16, 16, "#ff0000");
+    let out = join(&dir, "out");
+    std::fs::create_dir_all(&out).unwrap();
+    let model = Arc::new(Counting(AtomicUsize::new(0)));
+    let mut s = Session::new();
+    s.object_model = Some(Arc::clone(&model) as Arc<dyn ObjectModel>);
+    let steps = json!([["select.object", {"rect": [2, 2, 12, 12], "method": "model", "sampleAllLayers": true}]]);
+    let result = s.execute("file.automate.batch", json!({"steps": steps, "input": [input], "output": out})).unwrap();
+    assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
+    assert_eq!(model.0.load(Ordering::SeqCst), 1, "the Batch step did not reach the session's model: {result}");
+}

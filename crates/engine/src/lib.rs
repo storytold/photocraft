@@ -34,6 +34,7 @@ pub mod malloc_tuning;
 pub mod memory;
 pub mod memory_gate;
 pub mod new_layer;
+pub mod object_model;
 mod param_check;
 mod pixels;
 pub mod prefs;
@@ -320,6 +321,9 @@ pub struct Session {
     /// Object Selection's Object Finder results (#4087), shared by the hover preview and the
     /// click that commits it; valid while the pixels are unchanged.
     pub object_finder: smartselect_cmds::ObjectFinderCache,
+    /// The segmentation model the frontend provides for Object Selection (the desktop app's shared
+    /// `select-subject` tool); `None` selects with the classical algorithm only.
+    pub object_model: Option<std::sync::Arc<dyn object_model::ObjectModel>>,
     /// A finished live stroke offered to the `paint.stroke` / `paint.pencil` that commits it
     /// ([`Session::offer_live_stroke`]).
     pub(crate) live_commit: Option<brush_cmds::LiveCommit>,

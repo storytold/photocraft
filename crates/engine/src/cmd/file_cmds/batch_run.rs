@@ -256,12 +256,15 @@ fn process_outputs<'a>(
     let raw_ppi = s.prefs().raw_defaults.resolution;
     let action_prefs = s.prefs().actions.clone();
     let authorize = s.authorize;
+    let object_model = s.object_model.clone();
     let mut files = Vec::new();
     let mut errors = Vec::new();
     let mut written = OutputClaims::default();
     let run = |scratch: &mut Session, out: &str| {
-        // Nested commands answer to the initiating session's authorization hook.
+        // Nested commands answer to the initiating session's authorization hook, and run Object
+        // Selection on its model.
         scratch.authorize = authorize;
+        scratch.object_model = object_model.clone();
         scratch.prefs.edit(|prefs| prefs.actions = action_prefs.clone());
         f(scratch, out).map_err(FileFailure::from)
     };
@@ -315,6 +318,7 @@ pub(super) fn process_document_copies(
         }
         let prepare = |scratch: &mut Session, _: &str| {
             scratch.authorize = s.authorize;
+            scratch.object_model = s.object_model.clone();
             scratch.prefs.edit(|prefs| *prefs = s.prefs().clone());
             scratch.add_document(state.doc.as_ref().clone(), state.path.clone());
             // The moved selection belongs to the displayed image; commit it only in the copy.
@@ -999,6 +1003,8 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         save.preserve_alpha = true;
     }
     let authorize = s.authorize;
+    // Object Selection's model: a step with `"method": "model"` runs on it in each scratch session too.
+    let object_model = s.object_model.clone();
     let raw_ppi = super::open::raw_open_resolution(s);
     let action_prefs = s.prefs().actions.clone();
     let prefs = s.prefs.clone();
@@ -1132,6 +1138,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     Ok(())
                 };
                 scratch.authorize = authorize;
+                scratch.object_model = object_model.clone();
                 scratch.actions = actions.clone();
                 scratch.actions.playback_steps = carried.get();
                 scratch.actions.script_steps = script_steps.get();

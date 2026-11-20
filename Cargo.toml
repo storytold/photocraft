@@ -13,6 +13,11 @@ rust-version = "1.95"
 # The craft framework through its facade (`craft::ui::…`). The egui `[patch]` below must match
 # `craft::egui_fork::REV` (checked by `cargo xtask ci`).
 craft = { git = "https://github.com/storytold/craft-libs", rev = "bafb4522899d9f814a07dad636cdefcbf705dead", default-features = false }
+# The shared AI layer Object Selection runs SAM 2.1 through (`select-subject`, on the built-in rten
+# engine), from storytold/craft-ai-integrations. One revision for both crates, so there is one
+# `craft-ai-core`.
+craft-ai-client = { git = "https://github.com/storytold/craft-ai-integrations", rev = "d94a3593adcff504eaaad9e5aee4c84fd2f07a72", features = ["rten"] }
+craft-ai-core = { git = "https://github.com/storytold/craft-ai-integrations", rev = "d94a3593adcff504eaaad9e5aee4c84fd2f07a72" }
 # internal
 photocraft-geom = { path = "crates/geom" }
 photocraft-color = { path = "crates/color" }

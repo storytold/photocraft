@@ -47,6 +47,8 @@ mod external_svg;
 mod linux_libs;
 mod logging;
 mod monitor_profile;
+#[cfg(not(target_arch = "wasm32"))]
+mod object_ai;
 mod photoshop_settings;
 mod presentation;
 // The print portal needs the session bus (zbus, Linux only); its pure helpers are tested everywhere.
@@ -555,10 +557,19 @@ fn main() -> eframe::Result {
             let session = {
                 let mut session = Session::new();
                 session.print_spooler = print_portal::spooler();
+                session.object_model = object_ai::model();
                 session
             };
             #[cfg(not(target_os = "linux"))]
-            let session = Session::new();
+            let session = {
+                #[allow(unused_mut)]
+                let mut session = Session::new();
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    session.object_model = object_ai::model();
+                }
+                session
+            };
             // Before the first pass: the one install of the craft runtime must see every pass from
             // the first (R71); the app then runs on that context.
             PhotocraftApp::setup_window(&cc.egui_ctx, Default::default(), decision);
