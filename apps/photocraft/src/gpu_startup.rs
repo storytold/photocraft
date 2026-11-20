@@ -432,7 +432,9 @@ pub fn configure(setup: &mut egui_wgpu::WgpuSetup, plan: &Plan, os: Os, wanted: 
         if linux_auto_nvk {
             create.instance_descriptor.backends |= wgpu::Backends::GL;
         }
-        let select = wanted.is_some() || linux_auto_nvk || (plan.env.is_none() && (plan.backend == GpuBackend::Cpu || (plan.backend == GpuBackend::Auto && os == Os::Windows)));
+        let select = wanted.is_some()
+            || linux_auto_nvk
+            || (plan.env.is_none() && (plan.backend == GpuBackend::Cpu || (plan.backend == GpuBackend::Auto && os == Os::Windows)));
         if select {
             let backend = plan.backend;
             create.native_adapter_selector = Some(Arc::new(move |adapters: &[wgpu::Adapter], surface: Option<&wgpu::Surface<'_>>| {
@@ -450,8 +452,7 @@ pub fn configure(setup: &mut egui_wgpu::WgpuSetup, plan: &Plan, os: Os, wanted: 
                         }
                     })
                     .collect();
-                let (i, nvk_avoided) =
-                    pick_with_nvk_workaround(&cands, backend, os, linux_auto_nvk).ok_or_else(|| "no graphics adapter found".to_string())?;
+                let (i, nvk_avoided) = pick_with_nvk_workaround(&cands, backend, os, linux_auto_nvk).ok_or_else(|| "no graphics adapter found".to_string())?;
                 if nvk_avoided {
                     let selected = adapters[i].get_info();
                     let message = format!(
