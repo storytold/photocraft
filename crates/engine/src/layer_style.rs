@@ -154,7 +154,7 @@ pub fn effect_defaults(kind: &str) -> Value {
             json!({"blend": "Multiply", "color": "#000000", "opacity": 75, "angle": 120, "useGlobalLight": true, "distance": 5, "choke": 0, "size": 5, "contour": "Linear", "antiAlias": false, "noise": 0})
         }
         "outerGlow" => {
-            json!({"blend": "Screen", "opacity": 75, "color": "#ffffbe", "technique": "softer", "spread": 0, "size": 5, "range": 50, "contour": "Linear", "antiAlias": false, "noise": 0})
+            json!({"blend": "Screen", "opacity": 35, "color": "#ffffff", "technique": "softer", "spread": 0, "size": 7, "range": 50, "contour": "Linear", "antiAlias": false, "noise": 0})
         }
         "innerGlow" => {
             json!({"blend": "Screen", "opacity": 75, "color": "#ffffbe", "technique": "softer", "source": "edge", "choke": 0, "size": 5, "range": 50, "contour": "Linear", "antiAlias": false, "noise": 0})
@@ -566,12 +566,15 @@ fn fresh_effect(kind: &str) -> Option<Effect> {
         noise: 0.0,
         knocks_out: !inner,
     };
-    let glow = || Glow {
-        common: FxCommon::new(BlendMode::Screen, 0.75),
-        paint: FxPaint::Color(Color::rgb(1.0, 1.0, 190.0 / 255.0)),
+    // The two glows share their shape, but not their factory values: the Outer Glow starts at
+    // the reference application's white 35 % Size 7 (#14944), the Inner Glow at today's values
+    // until #14917 measures its own.
+    let glow = |inner: bool| Glow {
+        common: FxCommon::new(BlendMode::Screen, if inner { 0.75 } else { 0.35 }),
+        paint: FxPaint::Color(if inner { Color::rgb(1.0, 1.0, 190.0 / 255.0) } else { Color::WHITE }),
         technique: GlowTechnique::Softer,
         spread: 0.0,
-        size: 5.0,
+        size: if inner { 5.0 } else { 7.0 },
         contour: Contour::Linear,
         anti_alias: false,
         range: 0.5,
@@ -582,8 +585,8 @@ fn fresh_effect(kind: &str) -> Option<Effect> {
     Some(match kind {
         "dropShadow" => Effect::DropShadow(shadow(false)),
         "innerShadow" => Effect::InnerShadow(shadow(true)),
-        "outerGlow" => Effect::OuterGlow(glow()),
-        "innerGlow" => Effect::InnerGlow(glow()),
+        "outerGlow" => Effect::OuterGlow(glow(false)),
+        "innerGlow" => Effect::InnerGlow(glow(true)),
         "stroke" => Effect::Stroke(StrokeFx {
             common: FxCommon::new(BlendMode::Normal, 1.0),
             size: 1.0,
@@ -1280,6 +1283,9 @@ fn delete_effect(s: &mut Session, p: &Value, effect: &Value) -> Result<Value> {
     })?;
     Ok(Value::Null)
 }
+
+#[cfg(test)]
+mod outer_glow_defaults_tests;
 
 #[cfg(test)]
 mod inner_shadow_ranges_tests;
