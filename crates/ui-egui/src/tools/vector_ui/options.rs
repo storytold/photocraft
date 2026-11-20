@@ -160,7 +160,16 @@ fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut BarOpe
 fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut BarOpen) {
     // Photoshop's Pen lists Shape, Path and a greyed Pixels; the other pens keep theirs.
     let offered: &[(VectorMode, bool)] = if tool == Tool::Pen { &PEN_MODES } else { &OTHER_PEN_MODES };
+    // Photoshop's Freeform Pen stays in Path mode in an Indexed Color document (#12840). The
+    // mode is shared with the other pens, so one set to Shape elsewhere is reset here too.
+    let path_only = tool == Tool::FreeformPen && app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Indexed);
+    if path_only {
+        app.ui.tool_options.vector_mode = VectorMode::Path;
+    }
     VectorModeSelect::new(Bind::bound(&mut app.ui.tool_options.vector_mode), offered).show(ui);
+    if path_only {
+        app.ui.tool_options.vector_mode = VectorMode::Path;
+    }
     Divider::vertical().show(ui);
     if app.ui.tool_options.vector_mode == VectorMode::Shape {
         let ppi = document_ppi(app);
