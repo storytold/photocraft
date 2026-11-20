@@ -1,7 +1,7 @@
 //! Recorded Calculations Make forms, using the measured reference and ScriptListener types.
 use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
 use craft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
-use photocraft_engine::actions_cmds::Action;
+use photocraft_engine::actions_cmds::{Action, ActionList, ActionStep, ActionsFile};
 use photocraft_engine::{Session, atn_cmds};
 use serde_json::{Value, json};
 
@@ -44,7 +44,7 @@ fn roundtrip(d: Descriptor) -> Action {
     let imported = atn_cmds::import(&bytes(d.clone())).unwrap();
     assert!(imported.unsupported.is_empty());
     let action = imported.actions[0].clone();
-    assert_eq!(action.steps[0].0, "image.calculations");
+    assert_eq!(action.steps[0].command, "image.calculations");
     let (saved, skipped) = atn_cmds::export("Calculations", &[&action], &[], false).unwrap();
     assert!(skipped.is_empty());
     assert_eq!(atn::parse(&saved).unwrap().actions[0].items[0].descriptor, Some(d));
@@ -75,7 +75,7 @@ fn alpha(s: &Session, index: usize) -> Vec<f32> {
 }
 
 fn play(s: &mut Session, action: Action) -> Value {
-    s.actions.list = vec![action];
+    s.actions.list = ActionList::from_file(ActionsFile::new(vec![action], Vec::new()));
     s.execute("actions.play", json!({"action": "Calculate"})).unwrap()
 }
 
@@ -246,11 +246,11 @@ fn atn_calculations_unknown_wire_forms_are_kept_and_unrepresentable_native_optio
     }
     for d in variants {
         let imported = atn_cmds::import(&bytes(d.clone())).unwrap();
-        assert_eq!(imported.actions[0].steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(imported.actions[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP);
         let (saved, _) = atn_cmds::export("Calculations", &[&imported.actions[0]], &[], false).unwrap();
         assert_eq!(atn::parse(&saved).unwrap().actions[0].items[0].descriptor, Some(d));
     }
-    let valid = roundtrip(original).steps[0].1.clone();
+    let valid = roundtrip(original).steps[0].params.clone();
     for (key, value) in [
         ("result", json!("selection")),
         ("mask", json!({"channel":"red"})),
@@ -261,7 +261,7 @@ fn atn_calculations_unknown_wire_forms_are_kept_and_unrepresentable_native_optio
     ] {
         let mut p = valid.clone();
         p[key] = value;
-        let a = Action::new("Bad", vec![("image.calculations".into(), p)]);
+        let a = Action::new("Bad", vec![ActionStep::new("image.calculations", p)]);
         assert!(atn_cmds::export("Calculations", &[&a], &[], false).is_err(), "{key}");
     }
 }
@@ -274,7 +274,7 @@ fn atn_calculations_make_routing_retains_mask_creation() {
         .with("Usng", D::Enumerated { type_id: Id::new("UsrM"), value: Id::new("RvlA") });
     let imported = atn_cmds::import(&bytes(d)).unwrap();
     assert!(imported.unsupported.is_empty());
-    assert_eq!(imported.actions[0].steps[0].0, "layer.layerMask.revealAll");
+    assert_eq!(imported.actions[0].steps[0].command, "layer.layerMask.revealAll");
     let mut s = fixture(32);
     assert_eq!(play(&mut s, imported.actions[0].clone())["ran"], 1);
     let doc = &s.active().unwrap().doc;

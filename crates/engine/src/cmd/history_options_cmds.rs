@@ -79,7 +79,7 @@ pub fn snapshot_on_save(s: &mut Session) -> Option<u64> {
     let st = s.active_mut()?;
     // Saved again without a change: the previous save's snapshot already shows this document.
     if let Some(prev) = st.save_snapshot
-        && st.snapshots.iter().any(|snap| snap.id == prev && std::sync::Arc::ptr_eq(&snap.doc, &st.doc))
+        && st.snapshots().iter().any(|snap| snap.id == prev && std::sync::Arc::ptr_eq(&snap.doc, &st.doc))
     {
         return None;
     }
@@ -88,7 +88,7 @@ pub fn snapshot_on_save(s: &mut Session) -> Option<u64> {
     st.next_snapshot = id.saturating_add(1);
     let (doc, layers) = (st.doc.clone(), st.layer_target());
     // Like the camera button: the document and its saved state are unchanged.
-    st.snapshots.push(Snapshot { id, name, doc, layers });
+    st.snapshots_mut().push(Snapshot { id, name, doc, layers });
     st.save_snapshot = Some(id);
     // The snapshot's tiles count against the history budget.
     st.trim_history();
@@ -158,15 +158,8 @@ pub(crate) fn delete_state(s: &mut Session, i: usize, current: usize) -> Result<
         if !removed {
             return Err(EngineError::Other(format!("state {i} is not held")));
         }
-        // The document is unchanged, but the History panel's rows are not: a view-only change
-        // that keeps a clean document clean.
-        let clean = st.saved_revision == st.revision;
-        st.revision += 1;
-        st.view_revision += 1;
-        if clean {
-            st.saved_revision = st.revision;
-        }
-        st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+        // The document is unchanged: a view-only change that keeps a clean document clean.
+        st.bump_view_revision(!st.is_dirty());
         return Ok(());
     }
     // The step that made the current state: the layers whose visibility it changed get it back.
@@ -454,7 +447,7 @@ mod tests {
     }
 
     fn snapshot_names(s: &Session) -> Vec<String> {
-        s.active().unwrap().snapshots.iter().map(|snap| snap.name.clone()).collect()
+        s.active().unwrap().snapshots().iter().map(|snap| snap.name.clone()).collect()
     }
 
     /// PNG bytes of a small image, to open.
@@ -505,7 +498,7 @@ mod tests {
         let states = entries(&s);
         let id = snapshot_on_save(&mut s).unwrap();
         let st = s.active().unwrap();
-        let snap = st.snapshots.last().unwrap();
+        let snap = st.snapshots().last().unwrap();
         assert_eq!(snap.id, id);
         assert!(std::sync::Arc::ptr_eq(&snap.doc, &st.doc), "the document as saved");
         // HH:MM:SS, the local time of the save.
