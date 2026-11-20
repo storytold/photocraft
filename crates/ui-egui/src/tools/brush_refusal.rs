@@ -38,7 +38,7 @@ fn mode_tool_name(tool: Tool) -> Option<&'static str> {
 }
 
 /// The tool's name in the alerts, for the tools whose wording was measured: the Brush, the
-/// Sharpen tool (#12952), the Sponge (#13030), the Smudge tool (#12965), the Art History Brush
+/// Sharpen tool (#12952), the Sponge (#13030), the Smudge tool (#12965), the Healing Brush (#12111), the Art History Brush
 /// (#12638) and the Classic gradient (the live Gradient makes a fill layer and isn't measured, #12017).
 pub fn tool_name(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     match tool {
@@ -46,6 +46,7 @@ pub fn tool_name(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
         Tool::Sharpen => Some(tl!("sharpen tool")),
         Tool::Sponge => Some(tl!("sponge tool")),
         Tool::Smudge => Some(tl!("smudge tool")),
+        Tool::Healing => Some(tl!("healing brush")),
         Tool::ArtHistoryBrush => Some(tl!("art history brush")),
         Tool::Gradient if app.ui.tool_options.gradient_classic => Some(tl!("gradient tool")),
         _ => None,
@@ -92,7 +93,8 @@ fn layer_refusal(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     if crate::canvas::paint_target(app) != json!("pixels") {
         None
     } else if layer.is_group() {
-        Some(GROUP)
+        // A group is the Healing Brush's no-source alert (#12109), not this one.
+        (tool != Tool::Healing).then_some(GROUP)
     } else if locked(st.doc.effective_locks(layer.id), tool) {
         Some(LOCKED)
     } else {
@@ -126,3 +128,7 @@ mod remove_hidden_layer_tests;
 #[cfg(test)]
 #[path = "art_history_refusal_alert_tests.rs"]
 mod art_history_refusal_alert_tests;
+
+#[cfg(test)]
+#[path = "../healing_refusal_alert_tests.rs"]
+mod healing_refusal_alert_tests;
