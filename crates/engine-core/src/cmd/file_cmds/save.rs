@@ -48,6 +48,9 @@ pub(crate) struct SaveOpts {
     /// PDF: spot channels as overprinting Separation plates (`"pdfSpotPlates"`); on unless the
     /// params say `false`.
     pub pdf_spot_plates: bool,
+    /// PDF: the resolution each page's image is downsampled to when the document's is higher
+    /// (`"pdfDownsamplePpi"`); unset, every pixel is kept.
+    pub pdf_downsample_ppi: Option<f32>,
     /// PSD/PSB: embed the thumbnail resource (Preferences › File Handling › Image Previews).
     pub image_previews: bool,
     /// PSD/PSB: write the real merged image (Preferences › File Handling › Maximize PSD and PSB
@@ -76,6 +79,7 @@ impl Default for SaveOpts {
             tiff_pyramid: false,
             dds: photocraft_io::DdsOptions::default(),
             pdf_spot_plates: true,
+            pdf_downsample_ppi: None,
             image_previews: true,
             psd_maximize_compatibility: true,
             pcraft_full_composite: false,
@@ -108,6 +112,7 @@ impl SaveOpts {
             tiff_pyramid: tiff_bool_param(p, "tiffPyramid", cmd)?.unwrap_or(false),
             dds: dds_param(p, cmd)?.unwrap_or_default(),
             pdf_spot_plates: pdf_spot_plates_param(p, cmd)?,
+            pdf_downsample_ppi: pdf_downsample_ppi_param(p, cmd)?,
             image_previews: file_handling.image_previews != crate::prefs::Ask::Never,
             psd_maximize_compatibility: maximize_compatibility_param(p, cmd)?.unwrap_or(file_handling.maximize_psd_compatibility != crate::prefs::Ask::Never),
             pcraft_full_composite: pcraft_full_composite_param(p, cmd)?.unwrap_or(file_handling.pcraft_full_composite),
@@ -132,6 +137,20 @@ pub fn pdf_spot_plates_param(p: &Value, cmd: &str) -> Result<bool> {
     match p.get("pdfSpotPlates") {
         None | Some(Value::Null) => Ok(true),
         Some(v) => v.as_bool().ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: format!("`pdfSpotPlates` must be true or false, got {v}") }),
+    }
+}
+
+/// The resolution a PDF save downsamples its images to (`"pdfDownsamplePpi"`, 1 to 30000 pixels
+/// per inch, Save Adobe PDF › Compression › Bicubic Downsampling To; absent or null: none, #9642).
+/// Anything else is a bad parameter of command `cmd`.
+pub fn pdf_downsample_ppi_param(p: &Value, cmd: &str) -> Result<Option<f32>> {
+    use crate::document_preset_cmds::MAX_RESOLUTION;
+    match p.get("pdfDownsamplePpi") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_f64().filter(|ppi| (1.0..=MAX_RESOLUTION).contains(ppi)).map(|ppi| Some(ppi as f32)).ok_or_else(|| EngineError::BadParams {
+            cmd: cmd.into(),
+            msg: format!("`pdfDownsamplePpi` must be a number of pixels per inch from 1 to {MAX_RESOLUTION}, got {v}"),
+        }),
     }
 }
 
@@ -267,6 +286,7 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
         tga_bits: save.tga_bits,
         bmp_bits: save.bmp_bits,
         pdf_spot_plates: save.pdf_spot_plates,
+        pdf_downsample_ppi: save.pdf_downsample_ppi,
         image_previews: save.image_previews,
         psd_maximize_compatibility: save.psd_maximize_compatibility,
         pcraft_full_composite: save.pcraft_full_composite,
