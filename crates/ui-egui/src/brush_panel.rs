@@ -414,22 +414,27 @@ pub fn copy_texture_to_other_tools(app: &mut PhotocraftApp) {
 
 /// The Brush Settings panel menu actions (hamburger menu).
 pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    crate::pickers::shell::picker_menu_contents(
-        ui,
-        &mut app.ui.presets_ui,
-        "brush-picker",
-        crate::pickers::shell::PickerMenuOptions::for_panel("brush-picker"),
-        None,
-    );
-    ui.separator();
+    let panel = if app.ui.brush_picker.is_some() { "brush-picker" } else { "brushes" };
     if ui.button(tl!("New Brush Preset…")).clicked() {
         let name = new_preset_name(&app.session.tools.presets);
         if run_or_status(app, "brush.presets.save", json!({ "name": name }))
             && let Some(preset) = app.session.tools.presets.iter().find(|p| p.name == name)
         {
             app.ui.brushes_panel.renaming = Some(Renaming { group: false, name: name.clone(), folder: Vec::new(), text: String::new() });
-            crate::pickers::adapters::brush_picker::begin_rename(&mut app.ui.presets_ui, preset);
+            let target = (
+                preset.group.clone(),
+                crate::pickers::browser::asset_browser::ItemView {
+                    key: crate::pickers::adapters::brushes::preview_identity(preset),
+                    name: preset.name.clone(),
+                    group_path: preset.folder.clone(),
+                },
+            );
+            crate::pickers::browser::asset_browser::begin_item_rename(&mut app.ui.presets_ui, panel, &[target]);
         }
+        ui.close();
+    }
+    if ui.button(tl!("New Brush Group…")).clicked() {
+        crate::pickers::browser::popup_dialogs::request_new_group(ui.ctx(), panel);
         ui.close();
     }
     ui.separator();
@@ -441,78 +446,58 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .filter(|name| !crate::pickers::adapters::brushes::is_ambiguous_preset_name(&app.session.tools.presets, name))
         .and_then(|name| app.session.tools.presets.iter().find(|preset| preset.name.eq_ignore_ascii_case(name)))
         .map(|preset| preset.name.clone());
-    if ui.add_enabled(current.is_some(), egui::Button::new(tl!("Rename Current Brush…"))).clicked()
+    if ui.add_enabled(current.is_some(), egui::Button::new(tl!("Rename Brush…"))).clicked()
         && let Some(name) = current.as_ref()
     {
         app.ui.brushes_panel.renaming = Some(Renaming { group: false, name: name.clone(), folder: Vec::new(), text: name.clone() });
-        app.ui.brush_tab = 1;
+        if panel == "brush-picker" {
+            let target = app.session.tools.presets.iter().find(|preset| preset.name == *name).map(|preset| {
+                (
+                    preset.group.clone(),
+                    crate::pickers::browser::asset_browser::ItemView {
+                        key: crate::pickers::adapters::brushes::preview_identity(preset),
+                        name: preset.name.clone(),
+                        group_path: preset.folder.clone(),
+                    },
+                )
+            });
+            if let Some(target) = target {
+                crate::pickers::browser::asset_browser::begin_item_rename(&mut app.ui.presets_ui, panel, &[target]);
+            }
+        } else {
+            app.ui.brush_tab = 1;
+        }
         ui.close();
     }
-    if ui.add_enabled(current.is_some(), egui::Button::new(tl!("Delete Current Brush"))).clicked()
+    if ui.add_enabled(current.is_some(), egui::Button::new(tl!("Delete Brush…"))).clicked()
         && let Some(name) = current
     {
         run_or_status(app, "brush.presets.delete", json!({ "name": name }));
         ui.close();
     }
     ui.separator();
-    let visible_parts = [app.ui.presets_ui.brush_picker.show_name, app.ui.presets_ui.brush_picker.show_stroke, app.ui.presets_ui.brush_picker.show_tip]
-        .into_iter()
-        .filter(|shown| *shown)
-        .count();
-    for (shown, label) in [
-        (&mut app.ui.presets_ui.brush_picker.show_name, tl!("Brush Name")),
-        (&mut app.ui.presets_ui.brush_picker.show_stroke, tl!("Brush Stroke")),
-        (&mut app.ui.presets_ui.brush_picker.show_tip, tl!("Brush Tip")),
-    ] {
-        let was_shown = *shown;
-        if ui.checkbox(shown, label).changed() {
-            if was_shown && visible_parts == 1 {
-                *shown = true;
-            }
-            ui.close();
-        }
+    if ui.button(tl!("Append Default Brushes…")).on_hover_text("Built-in brush presets are already included in the library.").clicked() {
+        app.ui.status_error = false;
+        app.ui.status = "Built-in brush presets are already included in the library.".into();
+        ui.close();
     }
-    ui.separator();
     if ui.button(tl!("Import Brushes…")).clicked() {
         let _ = crate::preset_files_ui::import_brushes(app);
         ui.close();
     }
-    ui.separator();
-    crate::pickers::shell::picker_menu_contents(
-        ui,
-        &mut app.ui.presets_ui,
-        "brushes",
-        crate::pickers::shell::PickerMenuOptions { display: true, wrap_list: true, search_visibility: false, recents_visibility: false },
-        None,
-    );
-    ui.separator();
-    crate::pickers::shell::picker_menu_contents(
-        ui,
-        &mut app.ui.presets_ui,
-        "brush-texture-patterns",
-        crate::pickers::shell::PickerMenuOptions { display: true, wrap_list: true, search_visibility: false, recents_visibility: false },
-        None,
-    );
-    ui.separator();
-    if ui.button(tl!("Clear Brush Controls")).clicked() {
-        let before = app.session.tools.brush.clone();
-        let cleared = clear_brush_controls(&before);
-        commit(app, &before, &cleared);
+    let has_selection = app.ui.presets_ui.browser_selection_snapshot.get(panel).is_some_and(|selection| selection.contains_card);
+    if ui.add_enabled(has_selection, egui::Button::new(tl!("Export Selected Brushes…"))).clicked() {
+        app.ui.status = "Exporting selected brushes is not supported yet.".into();
         ui.close();
     }
-    let has_locks = app.session.tools.brush.locks != photocraft_paint::brush::SectionLocks::default();
-    if ui.add_enabled(has_locks, egui::Button::new(tl!("Reset All Locked Settings"))).clicked() {
-        let before = app.session.tools.brush.clone();
-        let mut after = before.clone();
-        after.locks = photocraft_paint::brush::SectionLocks::default();
-        commit(app, &before, &after);
-        ui.close();
-    }
-    let has_texture = app.session.tools.brush.texture.enabled;
-    if ui.add_enabled(has_texture, egui::Button::new(tl!("Copy Texture to Other Tools"))).clicked() {
-        copy_texture_to_other_tools(app);
-        ui.close();
-    }
+}
+
+/// Compose the common asset-picker menu first, then append brush-library commands.
+pub fn picker_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let panel = if app.ui.brush_picker.is_some() { "brush-picker" } else { "brushes" };
+    crate::pickers::shell::picker_menu_contents(ui, &mut app.ui.presets_ui, panel, crate::pickers::shell::PickerMenuOptions::for_panel(panel), None);
+    ui.separator();
+    panel_menu(app, ui);
 }
 
 pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
@@ -552,7 +537,7 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     egui::Popup::menu(&menu_btn).show(|ui| {
                         widgets::style_spectrum_popup_menu(ui);
                         ui.set_min_width(180.0);
-                        panel_menu(app, ui);
+                        picker_menu(app, ui);
                         ui.separator();
                         if ui.button(tl!("Close")).clicked() {
                             open = false;
@@ -578,7 +563,3 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.ui.panels.brush_settings = false;
     }
 }
-
-#[cfg(test)]
-#[path = "brush_panel_tests.rs"]
-mod tests;

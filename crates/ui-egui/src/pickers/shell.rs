@@ -1,8 +1,8 @@
 //! Shared layout for preset pickers, independent of the asset-specific browser and commands.
 
-use crate::pickers::browser::asset_browser::{BrowserAction, BrowserAdapter, browser};
+use crate::pickers::browser::asset_browser::{BrowserAction, BrowserAdapter, browser_with_root_sequence};
 use crate::pickers::footer::FooterOptions;
-use crate::pickers::state::PresetUi;
+use crate::pickers::state::{HierarchyOrderEntry, PresetUi};
 
 #[cfg(test)]
 pub(crate) use crate::pickers::picker_panel_menu::picker_menu_popup;
@@ -20,6 +20,12 @@ pub(crate) struct ShellOptions<'a> {
     pub(crate) search: Option<UiCallback<'a>>,
     /// Standard shared footer controls, when the picker needs them.
     pub(crate) footer: Option<FooterOptions<'a>>,
+    /// Consumer footer content for controls such as a card-scale slider.
+    pub(crate) custom_footer: Option<(&'a mut dyn FnMut(&mut egui::Ui, &mut PresetUi) -> Vec<BrowserAction>, f32)>,
+    /// Optional authoritative ordering for mixed root groups and items.
+    pub(crate) root_sequence: Option<Vec<HierarchyOrderEntry>>,
+    /// Total height reserved for the shell, including its controls and footer.
+    pub(crate) max_total_height: Option<f32>,
 }
 
 pub(crate) type CustomFooter<'a> = (UiCallback<'a>, f32);
@@ -42,6 +48,7 @@ pub(crate) struct CustomShellOptions<'a> {
 /// Compose the standard controls, generic browser viewport, and optional standard footer.
 pub(crate) fn picker_shell(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut BrowserAdapter<'_>, mut shell: ShellOptions<'_>) -> Vec<BrowserAction> {
     let panel = adapter.panel.to_string();
+    let shell_top = ui.cursor().min.y;
     shell_controls(ui, &mut shell);
     crate::pickers::search::show_search_bar(ui, st, &panel);
 
@@ -53,11 +60,24 @@ pub(crate) fn picker_shell(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut B
     };
 
     let footer_id = egui::Id::new(("preset-footer", panel.as_str()));
-    let footer_h = if shell.footer.is_some() { ui.data(|d| d.get_temp::<f32>(footer_id)).unwrap_or(FOOTER_GUESS) } else { 0.0 };
+    let custom_footer_h = shell.custom_footer.as_ref().map_or(0.0, |(_, height)| *height + 4.0);
+    let standard_footer_h = shell.footer.as_ref().map_or(0.0, |_| ui.data(|d| d.get_temp::<f32>(footer_id)).unwrap_or(FOOTER_GUESS));
+    let footer_h = standard_footer_h + custom_footer_h;
     // Do not let a consumer's legacy thumbnail-grid cap leave unused space below a short control
     // row; the browser itself scrolls within the viewport reserved by the shell.
-    let allocated_h = (ui.available_height() - footer_h).max(0.0);
-    events.extend(browser(ui, st, adapter, allocated_h));
+    let allocated_h = shell.max_total_height.map_or((ui.available_height() - footer_h).max(0.0), |height| {
+        (height - (ui.cursor().min.y - shell_top) - footer_h).max(0.0).min((ui.available_height() - footer_h).max(0.0))
+    });
+    // Give the browser an explicit child rectangle. Besides making the shell's height budget a
+    // real clip (rather than an advisory ScrollArea maximum), this keeps its layout origin stable
+    // for consumers embedded in a docked panel or a floating egui Area.
+    let browser_size = egui::vec2(ui.max_rect().width(), allocated_h);
+    let (browser_rect, _) = ui.allocate_exact_size(browser_size, egui::Sense::hover());
+    let mut browser_ui = ui.new_child(egui::UiBuilder::new().max_rect(browser_rect).layout(egui::Layout::top_down(egui::Align::Min)));
+    browser_ui.set_min_size(browser_size);
+    browser_ui.set_max_size(browser_size);
+    browser_ui.set_clip_rect(browser_ui.clip_rect().intersect(browser_rect));
+    events.extend(browser_with_root_sequence(&mut browser_ui, st, adapter, allocated_h, shell.root_sequence.as_deref()));
     for event in &events {
         if let BrowserAction::SelectItem { group, group_path, key } = event {
             st.record_recent_item(&panel, group, group_path, key);
@@ -74,11 +94,8 @@ pub(crate) fn picker_shell(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut B
                     events.push(BrowserAction::DeleteItem { group, group_path, key })
                 }
                 crate::pickers::footer::FooterAction::DeleteSelection => {
-                    let selected = st
-                        .browser_selection_snapshot
-                        .get(&panel)
-                        .map(crate::pickers::browser::selection_operations::delete_selection)
-                        .unwrap_or_default();
+                    let selected =
+                        st.browser_selection_snapshot.get(&panel).map(crate::pickers::browser::selection_operations::delete_selection).unwrap_or_default();
                     if selected.is_empty() {
                         if let (Some(key), Some(group), Some(group_path)) =
                             (st.selected.get(&panel).cloned(), st.selected_group.get(&panel).cloned(), st.selected_group_path.get(&panel).cloned())
@@ -89,6 +106,34 @@ pub(crate) fn picker_shell(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut B
                         events.extend(selected);
                     }
                 }
+                crate::pickers::footer::FooterAction::New if panel == "swatches" => {
+                    if adapter.groups.iter().all(|group| group.items.is_empty()) {
+                        events.push(BrowserAction::New);
+                        continue;
+                    }
+                    let selected = st.selected.get(&panel).and_then(|key| {
+                        st.selected_group.get(&panel).map(|group| crate::pickers::browser::selection::SelectionTarget::Item {
+                            group: group.clone(),
+                            path: st.selected_group_path.get(&panel).cloned().unwrap_or_default(),
+                            key: key.clone(),
+                        })
+                    });
+                    let recent =
+                        st.recent_items.get(&panel).and_then(|items| items.first()).map(|item| crate::pickers::browser::selection::SelectionTarget::Item {
+                            group: item.group.clone(),
+                            path: item.group_path.clone(),
+                            key: item.key.clone(),
+                        });
+                    let first = adapter.groups.iter().find_map(|group| {
+                        group.items.first().map(|item| crate::pickers::browser::selection::SelectionTarget::Item {
+                            group: group.name.clone(),
+                            path: item.group_path.clone(),
+                            key: item.key.clone(),
+                        })
+                    });
+                    let selection = st.browser_selection_snapshot.get(&panel).cloned().unwrap_or_default();
+                    crate::pickers::browser::popup_dialogs::request_copy_swatch_preset(ui.ctx(), &selection, selected.or(recent).or(first));
+                }
                 crate::pickers::footer::FooterAction::New => events.push(BrowserAction::New),
                 crate::pickers::footer::FooterAction::NewGroup => events.push(BrowserAction::NewGroup),
             }
@@ -98,6 +143,10 @@ pub(crate) fn picker_shell(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut B
             ui.data_mut(|d| d.insert_temp(footer_id, measured));
             ui.ctx().request_repaint();
         }
+    }
+    if let Some((footer, _)) = shell.custom_footer {
+        ui.add_space(4.0);
+        events.extend(footer(ui, st));
     }
     let mut events = events;
     crate::pickers::browser::popup_dialogs::show_new_group_dialog(ui, &panel, adapter.groups, &mut events);
@@ -373,21 +422,24 @@ mod display_menu_tests {
     }
 
     #[test]
-    fn panels_without_a_search_row_do_not_receive_a_search_menu_point() {
-        let mut harness = Harness::builder().with_size(vec2(420.0, 260.0)).build_ui_state(
-            |ui, state: &mut PresetUi| {
-                picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
-                    picker_menu_contents(ui, state, "styles", PickerMenuOptions::for_panel("styles"), None);
-                });
-            },
-            PresetUi::default(),
-        );
-        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
-        harness.run_steps(2);
-        harness.get_by_label("Panel menu").click();
-        harness.run_steps(2);
-        assert!(harness.query_by_label("Show Search Bar").is_none());
-        assert!(harness.query_by_label("Text Only").is_some());
+    fn styles_and_shapes_panel_menus_match_patterns_search_and_recents_controls() {
+        for panel in ["styles", "shapes"] {
+            let mut harness = Harness::builder().with_size(vec2(420.0, 260.0)).build_ui_state(
+                |ui, state: &mut PresetUi| {
+                    picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
+                        picker_menu_contents(ui, state, panel, PickerMenuOptions::for_panel(panel), None);
+                    });
+                },
+                PresetUi::default(),
+            );
+            crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+            harness.run_steps(2);
+            harness.get_by_label("Panel menu").click();
+            harness.run_steps(2);
+            assert!(harness.query_by_label("Show Search Bar").is_some(), "{panel} exposes search visibility like Patterns");
+            assert!(harness.query_by_label("Show Recents").is_some(), "{panel} exposes recents visibility like Patterns");
+            assert!(harness.query_by_label("Text Only").is_some());
+        }
     }
 
     #[test]

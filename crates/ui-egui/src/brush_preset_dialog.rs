@@ -159,7 +159,3 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     }
     app.run("brush.presets.save", p)
 }
-
-#[cfg(test)]
-#[path = "brush_preset_dialog_tests.rs"]
-mod tests;

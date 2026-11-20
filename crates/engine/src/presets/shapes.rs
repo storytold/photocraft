@@ -390,10 +390,44 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     // Define Custom Shape results live in the edit state; rename/delete them there.
     let custom = |s: &Session, n: &str| {
         str_param(p, "group").is_none_or(|g| g == CUSTOM_GROUP)
-            && find(&s.presets.shapes, n, None).is_none()
+            && find(&s.presets.shapes, n, str_param(p, "group")).is_none()
             && s.edit_state.custom_shapes.iter().any(|c| c.name == n)
     };
     let r = match action.as_str() {
+        "move" if str_param(p, "group") == Some(CUSTOM_GROUP) => {
+            let name = req_str(p, "preset", CMD)?;
+            let to = req_str(p, "to", CMD)?;
+            let index = s.edit_state.custom_shapes.iter().position(|shape| shape.name == name).ok_or_else(|| bad(CMD, format!("no preset \"{name}\"")))?;
+            if to != CUSTOM_GROUP && find(&s.presets.shapes, name, None).is_some() {
+                return Err(bad(CMD, format!("a shape named \"{name}\" already exists")));
+            }
+            let shape = s.edit_state.custom_shapes.remove(index);
+            if to == CUSTOM_GROUP {
+                let at =
+                    p.get("index").and_then(Value::as_u64).map_or(s.edit_state.custom_shapes.len(), |i| (i as usize).min(s.edit_state.custom_shapes.len()));
+                s.edit_state.custom_shapes.insert(at, shape);
+                json!({"group": CUSTOM_GROUP})
+            } else {
+                let group_index = group_index(&mut s.presets.shapes, Some(to));
+                let at = p
+                    .get("index")
+                    .and_then(Value::as_u64)
+                    .map_or(s.presets.shapes[group_index].items.len(), |i| (i as usize).min(s.presets.shapes[group_index].items.len()));
+                s.presets.shapes[group_index].items.insert(at, ShapePreset { name: shape.name, path: shape.path });
+                json!({"group": to})
+            }
+        }
+        "move" if str_param(p, "to") == Some(CUSTOM_GROUP) => {
+            let name = req_str(p, "preset", CMD)?;
+            let (source, index) = find(&s.presets.shapes, name, str_param(p, "group")).ok_or_else(|| bad(CMD, format!("no preset \"{name}\"")))?;
+            if s.edit_state.custom_shapes.iter().any(|shape| shape.name == name) {
+                return Err(bad(CMD, format!("a custom shape named \"{name}\" already exists")));
+            }
+            let shape = s.presets.shapes[source].items.remove(index);
+            let at = p.get("index").and_then(Value::as_u64).map_or(s.edit_state.custom_shapes.len(), |i| (i as usize).min(s.edit_state.custom_shapes.len()));
+            s.edit_state.custom_shapes.insert(at, crate::edit_menu_cmds::CustomShape { name: shape.name, path: shape.path });
+            json!({"group": CUSTOM_GROUP})
+        }
         "rename" if custom(s, req_str(p, "preset", CMD)?) => {
             let (n, to) = (req_str(p, "preset", CMD)?, req_str(p, "name", CMD)?);
             if let Some(c) = s.edit_state.custom_shapes.iter_mut().find(|c| c.name == n) {
@@ -405,6 +439,26 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
             let n = req_str(p, "preset", CMD)?;
             s.edit_state.custom_shapes.retain(|c| c.name != n);
             json!({"deleted": 1})
+        }
+        "renameGroup" if str_param(p, "group") == Some(CUSTOM_GROUP) => {
+            let to = req_str(p, "name", CMD)?;
+            if s.presets.shapes.iter().any(|group| group.name == to) {
+                return Err(bad(CMD, format!("a group named \"{to}\" already exists")));
+            }
+            let items = std::mem::take(&mut s.edit_state.custom_shapes).into_iter().map(|shape| ShapePreset { name: shape.name, path: shape.path }).collect();
+            s.presets.shapes.push(Group::new(to, items));
+            json!({"group": to})
+        }
+        "deleteGroup" if str_param(p, "group") == Some(CUSTOM_GROUP) => {
+            let deleted = s.edit_state.custom_shapes.len();
+            s.edit_state.custom_shapes.clear();
+            json!({"group": CUSTOM_GROUP, "deleted": deleted})
+        }
+        "newGroup" if str_param(p, "name") == Some(CUSTOM_GROUP) => {
+            return Err(bad(CMD, format!("\"{CUSTOM_GROUP}\" is a reserved group name")));
+        }
+        "renameGroup" if str_param(p, "name") == Some(CUSTOM_GROUP) => {
+            return Err(bad(CMD, format!("\"{CUSTOM_GROUP}\" is a reserved group name")));
         }
         a => edit_groups(&mut s.presets.shapes, a, p, CMD)?,
     };

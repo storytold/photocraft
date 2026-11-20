@@ -20,6 +20,7 @@
 //! [`PresetState::to_json`] (saved under `"presets"` by [`Session::prefs_to_json`]).
 
 pub mod clone_source;
+pub mod collisions;
 pub mod gradients;
 pub mod patterns;
 pub mod shapes;
@@ -192,9 +193,10 @@ impl Session {
             swatches: take(&mut m, "swatches"),
         };
         let st = &mut self.presets;
-        let mut gradient_names_changed = false;
+        let mut collisions_changed = false;
         if let Some(mut g) = p.gradients {
-            gradient_names_changed = gradients::make_gradient_names_unique(&mut g);
+            collisions_changed |= collisions::make_group_item_names_unique(&mut g);
+            collisions_changed |= collisions::make_group_names_unique(&mut g);
             st.gradients = g;
         }
         if let Some(g) = p.gradient {
@@ -202,12 +204,17 @@ impl Session {
         }
         if let Some(g) = p.styles {
             st.styles = g;
+            collisions_changed |= collisions::make_group_item_names_unique(&mut st.styles);
+            collisions_changed |= collisions::make_group_names_unique(&mut st.styles);
         }
         if let Some(g) = p.shapes {
             st.shapes = g;
+            collisions_changed |= collisions::make_group_item_names_unique(&mut st.shapes);
+            collisions_changed |= collisions::make_group_names_unique(&mut st.shapes);
         }
         if let Some(g) = p.pattern_groups {
             st.pattern_groups = g;
+            collisions_changed |= collisions::make_group_names_unique(&mut st.pattern_groups);
         }
         if let Some(t) = p.tool_presets {
             st.tool_presets = tools::load(t);
@@ -230,9 +237,11 @@ impl Session {
         if let Some(mut g) = p.swatches {
             // A hand-edited preferences file can't make the library unbounded.
             crate::swatch_cmds::cap_library(&mut g);
+            collisions_changed |= collisions::make_group_item_names_unique(&mut g);
+            collisions_changed |= collisions::make_group_names_unique(&mut g);
             self.presets.swatches = g;
         }
-        if gradient_names_changed {
+        if collisions_changed {
             // Persist the one-time compatibility repair so subsequent launches see stable names.
             self.presets_changed();
         } else {
@@ -287,11 +296,7 @@ pub(crate) fn find<T: Named>(groups: &[Group<T>], name: &str, group: Option<&str
 /// `base`, or `base 2`, `base 3`… so names stay unique across all groups (Photoshop allows
 /// duplicates, but agents address presets by name).
 pub(crate) fn unique_name<T: Named>(groups: &[Group<T>], base: &str) -> String {
-    let taken = |n: &str| groups.iter().any(|g| g.items.iter().any(|i| i.name() == n));
-    if !taken(base) {
-        return base.to_string();
-    }
-    (2..).map(|i| format!("{base} {i}")).find(|n| !taken(n)).unwrap_or_else(|| base.to_string())
+    collisions::unique_name(groups, base)
 }
 
 /// Index of `group` (created at the end when missing), or the first group (created as

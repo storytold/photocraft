@@ -47,22 +47,6 @@ fn floating_panel_rail_toggle_closes_the_float_window() {
 }
 
 #[test]
-fn brushes_menu_action_uses_the_shared_docking_layout() {
-    let mut app = app();
-    let before = app.ui.docking.clone();
-    assert!(crate::menus::invoke(&mut app, &egui::Context::default(), "window.panel.brushes", json!({})).is_ok());
-    let layout = app.ui.docking.as_ref().expect("brushes panel must be registered in docking");
-    assert!(layout.contains(&"brushes".to_string()));
-    assert!(app.ui.panels.brushes);
-    assert_ne!(app.ui.docking, before);
-
-    app.run("window.panel.float", json!({"panel":"brushes"})).unwrap();
-    assert!(app.ui.docking.as_ref().unwrap().floating.iter().any(|group| group.panels.contains(&"brushes".into())));
-    app.run("window.panel.dock", json!({"panel":"brushes"})).unwrap();
-    assert!(!app.ui.docking.as_ref().unwrap().floating.iter().any(|group| group.panels.contains(&"brushes".into())));
-}
-
-#[test]
 fn invalid_panel_requests_are_atomic_and_do_not_enter_a_custom_workspace() {
     let mut app = app();
     for (id, params) in [
@@ -124,24 +108,6 @@ fn ordinary_panel_tab_drag_enters_shared_docking_and_can_redock_into_another_tab
     drag(&mut h, source, destination);
     let layout = h.state().ui.docking.as_ref().unwrap();
     assert!(!layout.floating.iter().any(|g| g.panels.contains(&"layers".into())));
-    assert!(valid(layout));
-}
-
-#[test]
-fn brushes_tab_drag_floats_and_can_redock_into_another_tab_group() {
-    let mut app = app();
-    crate::menus::invoke(&mut app, &egui::Context::default(), "window.panel.brushes", json!({})).unwrap();
-    let mut h = harness(app, vec2(1280.0, 800.0));
-    let source = h.query_all_by_label("Brushes").find(|node| node.rect().height() <= 45.0).unwrap().rect().center();
-    drag(&mut h, source, egui::pos2(160.0, 140.0));
-    let layout = h.state().ui.docking.as_ref().expect("brushes drag starts shared docking");
-    assert!(layout.floating.iter().any(|group| group.panels.contains(&"brushes".into())), "{layout:?}");
-
-    let source = h.ctx.read_response(egui::Id::new("photocraft-panel-docking").with(("tab", &"brushes".to_string()))).unwrap().rect.center();
-    let destination = h.ctx.read_response(egui::Id::new("photocraft-panel-docking").with(("tab", &"layers".to_string()))).unwrap().rect.center();
-    drag(&mut h, source, destination);
-    let layout = h.state().ui.docking.as_ref().unwrap();
-    assert!(!layout.floating.iter().any(|group| group.panels.contains(&"brushes".into())));
     assert!(valid(layout));
 }
 

@@ -700,6 +700,7 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
         store.groups.insert(file, Synced { presets: items, tips: hashes, bytes: size, stale });
     }
     store.skipped = skipped;
+    crate::presets::collisions::make_flat_item_names_unique(&mut presets);
     // Tip files nothing references are garbage (e.g. left by a crash), unless a group failed to
     // load: its tips must survive so a fixed file still works.
     if !failed {

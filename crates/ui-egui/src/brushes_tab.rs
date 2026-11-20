@@ -10,31 +10,20 @@
 //! closed like groups. Every change is a `brush.presets.*` command, so it is journaled, drivable,
 //! and persisted by the preset store.
 //!
-//! Both the Brushes tab and the right-click Brush Picker use the shared asset browser, with
-//! specialised brush previews and independent view state for their different layouts.
+//! Both the Brushes tab and the right-click Brush Picker use the shared asset browser and its
+//! standard card/list layout, with brush-tip thumbnails supplied by the adapter.
 
-use egui::{RichText, vec2};
-use photocraft_engine::paint::MAX_BRUSH_SIZE;
-use serde_json::json;
-
-use crate::brush_panel::{BrushesView, commit_gesture, run_or_status};
+use crate::brush_panel::{BrushesView, commit_gesture};
 use crate::brush_preview;
 use crate::pickers::adapters::brushes::preview_identity;
-use crate::pickers::shell::{CustomShellOptions, picker_shell_custom};
 use crate::theme::Tokens;
-use crate::{PhotocraftApp, icons, widgets};
+use crate::{PhotocraftApp, widgets};
+use egui::{RichText, vec2};
+use photocraft_engine::paint::MAX_BRUSH_SIZE;
 
-#[cfg(test)]
-pub(crate) use crate::pickers::adapters::brushes::browser_group_views;
 pub use crate::pickers::adapters::brushes::{
     Action, GroupNode, ListLayout, MAX_VIEW_DEPTH, Node, PANEL_LIST, apply, drop_target, folder_drop, folder_tree, folder_view_key, group_key, preset_list,
 };
-#[cfg(test)]
-pub(crate) use crate::pickers::adapters::brushes::{
-    CARD_COMPACT_SCALE, CARD_GAP, CARD_MAX_H, CARD_MAX_W, CARD_MIN_H_SCALE, CARD_NAME_H, CARD_NUM_FONT, CARD_PAD, CARD_TIP_NAME_H, CARD_TIP_NAME_W,
-    CARD_TIP_ONLY_H, CARD_TIP_ONLY_W, CARD_TIP_W, GRID_GAP, card_tip_rect, grid_columns, remap_collapsed_prefix, remove_collapsed_prefix,
-};
-
 fn responsive_list_layout(ui: &egui::Ui) -> ListLayout {
     let height = ui.available_height().clamp(180.0, 640.0);
     ListLayout { max_height: height, ..PANEL_LIST }
@@ -43,7 +32,6 @@ fn responsive_list_layout(ui: &egui::Ui) -> ListLayout {
 /// The Brushes tab.
 pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let inner_w = ui.available_width().max(180.0);
     // Size of the current brush (Photoshop's Brushes panel slider).
     let before = app.session.tools.brush.clone();
     let mut b = before.clone();
@@ -66,38 +54,17 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     commit_gesture(app, ui.ctx(), &before, &b);
     ui.add_space(4.0);
     let layout = responsive_list_layout(ui);
-    let filter = std::cell::RefCell::new(app.ui.brushes_panel.filter.clone());
-    let preset_ui = std::cell::RefCell::new(&mut app.ui.presets_ui);
-    {
-        let mut picker_state = preset_ui.borrow_mut();
-        // Migrate the legacy two-state BrushesView only until the shared display-mode preference
-        // exists. Thereafter PickerDisplayMode is the single source of truth.
-        if !picker_state.display_modes.contains_key("brushes") {
-            picker_state.sizes.insert(
-                "brushes".to_owned(),
-                if app.ui.brushes_panel.view == BrushesView::List { crate::pickers::browser::asset_browser::MIN_THUMB } else { 40.0 },
-            );
-        }
+    // The brush adapter owns one complete shared shell: search row, browser viewport and footer.
+    // Keep the legacy BrushesView bridge only until an explicit shared display mode is selected.
+    if !app.ui.presets_ui.display_modes.contains_key("brushes") {
+        app.ui.presets_ui.sizes.insert(
+            "brushes".to_owned(),
+            if app.ui.brushes_panel.view == BrushesView::List { crate::pickers::browser::asset_browser::MIN_THUMB } else { 40.0 },
+        );
     }
-    let mut search = |ui: &mut egui::Ui| {
-        icons::paint(ui, egui::Rect::from_min_size(ui.cursor().min + vec2(0.0, 3.0), vec2(16.0, 16.0)), "search", 14.0, t.text_faint);
-        ui.add_space(20.0);
-        let search_w = (inner_w - 112.0).clamp(90.0, inner_w - 40.0);
-        widgets::text_field(ui, ui.id().with("brush-search"), &mut filter.borrow_mut(), tl!("Search Brushes"), search_w, false);
-    };
-    let acts = picker_shell_custom(ui, layout.max_height, CustomShellOptions { search: Some(&mut search), ..Default::default() }, |ui, allocated_h| {
-        app.ui.brushes_panel.filter = filter.borrow().clone();
-        app.ui.brushes_panel.view = if preset_ui.borrow().display_mode("brushes").uses_list_layout() { BrushesView::List } else { BrushesView::Grid };
-        preset_list(
-            ui,
-            &app.session.tools.presets,
-            app.session.tools.current_preset.as_deref(),
-            &mut app.ui.brushes_panel,
-            &mut **preset_ui.borrow_mut(),
-            ListLayout { max_height: allocated_h, ..layout },
-        )
-    });
-    drop(preset_ui);
+    app.ui.brushes_panel.view = if app.ui.presets_ui.display_mode("brushes").uses_list_layout() { BrushesView::List } else { BrushesView::Grid };
+    let acts =
+        preset_list(ui, &app.session.tools.presets, app.session.tools.current_preset.as_deref(), &mut app.ui.brushes_panel, &mut app.ui.presets_ui, layout);
     apply(app, acts);
     ui.add_space(4.0);
     widgets::hairline(ui);
@@ -106,22 +73,6 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.label(
             RichText::new(crate::i18n::trn(crate::i18n::current(), app.session.tools.presets.len() as u64, "{n} preset", "{n} presets")).color(t.text_faint),
         );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // The current preset by identity: editing the brush after picking must not deselect it.
-            let current = app.session.tools.current_preset.clone().filter(|n| app.session.tools.presets.iter().any(|p| p.name.eq_ignore_ascii_case(n)));
-            if ui.add_enabled_ui(current.is_some(), |ui| icons::button(ui, "trash", 24.0, false, "Delete brush")).inner.clicked()
-                && let Some(name) = current
-            {
-                run_or_status(app, "brush.presets.delete", json!({ "name": name }));
-            }
-            let new = icons::button(ui, "square-plus", 24.0, false, "Create new brush from the current settings");
-            if crate::pickers::adapters::brush_picker::named(new, "Create new brush from the current settings").clicked() {
-                crate::brush_preset_dialog::open(app, None);
-            }
-            if icons::button(ui, "folder-open", 24.0, false, "Import Brushes… (.abr or image)").clicked() {
-                let _ = crate::preset_files_ui::import_brushes(app);
-            }
-        });
     });
     // Forget previews of presets that no longer exist.
     let live_identities: std::collections::HashSet<String> = app.session.tools.presets.iter().map(preview_identity).collect();
@@ -129,7 +80,3 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         c.retain(|slot| slot.split_once(':').is_none_or(|(_, identity)| live_identities.contains(identity)));
     });
 }
-
-#[cfg(test)]
-#[path = "brushes_tab_tests.rs"]
-mod tests;

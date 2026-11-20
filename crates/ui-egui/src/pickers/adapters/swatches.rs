@@ -5,7 +5,7 @@
 //! As in Photoshop, clicking a swatch sets the foreground colour (and recolours selected type);
 //! Alt- or Ctrl/Cmd-clicking sets the background colour; double-clicking renames it. The
 //! shared panel menu owns New Swatch and New Swatch Group; this adapter contributes
-//! Import/Replace (`.aco`, `.ase`), Export (`.aco`), Export for Exchange (`.ase`) and Reset. Every action is a
+//! Import (`.aco`, `.ase`), selected export (`.aco`), Export for Exchange (`.ase`) and append defaults. Every action is a
 //! `swatches.*` engine command; this module only draws and dispatches. Colours are shown in the
 //! RGB working space through `photocraft-cms` (cached per library revision and colour settings).
 
@@ -20,6 +20,7 @@ use crate::pickers::browser::asset_browser::{
     standard_item_context_menu,
 };
 use crate::pickers::browser::browser_actions::run;
+use crate::pickers::browser::context_menu::SelectionMenuModel;
 use crate::pickers::browser::identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
 use crate::pickers::footer::FooterOptions;
 use crate::pickers::shell::{ShellOptions, picker_shell};
@@ -174,7 +175,12 @@ fn handle(app: &mut PhotocraftApp, e: BrowserAction, background: bool) {
         }
         // Swatches don't drop onto the canvas.
         BrowserAction::Drop(..) => {}
-        BrowserAction::AppendDefault => {}
+        BrowserAction::AppendDefault => {
+            if let Err(error) = app.run("swatches.reset", json!({"append": true})) {
+                app.ui.status = error;
+                app.ui.status_error = true;
+            }
+        }
         BrowserAction::Import => {
             if let Err(error) = import_dialog(app, false)
                 && error != crate::file_dialog::CANCELLED
@@ -191,6 +197,25 @@ fn handle(app: &mut PhotocraftApp, e: BrowserAction, background: bool) {
                 app.ui.status_error = true;
             }
         }
+        BrowserAction::ExportAll(format) => {
+            if let Err(error) = export_dialog(app, &format, None)
+                && error != crate::file_dialog::CANCELLED
+            {
+                app.ui.status = error;
+                app.ui.status_error = true;
+            }
+        }
+        BrowserAction::CopyItem { group, key, text } => match app.run("swatches.copy", json!({"group": group, "swatch": key, "name": text})) {
+            Ok(result) => {
+                if let Some(name) = result["name"].as_str() {
+                    app.ui.presets_ui.set_selected_item(PANEL, &group, &[], name);
+                }
+            }
+            Err(error) => {
+                app.ui.status = error;
+                app.ui.status_error = true;
+            }
+        },
         action => {
             crate::pickers::browser::browser_actions::generic(app, PANEL, "swatches", &action, json!({}));
         }
@@ -280,35 +305,33 @@ fn export_dialog(app: &mut PhotocraftApp, format: &str, selected: Option<&[Strin
     })
 }
 
-/// Swatches domain actions for the shared picker menu. The shell inserts the boundary before this
-/// extension; separators here are intentional boundaries between create, import/export and reset
-/// action groups, not duplicates of shared-menu section separators.
-pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, _state: &mut PresetUi) {
+/// Swatches domain actions for the shared picker menu. The shared shell owns the section boundary.
+pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut PresetUi) {
     let empty = app.session.presets.swatches.iter().all(|g| g.items.is_empty());
+    let selection = state.browser_selection_snapshot.get(PANEL).cloned().unwrap_or_default();
     let mut act: Option<&str> = None;
+    if crate::menu_keys::menu_item_button(ui, tl!("Append Default Swatches…"), true).clicked() {
+        act = Some("append");
+    }
     if crate::menu_keys::menu_item_button(ui, tl!("Import Swatches…"), true).clicked() {
         act = Some("import");
     }
-    if crate::menu_keys::menu_item_button(ui, tl!("Replace Swatches…"), true).clicked() {
-        act = Some("replace");
-    }
-    if crate::menu_keys::menu_item_button(ui, tl!("Export Swatches…"), !empty).clicked() {
-        act = Some("aco");
+    if crate::menu_keys::menu_item_button(ui, tl!("Export Selected Swatches…"), !SelectionMenuModel::new("Swatch", &selection).export_items.is_empty())
+        .clicked()
+    {
+        act = Some("selected");
     }
     if crate::menu_keys::menu_item_button(ui, tl!("Export Swatches for Exchange…"), !empty).clicked() {
         act = Some("ase");
     }
-    ui.separator();
-    if crate::menu_keys::menu_item_button(ui, tl!("Reset Swatches"), true).clicked() {
-        act = Some("reset");
-    }
     let Some(a) = act else { return };
     ui.close();
     let r = match a {
+        "append" => app.run("swatches.reset", json!({"append": true})),
         "import" => import_dialog(app, false),
-        "replace" => import_dialog(app, true),
-        "aco" | "ase" => export_dialog(app, a, None),
-        _ => app.run("swatches.reset", json!({})),
+        "selected" => export_dialog(app, "aco", Some(&SelectionMenuModel::new("Swatch", &selection).export_items)),
+        "ase" => export_dialog(app, "ase", None),
+        _ => unreachable!(),
     };
     if let Err(e) = r
         && e != "cancelled"

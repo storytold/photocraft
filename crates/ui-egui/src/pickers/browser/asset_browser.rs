@@ -12,11 +12,12 @@ use crate::pickers::browser::browser_interaction::{
     apply_browser_node_selection, asset_browser_header_drag_source_with_id, asset_browser_selection_clicked, asset_browser_selection_gesture,
     browser_drag_ghost_rect, draw_context_menu_target, item_row_edge_targets, replace_selected_delete_actions,
 };
-#[cfg(test)]
-use crate::pickers::browser::context_menu::selected_delete_actions;
 pub(crate) use crate::pickers::browser::browser_interaction::{
     begin_item_rename, delete_item_actions, item_context_targets, move_item_actions, standard_group_context_menu, standard_item_context_menu,
+    standard_nested_group_context_menu,
 };
+#[cfg(test)]
+use crate::pickers::browser::context_menu::selected_delete_actions;
 use crate::pickers::browser::dragging::{
     BrowserDragState, canvas_drop_target, register_browser_item_drop_targets, register_card, register_group_indent_drop_targets, register_group_objects,
     register_indentation_objects, register_root_objects, resolve_canonical_drop,
@@ -51,6 +52,8 @@ struct ItemGridLayout {
     display_mode: crate::pickers::state::PickerDisplayMode,
     wrap_list: bool,
     center_grid: bool,
+    max_grid_items: usize,
+    custom_item_size: Option<egui::Vec2>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -141,6 +144,12 @@ pub(crate) enum BrowserAction {
         key: String,
         text: String,
     },
+    /// Create a copy of an item with a new display name.
+    CopyItem {
+        group: String,
+        key: String,
+        text: String,
+    },
     /// Begin editing one card's label directly in a list row.
     BeginInlineRenameItem(String, ItemView),
     /// Cancel the currently active inline card rename.
@@ -188,6 +197,8 @@ pub(crate) enum BrowserAction {
     Import,
     /// Export the selected item identities from the picker library.
     ExportSelected(Vec<String>),
+    /// Export the complete picker library in a domain-specific interchange format.
+    ExportAll(String),
 }
 
 /// Semantic boundary between segment rendering and the picker frame's mutable browser state.
@@ -677,17 +688,27 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
 }
 
 /// Allocate and paint one visible group header, using the adapter override when present.
-fn draw_browser_group_header(ui: &mut egui::Ui, group: &GroupView, open: bool, depth: usize, painters: &mut Painters<'_, '_>) -> (Rect, egui::Response) {
+fn draw_browser_group_header(
+    ui: &mut egui::Ui,
+    group: &GroupView,
+    open: bool,
+    depth: usize,
+    selected: bool,
+    painters: &mut Painters<'_, '_>,
+) -> (Rect, egui::Response) {
     if painters.has_group() {
         let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), GROUP_HEADER_HEIGHT), Sense::hover());
         let rect = Rect::from_min_max(pos2(ui.clip_rect().left(), allocated_rect.top()), pos2(allocated_rect.right(), allocated_rect.bottom()));
         let response = ui.interact(inset_row_rect(rect, depth), allocated.id, Sense::click_and_drag());
+        if selected {
+            ui.painter().rect_filled(inset_row_rect(rect, depth), egui::CornerRadius::ZERO, crate::theme::Tokens::get(ui.ctx()).picker_selection());
+        }
         painters.group(ui, rect, group, open, response.hovered() || response.dragged(), 1.0);
         let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
         response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, &group.name));
         (rect, response)
     } else {
-        asset_browser_header(ui, &group.name, open, depth, None, GROUP_HEADER_HEIGHT)
+        asset_browser_header(ui, &group.name, open, depth, None, GROUP_HEADER_HEIGHT, selected)
     }
 }
 
@@ -710,14 +731,14 @@ fn draw_nested_folder_row(
 ) {
     let NestedFolderRow { group, root_group, open: group_open, depth: group_depth, parent_depth } = row;
     let BrowserCtx { panel, capabilities, .. } = *ctx;
-    let tokens = ctx.tokens;
     let browser_bounds = ui.clip_rect();
     if !drag.canonical_drop.group_headers.is_empty() {
         ui.add_space((GROUP_LAYOUT_GAP - ui.spacing().item_spacing.y).max(0.0));
     }
-    let (rect, response, disclosure, row_depth) = draw_nested_folder_header(ui, group, group_open, group_depth, parent_depth);
-    let name = group.path.last().map(String::as_str).unwrap_or("");
     let Some(node_id) = folder_node_for_identity(&root_group.name, &group.path, hierarchy.hierarchy_identities) else { return };
+    let selected = sink.is_node_selected(panel, &node_id);
+    let (rect, response, disclosure, row_depth) = draw_nested_folder_header(ui, group, group_open, group_depth, parent_depth, selected);
+    let name = group.path.last().map(String::as_str).unwrap_or("");
     if response.double_clicked() {
         sink.emit(BrowserAction::BeginInlineRenameGroup { group: root_group.name.clone(), group_path: group.path.clone() });
     }
@@ -744,9 +765,6 @@ fn draw_nested_folder_row(
             escape_hierarchy_key_part(&root_group.name),
             group.path.iter().map(|part| escape_hierarchy_key_part(part)).collect::<Vec<_>>().join("/")
         ));
-    }
-    if sink.is_node_selected(panel, &node_id) {
-        ui.painter().rect_filled(inset_row_rect(rect, row_depth), egui::CornerRadius::ZERO, tokens.row_selected.gamma_multiply(0.35));
     }
     drag.canonical_drop.group_headers.push((node_id.clone(), inset_row_rect(rect, row_depth), row_depth, group_open));
     drag.canonical_drop.node_bounds.borrow_mut().insert(node_id.clone(), inset_row_rect(rect, row_depth));
@@ -829,18 +847,24 @@ fn browser_segment_open(
 
 /// Allocate the item grid/list area and return the geometry shared by every item in this segment.
 fn allocate_browser_item_grid(ui: &mut egui::Ui, item_count: usize, layout: ItemGridLayout) -> ItemGrid {
-    let ItemGridLayout { content_indent, display_mode, wrap_list, center_grid, .. } = layout;
-    let list = display_mode.uses_list_layout();
+    let ItemGridLayout { content_indent, display_mode, wrap_list, center_grid, max_grid_items, custom_item_size } = layout;
+    let list = custom_item_size.is_none() && display_mode.uses_list_layout();
     let width = ui.available_width();
     let pad = content_indent;
     let gap = if list { 0.0 } else { GRID_GAP };
-    let (cell, cols, rows) = if list {
+    let (cell, cols, rows) = if let Some(size) = custom_item_size {
+        let cell = vec2(size.x.min((width - pad).max(0.0)), size.y.max(1.0));
+        let capacity = ((width - pad + gap) / (cell.x + gap)).floor().max(1.0) as usize;
+        let cols = if center_grid { capacity.min(max_grid_items.max(1)) } else { 1 };
+        (cell, cols, item_count.div_ceil(cols))
+    } else if list {
         let row_height = display_mode.item_height();
         list_layout_geometry(width, content_indent, row_height, wrap_list, display_mode.list_width(), item_count)
     } else {
         let size = display_mode.item_height();
         let cell = vec2(size, size);
-        let cols = ((width - pad + gap) / (cell.x + gap)).floor().max(1.0) as usize;
+        let capacity = ((width - pad + gap) / (cell.x + gap)).floor().max(1.0) as usize;
+        let cols = capacity;
         (cell, cols, item_count.div_ceil(cols))
     };
     let grid_width = cols as f32 * cell.x + cols.saturating_sub(1) as f32 * gap;
@@ -849,10 +873,10 @@ fn allocate_browser_item_grid(ui: &mut egui::Ui, item_count: usize, layout: Item
     // spacing and leave uneven vertical gaps.
     let grid_height = if rows == 0 { 0.0 } else { rows as f32 * cell.y + rows.saturating_sub(1) as f32 * gap };
     let (area, _) = ui.allocate_exact_size(vec2(width, grid_height), Sense::hover());
-    // Group headers anchor their visible row to the clip's left edge, not the allocated
-    // grid area's layout-aligned left edge. Anchor every card grid the same way so its
-    // explicit hierarchy padding is the only horizontal offset between header and card.
-    let origin_x = ui.clip_rect().left() + 1.0;
+    // The clip may be the full app viewport when the variable-size brush cards sit inside an egui
+    // Area. Anchor those cards to their allocated content origin, not that broader clip, or they
+    // are painted and hit-tested outside the popup. Other browsers retain their header-aligned origin.
+    let origin_x = if custom_item_size.is_some() { area.left() + 1.0 } else { ui.clip_rect().left() + 1.0 };
     ItemGrid { area, cell, columns: cols, rows, pad, center_offset, gap, origin_x, column_major: wrap_list, item_count, list }
 }
 
@@ -901,7 +925,7 @@ fn paint_browser_item(
                     && rename.group_path == painted.item.item.group_path
                     && rename.key == painted.item.item.key
             }) {
-                ui.painter().rect_filled(label_rect, 0.0, if selected { tokens.accent_soft } else { tokens.card });
+                ui.painter().rect_filled(label_rect, 0.0, if selected { tokens.picker_selection() } else { tokens.card });
                 let mut label_ui = ui.new_child(egui::UiBuilder::new().max_rect(label_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
                 label_ui.set_clip_rect(label_rect.intersect(ui.clip_rect()));
                 inline_action = paint_item_name(&mut label_ui, rename, panel, &painted.item.group.name, &painted.item.item);
@@ -941,7 +965,7 @@ fn paint_browser_item(
         ui.painter().rect_stroke(
             rect,
             CornerRadius::ZERO,
-            Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { tokens.accent } else { tokens.card_border }),
+            Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { tokens.picker_selection() } else { tokens.card_border }),
             // Keep the entire border inside the allocated card rect: it consumes card dimensions
             // and cannot overlap neighbours.
             egui::StrokeKind::Inside,
@@ -1022,6 +1046,7 @@ pub(crate) fn browser_with_root_sequence(
     let (picker_registry_id, mut picker_ids) = load_picker_id_registry(ui, panel);
     let query = crate::pickers::search::query(st, panel);
     let groups = adapter.groups;
+    let max_grid_items = groups.iter().map(|group| group.items.len()).max().unwrap_or(0);
     #[cfg(test)]
     let fallback_projection_keys = ui_tests::test_projection_keys(groups);
     #[cfg(test)]
@@ -1091,7 +1116,7 @@ pub(crate) fn browser_with_root_sequence(
                 draw_context_menu_target(ui, empty_area.clone(), compact_context_menus, |ui| {
                     sink.with_context_menu(|state, events| {
                         let selection = state.browser_selection_snapshot.get(panel).cloned().unwrap_or_default();
-                        crate::pickers::browser::context_menu::picker_context_menu(ui, panel, groups, &selection, events);
+                        crate::pickers::browser::context_menu::picker_context_menu(ui, panel, groups, state, &selection, events);
                     });
                 });
             }
@@ -1140,7 +1165,9 @@ pub(crate) fn browser_with_root_sequence(
                     if !drag_state.canonical_drop.group_headers.is_empty() {
                         ui.add_space((GROUP_LAYOUT_GAP - ui.spacing().item_spacing.y).max(0.0));
                     }
-                    let (header_rect, response) = draw_browser_group_header(ui, g, open, depth, &mut painters);
+                    let group_id = picker_group_id(&mut picker_ids, gi, projection_keys);
+                    let selected_group = sink.is_node_selected(panel, &group_id);
+                    let (header_rect, response) = draw_browser_group_header(ui, g, open, depth, selected_group, &mut painters);
                     if response.double_clicked() {
                         sink.emit(BrowserAction::BeginInlineRenameGroup { group: g.name.clone(), group_path: Vec::new() });
                     }
@@ -1157,7 +1184,6 @@ pub(crate) fn browser_with_root_sequence(
                     } else if capabilities.group_drag && response.hovered() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     }
-                    let group_id = picker_group_id(&mut picker_ids, gi, projection_keys);
                     drag_state.canonical_drop.group_headers.push((group_id.clone(), header_hit_rect, depth, open));
                     drag_state.canonical_drop.node_bounds.borrow_mut().insert(group_id.clone(), header_hit_rect);
                     if capabilities.group_drag {
@@ -1174,9 +1200,6 @@ pub(crate) fn browser_with_root_sequence(
                     if asset_browser_selection_clicked(&disclosure) {
                         let key = format!("{panel}/{}", escape_hierarchy_key_part(&g.name));
                         sink.toggle_group(key);
-                    }
-                    if sink.is_node_selected(panel, &group_id) {
-                        ui.painter().rect_filled(header_hit_rect, egui::CornerRadius::ZERO, browser_ctx.tokens.row_selected.gamma_multiply(0.35));
                     }
                     if let Some(menu) = context_menus.group {
                         let delete_context = BrowserDeleteContext { hierarchy: &projection.hierarchy, identities: &projection.hierarchy_identities };
@@ -1270,6 +1293,8 @@ pub(crate) fn browser_with_root_sequence(
                                     display_mode,
                                     wrap_list,
                                     center_grid,
+                                    max_grid_items,
+                                    custom_item_size: sink.state.custom_item_sizes.get(panel).copied(),
                                 },
                             );
                             if grid.area.height() > 0.0 && !root_level_items {

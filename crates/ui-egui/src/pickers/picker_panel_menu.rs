@@ -31,8 +31,8 @@ impl PickerMenuOptions {
         Self {
             display: true,
             wrap_list: true,
-            search_visibility: matches!(panel, "gradients" | "patterns" | "swatches"),
-            recents_visibility: matches!(panel, "gradients" | "patterns" | "swatches"),
+            search_visibility: matches!(panel, "gradients" | "patterns" | "swatches" | "styles" | "shapes" | "brushes" | "brush-picker"),
+            recents_visibility: matches!(panel, "gradients" | "patterns" | "swatches" | "styles" | "shapes" | "brushes" | "brush-picker"),
         }
     }
 }

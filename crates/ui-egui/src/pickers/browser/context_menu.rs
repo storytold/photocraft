@@ -104,6 +104,7 @@ pub(crate) fn picker_context_menu(
     ui: &mut egui::Ui,
     panel: &str,
     groups: &[GroupView],
+    state: &PresetUi,
     selection: &crate::pickers::state::BrowserSelectionSnapshot,
     events: &mut Vec<BrowserAction>,
 ) {
@@ -111,7 +112,7 @@ pub(crate) fn picker_context_menu(
         return;
     };
     ui.separator();
-    picker_creation_actions_menu(ui, asset, events);
+    picker_creation_actions_menu(ui, panel, asset, groups, selection, last_selected_swatch_target(state, panel), events);
     let move_targets = selection.selected_items.clone();
     if !move_targets.is_empty() {
         ui.separator();
@@ -138,8 +139,8 @@ fn picker_context_menu_actions(
 ) -> Option<&'static str> {
     let Some((asset, plural, supports_append, supports_import, supports_export)) = (match panel {
         "gradients" => Some((tl!("Gradient"), tl!("Gradients"), true, true, true)),
-        "patterns" => Some((tl!("Pattern"), tl!("Patterns"), false, true, true)),
-        "swatches" => Some((tl!("Swatch"), tl!("Swatches"), false, true, true)),
+        "patterns" => Some((tl!("Pattern"), tl!("Patterns"), true, true, true)),
+        "swatches" => Some((tl!("Swatch"), tl!("Swatches"), true, true, true)),
         "styles" => Some((tl!("Style"), tl!("Styles"), false, false, false)),
         "shapes" => Some((tl!("Shape"), tl!("Shapes"), false, false, false)),
         "toolPresets" => Some((tl!("Tool Preset"), tl!("Tool Presets"), false, false, false)),
@@ -161,14 +162,42 @@ fn picker_context_menu_actions(
         events.push(BrowserAction::ExportSelected(menu.export_items.clone()));
         ui.close();
     }
+    if panel == "swatches" {
+        if crate::menu_keys::menu_item_button(ui, tl!("Export Swatches for Exchange…"), true).clicked() {
+            events.push(BrowserAction::ExportAll("ase".into()));
+            ui.close();
+        }
+    }
     selection_actions_menu(ui, asset, selection, events);
     Some(asset)
 }
 
 /// Keep preset creation together after the selection-dependent actions on every context surface.
-fn picker_creation_actions_menu(ui: &mut egui::Ui, asset: &str, events: &mut Vec<BrowserAction>) {
-    if crate::menu_keys::menu_item_button(ui, &format!("New {asset} Preset…"), true).clicked() {
-        events.push(BrowserAction::New);
+fn picker_creation_actions_menu(
+    ui: &mut egui::Ui,
+    panel: &str,
+    asset: &str,
+    groups: &[GroupView],
+    selection: &crate::pickers::state::BrowserSelectionSnapshot,
+    fallback: Option<super::selection::SelectionTarget>,
+    events: &mut Vec<BrowserAction>,
+) {
+    let enabled = panel != "patterns";
+    if crate::menu_keys::menu_item_button(ui, &format!("New {asset} Preset…"), enabled).clicked() {
+        if panel == "swatches" {
+            let first = fallback.or_else(|| {
+                groups.iter().find_map(|group| {
+                    group.items.first().map(|item| super::selection::SelectionTarget::Item {
+                        group: group.name.clone(),
+                        path: item.group_path.clone(),
+                        key: item.key.clone(),
+                    })
+                })
+            });
+            crate::pickers::browser::popup_dialogs::request_copy_swatch_preset(ui.ctx(), selection, first);
+        } else {
+            events.push(BrowserAction::New);
+        }
         ui.close();
     }
     if crate::menu_keys::menu_item_button(ui, &format!("New {asset} Group…"), true).clicked() {
@@ -276,26 +305,90 @@ pub(crate) fn begin_item_rename(state: &mut PresetUi, panel: &str, targets: &[(S
     });
     state.item_renaming = renames.next();
     state.item_rename_queue = renames.collect();
+    state.renaming = state.item_renaming.as_ref().map(|rename| (panel.to_owned(), rename.key.clone(), rename.text.clone()));
 }
 
 /// Standard item-menu policy shared by preset panels and specialised adapters.
 pub(crate) fn standard_item_context_menu(ui: &mut egui::Ui, state: &mut PresetUi, args: ItemContextMenuArgs<'_>, events: &mut Vec<BrowserAction>) {
-    let ItemContextMenuArgs { panel, .. } = args;
+    let ItemContextMenuArgs { panel, item, group, selected_items, .. } = args;
     let selection = state.browser_selection_snapshot.get(panel).cloned().unwrap_or_default();
     if let Some(asset) = picker_context_menu_actions(ui, panel, &selection, events) {
         ui.separator();
-        picker_creation_actions_menu(ui, asset, events);
+        picker_creation_actions_menu(ui, panel, asset, std::slice::from_ref(group), &selection, last_selected_swatch_target(state, panel), events);
+    } else {
+        let targets = item_context_targets(item, group, selected_items);
+        let delete_label = if targets.len() > 1 { format!("{} ({})", tl!("Delete"), targets.len()) } else { tl!("Delete").to_string() };
+        match draw_item_context_menu(ui, tl!("Rename…"), &delete_label) {
+            Some(ContextMenuAction::Rename) => begin_item_rename(state, panel, &targets),
+            Some(ContextMenuAction::Delete) => events.extend(delete_item_actions(&targets)),
+            None => {}
+        }
+    }
+}
+
+/// Standard rename/delete policy for a nested folder header.
+pub(crate) fn standard_nested_group_context_menu(
+    ui: &mut egui::Ui,
+    state: &mut PresetUi,
+    panel: &str,
+    group: &GroupView,
+    group_path: &[String],
+    events: &mut Vec<BrowserAction>,
+) {
+    match draw_group_context_menu(ui, tl!("Rename Group…"), tl!("Delete Group")) {
+        Some(ContextMenuAction::Rename) => {
+            state.renaming = None;
+            state.group_renaming = Some(crate::pickers::state::NestedGroupRenameState {
+                panel: panel.to_owned(),
+                group: group.name.clone(),
+                group_path: group_path.to_vec(),
+                text: group_path.last().cloned().unwrap_or_default(),
+            });
+        }
+        Some(ContextMenuAction::Delete) => events.push(BrowserAction::DeleteNestedGroup { group: group.name.clone(), group_path: group_path.to_vec() }),
+        None => {}
     }
 }
 
 /// Standard group-menu policy shared by preset panels and specialised adapters.
 pub(crate) fn standard_group_context_menu(ui: &mut egui::Ui, state: &mut PresetUi, panel: &str, group: &GroupView, events: &mut Vec<BrowserAction>) {
     let selection = state.browser_selection_snapshot.get(panel).cloned().unwrap_or_default();
-    let _ = group;
     if let Some(asset) = picker_context_menu_actions(ui, panel, &selection, events) {
         ui.separator();
-        picker_creation_actions_menu(ui, asset, events);
+        picker_creation_actions_menu(ui, panel, asset, std::slice::from_ref(group), &selection, last_selected_swatch_target(state, panel), events);
+    } else {
+        match draw_group_context_menu(ui, tl!("Rename Group…"), tl!("Delete Group")) {
+            Some(ContextMenuAction::Rename) => {
+                state.group_renaming = None;
+                state.renaming = Some((panel.to_string(), format!("group:{}", group.name), group.name.clone()));
+            }
+            Some(ContextMenuAction::Delete) => events.push(BrowserAction::DeleteGroup(group.name.clone())),
+            None => {}
+        }
     }
+}
+
+fn last_selected_swatch_target(state: &PresetUi, panel: &str) -> Option<super::selection::SelectionTarget> {
+    if panel != "swatches" {
+        return None;
+    }
+    state
+        .selected
+        .get(panel)
+        .and_then(|key| {
+            state.selected_group.get(panel).map(|group| super::selection::SelectionTarget::Item {
+                group: group.clone(),
+                path: state.selected_group_path.get(panel).cloned().unwrap_or_default(),
+                key: key.clone(),
+            })
+        })
+        .or_else(|| {
+            state.recent_items.get(panel).and_then(|items| items.first()).map(|item| super::selection::SelectionTarget::Item {
+                group: item.group.clone(),
+                path: item.group_path.clone(),
+                key: item.key.clone(),
+            })
+        })
 }
 
 /// Attach a consumer-provided context menu to an egui response.
@@ -308,10 +401,14 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     use egui::vec2;
-    use egui_kittest::{kittest::Queryable, Harness};
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT, Queryable},
+    };
 
     use super::picker_context_menu;
     use crate::pickers::browser::asset_browser::{BrowserAction, GroupView, ItemView};
+    use crate::pickers::state::PresetUi;
 
     fn assert_standard_context_menu_template(harness: &Harness<'_>) {
         let labels = [
@@ -335,6 +432,108 @@ mod tests {
         let section_gap = harness.get_by_label("New Gradient Preset…").rect().top() - harness.get_by_label("Delete Gradients…").rect().bottom();
         assert!(section_gap > row_gap, "creation actions must follow a separator");
         assert!(harness.query_by_label("Move to").is_none(), "card and group menus do not include the empty-space Move to action");
+    }
+
+    #[test]
+    fn patterns_context_menu_renders_pattern_import_and_export_actions() {
+        let groups = Vec::new();
+        let selection = crate::pickers::state::BrowserSelectionSnapshot::default();
+        let mut harness = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui(|ui| {
+            ui.menu_button("Picker", |ui| {
+                picker_context_menu(ui, "patterns", &groups, &PresetUi::default(), &selection, &mut Vec::new());
+            });
+        });
+        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(2);
+        harness.get_by_label("Picker").click();
+        harness.run_steps(2);
+
+        for label in [
+            "Append Default Patterns…",
+            "Import Patterns…",
+            "Export Selected Patterns…",
+            "Rename Patterns…",
+            "Delete Patterns…",
+            "New Pattern Preset…",
+            "New Pattern Group…",
+        ] {
+            assert!(harness.query_by_label(label).is_some(), "missing Patterns context-menu entry: {label}");
+        }
+        assert!(!harness.get_by_label("Append Default Patterns…").accesskit_node().is_disabled());
+        assert!(harness.get_by_label("Export Selected Patterns…").accesskit_node().is_disabled());
+        assert!(harness.get_by_label("New Pattern Preset…").accesskit_node().is_disabled());
+    }
+
+    #[test]
+    fn styles_and_shapes_context_menus_share_the_patterns_action_structure() {
+        for (panel, singular, plural) in [("styles", "Style", "Styles"), ("shapes", "Shape", "Shapes")] {
+            let groups = Vec::new();
+            let selection = crate::pickers::state::BrowserSelectionSnapshot::default();
+            let mut harness = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui(|ui| {
+                ui.menu_button("Picker", |ui| {
+                    picker_context_menu(ui, panel, &groups, &PresetUi::default(), &selection, &mut Vec::new());
+                });
+            });
+            crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+            harness.run_steps(2);
+            harness.get_by_label("Picker").click();
+            harness.run_steps(2);
+
+            for label in [
+                format!("Append Default {plural}…"),
+                format!("Import {plural}…"),
+                format!("Export Selected {plural}…"),
+                format!("Rename {plural}…"),
+                format!("Delete {plural}…"),
+                format!("New {singular} Preset…"),
+                format!("New {singular} Group…"),
+            ] {
+                assert!(harness.query_by_label(&label).is_some(), "missing {panel} context-menu entry: {label}");
+            }
+            assert!(harness.get_by_label(&format!("Append Default {plural}…")).accesskit_node().is_disabled());
+            assert!(harness.get_by_label(&format!("Import {plural}…")).accesskit_node().is_disabled());
+            assert!(harness.get_by_label(&format!("Export Selected {plural}…")).accesskit_node().is_disabled());
+            assert!(!harness.get_by_label(&format!("New {singular} Preset…")).accesskit_node().is_disabled());
+        }
+    }
+
+    #[test]
+    fn swatches_context_menu_has_append_selected_export_and_exchange_actions() {
+        let groups = vec![GroupView {
+            name: "Basics".into(),
+            root_only: false,
+            items: vec![ItemView { key: "Black".into(), name: "Black".into(), group_path: Vec::new() }],
+        }];
+        let selected = ItemView { key: "Black".into(), name: "Black".into(), group_path: Vec::new() };
+        let selection = crate::pickers::state::BrowserSelectionSnapshot {
+            contains_selected_card: true,
+            contains_card: true,
+            selected_items: vec![("Basics".into(), selected)],
+            selected_cards: vec![("Basics".into(), "Black".into())],
+            cards: vec![("Basics".into(), "Black".into())],
+            targets: vec![crate::pickers::browser::selection::SelectionTarget::Item { group: "Basics".into(), path: Vec::new(), key: "Black".into() }],
+            ..Default::default()
+        };
+        let mut harness = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui(|ui| {
+            ui.menu_button("Picker", |ui| {
+                picker_context_menu(ui, "swatches", &groups, &PresetUi::default(), &selection, &mut Vec::new());
+            });
+        });
+        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(2);
+        harness.get_by_label("Picker").click();
+        harness.run_steps(2);
+
+        let append = harness.get_by_label("Append Default Swatches…").rect();
+        let selected = harness.get_by_label("Export Selected Swatches…").rect();
+        let exchange = harness.get_by_label("Export Swatches for Exchange…").rect();
+        assert!(selected.top() >= append.bottom(), "selected export follows append");
+        assert!(exchange.top() >= selected.bottom(), "Exchange export follows selected export");
+        assert!(!harness.get_by_label("Append Default Swatches…").accesskit_node().is_disabled());
+        assert!(!harness.get_by_label("Export Selected Swatches…").accesskit_node().is_disabled());
+        assert!(!harness.get_by_label("Export Swatches for Exchange…").accesskit_node().is_disabled());
+        assert!(!harness.get_by_label("New Swatch Preset…").accesskit_node().is_disabled());
+        assert!(harness.query_by_label("Export Swatches…").is_none());
     }
 
     #[test]
@@ -434,7 +633,7 @@ mod tests {
         let captured = Rc::clone(&events);
         let mut harness = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui(|ui| {
             ui.menu_button("Picker", |ui| {
-                picker_context_menu(ui, "gradients", &groups, &selection, &mut captured.borrow_mut());
+                picker_context_menu(ui, "gradients", &groups, &PresetUi::default(), &selection, &mut captured.borrow_mut());
             });
         });
         crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
@@ -505,7 +704,7 @@ mod tests {
         };
         let mut harness = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui(|ui| {
             ui.menu_button("Picker", |ui| {
-                picker_context_menu(ui, "gradients", &groups, &selection, &mut Vec::new());
+                picker_context_menu(ui, "gradients", &groups, &PresetUi::default(), &selection, &mut Vec::new());
             });
         });
         crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
@@ -514,7 +713,7 @@ mod tests {
         harness.run_steps(2);
         assert!(harness.query_by_label("Rename Groups…").is_some());
         assert!(harness.query_by_label("Delete Groups…").is_some());
-        assert!(harness.query_by_label("Rename Groups…").is_none());
+        assert!(harness.query_by_label("Rename Group…").is_none());
     }
 
     #[test]
@@ -528,7 +727,7 @@ mod tests {
         };
         let mut harness = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui(|ui| {
             ui.menu_button("Picker", |ui| {
-                picker_context_menu(ui, "gradients", &groups, &selection, &mut Vec::new());
+                picker_context_menu(ui, "gradients", &groups, &PresetUi::default(), &selection, &mut Vec::new());
             });
         });
         crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
@@ -559,7 +758,7 @@ mod tests {
         };
         let mut harness = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui(|ui| {
             ui.menu_button("Picker", |ui| {
-                picker_context_menu(ui, "gradients", &groups, &summary, &mut Vec::new());
+                picker_context_menu(ui, "gradients", &groups, &PresetUi::default(), &summary, &mut Vec::new());
             });
         });
         crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
@@ -576,7 +775,7 @@ mod tests {
     fn mixed_gradient_selection_deletes_selected_group_and_uncovered_card() {
         use std::collections::{BTreeMap, BTreeSet};
 
-        use super::{selected_delete_actions, BrowserDeleteContext};
+        use super::{BrowserDeleteContext, selected_delete_actions};
         use crate::pickers::browser::identity::PickerNodeIdentity;
         use crate::pickers::browser::path_identity_model::{HierarchyNode, PickerBrowserHierarchy, PickerId};
 

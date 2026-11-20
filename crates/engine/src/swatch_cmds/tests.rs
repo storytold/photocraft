@@ -43,6 +43,24 @@ fn add_from_foreground_and_explicit_models() {
 }
 
 #[test]
+fn copy_preserves_the_complete_swatch_value_and_resolves_duplicate_names() {
+    let mut s = Session::new();
+    let source = &mut s.presets.swatches[0].items[0];
+    source.color = SwatchColor::Book { space: 7, values: [1, 2, 3, 4] };
+    source.kind = SwatchKind::Spot;
+
+    let first = s.execute("swatches.copy", json!({"group": "Grays", "swatch": "Black", "name": "Ink"})).unwrap();
+    assert_eq!(first, json!({"name": "Ink", "group": "Grays"}));
+    let second = s.execute("swatches.copy", json!({"group": "Grays", "swatch": "Black", "name": "Ink"})).unwrap();
+    assert_eq!(second["name"], "Ink 2");
+
+    let group = &s.presets.swatches[0];
+    let copy = group.items.iter().find(|swatch| swatch.name == "Ink").unwrap();
+    assert_eq!(copy.color, SwatchColor::Book { space: 7, values: [1, 2, 3, 4] });
+    assert_eq!(copy.kind, SwatchKind::Spot);
+}
+
+#[test]
 fn use_sets_foreground_and_background_through_colour_management() {
     let mut s = Session::new();
     s.execute("swatches.use", json!({"swatch": "Red"})).unwrap();
@@ -72,20 +90,18 @@ fn rename_delete_move_and_groups() {
     // Out-of-range positions clamp.
     let r = s.execute("swatches.move", json!({"swatch": "White", "position": 999_999})).unwrap();
     assert_eq!(r["position"], 10);
-    // New group from swatches, rename it, delete it keeping the swatches.
+    // New group from swatches, rename it, then delete it and its swatches.
     let r = s.execute("swatches.newGroup", json!({"name": "Mine", "swatches": ["Red", "Blue"]})).unwrap();
     assert_eq!(r, json!({"group": "Mine", "moved": 2}));
     let r = s.execute("swatches.newGroup", json!({"name": "Mine"})).unwrap();
     assert_eq!(r["group"], "Mine 1");
     s.execute("swatches.renameGroup", json!({"group": "Mine", "name": "Favourites"})).unwrap();
     assert!(s.execute("swatches.renameGroup", json!({"group": "Favourites", "name": "Dark"})).is_err());
-    let r = s.execute("swatches.deleteGroup", json!({"group": "Favourites", "keepSwatches": true})).unwrap();
-    assert_eq!(r["kept"], 2);
-    assert!(s.presets.swatches[4].items.iter().any(|i| i.name == "Red"), "kept in the group above");
+    let r = s.execute("swatches.deleteGroup", json!({"group": "Favourites"})).unwrap();
+    assert_eq!(r["deleted"], 2);
+    assert!(!names(&s).contains(&"Red".to_string()), "deleting a group also deletes its swatches");
     s.execute("swatches.deleteGroup", json!({"group": "Mine 1"})).unwrap();
-    // Delete several by name, and one by index.
-    let r = s.execute("swatches.delete", json!({"swatch": ["Red", "Blue", "Red"]})).unwrap();
-    assert_eq!(r["deleted"].as_array().unwrap().len(), 2);
+    // Delete one by index after the group deletion has already removed Red and Blue.
     let r = s.execute("swatches.delete", json!({"index": 0})).unwrap();
     assert_eq!(r["deleted"], json!(["Ink Black"]));
     assert_eq!(names(&s).len(), 43);
@@ -236,7 +252,6 @@ fn bad_params_fail_gracefully() {
         ("swatches.renameGroup", json!({"group": "Nope", "name": "x"})),
         ("swatches.renameGroup", json!({"group": "Grays"})),
         ("swatches.deleteGroup", json!({})),
-        ("swatches.deleteGroup", json!({"group": "Grays", "keepSwatches": "yes"})),
         ("swatches.use", json!({"swatch": "Red", "target": "middle"})),
         ("swatches.use", json!({})),
         ("swatches.reset", json!({"append": 1})),
@@ -268,12 +283,24 @@ fn bad_params_fail_gracefully() {
     for g in ["Grays", "RGB", "Pastel", "Pure", "Dark"] {
         s.execute("swatches.deleteGroup", json!({"group": g})).unwrap();
     }
+    let last_group = s.execute("swatches.newGroup", json!({"name": "Last group"})).unwrap()["group"].as_str().unwrap().to_owned();
+    s.execute("swatches.deleteGroup", json!({"group": last_group})).unwrap();
+    assert!(s.presets.swatches.is_empty(), "the final group can be deleted");
     for id in ["swatches.delete", "swatches.rename", "swatches.move", "swatches.use", "swatches.export", "swatches.renameGroup", "swatches.deleteGroup"] {
         assert!(s.execute(id, json!({"swatch": "Red", "group": "Grays", "name": "x"})).is_err(), "{id}");
     }
     // Adding to an empty library creates a group.
     let r = s.execute("swatches.add", json!({})).unwrap();
     assert_eq!(r["group"], "Swatches");
+}
+
+#[test]
+fn adding_the_empty_library_fallback_creates_named_pure_red_swatch() {
+    let mut s = Session::new();
+    s.presets.swatches = vec![Group::new("Empty group", Vec::new())];
+    let r = s.execute("swatches.add", json!({"name": "Swatch 1", "color": {"model": "rgb", "values": [255, 0, 0]}})).unwrap();
+    assert_eq!(r, json!({"name": "Swatch 1", "group": "Empty group", "index": 0}));
+    assert_eq!(s.presets.swatches[0].items, vec![Swatch::new("Swatch 1", SwatchColor::Rgb([1.0, 0.0, 0.0]))]);
 }
 
 #[test]

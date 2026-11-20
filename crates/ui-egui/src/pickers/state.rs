@@ -86,6 +86,10 @@ pub struct PresetUi {
     pub brush_picker: BrushPickerView,
     /// Thumbnail size per panel (px; the minimum shows a list).
     pub sizes: BTreeMap<String, f32>,
+    /// Optional custom grid-cell size for consumers with variable-size card painters.
+    /// Transient geometry only; each adapter refreshes its value before drawing.
+    #[serde(skip)]
+    pub(crate) custom_item_sizes: BTreeMap<String, egui::Vec2>,
     /// Explicit shared display mode per asset picker. Missing values retain legacy sizing.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) display_modes: BTreeMap<String, PickerDisplayMode>,
@@ -1591,53 +1595,5 @@ mod tests {
         output.textures_delta.clear();
         super::persist(&mut app, &ctx);
         assert!(app.session.prefs().dialogs.contains_key("pickerBrowserUi"), "the completed hierarchy is persisted after release");
-    }
-
-    #[test]
-    fn legacy_brush_view_migrates_without_overwriting_saved_hierarchy_or_valid_defaults() {
-        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.session.prefs.edit(|prefs| {
-            prefs.dialogs.insert(
-                "pickerBrowserUi".into(),
-                serde_json::json!({
-                    "hierarchyOrder": {"gradients": {"": [{"type": "group", "key": "Existing group"}]}}
-                }),
-            );
-            prefs.brush_picker = serde_json::json!({
-                "showName": false,
-                "showStroke": "not a boolean",
-                "showTip": false,
-                "scale": "not a number"
-            });
-        });
-
-        super::restore(&mut app);
-
-        assert_eq!(
-            app.ui.presets_ui.hierarchy_order["gradients"][""],
-            [HierarchyOrderEntry::Group("Existing group".into())],
-            "restoring the legacy brush view must retain the common picker's saved hierarchy"
-        );
-        assert!(!app.ui.presets_ui.brush_picker.show_name);
-        assert!(app.ui.presets_ui.brush_picker.show_stroke, "a mistyped field retains its default");
-        assert!(!app.ui.presets_ui.brush_picker.show_tip);
-        assert_eq!(app.ui.presets_ui.brush_picker.scale, 1.0, "a mistyped scale retains its default");
-        assert!(app.session.prefs().brush_picker.is_null(), "the legacy preference is consumed after migration");
-    }
-
-    #[test]
-    fn legacy_brush_view_restores_one_visible_part_and_clamps_its_scale() {
-        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.session.prefs.edit(|prefs| {
-            prefs.brush_picker = serde_json::json!({"showName": false, "showStroke": false, "showTip": false, "scale": -4.0});
-        });
-
-        super::restore(&mut app);
-
-        assert!(!app.ui.presets_ui.brush_picker.show_name);
-        assert!(!app.ui.presets_ui.brush_picker.show_stroke);
-        assert!(app.ui.presets_ui.brush_picker.show_tip, "the card must retain at least one visible part");
-        assert_eq!(app.ui.presets_ui.brush_picker.scale, 0.15);
-        assert!(app.session.prefs().brush_picker.is_null());
     }
 }

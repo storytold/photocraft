@@ -3,14 +3,9 @@
 //! field and the preset library in its groups); the full editor is the Brush
 //! Settings panel (F5), which the picker and the options bar open with one click (#258).
 //!
-//! The preset browser uses the brush-specific adapter over the shared asset browser, always as
-//! cards: a click picks a preset and keeps the picker open, a double-click picks it and closes the picker
-//! (#1031); drag to reorder, right-click to rename or delete. Each card is a 2 × 2 grid — tip at
-//! the top left, stroke preview at the top right and the name in the merged bottom row (or in the
-//! stroke's cell when only the tip and the name show) — and the Brush Settings panel menu's three
-//! Brush Name/Brush Stroke/Brush Tip toggles hide its parts, at least one always on; the footer
-//! slider scales the cards. Presentation preferences live alongside the shared browser state in
-//! `UiState::presets_ui`; search, expansion, selection and presentation share one persistence path.
+//! The preset browser uses the shared asset browser's normal display modes and shell menu. A click
+//! picks a preset and keeps the picker open, a double-click picks it and closes the picker (#1031);
+//! drag to reorder, right-click to rename or delete. Only the brush-tip thumbnail is domain-specific.
 //!
 //! The picker edits a copy of the brush; the caller sends the size and hardness edits through
 //! `tools.setBrush` ([`crate::brush_panel::commit_gesture`]) and applies the returned [`Pick`]s
@@ -22,8 +17,6 @@ use photocraft_engine::paint::{BrushPreset, MAX_BRUSH_SIZE, TipShape};
 use serde_json::json;
 
 use crate::brushes_tab::{self, Action};
-pub(crate) use crate::pickers::adapters::brushes::SCALE_RANGE;
-use crate::pickers::state::BrushPickerView;
 use crate::theme::Tokens;
 use crate::{PhotocraftApp, icons, widgets};
 
@@ -32,15 +25,6 @@ pub const WIDTH: f32 = 300.0;
 /// The picker's content size before its grip is dragged, and the smallest it can be dragged to.
 pub const DEFAULT_SIZE: [f32; 2] = [WIDTH, 420.0];
 pub const MIN_SIZE: [f32; 2] = [230.0, 170.0];
-/// The scale slider's height (the Size and Hardness sliders').
-const SLIDER_H: f32 = 18.0;
-/// The least gap between the preset list and the slider under it.
-const FOOTER_GAP: f32 = 6.0;
-/// The room the footer takes from the picker's bottom.
-const FOOTER_H: f32 = SLIDER_H + FOOTER_GAP;
-/// Room the footer leaves on its right for the resize grip ([`resize_grip`] is 16 wide): the
-/// scale slider runs up to the grip's left edge, the two corner controls side by side.
-const GRIP_ROOM: f32 = 20.0;
 /// The block the Size and Hardness controls share, flush with the picker's left edge and at most
 /// this wide: a picker dragged wider keeps the controls their size, the space past them empty.
 pub(crate) const HEAD_MAX_W: f32 = 350.0;
@@ -55,15 +39,13 @@ pub enum Pick {
     OpenMenu(egui::Id),
     /// Save the current brush as a new preset, then name it in the rename bar.
     NewPreset,
-    /// Import brushes (.abr) with the file dialog.
-    Import,
 }
 
 impl Pick {
     /// Does this pick dismiss the picker? A double-click on a preset does (Photoshop), and so does
     /// anything that opens another panel or dialog.
     pub fn closes(&self) -> bool {
-        matches!(self, Pick::List(Action::Choose(_)) | Pick::OpenSettings | Pick::Import)
+        matches!(self, Pick::List(Action::Choose(_) | Action::NewPreset) | Pick::OpenSettings)
     }
 }
 
@@ -93,18 +75,16 @@ pub fn on_chip(ctx: &egui::Context, p: egui::Pos2) -> bool {
 /// panels share `PresetUi` and must retain their own rename state.
 pub fn close(ui: &mut crate::state::UiState) {
     ui.brush_picker = None;
+    if ui.presets_ui.item_renaming.as_ref().is_some_and(|rename| rename.panel == "brush-picker") {
+        ui.presets_ui.item_renaming = None;
+    }
+    ui.presets_ui.item_rename_queue.retain(|rename| rename.panel != "brush-picker");
     if ui.presets_ui.renaming.as_ref().is_some_and(|(panel, _, _)| panel == "brush-picker") {
         ui.presets_ui.renaming = None;
     }
     if ui.presets_ui.group_renaming.as_ref().is_some_and(|rename| rename.panel == "brush-picker") {
         ui.presets_ui.group_renaming = None;
     }
-}
-
-/// Start the shared browser's in-place rename for this exact preset occurrence. Brush commands
-/// still address names, so the brush picker's context menu only offers this action when that name is unambiguous.
-pub(crate) fn begin_rename(preset_ui: &mut crate::pickers::state::PresetUi, preset: &BrushPreset) {
-    preset_ui.renaming = Some(("brush-picker".to_string(), crate::pickers::adapters::brushes::preview_identity(preset), preset.name.clone()));
 }
 
 /// Run what the picker asked for.
@@ -118,7 +98,7 @@ pub fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, picks: Vec<Pick>) {
                     egui::Popup::menu(&response).show(|ui| {
                         widgets::style_spectrum_popup_menu(ui);
                         ui.set_min_width(180.0);
-                        crate::brush_panel::panel_menu(app, ui);
+                        crate::brush_panel::picker_menu(app, ui);
                     });
                 }
             }
@@ -127,9 +107,6 @@ pub fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, picks: Vec<Pick>) {
             Pick::NewPreset => {
                 close(&mut app.ui);
                 crate::brush_preset_dialog::open(app, None);
-            }
-            Pick::Import => {
-                let _ = crate::preset_files_ui::import_brushes(app);
             }
         }
     }
@@ -164,9 +141,8 @@ pub(crate) fn named(resp: egui::Response, label: &str) -> egui::Response {
     resp
 }
 
-/// The picker's contents: Size, Hardness (round tips only: a sampled tip has none), a search
-/// field with the Brush Settings and New Preset buttons, the preset list, and the footer
-/// slider that scales the cards ([`scale_slider`]). Size and Hardness sit in a block flush with
+/// The picker's contents: Size, Hardness (round tips only: a sampled tip has none), the shared
+/// picker shell, brush-specific header actions, and the preset library. Size and Hardness sit in a block flush with
 /// the left edge, at most [`HEAD_MAX_W`] wide, so a picker dragged wider doesn't stretch them.
 /// `current` is the selected preset's name (by identity, so edits don't deselect). `size` is the
 /// content size the user dragged the picker to ([`DEFAULT_SIZE`] before that): the list fills
@@ -181,7 +157,6 @@ pub fn body(
     size: egui::Vec2,
 ) -> Vec<Pick> {
     let t = Tokens::get(ui.ctx());
-    let preset_ui = std::cell::RefCell::new(preset_ui);
     let picks = std::cell::RefCell::new(Vec::new());
     // The picker is its dragged (or remembered) size: at least that tall even when every group
     // is closed, so reopening one has the room to show it.
@@ -235,66 +210,23 @@ pub fn body(
             picks.borrow_mut().push(Pick::OpenMenu(menu.id));
         }
     };
-    let mut search = |ui: &mut egui::Ui| {
-        ui.horizontal(|ui| {
-            icons::paint(ui, egui::Rect::from_min_size(ui.cursor().min + vec2(0.0, 3.0), vec2(16.0, 16.0)), "search", 14.0, t.text_faint);
-            ui.add_space(20.0);
-            widgets::text_field(
-                ui,
-                ui.id().with("brush-picker-search"),
-                preset_ui.borrow_mut().search.entry("brush-picker".to_string()).or_default(),
-                tl!("Search Brushes"),
-                (size.x - 40.0).max(60.0),
-                false,
-            );
-        });
+    let mut footer = |ui: &mut egui::Ui, state: &mut crate::pickers::state::PresetUi| -> Vec<crate::pickers::browser::asset_browser::BrowserAction> {
+        crate::pickers::adapters::brushes::draw_brush_footer_controls(ui, state, presets, "brush-picker")
     };
-    let mut footer = |ui: &mut egui::Ui| {
-        ui.add_space((size.y - (ui.cursor().min.y - top) - SLIDER_H).max(FOOTER_GAP));
-        // The browser is inset inside the picker shell; subtract that inset so the slider's cap
-        // matches the width available to its cards rather than the outer frame.
-        scale_slider(ui, &mut preset_ui.borrow_mut().brush_picker, (size.x - 16.0).max(0.0));
-    };
-    let show_search = { preset_ui.borrow().search_visible.get("brush-picker").copied().unwrap_or(true) };
-
-    let list_picks = crate::pickers::shell::picker_shell_custom(
+    let actions = crate::pickers::adapters::brushes::picker_browser_with_shell(
         ui,
-        (size.y - controls_h).max(0.0),
-        crate::pickers::shell::CustomShellOptions {
+        presets,
+        current,
+        preset_ui,
+        crate::pickers::shell::ShellOptions {
             header: Some(&mut header),
-            search: if show_search { Some(&mut search) } else { None },
-            footer: Some((&mut footer, FOOTER_H)),
+            custom_footer: Some((&mut footer, 28.0)),
             max_total_height: Some((size.y - controls_h).max(0.0)),
             ..Default::default()
         },
-        |ui, allocated_h| {
-            let actions =
-                { crate::pickers::adapters::brushes::picker_browser(ui, presets, current, &mut preset_ui.borrow_mut(), (allocated_h - 4.0).max(0.0)) };
-            actions.into_iter().map(Pick::List).collect::<Vec<_>>()
-        },
     );
-    picks.borrow_mut().extend(list_picks);
+    picks.borrow_mut().extend(actions.into_iter().map(Pick::List));
     picks.into_inner()
-}
-
-/// The footer's card-scale slider: how big the preset cards are drawn (1 the standard, 2 the
-/// largest), bare like the Size and Hardness sliders — a readout would be noise for a control
-/// that's set by feel. The value snaps to hundredths and runs over [`SCALE_RANGE`], from 0.15,
-/// under which the cards' padding and rows stop making sense; 0.40 and below is where
-/// [`brushes_tab`]'s cards go compact, the tips dropping their size numbers (the text itself
-/// holds its size at every scale).
-fn scale_slider(ui: &mut egui::Ui, st: &mut BrushPickerView, container_width: f32) {
-    let w = (ui.available_width() - GRIP_ROOM).max(60.0);
-    ui.allocate_ui_with_layout(vec2(w, SLIDER_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-        let show = (st.show_name, st.show_stroke, st.show_tip);
-        let max_scale = crate::pickers::adapters::brushes::max_picker_card_scale(container_width, show);
-        st.scale = st.scale.clamp(*SCALE_RANGE.start(), max_scale);
-        let resp = widgets::slider(ui, &mut st.scale, *SCALE_RANGE.start()..=max_scale, None);
-        if resp.changed() {
-            st.scale = (st.scale * 100.0).round() / 100.0;
-        }
-        dismiss_popup(&resp);
-    });
 }
 
 /// Closes any open popup as soon as `resp` is grabbed: a slider or grip drag never counts as a
@@ -350,23 +282,4 @@ pub fn resize_grip(ui: &mut egui::Ui, frame: egui::Rect, content: egui::Vec2) ->
         let start: egui::Vec2 = grip_ui.ctx().data_mut(|d| d.get_temp(start_id)).unwrap_or(content);
         (start + resp.total_drag_delta().unwrap_or_default()).clamp(min, max)
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::begin_rename;
-
-    #[test]
-    fn picker_rename_uses_shared_panel_and_occurrence_identity() {
-        let session = photocraft_engine::Session::new();
-        let preset = session.tools.presets.first().expect("session has built-in brush presets");
-        let expected_key = crate::pickers::adapters::brushes::preview_identity(preset);
-        let expected_name = preset.name.clone();
-        let mut state = crate::pickers::state::PresetUi::default();
-
-        begin_rename(&mut state, preset);
-
-        assert_eq!(state.renaming, Some(("brush-picker".into(), expected_key, expected_name.clone())));
-        assert_eq!(state.renaming.as_ref().map(|(_, _, text)| text.as_str()), Some(expected_name.as_str()));
-    }
 }

@@ -12,9 +12,16 @@ pub(crate) fn query(state: &PresetUi, panel: &str) -> String {
 
 /// Draw the standard search row for panels that expose the common search control.
 pub(crate) fn show_search_bar(ui: &mut egui::Ui, state: &mut PresetUi, panel: &str) {
-    if matches!(panel, "gradients" | "swatches" | "patterns") && state.search_visible.get(panel).copied().unwrap_or(true) {
+    if matches!(panel, "gradients" | "swatches" | "patterns" | "styles" | "shapes" | "brushes" | "brush-picker")
+        && state.search_visible.get(panel).copied().unwrap_or(true)
+    {
         let query = state.search.entry(panel.to_owned()).or_default();
-        ui.add(egui::TextEdit::singleline(query).desired_width(ui.available_width()).hint_text(tl!("Search")));
+        let tokens = crate::theme::Tokens::get(ui.ctx());
+        let hint = if panel == "brush-picker" { tl!("Search Brushes").to_owned() } else { format!("Search {}{}", panel[..1].to_uppercase(), &panel[1..]) };
+        ui.horizontal(|ui| {
+            ui.add(crate::icons::image("search", 14.0, tokens.text_faint));
+            ui.add(egui::TextEdit::singleline(query).desired_width(ui.available_width()).hint_text(egui::RichText::new(hint).italics()));
+        });
     }
 }
 

@@ -11,6 +11,15 @@ use super::{Group, always, bad, edit_groups, group_index, req_str, str_param};
 use crate::commands::CommandSpec;
 use crate::{Result, Session};
 
+impl super::Named for photocraft_doc::Pattern {
+    fn name(&self) -> &str {
+        self.display_name()
+    }
+    fn set_name(&mut self, name: String) {
+        self.name = name;
+    }
+}
+
 const UNGROUPED: &str = "Patterns";
 
 /// Built-in folders for the built-in procedural patterns.
@@ -22,6 +31,7 @@ pub fn builtin_groups() -> Vec<Group<String>> {
 
 /// Bring the groups in line with the library (see the module docs).
 pub fn sync(s: &mut Session) {
+    super::collisions::make_flat_item_names_unique(&mut s.patterns.items);
     let lib: Vec<String> = s.patterns.items.iter().map(|p| p.id.clone()).collect();
     let groups = &mut s.presets.pattern_groups;
     for g in groups.iter_mut() {
@@ -191,6 +201,45 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(r)
 }
 
+fn reset(s: &mut Session, p: &Value) -> Result<Value> {
+    let append = p.get("append").and_then(Value::as_bool).unwrap_or(false);
+    let defaults = crate::pattern_cmds::builtin();
+    let default_groups = builtin_groups();
+    if append {
+        let mut ids = std::collections::HashMap::new();
+        let mut names = s.patterns.items.iter().map(|item| item.display_name().to_string()).collect::<Vec<_>>();
+        for pattern in defaults {
+            // Pattern IDs are deterministic hashes of name + pixels. Unlike gradients, changing
+            // a Pattern's name after construction would leave its ID stale, so resolve the name
+            // first and construct a fresh Pattern to obtain a distinct, internally consistent ID.
+            let base = pattern.display_name().to_string();
+            let name = super::collisions::unique_name_from_names(&names, &base);
+            names.push(name.clone());
+            let copy = photocraft_doc::Pattern::new(name, pattern.surface, pattern.width, pattern.height);
+            let id = copy.id.clone();
+            s.patterns.items.push(copy);
+            ids.insert(pattern.id, id);
+        }
+        for mut group in default_groups {
+            group.name = super::collisions::unique_group_name(&s.presets.pattern_groups, &group.name);
+            for id in &mut group.items {
+                if let Some(mapped) = ids.get(id) {
+                    *id = mapped.clone();
+                }
+            }
+            s.presets.pattern_groups.push(group);
+        }
+    } else {
+        s.patterns.items = defaults;
+        s.presets.pattern_groups = default_groups;
+        if s.presets.pattern.as_ref().is_some_and(|id| !s.patterns.items.iter().any(|item| &item.id == id)) {
+            s.presets.pattern = None;
+        }
+    }
+    s.presets_changed();
+    Ok(json!({"groups": s.presets.pattern_groups.len(), "patterns": s.patterns.items.len()}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
@@ -241,6 +290,16 @@ pub fn specs() -> Vec<CommandSpec> {
             params: super::GROUP_EDIT_PARAMS,
             enabled: always,
             run: edit,
+            journal: true,
+        },
+        CommandSpec {
+            id: "pattern.presets.reset",
+            label: "Restore Default Patterns",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"append":bool=false}"##,
+            enabled: always,
+            run: reset,
             journal: true,
         },
     ]

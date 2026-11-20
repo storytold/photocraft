@@ -808,6 +808,10 @@ impl Tokens {
         if self.pro { Color32::from_gray(if self.dark() { 96 } else { 201 }) } else { self.accent_soft }
     }
 
+    pub fn picker_selection(&self) -> Color32 {
+        Color32::from_rgb(80, 102, 124)
+    }
+
     pub fn dark(&self) -> bool {
         matches!(
             self.kind,

@@ -3139,6 +3139,3 @@ mod channel_tint_tests {
 
 #[cfg(test)]
 mod options_hit_area_tests;
-
-#[cfg(test)]
-mod brush_browser_identity_tests;

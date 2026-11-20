@@ -11,10 +11,10 @@ use crate::pickers::browser::asset_browser::{
 use crate::pickers::browser::browser_actions::{generic, run};
 use crate::pickers::browser::browser_interaction::canvas_drop_rect;
 use crate::pickers::browser::identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
+use crate::pickers::browser::inline_rename::ItemRenameState;
 use crate::pickers::footer::FooterOptions;
 use crate::pickers::preset_previews::c32;
 use crate::pickers::shell::{ShellOptions, picker_shell};
-use crate::pickers::browser::inline_rename::ItemRenameState;
 use crate::pickers::state::HierarchyOrderEntry;
 
 /// The engine's fallback owner for gradients created when the library has no groups. The shared
@@ -278,8 +278,14 @@ pub(crate) fn new_gradient(app: &mut PhotocraftApp, state: &mut crate::pickers::
                 root.push(HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: name.clone() });
                 state.set_hierarchy_order("gradients", "", root);
             }
-            state.item_renaming =
-                Some(ItemRenameState { panel: "gradients".into(), group: destination_group, group_path: Vec::new(), key: name.clone(), text: name, focused: false });
+            state.item_renaming = Some(ItemRenameState {
+                panel: "gradients".into(),
+                group: destination_group,
+                group_path: Vec::new(),
+                key: name.clone(),
+                text: name,
+                focused: false,
+            });
         }
     }
 }

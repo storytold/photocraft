@@ -62,7 +62,10 @@ fn gradient_builtins_and_listing() {
 
 #[test]
 fn duplicate_gradient_names_are_migrated_with_incrementing_underscore_suffixes() {
-    use crate::presets::{Group, gradients::{GradientPreset, make_gradient_names_unique}};
+    use crate::presets::{
+        Group,
+        gradients::{GradientPreset, make_gradient_names_unique},
+    };
 
     let mut groups = vec![
         Group::new("Browns", vec![GradientPreset::new("Brown 01", &["#000000", "#ffffff"])]),
@@ -354,10 +357,8 @@ fn appending_default_gradients_deduplicates_group_and_preset_names() {
 
     s.execute("gradient.presets.reset", json!({"append": true})).unwrap();
     let second_append = s.execute("gradient.presets.list", json!({})).unwrap();
-    let names: Vec<&str> = second_append["groups"].as_array().unwrap().iter()
-        .flat_map(|g| g["presets"].as_array().unwrap())
-        .map(|p| p["name"].as_str().unwrap())
-        .collect();
+    let names: Vec<&str> =
+        second_append["groups"].as_array().unwrap().iter().flat_map(|g| g["presets"].as_array().unwrap()).map(|p| p["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"Black, White_2"));
 }
 
@@ -444,6 +445,39 @@ fn pattern_groups_select_apply_and_sync() {
     // Deleting a group deletes its patterns from the library.
     s.execute("pattern.presets.edit", json!({"action": "deleteGroup", "group": "Textures"})).unwrap();
     assert!(crate::pattern_cmds::resolve(&s, "Weave").is_none());
+}
+
+#[test]
+fn appending_default_patterns_restores_missing_builtins_and_adds_default_groups() {
+    let mut s = Session::new();
+    let original_count = s.patterns.items.len();
+    s.execute("pattern.presets.edit", json!({"action": "deleteGroup", "group": "Textures"})).unwrap();
+    assert!(crate::pattern_cmds::resolve(&s, "Bricks").is_none());
+
+    s.execute("pattern.presets.reset", json!({"append": true})).unwrap();
+    let listed = s.execute("pattern.presets.list", json!({})).unwrap();
+    let groups = listed["groups"].as_array().unwrap();
+    assert!(groups.iter().any(|group| group["name"] == "Geometric 1"));
+    let textures = groups.iter().find(|group| group["name"] == "Textures").unwrap();
+    assert_eq!(textures["patterns"].as_array().unwrap().len(), 3);
+    assert!(crate::pattern_cmds::resolve(&s, "Bricks").is_some());
+    assert_eq!(
+        s.patterns.items.len(),
+        original_count + 4,
+        "the three deleted texture patterns are restored as new entries, while the four existing geometric patterns are preserved"
+    );
+    let first_bricks_id = textures["patterns"][0]["id"].as_str().unwrap().to_string();
+    assert_ne!(first_bricks_id, crate::pattern_cmds::builtin()[4].id, "the appended pattern has a distinct identity from the builtin instance");
+
+    s.execute("pattern.presets.reset", json!({"append": true})).unwrap();
+    let listed = s.execute("pattern.presets.list", json!({})).unwrap();
+    let groups = listed["groups"].as_array().unwrap();
+    assert!(groups.iter().any(|group| group["name"] == "Textures 1"));
+    let textures_again = groups.iter().find(|group| group["name"] == "Textures 1").unwrap();
+    assert_eq!(textures_again["patterns"].as_array().unwrap().len(), 3);
+    assert_eq!(s.patterns.items.len(), original_count + 11, "a second append adds another distinct copy of all seven defaults");
+    assert_ne!(textures_again["patterns"][0]["id"], first_bricks_id);
+    assert!(s.patterns.items.iter().any(|pattern| pattern.display_name() == "Bricks_1"));
 }
 
 #[test]
@@ -606,13 +640,27 @@ fn shapes_place_as_shape_layers() {
 fn custom_shapes_join_the_shapes_panel() {
     let mut s = session(8);
     s.execute("shape.create", json!({"kind": "star", "rect": [0, 0, 30, 30]})).unwrap();
-    s.execute("edit.defineCustomShape", json!({"name": "My Star"})).unwrap();
+    s.execute("edit.defineCustomShape", json!({"name": "Heart"})).unwrap();
     let v = s.execute("shape.presets.list", json!({})).unwrap();
     let last = v["groups"].as_array().unwrap().last().unwrap().clone();
     assert_eq!(last["name"], super::shapes::CUSTOM_GROUP);
-    s.execute("shape.presets.place", json!({"preset": "My Star"})).unwrap();
-    s.execute("shape.presets.edit", json!({"action": "rename", "preset": "My Star", "name": "Star 2"})).unwrap();
-    s.execute("shape.presets.edit", json!({"action": "delete", "preset": "Star 2"})).unwrap();
+    // The custom collection can contain a name also used by a built-in preset.
+    assert!(s.execute("shape.presets.edit", json!({"action": "move", "preset": "Heart", "group": "Symbols", "to": super::shapes::CUSTOM_GROUP})).is_err());
+    assert!(s.execute("shape.presets.edit", json!({"action": "move", "preset": "Heart", "group": super::shapes::CUSTOM_GROUP, "to": "Symbols"})).is_err());
+    s.execute("shape.presets.edit", json!({"action": "rename", "preset": "Heart", "group": super::shapes::CUSTOM_GROUP, "name": "My Star"})).unwrap();
+    s.execute("shape.presets.edit", json!({"action": "move", "preset": "My Star", "group": super::shapes::CUSTOM_GROUP, "to": "Symbols", "index": 0})).unwrap();
+    assert!(s.edit_state.custom_shapes.is_empty());
+    assert_eq!(s.presets.shapes.iter().find(|g| g.name == "Symbols").unwrap().items[0].name, "My Star");
+    s.execute("shape.presets.edit", json!({"action": "move", "preset": "Heart", "group": "Symbols", "to": super::shapes::CUSTOM_GROUP, "index": 0})).unwrap();
+    assert_eq!(s.edit_state.custom_shapes[0].name, "Heart");
+    s.execute("shape.presets.edit", json!({"action": "renameGroup", "group": super::shapes::CUSTOM_GROUP, "name": "User Shapes"})).unwrap();
+    assert!(s.edit_state.custom_shapes.is_empty());
+    assert_eq!(s.presets.shapes.iter().find(|g| g.name == "User Shapes").unwrap().items[0].name, "Heart");
+    s.execute("shape.presets.edit", json!({"action": "deleteGroup", "group": "User Shapes"})).unwrap();
+    assert!(!s.presets.shapes.iter().any(|g| g.name == "User Shapes"));
+    s.execute("edit.defineCustomShape", json!({"name": "Delete Me"})).unwrap();
+    assert!(s.execute("shape.presets.edit", json!({"action": "newGroup", "name": super::shapes::CUSTOM_GROUP})).is_err());
+    s.execute("shape.presets.edit", json!({"action": "deleteGroup", "group": super::shapes::CUSTOM_GROUP})).unwrap();
     assert!(s.edit_state.custom_shapes.is_empty());
     // New preset from the active shape layer, normalised to the 100 box.
     s.execute("shape.presets.new", json!({"name": "From Layer", "group": "Mine"})).unwrap();

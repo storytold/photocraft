@@ -51,11 +51,7 @@ pub(crate) fn file_bytes(p: &Value, cmd: &str, what: &str) -> Result<(Vec<u8>, S
 
 /// A name not used by any preset in `taken` (case-insensitive): `name`, `name 2`, `name 3`…
 fn unique(name: &str, taken: &[String]) -> String {
-    let free = |n: &str| !taken.iter().any(|t| t.eq_ignore_ascii_case(n));
-    if free(name) {
-        return name.to_string();
-    }
-    (2..).map(|i| format!("{name} {i}")).find(|n| free(n)).unwrap_or_else(|| name.to_string())
+    crate::presets::collisions::unique_name_from_names(taken, name)
 }
 
 fn import_abr(s: &mut Session, p: &Value) -> Result<Value> {

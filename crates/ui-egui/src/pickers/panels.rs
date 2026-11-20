@@ -245,10 +245,7 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 domain_hierarchy_actions: false,
                 root_item_group: None,
             },
-            // The projection also contains the derived `Custom Shapes` group, whose items live in
-            // edit_state.custom_shapes and have no move command. Until that source supports the same
-            // canonical move contract, keep drag semantics disabled for this mixed-source adapter.
-            capabilities: BrowserCapabilities { item_drag: false, item_drop: false, group_drag: false, selection: true, activation: true },
+            capabilities: BrowserCapabilities::default(),
             item_context_menu: Some(standard_item_context_menu),
             group_context_menu: Some(standard_group_context_menu),
             nested_group_context_menu: None,
@@ -1215,6 +1212,34 @@ mod tests {
     }
 
     #[test]
+    fn patterns_panel_shows_cards_from_every_group_on_first_open() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let (app, _) = app();
+        let groups = pattern_group_views(&app.session.patterns.items, &app.session.presets.pattern_groups);
+        assert!(groups.len() >= 2, "the built-in pattern library has multiple groups");
+        let expected: Vec<(String, String)> =
+            groups.iter().filter_map(|group| group.items.first().map(|item| (group.name.clone(), item.name.clone()))).collect();
+        assert!(expected.len() >= 2, "at least two groups contain patterns");
+
+        let mut h = Harness::builder().with_size(vec2(420.0, 720.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
+                    patterns_panel(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        h.run_steps(4);
+
+        for (group, card) in expected {
+            assert!(h.get_by_label(&group).rect().is_positive(), "group header {group:?} is visible");
+            assert!(h.get_by_label(&card).rect().is_positive(), "pattern card {card:?} in {group:?} is visible");
+        }
+    }
+
+    #[test]
     fn patterns_panel_card_drag_updates_the_shared_card_group_sequence() {
         use egui_kittest::{Harness, kittest::Queryable};
 
@@ -1252,6 +1277,74 @@ mod tests {
             &h.state().ui.presets_ui.hierarchy_order["patterns"][&group_name][0..2],
             &[crate::pickers::state::HierarchyOrderEntry::Item(second_key), crate::pickers::state::HierarchyOrderEntry::Item(first_key),]
         );
+    }
+
+    #[test]
+    fn styles_and_shapes_support_nested_folder_drag_like_gradients() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        for (panel, draw) in
+            [("styles", styles_panel as fn(&mut PhotocraftApp, &mut egui::Ui)), ("shapes", shapes_panel as fn(&mut PhotocraftApp, &mut egui::Ui))]
+        {
+            let (app, _) = app();
+            let mut h = Harness::builder().with_size(vec2(520.0, 900.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
+                        draw(app, ui);
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+            h.run_steps(4);
+
+            let headers = last_group_headers(&h.ctx, panel);
+            assert!(headers.len() >= 2, "{panel} needs at least two groups");
+            let (target_group, _) = &headers[0];
+            let (moving_group, moving_header) = headers.last().unwrap();
+            let target_item = match panel {
+                "styles" => h
+                    .state()
+                    .session
+                    .presets
+                    .styles
+                    .iter()
+                    .find(|group| &group.name == target_group)
+                    .and_then(|group| group.items.first())
+                    .unwrap()
+                    .name
+                    .clone(),
+                _ => h
+                    .state()
+                    .session
+                    .presets
+                    .shapes
+                    .iter()
+                    .find(|group| &group.name == target_group)
+                    .and_then(|group| group.items.first())
+                    .unwrap()
+                    .name
+                    .clone(),
+            };
+            let target_card = h.get_by_label(&target_item).rect();
+            let target = egui::pos2(target_card.left() + 1.0, target_card.center().y);
+            let source = moving_header.center();
+
+            h.event(egui::Event::PointerMoved(source));
+            h.run_steps(1);
+            h.event(egui::Event::PointerButton { pos: source, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+            h.run_steps(1);
+            for step in 1..=6 {
+                h.event(egui::Event::PointerMoved(source + (target - source) * (step as f32 / 6.0)));
+                h.run_steps(1);
+            }
+            h.event(egui::Event::PointerButton { pos: target, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+            h.run_steps(3);
+
+            let state = &h.state().ui.presets_ui;
+            assert_eq!(state.parent_of(panel, moving_group), Some(target_group.as_str()), "{panel} group drag creates a nested folder");
+            assert_eq!(state.hierarchy_order[panel][target_group].first(), Some(&HierarchyOrderEntry::Group(moving_group.clone())));
+        }
     }
 
     fn consumer_item_menu(

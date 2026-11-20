@@ -226,6 +226,22 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"name": to}))
 }
 
+fn copy_swatch(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "swatches.copy";
+    if total(&s.presets.swatches) >= MAX_SWATCHES {
+        return Err(bad(CMD, format!("the Swatches panel is full ({MAX_SWATCHES} swatches)")));
+    }
+    let (gi, ii) = locate(s, p, CMD)?;
+    let base = name_param(p, "name", CMD)?.ok_or_else(|| bad(CMD, "missing `name`"))?;
+    let name = unique_name(&s.presets.swatches, &base);
+    let mut copy = s.presets.swatches[gi].items[ii].clone();
+    copy.name = name.clone();
+    let group = s.presets.swatches[gi].name.clone();
+    s.presets.swatches[gi].items.push(copy);
+    s.presets_changed();
+    Ok(json!({"name": name, "group": group}))
+}
+
 fn move_swatch(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "swatches.move";
     let (gi, ii) = locate(s, p, CMD)?;
@@ -294,26 +310,12 @@ fn rename_group(s: &mut Session, p: &Value) -> Result<Value> {
 fn delete_group(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "swatches.deleteGroup";
     let g = name_param(p, "group", CMD)?.ok_or_else(|| bad(CMD, "missing `group`"))?;
-    let keep = match p.get("keepSwatches") {
-        None | Some(Value::Null) => false,
-        Some(v) => v.as_bool().ok_or_else(|| bad(CMD, "`keepSwatches` must be true or false"))?,
-    };
     let i = group_of(s, &g, CMD)?;
     let groups = &mut s.presets.swatches;
-    if keep && groups.len() < 2 {
-        return Err(bad(CMD, "there is no other group to keep the swatches in"));
-    }
     let removed = groups.remove(i);
     let n = removed.items.len();
-    if keep {
-        // Into the group above (or the new first group), like Photoshop's "Delete Group Only".
-        let into = i.saturating_sub(1).min(groups.len().saturating_sub(1));
-        if let Some(t) = groups.get_mut(into) {
-            t.items.extend(removed.items);
-        }
-    }
     s.presets_changed();
-    Ok(json!({"group": g, if keep { "kept" } else { "deleted" }: n}))
+    Ok(json!({"group": g, "deleted": n}))
 }
 
 fn use_swatch(s: &mut Session, p: &Value) -> Result<Value> {
@@ -594,37 +596,17 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     if total(&base) + total(&groups) > MAX_SWATCHES || base.len() + groups.len() > MAX_GROUPS {
         return Err(bad(CMD, format!("too many swatches: the panel holds at most {MAX_SWATCHES} in {MAX_GROUPS} groups")));
     }
-    let mut lib = base;
     let count = total(&groups);
     let mut names = Vec::with_capacity(groups.len());
-    // Names stay unique across the library (agents address swatches by name).
-    let mut next: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut taken: std::collections::HashSet<String> = lib.iter().flat_map(|g| g.items.iter().map(|i| i.name.clone())).collect();
-    // Group names are numbered from 1 as in `unique_group` ("Grays 1"), and the numbering
-    // resumes per base name.
-    let mut group_next: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut group_taken: std::collections::HashSet<String> = lib.iter().map(|g| g.name.clone()).collect();
-    for mut g in groups {
-        if group_taken.contains(&g.name) {
-            let from = group_next.get(&g.name).copied().unwrap_or(1);
-            let (i, n) = (from..).map(|i| (i, format!("{} {i}", g.name))).find(|(_, n)| !group_taken.contains(n)).unwrap_or((from, g.name.clone()));
-            group_next.insert(g.name.clone(), i + 1);
-            g.name = n;
-        }
-        group_taken.insert(g.name.clone());
-        for sw in &mut g.items {
-            if taken.contains(&sw.name) {
-                // Resume numbering per base name, so a file of identical names stays linear.
-                let from = next.get(&sw.name).copied().unwrap_or(2);
-                let (i, n) = (from..).map(|i| (i, format!("{} {i}", sw.name))).find(|(_, n)| !taken.contains(n)).unwrap_or((from, sw.name.clone()));
-                next.insert(sw.name.clone(), i + 1);
-                sw.name = n;
-            }
-            taken.insert(sw.name.clone());
-        }
-        names.push(g.name.clone());
-        lib.push(g);
+    let mut lib = base;
+    let existing_groups = lib.len();
+    for group in groups {
+        lib.push(group);
     }
+    // Use the same library-wide collision policy as every other preset picker.
+    crate::presets::collisions::make_group_item_names_unique(&mut lib);
+    crate::presets::collisions::make_group_names_unique(&mut lib);
+    names.extend(lib.iter().skip(existing_groups).map(|group| group.name.clone()));
     s.presets.swatches = lib;
     s.presets_changed();
     Ok(json!({"format": format.id(), "mode": mode, "groups": names, "count": count, "warnings": warnings}))
@@ -724,6 +706,16 @@ pub fn specs() -> Vec<CommandSpec> {
             journal: true,
         },
         CommandSpec {
+            id: "swatches.copy",
+            label: "New Swatch Preset",
+            menu: &[],
+            shortcut: None,
+            params: leak(format!(r##"{{{target},"name":str}} → {{name,group}} (copy the swatch, preserving its colour model and kind)"##)),
+            enabled: has_swatches,
+            run: copy_swatch,
+            journal: true,
+        },
+        CommandSpec {
             id: "swatches.move",
             label: "Move Swatch",
             menu: &[],
@@ -758,7 +750,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Delete Swatch Group",
             menu: &[],
             shortcut: None,
-            params: r##"{"group":name,"keepSwatches":bool=false (move its swatches into the group above)} → {group,deleted|kept}"##,
+            params: r##"{"group":name} → {group,deleted}"##,
             enabled: has_groups,
             run: delete_group,
             journal: true,

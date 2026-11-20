@@ -222,10 +222,12 @@ fn define(s: &mut Session, p: &Value) -> Result<Value> {
     if px.chunks_exact(fmt.channels()).all(|q| q[fmt.channels() - 1] >= 1.0) {
         surf = surf.convert(PixelFormat::new(fmt.mode, fmt.sample, false));
     }
-    let name = match p.get("name").and_then(Value::as_str) {
+    let base = match p.get("name").and_then(Value::as_str) {
         Some(n) if !n.trim().is_empty() => n.to_string(),
         _ => default_name(s),
     };
+    let names = s.patterns.items.iter().map(|pattern| pattern.display_name().to_string()).collect::<Vec<_>>();
+    let name = crate::presets::collisions::unique_name_from_names(&names, &base);
     let pat = Pattern::new(name, surf, r.width(), r.height());
     let id = pat.id.clone();
     let out = info(&pat, false, true);

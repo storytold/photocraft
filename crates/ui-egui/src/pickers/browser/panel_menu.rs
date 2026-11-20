@@ -1,9 +1,9 @@
 //! Asset-browser contributions to the shared docking panel menu.
 
+use crate::PhotocraftApp;
 use crate::pickers::browser::asset_browser::BrowserAction;
 use crate::pickers::browser::context_menu::SelectionMenuModel;
 use crate::pickers::state::PresetUi;
-use crate::PhotocraftApp;
 
 fn browser_actions_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut PresetUi, panel: &str) {
     let Some((asset, prefix, new_params)) = (match panel {
@@ -21,9 +21,40 @@ fn browser_actions_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut 
     let selection_summary = state.browser_selection_snapshot.get(panel).cloned().unwrap_or_default();
     let menu = SelectionMenuModel::new(&asset, &selection_summary);
 
-    if crate::menu_keys::menu_item_button(ui, &format!("New {asset} Preset…"), true).clicked() {
+    let new_preset_enabled = panel != "patterns";
+    if crate::menu_keys::menu_item_button(ui, &format!("New {asset} Preset…"), new_preset_enabled).clicked() {
         if panel == "gradients" {
             crate::pickers::adapters::gradients::new_gradient(app, state);
+        } else if panel == "swatches" {
+            if app.session.presets.swatches.iter().all(|group| group.items.is_empty()) {
+                crate::pickers::browser::browser_actions::generic_with_state(app, state, panel, prefix, &BrowserAction::New, new_params);
+                ui.close();
+                return;
+            }
+            let selected = state.selected.get(panel).and_then(|key| {
+                let group = state
+                    .selected_group
+                    .get(panel)
+                    .or_else(|| app.session.presets.swatches.iter().find(|group| group.items.iter().any(|item| &item.name == key)).map(|group| &group.name));
+                group.map(|group| crate::pickers::browser::selection::SelectionTarget::Item {
+                    group: group.clone(),
+                    path: state.selected_group_path.get(panel).cloned().unwrap_or_default(),
+                    key: key.clone(),
+                })
+            });
+            let recent = state.recent_items.get(panel).and_then(|items| items.first()).map(|item| crate::pickers::browser::selection::SelectionTarget::Item {
+                group: item.group.clone(),
+                path: item.group_path.clone(),
+                key: item.key.clone(),
+            });
+            let first = app.session.presets.swatches.iter().find_map(|group| {
+                group.items.first().map(|item| crate::pickers::browser::selection::SelectionTarget::Item {
+                    group: group.name.clone(),
+                    path: Vec::new(),
+                    key: item.name.clone(),
+                })
+            });
+            crate::pickers::browser::popup_dialogs::request_copy_swatch_preset(ui.ctx(), &selection_summary, selected.or(recent).or(first));
         } else {
             crate::pickers::browser::browser_actions::generic_with_state(app, state, panel, prefix, &BrowserAction::New, new_params);
         }
@@ -65,6 +96,17 @@ fn browser_actions_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut 
     ui.separator();
 }
 
+/// Keep the domain-action menu surface aligned with Patterns while clearly disabling operations
+/// that Styles and Shapes do not yet implement.
+fn unavailable_asset_actions_menu(ui: &mut egui::Ui, plural: &str, show_append: bool) {
+    if show_append {
+        let _ = crate::menu_keys::menu_item_button(ui, &format!("Append Default {plural}…"), false);
+    }
+    let _ = crate::menu_keys::menu_item_button(ui, &format!("Import {plural}…"), false);
+    let _ = crate::menu_keys::menu_item_button(ui, &format!("Export Selected {plural}…"), false);
+    let _ = crate::menu_keys::menu_item_button(ui, &format!("Export {plural}…"), false);
+}
+
 /// Render the shared asset picker's menu points and its domain-specific extension.
 ///
 /// The generic display/search controls live in `picker_panel_menu`; this module connects those
@@ -83,8 +125,16 @@ pub(crate) fn shared_picker_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, pan
         let mut app = app_cell.borrow_mut();
         match panel {
             "gradients" => crate::pickers::adapters::gradients::panel_menu(&mut app, ui, state),
-            "patterns" => crate::pickers::adapters::patterns::panel_menu(&mut app, ui),
+            "patterns" => crate::pickers::adapters::patterns::panel_menu(&mut app, ui, state),
             "swatches" => crate::pickers::adapters::swatches::panel_menu(&mut app, ui, state),
+            "styles" => {
+                if crate::menu_keys::menu_item_button(ui, tl!("Append Default Styles…"), true).clicked() {
+                    let _ = crate::pickers::browser::browser_actions::run(&mut app, "style.presets.reset", serde_json::json!({"append": true}));
+                    ui.close();
+                }
+                unavailable_asset_actions_menu(ui, "Styles", false);
+            }
+            "shapes" => unavailable_asset_actions_menu(ui, "Shapes", true),
             _ => {}
         }
     };
@@ -98,13 +148,13 @@ pub(crate) fn shared_picker_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, pan
 #[cfg(test)]
 mod tests {
     use super::{browser_actions_menu, shared_picker_menu};
+    use crate::PhotocraftApp;
     use crate::pickers::browser::asset_browser::{GroupView, ItemView};
     use crate::pickers::state::PresetUi;
-    use crate::PhotocraftApp;
     use egui::vec2;
     use egui_kittest::{
-        kittest::{NodeT, Queryable},
         Harness,
+        kittest::{NodeT, Queryable},
     };
 
     #[test]
@@ -208,6 +258,147 @@ mod tests {
         harness.run_steps(2);
 
         assert!(!harness.get_by_label("Export Selected Gradients…").accesskit_node().is_disabled());
+    }
+
+    #[test]
+    fn patterns_panel_menu_uses_shared_selection_labels_and_pattern_actions() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut harness = Harness::builder().with_size(vec2(520.0, 520.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                app.ui.presets_ui.browser_selection_snapshot.insert(
+                    "patterns".into(),
+                    crate::pickers::state::BrowserSelectionSnapshot {
+                        contains_selected_card: true,
+                        contains_card: true,
+                        selected_cards: vec![("Basic".into(), "Pattern A".into()), ("Basic".into(), "Pattern B".into())],
+                        cards: vec![("Basic".into(), "Pattern A".into()), ("Basic".into(), "Pattern B".into())],
+                        targets: vec![
+                            crate::pickers::browser::selection::SelectionTarget::Item { group: "Basic".into(), path: Vec::new(), key: "Pattern A".into() },
+                            crate::pickers::browser::selection::SelectionTarget::Item { group: "Basic".into(), path: Vec::new(), key: "Pattern B".into() },
+                        ],
+                        ..Default::default()
+                    },
+                );
+                crate::pickers::shell::picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
+                    assert!(shared_picker_menu(app, ui, "patterns"));
+                });
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(2);
+        harness.get_by_label("Panel menu").click();
+        harness.run_steps(2);
+
+        let labels = [
+            "New Pattern Preset…",
+            "New Pattern Group…",
+            "Rename Patterns…",
+            "Delete Patterns…",
+            "Append Default Patterns…",
+            "Import Patterns…",
+            "Export Selected Patterns…",
+            "Export Patterns…",
+        ];
+        let mut previous_bottom = None;
+        for label in labels {
+            let rect = harness.get_by_label(label).rect();
+            if let Some(bottom) = previous_bottom {
+                assert!(rect.top() >= bottom, "{label} must follow the previous menu entry");
+            }
+            previous_bottom = Some(rect.bottom());
+        }
+        assert!(!harness.get_by_label("Append Default Patterns…").accesskit_node().is_disabled());
+        assert!(!harness.get_by_label("Export Selected Patterns…").accesskit_node().is_disabled());
+        assert!(!harness.get_by_label("Export Patterns…").accesskit_node().is_disabled());
+        assert!(harness.get_by_label("New Pattern Preset…").accesskit_node().is_disabled());
+    }
+
+    #[test]
+    fn styles_exposes_supported_default_append_while_shapes_keeps_unimplemented_actions_disabled() {
+        for panel in ["styles", "shapes"] {
+            let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            let mut harness = Harness::builder().with_size(vec2(520.0, 520.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    crate::pickers::shell::picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
+                        assert!(shared_picker_menu(app, ui, panel));
+                    });
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+            harness.run_steps(2);
+            harness.get_by_label("Panel menu").click();
+            harness.run_steps(2);
+
+            let plural = if panel == "styles" { "Styles" } else { "Shapes" };
+            let append_label = format!("Append Default {plural}…");
+            let append = harness.get_by_label(&append_label);
+            assert_eq!(append.accesskit_node().is_disabled(), panel == "shapes");
+            for action in [format!("Import {plural}…"), format!("Export Selected {plural}…"), format!("Export {plural}…")] {
+                assert!(harness.get_by_label(&action).accesskit_node().is_disabled(), "{panel} keeps unsupported action {action} visible but disabled");
+            }
+        }
+    }
+
+    #[test]
+    fn swatches_panel_menu_matches_the_requested_action_order() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut harness = Harness::builder().with_size(vec2(520.0, 520.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                let selected = ItemView { key: "Black".into(), name: "Black".into(), group_path: Vec::new() };
+                app.ui.presets_ui.browser_selection_snapshot.insert(
+                    "swatches".into(),
+                    crate::pickers::state::BrowserSelectionSnapshot {
+                        contains_selected_card: true,
+                        contains_card: true,
+                        selected_items: vec![("Grays".into(), selected)],
+                        selected_cards: vec![("Grays".into(), "Black".into())],
+                        cards: vec![("Grays".into(), "Black".into())],
+                        targets: vec![crate::pickers::browser::selection::SelectionTarget::Item {
+                            group: "Grays".into(),
+                            path: Vec::new(),
+                            key: "Black".into(),
+                        }],
+                        ..Default::default()
+                    },
+                );
+                crate::pickers::shell::picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
+                    assert!(shared_picker_menu(app, ui, "swatches"));
+                });
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(2);
+        harness.get_by_label("Panel menu").click();
+        harness.run_steps(2);
+
+        let labels = [
+            "New Swatch Preset…",
+            "New Swatch Group…",
+            "Show Recents",
+            "Append Default Swatches…",
+            "Import Swatches…",
+            "Export Selected Swatches…",
+            "Export Swatches for Exchange…",
+        ];
+        let mut previous_bottom = None;
+        for label in labels {
+            let rect = harness.get_by_label(label).rect();
+            if let Some(bottom) = previous_bottom {
+                assert!(rect.top() >= bottom, "{label} must follow the previous menu entry");
+            }
+            previous_bottom = Some(rect.bottom());
+        }
+        assert!(!harness.get_by_label("New Swatch Preset…").accesskit_node().is_disabled());
+        assert!(!harness.get_by_label("Export Selected Swatches…").accesskit_node().is_disabled());
+        assert!(harness.query_by_label("Replace Swatches…").is_none());
+        assert!(harness.query_by_label("Reset Swatches").is_none());
+        assert!(harness.query_by_label("Export Swatches…").is_none());
+        let selected = harness.get_by_label("Export Selected Swatches…").rect();
+        let exchange = harness.get_by_label("Export Swatches for Exchange…").rect();
+        assert!(exchange.top() >= selected.bottom(), "Exchange export follows selected export");
     }
 
     #[test]

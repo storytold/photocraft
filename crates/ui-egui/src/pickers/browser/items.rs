@@ -46,7 +46,7 @@ pub(crate) fn list_row(ui: &egui::Ui, response: &egui::Response, rect: Rect, lab
     item_info(response, label, selected);
     let tokens = Tokens::get(ui.ctx());
     if selected {
-        ui.painter().rect_filled(rect, 0.0, tokens.row_selected);
+        ui.painter().rect_filled(rect, 0.0, tokens.picker_selection());
     } else if response.hovered() {
         ui.painter().rect_filled(rect, 0.0, tokens.hover.gamma_multiply(0.5));
     }

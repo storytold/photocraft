@@ -24,12 +24,12 @@ pub(crate) fn group_open(st: &PresetUi, panel: &str, index: usize, name: &str, a
 }
 
 /// Shared collapsible group row. The caller owns toggle state and context actions.
-pub(crate) fn header(ui: &mut egui::Ui, name: &str, open: bool, depth: usize, count: Option<usize>, height: f32) -> (Rect, egui::Response) {
+pub(crate) fn header(ui: &mut egui::Ui, name: &str, open: bool, depth: usize, count: Option<usize>, height: f32, selected: bool) -> (Rect, egui::Response) {
     let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
     let rect = Rect::from_min_max(pos2(ui.clip_rect().left(), allocated_rect.top()), pos2(allocated_rect.right(), allocated_rect.bottom()));
     let response = ui.interact(inset_row_rect(rect, depth), allocated.id, Sense::click_and_drag());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-    paint(ui, rect, open, name, depth, false, count);
+    paint_with_selection(ui, rect, open, name, depth, false, count, selected);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, name));
     (rect, response)
 }
@@ -41,6 +41,7 @@ pub(crate) fn nested_header(
     open: bool,
     group_depth: usize,
     parent_depth: usize,
+    selected: bool,
 ) -> (Rect, egui::Response, egui::Response, usize) {
     let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), GROUP_HEADER_HEIGHT), Sense::hover());
     let rect = Rect::from_min_max(pos2(ui.clip_rect().left(), allocated_rect.top()), pos2(allocated_rect.right(), allocated_rect.bottom()));
@@ -51,29 +52,66 @@ pub(crate) fn nested_header(
         Rect::from_min_max(nested_header_rect.min, pos2((nested_header_rect.left() + 18.0).min(nested_header_rect.right()), nested_header_rect.bottom()));
     let disclosure = ui.interact(disclosure_rect, response.id.with("disclosure"), Sense::click());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, group.path.last().map(String::as_str).unwrap_or("")));
-    paint(ui, rect, open, group.path.last().map(String::as_str).unwrap_or(""), row_depth, response.hovered(), Some(group.count));
+    paint_with_selection(ui, rect, open, group.path.last().map(String::as_str).unwrap_or(""), row_depth, response.hovered(), Some(group.count), selected);
     (rect, response, disclosure, row_depth)
 }
 
-/// Paint a group header; nesting is conveyed by indentation rather than an accent bar.
-pub(crate) fn paint(ui: &egui::Ui, rect: Rect, open: bool, name: &str, depth: usize, _hovered: bool, count: Option<usize>) {
-    paint_with_opacity(ui, rect, open, name, depth, count, 1.0);
+fn paint_with_selection(ui: &egui::Ui, rect: Rect, open: bool, name: &str, depth: usize, _hovered: bool, count: Option<usize>, selected: bool) {
+    let tokens = Tokens::get(ui.ctx());
+    let (surface_contrast, text_contrast) =
+        if tokens.dark() { (DARK_SURFACE_CONTRAST, DARK_TEXT_CONTRAST) } else { (LIGHT_SURFACE_CONTRAST, LIGHT_TEXT_CONTRAST) };
+    let colors = crate::color_utils::contrasting_surface_colors(tokens.card, tokens.dark(), surface_contrast, text_contrast);
+    paint_header_contents(
+        ui,
+        rect,
+        open,
+        name,
+        depth,
+        count,
+        if selected { tokens.picker_selection() } else { colors.background },
+        colors.foreground,
+        tokens.card_border,
+    );
 }
 
 /// Paint the same header at a reduced opacity for its drag preview.
 pub(crate) fn paint_with_opacity(ui: &egui::Ui, rect: Rect, open: bool, name: &str, depth: usize, count: Option<usize>, opacity: f32) {
     let tokens = Tokens::get(ui.ctx());
-    let indent = row_indent(depth);
     let (surface_contrast, text_contrast) =
         if tokens.dark() { (DARK_SURFACE_CONTRAST, DARK_TEXT_CONTRAST) } else { (LIGHT_SURFACE_CONTRAST, LIGHT_TEXT_CONTRAST) };
     let colors = crate::color_utils::contrasting_surface_colors(tokens.card, tokens.dark(), surface_contrast, text_contrast);
     let with_opacity = |color| crate::color_utils::with_opacity(color, opacity);
+    paint_header_contents(
+        ui,
+        rect,
+        open,
+        name,
+        depth,
+        count,
+        with_opacity(colors.background),
+        with_opacity(colors.foreground),
+        with_opacity(tokens.card_border),
+    );
+}
+
+fn paint_header_contents(
+    ui: &egui::Ui,
+    rect: Rect,
+    open: bool,
+    name: &str,
+    depth: usize,
+    count: Option<usize>,
+    background: egui::Color32,
+    foreground: egui::Color32,
+    border: egui::Color32,
+) {
+    let indent = row_indent(depth);
     let row_rect = inset_row_rect(rect, depth);
-    ui.painter().rect_filled(row_rect, egui::CornerRadius::ZERO, with_opacity(colors.background));
+    ui.painter().rect_filled(row_rect, egui::CornerRadius::ZERO, background);
     ui.painter().rect_stroke(
         row_rect,
         egui::CornerRadius::ZERO,
-        egui::Stroke::new(1.0, with_opacity(tokens.card_border)),
+        egui::Stroke::new(1.0, border),
         // The border is contained by the allocated header dimensions.
         egui::StrokeKind::Inside,
     );
@@ -84,24 +122,18 @@ pub(crate) fn paint_with_opacity(ui: &egui::Ui, rect: Rect, open: bool, name: &s
         Rect::from_center_size(pos2(content_left + 9.0, rect.center().y), vec2(12.0, 12.0)),
         if open { "chevron-down" } else { "chevron-right" },
         12.0,
-        with_opacity(colors.foreground),
+        foreground,
     );
     crate::icons::paint(
         ui,
         Rect::from_center_size(pos2(content_left + 23.0, rect.center().y), vec2(12.0, 12.0)),
         if open { "folder-open" } else { "folder" },
         12.0,
-        with_opacity(colors.foreground),
+        foreground,
     );
-    ui.painter().text(pos2(content_left + 38.0, rect.center().y), Align2::LEFT_CENTER, name, egui::FontId::proportional(11.5), with_opacity(colors.foreground));
+    ui.painter().text(pos2(content_left + 38.0, rect.center().y), Align2::LEFT_CENTER, name, egui::FontId::proportional(11.5), foreground);
     if let Some(count) = count {
-        ui.painter().text(
-            pos2(rect.right() - 8.0, rect.center().y),
-            Align2::RIGHT_CENTER,
-            count.to_string(),
-            egui::FontId::proportional(11.0),
-            with_opacity(colors.foreground),
-        );
+        ui.painter().text(pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, count.to_string(), egui::FontId::proportional(11.0), foreground);
     }
 }
 

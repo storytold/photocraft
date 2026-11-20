@@ -240,7 +240,12 @@ pub(crate) fn generic_with_state(
                         app.session.presets.swatches.iter().find(|group| group.items.iter().any(|item| &item.name == key)).map(|group| group.name.clone())
                     })
                 });
-                ("swatches.add".to_owned(), selected_group.map_or_else(|| json!({}), |group| json!({"group": group})))
+                let empty = app.session.presets.swatches.iter().all(|group| group.items.is_empty());
+                let mut params = if empty { json!({"name": "Swatch 1", "color": {"model": "rgb", "values": [255, 0, 0]}}) } else { json!({}) };
+                if let Some(group) = selected_group {
+                    params["group"] = json!(group);
+                }
+                ("swatches.add".to_owned(), params)
             } else {
                 (format!("{prefix}.new"), new_params)
             };
@@ -260,6 +265,8 @@ pub(crate) fn generic_with_state(
         | BrowserAction::Drop(_, _)
         | BrowserAction::AppendDefault
         | BrowserAction::Import
-        | BrowserAction::ExportSelected(_) => false,
+        | BrowserAction::ExportSelected(_)
+        | BrowserAction::ExportAll(_)
+        | BrowserAction::CopyItem { .. } => false,
     }
 }

@@ -15,8 +15,8 @@ use crate::theme::Tokens;
 
 pub(super) use super::context_menu::{BrowserDeleteContext, replace_selected_delete_actions};
 pub(crate) use super::context_menu::{
-    ContextMenuAction, begin_item_rename, delete_item_actions, draw_context_menu_target, draw_group_context_menu, draw_item_context_menu, item_context_targets,
-    move_item_actions, standard_group_context_menu, standard_item_context_menu,
+    begin_item_rename, delete_item_actions, draw_context_menu_target, item_context_targets, move_item_actions, standard_group_context_menu,
+    standard_item_context_menu, standard_nested_group_context_menu,
 };
 
 /// Source identity for a floating drag preview.
@@ -310,7 +310,8 @@ pub(super) fn asset_browser_selection_gesture(response: &egui::Response) -> bool
         )
     });
 
-    if pressed && response.hovered()
+    if pressed
+        && response.hovered()
         && let Some(origin) = press_origin.filter(|origin| response.rect.contains(*origin))
     {
         response.ctx.data_mut(|data| data.insert_temp(state_id, SecondaryPressSelection { started_at: time, origin, selected: false }));
@@ -318,8 +319,7 @@ pub(super) fn asset_browser_selection_gesture(response: &egui::Response) -> bool
 
     if let Some(mut state) = response.ctx.data(|data| data.get_temp::<SecondaryPressSelection>(state_id)) {
         if down {
-            let stayed_in_place = response.hovered()
-                && pointer_pos.is_some_and(|pointer| pointer.distance(state.origin) <= SECONDARY_LONG_PRESS_MAX_MOVEMENT);
+            let stayed_in_place = response.hovered() && pointer_pos.is_some_and(|pointer| pointer.distance(state.origin) <= SECONDARY_LONG_PRESS_MAX_MOVEMENT);
             if !stayed_in_place {
                 response.ctx.data_mut(|data| data.remove_temp::<SecondaryPressSelection>(state_id));
                 return false;
@@ -387,8 +387,7 @@ pub(super) fn apply_browser_item_gesture(
     let response = response.on_hover_text(hover);
     let (selected, activated) = asset_browser_item_gesture(&response, capabilities.selection, capabilities.activation);
     if let Some(id) = painted.node_id.as_ref() {
-        let secondary = response.clicked_by(egui::PointerButton::Secondary)
-            || ui.input(|input| input.pointer.button_down(egui::PointerButton::Secondary));
+        let secondary = response.clicked_by(egui::PointerButton::Secondary) || ui.input(|input| input.pointer.button_down(egui::PointerButton::Secondary));
         apply_browser_node_selection(ui, selected, secondary, panel, id, visible_selection_order, sink);
     }
     if activated {

@@ -24,6 +24,30 @@ pub(crate) fn request_rename_selection(ctx: &egui::Context, panel: &str, action:
     });
 }
 
+/// Open the standard card-name editor in copy mode for the selected or fallback swatch.
+pub(crate) fn request_copy_swatch_preset(
+    ctx: &egui::Context,
+    selection: &crate::pickers::state::BrowserSelectionSnapshot,
+    fallback: Option<crate::pickers::browser::selection::SelectionTarget>,
+) {
+    let target = if selection.targets.len() == 1 && matches!(selection.targets.first(), Some(crate::pickers::browser::selection::SelectionTarget::Item { .. }))
+    {
+        selection.targets.first().cloned()
+    } else {
+        fallback
+    };
+    let Some(crate::pickers::browser::selection::SelectionTarget::Item { group, path, key }) = target else { return };
+    let request_id = egui::Id::new((RENAME_CARD, "swatches", "request"));
+    ctx.data_mut(|data| {
+        data.insert_temp(
+            request_id,
+            Some(BrowserAction::BeginRenameSelection { targets: vec![crate::pickers::browser::selection::SelectionTarget::Item { group, path, key }] }),
+        );
+        data.insert_temp(request_id.with("copy"), true);
+        data.insert_temp(request_id.with("defer"), true);
+    });
+}
+
 /// Turn New Group browser actions into a named group creation only after the dialog is accepted.
 pub(crate) fn show_new_group_dialog(ui: &mut egui::Ui, panel: &str, groups: &[GroupView], actions: &mut Vec<BrowserAction>) {
     let ctx = ui.ctx().clone();
@@ -136,7 +160,8 @@ fn show_next_item_rename(ui: &mut egui::Ui, panel: &str, groups: &[GroupView], a
             super::selection::SelectionTarget::Group(_) | super::selection::SelectionTarget::Folder { .. } => None,
         });
         if let Some((group, item)) = items.next() {
-            let name = item.name.clone();
+            let copy = ctx.data(|data| data.get_temp::<bool>(request_id.with("copy")).unwrap_or(false));
+            let name = if copy { next_copy_name(&item.name, groups) } else { item.name.clone() };
             ctx.data_mut(|data| {
                 if !headers.is_empty() {
                     data.insert_temp(egui::Id::new((RENAME_HEADERS_AFTER_ITEMS, panel)), headers);
@@ -170,11 +195,11 @@ fn show_next_item_rename(ui: &mut egui::Ui, panel: &str, groups: &[GroupView], a
 
     match decision {
         Some(true) if !name.trim().is_empty() => {
-            actions.push(BrowserAction::RenameItem {
-                group: group.clone(),
-                group_path: item.group_path.clone(),
-                key: item.key.clone(),
-                text: name.trim().to_owned(),
+            let copy = ctx.data(|data| data.get_temp::<bool>(request_id.with("copy")).unwrap_or(false));
+            actions.push(if copy {
+                BrowserAction::CopyItem { group: group.clone(), key: item.key.clone(), text: name.trim().to_owned() }
+            } else {
+                BrowserAction::RenameItem { group: group.clone(), group_path: item.group_path.clone(), key: item.key.clone(), text: name.trim().to_owned() }
             });
             advance_card_rename(&ctx, panel, request_id, name_id, true);
         }
@@ -307,6 +332,16 @@ fn card_type_name(panel: &str) -> &'static str {
     }
 }
 
+fn next_copy_name(base: &str, groups: &[GroupView]) -> String {
+    let names = groups.iter().flat_map(|group| group.items.iter().map(|item| item.name.as_str())).collect::<Vec<_>>();
+    let (stem, start) =
+        base.rsplit_once(' ').and_then(|(stem, suffix)| suffix.parse::<u32>().ok().map(|number| (stem, number.saturating_add(1)))).unwrap_or((base, 2));
+    (start..)
+        .map(|index| format!("{stem} {index}"))
+        .find(|candidate| !names.iter().any(|name| name.eq_ignore_ascii_case(candidate)))
+        .unwrap_or_else(|| base.to_owned())
+}
+
 fn advance_card_rename(ctx: &egui::Context, panel: &str, request_id: egui::Id, name_id: egui::Id, confirmed: bool) {
     ctx.data_mut(|data| {
         data.remove::<String>(name_id);
@@ -324,6 +359,7 @@ fn advance_card_rename(ctx: &egui::Context, panel: &str, request_id: egui::Id, n
             data.remove::<String>(request_id.with("group"));
             data.remove::<crate::pickers::browser::asset_browser::ItemView>(request_id.with("item"));
             data.remove::<bool>(request_id);
+            data.remove::<bool>(request_id.with("copy"));
             let pending_headers_id = egui::Id::new((RENAME_HEADERS_AFTER_ITEMS, panel));
             let pending_headers = data.get_temp::<Vec<super::selection::SelectionTarget>>(pending_headers_id);
             data.remove::<Vec<super::selection::SelectionTarget>>(pending_headers_id);
@@ -531,7 +567,18 @@ fn describe(actions: &[BrowserAction], groups: &[GroupView], panel: &str) -> (St
             Some(BrowserAction::DeleteNestedGroup { group_path, .. }) => group_path.last().cloned().unwrap_or_default(),
             _ => String::new(),
         };
-        return ("group".into(), name);
+        let kind = match panel {
+            "gradients" => "gradient group",
+            "patterns" => "pattern group",
+            "swatches" => "swatch group",
+            "styles" => "style group",
+            "shapes" => "shape group",
+            "brushes" => "brush group",
+            "toolPresets" => "tool preset group",
+            "cloneSource" => "clone source group",
+            _ => "group",
+        };
+        return (kind.into(), name);
     }
     let kind = match panel {
         "gradients" => "gradient",
@@ -564,7 +611,14 @@ fn delete_confirmation_messages(kind: &str) -> (&'static str, &'static str) {
     match kind {
         "gradient and group" => ("Delete the selected gradient and group?", "Delete the selected gradients and groups?"),
         kind if kind.ends_with(" and group") => ("Delete the selected item and group?", "Delete the selected items and groups?"),
-        "group" => ("Delete group \"{name}\" and its gradients?", "Delete the selected groups and their gradients?"),
+        "group" | "gradient group" => ("Delete group \"{name}\" and its gradients?", "Delete the selected groups and their gradients?"),
+        "pattern group" => ("Delete group \"{name}\" and its patterns?", "Delete the selected groups and their patterns?"),
+        "swatch group" => ("Delete group \"{name}\" and its swatches?", "Delete the selected groups and their swatches?"),
+        "style group" => ("Delete group \"{name}\" and its styles?", "Delete the selected groups and their styles?"),
+        "shape group" => ("Delete group \"{name}\" and its shapes?", "Delete the selected groups and their shapes?"),
+        "brush group" => ("Delete group \"{name}\" and its brushes?", "Delete the selected groups and their brushes?"),
+        "tool preset group" => ("Delete group \"{name}\" and its tool presets?", "Delete the selected groups and their tool presets?"),
+        "clone source group" => ("Delete group \"{name}\" and its clone sources?", "Delete the selected groups and their clone sources?"),
         "gradient" => ("Delete gradient \"{name}\"?", "Delete the selected gradients?"),
         "swatch" => ("Delete swatch \"{name}\"?", "Delete the selected swatches?"),
         "pattern" => ("Delete pattern \"{name}\"?", "Delete the selected patterns?"),
@@ -582,8 +636,54 @@ mod tests {
     use egui::vec2;
     use egui_kittest::{Harness, kittest::Queryable};
 
-    use super::{next_group_name, request_new_group, show_new_group_dialog, show_popup_dialog, show_rename_selection_dialog};
-    use crate::pickers::browser::asset_browser::GroupView;
+    use super::{
+        delete_confirmation_messages, describe, next_copy_name, next_group_name, request_new_group, show_new_group_dialog, show_popup_dialog,
+        show_rename_selection_dialog,
+    };
+    use crate::pickers::browser::asset_browser::{BrowserAction, GroupView, ItemView};
+
+    #[test]
+    fn copied_swatch_name_uses_the_next_available_number() {
+        let groups = [GroupView {
+            name: "Basics".into(),
+            root_only: false,
+            items: vec![
+                ItemView { key: "Black".into(), name: "Black".into(), group_path: Vec::new() },
+                ItemView { key: "Black 2".into(), name: "Black 2".into(), group_path: Vec::new() },
+            ],
+        }];
+        assert_eq!(next_copy_name("Black", &groups), "Black 3");
+        assert_eq!(next_copy_name("White", &groups), "White 2");
+        assert_eq!(next_copy_name("Swatch 2", &groups), "Swatch 3");
+    }
+
+    #[test]
+    fn group_delete_confirmation_uses_the_active_picker_asset_type() {
+        let cases = [
+            ("gradients", "gradient group", "Delete group \"Basics\" and its gradients?"),
+            ("patterns", "pattern group", "Delete group \"Textures\" and its patterns?"),
+            ("swatches", "swatch group", "Delete group \"Palette\" and its swatches?"),
+        ];
+        for (panel, expected_kind, expected_message) in cases {
+            let actions = vec![BrowserAction::DeleteGroup(
+                if panel == "patterns" {
+                    "Textures"
+                } else if panel == "swatches" {
+                    "Palette"
+                } else {
+                    "Basics"
+                }
+                .into(),
+            )];
+            let (kind, name) = describe(&actions, &[], panel);
+            assert_eq!(kind, expected_kind);
+            let (one, _) = delete_confirmation_messages(&kind);
+            assert_eq!(crate::i18n::fmt(one, &[("name", &name)]), expected_message);
+        }
+        let (one, many) = delete_confirmation_messages("pattern group");
+        assert_eq!(many, "Delete the selected groups and their patterns?");
+        assert_eq!(one, "Delete group \"{name}\" and its patterns?");
+    }
 
     #[test]
     fn new_group_name_increments_the_highest_exact_group_number() {

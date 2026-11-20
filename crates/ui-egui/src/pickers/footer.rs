@@ -31,11 +31,7 @@ pub(crate) enum FooterAction {
 
 fn delete_action(st: &PresetUi, panel: &str) -> Option<FooterAction> {
     if panel == "gradients" {
-        return st
-            .browser_selection
-            .get(panel)
-            .filter(|selection| !selection.is_empty())
-            .map(|_| FooterAction::DeleteSelection);
+        return st.browser_selection.get(panel).filter(|selection| !selection.is_empty()).map(|_| FooterAction::DeleteSelection);
     }
     if let Some(selection) = st.browser_selection.get(panel) {
         return (!selection.is_empty()).then_some(FooterAction::DeleteSelection);

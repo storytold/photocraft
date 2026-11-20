@@ -156,7 +156,9 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 canvas,
                 flush: false,
                 center_grid: false,
-                all_groups_open: false,
+                // Patterns is a visual asset library: expose the cards in every group on first
+                // open, matching the Swatches browser. Users can still collapse individual groups.
+                all_groups_open: true,
                 compact_context_menus: false,
                 domain_hierarchy_actions: false,
                 root_item_group: None,
@@ -205,6 +207,10 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             BrowserAction::Import => crate::preset_files_ui::import_patterns_dialog(app),
             BrowserAction::ExportSelected(names) => export_selected_patterns_dialog(app, &names),
+            BrowserAction::ExportAll(_) | BrowserAction::CopyItem { .. } => {}
+            BrowserAction::AppendDefault => {
+                run(app, "pattern.presets.reset", json!({"append": true}));
+            }
             _ => {
                 generic(app, "patterns", "pattern.presets", &event, json!({}));
             }
@@ -213,13 +219,23 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 /// Contribute the Patterns-specific actions to the shared docking header menu.
-pub(crate) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    if crate::menu_keys::menu_item_button(ui, tl!("Import"), true).clicked() {
+pub(crate) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &crate::pickers::state::PresetUi) {
+    if crate::menu_keys::menu_item_button(ui, tl!("Append Default Patterns…"), true).clicked() {
+        run(app, "pattern.presets.reset", json!({"append": true}));
+        ui.close();
+    }
+    if crate::menu_keys::menu_item_button(ui, tl!("Import Patterns…"), true).clicked() {
         crate::preset_files_ui::import_patterns_dialog(app);
         ui.close();
     }
+    let selection = state.browser_selection_snapshot.get("patterns").cloned().unwrap_or_default();
+    let menu = crate::pickers::browser::context_menu::SelectionMenuModel::new("Pattern", &selection);
+    if crate::menu_keys::menu_item_button(ui, tl!("Export Selected Patterns…"), !menu.export_items.is_empty()).clicked() {
+        export_selected_patterns_dialog(app, &menu.export_items);
+        ui.close();
+    }
     let can_export = !app.session.patterns.items.is_empty() && !cfg!(target_arch = "wasm32");
-    if crate::menu_keys::menu_item_button(ui, tl!("Export…"), can_export).clicked() {
+    if crate::menu_keys::menu_item_button(ui, tl!("Export Patterns…"), can_export).clicked() {
         ui.close();
         export_patterns_dialog(app);
     }
