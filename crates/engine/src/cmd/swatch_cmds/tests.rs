@@ -1,8 +1,12 @@
 use super::*;
+use craft_psd::aco::{AcoColor, AcoSwatch};
+use craft_psd::ase::{AseColor, AseEntry, AseFile, AseKind, AseSwatch};
 use photocraft_paint::tile::{b64_decode, b64_encode};
 
+use crate::presets::swatches::color_model;
+
 fn names(s: &Session) -> Vec<String> {
-    s.presets.swatches.iter().flat_map(|g| g.items.iter().map(|i| i.name.clone())).collect()
+    s.presets.swatches.iter().flat_map(|g| g.entries.iter().map(|i| i.name.clone())).collect()
 }
 
 fn export_bytes(s: &mut Session, p: Value) -> Vec<u8> {
@@ -27,7 +31,7 @@ fn add_from_foreground_and_explicit_models() {
     s.tools.foreground = [1.0, 0.5, 0.0, 1.0];
     let r = s.execute("swatches.add", json!({})).unwrap();
     assert_eq!((r["name"].as_str(), r["group"].as_str()), (Some("Color Swatch 1"), Some("Grays")));
-    assert_eq!(s.presets.swatches[0].items.last().unwrap().color, SwatchColor::Rgb([1.0, 0.5, 0.0]));
+    assert_eq!(s.presets.swatches[0].entries.last().unwrap().color, SwatchColor::Rgb([1.0, 0.5, 0.0]));
     let r = s.execute("swatches.add", json!({})).unwrap();
     assert_eq!(r["name"], "Color Swatch 2");
     // CMYK into a new group at the front, spot.
@@ -36,7 +40,7 @@ fn add_from_foreground_and_explicit_models() {
         .unwrap();
     assert_eq!(r["group"], "Print");
     let g = s.presets.swatches.last().unwrap();
-    assert_eq!(g.items[0], Swatch { name: "Ink".into(), color: SwatchColor::Cmyk([1.0, 0.0, 0.0, 0.0]), kind: SwatchKind::Spot });
+    assert_eq!(g.entries[0], SwatchEntry { name: "Ink".into(), color: SwatchColor::Cmyk([1.0, 0.0, 0.0, 0.0]), kind: SwatchKind::Spot });
     // Names stay unique.
     let r = s.execute("swatches.add", json!({"name": "Ink"})).unwrap();
     assert_eq!(r["name"], "Ink 2");
@@ -79,15 +83,25 @@ fn using_a_cmyk_swatch_remembers_its_inks() {
 #[test]
 fn rename_delete_move_and_groups() {
     let mut s = Session::new();
+    // A group moves to an index, clamped to the list, and the change is saved with the prefs.
+    let rev = s.presets.rev;
+    let r = s.execute("swatches.moveGroup", json!({"group": "Dark", "to": 0})).unwrap();
+    assert_eq!(r, json!({"group": "Dark", "position": 0}));
+    assert_eq!(s.presets.swatches[0].name, "Dark");
+    assert!(s.presets.rev > rev, "a group move is a preset change");
+    let r = s.execute("swatches.moveGroup", json!({"group": "Dark", "to": 999})).unwrap();
+    assert_eq!(r["position"], 4);
+    assert_eq!(s.presets.swatches[4].name, "Dark");
+    assert!(s.execute("swatches.moveGroup", json!({"group": "Nope", "to": 0})).is_err());
     s.execute("swatches.rename", json!({"swatch": "Black", "name": "Ink Black"})).unwrap();
     assert!(names(&s).contains(&"Ink Black".to_string()));
     assert!(s.execute("swatches.rename", json!({"swatch": "Ink Black", "name": "White"})).is_err(), "duplicate");
     // Reorder within the group, then into another group.
     s.execute("swatches.move", json!({"swatch": "White", "position": 0})).unwrap();
-    assert_eq!(s.presets.swatches[0].items[0].name, "White");
+    assert_eq!(s.presets.swatches[0].entries[0].name, "White");
     let r = s.execute("swatches.move", json!({"swatch": "White", "to": "Dark", "position": 1})).unwrap();
     assert_eq!(r, json!({"group": "Dark", "position": 1}));
-    assert_eq!(s.presets.swatches[4].items[1].name, "White");
+    assert_eq!(s.presets.swatches[4].entries[1].name, "White");
     // Out-of-range positions clamp.
     let r = s.execute("swatches.move", json!({"swatch": "White", "position": 999_999})).unwrap();
     assert_eq!(r["position"], 10);
@@ -100,7 +114,7 @@ fn rename_delete_move_and_groups() {
     assert!(s.execute("swatches.renameGroup", json!({"group": "Favourites", "name": "Dark"})).is_err());
     let r = s.execute("swatches.deleteGroup", json!({"group": "Favourites", "keepSwatches": true})).unwrap();
     assert_eq!(r["kept"], 2);
-    assert!(s.presets.swatches[4].items.iter().any(|i| i.name == "Red"), "kept in the group above");
+    assert!(s.presets.swatches[4].entries.iter().any(|i| i.name == "Red"), "kept in the group above");
     s.execute("swatches.deleteGroup", json!({"group": "Mine 1"})).unwrap();
     // Delete several by name, and one by index.
     let r = s.execute("swatches.delete", json!({"swatch": ["Red", "Blue", "Red"]})).unwrap();
@@ -128,7 +142,7 @@ fn changes_persist_with_the_preferences() {
     // A prefs file from before swatches existed keeps the defaults.
     let mut u = Session::new();
     u.load_presets_json(json!({"gradients": null}));
-    assert_eq!(u.presets.swatches, builtin());
+    assert_eq!(u.presets.swatches, default_swatches());
 }
 
 #[test]
@@ -141,14 +155,14 @@ fn aco_round_trip_keeps_16_bit_values_and_books() {
         AcoSwatch { name: "G".into(), color: AcoColor::Gray(1234) },
         AcoSwatch { name: "Book".into(), color: AcoColor::Other { space: 3, values: [9, 8, 7, 6] } },
     ];
-    let file = photocraft_psd::aco::write(&swatches).unwrap();
+    let file = craft_psd::aco::write(&swatches).unwrap();
     let mut s = Session::new();
     let r = s.execute("swatches.import", json!({"data": b64_encode(&file), "group": "Pro", "mode": "replace"})).unwrap();
     assert_eq!((r["format"].as_str(), r["count"].as_u64()), (Some("aco"), Some(6)));
     assert_eq!(r["warnings"].as_array().unwrap().len(), 1, "the colour book is reported");
     assert_eq!(s.presets.swatches.len(), 1);
-    assert_eq!(s.presets.swatches[0].items[3].color, SwatchColor::Lab([53.21, -128.0, 127.0]));
-    assert_eq!(s.presets.swatches[0].items[4].color.model(), "gray");
+    assert_eq!(s.presets.swatches[0].entries[3].color, SwatchColor::Lab([53.21, -128.0, 127.0]));
+    assert_eq!(color_model(&s.presets.swatches[0].entries[4].color), "gray");
     assert_eq!(export_bytes(&mut s, json!({"format": "aco"})), file, "byte-identical .aco");
     // On disk too, with the group taken from the file name.
     let dir = std::env::temp_dir().join(format!("pc-swatch-{}", std::process::id()));
@@ -174,20 +188,22 @@ fn act_round_trip_loads_a_photoshop_color_table() {
         let v = i as u8;
         *c = [v, 255 - v, 128];
     }
-    let file = photocraft_psd::act::write(&colors, Some(256), Some(255)).unwrap();
+    let file = craft_psd::act::write(&colors, Some(256), Some(255)).unwrap();
     assert_eq!(file.len(), 772);
     let mut s = Session::new();
     let r = s.execute("swatches.import", json!({"data": b64_encode(&file), "group": "Table", "mode": "replace"})).unwrap();
     assert_eq!((r["format"].as_str(), r["count"].as_u64()), (Some("act"), Some(256)));
     assert_eq!(r["warnings"].as_array().unwrap().len(), 1, "the transparent color is reported");
-    assert_eq!(s.presets.swatches[0].items[0].color, SwatchColor::Rgb([1.0, 1.0, 1.0]));
-    assert_eq!(s.presets.swatches[0].items[1].name, "Swatch 2");
+    assert_eq!(s.presets.swatches[0].entries[0].color, SwatchColor::Rgb([1.0, 1.0, 1.0]));
+    assert_eq!(s.presets.swatches[0].entries[1].name, "Swatch 2");
     // Sniffed by length without a format, and by extension from a path.
     let r = s.execute("swatches.import", json!({"data": b64_encode(&file), "mode": "replace"})).unwrap();
     assert_eq!(r["format"].as_str(), Some("act"));
     // Export keeps the 256 RGB colors; the trailer comes back in canonical form
     // (swatches have no transparency to preserve).
-    let canon = photocraft_psd::act::write(&colors, Some(256), None).unwrap();
+    let mut canon: Vec<u8> = colors.iter().flatten().copied().collect();
+    canon.extend(256u16.to_be_bytes());
+    canon.extend(0xFFFFu16.to_be_bytes());
     assert_eq!(export_bytes(&mut s, json!({"format": "act"})), canon);
     // A bigger library is capped at 256 with a warning; groups collapse to one list.
     for i in 0..300 {
@@ -207,7 +223,7 @@ fn act_that_starts_like_an_aco_is_still_an_act() {
     for (i, c) in colors.iter_mut().enumerate().skip(1) {
         *c = [(i as u8).wrapping_add(4), 7, 9];
     }
-    for file in [photocraft_psd::act::write(&colors, None, None).unwrap(), photocraft_psd::act::write(&colors, Some(256), None).unwrap()] {
+    for file in [craft_psd::act::write(&colors, None, None).unwrap(), craft_psd::act::write(&colors, Some(256), None).unwrap()] {
         assert_eq!(&file[..4], &[0, 1, 0, 5]);
         let mut s = Session::new();
         let r = s.execute("swatches.import", json!({"data": b64_encode(&file), "mode": "replace"})).unwrap();
@@ -215,12 +231,12 @@ fn act_that_starts_like_an_aco_is_still_an_act() {
     }
     // A real .aco of exactly 768 bytes (ten swatches with 25-character names) stays an .aco.
     let swatches: Vec<AcoSwatch> = (0..10u16).map(|i| AcoSwatch { name: format!("{i:0>25}"), color: AcoColor::Rgb([i * 1000, 0, 65535]) }).collect();
-    let file = photocraft_psd::aco::write(&swatches).unwrap();
-    assert_eq!(file.len(), photocraft_psd::act::PALETTE_LEN);
+    let file = craft_psd::aco::write(&swatches).unwrap();
+    assert_eq!(file.len(), craft_psd::act::PALETTE_LEN);
     let mut s = Session::new();
     let r = s.execute("swatches.import", json!({"data": b64_encode(&file), "mode": "replace"})).unwrap();
     assert_eq!((r["format"].as_str(), r["count"].as_u64()), (Some("aco"), Some(10)));
-    assert_eq!(s.presets.swatches[0].items[9].name, format!("{:0>25}", 9));
+    assert_eq!(s.presets.swatches[0].entries[9].name, format!("{:0>25}", 9));
 }
 
 #[test]
@@ -239,19 +255,19 @@ fn ase_round_trip_keeps_groups_floats_and_kinds() {
             },
         ],
     };
-    let bytes = photocraft_psd::ase::write(&src).unwrap();
+    let bytes = craft_psd::ase::write(&src).unwrap();
     let mut s = Session::new();
     let r = s.execute("swatches.import", json!({"data": b64_encode(&bytes), "group": "Exchange"})).unwrap();
     assert_eq!(r["groups"], json!(["Exchange", "Brand"]));
     assert_eq!(r["count"], 4);
     assert_eq!(r["warnings"].as_array().unwrap().len(), 1, "the unknown model is reported");
     let brand = s.presets.swatches.iter().find(|g| g.name == "Brand").unwrap();
-    assert_eq!(brand.items[0].kind, SwatchKind::Spot);
-    assert_eq!(brand.items[1].color, SwatchColor::Lab([50.0, 20.0, -30.0]));
-    assert_eq!(brand.items[2].color, SwatchColor::Gray(0.75));
+    assert_eq!(brand.entries[0].kind, SwatchKind::Spot);
+    assert_eq!(brand.entries[1].color, SwatchColor::Lab([50.0, 20.0, -30.0]));
+    assert_eq!(brand.entries[2].color, SwatchColor::Gray(0.75));
     // Export both groups and read them back.
     let out = export_bytes(&mut s, json!({"format": "ase", "swatches": ["Loose", "Spot ink", "Global lab", "Gray"]}));
-    let back = photocraft_psd::ase::parse(&out).unwrap();
+    let back = craft_psd::ase::parse(&out).unwrap();
     let flat: Vec<&AseSwatch> = back
         .entries
         .iter()
@@ -271,7 +287,7 @@ fn ase_round_trip_keeps_groups_floats_and_kinds() {
     // HSB swatches become RGB in .ase.
     s.execute("swatches.add", json!({"name": "Hue", "color": {"model": "hsb", "values": [120, 100, 100]}})).unwrap();
     let out = export_bytes(&mut s, json!({"format": "ase", "swatches": ["Hue"]}));
-    let back = photocraft_psd::ase::parse(&out).unwrap();
+    let back = craft_psd::ase::parse(&out).unwrap();
     assert_eq!(
         back.entries,
         vec![AseEntry::Group {
@@ -324,7 +340,7 @@ fn bad_params_fail_gracefully() {
         ("swatches.import", json!({"data": b64_encode(b"ASEF\0\x01\0\0\xff\xff\xff\xff")})),
         ("swatches.import", json!({"data": b64_encode(&[0, 1, 0xff, 0xff])})),
         ("swatches.import", json!({"data": b64_encode(&[0, 1, 0, 0])})),
-        ("swatches.import", json!({"data": b64_encode(&[0, 1, 0, 0]), "format": "gpl"})),
+        ("swatches.import", json!({"data": b64_encode(&[0, 1, 0, 0]), "format": "css"})),
         ("swatches.import", json!({"data": b64_encode(&[0, 1, 0, 0]), "mode": "merge"})),
         ("swatches.export", json!({"format": "pdf"})),
         ("swatches.export", json!({"group": "Nope"})),
@@ -357,12 +373,12 @@ fn bad_params_fail_gracefully() {
 fn library_limits() {
     let mut s = Session::new();
     let one = vec![AcoSwatch { name: "x".into(), color: AcoColor::Gray(0) }; 60_000];
-    let file = b64_encode(&photocraft_psd::aco::write(&one).unwrap());
+    let file = b64_encode(&craft_psd::aco::write(&one).unwrap());
     s.execute("swatches.import", json!({"data": file, "mode": "replace"})).unwrap();
     assert!(s.execute("swatches.import", json!({"data": file})).is_err(), "over the library limit");
     assert_eq!(names(&s).len(), 60_000);
     // A hand-edited preferences file is trimmed, not trusted.
-    let mut g = vec![Group::new(&"n".repeat(1000), vec![Swatch::new("a", SwatchColor::Gray(0.0)); MAX_SWATCHES + 5])];
+    let mut g = vec![SwatchGroup { name: "n".repeat(1000), entries: vec![SwatchEntry::new("a", SwatchColor::Gray(0.0)); MAX_SWATCHES + 5] }];
     cap_library(&mut g);
     assert_eq!(total(&g), MAX_SWATCHES);
     assert_eq!(g[0].name.chars().count(), MAX_NAME);
@@ -381,7 +397,7 @@ fn unnamed_groups_are_numbered_in_linear_time() {
         let paper = AseSwatch { name: "Paper".into(), color: AseColor::Gray(1.0), kind: AseKind::Process };
         let mut entries = vec![AseEntry::Group { name: String::new(), swatches: Vec::new() }; n];
         entries[0] = AseEntry::Group { name: String::new(), swatches: vec![paper] };
-        let file = b64_encode(&photocraft_psd::ase::write(&AseFile { entries }).unwrap());
+        let file = b64_encode(&craft_psd::ase::write(&AseFile { entries }).unwrap());
         let r = s.execute("swatches.import", json!({"data": file, "group": "Ink"})).unwrap();
         assert_eq!(s.presets.swatches.len(), MAX_GROUPS);
         let names: Vec<String> = r["groups"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
@@ -406,7 +422,7 @@ fn repeated_group_names_take_the_first_free_number() {
     }
     let paper = AseSwatch { name: "Paper".into(), color: AseColor::Gray(1.0), kind: AseKind::Process };
     let entries = ["Brand", "Brand", "Brand", "Brand 1"].into_iter().map(|name| AseEntry::Group { name: name.into(), swatches: vec![paper.clone()] }).collect();
-    let file = b64_encode(&photocraft_psd::ase::write(&AseFile { entries }).unwrap());
+    let file = b64_encode(&craft_psd::ase::write(&AseFile { entries }).unwrap());
     let r = s.execute("swatches.import", json!({"data": file})).unwrap();
     // The file's "Brand 1" comes after the first "Brand" took that name.
     assert_eq!(r["groups"], json!(["Brand 1", "Brand 3", "Brand 4", "Brand 1 1"]));

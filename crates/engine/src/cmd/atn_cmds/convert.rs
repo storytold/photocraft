@@ -1,7 +1,9 @@
-use super::descriptors::{desc, get_obj, jstr};
+use super::descriptors::{desc, get_obj, get_ref, jstr};
 use super::events::{event_and_descriptor, event_for};
 use super::fields::Mapped;
-use super::{Action, AtnAction, AtnEvent, AtnFile, AtnItem, D, DEFAULT_SET, Descriptor, PHOTOSHOP_STEP, UnicodeString, Value, atn, json};
+use crate::actions_cmds::ActionStep;
+
+use super::{Action, AtnAction, AtnEvent, AtnFile, AtnItem, D, DEFAULT_SET, Descriptor, PHOTOSHOP_STEP, ReferenceItem, UnicodeString, Value, atn, json};
 
 // ------------------------------------------------------------------ import
 
@@ -64,7 +66,32 @@ pub(super) fn clip_name(s: &str) -> String {
     s.chars().take(MAX_NAME_CHARS).collect()
 }
 
-fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Vec<Unsupported>) -> Action {
+/// Whole-library replacement resolves these explicit scopes against the archive.
+fn retain_action_scopes(d: &Descriptor, id: &str, params: &mut Value) {
+    let fields: &[(&str, &str)] = match id {
+        "actions.play" => &[("null", "set")],
+        "actions.conditional" => &[("then", "thenSet"), ("else", "elseSet")],
+        _ => return,
+    };
+    for (reference, scope) in fields {
+        if let Some([ReferenceItem::Name { class: action, .. }, set, ..]) = get_ref(d, reference)
+            && action.class_id.is("Actn")
+        {
+            match set {
+                ReferenceItem::Name { class, name } if class.class_id.is("ASet") => {
+                    params[*scope] = json!(clip_name(&name.to_string_lossy()));
+                }
+                // An indexed set is explicit, but its archive occurrence is unknown.
+                ReferenceItem::Index { class, index } if class.class_id.is("ASet") => {
+                    params[*scope] = json!(index);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Vec<Unsupported>, replacing: bool) -> Action {
     let name = clip_name(&a.name.to_string_lossy());
     let mut action = Action::new(name.clone(), Vec::new());
     action.set = Some(clip_name(set));
@@ -90,9 +117,12 @@ fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Ve
             }
         };
         for mut s in new_steps {
+            if replacing && let Some(descriptor) = &item.descriptor {
+                retain_action_scopes(descriptor, &s.0, &mut s.1);
+            }
             normalise(&mut s.1);
             let idx = action.steps.len();
-            action.steps.push(s);
+            action.steps.push(s.into());
             if !enabled {
                 action.disabled.insert(idx);
             }
@@ -114,17 +144,60 @@ pub fn import(bytes: &[u8]) -> std::result::Result<Imported, String> {
 /// `"gbk"`) instead of working it out. An unknown label fails.
 pub fn import_with_encoding(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<Imported, String> {
     let file = atn::parse_with_encoding(bytes, encoding).map_err(|e| e.to_string())?;
+    Ok(convert_set(&file, None))
+}
+
+pub(super) struct ReplacementSet {
+    pub imported: Imported,
+    pub keys: Vec<(usize, String)>,
+}
+
+pub(super) fn import_first_with_keys(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<ReplacementSet, String> {
+    let file = atn::parse_with_encoding(bytes, encoding).map_err(|error| error.to_string())?;
+    Ok(convert_with_keys(&file, None))
+}
+
+pub(super) fn import_sets(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<Vec<(ReplacementSet, Vec<usize>)>, String> {
+    let files = atn::parse_sets_with_encoding(bytes, encoding).map_err(|error| error.to_string())?;
+    if bytes.starts_with(&12u32.to_be_bytes()) && files.iter().any(|file| file.warnings.iter().any(|warning| warning.ends_with(" trailing bytes ignored"))) {
+        return Err("trailing data after the legacy Actions set".to_string());
+    }
+    Ok(files
+        .iter()
+        .map(|file| {
+            let mut unsupported_rows = Vec::new();
+            let set = convert_with_keys(file, Some(&mut unsupported_rows));
+            (set, unsupported_rows)
+        })
+        .collect())
+}
+
+fn convert_with_keys(file: &AtnFile, unsupported_rows: Option<&mut Vec<usize>>) -> ReplacementSet {
+    let keys = file
+        .actions
+        .iter()
+        .enumerate()
+        .filter(|(_, action)| action.function_key > 0)
+        .map(|(index, action)| (index, function_key_name(action.function_key, action.shift, action.command)))
+        .collect();
+    ReplacementSet { imported: convert_set(file, unsupported_rows), keys }
+}
+
+fn convert_set(file: &AtnFile, mut unsupported_rows: Option<&mut Vec<usize>>) -> Imported {
     let set = file.name.to_string_lossy();
     let set = if set.trim().is_empty() { DEFAULT_SET.to_string() } else { clip_name(&set) };
     let mut out = Imported { set: set.clone(), warnings: file.warnings.clone(), encoding: file.encoding.clone(), ..Default::default() };
-    for a in &file.actions {
-        let action = convert_action(&file, a, &set, &mut out.unsupported);
+    for (row, a) in file.actions.iter().enumerate() {
+        let action = convert_action(file, a, &set, &mut out.unsupported, unsupported_rows.is_some());
+        if let Some(owners) = unsupported_rows.as_deref_mut() {
+            owners.resize(out.unsupported.len(), row);
+        }
         if a.function_key > 0 {
             out.function_keys.push((action.name.clone(), function_key_name(a.function_key, a.shift, a.command)));
         }
         out.actions.push(action);
     }
-    Ok(out)
+    out
 }
 
 // ------------------------------------------------------------------ export
@@ -177,19 +250,57 @@ pub(super) fn export_item(id: &str, params: &Value, set: &str) -> Option<AtnItem
     Some(AtnItem { event, dictionary: e.label.as_bytes().to_vec(), descriptor, ..Default::default() })
 }
 
-/// Photoshop applies only the rename when a Set mixes it with opacity or blend mode (#8304).
-/// Write each layer property separately, renaming last so named references still resolve.
+/// Photoshop applies only the rename when a Set mixes it with opacity or blend mode (#8304):
+/// write each layer property separately, renaming last so named references still resolve. A
+/// `.atn` reference is also one target, so a `layer.setProps` step that named `layers` exports
+/// as one Set per layer, each referenced by Photoshop's layer id: an edit that accepted the
+/// list must not replay on the active layer alone (#7246). The list is split into one-target
+/// params before the step maps, so the keyed check that refuses the keys the `.atn` adapters
+/// cannot write (#7196) sees a mapped one. A step unable to represent the whole list exactly
+/// (an id beyond `Idnt`'s u32; a rename of several layers, which PhotoCraft itself refuses)
+/// comes back as `None`, to refuse or skip the source step.
 fn export_items(id: &str, params: &Value, set: &str) -> Option<Vec<AtnItem>> {
+    if id == "layer.setProps" {
+        if let Some(Value::Array(ids)) = params.get("layers") {
+            return layer_set_items(ids, params, set);
+        }
+        if params.get("layers").map(|v| !v.is_null()) == Some(true) {
+            return None;
+        }
+    }
     let item = export_item(id, params, set)?;
     if id != "layer.setProps" {
         return Some(vec![item]);
     }
+    item_property_split(item)
+}
+
+/// One Set per layer of an explicit `layers` list, by Photoshop's ever-present layer id.
+fn layer_set_items(ids: &[Value], params: &Value, set: &str) -> Option<Vec<AtnItem>> {
+    if ids.is_empty() || (params.get("name").is_some() && ids.len() > 1) {
+        return None;
+    }
+    let mut items = Vec::new();
+    for v in ids {
+        let layer = v.as_u64().filter(|n| *n <= u32::MAX as u64)?;
+        let mut p = params.clone();
+        let obj = p.as_object_mut()?;
+        obj.remove("layers");
+        obj.insert("layer".into(), Value::Number(serde_json::Number::from(layer)));
+        items.extend(item_property_split(export_item("layer.setProps", &p, set)?)?);
+    }
+    Some(items)
+}
+
+/// One item per property of one `Lyr ` target, renaming last so named references resolve
+/// when the whole Set replays (#8304).
+fn item_property_split(item: AtnItem) -> Option<Vec<AtnItem>> {
     let descriptor = item.descriptor.as_ref()?;
     let properties = get_obj(descriptor, "T   ")?;
     if properties.items.len() <= 1 {
         return Some(vec![item]);
     }
-    let target = descriptor.get("null")?;
+    let target = descriptor.get("null")?.clone();
     let mut items = Vec::with_capacity(properties.items.len());
     for (key, value) in properties.items.iter().filter(|(k, _)| !k.is("Nm  ")).chain(properties.items.iter().filter(|(k, _)| k.is("Nm  "))) {
         let mut property = properties.clone();
@@ -224,6 +335,49 @@ pub fn parse_function_key(key: &str) -> Option<(u16, bool, bool)> {
     Some((n, shift, command))
 }
 
+/// The exported actions' names, alone and with their sets, so each call is checked once.
+struct ExportTargets<'a> {
+    names: std::collections::HashSet<&'a str>,
+    scopes: std::collections::HashSet<(&'a str, &'a str)>,
+}
+
+impl<'a> ExportTargets<'a> {
+    fn new(actions: &[&'a Action]) -> Self {
+        let mut out = Self { names: Default::default(), scopes: Default::default() };
+        for &action in actions {
+            out.names.insert(&action.name);
+            if let Some(set) = action.set.as_deref() {
+                out.scopes.insert((set, &action.name));
+            }
+        }
+        out
+    }
+
+    fn internal(&self, name: &str, scope: Option<&str>) -> bool {
+        scope.map_or_else(|| self.names.contains(name), |scope| self.scopes.contains(&(scope, name)))
+    }
+}
+
+/// ATN calls name their action within a set: a call to an action the file holds names the set the
+/// file is written as, so it still reaches that action when the file loads elsewhere.
+fn export_targeted_items(id: &str, params: &Value, set: &str, targets: &ExportTargets<'_>) -> Option<Vec<AtnItem>> {
+    let fields: &[(&str, &str)] = match id {
+        "actions.play" => &[("action", "set")],
+        "actions.conditional" => &[("then", "thenSet"), ("else", "elseSet")],
+        _ => return export_items(id, params, set),
+    };
+    let mut params = params.clone();
+    for (name, scope) in fields {
+        if let Some(target) = params.get(*name).and_then(Value::as_str) {
+            let original_scope = params.get(*scope).filter(|value| !value.is_null()).or_else(|| params.get("set")).and_then(Value::as_str);
+            if targets.internal(target, original_scope) {
+                params[*scope] = json!(set);
+            }
+        }
+    }
+    export_items(id, &params, set)
+}
+
 /// The `.atn` bytes of `actions` as the set `set`. `function_keys` gives each action's key
 /// (`F1`…`F15`, with `Shift+` and `Cmd+` as [`function_key_name`] writes them). Steps with no Photoshop equivalent are an error unless `skip_unsupported`.
 pub fn export(
@@ -232,6 +386,7 @@ pub fn export(
     function_keys: &[(String, String)],
     skip_unsupported: bool,
 ) -> std::result::Result<(Vec<u8>, Vec<Skipped>), String> {
+    let targets = ExportTargets::new(actions);
     let mut skipped = Vec::new();
     let mut file = AtnFile { name: UnicodeString::new_nul(set), expanded: true, actions: Vec::new(), warnings: Vec::new(), ..Default::default() };
     for a in actions {
@@ -239,8 +394,8 @@ pub fn export(
         if let Some((n, shift, command)) = function_keys.iter().find(|(n, _)| n == &a.name).and_then(|(_, key)| parse_function_key(key)) {
             (out.function_key, out.shift, out.command) = (n, shift, command);
         }
-        for (i, (id, params)) in a.steps.iter().enumerate() {
-            let Some(items) = export_items(id, params, set) else {
+        for (i, ActionStep { command: id, params }) in a.steps.iter().enumerate() {
+            let Some(items) = export_targeted_items(id, params, set, &targets) else {
                 if skip_unsupported {
                     skipped.push(Skipped { action: a.name.clone(), step: i, id: id.clone() });
                     continue;
@@ -266,36 +421,4 @@ pub fn export(
     }
     let bytes = atn::write(&file).map_err(|e| e.to_string())?;
     Ok((bytes, skipped))
-}
-
-// ------------------------------------------------------------------ commands
-
-/// Assigns names not already used, as `name`, `name 2`, `name 3`… A plain linear scan of the
-/// taken list per candidate is cubic when an action file repeats one base name many times, so
-/// membership uses a set and the next suffix to try is cached per base name.
-pub(crate) struct UniqueNames {
-    taken: std::collections::HashSet<String>,
-    next_suffix: std::collections::HashMap<String, u32>,
-}
-
-impl UniqueNames {
-    pub(crate) fn new<I: IntoIterator<Item = String>>(existing: I) -> Self {
-        UniqueNames { taken: existing.into_iter().collect(), next_suffix: std::collections::HashMap::new() }
-    }
-
-    /// Reserves and returns a unique name derived from `name`, recording it as taken.
-    pub(crate) fn claim(&mut self, name: &str) -> String {
-        if self.taken.insert(name.to_string()) {
-            return name.to_string();
-        }
-        let mut i = self.next_suffix.get(name).copied().unwrap_or(2);
-        loop {
-            let candidate = format!("{name} {i}");
-            i += 1;
-            if self.taken.insert(candidate.clone()) {
-                self.next_suffix.insert(name.to_string(), i);
-                return candidate;
-            }
-        }
-    }
 }

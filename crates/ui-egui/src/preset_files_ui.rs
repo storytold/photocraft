@@ -11,6 +11,7 @@
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
+use crate::panel_docking::show_panel;
 
 /// Extensions handled here rather than by the document importer (`.aco`/`.act`/`.ase` swatches go to
 /// the Swatches panel through [`crate::swatches_ui::import_bytes`]).
@@ -52,8 +53,7 @@ pub fn import_brush_image(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> 
     app.ui.status_error = false;
     app.ui.status = format!("Imported brush {preset} from {file}");
     // Show it: Brush Settings › Brushes tab.
-    app.ui.panels.brush_settings = true;
-    app.ui.brush_tab = 1;
+    let _ = show_panel(app, "brushes", Some(true));
     Ok(r)
 }
 
@@ -180,26 +180,26 @@ pub(crate) fn run_import(app: &mut PhotocraftApp, cmd: &str, what: &str, stem: &
         };
         if what == "brushes" {
             // Show them: Brush Settings › Brushes tab.
-            app.ui.panels.brush_settings = true;
-            app.ui.brush_tab = 1;
+            let _ = show_panel(app, "brushes", Some(true));
         }
         if what == "shapes" {
-            app.ui.presets_ui.shapes = true;
+            let _ = show_panel(app, "shapes", Some(true));
         }
         if what == "styles" {
-            app.ui.presets_ui.styles = true;
+            let _ = show_panel(app, "styles", Some(true));
         }
     })
 }
 
 #[cfg(test)]
-#[path = "../../psd/tests/common/csh_fixture.rs"]
-mod csh_fixture;
-
-#[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use craft::host::{PickKind, Picked, ScriptedFiles};
+    use craft::ui::dialog::{DialogId, PromptChoice, StandardPrompt};
+
     use super::*;
-    use egui_kittest::kittest::Queryable;
+    use crate::panel_docking::is_shown;
 
     #[test]
     fn recognises_preset_files() {
@@ -215,18 +215,81 @@ mod tests {
         assert!(!is_preset_file("abr"));
     }
 
+    /// The open prompt that asks what to do with a preset group the import clashes with.
+    fn prompt(app: &PhotocraftApp) -> Option<DialogId> {
+        crate::dialogs::alerts::prompt_tagged::<crate::preset_group_prompt::PresetClash>(app)
+    }
+
+    /// Presses the button of the open preset prompt named `label`: Import as New Group is the
+    /// default answer, Replace the alternate one.
+    fn press(app: &mut PhotocraftApp, label: &str) {
+        let id = prompt(app).expect("the prompt is open");
+        let ctx = app.ctx().clone();
+        // PLAN: assumed `dialogs::{confirm, cancel}(app, ctx, id)` (dialogs-w19) also run the follow-up of the answered prompt, which dialogs-w21 hands to the import.
+        match label {
+            "Cancel" => crate::dialogs::cancel(app, &ctx, id).unwrap(),
+            "Import as New Group" | "Replace" => {
+                let choice = if label == "Replace" { PromptChoice::Alternate } else { PromptChoice::Proceed };
+                app.framework.dialogs.get_mut_by_id::<StandardPrompt>(id).expect("a standard prompt").set_choice(choice);
+                crate::dialogs::confirm(app, &ctx, id).unwrap();
+            }
+            other => panic!("the preset prompt has no `{other}` button"),
+        }
+    }
+
+    fn triangle_csh() -> Vec<u8> {
+        let mut out = b"cush".to_vec();
+        out.extend_from_slice(&2u32.to_be_bytes());
+        out.extend_from_slice(&1u32.to_be_bytes());
+        let name: Vec<u16> = "Triangle".encode_utf16().chain(std::iter::once(0)).collect();
+        out.extend_from_slice(&(name.len() as u32).to_be_bytes());
+        for unit in &name {
+            out.extend_from_slice(&unit.to_be_bytes());
+        }
+        if !name.len().is_multiple_of(2) {
+            out.extend_from_slice(&[0, 0]);
+        }
+        out.extend_from_slice(&1u32.to_be_bytes());
+        let mut body = vec![36];
+        body.extend_from_slice(b"00000000-0000-4000-8000-000000000001");
+        for bound in [0i32, 0, 100, 200] {
+            body.extend_from_slice(&bound.to_be_bytes());
+        }
+        for selector in [6u16, 8] {
+            body.extend_from_slice(&selector.to_be_bytes());
+            body.extend_from_slice(&[0; 24]);
+        }
+        let polygon = [(0.25f64, 0.25f64), (0.75, 0.25), (0.5, 0.75)];
+        body.extend_from_slice(&0u16.to_be_bytes());
+        body.extend_from_slice(&(polygon.len() as u16).to_be_bytes());
+        body.extend_from_slice(&[0; 22]);
+        for &(x, y) in &polygon {
+            body.extend_from_slice(&2u16.to_be_bytes());
+            for _ in 0..3 {
+                body.extend_from_slice(&((y * 16_777_216.0) as i32).to_be_bytes());
+                body.extend_from_slice(&((x * 16_777_216.0) as i32).to_be_bytes());
+            }
+        }
+        while !body.len().is_multiple_of(4) {
+            body.push(0);
+        }
+        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        out.extend_from_slice(&body);
+        out
+    }
+
     #[test]
     fn csh_open_imports_presets_and_shows_shapes_without_opening_a_document() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        open(&mut app, "Original.CSH", &csh_fixture::triangle_csh()).unwrap().unwrap();
+        open(&mut app, "Original.CSH", &triangle_csh()).unwrap().unwrap();
         assert!(app.session.active().is_none());
-        assert!(app.ui.presets_ui.shapes);
+        assert!(is_shown(&app, "shapes"));
         assert!(!app.ui.status_error);
         let imported = app.session.presets.shapes.iter().find(|g| g.name == "Original").unwrap();
         assert_eq!(imported.items.len(), 1);
         assert_eq!(imported.items[0].name, "Triangle");
         assert_eq!(app.ui.status, "Imported 1 shape from Original");
-        open(&mut app, "Original.CSH", &csh_fixture::triangle_csh()).unwrap().unwrap();
+        open(&mut app, "Original.CSH", &triangle_csh()).unwrap().unwrap();
         assert_eq!(app.ui.status, "Imported 1 shape from Original 1");
         assert!(app.session.presets.shapes.iter().any(|g| g.name == "Original 1"));
     }
@@ -241,41 +304,28 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a GPU adapter; renders the CSH import workflow for visual inspection"]
-    fn csh_panel_import_visual_evidence() {
-        let _guard = photocraft_testkit::gpu_lock();
-        let (dialog, requests) =
-            crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::Contents("Original.csh".into(), csh_fixture::triangle_csh()))]);
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(64).wgpu().build_eframe(move |cc| {
-            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            let services = crate::Services { file_dialog: Some(dialog), ..Default::default() };
-            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
-            app.set_wgpu(cc.wgpu_render_state.as_ref().unwrap().clone());
-            app.run("file.new", json!({"width": 400, "height": 300, "background": "transparent"})).unwrap();
-            // A user-cleared library makes the one imported fixture visible without scrolling.
-            app.session.presets.shapes.clear();
-            app.ui.presets_ui.shapes = true;
-            app
-        });
-        h.run_steps(8);
-        let destination = std::env::var("PHOTOCRAFT_CSH_EVIDENCE").unwrap_or_else(|_| "csh-evidence".into());
-        std::fs::create_dir_all(&destination).unwrap();
-        h.render().unwrap().save(std::path::Path::new(&destination).join("before-import.png")).unwrap();
-        h.get_by_label("Import Shapes…").click();
-        h.run_steps(12);
-        assert!(matches!(requests.borrow().first(), Some(crate::file_dialog::FileDialogRequest::Open { extensions: Some(exts), .. }) if exts == &["csh"]));
-        assert_eq!(h.state().session.presets.shapes[0].items[0].name, "Triangle");
-        assert!(!h.state().ui.status_error);
-        h.state_mut().run("shape.presets.place", json!({"preset": "Triangle", "rect": [60, 60, 280, 180], "fill": "#d85a32"})).unwrap();
-        h.run_steps(8);
-        h.render().unwrap().save(std::path::Path::new(&destination).join("imported-triangle.png")).unwrap();
+    fn import_shapes_dialog_requests_csh_and_imports() {
+        let files = Arc::new(ScriptedFiles::answering([Picked::Contents(vec![("Original.csh".into(), triangle_csh())])]));
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { files: Some(files.clone()), ..Default::default() });
+        app.session.presets.shapes.clear();
+        import_shapes_dialog(&mut app);
+        app.poll_file_dialog();
+        match files.requests().as_slice() {
+            [request] if request.kind == PickKind::Open => {
+                let [filter] = request.filters.as_slice() else { panic!("one filtered type, got {:?}", request.filters) };
+                assert_eq!(filter.extensions, ["csh"]);
+            }
+            other => panic!("expected one filtered open request, got {other:?}"),
+        }
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        assert_eq!(app.session.presets.shapes[0].items[0].name, "Triangle");
     }
 
     /// Opening `Kit.abr` when the library has a "Kit" group of the user's asks first: Import as
     /// New Group (Enter) keeps it, Cancel imports nothing, Replace deletes it (#10640).
     #[test]
     fn reimporting_a_brush_file_asks_before_touching_its_group() {
-        use photocraft_psd::abr::{LegacyBrush, LegacyTip, write_v12};
+        use craft_psd::abr::{LegacyBrush, LegacyTip, write_v12};
         let round = |name: &str| LegacyBrush {
             name: name.into(),
             spacing: 25,
@@ -285,33 +335,31 @@ mod tests {
         let abr = write_v12(2, &[round("Chalk"), round("Ink")], true).unwrap();
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let in_group = |app: &PhotocraftApp, g: &str| app.session.tools.presets.iter().filter(|p| p.group == g).count();
-        let prompt = |app: &PhotocraftApp| app.ui.dialogs.iter().find(|d| crate::preset_group_prompt::owns(&d.fields)).map(|d| d.id);
         open(&mut app, "Kit.abr", &abr).unwrap().unwrap();
         assert_eq!(in_group(&app, "Kit"), 2);
         assert!(prompt(&app).is_none(), "a new group imports without asking");
         assert!(app.ui.status.ends_with("brushes from Kit"), "{}", app.ui.status);
         // The user edits one of its brushes.
-        let edited = app.session.tools.presets.iter_mut().find(|p| p.group == "Kit").unwrap();
+        let edited = std::sync::Arc::make_mut(&mut app.session.tools.presets).iter_mut().find(|p| p.group == "Kit").unwrap();
         edited.brush.size = 77.0;
         let edited = edited.name.clone();
 
         // Cancel imports nothing.
         open(&mut app, "Kit.abr", &abr).unwrap().unwrap();
-        let id = prompt(&app).expect("the prompt is open");
-        crate::dialogs::cancel(&mut app, id).unwrap();
+        assert!(prompt(&app).is_some(), "the prompt is open");
+        press(&mut app, "Cancel");
         assert_eq!((in_group(&app, "Kit"), in_group(&app, "Kit (2)")), (2, 0));
-        assert!(app.held_preset_import.is_none());
+        assert!(prompt(&app).is_none(), "nothing is held once it is answered");
 
         // A file name with a trailing space (`Kit .abr`) names the same group.
         open(&mut app, "Kit .abr", &abr).unwrap().unwrap();
-        let id = prompt(&app).expect("the prompt is open for the trimmed name");
-        crate::dialogs::cancel(&mut app, id).unwrap();
+        assert!(prompt(&app).is_some(), "the prompt is open for the trimmed name");
+        press(&mut app, "Cancel");
         assert_eq!(in_group(&app, "Kit (2)"), 0);
 
         // The default answer imports beside it.
         open(&mut app, "Kit.abr", &abr).unwrap().unwrap();
-        let id = prompt(&app).expect("the prompt is open");
-        crate::dialogs::confirm(&mut app, id).unwrap();
+        press(&mut app, "Import as New Group");
         assert_eq!((in_group(&app, "Kit"), in_group(&app, "Kit (2)")), (2, 2));
         // The status names the file and the group it landed in.
         assert!(app.ui.status.ends_with("from Kit into “Kit (2)”"), "{}", app.ui.status);
@@ -320,11 +368,7 @@ mod tests {
 
         // Replace deletes the group's brushes first.
         open(&mut app, "Kit.abr", &abr).unwrap().unwrap();
-        let id = prompt(&app).expect("the prompt is open");
-        if let Some(d) = app.ui.dialogs.iter_mut().find(|d| d.id == id) {
-            d.fields.insert("choice".into(), json!("replace"));
-        }
-        crate::dialogs::confirm(&mut app, id).unwrap();
+        press(&mut app, "Replace");
         assert_eq!((in_group(&app, "Kit"), in_group(&app, "Kit (2)")), (2, 2));
         assert_eq!(size(&app), Some(9.0), "the file's own brush replaced the edited one");
         assert!(prompt(&app).is_none());
@@ -334,35 +378,28 @@ mod tests {
     /// Import as New Group adds "Fire (2)", Replace swaps "Fire" alone (#10640).
     #[test]
     fn reimporting_a_gradient_file_asks_before_touching_its_group() {
-        use photocraft_psd::grd::{GrdColor, GrdGradient, GrdStop, write};
+        use craft_psd::grd::{GrdColor, GrdGradient, GrdStop, write};
         let stop = |location: f32, color| GrdStop { location, midpoint: 0.5, color };
         let ember =
             GrdGradient { name: "Ember".into(), stops: vec![stop(0.0, GrdColor::Foreground), stop(1.0, GrdColor::Rgb([1.0, 0.0, 0.0]))], ..Default::default() };
         let grd = write(&[ember]);
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let groups = |app: &PhotocraftApp, g: &str| app.session.presets.gradients.iter().filter(|x| x.name == g).count();
-        let prompt = |app: &PhotocraftApp| app.ui.dialogs.iter().find(|d| crate::preset_group_prompt::owns(&d.fields)).map(|d| d.id);
         open(&mut app, "Fire.grd", &grd).unwrap().unwrap();
         assert_eq!(groups(&app, "Fire"), 1);
         assert!(prompt(&app).is_none(), "a new group imports without asking");
 
         open(&mut app, "Fire.grd", &grd).unwrap().unwrap();
-        let id = prompt(&app).expect("the prompt is open");
-        crate::dialogs::cancel(&mut app, id).unwrap();
+        press(&mut app, "Cancel");
         assert_eq!((groups(&app, "Fire"), groups(&app, "Fire (2)")), (1, 0));
 
         open(&mut app, "Fire.grd", &grd).unwrap().unwrap();
-        let id = prompt(&app).expect("the prompt is open");
-        crate::dialogs::confirm(&mut app, id).unwrap();
+        press(&mut app, "Import as New Group");
         assert_eq!((groups(&app, "Fire"), groups(&app, "Fire (2)")), (1, 1));
         assert!(app.ui.status.ends_with("from Fire into “Fire (2)”"), "{}", app.ui.status);
 
         open(&mut app, "Fire.grd", &grd).unwrap().unwrap();
-        let id = prompt(&app).expect("the prompt is open");
-        if let Some(d) = app.ui.dialogs.iter_mut().find(|d| d.id == id) {
-            d.fields.insert("choice".into(), json!("replace"));
-        }
-        crate::dialogs::confirm(&mut app, id).unwrap();
+        press(&mut app, "Replace");
         assert_eq!((groups(&app, "Fire"), groups(&app, "Fire (2)"), groups(&app, "Fire (3)")), (1, 1, 0));
     }
 
@@ -378,20 +415,21 @@ mod tests {
         }
         let img = photocraft_codecs::Image::from_u8(16, 16, photocraft_codecs::ChannelLayout::Gray, px).unwrap();
         let png = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap();
-        let (show, asked) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::Contents("Leaf.png".into(), png))]);
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_dialog: Some(show), ..Default::default() });
+        let files = Arc::new(ScriptedFiles::answering([Picked::Contents(vec![("Leaf.png".into(), png)])]));
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { files: Some(files.clone()), ..Default::default() });
         import_brushes(&mut app).unwrap();
-        app.poll_file_dialog(&egui::Context::default(), None);
-        match asked.borrow().first() {
-            Some(crate::file_dialog::FileDialogRequest::Open { extensions: Some(e), .. }) => {
-                assert!(e.iter().any(|x| x == "abr") && e.iter().any(|x| x == "png"), "{e:?}")
+        app.poll_file_dialog();
+        match files.requests().as_slice() {
+            [request] if request.kind == PickKind::Open => {
+                let [filter] = request.filters.as_slice() else { panic!("one filtered type, got {:?}", request.filters) };
+                assert!(filter.extensions.iter().any(|x| x == "abr") && filter.extensions.iter().any(|x| x == "png"), "{filter:?}");
             }
-            other => panic!("expected a filtered open dialog, got {other:?}"),
+            other => panic!("expected one filtered open request, got {other:?}"),
         }
         assert!(!app.ui.status_error, "{}", app.ui.status);
         assert_eq!(app.session.tools.current_preset.as_deref(), Some("Leaf"));
         let TipShape::Sampled(tip) = &app.session.tools.brush.tip else { panic!("sampled tip expected") };
         assert_eq!((tip.width, tip.height), (3, 8));
-        assert!(app.ui.panels.brush_settings && app.ui.brush_tab == 1, "the Brushes tab shows the new brush");
+        assert!(is_shown(&app, "brushes"), "the Brushes tab shows the new brush");
     }
 }
