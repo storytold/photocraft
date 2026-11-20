@@ -1,3 +1,5 @@
+use photocraft_engine::retouch_cmds::LiveRetouchExt;
+use photocraft_engine::brush_cmds::LiveStrokeExt;
 use photocraft_engine::presets::PresetsExt;
 use std::sync::Arc;
 

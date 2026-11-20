@@ -1,0 +1,413 @@
+#!/usr/bin/env python3
+"""Engine split, steps 7-12: cut one engine crate out of `photocraft-engine-core`.
+
+`scripts/engine_split/crates.tsv` names the crate of each engine module. A cut moves the modules of
+one crate, with every file their `mod` declarations reach, from `crates/engine-core/src` to the same
+paths under `crates/engine-<crate>/src`, so git's rename detection carries edits to them.
+
+    python3 scripts/engine_split/engine_cut.py split <crate>
+        On the day's main: `git mv` the crate's files, drop their declarations from core's `lib.rs`,
+        `cmd.rs` and `cmd/table.rs`, and in the moved files point `crate::cmd::<core item>` at
+        `crate::commands::<core item>` (the crate's own `cmd` module holds only its modules). Calls of
+        `Session` methods that became the crate's traits get the trait's import (TRAITS). The
+        hand-written part of the step (the crate's Cargo.toml, lib.rs, cmd.rs, install.rs, the
+        install lists, tooling) is its own commit, cherry-picked after this one.
+
+    python3 scripts/engine_split/engine_cut.py imports <crate>
+        Prints the import block the crate's root needs: every name its code reaches as `crate::x`
+        that the crate doesn't define, so moved code compiles without path edits.
+
+    python3 scripts/engine_split/engine_cut.py branch <crate> --base <merge-base> --head <branch>
+        On a branch rebased onto the cut (`--head` is the branch from before the rebase, `ORIG_HEAD`
+        right after it):
+          - moves files the branch added under core that belong to the crate's modules (new files in
+            a directory that still exists in core, such as `cmd/`, stay where git put them);
+          - moves `mod` lines the branch added to core's `cmd.rs`/`lib.rs` for the crate's modules,
+            and `TABLES` entries it added to core's `install.rs` naming them, into the crate's files;
+          - adds the import-block names the branch's moved code needs;
+          - adds trait imports for the trait methods it calls;
+          - lists, as NOT DONE, tests the branch added or edited in core that run one of the
+            crate's command ids: core installs only its own commands, so they fail at run time
+            with `UnknownCommand` and belong in the top crate's `tests/it`.
+
+    cargo check --message-format json ... | python3 scripts/engine_split/engine_cut.py fix
+        Widens to `pub` each core item the compiler reports as private where another engine crate
+        uses it (E0603, E0624, and E0616 when the note names the field).
+
+Running split or branch twice gives the same result. What it cannot do is printed at the end.
+"""
+import argparse, json, os, re, sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from rust_source import MOD_DECL, git, git_show, mask, module_file  # noqa: E402
+
+CORE = "crates/engine-core/src"
+MAP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "crates.tsv")
+ROOTS = ["crates", "apps"]
+
+# Session methods that became a crate's extension traits at its cut: method -> (module, trait).
+TRAITS = {
+    "paint": {
+        "offer_live_stroke": ("brush_cmds", "LiveStrokeExt"),
+        "offer_live_retouch": ("retouch_cmds", "LiveRetouchExt"),
+        "offer_live_dab": ("retouch_cmds", "LiveRetouchExt"),
+    },
+}
+
+# Names a crate's root defines itself, which its import block must not bring from core.
+OWN = {"cmd", "commands", "install", "session", "command_tables", "register"}
+
+
+def crate_src(crate):
+    return f"crates/engine-{crate}/src"
+
+
+def units(crate):
+    out = []
+    with open(MAP) as f:
+        for line in f:
+            if line.startswith("#") or line.startswith("unit\t") or not line.strip():
+                continue
+            u, c = line.rstrip("\n").split("\t")
+            if c == crate:
+                out.append(u)
+    return out
+
+
+def unit_root(u, src=CORE):
+    for f in (f"{src}/{u}.rs", f"{src}/{u}/mod.rs"):
+        if os.path.isfile(f):
+            return f
+    return None
+
+
+def reach(root):
+    """`root` and every file its `mod` declarations reach."""
+    seen, todo = [], [root]
+    while todo:
+        f = todo.pop()
+        if f in seen:
+            continue
+        seen.append(f)
+        src = open(f).read()
+        m = mask(src)
+        for d in MOD_DECL.finditer(m):
+            child = module_file(f, d.group(2), src[d.start(1) : d.end(1)])
+            if child:
+                todo.append(child)
+    return seen
+
+
+def crate_files(crate, src=CORE):
+    files = []
+    for u in units(crate):
+        r = unit_root(u, src)
+        if r:
+            files += [f for f in reach(r) if f not in files]
+    return files
+
+
+def read(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+def write(path, text):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+def decl_re(name):
+    """A declaration line of module `name` with its attributes, or a `pub use cmd::name;` line."""
+    return re.compile(r"^(?:[ \t]*#\[[^\n]*\]\n)*[ \t]*(?:pub(?:\([a-z]+\))?\s+)?(?:mod\s+" + name + r"\s*;|use\s+cmd::" + name + r"\s*;)[ \t]*\n", re.M)
+
+
+def drop_decls(crate):
+    """Removes the crate's module declarations from core's lib.rs, cmd.rs and cmd/table.rs."""
+    changed = []
+    for u in units(crate):
+        parts = u.split("/")
+        parent = {1: [f"{CORE}/lib.rs"], 2: [f"{CORE}/cmd.rs", f"{CORE}/lib.rs"], 3: [f"{CORE}/cmd/table.rs"]}[len(parts)]
+        for p in parent:
+            text = read(p)
+            new = decl_re(parts[-1]).sub("", text)
+            if new != text:
+                write(p, new)
+                changed.append(p)
+    return changed
+
+
+def own_cmd_names(crate):
+    return {u.split("/")[1] for u in units(crate) if u.startswith("cmd/")} | {"table"}
+
+
+CMD_PATH = re.compile(r"\bcrate::cmd::(\w+)")
+CMD_USE = re.compile(r"\buse crate::cmd::\{")
+
+
+def point_cmd_at_core(text, crate):
+    """`crate::cmd::x` for an x the crate doesn't hold becomes `crate::commands::x`."""
+    own = own_cmd_names(crate)
+    masked = mask(text)
+    edits = [(m.start(), m.end(), f"crate::commands::{m.group(1)}") for m in CMD_PATH.finditer(masked) if m.group(1) not in own]
+    edits += [(m.start(), m.end(), "use crate::commands::{") for m in CMD_USE.finditer(masked)]
+    for s, e, r in sorted(edits, reverse=True):
+        text = text[:s] + r + text[e:]
+    return text
+
+
+def rust_files(roots):
+    for root in roots:
+        for d, _, files in os.walk(root):
+            if "/target" in d or "/vendor" in d:
+                continue
+            for name in files:
+                if name.endswith(".rs"):
+                    yield os.path.join(d, name)
+
+
+def trait_root(path, crate):
+    if path.startswith(crate_src(crate) + "/"):
+        return "crate"
+    if path.startswith(CORE + "/"):
+        return None  # core can't name an upper crate's trait
+    return f"photocraft_engine_{crate}" if path.startswith(f"crates/engine-{crate}/") else "photocraft_engine"
+
+
+def add_trait_imports(path, crate):
+    """Adds `use <root>::<module>::<Trait>;` for each trait method the file calls."""
+    methods = TRAITS.get(crate, {})
+    if not methods:
+        return False
+    text = read(path)
+    masked = mask(text)
+    root = trait_root(path, crate)
+    needed = {}
+    for m in re.finditer(r"\.(" + "|".join(methods) + r")\s*\(", masked):
+        module, trait = methods[m.group(1)]
+        if re.search(r"\b(?:use|trait)\b[^;{]*\b" + trait + r"\b", masked):
+            continue
+        needed.setdefault(trait, (module, m.start()))
+    if not needed or root is None:
+        return False
+    for trait, (module, pos) in sorted(needed.items(), key=lambda x: -x[1][1]):
+        body = enclosing_mod(mask(text), pos)
+        line = f"use {root}::{module}::{trait};\n"
+        if body is not None:
+            nl = text.index("\n", body) + 1
+            indent = re.match(r"[ \t]*", text[nl:]).group(0)
+            text = text[:nl] + indent + line + text[nl:]
+        else:
+            um = re.search(r"^use ", mask(text), re.M)
+            at = um.start() if um else 0
+            text = text[:at] + line + text[at:]
+    write(path, text)
+    return True
+
+
+def enclosing_mod(masked, pos):
+    from rust_source import block_end
+
+    best = None
+    for m in re.finditer(r"\bmod\s+\w+\s*\{", masked[:pos]):
+        if block_end(masked, m.start()) > pos:
+            best = m.end()
+    return best
+
+
+def split(crate):
+    files = crate_files(crate)
+    if not files:
+        print(f"nothing of `{crate}` left in {CORE}")
+    for f in files:
+        dst = crate_src(crate) + f[len(CORE) :]
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        git("mv", f, dst)
+    print(f"moved {len(files)} files to {crate_src(crate)}")
+    print("declarations dropped in:", ", ".join(sorted(set(drop_decls(crate)))) or "none")
+    finish(crate, [f for f in rust_files([crate_src(crate)])])
+
+
+def finish(crate, moved):
+    n = 0
+    for f in moved:
+        text = read(f)
+        new = point_cmd_at_core(text, crate)
+        if new != text:
+            write(f, new)
+            n += 1
+    print(f"crate::cmd paths pointed at core's commands in {n} files")
+    t = sum(add_trait_imports(f, crate) for f in rust_files(ROOTS))
+    print(f"trait imports added in {t} files")
+
+
+def import_names(crate, files=None):
+    files = files if files is not None else list(rust_files([crate_src(crate)]))
+    own = OWN | {u.split("/")[-1] for u in units(crate)}
+    names = set()
+    for f in files:
+        masked = mask(read(f))
+        names |= set(re.findall(r"\bcrate::([A-Za-z_][A-Za-z0-9_]*)", masked))
+        for m in re.finditer(r"\buse crate::\{([^}]*)\}", masked):
+            names |= {n for n in re.findall(r"(?:^|,)\s*([A-Za-z_][A-Za-z0-9_]*)", m.group(1))}
+    return sorted(n for n in names if n not in own and n != "self")
+
+
+def imports(crate):
+    names = import_names(crate)
+    print("// The core items this crate's code names as `crate::x` (photocraft#15710).")
+    print("use photocraft_engine_core::{" + ", ".join(names) + "};")
+
+
+def crate_ids(crate):
+    ids = set()
+    for f in rust_files([crate_src(crate)]):
+        ids |= set(re.findall(r'(?:\b\w+!\(\s*|\bid:\s*)"([a-z][A-Za-z0-9_]*\.[A-Za-z0-9_.]+)"', read(f)))
+    return ids
+
+
+def branch(crate, base, head):
+    not_done = []
+    changed = git("diff", "--name-status", "-M", base, head).splitlines()
+    added = [l.split("\t")[-1] for l in changed if l.startswith("A")]
+    # Files git left in core that the crate's modules declare.
+    roots = [unit_root(u) for u in units(crate)]
+    left = [f for r in roots if r for f in reach(r)]
+    for f in left:
+        dst = crate_src(crate) + f[len(CORE) :]
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        git("mv", f, dst)
+    # Declarations and table entries the branch added in core for the crate's modules.
+    own = {u.split("/")[-1] for u in units(crate)}
+    for core_file, crate_file in ((f"{CORE}/cmd.rs", f"{crate_src(crate)}/cmd.rs"), (f"{CORE}/lib.rs", f"{crate_src(crate)}/lib.rs")):
+        text = read(core_file)
+        for name in own:
+            m = decl_re(name).search(text)
+            if m:
+                text = text[: m.start()] + text[m.end() :]
+                ct = read(crate_file)
+                if not decl_re(name).search(ct):
+                    write(crate_file, ct.rstrip("\n") + "\n" + m.group(0))
+        write(core_file, text)
+    inst = f"{CORE}/install.rs"
+    text = read(inst)
+    entry = re.compile(r'^[ \t]*\("[^"]+",\s*crate::(?:cmd::)?(' + "|".join(sorted(own)) + r')::specs\),[ \t]*\n', re.M)
+    for m in list(entry.finditer(text))[::-1]:
+        text = text[: m.start()] + text[m.end() :]
+        not_done.append(f"{crate_src(crate)}/install.rs: add the table entry `{m.group(0).strip()}` to TABLES")
+    write(inst, text)
+    finish(crate, left + [f for f in added if f.startswith(crate_src(crate) + "/") and os.path.exists(f)])
+    # Import block names the moved code now needs.
+    lib = f"{crate_src(crate)}/lib.rs"
+    lt = read(lib)
+    m = re.search(r"use photocraft_engine_core::\{([^}]*)\};", lt)
+    if m:
+        have = {n.strip() for n in m.group(1).split(",") if n.strip()}
+        want = sorted(have | set(import_names(crate)))
+        if want != sorted(have):
+            write(lib, lt[: m.start()] + "use photocraft_engine_core::{" + ", ".join(want) + "};" + lt[m.end() :])
+    # Tests in core that run the crate's commands.
+    ids = crate_ids(crate)
+    pat = re.compile(r'"(' + "|".join(re.escape(i) for i in sorted(ids)) + r')"') if ids else None
+    for l in changed:
+        f = l.split("\t")[-1]
+        if pat and f.startswith(CORE + "/") and f.endswith(".rs") and os.path.exists(f):
+            diff = git("diff", base, head, "--", f)
+            hits = sorted({m.group(1) for m in pat.finditer("\n".join(x for x in diff.splitlines() if x.startswith("+")))})
+            if hits:
+                not_done.append(f"{f}: the branch's lines run {', '.join(hits)}; a test doing that moves to crates/engine/tests/it")
+    report(not_done)
+
+
+PRIVATE_DEF = re.compile(r"^([ \t]*(?:#\[[^\n]*\]\s*)*)(?:pub\((?:crate|super|in [^)]*)\)\s+)?(?=(?:const\s+|async\s+|unsafe\s+)*(?:fn|struct|enum|const|static|type|trait|mod|use)\b|\w+\s*:)", re.M)
+
+
+def fix(stream):
+    widened = set()
+    left = []
+    for line in stream:
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue
+        if msg.get("reason") != "compiler-message":
+            continue
+        d = msg["message"]
+        code = (d.get("code") or {}).get("code")
+        if code not in ("E0603", "E0624", "E0616"):
+            continue
+        defs = [s for c in d.get("children", []) for s in c.get("spans", []) if "defined here" in (c.get("message") or "") or "private" in (c.get("message") or "")]
+        defs += [s for s in d.get("spans", []) if not s.get("is_primary")]
+        defs = [s for s in defs if s["file_name"].startswith(CORE + "/")]
+        if not defs:
+            left.append(d.get("rendered", d["message"]).splitlines()[0])
+            continue
+        sp = defs[0]
+        widened.add((sp["file_name"], sp["line_start"]))
+    by_file = {}
+    for f, ln in widened:
+        by_file.setdefault(f, set()).add(ln)
+    n = 0
+    for f, lines in by_file.items():
+        src = read(f).split("\n")
+        for ln in sorted(lines):
+            i = ln - 1
+            new = re.sub(r"^(\s*)(?:pub\((?:crate|super|in [^)]*)\)\s+)?(?!pub\b)", r"\1pub ", src[i], count=1)
+            new = re.sub(r"^(\s*)pub pub ", r"\1pub ", new)
+            if new != src[i]:
+                src[i] = new
+                n += 1
+        write(f, "\n".join(src))
+    print(f"widened {n} definitions in {len(by_file)} files")
+    for l in sorted(set(left)):
+        print("BY HAND:", l)
+    report([])
+
+
+CANNOT_DO = """
+What this script cannot do:
+  - items that core-crate code uses from the cut crate: they move down by hand (each cut's PR
+    lists where they went), or become a hook or a trait of the crate;
+  - core tests that run the cut crate's commands: they fail at run time with `UnknownCommand`
+    and move to crates/engine/tests/it, against the public API;
+  - the crate's own install list and `command_ids.txt` (crates/engine/src/install/) for a new
+    command or table: add them by hand;
+  - core items that only a test of the crate uses under `#[cfg(test)]`: core is then an ordinary
+    dependency, so the item doesn't exist there.
+"""
+
+
+def report(not_done):
+    for n in not_done:
+        print("NOT DONE:", n)
+    print(CANNOT_DO)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="mode", required=True)
+    for name in ("split", "imports"):
+        p = sub.add_parser(name)
+        p.add_argument("crate")
+    p = sub.add_parser("branch")
+    p.add_argument("crate")
+    p.add_argument("--base", required=True)
+    p.add_argument("--head", required=True)
+    sub.add_parser("fix")
+    a = ap.parse_args()
+    if a.mode == "split":
+        split(a.crate)
+        report([])
+    elif a.mode == "imports":
+        imports(a.crate)
+    elif a.mode == "branch":
+        branch(a.crate, a.base, a.head)
+    else:
+        fix(sys.stdin)
+
+
+if __name__ == "__main__":
+    main()

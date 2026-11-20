@@ -1,3 +1,4 @@
+use crate::brush_cmds::LiveStrokeExt;
 use super::*;
 
 fn session(w: u32, h: u32) -> Session {

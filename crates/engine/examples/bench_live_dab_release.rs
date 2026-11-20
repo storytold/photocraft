@@ -1,6 +1,7 @@
 //! Release cost of a live sequential-dab stroke on a 24 MP layer, in release mode: the commit
 //! rendering the stroke again (no offer) against taking the live pixels (`offer_live_dab`, which
 //! runs the finishing dabs, plus the commit). Also the live stroke's per-frame cost while drawn.
+use photocraft_engine::retouch_cmds::LiveRetouchExt;
 use std::time::Instant;
 
 use photocraft_engine::{EngineError, Session, paint::StrokePoint, retouch_cmds::LiveDab};
