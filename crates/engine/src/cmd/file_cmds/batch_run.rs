@@ -1245,8 +1245,9 @@ fn recorded_output_guard(p: &Value) -> bool {
 /// Documents are identified before playback; a step that closes or reorders tabs cannot make
 /// the next input silently become a different document.
 /// With a destination folder every document whose own copy this run wrote closes when the run ends,
-/// as the reference application does (#13673), and only while it is still clean and still at the
-/// revision that copy holds. A failed step or write, unsaved changes or no file of its own keep it.
+/// as the reference application does (#13673), whether or not the run left it changed: unsaved
+/// changes are not a reason to keep the tab. A failed step or write, a document with no file of its
+/// own and a document no longer at the revision that copy holds all keep their tabs.
 fn batch_open_documents(
     s: &mut Session,
     steps: &[(String, Value)],
@@ -1376,15 +1377,17 @@ fn batch_open_documents(
         } else if let Some((doc, revision)) = wrote {
             // Identity first: a step that activated another tab makes this turn write that other
             // tab's snapshot under this input's planned name, so this document never reached the
-            // folder. Then the saved-state rule: a document with nothing unsaved closes with the
-            // run, and a document that was never saved keeps its tab as well - a recorded Save step
-            // marks it saved without ever giving it a file, so `path` is its own condition and not a
-            // consequence of `is_dirty`. Then the revision: a recorded Save in a later turn marks
-            // this document clean without writing it, so the flag alone is not proof that the copy
-            // on disk holds what the tab now shows.
+            // folder. Then a file of its own: a document that was never saved keeps its tab - a
+            // recorded Save step marks it saved without ever giving it a file, so `path` is its own
+            // condition; the reference application instead raises its save dialog there, which is a
+            // separate item. Then the revision: unsaved changes are no reason to keep the tab, the
+            // measured reference closes a document whose copy it wrote even when the action changed
+            // it, but a document past the revision that copy holds is not the document on disk,
+            // whether the newer revision came from a later turn's edit or from a recorded Save in
+            // another turn whose own write went elsewhere.
             let found = s.documents().iter().find(|state| state.doc.id.0 == *id);
-            let written_and_clean = doc == *id && found.is_some_and(|state| state.path.is_some() && !state.is_dirty() && state.revision == revision);
-            if written_and_clean {
+            let written_and_current = doc == *id && found.is_some_and(|state| state.path.is_some() && state.revision == revision);
+            if written_and_current {
                 closed.push((*id, revision));
             }
         }
@@ -1393,14 +1396,15 @@ fn batch_open_documents(
     // it was recorded against, and a step that closed the document itself leaves nothing to close.
     for (id, revision) in closed {
         // Both rules are asked again here, not only at the document's own turn: a later input can
-        // reach this document through `document.activate` and leave it changed, or mark it clean
-        // with a recorded Save whose own write went to another tab, and closing it then would throw
-        // that edit away. A document past the revision this run wrote is not the document the copy
-        // on disk holds. Skipping the close is not an error entry: the copy the run promised was
-        // written.
+        // reach this document through `document.activate` and edit it, or mark it clean with a
+        // recorded Save whose own write went to another tab. Either way the tab now holds a revision
+        // this run never wrote, and closing it then would throw that edit away. The file-of-its-own
+        // rule is re-checked with it so that the closing pass asks the gate's question in full; no
+        // step takes a path away once a document has one. Skipping the close is not an error entry:
+        // the copy the run promised was written.
         let found = s.documents().iter().find(|state| state.doc.id.0 == id);
-        let still_writes_clean = found.is_some_and(|state| state.path.is_some() && !state.is_dirty() && state.revision == revision);
-        if !still_writes_clean {
+        let still_written = found.is_some_and(|state| state.path.is_some() && state.revision == revision);
+        if !still_written {
             continue;
         }
         if let Some(position) = s.documents().iter().position(|state| state.doc.id.0 == id) {

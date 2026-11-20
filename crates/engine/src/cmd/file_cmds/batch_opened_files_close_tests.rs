@@ -1,10 +1,10 @@
 //! Batch over Source: Opened Files (#13673). With a destination folder the run writes a copy of
-//! every opened document; the document itself then closes only when that turn wrote this
-//! document's own copy, it has nothing unsaved and a file of its own, and it is still at the
-//! revision that copy holds (the owner rule). A document with unsaved changes, a document that was
-//! never saved, a document whose step or write failed, a document a later turn worked on and a
-//! document the run never reached all keep their tabs, and without a destination nothing is
-//! written and nothing closes.
+//! every opened document; the document itself then closes once that turn wrote this document's own
+//! copy and it is still at the revision that copy holds, whether or not the run left it changed
+//! (the rule measured against the reference application in #15567). A document with no file of its
+//! own, a document whose step or write failed, a document a later turn worked on past the written
+//! revision and a document the run never reached all keep their tabs, and without a destination
+//! nothing is written and nothing closes.
 
 use super::*;
 
@@ -67,8 +67,8 @@ fn opened_files_with_a_folder_closes_each_unchanged_document_after_its_file_is_w
 }
 
 #[test]
-fn a_dirty_document_is_written_to_the_folder_and_stays_open_with_its_edits() {
-    let (dir, _workspace) = tmp("dirty-stays-open");
+fn a_dirty_document_is_written_to_the_folder_and_closes_with_its_edit_on_disk() {
+    let (dir, _workspace) = tmp("dirty-closes");
     let source = png(&dir, "a.png", 8, 6, "#ff0000");
     let output = join(&dir, "results");
     let before = std::fs::read(&source).unwrap();
@@ -76,15 +76,34 @@ fn a_dirty_document_is_written_to_the_folder_and_stays_open_with_its_edits() {
     let result =
         s.execute("file.automate.batch", json!({"source": "open", "steps": [["image.adjustments.invert", {}]], "output": output, "format": "png"})).unwrap();
     assert_eq!(result["errors"], json!([]), "{result}");
-    assert_eq!(result["files"], json!([join(&output, "a.png")]), "the copy is still written");
-    assert_eq!(open_paths(&s), vec![source.clone()], "the document with unsaved changes stays open");
-    assert!(s.documents()[0].is_dirty(), "and is still marked changed");
-    assert_eq!(s.active_index(), Some(0), "and stays the active tab");
-    let live = photocraft_compose::render(&s.documents()[0].doc, Rect::new(0, 0, 1, 1)).px[0];
-    assert_eq!(live, [0.0, 1.0, 1.0, 1.0], "and keeps the action's edit in the open document");
-    assert_eq!(top_left(&join(&output, "a.png")), [0.0, 1.0, 1.0, 1.0], "the copy carries the action's edit");
+    assert_eq!(result["files"], json!([join(&output, "a.png")]), "the copy is written");
+    assert!(s.documents().is_empty(), "the document closes even though the action left it changed, as the reference application does");
+    assert_eq!(s.active_index(), None, "and no tab is left active");
+    assert_eq!(top_left(&join(&output, "a.png")), [0.0, 1.0, 1.0, 1.0], "the copy on disk holds the action's edit");
     assert_eq!(top_left(&join(&dir, "a.png")), [1.0, 0.0, 0.0, 1.0], "the opened file keeps its own bytes");
     assert_eq!(std::fs::read(&source).unwrap(), before, "and its bytes exactly");
+}
+
+#[test]
+fn two_dirty_documents_are_both_written_to_the_folder_and_both_close() {
+    let (dir, _workspace) = tmp("two-dirty-close");
+    let first = png(&dir, "a.png", 8, 6, "#ff0000");
+    let second = png(&dir, "b.png", 8, 6, "#0000ff");
+    let output = join(&dir, "results");
+    let before_first = std::fs::read(&first).unwrap();
+    let before_second = std::fs::read(&second).unwrap();
+    let mut s = open_as_documents(&[first.clone(), second.clone()]);
+    // The exact measurement from #15567: one Invert step over a red and a blue document.
+    let result =
+        s.execute("file.automate.batch", json!({"source": "open", "steps": [["image.adjustments.invert", {}]], "output": output, "format": "png"})).unwrap();
+    assert_eq!(result["errors"], json!([]), "{result}");
+    assert_eq!(result["files"], json!([join(&output, "a.png"), join(&output, "b.png")]), "{result}");
+    assert!(s.documents().is_empty(), "both documents close although the action left both changed, and no prompt appears");
+    assert_eq!(s.active_index(), None);
+    assert_eq!(top_left(&join(&output, "a.png")), [0.0, 1.0, 1.0, 1.0], "the copy of a.png holds the edit");
+    assert_eq!(top_left(&join(&output, "b.png")), [1.0, 1.0, 0.0, 1.0], "the copy of b.png holds the edit");
+    assert_eq!(std::fs::read(&first).unwrap(), before_first, "the opened files keep their bytes");
+    assert_eq!(std::fs::read(&second).unwrap(), before_second, "and their bytes exactly");
 }
 
 #[test]
@@ -103,21 +122,20 @@ fn a_never_saved_document_is_written_as_its_name_psd_and_stays_open() {
 }
 
 #[test]
-fn a_run_with_no_steps_leaves_a_document_changed_before_the_run_open() {
-    let (dir, _workspace) = tmp("no-steps-dirty-stays");
+fn a_run_with_no_steps_writes_a_document_changed_before_the_run_and_closes_it() {
+    let (dir, _workspace) = tmp("no-steps-dirty-closes");
     let source = png(&dir, "a.png", 8, 6, "#ff0000");
     let output = join(&dir, "results");
     let mut s = open_as_documents(std::slice::from_ref(&source));
-    // Changed before the run, and the action has no step at all: nothing to discard, so the
-    // document keeps its tab and its change while its copy is still written.
+    // Changed before the run, and the action has no step at all: the reference application still
+    // writes the change into the folder and closes the document.
     s.execute("image.adjustments.invert", json!({})).unwrap();
     assert!(s.documents()[0].is_dirty(), "the run starts on a changed document");
     let result = s.execute("file.automate.batch", json!({"source": "open", "steps": [], "output": output, "format": "png"})).unwrap();
     assert_eq!(result["errors"], json!([]), "{result}");
     assert_eq!(result["files"], json!([join(&output, "a.png")]), "{result}");
-    assert_eq!(open_paths(&s), vec![source.clone()], "the changed document stays open");
-    assert!(s.documents()[0].is_dirty(), "with its change intact");
-    assert_eq!(top_left(&join(&output, "a.png")), [0.0, 1.0, 1.0, 1.0], "the copy carries the change");
+    assert!(s.documents().is_empty(), "the document changed before the run closes once its copy is written");
+    assert_eq!(top_left(&join(&output, "a.png")), [0.0, 1.0, 1.0, 1.0], "the copy on disk holds the change");
     assert_eq!(top_left(&join(&dir, "a.png")), [1.0, 0.0, 0.0, 1.0], "the opened file keeps its bytes");
 }
 
@@ -287,14 +305,13 @@ fn a_later_input_cannot_close_a_document_it_made_dirty_after_the_gate() {
         )
         .unwrap();
     // The first input's steps work on the other tab, and that tab's own input then works back on the
-    // first one: `a.png` was unchanged when its gate ran, so only a final check before the close
-    // keeps its new edit from being discarded.
+    // first one: `a.png`'s own turn wrote a revision that is no longer what the tab shows, so only a
+    // final check before the close keeps its new edit from being discarded. `b.png` is different: its
+    // own turn wrote the revision the tab still holds, so it closes with the run.
     assert_eq!(result["errors"], json!([]), "{result}");
     assert_eq!(result["files"], json!([join(&output, "a.png"), join(&output, "b.png")]), "{result}");
-    assert_eq!(open_names(&s), ["a.png", "b.png"], "both re-dirtied documents stay open");
-    for (index, name) in [(0, "a.png"), (1, "b.png")] {
-        assert!(s.documents()[index].is_dirty(), "{name} carries an unsaved change");
-    }
+    assert_eq!(open_names(&s), ["a.png"], "only the document past the written revision stays open");
+    assert!(s.documents()[0].is_dirty(), "a.png carries an unsaved change the copy does not hold");
     assert_eq!(top_left(&join(&dir, "a.png")), [1.0, 0.0, 0.0, 1.0], "a.png keeps its source bytes");
     assert_eq!(top_left(&join(&dir, "b.png")), [0.0, 0.0, 1.0, 1.0], "b.png keeps its source bytes");
     assert_eq!(std::fs::read(&first).unwrap(), before_first, "and its bytes exactly");
