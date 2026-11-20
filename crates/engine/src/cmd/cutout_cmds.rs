@@ -19,13 +19,13 @@ const CMD: &str = "layer.removeBackground";
 /// edges and hair get partial coverage instead of a hard cut.
 const REFINE: RefineParams = RefineParams { radius: 2.0, smart_radius: true, smooth: 10.0, feather: 0.5, contrast: 10.0, shift_edge: 0.0 };
 
-/// Remove Background needs an unlocked pixel layer.
+/// Remove Background needs an unlocked pixel or smart object layer.
 fn check(doc: &Document, l: &Layer) -> std::result::Result<(), String> {
-    if !matches!(l.content, LayerContent::Raster(_)) {
-        return Err(format!("the layer is {} {} layer, not a pixel layer", l.content.article(), l.content.kind_name()));
+    if !matches!(l.content, LayerContent::Raster(_) | LayerContent::Smart(_)) {
+        return Err(format!("the layer is {} {} layer, not a pixel or smart object layer", l.content.article(), l.content.kind_name()));
     }
     let locks = doc.effective_locks(l.id);
-    if locks.pixels || locks.all {
+    if locks.all || (matches!(l.content, LayerContent::Raster(_)) && locks.pixels) {
         return Err(format!("Could not complete your request because the layer \"{}\" is locked", l.name));
     }
     Ok(())
@@ -336,5 +336,19 @@ mod tests {
                 assert!(a < 0.05, "depth {depth}: stroke along the layer's edge at x = {x} (alpha {a})");
             }
         }
+    }
+
+    #[test]
+    fn remove_background_works_on_smart_object() {
+        let (mut s, inside) = disc(8);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let id = active_id(&s);
+        assert!(matches!(layer(&s, id).content, LayerContent::Smart(_)));
+        assert!(s.is_enabled(CMD));
+        let r = s.execute(CMD, json!({})).unwrap();
+        assert_eq!(r["layer"], id.0);
+        assert!(layer(&s, id).mask.is_some());
+        let v = mask_iou(&s, 200, 160, &inside);
+        assert!(v >= 0.75, "smart object: IoU {v}");
     }
 }
