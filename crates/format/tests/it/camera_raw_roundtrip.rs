@@ -3,12 +3,12 @@
 use photocraft_color::{BlendMode, ColorMode, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent, Size, SmartContentsId, SmartFilter, SmartObject, SmartSource};
 use photocraft_geom::Affine;
-use serde_json::json;
 
 #[test]
 fn pcraft_roundtrips_camera_raw_smart_filter_params() {
     let mut doc = Document::new("CameraRawPin", Size::new(16, 16), ColorMode::Rgb, SampleType::U16);
-    let params = json!({
+    let params: serde_json::Value = serde_json::from_str(
+        r#"{
         "temperature": 18.0,
         "tint": -12.0,
         "exposure": 0.75,
@@ -58,7 +58,9 @@ fn pcraft_roundtrips_camera_raw_smart_filter_params() {
         "calibrationHue": [4.0, -3.0, 2.0],
         "calibrationSat": [8.0, -5.0, 6.0],
         "encodingGamma": 1.8
-    });
+    }"#,
+    )
+    .unwrap();
     let smart = Layer::new(
         "RawSmart",
         LayerContent::Smart(SmartObject {
