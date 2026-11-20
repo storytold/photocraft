@@ -381,7 +381,25 @@ fn gate_args(exclude: &[String]) -> Vec<String> {
 
 /// The test build every test step shares: the gate's packages and features, TEST_TARGETS.
 fn test_build_args(exclude: &[String]) -> Vec<String> {
+    test_build_args_with(exclude, std::env::var_os("PHOTOCRAFT_CORPUS_TESTS").is_some_and(|v| v == "1"))
+}
+
+/// Packages whose real-file corpus tests (`feature = "corpus"`) the gate builds in with
+/// PHOTOCRAFT_CORPUS_TESTS=1. Those tests fail when the corpus is missing, so the gate's shards
+/// fetch it first (scripts/ci-test-shard.sh); a local `ci tests` leaves them out.
+const CORPUS_FEATURES: [&str; 2] = ["photocraft-io/corpus", "photocraft-engine/corpus"];
+
+fn test_build_args_with(exclude: &[String], corpus: bool) -> Vec<String> {
     let mut args = gate_args(exclude);
+    if corpus {
+        // `--features pkg/feature` names a package `--exclude` removed from the build: leave it out.
+        let extra: Vec<&str> = CORPUS_FEATURES.iter().copied().filter(|f| !exclude.iter().any(|e| f.split('/').next() == Some(e.as_str()))).collect();
+        if let Some(i) = args.iter().position(|a| a == "--features")
+            && !extra.is_empty()
+        {
+            args[i + 1] = format!("{},{}", args[i + 1], extra.join(","));
+        }
+    }
     args.extend(TEST_TARGETS[1..].iter().map(|a| a.to_string()));
     args
 }
@@ -797,6 +815,14 @@ mod ci_tests {
         let here = CiOptions { partition: None, selection: Selection::All, ..options };
         assert!(!nextest_args(&here, true, None, None).join(" ").contains("--no-tests"));
         assert_eq!(test_build_args(&here.exclude).join(" "), build);
+        assert_eq!(test_build_args_with(&here.exclude, false).join(" "), build);
+        assert_eq!(
+            test_build_args_with(&here.exclude, true).join(" "),
+            "--workspace --locked --features heif,photocraft-io/corpus,photocraft-engine/corpus --exclude photocraft-web --lib --bins --tests"
+        );
+        // A package the build leaves out cannot get a feature.
+        let args = test_build_args_with(&["photocraft-io".to_string()], true).join(" ");
+        assert!(args.contains("--features heif,photocraft-engine/corpus ") && !args.contains("photocraft-io/corpus"), "{args}");
     }
 
     #[test]

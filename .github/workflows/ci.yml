@@ -196,6 +196,7 @@ jobs:
         LPDEST=photocraft-no-such-printer
         CARGO_PROFILE_TEST_STRIP=symbols
         PHOTOCRAFT_CI_EXCLUDE=${{ needs.platforms.outputs.linux_skip }}
+        PHOTOCRAFT_CORPUS_TESTS=1
       timeout-minutes: 100
       cache-workspace-crates: true
       lint-cache: false
