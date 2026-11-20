@@ -1,9 +1,10 @@
-use craft::behavior::canvas::CanvasView;
+use craft::behavior::CanvasView;
 use craft::behavior::kurbo::Size;
 use craft::theme::variant::Tone;
-use craft::ui::bars::{Bar, BarKind, InvalidZoom, StatusItem, StatusMessage, StatusProgress, StatusReadout, StatusValues};
+use craft::ui::bars::{Bar, BarKind, StatusItem, StatusMessage, StatusProgress, StatusReadout, StatusValues};
 use craft::ui::contract::{Bind, MemoProps, MemoView, Outbox, ShowContainer as _};
 use craft::ui::runtime::commands::CommandRef;
+use craft::ui::text::InvalidZoom;
 
 use super::{PhotocraftApp, chrome_ui};
 

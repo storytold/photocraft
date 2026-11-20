@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 
 mod bar;
-pub(crate) mod facts;
 pub mod enable_rules;
+pub(crate) mod facts;
 mod invoke;
 mod items;
 pub mod native_menu;
@@ -27,6 +27,8 @@ pub use bar::menu_bar;
 pub use invoke::invoke;
 pub(crate) use invoke::{invoke_unguarded, panel_alias};
 pub use items::{MenuModel, base_rows, is_live, menu_rows, model, row};
+#[cfg(test)]
+pub(crate) use items::{fresh_bar, model_id};
 pub use state::is_enabled;
 pub(crate) use state::reveal_label;
 #[cfg(test)]

@@ -10,9 +10,9 @@ use craft::ui::contract::Tracked;
 use craft::ui::runtime::derived::derived;
 use serde_json::json;
 
+use super::facts::MenuFacts;
 use super::invoke::{panel_alias, proof_preset, workspace_id};
 use super::state::{checked, is_enabled, reveal_label, translated_menu_label};
-use super::facts::MenuFacts;
 use super::{DOCUMENT_ITEM, PhotocraftApp, TOP_MENUS, UI_COMMANDS};
 
 /// Is `id` implemented by the engine or the shell (a live menu item)? Shared by the menus and
@@ -391,6 +391,12 @@ fn put_in_window(bar: &mut MenuBar, node: Node) {
     let Some(menu) = bar.menus.iter_mut().find(|m| m.role == MenuRole::Window) else { return };
     let at = menu.children.iter().position(|n| matches!(n, Node::Submenu { label, .. } if label == "Workspace")).map_or(menu.children.len(), |p| p + 1);
     menu.children.insert(at, node);
+}
+
+/// The bar a build from `app`'s state lays out now, for trials that check the held model is never stale.
+#[cfg(test)]
+pub(crate) fn fresh_bar(app: &PhotocraftApp) -> MenuBar {
+    build(app).bar
 }
 
 fn build(app: &PhotocraftApp) -> Built {

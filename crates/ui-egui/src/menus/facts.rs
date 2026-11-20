@@ -164,9 +164,10 @@ impl<'a> MenuFacts<'a> {
             },
             ui: UiFacts {
                 tool: ui.tool as u64,
-                transform: ui.transform.as_ref().map(|t| {
-                    (t.session.revision(), t.content_aware.is_some(), t.layers.len(), crate::transform_tool::committing(app).is_some())
-                }),
+                transform: ui
+                    .transform
+                    .as_ref()
+                    .map(|t| (t.session.revision(), t.content_aware.is_some(), t.layers.len(), crate::transform_tool::committing(app).is_some())),
                 text_edit: ui.text_edit.as_ref(),
                 pen: (crate::vector_ui::pen_history_enabled(app, "edit.undo"), crate::vector_ui::pen_history_enabled(app, "edit.redo")),
                 crop: (crate::crop_ui::is_enabled(app, "edit.undo"), crate::crop_ui::is_enabled(app, "edit.redo"), crate::crop_ui::pending(app)),

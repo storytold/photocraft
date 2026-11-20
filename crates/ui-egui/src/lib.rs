@@ -952,6 +952,8 @@ mod drag_settle_trials;
 mod layer_thumb_bounds_tests;
 #[cfg(test)]
 mod mask_thumb_refresh_tests;
+#[cfg(test)]
+mod menu_floor_trials;
 
 #[cfg(test)]
 mod new_doc_remember_tests;
