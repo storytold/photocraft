@@ -132,7 +132,7 @@ jobs:
           else
             echo "web=false" >> "$GITHUB_OUTPUT"
           fi
-          if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/|crates/(ui-egui|text|gpu|tablet|heif|format)/|Cargo\.lock$|craft-i18n\.rev$|(.*/)?build\.rs$|\.cargo/config\.toml$|\.config/nextest\.toml$|xtask/|scripts/ci-test-shard\.sh$|\.github/workflows/ci\.yml$)'; then
+          if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/|crates/(ui-egui|text|gpu|tablet|heif|format)/|Cargo\.lock$|craft-i18n\.rev$|(.*/)?build\.rs$|\.cargo/config\.toml$|\.config/nextest\.toml$|\.config/ci-test-times\.tsv$|xtask/|scripts/ci-test-shard\.sh$|\.github/workflows/ci\.yml$)'; then
             echo "windows=true" >> "$GITHUB_OUTPUT"
           else
             echo "windows=false" >> "$GITHUB_OUTPUT"
@@ -149,9 +149,11 @@ jobs:
           fi
 
   # The Linux gate (craft-common-actions gate.yml). Its `lint` leg runs the checks that need no test
-  # build. The `build` job builds the tests once into a nextest archive (`cargo xtask ci archive`),
-  # uploads it and then runs the doctests; four test shards download the archive and run their
-  # share (scripts/ci-test-shard.sh). Shard 1 runs nextest's `gpu` group alone, on lavapipe, and
+  # build. The `build` job builds the tests once and writes one nextest archive per shard
+  # (`cargo xtask ci archive`, `shard-archives`), each with only the test binaries that shard runs,
+  # balanced by .config/ci-test-times.tsv (xtask/src/shards.rs); it uploads them and then runs the
+  # doctests. Each of the four test shards downloads its own archive and runs it
+  # (scripts/ci-test-shard.sh). Shard 1 runs nextest's `gpu` group alone, on lavapipe, and
   # fails on a skipped GPU comparison (scripts/ci-gpu-lavapipe.py); shards 2-4 split the other
   # tests. The `gpu` group is ~840 test-seconds on 4 slots (~3.5 min); the other ~6900
   # test-seconds over 3 shards are ~8.5-10.5 min each.
@@ -189,16 +191,18 @@ jobs:
       # fmt, egui-fork, clippy, layers, panel-commands, scorecard, the wasm32 check and the
       # missing-translations report (`cargo xtask ci lint`, xtask/src/main.rs), and the CI scripts'
       # own tests.
-      lint-command: python3 scripts/test-ci-gpu-lavapipe.py && python3 scripts/test-ci-windows-gpu-tests.py && cargo xtask ci lint
-      archive-command: cargo xtask ci archive
+      lint-command: python3 scripts/test-ci-gpu-lavapipe.py && python3 scripts/test-ci-windows-gpu-tests.py && python3 scripts/test-ci-test-times.py && cargo xtask ci lint
+      archive-command: cargo xtask ci archive --gpu-shard
       after-archive-command: cargo xtask ci doctest
       test-shards: 4
+      shard-archives: true
       # The tests and panic_hunt with `--locked --features heif` (TEST_TARGETS in xtask/src/main.rs).
       shard-command: bash scripts/ci-test-shard.sh --gpu-shard
 
   # The Windows tests and Clippy on the same gate, when `platforms` says the run needs them: a
-  # `lint` leg runs Clippy, the `build` job builds the tests once into a nextest archive and then
-  # runs the doctests, and six shards run their slice of the tests from the archive. Windows runs
+  # `lint` leg runs Clippy, the `build` job builds the tests once into one nextest archive per shard
+  # (as on Linux, without a GPU shard) and then runs the doctests, and six shards each run their own
+  # archive. Windows runs
   # the tests ~1.75x slower than Linux: ~55 min on one runner, ~9 min per shard. A seventh shard
   # would not shorten the slowest one while its slowest test alone takes ~9.6 min (the
   # shortcut-dispatch UI test). The browser apps are wasm targets, so their native tests are left
@@ -242,6 +246,7 @@ jobs:
       archive-command: cargo xtask ci archive
       after-archive-command: cargo xtask ci doctest
       test-shards: 6
+      shard-archives: true
       shard-command: bash scripts/ci-test-shard.sh
 
   # Keeps one Actions cache entry per family on main, so the repository stays within its 10 GB
