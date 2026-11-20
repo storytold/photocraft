@@ -49,18 +49,16 @@ fn tone_dialog_normalization_matches_native_execution() {
                 let parsed = |p| tone_adjustment(kind, p, crate::adjust_params::from_params(kind, p, None, mode).unwrap(), mode, colors).unwrap();
                 // One depth per (subset, record), rotating with their sum: every mode and kind still reaches every
                 // depth across the subsets.
-                {
-                    let depth = [SampleType::U8, SampleType::U16, SampleType::F32][(bits as usize + ri) % 3];
-                    let bounds = Rect::new(0, 0, 8, 8);
-                    let mut original = Surface::new(PixelFormat::new(mode, depth, true));
-                    let values: Vec<_> = (0..count).map(|i| (i as f32 + 1.0) / 7.0).chain([0.65]).collect();
-                    original.fill_rect(bounds, &values);
-                    let mut expected = original.clone();
-                    tone::adjust(&mut expected, colors, &parsed(&raw), None, bounds).unwrap();
-                    let mut actual = original;
-                    tone::adjust(&mut actual, colors, &parsed(&canonical), None, bounds).unwrap();
-                    assert_eq!(actual, expected, "{mode:?} {depth:?} {bits} {kind}");
-                }
+                let depth = [SampleType::U8, SampleType::U16, SampleType::F32][(bits as usize + ri) % 3];
+                let bounds = Rect::new(0, 0, 8, 8);
+                let mut original = Surface::new(PixelFormat::new(mode, depth, true));
+                let values: Vec<_> = (0..count).map(|i| (i as f32 + 1.0) / 7.0).chain([0.65]).collect();
+                original.fill_rect(bounds, &values);
+                let mut expected = original.clone();
+                tone::adjust(&mut expected, colors, &parsed(&raw), None, bounds).unwrap();
+                let mut actual = original;
+                tone::adjust(&mut actual, colors, &parsed(&canonical), None, bounds).unwrap();
+                assert_eq!(actual, expected, "{mode:?} {depth:?} {bits} {kind}");
             }
         }
     }
