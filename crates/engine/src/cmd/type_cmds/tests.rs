@@ -99,7 +99,7 @@ fn refreshing_type_layers_takes_no_history_step() {
     // Stale pixels, and a document saved in this state.
     {
         let st = s.active_mut().unwrap();
-        let Some(Layer { content: LayerContent::Text(t), .. }) = Arc::make_mut(&mut st.doc).layer_mut(id) else { panic!("not a type layer") };
+        let Some(Layer { content: LayerContent::Text(t), .. }) = Arc::make_mut(st.doc_mut()).layer_mut(id) else { panic!("not a type layer") };
         t.cache = None;
         st.saved_revision = st.revision;
     }

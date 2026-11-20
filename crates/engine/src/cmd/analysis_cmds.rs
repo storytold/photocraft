@@ -220,7 +220,7 @@ fn set_quiet(s: &mut Session, f: impl FnOnce(&mut Document)) -> Result<()> {
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     let mut d = (*st.doc).clone();
     f(&mut d);
-    st.doc = Arc::new(d);
+    *st.doc_mut() = Arc::new(d);
     let clean = st.saved_revision == st.revision;
     st.revision += 1;
     st.record_unknown_damage();
@@ -262,15 +262,16 @@ pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Sess
             // As in `Session::edit`: undo targets what was selected just before the step (#1356).
             st.history.set_current_layers(prior);
             st.history.record(label, before.clone(), st.layer_target());
-            st.history.add_current_visibility(&crate::visibility_changes(&before, &st.doc));
+            let changes = crate::visibility_changes(&before, &st.doc);
+            st.history.add_current_visibility(&changes);
             st.trim_history();
             st.coalesce = None;
             Ok(v)
         }
         Err(e) => {
-            let failed = std::mem::replace(&mut st.doc, before);
-            st.active_layer = prior.active;
-            st.selected_layers = prior.selected;
+            let failed = std::mem::replace(st.doc_mut(), before);
+            st.set_active_layer(prior.active);
+            *st.selection_mut() = prior.selected;
             st.layer_anchor = anchor;
             st.channel_view = channel_view;
             st.coalesce = coalesce;

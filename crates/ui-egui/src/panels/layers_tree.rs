@@ -120,7 +120,7 @@ impl<'a> PhotoLayers<'a> {
         let Some(active) = self.st.active_layer else { return Vec::new() };
         let selection = self.st.selected_layers();
         if selection.len() > 1 && selection.contains(&active) {
-            selection.into_iter().filter(|id| *id == active || !self.doc().is_background(*id)).collect()
+            selection.iter().copied().filter(|id| *id == active || !self.doc().is_background(*id)).collect()
         } else {
             vec![active]
         }
@@ -295,7 +295,7 @@ impl LayerTree for PhotoLayers<'_> {
             Some(l) if ui.mask_target && l.mask.is_some() => LayerPart::LayerMask,
             _ => LayerPart::Pixels,
         };
-        let mut selection = LayerSelection::new(self.st.selected_layers(), active, target);
+        let mut selection = LayerSelection::new(self.st.selected_layers().to_vec(), active, target);
         selection.sub_row = self.selected_filter().and_then(|(layer, index)| {
             let id = LayerId(layer);
             let row = match index {

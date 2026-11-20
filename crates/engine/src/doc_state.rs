@@ -3,16 +3,10 @@ use super::{Arc, Document, History, LayerId, LayerTarget, channel_cmds, float_cm
 /// Per-document editing state.
 #[derive(Clone, Debug)]
 pub struct DocState {
-    pub doc: Arc<Document>,
+    inputs: DocStateInputs,
+    selected_cache: std::sync::OnceLock<Vec<LayerId>>,
     pub history: History,
-    /// The primary ("key") layer: what single-layer commands act on. Always a member of
-    /// `selected_layers` when set.
-    pub active_layer: Option<LayerId>,
-    /// Every selected layer in the Layers panel (⌘/⇧-click), in selection order. Like
-    /// `active_layer`, selecting is not a history step, but undo and redo restore the layers each
-    /// state targeted when the next step was taken; see [`DocState::selected_layers`].
-    pub selected_layers: Vec<LayerId>,
-    /// Anchor of ⇧-click range selection (the last plainly or ⌘-clicked layer).
+    /// Anchor of range selection (the last plainly or command-clicked layer).
     pub layer_anchor: Option<LayerId>,
     pub path: Option<String>,
     /// An Affinity document (or its preview) must not acquire the native source as its Save path.
@@ -81,19 +75,37 @@ pub struct DocState {
     pub pixel_revision: u64,
 }
 
+/// Read-only document and layer selection inputs. Mutations go through `DocState` methods.
+#[derive(Clone, Debug)]
+pub struct DocStateInputs {
+    /// The current document.
+    pub doc: Arc<Document>,
+    /// The primary layer for single-layer commands.
+    pub active_layer: Option<LayerId>,
+    /// The raw selection in selection order. Undo and redo restore it with the target state.
+    pub selected_layers: Vec<LayerId>,
+}
+
+impl std::ops::Deref for DocState {
+    type Target = DocStateInputs;
+    fn deref(&self) -> &Self::Target {
+        &self.inputs
+    }
+}
+
 impl DocState {
     /// Trim the history to its budget, counting the tiles only History panel snapshots hold
     /// against it too (#4530). Returns how many states were dropped.
     pub fn trim_history(&mut self) -> usize {
         let snaps: Vec<&Document> = self.snapshots.iter().map(|s| &*s.doc).collect();
-        self.history.trim_with(&self.doc, &snaps)
+        self.history.trim_with(&self.inputs.doc, &snaps)
     }
 
     /// Pixel bytes of the document, the tiles only its history holds and the tiles only its
     /// History panel snapshots hold; embedded smart object contents count too.
     pub fn memory_bytes(&self) -> usize {
         let snaps: Vec<&Document> = self.snapshots.iter().map(|s| &*s.doc).collect();
-        self.history.pixel_bytes(&self.doc).saturating_add(self.history.extra_bytes(&self.doc, &snaps))
+        self.history.pixel_bytes(&self.inputs.doc).saturating_add(self.history.extra_bytes(&self.inputs.doc, &snaps))
     }
 
     pub fn new(doc: Document, path: Option<String>) -> Self {
@@ -111,10 +123,9 @@ impl DocState {
         // panel's top row can always bring it back (#2966).
         let first = history_cmds::Snapshot { id: 0, name: doc.name.clone(), doc: doc.clone(), layers: target };
         Self {
-            doc,
+            inputs: DocStateInputs { doc, active_layer, selected_layers: active_layer.into_iter().collect() },
+            selected_cache: std::sync::OnceLock::new(),
             history,
-            active_layer,
-            selected_layers: active_layer.into_iter().collect(),
             layer_anchor: active_layer,
             path,
             source_read_only: false,
@@ -158,11 +169,44 @@ impl DocState {
     pub fn snapshots_generation(&self) -> u64 {
         self.snapshots_generation
     }
-    /// The selected layers in bottom-to-top document order, always including the active layer.
-    /// Robust against stale state: ids no longer in the document are skipped, and if the active
-    /// layer was changed without updating the set, the selection is just the active layer.
-    pub fn selected_layers(&self) -> Vec<LayerId> {
-        selected_in(&self.doc, self.active_layer, &self.selected_layers)
+    /// The current document.
+    pub fn doc(&self) -> &Arc<Document> {
+        &self.inputs.doc
+    }
+    /// Consume the state and return its document without cloning its Arc.
+    pub fn into_document(self) -> Arc<Document> {
+        self.inputs.doc
+    }
+    /// Mutable access invalidates the ordered selection, including on document replacement.
+    pub fn doc_mut(&mut self) -> &mut Arc<Document> {
+        self.selected_cache.take();
+        &mut self.inputs.doc
+    }
+    /// The active layer, if any.
+    pub fn active_layer(&self) -> Option<LayerId> {
+        self.inputs.active_layer
+    }
+    /// Set the active layer and invalidate the held ordered selection.
+    pub fn set_active_layer(&mut self, active: Option<LayerId>) {
+        if self.inputs.active_layer != active {
+            self.selected_cache.take();
+            self.inputs.active_layer = active;
+        }
+    }
+    /// The raw selection in selection order.
+    pub fn selection(&self) -> &[LayerId] {
+        &self.inputs.selected_layers
+    }
+    /// Mutate the raw selection, invalidating the held ordered selection before access.
+    pub fn selection_mut(&mut self) -> &mut Vec<LayerId> {
+        self.selected_cache.take();
+        &mut self.inputs.selected_layers
+    }
+    /// Selected layers in bottom-to-top document order, including the active layer.
+    /// Missing IDs are skipped; if the active layer is not in the raw selection, only it is used.
+    /// The first read after a mutation builds the held slice; later reads reuse it.
+    pub fn selected_layers(&self) -> &[LayerId] {
+        self.selected_cache.get_or_init(|| selected_in(&self.inputs.doc, self.inputs.active_layer, &self.inputs.selected_layers))
     }
     pub fn is_layer_selected(&self, id: LayerId) -> bool {
         self.active_layer == Some(id) || (self.active_layer.is_some_and(|a| self.selected_layers.contains(&a)) && self.selected_layers.contains(&id))
@@ -483,6 +527,38 @@ mod selected_tests {
         let ids = [&a, &g, &b, &h, &c, &d, &e].map(|l| l.id).to_vec();
         doc.layers = vec![a, g, e].into();
         (doc, ids)
+    }
+
+    #[test]
+    fn held_selection_tracks_mutations_and_reuses_storage() {
+        use super::DocState;
+        use std::sync::Arc;
+        let (doc, ids) = mixed();
+        let mut st = DocState::new(doc, None);
+        st.set_active_layer(Some(ids[0]));
+        *st.selection_mut() = vec![ids[6], ids[0], ids[6], LayerId::fresh()];
+        assert_eq!(st.selected_layers(), &[ids[0], ids[6]]);
+        let ptr = st.selected_layers().as_ptr();
+        let serial = st.doc.layers.index().serial();
+        st.set_active_layer(Some(ids[0]));
+        assert_eq!(st.selected_layers().as_ptr(), ptr, "setting the same active layer keeps the cache");
+        for _ in 0..100 {
+            assert_eq!(st.selected_layers().as_ptr(), ptr);
+            assert_eq!(st.doc.layers.index().serial(), serial);
+        }
+        Arc::make_mut(st.doc_mut()).shift(ids[6], -2);
+        assert_eq!(st.selected_layers(), &[ids[6], ids[0]]);
+        Arc::make_mut(st.doc_mut()).remove(ids[6]);
+        assert_eq!(st.selected_layers(), &[ids[0]]);
+        st.set_active_layer(Some(ids[4]));
+        assert_eq!(st.selected_layers(), &[ids[4]]);
+        st.set_active_layer(None);
+        assert!(st.selected_layers().is_empty());
+        let (replacement, other) = mixed();
+        *st.doc_mut() = Arc::new(replacement);
+        st.set_active_layer(Some(other[6]));
+        *st.selection_mut() = vec![other[6], other[0]];
+        assert_eq!(st.selected_layers(), &[other[0], other[6]]);
     }
 
     #[test]

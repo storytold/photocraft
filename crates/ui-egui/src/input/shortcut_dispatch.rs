@@ -499,7 +499,7 @@ pub(crate) fn delete_key_command(app: &PhotocraftApp, id: String) -> String {
 pub(crate) fn clip_key_releases(app: &PhotocraftApp) -> bool {
     let Some(st) = app.session.active() else { return false };
     let selected = st.selected_layers();
-    let clips = match selected.as_slice() {
+    let clips = match selected {
         [] => return false,
         [one] => std::slice::from_ref(one),
         [_lowest, above @ ..] => above,
