@@ -15,6 +15,7 @@ use craft::ui::contract::Bind;
 use craft::ui::dialog::{DialogId, dialog_id};
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult};
 use craft::ui::runtime::env::{Label, UnitKind};
+use craft::ui::runtime::memory::{MemoryStage, SaveKey};
 use craft::ui::runtime::requests::PathKind;
 use photocraft_doc::Document;
 use photocraft_engine::color_cmds::ColorSettings;
@@ -489,6 +490,31 @@ fn reset_values(params: &[Param], opening: &DialogFields) -> DialogFields {
     reset
 }
 
+/// The Opacity Edit › Fade opens with: the last confirmed Fade's (the dialog remembers its values on OK, not on
+/// Cancel), else the default in `reset` (#13812).
+fn fade_opening_opacity(app: &PhotocraftApp, command: &str, reset: &DialogFields) -> Option<f64> {
+    let key = SaveKey::named(super::params::memory_scope(command));
+    let saved = MemoryStage::peek_saved::<Option<DialogFields>>(app.ctx(), &key);
+    saved.and_then(|saved| saved.number("opacity")).or_else(|| reset.number("opacity"))
+}
+
+/// Fade's Reset once the Opacity was changed from the one it opened with: the values it opened with (the last
+/// confirmed Fade's), not 100 % Normal, as the reference application does (#13812). `reset` without Opacity and Mode
+/// leaves those at their opening values. A Reset after changing only the Mode wasn't measured and keeps `reset`.
+fn fade_reset(reset: &DialogFields, fields: &DialogFields, opened: Option<f64>) -> DialogFields {
+    if fields.number("opacity") == opened {
+        return reset.clone();
+    }
+    let mut kept = reset.clone();
+    kept.remove("opacity");
+    kept.remove("mode");
+    kept
+}
+
+#[cfg(test)]
+#[path = "fade_reset_tests.rs"]
+mod fade_reset_tests;
+
 /// The dialog's title: the command's label without its ellipsis.
 pub(crate) fn title_of(label: &str) -> Label {
     Label::from(crate::i18n::t(label).trim_end_matches('…').to_string())
@@ -505,10 +531,15 @@ fn builder(
 ) -> impl for<'b> Fn(&'b mut DialogFields) -> ParamDialog<'b> + Send + 'static {
     let key = command.to_owned();
     let canvas = app.session.active_index().map(|idx| crate::canvas::document_display::CanvasHost::primary(app, idx).canvas_id());
+    let fade_opened = (command == super::fade_modes::COMMAND).then(|| fade_opening_opacity(app, command, &reset));
     move |fields: &mut DialogFields| {
+        let reset = match fade_opened {
+            Some(opened) => fade_reset(&reset, fields, opened),
+            None => reset.clone(),
+        };
         let mut dialog = ParamDialog::command(key.clone(), title.clone(), params.clone())
             .values(Bind::bound(fields))
-            .reset_to(reset.clone())
+            .reset_to(reset)
             .layout(ParamLayout::Stacked)
             .previews(previews(&key))
             .alert_title(tl!("PhotoCraft"));
