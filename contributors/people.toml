@@ -281,7 +281,7 @@ real_name = "Kushagra Sharma"
 
 [people.Terra854]
 display_name = "Terra854"
-sync_github_name = true
+sync_github_name = false
 
 [people.hidoba]
 real_name = "Vlad Grankovsky"
