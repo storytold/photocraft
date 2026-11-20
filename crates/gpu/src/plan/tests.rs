@@ -336,6 +336,28 @@ fn blend_if_plans_on_the_gpu() {
     assert_eq!(blend_if(&d), 0);
 }
 
+/// #14855: the Blend If pass marks 8-bit RGB documents in `p4.z`, where `compose.wgsl`'s `bi_ramp`
+/// fades a split point over both ends as `BlendRange::weight_8bit` does; deeper documents and
+/// Grayscale keep the plain ramp.
+#[test]
+fn blend_if_marks_eight_bit_documents_for_the_split_fade() {
+    for (mode, depth, levels) in [
+        (ColorMode::Rgb, SampleType::U8, 1.0),
+        (ColorMode::Rgb, SampleType::U16, 0.0),
+        (ColorMode::Rgb, SampleType::F32, 0.0),
+        (ColorMode::Grayscale, SampleType::U8, 0.0),
+    ] {
+        let mut d = Document::with_background("t", Size::new(8, 8), mode, depth, Color::WHITE);
+        let mut l = Layer::raster("bi", d.pixel_format());
+        l.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 4, 4), &[1.0, 0.0, 0.0, 1.0]);
+        l.blend_if.set(0, [photocraft_doc::BlendRange { black: [40, 90], white: [255, 255] }, photocraft_doc::BlendRange::FULL]);
+        d.layers.push(l);
+        let plan = plan(&d).unwrap();
+        let pass = plan.passes.iter().find(|p| p.flags & F_BLEND_IF != 0).expect("a Blend If pass");
+        assert_eq!(pass.extra[2], levels, "{mode:?} {depth:?}");
+    }
+}
+
 #[test]
 fn blend_if_params_pack_every_range_exactly() {
     let mut bi = photocraft_doc::BlendIf::default();

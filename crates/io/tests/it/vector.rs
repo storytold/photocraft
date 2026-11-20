@@ -95,15 +95,36 @@ fn clipping_path_resource_2999_unchanged_flatness_only_and_new_export() {
     let custom_payload = b"\x07Outline\x00\x01\x00\x00\x00\x00\x00\x01".to_vec();
     custom_file.resources.iter_mut().find(|r| r.id == 2999).unwrap().data = custom_payload.clone();
     let mut imported = import("x.psd", &custom_file.to_bytes().unwrap()).unwrap().document;
+    assert_eq!(imported.clipping_path.as_ref().unwrap().flatness, 1.0);
     let reexported = export(&imported, "x.psd", &ExportOptions::default()).unwrap().bytes;
     let reexported_2999 = craft_psd::PsdFile::from_bytes(&reexported).unwrap().resources.into_iter().find(|r| r.id == 2999).unwrap();
     assert_eq!(reexported_2999.data, custom_payload);
 
-    // Flatness-only edit on the same path preserves the imported 2999 bytes.
+    // A flatness-only edit changes only the fixed-point field, not the Pascal name or suffix.
     imported.clipping_path.as_mut().unwrap().flatness = 5.0;
     let flatness_edit = export(&imported, "x.psd", &ExportOptions::default()).unwrap().bytes;
     let flatness_2999 = craft_psd::PsdFile::from_bytes(&flatness_edit).unwrap().resources.into_iter().find(|r| r.id == 2999).unwrap();
-    assert_eq!(flatness_2999.data, custom_payload);
+    assert_eq!(flatness_2999.data, b"\x07Outline\x00\x05\x00\x00\x00\x00\x00\x01");
+    let mut edited = import("x.psd", &flatness_edit).unwrap().document;
+    assert_eq!(edited.clipping_path.as_ref().unwrap().flatness, 5.0);
+
+    // Printer default (zero) is also an explicit edit and retains the fill rule and tail.
+    edited.clipping_path.as_mut().unwrap().flatness = 0.0;
+    let reset = export(&edited, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let reset_2999 = craft_psd::PsdFile::from_bytes(&reset).unwrap().resources.into_iter().find(|r| r.id == 2999).unwrap();
+    assert_eq!(reset_2999.data, b"\x07Outline\x00\x00\x00\x00\x00\x00\x00\x01");
+
+    // Legacy resources without a flatness field keep their bytes unless flatness is edited.
+    let resource = custom_file.resources.iter_mut().find(|r| r.id == 2999).unwrap();
+    resource.data = b"\x07Outline".to_vec();
+    let mut legacy = import("x.psd", &custom_file.to_bytes().unwrap()).unwrap().document;
+    let legacy_unchanged = export(&legacy, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let legacy_2999 = craft_psd::PsdFile::from_bytes(&legacy_unchanged).unwrap().resources.into_iter().find(|r| r.id == 2999).unwrap();
+    assert_eq!(legacy_2999.data, b"\x07Outline");
+    legacy.clipping_path.as_mut().unwrap().flatness = 1.5;
+    let legacy_edit = export(&legacy, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let legacy_2999 = craft_psd::PsdFile::from_bytes(&legacy_edit).unwrap().resources.into_iter().find(|r| r.id == 2999).unwrap();
+    assert_eq!(legacy_2999.data, b"\x07Outline\x00\x01\x80\x00");
 }
 
 #[test]

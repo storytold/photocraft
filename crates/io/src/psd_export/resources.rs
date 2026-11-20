@@ -75,6 +75,40 @@ pub(crate) fn keep_imported_resource(doc: &Document, id: u16, data: &[u8]) -> bo
     true
 }
 
+/// Find an explicit flatness edit relative to the last matching imported resource, once per
+/// export. Import applies resources in order, so earlier duplicate resources cannot establish
+/// that the model changed.
+pub(crate) fn imported_clipping_flatness_edit(doc: &Document) -> Option<f32> {
+    let c = doc.clipping_path.as_ref()?;
+    let (_, _, data) = doc.metadata.psd_resources.iter().rfind(|(id, _, data)| {
+        *id == crate::vector_map::CLIPPING_PATH && craft_psd::path::clipping_path_name(data).is_some_and(|name| c.name == String::from_utf8_lossy(name))
+    })?;
+    (c.flatness != crate::vector_map::clipping_flatness(data)).then_some(c.flatness)
+}
+
+/// Copy a kept resource for export. An edit to clipping flatness must not discard the original
+/// Pascal name, fill-rule bytes or any other trailing bytes in the resource.
+pub(crate) fn imported_resource_data(id: u16, data: &[u8], clipping_flatness: Option<f32>) -> Vec<u8> {
+    let mut out = data.to_vec();
+    if id == crate::vector_map::CLIPPING_PATH
+        && let Some(flatness) = clipping_flatness
+        && let Some(start) = crate::vector_map::clipping_flatness_offset(data)
+    {
+        // Use the shared writer's representation. An empty name leaves one Pascal length byte.
+        let encoded = craft_psd::path::clipping_path_resource("", flatness);
+        if let Some(field) = encoded.get(1..5) {
+            if let Some(target) = out.get_mut(start..start + 4) {
+                target.copy_from_slice(field);
+            } else {
+                // On editing a legacy name-only resource, supply its missing field.
+                out.truncate(start);
+                out.extend_from_slice(field);
+            }
+        }
+    }
+    out
+}
+
 /// A document-level (global) tagged block. Photoshop pads these to a multiple of 4, and readers
 /// such as psd-tools step to the next block that way: an even pad after `CAI ` (77 bytes)
 /// misaligned every block after it (#200).
