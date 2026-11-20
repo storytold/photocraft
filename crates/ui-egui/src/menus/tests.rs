@@ -1,7 +1,7 @@
-use photocraft_engine::color_cmds::ColorExt;
 use super::items::row;
 use super::*;
 use craft::menu::{THEME_COMMAND, ThemeChoice};
+use photocraft_engine::color_cmds::ColorExt;
 
 #[test]
 fn live_lookup_finds_engine_and_shell_commands() {

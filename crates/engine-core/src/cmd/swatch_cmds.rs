@@ -132,8 +132,12 @@ fn swatch_json(conv: &SwatchConv, sw: &SwatchEntry) -> Value {
 
 fn list(s: &mut Session, _: &Value) -> Result<Value> {
     let conv = SwatchConv::new(s);
-    let groups: Vec<Value> =
-        s.presets().swatches.iter().map(|g| json!({"name": g.name, "swatches": g.entries.iter().map(|sw| swatch_json(&conv, sw)).collect::<Vec<_>>()})).collect();
+    let groups: Vec<Value> = s
+        .presets()
+        .swatches
+        .iter()
+        .map(|g| json!({"name": g.name, "swatches": g.entries.iter().map(|sw| swatch_json(&conv, sw)).collect::<Vec<_>>()}))
+        .collect();
     Ok(json!({"groups": groups, "count": total(&s.presets().swatches)}))
 }
 

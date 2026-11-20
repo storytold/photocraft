@@ -7,10 +7,10 @@
 //! concurrent test could flatten one document under two settings. Keep any other test that
 //! changes the spot dot gain in this file.
 
-use photocraft_engine::prefs::SavedPrefsExt;
-use photocraft_engine::color_cmds::ColorExt;
 use photocraft_compose::multichannel::{SPOT_DOT_GAIN, spot_dot_gain};
 use photocraft_engine::Session;
+use photocraft_engine::color_cmds::ColorExt;
+use photocraft_engine::prefs::SavedPrefsExt;
 use serde_json::json;
 
 /// A Multichannel document with one transparent black ink at 50 %.

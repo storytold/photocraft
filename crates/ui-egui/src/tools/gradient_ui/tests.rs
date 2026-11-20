@@ -1,6 +1,6 @@
-use photocraft_engine::presets::PresetsExt;
 use super::*;
 use crate::canvas::ToolEvent;
+use photocraft_engine::presets::PresetsExt;
 
 fn app_with_gradient(style: &str) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());

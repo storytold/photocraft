@@ -1,6 +1,6 @@
-use crate::color_cmds::ColorExt;
 use super::paths::{file_name, read_file, stem, template_name};
 use super::{Arc, Document, EngineError, Layer, LayerContent, LayerId, PixelFormat, PlaceSteps, Result, Session, Value, json, str_param};
+use crate::color_cmds::ColorExt;
 
 /// Replace only the file choice before either authorization gate; malformed params stay invalid.
 pub(crate) fn batch_open_params(s: &Session, id: &str, params: &Value) -> Option<Value> {

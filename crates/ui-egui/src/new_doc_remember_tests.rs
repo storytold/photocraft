@@ -2,14 +2,14 @@
 //! clipboard image's size still taking priority. Also the hosted dialog's test harness, which the
 //! New Document tests share.
 
-use photocraft_engine::prefs::SavedPrefsExt;
-use photocraft_engine::presets::PresetsExt;
 use craft::behavior::PixelSize;
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{BackgroundContents, BitDepth, ColorMode, DocumentOptions};
 use craft::ui::runtime::env::UnitKind;
 use egui::vec2;
 use egui_kittest::Harness;
+use photocraft_engine::prefs::SavedPrefsExt;
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;

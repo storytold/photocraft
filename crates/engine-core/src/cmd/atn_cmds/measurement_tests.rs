@@ -1,9 +1,9 @@
 //! #10723: Image › Analysis › Set Measurement Scale › Custom steps, recorded as a Set of the
 //! document's `measurementScale` property (`docs/atn.md`, "Recorded through the menus").
 
-use crate::actions_cmds::ActionsExt;
 use super::*;
 use crate::actions_cmds::ActionStep;
+use crate::actions_cmds::ActionsExt;
 
 const SET_SCALE: &str = "image.analysis.setMeasurementScale";
 const SOURCE: &str = "_atnMeasurementScaleDescriptor";

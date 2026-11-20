@@ -3,10 +3,10 @@
 //! selected) and its commands. How the panel draws and edits a colour is `ColorPanel`'s, covered
 //! in craft-color.
 
-use photocraft_engine::presets::PresetsExt;
 use egui::{Modifiers, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use photocraft_engine::presets::PresetsExt;
 use serde_json::json;
 
 use craft::color_ui::ui::{ColorPanelCommand, ColorPanelMode, ColorPanelRamp};

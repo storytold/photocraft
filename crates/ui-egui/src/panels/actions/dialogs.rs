@@ -1,10 +1,10 @@
 //! New Set…, Insert Stop… and the Stop message: the Actions panel's own dialogs.
 
-use photocraft_engine::actions_cmds::ActionsExt;
 use craft::automation::ui::actions::ActionSelection;
 use craft::ui::contract::Bind;
 use craft::ui::dialog::{DialogId, DialogResult, PromptAnswer, PromptChoice, StandardPrompt};
 use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamDialog, ParamKind, ParamResult};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{actions_cmds, actions_edit_cmds, atn_cmds};
 use serde_json::{Value, json};
 

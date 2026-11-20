@@ -1,8 +1,8 @@
 //! #13853: Fit Image opens with the width, height and Don't Enlarge it last ran with (OK, or a
 //! run without the dialog), not the document's size; Cancel stores nothing.
 
-use photocraft_engine::prefs::SavedPrefsExt;
 use craft::ui::dialog::DialogId;
+use photocraft_engine::prefs::SavedPrefsExt;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;

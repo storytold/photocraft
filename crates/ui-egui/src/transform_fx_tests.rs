@@ -2,9 +2,9 @@
 //! canvas: at every bit depth and colour mode, for pixel layers and groups, following edits made
 //! while the box is open, and matching what the commit leaves.
 
-use photocraft_engine::color_cmds::ColorExt;
 use egui::ColorImage;
 use photocraft_doc::{Layer, LayerId};
+use photocraft_engine::color_cmds::ColorExt;
 use serde_json::json;
 
 use crate::PhotocraftApp;

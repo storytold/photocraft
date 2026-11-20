@@ -8,8 +8,8 @@
 //! Import/Replace (`.aco`, `.act`, `.ase`), Export (`.aco`) and Export for Exchange (`.ase`) and Reset. The panel
 //! reports `SwatchEdit`s; [`apply_edit`] maps each to one `swatches.*` engine command.
 
-use photocraft_engine::presets::PresetsExt;
 use photocraft_engine::color_cmds::ColorExt;
+use photocraft_engine::presets::PresetsExt;
 use std::ffi::OsStr;
 
 use serde_json::{Value, json};

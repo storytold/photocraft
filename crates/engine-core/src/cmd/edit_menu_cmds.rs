@@ -5,8 +5,8 @@
 //! Check Spelling is not implemented: it needs a word list per language, and no permissively
 //! licensed dictionary small enough to bundle (or a pure-Rust checker with one) was available.
 
-use crate::presets::PresetsExt;
 use crate::preset_store::PresetStoreExt;
+use crate::presets::PresetsExt;
 use photocraft_color::{BlendMode, PixelFormat};
 use photocraft_doc::vector::Path;
 use photocraft_doc::{Document, Layer, LayerContent, LayerId};

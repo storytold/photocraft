@@ -1,6 +1,6 @@
 //! #7671: exported Stroke widths must have the same effect as command execution.
-use photocraft_engine::actions_cmds::ActionsExt;
 use craft_psd::{atn, descriptor::Value as D};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::actions_cmds::{Action, ActionList, ActionStep, ActionsFile};
 use photocraft_engine::{Session, atn_cmds};
 use serde_json::{Value, json};

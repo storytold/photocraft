@@ -12,8 +12,8 @@ fn ico_export_is_available_and_rejects_oversize_output() {
     assert_eq!((resized.size.width, resized.size.height), (150, 100));
 }
 
-use photocraft_engine::color_cmds::ColorExt;
 use super::*;
+use photocraft_engine::color_cmds::ColorExt;
 
 use craft::ui::runtime::memory::set_saved_value;
 use egui_kittest::Harness;

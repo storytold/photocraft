@@ -1,7 +1,6 @@
 //! The Clone Source panel: five source slots, the slot's offset, scale, rotation and flips, and the overlay options.
 //! Every edit is a `cloneSource.*` engine command.
 
-use photocraft_engine::presets::PresetsExt;
 use craft::behavior::{EditEvent, GestureId, Mixed};
 use craft::ui::buttons::{Button, ToggleButton};
 use craft::ui::choice::Checkbox;
@@ -11,6 +10,7 @@ use craft::ui::form::{Field, FieldGroup, SliderField};
 use craft::ui::pickers::Select;
 use craft::ui::runtime::env::UnitKind;
 use craft::ui::text::{LinkedFields, NumberField};
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 
 use super::run;

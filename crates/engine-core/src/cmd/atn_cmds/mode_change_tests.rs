@@ -2,9 +2,9 @@
 //! reference application: class `cjsp`, then `Msge`, `SrcM` (`Cndn` per ticked source mode) and
 //! `DstM` (the target mode's object).
 
-use crate::actions_cmds::ActionsExt;
 use super::stylize_tests::{load_items, saved_items};
 use super::*;
+use crate::actions_cmds::ActionsExt;
 use photocraft_color::ColorMode;
 
 const EVENT: &str = "8cba8cd6-cb66-11d1-bc43-0060b0a13dc4";

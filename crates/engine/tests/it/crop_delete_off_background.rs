@@ -2,8 +2,8 @@
 //! Photoshop does: it keeps the pixels past the canvas, and an extension is transparent on every
 //! layer. Delete on keeps the Background, and Image › Reveal All is unchanged (#10867).
 
-use photocraft_engine::actions_cmds::ActionsExt;
 use craft_psd::{atn, descriptor::Value as D};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::actions_cmds::{Action, ActionList, ActionStep, ActionsFile};
 use photocraft_engine::{EngineError, Session, atn_cmds};
 use photocraft_geom::Rect;

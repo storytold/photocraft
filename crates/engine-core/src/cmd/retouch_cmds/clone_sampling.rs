@@ -1,6 +1,6 @@
 //! Resolve and freeze a clone source without changing the sampled document.
-use crate::presets::PresetsExt;
 use crate::color_cmds::ColorExt;
+use crate::presets::PresetsExt;
 use std::sync::Arc;
 
 use crate::presets::clone_source::uses_slot;

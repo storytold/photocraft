@@ -1,10 +1,10 @@
 //! #10723: File › Automate › Fit Image steps, the script event measured in the reference
 //! application: class `cjsp`, then `Msge`, `Hght` and `Wdth` in pixels, `limit` (Don't Enlarge).
 
-use crate::actions_cmds::ActionsExt;
 use super::steps_automate::{FIT_IMAGE, FIT_IMAGE_EVENT};
 use super::*;
 use crate::actions_cmds::ActionStep;
+use crate::actions_cmds::ActionsExt;
 
 const SOURCE: &str = "_atnFitImageDescriptor";
 

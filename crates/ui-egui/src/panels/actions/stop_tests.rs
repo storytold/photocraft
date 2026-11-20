@@ -2,10 +2,10 @@
 //! and Stop; with the toggle off it ends the playback without a word; a pause inside a called
 //! action continues into its callers. Behaviour measured in the reference application
 //! (2026-11-05).
-use photocraft_engine::actions_cmds::ActionsExt;
 use super::*;
 use craft::ui::dialog::{DialogId, StandardPrompt};
 use photocraft_engine::actions_cmds::ActionStep;
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::atn_cmds::STOP_MESSAGE;
 
 const MESSAGE: &str = "Check the mask before continuing";

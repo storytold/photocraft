@@ -263,9 +263,7 @@ pub fn rgb_printers(s: &Session) -> RgbPrinters {
 /// Lists printers when the spooler is available. While it is busy, returns the cached list for
 /// the same source, or `Unsupported` if that source has no cached list.
 pub fn rgb_printers_without_waiting(s: &Session) -> RgbPrinters {
-    try_with_spooler(|| list_rgb_printers(s))
-        .or_else(|| last(&LAST_RGB_PRINTERS, s.printer_source()))
-        .unwrap_or(Err(craft_print::rgb::PrintError::Unsupported))
+    try_with_spooler(|| list_rgb_printers(s)).or_else(|| last(&LAST_RGB_PRINTERS, s.printer_source())).unwrap_or(Err(craft_print::rgb::PrintError::Unsupported))
 }
 
 /// Lists printers for the Print dialog. While the system spooler is busy, returns the cached

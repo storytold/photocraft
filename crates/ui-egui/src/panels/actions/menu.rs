@@ -1,9 +1,9 @@
 //! The Actions panel's menu: the rows the app offers, their states and the commands they fire.
 
-use photocraft_engine::actions_cmds::ActionsExt;
 use craft::automation::ui::actions::{ActionsMenuAction, ActionsMenuFacts, ActionsPanelCommands};
 use craft::ui::menu::PanelRow;
 use craft::ui::runtime::commands::{CommandRef, CommandSet as _, CommandState};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::actions_edit_cmds;
 
 use crate::PhotocraftApp;

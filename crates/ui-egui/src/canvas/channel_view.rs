@@ -12,11 +12,11 @@
 //! grayscale values instead. The canvas draws it as a raster source (`raster_source::ChannelOverlay`),
 //! which redraws only the damage of each change.
 
-use photocraft_engine::color_cmds::ColorExt;
 use egui::Color32;
 use photocraft_color::PixelFormat;
 use photocraft_doc::{AlphaChannel, ColorMode, Document};
 use photocraft_engine::channel_cmds::{ChannelView, color_count};
+use photocraft_engine::color_cmds::ColorExt;
 use photocraft_engine::mask_view_cmds::MaskViewMode;
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba, to_rgba};

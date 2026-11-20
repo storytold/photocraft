@@ -1,6 +1,5 @@
 //! Shape toolbar edits share the engine commands used by the Properties panel.
 
-use photocraft_engine::presets::PresetsExt;
 use craft::behavior::{EditEvent, Mixed};
 use craft::draw::stroke::StrokeStyle;
 use craft::draw::ui::shape::{ShapeAppearance, ShapeBar, ShapeChange, ShapePaint, ShapeToolSettings, VectorMode};
@@ -11,6 +10,7 @@ use craft::ui::dialog::{Alert, HostedAlert};
 use craft::ui::display::Divider;
 use craft::ui::runtime::env::Env;
 use photocraft_doc::{Fill, LayerContent};
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;

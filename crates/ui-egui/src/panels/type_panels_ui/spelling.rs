@@ -198,9 +198,9 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 #[cfg(test)]
 mod tests {
-    use photocraft_engine::actions_cmds::ActionsExt;
     use craft::ui::dialog::StackDialog as _;
     use photocraft_engine::actions_cmds::ActionStep;
+    use photocraft_engine::actions_cmds::ActionsExt;
 
     use super::*;
 

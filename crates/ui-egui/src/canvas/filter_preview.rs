@@ -1,8 +1,8 @@
-use photocraft_engine::color_cmds::ColorExt;
 use craft::imaging::ui::live_preview::{PreviewSession, settings_hash};
 use craft::ui::canvas::PixelRect;
 use craft::ui::dialog::StackDialog as _;
 use craft::ui::patterns::form_dialogs::HostedParamDialog;
+use photocraft_engine::color_cmds::ColorExt;
 
 use super::display::canvas_display;
 use super::textures::texture_buffer;

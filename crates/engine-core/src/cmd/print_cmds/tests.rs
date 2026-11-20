@@ -1,5 +1,5 @@
-use crate::print_cmds::PrintExt;
 use super::*;
+use crate::print_cmds::PrintExt;
 use photocraft_doc::{Knot, NamedPath, Path, Subpath};
 
 /// Compares signed-offset layout with actual PDF image operators and whole-page mirroring

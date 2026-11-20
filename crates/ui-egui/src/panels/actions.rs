@@ -6,11 +6,11 @@
 //! keeps the panel's state, maps its events to engine commands ([`apply_actions_events`]) and holds
 //! the selection rules Batch, Droplet and Play share.
 
-use photocraft_engine::actions_cmds::ActionsExt;
 use craft::automation::ui::actions::{
     ActionMove, ActionPlace, ActionSelection, ActionsEvent, ActionsPanel, ActionsPanelState, ActionsSettings, DIALOG_COLUMN, INCLUDE_COLUMN,
 };
 use craft::ui::contract::{SweepStep, ToggleEdit};
+use photocraft_engine::actions_cmds::ActionsExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 

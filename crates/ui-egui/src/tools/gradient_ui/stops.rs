@@ -6,13 +6,13 @@
 //! unchanged stop its document `Color` back: CMYK and Lab stops stay in their model. A preset stop's tag is 1 for the
 //! live foreground colour and 2 for the background.
 
-use photocraft_engine::color_cmds::ColorExt;
 use craft::behavior::kurbo::Vec2;
 use craft::color_ui::ui::gradient::{ColorStop, GradientStops, OpacityStop};
 use craft::draw::ui::gradient::{GradientFill, GradientStyle};
 use craft::theme::Srgba;
 use photocraft_compose::gradient_fill as gf;
 use photocraft_doc::{Color, Fill, GradientStyle as DocStyle};
+use photocraft_engine::color_cmds::ColorExt;
 use photocraft_engine::gradient_fill_cmds as cmds;
 use photocraft_engine::presets::gradients::{GradientPreset, StopColor};
 use serde_json::{Value, json};

@@ -1,4 +1,3 @@
-use photocraft_engine::actions_cmds::ActionsExt;
 use super::dialogs::params_for;
 use super::*;
 use crate::menus::{invoke as menu, is_live, menu_rows, row};
@@ -6,6 +5,7 @@ use craft::automation::actions::{Action, ActionStep};
 use craft::automation::ui::actions::ActionSelection;
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{HostedParamDialog, ParamKind};
+use photocraft_engine::actions_cmds::ActionsExt;
 
 fn app_with(n: usize) -> (Box<PhotocraftApp>, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());

@@ -62,8 +62,8 @@ mod tablet;
 mod ui_state;
 mod window_frame;
 
-use photocraft_engine::print_cmds::PrintExt;
 use photocraft_engine::Session;
+use photocraft_engine::print_cmds::PrintExt;
 use photocraft_ui_egui::PhotocraftApp;
 use photocraft_ui_egui::Prefix;
 use photocraft_ui_egui::window_policy::{self, Backend, Frame, TitleBarPref};

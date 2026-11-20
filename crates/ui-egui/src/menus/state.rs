@@ -1,6 +1,6 @@
-use photocraft_engine::color_cmds::ColorExt;
 use super::invoke::{panel_alias, proof_preset, workspace_id};
 use super::{DOCUMENT_ITEM, PhotocraftApp, Value};
+use photocraft_engine::color_cmds::ColorExt;
 
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     // Shortcut-only: the tool host owns presses during a gesture.

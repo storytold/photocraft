@@ -1,11 +1,11 @@
-use photocraft_engine::presets::PresetsExt;
-use photocraft_engine::color_cmds::ColorExt;
 use super::document_display::{CanvasHost, active_view};
 use super::*;
 use craft::behavior::canvas::ZoomLadder;
 use craft::behavior::kurbo::Size;
 use craft::ui::canvas::{PixelRect, RasterSource};
 use craft::ui::primitives::Revision;
+use photocraft_engine::color_cmds::ColorExt;
+use photocraft_engine::presets::PresetsExt;
 
 #[test]
 fn display_image_matches_egui_unmultiplied_conversion() {

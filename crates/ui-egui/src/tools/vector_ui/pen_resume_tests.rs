@@ -1,9 +1,9 @@
 //! Undo back to where a Pen path was finished gives the path back to the Pen, and Redo finishes
 //! it again (`pen_resume`).
 
-use photocraft_engine::actions_cmds::ActionsExt;
 use super::*;
 use crate::canvas::testing;
+use photocraft_engine::actions_cmds::ActionsExt;
 
 fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());

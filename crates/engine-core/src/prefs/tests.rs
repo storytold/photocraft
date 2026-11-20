@@ -1,6 +1,6 @@
-use crate::prefs::SavedPrefsExt;
-use crate::color_cmds::ColorExt;
 use super::*;
+use crate::color_cmds::ColorExt;
+use crate::prefs::SavedPrefsExt;
 
 #[test]
 fn system_title_bar_defaults_to_integrated_and_preserves_saved_choices() {

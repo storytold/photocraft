@@ -1,7 +1,7 @@
 //! Free Transform of several selected layers by one box (#6501).
 
-use crate::actions_cmds::ActionsExt;
 use super::*;
+use crate::actions_cmds::ActionsExt;
 
 /// A 200 x 200 document: a red 40 x 20 block on "Paint" (x 10..50, y 10..30) and a type layer
 /// over it, both selected, the type layer active (as after creating it and ⌘-clicking Paint).

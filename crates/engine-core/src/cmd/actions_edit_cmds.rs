@@ -95,7 +95,8 @@ fn insert(s: &mut Session, p: &Value) -> Result<Value> {
     if id == "actions.play" {
         // Refuse the one cycle visible here; deeper ones are caught at playback.
         let target = params.get("action");
-        let is_self = target.and_then(Value::as_str) == Some(s.actions().list.actions()[idx].name.as_str()) || target.and_then(Value::as_u64) == Some(idx as u64);
+        let is_self =
+            target.and_then(Value::as_str) == Some(s.actions().list.actions()[idx].name.as_str()) || target.and_then(Value::as_u64) == Some(idx as u64);
         if is_self {
             return Err(bad(cmd, "an action cannot play itself"));
         }

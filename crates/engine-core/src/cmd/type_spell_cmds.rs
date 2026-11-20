@@ -312,9 +312,9 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests {
-    use crate::actions_cmds::ActionsExt;
     use super::*;
     use crate::actions_cmds::ActionStep;
+    use crate::actions_cmds::ActionsExt;
 
     #[test]
     fn char_offsets_matches_per_offset_counting() {

@@ -1,6 +1,6 @@
+use super::*;
 use crate::prefs::SavedPrefsExt;
 use crate::presets::PresetsExt;
-use super::*;
 use craft_psd::aco::{AcoColor, AcoSwatch};
 use craft_psd::ase::{AseColor, AseEntry, AseFile, AseKind, AseSwatch};
 use photocraft_paint::tile::{b64_decode, b64_encode};

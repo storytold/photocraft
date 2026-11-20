@@ -1,5 +1,5 @@
-use crate::presets::PresetsExt;
 use super::*;
+use crate::presets::PresetsExt;
 use photocraft_color::ColorMode;
 
 const DEPTHS: [u64; 3] = [8, 16, 32];

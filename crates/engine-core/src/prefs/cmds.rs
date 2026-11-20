@@ -1,7 +1,7 @@
-use crate::color_cmds::ColorExt;
 use super::customize::{keyboard_shortcuts, menus};
 use super::validate::{SECTIONS, get_path, keyed};
 use super::{CommandSpec, EngineError, Map, Result, Session, ToolbarCustomization, Value, json};
+use crate::color_cmds::ColorExt;
 
 // ------------------------------------------------------------------ commands
 

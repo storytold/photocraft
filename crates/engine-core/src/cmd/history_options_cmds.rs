@@ -199,8 +199,8 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests {
-    use crate::prefs::SavedPrefsExt;
     use super::*;
+    use crate::prefs::SavedPrefsExt;
     use serde_json::json;
 
     fn entries(s: &Session) -> Vec<String> {

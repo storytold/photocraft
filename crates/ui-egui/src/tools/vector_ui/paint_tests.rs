@@ -1,5 +1,4 @@
 //! Pointer, keyboard, colour precision and history regressions for shape appearance controls.
-use photocraft_engine::presets::PresetsExt;
 use super::*;
 use crate::shape_options::set_tool_paint;
 use crate::shape_paint_ui::color_of;
@@ -13,6 +12,7 @@ use egui_kittest::{
     kittest::{NodeT, Queryable},
 };
 use photocraft_doc::ShapeLayer;
+use photocraft_engine::presets::PresetsExt;
 
 fn app(mode: &str, depth: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());

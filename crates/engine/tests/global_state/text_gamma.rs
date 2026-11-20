@@ -8,8 +8,8 @@
 //! with the one after its undo, and failed on Windows CI that way). Keep any other test that
 //! changes the gamma in this file.
 
-use photocraft_engine::color_cmds::ColorExt;
 use photocraft_engine::Session;
+use photocraft_engine::color_cmds::ColorExt;
 use serde_json::json;
 
 #[test]

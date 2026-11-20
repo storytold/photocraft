@@ -1,11 +1,11 @@
 //! The measured Smart Object Stack Mode events retain their descriptor and native behavior.
 
-use photocraft_engine::actions_cmds::ActionsExt;
 use craft_psd::{
     atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem},
     descriptor::{Class, Descriptor, Id, UnicodeString, Value as D},
 };
 use photocraft_doc::{Group, Layer, LayerContent, StackMode};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionList, ActionStep, ActionsFile},

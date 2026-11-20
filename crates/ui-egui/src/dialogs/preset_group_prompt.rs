@@ -11,8 +11,8 @@
 //! `ui.inspect` shows it, `ui.dialog.confirm` imports as a new group, `ui.dialog.set` with
 //! `"choice": "alternate"` then `ui.dialog.confirm` replaces, and `ui.dialog.cancel` imports nothing.
 
-use photocraft_engine::presets::PresetsExt;
 use craft::ui::dialog::{PromptAnswer, PromptChoice, StandardPrompt};
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 
 use super::alerts;

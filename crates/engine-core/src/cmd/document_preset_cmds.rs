@@ -405,8 +405,8 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests {
-    use crate::prefs::SavedPrefsExt;
     use super::*;
+    use crate::prefs::SavedPrefsExt;
 
     fn settings() -> Value {
         json!({"width":16,"height":24,"resolution":254.5,"mode":"lab","depth":16,

@@ -3,7 +3,6 @@
 //! Mismatch prompt at a time, naming its file, before that file opens; OK opens it and asks about
 //! the next; Cancel opens neither it nor the files still to come.
 
-use photocraft_engine::color_cmds::ColorExt;
 use crate::{PhotocraftApp, Services};
 use craft::color_ui::ui::ProfileMismatchDialog;
 use craft::ui::dialog::DialogId;
@@ -11,6 +10,7 @@ use egui::vec2;
 use egui_kittest::Harness;
 use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
 use photocraft_engine::Session;
+use photocraft_engine::color_cmds::ColorExt;
 use serde_json::json;
 
 /// What the prompt's `action` field calls each choice.

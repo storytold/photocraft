@@ -1,6 +1,6 @@
-use crate::preset_store::PresetStoreExt;
-use crate::actions_cmds::ActionsExt;
 use super::*;
+use crate::actions_cmds::ActionsExt;
+use crate::preset_store::PresetStoreExt;
 use serde_json::json;
 
 /// An `ActionList` holding `actions` in order.
@@ -238,7 +238,10 @@ fn rename_follows_conditional_branches() {
 fn delete_action_drops_its_function_key_but_deleting_a_step_keeps_it() {
     let mut s = crate::session();
     let key = format!("{PLAY_SHORTCUT_PREFIX}Action 1");
-    s.actions_mut().list.push(Action::new("Action 1", vec![ActionStep::new("layer.new.layer", json!({})), ActionStep::new("layer.new.layer", json!({}))])).unwrap();
+    s.actions_mut()
+        .list
+        .push(Action::new("Action 1", vec![ActionStep::new("layer.new.layer", json!({})), ActionStep::new("layer.new.layer", json!({}))]))
+        .unwrap();
     s.edit_prefs(|p| p.shortcuts.insert(key.clone(), "F2".into()));
     s.execute("actions.delete", json!({"action": 0, "step": 0})).unwrap();
     assert_eq!(s.prefs().shortcuts.get(&key).map(String::as_str), Some("F2"), "deleting a step keeps the key");

@@ -1,5 +1,5 @@
-use crate::actions_cmds::ActionsExt;
 use super::*;
+use crate::actions_cmds::ActionsExt;
 use crate::actions_cmds::{ActionList, ActionStep, ActionsFile};
 
 /// PhotoCraft's own roundtrip accepts a combined Set, but Photoshop applies only its rename.

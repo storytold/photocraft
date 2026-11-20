@@ -1,6 +1,6 @@
 //! Public playback history semantics, independent of the Actions panel implementation.
-use photocraft_engine::prefs::SavedPrefsExt;
 use photocraft_engine::actions_cmds::ActionsExt;
+use photocraft_engine::prefs::SavedPrefsExt;
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionList, ActionStep, ActionsFile},
@@ -522,7 +522,8 @@ fn again_copy_failure_preserves_the_completed_prefix() {
     s.execute("layer.setProps", json!({"locks":{"position":true}})).unwrap();
     let before = s.active().unwrap().doc.clone();
     let count = s.active().unwrap().history.past_len();
-    s.actions_mut().list = only("Prefix", vec![("layer.renameLayer".into(), json!({"name":"Completed prefix"})), ("edit.transform.againCopy".into(), json!({}))]);
+    s.actions_mut().list =
+        only("Prefix", vec![("layer.renameLayer".into(), json!({"name":"Completed prefix"})), ("edit.transform.againCopy".into(), json!({}))]);
     let result = s.execute("actions.play", json!({"action":0})).unwrap();
     assert_eq!(result["failed"]["step"], 1, "{result}");
     let after = s.active().unwrap().doc.clone();

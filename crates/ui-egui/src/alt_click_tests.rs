@@ -1,9 +1,9 @@
 //! ⌥-click through the real canvas: the Brush's temporary Eyedropper (#1659) and the Clone
 //! Stamp's source point and painting (#1658), the Zoom tool's Zoom Out (#3137).
 
-use photocraft_engine::presets::PresetsExt;
 use egui::{Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
+use photocraft_engine::presets::PresetsExt;
 use serde_json::json;
 
 use crate::PhotocraftApp;

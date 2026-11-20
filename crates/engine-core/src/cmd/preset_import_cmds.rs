@@ -12,8 +12,8 @@
 //!
 //! [`BrushSettings`]: photocraft_paint::BrushSettings
 
-use crate::presets::PresetsExt;
 use crate::preset_store::PresetStoreExt;
+use crate::presets::PresetsExt;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;

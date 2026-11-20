@@ -2,7 +2,6 @@
 //! framework's `PresetBrowser` and `PresetPicker`. Rows come from a panel's groups in the panel's folder order; the
 //! browser's events run as the panel's engine commands, through one mapping for every preset panel (`events`).
 
-use photocraft_engine::presets::PresetsExt;
 use craft::color_ui::ui::gradient::GradientRamp;
 use craft::keymap::CommandRef;
 use craft::theme::Srgba;
@@ -19,6 +18,7 @@ use craft::ui::primitives::textures::TextureCache;
 use craft::ui::runtime::commands::{CommandSet as _, CommandState};
 use craft::ui::tile_grid::TileZoom;
 use egui::{Color32, ColorImage, Pos2, Rect, pos2};
+use photocraft_engine::presets::PresetsExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 

@@ -1,10 +1,10 @@
-use crate::color_cmds::ColorExt;
-use crate::actions_cmds::ActionsExt;
 use super::open::import_at_raw_ppi;
 use super::paths::{extension, file_name, join, list_files, list_images, read_file, sanitize, stem, write_file};
 use super::processing::parse_steps;
 use super::save::{SaveOpts, encode, save_doc, save_doc_as};
 use super::{Arc, Document, EngineError, Result, Session, Value, batch_naming, json, str_param};
+use crate::actions_cmds::ActionsExt;
+use crate::color_cmds::ColorExt;
 
 /// Inputs of a batch command: `"input"` is a folder or an array of files.
 pub(crate) fn batch_inputs(p: &Value, cmd: &str) -> Result<Vec<String>> {

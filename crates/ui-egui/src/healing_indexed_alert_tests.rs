@@ -2,8 +2,8 @@
 //! reference application's alert with OK and change neither the clone source, the pixels nor the
 //! History. RGB documents keep healing, and the Clone Stamp (not measured) keeps setting its source.
 
-use photocraft_engine::presets::PresetsExt;
 use egui::Modifiers;
+use photocraft_engine::presets::PresetsExt;
 use serde_json::json;
 
 use super::tests::{app, stripes};

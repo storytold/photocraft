@@ -2,9 +2,9 @@
 //! drag one step) and never reach the document under the open box; and the
 //! handles have a generous grab radius, so a press just off a corner scales instead of rotating.
 
-use photocraft_engine::actions_cmds::ActionsExt;
 use egui::{Key, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
+use photocraft_engine::actions_cmds::ActionsExt;
 use serde_json::json;
 
 use crate::PhotocraftApp;

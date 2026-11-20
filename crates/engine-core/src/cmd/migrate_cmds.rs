@@ -82,8 +82,8 @@ pub fn specs() -> Vec<crate::commands::CommandSpec> {
 
 #[cfg(test)]
 mod tests {
-    use crate::prefs::SavedPrefsExt;
     use super::*;
+    use crate::prefs::SavedPrefsExt;
 
     #[test]
     fn merges_new_groups_only() {
