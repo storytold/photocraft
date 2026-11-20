@@ -92,6 +92,40 @@ pub(super) fn default_style_params(app: &PhotocraftApp) -> serde_json::Value {
     p
 }
 
+/// The `type.create` keys a new Type Mask takes from the document's active text layer (#12077):
+/// the font, style and size the options bar shows for that layer, so the mask starts in the same
+/// type settings instead of the tool's fresh defaults. Measured is only a click (not a paragraph
+/// box) with the Horizontal Type Mask over a horizontal text layer, so any other active layer
+/// gives `None` and today's tool options apply. The colour stays the foreground colour, as the
+/// rest of the create parameters do.
+pub(super) fn mask_style_from_active_layer(app: &PhotocraftApp) -> Option<serde_json::Value> {
+    let st = app.session.active()?;
+    let t = text_layer(&st.doc, st.active_layer?)?;
+    if t.orientation != photocraft_doc::text::Orientation::Horizontal {
+        return None;
+    }
+    // The same first run the options bar names the layer by (`bar_character_values`), at the same
+    // shown size: a 12 pt layer scaled 200 % shows 24 pt. Only reached with no type session open,
+    // where `shown_scale` reads this very layer.
+    let c = t.char_runs().into_iter().next()?.style;
+    let mut p = json!({});
+    // An empty name is the layer's placeholder for the default family, not a name to hand to
+    // `type.create`: the key is only taken when the layer names one.
+    if !c.font_family.is_empty() {
+        p["font"] = json!(c.font_family);
+    }
+    if !c.font_style.is_empty() {
+        p["fontStyle"] = json!(c.font_style);
+    }
+    let size = json!(c.size_pt * shown_scale(app));
+    // A size the document carries that is not a finite number stays out, so the tool's own size
+    // applies, as it does today.
+    if finite_style_value(&size) {
+        p["size"] = size;
+    }
+    Some(p)
+}
+
 /// Style numbers become f32 in the engine. JSON itself permits finite f64 values too large
 /// for that conversion; a hand-edited setting must not inject infinity into a new layer.
 /// Style collections (features, axes, colour) contain only scalar values, so no recursion.
