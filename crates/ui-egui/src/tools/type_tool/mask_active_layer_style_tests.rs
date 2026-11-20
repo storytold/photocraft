@@ -241,7 +241,8 @@ fn an_empty_active_text_layer_gives_its_style_too() {
 
 /// Not measured: which settings besides the size are taken over. Only the bar's font, style and
 /// size move to the mask - the active layer's leading, tracking, baseline shift and underline do
-/// not. Guard test: passes before and after the change.
+/// not. Red before the change like the takeover itself: its last line names the three keys that
+/// move over.
 #[test]
 fn a_mask_takes_no_other_character_settings_from_the_layer() {
     let mut app = new_app();
