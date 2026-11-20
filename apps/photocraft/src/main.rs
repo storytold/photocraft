@@ -108,8 +108,10 @@ fn automation_workspace_in(
     let mut workspace = flags.workspace()?;
     let mut warnings = Vec::new();
     let (read_given, write_given) = (!flags.automation_read_root.is_empty(), flags.automation_write_root.is_some());
-    // Looked up (and the default folder created) only for a direction no flag names.
-    let folders = if read_given && write_given { Default::default() } else { prefs.folders_with(default) };
+    // The default folder is created only when a direction no flag names has no folder of the
+    // person's own; otherwise it would be made and never used.
+    let needs_default = (!read_given && prefs.read_folder().is_none()) || (!write_given && prefs.write_folder().is_none());
+    let folders = prefs.folders_with(default.filter(|_| needs_default));
     for read in [true, false] {
         let given = if read { read_given } else { write_given };
         let Some(root) = (if read { folders.read.clone() } else { folders.write.clone() }).filter(|_| !given) else {
@@ -1112,8 +1114,14 @@ mod tests {
         let (ws, _) = super::automation_workspace_in(&flags(None, Some(&flag)), &empty, Some(&default)).unwrap();
         assert_eq!((ws.read_folders(), ws.write_folder()), (vec![default.clone()], Some(flag.clone())));
 
+        // A write flag and the person's own read folder leave nothing for the default: not created.
+        let unused = dir.join("unused");
         let mut own = empty.clone();
         own.read_root = flag.to_string_lossy().into_owned();
+        let (ws, _) = super::automation_workspace_in(&flags(None, Some(&flag)), &own, Some(&unused)).unwrap();
+        assert_eq!((ws.read_folders(), ws.write_folder()), (vec![flag.clone()], Some(flag.clone())));
+        assert!(!unused.exists(), "an unused default folder is not created");
+
         let (ws, _) = super::automation_workspace_in(&flags(None, None), &own, Some(&default)).unwrap();
         assert_eq!((ws.read_folders(), ws.write_folder()), (vec![flag.clone()], Some(default.clone())));
 
