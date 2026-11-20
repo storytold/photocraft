@@ -121,8 +121,11 @@ fn set_vars(s: &mut Session, f: impl FnOnce(&mut Variables)) -> Result<()> {
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     let mut doc = (*st.doc).clone();
     f(&mut doc.variables);
-    st.doc = Arc::new(doc);
+    *st.doc_mut() = Arc::new(doc);
     st.revision += 1;
+    st.record_unknown_damage();
+    st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+    st.record_damage();
     Ok(())
 }
 
@@ -278,9 +281,52 @@ fn apply_data_set(s: &mut Session, p: &Value) -> Result<Value> {
     let (set, idx) = resolve_set(s, p, "image.applyDataSet")?;
     let vars = s.active().ok_or(EngineError::NoDocument)?.doc.variables.clone();
     authorize_pixel_paths(s, &set)?;
-    s.edit("Apply Data Set", |doc, _| apply_to_doc(doc, &vars, &set))?;
+    // One history state named exactly "Apply Data Set", whatever the set is called (#14498).
+    let label = "Apply Data Set";
+    if replaces_locked_text(&s.active().ok_or(EngineError::NoDocument)?.doc, &vars, &set) {
+        // As in the reference application, nothing of the set is applied, but the attempt is
+        // still a history state (one that changes nothing), and the alert names no layer (#14499).
+        s.edit(label, |_, _| Ok(()))?;
+        return Err(EngineError::Other(DATA_SET_LAYER_LOCKED.into()));
+    }
+    s.edit(label, |doc, _| apply_to_doc(doc, &vars, &set))?;
     set_vars(s, |v| v.active = Some(idx))?;
     Ok(json!({"applied": set.name, "index": idx}))
+}
+
+/// The document as `image.applyDataSet {"index": index}` would leave it, built without touching the
+/// session: the Apply Data Set dialog's Preview (#14496). It reads replacement images as the
+/// command does (the same path gate, relative to the document) and fails as a whole, so a set
+/// that can't be applied never gives a partly applied preview.
+pub fn data_set_preview(s: &Session, index: usize) -> Result<Document> {
+    let (set, _) = resolve_set(s, &json!({"index": index}), "image.applyDataSet")?;
+    authorize_pixel_paths(s, &set)?;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let _authorization = crate::jobs::render_authorization_scope(s.authorize);
+    let _document = crate::doc_path::scope(st.path.as_deref().map(std::path::Path::new));
+    // The command refuses a set that replaces locked text and applies none of it (#14499).
+    if replaces_locked_text(&st.doc, &st.doc.variables, &set) {
+        return Err(EngineError::Other(DATA_SET_LAYER_LOCKED.into()));
+    }
+    let mut doc = (*st.doc).clone();
+    apply_to_doc(&mut doc, &st.doc.variables, &set)?;
+    Ok(doc)
+}
+
+/// The reference application's alert when Apply Data Set would replace the text of a layer
+/// under Lock All.
+pub const DATA_SET_LAYER_LOCKED: &str = "Could not apply data set because the layer is locked.";
+
+/// Whether `set` has a Text value for a type layer with its own Lock All. Visibility and Pixel
+/// Replacement values still apply to locked layers, as in the reference application; partial
+/// locks and a locked group were not measured and keep applying (#14499).
+fn replaces_locked_text(doc: &Document, vars: &Variables, set: &DataSet) -> bool {
+    set.values.iter().any(|dv| {
+        matches!(dv.value, VarValue::Text(_))
+            && vars.def(&dv.variable).is_some_and(|def| {
+                matches!(def.kind, VarKind::TextReplacement) && doc.layer(def.layer).is_some_and(|l| l.locks.all && matches!(l.content, LayerContent::Text(_)))
+            })
+    })
 }
 
 /// Resolve a data set from `{name}` or `{index}`.
@@ -333,7 +379,7 @@ pub fn import_data_sets_text(s: &mut Session, text: &str, p: &Value) -> Result<V
             let Some(cell) = cells.get(ci) else { continue };
             let Some(def) = vars.def(var) else { continue };
             let value = match def.kind {
-                VarKind::Visibility => VarValue::Visibility(matches!(cell.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "visible" | "on")),
+                VarKind::Visibility => VarValue::Visibility(cell.trim().eq_ignore_ascii_case("true")),
                 VarKind::PixelReplacement { .. } => VarValue::Pixels(cell.clone()),
                 VarKind::TextReplacement => VarValue::Text(cell.clone()),
             };
@@ -570,10 +616,15 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod import_history_tests;
 #[cfg(test)]
+mod import_visibility_tests;
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
 mod import_enabled_tests;
+
+#[cfg(test)]
+mod locked_text_layer_tests;
 
 #[cfg(test)]
 mod apply_history_name_tests;

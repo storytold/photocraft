@@ -372,8 +372,8 @@ fn the_brush_is_a_per_tool_option_that_presets_keep() {
     tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 5.0 }, Modifiers::NONE);
 }
 
-/// #10263: the Art History Brush starts at full opacity the first time it is picked, though it
-/// keeps the rest of the brush the old tool left (other tools still take its opacity).
+/// #10263: the Art History Brush starts at full opacity the first time it is picked, with its own
+/// tip rather than the old tool's (#12631; other tools still take its opacity).
 #[test]
 fn art_history_brush_starts_at_full_opacity() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -384,7 +384,7 @@ fn art_history_brush_starts_at_full_opacity() {
     app.ui.tool = Tool::ArtHistoryBrush;
     sync_tool_brush(&mut app);
     assert_eq!(app.session.tools.brush.opacity, 1.0, "Art History starts at 100%");
-    assert_eq!(app.session.tools.brush.size, 40.0, "and inherits the size");
+    assert_eq!(app.session.tools.brush.size, 21.0, "with its own 21 px tip");
     app.ui.tool = Tool::HistoryBrush;
     sync_tool_brush(&mut app);
     assert_eq!(app.session.tools.brush.opacity, 1.0, "the History Brush takes the Art History brush's opacity");
@@ -545,7 +545,7 @@ fn behind_and_clear_are_greyed_on_the_background_layer() {
         let doc = &h.state().session.active().unwrap().doc;
         (doc.layers[0].id, doc.layers[1].id)
     };
-    h.state_mut().session.active_mut().unwrap().active_layer = Some(bg);
+    h.state_mut().session.active_mut().unwrap().set_active_layer(Some(bg));
     for tool in [Tool::Brush, Tool::Pencil, Tool::PaintBucket] {
         open_tool_menu(&mut h, tool);
         assert!(!enabled(h.state(), Item::Clear), "{tool:?}");
@@ -562,7 +562,7 @@ fn behind_and_clear_are_greyed_on_the_background_layer() {
     }
     assert!(!enabled(h.state(), Item::Behind));
     // On a normal layer they are available again.
-    h.state_mut().session.active_mut().unwrap().active_layer = Some(top);
+    h.state_mut().session.active_mut().unwrap().set_active_layer(Some(top));
     assert!(enabled(h.state(), Item::Behind) && enabled(h.state(), Item::Clear));
 }
 

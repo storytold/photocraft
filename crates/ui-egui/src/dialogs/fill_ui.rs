@@ -17,7 +17,6 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 use crate::dialogs::blend_options::{blending_params, blending_rows};
 use crate::dialogs::params::{captured, open_param};
-use crate::panels::layers_tree::blend_key;
 
 /// The command of the dialog, which is also its dialog key.
 pub const COMMAND: &str = "edit.fill";
@@ -64,7 +63,7 @@ fn defaults(foreground: [f32; 3], first_pattern: Option<String>) -> DialogFields
         f.set("pattern", id);
     }
     f.set("colorAdaptation", true);
-    f.set("mode", blend_key(BlendMode::Normal));
+    f.set("mode", BlendMode::Normal.key().to_string());
     f.set("opacity", 100.0);
     f.set("preserveTransparency", false);
     f

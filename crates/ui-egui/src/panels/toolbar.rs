@@ -15,6 +15,9 @@ use photocraft_engine::prefs::ToolbarCustomization;
 use super::tool_commands;
 
 #[cfg(test)]
+#[path = "toolbar_docking_tests.rs"]
+mod toolbar_docking_tests;
+#[cfg(test)]
 #[path = "toolbar_tab_reveal_tests.rs"]
 mod toolbar_tab_reveal_tests;
 
@@ -158,7 +161,13 @@ fn quick_mask_button(app: &PhotocraftApp, ui: &mut egui::Ui) {
     let _ = FlyoutButton::new(&tools, &0).id_salt("quick-mask").selected(on).show(ui);
 }
 
-/// The rail over `slots`, its flyouts and drawer opening on `opens`, the side of the canvas.
+/// The side of the toolbar its tool flyouts, "…" flyout and Edit Toolbar drawer open on: the end (the right in a
+/// left-to-right layout) wherever the toolbar is docked or floats, as in the reference application, which opens them
+/// to the right even when the toolbar sits on the right between the dock's columns. The overlay flips them to the
+/// other side only when they would leave the window.
+const FLYOUTS_OPEN: Side = Side::End;
+
+/// The rail over `slots`, its flyouts and drawer opening on `opens`.
 fn rail<'a>(slots: &'a [ToolSlot<Tool>], current: &'a Tool, remembered: &'a LastUsed<Tool>, opens: Side, editing: bool) -> ToolRail<'a, Tool> {
     let rail = ToolRail::new(Label::Empty, slots, current, remembered).opens(opens).edit_toolbar(tl!("Edit Toolbar…").to_string());
     // The drawer's open flag is the one source of "editing".
@@ -218,7 +227,7 @@ pub(crate) fn measure(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32
         static LAST: std::cell::RefCell<Option<(MeasureKey, f32)>> = const { std::cell::RefCell::new(None) };
     }
     let slots = app.toolbar_slots.get(&app.session.prefs);
-    let (opens, editing) = (crate::panel_docking::toolbar_opens(app), app.ui.toolbar_drawer);
+    let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
     let env = craft::ui::runtime::env::Env::of(ui);
     let room = ui.available_size();
     let key = MeasureKey {
@@ -244,7 +253,7 @@ fn measure_now(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32 {
     let slots = app.toolbar_slots.get(&app.session.prefs);
     let remembered = last_used(&slots, &app.ui.group_tools);
     let current = app.ui.tool;
-    let (opens, editing) = (crate::panel_docking::toolbar_opens(app), app.ui.toolbar_drawer);
+    let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
     rail(&slots, &current, &remembered, opens, editing).measure_rail(ui, width, |ui, at| footer(app, ui, at)).y
 }
 
@@ -259,7 +268,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let slots = app.toolbar_slots.get(&app.session.prefs);
     let remembered = last_used(&slots, &app.ui.group_tools);
     let current = app.ui.tool;
-    let (opens, editing) = (crate::panel_docking::toolbar_opens(app), app.ui.toolbar_drawer);
+    let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
     let out = rail(&slots, &current, &remembered, opens, editing).show_rail(ui, |ui, at| footer(app, ui, at));
 
     if let Some(tool) = out.select {

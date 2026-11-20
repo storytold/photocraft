@@ -1,8 +1,9 @@
 use super::dispatch::no_params;
 use super::{PhotocraftApp, Value, json};
-use craft::ui::contract::Bind;
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{Bind, Outcome as _, Props as _, Show as _};
 use craft::ui::dialog::DialogId;
-use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamDialog, ParamKind};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind};
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::requests::PathKind;
 
@@ -142,6 +143,41 @@ fn export_quality() -> Param {
     Param::new("quality", tl!("Quality"), ParamKind::optional_number(0.0, 12.0, None, 10.0, 0)).enabled_when("format", "jpg")
 }
 
+/// The boards Export Selected Artboards exports: the selected top-level artboards while an artboard is the active
+/// layer, else none (the checkbox is greyed and every board is exported).
+fn selected_artboards(app: &PhotocraftApp) -> Vec<u64> {
+    let Some(st) = app.session.active() else { return Vec::new() };
+    let is_board = |id: &photocraft_doc::LayerId| st.doc.layers.iter().any(|l| l.id == *id && l.artboard().is_some());
+    if !st.active_layer.as_ref().is_some_and(is_board) {
+        return Vec::new();
+    }
+    st.selected_layers().iter().copied().filter(is_board).map(|id| id.0).collect()
+}
+
+/// Artboards to PDF's Export Selected Artboards (#13647): a checkbox over the command's own `artboards`, the ids of
+/// `selected`. It opens ticked when there are any, else greyed and unticked, and it is set from the selection at every
+/// open (a host-drawn row remembers nothing). Unticked, `artboards` is null and the command exports every board.
+fn export_selected_artboards(selected: Vec<u64>) -> Param {
+    let label = Label::from(tl!("Export Selected Artboards"));
+    let ids = Value::from(selected.clone());
+    let any = !selected.is_empty();
+    let opening = ids.clone();
+    let row = Param::custom("artboards", Label::Empty, move |ui, fields, _| {
+        let ticked = any && matches!(fields.get("artboards"), Some(FieldValue::Json(Value::Array(_))));
+        let out = Checkbox::new(Bind::given(ticked)).label(label.clone()).enabled(any).show(ui);
+        match out.value().copied() {
+            Some(true) if any => fields.set("artboards", FieldValue::Json(ids.clone())),
+            // Kept as null, not removed: a missing key opens ticked again. The command takes null as every board.
+            Some(false) => fields.set("artboards", FieldValue::Json(Value::Null)),
+            _ => {}
+        }
+        out.response().clone()
+    })
+    // Without a row label, so the checkbox names itself, as a check box row does.
+    .full_width();
+    if any { row.opens_with(FieldValue::Json(opening)) } else { row }
+}
+
 /// A document's name without its extension.
 fn stem(name: &str) -> String {
     name.rsplit_once('.').map_or(name, |(a, _)| a).to_owned()
@@ -221,21 +257,7 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                 Param::new("dontEnlarge", tl!("Don't Enlarge"), ParamKind::bool(enlarge)).not_remembered(),
             ])
         }
-        "file.automate.conditionalModeChange" => {
-            let modes = opts(&[
-                ("any", tl!("Any")),
-                ("rgb", tl!("RGB Color")),
-                ("grayscale", tl!("Grayscale")),
-                ("cmyk", tl!("CMYK Color")),
-                ("lab", tl!("Lab Color")),
-                ("indexed", tl!("Indexed Color")),
-                ("bitmap", tl!("Bitmap")),
-                ("duotone", tl!("Duotone")),
-                ("multichannel", tl!("Multichannel")),
-            ]);
-            let targets = opts(&[("rgb", tl!("RGB Color")), ("grayscale", tl!("Grayscale")), ("cmyk", tl!("CMYK Color")), ("lab", tl!("Lab Color"))]);
-            plain(vec![choice("from", tl!("From"), modes, "any"), choice("to", tl!("To"), targets, "rgb")])
-        }
+        crate::dialogs::conditional_mode_change_dialog::COMMAND => plain(crate::dialogs::conditional_mode_change_dialog::rows()),
         "file.export.layersToFiles" => {
             let (_, _, name) = doc?;
             plain(vec![
@@ -262,6 +284,15 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
             plain(vec![
                 folder("dir", tl!("Destination"), dir),
                 Param::new("prefix", tl!("File Name Prefix"), ParamKind::text(stem(&name))),
+                // Include Overlapping Areas / Artboard Content Only, right below the prefix, with no caption (#13629).
+                Param::new(
+                    "content",
+                    "",
+                    ParamKind::radio(
+                        opts(&[("overlapping", tl!("Include Overlapping Areas")), ("artboard", tl!("Artboard Content Only"))]),
+                        Some("overlapping".to_owned()),
+                    ),
+                ),
                 choice("format", tl!("File Type"), export_formats(), "png"),
                 export_quality(),
             ])
@@ -270,6 +301,7 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
             let (_, _, name) = doc?;
             plain(vec![
                 Param::new("path", tl!("File"), ParamKind::text(format!("{dir}/{}.pdf", stem(&name)))),
+                export_selected_artboards(selected_artboards(app)),
                 Param::new("quality", tl!("Quality"), ParamKind::int(Some(0), Some(12), 10)),
             ])
         }
@@ -816,3 +848,7 @@ fn export_contents(app: &mut PhotocraftApp) -> Result<Value, String> {
         Ok(json!({"path": path, "fileName": name, "bytes": bytes.len()}))
     })
 }
+
+#[cfg(test)]
+#[path = "../../artboards_to_pdf_selected_tests.rs"]
+mod artboards_to_pdf_selected_tests;

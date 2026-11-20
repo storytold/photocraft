@@ -303,7 +303,7 @@ fn copy_css(s: &mut Session, p: &Value) -> Result<Value> {
     let p = p.as_object().ok_or_else(|| bad("expected an object"))?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let ids = match p.get("layer") {
-        None | Some(Value::Null) => st.selected_layers(),
+        None | Some(Value::Null) => st.selected_layers().to_vec(),
         Some(v) => vec![LayerId(v.as_u64().ok_or_else(|| bad("`layer` must be an unsigned integer"))?)],
     };
     if ids.is_empty() {
