@@ -525,7 +525,7 @@ fn blending_options(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "layer.layerStyle.blendingOptions";
     let id = layer_param(s, p)?;
     let blend = match p.get("blend").and_then(Value::as_str) {
-        Some(b) => Some(crate::commands::blend_from_str(b).ok_or_else(|| bad(CMD, format!("unknown blend mode `{b}`")))?),
+        Some(b) => Some(crate::commands::parse_blend(b).ok_or_else(|| bad(CMD, format!("unknown blend mode `{b}`")))?),
         None => None,
     };
     let opacity = p.get("opacity").and_then(Value::as_f64).map(|v| (v as f32 / 100.0).clamp(0.0, 1.0));
@@ -876,7 +876,7 @@ fn create_layer(s: &mut Session, p: &Value) -> Result<Value> {
             let mut tmp = Document::new("fx", doc.size, doc.mode, doc.depth);
             tmp.global_light = light;
             tmp.patterns = doc.patterns.clone();
-            tmp.layers = vec![alone];
+            tmp.layers = vec![alone].into();
             let buf = photocraft_compose::render(&tmp, area);
             let mut surf = Surface::new(fmt);
             let data: Vec<f32> = buf.px.iter().flat_map(|q| photocraft_raster::from_rgba(&fmt, *q)).collect();
@@ -952,7 +952,7 @@ pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
     alone.blend = if alone.is_group() { BlendMode::PassThrough } else { BlendMode::Normal };
     alone.clipped = false;
     let mut tmp = doc.clone();
-    tmp.layers = vec![alone];
+    tmp.layers = vec![alone].into();
     tmp.selection = None;
     let area = doc.bounds();
     let buf = photocraft_compose::render(&tmp, area);

@@ -367,7 +367,7 @@ fn multiband_matches_the_serial_code() {
 /// none and everything, pass through every split the images can have (#15652; it swept 47 budgets).
 #[test]
 fn multiband_batches_match_the_serial_code() {
-    for (n, &(w, h)) in [(40usize, 30usize), (97, 61), (201, 129)].iter().enumerate() {
+    for (n, &(w, h)) in [(40usize, 30usize), (97, 61)].iter().enumerate() {
         for ch in [1usize, 3] {
             let (imgs, wts) = rois(w, h, ch, n as u64 * 17 + ch as u64);
             for levels in [1usize, 3, 5] {

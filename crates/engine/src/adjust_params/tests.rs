@@ -724,3 +724,13 @@ fn channel_mixer_percentages_are_whole_numbers() {
     assert_eq!(matrix[2], [-2.0, 2.0, 0.0, 0.0], "clamps stay -200 and 200");
     assert_eq!(to_params(&a)["red"], json!([0.0, 1.0, 51.0, -1.0]), "the stored step reads back whole");
 }
+
+/// #14417: tone values are whole percentages; scripted fractions round like the dialog's own
+/// slider pass (away from zero on halves, which no measured case pins to).
+#[test]
+fn color_balance_tones_round_to_whole_numbers() {
+    let a = from_params("colorBalance", &json!({"midtones": [12.7, -0.4, 100.4], "highlights": [-100.4, 0.0, 0.0]}), None, ColorMode::Rgb).unwrap();
+    let Adjustment::ColorBalance { midtones, highlights, .. } = a else { panic!("wrong kind") };
+    assert_eq!(midtones, [13.0, 0.0, 100.0], "12.7 to 13, -0.4 to 0, 100.4 rounds into the clamp");
+    assert_eq!(highlights, [-100.0, 0.0, 0.0], "-100.4 to -100");
+}
