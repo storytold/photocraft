@@ -94,7 +94,7 @@ pub(crate) fn pick(app: &mut PhotocraftApp, target: Target, name: String, bytes:
 }
 
 pub(crate) fn pick_relink(app: &mut PhotocraftApp, target: Target, path: String, bytes: Vec<u8>) -> Result<Value, String> {
-    if !std::path::Path::new(&path).is_absolute() {
+    if cfg!(target_arch = "wasm32") || !std::path::Path::new(&path).is_absolute() {
         return Err(format!("{path}: Relink to File needs a file on disk"));
     }
     pick_source(app, target, path, bytes, true)
@@ -236,8 +236,9 @@ fn apply_source(
     check(app, target)?;
     let result = app.with_document(target.doc, |app| {
         if relink {
+            #[cfg(not(target_arch = "wasm32"))]
             if order.is_some() {
-                let current = photocraft_format::read_file(std::path::Path::new(name)).map_err(|error| error.to_string())?;
+                let current = photocraft_format::read_file_limited(std::path::Path::new(name), bytes.len() as u64).map_err(|error| error.to_string())?;
                 if current != bytes {
                     return Err("the linked source changed after it was picked; select it again".into());
                 }
