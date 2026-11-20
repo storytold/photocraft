@@ -351,7 +351,7 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
     validate(&recipes)?;
     let corpus = Path::new(corpus).canonicalize().map_err(|e| format!("corpus: {e}"))?;
     let cli = Path::new(cli).canonicalize().map_err(|e| format!("CLI: {e}"))?;
-    let cli_sha = crate::sha256::hex(&read_limited_to(&cli, 512 * 1024 * 1024)?);
+    let cli_sha = crate::sha256::hex(&read_limited_to(&cli, 2048 * 1024 * 1024)?);
     let output = Path::new(output);
     fs::create_dir(output).map_err(|e| format!("output directory must be new: {e}"))?;
     let revision = git(root, &["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".into());

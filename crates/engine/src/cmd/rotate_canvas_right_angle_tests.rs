@@ -41,6 +41,10 @@ fn arbitrary_right_angles_match_the_dedicated_rotation_commands() {
             let params = json!({"angle": angle, "direction": direction});
             arbitrary.execute("view.colorSamplers.add", json!({"x":399,"y":299})).unwrap();
             exact.execute("view.colorSamplers.add", json!({"x":399,"y":299})).unwrap();
+            for s in [&mut arbitrary, &mut exact] {
+                s.execute("view.newGuide", json!({"orientation":"vertical","position":20.5,"color":"#ff00ff"})).unwrap();
+                s.execute("view.newGuide", json!({"orientation":"horizontal","position":0,"color":"#00ff00"})).unwrap();
+            }
             let steps = arbitrary.active().unwrap().history.past_len();
             let result = arbitrary.execute(ARBITRARY, params.clone()).unwrap();
             exact.execute(standard, json!({})).unwrap();
@@ -49,6 +53,7 @@ fn arbitrary_right_angles_match_the_dedicated_rotation_commands() {
             let expected = doc(&exact);
             assert_eq!(result, json!({"width": expected.size.width, "height": expected.size.height}), "{depth} bpc {params}");
             assert_eq!(actual.size, if standard == HALF { Size::new(400, 300) } else { Size::new(300, 400) });
+            assert_eq!(actual.guides, expected.guides, "guides at {depth} bpc for {params}");
             assert_eq!(
                 actual.layers[1].surface().unwrap().content_bounds(),
                 if standard == HALF { Rect::new(175, 125, 225, 175) } else { Rect::new(125, 175, 175, 225) },
@@ -75,7 +80,7 @@ fn arbitrary_right_angles_match_the_dedicated_rotation_commands() {
 }
 
 #[test]
-fn arbitrary_right_angle_clears_guides_and_selection_and_keeps_count_points() {
+fn arbitrary_right_angle_turns_guides_clears_selection_and_keeps_count_points() {
     let mut s = session(8);
     s.execute("view.newGuide", json!({"orientation":"vertical","position":20})).unwrap();
     s.execute("select.rect", json!({"x":175,"y":125,"width":50,"height":50})).unwrap();
@@ -84,12 +89,22 @@ fn arbitrary_right_angle_clears_guides_and_selection_and_keeps_count_points() {
 
     s.execute(ARBITRARY, json!({"angle":90})).unwrap();
     assert!(doc(&s).selection.is_none());
-    assert!(doc(&s).guides.horizontal.is_empty() && doc(&s).guides.vertical.is_empty());
+    assert_eq!(doc(&s).guides.horizontal, vec![20.0]);
+    assert!(doc(&s).guides.vertical.is_empty());
     assert_eq!(doc(&s).measurement.count_groups, before.measurement.count_groups);
     assert!(s.undo());
     assert_eq!(doc(&s).guides, before.guides);
     assert_eq!(doc(&s).selection, before.selection);
     assert_eq!(doc(&s).size, before.size);
+}
+
+#[test]
+fn right_angle_crop_still_drops_guides() {
+    let mut s = session(8);
+    s.execute("view.newGuide", json!({"orientation":"vertical","position":150})).unwrap();
+    s.execute("image.crop", json!({"x":50,"y":40,"width":200,"height":150,"angle":90})).unwrap();
+    assert_eq!(doc(&s).size, Size::new(200, 150));
+    assert!(doc(&s).guides.horizontal.is_empty() && doc(&s).guides.vertical.is_empty());
 }
 
 #[test]
@@ -103,7 +118,7 @@ fn artboard_right_angle_keeps_the_resampling_path() {
     let params = json!({"angle":90});
     let actual = arbitrary.execute(ARBITRARY, params.clone()).unwrap();
     // The shared path used by Straighten still runs the existing resampler.
-    assert_eq!(actual, rotate_arbitrary_with(&mut legacy, &params, false).unwrap());
+    assert_eq!(actual, rotate_arbitrary_with(&mut legacy, &params, false, false).unwrap());
     let (actual, legacy) = (doc(&arbitrary), doc(&legacy));
     assert_eq!(actual.size, legacy.size);
     let (actual_layers, legacy_layers) = (actual.walk(), legacy.walk());
