@@ -426,6 +426,10 @@ jobs:
       # package.sh runs Trunk's release builds, validates relative URLs, cuts the wasm into
       # parts, checks the 24 MiB per-file limit and exercises the packaging step release.yml uses.
       - name: Build and verify browser release
+        env:
+          # Pull requests skip wasm-opt --converge (minutes slower); main keeps it, so the size
+          # gate on a PR measures a slightly larger wasm than main produces.
+          PHOTOCRAFT_WEB_WASM_OPT_CONVERGE: ${{ github.event_name == 'pull_request' && '0' || '1' }}
         run: packaging/web/package.sh
       - name: Report wasm size
         if: success()
