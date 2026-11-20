@@ -147,7 +147,7 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let picked = s.tools.picked_cmyk([color[0], color[1], color[2]]);
     let mode = match p.get("mode") {
         None | Some(Value::Null) => photocraft_color::BlendMode::Normal,
-        Some(Value::String(m)) => crate::commands::blend_from_str(m)
+        Some(Value::String(m)) => crate::commands::parse_blend(m)
             .filter(|m| *m != photocraft_color::BlendMode::PassThrough)
             .ok_or_else(|| EngineError::BadParams { cmd: "edit.stroke".into(), msg: format!("unknown blend mode `{m}`") })?,
         Some(v) => return Err(EngineError::BadParams { cmd: "edit.stroke".into(), msg: format!("mode must be a blend mode name, not {v}") }),
@@ -333,9 +333,14 @@ fn transform_preset(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
     let (b, mut params) = match crate::transform_cmds::lone_target(&d.doc, d.active_layer, p)? {
         Some(surf) => (crate::transform_cmds::target_frame(&d.doc, surf), json!({"target": p.get("target")})),
         None => {
-            let id = d.active_layer.ok_or(EngineError::Other("no active layer".into()))?;
-            let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-            (crate::transform_cmds::transform_frame(&d.doc, l), json!({"layer": id.0}))
+            let explicit = crate::commands::explicit_layer(s, p)?;
+            let ids = explicit.map_or_else(|| crate::transform_cmds::selection_targets(d), |id| vec![id]);
+            let bounds = crate::transform_cmds::transform_frame_of(&d.doc, &ids);
+            let params = match explicit {
+                Some(id) => json!({"layer": id.0}),
+                None => json!({"layers": ids.iter().map(|id| id.0).collect::<Vec<_>>()}),
+            };
+            (bounds, params)
         }
     };
     if b.is_empty() {

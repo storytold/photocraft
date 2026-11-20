@@ -11,7 +11,7 @@ use photocraft_geom::{Rect, TILE_SIZE};
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde_json::{Value, json};
 
-use crate::commands::{blend_from_str, color_param, layer_param};
+use crate::commands::{color_param, layer_param, parse_blend};
 use crate::{EngineError, Result, Session};
 
 const CMD: &str = "edit.fill";
@@ -66,7 +66,7 @@ fn contents(p: &Value) -> Result<&str> {
 fn mode(p: &Value) -> Result<BlendMode> {
     match p.get("mode") {
         None | Some(Value::Null) => Ok(BlendMode::Normal),
-        Some(Value::String(m)) => blend_from_str(m).filter(|m| *m != BlendMode::PassThrough).ok_or_else(|| bad(format!("unknown blend mode `{m}`"))),
+        Some(Value::String(m)) => parse_blend(m).filter(|m| *m != BlendMode::PassThrough).ok_or_else(|| bad(format!("unknown blend mode `{m}`"))),
         Some(v) => Err(bad(format!("`mode` must be a blend mode name, not {v}"))),
     }
 }

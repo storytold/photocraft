@@ -67,7 +67,7 @@ impl Session {
     /// Complete for the commands in [`PRECHECKED`]: there it accepts what `execute` accepts, but
     /// for the group nesting limit (a test holds the two together). For others it checks only what they share.
     pub fn precheck(&mut self, id: &str, params: &Value) -> Result<()> {
-        let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        let spec = crate::registry::spec(id)?;
         if !(params.is_object() || params.is_null()) {
             return Err(EngineError::BadParams { cmd: id.to_string(), msg: "params must be a JSON object".into() });
         }
@@ -93,9 +93,10 @@ impl Session {
         self.admit(id, spec, params).map(|_| ())
     }
 
-    /// What `dispatch` checks once the params are valid and a floating selection has dropped:
-    /// the precondition (on a named layer for commands that take one), a job running on the
-    /// document, a hidden target. The run params (the Channels panel's target filled in) when it
+    /// What `dispatch` checks once the params are valid, before a floating selection drops (so a
+    /// refused command leaves it floating) and again after: the precondition (on a named layer
+    /// for commands that take one), a job running on the document, a hidden target, the Magic
+    /// Eraser's colour-mode alert. The run params (the Channels panel's target filled in) when it
     /// may run.
     pub(crate) fn admit(&mut self, id: &str, spec: &commands::CommandSpec, params: &Value) -> Result<Value> {
         let run_params = channel_cmds::inject_target(self, id, commands::inject_kind(id, params.clone()));
@@ -112,6 +113,13 @@ impl Session {
         if let Some(why) = hidden_target::refusal(self, id, params) {
             return Err(EngineError::Other(why.into()));
         }
+        // The Magic Eraser's alert for an Indexed Color or Bitmap document (#12032), the same
+        // error its `run` gives: checked here too, so a floating selection stays floating (#13169).
+        if id == "paint.magicEraser"
+            && let Some(why) = self.active().and_then(|st| crate::eraser_cmds::magic_eraser_refusal(&st.doc))
+        {
+            return Err(EngineError::Other(why.into()));
+        }
         Ok(run_params)
     }
 
@@ -123,7 +131,8 @@ impl Session {
     /// [`Self::is_enabled`] for a call with `params`: their `"target"` can enable a command, as a
     /// targeted layer mask enables Image › Adjustments › Invert on an adjustment layer (#780).
     pub fn is_enabled_with(&self, id: &str, params: &Value) -> bool {
-        self.disabled_reason_with(id, params).is_none()
+        // An unknown id is disabled; its reason would rank every command id for "did you mean".
+        commands::find(id).is_some_and(|spec| self.spec_disabled_reason(spec, id, params).is_none())
     }
 
     /// Why the command can't run now (None = it can): its own precondition, or a background job
@@ -134,8 +143,16 @@ impl Session {
 
     /// [`Self::disabled_reason`] for a call with `params`.
     pub fn disabled_reason_with(&self, id: &str, params: &Value) -> Option<String> {
-        let Some(s) = commands::find(id) else { return Some(EngineError::UnknownCommand(id.into()).to_string()) };
-        self.precondition(s, &channel_cmds::inject_target(self, id, params.clone())).err().or_else(|| self.job_conflict(id, s.journal))
+        let spec = match crate::registry::spec(id) {
+            Ok(spec) => spec,
+            Err(e) => return Some(e.to_string()),
+        };
+        self.spec_disabled_reason(spec, id, params)
+    }
+
+    /// [`Self::disabled_reason_with`] for the catalogue entry `spec` of `id`.
+    fn spec_disabled_reason(&self, spec: &commands::CommandSpec, id: &str, params: &Value) -> Option<String> {
+        self.precondition(spec, &channel_cmds::inject_target(self, id, params.clone())).err().or_else(|| self.job_conflict(id, spec.journal))
     }
 
     /// The command's own precondition for a call with `params` (their target filled in).
