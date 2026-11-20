@@ -7,6 +7,7 @@ mod cache_units;
 mod cargo_env;
 mod corpus;
 mod corpus_pins;
+#[cfg(feature = "framework-checks")]
 mod i18n_report;
 mod ico;
 mod layers;
@@ -95,7 +96,7 @@ fn main() -> ExitCode {
         Some("test-corpus") => corpus::test_cmd(&rest),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("parity") => cmd_parity(),
-        Some("i18n-report") => i18n_report::run(&root()),
+        Some("i18n-report") => cmd_i18n_report(),
         Some("perf") => perf::run(&root(), &rest),
         Some("scorecard") => scorecard::run(&root(), &rest),
         Some("version") => version::run(&root(), &rest),
@@ -151,12 +152,36 @@ pub fn target_dir() -> Result<PathBuf, String> {
 
 /// Two egui revisions in one build give two incompatible `Ui` types, so the workspace's egui
 /// `[patch]` must name the revision the craft framework is built with.
+#[cfg(feature = "framework-checks")]
 fn cmd_egui_fork() -> Result<(), String> {
     let path = root().join("Cargo.lock");
     let lock = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     craft::egui_fork::check_lockfile(&lock)?;
     println!("OK: every egui package comes from {} at {}.", craft::egui_fork::GIT, craft::egui_fork::REV);
     Ok(())
+}
+
+#[cfg(feature = "framework-checks")]
+fn cmd_i18n_report() -> Result<(), String> {
+    i18n_report::run(&root())
+}
+
+// An explicitly minimal xtask can still run either check when asked for it.
+#[cfg(not(feature = "framework-checks"))]
+fn run_framework_check(name: &str) -> Result<(), String> {
+    let mut c = cargo();
+    c.args(["run", "--locked", "-p", "xtask", "--features", "framework-checks", "--", name]);
+    run(c, name)
+}
+
+#[cfg(not(feature = "framework-checks"))]
+fn cmd_egui_fork() -> Result<(), String> {
+    run_framework_check("egui-fork")
+}
+
+#[cfg(not(feature = "framework-checks"))]
+fn cmd_i18n_report() -> Result<(), String> {
+    run_framework_check("i18n-report")
 }
 
 fn cmd_layers() -> Result<(), String> {
@@ -364,7 +389,7 @@ fn step_doctest(o: &CiOptions) -> Result<(), String> {
 
 fn step_i18n(_: &CiOptions) -> Result<(), String> {
     // Lists missing translations for the log; a missing string shows in English, so it never fails CI.
-    if let Err(e) = i18n_report::run(&root()) {
+    if let Err(e) = cmd_i18n_report() {
         eprintln!("warning: i18n report failed: {e}");
     }
     Ok(())
@@ -526,16 +551,25 @@ fn build_tests(o: &CiOptions) -> Result<(), String> {
 }
 
 /// `cargo nextest list --profile ci --message-format json` of the test build, with `args`.
-fn nextest_list(o: &CiOptions, args: &[&str]) -> Result<serde_json::Value, String> {
+fn nextest_list(o: &CiOptions, args: &[&str], record: bool) -> Result<serde_json::Value, String> {
     let mut c = cargo();
     c.args(["nextest", "list", "--profile", "ci", "--message-format", "json"]).args(test_build_args(&o.exclude)).args(args);
-    let what = shown(&c);
-    eprintln!("$ {what}");
-    let out = c.stderr(Stdio::inherit()).output().map_err(|e| format!("{what}: failed to spawn: {e}"))?;
-    if !out.status.success() {
-        return Err(format!("{what}: exited with {}", out.status));
+    let record = record.then(cache_units::file).flatten();
+    if record.is_some() {
+        c.args(["--cargo-message-format", "json-render-diagnostics"]);
     }
-    serde_json::from_slice(&out.stdout).map_err(|e| format!("{what}: bad JSON: {e}"))
+    let what = shown(&c);
+    let out = if let Some(file) = record {
+        cache_units::capture_recorded(c, &what, &file)?
+    } else {
+        eprintln!("$ {what}");
+        let out = c.stderr(Stdio::inherit()).output().map_err(|e| format!("{what}: failed to spawn: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("{what}: exited with {}", out.status));
+        }
+        out.stdout
+    };
+    serde_json::from_slice(&out).map_err(|e| format!("{what}: bad JSON: {e}"))
 }
 
 /// The gate's build job with per-shard archives: builds the tests, lists them, plans which binaries
@@ -550,7 +584,7 @@ fn build_shard_archives(o: &CiOptions, dir: &Path, name: &str, shards: usize, gp
     });
     let times = shards::Times::parse(&text, os)?;
     // The build itself, and every binary it made.
-    let built = nextest_list(o, &["--list-type", "binaries-only"])?;
+    let built = nextest_list(o, &["--list-type", "binaries-only"], true)?;
     let ids: Vec<String> = built.get("rust-binaries").and_then(serde_json::Value::as_object).ok_or("nextest list: no rust-binaries")?.keys().cloned().collect();
     // With a GPU shard every binary is listed against the gpu group; otherwise only the split ones.
     let filter = if gpu_shard {
@@ -559,7 +593,7 @@ fn build_shard_archives(o: &CiOptions, dir: &Path, name: &str, shards: usize, gp
         let split: Vec<String> = shards::binaries_to_list(&ids, &times, shards).iter().map(|b| format!("binary_id(={b})")).collect();
         if split.is_empty() { "none()".to_string() } else { split.join(" | ") }
     };
-    let listing = nextest_list(o, &["--run-ignored", "all", "-E", &filter])?;
+    let listing = nextest_list(o, &["--run-ignored", "all", "-E", &filter], false)?;
     let (binaries, target) = shards::parse_listing(&listing, gpu_shard)?;
     let plan = shards::plan(&binaries, &times, shards, gpu_shard)?;
     eprint!("{}", plan.summary());
