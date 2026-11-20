@@ -1,4 +1,4 @@
-use super::{Arc, Document, History, LayerId, LayerTarget, channel_cmds, float_cmds, history_cmds, layer_multi_cmds, symmetry_cmds};
+use super::{Arc, Document, History, LayerId, LayerTarget, channel_cmds, float_cmds, history_cmds, symmetry_cmds};
 
 /// Per-document editing state.
 #[derive(Clone, Debug)]
@@ -172,7 +172,7 @@ impl DocState {
     /// (marquee, lasso, Magic Wand, Quick / Object Selection, Select › …) is a history step but
     /// not an edit, so it neither marks the file modified nor makes closing ask to save.
     pub(crate) fn keeps_clean(&self, before: &Document) -> bool {
-        self.saved_revision == self.revision && layer_multi_cmds::selection_only_change(before, &self.doc)
+        self.saved_revision == self.revision && crate::damage::selection_only_change(before, &self.doc)
     }
     /// The revision [`DocState::last_damage`] is measured from: the revision before the command
     /// that made it, or the previous revision. A canvas that showed any revision from this one

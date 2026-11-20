@@ -1893,19 +1893,19 @@ impl Session {
 
     /// The one place a command's redraw area spans more than one revision. A command that moved
     /// the active document's revision more than once (Paste Into, Stroke Path, a compound, a
-    /// script) reports what changed since it began, [`layer_multi_cmds::step_damage`] of the
+    /// script) reports what changed since it began, [`crate::damage::step_damage`] of the
     /// document before and after, measured from the revision before it. A single-revision command
     /// keeps the damage it reported. Debug and test builds also count a whole-document redraw of
     /// a small change ([`Session::whole_redraws`]).
     pub(crate) fn note_command_damage(&mut self, id: &str, before: &Arc<Document>, from: u64) {
         let Some(st) = self.active_mut().filter(|st| st.doc.id == before.id && st.revision > from) else { return };
         if st.revision - from > 1 {
-            st.last_damage = crate::layer_multi_cmds::step_damage(before, &st.doc);
+            st.last_damage = crate::damage::step_damage(before, &st.doc);
             st.damage_span = Some((from, st.revision));
         }
         #[cfg(any(test, debug_assertions))]
         if st.last_damage.is_none()
-            && let Some(pct) = crate::layer_multi_cmds::small_change_pct(before, &st.doc)
+            && let Some(pct) = crate::damage::small_change_pct(before, &st.doc)
         {
             eprintln!("warning: {id}: redraws the whole document but changed {pct}% of it");
             self.whole_redraws += 1;
