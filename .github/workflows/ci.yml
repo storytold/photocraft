@@ -358,8 +358,12 @@ jobs:
         if: matrix.variant == 'hakari'
         run: |
           set -o pipefail
-          cargo tree --color never --locked -p photocraft-io --prefix none --format '{p}' |
-            sed 's/ (\*)$//' | LC_ALL=C sort -u > "$RUNNER_TEMP/io-packages-before"
+          record_packages() {
+            cargo tree --color never --locked -p photocraft-io --edges "$1" --prefix none --format '{p}' |
+              sed -e '/^workspace-hack v/d' -e 's/ (\*)$//' | LC_ALL=C sort -u > "$RUNNER_TEMP/io-$1-$2"
+          }
+          record_packages normal,build,dev before
+          record_packages normal,build before
           cargo hakari init crates/workspace-hack --yes
           cp .config/no-heif-trial.toml .config/hakari.toml
           python3 scripts/scope_no_heif_trial.py --exclude-codecs
@@ -369,9 +373,10 @@ jobs:
           cargo hakari manage-deps --yes
           cargo hakari generate --diff
           cargo hakari manage-deps --dry-run
-          cargo tree --color never --locked -p photocraft-io --prefix none --format '{p}' |
-            sed -e '/^workspace-hack v/d' -e 's/ (\*)$//' | LC_ALL=C sort -u > "$RUNNER_TEMP/io-packages-after"
-          diff -u "$RUNNER_TEMP/io-packages-before" "$RUNNER_TEMP/io-packages-after"
+          for edges in normal,build,dev normal,build; do
+            record_packages "$edges" after
+            diff -u "$RUNNER_TEMP/io-$edges-before" "$RUNNER_TEMP/io-$edges-after"
+          done
 
       - name: Check the decoder selection
         run: |

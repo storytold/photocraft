@@ -6,12 +6,11 @@ import tomllib
 from pathlib import Path
 
 
-# On the trial baseline these reduce 50 feature differences to 24 without adding
-# third-party packages. CI compares the resolved package sets on every trial run.
+# Keep pins that preserve both the test and production I/O package sets.
 PINS = set(
-    """bitflags digest ecolor either emath font-types gpu-allocator icu_collections
-    icu_normalizer icu_properties icu_provider_blob indexmap linux-raw-sys naga
-    proc-macro2 rustix serde_json skrifa syn toml typenum uuid wayland-sys wgpu-types""".split()
+    """bitflags digest ecolor either emath font-types icu_collections
+    icu_normalizer icu_properties icu_provider_blob indexmap linux-raw-sys
+    proc-macro2 rustix serde_json skrifa syn toml typenum uuid wayland-sys""".split()
 )
 
 
