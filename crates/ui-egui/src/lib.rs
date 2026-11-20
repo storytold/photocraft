@@ -32,8 +32,6 @@ pub mod dialogs;
 pub mod dock;
 pub(crate) mod edit_session;
 pub mod file_dialog;
-#[cfg(target_arch = "wasm32")]
-pub use file_dialog::{FileDialogAnswer, FileDialogFn, FileDialogReply, FileDialogRequest};
 pub mod file_open;
 pub mod frame_stages;
 pub mod gpu_memo;
