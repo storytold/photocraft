@@ -26,12 +26,11 @@ use crate::{EngineError, Result, Session};
 /// The action model is craft-automation's: one list type for the engine, the CLI and the panel.
 pub use craft::automation::actions::{Action, ActionColor, ActionList, ActionStep, ActionsFile, moved_index};
 
-mod history;
 pub(crate) use crate::actions_record::tool_stroke;
 pub use crate::actions_record::{replayable, shell_save_command, shell_view_command};
-pub(crate) use history::ActionHistory;
-pub use history::{ActionHistoryContinuation, finish_pending_history, suspend_history};
-pub(crate) use history::{before_edit as before_action_edit, begin_document_history, finish_document_history, history_rows, reconcile_history_removal};
+pub(crate) use crate::action_history::ActionHistory;
+pub use crate::action_history::{ActionHistoryContinuation, finish_pending_history, suspend_history};
+pub(crate) use crate::action_history::{before_edit as before_action_edit, begin_document_history, finish_document_history, history_rows, reconcile_history_removal};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
@@ -735,7 +734,7 @@ pub fn begin_playback_from(s: &mut Session, action: &Action, from: usize) -> Res
         return Err(bad("actions.play", format!("the script ran more than {max} steps in all")));
     }
     if s.actions.playing == 0 {
-        history::begin(s, &action.name);
+        crate::action_history::begin(s, &action.name);
         // A batch nested in a played action or another batch carries the shared count on.
         if !s.actions.budget_shared {
             s.actions.playback_steps = 0;
@@ -756,7 +755,7 @@ pub fn finish_playback(s: &mut Session, recording: Option<(usize, usize)>, actio
     s.actions.playback_stack.pop();
     s.actions.playing = s.actions.playing.saturating_sub(1);
     if s.actions.playing == 0 {
-        history::finish_playback(s);
+        crate::action_history::finish_playback(s);
     }
     if let Some((_, idx)) = recording {
         restore_recording(s, idx, &action.name, from);
