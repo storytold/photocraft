@@ -4,8 +4,10 @@
 //! selection it prefills the dragged size and OK puts the box's top-left at the drag start; Cancel
 //! creates nothing and adds no History state. The neighbours of that route keep today's behaviour,
 //! pinned below: a plain drag still makes the mask box at once, Alt+click without a drag is still
-//! a point mask, the Horizontal Type Mask tool keeps the plain drag (not measured), a drag up or to
-//! the left of its start keeps today's box (not measured), and ⌥ is read at the press.
+//! a point mask, the Horizontal Type Mask tool keeps the plain drag (not measured), a drag up, to
+//! the left, or up and to the right of its start keeps today's box (not measured), ⌥ is read at the
+//! press, and on the centred route fields edited in the dialog keep the box centred on the drag
+//! start.
 //!
 //! The gestures go through the canvas pass (`canvas::testing`) the way the released Type tool does
 //! on the hosted framework, and the dialog is driven the way a control answer drives a hosted
@@ -125,6 +127,23 @@ fn confirming_centres_the_box_on_the_drag_start() {
     );
 }
 
+/// #12090 centred route, field EDIT (the module's claim, `paragraph_text_size.rs`: "fields edited
+/// in the dialog keep the box centred on the drag start"): entering 80 × 40 in the prefilled dialog
+/// moves the top-left so the box stays centred on the drag start.
+#[test]
+fn editing_the_fields_keeps_the_box_centred_on_the_drag_start() {
+    let mut app = app();
+    drag(&mut app, [200.0, 100.0], [250.0, 125.0], Modifiers::ALT, Modifiers::ALT);
+    let (d, f) = only_dialog(&app);
+    assert_eq!((f["width"].as_f64(), f["height"].as_f64()), (Some(100.0), Some(50.0)), "the prefilled size, twice the drag");
+    set(&mut app, d, [("width", json!(80.0)), ("height", json!(40.0))]);
+    let ctx = app.ctx().clone();
+    crate::dialogs::confirm(&mut app, &ctx, d).unwrap();
+    let ed = app.ui.text_edit.as_ref().expect("OK starts the mask session");
+    assert!(ed.mask, "the session is a Type Mask");
+    assert_eq!(box_rect(&app, ed.layer), [160.0, 80.0, 80.0, 40.0], "the typed 80 × 40, still centred on the drag start (200, 100)");
+}
+
 /// #12090 measured, with a selection: the dialog opens prefilled with the plain drag size.
 #[test]
 fn alt_drag_with_a_selection_opens_the_dialog_at_the_dragged_size() {
@@ -229,6 +248,19 @@ fn a_leftward_alt_drag_keeps_todays_plain_box() {
     assert!(app.framework.dialogs.open_dialogs().is_empty(), "a leftward ⌥-drag opens no dialog");
     let ed = app.ui.text_edit.as_ref().expect("the drag starts the mask at once");
     assert_eq!(box_rect(&app, ed.layer), [150.0, 50.0, 50.0, 50.0], "the rectangle between the two points");
+}
+
+/// Guard for the SECOND condition of the gate (`pointer.rs`: `end[0] >= start[0] && end[1] >= start[1]`):
+/// a drag up and to the right passes the first condition and fails the second, so it is not the
+/// measured down-right configuration and keeps today's plain box, with no dialog. Green before and
+/// after this PR on purpose: it pins the axis the gate turns on.
+#[test]
+fn an_up_right_alt_drag_keeps_todays_plain_box() {
+    let mut app = app();
+    drag(&mut app, [200.0, 100.0], [250.0, 50.0], Modifiers::ALT, Modifiers::ALT);
+    assert!(app.framework.dialogs.open_dialogs().is_empty(), "an up-right ⌥-drag opens no dialog");
+    let ed = app.ui.text_edit.as_ref().expect("the drag starts the mask at once");
+    assert_eq!(box_rect(&app, ed.layer), [200.0, 50.0, 50.0, 50.0], "the rectangle between the two points");
 }
 
 /// Guard: the ⌥ latch the dialog route already has (#12044) — ⌥ pressed only as the button comes
