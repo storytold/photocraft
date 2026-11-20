@@ -158,6 +158,11 @@ fn assert_same(a: &ImportResult, b: &ImportResult, what: &str) {
     // Everything else, but for the ids every document and layer gets fresh.
     let mut db = db.clone();
     db.id = da.id;
+    // The indices' layer maps along with the layers, so indices naming no layer still differ.
+    let indices_layer = db.color_indices.as_ref().and_then(|c| db.layers.iter().zip(&da.layers).find(|(l, _)| l.id == c.layer)).map(|(_, k)| k.id);
+    if let (Some(c), Some(id)) = (db.color_indices.as_mut(), indices_layer) {
+        c.layer = id;
+    }
     db.layers.iter_mut().zip(&da.layers).for_each(|(l, k)| l.id = k.id);
     assert!(da == &db, "{what}: documents differ");
 }

@@ -211,7 +211,7 @@ mod tests {
         assert!(prompt(&app).is_none(), "a new group imports without asking");
         assert!(app.ui.status.ends_with("brushes from Kit"), "{}", app.ui.status);
         // The user edits one of its brushes.
-        let edited = app.session.tools.presets.iter_mut().find(|p| p.group == "Kit").unwrap();
+        let edited = std::sync::Arc::make_mut(&mut app.session.tools.presets).iter_mut().find(|p| p.group == "Kit").unwrap();
         edited.brush.size = 77.0;
         let edited = edited.name.clone();
 

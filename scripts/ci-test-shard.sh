@@ -1,41 +1,40 @@
 #!/usr/bin/env bash
-# One shard of the gate's tests: the gate's `shard-command` (.github/workflows/ci.yml). Each shard
-# restores the dependency cache, builds the tests (`cargo xtask ci build` builds the same on main's
-# cache warm-up leg) and runs its share with `cargo xtask ci tests`. The gate sets GATE_SHARD (1..N),
-# GATE_SHARDS (N) and NEXTEST_PARTITION (hash:GATE_SHARD/GATE_SHARDS).
+# One shard of the gate's tests: the gate's `shard-command` (.github/workflows/ci.yml). The gate's
+# build job wrote one nextest archive per shard with `cargo xtask ci archive` (`shard-archives`), each
+# holding only the test binaries that shard runs, the xtask binary and the shard plan
+# (.config/nextest.toml). The shard extracts its archive and runs the test steps with
+# `xtask ci tests --shard <k>` without building anything. The gate sets NEXTEST_ARCHIVE_FILE,
+# GATE_SHARD and GATE_SHARDS.
 #
-#   ci-test-shard.sh              each shard runs its hash partition of every test; shard 1 also
-#                                 runs the doctests
+# The build job balances the shards by recorded test times (.config/ci-test-times.tsv,
+# xtask/src/shards.rs); a binary too heavy for one shard is split across shards by test filter.
+#
+#   ci-test-shard.sh              the shard runs its binaries
 #   ci-test-shard.sh --gpu-shard  shard 1 runs nextest's `gpu` group alone on lavapipe, checked by
-#                                 scripts/ci-gpu-lavapipe.py; the other shards split the other tests,
-#                                 and shard 2 also runs the doctests
+#                                 scripts/ci-gpu-lavapipe.py (the build job ran
+#                                 `ci archive --gpu-shard`); the other shards run the other tests
 set -euo pipefail
 
+archive=target/nextest-archive
+mkdir -p "$archive"
+cargo nextest run --archive-file "$NEXTEST_ARCHIVE_FILE" --workspace-remap . --extract-to "$archive" --extract-overwrite -E 'none()' --no-tests=pass
+xtask=("$archive/target/debug/xtask" ci tests --from "$archive" --shard "$GATE_SHARD")
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) xtask=("$archive/target/debug/xtask.exe" ci tests --from "$archive" --shard "$GATE_SHARD") ;; esac
+
 case "${1:-}" in
-  "")
-    cargo xtask ci tests
-    doctests=1
-    ;;
+  "") exec "${xtask[@]}" ;;
   --gpu-shard)
     if [ "$GATE_SHARDS" -lt 2 ]; then
       echo "::error::--gpu-shard needs at least two shards, got $GATE_SHARDS"
       exit 1
     fi
     if [ "$GATE_SHARD" = 1 ]; then
-      # Build first, so only the test run goes through the lavapipe check.
-      cargo xtask ci build
-      python3 scripts/ci-gpu-lavapipe.py cargo xtask ci tests --gpu
-    else
-      NEXTEST_PARTITION="hash:$((GATE_SHARD - 1))/$((GATE_SHARDS - 1))" cargo xtask ci tests --no-gpu
+      exec python3 scripts/ci-gpu-lavapipe.py "${xtask[@]}" --gpu
     fi
-    doctests=2
+    exec "${xtask[@]}" --no-gpu
     ;;
   *)
     echo "usage: $0 [--gpu-shard]" >&2
     exit 2
     ;;
 esac
-
-if [ "$GATE_SHARD" = "$doctests" ]; then
-  cargo xtask ci doctest
-fi
