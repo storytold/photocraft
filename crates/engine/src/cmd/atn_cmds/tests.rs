@@ -1090,7 +1090,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.newFillLayer.pattern", json!({"pattern": "b7a3c1d2-0000-4000-8000-000000000001", "patternName": "Twin", "scale": 50})),
         ("image.mode.bitmap", json!({"method": "threshold"})),
         ("image.imageSize", json!({"resolution": 1200, "resample": "preserveDetails", "keepPrintSize": true, "scaleStyles": true})),
-        ("layer.new.layerFromBackground", json!({"ifPresent": true, "select": false})),
+        ("layer.new.layerFromBackground", json!({"ifPresent": true, "select": false, "show": false})),
         // COPYCAT, AJ_Actions2023 and the Line and Color tutorial set.
         ("layer.smartFilter.deleteFilterMask", json!({"ifPresent": true})),
         ("layer.smartFilter.blendingOptions", json!({"index": 1, "opacity": 0.5, "blend": "Darken"})),
