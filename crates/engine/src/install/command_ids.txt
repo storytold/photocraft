@@ -488,6 +488,8 @@ file.scripts.flattenAllLayerEffects
 file.scripts.flattenAllMasks
 file.export.layersToFiles
 file.export.colorLookupTables
+file.editInRawEditor
+file.developInRawEditor
 view.newGuideLayout
 view.newGuidesFromShape
 view.clearCanvasGuides
@@ -1014,4 +1016,3 @@ actions.delete
 actions.toggle
 actions.rename
 actions.setColor
-test.panic

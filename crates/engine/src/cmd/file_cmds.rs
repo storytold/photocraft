@@ -486,6 +486,10 @@ mod batch_serial_skip_failed_tests;
 mod open_as_error_name_tests;
 
 #[cfg(test)]
+#[path = "file_cmds/place_resolution_tests.rs"]
+mod place_resolution_tests;
+
+#[cfg(test)]
 mod aces_exr_tests {
     use super::*;
 
