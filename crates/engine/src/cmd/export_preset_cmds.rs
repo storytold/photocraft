@@ -12,15 +12,17 @@ const MAX_PRESETS: usize = 256;
 const MAX_PX: u32 = 300_000;
 const FORMATS: [&str; 6] = ["png", "jpg", "webp", "tif", "tga", "ico"];
 
-/// Export As › Image Size › Resample, in Photoshop's order: the `image.imageSize` method each
-/// choice sends, and its menu label. The first one is the default.
-pub const RESAMPLE: [(&str, &str); 6] = [
-    ("bicubicAutomatic", "Bicubic Automatic"),
+/// Export As › Image Size › Resample, in the reference application's menu order (#13737): the
+/// `image.imageSize` method each choice sends, and its menu label. The default is
+/// [`DEFAULT_RESAMPLE`]; Preserve Details is Image Size's `preserveDetails` resampler.
+pub const RESAMPLE: [(&str, &str); 7] = [
     ("bicubic", "Bicubic"),
-    ("bicubicSmoother", "Bicubic Smoother"),
+    ("bicubicAutomatic", "Bicubic Automatic"),
     ("bicubicSharper", "Bicubic Sharper"),
+    ("bicubicSmoother", "Bicubic Smoother"),
     ("bilinear", "Bilinear"),
     ("nearest", "Nearest Neighbor"),
+    ("preserveDetails", "Preserve Details"),
 ];
 
 /// Photoshop's Export As default: Bicubic Automatic.
@@ -244,7 +246,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Save Export Preset",
             menu: &[],
             shortcut: None,
-            params: r#"{"name":str,"settings":{"format":"png|jpg|webp|tif|tga|ico","quality":1..100,"lossless":bool,"transparency":bool,"scale":1..1000,"width":px,"height":px,"lockAspect":bool,"sizing":"scale|pixels","metadata":"none|exif|all","profile":"document|srgb","embedProfile":bool,"tgaBits":"auto|24|32","resample":"bicubicAutomatic|bicubic|bicubicSmoother|bicubicSharper|bilinear|nearest"="bicubicAutomatic"}} (a saved name is replaced)"#,
+            params: r#"{"name":str,"settings":{"format":"png|jpg|webp|tif|tga|ico","quality":1..100,"lossless":bool,"transparency":bool,"scale":1..1000,"width":px,"height":px,"lockAspect":bool,"sizing":"scale|pixels","metadata":"none|exif|all","profile":"document|srgb","embedProfile":bool,"tgaBits":"auto|24|32","resample":"bicubic|bicubicAutomatic|bicubicSharper|bicubicSmoother|bilinear|nearest|preserveDetails"="bicubicAutomatic"}} (a saved name is replaced)"#,
             enabled: always,
             run: save,
             journal: false,

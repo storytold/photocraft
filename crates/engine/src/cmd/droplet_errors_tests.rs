@@ -252,3 +252,59 @@ fn a_dropped_text_file_stays_silent_in_both_modes() {
         }
     }
 }
+
+// ---------------------------------------------------------------- the log never replaces an image
+
+/// #13713 review: the droplet writes its own log, so Batch's log guard (#13665) never sees the path.
+/// A log naming a dropped input, or a result the run plans to write, must leave that image alone: the
+/// run finishes, the bytes stay, and the refusal reaches `errorLogError` in Batch's own wording.
+#[test]
+fn an_error_log_naming_an_input_or_a_planned_output_never_replaces_it() {
+    let dir = tmp("log-collision");
+    let (a, b) = inputs(&dir);
+    // Aimed at a dropped input: the run goes on over the failing step, and a.png keeps its PNG bytes.
+    let dropped = std::fs::read(&a).unwrap();
+    let dp = failing_droplet(&dir, json!({"errors": "log", "errorLog": a.clone()}));
+    let r = Session::new().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a.clone(), b.clone()]})).unwrap();
+    assert_eq!(r["errors"].as_array().map(Vec::len), Some(2), "the run went on to both files: {r}");
+    assert_eq!(std::fs::read(&a).unwrap(), dropped, "{a} still holds the dropped image, not the log");
+    let refused = r["errorLogError"].as_str().unwrap_or_default().to_owned();
+    assert!(refused.contains("errorLog") && refused.contains("must not replace an input or batch output"), "{r}");
+    // Aimed at a planned output: run once without a log to learn the names Batch writes, then aim there.
+    let plain = working_droplet(&dir, json!({}));
+    let planned: Vec<String> = Session::new().execute("file.automate.runDroplet", json!({"droplet": plain, "input": [a.clone(), b.clone()]})).unwrap()["files"]
+        .as_array()
+        .expect("the run's results")
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect();
+    assert_eq!(planned.len(), 2, "{planned:?}");
+    let out = planned.first().expect("one planned output").clone();
+    let result = std::fs::read(&out).unwrap();
+    let dp = working_droplet(&dir, json!({"errors": "log", "errorLog": out.clone()}));
+    let r = Session::new().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]})).unwrap();
+    assert_eq!(r["files"].as_array().map(Vec::len), Some(2), "the run still wrote its results: {r}");
+    assert_eq!(std::fs::read(&out).unwrap(), result, "{out} still holds the result, not the log");
+    let refused = r["errorLogError"].as_str().unwrap_or_default().to_owned();
+    assert!(refused.contains("errorLog") && refused.contains("must not replace an input or batch output"), "{r}");
+}
+
+/// #13713 review: the guard above missed one file of its own run, the `.pcdroplet` being executed.
+/// It is never a dropped input (a folder scan takes images only) and never a batch result, so a
+/// droplet saved with its log aimed at its own name erased its own definition: the next run of that
+/// droplet found UTF-16 log bytes where the steps were. The definition's bytes must stay.
+#[test]
+fn an_error_log_naming_the_droplet_file_itself_never_replaces_it() {
+    let dir = tmp("log-self");
+    let (a, b) = inputs(&dir);
+    let dp = failing_droplet(&dir, json!({"errors": "log", "errorLog": format!("{dir}/Fails.pcdroplet")}));
+    let definition = std::fs::read(&dp).unwrap();
+    assert_eq!(dp, format!("{dir}/Fails.pcdroplet"), "the log was aimed at the droplet's own path");
+    let r = Session::new().execute("file.automate.runDroplet", json!({"droplet": dp.clone(), "input": [a, b]})).unwrap();
+    assert_eq!(std::fs::read(&dp).unwrap(), definition, "{dp} still holds the droplet definition, not the log");
+    let refused = r["errorLogError"].as_str().unwrap_or_default().to_owned();
+    assert!(refused.contains("errorLog") && refused.contains("must not replace an input or batch output"), "{r}");
+    let again = Session::new().execute("file.automate.runDroplet", json!({"droplet": dp.clone(), "input": [a]})).unwrap();
+    assert_eq!(again["errors"].as_array().map(Vec::len), Some(1), "the droplet is still runnable: {again}");
+}

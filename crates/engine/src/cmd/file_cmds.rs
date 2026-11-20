@@ -39,9 +39,9 @@ use batch_run::same_format;
 #[cfg(not(target_arch = "wasm32"))]
 pub use batch_run::validate_flat_outputs;
 pub use batch_run::{BatchInput, OutputClaims, encode_batch_error_log, encode_droplet_error_log, error_log_entries, list_images_tree};
+pub(crate) use batch_run::{ERROR_LOG_CONFLICT, batch_action, batch_inputs, batch_keeps_step, batch_save_point, process_files};
 #[cfg(test)]
 pub(crate) use batch_run::{MAX_SUBFOLDER_DEPTH, list_files_tree};
-pub(crate) use batch_run::{batch_action, batch_inputs, batch_keeps_step, batch_save_point, process_files};
 pub use export::{LayerExportReport, SkippedExportLayer, bake_cube, export_layers_report_with, export_layers_with};
 use export::{color_lookup_tables, layers_to_files, push_unique};
 use info::file_info;
@@ -126,11 +126,11 @@ impl crate::DocState {
     pub fn saved_to(&mut self, path: String) {
         let name = file_name(&path);
         if self.doc.name != name {
-            Arc::make_mut(&mut self.doc).name = name;
+            Arc::make_mut(self.doc_mut()).name = name;
         }
         // The file now holds just this document, whatever the one it was opened from held.
         if self.doc.file_encoding.source_images.is_some() {
-            Arc::make_mut(&mut self.doc).file_encoding.source_images = None;
+            Arc::make_mut(self.doc_mut()).file_encoding.source_images = None;
         }
         self.path = Some(path);
         self.saved_revision = self.revision;
@@ -484,6 +484,10 @@ mod batch_serial_skip_failed_tests;
 #[cfg(test)]
 #[path = "file_cmds/open_as_error_name_tests.rs"]
 mod open_as_error_name_tests;
+
+#[cfg(test)]
+#[path = "file_cmds/place_resolution_tests.rs"]
+mod place_resolution_tests;
 
 #[cfg(test)]
 mod aces_exr_tests {

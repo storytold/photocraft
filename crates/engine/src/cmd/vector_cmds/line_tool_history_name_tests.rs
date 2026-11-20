@@ -61,7 +61,7 @@ fn without_the_tool_the_commands_keep_their_own_names() {
 fn an_unknown_history_name_is_refused_without_a_step() {
     let mut s = session();
     let n = steps(&s);
-    assert!(s.execute("shape.create", line(Some("Ellipse Tool"))).is_err());
+    assert!(s.execute("shape.create", line(Some("Unknown Tool"))).is_err());
     assert!(s.execute("path.set", json!({"name": "work", "path": outline(100.0), "historyName": 7})).is_err());
     assert_eq!(steps(&s), n);
 }

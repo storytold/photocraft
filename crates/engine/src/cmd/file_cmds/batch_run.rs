@@ -557,11 +557,15 @@ fn batch_outcome(files: Vec<String>, errors: Vec<Value>, stopped: Option<(String
     result
 }
 
+/// How Batch refuses an error log that would replace a file the run reads or writes (#13665). A
+/// droplet writes its own log, so it names the same rule there (#13713).
+pub(crate) const ERROR_LOG_CONFLICT: &str = "\"errorLog\" must not replace an input or batch output";
+
 fn validate_error_log(policy: &BatchPolicy, inputs: impl IntoIterator<Item = String>, outputs: impl IntoIterator<Item = String>) -> Result<()> {
     let Some(log) = &policy.error_log else { return Ok(()) };
     let conflicts = |path: String| super::paths::same_destination(log, &path);
     if inputs.into_iter().chain(outputs).any(conflicts) {
-        return Err(EngineError::BadParams { cmd: "file.automate.batch".into(), msg: "\"errorLog\" must not replace an input or batch output".into() });
+        return Err(EngineError::BadParams { cmd: "file.automate.batch".into(), msg: ERROR_LOG_CONFLICT.into() });
     }
     Ok(())
 }

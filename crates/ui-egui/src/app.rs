@@ -79,6 +79,7 @@ impl PhotocraftApp {
             reorder_preview_hit: false,
             patch_preview: None,
             cam_preview: None,
+            data_set_preview: Default::default(),
             held_erase: false,
             last_stroke_end: None,
             brush_resize: Default::default(),
