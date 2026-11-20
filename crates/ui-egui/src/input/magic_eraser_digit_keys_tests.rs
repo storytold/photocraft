@@ -137,13 +137,17 @@ fn real_app_keys_set_magic_eraser_opacity_without_other_changes() {
     }
 }
 
-/// Preserve the old unrelated no-target controls without reviving the deleted raw-key fixture.
+/// Preserve every tool isolation check, including the Color Replacement target now on main.
 #[test]
-fn other_tools_without_digit_targets_still_ignore_digits() {
+fn other_tools_keep_their_current_digit_targets() {
     for tool in [Tool::ColorReplacement, Tool::Dodge, Tool::Smudge] {
         let mut a = app(tool);
         let before = (a.session.tools.brush.clone(), layer(&a), a.ui.tool_options.clone());
+        let mut expected = before.clone();
+        if tool == Tool::ColorReplacement {
+            expected.2.cr_tolerance = 30.0;
+        }
         press(&mut a, 3, false, 0.0);
-        assert_eq!((a.session.tools.brush.clone(), layer(&a), a.ui.tool_options.clone()), before);
+        assert_eq!((a.session.tools.brush.clone(), layer(&a), a.ui.tool_options.clone()), expected);
     }
 }
