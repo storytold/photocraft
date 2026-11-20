@@ -412,6 +412,8 @@ mod airbrush_rate_tests;
 mod brush_tests;
 #[cfg(test)]
 mod mixer_click_empty_layer_tests;
+#[cfg(test)]
+mod mixer_load_supply_tests;
 
 #[cfg(test)]
 mod smoothing_catch_up_default_tests;

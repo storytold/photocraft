@@ -280,7 +280,7 @@ fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
         },
-        blend: p.get("blend").and_then(Value::as_str).and_then(crate::commands::blend_from_str).or_else(|| with_blend.then_some(l.blend)),
+        blend: p.get("blend").and_then(Value::as_str).and_then(crate::commands::parse_blend).or_else(|| with_blend.then_some(l.blend)),
         fill_opacity: p.get("fillOpacity").and_then(Value::as_f64).map(|v| (v / 100.0).clamp(0.0, 1.0) as f32).or_else(|| with_blend.then_some(l.fill_opacity)),
         opacity: p.get("opacity").and_then(Value::as_f64).map(|v| (v / 100.0).clamp(0.0, 1.0) as f32).or_else(|| with_blend.then_some(l.opacity)),
     };
