@@ -76,7 +76,7 @@ pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 /// What the menus' rows depend on, cheaply: commands run, the documents (their names, in tab
 /// order, for the Window menu) and the active one's revision, selection, recent files, panels and
-/// view state, the language. `input` forces a change on frames with a click or key press, which
+/// view state, the keymap, and the preferences the rows show. `input` forces a change on frames with a click or key press, which
 /// covers state the hash doesn't list.
 pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
     let mut h = DefaultHasher::new();
@@ -119,7 +119,12 @@ pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
         crate::panel_docking::is_checked(app, panel.id).hash(&mut h);
     }
     serde_json::to_string(&(&ui.extras, &ui.view, ui.theme.id().as_str(), ui.theme.is_dark(), ui.tool)).unwrap_or_default().hash(&mut h);
-    s.prefs().interface.language.hash(&mut h);
+    // The preferences the rows show: the language, Edit › Menus (hidden rows, colours), the Quick Export label and
+    // the Font Preview Size tick.
+    let prefs = s.prefs();
+    prefs.interface.language.hash(&mut h);
+    (&prefs.menus.hidden, &prefs.menus.colors, prefs.interface.show_menu_colors).hash(&mut h);
+    (prefs.export.quick_export_format, prefs.type_.font_preview).hash(&mut h);
     h.finish()
 }
 

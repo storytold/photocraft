@@ -4,7 +4,7 @@
 //! The session holds everything the dialog edits: the draft keymap, the shortcut sets, the Menus
 //! draft and the text of a set waiting to be reviewed. Cancel drops it and the runtime never saw
 //! a change; OK writes the preferences once ([`save_keys`], then the menus), and the runtime's
-//! keymap follows the new preferences revision (`shortcut_dispatch::overrides`).
+//! keymap follows the new shortcut preferences (`shortcut_dispatch::overrides`).
 //!
 //! The Toolbar tab is not here: Edit › Toolbar opens the toolbar drawer.
 
@@ -79,7 +79,12 @@ pub(crate) fn profiles_of(prefs: &Preferences) -> Profiles {
 /// runtime's keymap is built for, and the preferences' bindings as overrides.
 pub(crate) fn draft_keymap(app: &PhotocraftApp) -> Keymap {
     let platform = windows::os_of(app.ctx());
-    Keymap::new(crate::shortcut_dispatch::command_rows(app).into_iter().chain(crate::shortcut_dispatch::bridged_rows()).collect(), Scopes::new(), platform)
+    // The runtime catalog's held rows while they are current; built here before the first frame holds them.
+    let rows = match app.framework.catalog_rows_at(app.session.actions.list.revision()) {
+        Some(rows) => rows.to_vec(),
+        None => crate::shortcut_dispatch::command_rows(app),
+    };
+    Keymap::new(rows.into_iter().chain(crate::shortcut_dispatch::bridged_rows()).collect(), Scopes::new(), platform)
         .with_reserved(reserved::system(platform))
         .with_overrides(keymap_defs::prefs_overrides(app.session.prefs()))
 }
@@ -115,6 +120,27 @@ pub fn open(app: &mut PhotocraftApp, tab: u64) {
 /// Whether the dialog is open: the runtime's keys step aside for its modal.
 pub fn shortcuts_open(app: &PhotocraftApp) -> bool {
     app.prefs_rt.shortcuts.is_some()
+}
+
+/// The id the control channel knows the dialog by: Edit › Keyboard Shortcuts and Edit › Menus reply with it,
+/// `ui.inspect` lists the dialog under it, and `ui.dialog.cancel` closes it. The dialog draws outside the framework's
+/// dialog host, which has no id for it (#15544).
+pub(crate) const CONTROL_ID: &str = "shortcuts";
+
+/// The reply of a command that opened the dialog.
+pub(crate) fn control_reply() -> Value {
+    json!({"dialog": CONTROL_ID})
+}
+
+/// The dialog as `ui.inspect` lists it among the dialogs while it is open, in the host's entry shape.
+pub(crate) fn inspect(app: &PhotocraftApp) -> Option<Value> {
+    shortcuts_open(app).then(|| json!({"id": CONTROL_ID, "key": "edit.keyboardShortcuts", "parent": null, "fields": {}}))
+}
+
+/// Cancel for a control client, as the dialog's Cancel: the session goes and nothing it edited is saved. False with
+/// the dialog closed.
+pub(crate) fn cancel(app: &mut PhotocraftApp) -> bool {
+    app.prefs_rt.shortcuts.take().is_some()
 }
 
 /// Whether the dialog is recording a chord: the key goes to the recorder and runs nothing, and the
@@ -213,7 +239,7 @@ fn ask_import(app: &mut PhotocraftApp, state: &mut DialogState) {
     let picked = app.pick_file_bytes_filtered(&["kys", "psp", "json"], |app, name, bytes| {
         let text = kys_text(&name, &bytes)?;
         queue_import(app, text);
-        Ok(json!({"dialog": "shortcuts"}))
+        Ok(control_reply())
     });
     if let Err(e) = picked {
         state.show_error(e);
