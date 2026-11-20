@@ -41,7 +41,7 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
 /// The selected raster layers, bottom to top.
 fn selected_pixel_layers(s: &Session) -> Vec<LayerId> {
     let Some(st) = s.active() else { return Vec::new() };
-    st.selected_layers().into_iter().filter(|id| st.doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Raster(_)))).collect()
+    st.selected_layers().iter().copied().filter(|id| st.doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Raster(_)))).collect()
 }
 
 /// Whether a lock keeps the layer `id` from being moved or warped: lock all, position or pixels.

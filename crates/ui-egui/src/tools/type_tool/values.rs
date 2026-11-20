@@ -83,7 +83,7 @@ fn runs_at_target(app: &PhotocraftApp) -> Option<(Vec<CharStyle>, Vec<ParagraphS
         }
         return Some((vec![c], vec![p]));
     }
-    let texts: Vec<_> = st.selected_layers().into_iter().filter_map(|id| text_layer(&st.doc, id)).collect();
+    let texts: Vec<_> = st.selected_layers().iter().copied().filter_map(|id| text_layer(&st.doc, id)).collect();
     if texts.is_empty() {
         let (c, p) = styles_at(app)?;
         return Some((vec![c], vec![p]));

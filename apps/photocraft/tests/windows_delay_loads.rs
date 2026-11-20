@@ -10,7 +10,10 @@ const PRINT_ONLY: [&str; 2] = ["windows.data.pdf.dll", "prntvpt.dll"];
 /// The built exe names each print-only DLL in its delay-load table, never its import table.
 #[test]
 fn print_only_system_dlls_are_delay_loaded() {
-    let exe = std::fs::read(env!("CARGO_BIN_EXE_photocraft")).unwrap();
+    // The run-time variable first: a run from a nextest archive points it at the extracted exe,
+    // while the compile-time path names the directory the archive was built in.
+    let path = std::env::var("CARGO_BIN_EXE_photocraft").unwrap_or_else(|_| env!("CARGO_BIN_EXE_photocraft").to_string());
+    let exe = std::fs::read(path).unwrap();
     let pe = Pe::parse(&exe);
     let imports = pe.dll_names(1, 20, 12);
     let delayed = pe.dll_names(13, 32, 4);
