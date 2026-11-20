@@ -335,6 +335,8 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
         // What the controls report for the host's pass.
         let mut body_shown = tools::BodyShown::default();
         let live = canvas_controls(app, ui, body.rect, host, &space, &mut turned, &mut body_shown);
+        // The Free Transform preview joins the picture slot after the document, which is prepared after the tools.
+        let transform_picture = std::mem::take(&mut body_shown.transform_picture);
         // The body can run more than once in a frame; a report from any of its runs counts.
         if let Some(context) = body_shown.crop.as_mut().and_then(craft::draw::ui::CropShown::take_context) {
             overlay_context = Some(context);
@@ -414,6 +416,8 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
             };
             display.show_at(ui, body.rect);
         }
+        // The moving pixels over the document, which hides the layer they come from, and under the controls.
+        space.paint_picture(ctx, transform_picture);
         space.paint_picture(ctx, clipping);
         // The grid is drawn over the picture.
         if app.ui.view.shows(app.ui.view.show.pixel_grid) {
@@ -460,8 +464,9 @@ fn pasteboards(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: Rect, idx: usiz
         Pasteboard::new(label, &page).border(border).show_at(ui, rect);
         return;
     }
-    let shown = super::display_doc(app, idx).0;
-    let uncovered = super::artboard_ui::uncovered(&shown);
+    let (shown, revision) = super::display_doc(app, idx);
+    let Some(st) = app.session.documents().get(idx) else { return };
+    let uncovered = app.doc_queries.uncovered(&app.session, st, revision, || super::artboard_ui::uncovered(&shown));
     Pasteboard::new(label, &pages).border(border).uncovered(&uncovered).show_at(ui, rect);
 }
 
@@ -471,7 +476,7 @@ fn selection_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: Rect, id
     if let Some(state) = app.session.documents().get(idx) {
         let doc = state.doc.clone();
         if let Some(selection) = doc.selection.as_ref() {
-            let mask = super::outline::SurfaceMask::new(selection, crate::app::surface_fingerprint(selection), [doc.size.width, doc.size.height]);
+            let mask = super::outline::SurfaceMask::new(selection, selection.generation(), [doc.size.width, doc.size.height]);
             // The map is `transform_tool::selection_map` while a Free Transform carries the selection.
             let mut overlay = SelectionOverlay::new(label.to_owned(), &mask).visible(ants.is_some()).offset(ants.map_or([0, 0], |(x, y)| [x, y]));
             if let Some(map) = crate::transform_tool::selection_map(app, doc.id) {
@@ -528,6 +533,7 @@ fn canvas_controls(
     let session = if primary { crate::transform_tool::show_in_canvas(app, ui, rect, now) } else { crate::transform_tool::SessionShown::default() };
     let session_box_shown = session.shown;
     reported.transform_snapped = session.snapped;
+    reported.transform_picture = session.picture;
     crate::cam_transform::show(app, ui, rect);
     super::transform_controls::show(app, ui, rect, session_box_shown);
     crate::move_box::show(app, ui, rect);

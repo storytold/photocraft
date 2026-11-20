@@ -96,7 +96,6 @@ mod tools;
 pub(crate) use app::adjustment_layer_active;
 #[cfg(test)]
 use app::layer_thumb_frame;
-pub use app::surface_fingerprint;
 pub use canvas::artboard_ui;
 pub(crate) use canvas::background_redraw;
 pub(crate) use canvas::cam_preview;
@@ -612,6 +611,8 @@ pub struct PhotocraftApp {
     /// Snap targets of the active document, derived data keyed on (document, revision,
     /// `SnapOptions`, excluded layers); `snap_ui::snap` reads and refills it through `&self`.
     pub(crate) snap_cache: std::sync::Mutex<Option<snap_ui::SnapCache>>,
+    /// What the chrome derives from each open document, kept per document revision (`app::doc_queries`).
+    pub(crate) doc_queries: app::doc_queries::DocQueries,
     /// The saved workspaces and the one shown (`workspace_ui`).
     pub workspaces: workspace_ui::Workspaces,
     /// Autosave timing and its retry state (`prefs_ui`).
@@ -803,6 +804,8 @@ mod navigator_gpu_tests;
 
 #[cfg(test)]
 mod color_swatch_tests;
+#[cfg(test)]
+mod dialog_title_ellipsis_tests;
 
 #[cfg(test)]
 mod profile_open_tests;
@@ -928,6 +931,8 @@ mod move_outline_tests;
 mod move_bar_distribute_gear_tests;
 
 #[cfg(test)]
+mod doc_revision_trials;
+#[cfg(test)]
 mod layer_thumb_bounds_tests;
 #[cfg(test)]
 mod mask_thumb_refresh_tests;
@@ -991,6 +996,8 @@ mod polygon_lasso_tests;
 #[cfg(test)]
 mod window_frame_tests;
 
+#[cfg(test)]
+mod artboards_overlap_dialog_tests;
 #[cfg(test)]
 mod browse_field_tests;
 #[cfg(test)]
