@@ -92,6 +92,7 @@ fn rows_are_greyed_as_measured_for_a_pixel_layer() {
         "layer.smartObjects.convertToSmartObject",
         "edit.freeTransform",
         "select.colorRange",
+        "select.loadSelection",
     ] {
         assert!(available(&app, &menu, id), "{id} is enabled");
     }
