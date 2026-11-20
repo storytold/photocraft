@@ -584,8 +584,19 @@ impl CanvasTool for FramePass<'_> {
         let style = ConstrainStyle::new(f64::from(cx.slop), f64::from(cx.slop));
         match scope.with_app(|app| press_rule(app, at, clicks, reach, &style, mods)) {
             Pressed::Draw => {
-                // Bitmap and Indexed Color documents make no frame (#13886): no drag, preview or alert.
-                if self.scope.with_app(|app| app.session.is_enabled("layer.new.frame")) { self.state.draw.press(pointer, cx) } else { ToolAction::Done }
+                if self.scope.with_app(|app| app.session.is_enabled("layer.new.frame")) {
+                    self.state.draw.press(pointer, cx)
+                } else {
+                    // Bitmap and Indexed Color documents make no frame (#13886): no drag, preview or
+                    // alert. A background job keeps the message the press showed before.
+                    self.scope.with_app(|app| {
+                        if let Some(reason) = app.session.job_conflict_reason("layer.new.frame") {
+                            app.ui.status = reason;
+                            app.ui.status_error = true;
+                        }
+                    });
+                    ToolAction::Done
+                }
             }
             Pressed::Done => ToolAction::Done,
             Pressed::Move(m) => {
