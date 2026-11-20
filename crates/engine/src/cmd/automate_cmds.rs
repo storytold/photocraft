@@ -544,7 +544,12 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "no images to place"));
     }
     let f = |k: &str, d: f64| p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(d);
-    let unit = p.get("units").and_then(Value::as_str).unwrap_or("inches");
+    // `units_px` reads any other string as inches, so an unknown unit would size the sheet wrongly without a word.
+    let unit = match p.get("units") {
+        None | Some(Value::Null) => "inches",
+        Some(Value::String(u)) if matches!(u.as_str(), "inches" | "cm" | "mm" | "px" | "pixels") => u.as_str(),
+        Some(other) => return Err(bad(cmd, format!("`units` must be one of inches|cm|mm|pixels, not {other}"))),
+    };
     let res = f("resolution", 300.0).clamp(1.0, 10_000.0);
     let pw = units_px(f("width", 8.0), unit, res).round().clamp(16.0, 30_000.0) as u32;
     let ph = units_px(f("height", 10.0), unit, res).round().clamp(16.0, 30_000.0) as u32;
