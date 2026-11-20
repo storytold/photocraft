@@ -43,6 +43,7 @@ pub mod stroke_trail;
 pub mod symmetry_ui;
 pub(super) mod tool_reset;
 pub mod transform_fx;
+pub mod transform_task_bar;
 pub mod transform_tool;
 pub(super) mod type_box_preview;
 pub(super) mod type_font_preview;
@@ -50,6 +51,9 @@ pub mod type_path_placement;
 pub mod type_tool;
 pub(super) mod type_transform;
 pub mod vector_ui;
+
+#[cfg(test)]
+mod art_history_fields_tests;
 
 #[cfg(test)]
 mod art_history_default_style_tests;
@@ -65,8 +69,13 @@ mod gradient_options_bar_mode_tests;
 #[cfg(test)]
 mod line_tool_defaults_tests;
 #[cfg(test)]
+mod object_selection_gear_tests;
+#[cfg(test)]
 mod object_selection_mode_tests;
 #[cfg(test)]
 mod path_selection_ctrl_direct_tests;
 #[cfg(test)]
 mod path_selection_shape_over_saved_path_tests;
+
+#[cfg(test)]
+mod art_history_reset_tip_tests;

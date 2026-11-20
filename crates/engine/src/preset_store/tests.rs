@@ -53,6 +53,47 @@ fn user(s: &Session) -> Vec<BrushPreset> {
 }
 
 #[test]
+fn empty_stores_preserve_shared_builtin_presets() {
+    let first_dir = TempDir::new("shared-first");
+    let second_dir = TempDir::new("shared-second");
+    let (mut first, warnings) = session(&first_dir);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let (second, warnings) = session(&second_dir);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(std::sync::Arc::ptr_eq(&first.tools.presets, &second.tools.presets));
+    first.execute("brush.presets.save", json!({"name": "Only first"})).unwrap();
+    assert!(second.tools.presets.iter().all(|p| p.name != "Only first"));
+    assert!(!std::sync::Arc::ptr_eq(&first.tools.presets, &second.tools.presets));
+}
+
+#[test]
+fn saved_airbrush_group_keeps_legacy_and_explicit_rates_across_reopen() {
+    let mem = MemBackend::default();
+    let group = json!({"format": GROUP_FORMAT, "version": 1, "group": "Airbrush", "presets": [
+        {"name": "Legacy Airbrush", "brush": {"buildUp": true}},
+        {"name": "Custom Airbrush", "brush": {"buildUp": true, "buildUpRate": 35}},
+        {"name": "Regular Brush", "brush": {}},
+    ]});
+    mem.write(&group_file_name("Airbrush"), &serde_json::to_vec(&group).unwrap()).unwrap();
+
+    let mut s = Session::new();
+    let warnings = s.attach_preset_store(open(Box::new(mem.clone())));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(s.tools.brush.build_up_rate, 10.0);
+    for (name, build_up, rate) in [("Regular Brush", false, 10.0), ("Custom Airbrush", true, 35.0), ("Legacy Airbrush", true, 20.0)] {
+        s.execute("tools.setBrush", json!({"preset": name})).unwrap();
+        assert_eq!(s.tools.brush.build_up, build_up);
+        assert_eq!(s.tools.brush.build_up_rate, rate);
+    }
+
+    s.execute("brush.presets.save", json!({"name": "Resaved Airbrush"})).unwrap();
+    let mut reopened = Session::new();
+    assert!(reopened.attach_preset_store(open(Box::new(mem))).is_empty());
+    reopened.execute("tools.setBrush", json!({"preset": "Resaved Airbrush"})).unwrap();
+    assert_eq!(reopened.tools.brush.build_up_rate, 20.0);
+}
+
+#[test]
 fn sessions_have_no_store_by_default() {
     let mut s = Session::new();
     assert!(s.preset_store.is_none(), "headless sessions must stay hermetic");
@@ -119,7 +160,7 @@ fn group_with_sampled_8_and_16_bit_tips_round_trips() {
     let b = sampled("Sixteen", "Inks", tip16(50, 70, 2));
     let mut c = sampled("Shared tip", "Other", tip8(64, 48, 1));
     c.brush.size = 9.0;
-    s.tools.presets.extend([a, b, c]);
+    std::sync::Arc::make_mut(&mut s.tools.presets).extend([a, b, c]);
     s.brush_presets_changed();
     s.sync_preset_store();
     let files = dir.files();
@@ -243,7 +284,7 @@ fn startup_with_many_groups_loads_them_all() {
     let (mut s, _) = session(&dir);
     for g in 0..25 {
         for i in 0..4 {
-            s.tools.presets.push(sampled(&format!("P{g}-{i}"), &format!("Group {g}"), tip8(16 + i, 16, g)));
+            std::sync::Arc::make_mut(&mut s.tools.presets).push(sampled(&format!("P{g}-{i}"), &format!("Group {g}"), tip8(16 + i, 16, g)));
         }
     }
     s.brush_presets_changed();
@@ -267,7 +308,7 @@ fn reordering_presets_and_groups_persists() {
     let (mut s, _) = session(&dir);
     for (n, g) in [("Ink 1", "Inks"), ("Ink 2", "Inks"), ("Wash", "Washes")] {
         s.execute("brush.presets.save", json!({"name": n})).unwrap();
-        s.tools.presets.iter_mut().find(|p| p.name == n).unwrap().group = g.into();
+        std::sync::Arc::make_mut(&mut s.tools.presets).iter_mut().find(|p| p.name == n).unwrap().group = g.into();
     }
     s.brush_presets_changed();
     s.sync_preset_store();
@@ -296,11 +337,27 @@ fn reordering_presets_and_groups_persists() {
 }
 
 #[test]
+fn reordering_only_built_in_presets_persists() {
+    let names = |s: &Session| s.tools.presets.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+    let dir = TempDir::new("reorder-builtin");
+    let (mut s, _) = session(&dir);
+    let group = s.tools.presets[0].group.clone();
+    let last = s.tools.presets.iter().rfind(|p| p.builtin && p.group == group).unwrap().name.clone();
+    let first = s.tools.presets[0].name.clone();
+    assert_ne!(last, first);
+    s.execute("brush.presets.move", json!({"name": last, "before": first})).unwrap();
+    assert_eq!(s.tools.presets[0].name, last);
+    let (t, w) = session(&dir);
+    assert!(w.is_empty(), "{w:?}");
+    assert_eq!(names(&t), names(&s), "the new built-in order survives a restart");
+}
+
+#[test]
 fn corrupt_and_oversized_files_are_skipped_with_a_warning() {
     let dir = TempDir::new("corrupt");
     let (mut s, _) = session(&dir);
-    s.tools.presets.push(sampled("Good", "Fine", tip8(8, 8, 1)));
-    s.tools.presets.push(sampled("Lost", "Broken tip", tip16(9, 9, 2)));
+    std::sync::Arc::make_mut(&mut s.tools.presets).push(sampled("Good", "Fine", tip8(8, 8, 1)));
+    std::sync::Arc::make_mut(&mut s.tools.presets).push(sampled("Lost", "Broken tip", tip16(9, 9, 2)));
     s.brush_presets_changed();
     s.sync_preset_store();
     let be = DirBackend::new(&dir.0);
@@ -370,7 +427,7 @@ fn bench_load_500_sampled_presets() {
         // A mix of 8-bit (most .abr tips) and 16-bit tips, 64..319 px.
         let side = 64 + (i * 37) % 256;
         let t = if i % 4 == 0 { tip16(side, side, i) } else { tip8(side, side, i) };
-        s.tools.presets.push(sampled(&format!("Brush {i}"), &format!("Set {}", i / 50), t));
+        std::sync::Arc::make_mut(&mut s.tools.presets).push(sampled(&format!("Brush {i}"), &format!("Set {}", i / 50), t));
     }
     s.brush_presets_changed();
     let t0 = std::time::Instant::now();
@@ -411,7 +468,7 @@ fn library(n: u32, side: u32) -> (Session, MemBackend) {
     let mut s = Session::new();
     s.attach_preset_store(open(Box::new(mem.clone())));
     for i in 0..n {
-        s.tools.presets.push(sampled(&format!("Big {i}"), "Big Set", tip8(side, side, i)));
+        std::sync::Arc::make_mut(&mut s.tools.presets).push(sampled(&format!("Big {i}"), "Big Set", tip8(side, side, i)));
     }
     s.brush_presets_changed();
     s.sync_preset_store();
@@ -519,7 +576,7 @@ fn missing_corrupt_or_unknown_tips_fail_when_used_without_panicking() {
     let k0 = key(&t, "Big 0");
     mem.remove(&tip_file(&k0)).unwrap();
     t.execute("tools.setBrush", json!({"preset": "Hard Round"})).unwrap();
-    let broken = t.tools.presets.iter_mut().find(|p| p.name == "Big 0").unwrap();
+    let broken = std::sync::Arc::make_mut(&mut t.tools.presets).iter_mut().find(|p| p.name == "Big 0").unwrap();
     broken.captures.color = true;
     broken.brush.color = [1.0, 0.0, 0.0, 1.0];
     t.tools.foreground = [0.0, 0.0, 1.0, 1.0];

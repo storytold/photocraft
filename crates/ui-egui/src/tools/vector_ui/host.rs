@@ -132,9 +132,22 @@ pub(crate) fn tool<'a>(scope: &'a ToolScope<'a>, state: &'a mut VectorTools, _ho
 /// After the run: the owner check, then what each tool reported. Every tool is drained, whichever is selected: a tool
 /// switch ends the Pen's gesture with an event of the old tool.
 pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut VectorTools, _response: &ToolHostResponse) {
+    // A live shape layer that moved under its draft since the last pass (Undo, Redo, the History panel) gives the Pen
+    // the draft it has now (#12909). Here the app holds stand-in tools, so the Pen is told directly.
+    if let Some(draft) = pen::sync_live_draft_from_layer(app) {
+        state.pen.kept(0).replace(&draft);
+    }
     cancel_stale_pen(app);
+    let before = app.ui.pen.as_ref().map(|p| p.draft.clone());
     let events = state.pen.take_events();
     apply_pen(app, events);
+    // A live shape layer takes the draft's anchors once a press is over (a release, or a key that changed the draft):
+    // a drag's updates make no History steps of their own (#12909).
+    let pointer = craft::ui::runtime::pointer::frame(app.ctx());
+    let changed = app.ui.pen.as_ref().map(|p| &p.draft) != before.as_ref();
+    if pointer.buttons.is_empty() && (changed || pointer.release.is_some()) {
+        pen::sync_live_layer_from_draft(app);
+    }
     end_for_other_tool(app);
     for event in state.shapes.take_events() {
         match event {
@@ -194,6 +207,11 @@ pub(crate) fn remove_last(app: &mut PhotocraftApp) -> bool {
         return false;
     }
     let Some(pen) = app.ui.pen.as_ref() else { return false };
+    // A live shape layer's anchors are History steps (#12909): Undo takes back the last one the layer took. Anchors it
+    // refused are the draft's alone, and the Pen takes those back first, one by one.
+    if pen.live_layer && !pen::live_anchors_pending(app) {
+        return pen::undo_live_step(app);
+    }
     if pen.resumes.as_ref().is_some_and(|r| pen.draft.knots.len() <= r.was.knots.len()) {
         drop_draft(app);
         return true;
@@ -308,11 +326,15 @@ fn edit_draft(app: &mut PhotocraftApp, edit: EditEvent<EditSubpath>) -> bool {
 fn set_draft(app: &mut PhotocraftApp, value: EditSubpath) {
     let n = value.knots.len();
     let selection_on_draft = app.ui.direct_selection.target == Some(PathRef::Pen);
+    // A refused draft whose document changed since takes no press, only Delete and Backspace: it stays refused, or
+    // `cancel_stale_pen` would drop all of it on the next pass instead of the one anchor (#15488).
+    let stale = app.ui.pen.as_ref().and_then(|p| p.owner.as_ref()).is_some_and(|o| !o.valid(app));
     let Some(pen) = ensure_draft(app) else { return };
     if pen.draft == value {
         return;
     }
     let grew = n > pen.draft.knots.len();
+    let first = pen.draft.knots.is_empty();
     // Only the first anchor changing under a path of three or more is the press that closes it with a drag. The
     // Curvature Pen's close reflows every anchor's handles: the open draft is the one before the closing update.
     if n != pen.draft.knots.len() {
@@ -325,7 +347,7 @@ fn set_draft(app: &mut PhotocraftApp, value: EditSubpath) {
         }
     }
     pen.draft = value;
-    pen.commit_failed = false;
+    pen.commit_failed &= stale;
     if selection_on_draft {
         let ds = &mut app.ui.direct_selection;
         if grew {
@@ -334,6 +356,10 @@ fn set_draft(app: &mut PhotocraftApp, value: EditSubpath) {
             ds.anchors.retain(|a| a[1] < n);
             ds.segment = ds.segment.filter(|s| s[1] + 1 < n);
         }
+    }
+    // In Shape mode the first anchor makes the shape layer at once (#12909).
+    if first {
+        pen::start_live_shape(app);
     }
 }
 
