@@ -1,4 +1,4 @@
-//! #11398: Edit › Preferences says "Plugins…" and "Camera Raw…" and has the reference
+//! #11398: Edit › Preferences says "Plugins…" and "RAW Defaults…" and has the reference
 //! application's two separators (after the first entry and before Camera Raw…).
 
 use crate::menu_catalog::CATALOG;
@@ -33,7 +33,7 @@ fn preferences_submenu_reads_in_the_reference_order_with_two_separators() {
             "Type…",
             "Enhanced Controls…",
             "---",
-            "Camera Raw…",
+            "RAW Defaults…",
         ]
     );
 }
@@ -76,12 +76,12 @@ fn engine_labels_match_the_catalogue_for_the_renamed_rows() {
         assert_eq!(engine, catalogue, "{id}");
     }
     assert_eq!(photocraft_engine::commands::find("edit.preferences.plugIns").unwrap().label, "Plugins…");
-    assert_eq!(photocraft_engine::commands::find("edit.preferences.rawDefaults").unwrap().label, "Camera Raw…");
+    assert_eq!(photocraft_engine::commands::find("edit.preferences.rawDefaults").unwrap().label, "RAW Defaults…");
 }
 
 #[test]
 fn preferences_dialog_page_names_follow_the_menu() {
     let title = |key: &str| photocraft_engine::prefs::SECTIONS.iter().find(|(k, _)| *k == key).map(|(_, t)| *t);
     assert_eq!(title("plugIns"), Some("Plugins"));
-    assert_eq!(title("rawDefaults"), Some("Camera Raw Defaults"));
+    assert_eq!(title("rawDefaults"), Some("RAW Defaults"));
 }

@@ -1,9 +1,11 @@
 //! The optional Actions discovery folder; filesystem scans stay off the UI thread.
 
 use crate::PhotocraftApp;
-use serde_json::{Map, Value, json};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
+
+/// egui temp key: Open Location in Preferences asked to reveal this folder.
+const OPEN_LOCATION: &str = "prefs.actionsFolder.open";
 
 #[derive(Default)]
 pub(crate) struct Runtime {
@@ -54,7 +56,15 @@ pub(crate) fn files(app: &PhotocraftApp) -> &[String] {
     if directory(app).is_some() { &app.prefs_rt.actions_folder.files } else { &[] }
 }
 
+/// Asks the next frame to open `folder` with the system file opener.
+pub(crate) fn request_open(ctx: &egui::Context, folder: &str) {
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new(OPEN_LOCATION), folder.to_string()));
+}
+
 pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if let Some(folder) = ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new(OPEN_LOCATION))) {
+        open_location(app, &folder);
+    }
     let folder = configured(app).to_string();
     let rt = &mut app.prefs_rt.actions_folder;
     if rt.folder != folder {
@@ -94,43 +104,8 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     ctx.request_repaint_after(Duration::from_secs(30));
 }
 
-const REQUEST: &str = "prefs.actionsFolder.request";
-
-pub(crate) fn field(ui: &mut egui::Ui, obj: &mut Map<String, Value>, value: &str) {
-    ui.label(tl!("Actions Folder"));
-    let mut value = value.to_string();
-    ui.vertical(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut value).desired_width(260.0));
-        ui.horizontal(|ui| {
-            if ui.button(tl!("Browse…")).clicked() {
-                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(REQUEST), true));
-            }
-            if ui.add_enabled(!value.trim().is_empty(), egui::Button::new(tl!("Open Location"))).clicked() {
-                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(REQUEST), false));
-            }
-        });
-    });
-    obj.insert("actionsFolder".into(), json!(value));
-}
-
-pub(crate) fn preferences(app: &mut PhotocraftApp, ui: &egui::Ui, fields: &Map<String, Value>) {
-    let Some(browse) = ui.ctx().data_mut(|d| d.remove_temp::<bool>(egui::Id::unique(REQUEST))) else { return };
-    let folder =
-        fields.get("values").and_then(|v| v.get("fileHandling")).and_then(|v| v.get("actionsFolder")).and_then(Value::as_str).unwrap_or("").to_string();
-    let result = if browse {
-        let Some(id) = fields.get("__prefsDialogId").and_then(Value::as_u64) else { return };
-        app.ask_file(crate::file_dialog::FileDialogRequest::Folder { initial_dir: (!folder.is_empty()).then_some(folder) }, move |app, answer| {
-            let crate::file_dialog::FileDialogAnswer::FolderTo(path) = answer else { return Err("expected a folder".into()) };
-            if let Some(dialog) = app.ui.dialog_mut(id) {
-                let values = dialog.fields.get_mut("values").and_then(Value::as_object_mut).ok_or("missing preferences")?;
-                let handling = values.get_mut("fileHandling").and_then(Value::as_object_mut).ok_or("missing file handling preferences")?;
-                handling.insert("actionsFolder".into(), json!(path));
-            }
-            Ok(Value::Null)
-        })
-    } else {
-        app.services.open_url.as_ref().ok_or_else(|| "no system file opener configured".to_string()).and_then(|open| open(&folder)).map(|()| Value::Null)
-    };
+fn open_location(app: &mut PhotocraftApp, folder: &str) {
+    let result = app.services.open_url.as_ref().ok_or_else(|| "no system file opener configured".to_string()).and_then(|open| open(folder));
     if let Err(err) = result {
         app.ui.status = err;
         app.ui.status_error = true;

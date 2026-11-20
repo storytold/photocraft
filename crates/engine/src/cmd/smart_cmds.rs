@@ -34,7 +34,7 @@ use photocraft_raster::Surface;
 use serde_json::{Value, json};
 use stack_cache::{Stage, StageKey};
 
-use crate::commands::{CommandSpec, blend_from_str, layer_param};
+use crate::commands::{CommandSpec, layer_param, parse_blend};
 use crate::jobs::JobCtx;
 use crate::{EngineError, Result, Session};
 
@@ -70,8 +70,15 @@ pub fn encode_source(doc: &Document) -> Result<Vec<u8>> {
 
 /// Decodes smart-object contents (a `.pcraft` bundle, PSD/PSB, or any flat image format).
 pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
-    if photocraft_io::svg::is_svg(bytes) {
-        return photocraft_io::svg::import_svg_bounded_images(file_name, bytes, 24_000_000)
+    decode_source_classified(file_name, bytes, photocraft_io::svg::is_svg(bytes))
+}
+
+/// Reuse the central format decision made by this render operation.
+fn decode_source_classified(file_name: &str, bytes: &[u8], svg: bool) -> Result<Document> {
+    if svg {
+        // This API has no warning channel. Stack/source caches and contents edits must not
+        // turn a partial SVG import into silently complete smart-object contents.
+        return photocraft_io::svg::import_svg_bounded_images_strict(file_name, bytes, 24_000_000)
             .map(|imported| imported.document)
             .map_err(|e| other(format!("can't read SVG smart object contents: {e}")));
     }
@@ -193,14 +200,14 @@ pub(crate) use filters::{add_smart_filter, add_smart_filter_in, filter_mask_pain
 use filters::{blending_options, delete_filter, edit_filters, move_filter, set_filter_params, set_filter_visible, smart, transfer_filters};
 pub(crate) use placing::detach_psd;
 pub(crate) use placing::{affine_homography, set_placement, shift_smart, transform_placement};
-use placing::{convert, shift_layer, via_copy};
+use placing::{convert, reset_transform, shift_layer, via_copy};
 pub use placing::{layer_to_smart, layers_to_smart, placement};
-#[cfg(test)]
-pub(crate) use rendering::DISPLAY_NATIVE_HASH_BYTES;
 use rendering::refresh_or_fail;
-pub(crate) use rendering::source_box;
+#[cfg(test)]
+pub(crate) use rendering::{DISPLAY_NATIVE_HASH_BYTES, WARNING_SOURCE_DECODES, WARNING_SOURCE_LIMIT};
 #[cfg(test)]
 use rendering::{NativeDigests, blend_surfaces, place, render_in};
+pub(crate) use rendering::{WarningRenderSources, render_with_warnings, render_with_warnings_using, source_box};
 pub use rendering::{apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image};
 #[cfg(test)]
 use source::svg_source_image_in;
@@ -238,6 +245,14 @@ pub fn specs() -> Vec<CommandSpec> {
             r##"{"layer":id?} → opens the contents as a new document; saving (layer.smartObjects.saveContents) or closing it updates the smart object"##,
             has_smart,
             edit_contents
+        ),
+        spec!(
+            "layer.smartObjects.resetTransform",
+            "Reset Transform",
+            SO,
+            r##"{"layer":id?} (the placement returns to 100 % of the current contents' own size with rotation, skew, Distort, Perspective and the Warp cleared, centred on the average of the placement's four corners; the smart filters stay; refused with nothing changed when the object can't be re-rendered (a visible filter PhotoCraft doesn't have, or contents that can't be read); one undo step)"##,
+            has_smart,
+            reset_transform
         ),
         spec!("layer.smartObjects.saveContents", "Save Contents", &[], "{} (in an Edit Contents document)", is_smart_child, |s, _| {
             let i = s.active_index().ok_or(EngineError::NoDocument)?;

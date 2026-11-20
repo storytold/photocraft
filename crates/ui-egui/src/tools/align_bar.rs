@@ -1,66 +1,98 @@
 //! The Move tool's Align and Distribute controls (Photoshop shows them whenever the Move tool is
-//! active; they enable once enough layers are selected). Every button dispatches an existing
-//! `layer.align.*` / `layer.distribute.*` command.
+//! active; they enable once enough layers are selected). The framework's `AlignBar` lays out the
+//! buttons and the More menu; each fired `AlignAction` runs the matching `layer.align.*` /
+//! `layer.distribute.*` command through the app's command sources ([`run_fired`]). The gear after
+//! the bar holds the Move tool's three hover and group toggles (#11381).
 
+use craft::behavior::IconId;
+use craft::ui::bars::{AlignAction, AlignBar};
+use craft::ui::buttons::IconButton;
+use craft::ui::contract::{Entry, Props as _, Show as _, Trigger};
+use craft::ui::menu::Menu;
+use craft::ui::runtime::access::PopupKind;
+use craft::ui::runtime::commands::{CommandRef, CommandSet as _, CommandState};
 use serde_json::json;
 
-use crate::theme::Tokens;
-use crate::{PhotocraftApp, icons};
+use crate::PhotocraftApp;
 
-/// (command id, icon, label). The labels are the Layer menu's, already translated.
-const ALIGN: [(&str, &str, &str); 6] = [
-    ("layer.align.leftEdges", "align-edge-left", "Left Edges"),
-    ("layer.align.horizontalCenters", "align-edge-hcenter", "Horizontal Centers"),
-    ("layer.align.rightEdges", "align-edge-right", "Right Edges"),
-    ("layer.align.topEdges", "align-edge-top", "Top Edges"),
-    ("layer.align.verticalCenters", "align-edge-vcenter", "Vertical Centers"),
-    ("layer.align.bottomEdges", "align-edge-bottom", "Bottom Edges"),
-];
+/// Every align and distribute action, once.
+fn all() -> impl Iterator<Item = AlignAction> {
+    AlignAction::ALIGN.into_iter().chain(AlignAction::DISTRIBUTE)
+}
 
-const DISTRIBUTE: [(&str, &str, &str); 8] = [
-    ("layer.distribute.topEdges", "distribute-top", "Top Edges"),
-    ("layer.distribute.verticalCenters", "distribute-vcenter", "Vertical Centers"),
-    ("layer.distribute.bottomEdges", "distribute-bottom", "Bottom Edges"),
-    ("layer.distribute.leftEdges", "distribute-left", "Left Edges"),
-    ("layer.distribute.horizontalCenters", "distribute-hcenter", "Horizontal Centers"),
-    ("layer.distribute.rightEdges", "distribute-right", "Right Edges"),
-    ("layer.distribute.horizontally", "distribute-horizontal", "Horizontally"),
-    ("layer.distribute.vertically", "distribute-vertical", "Vertically"),
-];
-
-/// The six align icons followed by a menu holding both groups with icons and names.
-/// Each icon uses 20 pt artwork inside a 28 pt hit target for high-DPI legibility
-/// without changing enabled-state or command dispatch (#8849).
-pub fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    ui.spacing_mut().item_spacing.x = 0.0;
-    for (cmd, icon, label) in ALIGN {
-        let tip = format!("{}: {}", tl!("Align"), tl!(label));
-        let on = app.session.is_enabled(cmd);
-        if ui.add_enabled_ui(on, |ui| icons::button_with_icon_size(ui, icon, 28.0, 20.0, false, &tip)).inner.clicked() {
-            let _ = app.run(cmd, json!({}));
-        }
+/// The engine command an action runs.
+pub(crate) fn command_id(action: AlignAction) -> Option<&'static str> {
+    match action {
+        AlignAction::AlignLeftEdges => Some("layer.align.leftEdges"),
+        AlignAction::AlignHorizontalCenters => Some("layer.align.horizontalCenters"),
+        AlignAction::AlignRightEdges => Some("layer.align.rightEdges"),
+        AlignAction::AlignTopEdges => Some("layer.align.topEdges"),
+        AlignAction::AlignVerticalCenters => Some("layer.align.verticalCenters"),
+        AlignAction::AlignBottomEdges => Some("layer.align.bottomEdges"),
+        AlignAction::DistributeTopEdges => Some("layer.distribute.topEdges"),
+        AlignAction::DistributeVerticalCenters => Some("layer.distribute.verticalCenters"),
+        AlignAction::DistributeBottomEdges => Some("layer.distribute.bottomEdges"),
+        AlignAction::DistributeLeftEdges => Some("layer.distribute.leftEdges"),
+        AlignAction::DistributeHorizontalCenters => Some("layer.distribute.horizontalCenters"),
+        AlignAction::DistributeRightEdges => Some("layer.distribute.rightEdges"),
+        AlignAction::DistributeHorizontally => Some("layer.distribute.horizontally"),
+        AlignAction::DistributeVertically => Some("layer.distribute.vertically"),
+        // `AlignAction` is `#[non_exhaustive]`; `all()` yields only the actions listed above, and a later one has no engine command here.
+        _ => None,
     }
-    ui.add_space(6.0);
-    let more = icons::button_with_icon_size(ui, "ellipsis", 28.0, 20.0, false, tl!("Align and distribute"));
-    egui::Popup::menu(&more).show(|ui| {
-        ui.set_min_width(200.0);
-        let mut section = |ui: &mut egui::Ui, title: &str, items: &[(&str, &str, &str)]| {
-            ui.label(egui::RichText::new(title).small().color(t.text_dim));
-            for (cmd, icon, label) in items {
-                let on = app.session.is_enabled(cmd);
-                let tint = if on { t.icon } else { t.text_dim };
-                let button = egui::Button::image_and_text(icons::image(icon, 16.0, tint), tl!(label));
-                if ui.add_enabled(on, button).clicked() {
-                    let _ = app.run(cmd, json!({}));
-                    ui.close();
-                }
-            }
-        };
-        section(ui, tl!("Align"), &ALIGN);
-        ui.separator();
-        section(ui, tl!("Distribute"), &DISTRIBUTE);
-    });
+}
+
+/// The enabled state of every action: the session's, as the Layer menu reads it.
+pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandState)> {
+    all().map(|action| (CommandRef::new(action.id()), CommandState::new().enabled(command_id(action).is_some_and(|id| app.session.is_enabled(id))))).collect()
+}
+
+/// Runs a fired `AlignAction`. False when `command` is not one of them. The context is the
+/// command-source shape's; these commands need none.
+pub(crate) fn run_fired(app: &mut PhotocraftApp, _ctx: &egui::Context, command: &CommandRef) -> bool {
+    let Some(action) = AlignAction::from_ref(command) else { return false };
+    let Some(id) = command_id(action) else { return false };
+    if let Err(e) = app.run(id, json!({})) {
+        app.ui.status = e;
+    }
+    true
+}
+
+/// The bar, then the gear.
+pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    AlignBar::new().show(ui);
+    gear(app, ui);
+}
+
+/// A row of the gear menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum GearOption {
+    HoverBounds,
+    ExpandGroup,
+    LayersHoverBounds,
+}
+
+/// The gear after the bar: a menu of the Move tool's three check items, all on by default and
+/// saved with the tool options.
+fn gear(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let label = tl!("Options").to_string();
+    let button = IconButton::new(IconId::new("settings")).label(label.clone()).popup(PopupKind::Menu).show(ui);
+    let o = &app.ui.tool_options;
+    let entries = [
+        Entry::new(GearOption::HoverBounds, tl!("Show layer bounds on hover").to_string()).checked(o.move_show_hover_bounds),
+        Entry::new(GearOption::ExpandGroup, tl!("Expand layer group on click").to_string()).checked(o.move_expand_group_on_click),
+        Entry::new(GearOption::LayersHoverBounds, tl!("Show hover bounds from Layers").to_string()).checked(o.move_show_layers_hover_bounds),
+    ];
+    let o = match Menu::new(label).opened_by(&button, Trigger::Press).pick(ui, &entries).picked {
+        Some(picked) => picked,
+        None => return,
+    };
+    let options = &mut app.ui.tool_options;
+    match o {
+        GearOption::HoverBounds => options.move_show_hover_bounds = !options.move_show_hover_bounds,
+        GearOption::ExpandGroup => options.move_expand_group_on_click = !options.move_expand_group_on_click,
+        GearOption::LayersHoverBounds => options.move_show_layers_hover_bounds = !options.move_show_layers_hover_bounds,
+    }
 }
 
 #[cfg(test)]
@@ -68,11 +100,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_button_is_a_live_command_with_an_icon() {
+    fn every_align_action_runs_a_live_command() {
         let specs = photocraft_engine::command_specs();
-        for (cmd, icon, _) in ALIGN.iter().chain(DISTRIBUTE.iter()) {
-            assert!(specs.iter().any(|c| c.id == *cmd), "{cmd} is not a command");
-            assert!(icons::exists(icon), "{icon} is not embedded");
+        let mut count = 0;
+        for action in all() {
+            let id = command_id(action).expect("an engine command");
+            assert!(specs.iter().any(|c| c.id == id), "{id} is not a command");
+            count += 1;
         }
+        assert_eq!(count, 14);
     }
 }

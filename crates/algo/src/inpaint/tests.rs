@@ -23,6 +23,24 @@ fn zero_width_images_complete_without_sizing_by_height() {
     assert_eq!(complete(1 << 40, 0, 3, &[], &[], &p), Some(Vec::new()));
 }
 
+/// Dimensions whose product wraps must be refused, not matched against tiny buffers.
+#[test]
+#[should_panic]
+fn wrapping_dimension_products_are_refused() {
+    let _ = complete(1 << 40, 1 << 40, 1, &[], &[], &CompleteParams::default());
+}
+
+/// A block size beyond `i32` falls back to the membrane fill instead of looping on a zero step.
+#[test]
+fn a_huge_synthesis_block_does_not_hang() {
+    let (w, h) = (8, 8);
+    let img = vec![0.5f32; w * h];
+    let mut hole = vec![false; w * h];
+    hole[27] = true;
+    let out = synthesize(w, h, 1, &img, &hole, usize::MAX, 1);
+    assert_eq!(out.len(), w * h);
+}
+
 /// Smooth gradient plus deterministic fine noise.
 fn texture(w: usize, h: usize) -> Vec<f32> {
     let mut rng = Rng::new(7);
@@ -168,10 +186,10 @@ fn a_hole_is_as_thick_as_it_is_through_not_along() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn thin_holes_are_filled_the_same_on_any_number_of_threads() {
-    let (w, h) = (300, 200);
+    let (w, h) = (150, 100);
     let img = busy(w, h, 3, 5);
     // A wavy line 6 px thick across the image.
-    let hole: Vec<bool> = (0..w * h).map(|i| (((i % w) as f32 * 0.05).sin() * 30.0 + 100.0 - (i / w) as f32).abs() < 3.0).collect();
+    let hole: Vec<bool> = (0..w * h).map(|i| (((i % w) as f32 * 0.05).sin() * 15.0 + 50.0 - (i / w) as f32).abs() < 3.0).collect();
     let px = roles(w, h, &hole);
     let run = |threads: usize| {
         let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
