@@ -81,6 +81,8 @@ fn fields(id: &str) -> Option<&'static [(&'static str, Rule)]> {
             ("wavelengthMax", Number(2.0, 999.0)),
             ("amplitudeMin", Number(1.0, 998.0)),
             ("amplitudeMax", Number(1.0, 999.0)),
+            ("scaleHorizontal", Number(1.0, 100.0)),
+            ("scaleVertical", Number(1.0, 100.0)),
             ("type", Choice("sine|triangle|square")),
             ("undefinedAreas", Choice("wrap|repeat")),
             ("seed", Unsigned(u32::MAX as u64)),

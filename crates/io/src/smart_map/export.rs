@@ -276,8 +276,8 @@ fn fltr_for(k: &Known, p: &J) -> Result<Option<Descriptor>, String> {
                 .with("WLMx", pi(p, "wavelengthMax", 120.0))
                 .with("AmMn", pi(p, "amplitudeMin", 5.0))
                 .with("AmMx", pi(p, "amplitudeMax", 35.0))
-                .with("SclH", Value::Integer(100))
-                .with("SclV", Value::Integer(100))
+                .with("SclH", pi_in(p, "scaleHorizontal", 100.0, 1, 100))
+                .with("SclV", pi_in(p, "scaleVertical", 100.0, 1, 100))
                 .with("UndA", enum_param(p, "undefinedAreas", "wrap", "UndA", &UNDEFINED_AREAS)?)
                 .with("RndS", seed)
         }

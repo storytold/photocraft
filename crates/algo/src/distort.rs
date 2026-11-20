@@ -121,6 +121,9 @@ pub(crate) struct WaveSpec {
     pub generators: u32,
     pub wavelength: (f32, f32),
     pub amplitude: (f32, f32),
+    /// Photoshop's Scale Horiz. and Vert.: the share (0–1) of each generator's horizontal and
+    /// vertical displacement that is applied.
+    pub scale: (f32, f32),
     pub wave_type: WaveType,
     pub undefined: UndefinedAreas,
     pub seed: u32,
@@ -141,6 +144,11 @@ fn shape(t: WaveType, phase: f32) -> f32 {
     }
 }
 
+/// A Wave scale as a factor in Photoshop's 1–100 % range: a non-finite one is 100 %.
+fn wave_scale(scale: f32) -> f32 {
+    if scale.is_finite() { scale.clamp(0.01, 1.0) } else { 1.0 }
+}
+
 /// Wave: displace `src` over `out` by the average of `w.generators` seeded waves (at most `MAX_WAVE_GENERATORS`) along each axis.
 pub(crate) fn wave(src: &Image, out: Rect, ctx: &Ctx, w: WaveSpec) -> Vec<f32> {
     let n = w.generators.clamp(1, MAX_WAVE_GENERATORS);
@@ -152,6 +160,7 @@ pub(crate) fn wave(src: &Image, out: Rect, ctx: &Ctx, w: WaveSpec) -> Vec<f32> {
         })
         .collect();
     let b = ctx.bounds;
+    let (sx, sy) = (wave_scale(w.scale.0), wave_scale(w.scale.1));
     remap(src, out, ctx, edge_of(w.undefined), |x, y| {
         let (lx, ly) = (x - b.x0 as f32, y - b.y0 as f32);
         let (mut dx, mut dy) = (0.0, 0.0);
@@ -159,7 +168,7 @@ pub(crate) fn wave(src: &Image, out: Rect, ctx: &Ctx, w: WaveSpec) -> Vec<f32> {
             dx += amp * shape(w.wave_type, std::f32::consts::TAU * ly / len + p1);
             dy += amp * shape(w.wave_type, std::f32::consts::TAU * lx / len + p2);
         }
-        (x + dx / n as f32, y + dy / n as f32)
+        (x + dx * sx / n as f32, y + dy * sy / n as f32)
     })
 }
 
