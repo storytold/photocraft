@@ -579,6 +579,14 @@ pub(crate) fn record_chrome_toggles(ctx: &egui::Context, toggles: &[(egui::Viewp
 /// group's tool on the press and releases the spring on the key-up; every other command runs on its press only.
 /// A framework command goes to [`crate::app::framework::run_command`], a PhotoCraft id to [`dispatch_as`].
 pub(crate) fn run_fired(app: &mut PhotocraftApp, ctx: &egui::Context, fired: &[Fired]) {
+    // A fired command is a command run, as `menus::invoke` counts one: many of these (the opacity and blend keys, the
+    // Artboard, Slice and panel commands) change what a settled region shows without going through `invoke`. A key's
+    // repeats change only what has a revision or a tool option (brush size, a nudge, a mode step), so a held key
+    // doesn't run every region at the repeat rate.
+    if fired.iter().any(|f| f.target.is_none() && f.phase != FirePhase::Repeat) {
+        app.commands_run += 1;
+        ctx.request_repaint();
+    }
     for f in fired {
         if f.target.is_some() {
             continue;
