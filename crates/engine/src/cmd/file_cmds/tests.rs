@@ -4752,7 +4752,7 @@ fn batch_steps_use_the_session_object_model() {
         fn unavailable(&self) -> Option<String> {
             None
         }
-        fn segment(&self, req: &SegmentRequest, _cancelled: &(dyn Fn() -> bool + Sync)) -> Result<SegmentAnswer, String> {
+        fn segment(&self, req: &SegmentRequest, _cancelled: &(dyn Fn() -> bool + Sync)) -> std::result::Result<SegmentAnswer, String> {
             self.0.fetch_add(1, Ordering::SeqCst);
             let n = (req.width as usize) * (req.height as usize);
             Ok(SegmentAnswer { mask: vec![255; n], matched: true })
