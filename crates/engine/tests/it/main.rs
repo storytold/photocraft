@@ -33,6 +33,7 @@ mod atn_stroke_width;
 mod atn_type_path;
 mod atn_v12;
 mod atn_video_frames;
+mod auto_blend_layer_kinds;
 mod average_smart;
 mod background_and_mask_depth;
 mod background_job_target;
