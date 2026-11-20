@@ -3,12 +3,13 @@
 //! mapping from preset events to `brush.presets.*` and `tools.setBrush`.
 
 use std::hash::Hash;
+use std::sync::Arc;
 
-use craft::behavior::{EditEvent, GesturePhase};
+use craft::behavior::{EditEvent, EditEvents, GesturePhase};
 use craft::draw::ui::brush_presets::{BrushCardParts, BrushPick, BrushRowPaint, BrushesPanel, brush_row};
 use craft::keymap::Mods;
-use craft::ui::contract::{Bind, ReorderMove};
-use craft::ui::patterns::presets::{PresetEvent, PresetRow, PresetView};
+use craft::ui::contract::{Bind, MemoProps, MemoView, Outbox, PlainData, ReorderMove, Tracked, bind_tracked};
+use craft::ui::patterns::presets::{PresetEvent, PresetRow, PresetState, PresetView};
 use craft::ui::primitives::ContentPainterCx;
 use craft::ui::primitives::textures::TextureCache;
 use craft::ui::runtime::env::Env;
@@ -28,7 +29,7 @@ use crate::theme::Tokens;
 /// What a row of the brush lists is: a preset, or a group (`folder` empty) or a folder of a group.
 /// One type serves all three because their names can be equal. `group` is the group's name as the
 /// engine stores it on its presets (empty for the ungrouped).
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, MemoProps, PlainData)]
 pub(crate) enum BrushKey {
     /// A preset, by name.
     Preset(String),
@@ -110,8 +111,7 @@ pub(crate) fn tip_paint(b: &BrushSettings) -> impl Fn(&ContentPainterCx, Rect) +
 
 /// The rows of every preset in the engine's panel order (the order `,` and `.` step through): a
 /// group row before the first preset of each group and each folder, with its count.
-pub(crate) fn preset_rows(app: &PhotocraftApp, env: &Env, parts: BrushCardParts) -> Vec<PresetRow<BrushKey>> {
-    let presets = app.session.tools.presets.as_ref();
+pub(crate) fn preset_rows(presets: &[BrushPreset], env: &Env, parts: BrushCardParts) -> Vec<PresetRow<BrushKey>> {
     let mut counts: std::collections::HashMap<(&str, &[String]), usize> = std::collections::HashMap::new();
     for p in presets {
         let path = path_of(p);
@@ -145,24 +145,69 @@ pub(crate) fn preset_rows(app: &PhotocraftApp, env: &Env, parts: BrushCardParts)
     rows
 }
 
-/// The `brushes` registry body: the Size field over the presets, in a list or a grid.
+/// The current preset's row: only while a preset of that name exists, so a deleted preset does not stay picked.
+pub(crate) fn current_key(tools: &photocraft_engine::ToolState) -> Option<BrushKey> {
+    let name = tools.current_preset.as_deref()?;
+    tools.presets.iter().find(|p| p.name.eq_ignore_ascii_case(name)).map(|p| BrushKey::Preset(p.name.clone()))
+}
+
+/// Every input of the Brushes panel's view: the presets and the brush size it shows, and its own list state.
+#[derive(MemoProps)]
+struct BrushesProps<'a> {
+    presets: &'a Tracked<Arc<Vec<BrushPreset>>>,
+    current: Option<BrushKey>,
+    diameter: f64,
+    state: &'a mut Tracked<PresetState<BrushKey>>,
+    out: Outbox<'a, BrushesEvent>,
+}
+
+/// What a run of the Brushes panel's view reports.
+enum BrushesEvent {
+    /// The Size field's edits.
+    Size(EditEvents<f64>),
+    /// The picks, with every row's key in list order (a reorder is placed by them).
+    Picks(Vec<BrushPick<BrushKey>>, Vec<BrushKey>),
+}
+
+/// The `brushes` registry body: the Size field over the presets, in a list or a grid. A memoized view: it runs when the
+/// presets, the current preset, the size or its list state change, or when input reaches it.
 pub(crate) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let mut sent = Vec::new();
+    let props = BrushesProps {
+        presets: &app.session.tools.presets,
+        current: current_key(&app.session.tools),
+        diameter: f64::from(app.session.tools.brush.size),
+        state: &mut app.ui.brushes_panel,
+        out: Outbox::new(&mut sent),
+    };
+    let _ = MemoView::new("brushes", props, show_panel).show(ui);
+    for event in sent {
+        match event {
+            BrushesEvent::Size(events) => {
+                for event in &events {
+                    set_size(app, event);
+                }
+            }
+            BrushesEvent::Picks(picks, keys) => run_picks(app, picks, &keys),
+        }
+    }
+}
+
+/// The Brushes panel's view.
+fn show_panel(props: &mut BrushesProps<'_>, ui: &mut egui::Ui) {
     let env = Env::of(ui);
-    let rows = preset_rows(app, &env, parts_of(app.ui.brushes_panel.view));
-    let keys: Vec<BrushKey> = rows.iter().map(|row| row.key.clone()).collect();
-    let current = app.session.tools.current_preset.as_deref().and_then(|c| app.session.tools.presets.iter().find(|p| p.name.eq_ignore_ascii_case(c)));
-    let current = current.map(|p| BrushKey::Preset(p.name.clone()));
-    let mut diameter = f64::from(app.session.tools.brush.size);
+    let rows = preset_rows(props.presets.as_slice(), &env, parts_of(props.state.view));
     let mut panel =
-        BrushesPanel::new(tl!("Brushes"), &rows, Bind::bound(&mut app.ui.brushes_panel), Bind::bound(&mut diameter), f64::from(MAX_BRUSH_SIZE)).import(true);
-    if let Some(current) = current {
+        BrushesPanel::new(tl!("Brushes"), &rows, bind_tracked!(props.state), Bind::bound(&mut props.diameter), f64::from(MAX_BRUSH_SIZE)).import(true);
+    if let Some(current) = props.current.clone() {
         panel = panel.selected(current);
     }
     let out = panel.show(ui);
-    for event in &out.diameter.events {
-        set_size(app, event);
+    props.out.send(BrushesEvent::Size(out.diameter.events));
+    if !out.picks.is_empty() {
+        let keys = rows.iter().map(|row| row.key.clone()).collect();
+        props.out.send(BrushesEvent::Picks(out.picks, keys));
     }
-    run_picks(app, out.picks, &keys);
 }
 
 /// One edit event of the Size field as a `tools.setBrush`: a gesture's events share a journal key,

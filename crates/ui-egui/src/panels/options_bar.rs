@@ -8,7 +8,7 @@ use craft::behavior::{EditEvents, IconId, NumberCodec};
 use craft::ui::bars::{Bar, BarHome, BarKind, BarOutput, BarTool};
 use craft::ui::buttons::ToggleButton;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Entry, MemoProps, MemoView, Outbox, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
 use craft::ui::form::Field;
 use craft::ui::menu::Menu;
@@ -181,25 +181,63 @@ fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     navigate::members(app, ui);
 }
 
+/// Every input of the bar's lead: the Home button's state and the active tool.
+#[derive(MemoProps)]
+struct LeadProps<'a> {
+    home_on: bool,
+    home_enabled: bool,
+    tool: Tool,
+    /// The tool picker is greyed while warping, as in the reference.
+    warping: bool,
+    out: Outbox<'a, LeadEvent>,
+}
+
+/// What a run of the bar's lead reports.
+enum LeadEvent {
+    /// Home was toggled.
+    Home,
+    /// A row of the tool icon's menu was picked.
+    Reset(Reset),
+}
+
 /// The Home button and the tool's icon with its Reset Tool and Reset All Tools menu.
 fn lead(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let documents = app.session.documents().len();
     let auto = app.session.prefs().general.auto_show_home_screen;
     let on = app.ui.chrome.shows_home(documents, auto);
-    // With no documents and auto-show on, Home can't be dismissed (there is nothing behind it).
-    let home = BarHome::new(tl!("Home").to_owned(), Bind::given(on)).enabled(documents > 0 || !auto).show(ui);
-    if home.events.value().is_some() {
-        app.ui.chrome.home = if on { None } else { Some(documents) };
+    let mut sent = Vec::new();
+    let props = LeadProps {
+        home_on: on,
+        // With no documents and auto-show on, Home can't be dismissed (there is nothing behind it).
+        home_enabled: documents > 0 || !auto,
+        tool: app.ui.tool,
+        warping: app.ui.transform.as_ref().is_some_and(|t| t.session.warp().is_some()),
+        out: Outbox::new(&mut sent),
+    };
+    let _ = MemoView::new("bar-lead", props, lead_view).show(ui);
+    for event in sent {
+        match event {
+            LeadEvent::Home => app.ui.chrome.home = if on { None } else { Some(documents) },
+            LeadEvent::Reset(reset) => {
+                if let Err(e) = crate::menus::invoke(app, ui.ctx(), reset.command(), json!({})) {
+                    app.ui.status = e;
+                }
+            }
+        }
     }
-    // The tool picker is greyed while warping, as in the reference.
-    let warping = app.ui.transform.as_ref().is_some_and(|t| t.session.warp().is_some());
-    let tool = BarTool::new(icons::tool_icon(app.ui.tool), tl!(app.ui.tool.label()).to_owned()).enabled(!warping).show(ui);
+}
+
+/// The bar lead's view.
+fn lead_view(props: &mut LeadProps<'_>, ui: &mut egui::Ui) {
+    let home = BarHome::new(tl!("Home").to_owned(), Bind::given(props.home_on)).enabled(props.home_enabled).show(ui);
+    if home.events.value().is_some() {
+        props.out.send(LeadEvent::Home);
+    }
+    let tool = BarTool::new(icons::tool_icon(props.tool), tl!(props.tool.label()).to_owned()).enabled(!props.warping).show(ui);
     // Photoshop: right-click the tool icon for Reset Tool / Reset All Tools.
     let rows = [Entry::new(Reset::Tool, tl!("Reset Tool").to_owned()), Entry::new(Reset::All, tl!("Reset All Tools").to_owned())];
-    if let Some(reset) = Menu::context(tl!("Tool").to_owned(), &tool.response).pick(ui, &rows).picked
-        && let Err(e) = crate::menus::invoke(app, ui.ctx(), reset.command(), json!({}))
-    {
-        app.ui.status = e;
+    if let Some(reset) = Menu::context(tl!("Tool").to_owned(), &tool.response).pick(ui, &rows).picked {
+        props.out.send(LeadEvent::Reset(reset));
     }
 }
 

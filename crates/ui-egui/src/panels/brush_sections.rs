@@ -194,7 +194,7 @@ impl Pane<'_> {
     /// name.
     fn tip_grid(&mut self, ui: &mut Ui, id: &'static str, selected: Option<BrushKey>) -> Option<String> {
         let parts = BrushCardParts::ALL.set(BrushCardPart::Name, false).set(BrushCardPart::Stroke, false);
-        let rows = preset_rows(self.app, &Env::of(ui), parts);
+        let rows = preset_rows(self.app.session.tools.presets.as_slice(), &Env::of(ui), parts);
         let mut state = PresetState::<BrushKey>::new();
         let mut browser = PresetBrowser::new(tl!("Brush tips"), Bind::bound(&mut state), &rows)
             .browser_id(egui::Id::unique(id))

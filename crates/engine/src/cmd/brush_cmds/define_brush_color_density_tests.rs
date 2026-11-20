@@ -149,8 +149,8 @@ fn command_density_applies_alpha_before_gray_and_selection_once() {
         let presets = (*transparent.tools.presets).clone();
         let err = transparent.execute(command, json!({"name": "Transparent colour"})).unwrap_err();
         assert!(err.to_string().contains("contain no paint"), "{err}");
-        assert_eq!(transparent.tools.brush, brush);
-        assert_eq!(transparent.tools.presets, presets);
+        assert_eq!(*transparent.tools.brush, brush);
+        assert_eq!(*transparent.tools.presets, presets);
     }
 }
 
@@ -316,8 +316,8 @@ fn sampled_trcs_cannot_hide_non_finite_contributing_channels() {
                 assert_eq!(s.active().unwrap().doc.selection.is_some(), selected);
                 assert_eq!(s.active().unwrap().doc.icc_profile.as_ref(), Some(&icc));
                 assert_eq!(s.active().unwrap().doc.layer(active).unwrap().surface().unwrap().rgba(20, 20).map(f32::to_bits), stored);
-                assert_eq!(s.tools.brush, brush);
-                assert_eq!(s.tools.presets, presets);
+                assert_eq!(*s.tools.brush, brush);
+                assert_eq!(*s.tools.presets, presets);
                 assert_eq!(s.tools.current_preset, current);
                 assert_eq!(s.tools.brush_rev, revision);
                 assert_eq!(s.journal, journal);

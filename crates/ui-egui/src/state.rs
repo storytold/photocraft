@@ -19,6 +19,7 @@ use craft::imaging::ui::scopes::ScopePanelState;
 use craft::layers::ui::filter::LayerFilter;
 use craft::layers::ui::options::LayersSettings;
 use craft::ui::canvas::{SplitAt, ViewCommands, ViewRequest};
+use craft::ui::contract::Tracked;
 use craft::ui::patterns::presets::{PresetState, PresetView};
 use photocraft_doc::DocId;
 
@@ -159,7 +160,7 @@ pub struct DocWindow {
     pub position: Option<[f32; 2]>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UiState {
     pub tool: Tool,
     /// The tools used so far, most recent first and each one once. The first tool of a shortcut
@@ -245,7 +246,7 @@ pub struct UiState {
     pub brush_picker: Option<[f32; 2]>,
     /// The Brush Preset picker's list: search, collapsed groups, view, size and the parts shown.
     #[serde(skip)]
-    pub(crate) brush_picker_state: BrushPickerState<BrushKey>,
+    pub(crate) brush_picker_state: Tracked<BrushPickerState<BrushKey>>,
     /// Photoshop's HUD Color Picker (#6098), open while Shift+Alt+right-click is held on the
     /// canvas with a painting tool (`crate::color_hud`).
     #[serde(default)]
@@ -412,8 +413,8 @@ pub struct UiState {
     #[serde(skip)]
     pub brush_curves_open: BTreeSet<&'static str>,
     /// Brushes panel: list or grid, zoom, collapsed groups and the search filter. Starts as a list.
-    #[serde(default = "brushes_list")]
-    pub(crate) brushes_panel: PresetState<BrushKey>,
+    #[serde(default = "brushes_list", with = "tracked_serde")]
+    pub(crate) brushes_panel: Tracked<PresetState<BrushKey>>,
     /// Marquee options-bar mode: 0 new, 1 add, 2 subtract, 3 intersect (modifier keys override).
     #[serde(default)]
     pub selection_mode: u8,
@@ -453,10 +454,24 @@ fn default_docking() -> std::sync::Arc<craft::behavior::dock::Workspace<String>>
 }
 
 /// The Brushes panel's state at start and for a saved state without one: the list view.
-fn brushes_list() -> PresetState<BrushKey> {
+fn brushes_list() -> Tracked<PresetState<BrushKey>> {
     let mut state = PresetState::new();
     state.view = PresetView::List;
-    state
+    Tracked::new(state)
+}
+
+/// A `Tracked` field saved as its value; a loaded one starts a new revision source.
+mod tracked_serde {
+    use craft::ui::contract::{PlainData, Tracked};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub(super) fn serialize<T: PlainData + Serialize, S: Serializer>(value: &Tracked<T>, s: S) -> Result<S::Ok, S::Error> {
+        (**value).serialize(s)
+    }
+
+    pub(super) fn deserialize<'de, T: PlainData + Deserialize<'de>, D: Deserializer<'de>>(d: D) -> Result<Tracked<T>, D::Error> {
+        T::deserialize(d).map(Tracked::new)
+    }
 }
 
 impl Default for UiState {
@@ -483,7 +498,7 @@ impl Default for UiState {
             filter_mask_target: None,
             properties_layer: None,
             brush_picker: None,
-            brush_picker_state: BrushPickerState::default(),
+            brush_picker_state: Tracked::default(),
             color_hud: None,
             canvas_tool_menu: None,
             selected_guide: None,
@@ -675,7 +690,7 @@ mod tests {
         let s = UiState::default();
         let v = serde_json::to_value(&s).unwrap();
         assert_eq!(v["tool"], "Move");
-        let back: UiState = serde_json::from_value(v).unwrap();
-        assert_eq!(back, s);
+        let back: UiState = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&back).unwrap(), v);
     }
 }

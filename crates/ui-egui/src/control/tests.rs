@@ -250,7 +250,7 @@ fn shape_stroke_defaults_are_drivable_and_validate_atomically() {
     let before = app.ui.clone();
     let bad = call(&mut app, &ctx, "ui.set", json!({"tool":"Rectangle","shapeStroke":{"dashes":[0,0]}}));
     assert_eq!(bad["ok"], false);
-    assert_eq!(app.ui, before);
+    assert_eq!(serde_json::to_value(&app.ui).unwrap(), serde_json::to_value(&before).unwrap());
     assert_eq!(call(&mut app, &ctx, "ui.set", json!({"shapeStroke":{"colour":"#ff0000"}}))["ok"], false);
     assert_eq!(call(&mut app, &ctx, "ui.set", json!({"shapeStroke":null}))["ok"], true);
     assert_eq!(app.ui.tool_options.stroke_width, 0.0);

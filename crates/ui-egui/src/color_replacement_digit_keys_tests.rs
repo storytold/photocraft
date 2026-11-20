@@ -84,7 +84,7 @@ fn modifiers_and_double_zero_preserve_color_replacement_and_layer_state() {
     let bg_tolerance = a.ui.tool_options.bg_tolerance;
     a.ui.tool = Tool::ColorReplacement;
     press(&mut a, 3, false, 9000.0);
-    assert_eq!(a.session.tools.brush, brush);
+    assert_eq!(*a.session.tools.brush, brush);
     assert_eq!(a.ui.tool_options.fill_opacity, opacity);
     assert_eq!(a.ui.tool_options.bg_tolerance, bg_tolerance);
 }
@@ -144,7 +144,7 @@ fn real_app_keys_set_tolerance_and_modifiers_leave_all_options_alone() {
     }
     key(&mut h, Modifiers::NONE);
     assert_eq!(h.state().ui.tool_options.cr_tolerance, 50.0);
-    assert_eq!(h.state().session.tools.brush, before.1);
+    assert_eq!(*h.state().session.tools.brush, before.1);
     assert_eq!(layer(h.state()), before.2);
 }
 

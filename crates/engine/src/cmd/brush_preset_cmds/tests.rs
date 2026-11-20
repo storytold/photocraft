@@ -36,7 +36,7 @@ fn move_within_and_between_groups() {
     s.execute("brush.presets.move", json!({"name": "A2", "group": "Beta"})).unwrap();
     assert_eq!(names(&s, "Beta"), ["B1", "A1", "B2", "A2"]);
     s.execute("brush.presets.move", json!({"name": "A3", "group": "Gamma"})).unwrap();
-    assert_eq!(group_order(&s.tools.presets).last().map(String::as_str), Some("Gamma"));
+    assert_eq!(group_order(&*s.tools.presets).last().map(String::as_str), Some("Gamma"));
     assert!(names(&s, "Alpha").is_empty());
     // A built-in moved to another group becomes the user's.
     let b = s.tools.presets.iter().find(|x| x.builtin).unwrap().name.clone();
@@ -54,12 +54,12 @@ fn groups_move_rename_and_delete() {
     assert_eq!(&order[n - 2..], ["Alpha", "Beta"]);
     let r = s.execute("brush.presets.moveGroup", json!({"group": "Beta", "index": 0})).unwrap();
     assert_eq!(r["index"], 0);
-    assert_eq!(group_order(&s.tools.presets)[0], "Beta");
+    assert_eq!(group_order(&*s.tools.presets)[0], "Beta");
     assert_eq!(names(&s, "Beta"), ["B1", "B2"], "a group moves as a block, in order");
     s.execute("brush.presets.moveGroup", json!({"group": "Alpha", "before": "Beta"})).unwrap();
-    assert_eq!(&group_order(&s.tools.presets)[..2], ["Alpha", "Beta"]);
+    assert_eq!(&group_order(&*s.tools.presets)[..2], ["Alpha", "Beta"]);
     s.execute("brush.presets.moveGroup", json!({"group": "Alpha"})).unwrap();
-    assert_eq!(group_order(&s.tools.presets).last().map(String::as_str), Some("Alpha"));
+    assert_eq!(group_order(&*s.tools.presets).last().map(String::as_str), Some("Alpha"));
     s.execute("brush.presets.renameGroup", json!({"group": "Alpha", "newName": "First"})).unwrap();
     assert_eq!(names(&s, "First"), ["A1", "A2", "A3"]);
     assert!(s.execute("brush.presets.renameGroup", json!({"group": "First", "newName": "Beta"})).is_err());
@@ -108,7 +108,7 @@ fn bad_params_fail_without_changes() {
     ] {
         assert!(s.execute(id, p.clone()).is_err(), "{id} {p}");
     }
-    assert_eq!(s.tools.presets, before);
+    assert_eq!(*s.tools.presets, before);
     // Huge indices clamp to the end.
     s.execute("brush.presets.move", json!({"name": "A1", "index": u64::MAX})).unwrap();
     s.execute("brush.presets.moveGroup", json!({"group": "Alpha", "index": u64::MAX})).unwrap();
@@ -157,21 +157,21 @@ fn presets_move_between_folders() {
     assert!(folder_of(&s, "I1").is_empty());
     // `before` in another folder than the one named.
     assert!(s.execute("brush.presets.move", json!({"name": "I1", "folder": ["Dry"], "before": "I2"})).is_err());
-    assert_eq!(subfolder_order(&s.tools.presets, "Set", &[]), ["Ink"]);
+    assert_eq!(subfolder_order(&*s.tools.presets, "Set", &[]), ["Ink"]);
 }
 
 #[test]
 fn folders_move_rename_and_delete() {
     let mut s = with_folders();
-    assert_eq!(subfolder_order(&s.tools.presets, "Set", &[]), ["Ink", "Dry"]);
+    assert_eq!(subfolder_order(&*s.tools.presets, "Set", &[]), ["Ink", "Dry"]);
     // Move Dry before Ink: the whole folder moves as a block.
     let r = s.execute("brush.presets.moveGroup", json!({"group": "Set", "folder": ["Dry"], "before": "Ink"})).unwrap();
     assert_eq!(r, json!({"group": "Set", "folder": ["Dry"], "index": 0}));
-    assert_eq!(subfolder_order(&s.tools.presets, "Set", &[]), ["Dry", "Ink"]);
+    assert_eq!(subfolder_order(&*s.tools.presets, "Set", &[]), ["Dry", "Ink"]);
     s.execute("brush.presets.moveGroup", json!({"group": "Set", "folder": ["Dry"]})).unwrap();
-    assert_eq!(subfolder_order(&s.tools.presets, "Set", &[]), ["Ink", "Dry"]);
+    assert_eq!(subfolder_order(&*s.tools.presets, "Set", &[]), ["Ink", "Dry"]);
     s.execute("brush.presets.moveGroup", json!({"group": "Set", "folder": ["Dry"], "index": 0})).unwrap();
-    assert_eq!(subfolder_order(&s.tools.presets, "Set", &[]), ["Dry", "Ink"]);
+    assert_eq!(subfolder_order(&*s.tools.presets, "Set", &[]), ["Dry", "Ink"]);
     let ink: Vec<&str> = s.tools.presets.iter().filter(|x| x.folder.first().is_some_and(|f| f == "Ink")).map(|x| x.name.as_str()).collect();
     assert_eq!(ink, ["I1", "F1", "I2"], "presets keep their order inside a moved folder");
     // Rename a nested folder: every preset below it follows.
@@ -213,7 +213,7 @@ fn bad_folder_params_fail_without_changes() {
     ] {
         assert!(s.execute(id, p.clone()).is_err(), "{id} {p}");
     }
-    assert_eq!(s.tools.presets, before);
+    assert_eq!(*s.tools.presets, before);
     s.execute("brush.presets.moveGroup", json!({"group": "Set", "folder": ["Ink", "Fine"], "index": u64::MAX})).unwrap();
 }
 
@@ -253,12 +253,12 @@ fn folders_move_into_folders_and_groups() {
     let r = s.execute("brush.presets.moveGroup", json!({"group": "Other", "folder": ["Ink", "Fine"], "into": {}})).unwrap();
     assert_eq!(r["group"], "Fine");
     assert_eq!(folder_of(&s, "D1"), ["Dry"]);
-    assert_eq!(photocraft_paint::presets::find(&s.tools.presets, "F1").unwrap().group, "Fine");
+    assert_eq!(photocraft_paint::presets::find(&*s.tools.presets, "F1").unwrap().group, "Fine");
     // A whole group into another group's folder.
     s.execute("brush.presets.moveGroup", json!({"group": "Fine", "into": {"group": "Set"}})).unwrap();
     assert!(names(&s, "Fine").is_empty());
     assert_eq!(folder_of(&s, "D1"), ["Fine", "Dry"]);
-    assert_eq!(subfolder_order(&s.tools.presets, "Set", &[]), ["Fine"]);
+    assert_eq!(subfolder_order(&*s.tools.presets, "Set", &[]), ["Fine"]);
 }
 
 #[test]
@@ -309,7 +309,7 @@ fn bad_moves_into_folders_fail_without_changes() {
     ] {
         assert!(s.execute("brush.presets.moveGroup", p.clone()).is_err(), "{p}");
     }
-    assert_eq!(s.tools.presets, before);
+    assert_eq!(*s.tools.presets, before);
     // Ink/Fine into Set itself: a clash with nothing, so it moves up a level.
     s.execute("brush.presets.moveGroup", json!({"group": "Set", "folder": ["Ink", "Fine"], "into": {"group": "Set"}})).unwrap();
     assert_eq!(folder_of(&s, "F1"), ["Fine"]);

@@ -165,7 +165,7 @@ fn every_section_round_trips_through_set_brush() {
         edit_section(i, &mut after);
         assert_ne!(before, after, "section {i} edits nothing");
         commit(&mut app, &before, &after);
-        assert_eq!(app.session.tools.brush, after, "section {i} ({name})");
+        assert_eq!(*app.session.tools.brush, after, "section {i} ({name})");
         // Through the command, with only the changed fields.
         let (id, p) = last_journal(&app).expect("journaled");
         assert_eq!(id, "tools.setBrush");
@@ -177,7 +177,7 @@ fn every_section_round_trips_through_set_brush() {
         // Replaying the journaled call onto a fresh session gives the same brush (drivable).
         let mut s = photocraft_engine::Session::new();
         s.execute(&id, p).unwrap();
-        assert_eq!(s.tools.brush, after, "replay of section {i}");
+        assert_eq!(*s.tools.brush, after, "replay of section {i}");
     }
 }
 
@@ -202,7 +202,7 @@ fn patches_are_minimal_and_skip_unchanged_bitmaps() {
     *app.session.tools.brush = old.clone();
     let new = BrushSettings { size: 9.0, roundness: 0.5, ..old.clone() };
     commit(&mut app, &old, &new);
-    assert_eq!(app.session.tools.brush, new);
+    assert_eq!(*app.session.tools.brush, new);
     // No change, no command.
     let n = app.session.journal.len();
     commit(&mut app, &new, &new);
@@ -219,7 +219,7 @@ fn bad_patches_fail_without_touching_the_brush() {
         json!({"brush": {"tip": {"sampled": {"width": 0}}}}),
     ] {
         assert!(app.run("tools.setBrush", bad).is_err());
-        assert_eq!(app.session.tools.brush, before);
+        assert_eq!(*app.session.tools.brush, before);
     }
 }
 
@@ -311,7 +311,7 @@ fn options_bar_edits_are_one_set_brush_per_gesture() {
     for (id, p) in &h.state().session.journal {
         s.execute(id, p.clone()).unwrap();
     }
-    assert_eq!(s.tools.brush, h.state().session.tools.brush);
+    assert_eq!(*s.tools.brush, *h.state().session.tools.brush);
 }
 
 #[test]
@@ -453,7 +453,7 @@ fn every_section_draws_without_issuing_commands() {
             h.run_steps(4);
             // Merely showing the panel must not rewrite the brush (no rounding drift, no commands).
             assert_eq!(h.state().session.journal.len(), n, "{panel} {view:?} section {section}");
-            assert_eq!(h.state().session.tools.brush, b, "{panel} {view:?} section {section}");
+            assert_eq!(*h.state().session.tools.brush, b, "{panel} {view:?} section {section}");
         }
     }
 }
@@ -473,7 +473,7 @@ fn kit(name: &str, group: &str, folder: &[&str]) -> paint::BrushPreset {
 fn rows_of(app: Box<PhotocraftApp>, view: PresetView) -> Vec<PresetRow<BrushKey>> {
     let mut h = Harness::builder().with_size(vec2(200.0, 200.0)).with_context(app.ctx().clone()).build_ui_state(
         move |ui, st: &mut (Box<PhotocraftApp>, Vec<PresetRow<BrushKey>>)| {
-            st.1 = preset_rows(&st.0, &Env::of(ui), parts_of(view));
+            st.1 = preset_rows(st.0.session.tools.presets.as_slice(), &Env::of(ui), parts_of(view));
         },
         (app, Vec::new()),
     );
@@ -907,7 +907,7 @@ fn panel_events_map_to_their_commands() {
     let mut brush = (*app.session.tools.brush).clone();
     let mut shown = 0;
     assert!(!apply_section_events(&mut brush, &mut shown, vec![BrushSectionEvent::Select(2)]));
-    assert_eq!((shown, &brush), (2, &app.session.tools.brush));
+    assert_eq!((shown, &brush), (2, &*app.session.tools.brush));
     assert!(apply_section_events(&mut brush, &mut shown, vec![BrushSectionEvent::OpenLink]));
     assert_eq!((shown, app.session.journal.len()), (2, journal));
 

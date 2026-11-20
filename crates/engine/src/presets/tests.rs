@@ -679,7 +679,7 @@ fn tool_presets_reject_invalid_colors_before_applying_the_brush() {
         .unwrap();
         assert!(s.execute("tool.presets.select", json!({"preset": "Invalid"})).is_err(), "{values}");
         assert_eq!(s.tools.foreground, color, "{values}");
-        assert_eq!(s.tools.brush, brush, "{values}");
+        assert_eq!(*s.tools.brush, brush, "{values}");
         assert_eq!(s.tools.brush_rev, brush_rev, "{values}");
     }
 }

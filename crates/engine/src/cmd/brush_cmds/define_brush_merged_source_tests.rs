@@ -171,8 +171,8 @@ fn a_hidden_black_source_over_white_or_transparency_is_empty_and_does_not_replac
             let history = s.active().unwrap().history.past_len();
             let err = s.execute(command, json!({"name": "Kept"})).unwrap_err();
             assert!(err.to_string().contains("contain no paint"), "{err}");
-            assert_eq!(s.tools.brush, brush);
-            assert_eq!(s.tools.presets, presets);
+            assert_eq!(*s.tools.brush, brush);
+            assert_eq!(*s.tools.presets, presets);
             assert_eq!(s.tools.current_preset, current);
             assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
             assert_eq!(s.active().unwrap().history.past_len(), history);
@@ -246,8 +246,8 @@ fn composite_storage_is_counted_with_density_and_mask_before_any_allocation() {
             assert!(unspent.is_err(), "budget refusal must precede the first allocation");
             assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
             assert_eq!(s.active().unwrap().history.past_len(), history);
-            assert_eq!(s.tools.brush, brush);
-            assert_eq!(s.tools.presets, presets);
+            assert_eq!(*s.tools.brush, brush);
+            assert_eq!(*s.tools.presets, presets);
             assert_eq!(s.tools.current_preset, current);
         }
     }
@@ -273,8 +273,8 @@ fn compositor_allocation_boundary_failure_preserves_source_and_preset_state() {
             assert!(err.to_string().contains("not enough memory"), "{err}");
             assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
             assert_eq!(s.active().unwrap().history.past_len(), history);
-            assert_eq!(s.tools.brush, brush);
-            assert_eq!(s.tools.presets, presets);
+            assert_eq!(*s.tools.brush, brush);
+            assert_eq!(*s.tools.presets, presets);
             assert_eq!(s.tools.current_preset, current);
         }
     }
@@ -304,8 +304,8 @@ fn a_banded_capture_that_fits_the_budget_is_not_charged_for_a_full_rgba_canvas()
             assert!(err.contains("not enough memory") && !err.contains("working memory"), "{err}");
             assert!(unspent.is_ok(), "the accepted budget must reach the first allocation");
             assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
-            assert_eq!(s.tools.brush, brush);
-            assert_eq!(s.tools.presets, presets);
+            assert_eq!(*s.tools.brush, brush);
+            assert_eq!(*s.tools.presets, presets);
         }
     }
 }
@@ -396,8 +396,8 @@ fn selection_buffer_failure_preserves_source_and_preset_state() {
         assert!(err.to_string().contains("not enough memory"), "{err}");
         assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
         assert_eq!(s.active().unwrap().history.past_len(), history);
-        assert_eq!(s.tools.brush, brush);
-        assert_eq!(s.tools.presets, presets);
+        assert_eq!(*s.tools.brush, brush);
+        assert_eq!(*s.tools.presets, presets);
         assert_eq!(s.tools.current_preset, current);
     }
 }

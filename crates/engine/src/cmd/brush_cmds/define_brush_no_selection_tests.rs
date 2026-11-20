@@ -125,8 +125,8 @@ fn a_large_canvas_is_trimmed_before_the_existing_tip_side_limit() {
     let presets = (*s.tools.presets).clone();
     let err = s.execute("edit.defineBrushPreset", json!({"name": "Too wide"})).unwrap_err();
     assert!(err.to_string().contains("too large for a brush tip"), "{err}");
-    assert_eq!(s.tools.brush, brush);
-    assert_eq!(s.tools.presets, presets);
+    assert_eq!(*s.tools.brush, brush);
+    assert_eq!(*s.tools.presets, presets);
 }
 
 #[test]
@@ -142,8 +142,8 @@ fn a_canvas_capture_allocation_failure_leaves_the_source_and_presets_unchanged()
     let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
     let err = result.unwrap_err().to_string();
     assert!(err.contains("not enough memory") && err.contains("defining a brush from the selection"), "{err}");
-    assert_eq!(s.tools.brush, brush);
-    assert_eq!(s.tools.presets, presets);
+    assert_eq!(*s.tools.brush, brush);
+    assert_eq!(*s.tools.presets, presets);
     assert_eq!(s.tools.current_preset, current);
     assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
     assert_eq!(s.active().unwrap().history.past_len(), history);
@@ -187,8 +187,8 @@ fn assert_budget_refusal(s: &mut Session, command: &str) {
     let err = result.unwrap_err().to_string();
     assert!(err.contains("working memory") && err.contains("defining a brush from the selection"), "{err}");
     assert!(unspent.is_err(), "the budget refusal must precede the first fallible allocation");
-    assert_eq!(s.tools.brush, brush);
-    assert_eq!(s.tools.presets, presets);
+    assert_eq!(*s.tools.brush, brush);
+    assert_eq!(*s.tools.presets, presets);
     assert_eq!(s.tools.current_preset, current);
     assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
     assert_eq!(s.active().unwrap().history.past_len(), history);

@@ -362,7 +362,7 @@ fn presets_save_load_delete_round_trip() {
     let b = s.execute("tools.setBrush", json!({"preset": "mine"})).unwrap();
     assert_eq!(b["size"], 77.0);
     let back: BrushSettings = serde_json::from_value(s.execute("brush.get", json!({})).unwrap()).unwrap();
-    assert_eq!(back, s.tools.brush);
+    assert_eq!(back, *s.tools.brush);
     // Overwrite, then delete.
     s.execute("brush.presets.save", json!({"name": "Mine"})).unwrap();
     assert_eq!(s.tools.presets.len(), n0 + 1);
@@ -458,7 +458,7 @@ fn a_failed_set_brush_leaves_no_current_preset_behind() {
     // A rejected brush (a wrong-typed size) must not record the preset it came with.
     assert!(s.execute("tools.setBrush", json!({"preset": "Chalk", "brush": {"size": "big"}})).is_err());
     assert_eq!(s.tools.current_preset, None);
-    assert_eq!(s.tools.brush, before);
+    assert_eq!(*s.tools.brush, before);
     // Once the brush is accepted, the preset is recorded.
     s.execute("tools.setBrush", json!({"preset": "Chalk"})).unwrap();
     assert_eq!(s.tools.current_preset.as_deref(), Some("Chalk"));
@@ -476,7 +476,7 @@ fn set_brush_merges_fields() {
     assert_eq!(b.size, 55.0);
     assert!(b.shape_dynamics.enabled && b.shape_dynamics.size.jitter == 0.5 && b.shape_dynamics.angle.jitter == 0.25);
     s.execute("tools.setBrush", json!({"reset": true})).unwrap();
-    assert_eq!(s.tools.brush, BrushSettings::default());
+    assert_eq!(*s.tools.brush, BrushSettings::default());
     // Protect texture carries the pattern across textured presets.
     s.execute("tools.setBrush", json!({"preset": "Chalk", "protectTexture": true})).unwrap();
     let chalk_pattern = s.tools.brush.texture.pattern.clone();
@@ -660,8 +660,8 @@ fn define_brush_from_selection_survives_allocation_failure() {
     let result = s.execute("brush.defineFromSelection", json!({"name": "Blob"}));
     let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
     assert!(result.is_err(), "an allocation failure must be reported, not panic");
-    assert_eq!(s.tools.brush, brush_before, "the current brush is unchanged");
-    assert_eq!(s.tools.presets, presets_before, "the preset list is unchanged");
+    assert_eq!(*s.tools.brush, brush_before, "the current brush is unchanged");
+    assert_eq!(*s.tools.presets, presets_before, "the preset list is unchanged");
     assert_eq!(s.active().unwrap().history.past_len(), history_before, "no history step was recorded");
 }
 
@@ -682,8 +682,8 @@ fn define_brush_from_selection_survives_failure_of_the_second_allocation() {
     let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
     assert!(result.is_err(), "an allocation failure must be reported, not panic");
     assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for defining a brush from the selection")));
-    assert_eq!(s.tools.brush, brush_before, "the current brush is unchanged");
-    assert_eq!(s.tools.presets, presets_before, "the preset list is unchanged");
+    assert_eq!(*s.tools.brush, brush_before, "the current brush is unchanged");
+    assert_eq!(*s.tools.presets, presets_before, "the preset list is unchanged");
     assert_eq!(s.active().unwrap().history.past_len(), history_before, "no history step was recorded");
     assert!(same_pixels(&pixels_before, &surface(&s), s.active().unwrap().doc.bounds()), "the document pixels are unchanged");
 }
@@ -701,8 +701,8 @@ fn define_brush_from_selection_propagates_compositor_allocation_error_transactio
     });
     assert!(result.is_err_and(|e| e.to_string().contains("defining a brush from the selection")));
     assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
-    assert_eq!(s.tools.brush, brush_before);
-    assert_eq!(s.tools.presets, presets_before);
+    assert_eq!(*s.tools.brush, brush_before);
+    assert_eq!(*s.tools.presets, presets_before);
     assert_eq!(s.active().unwrap().history.past_len(), history_before);
 }
 
@@ -953,11 +953,11 @@ fn pose_axes_commands_keep_minimal_patches_legacy_alias_and_preset_replay() {
     let mut s = session(100, 80);
     let input = StrokePoint { tilt_x: 13.0, tilt_y: -27.0, pressure: 0.71, rotation: 67.0, ..Default::default() };
     s.execute("tools.setBrush", json!({"brush": {"pose": {"enabled": true, "tiltX": 45, "tiltY": -18, "overrideTilt": true}}})).unwrap();
-    assert_eq!(photocraft_paint::dynamics::apply_pose(&s.tools.brush, input), StrokePoint { tilt_x: 45.0, tilt_y: -18.0, ..input });
+    assert_eq!(photocraft_paint::dynamics::apply_pose(&*s.tools.brush, input), StrokePoint { tilt_x: 45.0, tilt_y: -18.0, ..input });
     let before = (*s.tools.brush).clone();
     s.execute("tools.setBrush", json!({"pose": {"overrideTiltX": false}})).unwrap();
     assert_eq!(
-        photocraft_paint::dynamics::apply_pose(&s.tools.brush, input),
+        photocraft_paint::dynamics::apply_pose(&*s.tools.brush, input),
         StrokePoint { tilt_y: -18.0, ..input },
         "turning X off retains Y override and live X input"
     );
@@ -969,17 +969,17 @@ fn pose_axes_commands_keep_minimal_patches_legacy_alias_and_preset_replay() {
     assert_eq!(wire["pose"]["overrideTilt"], false, "legacy readback reports whether both axes are overridden");
     s.execute("brush.presets.save", json!({"name": "Independent pose"})).unwrap();
     s.execute("tools.setBrush", json!({"brush": {"pose": {"overrideTilt": false}}})).unwrap();
-    assert_eq!(photocraft_paint::dynamics::apply_pose(&s.tools.brush, input), input, "legacy false clears both axes even after axis editing");
+    assert_eq!(photocraft_paint::dynamics::apply_pose(&*s.tools.brush, input), input, "legacy false clears both axes even after axis editing");
     s.execute("tools.setBrush", json!({"preset": "Independent pose"})).unwrap();
     assert_eq!(s.tools.brush.pose, mixed.pose, "preset picking preserves independent state");
     // Explicit axis keys win over a legacy combined key in the same command.
     s.execute("tools.setBrush", json!({"brush": {"pose": {"overrideTilt": true, "overrideTiltY": false}}})).unwrap();
-    assert_eq!(photocraft_paint::dynamics::apply_pose(&s.tools.brush, input), StrokePoint { tilt_x: 45.0, ..input });
+    assert_eq!(photocraft_paint::dynamics::apply_pose(&*s.tools.brush, input), StrokePoint { tilt_x: 45.0, ..input });
     let mut replay = Session::new();
     for (id, params) in &s.journal {
         replay.execute(id, params.clone()).unwrap();
     }
-    assert_eq!(replay.tools.brush, s.tools.brush, "recorded commands reproduce the same axes");
+    assert_eq!(*replay.tools.brush, *s.tools.brush, "recorded commands reproduce the same axes");
 }
 
 #[test]
@@ -994,7 +994,7 @@ fn pose_axes_invalid_flags_fail_atomically() {
         json!({"overrideTilt": "yes", "overrideTiltX": false}),
     ] {
         assert!(s.execute("tools.setBrush", json!({"brush": {"pose": pose}})).is_err());
-        assert_eq!(s.tools.brush, before);
+        assert_eq!(*s.tools.brush, before);
         assert_eq!(s.journal.len(), n, "a failed update records no command");
     }
 }
@@ -1031,7 +1031,7 @@ fn new_brush_controls_round_trip_through_set_brush() {
     }
     let mut t = session(40, 40);
     t.execute("tools.setBrush", json!({ "brush": got })).unwrap();
-    assert_eq!(t.tools.brush, s.tools.brush);
+    assert_eq!(*t.tools.brush, *s.tools.brush);
     // Locked sections survive picking a preset through the command.
     s.execute("tools.setBrush", json!({"preset": "Chalk"})).unwrap();
     assert!(s.tools.brush.shape_dynamics.brush_projection && s.tools.brush.locks.texture);
@@ -1042,7 +1042,7 @@ fn new_brush_controls_round_trip_through_set_brush() {
     {
         assert!(s.execute("tools.setBrush", json!({ "brush": bad })).is_err());
     }
-    assert_eq!(s.tools.brush, before);
+    assert_eq!(*s.tools.brush, before);
 }
 
 #[test]
@@ -1186,7 +1186,7 @@ fn coalesced_set_brush_calls_journal_once_per_gesture() {
     for (id, p) in s.journal.iter().skip(1) {
         t.execute(id, p.clone()).unwrap();
     }
-    assert_eq!(t.tools.brush, s.tools.brush);
+    assert_eq!(*t.tools.brush, *s.tools.brush);
 }
 
 /// A Scatter amount beyond the 1000 % maximum (the issue's 1e38, just above the maximum, or one
@@ -1211,7 +1211,7 @@ fn out_of_range_scatter_is_rejected_and_the_maximum_still_paints() {
             let err = s.execute("tools.setBrush", json!({ "brush": patch.clone() })).unwrap_err();
             let msg = err.to_string();
             assert!(matches!(err, EngineError::BadParams { .. }) && msg.contains(what) && msg.contains(shown), "{j}: {msg}");
-            assert_eq!(s.tools.brush, before, "a rejected scatter must not change the session brush");
+            assert_eq!(*s.tools.brush, before, "a rejected scatter must not change the session brush");
             let (doc, revision) = (s.active().unwrap().doc.clone(), s.active().unwrap().revision);
             let err = paint_stroke(&mut s, &json!({"points": [[10, 10]], "brush": patch})).unwrap_err();
             assert!(matches!(err, EngineError::BadParams { .. }) && err.to_string().contains(shown), "{j}: {err}");

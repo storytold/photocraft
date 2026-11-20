@@ -38,7 +38,7 @@ fn group(app: &PhotocraftApp, kind: Kind, name: &str) -> Value {
 }
 
 fn library(app: &PhotocraftApp) -> Value {
-    json!({"brushes": app.session.tools.presets.as_ref(), "gradients": app.session.presets.gradients, "selectedBrush": app.session.tools.brush})
+    json!({"brushes": app.session.tools.presets.as_ref(), "gradients": app.session.presets.gradients, "selectedBrush": *app.session.tools.brush})
 }
 
 impl Fixture {

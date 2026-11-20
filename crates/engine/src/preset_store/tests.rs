@@ -374,7 +374,7 @@ fn corrupt_and_oversized_files_are_skipped_with_a_warning() {
     let before = (*t.tools.brush).clone();
     let e = t.execute("tools.setBrush", json!({"preset": "Lost"})).unwrap_err().to_string();
     assert!(e.contains(&h), "{e}");
-    assert_eq!(t.tools.brush, before, "a failed pick leaves the brush alone");
+    assert_eq!(*t.tools.brush, before, "a failed pick leaves the brush alone");
     t.execute("tools.setBrush", json!({"preset": "Good"})).unwrap();
     // The broken files are left alone for the user (never deleted by a sync).
     t.execute("brush.presets.save", json!({"name": "Another"})).unwrap();
@@ -586,7 +586,7 @@ fn missing_corrupt_or_unknown_tips_fail_when_used_without_panicking() {
     let revision_before = t.tools.brush_rev;
     assert!(t.execute("tools.setBrush", json!({"preset": "Big 0"})).is_err());
     assert!(t.execute("paint.stroke", json!({"points": [[1, 1], [9, 9]], "preset": "Big 0"})).is_err());
-    assert_eq!(t.tools.brush, before);
+    assert_eq!(*t.tools.brush, before);
     assert_eq!(t.tools.current_preset, preset_before);
     assert_eq!(t.tools.foreground, foreground_before);
     assert_eq!(t.tools.brush_rev, revision_before);
@@ -704,7 +704,7 @@ fn imported_abr_folders_persist_and_old_stores_load_flat() {
     mem.write(&group_file_name("Deep"), &serde_json::to_vec(&deep).unwrap()).unwrap();
     let mut d = Session::new();
     d.attach_preset_store(open(Box::new(mem.clone())));
-    assert_eq!(photocraft_paint::presets::find(&d.tools.presets, "Deep").unwrap().folder.len(), crate::brush_preset_cmds::MAX_FOLDER_DEPTH);
+    assert_eq!(photocraft_paint::presets::find(&*d.tools.presets, "Deep").unwrap().folder.len(), crate::brush_preset_cmds::MAX_FOLDER_DEPTH);
     assert!(photocraft_paint::presets::find(&d.tools.presets, "Blank").unwrap().folder.is_empty());
 }
 

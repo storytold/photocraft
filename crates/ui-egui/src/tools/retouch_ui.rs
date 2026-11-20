@@ -64,7 +64,7 @@ pub(crate) fn history_brush_params(app: &PhotocraftApp) -> Value {
 fn history_brush_params_with(app: &PhotocraftApp, erase_to_history: bool) -> Value {
     // The tool's tip goes in the params: the session's brush changes with the tool, if a tool key
     // is pressed mid-stroke.
-    let brush = &app.session.tools.brush;
+    let brush = &*app.session.tools.brush;
     let mut p = json!({
         "mode": brush.mode.label(),
         "opacity": brush.opacity * 100.0,
