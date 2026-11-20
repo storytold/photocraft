@@ -205,7 +205,7 @@ fn history_jumps_wait_for_a_pending_crop() {
     let mut app = app(SampleType::U8);
     app.run("history.newSnapshot", json!({})).unwrap();
     app.run("image.canvasSize", json!({"width": 300, "height": 200})).unwrap();
-    let snapshot = app.session.active().unwrap().snapshots[0].id;
+    let snapshot = app.session.active().unwrap().snapshots()[0].id;
     let frame = boxed(220.0, 120.0, 290.0, 190.0, 0.0);
     // A pass first: the tool holds a frame for the document it was made for, which Discard drops.
     crate::canvas::testing::frame(&mut app);

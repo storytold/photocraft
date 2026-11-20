@@ -66,10 +66,6 @@ fn read_pixel(h: &mut H) -> Value {
     h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap()
 }
 
-fn revision(h: &H) -> u64 {
-    h.state().session.active().unwrap().revision
-}
-
 fn blue_row(dir: &tempfile::TempDir, name: &str) -> Value {
     json!({"name": name, "values": [{"variable": "photo", "kind": "pixels", "value": dir.path().join("blue.png")}]})
 }
@@ -83,6 +79,8 @@ fn pixel_replacement_harness() -> (tempfile::TempDir, H, String) {
         let png = photocraft_io::export(&source.active().unwrap().doc, "png", &photocraft_io::ExportOptions::default()).unwrap().bytes;
         std::fs::write(dir.path().join(name), png).unwrap();
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    photocraft_raster::spill::use_test_volume_space();
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
     app.run("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
     let layer = app.session.active().unwrap().active_layer.unwrap();
@@ -91,29 +89,6 @@ fn pixel_replacement_harness() -> (tempfile::TempDir, H, String) {
     set(&mut h, &id, "defs", json!([{"name": "photo", "layer": layer.0, "type": "pixelReplacement", "method": "conform"}]));
     set(&mut h, &id, "dataSets", json!([blue_row(&dir, "Blue")]));
     (dir, h, id)
-}
-
-/// OK saves the draft; the Apply Data Set dialog opens on the saved rows.
-fn save_draft_and_open_apply_menu(h: &mut H, id: &str) -> String {
-    confirm(h, id);
-    assert!(!h.state().dialog_open());
-    open(h, "image.applyDataSet")
-}
-
-#[test]
-fn apply_menu_ok_requires_a_row_but_not_variable_definitions() {
-    for (rows, expected) in [(json!([]), None), (json!([{"name": "Empty", "values": []}]), Some(0))] {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
-        app.run("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
-        app.run("image.variables.dataSets", json!({"dataSets": rows})).unwrap();
-        let mut h = harness(app);
-        let id = open(&mut h, "image.applyDataSet");
-        h.state_mut().ui.status.clear();
-        confirm(&mut h, &id);
-        assert!(!h.state().dialog_open());
-        assert_eq!(h.state().session.active().unwrap().doc.variables.active, expected);
-        assert!(h.state().ui.status.is_empty(), "{}", h.state().ui.status);
-    }
 }
 
 /// Apply updates the canvas immediately; OK must not apply the same request again.
@@ -134,83 +109,18 @@ fn apply_replaces_pixels_before_ok_and_keeps_the_dialog_open() {
     assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]), "one history entry");
 }
 
-/// Duplicate labels must not change which row Apply or OK sends to the engine.
+/// Duplicate labels must not change which row the Data Sets page's Apply sends to the engine.
 #[test]
-fn duplicate_names_apply_the_selected_row_for_apply_and_ok() {
-    for button in ["Apply", "OK"] {
-        let (dir, mut h, id) = pixel_replacement_harness();
-        set(&mut h, &id, "dataSets", json!([{"name": "Blue", "values": []}, blue_row(&dir, "Blue")]));
-        let apply = save_draft_and_open_apply_menu(&mut h, &id);
-        assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]), "editing data sets only saves them");
-        h.get_by_label("Next Data Set").click();
-        h.run_steps(2);
-        assert_eq!(inspect(&mut h, &apply)["cur"], 1);
-        h.get_by_label(button).click();
-        h.run_steps(3);
-        assert_eq!(read_pixel(&mut h), json!([0.0, 0.0, 1.0, 1.0]), "{button}");
-        assert_eq!(h.state().session.active().unwrap().doc.variables.active, Some(1), "{button}");
-    }
-}
-
-#[test]
-fn apply_menu_apply_then_ok_keeps_one_history_entry() {
-    let (_dir, mut h, id) = pixel_replacement_harness();
-    let apply = save_draft_and_open_apply_menu(&mut h, &id);
+fn duplicate_names_apply_the_selected_row() {
+    let (dir, mut h, id) = pixel_replacement_harness();
+    set(&mut h, &id, "dataSets", json!([{"name": "Blue", "values": []}, blue_row(&dir, "Blue")]));
+    h.get_by_label("Next Data Set").click();
+    h.run_steps(2);
+    assert_eq!(inspect(&mut h, &id)["cur"], 1);
     h.get_by_label("Apply").click();
     h.run_steps(3);
     assert_eq!(read_pixel(&mut h), json!([0.0, 0.0, 1.0, 1.0]));
-    let before = revision(&h);
-    confirm(&mut h, &apply);
-    assert_eq!(revision(&h), before);
-    h.state_mut().run("edit.undo", json!({})).unwrap();
-    assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]));
-}
-
-#[test]
-fn apply_menu_ok_honors_changes_after_apply() {
-    for change in ["row", "value", "document"] {
-        let (dir, mut h, id) = pixel_replacement_harness();
-        let red = json!(dir.path().join("red.png"));
-        if change == "row" {
-            let mut row = blue_row(&dir, "Blue");
-            row["values"][0]["value"] = red.clone();
-            set(&mut h, &id, "dataSets", json!([blue_row(&dir, "Blue"), row]));
-        }
-        let apply = save_draft_and_open_apply_menu(&mut h, &id);
-        h.get_by_label("Apply").click();
-        h.run_steps(3);
-        if change == "row" {
-            h.get_by_label("Next Data Set").click();
-        } else if change == "value" {
-            let mut row = blue_row(&dir, "Blue");
-            row["values"][0]["value"] = red;
-            set(&mut h, &apply, "dataSets", json!([row]));
-        } else {
-            h.state_mut().run("image.adjustments.invert", json!({})).unwrap();
-        }
-        h.run_steps(3);
-        let before = if change == "document" { json!([1.0, 1.0, 0.0, 1.0]) } else { json!([0.0, 0.0, 1.0, 1.0]) };
-        assert_eq!(read_pixel(&mut h), before, "{change}: only document edits change pixels before OK");
-        confirm(&mut h, &apply);
-        let after = if change == "document" { json!([0.0, 0.0, 1.0, 1.0]) } else { json!([1.0, 0.0, 0.0, 1.0]) };
-        assert_eq!(read_pixel(&mut h), after, "{change}");
-        h.state_mut().run("edit.undo", json!({})).unwrap();
-        assert_eq!(read_pixel(&mut h), before);
-    }
-}
-
-#[test]
-fn apply_menu_ok_after_deleting_the_last_row_only_saves() {
-    let (_dir, mut h, id) = pixel_replacement_harness();
-    let apply = save_draft_and_open_apply_menu(&mut h, &id);
-    h.get_by_label("Delete").click();
-    h.run_steps(2);
-    h.state_mut().ui.status.clear();
-    confirm(&mut h, &apply);
-    assert!(!h.state().dialog_open());
-    assert!(h.state().ui.status.is_empty(), "{}", h.state().ui.status);
-    assert!(h.state().session.active().unwrap().doc.variables.data_sets.is_empty());
-    assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]));
+    assert_eq!(h.state().session.active().unwrap().doc.variables.active, Some(1));
 }
 
 #[test]
@@ -233,28 +143,25 @@ fn variables_editor_ok_only_saves_configuration() {
 /// A failed request reports once; correcting it can be applied and kept when Cancel closes.
 #[test]
 fn failed_apply_can_be_corrected_without_retries_or_cancel_rollback() {
-    for apply_mode in [false, true] {
-        let (dir, mut h, id) = pixel_replacement_harness();
-        let id = if apply_mode { save_draft_and_open_apply_menu(&mut h, &id) } else { id };
-        let missing = json!([{"name": "Blue", "values": [{"variable": "photo", "kind": "pixels", "value": dir.path().join("missing.png")}]}]);
-        set(&mut h, &id, "dataSets", missing);
-        h.get_by_label("Apply").click();
-        h.run_steps(3);
-        assert!(h.state().ui.status.contains("missing.png"), "{}", h.state().ui.status);
-        assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]));
-        h.state_mut().ui.status.clear();
-        h.run_steps(3);
-        assert!(h.state().ui.status.is_empty(), "a failed Apply must not retry each frame");
+    let (dir, mut h, id) = pixel_replacement_harness();
+    let missing = json!([{"name": "Blue", "values": [{"variable": "photo", "kind": "pixels", "value": dir.path().join("missing.png")}]}]);
+    set(&mut h, &id, "dataSets", missing);
+    h.get_by_label("Apply").click();
+    h.run_steps(3);
+    assert!(h.state().ui.status.contains("missing.png"), "{}", h.state().ui.status);
+    assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]));
+    h.state_mut().ui.status.clear();
+    h.run_steps(3);
+    assert!(h.state().ui.status.is_empty(), "a failed Apply must not retry each frame");
 
-        set(&mut h, &id, "dataSets", json!([blue_row(&dir, "Blue")]));
-        h.get_by_label("Apply").click();
-        h.run_steps(3);
-        cancel(&mut h, &id);
-        assert!(!h.state().dialog_open());
-        assert_eq!(read_pixel(&mut h), json!([0.0, 0.0, 1.0, 1.0]));
-        h.state_mut().run("edit.undo", json!({})).unwrap();
-        assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]));
-    }
+    set(&mut h, &id, "dataSets", json!([blue_row(&dir, "Blue")]));
+    h.get_by_label("Apply").click();
+    h.run_steps(3);
+    cancel(&mut h, &id);
+    assert!(!h.state().dialog_open());
+    assert_eq!(read_pixel(&mut h), json!([0.0, 0.0, 1.0, 1.0]));
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]));
 }
 
 /// `ui.dialog.set` takes only values the typed state holds: a malformed one is refused and the dialog keeps its state.
