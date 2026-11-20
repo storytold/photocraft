@@ -66,6 +66,9 @@ pub(crate) struct MenusDraft {
     pub(crate) set: String,
     /// Set by Save on the built-in set and by New: the pass asks the file service for a name once.
     pub(crate) ask_name: bool,
+    /// Set by Save on the built-in set or by New when `sets` is already at the engine's cap: the
+    /// pass shows the engine's cap line instead of asking the file service for a name.
+    pub(crate) cap_refused: bool,
     /// Set by anything that changed `sets` or `set`: OK writes them through `edit.menus`.
     pub(crate) sets_changed: bool,
 }
@@ -109,6 +112,17 @@ impl MenusDraft {
     /// write it; the built-in set needs a name from the Save dialog, so it has nothing to check.
     fn can_save(&self) -> bool {
         self.modified() && (self.set.is_empty() || set_name(&self.set).is_ok())
+    }
+
+    /// Ask the Save dialog for a new set's name, unless `sets` already holds as many sets as the
+    /// engine stores (`menu_sets::MAX_SETS`): a 65th name could only produce sets the engine
+    /// refuses to write, so the pass shows the engine's cap line and the dialog stays open.
+    fn ask_new_name(&mut self) {
+        if self.sets.len() >= menu_sets::MAX_SETS {
+            self.cap_refused = true;
+        } else {
+            self.ask_name = true;
+        }
     }
 
     /// Choose the set `name` ("" or the built-in name: the built-in set) and load its menus into
@@ -282,8 +296,13 @@ fn pass(app: &mut PhotocraftApp, ui: &mut egui::Ui, press_ok: bool) {
     drop(tabs);
     match output.outcome {
         Some(Outcome::Ok) => {
-            if let Err(e) = save_keys(app, keymap, profiles).and_then(|_| save_menus(app, menus)) {
-                app.ui.status = crate::i18n::fmt(tl!("The keyboard shortcuts were not saved: {error}"), &[("error", &e)]);
+            // The failure line names the write that failed: shortcuts and menus are separate subjects.
+            let failure = save_keys(app, keymap, profiles)
+                .err()
+                .map(|e| (tl!("The keyboard shortcuts were not saved: {error}"), e))
+                .or_else(|| save_menus(app, menus).err().map(|e| (tl!("The menus were not saved: {error}"), e)));
+            if let Some((subject, e)) = failure {
+                app.ui.status = crate::i18n::fmt(subject, &[("error", &e)]);
                 app.ui.status_error = true;
             }
         }
@@ -299,6 +318,14 @@ fn pass(app: &mut PhotocraftApp, ui: &mut egui::Ui, press_ok: bool) {
     if menus.ask_name {
         menus.ask_name = false;
         ask_set_name(app, state, &menus.copy_name());
+    }
+    if menus.cap_refused {
+        menus.cap_refused = false;
+        // The framework's in-dialog bars are drawn only on its own tab, so the Menus tab's refusal
+        // lines go to the app's status line, named by the engine's own cap message.
+        let cap = format!("at most {} menu sets", menu_sets::MAX_SETS);
+        app.ui.status = crate::i18n::fmt(tl!("The menu set was not saved: {error}"), &[("error", &cap)]);
+        app.ui.status_error = true;
     }
     if state.is_open() {
         app.prefs_rt.shortcuts = Some(session);
@@ -381,8 +408,25 @@ pub(crate) fn save_keys(app: &mut PhotocraftApp, keymap: &Keymap, profiles: &Pro
 /// — the params slice 1 added, which check the set names, colours and hideable ids.
 fn save_menus(app: &mut PhotocraftApp, menus: &MenusDraft) -> Result<Value, String> {
     if menus.sets_changed {
-        let sets: Map<String, Value> = menus.sets.iter().map(|(name, set)| (name.clone(), json!({"hidden": set.hidden, "colors": set.colors}))).collect();
-        app.run("edit.menus", json!({"sets": sets, "activeSet": menus.set})).map_err(|e| e.to_string())?;
+        // OK sends only what the engine would store: a set whose name it refuses is left out, and
+        // inside a set only items it lets be hidden and colours it knows. Since `sets` replaces
+        // every saved set, an entry a stale settings file holds is repaired out of the file;
+        // sending it whole, as this did, let one un-storable entry refuse the call, skip both
+        // menus writes, and close the dialog on the lost session.
+        let sets: Map<String, Value> = menus
+            .sets
+            .iter()
+            .filter_map(|(name, set)| {
+                let name = set_name(name).ok()?;
+                let hidden: Vec<&String> = set.hidden.iter().filter(|id| MenuCustomization::hideable(id)).collect();
+                let colors: Map<String, Value> =
+                    set.colors.iter().filter(|(_, c)| COLORS.contains(&c.as_str())).map(|(id, c)| (id.clone(), json!(c))).collect();
+                Some((name, json!({"hidden": hidden, "colors": colors})))
+            })
+            .collect();
+        // The set in use, likewise: "" unless the engine would keep both the name and that set.
+        let active = set_name(&menus.set).ok().filter(|name| sets.contains_key(name)).unwrap_or_default();
+        app.run("edit.menus", json!({"sets": sets, "activeSet": active})).map_err(|e| e.to_string())?;
     }
     let call = json!({"values": {"menus": {"hidden": menus.hidden, "colors": menus.colors}}});
     app.run("prefs.set", call).map_err(|e| e.to_string())
@@ -396,13 +440,22 @@ fn save_menus(app: &mut PhotocraftApp, menus: &MenusDraft) -> Result<Value, Stri
 fn ask_set_name(app: &mut PhotocraftApp, state: &mut DialogState, suggested: &str) {
     let asked = app.pick_save(suggested, |app, path| {
         let stem = Path::new(&path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        if let Some(session) = app.prefs_rt.shortcuts.as_mut() {
-            // The engine's own name rules: a name it would refuse (empty, overlong, the built-in
-            // one) is an error in the dialog, not a set the row could never select.
-            match set_name(&stem) {
-                Ok(name) => session.menus.store(&name),
-                Err(e) => session.state.show_error(e),
-            }
+        // The engine's own name rules: a name it would refuse (empty, overlong, the built-in one)
+        // is an error line, not a set the row could never select; the dialog stays open either way.
+        // Its bars belong to the framework's own tab, so the line goes to the app's status line.
+        let refused = match app.prefs_rt.shortcuts.as_mut() {
+            Some(session) => match set_name(&stem) {
+                Ok(name) => {
+                    session.menus.store(&name);
+                    None
+                }
+                Err(e) => Some(e),
+            },
+            None => None,
+        };
+        if let Some(e) = refused {
+            app.ui.status = crate::i18n::fmt(tl!("The menu set was not saved: {error}"), &[("error", &e)]);
+            app.ui.status_error = true;
         }
         Ok(control_reply())
     });
@@ -441,14 +494,14 @@ fn set_row(ui: &mut egui::Ui, draft: &mut MenusDraft) {
         if save.clicked() {
             if draft.set.is_empty() {
                 // The built-in set has no saved copy: the name comes from the Save dialog.
-                draft.ask_name = true;
+                draft.ask_new_name();
             } else {
                 let name = draft.set.clone();
                 draft.store(&name);
             }
         }
         if new.clicked() {
-            draft.ask_name = true;
+            draft.ask_new_name();
         }
         if delete.clicked() {
             draft.delete();

@@ -16,7 +16,7 @@ use egui::accesskit::Role;
 use egui::vec2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use photocraft_engine::menu_sets::{DEFAULTS_NAME, modified};
+use photocraft_engine::menu_sets::{DEFAULTS_NAME, MAX_SETS, modified};
 use serde_json::json;
 
 use super::shortcuts::press_ok;
@@ -102,6 +102,12 @@ fn the_set_dropdown_lists_the_built_in_set_first_and_the_saved_sets_after() {
     for name in [DEFAULTS_NAME, "Painting", "Web"] {
         assert!(h.query_by_label(name).is_some(), "{name} is not in the open list");
     }
+    // The order over the open list, top to bottom: the built-in set first, the saved sets after it
+    // in name order.
+    let built_in = h.get_by_label(DEFAULTS_NAME).rect().top();
+    let painting = h.get_by_label("Painting").rect().top();
+    let web = h.get_by_label("Web").rect().top();
+    assert!(built_in < painting && painting < web, "the open list runs {built_in}, {painting}, {web}: built-in first, then the saved sets by name");
 }
 
 /// The first edit renames the set in use "(modified)" in place; Save drops the marker.
@@ -331,7 +337,8 @@ fn cancel_drops_a_set_the_row_deleted() {
 
 /// A hand-edited settings file can name a set the engine itself refuses to write (the built-in
 /// name). The row still lists it and can delete it, but Save is greyed: it could not store under
-/// that name.
+/// that name. Picking away and pressing OK must not lose the session: the OK payload carries only
+/// what the engine would store, so the reserved-name set leaves the preferences with it.
 #[test]
 fn a_hand_edited_set_named_like_the_built_in_one_cannot_be_saved_but_can_be_deleted() {
     let mut h = harness(Arc::new(ScriptedFiles::new()));
@@ -344,4 +351,90 @@ fn a_hand_edited_set_named_like_the_built_in_one_cannot_be_saved_but_can_be_dele
     assert_eq!(row_value(&h), "PhotoCraft Defaults (modified)", "the row names the set in use, marker and all");
     assert!(greyed(&h, SAVE), "Save is greyed for a name the engine refuses to write");
     assert!(!greyed(&h, DELETE), "Delete can still clear it");
+    choose(&mut h, DEFAULTS_NAME);
+    assert_eq!(row_value(&h), DEFAULTS_NAME, "the built-in entry gives the built-in menus");
+    h.get_by_role_and_label(Role::ComboBox, "Set").click();
+    h.run_steps(2);
+    assert_eq!(
+        h.query_all_by_label(DEFAULTS_NAME).count(),
+        2,
+        "the built-in entry and the reserved-name set carry the same label, as the engine keeps both names"
+    );
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    ok(&mut h);
+    let p = h.state().session.prefs();
+    assert!(p.menu_sets.is_empty(), "the set the engine would refuse is not in the payload, so the preferences lose it");
+    assert!(p.menu_set.is_empty(), "and the row is back at the built-in set");
+    assert!(p.menus.hidden.is_empty(), "the built-in menus the pick loaded are the preferences' now");
+    assert!(!h.state().ui.status_error, "OK wrote, so no failure line");
+}
+
+/// A settings file can hold a set that hides an item that cannot be hidden (`file.close`): the
+/// prefs paths store it, but the engine's `edit.menus` would refuse it. OK filters its payload to
+/// what the engine would store, so picking another set and pressing OK lands every write instead
+/// of losing the session, and the stale entry is repaired out of the set.
+#[test]
+fn ok_writes_through_a_stale_prefs_set_the_engine_would_not_store() {
+    let mut h = harness(Arc::new(ScriptedFiles::new()));
+    h.state_mut().run("prefs.set", json!({"values": {"menuSet": "Old", "menuSets": {"Old": {"hidden": ["file.close", "edit.fade"], "colors": {}}}}})).unwrap();
+    open_menus(&mut h);
+    assert_eq!(row_value(&h), "Old (modified)", "the menus in use differ from the stale set");
+    choose(&mut h, DEFAULTS_NAME);
+    ok(&mut h);
+    let p = h.state().session.prefs();
+    assert!(p.menu_set.is_empty(), "the set switch landed: the built-in set is in use");
+    assert_eq!(p.menu_sets["Old"].hidden, ["edit.fade"], "the id the engine refuses to hide is out of the stored set");
+    assert!(h.state().prefs_rt.shortcuts.is_none(), "OK closed the dialog with its writes, not on a refused call");
+    assert!(!h.state().ui.status_error, "and no failure line was shown");
+}
+
+/// The set list is capped where the engine caps it (`MAX_SETS`). With the list already full, New
+/// shows the engine's own cap line (the framework's in-dialog bar is not drawn on the app's own
+/// tabs, so the line goes to the app's status line), the dialog stays open, and OK still writes:
+/// a full list can no longer drop the session.
+#[test]
+fn new_at_the_set_cap_refuses_with_an_error_line_and_ok_still_writes() {
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec!["Set Sixty Five.MNU".into()])]));
+    let mut h = harness(files.clone());
+    h.state_mut().session.edit_prefs(|p| {
+        for n in 0..MAX_SETS {
+            p.menu_sets.insert(format!("Set {n:02}"), Default::default());
+        }
+    });
+    open_menus(&mut h);
+    button(&h, NEW).click();
+    h.run_steps(3);
+    assert!(files.requests().is_empty(), "at the cap New does not ask the Save dialog");
+    assert_eq!(row_value(&h), DEFAULTS_NAME, "the row is unchanged");
+    let line = format!("at most {MAX_SETS} menu sets");
+    assert!(h.state().ui.status_error && h.state().ui.status.contains(&line), "the engine's cap line shows: {}", h.state().ui.status);
+    assert!(h.state().prefs_rt.shortcuts.is_some(), "and the dialog stays open");
+    ok(&mut h);
+    let p = h.state().session.prefs();
+    assert_eq!(p.menu_sets.len(), MAX_SETS, "no 65th set reached the preferences");
+    assert!(h.state().prefs_rt.shortcuts.is_none(), "OK closed the dialog with its writes landed");
+}
+
+/// A name the engine refuses cannot become a set: New whose Save dialog answers "PhotoCraft
+/// Defaults" leaves the row where it was, stores nothing in the preferences, and shows the
+/// engine's refusal line on the app's status line; the dialog stays open.
+#[test]
+fn a_picked_name_the_engine_refuses_shows_an_error_and_stores_no_set() {
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec!["PhotoCraft Defaults.MNU".into()])]));
+    let mut h = harness(files.clone());
+    with_saved_sets(h.state_mut());
+    open_menus(&mut h);
+    button(&h, NEW).click();
+    h.run_steps(4);
+    assert_eq!(files.requests().len(), 1, "New asked the Save dialog for a name");
+    assert_eq!(row_value(&h), "Painting", "the refused name stores no set: the row is where it was");
+    assert!(h.state().ui.status_error && h.state().ui.status.contains("is the built-in set"), "the engine's refusal line shows: {}", h.state().ui.status);
+    assert!(h.state().prefs_rt.shortcuts.is_some(), "and the dialog stays open");
+    let p = h.state().session.prefs();
+    assert_eq!(p.menu_sets.keys().collect::<Vec<_>>(), ["Painting", "Web"], "no set reached the preferences");
+    ok(&mut h);
+    let p = h.state().session.prefs();
+    assert_eq!(p.menu_sets.keys().collect::<Vec<_>>(), ["Painting", "Web"], "OK wrote the sets as they stood");
+    assert!(h.state().prefs_rt.shortcuts.is_none(), "and closed the dialog on its writes, not on a refusal");
 }
