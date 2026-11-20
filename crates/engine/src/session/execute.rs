@@ -231,7 +231,8 @@ impl Session {
         if d.doc.layer(target).is_none() {
             return Ok(None);
         }
-        let active = d.active_layer.replace(target);
+        let active = d.active_layer;
+        d.set_active_layer(Some(target));
         // The checks see the resolved id: a relative ordinal (`Frwr`, `Bckw`) would otherwise
         // resolve again from the swapped-in active layer and land one layer further.
         let mut resolved = params.clone();

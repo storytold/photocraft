@@ -9,7 +9,7 @@ pub(super) fn doc_state(s: &Session) -> std::result::Result<&DocState, String> {
 
 /// Selected layers of the active document, bottom-to-top.
 pub fn selected(s: &Session) -> Vec<LayerId> {
-    s.active().map(DocState::selected_layers).unwrap_or_default()
+    s.active().map(|st| st.selected_layers().to_vec()).unwrap_or_default()
 }
 
 /// The layers a layer command acts on: the `layer` param when given, else every selected layer
