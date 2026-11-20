@@ -576,7 +576,7 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
         s.execute("file.new", json!({"width": pw, "height": ph, "mode": mode, "depth": depth, "background": "white", "name": name}))?;
         let idx = s.active_index().ok_or(EngineError::NoDocument)?;
         if let Some(st) = s.active_mut() {
-            std::sync::Arc::make_mut(&mut st.doc).resolution_dpi = res as f32;
+            std::sync::Arc::make_mut(st.doc_mut()).resolution_dpi = res as f32;
         }
         let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
         for (k, path) in chunk.iter().enumerate() {

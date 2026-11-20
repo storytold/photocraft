@@ -45,10 +45,25 @@ impl BlendRange {
     /// a split point. An unsplit black point at `b` shows `v >= b`; an unsplit white point at `w`
     /// shows `v <= w`.
     pub fn weight(&self, v: f32) -> f32 {
+        self.weight_at(v, false)
+    }
+
+    /// [`BlendRange::weight`] in an 8-bit document, where a split point counts both of its ends:
+    /// the black side shows `(v − low + 1) / (high − low + 1)` and the white side
+    /// `(high − v + 1) / (high − low + 1)`, as measured in the reference application (#14855):
+    /// Gray 152 under a white point at 140/160 shows at 9/21, a value on the black point's low half
+    /// already at 1 / (high − low + 1). Unsplit points stay hard.
+    pub fn weight_8bit(&self, v: f32) -> f32 {
+        self.weight_at(v, true)
+    }
+
+    /// [`BlendRange::weight`], or [`BlendRange::weight_8bit`] when `levels`.
+    fn weight_at(&self, v: f32, levels: bool) -> f32 {
         let ramp = |lo: u8, hi: u8, x: f32| -> f32 {
-            // 0 at or below `lo`, 1 at or above `hi`.
+            // 0 at or below `lo` (below it on 8-bit levels), 1 at or above `hi`.
             let (lo, hi) = (f32::from(lo), f32::from(hi));
-            if hi <= lo { if x >= lo { 1.0 } else { 0.0 } } else { ((x - lo) / (hi - lo)).clamp(0.0, 1.0) }
+            let lo_end = if levels { lo - 1.0 } else { lo };
+            if hi <= lo { if x >= lo { 1.0 } else { 0.0 } } else { ((x - lo_end) / (hi - lo_end)).clamp(0.0, 1.0) }
         };
         let lo = ramp(self.black[0], self.black[1], v);
         // Mirror for the white point: 1 at or below its low half, 0 above its high half.
