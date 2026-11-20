@@ -13,6 +13,7 @@ use egui::{Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use photocraft_doc::{LayerContent, LayerId, TextLayer};
+use photocraft_engine::color_cmds::ColorExt;
 use photocraft_geom::{Affine, Point};
 use serde_json::json;
 

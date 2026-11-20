@@ -1,5 +1,6 @@
 //! Recorded-shaped Convert to Profile flags survive ATN load, save and native playback.
 
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::sync::Arc;
 
 use craft_cms::Builtin;
@@ -73,7 +74,7 @@ fn absolute_and_unknown_intents_remain_distinct_with_conversion_flags() {
             assert_eq!(saved, &d);
         } else {
             assert_eq!(result["unsupported"], json!([]));
-            assert_eq!(s.actions.list.actions()[0].steps[0].params["intent"], json!("absolute"));
+            assert_eq!(s.actions().list.actions()[0].steps[0].params["intent"], json!("absolute"));
             assert_eq!(saved.get("Inte"), Some(&D::Enumerated { type_id: Id::new("Inte"), value: Id::new("AClr") }));
             let mut absolute = intent_fixture();
             absolute.execute("edit.convertToProfile", json!({"profile": "srgb", "intent": "absolute", "bpc": false})).unwrap();
@@ -150,7 +151,7 @@ fn recorded_rgb_flags_survive_save_reimport_and_public_playback() {
         }
         let mut replay = fixture();
         assert_eq!(load(&mut replay, &recorded(d))["unsupported"], json!([]));
-        assert_eq!(replay.actions.list.actions()[0].steps, vec![ActionStep::new("edit.convertToProfile", params)]);
+        assert_eq!(replay.actions().list.actions()[0].steps, vec![ActionStep::new("edit.convertToProfile", params)]);
         let saved = save(&mut replay);
         let parsed = atn::parse(&saved).unwrap();
         let saved_d = parsed.actions[0].items[0].descriptor.as_ref().unwrap();
@@ -160,8 +161,8 @@ fn recorded_rgb_flags_survive_save_reimport_and_public_playback() {
         }
         let imported = atn_cmds::import(&saved).unwrap();
         assert!(imported.unsupported.is_empty());
-        assert_eq!(imported.actions[0].steps, replay.actions.list.actions()[0].steps);
-        replay.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+        assert_eq!(imported.actions[0].steps, replay.actions().list.actions()[0].steps);
+        replay.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
         let played = replay.execute("actions.play", json!({"action": "Convert"})).unwrap();
         assert_eq!(played["ran"], 1);
         assert!(played.get("failed").is_none(), "{played}");
@@ -182,12 +183,12 @@ fn recorded_rgb_flags_survive_save_reimport_and_public_playback() {
 fn defaults_are_explicit_false_and_assign_profile_is_unchanged() {
     let mut s = fixture();
     assert_eq!(load(&mut s, &recorded(descriptor()))["unsupported"], json!([]));
-    let params = &s.actions.list.actions()[0].steps[0].params;
+    let params = &s.actions().list.actions()[0].steps[0].params;
     for (_, param) in FLAGS {
         assert_eq!(params[param], false);
     }
     let saved = save(&mut s);
-    s.actions.list = ActionList::from_file(ActionsFile::new(atn_cmds::import(&saved).unwrap().actions, Vec::new()));
+    s.actions_mut().list = ActionList::from_file(ActionsFile::new(atn_cmds::import(&saved).unwrap().actions, Vec::new()));
     let mut control = fixture();
     control.execute("edit.convertToProfile", json!({"profile": "srgb", "intent": "relative", "bpc": false})).unwrap();
     let played = s.execute("actions.play", json!({"action": "Convert"})).unwrap();
@@ -240,7 +241,7 @@ fn unsupported_values_are_preserved_and_invalid_native_values_refuse_export() {
         let original = atn::parse(&bytes).unwrap();
         let mut s = Session::new();
         assert_eq!(load(&mut s, &bytes)["unsupported"].as_array().unwrap().len(), 1);
-        assert_eq!(s.actions.list.actions()[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(s.actions().list.actions()[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP);
         let saved = atn::parse(&save(&mut s)).unwrap();
         assert_eq!(saved.actions[0].items[0].descriptor, original.actions[0].items[0].descriptor);
         assert_eq!(saved.actions[0].items[0].event, original.actions[0].items[0].event);
@@ -278,7 +279,7 @@ fn reference_recorded_convert_to_profile_maps() {
     let mut s = fixture();
     assert_eq!(load(&mut s, &recorded(d))["unsupported"], json!([]));
     assert_eq!(
-        s.actions.list.actions()[0].steps,
+        s.actions().list.actions()[0].steps,
         vec![ActionStep::new(
             "edit.convertToProfile",
             json!({"profile": "prophoto-compat", "intent": "absolute", "dither": true, "flatten": false, "rasterizePlaced": false})

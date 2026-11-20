@@ -8,6 +8,7 @@
 //! [`note_alerts`].
 
 use craft::behavior::Selection;
+use photocraft_engine::color_cmds::ColorExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -114,7 +115,7 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
             // A check item with no document too: an item's kind never changes (native menus).
             let kind = id.strip_prefix("view.proofSetup.").and_then(photocraft_engine::proof_sim::ProofKind::from_id)?;
             let Some(d) = app.session.active() else { return Some(false) };
-            let pv = app.session.color.proof(d.doc.id);
+            let pv = app.session.color().proof(d.doc.id);
             Some(pv.enabled && pv.setup.kind == kind)
         }
     }

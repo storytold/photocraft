@@ -6,6 +6,7 @@ use craft::draw::ui::transform::{TransformChoice, TransformEdit, TransformMenuWo
 use craft::i18n::WordSet;
 use craft::imaging::trace::{MaskSource, outline};
 use craft::imaging::ui::warp::{CylinderValues, WarpMesh, WarpSplit};
+use photocraft_engine::color_cmds::ColorExt;
 
 use super::preview::AbovePlan;
 use super::warp::{cylinder_edit, cylinder_values, grid_edit};
@@ -1634,9 +1635,9 @@ fn transform_preview_preserves_displayed_profile_colors() {
                 Ok(())
             })
             .unwrap();
-        app.session.color.settings.monitor_profile = monitor.into();
+        app.session.color_mut().settings.monitor_profile = monitor.into();
         let st = app.session.active().unwrap();
-        let display = app.session.color.canvas_display(&st.doc).unwrap();
+        let display = app.session.color().canvas_display(&st.doc).unwrap();
         assert_eq!(!display.is_identity(), wide_gamut || monitor != "srgb");
         let composite = photocraft_compose::render(&st.doc, bounds);
         let expected = crate::canvas::display_image(Some(&display), &composite);
@@ -1683,7 +1684,7 @@ fn preview_applies_the_linked_mask() {
 #[test]
 fn transform_selection_tint_is_not_document_color() {
     let mut app = app_with_square(8, photocraft_geom::Rect::new(0, 0, 8, 8));
-    app.session.color.settings.monitor_profile = "display-p3".into();
+    app.session.color_mut().settings.monitor_profile = "display-p3".into();
     app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 8})).unwrap();
     let ctx = gpu_ctx();
     begin_selection(&mut app, &ctx).unwrap();
@@ -1708,9 +1709,9 @@ fn transform_covering_layer_uses_the_same_monitor_profile() {
             Ok(())
         })
         .unwrap();
-    app.session.color.settings.monitor_profile = "display-p3".into();
+    app.session.color_mut().settings.monitor_profile = "display-p3".into();
     let doc = app.session.active().unwrap().doc.clone();
-    let display = app.session.color.canvas_display(&doc).unwrap();
+    let display = app.session.color().canvas_display(&doc).unwrap();
     let expected = [lower, upper].map(|id| {
         let mut solo = (*doc).clone();
         for layer in &mut solo.layers {

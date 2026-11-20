@@ -10,6 +10,7 @@ use egui::vec2;
 use egui_kittest::Harness;
 use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
 use photocraft_engine::Session;
+use photocraft_engine::color_cmds::ColorExt;
 use serde_json::json;
 
 /// What the prompt's `action` field calls each choice.
@@ -225,7 +226,7 @@ fn remember_answers_the_waiting_files_and_stops_asking() {
         for name in ["a.png", "b.png", "c.png"] {
             assert_eq!(profile(&h, name).as_deref(), Some("sRGB IEC61966-2.1"), "background {background}: {name} converted");
         }
-        let settings = &h.state().session.color.settings;
+        let settings = &h.state().session.color().settings;
         assert_eq!(settings.policy(photocraft_doc::ColorMode::Rgb), photocraft_engine::color_cmds::Policy::Convert);
         assert!(!settings.ask_on_mismatch, "background {background}");
         h.state_mut().open_file("/pics/d.png", &adobe_png()).unwrap();
@@ -242,5 +243,5 @@ fn without_remember_the_next_file_still_asks() {
     open_three(&mut h);
     answer(&mut h, CONVERT);
     assert!(h.state().framework.dialogs.is_open::<ProfileMismatchDialog>(), "the next file asks");
-    assert!(h.state().session.color.settings.ask_on_mismatch);
+    assert!(h.state().session.color().settings.ask_on_mismatch);
 }

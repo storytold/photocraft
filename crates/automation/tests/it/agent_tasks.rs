@@ -3,6 +3,7 @@
 //! Each task uses only MCP tools (`doc_*`, `command_run`) the way an agent would, and checks the
 //! outcome through `doc_inspect`, `document.pixel` or the exported files, never engine internals.
 
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::io::Write;
 
 use photocraft_automation::{AuthorizedWorkspace, PhotocraftMcp};
@@ -330,7 +331,7 @@ async fn agent_play_refuses_a_recorded_file_open() {
     use photocraft_engine::actions_cmds::ActionStep;
     headless
         .session
-        .actions
+        .actions_mut()
         .list
         .push(photocraft_engine::actions_cmds::Action {
             name: "Open".into(),

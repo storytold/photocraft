@@ -2,6 +2,7 @@ use egui::vec2;
 use egui_kittest::{Harness, kittest::Queryable};
 use photocraft_doc::effects::{BevelTechnique, FxPaint, GlowSource};
 use photocraft_doc::{BlendMode, BlendRange, Effect, Knockout, StrokeFx};
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 
 use super::*;
@@ -681,7 +682,7 @@ fn new_style_saves_pending_state_and_a_swatch_apply_restores_it() {
     h.run_steps(3);
     // The preset is saved at once under the default name "Style".
     assert_eq!(h.state().framework.dialogs.stack().top(), Some(id), "New Style… opens no other dialog");
-    let preset = h.state().session.presets.styles.iter().flat_map(|g| g.items.iter()).find(|st| st.name == "Style").expect("the preset is created");
+    let preset = h.state().session.presets().styles.iter().flat_map(|g| g.items.iter()).find(|st| st.name == "Style").expect("the preset is created");
     assert_eq!(preset.effects.len(), 1, "only the enabled instance is saved");
     assert_eq!(preset.opacity, Some(0.4), "the pending opacity is saved");
 

@@ -3,6 +3,7 @@ use craft_psd::{
     atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem},
     descriptor::{Descriptor, Id, UnicodeString, Value as D},
 };
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::actions_cmds::{ActionList, ActionStep, ActionsFile};
 use photocraft_engine::{Session, atn_cmds};
 use serde_json::json;
@@ -71,24 +72,24 @@ fn load(event: [u8; 4], descriptor: Descriptor, command: &str) -> Session {
     let bytes = bytes(event, descriptor);
     let report = s.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&bytes)})).unwrap();
     assert_eq!(report["unsupported"], json!([]), "recorded {} must map to {command}", String::from_utf8_lossy(&event));
-    assert_eq!(s.actions.list.actions()[0].steps[0].command, command);
+    assert_eq!(s.actions().list.actions()[0].steps[0].command, command);
     s
 }
 
 #[test]
 fn recorded_grmp_imports_as_direct_gradient_map() {
     let s = load(*b"GrMp", gradient(), "image.adjustments.gradientMap");
-    assert_eq!(s.actions.list.actions()[0].steps[0].params["stops"], json!([[0, [0, 0, 1]], [1, [1, 0, 0]]]));
+    assert_eq!(s.actions().list.actions()[0].steps[0].params["stops"], json!([[0, [0, 0, 1]], [1, [1, 0, 0]]]));
 }
 
 #[test]
 fn recorded_rplc_imports_as_direct_replace_color() {
     let s = load(*b"RplC", replace(), "image.adjustments.replaceColor");
-    assert_eq!(s.actions.list.actions()[0].steps[0].params["hue"], json!(30));
+    assert_eq!(s.actions().list.actions()[0].steps[0].params["hue"], json!(30));
 }
 
 fn saved(s: &Session) -> AtnItem {
-    let refs = s.actions.list.actions().iter().collect::<Vec<_>>();
+    let refs = s.actions().list.actions().iter().collect::<Vec<_>>();
     let (bytes, skipped) = atn_cmds::export("Direct adjustments", &refs, &[], false).unwrap();
     assert!(skipped.is_empty());
     atn::parse(&bytes).unwrap().actions.remove(0).items.remove(0)
@@ -196,7 +197,7 @@ fn fractional_gradient_changes_pixels_and_preserves_selection_and_undo() {
         assert_eq!(&expected[12..], &original[12..], "outside the selection");
         let mut replay = fixture("rgb", depth);
         replay.execute("select.rect", json!({"x":0,"y":0,"width":3,"height":1})).unwrap();
-        replay.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+        replay.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
         play(&mut replay);
         assert_eq!(raw(&replay), expected);
         assert!(replay.undo());
@@ -294,7 +295,7 @@ fn kept(event: [u8; 4], d: Descriptor) {
     let imported = atn_cmds::import(&bytes(event, d.clone())).unwrap();
     assert_eq!(imported.unsupported.len(), 1, "{d:?}");
     let mut s = Session::new();
-    s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+    s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
     assert_eq!(saved(&s).descriptor, Some(d));
 }
 
@@ -339,10 +340,13 @@ fn invalid_replace_descriptors_and_lossy_exports_are_refused() {
         kept(*b"RplC", d);
     }
     let mut s = load(*b"GrMp", gradient(), "image.adjustments.gradientMap");
-    let mut stale = s.actions.list.actions()[0].steps[0].clone();
+    let mut stale = s.actions().list.actions()[0].steps[0].clone();
     stale.params["stops"][0][1][0] = json!(0.2);
-    s.actions.list.replace_step(0, 0, stale).unwrap();
-    assert!(atn_cmds::export("Direct adjustments", &[&s.actions.list.actions()[0]], &[], false).is_err(), "stale color metadata must not fall through to GdMp");
+    s.actions_mut().list.replace_step(0, 0, stale).unwrap();
+    assert!(
+        atn_cmds::export("Direct adjustments", &[&s.actions().list.actions()[0]], &[], false).is_err(),
+        "stale color metadata must not fall through to GdMp"
+    );
     for p in [json!({"color":"#ff0000"}), json!({"labMinimum":[40,0,0],"labMaximum":[60,0,0],"hue":0.5})] {
         let a = photocraft_engine::actions_cmds::Action::new("Native", vec![ActionStep::new("image.adjustments.replaceColor", p)]);
         assert!(atn_cmds::export("Direct adjustments", &[&a], &[], false).is_err());
@@ -376,7 +380,7 @@ fn recorded_replace_color_clamps_shifts_and_plays_the_lab_box_at_every_depth() {
             std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).selection = Some(mask);
         }
         let before = raw(&s);
-        s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+        s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
         play(&mut s);
         let after = raw(&s);
         if inverse {

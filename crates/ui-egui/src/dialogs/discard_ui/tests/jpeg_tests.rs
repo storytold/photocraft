@@ -9,6 +9,7 @@ use craft::ui::patterns::form_dialogs::HostedFormatOptions;
 use craft::ui::runtime::memory::{saved_value, set_saved_value};
 use egui_kittest::kittest::Queryable;
 use photocraft_codecs::JpegFormat;
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 /// Each write: the path, and the JPEG quality (1–100) and format the export was asked for.
@@ -73,7 +74,7 @@ pub(super) fn set_field(h: &mut Prompted, field: &str, value: Value) {
 
 /// The steps of the first recorded action.
 pub(super) fn steps(h: &Prompted) -> &Vec<ActionStep> {
-    &h.state().session.actions.list.action(0).unwrap().steps
+    &h.state().session.actions().list.action(0).unwrap().steps
 }
 
 /// Save As to a JPEG asks first, starting at the Export preferences' quality (85 → 10, Maximum)

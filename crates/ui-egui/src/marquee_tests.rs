@@ -5,6 +5,7 @@
 use crate::app::framework::BuildApp as _;
 use egui::{Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
+use photocraft_engine::smartselect_cmds::SmartSelectExt;
 use photocraft_geom::Rect;
 use serde_json::json;
 
@@ -95,7 +96,7 @@ fn object_selection_keeps_the_mode_from_the_mouse_press() {
                 let doc = st.doc.clone();
                 let target = st.active_layer;
                 let region = photocraft_engine::smartselect_cmds::find_object(&doc, target, false, 220.0, 150.0).expect("the red disc is detectable");
-                h.state_mut().session.object_finder.insert(&doc, target, std::sync::Arc::new(region));
+                h.state_mut().session.object_finder_mut().insert(&doc, target, std::sync::Arc::new(region));
                 if at_press.alt {
                     h.state_mut().run("select.all", json!({})).unwrap();
                 } else {

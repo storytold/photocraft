@@ -8,6 +8,8 @@ use craft::ui::patterns::form_dialogs::{BackgroundContents, BitDepth, ColorMode,
 use craft::ui::runtime::env::UnitKind;
 use egui::vec2;
 use egui_kittest::Harness;
+use photocraft_engine::prefs::SavedPrefsExt;
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -123,7 +125,7 @@ fn a_corrupt_remembered_value_is_ignored() {
     let kept = craft::ui::runtime::memory::saved_value::<Option<DocumentOptions>>(h.state().ctx(), &crate::new_doc_ui::LAST_CREATED);
     assert_eq!(kept.as_ref().map(|o| o.size), Some(PixelSize::new(800, 600)));
     let documents = h.state().session.documents().len();
-    let recent = h.state().session.presets.recent_documents.clone();
+    let recent = h.state().session.presets().recent_documents.clone();
     // A Create the engine refuses (an unknown profile) stores nothing and adds no recent entry.
     create(&mut h, |o| {
         o.size = PixelSize::new(321, 123);
@@ -131,7 +133,7 @@ fn a_corrupt_remembered_value_is_ignored() {
     });
     assert_eq!(h.state().session.documents().len(), documents, "no document was made");
     assert_eq!(craft::ui::runtime::memory::saved_value::<Option<DocumentOptions>>(h.state().ctx(), &crate::new_doc_ui::LAST_CREATED), kept, "unchanged");
-    assert_eq!(h.state().session.presets.recent_documents, recent);
+    assert_eq!(h.state().session.presets().recent_documents, recent);
 }
 
 /// #3131: File › New › Recent lists the documents created with the dialog, newest first, and
@@ -155,14 +157,14 @@ fn created_documents_fill_the_recent_category() {
         o.background = BackgroundContents::White;
         o.unit = UnitKind::Pixels;
     });
-    let recent = h.state().session.presets.recent_documents.clone();
+    let recent = h.state().session.presets().recent_documents.clone();
     assert_eq!(recent.iter().map(|r| (r.width, r.unit.as_str())).collect::<Vec<_>>(), [(1920, "px"), (640, "in")]);
     // The settings are kept with the preferences.
     let mut restarted = photocraft_engine::Session::new();
     restarted.load_prefs_json(&h.state().session.prefs_to_json()).unwrap();
-    assert_eq!(restarted.presets.recent_documents, recent);
+    assert_eq!(restarted.presets().recent_documents, recent);
     // The list the dialog opens with (its bound `recent`) holds every setting of each entry.
-    let listed: Vec<DocumentOptions> = restarted.presets.recent_documents.iter().map(crate::new_doc_ui::to_options).collect();
+    let listed: Vec<DocumentOptions> = restarted.presets().recent_documents.iter().map(crate::new_doc_ui::to_options).collect();
     assert_eq!(
         (listed[1].size, listed[1].unit, listed[1].color_mode, listed[1].depth),
         (PixelSize::new(640, 480), UnitKind::Inches, ColorMode::Cmyk, BitDepth::Sixteen)

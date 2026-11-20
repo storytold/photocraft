@@ -12,6 +12,7 @@
 //! Sample All Layers, and clears when the pointer leaves the canvas, the tool changes, a button
 //! goes down or the option is off. Quality of the object found is out of scope here (#2788).
 
+use photocraft_engine::smartselect_cmds::SmartSelectExt;
 use std::sync::Arc;
 
 use craft::behavior::kurbo::{Point, Rect};
@@ -129,7 +130,7 @@ pub(crate) fn update(app: &mut PhotocraftApp, at: Option<[f64; 2]>, pressed: boo
             Ok(found) => {
                 if let Some((r, mask)) = found {
                     if photocraft_engine::layer_multi_cmds::same_pixels(&job.doc, &doc_arc) {
-                        app.session.object_finder.insert(&doc_arc, target, Arc::clone(&r));
+                        app.session.object_finder_mut().insert(&doc_arc, target, Arc::clone(&r));
                         f.mask = Some((r, mask));
                     }
                 } else {
@@ -146,7 +147,7 @@ pub(crate) fn update(app: &mut PhotocraftApp, at: Option<[f64; 2]>, pressed: boo
     }
     let inside = |r: &Region| r.at(px[0], px[1]) >= 0.5;
     if !f.shown.as_deref().is_some_and(inside) {
-        f.shown = app.session.object_finder.lookup(&doc_arc, target, at[0] as f32, at[1] as f32);
+        f.shown = app.session.object_finder().lookup(&doc_arc, target, at[0] as f32, at[1] as f32);
     }
     match &f.shown {
         Some(r) if !f.mask.as_ref().is_some_and(|(m, _)| Arc::ptr_eq(m, r)) => f.mask = Some((Arc::clone(r), mask_of(r))),
@@ -280,7 +281,7 @@ mod tests {
         // Elsewhere on the same object: served from the cache, no new lookup.
         let u = update(&mut app, Some([120.0, 90.0]), false, 200.0, &ctx);
         assert!(u.shown.is_some_and(|s| Arc::ptr_eq(&s, &r)) && !u.busy);
-        assert_eq!(app.session.object_finder.len(), 1);
+        assert_eq!(app.session.object_finder().len(), 1);
         // The background highlights nothing.
         assert!(hover(&mut app, [4.0, 4.0]).shown.is_none());
     }

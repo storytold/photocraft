@@ -1,4 +1,5 @@
 use craft_psd::atn;
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{Session, actions_cmds::ActionStep, paint::tile::b64_encode};
 use serde_json::json;
 
@@ -17,6 +18,6 @@ fn legacy_v12_commands_import_like_v16() {
         let mut s = Session::new();
         let result = s.execute("actions.load", json!({"data": b64_encode(input)})).unwrap();
         assert_eq!(result["unsupported"], json!([]));
-        assert_eq!(s.actions.list.actions()[0].steps, expected);
+        assert_eq!(s.actions().list.actions()[0].steps, expected);
     }
 }

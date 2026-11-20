@@ -6,6 +6,7 @@
 use craft::keymap::{Binding, CommandRef, Policy};
 use egui::{Event, Key, Modifiers};
 use egui_kittest::Harness;
+use photocraft_engine::prefs::SavedPrefsExt;
 use photocraft_engine::prefs::{bindable_items, normalize_shortcut};
 use serde_json::json;
 

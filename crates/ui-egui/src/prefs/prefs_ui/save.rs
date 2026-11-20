@@ -1,3 +1,5 @@
+use photocraft_engine::link_watch::LinkWatchExt;
+use photocraft_engine::prefs::SavedPrefsExt;
 use std::time::Instant;
 
 use craft::platform::autosave::{AutosaveDoc, interval_for_minutes};

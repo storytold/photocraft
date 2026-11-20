@@ -5,6 +5,7 @@ use craft_psd::{
     descriptor::{Descriptor, Id, UnicodeString, Value as D},
 };
 use photocraft_doc::{LayerId, Rect};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionList, ActionStep, ActionsFile},
@@ -107,7 +108,7 @@ fn typed_flags_survive_saved_descriptors_and_public_playback() {
             }
             let (mut replay, replay_id) = fixture();
             assert_eq!(load(&mut replay, &recorded(event.clone(), d))["unsupported"], json!([]));
-            assert_eq!(replay.actions.list.actions()[0].steps, vec![ActionStep::new("edit.fill", params)], "CAF flags must import without loss");
+            assert_eq!(replay.actions().list.actions()[0].steps, vec![ActionStep::new("edit.fill", params)], "CAF flags must import without loss");
             let saved = save(&mut replay);
             let parsed = atn::parse(&saved).unwrap();
             let saved_d = parsed.actions[0].items[0].descriptor.as_ref().unwrap();
@@ -117,8 +118,8 @@ fn typed_flags_survive_saved_descriptors_and_public_playback() {
             assert_eq!(saved_d.get(ROTATION), Some(&D::Boolean(values[3])));
             let imported = atn_cmds::import(&saved).unwrap();
             assert!(imported.unsupported.is_empty());
-            assert_eq!(imported.actions[0].steps, replay.actions.list.actions()[0].steps);
-            replay.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+            assert_eq!(imported.actions[0].steps, replay.actions().list.actions()[0].steps);
+            replay.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
             let played = replay.execute("actions.play", json!({"action": "Fill"})).unwrap();
             assert_eq!(played["ran"], 1);
             assert!(played.get("failed").is_none(), "{played}");
@@ -134,10 +135,10 @@ fn typed_flags_survive_saved_descriptors_and_public_playback() {
 fn absent_and_null_native_flags_keep_defaults_and_export_no_rotation() {
     let mut s = Session::new();
     assert_eq!(load(&mut s, &recorded(AtnEvent::Code(*b"Fl  "), descriptor()))["unsupported"], json!([]));
-    assert_eq!(s.actions.list.actions()[0].steps[0].params, json!({"contents": "contentAware", "rotationAdaptation": false}));
+    assert_eq!(s.actions().list.actions()[0].steps[0].params, json!({"contents": "contentAware", "rotationAdaptation": false}));
     let saved = save(&mut s);
     let imported = atn_cmds::import(&saved).unwrap();
-    assert_eq!(imported.actions[0].steps, s.actions.list.actions()[0].steps);
+    assert_eq!(imported.actions[0].steps, s.actions().list.actions()[0].steps);
     for null in [false, true] {
         let mut params = json!({"contents": "contentAware"});
         if null {
@@ -184,7 +185,7 @@ fn malformed_flags_remain_kept_steps() {
             let mut s = Session::new();
             let loaded = load(&mut s, &source);
             assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1);
-            assert_eq!(s.actions.list.actions()[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP);
+            assert_eq!(s.actions().list.actions()[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP);
             let saved = atn::parse(&save(&mut s)).unwrap();
             assert_eq!(saved.actions[0].items[0].descriptor, original.actions[0].items[0].descriptor);
             assert_eq!(saved.actions[0].items[0].event, original.actions[0].items[0].event);

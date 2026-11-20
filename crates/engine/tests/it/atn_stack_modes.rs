@@ -5,6 +5,7 @@ use craft_psd::{
     descriptor::{Class, Descriptor, Id, UnicodeString, Value as D},
 };
 use photocraft_doc::{Group, Layer, LayerContent, StackMode};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionList, ActionStep, ActionsFile},
@@ -158,7 +159,7 @@ fn stack_recordings_play_native_modes_and_undo_at_each_depth() {
             let expected = s.active().unwrap().doc.clone();
             s.execute("edit.undo", json!({})).unwrap();
             let imported = load(source);
-            s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+            s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
             let result = s.execute("actions.play", json!({"action":"Mode","set":"Stacks"})).unwrap();
             assert_eq!(result["ran"], 1, "{result}");
             let actual = s.active().unwrap();
@@ -204,7 +205,7 @@ fn unsupported_stack_recordings_save_whole_and_refuse_playback() {
         s.execute("layer.smartObjects.stackMode.maximum", json!({})).unwrap();
         let before = s.active().unwrap().doc.clone();
         let history = s.active().unwrap().history.past_len();
-        s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+        s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
         let result = s.execute("actions.play", json!({"action":"Mode","set":"Stacks"})).unwrap();
         assert!(result.get("failed").is_some(), "{result}");
         assert_eq!(s.active().unwrap().doc.layers, before.layers);

@@ -2,6 +2,7 @@
 //! run without the dialog), not the document's size; Cancel stores nothing.
 
 use craft::ui::dialog::DialogId;
+use photocraft_engine::prefs::SavedPrefsExt;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;

@@ -3,6 +3,7 @@
 use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
 use craft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
 use photocraft_doc::{BlendMode, LayerContent};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionStep},
@@ -70,7 +71,7 @@ fn make_keeps_name_mode_and_clipping_through_play_and_save_at_both_depths() {
             let base = s.active().unwrap().active_layer.unwrap();
             let loaded = s.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&bytes(descriptor.clone()))})).unwrap();
             assert_eq!(loaded["unsupported"], json!([]), "{params}");
-            let steps = &s.actions.list.actions()[0].steps;
+            let steps = &s.actions().list.actions()[0].steps;
             assert_eq!(steps.len(), 1, "{params}");
             assert_eq!(steps[0].command, "layer.newAdjustmentLayer.levels");
             for (k, v) in params.as_object().unwrap() {

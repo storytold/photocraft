@@ -6,6 +6,7 @@
 use super::open::{Target, commit_open_raw, open_raw_with, return_on_failure};
 use super::sidecar::read_sidecar;
 use super::{CameraRaw, PhotocraftApp, RawOpen, Rect, Value, hosted, image, json, workspace_demosaic};
+use photocraft_engine::color_cmds::ColorExt;
 
 /// Long side of a filmstrip thumbnail, in pixels.
 const THUMB_SIDE: usize = 240;
@@ -54,7 +55,7 @@ fn thumbnail(app: &PhotocraftApp, index: usize) -> Option<egui::ColorImage> {
         }
     }
     let px: Vec<[f32; 4]> = acc.iter().map(|a| if a[4] > 0.0 { [a[0] / a[4], a[1] / a[4], a[2] / a[4], a[3] / a[4]] } else { [0.0; 4] }).collect();
-    let display = app.session.color.canvas_display(doc).ok()?;
+    let display = app.session.color().canvas_display(doc).ok()?;
     Some(image(&px, tw, th, &display))
 }
 

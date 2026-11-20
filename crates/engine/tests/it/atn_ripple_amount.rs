@@ -1,5 +1,6 @@
 //! #7670: integer ATN Ripple amounts must never silently replace native fractions.
 use craft_psd::{atn, descriptor::Value as D};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::actions_cmds::{Action, ActionList, ActionStep, ActionsFile};
 use photocraft_engine::{Session, atn_cmds};
 use serde_json::{Value, json};
@@ -39,7 +40,7 @@ fn fractional_amounts_remain_native_and_are_refused_by_strict_export() {
                 let mut direct = fixture(depth);
                 direct.execute(RIPPLE, params).unwrap();
                 let mut native = fixture(depth);
-                native.actions.list.push(action.clone()).unwrap();
+                native.actions_mut().list.push(action.clone()).unwrap();
                 native.execute("actions.play", json!({"action": "Fractional Ripple"})).unwrap();
                 assert_eq!(pixels(&direct), pixels(&native));
 
@@ -53,7 +54,7 @@ fn fractional_amounts_remain_native_and_are_refused_by_strict_export() {
                     assert!(skipped.is_empty() && imported.unsupported.is_empty() && imported.warnings.is_empty());
                     let exported = imported.actions[0].steps[0].params["amount"].clone();
                     let mut replay = fixture(depth);
-                    replay.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+                    replay.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
                     replay.execute("actions.play", json!({"action": "Fractional Ripple"})).unwrap();
                     let changed = pixels(&replay) != pixels(&direct);
                     if amount == 81.4 {
@@ -82,7 +83,7 @@ fn integer_amounts_sizes_and_defaults_preserve_playback() {
             let mut direct = fixture(depth);
             direct.execute(RIPPLE, params.clone()).unwrap();
             let mut native = fixture(depth);
-            native.actions.list.push(action.clone()).unwrap();
+            native.actions_mut().list.push(action.clone()).unwrap();
             native.execute("actions.play", json!({"action": "Integer Ripple"})).unwrap();
             assert_eq!(pixels(&native), pixels(&direct));
 
@@ -99,7 +100,7 @@ fn integer_amounts_sizes_and_defaults_preserve_playback() {
             assert_eq!(imported.actions[0].steps.len(), 1);
             assert_eq!(imported.actions[0].steps[0].command, RIPPLE);
             let mut replay = fixture(depth);
-            replay.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+            replay.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
             replay.execute("actions.play", json!({"action": "Integer Ripple"})).unwrap();
             assert_eq!(pixels(&replay), pixels(&direct), "depth {depth}: {params}");
         }

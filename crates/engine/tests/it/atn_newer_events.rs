@@ -4,6 +4,7 @@ use craft_psd::{
     descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D},
 };
 use photocraft_doc::{Layer, LayerContent, LayerId, SmartObject, SmartSource};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionStep},
@@ -184,7 +185,7 @@ fn atn_link_events_keep_descriptors_and_replay_the_requested_operation() {
             let descriptor = Descriptor::new("null").with("null", target());
             let mut s = fixture(&initial, &[0, 1]);
             assert_eq!(load(&mut s, &file(event, descriptor.clone()))["unsupported"], json!([]));
-            assert_eq!(s.actions.list.actions()[0].steps, [ActionStep::new("layer.linkLayers", json!({"linked": linked}))]);
+            assert_eq!(s.actions().list.actions()[0].steps, [ActionStep::new("layer.linkLayers", json!({"linked": linked}))]);
             let saved = s.execute("actions.save", json!({"set": "Links"})).unwrap();
             assert_eq!(saved["skipped"], json!([]));
             let bytes = photocraft_engine::paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
@@ -262,7 +263,7 @@ fn targeted(event: &str, explicit: bool) -> Descriptor {
 fn load_targeted(s: &mut Session, event: &str, id: &str, explicit: bool) {
     assert_eq!(load(s, &file(event, targeted(event, explicit)))["unsupported"], json!([]), "{event}");
     let p = if explicit { json!({}) } else { json!({"_atnNoTarget": true}) };
-    assert_eq!(s.actions.list.actions()[0].steps, [ActionStep::new(id, p)]);
+    assert_eq!(s.actions().list.actions()[0].steps, [ActionStep::new(id, p)]);
 }
 
 #[test]
@@ -297,7 +298,7 @@ fn bare_link_events_keep_their_operation_and_empty_keys() {
         let initial = if linked { None } else { Some(77) };
         let mut s = fixture(&[initial, initial], &[0, 1]);
         assert_eq!(load(&mut s, &file(event, Descriptor::new(event)))["unsupported"], json!([]));
-        assert_eq!(s.actions.list.actions()[0].steps[0].params, json!({"linked": linked, "_atnNoTarget": true}));
+        assert_eq!(s.actions().list.actions()[0].steps[0].params, json!({"linked": linked, "_atnNoTarget": true}));
         let saved = s.execute("actions.save", json!({"set": "Links"})).unwrap();
         let bytes = photocraft_engine::paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
         assert_eq!(atn::parse(&bytes).unwrap().actions[0].items[0].descriptor, Some(Descriptor::new("null")));
@@ -445,7 +446,7 @@ fn crop_parent_runs_once_and_the_kept_helper_stops_the_duplicate_crop_tail() {
     let report = load(&mut s, &atn::write(&f).unwrap());
     assert_eq!(report["unsupported"].as_array().unwrap().len(), 1);
     assert_eq!(
-        s.actions.list.actions()[0].steps.iter().map(|step| step.command.as_str()).collect::<Vec<_>>(),
+        s.actions().list.actions()[0].steps.iter().map(|step| step.command.as_str()).collect::<Vec<_>>(),
         ["file.automate.cropAndStraightenPhotos", "actions.photoshopStep", "image.duplicate", "image.crop"]
     );
     let saved = s.execute("actions.save", json!({"set": "Links"})).unwrap();
@@ -510,8 +511,8 @@ fn artboard_recorded_flags_and_guides_roundtrip_without_resizing() {
                 d.items.pop();
             }
             assert_eq!(load(&mut s, &file("artboardFromLayerGroupEvent", d.clone()))["unsupported"], json!([]));
-            assert_eq!(s.actions.list.actions()[0].steps[0].command, "layer.new.artboardFromGroup");
-            assert_eq!(s.actions.list.actions()[0].steps[0].params["color"], json!([0.25, 0.5, 0.75]));
+            assert_eq!(s.actions().list.actions()[0].steps[0].command, "layer.new.artboardFromGroup");
+            assert_eq!(s.actions().list.actions()[0].steps[0].params["color"], json!([0.25, 0.5, 0.75]));
             assert_eq!(saved_item(&mut s).descriptor, Some(d));
             play(&mut s);
             let doc = &s.active().unwrap().doc;
@@ -539,7 +540,7 @@ fn artboard_target_only_form_keeps_existing_native_group_behavior() {
     let before = s.active().unwrap().doc.clone();
     let d = Descriptor::new("null").with("null", target());
     assert_eq!(load(&mut s, &file("artboardFromLayerGroupEvent", d.clone()))["unsupported"], json!([]));
-    assert_eq!(s.actions.list.actions()[0].steps, [ActionStep::new("layer.new.artboardFromGroup", json!({}))]);
+    assert_eq!(s.actions().list.actions()[0].steps, [ActionStep::new("layer.new.artboardFromGroup", json!({}))]);
     assert_eq!(saved_item(&mut s).descriptor, Some(d));
     play(&mut s);
     assert!(s.active().unwrap().doc.layers[0].artboard().is_some());
@@ -599,7 +600,7 @@ fn artboard_fractional_colors_survive_import_save_and_playback() {
             D::Descriptor(["Rd  ", "Grn ", "Bl  "].into_iter().zip(rgb).fold(Descriptor::new("RGBC"), |color, (key, n)| color.with(key, D::Double(n))));
         assert_eq!(load(&mut s, &file(event, d.clone()))["unsupported"], json!([]));
         assert_eq!(saved_item(&mut s).descriptor, Some(d));
-        let ActionStep { command: id, params: mut changed } = s.actions.list.actions()[0].steps[0].clone();
+        let ActionStep { command: id, params: mut changed } = s.actions().list.actions()[0].steps[0].clone();
         changed["color"][0] = 0.5.into();
         assert!(atn_cmds::export("Links", &[&Action::new("Changed", vec![ActionStep::new(id, changed)])], &[], false).is_err());
         let before = s.active().unwrap().doc.clone();
@@ -649,7 +650,7 @@ fn artboard_omitted_type_defaults_to_white_and_invalid_native_settings_are_atomi
         Descriptor::new("null").with("null", target()).with("artboard", D::Descriptor(artboard_settings(None, vec![]))).with("changeBackground", D::Integer(1));
     assert_eq!(load(&mut s, &file("artboardFromLayerGroupEvent", d.clone()))["unsupported"], json!([]));
     assert_eq!(saved_item(&mut s).descriptor, Some(d));
-    let mut changed = s.actions.list.actions()[0].steps[0].params.clone();
+    let mut changed = s.actions().list.actions()[0].steps[0].params.clone();
     changed["background"] = "black".into();
     assert!(atn_cmds::export("Links", &[&Action::new("A", vec![ActionStep::new("layer.new.artboardFromGroup", changed)])], &[], false).is_err());
     play(&mut s);
@@ -703,7 +704,7 @@ fn artboard_background_edit_roundtrips_without_replaying_recorded_geometry() {
         let history = s.active().unwrap().history.past_len();
         let d = artboard_edit_descriptor(kind, 8);
         assert_eq!(load(&mut s, &file("editArtboardEvent", d.clone()))["unsupported"], json!([]));
-        assert_eq!(s.actions.list.actions()[0].steps[0].command, "layer.artboard.set");
+        assert_eq!(s.actions().list.actions()[0].steps[0].command, "layer.artboard.set");
         assert_eq!(saved_item(&mut s).descriptor, Some(d));
         play(&mut s);
         let doc = &s.active().unwrap().doc;
@@ -738,7 +739,7 @@ fn artboard_edit_refuses_unmeasured_modes_and_lossy_native_exports() {
         assert_eq!(s.active().unwrap().history.past_len(), history);
     }
     load(&mut s, &file("editArtboardEvent", artboard_edit_descriptor(4, 8)));
-    let params = s.actions.list.actions()[0].steps[0].params.clone();
+    let params = s.actions().list.actions()[0].steps[0].params.clone();
     for (key, value) in [("rect", json!([0, 0, 100, 100])), ("preset", json!("iPhone 14")), ("changeSizes", json!(4)), ("changeBackground", json!(0))] {
         let mut edited = params.clone();
         edited[key] = value;
@@ -932,7 +933,7 @@ fn make_type_shape_roundtrips_and_converts_actual_glyphs_with_undo() {
     Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(id).unwrap().psd_blocks.push((*b"TySh", Arc::new(vec![1, 2, 3])));
     let before = s.active().unwrap().doc.clone();
     assert_eq!(load(&mut s, &file("Mk  ", make_type_descriptor()))["unsupported"], json!([]));
-    assert_eq!(s.actions.list.actions()[0].steps, [ActionStep::new("type.convertToShape", json!({}))]);
+    assert_eq!(s.actions().list.actions()[0].steps, [ActionStep::new("type.convertToShape", json!({}))]);
     let saved = saved_item(&mut s);
     assert_eq!(saved.event, AtnEvent::Code(*b"Mk  "));
     let mut canonical = make_type_descriptor();
@@ -967,7 +968,7 @@ fn make_type_shape_keeps_wrong_references_and_preserves_fill_mappings() {
         assert!(skipped.is_empty());
         let mut s = Session::new();
         assert_eq!(load(&mut s, &bytes)["unsupported"], json!([]));
-        assert_eq!(s.actions.list.actions()[0].steps[0].command, id);
+        assert_eq!(s.actions().list.actions()[0].steps[0].command, id);
     }
     let action = Action::new("A", vec![ActionStep::new("type.convertToShape", json!({"layer": 1}))]);
     assert!(atn_cmds::export("Links", &[&action], &[], false).is_err());
@@ -1019,7 +1020,7 @@ fn shape_blur_radius_boundaries_keep_their_value_without_running_large_kernels()
         let mut s = Session::new();
         let mut canonical = radius_descriptor(radius);
         assert_eq!(load(&mut s, &file("shapeBlur", canonical.clone()))["unsupported"], json!([]));
-        assert_eq!(s.actions.list.actions()[0].steps[0].params["radius"].as_f64(), Some(radius));
+        assert_eq!(s.actions().list.actions()[0].steps[0].params["radius"].as_f64(), Some(radius));
         canonical.class_id = Id::new("null");
         assert_eq!(saved_item(&mut s).descriptor, Some(canonical));
     }
@@ -1143,7 +1144,7 @@ fn smart_paths_roundtrip_and_play_real_files_on_the_current_target() {
                 recorded = recorded.with("LyrI", D::Integer(hint));
             }
             assert_eq!(load(&mut s, &file(event, recorded))["unsupported"], json!([]), "{event}");
-            assert_eq!(s.actions.list.actions()[0].steps, [ActionStep::new(id, json!({"path": path}))]);
+            assert_eq!(s.actions().list.actions()[0].steps, [ActionStep::new(id, json!({"path": path}))]);
             let saved = s.execute("actions.save", json!({"set": "Links"})).unwrap();
             assert_eq!(saved["skipped"], json!([]));
             let bytes = photocraft_engine::paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();

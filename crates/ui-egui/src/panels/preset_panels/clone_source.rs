@@ -10,6 +10,7 @@ use craft::ui::form::{Field, FieldGroup, SliderField};
 use craft::ui::pickers::Select;
 use craft::ui::runtime::env::UnitKind;
 use craft::ui::text::{LinkedFields, NumberField};
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 
 use super::run;
@@ -56,7 +57,7 @@ fn toggle(ui: &mut egui::Ui, label: &str, value: bool) -> Option<bool> {
 
 /// The `cloneSource` registry body.
 pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let cs = app.session.presets.clone.clone();
+    let cs = app.session.presets().clone.clone();
     let slot = cs.active().clone();
     let mut select = None;
     ui.horizontal(|ui| {

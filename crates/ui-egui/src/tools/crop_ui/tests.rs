@@ -8,6 +8,7 @@ use craft::draw::ui::crop::{CropFill, CropLength, CropRatio, CropSettings, CropT
 use craft::ui::runtime::env::UnitKind;
 use egui::Modifiers;
 use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
+use photocraft_engine::actions_cmds::ActionsExt;
 use serde_json::json;
 
 const NONE: Modifiers = Modifiers::NONE;
@@ -183,7 +184,7 @@ fn edit_undo_steps_the_crop_box_not_the_document() {
     assert_eq!(crop_ui::is_enabled(&app, "edit.redo"), Some(false), "no box step to redo");
     let ctx = crate::canvas::testing::ctx(&app);
     crate::menus::invoke(&mut app, &ctx, "edit.undo", json!({})).unwrap();
-    assert!(app.session.actions.list.library_undo().is_some(), "the library edit remains available");
+    assert!(app.session.actions().list.library_undo().is_some(), "the library edit remains available");
     assert_eq!(crop_ui::frame(&app), Some(before), "undo restores the box");
     assert_eq!(app.session.active().unwrap().history.past_len(), doc_steps, "the document is untouched");
     app.run("edit.redo", json!({})).unwrap();

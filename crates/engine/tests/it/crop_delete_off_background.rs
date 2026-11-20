@@ -3,6 +3,7 @@
 //! layer. Delete on keeps the Background, and Image › Reveal All is unchanged (#10867).
 
 use craft_psd::{atn, descriptor::Value as D};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::actions_cmds::{Action, ActionList, ActionStep, ActionsFile};
 use photocraft_engine::{EngineError, Session, atn_cmds};
 use photocraft_geom::Rect;
@@ -124,7 +125,7 @@ fn the_action_steps_turned_crop_unlocks_the_background() {
     assert_eq!((step.command.as_str(), &step.params["deleteCroppedPixels"]), ("image.crop", &json!(false)));
 
     let mut s = doc();
-    s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+    s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
     let before = past(&s);
     s.execute("actions.play", json!({"action": "Crop"})).unwrap();
     assert_eq!(past(&s), before + 1, "one undo step");

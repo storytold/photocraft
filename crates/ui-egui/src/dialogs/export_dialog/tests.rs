@@ -13,6 +13,7 @@ fn ico_export_is_available_and_rejects_oversize_output() {
 }
 
 use super::*;
+use photocraft_engine::color_cmds::ColorExt;
 
 use craft::ui::runtime::memory::set_saved_value;
 use egui_kittest::Harness;

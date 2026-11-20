@@ -9,6 +9,8 @@
 
 use photocraft_compose::multichannel::{SPOT_DOT_GAIN, spot_dot_gain};
 use photocraft_engine::Session;
+use photocraft_engine::color_cmds::ColorExt;
+use photocraft_engine::prefs::SavedPrefsExt;
 use serde_json::json;
 
 /// A Multichannel document with one transparent black ink at 50 %.
@@ -22,7 +24,7 @@ fn half_tint(s: &mut Session) {
 fn spot_dot_gain_setting() {
     let _process = crate::lock(&crate::PROCESS);
     let mut s = Session::new();
-    assert_eq!(s.color.settings.spot_dot_gain, SPOT_DOT_GAIN, "Photoshop's default Spot working space: Dot Gain 20 %");
+    assert_eq!(s.color().settings.spot_dot_gain, SPOT_DOT_GAIN, "Photoshop's default Spot working space: Dot Gain 20 %");
     for bad in [json!(-1), json!(50), json!("20%"), json!(true)] {
         assert!(s.execute("edit.colorSettings", json!({"spotDotGain": bad})).is_err(), "{bad}");
     }
@@ -42,7 +44,7 @@ fn spot_dot_gain_setting() {
 
     // `prefs.set` and `prefs.reset` on `colorSettings` move the compositor's gain too. Same
     // function, not a second test: tests in one binary run concurrently.
-    let in_sync = |s: &Session| spot_dot_gain() == s.color.settings.spot_dot_gain;
+    let in_sync = |s: &Session| spot_dot_gain() == s.color().settings.spot_dot_gain;
     s.execute("prefs.set", json!({"path": "colorSettings.spotDotGain", "value": 25})).unwrap();
     assert_eq!(spot_dot_gain(), 25.0);
     assert!(in_sync(&s));
@@ -70,7 +72,7 @@ fn spot_dot_gain_setting() {
     photocraft_compose::multichannel::set_spot_dot_gain(SPOT_DOT_GAIN);
     let mut again = Session::new();
     again.load_prefs_json(&saved).unwrap();
-    assert_eq!(again.color.settings.spot_dot_gain, 38.0);
+    assert_eq!(again.color().settings.spot_dot_gain, 38.0);
     assert_eq!(spot_dot_gain(), 38.0);
 
     // A saved gain out of range is reported and reset, so later Color Settings edits still pass.
@@ -79,7 +81,7 @@ fn spot_dot_gain_setting() {
     let mut third = Session::new();
     let invalid = third.load_prefs_json(&bad.to_string()).unwrap();
     assert!(invalid.iter().any(|p| p.path() == "colorSettings.spotDotGain"), "{:?}", invalid.iter().map(|p| p.path()).collect::<Vec<_>>());
-    assert_eq!(third.color.settings.spot_dot_gain, SPOT_DOT_GAIN);
+    assert_eq!(third.color().settings.spot_dot_gain, SPOT_DOT_GAIN);
     assert_eq!(spot_dot_gain(), SPOT_DOT_GAIN);
     third.execute("edit.colorSettings", json!({"intent": "relative"})).unwrap();
     photocraft_compose::multichannel::set_spot_dot_gain(SPOT_DOT_GAIN);

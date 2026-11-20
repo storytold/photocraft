@@ -10,6 +10,7 @@ use craft::automation::ui::actions::{
     ActionMove, ActionPlace, ActionSelection, ActionsEvent, ActionsPanel, ActionsPanelState, ActionsSettings, DIALOG_COLUMN, INCLUDE_COLUMN,
 };
 use craft::ui::contract::{SweepStep, ToggleEdit};
+use photocraft_engine::actions_cmds::ActionsExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -58,7 +59,7 @@ mod stop_tests;
 mod tests;
 
 /// The Actions panel's state: the framework panel's selection, expansion and settings. The action
-/// list itself is [`photocraft_engine::Session::actions`]. Only Button Mode and the collapsed sets
+/// list itself is [`ActionsExt::actions`](photocraft_engine::actions_cmds::ActionsExt::actions). Only Button Mode and the collapsed sets
 /// are saved (see [`saved`]).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(from = "saved::Saved", into = "saved::Saved")]
@@ -111,7 +112,7 @@ pub(crate) fn label_of(id: &str) -> String {
 /// The action a selected row belongs to: the action itself or the action of a selected step.
 fn selected_action_index(app: &PhotocraftApp) -> Option<usize> {
     match app.ui.actions.panel.selected.as_ref()? {
-        ActionSelection::Action(i) | ActionSelection::Step(i, _) => Some(*i).filter(|i| *i < app.session.actions.list.actions().len()),
+        ActionSelection::Action(i) | ActionSelection::Step(i, _) => Some(*i).filter(|i| *i < app.session.actions().list.actions().len()),
         _ => None,
     }
 }
@@ -119,7 +120,7 @@ fn selected_action_index(app: &PhotocraftApp) -> Option<usize> {
 /// The selected action, else the first action of the selected set (Batch and Create Droplet start
 /// on the panel's selection), else the first one.
 pub fn selected_action(app: &PhotocraftApp) -> Option<&Action> {
-    let list = &app.session.actions.list;
+    let list = &app.session.actions().list;
     selected_action_index(app)
         .and_then(|i| list.action(i))
         .or_else(|| selected_set_actions(app).first().and_then(|i| list.action(*i)))
@@ -131,7 +132,7 @@ pub fn selected_action(app: &PhotocraftApp) -> Option<&Action> {
 /// one name in two sets, so the dialog sends the set too and the command picks that set's action.
 pub fn action_form_choices(app: &PhotocraftApp) -> (Vec<String>, Vec<String>) {
     let (mut names, mut sets) = (Vec::new(), Vec::new());
-    for action in app.session.actions.list.actions() {
+    for action in app.session.actions().list.actions() {
         if !names.contains(&action.name) {
             names.push(action.name.clone());
         }
@@ -145,14 +146,14 @@ pub fn action_form_choices(app: &PhotocraftApp) -> (Vec<String>, Vec<String>) {
 /// The selected set folder, if it still exists.
 pub(crate) fn selected_set(app: &PhotocraftApp) -> Option<&str> {
     match app.ui.actions.panel.selected.as_ref()? {
-        ActionSelection::Set(name) if app.session.actions.list.sets().contains(&name.as_str()) => Some(name),
+        ActionSelection::Set(name) if app.session.actions().list.sets().contains(&name.as_str()) => Some(name),
         _ => None,
     }
 }
 
 /// The actions of `set`, in list order (empty for an empty or unknown set).
 fn set_actions(app: &PhotocraftApp, set: &str) -> Vec<usize> {
-    let list = &app.session.actions.list;
+    let list = &app.session.actions().list;
     (0..list.actions().len()).filter(|i| list.set_of(*i) == Some(set)).collect()
 }
 
@@ -175,7 +176,7 @@ pub(crate) fn playback_targets(app: &PhotocraftApp) -> Vec<usize> {
 /// Index of the playback target. Photoshop's Play button uses the first action when
 /// the panel has actions but none of its rows is selected.
 fn playback_selection(app: &PhotocraftApp) -> Option<usize> {
-    if app.session.actions.list.actions().is_empty() { None } else { Some(selected_action_index(app).unwrap_or(0)) }
+    if app.session.actions().list.actions().is_empty() { None } else { Some(selected_action_index(app).unwrap_or(0)) }
 }
 
 /// Steps in the `[[id, params], …]` shape batch and droplets already accept, without the
@@ -230,7 +231,7 @@ pub(crate) fn library_changed(app: &mut PhotocraftApp) {
 /// The set New Action records into: the selected action's, else the selected set folder's.
 pub(crate) fn new_action_set(app: &PhotocraftApp) -> Option<String> {
     match selected_action_index(app) {
-        Some(i) => app.session.actions.list.set_of(i).map(str::to_owned),
+        Some(i) => app.session.actions().list.set_of(i).map(str::to_owned),
         None => selected_set(app).map(str::to_owned),
     }
 }
@@ -238,7 +239,7 @@ pub(crate) fn new_action_set(app: &PhotocraftApp) -> Option<String> {
 /// Start recording: into action `into`, or into a new action in [`new_action_set`] when `None`.
 /// The recorded action is selected and shown open, with its set open.
 pub(crate) fn begin_recording(app: &mut PhotocraftApp, into: Option<usize>) {
-    if app.session.actions.recording.is_some() {
+    if app.session.recording.target.is_some() {
         return;
     }
     let params = match into {
@@ -247,7 +248,7 @@ pub(crate) fn begin_recording(app: &mut PhotocraftApp, into: Option<usize>) {
     };
     let Ok(v) = app.run("actions.record", params) else { return };
     let Some(i) = v.get("index").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()) else { return };
-    let Some(action) = app.session.actions.list.action(i) else { return };
+    let Some(action) = app.session.actions().list.action(i) else { return };
     let (name, set) = (action.name.clone(), action.set.clone());
     let panel = &mut app.ui.actions.panel;
     panel.selected = Some(ActionSelection::Action(i));
@@ -261,11 +262,11 @@ pub(crate) fn begin_recording(app: &mut PhotocraftApp, into: Option<usize>) {
 /// Duplicate one action or step and select the copy. A copied action is open when its source is;
 /// the action of a copied step opens.
 fn duplicate_row(app: &mut PhotocraftApp, action: usize, step: Option<usize>) -> Result<Value, String> {
-    let source_open = app.session.actions.list.action(action).is_some_and(|a| app.ui.actions.panel.expanded.contains(&a.name));
+    let source_open = app.session.actions().list.action(action).is_some_and(|a| app.ui.actions.panel.expanded.contains(&a.name));
     let result = app.run("actions.duplicate", json!({"action": action, "step": step}))?;
     let index = result["index"].as_u64().and_then(|i| usize::try_from(i).ok()).ok_or("the copy has no action index")?;
     let copied_step = result.get("step").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok());
-    let name = app.session.actions.list.action(index).map(|a| a.name.clone());
+    let name = app.session.actions().list.action(index).map(|a| a.name.clone());
     let panel = &mut app.ui.actions.panel;
     panel.selected = Some(match copied_step {
         Some(s) => ActionSelection::Step(index, s),
@@ -301,7 +302,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let rename = app.ui.actions.rename.take();
     let paced = playback::pending(app);
     let host = PhotoActions::new(&app.session, paced);
-    let mut widget = ActionsPanel::new(&mut app.ui.actions.panel, &app.session.actions.list).host(&host);
+    let mut widget = ActionsPanel::new(&mut app.ui.actions.panel, &app.session.actions().list).host(&host);
     if let Some(action) = rename {
         widget = widget.start_rename(action);
     }
@@ -339,8 +340,8 @@ fn play_and_report(app: &mut PhotocraftApp, targets: &[usize], from: usize) {
 /// The action and the step position after the selected row, for inserting a step.
 fn insert_target(app: &PhotocraftApp) -> Result<(usize, Option<usize>), String> {
     match app.ui.actions.panel.selected.as_ref() {
-        Some(ActionSelection::Action(i)) if *i < app.session.actions.list.actions().len() => Ok((*i, None)),
-        Some(ActionSelection::Step(i, s)) if *i < app.session.actions.list.actions().len() => Ok((*i, Some(s.saturating_add(1)))),
+        Some(ActionSelection::Action(i)) if *i < app.session.actions().list.actions().len() => Ok((*i, None)),
+        Some(ActionSelection::Step(i, s)) if *i < app.session.actions().list.actions().len() => Ok((*i, Some(s.saturating_add(1)))),
         _ => Err(tl!("Select an action first.").to_string()),
     }
 }
@@ -355,7 +356,7 @@ fn apply_event(app: &mut PhotocraftApp, event: ActionsEvent) -> Result<(), Strin
         ActionsEvent::BeginRecording { into, .. } => begin_recording(app, into),
         ActionsEvent::NewAction => begin_recording(app, None),
         ActionsEvent::StopRecording => {
-            if !playback::stop(app) && app.session.actions.recording.is_some() {
+            if !playback::stop(app) && app.session.recording.target.is_some() {
                 app.run("actions.stop", json!({}))?;
             }
         }
@@ -394,7 +395,7 @@ fn apply_event(app: &mut PhotocraftApp, event: ActionsEvent) -> Result<(), Strin
             app.run("actions.setColor", json!({"action": action, "color": color.name()}))?;
         }
         ActionsEvent::AssignShortcut { action, choice, .. } => {
-            let name = app.session.actions.list.action(action).map(|a| a.name.clone()).ok_or("no such action")?;
+            let name = app.session.actions().list.action(action).map(|a| a.name.clone()).ok_or("no such action")?;
             let key = choice.map_or_else(String::new, |c| photocraft_engine::atn_cmds::function_key_name(u16::from(c.key), c.shift, c.command));
             assign_shortcut(app, &name, &key)?;
         }
@@ -427,7 +428,7 @@ fn reorder(app: &mut PhotocraftApp, row: ActionSelection, place: ActionPlace) ->
     match (row, place) {
         (ActionSelection::Action(action), ActionPlace::Action { index, set, .. }) => {
             app.run("actions.move", json!({"action": action, "to": index}))?;
-            let current = app.session.actions.list.set_of(index).map(str::to_owned);
+            let current = app.session.actions().list.set_of(index).map(str::to_owned);
             if current != set {
                 app.run("actions.assignSet", json!({"action": index, "set": set}))?;
             }

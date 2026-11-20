@@ -12,6 +12,7 @@
 //! hidden target layer answers its click with the reference's alert rather than the status line
 //! (#12033).
 
+use photocraft_engine::color_cmds::ColorExt;
 use egui::{Align2, Color32, CornerRadius, FontId, Pos2, RichText, Stroke, pos2, vec2};
 use photocraft_doc::{Document, Ruler};
 use serde::{Deserialize, Serialize};
@@ -124,7 +125,7 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
             // A check item with no document too: an item's kind never changes (native menus).
             let kind = id.strip_prefix("view.proofSetup.").and_then(photocraft_engine::proof_sim::ProofKind::from_id)?;
             let Some(d) = app.session.active() else { return Some(false) };
-            let pv = app.session.color.proof(d.doc.id);
+            let pv = app.session.color().proof(d.doc.id);
             Some(pv.enabled && pv.setup.kind == kind)
         }
     }

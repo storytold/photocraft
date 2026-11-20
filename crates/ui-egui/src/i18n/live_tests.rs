@@ -6,6 +6,7 @@ use crate::{PhotocraftApp, Services};
 use craft::settings::testing::MemoryFiles;
 use craft::settings::{Location, OpenOptions, SettingsStore};
 use craft::ui::patterns::preferences::PrefValue;
+use photocraft_engine::prefs::SavedPrefsExt;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;

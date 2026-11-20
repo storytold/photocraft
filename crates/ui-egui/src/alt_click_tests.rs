@@ -3,6 +3,7 @@
 
 use egui::{Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
+use photocraft_engine::presets::PresetsExt;
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -115,7 +116,7 @@ fn alt_click_routes_by_tool_held_or_latched() {
         h.state_mut().ui.tool = Tool::CloneStamp;
         latch_alt(&mut h, latched);
         click(&mut h, 150.0, 50.0, m);
-        assert!(h.state().session.presets.clone.active().source.is_some(), "Clone Stamp {how}: the source is set");
+        assert!(h.state().session.presets().clone.active().source.is_some(), "Clone Stamp {how}: the source is set");
 
         // Zoom: zooms out (scrubby on and off for the latched key), and zooms in again without ⌥.
         for scrubby in [true, false] {

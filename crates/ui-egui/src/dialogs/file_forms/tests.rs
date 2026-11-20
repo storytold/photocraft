@@ -2,6 +2,7 @@ use craft::automation::actions::{Action, ActionStep};
 use craft::automation::ui::actions::ActionSelection;
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::HostedParamDialog;
+use photocraft_engine::actions_cmds::ActionsExt;
 use serde_json::{Value, json};
 
 use super::*;
@@ -28,7 +29,7 @@ fn create_droplet_saves_the_selected_actions_set_and_steps() {
     for (set_name, name, step) in [("A", "Retouch", "image.adjustments.invert"), ("B", "Turn", "image.imageRotation.90cw")] {
         let mut action = Action::new(name, vec![ActionStep::new(step, json!({}))]);
         action.set = Some(set_name.into());
-        app.session.actions.list.push(action).unwrap();
+        app.session.actions_mut().list.push(action).unwrap();
     }
     app.ui.actions.panel.selected = Some(ActionSelection::Action(1));
     let id = open_create_droplet(&mut app).unwrap();
@@ -56,7 +57,7 @@ fn create_droplet_uses_the_action_selected_in_the_form() {
     app.run("file.new", json!({"width": 2, "height": 1})).unwrap();
     app.run("file.saveACopy", json!({"path": input})).unwrap();
     for (name, step) in [("Invert", "image.adjustments.invert"), ("Rotate", "image.imageRotation.90cw")] {
-        app.session.actions.list.push(Action::new(name, vec![ActionStep::new(step, json!({}))])).unwrap();
+        app.session.actions_mut().list.push(Action::new(name, vec![ActionStep::new(step, json!({}))])).unwrap();
     }
     app.ui.actions.panel.selected = Some(ActionSelection::Action(0));
     let id = open_create_droplet(&mut app).unwrap();

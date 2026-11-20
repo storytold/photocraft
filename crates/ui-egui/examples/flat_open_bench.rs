@@ -17,7 +17,7 @@
 //!
 //! Rows per case, in ms over `--reps` repetitions:
 //! - `import`: `import_for_open_with`, the real File › Open path (decode, orientation, tiles)
-//! - `admission`: `Session::open_document` of that document
+//! - `admission`: `ColorExt::open_document` of that document
 //! - `decode`: the codec alone, orientation kept as stored
 //! - `orient`: `Image::oriented` with the file's EXIF orientation (a no-op for an upright file)
 //! - `tiles`: `image_to_document` on the decoded image (layout conversion, tile construction, prune)
@@ -34,6 +34,7 @@
 //! A case run directly with `--case` generates a missing fixture in its own process, which
 //! raises its peak: run the bench once without `--case` first.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;

@@ -1,13 +1,14 @@
 use craft::print::ui::HostedPrint;
 use craft::ui::dialog::{DialogId, StackDialog as _};
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedSaveForWeb, Resample, SAVE_PATH_KEY, WebFormat, WebSlices};
+use photocraft_engine::print_cmds::PrintExt;
 
 use super::*;
 use std::sync::Arc;
 
 pub(super) fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.session.printer_source =
+    *app.session.printer_source_mut() =
         Some(Arc::new(|| vec![craft::print::Printer { name: "Test printer".into(), default: true, two_sided: None, description: String::new() }]));
     app.run("file.new", json!({"width": 120, "height": 80, "name": "web"})).unwrap();
     app
@@ -86,14 +87,14 @@ fn check_saved_settings_with_cached_printers(cached: &'static [&'static str]) {
     let ctx = app.ctx().clone();
     let available = Arc::new(AtomicBool::new(false));
     let listed = Arc::clone(&available);
-    app.session.printer_source = Some(Arc::new(move || {
+    *app.session.printer_source_mut() = Some(Arc::new(move || {
         if listed.load(Ordering::SeqCst) { vec![listed_printer("Saved printer")] } else { cached.iter().map(|name| listed_printer(name)).collect() }
     }));
     app.session.prefs.edit(|p| {
         p.dialogs.insert(photocraft_engine::print_cmds::REMEMBERED.into(), json!({"printer": "Saved printer", "printerSettings": "0011"}));
     });
     let mut lister = photocraft_engine::Session::new();
-    lister.printer_source = app.session.printer_source.clone();
+    *lister.printer_source_mut() = app.session.printer_source().cloned();
     let (held_tx, held) = std::sync::mpsc::channel();
     let (release, released_rx) = std::sync::mpsc::channel::<()>();
     let holder = std::thread::spawn(move || {
@@ -131,7 +132,7 @@ fn check_saved_settings_with_cached_printers(cached: &'static [&'static str]) {
 fn an_empty_fresh_printer_list_drops_the_saved_driver_settings() {
     let mut app = app();
     let ctx = app.ctx().clone();
-    app.session.printer_source = Some(Arc::new(Vec::new));
+    *app.session.printer_source_mut() = Some(Arc::new(Vec::new));
     app.session.prefs.edit(|p| {
         p.dialogs.insert(photocraft_engine::print_cmds::REMEMBERED.into(), json!({"printer": "Saved printer", "printerSettings": "0011"}));
     });
@@ -181,7 +182,7 @@ fn print_dialog_retries_an_uncached_printer_list_after_the_spooler_is_released()
     let ctx = app.ctx().clone();
     let asked = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&asked);
-    app.session.printer_source = Some(Arc::new(move || {
+    *app.session.printer_source_mut() = Some(Arc::new(move || {
         counted.fetch_add(1, Ordering::SeqCst);
         vec![craft::print::Printer { name: "Retry printer".into(), default: true, two_sided: None, description: String::new() }]
     }));

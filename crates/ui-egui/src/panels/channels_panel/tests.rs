@@ -3,6 +3,7 @@ use craft::automation::actions::{Action, ActionStep};
 use craft::behavior::value::{EditEvent, Mixed};
 use craft::ui::contract::ReorderMove;
 use craft::ui::primitives::textures::{ThumbRender, ThumbRequest, ThumbSource};
+use photocraft_engine::actions_cmds::ActionsExt;
 
 fn app_with(mode: &str) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -163,7 +164,7 @@ fn recording_a_colour_row_click_saves_as_photoshop_select() {
         app.run("actions.record", json!({"name": "Click"})).unwrap();
         target(&mut app, Row::Color(k), false);
         app.run("actions.stop", json!({})).unwrap();
-        let recorded = app.session.actions.list.actions().iter().find(|a| a.name == "Click").unwrap().steps.clone();
+        let recorded = app.session.actions().list.actions().iter().find(|a| a.name == "Click").unwrap().steps.clone();
         assert_eq!(recorded, vec![ActionStep::new("channel.target", json!({"channel": {"color": name}, "extend": false}))], "{mode}");
     }
 }
@@ -209,13 +210,13 @@ fn recorded_colour_clicks_save_as_component_selects() {
             s.execute("channel.target", json!({"channel": "composite"})).unwrap();
             let params = json!({"channel": Row::Color(k).target_reference(color_mode), "extend": false});
             assert_eq!(s.execute("channel.target", params.clone()).unwrap(), by_index, "{mode}/{k}");
-            s.actions.list.push(Action::new("Click", vec![ActionStep::new("channel.target", params)])).unwrap();
+            s.actions_mut().list.push(Action::new("Click", vec![ActionStep::new("channel.target", params)])).unwrap();
             let saved = s.execute("actions.save", json!({"action": "Click"})).unwrap_or_else(|e| panic!("{mode}/{k}: {e}"));
             assert_eq!(saved["skipped"], json!([]));
             let loaded = s.execute("actions.load", json!({"data": saved["data"]})).unwrap();
             assert_eq!(loaded["unsupported"], json!([]), "{mode}/{k}");
             let name = photocraft_engine::channel_cmds::color_names(color_mode)[k].to_ascii_lowercase();
-            assert_eq!(s.actions.list.actions().last().unwrap().steps, vec![ActionStep::new("channel.target", json!({"channel": {"color": name}}))]);
+            assert_eq!(s.actions().list.actions().last().unwrap().steps, vec![ActionStep::new("channel.target", json!({"channel": {"color": name}}))]);
         }
     }
     // Rows the colour names can't express keep their reference.

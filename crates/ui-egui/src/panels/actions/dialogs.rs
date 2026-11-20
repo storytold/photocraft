@@ -4,6 +4,7 @@ use craft::automation::ui::actions::ActionSelection;
 use craft::ui::contract::Bind;
 use craft::ui::dialog::{DialogId, DialogResult, PromptAnswer, PromptChoice, StandardPrompt};
 use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamDialog, ParamKind, ParamResult};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{actions_cmds, actions_edit_cmds, atn_cmds};
 use serde_json::{Value, json};
 
@@ -58,14 +59,14 @@ fn selected_action(app: &PhotocraftApp) -> Option<(usize, Option<usize>)> {
         ActionSelection::Step(action, step) => (*action, Some(*step)),
         _ => return None,
     };
-    app.session.actions.list.action(action).map(|_| (action, step))
+    app.session.actions().list.action(action).map(|_| (action, step))
 }
 
 /// Insert Stop…: a message step after the selected step, or at the end of the selected action (pending steps of a
 /// recording count). The action and the place are captured here; the dialog shows neither.
 pub(super) fn insert_stop_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
     let (action, step) = selected_action(app).ok_or_else(|| tl!("Select an action first").to_string())?;
-    let len = app.session.actions.list.step_count(action) + actions_cmds::pending_steps(&app.session, action).count();
+    let len = app.session.actions().list.step_count(action) + actions_cmds::pending_steps(&app.session, action).count();
     let at = step.map_or(len, |step| (step + 1).min(len));
     let id = params::open_param(app, INSERT_STOP, DialogFields::new(), json!({"action": action, "at": at}), |fields: &mut DialogFields| {
         let rows = vec![
@@ -96,7 +97,7 @@ fn run_insert_stop(app: &mut PhotocraftApp, _ctx: &egui::Context, result: ParamR
         Ok(inserted) => {
             let Some(step) = inserted["step"].as_u64().and_then(|step| usize::try_from(step).ok()) else { return };
             app.ui.actions.panel.selected = Some(ActionSelection::Step(action, step));
-            if let Some(held) = app.session.actions.list.action(action) {
+            if let Some(held) = app.session.actions().list.action(action) {
                 app.ui.actions.panel.expanded.insert(held.name.clone());
             }
         }

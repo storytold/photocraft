@@ -18,6 +18,7 @@ use craft::ui::primitives::textures::TextureCache;
 use craft::ui::runtime::commands::{CommandSet as _, CommandState};
 use craft::ui::tile_grid::TileZoom;
 use egui::{Color32, ColorImage, Pos2, Rect, pos2};
+use photocraft_engine::presets::PresetsExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -227,7 +228,7 @@ fn paint_gradient(cx: &ContentPainterCx, rect: Rect, stops: &[(f32, [f32; 4])]) 
 /// applies it.
 pub fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
-    let groups = app.session.presets.gradients.clone();
+    let groups = app.session.presets().gradients.clone();
     // PLAN: the current-gradient strip above the browser needs a painter component; the browser's selected row shows it.
     let folders: Vec<Folder> = groups
         .iter()
@@ -258,7 +259,7 @@ pub fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let library = app.session.patterns.items.clone();
     let folders: Vec<Folder> = app
         .session
-        .presets
+        .presets()
         .pattern_groups
         .iter()
         .map(|group| Folder {
@@ -297,7 +298,7 @@ pub(crate) fn style_image(session: &photocraft_engine::Session, preset: &photocr
 /// Window › Styles: a click applies the style to the selected layers (Shift adds its effects), a drop on the canvas
 /// applies it to the active layer.
 pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let groups = app.session.presets.styles.clone();
+    let groups = app.session.presets().styles.clone();
     let folders = style_folders(app);
     let rows = panel_rows(&app.ui.presets_ui, STYLES, &folders);
     let zone = canvas_zone(app);
@@ -314,7 +315,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// The Styles folders: each style group with its styles, keyed and named by the style's name.
 fn style_folders(app: &PhotocraftApp) -> Vec<Folder> {
-    let groups = &app.session.presets.styles;
+    let groups = &app.session.presets().styles;
     groups
         .iter()
         .map(|group| Folder { name: group.name.clone(), items: group.items.iter().map(|style| (style.name.clone(), style.name.clone())).collect() })
@@ -331,7 +332,7 @@ fn style_files(any: bool, export: Option<PresetExport>) -> PresetFiles<'static, 
 
 /// What the Styles panel menu is built from: whether any style exists, the selected style and the browser's view.
 fn styles_menu_facts(app: &PhotocraftApp) -> (bool, Option<PresetKey>, PresetView) {
-    let any = app.session.presets.styles.iter().any(|group| !group.items.is_empty());
+    let any = app.session.presets().styles.iter().any(|group| !group.items.is_empty());
     let selected = app.ui.presets_ui.selected.get(STYLES.id).cloned().map(PresetKey::Item);
     let view = app.ui.presets_ui.browsers.get(STYLES.id).map_or(PresetView::Grid, |state| state.view);
     (any, selected, view)
@@ -567,7 +568,7 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let current = app.ui.tool;
     let rows: Vec<PresetRow<PresetKey>> = app
         .session
-        .presets
+        .presets()
         .tool_presets
         .iter()
         .filter(|preset| !only || Tool::from_name(&preset.tool) == Some(current))

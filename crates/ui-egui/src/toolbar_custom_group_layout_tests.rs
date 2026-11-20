@@ -5,6 +5,7 @@
 
 use egui::{Key, Modifiers, vec2};
 use egui_kittest::kittest::Queryable;
+use photocraft_engine::prefs::SavedPrefsExt;
 use photocraft_engine::prefs::{DEFAULT_TOOLBAR, Preferences, ToolbarCustomization};
 use serde_json::{Value, json};
 

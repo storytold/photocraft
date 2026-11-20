@@ -2,6 +2,7 @@
 //! rendering frames while a slow job runs, shows the status-bar progress and the blocking progress
 //! overlay, and Esc / Cancel leave the document unchanged.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};

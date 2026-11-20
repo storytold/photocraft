@@ -1,4 +1,6 @@
 //! Public playback history semantics, independent of the Actions panel implementation.
+use photocraft_engine::actions_cmds::ActionsExt;
+use photocraft_engine::prefs::SavedPrefsExt;
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionList, ActionStep, ActionsFile},
@@ -18,7 +20,7 @@ fn only(name: &str, steps: Vec<(String, Value)>) -> ActionList {
 fn session() -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width":4,"height":4,"background":"#804020"})).unwrap();
-    s.actions
+    s.actions_mut()
         .list
         .push(Action::new("Two layers", ["First", "Second"].into_iter().map(|name| ActionStep::new("layer.new.layer", json!({"name":name}))).collect()))
         .unwrap();
@@ -52,7 +54,7 @@ fn recorded_clear_preserves_its_boundary_and_grouped_suffix() {
                 if suffix {
                     steps.extend([("layer.renameLayer".into(), json!({"name":"Suffix one"})), ("layer.renameLayer".into(), json!({"name":"Suffix two"}))]);
                 }
-                s.actions.list = only("Clear", steps);
+                s.actions_mut().list = only("Clear", steps);
                 let result = s.execute("actions.play", json!({"action":0})).unwrap();
                 assert!(result.get("failed").is_none(), "{result}");
                 let after = s.active().unwrap().doc.clone();
@@ -95,7 +97,7 @@ fn recorded_source_change_preserves_selected_pixels_and_grouping() {
                     ("edit.fill".into(), json!({"color":"#00ffff"})),
                     ("layer.renameLayer".into(), json!({"name":"After source"})),
                 ]);
-                s.actions.list = only("Source", steps);
+                s.actions_mut().list = only("Source", steps);
                 let result = s.execute("actions.play", json!({"action":0})).unwrap();
                 assert!(result.get("failed").is_none(), "{result}");
                 let added = if single_state { 1 } else { 2 + usize::from(prefix) };
@@ -139,7 +141,7 @@ fn recorded_purge_histories_does_not_restore_discarded_states() {
                 ("layer.renameLayer".into(), json!({"name":"Suffix one"})),
                 ("layer.renameLayer".into(), json!({"name":"Suffix two"})),
             ]);
-            s.actions.list = only("Purge", steps);
+            s.actions_mut().list = only("Purge", steps);
             let result = s.execute("actions.play", json!({"action":0})).unwrap();
             assert!(result.get("failed").is_none(), "{result}");
             let after = s.active().unwrap().doc.clone();
@@ -163,7 +165,7 @@ fn recorded_purge_histories_does_not_restore_discarded_states() {
 fn per_step_playback_also_binds_its_dialog_continuation() {
     use photocraft_engine::actions_cmds;
     let mut s = history_control_session(false);
-    let action = s.actions.list.actions()[0].clone();
+    let action = s.actions().list.actions()[0].clone();
     let recording = actions_cmds::begin_playback(&mut s, &action).unwrap();
     s.execute("layer.renameLayer", json!({"name":"Prefix"})).unwrap();
     let continuation = actions_cmds::suspend_history(&mut s).expect("per-step playback still needs a document/history binding");
@@ -184,7 +186,7 @@ fn snapshot_source_identity_is_bound_to_the_dialog_continuation() {
         let a = s.execute("history.newSnapshot", json!({"name":"Source A"})).unwrap()["snapshot"].clone();
         let b = s.execute("history.newSnapshot", json!({"name":"Source B"})).unwrap()["snapshot"].clone();
         s.execute("history.setSource", json!({"snapshot":a})).unwrap();
-        let action = s.actions.list.actions()[0].clone();
+        let action = s.actions().list.actions()[0].clone();
         let recording = actions_cmds::begin_playback(&mut s, &action).unwrap();
         s.execute("layer.renameLayer", json!({"name":"Prefix"})).unwrap();
         let continuation = actions_cmds::suspend_history(&mut s).unwrap();
@@ -217,7 +219,7 @@ fn in_action_undo_clear_restores_history_and_keeps_grouped_image_undo() {
                 ("edit.undo".into(), json!({})),
                 ("edit.redo".into(), json!({})),
             ]);
-            s.actions.list = only("Undo Clear", steps);
+            s.actions_mut().list = only("Undo Clear", steps);
             let result = s.execute("actions.play", json!({"action":0})).unwrap();
             assert!(result.get("failed").is_none(), "{result}");
             assert!(!s.active().unwrap().history.is_cleared(), "singleState={single_state}, prefix={prefix}");
@@ -244,7 +246,7 @@ fn cleared_intermediate_source_restores_exact_pixels_after_undo_redo() {
             let mut s = history_control_session(single_state);
             let before = s.active().unwrap().doc.clone();
             let past = s.active().unwrap().history.past_len();
-            s.actions.list = only(
+            s.actions_mut().list = only(
                 "Cleared Source",
                 vec![
                     ("edit.fill".into(), json!({"color":"#0000ff"})),
@@ -323,7 +325,7 @@ fn disabled_single_history_keeps_each_step() {
 fn failures_and_nested_calls_keep_the_outer_history_entry() {
     let mut s = session();
     let layers = s.active().unwrap().doc.layers.len();
-    s.actions
+    s.actions_mut()
         .list
         .push(action(
             "Outer",
@@ -355,7 +357,7 @@ fn no_op_and_repeated_plays_preserve_history_boundaries() {
     assert!(s.undo());
     let entries = s.active().unwrap().history.entries();
     let redo = s.active().unwrap().history.redo_label().map(str::to_owned);
-    s.actions.list.push(Action::new("Empty", vec![])).unwrap();
+    s.actions_mut().list.push(Action::new("Empty", vec![])).unwrap();
     s.execute("actions.play", json!({"action":"Empty"})).unwrap();
     assert_eq!(s.active().unwrap().history.entries(), entries);
     assert_eq!(s.active().unwrap().history.redo_label(), redo.as_deref());
@@ -420,7 +422,7 @@ fn a_real_action_still_refuses_history_setting_changes_with_grouping_on_or_off()
     for single in [false, true] {
         let mut s = session();
         s.execute("actions.setHistory", json!({"singleState": single})).unwrap();
-        s.actions.list = only("Setting", vec![("actions.setHistory".into(), json!({"singleState": !single}))]);
+        s.actions_mut().list = only("Setting", vec![("actions.setHistory".into(), json!({"singleState": !single}))]);
         let result = s.execute("actions.play", json!({"action": 0})).unwrap();
         assert_eq!(result["failed"]["id"], "actions.setHistory");
         assert_eq!(s.prefs().actions.create_single_history_state, single);
@@ -435,7 +437,7 @@ fn an_accepted_clear_survives_an_action_that_returns_to_empty_captured_history()
         let original = s.active().unwrap().doc.clone();
         assert_eq!(s.active().unwrap().history.past_len(), 0);
         assert!(s.execute("history.clear", json!({})).is_err(), "ordinary empty Clear still refuses");
-        s.actions.list = only(
+        s.actions_mut().list = only(
             "Empty capture Clear",
             vec![
                 ("edit.fill".into(), json!({"color": "#000000"})),
@@ -468,7 +470,7 @@ fn frame_compound_retains_undo_redo_content_and_layer_targets() {
         let target = s.active().unwrap().active_layer;
         let selected = s.active().unwrap().selected_layers.clone();
         let count = s.active().unwrap().history.past_len();
-        s.actions.list = only("Frame", vec![("layer.new.frameFromLayers".into(), json!({}))]);
+        s.actions_mut().list = only("Frame", vec![("layer.new.frameFromLayers".into(), json!({}))]);
         let result = s.execute("actions.play", json!({"action":0})).unwrap();
         assert!(result.get("failed").is_none(), "{result}");
         let after = s.active().unwrap().doc.clone();
@@ -492,7 +494,7 @@ fn tilted_crop_between_edits_is_one_action() {
     let mut s = session();
     let before = s.active().unwrap().doc.clone();
     let count = s.active().unwrap().history.past_len();
-    s.actions.list = only(
+    s.actions_mut().list = only(
         "Crop",
         vec![
             ("layer.renameLayer".into(), json!({"name":"Prefix"})),
@@ -520,7 +522,8 @@ fn again_copy_failure_preserves_the_completed_prefix() {
     s.execute("layer.setProps", json!({"locks":{"position":true}})).unwrap();
     let before = s.active().unwrap().doc.clone();
     let count = s.active().unwrap().history.past_len();
-    s.actions.list = only("Prefix", vec![("layer.renameLayer".into(), json!({"name":"Completed prefix"})), ("edit.transform.againCopy".into(), json!({}))]);
+    s.actions_mut().list =
+        only("Prefix", vec![("layer.renameLayer".into(), json!({"name":"Completed prefix"})), ("edit.transform.againCopy".into(), json!({}))]);
     let result = s.execute("actions.play", json!({"action":0})).unwrap();
     assert_eq!(result["failed"]["step"], 1, "{result}");
     let after = s.active().unwrap().doc.clone();
@@ -547,7 +550,7 @@ fn same_name_rename_does_not_record_or_clear_redo() {
     let ids: Vec<_> = (0..entries.len() + redo.len()).map(|i| st.history.row_id(i)).collect();
     let dirty = st.is_dirty();
     let name = st.doc.layer(st.active_layer.unwrap()).unwrap().name.clone();
-    s.actions.list = only("No change", vec![("layer.renameLayer".into(), json!({"name":name}))]);
+    s.actions_mut().list = only("No change", vec![("layer.renameLayer".into(), json!({"name":name}))]);
     let result = s.execute("actions.play", json!({"action":0})).unwrap();
     assert!(result.get("failed").is_none(), "{result}");
     let st = s.active().unwrap();
@@ -566,7 +569,7 @@ fn stop_message_retains_the_completed_prefix() {
         let mut s = session();
         let before = s.active().unwrap().doc.clone();
         let count = s.active().unwrap().history.past_len();
-        s.actions.list = only(
+        s.actions_mut().list = only(
             "Stop",
             vec![
                 ("layer.renameLayer".into(), json!({"name":"Prefix"})),
@@ -593,7 +596,7 @@ fn stop_message_retains_the_completed_prefix() {
 fn suspended_history_resumes_the_same_action() {
     use photocraft_engine::actions_cmds;
     let mut s = session();
-    let action = s.actions.list.actions()[0].clone();
+    let action = s.actions().list.actions()[0].clone();
     let before = s.active().unwrap().doc.clone();
     let count = s.active().unwrap().history.past_len();
     let recording = actions_cmds::begin_playback(&mut s, &action).unwrap();
@@ -622,7 +625,7 @@ fn suspended_history_refuses_document_or_history_drift() {
     use photocraft_engine::actions_cmds;
     for drift in 0..3 {
         let mut s = session();
-        let action = s.actions.list.actions()[0].clone();
+        let action = s.actions().list.actions()[0].clone();
         let recording = actions_cmds::begin_playback(&mut s, &action).unwrap();
         s.execute("layer.renameLayer", json!({"name":"Prefix"})).unwrap();
         let continuation = actions_cmds::suspend_history(&mut s).unwrap();
@@ -653,7 +656,7 @@ fn grouping_preserves_non_undoable_visibility() {
     s.execute("history.options", json!({"makeLayerVisibilityChangesUndoable":false})).unwrap();
     let before = s.active().unwrap().doc.clone();
     let layer = s.active().unwrap().active_layer.unwrap();
-    s.actions.list = only(
+    s.actions_mut().list = only(
         "Mixed",
         vec![
             ("layer.renameLayer".into(), json!({"name":"Prefix"})),
@@ -687,7 +690,7 @@ fn grouping_preserves_nonlinear_history_and_a_one_state_limit() {
             s.active_mut().unwrap().history.max_states = 1;
         }
         let before = s.active().unwrap().doc.clone();
-        s.actions.list = only("Many", (0..5).map(|i| ("layer.renameLayer".into(), json!({"name":format!("Name{i}")}))).collect());
+        s.actions_mut().list = only("Many", (0..5).map(|i| ("layer.renameLayer".into(), json!({"name":format!("Name{i}")}))).collect());
         let result = s.execute("actions.play", json!({"action":0})).unwrap();
         assert!(result.get("failed").is_none(), "{result}");
         let after = s.active().unwrap().doc.clone();
@@ -791,7 +794,7 @@ fn recorded_delete_case(case: &str) {
                 ("edit.fill".into(), json!({"color":"#ffff00"})),
                 ("edit.fill".into(), json!({"color":"#ff00ff"})),
             ]);
-            s.actions.list = only("Delete state", steps);
+            s.actions_mut().list = only("Delete state", steps);
             let result = s.execute("actions.play", json!({"action":0})).unwrap();
             assert!(result.get("failed").is_none(), "{case}, singleState={single_state}: {result}");
             let after = s.active().unwrap().doc.clone();
@@ -871,7 +874,7 @@ fn recorded_user_purge_undo_case(suffix: bool) {
             if suffix {
                 steps.extend([("edit.fill".into(), json!({"color":"#ffff00"})), ("edit.fill".into(), json!({"color":"#ff00ff"}))]);
             }
-            s.actions.list = only("Purge Undo", steps);
+            s.actions_mut().list = only("Purge Undo", steps);
             let result = s.execute("actions.play", json!({"action":0})).unwrap();
             assert!(result.get("failed").is_none(), "singleState={single_state}, prefix={prefix}, suffix={suffix}: {result}");
             let st = s.active().unwrap();

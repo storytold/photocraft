@@ -6,6 +6,7 @@ use craft_psd::{
 };
 use photocraft_color::{BlendMode, Color};
 use photocraft_doc::{Effect, Effects, FxCommon, FxPaint, LayerId, StrokeFx, StrokePosition};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionList, ActionStep, ActionsFile},
@@ -85,15 +86,15 @@ fn imported_style_scaling_survives_saved_bytes_and_playback() {
             let loaded = load(&mut s, &recorded(event, Some(descriptor)));
             assert_eq!(loaded["unsupported"], json!([]));
             let scale = option.unwrap_or(false);
-            assert_eq!(s.actions.list.actions()[0].steps, vec![ActionStep::new("image.imageSize", json!({"percent": 50, "scaleStyles": scale}))]);
+            assert_eq!(s.actions().list.actions()[0].steps, vec![ActionStep::new("image.imageSize", json!({"percent": 50, "scaleStyles": scale}))]);
             let saved = save(&mut s);
             let parsed = atn::parse(&saved).unwrap();
             // Only scaling needs the key: without it the step keeps style sizes.
             assert_eq!(parsed.actions[0].items[0].descriptor.as_ref().unwrap().get("scaleStyles"), scale.then_some(&D::Boolean(true)));
             let imported = atn_cmds::import(&saved).unwrap();
             assert!(imported.unsupported.is_empty());
-            assert_eq!(imported.actions[0].steps, s.actions.list.actions()[0].steps);
-            s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+            assert_eq!(imported.actions[0].steps, s.actions().list.actions()[0].steps);
+            s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
             let result = s.execute("actions.play", json!({"action": "Half"})).unwrap();
             assert_eq!(result["ran"], 1);
             assert!(result.get("failed").is_none(), "{result}");
@@ -121,7 +122,7 @@ fn native_default_is_written_explicitly_and_keeps_its_behavior() {
         assert_size_and_style(&direct, direct_id, scale);
         let (mut replay, replay_id) = fixture();
         assert_eq!(load(&mut replay, &bytes)["unsupported"], json!([]));
-        assert_eq!(replay.actions.list.actions()[0].steps[0].params["scaleStyles"], json!(scale));
+        assert_eq!(replay.actions().list.actions()[0].steps[0].params["scaleStyles"], json!(scale));
         let result = replay.execute("actions.play", json!({"action": "Half"})).unwrap();
         assert_eq!(result["ran"], 1);
         assert!(result.get("failed").is_none(), "{result}");
@@ -147,7 +148,7 @@ fn malformed_or_empty_steps_are_kept_without_becoming_resizes() {
             let original = atn::parse(&source).unwrap();
             let mut s = Session::new();
             let loaded = load(&mut s, &source);
-            let ActionStep { command: step, params } = &s.actions.list.actions()[0].steps[0];
+            let ActionStep { command: step, params } = &s.actions().list.actions()[0].steps[0];
             if original.actions[0].items[0].descriptor.is_none() {
                 assert_eq!(loaded["unsupported"], json!([]));
                 assert_eq!(step, atn_cmds::MENU_ITEM);

@@ -2,6 +2,7 @@
 //! they read changes.
 
 use craft::automation::actions::ActionStep;
+use photocraft_engine::actions_cmds::ActionsExt;
 use serde_json::json;
 
 use super::{COMMAND_SOURCES, PhotocraftApp};
@@ -71,14 +72,14 @@ fn the_catalog_is_built_only_when_its_inputs_change() {
     assert!(app.framework.overrides.get("filter.blur.gaussian").is_some_and(|keys| !keys.is_empty()), "the overrides carry the new key");
     assert_eq!(app.framework.keymap_inputs().1, generation, "the catalog keeps its generation");
 
-    app.session.actions.list.new_action("Trial", None).unwrap();
+    app.session.actions_mut().list.new_action("Trial", None).unwrap();
     frames(&mut app, 2);
     assert_eq!(builds(&app), (2, 3), "a new action builds the rows and the overrides once");
     assert_eq!(app.framework.keymap_inputs().1, generation + 1, "the catalog takes a new generation");
     assert!(app.framework.catalog_rows.iter().any(|row| row.label == "Trial"), "the action has its row");
 
     // Edits that keep every action's name leave the rows.
-    let list = &mut app.session.actions.list;
+    let list = &mut app.session.actions_mut().list;
     let at = list.actions().iter().position(|action| action.name == "Trial").unwrap();
     list.insert_step(at, 0, ActionStep::new("layer.new", json!({}))).unwrap();
     list.toggle_step(at, 0).unwrap();

@@ -7,6 +7,7 @@
 //! draft as `StyleValue::Other` so everything the dialog doesn't model (gradient strokes, imported
 //! contours, PSD data) survives an apply.
 
+use photocraft_engine::presets::PresetsExt;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -479,7 +480,7 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
     let layer_id = st.active_layer?;
     let layer = st.doc.layer(layer_id)?.clone();
     let (light, mode, doc) = (st.doc.global_light.angle, st.doc.mode, st.doc.id);
-    let user: Map<String, Value> = app.session.presets.layer_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let user: Map<String, Value> = app.session.presets().layer_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let keys = blend_keys();
     let specs = specs(&keys, &user, light);
     let mut draft = LayerStyleDraft::new(draft_of(&layer, light, mode));
@@ -587,7 +588,7 @@ pub fn pattern_list(app: &PhotocraftApp) -> Vec<PresetRow<String>> {
 fn gradient_presets(app: &PhotocraftApp) -> Vec<(String, GradientStops)> {
     let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
     app.session
-        .presets
+        .presets()
         .gradients
         .iter()
         .flat_map(|g| g.items.iter())
@@ -601,7 +602,7 @@ fn gradient_presets(app: &PhotocraftApp) -> Vec<(String, GradientStops)> {
 /// The Styles page's rows: each group with its presets, presets keyed by name and groups by `group/<name>`.
 fn style_rows(app: &PhotocraftApp) -> Vec<PresetRow<String>> {
     let mut rows = Vec::new();
-    for group in &app.session.presets.styles {
+    for group in &app.session.presets().styles {
         rows.push(PresetRow::group(format!("group/{}", group.name), group.name.clone(), 0).count(group.items.len()));
         rows.extend(group.items.iter().map(|st| PresetRow::item(st.name.clone(), st.name.clone(), 1)));
     }
@@ -617,7 +618,7 @@ fn paint_picture(cx: &ContentPainterCx, rect: Rect, key: impl std::hash::Hash + 
 /// presets and patterns; a picture is rendered on a texture miss only, under the key the Styles
 /// panel uses, so both share the textures.
 fn style_thumb(app: &PhotocraftApp) -> impl Fn(&ContentPainterCx, Rect, ThumbInfo<'_, String>) + Send + 'static {
-    let presets: Vec<StylePreset> = app.session.presets.styles.iter().flat_map(|g| g.items.iter().cloned()).collect();
+    let presets: Vec<StylePreset> = app.session.presets().styles.iter().flat_map(|g| g.items.iter().cloned()).collect();
     let patterns = app.session.patterns.clone();
     move |cx, rect, info| {
         let Some(style) = presets.iter().find(|s| &s.name == info.key) else { return };

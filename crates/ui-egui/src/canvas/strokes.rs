@@ -1,3 +1,6 @@
+use photocraft_engine::brush_cmds::LiveStrokeExt;
+use photocraft_engine::presets::PresetsExt;
+use photocraft_engine::retouch_cmds::LiveRetouchExt;
 use std::sync::Arc;
 
 use craft::behavior::PixelSize;
@@ -140,12 +143,12 @@ fn clone_dab_coverage(
 /// display's colour management; a second window on another monitor shows it through the main one's.
 pub(crate) fn clone_source(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<CloneSource> {
     use photocraft_engine::presets::clone_source::overlay_blend;
-    let overlay = app.session.presets.clone.overlay.clone();
+    let overlay = app.session.presets().clone.overlay.clone();
     let tool = app.ui.tool;
     if !matches!(tool, Tool::CloneStamp | Tool::Healing) || !overlay.show || (overlay.auto_hide && super::paint_tool::stroking(app).is_some()) {
         return None;
     }
-    let slot = app.session.presets.clone.active().clone();
+    let slot = app.session.presets().clone.active().clone();
     let map = crate::preset_panels::clone_mapping_at(app, Some(at))?;
     let radius = f64::from(app.session.tools.brush.size) / 2.0;
     if !radius.is_finite() || radius <= 0.0 || radius > 500.0 || !at.iter().all(|v| v.is_finite() && v.abs() < 1_000_000.0) {

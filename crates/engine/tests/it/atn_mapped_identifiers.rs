@@ -4,6 +4,7 @@ use craft_psd::{
     atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem},
     descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D},
 };
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionList, ActionStep, ActionsFile},
@@ -30,7 +31,7 @@ fn replay_saved(s: &mut Session, action: &Action) {
     let imported = atn_cmds::import(&bytes).unwrap();
     assert!(imported.unsupported.is_empty());
     assert_eq!(imported.actions[0].steps, action.steps);
-    s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+    s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
     let result = s.execute("actions.play", json!({"action":"Recorded"})).unwrap();
     assert_eq!(result["ran"], 1);
     assert!(result.get("failed").is_none(), "{result}");
@@ -109,7 +110,7 @@ fn review_point_resize_exports_the_default_resampler() {
         let mut expected = sized_document(40, 20, 144);
         expected.execute("image.imageSize", params).unwrap();
         let mut actual = sized_document(40, 20, 144);
-        actual.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+        actual.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
         let result = actual.execute("actions.play", json!({"action":"Recorded"})).unwrap();
         assert!(result.get("failed").is_none(), "{result}");
         let (a, b) = (&actual.active().unwrap().doc, &expected.active().unwrap().doc);
@@ -132,7 +133,7 @@ fn review_copy_cut_opacity_is_validated_before_any_step_runs() {
             let mut s = sized_document(8, 6, 72);
             s.execute("select.rect", json!({"x":0,"y":0,"width":2,"height":2})).unwrap();
             let before = s.active().unwrap().doc.clone();
-            s.actions.list = ActionList::from_file(ActionsFile::new(vec![action], Vec::new()));
+            s.actions_mut().list = ActionList::from_file(ActionsFile::new(vec![action], Vec::new()));
             let result = s.execute("actions.play", json!({"action":"Recorded"})).unwrap();
             assert!(result.get("failed").is_some());
             assert_eq!(s.active().unwrap().doc, before);
@@ -359,7 +360,7 @@ fn review_10702_transparency_names_resolve_at_playback() {
         }
         s.execute("layer.new.layer", json!({"name":"Active"})).unwrap();
         s.execute("edit.fill", json!({"contents":"color","color":"#ffffff"})).unwrap();
-        s.actions.list = ActionList::from_file(ActionsFile::new(vec![action.clone()], Vec::new()));
+        s.actions_mut().list = ActionList::from_file(ActionsFile::new(vec![action.clone()], Vec::new()));
         let played = s.execute("actions.play", json!({"action":"Recorded"})).unwrap();
         assert_eq!(played["ran"], 1, "{played}");
         let doc = &s.active().unwrap().doc;
