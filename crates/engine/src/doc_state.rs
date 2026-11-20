@@ -181,8 +181,10 @@ impl DocState {
     }
     /// Set the active layer and invalidate the held ordered selection.
     pub fn set_active_layer(&mut self, active: Option<LayerId>) {
-        self.selected_cache.take();
-        self.inputs.active_layer = active;
+        if self.inputs.active_layer != active {
+            self.selected_cache.take();
+            self.inputs.active_layer = active;
+        }
     }
     /// The raw selection in selection order.
     pub fn selection(&self) -> &[LayerId] {
@@ -461,6 +463,8 @@ mod selected_tests {
         assert_eq!(st.selected_layers(), &[ids[0], ids[6]]);
         let ptr = st.selected_layers().as_ptr();
         let serial = st.doc.layers.index().serial();
+        st.set_active_layer(Some(ids[0]));
+        assert_eq!(st.selected_layers().as_ptr(), ptr, "setting the same active layer keeps the cache");
         for _ in 0..100 {
             assert_eq!(st.selected_layers().as_ptr(), ptr);
             assert_eq!(st.doc.layers.index().serial(), serial);

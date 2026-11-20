@@ -71,7 +71,7 @@ fn can_link(s: &Session) -> std::result::Result<(), String> {
 }
 fn has_linked(s: &Session) -> std::result::Result<(), String> {
     let d = doc_state(s)?;
-    if link_groups(&d.doc, &d.selected_layers()).is_empty() { Err("the selected layers are not linked".into()) } else { Ok(()) }
+    if link_groups(&d.doc, d.selected_layers()).is_empty() { Err("the selected layers are not linked".into()) } else { Ok(()) }
 }
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {

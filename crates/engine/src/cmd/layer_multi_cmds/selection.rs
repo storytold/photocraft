@@ -192,9 +192,9 @@ fn recorded_transform(s: &Session, mut p: Value, pre_selected: Option<&[LayerId]
     let Some(st) = s.active() else { return p };
     let Some(listed) = p.get("layers").and_then(Value::as_array) else { return p };
     let Some(listed) = listed.iter().map(|v| v.as_u64().map(LayerId)).collect::<Option<Vec<_>>>() else { return p };
-    let selected = pre_selected.map_or_else(|| st.selected_layers().to_vec(), <[LayerId]>::to_vec);
+    let selected = pre_selected.unwrap_or_else(|| st.selected_layers());
     let mut moved = top_level(&st.doc, &listed);
-    let mut targets = crate::transform_cmds::targets_of(&st.doc, &selected, st.active_layer);
+    let mut targets = crate::transform_cmds::targets_of(&st.doc, selected, st.active_layer);
     moved.sort_unstable();
     moved.dedup();
     targets.sort_unstable();
@@ -380,7 +380,7 @@ pub(super) fn find_layers(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub(super) fn select_linked(s: &mut Session) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let groups = link_groups(&d.doc, &d.selected_layers());
+    let groups = link_groups(&d.doc, d.selected_layers());
     let ids: Vec<LayerId> = d.doc.walk().into_iter().filter(|(_, _, l)| l.link_group.is_some_and(|g| groups.contains(&g))).map(|(_, _, l)| l.id).collect();
     let active = d.active_layer.filter(|a| ids.contains(a)).or(ids.last().copied());
     let n = ids.len();
