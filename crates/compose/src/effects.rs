@@ -249,7 +249,14 @@ impl FxMaps {
 #[cfg(test)]
 mod inner_shadow_anti_alias_tests;
 #[cfg(test)]
+mod outer_glow_noise_tests;
+
+#[cfg(test)]
+mod inner_shadow_noise_tests;
+#[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod satin_invert_contour_tests;
 #[cfg(test)]
 mod satin_size_one_tests;
