@@ -126,7 +126,7 @@ fn refreshing_type_layers_refreshes_the_first_snapshot() {
     let mut stale = (*s.active().unwrap().doc).clone();
     let Some(Layer { content: LayerContent::Text(t), .. }) = stale.layer_mut(id) else { panic!("not a type layer") };
     t.cache = None;
-    let snap_cache = |s: &Session| match &s.active().unwrap().snapshots[0].doc.layer(id).unwrap().content {
+    let snap_cache = |s: &Session| match &s.active().unwrap().snapshots()[0].doc.layer(id).unwrap().content {
         LayerContent::Text(t) => t.cache.is_some(),
         other => panic!("{}", other.kind_name()),
     };
@@ -140,7 +140,7 @@ fn refreshing_type_layers_refreshes_the_first_snapshot() {
     assert!(text_layer(&s, id.0).cache.is_some());
     assert!(snap_cache(&s), "the first snapshot is refreshed with the document");
     let st = s.active().unwrap();
-    assert!(Arc::ptr_eq(&st.snapshots[0].doc, &st.doc), "and still shares it");
+    assert!(Arc::ptr_eq(&st.snapshots()[0].doc, &st.doc), "and still shares it");
     // Edited since it opened: the snapshot is refreshed on its own, the edit stays.
     s.add_document(stale.clone(), None);
     let doc_id = s.active().unwrap().doc.id;
@@ -151,7 +151,7 @@ fn refreshing_type_layers_refreshes_the_first_snapshot() {
     assert!(text_layer(&s, id.0).cache.is_some());
     let st = s.active().unwrap();
     assert_eq!(st.doc.layers.len(), layers);
-    assert_eq!(st.snapshots[0].doc.layers.len(), layers - 1, "the snapshot keeps the document as opened");
+    assert_eq!(st.snapshots()[0].doc.layers.len(), layers - 1, "the snapshot keeps the document as opened");
     // Each version is refreshed only for the layers picked in it: one picked in the open
     // document (e.g. a PSD layer edited since, while the snapshot keeps the file's pixels)
     // leaves the snapshot alone, and the other way round.
@@ -195,12 +195,12 @@ fn a_layer_picked_in_the_first_snapshot_refreshes_the_open_document_it_is_again(
     let picked = [crate::TypeLayerRef { doc: doc_id, layer: id, first_snapshot: true }];
     assert!(s.undo());
     let st = s.active().unwrap();
-    assert!(Arc::ptr_eq(&st.snapshots[0].doc, &st.doc), "Undo is back at the snapshot itself");
+    assert!(Arc::ptr_eq(&st.snapshots()[0].doc, &st.doc), "Undo is back at the snapshot itself");
     let rev = st.revision;
     assert!(s.refresh_type_layers(&picked).is_empty());
     assert!(text_layer(&s, id.0).cache.is_some(), "the open document has the real font");
     let st = s.active().unwrap();
-    assert!(Arc::ptr_eq(&st.snapshots[0].doc, &st.doc), "and still shares it with the snapshot");
+    assert!(Arc::ptr_eq(&st.snapshots()[0].doc, &st.doc), "and still shares it with the snapshot");
     assert!(st.revision > rev);
 }
 
