@@ -875,16 +875,17 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let names: Vec<&str> = boards.iter().map(|one| one.name.as_str()).collect();
     let stems = artboard_file_stems(&prefix, &names, HYPHENATED_FORMATS.contains(&format.as_str()));
     let mut files = Vec::new();
+    let mut warnings = Vec::new();
     for (mut one, name) in boards.into_iter().zip(stems) {
         board.apply(&mut one, &format);
         let path = join(&dir, &format!("{name}.{format}"));
-        save_doc(&one, &path, save)?;
+        warnings.extend(save_doc(&one, &path, save)?.into_iter().map(|w| format!("{name}.{format}: {w}")));
         files.push(path);
     }
     if files.is_empty() {
         return Err(bad(cmd, "no matching artboards"));
     }
-    Ok(json!({"files": files}))
+    Ok(json!({"files": files, "warnings": warnings}))
 }
 
 /// A minimal PDF with one page per JPEG image: (width px, height px, dpi, JPEG bytes).
@@ -1020,7 +1021,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToFiles",
             "Artboards to Files…",
             &["File", "Export"],
-            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name ("" = none),"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's file also shows the visible boards above it where they overlap it, each as a plain group with a \"Background for <board>\" layer; artboard: Artboard Content Only),"artboards":[id]? (default all),"quality":0..12? (JPEG),"iccProfile":bool=true,"bmpBits":24|32? (16 unsupported),"tgaBits":24|32?,"tiffCompression":"none|lzw|zip"="none" ("jpeg" unsupported),"pngInterlaced":bool=false,"transparency":bool=true (PNG; false: over white, no alpha),"maximizeCompatibility":bool? (PSD),"preserveArtboard":bool=true (PSD; false: a plain group)} → {files} (one "<prefix><artboard name>.<format>" per board, no separator or index added: spaces become "-" in PNG, JPEG, BMP, Targa and TIFF and stay in PSD and other formats, characters a file name can't hold become "_", and a name an earlier board already took, ignoring case, gets "-2", "-3"…)"##,
+            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name ("" = none),"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's file also shows the visible boards above it where they overlap it, each as a plain group with a \"Background for <board>\" layer; artboard: Artboard Content Only),"artboards":[id]? (default all),"quality":0..12? (JPEG),"iccProfile":bool=true,"bmpBits":24|32? (16 unsupported),"tgaBits":24|32?,"tiffCompression":"none|lzw|zip"="none" ("jpeg" unsupported),"pngInterlaced":bool=false,"transparency":bool=true (PNG; false: over white, no alpha),"maximizeCompatibility":bool? (PSD),"preserveArtboard":bool=true (PSD; false: a plain group)} → {files, warnings} (warnings: what a file could not hold, each "<file name>: <warning>"; one "<prefix><artboard name>.<format>" per board, no separator or index added: spaces become "-" in PNG, JPEG, BMP, Targa and TIFF and stay in PSD and other formats, characters a file name can't hold become "_", and a name an earlier board already took, ignoring case, gets "-2", "-3"…)"##,
             export_artboards,
             artboards_to_files
         ),

@@ -194,6 +194,9 @@ fn bad_option_values_are_errors_and_write_nothing() {
         json!({"bmpBits": -1}),
         json!({"quality": "high"}),
         json!({"quality": [8]}),
+        json!({"quality": -1}),
+        json!({"quality": 12.5}),
+        json!({"quality": 13}),
         json!({"iccProfile": "yes"}),
         json!({"pngInterlaced": 1}),
         json!({"transparency": {}}),
@@ -209,4 +212,18 @@ fn bad_option_values_are_errors_and_write_nothing() {
         assert!(matches!(r, Err(EngineError::BadParams { .. })), "{bad}: {r:?}");
         assert_eq!(std::fs::read_dir(dir).unwrap().count(), 0, "{bad}: nothing written");
     }
+}
+
+/// What a file could not hold comes back as a warning naming the file, as Save a Copy reports it:
+/// a 24-bit BMP of the transparent board is composited over white.
+#[test]
+fn export_warnings_reach_the_result() {
+    let (mut s, clear, white) = session();
+    let dir = &tmp("warnings");
+    let r = s.execute("file.export.artboardsToFiles", json!({"dir": dir, "prefix": "", "format": "bmp", "artboards": [clear], "bmpBits": 24})).unwrap();
+    let warnings = r["warnings"].as_array().unwrap();
+    assert!(warnings.iter().any(|w| w.as_str().is_some_and(|w| w.starts_with("Clear.bmp: ") && w.contains("over white"))), "{r}");
+    let opaque = s.execute("file.export.artboardsToFiles", json!({"dir": dir, "prefix": "", "format": "png", "artboards": [white]})).unwrap();
+    let warnings = opaque["warnings"].as_array().unwrap();
+    assert!(warnings.iter().all(|w| w.as_str().is_some_and(|w| w.starts_with("White.png: ") && !w.contains("over white"))), "{opaque}");
 }

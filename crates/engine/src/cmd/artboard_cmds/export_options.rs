@@ -51,7 +51,7 @@ pub(super) fn parse(s: &Session, p: &Value, cmd: &str) -> Result<(SaveOpts, Boar
     }
     match p.get("quality") {
         None | Some(Value::Null) => {}
-        Some(v) if v.as_f64().is_some() => {}
+        Some(v) if v.as_f64().is_some_and(|q| (0.0..=12.0).contains(&q)) => {}
         Some(v) => return Err(bad(cmd, format!("`quality` must be a number from 0 to 12, got {v}"))),
     }
     let mut save = SaveOpts::from_params(s, p, cmd)?;
