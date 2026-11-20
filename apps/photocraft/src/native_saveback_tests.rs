@@ -58,7 +58,7 @@ fn original_format_real_editor_save_watcher_and_psd_roundtrip() {
             (format, std::fs::read(path).unwrap())
         };
         let state = photo.active_mut().unwrap();
-        let LayerContent::Smart(sm) = &mut Arc::make_mut(&mut state.doc).layer_mut(id).unwrap().content else { panic!("smart") };
+        let LayerContent::Smart(sm) = &mut Arc::make_mut(state.doc_mut()).layer_mut(id).unwrap().content else { panic!("smart") };
         sm.source = SmartSource::Embedded { file_name: format!("Artwork.{format}"), bytes: Arc::new(bytes) };
     }
     let handoff = photo.execute("layer.smartObjects.exportSvg", json!({"layer":id.0})).unwrap();
