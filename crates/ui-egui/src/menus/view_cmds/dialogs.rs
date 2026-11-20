@@ -151,7 +151,7 @@ fn selected_artboards(app: &PhotocraftApp) -> Vec<u64> {
     if !st.active_layer.as_ref().is_some_and(is_board) {
         return Vec::new();
     }
-    st.selected_layers().into_iter().filter(is_board).map(|id| id.0).collect()
+    st.selected_layers().iter().copied().filter(is_board).map(|id| id.0).collect()
 }
 
 /// Artboards to PDF's Export Selected Artboards (#13647): a checkbox over the command's own `artboards`, the ids of

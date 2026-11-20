@@ -70,12 +70,13 @@ fn select_state(s: &mut Session, p: &Value) -> Result<Value> {
         std::sync::Arc::make_mut(&mut doc).name.clone_from(&start.name);
     }
     let damage = crate::layer_multi_cmds::step_damage(&start, &doc);
-    st.doc = doc;
+    *st.doc_mut() = doc;
     // Stepping only over selection changes keeps a clean document clean (#6865).
     let keep_clean = st.keeps_clean(&start);
     crate::restore_target(st, layers);
     st.bump_revision(keep_clean);
     st.last_damage = damage;
+    st.record_damage();
     if at != target {
         // Not reached (the bounds were checked): the document is consistent at the state reached.
         return Err(EngineError::Other(format!("the history stopped at state {at}")));
