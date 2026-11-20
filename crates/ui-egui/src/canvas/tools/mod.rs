@@ -274,6 +274,7 @@ impl<'a> ToolScope<'a> {
 fn hidden_target(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     let cmd = match tool {
         Tool::Move => "layer.translate",
+        Tool::RedEye => "paint.redEye",
         // The live Gradient makes a new Gradient Fill layer above the target, which Photoshop allows over a hidden
         // layer; only the classic one paints the target itself.
         Tool::Gradient if !app.ui.tool_options.gradient_classic => return None,
