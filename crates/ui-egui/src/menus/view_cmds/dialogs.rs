@@ -397,32 +397,7 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
             Param::new("detail", tl!("Detail"), ParamKind::number(None, None, 30.0, 1.0, 0)),
             Param::new("saturation", tl!("Saturation"), ParamKind::number(None, None, 20.0, 1.0, 0)),
         ]),
-        "file.automate.lensCorrection" => plain(vec![
-            folder("input", tl!("Source Folder"), dir.clone()),
-            folder("output", tl!("Destination"), format!("{dir}/corrected")),
-            choice(
-                "format",
-                tl!("File Type"),
-                opts(&[("same", tl!("Same as Source")), ("png", tl!("PNG")), ("jpg", tl!("JPEG")), ("psd", tl!("PSD")), ("tiff", tl!("TIFF"))]),
-                "same",
-            ),
-            choice("profile", tl!("Lens Profile"), opts(&[("auto", tl!("Auto")), ("generic", tl!("Generic")), ("none", tl!("None"))]), "auto"),
-            Param::new("correctDistortion", tl!("Geometric Distortion"), ParamKind::bool(true)),
-            Param::new("correctVignette", tl!("Vignette"), ParamKind::bool(true)),
-            Param::new("correctCA", tl!("Chromatic Aberration"), ParamKind::bool(true)),
-            Param::new("autoScale", tl!("Auto Scale Image"), ParamKind::bool(true)),
-            choice(
-                "edge",
-                tl!("Edge"),
-                opts(&[
-                    ("transparency", tl!("Transparency")),
-                    ("edgeExtension", tl!("Edge Extension")),
-                    ("black", tl!("Black Color")),
-                    ("white", tl!("White Color")),
-                ]),
-                "transparency",
-            ),
-        ]),
+        crate::dialogs::lens_batch_ui::COMMAND => plain(crate::dialogs::lens_batch_ui::rows(dir.clone())),
         "file.scripts.imageProcessor" => plain(vec![
             choice(
                 "source",
