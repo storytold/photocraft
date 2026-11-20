@@ -163,9 +163,9 @@ mod tests {
     fn delete_removes_the_selected_snapshot() {
         let mut app = app();
         app.run("history.newSnapshot", json!({})).unwrap();
-        let snaps = |app: &PhotocraftApp| app.session.active().unwrap().snapshots.len();
+        let snaps = |app: &PhotocraftApp| app.session.active().unwrap().snapshots().len();
         let before = snaps(&app);
-        let id = app.session.active().unwrap().snapshots.last().unwrap().id;
+        let id = app.session.active().unwrap().snapshots().last().unwrap().id;
         crate::panels::select_snapshot(&mut app, id);
         let steps = states(&app);
         fire(&mut app, "history.deleteState");

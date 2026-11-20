@@ -464,8 +464,9 @@ fn pasteboards(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: Rect, idx: usiz
         Pasteboard::new(label, &page).border(border).show_at(ui, rect);
         return;
     }
-    let shown = super::display_doc(app, idx).0;
-    let uncovered = super::artboard_ui::uncovered(&shown);
+    let (shown, revision) = super::display_doc(app, idx);
+    let Some(st) = app.session.documents().get(idx) else { return };
+    let uncovered = app.doc_queries.uncovered(&app.session, st, revision, || super::artboard_ui::uncovered(&shown));
     Pasteboard::new(label, &pages).border(border).uncovered(&uncovered).show_at(ui, rect);
 }
 
@@ -475,7 +476,7 @@ fn selection_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: Rect, id
     if let Some(state) = app.session.documents().get(idx) {
         let doc = state.doc.clone();
         if let Some(selection) = doc.selection.as_ref() {
-            let mask = super::outline::SurfaceMask::new(selection, crate::app::surface_fingerprint(selection), [doc.size.width, doc.size.height]);
+            let mask = super::outline::SurfaceMask::new(selection, selection.generation(), [doc.size.width, doc.size.height]);
             // The map is `transform_tool::selection_map` while a Free Transform carries the selection.
             let mut overlay = SelectionOverlay::new(label.to_owned(), &mask).visible(ants.is_some()).offset(ants.map_or([0, 0], |(x, y)| [x, y]));
             if let Some(map) = crate::transform_tool::selection_map(app, doc.id) {
@@ -552,6 +553,9 @@ fn canvas_controls(
     // One contextual task bar per window: the active document's tile carries it, not the tile drawn last.
     if app.session.active_index() == Some(host.idx) {
         crate::crop_task_bar::show(app, ui, rect);
+        if primary {
+            crate::transform_task_bar::show(app, ui, rect);
+        }
         crate::frame_tool::task_bar::show(ui, app, rect);
     }
     crate::crop_ui::each_pass(app);
