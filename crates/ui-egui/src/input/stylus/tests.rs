@@ -63,208 +63,66 @@ fn pen_contacts_follow_hover_force_and_lift() {
     assert!(!c.observe(&[]));
 }
 
-fn touch(phase: egui::TouchPhase, force: Option<f32>) -> egui::Event {
-    egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(0), phase, pos: egui::pos2(1.0, 1.0), force }
-}
-
 fn pen(pressure: f32) -> PenSample {
     PenSample { pressure, ..Default::default() }
 }
 
-#[test]
-fn the_feed_queues_every_sample_in_order_and_keeps_the_latest() {
-    let feed = StylusFeed::default();
-    for p in [0.1, 0.2, 0.3] {
-        feed.set(Some(pen(p)));
-    }
-    assert_eq!(feed.get().map(|s| s.pressure), Some(0.3));
-    assert_eq!(feed.drain().iter().map(|s| s.pressure).collect::<Vec<_>>(), vec![0.1, 0.2, 0.3]);
-    assert!(feed.drain().is_empty(), "drained once");
-    feed.set(None);
-    assert_eq!(feed.get(), None, "a lifted pen is not queued");
-    assert!(feed.drain().is_empty());
-    // A UI that stops draining keeps only the newest samples.
-    for i in 0..FEED_QUEUE + 10 {
-        feed.set(Some(pen((i % 100) as f32 / 100.0)));
-    }
-    assert_eq!(feed.drain().len(), FEED_QUEUE);
-}
-
-#[test]
-fn each_move_takes_its_share_of_the_frames_pen_samples() {
-    let mut s = Stylus::default();
-    s.feed.set(Some(pen(0.2)));
-    s.update(&[]);
-    s.begin_stroke();
-    // Next frame: the pen reported 0.4, 0.6 and 0.8 while six pointer moves arrived.
-    for p in [0.4, 0.6, 0.8] {
-        s.feed.set(Some(pen(p)));
-    }
-    s.update(&[]);
-    let got: Vec<f32> = (0..6)
-        .map(|k| {
-            s.select(k, 6);
-            s.pressure()
-        })
-        .collect();
-    let want = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
-    assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-6), "{got:?}");
-    s.clear_selection();
-    assert_eq!(s.pressure(), 0.8, "back to the current sample");
+/// The runtime's reading of `pen`: tilt and rotation in radians.
+fn reading(pen: PenSample) -> PointerSample {
+    let mut s = PointerSample::new(pen.pressure);
+    s.tilt = [pen.tilt_x.to_radians(), pen.tilt_y.to_radians()];
+    s.rotation = pen.rotation.to_radians();
+    s.eraser = pen.eraser;
+    s
 }
 
 #[test]
 fn the_pressure_curve_reshapes_pen_pressure_but_not_the_mouse() {
     let mut s = Stylus::default();
     s.set_pressure_curve(&[[0.0, 0.0], [0.3, 0.6], [1.0, 1.0]]);
-    s.feed.set(Some(pen(0.3)));
-    s.update(&[]);
+    s.record_pointer(0.0, Some(reading(pen(0.3))));
     assert!((s.pressure() - 0.6).abs() < 1e-5, "{}", s.pressure());
     s.set_pressure_curve(&[[0.0, 0.0], [1.0, 1.0]]);
     assert!((s.pressure() - 0.3).abs() < 1e-6, "linear again");
     // A mouse is full pressure whatever the curve.
     let mut m = Stylus::default();
     m.set_pressure_curve(&[[0.0, 0.0], [1.0, 0.2]]);
-    m.update(&[egui::Event::PointerMoved(egui::pos2(1.0, 1.0))]);
+    m.record_pointer(0.0, None);
+    assert_eq!(m.sample(), None);
     assert_eq!(m.pressure(), 1.0);
-}
-
-#[test]
-fn a_second_update_in_the_same_frame_keeps_its_samples() {
-    // The canvas runs once per view, and egui may run a frame in several passes.
-    let mut s = Stylus::default();
-    s.feed.set(Some(pen(0.4)));
-    s.feed.set(Some(pen(0.8)));
-    s.update_for_frame(7, &[]);
-    s.update_for_frame(7, &[]);
-    s.select(0, 2);
-    assert!((s.pressure() - 0.4).abs() < 1e-6, "{}", s.pressure());
 }
 
 #[test]
 fn a_new_stroke_never_starts_from_an_old_strokes_pressure() {
     let mut s = Stylus::default();
-    s.feed.set(Some(pen(0.9)));
-    s.update(&[]);
-    s.feed.set(Some(pen(0.1)));
-    s.update(&[]);
+    s.record_pointer(0.0, Some(reading(PenSample { tilt_x: 40.0, ..pen(0.9) })));
     s.begin_stroke();
-    s.select(0, 2);
+    s.record_pointer(10.0, Some(reading(pen(0.1))));
+    // The next stroke's press: its own reading, never the old peak or the old tilt.
+    s.record_pointer(500.0, Some(reading(pen(0.1))));
+    s.begin_stroke();
     assert!((s.pressure() - 0.1).abs() < 1e-6, "{}", s.pressure());
-}
-
-#[test]
-fn a_mouse_or_use_pressure_off_paints_at_full_pressure() {
-    let mut s = Stylus::default();
-    s.update(&[egui::Event::PointerMoved(egui::pos2(1.0, 1.0))]);
-    s.select(0, 1);
-    assert_eq!(s.pressure(), 1.0);
-    s.feed.set(Some(pen(0.3)));
-    s.use_pressure = false;
-    s.update(&[]);
-    s.select(0, 1);
-    assert_eq!(s.pressure(), 1.0);
-}
-
-#[test]
-fn rotation_between_samples_takes_the_short_way_round() {
-    let mut s = Stylus::default();
-    s.feed.set(Some(PenSample { rotation: 350.0, ..pen(1.0) }));
-    s.update(&[]);
-    s.feed.set(Some(PenSample { rotation: 10.0, ..pen(1.0) }));
-    s.update(&[]);
-    s.select(0, 2);
-    let r = s.sample().map_or(-1.0, |p| p.rotation);
-    assert!(r.abs() < 1e-3 || (r - 360.0).abs() < 1e-3, "halfway from 350° to 10° is 0°, got {r}");
+    assert!((s.tap_pressure() - 0.1).abs() < 1e-6, "the tap peak restarts: {}", s.tap_pressure());
+    assert_eq!(s.stroke.len(), 1, "the old stroke's poses are gone");
+    assert_eq!(s.stroke[0], [0.0, 0.0, 0.0]);
 }
 
 #[test]
 fn mouse_is_full_pressure() {
     let mut s = Stylus::default();
-    s.update(&[egui::Event::PointerMoved(egui::pos2(3.0, 4.0))]);
+    s.record_pointer(0.0, None);
     assert_eq!(s.pressure(), 1.0);
     assert_eq!(s.sample(), None);
 }
 
 #[test]
-fn touch_force_drives_pressure_until_lift() {
-    let mut s = Stylus::default();
-    s.update(&[touch(egui::TouchPhase::Start, Some(0.25))]);
-    assert_eq!(s.pressure(), 0.25);
-    s.update(&[touch(egui::TouchPhase::Move, Some(0.8)), touch(egui::TouchPhase::Move, Some(1.7))]);
-    assert_eq!(s.pressure(), 1.0, "clamped");
-    s.update(&[touch(egui::TouchPhase::Move, Some(f32::NAN))]);
-    assert_eq!(s.pressure(), 1.0);
-    s.update(&[touch(egui::TouchPhase::Move, Some(0.4))]);
-    assert_eq!(s.pressure(), 0.4);
-    // The lift frame still paints at the last force; the next frame is back to the mouse.
-    s.update(&[touch(egui::TouchPhase::End, None)]);
-    assert_eq!(s.pressure(), 0.4);
-    s.update(&[]);
-    assert_eq!(s.pressure(), 1.0);
-}
-
-fn touch_id(id: u64, phase: egui::TouchPhase, force: Option<f32>) -> egui::Event {
-    egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos: egui::pos2(1.0, 1.0), force }
-}
-
-#[test]
-fn a_light_windows_pen_tap_is_not_full_pressure() {
-    use egui::TouchPhase::{End, Move, Start};
-    // winit on Windows reports a pen pressed below its first pressure level with no force
-    // (pressure 0 maps to `None`). The pen hovered first, so the tap is pressure 0, not a
-    // mouse click's 1.
-    let mut s = Stylus::default();
-    s.update(&[touch_id(5, Move, None)]);
-    assert_eq!(s.pressure(), 1.0, "hovering is no contact");
-    s.update(&[touch_id(5, Start, None), touch_id(5, End, None)]);
-    assert_eq!(s.pressure(), 0.0);
-    assert_eq!(s.tap_pressure(), 0.0);
-    s.update(&[]);
-    assert_eq!(s.pressure(), 1.0, "lifted");
-    // A pen known from an earlier force: a stroke pressed before its first level starts at 0
-    // and then follows the pen.
-    let mut s = Stylus::default();
-    s.update(&[touch_id(7, Start, Some(0.5)), touch_id(7, End, None)]);
-    s.update(&[]);
-    s.update(&[touch_id(8, Start, None)]);
-    assert_eq!(s.pressure(), 0.0);
-    s.update(&[touch_id(8, Move, Some(0.3))]);
-    assert_eq!(s.pressure(), 0.3);
-    // A force-less move mid-stroke keeps the last force.
-    s.update(&[touch_id(8, Move, None)]);
-    assert_eq!(s.pressure(), 0.3);
-}
-
-#[test]
-fn a_finger_without_force_still_paints_at_full_pressure() {
-    use egui::TouchPhase::{End, Move, Start};
-    let mut s = Stylus::default();
-    s.update(&[touch_id(1, Start, None), touch_id(1, Move, None)]);
-    assert_eq!(s.pressure(), 1.0);
-    s.update(&[touch_id(1, End, None)]);
-    s.update(&[]);
-    assert_eq!(s.pressure(), 1.0);
-}
-
-#[test]
-fn a_new_tap_in_the_frame_an_old_one_lifted_keeps_its_force() {
-    use egui::TouchPhase::{End, Start};
-    let mut s = Stylus::default();
-    s.update(&[touch_id(1, Start, Some(0.6)), touch_id(1, End, None), touch_id(2, Start, Some(0.2))]);
-    assert_eq!(s.pressure(), 0.2);
-    s.update(&[]);
-    assert_eq!(s.pressure(), 0.2, "the second contact is still down");
-}
-
-#[test]
 fn feed_wins_and_is_sanitized() {
-    let mut s = Stylus::default();
-    s.update(&[touch(egui::TouchPhase::Start, Some(0.3))]);
-    s.feed.set(Some(PenSample { pressure: 0.6, tilt_x: 120.0, tilt_y: -30.0, rotation: -90.0, eraser: false }));
-    assert_eq!(s.sample(), Some(PenSample { pressure: 0.6, tilt_x: 90.0, tilt_y: -30.0, rotation: 270.0, eraser: false }));
-    s.feed.set(None);
-    assert_eq!(s.pressure(), 0.3);
+    // A tablet backend's out-of-range values are clamped before any brush sees them.
+    let wild = PenSample { pressure: 7.0, tilt_x: 120.0, tilt_y: f32::NAN, rotation: -90.0, eraser: false }.sanitized();
+    assert_eq!(wild, PenSample { pressure: 1.0, tilt_x: 90.0, tilt_y: 0.0, rotation: 270.0, eraser: false });
+    let feed = StylusFeed::default();
+    feed.set(Some(PenSample { pressure: 0.6, tilt_x: 120.0, tilt_y: f32::NAN, rotation: -90.0, eraser: false }));
+    assert_eq!(feed.get(), Some(PenSample { pressure: 0.6, tilt_x: 90.0, tilt_y: 0.0, rotation: 270.0, eraser: false }));
 }
 
 #[test]
@@ -276,45 +134,51 @@ fn pen_samples_reach_the_brush_stroke() {
     app.session.execute("layer.new.layer", json!({})).unwrap();
     app.ui.tool = crate::state::Tool::Brush;
     let m = egui::Modifiers::NONE;
+    // The pen's readings go into the feed; each event carries the pressure of the reading it goes with.
     app.stylus.feed.set(Some(PenSample { pressure: 0.2, tilt_x: 40.0, tilt_y: 0.0, rotation: 30.0, eraser: false }));
-    let pr = app.stylus.pressure();
-    tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 40.0, pressure: pr }, m);
+    tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 40.0, pressure: 0.2 }, m);
     app.stylus.feed.set(Some(PenSample { pressure: 0.9, tilt_x: 10.0, tilt_y: -5.0, rotation: 60.0, eraser: false }));
-    let pr = app.stylus.pressure();
-    tool_event(&mut app, ToolEvent::Move { x: 100.0, y: 40.0, pressure: pr }, m);
+    tool_event(&mut app, ToolEvent::Move { x: 100.0, y: 40.0, pressure: 0.9 }, m);
     tool_event(&mut app, ToolEvent::Up { x: 100.0, y: 40.0 }, m);
     let (id, p) = app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").cloned().unwrap();
     assert_eq!(id, "paint.stroke");
-    assert_eq!(p["points"][0], json!([10.0, 40.0, 0.2f32 as f64, 40.0, 0.0, 30.0]));
-    assert_eq!(p["points"][1], json!([100.0, 40.0, 0.9f32 as f64, 10.0, -5.0, 60.0]));
-    // A mouse stroke stays at full pressure with plain [x, y, p] points.
+    // x, y, pressure, tilt and rotation in degrees (through the runtime's radians), then the point's time.
+    let near = |point: &serde_json::Value, want: [f64; 6]| {
+        let got: Vec<f64> = point.as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+        assert!(got.len() == 7 && got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-4), "{got:?} is not {want:?}");
+    };
+    near(&p["points"][0], [10.0, 40.0, f64::from(0.2f32), 40.0, 0.0, 30.0]);
+    near(&p["points"][1], [100.0, 40.0, f64::from(0.9f32), 10.0, -5.0, 60.0]);
+    // A mouse stroke stays at full pressure with no tilt.
     app.stylus.feed.set(None);
-    let pr = app.stylus.pressure();
-    tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 60.0, pressure: pr }, m);
+    tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 60.0, pressure: 1.0 }, m);
     tool_event(&mut app, ToolEvent::Up { x: 90.0, y: 60.0 }, m);
     let (_, p) = app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").cloned().unwrap();
-    assert_eq!(p["points"][0], json!([10.0, 60.0, 1.0]));
+    assert_eq!(p["points"][0].as_array().unwrap()[..3], [json!(10.0), json!(60.0), json!(1.0)]);
+    assert!(p["points"][0].as_array().unwrap().iter().skip(3).take(3).all(|v| v.as_f64() == Some(0.0)), "no tilt or rotation");
 }
 
 #[test]
 fn stroke_points_carry_tilt_only_when_present() {
     let mut s = Stylus::default();
     let pts = [[0.0, 0.0, 0.5], [10.0, 0.0, 0.7], [20.0, 0.0, 0.7]];
+    s.record_pointer(0.0, None);
     s.begin_stroke();
     s.record_point();
     assert_eq!(s.stroke_points(&pts)[1], vec![10.0, 0.0, 0.7]);
-    s.feed.set(Some(PenSample { pressure: 0.7, tilt_x: 30.0, tilt_y: 10.0, rotation: 45.0, eraser: false }));
+    s.record_pointer(10.0, Some(reading(PenSample { pressure: 0.7, tilt_x: 30.0, tilt_y: 10.0, rotation: 45.0, eraser: false })));
     s.record_point();
     let out = s.stroke_points(&pts);
-    assert_eq!(out[0], vec![0.0, 0.0, 0.5, 0.0, 0.0, 0.0]);
-    assert_eq!(out[2], vec![20.0, 0.0, 0.7, 30.0, 10.0, 45.0]);
+    assert_eq!(out[0], vec![0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0]);
+    // Degrees survive the radians of the runtime's reading.
+    let tail = &out[2][3..6];
+    assert!([30.0, 10.0, 45.0].iter().zip(tail).all(|(w, g)| (w - g).abs() < 1e-3), "{tail:?}");
 }
 
 #[test]
 fn use_pressure_off_ignores_pen_and_touch() {
     let mut s = Stylus { use_pressure: false, ..Default::default() };
-    s.update(&[touch(egui::TouchPhase::Start, Some(0.3))]);
-    s.feed.set(Some(PenSample { pressure: 0.2, tilt_x: 40.0, ..Default::default() }));
+    s.record_pointer(0.0, Some(reading(PenSample { pressure: 0.2, tilt_x: 40.0, ..Default::default() })));
     assert_eq!((s.sample(), s.pressure()), (None, 1.0));
     s.begin_stroke();
     assert_eq!(s.stroke_points(&[[1.0, 2.0, 1.0]]), vec![vec![1.0, 2.0, 1.0]], "no tilt either");
@@ -339,9 +203,14 @@ fn eraser_end_switches_tools_once_and_never_mid_drag() {
     app.stylus.feed.set(pen(false));
     assert!(!Stylus::sync_eraser_tool(&mut app));
     assert_eq!(app.ui.tool, Tool::Eraser);
+    // The canvas pass after the release takes the flip. The driver's release ends the pen's reading with the press, so
+    // the pen, still in range at its tip, is read again for that pass.
     tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 10.0 }, egui::Modifiers::NONE);
+    assert_eq!(app.ui.tool, Tool::Eraser, "the release itself changes no tool");
+    app.stylus.feed.set(pen(false));
     assert!(Stylus::sync_eraser_tool(&mut app));
     assert_eq!(app.ui.tool, Tool::Brush, "the tip restores the previous tool");
+    assert!(!Stylus::sync_eraser_tool(&mut app), "reported once");
     // The eraser end while the Eraser is already chosen remembers nothing to restore.
     app.ui.tool = Tool::Eraser;
     app.stylus.feed.set(pen(true));

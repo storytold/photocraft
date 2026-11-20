@@ -520,6 +520,7 @@ fn params(size: [u32; 2], s: &PerPixel, tone: [u32; 4], texture: bool) -> Vec<u8
     f(vig.map_or([0.0, 0.0, 1.0, 1.0], |v| [v.centre[0], v.centre[1], v.axes[0], v.axes[1]]));
     f(vig.map_or([0.0; 4], |v| [v.edges[0], v.edges[1], 0.0, 0.0]));
     f(grain.map_or([1.0, 0.0, 0.0, 1.0], |gr| [gr.cell, gr.roughness, gr.amount, gr.scale]));
+    // The seed and the scale were resolved from the job's `DevelopInputs` when `per_pixel` built the grain.
     let seed = grain.map_or(0, |gr| gr.seed);
     let fine = seed.wrapping_add(7);
     out.extend([seed as u32, (seed >> 32) as u32, fine as u32, (fine >> 32) as u32].iter().flat_map(|v| v.to_le_bytes()));
