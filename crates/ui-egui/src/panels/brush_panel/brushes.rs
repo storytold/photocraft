@@ -109,7 +109,7 @@ pub(crate) fn tip_paint(b: &BrushSettings) -> impl Fn(&ContentPainterCx, Rect) +
 /// The rows of every preset in the engine's panel order (the order `,` and `.` step through): a
 /// group row before the first preset of each group and each folder, with its count.
 pub(crate) fn preset_rows(app: &PhotocraftApp, env: &Env, parts: BrushCardParts) -> Vec<PresetRow<BrushKey>> {
-    let presets = &app.session.tools.presets;
+    let presets = app.session.tools.presets.as_ref();
     let mut counts: std::collections::HashMap<(&str, &[String]), usize> = std::collections::HashMap::new();
     for p in presets {
         let path = path_of(p);
@@ -204,7 +204,7 @@ pub(crate) fn apply_events(app: &mut PhotocraftApp, events: Vec<PresetEvent<Brus
 }
 
 fn command_of(app: &PhotocraftApp, event: PresetEvent<BrushKey>, rows: &[BrushKey]) -> Option<(&'static str, Value)> {
-    let presets = &app.session.tools.presets;
+    let presets = app.session.tools.presets.as_ref();
     match event {
         PresetEvent::Select { key: BrushKey::Preset(name), .. } => Some(("tools.setBrush", json!({ "preset": name }))),
         // The double click's first click already picked it.

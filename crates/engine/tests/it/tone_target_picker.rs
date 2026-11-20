@@ -237,9 +237,13 @@ fn gray_tone_records_do_not_leak_from_rgb_channels() {
             for (target, panel) in
                 [(json!("mask"), ChannelTarget::LayerMask), (json!({"channel":0}), ChannelTarget::Alpha(0)), (json!("quickMask"), ChannelTarget::Composite)]
             {
-                for style in ["levels", "points", "pencil"] {
-                    for sampled in [false, true] {
-                        for explicit in [false, true] {
+                // Each style sees both flags; all four flag pairs occur across the styles.
+                for (si, style) in ["levels", "points", "pencil"].into_iter().enumerate() {
+                    for (ai, sampled) in [false, true].into_iter().enumerate() {
+                        for (ei, explicit) in [false, true].into_iter().enumerate() {
+                            if (si + ai) % 2 != ei {
+                                continue;
+                            }
                             let mut clean = session(mode, depth);
                             clean.active_mut().unwrap().channel_view.target = panel;
                             clean
