@@ -338,7 +338,22 @@ fn source_xmp_schemas_become_native_rdf_arrays_and_language_alternatives() {
         vec!["first & second", "third"]
     );
     let title = rdf.descendants().find(|node| node.has_tag_name(("http://purl.org/dc/elements/1.1/", "title"))).unwrap();
-    assert!(title.descendants().any(|node| node.attribute(("http://www.w3.org/XML/1998/namespace", "lang")) == Some("de-DE") && node.text() == Some("Titel")));
+    let rdf_ns = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    let creator = rdf.descendants().find(|node| node.has_tag_name(("http://purl.org/dc/elements/1.1/", "creator"))).unwrap();
+    let creator_seq = creator.children().find(|node| node.has_tag_name((rdf_ns, "Seq"))).unwrap();
+    assert_eq!(
+        creator_seq.children().filter(|node| node.has_tag_name((rdf_ns, "li"))).filter_map(|node| node.text()).collect::<Vec<_>>(),
+        ["Author one", "Author two"]
+    );
+    let title_alt = title.children().find(|node| node.has_tag_name((rdf_ns, "Alt"))).unwrap();
+    let alternatives = title_alt
+        .children()
+        .filter(|node| node.has_tag_name((rdf_ns, "li")))
+        .filter_map(|node| Some((node.attribute(("http://www.w3.org/XML/1998/namespace", "lang"))?, node.text()?)))
+        .collect::<Vec<_>>();
+    assert!(alternatives.contains(&("x-default", "A < B")));
+    assert!(alternatives.contains(&("de-DE", "Titel")));
+    assert_eq!(alternatives.len(), 2);
     assert!(!packet.contains("never interpreted"));
     let native = photocraft_format::save_to_bytes(&result.document, &Default::default()).unwrap();
     let reopened = photocraft_format::load_from_bytes(&native).unwrap();
@@ -471,4 +486,68 @@ fn legacy_non_tiff_exif_layout_remains_inert_without_budget_omission_disclosure(
         assert!(!report.entries.iter().any(|entry| entry.feature_code == "xcf.metadata_partial"));
         assert_eq!(report.attachments[0].bytes.as_slice(), record.as_slice());
     }
+}
+
+#[test]
+fn image_parasite_duplicates_across_properties_use_the_final_values() {
+    let mut source = TestImage::rgb8(1, 1);
+    source.image_props.push((21, parasite("gimp-comment", b"Draft\0")));
+    source.image_props.push((21, parasite("gimp-comment", b"Final\0")));
+    let document = open(&source.write()).document;
+    assert_eq!(document.metadata.text, [("Comment".to_owned(), "Final".to_owned())]);
+}
+
+#[test]
+fn raw_exif_gets_the_available_storage_before_earlier_xml() {
+    let raw = b"II\x2a\0\x08\0\0\0\0\0\0\0\0\0";
+    let xml = br#"<metadata><tag name="Exif.Image.Artist">Synthesized artist</tag></metadata>"#;
+    for combined in [false, true] {
+        let mut first = parasite("gimp-image-metadata", xml);
+        let second = parasite("exif-data", raw);
+        if combined {
+            first.extend_from_slice(&second);
+        }
+        let mut doc = Document::new("EXIF priority", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+        let mut outcomes = conversion::Outcomes::new(26).unwrap();
+        let owner = outcomes
+            .push(ConversionEntry {
+                feature_code: "xcf.canvas".into(),
+                source: conversion::source("image", 0, 0, "", &[], None),
+                targets: Vec::new(),
+                disposition: ConversionDisposition::NativeEquivalent,
+                reason: ConversionReason::NativePolicy,
+                source_description: String::new(),
+                native_description: String::new(),
+                attachments: Vec::new(),
+            })
+            .unwrap();
+        let props = [Prop { offset: 0, kind: 21, data: &first }, Prop { offset: first.len(), kind: 21, data: &second }];
+        let budget = xml.len() + raw.len();
+        metadata::image(
+            &mut doc,
+            &props[..if combined { 1 } else { 2 }],
+            26,
+            &mut Default::default(),
+            &mut outcomes,
+            owner,
+            &mut { budget },
+            &mut Default::default(),
+            &Interrupt::NONE,
+        )
+        .unwrap();
+        assert_eq!(doc.metadata.exif.as_deref().unwrap().as_slice(), raw);
+    }
+}
+
+#[test]
+fn reaching_reporting_allowance_does_not_discard_selected_native_comment() {
+    let mut source = TestImage::rgb8(1, 1);
+    // Two passes fit this payload; a report pass ahead of native selection would spend the third.
+    let mut records = parasite("unused", &vec![0; 44 << 20]);
+    records.extend_from_slice(&parasite("gimp-comment", b"Usable comment\0"));
+    source.image_props.push((21, records));
+    source.layers.push(TestLayer::rgba("Saved raster", 1, 1, vec![17, 31, 57, 255]));
+    let imported = open(&source.write());
+    assert_eq!(imported.document.metadata.text, [("Comment".to_owned(), "Usable comment".to_owned())]);
+    assert_eq!(imported.document.layers[0].surface().unwrap().pixel(0, 0), [17. / 255., 31. / 255., 57. / 255., 1.]);
 }

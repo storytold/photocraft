@@ -44,17 +44,18 @@ impl Session {
     /// Admission callers use [`Self::admit_import_with_initial_view`] to report invalid optional hints.
     pub fn apply_import_initial_view(&mut self, view: Option<photocraft_io::NativeInitialView>) -> Result<()> {
         let Some(view) = view else { return Ok(()) };
+        let before = self.active_layer_stamp();
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
-        view.validate(&st.doc).map_err(|e| EngineError::Other(e.to_string()))?;
+        view.validate(st.doc()).map_err(|e| EngineError::Other(e.to_string()))?;
         if !view.selected_layers.is_empty() {
-            st.active_layer = view.active_layer;
-            st.selected_layers = view.selected_layers;
-            st.layer_anchor = st.active_layer;
-            let target = crate::LayerTarget { active: st.active_layer, selected: st.selected_layers.clone() };
+            st.set_active_layer(view.active_layer);
+            *st.selection_mut() = view.selected_layers;
+            st.layer_anchor = st.active_layer();
+            let target = crate::LayerTarget { active: st.active_layer(), selected: st.selection().to_vec() };
             st.history.set_current_layers(target.clone());
             // The opened snapshot predates this one-time view handoff. Update its target only
             // while it still holds this exact admitted document, never an older edited state.
-            if let Some(index) = st.snapshots().iter().position(|snapshot| snapshot.id == 0 && Arc::ptr_eq(&snapshot.doc, &st.doc))
+            if let Some(index) = st.snapshots().iter().position(|snapshot| snapshot.id == 0 && Arc::ptr_eq(&snapshot.doc, st.doc()))
                 && let Some(snapshot) = st.snapshots_mut().get_mut(index)
             {
                 snapshot.layers = target;
@@ -75,6 +76,7 @@ impl Session {
             None
         };
         st.initial_path_selection = view.selected_path;
+        self.note_layer_change(before);
         self.sync_tools_mask_target();
         Ok(())
     }
@@ -265,7 +267,7 @@ mod initial_view_tests {
         let result = session.admit_import_with_initial_view(true, Some(view), |session| {
             let index = session.add_document(imported, None);
             // Admission hooks can change the pending data after a decoder-time check.
-            Arc::make_mut(&mut session.active_mut().unwrap().doc).paths.clear();
+            Arc::make_mut(session.active_mut().unwrap().doc_mut()).paths.clear();
             (index, ())
         });
         let (index, (), warning) = result.unwrap();
@@ -375,10 +377,15 @@ mod initial_view_tests {
         let second = source.active().unwrap().active_layer.unwrap();
         let mut session = Session::new();
         session.add_document((*source.active().unwrap().doc).clone(), None);
+        session.select_layer(second).unwrap();
         let before = session.active().unwrap().revision;
-        session
-            .apply_import_initial_view(Some(NativeInitialView { selected_layers: vec![first, second], active_layer: Some(first), ..Default::default() }))
-            .unwrap();
+        let marker = session.active_layer_changes();
+        let view = NativeInitialView { selected_layers: vec![first, second], active_layer: Some(first), ..Default::default() };
+        session.apply_import_initial_view(Some(view.clone())).unwrap();
+        let changed = session.active_layer_changes();
+        assert_ne!(changed, marker);
+        session.apply_import_initial_view(Some(view)).unwrap();
+        assert_eq!(session.active_layer_changes(), changed);
         assert_eq!(session.active().unwrap().revision, before);
         session.execute("layer.select", json!({"layer": second.0})).unwrap();
         session.execute("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();

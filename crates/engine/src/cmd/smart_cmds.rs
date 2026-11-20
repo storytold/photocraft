@@ -199,8 +199,8 @@ mod rendering;
 mod source;
 
 pub(crate) use contents::on_close;
-pub use contents::{commit_child, contents_of, replace_contents_bytes, replace_contents_from_bytes};
-use contents::{edit_contents, export_contents, is_smart_child, path_param, replace_contents, set_source, update_all};
+pub use contents::{commit_child, contents_of, relink_sample_order, replace_contents_bytes, replace_contents_from_bytes};
+use contents::{edit_contents, export_contents, is_smart_child, path_param, relink_to_file, replace_contents, set_source, update_all};
 use filters::smart_mut;
 pub(crate) use filters::{add_smart_filter, add_smart_filter_in, filter_mask_paintable, filter_mask_surface, refresh_after_filter_mask_edit};
 use filters::{blending_options, delete_filter, edit_filters, move_filter, set_filter_params, set_filter_visible, smart, transfer_filters};
@@ -289,16 +289,9 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.smartObjects.relinkToFile",
             "Relink to File…",
             SO,
-            r##"{"layer":id?,"path":str,"historicalXcfSampleOrder":"little-endian"|"big-endian"|null?} (absent preserves the stored source interpretation; null clears it)"##,
+            r##"{"layer":id?,"path":str,"historicalXcfSampleOrder":"little-endian"|"big-endian"|null?} (absent carries the stored choice only to byte-identical content; null clears it)"##,
             has_smart,
-            |s, p| {
-                let order_override = p
-                    .get("historicalXcfSampleOrder")
-                    .map(|_| crate::file_cmds::historical_xcf_sample_order(p, "layer.smartObjects.relinkToFile"))
-                    .transpose()?;
-                let path = path_param("layer.smartObjects.relinkToFile", p)?.to_string();
-                set_source(s, p, "Relink to File", false, order_override, |_, _| Ok(SmartSource::Linked { path }))
-            }
+            relink_to_file
         ),
         spec!("layer.smartObjects.updateModifiedContent", "Update Modified Content", SO, r##"{"layer":id?}"##, has_linked, |s, p| {
             let id = layer_param(s, p)?;
@@ -330,7 +323,7 @@ pub fn specs() -> Vec<CommandSpec> {
             unpack::convert_to_layers
         ),
         spec!("layer.smartObjects.convertToEmbedded", "Embed Linked", SO, r##"{"layer":id?}"##, has_linked, |s, p| {
-            set_source(s, p, "Convert to Embedded", true, None, |meta, src| {
+            set_source(s, p, "Convert to Embedded", true, |meta, src| {
                 let (file_name, bytes) = source_bytes(meta, src).ok_or_else(|| other("the linked file can't be read"))?;
                 Ok(SmartSource::Embedded { file_name, bytes })
             })
@@ -351,7 +344,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_smart,
             |s, p| {
                 let path = path_param("layer.smartObjects.convertToLinked", p)?.to_string();
-                set_source(s, p, "Convert to Linked", false, None, |meta, src| {
+                set_source(s, p, "Convert to Linked", false, |meta, src| {
                     let (_, bytes) = source_bytes(meta, src).ok_or_else(|| other("the smart object's contents are unavailable"))?;
                     crate::file_cmds::write_file(&path, &bytes)?;
                     Ok(SmartSource::Linked { path })

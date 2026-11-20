@@ -254,6 +254,9 @@ impl PlaceSteps {
             };
             let mut so = SmartObject::new(source, placement, px);
             so.historical_xcf_sample_order = input.opts.historical_xcf_sample_order;
+            if input.linked.is_some() && so.historical_xcf_sample_order.is_some() {
+                so.historical_xcf_link_digest = Some(*blake3::hash(&self.bytes).as_bytes());
+            }
             // A vector source (SVG) or a frame's image renders at its placement scale instead of
             // as a resampled raster.
             if let Some(doc) = &input.doc {

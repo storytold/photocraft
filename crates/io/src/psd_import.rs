@@ -717,6 +717,7 @@ impl Ctx<'_> {
                 .iter()
                 .filter(|block| block.key == crate::smart_xcf_order::PSD_KEY)
                 .find_map(|block| crate::smart_xcf_order::parse(&block.data)),
+            historical_xcf_link_digest: None,
             source: SmartSource::Linked { path: id },
             vector_preview,
             transform,

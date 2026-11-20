@@ -79,43 +79,19 @@ fn boolean(c: &mut Cursor<'_>) -> Result<bool> {
     }
 }
 
-/// Decode portable vector paint and color data into native fill data.
-/// Unavailable patterns or ambiguous colors receive explicit approximations without resolving source locators.
-fn paint(c: &mut Cursor<'_>, notes: &mut Vec<String>) -> Result<Fill> {
+/// Read both paint records for framing. Only enabled paint needs a native color.
+fn paint(c: &mut Cursor<'_>, enabled: bool, notes: &mut Vec<String>) -> Result<Option<Fill>> {
     let style = c.u32()?;
     let aa = boolean(c)?;
-    if !aa {
-        notes.push("Source paint antialiasing is disabled; native shape rasterization applies".into());
-    }
     let encoding = string(c)?;
-    let color = if encoding.is_empty() {
-        notes.push("Source paint has no stored color; native black is an explicit editable approximation".into());
-        Color::BLACK
+    let literal = if encoding.is_empty() {
+        None
     } else {
         let length = count(c, 256, "vector color byte")?;
-        let raw = c.take(length)?;
+        let pixels = c.take(length)?;
         let profile_length = count(c, super::MAX_PAYLOAD, "vector color profile byte")?;
         let profile = c.take(profile_length)?;
-        if encoding == "R'G'B'A u8" && length == 4 && profile_length == 0 {
-            let mut values = [0.0; 4];
-            for (out, &v) in values.iter_mut().zip(raw) {
-                *out = f32::from(v) / 255.0;
-            }
-            let [r, g, b, a] = values;
-            Color::rgba(r, g, b, a)
-        } else {
-            match super::effects::literal_rgb(&super::effects::ColorLiteral { encoding: &encoding, pixels: raw, profile }) {
-                Ok([r, g, b, a]) => Color::rgba(r, g, b, a),
-                Err(error @ super::effects::LiteralColorError::GrayLabPcsTransfer) => return Err(crate::IoError::Unsupported(error.to_string())),
-                Err(_) => {
-                    // Encoding names may approach 1 MiB and one layer record can be
-                    // referenced repeatedly. Keep diagnostics independent of their size;
-                    // the complete original configuration is retained separately.
-                    notes.push("Unsupported source vector color encoding/profile retained; native black approximation used".into());
-                    Color::BLACK
-                }
-            }
-        }
+        Some(super::effects::ColorLiteral { encoding: &encoding, pixels, profile })
     };
     // A source resource identity never becomes permission to open a file.
     let resource = string(c)?;
@@ -123,14 +99,69 @@ fn paint(c: &mut Cursor<'_>, notes: &mut Vec<String>) -> Result<Fill> {
         string(c)?;
         boolean(c)?;
     }
+    if !enabled {
+        return Ok(None);
+    }
+    if !aa {
+        notes.push("Source paint antialiasing is disabled; native shape rasterization applies".into());
+    }
+    let literal = literal.ok_or_else(|| crate::IoError::Unsupported("enabled vector paint has no stored color".into()))?;
+    let color = if let ("R'G'B'A u8", [r, g, b, a], []) = (literal.encoding, literal.pixels, literal.profile) {
+        let [r, g, b, a] = [*r, *g, *b, *a].map(|v| f32::from(v) / 255.);
+        Color::rgba(r, g, b, a)
+    } else {
+        let [r, g, b, a] = super::effects::literal_rgb(&literal).map_err(|error| crate::IoError::Unsupported(error.to_string()))?;
+        Color::rgba(r, g, b, a)
+    };
     match style {
-        0 => Ok(Fill::Solid(color)),
+        0 => Ok(Some(Fill::Solid(color))),
         1 => {
             notes.push("Source pattern resource is unavailable; native solid paint approximation used and resource identity retained".into());
-            Ok(Fill::Solid(color))
+            Ok(Some(Fill::Solid(color)))
         }
         _ => Err(invalid("unsupported vector paint style")),
     }
+}
+
+/// Translate source dash lengths and phase into native stroke-width units.
+fn stroke_dashes(mut dashes: Vec<f32>, width: f32) -> Result<(Vec<f32>, f32)> {
+    if dashes.iter().any(|d| !(0.0..=10_000.).contains(d)) {
+        return Err(invalid("vector stroke has an invalid dash length"));
+    }
+    if dashes.len() < 2 || width == 0.0 {
+        return Ok((Vec::new(), 0.0));
+    }
+    let mut phase = 0.0;
+    // A leading zero starts the cycle with a gap. Rotate that gap around
+    // to the previous cycle while keeping its original position via phase.
+    if let [0.0, gap, rest @ ..] = dashes.as_slice()
+        && !rest.is_empty()
+    {
+        let gap = *gap;
+        phase = rest.iter().sum();
+        dashes.drain(..2);
+        if dashes.len().is_multiple_of(2) {
+            if let Some(last) = dashes.last_mut() {
+                *last += gap;
+            }
+        } else {
+            dashes.push(gap);
+        }
+    }
+    if !dashes.len().is_multiple_of(2)
+        && let Some(tail) = dashes.pop()
+        && let Some(head) = dashes.first_mut()
+    {
+        *head += tail;
+        phase += tail;
+    }
+    if width > 0.0 && width < 1.0 {
+        for dash in &mut dashes {
+            *dash /= width;
+        }
+        phase /= width;
+    }
+    Ok((dashes, phase))
 }
 
 /// PROP_VECTOR_LAYER style, separate from its named saved-path geometry.
@@ -146,8 +177,8 @@ pub(super) fn vector_style(data: &[u8]) -> Result<VectorStyle> {
     let fill_enabled = boolean(&mut c)?;
     let stroke_enabled = boolean(&mut c)?;
     let mut source_only = Vec::new();
-    let fill = paint(&mut c, &mut source_only)?;
-    let stroke_paint = paint(&mut c, &mut source_only)?;
+    let fill = paint(&mut c, fill_enabled, &mut source_only)?;
+    let stroke_paint = paint(&mut c, stroke_enabled, &mut source_only)?;
     let width = coordinate(&mut c)? as f32;
     let cap = match c.u32()? {
         0 => LineCap::Butt,
@@ -167,17 +198,18 @@ pub(super) fn vector_style(data: &[u8]) -> Result<VectorStyle> {
     for _ in 0..n {
         dashes.push(coordinate(&mut c)? as f32);
     }
-    let stroke = ShapeStroke { width, paint: stroke_paint, cap, join, miter_limit, dashes, ..Default::default() };
-    stroke.validate().map_err(invalid)?;
+    let stroke = if let Some(paint) = stroke_paint {
+        let (dashes, dash_offset) = stroke_dashes(dashes, width)?;
+        let stroke = ShapeStroke { width, paint, cap, join, miter_limit, dashes, dash_offset, ..Default::default() };
+        stroke.validate().map_err(invalid)?;
+        Some(stroke)
+    } else {
+        None
+    };
     if c.pos != data.len() {
         return Err(invalid("trailing vector layer configuration bytes"));
     }
-    Ok(VectorStyle {
-        path_tattoo,
-        modified,
-        shape: ShapeLayer { fill: fill_enabled.then_some(fill), stroke: stroke_enabled.then_some(stroke), ..Default::default() },
-        source_only,
-    })
+    Ok(VectorStyle { path_tattoo, modified, shape: ShapeLayer { fill, stroke, ..Default::default() }, source_only })
 }
 
 /// Read a bounded NUL-terminated UTF-8 path string, allowing the explicitly empty encoding.
@@ -216,8 +248,25 @@ fn native_path(mut subpaths: Vec<Subpath>) -> Path {
     // GIMP's saved-path fill uses the even-odd rule across the whole path.
     // Native Join makes the subpaths one shape component (rather than unioning
     // independently filled contours, which would incorrectly fill holes).
-    for subpath in subpaths.iter_mut().skip(1) {
-        subpath.op = PathOp::Join;
+    for (index, subpath) in subpaths.iter_mut().enumerate() {
+        if index != 0 {
+            subpath.op = PathOp::Join;
+        }
+        // Native paths need two knots to emit a segment. Bisect a closing
+        // cubic at t = 0.5 without changing its geometry.
+        if subpath.closed
+            && let [knot] = subpath.knots.as_mut_slice()
+        {
+            let midpoint = |a: Point, b: Point| Point::new(a.x.midpoint(b.x), a.y.midpoint(b.y));
+            let out = midpoint(knot.anchor, knot.out_ctrl);
+            let controls = midpoint(knot.out_ctrl, knot.in_ctrl);
+            let incoming = midpoint(knot.in_ctrl, knot.anchor);
+            let first = midpoint(out, controls);
+            let second = midpoint(controls, incoming);
+            knot.out_ctrl = out;
+            knot.in_ctrl = incoming;
+            subpath.knots.push(Knot { anchor: midpoint(first, second), in_ctrl: first, out_ctrl: second, smooth: false });
+        }
     }
     Path { subpaths, fill_rule: FillRule::EvenOdd, inverted: false }
 }
@@ -320,6 +369,7 @@ fn vectors_inner(data: &[u8], ctl: &photocraft_raster::Interrupt<'_>) -> Result<
         let parasites = count(&mut c, 4096, "path parasite")?;
         let n = count(&mut c, MAX_POINTS, "path stroke")?;
         for _ in 0..parasites {
+            ctl.check().map_err(|_| crate::IoError::Cancelled)?;
             string(&mut c)?;
             c.u32()?;
             let bytes = count(&mut c, super::MAX_PAYLOAD, "path parasite byte")?;
@@ -494,7 +544,8 @@ fn standalone_inner(c: &Cursor<'_>, offset: usize, ctl: &photocraft_raster::Inte
     let mut source_only = false;
     for property in properties {
         match property.kind {
-            20 => tattoo = super::be_u32(property.data).filter(|n| *n != 0),
+            20 if property.data.len() == 4 => tattoo = super::be_u32(property.data).filter(|n| *n != 0),
+            20 => return Err(invalid("saved path tattoo must contain exactly four bytes")),
             43 => selected = true,
             _ => source_only = true,
         }
@@ -715,6 +766,95 @@ mod tests {
         assert!(vector_style(&b).expect("modified").modified);
     }
 
+    #[test]
+    fn source_dash_phase_and_subpixel_spacing_use_native_width_units() {
+        assert_eq!(stroke_dashes(vec![2., 1., 3.], 1.).unwrap(), (vec![5., 1.], 3.));
+        assert_eq!(stroke_dashes(vec![4., 2.], 0.5).unwrap(), (vec![8., 4.], 0.));
+        assert_eq!(stroke_dashes(vec![4., 2.], 2.).unwrap(), (vec![4., 2.], 0.));
+    }
+
+    #[test]
+    fn inactive_invalid_miter_does_not_discard_an_editable_fill() {
+        let mut bytes = Vec::new();
+        for value in [0, 72, 1, 0] {
+            u(&mut bytes, value);
+        }
+        for _ in 0..2 {
+            u(&mut bytes, 0);
+            u(&mut bytes, 1);
+            string(&mut bytes, "R'G'B'A u8");
+            u(&mut bytes, 4);
+            bytes.extend([0, 255, 0, 255]);
+            u(&mut bytes, 0);
+            u(&mut bytes, 0);
+        }
+        for value in [1f32.to_bits(), 0, 0, 0.5f32.to_bits(), 0] {
+            u(&mut bytes, value);
+        }
+        let shape = vector_style(&bytes).unwrap().shape;
+        assert_eq!(shape.fill, Some(Fill::Solid(Color::rgba(0., 1., 0., 1.))));
+        assert!(shape.stroke.is_none());
+        bytes[12..16].copy_from_slice(&1u32.to_be_bytes());
+        assert!(vector_style(&bytes).is_err());
+    }
+
+    #[test]
+    fn single_anchor_closed_cubic_preserves_both_halves() {
+        let knot = Knot { anchor: Point::new(0., 0.), in_ctrl: Point::new(0., 8.), out_ctrl: Point::new(8., 0.), smooth: false };
+        let path = native_path(vec![Subpath { knots: vec![knot], closed: true, ..Default::default() }]);
+        let knots = &path.subpaths[0].knots;
+        assert_eq!(knots.len(), 2);
+        assert_eq!(knots[0].in_ctrl, Point::new(0., 4.));
+        assert_eq!(knots[0].out_ctrl, Point::new(4., 0.));
+        assert_eq!(knots[1].in_ctrl, Point::new(4., 2.));
+        assert_eq!(knots[1].anchor, Point::new(3., 3.));
+        assert_eq!(knots[1].out_ctrl, Point::new(2., 4.));
+    }
+
+    #[test]
+    fn standalone_path_tattoo_requires_an_exact_word() {
+        for (data, valid) in [(7u32.to_be_bytes().to_vec(), true), ([7u32.to_be_bytes(), 9u32.to_be_bytes()].concat(), false)] {
+            let mut payload = Vec::new();
+            u(&mut payload, 20);
+            u(&mut payload, data.len() as u32);
+            payload.extend(data);
+            for value in [0, 0, 1, 0] {
+                u(&mut payload, value);
+            }
+            let mut bytes = vec![0; 4];
+            string(&mut bytes, "Saved path");
+            u(&mut bytes, payload.len() as u32);
+            bytes.extend(payload);
+            let decoded = standalone(&Cursor { b: &bytes, pos: 0, wide: true }, 4);
+            if valid {
+                assert_eq!(decoded.unwrap().tattoo, Some(7));
+            } else {
+                assert!(decoded.is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn saved_path_parasite_scan_observes_cancellation_between_records() {
+        let mut bytes = Vec::new();
+        for value in [1, 0, 1] {
+            u(&mut bytes, value);
+        }
+        string(&mut bytes, "Vector");
+        for value in [0, 0, 0, 4, 0] {
+            u(&mut bytes, value);
+        }
+        for _ in 0..4 {
+            string(&mut bytes, "Opaque data");
+            u(&mut bytes, 0);
+            u(&mut bytes, 0);
+        }
+        let polls = std::sync::atomic::AtomicUsize::new(0);
+        let cancel = || polls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 2;
+        let ctl = photocraft_raster::Interrupt::cancel_only(&cancel);
+        assert!(matches!(vectors_with_work(&bytes, &mut DecodeWork::default(), &ctl), Err(crate::IoError::Cancelled)));
+    }
+
     /// Compare profiled and grayscale vector paints with the shared native CMS conversion and reject ambiguous encodings.
     #[test]
     fn portable_profiled_and_gray_vector_paints_use_native_cms() {
@@ -730,7 +870,7 @@ mod tests {
         string(&mut b, "");
         let mut cursor = Cursor { b: &b, pos: 0, wide: false };
         let mut notes = Vec::new();
-        let actual = paint(&mut cursor, &mut notes).unwrap();
+        let actual = paint(&mut cursor, true, &mut notes).unwrap().unwrap();
         let transform = craft_cms::Transform::new(
             craft_cms::Builtin::DisplayP3.profile(),
             craft_cms::Builtin::Srgb.profile(),
@@ -754,7 +894,9 @@ mod tests {
         gray.extend([128, 64]);
         u(&mut gray, 0);
         string(&mut gray, "");
-        let Fill::Solid(gray) = paint(&mut Cursor { b: &gray, pos: 0, wide: false }, &mut Vec::new()).unwrap() else { panic!("native gray paint") };
+        let Fill::Solid(gray) = paint(&mut Cursor { b: &gray, pos: 0, wide: false }, true, &mut Vec::new()).unwrap().unwrap() else {
+            panic!("native gray paint")
+        };
         assert!((gray.c[0] - gray.c[1]).abs() < 0.00001);
         assert_eq!(gray.alpha, 64. / 255.);
     }

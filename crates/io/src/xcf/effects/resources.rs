@@ -49,12 +49,7 @@ pub(in crate::xcf) fn literal_rgb(value: &ColorLiteral<'_>) -> Result<[f32; 4], 
         "Y' u8" | "Y~ u8" => (1, false, false, true),
         "YA u8" => (1, true, true, true),
         "Y u8" => (1, false, true, true),
-        _ => {
-            return Err(LiteralColorError::Other(format!(
-                "stored color encoding {} is not independently portable; native-endian float colors need source byte-order evidence",
-                value.encoding
-            )));
-        }
+        _ => return Err("stored color encoding is not independently portable; native-endian float colors need source byte-order evidence".into()),
     };
     if value.pixels.len() != channels + usize::from(alpha) {
         return Err("stored color byte count does not match its encoding".into());

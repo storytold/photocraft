@@ -99,3 +99,15 @@ fn modern_pixel_size_and_legacy_font_keep_device_spacing_but_modern_points_use_p
     assert_eq!(pixels.runs[0].style.leading_pt, Some(13.));
     assert_eq!(pixels.runs[0].style.leading_pt, legacy.runs[0].style.leading_pt);
 }
+
+#[test]
+fn base_letter_spacing_omits_the_source_dead_zone_but_markup_does_not() {
+    for spacing in [-0.101f64, -0.1, 0., 0.1, 0.101] {
+        let config = format!("(text \"AA\") (font-size 18) (letter-spacing {spacing})");
+        let style = &decode(config.as_bytes(), 72., (0, 0)).unwrap().layer.runs[0].style;
+        assert_eq!(style.tracking == 0., spacing.abs() <= 0.1, "spacing {spacing}");
+    }
+    let config = br#"(markup "<markup><span letter_spacing='1'>AA</span></markup>") (font-size 18) (letter-spacing 0.1)"#;
+    let style = &decode(config, 72., (0, 0)).unwrap().layer.runs[0].style;
+    assert!(style.tracking > 0.);
+}

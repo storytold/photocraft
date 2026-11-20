@@ -5,31 +5,10 @@ use photocraft_doc::import_conversion::ImportConversion;
 const META_ALLOWANCE: usize = 64 * 1024;
 
 fn image(bytes: &[u8]) -> Image<'_> {
-    Image {
-        c: Cursor { b: bytes, pos: 0, wide: true },
-        version: 26,
-        precision: Precision::GAMMA8,
-        sample_order: crate::HistoricalXcfSampleOrder::BigEndian,
-        compression: Compression::None,
-        base_type: 0,
-        colormap: Vec::new(),
-        budget: 16 + usize::try_from(photocraft_raster::tile_storage_bytes(Rect::new(0, 0, 1, 1), &PixelFormat::RGBA8)).unwrap(),
-        meta_budget: META_ALLOWANCE,
-        vector_style_work_left: crate::xcf::MAX_METADATA_BYTES,
-        effect_decode_work: Default::default(),
-        text_decode_work: Default::default(),
-        parasite_work: Default::default(),
-        point_text_work_left: crate::xcf::text::POINT_LAYOUT_WORK_UNITS,
-        warnings: Warnings::default(),
-        outcomes: conversion::Outcomes::new(26).unwrap(),
-        clipped_to_backdrop: 0,
-        initial_view: Default::default(),
-        resolution_dpi: 72.,
-        pending_effects: Vec::new(),
-        path_tattoos: HashMap::new(),
-        pending_vectors: Vec::new(),
-        native_color_error: None,
-    }
+    let mut image = super::tests::decoder_image(bytes);
+    image.meta_budget = META_ALLOWANCE;
+    image.budget = 16 + usize::try_from(photocraft_raster::tile_storage_bytes(Rect::new(0, 0, 1, 1), &PixelFormat::RGBA8)).unwrap();
+    image
 }
 
 fn owner(image: &mut Image<'_>, ordinal: usize) -> usize {

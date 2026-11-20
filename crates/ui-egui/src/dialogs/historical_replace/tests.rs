@@ -488,3 +488,32 @@ fn owns(fields: &serde_json::Map<String, Value>) -> bool {
 fn can_confirm(fields: &serde_json::Map<String, Value>) -> bool {
     matches!(fields.get("historicalXcfSampleOrder").and_then(Value::as_str), Some("little-endian" | "big-endian"))
 }
+
+#[test]
+fn relink_picker_reuses_identical_bytes_and_asks_for_different_source_bytes() {
+    let folder = tempfile::tempdir().unwrap();
+    let same = folder.path().join("same.xcf");
+    let different = folder.path().join("different.xcf");
+    let original = fixture::historical_pixel(false);
+    let changed = fixture::historical_pixel(true);
+    std::fs::write(&same, &original).unwrap();
+    std::fs::write(&different, &changed).unwrap();
+    let mut app =
+        app(vec![Some(contents(same.to_str().unwrap(), original)), Some(contents(different.to_str().unwrap(), changed))], HistoricalXcfSampleOrder::BigEndian);
+    let pick = |app: &mut PhotocraftApp| {
+        let ctx = egui::Context::default();
+        crate::menus::invoke(app, &ctx, "layer.smartObjects.relinkToFile", json!({})).unwrap();
+        app.poll_file_dialog();
+        app.poll_file_dialog();
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+    };
+    pick(&mut app);
+    assert!(dialogs(&app).is_empty());
+    assert!(matches!(&object(&app).source, SmartSource::Linked { path } if path == same.to_str().unwrap()));
+    pick(&mut app);
+    assert_eq!(dialogs(&app).iter().filter(|dialog| owns(&dialog.fields)).count(), 1);
+    assert!(matches!(&object(&app).source, SmartSource::Linked { path } if path == same.to_str().unwrap()));
+    choose(&mut app, "little-endian");
+    assert_eq!(object(&app).historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::LittleEndian));
+    assert!(matches!(&object(&app).source, SmartSource::Linked { path } if path == different.to_str().unwrap()));
+}

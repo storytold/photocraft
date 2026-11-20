@@ -64,7 +64,7 @@ fn set_expanded(s: &mut Session, p: &Value) -> Result<Value> {
     let expanded = want.unwrap_or(!current);
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     // Copy-on-write: history snapshots keep their own state (layers share tiles, so this is cheap).
-    let doc = Arc::make_mut(&mut st.doc);
+    let doc = Arc::make_mut(st.doc_mut());
     let changed = if all {
         set_all(&mut doc.layers, expanded)
     } else {

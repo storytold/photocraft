@@ -145,6 +145,7 @@ struct Image<'a> {
     /// copy per reference, multiplying a small file into gigabytes of retained metadata.
     meta_budget: usize,
     vector_style_work_left: usize,
+    link_work_left: usize,
     /// Nonrefundable effect decoding work shared across all drawable/coverage owners.
     effect_decode_work: effects::DecodeWork,
     /// Nonrefundable configuration and inherited attribute work across all text owners.
@@ -338,6 +339,9 @@ impl<'a> Image<'a> {
                 return Err(invalid("the tile list ends before every tile"));
             }
             tiles.push(p);
+        }
+        if l.ptr_wire()? != 0 {
+            return Err(invalid("the tile list is missing its zero terminator"));
         }
         let mut data = allocate_samples(count)?;
         let mut underflow = false;
@@ -1058,10 +1062,12 @@ fn import_with_sample_order_and_parasite_work(
     let mut omitted_paths: Option<(usize, usize)> = None;
     if version >= 18 {
         loop {
-            let pointer = c.ptr()?;
+            let pointer = c.ptr_wire()?;
             if pointer == 0 {
                 break;
             }
+            // An unaddressable offset is invalid optional path data, like any offset outside the file.
+            let pointer = usize::try_from(pointer).unwrap_or(usize::MAX);
             if path_ptrs.len() == MAX_CHANNELS {
                 let omitted = omitted_paths.get_or_insert((pointer, 0));
                 omitted.1 = omitted.1.saturating_add(1);
@@ -1085,6 +1091,7 @@ fn import_with_sample_order_and_parasite_work(
         budget: MAX_PIXEL_BYTES,
         meta_budget: MAX_METADATA_BYTES,
         vector_style_work_left: MAX_METADATA_BYTES,
+        link_work_left: MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),
         parasite_work,
@@ -1145,6 +1152,19 @@ fn import_with_sample_order_and_parasite_work(
             format!("Explicit {sample_order} sample byte order selected before decoding; structural fields remain big-endian. Native samples retain their declared precision and source transfer curve"),
         )?;
     }
+    let mut document = Document::new(name, Size::new(w, h), mode, depth);
+    metadata::image_with_work(
+        &mut document,
+        &image_props,
+        version,
+        &mut image.initial_view,
+        &mut image.outcomes,
+        image_outcome,
+        &mut image.meta_budget,
+        &mut image.warnings,
+        &mut image.parasite_work,
+        ctl,
+    )?;
     for property in &image_props {
         if property.kind == 21 {
             let handled: &[&str] = if fallback_reason.is_some() { &[] } else { &["icc-profile"] };
@@ -1170,22 +1190,9 @@ fn import_with_sample_order_and_parasite_work(
     let (layers, linear_compositing) = image.import_layers(&layer_ptrs, fmt, mask_fmt, ctl)?;
     let (channels, selection) = image.import_channels(&channel_ptrs, mask_fmt, ctl)?;
 
-    let mut document = Document::new(name, Size::new(w, h), mode, depth);
     document.layers = layers.into();
     document.channels = channels;
     document.selection = selection;
-    metadata::image_with_work(
-        &mut document,
-        &image_props,
-        version,
-        &mut image.initial_view,
-        &mut image.outcomes,
-        image_outcome,
-        &mut image.meta_budget,
-        &mut image.warnings,
-        &mut image.parasite_work,
-        ctl,
-    )?;
     document.icc_profile = tag_document.then(|| native_profile.clone());
     let mut color_outcome = color_encoding_outcome(assigned_profile, precision, fallback_reason, tag_document);
     if parasites_limited {
@@ -1250,9 +1257,9 @@ fn color_encoding_outcome(assigned_profile: bool, precision: Precision, fallback
 /// Report native compositing differences without changing imported content or its durable conversion report.
 fn add_document_warnings(image: &mut Image<'_>, document: &Document, precision: Precision, linear_compositing: bool) {
     // The reference editor clips non-Normal layers to underlying coverage, showing nothing
-    // where underlying layers are transparent; PhotoCraft shows them. Only tell when there is
-    // transparency to show through: a bottom layer that is not opaque.
-    if image.clipped_to_backdrop > 0 && document.layers.first().is_some_and(|l| !l.locks.transparency || l.is_group()) {
+    // where underlying layers are transparent; PhotoCraft shows them. A locked layer may
+    // still have transparent pixels or cover only part of the canvas.
+    if image.clipped_to_backdrop > 0 {
         image.warnings.note(&format!(
             "{} layer(s) use a mode clipped to underlying coverage in the reference editor; PhotoCraft shows the layer where underlying layers are transparent",
             image.clipped_to_backdrop

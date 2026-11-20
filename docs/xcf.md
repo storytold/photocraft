@@ -9,12 +9,12 @@ use the same enhanced import in `photocraft-io` (`crates/io/src/xcf.rs`). This a
 ## Historical sample byte order
 
 Unmarked XCF versions 7–11 with multi-byte samples require the byte order used when the file was
-saved. Select **Little-endian** or **Big-endian** when the desktop Open or Replace Contents workflow
-asks. The choice applies to that source.
+saved. Select **Little-endian** or **Big-endian** when desktop Open, Replace Contents, or Relink to File asks. Relink keeps the previous choice when the source bytes match.
 
 For CLI Convert, Info, Run, and Batch, pass `--historical-xcf-sample-order little-endian` or
-`--historical-xcf-sample-order big-endian`. For automated Open such as MCP `doc.open` or desktop
-control `app.open`, set `historicalXcfSampleOrder` to `"little-endian"` or `"big-endian"`.
+`--historical-xcf-sample-order big-endian`. For MCP `doc_open`, use `historical_xcf_sample_order`.
+For desktop control `app.open`, use `historicalXcfSampleOrder`. Both parameters accept
+`"little-endian"` or `"big-endian"`.
 
 ## Decoder ownership
 

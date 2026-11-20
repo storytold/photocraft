@@ -61,6 +61,7 @@ fn image(bytes: &[u8], work: DecodeWork) -> Image<'_> {
         budget: MAX_PIXEL_BYTES,
         meta_budget: MAX_METADATA_BYTES,
         vector_style_work_left: crate::xcf::MAX_METADATA_BYTES,
+        link_work_left: crate::xcf::MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         parasite_work: Default::default(),
         text_decode_work: work,

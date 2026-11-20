@@ -808,8 +808,8 @@ pub(crate) fn finish_open_with_held(
     {
         let read_only = st.source_read_only;
         let initial_view = v.get("hasInitialView").and_then(Value::as_bool).unwrap_or(false).then(|| photocraft_io::NativeInitialView {
-            selected_layers: st.selected_layers.clone(),
-            active_layer: st.active_layer,
+            selected_layers: st.selection().to_vec(),
+            active_layer: st.active_layer(),
             target: match st.channel_view.target {
                 photocraft_engine::channel_cmds::ChannelTarget::LayerMask => photocraft_io::NativeImportTarget::LayerMask,
                 photocraft_engine::channel_cmds::ChannelTarget::Alpha(index) => photocraft_io::NativeImportTarget::AlphaChannel(index),
@@ -826,7 +826,7 @@ pub(crate) fn finish_open_with_held(
         // Its channel target, rather than the pending import's mask, owns the tool palette.
         app.session.sync_tools_mask_target();
         app.sync_views();
-        let doc = Arc::try_unwrap(st.doc).unwrap_or_else(|d| (*d).clone());
+        let doc = Arc::try_unwrap(st.into_document()).unwrap_or_else(|d| (*d).clone());
         crate::open_prompt::arrive(app, held(doc, read_only, initial_view, None, true));
         return Ok(Some(document));
     }

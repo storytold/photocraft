@@ -15,6 +15,7 @@ fn unsupported_vector_encoding_does_not_duplicate_unbounded_source_text() {
     bytes.extend_from_slice(&0u32.to_be_bytes()); // No resource.
     let mut cursor = Cursor { b: &bytes, pos: 0, wide: false };
     let mut notes = Vec::new();
-    paint(&mut cursor, &mut notes).unwrap();
-    assert!(notes.iter().map(String::len).sum::<usize>() <= 512, "one source encoding must not become retained diagnostic payload");
+    let error = paint(&mut cursor, true, &mut notes).unwrap_err();
+    assert!(matches!(error, crate::IoError::Unsupported(_)));
+    assert!(error.to_string().len() <= 512, "one source encoding must not become retained diagnostic payload");
 }

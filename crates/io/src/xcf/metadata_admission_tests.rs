@@ -4,31 +4,9 @@ use super::*;
 use photocraft_doc::import_conversion::ImportConversion;
 
 fn image(bytes: &[u8], metadata: usize) -> Image<'_> {
-    Image {
-        c: Cursor { b: bytes, pos: 0, wide: true },
-        version: 26,
-        precision: Precision::GAMMA8,
-        sample_order: crate::HistoricalXcfSampleOrder::BigEndian,
-        compression: Compression::None,
-        base_type: 0,
-        colormap: Vec::new(),
-        budget: MAX_PIXEL_BYTES,
-        meta_budget: metadata,
-        vector_style_work_left: crate::xcf::MAX_METADATA_BYTES,
-        effect_decode_work: Default::default(),
-        text_decode_work: Default::default(),
-        parasite_work: Default::default(),
-        point_text_work_left: crate::xcf::text::POINT_LAYOUT_WORK_UNITS,
-        warnings: Warnings::default(),
-        outcomes: conversion::Outcomes::new(26).unwrap(),
-        clipped_to_backdrop: 0,
-        initial_view: Default::default(),
-        resolution_dpi: 72.,
-        pending_effects: Vec::new(),
-        path_tattoos: HashMap::new(),
-        pending_vectors: Vec::new(),
-        native_color_error: None,
-    }
+    let mut image = super::tests::decoder_image(bytes);
+    image.meta_budget = metadata;
+    image
 }
 
 fn layer(w: &mut W, name: &str, properties: &[(u32, Vec<u8>)], mask: usize) -> usize {

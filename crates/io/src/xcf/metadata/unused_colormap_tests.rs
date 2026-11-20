@@ -89,3 +89,22 @@ fn palette_ignoring_never_ignores_truncated_declared_property_framing() {
     let indexed = source(2, u32::MAX.to_be_bytes().to_vec());
     assert!(crate::xcf::source_geometry("indexed.xcf", &indexed, &photocraft_raster::Interrupt::NONE).is_err());
 }
+
+#[test]
+fn legacy_short_palette_lengths_leave_rgb_and_gray_drawables_aligned() {
+    for base in [0, 1] {
+        let mut encoded = source(base, vec![0, 0, 0, 2, 17, 31, 57, 23, 41, 73]);
+        let mut c = crate::xcf::Cursor { b: &encoded, pos: 30, wide: true };
+        assert_eq!(c.u32().unwrap(), 17);
+        let length = c.u32().unwrap() as usize;
+        c.skip(length).unwrap();
+        assert_eq!(c.u32().unwrap(), 1);
+        let length_slot = c.pos;
+        assert_eq!(c.u32().unwrap(), 10);
+        encoded[length_slot..length_slot + 4].copy_from_slice(&6u32.to_be_bytes());
+        let result = crate::import("legacy-palette.xcf", &encoded).unwrap();
+        let expected = if base == 1 { vec![73. / 255., 128. / 255.] } else { vec![17. / 255., 31. / 255., 57. / 255., 128. / 255.] };
+        assert_eq!(result.document.layers[0].surface().unwrap().pixel(0, 0), expected);
+        assert_eq!(crate::xcf::source_geometry("legacy-palette.xcf", &encoded, &photocraft_raster::Interrupt::NONE).unwrap(), Some(((1., 1.), 72.)));
+    }
+}

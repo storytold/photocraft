@@ -117,6 +117,7 @@ fn text_shape_smart_raw_blocks_survive() {
         LayerContent::Smart(SmartObject {
             contents_id: SmartContentsId::fresh(),
             historical_xcf_sample_order: None,
+            historical_xcf_link_digest: None,
             vector_preview: None,
             source: SmartSource::Linked { path: String::new() },
             transform: photocraft_geom::Affine::IDENTITY,

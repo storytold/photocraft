@@ -239,3 +239,16 @@ fn retained_linked_xcf_geometry_uses_header_without_decoding_drawables() {
         assert!(ex.smart.composites.is_empty());
     }
 }
+
+#[test]
+fn unfiltered_historical_export_uses_geometry_without_decoding_drawables() {
+    let mut bytes = xcf(true);
+    bytes.truncate(59); // Valid prefix and geometry; no layer bytes can be decoded.
+    let source = SmartSource::Embedded { file_name: "header-only.xcf".into(), bytes: Arc::new(bytes.clone()) };
+    assert!(crate::smart_xcf_order::decode("header-only.xcf", &bytes, Some(Order::LittleEndian), &Interrupt::NONE).is_err());
+    let doc = document(source, Some(Order::LittleEndian));
+    let file = document_to_psd(&doc).unwrap();
+    let record = &file.layer_info.as_ref().unwrap().layers[0];
+    let placed = crate::smart_map::parse_sold(&record.block(b"SoLd").unwrap().data).unwrap();
+    assert_eq!(crate::smart_map::stored_size(&placed.descriptor), Some((1., 1.)));
+}

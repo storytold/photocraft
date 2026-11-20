@@ -1,7 +1,7 @@
 use super::filters::{smart, smart_mut};
 use super::placing::detach_psd;
 use super::rendering::{refresh, refresh_or_fail, unapplied_filters};
-use super::source::{authorized_source_bytes, source_bytes};
+use super::source::{authorized_source_bytes, embedded_source_bytes, source_bytes};
 use super::{
     Arc, DocId, Document, EngineError, LayerContent, LayerId, Metadata, Result, Session, SmartContentsId, SmartLink, SmartSource, Value, bad, base_name,
     decode_source_with_order, encode_source, json, layer_param, other,
@@ -16,23 +16,62 @@ fn instances(doc: &Document, contents_id: SmartContentsId) -> Vec<LayerId> {
     doc.walk().into_iter().filter_map(|(_, _, l)| matches!(&l.content, LayerContent::Smart(sm) if sm.contents_id == contents_id).then_some(l.id)).collect()
 }
 
+const RELINK: &str = "layer.smartObjects.relinkToFile";
+
+/// An existing interpretation can carry over only when the picked source bytes match.
+pub fn relink_sample_order(s: &Session, id: LayerId, candidate: &[u8]) -> Result<Option<photocraft_doc::HistoricalXcfSampleOrder>> {
+    let state = s.active().ok_or(EngineError::NoDocument)?;
+    let doc = state.doc();
+    let old = smart(doc, id)?;
+    let Some(order) = old.historical_xcf_sample_order else { return Ok(None) };
+    let same = if let Some(digest) = old.historical_xcf_link_digest {
+        digest == *blake3::hash(candidate).as_bytes()
+    } else {
+        embedded_source_bytes(&doc.metadata, &old.source).is_some_and(|(_, bytes)| bytes.as_slice() == candidate)
+    };
+    Ok(same.then_some(order))
+}
+
+pub(super) fn relink_to_file(s: &mut Session, p: &Value) -> Result<Value> {
+    let explicit = p.get("historicalXcfSampleOrder").map(|_| crate::file_cmds::historical_xcf_sample_order(p, RELINK)).transpose()?;
+    let path = path_param(RELINK, p)?.to_string();
+    let id = layer_param(s, p)?;
+    let state = s.active().ok_or(EngineError::NoDocument)?;
+    let needs_identity = explicit.map_or_else(|| smart(state.doc(), id).map(|old| old.historical_xcf_sample_order.is_some()), |order| Ok(order.is_some()))?;
+    let (order, digest) = if needs_identity {
+        let resolved = crate::doc_path::resolve(&path).map_err(|error| crate::doc_path::refusal("link", &path, error))?;
+        let bytes = photocraft_format::read_file(&resolved).map_err(|error| other(format!("can't read {path}: {error}")))?;
+        let order = match explicit {
+            Some(explicit) => explicit,
+            None => relink_sample_order(s, id, &bytes)?,
+        };
+        (order, order.map(|_| *blake3::hash(&bytes).as_bytes()))
+    } else {
+        (None, None)
+    };
+    set_shared_source(s, id, "Relink to File", false, SmartSource::Linked { path }, order, digest)
+}
+
 /// Swaps shared contents, keeping each instance's transform and filters, and re-renders.
-/// Only Relink supplies an override: `None` preserves the interpretation; `Some(None)`
-/// explicitly clears it. Storage conversions must not reinterpret unchanged source bytes.
+/// Storage conversions preserve the interpretation of unchanged source bytes.
 pub(super) fn set_source(
     s: &mut Session,
     p: &Value,
     label: &str,
     keep_psd: bool,
-    order_override: Option<Option<photocraft_doc::HistoricalXcfSampleOrder>>,
     make: impl FnOnce(&Metadata, &SmartSource) -> Result<SmartSource>,
 ) -> Result<Value> {
     let id = layer_param(s, p)?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let old = smart(doc, id)?;
-    let order = order_override.unwrap_or(old.historical_xcf_sample_order);
+    let order = old.historical_xcf_sample_order;
     let new = make(&doc.metadata, &old.source)?;
-    set_shared_source(s, id, label, keep_psd, new, order)
+    let digest = if order.is_some() && matches!(new, SmartSource::Linked { .. }) {
+        old.historical_xcf_link_digest.or_else(|| embedded_source_bytes(&doc.metadata, &old.source).map(|(_, bytes)| *blake3::hash(&bytes).as_bytes()))
+    } else {
+        None
+    };
+    set_shared_source(s, id, label, keep_psd, new, order, digest)
 }
 
 // Keep the shared-instance transaction out of the per-command source-builder instantiations.
@@ -43,6 +82,7 @@ fn set_shared_source(
     keep_psd: bool,
     new: SmartSource,
     historical_xcf_sample_order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+    historical_xcf_link_digest: Option<[u8; 32]>,
 ) -> Result<Value> {
     let (parent, contents_id, changed, warnings) = s.edit(label, |doc, _| {
         let contents_id = smart(doc, id)?.contents_id;
@@ -52,6 +92,7 @@ fn set_shared_source(
             let sm = smart_mut(doc, instance)?;
             sm.source = new.clone();
             sm.historical_xcf_sample_order = historical_xcf_sample_order;
+            sm.historical_xcf_link_digest = historical_xcf_link_digest;
             if !keep_psd {
                 detach_psd(doc.layer_mut(instance).ok_or(EngineError::NoLayer(instance))?);
             }
@@ -98,7 +139,7 @@ fn replace_contents_bytes_with_order(
     order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
 ) -> Result<Value> {
     decode_source_with_order(file_name, &bytes, order)?; // fail before touching the document
-    set_shared_source(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes: Arc::new(bytes) }, order)
+    set_shared_source(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes: Arc::new(bytes) }, order, None)
 }
 
 /// The file name and bytes of smart object `id`'s contents.
@@ -185,6 +226,7 @@ pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
             let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
             sm.source = SmartSource::Embedded { file_name: format!("{stem}.pcraft"), bytes: bytes.clone() };
             sm.historical_xcf_sample_order = None;
+            sm.historical_xcf_link_digest = None;
             detach_psd(doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?);
             refresh_or_fail(doc, id)?;
         }

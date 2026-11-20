@@ -12,7 +12,7 @@ fn gzip(bytes: &[u8]) -> Vec<u8> {
 fn session(depth: u64) -> Session {
     let mut session = Session::new();
     session.execute("file.new", json!({"width": 32, "height": 32, "depth": depth})).unwrap();
-    Arc::make_mut(&mut session.active_mut().unwrap().doc).icc_profile = Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes());
+    Arc::make_mut(session.active_mut().unwrap().doc_mut()).icc_profile = Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes());
     session
 }
 

@@ -317,29 +317,24 @@ pub(super) fn retained_allocation(layer: &TextLayer) -> usize {
 /// Decode supported hexadecimal markup colors and optional alpha; malformed widths or digits fail rather than becoming a default color.
 fn hex_color(text: &str) -> Result<Color> {
     let text = text.strip_prefix('#').ok_or_else(|| crate::IoError::Unsupported("named markup colors need an explicit native color-name mapping".into()))?;
-    let alpha = if text.len() == 8 {
-        Some(
-            u8::from_str_radix(text.get(6..8).ok_or_else(|| invalid("invalid markup alpha range"))?, 16)
-                .map_err(|_| invalid("invalid markup hexadecimal alpha"))?,
-        )
-    } else {
-        None
-    };
-    let text = if alpha.is_some() { text.get(..6).ok_or_else(|| invalid("invalid markup RGB range"))? } else { text };
-    let width = match text.len() {
-        3 => 1,
-        6 => 2,
-        12 => 4,
+    let (width, channels) = match text.len() {
+        3 => (1, 3),
+        4 => (1, 4),
+        6 => (2, 3),
+        8 => (2, 4),
+        9 => (3, 3),
+        12 => (4, 3),
+        16 => (4, 4),
         _ => return Err(invalid("unsupported markup color length")),
     };
-    let mut rgb = [0.0; 3];
+    let mut rgba = [1.0; 4];
     let denominator = ((1u32 << (width * 4)) - 1) as f32;
-    for (i, value) in rgb.iter_mut().enumerate() {
+    for (i, value) in rgba.iter_mut().take(channels).enumerate() {
         let s = text.get(i * width..(i + 1) * width).ok_or_else(|| invalid("markup color is not ASCII hexadecimal"))?;
         *value = u32::from_str_radix(s, 16).map_err(|_| invalid("invalid markup color"))? as f32 / denominator;
     }
-    let [r, g, b] = rgb;
-    Ok(Color::rgba(r, g, b, alpha.map_or(1., |alpha| f32::from(alpha) / 255.)))
+    let [r, g, b, a] = rgba;
+    Ok(Color::rgba(r, g, b, a))
 }
 
 /// Pango names are CSS color values plus the X11 numbered-name vocabulary.
@@ -603,7 +598,9 @@ pub(super) fn decode_with_work(
         );
     }
     // Base letter spacing is a device-pixel distance, independently of the font-size unit.
-    let tracking_pt = device_points(number(&fields, "letter-spacing", 0.0, -8192.0, 8192.0)?, dpi)?;
+    // GIMP omits base spacing within 0.1 px of zero. Explicit markup has no such threshold.
+    let spacing = number(&fields, "letter-spacing", 0.0, -8192.0, 8192.0)?;
+    let tracking_pt = if spacing.abs() > 0.1 { device_points(spacing, dpi)? } else { 0.0 };
     style.tracking = (f64::from(tracking_pt) * 1000.0 / f64::from(size_pt)) as f32;
     if !style.tracking.is_finite() {
         return Err(invalid("native text tracking exceeds finite bounds"));
@@ -654,14 +651,10 @@ pub(super) fn decode_with_work(
                 }
                 match super::effects::literal_rgb(&super::effects::ColorLiteral { encoding, pixels: bytes, profile }) {
                     Ok([r, g, b, a]) => style.color = Color::rgba(r, g, b, a),
-                    Err(error @ super::effects::LiteralColorError::GrayLabPcsTransfer) => return Err(crate::IoError::Unsupported(error.to_string())),
-                    Err(message) => note(&mut notes, format!("Source text color retained; native black approximation used: {message}")),
+                    Err(error) => return Err(crate::IoError::Unsupported(format!("source text color cannot be translated: {error}"))),
                 }
             }
-            _ => note(
-                &mut notes,
-                "Binary or profiled source text color retained; native black used because source byte order/color space is not declared".into(),
-            ),
+            _ => return Err(crate::IoError::Unsupported("source text color format cannot be translated".into())),
         }
     }
     let para = ParagraphStyle {
@@ -763,7 +756,7 @@ pub(super) fn decode_with_work(
                 return Err(invalid("duplicate markup font identity"));
             }
         }
-        let (text, runs) = markup_runs_in_file(source, &style, &fonts, dpi, &mut notes, &mut decode_work.attributes)?;
+        let (text, runs) = markup_runs_in_file(source, &style, &fonts, dpi, &mut notes, &mut decode_work.attributes, ctl)?;
         layer.text = text;
         layer.runs = runs;
     } else {
@@ -1302,7 +1295,7 @@ fn inspect_markup_attributes<'a, 'input: 'a>(ancestor: roxmltree::Node<'a, 'inpu
 /// DTD, namespaced reinterpretation and materialized style amplification are rejected.
 #[cfg(test)]
 fn markup_runs(markup: &str, base: &CharStyle, fonts: &HashMap<String, CharStyle>, dpi: f64, notes: &mut Vec<String>) -> Result<(String, Vec<TextRun>)> {
-    markup_runs_in_file(markup, base, fonts, dpi, notes, &mut DecodeWork::default().attributes)
+    markup_runs_in_file(markup, base, fonts, dpi, notes, &mut DecodeWork::default().attributes, &photocraft_raster::Interrupt::NONE)
 }
 
 fn markup_runs_in_file(
@@ -1312,6 +1305,7 @@ fn markup_runs_in_file(
     dpi: f64,
     notes: &mut Vec<String>,
     shared: &mut AttributeWork,
+    ctl: &photocraft_raster::Interrupt<'_>,
 ) -> Result<(String, Vec<TextRun>)> {
     let mut work = MarkupWork::new();
     work.shared = Some(shared);
@@ -1328,13 +1322,14 @@ fn markup_runs_in_file(
             }
         });
     }
-    markup_runs_with_attribute_allowance(markup, base, fonts, dpi, notes, &mut work)
+    markup_runs_with_attribute_allowance(markup, base, fonts, dpi, notes, &mut work, ctl)
 }
 
 /// Fence duplicate-attribute and deep-tree parser work before constructing a DOM.
 /// Later native-style budgets cannot protect work the XML reader already spent.
-fn parse_markup_with<'a, T>(markup: &'a str, parse: impl FnOnce(&'a str) -> Result<T>) -> Result<T> {
-    super::xml_work::admit(markup, "source text markup", super::MAX_STRING, MAX_DEPTH, &photocraft_raster::Interrupt::NONE)?;
+fn parse_markup_with<'a, T>(markup: &'a str, ctl: &photocraft_raster::Interrupt<'_>, parse: impl FnOnce(&'a str) -> Result<T>) -> Result<T> {
+    super::xml_work::admit(markup, "source text markup", super::MAX_STRING, MAX_DEPTH, ctl)?;
+    ctl.check().map_err(|_| crate::IoError::Cancelled)?;
     parse(markup)
 }
 
@@ -1345,8 +1340,9 @@ fn markup_runs_with_attribute_allowance(
     dpi: f64,
     notes: &mut Vec<String>,
     work: &mut MarkupWork<'_>,
+    ctl: &photocraft_raster::Interrupt<'_>,
 ) -> Result<(String, Vec<TextRun>)> {
-    let xml = parse_markup_with(markup, |markup| {
+    let xml = parse_markup_with(markup, ctl, |markup| {
         roxmltree::Document::parse_with_options(markup, roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES as u32, ..Default::default() })
             .map_err(|e| invalid(format!("invalid source text markup: {e}")))
     })?;
@@ -1362,6 +1358,7 @@ fn markup_runs_with_attribute_allowance(
         }
     });
     for node in xml.descendants().filter(roxmltree::Node::is_text) {
+        ctl.check().map_err(|_| crate::IoError::Cancelled)?;
         let value = node.text().unwrap_or("");
         charge_style_copy(style_allocation(base), &mut allowance, work.shared.as_deref_mut())?;
         let mut style = base.clone();
@@ -1378,6 +1375,7 @@ fn markup_runs_with_attribute_allowance(
             return Err(invalid("text markup nesting exceeds limit"));
         }
         for ancestor in ancestors.iter().rev() {
+            ctl.check().map_err(|_| crate::IoError::Cancelled)?;
             style.size_pt = unscaled_size;
             let inherited = inspect_markup_attributes(*ancestor, work)?;
             if let Some(requested) = inherited.font {
@@ -1514,7 +1512,13 @@ fn markup_runs_with_attribute_allowance(
                             note(notes, format!("Source text transform {} remains inert", diagnostic_value(a.value())));
                         }
                     },
-                    "strikethrough" => style.strikethrough = a.value() == "true",
+                    "strikethrough" => {
+                        style.strikethrough = match a.value() {
+                            "true" | "yes" | "t" | "y" => true,
+                            "false" | "no" | "f" | "n" => false,
+                            _ => return Err(invalid("invalid Pango strikethrough value")),
+                        };
+                    }
                     "foreground" | "fgcolor" | "color" => {
                         let color = markup_color(a.value())?;
                         style.color.c = color.c;

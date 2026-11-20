@@ -192,7 +192,7 @@ pub(crate) fn place_copy(doc: &mut Document, id: LayerId) -> Result<(i32, i32)> 
 /// Alt-drag copy of a plain layer must stay exportable to .atn (#7200).
 pub(crate) fn recorded_duplicate(s: &Session, mut p: Value) -> Value {
     let Some(st) = s.active() else { return p };
-    if st.selected_layers().into_iter().any(|id| st.doc.layer(id).is_some_and(|l| l.artboard().is_some())) {
+    if st.selected_layers().iter().copied().any(|id| st.doc.layer(id).is_some_and(|l| l.artboard().is_some())) {
         return p;
     }
     if let Some(fields) = p.as_object_mut() {

@@ -11,7 +11,7 @@ fn attributes(count: usize) -> String {
 }
 
 fn parsed_elements(markup: &str, calls: &Cell<usize>) -> Result<usize> {
-    parse_markup_with(markup, |source| {
+    parse_markup_with(markup, &photocraft_raster::Interrupt::NONE, |source| {
         calls.set(calls.get() + 1);
         let xml = roxmltree::Document::parse_with_options(
             source,
@@ -28,7 +28,7 @@ fn twenty_thousand_attributes_never_reach_the_dom_parser() {
     assert!(markup.len() < super::super::MAX_STRING);
     let calls = Cell::new(0);
     // A spy deliberately replaces the quadratic parser in the negative control.
-    let result = parse_markup_with(&markup, |_| {
+    let result = parse_markup_with(&markup, &photocraft_raster::Interrupt::NONE, |_| {
         calls.set(calls.get() + 1);
         Ok(())
     });
@@ -126,7 +126,7 @@ fn inherited_namespace_amplification_never_reaches_the_dom_parser() {
     assert!(!craft_svg::guard::too_wide(&markup, 256, 1 << 20), "local attribute widths alone admit the hostile inherited work");
     assert!(!craft_svg::guard::deeper_than(&markup, MAX_DEPTH));
     let calls = Cell::new(0);
-    let result = parse_markup_with(&markup, |_| {
+    let result = parse_markup_with(&markup, &photocraft_raster::Interrupt::NONE, |_| {
         calls.set(calls.get() + 1);
         Ok(())
     });
@@ -143,10 +143,37 @@ fn shallow_namespace_insertions_never_reach_the_dom_parser() {
     markup.push_str("</markup>");
     assert!(!craft_svg::guard::too_wide(&markup, 256, 1 << 20));
     let calls = Cell::new(0);
-    let result = parse_markup_with(&markup, |_| {
+    let result = parse_markup_with(&markup, &photocraft_raster::Interrupt::NONE, |_| {
         calls.set(calls.get() + 1);
         Ok(())
     });
     assert!(matches!(result, Err(crate::IoError::Unsupported(message)) if message.contains("XML namespace-parse")));
     assert_eq!(calls.get(), 0, "a shallow tree can still cause quadratic sorted namespace insertion");
+}
+
+#[test]
+fn cancellation_prevents_dom_parse_and_interrupts_the_style_walk() {
+    use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+    let markup = "<markup><span weight='bold'>first</span><span foreground='#fff'>second</span></markup>";
+    let polls = AtomicUsize::new(0);
+    let stop = || polls.fetch_add(1, Relaxed) >= 3;
+    let ctl = photocraft_raster::Interrupt::cancel_only(&stop);
+    let result: Result<()> = parse_markup_with(markup, &ctl, |_| panic!("cancelled preflight must never build a DOM"));
+    assert!(matches!(result, Err(crate::IoError::Cancelled)));
+
+    polls.store(0, Relaxed);
+    let count = || {
+        polls.fetch_add(1, Relaxed);
+        false
+    };
+    let ctl = photocraft_raster::Interrupt::cancel_only(&count);
+    parse_markup_with(markup, &ctl, |_| Ok(())).unwrap();
+    let before_walk = polls.swap(0, Relaxed);
+    let stop = || polls.fetch_add(1, Relaxed) >= before_walk + 3;
+    let ctl = photocraft_raster::Interrupt::cancel_only(&stop);
+    let mut work = MarkupWork::new();
+    let initial_visits = work.visits_left;
+    let result = markup_runs_with_attribute_allowance(markup, &CharStyle::default(), &HashMap::new(), 72., &mut Vec::new(), &mut work, &ctl);
+    assert!(matches!(result, Err(crate::IoError::Cancelled)));
+    assert!(work.visits_left < initial_visits);
 }

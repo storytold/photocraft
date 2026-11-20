@@ -42,20 +42,19 @@ impl<'a> Cursor<'a> {
     }
 
     pub(super) fn ptr(&mut self) -> Result<usize> {
+        usize::try_from(self.ptr_wire()?).map_err(|_| invalid("pointer does not fit in memory"))
+    }
+
+    pub(super) fn ptr_wire(&mut self) -> Result<u64> {
         if self.wide {
             let s = self.take(8)?;
-            usize::try_from(u64::from_be_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]])).map_err(|_| invalid("pointer does not fit in memory"))
+            Ok(u64::from_be_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]))
         } else {
-            self.u32().map(|v| v as usize)
+            self.u32().map(u64::from)
         }
     }
 
-    /// A STRING: `n+1` then `n` bytes and a NUL (0 for the empty string).
-    pub(super) fn string(&mut self) -> Result<String> {
-        Ok(String::from_utf8_lossy(self.string_bytes()?).into_owned())
-    }
-
-    /// The same bounded STRING read without allocating or decoding an unused field.
+    /// A bounded STRING: `n+1` then `n` bytes and a NUL (0 for the empty string).
     pub(super) fn string_bytes(&mut self) -> Result<&'a [u8]> {
         let n = self.u32()? as usize;
         if n > MAX_STRING {
@@ -93,8 +92,8 @@ pub(super) fn props_version_with_interrupt<'a>(c: &mut Cursor<'a>, version: Opti
     props_charged(c, version, true, ctl, &mut |_| Ok(()))
 }
 
-/// Only indexed images consume a palette. Unused palette properties keep their
-/// declared framing, so corrupt palette counts cannot reinterpret following headers.
+/// Indexed images require a palette. Other image modes only repair recognized
+/// legacy lengths and otherwise retain the declared optional property framing.
 pub(super) fn props_image_with_interrupt<'a>(c: &mut Cursor<'a>, version: u32, indexed: bool, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Vec<Prop<'a>>> {
     props_charged(c, Some(version), indexed, ctl, &mut |_| Ok(()))
 }
@@ -168,11 +167,16 @@ pub(super) fn property_header(input: &mut impl PropertyInput, count: usize) -> R
 /// still unread, so the geometry probe can inspect DPI without retaining other properties.
 pub(super) fn property_payload(input: &mut impl PropertyInput, kind: u32, declared: usize, version: Option<u32>, indexed: bool) -> Result<usize> {
     let (length, prefix) = match (kind, version) {
-        // Old XCFs can declare n+4 for 3n+4 bytes. Non-indexed images do not consume this palette.
-        (1, _) if indexed => {
+        // Old XCFs can declare n+4 for 3n+4 bytes. For optional palettes, only
+        // repair that recognized length when the count fits an XCF colormap.
+        (1, _) if indexed || declared >= 4 => {
             let colors = input.word()? as usize;
-            let length = colors.checked_mul(3).and_then(|n| n.checked_add(4)).ok_or_else(|| invalid("colormap overflow"))?;
-            (length, 4)
+            if !indexed && (colors > 256 || declared != colors + 4) {
+                (declared, 4)
+            } else {
+                let length = colors.checked_mul(3).and_then(|n| n.checked_add(4)).ok_or_else(|| invalid("colormap overflow"))?;
+                (length, 4)
+            }
         }
         // Both variants fit MAX_PAYLOAD because each individual string is bounded.
         (24, Some(version)) => {

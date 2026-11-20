@@ -3,18 +3,18 @@
 use super::{Cursor, Pixels, Result, invalid};
 
 /// Declarative XCF 3.2 link metadata. The locator is deliberately never resolved here.
-pub(super) struct Link {
+pub(super) struct Link<'a> {
     pub flags: u32,
-    pub locator: String,
+    pub locator: &'a [u8],
     pub width: u32,
     pub height: u32,
 }
 
 /// Validate a complete bounded link record and retain its locator as data, never permission to open an external resource.
-pub(super) fn link(bytes: &[u8]) -> Result<Link> {
+pub(super) fn link(bytes: &[u8]) -> Result<Link<'_>> {
     let mut c = Cursor { b: bytes, pos: 0, wide: false };
     let flags = c.u32()?;
-    let locator = c.string()?;
+    let locator = c.string_bytes()?;
     let (width, height) = (c.u32()?, c.u32()?);
     if c.pos != bytes.len() || locator.is_empty() || width == 0 || height == 0 {
         return Err(invalid("invalid link-layer locator or dimensions"));
@@ -129,13 +129,39 @@ mod tests {
         bytes
     }
 
+    #[test]
+    fn repeated_link_locators_spend_shared_work_and_keep_saved_pixels() {
+        use crate::xcf::{ColorMode, PixelFormat, SampleType, props_version, tests::decoder_image};
+        use photocraft_doc::import_conversion::ConversionReason;
+        let mut source = TestImage::rgb8(1, 1);
+        source.version = 26;
+        let mut layer = TestLayer::rgba("Saved link pixels", 1, 1, vec![17, 31, 57, 255]);
+        let locator = source_link(&"inert".repeat(200), 0);
+        let allowance = locator.len();
+        layer.props.push((48, locator));
+        source.layers.push(layer);
+        let bytes = source.write();
+        let mut cursor = Cursor { b: &bytes, pos: 30, wide: true };
+        props_version(&mut cursor, Some(26)).unwrap();
+        let offset = cursor.ptr().unwrap();
+        let mut image = decoder_image(&bytes);
+        image.link_work_left = allowance;
+        let mask = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
+        let (layers, _) = image.import_layers(&[offset, offset], PixelFormat::RGBA8, mask, &Interrupt::NONE).unwrap();
+        assert_eq!(layers.len(), 2);
+        assert!(layers.iter().all(|layer| layer.surface().unwrap().pixel(0, 0) == [17. / 255., 31. / 255., 57. / 255., 1.]));
+        assert_eq!(image.link_work_left, 0);
+        let ImportConversion::Report(report) = image.outcomes.finish().unwrap() else { panic!("report") };
+        assert_eq!(report.entries.iter().filter(|e| e.feature_code == "xcf.link_layer" && e.reason == ConversionReason::RetentionLimit).count(), 1);
+    }
+
     /// Exercise malformed link and transform payloads so optional metadata cannot cause unchecked reads or nonfinite native placement.
     #[test]
     fn link_configuration_is_bounded_and_validates_all_optional_fields() {
         let bytes = source_link("../../untrusted/source.png", 3);
         let metadata = link(&bytes).unwrap();
         assert_eq!((metadata.flags, metadata.width, metadata.height), (3, 27, 19));
-        assert_eq!(metadata.locator, "../../untrusted/source.png");
+        assert_eq!(metadata.locator, b"../../untrusted/source.png");
         for length in 0..bytes.len() {
             assert!(link(&bytes[..length]).is_err());
         }

@@ -46,6 +46,10 @@ impl B {
         // glow_map
         let center = inner && g.source == GlowSource::Center;
         let m = match g.technique {
+            GlowTechnique::Softer if inner && g.source == GlowSource::Edge && g.size == 1.0 && g.spread == 0.0 => {
+                let src = self.shift(In::Shape, 0.0, 0.0, 0.0, true);
+                self.conv(src, fx::size_one_kernel())
+            }
             GlowTechnique::Precise => {
                 let d = self.field(if inner { FieldKind::Inside } else { FieldKind::Outside }, g.size);
                 let solid = g.size * g.spread;

@@ -63,31 +63,7 @@ fn one_way_assigned_profile_keeps_stored_text_pixels_instead_of_aborting() {
 }
 
 fn image(bytes: &[u8]) -> Image<'_> {
-    Image {
-        c: Cursor { b: bytes, pos: 0, wide: true },
-        version: 26,
-        precision: Precision::GAMMA8,
-        sample_order: crate::HistoricalXcfSampleOrder::BigEndian,
-        compression: Compression::None,
-        base_type: 0,
-        colormap: Vec::new(),
-        budget: MAX_PIXEL_BYTES,
-        meta_budget: MAX_METADATA_BYTES,
-        vector_style_work_left: crate::xcf::MAX_METADATA_BYTES,
-        effect_decode_work: Default::default(),
-        text_decode_work: Default::default(),
-        parasite_work: Default::default(),
-        point_text_work_left: crate::xcf::text::POINT_LAYOUT_WORK_UNITS,
-        warnings: Warnings::default(),
-        outcomes: conversion::Outcomes::new(26).unwrap(),
-        clipped_to_backdrop: 0,
-        initial_view: Default::default(),
-        resolution_dpi: 72.,
-        pending_effects: Vec::new(),
-        path_tattoos: HashMap::new(),
-        pending_vectors: Vec::new(),
-        native_color_error: None,
-    }
+    super::tests::decoder_image(bytes)
 }
 
 fn vector_layer(encoding: &str) -> Vec<u8> {
@@ -161,6 +137,8 @@ fn repeated_text_offsets_charge_native_allocations_and_keep_rasters_when_full() 
     image.meta_budget = allowance;
     let (layers, _) =
         image.import_layers(&[pointer; 16], PixelFormat::RGBA8, PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false), &Interrupt::NONE).unwrap();
+    assert_eq!(layers.len(), 16);
+    assert_eq!(layers.iter().filter(|layer| matches!(layer.content, LayerContent::Raster(_))).count(), 15);
     let retained = layers
         .iter()
         .filter_map(|layer| match &layer.content {
@@ -240,4 +218,34 @@ fn deferred_effect_mask_has_an_explicit_omission_outcome() {
     assert_eq!(mask.disposition, ConversionDisposition::SkippedNonessential);
     assert!(mask.native_description.contains("not retained"));
     assert!(matches!(document.layers[0].content, LayerContent::Raster(_)));
+}
+
+#[test]
+fn undecodable_text_and_vector_paint_keep_the_saved_nonblack_appearance() {
+    let mut source = TestImage::rgb8(2, 1);
+    let mut text = TestLayer::rgba("Saved white text", 2, 1, vec![255, 255, 255, 255, 0, 0, 0, 255]);
+    let mut config = br#"(text "Ag") (font-size 24) (color (color "R'G'B'A float" 16 ""#.to_vec();
+    // GIMP literals carry writer-native samples even when structural XCF fields are big-endian.
+    for byte in [1f32.to_le_bytes(); 4].concat() {
+        config.extend_from_slice(format!("\\{byte:03o}").as_bytes());
+    }
+    config.extend_from_slice(br#"" 0))"#);
+    text.props.push((21, parasite("gimp-text-layer", &config)));
+    let vector_wire = vector_layer("R'G'B'A float");
+    let mut cursor = Cursor { b: &vector_wire, pos: 13, wide: true };
+    cursor.string_bytes().unwrap();
+    let properties = props(&mut cursor).unwrap();
+    let mut vector = TestLayer::rgba("Saved blue vector", 1, 1, vec![0, 0, 255, 255]);
+    vector.x = 1;
+    vector.props.push((47, properties[0].data.to_vec()));
+    source.layers.extend([vector, text]);
+    let imported = import("unknown-paint.xcf", &source.write(), &Interrupt::NONE).unwrap();
+    assert!(imported.document.layers.iter().all(|layer| matches!(layer.content, LayerContent::Raster(_))));
+    let composite = photocraft_compose::flatten(&imported.document);
+    assert_eq!(composite.px, [[1., 1., 1., 1.], [0., 0., 1., 1.]]);
+    assert!(imported.warnings.iter().any(|w| w.contains("opens as pixels")));
+    let photocraft_doc::import_conversion::ImportConversion::Report(report) = imported.document.metadata.import_conversion.as_deref().unwrap() else {
+        panic!("typed report")
+    };
+    assert!(report.entries.iter().any(|e| e.feature_code == "xcf.vector_layer" && e.source_description.contains("could not be translated")));
 }

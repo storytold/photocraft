@@ -111,6 +111,10 @@ fn historical_relink_missing_old_file_preserves_order_and_storage_conversions_do
         let mut s = session();
         let reply = s.execute("file.placeLinked", json!({"path":old,"historicalXcfSampleOrder":order})).unwrap();
         let id = LayerId(reply["layer"].as_u64().unwrap());
+        let native = photocraft_format::save_to_bytes(s.active().unwrap().doc(), &Default::default()).unwrap();
+        let reopened = photocraft_format::load_from_bytes(&native).unwrap();
+        let mut s = Session::new();
+        s.add_document(reopened, None);
         std::fs::rename(&old, &relocated).unwrap();
         s.execute("layer.smartObjects.relinkToFile", json!({"layer":id.0,"path":relocated})).unwrap();
         assert_eq!(object(&s, id).historical_xcf_sample_order, Some(interpretation));
@@ -138,6 +142,10 @@ fn historical_relink_explicit_order_replaces_the_old_interpretation() {
     let mut s = session();
     let reply = s.execute("file.placeLinked", json!({"path":little,"historicalXcfSampleOrder":"little-endian"})).unwrap();
     let id = LayerId(reply["layer"].as_u64().unwrap());
+    let before = s.active().unwrap().doc().clone();
+    let error = s.execute("layer.smartObjects.relinkToFile", json!({"layer":id.0,"path":big})).unwrap_err();
+    assert!(error.to_string().contains("sample byte order"), "{error}");
+    assert!(Arc::ptr_eq(&before, s.active().unwrap().doc()));
     s.execute("layer.smartObjects.relinkToFile", json!({"layer":id.0,"path":big,"historicalXcfSampleOrder":"big-endian"})).unwrap();
     assert_eq!(object(&s, id).historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::BigEndian));
     s.execute("layer.smartObjects.editContents", json!({"layer":id.0})).unwrap();

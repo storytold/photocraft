@@ -1547,3 +1547,106 @@ fn recovered_layer_cannot_displace_the_source_index_of_a_later_group() {
         assert!(imported.warnings.iter().any(|warning| warning.contains("Recovered") && warning.contains("top level")));
     }
 }
+
+/// Default decoder state for isolated version-26 record tests.
+pub(super) fn decoder_image(bytes: &[u8]) -> Image<'_> {
+    Image {
+        c: Cursor { b: bytes, pos: 0, wide: true },
+        version: 26,
+        precision: Precision::GAMMA8,
+        sample_order: crate::HistoricalXcfSampleOrder::BigEndian,
+        compression: Compression::None,
+        base_type: 0,
+        colormap: Vec::new(),
+        budget: MAX_PIXEL_BYTES,
+        meta_budget: MAX_METADATA_BYTES,
+        vector_style_work_left: MAX_METADATA_BYTES,
+        link_work_left: MAX_METADATA_BYTES,
+        effect_decode_work: Default::default(),
+        text_decode_work: Default::default(),
+        parasite_work: Default::default(),
+        point_text_work_left: super::text::POINT_LAYOUT_WORK_UNITS,
+        warnings: Warnings::default(),
+        outcomes: conversion::Outcomes::new(26).unwrap(),
+        clipped_to_backdrop: 0,
+        initial_view: Default::default(),
+        resolution_dpi: 72.,
+        pending_effects: Vec::new(),
+        path_tattoos: HashMap::new(),
+        pending_vectors: Vec::new(),
+        native_color_error: None,
+    }
+}
+
+#[test]
+fn malformed_tile_list_terminator_is_rejected_before_decoding() {
+    for wide in [false, true] {
+        let mut w = W { out: vec![0; 8], wide };
+        let at = hierarchy(&mut w, 1, 1, 4, &[17, 31, 57, 255], Compression::None);
+        let mut image = decoder_image(&w.out);
+        image.c.wide = wide;
+        let expected = image.hierarchy_with_alpha(at, 4, false, false, &Interrupt::NONE).unwrap();
+        assert_eq!(expected.data.len(), 4);
+        let pointer_bytes = if wide { 8 } else { 4 };
+        let terminator = at + 12 + 2 * pointer_bytes + 8 + pointer_bytes;
+        w.patch(terminator, at);
+        let mut image = decoder_image(&w.out);
+        image.c.wide = wide;
+        let error = image.hierarchy_with_alpha(at, 4, false, false, &Interrupt::NONE).err().unwrap();
+        assert!(error.to_string().contains("zero terminator"), "{error}");
+    }
+}
+
+#[test]
+fn grayscale_documents_reject_indexed_layers_with_the_same_byte_width() {
+    let mut source = TestImage::rgb8(1, 1);
+    source.base_type = 1;
+    let mut layer = TestLayer::rgba("Gray", 1, 1, vec![17, 255]);
+    layer.kind = 3;
+    source.layers.push(layer);
+    assert!(open(&source.write()).is_ok());
+    source.layers[0].kind = 5;
+    let error = open(&source.write()).err().unwrap();
+    assert!(error.to_string().contains("colour model"), "{error}");
+}
+
+#[test]
+fn partial_locked_backdrop_still_warns_about_source_clipping() {
+    let mut source = TestImage::rgb8(2, 1);
+    let mut top = TestLayer::rgba("Back-clipped", 2, 1, vec![255; 8]);
+    top.props.push((35, 2u32.to_be_bytes().to_vec()));
+    let mut bottom = TestLayer::rgba("Partial locked backdrop", 1, 1, vec![255; 4]);
+    bottom.props.push((10, 1u32.to_be_bytes().to_vec()));
+    source.layers.extend([top, bottom]);
+    let imported = open(&source.write()).unwrap();
+    assert!(imported.document.layers[0].locks.transparency);
+    assert!(imported.warnings.iter().any(|warning| warning.contains("underlying layers are transparent")));
+}
+
+#[test]
+fn malformed_selection_marker_does_not_steal_the_document_selection() {
+    use photocraft_doc::import_conversion::{ConversionReason, ImportConversion};
+    let mut w = W { out: vec![0; 8], wide: true };
+    let mut pointers = Vec::new();
+    for (name, marker, pixel) in [("Alpha", &[255][..], 64), ("Selection", &[][..], 255)] {
+        pointers.push(w.out.len());
+        w.u32(1);
+        w.u32(1);
+        w.string(name);
+        w.prop(4, marker);
+        w.end();
+        let ptr = w.slot();
+        w.ptr(0);
+        let at = hierarchy(&mut w, 1, 1, 1, &[pixel], Compression::None);
+        w.patch(ptr, at);
+    }
+    let mut image = decoder_image(&w.out);
+    let mask = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
+    let (alpha, selection) = image.import_channels(&pointers, mask, &Interrupt::NONE).unwrap();
+    assert_eq!(alpha.len(), 1);
+    assert_eq!(alpha[0].name, "Alpha");
+    assert_eq!(alpha[0].surface.pixel(0, 0), [64. / 255.]);
+    assert_eq!(selection.unwrap().pixel(0, 0), [1.]);
+    let ImportConversion::Report(report) = image.outcomes.finish().unwrap() else { panic!("report") };
+    assert!(report.entries.iter().any(|entry| entry.feature_code == "xcf.source_property.4" && entry.reason == ConversionReason::InvalidOptionalData));
+}

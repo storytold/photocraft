@@ -23,6 +23,8 @@ struct Held {
     bytes: Arc<Vec<u8>>,
     question: Option<photocraft_io::HistoricalXcfSampleOrderRequest>,
     job: Option<JobId>,
+    relink: bool,
+    inherited_order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
 }
 
 #[derive(Default)]
@@ -88,15 +90,37 @@ impl StepWork<Option<photocraft_io::HistoricalXcfSampleOrderRequest>> for ProbeW
 }
 
 pub(crate) fn pick(app: &mut PhotocraftApp, target: Target, name: String, bytes: Vec<u8>) -> Result<Value, String> {
+    pick_source(app, target, name, bytes, false)
+}
+
+pub(crate) fn pick_relink(app: &mut PhotocraftApp, target: Target, path: String, bytes: Vec<u8>) -> Result<Value, String> {
+    if !std::path::Path::new(&path).is_absolute() {
+        return Err(format!("{path}: Relink to File needs a file on disk"));
+    }
+    pick_source(app, target, path, bytes, true)
+}
+
+fn pick_source(app: &mut PhotocraftApp, target: Target, name: String, bytes: Vec<u8>, relink: bool) -> Result<Value, String> {
     check(app, target)?;
-    let wrapped = photocraft_engine::jobs::has_compressed_import_signature(&bytes);
+    let inherited_order = if relink {
+        app.with_document(target.doc, |app| {
+            photocraft_engine::smart_cmds::relink_sample_order(&app.session, target.layer, &bytes).map_err(|error| error.to_string())
+        })?
+    } else {
+        None
+    };
+    let wrapped = inherited_order.is_none() && photocraft_engine::jobs::has_compressed_import_signature(&bytes);
     // Even a fixed-output probe can scan an arbitrarily long compressed header.
     // Only plain fixed headers are inspected in the picker callback.
-    let question = if wrapped { None } else { photocraft_io::historical_xcf_sample_order_request(&name, &bytes).map_err(|error| error.to_string())? };
+    let question = if wrapped || inherited_order.is_some() {
+        None
+    } else {
+        photocraft_io::historical_xcf_sample_order_request(&name, &bytes).map_err(|error| error.to_string())?
+    };
     // Plain modern sources reserve their turn just like probed wrappers. Applying
     // one now would change the revision underneath an earlier unanswered choice.
     if !wrapped && question.is_none() && app.prompt_order.is_empty() && !crate::open_prompt::waiting(app) {
-        return replace(app, target, &name, bytes, None);
+        return apply_source(app, target, &name, bytes, inherited_order, relink);
     }
     let pending = &mut app.historical_replacements;
     let retained = pending.held.iter().try_fold(bytes.capacity(), |total, held| total.checked_add(held.bytes.capacity()));
@@ -106,7 +130,7 @@ pub(crate) fn pick(app: &mut PhotocraftApp, target: Target, name: String, bytes:
     let id = pending.next.checked_add(1).ok_or("replacement source identity limit reached")?;
     pending.next = id;
     let bytes = Arc::new(bytes);
-    pending.held.push(Held { id, target, name: name.clone(), bytes: bytes.clone(), question, job: None });
+    pending.held.push(Held { id, target, name: name.clone(), bytes: bytes.clone(), question, job: None, relink, inherited_order });
     app.prompt_order.push_back(PromptKind::Replacement(id));
     if wrapped {
         let started = app.session.start_job_stepped(
@@ -201,15 +225,25 @@ fn owned_bytes(bytes: Arc<Vec<u8>>) -> Vec<u8> {
     Arc::try_unwrap(bytes).unwrap_or_else(|bytes| bytes.as_ref().clone())
 }
 
-fn replace(
+fn apply_source(
     app: &mut PhotocraftApp,
     target: Target,
     name: &str,
     bytes: Vec<u8>,
     order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+    relink: bool,
 ) -> Result<Value, String> {
     check(app, target)?;
     let result = app.with_document(target.doc, |app| {
+        if relink {
+            if order.is_some() {
+                let current = photocraft_format::read_file(std::path::Path::new(name)).map_err(|error| error.to_string())?;
+                if current != bytes {
+                    return Err("the linked source changed after it was picked; select it again".into());
+                }
+            }
+            return app.run("layer.smartObjects.relinkToFile", json!({"layer":target.layer.0,"path":name,"historicalXcfSampleOrder":order}));
+        }
         photocraft_engine::smart_cmds::replace_contents_from_bytes(
             &mut app.session,
             &json!({"layer":target.layer.0,"historicalXcfSampleOrder":order}),
@@ -231,7 +265,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, id: u64) {
     let Some(question) = held.question else {
         let held = app.historical_replacements.held.remove(position);
         app.prompt_order.pop_front();
-        if let Err(error) = replace(app, held.target, &held.name, owned_bytes(held.bytes), None) {
+        if let Err(error) = apply_source(app, held.target, &held.name, owned_bytes(held.bytes), held.inherited_order, held.relink) {
             app.ui.status = error;
             app.ui.status_error = true;
         }
@@ -277,7 +311,7 @@ pub(crate) fn answer(app: &mut PhotocraftApp, fields: &serde_json::Map<String, V
     let position = app.historical_replacements.held.iter().position(|held| held.id == id).ok_or("replacement source is gone")?;
     let held = app.historical_replacements.held.remove(position);
     app.prompt_order.pop_front();
-    let result = if accept { replace(app, held.target, &held.name, owned_bytes(held.bytes), order) } else { Ok(json!({"cancelled":true})) };
+    let result = if accept { apply_source(app, held.target, &held.name, owned_bytes(held.bytes), order, held.relink) } else { Ok(json!({"cancelled":true})) };
     crate::open_prompt::advance(app);
     result
 }

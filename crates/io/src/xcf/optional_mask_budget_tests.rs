@@ -3,31 +3,9 @@ use super::*;
 use photocraft_doc::import_conversion::ImportConversion;
 
 fn image(bytes: &[u8], budget: usize) -> Image<'_> {
-    Image {
-        c: Cursor { b: bytes, pos: 0, wide: true },
-        version: 26,
-        precision: Precision::GAMMA8,
-        sample_order: crate::HistoricalXcfSampleOrder::BigEndian,
-        compression: Compression::None,
-        base_type: 0,
-        colormap: Vec::new(),
-        budget,
-        meta_budget: MAX_METADATA_BYTES,
-        vector_style_work_left: crate::xcf::MAX_METADATA_BYTES,
-        effect_decode_work: Default::default(),
-        text_decode_work: Default::default(),
-        parasite_work: Default::default(),
-        point_text_work_left: crate::xcf::text::POINT_LAYOUT_WORK_UNITS,
-        warnings: Warnings::default(),
-        outcomes: conversion::Outcomes::new(26).unwrap(),
-        clipped_to_backdrop: 0,
-        initial_view: Default::default(),
-        resolution_dpi: 72.,
-        pending_effects: Vec::new(),
-        path_tattoos: HashMap::new(),
-        pending_vectors: Vec::new(),
-        native_color_error: None,
-    }
+    let mut image = super::tests::decoder_image(bytes);
+    image.budget = budget;
+    image
 }
 
 fn fixture(valid_mask: bool) -> (Vec<u8>, usize, usize, usize) {
@@ -145,12 +123,8 @@ fn auxiliary_inventory_never_decodes_pixels_and_leaves_later_layer_budget() {
         let (bytes, _, layer, effect) = fixture(valid_hierarchy);
         let mut image = image(&bytes, later_layer_allowance());
         let owner = coverage_owner(&mut image);
-        let mut surface = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false));
-        surface.fill_rect(Rect::new(0, 0, 1, 1), &[0.75]);
-        let original = surface.read_region(Rect::new(0, 0, 1, 1));
         image.inventory_coverage_effects(owner, &[effect], &Interrupt::NONE).unwrap();
         assert_eq!(image.budget, later_layer_allowance());
-        assert_eq!(surface.read_region(Rect::new(0, 0, 1, 1)), original);
         admit_later_layer(&mut image, layer);
         let ImportConversion::Report(report) = image.outcomes.finish().unwrap() else { panic!("report") };
         let mask = report.entries.iter().find(|entry| entry.feature_code == "xcf.coverage_effect_mask").unwrap();

@@ -180,6 +180,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
                 SmartSource::Linked { path } => SmartSourceM::Linked { path: path.clone() },
             },
             historical_xcf_sample_order: s.historical_xcf_sample_order,
+            historical_xcf_link_digest: s.historical_xcf_link_digest,
             vector_preview: s.vector_preview.as_ref().map(|preview| VectorPreviewM { source_hash: preview.source_hash, svg: sink.blob(&preview.svg) }),
             transform: s.transform,
             smart_filters: s.smart_filters.clone(),
@@ -525,6 +526,7 @@ impl Loader<'_> {
                 contents_id,
                 source,
                 historical_xcf_sample_order,
+                historical_xcf_link_digest,
                 vector_preview,
                 transform,
                 smart_filters,
@@ -542,6 +544,7 @@ impl Loader<'_> {
                     SmartSourceM::Linked { path } => SmartSource::Linked { path: path.clone() },
                 },
                 historical_xcf_sample_order: *historical_xcf_sample_order,
+                historical_xcf_link_digest: *historical_xcf_link_digest,
                 vector_preview: match vector_preview {
                     // A display-only preview must not prevent recovery of the native source
                     // and cached pixels if its optional blob is missing or damaged.

@@ -516,6 +516,9 @@ fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapsho
         crate::jobs::authorize_render_command(&filter.command, &filter.params)?;
     }
     let Some((name, original)) = snapshot.or_else(|| source_bytes(&doc.metadata, &sm.source)) else { return Ok(None) };
+    if sm.historical_xcf_link_digest.is_some_and(|expected| expected != native_digest(&original)) {
+        return Err(other("the linked historical XCF bytes changed; relink and choose their sample byte order"));
+    }
     let bytes = display_source(sm, &original);
     let (fmt, canvas) = (doc.pixel_format(), doc.bounds());
     // Plain SVG uses the original strict vector path. Gzip sources use ordinary

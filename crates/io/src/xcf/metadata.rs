@@ -105,32 +105,42 @@ struct MetadataParasite<'a> {
 /// Resolve only supported names without an owned name index. Keep first-seen processing
 /// order and final duplicate values, even after arbitrarily many unused bounded records.
 fn metadata_parasites<'a>(
-    data: &'a [u8],
+    props: &[Prop<'a>],
     work: &mut super::wire::ParasiteWork,
     ctl: &photocraft_raster::Interrupt<'_>,
-) -> Result<([MetadataParasite<'a>; 4], super::wire::ParasiteScan)> {
+) -> Result<([MetadataParasite<'a>; 4], bool, bool)> {
     let mut selected =
         ["gimp-comment", "exif-data", "gimp-image-metadata", "gimp-metadata"].map(|name| MetadataParasite { name, ordinal: usize::MAX, data: None });
     let mut ordinal = 0usize;
-    let scan = super::wire::scan_parasites_with_work(data, work, ctl, |record| {
-        for slot in &mut selected {
-            if record.name == slot.name.as_bytes() {
-                if slot.data.is_none() {
-                    slot.ordinal = ordinal;
+    let mut limited = false;
+    let mut malformed = false;
+    for property in props.iter().filter(|property| property.kind == 21) {
+        let scan = super::wire::scan_parasites_with_work(property.data, work, ctl, |record| {
+            for slot in &mut selected {
+                if record.name == slot.name.as_bytes() {
+                    if slot.data.is_none() {
+                        slot.ordinal = ordinal;
+                    }
+                    slot.data = Some(record.payload);
                 }
-                slot.data = Some(record.payload);
             }
+            ordinal = ordinal.saturating_add(1);
+            Ok(true)
+        })?;
+        malformed |= scan.malformed;
+        if scan.limited {
+            limited = true;
+            break;
         }
-        ordinal = ordinal.saturating_add(1);
-        Ok(true)
-    })?;
-    selected.sort_by_key(|slot| slot.ordinal);
-    if scan.limited {
+    }
+    // Admit the final raw EXIF packet before optional XML synthesis shares its budget.
+    selected.sort_by_key(|slot| (slot.name != "exif-data", slot.ordinal));
+    if limited {
         for slot in &mut selected {
             slot.data = None;
         }
     }
-    Ok((selected, scan))
+    Ok((selected, limited, malformed))
 }
 
 #[allow(clippy::too_many_arguments)] // Guide conversion shares the image's storage budget and report.
@@ -315,107 +325,105 @@ pub(super) fn image_with_work<'a>(
                     "Native document has no per-document unit; native ruler and DPI semantics retained".into(),
                 )?;
             }
-            21 => {
-                let (selected, scan) = metadata_parasites(p.data, parasite_work, ctl)?;
-                if scan.limited {
+            _ => {}
+        }
+    }
+    let (selected, limited, malformed) = metadata_parasites(props, parasite_work, ctl)?;
+    if limited {
+        metadata_incomplete = true;
+        retention_limited = true;
+        outcomes.notice(
+            owner,
+            "xcf.parasite_work",
+            Reason::RetentionLimit,
+            (
+                "Image metadata parasite selection exceeded the shared scan-work allowance".into(),
+                "Incomplete final-value selection omitted; usable image pixels retained".into(),
+            ),
+            Some("reached the shared parasite scan-work allowance; usable image content was preserved"),
+            warnings,
+        )?;
+    }
+    if malformed {
+        outcomes.notice(
+            owner,
+            "xcf.parasite_framing",
+            Reason::InvalidOptionalData,
+            (
+                "Truncated or malformed optional parasite record".into(),
+                "Valid preceding metadata imported; remaining source configuration retained inert within report limits".into(),
+            ),
+            Some("has malformed optional metadata; valid preceding records were preserved"),
+            warnings,
+        )?;
+    }
+    for MetadataParasite { name, data, .. } in selected {
+        let Some(data) = data else { continue };
+        ctl.check().map_err(|_| super::IoError::Cancelled)?;
+        match name {
+            "gimp-comment" => {
+                if let Ok(text) = std::str::from_utf8(data.strip_suffix(&[0]).unwrap_or(data))
+                    && !text.is_empty()
+                {
+                    let omitted = !push_text(doc, "Comment", text, &mut text_storage, budget);
+                    metadata_incomplete |= omitted;
+                    retention_limited |= omitted;
+                }
+            }
+            "exif-data" => {
+                let raw = data.strip_prefix(b"Exif\0\0").unwrap_or(data);
+                // Native EXIF is a TIFF payload. Other legacy container layouts stay inert.
+                if raw.starts_with(b"II\x2a\0") || raw.starts_with(b"MM\0\x2a") {
+                    if charge(budget, raw.len()) {
+                        doc.metadata.exif = Some(std::sync::Arc::new(raw.to_vec()));
+                    } else {
+                        metadata_incomplete = true;
+                        retention_limited = true;
+                    }
+                }
+            }
+            "gimp-image-metadata" | "gimp-metadata" => {
+                // Refuse oversized optional XML before its parser allocates a node table.
+                if data.len() > *budget {
                     metadata_incomplete = true;
                     retention_limited = true;
-                    outcomes.notice(
-                        owner,
-                        "xcf.parasite_work",
-                        Reason::RetentionLimit,
-                        (
-                            "Image metadata parasite selection exceeded the shared scan-work allowance".into(),
-                            "Incomplete final-value selection omitted; usable image pixels retained".into(),
-                        ),
-                        Some("reached the shared parasite scan-work allowance; usable image content was preserved"),
-                        warnings,
-                    )?;
+                    continue;
                 }
-                if scan.malformed {
-                    outcomes.notice(
-                        owner,
-                        "xcf.parasite_framing",
-                        Reason::InvalidOptionalData,
-                        (
-                            "Truncated or malformed optional parasite record".into(),
-                            "Valid preceding metadata imported; remaining source configuration retained inert within report limits".into(),
-                        ),
-                        Some("has malformed optional metadata; valid preceding records were preserved"),
-                        warnings,
-                    )?;
-                }
-                for MetadataParasite { name, data, .. } in selected {
-                    let Some(data) = data else { continue };
-                    ctl.check().map_err(|_| super::IoError::Cancelled)?;
-                    match name {
-                        "gimp-comment" => {
-                            if let Ok(text) = std::str::from_utf8(data.strip_suffix(&[0]).unwrap_or(data))
-                                && !text.is_empty()
-                            {
-                                let omitted = !push_text(doc, "Comment", text, &mut text_storage, budget);
-                                metadata_incomplete |= omitted;
-                                retention_limited |= omitted;
-                            }
-                        }
-                        "exif-data" => {
-                            let raw = data.strip_prefix(b"Exif\0\0").unwrap_or(data);
-                            // Native EXIF is a TIFF payload. Other legacy container layouts stay inert.
-                            if raw.starts_with(b"II\x2a\0") || raw.starts_with(b"MM\0\x2a") {
-                                if charge(budget, raw.len()) {
-                                    doc.metadata.exif = Some(std::sync::Arc::new(raw.to_vec()));
-                                } else {
-                                    metadata_incomplete = true;
-                                    retention_limited = true;
-                                }
-                            }
-                        }
-                        "gimp-image-metadata" | "gimp-metadata" => {
-                            // Refuse oversized optional XML before its parser allocates a node table.
-                            if data.len() > *budget {
-                                metadata_incomplete = true;
-                                retention_limited = true;
-                                continue;
-                            }
-                            let Ok(xml) = std::str::from_utf8(data.strip_suffix(&[0]).unwrap_or(data)) else { continue };
-                            let tree = match parse_xml(xml, ctl) {
-                                Ok(tree) => tree,
-                                Err(crate::IoError::Cancelled) => return Err(crate::IoError::Cancelled),
-                                Err(error) => {
-                                    outcomes.notice(
-                                        owner,
-                                        "xcf.metadata_xml",
-                                        if matches!(error, crate::IoError::Unsupported(_)) { Reason::RetentionLimit } else { Reason::InvalidOptionalData },
-                                        (error.to_string(), "Optional XML metadata skipped; saved image pixels retained".into()),
-                                        Some("skipped optional XML metadata; saved image pixels were preserved"),
-                                        warnings,
-                                    )?;
-                                    continue;
-                                }
-                            };
-                            if tree.root_element().has_tag_name("metadata") {
-                                for node in tree.root_element().children().filter(|n| n.has_tag_name("tag")) {
-                                    ctl.check().map_err(|_| super::IoError::Cancelled)?;
-                                    if node.attribute("encoding").is_some() {
-                                        metadata_incomplete = true;
-                                        continue;
-                                    }
-                                    if let (Some(key), Some(value)) = (node.attribute("name"), node.text())
-                                        && matches!(key.split('.').next(), Some("Exif" | "Xmp" | "Iptc"))
-                                    {
-                                        let omitted = !push_text(doc, key, value, &mut text_storage, budget);
-                                        metadata_incomplete |= omitted;
-                                        retention_limited |= omitted;
-                                    }
-                                }
-                                let packets = super::metadata_packets::translate(doc, &tree, budget);
-                                outcomes.detail(owner, "xcf.metadata", Reason::NativePolicy,
-                                    "Serialized source EXIF/XMP/IPTC tag values".into(),
-                                    format!("Plain tags retained as native image text. Known unambiguous schema fields translated into native XMP packet: {}; native EXIF packet: {}. Existing raw packets take priority. Unknown, binary or ambiguous source structures remain inert; full packet equivalence is not claimed", packets.0, packets.1))?;
-                            }
-                        }
-                        _ => {}
+                let Ok(xml) = std::str::from_utf8(data.strip_suffix(&[0]).unwrap_or(data)) else { continue };
+                let tree = match parse_xml(xml, ctl) {
+                    Ok(tree) => tree,
+                    Err(crate::IoError::Cancelled) => return Err(crate::IoError::Cancelled),
+                    Err(error) => {
+                        outcomes.notice(
+                            owner,
+                            "xcf.metadata_xml",
+                            if matches!(error, crate::IoError::Unsupported(_)) { Reason::RetentionLimit } else { Reason::InvalidOptionalData },
+                            (error.to_string(), "Optional XML metadata skipped; saved image pixels retained".into()),
+                            Some("skipped optional XML metadata; saved image pixels were preserved"),
+                            warnings,
+                        )?;
+                        continue;
                     }
+                };
+                if tree.root_element().has_tag_name("metadata") {
+                    for node in tree.root_element().children().filter(|n| n.has_tag_name("tag")) {
+                        ctl.check().map_err(|_| super::IoError::Cancelled)?;
+                        if node.attribute("encoding").is_some() {
+                            metadata_incomplete = true;
+                            continue;
+                        }
+                        if let (Some(key), Some(value)) = (node.attribute("name"), node.text())
+                            && matches!(key.split('.').next(), Some("Exif" | "Xmp" | "Iptc"))
+                        {
+                            let omitted = !push_text(doc, key, value, &mut text_storage, budget);
+                            metadata_incomplete |= omitted;
+                            retention_limited |= omitted;
+                        }
+                    }
+                    let packets = super::metadata_packets::translate(doc, &tree, budget);
+                    outcomes.detail(owner, "xcf.metadata", Reason::NativePolicy,
+                        "Serialized source EXIF/XMP/IPTC tag values".into(),
+                        format!("Plain tags retained as native image text. Known unambiguous schema fields translated into native XMP packet: {}; native EXIF packet: {}. Existing raw packets take priority. Unknown, binary or ambiguous source structures remain inert; full packet equivalence is not claimed", packets.0, packets.1))?;
                 }
             }
             _ => {}

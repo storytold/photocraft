@@ -44,7 +44,15 @@ fn inherited_unknown_attributes_spend_visits_before_repeated_diagnostics() {
     let mut notes = Vec::new();
     let mut allowance = MarkupWork { visits_left: 256, ..MarkupWork::new() };
     reset();
-    let result = markup_runs_with_attribute_allowance(&markup, &CharStyle::default(), &HashMap::new(), 72., &mut notes, &mut allowance);
+    let result = markup_runs_with_attribute_allowance(
+        &markup,
+        &CharStyle::default(),
+        &HashMap::new(),
+        72.,
+        &mut notes,
+        &mut allowance,
+        &photocraft_raster::Interrupt::NONE,
+    );
     assert!(matches!(result, Err(crate::IoError::Unsupported(message)) if message.contains("attribute-visit allowance")));
     assert_eq!(allowance.visits_left, 0);
     assert_eq!(visits(), 256, "one shared ledger covers inspection and application across descendants");
@@ -58,7 +66,16 @@ fn exact_visit_boundary_preserves_inherited_known_styles_and_font_precedence() {
     let markup = "<markup><span weight='bold' foreground='#336699'><i>A</i><b>é</b></span></markup>";
     let mut allowance = MarkupWork { visits_left: 8, ..MarkupWork::new() }; // Two attributes, two visits each, across two text descendants.
     reset();
-    let (text, runs) = markup_runs_with_attribute_allowance(markup, &CharStyle::default(), &HashMap::new(), 72., &mut Vec::new(), &mut allowance).unwrap();
+    let (text, runs) = markup_runs_with_attribute_allowance(
+        markup,
+        &CharStyle::default(),
+        &HashMap::new(),
+        72.,
+        &mut Vec::new(),
+        &mut allowance,
+        &photocraft_raster::Interrupt::NONE,
+    )
+    .unwrap();
     assert_eq!((allowance.visits_left, visits()), (0, 8));
     assert_eq!(text, "Aé");
     assert_eq!(runs.iter().map(|run| run.len).collect::<Vec<_>>(), [1, 2]);
@@ -67,7 +84,18 @@ fn exact_visit_boundary_preserves_inherited_known_styles_and_font_precedence() {
     assert!(!runs[1].style.italic);
     assert!(runs.iter().all(|run| run.style.color == Color::rgba(0.2, 0.4, 0.6, 1.)));
     let mut short = MarkupWork { visits_left: 7, ..MarkupWork::new() };
-    assert!(markup_runs_with_attribute_allowance(markup, &CharStyle::default(), &HashMap::new(), 72., &mut Vec::new(), &mut short).is_err());
+    assert!(
+        markup_runs_with_attribute_allowance(
+            markup,
+            &CharStyle::default(),
+            &HashMap::new(),
+            72.,
+            &mut Vec::new(),
+            &mut short,
+            &photocraft_raster::Interrupt::NONE
+        )
+        .is_err()
+    );
 
     let requested = CharStyle { font_family: "Chosen family".into(), postscript_name: Some("ChosenExactFace".into()), ..Default::default() };
     let fonts = HashMap::from([("Chosen".to_owned(), requested)]);
@@ -80,6 +108,7 @@ fn exact_visit_boundary_preserves_inherited_known_styles_and_font_precedence() {
         72.,
         &mut notes,
         &mut allowance,
+        &photocraft_raster::Interrupt::NONE,
     )
     .unwrap();
     assert_eq!(allowance.visits_left, 0);
@@ -98,7 +127,15 @@ fn long_font_values_and_unknown_attribute_names_spend_byte_work_before_reprocess
         let bytes = name.len() + value.len();
         let mut allowance = MarkupWork { bytes_left: bytes * 2, ..MarkupWork::new() };
         reset();
-        let result = markup_runs_with_attribute_allowance(&markup, &CharStyle::default(), &HashMap::new(), 72., &mut Vec::new(), &mut allowance);
+        let result = markup_runs_with_attribute_allowance(
+            &markup,
+            &CharStyle::default(),
+            &HashMap::new(),
+            72.,
+            &mut Vec::new(),
+            &mut allowance,
+            &photocraft_raster::Interrupt::NONE,
+        );
         assert!(matches!(result, Err(crate::IoError::Unsupported(message)) if message.contains("attribute-byte allowance")), "{name}");
         assert_eq!((allowance.bytes_left, byte_work(), visits()), (0, bytes * 2, 2));
         assert_eq!(allowance.visits_left, MARKUP_ATTRIBUTE_VISITS - 2, "visit storage cannot substitute for byte work");
@@ -111,14 +148,23 @@ fn exact_attribute_byte_boundary_preserves_known_style_and_utf8_text() {
     let markup = "<markup><span weight='bold'>é</span></markup>";
     let mut allowance = MarkupWork { bytes_left: 20, ..MarkupWork::new() };
     reset();
-    let (text, runs) = markup_runs_with_attribute_allowance(markup, &CharStyle::default(), &HashMap::new(), 72., &mut Vec::new(), &mut allowance).unwrap();
+    let (text, runs) = markup_runs_with_attribute_allowance(
+        markup,
+        &CharStyle::default(),
+        &HashMap::new(),
+        72.,
+        &mut Vec::new(),
+        &mut allowance,
+        &photocraft_raster::Interrupt::NONE,
+    )
+    .unwrap();
     assert_eq!((allowance.bytes_left, byte_work(), visits()), (0, 20, 2));
     assert_eq!(text, "é");
     assert_eq!(runs[0].len, 2);
     assert_eq!(runs[0].style.weight, 700);
     let mut short = MarkupWork { bytes_left: 19, ..MarkupWork::new() };
     assert!(
-        matches!(markup_runs_with_attribute_allowance(markup, &CharStyle::default(), &HashMap::new(), 72., &mut Vec::new(), &mut short), Err(crate::IoError::Unsupported(message)) if message.contains("attribute-byte allowance"))
+        matches!(markup_runs_with_attribute_allowance(markup, &CharStyle::default(), &HashMap::new(), 72., &mut Vec::new(), &mut short, &photocraft_raster::Interrupt::NONE), Err(crate::IoError::Unsupported(message)) if message.contains("attribute-byte allowance"))
     );
     assert_eq!(short.bytes_left, 9, "unprocessed work is not charged or refunded");
 }

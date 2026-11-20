@@ -33,7 +33,7 @@ pub fn source_bytes(meta: &Metadata, src: &SmartSource) -> Option<(String, Arc<V
 }
 
 /// Memory-only resolution also covers Photoshop's embedded files addressed by a `Linked` UUID.
-fn embedded_source_bytes(meta: &Metadata, src: &SmartSource) -> Option<(String, Arc<Vec<u8>>)> {
+pub(super) fn embedded_source_bytes(meta: &Metadata, src: &SmartSource) -> Option<(String, Arc<Vec<u8>>)> {
     match src {
         SmartSource::Embedded { file_name, bytes } => Some((file_name.clone(), bytes.clone())),
         SmartSource::Linked { path } => photocraft_io::linked::find_linked_file(meta, path).map(|f| (f.file_name, Arc::new(f.bytes))),

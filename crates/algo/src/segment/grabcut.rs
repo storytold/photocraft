@@ -136,6 +136,14 @@ pub fn object_select(sampler: &dyn Sampler, canvas: Rect, rect: Rect, work_px: u
 /// hovers.
 pub const OBJECT_AT_WORK_PX: usize = 60_000;
 
+const OBJECT_ALPHA_THRESHOLD: f32 = 0.5;
+
+/// Whether the pixel at `(x, y)` in the selected sampler can seed Object Finder.
+/// Read at full resolution: a coarse pixel can hide a small transparent gap (#13070).
+pub fn can_seed_object(sampler: &dyn Sampler, canvas: Rect, x: i32, y: i32) -> bool {
+    canvas.contains(x, y) && sampler.rgba(Rect::from_xywh(x, y, 1, 1)).first().is_some_and(|pixel| pixel[3] >= OBJECT_ALPHA_THRESHOLD)
+}
+
 /// Object Selection's Object Finder (hover / click): the object under document point `(x, y)`.
 ///
 /// A heuristic, not a semantic segmenter (that is #2788): on a working-resolution copy of the
@@ -155,7 +163,7 @@ pub fn object_at(sampler: &dyn Sampler, canvas: Rect, x: f32, y: f32, work_px: u
         return None;
     }
     let (px, py) = (x.floor() as i32, y.floor() as i32);
-    if !canvas.contains(px, py) {
+    if !can_seed_object(sampler, canvas, px, py) {
         return None;
     }
     let work_px = work_px.max(1024);
@@ -189,7 +197,7 @@ fn object_in(sampler: &dyn Sampler, canvas: Rect, px: i32, py: i32, step: usize)
     if w < 2 || h < 2 || rgba.len() < w * h {
         return None;
     }
-    let opaque: Vec<bool> = rgba.iter().take(w * h).map(|p| p[3] >= 0.5).collect();
+    let opaque: Vec<bool> = rgba.iter().take(w * h).map(|p| p[3] >= OBJECT_ALPHA_THRESHOLD).collect();
     let img = RgbImage::from_rgba(&rgba, w, h);
     // Lightly smoothed, so noise and texture don't stop the growth; edges survive.
     let lab: Vec<[f32; 3]> = box3(&box3(&img.px, w, h), w, h).iter().map(|c| super::slic::rgb_to_lab(*c)).collect();

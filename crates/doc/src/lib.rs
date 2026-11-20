@@ -591,6 +591,8 @@ pub struct SmartObject {
     pub source: SmartSource,
     /// Explicit interpretation of ambiguous historical XCF sample bytes; never inferred.
     pub historical_xcf_sample_order: Option<HistoricalXcfSampleOrder>,
+    /// Identity of linked bytes explicitly assigned that interpretation.
+    pub historical_xcf_link_digest: Option<[u8; 32]>,
     /// Optional source-pixel display preview for AI/PDF/EPS; ignored after source bytes change.
     pub vector_preview: Option<VectorPreview>,
     pub transform: Affine,
@@ -625,6 +627,7 @@ impl SmartObject {
             contents_id: SmartContentsId::fresh(),
             source,
             historical_xcf_sample_order: None,
+            historical_xcf_link_digest: None,
             vector_preview: None,
             transform,
             smart_filters: Vec::new(),

@@ -32,6 +32,7 @@ fn assert_truncated_report_persists(conversion: ImportConversion) {
     assert!(notice.native_description.contains("incomplete"));
     assert!(notice.targets.is_empty());
     assert!(notice.attachments.is_empty());
+    let expected_notice = notice.clone();
     let mut document = Document::new("Usable native document", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
     let mut pixels = photocraft_raster::Surface::new(PixelFormat::RGBA8);
     pixels.write_region(Rect::new(0, 0, 1, 1), &[1., 0., 0., 1.]);
@@ -44,7 +45,9 @@ fn assert_truncated_report_persists(conversion: ImportConversion) {
     let Some(ImportConversion::Report(report)) = reopened.metadata.import_conversion.as_deref() else { panic!("durable report") };
     report.validate().unwrap();
     assert_eq!((report.entries.len(), report.attachments.len()), (expected_entries, expected_attachments));
-    assert_eq!(report.entries.iter().filter(|e| e.feature_code == "xcf.report_truncated").count(), 1);
+    let mut notices = report.entries.iter().filter(|e| e.feature_code == "xcf.report_truncated");
+    assert_eq!(notices.next(), Some(&expected_notice));
+    assert!(notices.next().is_none());
 }
 
 #[test]
@@ -218,6 +221,7 @@ fn full_report_coverage_inventory_still_warns_without_reading_optional_source() 
         budget: 0,
         meta_budget: 0,
         vector_style_work_left: crate::xcf::MAX_METADATA_BYTES,
+        link_work_left: crate::xcf::MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
         text_decode_work: Default::default(),
         parasite_work: Default::default(),

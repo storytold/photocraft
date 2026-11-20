@@ -113,3 +113,21 @@ fn nested_markup_percentages_replace_scale_independently_of_absolute_font_size()
         roundtrip(&layer);
     }
 }
+
+#[test]
+fn pango_hex_widths_and_strikethrough_aliases_preserve_native_style() {
+    let markup = "<markup><span alpha='25%'><span foreground='#f008' strikethrough='yes'>A</span><span foreground='#123456789' strikethrough='no'>B</span><span foreground='#ffff000000008000' alpha='75%'>C</span></span></markup>";
+    let (text, runs) = markup_runs(markup, &CharStyle::default(), &HashMap::new(), 72., &mut Vec::new()).unwrap();
+    assert_eq!(text, "ABC");
+    assert_eq!(runs[0].style.color, Color::rgba(1., 0., 0., 8. / 15.));
+    assert!(runs[0].style.strikethrough);
+    assert_eq!(runs[1].style.color, Color::rgba(0x123 as f32 / 4095., 0x456 as f32 / 4095., 0x789 as f32 / 4095., 0.25));
+    assert!(!runs[1].style.strikethrough);
+    assert_eq!(runs[2].style.color, Color::rgba(1., 0., 0., 0.75));
+    for (word, expected) in [("true", true), ("t", true), ("y", true), ("false", false), ("f", false), ("n", false)] {
+        let xml = format!("<markup><span strikethrough='{word}'>X</span></markup>");
+        let (_, runs) = markup_runs(&xml, &CharStyle::default(), &HashMap::new(), 72., &mut Vec::new()).unwrap();
+        assert_eq!(runs[0].style.strikethrough, expected);
+    }
+    assert!(markup_runs("<markup><span strikethrough='unknown'>X</span></markup>", &CharStyle::default(), &HashMap::new(), 72., &mut Vec::new()).is_err());
+}

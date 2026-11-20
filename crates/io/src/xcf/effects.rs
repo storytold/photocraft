@@ -14,7 +14,7 @@ pub(super) use envelope::POINTER_READS;
 pub(super) use envelope::decode;
 pub(super) use envelope::{DecodeWork, decode_with_work, read_pointers, read_pointers_with_work};
 
-pub(super) use resources::{LiteralColorError, literal_rgb};
+pub(super) use resources::literal_rgb;
 
 /// One parsed effect; file order and argument order remain explicit.
 #[derive(Debug)]

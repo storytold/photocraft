@@ -3,31 +3,7 @@ use super::*;
 use photocraft_doc::import_conversion::ImportConversion;
 
 fn image(bytes: &[u8]) -> Image<'_> {
-    Image {
-        c: Cursor { b: bytes, pos: 0, wide: true },
-        version: 26,
-        precision: Precision::GAMMA8,
-        sample_order: crate::HistoricalXcfSampleOrder::BigEndian,
-        compression: Compression::None,
-        base_type: 0,
-        colormap: Vec::new(),
-        budget: MAX_PIXEL_BYTES,
-        meta_budget: MAX_METADATA_BYTES,
-        vector_style_work_left: crate::xcf::MAX_METADATA_BYTES,
-        effect_decode_work: Default::default(),
-        text_decode_work: Default::default(),
-        parasite_work: Default::default(),
-        point_text_work_left: crate::xcf::text::POINT_LAYOUT_WORK_UNITS,
-        warnings: Warnings::default(),
-        outcomes: conversion::Outcomes::new(26).unwrap(),
-        clipped_to_backdrop: 0,
-        initial_view: Default::default(),
-        resolution_dpi: 72.,
-        pending_effects: Vec::new(),
-        path_tattoos: HashMap::new(),
-        pending_vectors: Vec::new(),
-        native_color_error: None,
-    }
+    super::tests::decoder_image(bytes)
 }
 
 fn payload(knots: u32) -> Vec<u8> {
@@ -234,8 +210,7 @@ fn cancelled_path_admission_still_cancels_instead_of_reporting_a_limit() {
     assert!(matches!(import_paths(&mut document, &mut image, &[], &[4], None, &Interrupt::cancel_only(&cancel)), Err(IoError::Cancelled)));
 }
 
-#[test]
-fn public_import_truncates_standalone_pointer_table_without_losing_paths_or_pixels() {
+fn standalone_pointer_image(count: usize) -> (W, Vec<usize>) {
     let mut w = W::new(26);
     for value in [1, 1, 0, 150] {
         w.u32(value);
@@ -245,7 +220,7 @@ fn public_import_truncates_standalone_pointer_table_without_losing_paths_or_pixe
     let layer = w.slot();
     w.ptr(0);
     w.ptr(0);
-    let paths: Vec<_> = (0..MAX_CHANNELS + 1).map(|_| w.slot()).collect();
+    let paths: Vec<_> = (0..count).map(|_| w.slot()).collect();
     w.ptr(0);
     let at = w.out.len();
     w.patch(layer, at);
@@ -259,7 +234,8 @@ fn public_import_truncates_standalone_pointer_table_without_losing_paths_or_pixe
     w.ptr(0);
     let at = hierarchy(&mut w, 1, 1, 4, &[17, 31, 57, 255], Compression::None);
     w.patch(raster, at);
-    for (name, slots) in [("Retained path", &paths[..MAX_CHANNELS]), ("Omitted path", &paths[MAX_CHANNELS..])] {
+    let split = count.min(MAX_CHANNELS);
+    for (name, slots) in [("Retained path", &paths[..split]), ("Omitted path", &paths[split..])] {
         let at = w.out.len();
         for &slot in slots {
             w.patch(slot, at);
@@ -273,6 +249,12 @@ fn public_import_truncates_standalone_pointer_table_without_losing_paths_or_pixe
         w.u32(payload.out.len() as u32);
         w.out.extend(payload.out);
     }
+    (w, paths)
+}
+
+#[test]
+fn public_import_truncates_standalone_pointer_table_without_losing_paths_or_pixels() {
+    let (w, _) = standalone_pointer_image(MAX_CHANNELS + 1);
     let imported = import("many-paths.xcf", &w.out, &Interrupt::NONE).unwrap();
     let document = &imported.document;
     assert_eq!(document.paths.len(), MAX_CHANNELS);
@@ -544,4 +526,16 @@ fn malformed_vector_property_disables_identity_guesses_for_other_admitted_paths(
     let ImportConversion::Report(report) = &conversion else { panic!("conversion report") };
     assert!(report.entries.iter().any(|entry| entry.reason == ConversionReason::InvalidOptionalData));
     assert!(!report.entries.iter().any(|entry| entry.reason == ConversionReason::RetentionLimit));
+}
+
+#[test]
+fn unaddressable_optional_path_offset_keeps_raster_and_disables_path_identity() {
+    let (mut w, offsets) = standalone_pointer_image(2);
+    let offset = offsets[0];
+    w.out[offset..offset + 8].copy_from_slice(&u64::MAX.to_be_bytes());
+    let imported = import("wide-path-offset.xcf", &w.out, &Interrupt::NONE).unwrap();
+    assert_eq!(imported.document.paths.len(), 1);
+    assert!(imported.initial_view.as_ref().is_none_or(|view| view.selected_path.is_none()));
+    assert!(imported.warnings.iter().any(|warning| warning.contains("path")));
+    assert_eq!(imported.document.layers[0].surface().unwrap().pixel(0, 0), [17. / 255., 31. / 255., 57. / 255., 1.]);
 }

@@ -1043,21 +1043,16 @@ impl Ex<'_> {
         } else {
             // Embedded formats we can't decode (vector PDF/AI…) are kept; their size comes from the
             // layer. A linked file we can't decode is not embedded.
-            let decoded = order.map(|_| crate::smart_xcf_order::decode(file_name, bytes, order, &self.ctl));
-            // Embedded unknown formats are copied below; a cancelled decode must never take that fallback.
-            self.ctl.check().map_err(|_| "export cancelled".to_string())?;
-            let geometry = match &decoded {
-                Some(Ok(doc)) => Ok(((f64::from(doc.size.width), f64::from(doc.size.height)), f64::from(doc.resolution_dpi))),
-                Some(Err(error)) => Err(error.to_string()),
-                None => crate::linked::source_geometry(file_name, bytes, &self.ctl),
-            };
+            // Historical byte order affects samples, not geometry. Decode the drawable on
+            // demand in source_composite if the smart filters actually need its pixels.
+            let geometry = crate::smart_xcf_order::geometry(file_name, bytes, order, &self.ctl).map_err(|error| error.to_string());
             self.ctl.check().map_err(|_| "export cancelled".to_string())?;
             let (size, dpi) = match geometry {
                 Ok(geometry) => geometry,
                 Err(e) if linked => return Err(format!("the linked file {file_name} is not an image PhotoCraft can open: {e}")),
                 Err(_) => ((0.0, 0.0), f64::from(self.dpi)),
             };
-            (file_name.to_string(), bytes.to_vec(), size, dpi, decoded.and_then(Result::ok))
+            (file_name.to_string(), bytes.to_vec(), size, dpi, None)
         };
         self.ctl.check().map_err(|_| "export cancelled".to_string())?;
         let uuid = contents_uuid(contents_id, &data);

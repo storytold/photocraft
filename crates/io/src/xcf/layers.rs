@@ -96,7 +96,7 @@ impl<'a> Image<'a> {
             let Channel { name, properties: cprops, pixels: px, effects: coverage_effects, name_limited, effects_limited } = self.channel(ptr, None, ctl)?;
             let mut surface = Surface::new(mask_fmt);
             write_pixels(&mut surface, &px, 0, 0, &mut self.budget)?;
-            let is_selection = cprops.iter().any(|p| p.kind == 4);
+            let is_selection = metadata::active(&cprops, 4);
             let native_selection = is_selection && selection.is_none();
             let channel_outcome = self.outcomes.push(ConversionEntry {
                 feature_code: if is_selection { "xcf.selection" } else { "xcf.channel" }.into(),
@@ -134,7 +134,9 @@ impl<'a> Image<'a> {
             let mut channel = AlphaChannel::new(name, surface);
             let handled = metadata::channel_overlay(&mut channel, &cprops);
             for property in &cprops {
-                if !matches!(property.kind, 4 | 20) && !handled.contains(&property.kind) {
+                if property.kind == 4 && !property.data.is_empty() {
+                    self.outcomes.property_with_reason(channel_outcome, 4, property.offset, property.data, ConversionReason::InvalidOptionalData)?;
+                } else if !matches!(property.kind, 4 | 20) && !handled.contains(&property.kind) {
                     let reason = match property.kind {
                         3 | 8 => ConversionReason::NativePolicy,
                         6 | 14 | 16 | 33 | 38 => ConversionReason::InvalidOptionalData,
@@ -224,10 +226,25 @@ impl<'a> Image<'a> {
     }
 
     /// Report inert linked-resource and placement records without resolving a locator or applying placement twice.
-    pub(super) fn layer_link(&mut self, outcome: usize, properties: &[Prop<'a>], hptr: usize) -> Result<()> {
-        let metadata = properties.iter().rev().find(|p| p.kind == 48).map(|p| resources::link(p.data));
+    fn layer_link(&mut self, outcome: usize, properties: &[Prop<'a>], hptr: usize, ctl: &Interrupt<'_>) -> Result<()> {
+        let mut metadata = None;
+        let mut limited = false;
+        for property in properties.iter().filter(|property| property.kind == 48) {
+            ctl.check().map_err(|_| IoError::Cancelled)?;
+            let admitted = super::work_budget::WorkBudget::new(&mut self.link_work_left).keep_remaining(property.data.len());
+            limited = !admitted;
+            metadata = admitted.then(|| resources::link(property.data).ok()).flatten();
+            let reason = if limited {
+                ConversionReason::RetentionLimit
+            } else if metadata.is_some() {
+                ConversionReason::NativePolicy
+            } else {
+                ConversionReason::InvalidOptionalData
+            };
+            self.outcomes.property_with_reason(outcome, property.kind, property.offset, property.data, reason)?;
+        }
         let (reason, source) = match metadata {
-            Some(Ok(metadata)) => (
+            Some(metadata) => (
                 if hptr == 0 { ConversionReason::ResourceUnavailable } else { ConversionReason::NativePolicy },
                 format!(
                     "Link resource {}x{}, flags {}, nonempty locator {} bytes retained inert; {}",
@@ -238,7 +255,8 @@ impl<'a> Image<'a> {
                     if hptr == 0 { "no stored pixel hierarchy" } else { "stored pixel hierarchy available" },
                 ),
             ),
-            _ => (ConversionReason::InvalidOptionalData, "Invalid optional link-resource configuration retained inert".into()),
+            None if limited => (ConversionReason::RetentionLimit, "Link locator exceeded the shared decode-work allowance".into()),
+            None => (ConversionReason::InvalidOptionalData, "Invalid optional link-resource configuration retained inert".into()),
         };
         self.outcomes.notice(
             outcome,
@@ -497,17 +515,10 @@ impl<'a> Image<'a> {
                 if self.outcomes.parasites_with_work(outcome, property.offset, property.data, &["gimphoto-clipped"], &mut self.parasite_work, ctl)? {
                     self.metadata_limit(outcome, "xcf.parasite_work", "Layer parasite reporting exceeded the shared scan-work allowance")?;
                 }
-            } else if !matches!(property.kind, 6 | 7 | 8 | 9 | 10 | 11 | 15 | 20 | 28 | 29 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37) {
+            } else if !matches!(property.kind, 6 | 7 | 8 | 9 | 10 | 11 | 15 | 20 | 28 | 29 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37 | 48) {
                 let reason = match property.kind {
                     5 => {
                         if resources::attachment(property.data, self.c.wide).is_ok() {
-                            ConversionReason::NativePolicy
-                        } else {
-                            ConversionReason::InvalidOptionalData
-                        }
-                    }
-                    48 => {
-                        if resources::link(property.data).is_ok() {
                             ConversionReason::NativePolicy
                         } else {
                             ConversionReason::InvalidOptionalData
@@ -644,11 +655,9 @@ impl<'a> Image<'a> {
         let hptr = c.ptr()?;
         let mptr = c.ptr()?;
         let (effect_pointers, effects_limited) = if self.version >= 20 { self.optional_effect_pointers(&mut c, ctl)? } else { (Vec::new(), false) };
-        let (type_rgb, alpha) = match kind {
-            0 => (true, false),
-            1 => (true, true),
-            2 | 4 => (false, false),
-            3 | 5 => (false, true),
+        let alpha = match kind {
+            0 | 2 | 4 => false,
+            1 | 3 | 5 => true,
             k => return Err(invalid(format!("unknown layer type {k} on '{name}'"))),
         };
 
@@ -723,7 +732,7 @@ impl<'a> Image<'a> {
             }
         }
         let gray_floating = floating && matches!(kind, 2 | 3) && self.base_type != 1;
-        if !gray_floating && type_rgb != (self.base_type != 1) && self.base_type != 2 {
+        if !gray_floating && kind / 2 != self.base_type {
             return Err(invalid(format!("layer '{name}' does not match the image's colour model")));
         }
 
@@ -765,7 +774,7 @@ impl<'a> Image<'a> {
         }
         self.layer_identity_notices(outcome, &lprops, floating, gray_floating, legacy_linked)?;
         if link {
-            self.layer_link(outcome, &lprops, hptr)?;
+            self.layer_link(outcome, &lprops, hptr, ctl)?;
         }
         self.layer_compositing(&layer, outcome, layer_mode, group, composite_mode)?;
         let linear = composite_space.unsigned_abs() == 1 || blend_space.unsigned_abs() == 1;

@@ -39,6 +39,7 @@ craft-psd = { workspace = true }
 egui = { workspace = true, features = ["serde"] }
 egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
 eframe = { workspace = true, features = ["wgpu", "accesskit", "clipboard"] }
+rustc-hash = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # The tables of craft-host's `SectionStore` (`app/framework.rs`); already linked through craft-host.

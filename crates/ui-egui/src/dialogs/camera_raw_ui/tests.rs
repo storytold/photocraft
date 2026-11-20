@@ -815,9 +815,9 @@ fn auto_tone_of_a_never_shown_raw_matches_the_dialogs() {
     app.run("layer.new.layer", json!({})).unwrap();
     let st = app.session.active_mut().unwrap();
     let id = st.doc.layers.iter().find(|l| l.surface().is_some()).unwrap().id;
-    st.active_layer = Some(id);
+    st.set_active_layer(Some(id));
     let document = st.doc.id;
-    let Some(photocraft_doc::LayerContent::Raster(s)) = std::sync::Arc::make_mut(&mut st.doc).layer_mut(id).map(|l| &mut l.content) else {
+    let Some(photocraft_doc::LayerContent::Raster(s)) = std::sync::Arc::make_mut(st.doc_mut()).layer_mut(id).map(|l| &mut l.content) else {
         panic!("a pixel layer")
     };
     let format = s.format();
