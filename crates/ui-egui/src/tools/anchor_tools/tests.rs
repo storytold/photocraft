@@ -63,7 +63,7 @@ fn add_on_a_straight_segment_inserts_a_smooth_anchor_in_one_step() {
 }
 
 #[test]
-fn delete_removes_the_clicked_anchor_and_alt_swaps_the_tools() {
+fn delete_removes_the_clicked_anchor_and_alt_makes_it_add() {
     let mut app = app(Tool::DeleteAnchorPoint);
     with_path(&mut app);
     let n = steps(&app);
@@ -72,15 +72,15 @@ fn delete_removes_the_clicked_anchor_and_alt_swaps_the_tools() {
     assert_eq!((p.subpaths[0].knots.len(), p.subpaths[0].closed), (3, true));
     assert_eq!(p.subpaths[0].knots[2].anchor, Point::new(40.0, 120.0));
     assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Delete Anchor Point"));
-    // ⌥ with Delete adds; ⌥ with Add deletes.
+    // ⌥ with Delete adds; ⌥ with Add deletes nothing (#12709).
     click(&mut app, [80.0, 120.0], Modifiers::ALT);
     assert_eq!(work(&app).subpaths[0].knots.len(), 3, "the bottom edge is gone; ⌥ on empty canvas adds nothing");
     click(&mut app, [40.0, 80.0], Modifiers::ALT);
     assert_eq!(work(&app).subpaths[0].knots.len(), 4);
     app.ui.tool = Tool::AddAnchorPoint;
     click(&mut app, [40.0, 80.0], Modifiers::ALT);
-    assert_eq!(work(&app).subpaths[0].knots.len(), 3);
-    assert_eq!(steps(&app), n + 3);
+    assert_eq!(work(&app).subpaths[0].knots.len(), 4);
+    assert_eq!(steps(&app), n + 2);
 }
 
 #[test]

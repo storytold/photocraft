@@ -59,6 +59,12 @@ fn the_wheel_over_a_field_steps_it_without_a_click() {
     assert_eq!(view(&h), before, "the canvas didn't move");
 }
 
+/// Frames a wheel event gets to play out (0.25 s each, the harness's default step). egui's wheel smoothing reaches
+/// 90 % in 0.1 s and takes the rest under one point at once, so the smoothed tail of a notch (about 50 points) ends
+/// within three frames even at a 0.1 s step; four leave one to spare: the view after
+/// them is the one the old forty left.
+const TAIL_STEPS: usize = 4;
+
 /// How far a wheel of `delta` lines with `modifiers` over the canvas moves the view, a Smoothing
 /// field focused or not, once egui's smoothed scroll has run out. The field isn't stepped.
 fn canvas_pan(focus: bool, delta: egui::Vec2, modifiers: egui::Modifiers) -> (f32, [f32; 2]) {
@@ -78,7 +84,7 @@ fn canvas_pan(focus: bool, delta: egui::Vec2, modifiers: egui::Modifiers) -> (f3
         phase: egui::TouchPhase::Move,
         modifiers,
     });
-    h.run_steps(40);
+    h.run_steps(TAIL_STEPS);
     assert!(h.query_all_by_role(Role::SpinButton).any(|n| n.value().as_deref() == Some("10")), "focus {focus}: the field wasn't stepped");
     let after = view(&h);
     (after.0 / before.0, [after.1[0] - before.1[0], after.1[1] - before.1[1]])
