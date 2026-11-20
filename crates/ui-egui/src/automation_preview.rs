@@ -10,6 +10,10 @@
 //! synthetic input pass that added or edited one). Their previews, and the previews of dialogs
 //! the synthetic input being handled opened or edited, pass the policy first. Dialogs only the
 //! user touched preview as before.
+//!
+//! A pass is compared as a whole, so it can't tell who made a change within it: a dialog the user
+//! edits in the same pass as injected input is marked too, and its preview stays judged (and
+//! refused, if the policy refuses it) for as long as that dialog stays open.
 
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::HostedParamDialog;
@@ -88,7 +92,9 @@ fn synthetic_reached(app: &PhotocraftApp, dialog: DialogId) -> bool {
 }
 
 /// What confirming dialog `dialog` is judged as: a parameter dialog whose key is a live command,
-/// with its fields (as `ui.dialog.confirm` judges it).
+/// with its fields (as `ui.dialog.confirm` judges it). Keep in step with `hosted_command` in
+/// `control/dialogs.rs`, which `ui.dialog.confirm` uses; it can't be called from here because
+/// `control` is not built for wasm.
 fn confirmed_as(app: &PhotocraftApp, dialog: DialogId) -> Option<(String, Value)> {
     app.framework.dialogs.get_by_id::<HostedParamDialog>(dialog)?;
     let open = app.framework.dialogs.open_dialogs().into_iter().find(|d| d.id == dialog)?;
@@ -137,7 +143,7 @@ mod tests {
     }
 
     /// An app whose automation gate and command callback both apply [`policy`].
-    fn confined_app() -> (PhotocraftApp, egui::Context) {
+    fn confined_app() -> (Box<PhotocraftApp>, egui::Context) {
         let services = crate::Services {
             automation_authorize: Some(policy),
             automation_command: Some(Box::new(|id, params| policy(id, params).map_err(|e| e.to_string()))),
