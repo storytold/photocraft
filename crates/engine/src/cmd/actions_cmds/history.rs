@@ -131,7 +131,7 @@ fn consolidate(s: &mut Session, group: &ActionHistory) {
         history.max_bytes = st.history.max_bytes;
         history.non_linear = st.history.non_linear;
         if st.doc.as_ref() == before.doc.as_ref() {
-            st.doc = before.doc.clone();
+            *st.doc_mut() = before.doc.clone();
             st.coalesce = before.coalesce.clone();
             if before.clean && st.saved_revision == before.saved_revision {
                 st.saved_revision = st.revision;
@@ -153,7 +153,12 @@ fn consolidate(s: &mut Session, group: &ActionHistory) {
             // exact pixels. Snapshots already retain source pixels without adding an Undo row.
             let id = st.next_snapshot;
             st.next_snapshot = id.saturating_add(1);
-            st.snapshots.push(crate::history_cmds::Snapshot { id, name: format!("{}: {}", group.name, source.label), doc: source.doc, layers: source.layers });
+            st.snapshots_mut().push(crate::history_cmds::Snapshot {
+                id,
+                name: format!("{}: {}", group.name, source.label),
+                doc: source.doc,
+                layers: source.layers,
+            });
             if restore_on_clear_undo {
                 history.set_cleared_brush_snapshot(id);
             } else {

@@ -31,10 +31,13 @@ pub struct SpellDialog {
 }
 
 /// The engine's misspellings, as the raw JSON items of `edit.checkSpelling`. A single-layer check without a layer
-/// lists nothing: an absent opening layer must not adopt the newly active one.
+/// lists nothing: an absent opening layer must not adopt the newly active one. Check All Layers starts at the opening
+/// layer, or top to bottom (null) without one (#14174).
 fn list(app: &mut PhotocraftApp, all_layers: bool, layer: Option<LayerId>, ignore: &[String]) -> Vec<Value> {
     let mut p = json!({ "action": "list", "allLayers": all_layers, "ignore": ignore, "suggestions": 8 });
-    if !all_layers {
+    if all_layers {
+        p["from"] = json!(layer.map(|l| l.0));
+    } else {
         let Some(layer) = layer else { return Vec::new() };
         p["layer"] = json!(layer.0);
     }
@@ -295,3 +298,7 @@ mod tests {
         assert_eq!(action.dialogs.iter().copied().collect::<Vec<_>>(), [0]);
     }
 }
+
+#[cfg(test)]
+#[path = "../type_spell_order_ui_tests.rs"]
+mod spell_order_ui_tests;
