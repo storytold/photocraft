@@ -362,6 +362,7 @@ jobs:
             sed 's/ (\*)$//' | LC_ALL=C sort -u > "$RUNNER_TEMP/io-packages-before"
           cargo hakari init crates/workspace-hack --yes
           cp .config/no-heif-trial.toml .config/hakari.toml
+          python3 scripts/scope_no_heif_trial.py --exclude-codecs
           cargo hakari generate
           python3 scripts/scope_no_heif_trial.py
           cargo hakari generate

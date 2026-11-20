@@ -1,5 +1,6 @@
 """Restrict the disposable CI workspace-hack to pins that preserve the I/O graph."""
 
+import argparse
 import json
 import tomllib
 from pathlib import Path
@@ -27,8 +28,18 @@ def exclusions(manifest):
 
 
 if __name__ == "__main__":
-    with Path("crates/workspace-hack/Cargo.toml").open("rb") as generated:
-        packages = exclusions(tomllib.load(generated))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--exclude-codecs", action="store_true", help="exclude the workspace's two codec dependencies before generation")
+    if parser.parse_args().exclude_codecs:
+        with Path("Cargo.toml").open("rb") as manifest:
+            workspace_deps = tomllib.load(manifest)["workspace"]["dependencies"]
+        packages = []
+        for alias in ("photocraft-codecs", "photocraft-formats"):
+            dep = workspace_deps[alias]
+            packages.append({"name": dep["package"], "git": dep["git"], "rev": dep["rev"]})
+    else:
+        with Path("crates/workspace-hack/Cargo.toml").open("rb") as generated:
+            packages = exclusions(tomllib.load(generated))
     # This config starts as a fresh copy of the checked-in trial template.
     with Path(".config/hakari.toml").open("a", encoding="utf-8") as config:
         for package in packages:
