@@ -270,6 +270,10 @@ impl Default for Pattern {
 pub struct Texture {
     pub enabled: bool,
     pub pattern: Pattern,
+    /// The id of the library pattern `pattern` was made from; `None` once `pattern` is anything else. The pattern
+    /// picker shows it as selected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pattern_id: Option<String>,
     pub invert: bool,
     /// Pattern scale (1 = 100 %).
     pub scale: f32,
@@ -306,6 +310,7 @@ impl Default for Texture {
         Self {
             enabled: false,
             pattern: Pattern::default(),
+            pattern_id: None,
             invert: false,
             scale: 1.0,
             brightness: 0.0,
@@ -526,11 +531,13 @@ pub struct Smoothing {
     pub enabled: bool,
     /// 0..1.
     pub amount: f32,
-    /// Lazy-mouse: paint only when the pointer pulls a string of `amount × 100 px` taut.
+    /// Lazy-mouse: paint only when the pointer pulls a string of `amount × 300 px` taut
+    /// ([`crate::dynamics::MAX_STRING_PX`], screen pixels before Adjust for Zoom).
     pub pulled_string: bool,
     /// Keep catching up with the pointer while it pauses (uses point timestamps).
     pub catch_up: bool,
-    /// Finish the stroke at the last pointer position.
+    /// Finish the stroke at the last pointer position. No effect in Pulled String Mode, where the
+    /// stroke ends the string's length behind the pointer (measured, #11888).
     pub catch_up_on_end: bool,
     /// Divide the string length by the view zoom (the command's `zoom` param).
     pub adjust_for_zoom: bool,
