@@ -390,6 +390,61 @@ fn a_file_holding_rows_we_do_not_know_writes_them_back() {
 }
 
 #[test]
+fn a_kept_row_keeps_its_prefix_its_own_declaration_and_its_markup() {
+    // "Kept as it was read" has to mean the entry as it stood in the file: a name of theirs with its
+    // prefix, the namespace declaration that gives that row's prefix its meaning, an attribute of
+    // theirs we have no name for, a nested element, a CDATA section, and a comment or a processing
+    // instruction standing between the rows.
+    let text = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+        "<photoshop-menu-settings version=\"2\" xmlns:ps=\"http://ns.adobe.com/photoshop/\" filename=\"$$$/FileName/Presets/MenuCustomization/My Menus=My Menus\" modified=\"0\">\n",
+        "  <!-- the set as the reference application saved it -->\n",
+        "  <ps:command xmlns:ps=\"http://ns.adobe.com/photoshop/\" ps:extra=\"1\" kind=\"static\" id=\"1520\" parentMenuID=\"2\" menuType=\"0\" hidden=\"1\" color=\"0\"/>\n",
+        "  <ps:panel><ps:name>Layers</ps:name><![CDATA[a < b]]></ps:panel>\n",
+        "  <?mnu-note kept?>\n",
+        "</photoshop-menu-settings>\n",
+    );
+    let read = from_mnu(text).expect("the reference application's file reads");
+    assert_eq!(read.kept.len(), 4, "the comment, both elements and the instruction, in the order they were read: {read:?}");
+    assert!(read.kept[1].starts_with("<ps:command"), "its prefix as it was written: {:?}", read.kept[1]);
+    assert!(read.kept[1].contains("xmlns:ps=\"http://ns.adobe.com/photoshop/\""), "the declaration of that prefix stays with the row: {:?}", read.kept[1]);
+    assert!(read.kept[1].contains("ps:extra=\"1\""), "an attribute of theirs we have no name for: {:?}", read.kept[1]);
+    assert!(read.kept[2].contains("<ps:name>Layers</ps:name>"), "a nested element keeps its prefix too: {:?}", read.kept[2]);
+    assert!(read.kept[2].contains("<![CDATA[a < b]]>"), "a section stays a section: {:?}", read.kept[2]);
+    assert_eq!(read.kept[0], "<!-- the set as the reference application saved it -->", "a comment between the rows is one of the entries");
+    assert_eq!(read.kept[3], "<?mnu-note kept?>", "and so is a processing instruction");
+    assert!(read.set.hidden.is_empty() && read.set.colors.is_empty(), "none of these rows names one of our items: {:?}", read.set);
+    // Our rewrite holds every one of them, and reading our own file gives the same entries again.
+    let again = from_mnu(&to_mnu("My Menus", &read.set, &read.kept)).expect("our rewrite reads back");
+    assert_eq!(again.kept, read.kept, "a kept entry is written as it was read: {:?} against {:?}", again.kept, read.kept);
+}
+
+#[test]
+fn what_a_kept_entry_does_not_keep_is_named_and_pinned() {
+    // The two limits of the pinned `craft_xml` reader, stated as tests rather than claimed away.
+    // One: an entity reference inside a kept entry is what its reader makes of it - the numeric form
+    // becomes its character and a predefined one comes back as a reference, while a name the reader
+    // does not know is dropped rather than guessed at.
+    let read = from_mnu(&mnu("  <note>a &#65; and &amp; and &unknownthing; b</note>\n")).expect("a foreign element is kept");
+    assert_eq!(read.kept.len(), 1, "{read:?}");
+    assert!(read.kept[0].contains("a A and "), "the numeric reference became its character: {:?}", read.kept[0]);
+    assert!(read.kept[0].contains("&amp;"), "the predefined reference comes back as a reference: {:?}", read.kept[0]);
+    assert!(!read.kept[0].contains("unknownthing"), "a reference name the reader does not know is not carried over: {:?}", read.kept[0]);
+    // Two: a namespace declaration the SOURCE root carries belongs to that root. We write our own
+    // root, so a prefixed row we keep carries its prefix but not the URI their root declared for it.
+    let foreign = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+        "<photoshop-menu-settings version=\"2\" xmlns:ps=\"http://ns.adobe.com/photoshop/\">\n",
+        "  <ps:command kind=\"static\" id=\"1520\" parentMenuID=\"2\" menuType=\"0\" hidden=\"1\" color=\"0\"/>\n",
+        "</photoshop-menu-settings>\n",
+    );
+    let read = from_mnu(foreign).expect("the reference's file reads");
+    let written = to_mnu("Mine", &read.set, &read.kept);
+    assert!(written.contains("<ps:command"), "the row keeps its prefix: {written}");
+    assert!(!written.contains("xmlns:ps"), "the foreign root's declaration does not move onto ours: {written}");
+}
+
+#[test]
 fn writing_a_set_over_a_file_keeps_the_rows_that_file_held() {
     // The row's Save overwrites the set's file without a dialog; the entries the file held that we
     // cannot name do not go with it.
@@ -489,6 +544,37 @@ fn the_first_set_makes_the_menu_sets_folder_and_writes_its_file_there() {
     std::fs::write(dir.join("Broken.MNU"), "<photocraft-menu-settings").expect("the broken file");
     assert!(write_set(&dir, "Broken", &set(&["file.new"], &[])).is_err(), "a malformed file is not rewritten");
     assert_eq!(std::fs::read_to_string(dir.join("Broken.MNU")).expect("still there"), "<photocraft-menu-settings", "the write refused, the file stayed");
+}
+
+#[test]
+fn a_folder_wearing_a_set_file_s_name_is_left_alone() {
+    // `read_sets` reads the files of the folder, not whatever else it holds: a subfolder wearing a
+    // set file's name is neither a set nor a file we failed to read, so it says nothing at all.
+    let tmp = tempfile::tempdir().expect("a settings folder");
+    let dir = folder(tmp.path());
+    std::fs::create_dir_all(dir.join("Mine.MNU")).expect("a folder wearing a set file's name");
+    std::fs::write(dir.join("Good.MNU"), mnu(&row(31, 2, 0, 0, 5))).expect("a real set file");
+    let (sets, errors) = read_sets(&dir);
+    assert_eq!(sets.keys().collect::<Vec<_>>(), vec!["Good"], "the subfolder is not a set: {sets:?}");
+    assert!(errors.is_empty(), "and it is not a file that could not be read: {errors:?}");
+    // The same name as a set to write is an error rather than a crash: the folder is in the way.
+    assert!(write_set(&dir, "Mine", &set(&["file.new"], &[])).is_err(), "a folder is in the way of that set's file");
+    assert!(dir.join("Mine.MNU").is_dir(), "and nothing was written through it");
+}
+
+#[test]
+fn a_set_write_leaves_one_file_in_the_folder_and_no_staging_behind() {
+    // The write lands as a whole file: staged beside the target and moved in, so the folder never
+    // keeps a second file of its own and the target is always a set file that reads - the old bytes
+    // until the move happens, the new ones after it, never half of either.
+    let (_tmp, dir) = folder_with(&[("Mine.MNU", &mnu(&row(1520, 2, 0, 1, 0)))]);
+    write_set(&dir, "Mine", &set(&["file.new"], &[])).expect("the rewrite");
+    let left: Vec<String> = std::fs::read_dir(&dir).expect("the folder").flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(left, vec!["Mine.MNU".to_string()], "one file in the folder, nothing staged left behind");
+    let text = std::fs::read_to_string(dir.join("Mine.MNU")).expect("the file");
+    assert!(text.contains(&row(10, 2, 0, 1, 0)), "the new set is whole: {text}");
+    assert!(text.contains(&row(1520, 2, 0, 1, 0)), "and the row the file held is still there: {text}");
+    assert!(from_mnu(&text).is_ok(), "what the folder holds reads as a set");
 }
 
 #[test]

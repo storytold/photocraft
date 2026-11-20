@@ -282,14 +282,32 @@ pub fn color_name(number: u32) -> Option<&'static str> {
 }
 
 /// What a `.mnu` file holds: the set the rows we know describe, and the entries we cannot name — a
-/// row with a number of theirs, a `<command>` that is not a static one, and any other element. A
-/// rewrite writes those back as they were read, which is what the issue asks for.
+/// row with a number of theirs, a `<command>` that is not a static one, any other element, and a
+/// comment, processing instruction or section standing between the rows. A rewrite writes those back
+/// as they were read, which is what the issue asks for.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Mnu {
     /// The set the known rows describe.
     pub set: MenuSet,
     /// The entries we could not name, in the order they were read, as XML text.
     pub kept: Vec<String>,
+}
+
+/// The name of the element [`node_xml`] wraps a node in so that the writer will write it, and which
+/// it takes off again.
+const KEPT_WRAPPER: &str = "kept";
+
+/// The XML text of a comment, a processing instruction or a CDATA section that stood between the
+/// rows. It goes through `craft_xml`'s own writer as the one child of an element whose tags then come
+/// off again, so the entry is exactly what that writer writes: a node that writer cannot write — a
+/// comment holding `--`, an instruction aimed at the reserved `xml` target — is left out here as it is
+/// left out there.
+fn node_xml(node: &craft_xml::Node) -> Option<String> {
+    let open = format!("<{KEPT_WRAPPER}>");
+    let close = format!("</{KEPT_WRAPPER}>");
+    let wrapped = craft_xml::El::new(KEPT_WRAPPER).with_node(node.clone()).to_xml();
+    let inner = wrapped.strip_prefix(open.as_str())?.strip_suffix(close.as_str())?;
+    (!inner.is_empty()).then(|| inner.to_owned())
 }
 
 /// Read the `.mnu` text of a set: the measured layout of #14450, and nothing else. Bad XML, a root
@@ -304,11 +322,19 @@ pub fn from_mnu(text: &str) -> Result<Mnu, String> {
     }
     // A set file is one root and one flat list of rows, so the depth bound is not what stops a
     // hostile file: the input bound is, and it is set twice on purpose (here and in the parser).
-    let options = craft_xml::Options { doctype: craft_xml::Doctype::Reject, ..craft_xml::Options::local() }.with_limits(craft_xml::Limits {
-        max_input: MAX_MNU_BYTES,
-        max_depth: 8,
-        ..craft_xml::Limits::DEFAULT
-    });
+    // Everything the pinned reader can keep is turned on, because a file may hold rows and markup
+    // we are only passing through: names as written (a prefix of theirs stays theirs), the namespace
+    // declarations that give a prefix its meaning, comments, processing instructions and CDATA
+    // sections. What it cannot keep - a reference name it does not know, and the declarations of a
+    // foreign root we do not write - is named in the tests, not claimed.
+    let options = craft_xml::Options {
+        doctype: craft_xml::Doctype::Reject,
+        comments: true,
+        pis: true,
+        cdata: true,
+        ..craft_xml::Options::default()
+    }
+    .with_limits(craft_xml::Limits { max_input: MAX_MNU_BYTES, max_depth: 8, ..craft_xml::Limits::DEFAULT });
     let root = options.parse(body.as_bytes()).map_err(|e| format!("menu set file: {e}"))?;
     if !root.local().ends_with(ROOT_SUFFIX) {
         return Err(format!("not a menu set file: its root element is <{}>", root.local()));
@@ -317,20 +343,32 @@ pub fn from_mnu(text: &str) -> Result<Mnu, String> {
         return Err(format!("menu set file version `{}` is not supported", root.attr("version").unwrap_or("nothing")));
     }
     let mut out = Mnu::default();
-    for child in root.elements() {
+    for child in &root.children {
+        // A comment, an instruction or a section standing between the rows is part of what the file
+        // held, so it goes into `kept` like a row we cannot name; the whitespace between them does not.
+        let element = match child {
+            craft_xml::Node::El(element) => element,
+            craft_xml::Node::Text(_) => continue,
+            other => {
+                if let Some(text) = node_xml(other) {
+                    out.kept.push(text);
+                }
+                continue;
+            }
+        };
         // An element we cannot take as a static command row of a known number is kept as it was.
-        let unknown = child.local() != "command" || child.attr("kind") != Some("static");
-        let number = child.attr("id").and_then(|v| v.parse::<u32>().ok());
+        let unknown = element.local() != "command" || element.attr("kind") != Some("static");
+        let number = element.attr("id").and_then(|v| v.parse::<u32>().ok());
         if unknown || number.is_none() {
-            out.kept.push(child.to_xml());
+            out.kept.push(element.to_xml());
             continue;
         }
-        let hidden = match child.attr("hidden").unwrap_or("0") {
+        let hidden = match element.attr("hidden").unwrap_or("0") {
             "0" => false,
             "1" => true,
             other => return Err(format!("menu set file: hidden=\"{other}\" is not 0 or 1")),
         };
-        let color = match child.attr("color").unwrap_or("0") {
+        let color = match element.attr("color").unwrap_or("0") {
             "0" => None,
             other => Some(
                 color_name(other.parse::<u32>().map_err(|_| format!("menu set file: colour \"{other}\" is not a number"))?)
@@ -338,7 +376,7 @@ pub fn from_mnu(text: &str) -> Result<Mnu, String> {
             ),
         };
         match number.and_then(ref_command) {
-            None => out.kept.push(child.to_xml()),
+            None => out.kept.push(element.to_xml()),
             Some(command) => {
                 if hidden {
                     out.set.hidden.push(command.to_owned());
@@ -455,7 +493,13 @@ pub fn read_sets(dir: &Path) -> (BTreeMap<String, MenuSet>, Vec<String>) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (sets, errors),
         Err(e) => return (sets, vec![format!("{}: {e}", dir.display())]),
     };
-    let mut files: Vec<(String, PathBuf)> = entries.flatten().filter_map(|e| set_name_of(&e.path()).map(|name| (name, e.path()))).collect();
+    let mut files: Vec<(String, PathBuf)> = entries
+        .flatten()
+        // Only the folder's files are set files: a subfolder wearing the name of one is not a file we
+        // failed to read, and says nothing.
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter_map(|entry| set_name_of(&entry.path()).map(|name| (name, entry.path())))
+        .collect();
     files.sort();
     if files.len() > MAX_SET_FILES {
         errors.push(format!("{}: more than {MAX_SET_FILES} set files, the rest were left out", dir.display()));
