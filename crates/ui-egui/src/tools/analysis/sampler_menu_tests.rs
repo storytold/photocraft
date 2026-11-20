@@ -43,10 +43,13 @@ fn delete_never_removes_another_sampler_after_the_list_changes_under_the_menu() 
     // Another document with a sampler at the same index and spot: still not this menu's sampler.
     right_click(&mut app, 180.0, 90.0);
     assert_eq!(app.ui.canvas_tool_menu.as_ref().and_then(|m| m.sampler), Some(1));
+    let original_menu = app.ui.canvas_tool_menu.clone().unwrap();
     app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    assert!(app.ui.canvas_tool_menu.is_none(), "switching documents closes the menu");
     for (x, y) in [(20, 20), (180, 90)] {
         app.run("view.colorSamplers.add", json!({"x": x, "y": y})).unwrap();
     }
+    assert!(!crate::canvas_tool_menu::entry_enabled(&app, &original_menu, SAMPLER_DELETE), "the original menu cannot delete another document's sampler");
     crate::canvas_tool_menu::close_stale(&mut app);
     crate::canvas_tool_menu::choose(&mut app, &ctx, SAMPLER_DELETE);
     assert_eq!(samplers(&app).len(), 2, "another document's sampler is not deleted");
