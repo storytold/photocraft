@@ -1341,3 +1341,30 @@ fn benchmark_u16_rgba_reads() {
         }
     }
 }
+
+#[test]
+fn generations_follow_mutations_and_remain_shared_by_unmodified_clones() {
+    let mut original = Surface::new(PixelFormat::RGBA8);
+    let initial = original.generation();
+    let copy = original.clone();
+    assert_eq!(copy.generation(), initial);
+    let region = Rect::new(0, 0, 1, 1);
+    let _ = original.read_region(region);
+    assert_eq!(original.generation(), initial);
+    original.write_pixel(0, 0, &[1.0, 0.0, 0.0, 1.0]);
+    assert_ne!(original.generation(), initial);
+    assert_eq!(copy.generation(), initial);
+    assert_ne!(original.read_region(region), copy.read_region(region));
+    let changed = original.generation();
+    original.map_color(|v| v * 0.5);
+    assert_ne!(original.generation(), changed);
+    let mapped = original.generation();
+    original.prune();
+    assert_ne!(original.generation(), mapped);
+    let before_tile = original.generation();
+    let old_copy = original.clone();
+    original.tile_mut(TileCoord { tx: 0, ty: 0 }).bytes_mut()[0] ^= 0xff;
+    assert_ne!(original.generation(), before_tile);
+    assert_eq!(old_copy.generation(), before_tile);
+    assert_ne!(original.read_region(region), old_copy.read_region(region));
+}
