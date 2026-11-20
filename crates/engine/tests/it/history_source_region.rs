@@ -3,7 +3,7 @@
 //! the whole source layer. The timing test is `#[ignore]`d; run it in release:
 //!
 //! ```sh
-//! cargo test -p photocraft-engine --release --test history_source_region -- --ignored --nocapture
+//! cargo test -p photocraft-engine --release --test it history_source_region -- --ignored --nocapture
 //! ```
 
 use photocraft_engine::Session;
