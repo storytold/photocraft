@@ -89,9 +89,6 @@ x11rb = { version = "=0.13.2", default-features = false, features = ["image", "r
 wl-clipboard-rs = { version = "=0.9.4", default-features = false }
 # Wayland desktop color selection through the existing XDG portal transport.
 zbus = "=5.19.0"
-# Caption button glyphs from the desktop's icon theme (`caption_style.rs`): SVG paths only, no
-# text or images. Already in Cargo.lock (photocraft-io).
-craft-svg = { workspace = true }
 # Already used by the portal stack; bounded waits let cancelling close the OS request.
 futures-lite = "=2.6.1"
 async-io = "=2.6.0"
@@ -109,8 +106,6 @@ winit = { version = "=0.30.13", default-features = false, features = ["wayland-c
 # GetCursorPos) and the window frame for the custom title bar (`window_frame.rs`, window styles),
 # no dependencies of its own. Pinned exactly: review the diff before bumping.
 [target.'cfg(target_os = "windows")'.dependencies]
-# Safe Windows screen-capture bindings; Linux uses the pure-Rust X11 client/portal.
-xcap = "=0.9.8"
 winsafe = { version = "=0.0.29", default-features = false, features = ["user"] }
 
 

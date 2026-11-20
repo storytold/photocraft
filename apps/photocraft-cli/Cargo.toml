@@ -45,7 +45,6 @@ thiserror = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [dev-dependencies]
-serde = { workspace = true }
 tempfile = "3"
 # Reading back a saved PSD's merged-image flag (#8064).
 craft-psd = { workspace = true }
