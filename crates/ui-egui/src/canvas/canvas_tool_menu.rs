@@ -828,8 +828,11 @@ fn shape_menu_measured(app: &PhotocraftApp) -> bool {
 /// The label a row shows, untranslated. The Pen's transform row names what it acts on, as in
 /// Photoshop (#12913): the points of the path being drawn, or nothing when the document has no
 /// path at all. A path that exists but isn't active, and the Path Selection and Direct Selection
-/// menus, keep the table's label.
+/// menus, keep the table's label. The Add Anchor Point menu names the selected anchors (#12710).
 pub(crate) fn row_label(app: &PhotocraftApp, menu: &CanvasToolMenu, label: &'static str, command: &str) -> &'static str {
+    if menu.tool == Tool::AddAnchorPoint {
+        return add_anchor_row_label(app, menu, label, command);
+    }
     if command != "path.transform" || menu.tool != Tool::Pen {
         return label;
     }
@@ -842,6 +845,36 @@ pub(crate) fn row_label(app: &PhotocraftApp, menu: &CanvasToolMenu, label: &'sta
             || st.doc.walk().iter().any(|(_, _, l)| l.vector_mask.is_some() || matches!(l.content, LayerContent::Shape(_)))
     });
     if any_path { label } else { "Free Transform" }
+}
+
+/// The Add Anchor Point menu's Fill, Stroke and transform rows, labelled as measured (#12710): with
+/// anchors of the targeted path selected they read **Fill Subpath…** / **Stroke Subpath…** for one
+/// subpath, **Fill Subpaths…** / **Stroke Subpaths…** for several, and **Free Transform Points**.
+/// With no path targeted the transform row reads **Free Transform**. Only the labels follow the
+/// selection: `path.fill`, `path.stroke` and `path.transform` take no subpath or anchor selection
+/// yet, so the rows still act on the whole path.
+fn add_anchor_row_label(app: &PhotocraftApp, menu: &CanvasToolMenu, label: &'static str, command: &str) -> &'static str {
+    if !menu.has_path {
+        return if command == "path.transform" { "Free Transform" } else { label };
+    }
+    // The other rows keep their label: return before looking at the selection, once per row.
+    if !matches!(command, "path.fill" | "path.stroke" | "path.transform") {
+        return label;
+    }
+    let ds = &app.ui.direct_selection;
+    let Some([first, _]) = ds.anchors.first() else { return label };
+    if !crate::direct_select::still_valid(app, ds) {
+        return label;
+    }
+    let several = ds.anchors.iter().any(|[s, _]| s != first);
+    match command {
+        "path.fill" if several => "Fill Subpaths…",
+        "path.fill" => "Fill Subpath…",
+        "path.stroke" if several => "Stroke Subpaths…",
+        "path.stroke" => "Stroke Subpath…",
+        "path.transform" => "Free Transform Points",
+        _ => label,
+    }
 }
 
 /// The Color Sampler menu's Delete row: removes the sampler the menu opened on.
@@ -964,9 +997,26 @@ pub fn path_menu(tool: Tool) -> bool {
 }
 
 /// The anchor tools whose path menu also heads with the entry for the point under the right-click
-/// (#12771, #12744). Add Anchor Point (#12710) joins here.
+/// (#12771, #12744, #12710).
 fn point_menu(tool: Tool) -> bool {
-    matches!(tool, Tool::DeleteAnchorPoint | Tool::ConvertPoint)
+    matches!(tool, Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint)
+}
+
+/// The Add Anchor Point tool's right-click on anchor `knot` of `target` selects it, as measured
+/// (#12710); an anchor already among the selected ones keeps the selection. The caller passes only
+/// an anchor that got a point entry, so the Pen draft and paths the anchor tools ignore never get here.
+fn select_right_clicked_anchor(app: &mut PhotocraftApp, target: PathRef, knot: [usize; 2]) {
+    let owner = crate::direct_select::Owner::current(app);
+    let ds = &app.ui.direct_selection;
+    if ds.target != Some(target) || !crate::direct_select::still_valid(app, ds) {
+        app.ui.direct_selection = crate::direct_select::DirectSelection { target: Some(target), ..Default::default() };
+    }
+    let ds = &mut app.ui.direct_selection;
+    ds.owner = owner;
+    ds.segment = None;
+    if !ds.anchors.contains(&knot) {
+        ds.anchors = vec![knot];
+    }
 }
 
 /// The entry for the anchor or segment `hit` on path `target`, as the anchor tools hit it: Delete
@@ -1489,6 +1539,13 @@ fn capture(app: &mut PhotocraftApp, menu: &mut CanvasToolMenu, doc: [f64; 2], po
     menu.has_path = menu.path_name.is_some() || pen_pending(app);
     if point_menu(menu.tool) && menu.has_path {
         menu.point = point.and_then(|(target, hit)| point_at(app, target, hit));
+        // Add Anchor Point: the anchor the menu offers to delete is selected too (#12710).
+        if menu.tool == Tool::AddAnchorPoint
+            && menu.point.is_some()
+            && let Some((target, BezierHit::Anchor { knot, .. })) = point
+        {
+            select_right_clicked_anchor(app, target, [knot.subpath, knot.knot]);
+        }
     }
     menu.inside_selection = menu.tool == Tool::ContentAwareMove && selected_at(app, doc);
     if menu.tool == Tool::ColorSampler {
@@ -1711,6 +1768,10 @@ pub fn entries(app: &PhotocraftApp, menu: &CanvasToolMenu) -> Vec<Entry<String>>
         let text = match row_label(app, menu, label, command) {
             // Spelled out so `cargo xtask i18n-coverage` lists the new label.
             "Free Transform Points" => tl!("Free Transform Points"),
+            "Fill Subpath…" => tl!("Fill Subpath…"),
+            "Fill Subpaths…" => tl!("Fill Subpaths…"),
+            "Stroke Subpath…" => tl!("Stroke Subpath…"),
+            "Stroke Subpaths…" => tl!("Stroke Subpaths…"),
             "Rasterize Vector Mask" => tl!("Rasterize Vector Mask"),
             key => tl!(key),
         };
@@ -1806,6 +1867,8 @@ mod make_selection_dialog_tests;
 #[cfg(test)]
 mod type_layer_menu_tests;
 
+#[cfg(test)]
+mod add_anchor_menu_tests;
 #[cfg(test)]
 mod delete_anchor_menu_tests;
 

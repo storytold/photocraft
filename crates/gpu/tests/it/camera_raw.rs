@@ -170,10 +170,6 @@ fn image(w: usize, h: usize, depth: Depth) -> Vec<[f32; 4]> {
 }
 
 /// Develops `p` both ways and returns the largest channel difference.
-fn compare(g: &mut Gpu, p: &Case, depth: Depth) -> f32 {
-    compare_at(g, p, depth, (171, 113))
-}
-
 fn compare_at(g: &mut Gpu, p: &Case, depth: Depth, (w, h): (usize, usize)) -> f32 {
     compare_image(g, p, depth, &image(w, h, depth), (w, h))
 }
@@ -207,10 +203,14 @@ fn compare_image(g: &mut Gpu, p: &Case, depth: Depth, src: &[[f32; 4]], (w, h): 
 }
 
 fn check(name: &str, sets: &[Case]) {
+    check_at(name, sets, (171, 113));
+}
+
+fn check_at(name: &str, sets: &[Case], size: (usize, usize)) {
     let Some(mut g) = gpu() else { return };
     for p in sets {
         for depth in DEPTHS {
-            let d = compare(&mut g, p, depth);
+            let d = compare_at(&mut g, p, depth, size);
             eprintln!("{name} {depth:?}: max |GPU - CPU| = {d:.2e}");
         }
     }
@@ -424,7 +424,8 @@ fn shadows_and_highlights() {
         cr! { shadows: 35.0, highlights: -45.0, encoding_gamma: 1.8},
     ];
     assert_moves(&sets);
-    check("shadows/highlights", &sets);
+    // The long side preserves the spatial filter scale; 48 rows keep several pyramid levels.
+    check_at("shadows/highlights", &sets, (171, 48));
 }
 
 #[test]
@@ -476,7 +477,7 @@ fn shadows_and_highlights_with_per_pixel_stages() {
     vignette_amount: -30.0,
     grain_amount: 20.0,
     pixel_scale: 0.2};
-    check(
+    check_at(
         "shadows/highlights + per pixel",
         &[
             all.clone(),
@@ -485,10 +486,11 @@ fn shadows_and_highlights_with_per_pixel_stages() {
             cr! { highlights: -60.0, whites: -60.0, blacks: 50.0, exposure: -0.4},
             cr! { shadows: 30.0, highlights: -30.0, whites: 40.0, blacks: -30.0, encoding_gamma: 1.8},
         ],
+        (171, 48),
     );
     // At the dialog's proxy width, at one depth: the depth only changes how the input is
     // quantized (8 and 16 bits both develop with `float = false`), and every depth already ran
-    // above at 171×113. The long side is what matters here (subsampled pyramid levels); the short
+    // above at 171×48. The long side is what matters here (subsampled pyramid levels); the short
     // one only needs to keep several levels, so the frame is a strip.
     let Some(mut g) = gpu() else { return };
     let d = compare_at(&mut g, &all, Depth::Sixteen, (858, 120));
@@ -499,9 +501,9 @@ fn shadows_and_highlights_with_per_pixel_stages() {
 /// with the CPU can't pass trivially.
 fn assert_moves(sets: &[Case]) {
     for p in sets {
-        let src = image(171, 113, Depth::Sixteen);
+        let src = image(171, 48, Depth::Sixteen);
         let mut out = src.clone();
-        develop(&mut out, 171, 113, p, false);
+        develop(&mut out, 171, 48, p, false);
         let moved = out.iter().zip(&src).flat_map(|(a, b)| (0..3).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
         assert!(moved > 0.02, "{p:?} moves pixels by at most {moved}");
     }
@@ -523,7 +525,8 @@ fn clarity_texture_and_dehaze() {
         cr! { dehaze: -30.0, clarity: -25.0, texture: 60.0, encoding_gamma: 1.8},
     ];
     assert_moves(&sets);
-    check("clarity/texture/dehaze", &sets);
+    // Match the movement check while retaining several pyramid levels.
+    check_at("clarity/texture/dehaze", &sets, (171, 48));
 }
 
 #[test]
@@ -563,11 +566,11 @@ fn clarity_texture_and_dehaze_with_shadows_highlights_and_per_pixel_stages() {
         cr! { clarity: 50.0, whites: -50.0, blacks: 45.0, exposure: -0.3},
         cr! { texture: -60.0, whites: 30.0, blacks: -60.0},
     ];
-    check("clarity/texture/dehaze + shadows/highlights + per pixel", &sets);
+    check_at("clarity/texture/dehaze + shadows/highlights + per pixel", &sets, (171, 48));
     let Some(mut g) = gpu() else { return };
     // At the dialog's proxy width (Dehaze and Clarity on a copy subsampled twice), and wider (three
     // times). One depth per size: the depth only changes how the input is quantized (8 and 16
-    // bits both develop with `float = false`), and every depth already ran above at 171×113. The
+    // bits both develop with `float = false`), and every depth already ran above at 171×48. The
     // long side sets the subsampling; the short one only needs to keep several pyramid levels, so
     // the frames are strips.
     for (size, depth) in [((858, 120), Depth::Eight), ((1600, 120), Depth::Float)] {
