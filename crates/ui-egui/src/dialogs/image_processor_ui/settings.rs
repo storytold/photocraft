@@ -1,9 +1,10 @@
 //! XML presets for the Image Processor dialog. The element names and order follow the measured settings file.
 
+use std::borrow::Cow;
 use std::fmt::Write;
 
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue};
-use roxmltree::{Document, ParsingOptions};
+use craft_xml::{Doctype, Limits, Node, Options};
 
 pub(super) const MAX_BYTES: usize = 256 * 1024;
 
@@ -66,10 +67,10 @@ fn too_large() -> String {
 
 pub(super) fn encode(fields: &DialogFields) -> Result<Vec<u8>, String> {
     let mut xml = String::from('\u{feff}');
-    if fields.text("source") == Some("current") {
-        let _ = writeln!(xml, "<?PhotoCraft {CURRENT_SOURCE}?>");
-    }
     let _ = writeln!(xml, "<{ROOT}>");
+    if fields.text("source") == Some("current") {
+        let _ = writeln!(xml, "\t<?PhotoCraft {CURRENT_SOURCE}?>");
+    }
     for &(tag, field, kind) in ELEMENTS {
         let field = field.unwrap_or_default();
         let _ = write!(xml, "\t<{tag}>");
@@ -97,7 +98,11 @@ pub(super) fn encode(fields: &DialogFields) -> Result<Vec<u8>, String> {
                 if text.len() > MAX_BYTES {
                     return Err(too_large());
                 }
-                push_text(&mut xml, text).ok_or_else(|| invalid(tag))?;
+                if !text.chars().all(craft_xml::is_xml_char) {
+                    return Err(invalid(tag));
+                }
+                // Keep the preset's one element per line even for paths containing line breaks.
+                xml.push_str(&craft_xml::esc(text).replace('\n', "&#10;"));
             }
         }
         let _ = writeln!(xml, "</{tag}>");
@@ -109,50 +114,37 @@ pub(super) fn encode(fields: &DialogFields) -> Result<Vec<u8>, String> {
     Ok(xml.into_bytes())
 }
 
-fn push_text(xml: &mut String, text: &str) -> Option<()> {
-    for c in text.chars() {
-        match c {
-            '&' => xml.push_str("&amp;"),
-            '<' => xml.push_str("&lt;"),
-            '>' => xml.push_str("&gt;"),
-            // Keep each element on one line. XML also normalizes literal carriage returns.
-            '\r' => xml.push_str("&#13;"),
-            '\n' => xml.push_str("&#10;"),
-            '\t' | '\u{20}'..='\u{d7ff}' | '\u{e000}'..='\u{fffd}' | '\u{10000}'..='\u{10ffff}' => xml.push(c),
-            _ => return None,
-        }
-    }
-    Some(())
-}
-
 pub(super) fn decode(bytes: &[u8]) -> Result<DialogFields, String> {
     if bytes.len() > MAX_BYTES {
         return Err(too_large());
     }
-    let text = std::str::from_utf8(bytes).map_err(|_| tl!("Image Processor settings must be UTF-8.").to_string())?;
-    let document = Document::parse_with_options(text, ParsingOptions { nodes_limit: 4096, ..Default::default() })
-        .map_err(|error| crate::i18n::fmt(tl!("Could not read Image Processor settings: {error}"), &[("error", &error.to_string())]))?;
-    let root = document.root_element();
-    if !root.has_tag_name(ROOT) || root.tag_name().namespace().is_some() {
+    std::str::from_utf8(bytes).map_err(|_| tl!("Image Processor settings must be UTF-8.").to_string())?;
+    let options = Options { doctype: Doctype::Reject, pis: true, ..Options::default() }.strict().with_limits(Limits {
+        max_input: MAX_BYTES,
+        max_depth: 32,
+        max_nodes: 4096,
+        ..Limits::default()
+    });
+    let root =
+        options.parse(bytes).map_err(|error| crate::i18n::fmt(tl!("Could not read Image Processor settings: {error}"), &[("error", &error.to_string())]))?;
+    if root.name != ROOT || root.attr("xmlns").is_some_and(|ns| !ns.is_empty()) {
         return Err(tl!("This file does not contain Image Processor settings.").into());
     }
-    let current = document.root().children().filter_map(|node| node.pi()).any(|pi| pi.target == "PhotoCraft" && pi.value == Some(CURRENT_SOURCE));
+    let current = root.children.iter().any(|node| matches!(node, Node::Pi { target, data } if target == "PhotoCraft" && data == CURRENT_SOURCE));
     let mut seen = std::collections::HashSet::new();
     let mut updates = DialogFields::new();
-    for child in root.children() {
-        if child.is_text() && child.text().is_some_and(|text| !text.trim().is_empty()) {
-            return Err(invalid(ROOT));
-        }
-        if !child.is_element() || child.tag_name().namespace().is_some() {
-            continue;
-        }
-        let tag = child.tag_name().name();
+    for node in &root.children {
+        let child = match node {
+            Node::El(child) if child.attr("xmlns").is_none_or(str::is_empty) => child,
+            Node::Text(text) if !text.trim().is_empty() => return Err(invalid(ROOT)),
+            _ => continue,
+        };
+        let tag = child.name.as_str();
         let Some(&(_, field, kind)) = ELEMENTS.iter().find(|(name, _, _)| *name == tag) else { continue };
-        if !seen.insert(tag) || child.children().any(|node| node.is_element()) {
+        if !seen.insert(tag) || child.children.iter().any(|node| matches!(node, Node::El(_))) {
             return Err(invalid(tag));
         }
-        let text: String = child.children().filter(|node| node.is_text()).filter_map(|node| node.text()).collect();
-        let value = parse_value(kind, text, current).ok_or_else(|| invalid(tag))?;
+        let value = parse_value(kind, child.text(), current).ok_or_else(|| invalid(tag))?;
         if let Some(field) = field {
             updates.set(field, value);
         }
@@ -160,7 +152,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<DialogFields, String> {
     Ok(updates)
 }
 
-fn parse_value(kind: Kind, text: String, current: bool) -> Option<FieldValue> {
+fn parse_value(kind: Kind, text: Cow<'_, str>, current: bool) -> Option<FieldValue> {
     let trimmed = text.trim();
     Some(match kind {
         OpenDocuments => {
@@ -175,7 +167,7 @@ fn parse_value(kind: Kind, text: String, current: bool) -> Option<FieldValue> {
             .into()
         }
         Bool(_) => trimmed.parse::<bool>().ok()?.into(),
-        Text => text.into(),
+        Text => text.into_owned().into(),
         Int(max) => {
             let value = trimmed.parse::<i64>().ok()?;
             (1..=max).contains(&value).then_some(value)?.into()

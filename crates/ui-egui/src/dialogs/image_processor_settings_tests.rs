@@ -83,6 +83,7 @@ fn invalid_settings_are_rejected() {
         "",
         "<Other/>",
         "<ImageProcessor xmlns='urn:other'/>",
+        "<!DOCTYPE ImageProcessor><ImageProcessor/>",
         "<ImageProcessor>",
         "<ImageProcessor><q>abc</q></ImageProcessor>",
         "<ImageProcessor><q>NaN</q></ImageProcessor>",
