@@ -75,6 +75,8 @@ pub struct EditState {
     pub custom_shapes: Vec<CustomShape>,
     /// Find and Replace Text position and the query it belongs to.
     pub find_cursor: Option<FindCursor>,
+    /// First layer visited in the current Find Next round (so wrapping stops before it).
+    pub find_start: Option<LayerId>,
 }
 
 /// Commands whose result Edit › Fade can blend back against the previous state.
@@ -479,3 +481,7 @@ mod caf_new_layer_name_tests;
 #[cfg(test)]
 #[path = "edit_menu_cmds/find_replace_change_tests.rs"]
 mod find_replace_change_tests;
+
+#[cfg(test)]
+#[path = "edit_menu_cmds/find_replace_order_tests.rs"]
+mod find_replace_order_tests;

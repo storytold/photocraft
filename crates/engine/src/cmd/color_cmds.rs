@@ -1007,9 +1007,19 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
 
+/// Edit > Convert to Profile: a document open, and not in Bitmap mode, where the reference
+/// application greys it (#14263).
+fn convert_profile_enabled(s: &Session) -> std::result::Result<(), String> {
+    let doc = &s.active().ok_or("no document open")?.doc;
+    if doc.mode == ColorMode::Bitmap {
+        return Err("Convert to Profile is not available for Bitmap documents".into());
+    }
+    Ok(())
+}
+
 /// Assign Profile is greyed for Lab, Bitmap and Multichannel documents, as in the reference
-/// application, and a script that runs it there fails (#14238). Convert to Profile keeps
-/// [`has_doc`]: it stays enabled for Lab.
+/// application, and a script that runs it there fails (#14238). Convert to Profile is greyed
+/// for Bitmap only ([`convert_profile_enabled`]): it stays enabled for Lab and Multichannel.
 fn assign_profile_enabled(s: &Session) -> std::result::Result<(), String> {
     let doc = &s.active().ok_or_else(|| "no document open".to_string())?.doc;
     let mode = match doc.mode {
@@ -1127,6 +1137,10 @@ fn convert_to_profile(s: &mut Session, p: &Value) -> Result<Value> {
         .and_then(Value::as_str)
         .ok_or_else(|| EngineError::BadParams { cmd: "edit.convertToProfile".into(), msg: "missing `profile`".into() })?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    // Also for a caller that runs it without the enabled check (#14263).
+    if doc.mode == ColorMode::Bitmap {
+        return Err(EngineError::Other("Convert to Profile is not available for Bitmap documents".into()));
+    }
     let dst = s.color.resolve(spec, Some(doc), None)?;
     let intent = intent_or(p, s.color.settings.intent())?;
     let bpc = bool_param(p, "bpc", s.color.settings.bpc);
@@ -1136,9 +1150,9 @@ fn convert_to_profile(s: &mut Session, p: &Value) -> Result<Value> {
     // A document tagged with a profile of the same colours as the destination needs no colour
     // conversion (compared by colour, not bytes). Without Flatten or Rasterize it stays as it is,
     // with no history state, as in the reference application (#14261); with either, that still
-    // runs as before. An untagged document is still converted and tagged, and an Indexed, Duotone,
-    // Bitmap or Multichannel one still goes through the conversion that changes its mode; none
-    // of those was measured. The embedded profile itself is compared, so one that can't be read
+    // runs as before. An untagged document is still converted and tagged, and an Indexed, Duotone
+    // or Multichannel one still goes through the conversion that changes its mode; none of those
+    // was measured (a Bitmap one is refused above). The embedded profile itself is compared, so one that can't be read
     // or doesn't fit the mode is still replaced.
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let measured = matches!(doc.mode, ColorMode::Rgb | ColorMode::Cmyk | ColorMode::Grayscale | ColorMode::Lab);
@@ -1384,7 +1398,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Convert to Profile…",
             ["Edit"],
             r##"{"profile":"srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020|gray-gamma-2.2|sgray|lab-d50|coated-cmyk|working" (or a path to an .icc file),"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true,"dither":bool=false (deterministic color quantization for 8-bit profile changes),"flatten":bool=false (flatten in the source profile before conversion),"rasterizePlaced":bool=false (freeze displayed Smart Object pixels; flatten takes precedence)}"##,
-            has_doc,
+            convert_profile_enabled,
             convert_to_profile,
             true
         ),
@@ -1971,3 +1985,6 @@ mod settings_tests {
         assert!(s.execute("color.profileMismatch", json!({"action": "explode"})).is_err());
     }
 }
+
+#[cfg(test)]
+mod convert_profile_bitmap_tests;
