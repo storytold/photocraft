@@ -1,5 +1,6 @@
 //! Explicit per-import choices, ordered with existing memory and profile prompts.
 use crate::{PhotocraftApp, open_prompt::PromptKind};
+use photocraft_doc::DocId;
 use photocraft_engine::jobs::{JobId, Started};
 use serde_json::{Value, json};
 
@@ -14,12 +15,22 @@ pub(crate) struct Historical {
     pub version: u64,
     pub bits: u64,
     pub job: Option<JobId>,
+    pub place: Option<DocId>,
 }
 
 pub(crate) fn arrive(app: &mut PhotocraftApp, held: Historical) {
     app.prompt_order.push_back(PromptKind::Historical(held.id));
     app.historical_opens.push(held);
     crate::open_prompt::advance(app);
+}
+
+pub(crate) fn arrive_place(app: &mut PhotocraftApp, name: &str, doc: DocId, result: &Value) -> Result<bool, String> {
+    let Some(id) = result.get("heldHistoricalXcfPlace").and_then(Value::as_u64) else { return Ok(false) };
+    let question = result.get("historicalXcfSampleOrderRequired").ok_or("missing historical XCF requirement")?;
+    let version = question.get("version").and_then(Value::as_u64).ok_or("missing historical XCF version")?;
+    let bits = question.get("bitsPerSample").and_then(Value::as_u64).ok_or("missing historical XCF precision")?;
+    arrive(app, Historical { id, name: name.into(), path: None, slot: None, order: None, version, bits, job: None, place: Some(doc) });
+    Ok(true)
 }
 
 pub(crate) fn show(app: &mut PhotocraftApp, id: u64) {
@@ -29,8 +40,15 @@ pub(crate) fn show(app: &mut PhotocraftApp, id: u64) {
 
 pub(crate) fn validate(app: &PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Result<(), String> {
     let id = fields.get(FIELD).and_then(Value::as_u64).ok_or("missing historical XCF source identity")?;
-    if app.prompt_order.front() != Some(&PromptKind::Historical(id)) || !app.historical_opens.iter().any(|held| held.id == id) {
+    let held = app.historical_opens.iter().find(|held| held.id == id).ok_or("historical XCF dialog is stale or out of order")?;
+    if app.prompt_order.front() != Some(&PromptKind::Historical(id)) {
         return Err("historical XCF dialog is stale or out of order".into());
+    }
+    if held.place.is_some() {
+        app.session.validate_historical_xcf_place(id).map_err(|error| error.to_string())?;
+        if app.ui.transform.is_some() || app.transform_preparing.is_some() || app.jobs.place.is_some() {
+            return Err("Finish the current placement or transform first".into());
+        }
     }
     photocraft_engine::file_cmds::historical_xcf_sample_order(&Value::Object(fields.clone()), "file.open")
         .map_err(|error| error.to_string())?
@@ -49,12 +67,16 @@ pub(crate) fn answer(app: &mut PhotocraftApp, fields: &serde_json::Map<String, V
         app.prompt_order.pop_front();
         crate::open_prompt::advance(app);
         crate::jobs_ui::end_batch(app);
+        app.ctx().request_repaint();
         return Ok(json!({"cancelled":true}));
     }
     validate(app, fields)?;
     let order = photocraft_engine::file_cmds::historical_xcf_sample_order(&Value::Object(fields.clone()), "file.open")
         .map_err(|error| error.to_string())?
         .ok_or("choose Little-endian or Big-endian, or Cancel")?;
+    if let Some((doc, name)) = app.historical_opens.iter().find(|held| held.id == id).and_then(|held| held.place.map(|doc| (doc, held.name.clone()))) {
+        return resume_place(app, id, doc, &name, order);
+    }
     // Reserve A's place until its decoded result arrives; B must not pass A's profile prompt.
     if let Some(front) = app.prompt_order.front_mut() {
         *front = PromptKind::Resuming(id);
@@ -89,6 +111,35 @@ pub(crate) fn answer(app: &mut PhotocraftApp, fields: &serde_json::Map<String, V
             Err(error)
         }
     }
+}
+
+fn resume_place(app: &mut PhotocraftApp, id: u64, doc: DocId, name: &str, order: photocraft_doc::HistoricalXcfSampleOrder) -> Result<Value, String> {
+    let started = app.refocus(doc).and_then(|_| app.session.resume_historical_xcf_open(id, order, app.background_jobs).map_err(|error| error.to_string()));
+    let started = match started {
+        Ok(started) => started,
+        Err(error) => {
+            crate::open_prompt::advance(app);
+            return Err(error);
+        }
+    };
+    app.historical_opens.retain(|held| held.id != id);
+    app.prompt_order.pop_front();
+    let ctx = app.ctx().clone();
+    let result = match started {
+        Started::Job(job) => {
+            let result = json!({"job": job.0, "pending": true});
+            app.jobs.last_started = Some(job);
+            crate::jobs_ui::track_place(app, name, &result);
+            Ok(result)
+        }
+        Started::Done(value) => {
+            app.sync_views();
+            crate::jobs_ui::finish_place_result(app, &ctx, name, doc, &value).map(|()| value)
+        }
+    };
+    crate::open_prompt::advance(app);
+    ctx.request_repaint();
+    result
 }
 
 pub(crate) fn for_job(app: &PhotocraftApp, job: JobId) -> Option<u64> {

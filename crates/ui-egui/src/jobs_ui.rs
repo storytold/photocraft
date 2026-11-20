@@ -251,15 +251,8 @@ fn finish_place(app: &mut PhotocraftApp, ctx: &egui::Context, place: PlaceJob, o
     app.sync_views();
     match outcome {
         JobOutcome::Done(result) => {
-            notices::io_result_warnings(app, &result, &place.name);
-            // The tab can change while the file is placed: the box opens only on the document it
-            // was placed in, and never over another one. An image placed into a frame has none.
-            if app.ui.transform.is_none()
-                && result.get("frame").and_then(Value::as_u64).is_none()
-                && app.session.active().is_some_and(|st| st.doc.id == place.doc)
-                && let Err(e) = crate::transform_tool::begin_placed(app, ctx)
-            {
-                app.ui.status = e;
+            if let Err(error) = finish_place_result(app, ctx, &place.name, place.doc, &result) {
+                app.place_failed(&place.name, &error);
             }
         }
         JobOutcome::Failed(err) => app.place_failed(&place.name, &err),
@@ -270,6 +263,23 @@ fn finish_place(app: &mut PhotocraftApp, ctx: &egui::Context, place: PlaceJob, o
         JobOutcome::Cancelled => {}
     }
     app.place_next_dropped(ctx);
+}
+
+/// Present a held byte-order choice or finish the actual placement.
+pub(crate) fn finish_place_result(app: &mut PhotocraftApp, ctx: &egui::Context, name: &str, doc: DocId, result: &Value) -> Result<(), String> {
+    if crate::dialogs::historical_xcf::arrive_place(app, name, doc, result)? {
+        return Ok(());
+    }
+    notices::io_result_warnings(app, result, name);
+    // Only open Free Transform on the document that received the layer.
+    if app.ui.transform.is_none()
+        && result.get("frame").and_then(Value::as_u64).is_none()
+        && app.session.active().is_some_and(|st| st.doc.id == doc)
+        && let Err(error) = crate::transform_tool::begin_placed(app, ctx)
+    {
+        app.ui.status = error;
+    }
+    Ok(())
 }
 
 /// Open a file in the background: a tab appears at once and shows the progress; the document
@@ -750,6 +760,7 @@ pub(crate) fn finish_open_with_held(
                 version: question.get("version").and_then(Value::as_u64).ok_or("missing historical XCF version")?,
                 bits: question.get("bitsPerSample").and_then(Value::as_u64).ok_or("missing historical XCF precision")?,
                 job: None,
+                place: None,
             },
         );
         return Ok(None);

@@ -12,7 +12,7 @@ use photocraft_io::PngImport;
 use photocraft_raster::{Surface, TranslateSteps};
 use web_time::Instant;
 
-use super::open::{PLACE_EMBEDDED, PlaceFile, PlaceInput, Prepared};
+use super::open::{PLACE_EMBEDDED, PlaceFile, PlaceInput, PlaceOutcome, Prepared};
 use super::paths::{file_name, read_file, stem};
 use super::{
     Affine, Arc, Document, EngineError, LayerContent, Resample, Result, SmartObject, SmartSource, Value, check_flattenable, f64_param, flattened_checked,
@@ -78,7 +78,7 @@ impl PlaceSteps {
     }
 
     /// One unit of work; `Some` when the place is prepared.
-    fn advance(&mut self, ctx: &JobCtx, deadline: Instant) -> Result<Option<Prepared>> {
+    fn advance(&mut self, ctx: &JobCtx, deadline: Instant) -> Result<Option<PlaceOutcome>> {
         match std::mem::replace(&mut self.stage, Stage::Spent) {
             Stage::Decode => {
                 self.read(ctx)?;
@@ -88,9 +88,23 @@ impl PlaceSteps {
                 match png {
                     Some(png) => self.stage = Stage::DecodePng(Box::new(png)),
                     None => {
-                        let imported = ctx
-                            .stage(0.0, 0.6, "Decoding", |ctl| photocraft_io::import_with_options_and_interrupt(&input.name, bytes, &input.opts, ctl))
-                            .map_err(|e| self.io_error(e))?;
+                        let imported =
+                            ctx.stage(0.0, 0.6, "Decoding", |ctl| photocraft_io::import_with_options_and_interrupt(&input.name, bytes, &input.opts, ctl));
+                        let imported = match imported {
+                            Err(photocraft_io::IoError::HistoricalXcfSampleOrderRequired(question))
+                                if input.params.get("askHistoricalXcfSampleOrder").and_then(Value::as_bool) == Some(true) =>
+                            {
+                                return Ok(Some(PlaceOutcome::Historical {
+                                    name: input.name.clone(),
+                                    bytes: Arc::clone(bytes),
+                                    question,
+                                    options: input.opts,
+                                    linked: input.linked.clone(),
+                                    params: input.params.clone(),
+                                }));
+                            }
+                            result => result.map_err(|error| self.io_error(error))?,
+                        };
                         self.decoded(imported, false, ctx)?;
                     }
                 }
@@ -123,7 +137,7 @@ impl PlaceSteps {
                     None => Stage::Translate(shift),
                 };
             }
-            Stage::Finish(px) => return self.finish(px, ctx).map(Some),
+            Stage::Finish(px) => return self.finish(px, ctx).map(|prepared| Some(PlaceOutcome::Ready(Box::new(prepared)))),
             Stage::Spent => return Err(EngineError::Other("internal error: the place was already prepared".into())),
         }
         Ok(None)
@@ -304,9 +318,9 @@ fn physical_scale(src_ppi: f64, doc_ppi: f64) -> f64 {
     if doc_ppi > 0.0 && src_ppi > doc_ppi && src_ppi.is_finite() { doc_ppi / src_ppi } else { 1.0 }
 }
 
-impl StepWork<Prepared> for PlaceSteps {
+impl StepWork<PlaceOutcome> for PlaceSteps {
     /// Runs units of work until `deadline` (at least one), checking for a cancel between them.
-    fn step(&mut self, ctx: &JobCtx, deadline: Instant) -> Result<Option<Prepared>> {
+    fn step(&mut self, ctx: &JobCtx, deadline: Instant) -> Result<Option<PlaceOutcome>> {
         loop {
             ctx.check()?;
             if let Some(prepared) = self.advance(ctx, deadline)? {

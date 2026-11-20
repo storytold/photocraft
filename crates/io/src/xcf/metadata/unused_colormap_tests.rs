@@ -202,3 +202,30 @@ fn overlapping_non_end_headers_keep_the_real_resolution_and_drawable_tables() {
         }
     }
 }
+
+#[test]
+fn palette_lookahead_skips_large_properties_without_accepting_empty_tables_inside_them() {
+    for version in [3, 11, 26] {
+        for legacy_length in [true, false] {
+            let mut image = TestImage::rgb8(1, 1);
+            image.version = version;
+            let mut palette = vec![0, 0, 0, 2, 255, 64];
+            if legacy_length {
+                // The short boundary sees (19, 19) from the RGB tail and actual DPI tag.
+                palette.extend([0, 0, 0, 19]);
+            }
+            image.image_props.push((1, palette));
+            image.image_props.push((19, [240f32.to_be_bytes(); 2].concat()));
+            image.image_props.push((50, vec![0; 64 * 1024]));
+            image.layers.push(TestLayer::rgba("Visible", 1, 1, vec![17, 31, 57, 255]));
+            image.channels.push(("Coverage", vec![64], false));
+            let mut source = image.write();
+            let palette_payload = if version < 4 { 26 } else { 30 } + 9 + 8;
+            source[palette_payload - 4..palette_payload].copy_from_slice(&6u32.to_be_bytes());
+            let result = crate::import("long-continuation.xcf", &source).unwrap();
+            assert_eq!(result.document.resolution_dpi, 240.);
+            assert_eq!(result.document.layers[0].surface().unwrap().pixel(0, 0), [17. / 255., 31. / 255., 57. / 255., 1.]);
+            assert_eq!(result.document.channels[0].surface.pixel(0, 0), [64. / 255.]);
+        }
+    }
+}

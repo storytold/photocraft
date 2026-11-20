@@ -658,7 +658,7 @@ impl Default for Jobs {
 
 #[path = "historical_xcf_open.rs"]
 mod historical_xcf_open;
-pub(crate) use historical_xcf_open::hold_smart_object;
+pub(crate) use historical_xcf_open::{hold_place, hold_smart_object};
 
 impl Jobs {
     /// Does a job started now run on a worker thread? (Not inline, and not stepped on this thread.)
@@ -1927,7 +1927,8 @@ impl Session {
                     }
                     st.note_disclosure_change();
                 }
-                self.after_command(id, params, spec.journal, automation, Some(nested_from), pre_selected.as_deref(), &record_before);
+                let journal = spec.journal && v.get("heldHistoricalXcfPlace").is_none();
+                self.after_command(id, params, journal, automation, Some(nested_from), pre_selected.as_deref(), &record_before);
                 Ok(Started::Done(v))
             }
         };
@@ -2179,7 +2180,9 @@ impl Session {
             // The step is automation's when the job's own request was gated, not the caller
             // polling it now, and only for the recording that owns it: a foreign recording does
             // not get the step.
-            self.after_command(command, params.clone(), *journal, *automation && !foreign, Some(nested_from), pre_selected.as_deref(), before);
+            // A held placement has not inserted a layer. Replaying this incomplete command would pause again.
+            let journal = *journal && r.as_ref().is_ok_and(|value| value.get("heldHistoricalXcfPlace").is_none());
+            self.after_command(command, params.clone(), journal, *automation && !foreign, Some(nested_from), pre_selected.as_deref(), before);
             if foreign && let Some((start, _)) = self.actions.recording.as_mut() {
                 *start = self.journal.len();
             }

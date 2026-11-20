@@ -394,7 +394,7 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
 }
 
 /// Run a place: in the background when the command was started with [`Session::start`].
-fn place_input(s: &mut Session, input: PlaceInput) -> Result<Value> {
+pub(crate) fn place_input(s: &mut Session, input: PlaceInput) -> Result<Value> {
     let label = input.job_label();
     crate::jobs::run_stepped(s, &label, true, PlaceSteps::new(input, s.cooperative_jobs()), apply_place)
 }
@@ -436,7 +436,11 @@ pub(crate) struct PlaceInput {
 impl PlaceInput {
     /// The input of a place of `bytes` already read (named `name`; `linked`: Place Linked to that path).
     pub(crate) fn new(s: &Session, name: &str, bytes: Vec<u8>, linked: Option<String>, p: &Value) -> Result<Self> {
-        Self::with_file(s, name, PlaceFile::Bytes(Arc::new(bytes)), linked, p)
+        Self::from_shared_bytes(s, name, Arc::new(bytes), linked, p)
+    }
+
+    pub(crate) fn from_shared_bytes(s: &Session, name: &str, bytes: Arc<Vec<u8>>, linked: Option<String>, p: &Value) -> Result<Self> {
+        Self::with_file(s, name, PlaceFile::Bytes(bytes), linked, p)
     }
 
     /// The input of a place of `file`, with the destination (canvas or frame), preferences and
@@ -486,6 +490,10 @@ impl PlaceInput {
         })
     }
 
+    pub(crate) fn set_import_options(&mut self, options: photocraft_io::ImportOptions) {
+        self.opts = options;
+    }
+
     /// The job's name in the progress UI.
     pub(crate) fn job_label(&self) -> String {
         format!("Placing {}", file_name(&self.name))
@@ -498,6 +506,18 @@ impl PlaceInput {
 }
 
 /// A place decoded, flattened and fitted, ready to be inserted by [`apply_place`].
+pub(crate) enum PlaceOutcome {
+    Ready(Box<Prepared>),
+    Historical {
+        name: String,
+        bytes: Arc<Vec<u8>>,
+        question: photocraft_io::HistoricalXcfSampleOrderRequest,
+        options: photocraft_io::ImportOptions,
+        linked: Option<String>,
+        params: Value,
+    },
+}
+
 pub(crate) struct Prepared {
     pub(super) warnings: Vec<String>,
     pub(super) content: LayerContent,
@@ -512,8 +532,14 @@ pub(crate) struct Prepared {
 }
 
 /// Insert the prepared layer as one undo step and report the place. Runs on the session's thread.
-pub(crate) fn apply_place(s: &mut Session, p: Prepared) -> Result<Value> {
-    let Prepared { warnings, content, layer_name, label, scale, bounds, smart, frame } = p;
+pub(crate) fn apply_place(s: &mut Session, outcome: PlaceOutcome) -> Result<Value> {
+    let prepared = match outcome {
+        PlaceOutcome::Ready(prepared) => prepared,
+        PlaceOutcome::Historical { name, bytes, question, options, linked, params } => {
+            return crate::jobs::hold_place(s, name, bytes, question, options, linked, params);
+        }
+    };
+    let Prepared { warnings, content, layer_name, label, scale, bounds, smart, frame } = *prepared;
     let layer = Layer::new(layer_name, content);
     let id = layer.id;
     s.edit(label, move |doc, active| {

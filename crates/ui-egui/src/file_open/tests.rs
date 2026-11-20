@@ -1905,3 +1905,72 @@ fn synchronous_svg_place_displays_omitted_image_warning() {
     app.place_next_dropped(&egui::Context::default());
     assert!(app.ui.notices.iter().any(|notice| notice.lines.iter().any(|line| line.contains("embedded") && line.contains("omitted"))));
 }
+
+#[test]
+fn historical_canvas_drops_hold_the_picked_path_or_bytes_until_answered() {
+    use crate::dialogs::historical_sample_order::tests_support::{cancel, confirm, dialogs, set_order};
+    use photocraft_doc::{HistoricalXcfSampleOrder, LayerContent, SmartSource};
+    use std::io::Write;
+
+    for path_drop in [false, true] {
+        for accept in [false, true] {
+            let folder = tempfile::tempdir().unwrap();
+            let path = folder.path().join("picked.xcf");
+            let mut app = app_with_canvas();
+            app.background_jobs = path_drop;
+            let ctx = app.ctx().clone();
+            let doc = app.session.active().unwrap().doc.id;
+            let layers = layer_count(&app);
+            let history = history_steps(&app);
+            let raw = crate::historical_xcf_fixture::historical_pixel(true);
+            let expected = if path_drop {
+                std::fs::write(&path, &raw).unwrap();
+                app.open_dropped(&ctx, vec![dropped(path.clone(), Err("use the file read job".into()))], DropTo::Canvas { at: None });
+                raw
+            } else {
+                let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+                encoder.write_all(&raw).unwrap();
+                let wrapped = encoder.finish().unwrap();
+                app.drop_places.push_back((doc, DropPlace::Bytes("picked.xcf.gz".into(), wrapped.clone())));
+                wrapped
+            };
+            app.drop_places.push_back((doc, DropPlace::Bytes("later.png".into(), png_bytes(2, 2))));
+            app.place_next_dropped(&ctx);
+            tick_until(&mut app, &ctx, |app| !app.historical_opens.is_empty());
+            let held = &app.historical_opens[0];
+            assert_eq!(held.place, Some(doc));
+            let id = held.id;
+            let dialog = dialogs(&app).into_iter().find(|d| d.fields.contains_key("__historicalXcfOpen")).expect("historical byte order prompt");
+            assert!(dialog.fields["historicalXcfSampleOrder"].is_null());
+            app.place_next_dropped(&ctx);
+            assert_eq!(app.drop_places.len(), 1, "the later drop waits for the answer");
+            assert_eq!(layer_count(&app), layers);
+            assert_eq!(history_steps(&app), history);
+            assert!(app.ui.transform.is_none());
+
+            if !accept {
+                cancel(&mut app, dialog.id).unwrap();
+                assert_eq!(layer_count(&app), layers);
+                assert!(!app.session.holds_historical_xcf_open(id));
+                app.place_next_dropped(&ctx);
+                tick_until(&mut app, &ctx, |app| app.ui.transform.is_some());
+                assert_eq!(layer_count(&app), layers + 1, "the later PNG advances after Cancel");
+                continue;
+            }
+            if path_drop {
+                std::fs::write(&path, crate::historical_xcf_fixture::historical_pixel(false)).unwrap();
+            }
+            set_order(&mut app, dialog.id, json!("little-endian"));
+            confirm(&mut app, dialog.id).unwrap();
+            tick_until(&mut app, &ctx, |app| app.ui.transform.is_some());
+            let state = app.session.active().unwrap();
+            let LayerContent::Smart(smart) = &state.doc.layer(state.active_layer.unwrap()).unwrap().content else { panic!("placed XCF Smart Object") };
+            assert_eq!(smart.historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::LittleEndian));
+            let SmartSource::Embedded { bytes, .. } = &smart.source else { panic!("original source bytes") };
+            assert_eq!(bytes.as_slice(), expected);
+            assert!(!app.session.holds_historical_xcf_open(id));
+            assert_eq!(layer_count(&app), layers + 1);
+            assert_eq!(app.drop_places.len(), 1, "the later drop waits for Free Transform");
+        }
+    }
+}

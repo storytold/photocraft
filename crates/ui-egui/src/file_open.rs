@@ -542,7 +542,12 @@ impl PhotocraftApp {
         }
         // A box still preparing (or its canceled job not yet handled) holds the queue too: the
         // next place would lock the document before a canceled place could be taken back.
-        while self.ui.transform.is_none() && self.transform_preparing.is_none() && self.jobs.place.is_none() && self.session.active_job().is_none() {
+        while self.ui.transform.is_none()
+            && self.transform_preparing.is_none()
+            && self.jobs.place.is_none()
+            && self.session.active_job().is_none()
+            && !self.historical_opens.iter().any(|held| held.place.is_some())
+        {
             let Some(active) = self.session.active().map(|st| st.doc.id) else { return };
             let Some((_, next)) = self.drop_places.iter().position(|(doc, _)| *doc == active).and_then(|i| self.drop_places.remove(i)) else {
                 return;
@@ -551,10 +556,11 @@ impl PhotocraftApp {
                 DropPlace::At { source, frame } => (*source, Some(frame)),
                 next => (next, None),
             };
-            let params = frame.map_or_else(
+            let mut params = frame.map_or_else(
                 || serde_json::json!({}),
                 |frame| serde_json::json!({"frame": frame.map_or(serde_json::Value::Bool(false), |id| serde_json::json!(id.0))}),
             );
+            params["askHistoricalXcfSampleOrder"] = serde_json::Value::Bool(true);
             let (name, placed) = match next {
                 DropPlace::At { .. } => {
                     self.failed(tl!("Invalid nested file drop").into());
@@ -584,12 +590,8 @@ impl PhotocraftApp {
                 // Running in the background: Free Transform starts when the layer has landed.
                 Ok(started) if crate::jobs_ui::track_place(self, &name, &started) => return,
                 Ok(result) => {
-                    crate::notices::io_result_warnings(self, &result, &name);
-                    if result.get("frame").and_then(serde_json::Value::as_u64).is_some() {
-                        continue;
-                    }
-                    if let Err(e) = crate::transform_tool::begin_placed(self, ctx) {
-                        self.ui.status = e;
+                    if let Err(error) = crate::jobs_ui::finish_place_result(self, ctx, &name, active, &result) {
+                        self.place_failed(&name, &error);
                     }
                 }
                 Err(e) => self.place_failed(&name, &e),

@@ -102,6 +102,7 @@ fn resuming_before_historical_and_decoded(app: &mut PhotocraftApp) -> crate::job
             version: 4,
             bits: 16,
             job: (id == 101).then_some(JobId(201)),
+            place: None,
         });
     }
     app.held_opens.push_back(later_document());

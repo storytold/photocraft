@@ -141,6 +141,11 @@ pub(super) trait PropertyInput {
     fn discard(&mut self, length: usize) -> Result<()>;
     fn peek(&mut self, offset: usize, length: usize) -> Result<Option<&[u8]>>;
 
+    /// Streaming lookahead may need to decompress and retain every skipped byte.
+    fn palette_lookahead_limit(&self) -> usize {
+        64 * 1024
+    }
+
     /// Only full import can validate target offsets. The geometry probe may
     /// stop at image-property END even for a truncated drawable stream.
     fn compare_palette_tables(&self, _declared: usize, _repaired: usize, _version: u32, _ctl: &photocraft_raster::Interrupt<'_>) -> Result<Option<bool>> {
@@ -163,32 +168,39 @@ impl PropertyInput for Cursor<'_> {
         Ok(self.b.get(start..end))
     }
 
+    fn palette_lookahead_limit(&self) -> usize {
+        // The in-memory cursor can jump over a large payload without reading it.
+        self.b.len().saturating_sub(self.pos)
+    }
+
     fn compare_palette_tables(&self, declared: usize, repaired: usize, version: u32, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Option<bool>> {
-        let tables_fit = |offset| {
-            let Some(start) = self.pos.checked_add(offset) else { return Ok(false) };
-            drawable_tables_fit(self.at(start), version, ctl)
+        let tables = |offset| {
+            let Some(start) = self.pos.checked_add(offset) else { return Ok(None) };
+            drawable_tables(self.at(start), version, ctl)
         };
-        let declared = tables_fit(declared)?;
-        let repaired = tables_fit(repaired)?;
-        Ok((declared != repaired).then_some(repaired))
+        let declared = tables(declared)?;
+        let repaired = tables(repaired)?;
+        // A run of zeroes inside a property can resemble an empty table.
+        // A framed table with actual drawables is stronger evidence.
+        Ok((declared != repaired).then_some(repaired > declared))
     }
 }
 
 /// Inspect the table framing without retaining or following any offset. A
 /// required drawable must lie after the tables and have space for a header.
-fn drawable_tables_fit(mut cursor: Cursor<'_>, version: u32, ctl: &photocraft_raster::Interrupt<'_>) -> Result<bool> {
-    let mut first_drawable = cursor.b.len();
+fn drawable_tables(mut cursor: Cursor<'_>, version: u32, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Option<bool>> {
+    let mut first_drawable = None;
     for limit in [super::MAX_LAYERS, super::MAX_CHANNELS] {
         for count in 0..=limit {
             ctl.check().map_err(|_| super::IoError::Cancelled)?;
-            let Ok(pointer) = cursor.ptr() else { return Ok(false) };
+            let Ok(pointer) = cursor.ptr() else { return Ok(None) };
             if pointer == 0 {
                 break;
             }
             if count == limit || pointer < cursor.pos || pointer.checked_add(12).is_none_or(|end| end > cursor.b.len()) {
-                return Ok(false);
+                return Ok(None);
             }
-            first_drawable = first_drawable.min(pointer);
+            first_drawable = Some(first_drawable.map_or(pointer, |first: usize| first.min(pointer)));
         }
     }
     if version >= 18 {
@@ -196,13 +208,13 @@ fn drawable_tables_fit(mut cursor: Cursor<'_>, version: u32, ctl: &photocraft_ra
         // without requiring every optional path target to be valid.
         for count in 0..=super::MAX_CHANNELS {
             ctl.check().map_err(|_| super::IoError::Cancelled)?;
-            let Ok(pointer) = cursor.ptr_wire() else { return Ok(false) };
+            let Ok(pointer) = cursor.ptr_wire() else { return Ok(None) };
             if pointer == 0 || count == super::MAX_CHANNELS {
                 break;
             }
         }
     }
-    Ok(cursor.pos <= first_drawable)
+    Ok(first_drawable.is_none_or(|first| cursor.pos <= first).then_some(first_drawable.is_some()))
 }
 
 pub(super) fn property_header(input: &mut impl PropertyInput, count: usize) -> Result<Option<(u32, usize)>> {
@@ -314,11 +326,11 @@ struct PaletteContinuation {
 }
 
 fn palette_continuation(input: &mut impl PropertyInput, mut offset: usize, ctl: &photocraft_raster::Interrupt<'_>) -> Result<PaletteContinuation> {
-    const MAX_PREFIX: usize = 64 * 1024;
+    let limit = input.palette_lookahead_limit();
     let mut continuation = PaletteContinuation::default();
     for _ in 0..64 {
         ctl.check().map_err(|_| super::IoError::Cancelled)?;
-        if offset > MAX_PREFIX - 8 {
+        if offset > limit.saturating_sub(8) {
             break;
         }
         let Some(header) = input.peek(offset, 8)? else {
@@ -347,8 +359,11 @@ fn palette_continuation(input: &mut impl PropertyInput, mut offset: usize, ctl: 
         if matches!((kind, length), (17, 0 | 2..) | (19, 0..=7 | 9..)) {
             continuation.unusual_lengths += 1;
         }
-        // The established payload limit and prefix cap bound this addition.
-        offset += 8 + length;
+        let Some(next) = offset.checked_add(8 + length) else {
+            continuation.invalid = true;
+            break;
+        };
+        offset = next;
     }
     Ok(continuation)
 }

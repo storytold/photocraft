@@ -163,3 +163,30 @@ fn scripted_place_open_and_relink_ignore_unused_sample_order_for_modern_xcf() {
         }
     }
 }
+
+#[test]
+fn historical_place_resume_keeps_the_frame_and_original_file_bytes() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("frame.xcf");
+    let original = fixture::historical_pixel(true);
+    std::fs::write(&path, &original).unwrap();
+
+    let mut s = session();
+    let frame = s.execute("layer.new.frame", json!({"x":0,"y":0,"width":1,"height":1})).unwrap()["layer"].as_u64().unwrap();
+    let original_doc = s.active().unwrap().doc.clone();
+    let question = s.execute("file.placeEmbedded", json!({"path":path,"frame":frame,"askHistoricalXcfSampleOrder":true})).unwrap();
+    let id = question["heldHistoricalXcfPlace"].as_u64().unwrap();
+    assert!(Arc::ptr_eq(&s.active().unwrap().doc, &original_doc));
+    std::fs::write(&path, fixture::historical_pixel(false)).unwrap();
+
+    let crate::jobs::Started::Done(result) = s.resume_historical_xcf_open(id, photocraft_io::HistoricalXcfSampleOrder::LittleEndian, false).unwrap() else {
+        panic!("inline frame placement");
+    };
+    assert_eq!(result["frame"], frame);
+    let children = s.active().unwrap().doc.layer(LayerId(frame)).unwrap().children().unwrap();
+    let LayerContent::Smart(smart) = &children[0].content else { panic!("embedded frame content") };
+    let SmartSource::Embedded { bytes, .. } = &smart.source else { panic!("original embedded source") };
+    assert_eq!(bytes.as_slice(), original);
+    assert_eq!(smart.historical_xcf_sample_order, Some(photocraft_io::HistoricalXcfSampleOrder::LittleEndian));
+    assert!(!s.holds_historical_xcf_open(id));
+}
