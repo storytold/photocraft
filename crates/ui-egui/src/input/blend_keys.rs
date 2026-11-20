@@ -163,7 +163,8 @@ fn set_layers_mode(app: &mut PhotocraftApp, mode: BlendMode) {
     let Some(st) = app.session.active() else { return };
     let ids: Vec<u64> = st
         .selected_layers()
-        .into_iter()
+        .iter()
+        .copied()
         .filter_map(|id| st.doc.layer(id))
         .filter(|l| !crate::doc_props_ui::is_background(&st.doc, l) && (mode != BlendMode::PassThrough || l.is_group()) && l.blend != mode)
         .map(|l| l.id.0)

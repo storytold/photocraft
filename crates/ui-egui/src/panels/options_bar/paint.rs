@@ -72,15 +72,18 @@ fn eraser_mode_name(mode: EraserMode) -> &'static str {
 /// Shift+right-click menu and the Pattern Stamp's list, it keeps both on the Background, so the wheel steps through
 /// them there too.
 fn mode_entries() -> Vec<Entry<PaintMode>> {
-    let keys: Vec<BlendKeyEntry<PaintMode>> = brush_mode_menu::choices()
-        .into_iter()
-        .map(|((mode, behind), _)| match (mode, behind) {
-            (Some(m), _) => crate::panels::blend_entry(PaintMode::Blend(m), m),
-            (None, true) => BlendKeyEntry::behind(PaintMode::Behind),
-            (None, false) => BlendKeyEntry::clear(PaintMode::Clear),
-        })
-        .collect();
-    blend_entries(&keys, |entry| Label::from(tl!(entry.key.text()).to_string()))
+    static CACHE: crate::i18n::LangCache<(), Vec<Entry<PaintMode>>> = crate::i18n::LangCache::new();
+    CACHE.get_or_build((), || {
+        let keys: Vec<BlendKeyEntry<PaintMode>> = brush_mode_menu::choices()
+            .into_iter()
+            .map(|((mode, behind), _)| match (mode, behind) {
+                (Some(m), _) => crate::panels::blend_entry(PaintMode::Blend(m), m),
+                (None, true) => BlendKeyEntry::behind(PaintMode::Behind),
+                (None, false) => BlendKeyEntry::clear(PaintMode::Clear),
+            })
+            .collect();
+        blend_entries(&keys, |entry| Label::from(tl!(entry.key.text()).to_string()))
+    })
 }
 
 /// The bar's values for `tool` from its brush `b` and the tool options. Opacity, Flow and Hardness
