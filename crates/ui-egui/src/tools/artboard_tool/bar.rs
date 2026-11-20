@@ -93,7 +93,7 @@ pub fn set_size(app: &mut PhotocraftApp, w: f32, h: f32) {
 fn selected_boards(app: &PhotocraftApp) -> Vec<LayerId> {
     let Some(st) = app.session.active() else { return Vec::new() };
     let mut ids: Vec<LayerId> = Vec::new();
-    for l in st.selected_layers() {
+    for &l in st.selected_layers() {
         if let Some(b) = st.doc.artboard_of(l)
             && !ids.contains(&b)
         {

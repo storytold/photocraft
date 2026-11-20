@@ -45,7 +45,7 @@ impl Fixture {
     }
 
     fn assert_selected(&self, expected: &[LayerId]) {
-        let mut actual = self.app.session.active().unwrap().selected_layers();
+        let mut actual = self.app.session.active().unwrap().selected_layers().to_vec();
         let mut expected = expected.to_vec();
         actual.sort_unstable_by_key(|id| id.0);
         expected.sort_unstable_by_key(|id| id.0);

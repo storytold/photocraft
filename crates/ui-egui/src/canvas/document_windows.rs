@@ -63,7 +63,7 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     for (id, rect) in windows {
         let shown = app.ui.document_windows.floating.iter().find(|(g, _)| g.id == id).and_then(|(g, _)| g.shown.or_else(|| g.documents.first().copied()));
         let Some(doc) = shown.and_then(|d| crate::canvas::tabs::document_index(app, d)) else { continue };
-        let title = format!("{} — window {}", crate::canvas::tabs::titled_name(&app.session.documents()[doc]), id);
+        let title = format!("{} — window {}", crate::canvas::tabs::titled_name(app, &app.session.documents()[doc]), id);
         // A New Window for Document keeps its own view beside the document's; any other floating window
         // draws the document's own view, which the Navigator, the status bar's zoom and the View commands
         // edit (#11276). Either is read here, inside the loop: a Scroll All Windows pan in a window drawn
