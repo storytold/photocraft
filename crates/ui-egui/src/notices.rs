@@ -7,7 +7,10 @@
 
 pub use craft::theme::variant::Tone;
 use craft::ui::notices::{NoticeCenter, NoticeEnd, PostedNotice};
-use craft::ui::runtime::toast::ToastId;
+use craft::ui::runtime::{
+    env::WindowKey,
+    toast::{self, ToastId},
+};
 use serde::{Deserialize, Serialize};
 
 use crate::PhotocraftApp;
@@ -53,6 +56,18 @@ pub fn post(app: &mut PhotocraftApp, title: impl Into<String>, lines: Vec<String
     id
 }
 
+pub(crate) fn post_panel_recovery(app: &mut PhotocraftApp) {
+    let id = app.ui.alloc_id();
+    app.ui.notices.push(Notice {
+        id,
+        title: crate::dock::RECOVERY_TITLE.into(),
+        lines: vec![crate::dock::RECOVERY_GUIDANCE.into()],
+        tone: Tone::Bad,
+        sticky: true,
+        ..Default::default()
+    });
+}
+
 /// The notices handed to the window's toast queue: for each, the app id, its untranslated title
 /// (the app's own once-while-shown checks compare titles) and the toast handle. Toasts the app
 /// removed wait in `removals` for the next [`show`], which has the context to dismiss them.
@@ -60,6 +75,7 @@ pub fn post(app: &mut PhotocraftApp, title: impl Into<String>, lines: Vec<String
 pub(crate) struct Live {
     posted: Vec<(u64, String, ToastId)>,
     removals: Vec<ToastId>,
+    panel_recovery_language: Option<crate::i18n::Lang>,
 }
 
 /// Drop notice `id`, whether it still waits in the outbox or is already a toast.
@@ -220,8 +236,26 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     };
     // `NoticeCenter::timeout` takes seconds and cannot switch off; with auto-hide off every notice is posted sticky.
     let center = NoticeCenter::new().timeout(seconds);
+    let language = crate::i18n::current();
+    let refreshing_recovery = app.notices_live.panel_recovery_language != Some(language)
+        && app
+            .notices_live
+            .posted
+            .iter()
+            .any(|(_, title, id)| title == crate::dock::RECOVERY_TITLE && toast::cards(&ctx, &WindowKey::main()).iter().any(|card| card.id == *id));
+    if refreshing_recovery {
+        remove_titled(app, crate::dock::RECOVERY_TITLE);
+        post_panel_recovery(app);
+    }
+    app.notices_live.panel_recovery_language = Some(language);
+    for toast in std::mem::take(&mut app.notices_live.removals) {
+        center.remove(&ctx, toast);
+    }
+
     let silenced: Vec<String> = app.session.prefs().dialogs.iter().filter(|(_, value)| value.as_bool() == Some(true)).map(|(key, _)| key.clone()).collect();
-    for notice in std::mem::take(&mut app.ui.notices) {
+    let (recovery, notices): (Vec<_>, Vec<_>) = std::mem::take(&mut app.ui.notices).into_iter().partition(|notice| notice.title == crate::dock::RECOVERY_TITLE);
+    // The newest card always fits. Place a restored warning after this pass's ordinary notices.
+    for notice in notices.into_iter().chain(recovery) {
         let mut posted =
             PostedNotice::new(notice.text(&notice.title)).lines(notice.lines.iter().map(|line| notice.text(line)).collect::<Vec<_>>()).tone(notice.tone);
         if let Some(key) = &notice.dismiss_pref {
@@ -234,12 +268,14 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.notices_live.posted.push((notice.id, notice.title, toast));
         }
     }
-    for toast in std::mem::take(&mut app.notices_live.removals) {
-        center.remove(&ctx, toast);
-    }
+    let mut recovery_dropped = false;
     for end in center.show(ui).ends {
         match end {
-            NoticeEnd::Closed(toast) | NoticeEnd::Expired(toast) | NoticeEnd::Dropped(toast) => forget(app, toast),
+            NoticeEnd::Closed(toast) | NoticeEnd::Expired(toast) => forget(app, toast),
+            NoticeEnd::Dropped(toast) => {
+                recovery_dropped |= app.notices_live.posted.iter().any(|(_, title, id)| *id == toast && title == crate::dock::RECOVERY_TITLE);
+                forget(app, toast);
+            }
             NoticeEnd::Silenced { id, key, .. } => {
                 forget(app, id);
                 app.session.prefs.edit(|prefs| {
@@ -248,6 +284,10 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             _ => {}
         }
+    }
+    if recovery_dropped && app.panel_recovery.is_some() && !shown_titled(app, crate::dock::RECOVERY_TITLE) {
+        post_panel_recovery(app);
+        ctx.request_repaint();
     }
 }
 
