@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use photocraft_doc::{Document, LayerContent, SmartObject};
+use photocraft_doc::{Document, LayerContent, SmartObject, SmartSource, StackMode};
 use photocraft_engine::jobs::{OpenSource, Started};
 use photocraft_engine::{Session, file_cmds};
 use serde_json::json;
@@ -103,6 +103,45 @@ fn native_reopen_operations_keep_recoverable_pixels() {
     let mut placed = Session::new();
     placed.execute("file.openAsSmartObject", json!({ "path": path })).unwrap();
     let bounds = cache.content_bounds();
-    let actual = object(&placed.active().unwrap().doc).cache.as_ref().unwrap();
+    let outer = &placed.active().unwrap().doc;
+    let actual = object(outer).cache.as_ref().unwrap();
     assert_eq!(actual.read_region(bounds), cache.read_region(bounds), "opening the native document as a Smart Object composites the recovered pixels");
+
+    for stack in [None, Some(StackMode::Maximum)] {
+        let mut layer = outer.layers[0].clone();
+        let LayerContent::Smart(smart) = &mut layer.content else { panic!("expected a Smart Object") };
+        smart.stack_mode = stack;
+        assert!(photocraft_engine::smart_cmds::refresh_layer(outer, &mut layer).unwrap());
+        let LayerContent::Smart(refreshed) = &layer.content else { panic!("the refreshed layer is a Smart Object") };
+        assert_eq!(refreshed.cache.as_ref().unwrap().read_region(bounds), actual.read_region(bounds), "refresh keeps the pixels recovered at open");
+    }
+
+    // A later source can't recover the embedded PNG with this document profile.
+    let mut different_profile = reference;
+    different_profile.icc_profile = Some(craft_cms::Builtin::DisplayP3.profile().to_bytes());
+    let mut layer = outer.layers[0].clone();
+    let LayerContent::Smart(smart) = &mut layer.content else { panic!("expected a Smart Object") };
+    smart.source = SmartSource::Embedded { file_name: "different-profile.pcraft".into(), bytes: Arc::new(without_cache(different_profile)) };
+    let failed = photocraft_engine::smart_cmds::refresh_layer(outer, &mut layer).unwrap_err();
+    assert!(failed.to_string().contains("couldn't rebuild the cache for"));
+    let LayerContent::Smart(smart) = &layer.content else { panic!("expected a Smart Object") };
+    assert_eq!(smart.cache.as_ref(), Some(actual), "an incomplete refresh must retain the current image");
+}
+
+#[test]
+fn native_revert_returns_the_named_warning_for_uncached_linked_art() {
+    let scratch = tempfile::tempdir().unwrap();
+    let mut reference = placed_png(scratch.path());
+    reference.layers[0].name = "Linked art".to_string();
+    smart_mut(&mut reference).source = SmartSource::Linked { path: "not-present.png".to_string() };
+    let bundle = without_cache(reference);
+    let path = scratch.path().join("linked-cache.pcraft");
+    std::fs::write(&path, &bundle).unwrap();
+
+    let mut opened = Session::new();
+    let before = file_cmds::open_bytes_as(&mut opened, "linked-cache.pcraft", &bundle, None, Some(path.to_str().unwrap().to_string())).unwrap();
+    assert!(before["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("Linked art")));
+    let reverted = opened.execute("file.revert", json!({})).unwrap();
+    assert_eq!(reverted["warnings"], before["warnings"], "Revert must report the same warning with the affected layer name");
+    assert!(object(&opened.active().unwrap().doc).cache.is_none());
 }

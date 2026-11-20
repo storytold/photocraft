@@ -19,6 +19,18 @@ fn embedded_png(smart: &SmartObject) -> Option<(&str, &[u8])> {
     .then_some((file_name, bytes))
 }
 
+fn missing_recoverable_cache(smart: &SmartObject) -> bool {
+    smart.cache.is_none() && (smart.raw_render_recipe.is_some() || embedded_png(smart).is_some())
+}
+
+/// A candidate still missing pixels after recovery. Rendering over an existing cache would lose them.
+pub(super) fn unrestored_embedded_layer(doc: &Document) -> Option<&str> {
+    doc.walk().into_iter().find_map(|(_, _, layer)| match &layer.content {
+        LayerContent::Smart(smart) if missing_recoverable_cache(smart) => Some(layer.name.as_str()),
+        _ => None,
+    })
+}
+
 /// Rebuild caches and refresh warnings only when the decoder identified a native document.
 pub fn recover_decoded_native_caches(decoded: &mut photocraft_io::DecodedOpen, ctx: &JobCtx) -> Result<()> {
     if decoded.native_pcraft && recover_native_embedded_caches(&mut decoded.imported.document, ctx)? {
@@ -37,7 +49,7 @@ pub fn recover_native_embedded_caches(doc: &mut Document, ctx: &JobCtx) -> Resul
         .into_iter()
         .filter_map(|(path, _, layer)| {
             let LayerContent::Smart(smart) = &layer.content else { return None };
-            (smart.cache.is_none() && (smart.raw_render_recipe.is_some() || embedded_png(smart).is_some())).then_some(path)
+            missing_recoverable_cache(smart).then_some(path)
         })
         .collect();
     if candidates.is_empty() {

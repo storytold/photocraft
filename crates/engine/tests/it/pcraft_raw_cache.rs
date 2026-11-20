@@ -133,6 +133,41 @@ fn raw_cache(layer: &Layer) -> Option<&Surface> {
 }
 
 #[test]
+fn refreshing_a_compact_native_smart_object_keeps_its_recovered_raw_pixels() {
+    let inner = doc_with_pcraft_raw_cache();
+    let expected_cache = raw_cache(&inner.layers[0]).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nested-raw.pcraft");
+    let options = photocraft_io::ExportOptions { pcraft_render_caches: false, ..Default::default() };
+    let compact = photocraft_io::export(&inner, "nested-raw.pcraft", &options).unwrap();
+    let mut omitted = photocraft_format::load_from_bytes(&compact.bytes).unwrap();
+    assert!(raw_cache(&omitted.layers[0]).is_none());
+    std::fs::write(&path, &compact.bytes).unwrap();
+
+    let mut session = Session::new();
+    session.execute("edit.colorSettings", json!({ "askOnMismatch": false })).unwrap();
+    let opened = session.execute("file.openAsSmartObject", json!({ "path": path })).unwrap();
+    assert_eq!(opened["warnings"], json!([]));
+    let outer = &session.active().unwrap().doc;
+    let initial = raw_cache(&outer.layers[0]).unwrap();
+    let bounds = expected_cache.content_bounds();
+    assert!(!bounds.is_empty());
+    assert_eq!(initial.read_region(bounds), expected_cache.read_region(bounds));
+    let mut refreshed = outer.layers[0].clone();
+    assert!(photocraft_engine::smart_cmds::refresh_layer(outer, &mut refreshed).unwrap());
+    assert_eq!(raw_cache(&refreshed).unwrap().read_region(bounds), initial.read_region(bounds));
+
+    let LayerContent::Smart(missing) = &mut omitted.layers[0].content else { panic!("expected a RAW Smart Object") };
+    missing.raw_render_recipe.as_mut().unwrap().source_hash[0] ^= 1;
+    let unreadable = photocraft_format::save_to_bytes(&omitted, &Default::default()).unwrap();
+    let LayerContent::Smart(smart) = &mut refreshed.content else { panic!("expected a Smart Object") };
+    smart.source = SmartSource::Embedded { file_name: "stale-raw.pcraft".into(), bytes: Arc::new(unreadable) };
+    let error = photocraft_engine::smart_cmds::refresh_layer(outer, &mut refreshed).unwrap_err();
+    assert!(error.to_string().contains("recovery-budget"));
+    assert_eq!(raw_cache(&refreshed).unwrap().read_region(bounds), initial.read_region(bounds), "an incomplete refresh retains the previous image");
+}
+
+#[test]
 fn pcraft_save_budget_accounts_for_each_omitted_layer_in_native_open_order() {
     let mut doc = doc_with_pcraft_raw_cache();
     let cache = raw_cache(&doc.layers[0]).unwrap().clone();

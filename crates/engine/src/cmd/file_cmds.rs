@@ -27,6 +27,7 @@ mod native_cache;
 pub use native_cache::{recover_decoded_native_caches, recover_native_embedded_caches};
 
 mod open;
+pub(crate) use open::import_smart_source;
 mod open_as_smart_object;
 mod paths;
 mod place_steps;
@@ -487,6 +488,10 @@ mod batch_serial_skip_failed_tests;
 #[cfg(test)]
 #[path = "file_cmds/open_as_error_name_tests.rs"]
 mod open_as_error_name_tests;
+
+#[cfg(test)]
+#[path = "file_cmds/place_resolution_tests.rs"]
+mod place_resolution_tests;
 
 #[cfg(test)]
 mod aces_exr_tests {

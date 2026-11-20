@@ -119,3 +119,53 @@ fn scratch_pixels_history_and_failed_save_are_transactional() {
     spill::configure(None, 0).unwrap();
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn a_scratch_read_during_optional_recovery_keeps_the_open_warning() {
+    use photocraft_doc::{Affine, LayerContent, SmartObject, SmartSource};
+    use photocraft_engine::jobs::{OpenSource, Started};
+    use photocraft_io::memory::{MemorySnapshot, with_mock_memory_provider};
+
+    let _scratch = crate::lock(&crate::PROCESS);
+    let dir = tempfile::tempdir().unwrap();
+    struct ResetScratch;
+    impl Drop for ResetScratch {
+        fn drop(&mut self) {
+            let _ = spill::configure(None, 0);
+        }
+    }
+    let _reset = ResetScratch;
+    let mut session = Session::new();
+
+    let image = photocraft_codecs::Image::from_u8(1, 1, photocraft_codecs::ChannelLayout::Rgba, vec![71, 84, 203, 255]).unwrap();
+    let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    let source = SmartSource::Embedded { file_name: "source.png".into(), bytes: Arc::new(png) };
+    let mut doc = Document::new("Native fixture", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::new("Embedded art", LayerContent::Smart(SmartObject::new(source, Affine::IDENTITY, None))));
+    let bundle = Arc::new(photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap());
+
+    spill::use_test_volume_space();
+    spill::configure(Some(dir.path()), 1).unwrap();
+    let mut pixels = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+    pixels.tile_mut(TileCoord::new(0, 0)).bytes_mut()[0] = 42;
+    spill::settle();
+    let tile = pixels.tile(TileCoord::new(0, 0)).unwrap().clone();
+    let file = spill::scratch_handle_for_tests().unwrap();
+    assert!(file.metadata().unwrap().len() > 0);
+    file.set_len(0).unwrap();
+
+    // Native decode needs no memory snapshot. The optional PNG recovery consults it before
+    // placing anything. Inject a real tile read failure there and leave the cache absent.
+    let generation = spill::read_error_generation();
+    let memory = std::rc::Rc::new(move || {
+        assert!(tile.try_bytes().is_err());
+        MemorySnapshot { available_ram: Some(0), ..Default::default() }
+    });
+    let report = with_mock_memory_provider(memory, || session.start_open_for_user_with_background("native.pcraft", OpenSource::Bytes(bundle), false));
+    assert!(spill::check_since(generation).is_err(), "the optional phase must have advanced the scratch generation");
+    let Started::Done(report) = report.unwrap() else { panic!("the open runs inline") };
+    let warnings = report["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].as_str().unwrap().contains("Embedded art"));
+    assert!(session.active().unwrap().doc.scratch_health().is_ok());
+}

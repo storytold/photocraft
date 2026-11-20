@@ -59,6 +59,9 @@ impl PhotocraftApp {
     }
 
     fn run_command_at_depth(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // Commands never see Apply Data Set's Preview: it is not the document (a Save would write
+        // it). The dialog shows it again on the next frame.
+        crate::panels::apply_data_set_ui::end_preview(self);
         if !vector_ui::cancel_stale(self) {
             return Err(self.ui.status.clone());
         }
@@ -203,7 +206,7 @@ impl PhotocraftApp {
             self.perf.stage.command(id, self.perf.command_ms);
         }
         match &r {
-            Ok(_) => {
+            Ok(reply) => {
                 if self.ui.status_error {
                     self.ui.status.clear();
                     self.ui.status_error = false;
@@ -215,6 +218,9 @@ impl PhotocraftApp {
                     // Sampler points that fell outside the new canvas (#1046).
                     self.ui.status = crate::i18n::trn(crate::i18n::current(), removed as u64, "{n} sample point removed", "{n} sample points removed");
                     self.ui.status_error = false;
+                }
+                if id == "file.revert" {
+                    notices::io_result_warnings(self, reply, tl!("Revert"));
                 }
             }
             Err(e) => {
