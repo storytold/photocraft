@@ -501,6 +501,32 @@ fn a_soft_edge_is_as_selected_as_it_is_opaque_and_feathered_moves_leave_the_rest
     assert!((alpha(doc, id, 15, 20) - 0.5).abs() < 0.01 && (alpha(doc, id, 45, 20) - 0.5).abs() < 0.01, "half left, half moved");
 }
 
+/// #10461: after a move the selection is the moved pixels' alpha, and Free Transform then takes
+/// each soft edge pixel whole, as moving does. Multiplying the selection in lifted a² and left
+/// a × (1 − a) of every edge behind, a grey outline where the shape had been.
+#[test]
+fn transforming_after_a_move_takes_soft_edges_whole() {
+    let (mut s, id) = session();
+    s.edit("soft edge", |doc, _| {
+        let surf = doc.layer_mut(id).unwrap().surface_mut().unwrap();
+        for (x, a) in [(30, 0.75), (31, 0.5), (32, 0.25)] {
+            surf.fill_rect(Rect::new(x, 10, x + 1, 30), &[1.0, 0.0, 0.0, a]);
+        }
+        Ok(())
+    })
+    .unwrap();
+    s.execute("select.rect", json!({"x": 5, "y": 5, "width": 40, "height": 30})).unwrap();
+    s.execute("select.float", json!({"dx": 10, "dy": 0})).unwrap();
+    s.execute("select.drop", json!({})).unwrap();
+    assert!((selected(&s.active().unwrap().doc, 41, 20) - 0.5).abs() < 0.01, "the selection is the moved pixels' alpha");
+    s.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, 0, 20], "interpolation": "nearest"})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    for (x, a) in [(39, 1.0), (40, 0.75), (41, 0.5), (42, 0.25)] {
+        assert_eq!(alpha(doc, id, x, 15), 0.0, "x {x}: nothing left where it was");
+        assert!((alpha(doc, id, x, 45) - a).abs() < 0.01, "x {x}: alpha {} where {a} moved", alpha(doc, id, x, 45));
+    }
+}
+
 /// #7538: arrow nudges add up to one floating piece, so up then down is back at no offset. The
 /// selection is the moved pixels' all the same, as after each of Photoshop's nudges, in one step;
 /// a piece that never moved (a click) changes nothing.
@@ -524,4 +550,78 @@ fn nudging_away_and_back_keeps_the_moved_pixels_selection() {
     let st = s.active().unwrap();
     assert_eq!(st.doc.selection.as_ref().map(|s| s.content_bounds()), Some(Rect::new(2, 2, 42, 42)), "a click keeps the marquee");
     assert_eq!(st.history.past_len(), steps, "and adds no step");
+}
+
+/// After a refused command the piece of [`session`], floated 15 px right, still floats: the
+/// document, its selection and its History are as they were before the command (#13169).
+fn assert_still_floating(s: &Session, id: LayerId, steps: usize, what: &str) {
+    let st = s.active().unwrap();
+    assert_eq!(floating(st).map(|f| f.offset), Some((15, 0)), "{what}: the piece still floats");
+    assert!(alpha(&st.doc, id, 12, 12) == 1.0 && alpha(&st.doc, id, 35, 12) == 0.0, "{what}: nothing dropped");
+    assert_eq!(st.doc.selection.as_ref().unwrap().content_bounds(), Rect::new(10, 10, 30, 30), "{what}: the selection did not move");
+    assert_eq!(st.history.past_len(), steps, "{what}: no History step");
+}
+
+#[test]
+fn a_disabled_command_leaves_the_piece_floating() {
+    let (mut s, id) = session();
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("select.float", json!({"dx": 15, "dy": 0})).unwrap();
+    let refused = s.execute("layer.ungroupLayers", json!({}));
+    assert!(matches!(refused, Err(EngineError::Disabled(..))), "a pixel layer is not a group: {refused:?}");
+    assert_still_floating(&s, id, steps, "Ungroup Layers");
+    // The piece drops as before once a command may run.
+    s.execute("select.drop", json!({})).unwrap();
+    let st = s.active().unwrap();
+    assert!(floating(st).is_none() && alpha(&st.doc, id, 12, 12) == 0.0 && alpha(&st.doc, id, 35, 12) == 1.0);
+    assert_eq!(st.history.past_len(), steps + 1);
+}
+
+#[test]
+fn a_command_refused_on_a_hidden_layer_leaves_the_piece_floating() {
+    let (mut s, id) = session();
+    s.edit("hide", |doc, _| {
+        doc.layer_mut(id).unwrap().visible = false;
+        Ok(())
+    })
+    .unwrap();
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("select.float", json!({"dx": 15, "dy": 0})).unwrap();
+    let refused = s.execute("paint.stroke", json!({"points": [[40, 40], [50, 50]], "color": "#00ff00"}));
+    assert!(refused.unwrap_err().to_string().contains(crate::hidden_target::HIDDEN));
+    assert_still_floating(&s, id, steps, "Brush on a hidden layer");
+}
+
+#[test]
+fn a_command_refused_for_the_colour_mode_leaves_the_piece_floating() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
+    s.execute("image.mode.indexedColor", json!({"palette": "exact", "dither": "none", "forced": "none"})).unwrap();
+    s.execute("select.rect", json!({"x": 5, "y": 5, "width": 10, "height": 10})).unwrap();
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("select.float", json!({"dx": 5, "dy": 0})).unwrap();
+    let refused = s.execute("filter.other.colorToAlpha", json!({}));
+    assert!(matches!(refused, Err(EngineError::Disabled(..))), "no Color to Alpha in Indexed Color: {refused:?}");
+    let st = s.active().unwrap();
+    assert_eq!(floating(st).map(|f| f.offset), Some((5, 0)), "the piece still floats");
+    assert_eq!(st.doc.selection.as_ref().unwrap().content_bounds(), Rect::new(5, 5, 15, 15));
+    assert_eq!(st.history.past_len(), steps, "no History step");
+}
+
+/// The issue's own case: the Magic Eraser in an Indexed Color document answers with its alert
+/// (#12032) and leaves the moved piece floating.
+#[test]
+fn a_magic_eraser_click_refused_in_indexed_color_leaves_the_piece_floating() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
+    s.execute("image.mode.indexedColor", json!({"palette": "exact", "dither": "none", "forced": "none"})).unwrap();
+    s.execute("select.rect", json!({"x": 5, "y": 5, "width": 10, "height": 10})).unwrap();
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("select.float", json!({"dx": 5, "dy": 0})).unwrap();
+    let refused = s.execute("paint.magicEraser", json!({"x": 30, "y": 30}));
+    assert_eq!(refused.unwrap_err().to_string(), crate::eraser_cmds::MAGIC_ERASER_INDEXED_ERROR, "the tool's alert, unchanged");
+    let st = s.active().unwrap();
+    assert_eq!(floating(st).map(|f| f.offset), Some((5, 0)), "the piece still floats");
+    assert_eq!(st.doc.selection.as_ref().unwrap().content_bounds(), Rect::new(5, 5, 15, 15));
+    assert_eq!(st.history.past_len(), steps, "no History step");
 }

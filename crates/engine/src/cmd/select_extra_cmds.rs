@@ -79,7 +79,8 @@ fn isolate_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     let on = p.get("on").and_then(Value::as_bool).unwrap_or(st.isolated_layers.is_empty());
     st.isolated_layers = if on { st.selected_layers() } else { Vec::new() };
-    st.revision += 1;
+    // A filter of the Layers panel's rows, but turning it on or off marks the document modified.
+    st.bump_view_revision(false);
     Ok(json!({ "isolated": !st.isolated_layers.is_empty(), "layers": st.isolated_layers.iter().map(|l| l.0).collect::<Vec<_>>() }))
 }
 
@@ -89,13 +90,9 @@ pub fn isolation_shows(doc: &Document, isolated: &[LayerId], id: LayerId) -> boo
     if isolated.is_empty() || isolated.contains(&id) {
         return true;
     }
-    fn contains(l: &photocraft_doc::Layer, set: &[LayerId]) -> bool {
-        match &l.content {
-            photocraft_doc::LayerContent::Group(g) => g.children.iter().any(|c| set.contains(&c.id) || contains(c, set)),
-            _ => false,
-        }
-    }
-    doc.layer(id).is_some_and(|l| contains(l, isolated))
+    // `id` is an ancestor of an isolated layer: walk each one's parents in the layer index.
+    let index = doc.layers.index();
+    isolated.iter().any(|&iso| std::iter::successors(index.parent(iso), |&p| index.parent(p)).any(|p| p == id))
 }
 
 // ---------------------------------------------------------------- Transform Selection
@@ -163,6 +160,11 @@ fn affine_params(cmd: &str, p: &Value, r: [f64; 4]) -> Result<Homography> {
 /// scale/rotate/move, refused when the result would not fit the transform budget.
 fn transform_selection(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "select.transformSelection";
+    let step_name = match p.get("stepName") {
+        None | Some(Value::Null) => "Transform Selection",
+        Some(Value::String(n)) if n == "Move Selection" => "Move Selection",
+        Some(_) => return Err(bad(CMD, "`stepName` must be \"Move Selection\"")),
+    };
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let sel = d.doc.selection.as_ref().ok_or_else(|| EngineError::Other("no selection".into()))?;
     let b = sel.content_bounds();
@@ -206,7 +208,7 @@ fn transform_selection(s: &mut Session, p: &Value) -> Result<Value> {
     if h.0.iter().zip(Homography::IDENTITY.0).all(|(a, b)| (a - b).abs() < 1e-12) {
         return Ok(json!({"changed": false, "selected": true}));
     }
-    let selected = s.edit("Transform Selection", |doc, _| {
+    let selected = s.edit(step_name, |doc, _| {
         if let Some(sel) = &doc.selection {
             crate::transform_cmds::check_budget(sel.content_bounds(), &h, "selection", sel.format())?;
             doc.selection = Some(crate::transform_cmds::warp_gray(sel, &h, interp)?).filter(|s| !s.content_bounds().is_empty());
@@ -250,7 +252,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Transform Selection",
             menu: &["Select"],
             shortcut: None,
-            params: r##"{"rect":[x0,y0,x1,y1]? (frame; default = selection bounds),"quad"|"corners":[[x,y]×4]? (where the frame's corners go: distort/perspective),"matrix":[a,b,c,d,e,f]?,"scaleX":%=100,"scaleY":%=100,"rotate":deg=0,"skewX":deg=0,"skewY":deg=0,"dx":px=0,"dy":px=0,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center","style"|"mesh"|"grid"|"warp":… (warp, as edit.transform.warp),"interpolation":"bilinear|bicubic|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bilinear" (Photoshop's bicubic variants render as Bicubic)}"##,
+            params: r##"{"rect":[x0,y0,x1,y1]? (frame; default = selection bounds),"quad"|"corners":[[x,y]×4]? (where the frame's corners go: distort/perspective),"matrix":[a,b,c,d,e,f]?,"scaleX":%=100,"scaleY":%=100,"rotate":deg=0,"skewX":deg=0,"skewY":deg=0,"dx":px=0,"dy":px=0,"stepName":"Move Selection"? (History step name for a plain move; the UI sends it for a drag of the outline; default "Transform Selection"; any other value is refused),"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center","style"|"mesh"|"grid"|"warp":… (warp, as edit.transform.warp),"interpolation":"bilinear|bicubic|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bilinear" (Photoshop's bicubic variants render as Bicubic)}"##,
             enabled: has_selection,
             run: transform_selection,
             journal: true,
@@ -363,6 +365,38 @@ mod tests {
         assert!(s.active().unwrap().isolated_layers.is_empty());
     }
 
+    /// Isolation lists a layer's groups around it, as the subtree scan it replaced did, on a
+    /// nested stack: the isolated layer, every group that holds it, nothing else.
+    #[test]
+    fn isolation_lists_the_groups_around_an_isolated_layer() {
+        use photocraft_doc::{Layer, PixelFormat};
+        fn by_scan(doc: &Document, isolated: &[LayerId], id: LayerId) -> bool {
+            fn contains(l: &Layer, set: &[LayerId]) -> bool {
+                l.children().is_some_and(|ch| ch.iter().any(|c| set.contains(&c.id) || contains(c, set)))
+            }
+            isolated.is_empty() || isolated.contains(&id) || doc.layer(id).is_some_and(|l| contains(l, isolated))
+        }
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 20, "height": 20})).unwrap();
+        let (inner, deep, side) =
+            (Layer::raster("deep", PixelFormat::RGBA8), Layer::raster("side", PixelFormat::RGBA8), Layer::raster("loose", PixelFormat::RGBA8));
+        let ids = [inner.id, deep.id, side.id];
+        s.edit("nest", |doc, _| {
+            let mid = Layer::group("mid", vec![deep, side]);
+            doc.layers.push(Layer::group("outer", vec![mid, Layer::group("empty", Vec::new())]));
+            doc.layers.push(inner);
+            Ok(())
+        })
+        .unwrap();
+        let doc = &s.active().unwrap().doc;
+        let all: Vec<LayerId> = doc.walk().into_iter().map(|(_, _, l)| l.id).collect();
+        for isolated in [vec![], vec![ids[1]], vec![ids[0], ids[2]], vec![LayerId(u64::MAX)]] {
+            for &id in &all {
+                assert_eq!(isolation_shows(doc, &isolated, id), by_scan(doc, &isolated, id), "{id:?} under {isolated:?}");
+            }
+        }
+    }
+
     fn rect_sel() -> Session {
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
@@ -420,6 +454,23 @@ mod tests {
         assert_eq!(r["changed"], json!(true));
         assert_ne!(sel_bounds(&s), Some(Rect::new(20, 30, 40, 40)));
         assert!(s.execute("select.transformSelection", json!({"scaleX": 0})).is_err());
+    }
+
+    #[test]
+    fn transform_selection_step_name_is_restricted() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 60, "height": 40})).unwrap();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+        let last = |s: &Session| s.active().unwrap().history.entries().last().cloned().unwrap();
+        s.execute("select.transformSelection", json!({"dx": 5, "dy": 0})).unwrap();
+        assert_eq!(last(&s), "Transform Selection");
+        s.execute("select.transformSelection", json!({"dx": 5, "dy": 0, "stepName": "Move Selection"})).unwrap();
+        assert_eq!(last(&s), "Move Selection");
+        let n = s.active().unwrap().history.past_len();
+        for bad_name in [json!("Crop"), json!(""), json!(7)] {
+            assert!(s.execute("select.transformSelection", json!({"dx": 5, "dy": 0, "stepName": bad_name})).is_err());
+        }
+        assert_eq!(s.active().unwrap().history.past_len(), n);
     }
 
     #[test]

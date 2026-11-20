@@ -6,7 +6,7 @@ use photocraft_raw::*;
 
 const RGGB: [u8; 4] = [0, 1, 1, 2];
 
-/// A 30×18 X-Trans RAF with a 2-pixel masked border.
+/// A 30×18 X-Trans RAF with a 2-pixel masked border, exercising padded rows.
 fn xtrans(packing: RafPacking, bits: u32) -> RafSpec {
     let (w, h) = (30, 18);
     let white = ((1u32 << bits) - 1) as u16;
@@ -30,6 +30,75 @@ fn every_storage_decodes_exactly() {
     }
 }
 
+const SMALL_ROW_VALUES: [u16; 16] = [0, 1, 0x3FFF, 0x2000, 0x1234, 42, 255, 0x1555, 0x2AAA, 2, 0x3FFE, 4096, 8191, 1023, 7, 37];
+
+#[test]
+fn generated_raw_ifd_tags_are_strictly_ascending() {
+    let specs = [
+        xtrans(RafPacking::U16 { le: true }, 14),
+        xtrans(RafPacking::U16 { le: false }, 16),
+        xtrans(RafPacking::Lsb12, 12),
+        xtrans(RafPacking::Words14, 14),
+        compressed(&XTRANS, 14, false),
+        compressed(&XTRANS, 14, true),
+    ];
+    for mut spec in specs {
+        for wb in [None, Some([302, 604, 453])] {
+            spec.wb_grb = wb;
+            let bytes = spec.build();
+            let region_at = u32::from_be_bytes(bytes[100..104].try_into().unwrap()) as usize;
+            let region = &bytes[region_at..];
+            let le = &region[..2] == b"II";
+            let word = |at| {
+                let bytes = region[at..at + 2].try_into().unwrap();
+                if le { u16::from_le_bytes(bytes) } else { u16::from_be_bytes(bytes) }
+            };
+            let long = |at| {
+                let bytes = region[at..at + 4].try_into().unwrap();
+                if le { u32::from_le_bytes(bytes) } else { u32::from_be_bytes(bytes) }
+            };
+            // Follow the serialized TIFF pointers independently of the decoder.
+            let ifd0 = long(4) as usize;
+            assert_eq!(word(ifd0), 1);
+            assert_eq!(word(ifd0 + 2), 0xF000);
+            let raw_ifd = long(ifd0 + 10) as usize;
+            let tags: Vec<_> = (0..usize::from(word(raw_ifd))).map(|i| word(raw_ifd + 2 + 12 * i)).collect();
+            assert!(tags.windows(2).all(|pair| pair[0] < pair[1]), "{:?}, WB {wb:?}: {tags:X?}", spec.packing);
+            assert_eq!(tags.contains(&0xF005), spec.packing == RafPacking::Words14);
+            assert_eq!(tags.contains(&0xF006), spec.packing == RafPacking::Words14);
+            assert_eq!(tags.contains(&0xF00E), wb.is_some());
+        }
+    }
+}
+
+#[test]
+fn small_word_packed_rows_decode_exactly() {
+    // Eight 14-bit samples need four words per row. At two rows this has the
+    // same payload size as U16, so the packed-word flag must select the decoder.
+    for data in [vec![1; 16], SMALL_ROW_VALUES.to_vec()] {
+        let mut spec = RafSpec::new(8, 2, data.clone(), RGGB.to_vec());
+        spec.packing = RafPacking::Words14;
+        spec.bits = 14;
+        let sensor = decode(&spec.build(), &Limits::default()).unwrap();
+        assert_eq!((sensor.width, sensor.height), (8, 2));
+        assert_eq!(sensor.data, data);
+    }
+}
+
+#[test]
+fn small_u16_rows_keep_their_container_packing() {
+    for le in [false, true] {
+        for data in [vec![1; 16], SMALL_ROW_VALUES.to_vec()] {
+            let mut spec = RafSpec::new(8, 2, data.clone(), RGGB.to_vec());
+            spec.packing = RafPacking::U16 { le };
+            spec.bits = 14;
+            let sensor = decode(&spec.build(), &Limits::default()).unwrap();
+            assert_eq!((sensor.width, sensor.height), (8, 2));
+            assert_eq!(sensor.data, data, "U16 little-endian: {le}");
+        }
+    }
+}
+
 #[test]
 fn xtrans_metadata() {
     let mut spec = xtrans(RafPacking::U16 { le: true }, 14);
@@ -48,7 +117,11 @@ fn xtrans_metadata() {
     assert!((s.baseline_exposure - 0.72).abs() < 1e-9);
     assert_eq!(s.orientation, 6);
     assert_eq!((s.make.as_deref(), s.model.as_deref()), (Some("FUJIFILM"), Some("X-Synthetic")));
-    assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+    // This RAF records black/WB but no white tag; the full 14-bit range is an
+    // explicit fallback, not a missing-CFA or missing-black warning.
+    assert_eq!(s.white, [16383.; 3]);
+    assert_eq!(s.warnings.len(), 1, "{:?}", s.warnings);
+    assert!(s.warnings[0].contains("white level") && s.warnings[0].contains("full sample range"), "{:?}", s.warnings);
 }
 
 #[test]
@@ -98,23 +171,92 @@ fn bayer_layouts() {
     }
 }
 
+/// A 780×18 all-zero RAF in Fujifilm's compressed storage (see `RafPacking::Compressed`).
+fn compressed(cfa: &[u8], bits: u32, lossy: bool) -> RafSpec {
+    let mut s = RafSpec::new(780, 18, vec![0; 780 * 18], cfa.to_vec());
+    s.bits = bits;
+    s.packing = RafPacking::Compressed { lossy };
+    s.black = vec![0];
+    s
+}
+
+#[test]
+fn compressed_lossless_and_lossy_decode() {
+    for cfa in [XTRANS.as_slice(), &RGGB, &[2, 1, 1, 0]] {
+        for bits in [12, 14, 16] {
+            for lossy in [false, true] {
+                let mut spec = compressed(cfa, bits, lossy);
+                spec.crop = Some([0, 2, 18, 776]);
+                let b = spec.build();
+                let s = decode(&b, &Limits::default()).unwrap_or_else(|e| panic!("{cfa:?} {bits} {lossy}: {e}"));
+                assert_eq!((s.width, s.height), (780, 18));
+                assert_eq!(s.data, spec.data);
+                assert_eq!(s.crop, Rect::new(2, 0, 776, 18));
+                assert_eq!(s.camera_wb, Some([2.0, 1.0, 1.5]));
+                assert_eq!(s.cfa.as_ref().map(|c| c.width), Some(if cfa.len() == 36 { 6 } else { 2 }));
+                develop_sensor(&s, &DevelopOptions::default()).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn compressed_images_of_any_group_count_decode() {
+    for h in [6, 24] {
+        for lossy in [false, true] {
+            let mut spec = compressed(&XTRANS, 14, lossy);
+            spec.height = h;
+            spec.data = vec![0; 780 * h];
+            let s = decode(&spec.build(), &Limits::default()).unwrap_or_else(|e| panic!("{h} rows, lossy {lossy}: {e}"));
+            assert_eq!((s.height, s.data.len()), (h, 780 * h));
+        }
+    }
+}
+
+#[test]
+fn compressed_variants_that_cannot_be_decoded_fail_cleanly() {
+    // The header's compression mode disagrees with the stream (lossy header, lossless stream).
+    let mut b = compressed(&XTRANS, 14, false).build();
+    b[108..112].copy_from_slice(&3u32.to_be_bytes());
+    assert!(matches!(decode(&b, &Limits::default()), Err(RawError::Malformed(_))));
+    // The stream assumes a fixed CFA arrangement.
+    let mut other = XTRANS;
+    other.swap(0, 2);
+    for cfa in [other.as_slice(), &[1, 0, 2, 1]] {
+        let b = compressed(cfa, 14, false).build();
+        match decode(&b, &Limits::default()) {
+            Err(RawError::Unsupported(m)) => assert!(m.contains("layout"), "{m}"),
+            other => panic!("expected unsupported, got {other:?}"),
+        }
+    }
+    // A short strip without the IS signature.
+    let mut b = compressed(&XTRANS, 14, false).build();
+    let at = b.windows(5).position(|w| w == b"IS\x01\x10\x0e").unwrap();
+    b[at..at + 2].copy_from_slice(b"XX");
+    assert!(matches!(decode(&b, &Limits::default()), Err(RawError::Unsupported(_))));
+    // A damaged entropy stream (sizes intact, a run of zero bits inside the first stripe that
+    // overruns the residual escape) is malformed, never a panic.
+    let mut b = compressed(&XTRANS, 14, false).build();
+    let at = b.windows(5).position(|w| w == b"IS\x01\x10\x0e").unwrap();
+    // Lossless: the 16-byte header and the two-entry size table, padded to 32 bytes.
+    let stream = at + 32;
+    b[stream + 64..stream + 128].fill(0);
+    match decode(&b, &Limits::default()) {
+        Err(RawError::Malformed(m)) => assert!(m.contains("residual"), "{m}"),
+        other => panic!("expected malformed, got {other:?}"),
+    }
+}
+
 #[test]
 fn unsupported_variants_report_and_keep_the_preview() {
-    let mut spec = xtrans(RafPacking::Compressed, 14);
+    let mut spec = xtrans(RafPacking::U16 { le: true }, 14);
+    spec.cfa_tiff = false;
     let b = spec.build();
     match decode(&b, &Limits::default()) {
-        Err(RawError::Unsupported(m)) => assert!(m.contains("compressed"), "{m}"),
-        other => panic!("expected unsupported, got {other:?}"),
-    }
-    let p = embedded_preview(&b).unwrap();
-    assert_eq!((p.width, p.height), (32, 24));
-
-    spec.packing = RafPacking::U16 { le: true };
-    spec.cfa_tiff = false;
-    match decode(&spec.build(), &Limits::default()) {
         Err(RawError::Unsupported(m)) => assert!(m.contains("FinePix"), "{m}"),
         other => panic!("expected unsupported, got {other:?}"),
     }
+    assert!(embedded_preview(&b).is_some());
 }
 
 #[test]

@@ -74,9 +74,10 @@ pub(super) fn rename_layer(s: &mut Session, p: &Value) -> Result<Value> {
     let name = p.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()).ok_or_else(|| bad("layer.renameLayer", "missing `name`"))?.to_string();
     let id = crate::commands::layer_param(s, p)?;
     s.edit("Rename Layer", |doc, _| {
-        doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.name = name;
+        doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.name.clone_from(&name);
         Ok(())
     })?;
+    crate::type_cmds::note_typed_name(s, id, &name);
     Ok(Value::Null)
 }
 
@@ -263,37 +264,115 @@ pub fn delete_selected(s: &mut Session) -> Result<Value> {
     Ok(json!({"deleted": sel.len()}))
 }
 
-/// Duplicate Layer with several layers selected: each copy goes above its original and the
-/// copies become the selection. Artboard copies go beside their boards unless `in_place`
+/// Duplicate Layer with several layers selected: the copies of sibling layers form one block above
+/// the topmost selected original, in the originals' order, as Photoshop does (#11915); a selection
+/// spanning groups keeps each copy directly above its original, so no copy leaves its group, and a
+/// clipped layer copied without its base keeps its copy above the original so the copy keeps that
+/// base. The copies become the selection. Artboard copies go beside their boards unless `in_place`
 /// ([`crate::artboard_cmds::place_copy`]). `label` names the history step (Layer via Copy reuses
 /// this path, #2777).
 pub fn duplicate_selected(s: &mut Session, in_place: bool, label: &str) -> Result<Value> {
     let sel = selected(s);
     let old_active = s.active().and_then(|d| d.active_layer);
     let add_copy = crate::commands::layer_panel_option(s, "addCopyToCopiedLayersAndGroups", true);
+    let mut shift = (0i32, 0i32);
     let (copies, active) = s.edit(label, |doc, active| {
+        let ids = top_level(doc, &sel);
+        // Copies of sibling layers go above the topmost selected original as one block, keeping
+        // their originals' order, as Photoshop does (#11915). Layers from different groups keep a
+        // copy directly above each original, so no copy leaves its group; artboard copies are
+        // placed beside their boards one by one (below). So does a clipped copy whose own base is
+        // not copied with it: the block would give it a different base and change its pixels.
+        let block = same_siblings(doc, &ids)
+            && !ids.iter().any(|id| doc.layer(*id).is_some_and(|l| l.artboard().is_some()))
+            && ids.iter().all(|id| doc.layer(*id).is_none_or(|l| !l.clipped || crate::clip_group::base_of(doc, *id).is_some_and(|base| ids.contains(&base))));
+        let mut above = ids.last().copied();
         let mut copies = Vec::new();
         let mut new_active = None;
-        for id in top_level(doc, &sel) {
+        for id in ids {
             // Match the single-layer duplicate path: Background copies become
             // ordinary layers, while normal copies retain their original locks.
             let dup = crate::commands::layer_copy(doc, id, add_copy)?;
-            let nid = doc.insert_above(Some(id), dup);
+            let nid = if block { doc.insert_above(above, dup) } else { doc.insert_above(Some(id), dup) };
+            if block {
+                above = Some(nid);
+            }
             if !in_place {
-                crate::artboard_cmds::place_copy(doc, nid)?;
+                // Each copy's shift moved the whole document, so they add up.
+                let (dx, dy) = crate::artboard_cmds::place_copy(doc, nid)?;
+                shift = (shift.0.saturating_add(dx), shift.1.saturating_add(dy));
             }
             if Some(id) == old_active {
                 new_active = Some(nid);
             }
             copies.push(nid);
         }
+        relink_copies(doc, &copies)?;
         let a = new_active.or(copies.last().copied());
         *active = a;
         Ok((copies, a))
     })?;
+    crate::artboard_cmds::follow_shift(s, shift);
     let out = copies.iter().map(|l| l.0).collect::<Vec<_>>();
     reselect(s, copies, active);
     Ok(json!({"layers": out, "layer": active.map(|l| l.0)}))
+}
+
+/// True when two or more layers in `ids` all share one parent (they are siblings), so copies of
+/// them can be inserted as one block above the topmost of them (#11915). Fewer than two ids, or an
+/// id that is not in `doc`, means false.
+fn same_siblings(doc: &Document, ids: &[LayerId]) -> bool {
+    let [first, rest @ ..] = ids else { return false };
+    let Some(mut parent) = doc.path_of(*first) else { return false };
+    parent.pop();
+    rest.iter().all(|id| {
+        let Some(mut path) = doc.path_of(*id) else { return false };
+        path.pop();
+        path == parent
+    })
+}
+
+/// Link groups of fresh copies, as the reference application does (measured, #11217): a copy of
+/// one layer alone (Duplicate, Layer via Copy) joins its original's link group. With several
+/// layers copied, the copies of several layers of one link group are linked to each other under a
+/// group of their own, as `layer_copy_cmds::adapt_copies` remaps copies landing in another
+/// document, and a copy that is the only one from its link group is unlinked. `copies` are the
+/// copies just inserted in `doc` (the layers in copied groups are remapped with them); the
+/// originals keep their groups.
+pub(crate) fn relink_copies(doc: &mut Document, copies: &[LayerId]) -> Result<()> {
+    // One layer copied on its own keeps the link group it was copied with.
+    if let [only] = copies
+        && doc.layer(*only).is_some_and(|l| !matches!(l.content, LayerContent::Group(_)))
+    {
+        return Ok(());
+    }
+    // Every copied layer with the link group it was copied with. An explicit stack rather than
+    // recursion: documents can nest deeply.
+    let mut linked: Vec<(LayerId, u64)> = Vec::new();
+    let mut stack: Vec<&Layer> = copies.iter().filter_map(|id| doc.layer(*id)).collect();
+    while let Some(l) = stack.pop() {
+        if let Some(group) = l.link_group {
+            linked.push((l.id, group));
+        }
+        if let LayerContent::Group(g) = &l.content {
+            stack.extend(g.children.iter());
+        }
+    }
+    let mut groups: Vec<u64> = linked.iter().map(|(_, group)| *group).collect();
+    groups.sort_unstable();
+    groups.dedup();
+    for group in groups {
+        let members: Vec<LayerId> = linked.iter().filter(|(_, g)| *g == group).map(|(id, _)| *id).collect();
+        // The id is picked after the previous group's copies took theirs, so no two share one.
+        let fresh =
+            if members.len() < 2 { None } else { Some(doc.unused_link_group().ok_or_else(|| EngineError::Other("no free link group id is left".into()))?) };
+        for id in members {
+            if let Some(l) = doc.layer_mut(id) {
+                l.link_group = fresh;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Show/hide every selected layer in one step.
