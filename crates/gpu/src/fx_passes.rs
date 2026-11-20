@@ -53,14 +53,12 @@ impl Compositor {
         {
             // Moved by whole pixels: maps are computed relative to the region, so if the shape
             // moved unchanged with it, every map is still exact.
-            let v = fx::shape(doc, layer, region);
             if let Some(e) = self.fx.get_mut(&key)
-                && v == e.shape_cpu
+                && fx::shape_matches(doc, layer, region, &e.shape_cpu)
             {
                 e.region = region;
                 rebuild = false;
             }
-            photocraft_raster::scratch::give(v);
         }
         if rebuild {
             let shape = Tex::map(device, "pc_fx_shape", region, MAP32);
