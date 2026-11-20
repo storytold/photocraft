@@ -609,6 +609,75 @@ fn distinct_native_preview_metadata_exhausts_budget_without_editing_any_instance
     assert_eq!(s.active().unwrap().doc, before);
 }
 
+/// A large opaque native payload is shared data, not work repeated for every display cache.
+#[test]
+fn native_save_refreshes_shared_caches_without_rehashing_the_native_payload_per_instance() {
+    let (mut s, id, original) = native_session("eps", 8);
+    let template = s.active().unwrap().doc.layer(id).unwrap().clone();
+    let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
+    for _ in 1..100 {
+        doc.insert_above(Some(id), template.duplicate());
+    }
+    let before = s.active().unwrap().doc.clone();
+    let mut changed = vec![b' '; MAX_VECTOR_SOURCE_BYTES];
+    changed[..original.len()].copy_from_slice(&original);
+    let params = native_request(&mut s, id, "eps", &changed);
+    let hashed = crate::smart_cmds::source_cache_statistics().native_hash_bytes;
+    assert_eq!(s.execute(UPDATE_VECTOR, params).unwrap()["updated"], true);
+    assert_eq!(crate::smart_cmds::source_cache_statistics().native_hash_bytes - hashed, 0, "cache refresh must not hash 16 MiB for every copy");
+    let after = s.active().unwrap().doc.clone();
+    let target = smart(&after, id).unwrap();
+    let SmartSource::Embedded { file_name, bytes } = &target.source else { panic!("native source lost") };
+    assert_eq!(file_name, "Logo.eps");
+    assert_eq!(bytes.as_slice(), changed.as_slice());
+    assert_eq!(target.vector_preview.as_ref().unwrap().source_hash, *blake3::hash(&changed).as_bytes());
+    for (_, _, layer) in after.walk() {
+        let LayerContent::Smart(sm) = &layer.content else { continue };
+        let SmartSource::Embedded { bytes: shared, .. } = &sm.source else { panic!("native source lost") };
+        assert!(Arc::ptr_eq(shared, bytes));
+        assert_eq!(sm.contents_id, target.contents_id);
+        assert_eq!(sm.cache.as_ref().unwrap().pixel(15, 11), vec![0.0, 0.0, 1.0, 1.0]);
+        let old = smart(&before, layer.id).unwrap();
+        assert_eq!(sm.transform, old.transform);
+        assert_eq!(sm.smart_filters, old.smart_filters);
+        assert_eq!(sm.filter_mask, old.filter_mask);
+    }
+    assert!(s.undo());
+    assert_eq!(s.active().unwrap().doc, before);
+    assert!(s.redo());
+    assert_eq!(s.active().unwrap().doc, after);
+}
+
+/// Explicit refreshes and warp frames of one shared native source verify its preview hash once,
+/// not once per call; a replaced source is verified again and a forged preview still fails.
+#[test]
+fn native_preview_digest_is_reused_per_source_allocation_and_rechecked_after_replacement() {
+    let (mut s, id, original) = native_session("eps", 8);
+    let mut changed = vec![b' '; 1024 * 1024];
+    changed[..original.len()].copy_from_slice(&original);
+    let params = native_request(&mut s, id, "eps", &changed);
+    s.execute(UPDATE_VECTOR, params).unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    let mut sm = smart(&doc, id).unwrap().clone();
+    // A fresh allocation of the same bytes: nothing about it can be remembered yet.
+    sm.source = SmartSource::Embedded { file_name: "Logo.eps".into(), bytes: Arc::new(changed.clone()) };
+    let hashed = || crate::smart_cmds::source_cache_statistics().native_hash_bytes;
+    let start = hashed();
+    let frame = crate::smart_cmds::source_box(&doc, &sm).unwrap();
+    for _ in 0..3 {
+        assert_eq!(crate::smart_cmds::source_box(&doc, &sm), Some(frame));
+        assert_eq!(crate::smart_cmds::render(&doc, &sm).unwrap().unwrap().pixel(15, 11), vec![0.0, 0.0, 1.0, 1.0], "the verified preview is drawn");
+    }
+    assert_eq!(hashed() - start, changed.len(), "one verification for one source allocation");
+    // Different bytes in a new allocation never inherit the verified digest.
+    let mut other = changed.clone();
+    other[original.len()] = b'%';
+    sm.source = SmartSource::Embedded { file_name: "Logo.eps".into(), bytes: Arc::new(other) };
+    let before = hashed();
+    assert!(crate::smart_cmds::render(&doc, &sm).is_err(), "a stale preview must not draw a different source");
+    assert_eq!(hashed() - before, changed.len());
+}
+
 #[test]
 fn native_source_replacement_never_uses_a_forged_or_stale_preview() {
     let (mut s, id, original) = native_session("ai", 8);

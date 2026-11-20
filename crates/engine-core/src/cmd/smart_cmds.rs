@@ -195,13 +195,14 @@ pub use placing::detach_psd;
 pub(crate) use placing::{affine_homography, set_placement, shift_smart, transform_placement};
 use placing::{convert, reset_transform, shift_layer, via_copy};
 pub use placing::{layer_to_smart, layers_to_smart, placement};
-pub use rendering::WarningRenderSources;
 use rendering::refresh_or_fail;
+pub(crate) use rendering::render_with_warnings;
 pub use rendering::render_with_warnings_using;
+pub use rendering::source_box;
 #[cfg(test)]
 use rendering::{NativeDigests, blend_surfaces, place, render_in};
+pub use rendering::{SourceCacheStatistics, WarningRenderSources, source_cache_statistics};
 pub use rendering::{apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image};
-pub(crate) use rendering::{render_with_warnings, source_box};
 #[cfg(test)]
 use source::svg_source_image_in;
 pub use source::vector_scale;

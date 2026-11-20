@@ -85,13 +85,13 @@ fn memo_prices_owned_output_and_does_not_retain_encoded_capacity() {
     let sm = object("reserved.svg", bytes);
     let tile = photocraft_raster::tile_storage_bytes(doc.bounds(), &doc.pixel_format()) as usize;
     let mut memo = WarningRenderSources::with_limits(&doc, tile + 4096, 32);
-    WARNING_SOURCE_DECODES.with(|value| value.set(0));
+    let decodes = source_cache_statistics().svg_decodes;
     let first = render_with_warnings_using(&sm, &mut memo).unwrap();
     assert!(first.1.is_empty());
     assert_eq!(memo.entries.len(), 1, "encoded spare capacity is borrowed, not retained memo storage");
     assert!(memo.bytes <= tile + 4096);
     assert_eq!(render_with_warnings_using(&sm, &mut memo).unwrap(), first);
-    assert_eq!(WARNING_SOURCE_DECODES.with(std::cell::Cell::get), 1);
+    assert_eq!(source_cache_statistics().svg_decodes - decodes, 1);
     assert_eq!(weak.strong_count(), 1, "only the caller owns its source allocation");
     drop(sm);
     assert!(weak.upgrade().is_none(), "the memo must not pin an encoded body after its owner drops it");
