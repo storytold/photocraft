@@ -56,7 +56,7 @@ pub(super) fn blend_label(ps: &str) -> Option<&'static str> {
 }
 
 pub(super) fn blend_ps(label: &str) -> Option<&'static str> {
-    crate::commands::blend_from_str(label).and_then(|m| BLEND_MODES.iter().find(|(_, v)| crate::commands::blend_from_str(v) == Some(m))).map(|(k, _)| *k)
+    crate::commands::parse_blend(label).and_then(|m| BLEND_MODES.iter().find(|(_, v)| crate::commands::parse_blend(v) == Some(m))).map(|(k, _)| *k)
 }
 
 /// Photoshop ↔ PhotoCraft value tables; Photoshop codes compare without their space padding.
