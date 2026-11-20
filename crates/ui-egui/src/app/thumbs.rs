@@ -18,7 +18,7 @@ pub(crate) struct SnapshotThumbs<'a> {
 impl<'a> SnapshotThumbs<'a> {
     /// The thumbnails of the snapshots of document `doc` (none when it is not open).
     pub(crate) fn new(app: &'a PhotocraftApp, doc: DocId) -> Self {
-        let snapshots = app.session.documents().iter().find(|st| st.doc.id == doc).map_or(&[][..], |st| &st.snapshots[..]);
+        let snapshots = app.session.documents().iter().find(|st| st.doc.id == doc).map_or(&[][..], |st| st.snapshots());
         Self { doc, snapshots }
     }
 }
@@ -36,21 +36,6 @@ impl ThumbSource<u64> for SnapshotThumbs<'_> {
     }
 }
 
-/// Cheap identity of a surface's pixels: its default (untouched) pixel, tile coordinates and
-/// `Arc` pointers. The default pixel matters: inverting or filling a tile-less mask only changes
-/// it (#2117).
-pub fn surface_fingerprint(s: &photocraft_raster::Surface) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ s.tile_count() as u64;
-    for &b in s.default_bytes() {
-        h = (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
-    }
-    for (c, t) in s.tiles() {
-        let p = std::sync::Arc::as_ptr(t) as usize as u64;
-        h = (h ^ p ^ ((c.tx as u64) << 32 | c.ty as u32 as u64)).wrapping_mul(0x100_0000_01b3);
-    }
-    h
-}
-
 /// The document area a layer thumbnail frames: the canvas, or with `clip` the layer's pixels on
 /// it (the canvas again when it has none there, so an empty layer still shows the page shape).
 pub(crate) fn layer_thumb_frame(layer: &photocraft_doc::Layer, canvas: photocraft_geom::Rect, clip: bool) -> photocraft_geom::Rect {
@@ -62,9 +47,9 @@ pub(crate) fn layer_thumb_frame(layer: &photocraft_doc::Layer, canvas: photocraf
 }
 
 impl PhotocraftApp {
-    /// Cached `Surface::content_bounds` keyed by an id and the surface's tile identity.
+    /// Cached `Surface::content_bounds` keyed by an id and the surface's generation.
     pub fn cached_bounds(&mut self, key: u64, surface: &photocraft_raster::Surface) -> photocraft_geom::Rect {
-        let rev = surface_fingerprint(surface);
+        let rev = surface.generation();
         if let Some((r, b)) = self.bounds_cache.get(&key)
             && *r == rev
         {
@@ -82,7 +67,7 @@ impl PhotocraftApp {
     /// hasn't changed since, else a scan (not cached).
     pub fn known_bounds(&self, key: u64, surface: &photocraft_raster::Surface) -> photocraft_geom::Rect {
         match self.bounds_cache.get(&key) {
-            Some((r, b)) if *r == surface_fingerprint(surface) => *b,
+            Some((r, b)) if *r == surface.generation() => *b,
             _ => surface.content_bounds(),
         }
     }
@@ -94,7 +79,7 @@ impl PhotocraftApp {
         match &layer.content {
             photocraft_doc::LayerContent::Shape(sh) if sh.has_soft_mask() => {
                 // Cached per rendering, like the pixel bounds: the frame renders strips of the shape.
-                let (key, rev) = (layer.id.0 | 1 << 63, surface_fingerprint(surface));
+                let (key, rev) = (layer.id.0 | 1 << 63, surface.generation());
                 if let Some((r, b)) = self.bounds_cache.get(&key)
                     && *r == rev
                 {
@@ -194,7 +179,7 @@ impl ThumbSource<Row> for ChannelThumbs<'_> {
         match key {
             Row::Composite | Row::Color(_) => Revision::of(&(doc.id.0, self.st.pixel_revision, self.show_color, size)),
             // A channel-list change with empty damage still refreshes these: they follow their own surface.
-            _ => Revision::of(&(doc.id.0, self.st.active_layer, self.surface(key).map(surface_fingerprint), size)),
+            _ => Revision::of(&(doc.id.0, self.st.active_layer, self.surface(key).map(photocraft_raster::Surface::generation), size)),
         }
     }
 

@@ -234,10 +234,7 @@ fn blending_does_not_follow_layer_selection_or_the_layer_mask_target() {
     confirm(&mut app, id);
     assert_eq!(smart(&app, layer).smart_filters[0].opacity, 0.25);
     assert_eq!(app.session.active().unwrap().active_layer, Some(selected));
-    assert_eq!(
-        crate::surface_fingerprint(&app.session.active().unwrap().doc.layer(selected).unwrap().mask.as_ref().unwrap().surface),
-        crate::surface_fingerprint(&mask)
-    );
+    assert_eq!(app.session.active().unwrap().doc.layer(selected).unwrap().mask.as_ref().unwrap().surface.generation(), mask.generation());
 }
 
 /// Blending an Invert smart filter keeps the translucent pixels' alpha at 8, 16 and 32 bits.
