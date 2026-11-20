@@ -170,6 +170,10 @@ impl DocState {
     pub fn doc(&self) -> &Arc<Document> {
         &self.inputs.doc
     }
+    /// Consume the state and return its document without cloning its Arc.
+    pub fn into_document(self) -> Arc<Document> {
+        self.inputs.doc
+    }
     /// Mutable access invalidates the ordered selection, including on document replacement.
     pub fn doc_mut(&mut self) -> &mut Arc<Document> {
         self.selected_cache.take();
