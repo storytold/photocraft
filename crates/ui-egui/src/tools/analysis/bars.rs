@@ -5,7 +5,7 @@ use craft::behavior::kurbo::Point;
 use craft::color_ui::ui::SamplerOptions;
 use craft::draw::ui::measure::{RulerBar, RulerLine};
 use craft::theme::Srgba;
-use craft::ui::buttons::{Button, IconButton, ToggleButton};
+use craft::ui::buttons::{IconButton, ToggleButton};
 use craft::ui::choice::Swatch;
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
 use craft::ui::display::{Divider, Text};
@@ -148,7 +148,8 @@ fn count(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: &photocraft_doc::Docum
     }
     // Clear acts on a visible current group with markers.
     let clearable = group.is_some() && g.visible && !g.points.is_empty();
-    if Button::new(Label::from(tl!("Clear"))).enabled(clearable).show(ui).clicked() {
+    let compact = app.session.prefs().workspace.narrow_options_bar();
+    if crate::option_cells::action(ui, Label::from(tl!("Clear")), IconId::new("eraser"), clearable, compact).clicked() {
         run(app, "count.clear", json!({}));
     }
     let rgb = g.color.to_rgb();
@@ -188,7 +189,8 @@ fn note(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: &photocraft_doc::Docume
         crate::notices::error(app, message);
     }
     // Clear All asks first (#11791); `notes.delete {"all": true}` itself never does.
-    if Button::new(Label::from(tl!("Clear All"))).enabled(!doc.notes.is_empty()).show(ui).clicked() {
+    let compact = app.session.prefs().workspace.narrow_options_bar();
+    if crate::option_cells::action(ui, Label::from(tl!("Clear All")), IconId::new("eraser"), !doc.notes.is_empty(), compact).clicked() {
         note_alerts::ask_clear_notes(app);
     }
     let shown = panel_docking::is_shown(app, "notes");

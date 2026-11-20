@@ -113,7 +113,7 @@ fn blending_edits_one_filter_with_percent_opacity_and_undo_redo() {
         confirm(&mut app, id);
         let changed = filters(&app, layer);
         assert!((changed[0].opacity - 0.01).abs() < 1e-6);
-        assert_eq!(blend_key(changed[0].blend), blend);
+        assert_eq!((changed[0].blend).key().to_string(), blend);
         assert_eq!(serde_json::to_value(&changed[1]).unwrap(), serde_json::to_value(&original[1]).unwrap());
         assert_eq!(photocraft_engine::smart_cmds::contents_of(&app.session.active().unwrap().doc, layer).unwrap(), source);
         assert_eq!(app.session.active().unwrap().doc.layer(layer).unwrap().blend, BlendMode::Normal);
@@ -234,10 +234,7 @@ fn blending_does_not_follow_layer_selection_or_the_layer_mask_target() {
     confirm(&mut app, id);
     assert_eq!(smart(&app, layer).smart_filters[0].opacity, 0.25);
     assert_eq!(app.session.active().unwrap().active_layer, Some(selected));
-    assert_eq!(
-        crate::surface_fingerprint(&app.session.active().unwrap().doc.layer(selected).unwrap().mask.as_ref().unwrap().surface),
-        crate::surface_fingerprint(&mask)
-    );
+    assert_eq!(app.session.active().unwrap().doc.layer(selected).unwrap().mask.as_ref().unwrap().surface.generation(), mask.generation());
 }
 
 /// Blending an Invert smart filter keeps the translucent pixels' alpha at 8, 16 and 32 bits.

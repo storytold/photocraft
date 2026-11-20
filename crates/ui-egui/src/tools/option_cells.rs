@@ -3,7 +3,8 @@
 
 use std::ops::RangeInclusive;
 
-use craft::behavior::{EditEvents, NumberCodec};
+use craft::behavior::{EditEvents, IconId, NumberCodec};
+use craft::ui::buttons::{Button, ButtonOutput, IconButton};
 use craft::ui::contract::{Bind, FieldLayout, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
 use craft::ui::dialog::Alert;
 use craft::ui::display::{Elide, Shade, Text};
@@ -13,6 +14,15 @@ use craft::ui::runtime::env::{Env, Label};
 use craft::ui::text::{NumberField, RangeAlert};
 
 use crate::PhotocraftApp;
+
+/// A text action in the Options bar; compact mode keeps its label in accessibility and the tooltip.
+pub(crate) fn action(ui: &mut egui::Ui, caption: Label, icon: IconId, enabled: bool, compact: bool) -> ButtonOutput {
+    if compact {
+        IconButton::new(icon).label(caption.clone()).tooltip(caption).enabled(enabled).show(ui)
+    } else {
+        Button::new(caption).enabled(enabled).show(ui)
+    }
+}
 
 /// One options-bar number cell over an `f32` option. The bound value changes only when the field
 /// commits, so showing a bar never rounds a fraction another tool shares.

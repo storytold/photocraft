@@ -224,9 +224,11 @@ impl PhotocraftApp {
         let panels_on = &self.ui.panels;
         let (menu_bar, options_bar, status_bar) = (panels_on.menu_bar, panels_on.options_bar, panels_on.status_bar);
         let window_title = panels::title_bar::window_title(self);
-        let options_size = if self.session.prefs().workspace.narrow_options_bar() { SlotSize::OptionsBarNarrow } else { SlotSize::OptionsBar };
-        let options_slot =
-            Slot::new(slots::OPTIONS).visible(options_bar && !home).reveal().size(options_size).label(Env::of(ui).words::<ShellWords>().options.clone());
+        let options_slot = Slot::new(slots::OPTIONS)
+            .visible(options_bar && !home)
+            .reveal()
+            .size(SlotSize::OptionsBar)
+            .label(Env::of(ui).words::<ShellWords>().options.clone());
         let versions = (panels::region_versions::options_bar(self), panels::region_versions::status_bar(self));
         // The shell binds a copy of the mode, since `show` takes the app too; the copy goes back
         // to the view after the pass.
@@ -295,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn the_narrow_options_bar_preference_shortens_the_bar() {
+    fn the_narrow_options_bar_preference_compacts_actions_at_the_normal_height() {
         for theme in [AppTheme::studio(), AppTheme::pro()] {
             let theme_id = theme.id().as_str().to_owned();
             let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |cc| {
@@ -303,18 +305,22 @@ mod tests {
                 let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
                 app.set_theme(&cc.egui_ctx, theme);
                 app.run("file.new", json!({"width": 200, "height": 160, "background": "white"})).unwrap();
+                app.ui.tool = crate::state::Tool::RectMarquee;
                 app
             });
             h.run_steps(5);
             assert_eq!(h.state().ui.theme.id().as_str(), theme_id);
-            let normal = options_height(&h);
+            let action_width = |h: &Harness<'_, Box<PhotocraftApp>>| h.get_by_role_and_label(Role::Button, "Select and Mask…").rect().width();
+            let height = options_height(&h);
+            let width = action_width(&h);
             h.state_mut().run("prefs.set", json!({"path": "workspace.enableNarrowOptionsBar", "value": true})).unwrap();
             h.run_steps(5);
-            let narrow = options_height(&h);
-            assert!(narrow < normal, "{theme_id}: narrow {narrow} must be shorter than normal {normal}");
+            assert_eq!(options_height(&h), height, "{theme_id}: the bar keeps its height");
+            assert!(action_width(&h) < width, "{theme_id}: the icon action is narrower");
             h.state_mut().run("prefs.set", json!({"path": "workspace.enableNarrowOptionsBar", "value": false})).unwrap();
             h.run_steps(5);
-            assert_eq!(options_height(&h), normal, "{theme_id}");
+            assert_eq!(options_height(&h), height, "{theme_id}");
+            assert_eq!(action_width(&h), width, "{theme_id}: the text button comes back");
         }
     }
 }

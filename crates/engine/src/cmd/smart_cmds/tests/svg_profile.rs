@@ -173,7 +173,7 @@ fn svg_smart_render_cache_tracks_destination_profile_and_transform() {
         assert!(warnings.is_empty());
         assert_eq!(reported.unwrap(), warped, "warning-bearing warp parity");
         assert!((warped.pixel(10, 8)[0] - corrected.pixel(3, 3)[0]).abs() < 0.01, "warp must keep corrected colours");
-        linear.layers = vec![Layer::new("Saved SVG", LayerContent::Smart(smart.clone()))];
+        linear.layers = vec![Layer::new("Saved SVG", LayerContent::Smart(smart.clone()))].into();
         let saved = encode_source(&linear).unwrap();
         let reopened = decode_source("saved.pcraft", &saved).unwrap();
         let LayerContent::Smart(restored) = &reopened.layers[0].content else { panic!("smart object lost on save") };

@@ -5,11 +5,10 @@
 // PLAN: the `craft::ui::widgets::{Button, Menu}` and `craft::ui::contract::{Entry, Trigger}` facade paths are assumed.
 
 use craft::behavior::kurbo::Size;
-use craft::behavior::{EditEvent, EditEvents};
+use craft::behavior::{EditEvent, EditEvents, IconId};
 use craft::draw::ui::artboard::{ArtboardBackground as Shown, ArtboardBar, ArtboardBarTarget, ArtboardPreset};
 use craft::theme::Srgba;
-use craft::ui::buttons::Button;
-use craft::ui::contract::{Entry, Show as _, Trigger};
+use craft::ui::contract::{Entry, Trigger};
 use craft::ui::menu::Menu;
 use craft::ui::runtime::requests::ColorRequest;
 use photocraft_doc::{ArtboardBackground, LayerId};
@@ -275,7 +274,8 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// The gear button and its menu: the four entries as check rows, Auto-nest Layers live, the others disabled.
 pub fn gear(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let opener = Button::new(tl!("Options")).show(ui).response;
+    let compact = app.session.prefs().workspace.narrow_options_bar();
+    let opener = crate::option_cells::action(ui, tl!("Options").into(), IconId::new("settings"), true, compact).response;
     let o = &app.ui.artboard_tool;
     let entries: Vec<Entry<Gear>> = GEAR.iter().map(|(g, label)| Entry::new(*g, label.to_string()).checked(g.checked(o)).enabled(g.enabled())).collect();
     let pick = Menu::new(tl!("Options")).opened_by(&opener, Trigger::Press).pick(ui, &entries);
