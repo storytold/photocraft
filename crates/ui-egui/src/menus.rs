@@ -118,7 +118,7 @@ mod open_recent_tests {
         app.push_recent("/tmp/a.png");
         app.push_recent("/tmp/b.psd");
         app.push_recent("/tmp/a.png"); // de-dupe → moves to front
-        assert_eq!(app.ui.recent_files, vec!["/tmp/a.png".to_string(), "/tmp/b.psd".to_string()]);
+        assert_eq!(*app.ui.recent_files, vec!["/tmp/a.png".to_string(), "/tmp/b.psd".to_string()]);
         for i in 0..15 {
             app.push_recent(&format!("/tmp/f{i}.png"));
         }
@@ -130,7 +130,7 @@ mod open_recent_tests {
         assert_eq!(app.session.prefs().file_handling.recent_files, app.ui.recent_files, "stored in the preferences");
 
         // Menu lists them under File › Open Recent, with basenames, plus Clear Recent Files.
-        app.ui.recent_files = vec!["/tmp/a.png".into(), "/dir/b.psd".into()];
+        *app.ui.recent_files = vec!["/tmp/a.png".into(), "/dir/b.psd".into()];
         let rows = menu_rows(&app);
         let labels: Vec<&str> = rows.iter().filter(|r| r.command.id.starts_with("file.openRecent.")).map(|r| r.label.as_str()).collect();
         assert_eq!(labels, vec!["a.png", "b.psd"]);
@@ -150,7 +150,7 @@ mod open_recent_tests {
             app.push_recent(p);
         }
         invoke(&mut app, &ctx, "file.removeRecent", json!({"path": "/tmp/b.psd"})).unwrap();
-        assert_eq!(app.ui.recent_files, vec!["/tmp/a.png".to_string(), "/tmp/c.tif".to_string()]);
+        assert_eq!(*app.ui.recent_files, vec!["/tmp/a.png".to_string(), "/tmp/c.tif".to_string()]);
         assert_eq!(app.session.prefs().file_handling.recent_files, app.ui.recent_files, "removed in the preferences too");
         invoke(&mut app, &ctx, "file.removeRecent", json!({"path": "/tmp/not-listed.png"})).unwrap();
         assert_eq!(app.ui.recent_files.len(), 2, "a path that isn't listed changes nothing");

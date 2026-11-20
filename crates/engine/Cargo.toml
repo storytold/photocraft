@@ -13,6 +13,8 @@ corpus = []
 
 [dependencies]
 craft-tracked = { workspace = true }
+# `#[derive(PlainData)]` for the session areas held in `Tracked`.
+craft-ui-macros = { workspace = true }
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 craft-cms = { workspace = true }

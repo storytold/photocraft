@@ -469,16 +469,21 @@ impl Default for ToolState {
 
 /// Layer › Layer Style › Copy Layer Style: the effects and the Blending Options, as Photoshop
 /// copies them (Paste Layer Style puts them all on each target).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub struct CopiedStyle {
+    #[plain_data(assume = "document effects: plain values")]
     pub effects: photocraft_doc::Effects,
+    #[plain_data(assume = "an enum")]
     pub blend: photocraft_color::BlendMode,
     pub fill: f32,
+    #[plain_data(assume = "document blending options: plain values")]
     pub advanced: photocraft_doc::AdvancedBlending,
+    #[plain_data(assume = "document blend ranges: plain values")]
     pub blend_if: photocraft_doc::BlendIf,
     pub excluded_channels: u32,
     /// The colour mode it was copied in: Blend If's channel ranges and the channel restrictions
     /// only carry over to a document in the same mode.
+    #[plain_data(assume = "an enum")]
     pub mode: photocraft_color::ColorMode,
 }
 

@@ -620,7 +620,7 @@ pub struct PhotocraftApp {
     /// What the chrome derives from each open document, kept per document revision (`app::doc_queries`).
     pub(crate) doc_queries: app::doc_queries::DocQueries,
     /// The saved workspaces and the one shown (`workspace_ui`).
-    pub workspaces: workspace_ui::Workspaces,
+    pub workspaces: craft::ui::contract::Tracked<workspace_ui::Workspaces>,
     /// Autosave timing and its retry state (`prefs_ui`).
     pub(crate) autosave: craft::platform::autosave::Autosave,
     /// GPU canvas renderer, when running on the wgpu backend (see [`Self::set_wgpu`]). Dropped

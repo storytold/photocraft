@@ -39,7 +39,7 @@ use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
 /// A named folder of presets.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Group<T> {
     pub name: String,
     pub items: Vec<T>,
@@ -67,7 +67,7 @@ impl Named for String {
 }
 
 /// All preset sets plus the panel state the engine needs.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub struct PresetState {
     pub gradients: Vec<Group<gradients::GradientPreset>>,
     /// The Gradient tool's current gradient (Gradients panel selection / gradient picker).
@@ -88,10 +88,13 @@ pub struct PresetState {
     pub clone: clone_source::CloneSources,
     /// The user defaults "Make Default" in the Layer Style dialog saves
     /// (effect kind → param set); "Reset to Default" restores them.
+    #[plain_data(assume = "JSON values: plain data")]
     pub layer_defaults: BTreeMap<String, Value>,
     /// Swatches panel library.
+    #[plain_data(assume = "craft-color-ui swatch groups: plain values and strings")]
     pub swatches: Vec<swatches::SwatchGroup>,
     /// The user contour library of the Layer Style dialog (`layer.layerStyle.contours.*`).
+    #[plain_data(assume = "document contours: plain numbers")]
     pub contours: Vec<photocraft_doc::Contour>,
     /// Bumped on every preset change (UIs key thumbnail caches on it).
     pub rev: u64,

@@ -741,11 +741,11 @@ fn restart_cases() -> Vec<Case> {
             }),
             check: Box::new(|app, ctx, _| {
                 // The list comes back, newest first.
-                assert_eq!(app.ui.recent_files, vec!["/work/b.png".to_string(), "/work/a.psd".to_string()]);
+                assert_eq!(*app.ui.recent_files, vec!["/work/b.png".to_string(), "/work/a.psd".to_string()]);
                 // Lowering "Recent File List Contains" shortens the menu at once; 0 turns it off.
                 app.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 1}})).unwrap();
                 tick(app, ctx);
-                assert_eq!(app.ui.recent_files, vec!["/work/b.png".to_string()]);
+                assert_eq!(*app.ui.recent_files, vec!["/work/b.png".to_string()]);
                 app.push_recent("/work/c.tif");
                 assert_eq!(app.session.prefs().file_handling.recent_files, vec!["/work/c.tif".to_string()]);
                 app.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 0}})).unwrap();
@@ -755,7 +755,7 @@ fn restart_cases() -> Vec<Case> {
                 // Clearing the list in Preferences (or by an agent) reaches the menu.
                 app.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 20, "fileHandling.recentFiles": ["/x.psd"]}})).unwrap();
                 tick(app, ctx);
-                assert_eq!(app.ui.recent_files, vec!["/x.psd".to_string()]);
+                assert_eq!(*app.ui.recent_files, vec!["/x.psd".to_string()]);
                 // A hostile count from a hand-edited preferences file is capped, not trusted.
                 app.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 100}})).unwrap();
                 app.session.prefs.edit(|p| p.file_handling.recent_file_count = u32::MAX);

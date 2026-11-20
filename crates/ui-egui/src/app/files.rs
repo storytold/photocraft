@@ -19,7 +19,7 @@ impl PhotocraftApp {
         r.insert(0, path.to_string());
         let evicted: Vec<String> = if r.len() > cap { r[cap..].to_vec() } else { Vec::new() };
         r.truncate(cap);
-        self.ui.recent_files = r.clone();
+        *self.ui.recent_files = r.clone();
         self.session.prefs.edit(|p| p.file_handling.recent_files = r);
         let mut cache = self.thumbnail_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.invalidate(path);
@@ -56,7 +56,7 @@ impl PhotocraftApp {
         let stored = &self.session.prefs().file_handling.recent_files;
         let want = stored.get(..cap.min(stored.len())).unwrap_or_default();
         if self.ui.recent_files.as_slice() != want {
-            self.ui.recent_files = want.to_vec();
+            *self.ui.recent_files = want.to_vec();
         }
     }
 

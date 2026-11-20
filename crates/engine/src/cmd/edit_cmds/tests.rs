@@ -17,7 +17,7 @@ fn new_clipboard_document_rejects_an_unrepresentable_origin() {
     let mut s = Session::new();
     let mut surface = Surface::new(PixelFormat::RGBA8);
     surface.write_pixel(i32::MIN, 0, &[1.0, 0.0, 0.0, 1.0]);
-    s.clipboard = Some(Clip {
+    *s.clipboard = Some(Clip {
         svg: None,
         components: None,
         surface,
@@ -48,7 +48,7 @@ fn paste_centres_pixels_from_another_document() {
     let r = s.execute("edit.paste", json!({})).unwrap();
     assert_eq!(r["offset"], json!([30, 25]), "into another document: centred");
     // An image from another app has no source document: centred too.
-    s.clipboard = s.clipboard.take().map(|c| Clip { source: None, ..c });
+    *s.clipboard = s.clipboard.take().map(|c| Clip { source: None, ..c });
     let r = s.execute("edit.paste", json!({})).unwrap();
     assert_eq!(r["offset"], json!([30, 25]));
     // Paste in Place still keeps the position.
@@ -138,7 +138,7 @@ fn injected_paste_failure_does_not_change_document_or_clipboard() {
     let mut s = session();
     s.execute("select.rect", json!({"x": 10, "y": 10, "width": 8, "height": 8})).unwrap();
     s.execute("edit.copy", json!({})).unwrap();
-    let before_clip = s.clipboard.clone();
+    let before_clip = s.clipboard.as_ref().cloned();
     let st = s.active().unwrap();
     let before_doc = (*st.doc).clone();
     let revision = st.revision;
@@ -250,7 +250,7 @@ fn external_clip_session(w: i32, h: i32, cw: i32, ch: i32) -> Session {
     s.execute("file.new", json!({"width": w, "height": h})).unwrap();
     let mut surface = Surface::new(PixelFormat::RGBA8);
     surface.fill_rect(Rect::new(0, 0, cw, ch), &[1.0, 0.0, 0.0, 1.0]);
-    s.clipboard =
+    *s.clipboard =
         Some(Clip { svg: None, components: None, surface, bounds: Rect::new(0, 0, cw, ch), layers: None, resolution: None, source: None, board: None });
     s
 }
@@ -454,7 +454,7 @@ fn copy_with_the_mask_targeted_takes_the_mask_as_grayscale() {
         let r = s.execute("edit.copy", json!({"target": "mask"})).unwrap();
         assert_eq!(r["bounds"], json!([0, 0, 40, 40]), "{depth}-bit: a mask copies whole, as in Photoshop");
         assert_eq!(s.active().unwrap().history.past_len(), steps, "{depth}-bit: copy adds no history step");
-        let clip = s.clipboard.clone().unwrap();
+        let clip = s.clipboard.as_ref().cloned().unwrap();
         let px = clip.surface.rgba(10, 10);
         assert!((px[0] - 0.75).abs() < 2.0 / 255.0, "{depth}-bit: {} vs 0.75", px[0]);
         assert!(clip.surface.rgba(30, 30)[0] < 0.01, "{depth}-bit: the hidden area copies as black");
@@ -475,7 +475,7 @@ fn an_untouched_mask_copies_the_whole_canvas_at_its_default() {
     s.execute("layer.layerMask.revealAll", json!({})).unwrap();
     let r = s.execute("edit.copy", json!({"target": "mask"})).unwrap();
     assert_eq!(r["bounds"], json!([0, 0, 40, 40]), "a plain Reveal All mask still transfers");
-    assert!(s.clipboard.clone().unwrap().surface.rgba(20, 20)[0] > 0.99);
+    assert!(s.clipboard.as_ref().cloned().unwrap().surface.rgba(20, 20)[0] > 0.99);
 }
 
 #[test]
@@ -489,7 +489,7 @@ fn mask_copy_takes_only_the_selection() {
     s.execute("select.rect", json!({"x": 8, "y": 8, "width": 4, "height": 4})).unwrap();
     let r = s.execute("edit.copy", json!({"target": "mask"})).unwrap();
     assert_eq!(r["bounds"], json!([8, 8, 4, 4]));
-    let clip = s.clipboard.clone().unwrap();
+    let clip = s.clipboard.as_ref().cloned().unwrap();
     assert!((clip.surface.rgba(9, 9)[0] - 0.75).abs() < 2.0 / 255.0);
     assert!(clip.surface.rgba(5, 5)[3] < 0.01, "nothing outside the selection");
 }
@@ -1138,7 +1138,7 @@ fn copy_paste_keeps_fill_and_adjustment_layers() {
         let src = s.active().unwrap().active_layer.unwrap();
         assert!(s.is_enabled("edit.copy"), "{depth}-bit: a fill layer can be copied");
         assert_eq!(s.execute("edit.copy", json!({})).unwrap()["bounds"], json!([0, 0, 60, 40]), "{depth}-bit: what it shows");
-        let clip = s.clipboard.clone().unwrap();
+        let clip = s.clipboard.as_ref().cloned().unwrap();
         assert!(clip.surface.rgba(59, 20)[0] > clip.surface.rgba(0, 20)[0], "{depth}-bit: the clip holds the gradient's pixels");
         let steps = s.active().unwrap().history.past_len();
         s.execute("edit.pasteSpecial.pasteInPlace", json!({})).unwrap();
@@ -1755,7 +1755,7 @@ fn paste_on_the_same_artboard_or_off_the_boards_is_unchanged() {
     s.execute("layer.select", json!({"layer": bg.0})).unwrap();
     assert_eq!(s.execute("edit.paste", json!({})).unwrap()["offset"], json!([0, 0]));
     // Paste Into's `clampToCanvas: false` keeps its own centring.
-    let clip = s.clipboard.clone().unwrap();
+    let clip = s.clipboard.as_ref().cloned().unwrap();
     let doc = &s.active().unwrap().doc;
     let on_b = doc.artboards().iter().find(|x| x.1 == "B").map(|x| x.0);
     let inside = doc.layer(on_b.unwrap()).unwrap().id;

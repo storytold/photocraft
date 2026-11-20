@@ -30,7 +30,7 @@ mod profile_dither;
 // ------------------------------------------------------------------ state
 
 /// View › Proof Setup settings.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct ProofSetup {
     /// What the user asked for (built-in id or path), for display.
     pub name: String,
@@ -58,7 +58,7 @@ impl Default for ProofSetup {
 }
 
 /// Per-document proofing state the UI reads (see [`ColorState::proof`]).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, craft_ui_macros::PlainData)]
 pub struct ProofView {
     pub setup: ProofSetup,
     /// View › Proof Colors.
@@ -216,7 +216,7 @@ pub fn validate_settings(c: &ColorSettings) -> std::result::Result<(), String> {
 pub struct ColorState {
     /// Edit › Color Settings (persisted with the preferences).
     pub settings: ColorSettings,
-    proofs: HashMap<DocId, ProofView>,
+    proofs: craft_tracked::Tracked<HashMap<DocId, ProofView>>,
     /// The displays and their ICC profiles as read by the platform, primary (menu-bar) display
     /// first (used when Color Settings › Monitor Profile is `auto`; none = sRGB display).
     pub displays: Vec<crate::display_color::Display>,

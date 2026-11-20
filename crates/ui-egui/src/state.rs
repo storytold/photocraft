@@ -176,7 +176,7 @@ pub struct UiState {
     pub spring: Option<crate::spring_tools::Spring>,
     /// Recently opened file paths, most-recent first (File › Open Recent). Capped; de-duplicated.
     #[serde(default)]
-    pub recent_files: Vec<String>,
+    pub recent_files: craft::ui::contract::Tracked<Vec<String>>,
     /// Recently picked type families, most-recent first (the font menu's Recent group). Capped by
     /// Preferences ▸ Type ▸ Recent Fonts; de-duplicated.
     #[serde(default)]
@@ -467,7 +467,7 @@ impl Default for UiState {
             tool: Tool::Move,
             group_tools: Vec::new(),
             spring: None,
-            recent_files: Vec::new(),
+            recent_files: Default::default(),
             recent_fonts: Vec::new(),
             text_edit: None,
             type_box_overflow: false,
