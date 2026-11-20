@@ -6,11 +6,12 @@ The action recording and playback state left `ActionState` (`s.actions`) for the
 state types moved to `crates/engine-core/src/state.rs` (their old paths are re-exported), the
 action-history bookkeeping to `action_history.rs`, and the stored-preferences document with the
 methods that combine preferences, colour settings and presets to `prefs/saved.rs`.
-`Clip::from_svg` is the free function `edit_cmds::clip_from_svg`.
+`Clip::from_svg` is the free function `edit_cmds::clip_from_svg`, and the preset store is a session
+slot read through `preset_store::PresetStoreExt` (`s.preset_store()`, `s.preset_store_mut()`).
 
     python3 scripts/engine_split/session_state.py split
-        Rewrites every Rust file under `crates/` and `apps/`: the recording fields and
-        `Clip::from_svg`. The rest of the step (type moves, slots, hooks) is hand-written, its
+        Rewrites every Rust file under `crates/` and `apps/`: the recording fields,
+        `Clip::from_svg` and the preset store field. The rest of the step (type moves, slots, hooks) is hand-written, its
         own commit.
 
     python3 scripts/engine_split/session_state.py branch --base <merge-base> --head <branch>
@@ -32,6 +33,13 @@ RECORDING = re.compile(r"\.actions\.(" + "|".join(FIELDS) + r")\b")
 FROM_SVG = re.compile(r"\bedit_cmds::Clip::from_svg\(")
 BARE_FROM_SVG = re.compile(r"(?<![\w:])Clip::from_svg\(")
 IMPORTS_FROM_SVG = re.compile(r"^\s*use [^;]*\bclip_from_svg\b", re.M)
+# The preset store is a slot (`preset_store::PresetStoreExt`); `services.preset_store` is the UI's own.
+PRESET_STORE = [
+    (re.compile(r"(?<!services)\.preset_store\.as_ref\(\)"), ".preset_store()"),
+    (re.compile(r"(?<!services)\.preset_store\.as_mut\(\)"), ".preset_store_mut().as_mut()"),
+    (re.compile(r"(?<!services)\.preset_store\.(is_none|is_some)\(\)"), r".preset_store().\1()"),
+    (re.compile(r"\b(self|s|session)\.preset_store = "), r"*\1.preset_store_mut() = "),
+]
 
 # Definitions that moved in this step: (file it was in, item, new file).
 MOVED = [
@@ -82,6 +90,8 @@ REPORT = []
 
 def rewrite_text(text):
     text = RECORDING.sub(lambda m: ".recording." + RENAMED.get(m.group(1), m.group(1)), text)
+    for rx, to in PRESET_STORE:
+        text = rx.sub(to, text)
     text = FROM_SVG.sub("edit_cmds::clip_from_svg(", text)
     return BARE_FROM_SVG.sub("clip_from_svg(", text)
 
@@ -143,6 +153,8 @@ CANNOT_DO = """
 What this script cannot do (the compiler points at each):
   - a recording field reached through another binding (`let a = &mut s.actions; a.playing`) or set
     in an `ActionState { .. }` literal: those fields are `s.recording.<field>` now;
+  - a file that now calls `preset_store()` / `preset_store_mut()` needs
+    `use photocraft_engine::preset_store::PresetStoreExt;` (`crate::preset_store::...` in core);
   - edits to a moved definition: re-apply them in the new file named above;
   - a new `Session` field: a plain core field when the pipeline reads it, else a slot its crate
     registers (`Install::slot`, read through the crate's extension trait).

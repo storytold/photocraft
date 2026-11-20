@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 use serde_json::{Value, json};
 
 use crate::hooks::Hooks;
+use crate::slots::SlotInit;
 use crate::{EngineError, Result, Session};
 
 type Run = fn(&mut Session, &Value) -> Result<Value>;
@@ -39,13 +40,25 @@ pub struct Install {
     pub commands: Vec<Table>,
     /// The pipeline hooks of the crates whose tables these are.
     pub hooks: Hooks,
+    /// The session slots of the crates whose tables these are, one per type.
+    pub slots: Vec<SlotInit>,
+}
+
+impl Install {
+    /// Give every session a slot of `T` ([`Session::slot`]); a type already registered keeps its one.
+    pub fn slot<T: Default + Send + 'static>(&mut self) {
+        let init = SlotInit::of::<T>();
+        if !self.slots.iter().any(|s| s.id() == init.id()) {
+            self.slots.push(init);
+        }
+    }
 }
 
 /// Install `install` for this process. Installing the same tables again (the same names in the
 /// same order) does nothing. Different tables are refused with [`EngineError::InstallConflict`],
 /// and from then on every command fails with it and the registry readers ([`command_specs`], [`find`]) panic with it.
-/// Only the tables are compared: each crate's `register` adds its hooks with its tables, so the
-/// same tables come with the same hooks.
+/// Only the tables are compared: each crate's `register` adds its hooks and slots with its tables,
+/// so the same tables come with the same hooks and slots.
 pub fn install(install: Install) -> Result<()> {
     INSTALLED.install(install)
 }
@@ -75,6 +88,17 @@ pub(crate) fn hooks() -> &'static Hooks {
         Ok(install) => &install.hooks,
         Err(e) => fail(e),
     }
+}
+
+/// The installed session slots; none before an install or after a conflicting one (a session made
+/// then reports the install at its first command).
+pub(crate) fn slot_inits() -> &'static [SlotInit] {
+    INSTALLED.installed().map_or(&[], |install| install.slots.as_slice())
+}
+
+/// A session read a slot its crate didn't install before the session was made.
+pub(crate) fn missing_slot() -> ! {
+    fail(INSTALLED.installed().err().unwrap_or(EngineError::NotInstalled))
 }
 
 /// The process's registry, for the readers that have no error to report: reading commands before

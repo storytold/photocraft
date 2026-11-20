@@ -27,9 +27,9 @@ fn tool_recording_is_opt_in_and_toggles_do_not_reclassify_pending_steps() {
     s.execute("actions.record", json!({"action":"A"})).unwrap();
     stroke(&mut s, "#ff0000");
     s.execute("select.all", json!({})).unwrap();
-    let original = s.actions.clone();
+    let original = (s.actions.clone(), s.recording.clone());
     assert!(s.execute("actions.allowToolRecording", json!({"enabled":"yes"})).is_err());
-    assert_eq!(s.actions, original, "invalid mode must not flush pending work");
+    assert_eq!((s.actions.clone(), s.recording.clone()), original, "invalid mode must not flush pending work");
     s.execute("actions.allowToolRecording", json!({"enabled":true})).unwrap();
     stroke(&mut s, "#00ff00");
     s.execute("actions.allowToolRecording", json!({"enabled":false})).unwrap();

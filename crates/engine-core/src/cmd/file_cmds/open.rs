@@ -1,15 +1,6 @@
 use super::paths::{file_name, read_file, stem, template_name};
 use super::{Arc, Document, EngineError, Layer, LayerContent, LayerId, PixelFormat, PlaceSteps, Result, Session, Value, json, str_param};
 
-/// Input and successfully opened document identities of one Override Open scratch session.
-pub(crate) struct BatchOpen {
-    pub path: String,
-    pub sources: Vec<photocraft_doc::DocId>,
-    pub raw_ppi: f64,
-    /// A recorded Open read a source that must not be replaced (Affinity, Krita, XCF, PDN).
-    pub read_only: bool,
-}
-
 /// Replace only the file choice before either authorization gate; malformed params stay invalid.
 pub(crate) fn batch_open_params(s: &Session, id: &str, params: &Value) -> Option<Value> {
     let binding = s.batch_open.as_ref()?;

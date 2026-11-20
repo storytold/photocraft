@@ -506,6 +506,24 @@ pub struct TipCacheStats {
     pub limit: u64,
 }
 
+/// The session's preset store (a session slot of this crate): `None` keeps presets session-only, as
+/// in headless and test sessions. The same store holds the Actions list.
+pub trait PresetStoreExt {
+    /// The attached preset store, if any.
+    fn preset_store(&self) -> Option<&PresetStore>;
+    /// The preset store slot, to attach or change the store.
+    fn preset_store_mut(&mut self) -> &mut Option<PresetStore>;
+}
+
+impl PresetStoreExt for Session {
+    fn preset_store(&self) -> Option<&PresetStore> {
+        self.slot::<Option<PresetStore>>().as_ref()
+    }
+    fn preset_store_mut(&mut self) -> &mut Option<PresetStore> {
+        self.slot_mut::<Option<PresetStore>>()
+    }
+}
+
 /// The persistent brush preset store attached to a session (see the module docs).
 pub struct PresetStore {
     backend: Box<dyn PresetBackend>,
@@ -1162,7 +1180,7 @@ impl Session {
                 std::sync::Arc::make_mut(&mut self.tools.presets).sort_by_key(key);
             }
         }
-        self.preset_store = Some(store);
+        *self.preset_store_mut() = Some(store);
         // Clear All, Reset or Replace before the store loaded made the session's list the whole
         // library: it keeps its undo and the ordinary sync writes it over the stored one.
         // Otherwise in-memory actions (created before the store finished loading) win on name and
@@ -1174,8 +1192,9 @@ impl Session {
         } else if self.actions.list.actions().is_empty() && self.actions.list.sets().is_empty() {
             self.actions.list.replace(disk);
             name_id_shortcuts(self, &action_ids);
-            if let Some(st) = self.preset_store.as_mut() {
-                st.actions_rev = self.actions.list.revision();
+            let rev = self.actions.list.revision();
+            if let Some(st) = self.preset_store_mut().as_mut() {
+                st.actions_rev = rev;
             }
             if !action_ids.is_empty() {
                 self.actions.list.touch();
@@ -1200,7 +1219,7 @@ impl Session {
         let mut brush = std::mem::take(&mut self.tools.brush);
         let _ = self.load_brush_tips(&mut brush);
         self.tools.brush = brush;
-        if let Some(st) = self.preset_store.as_mut() {
+        if let Some(st) = self.preset_store_mut().as_mut() {
             warnings.extend(st.take_warnings());
         }
         warnings
@@ -1209,19 +1228,20 @@ impl Session {
     /// Write pending brush preset, Actions and pattern changes to the attached store (no-op without one).
     pub fn sync_preset_store(&mut self) {
         let rev = self.tools.presets_rev;
-        if let Some(st) = self.preset_store.as_mut() {
-            if st.synced_rev != Some(rev) {
-                st.sync(&mut self.tools.presets);
-                st.synced_rev = Some(rev);
-                if link_stored_tips(st, &mut self.tools.brush) {
-                    // An embedded tip became a store reference: what the last-brush
-                    // persistence would write changed without a command touching the brush.
-                    self.tools.brush_changed();
-                }
+        // Out of its slot while it reads the session's presets, actions and patterns.
+        let Some(mut st) = self.preset_store_mut().take() else { return };
+        if st.synced_rev != Some(rev) {
+            st.sync(&mut self.tools.presets);
+            st.synced_rev = Some(rev);
+            if link_stored_tips(&st, &mut self.tools.brush) {
+                // An embedded tip became a store reference: what the last-brush
+                // persistence would write changed without a command touching the brush.
+                self.tools.brush_changed();
             }
-            st.sync_actions(&self.actions.list);
-            st.sync_patterns(&self.patterns);
         }
+        st.sync_actions(&self.actions.list);
+        st.sync_patterns(&self.patterns);
+        *self.preset_store_mut() = Some(st);
     }
 
     /// Load the stored tips of `b` (a preset's settings picked as the tool's brush, or exported) so
@@ -1230,7 +1250,7 @@ impl Session {
     pub fn load_brush_tips(&self, b: &mut BrushSettings) -> Result<(), String> {
         let load = |r: &mut StoredTile| -> Result<(), String> {
             if r.full.is_none() {
-                let st = self.preset_store.as_ref().ok_or_else(|| format!("brush tip {} is not available: no preset store is attached", r.key))?;
+                let st = self.preset_store().ok_or_else(|| format!("brush tip {} is not available: no preset store is attached", r.key))?;
                 r.full = Some(st.load_tile(r)?);
             }
             Ok(())

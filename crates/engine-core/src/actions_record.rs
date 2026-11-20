@@ -23,6 +23,36 @@ use serde_json::{Value, json};
 
 use crate::Session;
 
+/// Action recording and playback state ([`Session::recording`]): what the pipeline reads to
+/// journal steps into a recording, and the depth and step counters that bound playback, batches
+/// and scripts.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ActionRecording {
+    /// Journal length when recording started, and the action index being recorded into.
+    pub target: Option<(usize, usize)>,
+    /// Painting-tool strokes are recorded only when the user enables them for this session.
+    pub record_tools: bool,
+    /// Bumped by each `actions.record`, so a background job knows whether the recording it was
+    /// started in is still the one running when its result lands.
+    pub take: u64,
+    /// Nesting depth of `actions.play`, bounded by the playback stack limit.
+    pub playing: u8,
+    /// Active action names, for cycle detection in engine and desktop playback.
+    pub playback_stack: Vec<String>,
+    /// Number of steps executed by the current top-level playback tree.
+    pub playback_steps: u64,
+    /// Set for a batch nested in a played action or another batch: the playback counter it carries
+    /// is shared by every input, so a played action inside it does not restart the count.
+    pub budget_shared: bool,
+    /// How many batches (`file.automate.batch`, and droplets through it) are running inside one
+    /// another: each runs its steps in a scratch session that carries this on, plus one.
+    pub batch_depth: u8,
+    /// How many scripts (`file.scripts.browse`) are running inside one another.
+    pub script_depth: u8,
+    /// Steps run by the current top-level script and everything it calls.
+    pub script_steps: u64,
+}
+
 /// The active document as it was before a command ran, captured by the dispatcher.
 #[derive(Clone, Default)]
 pub(crate) struct Before {

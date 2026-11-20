@@ -7,7 +7,7 @@
 
 use photocraft_color::{BlendMode, PixelFormat};
 use photocraft_doc::vector::Path;
-use photocraft_doc::{DocId, Document, Layer, LayerContent, LayerId};
+use photocraft_doc::{Document, Layer, LayerContent, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde::{Deserialize, Serialize};
@@ -19,65 +19,7 @@ use crate::{EngineError, Result, Session};
 
 // ------------------------------------------------------------------ state
 
-/// What Edit › Fade would fade: the result of the last filter, adjustment or paint command.
-#[derive(Clone, Debug, PartialEq)]
-pub struct FadeSource {
-    pub doc: DocId,
-    /// Document revision right after the command, or after a later step that only showed or hid
-    /// other layers (#13805); any other change disables Fade.
-    pub revision: u64,
-    /// History id of the state before the command, which Fade blends back towards. Steps that only
-    /// showed or hid other layers can sit between that state and the current one.
-    pub before: Option<u64>,
-    pub target: FadeTarget,
-    pub label: String,
-}
-
-/// What the faded command changed, and so what Fade blends back.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FadeTarget {
-    /// A layer's pixels.
-    Pixels(LayerId),
-    /// A layer's layer mask.
-    Mask(LayerId),
-    /// An alpha or spot channel (index into [`Document::channels`]).
-    Channel(usize),
-    /// The Quick Mask.
-    QuickMask,
-}
-
-/// A custom shape (Edit › Define Custom Shape), usable by the Custom Shape tool.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CustomShape {
-    pub name: String,
-    pub path: Path,
-}
-
-/// Remembered Find and Replace Text match (or collapsed cursor after a replacement) and the
-/// search query it belongs to.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FindCursor {
-    pub layer: LayerId,
-    pub start: usize,
-    pub end: usize,
-    pub find: String,
-    pub case_sensitive: bool,
-    pub whole_word: bool,
-    pub forward: bool,
-    pub all_layers: bool,
-}
-
-/// Edit-menu state kept by the session.
-#[derive(Clone, Debug, Default)]
-pub struct EditState {
-    pub fade: Option<FadeSource>,
-    /// Custom shape library (the vector tools read it).
-    pub custom_shapes: Vec<CustomShape>,
-    /// Find and Replace Text position and the query it belongs to.
-    pub find_cursor: Option<FindCursor>,
-    /// First layer visited in the current Find Next round (so wrapping stops before it).
-    pub find_start: Option<LayerId>,
-}
+pub use crate::state::{CustomShape, EditState, FadeSource, FadeTarget, FindCursor};
 
 /// Commands whose result Edit › Fade can blend back against the previous state.
 fn fadeable(id: &str) -> bool {

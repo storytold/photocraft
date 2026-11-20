@@ -38,14 +38,7 @@ use crate::commands::{CommandSpec, layer_param, parse_blend};
 use crate::jobs::JobCtx;
 use crate::{EngineError, Result, Session};
 
-/// An open Edit Contents document and the shared contents it updates when saved or closed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SmartLink {
-    pub child: DocId,
-    pub parent: DocId,
-    pub layer: LayerId,
-    pub contents_id: SmartContentsId,
-}
+pub use crate::state::SmartLink;
 
 /// PSD placed-layer keys that describe the smart object's source; stale once we change it.
 const PLACED_KEYS: [&[u8; 4]; 3] = [b"SoLd", b"PlLd", b"SoLE"];

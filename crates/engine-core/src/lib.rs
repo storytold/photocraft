@@ -47,7 +47,9 @@ mod scratch;
 pub mod select_mask_edits;
 pub mod shell_commands;
 pub mod shortcut_sets;
+mod slots;
 pub mod snap;
+pub mod state;
 pub use variables_cmds::{DATA_SET_LAYER_LOCKED, data_set_preview, export_data_sets_with, import_data_sets_text};
 pub use video_cmds::render_video_with;
 
@@ -69,6 +71,7 @@ mod install;
 pub mod registry;
 mod session;
 
+pub use actions_record::ActionRecording;
 pub use cmd as commands;
 pub use cmd::actions_cmds;
 pub use cmd::actions_edit_cmds;
@@ -180,6 +183,7 @@ pub use install::{install, session};
 pub use session::move_item;
 use session::restore_target;
 pub(crate) use session::{carry_visibility, fix_selection, visibility_changes};
+pub use slots::SlotInit;
 
 /// A type layer for [`Session::refresh_type_layers`]: in the open document, or in its first
 /// History snapshot (the document as opened) when `first_snapshot`. The caller picks each against
@@ -209,7 +213,7 @@ pub struct Session {
     docs: Vec<DocState>,
     documents_generation: u64,
     /// Override Open belongs only to one Batch scratch session, never to caller preferences.
-    pub(crate) batch_open: Option<file_cmds::BatchOpen>,
+    pub(crate) batch_open: Option<state::BatchOpen>,
     /// Import diagnostics retained by a Batch scratch that suppresses only profile prompts.
     pub(crate) batch_open_notices: Option<Vec<Value>>,
     /// Frozen RAW workflow settings for one noninteractive Batch input.
@@ -238,14 +242,14 @@ pub struct Session {
     /// Coalescing key of the command being executed.
     coalesce_request: Option<String>,
     /// The outer action's original document/history states, independent of command transactions.
-    action_history: Option<actions_cmds::ActionHistory>,
+    action_history: Option<action_history::ActionHistory>,
     /// Weak leases expire when every copy of a suspended continuation is abandoned.
     paused_action_history: Vec<std::sync::Weak<()>>,
     /// Tests observe the actual scratch-session boundary without retaining it or changing output.
     #[cfg(test)]
     batch_history_observer: Option<fn(&Session)>,
     /// Pixels copied with Edit › Copy / Cut (shared by all documents, like Photoshop).
-    pub clipboard: Option<edit_cmds::Clip>,
+    pub clipboard: Option<state::Clip>,
     /// Layer › Layer Style › Copy Layer Style: the effects and the Blending Options
     /// ([`CopiedStyle`]: blend mode, fill opacity, Advanced Blending, Blend If, channels).
     pub style_clipboard: Option<CopiedStyle>,
@@ -255,34 +259,33 @@ pub struct Session {
     /// Colour management: proofing state, monitor profile, display transforms.
     pub color: color_cmds::ColorState,
     /// Open Edit Contents documents and the smart objects they update.
-    pub smart_links: Vec<smart_cmds::SmartLink>,
+    pub smart_links: Vec<state::SmartLink>,
     /// Type › Save Default Type Styles: character and paragraph style new type layers start from.
     pub type_defaults: Option<(photocraft_doc::text::CharStyle, photocraft_doc::text::ParagraphStyle)>,
     /// Quick Mask Options (colour, opacity, colour indicates) used when entering Quick Mask.
-    pub quick_mask_options: channel_cmds::QuickMaskOptions,
+    pub quick_mask_options: state::QuickMaskOptions,
     /// Colour channel the running command may change (a single colour channel is targeted).
-    color_restrict: Option<color_channels::Restriction>,
+    color_restrict: Option<state::Restriction>,
     /// Smart object whose filter mask the running command edits (`"target":"filterMask"`): each
     /// edit re-renders it, in the same history step.
     filter_mask_layer: Option<LayerId>,
     /// Edit › Preferences, keyboard shortcuts, menu and toolbar customisation (see `prefs`).
     pub prefs: prefs::PrefsStore,
     /// Edit menu state: Fade source, custom shape library (see `edit_menu_cmds`).
-    pub edit_state: edit_menu_cmds::EditState,
+    pub edit_state: state::EditState,
     /// The pattern library (Window › Patterns; see `pattern.*`).
-    pub patterns: pattern_cmds::PatternLibrary,
+    pub patterns: state::PatternLibrary,
     /// Image › Analysis: Measurement Log and Select Data Points (see `analysis_cmds`).
-    pub analysis: analysis_cmds::AnalysisState,
+    pub analysis: state::AnalysisState,
     /// Window › Gradients, Patterns (groups), Styles, Shapes, Tool Presets and Clone Source.
     pub presets: presets::PresetState,
     /// File menu state: Lock Slices, Image Assets, last Print / Save for Web settings, script
     /// event log (see `automate_cmds`).
-    pub file_menu: automate_cmds::FileMenuState,
-    /// Persistent brush preset store (desktop only; `None` keeps presets session-only, as in
-    /// headless and test sessions). See `preset_store`. The same store holds the Actions list.
-    pub preset_store: Option<preset_store::PresetStore>,
+    pub file_menu: state::FileMenuState,
     /// Window › Actions. The list persists with the preset store when one is attached.
     pub actions: actions_cmds::ActionState,
+    /// Action recording and playback: the recording target, depths and step counters.
+    pub recording: ActionRecording,
     /// Gate for every command the session runs, including the ones a command runs on its own
     /// behalf and `actions.play` steps. Untrusted sessions (MCP, the control channel) install
     /// the same check a top-level request sees. `None` runs everything, which is what a local
@@ -302,6 +305,8 @@ pub struct Session {
     pub printer_source: Option<print_cmds::PrinterSource>,
     /// Background jobs (see [`jobs`]).
     jobs: jobs::Jobs,
+    /// The installed crates' session slots ([`Session::slot`]).
+    slots: slots::Slots,
     /// Color Sampler points dropped by the last canvas-size change (crop, Canvas Size, Image Size,
     /// rotation), for the status message. Read with [`Session::take_samplers_removed`].
     samplers_removed: usize,
@@ -313,9 +318,9 @@ pub struct Session {
     symmetry_map: Option<photocraft_geom::Affine>,
     /// Each open document's linked smart objects' files: size and modification time when last
     /// seen ([`link_watch`]).
-    pub link_stamps: std::collections::HashMap<(u64, String), link_watch::Stamp>,
+    pub link_stamps: std::collections::HashMap<(u64, String), state::Stamp>,
     /// The stamps being taken on a worker thread ([`Session::start_link_scan`]).
-    pub link_scan: Option<link_watch::LinkScan>,
+    pub link_scan: Option<state::LinkScan>,
     /// Each open document's linked smart objects' files that were not there when last looked at
     /// ([`Session::missing_links`]).
     link_missing: std::collections::HashSet<(u64, String)>,
@@ -326,7 +331,7 @@ pub struct Session {
     pub object_finder: smartselect_cmds::ObjectFinderCache,
     /// A finished live stroke offered to the `paint.stroke` / `paint.pencil` that commits it
     /// ([`Session::offer_live_stroke`]).
-    pub(crate) live_commit: Option<brush_cmds::LiveCommit>,
+    pub(crate) live_commit: Option<state::LiveCommit>,
     /// Documents a background open decoded but held back until the user answers the profile
     /// prompt ([`ColorState::open_question`](color_cmds::ColorState::open_question)): `(id,
     /// document, source read-only)`. The shell takes them with [`Session::take_held_open`].

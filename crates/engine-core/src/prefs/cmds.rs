@@ -67,7 +67,7 @@ fn prefs_reset(s: &mut Session, p: &Value) -> Result<Value> {
     if !path.is_some_and(|path| path == "colorSettings" || path.starts_with("colorSettings.")) {
         let mut candidate = s.prefs().clone();
         candidate.reset(path).map_err(|e| bad("prefs.reset", e))?;
-        if candidate.actions.create_single_history_state != s.prefs().actions.create_single_history_state && crate::actions_cmds::history_policy_in_use(s) {
+        if candidate.actions.create_single_history_state != s.prefs().actions.create_single_history_state && crate::action_history::history_policy_in_use(s) {
             return Err(bad("prefs.reset", "cannot change action history settings during playback"));
         }
     }
