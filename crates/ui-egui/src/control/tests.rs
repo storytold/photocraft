@@ -10,7 +10,7 @@ fn action(name: &str, steps: Vec<(&str, Value)>) -> Action {
     Action::new(name, steps.into_iter().map(|(id, params)| ActionStep::new(id, params)).collect())
 }
 
-fn call(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value) -> Value {
+pub(super) fn call(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value) -> Value {
     let (req, _rx) = ControlRequest::new(method, params);
     match handle(app, ctx, &req) {
         Reply::Done(v) => v,

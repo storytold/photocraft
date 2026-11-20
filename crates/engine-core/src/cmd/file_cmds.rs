@@ -493,6 +493,10 @@ mod open_as_error_name_tests;
 mod place_resolution_tests;
 
 #[cfg(test)]
+#[path = "file_cmds/pdf_downsample_tests.rs"]
+mod pdf_downsample_tests;
+
+#[cfg(test)]
 mod aces_exr_tests {
     use super::*;
 
