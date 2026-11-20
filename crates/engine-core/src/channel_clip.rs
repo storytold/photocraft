@@ -149,10 +149,6 @@ pub(crate) fn copies_alpha_channel(s: &Session) -> bool {
     s.active().is_some_and(|st| matches!(st.channel_view.target, ChannelTarget::Alpha(i) if i < st.doc.channels.len()))
 }
 
-#[cfg(test)]
-#[path = "channel_clip/tests.rs"]
-mod tests;
-
 pub(crate) fn copy_colors(s: &mut Session, p: &Value, colors: crate::color_channels::ColorChannels) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let source = Some(crate::commands::layer_param(s, p)?)

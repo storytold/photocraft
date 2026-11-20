@@ -7,18 +7,6 @@ use super::*;
 use crate::Session;
 use serde_json::json;
 
-/// The issue's test document: 400 x 300 px at 72 ppi, RGB 8 bit, a filled (64,64,64)
-/// Background and a pixel layer with an orange (255,128,0) rectangle at x 100..299, y 75..224.
-fn test_document() -> Session {
-    let mut s = crate::session();
-    s.execute("file.new", json!({"width": 400, "height": 300, "resolution": 72, "background": "#404040"})).unwrap();
-    s.execute("layer.new.layer", json!({})).unwrap();
-    s.execute("select.rect", json!({"x": 100, "y": 75, "width": 200, "height": 150})).unwrap();
-    s.execute("edit.fill", json!({"contents": "color", "color": "#ff8000"})).unwrap();
-    s.execute("select.deselect", json!({})).unwrap();
-    s
-}
-
 fn session() -> Session {
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
@@ -85,24 +73,6 @@ fn reset_to_default_restores_the_outer_glow_factory_values() {
     let saved = s.execute("layer.layerStyle.defaultFor", json!({"kind": "outerGlow"})).unwrap();
     assert_eq!(saved["user"], json!(true));
     assert_eq!((saved["params"]["opacity"].as_f64(), saved["params"]["size"].as_f64()), (Some(12.0), Some(3.0)), "a saved default still wins");
-}
-
-/// #14944 measured: OK on the factory values over the grey test document. Top edge at x 200,
-/// y 74 outwards to 68, and the corner pixel (97, 72), as grey levels; the reference
-/// application's are 121 104 91 80 72 66 64 and 69, within 2 levels.
-#[test]
-fn the_factory_outer_glow_paints_the_measured_edge() {
-    let mut s = test_document();
-    s.execute("layer.layerStyle.outerGlow", json!({})).unwrap();
-    let d = s.active().unwrap();
-    let px = photocraft_compose::render(&d.doc, d.doc.bounds()).into_px();
-    let level = |x: usize, y: usize| (px[y * 400 + x][0] * 255.0).round() as i32;
-    for (y, want) in [(74, 121), (73, 104), (72, 91), (71, 80), (70, 72), (69, 66), (68, 64)] {
-        let got = level(200, y);
-        assert!((got - want).abs() <= 2, "top edge at (200, {y}): {got}, the reference gives {want}");
-    }
-    let corner = level(97, 72);
-    assert!((corner - 69).abs() <= 2, "corner (97, 72): {corner}, the reference gives 69");
 }
 
 /// #14944: an Outer Glow the document already carries keeps the values it was read with. The

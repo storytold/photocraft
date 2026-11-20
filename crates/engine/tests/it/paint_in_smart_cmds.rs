@@ -1,7 +1,9 @@
-//! FILE-215-3: painting a smart object's filter mask (`"target":"filterMask"`) hides the smart
-//! filters where it is black, in one undo step, and the painted mask is saved.
+//! Tests that run painting commands, moved from the engine-core `smart_cmds` tests: 7 test(s).
 
-use super::*;
+use photocraft_engine::Session;
+use serde_json::json;
+
+use photocraft_engine::smart_cmds::tests::*;
 
 /// A vertical black stroke over x = 8 into the filter mask, as the Brush tool sends it.
 fn stroke(s: &mut Session, target: Option<&str>) -> Result<Value> {
@@ -179,23 +181,23 @@ fn the_filter_mask_target_leaves_the_smart_object_commands_alone() {
     assert_ne!(active_smart(&s).transform, before, "the smart object flips");
     // A shown filter mask doesn't send them the target either.
     s.execute("view.layerMask", json!({"mode": "gray", "mask": "filter"})).unwrap();
-    assert_eq!(crate::channel_cmds::inject_target(&s, "edit.transform.flipHorizontal", json!({})), json!({}));
-    assert_eq!(crate::channel_cmds::inject_target(&s, "filter.convertForSmartFilters", json!({})), json!({}));
-    assert_eq!(crate::channel_cmds::inject_target(&s, "paint.stroke", json!({}))["target"], "filterMask");
+    assert_eq!(photocraft_engine::channel_cmds::inject_target(&s, "edit.transform.flipHorizontal", json!({})), json!({}));
+    assert_eq!(photocraft_engine::channel_cmds::inject_target(&s, "filter.convertForSmartFilters", json!({})), json!({}));
+    assert_eq!(photocraft_engine::channel_cmds::inject_target(&s, "paint.stroke", json!({}))["target"], "filterMask");
     // Curves on the shown filter mask edits that gray plane, not the layer mask or the colours.
-    let curve = crate::channel_cmds::isolated_curve_channel(s.active().unwrap()).expect("a gray target");
-    assert_eq!(curve.gray, Some(crate::channel_cmds::GraySurface::FilterMask));
+    let curve = photocraft_engine::channel_cmds::isolated_curve_channel(s.active().unwrap()).expect("a gray target");
+    assert_eq!(curve.gray, Some(photocraft_engine::channel_cmds::GraySurface::FilterMask));
     let flipped = active_smart(&s).transform;
     s.execute("edit.transform.flipHorizontal", json!({})).unwrap();
     assert_ne!(active_smart(&s).transform, flipped, "the smart object flips again");
     // Moving the smart object doesn't re-render its filters as a filter-mask edit.
     let p = json!({"dx": 2, "target": "filterMask"});
-    assert_eq!(crate::channel_cmds::filter_mask_layer(&s, "layer.translate", &p), None);
-    assert!(crate::channel_cmds::filter_mask_layer(&s, "paint.stroke", &p).is_some());
+    assert_eq!(photocraft_engine::channel_cmds::filter_mask_layer(&s, "layer.translate", &p), None);
+    assert!(photocraft_engine::channel_cmds::filter_mask_layer(&s, "paint.stroke", &p).is_some());
     // Every other routed command edits it and re-renders the object: Equalize too, though it
     // takes no layer mask target by default.
     for cmd in ["image.adjustments.shadowsHighlights", "plugin.run", "filter.blur.average"] {
-        assert!(crate::channel_cmds::filter_mask_layer(&s, cmd, &p).is_some(), "{cmd}");
+        assert!(photocraft_engine::channel_cmds::filter_mask_layer(&s, cmd, &p).is_some(), "{cmd}");
     }
     let steps = s.active().unwrap().history.past_len();
     s.execute("image.adjustments.equalize", json!({"target": "filterMask"})).unwrap();

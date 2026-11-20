@@ -1,18 +1,17 @@
-//! #11751: the Eyedropper's N by N Average box depends on the view zoom, as in Photoshop. Above
-//! 100 % it is the centred N × N square of document pixels; at 100 % and below it covers
-//! (N+1) × (N+1) screen pixels (at 100 % the document pixels x−N/2 … x+N/2+1). Without a zoom
-//! `document.sampleColor` keeps the centred square.
+//! Tests that run painting commands, moved from the engine-core `sample_zoom_box` tests: 8 test(s).
 
+use photocraft_doc::Size;
+use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
-use crate::Session;
+use photocraft_engine::Session;
 
 /// The issue's test document: 800 × 600 RGB/8 white; on a pixel layer a red (220,30,30) block at
 /// 100,100–300,250, 2 px black / 2 px white stripes at 350,100–450,200 (black at x 350–351,
 /// 354–355, …) and a grey ramp of ten 40 px blocks from x 100, values 100, 105, …, 145, at
 /// y 350–450.
 fn test_document() -> Session {
-    let mut s = crate::session();
+    let mut s = Session::new();
     s.execute("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Pixels"})).unwrap();
     let fill = |s: &mut Session, x: i32, y: i32, w: i32, h: i32, grey_or_hex: String| {
@@ -34,7 +33,7 @@ fn test_document() -> Session {
 
 /// A black 400 × 400 document with one white pixel at 200,200 (the issue's probe).
 fn probe() -> Session {
-    let mut s = crate::session();
+    let mut s = Session::new();
     s.execute("file.new", json!({"width": 400, "height": 400, "background": "white"})).unwrap();
     s.execute("select.all", json!({})).unwrap();
     s.execute("edit.fill", json!({"contents": "color", "color": "#000000"})).unwrap();
@@ -145,8 +144,11 @@ fn a_far_zoomed_out_box_is_capped_and_clipped_not_a_panic() {
     // At 1 % a 101 by 101 box would be 10 200 px wide: capped, and clipped to the canvas.
     let v = read(&mut s, 0, 0, 101, Some(0.01));
     assert!(v.iter().all(|c| (0..=1).contains(c)), "one white pixel in a canvas-wide average: {v:?}");
-    let rect = super::sample_cmds::sample_rect_at(200.5, 200.5, 101, Some(0.01), photocraft_geom::Rect::new(0, 0, 100_000, 100_000)).unwrap();
-    assert!(rect.width() <= super::sample_cmds::MAX_ZOOM_BOX && rect.height() <= super::sample_cmds::MAX_ZOOM_BOX, "{rect:?}");
+    let rect = photocraft_engine::cmd::sample_cmds::sample_rect_at(200.5, 200.5, 101, Some(0.01), photocraft_geom::Rect::new(0, 0, 100_000, 100_000)).unwrap();
+    assert!(
+        rect.width() <= photocraft_engine::cmd::sample_cmds::MAX_ZOOM_BOX && rect.height() <= photocraft_engine::cmd::sample_cmds::MAX_ZOOM_BOX,
+        "{rect:?}"
+    );
 }
 
 #[test]

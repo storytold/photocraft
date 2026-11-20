@@ -771,7 +771,3 @@ mod tests;
 
 #[cfg(test)]
 mod object_mode_refusal_tests;
-#[cfg(test)]
-mod quick_drop_transparent_tests;
-#[cfg(test)]
-mod quick_group_target_tests;

@@ -60,15 +60,6 @@ fn image_size_without_distant_tiles_still_resamples() {
 }
 
 #[test]
-fn face_detection_on_a_huge_empty_canvas_is_refused() {
-    let mut s = crate::session();
-    s.execute("file.new", json!({"width": 300_000, "height": 300_000, "background": "transparent"})).unwrap();
-    s.execute("layer.new.layer", json!({})).unwrap();
-    let e = s.execute("image.detectFaces", json!({"sampleAllLayers": false})).unwrap_err().to_string();
-    assert!(e.contains("working memory"), "{e}");
-}
-
-#[test]
 fn multichannel_on_a_huge_empty_canvas_is_refused() {
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 300_000, "height": 300_000, "background": "transparent"})).unwrap();

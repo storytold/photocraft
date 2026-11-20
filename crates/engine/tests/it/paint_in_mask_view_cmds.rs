@@ -1,9 +1,15 @@
-use super::*;
+//! Tests that run painting commands, moved from the engine-core `mask_view_cmds` tests: 7 test(s).
+
+use photocraft_doc::LayerId;
+use photocraft_engine::Session;
+use photocraft_engine::mask_view_cmds::*;
+use serde_json::{Value, json};
+
 use photocraft_geom::Rect;
 
 /// 40×20 document: Background, then "Masked" (red, mask hiding the left half) on top.
 fn session() -> (Session, u64, u64) {
-    let mut s = crate::session();
+    let mut s = Session::new();
     s.execute("file.new", json!({"width": 40, "height": 20})).unwrap();
     let bg = s.active().unwrap().doc.layers[0].id.0;
     let masked = s.execute("layer.new.layer", json!({"name": "Masked"})).unwrap()["layer"].as_u64().unwrap();
@@ -17,7 +23,7 @@ fn session() -> (Session, u64, u64) {
 
 /// The view as `document.inspect` reports it.
 fn view(s: &Session) -> Value {
-    crate::inspect::document(s.active().unwrap())["layerMaskView"].clone()
+    photocraft_engine::inspect::document(s.active().unwrap())["layerMaskView"].clone()
 }
 
 #[test]
@@ -30,7 +36,7 @@ fn modes_toggle_and_show_in_inspect_without_history() {
     assert_eq!(s.execute(ID, json!({"mode": "toggleGray"})).unwrap()["mode"], "off", "⌥-click again returns");
     assert_eq!(s.execute(ID, json!({"layer": masked, "mode": "overlay"})).unwrap()["mode"], "overlay");
     assert_eq!(s.active().unwrap().channel_view.layer_mask.unwrap().mode, MaskViewMode::Overlay);
-    let ch = crate::channel_cmds::channels_json(s.active().unwrap());
+    let ch = photocraft_engine::channel_cmds::channels_json(s.active().unwrap());
     assert_eq!(ch["layerMaskView"]["mode"], "overlay", "the Channels state carries it too");
     assert_eq!(s.execute(ID, json!({"mode": "toggleGray"})).unwrap()["mode"], "gray", "overlay → gray");
     assert_eq!(s.execute(ID, json!({"mode": "off"})).unwrap()["mode"], "off");
@@ -110,7 +116,7 @@ fn bad_params_and_no_mask_fail_gracefully() {
     assert_eq!(s.execute(ID, json!({"layer": bg, "mode": "off"})).unwrap()["mode"], "off");
     assert_eq!(view(&s)["mode"], "gray");
     // No document.
-    let mut empty = crate::session();
+    let mut empty = Session::new();
     assert!(empty.execute(ID, json!({"mode": "gray"})).is_err());
 }
 
@@ -161,7 +167,7 @@ fn backslash_command_toggles_the_overlay() {
     assert!(s.execute(OVERLAY_ID, json!({"layer": "x"})).is_err());
     assert!(s.execute(OVERLAY_ID, json!([1])).is_err());
     assert_eq!(view(&s), Value::Null);
-    let mut empty = crate::session();
+    let mut empty = Session::new();
     assert!(!empty.is_enabled(OVERLAY_ID));
     assert!(empty.execute(OVERLAY_ID, json!({})).is_err());
 }

@@ -156,28 +156,6 @@ fn image_size_scales_everything() {
     }
 }
 
-/// #6019: Image Size on an Indexed Color document makes no colours the colour table doesn't have.
-#[test]
-fn image_size_resamples_indexed_color_with_nearest_neighbor() {
-    let mut s = crate::session();
-    s.execute("file.new", json!({"width": 2, "height": 1})).unwrap();
-    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
-    s.execute("select.rect", json!({"x": 1, "y": 0, "width": 1, "height": 1})).unwrap();
-    s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
-    s.execute("select.deselect", json!({})).unwrap();
-    s.execute("image.mode.indexedColor", json!({})).unwrap();
-    for resample in ["bicubic", "automatic", "bilinear", "lanczos", "preserveDetails"] {
-        s.execute("image.imageSize", json!({"width": 8, "resample": resample})).unwrap();
-        let st = s.active().unwrap();
-        let surf = st.doc.layers[0].surface().unwrap();
-        for x in 0..8 {
-            let px = surf.pixel(x, 0);
-            assert!(px[..3] == [1.0, 0.0, 0.0] || px[..3] == [0.0, 0.0, 1.0], "{resample}: no blended colour at x {x}: {px:?}");
-        }
-        s.execute("history.undo", json!({})).unwrap();
-    }
-}
-
 /// The canvas border stays opaque after Image Size (it used to fade into transparency, so a
 /// Background or a 200 % export got a translucent frame), and a full selection stays full.
 /// #1544: 64 x 48 to 300000 x 300000 (90 billion pixels) started allocating resampled bands
@@ -358,33 +336,6 @@ fn image_size_reports_the_size_it_applied() {
     }
 }
 
-/// #1114: nearest neighbor reduction keeps source values without averaging.
-#[test]
-fn nearest_neighbor_reduction_keeps_source_values() {
-    let mut s = crate::session();
-    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
-    s.execute("tools.setColors", json!({"foreground": "#000000", "background": "#ffffff"})).unwrap();
-    for y in 0..8 {
-        for x in 0..8 {
-            if (x + y) % 2 == 0 {
-                s.execute("select.rect", json!({"x": x, "y": y, "width": 1, "height": 1})).unwrap();
-                s.execute("edit.fill", json!({"contents": "foreground"})).unwrap();
-            }
-        }
-    }
-    s.execute("select.deselect", json!({})).unwrap();
-    let st = s.active().unwrap();
-    let before = st.doc.layers[0].surface().unwrap().rgba(0, 0);
-    assert!(before[0] < 0.01, "setup: (0,0) should be black, got {before:?}");
-    s.execute("image.imageSize", json!({"width": 4, "height": 4, "resample": "nearest"})).unwrap();
-    let st = s.active().unwrap();
-    let surf = st.doc.layers[0].surface().unwrap();
-    for (x, y) in [(0, 0), (1, 1), (2, 3)] {
-        let v = surf.rgba(x, y)[0];
-        assert!(v.is_finite() && !(0.01..=0.99).contains(&v), "nearest produced an averaged value {v} at ({x},{y})");
-    }
-}
-
 #[test]
 fn canvas_size_anchors_and_extends_background() {
     let mut s = session();
@@ -562,45 +513,6 @@ fn crop_rect_edge_cases_never_fall_back_to_the_selection() {
     assert_eq!(doc(&s).layers[1].surface().unwrap().pixel(19, 14), vec![1.0, 0.0, 0.0, 1.0]);
 }
 
-#[test]
-fn crop_extension_fills_the_background_with_the_background_colour() {
-    let mut shrink = crate::session();
-    shrink.execute("file.new", json!({"width": 16, "height": 16, "background": "#ff0000"})).unwrap();
-    shrink.execute("image.crop", json!({"x": 2, "y": 0, "width": 12, "height": 16})).unwrap();
-    let layer = &doc(&shrink).layers[0];
-    assert_eq!(layer.name, "Background", "a shrink-only crop keeps the Background");
-    assert!(layer.locks.transparency && layer.locks.position);
-
-    let mut s = crate::session();
-    s.execute("file.new", json!({"width": 16, "height": 16, "background": "#ff0000"})).unwrap();
-    s.tools.background = [0.0, 1.0, 0.0, 1.0];
-    s.execute("image.crop", json!({"x": -4, "y": 0, "width": 20, "height": 16})).unwrap();
-    let layer = &doc(&s).layers[0];
-    assert_eq!(layer.name, "Background", "an extending crop keeps the Background (#3081)");
-    assert!(layer.locks.transparency && layer.locks.position);
-    assert_eq!(layer.surface().unwrap().rgba(1, 8), [0.0, 1.0, 0.0, 1.0], "the added border takes the background colour");
-    assert_eq!(layer.surface().unwrap().rgba(8, 8), [1.0, 0.0, 0.0, 1.0], "the original pixels stay");
-
-    s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
-    let layer = &doc(&s).layers[0];
-    assert_eq!(layer.surface().unwrap().rgba(1, 8), [0.0, 0.0, 1.0, 1.0], "Fill paints the extended border");
-    assert_eq!(layer.surface().unwrap().rgba(8, 8), [0.0, 0.0, 1.0, 1.0]);
-
-    s.execute("edit.undo", json!({})).unwrap();
-    s.execute("edit.undo", json!({})).unwrap();
-    let layer = &doc(&s).layers[0];
-    assert_eq!(doc(&s).size, Size::new(16, 16));
-    assert_eq!(layer.surface().unwrap().rgba(8, 8), [1.0, 0.0, 0.0, 1.0]);
-    assert_eq!(layer.surface().unwrap().content_bounds(), Rect::new(0, 0, 16, 16), "undo removes the filled border");
-
-    // A normal layer gets transparent pixels in the added area.
-    let mut s = crate::session();
-    s.execute("file.new", json!({"width": 16, "height": 16, "background": "#ff0000"})).unwrap();
-    s.execute("layer.new.layerFromBackground", json!({})).unwrap();
-    s.execute("image.crop", json!({"x": -4, "y": 0, "width": 20, "height": 16})).unwrap();
-    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(1, 8), [0.0; 4]);
-}
-
 /// Delete Cropped Pixels deletes pixel-layer data only: type and smart objects keep what lies
 /// outside the frame, so moving them later doesn't show them cut at the old edge.
 #[test]
@@ -706,92 +618,6 @@ fn an_alpha_less_background_extension_takes_the_colour() {
     assert_eq!(surf.pixel(50, 50), kept, "the kept area is unchanged");
 }
 
-/// A document (`mode`, `depth`) with a white Background and a layer holding a red pixel at
-/// (12, 8) and a blue one at (30, 3).
-fn marked(mode: &str, depth: u32) -> Session {
-    let mut s = crate::session();
-    s.execute("file.new", json!({"width": 40, "height": 20, "mode": mode, "depth": depth, "background": "white"})).unwrap();
-    s.execute("layer.new.layer", json!({})).unwrap();
-    for (x, y, c) in [(12, 8, "#ff0000"), (30, 3, "#0000ff")] {
-        s.execute("select.rect", json!({"x": x, "y": y, "width": 1, "height": 1})).unwrap();
-        s.execute("edit.fill", json!({"color": c})).unwrap();
-    }
-    s.execute("select.deselect", json!({})).unwrap();
-    s
-}
-
-fn layer_rgba(s: &Session, layer: usize, x: i32, y: i32) -> [f32; 4] {
-    doc(s).layers[layer].surface().unwrap().rgba(x, y)
-}
-
-/// #1792: a frame turned 90° clockwise crops what Image Rotation › Arbitrary 90° CCW and a
-/// plain crop give, in one undo step that restores the document, at 8, 16 and 32 bits.
-#[test]
-fn crop_at_90_degrees_is_rotate_then_crop_in_one_step() {
-    for depth in [8, 16, 32] {
-        let mut s = marked("rgb", depth);
-        let before = doc(&s).clone();
-        let past = s.active().unwrap().history.past_len();
-        // The 10 × 20 frame at (10, 0), turned 90° about (15, 10), covers x 5..25, y 5..15.
-        let r = s.execute("image.crop", json!({"x": 10, "y": 0, "width": 10, "height": 20, "angle": 90})).unwrap();
-        assert_eq!(r["angle"], json!(90.0), "{depth}");
-        assert_eq!(doc(&s).size, Size::new(10, 20), "{depth}");
-        assert_eq!(s.active().unwrap().history.past_len(), past + 1, "{depth}: one undo step");
-        // (12, 8) is 2.5 left of and 1.5 above the centre: in the upright frame, 1.5 left of
-        // and 2.5 below its centre (5, 10).
-        let red = layer_rgba(&s, 1, 3, 12);
-        assert!(red[0] > 0.9 && red[1] < 0.1 && red[3] > 0.9, "{depth}: {red:?}");
-        let mut reference = marked("rgb", depth);
-        reference.execute("image.rotation.arbitrary", json!({"angle": 90, "direction": "ccw"})).unwrap();
-        reference.execute("image.crop", json!({"x": 5, "y": 15, "width": 10, "height": 20})).unwrap();
-        for l in 0..2 {
-            for y in 0..20 {
-                for x in 0..10 {
-                    let (a, b) = (layer_rgba(&s, l, x, y), layer_rgba(&reference, l, x, y));
-                    // A fully transparent pixel's colour is invisible, and the turned crop
-                    // doesn't turn the pixels it deletes, which the warp spreads colour from.
-                    let n = if b[3] > 1e-3 { 4 } else { 1 };
-                    assert!(a.iter().rev().zip(b.iter().rev()).take(n).all(|(p, q)| (p - q).abs() < 1e-3), "{depth} layer {l} ({x}, {y}): {a:?} vs {b:?}");
-                }
-            }
-        }
-        s.execute("edit.undo", json!({})).unwrap();
-        let d = doc(&s);
-        assert_eq!(d.size, before.size, "{depth}");
-        assert_eq!(d.depth, before.depth);
-        for y in 0..20 {
-            for x in 0..40 {
-                assert_eq!(layer_rgba(&s, 1, x, y), before.layers[1].surface().unwrap().rgba(x, y), "{depth} undo at ({x}, {y})");
-            }
-        }
-    }
-}
-
-/// A slightly turned frame keeps its own size, the pixel under its centre and the Background's
-/// colour; the turn's sign matters (a counter-clockwise frame is a negative angle).
-#[test]
-fn crop_at_a_small_angle_keeps_the_frame_size_in_every_mode() {
-    for (mode, depth) in [("rgb", 8), ("rgb", 16), ("rgb", 32), ("grayscale", 16), ("cmyk", 8), ("lab", 16)] {
-        for angle in [5.0, -7.5, 365.0] {
-            let mut s = marked(mode, depth);
-            s.execute("image.crop", json!({"x": 2, "y": 1, "width": 21, "height": 15, "angle": angle})).unwrap();
-            let d = doc(&s);
-            assert_eq!(d.size, Size::new(21, 15), "{mode} {depth} {angle}");
-            assert_eq!(d.depth.bytes() * 8, depth as usize, "{mode} {depth}");
-            assert_eq!(format!("{:?}", d.mode).to_lowercase(), mode, "{mode} {depth}");
-            assert_eq!(d.layers.len(), 2);
-            // The frame's centre (12.5, 8.5) is the red pixel (the layer's only paint nearby);
-            // it stays at the centre, its colour kept.
-            let want = layer_rgba(&marked(mode, depth), 1, 12, 8);
-            let red = layer_rgba(&s, 1, 10, 7);
-            assert!(red[3] > 0.5 && (0..3).all(|c| (red[c] - want[c]).abs() < 0.2), "{mode} {depth} {angle}: {red:?} vs {want:?}");
-            // The Background stays opaque white inside the canvas it came from.
-            let bg = layer_rgba(&s, 0, 10, 7);
-            assert!(bg.iter().all(|v| (v - 1.0).abs() < 0.02), "{mode} {depth} {angle}: {bg:?}");
-        }
-    }
-}
-
 /// A turned crop that deletes the cropped pixels turns only what lands in the frame; inside the
 /// new canvas every layer, mask and channel is exactly what turning everything gives (the
 /// frame spans several tiles, at several depths and angles).
@@ -846,60 +672,6 @@ fn turned_crop_deleting_pixels_matches_turning_the_whole_canvas() {
             let layer = a.layers[1].surface().unwrap();
             assert!(canvas.contains_rect(&layer.content_bounds()), "{depth} {angle}: {:?}", layer.content_bounds());
         }
-    }
-}
-
-/// Angle 0 (or a whole turn) is the plain crop: no resampling, the same document.
-#[test]
-fn crop_at_angle_zero_is_the_plain_crop() {
-    let mut plain = marked("rgb", 16);
-    plain.execute("image.crop", json!({"x": 3, "y": 2, "width": 30, "height": 10})).unwrap();
-    for angle in [json!(0), json!(0.0), json!(360), json!(-720), json!(null)] {
-        let mut s = marked("rgb", 16);
-        let r = s.execute("image.crop", json!({"x": 3, "y": 2, "width": 30, "height": 10, "angle": angle})).unwrap();
-        assert!(r.get("angle").is_none(), "{angle}: {r}");
-        assert_eq!(doc(&s).size, Size::new(30, 10));
-        for l in 0..2 {
-            for y in 0..10 {
-                for x in 0..30 {
-                    assert_eq!(layer_rgba(&s, l, x, y), layer_rgba(&plain, l, x, y), "{angle} layer {l} ({x}, {y})");
-                }
-            }
-        }
-    }
-}
-
-/// Bad angles fail cleanly, before anything changes.
-#[test]
-fn crop_angle_rejects_bad_values_without_changing_the_document() {
-    let bad = [
-        json!({"x": 0, "y": 0, "width": 10, "height": 10, "angle": "NaN"}),
-        json!({"x": 0, "y": 0, "width": 10, "height": 10, "angle": "12"}),
-        json!({"x": 0, "y": 0, "width": 10, "height": 10, "angle": [1]}),
-        json!({"x": 0, "y": 0, "width": 10, "height": 10, "angle": true}),
-        json!({"x": 0, "y": 0, "width": 10, "height": 10, "angle": 1e308}),
-        json!({"x": 0, "y": 0, "width": 10, "height": 10, "angle": -3601}),
-        json!({"x": 0, "y": 0, "width": 10, "height": 10, "angle": f64::MAX}),
-        // An angle needs the frame: a selection crop has none.
-        json!({"angle": 10}),
-        json!({"x": 0, "y": 0, "width": 0, "height": 10, "angle": 10}),
-        json!({"x": 0, "y": 0, "width": 300_001, "height": 10, "angle": 10}),
-        json!({"x": i32::MAX - 5, "y": 0, "width": 10, "height": 10, "angle": 10}),
-    ];
-    for p in bad {
-        let mut s = marked("rgb", 8);
-        s.execute("select.all", json!({})).unwrap();
-        let before = doc(&s).clone();
-        let past = s.active().unwrap().history.past_len();
-        assert!(s.execute("image.crop", p.clone()).is_err(), "{p}");
-        assert_eq!(doc(&s).size, before.size, "{p}");
-        assert_eq!(s.active().unwrap().history.past_len(), past, "{p}");
-    }
-    // Far-off but representable frames turn and crop without panicking.
-    for (x, y) in [(-1_000_000, 0), (0, 1_000_000), (i32::MIN / 4, i32::MAX / 4)] {
-        let mut s = marked("rgb", 8);
-        s.execute("image.crop", json!({"x": x, "y": y, "width": 4, "height": 3, "angle": 33.3})).unwrap();
-        assert_eq!(doc(&s).size, Size::new(4, 3));
     }
 }
 
@@ -966,32 +738,6 @@ fn crop_target_resamples_after_a_turned_crop_and_resolution_alone_keeps_the_pixe
     let mut s = session();
     s.execute("image.crop", json!({"x": 2, "y": 3, "width": 30, "height": 10, "resolution": 150})).unwrap();
     assert_eq!((doc(&s).size, doc(&s).resolution_dpi), (Size::new(30, 10), 150.0));
-}
-
-/// #7722: a W x H crop of an Indexed Color document resamples like Image Size (#6019), with
-/// Nearest Neighbor, so no pixel gets a blend that isn't in the colour table.
-#[test]
-fn crop_target_resamples_indexed_color_with_nearest_neighbor() {
-    let mut s = crate::session();
-    s.execute("file.new", json!({"width": 2, "height": 1})).unwrap();
-    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
-    s.execute("select.rect", json!({"x": 1, "y": 0, "width": 1, "height": 1})).unwrap();
-    s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
-    s.execute("select.deselect", json!({})).unwrap();
-    s.execute("image.mode.indexedColor", json!({})).unwrap();
-    for resample in [None, Some("bicubic"), Some("automatic"), Some("bilinear"), Some("lanczos")] {
-        let mut p = json!({"x": 0, "y": 0, "width": 2, "height": 1, "targetWidth": 8, "targetHeight": 1});
-        if let Some(r) = resample {
-            p["resample"] = json!(r);
-        }
-        s.execute("image.crop", p).unwrap();
-        let surf = doc(&s).layers[0].surface().unwrap();
-        for x in 0..8 {
-            let px = surf.pixel(x, 0);
-            assert!(px[..3] == [1.0, 0.0, 0.0] || px[..3] == [0.0, 0.0, 1.0], "{resample:?}: no blended colour at x {x}: {px:?}");
-        }
-        s.execute("history.undo", json!({})).unwrap();
-    }
 }
 
 #[test]

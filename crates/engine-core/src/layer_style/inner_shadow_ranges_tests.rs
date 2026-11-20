@@ -79,28 +79,3 @@ fn a_drop_shadow_still_stores_what_it_is_given() {
     let Effect::DropShadow(sh) = &l.effects.items[0] else { panic!("{:?}", l.effects.items) };
     assert_eq!((sh.distance, sh.size, sh.angle), (40000.0, 300.0, 200.0));
 }
-
-/// #14940: in-range values keep today's pixels. The measured far-distance case (Size 0,
-/// Distance 500 on a 200 x 150 px layer) paints the whole layer with the shadow colour; these
-/// levels are the ones the compositor already gave, so the range change moves no pixel.
-#[test]
-fn an_inner_shadow_reaching_past_the_layer_paints_it_as_before() {
-    let mut s = crate::session();
-    s.execute("file.new", json!({"width": 400, "height": 300, "background": "white"})).unwrap();
-    s.execute("layer.new.layer", json!({})).unwrap();
-    s.execute("select.rect", json!({"x": 100, "y": 75, "width": 200, "height": 150})).unwrap();
-    s.execute("edit.fill", json!({"contents": "color", "color": "#ff8000"})).unwrap();
-    s.execute("select.deselect", json!({})).unwrap();
-    s.execute("layer.layerStyle.innerShadow", json!({"distance": 500.0, "size": 0.0})).unwrap();
-    let d = s.active().unwrap();
-    let px = photocraft_compose::render(&d.doc, d.doc.bounds()).into_px();
-    let level = |x: usize, y: usize| px[y * 400 + x].map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as i32);
-    // Inside the layer: Multiply black at the factory 75 %, so the orange stays only at a quarter.
-    for (x, y) in [(200, 150), (105, 80), (295, 220)] {
-        assert_eq!(level(x, y), [64, 32, 0, 255], "inside the layer at ({x}, {y})");
-    }
-    // Outside it, nothing: the inner shadow never leaves the layer, and the canvas stays white.
-    for (x, y) in [(200, 74), (97, 72), (5, 5)] {
-        assert_eq!(level(x, y), [255, 255, 255, 255], "outside the layer at ({x}, {y})");
-    }
-}

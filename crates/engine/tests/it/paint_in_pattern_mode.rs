@@ -1,11 +1,9 @@
-//! Patterns paint in the document's colour mode, as in Photoshop: a pattern keeps its own colours
-//! (an RGB pattern stays RGB, in the library and in the document), but a pattern fill in a
-//! Grayscale or CMYK document shows what Edit › Fill with that pattern paints, and converting
-//! back to RGB brings the colours back (the follow-up to #1907; #1905 is about solid and
-//! gradient fills).
+//! Tests that run painting commands, moved from the engine-core `pattern_mode` tests: 2 test(s).
 
-use crate::Session;
+use photocraft_engine::Session;
+
 use photocraft_doc::ColorMode;
+
 use serde_json::json;
 
 /// Defines a blue-and-yellow RGB pattern from a scratch document and returns its id.
@@ -52,7 +50,7 @@ fn pattern_mode(s: &Session) -> ColorMode {
 fn pattern_fills_paint_like_edit_fill_in_every_mode() {
     for (mode, cm) in [("gray", ColorMode::Grayscale), ("cmyk", ColorMode::Cmyk), ("lab", ColorMode::Lab), ("rgb", ColorMode::Rgb)] {
         for depth in [8, 16, 32] {
-            let mut s = crate::session();
+            let mut s = Session::new();
             let pat = colour_pattern(&mut s);
             let want = painted(&mut s, mode, depth, &pat);
             s.execute("file.new", json!({"width": 32, "height": 16, "mode": mode, "depth": depth, "background": "white"})).unwrap();
@@ -74,7 +72,7 @@ fn pattern_fills_paint_like_edit_fill_in_every_mode() {
 #[test]
 fn a_grayscale_round_trip_keeps_the_pattern_colours() {
     for depth in [8, 16] {
-        let mut s = crate::session();
+        let mut s = Session::new();
         let pat = colour_pattern(&mut s);
         s.execute("file.new", json!({"width": 32, "height": 16, "mode": "rgb", "depth": depth, "background": "white"})).unwrap();
         s.execute("layer.newFillLayer.pattern", json!({"pattern": pat})).unwrap();

@@ -1,13 +1,22 @@
-use super::*;
+//! Tests that run painting commands, moved from the engine-core `channel_clip` tests: 11 test(s).
+
+use photocraft_color::PixelFormat;
+use photocraft_engine::Session;
+use photocraft_engine::channel_clip::*;
+use photocraft_raster::Surface;
+use serde_json::{Value, json};
+
 use photocraft_color::ColorMode;
+
 use photocraft_geom::Rect;
 
 const W: i32 = 40;
+
 const H: i32 = 20;
 
 /// A white document whose left half is #336699: red 0.2, green 0.4, blue 0.6 there.
 fn session(depth: u32) -> Session {
-    let mut s = crate::session();
+    let mut s = Session::new();
     s.execute("file.new", json!({"width": W, "height": H, "depth": depth})).unwrap();
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": W / 2, "height": H})).unwrap();
     s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
@@ -77,7 +86,7 @@ fn cmyk_channels_copy_and_paste_as_tone() {
     // #5787: copying a CMYK channel gives its tone (white where there is no ink), and pasting a
     // tone into a CMYK channel writes it back as ink.
     for depth in [8, 16] {
-        let mut s = crate::session();
+        let mut s = Session::new();
         s.execute("file.new", json!({"width": W, "height": H, "mode": "cmyk", "depth": depth, "background": "white"})).unwrap();
         s.execute("select.rect", json!({"x": 0, "y": 0, "width": W / 2, "height": H})).unwrap();
         s.execute("edit.fill", json!({"color": "#00ffff"})).unwrap();
@@ -102,7 +111,7 @@ fn spot_channels_copy_and_paste_as_tone() {
     // #5787: a spot channel stores ink but copies as its tone, and a tone pasted into it goes back
     // to ink: spot -> Black prints the spot's ink in black, Cyan -> spot gives the spot Cyan's ink.
     for depth in [8, 16] {
-        let mut s = crate::session();
+        let mut s = Session::new();
         s.execute("file.new", json!({"width": W, "height": H, "mode": "cmyk", "depth": depth, "background": "white"})).unwrap();
         s.execute("select.rect", json!({"x": 0, "y": 0, "width": W / 2, "height": H})).unwrap();
         s.execute("edit.fill", json!({"color": "#00ffff"})).unwrap();
@@ -214,9 +223,9 @@ fn clearing_a_channel_reports_allocation_failure_without_editing() {
         let id = s.active().unwrap().active_layer.unwrap();
         let before = s.active().unwrap().doc.clone();
         let history = s.active().unwrap().history.entries();
-        crate::allocation::fail_next_for_test();
-        let result = s.edit("Clear", |doc, _| crate::channel_cmds::clear_color_channel(doc, id, 0, [1.0; 4]));
-        let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
+        photocraft_engine::allocation::fail_next_for_test();
+        let result = s.edit("Clear", |doc, _| photocraft_engine::channel_cmds::clear_color_channel(doc, id, 0, [1.0; 4]));
+        let _ = photocraft_engine::allocation::capacity::<u8>(0, "reset failpoint");
         assert!(result.is_err());
         assert_eq!(*s.active().unwrap().doc, *before);
         assert_eq!(s.active().unwrap().history.entries(), history);
@@ -230,9 +239,9 @@ fn channel_paste_allocation_failure_is_transactional() {
         s.execute("edit.copy", json!({})).unwrap();
         let before = s.active().unwrap().doc.clone();
         let history = s.active().unwrap().history.entries();
-        crate::allocation::fail_next_for_test();
+        photocraft_engine::allocation::fail_next_for_test();
         let result = paste(&mut s, &json!({}), 1, true, None, "Paste");
-        let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
+        let _ = photocraft_engine::allocation::capacity::<u8>(0, "reset failpoint");
         assert!(result.is_err());
         assert_eq!(*s.active().unwrap().doc, *before);
         assert_eq!(s.active().unwrap().history.entries(), history);
@@ -251,9 +260,9 @@ fn channel_copy_allocation_failure_keeps_clipboard_and_document() {
         let before = s.active().unwrap().doc.clone();
         let clip = s.clipboard.as_ref().unwrap().surface.clone();
         let history = s.active().unwrap().history.entries();
-        crate::allocation::fail_next_for_test();
+        photocraft_engine::allocation::fail_next_for_test();
         let result = copy(&mut s, &Value::Null);
-        let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
+        let _ = photocraft_engine::allocation::capacity::<u8>(0, "reset failpoint");
         assert!(result.is_err());
         assert_eq!(*s.active().unwrap().doc, *before);
         assert_eq!(s.active().unwrap().history.entries(), history);

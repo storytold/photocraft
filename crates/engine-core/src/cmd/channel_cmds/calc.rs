@@ -5,10 +5,6 @@ use super::targeting::{Target, is_channel_target, is_spot_target, target_of, tar
 use super::{AlphaChannel, ColorMode, EngineError, Result, SelectionMode, Session, Value, json, sel};
 use photocraft_color::blend::blend_rgb;
 
-#[cfg(test)]
-#[path = "apply_image_preserve_tests.rs"]
-mod apply_image_preserve_tests;
-
 // ---------------------------------------------------------------------------------------------
 // Apply Image / Calculations
 

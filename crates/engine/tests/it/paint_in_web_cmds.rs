@@ -1,7 +1,9 @@
-//! Quick Export writes progressive JPGs (SOF2) at every quality, as the reference application
-//! does, while Save for Web keeps its own Progressive checkbox, off by default (#13787).
+//! Tests that run painting commands, moved from the engine-core `web_cmds` tests: 2 test(s).
 
-use super::*;
+use photocraft_engine::Session;
+use serde_json::json;
+
+use photocraft_engine::web_cmds::*;
 
 fn tmp(name: &str) -> String {
     let d = std::env::temp_dir().join(format!("photocraft-quick-jpg-{}-{name}", std::process::id()));
@@ -12,7 +14,7 @@ fn tmp(name: &str) -> String {
 
 /// A 64×48 8-bit document: a white background with a flat blue block over its left half.
 fn session() -> Session {
-    let mut s = crate::session();
+    let mut s = Session::new();
     s.execute("file.new", json!({"width": 64, "height": 48, "depth": 8, "name": "quick.psd", "background": "white"})).unwrap();
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 32, "height": 48})).unwrap();
     s.execute("edit.fill", json!({"color": "#3366cc"})).unwrap();

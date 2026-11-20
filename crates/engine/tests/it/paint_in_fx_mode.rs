@@ -1,14 +1,13 @@
-//! Layer style colours made in a Grayscale or CMYK document are in the document's mode, so a red
-//! Color Overlay in a Gray document composites grey, like red painted with Edit › Fill (the
-//! effect counterpart of #1905; Image › Mode already converts them).
+//! Tests that run painting commands, moved from the engine-core `fx_mode` tests: 4 test(s).
 
-use crate::Session;
+use photocraft_engine::Session;
+
 use serde_json::{Value, json};
 
 const KINDS: [&str; 9] = ["dropShadow", "innerShadow", "outerGlow", "innerGlow", "satin", "colorOverlay", "gradientOverlay", "stroke", "bevelEmboss"];
 
 fn session(mode: &str, depth: u32) -> Session {
-    let mut s = crate::session();
+    let mut s = Session::new();
     s.execute("file.new", json!({"width": 48, "height": 32, "mode": mode, "depth": depth, "background": "white"})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("select.rect", json!({"x": 12, "y": 8, "width": 24, "height": 16})).unwrap();
