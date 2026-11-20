@@ -396,7 +396,9 @@ fn refresh_sel_key(app: &mut PhotocraftApp) {
 
 /// Brings the panel's histograms up to date as far as one frame should: lands a finished count,
 /// keeps entries a view-only revision didn't invalidate, and starts the next count (at most one at
-/// a time, at most every 250 ms per entry). `ctx` repaints when a worker delivers.
+/// a time, at most every 250 ms per entry). While a count runs, the panel asks the framework to run
+/// it again in 30 ms to land the result: a worker thread cannot wake one settled region, and the
+/// panel's version holds no worker state.
 pub fn update(app: &mut PhotocraftApp, ctx: &egui::Context) {
     refresh_sel_key(app);
     let want = want(app);
@@ -450,7 +452,7 @@ pub fn update(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.doc_hist_preview = None;
     }
     if app.hist_job.is_some() {
-        ctx.request_repaint_after(std::time::Duration::from_millis(30));
+        poll(ctx);
         return;
     }
     let now = ctx.input(|i| i.time) * 1000.0;
@@ -469,39 +471,42 @@ pub fn update(app: &mut PhotocraftApp, ctx: &egui::Context) {
         None
     };
     match job {
-        Some((Some(doc), key)) => spawn(app, ctx, doc, key, want.source, want.space),
+        Some((Some(doc), key)) => {
+            spawn(app, doc, key, want.source, want.space);
+            poll(ctx);
+        }
         Some((None, _)) => {}
         None if stale(&app.doc_hist, &want.committed) || want.preview.as_ref().is_some_and(|(_, k)| stale(&app.doc_hist_preview, k)) => {
-            ctx.request_repaint_after(std::time::Duration::from_millis(260));
+            craft::ui::runtime::frame::request_repaint_after(ctx, 0.26);
         }
         None => {}
     }
 }
 
+/// Runs the panel again in 30 ms to land the running count.
+fn poll(ctx: &egui::Context) {
+    craft::ui::runtime::frame::request_repaint_after(ctx, 0.03);
+}
+
 /// Counts `doc` for `key` on a worker thread (inline on the web, where there are none, or when a
 /// spawn fails), delivered through `app.hist_job`.
-fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, doc: Arc<Document>, key: HistKey, source: HistSource, space: ToneSpace) {
+fn spawn(app: &mut PhotocraftApp, doc: Arc<Document>, key: HistKey, source: HistSource, space: ToneSpace) {
     let (tx, rx) = std::sync::mpsc::channel();
     #[cfg(not(target_arch = "wasm32"))]
     let spawned = {
         let doc = doc.clone();
         let tx = tx.clone();
-        let ctx = ctx.clone();
         std::thread::Builder::new()
             .name("histogram".into())
             .spawn(move || {
                 let t0 = crate::gpu_canvas::now_ms();
                 let h = Arc::new(tone::compute_histograms_at(&doc, source, space, HistScope::Selection, key.max_level));
                 let _ = tx.send((key, crate::gpu_canvas::now_ms() - t0, h));
-                ctx.request_repaint();
             })
             .is_ok()
     };
     #[cfg(target_arch = "wasm32")]
-    let spawned = {
-        let _ = ctx;
-        false
-    };
+    let spawned = false;
     if !spawned {
         let t0 = crate::gpu_canvas::now_ms();
         let h = Arc::new(tone::compute_histograms_at(&doc, source, space, HistScope::Selection, key.max_level));
