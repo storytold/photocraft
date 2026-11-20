@@ -18,6 +18,7 @@ use photocraft_engine::layer_multi_cmds::move_targets;
 use photocraft_engine::snap::{layer_rect, target_rect_of};
 
 use crate::PhotocraftApp;
+use crate::app::doc_queries::MovingLayers;
 use crate::state::Tool;
 
 /// What the cached targets were built from.
@@ -60,13 +61,17 @@ fn moving_set(app: &PhotocraftApp) -> Vec<LayerId> {
     if moves_as_move_tool(app)
         && let Some(st) = app.session.active()
     {
-        let selected = st.selected_layers();
+        let moving = app.doc_queries.moving(&app.session, st, || {
+            let selected = st.selected_layers();
+            let whole = crate::move_ui::with_descendants(&st.doc, &move_targets(&st.doc, &selected));
+            MovingLayers { selected: selected.into(), whole: whole.into() }
+        });
         // Selected pixels float off the selected layers alone (a floating piece never snaps to its own layer), so
         // the layers linked to them stay put and stay targets.
         if !crate::move_ui::moves_selected_pixels_with(app, Tool::Move) {
-            set.extend(crate::move_ui::with_descendants(&st.doc, &move_targets(&st.doc, &selected)));
+            set.extend_from_slice(&moving.whole);
         }
-        set.extend(selected);
+        set.extend_from_slice(&moving.selected);
     }
     if let Some(edit) = app.ui.text_edit.as_ref() {
         set.push(LayerId(edit.layer));
