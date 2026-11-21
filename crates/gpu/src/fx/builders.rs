@@ -68,7 +68,15 @@ impl B {
             GlowTechnique::Softer => {
                 // Inner glows spread 1 - alpha.
                 let src = if inner { self.shift(In::Shape, 0.0, 0.0, 0.0, true) } else { In::Shape };
-                self.spread_blur(src, (g.size, g.spread), inner, 0.0, 0.0)
+                // #14950: a Size 1 outer glow with Spread 0. `blur_kernel(1.0)` is the identity, so
+                // the glow would stay the hard layer alpha and reach no pixel outside the edge,
+                // exactly as on the CPU. Both compositors expand it by the ¼–½–¼ taps instead
+                // (`photocraft_compose::effects::size_one_kernel`, the kernel `glow_map` applies).
+                if !inner && g.size == 1.0 && g.spread == 0.0 {
+                    self.conv(src, fx::size_one_kernel())
+                } else {
+                    self.spread_blur(src, (g.size, g.spread), inner, 0.0, 0.0)
+                }
             }
         };
         // The same transfer as the CPU's `glow_map`, reach cap included (#11361).

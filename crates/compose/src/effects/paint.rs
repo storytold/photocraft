@@ -1,4 +1,4 @@
-use super::blur::{blur, dilate};
+use super::blur::{blur, dilate, size_one_blur};
 use super::distance::{dist_inside, dist_outside};
 use super::{
     BlendMode, Buffer, Contour, Effect, FxPaint, GlobalLight, Glow, GlowSource, GlowTechnique, Gradient, GradientStyle, Map, Placement, PreparedPatterns, Rect,
@@ -496,7 +496,17 @@ pub(super) fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -
         GlowTechnique::Softer => {
             let (r, bw) = spread_split(g.size, g.spread);
             let mut m = dilate(&src, r);
-            blur(&mut m, bw);
+            if !inner && g.size == 1.0 && g.spread == 0.0 {
+                // #14950: a Size 1 outer glow with Spread 0. At that width the box blur is the
+                // identity (`box_width` floors it at 1 px), so the glow stays the hard layer alpha
+                // and no coverage ever reaches past the edge. The reference application puts half a
+                // glow on the first pixel outside every edge: `SIZE_ONE_TAPS`, whose ¼ coverage the
+                // Range 50 % LUT doubles to ½. Inner glows (#14924) and a spread or choked Size 1
+                // keep today's map.
+                size_one_blur(&mut m);
+            } else {
+                blur(&mut m, bw);
+            }
             m
         }
     };
