@@ -211,6 +211,7 @@ fn the_options_bar_ratio_list_takes_escape_and_enter_before_the_crop() {
     h.run_steps(6);
     assert_eq!(size(&h), Some((200, 200)), "Enter on the canvas commits the pending crop");
     assert_eq!(history(&h), steps + 1, "Enter adds one document history step");
+    assert!(!pending(h.state()), "Enter clears the pending Crop session once the document accepts the crop");
 }
 
 #[test]
@@ -281,6 +282,7 @@ fn cancel_and_done_only_while_a_crop_is_pending() {
     let at = widget(&h, "Done");
     click_at(&mut h, at);
     assert_eq!(h.state().session.active().map(|s| (s.doc.size.width, s.doc.size.height)), Some((220, 170)), "Done crops");
+    assert!(!pending(h.state()), "Done also clears the pending Crop session");
 }
 
 /// The active document's stored zoom.
