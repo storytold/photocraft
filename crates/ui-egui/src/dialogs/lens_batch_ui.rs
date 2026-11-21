@@ -87,7 +87,10 @@ pub(crate) fn derive(fields: &mut DialogFields) {
 /// and no profile file: today `profile` `none`). The corrections do not count.
 pub(crate) fn missing(fields: &DialogFields) -> Option<&'static str> {
     let listed = fields.list("input").is_some_and(|list| !list.is_empty());
-    let folder = fields.bool("input.useFolder") == Some(true) && fields.text("input.folder").is_some_and(|dir| !dir.is_empty());
+    // A folder counts until its listing comes back, then only with an image in it.
+    let folder = fields.bool("input.useFolder") == Some(true)
+        && fields.text("input.folder").is_some_and(|dir| !dir.is_empty())
+        && fields.list("input.folderFiles").is_none_or(|files| !files.is_empty());
     if !listed && !folder {
         Some(tl!("Lens Correction needs at least one source file"))
     } else if matches!(fields.text("profile").unwrap_or("none"), "none" | "") {
