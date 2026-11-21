@@ -64,6 +64,32 @@ fn mode_opacity_and_preserve_transparency() {
     assert!(close(px(&app, 5, 5), [0.5, 0.5, 0.5, 1.0]));
 }
 
+/// The Mode list has Behind and Clear after Dissolve, greyed when the target has no transparency, and picking
+/// Behind paints only where the layer is transparent (#14646).
+#[test]
+fn behind_and_clear_follow_dissolve_and_grey_without_transparency() {
+    let mode_row = |transparency: bool| rows([0.0; 3], None, transparency).into_iter().find(|p| p.key == "mode").unwrap();
+    let ParamKind::Blend { modes, .. } = &mode_row(true).kind else { panic!("Mode is a blend row") };
+    let keys: Vec<&str> = modes.iter().map(|(entry, _)| entry.key.as_str()).collect();
+    let dissolve = keys.iter().position(|k| *k == BlendMode::Dissolve.key()).unwrap();
+    assert_eq!(keys.get(dissolve + 1..dissolve + 3), Some(&["behind", "clear"][..]), "{keys:?}");
+    assert!(mode_row(true).option_enabled("behind") && mode_row(true).option_enabled("clear"));
+    assert!(!mode_row(false).option_enabled("behind") && !mode_row(false).option_enabled("clear"));
+
+    let mut app = app();
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 30})).unwrap();
+    fill(&mut app, json!({"contents": "white"}));
+    app.run("select.deselect", json!({})).unwrap();
+    fill(&mut app, json!({"contents": "black", "mode": "behind"}));
+    assert!(close(px(&app, 5, 5), [1.0; 4]), "the opaque white stays: {:?}", px(&app, 5, 5));
+    assert!(close(px(&app, 30, 5), [0.0, 0.0, 0.0, 1.0]), "the empty half takes the black: {:?}", px(&app, 30, 5));
+    assert!(has_transparency(&app, &json!("pixels")));
+
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+    assert!(!has_transparency(&app, &json!("pixels")), "the Background layer has no transparency");
+}
+
 /// A targeted Smart Object mask is admitted and only the selected mask pixels fill.
 #[test]
 fn shift_f5_fills_the_selected_area_of_a_smart_object_mask() {

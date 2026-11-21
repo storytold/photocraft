@@ -1,6 +1,7 @@
 //! The Blending rows that Fill, Stroke and the Smart Filter Blending Options dialog share: the mode list is the
-//! Layers panel's, so a mode has one key and one shortcut everywhere.
+//! Layers panel's, so a mode has one key and one shortcut everywhere; Fill's adds the painting modes Behind and Clear.
 
+use craft::ui::patterns::blend_keys::BlendKeyEntry;
 use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamKind};
 use craft::ui::runtime::env::Label;
 use photocraft_color::BlendMode;
@@ -22,9 +23,37 @@ pub(crate) fn blend_mode(fields: &DialogFields, key: &str) -> BlendMode {
 
 /// The Blending section, Mode, Opacity (percent) and Preserve Transparency: the rows Fill and Stroke share.
 pub(crate) fn blending_rows() -> Vec<Param> {
+    blending_rows_with(blend_param("mode", tl!("Mode:"), false, BlendMode::Normal))
+}
+
+/// [`blending_rows`] for Fill, whose Mode list also has the painting modes Behind and Clear after Dissolve
+/// (`edit.fill`'s `behind` and `clear`). Without `transparency` (the Background layer, a mask, a channel) they are
+/// listed greyed.
+pub(crate) fn fill_blending_rows(transparency: bool) -> Vec<Param> {
+    let mut modes: Vec<(BlendKeyEntry<String>, Label)> = crate::panels::blend_options(false, BlendMode::Normal)
+        .into_iter()
+        .map(|(m, name)| (crate::panels::blend_entry(m.key().to_string(), m), Label::from(name)))
+        .collect();
+    let after_dissolve = modes.iter().position(|(entry, _)| entry.key == BlendMode::Dissolve.key()).map_or(modes.len(), |i| i + 1);
+    modes.splice(
+        after_dissolve..after_dissolve,
+        [(BlendKeyEntry::behind(BEHIND.to_string()), Label::from(tl!("Behind"))), (BlendKeyEntry::clear(CLEAR.to_string()), Label::from(tl!("Clear")))],
+    );
+    let mut mode = Param::new("mode", tl!("Mode:"), ParamKind::blend(modes, Some(BlendMode::Normal.key().to_string())));
+    if !transparency {
+        mode = mode.disabled_options([BEHIND, CLEAR]);
+    }
+    blending_rows_with(mode)
+}
+
+/// The keys of Fill's Behind and Clear entries: `edit.fill`'s mode names.
+const BEHIND: &str = "behind";
+const CLEAR: &str = "clear";
+
+fn blending_rows_with(mode: Param) -> Vec<Param> {
     vec![
         Param::section(tl!("Blending")),
-        blend_param("mode", tl!("Mode:"), false, BlendMode::Normal),
+        mode,
         super::new_layer_ui::opacity_param(),
         Param::new("preserveTransparency", tl!("Preserve Transparency"), ParamKind::bool(false)),
     ]
