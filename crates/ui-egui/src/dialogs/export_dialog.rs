@@ -17,7 +17,8 @@ use craft::ui::patterns::form_dialogs::{
 };
 use craft::ui::patterns::presets::{GroupPath, NamedPresetEvent, PresetLibrary};
 use craft::ui::runtime::requests::PathKind;
-use photocraft_doc::{ColorMode, Document, LayerId};
+use photocraft_doc::{ColorMode, Document, LayerId, Size};
+use photocraft_geom::Rect;
 use serde_json::{Map, Value, json};
 
 use photocraft_engine::export_preset_cmds::{DEFAULT_RESAMPLE, export_resample};
@@ -194,6 +195,9 @@ pub(crate) struct ExportOpen {
     pub(crate) dialog: DialogId,
     /// The layers Layer › Export As exports; empty for the whole document, several for one file each.
     pub(crate) layers: Vec<LayerId>,
+    /// #15291: the area a whole-document export crops to first (the artboards' union); `None`
+    /// exports the canvas as it always did, and the layer paths trim to their layer already.
+    pub(crate) area: Option<Rect>,
     /// The size of the source the dialog fits its size to: the document, or the first layer.
     source: PixelSize,
     /// The preview's texture; the dialog's state holds only its id, so it lives as long as the dialog.
@@ -257,17 +261,43 @@ fn stem_of(name: &str) -> String {
     name.rsplit_once('.').map_or(name, |(a, _)| a).to_string()
 }
 
-/// File › Export › Export As…
+/// File › Export › Export As…. On a document with artboards the dialog and the export follow the
+/// boards' union, not the canvas (#15291).
 pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
     let st = app.session.active().ok_or("no document")?;
     let (stem, size) = (stem_of(&st.doc.name), st.doc.size);
-    open_sized(app, stem, None, PixelSize::new(size.width, size.height), Vec::new())
+    let area = artboard_area(&st.doc);
+    let source = area.map(|a| PixelSize::new(a.width(), a.height())).unwrap_or_else(|| PixelSize::new(size.width, size.height));
+    open_sized(app, stem, None, source, Vec::new(), area)
+}
+
+/// The area File › Export As exports on a document with artboards (#15291): the union of the
+/// top-level boards, clipped to the canvas. `None` when the document has no artboards or the
+/// boards already cover the canvas; those keep today's whole-canvas export. The rule exists
+/// because the canvas only ever grows to fit every board (`artboard_cmds::fit_canvas`) and
+/// `layer.delete` never shrinks it, so the grown canvas can hold empty ground outside every
+/// board - the white residue of the report - which must not travel into the file.
+fn artboard_area(doc: &Document) -> Option<Rect> {
+    let canvas = Rect::from_size(doc.size);
+    let mut area = Rect::EMPTY;
+    for (_, _, board) in doc.artboards() {
+        area = area.union(&board.rect);
+    }
+    let area = area.intersect(&canvas);
+    (!area.is_empty() && area != canvas).then_some(area)
 }
 
 /// The dialog fitted to a `source`-sized document or layer. Fitting the document first would
 /// replace a remembered pixel size the document can't take with the percent, even when the layer
 /// can take it.
-fn open_sized(app: &mut PhotocraftApp, stem: String, title: Option<String>, source: PixelSize, layers: Vec<LayerId>) -> Result<DialogId, String> {
+fn open_sized(
+    app: &mut PhotocraftApp,
+    stem: String,
+    title: Option<String>,
+    source: PixelSize,
+    layers: Vec<LayerId>,
+    area: Option<Rect>,
+) -> Result<DialogId, String> {
     let prefs = app.session.prefs().export.clone();
     let mut options = ExportOptions::default();
     options.quality = u8::try_from(prefs.jpeg_quality.clamp(1, 100)).unwrap_or(85);
@@ -300,6 +330,7 @@ fn open_sized(app: &mut PhotocraftApp, stem: String, title: Option<String>, sour
         #[cfg(test)]
         dialog: id,
         layers,
+        area,
         source,
         texture: None,
         picking: false,
@@ -317,7 +348,7 @@ pub fn open_layer(app: &mut PhotocraftApp, layer: LayerId) -> Result<DialogId, S
     // the layer exports at.
     let template = "Export As: {name}";
     let title = crate::i18n::fmt(tl!(template), &[("name", &ldoc.name)]);
-    open_sized(app, stem_of(&ldoc.name), Some(title), PixelSize::new(ldoc.size.width, ldoc.size.height), vec![layer])
+    open_sized(app, stem_of(&ldoc.name), Some(title), PixelSize::new(ldoc.size.width, ldoc.size.height), vec![layer], None)
 }
 
 /// Layer › Export As… with several layers (artboards, say) selected: the same dialog, then one
@@ -336,7 +367,7 @@ pub fn open_layers(app: &mut PhotocraftApp, layers: &[LayerId]) -> Result<Dialog
     let stem = export_name(&stem_of(&st.doc.name));
     let template = "Export As: {n} layers";
     let title = crate::i18n::fmt(tl!(template), &[("n", &layers.len().to_string())]);
-    open_sized(app, stem, Some(title), PixelSize::new(ldoc.size.width, ldoc.size.height), layers.to_vec())
+    open_sized(app, stem, Some(title), PixelSize::new(ldoc.size.width, ldoc.size.height), layers.to_vec(), None)
 }
 
 /// What a several-layer export says when no selected layer has pixels, as in the reference
@@ -361,6 +392,8 @@ fn exportable_layers(doc: &Document, ids: &[LayerId]) -> Result<Vec<Document>, S
     Ok(docs)
 }
 
+#[cfg(test)]
+mod artboard_export_area_tests;
 #[cfg(test)]
 mod layer_empty_skip_tests;
 #[cfg(test)]
@@ -466,12 +499,50 @@ fn batch_paths(path: &str, docs: &[Document]) -> Vec<String> {
         .collect()
 }
 
-/// The document a dialog exports: the whole image, or one layer (`__layer`).
+/// The document a dialog exports: the whole image, or one layer (`__layer`); a whole-image
+/// export with artboards first crops to the boards' union (`__area`, #15291), so the empty
+/// ground the grown canvas keeps outside them never reaches the file.
 fn source_document_from(doc: Arc<Document>, f: &Map<String, Value>) -> Result<Arc<Document>, String> {
     match f.get("__layer").and_then(Value::as_u64) {
         Some(id) => photocraft_engine::layer_menu_cmds::layer_document(&doc, photocraft_doc::LayerId(id)).map(Arc::new).map_err(|e| e.to_string()),
-        None => Ok(doc),
+        None => match area_of(f, doc.size)? {
+            Some(area) => Ok(Arc::new(crop_to(&doc, area)?)),
+            None => Ok(doc),
+        },
     }
+}
+
+/// The `__area` a [`source_document_from`] crop gets, decoded from `[x, y, width, height]`.
+/// Only [`open`] and its pipeline set it, always from [`artboard_area`] and so inside the
+/// canvas; a settings map carrying anything else (a hand-written or replayed one) is an error,
+/// never a guess. Indices come from data, so every number is checked before it becomes an edge.
+fn area_of(f: &Map<String, Value>, canvas: Size) -> Result<Option<Rect>, String> {
+    let Some(v) = f.get("__area") else { return Ok(None) };
+    let bad = || "`__area` must be `[x, y, width, height]` in whole pixels".to_string();
+    let nums: Vec<i64> = v.as_array().ok_or_else(bad)?.iter().map(Value::as_i64).collect::<Option<Vec<i64>>>().ok_or_else(bad)?;
+    let [x, y, w, h] = nums.as_slice() else { return Err(bad()) };
+    if *x < 0 || *y < 0 || *w < 1 || *h < 1 || x + w > i64::from(canvas.width) || y + h > i64::from(canvas.height) {
+        return Err("`__area` must be at least one pixel and lie inside the canvas".into());
+    }
+    Ok(Some(Rect::new(*x as i32, *y as i32, (x + w) as i32, (y + h) as i32)))
+}
+
+/// The document cropped to `area`, on a private session: the copy an export writes, never the
+/// user's document. Cropped pixels are kept (`deleteCroppedPixels: false`), so content that
+/// starts outside the area but paints into it (an effect bleeding over an edge) still exports,
+/// exactly as it does on today's canvas.
+fn crop_to(doc: &Document, area: Rect) -> Result<Document, String> {
+    let mut session = photocraft_engine::Session::new();
+    session.add_document(doc.clone(), None);
+    session
+        .execute("image.crop", json!({"x": area.x0, "y": area.y0, "width": area.width(), "height": area.height(), "deleteCroppedPixels": false}))
+        .map_err(|e| e.to_string())?;
+    session.active().map(|st| (*st.doc).clone()).ok_or_else(|| "crop failed".into())
+}
+
+/// The `__area` field for `area`, as [`area_of`] reads it back.
+fn area_json(area: Rect) -> Value {
+    json!([area.x0, area.y0, area.width(), area.height()])
 }
 
 fn source_document(app: &PhotocraftApp, f: &Map<String, Value>) -> Result<Arc<Document>, String> {
@@ -937,6 +1008,10 @@ fn start_preview(app: &PhotocraftApp, open: &ExportOpen, request: PreviewRequest
     if let Some(layer) = open.layers.first() {
         settings.insert("__layer".into(), json!(layer.0));
     }
+    // A whole-document preview of an artboard document shows the boards' area (#15291).
+    if let Some(area) = open.area {
+        settings.insert("__area".into(), area_json(area));
+    }
     let profile = effective_source_profile(app, &doc);
     let signature = format!("{}:{}", Value::Object(settings.clone()), profile.content_hash());
     let layer = open.layers.first().map(|layer| layer.0);
@@ -1031,6 +1106,9 @@ fn finish(app: &mut PhotocraftApp, ctx: &egui::Context, open: &ExportOpen, resul
     } else {
         if let Some(layer) = open.layers.first() {
             f.insert("__layer".into(), json!(layer.0));
+        }
+        if let Some(area) = open.area {
+            f.insert("__area".into(), area_json(area));
         }
         // With more than one output the path is the folder the files go into.
         if result.outputs.len() > 1 { export_sizes(app, &f, &rows, &path)? } else { export_to(app, &scaled_fields(&f, rows[0].size.factor()), &path)? }
@@ -1164,6 +1242,13 @@ pub(crate) fn replay(app: &mut PhotocraftApp, params: &Value) -> Result<Value, S
         return Err(format!("Export As: `{key}` can't be {v}"));
     }
     let doc = app.session.active().ok_or("no document")?.doc.clone();
+    // The area the dialog exported when it recorded the step (#15291): a document with
+    // artboards exports their union, recomputed from the document as it stands now. The
+    // recorded step holds the dialog's settings, never the crop itself.
+    let doc = match artboard_area(&doc) {
+        Some(area) => Arc::new(crop_to(&doc, area)?),
+        None => doc,
+    };
     let source_profile = effective_source_profile(app, &doc);
     write_export(app, &doc, &f, path, &source_profile)
 }
