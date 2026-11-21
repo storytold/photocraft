@@ -61,13 +61,25 @@ fn eight_and_sixteen_bit_rgb_grayscale_cmyk_and_lab_still_erase() {
         (ColorMode::Rgb, SampleType::U8),
         (ColorMode::Rgb, SampleType::U16),
         (ColorMode::Grayscale, SampleType::U8),
+        (ColorMode::Grayscale, SampleType::U16),
         (ColorMode::Cmyk, SampleType::U8),
+        (ColorMode::Cmyk, SampleType::U16),
         (ColorMode::Lab, SampleType::U8),
+        (ColorMode::Lab, SampleType::U16),
     ] {
         let mut s = session(mode, depth);
         assert_eq!(background_eraser_refusal(&s.active().unwrap().doc), None, "{mode:?} {depth:?}");
         let before = state(&s).0;
         s.execute("paint.backgroundEraser", stroke()).unwrap_or_else(|e| panic!("{mode:?} {depth:?}: {e}"));
         assert!(state(&s).0 > before, "{mode:?} {depth:?}: a History step");
+    }
+}
+
+/// Duotone and Multichannel aren't measured: at 32 bits they keep today's behaviour, no refusal (CodeRabbit on #16273).
+#[test]
+fn unmeasured_modes_keep_erasing_at_32_bits() {
+    for mode in [ColorMode::Duotone, ColorMode::Multichannel] {
+        let d = Document::with_background("meadow", Size::new(8, 8), mode, SampleType::F32, Color::WHITE);
+        assert_eq!(background_eraser_refusal(&d), None, "{mode:?}");
     }
 }

@@ -188,7 +188,8 @@ pub fn background_eraser_refusal(doc: &Document) -> Option<&'static str> {
     match doc.mode {
         ColorMode::Indexed => Some(BACKGROUND_ERASER_INDEXED_ERROR),
         ColorMode::Bitmap => Some(BACKGROUND_ERASER_BITMAP_ERROR),
-        _ if doc.depth == SampleType::F32 => Some(BACKGROUND_ERASER_32BIT_ERROR),
+        // Only the measured modes: a 32-bit Duotone or Multichannel document isn't, and keeps erasing (CodeRabbit on #16273).
+        ColorMode::Rgb | ColorMode::Grayscale | ColorMode::Cmyk | ColorMode::Lab if doc.depth == SampleType::F32 => Some(BACKGROUND_ERASER_32BIT_ERROR),
         _ => None,
     }
 }
