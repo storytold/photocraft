@@ -611,13 +611,13 @@ fn gradient_presets(app: &PhotocraftApp) -> Vec<(String, GradientStops)> {
 #[derive(craft::ui::contract::MemoProps)]
 struct StylePresets {
     groups: Vec<(String, Vec<String>)>,
-    library: Tracked<StyleLibrary>,
+    library: std::sync::Arc<Tracked<StyleLibrary>>,
 }
 
 /// The Styles page's presets.
 fn style_presets(app: &PhotocraftApp) -> PresetSource<'static, String> {
     let groups = app.session.presets.styles.iter().map(|group| (group.name.clone(), group.items.iter().map(|st| st.name.clone()).collect())).collect();
-    let inputs = StylePresets { groups, library: StyleLibrary::of(&app.session) };
+    let inputs = StylePresets { groups, library: StyleLibrary::of(app.ctx(), &app.session) };
     PresetSource::new(inputs, PresetFns::new(style_rows).thumb(style_thumb))
 }
 
