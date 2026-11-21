@@ -324,6 +324,20 @@ echo 'media-gfx/photocraft-bin ~amd64' >> /etc/portage/package.accept_keywords/p
 emerge --ask media-gfx/photocraft-bin
 ```
 
+On Windows, [Scoop](https://scoop.sh)'s Extras bucket packages the portable zips (x64, arm64 and x86) as `photocraft`. `scoop update photocraft` upgrades it with your settings kept, and `photocraft-cli` goes on your PATH:
+
+```powershell
+scoop bucket add extras
+scoop install extras/photocraft
+```
+
+On macOS and Linux, [Homebrew](https://brew.sh) has the app as a cask (the DMG on macOS, the AppImage on Linux) and the command-line tool as a formula:
+
+```sh
+brew install --cask photocraft
+brew install photocraft-cli
+```
+
 ## Documentation
 
 Developer, architecture, automation, format, and security documentation is maintained in the [PhotoCraft documentation book](book/).
