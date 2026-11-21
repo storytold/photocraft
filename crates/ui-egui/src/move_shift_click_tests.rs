@@ -45,7 +45,7 @@ impl Fixture {
     }
 
     fn assert_selected(&self, expected: &[LayerId]) {
-        let mut actual = self.app.session.active().unwrap().selected_layers();
+        let mut actual = self.app.session.active().unwrap().selected_layers().to_vec();
         let mut expected = expected.to_vec();
         actual.sort_unstable_by_key(|id| id.0);
         expected.sort_unstable_by_key(|id| id.0);
@@ -103,6 +103,46 @@ fn point_clicks_toggle_members_but_keep_the_singleton_and_plain_multi_selection(
     f.gesture([14.0, 14.0], [14.0, 14.0], Modifiers::COMMAND);
     f.assert_selected(&[b]);
     assert_eq!(f.bounds(), before, "selection-only gestures move no pixels");
+}
+
+#[test]
+fn group_auto_select_picks_and_moves_the_enclosing_group() {
+    let mut f = Fixture::new();
+    let [a, b, _] = f.layers;
+    f.select(&[a]);
+    let group = LayerId(f.app.run("layer.new.groupFromLayers", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap());
+    f.select(&[b]);
+    f.app.ui.tool_options.move_target = "group".into();
+    let before = f.bounds();
+    f.gesture([14.0, 14.0], [20.0, 16.0], Modifiers::NONE);
+    f.assert_selected(&[group]);
+    assert_eq!(f.bounds()[1], before[1].translate(6, 2), "the group moves its child");
+    assert_eq!(f.bounds()[2], before[2], "the other layer stays put");
+}
+
+#[test]
+fn dragging_a_selected_layer_moves_the_whole_selection() {
+    let mut f = Fixture::new();
+    let [a, b, _] = f.layers;
+    f.select(&[a, b]);
+    let before = f.bounds();
+    f.gesture([14.0, 14.0], [20.0, 16.0], Modifiers::NONE);
+    f.assert_selected(&[a, b]);
+    assert_eq!(f.bounds()[1], before[1].translate(6, 2));
+    assert_eq!(f.bounds()[2], before[2].translate(6, 2));
+}
+
+#[test]
+fn shift_click_adds_shape_layers_one_after_another() {
+    let mut f = Fixture::new();
+    let ids = [10, 34, 58].map(|x| {
+        let layer = f.app.run("shape.create", json!({"kind": "rect", "rect": [x, 35, 10, 10], "fill": "#ff0000"})).unwrap();
+        LayerId(layer["layer"].as_u64().unwrap())
+    });
+    f.gesture([15.0, 40.0], [15.0, 40.0], Modifiers::NONE);
+    f.gesture([39.0, 40.0], [39.0, 40.0], Modifiers::SHIFT);
+    f.gesture([63.0, 40.0], [63.0, 40.0], Modifiers::SHIFT);
+    f.assert_selected(&ids);
 }
 
 /// Shift-press changes the selected set immediately, and only that set moves on drag (#11102).

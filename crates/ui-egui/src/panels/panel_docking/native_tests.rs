@@ -283,7 +283,7 @@ fn a_floated_toolbar_stays_in_the_main_window_while_other_panels_get_os_windows(
         desktop.h.state_mut().run("window.panel.window", json!({"panel": panel})).unwrap();
     }
     desktop.steps(3);
-    let floating = |panel: &str| matches!(desktop.h.state().ui.docking.layout.place(&panel.to_owned()), Some(PanelPlace::Floating { .. }));
+    let floating = |panel: &str| matches!(desktop.h.state().ui.docking.layout().place(&panel.to_owned()), Some(PanelPlace::Floating { .. }));
     assert!(floating(TOOLBAR) && floating("layers"), "both panels float");
     assert!(desktop.window(TOOLBAR).is_none(), "the toolbar floats in the main window");
     assert!(desktop.window("layers").is_some(), "the Layers panel floats in its own OS window");

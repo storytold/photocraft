@@ -1223,7 +1223,7 @@ fn nested_group_preview_excludes_its_siblings() {
 
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
     let st = app.session.active_mut().unwrap();
-    let doc = Arc::make_mut(&mut st.doc);
+    let doc = Arc::make_mut(st.doc_mut());
     let target_pixels = doc.layers.pop().unwrap();
     let mut sibling = Layer::raster("sibling", PixelFormat::RGBA8);
     sibling.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(12, 12, 20, 20), &[0.0, 0.0, 1.0, 1.0]);
@@ -1239,7 +1239,7 @@ fn artboard_preview_app(background: photocraft_doc::ArtboardBackground) -> (Box<
     use photocraft_doc::{Artboard, Layer};
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
     let st = app.session.active_mut().unwrap();
-    let doc = Arc::make_mut(&mut st.doc);
+    let doc = Arc::make_mut(st.doc_mut());
     let red = doc.layers.pop().unwrap();
     let red_id = red.id;
     let mut blue = Layer::raster("covering blue", photocraft_color::PixelFormat::RGBA8);
@@ -1318,7 +1318,7 @@ fn nested_group_preview_detaches_every_clipped_ancestor() {
 
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
     let st = app.session.active_mut().unwrap();
-    let doc = Arc::make_mut(&mut st.doc);
+    let doc = Arc::make_mut(st.doc_mut());
     let target_pixels = doc.layers.pop().unwrap();
     let target = Layer::group("target", vec![target_pixels]);
     let target_id = target.id;
@@ -1340,7 +1340,7 @@ fn several_preview_detaches_clipped_ancestors() {
     use photocraft_doc::Layer;
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
     let st = app.session.active_mut().unwrap();
-    let doc = Arc::make_mut(&mut st.doc);
+    let doc = Arc::make_mut(st.doc_mut());
     let first = doc.layers.pop().unwrap();
     let first_id = first.id;
     let mut second = Layer::raster("second", PixelFormat::RGBA8);

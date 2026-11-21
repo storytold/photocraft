@@ -25,14 +25,16 @@ An app started from the Dock, the Start menu or a file manager has no command li
 |---|---|
 | `integrations.connectAgents` (default off, not in the dialog) | Without the `AI-MCP` flag: serve agents on loopback without `--control`, and publish the connection (below). Set from a saved Control Port; with the flag only the launcher's switch counts |
 | `integrations.controlPort` (default 0) | The port for that; 0 = any free port (clients read it from the connection file) |
-| `integrations.readRoot` (default empty) | The agents' read folder; with `--control`, stands in for `--automation-read-root` |
-| `integrations.writeRoot` (default empty) | The agents' write folder; with `--control`, stands in for `--automation-write-root` |
+| `integrations.readRoot` (default empty) | The agents' read folder; with `--control`, stands in for `--automation-read-root`. Empty: the default agent folder (below) |
+| `integrations.writeRoot` (default empty) | The agents' write folder; with `--control`, stands in for `--automation-write-root`. Empty: the default agent folder (below) |
 | `integrations.whenAppClosed` (default `launch`) | What `photocraft-cli mcp` does while agents may use the app but it is closed: `launch`, `headless` or `error` |
 | `integrations.allowAgentControl` (default on, not in the dialog) | Off refuses `--control` too |
 
 A file whose `controlPort` (1 to 65535) started the server at launch, as on `main` before the agents switch, loads with `connectAgents` on, so that keeps working without the flag. Started with `--control`, the app leaves the connection to the launch flags and the dialog says so; only `--control` (or `PHOTOCRAFT_CONTROL_PORT`) opens a port at launch.
 
 With `--control`, each launch option, or its environment variable, wins over its preference; the two folders are decided separately (any `--automation-read-root` replaces the read folder). The same folder for both reading and writing shares one capability, as it does when given by flags, so an implicit save works there too. A folder named by a flag that can't be opened stops the launch (exit status 2), as before. A folder named only in the preferences that can't be opened, or isn't an absolute path, is left out, so that direction of file access fails closed; the app still starts, prints the reason on standard error and shows it in a notice. Automation can't change the two folders (`prefs.set` refuses `integrations.readRoot`, `integrations.writeRoot` and the whole `integrations` section): an agent must not widen its own file access.
+
+A folder left empty (and named by no flag) is the default agent folder, `Documents/ArtCraft/Agents/PhotoCraft` in the system's Documents folder (Windows, macOS, and Linux's XDG Documents folder, else `~/Documents`), created when first used; the same folder for both directions shares one capability. It comes from the suite's shared agent settings (craft-libs `craft-control`, `AgentSettings::folders`), so every Craft app has its own beside it. A default folder that can't be created is left out, so that direction fails closed. The MCP tool `agent_folders` tells an agent which folders it may use.
 
 While agents may connect, the app keeps its token in its settings folder, in `agent-control.token`, exactly as `--control-token-file <settings folder>/agent-control.token` would (created mode `0600` with a fresh token when missing, reused otherwise, also when the port changes; delete it to get a new token). If that file can't be written or read (a read-only or full settings folder), agents can't connect and the dialog shows why. Otherwise the app publishes the connection beside it, in `agent-connection.json`, and removes it when the connection stops:
 
@@ -501,7 +503,7 @@ variables are not supported by headless `photocraft-cli mcp` or `serve`; supply 
 In MCP bridge mode, configure roots on the desktop process. Supplying root flags to
 `photocraft-cli mcp --bridge` is a usage error; a bridge client cannot grant filesystem access.
 While agents may use the app, the folders chosen in Preferences › AI Integrations (`readRoot` /
-`writeRoot`) are the agents' roots; `mcp` uses them for a headless session only when the app's
+`writeRoot`, the default agent folder for an empty one) are the agents' roots; `mcp` uses them for a headless session only when the app's
 *When PhotoCraft is closed* choice (or `--when-closed headless`) asks for one. Without the
 person's consent, `mcp` works headless with only the roots given to it, as before.
 
