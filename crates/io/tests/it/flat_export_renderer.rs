@@ -367,6 +367,9 @@ fn unsupported_renderer_converts_on_cpu() {
         warnings.iter().any(|w| w.contains("custom renderer unavailable") && w.contains("falling back to CPU")),
         "fallback warning must be reported: {warnings:?}"
     );
+    for warning in &cpu_warnings {
+        assert_eq!(warnings.iter().filter(|w| *w == warning).count(), 1, "each conversion warning must be reported once after the retry: {warnings:?}");
+    }
 }
 
 #[test]

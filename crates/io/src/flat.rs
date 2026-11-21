@@ -1462,9 +1462,13 @@ pub fn document_to_image_with_renderer(doc: &Document, warnings: &mut Vec<String
     let Some(r) = renderer else {
         return document_to_image_for_with_renderer(doc, warnings, true, false, &Interrupt::NONE, None);
     };
+    let attempt_start = warnings.len();
     match document_to_image_for_with_renderer(doc, warnings, true, false, &Interrupt::NONE, Some(&mut *r)) {
         Ok(img) => Ok(img),
         Err(IoError::Render(render_err)) if render_err.is_retryable() => {
+            // The failed attempt may have added conversion warnings already; the CPU retry
+            // reports them again. Drop only those, keeping the caller's earlier warnings.
+            warnings.truncate(attempt_start);
             let fallback_warning = format!("custom renderer unavailable ({render_err}); falling back to CPU");
             // The fallback reason goes into this conversion's warnings, and the renderer's own
             // diagnostics beside it: leaving either on the renderer would leak them into a later
