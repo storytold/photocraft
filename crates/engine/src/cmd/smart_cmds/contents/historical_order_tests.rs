@@ -312,6 +312,11 @@ fn changed_historical_links_refuse_decode_and_storage_commands_atomically() {
         assert!(!output.exists());
         assert_eq!(s.documents().len(), 1);
     }
+    let original_format = dir.path().join("wrong.xcf");
+    let error = s.execute("layer.smartObjects.exportContents", json!({"layer":id.0,"path":original_format})).unwrap_err();
+    assert!(error.to_string().contains("relink and choose"));
+    assert!(!original_format.exists());
+    assert!(contents_of(&s.active().unwrap().doc, id).is_err(), "the desktop export uses this same reader");
     std::fs::write(&source, &approved).unwrap();
     s.execute("layer.smartObjects.embedAllLinked", json!({})).unwrap();
     let object = object(&s, id);

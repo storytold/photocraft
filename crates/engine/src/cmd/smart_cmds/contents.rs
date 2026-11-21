@@ -1,11 +1,13 @@
 use super::filters::{smart, smart_mut};
 use super::placing::detach_psd;
-use super::rendering::{refresh, refresh_or_fail, unapplied_filters};
+use super::rendering::{refresh, refresh_or_fail, refresh_or_fail_in, unapplied_filters};
 use super::source::{authorized_source_bytes, embedded_source_bytes, source_bytes};
 use super::{
     Arc, DocId, Document, EngineError, LayerContent, LayerId, Metadata, Result, Session, SmartContentsId, SmartLink, SmartSource, Value, bad, base_name,
     decode_source_with_order, encode_source, json, layer_param, other,
 };
+use crate::jobs::{JobCtx, Started};
+use photocraft_doc::HistoricalXcfSampleOrder;
 
 pub(super) fn path_param<'a>(cmd: &str, p: &'a Value) -> Result<&'a str> {
     p.get("path").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| bad(cmd, "pass `path`"))
@@ -19,9 +21,11 @@ fn instances(doc: &Document, contents_id: SmartContentsId) -> Vec<LayerId> {
 const RELINK: &str = "layer.smartObjects.relinkToFile";
 
 /// An existing interpretation can carry over only when the picked source bytes match.
-pub fn relink_sample_order(s: &Session, id: LayerId, candidate: &[u8]) -> Result<Option<photocraft_doc::HistoricalXcfSampleOrder>> {
-    let state = s.active().ok_or(EngineError::NoDocument)?;
-    let doc = state.doc();
+pub fn relink_sample_order(s: &Session, id: LayerId, candidate: &[u8]) -> Result<Option<HistoricalXcfSampleOrder>> {
+    relink_order(s.active().ok_or(EngineError::NoDocument)?.doc(), id, candidate)
+}
+
+fn relink_order(doc: &Document, id: LayerId, candidate: &[u8]) -> Result<Option<HistoricalXcfSampleOrder>> {
     let old = smart(doc, id)?;
     let Some(order) = old.historical_xcf_sample_order else { return Ok(None) };
     let same = if let Some(digest) = old.historical_xcf_link_digest {
@@ -41,26 +45,36 @@ pub(super) fn relink_to_file(s: &mut Session, p: &Value) -> Result<Value> {
         .transpose()?;
     let path = path_param(RELINK, p)?.to_string();
     let id = layer_param(s, p)?;
-    let state = s.active().ok_or(EngineError::NoDocument)?;
-    let needs_identity = explicit.map_or_else(|| smart(state.doc(), id).map(|old| old.historical_xcf_sample_order.is_some()), |order| Ok(order.is_some()))?;
-    let (order, digest) = if needs_identity || expected.is_some() {
-        let resolved = crate::doc_path::resolve(&path).map_err(|error| crate::doc_path::refusal("link", &path, error))?;
-        let bytes = photocraft_format::read_file(&resolved).map_err(|error| other(format!("can't read {path}: {error}")))?;
-        let digest = photocraft_io::linked::historical_xcf_digest(&bytes);
-        if expected.is_some_and(|expected| expected != digest) {
-            return Err(other("the linked source changed after it was picked; select it again"));
-        }
-        let order = match explicit {
-            Some(explicit) => explicit,
-            None => relink_sample_order(s, id, &bytes)?,
-        };
-        let order = photocraft_io::applicable_historical_xcf_sample_order(&path, &bytes, order, &photocraft_raster::Interrupt::NONE)
-            .map_err(|error| other(error.to_string()))?;
-        (order, order.map(|_| digest))
-    } else {
-        (None, None)
-    };
-    set_shared_source(s, id, "Relink to File", false, SmartSource::Linked { path }, order, digest)
+    let snapshot = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
+    let needs_identity = explicit.unwrap_or(smart(&snapshot, id)?.historical_xcf_sample_order).is_some();
+    let label = "Relink to File";
+    crate::jobs::run(
+        s,
+        label,
+        true,
+        move |ctx| {
+            let (order, digest) = if needs_identity || expected.is_some() {
+                ctx.check()?;
+                let resolved = crate::doc_path::resolve(&path).map_err(|error| crate::doc_path::refusal("link", &path, error))?;
+                let bytes = photocraft_format::read_file(&resolved).map_err(|error| other(format!("can't read {path}: {error}")))?;
+                ctx.check()?;
+                let digest = photocraft_io::linked::historical_xcf_digest(&bytes);
+                if expected.is_some_and(|expected| expected != digest) {
+                    return Err(other("the linked source changed after it was picked; select it again"));
+                }
+                let order = match explicit {
+                    Some(explicit) => explicit,
+                    None => relink_order(&snapshot, id, &bytes)?,
+                };
+                let order = picked_order(&path, &bytes, order, ctx)?;
+                (order, order.map(|_| digest))
+            } else {
+                (None, None)
+            };
+            prepare_source_change(&snapshot, id, SourceChange { source: SmartSource::Linked { path }, order, digest }, ctx)
+        },
+        move |s, updated| publish_source_change(s, id, label, updated),
+    )
 }
 
 /// Swaps shared contents, keeping each instance's transform and filters, and re-renders.
@@ -95,30 +109,95 @@ fn set_shared_source(
     historical_xcf_sample_order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
     historical_xcf_link_digest: Option<[u8; 32]>,
 ) -> Result<Value> {
-    let (parent, contents_id, changed, warnings) = s.edit(label, |doc, _| {
-        let contents_id = smart(doc, id)?.contents_id;
-        let changed = instances(doc, contents_id);
-        let mut warnings = std::collections::BTreeSet::new();
-        for &instance in &changed {
-            let sm = smart_mut(doc, instance)?;
-            sm.source = new.clone();
-            sm.historical_xcf_sample_order = historical_xcf_sample_order;
-            sm.historical_xcf_link_digest = historical_xcf_link_digest;
-            if !keep_psd {
-                detach_psd(doc.layer_mut(instance).ok_or(EngineError::NoLayer(instance))?);
-            }
-            warnings
-                .extend(unapplied_filters(smart(doc, instance)?).into_iter().map(|n| format!("the {n} smart filter is not supported, so it was not applied")));
-            refresh_or_fail(doc, instance)?;
+    let change = SourceChange { source: new, order: historical_xcf_sample_order, digest: historical_xcf_link_digest };
+    let change = s.edit(label, |doc, _| apply_source_change(doc, id, keep_psd, &change, &JobCtx::new()))?;
+    Ok(report_source_change(s, id, change))
+}
+
+struct SourceChange {
+    source: SmartSource,
+    order: Option<HistoricalXcfSampleOrder>,
+    digest: Option<[u8; 32]>,
+}
+
+struct ChangedInstances {
+    parent: DocId,
+    contents_id: SmartContentsId,
+    layers: Vec<LayerId>,
+    warnings: std::collections::BTreeSet<String>,
+}
+
+fn apply_source_change(doc: &mut Document, id: LayerId, keep_psd: bool, change: &SourceChange, ctx: &JobCtx) -> Result<ChangedInstances> {
+    let contents_id = smart(doc, id)?.contents_id;
+    let layers = instances(doc, contents_id);
+    let mut warnings = std::collections::BTreeSet::new();
+    for &layer in &layers {
+        ctx.check()?;
+        let sm = smart_mut(doc, layer)?;
+        sm.source = change.source.clone();
+        sm.historical_xcf_sample_order = change.order;
+        sm.historical_xcf_link_digest = change.digest;
+        if !keep_psd {
+            detach_psd(doc.layer_mut(layer).ok_or(EngineError::NoLayer(layer))?);
         }
-        Ok((doc.id, contents_id, changed, warnings))
-    })?;
+        warnings.extend(unapplied_filters(smart(doc, layer)?).into_iter().map(|n| format!("the {n} smart filter is not supported, so it was not applied")));
+        refresh_or_fail_in(doc, layer, ctx)?;
+    }
+    Ok(ChangedInstances { parent: doc.id, contents_id, layers, warnings })
+}
+
+fn report_source_change(s: &mut Session, id: LayerId, change: ChangedInstances) -> Value {
+    let ChangedInstances { parent, contents_id, layers, warnings } = change;
     // An old editor must not overwrite newly replaced/relinked contents on close. Keep its
     // document open, but the next Edit Contents opens the replacement source.
     s.smart_links.retain(|l| l.parent != parent || l.contents_id != contents_id);
     // Every instance changed, not only `layer`: list them, so a caller doesn't repeat the
     // command once per copy (#4075).
-    Ok(json!({"layer": id.0, "instances": changed.iter().map(|l| l.0).collect::<Vec<_>>(), "warnings": warnings}))
+    json!({"layer": id.0, "instances": layers.iter().map(|l| l.0).collect::<Vec<_>>(), "warnings": warnings})
+}
+
+/// Finish a picker-confirmed source change on a native worker. Publish the refreshed
+/// document and invalidate old Edit Contents children only after successful rendering.
+pub fn start_picked_replacement(s: &mut Session, id: LayerId, name: String, bytes: Vec<u8>, order: Option<HistoricalXcfSampleOrder>) -> Result<Started> {
+    let command = "layer.smartObjects.replaceContents";
+    if let Some(conflict) = s.job_conflict(command, true) {
+        return Err(other(conflict));
+    }
+    let label = "Replace Contents";
+    let snapshot = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
+    smart(&snapshot, id)?;
+    s.start_job(
+        command,
+        json!({"layer":id.0,"historicalXcfSampleOrder":order}),
+        label,
+        true,
+        move |ctx| {
+            let order = picked_order(&name, &bytes, order, ctx)?;
+            let source = SmartSource::Embedded { file_name: name, bytes: Arc::new(bytes) };
+            prepare_source_change(&snapshot, id, SourceChange { source, order, digest: None }, ctx)
+        },
+        move |s, updated| publish_source_change(s, id, label, updated),
+    )
+}
+
+fn picked_order(name: &str, bytes: &[u8], order: Option<HistoricalXcfSampleOrder>, ctx: &JobCtx) -> Result<Option<HistoricalXcfSampleOrder>> {
+    ctx.stage(0., 0.05, "Reading source", |ctl| photocraft_io::applicable_historical_xcf_sample_order(name, bytes, order, ctl))
+        .map_err(|error| crate::error::io_open_error(name, error))
+}
+
+fn prepare_source_change(snapshot: &Document, id: LayerId, change: SourceChange, ctx: &JobCtx) -> Result<(Document, ChangedInstances)> {
+    let mut doc = snapshot.clone();
+    let changed = apply_source_change(&mut doc, id, false, &change, ctx)?;
+    ctx.check()?;
+    Ok((doc, changed))
+}
+
+fn publish_source_change(s: &mut Session, id: LayerId, label: &str, (updated, changed): (Document, ChangedInstances)) -> Result<Value> {
+    s.edit(label, move |doc, _| {
+        *doc = updated;
+        Ok(())
+    })?;
+    Ok(report_source_change(s, id, changed))
 }
 
 pub(super) fn replace_contents(s: &mut Session, p: &Value) -> Result<Value> {
@@ -157,7 +236,10 @@ fn replace_contents_bytes_with_order(
 
 /// The file name and bytes of smart object `id`'s contents.
 pub fn contents_of(doc: &Document, id: LayerId) -> Result<(String, Arc<Vec<u8>>)> {
-    source_bytes(&doc.metadata, &smart(doc, id)?.source).ok_or_else(|| other("the smart object's contents are unavailable"))
+    let object = smart(doc, id)?;
+    let (name, bytes) = source_bytes(&doc.metadata, &object.source).ok_or_else(|| other("the smart object's contents are unavailable"))?;
+    photocraft_io::linked::check_historical_xcf_digest(object.historical_xcf_link_digest, &bytes).map_err(other)?;
+    Ok((name, bytes))
 }
 
 /// Writes the smart object's file as it is. To a path with another extension (a `.png` for
@@ -179,7 +261,6 @@ pub(super) fn export_contents(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({"path": path, "fileName": name, "bytes": bytes.len(), "converted": false}));
     }
     let source = smart(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
-    photocraft_io::linked::check_historical_xcf_digest(source.historical_xcf_link_digest, &bytes).map_err(other)?;
     let contents = decode_source_with_order(&name, &bytes, source.historical_xcf_sample_order)?;
     let r = photocraft_io::export(&contents, path, &photocraft_io::ExportOptions { read_linked_files: s.authorize.is_none(), ..Default::default() })
         .map_err(|e| other(format!("can't export the contents as {}: {e}", base_name(path))))?;

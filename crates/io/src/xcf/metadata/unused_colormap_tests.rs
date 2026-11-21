@@ -204,6 +204,35 @@ fn overlapping_non_end_headers_keep_the_real_resolution_and_drawable_tables() {
 }
 
 #[test]
+fn legacy_palette_lookahead_understands_versioned_custom_units() {
+    use crate::xcf::tests::W;
+    for version in [11, 20, 21, 26] {
+        let mut image = TestImage::rgb8(1, 1);
+        image.version = version;
+        image.image_props.push((1, vec![0, 0, 0, 2, 255, 64, 0, 0, 0, 17]));
+        let mut unit = W { out: Vec::new(), wide: false };
+        unit.u32(1f32.to_bits());
+        unit.u32(2);
+        for value in ["unit", "u", "unit-symbol"].into_iter().chain(["units", "unit singular"].into_iter().take(if version < 21 { 2 } else { 0 })) {
+            unit.string(value);
+        }
+        image.image_props.push((24, unit.out));
+        image.image_props.push((19, [240f32.to_be_bytes(); 2].concat()));
+        image.layers.push(TestLayer::rgba("Visible", 1, 1, vec![17, 31, 57, 255]));
+        let mut source = image.write();
+        let palette_length = 30 + 9 + 4;
+        source[palette_length..palette_length + 4].copy_from_slice(&6u32.to_be_bytes());
+        let unit_length = 30 + 9 + 8 + 10 + 4;
+        source[unit_length..unit_length + 4].copy_from_slice(&4u32.to_be_bytes());
+        let imported = crate::import("palette-unit.xcf", &source).unwrap();
+        assert_eq!(imported.document.resolution_dpi, 240.);
+        assert_eq!(imported.document.layers[0].surface().unwrap().pixel(0, 0), [17. / 255., 31. / 255., 57. / 255., 1.]);
+        let wrapped = crabz2::compress(&source, crabz2::Level::default());
+        assert_eq!(crate::xcf::source_geometry("palette-unit.xcf.bz2", &wrapped, &photocraft_raster::Interrupt::NONE).unwrap(), Some(((1., 1.), 240.)));
+    }
+}
+
+#[test]
 fn palette_lookahead_skips_large_properties_without_accepting_empty_tables_inside_them() {
     use photocraft_doc::{Document, Layer, LayerContent, SmartObject, SmartSource};
     use photocraft_geom::Affine;

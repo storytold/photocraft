@@ -1784,12 +1784,20 @@ fn import_vectors(document: &mut Document, image: &mut Image<'_>, ctl: &Interrup
         image.meta_budget = remaining;
         vector.shape.path = path.path.clone();
         let layer = document.layer_mut(id).ok_or_else(|| invalid("missing native vector target"))?;
-        layer.content = LayerContent::Shape(vector.shape);
+        // Keep the already-budgeted appearance until the editable shape is changed.
+        let previous = std::mem::replace(&mut layer.content, LayerContent::Shape(vector.shape));
+        if let LayerContent::Shape(shape) = &mut layer.content {
+            shape.cache = match previous {
+                LayerContent::Raster(pixels) => Some(pixels),
+                LayerContent::Text(text) => text.cache,
+                _ => None,
+            };
+        }
         image.outcomes.notice(
             outcome,
             "xcf.vector_layer",
             ConversionReason::NativePolicy,
-            ("Saved vector geometry and paint".into(), "Native editable shape; PhotoCraft fill/stroke, geometry editing and rasterization apply".into()),
+            ("Saved vector geometry and paint".into(), "Native editable shape with saved appearance. PhotoCraft rasterizes subsequent edits".into()),
             Some("opens as an editable native shape"),
             &mut image.warnings,
         )?;

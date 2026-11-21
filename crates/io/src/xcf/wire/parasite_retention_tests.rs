@@ -181,7 +181,7 @@ fn editable_text_after_unknown_layer_parasites_is_not_lost_to_collection_limits(
     let photocraft_doc::LayerContent::Text(text) = &result.document.layers[0].content else { panic!("unknown source names must not force pixel fallback") };
     assert_eq!(text.text, "final");
     assert_eq!(text.runs[0].style.color.alpha, 0.5);
-    assert!(text.cache.is_none());
+    assert_eq!(text.cache.as_ref().unwrap().pixel(0, 0), [17. / 255., 31. / 255., 57. / 255., 1.]);
 }
 #[test]
 fn assigned_icc_after_a_flood_is_preserved_and_header_scan_cancels_during_records() {

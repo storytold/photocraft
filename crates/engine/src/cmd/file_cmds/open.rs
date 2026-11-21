@@ -55,34 +55,35 @@ pub(crate) fn import_opened(s: &Session, name: &str, bytes: &[u8]) -> Result<Doc
 }
 
 pub(super) fn import_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8]) -> Result<Document> {
-    import_source_at_raw_ppi(raw_ppi, name, bytes).map(|(doc, _)| doc)
+    import_source_at_raw_ppi(raw_ppi, name, bytes, &Default::default()).map(|(doc, _)| doc)
 }
 
 /// [`import_at_raw_ppi`], also telling whether the source must not be replaced by a save
 /// (`ImportResult::source_read_only`: Affinity, Krita, XCF, PDN, whatever its extension says).
-pub(super) fn import_source_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8]) -> Result<(Document, bool)> {
-    let r = import_result(name, bytes)?;
+pub(super) fn import_source_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<(Document, bool)> {
+    let r = import_result_with(name, bytes, opts)?;
     let mut doc = r.document;
     raw_resolution(raw_ppi, &r.warnings, &mut doc);
     Ok((doc, r.source_read_only))
-}
-
-fn import_result(name: &str, bytes: &[u8]) -> Result<photocraft_io::ImportResult> {
-    import_result_with(name, bytes, &photocraft_io::ImportOptions::default())
 }
 
 /// The one import path every caller shares: allocation checkpoint, native `.pcraft` and format
 /// dispatch through `photocraft_io::import_with_options`, typed memory refusals, and the
 /// preview-only refusal wherever the import came from.
 pub(super) fn import_result_with(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<photocraft_io::ImportResult> {
-    import_result_for_open(name, bytes, opts).map(|(r, _)| r)
+    import_result_for_open(name, bytes, opts, &photocraft_raster::Interrupt::NONE).map(|(r, _)| r)
 }
 
 /// [`import_result_with`], also telling whether a PSD/PSB had damaged data it recovered from, as
 /// File › Open's job learns it (`photocraft_io::import_for_open`), so an interactive caller can ask.
-pub(super) fn import_result_for_open(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<(photocraft_io::ImportResult, bool)> {
+pub(crate) fn import_result_for_open(
+    name: &str,
+    bytes: &[u8],
+    opts: &photocraft_io::ImportOptions,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<(photocraft_io::ImportResult, bool)> {
     crate::allocation::checkpoint("importing document")?;
-    let (r, damaged) = photocraft_io::import_for_open(name, bytes, opts).map_err(|e| crate::error::io_open_error(name, e))?;
+    let (r, damaged) = photocraft_io::import_for_open_with(name, bytes, opts, ctl).map_err(|e| crate::error::io_open_error(name, e))?;
     // Auxiliary imports return only a document and cannot surface the preview's fidelity warning.
     // Open has its own warning-preserving path; never silently place or process a thumbnail.
     if r.preview_only {

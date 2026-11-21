@@ -1,4 +1,3 @@
-use super::open::import_at_raw_ppi;
 use super::paths::{extension, file_name, join, list_files, list_images, read_file, sanitize, stem, write_file};
 use super::processing::parse_steps;
 use super::save::{SaveOpts, encode, save_doc, save_doc_as};
@@ -140,7 +139,7 @@ pub(crate) fn process_files(
     f: &dyn Fn(&mut Session) -> Result<()>,
 ) -> Value {
     let inputs: Vec<BatchInput> = inputs.iter().map(|path| BatchInput { path: path.clone(), rel_dir: String::new() }).collect();
-    process_tree(s, &inputs, output, format, save, TreeNaming::Suffix(suffix), &|scratch, _| f(scratch).map(|()| false))
+    process_tree(s, (&inputs, None), output, format, save, TreeNaming::Suffix(suffix), &|scratch, _| f(scratch).map(|()| false))
 }
 
 pub(super) enum TreeNaming<'a> {
@@ -154,7 +153,7 @@ pub(super) enum TreeNaming<'a> {
 /// recorded save marked); otherwise the active document is saved after it.
 pub(super) fn process_tree(
     s: &Session,
-    inputs: &[BatchInput],
+    (inputs, order): (&[BatchInput], Option<photocraft_io::HistoricalXcfSampleOrder>),
     output: &str,
     format: &str,
     save: SaveOpts,
@@ -169,7 +168,7 @@ pub(super) fn process_tree(
         let ext = if format == "same" { same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
         (path.as_str(), join(&join(output, rel_dir), &format!("{}{suffix}.{ext}", stem(path))))
     });
-    process_outputs(s, outputs, save, unique, f)
+    process_outputs(s, outputs, save, unique, order, f)
 }
 
 /// The extension a batch output takes with Format "Same": the input's own, except for formats
@@ -268,6 +267,7 @@ fn process_outputs<'a>(
     outputs: impl IntoIterator<Item = (&'a str, String)>,
     save: SaveOpts,
     unique: bool,
+    order: Option<photocraft_io::HistoricalXcfSampleOrder>,
     f: &dyn Fn(&mut Session, &str) -> Result<bool>,
 ) -> Value {
     // The scratch sessions have default preferences; a raw opens at the user's Raw Defaults.
@@ -284,7 +284,7 @@ fn process_outputs<'a>(
         f(scratch, out).map_err(FileFailure::from)
     };
     for (path, out) in outputs {
-        let options = ProcessOptions { format: None, written: (!unique).then_some(&written), ctx: None, input: None, unique };
+        let options = ProcessOptions { format: None, written: (!unique).then_some(&written), ctx: None, input: None, order, unique };
         let r = process_one(raw_ppi, path, &out, save, options, &run);
         match r {
             Ok(Some(PublishedOutput { path: out, warning })) => {
@@ -346,7 +346,7 @@ pub(super) fn process_document_copies(
         let notices = std::cell::RefCell::new(Vec::new());
         let input = InputPolicy { prepare: &prepare, notices: &notices };
         let run = |scratch: &mut Session, out: &str| f(scratch, out).map_err(FileFailure::from);
-        let options = ProcessOptions { format: Some(&ext), written: Some(&written), ctx: None, input: Some(&input), unique: false };
+        let options = ProcessOptions { format: Some(&ext), written: Some(&written), ctx: None, input: Some(&input), order: None, unique: false };
         match process_one(s.prefs().raw_defaults.resolution, &path, &out, save, options, &run) {
             Ok(_) => {
                 written.record(&out, &path);
@@ -368,6 +368,7 @@ struct ProcessOptions<'a> {
     written: Option<&'a OutputClaims>,
     ctx: Option<&'a crate::jobs::JobCtx>,
     input: Option<&'a InputPolicy<'a>>,
+    order: Option<photocraft_io::HistoricalXcfSampleOrder>,
     unique: bool,
 }
 
@@ -390,7 +391,8 @@ fn process_one(
             (input.prepare)(&mut scratch, path)?;
         } else {
             let bytes = read_file(path)?;
-            let doc = import_at_raw_ppi(raw_ppi, &file_name(path), &bytes)?;
+            let opts = photocraft_io::ImportOptions { historical_xcf_sample_order: options.order, ..Default::default() };
+            let (doc, _) = super::open::import_source_at_raw_ppi(raw_ppi, &file_name(path), &bytes, &opts)?;
             scratch.add_document(doc, Some(path.to_string()));
         }
         if let Some(ctx) = options.ctx {
@@ -644,7 +646,7 @@ fn process_batch_outputs_with(
             path,
             out,
             save,
-            ProcessOptions { format: Some(format), written: check_duplicates.then_some(&written), ctx: Some(ctx), input, unique: false },
+            ProcessOptions { format: Some(format), written: check_duplicates.then_some(&written), ctx: Some(ctx), input, order: None, unique: false },
             f,
         );
         if result.is_ok() {
@@ -798,6 +800,7 @@ pub(crate) fn batch_action(list: &[crate::actions_cmds::Action], p: &Value) -> R
 pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
     check_batch_depth(s, cmd)?;
+    let historical_xcf_sample_order = super::open::historical_xcf_sample_order(p, cmd)?;
     let quiet_raw = match p.get("suppressOpenOptions") {
         None | Some(Value::Null) => false,
         Some(Value::Bool(value)) => *value,
@@ -1081,10 +1084,13 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                 } else {
                     let bytes = read_file(path)?;
                     if quiet_profiles || quiet_raw {
-                        super::open::open_bytes_as(scratch, &file_name(path), &bytes, None, Some(path.to_string()))?;
+                        let mut opts = crate::jobs::import_options(scratch.prefs());
+                        opts.historical_xcf_sample_order = historical_xcf_sample_order;
+                        super::open::open_bytes_as_with_import_options(scratch, &file_name(path), &bytes, None, Some(path.to_string()), &opts)?;
                         read_only_source.set(scratch.active().is_some_and(|state| state.source_read_only));
                     } else {
-                        let (doc, read_only) = super::open::import_source_at_raw_ppi(raw_ppi, &file_name(path), &bytes)?;
+                        let opts = photocraft_io::ImportOptions { historical_xcf_sample_order, ..Default::default() };
+                        let (doc, read_only) = super::open::import_source_at_raw_ppi(raw_ppi, &file_name(path), &bytes, &opts)?;
                         read_only_source.set(read_only);
                         scratch.add_document(doc, Some(path.to_string()));
                     }

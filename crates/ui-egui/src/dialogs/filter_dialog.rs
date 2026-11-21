@@ -670,6 +670,9 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
     if command == crate::dialogs::image_processor_ui::COMMAND {
         crate::dialogs::image_processor_ui::nest(&mut map);
     }
+    if map.get("historicalXcfSampleOrder").and_then(Value::as_str) == Some("") {
+        map.remove("historicalXcfSampleOrder");
+    }
     params_of(&map)
 }
 

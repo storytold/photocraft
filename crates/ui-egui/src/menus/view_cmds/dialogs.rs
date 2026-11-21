@@ -407,6 +407,7 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
             ),
             folder("input", tl!("Input Folder"), dir.clone()).visible_when("source", "folder"),
             Param::new("includeSubfolders", tl!("Include All Subfolders"), ParamKind::bool(false)).visible_when("source", "folder"),
+            historical_xcf_order_choice(),
             folder("output", tl!("Output Folder"), format!("{dir}/processed")),
             Param::section(tl!("File Type")),
             // One section per format: the checkbox that enables it, then its own options and size.
@@ -493,6 +494,7 @@ fn batch_form(app: &PhotocraftApp, dir: &str) -> Option<(Vec<Param>, DialogField
         choice("source", tl!("Source"), opts(&[("folder", tl!("Folder")), ("open", tl!("Opened Files"))]), "folder"),
         folder("input", tl!("Input Folder"), dir),
         Param::new("includeSubfolders", tl!("Include All Subfolders"), ParamKind::bool(false)),
+        historical_xcf_order_choice(),
         folder("output", tl!("Output Folder"), format!("{dir}/batch")),
         choice(
             "format",
@@ -515,6 +517,16 @@ fn batch_form(app: &PhotocraftApp, dir: &str) -> Option<(Vec<Param>, DialogField
         Param::new("errorLog", tl!("Error Log"), ParamKind::text("")),
     ]);
     Some((rows, DialogFields::new()))
+}
+
+fn historical_xcf_order_choice() -> Param {
+    choice(
+        "historicalXcfSampleOrder",
+        tl!("Historical XCF Sample Order"),
+        opts(&[("", tl!("Unspecified")), ("little-endian", tl!("Little-endian")), ("big-endian", tl!("Big-endian"))]),
+        "",
+    )
+    .visible_when("source", "folder")
 }
 
 /// The channel workflow forms (see channels_panel.rs for the channel references): Save and Load Selection, Apply

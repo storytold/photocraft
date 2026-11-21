@@ -89,8 +89,7 @@ fn source_error(name: &str, error: IoError) -> crate::EngineError {
 fn prepare(path: String, bytes: Arc<Vec<u8>>, options: ImportOptions, confirm_damage: bool, ctx: &JobCtx) -> Result<Ready> {
     ctx.check()?;
     let file = file_name(&path);
-    ctx.progress(0.05, "Decoding");
-    let (result, damaged) = import_result_for_open(&file, &bytes, &options)?;
+    let (result, damaged) = ctx.stage(0.05, 0.9, "Decoding", |ctl| import_result_for_open(&file, &bytes, &options, ctl))?;
     let historical_xcf_sample_order = ctx
         .stage(0.9, 0.91, "Flattening", |ctl| photocraft_io::applicable_historical_xcf_sample_order(&file, &bytes, options.historical_xcf_sample_order, ctl))
         .map_err(|error| source_error(&file, error))?;

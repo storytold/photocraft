@@ -64,6 +64,7 @@ struct Held {
 pub(crate) struct Pending {
     next: u64,
     held: Vec<Held>,
+    applying: Option<JobId>,
 }
 
 impl Pending {
@@ -71,7 +72,11 @@ impl Pending {
         self.held.len()
     }
     pub(crate) fn is_empty(&self) -> bool {
-        self.held.is_empty()
+        self.held.is_empty() && !self.applying()
+    }
+
+    pub(crate) fn applying(&self) -> bool {
+        self.applying.is_some()
     }
 }
 
@@ -232,6 +237,23 @@ fn finish_probe(app: &mut PhotocraftApp, id: u64, value: &Value) -> Result<(), S
 }
 
 pub(crate) fn on_event(app: &mut PhotocraftApp, event: &JobEvent) -> bool {
+    if app.historical_replacements.applying == Some(event.id) {
+        app.historical_replacements.applying = None;
+        app.sync_views();
+        match &event.outcome {
+            JobOutcome::Done(_) => {
+                app.ui.status = event.label.clone();
+                app.ui.status_error = false;
+            }
+            JobOutcome::Failed(error) => super::alerts::report_error(app, error.clone()),
+            JobOutcome::Cancelled => {
+                app.ui.status = crate::i18n::fmt(tl!("Canceled {label}"), &[("label", &event.label)]);
+                app.ui.status_error = false;
+            }
+        }
+        crate::open_prompt::advance(app);
+        return true;
+    }
     let Some(id) = app.historical_replacements.held.iter().find(|held| held.job == Some(event.id)).map(|held| held.id) else { return false };
     let result = match &event.outcome {
         JobOutcome::Done(value) => finish_probe(app, id, value),
@@ -248,6 +270,9 @@ pub(crate) fn on_event(app: &mut PhotocraftApp, event: &JobEvent) -> bool {
 }
 
 pub(crate) fn cancel_all(app: &mut PhotocraftApp) {
+    if let Some(job) = app.historical_replacements.applying.take() {
+        app.session.cancel_job(job);
+    }
     for held in app.historical_replacements.held.drain(..) {
         if let Some(job) = held.job {
             app.session.cancel_job(job);
@@ -284,10 +309,28 @@ fn apply_source(
     let result = app.with_document(target.doc, |app| {
         if matches!(action, Action::Relink(_)) {
             let expected = order.map(|_| photocraft_io::linked::historical_xcf_digest(&bytes));
-            return app.run(
+            let result = app.run(
                 "layer.smartObjects.relinkToFile",
                 json!({"layer":target.layer.0,"path":name,"historicalXcfSampleOrder":order,"expectedSourceDigest":expected}),
-            );
+            )?;
+            if result["pending"].as_bool() == Some(true) {
+                app.historical_replacements.applying = result["job"].as_u64().map(JobId);
+            }
+            return Ok(result);
+        }
+        if app.background_jobs && !cfg!(target_arch = "wasm32") {
+            let started = photocraft_engine::smart_cmds::start_picked_replacement(&mut app.session, target.layer, name.to_owned(), bytes, order)
+                .map_err(|error| error.to_string())?;
+            return Ok(match started {
+                Started::Job(id) => {
+                    app.historical_replacements.applying = Some(id);
+                    app.jobs.last_started = Some(id);
+                    app.ui.status.clear();
+                    app.ui.status_error = false;
+                    json!({"job":id.0,"pending":true})
+                }
+                Started::Done(value) => value,
+            });
         }
         photocraft_engine::smart_cmds::replace_contents_from_bytes(
             &mut app.session,

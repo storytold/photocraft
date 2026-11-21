@@ -25,7 +25,7 @@ pub fn stack_image_with_order(
     mode: photocraft_doc::StackMode,
     order: Option<HistoricalXcfSampleOrder>,
 ) -> Result<SourceImage> {
-    stack_image_classified(file_name, bytes, fmt, mode, None, order)
+    stack_image_classified(file_name, bytes, fmt, mode, None, order, &photocraft_raster::Interrupt::NONE)
 }
 
 fn stack_image_classified(
@@ -35,7 +35,9 @@ fn stack_image_classified(
     mode: photocraft_doc::StackMode,
     svg: Option<bool>,
     order: Option<HistoricalXcfSampleOrder>,
+    ctl: &photocraft_raster::Interrupt<'_>,
 ) -> Result<SourceImage> {
+    ctl.check().map_err(|_| EngineError::Cancelled)?;
     use photocraft_algo::stack::Stat;
     let mut key = source_cache_key(file_name, bytes, fmt, svg, order);
     // Use a separate domain from entries that predate plain SVG completeness checks.
@@ -44,7 +46,7 @@ fn stack_image_classified(
         return Ok(img);
     }
     let svg = svg.unwrap_or_else(|| photocraft_io::svg::is_svg(bytes));
-    let doc = super::decode_source_classified(file_name, bytes, svg, order)?;
+    let doc = super::decode_source_classified(file_name, bytes, svg, order, ctl)?;
     let layers: &[Layer] = match doc.layers.as_slice() {
         [only] if only.is_group() => only.children().unwrap_or_default(),
         all => all,
@@ -203,7 +205,9 @@ fn apply_smart_filter(f: &SmartFilter, sm: &SmartObject, cur: &Surface, canvas: 
 /// The source placed in document pixels, before any smart filter (uncached test oracle).
 #[cfg(test)]
 pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) -> Result<Surface> {
-    place_with_svg(name, bytes, doc, sm, photocraft_io::svg::is_svg(bytes), &mut |bytes, scale| svg_source_image_in(bytes, doc, scale))
+    place_with_svg(name, bytes, doc, sm, photocraft_io::svg::is_svg(bytes), &photocraft_raster::Interrupt::NONE, &mut |bytes, scale| {
+        svg_source_image_in(bytes, doc, scale)
+    })
 }
 
 fn place_with_svg(
@@ -212,6 +216,7 @@ fn place_with_svg(
     doc: &Document,
     sm: &SmartObject,
     is_svg: bool,
+    ctl: &photocraft_raster::Interrupt<'_>,
     svg: &mut impl FnMut(&[u8], f64) -> Result<SourceImage>,
 ) -> Result<Surface> {
     let fmt = doc.pixel_format();
@@ -237,10 +242,10 @@ fn place_with_svg(
     }
     let order = sm.historical_xcf_sample_order;
     let img = match sm.stack_mode {
-        Some(mode) if is_svg => convert_svg_source(stack_image_classified(name, bytes, PixelFormat::RGBA32F, mode, Some(is_svg), order)?, doc)?,
+        Some(mode) if is_svg => convert_svg_source(stack_image_classified(name, bytes, PixelFormat::RGBA32F, mode, Some(is_svg), order, ctl)?, doc)?,
         None if is_svg => svg(bytes, 1.0)?,
-        Some(mode) => stack_image_classified(name, bytes, fmt, mode, Some(is_svg), order)?,
-        None => source_image_classified(name, bytes, fmt, is_svg, order)?,
+        Some(mode) => stack_image_classified(name, bytes, fmt, mode, Some(is_svg), order, ctl)?,
+        None => source_image_classified(name, bytes, fmt, is_svg, order, ctl)?,
     };
     // The placed stage is unclipped: a large enough placement (an image scaled to fill a huge
     // frame) would otherwise fill memory before any allocation could fail.
@@ -350,8 +355,8 @@ pub(crate) fn source_box(doc: &Document, sm: &SmartObject) -> Option<[f64; 4]> {
     let order = sm.historical_xcf_sample_order;
     let r = match sm.stack_mode {
         None if is_svg => photocraft_io::svg::bounded_canvas_bounds(&bytes, 24_000_000).ok()?,
-        Some(mode) => stack_image_classified(&name, &bytes, fmt, mode, Some(is_svg), order).ok()?.bounds,
-        None => source_image_classified(&name, &bytes, fmt, is_svg, order).ok()?.bounds,
+        Some(mode) => stack_image_classified(&name, &bytes, fmt, mode, Some(is_svg), order, &photocraft_raster::Interrupt::NONE).ok()?.bounds,
+        None => source_image_classified(&name, &bytes, fmt, is_svg, order, &photocraft_raster::Interrupt::NONE).ok()?.bounds,
     };
     Some([f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1)])
 }
@@ -496,7 +501,7 @@ pub(crate) fn render_with_warnings_using(sm: &SmartObject, sources: &mut Warning
         return Err(other("the smart object has unsupported visible filters"));
     }
     let mut warnings = Vec::new();
-    let placed = place_with_svg(&name, &bytes, doc, sm, true, &mut |_, scale| {
+    let placed = place_with_svg(&name, &bytes, doc, sm, true, &photocraft_raster::Interrupt::NONE, &mut |_, scale| {
         let (image, omitted) = sources.image(&bytes, scale, name_key)?;
         warnings.extend(omitted);
         Ok(image)
@@ -517,7 +522,7 @@ fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapsho
         crate::jobs::authorize_render_command(&filter.command, &filter.params)?;
     }
     let Some((name, original)) = snapshot.or_else(|| source_bytes(&doc.metadata, &sm.source)) else { return Ok(None) };
-    photocraft_io::linked::check_historical_xcf_digest(sm.historical_xcf_link_digest, &original).map_err(other)?;
+    photocraft_io::linked::check_historical_xcf_digest(sm.historical_xcf_link_digest, &original).map_err(EngineError::HistoricalXcfLinkChanged)?;
     let bytes = display_source(sm, &original);
     let (fmt, canvas) = (doc.pixel_format(), doc.bounds());
     // Plain SVG uses the original strict vector path. Gzip sources use ordinary
@@ -534,7 +539,9 @@ fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapsho
         if let Some(stage) = stack_cache::get(&placed_key) {
             return Ok(stage);
         }
-        let surface = place_with_svg(&name, &bytes, doc, sm, is_svg, &mut |bytes, scale| svg_source_image_in(bytes, doc, scale))?;
+        let surface = ctx.stage(0., 0.8, "Rendering smart object source", |ctl| {
+            place_with_svg(&name, &bytes, doc, sm, is_svg, ctl, &mut |bytes, scale| svg_source_image_in(bytes, doc, scale))
+        })?;
         let stage = Stage { extent: canvas.union(&surface.content_bounds()), surface };
         stack_cache::put(placed_key, &stage);
         Ok(stage)

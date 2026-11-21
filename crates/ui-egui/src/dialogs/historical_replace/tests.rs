@@ -584,3 +584,30 @@ fn desktop_place_linked_refuses_a_file_changed_during_the_historical_prompt() {
     assert_eq!(active.history.past_len(), prior_history);
     assert!(app.prompt_order.is_empty());
 }
+
+#[test]
+fn accepted_historical_source_changes_run_as_cancellable_desktop_jobs() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("picked.xcf");
+    let bytes = fixture::historical_pixel(true);
+    std::fs::write(&path, &bytes).unwrap();
+    for command in [COMMAND, "layer.smartObjects.relinkToFile"] {
+        let pick = contents(path.to_str().unwrap(), bytes.clone());
+        let mut app = app(vec![Some(pick)], HistoricalXcfSampleOrder::BigEndian);
+        let before = app.session.active().unwrap().doc.clone();
+        let prior_history = app.session.active().unwrap().history.past_len();
+        crate::menus::invoke(&mut app, &egui::Context::default(), command, json!({})).unwrap();
+        app.poll_file_dialog();
+        app.poll_file_dialog();
+        app.background_jobs = true;
+        choose(&mut app, "little-endian");
+        let job = app.historical_replacements.applying.expect("accepted source change starts a job");
+        assert_eq!(app.session.job(job).unwrap().command, command);
+        assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+        assert!(app.session.cancel_job(job));
+        tick_probe(&mut app);
+        assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+        assert_eq!(app.session.active().unwrap().history.past_len(), prior_history);
+        assert!(app.historical_replacements.is_empty());
+    }
+}

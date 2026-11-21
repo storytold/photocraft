@@ -179,8 +179,11 @@ fn cubic_shape_fill_stroke_and_auxiliary_axes_use_native_geometry_and_rendering(
         // nominal zero primary. All geometry/style fields remain exact.
         let mut structural = shape.clone();
         structural.fill = expected.fill.clone();
+        structural.cache = None;
         assert_eq!(structural, expected);
-        assert!(shape.cache.is_none(), "source raster is never a native shape cache");
+        assert_eq!(shape.cache.as_ref().unwrap().pixel(-2, 3), [17. / 255., 31. / 255., 57. / 255., 1.]);
+        let composite = photocraft_compose::render(&doc, Rect::new(-2, 3, -1, 4));
+        assert_eq!(composite.px[0], [17. / 255., 31. / 255., 57. / 255., 1.]);
         assert_eq!(doc.paths[0].name, "曲線");
         assert_eq!(doc.paths[0].path, expected.path);
         assert_eq!(result.initial_view.unwrap().selected_path, Some(0));

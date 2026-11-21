@@ -144,7 +144,10 @@ mod synthetic {
         assert_eq!(text.text, "héλ");
         assert_eq!(text.font_family, "fixed");
         assert_eq!(text.size_pt, 20.);
-        assert!(text.cache.is_none());
+        assert_eq!(text.cache.as_ref().unwrap().pixel(0, 0), [7. / 255., 19. / 255., 31. / 255., 1.]);
+        let png = photocraft_io::export(&doc, "editable-text.png", &Default::default()).unwrap();
+        let pixels = photocraft_codecs::decode(&png.bytes).unwrap();
+        assert_eq!(&pixels.to_rgba8()[..4], &[7, 19, 31, 255]);
         assert!(imported.source_read_only && !imported.preview_only);
         assert!(doc.metadata.import_conversion.is_some());
         let saved = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
@@ -213,7 +216,7 @@ mod synthetic {
         };
         assert_eq!(text.text, "SNC");
         assert_eq!(text.runs.len(), 3);
-        assert!(text.cache.is_none(), "decoding native type does not require installed fonts or a baked glyph cache");
+        assert!(text.cache.is_some(), "editable type retains its saved appearance without installed fonts");
         // Independent X11 rgb.txt facts for the numbered names; unnumbered
         // Pango gray uses CSS128, not the X11 table's190 value.
         let expected = [[54., 100., 139.], [107., 107., 107.], [128., 128., 128.]];

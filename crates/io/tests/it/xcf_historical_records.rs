@@ -168,7 +168,7 @@ fn old_font_description_beats_stale_gdyntext_at_the_full_parasite_boundary() {
         drop(engine);
         assert_eq!(text.runs[0].style.weight, 700);
         assert!(text.runs[0].style.italic);
-        assert!(text.cache.is_none());
+        assert!(text.cache.is_some());
         roundtrip(&doc);
     }
 }

@@ -75,11 +75,18 @@ pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
 
 /// Decode with the persisted interpretation of historical XCF sample bytes, without inferring an order.
 pub fn decode_source_with_order(file_name: &str, bytes: &[u8], order: Option<photocraft_doc::HistoricalXcfSampleOrder>) -> Result<Document> {
-    decode_source_classified(file_name, bytes, photocraft_io::svg::is_svg(bytes), order)
+    decode_source_classified(file_name, bytes, photocraft_io::svg::is_svg(bytes), order, &photocraft_raster::Interrupt::NONE)
 }
 
 /// Reuse the central format decision made by this render operation.
-fn decode_source_classified(file_name: &str, bytes: &[u8], svg: bool, order: Option<photocraft_doc::HistoricalXcfSampleOrder>) -> Result<Document> {
+fn decode_source_classified(
+    file_name: &str,
+    bytes: &[u8],
+    svg: bool,
+    order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<Document> {
+    ctl.check().map_err(|_| EngineError::Cancelled)?;
     if svg {
         // This API has no warning channel. Stack/source caches and contents edits must not
         // turn a partial SVG import into silently complete smart-object contents.
@@ -88,7 +95,10 @@ fn decode_source_classified(file_name: &str, bytes: &[u8], svg: bool, order: Opt
             .map_err(|e| other(format!("can't read SVG smart object contents: {e}")));
     }
     let options = photocraft_io::ImportOptions { historical_xcf_sample_order: order, ..Default::default() };
-    crate::file_cmds::import_with_options(file_name, bytes, &options).map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))
+    crate::file_cmds::import_result_for_open(file_name, bytes, &options, ctl).map(|(result, _)| result.document).map_err(|e| match e {
+        EngineError::Cancelled => e,
+        e => other(format!("can't read smart object contents \"{file_name}\": {e}")),
+    })
 }
 
 fn base_name(path: &str) -> String {
@@ -203,7 +213,7 @@ mod rendering;
 mod source;
 
 pub(crate) use contents::on_close;
-pub use contents::{commit_child, contents_of, relink_sample_order, replace_contents_bytes, replace_contents_from_bytes};
+pub use contents::{commit_child, contents_of, relink_sample_order, replace_contents_bytes, replace_contents_from_bytes, start_picked_replacement};
 use contents::{edit_contents, export_contents, is_smart_child, path_param, relink_to_file, replace_contents, set_source, update_all};
 use filters::smart_mut;
 pub(crate) use filters::{add_smart_filter, add_smart_filter_in, filter_mask_paintable, filter_mask_surface, refresh_after_filter_mask_edit};

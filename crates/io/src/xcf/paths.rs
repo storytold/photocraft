@@ -169,7 +169,7 @@ fn stroke_dashes(mut dashes: Vec<f32>, width: f32) -> Result<(Vec<f32>, f32)> {
 /// PROP_VECTOR_LAYER style, separate from its named saved-path geometry.
 /// The caller resolves `path_tattoo` only against paths in the same source image.
 /// Modified vector pixels must remain a raster fallback rather than using this
-/// shape. Every successful shape starts without a source raster cache.
+/// shape. The importer attaches any saved pixels after binding the path.
 pub(super) fn vector_style(data: &[u8]) -> Result<VectorStyle> {
     #[cfg(test)]
     VECTOR_STYLE_DECODES.with(|count| count.set(count.get().saturating_add(1)));
@@ -730,9 +730,9 @@ mod tests {
             assert_eq!(reopened.paths[0], path.named);
         }
     }
-    /// Resolve vector style references only to paths in the same image and verify native Shape content starts without a source raster cache.
+    /// Bind vector references to paths in the same image and preserve the saved raster as the initial shape cache.
     #[test]
-    fn vector_layer_import_resolves_local_path_without_using_source_raster_cache() {
+    fn vector_layer_import_resolves_local_path_and_keeps_the_saved_appearance() {
         use super::super::tests::{TestImage, TestLayer};
         let mut path = Vec::new();
         for v in [1, 0, 1] {
@@ -772,7 +772,8 @@ mod tests {
                 continue;
             }
             let photocraft_doc::LayerContent::Shape(shape) = &doc.layers[0].content else { panic!("editable shape") };
-            assert!(shape.cache.is_none());
+            assert_eq!(shape.cache.as_ref().unwrap().pixel(0, 0), [200. / 255., 20. / 255., 100. / 255., 1.]);
+            assert_eq!(photocraft_compose::flatten(&doc).px[0], [200. / 255., 20. / 255., 100. / 255., 1.]);
             assert_eq!(shape.path, doc.paths[0].path);
             assert_eq!(shape.path.subpaths[0].knots[1].anchor, Point::new(20.0, -3.0));
             let saved = photocraft_format::save_to_bytes(&doc, &Default::default()).expect("save");

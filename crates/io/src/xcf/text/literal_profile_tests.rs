@@ -120,7 +120,7 @@ fn editable_text_and_vectors_use_internal_profile_without_inventing_an_assignmen
                     _ => None,
                 })
                 .expect("editable vector, not saved raster");
-            assert!(text.cache.is_none() && shape.cache.is_none());
+            assert!(text.cache.is_some() && shape.cache.is_some());
             assert_literal(text.runs[0].style.color, expected(&profile.bytes, mode, [0.25, 0.5, 0.75, 0.5]));
             let fill = expected(&profile.bytes, mode, [64. / 255., 128. / 255., 192. / 255., 128. / 255.]);
             let Some(Fill::Solid(actual_fill)) = &shape.fill else { panic!("solid vector fill") };

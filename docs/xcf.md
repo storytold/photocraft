@@ -16,6 +16,8 @@ For CLI Convert, Info, Run, and Batch, pass `--historical-xcf-sample-order littl
 and for headless MCP `doc_place` and `doc_replace_smart_object`.
 For desktop control `app.open`, use `historicalXcfSampleOrder`. Both parameters accept
 `"little-endian"` or `"big-endian"`.
+In the desktop Batch and Image Processor dialogs, use **Historical XCF Sample Order** for
+folder inputs. Choose **Unspecified** to leave files that require a choice as per-file errors.
 
 ## Decoder ownership
 

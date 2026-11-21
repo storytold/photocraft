@@ -267,7 +267,7 @@ pub(super) fn property_payload(
         // Both variants fit MAX_PAYLOAD because each individual string is bounded.
         (24, Some(version)) => {
             input.discard(8)?;
-            for _ in 0..if version < 21 { 5 } else { 3 } {
+            for _ in 0..custom_unit_strings(version) {
                 discard_property_string(input)?;
             }
             return Ok(0);
@@ -309,8 +309,8 @@ fn repair_palette_boundary(
         return Ok(true);
     }
 
-    let declared = palette_continuation(input, declared, ctl)?;
-    let repaired = palette_continuation(input, repaired, ctl)?;
+    let declared = palette_continuation(input, declared, version, ctl)?;
+    let repaired = palette_continuation(input, repaired, version, ctl)?;
     if let (Some(left), Some(right)) = (declared.end, repaired.end)
         && let Some(preference) = input.compare_palette_tables(left, right, version, ctl)?
     {
@@ -331,10 +331,15 @@ struct PaletteContinuation {
     invalid: bool,
 }
 
-fn palette_continuation(input: &mut impl PropertyInput, mut offset: usize, ctl: &photocraft_raster::Interrupt<'_>) -> Result<PaletteContinuation> {
+fn palette_continuation(
+    input: &mut impl PropertyInput,
+    mut offset: usize,
+    version: u32,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<PaletteContinuation> {
     let limit = input.palette_lookahead_limit();
     let mut continuation = PaletteContinuation::default();
-    for _ in 0..64 {
+    'properties: for _ in 0..64 {
         ctl.check().map_err(|_| super::IoError::Cancelled)?;
         if offset > limit.saturating_sub(8) {
             break;
@@ -353,9 +358,29 @@ fn palette_continuation(input: &mut impl PropertyInput, mut offset: usize, ctl: 
             }
             break;
         }
+        if kind == 24 {
+            // The size word does not delimit historical custom units.
+            let mut next = offset.saturating_add(16);
+            for _ in 0..custom_unit_strings(version) {
+                if next.saturating_add(4) > limit {
+                    break 'properties;
+                }
+                let Some(length) = input.peek(next, 4)?.and_then(be_u32).map(|n| n as usize) else {
+                    continuation.invalid = true;
+                    break 'properties;
+                };
+                if length > MAX_STRING {
+                    continuation.invalid = true;
+                    break 'properties;
+                }
+                next = next.saturating_add(4 + length);
+            }
+            offset = next;
+            continue;
+        }
         // These records have their own historical length rules. A probe that
         // cannot establish their framing gives no evidence against this boundary.
-        if matches!(kind, 1 | 24 | 48) {
+        if matches!(kind, 1 | 48) {
             break;
         }
         if length > MAX_PAYLOAD {
@@ -386,6 +411,10 @@ fn plausible_property(bytes: Option<&[u8]>) -> bool {
         (Some(1..=49), Some(n)) => n as usize <= MAX_PAYLOAD,
         _ => false,
     }
+}
+
+fn custom_unit_strings(version: u32) -> usize {
+    if version < 21 { 5 } else { 3 }
 }
 
 fn discard_property_string(input: &mut impl PropertyInput) -> Result<()> {

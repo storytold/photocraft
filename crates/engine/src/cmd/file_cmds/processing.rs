@@ -104,6 +104,7 @@ pub(super) fn parse_steps(v: &Value) -> Result<Vec<(String, Value)>> {
 /// return an error; processing failures and output-name collisions appear in per-file errors.
 pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = IMAGE_PROCESSOR;
+    let order = super::open::historical_xcf_sample_order(p, cmd)?;
     let source = match p.get("source") {
         None | Some(Value::Null) => "folder",
         Some(Value::String(source)) if matches!(source.as_str(), "folder" | "current" | "open") => source.as_str(),
@@ -111,7 +112,7 @@ pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let output = str_param(p, "output", cmd)?.to_string();
     if p.get("format").is_none() && ["jpeg", "psd", "tiff"].iter().any(|key| p.get(key).is_some()) {
-        return image_processor_formats(s, p, source, &output);
+        return image_processor_formats(s, p, source, &output, order);
     }
     let format = p.get("format").and_then(Value::as_str).unwrap_or("jpg");
     // The format becomes a filename extension, never a path supplied by a caller.
@@ -135,7 +136,7 @@ pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let r = if source == "folder" {
         let inputs = batch_inputs_tree(p, cmd, &output)?;
-        process_tree(s, &inputs, &output, format, save, TreeNaming::Unique, &process)
+        process_tree(s, (&inputs, order), &output, format, save, TreeNaming::Unique, &process)
     } else {
         let documents = if source == "current" { vec![s.active().ok_or(EngineError::NoDocument)?] } else { s.documents().iter().collect() };
         if documents.is_empty() {
@@ -210,7 +211,7 @@ enum ProcessorInputs<'a> {
     Documents(Vec<&'a crate::DocState>),
 }
 
-fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -> Result<Value> {
+fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str, order: Option<photocraft_io::HistoricalXcfSampleOrder>) -> Result<Value> {
     // Resolve all settings and collect inputs before a format can write any files.
     let mut formats = Vec::new();
     for (key, extension) in [("jpeg", "jpg"), ("psd", "psd"), ("tiff", "tif")] {
@@ -249,7 +250,7 @@ fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -
             Ok(false)
         };
         let mut result = match &inputs {
-            ProcessorInputs::Folder(inputs) => process_tree(s, inputs, output, format.extension, format.save, TreeNaming::Unique, &process),
+            ProcessorInputs::Folder(inputs) => process_tree(s, (inputs, order), output, format.extension, format.save, TreeNaming::Unique, &process),
             ProcessorInputs::Documents(documents) => process_document_copies(s, documents, output, format.extension, format.save, &process),
         };
         if let Some(Value::Array(written)) = result.get_mut("files").map(Value::take) {

@@ -193,6 +193,7 @@ impl Session {
             }
         }
         let mut updated = Vec::new();
+        let mut warnings = Vec::new();
         for (path, ids) in changed {
             let r = self.edit("Update Modified Content", |d, _| {
                 for id in &ids {
@@ -204,11 +205,13 @@ impl Session {
             });
             // Not readable (still being written, or not a format smart objects read): the edit left
             // nothing behind, and the file is tried again once it changes again, not on every look.
-            if r.is_ok() {
-                updated.extend(ids);
+            match r {
+                Ok(()) => updated.extend(ids),
+                Err(EngineError::HistoricalXcfLinkChanged(message)) => warnings.push(format!("{path}: {message}")),
+                Err(_) => {}
             }
         }
-        Ok(json!({"updated": updated}))
+        if warnings.is_empty() { Ok(json!({"updated": updated})) } else { Ok(json!({"updated": updated, "warnings": warnings})) }
     }
 }
 
@@ -265,6 +268,26 @@ mod tests {
 
     const RED: [f32; 3] = [1.0, 0.0, 0.0];
     const BLUE: [f32; 3] = [0.0, 0.0, 1.0];
+
+    #[test]
+    fn a_changed_historical_xcf_link_reports_relink_once_without_editing() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("source.xcf");
+        let bytes = crate::jobs::historical_xcf_fixture::historical_pixel(true);
+        std::fs::write(&path, bytes).unwrap();
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":1,"height":1})).unwrap();
+        s.execute("file.placeLinked", json!({"path":path,"historicalXcfSampleOrder":"little-endian"})).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
+        save(&path, &crate::jobs::historical_xcf_fixture::historical_pixel(false));
+        let result = s.execute("layer.smartObjects.updateChanged", json!({})).unwrap();
+        assert_eq!(result["updated"], json!([]));
+        assert_eq!(result["warnings"].as_array().unwrap().len(), 1);
+        assert!(result["warnings"][0].as_str().unwrap().contains("relink and choose"));
+        assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &before));
+        assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
+    }
 
     #[test]
     fn a_linked_smart_object_follows_its_file() {

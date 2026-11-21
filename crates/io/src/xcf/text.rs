@@ -289,7 +289,8 @@ fn style_allocation(style: &CharStyle) -> usize {
 /// Conservatively admit all owned native text allocations before replacing a saved raster.
 /// These decoders create no pixel cache or PSD payload; reject an unexpected one rather than undercount it.
 pub(super) fn retained_allocation(layer: &TextLayer) -> usize {
-    if layer.cache.is_some() || layer.psd_raw.is_some() {
+    // The saved raster moved into the initial cache is charged to the pixel budget.
+    if layer.psd_raw.is_some() {
         return usize::MAX;
     }
     let knots = |path: &photocraft_doc::vector::Subpath| path.knots.capacity().saturating_mul(std::mem::size_of::<photocraft_doc::vector::Knot>());

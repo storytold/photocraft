@@ -433,14 +433,19 @@ impl<'a> Image<'a> {
                         return self.text_retention_fallback(outcome);
                     };
                     self.meta_budget = remaining;
-                    layer.content = LayerContent::Text(decoded.layer);
+                    // The already-budgeted saved pixels are the initial document-space
+                    // cache. Native text edits refresh it using PhotoCraft typography.
+                    let previous = std::mem::replace(&mut layer.content, LayerContent::Text(decoded.layer));
+                    if let (LayerContent::Raster(pixels), LayerContent::Text(text)) = (previous, &mut layer.content) {
+                        text.cache = Some(pixels);
+                    }
                     self.outcomes.notice(
                         outcome,
                         "xcf.text",
                         ConversionReason::NativePolicy,
                         (
                             "Editable source text, typography and placement".into(),
-                            "Native editable text; PhotoCraft font matching, shaping and rasterization apply".into(),
+                            "Native editable text with saved appearance. PhotoCraft shapes and rasterizes subsequent edits".into(),
                         ),
                         Some("opens as editable native text with PhotoCraft typography"),
                         &mut self.warnings,

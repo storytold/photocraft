@@ -5,7 +5,7 @@ use photocraft_geom::TILE_SIZE;
 
 use super::{
     Arc, ColorMode, Document, Layer, LayerContent, LayerId, Metadata, Mutex, PixelFormat, Rect, Result, SampleType, Session, SmartObject, SmartSource, Surface,
-    base_name, decode_source_with_order, json, other,
+    base_name, json, other,
 };
 
 /// A linked file's bytes; `None` when it is missing or its path is not followed
@@ -379,7 +379,7 @@ pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat) -> Result<S
 
 /// Decode and cache only pixels produced with the requested historical XCF interpretation.
 pub fn source_image_with_order(file_name: &str, bytes: &[u8], fmt: PixelFormat, order: Option<HistoricalXcfSampleOrder>) -> Result<SourceImage> {
-    source_image_inner(file_name, bytes, fmt, None, order)
+    source_image_inner(file_name, bytes, fmt, None, order, &photocraft_raster::Interrupt::NONE)
 }
 
 pub(super) fn source_image_classified(
@@ -388,20 +388,26 @@ pub(super) fn source_image_classified(
     fmt: PixelFormat,
     svg: bool,
     order: Option<HistoricalXcfSampleOrder>,
+    ctl: &photocraft_raster::Interrupt<'_>,
 ) -> Result<SourceImage> {
-    source_image_inner(file_name, bytes, fmt, Some(svg), order)
+    source_image_inner(file_name, bytes, fmt, Some(svg), order, ctl)
 }
 
-fn source_image_inner(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: Option<bool>, order: Option<HistoricalXcfSampleOrder>) -> Result<SourceImage> {
+fn source_image_inner(
+    file_name: &str,
+    bytes: &[u8],
+    fmt: PixelFormat,
+    svg: Option<bool>,
+    order: Option<HistoricalXcfSampleOrder>,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<SourceImage> {
+    ctl.check().map_err(|_| crate::EngineError::Cancelled)?;
     let key = source_cache_key(file_name, bytes, fmt, svg, order);
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
     crate::memory_gate::ensure(&format!("render the smart object \u{201c}{file_name}\u{201d}"), crate::memory_gate::smart_render_need(bytes))?;
-    let doc = match svg {
-        Some(svg) => super::decode_source_classified(file_name, bytes, svg, order)?,
-        None => decode_source_with_order(file_name, bytes, order)?,
-    };
+    let doc = super::decode_source_classified(file_name, bytes, svg.unwrap_or_else(|| photocraft_io::svg::is_svg(bytes)), order, ctl)?;
     let img = SourceImage { surface: Arc::new(flattened_source(&doc, fmt)?), bounds: doc.bounds() };
     cache_put(key, img.clone());
     Ok(img)
@@ -438,9 +444,12 @@ mod tests {
         let raster = photocraft_codecs::Image::from_u8(1, 1, photocraft_codecs::ChannelLayout::Rgb, vec![13, 47, 91]).unwrap();
         let png = photocraft_codecs::encode(&raster, photocraft_codecs::Format::Png, &Default::default()).unwrap();
         let name = "source-classification-regression.png";
-        let first = source_image_classified(name, &png, PixelFormat::RGBA8, false, None).unwrap();
+        let first = source_image_classified(name, &png, PixelFormat::RGBA8, false, None, &photocraft_raster::Interrupt::NONE).unwrap();
         assert_eq!(first.bounds, Rect::new(0, 0, 1, 1));
-        assert!(source_image_classified(name, &png, PixelFormat::RGBA8, true, None).is_err(), "a warm raster hit must not skip strict SVG decoding");
+        assert!(
+            source_image_classified(name, &png, PixelFormat::RGBA8, true, None, &photocraft_raster::Interrupt::NONE).is_err(),
+            "a warm raster hit must not skip strict SVG decoding"
+        );
         assert!(source_image(name, &png, PixelFormat::RGBA8).is_ok());
     }
     fn image(side: i32) -> SourceImage {

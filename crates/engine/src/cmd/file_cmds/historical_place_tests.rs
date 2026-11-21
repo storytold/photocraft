@@ -190,3 +190,72 @@ fn historical_place_resume_keeps_the_frame_and_original_file_bytes() {
     assert_eq!(smart.historical_xcf_sample_order, Some(photocraft_io::HistoricalXcfSampleOrder::LittleEndian));
     assert!(!s.holds_historical_xcf_open(id));
 }
+
+#[test]
+fn a_wrapped_canvas_drop_probes_only_the_header_until_confirmation() {
+    use std::io::Write;
+
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(&fixture::historical_pixel(true)).unwrap();
+    let mut gzip = encoder.finish().unwrap();
+    gzip.truncate(gzip.len() - 4); // The header is available but the full envelope cannot pass.
+    let mut s = session();
+    let before = s.active().unwrap().doc.clone();
+    let crate::jobs::Started::Job(job) = s.start_place_bytes("source.xcf.gz", gzip, None, json!({"askHistoricalXcfSampleOrder":true})).unwrap() else {
+        panic!("the wrapped drop is probed on a worker")
+    };
+    let reply = s.wait_job(job).unwrap();
+    let held = reply["heldHistoricalXcfPlace"].as_u64().unwrap();
+    assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+    assert!(s.resume_historical_xcf_open(held, photocraft_io::HistoricalXcfSampleOrder::LittleEndian, false).is_err());
+    assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+}
+
+#[test]
+fn smart_object_open_decode_observes_cancellation_inside_wrapped_import() {
+    use std::io::Write as _;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(&fixture::historical_pixel(true)).unwrap();
+    let bytes = encoder.finish().unwrap();
+    let options =
+        photocraft_io::ImportOptions { historical_xcf_sample_order: Some(photocraft_io::HistoricalXcfSampleOrder::LittleEndian), ..Default::default() };
+    assert!(open::import_result_for_open("old.xcf.gz", &bytes, &options, &photocraft_raster::Interrupt::NONE).is_ok());
+
+    let checks = AtomicUsize::new(0);
+    let cancel = || checks.fetch_add(1, Ordering::Relaxed) >= 2;
+    let interrupt = photocraft_raster::Interrupt::cancel_only(&cancel);
+    let result = open::import_result_for_open("old.xcf.gz", &bytes, &options, &interrupt);
+    assert!(matches!(result, Err(EngineError::Cancelled)));
+    assert!(checks.load(Ordering::Relaxed) >= 3);
+}
+
+#[test]
+fn folder_batch_and_image_processor_use_explicit_historical_xcf_order() {
+    let folder = tempfile::tempdir().unwrap();
+    let source = folder.path().join("source");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("big.xcf"), fixture::historical_pixel(false)).unwrap();
+    for (id, name, mut params) in [
+        ("file.automate.batch", "batch", json!({"format":"png","steps":[{"command":"layer.new.layer","params":{}}]})),
+        ("file.automate.batch", "quiet", json!({"format":"png","suppressWarnings":true,"steps":[{"command":"layer.new.layer","params":{}}]})),
+        ("file.scripts.imageProcessor", "simple", json!({"format":"png"})),
+        ("file.scripts.imageProcessor", "multiple", json!({"tiff":{"enabled":true}})),
+    ] {
+        let mut s = session();
+        let output = folder.path().join(name);
+        params["input"] = json!(source);
+        params["output"] = json!(output);
+        let missing = s.execute(id, params.clone()).unwrap();
+        assert!(missing["files"].as_array().unwrap().is_empty(), "{missing:?}");
+        assert!(!missing["errors"].as_array().unwrap().is_empty(), "{missing:?}");
+        params["historicalXcfSampleOrder"] = json!("native");
+        assert!(s.execute(id, params.clone()).is_err());
+        params["historicalXcfSampleOrder"] = json!("big-endian");
+        let result = s.execute(id, params).unwrap();
+        assert!(result["errors"].as_array().unwrap().is_empty(), "{result:?}");
+        let written = result["files"][0].as_str().unwrap();
+        assert!(std::path::Path::new(written).is_file(), "{result:?}");
+    }
+}

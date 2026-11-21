@@ -174,6 +174,9 @@ pub(crate) fn answer_prompt(app: &mut PhotocraftApp, _ctx: &egui::Context, answe
 
 /// Opens queued files in order until one needs its prompt, which is shown if it isn't yet.
 pub fn advance(app: &mut PhotocraftApp) {
+    if app.historical_replacements.applying() {
+        return;
+    }
     // Reconcile legacy callers that populated held queues directly.
     if app.prompt_order.is_empty() {
         app.prompt_order.extend(std::iter::repeat_n(PromptKind::Open, app.held_opens.len()));

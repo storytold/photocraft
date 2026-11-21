@@ -84,6 +84,22 @@ impl PlaceSteps {
                 self.read(ctx)?;
                 let input = &self.input;
                 let bytes = &self.bytes;
+                if input.params.get("askHistoricalXcfSampleOrder").and_then(Value::as_bool) == Some(true)
+                    && input.opts.historical_xcf_sample_order.is_none()
+                    && photocraft_io::import_compression(bytes).is_some()
+                    && let Some(question) = ctx
+                        .stage(0.0, 0.05, "Reading", |ctl| photocraft_io::historical_xcf_sample_order_request_with(&input.name, bytes, ctl))
+                        .map_err(|error| self.io_error(error))?
+                {
+                    return Ok(Some(PlaceOutcome::Historical {
+                        name: input.name.clone(),
+                        bytes: Arc::clone(bytes),
+                        question,
+                        options: input.opts,
+                        linked: input.linked.clone(),
+                        params: input.params.clone(),
+                    }));
+                }
                 let png = if self.fine { PngImport::new(&input.name, bytes).map_err(|e| self.io_error(e))? } else { None };
                 match png {
                     Some(png) => self.stage = Stage::DecodePng(Box::new(png)),
