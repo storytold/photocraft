@@ -14,7 +14,7 @@ pub const MAX_EDGE: u32 = 30_000;
 pub const MAX_PAINT_PIXELS: u64 = 1 << 26;
 
 /// A bounded, cancellable pattern hash could not be completed.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, craft_ui_macros::PlainData)]
 pub enum PatternBuildError {
     InvalidDimensions,
     ScratchLimit { required: usize, available: usize },
@@ -58,7 +58,7 @@ pub const BAND_ROWS: u32 = 256;
 
 /// One pattern tile. Pixels cover `0..width × 0..height` of `surface`, in any pixel format
 /// (depth and colour model are the pattern's own, as in Photoshop).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct Pattern {
     /// Unique id (a UUID string, as Photoshop's `Idnt`).
     pub id: String,

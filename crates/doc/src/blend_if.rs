@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 /// One Blend If slider pair: `black` = (low, high), `white` = (low, high), all on 0..=255.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct BlendRange {
     pub black: [u8; 2],
     pub white: [u8; 2],
@@ -75,7 +75,7 @@ impl BlendRange {
 /// A layer's Blend If settings. `ranges[0]` is the "Gray" entry (composite of the colour
 /// channels), then one entry per colour channel of the document's mode (R, G, B / C, M, Y, K /
 /// L, a, b / Gray), each as `[this layer, underlying layer]`. Empty = every pixel blends.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct BlendIf {
     pub ranges: Vec<[BlendRange; 2]>,
 }
