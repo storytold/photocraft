@@ -33,6 +33,29 @@ pub fn pick(app: &mut PhotocraftApp, at: [f64; 2], size: SampleSize, source: Sam
         .map(|rgb| if super::paint_target(app) == json!("pixels") { rgb } else { [photocraft_color::convert::rgb_to_gray(rgb); 3] })
 }
 
+/// Whether document point `at` lies off the active document's image, on the pasteboard around it.
+pub fn off_image(app: &PhotocraftApp, at: [f64; 2]) -> bool {
+    let Some(st) = app.session.active() else { return false };
+    let (w, h) = (f64::from(st.doc.size.width), f64::from(st.doc.size.height));
+    at.iter().all(|v| v.is_finite()) && !((0.0..w).contains(&at[0]) && (0.0..h).contains(&at[1]))
+}
+
+/// Whether the Eyedropper's pick reads the targeted raster mask rather than the image (`pick`).
+pub fn samples_mask(app: &PhotocraftApp, source: SampleSource) -> bool {
+    eyedropper_mask_source(app, source).is_some()
+}
+
+/// The pasteboard's colour as the canvas draws it (#11755): Preferences › Interface's canvas colour, else black in
+/// Full Screen Mode and the theme's canvas surface otherwise (`document_display::pasteboard_color`).
+pub fn pasteboard_rgb(app: &PhotocraftApp) -> [f32; 3] {
+    let color = match crate::prefs_ui::pasteboard_color(app) {
+        Some(color) => color,
+        None if app.ui.view.hides_chrome() => egui::Color32::BLACK,
+        None => app.ui.theme.tokens().canvas,
+    };
+    [color.r(), color.g(), color.b()].map(|v| f32::from(v) / 255.0)
+}
+
 /// What the Eyedropper tool (and a painting tool's ⌥-click) picks at document point `at`: its options
 /// bar's Sample Size and Sample (#1649).
 pub fn eyedropper_color(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<[f32; 3]> {
