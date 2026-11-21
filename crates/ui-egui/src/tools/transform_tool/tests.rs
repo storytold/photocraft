@@ -2786,3 +2786,52 @@ fn warp_after_an_unapplied_perspective_keeps_it_until_the_first_pull() {
     settle(&mut app);
     assert!(flat(&app).is_none(), "a pulled warp is drawn from its carried points");
 }
+
+/// A Perspective box with its top shortened, Warp, and a long pull from near the short edge diagonally toward the long
+/// one, frame by frame as the warp grid reports it. Past the placement's horizon the carried points went through
+/// infinity, and the grid and the picture flipped from one side to the other with every few pixels of the pull. The
+/// reference's picture passes the horizon once and settles: the placement gives way through the drag, not only when it
+/// lands. No point of the shown grid may jump from far on one side of the box to far on the other between two frames.
+#[test]
+fn a_long_pull_under_a_perspective_does_not_flip() {
+    let mut app = app_with_square(400, photocraft_geom::Rect::new(60, 90, 240, 210));
+    let ctx = app.ctx().clone();
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    begin(&mut app, &ctx).unwrap();
+    let pivot = open(&app).session.state().pivot;
+    let quad = [[126.0, 90.0], [174.0, 90.0], [240.0, 210.0], [60.0, 210.0]];
+    box_events(&mut app, 1, &[BoxState::new(quad.map(|[x, y]| Point::new(x, y)), pivot)]);
+    settle(&mut app);
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    let start = warp_mesh(&app);
+    let to_doc = photocraft_algo::transform::Homography(app.transform_preview.as_ref().unwrap().placed_warp.expect("Warp edits the contents").0);
+    let back = to_doc.inverse().unwrap();
+    let gesture = GestureId::new(7);
+    let centre = Point::new(150.0, 150.0);
+    let mut shown = start.points.clone();
+    let last = 400;
+    for d in (5..=last).step_by(5) {
+        let by = [d as f64 / 2f64.sqrt(), d as f64 / 2f64.sqrt()];
+        let pulled = super::warp::in_contents(&start, super::warp::RuleEdit::Surface { s: 0.5, t: 0.1, by }, 1.0, &to_doc, &back).expect("a pulled mesh");
+        let mut events = EditEvents::new();
+        if d == 5 {
+            events.push(EditEvent::begin(gesture, Mixed::Same(start.clone()), "Warp".into(), None));
+        }
+        events.push(if d == last { EditEvent::commit(gesture, Mixed::Same(start.clone()), pulled) } else { EditEvent::update(gesture, pulled) });
+        grid_edit(&mut app, &events, false);
+        settle(&mut app);
+        let now = warp_mesh(&app).points;
+        for (i, (p, q)) in now.iter().zip(&shown).enumerate() {
+            assert!(p.x.is_finite() && p.y.is_finite(), "pull {d}: point {i} is not finite");
+            // Through infinity: from far on one side of the box to far on the other in one frame.
+            let crossed = |a: f64, b: f64| a * b < 0.0 && a.abs() > 500.0 && b.abs() > 500.0;
+            assert!(
+                !crossed(p.x - centre.x, q.x - centre.x) && !crossed(p.y - centre.y, q.y - centre.y),
+                "pull {d}: point {i} flipped through infinity: {q:?} -> {p:?}"
+            );
+        }
+        shown = now;
+    }
+    assert!(app.transform_preview.as_ref().unwrap().drag_placed.is_none(), "the drag's start map goes with the release");
+}

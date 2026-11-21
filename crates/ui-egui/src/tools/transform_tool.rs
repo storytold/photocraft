@@ -153,6 +153,9 @@ pub struct OpenPreview {
     /// One entry per undone step that came back into Warp mode, newest last: whether it undid a hold, so its Redo
     /// holds the warp again rather than dropping it ([`commit::step`]). Emptied once the session has nothing to redo.
     pub(crate) redo_holds: Vec<bool>,
+    /// During a warp drag on a placed smart object: the map from its contents as the drag began. The pull rule works
+    /// through it, while `placed_warp` is what the drag has made of it ([`warp::grid_edit`]'s squeeze at the horizon).
+    pub(crate) drag_placed: Option<([f64; 9], bool)>,
     /// A smart object's stored warp, for the box's preview once its move is projective ([`WarpedPreview`]).
     pub(crate) warped: Option<WarpedPreview>,
 }
@@ -246,6 +249,7 @@ impl OpenPreview {
             placed_warp: None,
             held: None,
             redo_holds: Vec::new(),
+            drag_placed: None,
             warped: None,
         }
     }

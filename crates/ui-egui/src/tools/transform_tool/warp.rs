@@ -362,33 +362,59 @@ pub(crate) fn grid_edit(app: &mut PhotocraftApp, events: &EditEvents<WarpMesh>, 
     let Some(b) = app.ui.transform.as_ref().and_then(|t| t.session.warp()).map(|w| w.warp.bounds) else { return };
     let mut applied = false;
     for event in events.iter() {
+        // A smart object's warp under its placement: the drag works through the map it began with; what the drag
+        // shows and lands is that map as the pull has squeezed it.
+        if matches!(event, craft::behavior::EditEvent::Begin { .. })
+            && let Some(pv) = app.transform_preview.as_mut()
+            && pv.drag_placed.is_none()
+        {
+            pv.drag_placed = pv.placed_warp;
+        }
         // PLAN: the sheet says a `Cancel` keeps the session's warp, but `TransformSession::apply(Warp(..))` stores each Update, so the drag's start is restored from the event's `before` (as a Custom warp over the same mesh).
         let Some(mesh) = event.landed() else { continue };
-        set_warp(app, Warp::custom(bezier_of(mesh), b));
         applied = true;
-        // A smart object's warp pulled towards the viewer past its placement's horizon: when the drag lands, the
-        // placement gives way as the reference's does ([`horizon_squeeze`]), and the points are carried through it.
-        if matches!(event, craft::behavior::EditEvent::Commit { .. })
-            && let Some((to_doc, _)) = app.transform_preview.as_ref().and_then(|pv| pv.placed_warp)
-            && let Some(back) = photocraft_algo::transform::Homography(to_doc).inverse()
-        {
-            let contents = bezier_of(mesh).map_points(|p| {
-                let (x, y) = back.apply(p[0], p[1]);
-                [x, y]
-            });
-            if let Some(squeeze) = horizon_squeeze(to_doc, &contents.points, b) {
+        let base = app.transform_preview.as_ref().and_then(|pv| pv.drag_placed.or(pv.placed_warp));
+        let ends = matches!(event, craft::behavior::EditEvent::Commit { .. } | craft::behavior::EditEvent::Cancel { .. });
+        let cancelled = matches!(event, craft::behavior::EditEvent::Cancel { .. });
+        // A smart object's warp pulled towards the viewer past its placement's horizon: the placement gives way as
+        // the reference's does ([`horizon_squeeze`]), all through the drag (the reference's picture passes the horizon
+        // once and settles, it never flips back and forth), and the points are carried through it.
+        let squeezed = match base {
+            Some((to_doc, _)) if !cancelled => photocraft_algo::transform::Homography(to_doc).inverse().and_then(|back| {
+                let contents = bezier_of(mesh).map_points(|p| {
+                    let (x, y) = back.apply(p[0], p[1]);
+                    [x, y]
+                });
+                let squeeze = horizon_squeeze(to_doc, &contents.points, b)?;
                 let placed = photocraft_algo::transform::Homography(to_doc).mul(&photocraft_algo::transform::Homography(squeeze));
-                if placed.0.iter().all(|v| v.is_finite()) {
+                placed.0.iter().all(|v| v.is_finite()).then(|| {
                     let doc = contents.map_points(|p| {
                         let (x, y) = placed.apply(p[0], p[1]);
                         [x, y]
                     });
-                    if let Some(pv) = app.transform_preview.as_mut() {
-                        pv.placed_warp = Some((placed.0, true));
-                    }
-                    set_warp(app, Warp::custom(doc, b));
+                    (placed.0, doc)
+                })
+            }),
+            _ => None,
+        };
+        match squeezed {
+            Some((placed, doc)) => {
+                if let Some(pv) = app.transform_preview.as_mut() {
+                    pv.placed_warp = Some((placed, true));
                 }
+                set_warp(app, Warp::custom(doc, b));
             }
+            None => {
+                if let Some(pv) = app.transform_preview.as_mut()
+                    && pv.drag_placed.is_some()
+                {
+                    pv.placed_warp = base;
+                }
+                set_warp(app, Warp::custom(bezier_of(mesh), b));
+            }
+        }
+        if ends && let Some(pv) = app.transform_preview.as_mut() {
+            pv.drag_placed = None;
         }
     }
     if split
