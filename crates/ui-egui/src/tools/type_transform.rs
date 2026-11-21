@@ -170,6 +170,20 @@ pub(crate) fn quad_of(rect: kurbo::Rect, aff: &Affine) -> Option<[kurbo::Point; 
     quad.iter().all(|p| p.x.is_finite() && p.y.is_finite()).then_some(quad)
 }
 
+/// A paragraph's document-space frame when its ink leaves no ordinary transform bounds.
+pub(crate) fn paragraph_frame_without_ink(layer: &photocraft_doc::Layer) -> Option<photocraft_geom::Rect> {
+    let LayerContent::Text(text) = &layer.content else { return None };
+    let TextShape::Box { x, y, width, height } = text.shape else { return None };
+    if text.text.trim().is_empty() || width <= 0.0 || height <= 0.0 || text.transform.inverse().is_none() {
+        return None;
+    }
+    let [x, y, width, height] = [x, y, width, height].map(f64::from);
+    let [a, b, c, d] = quad_of(kurbo::Rect::new(x, y, x + width, y + height), &text.transform)?;
+    let rect = kurbo::Rect::from_points(a, b).union_pt(c).union_pt(d).expand();
+    let bounds = photocraft_geom::Rect::new(rect.x0 as i32, rect.y0 as i32, rect.x1 as i32, rect.y1 as i32);
+    (!bounds.is_empty()).then_some(bounds)
+}
+
 /// The text's frame: the open transform's, else the layer's bounds mapped by its existing affine (including
 /// rotation and skew). `None` for a locked, hidden or position-locked layer, which cannot be moved. The one
 /// exception is a Type Mask session with ⌘/Ctrl held: its text is a hidden working layer, and the reference

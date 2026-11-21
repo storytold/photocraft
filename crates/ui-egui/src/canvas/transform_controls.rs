@@ -75,7 +75,14 @@ pub(crate) fn frame(app: &PhotocraftApp) -> Option<kurbo::Rect> {
 fn framed(app: &PhotocraftApp, pressed: bool) -> Option<kurbo::Rect> {
     let st = app.session.active()?;
     let layers = framed_layers(app, pressed);
-    let b = layers.iter().map(|l| photocraft_engine::transform_cmds::transform_frame(&st.doc, l)).filter(|b| !b.is_empty()).reduce(|a, b| a.union(&b))?;
+    let b =
+        layers.iter().map(|l| photocraft_engine::transform_cmds::transform_frame(&st.doc, l)).filter(|b| !b.is_empty()).reduce(|a, b| a.union(&b)).or_else(
+            || {
+                let [layer] = layers.as_slice() else { return None };
+                let bounds = crate::type_transform::paragraph_frame_without_ink(layer)?;
+                (layer.link_group.is_none() || photocraft_engine::transform_cmds::box_targets(&st.doc, &[layer.id]) == [layer.id]).then_some(bounds)
+            },
+        )?;
     // Floating selected pixels are framed by their outline, as their ants are (#7538), not by the
     // selection they were cut with; a frame round other selected layers too keeps them all.
     let alone = matches!(layers.as_slice(), [l] if photocraft_engine::float_cmds::floating(st).is_some_and(|f| f.layer == l.id));
