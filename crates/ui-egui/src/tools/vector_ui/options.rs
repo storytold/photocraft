@@ -259,20 +259,13 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
 }
 
 /// The W / H the Pen Shape-mode bar shows (#12907): the size of the path being drawn, 0 px when
-/// there is no draft. The anchors' box: the measured shapes are straight (200 × 200 px), and what
-/// a handle beyond the anchors or a typed size does was not measured and changes nothing today.
+/// there is no draft. Reuses the crate's one finite-guarded path bounds helper
+/// (`photocraft_text::area::path_bounds`, anchors and handles): the measured shapes are straight
+/// (200 × 200 px), and what a handle beyond the anchors or a typed size does was not measured and
+/// changes nothing today.
 fn pen_shape_size(pen: Option<&PenPath>) -> (f64, f64) {
-    let Some(knots) = pen.map(|p| &p.draft.knots) else { return (0.0, 0.0) };
-    let Some(first) = knots.first() else { return (0.0, 0.0) };
-    let (mut x0, mut y0, mut x1, mut y1) = (first.anchor.x, first.anchor.y, first.anchor.x, first.anchor.y);
-    for k in knots.iter().skip(1) {
-        let (x, y) = (k.anchor.x, k.anchor.y);
-        x0 = x0.min(x);
-        y0 = y0.min(y);
-        x1 = x1.max(x);
-        y1 = y1.max(y);
-    }
-    (x1 - x0, y1 - y0)
+    let Some(pen) = pen.filter(|p| !p.draft.knots.is_empty()) else { return (0.0, 0.0) };
+    photocraft_text::area::path_bounds(&super::pen_path(pen)).map_or((0.0, 0.0), |(x0, y0, x1, y1)| (x1 - x0, y1 - y0))
 }
 
 /// Path mode's "Make:" row, as in Photoshop's options bar: Selection…, Mask and Shape, from the
