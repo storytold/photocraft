@@ -101,7 +101,8 @@ pub fn prepare(mut launch: Launch, validate: impl FnOnce(&Path) -> Result<PathBu
 
 /// Resolve the selected private root before the caller's first startup effect.
 pub fn validate_root(root: &Path, env: impl Fn(&str) -> Option<OsString>, exe: Option<&Path>) -> Result<PathBuf, String> {
-    crate::profile_root::validate(root, env, exe, photocraft_automation::app_dirs::ensure_writable)
+    let stable_agent = craft::control::agents::default_folder(crate::AGENT_APP_NAME);
+    crate::profile_root::validate(root, env, exe, stable_agent.as_deref(), photocraft_automation::app_dirs::ensure_writable)
 }
 
 #[cfg(test)]

@@ -123,15 +123,28 @@ fn forbidden_roots(platform: Platform, env: &impl Fn(&str) -> Option<OsString>, 
     roots.into_iter().map(|p| canonical_future(&p)).collect()
 }
 
+/// The nightly fallback for files made by agents. Resolving it never creates a directory and
+/// never falls back to the stable Documents folder. The SDK creates it lazily if a default is
+/// actually needed; explicit user-chosen document roots keep their existing semantics.
+pub fn agent_directory(root: &Path) -> Result<PathBuf, String> {
+    let chosen = canonical_future(&absolute(root.to_path_buf(), "the nightly profile root")?)?;
+    let agent = canonical_future(&chosen.join("AgentFiles"))?;
+    if agent == chosen || !agent.starts_with(&chosen) {
+        return Err("the nightly default agent folder must stay inside its selected profile".into());
+    }
+    Ok(agent)
+}
+
 /// The writable hook is the app's existing exclusive probe. Keeping it injected lets filesystem
 /// boundary tests exercise the real policy without starting the app or changing global state.
 pub fn validate(
     root: &Path,
     env: impl Fn(&str) -> Option<OsString>,
     exe: Option<&Path>,
+    stable_agent: Option<&Path>,
     writable: impl FnOnce(&Path) -> std::io::Result<()>,
 ) -> Result<PathBuf, String> {
-    validate_for(Platform::current()?, root, env, exe, writable)
+    validate_for(Platform::current()?, root, env, exe, stable_agent, writable)
 }
 
 fn validate_for(
@@ -139,6 +152,7 @@ fn validate_for(
     root: &Path,
     env: impl Fn(&str) -> Option<OsString>,
     exe: Option<&Path>,
+    stable_agent: Option<&Path>,
     writable: impl FnOnce(&Path) -> std::io::Result<()>,
 ) -> Result<PathBuf, String> {
     absolute(root.to_path_buf(), "the nightly profile root")?;
@@ -152,10 +166,17 @@ fn validate_for(
     }
     let chosen = canonical_future(root)?;
     let exe = absolute(exe.ok_or("cannot establish the installation boundary")?.to_path_buf(), "the executable")?;
-    let forbidden = forbidden_roots(platform, &env, &exe)?;
+    let mut forbidden = forbidden_roots(platform, &env, &exe)?;
+    if let Some(agent) = stable_agent {
+        // Use the SDK-resolved Documents/known-folder location, including redirected Documents.
+        // Do not reconstruct it from HOME or create it just to establish the boundary.
+        forbidden.push(canonical_future(&absolute(agent.to_path_buf(), "the stable default agent folder")?)?);
+    }
     if forbidden.iter().any(|stable| overlaps(&chosen, stable, platform)) {
         return Err("the nightly root must not overlap stable data or an installation".into());
     }
+    // Existing aliases under the profile must not redirect the default agent workspace elsewhere.
+    agent_directory(&chosen)?;
     let mut create = std::fs::DirBuilder::new();
     create.recursive(true);
     #[cfg(unix)]
@@ -168,6 +189,7 @@ fn validate_for(
     if confirmed != chosen || forbidden.iter().any(|stable| overlaps(&confirmed, stable, platform)) {
         return Err("the nightly profile changed while it was being validated".into());
     }
+    agent_directory(&confirmed)?;
     writable(&confirmed).map_err(|e| format!("the nightly profile is not writable: {e}"))?;
     Ok(confirmed)
 }
@@ -217,6 +239,7 @@ mod tests {
                 root,
                 |key| self.get(key),
                 Some(&self.exe),
+                None,
                 |dir| {
                     let probe = dir.join("exclusive-test-probe");
                     let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&probe)?;
@@ -236,6 +259,87 @@ mod tests {
             // Only the directory successfully created by this fixture is owned for removal.
             std::fs::remove_dir_all(&self.root).unwrap();
         }
+    }
+
+    #[test]
+    fn agent_default_is_private_lazy_and_preserves_stable_documents() {
+        let fixture = Fixture::new();
+        let stable = fixture.home().join("Documents/ArtCraft/Agents/PhotoCraft");
+        std::fs::create_dir_all(&stable).unwrap();
+        std::fs::write(stable.join("existing-document"), b"stable document bytes").unwrap();
+        let private = fixture.check(Platform::Linux, &fixture.home().join("nightly-profile")).unwrap();
+        let agent = agent_directory(&private).unwrap();
+        assert!(agent.starts_with(&private) && agent != private);
+        assert!(!agent.exists(), "resolving the fallback must not create it before use");
+        std::fs::create_dir_all(&agent).unwrap();
+        std::fs::write(agent.join("new-document"), b"nightly document bytes").unwrap();
+        assert_eq!(std::fs::read(stable.join("existing-document")).unwrap(), b"stable document bytes");
+        assert_eq!(std::fs::read_dir(&stable).unwrap().count(), 1);
+        assert_eq!(std::fs::read(agent.join("new-document")).unwrap(), b"nightly document bytes");
+    }
+
+    #[test]
+    fn stable_agent_known_folder_and_overlaps_refuse_before_writable_probe() {
+        let fixture = Fixture::new();
+        // Models redirected Documents/known folders: not assumed to be beneath HOME.
+        let stable = fixture.root.join("redirected documents/ArtCraft/Agents/PhotoCraft");
+        std::fs::create_dir_all(&stable).unwrap();
+        std::fs::write(stable.join("existing-document"), b"stable document bytes").unwrap();
+        for platform in [Platform::Windows, Platform::Linux, Platform::Mac] {
+            for root in [stable.clone(), stable.join("nightly"), stable.parent().unwrap().to_path_buf()] {
+                let calls = std::cell::Cell::new(0);
+                let result = validate_for(
+                    platform,
+                    &root,
+                    |key| fixture.get(key),
+                    Some(&fixture.exe),
+                    Some(&stable),
+                    |_| {
+                        calls.set(calls.get() + 1);
+                        Ok(())
+                    },
+                );
+                assert!(result.unwrap_err().contains("overlap"));
+                assert_eq!(calls.get(), 0);
+            }
+        }
+        assert_eq!(std::fs::read(stable.join("existing-document")).unwrap(), b"stable document bytes");
+        assert_eq!(std::fs::read_dir(&stable).unwrap().count(), 1);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn agent_default_rejects_existing_and_dangling_escape_aliases_before_writes() {
+        let fixture = Fixture::new();
+        let private = fixture.home().join("nightly-profile");
+        let outside = fixture.home().join("stable-agent-files");
+        std::fs::create_dir_all(&private).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("existing-document"), b"stable document bytes").unwrap();
+        for target in [&outside, &outside.join("missing")] {
+            let alias = private.join("AgentFiles");
+            std::os::unix::fs::symlink(target, &alias).unwrap();
+            assert!(agent_directory(&private).is_err());
+            let calls = std::cell::Cell::new(0);
+            assert!(
+                validate_for(
+                    Platform::Linux,
+                    &private,
+                    |key| fixture.get(key),
+                    Some(&fixture.exe),
+                    Some(&outside),
+                    |_| {
+                        calls.set(calls.get() + 1);
+                        Ok(())
+                    }
+                )
+                .is_err()
+            );
+            assert_eq!(calls.get(), 0);
+            assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1);
+            std::fs::remove_file(alias).unwrap();
+        }
+        assert_eq!(std::fs::read(outside.join("existing-document")).unwrap(), b"stable document bytes");
     }
 
     #[test]
@@ -339,6 +443,7 @@ mod tests {
             &candidate,
             |key| fixture.get(key),
             Some(&fixture.exe),
+            None,
             |_| {
                 calls.set(calls.get() + 1);
                 Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "injected write refusal"))

@@ -87,8 +87,9 @@ fn title_bar_pref(prefs: &photocraft_engine::prefs::Preferences) -> TitleBarPref
 
 /// The automation roots: `--automation-read-root` / `--automation-write-root` (or their
 /// variables) win; a direction without one takes Preferences › AI Integrations' folder, and with
-/// that empty too the default agent folder `Documents/ArtCraft/Agents/PhotoCraft`, created when
-/// first used (`AgentSettings::folders`). A flag's
+/// that empty too the channel's default agent folder: stable uses
+/// `Documents/ArtCraft/Agents/PhotoCraft`; Nightly uses its private profile's `AgentFiles`.
+/// It is created only when first used (`AgentSettings::folders_with`). A flag's
 /// root that can't be opened stops the launch (exit status 2) as before. A preference's root that
 /// can't be opened, or isn't an absolute path (it would depend on the folder the app was started
 /// from), is left out, so that direction fails closed, and the warning says why: a folder moved
@@ -99,7 +100,20 @@ fn automation_workspace(
     flags: &photocraft_automation::args::AutomationArgs,
     prefs: &craft::automation::agents::AgentSettings,
 ) -> Result<(photocraft_automation::workspace::AuthorizedWorkspace, Option<String>), photocraft_automation::AutomationError> {
-    automation_workspace_in(flags, prefs, craft::control::agents::default_folder(AGENT_APP_NAME).as_deref())
+    automation_workspace_for_profile(flags, prefs, launch_profile::current(), || craft::control::agents::default_folder(AGENT_APP_NAME))
+}
+
+fn automation_workspace_for_profile(
+    flags: &photocraft_automation::args::AutomationArgs,
+    prefs: &craft::automation::agents::AgentSettings,
+    profile: &launch_profile::Profile,
+    stable_default: impl FnOnce() -> Option<std::path::PathBuf>,
+) -> Result<(photocraft_automation::workspace::AuthorizedWorkspace, Option<String>), photocraft_automation::AutomationError> {
+    let default = match profile.root() {
+        Some(root) => Some(profile_root::agent_directory(root).map_err(photocraft_automation::AutomationError::BadRequest)?),
+        None => stable_default(),
+    };
+    automation_workspace_in(flags, prefs, default.as_deref())
 }
 
 /// The app's name in its default agent folder, `Documents/ArtCraft/Agents/PhotoCraft`.
@@ -1163,6 +1177,52 @@ mod tests {
         assert_eq!(warning, None);
         assert!(ws.read("a.txt").is_err() && ws.write("c.txt", b"x").is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn nightly_agent_workspace_uses_its_private_profile_not_stable_documents() {
+        let dir = temp_dir("nightly-agent-roots");
+        let private = dir.join("nightly profile");
+        let stable = dir.join("redirected Documents/ArtCraft/Agents/PhotoCraft");
+        std::fs::create_dir_all(&private).unwrap();
+        std::fs::create_dir_all(&stable).unwrap();
+        std::fs::write(stable.join("existing-document"), b"stable document bytes").unwrap();
+        let profile = super::launch_profile::Profile::NightlyV1(private.clone());
+        let (ws, warning) = super::automation_workspace_for_profile(&flags(None, None), &craft::automation::agents::AgentSettings::default(), &profile, || {
+            panic!("Nightly must never consult the stable agent-folder fallback")
+        })
+        .unwrap();
+        assert_eq!(warning, None);
+        let canonical_private = std::fs::canonicalize(&private).unwrap();
+        assert!(ws.read_folders().iter().all(|p| p.starts_with(&canonical_private)));
+        assert!(ws.write_folder().unwrap().starts_with(&canonical_private));
+        ws.write("nightly-document", b"nightly document bytes").unwrap();
+        assert_eq!(ws.read("nightly-document").unwrap(), b"nightly document bytes");
+        assert_eq!(std::fs::read(stable.join("existing-document")).unwrap(), b"stable document bytes");
+        assert_eq!(std::fs::read_dir(&stable).unwrap().count(), 1);
+        drop(ws);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn stable_agent_workspace_preserves_the_resolved_default_folder() {
+        let dir = temp_dir("stable-agent-roots");
+        let stable = dir.join("redirected Documents/ArtCraft/Agents/PhotoCraft");
+        let (ws, warning) = super::automation_workspace_for_profile(
+            &flags(None, None),
+            &craft::automation::agents::AgentSettings::default(),
+            &super::launch_profile::Profile::Stable,
+            || Some(stable.clone()),
+        )
+        .unwrap();
+        assert_eq!(warning, None);
+        let canonical_stable = std::fs::canonicalize(&stable).unwrap();
+        assert_eq!(ws.read_folders(), vec![canonical_stable.clone()]);
+        assert_eq!(ws.write_folder(), Some(canonical_stable));
+        ws.write("stable-document", b"stable document bytes").unwrap();
+        assert_eq!(std::fs::read(stable.join("stable-document")).unwrap(), b"stable document bytes");
+        drop(ws);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// Empty preferences fall back to the default agent folder, created when first used, for
