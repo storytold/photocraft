@@ -79,7 +79,11 @@ fn ctrl_alt_keeps_the_tip() {
     let plain = cursor(&mut h, Modifiers::NONE);
     let chord = cursor(&mut h, CTRL_ALT);
     assert_ne!(chord, Some(sample_target()), "Ctrl+⌥: not the target");
-    assert_eq!(chord, plain, "Ctrl+⌥: the tip outline as today");
+    // Only on macOS is Ctrl a key of its own. Elsewhere Ctrl is the command key, so Ctrl+⌥ is ⌘⌥: the quick pick to the
+    // Move tool, whose ⌥ cursor is the copy cursor (CI on Linux and Windows showed `System(Copy)`).
+    if cfg!(target_os = "macos") {
+        assert_eq!(chord, plain, "Ctrl+⌥: the tip outline as today");
+    }
 }
 
 /// Standard and Precise were not measured with the Spot Healing Brush's ⌥, so ⌥ changes nothing.
