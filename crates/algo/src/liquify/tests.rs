@@ -790,3 +790,71 @@ fn the_next_live_segment_takes_back_the_provisional_dab() {
     direct.stroke_segment_live(&s, [100.0, 100.0, 1.0], [101.0, 100.0, 1.0], 16.0);
     assert!(g == direct, "the first segment's dab was taken back before the second was applied");
 }
+
+/// A forward-warped marker column on a gray layer, and the field that moves it (#210 tests).
+fn warped_marker() -> (Surface, LiquifyField) {
+    let mut s = LiquifyStroke::new(LiquifyTool::ForwardWarp, 40.0);
+    s.points = vec![vec![40.0, 32.0], vec![52.0, 32.0]];
+    let field = LiquifyField::from_strokes(bounds(), 2.0, &[s]);
+    let mut img = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, true));
+    img.fill_rect(bounds(), &[0.0, 1.0]);
+    img.fill_rect(Rect::new(40, 28, 42, 36), &[1.0, 1.0]);
+    (img, field)
+}
+
+#[test]
+fn apply_liquify_with_matches_apply_liquify_when_not_cancelled() {
+    let (img, field) = warped_marker();
+    let reported = std::sync::Mutex::new(0.0f32);
+    let progress = |p: f32| {
+        let mut m = reported.lock().unwrap();
+        *m = m.max(p);
+    };
+    let never = || false;
+    let out = apply_liquify_with(&img, &field, &Interrupt::new(&never, &progress)).expect("not cancelled");
+    let want = apply_liquify(&img, &field);
+    assert_ne!(want, img, "the stroke moves the marker");
+    assert_eq!(out, want);
+    assert_eq!(*reported.lock().unwrap(), 1.0);
+    assert_eq!(apply_liquify_with(&img, &field, &Interrupt::NONE), Some(want));
+}
+
+#[test]
+fn apply_liquify_with_stops_when_cancelled() {
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+    // A strip 130 tiles long with a short stroke in each tile, so the render runs in three
+    // batches (64, 64 and 2 tiles).
+    let ts = photocraft_geom::TILE_SIZE;
+    let strip = Rect::new(0, 0, 130 * ts, 16);
+    let strokes: Vec<LiquifyStroke> = (0..130)
+        .map(|t| {
+            let mut s = LiquifyStroke::new(LiquifyTool::ForwardWarp, 40.0);
+            let x = f64::from(t * ts + ts / 2);
+            s.points = vec![vec![x - 6.0, 8.0], vec![x + 6.0, 8.0]];
+            s
+        })
+        .collect();
+    let field = LiquifyField::from_strokes(strip, 2.0, &strokes);
+    let tiles = strip.tiles().filter(|t| field.touches(t.rect().intersect(&strip))).count();
+    assert_eq!(tiles, 130, "every tile is moved");
+    let mut img = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, true));
+    img.fill_rect(strip, &[0.0, 1.0]);
+    img.fill_rect(Rect::new(0, 6, 130 * ts, 10), &[1.0, 1.0]);
+    let always = || true;
+    assert!(apply_liquify_with(&img, &field, &Interrupt::cancel_only(&always)).is_none());
+    // Cancelled after the first check: each of the first batch's tiles checks once and skips its
+    // work, the check after the batch stops the render, and no batch reports progress. A render
+    // that checked only at the end would check every tile (and report progress per batch); one
+    // without the per-tile check would check once.
+    let calls = AtomicUsize::new(0);
+    let later = || calls.fetch_add(1, SeqCst) >= 1;
+    let reported = AtomicUsize::new(0);
+    let progress = |_: f32| {
+        reported.fetch_add(1, SeqCst);
+    };
+    assert!(apply_liquify_with(&img, &field, &Interrupt::new(&later, &progress)).is_none());
+    let calls = calls.load(SeqCst);
+    assert_eq!(calls, RENDER_BATCH_TILES + 1, "one check per tile of the first batch, then the batch's");
+    assert!(calls < tiles);
+    assert_eq!(reported.load(SeqCst), 0, "no batch was finished");
+}

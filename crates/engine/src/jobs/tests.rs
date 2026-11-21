@@ -890,6 +890,39 @@ fn a_finished_batch_worker_rejects_late_cancellation() {
     assert_eq!(result["cancelled"], false);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn cancel_working_job_refuses_a_worker_that_already_finished() {
+    let mut s = Session::new();
+    let id = job(s.start_job("test.quick", json!({}), "Quick", false, |_| Ok(json!(1)), |_, result| Ok(result)).unwrap());
+    let started = Instant::now();
+    while !s.jobs.running.iter().any(|running| running.id == id && running.handle.as_ref().is_some_and(|handle| handle.is_finished())) {
+        assert!(started.elapsed() < Duration::from_secs(10), "worker did not finish");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(s.cancel_working_job(id), Err(CancelRefused::Finishing), "its result is already sent");
+    assert!(matches!(wait_event(&mut s, id).outcome, JobOutcome::Done(_)), "the result is applied, not lost");
+    // A worker still at work is cancelled as by `try_cancel_job`.
+    let id = job(s
+        .start_job(
+            "test.slow",
+            json!({}),
+            "Slow",
+            false,
+            |ctx| {
+                while !ctx.cancelled() {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                ctx.check()
+            },
+            |_, ()| Ok(json!(null)),
+        )
+        .unwrap());
+    assert_eq!(s.cancel_working_job(id), Ok(()));
+    s.join_cancelled_jobs();
+    assert!(s.job(id).is_none());
+}
+
 /// A flat scanline EXR opened from a path goes through the band decoder in the open job and
 /// arrives as the same 32-bit document the whole-file decoder makes; cancelling adds nothing.
 #[cfg(any(unix, windows))]
@@ -1719,4 +1752,80 @@ fn unix_fingerprint_detects_a_same_size_rewrite_with_a_restored_mtime() {
     assert_ne!((b.ctime_secs, b.ctime_nanos), (a.ctime_secs, a.ctime_nanos), "the Unix identity carries ctime, so a restored mtime cannot hide a rewrite");
     assert_ne!(before, after, "a same-size rewrite with a restored mtime is a different source");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Starts `cmd` in the background on a fresh [`session`] and checks it matches `execute`: one undo
+/// step labelled `label`, the same pixels.
+fn matches_inline_as_a_job(cmd: &str, label: &str, p: serde_json::Value) {
+    let mut inline = session(300, 200);
+    let expected = inline.execute(cmd, p.clone()).unwrap();
+    assert_eq!(expected["changed"], true, "{cmd}: {expected}");
+
+    let mut s = session(300, 200);
+    let before = pixels(&s);
+    let steps = s.active().unwrap().history.past_len();
+    let id = job(s.start(cmd, p).unwrap());
+    // The canvas shows the pre-job state until the job is applied.
+    assert_eq!(pixels(&s), before, "{cmd}");
+    let e = wait_event(&mut s, id);
+    let JobOutcome::Done(v) = &e.outcome else { panic!("{cmd}: {e:?}") };
+    assert_eq!(v["changed"], true, "{cmd}: {v}");
+    assert_eq!(e.label, label);
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "{cmd}: one undo step");
+    assert_eq!(pixels(&s), pixels(&inline), "{cmd}: same pixels as the synchronous command");
+    assert!(s.undo());
+    assert_eq!(pixels(&s), before, "{cmd}: undo");
+}
+
+#[test]
+fn liquify_runs_as_a_job_with_the_inline_result() {
+    let p = json!({"strokes": [{"tool": "forwardWarp", "size": 80, "points": [[120, 100], [160, 100]]}]});
+    matches_inline_as_a_job("filter.liquify", "Liquify", p);
+}
+
+#[test]
+fn puppet_warp_runs_as_a_job_with_the_inline_result() {
+    let p = json!({"pins": [{"src": [60, 100], "dst": [60, 100]}, {"src": [240, 100], "dst": [240, 70]}]});
+    matches_inline_as_a_job("edit.puppetWarp", "Puppet Warp", p);
+}
+
+#[test]
+fn perspective_warp_runs_as_a_job_with_the_inline_result() {
+    let p = json!({"planes": [{
+        "src": [[30, 20], [270, 20], [270, 180], [30, 180]],
+        "dst": [[50, 20], [250, 20], [270, 180], [30, 180]],
+    }]});
+    matches_inline_as_a_job("edit.perspectiveWarp", "Perspective Warp", p);
+}
+
+#[test]
+fn a_cancelled_liquify_leaves_the_document_unchanged() {
+    let mut s = session(1600, 1200);
+    let doc_before = s.active().unwrap().doc.clone();
+    let steps = s.active().unwrap().history.past_len();
+    let stroke = json!({"strokes": [{"tool": "bloat", "size": 600, "points": [[800, 600], [820, 600], [840, 600]]}]});
+    let id = job(s.start("filter.liquify", stroke).unwrap());
+    assert!(s.cancel_job(id));
+    assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
+    s.join_cancelled_jobs();
+    assert!(s.poll_jobs().is_empty(), "nothing arrives later");
+    let st = s.active().unwrap();
+    assert!(Arc::ptr_eq(&st.doc, &doc_before), "the document snapshot was not replaced");
+    assert_eq!(st.history.past_len(), steps);
+}
+
+#[test]
+fn a_cancelled_puppet_warp_leaves_the_document_unchanged() {
+    let mut s = session(600, 400);
+    let doc_before = s.active().unwrap().doc.clone();
+    let steps = s.active().unwrap().history.past_len();
+    let pins = json!({"pins": [{"src": [100, 200], "dst": [100, 200]}, {"src": [500, 200], "dst": [500, 120]}]});
+    let id = job(s.start("edit.puppetWarp", pins).unwrap());
+    assert!(s.cancel_job(id));
+    assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
+    s.join_cancelled_jobs();
+    assert!(s.poll_jobs().is_empty(), "nothing arrives later");
+    let st = s.active().unwrap();
+    assert!(Arc::ptr_eq(&st.doc, &doc_before), "the document snapshot was not replaced");
+    assert_eq!(st.history.past_len(), steps);
 }
