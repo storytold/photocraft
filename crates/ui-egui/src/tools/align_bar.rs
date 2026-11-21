@@ -47,6 +47,11 @@ pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandSta
     all().map(|action| (CommandRef::new(action.id()), CommandState::new().enabled(command_id(action).is_some_and(|id| app.session.is_enabled(id))))).collect()
 }
 
+/// [`command_states`], derived from what the rules read.
+pub(crate) fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    crate::app::framework::derived_states(app, name, &crate::menus::facts::RuleFacts::of(app), || command_states(app))
+}
+
 /// Runs a fired `AlignAction`. False when `command` is not one of them. The context is the
 /// command-source shape's; these commands need none.
 pub(crate) fn run_fired(app: &mut PhotocraftApp, _ctx: &egui::Context, command: &CommandRef) -> bool {

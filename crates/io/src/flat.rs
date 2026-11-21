@@ -9,7 +9,7 @@ use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_raster::{AllocationError, Interrupt, PruneCursor, RowWriteError, Surface};
 
 use crate::renderer::{BandRenderer, RenderError};
-use crate::{ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
+use crate::{BmpBits, ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
 
 /// Bytes per band when converting or exporting a band of rows at a time.
 const BAND_BYTES: usize = 32 << 20;
@@ -1868,12 +1868,12 @@ pub fn export_flat_with_renderer(
     ctl: &photocraft_raster::Interrupt,
     mut renderer: Option<&mut dyn BandRenderer>,
 ) -> Result<ExportResult, IoError> {
-    if let Some(mut r) = export_mode_specific(doc, format, opts)? {
-        // Palette PNG/BMP and Duotone exports render on their own paths before the renderer
+    if let Some(mut r) = export_mode_specific(doc, format, opts, ctl)? {
+        // Palette PNG/BMP/GIF and Duotone exports render on their own paths before the renderer
         // branch: say so, or `--gpu` would silently do nothing for them.
         if let Some(renderer) = &mut renderer {
             let why = match doc.mode {
-                ColorMode::Indexed => "palette (Indexed Color) PNG/BMP export uses the CPU compositor",
+                ColorMode::Indexed => "palette (Indexed Color) PNG/BMP/GIF export uses the CPU compositor",
                 ColorMode::Duotone => "Duotone export uses the CPU compositor",
                 _ => "this export uses the CPU compositor",
             };
@@ -1898,6 +1898,9 @@ pub fn export_flat_with_renderer(
                 let mut img = prepare_flat(img, format, &mut warnings)?;
                 if format == Format::Tga {
                     img = tga_image(doc, img, opts.tga_bits, opts.preserve_alpha, &mut warnings)?;
+                }
+                if format == Format::Bmp {
+                    img = bmp_image(img, opts.bmp_bits, &mut warnings)?;
                 }
                 if format == Format::Dds {
                     img = dds_image(doc, img, &mut warnings)?;
@@ -1948,6 +1951,9 @@ pub fn export_flat_with_renderer(
     let mut img = prepare_flat(img, format, &mut warnings)?;
     if format == Format::Tga {
         img = tga_image(doc, img, opts.tga_bits, opts.preserve_alpha, &mut warnings)?;
+    }
+    if format == Format::Bmp {
+        img = bmp_image(img, opts.bmp_bits, &mut warnings)?;
     }
     if format == Format::Dds {
         img = dds_image(doc, img, &mut warnings)?;
@@ -2253,6 +2259,29 @@ fn tga_image(doc: &Document, img: Image, bits: Option<TgaBits>, preserve_alpha: 
     }
 }
 
+/// The image an RGB BMP of `bits` per pixel holds: 24 composites a transparent image over white,
+/// 32 gives an opaque image an opaque alpha; `None` keeps the image (32 with transparency, else
+/// 24). Grayscale images are written as they are. 16 bits is refused: the encoder has no 16-bit
+/// BMP.
+fn bmp_image(img: Image, bits: Option<BmpBits>, warnings: &mut Vec<String>) -> Result<Image, IoError> {
+    let Some(bits) = bits else { return Ok(img) };
+    if !img.layout().is_rgb() {
+        warnings.push(format!("{}-bit BMP applies to RGB images; the grayscale image is written as it is", bits.bits()));
+        return Ok(img);
+    }
+    match bits {
+        BmpBits::Bits16 => Err(IoError::Unsupported("16-bit BMP is not supported yet; use 24 or 32 bits".into())),
+        BmpBits::Bits24 if img.layout().has_alpha() => {
+            warnings.push("transparency composited over white; a 24-bit BMP has no alpha".into());
+            matte_over_white(&img)
+        }
+        BmpBits::Bits32 if !img.layout().has_alpha() => {
+            map_bands(&img, ChannelLayout::Rgba, img.sample_type(), |vals| vals.as_chunks::<3>().0.iter().flat_map(|&[r, g, b]| [r, g, b, 1.0]).collect())
+        }
+        _ => Ok(img),
+    }
+}
+
 /// The image a DDS texture holds (#8563): as with a 32-bit Targa, the document's alpha channel
 /// becomes the texture's alpha when it has exactly one (spot channels don't count), the colours
 /// composited over white where the layers are transparent; BC1 keeps it as on/off, BC2 and BC3
@@ -2461,19 +2490,51 @@ fn cmyk_image_to_srgb(img: &Image) -> Result<Image, IoError> {
     Ok(Image::from_normalized(w, h, layout, sample, &out)?.with_icc(Some(dst.to_bytes().to_vec())).with_meta(img.meta.clone()))
 }
 
-/// Indexed Color → PNG-8 or an 8-bit BMP with its colour table; Duotone → the inks rendered as RGB.
-fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) -> Result<Option<ExportResult>, IoError> {
+/// The metadata a GIF cannot hold, worded as the generic encoder's fidelity warnings word it.
+/// The indexed route encodes straight from the document instead of through [`encode_image`], so it
+/// has to report what that check would have warned about.
+fn gif_dropped_metadata(doc: &Document, opts: &ExportOptions) -> Vec<String> {
+    let mut w = Vec::new();
+    if !opts.encode.embed_metadata {
+        return w;
+    }
+    if doc.icc_profile.is_some() && opts.encode.embed_icc {
+        w.push("ICC profile not supported; it will be dropped".into());
+    }
+    if doc.metadata.exif.is_some() {
+        w.push("EXIF not supported; it will be dropped".into());
+    }
+    // Export As ▸ Metadata: None already dropped these before the generic encoder got to say so.
+    if opts.xmp != XmpEmbed::None {
+        if doc.metadata.xmp.is_some() {
+            w.push("XMP not supported; it will be dropped".into());
+        }
+        if !doc.metadata.text.is_empty() {
+            w.push("text metadata not supported; it will be dropped".into());
+        }
+    }
+    w.push("resolution (DPI) not supported; it will be dropped".into());
+    w
+}
+
+/// Indexed Color → PNG-8, an 8-bit BMP or a GIF with the document's colour table; Duotone → the
+/// inks rendered as RGB.
+fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<Option<ExportResult>, IoError> {
     match doc.mode {
-        ColorMode::Indexed if matches!(format, Format::Png | Format::Bmp) => {
+        ColorMode::Indexed if matches!(format, Format::Png | Format::Bmp | Format::Gif) => {
             let Some(table) = doc.color_table.as_ref().filter(|t| !t.colors.is_empty() && t.colors.len() <= 256) else { return Ok(None) };
-            // PNG transparency belongs to a palette index, not its RGB value. Keep the
+            // PNG and GIF transparency belongs to a palette index, not its RGB value. Keep the
             // transparent entry out of opaque lookup, even when it duplicates an opaque colour.
-            let png_transparent_index = table.transparent.map(usize::from).filter(|_| format == Format::Png);
+            let transparent_index = table.transparent.map(usize::from).filter(|_| format != Format::Bmp);
             let (opaque_indices, colors): (Vec<u8>, Vec<_>) =
-                table.colors.iter().copied().enumerate().filter(|(i, _)| Some(*i) != png_transparent_index).map(|(i, c)| (i as u8, c)).unzip();
+                table.colors.iter().copied().enumerate().filter(|(i, _)| Some(*i) != transparent_index).map(|(i, c)| (i as u8, c)).unzip();
             let opaque = photocraft_doc::ColorTable { colors, transparent: None };
+            // This route renders and encodes on its own, so it polls `ctl` itself: before the
+            // render, per band and before the encoder (#11861 review).
+            ctl.check().map_err(|_| IoError::Cancelled)?;
             let mut idx = try_buffer(doc.size.area() as usize, 1)?;
             photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> Result<(), IoError> {
+                ctl.check().map_err(|_| IoError::Cancelled)?;
                 for p in &band.px {
                     let i = match table.transparent {
                         Some(t) if p[3] < 0.5 => t,
@@ -2485,6 +2546,7 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
                 }
                 Ok(())
             })?;
+            ctl.check().map_err(|_| IoError::Cancelled)?;
             if format == Format::Bmp {
                 let bytes = codecs::encode_bmp_indexed(doc.size.width, doc.size.height, &idx, &table.colors)?;
                 let mut warnings = vec![format!("written as an 8-bit palette BMP ({} colours)", table.colors.len())];
@@ -2493,10 +2555,28 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
                 }
                 return Ok(Some(ExportResult { bytes, warnings }));
             }
+            if format == Format::Gif {
+                // The whole table in its original order, as the palette PNG and BMP write it: a
+                // GIF colour table holds 2^n entries, and the writer pads the ones past the
+                // document's last entry with black, so no used index moves (#11824). A
+                // transparent index past the last entry needs a slot too: pad through it, or a
+                // transparent pixel fails the export of an API-created table (#11861 review).
+                let mut colors = table.colors.clone();
+                if let Some(t) = table.transparent.filter(|t| usize::from(*t) >= colors.len()) {
+                    colors.resize(usize::from(t) + 1, [0, 0, 0]);
+                }
+                let bytes = codecs::web::encode_gif_indexed(doc.size.width, doc.size.height, &idx, &colors, table.transparent, false)?;
+                let mut warnings = vec![format!("written as a GIF with the document's colour table ({} colours)", table.colors.len())];
+                warnings.extend(gif_dropped_metadata(doc, opts));
+                return Ok(Some(ExportResult { bytes, warnings }));
+            }
             // Same rule as the ordinary PNG encoder: the resolution goes into `pHYs` with the metadata.
             let dpi = opts.encode.embed_metadata.then_some((doc.resolution_dpi, doc.resolution_dpi));
             let bytes = codecs::encode_png_indexed(doc.size.width, doc.size.height, &idx, &table.colors, table.transparent, dpi, opts.encode.png_stereo)?;
             let mut warnings = vec![format!("written as an 8-bit palette PNG ({} colours)", table.colors.len())];
+            if opts.encode.png_interlaced {
+                warnings.push("written without interlacing: the palette PNG exporter does not interlace".into());
+            }
             if opts.encode.embed_metadata && opts.xmp == XmpEmbed::All && !doc.metadata.text.is_empty() {
                 warnings.push("text metadata is not supported by the palette PNG exporter; it will be dropped".into());
             }

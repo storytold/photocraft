@@ -11,6 +11,9 @@ workspace = true
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 serde = { workspace = true }
+# Plain data (the engine holds documents in a `Tracked`): the marker and its derive, without the UI.
+craft-tracked = { workspace = true }
+craft-ui-macros = { workspace = true }
 crc32fast = "1"
 lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
 

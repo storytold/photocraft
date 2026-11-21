@@ -4,8 +4,13 @@ use photocraft_raster::Interrupt;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 fn fixture(layout: ChannelLayout, sample: SampleType, compression: ExrCompression) -> Vec<u8> {
+    fixture_as(layout, layout, sample, compression)
+}
+
+/// The `layout` fixture's samples written with the channels of `stored`.
+fn fixture_as(layout: ChannelLayout, stored: ChannelLayout, sample: SampleType, compression: ExrCompression) -> Vec<u8> {
     let values: Vec<f32> = (0..31 * 35 * layout.channels()).map(|i| [-0.25, 4.0, 0.0, 0.0001, 0.5][i % 5]).collect();
-    let image = Image::from_f32(31, 35, layout, &values).unwrap().convert(layout, sample);
+    let image = Image::from_f32(31, 35, layout, &values).unwrap().convert(stored, sample);
     photocraft_codecs::encode(&image, Format::OpenExr, &EncodeOptions { exr_compression: compression, ..Default::default() }).unwrap()
 }
 
@@ -22,7 +27,14 @@ fn native_scanline_import_preserves_hdr_document_and_cancels_without_publication
             for compression in [ExrCompression::None, ExrCompression::Rle, ExrCompression::Zip1, ExrCompression::Zip16, ExrCompression::Piz] {
                 let bytes = fixture(layout, sample, compression);
                 std::fs::write(&path, &bytes).unwrap();
-                let reference = photocraft_io::import("HDR", &bytes).unwrap();
+                // Every EXR opens as RGB (#14069); the whole-file decoder still opens gray
+                // as Grayscale, so a gray file is compared with its RGB twin.
+                let rgb = match layout {
+                    ChannelLayout::Gray => ChannelLayout::Rgb,
+                    ChannelLayout::GrayA => ChannelLayout::Rgba,
+                    other => other,
+                };
+                let reference = photocraft_io::import("HDR", &fixture_as(layout, rgb, sample, compression)).unwrap();
                 let actual = open(&path, &Interrupt::NONE).unwrap();
                 {
                     let a = &actual.document;
