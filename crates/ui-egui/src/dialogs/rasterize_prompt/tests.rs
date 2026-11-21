@@ -358,15 +358,16 @@ fn last_filter_on_a_type_layer_needs_a_filter_to_repeat() {
 /// prompt (Flame, Tree, Picture Frame already run on a type layer: they render on a new layer).
 #[test]
 fn every_filter_live_on_pixels_asks_on_a_type_layer() {
-    let ids: Vec<&str> = crate::menu_catalog::CATALOG.iter().filter(|e| e.3.starts_with("filter.")).map(|e| e.3).collect();
     let mut pixels = app_with(Kind::Type);
+    // Before rasterizing the probe, find the filters that cannot run directly on Type.
+    let ids: Vec<&str> = crate::menu_catalog::CATALOG.iter().map(|e| e.3).filter(|id| id.starts_with("filter.") && !pixels.session.is_enabled(id)).collect();
     pixels.run("layer.rasterize.type", json!({})).unwrap();
     let mut asked = 0;
     for id in ids {
-        let mut app = app_with(Kind::Type);
-        if !crate::menus::is_enabled(&pixels, id) || app.session.is_enabled(id) {
+        if !crate::menus::is_enabled(&pixels, id) {
             continue;
         }
+        let mut app = app_with(Kind::Type);
         assert!(crate::menus::is_enabled(&app, id), "{id}");
         menu(&mut app, id).unwrap();
         let d = prompt(&app).unwrap_or_else(|| panic!("{id}: no prompt"));
