@@ -347,6 +347,8 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                         Some("overlapping".to_owned()),
                     ),
                 ),
+                // Ticked on first open (#13648).
+                Param::new("includeBackground", tl!("Include Background in Export"), ParamKind::bool(true)),
                 Param::new("quality", tl!("Quality"), ParamKind::int(Some(0), Some(12), 10)),
                 // Unticked on first open; the form remembers it as the last run left it (#13644).
                 Param::new("reversePageOrder", tl!("Reverse Page Order"), ParamKind::bool(false)),

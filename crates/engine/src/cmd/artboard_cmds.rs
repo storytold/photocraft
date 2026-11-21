@@ -782,6 +782,11 @@ fn cut_pixels(layers: &mut [Layer], keep: Rect, depth: usize) {
 /// board that can't be exported fails the export without leaving a partial set behind. With
 /// `overlapping`, each file also holds the boards above that overlap it ([`overlapping_boards`]).
 fn chosen_documents(doc: &Document, p: &Value, overlapping: bool) -> Result<Vec<Document>> {
+    Ok(chosen_board_documents(doc, p, overlapping)?.into_iter().map(|(_, one)| one).collect())
+}
+
+/// [`chosen_documents`], each with the id of the board it was built from.
+fn chosen_board_documents(doc: &Document, p: &Value, overlapping: bool) -> Result<Vec<(LayerId, Document)>> {
     let mut out = Vec::new();
     for id in chosen_artboards(doc, p) {
         let Some(mut one) = artboard_document(doc, id)? else { continue };
@@ -794,7 +799,7 @@ fn chosen_documents(doc: &Document, p: &Value, overlapping: bool) -> Result<Vec<
                 one.layers.push(group);
             }
         }
-        out.push(one);
+        out.push((id, one));
     }
     Ok(out)
 }
@@ -1132,20 +1137,40 @@ fn rgb_copy(one: &Document) -> Result<Document> {
 /// `one` flattened over white as a JPEG, for a PDF page. A board past the compositor's render
 /// limit is refused before it is flattened (the flatten would be empty).
 fn jpeg_page(one: &Document, quality: Option<f64>, cmd: &str) -> Result<Vec<u8>> {
+    Ok(jpeg_page_masked(one, quality, false, cmd)?.0)
+}
+
+/// [`jpeg_page`] and, when `masked`, the page's [`soft_mask`] taken from the composite before it
+/// goes over white.
+fn jpeg_page_masked(one: &Document, quality: Option<f64>, masked: bool, cmd: &str) -> Result<(Vec<u8>, Option<Vec<u8>>)> {
     crate::file_cmds::check_flattenable(one, cmd)?;
-    let buf = photocraft_compose::flatten(one).over_background([1.0, 1.0, 1.0]);
+    let composite = photocraft_compose::flatten(one);
+    let mask = if masked { soft_mask(&composite.px)? } else { None };
+    let buf = composite.over_background([1.0, 1.0, 1.0]);
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
     let mut flat = Document::new(&one.name, one.size, ColorMode::Rgb, SampleType::U8);
     let mut surf = Surface::new(fmt);
     let vals: Vec<f32> = buf.px.iter().flat_map(|px| photocraft_raster::from_rgba(&fmt, *px)).collect();
     surf.write_region(one.bounds(), &vals);
     flat.layers.push(Layer::new("Background", LayerContent::Raster(surf)));
-    Ok(encode(&flat, "page.jpg", quality)?.0)
+    Ok((encode(&flat, "page.jpg", quality)?.0, mask))
 }
 
 /// A minimal PDF with one page per JPEG image: (width px, height px, dpi, JPEG bytes).
 /// Pages are sized so the image prints at its resolution.
 pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
+    let pages: Vec<PdfPage> = pages.iter().map(|(w, h, dpi, jpeg)| (*w, *h, *dpi, jpeg.clone(), None)).collect();
+    raster_pdf_masked(&pages)
+}
+
+/// One page of [`raster_pdf_masked`]: width px, height px, dpi, JPEG bytes and, when the page
+/// has transparency, its alpha as a Flate-compressed 8-bit DeviceGray image of the same size.
+type PdfPage = (u32, u32, f32, Vec<u8>, Option<Vec<u8>>);
+
+/// [`raster_pdf`] where a page may carry a soft mask (`/SMask`). The mask has `/Matte [1 1 1]`:
+/// the page's colours are already composited over white, so a viewer that honours the mask
+/// recovers the true colours, and one that ignores it shows today's white page.
+fn raster_pdf_masked(pages: &[PdfPage]) -> Vec<u8> {
     let mut out: Vec<u8> = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
     let mut offsets: Vec<usize> = Vec::new();
     let mut obj = |out: &mut Vec<u8>, body: &[u8]| {
@@ -1154,14 +1179,24 @@ pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
         out.extend_from_slice(body);
         out.extend_from_slice(b"\nendobj\n");
     };
-    // Objects: 1 catalog, 2 page tree, then per page: page, contents, image.
-    let kids: Vec<String> = (0..pages.len()).map(|i| format!("{} 0 R", 3 + i * 3)).collect();
+    // Objects: 1 catalog, 2 page tree, then per page: page, contents, image and, when the page
+    // has one, its soft mask; numbered in that order.
+    let mut next = 3;
+    let first: Vec<usize> = pages
+        .iter()
+        .map(|page| {
+            let n = next;
+            next += if page.4.is_some() { 4 } else { 3 };
+            n
+        })
+        .collect();
+    let kids: Vec<String> = first.iter().map(|n| format!("{n} 0 R")).collect();
     obj(&mut out, b"<< /Type /Catalog /Pages 2 0 R >>");
     obj(&mut out, format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids.join(" "), pages.len()).as_bytes());
-    for (i, (w, h, dpi, jpeg)) in pages.iter().enumerate() {
+    for ((w, h, dpi, jpeg, mask), n) in pages.iter().zip(first) {
         let k = 72.0 / f64::from(dpi.max(1.0));
         let (pw, ph) = (f64::from(*w) * k, f64::from(*h) * k);
-        let (contents, image) = (4 + i * 3, 5 + i * 3);
+        let (contents, image, smask) = (n + 1, n + 2, n + 3);
         obj(
             &mut out,
             format!(
@@ -1171,14 +1206,25 @@ pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
         );
         let stream = format!("q {pw:.3} 0 0 {ph:.3} 0 0 cm /Im0 Do Q");
         obj(&mut out, format!("<< /Length {} >>\nstream\n{stream}\nendstream", stream.len()).as_bytes());
+        let soft = if mask.is_some() { format!(" /SMask {smask} 0 R") } else { String::new() };
         let mut img = format!(
-            "<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {} >>\nstream\n",
+            "<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceRGB /BitsPerComponent 8{soft} /Filter /DCTDecode /Length {} >>\nstream\n",
             jpeg.len()
         )
         .into_bytes();
         img.extend_from_slice(jpeg);
         img.extend_from_slice(b"\nendstream");
         obj(&mut out, &img);
+        if let Some(mask) = mask {
+            let mut m = format!(
+                "<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceGray /BitsPerComponent 8 /Matte [1 1 1] /Filter /FlateDecode /Length {} >>\nstream\n",
+                mask.len()
+            )
+            .into_bytes();
+            m.extend_from_slice(mask);
+            m.extend_from_slice(b"\nendstream");
+            obj(&mut out, &m);
+        }
     }
     let xref = out.len();
     out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes());
@@ -1189,13 +1235,51 @@ pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
+/// Leaves out `one`'s board fill for Artboards to PDF's Include Background in Export unticked
+/// (#13648), so what the board's layers don't cover becomes transparent. Only what the reference
+/// application was measured with: a white board with layers in an 8-bit RGB document. Anything
+/// else (an empty board, another fill, other modes and depths) keeps today's opaque page; the
+/// return value says whether the fill was left out.
+fn drop_white_fill(one: &mut Document) -> bool {
+    if one.mode != ColorMode::Rgb || one.depth != SampleType::U8 {
+        return false;
+    }
+    let mut dropped = false;
+    for board in &mut one.layers {
+        if board.children().is_some_and(|layers| !layers.is_empty())
+            && let Some(artboard) = board.artboard_mut()
+            && artboard.background == ArtboardBackground::White
+        {
+            artboard.background = ArtboardBackground::Transparent;
+            dropped = true;
+        }
+    }
+    dropped
+}
+
+/// A page's soft mask: its alpha as 8-bit gray, Flate-compressed. `None` when the page is opaque
+/// everywhere, so a board its layers cover entirely keeps today's page.
+fn soft_mask(px: &[[f32; 4]]) -> Result<Option<Vec<u8>>> {
+    let alpha: Vec<u8> = px.iter().map(|p| (p[3].clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+    if alpha.iter().all(|a| *a == 255) {
+        return Ok(None);
+    }
+    let failed = |e: std::io::Error| EngineError::Other(format!("Artboards to PDF: soft mask: {e}"));
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(6));
+    std::io::Write::write_all(&mut z, &alpha).map_err(failed)?;
+    Ok(Some(z.finish().map_err(failed)?))
+}
+
 /// File › Export › Artboards to PDF: one page per board (flattened over white, JPEG-encoded).
+/// With `"includeBackground": false` a white board's fill is left out and the page gets a soft
+/// mask, so a viewer shows its own background where the board has no pixels.
 fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToPdf";
     let path = str_param(p, "path", cmd)?.to_string();
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
     let quality = f64_param(p, "quality").or(Some(10.0));
+    let background = p.get("includeBackground").and_then(Value::as_bool).unwrap_or(true);
     // Reverse Page Order (#13644): the default page order the other way round.
     let reverse = match p.get("reversePageOrder") {
         None | Some(Value::Null) => false,
@@ -1205,10 +1289,14 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let guard = ScratchGuard::new(&doc)?;
     let mut pages = Vec::new();
     // Pages go bottom artboard of the Layers panel first, as in the reference application (#13643);
-    // `chosen_documents` lists them top first, the order Artboards to Files keeps.
-    for one in chosen_documents(&doc, p, overlapping)?.into_iter().rev() {
-        let jpeg = jpeg_page(&one, quality, cmd)?;
-        pages.push((one.size.width, one.size.height, doc.resolution_dpi, jpeg));
+    // `chosen_board_documents` lists them top first, the order Artboards to Files keeps.
+    for (id, mut one) in chosen_board_documents(&doc, p, overlapping)?.into_iter().rev() {
+        // A hidden board was not measured and keeps today's opaque page. `artboard_document`
+        // shows the board, so its visibility is read from the source.
+        let visible = doc.layer(id).is_some_and(|l| l.visible);
+        let masked = !background && visible && drop_white_fill(&mut one);
+        let (jpeg, mask) = jpeg_page_masked(&one, quality, masked, cmd)?;
+        pages.push((one.size.width, one.size.height, doc.resolution_dpi, jpeg, mask));
     }
     if pages.is_empty() {
         return Err(bad(cmd, "no matching artboards"));
@@ -1217,7 +1305,7 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
         pages.reverse();
     }
     guard.check()?;
-    write_file(&path, &raster_pdf(&pages))?;
+    write_file(&path, &raster_pdf_masked(&pages))?;
     Ok(json!({"path": path, "pages": pages.len()}))
 }
 
@@ -1288,7 +1376,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToPdf",
             "Artboards to PDF…",
             &["File", "Export"],
-            r##"{"path":str (.pdf),"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's page also shows the visible boards above it where they overlap it; artboard: Artboard Content Only),"artboards":[id]?,"quality":0..12=10,"reversePageOrder":bool=false (the default page order the other way round)} → {path, pages} (one raster page per board, bottom artboard of the Layers panel first)"##,
+            r##"{"path":str (.pdf),"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's page also shows the visible boards above it where they overlap it; artboard: Artboard Content Only),"artboards":[id]?,"quality":0..12=10,"includeBackground":bool=true (false: a white board's fill is left out and the page gets a soft mask, so it is transparent where the board's layers have no pixels; an empty board, other fills and documents other than 8-bit RGB keep it),"reversePageOrder":bool=false (the default page order the other way round)} → {path, pages} (one raster page per board, bottom artboard of the Layers panel first)"##,
             export_artboards,
             artboards_to_pdf
         ),
@@ -1328,6 +1416,9 @@ mod from_group_hidden_bounds_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/overlapping_areas_tests.rs"]
 mod overlapping_areas_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/pdf_include_background_tests.rs"]
+mod pdf_include_background_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/pdf_overlapping_areas_tests.rs"]
 mod pdf_overlapping_areas_tests;
