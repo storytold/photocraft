@@ -402,7 +402,7 @@ fn settings_only(b: &mut BrushSettings) -> BrushSettings {
 fn set_stored(b: &mut BrushSettings, refs: [Option<StoredTile>; 3]) {
     let [tip, dual, texture] = refs;
     if let Some(r) = tip {
-        b.tip = TipShape::Stored(r);
+        b.tip = TipShape::Stored(r).into();
     }
     if let Some(r) = dual {
         b.dual_brush.tip = TipShape::Stored(r);
@@ -1145,14 +1145,14 @@ impl Session {
         // The list stays shared (`make_mut` is taken at the first write) when the store changes nothing.
         let hide = |p: &BrushPreset| p.builtin && hidden_builtins.iter().any(|h| h.eq_ignore_ascii_case(&p.name));
         if self.tools.presets.iter().any(hide) {
-            std::sync::Arc::make_mut(&mut self.tools.presets).retain(|p| !hide(p));
+            std::sync::Arc::make_mut(&mut *self.tools.presets).retain(|p| !hide(p));
         }
         for p in presets {
             let found = self.tools.presets.iter().position(|x| x.name.eq_ignore_ascii_case(&p.name));
             match found {
-                Some(i) if self.tools.presets[i].builtin && self.tools.presets[i] != p => std::sync::Arc::make_mut(&mut self.tools.presets)[i] = p,
+                Some(i) if self.tools.presets[i].builtin && self.tools.presets[i] != p => std::sync::Arc::make_mut(&mut *self.tools.presets)[i] = p,
                 Some(_) => {}
-                None => std::sync::Arc::make_mut(&mut self.tools.presets).push(p),
+                None => std::sync::Arc::make_mut(&mut *self.tools.presets).push(p),
             }
         }
         // The saved panel order (stable: presets it doesn't name keep their order, at the end).
@@ -1160,7 +1160,7 @@ impl Session {
             let pos: HashMap<String, usize> = order.iter().enumerate().map(|(i, n)| (n.to_lowercase(), i)).collect();
             let key = |p: &BrushPreset| pos.get(&p.name.to_lowercase()).copied().unwrap_or(usize::MAX);
             if !self.tools.presets.iter().map(key).is_sorted() {
-                std::sync::Arc::make_mut(&mut self.tools.presets).sort_by_key(key);
+                std::sync::Arc::make_mut(&mut *self.tools.presets).sort_by_key(key);
             }
         }
         self.preset_store = Some(store);
@@ -1198,9 +1198,9 @@ impl Session {
         self.sync_preset_store();
         // A brush remembered from the previous run (or picked before the store loaded) may be
         // painting with previews; load the full tips now (a missing one keeps its preview).
-        let mut brush = std::mem::take(&mut self.tools.brush);
+        let mut brush = std::mem::take(&mut *self.tools.brush);
         let _ = self.load_brush_tips(&mut brush);
-        self.tools.brush = brush;
+        *self.tools.brush = brush;
         if let Some(st) = self.preset_store.as_mut() {
             warnings.extend(st.take_warnings());
         }
@@ -1236,7 +1236,7 @@ impl Session {
             }
             Ok(())
         };
-        if let TipShape::Stored(r) = &mut b.tip {
+        if let TipShape::Stored(r) = &mut *b.tip {
             load(r)?;
         }
         if let TipShape::Stored(r) = &mut b.dual_brush.tip {
@@ -1261,11 +1261,11 @@ fn link_stored_tips(st: &PresetStore, b: &mut BrushSettings) -> bool {
         st.tips.contains_key(&h).then(|| StoredTile { key: h, width: g.width, height: g.height, preview: Arc::new(g.preview(PREVIEW_SIDE)), full: None })
     };
     let mut linked = false;
-    if let TipShape::Sampled(g) = &b.tip
+    if let TipShape::Sampled(g) = &*b.tip
         && let Some(r) = link(g)
-        && let TipShape::Sampled(g) = std::mem::take(&mut b.tip)
+        && let TipShape::Sampled(g) = std::mem::take(&mut *b.tip)
     {
-        b.tip = TipShape::Stored(StoredTile { full: Some(Arc::new(g)), ..r });
+        b.tip = TipShape::Stored(StoredTile { full: Some(Arc::new(g)), ..r }).into();
         linked = true;
     }
     if let TipShape::Sampled(g) = &b.dual_brush.tip

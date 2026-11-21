@@ -13,6 +13,6 @@ photocraft-color = { workspace = true }
 photocraft-raster = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-# LayerId is plain data (the Layers panel keys its rows by it): the marker and its derive, without the UI.
+# Plain data (the engine holds documents in a `Tracked`): the marker and its derive, without the UI.
 craft-tracked = { workspace = true }
 craft-ui-macros = { workspace = true }
