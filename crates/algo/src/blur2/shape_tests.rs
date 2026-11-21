@@ -51,12 +51,16 @@ fn scalar_prefix_exact_all_shapes_radii_channels_subrects() {
     for shape in SHAPES {
         for radius in [0.0, 0.49, 0.5, 0.75, 1.0, 1.1, 2.5, 5.0, 25.0, 100.0] {
             let spans = Spans::new(radius, shape_inside(shape));
+            let prepared = crate::shape_blur::Prepared::new(radius, shape);
             for n in 1..=MAXC {
                 for alpha in [false, true] {
                     let src = image(Rect::new(-5, -3, 9, 7), n, alpha);
                     let ctx = Ctx { bounds: src.rect, mode: ColorMode::Multichannel, alpha };
-                    for out in [src.rect, Rect::new(-2, 1, 3, 2), Rect::new(-8, -7, 12, 10), Rect::EMPTY] {
-                        exact(&shape_blur(&src, out, &ctx, radius, shape), &conv_spans(&src, out, &ctx, &spans));
+                    // Exercise the direct entry point for each layout and reuse preparation for
+                    // the other rectangles of the same shape and radius.
+                    exact(&shape_blur(&src, src.rect, &ctx, radius, shape), &conv_spans(&src, src.rect, &ctx, &spans));
+                    for out in [Rect::new(-2, 1, 3, 2), Rect::new(-8, -7, 12, 10), Rect::EMPTY] {
+                        exact(&prepared.run(&src, out, &ctx), &conv_spans(&src, out, &ctx, &spans));
                     }
                 }
             }
