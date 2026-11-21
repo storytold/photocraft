@@ -293,12 +293,17 @@ fn check_file(name: &str, bytes: &[u8]) -> (Outcome, Option<f32>) {
     // Export must always succeed, re-parse and re-import.
     let reimported = match export(doc, "x.psd", &ExportOptions::default()) {
         Ok(r) => {
-            if let Err(e) = PsdFile::from_bytes(&r.bytes) {
-                eprintln!("{name:<60} REEXPORT-PARSE-ERROR {e}");
-                return (Outcome::Error, None);
-            }
-            // Every exported tagged block must re-parse strictly (#200).
-            let errs = common::strict_block_errors(&r.bytes);
+            let errs = {
+                let exported = match PsdFile::from_bytes(&r.bytes) {
+                    Ok(file) => file,
+                    Err(e) => {
+                        eprintln!("{name:<60} REEXPORT-PARSE-ERROR {e}");
+                        return (Outcome::Error, None);
+                    }
+                };
+                // Every exported tagged block must re-parse strictly (#200).
+                common::strict_parsed_block_errors(&exported)
+            };
             if !errs.is_empty() {
                 eprintln!("{name:<60} EXPORT-BLOCK-ERROR {}", errs.join("; "));
                 BLOCK_ERRORS.with(|b| b.borrow_mut().push(format!("{name}: {}", errs.join("; "))));
