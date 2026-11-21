@@ -104,6 +104,9 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
     photocraft_engine::file_cmds::validate_flat_outputs(&plan).map_err(|error| CliError::Naming(error.to_string()))?;
     if let Some(log) = &a.error_log {
         let same = |path: &Path| photocraft_engine::file_cmds::same_destination(log, path);
+        if same(&a.actions) {
+            return Err(CliError::BatchOption("--error-log must not replace the --actions file".into()));
+        }
         if inputs.iter().any(|input| same(Path::new(&input.path))) || targets.iter().any(|target| same(target)) {
             return Err(CliError::BatchOption("--error-log must not replace an input or batch output".into()));
         }
