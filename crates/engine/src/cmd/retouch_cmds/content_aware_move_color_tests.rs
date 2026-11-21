@@ -58,13 +58,11 @@ fn green_doc() -> Session {
     s
 }
 
-/// The same checker on a horizontal grey ramp, constant across each 10 px column. Cropped to what
-/// the tests read (the landings end at x 620, y 440): a fill samples the whole canvas, so its
-/// cost grows with it.
-fn ramp_doc() -> Session {
-    let mut s = session(640, 460);
+/// The same checker on a horizontal grey ramp, constant across each 10 px column.
+fn ramp_doc(height: u32, checker_y_offset: i32) -> Session {
+    let mut s = session(640, height);
     paint(&mut s, |x, y| {
-        if let Some(v) = checker(x, y) {
+        if let Some(v) = checker(x, y + checker_y_offset) {
             [v, v, v]
         } else {
             let column = x.div_euclid(10) * 10;
@@ -152,9 +150,10 @@ fn a_brightness_change_shifts_the_middle_only_past_color_five() {
     // step 1); Extend skips Move's fill of the old place, which nothing here reads. The drop
     // straight down below stays a Move.
     let row = |color: u64| {
-        let mut s = ramp_doc();
-        select_and_move(&mut s, [120, 120, 40, 40], [460, 280], color, "extend");
-        (levels(&s, 590, 420), levels(&s, 600, 420))
+        // The ramp varies only in x. Move across it on a shorter canvas with the same checker and fit ring.
+        let mut s = ramp_doc(100, 90);
+        select_and_move(&mut s, [120, 30, 40, 40], [460, 0], color, "extend");
+        (levels(&s, 590, 50), levels(&s, 600, 50))
     };
     let (light, dark) = row(0);
     assert_eq!((light, dark), ([200, 200, 200], [60, 60, 60]), "color 0 keeps the checker");
@@ -167,7 +166,7 @@ fn a_brightness_change_shifts_the_middle_only_past_color_five() {
     assert_eq!(dark, [dark[0]; 3]);
 
     // Same lighting, dropped straight down: the middle darkens (about −63; dark cells clip).
-    let mut s = ramp_doc();
+    let mut s = ramp_doc(460, 0);
     select_and_move(&mut s, [120, 120, 40, 40], [0, 280], 10, "move");
     let (light, dark) = (levels(&s, 130, 420), levels(&s, 140, 420));
     assert!(light[0] >= 120 && light[0] <= 155, "same lighting light cell: {light:?}");
