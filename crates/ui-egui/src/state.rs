@@ -195,6 +195,10 @@ pub struct UiState {
     /// Tool to restore when an inline type edit session commits or cancels (e.g. Move tool, #1132).
     #[serde(skip)]
     pub text_edit_return_tool: Option<Tool>,
+    /// `Session::active_layer_changes` once a Type Mask session gave the active layer back
+    /// (#12078): a later change of active layer ends the mask, as it ends other type edits.
+    #[serde(skip)]
+    pub type_mask_layer_changes: Option<u64>,
     /// Ctrl/Cmd Type-tool gesture; never saved or restored.
     #[serde(skip)]
     pub type_transform: Option<TypeTransform>,
@@ -473,6 +477,7 @@ impl Default for UiState {
             type_box_overflow: false,
             type_insertion_style: None,
             text_edit_return_tool: None,
+            type_mask_layer_changes: None,
             type_transform: None,
             type_transform_pivot: None,
             cam_transform: None,

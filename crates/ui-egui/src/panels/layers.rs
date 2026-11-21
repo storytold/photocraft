@@ -26,6 +26,10 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     // Thumbnail Contents is the clip preference alone, so the panel reads it each pass.
     app.ui.layers_settings.options.thumbnail_contents = crate::layers_panel_ui::thumbnail_contents(app);
+    // The reference application greys the panel while a Type Mask is edited (#12078).
+    if app.ui.text_edit.as_ref().is_some_and(|ed| ed.mask) {
+        ui.disable();
+    }
     // Taken out of the app for the pass; a move keeps its revision.
     let held = app.layers_tree.take();
     let Some(st) = app.session.active() else {
