@@ -541,3 +541,79 @@ fn a_stored_puppet_mesh_is_drawn_only_on_the_placement_it_was_made_for() {
     bare.smart_filters[0].params["mesh"].as_object_mut().unwrap().remove("placement");
     assert_eq!(render(&bare), Rect::new(16, 14, 66, 44), "no placement: solved");
 }
+
+/// Starts `cmd` as the UI does (`Session::start`) and waits for its background job; returns the
+/// command's result.
+fn run_as_job(s: &mut Session, cmd: &str, p: Value) -> Value {
+    let crate::jobs::Started::Job(id) = s.start(cmd, p).unwrap() else { panic!("{cmd} ran inline") };
+    let t = std::time::Instant::now();
+    loop {
+        if let Some(e) = s.poll_jobs().into_iter().find(|e| e.id == id) {
+            let crate::jobs::JobOutcome::Done(v) = e.outcome else { panic!("{cmd}: {e:?}") };
+            return v;
+        }
+        assert!(t.elapsed().as_secs() < 60, "{cmd} did not finish");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+#[test]
+fn puppet_warp_job_moves_a_linked_mask_with_the_pixels() {
+    // #4910 on the worker: the layer's warp hands the moved mask to the mask step there too.
+    for depth in [8u64, 16, 32] {
+        let mut s = masked_session(depth, &[(20, 24)]);
+        let before = s.active().unwrap().doc.clone();
+        let steps = s.active().unwrap().history.past_len();
+        run_as_job(&mut s, PUPPET, json!({"pins": [{"src": [30, 25], "dst": [36, 29]}], "mode": "rigid", "interpolation": "bilinear"}));
+        assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "{depth}: one undo step");
+        for y in [16, 30, 42] {
+            assert!(mask_at(&s, 27, y) < 0.01, "{depth}: the stripe moved to x 26..30 (y {y})");
+            assert!(mask_at(&s, 21, y) > 0.99, "{depth}: and left x 20..24 (y {y})");
+        }
+        let was = before.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().pixel(21, 26);
+        assert!(worst_px(&active_surface(&s).pixel(27, 30), &was) <= 1.0 / 255.0, "{depth}");
+        s.undo();
+        assert!(mask_at(&s, 21, 30) < 0.01 && mask_at(&s, 27, 30) > 0.99, "{depth}: undo puts the mask back");
+    }
+}
+
+#[test]
+fn liquify_job_on_a_smart_object_adds_its_smart_filter() {
+    let mut s = session(8);
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let original = active_surface(&s);
+    let steps = s.active().unwrap().history.past_len();
+    let (cmd, p) = smart_distortions()[0].clone();
+    let r = run_as_job(&mut s, cmd, p.clone());
+    assert_eq!(r["changed"], true, "{r}");
+    let sm = smart(&s);
+    assert_eq!(sm.smart_filters.len(), 1);
+    assert_eq!(sm.smart_filters[0].command, LIQUIFY);
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one undo step");
+    // The same render as the synchronous command.
+    let mut inline = session(8);
+    inline.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let inline_r = inline.execute(cmd, p).unwrap();
+    assert_eq!(active_surface(&s), active_surface(&inline));
+    assert_ne!(active_surface(&s), original);
+    // The field's largest displacement comes back on a smart object too, measured on the worker.
+    assert!(r["maxDisplacement"].as_f64().is_some_and(|m| m > 0.0), "{r}");
+    assert_eq!(r["maxDisplacement"], inline_r["maxDisplacement"], "{r} vs {inline_r}");
+}
+
+#[test]
+fn liquify_that_displaces_nothing_leaves_no_history_step() {
+    // Zero pressure moves nothing: no undo step, inline or as a background job, and the layer
+    // and document stay as they were.
+    let p = json!({"strokes": [{"tool": "forwardWarp", "size": 30, "pressure": 0, "points": [[30, 25], [45, 25]]}]});
+    for threaded in [false, true] {
+        let mut s = session(8);
+        let doc = s.active().unwrap().doc.clone();
+        let steps = s.active().unwrap().history.past_len();
+        let r = if threaded { run_as_job(&mut s, LIQUIFY, p.clone()) } else { s.execute(LIQUIFY, p.clone()).unwrap() };
+        assert_eq!(r["changed"], false, "threaded {threaded}: {r}");
+        assert_eq!(r["maxDisplacement"], 0.0, "threaded {threaded}: {r}");
+        assert_eq!(s.active().unwrap().history.past_len(), steps, "threaded {threaded}: no history step");
+        assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &doc), "threaded {threaded}: the document was not replaced");
+    }
+}

@@ -1720,3 +1720,63 @@ fn unix_fingerprint_detects_a_same_size_rewrite_with_a_restored_mtime() {
     assert_ne!(before, after, "a same-size rewrite with a restored mtime is a different source");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Starts `cmd` in the background on a fresh [`session`] and checks it matches `execute`: one undo
+/// step labelled `label`, the same pixels.
+fn matches_inline_as_a_job(cmd: &str, label: &str, p: serde_json::Value) {
+    let mut inline = session(300, 200);
+    let expected = inline.execute(cmd, p.clone()).unwrap();
+    assert_eq!(expected["changed"], true, "{cmd}: {expected}");
+
+    let mut s = session(300, 200);
+    let before = pixels(&s);
+    let steps = s.active().unwrap().history.past_len();
+    let id = job(s.start(cmd, p).unwrap());
+    // The canvas shows the pre-job state until the job is applied.
+    assert_eq!(pixels(&s), before, "{cmd}");
+    let e = wait_event(&mut s, id);
+    let JobOutcome::Done(v) = &e.outcome else { panic!("{cmd}: {e:?}") };
+    assert_eq!(v["changed"], true, "{cmd}: {v}");
+    assert_eq!(e.label, label);
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "{cmd}: one undo step");
+    assert_eq!(pixels(&s), pixels(&inline), "{cmd}: same pixels as the synchronous command");
+    assert!(s.undo());
+    assert_eq!(pixels(&s), before, "{cmd}: undo");
+}
+
+#[test]
+fn liquify_runs_as_a_job_with_the_inline_result() {
+    let p = json!({"strokes": [{"tool": "forwardWarp", "size": 80, "points": [[120, 100], [160, 100]]}]});
+    matches_inline_as_a_job("filter.liquify", "Liquify", p);
+}
+
+#[test]
+fn puppet_warp_runs_as_a_job_with_the_inline_result() {
+    let p = json!({"pins": [{"src": [60, 100], "dst": [60, 100]}, {"src": [240, 100], "dst": [240, 70]}]});
+    matches_inline_as_a_job("edit.puppetWarp", "Puppet Warp", p);
+}
+
+#[test]
+fn perspective_warp_runs_as_a_job_with_the_inline_result() {
+    let p = json!({"planes": [{
+        "src": [[30, 20], [270, 20], [270, 180], [30, 180]],
+        "dst": [[50, 20], [250, 20], [270, 180], [30, 180]],
+    }]});
+    matches_inline_as_a_job("edit.perspectiveWarp", "Perspective Warp", p);
+}
+
+#[test]
+fn a_cancelled_liquify_leaves_the_document_unchanged() {
+    let mut s = session(1600, 1200);
+    let doc_before = s.active().unwrap().doc.clone();
+    let steps = s.active().unwrap().history.past_len();
+    let stroke = json!({"strokes": [{"tool": "bloat", "size": 600, "points": [[800, 600], [820, 600], [840, 600]]}]});
+    let id = job(s.start("filter.liquify", stroke).unwrap());
+    assert!(s.cancel_job(id));
+    assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
+    s.join_cancelled_jobs();
+    assert!(s.poll_jobs().is_empty(), "nothing arrives later");
+    let st = s.active().unwrap();
+    assert!(Arc::ptr_eq(&st.doc, &doc_before), "the document snapshot was not replaced");
+    assert_eq!(st.history.past_len(), steps);
+}
