@@ -75,8 +75,10 @@ fn ramp_doc() -> Session {
     s
 }
 
+// The swatches are constant down the image. Keep the full horizontal sampling windows and
+// 50 rows above and below the selection for the color fit.
 fn flat_doc() -> Session {
-    let mut s = session(800, 600);
+    let mut s = session(800, 200);
     paint(&mut s, |x, _| if x < 400 { [204, 204, 204] } else { [51, 51, 51] });
     s
 }
@@ -180,22 +182,22 @@ fn a_brightness_change_shifts_the_middle_only_past_color_five() {
 fn a_flat_patch_matches_the_new_surroundings_at_color_ten() {
     let moved_with = |color: u64, mode: &str| {
         let mut s = flat_doc();
-        select_and_move(&mut s, [150, 250, 100, 100], [400, 0], color, mode);
+        select_and_move(&mut s, [150, 50, 100, 100], [400, 0], color, mode);
         s
     };
     // Move and Extend land the content with the same code (`run_move` step 1); Move only adds
     // the fill of the old place, away from the landing. So Colors 0 and 3 run once (Extend, one
     // fill instead of two), and Color 10 runs in both modes, whose landings are compared pixel
     // by pixel below.
-    assert_eq!(levels(&moved_with(0, "extend"), 600, 300), [204, 204, 204], "color 0 keeps 204");
-    assert_eq!(levels(&moved_with(3, "extend"), 600, 300), [204, 204, 204], "color 3 leaves the middle");
+    assert_eq!(levels(&moved_with(0, "extend"), 600, 100), [204, 204, 204], "color 0 keeps 204");
+    assert_eq!(levels(&moved_with(3, "extend"), 600, 100), [204, 204, 204], "color 3 leaves the middle");
     let moved = moved_with(10, "move");
     let extended = moved_with(10, "extend");
     for (mode, s) in [("move", &moved), ("extend", &extended)] {
-        assert_eq!(levels(s, 600, 300), [51, 51, 51], "{mode} color 10 becomes 51");
+        assert_eq!(levels(s, 600, 100), [51, 51, 51], "{mode} color 10 becomes 51");
     }
     // The landing itself agrees; the old place is the part Move refills and Extend keeps.
-    for y in [256, 300, 340] {
+    for y in [56, 100, 140] {
         for x in [556, 600, 640] {
             assert_eq!(levels(&moved, x, y), levels(&extended, x, y), "move and extend agree at {x},{y}");
         }
