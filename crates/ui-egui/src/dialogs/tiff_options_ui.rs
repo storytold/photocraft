@@ -51,7 +51,7 @@ impl TiffChoice {
     /// Adds `tiffCompression`, and `tiffTransparency` and `tiffPyramid` when set, to a recorded
     /// save step, so replaying it doesn't ask again. `tiffLayers` is recorded by the save itself.
     pub fn record(self, step: &mut Value) {
-        step["tiffCompression"] = compression_name(self.compression).into();
+        step["tiffCompression"] = if self.ccitt_g4 { "g4" } else { compression_name(self.compression) }.into();
         if let Some(t) = self.transparency {
             step["tiffTransparency"] = t.into();
         }
@@ -106,6 +106,8 @@ pub struct Parked {
     has_transparency: bool,
     /// The layered-file note ("Ask Before Saving Layered TIFF Files") shows.
     layer_note: bool,
+    /// The document is in Bitmap mode (1-bit bilevel).
+    is_bitmap: bool,
 }
 
 /// The framework's compression for the codec's (PackBits, which the dialog doesn't offer, as none).
@@ -157,23 +159,25 @@ pub fn park_dialog(app: &mut PhotocraftApp, path: String, copy: bool, record: &'
     options.compression = ui_compression(compression);
     options.pyramid = pyramid;
     options.transparency = transparency;
+    let is_bitmap = st.doc.mode == photocraft_doc::ColorMode::Bitmap;
     let dialog =
         HostedFormatOptions::new(app.ctx(), ExportOptionsKind::Tiff).initial(FormatOptions::Tiff(options)).tiff_document(layered, has_transparency, layer_note);
-    let parked = Parked { layered, has_transparency, layer_note };
+    let parked = Parked { layered, has_transparency, layer_note, is_bitmap };
     format_prompts::park(app, ParkedSave { doc, path, copy, record, format: ParkedFormat::Tiff(parked) }, dialog)
 }
 
 /// OK: writes the parked save with the dialog's answer, and journals it.
 pub(crate) fn finish(app: &mut PhotocraftApp, ctx: &egui::Context, save: ParkedSave, options: TiffOptions) {
-    let ParkedFormat::Tiff(Parked { layered, has_transparency, layer_note }) = save.format else { return };
+    let ParkedFormat::Tiff(Parked { layered, has_transparency, layer_note, is_bitmap }) = save.format else { return };
     if layer_note && options.dont_show_again && !options.discard_layers {
         app.session.edit_prefs(|prefs| prefs.file_handling.ask_before_saving_layered_tiff = false);
     }
     let compression = codec_compression(options.compression);
     app.tiff_remembered = Remembered { compression, pyramid: options.pyramid };
+    let ccitt_g4 = is_bitmap && options.compression != UiTiffCompression::None;
     let choice = TiffChoice {
         compression,
-        ccitt_g4: false,
+        ccitt_g4,
         transparency: has_transparency.then_some(options.transparency),
         pyramid: options.pyramid,
         layers: layered.then_some(!options.discard_layers),
