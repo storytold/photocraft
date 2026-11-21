@@ -936,3 +936,21 @@ bench = "pen_cursor_bench"
 row = "Pen painted cursor"
 budget_ms = 0.25
 enforce = false  # advisory until measured on the nightly runner
+
+[[scenario]]
+id = "P95"
+title = "Filter dialog preview canvas upload at k 1, 36 MP, 1920x1080 view (display + texels)"
+issue = 5772
+bench = "interactive_bench"
+row = "filter preview canvas upload, k 1 (view, display + texels)"
+budget_ms = 16
+enforce = false  # met on an RTX 4090 Laptop (worst step 5.1 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
+
+[[scenario]]
+id = "P96"
+title = "Filter dialog preview window texture at k 1, 36 MP (whole image)"
+issue = 5772
+bench = "interactive_bench"
+row = "filter preview window texture, k 1 (whole image)"
+budget_ms = 16
+enforce = false  # not measured since the framework's preview pane (2026-11-20): the window's texture is now the whole image, not its view (3.2 ms cropped, 2026-10-24)
