@@ -20,17 +20,24 @@ pub struct PlacedSpec<'a> {
 }
 
 /// Where the frame corners land (top-left, top-right, bottom-right, bottom-left), as x, y pairs.
-/// The frame is [`crate::blocks::placed_frame`] of `warp`, the warp the block stores, for an
-/// affine placement (the inverse of `parse_smart`), [`crate::blocks::perspective_frame`] of it
-/// for a projective one (as `parse_smart_perspective` reads it).
-fn quad_points(s: &PlacedSpec<'_>, warp: Option<&Warp>) -> [f64; 8] {
+/// The frame is [`crate::blocks::sold_frame`] of `warp`, the warp the block stores, for an
+/// affine placement in a `SoLd` (the inverse of `parse_smart`; [`crate::blocks::placed_frame`]
+/// in a `PlLd`, `sold` false), [`crate::blocks::perspective_frame`] of it for a projective one
+/// (as `parse_smart_perspective` reads it).
+fn quad_points(s: &PlacedSpec<'_>, warp: Option<&Warp>, sold: bool) -> [f64; 8] {
     let (w, h) = s.size;
     let [a, b, c, d, e, f] = s.transform.m;
     let map = |x: f64, y: f64| match &s.perspective {
         Some(p) => photocraft_algo::transform::Homography(*p).apply(x, y),
         None => (a * x + c * y + e, b * x + d * y + f),
     };
-    let [x0, y0, x1, y1] = if s.perspective.is_some() { crate::blocks::perspective_frame(warp, w, h) } else { crate::blocks::placed_frame(warp, w, h) };
+    let [x0, y0, x1, y1] = if s.perspective.is_some() {
+        crate::blocks::perspective_frame(warp, w, h)
+    } else if sold {
+        crate::blocks::sold_frame(warp, w, h)
+    } else {
+        crate::blocks::placed_frame(warp, w, h)
+    };
     let mut out = [0.0; 8];
     for (i, (x, y)) in [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].into_iter().enumerate() {
         (out[2 * i], out[2 * i + 1]) = map(x, y);
@@ -39,15 +46,15 @@ fn quad_points(s: &PlacedSpec<'_>, warp: Option<&Warp>) -> [f64; 8] {
 }
 
 /// The transform quad: the source corners (top-left, top-right, bottom-right, bottom-left).
-fn quad(s: &PlacedSpec<'_>, warp: Option<&Warp>) -> Value {
-    Value::List(quad_points(s, warp).into_iter().map(Value::Double).collect())
+fn quad(s: &PlacedSpec<'_>, warp: Option<&Warp>, sold: bool) -> Value {
+    Value::List(quad_points(s, warp, sold).into_iter().map(Value::Double).collect())
 }
 
 /// Has the placement moved from the quad a template descriptor stores (`Trnf`)?
 pub(super) fn quad_moved(template: &Descriptor, s: &PlacedSpec<'_>, warp: Option<&Warp>) -> bool {
     let Some(Value::List(pts)) = template.get("Trnf") else { return true };
     let old: Vec<f64> = pts.iter().filter_map(|v| crate::blocks::num(Some(v))).collect();
-    let new = quad_points(s, warp);
+    let new = quad_points(s, warp, true);
     old.len() != 8 || old.iter().zip(new).any(|(a, b)| (a - b).abs() > 1e-6 * (1.0 + a.abs()))
 }
 
@@ -183,8 +190,8 @@ pub fn sold_bytes(template: Option<&Descriptor>, s: &PlacedSpec<'_>, warnings: &
                 set(&mut d, "placed", Value::Text(UnicodeString::new_nul(s.placed)));
             }
             if quad_moved(t, s, stored) {
-                set(&mut d, "Trnf", quad(s, stored));
-                set(&mut d, "nonAffineTransform", quad(s, stored));
+                set(&mut d, "Trnf", quad(s, stored, true));
+                set(&mut d, "nonAffineTransform", quad(s, stored, true));
             }
             set(&mut d, "warp", warp);
             // `quiltWarp` is read before `warp`, so the imported one stays only while it still
@@ -219,8 +226,8 @@ pub fn sold_bytes(template: Option<&Descriptor>, s: &PlacedSpec<'_>, warnings: &
                 .with("frameCount", Value::Integer(1))
                 .with("Annt", Value::Integer(16))
                 .with("Type", Value::Integer(2))
-                .with("Trnf", quad(s, stored))
-                .with("nonAffineTransform", quad(s, stored));
+                .with("Trnf", quad(s, stored, true))
+                .with("nonAffineTransform", quad(s, stored, true));
             if let Some((w, m)) = split {
                 d = d.with("quiltWarp", quilt_desc(w, m, None));
             }
@@ -254,7 +261,7 @@ pub fn plld_bytes(s: &PlacedSpec<'_>, warnings: &mut Vec<String>) -> Vec<u8> {
     for v in [1i32, 1, 16, 2] {
         out.extend_from_slice(&v.to_be_bytes());
     }
-    if let Value::List(q) = quad(s, warp) {
+    if let Value::List(q) = quad(s, warp, false) {
         for v in q {
             if let Value::Double(x) = v {
                 out.extend_from_slice(&x.to_be_bytes());
