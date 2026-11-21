@@ -234,3 +234,54 @@ fn a_first_click_on_a_dark_core_inside_a_red_ring_corrects_the_ring() {
     assert!(n > 800, "the red ring changes ({n} px)");
     assert_ne!(at(&px, 200, 188), [210, 40, 40], "the ring kept its red");
 }
+
+#[test]
+fn a_first_click_on_the_highlight_next_to_a_dark_fleck_corrects_the_pupil() {
+    // A single black pixel beside the highlight is nearer the click than any red (#16148 review).
+    let mut px = eye(RED, true);
+    paint(&mut px, [0, 0, 0], |x, y| (x, y) == (206, 193));
+    let n = apply(&mut px, SIDE, SIDE, (206, 194), ORIGIN, 50.0, 50.0);
+    assert_pupil_corrected(&px, n, "dark fleck");
+    assert_eq!(at(&px, 206, 193), [0, 0, 0], "the fleck is left alone");
+}
+
+#[test]
+fn a_first_click_on_a_thick_grey_iris_corrects_the_small_red_pupil() {
+    // A grey iris out to r 24 around a red pupil of r 8; the click lands on the grey (#16148 review).
+    let mut px = eye(RED, true);
+    paint(&mut px, GREY_IRIS, |x, y| in_disc(x, y, 200.0, 200.0, 24.0));
+    paint(&mut px, RED, |x, y| in_disc(x, y, 200.0, 200.0, 8.0));
+    let before = px.clone();
+    let n = apply(&mut px, SIDE, SIDE, (200, 179), ORIGIN, 50.0, 50.0);
+    assert!(n > 150, "the red pupil changes ({n} px)");
+    assert!(centre(&px).iter().all(|&c| c <= 30), "centre {:?}", centre(&px));
+    for y in 170..231 {
+        for x in 170..231 {
+            let q = at(&px, x, y);
+            if in_disc(x, y, 200.0, 200.0, 8.0) {
+                assert!((q[0] - q[1]).abs() <= 10 && (q[0] - q[2]).abs() <= 10, "({x},{y}) {q:?} is not neutral");
+            } else {
+                assert_eq!(q, at(&before, x, y), "({x},{y}) outside the pupil changed");
+            }
+        }
+    }
+    assert_eq!(at(&px, 200, 150), [200, 150, 120], "the skin is left alone");
+}
+
+#[test]
+fn a_second_click_on_a_bright_corrected_pupil_leaves_the_skin_alone() {
+    // A light red pupil stays above the dark-neutral luminance after one correction at 50/50; a
+    // second centre click must still not grey the skin (#16148 review).
+    let mut px = eye([255, 153, 153], false);
+    assert!(click(&mut px, 50.0, 50.0) > 900, "the first click corrects the pupil");
+    let q = centre(&px);
+    assert!((q[0] - q[1]).abs() <= 10 && (q[0] - q[2]).abs() <= 10, "centre {q:?} is not neutral");
+    let once = px.clone();
+    click(&mut px, 50.0, 50.0);
+    for (a, b) in once.iter().zip(&px) {
+        for c in 0..3 {
+            assert!((a[c] - b[c]).abs() * 255.0 <= 5.0, "second click moved {a:?} to {b:?}");
+        }
+    }
+    assert_eq!(at(&px, 200, 150), [200, 150, 120], "the skin is left alone");
+}
