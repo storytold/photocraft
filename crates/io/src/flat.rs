@@ -3768,6 +3768,22 @@ mod bilevel_tiff_tests {
     }
 
     #[test]
+    fn opaque_composite_over_transparent_bottom_layer_succeeds_with_preserve_alpha() {
+        let mut doc = Document::new("multi", Size::new(2, 1), ColorMode::Bitmap, SampleType::U8);
+        // Bottom layer: transparent
+        let bottom = Surface::from_interleaved(photocraft_color::PixelFormat::RGBA8, Rect::new(0, 0, 2, 1), &[0, 0, 0, 0, 0, 0, 0, 0]);
+        doc.layers.push(photocraft_doc::Layer::new("Bottom", photocraft_doc::LayerContent::Raster(bottom)));
+        // Upper layer: opaque covering the canvas
+        let top = Surface::from_interleaved(photocraft_color::PixelFormat::RGBA8, Rect::new(0, 0, 2, 1), &[255, 255, 255, 255, 0, 0, 0, 255]);
+        doc.layers.push(photocraft_doc::Layer::new("Top", photocraft_doc::LayerContent::Raster(top)));
+
+        let mut opts = ExportOptions { tiff_ccitt_g4: true, ..Default::default() };
+        opts.preserve_alpha = true;
+        let res = export_flat(&doc, Format::Tiff, &opts);
+        assert!(res.is_ok());
+    }
+
+    #[test]
     fn bilevel_tiff_warns_when_dropping_extra_channels() {
         let mut doc = import_flat("bilevel.tif", &tiff(1, 1)).unwrap().document;
         doc.channels.push(photocraft_doc::AlphaChannel::new("Alpha 1", Surface::new(photocraft_color::PixelFormat::GRAY8)));
