@@ -387,6 +387,56 @@ mod app_tests {
         assert_eq!(s.frames, 1, "the frame whose stroke the last pass cancelled: {s:?}");
     }
 
+    /// Run in a fresh test process so process-wide caches start cold.
+    /// ```text
+    /// cargo test --locked -p photocraft-ui-egui --lib -- --exact frame_stages::app_tests::profile_app_startup_and_first_frame --ignored --nocapture --test-threads=1
+    /// ```
+    #[test]
+    #[ignore = "manual test-profile startup timings (#15651)"]
+    fn profile_app_startup_and_first_frame() {
+        use std::time::Instant;
+
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 64, "height": 64, "background": "white"})).unwrap();
+        let services = crate::Services::default();
+
+        // Time the two phases of PhotocraftApp::new on the same context that runs the whole app.
+        let start = Instant::now();
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, Default::default());
+        let setup = start.elapsed();
+        let state_start = Instant::now();
+        let mut app = PhotocraftApp::with_context(ctx, session, services);
+        let state = state_start.elapsed();
+        println!("CPU app timings with a 64 × 64 document. Fixture setup and host tessellation are outside these timings.");
+        println!(
+            "app construction: {:.3} ms (context and setup {:.3}, state and restore {:.3})",
+            (setup + state).as_secs_f64() * 1000.0,
+            setup.as_secs_f64() * 1000.0,
+            state.as_secs_f64() * 1000.0
+        );
+
+        // Building the harness draws its first frame and may draw settling frames. Read the first retained frame.
+        app.slow_frames.set_threshold_ms(0.0);
+        let mut harness =
+            egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(1440.0, 900.0)).with_max_steps(4).build_eframe(move |_| app);
+        let report = |label: &str, frame: &super::FrameStages| {
+            assert_eq!(frame.path, "cpu", "{label} uses the headless CPU canvas");
+            println!(
+                "{label}: {:.3} ms (input {:.3}, UI {:.3}, command {:.3}, composite {:.3}, upload {:.3})",
+                frame.frame_ms, frame.input_ms, frame.ui_ms, frame.command_ms, frame.composite_ms, frame.upload_ms
+            );
+        };
+        let frames = &harness.state().slow_frames;
+        let count = frames.frames().count();
+        assert!((1..super::SLOW_FRAMES).contains(&count), "the initial frame stays in the record: {count}");
+        report("first root frame", frames.frames().next().expect("the initial whole app frame"));
+        harness.step();
+        let frames = &harness.state().slow_frames;
+        assert_eq!(frames.frames().count(), count + 1);
+        report("one frame after harness setup", frames.frames().next_back().expect("the measured whole app frame"));
+    }
+
     #[test]
     fn an_app_frame_with_a_full_refresh_records_its_stages() {
         let (w, h) = (4000u64, 3000u64);
