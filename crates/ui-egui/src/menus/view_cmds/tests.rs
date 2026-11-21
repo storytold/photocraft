@@ -961,3 +961,6 @@ fn rotate_view_params_set_add_reset_and_reject() {
     run(&mut app, json!({"angle": 1.0e20})).unwrap();
     assert!(angle(&app).is_finite() && angle(&app).abs() <= 180.0);
 }
+
+#[path = "apply_image_default_channel_tests.rs"]
+mod apply_image_default_channel_tests;

@@ -6,6 +6,7 @@ use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind};
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::requests::PathKind;
+use photocraft_engine::channel_cmds::{self, ChanRef, ChannelTarget};
 
 // ---------- dialogs and pickers in front of engine commands ----------
 
@@ -524,16 +525,21 @@ fn batch_form(app: &PhotocraftApp, dir: &str) -> Option<(Vec<Param>, DialogField
     Some((rows, DialogFields::new()))
 }
 
+// Apply Image's source picker uses an index when a saved channel's name resolves to a
+// different channel. The label remains the saved channel's own name.
+pub(crate) const APPLY_IMAGE_ALPHA_PREFIX: &str = "@alpha:";
+
 /// The channel workflow forms (see channels_panel.rs for the channel references): Save and Load Selection, Apply
 /// Image and Calculations.
 fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFields)> {
     let st = app.session.active()?;
     let d = &st.doc;
     let mode = d.pixel_format().mode;
-    let mut chans: Vec<String> = vec![photocraft_engine::channel_cmds::composite_name(mode).to_string()];
+    let mut chans: Vec<String> = vec![channel_cmds::composite_name(mode).to_string()];
     if mode.color_channels() > 1 {
-        chans.extend(photocraft_engine::channel_cmds::color_names(mode).iter().map(|n| n.to_string()));
+        chans.extend(channel_cmds::color_names(mode).iter().map(|n| n.to_string()));
     }
+    let alpha_offset = chans.len();
     chans.extend(d.channels.iter().map(|c| c.name.clone()));
     let alphas: Vec<String> = std::iter::once("new".to_string()).chain(d.channels.iter().map(|c| c.name.clone())).collect();
     // The active layer's transparency, and its mask only when it has one.
@@ -569,8 +575,6 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
             ]
         }
         "image.applyImage" => {
-            let mut masks = vec!["none".to_string()];
-            masks.extend(load.iter().cloned());
             // Source layer: Merged, then the pixel layers top to bottom (the engine takes
             // the topmost layer of a name), shown by their own names.
             let mut layers = vec!["merged".to_string()];
@@ -579,17 +583,40 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
                     layers.push(l.name.clone());
                 }
             }
+            let target = match st.channel_view.target {
+                ChannelTarget::Color(index) if st.channel_view.color_selection(mode.color_channels()).is_some_and(|colors| colors.len() == 1) => {
+                    Some(index + 1)
+                }
+                ChannelTarget::Alpha(index) if index < d.channels.len() => Some(alpha_offset + index),
+                _ => None,
+            };
+            let mut sources = channels(&load);
+            let mut masks = Vec::with_capacity(sources.len() + 1);
+            masks.push(("none".into(), Label::from(tl!("None"))));
+            masks.extend(sources.iter().cloned());
+            for (index, (key, label)) in sources.iter_mut().skip(alpha_offset).take(d.channels.len()).enumerate() {
+                if key.starts_with(APPLY_IMAGE_ALPHA_PREFIX)
+                    || (target == Some(alpha_offset + index) && (key.is_empty() || channel_cmds::parse_ref(&json!(key), d) != Some(ChanRef::Alpha(index))))
+                {
+                    *label = Label::from(key.clone());
+                    *key = format!("{APPLY_IMAGE_ALPHA_PREFIX}{index}");
+                }
+            }
+            let default = target.and_then(|index| sources.get(index)).map_or_else(|| chans[0].clone(), |(key, _)| key.clone());
+            let source = choice("sourceChannel", tl!("Source Channel"), sources, &default);
+            // An explicit single target wins over the last successfully used source.
+            let source = if target.is_some() { source.not_remembered() } else { source };
             // Scale and Offset only affect Add and Subtract.
             vec![
                 choice("sourceLayer", tl!("Layer"), channels(&layers), "merged"),
-                choice("sourceChannel", tl!("Source Channel"), channels(&load), &chans[0]),
+                source,
                 Param::new("sourceInvert", tl!("Invert"), ParamKind::bool(false)),
                 choice("blending", tl!("Blending"), blend_modes(), "multiply"),
                 Param::new("opacity", tl!("Opacity"), ParamKind::number(Some(0.0), Some(100.0), 100.0, 1.0, 0)),
                 Param::new("scale", tl!("Scale"), ParamKind::number(Some(0.001), Some(2.0), 1.0, 0.1, 3)),
                 Param::new("offset", tl!("Offset"), ParamKind::int(Some(-255), Some(255), 0)),
                 Param::new("preserveTransparency", tl!("Preserve Transparency"), ParamKind::bool(false)),
-                choice("maskChannel", tl!("Mask Channel"), channels(&masks), "none"),
+                choice("maskChannel", tl!("Mask Channel"), masks, "none"),
             ]
         }
         _ => vec![
