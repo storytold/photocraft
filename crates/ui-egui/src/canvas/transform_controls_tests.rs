@@ -148,8 +148,16 @@ fn a_press_in_the_margin_of_a_floating_piece_starts_a_new_selection() {
         app.ui.tool = tool;
         app.ui.extras.snap = false;
         app.ui.view.show.smart_guides = false;
+        let layer = app.session.active().unwrap().active_layer;
         drag(&mut app, [33.0, 28.0], [10.0, 10.0], none);
         assert_eq!(float_offset(&app), None, "{tool:?}: in the old marquee's margin the piece is dropped and a new selection starts");
+        if tool == Tool::RectMarquee {
+            let st = app.session.active().unwrap();
+            assert_eq!(st.active_layer, layer);
+            assert_eq!(bounds(&app), Some(photocraft_geom::Rect::new(10, 10, 33, 28)), "the drag makes a new marquee");
+            let surface = st.doc.layer(layer.unwrap()).unwrap().surface().unwrap();
+            assert_eq!(surface.content_bounds(), photocraft_geom::Rect::new(50, 45, 100, 85), "the red pixels are dropped at their floating offset");
+        }
     }
 }
 
