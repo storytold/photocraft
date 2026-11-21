@@ -127,3 +127,48 @@ fn with_a_selection_the_converted_layers_mask_is_the_selection() {
     let m = l.mask.as_ref().unwrap();
     assert_eq!((m.value(5, 5), m.value(30, 20)), (1.0, 0.0));
 }
+
+#[test]
+fn the_converted_layer_keeps_the_psd_blocks_that_dont_describe_a_content_kind() {
+    let mut s = session();
+    let top = add_layer(&mut s, "Top");
+    s.edit("layer properties", |d, _| {
+        let l = d.layer_mut(top).unwrap();
+        l.psd_blocks.push((*b"lyvr", std::sync::Arc::new(vec![0, 0, 0, 16])));
+        l.psd_blocks.push((*b"lnkE", std::sync::Arc::new(vec![7])));
+        // Describing another content kind: kept, they would reopen the layer as that kind.
+        l.psd_blocks.push((*b"SoCo", std::sync::Arc::new(vec![1])));
+        l.psd_blocks.push((*b"TySh", std::sync::Arc::new(vec![2])));
+        l.psd_blocks.push((*b"vmsk", std::sync::Arc::new(vec![3])));
+        Ok(())
+    })
+    .unwrap();
+    s.execute(CREATE, drag()).unwrap();
+    let l = s.active().unwrap().doc.layer(top).unwrap();
+    assert!(matches!(l.content, LayerContent::Fill(_)));
+    let keys: Vec<&[u8; 4]> = l.psd_blocks.iter().map(|(k, _)| k).collect();
+    assert_eq!(keys, [b"lyvr", b"lnkE"], "the layer version and link block stay; the content-kind blocks go");
+}
+
+#[test]
+fn a_video_layer_with_an_empty_current_frame_gets_a_new_layer_above() {
+    let mut s = session();
+    let video = add_layer(&mut s, "Video");
+    s.edit("video layer", |d, _| {
+        let l = d.layer_mut(video).unwrap();
+        let fmt = l.surface().unwrap().format();
+        let mut painted = photocraft_raster::Surface::new(fmt);
+        painted.fill_rect(photocraft_geom::Rect::new(4, 4, 12, 12), &[1.0, 0.0, 0.0, 1.0]);
+        let empty = photocraft_raster::Surface::new(fmt);
+        // The current frame (0) is empty; frame 1 holds pixels.
+        l.video = Some(photocraft_doc::VideoData::new(vec![empty, painted], 24.0));
+        Ok(())
+    })
+    .unwrap();
+    s.execute(CREATE, drag()).unwrap();
+    assert_eq!(names(&s).len(), 3, "a new layer above, not a conversion: {:?}", names(&s));
+    let d = &s.active().unwrap().doc;
+    let l = d.layer(video).unwrap();
+    assert!(matches!(l.content, LayerContent::Raster(_)), "the video layer is still a pixel layer");
+    assert_eq!(l.video.as_ref().unwrap().frames.len(), 2, "its frames are intact");
+}
