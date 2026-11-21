@@ -66,7 +66,7 @@ pub use dialogs::{apply_window, invoke, open_preferences, window_open};
 pub(crate) use dialogs::{feed, take as take_window};
 pub(crate) use presets::{PRESETS_FAMILY, take as take_presets};
 pub(crate) use save::save_preferences;
-pub use save::{autosave_now, tick};
+pub use save::{autosave_dirty_now, autosave_now, tick};
 pub use shortcuts::{open as open_shortcuts, recording, shortcuts_open, show as show_shortcuts};
 pub use startup::load;
 pub(crate) use startup::{on_recovery_event, remember_rulers};

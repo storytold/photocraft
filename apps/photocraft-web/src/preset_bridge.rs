@@ -72,9 +72,29 @@ pub struct ActionWrite {
     pub keys: ActionKeys,
 }
 
+/// Plain records by name; `None` deletes one. The recovery store (#6615) writes only these.
+pub type Files = BTreeMap<String, Option<Arc<[u8]>>>;
+
 pub enum Batch {
-    Files(BTreeMap<String, Option<Arc<[u8]>>>),
+    Files(Files),
     Actions(ActionWrite),
+}
+
+/// Whether committing `files` on top of `stored` (every record's name and size, as read inside
+/// the write transaction) keeps the store within `max` bytes. Records the write replaces or
+/// deletes are not counted twice. A write that does not grow the store always fits, so a store
+/// another tab pushed over the cap can still be shrunk or cleaned up.
+pub fn fits_total(stored: impl IntoIterator<Item = (String, u64)>, files: &Files, max: u64) -> bool {
+    let (mut current, mut kept) = (0u64, 0u64);
+    for (name, size) in stored {
+        current = current.saturating_add(size);
+        if !files.contains_key(&name) {
+            kept = kept.saturating_add(size);
+        }
+    }
+    let added = files.values().flatten().fold(0u64, |sum, bytes| sum.saturating_add(bytes.len() as u64));
+    let next = kept.saturating_add(added);
+    next <= max || next <= current
 }
 
 #[derive(Debug)]
@@ -752,5 +772,34 @@ mod tests {
         assert_eq!(loaded.tools.presets, s.tools.presets);
         assert_eq!(loaded.presets.gradients, s.presets.gradients);
         assert!(loaded.presets.gradients.iter().any(|g| g.name == "Browser gradients"));
+    }
+
+    fn put(len: usize) -> Option<Arc<[u8]>> {
+        Some(vec![0u8; len].into())
+    }
+
+    #[test]
+    fn total_cap_is_checked_against_what_is_stored_not_what_this_tab_knows() {
+        // Another tab already stored 700 bytes; this tab adds 200 against a 768-byte cap.
+        let stored = [("web-other-1.pcraft".to_string(), 700u64)];
+        let files = Files::from([("web-mine-2.pcraft".to_string(), put(200))]);
+        assert!(!fits_total(stored.clone(), &files, 768));
+        assert!(fits_total(stored, &files, 900));
+    }
+
+    #[test]
+    fn total_cap_does_not_count_replaced_records_twice_and_never_blocks_shrinking() {
+        let stored = [("a".to_string(), 500u64), ("b".to_string(), 400u64)];
+        // Replacing `a` with 300 bytes: 300 + 400 fits 768.
+        assert!(fits_total(stored.clone(), &Files::from([("a".to_string(), put(300))]), 768));
+        // The store is already over the cap (900 > 768): a replacement that shrinks it (800) is
+        // allowed, one that grows it (1000) is refused.
+        assert!(fits_total(stored.clone(), &Files::from([("a".to_string(), put(400))]), 768));
+        assert!(!fits_total(stored.clone(), &Files::from([("a".to_string(), put(600))]), 768));
+        // Under the cap, growing past it is refused (300 + 400 stored, `a` becomes 500).
+        let under = [("a".to_string(), 300u64), ("b".to_string(), 400u64)];
+        assert!(!fits_total(under, &Files::from([("a".to_string(), put(500))]), 768));
+        // Deleting always fits.
+        assert!(fits_total(stored, &Files::from([("a".to_string(), None), ("b".to_string(), None)]), 768));
     }
 }

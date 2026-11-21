@@ -218,7 +218,12 @@ fn autosave(app: &mut PhotocraftApp, now: Instant) {
     if crate::panels::apply_data_set_ui::previewing(app) {
         return;
     }
-    let docs: Vec<AutosaveDoc> = app.session.documents().iter().map(|d| AutosaveDoc { id: d.doc.id.0, revision: d.revision, dirty: d.is_dirty() }).collect();
+    // Saved or closed documents drop their recovery data, and so does turning Autosave off: the
+    // copies already kept (on the web, in the browser's storage) are removed, not left behind.
+    // With Autosave off every document counts as clean, so `due` discards each tracked copy.
+    let on = interval.is_some();
+    let docs: Vec<AutosaveDoc> =
+        app.session.documents().iter().map(|d| AutosaveDoc { id: d.doc.id.0, revision: d.revision, dirty: on && d.is_dirty() }).collect();
     let due = app.autosave.due(now, docs);
     if let Some(discard) = app.services.discard_autosave.as_mut() {
         for id in &due.discard {
@@ -255,6 +260,14 @@ fn autosave_failed(app: &mut PhotocraftApp, text: String) {
 /// changes).
 pub fn autosave_now(app: &mut PhotocraftApp) {
     app.autosave.autosave_now();
+}
+
+/// Autosave unsaved documents right now, outside the frame loop (the web build, when the page is
+/// hidden and no frames run). Honors the Autosave preference; documents already saved at their
+/// current revision are skipped.
+pub fn autosave_dirty_now(app: &mut PhotocraftApp) {
+    autosave_now(app);
+    autosave(app, Instant::now());
 }
 
 /// History Log preference: append executed commands to a text file.
