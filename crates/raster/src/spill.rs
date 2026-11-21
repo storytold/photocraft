@@ -1143,6 +1143,12 @@ pub fn use_test_volume_space() {
     M.config().query_space = |dir| dir.is_dir().then_some((32 << 30, 64 << 30));
 }
 
+/// Substitute a volume-space query in an isolated test process.
+#[doc(hidden)]
+pub fn set_volume_space_for_tests(query: fn(&Path) -> Option<(u64, u64)>) {
+    M.config().query_space = query;
+}
+
 /// Runs at the start of every folder query, off every lock: tests stall it to simulate a dead mount.
 #[doc(hidden)]
 pub fn set_query_hook_for_tests(hook: Option<fn(&Path)>) {

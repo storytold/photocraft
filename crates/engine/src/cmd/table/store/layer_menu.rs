@@ -1,7 +1,7 @@
 use crate::cmd::{Color, CommandSpec, Fill, Layer, LayerContent, Value, color_param, has_doc, json, layer_panel_option, mask_new_layer};
 
 /// Layer menu: the gradient fill layer.
-pub(crate) fn specs() -> Vec<CommandSpec> {
+pub fn specs() -> Vec<CommandSpec> {
     vec![cmd!(
         "layer.newFillLayer.gradient",
         "Gradient…",

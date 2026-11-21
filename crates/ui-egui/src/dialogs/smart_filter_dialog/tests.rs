@@ -178,7 +178,7 @@ fn reduced_preview_scales_placement_stack_and_mask_without_adding_filters() {
     let (mut app, layer) = app(16, "rgb");
     // A half-visible shared mask, different from the layer mask.
     let st = app.session.active_mut().unwrap();
-    let doc = Arc::make_mut(&mut st.doc);
+    let doc = Arc::make_mut(st.doc_mut());
     let LayerContent::Smart(sm) = &mut doc.layer_mut(layer).unwrap().content else { panic!() };
     let mut mask = photocraft_doc::LayerMask::reveal_all();
     mask.surface.fill_rect(photocraft_geom::Rect::new(32, 0, 64, 48), &[0.0]);
@@ -234,10 +234,7 @@ fn blending_does_not_follow_layer_selection_or_the_layer_mask_target() {
     confirm(&mut app, id);
     assert_eq!(smart(&app, layer).smart_filters[0].opacity, 0.25);
     assert_eq!(app.session.active().unwrap().active_layer, Some(selected));
-    assert_eq!(
-        crate::surface_fingerprint(&app.session.active().unwrap().doc.layer(selected).unwrap().mask.as_ref().unwrap().surface),
-        crate::surface_fingerprint(&mask)
-    );
+    assert_eq!(app.session.active().unwrap().doc.layer(selected).unwrap().mask.as_ref().unwrap().surface.generation(), mask.generation());
 }
 
 /// Blending an Invert smart filter keeps the translucent pixels' alpha at 8, 16 and 32 bits.
