@@ -8,7 +8,7 @@ fn main() {
     let (doc_w, doc_h) = (6016usize, 4000usize);
     let click = (doc_w as i32 / 2, doc_h as i32 / 2);
     let pupil = 50.0f32;
-    let radius = redeye::search_radius(pupil);
+    let radius = redeye::SEARCH_RADIUS;
     let halo = redeye::halo_radius();
     let ext = radius.ceil() as i32 + halo;
     let x0 = click.0.saturating_sub(ext);
