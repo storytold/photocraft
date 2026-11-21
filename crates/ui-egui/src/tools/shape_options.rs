@@ -88,12 +88,13 @@ fn field_of(change: &ShapeChange) -> &'static str {
 
 /// Whether a cancelled gesture's restore value is already what the bar shows: no `Update` of the gesture
 /// reached the document, so a restore would add an empty history step and a cancelled pick must not run.
-fn already_shown(change: &ShapeChange, appearance: &ShapeAppearance, settings: &ShapeToolSettings) -> bool {
+fn already_shown(change: &ShapeChange, kind: ShapeKind, appearance: &ShapeAppearance, settings: &ShapeToolSettings) -> bool {
     match change {
         ShapeChange::Fill(p) => appearance.fill == *p,
         ShapeChange::Stroke { paint, .. } => appearance.stroke == *paint,
         ShapeChange::StrokeWidth(w) => appearance.stroke_width == *w,
         ShapeChange::StrokeStyle { style, .. } => appearance.stroke_style == *style,
+        ShapeChange::CornerRadius(r) if kind == ShapeKind::Triangle => settings.triangle_corner_radius == *r,
         ShapeChange::CornerRadius(r) => settings.corner_radius == *r,
         ShapeChange::Sides(n) => settings.sides == *n,
         ShapeChange::Weight(w) => settings.line_weight == *w,
@@ -254,7 +255,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     let mut remembered: Vec<Fill> = Vec::new();
     for event in &out.events {
         let Some(change) = proposal(event) else { continue };
-        if matches!(event, EditEvent::Cancel { .. }) && already_shown(change, &appearance, &settings) {
+        if matches!(event, EditEvent::Cancel { .. }) && already_shown(change, kind, &appearance, &settings) {
             continue;
         }
         let committed = !matches!(event, EditEvent::Update { .. } | EditEvent::Cancel { .. });

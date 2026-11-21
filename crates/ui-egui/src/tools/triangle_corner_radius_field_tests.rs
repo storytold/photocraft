@@ -211,3 +211,18 @@ fn the_create_triangle_dialog_starts_from_the_radius() {
         other => panic!("not a triangle: {other:?}"),
     }
 }
+
+#[test]
+fn escape_on_the_triangle_radius_compares_the_triangles_own_radius() {
+    use craft::draw::ui::shape::{ShapeAppearance, ShapeChange, ShapeToolSettings};
+    use craft::draw::ui::shape_drag::ShapeKind;
+    let mut settings = ShapeToolSettings::default();
+    settings.corner_radius = 7.0;
+    settings.triangle_corner_radius = 15.0;
+    let appearance = ShapeAppearance::new(crate::shape_paint_ui::paint_of(None), crate::shape_paint_ui::paint_of(None), 1.0);
+    let restore = ShapeChange::CornerRadius(15.0);
+    assert!(super::already_shown(&restore, ShapeKind::Triangle, &appearance, &settings), "the bar already shows the Triangle's 15");
+    assert!(!super::already_shown(&restore, ShapeKind::Rectangle, &appearance, &settings), "the Rectangle's radius is 7");
+    let restore = ShapeChange::CornerRadius(7.0);
+    assert!(!super::already_shown(&restore, ShapeKind::Triangle, &appearance, &settings), "the Triangle's radius is not 7");
+}
