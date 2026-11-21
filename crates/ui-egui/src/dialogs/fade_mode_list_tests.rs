@@ -4,9 +4,10 @@
 use craft::ui::patterns::form_dialogs::{Param, ParamKind};
 use craft::ui::runtime::env::Label;
 use photocraft_color::{BlendMode, ColorMode, SampleType};
+use photocraft_engine::fill_cmds::greyed_modes as greyed;
 use serde_json::json;
 
-use super::{COMMAND, greyed, param};
+use super::{COMMAND, param};
 use crate::PhotocraftApp;
 
 /// The reference application's Fade Mode list, a group per row.
