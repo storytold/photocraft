@@ -37,9 +37,9 @@ fn every_layout_opens_as_the_whole_image_decode_does() {
         (ChannelLayout::Rgb, SampleType::F16),
     ];
     for (layout, sample) in cases {
+        let img = pattern(301, 257, layout, sample);
         for compression in [TiffCompression::None, TiffCompression::Lzw] {
             let what = format!("{layout:?} {sample:?} {compression:?}");
-            let img = pattern(301, 257, layout, sample);
             let bytes = tiff(&img, compression);
             let r = photocraft_io::import("t.tif", &bytes).unwrap_or_else(|e| panic!("{what}: {e}"));
             let decoded = codecs::decode(&bytes).unwrap();
