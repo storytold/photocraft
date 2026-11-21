@@ -214,10 +214,17 @@ pub fn base_rows(app: &PhotocraftApp) -> Vec<Row> {
         }
     }
     crate::plugin_ui::rows(app, &mut rows);
-    if let Some(mask) = app.session.active().and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id))).and_then(|l| l.mask.as_ref())
-        && let Some(item) = find(&mut rows, "layer.layerMask.enabled")
-    {
-        item.label = crate::layer_menu_ui::mask_toggle_label(mask.enabled).into();
+    if let Some(layer) = app.session.active().and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id))) {
+        if let Some(mask) = &layer.mask
+            && let Some(item) = find(&mut rows, "layer.layerMask.enabled")
+        {
+            item.label = crate::layer_menu_ui::mask_toggle_label(mask.enabled).into();
+        }
+        if let Some(mask) = &layer.vector_mask
+            && let Some(item) = find(&mut rows, "layer.vectorMask.enabled")
+        {
+            item.label = crate::layer_menu_ui::vector_mask_toggle_label(mask.enabled).into();
+        }
     }
     // Layer › Merge Layers reads Merge Group with just a group selected, as in Photoshop (#3832).
     if let Some(st) = app.session.active()
