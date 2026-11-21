@@ -206,6 +206,18 @@ fn color_lookup_with_an_overflowing_stored_size_is_the_identity() {
     }
 }
 
+#[test]
+fn color_lookup_dithers_only_8_bit_documents() {
+    let a =
+        Adjustment::ColorLookup { name: "x".into(), lut: Some(std::sync::Arc::new(vec![0.5; 24])), size: 2, tetrahedral: false, dither: true, source: None };
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut b = ramp();
+        apply_depth(&a, &mut b, Transfer::Srgb, Some(depth));
+        let flat = b.px.iter().all(|p| p[..3] == [0.5; 3]);
+        assert_eq!(flat, depth != SampleType::U8, "{depth:?}");
+    }
+}
+
 /// Photoshop 27.11, measured: Color Balance with one cyan–red slider moved, over a gray ramp
 /// (x = 0, 16, …, 240, 255); red and green out (blue follows green on gray).
 #[test]
