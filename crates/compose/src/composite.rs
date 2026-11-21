@@ -722,7 +722,7 @@ fn composite_atop_any_with<A: BufferAlloc>(layer: &Layer, base: &mut Buffer, cx:
         return Ok(());
     }
     let Some(content) = render_content_with(layer, rect, cx, alloc)? else { return Ok(()) };
-    let opacity = layer.opacity * layer.fill_opacity;
+    let (opacity, fill) = (layer.opacity, layer.fill_opacity);
     let gamma = text_gamma(layer);
     for (i, p) in base.px.iter_mut().enumerate() {
         let alpha = p[3];
@@ -735,13 +735,14 @@ fn composite_atop_any_with<A: BufferAlloc>(layer: &Layer, base: &mut Buffer, cx:
             // pixels by spatial coverage instead of continuously mixing the colours (#3052).
             let x = rect.x0 + (i as i32 % rect.width() as i32);
             let y = rect.y0 + (i as i32 / rect.width() as i32);
-            if dissolve_noise(x, y) < s[3] * opacity {
+            if dissolve_noise(x, y) < s[3] * opacity * fill {
                 *p = [s[0], s[1], s[2], alpha];
             }
             continue;
         }
-        // Blend as if the base were opaque, then keep the base's alpha.
-        let r = blend::composite_gamma(layer.blend, [p[0], p[1], p[2], 1.0], s, opacity, gamma);
+        // Blend as if the base were opaque, then keep the base's alpha. Fill stays apart from
+        // Opacity so the special eight blend it as they do unclipped (#15696).
+        let r = blend::composite_fill(layer.blend, [p[0], p[1], p[2], 1.0], s, opacity, fill, gamma);
         *p = [r[0], r[1], r[2], alpha];
     }
     Ok(())
