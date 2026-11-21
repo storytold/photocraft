@@ -14,7 +14,8 @@ fn read_mips(gpu: &GpuCanvas, key: u64) -> Vec<Vec<[f32; 4]>> {
     let tile = &doc.tiles[0];
     let (device, queue) = (&gpu.rs.device, &gpu.rs.queue);
     let bpp = texel_bytes(doc.format) as usize;
-    (0..tile.levels.len())
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let staging: Vec<_> = (0..tile.levels.len())
         .map(|level| {
             let (w, h) = ((doc.size[0] >> level).max(1), (doc.size[1] >> level).max(1));
             let row = (w as usize * bpp).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize);
@@ -24,7 +25,6 @@ fn read_mips(gpu: &GpuCanvas, key: u64) -> Vec<Vec<[f32; 4]>> {
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
-            let mut encoder = device.create_command_encoder(&Default::default());
             encoder.copy_texture_to_buffer(
                 wgpu::TexelCopyTextureInfo { texture: &tile.texture, mip_level: level as u32, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
                 wgpu::TexelCopyBufferInfo {
@@ -33,9 +33,19 @@ fn read_mips(gpu: &GpuCanvas, key: u64) -> Vec<Vec<[f32; 4]>> {
                 },
                 wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
             );
-            queue.submit([encoder.finish()]);
-            buffer.slice(..).map_async(wgpu::MapMode::Read, |result| result.unwrap());
-            assert!(gpu.health.wait(device, None));
+            (buffer, w, h, row)
+        })
+        .collect();
+
+    queue.submit([encoder.finish()]);
+    for (buffer, ..) in &staging {
+        buffer.slice(..).map_async(wgpu::MapMode::Read, |result| result.unwrap());
+    }
+    assert!(gpu.health.wait(device, None));
+
+    staging
+        .into_iter()
+        .map(|(buffer, w, h, row)| {
             let data = buffer.slice(..).get_mapped_range().unwrap();
             let mut pixels = Vec::new();
             for y in 0..h as usize {
