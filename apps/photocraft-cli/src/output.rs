@@ -1,3 +1,4 @@
+use photocraft_codecs::TiffCompression;
 use photocraft_io::ExportOptions;
 use serde_json::Value;
 use std::io::Write;
@@ -22,8 +23,12 @@ impl From<&ExportArgs> for ExportOptions {
             o.encode.webp_lossless = false;
         }
         o.encode.dpx_bits = a.dpx_bits;
-        if let Some(c) = a.tiff_compression {
-            o.encode.tiff_compression = c;
+        match a.tiff_compression {
+            Some(crate::args::CliTiffCompression::None) => o.encode.tiff_compression = TiffCompression::None,
+            Some(crate::args::CliTiffCompression::Lzw) => o.encode.tiff_compression = TiffCompression::Lzw,
+            Some(crate::args::CliTiffCompression::Zip) => o.encode.tiff_compression = TiffCompression::Deflate,
+            Some(crate::args::CliTiffCompression::G4) => o.tiff_ccitt_g4 = true,
+            None => {}
         }
         o.encode.tiff_pyramid = a.tiff_pyramid;
         if let Some(f) = a.jpeg_format {

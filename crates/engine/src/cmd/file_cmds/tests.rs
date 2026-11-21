@@ -4153,6 +4153,30 @@ fn save_a_copy_writes_the_tiff_compression_asked_for() {
     }
 }
 
+/// #15995: `tiffCompression`: "g4" writes CCITT Group 4 (tag 4) for bilevel Bitmap documents,
+/// and is refused for non-Bitmap documents.
+#[test]
+fn save_a_copy_writes_tiff_g4_for_bitmap_and_refuses_non_bitmap() {
+    let dir = tmp("tiff-g4");
+    // Non-bitmap document: refuses G4
+    let mut s = session(8, 8, 8);
+    let out = join(&dir, "non_bitmap.tif");
+    let err = s.execute("file.saveACopy", json!({"path": out, "tiffCompression": "g4"})).unwrap_err();
+    assert!(err.to_string().contains("Bitmap"), "{err}");
+
+    // Bitmap document: writes tag 4
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 24, "height": 16, "mode": "grayscale", "background": "white"})).unwrap();
+    s.execute("image.mode.bitmap", json!({"method": "threshold"})).unwrap();
+    let out_g4 = join(&dir, "bitmap_g4.tif");
+    s.execute("file.saveACopy", json!({"path": out_g4, "tiffCompression": "g4"})).unwrap();
+    let bytes = std::fs::read(&out_g4).unwrap();
+    assert_eq!(tiff_compression_tag(&bytes), Some(4));
+    let reopened = photocraft_io::import("bitmap_g4.tif", &bytes).unwrap().document;
+    assert_eq!(reopened.mode, photocraft_color::ColorMode::Bitmap);
+    assert_eq!(reopened.size, photocraft_geom::Size::new(24, 16));
+}
+
 /// #8827: `tiffPyramid` writes reduced-resolution levels after the image and `tiffTransparency`
 /// false composites a transparent document over white. Bad values are refused before anything is
 /// written.

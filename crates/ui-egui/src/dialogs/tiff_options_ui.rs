@@ -26,6 +26,7 @@ use crate::{ExportSettings, PhotocraftApp};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TiffChoice {
     pub compression: TiffCompression,
+    pub ccitt_g4: bool,
     /// Save Transparency; `None` for the default (see [`ExportSettings::tiff_transparency`]).
     pub transparency: Option<bool>,
     /// Save Image Pyramid.
@@ -39,6 +40,7 @@ impl TiffChoice {
     pub fn apply(self, settings: ExportSettings) -> ExportSettings {
         ExportSettings {
             tiff_compression: self.compression,
+            tiff_ccitt_g4: self.ccitt_g4,
             tiff_transparency: self.transparency,
             tiff_pyramid: self.pyramid,
             tiff_layers: self.layers.unwrap_or(settings.tiff_layers),
@@ -74,6 +76,8 @@ pub fn compression_name(c: TiffCompression) -> &'static str {
 pub fn choice_param(params: &Value, cmd: &str) -> Result<Option<TiffChoice>, String> {
     use photocraft_engine::file_cmds::{tiff_bool_param, tiff_compression_param};
     let compression = tiff_compression_param(params, cmd).map_err(|e| e.to_string())?;
+    let ccitt_g4 = matches!(params.get("tiffCompression").and_then(Value::as_str), Some("g4" | "ccitt" | "ccitt_g4"))
+        || params.get("tiffCcittG4").and_then(Value::as_bool).unwrap_or(false);
     let transparency = tiff_bool_param(params, "tiffTransparency", cmd).map_err(|e| e.to_string())?;
     let pyramid = tiff_bool_param(params, "tiffPyramid", cmd).map_err(|e| e.to_string())?;
     let layers = match params.get("tiffLayers") {
@@ -81,8 +85,8 @@ pub fn choice_param(params: &Value, cmd: &str) -> Result<Option<TiffChoice>, Str
         Some(Value::Bool(b)) => Some(*b),
         Some(v) => return Err(format!("{cmd}: `tiffLayers` must be true or false, got {v}")),
     };
-    let any = compression.is_some() || transparency.is_some() || pyramid.is_some() || layers.is_some();
-    Ok(any.then(|| TiffChoice { compression: compression.unwrap_or_default(), transparency, pyramid: pyramid.unwrap_or(false), layers }))
+    let any = compression.is_some() || ccitt_g4 || transparency.is_some() || pyramid.is_some() || layers.is_some();
+    Ok(any.then(|| TiffChoice { compression: compression.unwrap_or_default(), ccitt_g4, transparency, pyramid: pyramid.unwrap_or(false), layers }))
 }
 
 /// What the last TIFF Options answer of the session chose, where the next prompt starts.
@@ -169,6 +173,7 @@ pub(crate) fn finish(app: &mut PhotocraftApp, ctx: &egui::Context, save: ParkedS
     app.tiff_remembered = Remembered { compression, pyramid: options.pyramid };
     let choice = TiffChoice {
         compression,
+        ccitt_g4: false,
         transparency: has_transparency.then_some(options.transparency),
         pyramid: options.pyramid,
         layers: layered.then_some(!options.discard_layers),
@@ -198,7 +203,7 @@ mod tests {
         );
         assert_eq!(
             choice_param(&json!({"tiffTransparency": false, "tiffPyramid": true, "tiffLayers": false}), "file.saveAs"),
-            Ok(Some(TiffChoice { compression: TiffCompression::None, transparency: Some(false), pyramid: true, layers: Some(false) }))
+            Ok(Some(TiffChoice { compression: TiffCompression::None, ccitt_g4: false, transparency: Some(false), pyramid: true, layers: Some(false) }))
         );
         for bad in [
             json!({"tiffCompression": "jpeg"}),
@@ -215,7 +220,8 @@ mod tests {
     #[test]
     fn apply_sets_the_export_settings() {
         let base = ExportSettings::default();
-        let s = TiffChoice { compression: TiffCompression::Deflate, transparency: Some(false), pyramid: true, layers: Some(false) }.apply(base.clone());
+        let s = TiffChoice { compression: TiffCompression::Deflate, ccitt_g4: false, transparency: Some(false), pyramid: true, layers: Some(false) }
+            .apply(base.clone());
         assert_eq!((s.tiff_compression, s.tiff_transparency, s.tiff_pyramid, s.tiff_layers), (TiffCompression::Deflate, Some(false), true, false));
         let io = s.io_options();
         assert_eq!(
