@@ -779,6 +779,10 @@ fn invoke_view_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p
         crate::equalize_ui::COMMAND if params.as_object().is_none_or(|object| object.is_empty()) && crate::equalize_ui::asks(app) => {
             Some(Ok(dialog_reply(crate::equalize_ui::open(app))))
         }
+        // Edit › Assign Profile on a document with layers asks first (#14235).
+        "edit.assignProfile" if params.as_object().is_none_or(|object| object.is_empty()) && crate::dialogs::assign_profile_layers_alert::asks(app) => {
+            Some(Ok(dialog_reply(crate::dialogs::assign_profile_layers_alert::open(app))))
+        }
         fl if crate::filter_dialog::has_dialog(fl) && params.as_object().is_none_or(|object| object.is_empty()) => {
             Some(crate::filter_dialog::open(app, fl).map(dialog_reply))
         }
