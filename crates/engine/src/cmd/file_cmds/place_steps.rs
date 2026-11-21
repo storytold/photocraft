@@ -285,6 +285,7 @@ impl PlaceSteps {
             bounds,
             smart,
             frame: input.frame.as_ref().map(|(id, _)| *id),
+            anchor: input.anchor,
         })
     }
 }
