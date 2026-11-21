@@ -4785,6 +4785,154 @@ fn mapped_recording(event: &str, descriptor: Descriptor) -> Imported {
     import(&atn::write(&one_action(vec![item(event, event, Some(descriptor))])).unwrap()).unwrap()
 }
 
+/// The duplicate the reference application records is the `Dplc` event: it maps to the
+/// existing duplicate command, carries the recorded `Nm  ` name and the `Mrgd`
+/// merged-contents flag, and `Mrgd` true gives a copy with a single layer.
+#[test]
+fn dplc_document_duplicate_plays_a_one_layer_copy() {
+    let d = desc("null").with("null", target_ref("Dcmn")).with("Nm  ", text("Mattifier copy")).with("Mrgd", D::Boolean(true));
+    let loaded = mapped_recording("Dplc", d);
+    assert!(loaded.unsupported.is_empty(), "{:?}", loaded.unsupported);
+    assert_eq!(loaded.actions[0].steps, vec![ActionStep::new("image.duplicate", json!({"name": "Mattifier copy", "mergedOnly": true}))]);
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Ink"})).unwrap();
+    let items = vec![item(
+        "Dplc",
+        "Duplicate",
+        Some(desc("null").with("null", target_ref("Dcmn")).with("Nm  ", text("Mattifier copy")).with("Mrgd", D::Boolean(true))),
+    )];
+    let r = s.execute("actions.load", json!({"data": set_of("Dplc", vec![("A", items)])})).unwrap();
+    assert_eq!(r["unsupported"], json!([]), "{r}");
+    let r = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert!(r.get("failed").is_none(), "{r}");
+    assert_eq!(s.documents().len(), 2, "the Dplc duplicated the document");
+    let st = s.active().unwrap();
+    assert_eq!(st.doc.name, "Mattifier copy", "the recorded name reaches the copy");
+    assert_eq!(st.doc.layers.len(), 1, "Mrgd true gives a one-layer copy");
+}
+
+/// #15185, measured in the reference application: a Make aimed at a document is NOT a
+/// document duplicate there. `Mk  ` with a single `Dcmn` reference to the target ordinal,
+/// with or without `Nm  ` and `Mrgd`, the same document referenced by its recorded title,
+/// and the `Dcmn` class with `Usng` = the target document all answer "The command Make is
+/// not currently available" and make no copy. They stay kept Photoshop steps here, as they
+/// do for every other Make shape: the whole descriptor is kept and reported as unsupported,
+/// and it saves back unchanged.
+#[test]
+fn make_document_duplicate_forms_stay_kept_steps() {
+    let by_name = || D::Reference(vec![ReferenceItem::Name { class: class("Dcmn"), name: UnicodeString::new_nul("Mattifier.tif") }]);
+    for d in [
+        // The target document by ordinal, with and without the optional keys.
+        desc("null").with("null", target_ref("Dcmn")),
+        desc("null").with("null", target_ref("Dcmn")).with("Nm  ", text("Mattifier copy")),
+        desc("null").with("null", target_ref("Dcmn")).with("Mrgd", D::Boolean(true)),
+        desc("null").with("null", target_ref("Dcmn")).with("Nm  ", text("Mattifier copy")).with("Mrgd", D::Boolean(true)),
+        // The document referenced by its recorded title.
+        desc("null").with("null", by_name()),
+        desc("null").with("null", by_name()).with("Nm  ", text("Mattifier copy")).with("Mrgd", D::Boolean(false)),
+        // The class form naming the target document in `Usng`.
+        desc("null").with("null", class_ref("Dcmn")).with("Usng", target_ref("Dcmn")),
+    ] {
+        let loaded = mapped_recording("Mk  ", d.clone());
+        assert_eq!(loaded.actions[0].steps.len(), 1, "{:?}", d.items);
+        assert_eq!(loaded.actions[0].steps[0].command, PHOTOSHOP_STEP, "no duplicate command for {:?}", d.items);
+        assert_eq!(loaded.unsupported.iter().map(|u| u.step).collect::<Vec<_>>(), [0], "{:?}", d.items);
+        let (saved, skipped) = export("Mk", &[&loaded.actions[0]], &[], false).unwrap();
+        assert!(skipped.is_empty(), "{skipped:?}");
+        assert_eq!(atn::parse(&saved).unwrap().actions[0].items[0].descriptor.as_ref(), Some(&d), "saves back unchanged: {:?}", d.items);
+    }
+}
+
+/// What that means at playback, the point of the change: the Mattifier shape of #15185 stops
+/// at the Make, as it does in the reference application, instead of making a copy and
+/// running Flatten Image and Convert Mode on it.
+#[test]
+fn make_document_duplicate_stops_the_action() {
+    let items = vec![
+        item("Mk  ", "Make", Some(desc("null").with("null", target_ref("Dcmn")).with("Nm  ", text("Mattifier copy")))),
+        item("FltI", "Flatten Image", None),
+        item("CnvM", "Convert Mode", Some(desc("null").with("T   ", D::Class(class("CMYM"))))),
+    ];
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Ink"})).unwrap();
+    let r = s.execute("actions.load", json!({"data": set_of("Mattifier", vec![("A", items)])})).unwrap();
+    assert_eq!(r["unsupported"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(s.actions.list.actions()[0].steps[0].command, PHOTOSHOP_STEP, "{r}");
+    let r = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert_eq!(r["failed"]["id"], PHOTOSHOP_STEP, "{r}");
+    assert_eq!(s.documents().len(), 1, "the kept Make step made no copy");
+    let st = s.active().unwrap();
+    assert_eq!(st.doc.mode, photocraft_color::ColorMode::Rgb, "Convert Mode never ran after the stopped step");
+    assert_eq!(st.doc.layers.len(), 2, "Flatten Image never ran after the stopped step");
+}
+
+/// A kept step carries the descriptor as bytes, so every recorded `Nm  ` name comes back
+/// exactly as it was read: an unpaired surrogate is not replaced with U+FFFD and no NUL is
+/// dropped, because no name is ever converted into a command parameter.
+#[test]
+fn make_document_duplicate_name_round_trips_through_the_kept_step() {
+    for name in [
+        UnicodeString::new_nul("Mattifier copy"),
+        UnicodeString::new("Mattifier copy"),
+        UnicodeString(vec![0x0041, 0x0000, 0x0042]),
+        UnicodeString(vec![0xD800]),
+        UnicodeString(vec![u16::from(b'C'), 0xD800, 0]),
+        UnicodeString(vec![u16::from(b'C'), 0, 0]),
+    ] {
+        let d = desc("null").with("null", target_ref("Dcmn")).with("Nm  ", D::Text(name.clone()));
+        let loaded = mapped_recording("Mk  ", d);
+        assert_eq!(loaded.actions[0].steps[0].command, PHOTOSHOP_STEP, "{name:?}");
+        let (saved, skipped) = export("Dup", &[&loaded.actions[0]], &[], false).unwrap();
+        assert!(skipped.is_empty(), "{name:?}: {skipped:?}");
+        let raw = atn::parse(&saved).unwrap();
+        let back = raw.actions[0].items[0].descriptor.as_ref().unwrap().get("Nm  ");
+        assert_eq!(back, Some(&D::Text(name.clone())), "{name:?}");
+    }
+}
+
+/// Every other Make aimed at a document keeps today's behaviour: a complete kept step; the
+/// `Usng` layer form keeps its existing Duplicate Layer mapping.
+#[test]
+fn other_make_document_forms_stay_kept_steps() {
+    let target = target_ref("Dcmn");
+    let chained = D::Reference(vec![
+        ReferenceItem::Enumerated { class: class("Dcmn"), type_id: Id::new("Ordn"), value: Id::new("Trgt") },
+        ReferenceItem::Property { class: class("Chnl"), key: Id::new("Msk ") },
+    ]);
+    for d in [
+        // A chained document-to-channel reference is not a whole-document duplicate.
+        desc("null").with("null", chained),
+        // An indexed document reference names another open document: no equivalent.
+        desc("null").with("null", D::Reference(vec![ReferenceItem::Index { class: class("Dcmn"), index: 1 }])),
+        // A present value the mapper cannot read keeps the whole step.
+        desc("null").with("null", target.clone()).with("Mrgd", long(1.0)),
+        desc("null").with("null", target.clone()).with("Nm  ", long(3.0)),
+        // craft-psd keeps every item, so a key can repeat; reading the descriptor would see
+        // only the first one and silently drop the rest. A second `Nm  ` the mapping cannot
+        // carry must keep the whole step instead.
+        desc("null")
+            .with("null", target.clone())
+            .with("Nm  ", D::Text(UnicodeString(vec![u16::from(b'C'), 0])))
+            .with("Nm  ", D::Text(UnicodeString(vec![0xD800]))),
+        // Two readable values for one param: nothing says which one wins, so nothing maps.
+        desc("null").with("null", target.clone()).with("Nm  ", text("A")).with("Nm  ", text("B")),
+        desc("null").with("null", target.clone()).with("Mrgd", D::Boolean(true)).with("Mrgd", D::Boolean(false)),
+        // A second document reference is not dropped on the way to the params.
+        desc("null").with("null", target.clone()).with("null", target.clone()),
+        // A key outside the measured form is not silently dropped.
+        desc("null").with("null", target).with("Usng", D::Descriptor(desc("Chnl"))),
+    ] {
+        let loaded = mapped_recording("Mk  ", d.clone());
+        assert_eq!(loaded.actions[0].steps[0].command, PHOTOSHOP_STEP, "{:?}", d.items);
+    }
+    // Duplicate Layer into a new document keeps its existing mapping.
+    let layer_form = desc("null").with("null", class_ref("Dcmn")).with("Usng", target_ref("Lyr "));
+    let loaded = mapped_recording("Mk  ", layer_form);
+    assert_eq!(loaded.actions[0].steps, vec![ActionStep::new("layer.duplicate", json!({"document": "new"}))]);
+}
+
 /// Every frame anchor survives import/export; unknown anchors stay available verbatim.
 #[test]
 fn mapped_transform_reference_points_round_trip() {
