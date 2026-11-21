@@ -20,6 +20,10 @@ use super::{
 };
 use crate::jobs::{JobCtx, StepWork};
 
+#[cfg(test)]
+#[path = "place_fractional_offset_tests.rs"]
+mod place_fractional_offset_tests;
+
 /// Pixels a flatten band covers at most: four tiles of a tile row (about 5 ms on one core).
 const BAND_PIXELS: i64 = 4 * (TILE_SIZE as i64) * (TILE_SIZE as i64);
 
@@ -190,7 +194,9 @@ impl PlaceSteps {
                 });
             }
         }
-        let (dx, dy) = ((center.0 - w * scale / 2.0).round(), (center.1 - h * scale / 2.0).round());
+        // The exact offset: a placed smart object's transform keeps a half pixel (#14114); the
+        // pixels round it where they move (`fitted`).
+        let (dx, dy) = (center.0 - w * scale / 2.0, center.1 - h * scale / 2.0);
         self.plan = Plan { w, h, scale, dx, dy };
         // A frame's image renders through its smart object, which refuses a placement past the
         // memory budget; resampling it to the frame's size first would allocate that surface twice.
@@ -220,7 +226,7 @@ impl PlaceSteps {
     /// that a few target tiles at a time (an offset off the tile grid rebuilds nearly every tile
     /// the image touches); otherwise it is one [`translate_surface`].
     fn fitted(&mut self, px: Surface) {
-        let (dx, dy) = (self.plan.dx as i32, self.plan.dy as i32);
+        let (dx, dy) = (self.plan.dx.round() as i32, self.plan.dy.round() as i32);
         self.stage = if self.fine {
             let content = px.content_bounds();
             Stage::Translate(Box::new(TranslateSteps::new(px, dx, dy, content)))
@@ -234,6 +240,9 @@ impl PlaceSteps {
         let Plan { w, h, scale, dx, dy } = self.plan;
         let input = &self.input;
         let (cw, ch) = input.canvas;
+        // Only a smart object placed outside a frame keeps the half pixel (#14114); a pixel layer
+        // and a frame's image keep today's whole-pixel offset.
+        let (dx, dy) = if input.smart && input.frame.is_none() { (dx, dy) } else { (dx.round(), dy.round()) };
         let placement = input.frame.as_ref().map_or(Affine { m: [scale, 0.0, 0.0, scale, dx, dy] }, |(_, f)| {
             f.transform.mul(&Affine { m: [scale / cw, 0.0, 0.0, scale / ch, dx / cw, dy / ch] })
         });
