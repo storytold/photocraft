@@ -72,3 +72,21 @@ fn a_shape_with_area_opens_the_dialog() {
     let s = with_work_path(Path::new(vec![Subpath::polygon(&[(10.0, 10.0), (90.0, 10.0), (50.0, 80.0)])]));
     assert_eq!(define_custom_shape_refusal(&s), None);
 }
+
+/// A bow tie's signed areas cancel, but its two triangles are filled: it is a shape (CodeRabbit on #16238).
+#[test]
+fn a_self_crossing_bow_tie_is_stored() {
+    let mut s = with_work_path(Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (10.0, 10.0), (0.0, 10.0), (10.0, 0.0)])]));
+    assert_eq!(define_custom_shape_refusal(&s), None);
+    s.execute("edit.defineCustomShape", json!({"name": "Bow"})).unwrap();
+    assert_eq!(stored(&s), 1);
+}
+
+/// A closed path of two anchors keeps its old behaviour: it is stored (not measured).
+#[test]
+fn a_closed_two_anchor_path_keeps_being_stored() {
+    let mut s = with_work_path(Path::new(vec![Subpath { closed: true, knots: vec![Knot::corner(10.0, 10.0), Knot::corner(20.0, 20.0)], op: PathOp::Combine }]));
+    assert_eq!(define_custom_shape_refusal(&s), None);
+    s.execute("edit.defineCustomShape", json!({"name": "Two"})).unwrap();
+    assert_eq!(stored(&s), 1);
+}

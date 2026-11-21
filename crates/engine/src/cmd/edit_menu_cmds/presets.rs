@@ -60,15 +60,23 @@ fn refusal(path: &Path) -> Option<ShapeRefusal> {
     if !path.subpaths.is_empty() && path.subpaths.iter().all(|sp| sp.op == photocraft_doc::PathOp::Subtract) {
         return Some(ShapeRefusal::SubtractOnly);
     }
-    // Each subpath is filled closed, so a straight open line encloses nothing either.
-    let area: f64 = photocraft_vector::flatten_path(path, 0.05)
-        .iter()
-        .map(|line| {
-            let pts = &line.pts;
-            (0..pts.len()).map(|i| pts[i].0 * pts[(i + 1) % pts.len()].1 - pts[(i + 1) % pts.len()].0 * pts[i].1).sum::<f64>().abs() / 2.0
-        })
-        .sum();
-    (area.is_nan() || area <= 1e-6).then_some(ShapeRefusal::Empty)
+    // A closed path of two anchors keeps today's behaviour: it is stored (not measured, CodeRabbit on #16238).
+    if path.subpaths.iter().any(|sp| sp.closed && sp.knots.len() == 2) {
+        return None;
+    }
+    // Every flattened point on one line (or one point): nothing is enclosed. Not the signed area, which cancels for a
+    // self-crossing outline like a bow tie that does cover pixels (CodeRabbit on #16238).
+    let lines = photocraft_vector::flatten_path(path, 0.05);
+    let pts: Vec<(f64, f64)> = lines.iter().flat_map(|l| l.pts.iter().copied()).collect();
+    let Some(&p0) = pts.first() else { return Some(ShapeRefusal::Empty) };
+    if pts.iter().any(|p| !p.0.is_finite() || !p.1.is_finite()) {
+        return Some(ShapeRefusal::Empty);
+    }
+    let far = pts.iter().copied().max_by(|a, b| ((a.0 - p0.0).hypot(a.1 - p0.1)).total_cmp(&((b.0 - p0.0).hypot(b.1 - p0.1)))).unwrap_or(p0);
+    let len = (far.0 - p0.0).hypot(far.1 - p0.1);
+    let off_line =
+        if len <= 1e-9 { 0.0 } else { pts.iter().map(|p| ((p.0 - p0.0) * (far.1 - p0.1) - (p.1 - p0.1) * (far.0 - p0.0)).abs() / len).fold(0.0, f64::max) };
+    (off_line <= 1e-6).then_some(ShapeRefusal::Empty)
 }
 
 /// What Define Custom Shape would refuse for the path it would use on the active document (the menu
