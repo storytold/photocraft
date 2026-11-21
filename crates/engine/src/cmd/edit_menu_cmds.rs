@@ -63,6 +63,7 @@ pub struct FindCursor {
     pub find: String,
     pub case_sensitive: bool,
     pub whole_word: bool,
+    pub ignore_accents: bool,
     pub forward: bool,
     pub all_layers: bool,
 }
@@ -365,7 +366,7 @@ pub use content_aware_scale::ContentAwareScalePreview;
 use content_aware_scale::content_aware_scale;
 pub use fade::{FadePreview, fade_preview, fade_surface};
 use fade::{can_fade, fade};
-pub use find_replace::find_matches;
+pub use find_replace::{find_matches, find_matches_with};
 use find_replace::{find_replace, has_type_layer};
 pub(crate) use presets::current_path;
 pub use presets::{PRESET_FORMAT, PresetFile};
@@ -432,7 +433,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Find and Replace Text…",
             ["Edit"],
             None,
-            r##"{"find":text,"replace":text,"action":"changeAll|find|change|changeFind","caseSensitive":bool=false,"wholeWord":bool=false,"forward":bool=true,"allLayers":bool=true}"##,
+            r##"{"find":text,"replace":text,"action":"changeAll|find|change|changeFind","caseSensitive":bool=false,"wholeWord":bool=false,"ignoreAccents":bool=false,"forward":bool=true,"allLayers":bool=true}"##,
             has_type_layer,
             find_replace
         ),
@@ -485,3 +486,7 @@ mod find_replace_change_tests;
 #[cfg(test)]
 #[path = "edit_menu_cmds/find_replace_order_tests.rs"]
 mod find_replace_order_tests;
+
+#[cfg(test)]
+#[path = "edit_menu_cmds/find_replace_accents_tests.rs"]
+mod find_replace_accents_tests;

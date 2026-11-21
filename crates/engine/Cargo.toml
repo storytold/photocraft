@@ -50,6 +50,9 @@ craft = { workspace = true, features = ["automation", "color-ui", "keymap", "pla
 
 # Release tags use the same semantic versions as Cargo.
 semver = "1"
+# Find and Replace Text's Ignore Accents: canonical decomposition and the combining-mark table
+# (MIT OR Apache-2.0; the 0.1.26 already in the tree).
+unicode-normalization = "0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tempfile = "3"
