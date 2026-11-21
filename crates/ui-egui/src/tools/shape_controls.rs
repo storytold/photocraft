@@ -87,7 +87,7 @@ fn selection(app: &PhotocraftApp, flat_ok: bool) -> Option<(Vec<u64>, [f64; 4])>
     }
     let mut layers = Vec::with_capacity(ids.len());
     let mut rect: Option<[f64; 4]> = None;
-    for id in ids {
+    for &id in ids {
         let l = st.doc.layer(id)?;
         let LayerContent::Shape(sh) = &l.content else { return None };
         let (x0, y0, x1, y1) = sh.path.control_bounds()?;
@@ -335,7 +335,8 @@ pub(crate) fn corner_targets(app: &PhotocraftApp) -> Vec<CornerTarget> {
     let Some(st) = app.session.active() else { return Vec::new() };
     let mut out: Vec<CornerTarget> = st
         .selected_layers()
-        .into_iter()
+        .iter()
+        .copied()
         .filter_map(|id| {
             let l = st.doc.layer(id)?;
             let LayerContent::Shape(sh) = &l.content else { return None };
