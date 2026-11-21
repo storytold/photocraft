@@ -36,6 +36,8 @@ fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, 
         let contents_id = smart(doc, id)?.contents_id;
         let changed = instances(doc, contents_id);
         let mut warnings = std::collections::BTreeSet::new();
+        // The instances all warp the new contents: one reduced copy of them serves every shrink.
+        let _levels = photocraft_algo::warp::reuse_levels();
         for &instance in &changed {
             smart_mut(doc, instance)?.source = new.clone();
             if !keep_psd {
