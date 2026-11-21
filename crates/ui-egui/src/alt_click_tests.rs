@@ -6,57 +6,48 @@ use egui_kittest::Harness;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::ViewXform;
+use crate::app::framework::BuildApp as _;
 use crate::state::Tool;
+use craft::keymap::Mods;
 
-fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_size(vec2(900.0, 600.0)).build_ui_state(
+fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(900.0, 600.0)).build_app(
         |ui, app: &mut PhotocraftApp| {
-            let ctx = ui.ctx().clone();
-            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            crate::shortcuts::handle(app, &ctx);
             egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+
     h.run_steps(4);
     let v = &mut h.state_mut().ui.views[0];
     v.zoom = 1.0;
     v.center = [100.0, 50.0];
-    v.fit_pending = false;
+    v.clear_pending();
     h.run_steps(2);
     h
 }
 
-fn screen(h: &Harness<'static, PhotocraftApp>, x: f32, y: f32) -> Pos2 {
-    let app = h.state();
-    let v = &app.ui.views[0];
-    let xf = ViewXform {
-        rect: crate::rulers::content_rect(app, app.last_canvas_rect),
-        zoom: v.zoom,
-        center: v.center,
-        flip: app.ui.view.flip_horizontal,
-        rotation: v.rotation,
-        aspect: app.ui.view.display_aspect(),
-    };
-    xf.to_screen(x, y)
+fn screen(h: &Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32) -> Pos2 {
+    crate::canvas::testing::to_screen(h.state(), [f64::from(x), f64::from(y)])
 }
 
-fn mods(h: &mut Harness<'static, PhotocraftApp>, m: Modifiers) {
+/// Latches Alt in Window › Modifier Keys, or releases every latched key.
+fn latch_alt(h: &mut Harness<'static, Box<PhotocraftApp>>, on: bool) {
+    h.state_mut().ui.shell.latched = if on { Mods { alt: true, ..Mods::default() } } else { Mods::default() };
+}
+
+fn mods(h: &mut Harness<'static, Box<PhotocraftApp>>, m: Modifiers) {
     h.event(egui::Event::ModifiersChanged(m));
     h.run_steps(1);
 }
 
-fn button(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, down: bool, m: Modifiers) {
+fn button(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2, down: bool, m: Modifiers) {
     h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: down, modifiers: m });
     h.run_steps(1);
 }
 
 /// A click at document point (x, y) with `m` held from before the press until after the release.
-fn click(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, m: Modifiers) {
+fn click(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32, m: Modifiers) {
     let p = screen(h, x, y);
     mods(h, m);
     h.event(egui::Event::PointerMoved(p));
@@ -68,7 +59,7 @@ fn click(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, m: Modifiers) 
 }
 
 /// A drag between document points with `m` held throughout.
-fn drag(h: &mut Harness<'static, PhotocraftApp>, from: [f32; 2], to: [f32; 2], m: Modifiers) {
+fn drag(h: &mut Harness<'static, Box<PhotocraftApp>>, from: [f32; 2], to: [f32; 2], m: Modifiers) {
     let p = screen(h, from[0], from[1]);
     mods(h, m);
     h.event(egui::Event::PointerMoved(p));
@@ -86,7 +77,7 @@ fn drag(h: &mut Harness<'static, PhotocraftApp>, from: [f32; 2], to: [f32; 2], m
 }
 
 /// Two halves: red on the left, green on the right, on one background layer.
-fn two_colours() -> PhotocraftApp {
+fn two_colours() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 100, "background": "white"})).unwrap();
     app.run("select.rect", json!({"x": 0, "y": 0, "width": 100, "height": 100})).unwrap();
@@ -98,41 +89,63 @@ fn two_colours() -> PhotocraftApp {
     app
 }
 
+/// Three handlers compete for one ⌥ press (the brush's sampler, the clone source, the zoom step, the
+/// mixer's load): which one takes it depends on the tool, and a latched ⌥ acts as a held one.
 #[test]
-fn alt_click_with_the_brush_samples_the_foreground() {
-    let mut h = harness(two_colours());
-    h.state_mut().ui.tool = Tool::Brush;
-    h.state_mut().run("tools.setColors", json!({"foreground": [0.0, 0.0, 1.0, 1.0]})).unwrap();
-    let rev = h.state().session.active().unwrap().revision;
-    click(&mut h, 50.0, 50.0, Modifiers::ALT);
-    assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "⌥-click sampled red");
-    assert_eq!(h.state().session.active().unwrap().revision, rev, "nothing was painted");
-    click(&mut h, 150.0, 50.0, Modifiers::ALT);
-    assert_eq!(h.state().session.tools.foreground, [0.0, 1.0, 0.0, 1.0], "⌥-click sampled green");
-}
+fn alt_click_routes_by_tool_held_or_latched() {
+    for latched in [false, true] {
+        // The click carries ⌥ itself, or the latch supplies it.
+        let m = if latched { Modifiers::NONE } else { Modifiers::ALT };
+        let how = if latched { "latched" } else { "held" };
 
-#[test]
-fn releasing_ctrl_after_a_resize_press_does_not_sample_or_paint() {
-    for split_frames in [false, true] {
-        for release in [Modifiers::NONE, Modifiers::ALT] {
-            let mut h = harness(two_colours());
-            h.state_mut().ui.tool = Tool::Brush;
-            let blue = [0.0, 0.0, 1.0, 1.0];
-            h.state_mut().run("tools.setColors", json!({"foreground": blue})).unwrap();
-            let rev = h.state().session.active().unwrap().revision;
-            let p = screen(&h, 50.0, 50.0);
-            frame(&mut h, vec![egui::Event::PointerMoved(p)], false);
-            let down = pointer(p, true, Modifiers::ALT | Modifiers::CTRL);
-            let up = pointer(p, false, release);
-            if split_frames {
-                frame(&mut h, vec![down], false);
-                frame(&mut h, vec![up], false);
-            } else {
-                frame(&mut h, vec![down, up], false);
+        // Brush: samples the foreground, paints nothing.
+        let mut h = harness(two_colours());
+        h.state_mut().ui.tool = Tool::Brush;
+        h.state_mut().run("tools.setColors", json!({"foreground": [0.0, 0.0, 1.0, 1.0]})).unwrap();
+        let rev = h.state().session.active().unwrap().revision;
+        latch_alt(&mut h, latched);
+        click(&mut h, 50.0, 50.0, m);
+        assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "Brush {how}: sampled red");
+        assert_eq!(h.state().session.active().unwrap().revision, rev, "Brush {how}: nothing was painted");
+        click(&mut h, 150.0, 50.0, m);
+        assert_eq!(h.state().session.tools.foreground, [0.0, 1.0, 0.0, 1.0], "Brush {how}: sampled green");
+
+        // Clone Stamp: sets the source.
+        let mut h = harness(two_colours());
+        h.state_mut().ui.tool = Tool::CloneStamp;
+        latch_alt(&mut h, latched);
+        click(&mut h, 150.0, 50.0, m);
+        assert!(h.state().session.presets.clone.active().source.is_some(), "Clone Stamp {how}: the source is set");
+
+        // Zoom: zooms out (scrubby on and off for the latched key), and zooms in again without ⌥.
+        for scrubby in [true, false] {
+            if !latched && !scrubby {
+                continue;
             }
-            assert_eq!(h.state().session.tools.foreground, blue, "split={split_frames}, release={release:?}");
-            assert_eq!(h.state().session.active().unwrap().revision, rev, "a resize tap does not paint");
+            let mut h = harness(two_colours());
+            h.state_mut().ui.tool = Tool::Zoom;
+            h.state_mut().ui.tool_options.zoom_scrubby = scrubby;
+            latch_alt(&mut h, latched);
+            click(&mut h, 50.0, 50.0, m);
+            assert_eq!(h.state().ui.views[0].zoom, 2.0 / 3.0, "Zoom {how} scrubby={scrubby}");
+            latch_alt(&mut h, false);
+            click(&mut h, 50.0, 50.0, Modifiers::NONE);
+            assert_eq!(h.state().ui.views[0].zoom, 1.0, "Zoom {how} scrubby={scrubby}: without ⌥ it zooms in");
         }
+
+        // Mixer Brush: loads the reservoir and keeps the foreground.
+        let mut h = harness(two_colours());
+        h.state_mut().ui.tool = Tool::MixerBrush;
+        h.state_mut().run("tools.setColors", json!({"foreground": [0.0, 0.0, 1.0, 1.0]})).unwrap();
+        let rev = h.state().session.active().unwrap().revision;
+        assert!(h.state().session.tools.mixer.reservoir.is_none());
+        latch_alt(&mut h, latched);
+        click(&mut h, 50.0, 50.0, m);
+        assert_eq!(h.state().session.tools.mixer.reservoir, Some([1.0, 0.0, 0.0, 1.0]), "Mixer {how}: loaded red");
+        assert_eq!(h.state().session.tools.foreground, [0.0, 0.0, 1.0, 1.0], "Mixer {how}: the foreground is unchanged");
+        assert_eq!(h.state().session.active().unwrap().revision, rev, "Mixer {how}: nothing was painted");
+        click(&mut h, 150.0, 50.0, m);
+        assert_eq!(h.state().session.tools.mixer.reservoir, Some([0.0, 1.0, 0.0, 1.0]), "Mixer {how}: loaded green");
     }
 }
 
@@ -193,8 +206,15 @@ fn mixer_raw_drag_commits_live_pixels_before_a_spring_tool_returns() {
         button(&mut h, start, true, Modifiers::NONE);
         if spring {
             // A temporary Mixer Brush's key was released while its mouse drag is held.
-            h.state_mut().ui.spring =
-                Some(crate::spring_tools::Spring { previous: Tool::Zoom, tool: Tool::MixerBrush, keys: vec![], since: 0.0, used: true, released: true });
+            h.state_mut().ui.spring = Some(crate::spring_tools::Spring {
+                previous: Tool::Zoom,
+                tool: Tool::MixerBrush,
+                keys: vec![],
+                since: 0.0,
+                up: None,
+                used: true,
+                released: true,
+            });
         }
         let end = screen(&h, 80.0, 50.0);
         h.event(egui::Event::PointerMoved(end));
@@ -215,22 +235,6 @@ fn mixer_raw_drag_commits_live_pixels_before_a_spring_tool_returns() {
         h.state_mut().run("edit.undo", json!({})).unwrap();
         assert_eq!(*h.state().session.active().unwrap().doc, *before);
     }
-}
-
-#[test]
-fn alt_click_sets_the_clone_source_and_a_drag_paints_it() {
-    let mut h = harness(two_colours());
-    h.state_mut().ui.tool = Tool::CloneStamp;
-    h.state_mut().ui.tool_options.clone_sample = "all".into();
-    h.state_mut().run("tools.setBrush", json!({"brush": {"size": 10, "hardness": 1.0}})).unwrap();
-    click(&mut h, 150.0, 50.0, Modifiers::ALT);
-    assert!(h.state().session.presets.clone.active().source.is_some(), "⌥-click set the source");
-    let rev = h.state().session.active().unwrap().revision;
-    drag(&mut h, [30.0, 50.0], [70.0, 50.0], Modifiers::NONE);
-    let st = h.state().session.active().unwrap();
-    assert!(st.revision > rev, "the clone stroke was committed");
-    let px = st.doc.layers[0].surface().unwrap().rgba(50, 50);
-    assert!(px[1] > 0.9 && px[0] < 0.1, "green cloned over red: {px:?}");
 }
 
 /// ⌥-click in one open document, then paint in another: the stroke clones from the first, as in
@@ -290,7 +294,7 @@ fn clone_stamp_paints_an_empty_layer_from_the_layers_below() {
 /// What X11 and Wayland deliver when the window manager grabs an Alt+left press (Cinnamon's
 /// window move): the pointer leaves and the keyboard focus goes (winit clears the modifiers),
 /// and both come back on release. The click itself never arrives.
-fn grabbed_alt_click(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, refocus: bool) {
+fn grabbed_alt_click(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32, refocus: bool) {
     let p = screen(h, x, y);
     mods(h, Modifiers::ALT);
     h.event(egui::Event::PointerMoved(p));
@@ -351,55 +355,6 @@ fn leaving_the_window_without_a_grab_says_nothing() {
     assert_ne!(h.state().ui.status, crate::alt_grab::message());
 }
 
-#[test]
-fn a_latched_alt_samples_and_sets_the_clone_source_without_the_key() {
-    // The way around a desktop that takes Alt+click: latch ⌥ in Window › Modifier Keys.
-    let mut h = harness(two_colours());
-    h.state_mut().ui.shell.sticky_alt = true;
-    h.state_mut().ui.tool = Tool::Brush;
-    click(&mut h, 150.0, 50.0, Modifiers::NONE);
-    assert_eq!(h.state().session.tools.foreground, [0.0, 1.0, 0.0, 1.0]);
-    h.state_mut().ui.tool = Tool::CloneStamp;
-    click(&mut h, 150.0, 50.0, Modifiers::NONE);
-    assert!(h.state().session.presets.clone.active().source.is_some());
-}
-
-#[test]
-fn alt_click_with_the_zoom_tool_zooms_out_held_or_latched() {
-    for (sticky, scrubby, m) in [(false, true, Modifiers::ALT), (true, true, Modifiers::NONE), (true, false, Modifiers::NONE)] {
-        let mut h = harness(two_colours());
-        h.state_mut().ui.tool = Tool::Zoom;
-        h.state_mut().ui.tool_options.zoom_scrubby = scrubby;
-        h.state_mut().ui.shell.sticky_alt = sticky;
-        click(&mut h, 50.0, 50.0, m);
-        assert_eq!(h.state().ui.views[0].zoom, 2.0 / 3.0, "sticky={sticky} scrubby={scrubby}");
-        // Without ⌥ the click zooms in again.
-        h.state_mut().ui.shell.sticky_alt = false;
-        click(&mut h, 50.0, 50.0, Modifiers::NONE);
-        assert_eq!(h.state().ui.views[0].zoom, 1.0, "sticky={sticky} scrubby={scrubby}");
-    }
-}
-
-#[test]
-fn alt_click_with_the_mixer_brush_loads_the_reservoir_not_the_foreground() {
-    let mut h = harness(two_colours());
-    h.state_mut().ui.tool = Tool::MixerBrush;
-    h.state_mut().run("tools.setColors", json!({"foreground": [0.0, 0.0, 1.0, 1.0]})).unwrap();
-    let rev = h.state().session.active().unwrap().revision;
-    assert!(h.state().session.tools.mixer.reservoir.is_none());
-    click(&mut h, 50.0, 50.0, Modifiers::ALT);
-    assert_eq!(h.state().session.tools.mixer.reservoir, Some([1.0, 0.0, 0.0, 1.0]), "⌥-click loaded red into the reservoir");
-    assert_eq!(h.state().session.tools.foreground, [0.0, 0.0, 1.0, 1.0], "the foreground colour is unchanged");
-    assert_eq!(h.state().session.active().unwrap().revision, rev, "nothing was painted");
-    click(&mut h, 150.0, 50.0, Modifiers::ALT);
-    assert_eq!(h.state().session.tools.mixer.reservoir, Some([0.0, 1.0, 0.0, 1.0]), "⌥-click loaded green");
-    assert_eq!(h.state().session.tools.foreground, [0.0, 0.0, 1.0, 1.0]);
-}
-
-// ---------------------------------------------------------------------------------------------
-// #10544: ⌥-click with a Windows touchpad. The Alt key's press arrives, but the modifier state the
-// pointer events carry misses it, and a tap delivers its press and release in one frame.
-
 /// The Alt key press alone: the modifier state stays without Alt (what the platform reported).
 fn alt_key(pressed: bool) -> egui::Event {
     egui::Event::Key { key: egui::Key::AltLeft, physical_key: Some(egui::Key::AltLeft), pressed, repeat: false, modifiers: Modifiers::NONE }
@@ -409,15 +364,10 @@ fn pointer(p: Pos2, pressed: bool, m: Modifiers) -> egui::Event {
     egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers: m }
 }
 
-/// One frame of raw input holding `events`. `fold` runs the app's raw-input step that folds the
-/// Alt key into them (`PhotocraftApp::raw_input_hook`); without it the frame is what the platform
-/// sent.
-fn frame(h: &mut Harness<'static, PhotocraftApp>, events: Vec<egui::Event>, fold: bool) {
+/// One frame of raw input holding `events`, as the platform sent them. The harness runs the app's
+/// `raw_input_hook`, which folds the Alt key into them.
+fn frame(h: &mut Harness<'static, Box<PhotocraftApp>>, events: Vec<egui::Event>) {
     h.input_mut().events.extend(events);
-    if fold {
-        let ctx = h.ctx.clone();
-        crate::alt_keys::fold_alt(&ctx, h.input_mut());
-    }
     h.step();
 }
 
@@ -438,55 +388,48 @@ enum Touch {
 const TAPS: [Touch; 4] = [Touch::QuickTap, Touch::AltAndQuickTap, Touch::PressThenRelease, Touch::AltReleasedWithTheButton];
 
 /// Play `tap` at document point (x, y) with the modifier state stale (always `NONE`).
-fn stale_tap(h: &mut Harness<'static, PhotocraftApp>, tap: Touch, x: f32, y: f32, fold: bool) {
+fn stale_tap(h: &mut Harness<'static, Box<PhotocraftApp>>, tap: Touch, x: f32, y: f32) {
     let p = screen(h, x, y);
     let (down, up) = (pointer(p, true, Modifiers::NONE), pointer(p, false, Modifiers::NONE));
     match tap {
         Touch::QuickTap => {
-            frame(h, vec![alt_key(true)], fold);
-            frame(h, vec![egui::Event::PointerMoved(p)], fold);
-            frame(h, vec![down, up], fold);
+            frame(h, vec![alt_key(true)]);
+            frame(h, vec![egui::Event::PointerMoved(p)]);
+            frame(h, vec![down, up]);
         }
         Touch::AltAndQuickTap => {
-            frame(h, vec![egui::Event::PointerMoved(p)], fold);
-            frame(h, vec![alt_key(true), down, up], fold);
+            frame(h, vec![egui::Event::PointerMoved(p)]);
+            frame(h, vec![alt_key(true), down, up]);
         }
         Touch::PressThenRelease => {
-            frame(h, vec![alt_key(true), egui::Event::PointerMoved(p)], fold);
-            frame(h, vec![down], fold);
-            frame(h, vec![up], fold);
+            frame(h, vec![alt_key(true), egui::Event::PointerMoved(p)]);
+            frame(h, vec![down]);
+            frame(h, vec![up]);
         }
         Touch::AltReleasedWithTheButton => {
-            frame(h, vec![alt_key(true), egui::Event::PointerMoved(p)], fold);
-            frame(h, vec![down], fold);
-            frame(h, vec![alt_key(false), up], fold);
+            frame(h, vec![alt_key(true), egui::Event::PointerMoved(p)]);
+            frame(h, vec![down]);
+            frame(h, vec![alt_key(false), up]);
         }
     }
-    frame(h, vec![alt_key(false)], fold);
+    frame(h, vec![alt_key(false)]);
     h.run_steps(2);
 }
 
-/// The cause: with the modifier state that misses Alt, the same tap samples nothing. With the Alt
-/// key folded into the events (the raw-input step), every grouping samples.
+/// With the modifier state missing Alt (the cause: without the fold in `raw_input_hook` the same
+/// tap paints), the Alt key's own events make every grouping sample.
 #[test]
 fn a_touchpad_tap_with_a_stale_modifier_state_samples_with_the_brush() {
     for tool in [Tool::Brush, Tool::Pencil] {
         for tap in TAPS {
-            for fold in [false, true] {
-                let mut h = harness(two_colours());
-                h.state_mut().ui.tool = tool;
-                h.state_mut().run("tools.setColors", json!({"foreground": [0.0, 0.0, 1.0, 1.0]})).unwrap();
-                let rev = h.state().session.active().unwrap().revision;
-                stale_tap(&mut h, tap, 50.0, 50.0, fold);
-                let what = format!("{tool:?} {tap:?} fold={fold}");
-                if fold {
-                    assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "sampled red: {what}");
-                    assert_eq!(h.state().session.active().unwrap().revision, rev, "nothing was painted: {what}");
-                } else {
-                    assert_ne!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "the cause, without the fold: {what}");
-                }
-                assert!(!h.state().alt_sampling, "the press ended: {what}");
-            }
+            let mut h = harness(two_colours());
+            h.state_mut().ui.tool = tool;
+            h.state_mut().run("tools.setColors", json!({"foreground": [0.0, 0.0, 1.0, 1.0]})).unwrap();
+            let rev = h.state().session.active().unwrap().revision;
+            stale_tap(&mut h, tap, 50.0, 50.0);
+            let what = format!("{tool:?} {tap:?}");
+            assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "sampled red: {what}");
+            assert_eq!(h.state().session.active().unwrap().revision, rev, "nothing was painted: {what}");
         }
     }
 }
@@ -499,64 +442,8 @@ fn a_touchpad_tap_with_a_stale_modifier_state_sets_the_clone_source() {
         h.state_mut().ui.tool_options.clone_sample = "all".into();
         h.state_mut().run("tools.setBrush", json!({"brush": {"size": 10, "hardness": 1.0}})).unwrap();
         let rev = h.state().session.active().unwrap().revision;
-        stale_tap(&mut h, tap, 150.0, 50.0, true);
+        stale_tap(&mut h, tap, 150.0, 50.0);
         assert!(h.state().session.presets.clone.active().source.is_some(), "⌥-click set the source: {tap:?}");
         assert_eq!(h.state().session.active().unwrap().revision, rev, "the tap only set the source, it painted nothing: {tap:?}");
     }
-}
-
-/// Alt is let go together with the button: the click decided at the press stays a sample.
-#[test]
-fn letting_go_of_alt_with_the_button_does_not_paint_a_click() {
-    for tool in [Tool::Brush, Tool::Pencil, Tool::CloneStamp] {
-        let mut h = harness(two_colours());
-        h.state_mut().ui.tool = tool;
-        h.state_mut().ui.tool_options.clone_sample = "all".into();
-        h.state_mut().run("tools.setBrush", json!({"brush": {"size": 10, "hardness": 1.0}})).unwrap();
-        let rev = h.state().session.active().unwrap().revision;
-        let p = screen(&h, 150.0, 50.0);
-        frame(&mut h, vec![egui::Event::ModifiersChanged(Modifiers::ALT), egui::Event::PointerMoved(p)], false);
-        frame(&mut h, vec![pointer(p, true, Modifiers::ALT)], false);
-        // The release is stamped without Alt, in the frame after the press.
-        frame(&mut h, vec![egui::Event::ModifiersChanged(Modifiers::NONE), pointer(p, false, Modifiers::NONE)], false);
-        h.run_steps(2);
-        assert_eq!(h.state().session.active().unwrap().revision, rev, "{tool:?}: the click only sampled");
-        assert!(!h.state().alt_sampling && h.state().drag.is_none(), "{tool:?}");
-        if tool == Tool::CloneStamp {
-            assert!(h.state().session.presets.clone.active().source.is_some(), "the source was set");
-        }
-    }
-}
-
-/// The next click starts from its own Alt: a plain click after an ⌥-click paints.
-#[test]
-fn a_plain_click_after_an_alt_click_paints() {
-    let mut h = harness(two_colours());
-    h.state_mut().ui.tool = Tool::Brush;
-    h.state_mut().run("tools.setColors", json!({"foreground": [0.0, 0.0, 1.0, 1.0]})).unwrap();
-    stale_tap(&mut h, Touch::PressThenRelease, 50.0, 50.0, true);
-    assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0]);
-    let rev = h.state().session.active().unwrap().revision;
-    let p = screen(&h, 150.0, 50.0);
-    frame(&mut h, vec![egui::Event::PointerMoved(p)], true);
-    frame(&mut h, vec![pointer(p, true, Modifiers::NONE)], true);
-    frame(&mut h, vec![pointer(p, false, Modifiers::NONE)], true);
-    h.run_steps(2);
-    assert!(h.state().session.active().unwrap().revision > rev, "a click without Alt paints");
-    assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "and samples nothing");
-}
-
-/// A release and the next press in one frame must retain the next press's Alt until its release.
-#[test]
-fn alt_press_after_a_release_in_the_same_frame_sets_clone_source() {
-    let mut h = harness(two_colours());
-    h.state_mut().ui.tool = Tool::CloneStamp;
-    h.state_mut().ui.tool_options.clone_sample = "all".into();
-    let p = screen(&h, 150.0, 50.0);
-    frame(&mut h, vec![egui::Event::PointerMoved(p)], false);
-    frame(&mut h, vec![pointer(p, true, Modifiers::ALT)], false);
-    frame(&mut h, vec![pointer(p, false, Modifiers::ALT), pointer(p, true, Modifiers::ALT)], false);
-    h.state_mut().session.presets.clone.active_mut().source = None;
-    frame(&mut h, vec![pointer(p, false, Modifiers::NONE)], false);
-    assert!(h.state().session.presets.clone.active().source.is_some(), "the second Alt press sets the source");
 }

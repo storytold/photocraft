@@ -548,7 +548,7 @@ fn stack_modes_render_from_the_nested_layers() {
         let g = Layer::new("stack", LayerContent::Group(photocraft_doc::Group { children: kids, expanded: true, artboard: None, frame_stroke: None }));
         let smart = crate::smart_cmds::layer_to_smart(doc, &g)?;
         let id = smart.id;
-        doc.layers = vec![smart];
+        doc.layers = vec![smart].into();
         *active = Some(id);
         Ok(())
     })
@@ -959,4 +959,11 @@ fn decontamination_alpha_keeps_missing_source_alpha_only_inside_bounds() {
     for (x, y) in [(9, 128), (700, 128), (300, 9), (300, 240)] {
         assert_eq!(alpha.sample_channel(x, y, 0), 0.0);
     }
+}
+
+#[test]
+fn layer_export_as_names_every_resample_method_in_the_presets_order() {
+    let spec = crate::install::command_specs().iter().find(|c| c.id == "layer.exportAs").unwrap();
+    let keys: Vec<&str> = crate::export_preset_cmds::RESAMPLE.iter().map(|(key, _)| *key).collect();
+    assert!(spec.params.contains(&format!("\"resample\":\"{}\"", keys.join("|"))), "{}", spec.params);
 }

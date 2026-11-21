@@ -1,4 +1,5 @@
 use super::*;
+use crate::actions_cmds::ActionStep;
 
 /// An independently constructed selection-property reference, as recorded in Group F.
 fn selection() -> D {
@@ -97,9 +98,9 @@ fn assert_kept(id: &str, name: Option<&str>, descriptor: Descriptor) {
     let mut s = Session::new();
     let loaded = s.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&atn::write(&original).unwrap())})).unwrap();
     assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1, "{id}/{name:?}/{descriptor:?}");
-    assert_eq!(s.actions.list[0].steps[0].0, PHOTOSHOP_STEP);
-    assert!(s.actions.list[0].disabled.contains(&0));
-    assert!(s.actions.list[0].dialogs.contains(&0));
+    assert_eq!(s.actions.list.actions()[0].steps[0].command, PHOTOSHOP_STEP);
+    assert!(s.actions.list.actions()[0].disabled.contains(&0));
+    assert!(s.actions.list.actions()[0].dialogs.contains(&0));
     let saved = s.execute("actions.save", json!({"action":"Step"})).unwrap();
     assert_eq!(saved["skipped"], json!([]));
     let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
@@ -182,7 +183,7 @@ fn group_f_maps_steps_recorded_with_the_application_header() {
     for (event, d, (command, params)) in cases {
         let loaded = import(&file(event, d)).unwrap();
         assert!(loaded.unsupported.is_empty(), "{command}");
-        assert_eq!(loaded.actions[0].steps, vec![(command.to_string(), params)]);
+        assert_eq!(loaded.actions[0].steps, vec![ActionStep::new(command, params)]);
     }
 }
 
@@ -271,7 +272,7 @@ fn fade_defaults_and_opacity_limits_are_explicit() {
         let bytes = file(AtnEvent::Code(*b"Fade"), desc("null").with("Opct", pct(opacity)).with("Md  ", enm("BlnM", "Nrml")));
         let loaded = import(&bytes).unwrap();
         assert!(loaded.unsupported.is_empty());
-        assert_eq!(loaded.actions[0].steps[0].1["opacity"].as_f64(), Some(expected));
+        assert_eq!(loaded.actions[0].steps[0].params["opacity"].as_f64(), Some(expected));
         let saved = export("Group F", &[&loaded.actions[0]], &[], false).unwrap().0;
         let d = atn::parse(&saved).unwrap().actions[0].items[0].descriptor.clone().unwrap();
         assert_eq!(d, desc("null").with("Opct", pct(expected)).with("Md  ", enm("BlnM", "Nrml")));
@@ -331,7 +332,7 @@ fn group_f_unsupported_settings_are_not_silently_replaced() {
         original.actions[0].items[0].dialog_options = 2;
         let loaded = import(&atn::write(&original).unwrap()).unwrap();
         assert_eq!(loaded.unsupported.len(), 1);
-        assert_eq!(loaded.actions[0].steps[0].0, PHOTOSHOP_STEP);
+        assert_eq!(loaded.actions[0].steps[0].command, PHOTOSHOP_STEP);
         let saved = export("Group F", &[&loaded.actions[0]], &[], false).unwrap().0;
         assert_eq!(atn::parse(&saved).unwrap().actions[0].items[0], original.actions[0].items[0]);
     }
