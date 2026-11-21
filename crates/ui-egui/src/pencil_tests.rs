@@ -416,6 +416,10 @@ fn history_stroke_pixels(mode: &str, pressed: &serde_json::Value, switched: Opti
     tool_event(&mut app, ToolEvent::Up { x: pts[4].0, y: pts[4].1 }, Modifiers::NONE);
     let (id, p) = last(&app);
     assert_eq!(id, "paint.historyBrush", "{mode}: {p}");
+    // The mode's own flags: the pixel comparisons can't see one go, as both strokes would lose it.
+    for flag in ["pencil", "block"] {
+        assert_eq!(p.get(flag) == Some(&json!(true)), mode == flag, "{mode}: {flag} in {p}");
+    }
     let st = app.session.active().unwrap();
     layer(&app).surface().unwrap().read_region(st.doc.bounds())
 }
