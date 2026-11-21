@@ -184,6 +184,8 @@ fn the_options_bar_ratio_list_takes_escape_and_enter_before_the_crop() {
     assert!(pending(h.state()), "the drawn square crop is pending");
     let before = frame_rect(&h).expect("the pending frame");
     let size = |h: &Harness| h.state().session.active().map(|s| (s.doc.size.width, s.doc.size.height));
+    let history = |h: &Harness| h.state().session.active().expect("the crop document").history.past_len();
+    let steps = history(&h);
     let square = "1 : 1 (Square)";
 
     // Escape dismisses the list. Enter accepts its first row, the selected free Ratio.
@@ -208,7 +210,7 @@ fn the_options_bar_ratio_list_takes_escape_and_enter_before_the_crop() {
     h.key_press(egui::Key::Enter);
     h.run_steps(6);
     assert_eq!(size(&h), Some((200, 200)), "Enter on the canvas commits the pending crop");
-    assert!(!pending(h.state()));
+    assert_eq!(history(&h), steps + 1, "Enter adds one document history step");
 }
 
 #[test]
