@@ -46,6 +46,11 @@ wgpu = { version = "30", default-features = false, features = ["std", "wgsl"], o
 pollster = { version = "1", optional = true }
 
 [dev-dependencies]
+# Built-in profiles as synthetic working-space files for the desktop mode-change tests.
+craft-cms = { workspace = true }
+# Their folder: created exclusively, removed on drop even when an assertion panics. The same
+# version the engine already uses.
+tempfile = "3"
 photocraft-color = { workspace = true }
 photocraft-geom = { workspace = true }
 # Synthetic camera raws (#7789).
