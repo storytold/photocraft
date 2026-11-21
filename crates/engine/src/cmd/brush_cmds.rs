@@ -1210,7 +1210,9 @@ fn define_from_selection_with_renderer(
             return Err(crate::allocation::error("defining a brush from the selection", &error.to_string()));
         }
     }
-    let (brush, tw, th) = sampled_brush(cmd, &v, w, h)?;
+    let (mut brush, tw, th) = sampled_brush(cmd, &v, w, h)?;
+    // Defined tips start at 10%; image imports retain the shared helper's 25%.
+    brush.spacing = 0.10;
     upsert(s, BrushPreset { name: name.clone(), brush: brush.clone(), builtin: false, group: String::new(), folder: Vec::new(), captures: Default::default() });
     *s.tools.brush = brush;
     s.tools.current_preset = Some(name.clone());
@@ -1585,6 +1587,9 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod define_brush_spacing_tests;
 
 #[cfg(test)]
 #[path = "color_replacement_modes_tests.rs"]
