@@ -819,7 +819,8 @@ fn bundles_without_the_full_composite_still_open() {
     }
     let other = z.finish().unwrap();
     assert!(read_full_composite(&other).is_err());
-    assert!(matches!(load_from_bytes(&other), Err(FormatError::Corrupt(_))));
+    let e = load_from_bytes(&other).unwrap_err();
+    assert!(matches!(&e, FormatError::Corrupt(m) if m.contains("full_composite")), "{e}");
     assert_eq!(load_from_bytes(&older).unwrap(), load_from_bytes(&bytes).unwrap());
     assert_eq!(load_from_bytes(&older).unwrap(), doc);
     // A save without it writes no member at all, as older writers did.
