@@ -7,6 +7,9 @@
 //! Triangle's stand-in, a sample also becomes the tool's solid Fill, and Shift+Alt samples as Alt
 //! does (#13364).
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use craft::behavior::{CancelReason, Cursor, PointerButton};
 use craft::color_ui::ui::{EyedropperTool, SampleSize, SampleSource};
 use craft::keymap::Mods;
@@ -39,6 +42,8 @@ pub(crate) struct PcEyedropper<'a> {
     stand_in: bool,
     /// Runs as the Triangle's Alt stand-in: a pick also sets the tool's Fill.
     shape_fill: bool,
+    /// Whether the sample being taken may read the pasteboard off the image ([`Self::arm_pasteboard`]).
+    on_pasteboard: Rc<Cell<bool>>,
 }
 
 /// The Eyedropper tool, for `Tool::Eyedropper`.
@@ -65,10 +70,29 @@ impl<'a> PcEyedropper<'a> {
         });
         // Preferences › Cursors › Other Cursors = Precise wants the plain crosshair, so no ring.
         options.show_ring &= !precise;
+        let on_pasteboard = Rc::new(Cell::new(false));
+        let pasteboard = Rc::clone(&on_pasteboard);
         let sample = move |at: [f64; 2], size: SampleSize, source: SampleSource| {
-            scope.with_app(|app| sampling::pick(app, at, size, source)).map(|c| Srgba::rgb(c[0], c[1], c[2]))
+            scope
+                .with_app(|app| {
+                    // Off the image, the Eyedropper takes the pasteboard as drawn, whatever the Sample mode (#11755).
+                    // A pick from a targeted layer mask is not measured there and keeps picking nothing.
+                    if pasteboard.get() && sampling::off_image(app, at) && !sampling::samples_mask(app, source) {
+                        return Some(sampling::pasteboard_rgb(app));
+                    }
+                    sampling::pick(app, at, size, source)
+                })
+                .map(|c| Srgba::rgb(c[0], c[1], c[2]))
         };
-        PcEyedropper { scope, state, inner: EyedropperTool::new(options, sample).foreground(foreground), stand_in, shape_fill: stand_in && triangle }
+        let inner = EyedropperTool::new(options, sample).foreground(foreground);
+        PcEyedropper { scope, state, inner, stand_in, shape_fill: stand_in && triangle, on_pasteboard }
+    }
+
+    /// Whether a sample at `pointer` may take the pasteboard's colour: the Eyedropper tool itself, without Alt, over
+    /// the canvas. Alt's background pick and the painting tools' Alt stand-in outside the image are not measured, so
+    /// they keep picking nothing there; past the canvas (another panel) the window's pixels are not read here either.
+    fn arm_pasteboard(&self, pointer: &ToolPointer, cx: &ToolContext<'_>) {
+        self.on_pasteboard.set(!self.stand_in && !pointer.mods.alt && cx.rect.contains(pointer.pos));
     }
 
     /// Writes the newest pick to its swatch; as the Triangle's stand-in, also makes the tool's Fill
@@ -130,6 +154,7 @@ impl CanvasTool for PcEyedropper<'_> {
             self.state.sampler_added = true;
             return ToolAction::Claimed;
         }
+        self.arm_pasteboard(pointer, cx);
         let action = self.inner.press(pointer, cx);
         self.apply();
         action
@@ -140,6 +165,7 @@ impl CanvasTool for PcEyedropper<'_> {
         if self.state.sampler_added || (self.shift_adds_samplers() && pointer.mods.shift) {
             return;
         }
+        self.arm_pasteboard(pointer, cx);
         self.inner.drag(pointer, cx);
         self.apply();
     }
@@ -183,3 +209,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../brush_shift_alt_sampler_tests.rs"]
 mod brush_shift_alt_sampler_tests;
+
+#[cfg(test)]
+#[path = "../eyedropper_outside_document_tests.rs"]
+mod eyedropper_outside_document_tests;
