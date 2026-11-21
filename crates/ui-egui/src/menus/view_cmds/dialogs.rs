@@ -653,7 +653,7 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             };
             let linked = id == "file.placeLinked";
             let ctx = ctx.clone();
-            Some(app.pick_file_bytes(move |app, name, bytes| {
+            let place = move |app: &mut PhotocraftApp, name: String, bytes: Vec<u8>| {
                 if app.ui.transform.is_some() {
                     return Err("Commit or cancel the transform first".into());
                 }
@@ -665,7 +665,9 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                     crate::transform_tool::begin_placed(app, &ctx)?;
                 }
                 Ok(result)
-            }))
+            };
+            // Place Embedded's picker is titled for the command (#14110); Place Linked keeps the system's.
+            Some(if linked { app.pick_file_bytes(place) } else { app.pick_file_bytes_titled(tl!("Place Embedded").to_string(), place) })
         }
         "layer.smartObjects.replaceContents" => {
             let st = app.session.active()?;
