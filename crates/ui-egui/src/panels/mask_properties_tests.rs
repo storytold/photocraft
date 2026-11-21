@@ -174,6 +174,46 @@ fn mask_slider_drags_preview_live_and_undo_as_separate_gestures() {
     assert!((mask(&h).density - 0.5).abs() < 0.01, "density {} after a cancelled drag", mask(&h).density);
 }
 
+#[test]
+fn an_uncommitted_density_draft_does_not_follow_the_active_layer() {
+    use egui::{Event, Key, Modifiers, accesskit::Role};
+
+    let mut session = session_for(Target::Pixel);
+    let first = session.active().unwrap().active_layer.unwrap();
+    session.execute("layer.new.layer", json!({"name": "Second mask"})).unwrap();
+    session.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    let second = session.active().unwrap().active_layer.unwrap();
+    session.execute("layer.select", json!({"layer": first.0})).unwrap();
+    let mut h = harness_of(session, true, false);
+    let steps = history(&h);
+    let type_density = |h: &mut Harness<'_, Box<PhotocraftApp>>| {
+        h.get_by_role_and_label(Role::SpinButton, "Density").click();
+        frames(h, 1);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.event(Event::Text("25*2".into()));
+        frames(h, 2);
+        assert_eq!(h.get_by_role_and_label(Role::SpinButton, "Density").value().as_deref(), Some("25*2"), "the expression is in the field");
+    };
+    let first_density = |h: &Harness<'_, Box<PhotocraftApp>>| h.state().session.active().unwrap().doc.layer(first).unwrap().mask.as_ref().unwrap().density;
+
+    type_density(&mut h);
+    assert_eq!(mask(&h).density, 1.0, "typing does not apply the draft");
+    h.state_mut().session.execute("layer.select", json!({"layer": second.0})).unwrap();
+    frames(&mut h, 4);
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(second));
+    assert_ne!(h.get_by_role_and_label(Role::SpinButton, "Density").value().as_deref(), Some("25*2"), "the new field has no draft from the first mask");
+    assert_eq!(mask(&h).density, 1.0, "the new mask is unchanged");
+    assert_eq!(first_density(&h), 1.0, "switching targets does not apply the old draft");
+    assert_eq!(history(&h), steps);
+
+    type_density(&mut h);
+    h.key_press(Key::Enter);
+    frames(&mut h, 3);
+    assert_eq!(mask(&h).density, 0.5, "Enter applies the expression to the second mask");
+    assert_eq!(first_density(&h), 1.0, "the first mask is unchanged");
+    assert_eq!(history(&h), steps + 1, "only the explicit commit edits the document");
+}
+
 /// A Density drag in each mask section runs that section's edit command: one undo step per gesture, and a
 /// shape stays a shape (#5846).
 #[test]
