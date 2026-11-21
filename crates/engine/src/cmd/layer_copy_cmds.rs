@@ -300,7 +300,13 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     adapt_copies(s, &mut copies, &ddoc)?;
     // Placement: centred on the destination's canvas, centred on a point, or offset from where
     // the layers are in the source (default: the same canvas position).
-    let (dx, dy) = if p.get("center").and_then(Value::as_bool).unwrap_or(false) {
+    // `centerOutside`: copies that would land wholly off the destination's canvas are centred on it, the rest keep
+    // their place, as Duplicate Layer does (#14606); a half pixel rounds towards the top left.
+    let outside = p.get("centerOutside").and_then(Value::as_bool).unwrap_or(false) && content.intersect(&ddoc.bounds()).is_empty();
+    let (dx, dy) = if outside {
+        let (c, d) = (center(content), center(ddoc.bounds()));
+        ((d[0] - c[0]).floor(), (d[1] - c[1]).floor())
+    } else if p.get("center").and_then(Value::as_bool).unwrap_or(false) {
         let (c, d) = (center(content), center(ddoc.bounds()));
         (d[0] - c[0], d[1] - c[1])
     } else if let Some(at) = point(p, "at")? {
@@ -425,7 +431,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Copy Layers to Document",
         menu: &[],
         shortcut: None,
-        params: r##"{"document":index (destination),"layers":[id,…]?=the source's selected layers,"source":index?=active,"selectionOnly":bool=false (copy selected pixels from one raster layer),"center":bool=false (centre on the destination's canvas),"at":[x,y]? (centre the copies on this point),"offset":[dx,dy]?=[0,0] (from their place in the source),"name":str? (one layer: the copy's name)}"##,
+        params: r##"{"document":index (destination),"layers":[id,…]?=the source's selected layers,"source":index?=active,"selectionOnly":bool=false (copy selected pixels from one raster layer),"center":bool=false (centre on the destination's canvas),"centerOutside":bool=false (centre only copies that would land wholly off the destination's canvas),"at":[x,y]? (centre the copies on this point),"offset":[dx,dy]?=[0,0] (from their place in the source),"name":str? (one layer: the copy's name)}"##,
         enabled,
         run: copy_to_document,
         journal: true,
