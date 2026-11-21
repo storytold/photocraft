@@ -14,6 +14,29 @@ fn noise_gradient_fill(min: [i32; 4], max: [i32; 4], add_transparency: bool) -> 
     Descriptor::new("null").with("Grad", Value::Descriptor(gradient))
 }
 
+/// Distort/Perspective corners frame the warp's control-point box, as the affine ones do: the
+/// box's corners land on the stored quad, not the source rect's.
+#[test]
+fn perspective_corners_frame_the_warp_box() {
+    use photocraft_geom::warp::{BezierMesh, Warp, WarpStyle};
+    let mut mesh = BezierMesh::identity([0.0, 0.0, 40.0, 20.0], 1, 1);
+    assert!(mesh.split_u(0.5));
+    mesh.points[0] = [-8.0, -4.0];
+    let mut warp = Warp::preset(WarpStyle::Custom, 0.0, [0.0, 0.0, 40.0, 20.0]);
+    warp.mesh = Some(mesh);
+    let frame = placed_frame(Some(&warp), 40.0, 20.0);
+    assert_eq!(frame, [-8.0, -4.0, 40.0, 20.0]);
+    let q = [[100.0, 100.0], [300.0, 120.0], [280.0, 220.0], [110.0, 200.0]];
+    let h = photocraft_algo::transform::Homography(corners_perspective_in(q, frame).expect("projective"));
+    for ((x, y), c) in [(-8.0, -4.0), (40.0, -4.0), (40.0, 20.0), (-8.0, 20.0)].into_iter().zip(q) {
+        let (u, v) = h.apply(x, y);
+        assert!((u - c[0]).abs() < 1e-9 && (v - c[1]).abs() < 1e-9);
+    }
+    // The `PlLd` record reads the same corners the same way.
+    let p = [100.0, 100.0, 300.0, 120.0, 280.0, 220.0, 110.0, 200.0];
+    assert_eq!(plld_transform(&p, Some((40.0, 20.0)), Some(&warp)).1, Some(h.0));
+}
+
 #[test]
 fn constant_rgb_noise_fill_uses_its_exact_colour() {
     use photocraft_doc::Fill;
