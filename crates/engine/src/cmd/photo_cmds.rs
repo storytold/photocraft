@@ -930,6 +930,11 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
             let warped_sizes: Vec<(usize, usize)> =
                 extents.iter().map(|&(w, h)| ((w.ceil() + 1.0).max(0.0).min(cw) as usize, (h.ceil() + 1.0).max(0.0).min(ch) as usize)).collect();
             let (est_needed, fixed_during_bands) = estimate_photomerge_memory(&sizes, &warped_sizes, cw as usize, ch as usize, cc, bpp, blend, fill);
+            // Auto-Blend Layers' first snapshot keeps the aligned layers (#14094): their warped
+            // pixels stay alive through the blend instead of being freed as it reads them.
+            let kept =
+                if blend && !fill { warped_sizes.iter().map(|&(w, h)| w.saturating_mul(h)).fold(0usize, usize::saturating_add).saturating_mul(bpp) } else { 0 };
+            let (est_needed, fixed_during_bands) = (est_needed.saturating_add(kept), fixed_during_bands.saturating_add(kept));
             if est_needed > budget {
                 let mb_est = est_needed / (1 << 20);
                 let mb_budget = budget / (1 << 20);
@@ -958,6 +963,7 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
             let mut doc = Document::new(doc_name, Size::new(cw as u32, ch as u32), fmt.mode, fmt.sample);
             doc.icc_profile = icc;
             let mut info = json!({});
+            let mut unblended = None;
             let ref_pos = placed.iter().position(|&i| i == al.reference).unwrap_or(0);
             if blend {
                 let pls: Vec<Placement> = placements.iter().map(|p| (*p).clone()).collect();
@@ -965,6 +971,8 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
                 let geo = vignette.then_some((pls.as_slice(), sizes.as_slice(), offset));
                 let remaining_band_budget = budget.saturating_sub(fixed_during_bands);
                 let check_cancel = || ctx.check();
+                // Shares the tiles: the cost is the `kept` bytes charged above.
+                let aligned = (!fill).then(|| warped.clone());
                 let opt = BlendOptions { seamless: true, gains: true, geometry: geo, budget: Some(remaining_band_budget) };
                 let b = seam_blend(warped, canvas, &order, opt, Some(&check_cancel))?;
                 // `children[0]` is the bottom layer, and the first source goes on top.
@@ -975,6 +983,7 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
                     l.mask = Some(m);
                     doc.layers.push(l);
                 }
+                unblended = aligned.map(|aligned| unblended_layers(&doc, aligned));
                 info = json!({"gains": b.gains, "vignette": b.vignette});
                 ctx.check()?;
                 if fill {
@@ -1008,13 +1017,58 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
                     "photometric": info,
                     "ms": {"register": t_reg * 1000.0, "warp": (t_warp - t_reg) * 1000.0, "total": t0.ms()},
                 }),
+                unblended,
             ))
         },
-        |s, (doc, mut info): (Document, Value)| {
-            info["document"] = json!(s.add_document(doc, None));
+        move |s, (doc, mut info, unblended): (Document, Value, Option<Document>)| {
+            info["document"] = json!(open_photomerge_result(s, doc, unblended, blend, fill));
             Ok(info)
         },
     )
+}
+
+/// The blended Photomerge `doc` as it was before Auto-Blend Layers: the same layers (names, ids,
+/// order) holding the `aligned` pixels, in source order, without seam masks.
+fn unblended_layers(doc: &Document, aligned: Vec<Surface>) -> Document {
+    let mut d = doc.clone();
+    // `children[0]` is the bottom layer, the last source.
+    for (l, px) in d.layers.iter_mut().zip(aligned.into_iter().rev()) {
+        l.content = LayerContent::Raster(px);
+        l.mask = None;
+    }
+    d
+}
+
+/// Opens a Photomerge result with the History and the targeted layers Photoshop leaves (#14094).
+/// The History panel holds the first snapshot and one state named after the merge's last step:
+/// "Fill" with the fill option, else "Auto-Blend Layers" with Blend Images Together on and "Move"
+/// with it off. The Auto-Blend snapshot holds `unblended`, the aligned layers before blending
+/// ([`unblended_layers`]), so going back to it undoes the blend. Blend on targets every source
+/// layer, Blend off only the bottom one (the last source); the fill result keeps today's target,
+/// its top layer.
+fn open_photomerge_result(s: &mut Session, doc: Document, unblended: Option<Document>, blend: bool, fill: bool) -> usize {
+    let label = match (blend, fill) {
+        (true, true) => "Fill",
+        (true, false) => "Auto-Blend Layers",
+        (false, _) => "Move",
+    };
+    let all: Vec<photocraft_doc::LayerId> = doc.layers.iter().map(|l| l.id).collect();
+    let bottom = doc.layers.first().map(|l| l.id);
+    let idx = s.add_document(doc, None);
+    if let Some(st) = s.active_mut() {
+        st.history.set_current_label(label);
+        // The first snapshot (History Options › Automatically Create First Snapshot) is the
+        // document before the step; without it the state before the step is not kept.
+        if let (Some(d), Some(first)) = (unblended, st.snapshots.first_mut().filter(|snap| snap.id == 0)) {
+            first.doc = std::sync::Arc::new(d);
+        }
+    }
+    match (blend, fill) {
+        (true, false) => crate::layer_multi_cmds::reselect(s, all, None),
+        (false, _) => crate::layer_multi_cmds::reselect(s, bottom.into_iter().collect(), bottom),
+        (true, true) => {}
+    }
+    idx
 }
 
 /// Fills the transparent areas of a composite (inside its bounding rectangle) with
@@ -1415,3 +1469,6 @@ mod tests;
 
 #[cfg(test)]
 mod photomerge_name_tests;
+
+#[cfg(test)]
+mod photomerge_history_tests;
