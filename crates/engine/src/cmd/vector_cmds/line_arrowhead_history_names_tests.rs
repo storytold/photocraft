@@ -59,7 +59,7 @@ fn turning_end_off_is_also_change_arrowhead_end() {
 fn the_panel_keys_layer_and_coalesce_do_not_change_the_name() {
     let mut s = arrow_line();
     let id = s.active().unwrap().active_layer.unwrap().0;
-    edit(&mut s, json!({"arrowWidth": 15, "layer": id, "coalesce": "w"}));
+    edit(&mut s, json!({"arrowWidth": 15, "layer": id, "coalesce": "w", "historyName": null}));
     assert_eq!(last_step(&s), Some("Change Arrowhead Width"));
 }
 

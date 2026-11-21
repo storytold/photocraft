@@ -95,6 +95,60 @@ fn the_first_click_makes_the_shape_layer_right_away() {
 }
 
 #[test]
+fn first_anchor_drag_is_part_of_new_shape_layer() {
+    let mut app = app();
+    let before = steps(&app);
+    let anchor = [125.0, 25.0];
+    let handle = [145.0, 45.0];
+    testing::press(&mut app, anchor, egui::Modifiers::NONE);
+    assert_eq!(shapes(&app).len(), 1, "the layer appears on press");
+    testing::move_to(&mut app, handle, egui::Modifiers::NONE);
+    testing::release(&mut app, handle, egui::Modifiers::NONE);
+    let first_shape = shapes(&app)[0].1.clone();
+    let knot = &first_shape.path.subpaths[0].knots[0];
+    assert_ne!(knot.anchor, knot.out_ctrl, "the outgoing handle is stored");
+    assert_eq!(steps(&app), before + 1);
+    assert_eq!(undo_label(&app).as_deref(), Some("New Shape Layer"));
+
+    menu(&mut app, "edit.undo");
+    assert!(shapes(&app).is_empty());
+    menu(&mut app, "edit.redo");
+    assert_eq!(shapes(&app)[0].1.path, first_shape.path, "redo restores the dragged handle with the layer");
+}
+
+#[test]
+fn later_pen_anchors_and_close_are_named_history_steps() {
+    let mut app = app();
+    let before = steps(&app);
+    click(&mut app, 125.0, 25.0);
+
+    click(&mut app, 175.0, 25.0);
+    assert_eq!(steps(&app), before + 2);
+    assert_eq!(undo_label(&app).as_deref(), Some("New Anchor Point"));
+
+    let anchor = [175.0, 75.0];
+    let handle = [155.0, 85.0];
+    testing::press(&mut app, anchor, egui::Modifiers::NONE);
+    testing::move_to(&mut app, handle, egui::Modifiers::NONE);
+    testing::release(&mut app, handle, egui::Modifiers::NONE);
+    assert_eq!(steps(&app), before + 3);
+    assert_eq!(undo_label(&app).as_deref(), Some("New Anchor Point"));
+
+    let start = [125.0, 25.0];
+    let close_handle = [110.0, 45.0];
+    testing::press(&mut app, start, egui::Modifiers::NONE);
+    testing::move_to(&mut app, close_handle, egui::Modifiers::NONE);
+    testing::release(&mut app, close_handle, egui::Modifiers::NONE);
+    assert_eq!(steps(&app), before + 4);
+    assert_eq!(undo_label(&app).as_deref(), Some("Close Path"));
+    menu(&mut app, "edit.undo");
+    assert_eq!(draft_len(&app), Some(3));
+    assert!(!shapes(&app)[0].1.path.subpaths[0].closed);
+    menu(&mut app, "edit.undo");
+    assert_eq!(draft_len(&app), Some(2));
+}
+
+#[test]
 fn the_layer_fills_the_open_path_anchor_by_anchor() {
     let mut app = app();
     let before = steps(&app);
@@ -107,7 +161,7 @@ fn the_layer_fills_the_open_path_anchor_by_anchor() {
     assert_eq!(covered(&sh.path, 165, 35), 1.0, "the triangle is filled before it is closed");
     assert_eq!(covered(&sh.path, 135, 65), 0.0, "and only the triangle");
     assert_eq!(steps(&app), before + 3, "the layer, then one step per further anchor");
-    assert_eq!(undo_label(&app).as_deref(), Some("Edit Shape"));
+    assert_eq!(undo_label(&app).as_deref(), Some("New Anchor Point"));
     assert_eq!(draft_len(&app), Some(3));
 }
 
@@ -122,6 +176,9 @@ fn one_click_then_enter_leaves_a_one_anchor_shape_layer() {
     assert_eq!(list.len(), 1);
     assert_eq!(subpaths(&list[0].1), [(false, vec![[125.0, 25.0]])]);
     assert_eq!(steps(&app), before, "finishing adds no step");
+    click(&mut app, 50.0, 100.0);
+    assert_eq!(shapes(&app).len(), 2);
+    assert_eq!(steps(&app), before + 1, "each shape starts a new history step");
 }
 
 #[test]
@@ -145,7 +202,10 @@ fn finishing_with_enter_or_escape_then_clicking_elsewhere_starts_a_new_layer() {
 fn clicking_the_first_anchor_closes_the_same_layer_and_keeps_its_fill() {
     let mut app = app();
     triangle(&mut app);
+    let before = steps(&app);
     click(&mut app, 125.0, 25.0);
+    assert_eq!(steps(&app), before + 1);
+    assert_eq!(undo_label(&app).as_deref(), Some("Close Path"));
     assert!(app.ui.pen.is_none(), "closing commits");
     let list = shapes(&app);
     assert_eq!(list.len(), 1, "no second layer");
