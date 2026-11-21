@@ -503,23 +503,6 @@ fn canvas_controls(
 ) -> Option<(photocraft_doc::LayerId, photocraft_doc::Fill)> {
     let pointer = ui.input(|i| i.pointer.hover_pos());
     let now = ui.input(|i| i.time);
-    // The scroll bars (Standard Screen Mode only) and the rotation compass change the view they are bound to. They
-    // are shown first: a control shown later is above the earlier ones, and a body part such as the text editor
-    // takes no press under a member that covers the whole canvas.
-    let mut shown = space.view;
-    if !app.ui.view.hides_chrome() {
-        let size = app.session.documents()[host.idx].doc.size;
-        let bounds = Rect64::from_origin_size(Point::ZERO, Size::new(f64::from(size.width), f64::from(size.height)));
-        CanvasScrollbars::new("Scroll bars", Bind::bound(&mut shown), bounds)
-            .overscroll(app.session.prefs().tools.overscroll)
-            .document_chrome()
-            .show_at(ui, rect);
-    }
-    if RotateView::visible(shown.rotation) {
-        let mut rotation = shown.rotation;
-        RotateView::new("Rotate View", Bind::bound(&mut rotation), shown.flip_x).show_at(ui, RotateView::compass_rect(ui, rect));
-        shown.rotation = rotation;
-    }
     crate::distort_ui::show_in_canvas(app, ui, rect);
     crate::blur_pins::overlay(app, ui, rect);
     let doc = app.session.documents()[host.idx].doc.id;
@@ -551,6 +534,24 @@ fn canvas_controls(
     crate::analysis::canvas::body(app, ui, rect);
     if primary {
         reported.crop = super::tools::crop::show_frame(app, ui, rect);
+    }
+    // The scroll bars (Standard Screen Mode only) and the rotation compass change the view they are bound to. They are
+    // window chrome that works with every tool, so they are shown after the tools' controls: a control shown later is
+    // above the earlier ones, and the Crop frame covers the whole canvas (its outside turns the frame; #16231). They
+    // declare parts only over the bars and the compass, so a press elsewhere still reaches the controls below.
+    let mut shown = space.view;
+    if !app.ui.view.hides_chrome() {
+        let size = app.session.documents()[host.idx].doc.size;
+        let bounds = Rect64::from_origin_size(Point::ZERO, Size::new(f64::from(size.width), f64::from(size.height)));
+        CanvasScrollbars::new("Scroll bars", Bind::bound(&mut shown), bounds)
+            .overscroll(app.session.prefs().tools.overscroll)
+            .document_chrome()
+            .show_at(ui, rect);
+    }
+    if RotateView::visible(shown.rotation) {
+        let mut rotation = shown.rotation;
+        RotateView::new("Rotate View", Bind::bound(&mut rotation), shown.flip_x).show_at(ui, RotateView::compass_rect(ui, rect));
+        shown.rotation = rotation;
     }
     // One contextual task bar per window: the active document's tile carries it, not the tile drawn last.
     if app.session.active_index() == Some(host.idx) {
@@ -722,6 +723,59 @@ mod tests {
         for label in ["Horizontal scroll bar", "Vertical scroll bar"] {
             let bar = h.get_by_role_and_label(Role::ScrollBar, label);
             assert_eq!(bar.accesskit_node().max_numeric_value(), Some(0.0), "{label} after turning Overscroll off");
+        }
+    }
+
+    /// #16231: with the Crop tool active the scroll bars still scroll the view. The crop frame is shown after them and
+    /// covers the whole canvas (its outside turns the frame), so it took every press on them before.
+    #[test]
+    fn canvas_scrollbars_scroll_while_the_crop_tool_is_active() {
+        use egui::accesskit::Role;
+        use egui::{Event, PointerButton, vec2};
+        use egui_kittest::kittest::Queryable;
+
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).with_pixels_per_point(1.0).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+            app.ui.tool = Tool::Crop;
+            app
+        });
+        h.run_steps(6);
+        // 400 % makes the document larger than the window, so both bars have room to scroll.
+        let view = &mut h.state_mut().ui.views[0];
+        view.zoom = 4.0;
+        view.center = [200.0, 150.0];
+        view.clear_pending();
+        h.run_steps(4);
+        let frame = h.state().canvas_tools.crop.tool.frame();
+        assert!(frame.is_some(), "the Crop tool shows its default frame");
+
+        for (label, along) in [("Horizontal scroll bar", vec2(40.0, 0.0)), ("Vertical scroll bar", vec2(0.0, 40.0))] {
+            let before = testing::view(h.state()).expect("the document is shown");
+            // The view is centred, so the thumb lies over the middle of its track.
+            let thumb = h.get_by_role_and_label(Role::ScrollBar, label).rect().center();
+            h.hover_at(thumb);
+            h.run_steps(2);
+            h.drag_at(thumb);
+            h.run_steps(1);
+            for step in [0.25, 0.5, 1.0] {
+                h.hover_at(thumb + along * step);
+                h.run_steps(1);
+            }
+            h.event(Event::PointerButton { pos: thumb + along, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.run_steps(2);
+            let after = testing::view(h.state()).expect("the document is shown");
+            if along.x > 0.0 {
+                assert!(after.center.x > before.center.x + 10.0, "{label} drag scrolls the view: {before:?} -> {after:?}");
+                assert_eq!(after.center.y, before.center.y, "{label} drag keeps the other axis");
+            } else {
+                assert!(after.center.y > before.center.y + 10.0, "{label} drag scrolls the view: {before:?} -> {after:?}");
+                assert_eq!(after.center.x, before.center.x, "{label} drag keeps the other axis");
+            }
+            let tool = &h.state().canvas_tools.crop.tool;
+            assert_eq!(tool.frame(), frame, "{label} drag leaves the crop frame alone");
+            assert!(!tool.modified(), "{label} drag starts no crop edit");
         }
     }
 

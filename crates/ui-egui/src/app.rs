@@ -72,6 +72,7 @@ impl PhotocraftApp {
             menu_model: None,
             toolbar_slots: Default::default(),
             dock_model: Default::default(),
+            preset_art: Default::default(),
             move_preview: None,
             move_hover: None,
             move_distance: None,
@@ -341,3 +342,6 @@ mod clipboard_tests;
 
 #[cfg(test)]
 mod apply_data_set_alert_tests;
+
+#[cfg(test)]
+mod apply_data_set_missing_file_tests;
