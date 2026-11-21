@@ -205,7 +205,7 @@ impl PhotocraftApp {
             .admit_import_with_initial_view(read_only, initial_view, |session| (session.add_document(doc, None), ()))
             .map_err(|error| error.to_string())?;
         warnings.extend(view_warning);
-        self.sync_views();
+        self.sync_opened_view();
         self.ui.status = crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]);
         self.ui.status_error = false;
         notices::io_warnings(self, &crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]), &warnings);

@@ -1262,16 +1262,22 @@ fn opening_composite_view_clears_previous_tab_mask_target_before_first_edit() {
     let layer = doc.layer_mut(id).unwrap();
     layer.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 8, 6), &[1., 0., 0., 1.]);
     let mask = layer.mask.clone();
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), native_view_services(doc, view));
-    app.run("file.new", json!({"width":8,"height":6})).unwrap();
-    app.run("layer.layerMask.revealAll", json!({})).unwrap();
-    assert!(app.ui.mask_target);
-    app.open_bytes("composite.xcf", b"fixture").unwrap();
-    assert!(!app.ui.mask_target);
-    app.run("image.adjustments.invert", json!({})).unwrap();
-    let layer = app.session.active().unwrap().doc.layer(id).unwrap();
-    assert_eq!(layer.surface().unwrap().pixel(0, 0), [0., 1., 1., 1.]);
-    assert_eq!(layer.mask, mask);
+    for automation in [false, true] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), native_view_services(doc.clone(), view.clone()));
+        app.run("file.new", json!({"width":8,"height":6})).unwrap();
+        app.run("layer.layerMask.revealAll", json!({})).unwrap();
+        assert!(app.ui.mask_target);
+        if automation {
+            app.open_automation_bytes("composite.xcf", b"fixture").unwrap();
+        } else {
+            app.open_bytes("composite.xcf", b"fixture").unwrap();
+        }
+        assert!(!app.ui.mask_target);
+        app.run("image.adjustments.invert", json!({})).unwrap();
+        let layer = app.session.active().unwrap().doc.layer(id).unwrap();
+        assert_eq!(layer.surface().unwrap().pixel(0, 0), [0., 1., 1., 1.]);
+        assert_eq!(layer.mask, mask);
+    }
 }
 
 #[test]

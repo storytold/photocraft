@@ -906,20 +906,29 @@ async fn headless_smart_object_tools_use_explicit_historical_xcf_order() {
     let root = tmp("historical-smart-object");
     std::fs::write(root.join("little.xcf"), historical_xcf_fixture::historical_pixel(true)).unwrap();
     std::fs::write(root.join("big.xcf"), historical_xcf_fixture::historical_pixel(false)).unwrap();
+    std::fs::write(root.join("modern.xcf"), historical_xcf_fixture::modern_pixel(0x1234)).unwrap();
     let client = connect(headless_in(&root)).await;
     json_of(&call(&client, "doc_new", json!({"width": 8, "height": 8})).await);
 
     let placed = json_of(&call(&client, "doc_place", json!({"path": "little.xcf", "historical_xcf_sample_order": "little-endian"})).await);
     let layer = placed["layer"].clone();
-    for (path, order) in [("placed.pcraft", HistoricalXcfSampleOrder::LittleEndian), ("replaced.pcraft", HistoricalXcfSampleOrder::BigEndian)] {
-        if order == HistoricalXcfSampleOrder::BigEndian {
-            json_of(&call(&client, "doc_replace_smart_object", json!({"path": "big.xcf", "layer": layer, "historical_xcf_sample_order": order})).await);
+    for (path, replacement, order) in [
+        ("placed.pcraft", None, Some(HistoricalXcfSampleOrder::LittleEndian)),
+        ("replaced.pcraft", Some("big.xcf"), Some(HistoricalXcfSampleOrder::BigEndian)),
+        ("modern.pcraft", Some("modern.xcf"), None),
+    ] {
+        if let Some(source) = replacement {
+            let requested = order.unwrap_or(HistoricalXcfSampleOrder::LittleEndian);
+            json_of(&call(&client, "doc_replace_smart_object", json!({"path":source,"layer":layer,"historical_xcf_sample_order":requested})).await);
         }
         json_of(&call(&client, "doc_save", json!({"path": path})).await);
         let document = photocraft_format::load_from_bytes(&std::fs::read(root.join(path)).unwrap()).unwrap();
         let id = photocraft_doc::LayerId(layer.as_u64().unwrap());
         let LayerContent::Smart(smart) = &document.layer(id).unwrap().content else { panic!("Smart Object") };
-        assert_eq!(smart.historical_xcf_sample_order, Some(order));
+        assert_eq!(smart.historical_xcf_sample_order, order);
+        if order.is_none() {
+            assert!((smart.cache.as_ref().unwrap().pixel(4, 4)[0] - f32::from(0x1234u16) / 65535.).abs() <= 1. / 255.);
+        }
     }
     client.cancel().await.unwrap();
     cleanup(&root);

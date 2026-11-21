@@ -140,6 +140,14 @@ impl PhotocraftApp {
         }
     }
 
+    /// Initialize the shell's targets from the newly opened document.
+    pub(crate) fn sync_opened_view(&mut self) {
+        self.ui.mask_target = false;
+        self.ui.vector_mask_target = false;
+        self.ui.filter_mask_target = None;
+        self.sync_views();
+    }
+
     /// Viewing a layer mask (#196) targets it; a vector-mask target needs a vector mask on the
     /// active layer (a shape layer's path is its content, not a mask). Targeting a mask or the
     /// pixels brings back that target's foreground/background pair, as in Photoshop (#2166).

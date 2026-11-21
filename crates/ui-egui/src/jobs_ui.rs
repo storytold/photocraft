@@ -872,7 +872,7 @@ pub(crate) fn after_open(
     if let Some(p) = path {
         app.opened_from(p);
     }
-    app.sync_views();
+    app.sync_opened_view();
     // Fonts the document's type uses that aren't installed join the import warnings (#4559).
     let warnings = crate::file_open::with_missing_fonts(app, warnings.to_vec());
     let warnings = warnings.as_slice();
