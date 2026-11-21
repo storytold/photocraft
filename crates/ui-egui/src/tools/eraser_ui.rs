@@ -239,20 +239,28 @@ fn background_eraser_members(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
 
     check(ui, tl!("Protect Foreground Color"), &mut app.ui.tool_options.bg_protect_fg, Some(tl!("Do not erase the foreground swatch color")));
 
-    let pressure = ToggleButton::new(tl!("Always use pressure for size"), Bind::given(brush.pressure_size))
-        .icon(IconId::new("target"))
-        .icon_only()
-        .tooltip(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure").to_owned())
-        .show(ui);
-    if let Some(on) = pressure.value().copied() {
+    let (picked, pressure_key) = pressure_size_toggle(ui, brush.pressure_size);
+    if let Some(on) = picked {
         brush.pressure_size = on;
-        key = pressure.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e)).or(key);
+        key = pressure_key.or(key);
     }
     crate::brush_panel::commit_keyed(app, &before, &brush, key);
 
     for alert in &alerts {
         option_cells::range_alert(app, ui, alert);
     }
+}
+
+/// The options bar's "Pressure for Size" toggle button over a tool brush's `pressure_size` (the Background Eraser's,
+/// and the Blur tool's, #12648).
+/// Returns the value picked this frame and the history key of its gesture.
+pub(crate) fn pressure_size_toggle(ui: &mut egui::Ui, on: bool) -> (Option<bool>, Option<String>) {
+    let out = ToggleButton::new(tl!("Always use pressure for size"), Bind::given(on))
+        .icon(IconId::new("target"))
+        .icon_only()
+        .tooltip(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure").to_owned())
+        .show(ui);
+    (out.value().copied(), out.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e)))
 }
 
 #[cfg(test)]
