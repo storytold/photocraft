@@ -790,3 +790,26 @@ fn an_existing_outer_glow_is_edited_with_its_own_values() {
     let FxPaint::Color(c) = &g.paint else { panic!("{:?}", g.paint) };
     assert_eq!(hex(c), "#ffffbe", "OK kept the colour");
 }
+
+#[test]
+fn layer_style_checkbox_drag_clears_then_checks_without_touching_the_next_effect() {
+    use crate::dialogs::tests::{checkbox_centers, fast_checkbox_drag};
+
+    let mut app = app_with_layer(32);
+    let id = open(&mut app, None).unwrap();
+    let kinds = [EffectKind::BevelEmboss, EffectKind::Stroke, EffectKind::InnerShadow, EffectKind::InnerGlow];
+    edit(&mut app, id, |d| {
+        for kind in kinds {
+            d.add_instance(kind, &defaults(kind));
+        }
+    });
+    let mut h = harness(app);
+    let [bevel, stroke, shadow] = checkbox_centers(&h, ["Bevel & Emboss", "Stroke", "Inner Shadow"]);
+    let states = |app: &PhotocraftApp| kinds.map(|kind| draft(app, id).style.effect(first_of(app, id, kind)).unwrap().on);
+
+    assert_eq!(states(h.state()), [true; 4]);
+    fast_checkbox_drag(&mut h, [bevel, stroke, shadow]);
+    assert_eq!(states(h.state()), [false, false, false, true]);
+    fast_checkbox_drag(&mut h, [shadow, stroke, bevel]);
+    assert_eq!(states(h.state()), [true; 4]);
+}
