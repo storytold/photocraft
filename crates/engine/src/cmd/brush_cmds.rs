@@ -1069,12 +1069,21 @@ fn presets_set_current(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn has_selection_and_pixels(s: &Session) -> std::result::Result<(), String> {
-    s.active().ok_or("no document")?;
+    let d = s.active().ok_or("no document")?;
+    // The area the command reads (selection, else canvas) is limited, not just the painted
+    // extent, like Photoshop (#14275).
+    let area = d.doc.selection.as_ref().map_or_else(|| d.doc.bounds(), |sel| sel.content_bounds().intersect(&d.doc.bounds()));
+    if area.width().max(area.height()) > MAX_DEFINED_TIP {
+        return Err(format!("the area is larger than {MAX_DEFINED_TIP} px"));
+    }
     Ok(())
 }
 
-/// Largest sampled tip side (like Photoshop's 5000 px limit, kept smaller for preset size).
+/// Largest tip side for an image file imported as a brush (kept smaller for preset size).
 pub const MAX_TIP: u32 = 2500;
+
+/// Largest tip side for Define Brush Preset (Photoshop's limit).
+pub const MAX_DEFINED_TIP: u32 = 5000;
 
 fn define_from_selection(s: &mut Session, p: &Value) -> Result<Value> {
     define_from_selection_with_renderer(s, p, |doc, area, sink| photocraft_compose::try_render_bands(doc, area, 0, sink))
@@ -1183,8 +1192,9 @@ fn define_from_selection_with_renderer(
 }
 
 /// A sampled-tip brush from a paint-amount map (`w`×`h`, row-major, 0 = no paint, 1 = full):
-/// cropped to the painted extent, at most [`MAX_TIP`] px a side. Shared by Define Brush Preset
-/// and importing an image file as a brush (`brush.presets.importImage`).
+/// cropped to the painted extent, at most [`MAX_DEFINED_TIP`] px a side. Shared by Define Brush
+/// Preset and importing an image file as a brush (`brush.presets.importImage`), which checks the
+/// smaller [`MAX_TIP`] itself.
 pub(crate) fn sampled_brush(cmd: &str, v: &[f32], w: usize, h: usize) -> Result<(BrushSettings, u32, u32)> {
     let at = |x: usize, y: usize| v.get(y * w + x).copied().unwrap_or(0.0);
     // Crop to the painted extent.
@@ -1203,10 +1213,11 @@ pub(crate) fn sampled_brush(cmd: &str, v: &[f32], w: usize, h: usize) -> Result<
         return Err(bad(cmd, "the pixels contain no paint (all white or transparent)"));
     }
     let (tw, th) = ((x1 - x0) as u32, (y1 - y0) as u32);
-    if tw.max(th) > MAX_TIP {
-        return Err(bad(cmd, format!("too large for a brush tip ({tw}×{th}; max {MAX_TIP} px)")));
+    if tw.max(th) > MAX_DEFINED_TIP {
+        return Err(bad(cmd, format!("too large for a brush tip ({tw}×{th}; max {MAX_DEFINED_TIP} px)")));
     }
-    let mut data = Vec::with_capacity((tw * th) as usize);
+    // A 5000 px tip is ~100 MB of f32, so reserve it fallibly.
+    let mut data = crate::allocation::capacity(tw as usize * th as usize, "making a brush tip")?;
     for y in y0..y1 {
         data.extend((x0..x1).map(|x| at(x, y)));
     }
@@ -1564,3 +1575,6 @@ mod define_brush_no_selection_tests;
 
 #[cfg(test)]
 mod define_brush_color_density_tests;
+
+#[cfg(test)]
+mod define_brush_size_limit_tests;
