@@ -182,3 +182,22 @@ async fn agent_completes_six_rounding_out_tasks() {
     shutdown(c, server).await;
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// `doc_new` passes `resolution` on to `file.new`: a print document starts at its ppi instead of
+/// 72, and without it the default stays 72.
+#[tokio::test(flavor = "multi_thread")]
+async fn doc_new_takes_a_resolution() {
+    let dir = tmp("doc_new_resolution");
+    let (c, server) = connect(&dir).await;
+
+    tool(&c, "doc_new", json!({"width": 600, "height": 300, "resolution": 300})).await;
+    let res = inspect(&c).await["resolution"].as_f64().unwrap();
+    assert!((res - 300.0).abs() < 1e-3, "the document is at the requested ppi: {res}");
+
+    tool(&c, "doc_new", json!({"width": 600, "height": 300})).await;
+    let res = inspect(&c).await["resolution"].as_f64().unwrap();
+    assert!((res - 72.0).abs() < 1e-3, "the default stays 72 ppi: {res}");
+
+    shutdown(c, server).await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
