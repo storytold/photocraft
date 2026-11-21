@@ -34,8 +34,8 @@ fn every_compositor_pipeline_builds() {
     // translation went untested. One adapter per backend keeps a second, unrelated adapter of the
     // same backend (a dual-GPU laptop's integrated GPU) out of the run. The second pass names DXC
     // rather than `Auto`: without `dxcompiler.dll`, as on the Windows runners, `Auto` falls back to
-    // FXC and built every pipeline with FXC a second time (half of this test's time, #15929), while
-    // a DXC that does not load leaves DX12 out of that pass.
+    // FXC and built every pipeline with FXC a second time (#15929), while a DXC that does not load
+    // leaves DX12 out of that pass.
     for (backends, compiler) in [(wgpu::Backends::DX12, wgpu::Dx12Compiler::Fxc), (wgpu::Backends::all(), wgpu::Dx12Compiler::default_dynamic_dxc())] {
         let required = cfg!(windows) && matches!(compiler, wgpu::Dx12Compiler::Fxc);
         for backend in backends.iter() {
