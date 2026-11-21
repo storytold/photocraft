@@ -32,6 +32,13 @@ fn is_critical(path: &str) -> bool {
 
 /// `cargo xtask corpus [--all | --pngsuite | --download | --psd | --psd-tools | --heif | --exr | --pixls | --affinity | --atn | --photoshop [--local] | --gimp [--local]] [--update-manifest]`
 pub fn cmd(args: &[&str]) -> Result<(), String> {
+    for arg in args {
+        match *arg {
+            "--all" | "--pngsuite" | "--download" | "--psd" | "--psd-tools" | "--heif" | "--pixls" | "--exr" | "--affinity" | "--atn" | "--photoshop"
+            | "--gimp" | "--local" | "--update-manifest" => {}
+            other => return Err(format!("corpus: unknown argument `{other}`")),
+        }
+    }
     let update = args.contains(&"--update-manifest");
     let mut did = false;
     if args.contains(&"--all") {
