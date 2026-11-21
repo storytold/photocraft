@@ -404,6 +404,23 @@ fn bitmap_methods_are_binary_and_track_tone() {
     }
 }
 
+#[test]
+fn halftone_preserves_solid_white_and_black() {
+    // Image > Mode > Bitmap on a 72 ppi document, with the default Halftone Screen settings.
+    let method = BitmapMethod::Halftone { cell: (72.0_f32 / 53.0).max(2.0), angle: 45.0, shape: HalftoneShape::Round };
+    let width = 256;
+    for level in [0.0, 1.0] {
+        let mut gray = vec![level; width * width];
+        to_bitmap(&mut gray, width, method);
+        let changed = gray.iter().filter(|&&pixel| pixel != level).count();
+        assert_eq!(changed, 0, "a solid {level} image must stay unchanged");
+    }
+
+    let mut gray = vec![254.0 / 255.0; width * width];
+    to_bitmap(&mut gray, width, method);
+    assert!(gray.contains(&0.0) && gray.contains(&1.0), "near-white still carries a halftone pattern");
+}
+
 /// The first 8-bit gray level (of a 0..=255 ramp) that `t` turns white.
 fn first_white(t: f32) -> u32 {
     (0..=255).find(|v| *v as f32 / 255.0 >= t).unwrap_or(256)
