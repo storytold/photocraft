@@ -349,9 +349,9 @@ pub(super) fn live_from_params(cmd: &str, kind: &str, p: &Value, prev: Option<&L
             LiveShape::Triangle { rect: rect()?, corner_radius }
         }
         "polygon" | "star" => {
-            let (ps, pr, pc) = match prev {
-                Some(LiveShape::Polygon { sides, star_ratio, corner_radius, .. }) => (*sides, *star_ratio, *corner_radius),
-                _ => (5, if kind == "star" { 0.5 } else { 1.0 }, 0.0),
+            let (ps, pr, pc, pf) = match prev {
+                Some(LiveShape::Polygon { sides, star_ratio, corner_radius, fills_box, .. }) => (*sides, *star_ratio, *corner_radius, *fills_box),
+                _ => (5, if kind == "star" { 0.5 } else { 1.0 }, 0.0, false),
             };
             let corner_radius = f64p(p, "cornerRadius").map_or(pc, |v| if v.is_finite() { v.clamp(0.0, 1.0e6) } else { pc });
             let sides = f64p(p, "sides").map_or(ps, |v| v.round().clamp(3.0, 100.0) as u32);
@@ -361,6 +361,9 @@ pub(super) fn live_from_params(cmd: &str, kind: &str, p: &Value, prev: Option<&L
                 sides,
                 star_ratio: if kind == "polygon" && f64p(p, "starRatio").is_none() { 1.0 } else { ratio },
                 corner_radius,
+                // The Polygon tool's geometry, which fills `rect` (#13298); off by default, so scripts and
+                // edits of older polygons keep theirs.
+                fills_box: p.get("fillsBox").and_then(Value::as_bool).unwrap_or(pf),
             }
         }
         "line" => {
