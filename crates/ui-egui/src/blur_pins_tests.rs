@@ -74,3 +74,25 @@ fn each_kind_writes_the_engines_pin_payload() {
     fields.set("pins", FieldValue::List(vec![FieldValue::Json(json!({"x": 0.1, "y": 0.2, "blur": 7.0}))]));
     assert_eq!(pins_of(&fields, BlurKind::Field, bounds).pins, vec![BlurPin::new(0.1, 0.2, 7.0)]);
 }
+
+/// A smart object over the (100,50)-(300,150) block of a 400x300 document, left as the active layer.
+fn make_object(app: &mut PhotocraftApp) {
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("select.rect", json!({"x": 100, "y": 50, "width": 200, "height": 100})).unwrap();
+    app.run("edit.fill", json!({"contents": "black"})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+}
+
+/// #13558: a Blur Gallery filter on a Smart Object places its pins on the object, so the dialog's
+/// bounds are the object's, not the canvas's. The same bounds serve reopening a smart filter.
+#[test]
+fn a_smart_object_dialog_takes_the_object_bounds() {
+    let mut app = app_with(false);
+    make_object(&mut app);
+    let (_, bounds, _) = initial(&mut app, COMMAND).unwrap();
+    assert_eq!(bounds, [100.0, 50.0, 300.0, 150.0]);
+    // A plain pixel layer keeps the canvas.
+    let mut plain = app_with(false);
+    assert_eq!(initial(&mut plain, COMMAND).unwrap().1, [0.0, 0.0, 400.0, 300.0]);
+}

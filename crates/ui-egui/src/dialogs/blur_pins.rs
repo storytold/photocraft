@@ -45,8 +45,13 @@ fn amount_key(kind: BlurKind) -> &'static str {
     if kind == BlurKind::Spin { "blurAngle" } else { "blur" }
 }
 
-/// The filter's bounds in document pixels: the selection's, else the canvas.
+/// The filter's bounds in document pixels: a Smart Object's placed content (its filters work within the object, so
+/// pins are fractions of it), else the selection's, else the canvas.
 fn document_bounds(app: &mut PhotocraftApp) -> Option<[f64; 4]> {
+    let object = app.session.active().and_then(|st| st.active_layer.and_then(|l| photocraft_engine::smart_cmds::object_bounds(&st.doc, l)));
+    if let Some(b) = object {
+        return Some([f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)]);
+    }
     let (doc, canvas, selection) = app.session.active().map(|st| (st.doc.id, st.doc.bounds(), st.doc.selection.clone()))?;
     let b = selection.map(|s| app.cached_bounds(u64::MAX - doc.0, &s)).filter(|b| !b.is_empty()).unwrap_or(canvas);
     Some([f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)])
