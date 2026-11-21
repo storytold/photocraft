@@ -79,14 +79,29 @@ pub fn credits() -> Credits {
 
 /// The About tab's contents: name, blurb, version, the community button and the project links.
 pub fn about_info(_app: &PhotocraftApp) -> AboutInfo {
-    AboutInfo::new("PhotoCraft", tl!("PhotoCraft — an open-source, native image editor written in Rust."), photocraft_engine::build_info::long_version())
+    about_info_for(crate::os_window::identity(), photocraft_engine::build_info::long_version(), photocraft_engine::build_info::git_sha())
+}
+
+fn about_info_for(identity: crate::os_window::LaunchIdentity, version: String, commit: Option<&str>) -> AboutInfo {
+    let nightly = identity == crate::os_window::LaunchIdentity::NightlyV1;
+    let mut links = vec![
+        AboutLink::new(tl!("PhotoCraft website"), crate::links::APP_PAGE),
+        AboutLink::new(tl!("GitHub"), crate::links::GITHUB),
+        AboutLink::new(tl!("ArtCraft"), crate::links::ARTCRAFT_WEBSITE),
+    ];
+    if nightly {
+        // Opens only after a user click. No diagnostics, paths or documents are sent automatically.
+        links.push(AboutLink::new(tl!("Report a problem"), crate::links::ISSUES));
+    }
+    let version = if nightly { nightly_about_version(&version, commit) } else { version };
+    AboutInfo::new(crate::os_window::name_for(identity), tl!("PhotoCraft — an open-source, native image editor written in Rust."), version)
         .community(AboutLink::new(tl!("Join us on Discord"), crate::links::DISCORD))
-        .links([
-            AboutLink::new(tl!("PhotoCraft website"), crate::links::APP_PAGE),
-            AboutLink::new(tl!("GitHub"), crate::links::GITHUB),
-            AboutLink::new(tl!("ArtCraft"), crate::links::ARTCRAFT_WEBSITE),
-        ])
+        .links(links)
         .built_with("egui · wgpu · photocraft-engine")
+}
+
+fn nightly_about_version(version: &str, commit: Option<&str>) -> String {
+    format!("{version}\nCommit: {}", commit.filter(|value| !value.is_empty()).unwrap_or("unavailable"))
 }
 
 /// Opens the About dialog on `tab`.
@@ -111,5 +126,46 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Issue reports take the English lines whatever the interface language, as the Copy button always has.
     if app.framework.dialogs.get_mut::<HostedReport>().and_then(HostedReport::take_copied).is_some() {
         ctx.copy_text(crate::gpu_status::system_info(app).join("\n"));
+    }
+}
+
+#[cfg(test)]
+mod nightly_about_tests {
+    use super::*;
+    use crate::os_window::LaunchIdentity;
+
+    #[test]
+    fn stable_about_preserves_its_name_version_and_existing_links() {
+        let info = about_info_for(LaunchIdentity::Stable, "0.23.1 (dev build)".into(), None);
+        let expected = AboutInfo::new("PhotoCraft", "", "0.23.1 (dev build)".to_owned());
+        assert_eq!(info.app_name, expected.app_name);
+        assert_eq!(info.version, expected.version);
+        assert_eq!(
+            info.links.iter().map(|link| link.url.as_str()).collect::<Vec<_>>(),
+            [crate::links::APP_PAGE, crate::links::GITHUB, crate::links::ARTCRAFT_WEBSITE]
+        );
+        assert_eq!(info.community.unwrap().url, crate::links::DISCORD);
+    }
+
+    #[test]
+    fn nightly_about_names_its_channel_and_adds_a_user_initiated_report_link() {
+        let commit = "0123456789abcdef0123456789abcdef01234567";
+        let version = "0.23.1-nightly.20261121.17.1.g0123456789ab";
+        let info = about_info_for(LaunchIdentity::NightlyV1, version.into(), Some(commit));
+        let expected = AboutInfo::new("PhotoCraft Nightly", "", nightly_about_version(version, Some(commit)));
+        assert_eq!(info.app_name, expected.app_name);
+        assert_eq!(info.version, expected.version);
+        assert_eq!(info.links.len(), 4);
+        assert_eq!(info.links.last().unwrap().url, crate::links::ISSUES);
+        assert_eq!(info.community.unwrap().url, crate::links::DISCORD);
+    }
+
+    #[test]
+    fn nightly_about_retains_the_full_tag_and_commit_without_inventing_missing_provenance() {
+        let commit = "0123456789abcdef0123456789abcdef01234567";
+        let version = "0.23.1-nightly.20261121.17.1.g0123456789ab";
+        assert_eq!(nightly_about_version(version, Some(commit)), format!("{version}\nCommit: {commit}"));
+        assert_eq!(nightly_about_version(version, None), format!("{version}\nCommit: unavailable"));
+        assert_eq!(nightly_about_version(version, Some("")), format!("{version}\nCommit: unavailable"));
     }
 }

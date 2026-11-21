@@ -1,0 +1,60 @@
+{
+  "title": "PhotoCraft nightly deep-background icons",
+  "author": "@skylartaylor",
+  "license": "MIT OR Apache-2.0",
+  "source_commit": "06afefff534fb18ca7ea2725a9f476fe477dbd29",
+  "inputs": [
+    {
+      "path": "assets/app-icon/hicolor/256x256/apps/ai.storyteller.photocraft.png",
+      "sha256": "efd02e0b8ea76c59fbc3a9692ddc21faae6064cc9f9492898df1facec3b5b57d",
+      "purpose": "Windows/Linux native256 master"
+    },
+    {
+      "path": "assets/app-icon/photocraft-1024.png",
+      "sha256": "00a39c5ccbcb2b5f144573b1cedb6c387c4416ad06fd1cf2865b0737458ee704",
+      "purpose": "native padded Mac1024 master; not upscaled from256"
+    }
+  ],
+  "method": {
+    "kind": "original code-generated derivative of the project-owned icon",
+    "original_palette": {
+      "ink": "#0b0b0c",
+      "paper": "#efe9dc",
+      "background": "#2f7bf5"
+    },
+    "nightly_background": "#22395d",
+    "transform": "Fit background contribution in the existing ink/paper/background palette and change only that contribution. Preserve alpha/padding and neutral foreground/detail RGBA. Derive native-size frames separately from their corresponding unchanged-resolution masters and pack PNG frames into ICO/ICNS. No crescent, letter or badge.",
+    "generator_sha256": "a04dcbba501985de729d37d352597de6ffb2ad993f1596eced6b12bffc114d85"
+  },
+  "outputs": {
+    "assets/app-icon/photocraft-nightly.png": "7a79aff027f9f95cef0edc0a84ce3791af302b6351ebca4d0e736477e3b3f031",
+    "assets/app-icon/photocraft-nightly.ico": "87f67bc7b9ce18f54ab62769d7e6849d9ed0fd2658fce7db1a1eb05140fad2f4",
+    "assets/app-icon/photocraft-nightly-1024.png": "8de1e42f70720c7b8c66f40f443e7f7a423690cfcb062725d2e563c5f8fd51b1",
+    "assets/app-icon/photocraft-nightly.icns": "9ceecf811014509cc1444f44aaa0d31715a1e2439e943aec77c510dd4b2bf8f0"
+  },
+  "ico_frame_sizes": [
+    16,
+    20,
+    24,
+    32,
+    40,
+    48,
+    64,
+    128,
+    256
+  ],
+  "icns_png_slots": {
+    "icp4": 16,
+    "icp5": 32,
+    "ic11": 32,
+    "icp6": 64,
+    "ic12": 64,
+    "ic07": 128,
+    "ic08": 256,
+    "ic13": 256,
+    "ic09": 512,
+    "ic14": 512,
+    "ic10": 1024
+  },
+  "validation": "Source/input/output hashes, PNG CRC/dimensions and exact container members checked; supplied generator pixel proof preserves foreground/alpha. Visual comparison reviewed. Native Explorer/Finder/iconutil/app-package qualification remains unrun."
+}
