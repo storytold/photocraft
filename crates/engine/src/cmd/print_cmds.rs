@@ -1433,6 +1433,12 @@ fn printer_page(_: &mut Session, p: &Value) -> Result<Value> {
             _ => return Err(bad("file.print.page", "orientation is \"portrait\" or \"landscape\"")),
         },
     };
+    // A driver query can block in the spooler while holding `SPOOLER` (#15847), so a process that
+    // called `disable_printing` asks no driver. `PHOTOCRAFT_NO_PRINT` only stops spooling, and
+    // reading a page spools nothing.
+    if PRINTING_DISABLED.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err(other("printer queries are disabled in this process (photocraft_engine::print_cmds::disable_printing)"));
+    }
     let printer = printer_name(p)?;
     let mut settings = printer_settings(p)?;
     if let Some(landscape) = landscape {
@@ -1454,8 +1460,9 @@ fn printer_page(_: &mut Session, p: &Value) -> Result<Value> {
 /// Set once by test harnesses (the panic hunt) so no command in the process can reach a printer.
 static PRINTING_DISABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Refuse to spool anything from this process from now on (tests, fuzzing). The
-/// `PHOTOCRAFT_NO_PRINT` environment variable does the same for a whole shell (CI).
+/// Refuse to spool anything from this process from now on (tests, fuzzing), and refuse
+/// `file.print.page`'s driver queries. The `PHOTOCRAFT_NO_PRINT` environment variable stops
+/// spooling for a whole shell (CI) but still lets a page be read.
 pub fn disable_printing() {
     PRINTING_DISABLED.store(true, std::sync::atomic::Ordering::Relaxed);
 }
