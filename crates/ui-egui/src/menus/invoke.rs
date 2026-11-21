@@ -304,9 +304,17 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
             app.pick_file_bytes_filtered(&["csv", "txt"], move |app, _name, bytes| {
                 app.refocus(doc)?;
                 let text = data_sets_text(bytes)?;
-                let r = photocraft_engine::import_data_sets_text(&mut app.session, &text, &params).map_err(|e| e.to_string());
-                app.sync_views();
-                r
+                match photocraft_engine::import_data_sets_text(&mut app.session, &text, &params) {
+                    Ok(value) => {
+                        app.sync_views();
+                        Ok(value)
+                    }
+                    Err(err) => {
+                        let message = data_sets_import_alert(&err);
+                        let _ = crate::dialogs::alerts::alert(app, message.clone());
+                        Err(message)
+                    }
+                }
             })
         }
         "file.save" => {
@@ -600,6 +608,15 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
 /// U+FFFD-substituted values.
 pub(super) fn data_sets_text(bytes: Vec<u8>) -> Result<String, String> {
     String::from_utf8(bytes).map_err(|e| format!("the data set file is not valid UTF-8: {e}"))
+}
+
+/// The sentence shown in the File › Import › Variable Data Sets alert (#13923): the engine's
+/// parse message, without the `invalid parameters for …` wrapper.
+fn data_sets_import_alert(err: &photocraft_engine::EngineError) -> String {
+    match err {
+        photocraft_engine::EngineError::BadParams { msg, .. } => msg.clone(),
+        _ => err.to_string(),
+    }
 }
 
 fn open_path(app: &mut PhotocraftApp, path: &str) -> Result<Value, String> {

@@ -655,10 +655,10 @@ fn doc_export_data_sets_refuse_collisions_and_import_reads_the_root() {
     assert!(refused.contains("{index}"), "{refused}");
     assert_eq!(std::fs::read_dir(&clash).unwrap().count(), 0, "no file of the refused batch");
     // A CSV from the read root, and one outside it.
-    std::fs::write(root.join("sets.csv"), "Data Set,show\none,true\ntwo,false\n").unwrap();
+    std::fs::write(root.join("sets.csv"), "DataSet,show\none,true\ntwo,false\n").unwrap();
     let imported = h.handle("doc.importDataSets", json!({"path": "sets.csv"})).unwrap();
     assert_eq!(imported["imported"].as_u64(), Some(2), "{imported}");
-    std::fs::write(base.join("outside.csv"), "Data Set,show\none,true\n").unwrap();
+    std::fs::write(base.join("outside.csv"), "DataSet,show\none,true\n").unwrap();
     let outside = h.handle("doc.importDataSets", json!({"path": base.join("outside.csv").to_string_lossy()})).unwrap_err().to_string();
     assert!(outside.contains("must be inside an automation read root"), "{outside}");
     // Release directory capabilities before cleanup on Windows.
@@ -673,7 +673,7 @@ fn indexed_place_replace_and_data_set_methods_keep_the_active_document() {
     std::fs::create_dir_all(&root).unwrap();
     let img = photocraft_codecs::Image::from_u8(4, 4, photocraft_codecs::ChannelLayout::Rgb, vec![42; 4 * 4 * 3]).unwrap();
     std::fs::write(root.join("logo.png"), photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap()).unwrap();
-    std::fs::write(root.join("sets.csv"), "Data Set,show\none,true\ntwo,false\n").unwrap();
+    std::fs::write(root.join("sets.csv"), "DataSet,show\none,true\ntwo,false\n").unwrap();
     let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
     h.handle("doc.new", json!({"width": 8, "height": 8, "background": "white", "name": "first"})).unwrap();
     h.handle("doc.new", json!({"width": 8, "height": 8, "background": "white", "name": "second"})).unwrap();

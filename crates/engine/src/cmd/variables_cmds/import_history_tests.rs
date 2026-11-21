@@ -87,7 +87,7 @@ fn import_records_one_step_and_undo_redo_restore_only_data_sets() {
 fn failed_import_preserves_existing_sets_and_redo() {
     let mut session = template();
     // The picker and automation also use the text entry point.
-    import_data_sets_text(&mut session, "Headline\nNew text\n", &json!({})).unwrap();
+    import_data_sets_text(&mut session, "Headline,Badge\nNew text,True\n", &json!({})).unwrap();
     assert!(session.undo());
     let state = session.active().unwrap();
     let before = state.doc.clone();
