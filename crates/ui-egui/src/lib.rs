@@ -505,6 +505,10 @@ pub struct PhotocraftApp {
     pub(crate) automation_input: bool,
     /// The direct control-command route keeps Actions playback synchronous and dialog-free.
     pub(crate) programmatic_playback: bool,
+    /// True while the control channel runs a command through `ui.menu.invoke`: the request came
+    /// from an automation client, not from the person at the desktop, so its Batch never parks
+    /// on a Stop For Errors question (see `jobs_ui::run`, #13667).
+    pub(crate) control_invoked: bool,
     /// How many `run_command` calls are on the stack. Only the outermost one writes the frame's
     /// command stage: a nested run (`file.save` → `layer.smartObjects.saveContents`,
     /// `actions.play` → its steps) is already inside the outer call's time.
@@ -713,6 +717,8 @@ struct InputTarget {
 mod artboard_add_mode_tests;
 #[cfg(test)]
 mod background_eraser_tolerance_field_tests;
+#[cfg(test)]
+mod batch_stop_for_errors_tests;
 #[cfg(test)]
 mod brush_picker_escape_tests;
 #[cfg(test)]

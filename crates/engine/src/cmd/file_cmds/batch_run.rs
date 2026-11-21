@@ -679,6 +679,13 @@ fn process_batch_outputs_with(
             Err(error) => {
                 errors.push(error.value("file", path));
                 if policy.stop_on_error {
+                    // Stop For Errors first asks the desktop over the same pause the Esc
+                    // question uses (#13667): Continue leaves the error recorded and processes
+                    // the next input. Stop, and a run no desktop can answer, end here with
+                    // today's partial result.
+                    if ctx.batch_pause_for_error(path, &error.error.to_string()) == Some(true) {
+                        continue;
+                    }
                     stopped = Some(path.clone());
                     break;
                 }
