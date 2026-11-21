@@ -198,7 +198,7 @@ fn export_to_files_and_pdf() {
 
 #[test]
 fn raster_pdf_xref_offsets_point_at_objects() {
-    let pdf = raster_pdf(&[(2, 3, 72.0, vec![0xff, 0xd8, 0xff, 0xd9])]);
+    let pdf = raster_pdf(&[(2, 3, 72.0, vec![0xff, 0xd8, 0xff, 0xd9])], None);
     let text = String::from_utf8_lossy(&pdf).into_owned();
     let xref = text.rfind("xref\n").unwrap();
     let offsets: Vec<usize> = text[xref..].lines().skip(3).take(5).map(|l| l[..10].parse().unwrap()).collect();

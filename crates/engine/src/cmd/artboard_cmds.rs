@@ -889,8 +889,9 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// A minimal PDF with one page per JPEG image: (width px, height px, dpi, JPEG bytes).
-/// Pages are sized so the image prints at its resolution.
-pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
+/// Pages are sized so the image prints at its resolution. With `icc`, an RGB ICC profile, every page maps
+/// its DeviceRGB image to it through a `DefaultRGB` colour space; the profile is written once, last.
+pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)], icc: Option<&[u8]>) -> Vec<u8> {
     let mut out: Vec<u8> = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
     let mut offsets: Vec<usize> = Vec::new();
     let mut obj = |out: &mut Vec<u8>, body: &[u8]| {
@@ -899,7 +900,8 @@ pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
         out.extend_from_slice(body);
         out.extend_from_slice(b"\nendobj\n");
     };
-    // Objects: 1 catalog, 2 page tree, then per page: page, contents, image.
+    // Objects: 1 catalog, 2 page tree, then per page: page, contents, image; then the profile, if any.
+    let color_space = icc.map_or(String::new(), |_| format!(" /ColorSpace << /DefaultRGB [/ICCBased {} 0 R] >>", 3 + pages.len() * 3));
     let kids: Vec<String> = (0..pages.len()).map(|i| format!("{} 0 R", 3 + i * 3)).collect();
     obj(&mut out, b"<< /Type /Catalog /Pages 2 0 R >>");
     obj(&mut out, format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids.join(" "), pages.len()).as_bytes());
@@ -910,7 +912,7 @@ pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
         obj(
             &mut out,
             format!(
-                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.3} {ph:.3}] /Resources << /XObject << /Im0 {image} 0 R >> >> /Contents {contents} 0 R >>"
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.3} {ph:.3}] /Resources << /XObject << /Im0 {image} 0 R >>{color_space} >> /Contents {contents} 0 R >>"
             )
             .as_bytes(),
         );
@@ -924,6 +926,12 @@ pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
         img.extend_from_slice(jpeg);
         img.extend_from_slice(b"\nendstream");
         obj(&mut out, &img);
+    }
+    if let Some(icc) = icc {
+        let mut stream = format!("<< /N 3 /Alternate /DeviceRGB /Length {} >>\nstream\n", icc.len()).into_bytes();
+        stream.extend_from_slice(icc);
+        stream.extend_from_slice(b"\nendstream");
+        obj(&mut out, &stream);
     }
     let xref = out.len();
     out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes());
@@ -941,6 +949,16 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
     let quality = f64_param(p, "quality").or(Some(10.0));
+    let include_icc = match p.get("includeIcc") {
+        None | Some(Value::Null) => true,
+        Some(v) => v.as_bool().ok_or_else(|| bad(cmd, "`includeIcc` must be true or false"))?,
+    };
+    // Only a readable RGB profile can describe the RGB page images (#13653); any other is left out.
+    let icc = doc
+        .icc_profile
+        .as_deref()
+        .map(Vec::as_slice)
+        .filter(|icc| include_icc && craft_cms::Profile::parse(icc).is_ok_and(|p| p.color_space == craft_cms::ColorSpace::Rgb));
     let mut pages = Vec::new();
     // Pages go bottom artboard of the Layers panel first, as in the reference application (#13643);
     // `chosen_documents` lists them top first, the order Artboards to Files keeps.
@@ -958,7 +976,7 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     if pages.is_empty() {
         return Err(bad(cmd, "no matching artboards"));
     }
-    write_file(&path, &raster_pdf(&pages))?;
+    write_file(&path, &raster_pdf(&pages, icc))?;
     Ok(json!({"path": path, "pages": pages.len()}))
 }
 
@@ -1029,7 +1047,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToPdf",
             "Artboards to PDF…",
             &["File", "Export"],
-            r##"{"path":str (.pdf),"artboards":[id]?,"quality":0..12=10} → {path, pages} (one raster page per board, bottom artboard of the Layers panel first)"##,
+            r##"{"path":str (.pdf),"artboards":[id]?,"quality":0..12=10,"includeIcc":bool=true (Include ICC Profile: each page maps its RGB image to the document's profile through a DefaultRGB colour space; a profile that isn't RGB is left out)} → {path, pages} (one raster page per board, bottom artboard of the Layers panel first)"##,
             export_artboards,
             artboards_to_pdf
         ),
@@ -1063,3 +1081,7 @@ mod pdf_page_order_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "artboards_to_pdf_icc_tests.rs"]
+mod artboards_to_pdf_icc_tests;
