@@ -99,11 +99,39 @@ fn command_list(a: &RunArgs) -> Result<Vec<(String, Value)>> {
     let mut cmds: Vec<(String, Value)> = Vec::new();
     for step in &a.steps {
         match step {
-            Step::Cmd(id) => cmds.push((id.clone(), json!({}))),
+            Step::Cmd(id) => match inline_params(id) {
+                Some(hint) => return Err(hint),
+                None => cmds.push((id.clone(), json!({}))),
+            },
             Step::Params(p) => cmds.last_mut().ok_or(CliError::ParamsBeforeCmd)?.1 = p.clone(),
         }
     }
     Ok(cmds)
+}
+
+/// The longest id or parameter text [`inline_params`] echoes, in characters.
+const HINT_ECHO_CHARS: usize = 80;
+
+/// A `--cmd` value that carries its parameters (`file.placeEmbedded {"path":…}`, #8673) gets a
+/// pointer to `--params`, rather than an "unknown command" for the whole string. The object need
+/// not be valid JSON yet: once it sits in `--params`, that flag reports the parse error. The value
+/// is echoed once and cut short past [`HINT_ECHO_CHARS`]; apostrophes are quoted, so a short
+/// suggestion pastes into a POSIX shell as it is.
+fn inline_params(cmd: &str) -> Option<CliError> {
+    let cmd = cmd.trim();
+    let split = cmd.find(|c: char| c == '{' || c.is_whitespace())?;
+    let (id, params) = (cmd[..split].trim(), cmd[split..].trim());
+    if id.is_empty() || !params.starts_with('{') {
+        return None;
+    }
+    Some(CliError::InlineParams { id: shorten(id), params: shorten(params).replace('\'', r"'\''") })
+}
+
+fn shorten(s: &str) -> String {
+    match s.char_indices().nth(HINT_ECHO_CHARS) {
+        Some((end, _)) => format!("{}…", &s[..end]),
+        None => s.to_string(),
+    }
 }
 
 /// Reported once by `run --gpu` when a step is `file.export.quickExport`.
@@ -287,5 +315,42 @@ mod missing_font_warning_tests {
         assert_eq!(code, 0, "{stderr}");
         assert!(!stderr.contains("font '"), "{stderr}");
         let _ = std::fs::remove_dir_all(&folder);
+    }
+}
+
+#[cfg(test)]
+mod inline_params_tests {
+    use super::inline_params;
+    use crate::error::CliError;
+
+    fn hint(cmd: &str) -> String {
+        inline_params(cmd).map(|e| e.to_string()).unwrap_or_default()
+    }
+
+    #[test]
+    fn only_an_id_followed_by_an_object_gets_the_hint() {
+        let h = hint(r#" file.placeEmbedded  {"path":"a.png"} "#);
+        assert!(h.contains(r#"--cmd file.placeEmbedded --params '{"path":"a.png"}'"#), "{h}");
+        assert!(matches!(inline_params(r#"file.placeEmbedded{"path":"a.png"}"#), Some(CliError::InlineParams { .. })));
+        // Malformed JSON still belongs in --params, which then names the parse error.
+        assert!(hint("layer.new.layer {oops").contains("--params '{oops'"));
+        let h = hint(r#"file.placeEmbedded {"path":"O'Brien.png"}"#);
+        assert!(h.ends_with(r#"--params '{"path":"O'\''Brien.png"}'"#), "{h}");
+        for plain in ["file.placeEmbedded", "file.placeEmbedded extra", r#"{"path":"a.png"}"#, "  ", ""] {
+            assert!(inline_params(plain).is_none(), "{plain:?}");
+        }
+    }
+
+    #[test]
+    fn the_hint_names_the_value_once_and_bounds_it() {
+        let params = format!(r#"{{"text":"{}"}}"#, "é".repeat(4000));
+        let h = hint(&format!("type.create {params}"));
+        assert_eq!(h.matches("--params").count(), 2, "{h}");
+        assert!(!h.contains(&params));
+        assert!(h.chars().count() < 300, "{} chars", h.chars().count());
+        assert!(h.ends_with("…'"), "{h}");
+        let id = "x".repeat(4000);
+        let h = hint(&format!("{id} {{}}"));
+        assert!(h.chars().count() < 300, "{} chars", h.chars().count());
     }
 }
