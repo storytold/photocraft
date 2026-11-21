@@ -158,12 +158,22 @@ pub(crate) fn shape_blur(src: &Image, out: Rect, ctx: &Ctx, radius: f32, shape: 
 }
 
 #[cfg(test)]
+fn scalar_prefix(src: &Image, alpha: bool) -> Prefix {
+    let win = src.rect;
+    let p = premul_window(src, win, alpha);
+    Prefix::new(&p, win.width() as usize, win.height() as usize, src.ch)
+}
+
+#[cfg(test)]
 fn conv_spans(src: &Image, out: Rect, ctx: &Ctx, spans: &Spans) -> Vec<f32> {
+    let prefix = scalar_prefix(src, ctx.alpha);
+    conv_spans_from_prefix(src, out, ctx, spans, &prefix)
+}
+
+#[cfg(test)]
+fn conv_spans_from_prefix(src: &Image, out: Rect, ctx: &Ctx, spans: &Spans, pre: &Prefix) -> Vec<f32> {
     let n = src.ch;
     let win = src.rect;
-    let (ww, wh) = (win.width() as usize, win.height() as usize);
-    let p = premul_window(src, win, ctx.alpha);
-    let pre = Prefix::new(&p, ww, wh, n);
     let mut acc = [0.0f64; MAXC];
     let mut px = [0.0f32; MAXC];
     let mut res = Vec::with_capacity(out.width() as usize * out.height() as usize * n);
