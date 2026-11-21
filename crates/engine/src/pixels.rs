@@ -94,6 +94,19 @@ pub(crate) fn check_adjustment_tile_budget(area: Rect, stored: usize, format: &p
 /// Works tile by tile in parallel, so a large layer needs one tile's buffers per thread rather
 /// than four full-layer copies, and the result is the same as one pass over the whole region.
 pub fn adjust_surface(s: &mut Surface, adj: &Adjustment, selection: Option<&Surface>, mode: photocraft_color::ColorMode) -> Result<(), String> {
+    adjust_surface_in(s, adj, selection, mode, adjust::GrayLightness::untagged())
+}
+
+/// [`adjust_surface`] in a document whose gray profile relates gray to L* as `gray` does (see
+/// [`adjust::GrayLightness::for_profile`]): a Grayscale Gradient Map stores its colours' L*
+/// through it, as the adjustment layer does. [`adjust_surface`] assumes an untagged document.
+pub fn adjust_surface_in(
+    s: &mut Surface,
+    adj: &Adjustment,
+    selection: Option<&Surface>,
+    mode: photocraft_color::ColorMode,
+    gray: &adjust::GrayLightness,
+) -> Result<(), String> {
     use rayon::prelude::*;
     let r = s.content_bounds();
     if r.is_empty() {
@@ -118,7 +131,7 @@ pub fn adjust_surface(s: &mut Surface, adj: &Adjustment, selection: Option<&Surf
             let mut one = Surface::new(fmt);
             one.put_tiles([(tc, tile)]);
             let tr = tc.rect().intersect(&r);
-            let out = adjusted(&one, tr, adj, selection, mode);
+            let out = adjusted_with_transfer(&one, tr, adj, selection, mode, adjust::Transfer::for_document(mode, fmt.sample), gray);
             one.write_region(tr, &out);
             photocraft_raster::scratch::give(out);
             one.take_tiles(tc.rect())
@@ -160,11 +173,13 @@ pub(crate) fn adjust_mask_with_transfer(
         let unit = Rect::from_xywh(0, 0, 1, 1);
         let blank = Surface::with_default(fmt, &s.default_pixel());
         let mask_default = Surface::with_default(sel.format(), &sel.default_pixel());
-        let mut out = Surface::with_default(fmt, &adjusted_with_transfer(&blank, unit, adj, Some(&mask_default), mode, transfer));
+        let mut out =
+            Surface::with_default(fmt, &adjusted_with_transfer(&blank, unit, adj, Some(&mask_default), mode, transfer, adjust::GrayLightness::untagged()));
         let stored: std::collections::BTreeSet<_> = s.tiles().map(|(c, _)| *c).chain(sel.tiles().map(|(c, _)| *c)).collect();
         for coord in stored {
             let r = coord.rect();
-            out.try_write_region(r, &adjusted_with_transfer(s, r, adj, selection, mode, transfer)).map_err(|e| e.to_string())?;
+            out.try_write_region(r, &adjusted_with_transfer(s, r, adj, selection, mode, transfer, adjust::GrayLightness::untagged()))
+                .map_err(|e| e.to_string())?;
         }
         out.prune();
         *s = out;
@@ -188,7 +203,7 @@ pub(crate) fn adjust_mask_with_transfer(
             tile_rects(r).collect()
         };
         for t in &tiles {
-            let out = adjusted_with_transfer(s, *t, adj, Some(sel), mode, transfer);
+            let out = adjusted_with_transfer(s, *t, adj, Some(sel), mode, transfer, adjust::GrayLightness::untagged());
             s.write_region(*t, &out);
             photocraft_raster::scratch::give(out);
         }
@@ -199,12 +214,15 @@ pub(crate) fn adjust_mask_with_transfer(
     }
     let fmt = s.format();
     let unit = Rect::from_xywh(0, 0, 1, 1);
-    let mut out = Surface::with_default(fmt, &adjusted_with_transfer(&Surface::with_default(fmt, &s.default_pixel()), unit, adj, None, mode, transfer));
+    let mut out = Surface::with_default(
+        fmt,
+        &adjusted_with_transfer(&Surface::with_default(fmt, &s.default_pixel()), unit, adj, None, mode, transfer, adjust::GrayLightness::untagged()),
+    );
     // Everything the mask doesn't store reads as its default, which `out` already holds adjusted.
     // So only the stored tiles are adjusted, not the (possibly huge) rectangle around them.
     let stored: Vec<Rect> = s.tiles().map(|(c, _)| c.rect()).collect();
     for r in stored {
-        let data = adjusted_with_transfer(s, r, adj, None, mode, transfer);
+        let data = adjusted_with_transfer(s, r, adj, None, mode, transfer, adjust::GrayLightness::untagged());
         out.write_region(r, &data);
         photocraft_raster::scratch::give(data);
     }
@@ -214,8 +232,9 @@ pub(crate) fn adjust_mask_with_transfer(
 }
 
 /// `s`'s pixels over `r` (untouched ones included) with `adj` applied through the selection, encoded.
+#[cfg(test)]
 fn adjusted(s: &Surface, r: Rect, adj: &Adjustment, selection: Option<&Surface>, mode: photocraft_color::ColorMode) -> Vec<f32> {
-    adjusted_with_transfer(s, r, adj, selection, mode, adjust::Transfer::for_document(mode, s.format().sample))
+    adjusted_with_transfer(s, r, adj, selection, mode, adjust::Transfer::for_document(mode, s.format().sample), adjust::GrayLightness::untagged())
 }
 
 fn adjusted_with_transfer(
@@ -225,6 +244,7 @@ fn adjusted_with_transfer(
     selection: Option<&Surface>,
     mode: photocraft_color::ColorMode,
     transfer: adjust::Transfer,
+    gray: &adjust::GrayLightness,
 ) -> Vec<f32> {
     let fmt = s.format();
     if fmt.mode == mode && matches!(mode, photocraft_color::ColorMode::Lab | photocraft_color::ColorMode::Cmyk) && adjust::stored_channel_adjustment(adj) {
@@ -256,7 +276,7 @@ fn adjusted_with_transfer(
         (photocraft_color::SampleType::U16, Adjustment::Posterize { .. } | Adjustment::Threshold { .. }) => Some(fmt.sample),
         _ => None,
     };
-    adjust::apply_in(adj, &mut buf, transfer, depth, mode);
+    adjust::apply_in_gray(adj, &mut buf, transfer, depth, mode, gray);
     mix_through_selection(&fmt, r, &orig.px, &buf.px, selection)
 }
 

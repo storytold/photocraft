@@ -2076,3 +2076,36 @@ fn sessions_share_builtin_brushes_until_edited() {
     assert!(first.tools.presets.iter().any(|preset| preset.name == "Session-only test brush"));
     assert!(!std::sync::Arc::ptr_eq(&first.tools.presets, &second.tools.presets));
 }
+
+/// Image › Adjustments › Gradient Map stores the same grays as a Gradient Map layer in a
+/// Grayscale document, and both follow the gray profile the document carries (#15868).
+#[test]
+fn grayscale_gradient_map_command_follows_the_document_gray_profile() {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    let strips = [16u8, 128, 240];
+    let run = |profile: craft_cms::Builtin, cmd: &str| -> Vec<f32> {
+        let mut doc = Document::new("g", photocraft_geom::Size::new(strips.len() as u32, 1), ColorMode::Grayscale, SampleType::U8);
+        doc.icc_profile = Some(profile.profile().to_bytes());
+        let fmt = doc.pixel_format();
+        let mut surface = photocraft_raster::Surface::new(fmt);
+        for (x, &v) in strips.iter().enumerate() {
+            surface.write_pixel(x as i32, 0, &[f32::from(v) / 255.0, 1.0]);
+        }
+        let mut layer = photocraft_doc::Layer::raster("strips", fmt);
+        layer.content = photocraft_doc::LayerContent::Raster(surface);
+        doc.layers.push(layer);
+        let mut s = Session::new();
+        s.add_document(doc, None);
+        s.execute(cmd, json!({"stops": [[0, "#ff0000"], [1, "#0000ff"]]})).unwrap();
+        let doc = &s.active().unwrap().doc;
+        let flat = photocraft_compose::flatten_to_surface(doc, PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false), Some([1.0; 3]));
+        (0..strips.len()).map(|x| flat.pixel(x as i32, 0)[0] * 255.0).collect()
+    };
+    let command = run(craft_cms::Builtin::GrayGamma22, "image.adjustments.gradientMap");
+    let layer = run(craft_cms::Builtin::GrayGamma22, "layer.newAdjustmentLayer.gradientMap");
+    let dot_gain = run(craft_cms::Builtin::DotGain20Compat, "image.adjustments.gradientMap");
+    for i in 0..strips.len() {
+        assert!((command[i] - layer[i]).abs() <= 1.0, "strip {}: command {} vs layer {}", strips[i], command[i], layer[i]);
+        assert!(command[i] > dot_gain[i] + 2.0, "strip {}: Gamma 2.2 {} not above Dot Gain {}", strips[i], command[i], dot_gain[i]);
+    }
+}

@@ -60,6 +60,10 @@ pub(crate) struct Ctx<'a> {
     pub(crate) doc: Option<&'a Document>,
     /// Effect-map identities of this render's document layers (see [`LayerKeys`]).
     pub(crate) layer_keys: LayerKeys,
+    /// The document's embedded profile (`None`: untagged), for [`Self::gray`].
+    pub(crate) icc_profile: Option<std::sync::Arc<Vec<u8>>>,
+    /// The document's gray ↔ L* relation, built on first use (Gradient Map in Grayscale).
+    pub(crate) gray: std::sync::OnceLock<std::sync::Arc<adjust::GrayLightness>>,
 }
 
 /// Memo of [`layer_identity`] for the layers of the document being rendered. The identity depends
@@ -130,6 +134,8 @@ impl<'a> Ctx<'a> {
             fx_over_budget: fx_over_budget(&doc.layers, doc.bounds()),
             layer_keys: Default::default(),
             tone_luts: prepare_tones(&doc.layers, 0),
+            icc_profile: doc.icc_profile.clone(),
+            gray: Default::default(),
         }
     }
 
@@ -154,7 +160,12 @@ impl<'a> Ctx<'a> {
             let extrapolate = adjust::float_tone_extrapolates(adj, Some(self.depth), self.mode);
             adjust::apply_tone(buf, *space, luts.get_or_init(|| adjust::tone_luts_depth(adj, Some(self.depth))), identity, extrapolate);
         } else {
-            adjust::apply_in(adj, buf, self.transfer, Some(self.depth), self.mode);
+            let gray = if self.mode == photocraft_color::ColorMode::Grayscale {
+                self.gray.get_or_init(|| adjust::GrayLightness::for_profile(self.icc_profile.as_deref().map(Vec::as_slice)))
+            } else {
+                adjust::GrayLightness::untagged()
+            };
+            adjust::apply_in_gray(adj, buf, self.transfer, Some(self.depth), self.mode, gray);
         }
     }
 }

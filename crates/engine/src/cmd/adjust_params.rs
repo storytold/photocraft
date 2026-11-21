@@ -85,8 +85,9 @@ pub(super) fn destructive_adjust(s: &mut Session, label: &str, adj: Adjustment, 
     s.edit(label, |doc, _| {
         let sel = doc.selection.clone();
         let mode = doc.mode;
+        let gray = photocraft_compose::adjust::GrayLightness::for_profile(doc.icc_profile.as_deref().map(Vec::as_slice));
         let surf = paint_surface(doc, id, p)?;
-        pixels::adjust_surface(surf, &adj, sel.as_ref(), mode).map_err(EngineError::Other)?;
+        pixels::adjust_surface_in(surf, &adj, sel.as_ref(), mode, &gray).map_err(EngineError::Other)?;
         Ok(())
     })?;
     Ok(Value::Null)

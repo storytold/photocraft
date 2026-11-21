@@ -1,14 +1,20 @@
-use photocraft_color::convert::{linear_to_srgb, srgb_to_lab};
+use craft_cms::Builtin;
+use photocraft_color::convert::linear_to_srgb;
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Adjustment, Document, Layer, LayerContent, Size};
 use photocraft_raster::Surface;
 
-use super::{Transfer, apply_depth, apply_in};
+use super::{GrayLightness, Transfer, apply_depth, apply_in};
 use crate::{Buffer, Rect, flatten_to_surface};
 
 fn render_grayscale_strips(depth: SampleType, strips: &[u8], adj: Adjustment) -> Vec<f32> {
+    render_tagged_strips(depth, None, strips, adj)
+}
+
+fn render_tagged_strips(depth: SampleType, profile: Option<Builtin>, strips: &[u8], adj: Adjustment) -> Vec<f32> {
     let w = strips.len() as u32;
     let mut doc = Document::new("gray", Size::new(w, 1), ColorMode::Grayscale, depth);
+    doc.icc_profile = profile.map(|p| p.profile().to_bytes());
     let fmt = doc.pixel_format();
     let mut base = Layer::raster("strips", fmt);
     let mut s = Surface::new(fmt);
@@ -23,8 +29,9 @@ fn render_grayscale_strips(depth: SampleType, strips: &[u8], adj: Adjustment) ->
     (0..w).map(|x| flat.pixel(x as i32, 0)[0]).collect()
 }
 
+/// L* of a stored gray in an untagged document (through sRGB).
 fn gray_lstar(g: f32) -> f32 {
-    srgb_to_lab([g, g, g])[0]
+    GrayLightness::untagged().lightness(g) * 100.0
 }
 
 fn linear_red_to_blue_stops() -> Vec<(f32, [f32; 3])> {
@@ -121,4 +128,32 @@ fn rgb_cmyk_lab_duotone_and_gray32_keep_todays_behavior() {
     apply_in(&adj, &mut lab, Transfer::Srgb, Some(SampleType::U8), ColorMode::Lab);
     assert_eq!(lab.px[0][2], 1.0);
     assert!(lab.px[0][0] < 0.01);
+}
+
+#[test]
+fn grayscale_result_follows_the_document_gray_profile() {
+    let strips = [16u8, 128, 240];
+    let adj = Adjustment::GradientMap { stops: linear_red_to_blue_stops(), reverse: false, dither: false, source: None };
+    for depth in [SampleType::U8, SampleType::U16] {
+        let gamma = render_tagged_strips(depth, Some(Builtin::GrayGamma22), &strips, adj.clone());
+        let dot_gain = render_tagged_strips(depth, Some(Builtin::DotGain20Compat), &strips, adj.clone());
+        // The reference application stores about 127 at strip 16 in a Gamma 2.2 document.
+        assert!((gamma[0] * 255.0 - 127.0).abs() <= 1.0, "{depth:?}: Gamma 2.2 strip 16 stored {}", gamma[0] * 255.0);
+        // A Dot Gain curve needs a lower gray than Gamma 2.2 for the same lightness.
+        for i in 0..strips.len() {
+            assert!(gamma[i] > dot_gain[i] + 2.0 / 255.0, "{depth:?} strip {}: Gamma 2.2 {} not above Dot Gain {}", strips[i], gamma[i], dot_gain[i]);
+        }
+    }
+}
+
+#[test]
+fn grayscale_black_to_white_is_identity_in_a_tagged_document() {
+    let strips = [0u8, 16, 48, 80, 112, 128, 144, 176, 208, 240, 255];
+    let adj = Adjustment::GradientMap { stops: vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])], reverse: false, dither: false, source: None };
+    for depth in [SampleType::U8, SampleType::U16] {
+        let out = render_tagged_strips(depth, Some(Builtin::GrayGamma22), &strips, adj.clone());
+        for (&want, &got) in strips.iter().zip(&out) {
+            assert!((got * 255.0 - f32::from(want)).abs() <= 1.0, "{depth:?}: gray {want} mapped to {:.2}", got * 255.0);
+        }
+    }
 }
