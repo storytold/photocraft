@@ -44,6 +44,7 @@ const PLACE_AFTER: &[(&str, &str)] = &[
     ("view.rotateRight", "view.rotateLeft"),
     ("view.resetView", "view.rotateRight"),
     ("filter.other.colorToAlpha", "filter.other.offset"),
+    ("help.checkForUpdates", "help.reportIssue"),
 ];
 
 /// The menu rows of one state of the app, built once and kept until that state changes: building

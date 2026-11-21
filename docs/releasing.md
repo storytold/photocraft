@@ -18,10 +18,13 @@ in the manual check window. Concurrent requests share one check.
 HTTPS validates certificates and host names against the operating system's trust store.
 
 Tags must be semantic versions (`v0.8.0` or `0.8.0`); only published stable versions newer
-than the installed workspace version trigger a notice. Drafts and prereleases do not trigger it.
-Flatpak builds also check for releases; repository-managed installations are updated through
-their package manager. Web/headless frontends have no update transport. No release-workflow
-changes are required: publishing a newer stable GitHub Release makes it discoverable.
+than the installed workspace version trigger a notice. The same update window offers the
+install. A signed macOS release hands that install to Sparkle; other desktop builds use the
+shared installer. Drafts and prereleases do not trigger it. Flatpak builds also check for
+releases; repository-managed installations are updated through their package manager.
+Web/headless frontends have no update transport. No release-workflow changes are required
+for discovery: publishing a newer stable GitHub Release makes it discoverable. The signed
+macOS installer also needs the Sparkle feed described under Cutting a release.
 
 ## Cutting a release
 
@@ -121,6 +124,26 @@ in `ci.yml`. Build option: `docs/development.md` › Fonts.
   as its own step after packaging. With signing secrets it fails the job on any miss; without
   them it only checks signature integrity and warns, like `package.sh`. Run it locally after a
   build: `packaging/macos/verify.sh --arch aarch64`.
+
+- **In-app updates:** one flow for every platform. PhotoCraft checks published releases once at
+  startup when Preferences › General › Automatically Check for Updates is on, and again from
+  *Help ▸ Check for Updates…*. The existing update window is the only notification. On a signed
+  macOS release, *Update and Restart* hands the install to Sparkle, which downloads the signed
+  update and replaces the app when PhotoCraft quits. Sparkle does not check on its own:
+  `SUEnableAutomaticChecks` stays off, and the app turns Sparkle's automatic checks off after
+  startup. Other desktop builds install through the shared self-update prompt (DMG, MSI, or
+  AppImage). Flatpak leaves updates to its package manager. To enable the signed macOS installer,
+  create a Sparkle EdDSA key pair on a maintainer-controlled Mac with the pinned Sparkle
+  `generate_keys` tool. Store the exported private key as the `SPARKLE_EDDSA_PRIVATE_KEY` Actions
+  secret and the matching base64 public key as the `SPARKLE_PUBLIC_KEY` Actions variable in the
+  `release` environment. The workflow signs `appcast.xml` with the private key and uploads it
+  with the DMG. When either value is missing, the build disables the Sparkle handoff and emits a
+  warning. Never commit or share the private key.
+
+  The optional desktop `macos-updater` feature links Sparkle; ordinary macOS development and CI
+  builds leave it disabled and use installer downloads. `packaging/macos/package.sh` enables
+  `heif,macos-updater`, downloads and verifies the pinned framework, and includes its complete
+  distribution license and third-party notices in `Contents/Resources/Licenses/Sparkle.txt`.
 
 Locally, without certificates, the script signs ad-hoc (`codesign -s -`) and skips notarization.
 That's enough to check the bundle and the DMG on your own Mac:

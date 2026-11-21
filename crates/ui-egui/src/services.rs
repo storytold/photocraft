@@ -365,6 +365,9 @@ pub type AgentAutomationFn = Box<dyn Fn(&craft::automation::agents::AgentSetting
 /// Open a URL in the system browser (native) — reliable cross-platform, unlike `ctx.open_url`.
 pub type OpenUrlFn = Box<dyn Fn(&str) -> Result<(), String>>;
 
+/// Hand an update to the host's signed installer. Discovery stays with the updater.
+pub type InstallUpdateFn = Box<dyn FnMut() -> Result<(), String>>;
+
 /// Put an RGBA8 image (width, height, pixels) on the OS clipboard.
 pub type ClipboardSetFn = Box<dyn FnMut(u32, u32, &[u8]) -> Result<(), String>>;
 
@@ -573,6 +576,9 @@ pub struct Services {
     /// (Tab, Alt; see `zoom_field`). No platform sets it yet, so the alert falls back to
     /// [`Self::beep`].
     pub alert: Option<fn()>,
+    /// Signed in-app installer (macOS Sparkle), when the release bundle supplies one.
+    /// Update discovery stays with the updater; this only installs.
+    pub install_update: Option<InstallUpdateFn>,
     /// Files delivered asynchronously (web drag-and-drop): drained every frame and opened as
     /// documents.
     pub inbox: Option<Inbox>,
