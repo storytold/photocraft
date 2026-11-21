@@ -127,7 +127,13 @@ fn refused_clicks_add_no_state() {
         refused(&mut s, params, case);
     }
     s.execute("select.rect", json!({"x": 40, "y": 40, "width": 10, "height": 10})).unwrap();
-    refused(&mut s, json!({"x": 8, "y": 8}), "a click outside the selection");
+    // #13096: a click outside the selection does nothing silently: an Ok with no state.
+    let (n, _) = last(&s);
+    let before = pixels(&s);
+    let r = s.execute("paint.redEye", json!({"x": 8, "y": 8})).unwrap();
+    assert_eq!((r["pixels"].as_u64(), r["outsideSelection"].as_bool()), (Some(0), Some(true)), "{r}");
+    assert_eq!(last(&s).0, n, "a click outside the selection: no state");
+    assert!(pixels(&s) == before, "a click outside the selection");
     unchanged_state(&mut s, json!({"x": 44, "y": 44}), "a click inside the selection");
     s.execute("select.deselect", json!({})).unwrap();
     let id = s.active().unwrap().active_layer.unwrap();
