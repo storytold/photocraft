@@ -2,6 +2,7 @@ use super::common::{Bounds, Px, Rng};
 use super::solver::{Best, LANES, known_sse, known_sse_any, known_sse_lanes, least_sum};
 use super::sources::{hole_bbox, integral, window_count};
 use super::{HoleIntegral, membrane_fill, par};
+use crate::peel_frontier::{Connectivity, PeelFrontier};
 
 /// Fill the hole from its edge inwards, one ring at a time: each pixel takes the centre of the
 /// source patch that best matches what is already known around it (the first in `sources` of
@@ -33,27 +34,12 @@ pub(super) fn onion_peel(
     }
     let mut took = vec![NONE; w * h];
     let neighbours = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)];
+    let is_hole = |i| px.get(i) == Some(&Px::Hole);
+    let holes = (hb.y0..hb.y1).flat_map(|y| (hb.x0..hb.x1).map(move |x| y * w + x)).filter(|&i| is_hole(i));
+    let mut frontier = PeelFrontier::new((w, h), Connectivity::Eight, &known, holes, ctl)?;
     loop {
         ctl.check()?;
-        let mut front: Vec<usize> = Vec::new();
-        for y in hb.y0..hb.y1 {
-            for x in hb.x0..hb.x1 {
-                let i = y * w + x;
-                if known[i] || px[i] != Px::Hole {
-                    continue;
-                }
-                let (x, y) = (x as i32, y as i32);
-                let edge = (-1..=1).any(|dy: i32| {
-                    (-1..=1).any(|dx: i32| {
-                        let (nx, ny) = (x + dx, y + dy);
-                        nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h && known[ny as usize * w + nx as usize]
-                    })
-                });
-                if edge {
-                    front.push(i);
-                }
-            }
-        }
+        let front = frontier.cells();
         if front.is_empty() {
             break;
         }
@@ -164,6 +150,7 @@ pub(super) fn onion_peel(
             known[i] = true;
             took[i] = j;
         }
+        frontier.advance(&known, is_hole, ctl)?;
     }
     Ok(())
 }
