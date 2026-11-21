@@ -223,7 +223,7 @@ fn background_eraser_members(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
     }
 
     // Angle and Pressure for Size edit the tool's own brush (the shell swaps one in per tool).
-    let before = app.session.tools.brush.clone();
+    let before = (*app.session.tools.brush).clone();
     let mut brush = before.clone();
     let mut angle = brush.angle;
     let angle_out = option_cells::number(tl!("Angle"), &mut angle, -180.0..=180.0)

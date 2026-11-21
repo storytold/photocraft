@@ -602,7 +602,7 @@ pub(super) fn path_stroke(s: &mut Session, p: &Value) -> Result<Value> {
         let lines = vector::flatten_path(&path, 0.1);
         return stroke_with_command(s, p, cmd, &lines, simulate);
     }
-    let base = s.tools.brush.clone();
+    let base = (*s.tools.brush).clone();
     let fg = s.tools.foreground;
     let mut brush = photocraft_paint::BrushSettings {
         size: f64p(p, "size").map_or(base.size, |v| v as f32),

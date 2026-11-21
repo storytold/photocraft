@@ -709,17 +709,20 @@ fn run_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Fired) {
     // The Delete key is Edit › Clear, or deletes the layers when nothing is selected (`delete_key_command`).
     let id = if id == EditCommands::Delete.id() { "edit.clear" } else { id };
     let id = clip_key_command(app, delete_key_command(app, id.to_string()));
-    dispatch_as(app, ctx, &id, f.alt_variant);
+    // A key that runs another command (Delete, the clip keys) runs it without the fired command's parameters.
+    let command = if id == f.command.id { f.command.clone() } else { CommandRef::new(id) };
+    dispatch_as(app, ctx, &command, f.alt_variant);
 }
 
 /// Run a shortcut's command like its menu item (dialogs included), or say why it can't run.
 pub fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str) {
-    dispatch_as(app, ctx, id, false);
+    dispatch_as(app, ctx, &CommandRef::new(id), false);
 }
 
-/// [`dispatch`]; with `last`, an adjustment dialog opens at its last confirmed settings and New Layer makes the
-/// layer without its dialog.
-fn dispatch_as(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, last: bool) {
+/// [`dispatch`] of a fired command, its parameters included (an Appearance or Language row's choice); with `last`, an
+/// adjustment dialog opens at its last confirmed settings and New Layer makes the layer without its dialog.
+fn dispatch_as(app: &mut PhotocraftApp, ctx: &egui::Context, command: &CommandRef, last: bool) {
+    let id = command.id.as_str();
     let action = id.strip_prefix(crate::actions::SHORTCUT_PREFIX);
     let command_id = if action.is_some() { "actions.play" } else { id };
     // A key saved for an action that was since deleted or renamed names no action.
@@ -748,7 +751,8 @@ fn dispatch_as(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, last: boo
             let opened = if last { crate::adjust_dialog::open_last(app, id) } else { crate::adjust_dialog::open(app, id) };
             opened.map(|_| serde_json::Value::Null)
         } else {
-            crate::menus::invoke(app, ctx, id, json!({}))
+            let params = if command.params.is_null() { json!({}) } else { command.params.clone() };
+            crate::menus::invoke(app, ctx, id, params)
         };
         match r {
             Ok(_) => Outcome::Ran,
