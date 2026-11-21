@@ -82,6 +82,11 @@ pub fn alert(app: &PhotocraftApp, tool: Tool, hidden: bool) -> Option<String> {
         return (!hidden && pixel_layer && layer_refusal(app, tool) == Some(LOCKED)).then(|| tl!(REMOVE_LOCKED).to_string());
     }
     let name = tool_name(app, tool)?;
+    // A group is the Healing Brush's no-source alert (#12109), hidden or not: it keeps today's
+    // messages (the status bar for a hidden one, `refuse_group`'s alert for a shown one).
+    if tool == Tool::Healing && app.session.active().and_then(|st| st.doc.layer(st.active_layer?)).is_some_and(photocraft_doc::Layer::is_group) {
+        return None;
+    }
     let template = if hidden { HIDDEN } else { layer_refusal(app, tool)? };
     Some(crate::i18n::fmt(tl!(template), &[("tool", name)]))
 }
@@ -93,8 +98,7 @@ fn layer_refusal(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     if crate::canvas::paint_target(app) != json!("pixels") {
         None
     } else if layer.is_group() {
-        // A group is the Healing Brush's no-source alert (#12109), not this one.
-        (tool != Tool::Healing).then_some(GROUP)
+        Some(GROUP)
     } else if locked(st.doc.effective_locks(layer.id), tool) {
         Some(LOCKED)
     } else {
