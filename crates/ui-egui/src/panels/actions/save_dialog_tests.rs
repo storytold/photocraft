@@ -113,6 +113,14 @@ fn cancel_in_the_save_dialog_writes_nothing_and_stops_the_action() {
     // The next Play asks again.
     play(&mut app);
     assert_eq!(files.open(), 1);
+    // An error left in the status bar from before doesn't pass for this step's: Cancel still
+    // says the action stopped.
+    answer(&mut app, &files, Picked::Cancelled);
+    app.ui.status = "Save failed: an earlier error".into();
+    app.ui.status_error = true;
+    play(&mut app);
+    answer(&mut app, &files, Picked::Cancelled);
+    assert_eq!(app.ui.status, "Action playback stopped");
 }
 
 #[test]
@@ -222,6 +230,12 @@ fn a_failed_write_keeps_its_error_and_stops_the_action() {
     assert!(app.ui.status_error && app.ui.status.contains("the disk is full"), "the write's error stays: {}", app.ui.status);
     assert!(app.background_jobs, "background jobs are back on once the dialogs closed");
     assert!(app.paused_playbacks.paused.is_empty() && app.paused_playbacks.save.is_none());
+    // Played again over that same error, the same failure still keeps it.
+    let error = app.ui.status.clone();
+    play(&mut app);
+    answer(&mut app, &files, chose("/out/chosen.psd"));
+    assert!(!after_ran(&app));
+    assert!(app.ui.status_error && app.ui.status == error, "the repeated failure keeps its error: {}", app.ui.status);
 }
 
 #[test]
@@ -239,13 +253,13 @@ fn an_export_that_wrote_its_files_continues_without_a_journaled_step() {
 }
 
 #[test]
-fn a_save_finished_on_another_active_document_ends_the_action() {
+fn a_save_answered_on_another_active_document_writes_nothing_and_ends_the_action() {
     let (mut app, files, written) = setup(("file.saveACopy", json!({"path": "/out/copy.psd"})));
     play(&mut app);
     // Another document comes to the front while the dialog is open.
     app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
     answer(&mut app, &files, chose("/out/copy.psd"));
-    assert_eq!(*written.borrow(), ["/out/copy.psd"], "the copy is of the document the step played on");
+    assert!(written.borrow().is_empty(), "nothing is written once the step's document isn't the active one: {:?}", written.borrow());
     assert!(!after_ran(&app), "the rest doesn't play on the other document");
     assert!(app.ui.status_error && app.ui.status.contains("active document changed"), "{}", app.ui.status);
     assert!(app.paused_playbacks.paused.is_empty() && app.paused_playbacks.save.is_none());
