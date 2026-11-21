@@ -60,7 +60,7 @@ fn hiding_another_layer_keeps_fade() {
             assert_eq!(pixel(&s, paint), sharp, "{hide} undoable={undoable}: 0 % fades the blur away");
             assert!(!visible(&s, bg), "{hide} undoable={undoable}: Fade leaves the Background hidden");
             assert_eq!(s.active().unwrap().history.undo_label(), Some("Fade Gaussian Blur"));
-            assert!(!s.is_enabled("edit.fade"), "{hide} undoable={undoable}: Fade can't repeat");
+            assert!(s.is_enabled("edit.fade"), "{hide} undoable={undoable}: fading again replaces the Fade (#13804)");
         }
     }
 }

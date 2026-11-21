@@ -8,7 +8,14 @@ use super::{
 pub(super) fn can_fade(s: &Session) -> std::result::Result<(), String> {
     let st = s.active().ok_or("no document open")?;
     let f = s.edit_state.fade.as_ref().ok_or("nothing to fade")?;
-    if f.doc != st.doc.id || f.revision != st.revision || before_state(st, f).is_none() {
+    // Right after the step (or only visibility changes since), right after a Fade of it, which
+    // fading again replaces, or right after the Undo of that Fade (#13804). Any other change since
+    // (selecting a layer, a sampler, …) still disables it.
+    let current = st.history.row_id(st.history.past_len());
+    let available = f.revision == st.revision
+        || f.faded
+            .is_some_and(|(id, rev)| (current == Some(id) && st.revision == rev) || (current.is_some() && current == f.op_state && st.revision == rev + 1));
+    if f.doc != st.doc.id || !available || before_state(st, f).is_none() {
         return Err("Fade is only available right after a filter, adjustment or painting step".into());
     }
     if surface_of(&st.doc, f.target).is_none() {
@@ -99,6 +106,15 @@ struct FadeJob {
     opacity: f32,
 }
 
+/// The document Fade blends: the current one, or right after a Fade of the step (which fading again
+/// replaces) the step's own result before it (#13804).
+fn fade_base(s: &Session) -> Option<std::sync::Arc<Document>> {
+    let st = s.active()?;
+    let current = st.history.row_id(st.history.past_len());
+    let again = s.edit_state.fade.as_ref().is_some_and(|f| f.faded.is_some_and(|(id, _)| current == Some(id)));
+    if again { st.history.state(st.history.past_len().checked_sub(1)?) } else { Some(st.doc.clone()) }
+}
+
 fn fade_job(s: &Session, p: &Value) -> Result<FadeJob> {
     let cmd = "edit.fade";
     let src = s.edit_state.fade.clone().ok_or_else(|| bad(cmd, "nothing to fade"))?;
@@ -107,7 +123,8 @@ fn fade_job(s: &Session, p: &Value) -> Result<FadeJob> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let prev = before_state(st, &src).ok_or_else(|| bad(cmd, "no previous state"))?;
     let before = surface_of(&prev, src.target).cloned().ok_or_else(|| EngineError::Other("the layer or channel did not exist before this step".into()))?;
-    let now = surface_of(&st.doc, src.target).ok_or_else(|| EngineError::Other("the faded layer or channel no longer exists".into()))?;
+    let base = fade_base(s).ok_or(EngineError::NoDocument)?;
+    let now = surface_of(&base, src.target).ok_or_else(|| EngineError::Other("the faded layer or channel no longer exists".into()))?;
     if now.format() != before.format() {
         return Err(EngineError::Other("can't fade a step that changed the layer's pixel format".into()));
     }
@@ -124,10 +141,33 @@ fn apply_fade(doc: &mut Document, j: &FadeJob) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+#[path = "fade_refade_tests.rs"]
+mod refade_tests;
+
 pub(super) fn fade(s: &mut Session, p: &Value) -> Result<Value> {
+    let current = |s: &Session| s.active().and_then(|st| st.history.row_id(st.history.past_len()));
+    // Fading again right after a Fade replaces it: back to the step's state first, so the new Fade
+    // blends the step's own result over the pixels before it, and the history keeps one Fade
+    // state (#13804).
+    let again = s.edit_state.fade.as_ref().is_some_and(|f| f.faded.is_some_and(|(id, _)| current(s) == Some(id)));
+    // The job reads the state before an earlier Fade straight from the history, so everything that can
+    // fail is done before that Fade is taken back: a bad parameter, a missing earlier state, a changed
+    // pixel format.
     let j = fade_job(s, p)?;
+    if again {
+        // A dry run on the state the real one will start from, so a failure in the blend (an
+        // allocation, say) also leaves the earlier Fade where it was.
+        let base = fade_base(s).ok_or(EngineError::NoDocument)?;
+        apply_fade(&mut Document::clone(&base), &j)?;
+        s.rollback();
+    }
     let label = format!("Fade {}", j.label);
     s.edit(&label, |doc, _| apply_fade(doc, &j))?;
+    let (state, revision) = (current(s), s.active().map(|st| st.revision));
+    if let Some(f) = s.edit_state.fade.as_mut() {
+        f.faded = state.zip(revision);
+    }
     Ok(json!({"faded": j.label, "opacity": j.opacity * 100.0, "mode": j.mode.label()}))
 }
 
@@ -153,7 +193,7 @@ impl FadePreview {
 pub fn fade_preview(s: &Session, p: &Value) -> Result<FadePreview> {
     can_fade(s).map_err(|e| bad("edit.fade", e))?;
     let job = fade_job(s, p)?;
-    let doc = Document::clone(&s.active().ok_or(EngineError::NoDocument)?.doc);
+    let doc = Document::clone(&*fade_base(s).ok_or(EngineError::NoDocument)?);
     Ok(FadePreview { doc, job })
 }
 
