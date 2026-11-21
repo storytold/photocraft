@@ -334,4 +334,3 @@ fn taking_the_active_layers_style_leaves_the_tool_options_as_they_are() {
     let o = &app.ui.tool_options;
     assert_eq!((o.type_font.as_str(), o.type_style.as_str(), o.type_size), ("Tool Font", "Regular", 48.0), "the tool options are untouched");
 }
-
