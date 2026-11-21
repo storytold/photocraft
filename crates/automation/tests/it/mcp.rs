@@ -435,9 +435,11 @@ async fn bridge_doc_save_forwards_dds_options() {
     let client = connect(PhotocraftMcp::bridge(&addr, CONTROL_TOKEN).unwrap()).await;
     let saved = json_of(&call(&client, "doc_save", json!({"path": "out.dds", "ddsCompression": "DXT5", "ddsMipmaps": true})).await);
     assert_eq!(saved, json!({"saved": {"path": "out.dds", "ddsCompression": "bc3", "ddsMipmaps": true}}));
-    let r = call(&client, "doc_save", json!({"path": "out.dds", "ddsCompression": "bc7"})).await;
-    assert_eq!(r.is_error, Some(true), "{}", text(&r));
-    assert!(text(&r).contains("ddsCompression"), "{}", text(&r));
+    for bad in ["bc7", "bc4", "ATI2"] {
+        let r = call(&client, "doc_save", json!({"path": "out.dds", "ddsCompression": bad})).await;
+        assert_eq!(r.is_error, Some(true), "{bad}: {}", text(&r));
+        assert!(text(&r).contains("ddsCompression"), "{bad}: {}", text(&r));
+    }
     client.cancel().await.unwrap();
     app.abort();
 }
@@ -459,9 +461,11 @@ async fn headless_doc_save_writes_dds_options() {
         let bytes = std::fs::read(dir.join(params["path"].as_str().unwrap())).unwrap();
         assert_eq!((&bytes[84..88], u32::from_le_bytes(bytes[28..32].try_into().unwrap())), (&fourcc[..], mips), "{params}");
     }
-    let r = call(&client, "doc_export", json!({"path": "bad.dds", "ddsCompression": "bc7"})).await;
-    assert_eq!(r.is_error, Some(true), "{}", text(&r));
-    assert!(!dir.join("bad.dds").exists());
+    for bad in ["bc7", "bc5", "ati1"] {
+        let r = call(&client, "doc_export", json!({"path": "bad.dds", "ddsCompression": bad})).await;
+        assert_eq!(r.is_error, Some(true), "{bad}: {}", text(&r));
+        assert!(!dir.join("bad.dds").exists(), "{bad}");
+    }
     client.cancel().await.unwrap();
     cleanup(&dir);
 }

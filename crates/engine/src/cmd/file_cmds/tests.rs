@@ -1788,7 +1788,14 @@ fn save_a_copy_writes_the_dds_options_asked_for() {
     let mut s = session(8, 8, 8);
     let state = |s: &Session| s.active().map(|st| (st.revision, st.path.clone(), st.is_dirty()));
     let before = state(&s);
-    for bad in [json!({"ddsCompression": "bc7"}), json!({"ddsCompression": 1}), json!({"ddsMipmaps": "yes"}), json!({"ddsMipmaps": 1})] {
+    for bad in [
+        json!({"ddsCompression": "bc7"}),
+        json!({"ddsCompression": "bc4"}),
+        json!({"ddsCompression": "ati2"}),
+        json!({"ddsCompression": 1}),
+        json!({"ddsMipmaps": "yes"}),
+        json!({"ddsMipmaps": 1}),
+    ] {
         let out = join(&dir, "bad.dds");
         let mut p = bad.clone();
         p["path"] = json!(out);

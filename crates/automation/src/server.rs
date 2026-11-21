@@ -1305,7 +1305,7 @@ impl PhotocraftMcp {
         if let Some(q) = p.quality.filter(|q| !(1..=100).contains(q)) {
             return Ok(fail(format!("`quality` must be a whole number from 1 to 100, got {q}")));
         }
-        let dds_compression = match p.dds_compression.as_deref().map(|c| (c, photocraft_io::DdsCompression::from_name(c))) {
+        let dds_compression = match p.dds_compression.as_deref().map(|c| (c, photocraft_io::dds_compression(c))) {
             None => None,
             Some((_, Some(c))) => Some(c),
             Some((c, None)) => return Ok(fail(format!("`ddsCompression` must be none, bc1, bc2 or bc3, got {c:?}"))),

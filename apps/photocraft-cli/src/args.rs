@@ -401,7 +401,7 @@ fn dpx_bits(s: &str) -> Result<DpxBits, ValueError> {
 }
 
 fn dds_compression(s: &str) -> Result<DdsCompression, ValueError> {
-    DdsCompression::from_name(s).ok_or(ValueError::DdsCompression)
+    photocraft_io::dds_compression(s).ok_or(ValueError::DdsCompression)
 }
 
 fn tiff_compression(s: &str) -> Result<TiffCompression, ValueError> {
