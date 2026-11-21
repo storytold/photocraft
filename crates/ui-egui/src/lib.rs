@@ -948,6 +948,8 @@ mod brush_settle_trials;
 #[cfg(test)]
 mod chrome_settle_trials;
 #[cfg(test)]
+mod command_state_trials;
+#[cfg(test)]
 mod doc_revision_trials;
 #[cfg(test)]
 mod doc_tracked_trials;
