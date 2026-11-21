@@ -51,8 +51,8 @@ what an agent can't finish alone.
 - **Evidence:** corpus floors (`crates/io/tests/it/corpus.rs`, scorecard): Photoshop-authored
   oracles 190/258 (74%; 32-bit Hue/Saturation 2026-10-22; smart filter masks 2026-10-14; CMYK and Lab adjustment layers, 32-bit unclipped adjustments, Levels, Threshold, Posterize and mask feathers 2026-10-13; Gradient Map luminosity 2026-10-13; CMYK Invert, Posterize and Threshold on the inks 2026-10-12), io corpus 148/170 (87%), psd-tools 249/309 (81%); round trips ~100%
   within the corpus. Smart-filter re-render matches 5/30. User reports: a PSD with text layers
-  re-saved unmodified would not reopen (#2374, closed 2026-10-10), Photoshop 26.6 cannot reopen our files (#1281), "PSD not
-  opening in Photoshop" (#2469), a CS2-era smart object unavailable (#2465, fixed 2026-10-12), PSB smart object
+  re-saved unmodified would not reopen (#2374, closed 2026-10-10), Photoshop 26.6 cannot reopen our files (#1281, closed 2026-11-10), "PSD not
+  opening in Photoshop" (#2469, duplicate of #7698, fixed by #7773 merged 2026-10-21), a CS2-era smart object unavailable (#2465, fixed 2026-10-12), PSB smart object
   blank (#1764), perspective placed layers flattened (#579, fixed by #426), PSB > 4 GB fails on Windows (#375; a generated 4.38 GB PSB opens, saves and re-opens
   through io on Windows, io tests/it/large_files.rs, 2026-10-13), a 117,504 × 22,464 px print TIFF
   refused at 2^30 px (#8456, #8169; opens since 2026-10-22, decoded a group of rows at a time into

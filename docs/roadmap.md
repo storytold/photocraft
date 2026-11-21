@@ -36,7 +36,7 @@ that blocks the workflow, would make PhotoCraft pre-alpha.
 | Cut-out: select a subject, refine the edge, mask, export PNG with transparency | partial (not blocking) | Object/Quick Selection, Select Subject (classical), Refine Edge dialog, layer masks, PNG export. Select and Mask is a dialog, not the workspace; no Refine Hair (#2671) | 0 (depth: 80–140 h, G7) |
 | Design: type, shapes, layer styles, artboards; export PNG/JPEG; save and reopen | partial (not blocking) | Point/paragraph type, shapes with stroke controls, all 10 layer effects, artboards, Export As. One macOS report of a 60 s freeze on choosing the Type tool (#2518, not reproduced); no type on a path | 0 (fix #2518: 2–6 h) |
 | Paint with a pen tablet: pressure brushes, layers, save and reopen | partial (not blocking) | Pressure, tilt, rotation on macOS (AppKit monitor); every Brush Settings section. Lag with big brushes (#2619) and feel gaps ([brush-parity.md](brush-parity.md)) | 0 (feel: 100–180 h, G4) |
-| Exchange PSDs with Photoshop users: open a client PSD, edit, send a PSD back | partial (not blocking for alpha; blocking for beta) | Photoshop-authored oracle 133/256 render as Photoshop does; most exports open in Photoshop (smart objects verified), but some don't (#1281, #2469) | 0 for alpha; 150–250 h for beta (G1) |
+| Exchange PSDs with Photoshop users: open a client PSD, edit, send a PSD back | partial (not blocking for alpha; blocking for beta) | Photoshop-authored oracle 133/256 render as Photoshop does; most exports open in Photoshop (smart objects verified); the reported rejections are resolved (#1281 closed 2026-11-10; #2469 duplicate of #7698, fixed by #7773 merged 2026-10-21), but Photoshop re-open of our exports is still not test-covered | 0 for alpha; 150–250 h for beta (G1) |
 
 **Result: passes.** Every core workflow completes end to end and the work saves and reopens in
 PhotoCraft; the partial rows are depth and fidelity gaps with workarounds, not blockers. Ready for
@@ -68,7 +68,8 @@ Releases: 0.1.0 (2026-10-02), 0.2.0 (2026-10-05, first signed and notarized), 0.
 Ranked; each item links to its gap entry. Pick from the top unless an issue is assigned to you.
 
 1. **PSD that Photoshop trusts** ([G1](gaps.md#g1-psd-fidelity-and-photoshop-acceptance)):
-   fix Photoshop refusing our files (#1281, #2469; text-layer case #2374 closed); add a
+   fix Photoshop refusing our files (#1281 closed 2026-11-10; #2469 duplicate of #7698, fixed by
+   #7773 merged 2026-10-21; text-layer case #2374 closed); add a
    Photoshop re-open check (FILE-216-4); Photoshop-oracle floor 133/256 → 200+. 150–250 h.
 2. **Performance budgets** ([G2](gaps.md#g2-interactive-performance)): the 22 over-budget
    scenarios, the P12 GPU crash at 150 layers, brush and cursor lag (#2619, #2566). 200–350 h.
