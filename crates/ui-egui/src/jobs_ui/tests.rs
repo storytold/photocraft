@@ -696,6 +696,177 @@ fn a_failed_save_does_not_close_the_window_over_its_error() {
     assert!(!h.state().jobs.close_after_saves, "the window stays open to show the error");
 }
 
+fn save_and_close_shortcut(h: &mut Harness<'_, PhotocraftApp>, key: egui::Key) {
+    let modifiers = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+    h.key_down_modifiers(modifiers, key);
+    h.step();
+    h.key_up_modifiers(modifiers, key);
+    h.step();
+}
+
+fn start_save_shortcut(h: &mut Harness<'_, PhotocraftApp>, path: &str, save: crate::SaveFileFn, clean: bool) {
+    let app = h.state_mut();
+    app.services.save_file = Some(save);
+    app.services.export = Some(Box::new(|doc, path, _| {
+        let exported = photocraft_io::export(doc, path, &Default::default()).map_err(|err| err.to_string())?;
+        Ok((exported.bytes, exported.warnings))
+    }));
+    let st = app.session.active_mut().unwrap();
+    st.path = Some(path.into());
+    if clean {
+        st.saved_revision = st.revision;
+    }
+    h.ctx.set_os(egui::os::OperatingSystem::Windows);
+    save_and_close_shortcut(h, egui::Key::S);
+    assert!(h.state().saving(), "Ctrl+S started the background save");
+}
+
+#[test]
+fn close_shortcut_waits_for_a_save_of_a_clean_document() {
+    let mut h = app_harness();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("save-before-close.psd");
+    let gate = Arc::new(AtomicBool::new(false));
+    let release = gate.clone();
+    let save = Arc::new(move |doc: &photocraft_doc::Document, path: &str, _: &crate::ExportSettings, ctl: &crate::jobs_ui::SaveCtl| {
+        while !release.load(Ordering::Relaxed) {
+            ctl.check()?;
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let exported = photocraft_io::export(doc, path, &Default::default()).map_err(|err| err.to_string())?;
+        ctl.commit()?;
+        photocraft_format::atomic_write(std::path::Path::new(path), &exported.bytes).map_err(|err| err.to_string())?;
+        Ok(exported.warnings)
+    });
+
+    start_save_shortcut(&mut h, path.to_str().unwrap(), save, true);
+    save_and_close_shortcut(&mut h, egui::Key::W);
+    let remained_open = h.state().session.documents().len() == 1;
+    let wrote_early = path.exists();
+    gate.store(true, Ordering::Relaxed);
+    step_until(&mut h, |app| !app.saving());
+
+    assert!(remained_open, "Ctrl+W must keep the tab open while the save is running");
+    assert!(!wrote_early, "the worker was still held when Ctrl+W ran");
+    assert!(h.state().discard.is_none());
+    assert!(h.state().session.documents().is_empty(), "the tab closes once saved");
+    let saved = photocraft_io::import_with_options("save-before-close.psd", &std::fs::read(path).unwrap(), &Default::default()).unwrap().document;
+    assert_eq!(saved.size, photocraft_geom::Size::new(320, 240));
+}
+
+#[test]
+fn close_shortcut_waits_for_a_save_of_a_dirty_document() {
+    let mut h = app_harness();
+    let gates = Gates { write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+    let path = "/tmp/photocraft-test/save-before-dirty-close.psd";
+    start_save_shortcut(&mut h, path, gates.save(None), false);
+    save_and_close_shortcut(&mut h, egui::Key::W);
+    let remained_open = h.state().session.documents().len() == 1;
+    gates.encode.store(true, Ordering::Relaxed);
+    step_until(&mut h, |app| !app.saving());
+    assert!(remained_open);
+    assert_eq!(gates.written(), [path]);
+    assert!(h.state().discard.is_none());
+    assert!(h.state().session.documents().is_empty());
+}
+
+#[test]
+fn a_close_queued_during_save_keeps_the_document_after_failure_or_cancel() {
+    for (clean, fail) in [(true, Some("disk full")), (true, None), (false, Some("disk full")), (false, None)] {
+        let mut h = app_harness();
+        let gates = Gates { write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+        let path = "/tmp/photocraft-test/save-before-failed-close.psd";
+        start_save_shortcut(&mut h, path, gates.save(fail), clean);
+        save_and_close_shortcut(&mut h, egui::Key::W);
+        if fail.is_some() {
+            gates.encode.store(true, Ordering::Relaxed);
+        } else {
+            h.key_press(egui::Key::Escape);
+        }
+        step_until(&mut h, |app| !app.saving());
+        assert!(!h.state().saving());
+        assert!(gates.written().is_empty());
+        assert_eq!(h.state().session.documents().len(), 1);
+        assert_eq!(h.state().discard.is_some(), !clean, "only a dirty document asks what to do with unsaved changes");
+        if let Some(error) = fail {
+            assert!(noticed(h.state(), error));
+        } else {
+            assert!(h.state().ui.status.contains("Canceled"), "the save was explicitly canceled");
+        }
+        // A later save should not replay the old Close.
+        if !clean {
+            h.key_press(egui::Key::Escape);
+            h.run_steps(2);
+            assert!(h.state().discard.is_none());
+        }
+        let retry = Gates { write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+        start_save_shortcut(&mut h, path, retry.save(None), clean);
+        retry.encode.store(true, Ordering::Relaxed);
+        step_until(&mut h, |app| !app.saving());
+        assert_eq!(retry.written(), [path]);
+        assert_eq!(h.state().session.documents().len(), 1);
+    }
+}
+
+#[test]
+fn a_close_queued_during_save_rechecks_edits_from_save_hooks() {
+    let mut h = app_harness();
+    let gates = Gates { write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+    h.state_mut()
+        .run(
+            "file.scripts.scriptEventsManager",
+            json!({"enabled": true, "add": {"event": "saveDocument", "steps": [["layer.new.layer", {"name": "After save"}]]}}),
+        )
+        .unwrap();
+    let path = "/tmp/photocraft-test/save-before-new-edits.psd";
+    start_save_shortcut(&mut h, path, gates.save(None), true);
+    save_and_close_shortcut(&mut h, egui::Key::W);
+    gates.encode.store(true, Ordering::Relaxed);
+    step_until(&mut h, |app| !app.saving());
+    assert_eq!(gates.written(), [path]);
+    let app = h.state();
+    let st = app.session.active().expect("the document with newer edits stays open");
+    assert!(st.is_dirty());
+    assert!(st.doc.layers.iter().any(|layer| layer.name == "After save"));
+    assert!(app.discard.is_some(), "ask about the edits made after saving");
+}
+
+#[test]
+fn a_repeated_close_during_the_write_follows_the_original_tab() {
+    let mut h = app_harness();
+    let gates = Gates::default();
+    let app = h.state_mut();
+    let earlier = app.session.active().unwrap().doc.id;
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let saving = app.session.active().unwrap().doc.id;
+    let path = "/tmp/photocraft-test/save-while-switching-tabs.psd";
+    start_save_shortcut(&mut h, path, gates.save(None), true);
+    gates.encode.store(true, Ordering::Relaxed);
+    let writing = |app: &PhotocraftApp| app.jobs.saves.first().is_some_and(|save| app.session.job(save.job).is_some_and(|job| job.message == "Writing"));
+    step_until(&mut h, writing);
+    assert!(writing(h.state()));
+
+    for _ in 0..2 {
+        save_and_close_shortcut(&mut h, egui::Key::W);
+    }
+    let ctx = h.ctx.clone();
+    let app = h.state_mut();
+    assert_eq!(app.session.active().unwrap().doc.id, saving);
+    app.session.set_active(0);
+    let st = app.session.active_mut().unwrap();
+    assert_eq!(st.doc.id, earlier);
+    st.saved_revision = st.revision;
+    crate::menus::invoke(app, &ctx, "file.close", json!({"document": 0})).unwrap();
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    let later = app.session.active().unwrap().doc.id;
+    assert_eq!(app.session.documents()[0].doc.id, saving, "the deferred close's original index changed");
+    gates.write.store(true, Ordering::Relaxed);
+    step_until(&mut h, |app| !app.saving());
+    assert_eq!(gates.written(), [path]);
+    assert_eq!(h.state().session.documents().len(), 1);
+    assert_eq!(h.state().session.active().unwrap().doc.id, later);
+}
+
 #[test]
 fn a_cancelled_save_still_counts_until_its_worker_returns() {
     let mut h = app_harness();

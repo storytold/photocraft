@@ -78,7 +78,8 @@ fn discarded(app: &PhotocraftApp, id: &str, params: &Value) -> (Option<DocId>, V
 pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
     let (target, docs) = discarded(app, id, params);
     if docs.is_empty() {
-        return false;
+        // Closing a tab cancels its jobs. Even a clean document can have a save in progress.
+        return id == "file.close" && params.get("save").is_none_or(Value::is_null) && target.is_some_and(|doc| crate::jobs_ui::close_when_saved(app, doc));
     }
     // Once the window's GPU device is lost nothing can be drawn (`gpu_status::check_window`), so
     // the prompt would never show. While saving for recovery keeps failing, quitting (the close
@@ -249,6 +250,19 @@ pub(crate) fn saved_document(app: &mut PhotocraftApp, ctx: &egui::Context, doc: 
         && index_of(app, doc).is_some_and(|i| app.services.write_unconfirmed || !app.session.documents()[i].is_dirty())
     {
         advance(app, ctx);
+    }
+}
+
+/// Resume a Close requested while a clean document was saving. A save hook may have since edited
+/// the document, closed it, or shifted its tab, so resolve its id and check for unsaved work again.
+pub(crate) fn close_saved_document(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) {
+    let Some(i) = index_of(app, doc) else { return };
+    let params = json!({"document": i});
+    if !intercept(app, "file.close", &params)
+        && let Err(e) = crate::menus::invoke_unguarded(app, ctx, "file.close", params)
+    {
+        app.ui.status = e;
+        app.ui.status_error = true;
     }
 }
 
