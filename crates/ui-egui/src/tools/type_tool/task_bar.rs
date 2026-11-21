@@ -5,11 +5,10 @@
 //! 1. the grip (the widget's);
 //! 2. font family dropdown;
 //! 3. font size field;
-//! 4. Bold toggle button;
+//! 4. text colour swatch;
 //! 5. Left / Center / Right alignment buttons;
-//! 6. text colour swatch;
-//! 7. the ⋯ menu (the widget's);
-//! 8. Commit (✓) and Cancel (✗) buttons.
+//! 6. Warp Text button;
+//! 7. the ⋯ menu (the widget's).
 //!
 //! Shown when Window → Contextual Task Bar is on, a Type-family tool is active, there is an
 //! active document, no dialog is open, and a text-edit session is live.
@@ -132,10 +131,10 @@ fn type_unit(app: &PhotocraftApp) -> (f32, &'static str) {
     }
 }
 
-/// The bar's contents: font family, size, bold, alignment, colour, ⋯, commit/cancel.
+/// The bar's contents matching the reference application:
+/// font family, size, colour, three alignments, warp text, ⋯ menu.
 fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, cx: &mut TaskBarCx<'_>) {
     use super::defaults::{apply, shown_scale};
-    use super::editing::{cancel, commit_with};
     use super::fonts::{families, selected_style, styles};
     use super::options_bar::styles_at;
 
@@ -154,7 +153,7 @@ fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, cx: &mut TaskBarCx<'_>) 
         None => (o.type_font.clone(), o.type_style.clone(), o.type_size),
     };
 
-    // --- Font family dropdown ---
+    // 1. Font family dropdown
     let font_families = families();
     let entries: Vec<Entry<String>> = font_families.iter().map(|f| Entry::new(f.clone(), f.clone())).collect();
     let pick = Select::new(label(tl!("Font")), Bind::bound(&mut fam), &entries).show(ui);
@@ -170,7 +169,7 @@ fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, cx: &mut TaskBarCx<'_>) 
         }
     }
 
-    // --- Font size field ---
+    // 2. Font size field
     let (unit, unit_label) = type_unit(app);
     let mut display = Some(f64::from(size * unit));
     let size_field = NumberField::new(label(tl!("Size")), Bind::bound(&mut display))
@@ -183,53 +182,31 @@ fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, cx: &mut TaskBarCx<'_>) 
         apply(app, json!({"size": pt, "metricsAsShown": true}), None);
     }
 
-    // --- Bold toggle ---
-    let font_is_bold = char_style.as_ref().map_or_else(
-        || style.contains("Bold") || o.type_style.contains("Bold"),
-        |c| c.weight >= 600 || style.contains("Bold"),
-    );
-    let faux_bold = char_style.as_ref().is_some_and(|c| c.faux_bold);
-    let is_bold = faux_bold || font_is_bold;
+    Divider::vertical().show(ui);
 
-    let bold_button = ToggleButton::new(label(tl!("Bold")), Bind::given(is_bold))
-        .icon(IconId::new("bold"))
-        .icon_only()
-        .show(ui);
-    if bold_button.response.clicked() {
-        if is_bold {
-            if faux_bold && !font_is_bold {
-                apply(app, json!({"fauxBold": false}), None);
-            } else {
-                let is_italic = char_style.as_ref().map_or_else(
-                    || {
-                        let s = style.to_lowercase();
-                        let os = o.type_style.to_lowercase();
-                        s.contains("italic") || s.contains("oblique") || os.contains("italic") || os.contains("oblique")
-                    },
-                    |c| c.italic || style.to_lowercase().contains("italic") || style.to_lowercase().contains("oblique"),
-                );
-                let new_style = resolve_bold_counterpart(&fam, &style, is_italic, false);
-                app.ui.tool_options.type_style = new_style.clone();
-                apply(app, json!({"fontStyle": new_style, "fauxBold": false}), None);
-            }
-        } else {
-            let is_italic = char_style.as_ref().map_or_else(
-                || {
-                    let s = style.to_lowercase();
-                    let os = o.type_style.to_lowercase();
-                    s.contains("italic") || s.contains("oblique") || os.contains("italic") || os.contains("oblique")
-                },
-                |c| c.italic || style.to_lowercase().contains("italic") || style.to_lowercase().contains("oblique"),
-            );
-            let new_style = resolve_bold_counterpart(&fam, &style, is_italic, true);
-            app.ui.tool_options.type_style = new_style.clone();
-            apply(app, json!({"fontStyle": new_style}), None);
-        }
+    // 3. Text colour swatch
+    let c = shown
+        .as_ref()
+        .map(|s| s.3)
+        .map(|c| {
+            let v = c.to_rgb();
+            [v[0], v[1], v[2], 1.0]
+        })
+        .unwrap_or(app.session.tools.foreground);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 18.0), egui::Sense::click());
+    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    ui.painter().rect_filled(rect, 2.0, Color32::from_rgb(q(c[0]), q(c[1]), q(c[2])));
+    let border_color = Color32::from_gray(100);
+    ui.painter().rect_stroke(rect, 2.0, Stroke::new(1.0, border_color), egui::StrokeKind::Outside);
+    let resp = resp.on_hover_text(tl!("Set text color"));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Set the text color")));
+    if resp.clicked() {
+        super::defaults::open_color_picker(app, [c[0], c[1], c[2]]);
     }
 
     Divider::vertical().show(ui);
 
-    // --- Alignment buttons (Left / Center / Right) ---
+    // 4. Alignment buttons (Left / Center / Right)
     let para = styles_at(app).map(|(_, p)| p);
     let shown_align = match &para {
         Some(p) => match p.align {
@@ -271,119 +248,23 @@ fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, cx: &mut TaskBarCx<'_>) 
 
     Divider::vertical().show(ui);
 
-    // --- Text colour swatch ---
-    let c = shown
-        .as_ref()
-        .map(|s| s.3)
-        .map(|c| {
-            let v = c.to_rgb();
-            [v[0], v[1], v[2], 1.0]
-        })
-        .unwrap_or(app.session.tools.foreground);
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(24.0, 18.0), egui::Sense::click());
-    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    ui.painter().rect_filled(rect, 2.0, Color32::from_rgb(q(c[0]), q(c[1]), q(c[2])));
-    let border_color = Color32::from_gray(100);
-    ui.painter().rect_stroke(rect, 2.0, Stroke::new(1.0, border_color), egui::StrokeKind::Outside);
-    let resp = resp.on_hover_text(tl!("Set text color"));
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Set the text color")));
-    if resp.clicked() {
-        super::defaults::open_color_picker(app, [c[0], c[1], c[2]]);
-    }
-
-    // --- ⋯ menu ---
-    cx.more_menu(ui);
-
-    // --- Commit / Cancel ---
-    if IconButton::new(IconId::new("check"))
-        .label(tl!("Commit any current edits (Cmd+Enter)"))
+    // 5. Warp Text button
+    let can_warp = crate::menus::is_enabled(app, "type.warpText");
+    if IconButton::new(IconId::new("text_warp"))
+        .label(tl!("Create warped text"))
+        .enabled(can_warp)
         .show(ui)
         .clicked()
     {
-        commit_with(app, ui.input(|i| i.modifiers));
-    }
-    if IconButton::new(IconId::new("x"))
-        .label(tl!("Cancel any current edits (Esc)"))
-        .show(ui)
-        .clicked()
-    {
-        cancel(app);
-    }
-}
-
-/// Resolves the bold or non-bold counterpart style for a font family, preserving italic/oblique styling.
-pub(crate) fn resolve_bold_counterpart(fam: &str, current_style: &str, is_italic: bool, want_bold: bool) -> String {
-    let available = super::fonts::styles(fam);
-    let lower_curr = current_style.to_lowercase();
-    let is_oblique = lower_curr.contains("oblique")
-        || (!lower_curr.contains("italic") && available.iter().any(|s| s.to_lowercase().contains("oblique")));
-
-    let target = match (is_italic, is_oblique, want_bold) {
-        (true, true, true) => "Bold Oblique",
-        (true, true, false) => "Oblique",
-        (true, false, true) => "Bold Italic",
-        (true, false, false) => "Italic",
-        (false, _, true) => "Bold",
-        (false, _, false) => "Regular",
-    };
-
-    if let Some(s) = available.iter().find(|s| s.eq_ignore_ascii_case(target)) {
-        return s.clone();
-    }
-
-    let faces = photocraft_text::try_shared()
-        .and_then(|shared| shared.lock().ok().map(|mut e| e.fonts.faces(fam)))
-        .unwrap_or_default();
-
-    let style_info = |s: &str| -> (bool, f32) {
-        if let Some(f) = faces.iter().find(|f| f.style.eq_ignore_ascii_case(s)) {
-            (f.italic, f.weight)
-        } else {
-            let lower = s.to_lowercase();
-            let it = lower.contains("italic") || lower.contains("oblique");
-            let weight = if lower.contains("thin") || lower.contains("hairline") {
-                100.0
-            } else if lower.contains("extralight") || lower.contains("ultralight") {
-                200.0
-            } else if lower.contains("light") {
-                300.0
-            } else if lower.contains("medium") {
-                500.0
-            } else if lower.contains("semibold") || lower.contains("demibold") {
-                600.0
-            } else if lower.contains("extrabold") || lower.contains("ultrabold") {
-                800.0
-            } else if lower.contains("black") || lower.contains("heavy") {
-                900.0
-            } else if lower.contains("bold") {
-                700.0
-            } else {
-                400.0
-            };
-            (it, weight)
+        let ctx = ui.ctx().clone();
+        if let Err(e) = crate::menus::invoke(app, &ctx, "type.warpText", json!({})) {
+            app.ui.status = e;
+            app.ui.status_error = true;
         }
-    };
-
-    let target_weight = if want_bold { 700.0 } else { 400.0 };
-
-    let best = available
-        .iter()
-        .filter(|s| {
-            let (it, w) = style_info(s);
-            let is_bd = w >= 600.0;
-            it == is_italic && is_bd == want_bold
-        })
-        .min_by(|a, b| {
-            let (_, wa) = style_info(a);
-            let (_, wb) = style_info(b);
-            (wa - target_weight).abs().total_cmp(&(wb - target_weight).abs())
-        });
-
-    if let Some(s) = best {
-        return s.clone();
     }
 
-    target.into()
+    // 6. ⋯ menu
+    cx.more_menu(ui);
 }
 
 #[cfg(test)]
@@ -398,23 +279,20 @@ mod tests {
         app
     }
 
-    /// `eligible` is false when the Type tool is not active.
+    /// The Type contextual task bar shows only while a text-edit session is live,
+    /// and not for the Type tool with no session or for other tools.
     #[test]
-    fn eligible_false_when_wrong_tool() {
+    fn bar_shows_only_while_text_edit_is_live() {
         let mut app = app_with_doc();
-        app.ui.tool = crate::state::Tool::Move;
         app.ui.panels.context_task_bar = true;
-        // No text_edit session.
-        assert!(!eligible(&app));
-    }
 
-    /// `eligible` is false when `context_task_bar` is off, even with the right tool and session.
-    #[test]
-    fn eligible_false_when_toggle_off() {
-        let mut app = app_with_doc();
-        app.ui.tool = crate::state::Tool::Type;
-        app.ui.panels.context_task_bar = false;
-        // Fabricate a minimal TextEdit so the only missing condition is the toggle.
+        // 1. Type tool without an active text-edit session: not eligible.
+        app.ui.tool = Tool::Type;
+        app.ui.text_edit = None;
+        assert!(!eligible(&app));
+
+        // 2. Other tool (e.g. Move), even if a text_edit state existed: not eligible.
+        app.ui.tool = Tool::Move;
         app.ui.text_edit = Some(crate::state::TextEdit {
             layer: 0,
             caret: 0,
@@ -425,39 +303,20 @@ mod tests {
             document: None,
         });
         assert!(!eligible(&app));
-    }
 
-    /// `eligible` is false when there is no active text_edit session.
-    #[test]
-    fn eligible_false_when_no_text_edit() {
-        let mut app = app_with_doc();
-        app.ui.tool = crate::state::Tool::Type;
-        app.ui.panels.context_task_bar = true;
-        app.ui.text_edit = None;
+        // 3. Various other tools: not eligible.
+        for other_tool in [Tool::RectMarquee, Tool::Lasso, Tool::Crop, Tool::Brush, Tool::Eraser, Tool::Hand] {
+            app.ui.tool = other_tool;
+            assert!(!eligible(&app), "must not show for {other_tool:?}");
+        }
+
+        // 4. Type tool with active text-edit session: eligible.
+        app.ui.tool = Tool::Type;
+        assert!(eligible(&app));
+
+        // 5. Window -> Contextual Task Bar toggle off: not eligible.
+        app.ui.panels.context_task_bar = false;
         assert!(!eligible(&app));
-    }
-
-    /// Preserving oblique styling when toggling bold.
-    #[test]
-    fn resolve_bold_counterpart_preserves_oblique() {
-        // Toggling bold on oblique selects Bold Oblique
-        assert_eq!(resolve_bold_counterpart("CustomFamily", "Oblique", true, true), "Bold Oblique");
-        // Toggling bold off on Bold Oblique selects Oblique
-        assert_eq!(resolve_bold_counterpart("CustomFamily", "Bold Oblique", true, false), "Oblique");
-        // Regular / Bold fallback
-        assert_eq!(resolve_bold_counterpart("CustomFamily", "Regular", false, true), "Bold");
-        assert_eq!(resolve_bold_counterpart("CustomFamily", "Bold", false, false), "Regular");
-        // Bundled Inter: toggling bold picks Bold (or SemiBold if Bold absent)
-        let bold_style = resolve_bold_counterpart("Inter", "Regular", false, true);
-        assert!(bold_style == "Bold" || bold_style == "SemiBold");
-        assert_eq!(resolve_bold_counterpart("Inter", &bold_style, false, false), "Regular");
-    }
-
-    /// Preserving italic styling when toggling bold.
-    #[test]
-    fn resolve_bold_counterpart_preserves_italic() {
-        assert_eq!(resolve_bold_counterpart("CustomFamily", "Italic", true, true), "Bold Italic");
-        assert_eq!(resolve_bold_counterpart("CustomFamily", "Bold Italic", true, false), "Italic");
     }
 
     /// `text_anchor` produces four corners for the active text layer.
@@ -478,7 +337,7 @@ mod tests {
         let layer = created["layer"].as_u64().unwrap();
         app.sync_views();
 
-        app.ui.tool = crate::state::Tool::Type;
+        app.ui.tool = Tool::Type;
         app.ui.panels.context_task_bar = true;
         app.ui.text_edit = Some(crate::state::TextEdit {
             layer,
@@ -494,37 +353,26 @@ mod tests {
         assert_eq!(corners.len(), 4);
     }
 
-    /// When faux bold alone makes the button active, clearing it preserves the underlying face (e.g. Light).
+    /// Warp Text command is enabled while editing a text layer.
     #[test]
-    fn clear_faux_bold_alone_preserves_underlying_face() {
+    fn warp_text_is_enabled_for_text_layer() {
         let mut app = app_with_doc();
         let created = app
             .run(
                 "type.create",
                 json!({
-                    "text": "Light Text",
-                    "size": 24,
-                    "fontStyle": "Light",
-                    "fauxBold": true,
+                    "text": "Warp Me",
+                    "size": 32,
+                    "x": 50,
+                    "y": 50,
                 }),
             )
             .unwrap();
-        let layer = super::super::LayerId(created["layer"].as_u64().unwrap());
+        let layer = created["layer"].as_u64().unwrap();
         app.sync_views();
-
-        let t = super::super::text_layer(&app.session.active().unwrap().doc, layer).unwrap();
-        let c = &t.char_runs()[0].style;
-        assert!(c.faux_bold);
-        assert_eq!(c.font_style, "Light");
-
-        // Verify font_is_bold is false and faux_bold is true
-        let font_is_bold = c.weight >= 600 || c.font_style.contains("Bold");
-        assert!(!font_is_bold);
-        assert!(c.faux_bold);
-
-        // Clearing faux bold without replacing fontStyle keeps "Light"
+        app.ui.tool = Tool::Type;
         app.ui.text_edit = Some(crate::state::TextEdit {
-            layer: layer.0,
+            layer,
             caret: 0,
             anchor: 0,
             session: String::new(),
@@ -532,18 +380,14 @@ mod tests {
             mask: false,
             document: None,
         });
-        super::super::defaults::apply(&mut app, json!({"fauxBold": false}), None);
-        let t_after = super::super::text_layer(&app.session.active().unwrap().doc, layer).unwrap();
-        let c_after = &t_after.char_runs()[0].style;
-        assert!(!c_after.faux_bold);
-        assert_eq!(c_after.font_style, "Light");
+        assert!(crate::menus::is_enabled(&app, "type.warpText"));
     }
 
     /// `inspect` reports the Type task bar rectangle when eligible.
     #[test]
     fn inspect_reports_type_task_bar_when_eligible() {
         let mut app = app_with_doc();
-        app.ui.tool = crate::state::Tool::Type;
+        app.ui.tool = Tool::Type;
         app.ui.panels.context_task_bar = true;
         app.ui.text_edit = Some(crate::state::TextEdit {
             layer: 0,

@@ -9,7 +9,6 @@ pub static PHOTOCRAFT_ICONS: AppIcons = AppIcons::new("photocraft", Some(2.0), I
 /// Every icon of the set: name and SVG document.
 pub static ICONS: &[(&str, &[u8])] = &[
     ("arrow-left-right", include_bytes!("../../../assets/icons/arrow-left-right.svg")),
-    ("bold", include_bytes!("../../../assets/icons/bold.svg")),
     ("circle-dashed", include_bytes!("../../../assets/icons/circle-dashed.svg")),
     ("ellipsis", include_bytes!("../../../assets/icons/ellipsis.svg")),
     ("file-plus", include_bytes!("../../../assets/icons/file-plus.svg")),
