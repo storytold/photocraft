@@ -1244,6 +1244,10 @@ fn recorded_output_guard(p: &Value) -> bool {
 /// Source: Opened Files runs on the live documents, so edits remain in their histories.
 /// Documents are identified before playback; a step that closes or reorders tabs cannot make
 /// the next input silently become a different document.
+/// With a destination folder every document whose own copy this run wrote closes when the run ends,
+/// as the reference application does (#13673), whether or not the run left it changed: unsaved
+/// changes are not a reason to keep the tab. A failed step or write, a document with no file of its
+/// own and a document no longer at the revision that copy holds all keep their tabs.
 fn batch_open_documents(
     s: &mut Session,
     steps: &[(String, Value)],
@@ -1292,12 +1296,16 @@ fn batch_open_documents(
     let mut errors = Vec::new();
     let mut stopped = None;
     let mut done = 0;
+    let mut closed: Vec<(u64, u64)> = Vec::new();
     let mut written = OutputClaims::default();
     let check_duplicates = recorded_output_guard(p);
     for (index, (id, name, path)) in originals.iter().enumerate() {
         // The document a recorded Save / Save As marked as saved, with its earlier saved
         // revision: when Batch then writes nothing, it reads as changed again.
         let mut marked: Option<(u64, u64)> = None;
+        // The document the successful write of this turn preserved, with that snapshot revision:
+        // only that document at that revision may be considered for closing.
+        let mut wrote: Option<(u64, u64)> = None;
         let result = (|| -> std::result::Result<(), FileFailure> {
             // A rejected destination cannot edit the next document either.
             if check_duplicates && let Some(paths) = &planned {
@@ -1306,13 +1314,13 @@ fn batch_open_documents(
             }
             let position = s.documents().iter().position(|state| state.doc.id.0 == *id).ok_or(EngineError::NoDocument)?;
             s.set_active(position);
-            let mut saved: Option<Arc<Document>> = None;
+            let mut saved: Option<(Arc<Document>, u64)> = None;
             for (command, params) in steps {
                 // A recorded Save is a step too: Batch writes the output for it.
                 charge_script_step(s)?;
                 if batch_save_point(command) {
                     let state = s.active_mut().ok_or(EngineError::NoDocument)?;
-                    saved = Some(state.doc.clone());
+                    saved = Some((state.doc.clone(), state.revision));
                     // With no destination nothing is written, so the document stays changed.
                     if command != "file.saveACopy" && planned.is_some() {
                         if marked.is_none() {
@@ -1330,13 +1338,22 @@ fn batch_open_documents(
             }
             let Some(paths) = &planned else { return Ok(()) };
             let out = paths.get(index).ok_or_else(|| EngineError::Other("batch output plan is incomplete".into()))?;
-            let doc = match saved {
-                Some(saved) if s.active().is_some_and(|state| state.doc.id == saved.id) => s.active().ok_or(EngineError::NoDocument)?.doc.clone(),
-                Some(saved) => saved,
-                None => s.documents().iter().find(|state| state.doc.id.0 == *id).ok_or(EngineError::NoDocument)?.doc.clone(),
+            // The snapshot and the revision it carries: a successful write below preserved exactly
+            // this document at exactly this revision, and no other.
+            let (doc, revision) = match saved {
+                Some((saved, _)) if s.active().is_some_and(|state| state.doc.id == saved.id) => {
+                    let state = s.active().ok_or(EngineError::NoDocument)?;
+                    (state.doc.clone(), state.revision)
+                }
+                Some((saved, saved_revision)) => (saved, saved_revision),
+                None => {
+                    let state = s.documents().iter().find(|state| state.doc.id.0 == *id).ok_or(EngineError::NoDocument)?;
+                    (state.doc.clone(), state.revision)
+                }
             };
             let ext = if format == "same" { same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
             save_doc_as(&doc, out, &ext, save)?;
+            wrote = Some((doc.id.0, revision));
             written.record(out, path);
             files.push(out.clone());
             Ok(())
@@ -1357,6 +1374,41 @@ fn batch_open_documents(
                 stopped = Some(name.clone());
                 break;
             }
+        } else if let Some((doc, revision)) = wrote {
+            // Identity first: a step that activated another tab makes this turn write that other
+            // tab's snapshot under this input's planned name, so this document never reached the
+            // folder. Then a file of its own: a document that was never saved keeps its tab - a
+            // recorded Save step marks it saved without ever giving it a file, so `path` is its own
+            // condition; the reference application instead raises its save dialog there, which is a
+            // separate item. Then the revision: unsaved changes are no reason to keep the tab, the
+            // measured reference closes a document whose copy it wrote even when the action changed
+            // it, but a document past the revision that copy holds is not the document on disk,
+            // whether the newer revision came from a later turn's edit or from a recorded Save in
+            // another turn whose own write went elsewhere.
+            let found = s.documents().iter().find(|state| state.doc.id.0 == *id);
+            let written_and_current = doc == *id && found.is_some_and(|state| state.path.is_some() && state.revision == revision);
+            if written_and_current {
+                closed.push((*id, revision));
+            }
+        }
+    }
+    // Closing waits for the end of the loop: a step that picks a tab by index still sees the tabs
+    // it was recorded against, and a step that closed the document itself leaves nothing to close.
+    for (id, revision) in closed {
+        // Both rules are asked again here, not only at the document's own turn: a later input can
+        // reach this document through `document.activate` and edit it, or mark it clean with a
+        // recorded Save whose own write went to another tab. Either way the tab now holds a revision
+        // this run never wrote, and closing it then would throw that edit away. The file-of-its-own
+        // rule is re-checked with it so that the closing pass asks the gate's question in full; no
+        // step takes a path away once a document has one. Skipping the close is not an error entry:
+        // the copy the run promised was written.
+        let found = s.documents().iter().find(|state| state.doc.id.0 == id);
+        let still_written = found.is_some_and(|state| state.path.is_some() && state.revision == revision);
+        if !still_written {
+            continue;
+        }
+        if let Some(position) = s.documents().iter().position(|state| state.doc.id.0 == id) {
+            s.close(position);
         }
     }
     if let Some(id) = previous
