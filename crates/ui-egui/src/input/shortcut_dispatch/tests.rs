@@ -82,23 +82,11 @@ pub(crate) fn tap(h: &mut Harness<'_, Box<PhotocraftApp>>, key: Key, mods: Modif
     h.run_steps(3);
 }
 
+/// A press and release queued in one input frame, then the frames that take it and run its command: two, not
+/// [`tap`]'s three - the runtime takes the key in the first and the app runs the command it fired in the second
+/// (`quick_shift_press` in `tool_shift_cycle_order_tests` measures the same for the tool letters). The third frame
+/// only drew the app again (#15941).
 fn press(h: &mut Harness<'_, Box<PhotocraftApp>>, sc: &str) {
-    let sc = parse(sc).unwrap_or_else(|| panic!("unparsable shortcut {sc}"));
-    // Two frames, not [`tap`]'s three: the runtime takes the key in the first and the app runs the command it fired
-    // in the second (`quick_shift_press` in `tool_shift_cycle_order_tests` measures the same for the tool letters).
-    // The third frame only drew the app again (#15941).
-    let m = platform(sc.modifiers);
-    h.input_mut().events.extend([
-        egui::Event::ModifiersChanged(m),
-        egui::Event::Key { key: sc.logical_key, physical_key: None, pressed: true, repeat: false, modifiers: m },
-        egui::Event::Key { key: sc.logical_key, physical_key: None, pressed: false, repeat: false, modifiers: m },
-        egui::Event::ModifiersChanged(Modifiers::NONE),
-    ]);
-    h.run_steps(2);
-}
-
-/// Queue one press/release in one input frame, then let the runtime collect and the app dispatch it.
-fn press_in_one_frame(h: &mut Harness<'_, Box<PhotocraftApp>>, sc: &str) {
     let sc = parse(sc).unwrap_or_else(|| panic!("unparsable shortcut {sc}"));
     let m = platform(sc.modifiers);
     h.input_mut().events.extend([
@@ -370,7 +358,7 @@ fn every_kind_of_shortcut_dispatches_from_where_focus_usually_is() {
             // A press the focused component holds (the Layers rows' stacking and visibility keys)
             // is the component's and reaches no app command.
             let held = focus_holds(&h.ctx, chord);
-            press_in_one_frame(&mut h, &sc);
+            press(&mut h, &sc);
             let log = take_log(&h.ctx);
             if typing && !chord.has_command() && !chord.is_function_key() {
                 // A focused text field keeps its typing / editing keys: nothing may fire.
@@ -396,7 +384,7 @@ fn every_kind_of_shortcut_dispatches_from_where_focus_usually_is() {
         for t in one.into_iter().chain(many) {
             let start = if t.key() == 'H' { Tool::Move } else { Tool::Hand };
             h.state_mut().ui.tool = start;
-            press_in_one_frame(&mut h, &t.key().to_string());
+            press(&mut h, &t.key().to_string());
             let want = if typing { start } else { t };
             if h.state().ui.tool.key() != want.key() {
                 failures.push(format!("{place:?}: tool key {} left {:?}, expected a {} tool", t.key(), h.state().ui.tool, want.key()));

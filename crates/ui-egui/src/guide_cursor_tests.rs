@@ -141,14 +141,17 @@ fn command_over_a_guide_takes_it_where_command_is_the_move_tool() {
             assert_eq!(moved, vec![200.0], "{tool:?} locked={locked}");
         }
     };
-    // One app for the rows whose ⌘ press the Move tool takes, and for the two rows that ask a locked guide to stay:
+    // One app for the rows whose ⌘ press the Move tool takes and for the rows that ask a locked guide to stay:
     // `harness` builds the whole app and its settle frames, while the selected tool, the ⌘ latch and the locked
-    // guides are state the app reads each frame. Each row that moved the guide puts it back with the ruler's own
-    // command (`view.moveGuide`), which is what a user does to move it again (#15941).
+    // guides are state the app reads each frame. The split is by what a row expects, not by tool name: a takes-row
+    // puts the guide back with the ruler's own command (`view.moveGuide`, what a user does to move it again) and a
+    // locked row moves nothing, so neither leaves state for the rows after it (#15941).
     let mut shared = harness(Tool::Brush);
+    let mut ran = 0;
     for (tool, locked, latched, takes_guide) in rows {
-        if takes_guide || matches!(tool, Tool::Brush | Tool::Frame) {
+        if takes_guide || locked {
             check(&mut shared, tool, locked, latched, takes_guide);
+            ran += 1;
         }
     }
     // The tools that keep ⌘ for themselves share an app too. The Type tool goes last: its ⌘-drag leaves an open
@@ -157,8 +160,14 @@ fn command_over_a_guide_takes_it_where_command_is_the_move_tool() {
     // pending crop frame holding the canvas.
     let mut keeps = harness(Tool::Pen);
     for tool in [Tool::Pen, Tool::Hand, Tool::Zoom, Tool::Rectangle, Tool::Slice, Tool::Type] {
+        // Cheap guard on the reason this app is ordered: no row so far left an open text edit that would decide
+        // this one instead of its tool.
+        assert!(keeps.state().ui.text_edit.is_none(), "no text edit open before {tool:?} in the keeps app");
         check(&mut keeps, tool, false, false, false);
+        ran += 1;
     }
     let mut crop = harness(Tool::Crop);
     check(&mut crop, Tool::Crop, false, false, false);
+    ran += 1;
+    assert_eq!(ran, rows.len(), "every row ran once: {} shared, 6 keeps, 1 crop", ran - 7);
 }

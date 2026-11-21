@@ -1,6 +1,7 @@
 //! Shift+letter steps through a key's tool group in the toolbar flyout's order, wrapping, and the
 //! anchor point tools have no letter so P never reaches them.
 
+use craft::keymap::Chord;
 use craft::ui::runtime::commands::{FirePhase, FireSource, Fired};
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
@@ -68,9 +69,10 @@ fn quick_shift_press(h: &mut Harness<'static, Box<PhotocraftApp>>, key: Key) {
 /// call [`crate::shortcut_dispatch::run_fired`], which is the entry a fired Shift+letter reaches once the runtime
 /// has taken the key. One whole-app frame costs more than the pick itself (#15651), and 64 tool members x two frames
 /// per press made these three tests the slowest of their file. The keyboard's way to this entry stays pressed for
-/// one tool per kind of group in [`a_real_shift_letter_takes_the_next_tool_of_its_group`], and every
-/// `tools.nextInGroup` row's binding is pressed by
-/// `input::shortcut_dispatch::tests::every_displayed_shortcut_runs_its_menu_item`.
+/// one tool per kind of group in [`a_real_shift_letter_takes_the_next_tool_of_its_group`], and the chord itself is
+/// pinned for every group letter by [`every_group_letter_shift_chord_reaches_its_group_step`] below. These sweeps
+/// hand the command to [`crate::shortcut_dispatch::run_fired`] directly, and no menu shows a `tools.nextInGroup`
+/// row, so `input::shortcut_dispatch::tests::every_displayed_shortcut_runs_its_menu_item` never takes their branch.
 fn bare_app() -> (Box<PhotocraftApp>, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 20, "height": 10})).unwrap();
@@ -149,6 +151,25 @@ fn a_real_shift_letter_takes_the_next_tool_of_its_group() {
     h.state_mut().ui.group_tools.clear();
     quick_shift_press(&mut h, Key::K);
     assert_eq!(h.state().ui.tool, Tool::Frame, "Shift+K picks the only tool of the Frame group");
+}
+
+/// The chord each group step hangs on: `command_rows` gives every `tools.nextInGroup` row its default
+/// `Shift+<LETTER>` binding, and the keymap is what turns the pressed chord into the command the fired sweeps hand to
+/// `run_fired` themselves. The sweeps and that entry point pin nothing here, and no menu shows a `tools.nextInGroup`
+/// row, so this table - one settled app, one keymap lookup per letter, no frames per letter - is what fails when a
+/// row's chord is dropped. The Space group of the Pen flyout's anchor tools (their `key()`, `state::tool`) takes the
+/// same loop: its default text is `Shift+ ` with no key name, which `Chord::parse` refuses, so production binds
+/// Shift+Space to nothing - pinned too, and this row changes the day a spellable binding for it is added.
+#[test]
+fn every_group_letter_shift_chord_reaches_its_group_step() {
+    let h = app();
+    for (letter, _) in crate::tool_shortcuts::group_letters() {
+        let id = crate::shortcut_dispatch::next_in_group_id(letter);
+        let command = crate::shortcut_dispatch::keymap_command(&id);
+        let bound = craft::ui::runtime::commands::chord(&h.ctx, &command);
+        let want = Chord::parse(&format!("Shift+{}", letter.to_ascii_uppercase())).ok();
+        assert_eq!(bound, want, "Shift+{letter} reaches {id}");
+    }
 }
 
 #[test]
