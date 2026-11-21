@@ -24,7 +24,8 @@ pub(crate) fn open(app: &mut PhotocraftApp, kind: ShapeKind, at: Point) -> Optio
         .active()
         .map_or((72.0, [1.0, 1.0]), |d| (f64::from(d.doc.resolution_dpi.max(1.0)), [f64::from(d.doc.size.width), f64::from(d.doc.size.height)]));
     let o = &app.ui.tool_options;
-    let radius = f64::from(o.corner_radius.max(0.0));
+    // Create Triangle starts from the Triangle tool's own radius (#13355).
+    let radius = f64::from(if kind == ShapeKind::Triangle { o.triangle_corner_radius } else { o.corner_radius }.max(0.0));
     let sides = o.polygon_sides.clamp(3, 100);
     let units = GuideUnits::new(ruler, size[0], size[1], dpi).points_per_inch(points);
     // The options bar has no star ratio: a polygon opens as a plain polygon.

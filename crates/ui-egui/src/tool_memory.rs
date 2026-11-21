@@ -535,6 +535,7 @@ pub(crate) fn sanitize(o: &mut ToolOptions) {
     fit(&mut o.strength, 1.0, 100.0, d.strength);
     fit(&mut o.stroke_width, 0.0, 288.0, d.stroke_width);
     fit(&mut o.corner_radius, *RADIUS_RANGE.start() as f32, *RADIUS_RANGE.end() as f32, d.corner_radius);
+    fit(&mut o.triangle_corner_radius, *RADIUS_RANGE.start() as f32, *RADIUS_RANGE.end() as f32, d.triangle_corner_radius);
     // The framework's `LINE_WEIGHT_RANGE` is the one source of the weight bounds.
     fit(&mut o.line_weight, *LINE_WEIGHT_RANGE.start() as f32, *LINE_WEIGHT_RANGE.end() as f32, d.line_weight);
     fit(&mut o.curve_fit, 0.5, 10.0, d.curve_fit);

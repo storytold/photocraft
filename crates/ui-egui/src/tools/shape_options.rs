@@ -88,12 +88,13 @@ fn field_of(change: &ShapeChange) -> &'static str {
 
 /// Whether a cancelled gesture's restore value is already what the bar shows: no `Update` of the gesture
 /// reached the document, so a restore would add an empty history step and a cancelled pick must not run.
-fn already_shown(change: &ShapeChange, appearance: &ShapeAppearance, settings: &ShapeToolSettings) -> bool {
+fn already_shown(change: &ShapeChange, kind: ShapeKind, appearance: &ShapeAppearance, settings: &ShapeToolSettings) -> bool {
     match change {
         ShapeChange::Fill(p) => appearance.fill == *p,
         ShapeChange::Stroke { paint, .. } => appearance.stroke == *paint,
         ShapeChange::StrokeWidth(w) => appearance.stroke_width == *w,
         ShapeChange::StrokeStyle { style, .. } => appearance.stroke_style == *style,
+        ShapeChange::CornerRadius(r) if kind == ShapeKind::Triangle => settings.triangle_corner_radius == *r,
         ShapeChange::CornerRadius(r) => settings.corner_radius == *r,
         ShapeChange::Sides(n) => settings.sides == *n,
         ShapeChange::Weight(w) => settings.line_weight == *w,
@@ -150,6 +151,8 @@ fn tool_settings(o: &crate::state::ToolOptions, live: Option<&photocraft_doc::Li
         Some(photocraft_doc::LiveShape::Rect { radii, .. }) if rect_target => radii[0],
         _ => f64::from(o.corner_radius),
     };
+    // The Triangle tool's own radius (#13355).
+    settings.triangle_corner_radius = f64::from(o.triangle_corner_radius);
     settings.sides = o.polygon_sides;
     settings.line_weight = f64::from(o.line_weight);
     settings.stroke_width = f64::from(o.stroke_width);
@@ -173,6 +176,20 @@ fn paint_dialog_target<C>(which: ShapePaint, fg: C, bg: C) -> Option<(crate::sha
         ShapePaint::Stroke => Some((crate::shape_fill_ui::Paint::Stroke, bg)),
         _ => None,
     }
+}
+
+/// Stores the bar's Radius `r` for `kind` and returns the edit for the selected shape, if any. The Triangle
+/// tool's Radius is the next triangle's own (#13355) and never edits the active shape; the Rectangle's sets the
+/// selected rectangle's four radii when the bar targets one (`rect_target`).
+fn corner_radius_change(o: &mut crate::state::ToolOptions, kind: ShapeKind, rect_target: bool, r: f64) -> Option<Value> {
+    let r = r as f32;
+    if kind == ShapeKind::Triangle {
+        o.triangle_corner_radius = r;
+        return None;
+    }
+    o.corner_radius = r;
+    let rf = f64::from(r);
+    rect_target.then(|| json!({"radii": [rf, rf, rf, rf]}))
 }
 
 pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, paint: bool) {
@@ -238,7 +255,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     let mut remembered: Vec<Fill> = Vec::new();
     for event in &out.events {
         let Some(change) = proposal(event) else { continue };
-        if matches!(event, EditEvent::Cancel { .. }) && already_shown(change, &appearance, &settings) {
+        if matches!(event, EditEvent::Cancel { .. }) && already_shown(change, kind, &appearance, &settings) {
             continue;
         }
         let committed = !matches!(event, EditEvent::Update { .. } | EditEvent::Cancel { .. });
@@ -290,14 +307,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
                 app.ui.tool_options.stroke_width = enabled_stroke_width(app.ui.tool_options.stroke_width);
                 edit = Some(json!({"stroke": p}));
             }
-            ShapeChange::CornerRadius(r) => {
-                let r = *r as f32;
-                app.ui.tool_options.corner_radius = r;
-                if rect_target {
-                    let rf = f64::from(r);
-                    edit = Some(json!({"radii": [rf, rf, rf, rf]}));
-                }
-            }
+            ShapeChange::CornerRadius(r) => edit = corner_radius_change(&mut app.ui.tool_options, kind, rect_target, *r),
             ShapeChange::Radii(r) => {
                 app.ui.tool_options.corner_radius = r[0] as f32;
                 if rect_target {
@@ -383,3 +393,7 @@ mod rectangle_radius_target_tests;
 #[cfg(test)]
 #[path = "polygon_sides_alert_tests.rs"]
 mod polygon_sides_alert_tests;
+
+#[cfg(test)]
+#[path = "triangle_corner_radius_field_tests.rs"]
+mod triangle_corner_radius_field_tests;
