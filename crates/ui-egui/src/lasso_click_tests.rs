@@ -47,3 +47,28 @@ fn lasso_drag_from_pasteboard_still_creates_a_selection() {
     let selection = app.session.active().unwrap().doc.selection.as_ref().expect("a drag still selects");
     assert!(selection.sample_channel(50, 120, 0) > 0.5);
 }
+
+#[test]
+fn lasso_alt_segments_keep_the_intersect_mode_from_the_first_press() {
+    let mut app = app();
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 150, "height": 200})).unwrap();
+    let history = app.session.active().unwrap().history.past_len();
+
+    let intersect = Modifiers::SHIFT | Modifiers::ALT;
+    testing::press(&mut app, [50.0, 50.0], intersect);
+    testing::move_to(&mut app, [90.0, 40.0], intersect);
+    testing::move_to(&mut app, [120.0, 50.0], intersect);
+    testing::modifiers(&mut app, Modifiers::NONE);
+    testing::release(&mut app, [120.0, 50.0], Modifiers::ALT);
+    testing::press(&mut app, [180.0, 150.0], Modifiers::ALT);
+    testing::release(&mut app, [180.0, 150.0], Modifiers::ALT);
+    assert_eq!(app.session.active().unwrap().history.past_len(), history, "Alt holds the outline open");
+
+    testing::modifiers(&mut app, Modifiers::NONE);
+    let state = app.session.active().unwrap();
+    assert_eq!(state.history.past_len(), history + 1);
+    let selection = state.doc.selection.as_ref().expect("the outline intersects the original selection");
+    assert!(selection.sample_channel(120, 90, 0) > 0.5, "the overlap stays selected");
+    assert!(selection.sample_channel(10, 10, 0) < 0.1, "the original selection outside the outline is removed");
+    assert!(selection.sample_channel(165, 135, 0) < 0.1, "the outline outside the original selection is excluded");
+}
