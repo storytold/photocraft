@@ -100,8 +100,12 @@ fn adjustments_filters_and_drawing_preserve_other_encoded_components() {
                 subset(&mut s);
                 let before = surface(&s);
                 // Color Replacement refuses 32-bit RGB (#11923), the Art History Brush every depth
-                // but 8 bits (#12637), as the reference application does.
-                if (*cmd == "paint.colorReplacement" && mode == "rgb" && depth == 32) || (*cmd == "paint.artHistoryBrush" && depth != 8) {
+                // but 8 bits (#12637), the Background Eraser 32 bits (#11912), as the reference
+                // application does.
+                if (*cmd == "paint.colorReplacement" && mode == "rgb" && depth == 32)
+                    || (*cmd == "paint.artHistoryBrush" && depth != 8)
+                    || (*cmd == "paint.backgroundEraser" && depth == 32)
+                {
                     assert!(s.execute(cmd, p.clone()).is_err(), "{mode} {depth} {cmd} is refused");
                     assert_eq!(surface(&s), before, "{mode} {depth} {cmd}: nothing changed");
                     continue;
@@ -317,7 +321,8 @@ fn explicit_layer_restriction_protects_the_layer_actually_edited() {
 
 #[test]
 fn background_eraser_on_an_opaque_background_edits_only_selected_channels() {
-    for depth in [8, 16, 32] {
+    // A 32-bit document refuses the Background Eraser (#11912).
+    for depth in [8, 16] {
         let mut s = Session::new();
         s.execute("file.new", json!({"width":32,"height":24,"depth":depth})).unwrap();
         s.tools.background = [0.0, 0.0, 0.0, 1.0];
@@ -1018,7 +1023,8 @@ fn named_layers_resolve_identically_for_painting_and_component_restoration() {
         ("path.fill", json!({"color":"#ffffff"})),
         ("path.stroke", json!({"size":9,"color":"#ffffff"})),
     ] {
-        let mut s = setup("rgb", 32);
+        // A 32-bit document refuses the Background Eraser (#11912): it is checked at 16 bits.
+        let mut s = setup("rgb", if command == "paint.backgroundEraser" { 16 } else { 32 });
         let id = s.active().unwrap().active_layer.unwrap();
         let name = s.active().unwrap().doc.layer(id).unwrap().name.clone();
         let before = surface(&s);

@@ -171,8 +171,34 @@ const CHANNEL_TARGET_REFUSED: &str = "Could not use the background eraser becaus
 
 /// The stroke, settings, layer and colour-channel target of a `paint.backgroundEraser` (shared by
 /// the command and its live preview), after the same checks.
+/// The reference's alert for a Background Eraser stroke in a 32-bit document (#11912), measured: one alert with OK.
+pub const BACKGROUND_ERASER_32BIT_ERROR: &str =
+    "Could not use the background eraser because it does not work with 32 bit per channel images (convert image to 8 or 16 bit per channel to edit).";
+/// Its alert in a Bitmap document (#11912).
+pub const BACKGROUND_ERASER_BITMAP_ERROR: &str =
+    "Could not use the background eraser because it does not work with Bitmap images (convert image to Grayscale mode to edit).";
+/// The command's refusal in an Indexed Color document (#11912). The reference shows no alert there: the cursor is a
+/// "no" sign and a press does nothing, so this text is only the command's answer.
+pub const BACKGROUND_ERASER_INDEXED_ERROR: &str = "the background eraser does not work with Indexed Color images";
+
+/// Why the Background Eraser can't work in `doc` (#11912): a 32-bit or Bitmap document (an alert each), or Indexed
+/// Color (no alert). 8- and 16-bit RGB, Grayscale, CMYK and Lab erase; Duotone and Multichannel aren't measured and
+/// keep erasing.
+pub fn background_eraser_refusal(doc: &Document) -> Option<&'static str> {
+    match doc.mode {
+        ColorMode::Indexed => Some(BACKGROUND_ERASER_INDEXED_ERROR),
+        ColorMode::Bitmap => Some(BACKGROUND_ERASER_BITMAP_ERROR),
+        _ if doc.depth == SampleType::F32 => Some(BACKGROUND_ERASER_32BIT_ERROR),
+        _ => None,
+    }
+}
+
 fn background_eraser_setup(s: &Session, p: &Value) -> Result<(Stroke, BgEraseSettings, LayerId, Option<crate::color_channels::ColorChannels>)> {
     const CMD: &str = "paint.backgroundEraser";
+    // Refused before anything is read or sampled, so the live stroke never draws either (#11912).
+    if let Some(why) = s.active().and_then(|d| background_eraser_refusal(&d.doc)) {
+        return Err(EngineError::Other(why.into()));
+    }
     let pts = crate::brush_cmds::parse_points(p, CMD)?;
     if pts.iter().any(|q| !q.x.is_finite() || !q.y.is_finite() || q.x.abs() > 1e7 || q.y.abs() > 1e7) {
         return Err(bad(CMD, "`points` must be finite canvas coordinates"));
@@ -344,3 +370,7 @@ mod transparency_lock_tests;
 #[cfg(test)]
 #[path = "background_eraser_channel_target_tests.rs"]
 mod channel_target_tests;
+
+#[cfg(test)]
+#[path = "background_eraser_mode_refusal_tests.rs"]
+mod background_eraser_mode_refusal_tests;

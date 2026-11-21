@@ -288,6 +288,9 @@ fn hidden_target(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
 /// a group's pixels. Those tools say why in an alert; the other tools say a hidden target in the status bar. True when
 /// the press is refused.
 fn press_refused(app: &mut PhotocraftApp, tool: Tool) -> bool {
+    if crate::eraser_ui::background_eraser_blocked(app, tool) {
+        return true;
+    }
     let hidden = hidden_target(app, tool);
     if let Some(message) = crate::brush_refusal::alert(app, tool, hidden.is_some()) {
         let _ = crate::dialogs::alerts::alert(app, message);

@@ -32,6 +32,13 @@ fn document_alert(app: &PhotocraftApp) -> Option<&'static str> {
     app.session.active().and_then(|st| photocraft_engine::eraser_cmds::magic_eraser_refusal(&st.doc))
 }
 
+/// The Background Eraser in an Indexed Color document (#11912): the cursor is a "no" sign and a press does nothing,
+/// with no alert and no History step, as in Photoshop.
+pub(crate) fn background_eraser_blocked(app: &PhotocraftApp, tool: Tool) -> bool {
+    use photocraft_engine::eraser_cmds::{BACKGROUND_ERASER_INDEXED_ERROR, background_eraser_refusal};
+    tool == Tool::BackgroundEraser && app.session.active().and_then(|st| background_eraser_refusal(&st.doc)) == Some(BACKGROUND_ERASER_INDEXED_ERROR)
+}
+
 /// A `paint.magicEraser` error as the alert it was meant to be (#12032), so a click that reaches
 /// the command shows the same dialog the press shows rather than only the status bar.
 fn error_alert(error: &str) -> Option<&'static str> {

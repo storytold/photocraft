@@ -64,6 +64,21 @@ pub fn alert(app: &PhotocraftApp, tool: Tool, hidden: bool) -> Option<String> {
         let p = crate::retouch_ui::pattern_stamp_params(app, &[]);
         return pattern_stamp_press_refusal(&app.session, &p).is_some().then(|| tl!(PATTERN_STAMP_INDEXED_REFUSAL).to_owned());
     }
+    // The Background Eraser's own measured alerts (#11912). Indexed Color has none: the press is refused quietly
+    // (`eraser_ui::background_eraser_blocked`).
+    if tool == Tool::BackgroundEraser {
+        use photocraft_engine::eraser_cmds::{BACKGROUND_ERASER_32BIT_ERROR, BACKGROUND_ERASER_BITMAP_ERROR, background_eraser_refusal};
+        return match app.session.active().and_then(|st| background_eraser_refusal(&st.doc)) {
+            Some(BACKGROUND_ERASER_32BIT_ERROR) => Some(
+                tl!("Could not use the background eraser because it does not work with 32 bit per channel images (convert image to 8 or 16 bit per channel to edit).")
+                    .to_owned(),
+            ),
+            Some(BACKGROUND_ERASER_BITMAP_ERROR) => {
+                Some(tl!("Could not use the background eraser because it does not work with Bitmap images (convert image to Grayscale mode to edit).").to_owned())
+            }
+            _ => None,
+        };
+    }
     if let Some(name) = mode_tool_name(tool)
         && let Some(template) = match app.session.active()?.doc.mode {
             photocraft_doc::ColorMode::Indexed => Some(INDEXED),
