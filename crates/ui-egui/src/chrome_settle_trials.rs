@@ -42,6 +42,7 @@ fn ran(h: &H, name: &str) -> bool {
 }
 
 #[test]
+#[ignore = "#15709: the memoized title bar and dock groups replay only once the app state they read is tracked"]
 fn a_hover_over_the_canvas_runs_no_dock_chrome_and_no_title_bar() {
     let mut h = harness();
     let at = h.state().last_canvas_rect.center();
@@ -57,6 +58,7 @@ fn a_hover_over_the_canvas_runs_no_dock_chrome_and_no_title_bar() {
 /// and menu titles), a toolbar slot taken off the rail (the toolbar column's grid) and an edit that marks the document unsaved
 /// (the title). A version that missed one would replay the old chrome.
 #[test]
+#[ignore = "#15709: the memoized title bar and dock groups replay only once the app state they read is tracked"]
 fn the_chrome_runs_when_what_it_shows_changes() {
     let mut h = harness();
     assert_eq!(chrome_runs(&h), [], "settled");

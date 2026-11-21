@@ -1,6 +1,6 @@
 use super::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft::ui::contract::MemoProps)]
 pub enum Tool {
     Move,
     Artboard,

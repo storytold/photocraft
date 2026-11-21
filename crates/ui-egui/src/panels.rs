@@ -57,7 +57,6 @@ pub(super) mod panel_docking;
 pub(crate) mod preset_browser;
 pub mod preset_panels;
 mod properties;
-pub(crate) mod region_versions;
 pub(crate) mod registry;
 pub mod smart_ui;
 mod status_bar;
