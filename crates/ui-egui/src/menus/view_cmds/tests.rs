@@ -232,12 +232,14 @@ fn fit_image_validates_dialog_bounds_before_one_undoable_resize() {
     let accepted = fields(&app, id);
     assert_eq!(accepted["width"].as_f64(), Some(1.0));
     assert_eq!(accepted["height"].as_f64(), Some(300_000.0));
+    set(&mut app, &ctx, id, "width", json!(80));
+    set(&mut app, &ctx, id, "height", json!(40));
     let staged = app.session.active().unwrap();
     assert_eq!((staged.doc.size, staged.history.past_len(), staged.revision), (size, steps, revision));
 
     confirm(&mut app, &ctx, id).unwrap();
     let resized = app.session.active().unwrap();
-    assert_eq!((resized.doc.size.width, resized.doc.size.height), (1, 1));
+    assert_eq!((resized.doc.size.width, resized.doc.size.height), (50, 40));
     assert_eq!(resized.history.past_len(), steps + 1);
     assert_eq!(resized.history.undo_label(), Some("Image Size"));
 
