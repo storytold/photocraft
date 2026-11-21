@@ -223,3 +223,164 @@ fn percent_is_of_the_selected_artboard_and_stays_percent() {
     let id = open_dialog(&mut h);
     assert_eq!(fields(&h, id)["columns"]["size"]["value"], 50.0);
 }
+
+/// A launch on the preferences kept in `files` (the settings store's file, in memory), with a document open: the
+/// next start after a quit when `files` already holds what an earlier launch saved.
+fn launch(files: &std::sync::Arc<craft::settings::testing::MemoryFiles>) -> PhotocraftApp {
+    let options = craft::settings::OpenOptions::new(craft::settings::Location::Dir("/memory/photocraft-guide-layout".into())).files(files.clone());
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.new", json!({"width":1200,"height":800})).unwrap();
+    PhotocraftApp::new(session, crate::Services { settings: Some(craft::settings::SettingsStore::open_with(options)), ..Default::default() })
+}
+
+/// `app` under the app's own frame (its hooks around each pass, as eframe runs them), so what the framework saves
+/// reaches the preferences and the settings file as in the running app.
+fn framed(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+    use crate::app::framework::BuildApp;
+    let mut h = Harness::<'static, PhotocraftApp>::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .build_app(|ui: &mut egui::Ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
+    h.run_steps(2);
+    h
+}
+
+/// A launch whose saved values hold `layout` as the remembered New Guide Layout, written through the settings store as
+/// a hand-edited or damaged file would be read.
+fn launch_with_saved(layout: Value) -> Harness<'static, PhotocraftApp> {
+    let files = std::sync::Arc::new(craft::settings::testing::MemoryFiles::new());
+    let mut first = framed(launch(&files));
+    let ctx = first.ctx.clone();
+    set_saved_value(&ctx, &REMEMBERED, Some(layout));
+    first.run_steps(2);
+    crate::prefs_ui::save_preferences(first.state_mut()).unwrap();
+    framed(launch(&files))
+}
+
+/// The layout the last OK saved, if any.
+fn saved(h: &Harness<'static, PhotocraftApp>) -> Option<Value> {
+    saved_value::<Option<Value>>(h.state().ctx(), &REMEMBERED)
+}
+
+/// The dialog reopens with the layout the last OK applied, after a restart too (#12978).
+#[test]
+fn the_confirmed_layout_survives_a_restart() {
+    let files = std::sync::Arc::new(craft::settings::testing::MemoryFiles::new());
+    let mut h = framed(launch(&files));
+    let id = open_dialog(&mut h);
+    set_group(&mut h, id, "columns", |c| {
+        c["number"] = json!(3);
+        c["gutter"]["value"] = json!(12);
+    });
+    set_group(&mut h, id, "rows", |r| {
+        r["enabled"] = json!(true);
+        r["number"] = json!(2);
+    });
+    set(&mut h, id, "centerColumns", json!(true)).unwrap();
+    set(&mut h, id, "clearExisting", json!(true)).unwrap();
+    let before = fields(&h, id);
+    assert!(confirm(&mut h, id));
+    // Written to the settings file and read back by the next launch.
+    crate::prefs_ui::save_preferences(h.state_mut()).unwrap();
+
+    let mut h = framed(launch(&files));
+    let id = open_dialog(&mut h);
+    let f = fields(&h, id);
+    for key in ["columns", "rows", "margin", "centerColumns", "clearExisting", "target"] {
+        assert_eq!(f[key], before[key], "{key}");
+    }
+    assert_eq!(f["columns"]["number"], 3);
+    assert_eq!((&f["rows"]["enabled"], &f["rows"]["number"]), (&json!(true), &json!(2)));
+}
+
+/// Only OK remembers: Cancel and an OK that fails leave the saved layout as it was, and the colour is not part of it.
+#[test]
+fn cancel_and_a_failed_ok_keep_the_saved_layout() {
+    let mut h = harness(app());
+    let id = open_dialog(&mut h);
+    set_group(&mut h, id, "columns", |c| c["number"] = json!(3));
+    cancel(&mut h, id);
+    assert_eq!(saved(&h), None, "Cancel saves nothing");
+
+    let id = open_dialog(&mut h);
+    set_group(&mut h, id, "columns", |c| c["number"] = json!(4));
+    assert!(confirm(&mut h, id));
+    let kept = saved(&h).unwrap();
+    assert_eq!(kept["columns"], 4);
+    assert!(kept.get("color").is_none(), "only the layout is saved: {kept}");
+
+    // Seven gutters of 1000 px cannot fit 1200 px: OK fails and the dialog stays open.
+    let id = open_dialog(&mut h);
+    set_group(&mut h, id, "columns", |c| {
+        c["number"] = json!(5);
+        c["gutter"]["value"] = json!(1000);
+    });
+    assert!(!confirm(&mut h, id));
+    cancel(&mut h, id);
+    assert_eq!(saved(&h), Some(kept));
+}
+
+/// A hand-edited preferences file can't break the dialog: each bad value keeps its default, the good ones still load.
+#[test]
+fn a_corrupt_saved_layout_keeps_the_defaults() {
+    let mut h = harness(app());
+    let id = open_dialog(&mut h);
+    let factory = fields(&h, id);
+    cancel(&mut h, id);
+
+    let bad = json!({
+        "columns": "many",
+        "gutter": -3,
+        "rowGutter": 6,
+        "margin": [1, 2, 3],
+        "centerColumns": 1,
+        "clearExisting": true,
+        "target": "moon",
+        "bogus": true,
+    });
+    let mut h = launch_with_saved(bad);
+    let id = open_dialog(&mut h);
+    let f = fields(&h, id);
+    assert_eq!((&f["columns"]["number"], &f["columns"]["gutter"]), (&factory["columns"]["number"], &factory["columns"]["gutter"]));
+    assert_eq!((&f["margin"], &f["centerColumns"], &f["target"]), (&factory["margin"], &factory["centerColumns"], &factory["target"]));
+    assert_eq!(f["clearExisting"], json!(true), "the good value loads");
+    assert_eq!(f["rows"]["gutter"]["value"].as_f64(), Some(6.0), "the good value loads");
+    assert!(confirm(&mut h, id), "the dialog still works");
+
+    let mut h = launch_with_saved(json!("junk"));
+    let id = open_dialog(&mut h);
+    assert_eq!(fields(&h, id), factory);
+}
+
+/// The target and the Columns, Rows and Margin checkboxes come back after a restart too: an OK on the selected artboards
+/// with Columns and Margin off reopens that way when an artboard is selected again, and falls back to the document when
+/// none is.
+#[test]
+fn the_confirmed_target_and_sections_survive_a_restart() {
+    let board = json!({"rect": [200, 100, 140, 40]});
+    let files = std::sync::Arc::new(craft::settings::testing::MemoryFiles::new());
+    let mut h = framed(launch(&files));
+    h.state_mut().run("layer.new.artboard", board.clone()).unwrap();
+    let id = open_dialog(&mut h);
+    set(&mut h, id, "target", json!("selectedArtboards")).unwrap();
+    set_group(&mut h, id, "columns", |c| c["enabled"] = json!(false));
+    set_group(&mut h, id, "rows", |r| {
+        r["enabled"] = json!(true);
+        r["number"] = json!(2);
+    });
+    set(&mut h, id, "marginEnabled", json!(false)).unwrap();
+    assert!(confirm(&mut h, id));
+    crate::prefs_ui::save_preferences(h.state_mut()).unwrap();
+
+    let mut h = framed(launch(&files));
+    h.state_mut().run("layer.new.artboard", board).unwrap();
+    let id = open_dialog(&mut h);
+    let f = fields(&h, id);
+    assert_eq!(f["target"], "selectedArtboards");
+    assert_eq!((&f["columns"]["enabled"], &f["rows"]["enabled"], &f["rows"]["number"]), (&json!(false), &json!(true), &json!(2)));
+    assert_eq!(f["marginEnabled"], json!(false));
+    cancel(&mut h, id);
+
+    let mut h = framed(launch(&files));
+    let id = open_dialog(&mut h);
+    assert_eq!(fields(&h, id)["target"], "document", "no artboard selected");
+}
