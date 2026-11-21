@@ -150,6 +150,26 @@ fn collect_vectors(doc: &Document) -> (Vec<(usize, Vec<ContentOp>)>, SelectionFo
     (layers, selection_font)
 }
 
+/// The pixels of `surface` over `rect` and the rect they cover: as they are at `scale` 1, else
+/// resampled bicubically by `scale` about the document origin (the page keeps its size, so the
+/// image is drawn at fewer pixels per inch). The edge pixels repeat outwards, so the page's border
+/// doesn't fade into the transparency beyond it.
+fn region_at(
+    surface: &photocraft_raster::Surface,
+    rect: photocraft_geom::Rect,
+    scale: f64,
+    ctl: &photocraft_raster::Interrupt,
+) -> std::result::Result<(Vec<f32>, photocraft_geom::Rect), IoError> {
+    if scale >= 1.0 {
+        return Ok((surface.read_region(rect), rect));
+    }
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let small = photocraft_algo::resample::resize_surface_in_canvas(surface, scale, scale, photocraft_algo::resample::Resample::Bicubic, rect);
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let rect = photocraft_algo::resample::scaled_rect(rect, scale, scale);
+    Ok((small.read_region(rect), rect))
+}
+
 /// Pixels in `rect`, saturating on overflow.
 fn rect_pixels(rect: photocraft_geom::Rect) -> u64 {
     u64::from(rect.width()).saturating_mul(u64::from(rect.height()))
@@ -168,14 +188,24 @@ fn rect_pixels(rect: photocraft_geom::Rect) -> u64 {
 /// each, and a Multichannel document, which is nothing but its channels, is written as plates
 /// alone. Without it a Multichannel document has nothing to write and is refused.
 pub fn export(doc: &Document, spot_plates: bool, ctl: &photocraft_raster::Interrupt) -> std::result::Result<ExportResult, IoError> {
-    export_with(doc, spot_plates, doc.metadata.xmp.as_deref(), ctl)
+    export_with(doc, spot_plates, None, doc.metadata.xmp.as_deref(), ctl)
 }
 
 /// [`export`] with the XMP packet to embed (`doc_xmp`: the document's, or `None` when the save
 /// embeds no metadata). With spot plates the packet gains their description through the shared
 /// PDF writer;
 /// without plates it is written as it is, and nothing when there is none.
-pub fn export_with(doc: &Document, spot_plates: bool, doc_xmp: Option<&str>, ctl: &photocraft_raster::Interrupt) -> std::result::Result<ExportResult, IoError> {
+///
+/// With `downsample_ppi` below the document's resolution, each page's image is resampled to
+/// it (Save Adobe PDF › Compression › Bicubic Downsampling To, #9642): the page keeps its size
+/// and the file gets smaller. The spot plates keep the document's resolution.
+pub fn export_with(
+    doc: &Document,
+    spot_plates: bool,
+    downsample_ppi: Option<f32>,
+    doc_xmp: Option<&str>,
+    ctl: &photocraft_raster::Interrupt,
+) -> std::result::Result<ExportResult, IoError> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let (w, h) = (usize::try_from(doc.size.width).unwrap_or(0), usize::try_from(doc.size.height).unwrap_or(0));
     if w == 0 || h == 0 {
@@ -201,13 +231,14 @@ pub fn export_with(doc: &Document, spot_plates: bool, doc_xmp: Option<&str>, ctl
     let fmt = doc.pixel_format();
     let n = fmt.channels().max(1);
     let dpi = f64::from(doc.resolution_dpi.max(1.0));
+    let image_scale = downsample_ppi.map_or(1.0, |ppi| (f64::from(ppi) / dpi).min(1.0));
     let paper = if doc.mode == ColorMode::Cmyk { 0.0 } else { 1.0 };
     let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     let icc = doc.icc_profile.as_ref().map(|p| p.to_vec());
     let plate_count = if spot_plates { plate_channels(doc).count() } else { 0 };
     // Straight alpha, composited here over paper: white in RGB/Gray (1 = full light), zero ink
     // in CMYK (0 = paper).
-    let image_of = |values: &[f32], rect: photocraft_geom::Rect, device: usize| {
+    let image_of = |(values, rect): (Vec<f32>, photocraft_geom::Rect), device: usize| {
         let mut data = Vec::with_capacity((rect.width() as usize * rect.height() as usize).saturating_mul(device));
         for px in values.chunks(n) {
             let a = px.last().copied().unwrap_or(1.0).clamp(0.0, 1.0);
@@ -234,9 +265,11 @@ pub fn export_with(doc: &Document, spot_plates: bool, doc_xmp: Option<&str>, ctl
         // A page keeps `device` bytes a pixel for its composite and one a pixel for each plate.
         let retained = page_pixels.saturating_mul((device.unwrap_or(0) + plate_count) as u64);
         // One page renders at a time: its f32 composite surface plus the region read back from
-        // it, both `n` channels at 4 bytes per pixel. The whole-document canvas is never held.
+        // it, both `n` channels at 4 bytes per pixel, and between them the resampled surface when
+        // the page is downsampled. The whole-document canvas is never held.
         let largest = artboards.iter().map(|(_, _, a)| rect_pixels(a.rect)).max().unwrap_or(0);
-        let temporary = largest.saturating_mul(n as u64).saturating_mul(4).saturating_mul(2);
+        let stores = if image_scale < 1.0 { 3 } else { 2 };
+        let temporary = largest.saturating_mul(n as u64).saturating_mul(4).saturating_mul(stores);
         let estimate = retained.saturating_add(temporary);
         if estimate > MAX_PDF_EXPORT_BYTES {
             return Err(IoError::Unsupported(format!(
@@ -261,15 +294,17 @@ pub fn export_with(doc: &Document, spot_plates: bool, doc_xmp: Option<&str>, ctl
             // A hidden artboard still gets its page, rendered from its own content rather than
             // left blank by the group's visibility.
             let Some(layer) = doc.layer(*id) else { continue };
-            let image = device.map(|device| {
-                let mut group = layer.clone();
-                group.visible = true;
-                one.layers.clear();
-                one.layers.push(group);
-                // Render only this artboard's rect; the surface never holds the whole document.
-                let surface = photocraft_compose::composite_to_surface(&one, rect, PixelFormat::new(fmt.mode, fmt.sample, true), None);
-                image_of(&surface.read_region(rect), rect, device)
-            });
+            let image = device
+                .map(|device| {
+                    let mut group = layer.clone();
+                    group.visible = true;
+                    one.layers.clear();
+                    one.layers.push(group);
+                    // Render only this artboard's rect; the surface never holds the whole document.
+                    let surface = photocraft_compose::composite_to_surface(&one, rect, PixelFormat::new(fmt.mode, fmt.sample, true), None);
+                    region_at(&surface, rect, image_scale, ctl).map(|region| image_of(region, device))
+                })
+                .transpose()?;
             pages.push(page_of(image, rect, Some((*name).to_string())));
         }
         if pages.is_empty() {
@@ -285,16 +320,18 @@ pub fn export_with(doc: &Document, spot_plates: bool, doc_xmp: Option<&str>, ctl
         // on the backdrop (adjustments, blend modes, masks, effects, or clipping). A Multichannel
         // document has no composite for them to sit on: it is its plates alone.
         let (vector_layers, selection_font) = if device.is_some() { collect_vectors(doc) } else { (Vec::new(), SelectionFont::default()) };
-        let image = device.map(|device| {
-            let mut backdrop = doc.clone();
-            for (index, _) in &vector_layers {
-                if let Some(layer) = backdrop.layers.get_mut(*index) {
-                    layer.visible = false;
+        let image = device
+            .map(|device| {
+                let mut backdrop = doc.clone();
+                for (index, _) in &vector_layers {
+                    if let Some(layer) = backdrop.layers.get_mut(*index) {
+                        layer.visible = false;
+                    }
                 }
-            }
-            let surface = photocraft_compose::flatten_to_surface(&backdrop, PixelFormat::new(fmt.mode, fmt.sample, true), None);
-            image_of(&surface.read_region(canvas), canvas, device)
-        });
+                let surface = photocraft_compose::flatten_to_surface(&backdrop, PixelFormat::new(fmt.mode, fmt.sample, true), None);
+                region_at(&surface, canvas, image_scale, ctl).map(|region| image_of(region, device))
+            })
+            .transpose()?;
         // The vector layers, bottom to top, in the document's pixel space (y down), over the
         // image and under the plates.
         let mut operations = Vec::new();
