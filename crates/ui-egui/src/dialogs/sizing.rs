@@ -5,18 +5,43 @@
 //! `image.imageSize` / `image.canvasSize`.
 
 use craft::behavior::{Anchor9, PixelSize};
+use craft::settings::Remembered;
 use craft::ui::contract::Bind;
 use craft::ui::dialog::{DialogId, DialogResult, dialog_id};
 use craft::ui::patterns::form_dialogs::{
     CanvasExtension, CanvasSize, CanvasSizeResult, CanvasSizeValues, HostedCanvasSize, HostedImageSize, ImageSize, ImageSizeResult, ImageSizeValues, Resample,
 };
 use craft::ui::runtime::env::{ColumnSize, Label, UnitKind};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
 const IMAGE_COMMAND: &str = "image.imageSize";
 const CANVAS_COMMAND: &str = "image.canvasSize";
+
+/// What OK in Image Size keeps for the next opening (#14799): the Width/Height unit, the Resolution unit, whether
+/// Resample is on, and the method. Width, Height and Resolution always open from the document; Cancel keeps nothing.
+/// Kept in the framework's remembered settings, so it outlasts a restart as the parameter dialogs' memories do.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImageSizeMemory {
+    unit: UnitKind,
+    resolution_unit: UnitKind,
+    resampling: bool,
+    /// The method Resample shows, kept also when OK had Resample off, so turning it on again returns to it.
+    method: Resample,
+}
+
+fn image_memory() -> Remembered<ImageSizeMemory> {
+    Remembered::new("photocraft.image.imageSize")
+}
+
+/// Keeps the settings of an Image Size OK; `opening` is the method the dialog opened with, kept when Resample was off.
+fn remember_image(app: &PhotocraftApp, r: &ImageSizeResult, opening: Resample) {
+    let memory = ImageSizeMemory { unit: r.unit, resolution_unit: r.resolution_unit, resampling: r.resample.is_some(), method: r.resample.unwrap_or(opening) };
+    image_memory().store(app.framework.host(), &memory);
+}
 
 /// The dialog unit of the Units & Rulers preference.
 pub(crate) fn pref_unit(u: photocraft_engine::prefs::Unit) -> UnitKind {
@@ -160,14 +185,23 @@ pub(crate) fn open_with(app: &mut PhotocraftApp, command: &str, params: &Value) 
     let bytes_per_pixel = d.layers.first().and_then(|l| l.surface()).map_or(4, |s| s.format().bytes_per_pixel()) as f64;
     let image_bytes_per_pixel = flat_bytes_per_pixel(d);
     let id = if command == IMAGE_COMMAND {
+        // The last OK's units, Resample and method (#14799); the preferences until there is one.
+        let memory = image_memory().recall(app.framework.host());
         // Indexed Color resamples with Nearest Neighbor only, as the command does (#6019).
         let indexed = d.mode == photocraft_color::ColorMode::Indexed;
-        let mut method = resample_of(interpolation);
+        let mut method = memory.map_or_else(|| resample_of(interpolation), |m| m.method);
         if indexed && method != Resample::Automatic {
             method = Resample::NearestNeighbor;
         }
         let methods = if indexed { vec![Resample::Automatic, Resample::NearestNeighbor] } else { Vec::new() };
-        let values = ImageSizeValues::new(size).pixels_per_inch(dpi).points_per_inch(points).unit(unit).method(method).column_size(columns);
+        let mut values = ImageSizeValues::new(size).pixels_per_inch(dpi).points_per_inch(points).unit(unit).method(method).column_size(columns);
+        if let Some(m) = memory {
+            // A recorded size stays in pixels.
+            if !seeded {
+                values = values.unit(m.unit);
+            }
+            values = values.resolution_unit(m.resolution_unit).resampling(m.resampling);
+        }
         app.framework.dialogs.open(HostedImageSize::new(values, move |values: Bind<'_, ImageSizeValues>| {
             ImageSize::new(values).methods(methods.clone()).bytes_per_pixel(image_bytes_per_pixel)
         }))
@@ -222,7 +256,12 @@ pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
     answer_held(app);
     if let Some(result) = app.framework.dialogs.take::<HostedImageSize>() {
         let params = match result {
-            DialogResult::Ok(r) => Some(image_params(app, &r)),
+            DialogResult::Ok(r) => {
+                let opening =
+                    image_memory().recall(app.framework.host()).map_or_else(|| resample_of(app.session.prefs().general.image_interpolation), |m| m.method);
+                remember_image(app, &r, opening);
+                Some(image_params(app, &r))
+            }
             _ => None,
         };
         // One dialog of each type is open at a time, so its key names the dialog a paused playback holds.
@@ -306,3 +345,7 @@ fn finish(app: &mut PhotocraftApp, id: DialogId, command: &str, params: Option<V
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "image_size_remembers_tests.rs"]
+mod image_size_remembers_tests;
