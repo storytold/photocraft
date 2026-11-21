@@ -11,30 +11,32 @@ use serde_json::{Value, json};
 
 use super::pen_pending;
 use crate::PhotocraftApp;
+use crate::state::Tool;
 
 /// The commands this family's dialogs run.
 const COMMANDS: [&str; 7] =
     ["edit.defineCustomShape", "path.toSelection", "path.fill", "path.stroke", "path.clippingPath.set", "path.transform", "select.toWorkPath"];
 
-/// The brush-based tools Stroke Path can stroke with, as `path.stroke`'s `tool` takes them.
-const STROKE_TOOLS: [(&str, &str); 17] = [
-    ("brush", "Brush"),
-    ("pencil", "Pencil"),
-    ("eraser", "Eraser"),
-    ("backgroundEraser", "Background Eraser"),
-    ("cloneStamp", "Clone Stamp"),
-    ("patternStamp", "Pattern Stamp"),
-    ("healingBrush", "Healing Brush"),
-    ("spotHealingBrush", "Spot Healing Brush"),
-    ("historyBrush", "History Brush"),
-    ("blur", "Blur"),
-    ("sharpen", "Sharpen"),
-    ("smudge", "Smudge"),
-    ("dodge", "Dodge"),
-    ("burn", "Burn"),
-    ("sponge", "Sponge"),
-    ("colorReplacement", "Color Replacement"),
-    ("mixerBrush", "Mixer Brush"),
+/// The brush-based tools Stroke Path can stroke with: `path.stroke`'s `tool`, its label and the tool
+/// whose brush it paints with.
+const STROKE_TOOLS: [(&str, &str, Tool); 17] = [
+    ("brush", "Brush", Tool::Brush),
+    ("pencil", "Pencil", Tool::Pencil),
+    ("eraser", "Eraser", Tool::Eraser),
+    ("backgroundEraser", "Background Eraser", Tool::BackgroundEraser),
+    ("cloneStamp", "Clone Stamp", Tool::CloneStamp),
+    ("patternStamp", "Pattern Stamp", Tool::PatternStamp),
+    ("healingBrush", "Healing Brush", Tool::Healing),
+    ("spotHealingBrush", "Spot Healing Brush", Tool::SpotHealing),
+    ("historyBrush", "History Brush", Tool::HistoryBrush),
+    ("blur", "Blur", Tool::Blur),
+    ("sharpen", "Sharpen", Tool::Sharpen),
+    ("smudge", "Smudge", Tool::Smudge),
+    ("dodge", "Dodge", Tool::Dodge),
+    ("burn", "Burn", Tool::Burn),
+    ("sponge", "Sponge", Tool::Sponge),
+    ("colorReplacement", "Color Replacement", Tool::ColorReplacement),
+    ("mixerBrush", "Mixer Brush", Tool::MixerBrush),
 ];
 
 /// The Make Selection operations, in Photoshop's order: (`path.toSelection` mode, label).
@@ -90,7 +92,7 @@ fn fill_params(app: &PhotocraftApp) -> Vec<Param> {
 /// Photoshop's Stroke Path dialog: the brush-based tool to stroke with (painting with that tool's
 /// current options) and Simulate Pressure, the one remembered row (#2978, #10527).
 fn stroke_params(_: &PhotocraftApp) -> Vec<Param> {
-    let tools = STROKE_TOOLS.iter().map(|(key, label)| (key.to_string(), tl!(label).to_string().into())).collect();
+    let tools = STROKE_TOOLS.iter().map(|(key, label, _)| (key.to_string(), tl!(label).to_string().into())).collect();
     vec![
         plain("tool", "Tool:", ParamKind::choice(tools, Some("brush".into()))),
         Param::new("simulatePressure", tl!("Simulate Pressure").to_string(), ParamKind::bool(false)),
@@ -179,11 +181,26 @@ pub(crate) fn run(app: &mut PhotocraftApp, ctx: &egui::Context, result: ParamRes
 pub(crate) fn check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
     let Some(params) = command_params(app, result) else { return Ok(()) };
     let revision = app.session.active().map(|st| st.revision);
+    if result.key == "path.stroke" {
+        return stroke(app, params).map_err(Label::from);
+    }
     app.run(result.key.as_str(), params.clone()).map_err(Label::from)?;
     if result.key == "path.toSelection" {
         name_make_selection_step(app, &params, revision);
     }
     Ok(())
+}
+
+/// Runs `path.stroke` with the brush of the tool it names, not the live brush (the last brush tool's,
+/// #16182), and puts the live brush back after.
+pub(crate) fn stroke(app: &mut PhotocraftApp, params: Value) -> Result<(), String> {
+    let tool = params.get("tool").and_then(Value::as_str).unwrap_or("brush");
+    let Some(&(_, _, tool)) = STROKE_TOOLS.iter().find(|(key, _, _)| *key == tool) else { return app.run("path.stroke", params).map(drop) };
+    let brush = crate::paint_mouse::tool_brush(app, tool);
+    let live = std::mem::replace(&mut app.session.tools.brush, brush);
+    let result = app.run("path.stroke", params);
+    app.session.tools.brush = live;
+    result.map(drop)
 }
 
 /// The engine parameters a dialog's confirmed values make; `None` for a key the family does not own.
