@@ -307,3 +307,103 @@ fn ok_paints_the_layer_the_workspace_was_opened_on() {
         }
     }
 }
+
+/// Ticks the jobs (as each frame does) until `done` holds, with the passes that show a workspace given back.
+fn tick_until(h: &mut Harness<'static, Box<PhotocraftApp>>, done: impl Fn(&PhotocraftApp) -> bool) {
+    let ctx = h.ctx.clone();
+    for _ in 0..400 {
+        crate::jobs_ui::tick(h.state_mut(), &ctx);
+        if done(h.state()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(4);
+}
+
+/// OK as a background job (#210): the workspace closes while the job runs; returns the job.
+fn ok_as_job(h: &mut Harness<'static, Box<PhotocraftApp>>) -> photocraft_engine::jobs::JobId {
+    let before = h.state().vanishing_committing.len();
+    ok(h);
+    let committing = &h.state().vanishing_committing;
+    assert_eq!(committing.len(), before + 1, "OK started a background job");
+    committing[before].job
+}
+
+#[test]
+fn a_cancelled_vanishing_point_job_gives_the_workspace_back() {
+    let mut app = app_with_layer();
+    app.background_jobs = true;
+    copy_red_square(&mut app);
+    let steps = app.session.active().unwrap().history.past_len();
+    let mut h = open(app);
+    set(&mut h, json!({"planes": [floor()]}));
+    set(&mut h, json!({"clone": [{"source": [100, 120], "points": [[90, 80], [96, 80]], "size": 12}]}));
+    let fields = describe(h.state()).expect("Vanishing Point is open");
+    let job = ok_as_job(&mut h);
+    // Cancelled before the result is polled, so it never lands whatever the worker has done.
+    assert!(h.state_mut().session.cancel_job(job));
+    h.state_mut().session.join_cancelled_jobs();
+    tick_until(&mut h, |app| app.vanishing.is_some());
+    assert!(h.state().vanishing.is_some(), "the workspace comes back after the cancel");
+    assert_eq!(describe(h.state()), Some(fields), "the same planes, paste and strokes, ready to retry");
+    assert!(source(&h).stamp_preview().is_some(), "the strokes show again");
+    assert!(h.state().vanishing_committing.is_empty());
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "nothing applied");
+}
+
+#[test]
+fn a_finished_vanishing_point_job_lands_as_one_step_and_stays_closed() {
+    let mut app = app_with_layer();
+    app.background_jobs = true;
+    copy_red_square(&mut app);
+    let steps = app.session.active().unwrap().history.past_len();
+    let mut h = open(app);
+    set(&mut h, json!({"planes": [floor()]}));
+    ok_as_job(&mut h);
+    tick_until(&mut h, |app| app.vanishing_committing.is_empty());
+    assert!(h.state().vanishing_committing.is_empty(), "the job ended");
+    assert!(h.state().vanishing.is_none(), "a landed commit does not reopen the workspace");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+}
+
+#[test]
+fn a_commit_on_another_document_keeps_the_first_commits_session() {
+    // One pending slot: a commit on B replaced A's session, so A's failed or cancelled job had nothing to give back.
+    let mut app = app_with_layer();
+    app.background_jobs = true;
+    copy_red_square(&mut app);
+    let a_doc = app.session.active().unwrap().doc.id;
+    let mut h = open(app);
+    set(&mut h, json!({"planes": [floor()]}));
+    let a_fields = describe(h.state()).expect("Vanishing Point is open on A");
+    let a_job = ok_as_job(&mut h);
+
+    // Document B, with its own commit (the clipboard still holds the red square).
+    h.state_mut().session.execute("file.new", json!({"width": 240, "height": 160, "depth": 16})).unwrap();
+    h.state_mut().session.execute("layer.new.layer", json!({})).unwrap();
+    h.state_mut().session.execute("edit.fill", json!({"color": "#4080c0"})).unwrap();
+    h.state_mut().sync_views();
+    let ctx = h.ctx.clone();
+    begin(h.state_mut(), &ctx).unwrap();
+    h.run_steps(4);
+    set(&mut h, json!({"planes": [full_plane()]}));
+    let b_fields = describe(h.state()).expect("Vanishing Point is open on B");
+    assert_ne!(a_fields["planes"], b_fields["planes"]);
+    let b_job = ok_as_job(&mut h);
+    assert_eq!(h.state().vanishing_committing.len(), 2, "both sessions are held");
+
+    // Back on A, its job is cancelled: A's own session comes back, B's stays held until its job ends.
+    let a_index = h.state().session.documents().iter().position(|st| st.doc.id == a_doc).unwrap();
+    assert!(h.state_mut().session.set_active(a_index));
+    h.state_mut().sync_views();
+    assert!(h.state_mut().session.cancel_job(a_job));
+    h.state_mut().session.join_cancelled_jobs();
+    tick_until(&mut h, |app| app.vanishing.is_some());
+    let fields = describe(h.state()).expect("A's workspace comes back after the cancel");
+    assert_eq!(fields, a_fields);
+    assert!(h.state().vanishing_committing.iter().all(|c| c.job != a_job), "A's entry is gone");
+    // B's job ends (landed or not): its entry goes too.
+    tick_until(&mut h, |app| app.vanishing_committing.is_empty());
+    assert!(h.state().vanishing_committing.iter().all(|c| c.job != b_job), "B's entry goes when its job ends");
+}

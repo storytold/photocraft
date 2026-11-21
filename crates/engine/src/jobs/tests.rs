@@ -1720,3 +1720,108 @@ fn unix_fingerprint_detects_a_same_size_rewrite_with_a_restored_mtime() {
     assert_ne!(before, after, "a same-size rewrite with a restored mtime is a different source");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Starts `cmd` in the background on a fresh [`session`] and checks it matches `execute`: one undo
+/// step labelled `label`, the same pixels and the same result (but its timing, and the layer id:
+/// ids are unique across sessions, so the two sessions' layers differ).
+fn filter_matches_inline_as_a_job(cmd: &str, label: &str, p: serde_json::Value) {
+    let untimed = |v: &serde_json::Value| {
+        let mut v = v.clone();
+        if let Some(m) = v.as_object_mut() {
+            m.remove("ms");
+            m.remove("layer");
+        }
+        v
+    };
+    let mut inline = session(300, 200);
+    let before = pixels(&inline);
+    let expected = inline.execute(cmd, p.clone()).unwrap();
+    assert_ne!(pixels(&inline), before, "{cmd}: the command changes the layer");
+
+    let mut s = session(300, 200);
+    let steps = s.active().unwrap().history.past_len();
+    let id = job(s.start(cmd, p).unwrap());
+    // The canvas shows the pre-job state until the job is applied.
+    assert_eq!(pixels(&s), before, "{cmd}");
+    let e = wait_event(&mut s, id);
+    let JobOutcome::Done(v) = &e.outcome else { panic!("{cmd}: {e:?}") };
+    assert_eq!(untimed(v), untimed(&expected), "{cmd}: the result comes back after the apply");
+    assert_eq!(v["layer"], json!(s.active().unwrap().active_layer.unwrap().0), "{cmd}: {v}");
+    assert_eq!(e.label, label);
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "{cmd}: one undo step");
+    assert_eq!(pixels(&s), pixels(&inline), "{cmd}: same pixels as the synchronous command");
+    assert!(s.undo());
+    assert_eq!(pixels(&s), before, "{cmd}: undo");
+}
+
+#[test]
+fn lens_correction_runs_as_a_job_with_the_inline_result() {
+    filter_matches_inline_as_a_job("filter.lensCorrection", "Lens Correction", json!({"distortion": -40, "vignetteAmount": -50}));
+}
+
+#[test]
+fn adaptive_wide_angle_runs_as_a_job_with_the_inline_result() {
+    let p = json!({"model": "fisheye", "focalLength": 10, "constraints": [{"a": [20, 40], "b": [280, 40], "orientation": "horizontal"}]});
+    filter_matches_inline_as_a_job("filter.adaptiveWideAngle", "Adaptive Wide Angle", p);
+}
+
+#[test]
+fn camera_raw_filter_runs_as_a_job_with_the_inline_result() {
+    filter_matches_inline_as_a_job("filter.cameraRaw", "RAW Develop Filter", json!({"exposure": 1.0, "vibrance": 30, "clarity": 20}));
+}
+
+#[test]
+fn vanishing_point_runs_as_a_job_with_the_inline_result() {
+    // A floor receding to the top; one clone stroke copies its near edge to its far one.
+    let p = json!({
+        "planes": [{"corners": [[90, 60], [210, 60], [270, 180], [30, 180]]}],
+        "clone": [{"source": [150, 170], "points": [[150, 80], [160, 80]], "size": 16, "hardness": 80}],
+    });
+    filter_matches_inline_as_a_job("filter.vanishingPoint", "Vanishing Point", p);
+}
+
+#[test]
+fn a_cancelled_lens_correction_leaves_the_document_unchanged() {
+    let mut s = session(1600, 1200);
+    let doc_before = s.active().unwrap().doc.clone();
+    let steps = s.active().unwrap().history.past_len();
+    let id = job(s.start("filter.lensCorrection", json!({"distortion": -40, "vignetteAmount": -50})).unwrap());
+    assert!(s.cancel_job(id));
+    assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
+    s.join_cancelled_jobs();
+    assert!(s.poll_jobs().is_empty(), "nothing arrives later");
+    let st = s.active().unwrap();
+    assert!(Arc::ptr_eq(&st.doc, &doc_before), "the document snapshot was not replaced");
+    assert_eq!(st.history.past_len(), steps);
+}
+
+/// Locks the active layer's pixels, then checks `cmd` is refused by `start` itself: no job, no
+/// undo step.
+fn locked_layer_errors_before_starting_a_job(cmd: &str, p: serde_json::Value) {
+    let mut s = session(300, 200);
+    s.edit("lock", |doc, active| {
+        doc.layer_mut(active.unwrap()).unwrap().locks.pixels = true;
+        Ok(())
+    })
+    .unwrap();
+    let steps = s.active().unwrap().history.past_len();
+    let e = s.start(cmd, p).unwrap_err().to_string();
+    assert!(e.contains("is locked"), "{cmd}: {e}");
+    assert!(s.jobs().is_empty(), "{cmd}: no job started");
+    assert!(s.poll_jobs().is_empty(), "{cmd}");
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "{cmd}: no undo step");
+}
+
+#[test]
+fn lens_correction_on_a_locked_layer_errors_before_starting_a_job() {
+    locked_layer_errors_before_starting_a_job("filter.lensCorrection", json!({"distortion": -40}));
+}
+
+#[test]
+fn vanishing_point_on_a_locked_layer_errors_before_starting_a_job() {
+    let p = json!({
+        "planes": [{"corners": [[90, 60], [210, 60], [270, 180], [30, 180]]}],
+        "clone": [{"source": [150, 170], "points": [[150, 80], [160, 80]], "size": 16}],
+    });
+    locked_layer_errors_before_starting_a_job("filter.vanishingPoint", p);
+}
