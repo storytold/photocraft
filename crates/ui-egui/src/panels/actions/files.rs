@@ -56,6 +56,12 @@ pub(super) fn load_source(app: &mut PhotocraftApp, name: &str, params: Value) ->
 
 /// Load every chosen action file in order, retaining failures and unsupported-step warnings.
 pub(super) fn load_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
+    // The panel menu greys this row while a recording or a paced playback holds the library (see
+    // [`super::menu::states`]); a keyboard, shortcut or control-channel route says so before the
+    // picker opens, since `actions.load` only refuses after it has read the chosen file.
+    if app.session.actions.recording.is_some() || app.session.actions.playing > 0 || super::playback::pending(app) {
+        return Err(tl!("Stop recording or playback before changing the Actions library.").into());
+    }
     let mut request = PickRequest::open_many("actions").filter("Actions", &["atn"]);
     if let Some(dir) = crate::file_dialog::last_used_dir(&app.ui.recent_files) {
         request = request.directory(dir);
@@ -65,8 +71,8 @@ pub(super) fn load_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
         let files: Vec<(String, Option<Vec<u8>>)> = match picked {
             Picked::Paths(paths) => paths.into_iter().map(|path| (path.to_string_lossy().into_owned(), None)).collect(),
             Picked::Contents(files) => files.into_iter().map(|(name, bytes)| (name, Some(bytes))).collect(),
-            Picked::Cancelled => return Err(crate::file_dialog::CANCELLED.into()),
-            Picked::Unavailable(why) => return Err(why),
+            Picked::Cancelled | Picked::Downloaded(_) => return Err(crate::file_dialog::CANCELLED.into()),
+            Picked::Unavailable(why) | Picked::Failed(why) => return Err(why),
         };
         let count = files.len();
         if count == 0 {

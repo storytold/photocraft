@@ -36,7 +36,7 @@ pub(crate) struct Before {
 impl Before {
     pub(crate) fn capture(s: &Session) -> Self {
         match s.active() {
-            Some(st) => Self { doc: Some(st.doc.clone()), active_layer: st.active_layer, selected: st.selected_layers() },
+            Some(st) => Self { doc: Some(st.doc.clone()), active_layer: st.active_layer, selected: st.selected_layers().to_vec() },
             None => Self::default(),
         }
     }

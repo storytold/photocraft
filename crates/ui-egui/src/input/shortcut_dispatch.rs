@@ -12,6 +12,8 @@
 
 use std::collections::HashMap;
 
+use rustc_hash::FxHashMap;
+
 use craft::color_ui::ui::SwatchesCommand;
 use craft::keymap::{Binding, Chord, CommandDef, CommandKind, Overrides, Scope};
 use craft::layers::ui::panel::LayersPanelCommands;
@@ -159,9 +161,21 @@ fn bridge_of(command: &CommandRef) -> Option<(&'static str, Bridged)> {
     bridged_commands().iter().find(|(bridged, _, _)| bridged == command).map(|(_, id, bridged)| (*id, *bridged))
 }
 
+/// Runtime rows indexed by id, keeping the first row if an id appears more than once.
+fn runtime_by_id() -> &'static FxHashMap<&'static str, Bridged> {
+    static TABLE: std::sync::OnceLock<FxHashMap<&'static str, Bridged>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table = FxHashMap::default();
+        for &(id, bridged) in RUNTIME_COMMANDS {
+            table.entry(id).or_insert(bridged);
+        }
+        table
+    })
+}
+
 /// Whether the runtime defines command `id` (a row of [`RUNTIME_COMMANDS`]).
 pub(crate) fn is_bridged(id: &str) -> bool {
-    RUNTIME_COMMANDS.iter().any(|(bridged, _)| *bridged == id)
+    runtime_by_id().contains_key(id)
 }
 
 /// Whether `id` is a view row of [`RUNTIME_COMMANDS`]: a command the document canvas runs on its view.
@@ -341,7 +355,7 @@ pub(crate) fn command_rows(app: &PhotocraftApp) -> Vec<CommandDef> {
 /// The command of the runtime's keymap that menu row `id` runs: the framework command a row of [`RUNTIME_COMMANDS`]
 /// bridges, the shell command a Window panel item runs (`menus::panel_alias`), else the row's own.
 pub(crate) fn keymap_command(id: &str) -> CommandRef {
-    if let Some((_, bridged)) = RUNTIME_COMMANDS.iter().find(|(bridged, _)| *bridged == id) {
+    if let Some(bridged) = runtime_by_id().get(id) {
         return bridged.command();
     }
     CommandRef::new(crate::menus::panel_alias(id).unwrap_or(id))
@@ -485,7 +499,7 @@ pub(crate) fn delete_key_command(app: &PhotocraftApp, id: String) -> String {
 pub(crate) fn clip_key_releases(app: &PhotocraftApp) -> bool {
     let Some(st) = app.session.active() else { return false };
     let selected = st.selected_layers();
-    let clips = match selected.as_slice() {
+    let clips = match selected {
         [] => return false,
         [one] => std::slice::from_ref(one),
         [_lowest, above @ ..] => above,
@@ -565,6 +579,14 @@ pub(crate) fn record_chrome_toggles(ctx: &egui::Context, toggles: &[(egui::Viewp
 /// group's tool on the press and releases the spring on the key-up; every other command runs on its press only.
 /// A framework command goes to [`crate::app::framework::run_command`], a PhotoCraft id to [`dispatch_as`].
 pub(crate) fn run_fired(app: &mut PhotocraftApp, ctx: &egui::Context, fired: &[Fired]) {
+    // A fired command is a command run, as `menus::invoke` counts one: many of these (the opacity and blend keys, the
+    // Artboard, Slice and panel commands) change what a settled region shows without going through `invoke`. A key's
+    // repeats change only what has a revision or a tool option (brush size, a nudge, a mode step), so a held key
+    // doesn't run every region at the repeat rate.
+    if fired.iter().any(|f| f.target.is_none() && f.phase != FirePhase::Repeat) {
+        app.commands_run += 1;
+        ctx.request_repaint();
+    }
     for f in fired {
         if f.target.is_some() {
             continue;
