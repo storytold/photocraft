@@ -156,7 +156,7 @@ pub(super) fn screen_of(app: &PhotocraftApp, doc: [f32; 2]) -> Pos2 {
 fn document_state(app: &PhotocraftApp) -> impl PartialEq + use<> {
     let state = app.session.active().unwrap();
     let strokes = app.session.journal.iter().filter(|(id, _)| id == "paint.stroke").count();
-    (state.doc.clone(), state.revision, state.history.past_len(), state.active_layer, state.selected_layers(), strokes)
+    (state.doc.clone(), state.revision, state.history.past_len(), state.active_layer, state.selected_layers().to_vec(), strokes)
 }
 
 fn view_of(app: &PhotocraftApp) -> Option<(craft::behavior::kurbo::Point, f64)> {
