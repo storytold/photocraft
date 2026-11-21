@@ -52,9 +52,9 @@ pub fn glow_lut(g: &Glow) -> Option<Vec<f32>> {
 /// rounded down to a table entry for both techniques); the coverage where it reaches 1 is per
 /// technique:
 ///
-/// - Precise: the falloff is linear in distance, so the edge is the distance left to the reach's
-///   end: the last pixel steps down by how far inside the reach its centre is (one soft pixel,
-///   as Photoshop's flat-contour band).
+/// - Precise: a fixed coverage, [`PRECISE_FULL_COVERAGE`]. The falloff is linear in distance, so
+///   at Spread 0 the band fades over its last `0.24 · (size + 1)` px: about one soft pixel at
+///   Size 4, two to three at Size 10, as Photoshop's flat-contour band.
 /// - Softer: coverage is a tent blur, and the same coverage means a different distance for a
 ///   straight edge and a single pixel, so no coverage-only model gives the distance. The edge
 ///   reaches 1 at the coverage one opaque pixel gives one pixel inside its reach along a row
@@ -65,7 +65,7 @@ pub fn glow_lut(g: &Glow) -> Option<Vec<f32>> {
 /// So:
 ///
 /// - coverage 0 always paints 0, for any contour (nothing beyond the reach);
-/// - a high contour is solid up to the last pixel of the reach, which steps down;
+/// - a high contour is solid up to the outer pixels of the reach, which step down;
 /// - it never paints less than the Linear contour would, so a contour that already follows or
 ///   stays under the falloff (Linear, or a custom curve with `contour(0) = 0` rising no faster
 ///   than the reach edge) is unchanged. The reach does not depend on Range: Range stretches the
@@ -94,6 +94,14 @@ pub fn glow_paint_lut(g: &Glow, inner: bool) -> Option<Vec<f32>> {
     )
 }
 
+/// The Precise coverage at which a high contour's reach edge paints in full (#15006), whatever
+/// the Size: with `v = ½·(1 − (d − solid) / soft)`, Photoshop paints `v / 0.12`. Measured at
+/// Range 50 %, Spread 0: Size 4 at 4 px out (a pixel-aligned edge) 213 of 255 and at √18 px (a
+/// corner's diagonal) 161; Size 10, #11361's ellipse row `153, 120, 92` (this gives
+/// `155, 123, 92`). Other Ranges and Spreads are unmeasured. Tying the knee to the distance
+/// instead (`1 / (2·soft)`, the reach's last pixel) left the pixel at Size px out solid.
+const PRECISE_FULL_COVERAGE: f32 = 0.12;
+
 /// Entries in a glow's transfer table: the GPU's `compose.wgsl` `lut` reads 4096, linearly
 /// interpolated, as the CPU's [`lut_at`] does.
 const GLOW_LUT_LEN: usize = 4096;
@@ -113,16 +121,11 @@ fn glow_reach_edge(per_coverage: f32, v: f32) -> f32 {
 /// coverage rounded down to a whole table step (at least one), so the knee lands on a table entry
 /// and the table interpolates the edge exactly (rounding down only widens what paints in full).
 ///
-/// - Precise: `v = ½·(1 − (d − solid) / soft)`, which reaches 0 at `d = size + 1` (centre to
-///   centre), so the distance left to the reach's end is `size + 1 − d = 2·soft·v`: full at
-///   `v = 1 / (2·soft)`.
+/// - Precise: full at [`PRECISE_FULL_COVERAGE`].
 /// - Softer: full at [`softer_full_coverage`].
 fn glow_edge_per_coverage(g: &Glow) -> f32 {
     let full = match g.technique {
-        GlowTechnique::Precise => {
-            let solid = g.size * g.spread;
-            0.5 / (g.size + 1.0 - solid).max(1e-3)
-        }
+        GlowTechnique::Precise => PRECISE_FULL_COVERAGE,
         GlowTechnique::Softer => softer_full_coverage(spread_split(g.size, g.spread).1),
     };
     let steps = (GLOW_LUT_LEN - 1) as f32;
