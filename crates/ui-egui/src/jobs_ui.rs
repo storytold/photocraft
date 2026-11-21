@@ -997,6 +997,21 @@ pub fn bytes(b: &[u8]) -> OpenSource {
 mod tests;
 
 /// Placements keep the canvas accessible when progress and Cancel are visible in the status bar.
+/// So does a copy of layers into another document: the reference application copies them at once
+/// and leaves every tab free, and the modal over the source blocked going back to its tab.
 fn place_uses_status_bar(command: &str, status_bar_visible: bool) -> bool {
-    status_bar_visible && matches!(command, "file.placeEmbedded" | "file.placeLinked")
+    status_bar_visible && matches!(command, "file.placeEmbedded" | "file.placeLinked" | "layer.copyToDocument")
+}
+
+#[cfg(test)]
+mod place_progress_tests {
+    #[test]
+    fn placement_modal_depends_on_command_and_visible_progress() {
+        for command in ["file.placeEmbedded", "file.placeLinked"] {
+            assert!(super::place_uses_status_bar(command, true));
+            assert!(!super::place_uses_status_bar(command, false));
+        }
+        assert!(!super::place_uses_status_bar("filter.blur", true));
+        assert!(super::place_uses_status_bar("layer.copyToDocument", true), "a copy into another tab leaves the tabs free");
+    }
 }

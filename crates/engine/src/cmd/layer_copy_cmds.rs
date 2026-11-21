@@ -74,12 +74,36 @@ fn prepare_shapes(layers: &mut [Layer], doc: &Document, new_canvas: bool) {
 /// Readies `copies` (a scratch document of the source's colour holding duplicated layers) for
 /// landing in `dest`: smart objects get fresh contents ids, keeping only the sharing within the
 /// batch (contents ids belong to a document, so the copies never join objects already in `dest`,
-/// including another opening of the same file), and the pixels convert to `dest`'s profile and
-/// bit depth.
+/// including another opening of the same file), the pixels convert to `dest`'s profile and
+/// bit depth, and the type points at `dest`'s text styles.
 pub(crate) fn adapt_copies(s: &Session, copies: &mut Document, dest: &Document) -> Result<()> {
-    // Link-group IDs are scoped to a document. Two independently linked pairs can both
-    // use group 1; copying one must not link it to the other's existing layers (#3045).
-    // Remap each imported group once so links within the copied batch stay intact.
+    adapt_copies_with(copies, dest, s.color.settings.intent(), s.color.settings.bpc)?;
+    adopt_text_styles(copies, &dest.text_styles)
+}
+
+/// [`adapt_copies`] with Color Settings' intent and black point compensation passed in, so it
+/// can run on a worker, and without the text styles: a copy made as a job adopts those as it
+/// lands, against the destination's styles as they are then.
+fn adapt_copies_with(copies: &mut Document, dest: &Document, intent: craft_cms::Intent, bpc: bool) -> Result<()> {
+    remap_link_groups(copies, dest)?;
+    let mut contents = HashMap::new();
+    let smart_ids: Vec<_> = copies.walk().into_iter().filter_map(|(_, _, l)| matches!(l.content, LayerContent::Smart(_)).then_some(l.id)).collect();
+    for id in smart_ids {
+        if let Some(l) = copies.layer_mut(id)
+            && let LayerContent::Smart(sm) = &mut l.content
+        {
+            sm.contents_id = *contents.entry(sm.contents_id).or_insert_with(SmartContentsId::fresh);
+        }
+    }
+    convert_copies(copies, dest, intent, bpc)
+}
+
+/// Give the copies' link groups IDs `dest` doesn't use. Link-group IDs are scoped to a document:
+/// two independently linked pairs can both use group 1, and copying one must not link it to the
+/// other's existing layers (#3045). Each imported group is remapped once, so links within the
+/// copied batch stay intact. A copy made as a job remaps again as it lands, against the
+/// destination as it is then: it may have linked layers of its own meanwhile.
+fn remap_link_groups(copies: &mut Document, dest: &Document) -> Result<()> {
     let mut used: HashSet<u64> = dest.walk().into_iter().filter_map(|(_, _, l)| l.link_group).collect();
     let mut next_group = dest.unused_link_group().ok_or_else(|| EngineError::Other("no free linked-layer group id".into()))?;
     let groups: Vec<_> = copies.walk().into_iter().filter_map(|(_, _, l)| l.link_group.map(|group| (l.id, group))).collect();
@@ -100,18 +124,15 @@ pub(crate) fn adapt_copies(s: &Session, copies: &mut Document, dest: &Document) 
             layer.link_group = remapped.get(&group).copied();
         }
     }
-    let mut contents = HashMap::new();
-    let smart_ids: Vec<_> = copies.walk().into_iter().filter_map(|(_, _, l)| matches!(l.content, LayerContent::Smart(_)).then_some(l.id)).collect();
-    for id in smart_ids {
-        if let Some(l) = copies.layer_mut(id)
-            && let LayerContent::Smart(sm) = &mut l.content
-        {
-            sm.contents_id = *contents.entry(sm.contents_id).or_insert_with(SmartContentsId::fresh);
-        }
-    }
+    Ok(())
+}
+
+/// The copies' pixels in `dest`'s colour profile and bit depth, type at its resolution, and their
+/// shapes made ready for it (the rest of [`adapt_copies_with`]).
+fn convert_copies(copies: &mut Document, dest: &Document, intent: craft_cms::Intent, bpc: bool) -> Result<()> {
     if (copies.mode, &copies.icc_profile) != (dest.mode, &dest.icc_profile) {
         let profile = crate::color_cmds::document_profile(dest);
-        crate::color_cmds::convert_document(copies, &profile, s.color.settings.intent(), s.color.settings.bpc)?;
+        crate::color_cmds::convert_document(copies, &profile, intent, bpc)?;
     }
     if copies.depth != dest.depth {
         crate::image_cmds::for_each_surface(&mut copies.layers, true, &mut |surf, _| {
@@ -123,7 +144,6 @@ pub(crate) fn adapt_copies(s: &Session, copies: &mut Document, dest: &Document) 
     // application (24 pt at 72 ppi becomes 5.76 pt at 300 ppi, with no transform). Left at the
     // source's, a copy re-laid out at the destination's resolution on its next edit (#9560).
     crate::canvas_geom::retarget_type_resolution(copies, dest.resolution_dpi);
-    adopt_text_styles(copies, &dest.text_styles)?;
     let new_canvas = copies.bounds() != dest.bounds();
     prepare_shapes(&mut copies.layers, dest, new_canvas);
     Ok(())
@@ -297,7 +317,6 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     prepare_shapes(&mut copies.layers, &sdoc, false);
     let bounds = copies.layers.iter().filter_map(crate::layer_multi_cmds::layer_bounds).fold(Rect::EMPTY, |a, b| a.union(&b));
     let content = if bounds.is_empty() { sdoc.bounds() } else { bounds };
-    adapt_copies(s, &mut copies, &ddoc)?;
     // Placement: centred on the destination's canvas, centred on a point, or offset from where
     // the layers are in the source (default: the same canvas position).
     let (dx, dy) = if p.get("center").and_then(Value::as_bool).unwrap_or(false) {
@@ -310,11 +329,66 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         point(p, "offset")?.map_or((0.0, 0.0), |o| (o[0], o[1]))
     };
     let (dx, dy) = (dx.round() as i32, dy.round() as i32);
-    translate_copies(&mut copies, &ddoc, dx, dy);
-    let patterns: Vec<_> = sdoc.patterns.iter().filter(|pat| !ddoc.patterns.iter().any(|d| d.id == pat.id)).cloned().collect();
+    let (intent, bpc) = (s.color.settings.intent(), s.color.settings.bpc);
+    let label = if ids.len() == 1 { "Duplicate Layer" } else { "Duplicate Layers" };
+    // Converting the copies to the destination's profile and depth and shifting them into place
+    // touch every pixel: a large layer took 0.7 s on the UI thread. As a job they are made on a
+    // worker (the source stays locked) and land as one history step in the destination.
+    let work_dest = ddoc.clone();
+    crate::jobs::run(
+        s,
+        label,
+        true,
+        move |ctx| {
+            ctx.progress(0.0, "Converting layers");
+            adapt_copies_with(&mut copies, &work_dest, intent, bpc)?;
+            ctx.check()?;
+            ctx.progress(0.5, "Placing layers");
+            translate_copies(&mut copies, &work_dest, dx, dy);
+            Ok(copies)
+        },
+        move |s, copies| land_copies(s, src, &sdoc, &ddoc, copies, typed, label, (dx, dy)),
+    )
+}
+
+/// The second half of [`copy_to_document`], once the copies are converted and placed: insert them
+/// in the destination as one history step and select them there.
+#[allow(clippy::too_many_arguments)]
+fn land_copies(
+    s: &mut Session,
+    src: usize,
+    sdoc: &Document,
+    ddoc: &Document,
+    mut copies: Document,
+    typed: Option<String>,
+    label: &str,
+    (dx, dy): (i32, i32),
+) -> Result<Value> {
+    // The documents may have moved in the tab list while the job ran: find them again by id.
+    let find = |s: &Session, id: photocraft_doc::DocId| s.documents().iter().position(|d| d.doc.id == id);
+    let src = find(s, sdoc.id).unwrap_or(src);
+    let dest = find(s, ddoc.id).ok_or_else(|| bad("the destination document was closed"))?;
+    let live = &s.documents()[dest].doc;
+    // The copies were converted for the destination as the job began: they no longer fit it if
+    // its mode, bit depth or profile changed meanwhile.
+    if (live.mode, live.depth, &live.icc_profile) != (ddoc.mode, ddoc.depth, &ddoc.icc_profile) {
+        return Err(bad("the destination's mode, bit depth or colour profile changed while the layers were copied; copy them again"));
+    }
+    // Type takes the destination's resolution and styles as they are now: either may have
+    // changed while the job ran, and a style id taken from the job's snapshot could already be
+    // one the destination has added since.
+    crate::canvas_geom::retarget_type_resolution(&mut copies, live.resolution_dpi);
+    adopt_text_styles(&mut copies, &live.text_styles)?;
+    // Shape caches are clipped to the canvas they were rendered for: a canvas resized meanwhile
+    // gets them rendered again for its size, or a shape beyond the old edge would stay hidden.
+    if live.bounds() != ddoc.bounds() {
+        prepare_shapes(&mut copies.layers, live, true);
+    }
+    // Link groups the destination took meanwhile stay its own.
+    remap_link_groups(&mut copies, live)?;
+    let patterns: Vec<_> = sdoc.patterns.iter().filter(|pat| !live.patterns.iter().any(|d| d.id == pat.id)).cloned().collect();
     let styles = std::mem::take(&mut copies.text_styles);
     s.set_active(dest);
-    let label = if ids.len() == 1 { "Duplicate Layer" } else { "Duplicate Layers" };
     let edited = s.edit(label, |doc, active| {
         doc.patterns.extend(patterns);
         land_text_styles(doc, styles);

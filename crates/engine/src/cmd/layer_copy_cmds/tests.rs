@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, LayerContent, LayerId, Pattern};
 use photocraft_geom::Rect;
@@ -709,4 +711,147 @@ fn type_duplicated_to_a_new_document_keeps_the_sources_basic_paragraph() {
     s.execute("type.paragraphStyle.clearOverride", json!({"layer": id.0})).unwrap();
     s.execute("type.characterStyle.clearOverride", json!({"layer": id.0})).unwrap();
     assert!(close(text(&s, i, id).runs[0].style.size_pt, 30.0), "{}", text(&s, i, id).runs[0].style.size_pt);
+}
+
+/// A copy started as a job lands the same layers, placement, pixels and history as one run inline.
+#[test]
+fn a_started_copy_runs_as_a_job_and_lands_like_the_inline_one() {
+    let (mut inline, _) = two_docs(40, 30, 16);
+    let want = inline.execute("layer.copyToDocument", json!({"document": 1})).unwrap();
+    let (mut s, _) = two_docs(40, 30, 16);
+    let id = match s.start("layer.copyToDocument", json!({"document": 1})).unwrap() {
+        crate::jobs::Started::Job(id) => id,
+        crate::jobs::Started::Done(v) => panic!("expected a background job, ran inline: {v}"),
+    };
+    let t = std::time::Instant::now();
+    let event = loop {
+        if let Some(e) = s.poll_jobs().into_iter().find(|e| e.id == id) {
+            break e;
+        }
+        assert!(t.elapsed() < std::time::Duration::from_secs(60), "the copy job did not finish");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    };
+    assert!(matches!(event.outcome, crate::jobs::JobOutcome::Done(_)), "{:?}", event.outcome);
+    assert_eq!(s.active_index(), Some(1), "the destination becomes the active document");
+    let (got, expected) = (doc(&s, 1), doc(&inline, 1));
+    assert_eq!(got.layers.len(), expected.layers.len());
+    let id = got.layers[1].id;
+    assert_eq!(got.layers[1].name, "paint");
+    assert_eq!(bounds(&s, 1, id), bounds(&inline, 1, copied(&want)), "placed as the inline copy is");
+    let r = Rect::new(0, 0, 60, 50);
+    assert_eq!(got.layers[1].surface().unwrap().read_region(r), expected.layers[1].surface().unwrap().read_region(r), "converted as the inline copy is");
+    assert_eq!(s.active().unwrap().history.past_len(), inline.active().unwrap().history.past_len(), "one history step, as inline");
+}
+
+/// A copy converted for the destination as it was when the job began doesn't land after the
+/// destination's mode changed meanwhile: it fails and leaves the destination as it is.
+#[test]
+fn a_copy_job_does_not_land_in_a_destination_whose_mode_changed_meanwhile() {
+    let (mut s, _) = two_docs(40, 30, 8);
+    let id = match s.start("layer.copyToDocument", json!({"document": 1})).unwrap() {
+        crate::jobs::Started::Job(id) => id,
+        crate::jobs::Started::Done(v) => panic!("expected a background job, ran inline: {v}"),
+    };
+    // The destination is only read by the job: it can still be edited while the copy runs.
+    s.set_active(1);
+    s.execute("image.mode.grayscale", json!({})).unwrap();
+    let layers = doc(&s, 1).layers.len();
+    let t = std::time::Instant::now();
+    let event = loop {
+        if let Some(e) = s.poll_jobs().into_iter().find(|e| e.id == id) {
+            break e;
+        }
+        assert!(t.elapsed() < std::time::Duration::from_secs(60), "the copy job did not finish");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    };
+    let crate::jobs::JobOutcome::Failed(why) = &event.outcome else { panic!("the copy landed: {:?}", event.outcome) };
+    assert!(why.contains("changed while the layers were copied"), "{why}");
+    assert_eq!(doc(&s, 1).layers.len(), layers, "nothing landed in the destination");
+}
+
+/// Starts `layer.copyToDocument` to document 1 as a job, runs `meanwhile` while it is running and
+/// returns once it has landed.
+fn copy_as_job_while(s: &mut Session, meanwhile: impl FnOnce(&mut Session)) -> crate::jobs::JobEvent {
+    let id = match s.start("layer.copyToDocument", json!({"document": 1})).unwrap() {
+        crate::jobs::Started::Job(id) => id,
+        crate::jobs::Started::Done(v) => panic!("expected a background job, ran inline: {v}"),
+    };
+    meanwhile(s);
+    let t = std::time::Instant::now();
+    loop {
+        if let Some(e) = s.poll_jobs().into_iter().find(|e| e.id == id) {
+            return e;
+        }
+        assert!(t.elapsed() < std::time::Duration::from_secs(60), "the copy job did not finish");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+/// Styles the destination adds while a copy job runs take the ids the job's snapshot had free:
+/// the copy's styles are given ids as it lands, so every id stays unique and the copied type
+/// points at its own style.
+#[test]
+fn a_copy_job_gives_its_styles_ids_the_destination_has_free_as_it_lands() {
+    let (mut s, _) = styled_type_docs(|_| {});
+    let event = copy_as_job_while(&mut s, |s| {
+        s.set_active(1);
+        s.execute("type.characterStyle.new", json!({"name": "Added meanwhile", "fromSelection": false})).unwrap();
+        s.execute("type.paragraphStyle.new", json!({"name": "Added meanwhile", "fromSelection": false})).unwrap();
+    });
+    assert!(matches!(event.outcome, crate::jobs::JobOutcome::Done(_)), "{:?}", event.outcome);
+    let d = doc(&s, 1);
+    let chars: Vec<_> = d.text_styles.character.iter().map(|c| c.id).collect();
+    let paras: Vec<_> = d.text_styles.paragraph.iter().map(|p| p.id).collect();
+    assert_eq!(chars.iter().collect::<BTreeSet<_>>().len(), chars.len(), "character style ids repeat: {chars:?}");
+    assert_eq!(paras.iter().collect::<BTreeSet<_>>().len(), paras.len(), "paragraph style ids repeat: {paras:?}");
+    let id = d.layers.last().unwrap().id;
+    let t = text(&s, 1, id);
+    let char_name = t.runs[0].style.style_sheet.and_then(|i| d.text_styles.char_style(i)).map(|c| c.name.clone());
+    let para_name = t.paragraphs[0].style.style_sheet.and_then(|i| d.text_styles.para_style(i)).map(|p| p.name.clone());
+    assert_eq!(char_name.as_deref(), Some("Character Style 1"));
+    assert_eq!(para_name.as_deref(), Some("Paragraph Style 1"));
+}
+
+/// Type copied as a job takes the destination's resolution as it is when the copy lands, not as
+/// it was when the job began: 24 pt from 72 ppi is 11.52 pt in a destination changed to 150 ppi.
+#[test]
+fn a_copy_job_takes_the_destinations_resolution_as_it_lands() {
+    let (mut s, t) = type_docs(72, 300);
+    let event = copy_as_job_while(&mut s, |s| {
+        s.set_active(1);
+        s.edit("Resolution", |doc, _| {
+            doc.resolution_dpi = 150.0;
+            Ok(())
+        })
+        .unwrap();
+    });
+    assert!(matches!(event.outcome, crate::jobs::JobOutcome::Done(_)), "{:?}", event.outcome);
+    let id = doc(&s, 1).layers.last().unwrap().id;
+    assert!(close(text(&s, 1, id).size_pt, 11.52), "{} pt", text(&s, 1, id).size_pt);
+    assert!(close(text(&s, 1, id).runs[0].style.size_pt, 11.52), "run {} pt", text(&s, 1, id).runs[0].style.size_pt);
+    assert_eq!(ink(&s, 1, id).0, ink(&s, 0, t).0, "the copy keeps its pixels");
+}
+
+/// A copy job's shapes are rendered for the destination as it is when they land: a shape beyond
+/// the edge of a 60-pixel canvas that grew to 120 pixels meanwhile shows, rather than staying
+/// clipped away until it is edited.
+#[test]
+fn a_copy_job_renders_its_shapes_for_the_destination_as_it_lands() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 120, "height": 50})).unwrap();
+    s.execute("shape.create", json!({"kind": "rect", "rect": [70, 10, 20, 20], "fill": "#ff0000"})).unwrap();
+    s.execute("file.new", json!({"width": 60, "height": 50})).unwrap();
+    s.set_active(0);
+    let event = copy_as_job_while(&mut s, |s| {
+        s.set_active(1);
+        s.edit("Canvas Size", |doc, _| {
+            doc.size = photocraft_geom::Size::new(120, 50);
+            Ok(())
+        })
+        .unwrap();
+    });
+    assert!(matches!(event.outcome, crate::jobs::JobOutcome::Done(_)), "{:?}", event.outcome);
+    let LayerContent::Shape(sh) = &doc(&s, 1).layers.last().unwrap().content else { panic!("the copy is a shape") };
+    let painted = photocraft_compose::bounds::content_bounds(sh.cache.as_ref().expect("a rendered shape"));
+    assert!(!painted.is_empty() && painted.x0 >= 70 && painted.x1 <= 90, "the shape shows where it is: {painted:?}");
 }
