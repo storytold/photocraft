@@ -838,18 +838,28 @@ fn windowed_tool_feather_matches_full_canvas() {
                         (r.x1 as f32 - 0.25, r.y1 as f32 + 0.125),
                         (r.x0 as f32, r.y1 as f32),
                     ];
-                    let input = if tool == "lasso" {
-                        sel::polygon(&pts, area, aa)
+                    let mask = if tool == "ellipse" {
+                        // An ellipse keeps its shape past the canvas (one canvas size past each
+                        // edge), so it is feathered whole and then read on the canvas.
+                        let (w, h) = (area.width() as i32, area.height() as i32);
+                        let reach = Rect::new(area.x0 - w, area.y0 - h, area.x1 + w, area.y1 + h);
+                        let shape = sel::ellipse_surface(r, reach, aa);
+                        let whole = sel::feather(&sel::mask_from_surface(Some(&shape), reach), reach.width() as usize, reach.height() as usize, radius);
+                        let stride = reach.width() as usize;
+                        (area.y0..area.y1)
+                            .flat_map(|y| (area.x0..area.x1).map(move |x| ((y - reach.y0) as usize, (x - reach.x0) as usize)))
+                            .map(|(row, col)| whole[row * stride + col])
+                            .collect()
                     } else {
-                        let mut shape = Surface::new(photocraft_color::PixelFormat::GRAY8);
-                        if tool == "ellipse" {
-                            shape = sel::ellipse_surface(r, area, aa);
+                        let input = if tool == "lasso" {
+                            sel::polygon(&pts, area, aa)
                         } else {
+                            let mut shape = Surface::new(photocraft_color::PixelFormat::GRAY8);
                             shape.fill_rect(r.intersect(&area), &[1.0]);
-                        }
-                        sel::mask_from_surface(Some(&shape), area)
+                            sel::mask_from_surface(Some(&shape), area)
+                        };
+                        sel::feather(&input, area.width() as usize, area.height() as usize, radius)
                     };
-                    let mask = sel::feather(&input, area.width() as usize, area.height() as usize, radius);
                     for m in ["replace", "add", "subtract", "intersect"] {
                         for has_old in [false, true] {
                             let mut s = Session::new();
