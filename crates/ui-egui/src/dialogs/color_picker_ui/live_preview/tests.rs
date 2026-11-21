@@ -133,6 +133,55 @@ fn ok_keeps_the_colour_and_the_dialog_makes_one_history_step() {
     assert!((0..3).all(|i| (c[i] - want[i]).abs() < 1.5 / 255.0), "{c:?}");
 }
 
+/// The picker's previews leave the Fill dialog's own Undo alone until OK.
+#[test]
+fn fill_undo_ignores_cancelled_previews_and_reverts_one_accepted_colour() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1100.0, 760.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 16, "height": 12})).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.state_mut().run("select.all", json!({})).unwrap();
+    let original = h.state().session.active().unwrap().doc.clone();
+    let steps = past(h.state());
+    assert!(steps > 0, "the underlying document has an edit to undo");
+    let FillPicker { fill, picker, key } = fill_with_picker(h.state_mut());
+    h.run_steps(4);
+    let before = values(h.state(), fill);
+    let undo = |h: &mut egui_kittest::Harness<'_, Box<PhotocraftApp>>| {
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+        h.run_steps(4);
+    };
+
+    for color in ["#336699", "#ff0000"] {
+        pick(h.state_mut(), picker, color);
+        h.run_steps(2);
+        assert_eq!(previewed(h.state(), fill, &key).as_deref(), Some(color), "the open Fill previews {color}");
+    }
+    crate::dialogs::testing::cancel(h.state_mut(), picker).unwrap();
+    h.run_steps(3);
+    undo(&mut h);
+    assert_eq!(values(h.state(), fill), before, "Cancel leaves no Fill history step to undo");
+    assert_eq!(past(h.state()), steps, "Undo does not reach the document");
+
+    let request = ColorRequest::new(key.as_str(), craft::theme::Srgba::from_rgb_array([32.0 / 255.0, 160.0 / 255.0, 64.0 / 255.0]));
+    let picker = open_for_request(h.state_mut(), fill, request);
+    for color in ["#ff0000", "#336699"] {
+        pick(h.state_mut(), picker, color);
+        h.run_steps(2);
+        assert_eq!(previewed(h.state(), fill, &key).as_deref(), Some(color), "the open Fill previews {color}");
+    }
+    crate::dialogs::testing::confirm(h.state_mut(), picker).unwrap();
+    h.run_steps(4);
+    assert_eq!(held_color(h.state(), fill, &key).as_deref(), Some("#336699"), "the picker has answered the Fill row");
+    undo(&mut h);
+    assert_eq!(values(h.state(), fill), before, "one Undo takes the row straight back to the opening colour");
+    assert_eq!(past(h.state()), steps, "dialog Undo never steps document history");
+    assert_eq!(h.state().session.active().unwrap().doc, original, "the document is unchanged");
+}
+
 /// Back on the colour it opened on, the row shows the value it held; a picker that never changes leaves the parent
 /// alone.
 #[test]
