@@ -338,6 +338,10 @@ fn live_background_eraser_matches_the_commit() {
             let opts = |pts: &[[f64; 2]]| json!({"points": pts, "size": 14, "hardness": 0.6, "sampling": sampling, "limits": "discontiguous", "tolerance": 30, "seed": 7});
             let (doc, h) = (s.active().unwrap().doc.clone(), history_len(&s));
             let mut live = live_background_eraser(&s, &opts(&all[..1])).unwrap();
+            let shown = live.doc.clone();
+            let err = live.push(&[photocraft_paint::StrokePoint::new(900000.0, 900000.0, 1.0)]).unwrap_err();
+            assert!(err.to_string().contains("stroke too large"));
+            assert!(std::sync::Arc::ptr_eq(&shown, &live.doc), "a rejected push leaves the preview untouched");
             for q in &all[1..] {
                 live.push(&[photocraft_paint::StrokePoint::new(q[0], q[1], 1.0)]).unwrap();
             }
