@@ -16,8 +16,9 @@
 //! directory ([`SETS_DIR`], [`folder`]), the set name being the file name without the extension.
 //! [`to_mnu`] and [`from_mnu`] write and read that layout - UTF-8 XML, one `<command>` element per
 //! changed item, the measured numeric ids ([`REF_ITEMS`]) and colour numbers (0 to 7) - and keep
-//! every entry they could not name ([`Mnu::kept`]). A malformed file is an error: bad XML, a colour
-//! number outside the measured list, or a file over [`MAX_MNU_BYTES`]. The preferences stay the
+//! every entry they could not name ([`Mnu::kept`]), a row coloured 8 to 11 among them
+//! ([`UNNAMED_COLORS`]). A malformed file is an error: bad XML, a colour number outside 0 to 11, or
+//! a file over [`MAX_MNU_BYTES`]. The preferences stay the
 //! store of what the menus in use are; the files are where the named sets live (#14450).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -281,6 +282,36 @@ pub fn color_name(number: u32) -> Option<&'static str> {
     usize::try_from(number).ok().and_then(|at| COLORS.get(at)).copied()
 }
 
+/// The colour numbers the reference application writes that PhotoCraft has no name for yet:
+/// Seafoam 8, Indigo 9, Magenta 10 and Fuchsia 11 (measured, #14450). They come with the
+/// twelve-entry colour list of #14336; until then a row using one is kept as it was read
+/// ([`Mnu::kept`]) instead of making the whole file fail (#15978).
+pub const UNNAMED_COLORS: std::ops::RangeInclusive<u32> = 8..=11;
+
+/// The command of a static row of ours whose colour is one of [`UNNAMED_COLORS`]. Such a row stays
+/// in [`Mnu::kept`] so its colour is written back unchanged, while its `hidden` still hides the item;
+/// [`to_mnu`] then writes that row in place of one of its own, with `hidden` as the set has it.
+fn unnamed_color_row(element: &craft_xml::El) -> Option<&'static str> {
+    if element.local() != "command" || element.attr("kind") != Some("static") {
+        return None;
+    }
+    element.attr("color")?.parse::<u32>().ok().filter(|c| UNNAMED_COLORS.contains(c))?;
+    element.attr("id")?.parse::<u32>().ok().and_then(ref_command)
+}
+
+/// The reader options of a set file, shared by [`from_mnu`] and the re-read of a kept row.
+fn mnu_options() -> craft_xml::Options<'static> {
+    craft_xml::Options { doctype: craft_xml::Doctype::Reject, comments: true, pis: true, cdata: true, ..craft_xml::Options::default() }
+        .with_limits(craft_xml::Limits { max_input: MAX_MNU_BYTES, max_depth: 8, ..craft_xml::Limits::DEFAULT })
+}
+
+/// A kept entry that is an [`unnamed_color_row`]: its element and its command.
+fn kept_unnamed_color_row(entry: &str) -> Option<(craft_xml::El, &'static str)> {
+    let element = mnu_options().parse(entry.as_bytes()).ok()?;
+    let command = unnamed_color_row(&element)?;
+    Some((element, command))
+}
+
 /// What a `.mnu` file holds: the set the rows we know describe, and the entries we cannot name — a
 /// row with a number of theirs, a `<command>` that is not a static one, any other element, and a
 /// comment, processing instruction or section standing between the rows. A rewrite writes those back
@@ -312,8 +343,9 @@ fn node_xml(node: &craft_xml::Node) -> Option<String> {
 
 /// Read the `.mnu` text of a set: the measured layout of #14450, and nothing else. Bad XML, a root
 /// that is not a menu set's, a version other than the measured one, a `hidden` that is not 0 or 1 and
-/// a colour number outside [`color_name`]'s list are all errors, never a crash; so is text longer
-/// than [`MAX_MNU_BYTES`].
+/// a colour number outside 0 to 11 are all errors, never a crash; so is text longer than
+/// [`MAX_MNU_BYTES`]. A row of ours coloured 8 to 11 ([`UNNAMED_COLORS`]) hides its item as it says
+/// and is kept as it was read.
 pub fn from_mnu(text: &str) -> Result<Mnu, String> {
     // The reference application's own writer puts a byte-order mark before the declaration.
     let body = text.strip_prefix('\u{feff}').unwrap_or(text);
@@ -327,9 +359,7 @@ pub fn from_mnu(text: &str) -> Result<Mnu, String> {
     // declarations that give a prefix its meaning, comments, processing instructions and CDATA
     // sections. What it cannot keep - a reference name it does not know, and the declarations of a
     // foreign root we do not write - is named in the tests, not claimed.
-    let options = craft_xml::Options { doctype: craft_xml::Doctype::Reject, comments: true, pis: true, cdata: true, ..craft_xml::Options::default() }
-        .with_limits(craft_xml::Limits { max_input: MAX_MNU_BYTES, max_depth: 8, ..craft_xml::Limits::DEFAULT });
-    let root = options.parse(body.as_bytes()).map_err(|e| format!("menu set file: {e}"))?;
+    let root = mnu_options().parse(body.as_bytes()).map_err(|e| format!("menu set file: {e}"))?;
     if !root.local().ends_with(ROOT_SUFFIX) {
         return Err(format!("not a menu set file: its root element is <{}>", root.local()));
     }
@@ -362,12 +392,26 @@ pub fn from_mnu(text: &str) -> Result<Mnu, String> {
             "1" => true,
             other => return Err(format!("menu set file: hidden=\"{other}\" is not 0 or 1")),
         };
+        // A colour we have no name for yet (8 to 11): the row is kept as it was, so its colour is
+        // written back unchanged, and its `hidden` still hides our item (#15978).
+        if let Some(command) = unnamed_color_row(element) {
+            if hidden {
+                out.set.hidden.push(command.to_owned());
+            }
+            out.kept.push(element.to_xml());
+            continue;
+        }
         let color = match element.attr("color").unwrap_or("0") {
             "0" => None,
-            other => Some(
-                color_name(other.parse::<u32>().map_err(|_| format!("menu set file: colour \"{other}\" is not a number"))?)
-                    .ok_or_else(|| format!("menu set file: unknown colour number \"{other}\""))?,
-            ),
+            other => {
+                let number = other.parse::<u32>().map_err(|_| format!("menu set file: colour \"{other}\" is not a number"))?;
+                // Here 8 to 11 can only be on a row whose number is not ours, which is kept below.
+                if UNNAMED_COLORS.contains(&number) {
+                    None
+                } else {
+                    Some(color_name(number).ok_or_else(|| format!("menu set file: unknown colour number \"{other}\""))?)
+                }
+            }
         };
         match number.and_then(ref_command) {
             None => out.kept.push(element.to_xml()),
@@ -395,10 +439,31 @@ pub fn to_mnu(name: &str, set: &MenuSet, kept: &[String]) -> String {
     let key = craft_xml::esc_attr(&format!("{FILE_KEY}/{name}={name}"));
     let mut out = String::from(craft_xml::DECL);
     out.push_str(&format!("<{root} version=\"{FILE_VERSION}\" filename=\"{key}\" modified=\"0\">\n"));
+    // The kept rows of our items whose colour we cannot name yet (#15978), by their index in `kept`.
+    let unnamed: Vec<(usize, craft_xml::El, &str)> =
+        kept.iter().enumerate().filter_map(|(at, entry)| kept_unnamed_color_row(entry).map(|(element, command)| (at, element, command))).collect();
     for item in REF_ITEMS {
         let hidden = set.hidden.iter().any(|id| id == item.command);
         // `none` is 0, and 0 is "no colour", so a `none` entry writes no colour of its own.
         let color = set.colors.get(item.command).and_then(|c| color_number(c)).unwrap_or(0);
+        // A kept row with a colour we cannot name stands for this item: it is written in place of
+        // ours with its colour unchanged and `hidden` as the set has it, so the item has one row.
+        // A colour the set gives the item that we can name replaces it.
+        if color == 0
+            && let Some((at, element, _)) = unnamed.iter().find(|(_, _, command)| *command == item.command)
+        {
+            let row = if (element.attr("hidden") == Some("1")) == hidden {
+                kept.get(*at).cloned().unwrap_or_else(|| element.to_xml())
+            } else {
+                let mut element = element.clone();
+                element.set_attr("hidden", u8::from(hidden));
+                element.to_xml()
+            };
+            out.push_str("  ");
+            out.push_str(&row);
+            out.push('\n');
+            continue;
+        }
         if !hidden && color == 0 {
             continue;
         }
@@ -410,7 +475,11 @@ pub fn to_mnu(name: &str, set: &MenuSet, kept: &[String]) -> String {
             u8::from(hidden),
         ));
     }
-    for entry in kept {
+    for (at, entry) in kept.iter().enumerate() {
+        // Written above, in the place of the item it stands for, or replaced by the set's own row.
+        if unnamed.iter().any(|(row, _, _)| *row == at) {
+            continue;
+        }
         out.push_str("  ");
         out.push_str(entry);
         out.push('\n');

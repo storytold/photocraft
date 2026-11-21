@@ -472,8 +472,9 @@ fn xml_that_is_not_a_set_is_an_error_and_not_a_crash() {
 
 #[test]
 fn an_unknown_colour_number_is_an_error_and_not_a_crash() {
-    // The issue's second malformed case: the reference's number, or anything that is not one.
-    for color in ["8", "9", "11", "12", "-1", "seven", ""] {
+    // The issue's second malformed case: a number outside the reference's 0 to 11, or anything that
+    // is not a number. 8 to 11 are the reference's own colours and read (#15978).
+    for color in ["12", "99", "4294967296", "-1", "seven", ""] {
         let text = mnu(&format!("  <command kind=\"static\" id=\"10\" parentMenuID=\"2\" menuType=\"0\" hidden=\"1\" color=\"{color}\"/>\n"));
         assert!(from_mnu(&text).is_err(), "colour `{color}` read as a set");
     }
@@ -772,4 +773,62 @@ fn a_case_insensitive_folder_cannot_hold_two_spellings_of_one_set_name() {
     let (files, errors) = read_sets(&dir);
     assert_eq!(files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["x"], "one set");
     assert!(errors.is_empty(), "{errors:?}");
+}
+
+// ---- colour numbers 8 to 11: the reference's colours we have no name for yet (#15978) ----
+
+#[test]
+fn a_row_coloured_8_to_11_loads_and_is_written_back_unchanged() {
+    // Seafoam 8, Indigo 9, Magenta 10, Fuchsia 11: the file loads instead of failing, the row hides
+    // its item as it says, and a rewrite holds the row exactly as it was read.
+    for color in menu_sets::UNNAMED_COLORS {
+        let hidden = row(10, 2, 0, 1, color);
+        let shown = row(1154, 3, 0, 0, color);
+        let read = from_mnu(&mnu(&format!("{hidden}{shown}"))).unwrap_or_else(|e| panic!("colour {color} reads: {e}"));
+        assert_eq!(hidden_of(&read.set), vec!["file.new".to_string()], "colour {color}: the hidden row still hides File › New");
+        assert!(read.set.colors.is_empty(), "colour {color} has no name of ours yet: {:?}", read.set.colors);
+        assert_eq!(read.kept, vec![hidden.trim().to_string(), shown.trim().to_string()], "colour {color}: both rows kept as read");
+        let written = to_mnu("Mine", &read.set, &read.kept);
+        assert!(written.contains(&hidden) && written.contains(&shown), "colour {color}: both rows unchanged: {written}");
+        assert_eq!(written.matches("<command").count(), 2, "colour {color}: one row per item, no second row of ours: {written}");
+        assert_eq!(from_mnu(&written).expect("the rewrite reads back"), read, "colour {color}: reading and writing is stable");
+    }
+}
+
+#[test]
+fn a_kept_8_to_11_row_follows_the_set_s_hidden_and_yields_to_a_colour_we_name() {
+    // Hiding the item in PhotoCraft rewrites that row's `hidden` and keeps its colour; showing it
+    // again does the same back; a colour we can name replaces the row with one of ours.
+    let read = from_mnu(&mnu(&row(10, 2, 0, 0, 9))).expect("an Indigo row reads");
+    let hide = to_mnu("Mine", &set(&["file.new"], &[]), &read.kept);
+    assert!(hide.contains(&row(10, 2, 0, 1, 9)), "hidden now, still Indigo: {hide}");
+    assert_eq!(hide.matches("id=\"10\"").count(), 1, "one row for File › New: {hide}");
+    let read = from_mnu(&hide).expect("the rewrite reads");
+    let show = to_mnu("Mine", &set(&[], &[]), &read.kept);
+    assert!(show.contains(&row(10, 2, 0, 0, 9)), "shown again, still Indigo: {show}");
+    let red = to_mnu("Mine", &set(&[], &[("file.new", "red")]), &read.kept);
+    assert!(red.contains(&row(10, 2, 0, 0, 1)), "the set's red: {red}");
+    assert_eq!(red.matches("id=\"10\"").count(), 1, "the Indigo row gave way to the set's own: {red}");
+}
+
+#[test]
+fn colour_12_is_an_error_and_an_8_to_11_row_we_do_not_number_is_kept() {
+    // Only a number outside 0 to 11 makes the file an error, never a crash.
+    assert!(from_mnu(&mnu(&row(10, 2, 0, 1, 12))).is_err(), "colour 12 is not the reference's");
+    assert!(from_mnu(&mnu(&row(1520, 2, 0, 1, 12))).is_err(), "not on a row we do not number either");
+    // A row of a number we have no command for, coloured Magenta, is kept like any other such row.
+    let read = from_mnu(&mnu(&row(1520, 2, 0, 1, 10))).expect("a Magenta row of theirs reads");
+    assert_eq!(read.kept, vec![row(1520, 2, 0, 1, 10).trim().to_string()]);
+    assert!(read.set.hidden.is_empty() && read.set.colors.is_empty(), "{read:?}");
+}
+
+#[test]
+fn saving_over_a_file_with_an_8_to_11_row_keeps_its_colour() {
+    // The row's Save rewrites the file; the Fuchsia row stays one row and keeps its colour.
+    let (_tmp, dir) = folder_with(&[("Mine.MNU", &mnu(&row(1154, 3, 0, 0, 11)))]);
+    write_set(&dir, "Mine", &set(&["edit.fade", "file.new"], &[])).expect("the file was written");
+    let text = std::fs::read_to_string(dir.join("Mine.MNU")).expect("the set's file");
+    assert!(text.contains(&row(10, 2, 0, 1, 0)), "the new hidden row: {text}");
+    assert!(text.contains(&row(1154, 3, 0, 1, 11)), "Fade hidden, still Fuchsia: {text}");
+    assert_eq!(text.matches("<command").count(), 2, "{text}");
 }
