@@ -353,7 +353,6 @@ sha256-verified. Fetch them with `cargo xtask corpus --all` and run the tests wi
 |---|---|---|
 | x64 (64-bit Intel/AMD) | `photocraft-<ver>-windows-x64.msi` | `photocraft-<ver>-windows-x64-portable.zip` |
 | arm64 (Snapdragon and other ARM PCs) | `photocraft-<ver>-windows-arm64.msi` | `photocraft-<ver>-windows-arm64-portable.zip` |
-| x86 (32-bit) | `photocraft-<ver>-windows-x86.msi` | `photocraft-<ver>-windows-x86-portable.zip` |
 
 Installers and executables are code-signed.
 
