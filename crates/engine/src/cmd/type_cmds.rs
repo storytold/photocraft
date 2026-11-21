@@ -83,7 +83,7 @@ fn range_param(text: &str, p: &Value) -> (usize, usize) {
 /// Photoshop's manual kerning range (1/1000 em).
 pub const KERN_MIN: f64 = -1000.0;
 pub const KERN_MAX: f64 = 10_000.0;
-pub const TYPE_SIZE_MIN_PT: f64 = 0.1;
+pub const TYPE_SIZE_MIN_PT: f64 = 0.01;
 pub const TYPE_SIZE_MAX_PT: f64 = 1296.0;
 pub const TRACKING_MIN: f64 = -1000.0;
 pub const TRACKING_MAX: f64 = 10_000.0;
@@ -109,8 +109,11 @@ pub fn check_kerning(p: &Value) -> std::result::Result<(), String> {
 /// and the superscript/subscript `baseline`, so a typo is an error rather than a reset to Normal.
 pub fn check_size_tracking(p: &Value) -> std::result::Result<(), String> {
     if let Some(v) = p.get("size") {
+        // Sizes are stored as `f32`, and the controls send that `f32` widened to a number: 0.01 as an `f32` reads
+        // just below the 0.01 it was typed as. Validate in the `f32` domain the size is kept in, as the step
+        // keys' clamp already does.
         match v.as_f64() {
-            Some(size) if size.is_finite() && (TYPE_SIZE_MIN_PT..=TYPE_SIZE_MAX_PT).contains(&size) => {}
+            Some(size) if size.is_finite() && (TYPE_SIZE_MIN_PT as f32..=TYPE_SIZE_MAX_PT as f32).contains(&(size as f32)) => {}
             _ => return Err(format!("size must be between {TYPE_SIZE_MIN_PT} and {TYPE_SIZE_MAX_PT} pt")),
         }
     }
@@ -1004,7 +1007,7 @@ pub fn name_selection_commit(s: &mut Session) {
     }
 }
 
-const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.1..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","baseline":"normal|superscript|subscript","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str"##;
+const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.01..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","baseline":"normal|superscript|subscript","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str"##;
 
 /// The Type commands: create and edit type layers, set styles, fill paths, and the queries about them.
 pub fn specs() -> Vec<CommandSpec> {

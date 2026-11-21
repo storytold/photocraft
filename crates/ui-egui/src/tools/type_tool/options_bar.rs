@@ -28,6 +28,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(request) = out.requests.take_color() {
         values::pick_color(app, request.color.map(|c| [c.r, c.g, c.b]));
     }
+    // A size typed outside the field's range was kept as the nearest limit; the reference says so in a modal
+    // alert, once, closed by OK (#12053). The measured case is the bar showing points; the same field with its
+    // Type unit in pixels or millimetres keeps today's silent clamp (*not measured*).
+    if let Some(alert) = out.size_out_of_range.take()
+        && values::doc_unit(app).kind == craft::ui::runtime::env::UnitKind::Points
+    {
+        crate::tools::option_cells::range_alert(app, ui, &alert);
+    }
     let ctx = ui.ctx().clone();
     for (pressed, command) in [(out.warp, "type.warpText"), (out.panels, "window.panel.character")] {
         if pressed && let Err(e) = crate::menus::invoke(app, &ctx, command, json!({})) {
@@ -85,3 +93,7 @@ pub(super) fn kerning_at(app: &PhotocraftApp) -> Option<(photocraft_doc::text::K
 #[cfg(test)]
 #[path = "vertical_mask_align_buttons_tests.rs"]
 mod vertical_mask_align_buttons_tests;
+
+#[cfg(test)]
+#[path = "size_range_tests.rs"]
+mod size_range_tests;
