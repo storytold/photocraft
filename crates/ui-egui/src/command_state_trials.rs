@@ -167,7 +167,7 @@ fn merge_channels_follows_a_change_to_a_background_document() {
         let s = &mut h.state_mut().session;
         let Some(id) = s.documents().get(2).map(|st| st.doc.id) else { panic!("three documents are open") };
         let Some(st) = s.document_mut(id) else { panic!("the third document is open") };
-        st.doc.size = photocraft_geom::Size::new(side, side);
+        std::sync::Arc::make_mut(st.doc_mut()).size = photocraft_geom::Size::new(side, side);
     };
     resize(&mut h, 32);
     assert!(!merge(&mut h), "a background document of another size leaves two to merge");
