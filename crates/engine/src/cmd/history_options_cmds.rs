@@ -397,7 +397,13 @@ mod tests {
         // Non-linear Delete of a past state: the step after it now starts from the state before
         // it, so undoing that step also gives back the visibility the deleted step changed.
         s.execute("layerComp.apply", json!({"comp": "Hidden"})).unwrap();
-        s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+        // The step after the comp used to be a fill. The comp hides the layer, and Fill on a
+        // hidden layer is now refused with or without a selection (#10476), so a fill here would
+        // be a refusal rather than a step. What this part of the test needs is only *a* step after
+        // the comp, so Select All takes that part: it writes a history step without touching the
+        // hidden layer's pixels, which leaves the red fill above as the last pixel state the
+        // assertions below look for.
+        s.execute("select.all", json!({})).unwrap();
         let comp = entries(&s).len() - 2;
         s.execute("history.deleteState", json!({"state": comp})).unwrap();
         assert!(!visible(&s, id));
