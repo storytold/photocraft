@@ -39,5 +39,7 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "DomRect", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Storage", "Event", "EventTarget", "MouseEvent", "PointerEvent", "BeforeUnloadEvent", "AbortController", "AbortSignal", "DomException", "Response", "IdbFactory", "IdbOpenDbRequest", "IdbDatabase", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "IdbObjectStore", "IdbCursor", "IdbCursorWithValue", "RequestInit", "RequestMode", "Navigator", "ErrorEvent", "PromiseRejectionEvent"] }
 
 [dev-dependencies]
+# `command` tests run the real app headless.
+egui_kittest = { workspace = true, features = ["eframe"] }
 photocraft-paint = { workspace = true }
 craft-psd = { workspace = true }
