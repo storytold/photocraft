@@ -70,8 +70,7 @@ fn keeps_box_drag(id: &str) -> bool {
 
 /// Run a command id from any source (menu, shortcut, palette, automation).
 pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
-    // The regions that ran before it in this pass show its change in the next one.
-    app.commands_run += 1;
+    // The views that ran before it in this pass show its change in the next one.
     ctx.request_repaint();
     if app.automation_input
         && let Some(authorize) = app.services.automation_command.as_ref()
@@ -393,6 +392,9 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
 
 /// Dispatch UI actions and dialogs, falling back to the engine for other commands.
 pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    // File › Save and the unsaved-changes prompt's Save write from here without `run`: they must
+    // not write Apply Data Set's Preview either. The dialog shows it again on the next frame.
+    crate::panels::apply_data_set_ui::end_preview(app);
     if let Some(result) = crate::smart_svg_ui::intercept(app, id, &params) {
         return result;
     }
@@ -629,6 +631,7 @@ fn invoke_export_command(app: &mut PhotocraftApp, id: &str, params: &Value) -> R
                 // Several layers (artboards, say) selected: one file each (#3629).
                 let layers = app.session.active().map(|document| document.selected_layers()).unwrap_or_default();
                 if layers.len() > 1 {
+                    let layers = layers.to_vec();
                     Some(Ok(json!({"dialog": crate::export_dialog::open_layers(app, &layers)?.value()})))
                 } else {
                     Some(Ok(json!({"dialog": crate::export_dialog::open_layer(app, selected)?.value()})))

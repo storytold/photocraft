@@ -26,6 +26,8 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     // Thumbnail Contents is the clip preference alone, so the panel reads it each pass.
     app.ui.layers_settings.options.thumbnail_contents = crate::layers_panel_ui::thumbnail_contents(app);
+    // Taken out of the app for the pass; a move keeps its revision.
+    let held = app.layers_tree.take();
     let Some(st) = app.session.active() else {
         let _ = Notice::new(Tone::Neutral, tl!("No document")).layout(NoticeLayout::Centred).show(ui);
         return;
@@ -37,14 +39,14 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut filter = app.ui.layer_filter.clone();
     let before = filter.clone();
     let picked = crate::smart_ui::selected(&app.smart_filter_picks, &st.doc, st.active_layer);
-    let tree = PhotoLayers::new(app, st, &filter, foreign, picked);
+    let tree = PhotoLayers::new(app, st, &filter, foreign, picked).held(held);
     let thumbs = Thumbnails::<LayerThumb<LayerId>>::in_context(&ctx, "photocraft-layer-thumbs", ThumbnailOptions::new());
     let source = PhotoThumbs::new(app, &st.doc);
     let mut panel = LayersPanel::new(&tree)
         .settings(settings)
         .thumbnails(&thumbs, &source)
         .filter(Bind::bound(&mut filter))
-        .row_menu(|target| layers_tree::row_menu(&tree, target))
+        .row_menu(|target| layers_tree::row_menu(app, &tree, target))
         .document(st.doc.id);
     if let Some((id, groups)) = reveal {
         panel = panel.reveal(id, groups);
@@ -59,7 +61,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         panel = panel.start_rename(id);
     }
     let out = panel.show(ui);
-    drop(tree);
+    app.layers_tree = Some(tree);
     app.find_layers_focus = false;
     app.layers_rename = None;
     if filter != before {

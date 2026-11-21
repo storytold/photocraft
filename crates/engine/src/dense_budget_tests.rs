@@ -25,7 +25,7 @@ fn sparse_session() -> (Session, LayerId) {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
     let id = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
-    let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
     let surf = doc.layer_mut(id).unwrap().surface_mut().unwrap();
     *surf = distant_blocks(surf);
     (s, id)
@@ -41,7 +41,7 @@ fn refused(s: &mut Session, cmd: &str, p: serde_json::Value) {
 #[test]
 fn apply_layer_mask_over_distant_tiles_is_refused() {
     let (mut s, id) = sparse_session();
-    Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().mask = Some(LayerMask::reveal_all());
+    Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(id).unwrap().mask = Some(LayerMask::reveal_all());
     refused(&mut s, "layer.layerMask.apply", json!({"layer": id.0}));
 }
 
@@ -84,7 +84,7 @@ fn multichannel_counts_every_duotone_ink() {
     use photocraft_doc::{Duotone, DuotoneInk};
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 15_000, "height": 15_000, "background": "transparent"})).unwrap();
-    let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
     doc.mode = ColorMode::Duotone;
     doc.duotone = Some(Duotone { inks: (0..4).map(|i| DuotoneInk::new(format!("ink {i}"), [0.0; 3])).collect(), psd_raw: None });
     refused(&mut s, "image.mode.multichannel", json!({}));
