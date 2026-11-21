@@ -178,8 +178,9 @@ pub fn spawn_x11(feed: &StylusFeed, display: Option<DisplayKind>) {
         log::info!("tablet pressure: not available on this display server ({display:?})");
         return;
     }
-    if let Err(e) = photocraft_tablet::x11::spawn(None, sink(feed.clone())) {
-        log::warn!("{e}");
+    match photocraft_tablet::x11::spawn(None, sink(feed.clone())) {
+        Ok(_) => log::info!("tablet: XInput2 background reader started"),
+        Err(e) => log::warn!("{e}"),
     }
 }
 
@@ -208,7 +209,7 @@ impl DisplayKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use photocraft_tablet::{Update, appkit};
+    use photocraft_tablet::{Update, appkit, xi};
     use photocraft_ui_egui::PhotocraftApp;
     use photocraft_ui_egui::state::Tool;
     use serde_json::{Value, json};
@@ -313,6 +314,86 @@ mod tests {
             }
         });
         assert!(m_dark > 0.9 && m_w >= heavy_w - 1.0, "mouse = pressure 1: {m_dark}, {m_w}");
+    }
+
+    /// Replay #10460's reported values through the public mapper, real feed and brush consumer.
+    /// The master/slave ordering is a control, not an asserted recording of the reporter's app.
+    #[test]
+    fn intuos_pressure_reaches_brush_with_sparse_axes_and_master_events() {
+        use egui_kittest::Harness;
+
+        for master_first in [false, true] {
+            let mut state = xi::State::default();
+            state.set_devices([
+                xi::Device::new(19, "Wacom Intuos3 6x11 Pen stylus", [(2, "Abs Pressure".into(), 0.0, 65536.0)]),
+                xi::Device::new(12, "Mouse", [(0, "Rel X".into(), -1.0, -1.0)]),
+            ]);
+            // Drive the current primary canvas through window pointer input, not the removed
+            // direct ToolEvent dispatcher. The app and harness share the real input context.
+            let mut h = Harness::builder().with_size(egui::vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
+                PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+                PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default())
+            });
+            let app = h.state_mut();
+            app.session.execute("file.new", json!({"width": 120, "height": 80})).unwrap();
+            app.session.execute("layer.new.layer", json!({})).unwrap();
+            app.ui.tool = Tool::Brush;
+            app.sync_views();
+            let feed = app.stylus.feed.clone();
+            let send = sink(feed);
+            let dispatch = |update| {
+                if let Update::Set(sample) = update {
+                    send(sample);
+                }
+            };
+            h.run_steps(4);
+            {
+                let view = &mut h.state_mut().ui.views[0];
+                view.zoom = 1.0;
+                view.center = [60.0, 40.0];
+                view.clear_pending();
+            }
+            h.run_steps(2);
+            let at = |h: &Harness<'_, Box<PhotocraftApp>>, x: f64| h.state().last_canvas_rect.center() + egui::vec2((x - 60.0) as f32, -20.0);
+            let raw = [53107.0, 50289.0, 17296.0];
+            for (index, value) in raw.into_iter().enumerate() {
+                if master_first {
+                    dispatch(state.handle(2, [(2, value)]));
+                }
+                dispatch(state.handle(19, xi::valuators(&[1 << 2], &[value])));
+                if !master_first {
+                    dispatch(state.handle(2, [(2, value)]));
+                }
+                dispatch(state.handle(19, [(0, 10.0)]));
+                dispatch(state.handle(99, [(2, value)]));
+                let pressure = h.state().stylus.pressure();
+                assert!((f64::from(pressure) - value / 65536.0).abs() < 1e-6);
+                let x = 10.0 + index as f64 * 40.0;
+                let pos = at(&h, x);
+                h.event(egui::Event::PointerMoved(pos));
+                h.run_steps(1);
+                if index == 0 {
+                    h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+                    h.run_steps(1);
+                }
+            }
+            dispatch(state.handle(19, [(2, 0.0)]));
+            dispatch(state.handle(19, []));
+            assert_eq!(h.state().stylus.pressure(), 0.0, "a lift is not mouse pressure");
+            let pos = at(&h, 90.0);
+            h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+            h.run_steps(4);
+            let app = h.state_mut();
+            let (_, stroke) = app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").unwrap();
+            for (index, value) in raw.into_iter().enumerate() {
+                assert_eq!(stroke["points"][index][2], json!((value / 65536.0) as f32 as f64));
+            }
+            dispatch(state.handle(12, [(0, 1.0)]));
+            assert_eq!(app.stylus.pressure(), 1.0, "a genuine mouse remains full strength");
+            app.stylus.use_pressure = false;
+            dispatch(state.handle(19, [(2, 53107.0)]));
+            assert_eq!(app.stylus.pressure(), 1.0, "the preference still disables pressure");
+        }
     }
 
     /// `/proc/bus/input/devices` of a laptop with a Wacom Intuos Pro attached (64-bit longs: the
