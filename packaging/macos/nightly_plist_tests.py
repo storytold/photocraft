@@ -27,7 +27,10 @@ class NightlyMetadata(unittest.TestCase):
     def test_nightly_transform_removes_associations_without_changing_stable_or_platform_metadata(self):
         stable = plistlib.loads(self.original)
         stable["CFBundleURLTypes"] = [{"CFBundleURLSchemes": ["generated-test-scheme"]}]
-        rendered = plistlib.loads(POLICY.render(plistlib.dumps(stable), VERSION, COMMIT))
+        prepared = plistlib.dumps(stable)
+        self.template.write_bytes(prepared)
+        POLICY.write_plist(self.template, self.output, VERSION, COMMIT)
+        rendered = plistlib.loads(self.output.read_bytes())
         for key in POLICY.ASSOCIATIONS:
             self.assertNotIn(key, rendered)
         self.assertNotEqual(rendered["CFBundleIdentifier"], stable["CFBundleIdentifier"])
@@ -38,7 +41,8 @@ class NightlyMetadata(unittest.TestCase):
         self.assertTrue(VERSION.startswith(rendered["CFBundleVersion"] + "-nightly."))
         for key in ("LSMinimumSystemVersion", "CFBundleLocalizations", "NSHighResolutionCapable", "NSHumanReadableCopyright"):
             self.assertEqual(rendered[key], stable[key])
-        self.assertEqual(self.template.read_bytes(), self.original)
+        self.assertEqual(self.template.read_bytes(), prepared)
+        self.assertEqual((HERE / "Info.plist.in").read_bytes(), self.original)
 
     def test_bad_identity_or_template_refuses_before_creating_output(self):
         for version, commit in (("0.23.1", COMMIT), (VERSION, "b" * 40), (VERSION, "not-a-commit"), (VERSION.replace("20261121", "20261399"), COMMIT)):
