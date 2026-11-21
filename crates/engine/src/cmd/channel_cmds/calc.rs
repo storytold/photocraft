@@ -1,4 +1,4 @@
-use super::manage::gray_document;
+use super::manage::multichannel_document;
 use super::planes::{channel_format, edit_mode, next_alpha_name, plane_surface, read_plane, tone};
 use super::refs::{Blending, bad, doc_index, mask_plane, source, source_spec};
 use super::targeting::{Target, is_channel_target, is_spot_target, target_of, target_surface};
@@ -165,9 +165,16 @@ pub(super) fn calculations(s: &mut Session, p: &Value) -> Result<Value> {
             Ok(json!({ "channel": i }))
         }
         "newDocument" => {
+            // As the reference application (#14515): a Multichannel "Untitled-N" holding the
+            // result as "Alpha 1", whose first history state is "Calculations".
             let like = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
-            let d = gray_document(name.as_deref().unwrap_or("Untitled"), &like, &out);
+            let name =
+                name.unwrap_or_else(|| crate::file_cmds::untitled_name("Untitled", |n| s.documents().iter().any(|d| d.doc.name == n) || s.held_open_named(n)));
+            let d = multichannel_document(&name, &like, &out);
             let i = s.add_document(d, None);
+            if let Some(st) = s.active_mut() {
+                st.history.set_current_label("Calculations");
+            }
             Ok(json!({ "document": i }))
         }
         "selection" => {

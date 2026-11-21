@@ -30,6 +30,9 @@ mod apply_image_lock_transparency_tests;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod calculations_new_document_tests;
+
 // ---------------------------------------------------------------------------------------------
 // Enabled predicates
 
