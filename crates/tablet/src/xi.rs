@@ -133,8 +133,14 @@ pub struct State {
 impl State {
     /// Replace the device list (after `XIQueryDevice`, on start and hierarchy changes).
     pub fn set_devices(&mut self, devices: impl IntoIterator<Item = Device>) {
-        self.devices = devices.into_iter().take(MAX_DEVICES).map(|d| (d.id, d)).collect();
-        self.last.retain(|id, _| self.devices.contains_key(id));
+        let devices: HashMap<_, _> = devices.into_iter().take(MAX_DEVICES).map(|d| (d.id, d)).collect();
+        // Cached values are already mapped: changed ranges or axes make them stale.
+        // XIQueryDevice may return the same classes in a different order.
+        self.last.retain(|id, _| match (self.devices.get(id), devices.get(id)) {
+            (Some(old), Some(new)) => old.eraser == new.eraser && old.axes.len() == new.axes.len() && old.axes.iter().all(|axis| new.axes.contains(axis)),
+            _ => false,
+        });
+        self.devices = devices;
     }
 
     pub fn device(&self, id: u16) -> Option<&Device> {
@@ -250,6 +256,35 @@ mod tests {
         // A mouse moving means mouse; a master or unknown id changes nothing.
         assert_eq!(st.handle(12, [(0, 3.0)]), Update::Set(None));
         assert_eq!(st.handle(2, [(2, 3.0)]), Update::Keep);
+    }
+
+    #[test]
+    fn refreshing_devices_resets_changed_mappings_only() {
+        let original = wacom(9, "Pen stylus");
+        let unchanged = wacom(10, "Pen eraser");
+        let removed = wacom(11, "Pen stylus");
+        let mut st = State::default();
+        st.set_devices([original.clone(), unchanged.clone(), removed.clone()]);
+        let _ = st.handle(9, [(2, 32767.5), (3, -30.0), (4, 45.0)]);
+        let cached = sample(st.handle(10, [(2, 49151.25), (3, 12.0), (5, 0.0)]));
+        let _ = st.handle(11, [(2, 65535.0)]);
+
+        let mut changed = original;
+        changed.axes.retain(|a| a.kind != AxisKind::TiltY);
+        changed.axes.iter_mut().find(|a| a.kind == AxisKind::Pressure).unwrap().max *= 2.0;
+        // XIQueryDevice does not promise a stable class order.
+        let mut reordered = unchanged.clone();
+        reordered.axes.reverse();
+        st.set_devices([changed.clone(), reordered]);
+
+        let fresh = sample(st.handle(9, []));
+        assert_eq!((fresh.pressure, fresh.tilt_x, fresh.tilt_y, fresh.rotation), (0.0, 0.0, 0.0, 0.0));
+        assert_eq!(sample(st.handle(9, [(2, 32767.5)])).pressure, 0.25);
+        assert_eq!(sample(st.handle(10, [])), cached, "unchanged mappings retain their sample");
+        assert_eq!(st.handle(11, []), Update::Keep);
+
+        st.set_devices([changed, unchanged, removed]);
+        assert_eq!(sample(st.handle(11, [])).pressure, 0.0, "removed devices lose their cached sample");
     }
 
     #[test]
