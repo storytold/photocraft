@@ -1,0 +1,188 @@
+//! #10723: File › Package, File › Import › Notes and Image › Apply Data Set steps as
+//! `docs/atn.md` ("Recorded with source files") measures them.
+
+use super::*;
+
+fn load(items: Vec<AtnItem>) -> (Session, Value) {
+    let file = AtnFile {
+        name: UnicodeString::new_nul("Menus"),
+        actions: vec![AtnAction { name: UnicodeString::new_nul("A"), items, ..Default::default() }],
+        ..Default::default()
+    };
+    let mut s = Session::new();
+    let r = s.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&atn::write(&file).unwrap())})).unwrap();
+    (s, r)
+}
+
+fn named(event: &str, label: &str, d: Descriptor) -> AtnItem {
+    AtnItem { event: AtnEvent::name(event), dictionary: label.as_bytes().to_vec(), descriptor: Some(d), ..Default::default() }
+}
+
+/// A step stored under a four-character code, the way a recorded file stores `Aply`.
+fn coded(code: &str, label: &str, d: Descriptor) -> AtnItem {
+    AtnItem { event: AtnEvent::Code(code.as_bytes().try_into().unwrap()), dictionary: label.as_bytes().to_vec(), descriptor: Some(d), ..Default::default() }
+}
+
+fn saved(s: &mut Session) -> Vec<AtnItem> {
+    let r = s.execute("actions.save", json!({"action": "A"})).unwrap();
+    assert_eq!(r["skipped"], json!([]), "{r}");
+    atn::parse(&photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap()).unwrap().actions.remove(0).items
+}
+
+/// The three steps load as their commands and save back with the same events and descriptors.
+/// Package and Import Notes have only a string ID; Apply Data Set is recorded under `Aply`.
+#[test]
+fn package_notes_and_data_set_steps_load_and_save_back() {
+    let package = desc("null").with("T   ", path_value("/work/packages"));
+    let notes = desc("null").with("Usng", path_value("/work/review.psd"));
+    let data_set = desc("null").with("null", name_ref("dataSetClass", "Summer sale"));
+    let items = vec![
+        named("packageFile", "Package", package.clone()),
+        named("importAnnots", "Import Notes", notes.clone()),
+        coded("Aply", "Apply Data Set", data_set.clone()),
+    ];
+    let (mut s, r) = load(items.clone());
+    assert_eq!(r["unsupported"], json!([]), "{r}");
+    assert_eq!(
+        s.actions.list[0].steps,
+        [
+            ("file.package".to_string(), json!({"dir": "/work/packages"})),
+            ("file.import.notes".to_string(), json!({"path": "/work/review.psd"})),
+            ("image.applyDataSet".to_string(), json!({"name": "Summer sale"})),
+        ]
+    );
+    let back = saved(&mut s);
+    for (b, original) in back.iter().zip(&items) {
+        assert_eq!((&b.event, &b.descriptor), (&original.event, &original.descriptor));
+    }
+}
+
+/// Apply Data Set is `stringIDToTypeID("apply")` = `charIDToTypeID("Aply")`, so a recorded file
+/// stores the step under the four-character code `Aply` (davidmann4 review on events.rs, the
+/// `apply` entry). It loads as `image.applyDataSet`, not as a kept step, and saving writes `Aply`
+/// back, with the same descriptor.
+#[test]
+fn an_apply_data_set_step_stored_under_aply_loads_and_saves_back_as_aply() {
+    let data_set = desc("null").with("null", name_ref("dataSetClass", "Summer sale"));
+    let (mut s, r) = load(vec![coded("Aply", "Apply Data Set", data_set.clone())]);
+    assert_eq!(r["unsupported"], json!([]), "a recorded Apply Data Set is not a kept step: {r}");
+    assert_eq!(s.actions.list[0].steps, [("image.applyDataSet".to_string(), json!({"name": "Summer sale"}))]);
+    let back = saved(&mut s);
+    assert_eq!(back[0].event, AtnEvent::Code(*b"Aply"));
+    assert_eq!(back[0].descriptor.as_ref(), Some(&data_set));
+    // A step PhotoCraft saves for the command is the same event.
+    let item = export_item("image.applyDataSet", &json!({"name": "Summer sale"}), "S").unwrap();
+    assert_eq!((item.event, item.descriptor.as_ref()), (AtnEvent::Code(*b"Aply"), Some(&data_set)));
+}
+
+/// The string name `apply` still loads (the same event ID), and saves back under the
+/// four-character code, as the other events that have one do.
+#[test]
+fn an_apply_data_set_step_stored_by_name_saves_back_under_aply() {
+    let data_set = desc("null").with("null", name_ref("dataSetClass", "Summer sale"));
+    let (mut s, r) = load(vec![named("apply", "Apply Data Set", data_set.clone())]);
+    assert_eq!(r["unsupported"], json!([]), "{r}");
+    assert_eq!(s.actions.list[0].steps, [("image.applyDataSet".to_string(), json!({"name": "Summer sale"}))]);
+    let back = saved(&mut s);
+    assert_eq!((&back[0].event, back[0].descriptor.as_ref()), (&AtnEvent::Code(*b"Aply"), Some(&data_set)));
+}
+
+/// An `Aply` step that is not a data set by name stays a kept step and saves back unchanged,
+/// under the code it was recorded with.
+#[test]
+fn an_aply_step_that_is_not_a_data_set_by_name_stays_kept() {
+    let other = desc("null").with("null", name_ref("Lyr ", "Summer sale"));
+    let (mut s, r) = load(vec![coded("Aply", "Apply Data Set", other.clone())]);
+    assert_ne!(s.actions.list[0].steps[0].0, "image.applyDataSet", "{r}");
+    let back = saved(&mut s);
+    assert_eq!((&back[0].event, back[0].descriptor.as_ref()), (&AtnEvent::Code(*b"Aply"), Some(&other)));
+}
+
+/// Package plays: the document and its folder are written where the step says.
+#[test]
+fn a_loaded_package_step_plays() {
+    // A fresh folder of its own, removed even when an assertion fails.
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("pkg").to_string_lossy().replace('\\', "/");
+    let (mut s, _) = load(vec![named("packageFile", "Package", desc("null").with("T   ", path_value(&out)))]);
+    s.execute("file.new", json!({"width": 8, "height": 8, "name": "Poster"})).unwrap();
+    let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert_eq!(played["ran"], 1, "{played}");
+    // PhotoCraft's Package: `<folder>/<document>/<document>.pcraft` (no links, so no `Links` folder).
+    let document = std::path::Path::new(&out).join("Poster").join("Poster.pcraft");
+    assert!(document.is_file(), "the package folder holds the document: {}", document.display());
+}
+
+/// A step with a key the event does not have, or an `apply` of something other than a data set
+/// by name, keeps the Photoshop step.
+#[test]
+fn other_forms_keep_the_photoshop_step() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    assert!(kept(steps_file_menu::package_from(&desc("null").with("T   ", path_value("/a")).with("Fldr", D::Boolean(true)))));
+    assert!(kept(steps_file_menu::notes_from(&desc("null"))));
+    assert!(kept(steps_file_menu::apply_data_set_from(&desc("null").with("null", target_ref("dataSetClass")))));
+    assert!(kept(steps_file_menu::apply_data_set_from(&desc("null").with("null", name_ref("Lyr ", "Summer sale")))));
+}
+
+/// What the events cannot hold refuses the step: a package format, a data set by index.
+#[test]
+fn settings_without_a_key_are_refused() {
+    assert!(export_item("file.package", &json!({"dir": "/a", "format": "psd"}), "S").is_none());
+    assert!(export_item("image.applyDataSet", &json!({"index": 2}), "S").is_none());
+    assert!(export_item("file.import.notes", &json!({}), "S").is_none());
+}
+
+/// An `apply` naming a data set with an empty name has no `image.applyDataSet` form that saves
+/// back, so it keeps the Photoshop step and round-trips unchanged (CodeRabbit review on
+/// steps_file_menu.rs:54).
+#[test]
+fn an_empty_data_set_name_keeps_the_photoshop_step() {
+    let empty = desc("null").with("null", name_ref("dataSetClass", ""));
+    let items = vec![named("apply", "Apply Data Set", empty.clone())];
+    let (mut s, _) = load(items);
+    assert_ne!(s.actions.list[0].steps[0].0, "image.applyDataSet", "{:?}", s.actions.list[0].steps);
+    let back = saved(&mut s);
+    assert_eq!((back[0].event.id(), back[0].descriptor.as_ref()), ("apply".to_string(), Some(&empty)));
+}
+
+/// Import Notes plays only from the files `file.import.notes` reads (.psd, .psb, .pcraft). Notes
+/// recorded from a PDF or FDF keep the Photoshop step, so the load reports them as unsupported
+/// rather than failing on playback (CodeRabbit review on steps_file_menu.rs:20-39).
+#[test]
+fn notes_from_a_pdf_keep_the_photoshop_step() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    for path in ["/work/review.pdf", "/work/review.PDF", "/work/review.fdf", "/work/notes"] {
+        assert!(kept(steps_file_menu::notes_from(&desc("null").with("Usng", path_value(path)))), "{path}");
+    }
+    for path in ["/work/review.psd", "/work/review.PSB", "/work/review.pcraft"] {
+        assert!(!kept(steps_file_menu::notes_from(&desc("null").with("Usng", path_value(path)))), "{path}");
+    }
+}
+
+/// Saving refuses an Import Notes step from a file `notes_from` wouldn't map back, so a step never
+/// changes kind over a save and load (CodeRabbit review on steps_file_menu.rs:37).
+#[test]
+fn notes_from_a_pdf_are_refused_on_save() {
+    for path in ["/work/review.pdf", "/work/notes"] {
+        assert!(export_item("file.import.notes", &json!({"path": path}), "S").is_none(), "{path}");
+    }
+    assert!(export_item("file.import.notes", &json!({"path": "/work/review.psd"}), "S").is_some());
+}
+
+/// An `apply` naming a data set that isn't valid UTF-16 (an unpaired surrogate) has no
+/// `image.applyDataSet` name that saves back the same reference, so it keeps the Photoshop step
+/// and round-trips unchanged (CodeRabbit review on events.rs:1235).
+#[test]
+fn a_data_set_name_with_an_unpaired_surrogate_keeps_the_photoshop_step() {
+    let mut reference = name_ref("dataSetClass", "");
+    if let D::Reference(items) = &mut reference
+        && let [ReferenceItem::Name { name, .. }] = items.as_mut_slice()
+    {
+        *name = UnicodeString(vec![u16::from(b'A'), 0xD800, 0]);
+    }
+    let unpaired = desc("null").with("null", reference);
+    let (mut s, _) = load(vec![named("apply", "Apply Data Set", unpaired.clone())]);
+    assert_ne!(s.actions.list[0].steps[0].0, "image.applyDataSet", "{:?}", s.actions.list[0].steps);
+    let back = saved(&mut s);
+    assert_eq!((back[0].event.id(), back[0].descriptor.as_ref()), ("apply".to_string(), Some(&unpaired)));
+}
