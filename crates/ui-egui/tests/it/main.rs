@@ -18,6 +18,7 @@ mod eraser_reset_defaults;
 mod flatpak_updates;
 mod free_transform_preview_canvas;
 mod gpu_device_loss;
+mod headless_appearance_watcher;
 mod healing_reset_tip;
 // The interactive bench's `#[cfg(test)]` reporting tests: CI runs `--tests`, never examples.
 // Embedding the example leaves its other entrypoints unused in this binary.
