@@ -325,13 +325,14 @@ pub fn convert_target(doc: &Document, active: Option<LayerId>) -> Option<LayerId
     let l = doc.layer(active?)?;
     let LayerContent::Raster(pixels) = &l.content else { return None };
     let plain = l.visible && l.locks == photocraft_doc::Locks::default() && l.mask.is_none() && l.vector_mask.is_none();
-    (plain && l.frame.is_none() && pixels.content_bounds().is_empty()).then_some(l.id)
+    // A video layer's current frame can be empty while its other frames hold pixels.
+    (plain && l.frame.is_none() && l.video.is_none() && pixels.content_bounds().is_empty()).then_some(l.id)
 }
 
 /// `new` takes the place of the empty pixel layer `old`: the id, name, label, clipping, link,
-/// effects, blending options, PSD layer id and XMP packet stay (the mode and opacity are the
-/// Gradient tool's), and the layer is revealed by a white mask unless the selection already masks
-/// it.
+/// effects, blending options, PSD layer id, XMP packet and the PSD blocks that don't describe a
+/// content kind stay (the mode and opacity are the Gradient tool's), and the layer is revealed by
+/// a white mask unless the selection already masks it.
 pub fn convert_in_place(doc: &mut Document, old: LayerId, mut new: Layer) -> Result<LayerId> {
     let depth = doc.depth;
     let mask = match new.mask.take() {
@@ -351,9 +352,17 @@ pub fn convert_in_place(doc: &mut Document, old: LayerId, mut new: Layer) -> Res
     new.advanced = slot.advanced;
     new.psd_id = slot.psd_id;
     new.xmp = slot.xmp.clone();
+    new.psd_blocks = slot.psd_blocks.iter().filter(|(k, _)| !content_block(k)).cloned().collect();
     new.mask = Some(mask);
     *slot = new;
     Ok(old)
+}
+
+/// PSD blocks that describe what a layer *is* (a fill or adjustment, a shape or vector mask, type,
+/// a smart object, a frame): the converted layer is a new Gradient fill, so they would reopen it
+/// as the old kind. The others (layer version, blending extras, ...) stay with the layer.
+fn content_block(key: &[u8; 4]) -> bool {
+    crate::vector_cmds::SHAPE_BLOCKS.contains(&key) || matches!(key, b"TySh" | b"tySh" | b"lmfx" | b"SoLd" | b"PlLd" | b"SoLE" | b"pcFr")
 }
 
 fn create(s: &mut Session, p: &Value) -> Result<Value> {
