@@ -427,6 +427,9 @@ mod tests;
 mod clone_source_layer_tests;
 
 #[cfg(test)]
+mod pattern_stamp_impressionist_tests;
+
+#[cfg(test)]
 mod patch_history_names_tests;
 
 #[cfg(test)]
