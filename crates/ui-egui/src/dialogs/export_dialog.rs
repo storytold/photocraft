@@ -17,7 +17,7 @@ use craft::ui::patterns::form_dialogs::{
 };
 use craft::ui::patterns::presets::{GroupPath, NamedPresetEvent, PresetLibrary};
 use craft::ui::runtime::requests::PathKind;
-use photocraft_doc::{ColorMode, Document, LayerId};
+use photocraft_doc::{ColorMode, Document, LayerId, SampleType};
 use serde_json::{Map, Value, json};
 
 use photocraft_engine::export_preset_cmds::{DEFAULT_RESAMPLE, export_resample};
@@ -400,7 +400,7 @@ pub fn quick_export_selected_layers_png(app: &mut PhotocraftApp) -> Result<Value
         for (doc, path) in docs.iter().zip(paths) {
             crate::app::ensure_memory_to_save(doc, &path)?;
             let export = app.services.export.as_ref().ok_or("no exporter configured")?;
-            let (bytes, warnings) = export(doc, &path, &ExportSettings { xmp_all: false, ..Default::default() })?;
+            let (bytes, warnings) = export(doc, &path, &ExportSettings { layer_alpha: true, xmp_all: false, ..Default::default() })?;
             let write = app.services.write.as_mut().ok_or("no writer configured")?;
             write(&path, &bytes)?;
             crate::notices::io_warnings(app, &format!("Exported {}", crate::file_open::display_name(&path)), &warnings);
@@ -620,8 +620,23 @@ fn settings(f: &Map<String, Value>) -> ExportSettings {
         // Export As's JPGs are progressive (SOF2) in the reference application, measured at its
         // default quality; the scan layout is one setting for the whole dialog.
         jpeg_format: photocraft_codecs::JpegFormat::Progressive,
+        // A layer's PNG always keeps its alpha channel (#14816): the dialog exports one layer when
+        // it carries `__layer` (its first layer) or `__layers` (several, one file each). File >
+        // Export As has neither and keeps today's RGB for an opaque composite.
+        layer_alpha: f.contains_key("__layer") || f.contains_key("__layers"),
         ..Default::default()
     }
+}
+
+/// `settings` with the layer branches' kept alpha checked against the source document: the kept
+/// alpha is measured only for an RGB document at 8 bits (#14816), and under the dialog's default
+/// "Convert to sRGB" `export_document` converts a grayscale or CMYK source into an RGB 8-bit copy
+/// before the encoder runs - so the decision happens here, on the source, not on that copy
+/// (#14968 review).
+fn source_scoped_settings(doc: &Document, f: &Map<String, Value>) -> ExportSettings {
+    let mut s = settings(f);
+    s.layer_alpha &= doc.mode == ColorMode::Rgb && doc.depth == SampleType::U8;
+    s
 }
 
 /// The preview and size estimate share a single reduced document. Resizing every layer twice is
@@ -645,7 +660,7 @@ fn scaled_estimate(bytes: usize, doc: &Document, proxy: &Document, f: &Map<Strin
 /// Estimated size (bytes) from the already prepared proxy encode, scaled by pixel count.
 fn estimate(app: &PhotocraftApp, doc: &Document, proxy: &Document, f: &Map<String, Value>) -> Option<u64> {
     let export = app.services.export.as_ref()?;
-    let (bytes, _) = export(proxy, &format!("estimate.{}", s_fmt(f)), &settings(f)).ok()?;
+    let (bytes, _) = export(proxy, &format!("estimate.{}", s_fmt(f)), &source_scoped_settings(doc, f)).ok()?;
     Some(scaled_estimate(bytes.len(), doc, proxy, f))
 }
 
@@ -727,7 +742,7 @@ fn poll_or_start_preview(
 /// The native exporter uses this same IO encoder. Keep the entire estimate off the UI thread.
 #[cfg(not(target_arch = "wasm32"))]
 fn estimate_native(doc: &Document, proxy: &Document, f: &Map<String, Value>) -> Option<u64> {
-    let bytes = photocraft_io::export(proxy, &format!("estimate.{}", s_fmt(f)), &settings(f).io_options()).ok()?.bytes;
+    let bytes = photocraft_io::export(proxy, &format!("estimate.{}", s_fmt(f)), &source_scoped_settings(doc, f).io_options()).ok()?.bytes;
     Some(scaled_estimate(bytes.len(), doc, proxy, f))
 }
 
@@ -748,7 +763,7 @@ fn exact_estimate(doc: &Document, f: &Map<String, Value>, source_profile: &Profi
         return None;
     }
     let full = export_document(doc, f, None, source_profile).ok()?;
-    let bytes = photocraft_io::export(&full, &format!("estimate.{}", s_fmt(f)), &settings(f).io_options()).ok()?.bytes;
+    let bytes = photocraft_io::export(&full, &format!("estimate.{}", s_fmt(f)), &source_scoped_settings(doc, f).io_options()).ok()?.bytes;
     u64::try_from(bytes.len()).ok()
 }
 
@@ -1138,7 +1153,7 @@ fn write_export(app: &mut PhotocraftApp, doc: &Document, f: &Map<String, Value>,
     let out = export_document(doc, f, None, source_profile)?;
     crate::app::ensure_memory_to_save(&out, path)?;
     let export = app.services.export.as_ref().ok_or("no exporter configured")?;
-    let (bytes, warnings) = export(&out, path, &settings(f))?;
+    let (bytes, warnings) = export(&out, path, &source_scoped_settings(doc, f))?;
     let write = app.services.write.as_mut().ok_or("no writer configured")?;
     write(path, &bytes)?;
     let template = "Exported {path} ({size})";
@@ -1180,7 +1195,7 @@ fn export_layers(app: &mut PhotocraftApp, f: &Map<String, Value>, ids: &[LayerId
         return Err("no selected layers".into());
     }
     let docs = exportable_layers(&st.doc, ids)?;
-    let settings = settings(f);
+    let settings = source_scoped_settings(&st.doc, f);
     let folder = docs.len() > 1 && !cfg!(target_arch = "wasm32");
     let paths: Vec<String> = if folder {
         layer_file_names(&docs, &s_fmt(f)).into_iter().map(|name| std::path::Path::new(path).join(name).to_string_lossy().into_owned()).collect()
@@ -1318,6 +1333,9 @@ mod tests;
 mod jpg_progressive_tests;
 #[cfg(test)]
 mod layer_name_sanitise_tests;
+
+#[cfg(test)]
+mod layer_png_rgba_tests;
 
 #[cfg(all(test, unix))]
 mod batch_name_tests {
