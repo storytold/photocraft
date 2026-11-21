@@ -87,7 +87,7 @@ fn real_freeform_stale_target_source_revision_and_document_cancel_without_finish
             "target" => app.ui.selected_path = Some("work".into()),
             "source" => {
                 let st = app.session.active_mut().unwrap();
-                st.doc = std::sync::Arc::new((*st.doc).clone());
+                *st.doc_mut() = std::sync::Arc::new((*st.doc).clone());
             }
             "revision" => app.session.active_mut().unwrap().revision += 1,
             "document" => {

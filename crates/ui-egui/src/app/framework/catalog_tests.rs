@@ -30,6 +30,11 @@ fn keyed_runs(app: &PhotocraftApp) -> Vec<Option<usize>> {
     COMMAND_SOURCES.iter().zip(&app.framework.held_states.runs).map(|(source, &runs)| source.key.map(|_| runs)).collect()
 }
 
+/// The revision of the states the runtime reads.
+fn held_revision(app: &PhotocraftApp) -> craft::ui::contract::Revision {
+    app.framework.held_states.states.revision()
+}
+
 /// The keyed sources that computed their states between `before` and `after`.
 fn ran(before: &[Option<usize>], after: &[Option<usize>]) -> Vec<usize> {
     before.iter().zip(after).enumerate().filter(|(_, (was, now))| was.is_some() && was != now).map(|(at, _)| at).collect()
@@ -94,12 +99,18 @@ fn keyed_command_states_run_only_when_their_key_changes() {
     let before = keyed_runs(&app);
     assert!(before.iter().flatten().all(|&runs| runs == 1), "the first frame computes every keyed source once");
 
+    let revision = held_revision(&app);
     frames(&mut app, 100);
     assert_eq!(keyed_runs(&app), before, "idle frames compute no keyed source");
+    assert_eq!(held_revision(&app), revision, "idle frames write no states");
 
     let other = if app.ui.tool == Tool::Brush { Tool::Move } else { Tool::Brush };
     crate::tool_memory::select(&mut app, other);
     frames(&mut app, 2);
+    assert_ne!(held_revision(&app), revision, "a tool change writes the states");
+    let revision = held_revision(&app);
+    frames(&mut app, 10);
+    assert_eq!(held_revision(&app), revision, "the frames after the tool change write no states");
     let after = keyed_runs(&app);
     for (at, (was, now)) in before.iter().zip(&after).enumerate() {
         let moved = usize::from(at == TOOL_SOURCE);
