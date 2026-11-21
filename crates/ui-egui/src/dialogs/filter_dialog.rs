@@ -650,10 +650,12 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
         }
     }
     // The exports to files take the JPEG quality only for a JPEG (a quality would make a WebP lossy).
-    if matches!(command, "file.export.artboardsToFiles" | "file.export.layersToFiles" | "file.export.layerCompsToFiles")
-        && map.get("format").and_then(Value::as_str) != Some("jpg")
-    {
+    if matches!(command, "file.export.layersToFiles" | "file.export.layerCompsToFiles") && map.get("format").and_then(Value::as_str) != Some("jpg") {
         map.remove("quality");
+    }
+    // Artboards to Files sends the chosen file type's Export Options, and only while the box is ticked (#13636).
+    if command == "file.export.artboardsToFiles" {
+        crate::menus::view_cmds::nest_artboard_export_options(&mut map);
     }
     // An emptied embedded LUT is no data: a stored empty `data` would be read over the chosen `lut`.
     if command == "image.adjustments.colorLookup" && map.get("data").and_then(Value::as_str).is_some_and(str::is_empty) {
