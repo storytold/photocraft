@@ -51,6 +51,23 @@ pub fn alert_once(app: &mut PhotocraftApp, message: impl Into<String>, pref: &'s
     open_prompt(app, prompt).ok().or_else(|| prompt_tagged::<AlertOnce>(app))
 }
 
+/// [`alert_once`] with Continue (the default, Enter) and Cancel (Escape) instead of OK, as the
+/// reference shows for the Spot Healing Brush's Alt-click (#12563). Neither button acts: the caller
+/// has already refused what opened it. The ticked box is kept on Continue, as on [`alert_once`]'s OK.
+/// `None` once the box was ticked for `pref`.
+pub fn alert_once_continue(app: &mut PhotocraftApp, message: impl Into<String>, pref: &'static str) -> Option<DialogId> {
+    if dismissed(app, pref) {
+        return None;
+    }
+    let prompt = StandardPrompt::custom(message.into())
+        .title(TITLE)
+        .button(PromptChoice::Proceed, tl!("Continue").to_owned())
+        .button(PromptChoice::Cancel, tl!("Cancel").to_owned())
+        .dont_show_again()
+        .tag(AlertOnce { pref });
+    open_prompt(app, prompt).ok().or_else(|| prompt_tagged::<AlertOnce>(app))
+}
+
 /// Whether "Don't show again" was ticked on the question remembered as `pref`.
 pub fn dismissed(app: &PhotocraftApp, pref: &str) -> bool {
     app.session.prefs().dialogs.get(pref).and_then(|v| v.get("skip")).and_then(Value::as_bool) == Some(true)
