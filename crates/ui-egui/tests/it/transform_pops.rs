@@ -4,7 +4,7 @@
 //! drawn there, so a pop reads as a jump in content pixels.
 //!
 //! `cargo test -p photocraft-ui-egui --test it transform_pops -- --ignored --nocapture` (POPS_LEN, default 3; POPS_GPU=1
-//! for the GPU canvas).
+//! for the GPU canvas; POPS_SUBJECT=smart|pixel|turned|warped for the object, see [`subject`]).
 
 use craft::behavior::kurbo::Point;
 use egui::{Modifiers, PointerButton, Pos2};
@@ -72,6 +72,8 @@ fn drag(h: &mut Harness, from: Pos2, to: Pos2) {
 
 /// A white 400 × 300 document with the position-coded object as a smart object, at 100 %.
 fn setup(h: &mut Harness) {
+    let subject = subject();
+    let subject = subject.as_str();
     {
         let app = h.state_mut();
         app.run("file.new", json!({"width": 400, "height": 300, "background": "white"})).expect("new");
@@ -90,13 +92,37 @@ fn setup(h: &mut Harness) {
                 Ok(())
             })
             .expect("paint");
-        app.run("layer.smartObjects.convertToSmartObject", json!({})).expect("smart object");
+        if subject != "pixel" {
+            app.run("layer.smartObjects.convertToSmartObject", json!({})).expect("smart object");
+        }
+        if subject == "turned" {
+            app.run("edit.transform", json!({"rotate": 15.0})).expect("turn");
+        }
         app.sync_views();
         app.ui.extras.rulers = false;
         app.ui.panels.context_task_bar = false;
     }
     control(h, "ui.set", json!({"tool": "move", "zoom": 1.0, "center": [200, 150]}));
     h.run_steps(3);
+    if subject == "warped" {
+        // A smart object that already carries a warp of its own: one pull, applied.
+        control(h, "ui.menu.invoke", json!({"id": "edit.transform.warp"}));
+        h.run_steps(4);
+        let (from, to) = (screen(h, 150.5, 150.5), screen(h, 160.5, 157.5));
+        drag(h, from, to);
+        h.event(egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        h.run_steps(8);
+        let st = h.state().session.active().expect("a document");
+        let layer = st.active_layer.and_then(|id| st.doc.layer(id)).expect("the object");
+        let photocraft_doc::LayerContent::Smart(sm) = &layer.content else { panic!("a smart object") };
+        assert!(sm.warp.as_ref().is_some_and(|w| !w.is_identity()), "the warped subject carries a warp");
+    }
+}
+
+/// The object the sweep runs on (POPS_SUBJECT): `smart` (default), `pixel` (a plain pixel layer), `turned` (a smart
+/// object turned 15°), `warped` (a smart object with a warp of its own).
+fn subject() -> String {
+    std::env::var("POPS_SUBJECT").unwrap_or_else(|_| "smart".into())
 }
 
 /// Document points sampled: a grid well inside the object's start rect.
@@ -193,6 +219,11 @@ impl Step {
 fn run(gpu: bool, steps: &[Step]) -> Result<Vec<Option<(f64, f64)>>, String> {
     let Some(mut h) = harness(gpu) else { return Ok(Vec::new()) };
     setup(&mut h);
+    // A capture that finds no object proves nothing: the object must show at most sample points before the first step.
+    let seen = capture(&mut h).iter().filter(|c| c.is_some()).count();
+    if seen * 4 < samples().len() * 3 {
+        return Err(format!("setup: the object shows at only {seen} of {} sample points", samples().len()));
+    }
     let mut mode: Option<Step> = None;
     for (n, &step) in steps.iter().enumerate() {
         let before = capture(&mut h);
