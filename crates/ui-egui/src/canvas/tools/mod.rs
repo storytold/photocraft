@@ -307,6 +307,9 @@ fn press_refused(app: &mut PhotocraftApp, tool: Tool) -> bool {
 /// case was measured: a layer inside a hidden group, a targeted mask, Sample All Layers and the other layer kinds keep
 /// the status-bar error. Hidden is checked before the lock, so a hidden layer with Lock All is quiet too.
 fn quiet_hidden_refusal(app: &PhotocraftApp, tool: Tool) -> bool {
+    if crate::brush_refusal::spot_healing_quiet(app, tool) {
+        return true;
+    }
     if tool != Tool::Remove || app.ui.tool_options.sample_all.remove || super::paint_target(app) != serde_json::json!("pixels") {
         return false;
     }
