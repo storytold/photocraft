@@ -263,7 +263,7 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                 Param::new("dontEnlarge", tl!("Don't Enlarge"), ParamKind::bool(enlarge)).not_remembered(),
             ])
         }
-        crate::dialogs::conditional_mode_change_dialog::COMMAND => plain(crate::dialogs::conditional_mode_change_dialog::rows()),
+        crate::dialogs::conditional_mode_change_dialog::COMMAND => plain(crate::dialogs::conditional_mode_change_dialog::rows(app)),
         "file.export.layersToFiles" => {
             let (_, _, name) = doc?;
             plain(vec![

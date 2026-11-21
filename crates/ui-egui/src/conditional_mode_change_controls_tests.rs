@@ -13,29 +13,39 @@ use super::COMMAND;
 use crate::PhotocraftApp;
 use crate::warp_text_dialog_tests::harness;
 
-type H = Harness<'static, Box<PhotocraftApp>>;
+pub(super) type H = Harness<'static, Box<PhotocraftApp>>;
 
 /// The checkboxes as Photoshop's two columns show them, row by row.
-const LEFT: [&str; 4] = ["Bitmap", "Grayscale", "Duotone", "Indexed Color"];
-const RIGHT: [&str; 4] = ["RGB Color", "CMYK Color", "Lab Color", "Multichannel"];
+pub(super) const LEFT: [&str; 4] = ["Bitmap", "Grayscale", "Duotone", "Indexed Color"];
+pub(super) const RIGHT: [&str; 4] = ["RGB Color", "CMYK Color", "Lab Color", "Multichannel"];
 const ALL_IDS: [&str; 8] = ["bitmap", "grayscale", "duotone", "indexed", "rgb", "cmyk", "lab", "multichannel"];
 
 /// An RGB document with the dialog opened from the File menu.
 fn opened() -> (H, DialogId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 40, "height": 20})).unwrap();
-    let ctx = app.ctx().clone();
-    let reply = crate::menus::invoke(&mut app, &ctx, COMMAND, json!({})).unwrap();
-    let want = reply["dialog"].as_str().expect("the reply names a dialog").to_owned();
-    let id = app.framework.dialogs.open_dialogs().into_iter().map(|d| d.id).find(|id| id.value().to_string() == want).expect("the dialog is open");
+    open_in(app)
+}
+
+/// `app` drawn with the dialog opened from the File menu.
+pub(super) fn open_in(mut app: Box<PhotocraftApp>) -> (H, DialogId) {
+    let id = open_dialog(&mut app);
     (harness(app), id)
 }
 
-fn is_open(h: &H, id: DialogId) -> bool {
+/// Opens the dialog from the File menu.
+pub(super) fn open_dialog(app: &mut PhotocraftApp) -> DialogId {
+    let ctx = app.ctx().clone();
+    let reply = crate::menus::invoke(app, &ctx, COMMAND, json!({})).unwrap();
+    let want = reply["dialog"].as_str().expect("the reply names a dialog").to_owned();
+    app.framework.dialogs.open_dialogs().into_iter().map(|d| d.id).find(|id| id.value().to_string() == want).expect("the dialog is open")
+}
+
+pub(super) fn is_open(h: &H, id: DialogId) -> bool {
     h.state().framework.dialogs.open_dialogs().iter().any(|d| d.id == id)
 }
 
-fn field(h: &H, id: DialogId, key: &str) -> Value {
+pub(super) fn field(h: &H, id: DialogId, key: &str) -> Value {
     h.state()
         .framework
         .dialogs
@@ -44,11 +54,11 @@ fn field(h: &H, id: DialogId, key: &str) -> Value {
         .unwrap_or(Value::Null)
 }
 
-fn checked(h: &H, label: &str) -> bool {
+pub(super) fn checked(h: &H, label: &str) -> bool {
     h.get_by_role_and_label(Role::CheckBox, label).accesskit_node().toggled() == Some(Toggled::True)
 }
 
-fn click(h: &mut H, role: Role, label: &str) {
+pub(super) fn click(h: &mut H, role: Role, label: &str) {
     h.get_by_role_and_label(role, label).click();
     h.run_steps(3);
 }
@@ -57,21 +67,21 @@ fn rect(h: &H, role: Role, label: &str) -> egui::Rect {
     h.get_by_role_and_label(role, label).rect()
 }
 
-fn mode(h: &H) -> ColorMode {
+pub(super) fn mode(h: &H) -> ColorMode {
     h.state().session.active().unwrap().doc.mode
 }
 
-fn steps(h: &H) -> usize {
+pub(super) fn steps(h: &H) -> usize {
     h.state().session.active().unwrap().history.entries().len()
 }
 
 /// OK as the default button files it; the family runs the command in the passes after it.
-fn ok(h: &mut H, id: DialogId) {
+pub(super) fn ok(h: &mut H, id: DialogId) {
     crate::dialogs::testing::confirm(h.state_mut(), id).expect("OK is accepted");
     h.run_steps(3);
 }
 
-fn set(h: &mut H, id: DialogId, key: &str, value: Value) {
+pub(super) fn set(h: &mut H, id: DialogId, key: &str, value: Value) {
     let ctx = h.ctx.clone();
     h.state_mut().framework.dialogs.set_json_field(&ctx, id, key, value).unwrap_or_else(|e| panic!("{key}: {e}"));
     h.run_steps(3);
@@ -99,8 +109,8 @@ fn source_mode_has_eight_checkboxes_in_two_columns_with_all_and_none_under_them(
         h.query_all_by_label("Target Mode").map(|n| n.rect().top()).fold(f32::MAX, f32::min) > all.bottom(),
         "the Target Mode section is below the Source Mode one"
     );
-    // Today's default ("any") ticks every source, and none is greyed for an RGB document.
-    assert!(LEFT.into_iter().chain(RIGHT).all(|l| checked(&h, l)));
+    // The first open ticks RGB Color only (#13680), and none is greyed for an RGB document.
+    assert!(LEFT.into_iter().chain(RIGHT).all(|l| checked(&h, l) == (l == "RGB Color")));
     assert!(LEFT.into_iter().chain(RIGHT).all(|l| !h.get_by_role_and_label(Role::CheckBox, l).accesskit_node().is_disabled()));
     for raw in ["Any", "From", "To"] {
         assert!(h.query_all_by_label(raw).next().is_none(), "no raw {raw} control");
@@ -126,12 +136,13 @@ fn none_clears_and_all_ticks_every_source() {
 
 #[test]
 fn the_mode_list_names_the_targets_in_full() {
-    let rows = super::rows();
+    let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let rows = super::rows(&app);
     let to = rows.iter().find(|p| p.key == "to").expect("a Mode list");
     let craft::ui::patterns::form_dialogs::ParamKind::Choice { options, default, .. } = &to.kind else { panic!("Mode is a list") };
     let names: Vec<&str> = options.iter().map(|(_, label)| label.as_str()).collect();
     assert_eq!(names, ["Grayscale", "RGB Color", "CMYK Color", "Lab Color"]);
-    assert_eq!(default.as_deref(), Some("rgb"));
+    assert_eq!(default.as_deref(), Some("grayscale"));
     assert_eq!(to.label.as_str(), "Mode");
 }
 
