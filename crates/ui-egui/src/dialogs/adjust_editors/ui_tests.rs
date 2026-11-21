@@ -405,6 +405,48 @@ fn gradient_map_stop_picker_closed_without_a_colour_changes_nothing() {
     }
 }
 
+/// A Curves adjustment layer over a 64 x 48 image whose left half is #3c3c3c and right half #bebebe (levels 60 and
+/// 190, mean 125), in the whole app with Properties open on it.
+fn curves_over_two_tones() -> Harness<'static, Box<PhotocraftApp>> {
+    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).with_step_dt(1.0 / 60.0).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 32, "height": 48})).unwrap();
+        s.execute("edit.fill", json!({"color": "#3c3c3c"})).unwrap();
+        s.execute("select.inverse", json!({})).unwrap();
+        s.execute("edit.fill", json!({"color": "#bebebe"})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("layer.newAdjustmentLayer.curves", json!({})).unwrap();
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), s, crate::Services::default());
+        crate::panel_docking::apply(&mut app, vec![Action::resize_group("properties".to_owned(), Some(560.0))]).unwrap();
+        app
+    });
+    let ctx = h.ctx.clone();
+    let (request, _) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"collapsed": ["color"]}}));
+    crate::control::handle(h.state_mut(), &ctx, &request);
+    h.run_steps(8);
+    h
+}
+
+/// #9229, #9237: Curves has an Auto button, as the reference application's does. On the two-tone image it keeps the
+/// black point at (0, 0), puts the white end at 228 (the image does not reach white) and three fitted points between,
+/// as one history step; it does not stretch the image's own range to 0..255 the way Levels' Auto does, and a point
+/// curve stays a point curve.
+#[test]
+fn curves_auto_button_keeps_black_puts_white_at_228_and_lifts_the_midtones() {
+    let mut h = curves_over_two_tones();
+    let steps = history_len(&h);
+    let auto = h.query_all_by_label("Auto").last().map(|n| n.rect().center()).expect("an Auto button");
+    click(&mut h, auto);
+    let (_, after) = layer(&h);
+    let Adjustment::Curves { master, pencil, .. } = &after else { panic!("{after:?}") };
+    let points: Vec<[f32; 2]> = master.iter().map(|p| [(p.input * 255.0).round(), (p.output * 255.0).round()]).collect();
+    assert_eq!(points, vec![[0.0, 0.0], [64.0, 57.0], [146.0, 168.0], [187.0, 220.0], [228.0, 255.0]], "{after:?}");
+    assert!(!pencil, "a point curve stays a point curve");
+    assert_eq!(history_len(&h), steps + 1);
+}
+
 /// #9269: Black & White's Auto button sets the layer's weights from the image under it, as one
 /// history step.
 #[test]
