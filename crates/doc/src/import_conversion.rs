@@ -22,13 +22,13 @@ const TARGET_BYTES: usize = 128;
 const ATTACHMENT_BYTES: usize = 160;
 
 /// An optional future report is retained without interpreting its record or binary payloads.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub enum ImportConversion {
     Report(ConversionReport),
     Opaque { schema_version: u32, record: Arc<Vec<u8>>, attachments: Vec<Arc<Vec<u8>>> },
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversionReport {
     pub source_format: String,
@@ -40,7 +40,7 @@ pub struct ConversionReport {
     pub attachments: Vec<RetainedImportData>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversionEntry {
     pub feature_code: String,
@@ -55,7 +55,7 @@ pub struct ConversionEntry {
     pub attachments: Vec<u32>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversionDisposition {
     NativeEquivalent,
@@ -64,7 +64,7 @@ pub enum ConversionDisposition {
     SkippedNonessential,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversionReason {
     NativePolicy,
@@ -77,7 +77,7 @@ pub enum ConversionReason {
 }
 
 /// Ordinals/paths identify the source snapshot, including duplicate display names.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceItemRef {
     pub kind: String,
@@ -90,7 +90,7 @@ pub struct SourceItemRef {
 }
 
 /// Import-time references may become stale; they are never remapped into live instructions.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeTargetRef {
     pub layer_id: Option<LayerId>,
@@ -102,7 +102,7 @@ pub struct NativeTargetRef {
     pub label: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub struct RetainedImportData {
     pub owner: SourceItemRef,
@@ -113,7 +113,7 @@ pub struct RetainedImportData {
     pub bytes: Arc<Vec<u8>>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui_macros::PlainData)]
 pub enum ConversionValidationError {
     Limit(&'static str),
     Invalid(&'static str),

@@ -1,5 +1,9 @@
 //! #1436: a size-changing Arbitrary rotation preview must remain visible on the real GPU canvas.
 //! Synthetic blue pixels are measured outside the dialog, so its controls cannot pass the test.
+//!
+//! Rotate Canvas itself has no Preview, as in the reference application (#14462): the menu's dialog
+//! leaves the canvas as it is until OK. The size-changing preview the canvas still places is opened
+//! with its Preview box through `filter_dialog::open_previewing`.
 
 use egui::accesskit::Toggled;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -55,9 +59,16 @@ fn setup(h: &mut Harness, width: u32, height: u32, zoom: f32, center: [f32; 2]) 
     assert!(h.state().perf.gpu, "the fixture must use the GPU canvas");
 }
 
-/// Opens the dialog and returns the id the reply gave, in the protocol's own form.
+/// Opens the dialog through the menu and returns the id the reply gave, in the protocol's own form.
 fn open(h: &mut Harness) -> Value {
     control(h, "ui.menu.invoke", json!({"id":"image.rotation.arbitrary"}))["dialog"].clone()
+}
+
+/// Opens the dialog with a Preview box, which the menu's has not (#14462), and returns its id in the protocol's form.
+fn open_previewing(h: &mut Harness) -> Value {
+    let id = photocraft_ui_egui::filter_dialog::open_previewing(h.state_mut(), "image.rotation.arbitrary").expect("the dialog opens");
+    h.run_steps(4);
+    json!(id.value().to_string())
 }
 
 fn angle(h: &mut Harness, id: &Value, value: f64) {
@@ -117,7 +128,7 @@ fn size_changing_rotation_preview_is_visible_and_preserves_the_panned_center() {
     {
         setup(&mut h, width, height, zoom, center);
         assert_eq!(photocraft_ui_egui::proxy::factor(&h.state().session.active().unwrap().doc), factor);
-        let id = open(&mut h);
+        let id = open_previewing(&mut h);
         let source = blue(&mut h, &format!("{width}x{height}-{degrees}-zero")).0;
         assert!(source > 5_000, "the unrotated blue image must be visible outside the dialog");
         angle(&mut h, &id, degrees);
@@ -140,7 +151,7 @@ fn size_changing_rotation_preview_is_visible_and_preserves_the_panned_center() {
 }
 
 #[test]
-fn preview_toggle_and_cancel_keep_the_document_while_ok_applies_rotation() {
+fn the_dialog_has_no_preview_and_cancel_keeps_the_document_while_ok_applies_rotation() {
     let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut h) = harness() else { return };
     h.run_steps(4);
@@ -148,18 +159,15 @@ fn preview_toggle_and_cancel_keep_the_document_while_ok_applies_rotation() {
     let st = h.state().session.active().unwrap();
     let (doc, revision, history) = (st.doc.clone(), st.revision, st.history.entries());
     let id = open(&mut h);
-    assert!(blue(&mut h, "control-zero-on").0 > 5_000);
-    h.get_by_label("Preview").click();
-    h.run_steps(4);
-    assert!(!preview_on(&h));
-    assert!(blue(&mut h, "control-zero-off").0 > 5_000);
-    h.get_by_label("Preview").click();
-    h.run_steps(4);
-    assert!(preview_on(&h));
-    assert!(blue(&mut h, "control-zero-restored").0 > 5_000);
-    h.get_by_label("Preview").click();
-    h.run_steps(4);
+    assert!(h.query_by_label("Preview").is_none(), "Rotate Canvas has no Preview box");
+    assert!(blue(&mut h, "control-zero").0 > 5_000);
+    // A 45° turn would grow the canvas to 453 x 453; while the dialog is open the canvas keeps the document as it is.
     angle(&mut h, &id, 45.0);
+    let (count, top, bottom) = blue(&mut h, "control-45-open");
+    assert!(count > 5_000, "the unrotated image stays visible ({count})");
+    let rect = photocraft_ui_egui::canvas::active_view(h.state()).expect("a shown view").rect;
+    assert!(((top + bottom) as f32 / 2.0 - rect.center().y).abs() < 3.0, "the image stays centred");
+    assert!(bottom - top <= 242, "no rotated preview grows the image: {top}..{bottom}");
     h.get_by_label("Cancel").click();
     h.run_steps(4);
     let st = h.state().session.active().unwrap();
@@ -169,8 +177,6 @@ fn preview_toggle_and_cancel_keep_the_document_while_ok_applies_rotation() {
     assert!(blue(&mut h, "control-cancel").0 > 5_000);
 
     let id = open(&mut h);
-    h.get_by_label("Preview").click();
-    h.run_steps(4);
     angle(&mut h, &id, 45.0);
     h.get_by_label("OK").click();
     h.run_steps(4);

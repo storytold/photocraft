@@ -54,6 +54,26 @@ impl LayerIndex {
         self.entries.get(&id).map(|e| e.path.len() - 1)
     }
 
+    /// The layers of `ids` that no other of them contains, in document order (bottom to top,
+    /// depth first); ids not in the stack are left out.
+    pub fn roots(&self, ids: &[LayerId]) -> Vec<LayerId> {
+        let mut paths: Vec<(&[usize], LayerId)> = ids.iter().filter_map(|&id| Some((self.path(id)?, id))).collect();
+        paths.sort_unstable();
+        paths.dedup();
+        let mut out: Vec<LayerId> = Vec::with_capacity(paths.len());
+        let mut last: Option<&[usize]> = None;
+        for (path, id) in paths {
+            // Sorted by path, a contained layer follows its outermost container directly or after
+            // others it contains.
+            if last.is_some_and(|l| path.starts_with(l)) {
+                continue;
+            }
+            last = Some(path);
+            out.push(id);
+        }
+        out
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -114,6 +134,12 @@ impl DerefMut for LayerTree {
         &mut self.layers
     }
 }
+
+// The index is a pure function of `layers`: every write goes through `DerefMut`, which drops it, `Clone` starts
+// without it, and every lookup answers the same whether it is built or not. Its one observable trace is
+// `LayerIndex::serial`, a rebuild probe for tests that no view reads. So a shared reference can't change what readers
+// see, and a `Tracked` document's revision covers the tree.
+impl craft_tracked::PlainData for LayerTree {}
 
 impl Clone for LayerTree {
     fn clone(&self) -> Self {

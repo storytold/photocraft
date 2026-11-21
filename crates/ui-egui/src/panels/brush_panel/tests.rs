@@ -160,12 +160,12 @@ fn edit_section(i: usize, b: &mut BrushSettings) {
 fn every_section_round_trips_through_set_brush() {
     for (i, (name, _)) in SECTIONS.iter().enumerate() {
         let mut app = app();
-        let before = app.session.tools.brush.clone();
+        let before = (*app.session.tools.brush).clone();
         let mut after = before.clone();
         edit_section(i, &mut after);
         assert_ne!(before, after, "section {i} edits nothing");
         commit(&mut app, &before, &after);
-        assert_eq!(app.session.tools.brush, after, "section {i} ({name})");
+        assert_eq!(*app.session.tools.brush, after, "section {i} ({name})");
         // Through the command, with only the changed fields.
         let (id, p) = last_journal(&app).expect("journaled");
         assert_eq!(id, "tools.setBrush");
@@ -177,7 +177,7 @@ fn every_section_round_trips_through_set_brush() {
         // Replaying the journaled call onto a fresh session gives the same brush (drivable).
         let mut s = photocraft_engine::Session::new();
         s.execute(&id, p).unwrap();
-        assert_eq!(s.tools.brush, after, "replay of section {i}");
+        assert_eq!(*s.tools.brush, after, "replay of section {i}");
     }
 }
 
@@ -185,7 +185,7 @@ fn every_section_round_trips_through_set_brush() {
 fn patches_are_minimal_and_skip_unchanged_bitmaps() {
     let tip = TipShape::Sampled(GrayTile::from_fn(400, 300, |x, y| ((x * y) % 7) as f32 / 7.0));
     let old = BrushSettings {
-        tip: tip.clone(),
+        tip: tip.clone().into(),
         texture: paint::Texture { pattern: Pattern::Tile(GrayTile::from_fn(64, 64, |x, _| x as f32 / 64.0)), ..Default::default() },
         ..Default::default()
     };
@@ -195,14 +195,14 @@ fn patches_are_minimal_and_skip_unchanged_bitmaps() {
     assert_eq!(brush_patch(&old, &new), json!({"shapeDynamics": {"enabled": true}}));
     assert_eq!(brush_patch(&old, &old), json!({}));
     // A changed tip is sent whole.
-    let new = BrushSettings { tip: TipShape::Round, ..old.clone() };
+    let new = BrushSettings { tip: TipShape::Round.into(), ..old.clone() };
     assert_eq!(brush_patch(&old, &new), json!({"tip": "round"}));
     // Applying any of these through the engine gives back `new`.
     let mut app = app();
-    app.session.tools.brush = old.clone();
+    *app.session.tools.brush = old.clone();
     let new = BrushSettings { size: 9.0, roundness: 0.5, ..old.clone() };
     commit(&mut app, &old, &new);
-    assert_eq!(app.session.tools.brush, new);
+    assert_eq!(*app.session.tools.brush, new);
     // No change, no command.
     let n = app.session.journal.len();
     commit(&mut app, &new, &new);
@@ -212,14 +212,14 @@ fn patches_are_minimal_and_skip_unchanged_bitmaps() {
 #[test]
 fn bad_patches_fail_without_touching_the_brush() {
     let mut app = app();
-    let before = app.session.tools.brush.clone();
+    let before = (*app.session.tools.brush).clone();
     for bad in [
         json!({"brush": {"size": "huge"}}),
         json!({"brush": {"shapeDynamics": {"size": {"control": "telepathy"}}}}),
         json!({"brush": {"tip": {"sampled": {"width": 0}}}}),
     ] {
         assert!(app.run("tools.setBrush", bad).is_err());
-        assert_eq!(app.session.tools.brush, before);
+        assert_eq!(*app.session.tools.brush, before);
     }
 }
 
@@ -230,7 +230,7 @@ fn section_locks_round_trip_and_survive_preset_picks() {
         assert_eq!(section_lock(&mut b, i).is_some(), i > 0, "{name} has a lock");
     }
     let mut app = app();
-    let before = app.session.tools.brush.clone();
+    let before = (*app.session.tools.brush).clone();
     let mut after = before.clone();
     edit_section(2, &mut after);
     for i in [2, 6, 8] {
@@ -311,7 +311,7 @@ fn options_bar_edits_are_one_set_brush_per_gesture() {
     for (id, p) in &h.state().session.journal {
         s.execute(id, p.clone()).unwrap();
     }
-    assert_eq!(s.tools.brush, h.state().session.tools.brush);
+    assert_eq!(*s.tools.brush, *h.state().session.tools.brush);
 }
 
 #[test]
@@ -447,13 +447,13 @@ fn every_section_draws_without_issuing_commands() {
             for i in 0..SECTIONS.len() {
                 edit_section(i, &mut b);
             }
-            b.tip = TipShape::Sampled(GrayTile::from_fn(50, 40, |x, y| ((x ^ y) & 1) as f32));
-            h.state_mut().session.tools.brush = b.clone();
+            b.tip = TipShape::Sampled(GrayTile::from_fn(50, 40, |x, y| ((x ^ y) & 1) as f32)).into();
+            *h.state_mut().session.tools.brush = b.clone();
             let n = h.state().session.journal.len();
             h.run_steps(4);
             // Merely showing the panel must not rewrite the brush (no rounding drift, no commands).
             assert_eq!(h.state().session.journal.len(), n, "{panel} {view:?} section {section}");
-            assert_eq!(h.state().session.tools.brush, b, "{panel} {view:?} section {section}");
+            assert_eq!(*h.state().session.tools.brush, b, "{panel} {view:?} section {section}");
         }
     }
 }
@@ -473,7 +473,7 @@ fn kit(name: &str, group: &str, folder: &[&str]) -> paint::BrushPreset {
 fn rows_of(app: Box<PhotocraftApp>, view: PresetView) -> Vec<PresetRow<BrushKey>> {
     let mut h = Harness::builder().with_size(vec2(200.0, 200.0)).with_context(app.ctx().clone()).build_ui_state(
         move |ui, st: &mut (Box<PhotocraftApp>, Vec<PresetRow<BrushKey>>)| {
-            st.1 = preset_rows(&st.0, &Env::of(ui), parts_of(view));
+            st.1 = preset_rows(st.0.session.tools.presets.as_slice(), &Env::of(ui), parts_of(view));
         },
         (app, Vec::new()),
     );
@@ -487,7 +487,7 @@ fn preset_rows_nest_presets_in_panel_order() {
     let max = photocraft_engine::brush_preset_cmds::MAX_FOLDER_DEPTH;
     let deep: Vec<&str> = vec!["d"; max + 5];
     let mut app = app();
-    app.session.tools.presets = std::sync::Arc::new(vec![
+    *app.session.tools.presets = std::sync::Arc::new(vec![
         kit("Top", "Kit", &[]),
         kit("Pen", "Kit", &["Inks"]),
         kit("Chalk", "Kit", &["Dry"]),
@@ -509,7 +509,7 @@ fn preset_rows_nest_presets_in_panel_order() {
 
 fn fixture() -> Box<PhotocraftApp> {
     let mut app = app();
-    app.session.tools.presets = std::sync::Arc::new(vec![
+    *app.session.tools.presets = std::sync::Arc::new(vec![
         kit("A1", "Alpha", &[]),
         kit("A2", "Alpha", &[]),
         kit("A3", "Alpha", &[]),
@@ -674,7 +674,7 @@ fn options_pane_does_not_repeat_the_selected_sections_name() {
 fn f5_edits_the_default_brush_with_every_section() {
     let mut h = app_harness();
     assert!(!crate::panels::panel_docking::is_shown(h.state(), "brushSettings"));
-    let fresh = h.state().session.tools.brush.clone();
+    let fresh = (*h.state().session.tools.brush).clone();
     assert!(!fresh.shape_dynamics.enabled && !fresh.transfer.enabled, "the default round brush has no dynamics yet");
     h.key_press(egui::Key::F5);
     h.run_steps(3);
@@ -891,7 +891,7 @@ fn panel_events_map_to_their_commands() {
         (BrushSectionEvent::switch(11, false), json!({"smoothing": {"enabled": false}})),
     ];
     for (event, patch) in cases {
-        let before = app.session.tools.brush.clone();
+        let before = (*app.session.tools.brush).clone();
         let mut after = before.clone();
         let mut shown = 0;
         assert!(!apply_section_events(&mut after, &mut shown, vec![event]));
@@ -904,15 +904,15 @@ fn panel_events_map_to_their_commands() {
 
     // Select shows the pane and runs no command; the Brushes link asks to open the Brushes panel.
     let journal = app.session.journal.len();
-    let mut brush = app.session.tools.brush.clone();
+    let mut brush = (*app.session.tools.brush).clone();
     let mut shown = 0;
     assert!(!apply_section_events(&mut brush, &mut shown, vec![BrushSectionEvent::Select(2)]));
-    assert_eq!((shown, &brush), (2, &app.session.tools.brush));
+    assert_eq!((shown, &brush), (2, &*app.session.tools.brush));
     assert!(apply_section_events(&mut brush, &mut shown, vec![BrushSectionEvent::OpenLink]));
     assert_eq!((shown, app.session.journal.len()), (2, journal));
 
     // Reset keeps the colours, smoothing and locks.
-    let mut brush = app.session.tools.brush.clone();
+    let mut brush = (*app.session.tools.brush).clone();
     brush.size = 99.0;
     brush.locks.texture = true;
     apply_action(&mut app, &mut brush, BrushPanelAction::Reset);

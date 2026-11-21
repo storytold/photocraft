@@ -32,16 +32,49 @@ pub(crate) fn panel_rows(app: &PhotocraftApp) -> Vec<PanelRow> {
 pub(crate) fn states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandState)> {
     let facts = facts(app);
     let (panel, list) = (&app.ui.actions.panel, &app.session.actions.list);
+    // Load Actions… is the one library row the framework leaves always on. The app's own
+    // `actions.load` refuses while a recording or a paced playback holds the library (a load would
+    // replace the set the recording writes into), and the reference application greys the row
+    // beside Clear All, Reset and Replace while recording. Grey it with the rule the command
+    // itself checks, so the menu never offers a row that can only fail.
+    let busy = facts.recording || facts.waiting;
     panel_rows(app)
         .into_iter()
         .filter_map(|row| match row {
             PanelRow::Command(command) => {
-                let state = ActionsPanelCommands::from_ref(&command)?.state(panel, list, facts);
+                let row_command = ActionsPanelCommands::from_ref(&command)?;
+                let state = row_command.state(panel, list, facts);
+                let state = if row_command == ActionsPanelCommands::Load { state.enabled(!busy) } else { state };
                 Some((command, state))
             }
             _ => None,
         })
         .collect()
+}
+
+/// What [`states`] reads: the list, the menu's facts and the panel's state.
+#[derive(craft::ui::contract::MemoProps)]
+struct StatesFacts<'a> {
+    list: u64,
+    recording: bool,
+    path_selected: bool,
+    waiting: bool,
+    tool_recording: bool,
+    panel: &'a craft::automation::ui::actions::ActionsPanelState,
+}
+
+/// [`states`], derived from [`StatesFacts`].
+pub(crate) fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    let menu = facts(app);
+    let facts = StatesFacts {
+        list: app.session.actions.list.revision(),
+        recording: menu.recording,
+        path_selected: menu.path_selected,
+        waiting: menu.waiting,
+        tool_recording: menu.tool_recording,
+        panel: &app.ui.actions.panel,
+    };
+    crate::app::framework::derived_states(app, name, &facts, || states(app))
 }
 
 /// Runs a fired command of the Actions panel; `false` for a command of another set. Its event goes through the one
