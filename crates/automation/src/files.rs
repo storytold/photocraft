@@ -146,7 +146,11 @@ pub fn save_with_renderer_keeping(
         .or_else(|| path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()))
         .ok_or_else(|| AutomationError::BadRequest(format!("cannot tell the format of `{}`; pass a format", path.display())))?;
     if ext == photocraft_format::EXTENSION {
-        let named = named_for_output(doc, &path.to_string_lossy());
+        let mut named = doc.clone();
+        // Native filenames may contain a literal backslash on Unix.
+        if let Some(name) = path.file_name() {
+            named.name = name.to_string_lossy().into_owned();
+        }
         let mut local = PcraftWriter::new();
         let w = writer.unwrap_or(&mut local);
         w.save_path(&named, path, &native_options(&named, opts)?)?;
