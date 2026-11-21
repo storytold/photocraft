@@ -79,7 +79,8 @@ fn bounded_readback_matches_independent_cpu_oracle() {
 #[test]
 fn bounded_readback_strictly_respects_staging_budget() {
     let Some((ctx, mut comp, _lock)) = test_gpu() else { return };
-    let doc = sample_doc(256, 256);
+    // At either accumulator depth 33 rows span full bands and a one-row tail.
+    let doc = sample_doc(256, 33);
     let rect = doc.bounds();
     let budget = 16 * 1024; // 16 KiB strict cap
 
@@ -96,6 +97,7 @@ fn bounded_readback_strictly_respects_staging_budget() {
         x += chunk_size;
     }
 
+    let mut next_y = rect.y0;
     render_bands(
         &mut comp,
         ctx.device(),
@@ -106,6 +108,8 @@ fn bounded_readback_strictly_respects_staging_budget() {
         budget,
         &photocraft_raster::Interrupt::NONE,
         |band_rect, px| {
+            assert_eq!(band_rect.y0, next_y, "bands must cover the rows in order");
+            next_y = band_rect.y1;
             let actual_staging = band_rect.height() as u64 * row_staging_bytes;
             assert!(actual_staging <= budget as u64, "band staging {} exceeds budget {}", actual_staging, budget);
             assert_eq!(px.len(), (band_rect.width() * band_rect.height()) as usize);
@@ -113,6 +117,7 @@ fn bounded_readback_strictly_respects_staging_budget() {
         },
     )
     .expect("bounded readback budget respected");
+    assert_eq!(next_y, rect.y1, "the final band covers the tail");
 }
 
 #[test]
