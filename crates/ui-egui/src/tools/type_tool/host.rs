@@ -15,12 +15,14 @@ use super::{Affine, Arc, PhotocraftApp, TextLayout, byte_of, insertion_style, te
 pub(crate) struct LayerHost<'a> {
     app: &'a mut PhotocraftApp,
     layer: LayerId,
+    /// An actual editor press that belongs to another shown type layer, not this edit's caret.
+    pub(super) other_type_press: bool,
 }
 
 impl<'a> LayerHost<'a> {
     /// The host of `layer` in the active document.
     pub(crate) fn new(app: &'a mut PhotocraftApp, layer: LayerId) -> Self {
-        Self { app, layer }
+        Self { app, layer, other_type_press: false }
     }
 
     fn laid_out(&mut self) -> Option<Laid> {
@@ -70,6 +72,11 @@ impl TextEditorHost for LayerHost<'_> {
     }
 
     fn hit(&mut self, at: Point) -> (usize, usize) {
+        let mut at = at;
+        if let Some(press) = craft::ui::runtime::pointer::frame(self.app.ctx()).press.filter(|press| press.button == craft::behavior::PointerButton::Primary) {
+            at = crate::canvas::document_display::painted_doc_point(self.app, press.origin).unwrap_or(at);
+            self.other_type_press |= super::layout::hit_layer(self.app, at.x, at.y).is_some_and(|id| id != self.layer);
+        }
         hit_at(self.app, self.layer, at.x, at.y)
     }
 

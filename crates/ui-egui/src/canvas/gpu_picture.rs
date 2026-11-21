@@ -10,6 +10,7 @@ use super::display::{LiveProposal, hdr_preview, sync_display_lut};
 use super::filter_preview::{ensure_adjust_proxy, ensure_filter_preview, ensure_proxy_preview, filter_preview_display_doc};
 use super::textures::{ensure_gpu, preview_bounds, redraw_focus};
 use super::{Document, PhotocraftApp, viewport_pages};
+pub(crate) use crate::gpu_canvas::GpuSampling;
 use crate::gpu_canvas::ViewParams;
 use photocraft_geom::Rect as DRect;
 
@@ -114,6 +115,14 @@ pub(crate) fn gpu_picture(app: &mut PhotocraftApp, req: &GpuRequest<'_>) -> Opti
 }
 
 impl GpuPicture {
+    /// Capture the source grids of this picture, including resident page reductions and the
+    /// reduced preview's shifted origin. The scale is device pixels per document pixel.
+    pub(crate) fn sampling(&self, app: &PhotocraftApp, physical_scale: f32) -> GpuSampling {
+        app.gpu
+            .as_ref()
+            .map_or_else(|| GpuSampling::empty(physical_scale), |gpu| gpu.sampling(self.params.doc, self.params.doc_size, physical_scale, self.k, self.growth))
+    }
+
     /// Where the picture lies in the document, in document pixels: a reduced or size-changing preview's own area, else
     /// the document's bounds.
     pub(crate) fn bounds(&self) -> DRect {

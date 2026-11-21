@@ -43,6 +43,11 @@ pub(crate) struct TypeState {
 }
 
 impl TypeState {
+    /// The press ended the current edit and must not create or select new text in the same pass.
+    pub(crate) fn ended_edit_on_press(&mut self) {
+        self.began_with_session = true;
+    }
+
     pub(crate) fn take_context(&mut self) -> Option<(egui::Pos2, Mods)> {
         self.context.take()
     }
@@ -274,7 +279,8 @@ impl CanvasTool for TypeTool<'_> {
         if std::mem::take(&mut self.state.began_with_session) {
             return ToolAction::Done;
         }
-        let at = space.view.to_doc(pointer.pos);
+        let at =
+            self.scope.with_app(|app| crate::canvas::document_display::painted_doc_point(app, pointer.pos).unwrap_or_else(|| space.view.to_doc(pointer.pos)));
         let ctx = self.scope.ctx().clone();
         let action = self.scope.with_app(|app| press_at(app, &ctx, at.x, at.y, pointer.mods));
         self.state.press = (action == ToolAction::Claimed).then_some(at);
@@ -337,7 +343,8 @@ impl CanvasTool for TypeTool<'_> {
     /// cursor (cw.C9).
     fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
         let (Some(pointer), Some(space)) = (cx.pointer, cx.space()) else { return Cursor::System(CursorIcon::Text) };
-        let at = space.view.to_doc(pointer.pos);
+        let at =
+            self.scope.with_app(|app| crate::canvas::document_display::painted_doc_point(app, pointer.pos).unwrap_or_else(|| space.view.to_doc(pointer.pos)));
         let press = self.state.press.map(|p| [p.x, p.y]);
         self.scope.with_app(|app| match hover_path_target(app, at.x, at.y, cx.mods.shift, press) {
             Some(PathClick::Area { .. }) => Cursor::from(PaintedCursor::type_on(false)),

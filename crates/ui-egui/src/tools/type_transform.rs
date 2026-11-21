@@ -312,6 +312,20 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, canvas: egui::Rec
         .show_at(ui, canvas);
     // The press that went down on the box in this pass, or the box's first edit, starts the capture.
     let pressed = out.held.is_some() && pointer.press.is_some();
+    if app.ui.type_transform.is_none()
+        && !drawn
+        && pressed
+        && let Some(press) = pointer.press.filter(|press| press.button == craft::behavior::PointerButton::Primary)
+        && let Some(view) = view_of(ui)
+    {
+        let at = crate::canvas::document_display::painted_doc_point(app, press.origin).unwrap_or_else(|| view.to_doc(press.origin));
+        if crate::type_tool::hit_layer(app, at.x, at.y).is_some_and(|id| id != frame.layer) {
+            app.canvas_tools.type_tool.ended_edit_on_press();
+            let mods = egui::Modifiers { alt: pointer.mods.alt, ctrl: pointer.mods.ctrl, shift: pointer.mods.shift, mac_cmd: false, command: pointer.mods.cmd };
+            crate::type_tool::commit_with(app, mods);
+            return;
+        }
+    }
     if app.ui.type_transform.is_none() && !pressed && out.edits.is_empty() && out.apply.is_none() && !out.discard {
         return;
     }

@@ -1,5 +1,6 @@
 //! The crate's integration tests, linked into one test binary.
 
+mod alpha_region;
 mod scratch;
 mod scratch_capacity;
 mod scratch_recovery;

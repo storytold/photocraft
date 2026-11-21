@@ -1413,6 +1413,7 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
 /// opens.
 pub fn open_at(app: &mut PhotocraftApp, tool: Tool, mods: Mods, at: Pos2, doc: [f64; 2], point: Option<(PathRef, BezierHit)>) -> bool {
     use crate::paint_mouse::ContextPopup; // PLAN: assumed `context_popup(app, tool, mods, doc) -> Option<ContextPopup>` with `Menu(MenuKind)` and `BrushPicker` (cw.P8)
+    let doc = if tool.is_type() { crate::canvas::document_display::painted_doc_point(app, at).map_or(doc, |point| [point.x, point.y]) } else { doc };
     match crate::paint_mouse::context_popup(app, tool, mods, doc) {
         Some(ContextPopup::Menu(kind)) => open(app, tool, kind, at, doc, point),
         Some(ContextPopup::BrushPicker) => {

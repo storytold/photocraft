@@ -65,6 +65,28 @@ curl -sfL -o assets/icons/<name>.svg https://raw.githubusercontent.com/lucide-ic
 | Radial Blur: Zoom | `filter_dialog/zoom_center.rs` | A ray diagram to the left of Center X/Y sets the centre by click or drag. Diagram, sliders and numeric fields share the same coordinates; arrow keys on the diagram step by 0.01. Ray lengths follow Amount, and the existing image preview follows every edit. OK applies the filter; Cancel discards the edits. |
 | Shape Stroke Options | `shape_stroke_ui.rs`, `vector_ui.rs` | Direct editing: valid changes apply immediately, with one numeric drag per undo step in Properties. Escape/outside click closes the popup and retains changes; a child dropdown keeps the parent open. The options bar sets new-shape defaults; Properties edits the selected shape. |
 
+Type-tool picking (updated 2026-11-18, #10266) tests the transformed text layout or nontransparent
+cached ink in the last displayed canvas picture's source-pixel sampling footprint, not the cache's
+overall bounding rectangle. Pointer coordinates use that picture's saved camera, including during
+zoom transitions. GPU pictures use their resident source grids and reduction, exact nonzero sharp-filter
+weights, and conservative bilinear/trilinear mip support. CPU pictures use the uploaded base/detail
+grids and linear/nearest filters. Transparent detail leaves base pixels visible; opaque detail hides them.
+Small shared opacity masks track actual uploads and preserve prior pictures across partial updates.
+Renderer selection is per canvas/document, not the global performance report.
+Transparent corners of rotated text and padding outside that footprint do not intercept lower text. At a real
+overlap the topmost shown type layer wins; hidden groups are skipped. While editing, an
+outside click still commits without opening another layer on that same click.
+Transparent leading between soft-wrapped lines remains part of the paragraph's layout hit
+area: clicking there places the caret on the nearest line rather than requiring an ink pixel.
+Headless `type.hitTest` remains an exact document-coordinate query without viewport sampling.
+Regional alpha queries reuse exact backing-owned empty/full summaries or pixel bits. Every byte write
+invalidates that backing's coverage; clone-on-write, tile replacement and moved query rectangles cannot
+reuse stale results. Mixed coverage storage counts against tile residency and is released when pixels spill;
+known scratch-read failures also invalidate coverage, and a successful read restores it without a write.
+Coverage builds lazily; resident warmed coverage allocates no storage and decodes no pixels.
+Imported cache bounds are not edit-ownership polygons: caret and move-reach controls check the actual press
+against the alpha-aware picker, preserving paragraph-handle priority. GPU adapter skips do not catch app setup.
+
 Shape Stroke Options (updated 2026-10-11) sizes to its content and scrolls only when necessary.
 It has no Apply/Cancel footer. Solid, Dashed and Dotted are full clickable rows with line
 samples and visible selection; opening the editor alone never changes a shape. Invalid pending
