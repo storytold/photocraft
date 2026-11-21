@@ -46,6 +46,7 @@ craft-xcf = { workspace = true }
 craft-pdn = { workspace = true }
 craft-svg = { workspace = true }
 craft-tiff = { workspace = true }
+craft-metadata = { workspace = true }
 craft-crs = { workspace = true }
 craft-xml = { workspace = true }
 thiserror = { workspace = true }

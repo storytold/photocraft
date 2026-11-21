@@ -6612,6 +6612,7 @@ dependencies = [
  "craft-file-formats",
  "craft-image-codecs",
  "craft-kra",
+ "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=163f1b20315ffacaf8a6e085f4ae7fc568c08ff2)",
  "craft-ora",
  "craft-pdf",
  "craft-pdn",
