@@ -248,7 +248,10 @@ impl SelectionProbe for PcSelection {
     }
 
     fn inside_selection(&self, at: Point) -> bool {
-        self.selection.as_ref().is_some_and(|sel| covers(sel, at))
+        // Only on the canvas: an oval keeps its part past the canvas edge, but no outline is drawn there, so a press on
+        // that hidden part starts a new marquee instead of dragging a selection the user can't see.
+        let on_canvas = at.x >= 0.0 && at.y >= 0.0 && at.x < f64::from(self.size.width) && at.y < f64::from(self.size.height);
+        on_canvas && self.selection.as_ref().is_some_and(|sel| covers(sel, at))
     }
 
     fn bounds(&self) -> Option<Rect> {
