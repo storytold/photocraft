@@ -109,8 +109,11 @@ pub fn check_kerning(p: &Value) -> std::result::Result<(), String> {
 /// and the superscript/subscript `baseline`, so a typo is an error rather than a reset to Normal.
 pub fn check_size_tracking(p: &Value) -> std::result::Result<(), String> {
     if let Some(v) = p.get("size") {
+        // Sizes are stored as `f32`, and the controls send that `f32` widened to a number: 0.01 as an `f32` reads
+        // just below the 0.01 it was typed as. Validate in the `f32` domain the size is kept in, as the step
+        // keys' clamp already does.
         match v.as_f64() {
-            Some(size) if size.is_finite() && (TYPE_SIZE_MIN_PT..=TYPE_SIZE_MAX_PT).contains(&size) => {}
+            Some(size) if size.is_finite() && (TYPE_SIZE_MIN_PT as f32..=TYPE_SIZE_MAX_PT as f32).contains(&(size as f32)) => {}
             _ => return Err(format!("size must be between {TYPE_SIZE_MIN_PT} and {TYPE_SIZE_MAX_PT} pt")),
         }
     }
