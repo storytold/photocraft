@@ -659,6 +659,26 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
     if command == "image.adjustments.colorLookup" && map.get("data").and_then(Value::as_str).is_some_and(str::is_empty) {
         map.remove("data");
     }
+    if command == "file.automate.batch" {
+        // Destination decides what the command is asked for (#13659): None opens each source and Save
+        // and Close writes each source, so neither takes an output folder or a File Type - Save and
+        // Close writes every source in its own format and refuses any other, and None plays without
+        // ever encoding a result. Quality leaves with them: the command reads it through SaveOpts, so
+        // a greyed value kept from a Folder run would re-encode an in-place JPEG or WebP save. The rows
+        // keep their values on screen for the next Folder choice, but the run must not see them. The
+        // Override box rides along only for a Folder run with the box ticked: None writes nothing an
+        // Override could route, Save and Close does not represent it, and the command's recorded-Batch
+        // rules refuse an Override that does not match the action's own Save steps.
+        if matches!(fields.text("destination"), Some("none") | Some("saveAndClose")) {
+            map.remove("output");
+            map.remove("format");
+            map.remove("quality");
+            map.remove("overrideSaveAs");
+        }
+        if fields.bool("overrideSaveAs") == Some(false) {
+            map.remove("overrideSaveAs");
+        }
+    }
     if command == "image.mode.indexedColor" {
         // The matte colour row belongs to the "custom" choice, which the command takes as the colour itself.
         let color = map.remove(rows::MATTE_COLOR);

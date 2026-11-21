@@ -2,8 +2,8 @@ use super::dispatch::no_params;
 use super::{PhotocraftApp, Value, json};
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Outcome as _, Props as _, Show as _};
-use craft::ui::dialog::DialogId;
-use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind};
+use craft::ui::dialog::{DialogId, StackDialog};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind};
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::requests::PathKind;
 
@@ -493,7 +493,14 @@ fn batch_form(app: &PhotocraftApp, dir: &str) -> Option<(Vec<Param>, DialogField
         choice("source", tl!("Source"), opts(&[("folder", tl!("Folder")), ("open", tl!("Opened Files"))]), "folder"),
         folder("input", tl!("Input Folder"), dir),
         Param::new("includeSubfolders", tl!("Include All Subfolders"), ParamKind::bool(false)),
-        folder("output", tl!("Output Folder"), format!("{dir}/batch")),
+        // Destination (#13659), worded as the reference application words its three choices, opening
+        // on None. The values stay the command's own words (`none`, `saveAndClose`, `folder`). Only a
+        // folder run names where its results go and how they are called, and only a folder run has an
+        // Override Save As to override, so the rows below it that a folder run owns are greyed until
+        // Folder is picked.
+        choice("destination", tl!("Destination"), opts(&[("none", tl!("None")), ("saveAndClose", tl!("Save and Close")), ("folder", tl!("Folder"))]), "none"),
+        Param::new("overrideSaveAs", tl!("Override Action \"Save As\" Commands"), ParamKind::bool(false)).enabled_when_in("destination", ["folder"]),
+        folder("output", tl!("Output Folder"), format!("{dir}/batch")).enabled_when("destination", "folder"),
         choice(
             "format",
             tl!("File Type"),
@@ -506,15 +513,50 @@ fn batch_form(app: &PhotocraftApp, dir: &str) -> Option<(Vec<Param>, DialogField
                 ("webp", tl!("WebP")),
             ]),
             "same",
-        ),
-        Param::new("naming", tl!("File Naming"), ParamKind::text("")).hint("{name}").tooltip("{name} · {serial} · {date} (UTC)"),
-        Param::new("startingSerial", tl!("Starting Serial Number"), ParamKind::int(Some(1), None, 1)),
+        )
+        .enabled_when("destination", "folder"),
+        Param::new("naming", tl!("File Naming"), ParamKind::text(""))
+            .hint("{name}")
+            .tooltip("{name} · {serial} · {date} (UTC)")
+            .enabled_when("destination", "folder"),
+        Param::new("startingSerial", tl!("Starting Serial Number"), ParamKind::int(Some(1), None, 1)).enabled_when("destination", "folder"),
         // Off sends no quality, which keeps the command's JPEG and lossless WebP defaults.
-        Param::new("quality", tl!("Quality"), ParamKind::optional_number(0.0, 12.0, None, 8.0, 0)),
+        Param::new("quality", tl!("Quality"), ParamKind::optional_number(0.0, 12.0, None, 8.0, 0)).enabled_when("destination", "folder"),
         Param::new("stopOnError", tl!("Stop For Errors"), ParamKind::bool(false)),
         Param::new("errorLog", tl!("Error Log"), ParamKind::text("")),
     ]);
     Some((rows, DialogFields::new()))
+}
+
+/// The Batch dialog's Override Action "Save As" Commands box (#13659): the note it answers its own
+/// tick with, as the reference application shows it, and the dialog preference that keeps a ticked
+/// "Don't show again".
+pub(super) const BATCH_OVERRIDE_NOTE: &str = "When this option is on, files will be saved to the destination folder only by \"save as\" steps in the action. \
+                                              If there are no \"save\" or \"save as\" steps, no files will be saved.";
+pub(crate) const BATCH_OVERRIDE_PREF: &str = "automate.batch.overrideSaveAs";
+
+/// The open hosted form of command `command`, if one is open.
+fn open_form_of(app: &PhotocraftApp, command: &str) -> Option<DialogId> {
+    let dialogs = &app.framework.dialogs;
+    dialogs.stack().ids().find(|id| dialogs.get_by_id::<HostedParamDialog>(*id).is_some_and(|form| StackDialog::key(form) == Some(command)))
+}
+
+/// Once per frame, the Batch dialog's Override Action "Save As" Commands box (#13659). The hosted
+/// form keeps its own values, so the app reads the open dialog: the tick that turns the box on opens
+/// the note once, and a box cleared and ticked anew opens it again. `alerts::alert_once` stays quiet
+/// once "Don't show again" was ticked for the note.
+pub(crate) fn note_batch_override(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let Some(id) = open_form_of(app, "file.automate.batch") else { return };
+    let ticked = app.framework.dialogs.get_by_id::<HostedParamDialog>(id).and_then(|form| form.fields().bool("overrideSaveAs")) == Some(true);
+    // The state of the box at the last pass of the dialogs, per open dialog: only a pass that finds
+    // the box newly ticked opens the note, so a second pass of the same frame and a held tick add nothing.
+    let seen = egui::Id::unique(("pc-batch-override-noted", id.value().to_string()));
+    let noted = ctx.data(|data| data.get_temp::<bool>(seen)).unwrap_or(false);
+    ctx.data_mut(|data| data.insert_temp(seen, ticked));
+    if !ticked || noted {
+        return;
+    }
+    let _ = crate::dialogs::alerts::alert_once(app, tl!(BATCH_OVERRIDE_NOTE), BATCH_OVERRIDE_PREF);
 }
 
 /// The channel workflow forms (see channels_panel.rs for the channel references): Save and Load Selection, Apply
