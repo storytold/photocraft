@@ -25,7 +25,7 @@ impl PhotocraftApp {
             self.session.authorize = gate;
         }
         // Canvas Size opens on the extension colour of the last run, with or without its dialog (#14581).
-        let extension = (id == "image.canvasSize").then(|| params.get("extensionColor").cloned()).flatten();
+        let extension = (id == "image.canvasSize").then(|| crate::sizing::canvas_extension_of_params(&params));
         let result = self.run_command(id, params);
         if gate.is_some() {
             self.session.authorize = None;

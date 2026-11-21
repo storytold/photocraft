@@ -113,6 +113,12 @@ const CANVAS_KEPT: &str = "photocraft.image.canvasSize.kept";
 /// The extension colour of the last Canvas Size run, with or without the dialog (#14581).
 const CANVAS_EXTENSION: &str = "photocraft.image.canvasSize.extensionColor";
 
+/// The `extensionColor` a Canvas Size run uses: the parameter, or the Background when it is absent or null, as the
+/// engine does (CodeRabbit on #16146).
+pub(crate) fn canvas_extension_of_params(params: &Value) -> Value {
+    params.get("extensionColor").filter(|v| !v.is_null()).cloned().unwrap_or_else(|| json!("background"))
+}
+
 /// The `extensionColor` of a successful Canvas Size run, for the next opening.
 pub(crate) fn note_canvas_extension(app: &PhotocraftApp, color: Value) {
     if extension_of(&color).is_some() {

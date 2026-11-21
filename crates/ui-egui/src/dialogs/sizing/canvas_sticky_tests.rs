@@ -123,6 +123,30 @@ fn a_run_without_the_dialog_sets_the_colour_it_opens_on() {
     assert_eq!(shown(&app, id)["extension"], json!(CanvasExtension::Black));
 }
 
+/// A run that leaves `extensionColor` out extends with the Background, so that is what the dialog opens on
+/// (CodeRabbit on #16146).
+#[test]
+fn a_run_without_a_colour_opens_the_dialog_on_the_background() {
+    let mut app = app();
+    app.run("image.canvasSize", json!({"width": 420, "height": 320, "anchor": "center", "extensionColor": "black"})).unwrap();
+    app.run("image.canvasSize", json!({"width": 440, "height": 340, "anchor": "center"})).unwrap();
+    let id = open(&mut app);
+    assert_eq!(shown(&app, id)["extension"], json!(CanvasExtension::Background));
+}
+
+/// A Canvas Size action step that runs without a dialog records its colour too.
+#[test]
+fn a_canvas_size_action_step_sets_the_colour_the_dialog_opens_on() {
+    use craft::automation::actions::{Action, ActionStep};
+    let mut app = app();
+    let step = ActionStep::from(("image.canvasSize".to_string(), json!({"width": 420, "height": 320, "anchor": "center", "extensionColor": "black"})));
+    app.session.actions.list.push(Action::new("Size", vec![step])).expect("a new name");
+    let played = app.run("actions.play", json!({"action": 0})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    let id = open(&mut app);
+    assert_eq!(shown(&app, id)["extension"], json!(CanvasExtension::Black));
+}
+
 #[test]
 fn fresh_settings_keep_todays_defaults() {
     let mut app = app();
