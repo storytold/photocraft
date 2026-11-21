@@ -110,6 +110,30 @@ fn a_plane_and_ok_paste_in_one_step() {
 }
 
 #[test]
+fn vanishing_point_cancel_leaves_pending_paste_unapplied() {
+    let mut app = app_with_layer();
+    copy_red_square(&mut app);
+    let st = app.session.active().unwrap();
+    let (original, steps, revision) = (st.doc.clone(), st.history.past_len(), st.revision);
+
+    let mut h = open(app);
+    set(&mut h, json!({"planes": [floor()]}));
+    let pending = describe(h.state()).expect("Vanishing Point is open");
+    assert_eq!(pending["paste"].as_array().map(Vec::len), Some(1), "OK would paste onto the plane");
+
+    let dialog = h.state().vanishing.as_ref().unwrap().dialog;
+    let ctx = h.ctx.clone();
+    crate::control::dialogs::workspace_ui(h.state_mut(), &ctx, VP, &json!({"cancel": true})).unwrap();
+    h.run_steps(4);
+    let app = h.state();
+    assert!(app.framework.dialogs.get_dyn(dialog).is_none(), "Cancel closes the dialog");
+    assert!(app.vanishing.is_none(), "Cancel drops the workspace");
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc, original, "Cancel leaves the document unchanged");
+    assert_eq!((st.history.past_len(), st.revision), (steps, revision), "Cancel does not edit the document or its history");
+}
+
+#[test]
 fn a_torn_wall_and_clone_strokes_are_one_step_and_preview_on_the_source() {
     let mut app = app_with_layer();
     // A green mark near the floor's front edge to clone.

@@ -12,9 +12,12 @@ use crate::state::Tool;
 
 type H = Harness<'static, Box<PhotocraftApp>>;
 
-/// How the memoized view whose props type is named `props` took part in the last pass.
+/// How the memoized view whose props type is named `props` took part in the last pass. A view inside the options bar's
+/// own view (`region_versions::OptionsSlot`) is not decided when that view replays: it replays with it.
 fn run_of(h: &H, props: &str) -> Option<MemoRun> {
-    last_pass_memo_runs(&h.ctx).into_iter().find(|(name, _, _)| name.contains(props)).map(|(_, _, run)| run)
+    let runs = last_pass_memo_runs(&h.ctx);
+    let own = runs.iter().find(|(name, _, _)| name.contains(props)).map(|(_, _, run)| *run);
+    own.or_else(|| runs.iter().any(|(name, _, run)| name.contains("OptionsSlot<") && *run == MemoRun::Replayed).then_some(MemoRun::Replayed))
 }
 
 #[test]

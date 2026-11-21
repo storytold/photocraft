@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use photocraft_raster::Surface;
 
 /// Where a video layer's footage came from.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum VideoSource {
     /// Created blank (Layer › Video Layers › New Blank Video Layer).
     Blank,
@@ -20,7 +20,7 @@ pub enum VideoSource {
 ///
 /// Frames are full raster surfaces held in memory and saved in native documents. The
 /// optional original footage is kept separately from painted frames for comparison/restore.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub struct VideoData {
     pub frames: Vec<Surface>,
     /// Immutable original footage of a file-backed sequence. COW surfaces share unchanged
@@ -57,7 +57,7 @@ impl PartialEq for VideoData {
 }
 
 /// The document timeline.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Timeline {
     /// Frames per second.
     pub fps: f32,
