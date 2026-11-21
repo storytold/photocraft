@@ -1,8 +1,7 @@
 //! #12732: Add Anchor Point reaches a segment within 5 points, as measured at display scale 1: at
 //! 100 % a click 5 px from a segment adds an anchor and one 6 px away does nothing; at 200 % that
 //! is 2.5 document px. The reach is the overlay's (storytold/craft-libs#2282); these tests drive it
-//! through the canvas, and the two that need it stay ignored until the pin carries it. Delete Anchor
-//! Point keeps its 6 points.
+//! through the canvas. Delete Anchor Point keeps its 6 points.
 
 use egui::Modifiers;
 use photocraft_doc::vector::Path;
@@ -60,7 +59,6 @@ fn adds_at(zoom: f32, dy: f64) -> bool {
 }
 
 #[test]
-#[ignore = "needs the craft-libs pin with storytold/craft-libs#2282 (the overlay reaches 4 points before it)"]
 fn at_100_percent_a_click_5_px_from_a_segment_adds_an_anchor_and_6_px_does_nothing() {
     for dy in [2.0, 4.0, 5.0] {
         assert!(adds_at(1.0, dy), "{dy} px below adds");
@@ -71,7 +69,6 @@ fn at_100_percent_a_click_5_px_from_a_segment_adds_an_anchor_and_6_px_does_nothi
 }
 
 #[test]
-#[ignore = "needs the craft-libs pin with storytold/craft-libs#2282 (the overlay reaches 4 points before it)"]
 fn the_reach_is_in_screen_pixels_so_at_200_percent_it_is_2_5_document_px() {
     assert!(adds_at(2.0, 2.5));
     assert!(!adds_at(2.0, 3.0));
