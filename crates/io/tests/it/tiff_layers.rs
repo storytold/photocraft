@@ -20,7 +20,7 @@ fn tags(bytes: &[u8]) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
     (r.map(<[u8]>::to_vec), l.map(<[u8]>::to_vec))
 }
 
-fn roundtrip(doc: &Document) -> Document {
+fn roundtrip(doc: &Document) -> (Document, photocraft_codecs::Image) {
     let r = tiff(doc, true);
     let (resources, layers) = tags(&r.bytes);
     let layers = layers.expect("layer data");
@@ -40,7 +40,7 @@ fn roundtrip(doc: &Document) -> Document {
     if extra > 0 && extra <= photocraft_codecs::MAX_EXTRA_SAMPLES {
         assert_eq!(flat.meta.extra_samples.len(), extra, "{:?}", r.warnings);
     }
-    import("x.tif", &r.bytes).expect("import").document
+    (import("x.tif", &r.bytes).expect("import").document, flat)
 }
 
 /// `doc` as a layered TIFF round trip returns it, including extra channels.
@@ -53,7 +53,7 @@ macro_rules! rt_case {
         #[test]
         fn $name() {
             let d = gen_doc($mode, $depth, $f);
-            let back = roundtrip(&d);
+            let (back, _) = roundtrip(&d);
             assert_docs_eq(&expected(&d), &back);
         }
     };
@@ -77,16 +77,11 @@ fn tiff_and_psd_open_as_the_same_document() {
         let d = gen_doc(mode, depth, Features::ALL);
         let psd = export(&d, "x.psd", &ExportOptions::default()).unwrap();
         let from_psd = import("x.psd", &psd.bytes).unwrap().document;
-        let from_tif = roundtrip(&d);
+        let (from_tif, composite) = roundtrip(&d);
         assert_docs_eq(&expected(&from_psd), &from_tif);
         // The composite the TIFF carries is what the document looks like.
-        let tif = tiff(&d, true);
-        let flat = import(
-            "flat.tif",
-            &photocraft_codecs::encode(&photocraft_codecs::decode(&tif.bytes).unwrap(), photocraft_codecs::Format::Tiff, &Default::default()).unwrap(),
-        )
-        .unwrap()
-        .document;
+        let flat_bytes = photocraft_codecs::encode(&composite, photocraft_codecs::Format::Tiff, &Default::default()).unwrap();
+        let flat = import("flat.tif", &flat_bytes).unwrap().document;
         let a = photocraft_compose::flatten(&d).into_px();
         let b = photocraft_compose::flatten(&flat).into_px();
         assert!(max_diff(&a, &b) <= 2.0 / 255.0, "{mode:?} {depth:?}: composite differs by {}", max_diff(&a, &b));
