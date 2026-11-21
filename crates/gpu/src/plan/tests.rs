@@ -480,7 +480,7 @@ fn cached_adjustment_rows_match_freshly_built_tables() {
         for a in row_cached_adjustments() {
             let fresh: Vec<Vec<f32>> = match &a {
                 Adjustment::Levels { .. } | Adjustment::Curves { .. } => adjust::tone_luts_depth(&a, Some(depth)).into_iter().take(3).collect(),
-                Adjustment::HueSaturation { ranges, .. } => adjust::hue_range_tables(ranges).into_iter().collect(),
+                Adjustment::HueSaturation { ranges, .. } => adjust::hue_range_tables(ranges, depth == SampleType::U8).into_iter().collect(),
                 Adjustment::ColorBalance { shadows, midtones, highlights, preserve_luminosity } => {
                     let curves = adjust::BalanceCurve::rgb([*shadows, *midtones, *highlights], *preserve_luminosity);
                     (0..3).map(|ch| (0..4096).map(|k| curves[ch].eval(k as f32 / 4095.0)).collect()).collect()
