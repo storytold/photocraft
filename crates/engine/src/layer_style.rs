@@ -1000,6 +1000,9 @@ fn same_kind(a: &Effect, b: &Effect) -> bool {
 /// automation mistake can't ask for an unbounded document change.
 const MAX_EFFECTS: usize = 256;
 
+/// The most strokes `add` puts on one layer: the Layer Style dialog's limit (#15140).
+pub(crate) const MAX_STROKES: usize = 10;
+
 /// Replaces a layer's whole effect list in one history step: the Layer Style dialog's
 /// apply. Each entry builds an effect from `params`, or edits the snapshot it carried
 /// (`fx`: the effect JSON as the dialog loaded it, kept verbatim for everything the
@@ -1096,7 +1099,14 @@ fn set_effect(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
         // effects list already has the default `enabled: true`, so a first effect still shows.
         match l.effects.items.iter_mut().find(|e| same_kind(e, &fx)) {
             Some(slot) if !add => *slot = fx,
-            _ => l.effects.items.push(fx),
+            _ => {
+                // A new stroke stops at ten, as the dialog's "+" does (#15140). A layer that
+                // already holds more (from a file or a script) keeps them; editing one still works.
+                if matches!(fx, Effect::Stroke(_)) && l.effects.items.iter().filter(|e| matches!(e, Effect::Stroke(_))).count() >= MAX_STROKES {
+                    return Err(bad(&format!("layer.layerStyle.{kind}"), format!("a layer takes at most {MAX_STROKES} strokes")));
+                }
+                l.effects.items.push(fx);
+            }
         }
         Ok(())
     })?;
@@ -1291,6 +1301,9 @@ mod outer_glow_defaults_tests;
 mod inner_shadow_ranges_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod stroke_max_ten_tests;
 
 fn exact_stops(p: &Value) -> Option<Vec<(f32, Color)>> {
     p.get("stops")?
