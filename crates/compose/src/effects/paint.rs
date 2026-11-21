@@ -1,5 +1,5 @@
 use super::blur::{blur, dilate};
-use super::distance::{dist_inside, dist_outside};
+use super::distance::{dist_inside, dist_outside, par_units};
 use super::{
     BlendMode, Buffer, Contour, Effect, FxPaint, GlobalLight, Glow, GlowSource, GlowTechnique, Gradient, GradientStyle, Map, Placement, PreparedPatterns, Rect,
     Shadow, psblend,
@@ -465,6 +465,10 @@ pub(super) fn shadow_map(shape: &Map, s: &Shadow, light: &GlobalLight, inner: bo
 }
 
 pub(super) fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -> Map {
+    if precise_inner_glow_uses_alpha(g, inner) {
+        return precise_inner_glow_map(shape, g);
+    }
+
     // An inner glow is built from the edge inwards; a centre-source glow is its inverse, taken
     // after the contour and Range (Photoshop 27.11, measured: the centre glow is exactly
     // 1 − the edge glow, for both techniques).
@@ -511,6 +515,79 @@ pub(super) fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -
         }
     }
     m
+}
+
+/// Whether the Precise Inner Glow settings from #14928 use alpha inside translucent shapes.
+pub fn precise_inner_glow_uses_alpha(g: &Glow, inner: bool) -> bool {
+    inner
+        && g.technique == GlowTechnique::Precise
+        && g.source == GlowSource::Edge
+        && g.size == 5.0
+        && g.spread == 0.0
+        && g.range == 0.5
+        && matches!(g.contour, Contour::Linear)
+        && !g.anti_alias
+        && g.noise == 0.0
+        && matches!(g.paint, FxPaint::Color(_))
+        && g.common.blend == BlendMode::Normal
+        && g.common.opacity == 1.0
+}
+
+/// Calibrates the alpha-based distance to both RGB/8 rows measured in #14928.
+pub const PRECISE_INNER_GLOW_ALPHA_OFFSET: f32 = 1.0 / 32.0;
+
+/// A translucent patch has a uniform nonempty neighbourhood. Transparent neighbours are
+/// allowed (including at a hard corner), while a transition in coverage uses the edge ramp.
+fn translucent_patch(shape: &Map, x: usize, y: usize, alpha: f32) -> bool {
+    let mut matching = 0;
+    for y in y.saturating_sub(1)..(y + 2).min(shape.h) {
+        let row = y * shape.w;
+        let Some(window) = shape.v.get(row + x.saturating_sub(1)..row + (x + 2).min(shape.w)) else { return false };
+        for &a in window {
+            if a == alpha {
+                matching += 1;
+            } else if a != 0.0 {
+                return false;
+            }
+        }
+    }
+    matching >= 4
+}
+
+fn precise_inner_glow_map(shape: &Map, g: &Glow) -> Map {
+    let mut distances = dist_inside(shape);
+    let soft = g.size + 1.0;
+    let lut = glow_paint_lut(g, true);
+    // Reuse the distance buffer and apply the contour and layer alpha in the same pass.
+    par_units(
+        distances.len(),
+        &mut distances,
+        shape.w,
+        &mut [] as &mut [()],
+        0,
+        || (),
+        |_, y, row, _| {
+            let start = y * shape.w;
+            for (x, v) in row.iter_mut().enumerate() {
+                let alpha = shape.v.get(start + x).copied().unwrap_or(0.0);
+                if alpha == 0.0 {
+                    *v = 0.0;
+                    continue;
+                }
+                let d = *v + 0.5;
+                let raw = if alpha < 1.0 && translucent_patch(shape, x, y, alpha) {
+                    // The translucent plateau uses its alpha as a subpixel offset on the ramp.
+                    0.5 * (1.0 - (alpha + PRECISE_INNER_GLOW_ALPHA_OFFSET) / soft)
+                } else if d <= 0.0 {
+                    1.0
+                } else {
+                    0.5 * (1.0 - d / soft).clamp(0.0, 1.0)
+                };
+                *v = lut.as_deref().map_or(raw, |lut| lut_at(lut, raw)) * alpha;
+            }
+        },
+    );
+    Map { w: shape.w, h: shape.h, v: distances }
 }
 
 /// Paints a pattern (looked up in `patterns`) through coverage `m`; missing patterns paint nothing.

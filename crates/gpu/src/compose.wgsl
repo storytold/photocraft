@@ -1480,8 +1480,38 @@ fn fs_mblur(in: VOut) -> @location(0) vec4<f32> {
 fn fs_mglow(in: VOut) -> @location(0) vec4<f32> {
     let d = textureLoad(tex_a, local(in.pos), 0).r + 0.5;
     var m = 0.5 * clamp(1.0 - (d - op.p0.x) / op.p0.y, 0.0, 1.0);
+    if (op.p1.x > 0.5) {
+        return mout(precise_inner_glow(local(in.pos), select(m, 1.0, d <= op.p0.x)));
+    }
     if (d <= op.p0.x) { m = 1.0; }
     return mout(m);
+}
+
+fn inner_glow_alpha(p: vec2<i32>) -> f32 {
+    return select(0.0, textureLoad(tex_b, p, 0).r, all(p >= vec2(0)) && all(p < chunk.size));
+}
+
+fn precise_inner_glow(p: vec2<i32>, ramp: f32) -> f32 {
+    let a = textureLoad(tex_b, p, 0).r;
+    if (a == 0.0) { return 0.0; }
+    var v = ramp;
+    if (a < 1.0) {
+        // Transparent neighbours are part of a hard edge. Other alpha values are a transition.
+        let sides = vec4(inner_glow_alpha(p + vec2(-1, 0)), inner_glow_alpha(p + vec2(1, 0)),
+                         inner_glow_alpha(p + vec2(0, -1)), inner_glow_alpha(p + vec2(0, 1)));
+        let same_sides = sides == vec4(a);
+        if (all(select(sides == vec4(0.0), vec4(true), same_sides))) {
+            let corners = vec4(inner_glow_alpha(p + vec2(-1, -1)), inner_glow_alpha(p + vec2(1, -1)),
+                               inner_glow_alpha(p + vec2(-1, 1)), inner_glow_alpha(p + vec2(1, 1)));
+            let same_corners = corners == vec4(a);
+            if (all(select(corners == vec4(0.0), vec4(true), same_corners))) {
+                let matching = dot(select(vec4(0.0), vec4(1.0), same_sides) + select(vec4(0.0), vec4(1.0), same_corners), vec4(1.0));
+                if (matching >= 3.0) { v = 0.5 * (1.0 - (a + op.p1.y) / op.p0.y); }
+            }
+        }
+    }
+    // This case is edge-source with a Linear contour at 50% Range.
+    return lut(0, v) * a;
 }
 
 // Last step of a coverage map: p0 = (|A - B| (satin), 1 - v (1: before the contour, 2: after it,
