@@ -279,6 +279,28 @@ impl ColorState {
         if exif_srgb { merge(report, json!({"exif": true})) } else { report }
     }
 
+    /// Whether the profile `tag` of a `mode` document differs in colour from that mode's working space, as the open
+    /// policy compares them (by colour, not bytes); for the document tab's mark (#14240). `false` for a tag of another
+    /// colour space. The answer is kept per tag and working setting: the tab asks every frame, and the comparison
+    /// samples the whole gamut.
+    pub fn differs_from_working(&self, mode: ColorMode, tag: &Arc<Vec<u8>>) -> bool {
+        type Cache = Mutex<Vec<(Weak<Vec<u8>>, ColorMode, Option<String>, bool)>>;
+        static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
+        let cache = CACHE.get_or_init(Default::default);
+        let space = mode_space(mode);
+        let spec = self.settings.working_spec(space).map(str::to_owned);
+        {
+            let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
+            c.retain(|(w, ..)| w.strong_count() > 0);
+            if let Some((.., differs)) = c.iter().find(|(w, m, s, _)| w.as_ptr() == Arc::as_ptr(tag) && *m == mode && *s == spec) {
+                return *differs;
+            }
+        }
+        let differs = profile_from_bytes(tag).is_ok_and(|p| p.color_space == space && !p.same_colors(&self.working(mode)));
+        cache.lock().unwrap_or_else(|e| e.into_inner()).push((Arc::downgrade(tag), mode, spec, differs));
+        differs
+    }
+
     /// [`ColorState::open_policy`] once the document's profile is known.
     fn apply_open_policy(&self, doc: &mut Document, space: ColorSpace) -> Value {
         let working = self.working(doc.mode);
