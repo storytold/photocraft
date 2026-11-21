@@ -8,7 +8,7 @@ pub(crate) const SAVE_OPTIONS_OPEN: &str = "Answer the TIFF, Targa, DDS or JPEG 
 /// The format answers a save takes instead of asking: the Targa bits per pixel (`"tgaBits"`),
 /// the DDS options (`"ddsCompression"`, `"ddsMipmaps"`), JPEG Options (`"quality"` 0–12,
 /// `"jpegFormat"`), TIFF Options (`"tiffCompression"`, `"tiffTransparency"`, `"tiffPyramid"`,
-/// `"tiffLayers"`) and a PSD/PSB's Maximize Compatibility (`"maximizeCompatibility"`). `None`
+/// `"tiffByteOrder"`, `"tiffPixelOrder"`, `"tiffLayers"`) and a PSD/PSB's Maximize Compatibility (`"maximizeCompatibility"`). `None`
 /// asks in Save As and takes the default in automation saves, which never prompt (Maximize
 /// Compatibility: Preferences › File Handling decides).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -113,6 +113,10 @@ pub struct ExportSettings {
     pub tiff_transparency: Option<bool>,
     /// TIFF Options › Save Image Pyramid.
     pub tiff_pyramid: bool,
+    /// TIFF Options › Byte Order (little-endian unless a script asks for big-endian).
+    pub tiff_byte_order: photocraft_codecs::TiffByteOrder,
+    /// TIFF Options › Pixel Order (Interleaved unless a script asks for Per Channel).
+    pub tiff_pixel_order: photocraft_codecs::TiffPixelOrder,
     /// Embed the document's whole XMP packet. `true` by default (Save As keeps the metadata);
     /// Export As starts at Metadata: None, since the packet can carry the text of every type
     /// layer and one id per placed document (#647).
@@ -160,6 +164,8 @@ impl Default for ExportSettings {
             tiff_compression: photocraft_codecs::TiffCompression::None,
             tiff_transparency: None,
             tiff_pyramid: false,
+            tiff_byte_order: photocraft_codecs::TiffByteOrder::LittleEndian,
+            tiff_pixel_order: photocraft_codecs::TiffPixelOrder::Interleaved,
             xmp_all: true,
             tga_bits: None,
             dds: photocraft_io::DdsOptions::default(),
@@ -195,6 +201,8 @@ impl ExportSettings {
         opts.tiff_transparency = self.tiff_transparency;
         opts.encode.tiff_compression = self.tiff_compression;
         opts.encode.tiff_pyramid = self.tiff_pyramid;
+        opts.encode.tiff_byte_order = self.tiff_byte_order;
+        opts.encode.tiff_pixel_order = self.tiff_pixel_order;
         opts.xmp = if self.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
         opts.tga_bits = self.tga_bits;
         opts.encode.dds = self.dds;

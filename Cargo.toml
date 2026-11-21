@@ -361,4 +361,37 @@ egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6525c879
 egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6525c87923ca47465aac244460fe4b1139349060" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
 
-
+# Until the craft-libs pull request with this change merges into `next`: its branch, based on the
+# pinned `next` commit above. Replace with the merged revision.
+[patch."https://github.com/storytold/craft-libs"]
+craft = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-affinity = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-cms = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-crs = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-dds = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-docpath = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-file-formats = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-heif = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-i18n = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-image-codecs = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-jpeg = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-jxl = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-kra = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-media = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-metadata = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-ora = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-pcraft-bundle = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-pcraft-format = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-pdf = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-pdn = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-plist = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-print = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-psd = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-raw = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-svg = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-tiff = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-update = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-video = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-xcf = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-xml = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }
+craft-zip = { git = "https://github.com/acebear17/craft-libs", rev = "e5f7daa77577acc842913e5302613c75ef396939" }

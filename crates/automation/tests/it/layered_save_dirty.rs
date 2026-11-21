@@ -105,3 +105,28 @@ fn doc_save_takes_tiff_options() {
     assert!(!bad.exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The control channel's `doc.save` takes TIFF Options › Byte Order and Pixel Order (#15908):
+/// `tiffByteOrder` "big" writes big-endian, `tiffPixelOrder` "perChannel" one plane per channel;
+/// a bad value is an error and writes nothing.
+#[test]
+fn doc_save_takes_tiff_byte_and_pixel_order() {
+    let dir = tmp("tiff-order");
+    let mut headless = Headless::trusted_local();
+    headless.handle("doc.new", json!({"width": 40, "height": 30, "background": "white"})).unwrap();
+    let path = dir.join("o.tif");
+    let p = path.to_str().unwrap();
+    headless.handle("doc.save", json!({"path": p, "tiffByteOrder": "big", "tiffPixelOrder": "perChannel", "tiffCompression": "lzw"})).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(bytes.starts_with(b"MM"));
+    let info = photocraft_codecs::tiff_info(&bytes).unwrap();
+    assert!(info.pages[0].planar && !info.little_endian);
+    let bad = dir.join("bad.tif");
+    for params in [json!({"tiffByteOrder": "mac"}), json!({"tiffPixelOrder": "planar"}), json!({"tiffByteOrder": 2})] {
+        let mut params = params;
+        params["path"] = json!(bad.to_str().unwrap());
+        assert!(headless.handle("doc.save", params.clone()).is_err(), "{params}");
+    }
+    assert!(!bad.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}

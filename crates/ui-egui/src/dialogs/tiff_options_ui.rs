@@ -1,9 +1,12 @@
 //! TIFF Options: what File › Save As and Save a Copy ask before writing a TIFF, as Photoshop's
 //! TIFF Options dialog does (#8827): Image Compression (None, LZW, ZIP), Save Image Pyramid,
 //! Save Transparency (offered when the document has no Background layer) and, for a document a
-//! TIFF stores with its layers, "Discard Layers and Save a Copy". Photoshop's JPEG compression,
-//! Pixel Order and Byte Order aren't offered: the TIFF encoder writes interleaved samples in the
-//! machine's byte order without JPEG.
+//! TIFF stores with its layers, "Discard Layers and Save a Copy". Photoshop's JPEG compression
+//! isn't offered: the TIFF encoder has none. Pixel Order (interleaved, per channel) and Byte
+//! Order (little- or big-endian) are taken from scripts (`tiffPixelOrder`, `tiffByteOrder`) and
+//! recorded with the save, but the dialog has no rows for them yet: its rows come from the
+//! framework's TIFF Options form, so an answer from the dialog writes the defaults, interleaved
+//! and little-endian.
 //!
 //! With "Ask Before Saving Layered TIFF Files" on (Preferences › File Handling), a layered save
 //! also notes that layers increase the file size; "Don't show again" clears the preference.
@@ -12,11 +15,11 @@
 //! once answered, journalled as the `record` command passed to [`park`] with its path,
 //! `tiffLayers` (layered documents) and [`TiffChoice::record`]'s params. Cancel drops the save.
 //! Scripts skip the prompt by passing any of `tiffCompression`, `tiffTransparency`,
-//! `tiffPyramid` or `tiffLayers`. The answer is remembered for the next TIFF save of the session.
+//! `tiffPyramid`, `tiffByteOrder`, `tiffPixelOrder` or `tiffLayers`. The answer is remembered for the next TIFF save of the session.
 
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{ExportOptionsKind, FormatOptions, HostedFormatOptions, TiffCompression as UiTiffCompression, TiffOptions};
-use photocraft_codecs::TiffCompression;
+use photocraft_codecs::{TiffByteOrder, TiffCompression, TiffPixelOrder};
 use serde_json::Value;
 
 use crate::format_prompts::{self, ParkedFormat, ParkedSave};
@@ -32,6 +35,10 @@ pub struct TiffChoice {
     pub pyramid: bool,
     /// `Some(false)`: "Discard Layers and Save a Copy". `None` keeps what the save would do.
     pub layers: Option<bool>,
+    /// Byte Order: little-endian (`II`) or big-endian (`MM`).
+    pub byte_order: TiffByteOrder,
+    /// Pixel Order: interleaved, or each channel on its own.
+    pub pixel_order: TiffPixelOrder,
 }
 
 impl TiffChoice {
@@ -41,13 +48,16 @@ impl TiffChoice {
             tiff_compression: self.compression,
             tiff_transparency: self.transparency,
             tiff_pyramid: self.pyramid,
+            tiff_byte_order: self.byte_order,
+            tiff_pixel_order: self.pixel_order,
             tiff_layers: self.layers.unwrap_or(settings.tiff_layers),
             ..settings
         }
     }
 
-    /// Adds `tiffCompression`, and `tiffTransparency` and `tiffPyramid` when set, to a recorded
-    /// save step, so replaying it doesn't ask again. `tiffLayers` is recorded by the save itself.
+    /// Adds `tiffCompression`, and `tiffTransparency`, `tiffPyramid`, `tiffByteOrder` and
+    /// `tiffPixelOrder` when set or not the default, to a recorded save step, so replaying it
+    /// doesn't ask again. `tiffLayers` is recorded by the save itself.
     pub fn record(self, step: &mut Value) {
         step["tiffCompression"] = compression_name(self.compression).into();
         if let Some(t) = self.transparency {
@@ -55,6 +65,12 @@ impl TiffChoice {
         }
         if self.pyramid {
             step["tiffPyramid"] = true.into();
+        }
+        if self.byte_order != TiffByteOrder::default() {
+            step["tiffByteOrder"] = self.byte_order.name().into();
+        }
+        if self.pixel_order != TiffPixelOrder::default() {
+            step["tiffPixelOrder"] = self.pixel_order.name().into();
         }
     }
 }
@@ -69,20 +85,29 @@ pub fn compression_name(c: TiffCompression) -> &'static str {
 }
 
 /// The TIFF Options a command or control call gives (`tiffCompression`, `tiffTransparency`,
-/// `tiffPyramid`, `tiffLayers`), which skip the prompt. None given: `None`. A bad value is an
-/// error, as in the engine's saves.
+/// `tiffPyramid`, `tiffByteOrder`, `tiffPixelOrder`, `tiffLayers`), which skip the prompt. None
+/// given: `None`. A bad value is an error, as in the engine's saves.
 pub fn choice_param(params: &Value, cmd: &str) -> Result<Option<TiffChoice>, String> {
-    use photocraft_engine::file_cmds::{tiff_bool_param, tiff_compression_param};
+    use photocraft_engine::file_cmds::{tiff_bool_param, tiff_byte_order_param, tiff_compression_param, tiff_pixel_order_param};
     let compression = tiff_compression_param(params, cmd).map_err(|e| e.to_string())?;
     let transparency = tiff_bool_param(params, "tiffTransparency", cmd).map_err(|e| e.to_string())?;
     let pyramid = tiff_bool_param(params, "tiffPyramid", cmd).map_err(|e| e.to_string())?;
+    let byte_order = tiff_byte_order_param(params, cmd).map_err(|e| e.to_string())?;
+    let pixel_order = tiff_pixel_order_param(params, cmd).map_err(|e| e.to_string())?;
     let layers = match params.get("tiffLayers") {
         None | Some(Value::Null) => None,
         Some(Value::Bool(b)) => Some(*b),
         Some(v) => return Err(format!("{cmd}: `tiffLayers` must be true or false, got {v}")),
     };
-    let any = compression.is_some() || transparency.is_some() || pyramid.is_some() || layers.is_some();
-    Ok(any.then(|| TiffChoice { compression: compression.unwrap_or_default(), transparency, pyramid: pyramid.unwrap_or(false), layers }))
+    let any = compression.is_some() || transparency.is_some() || pyramid.is_some() || layers.is_some() || byte_order.is_some() || pixel_order.is_some();
+    Ok(any.then(|| TiffChoice {
+        compression: compression.unwrap_or_default(),
+        transparency,
+        pyramid: pyramid.unwrap_or(false),
+        layers,
+        byte_order: byte_order.unwrap_or_default(),
+        pixel_order: pixel_order.unwrap_or_default(),
+    }))
 }
 
 /// What the last TIFF Options answer of the session chose, where the next prompt starts.
@@ -172,6 +197,8 @@ pub(crate) fn finish(app: &mut PhotocraftApp, ctx: &egui::Context, save: ParkedS
         transparency: has_transparency.then_some(options.transparency),
         pyramid: options.pyramid,
         layers: layered.then_some(!options.discard_layers),
+        // The framework's form has no Byte Order or Pixel Order rows: the defaults.
+        ..TiffChoice::default()
     };
     let mut step = save.step();
     if let Some(layers) = choice.layers {
@@ -198,8 +225,13 @@ mod tests {
         );
         assert_eq!(
             choice_param(&json!({"tiffTransparency": false, "tiffPyramid": true, "tiffLayers": false}), "file.saveAs"),
-            Ok(Some(TiffChoice { compression: TiffCompression::None, transparency: Some(false), pyramid: true, layers: Some(false) }))
+            Ok(Some(TiffChoice { compression: TiffCompression::None, transparency: Some(false), pyramid: true, layers: Some(false), ..Default::default() }))
         );
+        assert_eq!(
+            choice_param(&json!({"tiffByteOrder": "big", "tiffPixelOrder": "perChannel"}), "file.saveAs"),
+            Ok(Some(TiffChoice { byte_order: TiffByteOrder::BigEndian, pixel_order: TiffPixelOrder::PerChannel, ..Default::default() }))
+        );
+        assert_eq!(choice_param(&json!({"tiffByteOrder": "little", "tiffPixelOrder": "interleaved"}), "file.saveAs"), Ok(Some(TiffChoice::default())));
         for bad in [
             json!({"tiffCompression": "jpeg"}),
             json!({"tiffCompression": 1}),
@@ -207,6 +239,11 @@ mod tests {
             json!({"tiffTransparency": 1}),
             json!({"tiffPyramid": [true]}),
             json!({"tiffLayers": "false"}),
+            json!({"tiffByteOrder": "mac"}),
+            json!({"tiffByteOrder": "Little"}),
+            json!({"tiffByteOrder": 1}),
+            json!({"tiffPixelOrder": "planar"}),
+            json!({"tiffPixelOrder": true}),
         ] {
             assert!(choice_param(&bad, "file.saveAs").is_err(), "{bad}");
         }
@@ -215,13 +252,26 @@ mod tests {
     #[test]
     fn apply_sets_the_export_settings() {
         let base = ExportSettings::default();
-        let s = TiffChoice { compression: TiffCompression::Deflate, transparency: Some(false), pyramid: true, layers: Some(false) }.apply(base.clone());
+        let s = TiffChoice {
+            compression: TiffCompression::Deflate,
+            transparency: Some(false),
+            pyramid: true,
+            layers: Some(false),
+            byte_order: TiffByteOrder::BigEndian,
+            pixel_order: TiffPixelOrder::PerChannel,
+        }
+        .apply(base.clone());
         assert_eq!((s.tiff_compression, s.tiff_transparency, s.tiff_pyramid, s.tiff_layers), (TiffCompression::Deflate, Some(false), true, false));
+        assert_eq!((s.tiff_byte_order, s.tiff_pixel_order), (TiffByteOrder::BigEndian, TiffPixelOrder::PerChannel));
         let io = s.io_options();
         assert_eq!(
             (io.encode.tiff_compression, io.tiff_transparency, io.encode.tiff_pyramid, io.tiff_layers),
             (TiffCompression::Deflate, Some(false), true, false)
         );
+        assert_eq!((io.encode.tiff_byte_order, io.encode.tiff_pixel_order), (TiffByteOrder::BigEndian, TiffPixelOrder::PerChannel));
+        // The defaults stay the defaults.
+        let io = ExportSettings::default().io_options();
+        assert_eq!((io.encode.tiff_byte_order, io.encode.tiff_pixel_order), (TiffByteOrder::LittleEndian, TiffPixelOrder::Interleaved));
         // No layers answer keeps what the save would do.
         assert!(TiffChoice::default().apply(base).tiff_layers);
     }
