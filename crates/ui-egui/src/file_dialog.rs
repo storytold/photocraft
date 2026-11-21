@@ -300,6 +300,30 @@ impl PhotocraftApp {
         })
     }
 
+    /// Ask for a single file whose desktop path can go straight to an engine command (avoiding a
+    /// duplicate UI-thread read of multi-gigabyte preset files), while web files arrive as bytes.
+    pub(crate) fn pick_file_source_filtered(
+        &mut self,
+        extensions: &[&str],
+        then: impl FnOnce(&mut Self, String, Option<Vec<u8>>) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
+        let mut request = open_filters(PickRequest::open("file"), extensions);
+        if let Some(dir) = last_used_dir(&self.ui.recent_files) {
+            request = request.directory(dir);
+        }
+        self.ask_file(request, move |app, picked| match picked {
+            Picked::Contents(files) => {
+                let (name, bytes) = files.into_iter().next().ok_or(CANCELLED)?;
+                then(app, name, Some(bytes))
+            }
+            Picked::Paths(paths) => {
+                let path = path_string(paths.first().ok_or(CANCELLED)?);
+                then(app, path, None)
+            }
+            Picked::Cancelled | Picked::Unavailable(_) => Err(UNEXPECTED.into()),
+        })
+    }
+
     /// File › Open: opens every chosen file in the order the dialog returns them, reporting each
     /// failure (see [`Self::open_paths_in_order`]).
     pub fn open_dialog_file(&mut self) -> Result<Value, String> {

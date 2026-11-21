@@ -48,16 +48,57 @@ pub fn read_abr_with(bytes: &[u8], group: &str, ctl: &photocraft_raster::Interru
     map_file_with(&f, group, &photocraft_raster::Interrupt::new(&cancel, &progress)).map_err(|e| e.to_string())
 }
 
+/// [`read_abr_with`] for an owned `.abr` buffer: frees `bytes` once parsed and releases each
+/// decoded [`AbrSample`]'s raw pixels as soon as its [`GrayTile`] is built (#5949).
+pub fn read_abr_owned(bytes: Vec<u8>, group: &str, ctl: &photocraft_raster::Interrupt) -> Result<AbrImport, String> {
+    let f = abr::parse(&bytes).map_err(|e| format!("not a readable brush file (.abr): {e}"))?;
+    drop(bytes);
+    ctl.progress(0.1);
+    let cancel = || ctl.cancelled();
+    let progress = |p: f32| ctl.progress(0.1 + 0.9 * p);
+    map_file_owned(f, group, &photocraft_raster::Interrupt::new(&cancel, &progress)).map_err(|e| e.to_string())
+}
+
 /// Map a parsed file.
 pub fn map_file(f: &AbrFile, group: &str) -> AbrImport {
     // Never cancelled, so always `Ok`.
     map_file_with(f, group, &photocraft_raster::Interrupt::NONE).unwrap_or_default()
 }
 
+/// Converts a single legacy brush entry into a [`BrushPreset`].
+fn map_legacy_brush(i: usize, b: &abr::LegacyBrush, group: &str, warnings: &mut BTreeSet<String>) -> BrushPreset {
+    let spacing = if b.spacing == 0 { 0.25 } else { f32::from(b.spacing) / 100.0 };
+    let base = BrushSettings { pressure_size: false, spacing, ..Default::default() };
+    let (brush, default_name) = match &b.tip {
+        LegacyTip::Computed { diameter, hardness, angle, roundness } => (
+            BrushSettings {
+                size: f32::from((*diameter).max(1)),
+                hardness: (f32::from(*hardness) / 100.0).clamp(0.0, 1.0),
+                angle: f32::from(*angle),
+                roundness: (f32::from(*roundness) / 100.0).clamp(0.01, 1.0),
+                ..base
+            },
+            format!("{} px Round", diameter),
+        ),
+        LegacyTip::Sampled(s) => {
+            let (tile, size) = Mapper::convert_sample(s, warnings);
+            (BrushSettings { size, tip: TipShape::Sampled(tile), aliased: !b.anti_alias, ..base }, format!("Sampled Brush {}", i + 1))
+        }
+    };
+    let name = if b.name.trim().is_empty() { default_name } else { b.name.trim().to_string() };
+    BrushPreset { name, brush, builtin: false, group: group.to_string(), folder: Vec::new(), captures: Default::default() }
+}
+
 /// [`map_file`] that checks `ctl` before each brush.
 pub fn map_file_with(f: &AbrFile, group: &str, ctl: &photocraft_raster::Interrupt) -> Result<AbrImport, photocraft_raster::Cancelled> {
     let mut out = AbrImport { version: f.version, warnings: f.warnings.clone(), ..Default::default() };
-    let mut m = Mapper { file: f, warnings: BTreeSet::new(), unknown: BTreeSet::new(), tips: Default::default() };
+    let mut m = Mapper {
+        samples: SampleStore::Borrowed(&f.samples),
+        patterns: &f.patterns,
+        warnings: BTreeSet::new(),
+        unknown: BTreeSet::new(),
+        tips: Default::default(),
+    };
     let total = f.legacy.len().max(f.samples.len()).max(f.presets.len()).max(1) as f32;
     let step = |i: usize| -> Result<(), photocraft_raster::Cancelled> {
         ctl.check()?;
@@ -67,33 +108,14 @@ pub fn map_file_with(f: &AbrFile, group: &str, ctl: &photocraft_raster::Interrup
     if !f.legacy.is_empty() {
         for (i, b) in f.legacy.iter().enumerate() {
             step(i)?;
-            let spacing = if b.spacing == 0 { 0.25 } else { f32::from(b.spacing) / 100.0 };
-            let base = BrushSettings { pressure_size: false, spacing, ..Default::default() };
-            let (brush, default_name) = match &b.tip {
-                LegacyTip::Computed { diameter, hardness, angle, roundness } => (
-                    BrushSettings {
-                        size: f32::from((*diameter).max(1)),
-                        hardness: (f32::from(*hardness) / 100.0).clamp(0.0, 1.0),
-                        angle: f32::from(*angle),
-                        roundness: (f32::from(*roundness) / 100.0).clamp(0.01, 1.0),
-                        ..base
-                    },
-                    format!("{} px Round", diameter),
-                ),
-                LegacyTip::Sampled(s) => {
-                    let (tip, size) = m.tip(s);
-                    (BrushSettings { size, tip, aliased: !b.anti_alias, ..base }, format!("Sampled Brush {}", i + 1))
-                }
-            };
-            let name = if b.name.trim().is_empty() { default_name } else { b.name.trim().to_string() };
-            out.presets.push(BrushPreset { name, brush, builtin: false, group: group.to_string(), folder: Vec::new(), captures: Default::default() });
+            out.presets.push(map_legacy_brush(i, b, group, &mut m.warnings));
         }
     } else if f.presets.is_empty() {
         // Tips without a settings section (early v6 files): one preset per tip.
         for (i, s) in f.samples.iter().enumerate() {
             step(i)?;
-            let (tip, size) = m.tip(s);
-            let brush = BrushSettings { pressure_size: false, spacing: 0.25, size, tip, ..Default::default() };
+            let (tile, size) = Mapper::convert_sample(s, &mut m.warnings);
+            let brush = BrushSettings { pressure_size: false, spacing: 0.25, size, tip: TipShape::Sampled(tile), ..Default::default() };
             out.presets.push(BrushPreset {
                 name: format!("Sampled Brush {}", i + 1),
                 brush,
@@ -123,6 +145,73 @@ pub fn map_file_with(f: &AbrFile, group: &str, ctl: &photocraft_raster::Interrup
     out.warnings.extend(m.warnings);
     if !m.unknown.is_empty() {
         out.warnings.push(format!("settings without a PhotoCraft equivalent were ignored: {}", m.unknown.into_iter().collect::<Vec<_>>().join(", ")));
+    }
+    ctl.progress(1.0);
+    Ok(out)
+}
+
+/// [`map_file_with`] that consumes `f` so each sample's raw byte buffer is freed once converted.
+fn map_file_owned(mut f: AbrFile, group: &str, ctl: &photocraft_raster::Interrupt) -> Result<AbrImport, photocraft_raster::Cancelled> {
+    let total = f.legacy.len().max(f.samples.len()).max(f.presets.len()).max(1) as f32;
+    let step = |i: usize| -> Result<(), photocraft_raster::Cancelled> {
+        ctl.check()?;
+        ctl.progress(i as f32 / total);
+        Ok(())
+    };
+    let mut out = AbrImport { version: f.version, warnings: std::mem::take(&mut f.warnings), ..Default::default() };
+    if !f.legacy.is_empty() {
+        let mut warnings = BTreeSet::new();
+        for (i, b) in f.legacy.into_iter().enumerate() {
+            step(i)?;
+            out.presets.push(map_legacy_brush(i, &b, group, &mut warnings));
+        }
+        out.warnings.extend(warnings);
+    } else if f.presets.is_empty() {
+        let mut warnings = BTreeSet::new();
+        for (i, s) in f.samples.into_iter().enumerate() {
+            step(i)?;
+            let (tile, size) = Mapper::convert_sample(&s, &mut warnings);
+            let brush = BrushSettings { pressure_size: false, spacing: 0.25, size, tip: TipShape::Sampled(tile), ..Default::default() };
+            out.presets.push(BrushPreset {
+                name: format!("Sampled Brush {}", i + 1),
+                brush,
+                builtin: false,
+                group: group.to_string(),
+                folder: Vec::new(),
+                captures: Default::default(),
+            });
+        }
+        out.warnings.extend(warnings);
+    } else {
+        let presets = std::mem::take(&mut f.presets);
+        let mut folders = std::mem::take(&mut f.folders);
+        let mut m = Mapper {
+            samples: SampleStore::Owned(std::mem::take(&mut f.samples)),
+            patterns: &f.patterns,
+            warnings: BTreeSet::new(),
+            unknown: BTreeSet::new(),
+            tips: Default::default(),
+        };
+        for (i, d) in presets.into_iter().enumerate() {
+            step(i)?;
+            let name = text(&d, "Nm  ").filter(|n| !n.trim().is_empty()).map(|n| n.trim().to_string()).unwrap_or_else(|| format!("Brush {}", i + 1));
+            match m.preset(&d) {
+                Some(brush) => {
+                    let folder = folders.get_mut(i).map(std::mem::take).unwrap_or_default();
+                    out.presets.push(BrushPreset { name, brush, builtin: false, group: group.to_string(), folder, captures: Default::default() });
+                }
+                None => {
+                    m.warnings.insert(format!("\"{name}\": its sampled tip is missing from the file; skipped"));
+                }
+            }
+        }
+        let warnings = std::mem::take(&mut m.warnings);
+        let unknown = std::mem::take(&mut m.unknown);
+        drop(m);
+        out.warnings.extend(warnings);
+        if !unknown.is_empty() {
+            out.warnings.push(format!("settings without a PhotoCraft equivalent were ignored: {}", unknown.into_iter().collect::<Vec<_>>().join(", ")));
+        }
     }
     ctl.progress(1.0);
     Ok(out)
@@ -251,30 +340,60 @@ const KNOWN: &[&str] = &[
     "toolOptions",
 ];
 
+enum SampleStore<'a> {
+    Borrowed(&'a [AbrSample]),
+    Owned(Vec<AbrSample>),
+}
+
+impl SampleStore<'_> {
+    /// Finds the sample matching `id`, falling back to index `0` when the file holds a single sample.
+    fn find_index(&self, id: &str) -> Option<usize> {
+        let slice = match self {
+            Self::Borrowed(s) => *s,
+            Self::Owned(s) => s.as_slice(),
+        };
+        slice.iter().position(|s| s.id == id).or_else(|| (slice.len() == 1).then_some(0))
+    }
+}
+
 struct Mapper<'a> {
-    file: &'a AbrFile,
+    samples: SampleStore<'a>,
+    patterns: &'a [PsdPattern],
     warnings: BTreeSet<String>,
     unknown: BTreeSet<String>,
-    /// Tips already converted, by sample: presets can name one sample thousands of times, and a
-    /// tile clones by sharing its data.
-    tips: std::collections::HashMap<*const AbrSample, (photocraft_paint::tile::GrayTile, f32)>,
+    /// Tips already converted, by sample index: presets can name one sample thousands of times,
+    /// and a tile clones by sharing its data.
+    tips: std::collections::HashMap<usize, (photocraft_paint::tile::GrayTile, f32)>,
 }
 
 impl Mapper<'_> {
-    /// A sampled tip (downsampled to [`MAX_TIP_EDGE`]) and its size (larger side).
-    fn tip(&mut self, s: &AbrSample) -> (TipShape, f32) {
-        if let Some((tile, size)) = self.tips.get(&std::ptr::from_ref(s)) {
-            return (TipShape::Sampled(tile.clone()), *size);
-        }
+    /// Converts `s` into a [`GrayTile`] (downsampled to [`MAX_TIP_EDGE`]) and its nominal size.
+    fn convert_sample(s: &AbrSample, warnings: &mut BTreeSet<String>) -> (GrayTile, f32) {
         let v = s.to_unit();
         let (w, h, v) = fit(s.width, s.height, v, MAX_TIP_EDGE);
         if (w, h) != (s.width, s.height) {
-            self.warnings.insert(format!("tips larger than {MAX_TIP_EDGE} px were downsampled"));
+            warnings.insert(format!("tips larger than {MAX_TIP_EDGE} px were downsampled"));
         }
         let data = v.iter().map(|x| (x.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16).collect();
-        let (tile, size) = (GrayTile { width: w, height: h, data }, s.width.max(s.height) as f32);
-        self.tips.insert(std::ptr::from_ref(s), (tile.clone(), size));
-        (TipShape::Sampled(tile), size)
+        (GrayTile { width: w, height: h, data }, s.width.max(s.height) as f32)
+    }
+
+    /// A sampled tip at `idx` and its size (larger side), freeing `s.data` when owned.
+    fn tip_at(&mut self, idx: usize) -> Option<(TipShape, f32)> {
+        if let Some((tile, size)) = self.tips.get(&idx) {
+            return Some((TipShape::Sampled(tile.clone()), *size));
+        }
+        let (tile, size) = match &mut self.samples {
+            SampleStore::Borrowed(s) => Self::convert_sample(s.get(idx)?, &mut self.warnings),
+            SampleStore::Owned(s) => {
+                let sample = s.get_mut(idx)?;
+                let out = Self::convert_sample(sample, &mut self.warnings);
+                sample.data = Vec::new();
+                out
+            }
+        };
+        self.tips.insert(idx, (tile.clone(), size));
+        Some((TipShape::Sampled(tile), size))
     }
 
     fn dynamic(&mut self, d: Option<&Descriptor>) -> Dynamic {
@@ -310,16 +429,15 @@ impl Mapper<'_> {
             return Some((TipShape::Round, None));
         }
         let id = text(t, "sampledData").unwrap_or_default();
-        let s = self.file.samples.iter().find(|s| s.id == id).or_else(|| self.file.samples.first().filter(|_| self.file.samples.len() == 1))?;
-        let (tip, size) = self.tip(s);
+        let idx = self.samples.find_index(&id)?;
+        let (tip, size) = self.tip_at(idx)?;
         Some((tip, Some(size)))
     }
 
     fn pattern(&mut self, t: &Descriptor) -> Pattern {
         let id = text(t, "Idnt").unwrap_or_default();
         let name = text(t, "Nm  ").unwrap_or_default();
-        let found =
-            self.file.patterns.iter().find(|p| !id.is_empty() && p.id == id).or_else(|| self.file.patterns.iter().find(|p| !name.is_empty() && p.name == name));
+        let found = self.patterns.iter().find(|p| !id.is_empty() && p.id == id).or_else(|| self.patterns.iter().find(|p| !name.is_empty() && p.name == name));
         match found.and_then(pattern_tile) {
             Some(tile) => Pattern::Tile(tile),
             None => {
