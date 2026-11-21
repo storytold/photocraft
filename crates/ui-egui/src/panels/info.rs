@@ -10,24 +10,34 @@ pub(crate) fn hover_pixel(app: &PhotocraftApp) -> Option<(i32, i32)> {
     app.hover_doc.map(|p| (p[0].floor() as i32, p[1].floor() as i32)).filter(|(x, y)| *x >= 0 && *y >= 0 && *x < size.width as i32 && *y < size.height as i32)
 }
 
-/// The colour the Info panel reads at document pixel `(x, y)`, straight RGBA 0..1: averaged over
-/// the Eyedropper's Sample Size over the box it reads at the view zoom, as in Photoshop (#1649,
-/// #11751), and cached per pixel, revision, size and zoom.
-pub(crate) fn pointer_sample(app: &mut PhotocraftApp, (x, y): (i32, i32)) -> Option<[f32; 4]> {
-    let rev = app.session.active()?.revision;
+/// The colours the Info panel reads at document pixel `(x, y)`: the composite RGB (straight RGBA
+/// 0..1), averaged over the Eyedropper's Sample Size over the box it reads at the view zoom, as in
+/// Photoshop (#1649, #11732, #11751), and its CMYK percentages (the document's own inks for a CMYK
+/// document, #11640). Both are cached per document, pixel, revision, Sample Size and zoom, so
+/// neither the composite nor the ink composite runs again on a frame that shows the same pixel of
+/// the same document (#4528) — and a switch to another document re-reads (#11681 review).
+pub(crate) fn pointer_readout(app: &mut PhotocraftApp, (x, y): (i32, i32)) -> Option<crate::InfoSample> {
+    let st = app.session.active()?;
+    let (doc, rev) = (st.doc.id, st.revision);
     let sample_size = app.ui.tool_options.eyedropper.size.pixels();
     let zoom = app.current_zoom();
-    let key = (x, y, rev, sample_size, zoom.to_bits());
+    let key = (doc, x, y, rev, sample_size, zoom.to_bits());
     if let Some((k, v)) = app.info_sample
         && k == key
     {
         return Some(v);
     }
-    let params = json!({"x": f64::from(x) + 0.5, "y": f64::from(y) + 0.5, "size": sample_size, "zoom": f64::from(zoom)});
+    let at = [f64::from(x) + 0.5, f64::from(y) + 0.5];
+    let params = json!({"x": at[0], "y": at[1], "size": sample_size, "zoom": f64::from(zoom)});
     let v: Vec<f32> = serde_json::from_value(app.session.execute("document.sampleColor", params).ok()?).ok()?;
-    let v = [*v.first()?, *v.get(1)?, *v.get(2)?, *v.get(3)?];
-    app.info_sample = Some((key, v));
-    Some(v)
+    let rgba = [*v.first()?, *v.get(1)?, *v.get(2)?, *v.get(3)?];
+    // The CMYK row through the engine, as the Color Sampler points do: the document's own inks for
+    // a CMYK document, so a pure ink reads 100 % (#11640), over the same box the RGB row just
+    // averaged (#11751); else the colour-managed conversion of its RGB composite, the same one the
+    // Color Picker uses (#8101).
+    let cmyk = app.session.active().map(|st| photocraft_engine::sampler_cmds::cmyk_readout(&st.doc, at, sample_size, Some(f64::from(zoom)), rgba))?;
+    app.info_sample = Some((key, (rgba, cmyk)));
+    Some((rgba, cmyk))
 }
 
 /// The Info panel's W and H for a size of `wh` px (the selection's or the pending crop frame's):
@@ -88,7 +98,6 @@ fn byte(v: f32) -> u8 {
 pub(crate) fn readings<'a>(app: &mut PhotocraftApp, samplers: &'a [(SamplerReadout, [Label; 2])]) -> InfoReadings<'a> {
     let Some(st) = app.session.active() else { return InfoReadings::new() };
     let (size, origin, dpi, idx) = (st.doc.size, st.doc.ruler_origin, f64::from(st.doc.resolution_dpi), app.session.active_index());
-    let cmyk_space = photocraft_compose::cmyk_space(&st.doc);
     let selection = st.doc.selection.as_ref().map(photocraft_compose::bounds::content_bounds).map(|r| [r.width() as f64, r.height() as f64]);
     // Positions and sizes in the ruler unit (Preferences › Units & Rulers).
     let units = app.session.prefs().units_and_rulers.clone();
@@ -99,11 +108,11 @@ pub(crate) fn readings<'a>(app: &mut PhotocraftApp, samplers: &'a [(SamplerReado
     let wh = ruler.as_ref().and_then(|r| r.size).or(crate::crop_ui::info_size(app)).or(selection);
     let guide = idx.and_then(|idx| craft::ui::canvas_controls::reading::running(app.ctx(), CanvasHost::primary(app, idx).canvas_id()));
     let pointer = hover_pixel(app);
-    let rgba = pointer.and_then(|p| pointer_sample(app, p));
-    let color = rgba.map(|c| {
-        // Colour-managed CMYK in percent like Photoshop's readout, through the same conversion as the Color
-        // Picker (#8101) and the Color Sampler readout (`sampler_cmds::device_cmyk`).
-        let cmyk = photocraft_color::convert::with_cmyk_space(cmyk_space.as_ref(), || photocraft_engine::sampler_cmds::device_cmyk(c[0], c[1], c[2]));
+    let sample = pointer.and_then(|p| pointer_readout(app, p));
+    let color = sample.map(|(c, cmyk)| {
+        // CMYK in percent like Photoshop's readout, through the engine's readout: the document's own inks
+        // for a CMYK document (#11640), else the same colour-managed conversion as the Color Picker
+        // (#8101) and the Color Sampler readout (`sampler_cmds::cmyk_readout`).
         InfoColor::from_parts([byte(c[0]), byte(c[1]), byte(c[2])], cmyk.map(|v| v.clamp(0, 100) as u8))
     });
     // Measured from the rulers' zero point (#2955).
@@ -209,6 +218,33 @@ mod tests {
         assert_eq!(b[0]["rgb"], json!([255, 0, 0]), "an edit shows");
         app.run("view.colorSamplers.add", json!({"x": 8, "y": 8})).unwrap();
         assert_eq!(sampler_readouts(&mut app).len(), 2, "so does a new sampler");
+    }
+
+    /// #11681 review: the pointer sample cache is keyed by the document as well as the pixel, the
+    /// revision and the Sample Size. Two open documents can hold the same revision, so switching
+    /// back to the first must re-read its own inks instead of repeating the second one's row.
+    #[test]
+    fn pointer_readout_is_keyed_by_the_document() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        // Two CMYK documents at the same revision (one edit each), the first pure cyan, the second
+        // pure magenta, both inked under pixel (3, 3).
+        for ink in [[1.0f32, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]] {
+            app.run("file.new", json!({"width": 8, "height": 8, "mode": "cmyk", "background": "white"})).unwrap();
+            app.session
+                .edit("paint", move |doc, _| {
+                    let surf = doc.layers[0].surface_mut().unwrap();
+                    surf.fill_rect(photocraft_geom::Rect::new(2, 2, 4, 4), &[ink[0], ink[1], ink[2], ink[3], 1.0]);
+                    Ok(())
+                })
+                .unwrap();
+        }
+        let read = |app: &mut PhotocraftApp| pointer_readout(app, (3, 3)).map(|(_, cmyk)| cmyk);
+        assert_eq!(read(&mut app), Some([0, 100, 0, 0]), "the open document reads its magenta ink");
+        app.run("document.activate", json!({"document": 0})).unwrap();
+        assert_eq!(read(&mut app), Some([100, 0, 0, 0]), "the first document re-reads its own cyan");
+        // And back to the second, still its own values.
+        app.run("document.activate", json!({"document": 1})).unwrap();
+        assert_eq!(read(&mut app), Some([0, 100, 0, 0]), "and so does the second");
     }
 }
 
