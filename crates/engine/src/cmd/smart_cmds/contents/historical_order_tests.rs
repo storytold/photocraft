@@ -210,25 +210,67 @@ fn fresh_replacement_requires_its_own_order_and_native_replacement_clears_it() {
 }
 
 #[test]
-fn persisted_missing_historical_order_never_guesses_when_editing_contents() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("historical.xcf");
-    let bytes = fixture::historical_pixel(true);
-    std::fs::write(&path, &bytes).unwrap();
+fn edit_contents_recovers_a_legacy_embedded_big_endian_xcf_after_explicit_choice() {
+    let bytes = fixture::historical_pixel(false);
     let mut s = session();
-    let reply = s.execute("file.placeEmbedded", json!({"path":path,"historicalXcfSampleOrder":"little-endian"})).unwrap();
-    let id = LayerId(reply["layer"].as_u64().unwrap());
-    s.edit("Legacy source without interpretation", |doc, _| {
-        smart_mut(doc, id)?.historical_xcf_sample_order = None;
-        Ok(())
-    })
-    .unwrap();
+    let id = s
+        .edit("Legacy embedded XCF", |doc, active| {
+            // The older importer stored original bytes and a big-endian rendered cache,
+            // without a sample-order field. Build that legacy state directly.
+            let mut cache = photocraft_raster::Surface::new(doc.pixel_format());
+            cache.fill_rect(photocraft_geom::Rect::new(0, 0, 1, 1), &[0x1234 as f32 / 65535., 0x4567 as f32 / 65535., 0x89ab as f32 / 65535., 1.]);
+            let mut object = SmartObject::new(
+                SmartSource::Embedded { file_name: "historical.xcf".into(), bytes: Arc::new(bytes.clone()) },
+                photocraft_geom::Affine::IDENTITY,
+                None,
+            );
+            object.cache = Some(cache);
+            let layer = photocraft_doc::Layer::new("Legacy", LayerContent::Smart(object));
+            let id = layer.id;
+            doc.layers.push(layer);
+            *active = Some(id);
+            Ok(id)
+        })
+        .unwrap();
     let mut reopened = roundtrip(&s);
     let before = reopened.active().unwrap().doc.clone();
-    assert!(reopened.execute("layer.smartObjects.editContents", json!({"layer":id.0})).is_err());
+    assert!(matches!(
+        reopened.execute("layer.smartObjects.editContents", json!({"layer":id.0})),
+        Err(EngineError::EmbeddedHistoricalXcfOrder { layer, .. }) if layer == id
+    ));
     assert_eq!(reopened.documents().len(), 1);
     assert!(Arc::ptr_eq(&before, &reopened.active().unwrap().doc));
-    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    reopened.execute("layer.smartObjects.editContents", json!({"layer":id.0,"historicalXcfSampleOrder":"big-endian"})).unwrap();
+    assert_child_pixels(&reopened);
+    assert!(reopened.set_active(0));
+    assert_eq!(object(&reopened, id).historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::BigEndian));
+    assert_eq!(contents_of(&reopened.active().unwrap().doc, id).unwrap().1.as_slice(), bytes);
+    let mut restored = roundtrip(&reopened);
+    restored.execute("layer.smartObjects.editContents", json!({"layer":id.0})).unwrap();
+    assert_child_pixels(&restored);
+}
+
+#[test]
+fn update_all_keeps_healthy_refreshes_when_another_link_needs_relinking() {
+    let dir = tempfile::tempdir().unwrap();
+    let stale = dir.path().join("stale.xcf");
+    let healthy = dir.path().join("healthy.xcf");
+    std::fs::write(&stale, fixture::historical_pixel(false)).unwrap();
+    std::fs::write(&healthy, fixture::modern_pixel(0x1111)).unwrap();
+    let mut s = session();
+    let stale_layer =
+        LayerId(s.execute("file.placeLinked", json!({"path":stale, "historicalXcfSampleOrder":"big-endian"})).unwrap()["layer"].as_u64().unwrap());
+    let healthy_layer = LayerId(s.execute("file.placeLinked", json!({"path":healthy})).unwrap()["layer"].as_u64().unwrap());
+    std::fs::write(&stale, fixture::historical_pixel(true)).unwrap();
+    std::fs::write(&healthy, fixture::modern_pixel(0x7777)).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let result = s.execute("layer.smartObjects.updateAllModifiedContent", json!({})).unwrap();
+    assert_eq!(result["updated"], json!([healthy_layer.0]));
+    assert!(result["warnings"][0].as_str().unwrap().contains("relink and choose"));
+    assert_eq!(s.active().unwrap().doc.layer(stale_layer), before.layer(stale_layer));
+    assert!((object(&s, healthy_layer).cache.as_ref().unwrap().pixel(0, 0)[0] - f32::from(0x7777u16) / 65535.).abs() <= 1. / 65535.);
+    assert!(s.undo());
+    assert_eq!(s.active().unwrap().doc.layer(healthy_layer), before.layer(healthy_layer));
 }
 
 #[test]

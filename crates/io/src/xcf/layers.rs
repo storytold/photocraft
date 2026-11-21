@@ -414,6 +414,20 @@ impl<'a> Image<'a> {
                 &mut self.warnings,
             )?;
         } else if let Some((config_name, config)) = config {
+            let (x_dpi, y_dpi) = self.source_resolution;
+            if x_dpi != y_dpi {
+                return self.outcomes.notice(
+                    outcome,
+                    "xcf.text",
+                    ConversionReason::NativeLimitation,
+                    (
+                        format!("Source text uses a resolution of {x_dpi} × {y_dpi} DPI"),
+                        "Stored pixels preserved as a native raster; native text uses one resolution for both axes".into(),
+                    ),
+                    Some("uses unequal horizontal and vertical DPI and opens as saved text pixels"),
+                    &mut self.warnings,
+                );
+            }
             // Decline repeated large configurations before font lookup and layout
             // once even their source-sized retained text cannot fit the shared budget.
             if config.len() > self.meta_budget {
@@ -422,9 +436,9 @@ impl<'a> Image<'a> {
             let decoded = if let Some(error) = &self.native_color_error {
                 Err(IoError::Unsupported(format!("native text colors cannot be converted: {error}")))
             } else if config_name == "plug_in_gdyntext/data" {
-                text::decode_gdyntext_with_work(config, self.resolution_dpi, (x, y), ctl, &mut self.point_text_work_left, &mut self.text_decode_work)
+                text::decode_gdyntext_with_work(config, x_dpi, (x, y), ctl, &mut self.point_text_work_left, &mut self.text_decode_work)
             } else {
-                text::decode_with_work(config, self.resolution_dpi, (x, y), ctl, &mut self.point_text_work_left, &mut self.text_decode_work)
+                text::decode_with_work(config, x_dpi, (x, y), ctl, &mut self.point_text_work_left, &mut self.text_decode_work)
             };
             match decoded {
                 Ok(Some(mut decoded)) => {

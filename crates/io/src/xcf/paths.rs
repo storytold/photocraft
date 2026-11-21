@@ -104,6 +104,11 @@ fn paint(c: &mut Cursor<'_>, enabled: bool, notes: &mut Vec<String>) -> Result<O
     if !enabled {
         return Ok(None);
     }
+    match style {
+        0 => {}
+        1 => return Err(crate::IoError::Unsupported("enabled vector pattern has no native mapping; the saved path is imported separately".into())),
+        _ => return Err(invalid("unsupported vector paint style")),
+    }
     if !aa {
         notes.push("Source paint antialiasing is disabled; native shape rasterization applies".into());
     }
@@ -115,14 +120,7 @@ fn paint(c: &mut Cursor<'_>, enabled: bool, notes: &mut Vec<String>) -> Result<O
         let [r, g, b, a] = super::effects::literal_rgb(&literal).map_err(|error| crate::IoError::Unsupported(error.to_string()))?;
         Color::rgba(r, g, b, a)
     };
-    match style {
-        0 => Ok(Some(Fill::Solid(color))),
-        1 => {
-            notes.push("Source pattern resource is unavailable; native solid paint approximation used and resource identity retained".into());
-            Ok(Some(Fill::Solid(color)))
-        }
-        _ => Err(invalid("unsupported vector paint style")),
-    }
+    Ok(Some(Fill::Solid(color)))
 }
 
 /// Translate source dash lengths and phase into native stroke-width units.

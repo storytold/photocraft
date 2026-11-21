@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use photocraft_automation::Headless;
 use photocraft_engine::actions_cmds::{Action, ActionList, ActionsFile};
 use photocraft_io::ExportOptions;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::{
     CliError, Result,
@@ -215,6 +215,11 @@ pub(crate) fn droplet(a: &DropletArgs, out: &mut dyn Write, err: &mut dyn Write)
     let r = s.execute("file.automate.runDroplet", p)?;
     for f in r["files"].as_array().into_iter().flatten() {
         let _ = writeln!(out, "ok    {}", f.as_str().unwrap_or_default());
+    }
+    for notice in r["notices"].as_array().into_iter().flatten() {
+        for warning in notice["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+            let _ = writeln!(err, "warning: {}: {warning}", notice["file"].as_str().unwrap_or_default());
+        }
     }
     let errors = r["errors"].as_array().cloned().unwrap_or_default();
     for e in &errors {

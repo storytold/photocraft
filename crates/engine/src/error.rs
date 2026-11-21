@@ -44,6 +44,9 @@ pub enum EngineError {
     /// The linked XCF no longer matches the bytes approved for a sample order.
     #[error("{0}")]
     HistoricalXcfLinkChanged(&'static str),
+    /// Edit Contents can recover an older embedded XCF when the user supplies its order.
+    #[error("{question}; choose a sample byte order for the embedded source")]
+    EmbeddedHistoricalXcfOrder { layer: LayerId, question: photocraft_io::HistoricalXcfSampleOrderRequest },
     #[error("{0}")]
     Other(String),
     /// A batch or droplet stopped at its nesting or shared playback-step limit. A batch whose

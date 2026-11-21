@@ -301,7 +301,7 @@ pub fn open_warnings(doc: &Document) -> Vec<String> {
     use photocraft_doc::import_conversion::ImportConversion;
     match doc.metadata.import_conversion.as_deref() {
         Some(ImportConversion::Report(_)) if import_report_needs_notice(doc) => {
-            out.push("a historical import conversion report records approximations or unapplied source data; view Import Conversion Report for details".into());
+            out.push("a historical import conversion report stored in this native file records approximations or unapplied source data".into());
         }
         Some(ImportConversion::Opaque { .. }) => {
             out.push("an import conversion report from a newer version is retained without interpretation".into());

@@ -27,19 +27,25 @@ fn geometry(w: &mut W, source: SourcePath<'_>) {
     }
 }
 
-fn vector_style(tattoo: u32) -> Vec<u8> {
+fn vector_style(tattoo: u32, patterned_fill: bool, patterned_stroke: bool, stroke_enabled: bool) -> Vec<u8> {
     let mut w = W { out: Vec::new(), wide: false };
-    for value in [0, tattoo, 1, 0] {
-        w.u32(value); // Unmodified pixels, local path, fill enabled, stroke disabled.
+    for value in [0, tattoo, 1, u32::from(stroke_enabled)] {
+        w.u32(value); // Unmodified pixels, local path, fill enabled.
     }
-    for _ in 0..2 {
-        w.u32(0); // Solid paint.
+    for patterned in [patterned_fill, patterned_stroke] {
+        w.u32(u32::from(patterned));
         w.u32(1); // Antialias.
         w.string("R'G'B'A u8");
         w.u32(4);
         w.out.extend([255, 0, 0, 255]);
         w.u32(0); // No profile.
-        w.string(""); // No resource.
+        if patterned {
+            w.string("Source pattern");
+            w.string("Pattern resource identity");
+            w.u32(0);
+        } else {
+            w.string("");
+        }
     }
     for value in [1f32.to_bits(), 0, 0, 4f32.to_bits(), 0] {
         w.u32(value);
@@ -48,6 +54,10 @@ fn vector_style(tattoo: u32) -> Vec<u8> {
 }
 
 fn fixture(standalone: bool, paths: &[SourcePath<'_>], references: &[u32]) -> (Vec<u8>, Vec<Vec<u8>>) {
+    fixture_with_style(standalone, paths, references, |tattoo| vector_style(tattoo, false, false, false))
+}
+
+fn fixture_with_style(standalone: bool, paths: &[SourcePath<'_>], references: &[u32], style: impl Fn(u32) -> Vec<u8>) -> (Vec<u8>, Vec<Vec<u8>>) {
     let mut w = W::new(26);
     for value in [1, 1, 0, 150] {
         w.u32(value);
@@ -82,7 +92,7 @@ fn fixture(standalone: bool, paths: &[SourcePath<'_>], references: &[u32]) -> (V
             w.u32(value);
         }
         w.string(&format!("Vector {tattoo}"));
-        w.prop(47, &vector_style(tattoo));
+        w.prop(47, &style(tattoo));
         w.end();
         let raster = w.slot();
         w.ptr(0); // Mask.
@@ -181,6 +191,26 @@ fn incomplete_geometry_is_owner_local_and_duplicate_tattoos_stay_ambiguous() {
         for paths in [[incomplete, duplicate], [duplicate, incomplete]] {
             let (bytes, _) = fixture(standalone, &paths, &[72]);
             assert_saved_raster(&crate::import("ambiguous-vector.xcf", &bytes).unwrap().document.layers[0]);
+        }
+    }
+}
+
+#[test]
+fn enabled_vector_patterns_keep_saved_pixels_and_the_separate_editable_path() {
+    let source = SourcePath { tattoo: 72, strokes: &[1], axes: 2, extra_metadata: false };
+    for (fill, stroke, enabled) in [(true, false, false), (false, true, true), (false, true, false)] {
+        let (bytes, _) = fixture_with_style(true, &[source], &[72], |tattoo| vector_style(tattoo, fill, stroke, enabled));
+        let imported = crate::import("patterned-vector.xcf", &bytes).unwrap();
+        assert_eq!(imported.document.paths[0].path.subpaths.len(), 1);
+        let layer = &imported.document.layers[0];
+        if fill || enabled {
+            assert_saved_raster(layer);
+            let Some(ImportConversion::Report(report)) = imported.document.metadata.import_conversion.as_deref() else { panic!("typed report") };
+            assert!(report.entries.iter().any(|entry| entry.feature_code == "xcf.vector_layer"
+                && entry.reason == ConversionReason::MissingMapping
+                && entry.source_description.contains("enabled vector pattern")));
+        } else {
+            assert!(matches!(&layer.content, LayerContent::Shape(shape) if shape.fill.is_some() && shape.stroke.is_none()));
         }
     }
 }

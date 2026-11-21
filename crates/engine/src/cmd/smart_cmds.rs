@@ -267,7 +267,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.smartObjects.editContents",
             "Edit Contents",
             SO,
-            r##"{"layer":id?} → opens the contents as a new document; saving (layer.smartObjects.saveContents) or closing it updates the smart object"##,
+            r##"{"layer":id?,"historicalXcfSampleOrder":"little-endian"|"big-endian"|null?} → opens the contents as a new document; an explicit sample order recovers a legacy embedded XCF without a saved choice. Saving (layer.smartObjects.saveContents) or closing edited contents updates the smart object"##,
             has_smart,
             edit_contents
         ),
@@ -324,7 +324,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.smartObjects.updateAllModifiedContent",
             "Update All Modified Content",
             SO,
-            "{}",
+            "{} → {updated: [layer ids], warnings?: [relink messages]}",
             |s| s.active().map(|_| ()).ok_or_else(|| "no document open".into()),
             |s, _| update_all(s)
         ),

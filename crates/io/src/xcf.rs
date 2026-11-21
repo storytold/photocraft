@@ -162,7 +162,7 @@ struct Image<'a> {
     /// Layers GIMP composites with "Clip to backdrop" (its default for every mode but Normal).
     clipped_to_backdrop: usize,
     initial_view: crate::initial_view::NativeInitialView,
-    resolution_dpi: f32,
+    source_resolution: (f32, f32),
     pending_effects: Vec<PendingLayerEffects>,
     path_tattoos: HashMap<u32, Option<PathBinding>>,
     pending_vectors: Vec<(photocraft_doc::LayerId, usize, paths::VectorStyle)>,
@@ -1126,7 +1126,7 @@ fn import_with_sample_order_and_parasite_work(
         outcomes: conversion::Outcomes::new(version)?,
         clipped_to_backdrop: 0,
         initial_view: Default::default(),
-        resolution_dpi: metadata::image_resolution(&image_props, 72.0),
+        source_resolution: metadata::effective_resolution(&image_props).unwrap_or((72.0, 72.0)),
         pending_effects: Vec::new(),
         path_tattoos: HashMap::new(),
         pending_vectors: Vec::new(),
@@ -1274,7 +1274,7 @@ fn color_encoding_outcome(assigned_profile: bool, precision: Precision, fallback
                 "The assigned ICC profile could not be used: {reason}. An encoding-correct implicit profile interprets the unchanged samples; assigned colorants could not be preserved. Optional source profile bytes remain inert when retention limits permit"
             ),
             None if !tag_document => "Unassigned nonlinear samples remain untagged for ordinary native color policy; implicit sRGB/sGray meaning is used only for internal literal conversion".into(),
-            None => "Native ICC profile preserves the source colorants and sample transfer curve; samples retain native precision and range".into(),
+            None => "Native ICC profile preserves the source colorants and sample transfer curve".into(),
         },
         attachments: Vec::new(),
     }

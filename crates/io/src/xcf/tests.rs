@@ -1590,7 +1590,7 @@ pub(super) fn decoder_image(bytes: &[u8]) -> Image<'_> {
         outcomes: conversion::Outcomes::new(26).unwrap(),
         clipped_to_backdrop: 0,
         initial_view: Default::default(),
-        resolution_dpi: 72.,
+        source_resolution: (72., 72.),
         pending_effects: Vec::new(),
         path_tattoos: HashMap::new(),
         pending_vectors: Vec::new(),

@@ -484,7 +484,11 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
         bp["calledActions"] = called.clone();
     }
     let r = s.execute("file.automate.batch", bp)?;
-    Ok(json!({"droplet": path, "output": output, "files": r["files"], "errors": r["errors"]}))
+    let mut result = json!({"droplet": path, "output": output, "files": r["files"], "errors": r["errors"]});
+    if let Some(notices) = r.get("notices") {
+        result["notices"] = notices.clone();
+    }
+    Ok(result)
 }
 
 // ---------- Statistics ----------
@@ -686,7 +690,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.runDroplet",
             "Run Droplet",
             &[],
-            r##"{"droplet":path,"input":[files or folders],"historicalXcfSampleOrder":"little-endian|big-endian"?,"output":folder? (default: droplet's, else <input folder>/droplet-output)} → {files, errors} (an input whose output name was already written in the run goes to errors)"##,
+            r##"{"droplet":path,"input":[files or folders],"historicalXcfSampleOrder":"little-endian|big-endian"?,"output":folder? (default: droplet's, else <input folder>/droplet-output)} → {files, errors, notices?} (an input whose output name was already written in the run goes to errors)"##,
             native,
             run_droplet
         ),

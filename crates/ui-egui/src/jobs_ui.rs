@@ -193,12 +193,16 @@ pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, St
     // A place is also a job where there are no threads (the web build): the session steps it a
     // slice per frame, and every other command stays synchronous there.
     let place = matches!(id, "file.placeEmbedded" | "file.placeLinked") && place_in_background(app);
-    if !app.background_jobs && !place {
-        return app.session.execute(id, params).map_err(|e| e.to_string());
-    }
-    match app.session.start(id, params).map_err(|e| e.to_string())? {
-        Started::Done(v) => Ok(v),
-        Started::Job(job) => {
+    let started = if !app.background_jobs && !place { app.session.execute(id, params).map(Started::Done) } else { app.session.start(id, params) };
+    match started {
+        Err(photocraft_engine::EngineError::EmbeddedHistoricalXcfOrder { layer, question })
+            if !app.automation_input && app.session.authorize.is_none() && app.run_depth == 1 =>
+        {
+            crate::dialogs::historical_replace::prompt_edit(app, layer, question)
+        }
+        Err(error) => Err(error.to_string()),
+        Ok(Started::Done(v)) => Ok(v),
+        Ok(Started::Job(job)) => {
             app.jobs.last_started = Some(job);
             // The status bar's progress readout names the job; clear any old message.
             app.ui.status.clear();

@@ -232,7 +232,7 @@ fn full_report_coverage_inventory_still_warns_without_reading_optional_source() 
         outcomes,
         clipped_to_backdrop: 0,
         initial_view: Default::default(),
-        resolution_dpi: 72.,
+        source_resolution: (72., 72.),
         pending_effects: Vec::new(),
         path_tattoos: Default::default(),
         pending_vectors: Vec::new(),

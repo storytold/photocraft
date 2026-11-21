@@ -96,7 +96,7 @@ fn image(bytes: &[u8], budget: usize, base_type: u32, precision: Precision) -> I
         outcomes: conversion::Outcomes::new(11).unwrap(),
         clipped_to_backdrop: 0,
         initial_view: Default::default(),
-        resolution_dpi: 72.,
+        source_resolution: (72., 72.),
         pending_effects: Vec::new(),
         path_tattoos: HashMap::new(),
         pending_vectors: Vec::new(),

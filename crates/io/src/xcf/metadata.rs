@@ -35,7 +35,7 @@ pub(super) fn image_resolution(props: &[Prop<'_>], fallback: f32) -> f32 {
 }
 
 /// Resolve the same final valid pair for native DPI and its physical-size warning.
-fn effective_resolution(props: &[Prop<'_>]) -> Option<(f32, f32)> {
+pub(super) fn effective_resolution(props: &[Prop<'_>]) -> Option<(f32, f32)> {
     props.iter().filter(|property| property.kind == 19).filter_map(|property| resolution_pair(property.data)).next_back()
 }
 

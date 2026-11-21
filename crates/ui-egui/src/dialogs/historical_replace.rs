@@ -20,6 +20,7 @@ pub(crate) struct Target {
 enum Action {
     Replace(Target),
     Relink(Target),
+    Edit(Target),
     Place { doc: DocId, layer: Option<LayerId>, revision: u64, linked: bool },
 }
 
@@ -28,6 +29,7 @@ impl Action {
         match self {
             Self::Replace(_) => COMMAND,
             Self::Relink(_) => "layer.smartObjects.relinkToFile",
+            Self::Edit(_) => "layer.smartObjects.editContents",
             Self::Place { linked: true, .. } => "file.placeLinked",
             Self::Place { linked: false, .. } => "file.placeEmbedded",
         }
@@ -35,7 +37,7 @@ impl Action {
 
     fn check(self, app: &PhotocraftApp) -> Result<(), String> {
         match self {
-            Self::Replace(target) | Self::Relink(target) => check(app, target),
+            Self::Replace(target) | Self::Relink(target) | Self::Edit(target) => check(app, target),
             Self::Place { doc, layer, revision, .. } => {
                 let state = app.session.documents().iter().find(|state| state.doc.id == doc).ok_or("the placement document was closed")?;
                 if app.ui.transform.is_some() {
@@ -54,7 +56,7 @@ struct Held {
     id: u64,
     action: Action,
     name: String,
-    bytes: Arc<Vec<u8>>,
+    bytes: Option<Arc<Vec<u8>>>,
     question: Option<photocraft_io::HistoricalXcfSampleOrderRequest>,
     job: Option<JobId>,
     inherited_order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
@@ -83,8 +85,23 @@ impl Pending {
 pub(crate) fn target(app: &PhotocraftApp) -> Result<Target, String> {
     let state = app.session.active().ok_or("no document")?;
     let layer = state.active_layer.ok_or("no active layer")?;
+    target_in(state, layer)
+}
+
+fn target_in(state: &photocraft_engine::DocState, layer: LayerId) -> Result<Target, String> {
     let Some(LayerContent::Smart(smart)) = state.doc.layer(layer).map(|layer| &layer.content) else { return Err("the layer is not a smart object".into()) };
     Ok(Target { doc: state.doc.id, layer, contents: smart.contents_id, revision: state.revision })
+}
+
+/// Edit Contents already inspected this embedded source and asked for its byte order.
+pub(crate) fn prompt_edit(app: &mut PhotocraftApp, layer: LayerId, question: photocraft_io::HistoricalXcfSampleOrderRequest) -> Result<Value, String> {
+    let state = app.session.active().ok_or("no document")?;
+    let target = target_in(state, layer)?;
+    let Some(LayerContent::Smart(smart)) = state.doc.layer(layer).map(|layer| &layer.content) else { return Err("the layer is not a smart object".into()) };
+    let photocraft_doc::SmartSource::Embedded { file_name, .. } = &smart.source else { return Err("the source is no longer embedded".into()) };
+    let id = hold(app, Action::Edit(target), file_name.clone(), None, Some(question), None)?;
+    crate::open_prompt::advance(app);
+    Ok(json!({"heldHistoricalXcfEdit": id}))
 }
 
 fn check(app: &PhotocraftApp, target: Target) -> Result<(), String> {
@@ -164,18 +181,10 @@ fn pick_source(app: &mut PhotocraftApp, action: Action, name: String, bytes: Vec
     // Plain modern sources reserve their turn just like probed wrappers. Applying
     // one now would change the revision underneath an earlier unanswered choice.
     if !wrapped && question.is_none() && app.prompt_order.is_empty() && !crate::open_prompt::waiting(app) {
-        return apply_source(app, action, &name, bytes, inherited_order);
+        return apply_source(app, action, &name, Some(Arc::new(bytes)), inherited_order);
     }
-    let pending = &mut app.historical_replacements;
-    let retained = pending.held.iter().try_fold(bytes.capacity(), |total, held| total.checked_add(held.bytes.capacity()));
-    if pending.held.len() >= 8 || retained.is_none_or(|bytes| bytes > 512 << 20) {
-        return Err("too many picked sources await a sample-order choice; finish or cancel an earlier choice".into());
-    }
-    let id = pending.next.checked_add(1).ok_or("replacement source identity limit reached")?;
-    pending.next = id;
     let bytes = Arc::new(bytes);
-    pending.held.push(Held { id, action, name: name.clone(), bytes: bytes.clone(), question, job: None, inherited_order });
-    app.prompt_order.push_back(PromptKind::Replacement(id));
+    let id = hold(app, action, name.clone(), Some(bytes.clone()), question, inherited_order)?;
     if wrapped {
         let started =
             app.session.start_job_stepped(action.command(), Value::Null, "Reading replacement header", false, ProbeWork { name, bytes }, |_, question| {
@@ -201,6 +210,30 @@ fn pick_source(app: &mut PhotocraftApp, action: Action, name: String, bytes: Vec
     }
     crate::open_prompt::advance(app);
     Ok(json!({"heldHistoricalXcfReplacement":id}))
+}
+
+fn hold(
+    app: &mut PhotocraftApp,
+    action: Action,
+    name: String,
+    bytes: Option<Arc<Vec<u8>>>,
+    question: Option<photocraft_io::HistoricalXcfSampleOrderRequest>,
+    inherited_order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+) -> Result<u64, String> {
+    let pending = &mut app.historical_replacements;
+    let retained = pending
+        .held
+        .iter()
+        .filter_map(|held| held.bytes.as_ref())
+        .try_fold(bytes.as_ref().map_or(0, |bytes| bytes.capacity()), |total, bytes| total.checked_add(bytes.capacity()));
+    if pending.held.len() >= 8 || retained.is_none_or(|bytes| bytes > 512 << 20) {
+        return Err("too many sources await a sample-order choice; finish or cancel an earlier choice".into());
+    }
+    let id = pending.next.checked_add(1).ok_or("replacement source identity limit reached")?;
+    pending.next = id;
+    pending.held.push(Held { id, action, name, bytes, question, job: None, inherited_order });
+    app.prompt_order.push_back(PromptKind::Replacement(id));
+    Ok(id)
 }
 
 fn discard(app: &mut PhotocraftApp, id: u64) {
@@ -288,10 +321,15 @@ fn apply_source(
     app: &mut PhotocraftApp,
     action: Action,
     name: &str,
-    bytes: Vec<u8>,
+    bytes: Option<Arc<Vec<u8>>>,
     order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
 ) -> Result<Value, String> {
     action.check(app)?;
+    if let Action::Edit(target) = action {
+        app.refocus(target.doc)?;
+        return app.run(action.command(), json!({"layer":target.layer.0,"historicalXcfSampleOrder":order}));
+    }
+    let bytes = owned_bytes(bytes.ok_or("the picked Smart Object source is gone")?);
     if let Action::Place { doc, linked, .. } = action {
         app.refocus(doc)?;
         let result = app.place_bytes(name, bytes, linked.then(|| name.to_owned()), order)?;
@@ -353,7 +391,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, id: u64) {
     let Some(question) = held.question else {
         let held = app.historical_replacements.held.remove(position);
         app.prompt_order.pop_front();
-        if let Err(error) = apply_source(app, held.action, &held.name, owned_bytes(held.bytes), held.inherited_order) {
+        if let Err(error) = apply_source(app, held.action, &held.name, held.bytes, held.inherited_order) {
             app.ui.status = error;
             app.ui.status_error = true;
         }
@@ -399,7 +437,7 @@ pub(crate) fn answer(app: &mut PhotocraftApp, fields: &serde_json::Map<String, V
     let position = app.historical_replacements.held.iter().position(|held| held.id == id).ok_or("replacement source is gone")?;
     let held = app.historical_replacements.held.remove(position);
     app.prompt_order.pop_front();
-    let result = if accept { apply_source(app, held.action, &held.name, owned_bytes(held.bytes), order) } else { Ok(json!({"cancelled":true})) };
+    let result = if accept { apply_source(app, held.action, &held.name, held.bytes, order) } else { Ok(json!({"cancelled":true})) };
     crate::open_prompt::advance(app);
     result
 }

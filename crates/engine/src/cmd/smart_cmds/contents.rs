@@ -280,6 +280,8 @@ pub(super) fn export_contents(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub(super) fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "layer.smartObjects.editContents";
+    let explicit = crate::file_cmds::historical_xcf_sample_order(p, CMD)?;
     let id = layer_param(s, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let parent = st.doc.id;
@@ -293,10 +295,26 @@ pub(super) fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let sm = smart(&st.doc, id)?;
     let source = &sm.source;
-    let (name, bytes) = authorized_source_bytes(s, "layer.smartObjects.editContents", &st.doc.metadata, source)?
-        .ok_or_else(|| other("the smart object's contents are unavailable"))?;
-    photocraft_io::linked::check_historical_xcf_digest(sm.historical_xcf_link_digest, &bytes).map_err(other)?;
-    let mut child = decode_source_with_order(&name, &bytes, sm.historical_xcf_sample_order)?;
+    let (name, bytes) = authorized_source_bytes(s, CMD, &st.doc.metadata, source)?.ok_or_else(|| other("the smart object's contents are unavailable"))?;
+    photocraft_io::linked::check_historical_xcf_digest(sm.historical_xcf_link_digest, &bytes).map_err(EngineError::HistoricalXcfLinkChanged)?;
+    let saved_order = sm.historical_xcf_sample_order;
+    let recovered_order = if saved_order.is_none()
+        && matches!(source, SmartSource::Embedded { .. })
+        && let Some(question) = photocraft_io::historical_xcf_sample_order_request(&name, &bytes).map_err(|error| other(error.to_string()))?
+    {
+        Some(explicit.ok_or(EngineError::EmbeddedHistoricalXcfOrder { layer: id, question })?)
+    } else {
+        None
+    };
+    let mut child = decode_source_with_order(&name, &bytes, saved_order.or(recovered_order))?;
+    if let Some(order) = recovered_order {
+        s.edit("Set Historical XCF Sample Byte Order", |doc, _| {
+            for layer in instances(doc, contents_id) {
+                smart_mut(doc, layer)?.historical_xcf_sample_order = Some(order);
+            }
+            Ok(())
+        })?;
+    }
     // Bundles keep their document id; each open copy needs its own.
     child.id = DocId::fresh();
     child.name = name;
@@ -378,16 +396,36 @@ pub(super) fn update_all(s: &mut Session) -> Result<Value> {
         .filter(|(_, _, l)| matches!(&l.content, LayerContent::Smart(sm) if matches!(sm.source, SmartSource::Linked { .. })))
         .map(|(_, _, l)| l.id)
         .collect();
-    let mut updated = Vec::new();
-    s.edit("Update All Modified Content", |doc, _| {
-        for id in &ids {
-            if refresh(doc, *id)? {
-                updated.push(id.0);
+    let mut stale = std::collections::BTreeSet::new();
+    let result = s.edit("Update All Modified Content", |doc, _| {
+        let mut updated = Vec::new();
+        let mut stale_only = None;
+        for id in ids {
+            match refresh(doc, id) {
+                Ok(true) => updated.push(id.0),
+                Ok(false) => {}
+                Err(EngineError::HistoricalXcfLinkChanged(message)) => {
+                    if let SmartSource::Linked { path } = &smart(doc, id)?.source {
+                        stale.insert(format!("{path}: {message}"));
+                    }
+                    stale_only = Some(message);
+                }
+                Err(error) => return Err(error),
             }
         }
-        Ok(())
-    })?;
-    Ok(json!({"updated": updated}))
+        if updated.is_empty()
+            && let Some(message) = stale_only
+        {
+            // No healthy refresh to publish or add to History.
+            return Err(EngineError::HistoricalXcfLinkChanged(message));
+        }
+        Ok(updated)
+    });
+    let updated = match result {
+        Err(EngineError::HistoricalXcfLinkChanged(_)) => Vec::new(),
+        result => result?,
+    };
+    if stale.is_empty() { Ok(json!({"updated": updated})) } else { Ok(json!({"updated": updated, "warnings": stale})) }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

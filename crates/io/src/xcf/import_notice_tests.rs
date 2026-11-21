@@ -67,7 +67,7 @@ fn float_source(precision: u32, red: f64, alpha: f64) -> Vec<u8> {
     source.precision = precision;
     let data = [red, 0.5, 0.75, alpha]
         .into_iter()
-        .flat_map(|value| if precision == 750 { value.to_be_bytes().to_vec() } else { (value as f32).to_be_bytes().to_vec() })
+        .flat_map(|value| if matches!(precision, 700 | 750) { value.to_be_bytes().to_vec() } else { (value as f32).to_be_bytes().to_vec() })
         .collect();
     source.layers.push(TestLayer::rgba("Native float pixels", 1, 1, data));
     source.write()
@@ -102,13 +102,21 @@ fn successful_text_and_vector_keep_first_import_disclosures_but_native_history_i
 
 #[test]
 fn ordinary_f32_f64_storage_conversion_is_quiet_but_underflow_and_clamping_still_warn() {
-    for precision in [650, 750] {
+    for precision in [650, 700, 750] {
         let imported = crate::import("notice.xcf", &float_source(precision, 0.25, 1.)).unwrap();
         assert_eq!(imported.document.depth, SampleType::F32);
         let pixels = imported.document.layers[0].surface().unwrap().read_region(Rect::new(0, 0, 1, 1));
         assert_eq!(pixels, [0.25, 0.5, 0.75, 1.]);
         let Some(ImportConversion::Report(report)) = imported.document.metadata.import_conversion.as_deref() else { panic!("typed report") };
-        assert_eq!(report.entries.iter().any(|entry| entry.feature_code == "xcf.precision" && entry.reason == R::NumericalConversion), precision == 750);
+        assert_eq!(
+            report.entries.iter().any(|entry| entry.feature_code == "xcf.precision" && entry.reason == R::NumericalConversion),
+            matches!(precision, 700 | 750)
+        );
+        let encoding = report.entries.iter().find(|entry| entry.feature_code == "xcf.color_encoding").unwrap();
+        if precision == 700 {
+            assert!(encoding.native_description.contains("transfer curve"));
+        }
+        assert!(!encoding.native_description.contains("precision"));
         assert_persisted_notices(&imported, false);
         let clamped = crate::import("clamped.xcf", &float_source(precision, 0.25, 1.5)).unwrap();
         assert!(clamped.warnings.iter().any(|warning| warning.contains("coverage") && warning.contains("clamped")));

@@ -198,6 +198,11 @@ impl PhotocraftApp {
         } else {
             jobs_ui::run(self, id, params)
         };
+        if id == "layer.smartObjects.updateAllModifiedContent"
+            && let Ok(reply) = &r
+        {
+            notices::io_result_warnings(self, reply, tl!("Update All Modified Content"));
+        }
         let creates_adjustment_or_fill = id.starts_with("layer.newAdjustmentLayer.") || id.starts_with("layer.newFillLayer.");
         self.sync_command_side_effects(id, &r, creates_active_mask, creates_active_vector_mask, creates_adjustment_or_fill, path_mask);
         self.perf.last_command = id.to_string();

@@ -13,7 +13,8 @@
 //!
 //! Stamps are kept per document: one in the background is looked at when it comes to the front.
 //! A file seen for the first time is only remembered (one changed while its document was closed
-//! keeps waiting for Update Modified Content, as in Photoshop); one that can't be read (another app
+//! keeps waiting for Update Modified Content, as in Photoshop). For a historical XCF, the first
+//! look also checks its saved fingerprint and warns if relinking is needed. One that can't be read (another app
 //! is still writing it) is tried again once it changes again, not on every look. Only smart objects
 //! of the document itself follow their files, not ones nested in another smart object's contents.
 //! While a background job runs on the document, its files aren't looked at: an update would replace
@@ -31,9 +32,16 @@ use crate::{EngineError, Result, Session};
 /// A file's size and modification time (nanoseconds since 1970).
 pub type Stamp = (u64, u128);
 
-/// Stamps of a document's linked files taken on a worker thread: (document id, [(file, layer
-/// ids, stamp)]).
-pub type LinkScan = Arc<Mutex<Option<(u64, Vec<(String, Vec<u64>, Option<Stamp>)>)>>>;
+/// One linked file observed by the watcher.
+pub struct LinkObservation {
+    path: String,
+    layers: Vec<u64>,
+    stamp: Option<Stamp>,
+    first_digest: Option<[u8; 32]>,
+}
+
+/// Observations of a document's linked files taken on a worker thread.
+pub type LinkScan = Arc<Mutex<Option<(u64, Vec<LinkObservation>)>>>;
 
 /// Stamps `file`, a linked path resolved by [`crate::doc_path`]; `None` (not looked at, like a
 /// missing file) when it is not followed.
@@ -66,23 +74,75 @@ pub fn linked_files(d: &Document) -> Vec<(String, Vec<u64>)> {
 /// the layers of the ones that changed.
 pub(crate) fn update_changed(s: &mut Session, _: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let (doc, files) = (st.doc.id.0, resolved_files(st));
-    let now = files.into_iter().map(|(p, file, ids)| (p, ids, stamp(file.as_deref()))).collect();
+    let (doc, files) = (st.doc.id.0, resolved_files(s, st));
+    let now = files.into_iter().map(ResolvedLink::observe).collect();
     // Drop a look still running on a worker thread. It stamped the files before this one, and
     // applying it later would replace this look's result.
     s.link_scan = None;
     s.apply_link_stamps(doc, now)
 }
 
-/// [`linked_files`] of `st`'s document with the file each path resolves to, or `None` for a path
-/// that is not followed ([`crate::doc_path`]).
-fn resolved_files(st: &crate::DocState) -> Vec<(String, Option<std::path::PathBuf>, Vec<u64>)> {
+struct ResolvedLink {
+    path: String,
+    file: Option<std::path::PathBuf>,
+    layers: Vec<u64>,
+    check_first_digest: bool,
+}
+
+impl ResolvedLink {
+    fn observe(self) -> LinkObservation {
+        let stamp = stamp(self.file.as_deref());
+        let first_digest =
+            if self.check_first_digest { stamp.zip(self.file.as_deref()).and_then(|(observed, file)| first_digest(file, observed)) } else { None };
+        LinkObservation { path: self.path, layers: self.layers, stamp, first_digest }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn first_digest(path: &std::path::Path, observed: Stamp) -> Option<[u8; 32]> {
+    use std::io::Read as _;
+
+    let (file, metadata) = photocraft_format::read::open_regular_file(path).ok()?;
+    if metadata.len() != observed.0 || observed.0 > photocraft_format::read::MAX_OPEN_BYTES {
+        return None;
+    }
+    // Stream at most the observed file size plus one byte to detect growth, with no
+    // source-sized allocation or decoding. Leave the saved Smart Object pixels alone.
+    let mut source = file.take(observed.0.saturating_add(1));
+    let mut hash = blake3::Hasher::new();
+    let mut buffer = [0; 16 * 1024];
+    loop {
+        let read = source.read(&mut buffer).ok()?;
+        if read == 0 {
+            break;
+        }
+        hash.update(buffer.get(..read)?);
+    }
+    (hash.count() == observed.0 && stamp(Some(path)) == Some(observed)).then(|| *hash.finalize().as_bytes())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn first_digest(_: &std::path::Path, _: Stamp) -> Option<[u8; 32]> {
+    None
+}
+
+fn saved_digest(doc: &Document, layer: u64) -> Option<[u8; 32]> {
+    let LayerContent::Smart(smart) = &doc.layer(LayerId(layer))?.content else { return None };
+    smart.historical_xcf_link_digest
+}
+
+/// Resolve the disk paths and identify first observations that need a fingerprint.
+fn resolved_files(s: &Session, st: &crate::DocState) -> Vec<ResolvedLink> {
     let document = st.path.as_deref().map(std::path::Path::new);
     linked_files(&st.doc)
         .into_iter()
-        .map(|(p, ids)| {
-            let file = crate::doc_path::resolve_in(&p, document).ok();
-            (p, file, ids)
+        .map(|(path, layers)| {
+            let file = crate::doc_path::resolve_in(&path, document).ok();
+            let check_first_digest = file.is_some()
+                && !s.link_stamps.contains_key(&(st.doc.id.0, path.clone()))
+                && layers.iter().any(|&layer| saved_digest(&st.doc, layer).is_some())
+                && s.authorize.is_none_or(|gate| gate("layer.smartObjects.updateModifiedContent", &json!({"path":path})).is_ok());
+            ResolvedLink { path, file, layers, check_first_digest }
         })
         .collect()
 }
@@ -95,17 +155,17 @@ impl Session {
             return;
         }
         let Some(st) = self.active() else { return };
-        let (doc, files) = (st.doc.id.0, resolved_files(st));
+        let (doc, files) = (st.doc.id.0, resolved_files(self, st));
         // Nothing to look at: no links, or none that is followed. None of them is listed as
         // missing either, so a link added back isn't shown missing before its first look.
-        if files.iter().all(|(_, file, _)| file.is_none()) {
+        if files.iter().all(|link| link.file.is_none()) {
             self.link_missing.retain(|(d, _)| *d != doc);
             return;
         }
         let slot: LinkScan = Arc::default();
         let out = slot.clone();
         let spawned = std::thread::Builder::new().name("link-watch".into()).spawn(move || {
-            let stamps = files.into_iter().map(|(p, file, ids)| (p, ids, stamp(file.as_deref()))).collect();
+            let stamps = files.into_iter().map(ResolvedLink::observe).collect();
             *out.lock().unwrap_or_else(PoisonError::into_inner) = Some((doc, stamps));
         });
         if spawned.is_ok() {
@@ -123,14 +183,14 @@ impl Session {
 
     /// Remember which of document `doc`'s files in `now` were not there, and forget the files of
     /// closed documents. The web app has no files to look at, so it lists none.
-    fn note_missing_links(&mut self, doc: u64, now: &[(String, Vec<u64>, Option<Stamp>)]) {
+    fn note_missing_links(&mut self, doc: u64, now: &[LinkObservation]) {
         let open: HashSet<u64> = self.documents().iter().map(|d| d.doc.id.0).collect();
         self.link_missing.retain(|(d, _)| *d != doc && open.contains(d));
         if cfg!(target_arch = "wasm32") {
             return;
         }
         let document = self.active().and_then(|st| st.path.clone());
-        for (path, _, stamp) in now {
+        for LinkObservation { path, stamp, .. } in now {
             if stamp.is_none() && crate::doc_path::resolve_in(path, document.as_deref().map(std::path::Path::new)).is_ok() {
                 self.link_missing.insert((doc, path.clone()));
             }
@@ -144,7 +204,7 @@ impl Session {
         // A relink or embed while the look ran: it stamped files the document no longer links in
         // that way, so drop it; the next look takes the current links.
         if let Some(st) = self.active().filter(|st| st.doc.id.0 == doc)
-            && !linked_files(&st.doc).iter().map(|(p, ids)| (p, ids)).eq(stamps.iter().map(|(p, ids, _)| (p, ids)))
+            && !linked_files(&st.doc).iter().map(|(p, ids)| (p, ids)).eq(stamps.iter().map(|link| (&link.path, &link.layers)))
         {
             return Some(Ok(json!({"updated": []})));
         }
@@ -153,7 +213,7 @@ impl Session {
 
     /// Compare the stamps of document `doc`'s linked files with the ones last seen and update the
     /// layers of the changed ones. Returns `{updated: [layer ids]}`.
-    fn apply_link_stamps(&mut self, doc: u64, now: Vec<(String, Vec<u64>, Option<Stamp>)>) -> Result<Value> {
+    fn apply_link_stamps(&mut self, doc: u64, now: Vec<LinkObservation>) -> Result<Value> {
         // The document went to the back meanwhile: it's looked at when it's in front again.
         if self.active().map(|d| d.doc.id.0) != Some(doc) {
             return Ok(json!({"updated": []}));
@@ -177,7 +237,8 @@ impl Session {
             }
         });
         let mut changed = Vec::new();
-        for (path, ids, stamp) in now {
+        let mut warnings = Vec::new();
+        for LinkObservation { path, layers, stamp, first_digest } in now {
             match (before.get(&path), stamp) {
                 // Not there right now (an app saving by delete and rename): keep the last stamp.
                 (Some(old), None) => {
@@ -185,7 +246,13 @@ impl Session {
                 }
                 (old, Some(new)) => {
                     if old.is_some_and(|o| *o != new) {
-                        changed.push((path.clone(), ids));
+                        changed.push((path.clone(), layers));
+                    } else if old.is_none()
+                        && let Some(digest) = first_digest
+                        && let Some(state) = self.active()
+                        && layers.iter().filter_map(|&layer| saved_digest(&state.doc, layer)).any(|saved| saved != digest)
+                    {
+                        warnings.push(format!("{path}: {}", photocraft_io::linked::HISTORICAL_XCF_LINK_CHANGED));
                     }
                     self.link_stamps.insert((doc, path), new);
                 }
@@ -193,7 +260,6 @@ impl Session {
             }
         }
         let mut updated = Vec::new();
-        let mut warnings = Vec::new();
         for (path, ids) in changed {
             let mut stale = None;
             let r = self.edit("Update Modified Content", |d, _| {
@@ -301,6 +367,39 @@ mod tests {
     }
 
     #[test]
+    fn the_first_background_scan_warns_about_a_replaced_xcf_from_a_reopened_document() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("source.xcf");
+        let saved = folder.path().join("doc.pcraft");
+        std::fs::write(&path, crate::jobs::historical_xcf_fixture::historical_pixel(false)).unwrap();
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":1,"height":1})).unwrap();
+        s.execute("file.placeLinked", json!({"path":path,"historicalXcfSampleOrder":"big-endian"})).unwrap();
+        s.execute("file.saveACopy", json!({"path":saved})).unwrap();
+        assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
+        s.close(0);
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::fs::write(&path, crate::jobs::historical_xcf_fixture::historical_pixel(true)).unwrap();
+        std::fs::File::options().write(true).open(&path).unwrap().set_times(std::fs::FileTimes::new().set_modified(modified)).unwrap();
+        s.execute("file.openAs", json!({"path":saved})).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        s.start_link_scan();
+        let started = std::time::Instant::now();
+        let result = loop {
+            if let Some(result) = s.poll_link_scan() {
+                break result.unwrap();
+            }
+            assert!(started.elapsed() < std::time::Duration::from_secs(10));
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(result["updated"], json!([]));
+        assert_eq!(result["warnings"].as_array().unwrap().len(), 1);
+        assert!(result["warnings"][0].as_str().unwrap().contains("relink and choose"));
+        assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &before));
+        assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
+    }
+
+    #[test]
     fn a_stale_historical_link_does_not_block_a_healthy_link_to_the_same_path() {
         use crate::jobs::historical_xcf_fixture::{historical_pixel, modern_pixel};
         for historical_first in [false, true] {
@@ -322,7 +421,9 @@ mod tests {
             })
             .unwrap();
             let before = s.active().unwrap().doc.clone();
-            s.execute("layer.smartObjects.updateChanged", json!({})).unwrap();
+            let observed = s.execute("layer.smartObjects.updateChanged", json!({})).unwrap();
+            assert_eq!(observed["updated"], json!([]));
+            assert!(observed["warnings"][0].as_str().unwrap().contains("relink and choose"));
             save(&path, &modern_pixel(0x4321));
             let refreshed = s.execute("layer.smartObjects.updateChanged", json!({})).unwrap();
             assert_eq!(refreshed["updated"], json!([current]));
@@ -465,7 +566,7 @@ mod tests {
         let bytes = std::fs::read(&saved).unwrap();
         crate::file_cmds::open_bytes_as(&mut s, "doc.pcraft", &bytes, None, Some(saved.to_string_lossy().into_owned())).unwrap();
         assert_eq!(s.active().unwrap().doc.id, id);
-        *scan.lock().unwrap() = Some((id.0, vec![(stored, vec![layer], None)]));
+        *scan.lock().unwrap() = Some((id.0, vec![super::LinkObservation { path: stored, layers: vec![layer], stamp: None, first_digest: None }]));
         assert!(s.poll_link_scan().is_none());
         assert!(s.missing_links().is_empty());
     }
@@ -493,7 +594,10 @@ mod tests {
         let doc = s.active().unwrap().doc.id.0;
         let stored = super::linked_files(&s.active().unwrap().doc)[0].0.clone();
         let inject = |s: &mut Session, file: &str| {
-            let scan = std::sync::Arc::new(std::sync::Mutex::new(Some((doc, vec![(file.to_string(), vec![layer], None)]))));
+            let scan = std::sync::Arc::new(std::sync::Mutex::new(Some((
+                doc,
+                vec![super::LinkObservation { path: file.to_string(), layers: vec![layer], stamp: None, first_digest: None }],
+            ))));
             s.link_scan = Some(scan);
         };
         // Taken before a relink: its file is no longer linked.

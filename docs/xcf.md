@@ -9,7 +9,10 @@ use the same enhanced import in `photocraft-io` (`crates/io/src/xcf.rs`). This a
 ## Historical sample byte order
 
 Unmarked XCF versions 7–11 with multi-byte samples require the byte order used when the file was
-saved. Select **Little-endian** or **Big-endian** when desktop Open, Replace Contents, or Relink to File asks. Relink keeps the previous choice when the source bytes match.
+saved. Select **Little-endian** or **Big-endian** when desktop Open, Replace Contents, or Relink
+to File asks. Edit Contents also asks when an older bundle embeds such a source without a saved
+choice. The chosen order is stored with the Smart Object. Relink keeps the previous choice when
+the source bytes match.
 
 For CLI Convert, Info, Run, Batch, and Droplet, pass `--historical-xcf-sample-order little-endian` or
 `--historical-xcf-sample-order big-endian`. Use `historical_xcf_sample_order` for MCP `doc_open`
@@ -48,7 +51,10 @@ XCF import.
 | Compression | none, RLE, zlib; gzip, bzip2 and XZ transport wrappers |
 | XCF versions | 0 to 26 (GIMP 1.x to 3.2); newer files open with a note, unknown parts skipped |
 
-Text and vector layers with active paint that cannot be decoded, including writer-endian float colours without byte-order evidence, keep their saved pixels.
+Text layers in documents with unequal horizontal and vertical DPI keep their saved pixels.
+Vector layers with an enabled pattern also keep their saved pixels, with the source path
+available separately for editing. Active paint that cannot be decoded, including writer-endian
+float colours without byte-order evidence, also preserves the saved appearance.
 
 Saved paths, guides and supported editing-view selections are imported. Floating pixels remain separate raster layers. Unsupported layer effects and optional records are disclosed in the conversion report. Retention limits omit optional data while preserving usable pixels; structural and pixel allocation limits still reject unsafe inputs.
 

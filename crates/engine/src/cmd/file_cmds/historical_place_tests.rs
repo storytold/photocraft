@@ -251,11 +251,13 @@ fn historical_sample_order_reaches_stack_statistics_contact_sheet_and_droplets()
     let output = dir.path().join("result");
     s.execute(
         "file.automate.createDroplet",
-        json!({"path":droplet,"format":"pcraft","shim":false,"steps":[["layer.new.layer",{}]],"historicalXcfSampleOrder":order}),
+        json!({"path":droplet,"format":"pcraft","shim":false,"overrideOpen":true,
+            "steps":[["file.openAs",{"path":"recorded.xcf"}]],"historicalXcfSampleOrder":order}),
     )
     .unwrap();
     let result = s.execute("file.automate.runDroplet", json!({"droplet":droplet,"input":[path],"output":output})).unwrap();
     assert_eq!(result["errors"], json!([]), "{result}");
+    assert!(result["notices"][0]["warnings"].as_array().unwrap().iter().any(|note| note.as_str().unwrap().contains("explicit big-endian choice")));
     let written = std::fs::read(result["files"][0].as_str().unwrap()).unwrap();
     let doc = photocraft_format::load_from_bytes(&written).unwrap();
     assert_eq!(doc.layers[0].surface().unwrap().pixel(0, 0)[0], f32::from(0x1234u16) / 65535.);
@@ -289,5 +291,68 @@ fn batch_override_open_inherits_the_batch_order_and_keeps_a_recorded_choice() {
         let doc = photocraft_io::import(written, &png).unwrap().document;
         let pixel = doc.layers[0].surface().unwrap().pixel(0, 0);
         assert_eq!(pixel, [0x1234 as f32 / 65535., 0x4567 as f32 / 65535., 0x89ab as f32 / 65535., 1.], "{name}");
+    }
+}
+
+#[test]
+fn batch_edits_the_saved_xcf_layer_with_or_without_open_suppression() {
+    fn words(bytes: &mut Vec<u8>, values: &[u32]) {
+        bytes.extend(values.iter().flat_map(|value| value.to_be_bytes()));
+    }
+    fn point(bytes: &mut [u8], slot: usize, offset: usize) {
+        bytes[slot..slot + 4].copy_from_slice(&(offset as u32).to_be_bytes());
+    }
+    let mut source = b"gimp xcf v007\0".to_vec();
+    words(&mut source, &[1, 1, 0, 250, 17, 1]);
+    source.push(0);
+    words(&mut source, &[0, 0]);
+    let pointers = source.len();
+    words(&mut source, &[0, 0, 0, 0]); // Two layers, end layers, end channels.
+    for (offset, name, red) in [(0, b"top\0".as_slice(), 0x0000u16), (4, b"saved\0".as_slice(), 0x1234u16)] {
+        let layer = source.len();
+        point(&mut source, pointers + offset, layer);
+        words(&mut source, &[1, 1, 1, name.len() as u32]);
+        source.extend(name);
+        if offset == 4 {
+            words(&mut source, &[2, 0]); // Selected source layer, below the default top layer.
+        }
+        words(&mut source, &[8, 4, 1, 0, 0]);
+        let hierarchy = source.len() + 8;
+        words(&mut source, &[hierarchy as u32, 0, 1, 1, 8, (hierarchy + 20) as u32, 0]);
+        words(&mut source, &[1, 1, (hierarchy + 36) as u32, 0]);
+        source.extend([red, 0, 0, 0xffff].into_iter().flat_map(u16::to_be_bytes));
+    }
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("saved-layer.xcf");
+    std::fs::write(&path, source).unwrap();
+    let mut s = session();
+    let mut baseline = None;
+    for quiet in [false, true] {
+        for override_open in [false, true] {
+            let mut steps = vec![json!(["image.adjustments.invert", {}])];
+            if override_open {
+                steps.insert(0, json!(["file.openAs", {"path":"recorded.xcf"}]));
+            }
+            let result = s
+                .execute(
+                    "file.automate.batch",
+                    json!({
+                        "input":[path],"output":folder.path().join(format!("{quiet}-{override_open}")),"format":"pcraft",
+                        "suppressWarnings":quiet,"suppressOpenOptions":quiet,"overrideOpen":override_open,"historicalXcfSampleOrder":"big-endian","steps":steps
+                    }),
+                )
+                .unwrap();
+            assert_eq!(result["errors"], json!([]), "{quiet} {override_open}: {result}");
+            let file = std::fs::read(result["files"][0].as_str().unwrap()).unwrap();
+            let doc = photocraft_format::load_from_bytes(&file).unwrap();
+            let pixel = |name| doc.layers.iter().find(|layer| layer.name == name).unwrap().surface().unwrap().pixel(0, 0);
+            assert_eq!(pixel("top"), [0., 0., 0., 1.], "{quiet} {override_open}");
+            let saved = pixel("saved");
+            assert_ne!(saved[0], f32::from(0x1234u16) / 65535., "{quiet} {override_open}");
+            assert_eq!(&saved, baseline.get_or_insert_with(|| saved.clone()), "{quiet} {override_open}");
+            assert!(
+                result["notices"][0]["warnings"].as_array().unwrap().iter().any(|warning| warning.as_str().unwrap().contains("explicit big-endian choice"))
+            );
+        }
     }
 }

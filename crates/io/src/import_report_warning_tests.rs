@@ -64,6 +64,9 @@ fn retained_parser_properties_are_quiet_but_content_losses_still_warn_after_nati
         let reopened = import("saved.pcraft", &native.bytes).unwrap();
         assert_eq!(reopened.document.metadata.import_conversion, doc.metadata.import_conversion);
         assert_eq!(reopened.warnings.len(), usize::from(warn), "reopened {feature}: {disposition:?}");
+        if warn {
+            assert!(reopened.warnings[0].contains("report stored in this native file"));
+        }
         let flat = export(&reopened.document, "png", &Default::default()).unwrap();
         assert_eq!(
             flat.warnings.iter().filter(|warning| warning.contains("import conversion report") && warning.contains("not exported")).count(),

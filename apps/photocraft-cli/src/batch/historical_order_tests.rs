@@ -275,3 +275,20 @@ const XZ: &[u8] = &[
     222, 242, 70, 252, 56, 178, 33, 137, 90, 82, 218, 28, 74, 165, 70, 224, 120, 16, 4, 0, 0, 0, 0, 126, 106, 230, 248, 49, 127, 163, 141, 0, 1, 90, 141, 1, 0,
     0, 0, 10, 236, 138, 159, 177, 196, 103, 251, 2, 0, 0, 0, 0, 4, 89, 90,
 ];
+
+#[test]
+fn droplet_reports_warnings_from_a_redirected_xcf_open() {
+    let folder = tempfile::tempdir().unwrap();
+    let source = folder.path().join("warning.xcf");
+    let droplet = folder.path().join("redirect.pcdroplet");
+    std::fs::write(&source, historical_rgb16(7, false)).unwrap();
+    let spec = serde_json::json!({
+        "photocraftDroplet":1,
+        "action":{"name":"Redirect","steps":[["file.openAs",{"path":"recorded.xcf"}]]},
+        "options":{"format":"pcraft","overrideOpen":true,"historicalXcfSampleOrder":"big-endian"}
+    });
+    std::fs::write(&droplet, spec.to_string()).unwrap();
+    let got = invoke(&["droplet", droplet.to_str().unwrap(), source.to_str().unwrap()]);
+    assert_eq!(got.code, 0, "{}", got.stderr);
+    assert!(got.stderr.contains(&format!("warning: {}:", source.display())) && got.stderr.contains("explicit big-endian choice"), "{}", got.stderr);
+}

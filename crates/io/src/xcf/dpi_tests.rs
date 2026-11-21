@@ -48,8 +48,16 @@ fn duplicate_resolution_properties_use_the_last_valid_pair_for_all_native_units(
         (vec![pair(300., 300.), pair(144., f32::NAN)], 300.),
         (vec![pair(300., f32::NAN), pair(144., 144.)], 144.),
         (vec![pair(72., 72.), pair(300., f32::NAN)], 72.),
-        (vec![pair(300., 150.)], 300.),
     ] {
         assert_matching_resolution(properties, expected);
     }
+}
+
+#[test]
+fn unequal_resolution_keeps_saved_text_pixels_and_warns_about_text() {
+    let imported = text_at_resolution(vec![pair(144., 72.), pair(288., f32::NAN)]);
+    assert_eq!(imported.document.resolution_dpi, 144.);
+    let LayerContent::Raster(pixels) = &imported.document.layers[0].content else { panic!("saved raster text") };
+    assert_eq!(pixels.pixel(0, 0), [1., 0., 0., 1.]);
+    assert!(imported.warnings.iter().any(|warning| warning.contains("unequal horizontal and vertical DPI") && warning.contains("saved text pixels")));
 }

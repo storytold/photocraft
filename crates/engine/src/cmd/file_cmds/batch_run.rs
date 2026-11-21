@@ -1066,6 +1066,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                 }
                 #[cfg(target_arch = "wasm32")]
                 let _ = check_folder_format;
+                scratch.batch_open_notices = Some(Vec::new());
                 if quiet_profiles || quiet_raw {
                     scratch.prefs = prefs.clone();
                     scratch.color.settings = color_settings.clone();
@@ -1077,7 +1078,6 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     if quiet_raw {
                         scratch.batch_raw_open = Some(raw_settings.clone());
                     }
-                    scratch.batch_open_notices = Some(Vec::new());
                 }
                 if override_open {
                     scratch.batch_open =
@@ -1091,12 +1091,15 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                         read_only_source.set(scratch.active().is_some_and(|state| state.source_read_only));
                     } else {
                         let opts = photocraft_io::ImportOptions { historical_xcf_sample_order, ..Default::default() };
-                        let imported = super::open::import_source_at_raw_ppi(raw_ppi, &file_name(path), &bytes, &opts)?;
+                        let mut imported = super::open::import_source_at_raw_ppi(raw_ppi, &file_name(path), &bytes, &opts)?;
                         read_only_source.set(imported.source_read_only);
+                        let (_, (), warning) = scratch.admit_import_with_initial_view(imported.source_read_only, imported.initial_view, |s| {
+                            (s.add_document(imported.document, Some(path.to_string())), ())
+                        })?;
+                        imported.warnings.extend(warning);
                         if !imported.warnings.is_empty() {
-                            notices.borrow_mut().push(json!({"file":path,"warnings":imported.warnings,"color":null}));
+                            super::open::batch_open_notice(scratch, path, &imported.warnings, &Value::Null);
                         }
-                        scratch.add_document(imported.document, Some(path.to_string()));
                     }
                 }
                 Ok(())

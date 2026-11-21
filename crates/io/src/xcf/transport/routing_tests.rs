@@ -27,6 +27,10 @@ fn wrappers(bytes: &[u8]) -> Vec<Vec<u8>> {
 
 /// Original uncompressed LZMA2 chunks in an XZ CRC32 stream; no encoder feature is needed.
 fn xz(bytes: &[u8]) -> Vec<u8> {
+    xz_blocks(&[bytes], |_, _| {})
+}
+
+fn xz_blocks(blocks: &[&[u8]], change_record: impl Fn(usize, &mut (usize, usize))) -> Vec<u8> {
     fn vli(mut value: usize, out: &mut Vec<u8>) {
         loop {
             let byte = (value & 127) as u8;
@@ -41,22 +45,27 @@ fn xz(bytes: &[u8]) -> Vec<u8> {
     out.extend(crc32fast::hash(&[0, 1]).to_le_bytes());
     let mut header = vec![2, 0, 0x21, 1, 0, 0, 0, 0];
     header.extend(crc32fast::hash(&header).to_le_bytes());
-    out.extend(&header);
-    let mut data = Vec::new();
-    for chunk in bytes.chunks(65536) {
-        data.push(1);
-        data.extend(((chunk.len() - 1) as u16).to_be_bytes());
-        data.extend(chunk);
+    let mut index = vec![0];
+    vli(blocks.len(), &mut index);
+    for (block, bytes) in blocks.iter().enumerate() {
+        out.extend(&header);
+        let mut data = Vec::new();
+        for chunk in bytes.chunks(65536) {
+            data.push(1);
+            data.extend(((chunk.len() - 1) as u16).to_be_bytes());
+            data.extend(chunk);
+        }
+        data.push(0);
+        out.extend(&data);
+        while !out.len().is_multiple_of(4) {
+            out.push(0);
+        }
+        out.extend(crc32fast::hash(bytes).to_le_bytes());
+        let mut record = (header.len() + data.len() + 4, bytes.len());
+        change_record(block, &mut record);
+        vli(record.0, &mut index);
+        vli(record.1, &mut index);
     }
-    data.push(0);
-    out.extend(&data);
-    while !out.len().is_multiple_of(4) {
-        out.push(0);
-    }
-    out.extend(crc32fast::hash(bytes).to_le_bytes());
-    let mut index = vec![0, 1];
-    vli(header.len() + data.len() + 4, &mut index);
-    vli(bytes.len(), &mut index);
     while !index.len().is_multiple_of(4) {
         index.push(0);
     }
@@ -107,6 +116,26 @@ fn concatenated_xz_import_rejects_an_inconsistent_footer_backward_size() {
         let wrapped = join(&members[0], &members[1]);
         assert!(header_prefix("joined.xcf.xz", &wrapped, &Interrupt::NONE).unwrap().is_some());
         assert!(matches!(crate::import("joined.xcf.xz", &wrapped), Err(IoError::Xcf(message)) if message.contains("XZ stream Index")));
+    }
+}
+
+#[test]
+fn multi_block_xz_checks_each_index_size_even_when_the_total_is_correct() {
+    let source = plain();
+    let blocks = [&source[..48], &source[48..]];
+    let import = |bytes: &[u8]| crate::import("multi-block.xcf.xz", bytes);
+    assert!(import(&xz_blocks(&blocks, |_, _| {})).is_ok());
+    for uncompressed in [false, true] {
+        let invalid = xz_blocks(&blocks, |block, record| {
+            let size = if uncompressed { &mut record.1 } else { &mut record.0 };
+            // Compensate in block two so neither aggregate changes.
+            if block == 0 {
+                *size += 1;
+            } else {
+                *size -= 1;
+            }
+        });
+        assert!(matches!(import(&invalid), Err(IoError::Xcf(message)) if message.contains("XZ Index sizes do not match")));
     }
 }
 

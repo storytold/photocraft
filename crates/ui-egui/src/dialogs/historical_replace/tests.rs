@@ -626,3 +626,30 @@ fn accepted_historical_source_changes_run_as_cancellable_desktop_jobs() {
         assert!(app.historical_replacements.is_empty());
     }
 }
+
+#[test]
+fn edit_contents_prompts_for_a_legacy_embedded_xcf_and_keeps_the_choice() {
+    let mut app = app(Vec::new(), HistoricalXcfSampleOrder::BigEndian);
+    app.session
+        .edit("Legacy source", |doc, _| {
+            let LayerContent::Smart(object) = &mut doc.layers[0].content else { panic!("smart object") };
+            object.historical_xcf_sample_order = None;
+            Ok(())
+        })
+        .unwrap();
+    let parent = app.session.active().unwrap().doc.id;
+    let ctx = egui::Context::default();
+    let result = crate::menus::invoke(&mut app, &ctx, "layer.smartObjects.editContents", json!({})).unwrap();
+    assert!(result["heldHistoricalXcfEdit"].is_u64());
+    let id = dialogs(&app).into_iter().find(|dialog| owns(&dialog.fields)).unwrap().id;
+    cancel(&mut app, id).unwrap();
+    assert_eq!(app.session.documents().len(), 1);
+    assert_eq!(object(&app).historical_xcf_sample_order, None);
+
+    app.run("layer.smartObjects.editContents", json!({})).unwrap();
+    choose(&mut app, "big-endian");
+    assert_eq!(object(&app).historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::BigEndian));
+    let child = app.session.active().unwrap();
+    assert_ne!(child.doc.id, parent);
+    assert_eq!(child.doc.layers[0].surface().unwrap().pixel(0, 0)[0], f32::from(0x1234u16) / 65535.);
+}
