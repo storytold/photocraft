@@ -32,6 +32,7 @@ const TABLES: &[Table] = &[
     ("filters_ext", crate::filters_ext::specs),
     ("color_to_alpha_cmds", crate::color_to_alpha_cmds::specs),
     ("gallery_cmds", crate::gallery_cmds::specs),
+    ("global_perspective_cmds", crate::global_perspective_cmds::specs),
     ("gradient_fill_cmds", crate::gradient_fill_cmds::specs),
     ("solid_fill_cmds", crate::solid_fill_cmds::specs),
     ("pattern_fill_cmds", crate::pattern_fill_cmds::specs),
