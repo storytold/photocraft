@@ -142,7 +142,7 @@ mod outlines {
         }
         // The classification evaluates every edge twice per piece and sampling distance: a path whose pieces would take
         // more than the budget is stored as it is.
-        if pieces.len().saturating_mul(edges.len()).saturating_mul(2 * SAMPLE_OFFSETS.len()) > WORK_BUDGET {
+        if pieces.len().saturating_mul(edges.len()).saturating_mul(2 * SAMPLE_OFFSETS.len() + 1) > WORK_BUDGET {
             return None;
         }
         // Keep the pieces with the shape on one side only, running with the shape on their left.
@@ -151,6 +151,16 @@ mod outlines {
             let d = sub(b, a);
             let len = dot(d, d).sqrt();
             let m = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+            // Another boundary within a few sampling distances of this piece (a hole or a gap narrower than that, so
+            // that both samples can land on the far side of it) makes the samples meaningless, even when they agree:
+            // the path stays as it is (CodeRabbit on #16189). Edges through the midpoint itself are the piece's own.
+            let crowded = edges.iter().any(|&(p, q)| {
+                let d = distance_to_edge(m, p, q);
+                d > 1e-9 && d < 3.0 * SAMPLE_OFFSETS[0]
+            });
+            if crowded {
+                return None;
+            }
             let sides: Vec<(bool, bool)> = SAMPLE_OFFSETS
                 .iter()
                 .map(|eps| {
@@ -226,6 +236,16 @@ mod outlines {
             (a.0.0 + t * r.0, a.0.1 + t * r.1)
         };
         vec![(t.clamp(0.0, 1.0), u.clamp(0.0, 1.0), p)]
+    }
+
+    /// The distance from `p` to the segment `a`-`b`.
+    fn distance_to_edge(p: Pt, a: Pt, b: Pt) -> f64 {
+        let d = sub(b, a);
+        let len2 = dot(d, d);
+        let t = if len2 > 0.0 { (dot(sub(p, a), d) / len2).clamp(0.0, 1.0) } else { 0.0 };
+        let c = (a.0 + d.0 * t, a.1 + d.1 * t);
+        let e = sub(p, c);
+        dot(e, e).sqrt()
     }
 
     /// Whether `p` is inside `path`, folding its components' operations as the renderer does (inversion aside).

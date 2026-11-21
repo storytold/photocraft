@@ -153,3 +153,12 @@ fn a_hole_narrower_than_the_sampling_distance_keeps_the_original_path() {
     assert_eq!(stored.subpaths.len(), 2, "both subpaths are kept");
     assert_eq!(stored.subpaths[1].op, PathOp::Subtract);
 }
+
+/// A hole smaller than both sampling distances is crossed whole by every sample, so the samples agree and still say
+/// nothing: the original path is kept (CodeRabbit on #16189).
+#[test]
+fn a_hole_smaller_than_every_sampling_distance_keeps_the_original_path() {
+    let stored = define(Path::new(vec![r(0.0, 0.0, 20.0, 20.0, PathOp::Combine), r(10.000_000_1, 10.000_000_1, 10.000_000_9, 10.000_000_9, PathOp::Subtract)]));
+    assert_eq!(stored.subpaths.len(), 2, "both subpaths are kept");
+    assert_eq!(stored.subpaths[1].op, PathOp::Subtract);
+}
