@@ -266,6 +266,22 @@ pub(crate) fn settings_toggle(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
     }
 }
 
+/// Healing's button beside the brush field runs the existing Window > Clone Source command.
+pub(crate) fn clone_source_toggle(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
+    let shown = crate::panel_docking::is_shown(app, "cloneSource");
+    let mut on = shown;
+    ToggleButton::new(tl!("Toggle the Clone Source panel"), Bind::bound(&mut on))
+        .icon(craft::behavior::IconId::new("crosshair"))
+        .icon_only()
+        .tooltip(tl!("Toggle the Clone Source panel"))
+        .show(ui);
+    if on != shown
+        && let Err(e) = crate::menus::invoke(app, ui.ctx(), "window.panel.cloneSource", json!({}))
+    {
+        app.ui.status = e;
+    }
+}
+
 #[cfg(test)]
 #[path = "../brush_picker_gear_menu_tests.rs"]
 mod gear_menu_tests;

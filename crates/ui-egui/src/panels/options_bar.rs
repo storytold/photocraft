@@ -152,7 +152,11 @@ fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::paint_mouse::sync_tool_brush(app);
     if (tool.is_brushlike() && !matches!(tool, Tool::Brush | Tool::Pencil | Tool::MixerBrush | Tool::Eraser)) || tool == Tool::QuickSelection {
         crate::brush_picker::show_field(ui, app, true);
-        crate::brush_picker::settings_toggle(ui, app);
+        if tool == Tool::Healing {
+            crate::brush_picker::clone_source_toggle(ui, app);
+        } else {
+            crate::brush_picker::settings_toggle(ui, app);
+        }
         Divider::vertical().show(ui);
     }
     if matches!(tool, Tool::CloneStamp | Tool::PatternStamp | Tool::HistoryBrush | Tool::Healing | Tool::ArtHistoryBrush) {
