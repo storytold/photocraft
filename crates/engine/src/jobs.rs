@@ -102,6 +102,8 @@ struct Shared {
     /// `fetch_max` keeps progress monotonic even with several reporting threads.
     progress: AtomicU32,
     message: Mutex<String>,
+    /// Intermediate results the worker published for the UI ([`JobCtx::publish`]).
+    published: Mutex<Vec<Box<dyn Any + Send>>>,
     batch: Mutex<BatchInterrupt>,
     batch_decision: Condvar,
     batch_preview: Mutex<Option<BatchPreview>>,
@@ -336,6 +338,12 @@ impl JobCtx {
         self.shared.state.fetch_or(WORK_FINISHED, Ordering::Release);
     }
 
+    /// Hands an intermediate result (for example a preview of what the job is making) to the UI
+    /// thread, which collects it with [`Session::take_published`] while the job runs.
+    pub fn publish<T: Send + 'static>(&self, value: T) {
+        self.shared.published.lock().unwrap_or_else(PoisonError::into_inner).push(Box::new(value));
+    }
+
     /// `Err(Cancelled)` once cancelled, for `?` between stages.
     pub fn check(&self) -> Result<()> {
         if self.cancelled() { Err(EngineError::Cancelled) } else { Ok(()) }
@@ -518,6 +526,8 @@ struct Running {
     pre_selected: Option<Vec<LayerId>>,
     before: crate::actions_record::Before,
     doc: Option<DocId>,
+    /// A document the job locks without editing it (an open's preview, [`Session::set_job_lock`]).
+    locks: Option<DocId>,
     /// The document as the job saw it: applying fails if it was edited meanwhile.
     snapshot: Option<Weak<Document>>,
     ctx: JobCtx,
@@ -706,6 +716,7 @@ fn import_path(
     expected: Option<&SourceFingerprint>,
     ctl: &photocraft_raster::Interrupt,
     opened: &mut Option<photocraft_io::FileIdentity>,
+    on_bytes: &mut dyn FnMut(&[u8]) -> std::result::Result<(), photocraft_io::IoError>,
 ) -> std::result::Result<(photocraft_io::ImportResult, bool), photocraft_io::IoError> {
     let expected = match expected {
         None => None,
@@ -714,7 +725,7 @@ fn import_path(
     };
     // Bounded reads, and a clear error for a file larger than memory (#375); a PSD/PSB is
     // streamed from the open file instead of being read whole.
-    photocraft_io::import_file_for_open_verified(name, std::path::Path::new(path), expected, opts, ctl, opened)
+    photocraft_io::import_file_for_open_verified_with(name, std::path::Path::new(path), expected, opts, ctl, opened, on_bytes)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -725,8 +736,25 @@ fn import_path(
     _: Option<&SourceFingerprint>,
     _: &photocraft_raster::Interrupt,
     _: &mut Option<photocraft_io::FileIdentity>,
+    _: &mut dyn FnMut(&[u8]) -> std::result::Result<(), photocraft_io::IoError>,
 ) -> std::result::Result<(photocraft_io::ImportResult, bool), photocraft_io::IoError> {
     Err(photocraft_io::IoError::Read(format!("cannot open paths on the web: {path}")))
+}
+
+/// Publishes a raw's first-paint stages (the camera's JPEG, a half-size develop) from the job's
+/// thread, then checks for Cancel. A cancelled open drops the sensor decode the stages left for
+/// the full develop. Not a raw: nothing happens.
+fn raw_first_paint(ctx: &JobCtx, name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> std::result::Result<(), ()> {
+    if !photocraft_io::raw::is_raw(bytes) {
+        return Ok(());
+    }
+    ctx.progress(0.01, "Previewing");
+    photocraft_io::raw::publish_previews(name, bytes, opts.demosaic, &mut |r| ctx.publish(r), &|| ctx.cancelled());
+    if ctx.check().is_err() {
+        photocraft_io::raw::discard_predecoded();
+        return Err(());
+    }
+    Ok(())
 }
 
 /// Run a job-capable command's heavy part. `work` runs on a worker thread when the command was
@@ -873,6 +901,7 @@ fn new_job<T: Send + 'static>(
         pre_selected: None,
         before: crate::actions_record::Before::capture(s),
         doc,
+        locks: None,
         snapshot,
         ctx: JobCtx::new(),
         started_ms: now_ms(),
@@ -1263,6 +1292,7 @@ impl Session {
         let mut opts = import_options(self.prefs());
         // An interactive raw open keeps its sensor data for the Camera Raw dialog it may show.
         opts.keep_raw = confirm_damage && self.prefs().raw_defaults.open_in_camera_raw;
+        let progressive = confirm_damage;
         opts.psd_high_memory_approved = approve_high_memory;
         opts.psd_approved_estimate = approved_estimate;
         let test_memory_scope = photocraft_io::memory::TestMemoryScope::capture();
@@ -1298,6 +1328,11 @@ impl Session {
                 let outcome = match source {
                     OpenSource::Bytes(bytes) => {
                         ctx.check()?;
+                        // Interactive raw opens show the camera's JPEG and a half-size develop while
+                        // the full develop runs (the UI takes them with `take_published`).
+                        if progressive && !cfg!(target_arch = "wasm32") {
+                            raw_first_paint(ctx, &name_w, &bytes, &opts).map_err(|_| EngineError::Cancelled)?;
+                        }
                         ctx.progress(0.02, "Decoding");
                         let res = ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl));
                         match res {
@@ -1317,7 +1352,14 @@ impl Session {
                     }
                     OpenSource::Path(p) => {
                         let mut opened = None;
-                        let res = ctx.stage(0.0, 0.95, "Decoding", |ctl| import_path(&name_w, &p, &opts, expected_fingerprint.as_ref(), ctl, &mut opened));
+                        // The same first-paint stages as for bytes, from the bytes the verified handle
+                        // read (its identity and preflight checks are unchanged).
+                        let mut first_paint = |bytes: &[u8]| -> std::result::Result<(), photocraft_io::IoError> {
+                            if progressive { raw_first_paint(ctx, &name_w, bytes, &opts).map_err(|_| photocraft_io::IoError::Cancelled) } else { Ok(()) }
+                        };
+                        let res = ctx.stage(0.0, 0.95, "Decoding", |ctl| {
+                            import_path(&name_w, &p, &opts, expected_fingerprint.as_ref(), ctl, &mut opened, &mut first_paint)
+                        });
                         match res {
                             Ok(imported) => WorkResult::Decoded(Box::new(imported)),
                             Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if confirm_damage => {
@@ -1669,7 +1711,26 @@ impl Session {
 
     /// The running job that locks document `doc`, if any.
     pub fn job_on(&self, doc: DocId) -> Option<JobInfo> {
-        self.jobs.running.iter().find(|r| r.doc == Some(doc)).map(Running::info)
+        self.jobs.running.iter().find(|r| r.doc == Some(doc) || r.locks == Some(doc)).map(Running::info)
+    }
+
+    /// Collects the values of type `T` that running job `id` published ([`JobCtx::publish`]) since
+    /// the last call, oldest first.
+    pub fn take_published<T: 'static>(&mut self, id: JobId) -> Vec<T> {
+        let Some(job) = self.jobs.running.iter().find(|r| r.id == id) else { return Vec::new() };
+        let mut all = job.ctx.shared.published.lock().unwrap_or_else(PoisonError::into_inner);
+        let (mine, rest) = std::mem::take(&mut *all).into_iter().partition::<Vec<_>, _>(|v| v.is::<T>());
+        *all = rest;
+        mine.into_iter().filter_map(|v| v.downcast::<T>().ok().map(|b| *b)).collect()
+    }
+
+    /// Makes running job `id` lock document `doc` (or none) as if it edited it, without it being
+    /// the job's document: edits are refused meanwhile and closing `doc` cancels the job. For a
+    /// preview shown while an open job makes the real document.
+    pub fn set_job_lock(&mut self, id: JobId, doc: Option<DocId>) {
+        if let Some(job) = self.jobs.running.iter_mut().find(|r| r.id == id) {
+            job.locks = doc;
+        }
     }
 
     /// The running job that locks the active document, if any.
@@ -1705,7 +1766,7 @@ impl Session {
     /// Cancel the jobs editing document `doc` (it is closing). A job past its commit keeps
     /// running and its result is still applied (see [`JobCtx::commit`]).
     pub(crate) fn cancel_jobs_on(&mut self, doc: DocId) -> CancelReport {
-        let ids: Vec<JobId> = self.jobs.running.iter().filter(|r| r.doc == Some(doc)).map(|r| r.id).collect();
+        let ids: Vec<JobId> = self.jobs.running.iter().filter(|r| r.doc == Some(doc) || r.locks == Some(doc)).map(|r| r.id).collect();
         let report = self.cancel_each(ids);
         // Workers cancelled now, or earlier and still unwinding, hold the closing document.
         #[cfg(not(target_arch = "wasm32"))]
