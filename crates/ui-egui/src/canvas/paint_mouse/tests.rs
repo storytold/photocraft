@@ -401,7 +401,7 @@ fn art_history_brush_starts_at_full_opacity() {
 fn each_tool_keeps_its_own_brush() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
-    let brush = |app: &PhotocraftApp| app.session.tools.brush.clone();
+    let brush = |app: &PhotocraftApp| (*app.session.tools.brush).clone();
     let size = |b: &BrushSettings| b.size;
     let hardness = |b: &BrushSettings| b.hardness;
     let opacity = |b: &BrushSettings| b.opacity;

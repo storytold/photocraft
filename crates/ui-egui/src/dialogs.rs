@@ -732,6 +732,7 @@ pub(crate) mod image_processor_ui;
 pub mod jpeg_options_ui;
 pub mod layer_picker;
 pub mod layer_style;
+pub(crate) mod lens_batch_ui;
 pub mod liquify_ui;
 pub mod live_shape_prompt;
 pub mod mask_trash_prompt;
@@ -749,6 +750,9 @@ mod paths_export_document_bounds_tests;
 pub(crate) mod pattern_fill_ui;
 pub mod preset_group_prompt;
 pub mod rasterize_prompt;
+#[cfg(test)]
+mod rotate_canvas_layout_tests;
+pub(crate) mod rotate_canvas_ui;
 #[cfg(test)]
 mod scale_effects_layout_tests;
 pub mod screen_picker;

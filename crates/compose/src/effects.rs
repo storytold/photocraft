@@ -54,8 +54,8 @@ use distance::{
 };
 use paint::dissolves;
 pub use paint::{
-    bevel_contour_lut, glow_gradient_gain, glow_lut, glow_paint_lut, gradient_t, gradient_units, hash_noise, ranged_lut, sample_gradient, satin_lut,
-    spread_split,
+    aa_shift, anti_aliased_contour, bevel_contour_lut, glow_gradient_gain, glow_lut, glow_paint_lut, gradient_t, gradient_units, hash_noise, ranged_lut,
+    sample_gradient, satin_lut, spread_split,
 };
 #[cfg(test)]
 use paint::{glow_map, lut_at, noise, offset, shadow_map};
@@ -246,6 +246,8 @@ impl FxMaps {
     }
 }
 
+#[cfg(test)]
+mod inner_shadow_anti_alias_tests;
 #[cfg(test)]
 mod outer_glow_noise_tests;
 
