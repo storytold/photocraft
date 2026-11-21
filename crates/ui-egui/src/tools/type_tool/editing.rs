@@ -338,6 +338,14 @@ fn commit_here(app: &mut PhotocraftApp, by_user: bool) {
         if let Err(e) = app.run("type.createSelection", json!({"layer": ed.layer, "removeLayer": true, "operation": "new", "coalesce": ed.session})) {
             // The refused step left the document alone: keep today's type layer, so what was typed
             // is not lost with a selection that was never made.
+            //
+            // #12047: the session ends here, so the retained layer takes the name from its text
+            // like every other first commit - the document's generic "Layer N" name was only its
+            // provisional one while the text was being edited.
+            let name = photocraft_engine::type_cmds::layer_name(&text);
+            let _ = app.run("type.edit", json!({"layer": ed.layer, "name": name, "coalesce": ed.session}));
+            // Re-show the refusal after that: the command shell clears an error status on the
+            // next command that succeeds (`app::commands`), which the rename above is.
             app.ui.status = e;
             app.ui.status_error = true;
             return;
@@ -587,6 +595,39 @@ mod indexed_commit_tests {
             commit(&mut column_app);
             assert_eq!(text_layers(&column_app), 1, "{mode}: vertical text keeps its editable layer");
             assert!(selection(&column_app).is_none(), "{mode}: and is not turned into a selection");
+        }
+    }
+
+    /// The refusal branch of the conversion above (#12041): when the commit's
+    /// `type.createSelection` is refused - its `removeLayer` would leave the document with no
+    /// layer at all - `commit_here` keeps the typed layer as a type layer. The session still
+    /// ends there, so the layer takes the name from its text like any other first commit
+    /// (#12047), instead of keeping the provisional "Layer N" it only carried while editing.
+    #[test]
+    fn a_refused_conversion_still_names_the_retained_layer_from_its_text() {
+        for mode in ["indexed", "bitmap"] {
+            let mut app = app(mode);
+            open(&mut app, (80.0, 120.0), (80.0, 120.0));
+            type_text(&mut app, "Hi");
+            let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
+            let name_of = |app: &PhotocraftApp| app.session.active().unwrap().doc.layer(id).unwrap().name.clone();
+            assert_eq!(name_of(&app), "Layer 1", "{mode}: the name is provisional while editing");
+            // Keep the session open and take the document's other layer away: the commit's
+            // conversion with removeLayer would leave no layer at all, which the engine refuses
+            // ("a document must keep at least one layer").
+            let other = app.session.active().unwrap().doc.layers.iter().map(|l| l.id).find(|lid| *lid != id).unwrap();
+            let states_before = states(&app);
+            app.run("layer.delete", json!({"layer": other.0})).unwrap();
+            commit(&mut app);
+            assert!(app.ui.text_edit.is_none(), "{mode}: the commit ends the session");
+            assert!(app.ui.status_error, "{mode}: the refusal is shown in the status bar");
+            assert_eq!(layers(&app), 1, "{mode}: the refused conversion keeps the typed layer");
+            assert_eq!(text_layers(&app), 1, "{mode}: and it is still a type layer");
+            assert!(selection(&app).is_none(), "{mode}: and selects nothing");
+            assert_eq!(name_of(&app), "Hi", "{mode}: the retained layer follows its text, like any first commit");
+            // The refused conversion makes no history state of its own; the delete and the
+            // rename each do (the delete had already ended the typing session's coalesce group).
+            assert_eq!(states(&app), states_before + 2, "{mode}: states after the refused commit: {:?}", states(&app));
         }
     }
 }
