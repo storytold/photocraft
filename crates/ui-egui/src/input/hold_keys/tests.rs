@@ -632,6 +632,11 @@ fn space_right_click_opens_the_hand_view_menu() {
     let mut h = harness(Tool::Move);
     for tool in [Tool::Move, Tool::Brush, Tool::RectMarquee, Tool::Pen] {
         h.state_mut().ui.tool = tool;
+        // Every case starts at 100 %, not where the case before it left the shared view: the first
+        // case ends at 200 %, and a later case whose row applied nothing would still read 200 %.
+        let view = &mut h.state_mut().ui.views[0];
+        view.zoom = 1.0;
+        view.clear_pending();
         h.run_steps(1);
         let p = screen(&h, 200.0, 150.0);
         h.event(Event::PointerMoved(p));
@@ -649,6 +654,7 @@ fn space_right_click_opens_the_hand_view_menu() {
         assert_eq!(h.state().ui.tool, tool, "{tool:?}: the tool is kept");
         // Its rows work as the selected Hand's do.
         let before = zoom(&h);
+        assert!(before != 2.0, "{tool:?}: the case starts away from 200 % ({before}), so the row has to move the view");
         let ctx = h.ctx.clone();
         crate::canvas_tool_menu::choose(h.state_mut(), &ctx, "view.twoHundredPercent");
         h.run_steps(2);
