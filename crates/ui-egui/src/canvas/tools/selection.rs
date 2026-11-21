@@ -266,7 +266,12 @@ impl SelectionProbe for PcSelection {
     fn on_floating(&self, at: Point) -> bool {
         let Some(piece) = &self.piece else { return self.inside_selection(at) };
         let at = Point::new(at.x - f64::from(piece.offset.0), at.y - f64::from(piece.offset.1));
-        piece.outline.as_ref().map_or_else(|| self.inside_selection(at), |outline| covers(outline, at))
+        // A floating piece is hit wherever it lies, past the canvas edge too, and `at` is now in the piece's own space,
+        // so the canvas check in `inside_selection` (for a selection that isn't floating) does not apply.
+        match &piece.outline {
+            Some(outline) => covers(outline, at),
+            None => self.selection.as_ref().is_some_and(|sel| covers(sel, at)),
+        }
     }
 }
 

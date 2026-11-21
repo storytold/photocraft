@@ -482,3 +482,24 @@ fn a_press_on_the_hidden_part_of_an_oval_starts_a_new_marquee() {
     assert_eq!(drawn.content_bounds(), b, "a new oval, not the old one moved");
     assert_eq!(drawn.read_region(b), fresh.read_region(b), "pixel for pixel");
 }
+
+/// A floating layer mask has no outline of its own, so the selection, shifted by the move, stands in for it. A ⌘-drag on
+/// the moved oval moves the mask again even where the oval started past the canvas edge.
+#[test]
+fn a_cmd_drag_on_a_moved_mask_whose_oval_started_past_the_edge_moves_it_again() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    app.sync_views();
+    app.ui.extras.snap = false;
+    app.ui.view.show.smart_guides = false;
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.ui.tool = Tool::EllipseMarquee;
+    drag(&mut app, [-100.0, 100.0], [100.0, 220.0], Modifiers::NONE);
+    app.run("select.float", json!({"dx": 200, "dy": 0, "target": "mask"})).unwrap();
+    let offset = |app: &PhotocraftApp| photocraft_engine::float_cmds::floating(app.session.active().unwrap()).map(|f| f.offset);
+    assert_eq!(offset(&app), Some((200, 0)));
+    // Canvas (150, 160) is inside the moved oval; in the piece's own space it is (-50, 160), past the canvas edge.
+    drag(&mut app, [150.0, 160.0], [150.0, 200.0], Modifiers::COMMAND);
+    assert_eq!(offset(&app), Some((200, 40)), "the mask moved down");
+}
