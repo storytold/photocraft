@@ -3,7 +3,7 @@ use super::{Result, Session, Value, json};
 // ------------------------------------------------------------------ Purge
 
 fn history_bytes(s: &Session, all: bool) -> usize {
-    let docs: Vec<&crate::DocState> = if all { s.documents().iter().collect() } else { s.active().into_iter().collect() };
+    let docs: Vec<&crate::DocState> = if all { s.documents().iter().map(|st| &**st).collect() } else { s.active().into_iter().collect() };
     // Purge keeps the snapshots, so the tiles they share with the states aren't freed.
     docs.iter()
         .map(|d| {
@@ -31,8 +31,8 @@ pub(super) fn purge(s: &mut Session, what: &str) -> Result<Value> {
     }
     if matches!(what, "clipboard" | "all") && (s.clipboard.is_some() || s.style_clipboard.is_some()) {
         freed += clip_bytes(s);
-        s.clipboard = None;
-        s.style_clipboard = None;
+        *s.clipboard = None;
+        *s.style_clipboard = None;
         items.push("clipboard");
     }
     if matches!(what, "histories" | "all") {

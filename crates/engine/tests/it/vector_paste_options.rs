@@ -37,7 +37,7 @@ const SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="10" heigh
 fn scene(depth: u32) -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 20, "height": 16, "depth": depth, "background": "transparent"})).unwrap();
-    s.clipboard = Some(Clip::from_svg(SVG).unwrap());
+    *s.clipboard = Some(Clip::from_svg(SVG).unwrap());
     s
 }
 
@@ -65,7 +65,7 @@ fn rejected(s: &mut Session, p: Value) -> String {
     let selection = state.selected_layers.clone();
     let active = state.active_layer;
     let history = (state.history.past_len(), state.history.redo_label().map(str::to_owned));
-    let clip = s.clipboard.clone().unwrap();
+    let clip = (*s.clipboard).clone().unwrap();
     let error = s.execute("edit.paste", p).unwrap_err().to_string();
     let state = s.active().unwrap();
     assert_eq!(state.doc, before);
@@ -134,7 +134,7 @@ fn original_svg_drives_pixels_curves_and_shape_paint_with_one_undo() {
     assert!(legacy[1] > 0.9 && legacy[0] < 0.1, "omission keeps the ordinary raster mirror route");
     s.execute("edit.undo", json!({})).unwrap();
     let replaced = String::from_utf8(SVG.to_vec()).unwrap().replace("C2 0", "C3 0");
-    s.clipboard = Some(Clip::from_svg(replaced.as_bytes()).unwrap());
+    *s.clipboard = Some(Clip::from_svg(replaced.as_bytes()).unwrap());
     s.execute("edit.paste", json!({"as":"path"})).unwrap();
     assert!(s.active().unwrap().doc.paths.last().unwrap().path.subpaths.iter().flat_map(|p| &p.knots).any(|k| k.out_ctrl == Point::new(8.0, 4.0)));
     s.execute("edit.undo", json!({})).unwrap();
@@ -193,17 +193,17 @@ fn invalid_modes_targets_and_capabilities_preserve_source_and_history() {
         rejected(&mut s, p);
     }
     let multi = br##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="8"><rect width="3" height="3"/><rect x="5" width="3" height="3"/></svg>"##;
-    s.clipboard = Some(Clip::from_svg(multi).unwrap());
+    *s.clipboard = Some(Clip::from_svg(multi).unwrap());
     rejected(&mut s, json!({"as":"shape"}));
     s.execute("edit.paste", json!({"as":"path"})).unwrap();
     assert_eq!(s.active().unwrap().doc.paths.last().unwrap().path.subpaths.len(), 2);
     let opacity = br##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="8"><g opacity=".5"><rect width="3" height="3"/></g></svg>"##;
-    s.clipboard = Some(Clip::from_svg(opacity).unwrap());
+    *s.clipboard = Some(Clip::from_svg(opacity).unwrap());
     for mode in ["path", "shape"] {
         rejected(&mut s, json!({"as":mode}));
     }
     let mut empty = Session::new();
-    empty.clipboard = Some(Clip::from_svg(SVG).unwrap());
+    *empty.clipboard = Some(Clip::from_svg(SVG).unwrap());
     assert!(empty.execute("edit.paste", json!({"as":"pixels"})).is_err());
     assert!(empty.active().is_none());
     let mut locked = scene(8);
@@ -236,7 +236,7 @@ fn source_and_destination_work_limits_refuse_before_editing() {
         many.push_str("<rect width='1' height='1'/>");
     }
     many.push_str("</svg>");
-    s.clipboard = Some(Clip::from_svg(many.as_bytes()).unwrap());
+    *s.clipboard = Some(Clip::from_svg(many.as_bytes()).unwrap());
     assert!(rejected(&mut s, json!({"as":"path"})).contains("4096"));
     // The original position covers 36MP in this destination; the final position covers zero.
     let oversized = br##"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><path d="M0 0H6000V6000H0Z"/></svg>"##;
@@ -246,7 +246,7 @@ fn source_and_destination_work_limits_refuse_before_editing() {
     doc.layers.push(Layer::raster("Pixels", doc.pixel_format()));
     let mut large = Session::new();
     large.add_document(doc, None);
-    large.clipboard = Some(Clip::from_svg(oversized).unwrap());
+    *large.clipboard = Some(Clip::from_svg(oversized).unwrap());
     assert!(rejected(&mut large, json!({"as":"shape","center":[-10000,-10000]})).contains("cache exceeds 24 megapixels"));
 }
 
@@ -354,7 +354,7 @@ fn recorded_pixels_paste(in_place: bool) -> Descriptor {
 fn recorded_pixels_paste_keeps_the_ordinary_route() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 20, "height": 16, "background": "transparent"})).unwrap();
-    s.clipboard = Some(Clip::from_svg(SVG).unwrap());
+    *s.clipboard = Some(Clip::from_svg(SVG).unwrap());
     s.execute("edit.paste", json!({"as":"shape"})).unwrap();
     s.execute("edit.copy", json!({})).unwrap();
     assert_eq!(load(&mut s, &recorded(recorded_pixels_paste(false)))["unsupported"], json!([]));

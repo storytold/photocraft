@@ -4,7 +4,7 @@ use crate::{Path, ShapeLayer, ShapeStroke};
 use photocraft_geom::{Affine, Point, Rect};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Frame {
     pub path: Path,
     pub transform: Affine,

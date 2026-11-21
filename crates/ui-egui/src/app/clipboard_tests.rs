@@ -330,7 +330,7 @@ fn newer_unexported_copies_do_not_track_an_older_os_signature() {
                 write_fails.store(true, Ordering::SeqCst);
                 app.session.edit_prefs(|prefs| prefs.general.export_clipboard = !disable_export);
                 app.run(copy_id, serde_json::json!({})).unwrap();
-                let copied = app.session.clipboard.clone().unwrap();
+                let copied = app.session.clipboard.as_ref().cloned().unwrap();
                 assert!(app.clip_unmirrored && !app.clip_external);
                 assert_eq!(app.os_clip_sig, old_signature);
                 assert_eq!(copied.surface.rgba(0, 0), [0.0, 0.0, 1.0, 1.0]);
@@ -519,7 +519,7 @@ fn copy_with_the_mask_targeted_copies_the_mask_not_the_pixels() {
     app.ui.mask_target = true;
     let app_ctx = app.ctx().clone();
     crate::menus::invoke(&mut app, &app_ctx, "edit.copy", serde_json::json!({})).unwrap();
-    let clip = app.session.clipboard.clone().expect("the mask was copied");
+    let clip = app.session.clipboard.as_ref().cloned().expect("the mask was copied");
     let st = app.session.active().unwrap();
     let (w, h) = (st.doc.size.width as i32, st.doc.size.height as i32);
     assert_eq!(

@@ -196,7 +196,7 @@ fn pixel_align_psd_integer_translation_retains_coordinate_allowance() {
         psd_coordinate_frame: Some([1000, 1000]),
         ..Default::default()
     };
-    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().content = LayerContent::Shape(sh.clone());
+    std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(id).unwrap().content = LayerContent::Shape(sh.clone());
     let canvas = Rect::new(0, 0, 1000, 1000);
     let before = CompiledShape::new(&sh, DEFAULT_TOLERANCE, canvas).render_rgba(Rect::new(0, 0, 80, 80));
     s.execute("shape.edit", json!({"layer":id.0,"transform":[1,0,0,1,3,5]})).unwrap();
@@ -221,7 +221,7 @@ fn pixel_align_round2_grid_transforms_conversion_and_point_edits() {
     s.execute("file.new", json!({"width":1000,"height":2000})).unwrap();
     s.execute("shape.create", json!({"rect":[10,10,60,60],"useAlignedRendering":true})).unwrap();
     let id = s.active().unwrap().active_layer.unwrap();
-    let LayerContent::Shape(sh) = &mut std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().content else { panic!() };
+    let LayerContent::Shape(sh) = &mut std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(id).unwrap().content else { panic!() };
     sh.psd_coordinate_frame = Some([1000, 2000]);
     for (matrix, frame) in [(json!([-1, 0, 0, 1, 100, 0]), [1000, 2000]), (json!([0, 1, -1, 0, 100, 0]), [2000, 1000])] {
         s.execute("shape.edit", json!({"layer":id.0,"transform":matrix})).unwrap();
@@ -248,7 +248,7 @@ fn pixel_align_unchanged_path_and_whole_path_grid_move_keep_provenance() {
     s.execute("file.new", json!({"width":1000,"height":1000})).unwrap();
     let info = s.execute("shape.create", json!({"rect":[10,10,60,60],"useAlignedRendering":true})).unwrap();
     let id = s.active().unwrap().active_layer.unwrap();
-    let LayerContent::Shape(sh) = &mut std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().content else { panic!() };
+    let LayerContent::Shape(sh) = &mut std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(id).unwrap().content else { panic!() };
     sh.psd_coordinate_frame = Some([1000, 1000]);
     s.execute("shape.edit", json!({"layer":id.0,"path":info["path"]})).unwrap();
     s.execute("path.moveAnchors", json!({"name":"layer","anchors":[[0,0],[0,1],[0,2],[0,3]],"move":[3,5]})).unwrap();
@@ -266,7 +266,7 @@ fn pixel_align_grid_move_recovers_rounded_integer_offsets() {
         s.execute("file.new", json!({"width":100,"height":100})).unwrap();
         s.execute("shape.create", json!({"rect":[coordinate,coordinate,20,20],"useAlignedRendering":true})).unwrap();
         let id = s.active().unwrap().active_layer.unwrap();
-        let LayerContent::Shape(sh) = &mut std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().content else { panic!("shape") };
+        let LayerContent::Shape(sh) = &mut std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(id).unwrap().content else { panic!("shape") };
         sh.psd_coordinate_frame = Some([300_000, 300_000]);
         let before = sh.path.clone();
         let first = before.subpaths[0].knots[0].anchor;
@@ -287,7 +287,7 @@ fn pixel_align_grid_move_rejects_fractional_or_partial_offsets() {
         s.execute("file.new", json!({"width":100,"height":100})).unwrap();
         s.execute("shape.create", json!({"rect":[10.0000006,10.0000006,20,20]})).unwrap();
         let id = s.active().unwrap().active_layer.unwrap();
-        let LayerContent::Shape(sh) = &mut std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().content else { panic!("shape") };
+        let LayerContent::Shape(sh) = &mut std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(id).unwrap().content else { panic!("shape") };
         sh.psd_coordinate_frame = Some([1000, 1000]);
         s.execute("path.moveAnchors", json!({"name":"layer","anchors":anchors,"move":[dx,10]})).unwrap();
         let LayerContent::Shape(sh) = &s.active().unwrap().doc.layer(id).unwrap().content else { panic!("shape") };

@@ -783,6 +783,19 @@ fn disabled_printing_never_spools() {
     let e = s.execute("file.print", json!({})).unwrap_err().to_string();
     assert!(e.contains("printing is disabled"), "{e}");
     assert!(s.execute("file.printOneCopy", json!({})).is_err());
+    // Nor does it ask a driver for its page: on a Windows runner that call can hang, holding SPOOLER.
+    let e = s.execute("file.print.page", json!({})).unwrap_err().to_string();
+    assert!(e.contains("printing is disabled"), "{e}");
+    // Bad values are still the error they were, before the check.
+    let e = s.execute("file.print.page", json!({"orientation": "sideways"})).unwrap_err().to_string();
+    assert!(e.contains("orientation"), "{e}");
+    // With printing on the command goes past the switch to the printer route: off Windows the GDI route has no
+    // printers, so a named printer's page is the route's own refusal (no driver is asked there).
+    #[cfg(not(windows))]
+    {
+        let e = super::page_of_printer(&json!({"printer": "Anything"}), false).unwrap_err().to_string();
+        assert!(!e.contains("printing is disabled"), "{e}");
+    }
     // A dry run still renders and reports the command it would have run.
     let r = s.execute("file.print", json!({"dryRun": true})).unwrap();
     assert_eq!(r["sent"], false);
