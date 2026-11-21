@@ -365,19 +365,21 @@ pub fn inspect(app: &PhotocraftApp) -> Value {
 
 /// The diagnostics report's render-path lines (Help › System Info, `gpu_status`): the active
 /// document's path, then the history, newest first. History entries name their document only
-/// with `names` (on screen); the copied report says `document {id}`, as it goes into issues.
+/// with `names` (on screen); the copied report says `document {id}`, as it goes into issues, and
+/// leaves out the layer and pattern names a reason quotes (see [`without_quoted`]).
 pub fn report_lines(app: &PhotocraftApp, names: bool) -> Vec<String> {
+    let detail = |r: &CpuReason| if names { r.to_string() } else { without_quoted(&r.to_string()) };
     let doc = app.session.active().map_or(0, |st| st.doc.id.0);
     let mut v = vec![match app.render_path.current(doc) {
         // A software adapter still runs the GPU canvas: the GPU path, drawn in software. Without
         // a GPU canvas (CPU mode on one), it is the CPU path.
         Some(r @ CpuReason::SoftwareAdapter) if has_gpu_canvas(app) => {
             let template = "Render path: GPU ({kind}: {detail})";
-            crate::i18n::fmt(tl!(template), &[("kind", r.kind()), ("detail", &r.to_string())])
+            crate::i18n::fmt(tl!(template), &[("kind", r.kind()), ("detail", &detail(r))])
         }
         Some(r) => {
             let template = "Render path: CPU ({kind}: {detail})";
-            crate::i18n::fmt(tl!(template), &[("kind", r.kind()), ("detail", &r.to_string())])
+            crate::i18n::fmt(tl!(template), &[("kind", r.kind()), ("detail", &detail(r))])
         }
         None => tl!("Render path: GPU").to_string(),
     }];
@@ -392,22 +394,38 @@ pub fn report_lines(app: &PhotocraftApp, names: bool) -> Vec<String> {
             doc => format!("document {doc}"),
         };
         let what = match (&c.reason, c.preview) {
-            (Some(r), true) => r.to_string(),
+            (Some(r), true) => detail(r),
             (None, true) => tl!("adjustment preview no longer uses the CPU proxy").to_string(),
             // As the current path above: a software adapter running the GPU canvas then.
             (Some(r @ CpuReason::SoftwareAdapter), false) if c.gpu_canvas => {
                 let template = "GPU ({kind}: {detail})";
-                crate::i18n::fmt(tl!(template), &[("kind", r.kind()), ("detail", &r.to_string())])
+                crate::i18n::fmt(tl!(template), &[("kind", r.kind()), ("detail", &detail(r))])
             }
             (Some(r), false) => {
                 let template = "CPU ({kind}: {detail})";
-                crate::i18n::fmt(tl!(template), &[("kind", r.kind()), ("detail", &r.to_string())])
+                crate::i18n::fmt(tl!(template), &[("kind", r.kind()), ("detail", &detail(r))])
             }
             (None, false) => tl!("back on the GPU").to_string(),
         };
         v.push(format!("  {:.0} ms: {who}: {what}", c.t_ms));
     }
     v
+}
+
+/// `text` with each backtick-quoted span as `` `…` ``: a reason quotes the layer or pattern it
+/// names (`Advanced Blending on `{layer}``), and those names are the user's, kept out of issues.
+/// A backtick without its closing one is left as it is.
+fn without_quoted(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some((before, after)) = rest.split_once('`') {
+        let Some((_, tail)) = after.split_once('`') else { break };
+        out.push_str(before);
+        out.push_str("`…`");
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
 }
 
 #[cfg(test)]
@@ -428,6 +446,14 @@ mod tests {
 
     fn over(needed: u64) -> Path {
         Path::Cpu(CpuReason::OverBudget { needed, budget: 2 << 30 })
+    }
+
+    #[test]
+    fn without_quoted_hides_each_backtick_span() {
+        assert_eq!(without_quoted("Advanced Blending on `Jane` (composited on the CPU)"), "Advanced Blending on `…` (composited on the CPU)");
+        assert_eq!(without_quoted("`a` and `b c`, then `d"), "`…` and `…`, then `d");
+        assert_eq!(without_quoted("no quotes"), "no quotes");
+        assert_eq!(without_quoted("``"), "`…`");
     }
 
     #[test]

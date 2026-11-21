@@ -603,7 +603,7 @@ mod tests {
     fn diagnostics_report_includes_fallback_history_and_slow_frames() {
         use crate::render_path::{CpuReason, Path, note};
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        note(&mut app, 7, Path::Cpu(CpuReason::Unsupported("Advanced Blending on Layer 1".into())));
+        note(&mut app, 7, Path::Cpu(CpuReason::Unsupported("Advanced Blending on `Layer 1` (composited on the CPU)".into())));
         note(&mut app, 7, Path::Gpu { full: true });
         let mut slow = crate::frame_stages::FrameStages::default();
         slow.refresh("full", 24_000_000, 80.0, 2.0);
@@ -613,7 +613,7 @@ mod tests {
         assert!(report.iter().any(|l| l == "Render path: GPU"), "{report:?}");
         assert!(report.iter().any(|l| l == "Render path changes: 2"), "{report:?}");
         // Newest first: back on the GPU, then why it left.
-        assert!(at("document 7: back on the GPU") < at("document 7: CPU (unsupported: Advanced Blending on Layer 1)"));
+        assert!(at("document 7: back on the GPU") < at("document 7: CPU (unsupported: Advanced Blending on `…` (composited on the CPU))"));
         assert!(report.iter().any(|l| l == "Slow frames (over 50 ms): 1"), "{report:?}");
         assert!(at("slow frame: 82.0 ms on the cpu path") > at("Slow frames (over 50 ms): 1"));
         // A current reason names its kind and detail.
@@ -637,13 +637,19 @@ mod tests {
         app.session.color.set_displays(Err(format!("cannot read profile `{profile}`: not found")));
         app.run("file.new", json!({"width": 8, "height": 8, "name": "Jane_Smith_wedding_proofs.psd"})).unwrap();
         let doc = app.session.active().unwrap().doc.id.0;
+        let blending = "Advanced Blending on `Jane_Smith` (composited on the CPU)";
+        note(&mut app, doc, Path::Cpu(CpuReason::Unsupported(blending.into())));
         note(&mut app, doc, Path::Cpu(CpuReason::ViewTransform));
         let copied = diagnostics_report(&app).join("\n");
         assert!(copied.contains("cannot read profile `~/Profiles/Mine.icc`"), "{copied}");
         assert!(!copied.contains(&profile) && !copied.contains("Jane_Smith"), "{copied}");
         assert!(copied.contains(&format!("document {doc}: CPU (viewTransform: ")), "{copied}");
-        // Help › System Info on screen still names the document.
-        assert!(diagnostics_report_ui(&app).iter().any(|l| l.contains("Jane_Smith_wedding_proofs.psd: CPU (")));
+        // A reason's quoted layer name is left out of the copy too.
+        assert!(copied.contains(&format!("document {doc}: CPU (unsupported: Advanced Blending on `…` (composited on the CPU))")), "{copied}");
+        // Help › System Info on screen still names the document and the layer.
+        let on_screen = diagnostics_report_ui(&app);
+        assert!(on_screen.iter().any(|l| l.contains("Jane_Smith_wedding_proofs.psd: CPU (")), "{on_screen:?}");
+        assert!(on_screen.iter().any(|l| l.contains(blending)), "{on_screen:?}");
     }
 
     #[test]
