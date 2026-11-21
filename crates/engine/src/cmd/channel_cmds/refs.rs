@@ -249,6 +249,39 @@ pub(super) fn gray_plane(doc: &Document, layer: Option<LayerId>, active: Option<
         .collect())
 }
 
+/// Where a Calculations source that reads a layer's colour shows (#14511): 1 where the layer has
+/// a pixel (alpha above 0) that an enabled layer mask does not hide, 0 elsewhere, so Source 2
+/// shows through there, as in the reference application. `None` for merged sources and for the
+/// other channels (Transparency, Layer Mask, alpha channels, …), which keep their values. Partial
+/// alpha and mask greys count as shown, and a feathered mask is not read, as today (not measured).
+pub(super) fn layer_coverage(s: &Session, p: &Value, cmd: &str) -> Result<Option<Vec<f32>>> {
+    let st = s.documents().get(doc_index(s, p, "document")?).ok_or(EngineError::NoDocument)?;
+    let Some(id) = source_layer(&st.doc, p, cmd)? else { return Ok(None) };
+    let colour = match p.get("channel") {
+        None => true,
+        // Resolved as `source` resolves it: one targeted colour, or a one-channel composite.
+        Some(v) if *v == serde_json::json!({"targeted": true}) => match st.channel_view.target {
+            super::view::ChannelTarget::Color(_) => st.channel_view.selected_colors.len() <= 1,
+            super::view::ChannelTarget::Composite => color_count(&st.doc) == 1,
+            _ => false,
+        },
+        Some(v) => matches!(parse_ref(v, &st.doc), Some(ChanRef::Composite | ChanRef::Color(_))),
+    };
+    if !colour {
+        return Ok(None);
+    }
+    // The Transparency read holds an RGBA buffer (16 bytes a pixel) beside its alpha plane (4):
+    // refuse a canvas past the working budget before reading, as the colour read does.
+    crate::allocation::check_dense(st.doc.bounds(), 20, "reading this channel source's coverage")?;
+    let alpha = ref_planes(&st.doc, Some(id), st.active_layer, ChanRef::Transparency)?.into_iter().next().unwrap_or_default();
+    let layer = st.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    // A feathered mask's edge is partly visible where its raw value is 0; such masks were not
+    // measured, so they keep today's result (the mask is not read).
+    let mask = layer.mask.as_ref().filter(|m| m.enabled && m.feather <= 0.0).map(|m| (m.density, read_plane(&m.surface, st.doc.bounds())));
+    let shown = |i: usize, a: f32| a > 0.0 && mask.as_ref().is_none_or(|(density, m)| m.get(i).is_none_or(|v| 1.0 - density * (1.0 - v) > 0.0));
+    Ok(Some(alpha.iter().enumerate().map(|(i, &a)| if shown(i, a) { 1.0 } else { 0.0 }).collect()))
+}
+
 /// A source spec `{document?, layer?, channel, invert?}`, reduced to planes over the canvas of
 /// the active document (sizes must match, as in Photoshop).
 pub(super) fn source(s: &Session, p: &Value, cmd: &str, gray: bool) -> Result<Vec<Vec<f32>>> {
