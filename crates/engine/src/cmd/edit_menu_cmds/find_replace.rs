@@ -4,14 +4,50 @@ use super::{Document, EngineError, FindCursor, LayerContent, LayerId, Result, Se
 
 /// Byte ranges of `find` in `text` (case-insensitive unless `case`; whole words only with `whole`).
 pub fn find_matches(text: &str, find: &str, case: bool, whole: bool) -> Vec<(usize, usize)> {
+    find_matches_with(text, find, case, whole, false)
+}
+
+/// [`find_matches`], and with `ignore_accents` a letter matches its accented forms: each character is
+/// compared by its canonical decomposition with the combining marks dropped ("cafe" finds "café").
+/// A match then never starts on a combining mark and takes the marks after its last letter, so a
+/// replacement leaves no stray accent on decomposed text.
+pub fn find_matches_with(text: &str, find: &str, case: bool, whole: bool, ignore_accents: bool) -> Vec<(usize, usize)> {
+    use unicode_normalization::char::{decompose_canonical, is_combining_mark};
     if find.is_empty() {
         return Vec::new();
     }
-    let norm = |c: char| -> String { if case { c.to_string() } else { c.to_lowercase().collect() } };
+    let norm = |c: char| -> String {
+        let mut out = String::new();
+        let mut push = |c: char| {
+            if case {
+                out.push(c);
+            } else {
+                out.extend(c.to_lowercase());
+            }
+        };
+        if ignore_accents {
+            decompose_canonical(c, |d| {
+                if !is_combining_mark(d) {
+                    push(d);
+                }
+            });
+        } else {
+            push(c);
+        }
+        out
+    };
     let needle: String = find.chars().map(norm).collect();
+    if needle.is_empty() {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     let mut at = 0;
     while at < text.len() {
+        let first = text[at..].chars().next();
+        if ignore_accents && first.is_some_and(|c| norm(c).is_empty()) {
+            at += first.map_or(1, char::len_utf8);
+            continue;
+        }
         // Compare char by char so case folding that changes byte lengths stays aligned.
         let mut hay = String::new();
         let mut end = at;
@@ -23,8 +59,12 @@ pub fn find_matches(text: &str, find: &str, case: bool, whole: bool) -> Vec<(usi
             end = at + i + c.len_utf8();
         }
         if hay == needle {
+            if ignore_accents {
+                end += text[end..].chars().take_while(|c| norm(*c).is_empty()).map(char::len_utf8).sum::<usize>();
+            }
             let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
-            let before = text[..at].chars().next_back();
+            // Ignoring accents, a mark before the match belongs to the letter it follows.
+            let before = text[..at].chars().rev().find(|c| !ignore_accents || !norm(*c).is_empty());
             let after = text[end..].chars().next();
             if !whole || (!word(before) && !word(after)) {
                 out.push((at, end));
@@ -32,7 +72,7 @@ pub fn find_matches(text: &str, find: &str, case: bool, whole: bool) -> Vec<(usi
                 continue;
             }
         }
-        at += text[at..].chars().next().map_or(1, char::len_utf8);
+        at += first.map_or(1, char::len_utf8);
     }
     out
 }
@@ -66,6 +106,8 @@ pub(super) fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
     let replace = str_or(p, "replace", "").to_string();
     let (case, whole, forward, all_layers) =
         (bool_or(p, "caseSensitive", false), bool_or(p, "wholeWord", false), bool_or(p, "forward", true), bool_or(p, "allLayers", true));
+    let accents = bool_or(p, "ignoreAccents", false);
+    let matches = |text: &str| find_matches_with(text, &find, case, whole, accents);
     let action = str_or(p, "action", "changeAll").to_string();
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let active_layer = st.active_layer;
@@ -84,7 +126,7 @@ pub(super) fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
         "changeAll" => {
             let doc = st.doc.clone();
             let plan: Vec<(LayerId, Vec<(usize, usize)>)> =
-                layers.iter().filter_map(|id| Some((*id, find_matches(&text_of(&doc, *id)?, &find, case, whole)))).filter(|(_, m)| !m.is_empty()).collect();
+                layers.iter().filter_map(|id| Some((*id, matches(&text_of(&doc, *id)?)))).filter(|(_, m)| !m.is_empty()).collect();
             let count: usize = plan.iter().map(|(_, m)| m.len()).sum();
             if count == 0 {
                 s.edit_state.find_cursor = None;
@@ -109,11 +151,14 @@ pub(super) fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
         }
         "find" | "change" | "changeFind" => {
             let doc = st.doc.clone();
-            let same_query = s
-                .edit_state
-                .find_cursor
-                .as_ref()
-                .is_some_and(|c| c.find == find && c.case_sensitive == case && c.whole_word == whole && c.forward == forward && c.all_layers == all_layers);
+            let same_query = s.edit_state.find_cursor.as_ref().is_some_and(|c| {
+                c.find == find
+                    && c.case_sensitive == case
+                    && c.whole_word == whole
+                    && c.ignore_accents == accents
+                    && c.forward == forward
+                    && c.all_layers == all_layers
+            });
             if !same_query {
                 // A new query starts a new round: forget both the cursor and the round origin.
                 s.edit_state.find_cursor = None;
@@ -123,7 +168,7 @@ pub(super) fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
             let mut changed = None;
             if action != "find"
                 && let Some((id, a, b)) = cursor
-                && text_of(&doc, id).is_some_and(|t| find_matches(&t, &find, case, whole).contains(&(a, b)))
+                && text_of(&doc, id).is_some_and(|t| matches(&t).contains(&(a, b)))
             {
                 crate::type_cmds::check_text_unlocked(&doc, id)?;
                 s.edit("Replace Text", |doc, _| {
@@ -138,8 +183,17 @@ pub(super) fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
                 // Collapse the cursor on the side the search moves away from, so the next search
                 // skips the replaced text even when the replacement still matches.
                 let c = if forward { end } else { a };
-                s.edit_state.find_cursor =
-                    Some(FindCursor { layer: id, start: c, end: c, find: find.clone(), case_sensitive: case, whole_word: whole, forward, all_layers });
+                s.edit_state.find_cursor = Some(FindCursor {
+                    layer: id,
+                    start: c,
+                    end: c,
+                    find: find.clone(),
+                    case_sensitive: case,
+                    whole_word: whole,
+                    ignore_accents: accents,
+                    forward,
+                    all_layers,
+                });
                 changed = Some((id, a, end));
                 if action == "change" {
                     return Ok(json!({"changed": {"layer": id.0, "start": a, "end": end}}));
@@ -163,7 +217,7 @@ pub(super) fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
                         break;
                     }
                     let Some(text) = text_of(&doc, id) else { continue };
-                    let ms = find_matches(&text, &find, case, whole);
+                    let ms = matches(&text);
                     let hit = match (k, cursor) {
                         (0, Some((cid, a, b))) if cid == id => {
                             if forward {
@@ -181,8 +235,17 @@ pub(super) fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
                         }
                     };
                     if let Some((a, b)) = hit {
-                        s.edit_state.find_cursor =
-                            Some(FindCursor { layer: id, start: a, end: b, find, case_sensitive: case, whole_word: whole, forward, all_layers });
+                        s.edit_state.find_cursor = Some(FindCursor {
+                            layer: id,
+                            start: a,
+                            end: b,
+                            find,
+                            case_sensitive: case,
+                            whole_word: whole,
+                            ignore_accents: accents,
+                            forward,
+                            all_layers,
+                        });
                         s.edit_state.find_start = Some(origin);
                         let _ = s.select_layer(id);
                         return Ok(
