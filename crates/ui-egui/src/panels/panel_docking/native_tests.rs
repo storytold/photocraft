@@ -203,6 +203,48 @@ fn keys_pressed_in_a_panel_window_run_photocrafts_shortcuts() {
     assert_eq!(layers(&desktop), before, "⌘Z in the Layers window undoes");
 }
 
+/// #15638: a key pressed in a floating document window (Window › Arrange › Float in Window) reaches
+/// PhotoCraft's shortcut dispatch, as one pressed in the main window does: V picks the Move tool, S the
+/// Clone Stamp, and ⌘Z undoes in the floated document.
+#[test]
+fn keys_pressed_in_a_floating_document_window_run_photocrafts_shortcuts() {
+    use crate::state::Tool;
+    let mut app = app_with_document();
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    let mut desktop = Desktop::new(app);
+    let windows = |desktop: &Desktop| desktop.host.borrow().windows.keys().copied().collect::<Vec<_>>();
+    assert!(windows(&desktop).is_empty(), "no OS window before the float");
+    let floated = desktop.h.state().session.documents()[0].doc.id;
+    let window = desktop.h.state_mut().ui.document_windows.float(&floated, Rect::from_min_size(pos2(600.0, 200.0), vec2(400.0, 300.0)));
+    assert!(window.is_some(), "the document floats");
+    desktop.h.state_mut().session.set_active(0);
+    desktop.steps(3);
+    let [viewport] = windows(&desktop)[..] else { panic!("the floated document has its own OS window: {:?}", windows(&desktop)) };
+
+    // The main window, the control: its keys run the shortcuts.
+    desktop.h.state_mut().ui.tool = Tool::Brush;
+    for pressed in [true, false] {
+        desktop.h.input_mut().events.push(Event::Key { key: Key::V, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE });
+        desktop.steps(2);
+    }
+    assert_eq!(desktop.h.state().ui.tool, Tool::Move, "V in the main window picks the Move tool");
+    desktop.host.borrow_mut().focus = Some(viewport);
+    desktop.steps(2);
+
+    desktop.h.state_mut().ui.tool = Tool::Brush;
+    desktop.key(viewport, Key::V, Modifiers::NONE);
+    assert_eq!(desktop.h.state().ui.tool, Tool::Move, "V in the floating document window picks the Move tool");
+    desktop.key(viewport, Key::S, Modifiers::NONE);
+    assert_eq!(desktop.h.state().ui.tool, Tool::CloneStamp, "S in the floating document window picks the Clone Stamp");
+
+    let layers = |desktop: &Desktop| desktop.h.state().session.documents()[0].doc.layers.len();
+    let before = layers(&desktop);
+    desktop.h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    assert_eq!(layers(&desktop), before + 1);
+    desktop.key(viewport, Key::Z, Modifiers::COMMAND);
+    assert_eq!(layers(&desktop), before, "⌘Z in the floating document window undoes in its document");
+}
+
 /// The Mac menu bar, reporting one key equivalent.
 struct MenuKey(Vec<MenuEvent>);
 
