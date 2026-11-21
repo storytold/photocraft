@@ -324,6 +324,10 @@ mod analysis_ruler_visibility_tests;
 mod analysis_ruler_move_tests;
 
 #[cfg(test)]
+#[path = "analysis_ruler_units_tests.rs"]
+mod analysis_ruler_units_tests;
+
+#[cfg(test)]
 #[path = "note_show_on_new_tests.rs"]
 mod note_show_on_new_tests;
 
@@ -643,11 +647,70 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
 
 // ------------------------------------------------------------------ options bars
 
-fn readout(ui: &mut egui::Ui, label: &str, value: Option<f64>) {
+fn readout(ui: &mut egui::Ui, label: &str, value: Option<String>) {
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(tl!(&label)).color(t.text_dim).size(11.0));
-    ui.label(RichText::new(value.map_or(String::new(), |v| format!("{v:.2}"))).color(t.text).size(11.0).monospace());
+    ui.label(RichText::new(value.unwrap_or_default()).color(t.text).size(11.0).monospace());
     ui.add_space(6.0);
+}
+
+/// `v` with exactly `decimals` decimals (trailing zeros kept) and the system's decimal separator,
+/// as the app's other numeric fields show numbers.
+fn fixed(v: f64, decimals: usize) -> String {
+    let s = format!("{v:.decimals$}");
+    match crate::i18n::decimal_separator() {
+        Some(c) if c != '.' => s.replace('.', &c.to_string()),
+        _ => s,
+    }
+}
+
+/// The Ruler's options-bar values as the reference application shows them (#11989), in order X, Y,
+/// W, H, A, L1, L2. With Use Measurement Scale off the lengths are in the ruler unit with its own
+/// decimals (pixels 0, inches 3, centimetres 2, millimetres 1, points 1, picas 2, percent 1 with
+/// "%", of the width for X/W and of the height for Y/H); L1 and L2 in pixels take 2 decimals and
+/// are blank in percent. With it on they are in the scale's units with 2 decimals, as before. A
+/// has one decimal and "°". With no ruler: 0.00, 0.0° and a blank L2.
+pub(crate) fn ruler_readouts(app: &PhotocraftApp, doc: &Document) -> [Option<String>; 7] {
+    use photocraft_engine::prefs::Unit;
+    let Some(r) = doc.measurement.ruler else {
+        let zero = || Some(fixed(0.0, 2));
+        return [zero(), zero(), zero(), zero(), Some(format!("{}°", fixed(0.0, 1))), zero(), None];
+    };
+    let sc = &doc.measurement.scale;
+    let info = photocraft_engine::analysis_cmds::ruler_info(&r, sc);
+    let g = |k: &str| info[k].as_f64();
+    let units = &app.session.prefs().units_and_rulers;
+    let (unit, ppi) = (units.rulers, units.point_size.per_inch());
+    let dpi = f64::from(doc.resolution_dpi);
+    let (width, height) = (f64::from(doc.size.width), f64::from(doc.size.height));
+    let decimals = match unit {
+        Unit::Pixels => 0,
+        Unit::Inches => 3,
+        Unit::Centimeters | Unit::Picas => 2,
+        Unit::Millimeters | Unit::Points | Unit::Percent => 1,
+    };
+    let scale = app.ui.analysis.use_measurement_scale.then(|| sc.factor());
+    let length = |px: Option<f64>, extent: f64, line: bool| -> Option<String> {
+        let px = px?;
+        if let Some(f) = scale {
+            return Some(fixed(px * f, 2));
+        }
+        match unit {
+            Unit::Percent if line => None,
+            Unit::Pixels if line => Some(fixed(px, 2)),
+            Unit::Percent => Some(format!("{}%", fixed(unit.from_px(px, dpi, extent, ppi), decimals))),
+            _ => Some(fixed(unit.from_px(px, dpi, extent, ppi), decimals)),
+        }
+    };
+    [
+        length(g("x"), width, false),
+        length(g("y"), height, false),
+        length(g("w"), width, false),
+        length(g("h"), height, false),
+        g("angle").map(|a| format!("{}°", fixed(a, 1))),
+        length(g("l1"), width, true),
+        length(g("l2"), width, true),
+    ]
 }
 
 /// Options bar of the Ruler, Count, Note and Color Sampler tools. Returns true when drawn.
@@ -657,17 +720,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     };
     match tool {
         Tool::Ruler => {
-            let sc = doc.measurement.scale.clone();
-            let f = if app.ui.analysis.use_measurement_scale { sc.factor() } else { 1.0 };
-            let info = doc.measurement.ruler.map(|r| photocraft_engine::analysis_cmds::ruler_info(&r, &sc));
-            let g = |k: &str| info.as_ref().and_then(|i| i[k].as_f64());
-            readout(ui, "X:", g("x").map(|v| v * f));
-            readout(ui, "Y:", g("y").map(|v| v * f));
-            readout(ui, "W:", g("w").map(|v| v * f));
-            readout(ui, "H:", g("h").map(|v| v * f));
-            readout(ui, "A:", g("angle"));
-            readout(ui, "L1:", g("l1").map(|v| v * f));
-            readout(ui, "L2:", g("l2").map(|v| v * f));
+            for (label, value) in ["X:", "Y:", "W:", "H:", "A:", "L1:", "L2:"].into_iter().zip(ruler_readouts(app, &doc)) {
+                readout(ui, label, value);
+            }
             crate::widgets::vline(ui, 22.0);
             crate::widgets::checkbox(ui, &mut app.ui.analysis.use_measurement_scale, tl!("Use Measurement Scale"));
             let has = doc.measurement.ruler.is_some();
