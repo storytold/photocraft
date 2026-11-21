@@ -2598,22 +2598,55 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions, ct
             r.warnings.push(format!("Duotone ({} inks) written as RGB", d.inks.len()));
             Ok(Some(r))
         }
-        ColorMode::Bitmap if format == Format::Tiff => export_tiff_bilevel(doc, opts, ctl).map(Some),
+        ColorMode::Bitmap if format == Format::Tiff && (opts.tiff_ccitt_g4 || opts.encode.tiff_compression == codecs::TiffCompression::None) => {
+            export_tiff_bilevel(doc, opts, ctl).map(Some)
+        }
         _ => Ok(None),
+    }
+}
+
+/// Rational reduction for fractional DPI values in TIFF tags.
+fn dpi_rational(dpi: f32) -> (u32, u32) {
+    if dpi.fract() == 0.0 {
+        ((dpi.round() as u32).max(1), 1)
+    } else {
+        let denom = 10_000u32;
+        let num = (f64::from(dpi) * f64::from(denom)).round() as u32;
+        fn gcd(mut a: u32, mut b: u32) -> u32 {
+            while b != 0 {
+                let t = b;
+                b = a % b;
+                a = t;
+            }
+            a
+        }
+        let g = gcd(num, denom).max(1);
+        ((num / g).max(1), (denom / g).max(1))
     }
 }
 
 /// Bilevel (1-bit / Bitmap mode) TIFF export, with optional CCITT Group 4 (T.6) compression (#15995).
 fn export_tiff_bilevel(doc: &Document, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ExportResult, IoError> {
+    if opts.encode.tiff_pyramid {
+        return Err(IoError::Unsupported("TIFF image pyramid is not supported for bilevel (Bitmap mode) documents".into()));
+    }
+    if opts.encode.tiff_compression != codecs::TiffCompression::None && !opts.tiff_ccitt_g4 {
+        return Err(IoError::Unsupported("TIFF compression must be G4 or None for bilevel TIFF export".into()));
+    }
+
     let (w, h) = (doc.size.width, doc.size.height);
     if w == 0 || h == 0 {
         return Err(IoError::Unsupported("cannot export an empty document".into()));
     }
-    let w_u16 = u16::try_from(w).map_err(|_| IoError::Unsupported("TIFF bilevel export width exceeds 65535 pixels".into()))?;
 
     ctl.check().map_err(|_| IoError::Cancelled)?;
 
-    let mut enc = if opts.tiff_ccitt_g4 { Some(fax::encoder::Encoder::new(fax::VecWriter::new())) } else { None };
+    let mut enc = if opts.tiff_ccitt_g4 {
+        let w_u16 = u16::try_from(w).map_err(|_| IoError::Unsupported("TIFF CCITT G4 bilevel export width exceeds 65535 pixels".into()))?;
+        Some((fax::encoder::Encoder::new(fax::VecWriter::new()), w_u16))
+    } else {
+        None
+    };
 
     let row_bytes = (w as usize).div_ceil(8);
     let mut uncompressed_data = if enc.is_none() {
@@ -2630,13 +2663,17 @@ fn export_tiff_bilevel(doc: &Document, opts: &ExportOptions, ctl: &photocraft_ra
         for row_idx in 0..band_h {
             let row_start = row_idx * band_w;
             let row_pixels = &band.px[row_start..row_start + band_w];
-            if let Some(encoder) = enc.as_mut() {
-                let pels = row_pixels.iter().map(|p| if p[0] >= 0.5 { fax::Color::White } else { fax::Color::Black });
-                encoder.encode_line(pels, w_u16).map_err(|e| IoError::Unsupported(format!("fax encoding error: {e:?}")))?;
+            if let Some((encoder, w_u16)) = enc.as_mut() {
+                let pels = row_pixels.iter().map(|p| {
+                    let v = p[0] * p[3] + (1.0 - p[3]);
+                    if v >= 0.5 { fax::Color::White } else { fax::Color::Black }
+                });
+                encoder.encode_line(pels, *w_u16).map_err(|e| IoError::Unsupported(format!("fax encoding error: {e:?}")))?;
             } else if let Some(uncomp) = uncompressed_data.as_mut() {
                 let mut row_buf = vec![0u8; row_bytes];
                 for (x, p) in row_pixels.iter().enumerate() {
-                    if p[0] < 0.5 {
+                    let v = p[0] * p[3] + (1.0 - p[3]);
+                    if v < 0.5 {
                         // Photometric 0 (WhiteIsZero): 0 is white, 1 is black
                         row_buf[x / 8] |= 0x80 >> (x % 8);
                     }
@@ -2649,7 +2686,7 @@ fn export_tiff_bilevel(doc: &Document, opts: &ExportOptions, ctl: &photocraft_ra
 
     ctl.check().map_err(|_| IoError::Cancelled)?;
 
-    let (image_data, compression, warning) = if let Some(encoder) = enc {
+    let (image_data, compression, warning) = if let Some((encoder, _)) = enc {
         let g4_bytes = encoder.finish().map_err(|e| IoError::Unsupported(format!("fax encoder finish error: {e:?}")))?.finish();
         (g4_bytes, 4u16, "written as a bilevel TIFF with CCITT Group 4 (T.6) compression".to_string())
     } else if let Some(uncomp) = uncompressed_data {
@@ -2673,10 +2710,10 @@ fn export_tiff_bilevel(doc: &Document, opts: &ExportOptions, ctl: &photocraft_ra
         ifd.set(293, craft_tiff::Value::Long(vec![0]));
     }
 
-    if doc.resolution_dpi > 0.0 {
-        let dpi = (doc.resolution_dpi.round() as u32).max(1);
-        ifd.set(craft_tiff::tags::X_RESOLUTION, craft_tiff::Value::Rational(vec![(dpi, 1)]));
-        ifd.set(craft_tiff::tags::Y_RESOLUTION, craft_tiff::Value::Rational(vec![(dpi, 1)]));
+    if opts.encode.embed_metadata && doc.resolution_dpi > 0.0 {
+        let (num, denom) = dpi_rational(doc.resolution_dpi);
+        ifd.set(craft_tiff::tags::X_RESOLUTION, craft_tiff::Value::Rational(vec![(num, denom)]));
+        ifd.set(craft_tiff::tags::Y_RESOLUTION, craft_tiff::Value::Rational(vec![(num, denom)]));
         ifd.set(craft_tiff::tags::RESOLUTION_UNIT, craft_tiff::Value::Short(vec![2])); // Inch
     }
 
@@ -2693,6 +2730,17 @@ fn export_tiff_bilevel(doc: &Document, opts: &ExportOptions, ctl: &photocraft_ra
     let mut warnings = vec![warning];
     if opts.tiff_layers && doc.layers.len() > 1 {
         warnings.push("layers are not supported in 1-bit bilevel TIFF; document flattened".into());
+    }
+    if opts.encode.embed_metadata {
+        if doc.icc_profile.is_some() && opts.encode.embed_icc {
+            warnings.push("ICC profile not supported; it will be dropped".into());
+        }
+        if doc.metadata.exif.is_some() {
+            warnings.push("EXIF not supported; it will be dropped".into());
+        }
+        if opts.xmp != XmpEmbed::None && !doc.metadata.text.is_empty() {
+            warnings.push("text metadata not supported; it will be dropped".into());
+        }
     }
 
     Ok(ExportResult { bytes, warnings })
@@ -3643,5 +3691,49 @@ mod bilevel_tiff_tests {
         let uncompressed_export = export_flat(&doc, Format::Tiff, &ExportOptions { tiff_ccitt_g4: false, ..Default::default() }).unwrap();
 
         assert!(g4_export.bytes.len() < uncompressed_export.bytes.len() / 2);
+    }
+
+    #[test]
+    fn bilevel_tiff_refuses_pyramid() {
+        let imported = import_flat("bilevel.tif", &tiff(1, 1)).unwrap().document;
+        let mut opts = ExportOptions { tiff_ccitt_g4: true, ..Default::default() };
+        opts.encode.tiff_pyramid = true;
+        let err = export_flat(&imported, Format::Tiff, &opts).unwrap_err();
+        assert!(matches!(err, IoError::Unsupported(_)));
+    }
+
+    #[test]
+    fn bilevel_tiff_fractional_dpi_and_embed_metadata() {
+        let mut doc = import_flat("bilevel.tif", &tiff(1, 1)).unwrap().document;
+        doc.resolution_dpi = 299.5;
+
+        // With embed_metadata: true, fractional DPI is preserved
+        let opts = ExportOptions { tiff_ccitt_g4: true, ..Default::default() };
+        let res = export_flat(&doc, Format::Tiff, &opts).unwrap();
+        let parsed = craft_tiff::Tiff::parse(&res.bytes).unwrap();
+        assert!(parsed.ifds[0].value(craft_tiff::tags::X_RESOLUTION).is_some());
+        assert_eq!(dpi_rational(299.5), (599, 2));
+
+        // With embed_metadata: false, resolution tags are omitted
+        let mut opts_no_meta = ExportOptions { tiff_ccitt_g4: true, ..Default::default() };
+        opts_no_meta.encode.embed_metadata = false;
+        let res_no_meta = export_flat(&doc, Format::Tiff, &opts_no_meta).unwrap();
+        let parsed_no_meta = craft_tiff::Tiff::parse(&res_no_meta.bytes).unwrap();
+        assert!(parsed_no_meta.ifds[0].value(craft_tiff::tags::X_RESOLUTION).is_none());
+    }
+
+    #[test]
+    fn bilevel_tiff_composites_transparent_pixels_over_white() {
+        // Create a 2x1 Bitmap document with 1 transparent pixel and 1 opaque black pixel
+        let mut doc = Document::new("trans", Size::new(2, 1), ColorMode::Bitmap, SampleType::U8);
+        let surface = Surface::from_interleaved(photocraft_color::PixelFormat::RGBA8, Rect::new(0, 0, 2, 1), &[0, 0, 0, 0, 0, 0, 0, 255]);
+        doc.layers.push(photocraft_doc::Layer::new("Layer 1", photocraft_doc::LayerContent::Raster(surface)));
+
+        let opts = ExportOptions { tiff_ccitt_g4: true, ..Default::default() };
+        let res = export_flat(&doc, Format::Tiff, &opts).unwrap();
+        let reopened = import_flat("composited.tif", &res.bytes).unwrap().document;
+        let px = reopened.layers[0].surface().unwrap();
+        assert_eq!(px.pixel(0, 0)[0], 1.0); // White
+        assert_eq!(px.pixel(1, 0)[0], 0.0); // Black
     }
 }
