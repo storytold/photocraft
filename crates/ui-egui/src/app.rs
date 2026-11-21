@@ -43,6 +43,7 @@ impl PhotocraftApp {
         // Actions automation wrote keep this gate when the user plays them. Batch and droplets
         // copy steps instead of the action, so they do not keep the gate yet.
         session.automation_gate = session.automation_gate.or(services.automation_authorize);
+        session.set_subject_model(services.subject_model.clone());
         // PLAN: dialogs-w59 adds `Services::files` (assumed `Option<Arc<dyn craft::host::Files>>`).
         let framework = framework::Framework::new(services.files.clone());
         let pen_feed = stylus::StylusFeed::of(&ctx);

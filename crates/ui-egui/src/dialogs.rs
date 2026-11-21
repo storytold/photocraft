@@ -406,6 +406,7 @@ pub(crate) const PROMPTS: &[PromptRow] = &[
     disk_change_prompt::answer,
     rasterize_prompt::answer,
     live_shape_prompt::answer,
+    subject_model_prompt::answer,
     preset_group_prompt::answer,
     open_prompt::answer_prompt,
     alerts::answer,
@@ -622,8 +623,14 @@ const ENGINE_READ: &[&str] = &["ui.layersPanelOptions", "file.print", "file.expo
 
 /// The "Don't show again" entries (`{"skip": true}`), by key, as their prompt modules read them. Told apart by key, not
 /// by the shape of the value.
-fn dont_show_again_keys() -> [&'static str; 4] {
-    [delete_layer_prompt::PREF, live_shape_prompt::PREF, crate::analysis::note_alerts::DELETE_NOTE_PREF, crate::retouch_ui::CAM_NO_PIXELS_PREF]
+fn dont_show_again_keys() -> [&'static str; 5] {
+    [
+        delete_layer_prompt::PREF,
+        live_shape_prompt::PREF,
+        subject_model_prompt::PREF,
+        crate::analysis::note_alerts::DELETE_NOTE_PREF,
+        crate::retouch_ui::CAM_NO_PIXELS_PREF,
+    ]
 }
 
 /// Where the remembered value of the preference entry `key` goes: `None` keeps it in `Preferences.dialogs`, else the
@@ -761,6 +768,7 @@ pub mod snapshot_dialog;
 pub(crate) mod solid_fill_ui;
 pub mod stack_dialog;
 pub mod stroke_ui;
+pub mod subject_model_prompt;
 pub mod targa_options_ui;
 #[cfg(test)]
 mod tests;

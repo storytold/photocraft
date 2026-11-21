@@ -131,6 +131,7 @@ pub mod smartselect_cmds;
 pub mod solid_fill_cmds;
 pub mod stamp_cmds;
 pub mod style_asl_cmds;
+pub mod subject_model_cmds;
 pub mod swatch_cmds;
 pub mod symmetry_cmds;
 pub mod table;

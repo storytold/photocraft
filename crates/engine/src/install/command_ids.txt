@@ -294,6 +294,7 @@ select.subject
 select.refineEdge
 select.focusArea
 layer.removeBackground
+select.subjectModel.install
 paint.setSymmetry
 paint.symmetryFromPath
 paint.symmetryDisable
