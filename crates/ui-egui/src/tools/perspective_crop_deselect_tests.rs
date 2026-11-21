@@ -5,7 +5,7 @@ use egui::Modifiers;
 use serde_json::json;
 
 use super::*;
-use crate::canvas::testing::{ToolEvent, frame, tool_event};
+use crate::canvas::testing::{ToolEvent, frame, key, tool_event};
 
 /// A 200 × 150 document with a selection and the Perspective Crop tool.
 fn app(selection: bool) -> Box<PhotocraftApp> {
@@ -93,6 +93,29 @@ fn a_selection_made_between_corner_clicks_is_kept() {
     assert!(selected(&app), "only the quad's first press deselects");
     assert_eq!(steps(&app), before, "no second Deselect step");
     assert!(quad(&app).is_some(), "four clicks made the quad");
+}
+
+#[test]
+fn escape_cancels_pending_corners_before_deselecting() {
+    let mut app = app(false);
+    drag(&mut app, [20.0, 20.0], [20.0, 20.0]);
+    app.run("select.all", json!({})).unwrap();
+    for corner in [[180.0, 25.0], [175.0, 130.0]] {
+        drag(&mut app, corner, corner);
+    }
+    assert_eq!(app.canvas_tools.perspective.tool.placing(), 3, "the crop is still being placed");
+    assert!(quad(&app).is_none());
+    let before = steps(&app);
+    let selection = app.session.active().unwrap().doc.selection.clone().expect("the selection made during the crop");
+
+    key(&mut app, egui::Key::Escape, Modifiers::NONE);
+    assert!(!pending(&app), "Escape drops the unfinished crop");
+    assert_eq!(app.session.active().unwrap().doc.selection.as_ref(), Some(&selection), "the first Escape leaves the selection");
+    assert_eq!(steps(&app), before);
+
+    key(&mut app, egui::Key::Escape, Modifiers::NONE);
+    assert!(!selected(&app), "without a pending crop, Escape deselects");
+    assert_eq!(steps(&app), before + 1, "only the second Escape edits the document");
 }
 
 #[test]
