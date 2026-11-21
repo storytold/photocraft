@@ -384,3 +384,7 @@ fn toggle_view(props: &mut ToggleProps<'_>, ui: &mut egui::Ui) {
 #[cfg(test)]
 #[path = "../brush_picker_gear_menu_tests.rs"]
 mod gear_menu_tests;
+
+#[cfg(test)]
+#[path = "brush_picker_compact_tests.rs"]
+mod compact_tests;
