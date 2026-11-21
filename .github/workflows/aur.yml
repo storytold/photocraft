@@ -1,0 +1,93 @@
+# Publish photocraft and photocraft-bin to the AUR (https://aur.archlinux.org) when a release
+# is published. Pre-releases are skipped. See packaging/arch/README.md and docs/releasing.md.
+#
+# The job pushes over SSH with the key in the `aur` environment's AUR_SSH_PRIVATE_KEY secret:
+# the private half of a key registered on the AUR account that maintains both packages. Without
+# it the job checks the PKGBUILDs and stops with a warning.
+name: AUR
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Published release to push, e.g. 0.2.0"
+        type: string
+        required: true
+      dry_run:
+        description: "Build the PKGBUILDs but don't push"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aur
+  cancel-in-progress: false
+
+jobs:
+  aur:
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    environment: aur
+    container: archlinux:base-devel
+    env:
+      VERSION: ${{ inputs.version || github.event.release.tag_name }}
+      DRY_RUN: ${{ inputs.dry_run || false }}
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+      AUR_GIT_NAME: ${{ vars.AUR_GIT_NAME || 'PhotoCraft maintainers' }}
+      AUR_GIT_EMAIL: ${{ vars.AUR_GIT_EMAIL || 'photocraft@storyteller.ai' }}
+    steps:
+      - name: Install tools
+        run: pacman -Syu --noconfirm --needed git openssh namcap
+      - uses: actions/checkout@v4
+      # makepkg refuses to run as root; --syncdeps installs dependencies through sudo.
+      - name: Build user
+        run: |
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' >/etc/sudoers.d/builder
+          chown -R builder: "$GITHUB_WORKSPACE"
+      - name: Update PKGBUILDs
+        run: su builder -c "packaging/arch/update.sh '$VERSION'"
+      - name: Build photocraft-bin
+        run: |
+          su builder -c "cd packaging/arch/photocraft-bin && makepkg --syncdeps --noconfirm --cleanbuild"
+          pacman -U --noconfirm packaging/arch/photocraft-bin/*.pkg.tar.zst
+          photocraft-cli --version
+          namcap packaging/arch/photocraft-bin/PKGBUILD
+      # The source package is only fetched and checksummed here: a full Rust build would add
+      # 20+ minutes, and the -bin build above runs the same binaries.
+      - name: Verify photocraft sources
+        run: su builder -c "cd packaging/arch/photocraft && makepkg --verifysource && namcap PKGBUILD"
+      - name: Push to the AUR
+        run: |
+          if [ "$DRY_RUN" = true ]; then
+            echo "Dry run: not pushing"; exit 0
+          fi
+          if [ -z "$AUR_SSH_PRIVATE_KEY" ]; then
+            echo "::warning::AUR_SSH_PRIVATE_KEY is not set; skipping the AUR push"; exit 0
+          fi
+          install -dm700 ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" >~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          # Fingerprints published at https://aur.archlinux.org (bottom of the home page).
+          ssh-keyscan -t ed25519 aur.archlinux.org >~/.ssh/known_hosts
+          ssh-keygen -lf ~/.ssh/known_hosts | grep -q 'SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4' \
+            || { echo "::error::aur.archlinux.org host key does not match the published fingerprint"; exit 1; }
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes"
+          git config --global user.name "$AUR_GIT_NAME"
+          git config --global user.email "$AUR_GIT_EMAIL"
+          for pkg in photocraft photocraft-bin; do
+            dir="$RUNNER_TEMP/aur-$pkg"
+            git clone "ssh://aur@aur.archlinux.org/$pkg.git" "$dir"
+            cp "packaging/arch/$pkg/PKGBUILD" "packaging/arch/$pkg/.SRCINFO" "$dir/"
+            git -C "$dir" add PKGBUILD .SRCINFO
+            if git -C "$dir" diff --cached --quiet; then
+              echo "$pkg is already up to date"; continue
+            fi
+            git -C "$dir" commit -m "Update to ${VERSION#v}"
+            git -C "$dir" push origin HEAD:master
+            echo "Pushed $pkg ${VERSION#v}" >>"$GITHUB_STEP_SUMMARY"
+          done
