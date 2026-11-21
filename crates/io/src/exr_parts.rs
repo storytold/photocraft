@@ -3,7 +3,7 @@
 //! file listed for a chooser ([`entries`]), and the chosen ones imported as the layers of
 //! one document ([`import`]), with an optional additive beauty precomp from the AOVs.
 
-use photocraft_cms::Builtin;
+use craft_cms::Builtin;
 use photocraft_codecs::{self as codecs, ChannelLayout, DecodeOptions, Image, SampleType};
 use photocraft_color::{ColorMode, SampleType as DocSample};
 use photocraft_doc::{Document, Layer, LayerContent, Size};
@@ -270,10 +270,10 @@ pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult,
     }
     let mode = if gray_only { ColorMode::Grayscale } else { ColorMode::Rgb };
     let mut doc = Document::new(name, Size::new(max.0, max.1), mode, DocSample::F32);
-    doc.layers = layers;
+    doc.layers = layers.into();
     // OpenEXR holds linear, scene-referred values (Y is linear luminance): use the profile
     // matching the selected parts' mode, as File › Open does.
-    doc.icc_profile = Some(if gray_only { photocraft_cms::builtin::linear_gray().to_bytes() } else { Builtin::LinearSrgb.profile().to_bytes() });
+    doc.icc_profile = Some(if gray_only { craft_cms::builtin::linear_gray().to_bytes() } else { Builtin::LinearSrgb.profile().to_bytes() });
     Ok(ImportResult { document: doc, warnings, source_read_only: false, preview_only: false })
 }
 

@@ -127,9 +127,13 @@ fn halftone_unusual_coordinates_and_params_keep_direct_semantics() {
 fn tiled_filters_match_scalar_at_all_depths_with_soft_selection() {
     use crate::{FilterParams, apply_tiled};
     let bounds = Rect::new(-17, -9, 26, 24);
-    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
-        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
-            for alpha in [false, true] {
+    // Every mode/depth pair and both alpha values for each mode and depth.
+    for (mi, mode) in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab].into_iter().enumerate() {
+        for (di, depth) in [SampleType::U8, SampleType::U16, SampleType::F32].into_iter().enumerate() {
+            for (ai, alpha) in [false, true].into_iter().enumerate() {
+                if (mi + di) % 2 != ai {
+                    continue;
+                }
                 let ctx = Ctx { bounds, mode, alpha };
                 let src = fixture(bounds, &ctx, 2);
                 let mut surface = Surface::new(PixelFormat::new(mode, depth, alpha));
@@ -190,4 +194,89 @@ fn facet_scratch_rejects_large_or_incomplete_storage() {
     let out = Rect::new(0, 0, 2, 2);
     let src = Image { rect: out.inflate(3), ch: 4, data: Vec::new() };
     assert!(facet::run(&src, out, &ctx).is_none());
+}
+
+#[test]
+fn cell_filters_match_scalar_models_edges_and_fractional_cells() {
+    let bounds = Rect::new(-19, -13, 32, 29);
+    // The cell filters see the mode only as a channel count, CMYK's ink direction (`subtractive`) and the native
+    // background, so Lab adds nothing to RGB; cells of 100 and 300 are both past every `out`, and the seed has no
+    // branch (0 and u32::MAX keep the wrapping ends) (#15652).
+    for (mi, mode) in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Multichannel].into_iter().enumerate() {
+        for (ai, alpha) in [false, true].into_iter().enumerate() {
+            let ctx = Ctx { bounds, mode, alpha };
+            for pattern in 0..5 {
+                for halo in [0, 7] {
+                    let src = fixture(bounds.inflate(halo), &ctx, pattern);
+                    for out in [bounds, Rect::new(-23, -15, 37, 31), Rect::new(-7, 2, 18, 13)] {
+                        // Retain every mode/alpha pair and all four cell sizes for each mode.
+                        for (ci, cell) in [2.0, 3.75, 10.0, 300.0].into_iter().enumerate() {
+                            if ci % 2 != (mi + ai) % 2 {
+                                continue;
+                            }
+                            for seed in [0, u32::MAX] {
+                                let got = cells::crystallize(&src, out, &ctx, cell, seed).unwrap();
+                                assert_bits(&got, &crystallize_direct(&src, out, &ctx, cell, seed));
+                                for bg in [[1.0; 4], [0.1, 0.8, 0.4, 0.25]] {
+                                    let got = cells::pointillize(&src, out, &ctx, cell, seed, bg).unwrap();
+                                    assert_bits(&got, &pointillize_direct(&src, out, &ctx, cell, seed, bg));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn cell_filters_tiled_storage_matches_scalar_with_soft_selection() {
+    use crate::{FilterParams, apply_tiled};
+    let bounds = Rect::new(-17, -9, 86, 78);
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            for alpha in [false, true] {
+                let ctx = Ctx { bounds, mode, alpha };
+                let src = fixture(bounds, &ctx, 2);
+                let mut surface = Surface::new(PixelFormat::new(mode, depth, alpha));
+                surface.write_region(bounds, &src.data);
+                let mut selection = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false));
+                let coverage: Vec<_> = (0..bounds.width() * bounds.height()).map(|i| (i % 7) as f32 / 6.0).collect();
+                selection.write_region(bounds, &coverage);
+                for params in [
+                    FilterParams::Crystallize { cell_size: 3.75, seed: 37 },
+                    FilterParams::Crystallize { cell_size: 10.0, seed: 37 },
+                    FilterParams::Pointillize { cell_size: 3.75, seed: 37, background: [1.0; 4] },
+                    FilterParams::Pointillize { cell_size: 10.0, seed: 37, background: [0.1, 0.8, 0.4, 0.25] },
+                ] {
+                    for extent in [None, Some(bounds)] {
+                        assert!(matches!(params.halo(), crate::Halo::Radius(_)));
+                        let halo = match params.halo() {
+                            crate::Halo::Radius(r) => r,
+                            _ => 0,
+                        };
+                        let image = match extent {
+                            Some(e) => Image::read_clamped(&surface, bounds.inflate(halo), e),
+                            None => Image::read(&surface, bounds.inflate(halo)),
+                        };
+                        let mut expected_data = match params {
+                            FilterParams::Crystallize { cell_size, seed } => crystallize_direct(&image, bounds, &ctx, cell_size, seed),
+                            FilterParams::Pointillize { cell_size, seed, background } => pointillize_direct(&image, bounds, &ctx, cell_size, seed, background),
+                            _ => Vec::new(),
+                        };
+                        crate::mix_selection(&mut expected_data, bounds, &selection, &image, ctx.alpha);
+                        let mut expected = surface.clone();
+                        expected.write_region(bounds, &expected_data);
+                        // Tile 7 has dense edge tiles, sparse inner ones and a partial last one; 17 makes 1-pixel-wide and
+                        // 2-row tiles. Tile 1 sent every edge pixel through the dense fallback (#15652).
+                        for tile in [7, 17, 256] {
+                            let got = apply_tiled(&surface, &params, bounds, bounds, Some(&selection), tile, extent);
+                            assert_bits(&got.read_region(bounds), &expected.read_region(bounds));
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

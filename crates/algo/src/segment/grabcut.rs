@@ -10,7 +10,7 @@ use photocraft_geom::Rect;
 use photocraft_raster::{Cancelled, Interrupt};
 
 use super::gmm::{DEFAULT_REG, Gmm};
-use super::{FREE, HARD_BG, HARD_FG, Region, RgbImage, Sampler, contrast_beta, data_costs, grid_cut_cancellable, subsample};
+use super::{FREE, HARD_BG, HARD_FG, Region, RgbImage, Sampler, contrast_beta, data_costs, grid_cut_bk_cancellable, subsample};
 
 /// Definite background.
 pub const BG: u8 = 0;
@@ -67,7 +67,7 @@ pub fn grabcut_with(img: &RgbImage, trimap: &mut [u8], iters: usize, ctl: &Inter
         };
         let (cf, cb) = data_costs(img, &fg, &bg);
         // `grid_cut`'s weight, with the cut stopping on cancel.
-        let cut = grid_cut_cancellable(img, &cf, &cb, &fixed, |d2| GAMMA * (-beta * d2).exp(), &cancel).ok_or(Cancelled)?;
+        let cut = grid_cut_bk_cancellable(img, &cf, &cb, &fixed, |d2| GAMMA * (-beta * d2).exp(), &cancel).ok_or(Cancelled)?;
         let mut changed = 0usize;
         for (t, fgnd) in trimap.iter_mut().zip(&cut) {
             if *t == PR_BG || *t == PR_FG {
@@ -136,6 +136,14 @@ pub fn object_select(sampler: &dyn Sampler, canvas: Rect, rect: Rect, work_px: u
 /// hovers.
 pub const OBJECT_AT_WORK_PX: usize = 60_000;
 
+const OBJECT_ALPHA_THRESHOLD: f32 = 0.5;
+
+/// Whether the pixel at `(x, y)` in the selected sampler can seed Object Finder.
+/// Read at full resolution: a coarse pixel can hide a small transparent gap (#13070).
+pub fn can_seed_object(sampler: &dyn Sampler, canvas: Rect, x: i32, y: i32) -> bool {
+    canvas.contains(x, y) && sampler.rgba(Rect::from_xywh(x, y, 1, 1)).first().is_some_and(|pixel| pixel[3] >= OBJECT_ALPHA_THRESHOLD)
+}
+
 /// Object Selection's Object Finder (hover / click): the object under document point `(x, y)`.
 ///
 /// A heuristic, not a semantic segmenter (that is #2788): on a working-resolution copy of the
@@ -155,7 +163,7 @@ pub fn object_at(sampler: &dyn Sampler, canvas: Rect, x: f32, y: f32, work_px: u
         return None;
     }
     let (px, py) = (x.floor() as i32, y.floor() as i32);
-    if !canvas.contains(px, py) {
+    if !can_seed_object(sampler, canvas, px, py) {
         return None;
     }
     let work_px = work_px.max(1024);
@@ -182,16 +190,23 @@ pub fn object_at(sampler: &dyn Sampler, canvas: Rect, x: f32, y: f32, work_px: u
 /// One [`object_at`] pass over `canvas` (the document or a window of it) at working step `step`;
 /// `(px, py)` lies inside `canvas`.
 fn object_in(sampler: &dyn Sampler, canvas: Rect, px: i32, py: i32, step: usize) -> Option<Region> {
-    let img = sampler.rgb_scaled(canvas, step);
-    let (w, h) = (img.w, img.h);
-    if w < 2 || h < 2 {
+    // Alpha is kept, so a transparent pixel is a boundary rather than the mid grey `from_rgba`
+    // would composite it to: a mid-grey object on a transparent layer stays an object (#12852).
+    let rgba = sampler.rgba_scaled(canvas, step);
+    let (w, h) = ((canvas.width() as usize).div_ceil(step), (canvas.height() as usize).div_ceil(step));
+    if w < 2 || h < 2 || rgba.len() < w * h {
         return None;
     }
+    let opaque: Vec<bool> = rgba.iter().take(w * h).map(|p| p[3] >= OBJECT_ALPHA_THRESHOLD).collect();
+    let img = RgbImage::from_rgba(&rgba, w, h);
     // Lightly smoothed, so noise and texture don't stop the growth; edges survive.
     let lab: Vec<[f32; 3]> = box3(&box3(&img.px, w, h), w, h).iter().map(|c| super::slic::rgb_to_lab(*c)).collect();
     let sx = (((px - canvas.x0) as usize) / step).min(w - 1);
     let sy = (((py - canvas.y0) as usize) / step).min(h - 1);
-    let grown = grow_similar(&lab, w, h, sx, sy);
+    if !opaque[sy * w + sx] {
+        return None;
+    }
+    let grown = grow_similar(&lab, w, h, sx, sy, &opaque);
     let count = grown.iter().filter(|g| **g).count();
     let boundary = grown.iter().enumerate().filter(|(i, on)| **on && (i % w == 0 || i % w + 1 == w || i / w == 0 || i / w + 1 == h)).count();
     // shortcut: cropped objects covering most of the frame need a semantic segmenter (#2788).
@@ -215,6 +230,10 @@ fn object_in(sampler: &dyn Sampler, canvas: Rect, px: i32, py: i32, step: usize)
             let inside = xx >= bx0 && xx < bx1 && yy >= by0 && yy < by1;
             trimap[i] = if grown[i] {
                 PR_FG
+            } else if !opaque[i] {
+                // Transparency is background, whatever it was composited to.
+                any_bg = true;
+                BG
             } else if inside {
                 PR_BG
             } else {
@@ -250,13 +269,17 @@ fn object_in(sampler: &dyn Sampler, canvas: Rect, px: i32, py: i32, step: usize)
 
 /// Region growing (4-connected) from `(sx, sy)` over pixels whose CIELAB colour is within a
 /// distance of the seed area's running mean and whose step from the neighbour it was reached
-/// from is small, so it stops at edges.
-fn grow_similar(lab: &[[f32; 3]], w: usize, h: usize, sx: usize, sy: usize) -> Vec<bool> {
+/// from is small, so it stops at edges. A pixel that is not `opaque` is never entered, so
+/// transparency stops the growth too.
+fn grow_similar(lab: &[[f32; 3]], w: usize, h: usize, sx: usize, sy: usize, opaque: &[bool]) -> Vec<bool> {
     const MEAN_DIST: f32 = 32.0;
     const EDGE_STEP: f32 = 10.0;
     let d = |a: [f32; 3], b: [f32; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
     let mut out = vec![false; w * h];
     let Some(&seed) = lab.get(sy * w + sx) else { return out };
+    if !opaque.get(sy * w + sx).copied().unwrap_or(false) {
+        return out;
+    }
     let (mut sum, mut n) = ([seed[0] as f64, seed[1] as f64, seed[2] as f64], 1.0f64);
     let mut stack = vec![(sx, sy)];
     out[sy * w + sx] = true;
@@ -269,7 +292,7 @@ fn grow_similar(lab: &[[f32; 3]], w: usize, h: usize, sx: usize, sy: usize) -> V
                 continue;
             }
             let i = ny * w + nx;
-            if out[i] {
+            if out[i] || !opaque.get(i).copied().unwrap_or(true) {
                 continue;
             }
             let q = lab[i];
