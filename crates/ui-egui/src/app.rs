@@ -71,7 +71,6 @@ impl PhotocraftApp {
             texture_serials: Default::default(),
             menu_model: None,
             toolbar_slots: Default::default(),
-            layers_tree: None,
             dock_model: Default::default(),
             move_preview: None,
             move_hover: None,
