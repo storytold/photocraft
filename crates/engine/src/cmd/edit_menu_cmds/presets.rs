@@ -86,6 +86,12 @@ mod outlines {
     const MAX_EDGES: usize = 2000;
     /// Parameter slack along an edge for a crossing at its end.
     const T: f64 = 1e-9;
+    /// The most winding-edge evaluations the boundary classification may take (pieces x edges x the samples per piece);
+    /// beyond it the path stays as it is instead of blocking the command (CodeRabbit on #16189).
+    const WORK_BUDGET: usize = 20_000_000;
+    /// The sampling distances beside a piece: a boundary counts only when both give the same answer, so a feature
+    /// narrower than the larger one is left alone rather than misread.
+    const SAMPLE_OFFSETS: [f64; 2] = [1e-4, 1e-6];
 
     fn sub(a: Pt, b: Pt) -> Pt {
         (a.0 - b.0, a.1 - b.1)
@@ -134,13 +140,29 @@ mod outlines {
                 }
             }
         }
+        // The classification evaluates every edge twice per piece and sampling distance: a path whose pieces would take
+        // more than the budget is stored as it is.
+        if pieces.len().saturating_mul(edges.len()).saturating_mul(2 * SAMPLE_OFFSETS.len()) > WORK_BUDGET {
+            return None;
+        }
         // Keep the pieces with the shape on one side only, running with the shape on their left.
         let mut kept: Vec<(Pt, Pt)> = Vec::new();
         for (a, b) in pieces.into_values() {
             let d = sub(b, a);
             let len = dot(d, d).sqrt();
-            let (n, m) = ((d.1 / len * 1e-4, -d.0 / len * 1e-4), ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0));
-            match (inside(path, &polys, (m.0 + n.0, m.1 + n.1)), inside(path, &polys, (m.0 - n.0, m.1 - n.1))) {
+            let m = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+            let sides: Vec<(bool, bool)> = SAMPLE_OFFSETS
+                .iter()
+                .map(|eps| {
+                    let n = (d.1 / len * eps, -d.0 / len * eps);
+                    (inside(path, &polys, (m.0 + n.0, m.1 + n.1)), inside(path, &polys, (m.0 - n.0, m.1 - n.1)))
+                })
+                .collect();
+            // Samples that disagree can't classify this boundary reliably (a hole narrower than the larger offset).
+            if sides.windows(2).any(|w| w[0] != w[1]) {
+                return None;
+            }
+            match sides[0] {
                 (true, false) => kept.push((a, b)),
                 (false, true) => kept.push((b, a)),
                 _ => {}

@@ -127,3 +127,29 @@ fn degenerate_paths_are_stored_without_a_panic() {
         let _ = s.execute("edit.defineCustomShape", json!({"name": "Odd"}));
     }
 }
+
+/// A path whose crossings would need more work than the budget is stored as it is, not after seconds of
+/// classification (CodeRabbit on #16189).
+#[test]
+fn a_path_with_too_much_crossing_work_is_stored_as_it_is() {
+    let mut subpaths = Vec::new();
+    for i in 0..250 {
+        let x = f64::from(i) * 8.0;
+        subpaths.push(r(x, 0.0, x + 4.0, 2000.0, PathOp::Combine));
+    }
+    for j in 0..250 {
+        let y = f64::from(j) * 8.0;
+        subpaths.push(r(0.0, y, 2000.0, y + 4.0, PathOp::Combine));
+    }
+    let stored = define(Path::new(subpaths));
+    assert_eq!(stored.subpaths.len(), 500, "the original path is kept");
+}
+
+/// A hole narrower than the sampling distance can't be classified from the samples: the original path is kept
+/// instead of storing a filled square (CodeRabbit on #16189).
+#[test]
+fn a_hole_narrower_than_the_sampling_distance_keeps_the_original_path() {
+    let stored = define(Path::new(vec![r(0.0, 0.0, 20.0, 20.0, PathOp::Combine), r(10.0, 10.0, 10.00005, 10.00005, PathOp::Subtract)]));
+    assert_eq!(stored.subpaths.len(), 2, "both subpaths are kept");
+    assert_eq!(stored.subpaths[1].op, PathOp::Subtract);
+}
