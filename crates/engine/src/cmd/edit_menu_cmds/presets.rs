@@ -70,7 +70,17 @@ fn refusal(path: &Path) -> Option<ShapeRefusal> {
     // Every flattened point on one line (or one point): nothing is enclosed. Not the signed area, which cancels for a
     // self-crossing outline like a bow tie that does cover pixels (CodeRabbit on #16238).
     let lines = photocraft_vector::flatten_path(path, 0.05);
-    let pts: Vec<(f64, f64)> = lines.iter().flat_map(|l| l.pts.iter().copied()).collect();
+    let mut pts: Vec<(f64, f64)> = lines.iter().flat_map(|l| l.pts.iter().copied()).collect();
+    // A curve flattened to one piece keeps only its end points, so the handles that shape each segment count too: a path
+    // whose anchors are on a line but whose handles bulge encloses area (CodeRabbit on #16238).
+    for sp in &path.subpaths {
+        let n = sp.knots.len();
+        let segments = if sp.closed { n } else { n.saturating_sub(1) };
+        for i in 0..segments {
+            let (from, to) = (&sp.knots[i], &sp.knots[(i + 1) % n]);
+            pts.extend([(from.out_ctrl.x, from.out_ctrl.y), (to.in_ctrl.x, to.in_ctrl.y)]);
+        }
+    }
     let Some(&p0) = pts.first() else { return Some(ShapeRefusal::Empty) };
     if pts.iter().any(|p| !p.0.is_finite() || !p.1.is_finite()) {
         return Some(ShapeRefusal::Empty);
@@ -79,8 +89,10 @@ fn refusal(path: &Path) -> Option<ShapeRefusal> {
     let len = (far.0 - p0.0).hypot(far.1 - p0.1);
     let off_line =
         if len <= 1e-9 { 0.0 } else { pts.iter().map(|p| ((p.0 - p0.0) * (far.1 - p0.1) - (p.1 - p0.1) * (far.0 - p0.0)).abs() / len).fold(0.0, f64::max) };
-    // Collinear to floating-point noise only: a thin rectangle has area and is stored, however narrow.
-    (off_line <= 1e-9 * (1.0 + len)).then_some(ShapeRefusal::Empty)
+    // Collinear to floating-point noise only, which grows with the size of the coordinates, not with the length of the
+    // line: a thin rectangle has area and is stored, however narrow and however long.
+    let magnitude = pts.iter().fold(0.0_f64, |m, p| m.max(p.0.abs()).max(p.1.abs()));
+    (off_line <= 1e-12 * (1.0 + magnitude)).then_some(ShapeRefusal::Empty)
 }
 
 /// What Define Custom Shape would refuse for the path it would use on the active document (the menu

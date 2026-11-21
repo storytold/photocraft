@@ -3,6 +3,7 @@
 //! alert (the menu does nothing). A 1×1 square still works.
 
 use photocraft_doc::{Knot, Path, PathOp, Subpath};
+use photocraft_geom::Point;
 use serde_json::json;
 
 use super::{EMPTY_PATH, ShapeRefusal, define_custom_shape_refusal};
@@ -97,6 +98,32 @@ fn a_very_thin_rectangle_is_stored() {
     let mut s = with_work_path(Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (10.0, 0.0), (10.0, 0.000_000_5), (0.0, 0.000_000_5)])]));
     assert_eq!(define_custom_shape_refusal(&s), None);
     s.execute("edit.defineCustomShape", json!({"name": "Thin"})).unwrap();
+    assert_eq!(stored(&s), 1);
+}
+
+/// A long thin rectangle has area too: the tolerance follows the size of the coordinates, not the length of the line
+/// (CodeRabbit on #16238).
+#[test]
+fn a_long_very_thin_rectangle_is_stored() {
+    let mut s = with_work_path(Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (1000.0, 0.0), (1000.0, 0.000_000_5), (0.0, 0.000_000_5)])]));
+    assert_eq!(define_custom_shape_refusal(&s), None);
+    s.execute("edit.defineCustomShape", json!({"name": "Long"})).unwrap();
+    assert_eq!(stored(&s), 1);
+}
+
+/// Anchors on a line whose handles bulge enclose area, though the flattening keeps only the end points of a shallow curve
+/// (CodeRabbit on #16238).
+#[test]
+fn collinear_anchors_with_bulging_handles_are_stored() {
+    let knot = |x: f64, out: Option<(f64, f64)>, inn: Option<(f64, f64)>| {
+        let anchor = Point::new(x, 0.0);
+        let at = |c: Option<(f64, f64)>| c.map_or(anchor, |(cx, cy)| Point::new(cx, cy));
+        Knot { anchor, in_ctrl: at(inn), out_ctrl: at(out), smooth: false }
+    };
+    let knots = vec![knot(0.0, Some((10.0 / 3.0, 0.01)), None), knot(10.0, None, Some((20.0 / 3.0, 0.01))), knot(5.0, None, None)];
+    let mut s = with_work_path(Path::new(vec![Subpath { closed: true, knots, op: PathOp::Combine }]));
+    assert_eq!(define_custom_shape_refusal(&s), None);
+    s.execute("edit.defineCustomShape", json!({"name": "Bulge"})).unwrap();
     assert_eq!(stored(&s), 1);
 }
 
