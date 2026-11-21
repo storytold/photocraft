@@ -15,7 +15,7 @@ fn successful_save_identity_is_not_undone_or_redone() {
         s.execute("layer.new.layer", json!({})).unwrap();
         let original = s.active().unwrap().doc.clone();
         let revision = s.active().unwrap().revision;
-        s.active_mut().unwrap().saved_to("C:\\作品\\My picture.PSD".into());
+        s.saved_to("C:\\作品\\My picture.PSD".into());
         let saved = s.active().unwrap();
         assert_eq!(saved.doc.name, "My picture.PSD");
         assert_eq!(saved.doc.id, original.id);
@@ -23,11 +23,11 @@ fn successful_save_identity_is_not_undone_or_redone() {
         assert!(!saved.is_dirty());
         assert_eq!(original.name, "Untitled-1", "the exported snapshot remains immutable");
         let snapshot = saved.doc.clone();
-        s.active_mut().unwrap().saved_to("C:\\作品\\My picture.PSD".into());
+        s.saved_to("C:\\作品\\My picture.PSD".into());
         assert!(Arc::ptr_eq(&s.active().unwrap().doc, &snapshot), "saving the same name does not invalidate snapshots or jobs");
         assert!(s.undo());
         assert_eq!(s.active().unwrap().doc.name, "My picture.PSD");
-        s.active_mut().unwrap().saved_to("renamed.psb".into());
+        s.saved_to("renamed.psb".into());
         assert!(s.redo());
         assert_eq!(s.active().unwrap().doc.name, "renamed.psb");
         assert_eq!(s.active().unwrap().path.as_deref(), Some("renamed.psb"));

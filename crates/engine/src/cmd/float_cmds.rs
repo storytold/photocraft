@@ -28,7 +28,7 @@ use crate::{DocState, EngineError, Result, Session};
 /// A layer split by its selection: the layer with the selected pixels cut out, and the cut pixels
 /// (cropped to the selection). Splitting touches only the selection's area, and placing the piece
 /// ([`CutParts::moved`]) only the piece's: the cut-out layer's other tiles are shared.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub struct CutParts {
     pub layer: LayerId,
     rest: Surface,
@@ -258,7 +258,7 @@ fn cut_piece(base: &Surface, sel: &Surface, b: photocraft_geom::Rect, with_alpha
 }
 
 /// A piece floating `offset` whole pixels from where it was cut, over document `revision`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub struct Floating {
     pub layer: LayerId,
     pub offset: (i32, i32),
@@ -392,11 +392,18 @@ pub(crate) fn drops_for(s: &Session, id: &str) -> bool {
 /// Before any command (`Session::dispatch`): Undo puts a floating piece back (and is used up:
 /// returns its result); every other command but the floating ones drops it first.
 pub(crate) fn before_command(s: &mut Session, id: &str) -> Result<Option<Value>> {
-    let Some(st) = s.active_mut() else { return Ok(None) };
+    // Runs before every command: read through `active`, and borrow the document to change only to drop a stale
+    // float, since the borrow moves its `Tracked` revision.
+    let Some(st) = s.active() else { return Ok(None) };
     if floating(st).is_none() {
-        st.floating = None;
+        if st.floating.is_some()
+            && let Some(st) = s.active_mut()
+        {
+            st.floating = None;
+        }
         return Ok(None);
     }
+    let Some(st) = s.active_mut() else { return Ok(None) };
     match id {
         // Edit › Undo and the History panel's Step Backward step back over the move itself.
         "edit.undo" | "history.stepBackward" => {

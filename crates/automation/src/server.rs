@@ -785,6 +785,28 @@ impl PhotocraftMcp {
         to_result(b.call_read("ui.inspect", json!({})).await)
     }
 
+    #[tool(
+        description = "Where this app opens and saves files for agents. Put files the app should open in read_folder (or a folder below it) and find what it saves in write_folder. Both are usually the app's agent folder in Documents/ArtCraft/Agents; the person may have set others. null means the app has no such folder now. Paths passed to other tools may be relative to these folders."
+    )]
+    async fn agent_folders(&self) -> Result<CallToolResult, McpError> {
+        if let Some(r) = self.headless_op(|h| Ok(session_folders_answer(&h.folders()))).await {
+            return to_result(r);
+        }
+        match &*self.backend {
+            Backend::Live(live) => match live.window_folders().await {
+                Ok(folders) => Ok(ok_json(&craft::control::agents::folders_answer(&folders))),
+                Err(e) => Ok(fail(e)),
+            },
+            // A window reached with --bridge may have been started with its own root flags.
+            Backend::Bridge(_) => Ok(ok_json(&json!({
+                "read_folder": null,
+                "write_folder": null,
+                "note": "bridge mode: the app's folders are the ones it was started with (--automation-read-root, --automation-write-root) or set in Preferences > AI Integrations"
+            }))),
+            Backend::Headless(_) => Ok(no_backend()),
+        }
+    }
+
     #[tool(description = "Open an image or document file and make it active. Returns index, size and import warnings.")]
     async fn doc_open(&self, Parameters(p): Parameters<OpenParams>) -> Result<CallToolResult, McpError> {
         let path = PathBuf::from(&p.path);
@@ -1151,6 +1173,24 @@ impl PhotocraftMcp {
             None => bridge_only("control_call"),
         }
     }
+}
+
+/// `agent_folders`' answer for a headless session: the shared shape (`read_folder`, the first
+/// read root; `write_folder`), plus every read root in lookup order and, for a trusted local
+/// session, `any_path`.
+fn session_folders_answer(f: &crate::headless::SessionFolders) -> Value {
+    let path = |p: &std::path::Path| p.to_string_lossy().into_owned();
+    let mut answer = json!({
+        "read_folder": f.read.first().map(|p| path(p)),
+        "write_folder": f.write.as_deref().map(path),
+    });
+    if f.read.len() > 1 {
+        answer["read_folders"] = json!(f.read.iter().map(|p| path(p)).collect::<Vec<_>>());
+    }
+    if f.any_path {
+        answer["any_path"] = json!(true);
+    }
+    answer
 }
 
 /// Whether two targets are the same session or the same app connection.

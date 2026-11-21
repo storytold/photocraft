@@ -21,7 +21,7 @@ pub(crate) fn show_frame(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui:
     Some(app.canvas_tools.crop.tool.show_frame(ui, rect, &run.input(&ctx)))
 }
 
-/// Applies what the pass reported to the document and the crop options.
-pub(crate) fn finish(app: &mut PhotocraftApp, output: CropOutput) {
-    crate::crop_ui::finish(app, output);
+/// Applies what the pass reported while the live Crop tool is still held by the canvas rig.
+pub(crate) fn finish(app: &mut PhotocraftApp, tool: &mut CropTool, output: CropOutput) {
+    crate::crop_ui::finish(app, tool, output);
 }

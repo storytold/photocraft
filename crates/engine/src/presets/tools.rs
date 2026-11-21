@@ -15,12 +15,13 @@ use super::{Group, Named, always, bad, edit_groups, req_str, str_param};
 use crate::commands::CommandSpec;
 use crate::{Result, Session};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct ToolPreset {
     pub name: String,
     /// Tool name as the shell spells it (`"brush"`, `"eraser"`, `"gradient"`, …), case-insensitive.
     pub tool: String,
     #[serde(default)]
+    #[plain_data(assume = "JSON values: plain data")]
     pub options: Value,
 }
 
@@ -126,7 +127,7 @@ fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
         "colorreplacement",
     ];
     if options.get("brush").is_none() && brushy.contains(&norm(&tool).as_str()) {
-        options["brush"] = serde_json::to_value(&s.tools.brush).unwrap_or(Value::Null);
+        options["brush"] = serde_json::to_value(&*s.tools.brush).unwrap_or(Value::Null);
     }
     if p.get("includeColor").and_then(Value::as_bool).unwrap_or(false) {
         let f = s.tools.foreground;
