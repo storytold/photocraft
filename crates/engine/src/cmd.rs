@@ -61,6 +61,7 @@ pub mod frame_cmds;
 pub mod fx_view_cmds;
 pub mod fx_visibility_cmds;
 pub mod gallery_cmds;
+pub mod global_perspective_cmds;
 #[cfg(test)]
 mod gradient_alpha_method_tests;
 pub mod gradient_fill_cmds;
