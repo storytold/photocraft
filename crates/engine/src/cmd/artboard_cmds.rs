@@ -888,8 +888,8 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"files": files}))
 }
 
-/// A minimal PDF with one page per JPEG image: (width px, height px, dpi, JPEG bytes).
-/// Pages are sized so the image prints at its resolution.
+/// A minimal PDF with one page per image: (width px, height px, dpi, JPEG bytes or a zlib
+/// stream of 8-bit RGB samples). Pages are sized so the image prints at its resolution.
 pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
     let mut out: Vec<u8> = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
     let mut offsets: Vec<usize> = Vec::new();
@@ -903,7 +903,7 @@ pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
     let kids: Vec<String> = (0..pages.len()).map(|i| format!("{} 0 R", 3 + i * 3)).collect();
     obj(&mut out, b"<< /Type /Catalog /Pages 2 0 R >>");
     obj(&mut out, format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids.join(" "), pages.len()).as_bytes());
-    for (i, (w, h, dpi, jpeg)) in pages.iter().enumerate() {
+    for (i, (w, h, dpi, data)) in pages.iter().enumerate() {
         let k = 72.0 / f64::from(dpi.max(1.0));
         let (pw, ph) = (f64::from(*w) * k, f64::from(*h) * k);
         let (contents, image) = (4 + i * 3, 5 + i * 3);
@@ -916,12 +916,14 @@ pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
         );
         let stream = format!("q {pw:.3} 0 0 {ph:.3} 0 0 cm /Im0 Do Q");
         obj(&mut out, format!("<< /Length {} >>\nstream\n{stream}\nendstream", stream.len()).as_bytes());
+        // JPEG data opens with the SOI marker FF D8; a zlib stream never starts with FF.
+        let filter = if data.starts_with(&[0xff, 0xd8]) { "DCTDecode" } else { "FlateDecode" };
         let mut img = format!(
-            "<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {} >>\nstream\n",
-            jpeg.len()
+            "<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /{filter} /Length {} >>\nstream\n",
+            data.len()
         )
         .into_bytes();
-        img.extend_from_slice(jpeg);
+        img.extend_from_slice(data);
         img.extend_from_slice(b"\nendstream");
         obj(&mut out, &img);
     }
@@ -934,13 +936,21 @@ pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
-/// File › Export › Artboards to PDF: one page per board (flattened over white, JPEG-encoded).
+/// File › Export › Artboards to PDF: one page per board (flattened over white, JPEG- or ZIP-encoded).
 fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToPdf";
     let path = str_param(p, "path", cmd)?.to_string();
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
     let quality = f64_param(p, "quality").or(Some(10.0));
+    let zip = match p.get("encoding") {
+        None | Some(Value::Null) => false,
+        Some(v) => match v.as_str() {
+            Some("jpeg") => false,
+            Some("zip") => true,
+            _ => return Err(bad(cmd, format!("`encoding` must be \"jpeg\" or \"zip\", not {v}"))),
+        },
+    };
     let mut pages = Vec::new();
     // Pages go bottom artboard of the Layers panel first, as in the reference application (#13643);
     // `chosen_documents` lists them top first, the order Artboards to Files keeps.
@@ -951,9 +961,16 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
         let mut surf = Surface::new(fmt);
         let vals: Vec<f32> = buf.px.iter().flat_map(|px| photocraft_raster::from_rgba(&fmt, *px)).collect();
         surf.write_region(one.bounds(), &vals);
-        flat.layers.push(Layer::new("Background", LayerContent::Raster(surf)));
-        let (jpeg, _) = encode(&flat, "page.jpg", quality)?;
-        pages.push((one.size.width, one.size.height, doc.resolution_dpi, jpeg));
+        let image = if zip {
+            // Lossless (#13651): the exact 8-bit RGB samples, alpha dropped, Flate-compressed.
+            let rgb: Vec<u8> = surf.to_interleaved(one.bounds()).as_chunks::<4>().0.iter().flat_map(|&[r, g, b, _]| [r, g, b]).collect();
+            let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+            std::io::Write::write_all(&mut z, &rgb).and_then(|()| z.finish()).map_err(|e| EngineError::Other(format!("compressing a PDF page: {e}")))?
+        } else {
+            flat.layers.push(Layer::new("Background", LayerContent::Raster(surf)));
+            encode(&flat, "page.jpg", quality)?.0
+        };
+        pages.push((one.size.width, one.size.height, doc.resolution_dpi, image));
     }
     if pages.is_empty() {
         return Err(bad(cmd, "no matching artboards"));
@@ -1029,7 +1046,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToPdf",
             "Artboards to PDF…",
             &["File", "Export"],
-            r##"{"path":str (.pdf),"artboards":[id]?,"quality":0..12=10} → {path, pages} (one raster page per board, bottom artboard of the Layers panel first)"##,
+            r##"{"path":str (.pdf),"artboards":[id]?,"quality":0..12=10,"encoding":"jpeg|zip"="jpeg" (zip: lossless Flate pages, quality ignored)} → {path, pages} (one raster page per board, bottom artboard of the Layers panel first)"##,
             export_artboards,
             artboards_to_pdf
         ),
@@ -1060,6 +1077,10 @@ mod overlapping_areas_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/pdf_page_order_tests.rs"]
 mod pdf_page_order_tests;
+
+#[cfg(test)]
+#[path = "artboard_cmds/pdf_zip_encoding_tests.rs"]
+mod pdf_zip_encoding_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/tests.rs"]
 mod tests;
