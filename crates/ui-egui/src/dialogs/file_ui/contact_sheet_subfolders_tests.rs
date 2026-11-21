@@ -39,6 +39,8 @@ fn ok_runs_the_sheet_with_both_settings() {
         set(&mut app, "input", json!(dir.to_string_lossy()));
         // No captions: they wait on the app's fonts, which load in the background.
         set(&mut app, "caption", json!(false));
+        // Image layers are counted, so the sheet stays unflattened.
+        set(&mut app, "flatten", json!(false));
         if group {
             set(&mut app, "groupByFolder", json!(true));
         }
