@@ -2,8 +2,8 @@
 //! swatches with the shape tools' popups, stroke width and type, W / H, and Align Edges, in the
 //! reference's order: Fill: swatch, Stroke: swatch, width, type, W:, H:, Align Edges (on).
 //! W and H read 0 px with no shape and the live size of the shape being drawn (200 x 200 for a
-//! 200 x 200 triangle). The not-measured cases (the stroke default, typing into W / H) keep
-//! today's behaviour.
+//! 200 x 200 triangle); a one-anchor or a flat (line) draft keeps 0 px on its flat axis. The
+//! not-measured cases (the stroke default, typing into W / H) keep today's behaviour.
 
 use egui::Modifiers;
 use egui::accesskit::{Role, Toggled};
@@ -241,6 +241,23 @@ fn w_and_h_show_zero_for_no_shape_and_the_live_size_while_drawing() {
     assert_eq!(field_text(&h, "H:"), "200", "the 200 x 200 triangle: H");
 }
 
+/// Degenerate drafts stay 0 px rather than a negative or missing number: one anchor shows 0 x 0,
+/// and a straight line (two clicks at the same y) shows 200 x 0. `pen_shape_size` guards the empty
+/// draft and `path_bounds` the flat box; the pin holds before and after this PR's change, since
+/// the guard is part of the code the PR adds.
+#[test]
+fn degenerate_drafts_show_zero_on_the_flat_axis() {
+    let mut h = shape_bar();
+    testing::click(h.state_mut(), [20.0, 120.0], Modifiers::NONE);
+    h.run_steps(2);
+    assert_eq!(field_text(&h, "W:"), "0", "one anchor: 0 px wide");
+    assert_eq!(field_text(&h, "H:"), "0", "one anchor: 0 px tall");
+    testing::click(h.state_mut(), [220.0, 120.0], Modifiers::NONE);
+    h.run_steps(2);
+    assert_eq!(field_text(&h, "W:"), "200", "the line draft: 200 px wide");
+    assert_eq!(field_text(&h, "H:"), "0", "the line draft: 0 px tall, not a negative height");
+}
+
 /// Not measured: what typing into W / H does. It keeps today's behaviour — the field shows the
 /// live size and an edit changes neither the tool options nor the document.
 #[test]
@@ -318,17 +335,20 @@ fn the_shape_tools_keep_their_own_bars() {
     assert!(h.query_by_label("Align Edges").is_some(), "the Triangle keeps its Align Edges (#13370)");
 }
 
-/// The Freeform Pen's Shape-mode branch of the same bar gains the same row (the issue's Where
-/// covers all three pens); Path mode keeps its Make: row and gains nothing.
+/// The Freeform Pen's and the Curvature Pen's Shape-mode branch of the same bar gains the same
+/// row (the issue's Where covers all three pens); Path mode keeps its Make: row and gains nothing.
 #[test]
 fn the_freeform_pen_shape_bar_gains_the_same_row() {
-    let mut h = bar(Tool::FreeformPen);
-    pick_mode(&mut h, "Shape");
-    assert!(h.query_by_role_and_label(Role::ColorWell, "Fill:").is_some());
-    assert!(h.query_by_role_and_label(Role::ColorWell, "Stroke:").is_some());
-    assert!(h.query_by_label("W:").is_some());
-    assert!(h.query_by_label("Align Edges").is_some());
-    pick_mode(&mut h, "Path");
-    assert!(h.query_by_label("Align Edges").is_none());
-    assert!(h.query_by_role_and_label(Role::Button, "Shape").is_some(), "Make: Shape stays in Path mode");
+    for tool in [Tool::FreeformPen, Tool::CurvaturePen] {
+        let mut h = bar(tool);
+        pick_mode(&mut h, "Shape");
+        assert!(h.query_by_role_and_label(Role::ColorWell, "Fill:").is_some(), "{tool:?} Shape mode: the Fill swatch");
+        assert!(h.query_by_role_and_label(Role::ColorWell, "Stroke:").is_some(), "{tool:?} Shape mode: the Stroke swatch");
+        assert!(h.query_by_label("W:").is_some(), "{tool:?} Shape mode: W");
+        assert!(h.query_by_label("H:").is_some(), "{tool:?} Shape mode: H");
+        assert!(h.query_by_label("Align Edges").is_some(), "{tool:?} Shape mode: Align Edges");
+        pick_mode(&mut h, "Path");
+        assert!(h.query_by_label("Align Edges").is_none(), "{tool:?} Path mode: no Align Edges");
+        assert!(h.query_by_role_and_label(Role::Button, "Shape").is_some(), "{tool:?} Path mode: Make: Shape stays");
+    }
 }

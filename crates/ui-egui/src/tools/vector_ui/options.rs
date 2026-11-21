@@ -200,14 +200,15 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
         // yet either, #2496).
         let (w, h) = pen_shape_size(app.ui.pen.as_ref());
         // The Field shows the "W:" / "H:" caption, as the reference's row prints them; in a bar a
-        // Field already takes its content width. The fields are views: their output applies nothing.
+        // Field already takes its content width. The fields are views: their output applies nothing,
+        // so their label offers no scrub handle either (scrub(false), unlike the editing fields).
         let _ = Field::new(label(tl!("W:")))
             .id_salt("pen-w")
-            .side(SideLabel::new().scrub(true))
+            .side(SideLabel::new().scrub(false))
             .show(ui, |ui, _| NumberField::new(label(tl!("W:")), Bind::given(Some(w))).unit_kind(UnitKind::Pixels).show(ui));
         let _ = Field::new(label(tl!("H:")))
             .id_salt("pen-h")
-            .side(SideLabel::new().scrub(true))
+            .side(SideLabel::new().scrub(false))
             .show(ui, |ui, _| NumberField::new(label(tl!("H:")), Bind::given(Some(h))).unit_kind(UnitKind::Pixels).show(ui));
         // Align Edges (#12907): on by default and shown only in Shape mode; Path mode shows no
         // paint row at all (the issue allows absent or greyed). The checkbox writes the option the
