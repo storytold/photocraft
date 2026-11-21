@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 /// Blending Options › Advanced Blending › Knockout: which layers beneath this one its shape
 /// punches through. Fill opacity controls the strength (0 % fill shows the knocked-out area bare).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub enum Knockout {
     /// The layer blends with everything beneath it (the default).
@@ -68,7 +68,7 @@ impl Knockout {
 }
 
 /// The Advanced Blending switches of a layer (see the module docs). `Default` is Photoshop's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AdvancedBlending {
     /// Knockout: None / Shallow / Deep. PSD `knko`.
