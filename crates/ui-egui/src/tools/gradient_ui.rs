@@ -84,6 +84,36 @@ pub(crate) fn fill_layer_active(app: &PhotocraftApp) -> bool {
         && app.session.active().is_some_and(|st| st.doc.path_of(l.id).is_some_and(|p| st.doc.shown_at(&p) && !st.doc.locks_at(&p).any()))
 }
 
+/// Opens the gradient preset picker at screen point `at` (a right-click on the canvas, #12013).
+pub(crate) fn open_picker(app: &mut PhotocraftApp, at: [f32; 2]) {
+    app.ui.gradient_picker = Some(at);
+}
+
+/// The gradient preset picker at the point `app.ui.gradient_picker` holds, while it is open; another tool closes it.
+pub(crate) fn show_picker(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
+    let Some(at) = app.ui.gradient_picker else { return };
+    if app.ui.tool != Tool::Gradient || !crate::panels::preset_browser::gradient_picker_at(app, ui, egui::pos2(at[0], at[1])) {
+        app.ui.gradient_picker = None;
+    }
+}
+
+/// Whether a right-click on the canvas with the Gradient tool opens the gradient preset picker (#12013): over a shown
+/// pixel layer with no lock of its own (the Background's built-in locks aside), in an 8-bit RGB document, in both
+/// Gradient and Classic gradient mode. A gradient fill layer opens nothing (the tool edits it live). Hidden, locked,
+/// type, smart object and group layers, and other colour modes and bit depths, were not measured and keep opening
+/// nothing.
+pub(crate) fn right_click_picks_preset(app: &PhotocraftApp) -> bool {
+    let Some(st) = app.session.active() else { return false };
+    let doc = &st.doc;
+    let Some(l) = st.active_layer.and_then(|id| doc.layer(id)) else { return false };
+    let Some(path) = doc.path_of(l.id) else { return false };
+    matches!(l.content, LayerContent::Raster(_))
+        && doc.shown_at(&path)
+        && (doc.is_background(l.id) || !doc.locks_at(&path).any())
+        && doc.mode == photocraft_color::ColorMode::Rgb
+        && doc.depth == photocraft_color::SampleType::U8
+}
+
 /// The active layer when it is a gradient fill layer: (layer, its frame, the canvas).
 pub(crate) fn active_gradient(app: &PhotocraftApp) -> Option<(Layer, Rect32, photocraft_geom::Rect)> {
     let st = app.session.active()?;

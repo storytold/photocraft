@@ -243,6 +243,10 @@ pub struct UiState {
     /// its screen position (points).
     #[serde(default)]
     pub brush_picker: Option<[f32; 2]>,
+    /// The gradient preset picker a right-click on the canvas opens with the Gradient tool (#12013): its screen
+    /// position (points) while it is open. Not restored at launch.
+    #[serde(skip)]
+    pub gradient_picker: Option<[f32; 2]>,
     /// The Brush Preset picker's list: search, collapsed groups, view, size and the parts shown.
     #[serde(skip)]
     pub(crate) brush_picker_state: BrushPickerState<BrushKey>,
@@ -477,6 +481,7 @@ impl Default for UiState {
             filter_mask_target: None,
             properties_layer: None,
             brush_picker: None,
+            gradient_picker: None,
             brush_picker_state: BrushPickerState::default(),
             color_hud: None,
             canvas_tool_menu: None,

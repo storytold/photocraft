@@ -776,5 +776,54 @@ pub(crate) fn pattern_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui, selecte
     value.filter(|picked| before.as_ref() != Some(picked))
 }
 
+// ------------------------------------------------------------------ gradient picker
+
+/// The key prefix of a group row in the gradient picker, so a group never reads as a preset name.
+const GRADIENT_GROUP: &str = "group:";
+
+/// The gradient presets as picker rows: each group, then its gradients with their ramp (in the current colours) and
+/// their name as the tooltip, keyed by name as the Gradients panel keys them.
+fn gradient_rows(app: &PhotocraftApp) -> Vec<PresetRow<String>> {
+    let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
+    let mut rows = Vec::new();
+    for group in &app.session.presets.gradients {
+        rows.push(PresetRow::group(format!("{GRADIENT_GROUP}{}", group.name), group.name.clone(), 0));
+        for preset in &group.items {
+            let stops = preset.resolve(fg, bg);
+            rows.push(
+                PresetRow::item(preset.name.clone(), preset.name.clone(), 1)
+                    .tooltip(preset.name.clone())
+                    .preview(ThumbAspect::new(32, 18), move |cx, rect| paint_gradient(cx, rect, &stops)),
+            );
+        }
+    }
+    rows
+}
+
+/// The gradient preset picker open at screen point `at`, as a right-click on the canvas opens it with the Gradient
+/// tool (#12013): the presets in their groups, like the Gradients panel. A click picks a preset and keeps the picker
+/// open; a double click or Enter picks it and closes; Escape or a press outside closes it and picks nothing. A pick
+/// selects the gradient for the tool (`gradient.presets.select`, no history state) and becomes the Gradients panel's
+/// selection. Returns whether the picker is still open.
+pub(crate) fn gradient_picker_at(app: &mut PhotocraftApp, ui: &mut egui::Ui, at: Pos2) -> bool {
+    const ID: &str = "gradientPicker";
+    let rows = gradient_rows(app);
+    let mut value = app.ui.presets_ui.selected.get(GRADIENTS.id).cloned();
+    let mut state = picker_state(&app.ui.presets_ui, ID);
+    let mut open = true;
+    let out = PresetPicker::new(tl!("Gradients"), Bind::bound(&mut value), &rows, Bind::bound(&mut state))
+        .cell_shape(CellShape::ratio(32, 18))
+        .keep_open()
+        .open_at(at, Bind::bound(&mut open))
+        .show(ui);
+    keep_picker_state(&mut app.ui.presets_ui, ID, state);
+    if let Some(name) = out.picked.filter(|picked| !picked.starts_with(GRADIENT_GROUP))
+        && run(app, "gradient.presets.select", json!({"preset": name})).is_some()
+    {
+        app.ui.presets_ui.selected.insert(GRADIENTS.id.into(), name);
+    }
+    open && out.open
+}
+
 #[cfg(test)]
 mod tests;
