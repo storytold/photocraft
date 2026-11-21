@@ -74,6 +74,73 @@ fn move_tool_snaps_to_other_layer_edges_with_smart_guides() {
     assert_eq!(mover_bounds(&app).x0, 300);
 }
 
+#[test]
+fn ctrl_held_from_press_keeps_move_snapping() {
+    let ctrl = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+    for tool in [Tool::Move, Tool::Brush, Tool::RectMarquee] {
+        let mut app = app_with_box();
+        craft::ui::testing::windows::set_os(app.ctx(), craft::host::target::Os::Windows);
+        app.ui.tool = tool;
+        app.ui.tool_options.move_auto_select = false;
+        let lines = move_drag(&mut app, [323.0, 100.0], ctrl);
+        assert!(has_line(&lines, 300.0), "{tool:?}: {lines:?}");
+        assert_eq!(mover_bounds(&app).x0, 300, "{tool:?}");
+    }
+}
+
+#[test]
+fn ctrl_released_and_pressed_again_suspends_move_snapping() {
+    let mut app = app_with_box();
+    craft::ui::testing::windows::set_os(app.ctx(), craft::host::target::Os::Windows);
+    app.ui.tool = Tool::Move;
+    app.ui.tool_options.move_auto_select = false;
+    let ctrl = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+    tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, ctrl);
+    let drag = ToolEvent::Move { x: 323.0, y: 100.0, pressure: 1.0 };
+    let lines = tool_event_response(&mut app, drag, egui::Modifiers::NONE).snapped;
+    assert!(has_line(&lines, 300.0), "{lines:?}");
+    let lines = tool_event_response(&mut app, drag, ctrl).snapped;
+    assert!(lines.is_empty(), "{lines:?}");
+    tool_event(&mut app, ToolEvent::Up { x: 323.0, y: 100.0 }, ctrl);
+    assert_eq!(mover_bounds(&app).x0, 303);
+}
+
+#[test]
+fn ctrl_pressed_after_move_starts_suspends_snapping() {
+    let mut app = app_with_box();
+    craft::ui::testing::windows::set_os(app.ctx(), craft::host::target::Os::Windows);
+    app.ui.tool = Tool::Move;
+    app.ui.tool_options.move_auto_select = false;
+    let m = egui::Modifiers::NONE;
+    tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, m);
+    let drag = ToolEvent::Move { x: 323.0, y: 100.0, pressure: 1.0 };
+    let lines = tool_event_response(&mut app, drag, m).snapped;
+    assert!(has_line(&lines, 300.0), "{lines:?}");
+    let ctrl = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+    let lines = tool_event_response(&mut app, drag, ctrl).snapped;
+    assert!(lines.is_empty(), "{lines:?}");
+    tool_event(&mut app, ToolEvent::Up { x: 323.0, y: 100.0 }, ctrl);
+    assert_eq!(mover_bounds(&app).x0, 303);
+}
+
+#[test]
+fn macos_move_snaps_with_command_and_suspends_with_control() {
+    let mut app = app_with_box();
+    crate::canvas::testing::on_a_mac(&app);
+    app.ui.tool = Tool::Move;
+    app.ui.tool_options.move_auto_select = false;
+    let cmd = egui::Modifiers { mac_cmd: true, command: true, ..Default::default() };
+    tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, cmd);
+    let drag = ToolEvent::Move { x: 323.0, y: 100.0, pressure: 1.0 };
+    let lines = tool_event_response(&mut app, drag, cmd).snapped;
+    assert!(has_line(&lines, 300.0), "{lines:?}");
+    let ctrl = egui::Modifiers { ctrl: true, ..Default::default() };
+    let lines = tool_event_response(&mut app, drag, ctrl).snapped;
+    assert!(lines.is_empty(), "{lines:?}");
+    tool_event(&mut app, ToolEvent::Up { x: 323.0, y: 100.0 }, ctrl);
+    assert_eq!(mover_bounds(&app).x0, 303);
+}
+
 /// The auto-selected layer is the moving set; an empty layer gives no box and no snap.
 #[test]
 fn move_tool_box_and_snapping_follow_the_auto_selected_layer() {
