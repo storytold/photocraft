@@ -265,15 +265,25 @@ mod tests {
     #[test]
     fn median_histogram_matches_the_direct_selection() {
         let src_rect = Rect::new(-10, -8, 36, 30);
-        // The output reaches past the source edge, where samples read as 0.
-        let out = Rect::new(-14, -3, 30, 34);
+        let windows = [
+            // Interior for every radius, with enough rows and columns to slide both ways.
+            Rect::new(6, 8, 20, 14),
+            // The bottom-left corner and the right edge include output outside the source.
+            Rect::new(-12, 26, -6, 32),
+            Rect::new(33, 4, 38, 8),
+            // The top edge includes the deliberate NaN at (15, -8) in the float source.
+            Rect::new(14, -9, 18, -6),
+        ];
+        let bits = |v: Vec<f32>| v.into_iter().map(f32::to_bits).collect::<Vec<_>>();
         for kind in 0..3 {
             let img = noisy(src_rect, kind);
             for r in [2, 3, 7, 16] {
                 for t in [None, Some(0.0), Some(10.0 / 255.0), Some(1.0)] {
-                    let bits = |v: Vec<f32>| v.into_iter().map(f32::to_bits).collect::<Vec<_>>();
-                    let fast = bits(median_ranked(&img, out, r, t));
-                    assert_eq!(fast, bits(median_direct(&img, out, r, t)), "kind {kind} r {r} threshold {t:?}");
+                    for out in windows {
+                        let fast = bits(median_ranked(&img, out, r, t));
+                        let direct = bits(median_direct(&img, out, r, t));
+                        assert!(fast == direct, "kind {kind} r {r} threshold {t:?} window {out:?}");
+                    }
                 }
             }
         }
