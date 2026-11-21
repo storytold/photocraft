@@ -70,19 +70,33 @@ pub fn encode_source(doc: &Document) -> Result<Vec<u8>> {
 
 /// Decodes smart-object contents (a `.pcraft` bundle, PSD/PSB, or any flat image format).
 pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
-    decode_source_classified(file_name, bytes, photocraft_io::svg::is_svg(bytes))
+    decode_source_with(file_name, bytes, &photocraft_raster::Interrupt::NONE)
 }
 
-/// Reuse the central format decision made by this render operation.
-fn decode_source_classified(file_name: &str, bytes: &[u8], svg: bool) -> Result<Document> {
+/// [`decode_source`] that stops with [`EngineError::Cancelled`] once `ctl` is cancelled: before
+/// and after an SVG import, and between the stages (and PSD/PSB layers) of any other import.
+pub(crate) fn decode_source_with(file_name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -> Result<Document> {
+    decode_source_classified_with(file_name, bytes, photocraft_io::svg::is_svg(bytes), ctl)
+}
+
+/// Decodes with the format decision the caller already made, and stops with
+/// [`EngineError::Cancelled`] once `ctl` is cancelled.
+fn decode_source_classified_with(file_name: &str, bytes: &[u8], svg: bool, ctl: &photocraft_raster::Interrupt) -> Result<Document> {
+    let cancelled = |_| EngineError::Cancelled;
+    ctl.check().map_err(cancelled)?;
     if svg {
         // This API has no warning channel. Stack/source caches and contents edits must not
         // turn a partial SVG import into silently complete smart-object contents.
-        return photocraft_io::svg::import_svg_bounded_images_strict(file_name, bytes, 24_000_000)
+        let doc = photocraft_io::svg::import_svg_bounded_images_strict(file_name, bytes, 24_000_000)
             .map(|imported| imported.document)
-            .map_err(|e| other(format!("can't read SVG smart object contents: {e}")));
+            .map_err(|e| other(format!("can't read SVG smart object contents: {e}")))?;
+        ctl.check().map_err(cancelled)?;
+        return Ok(doc);
     }
-    crate::file_cmds::import(file_name, bytes).map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))
+    crate::file_cmds::import_with_interrupt(file_name, bytes, ctl).map_err(|e| match e {
+        EngineError::Cancelled => EngineError::Cancelled,
+        e => other(format!("can't read smart object contents \"{file_name}\": {e}")),
+    })
 }
 
 fn base_name(path: &str) -> String {
@@ -204,10 +218,12 @@ use placing::{convert, reset_transform, shift_layer, via_copy};
 pub use placing::{layer_to_smart, layers_to_smart, placement};
 use rendering::refresh_or_fail;
 #[cfg(test)]
+pub(crate) use rendering::render_with_warnings;
+#[cfg(test)]
 pub(crate) use rendering::{DISPLAY_NATIVE_HASH_BYTES, WARNING_SOURCE_DECODES, WARNING_SOURCE_LIMIT};
 #[cfg(test)]
 use rendering::{NativeDigests, blend_surfaces, place, render_in};
-pub(crate) use rendering::{WarningRenderSources, render_with_warnings, render_with_warnings_using, source_box};
+pub(crate) use rendering::{WarningRenderSources, render_with_warnings_in, render_with_warnings_using, source_box};
 pub use rendering::{apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image};
 #[cfg(test)]
 use source::svg_source_image_in;

@@ -1,10 +1,11 @@
 use std::sync::PoisonError;
 
 use photocraft_geom::TILE_SIZE;
+use photocraft_raster::Interrupt;
 
 use super::{
-    Arc, ColorMode, Document, Layer, LayerContent, LayerId, Metadata, Mutex, PixelFormat, Rect, Result, SampleType, Session, SmartObject, SmartSource, Surface,
-    base_name, decode_source, json, other,
+    Arc, ColorMode, Document, EngineError, Layer, LayerContent, LayerId, Metadata, Mutex, PixelFormat, Rect, Result, SampleType, Session, SmartObject,
+    SmartSource, Surface, base_name, decode_source_with, json, other,
 };
 
 /// A linked file's bytes; `None` when it is missing or its path is not followed
@@ -213,13 +214,20 @@ pub(super) fn buffer_to_surface(buf: &photocraft_compose::Buffer, fmt: PixelForm
 /// A source's pixels in `fmt` from a flattened `buf` (the stack-mode combine, which has no
 /// document to composite).
 pub(super) fn source_surface_from_buffer(src: &Document, buf: &photocraft_compose::Buffer, fmt: PixelFormat) -> Result<Surface> {
-    let raster = |f| buffer_to_surface(buf, f);
+    let raster = |f| Ok(buffer_to_surface(buf, f));
     convert_source(src, fmt, raster)
 }
 
 /// `src` composited straight into `fmt` in blocks, without the full-size RGBA buffer
 /// [`photocraft_compose::flatten`] allocates (16 bytes a pixel on top of the surface).
+#[cfg(test)]
 pub(super) fn flattened_source(src: &Document, fmt: PixelFormat) -> Result<Surface> {
+    flattened_source_with(src, fmt, &Interrupt::NONE)
+}
+
+/// [`flattened_source`] that stops with [`EngineError::Cancelled`] once `ctl` is cancelled,
+/// checked before each block.
+pub(super) fn flattened_source_with(src: &Document, fmt: PixelFormat, ctl: &Interrupt) -> Result<Surface> {
     let b = src.bounds();
     if u64::from(b.width()) * u64::from(b.height()) > photocraft_compose::MAX_RENDER_PIXELS {
         return Err(other(format!("the smart object's {}×{} contents are too large to render", b.width(), b.height())));
@@ -228,9 +236,27 @@ pub(super) fn flattened_source(src: &Document, fmt: PixelFormat) -> Result<Surfa
     // the RGBA buffer, so those modes keep the buffer path.
     let native = |m| matches!(m, ColorMode::Cmyk | ColorMode::Lab);
     if native(src.mode) || native(fmt.mode) {
-        return source_surface_from_buffer(src, &photocraft_compose::flatten(src), fmt);
+        // The buffer `photocraft_compose::flatten` gives, composited in bands of about
+        // [`BLOCK_PIXELS`] so a cancel is seen between them.
+        check(ctl)?;
+        let too_large = || other("the smart object's contents are too large to render".to_string());
+        let pixels = usize::try_from(u64::from(b.width()) * u64::from(b.height())).map_err(|_| too_large())?;
+        let mut px = crate::allocation::capacity(pixels, "smart object source")?;
+        let rows = i32::try_from(BLOCK_PIXELS / u64::from(b.width().max(1))).unwrap_or(i32::MAX);
+        photocraft_compose::render_bands(src, b, rows, |band| {
+            check(ctl)?;
+            px.extend_from_slice(&band.px);
+            Ok::<(), EngineError>(())
+        })?;
+        check(ctl)?;
+        return source_surface_from_buffer(src, &photocraft_compose::Buffer { rect: b, px }, fmt);
     }
-    convert_source(src, fmt, |f| composite_in_blocks(src, f))
+    convert_source(src, fmt, |f| composite_in_blocks(src, f, ctl))
+}
+
+/// `Err(Cancelled)` once `ctl` is cancelled.
+pub(super) fn check(ctl: &Interrupt) -> Result<()> {
+    ctl.check().map_err(|_| EngineError::Cancelled)
 }
 
 /// Pixels per block of [`composite_in_blocks`]: the compositor's own bands are 8 Mpx, which for
@@ -241,7 +267,7 @@ const BLOCK_PIXELS: u64 = 1 << 20;
 /// composite and its conversion never cover more than [`BLOCK_PIXELS`]. Blocks are whole tiles,
 /// so each block's tiles move into the result as they are: nothing is allocated outside the
 /// block, and nothing is copied.
-fn composite_in_blocks(src: &Document, fmt: PixelFormat) -> Surface {
+fn composite_in_blocks(src: &Document, fmt: PixelFormat, ctl: &Interrupt) -> Result<Surface> {
     let b = src.bounds();
     let (bw, bh) = block_size(b.width());
     let mut out = Surface::new(fmt);
@@ -254,6 +280,7 @@ fn composite_in_blocks(src: &Document, fmt: PixelFormat) -> Surface {
             let x1 = x.saturating_add(bw);
             let block = Rect::new(x, y, x1, y1).intersect(&b);
             if !block.is_empty() {
+                check(ctl)?;
                 let mut part = photocraft_compose::composite_to_surface(src, block, fmt, None);
                 out.put_tiles(part.take_tiles(block));
             }
@@ -262,7 +289,7 @@ fn composite_in_blocks(src: &Document, fmt: PixelFormat) -> Surface {
         y = y1;
     }
     out.prune();
-    out
+    Ok(out)
 }
 
 /// Width and height of a block of [`composite_in_blocks`] for a `width`-pixel source: whole tiles,
@@ -277,15 +304,15 @@ fn block_size(width: u32) -> (i32, i32) {
 
 /// Runs the gray and 32-bit conversions a source needs to reach `fmt`; `raster` yields the
 /// source's composite at a pixel format.
-fn convert_source(src: &Document, fmt: PixelFormat, raster: impl FnOnce(PixelFormat) -> Surface) -> Result<Surface> {
+fn convert_source(src: &Document, fmt: PixelFormat, raster: impl FnOnce(PixelFormat) -> Result<Surface>) -> Result<Surface> {
     let gray = fmt.mode == ColorMode::Grayscale && src.pixel_format().mode != ColorMode::Grayscale;
     let linear = fmt.sample == SampleType::F32 && src.depth != SampleType::F32;
     if !gray && !linear {
-        return Ok(raster(fmt));
+        return raster(fmt);
     }
     let mut doc = Document::new(src.name.clone(), src.size, src.mode, src.depth);
     doc.icc_profile = src.icc_profile.clone();
-    doc.layers = vec![Layer::new("source", LayerContent::Raster(raster(src.pixel_format())))].into();
+    doc.layers = vec![Layer::new("source", LayerContent::Raster(raster(src.pixel_format())?))].into();
     if gray {
         let gray_profile = crate::color_cmds::working_profile(ColorMode::Grayscale);
         crate::color_cmds::convert_document(&mut doc, &gray_profile, craft_cms::Intent::RelativeColorimetric, true)?;
@@ -304,6 +331,12 @@ fn convert_source(src: &Document, fmt: PixelFormat, raster: impl FnOnce(PixelFor
 /// An SVG source rendered at `scale` times its own size (cached per scale), so a vector smart
 /// object stays sharp however it is placed.
 pub fn svg_source_image(bytes: &[u8], fmt: PixelFormat, scale: f64) -> Result<SourceImage> {
+    svg_source_image_with(bytes, fmt, scale, &Interrupt::NONE)
+}
+
+/// [`svg_source_image`] that stops with [`EngineError::Cancelled`] once `ctl` is cancelled,
+/// checked before and after the drawing is rasterized.
+fn svg_source_image_with(bytes: &[u8], fmt: PixelFormat, scale: f64, ctl: &Interrupt) -> Result<SourceImage> {
     let mut h = blake3::Hasher::new();
     h.update(bytes);
     h.update(&scale.to_bits().to_le_bytes());
@@ -311,7 +344,9 @@ pub fn svg_source_image(bytes: &[u8], fmt: PixelFormat, scale: f64) -> Result<So
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
+    check(ctl)?;
     let buf = photocraft_io::svg::rasterize_bounded(bytes, scale as f32, 24_000_000).map_err(|e| other(format!("can't render the SVG smart object: {e}")))?;
+    check(ctl)?;
     let img = SourceImage { surface: Arc::new(buffer_to_surface(&buf, fmt)), bounds: buf.rect };
     cache_put(key, img.clone());
     Ok(img)
@@ -319,7 +354,13 @@ pub fn svg_source_image(bytes: &[u8], fmt: PixelFormat, scale: f64) -> Result<So
 
 /// Render SVG's sRGB colours into the destination profile before placement. The profile is
 /// part of the source cache key, so assigning a different profile cannot reuse old colours.
+#[cfg(test)]
 pub(super) fn svg_source_image_in(bytes: &[u8], doc: &Document, scale: f64) -> Result<SourceImage> {
+    svg_source_image_in_with(bytes, doc, scale, &Interrupt::NONE)
+}
+
+/// [`svg_source_image_in`] that stops with [`EngineError::Cancelled`] once `ctl` is cancelled.
+pub(super) fn svg_source_image_in_with(bytes: &[u8], doc: &Document, scale: f64, ctl: &Interrupt) -> Result<SourceImage> {
     use photocraft_color::{ColorMode, SampleType};
 
     let fmt = doc.pixel_format();
@@ -327,7 +368,7 @@ pub(super) fn svg_source_image_in(bytes: &[u8], doc: &Document, scale: f64) -> R
     // An exact built-in sRGB destination needs no CMS conversion. Keep the direct render
     // path (and its depth-specific cache) without approximating custom profile equality.
     if doc.mode == ColorMode::Rgb && profile.to_bytes().as_ref() == craft_cms::Builtin::Srgb.profile().to_bytes().as_ref() {
-        return svg_source_image(bytes, fmt, scale);
+        return svg_source_image_with(bytes, fmt, scale, ctl);
     }
     let mut h = blake3::Hasher::new();
     h.update(b"svg-icc\0");
@@ -338,7 +379,8 @@ pub(super) fn svg_source_image_in(bytes: &[u8], doc: &Document, scale: f64) -> R
     if let Some(image) = cache_get(&key) {
         return Ok(image);
     }
-    let source = svg_source_image(bytes, PixelFormat::new(ColorMode::Rgb, SampleType::F32, true), scale)?;
+    let source = svg_source_image_with(bytes, PixelFormat::new(ColorMode::Rgb, SampleType::F32, true), scale, ctl)?;
+    check(ctl)?;
     let image = convert_svg_source(source, doc)?;
     cache_put(key, image.clone());
     Ok(image)
@@ -369,24 +411,37 @@ pub(crate) fn vector_scale(sm: &SmartObject) -> f64 {
 
 /// The composited source image of `bytes` in pixel format `fmt` (decoded once, then cached).
 pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat) -> Result<SourceImage> {
-    source_image_inner(file_name, bytes, fmt, None)
+    source_image_with(file_name, bytes, fmt, &Interrupt::NONE)
 }
 
+/// [`source_image`] that stops with [`EngineError::Cancelled`] once `ctl` is cancelled, while
+/// the source is decoded and while it is composited. A cancelled decode caches nothing.
+pub(super) fn source_image_with(file_name: &str, bytes: &[u8], fmt: PixelFormat, ctl: &Interrupt) -> Result<SourceImage> {
+    source_image_inner(file_name, bytes, fmt, None, ctl)
+}
+
+#[cfg(test)]
 pub(super) fn source_image_classified(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: bool) -> Result<SourceImage> {
-    source_image_inner(file_name, bytes, fmt, Some(svg))
+    source_image_classified_with(file_name, bytes, fmt, svg, &Interrupt::NONE)
 }
 
-fn source_image_inner(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: Option<bool>) -> Result<SourceImage> {
+/// Decodes with the format decision the caller already made, and stops with
+/// [`EngineError::Cancelled`] once `ctl` is cancelled.
+pub(super) fn source_image_classified_with(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: bool, ctl: &Interrupt) -> Result<SourceImage> {
+    source_image_inner(file_name, bytes, fmt, Some(svg), ctl)
+}
+
+fn source_image_inner(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: Option<bool>, ctl: &Interrupt) -> Result<SourceImage> {
     let key = source_cache_key(file_name, bytes, fmt, svg);
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
     crate::memory_gate::ensure(&format!("render the smart object \u{201c}{file_name}\u{201d}"), crate::memory_gate::smart_render_need(bytes))?;
     let doc = match svg {
-        Some(svg) => super::decode_source_classified(file_name, bytes, svg)?,
-        None => decode_source(file_name, bytes)?,
+        Some(svg) => super::decode_source_classified_with(file_name, bytes, svg, ctl)?,
+        None => decode_source_with(file_name, bytes, ctl)?,
     };
-    let img = SourceImage { surface: Arc::new(flattened_source(&doc, fmt)?), bounds: doc.bounds() };
+    let img = SourceImage { surface: Arc::new(flattened_source_with(&doc, fmt, ctl)?), bounds: doc.bounds() };
     cache_put(key, img.clone());
     Ok(img)
 }

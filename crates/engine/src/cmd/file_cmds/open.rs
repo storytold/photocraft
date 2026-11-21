@@ -47,6 +47,12 @@ pub(crate) fn import_with_options(name: &str, bytes: &[u8], opts: &photocraft_io
     import_result_with(name, bytes, opts).map(|r| r.document)
 }
 
+/// [`import`] that checks `ctl` between stages (and per layer for PSD/PSB). A cancelled import
+/// fails with [`EngineError::Cancelled`].
+pub(crate) fn import_with_interrupt(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -> Result<Document> {
+    import_result_for_open_with(name, bytes, &photocraft_io::ImportOptions::default(), ctl).map(|(r, _)| r.document)
+}
+
 /// [`import`] for a file that becomes a document of its own (Revert, Load Files into Stack;
 /// Batch's scratch sessions use [`import_at_raw_ppi`]): a developed raw gets Preferences › Raw
 /// Defaults › Resolution, as it does through File › Open.
@@ -81,8 +87,22 @@ pub(super) fn import_result_with(name: &str, bytes: &[u8], opts: &photocraft_io:
 /// [`import_result_with`], also telling whether a PSD/PSB had damaged data it recovered from, as
 /// File › Open's job learns it (`photocraft_io::import_for_open`), so an interactive caller can ask.
 pub(super) fn import_result_for_open(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<(photocraft_io::ImportResult, bool)> {
+    import_result_for_open_with(name, bytes, opts, &photocraft_raster::Interrupt::NONE)
+}
+
+/// [`import_result_for_open`] that checks `ctl`; a cancelled import fails with
+/// [`EngineError::Cancelled`].
+fn import_result_for_open_with(
+    name: &str,
+    bytes: &[u8],
+    opts: &photocraft_io::ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<(photocraft_io::ImportResult, bool)> {
     crate::allocation::checkpoint("importing document")?;
-    let (r, damaged) = photocraft_io::import_for_open(name, bytes, opts).map_err(|e| crate::error::io_open_error(name, e))?;
+    let (r, damaged) = photocraft_io::import_for_open_with(name, bytes, opts, ctl).map_err(|e| match e {
+        photocraft_io::IoError::Cancelled => EngineError::Cancelled,
+        e => crate::error::io_open_error(name, e),
+    })?;
     // Auxiliary imports return only a document and cannot surface the preview's fidelity warning.
     // Open has its own warning-preserving path; never silently place or process a thumbnail.
     if r.preview_only {
