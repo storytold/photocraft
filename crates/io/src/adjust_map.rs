@@ -377,13 +377,21 @@ pub(crate) fn is_unpadded_photocraft_gradient_map(data: &[u8]) -> bool {
 /// `grdm` version 1 for [`Adjustment::GradientMap`] (Classic interpolation, Smoothness 0, so
 /// the stops are reproduced exactly).
 fn write_gradient_map(stops: &[(f32, [f32; 3])], reverse: bool, dither: bool) -> Vec<u8> {
-    write_grdm(stops, &[], 0.0, crate::gradient_bake::Method::Classic, reverse, dither)
+    write_grdm(stops, &[], 0.0, crate::gradient_bake::Method::Classic, reverse, dither, false)
 }
 
 /// `grdm` with Photoshop's gradient settings: the midpoint of segment k (after stop k, in
 /// location order, `0..1`) is stored on stop k + 1, Smoothness in 4096ths, and a method other
 /// than Classic in a version 3 block (#8351).
-fn write_grdm(stops: &[(f32, [f32; 3])], mids: &[f32], smooth: f32, method: crate::gradient_bake::Method, reverse: bool, dither: bool) -> Vec<u8> {
+fn write_grdm(
+    stops: &[(f32, [f32; 3])],
+    mids: &[f32],
+    smooth: f32,
+    method: crate::gradient_bake::Method,
+    reverse: bool,
+    dither: bool,
+    hard_steps: bool,
+) -> Vec<u8> {
     let mut v = Vec::new();
     let code = method.code();
     put16(&mut v, if code.is_some() { 3 } else { 1 });
@@ -398,15 +406,17 @@ fn write_grdm(stops: &[(f32, [f32; 3])], mids: &[f32], smooth: f32, method: crat
         put16(&mut v, u);
     }
     put16(&mut v, stops.len().min(usize::from(u16::MAX)) as u16);
-    // Locations in 4096ths. A hard step ends one hair before its stop (a Stripes map's baked steps), which rounds onto
-    // the stop itself; at the very end that would leave two stops at 4096 and a reader would take the earlier colour
-    // at t = 1, so the step before the final stop moves one 4096th down (CodeRabbit on #16161).
+    // Locations in 4096ths. A baked Stripes map (`hard_steps`) holds each colour up to one hair before the next stop,
+    // which rounds onto that stop: two stops at one location, where a reader takes the earlier colour at the
+    // boundary. Every such step moves one 4096th down, last first, so the later stop's colour holds at its own
+    // location; other maps keep their stops exactly (CodeRabbit on #16161).
     let mut locs: Vec<u32> = stops.iter().take(usize::from(u16::MAX)).map(|(t, _)| (t.clamp(0.0, 1.0) * 4096.0).round() as u32).collect();
-    if let [.., before, last] = locs.as_mut_slice()
-        && *last == 4096
-        && *before == 4096
-    {
-        *before = 4095;
+    if hard_steps {
+        for i in (0..locs.len().saturating_sub(1)).rev() {
+            if locs[i] >= locs[i + 1] && locs[i + 1] > 0 {
+                locs[i] = locs[i + 1] - 1;
+            }
+        }
     }
     for (k, (_, c)) in stops.iter().take(usize::from(u16::MAX)).enumerate() {
         let mid = k.checked_sub(1).and_then(|s| mids.get(s)).copied().filter(|m| m.is_finite()).map_or(50, |m| (m.clamp(0.05, 0.95) * 100.0).round() as u32);
@@ -728,10 +738,17 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
             let mut stops = src.stops.clone();
             stops.sort_by(|a, b| a.0.total_cmp(&b.0));
             let method = crate::gradient_bake::Method::from_name(&src.method).unwrap_or(crate::gradient_bake::Method::Classic);
-            return block(b"grdm", write_grdm(&stops, &src.midpoints, src.smoothness, method, *reverse, *dither));
+            return block(b"grdm", write_grdm(&stops, &src.midpoints, src.smoothness, method, *reverse, *dither, false));
         }
-        Adjustment::GradientMap { stops, reverse, dither, .. } => {
-            return block(b"grdm", write_gradient_map(&encode::gradient_stops(stops), *reverse, *dither));
+        Adjustment::GradientMap { stops, reverse, dither, source } => {
+            let hard_steps = source.as_ref().is_some_and(|src| src.method.eq_ignore_ascii_case("stripes"));
+            let stops = encode::gradient_stops(stops);
+            let data = if hard_steps {
+                write_grdm(&stops, &[], 0.0, crate::gradient_bake::Method::Classic, *reverse, *dither, true)
+            } else {
+                write_gradient_map(&stops, *reverse, *dither)
+            };
+            return block(b"grdm", data);
         }
         Adjustment::Vibrance { vibrance, saturation } => return block(b"vibA", encode::vibrance(*vibrance, *saturation)),
         Adjustment::ColorBalance { shadows, midtones, highlights, preserve_luminosity } => {
