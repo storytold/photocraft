@@ -1210,3 +1210,437 @@ fn pencil_auto_erase_knows_the_indexed_foreground() {
     s.execute("paint.pencil", pencil).unwrap();
     assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(8, 8), [1.0, 1.0, 1.0, 1.0]);
 }
+
+#[test]
+fn indexed_color_custom_palette_uses_the_table_verbatim() {
+    let mut s = session(24, 16, 8, "rgb");
+    let table = ["#ff0000", "#00ff00", "#0000ff", "#ffffff"];
+    let r = s.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": table, "dither": "none"})).unwrap();
+    let d = doc(&s);
+    assert_eq!((d.mode, d.depth), (ColorMode::Indexed, SampleType::U8));
+    let t = d.color_table.as_ref().unwrap();
+    assert_eq!(t.colors, vec![[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]]);
+    assert_eq!(t.transparent, None);
+    assert_eq!(r["colors"].as_u64().unwrap(), 4);
+    // Every pixel lands on the given table.
+    assert!(colours(d).iter().all(|c| t.colors.contains(c)));
+}
+
+#[test]
+fn indexed_color_custom_palette_ignores_count_and_forced() {
+    let mut s = session(12, 8, 8, "rgb");
+    // `colors` is disabled with a custom table: even an out-of-range value must not fail.
+    s.execute("image.mode.indexedColor", json!({"palette": "custom", "colors": 0, "forced": "primaries", "paletteColors": ["#123456", "#654321"]})).unwrap();
+    let t = doc(&s).color_table.as_ref().unwrap();
+    assert_eq!(t.colors, vec![[0x12, 0x34, 0x56], [0x65, 0x43, 0x21]]);
+}
+
+#[test]
+fn indexed_color_custom_palette_rejects_bad_tables_without_editing() {
+    let mut s = session(12, 8, 16, "rgb");
+    let before = s.active().unwrap().history.past_len();
+    for p in [
+        json!({"palette": "custom"}), // no paletteColors
+        json!({"palette": "custom", "paletteColors": null}),
+        json!({"palette": "custom", "paletteColors": []}),                   // 0 entries
+        json!({"palette": "custom", "paletteColors": ["#ff0000"]}),          // 1 entry
+        json!({"palette": "custom", "paletteColors": vec!["#ff0000"; 257]}), // 257 entries
+        json!({"palette": "custom", "paletteColors": ["#ff0000", "not-a-colour"]}),
+        json!({"palette": "custom", "paletteColors": ["#ff0000", [1.0, 2.0]]}), // short array
+    ] {
+        assert!(s.execute("image.mode.indexedColor", p.clone()).is_err(), "{p}");
+    }
+    assert_eq!(s.active().unwrap().history.past_len(), before);
+    assert_eq!((doc(&s).mode, doc(&s).depth), (ColorMode::Rgb, SampleType::U16));
+}
+
+#[test]
+fn indexed_color_custom_palette_transparency_appends_white() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 4 { [1.0, 0.0, 0.0, 1.0] } else { [0.0; 4] });
+    s.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#ff0000", "#00ff00"], "dither": "none"})).unwrap();
+    let t = doc(&s).color_table.as_ref().unwrap();
+    assert_eq!(t.colors, vec![[255, 0, 0], [0, 255, 0], [255, 255, 255]]);
+    assert_eq!(t.transparent, Some(2));
+    // A full 256-entry table has no room for the transparent entry.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 4 { [1.0, 0.0, 0.0, 1.0] } else { [0.0; 4] });
+    let full: Vec<String> = (0..256).map(|i| format!("#{:02x}0000", i)).collect();
+    s.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": full, "dither": "none"})).unwrap();
+    let t = doc(&s).color_table.as_ref().unwrap();
+    assert_eq!(t.colors.len(), 256);
+    assert_eq!(t.transparent, None);
+}
+#[test]
+fn indexed_color_explicit_transparent_entry() {
+    // Custom palette with clear pixels: the explicit entry is used as-is, no white appended.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| {
+        if x < 3 {
+            [1.0, 0.0, 0.0, 1.0]
+        } else if x < 6 {
+            [0.0, 0.0, 1.0, 1.0]
+        } else {
+            [0.0; 4]
+        }
+    });
+    let r = s
+        .execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#ff0000", "#0000ff"], "dither": "none", "transparent": 1}))
+        .unwrap();
+    let d = doc(&s);
+    let t = d.color_table.as_ref().unwrap();
+    assert_eq!(t.colors, vec![[255, 0, 0], [0, 0, 255]]);
+    assert_eq!(t.transparent, Some(1));
+    assert_eq!(r["transparentIndex"].as_u64(), Some(1));
+    // Clear pixels and pixels matching the transparent entry become transparent; red stays opaque.
+    assert_eq!(d.layers[0].surface().unwrap().rgba(7, 0), [0.0, 0.0, 1.0, 0.0]);
+    assert_eq!(d.layers[0].surface().unwrap().rgba(0, 0), [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(d.layers[0].surface().unwrap().rgba(4, 0), [0.0, 0.0, 1.0, 0.0]);
+    assert_eq!(d.layers[0].name, "Index");
+}
+#[test]
+fn indexed_color_explicit_transparent_without_clear_pixels() {
+    // The entry can be marked even when the image has no clear pixels (Photoshop's Color Table):
+    // pixels that quantize to the transparent entry become transparent.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "white"})).unwrap();
+    paint(&mut s, |x, _| if x < 4 { [1.0, 0.0, 0.0, 1.0] } else { [0.0, 1.0, 1.0, 1.0] });
+    let r = s
+        .execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#ff0000", "#00ffff"], "dither": "none", "transparent": 1}))
+        .unwrap();
+    let d = doc(&s);
+    let t = d.color_table.as_ref().unwrap();
+    assert_eq!(t.colors, vec![[255, 0, 0], [0, 255, 255]]);
+    assert_eq!(t.transparent, Some(1));
+    assert_eq!(r["transparentIndex"].as_u64(), Some(1));
+    assert_eq!(d.layers[0].surface().unwrap().rgba(0, 0), [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(d.layers[0].surface().unwrap().rgba(6, 0), [0.0, 1.0, 1.0, 0.0]);
+}
+#[test]
+fn indexed_color_explicit_null_transparent_disables_transparency() {
+    // Explicit `"transparent": null` (e.g. loading a 768-byte .act without a trailer) produces
+    // an opaque indexed image even when the source had clear pixels.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 4 { [1.0, 0.0, 0.0, 1.0] } else { [0.0; 4] });
+    s.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#000000", "#ff0000"], "dither": "none", "transparent": null})).unwrap();
+    let d = doc(&s);
+    let t = d.color_table.as_ref().unwrap();
+    assert_eq!(t.colors, vec![[0, 0, 0], [255, 0, 0]]);
+    assert_eq!(t.transparent, None);
+    assert_eq!(d.layers[0].surface().unwrap().rgba(6, 0), [0.0, 0.0, 0.0, 1.0]);
+    // Subsequent Color Table edit making entry 0 transparent and then clearing it again works
+    // even when entry 0 is black [0, 0, 0] (the surface's default pixel when transparent).
+    s.execute("image.mode.colorTable", json!({"transparent": 0})).unwrap();
+    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(6, 0), [0.0, 0.0, 0.0, 0.0]);
+    s.execute("image.mode.colorTable", json!({"transparent": null})).unwrap();
+    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(6, 0), [0.0, 0.0, 0.0, 1.0]);
+}
+#[test]
+fn indexed_color_explicit_transparent_builtin_palette() {
+    // Built-in palette: no white appended, the table is exactly the computed colours.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 4 { [1.0, 0.0, 0.0, 1.0] } else { [0.0; 4] });
+    let r = s.execute("image.mode.indexedColor", json!({"palette": "adaptive", "colors": 4, "forced": "none", "dither": "none", "transparent": 0})).unwrap();
+    let d = doc(&s);
+    let t = d.color_table.as_ref().unwrap();
+    assert_eq!(t.colors, vec![[255, 0, 0]]);
+    assert_eq!(t.transparent, Some(0));
+    assert_eq!(r["transparentIndex"].as_u64(), Some(0));
+    assert_eq!(d.layers[0].surface().unwrap().rgba(7, 0)[3], 0.0);
+}
+#[test]
+fn indexed_color_explicit_transparent_rejects_bad_indices_without_editing() {
+    let mut s = session(8, 4, 16, "rgb");
+    let before = s.active().unwrap().history.past_len();
+    for t in [json!(2), json!(300), json!(-1), json!("1"), json!(1.5), json!(true)] {
+        assert!(s.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#ff0000", "#00ffff"], "transparent": t})).is_err(), "{t}");
+    }
+    assert_eq!(s.active().unwrap().history.past_len(), before);
+    assert_eq!((doc(&s).mode, doc(&s).depth), (ColorMode::Rgb, SampleType::U16));
+    // null explicitly disables transparency (no clear pixels here, so no entry either way).
+    s.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#ff0000", "#00ffff"], "transparent": null})).unwrap();
+    assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, None);
+}
+
+#[test]
+fn indexed_color_full_builtin_palette_keeps_clear_pixels_without_an_entry() {
+    // A 256-entry built-in palette (System Mac) has no room for the auto-appended white entry:
+    // clear pixels keep their legacy handling (left alone), not flattened to opaque.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 4 { [1.0, 0.0, 0.0, 1.0] } else { [0.0; 4] });
+    let r = s.execute("image.mode.indexedColor", json!({"palette": "systemMac", "dither": "none"})).unwrap();
+    let d = doc(&s);
+    assert_eq!(d.color_table.as_ref().unwrap().transparent, None, "no room for a 257th entry");
+    assert_eq!(r["transparentIndex"], Value::Null);
+    // Clear pixels are left alone (alpha 0), opaque red is quantized and stays opaque.
+    let surf = d.layers[0].surface().unwrap();
+    assert_eq!(surf.rgba(6, 0), [0.0, 0.0, 0.0, 0.0]);
+    assert_eq!(surf.rgba(2, 0)[3], 1.0);
+}
+
+#[test]
+fn web_palette_keeps_the_transparent_entry_and_a_full_exact_table_cannot() {
+    // Documented in docs/development.md (Indexed Color conversion): a table that fills all 256
+    // entries has no slot for the auto-appended transparent entry. Web has 216, so it keeps one.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 4 { [1.0, 0.0, 0.0, 1.0] } else { [0.0; 4] });
+    let r = s.execute("image.mode.indexedColor", json!({"palette": "web", "dither": "none"})).unwrap();
+    let web = doc(&s).color_table.as_ref().unwrap();
+    assert_eq!(web.colors.len(), 217, "216 web colours plus the appended transparent entry");
+    assert_eq!(web.transparent, Some(216));
+    assert_eq!(r["transparentIndex"], json!(216));
+
+    // Exact: 255 distinct reds plus one clear black pixel fill the table, so there is no room.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, y| {
+        let i = y * 16 + x;
+        if i < 255 { [(i + 1) as f32 / 255.0, 0.0, 0.0, 1.0] } else { [0.0; 4] }
+    });
+    let r = s.execute("image.mode.indexedColor", json!({"palette": "exact", "dither": "none"})).unwrap();
+    assert_eq!(r["colors"], json!(256), "the image's 256 colours fill the table");
+    assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, None, "a full table has no slot for the transparent entry");
+    assert_eq!(r["transparentIndex"], Value::Null);
+}
+
+#[test]
+fn transparent_first_heads_the_table_and_is_the_default_last() {
+    // The dialog's "1st index as transparent": the auto-appended entry goes to index 0 and the
+    // table's other entries shift up; the default keeps Photoshop's last-entry placement.
+    let clear_doc = || {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+        paint(&mut s, |x, _| if x < 4 { [1.0, 0.0, 0.0, 1.0] } else { [0.0; 4] });
+        s
+    };
+    let mut first = clear_doc();
+    let r = first
+        .execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#ff0000", "#00ff00"], "dither": "none", "transparentFirst": true}))
+        .unwrap();
+    let t = doc(&first).color_table.as_ref().unwrap();
+    assert_eq!(t.transparent, Some(0), "the transparent entry heads the table");
+    assert_eq!(r["transparentIndex"], json!(0));
+    assert_eq!(t.colors, vec![[255, 255, 255], [255, 0, 0], [0, 255, 0]], "the custom colours shift up by one");
+    // Clear pixels are transparent; the opaque red pixels stay opaque.
+    let surf = doc(&first).layers[0].surface().unwrap();
+    assert_eq!(surf.rgba(6, 0)[3], 0.0);
+    assert_eq!(surf.rgba(2, 0)[3], 1.0);
+
+    // Default: appended last, as before.
+    let mut last = clear_doc();
+    last.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#ff0000", "#00ff00"], "dither": "none"})).unwrap();
+    let t = doc(&last).color_table.as_ref().unwrap();
+    assert_eq!(t.transparent, Some(2), "default keeps the transparent entry last");
+    assert_eq!(t.colors, vec![[255, 0, 0], [0, 255, 0], [255, 255, 255]]);
+}
+
+#[test]
+fn color_table_clearing_transparency_leaves_empty_pixels_alone() {
+    // A non-black transparent entry: fully-transparent black pixels (the surface default — an
+    // empty layer or pruned tiles) must not take the transparent index, or clearing
+    // transparency would materialise them as opaque entry colour.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 4 { [0.0, 0.0, 0.0, 1.0] } else { [0.0; 4] });
+    s.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#000000", "#ff0000"], "dither": "none", "transparent": 1})).unwrap();
+    assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, Some(1));
+    // A second, empty layer: its pixels are the surface default [0,0,0,0].
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let empty = doc(&s).layers.len() - 1;
+    s.execute("image.mode.colorTable", json!({"transparent": null})).unwrap();
+    let d = doc(&s);
+    // The real transparent pixel (stored as the entry colour) becomes opaque red.
+    assert_eq!(d.layers[0].surface().unwrap().rgba(6, 0), [1.0, 0.0, 0.0, 1.0]);
+    // The empty layer stays empty: no opaque red materialised.
+    let surf = d.layers[empty].surface().unwrap();
+    assert_eq!(surf.rgba(0, 0), [0.0; 4]);
+    assert_eq!(surf.rgba(7, 3), [0.0; 4]);
+}
+
+/// An 8×4 doc: columns 0..=3 opaque red, columns 4..=7 clear (16 transparent pixels).
+fn half_clear() -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 4 { [1.0, 0.0, 0.0, 1.0] } else { [0.0; 4] });
+    s
+}
+
+#[test]
+fn indexed_color_reports_flattened_transparent_pixels() {
+    // An explicit "transparent": null flattens the clear pixels to opaque and reports how many.
+    let mut s = half_clear();
+    let r = s
+        .execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#000000", "#ff0000"], "dither": "none", "transparent": null}))
+        .unwrap();
+    assert_eq!(r["flattened"].as_u64(), Some(16), "the 16 clear pixels are flattened");
+    assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, None);
+    // An opaque source has no clear pixels: nothing is flattened.
+    let mut s = session(8, 4, 8, "rgb");
+    let r = s
+        .execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#000000", "#ff0000"], "dither": "none", "transparent": null}))
+        .unwrap();
+    assert_eq!(r["flattened"].as_u64(), Some(0));
+}
+
+#[test]
+fn indexed_color_auto_path_keeps_clear_pixels_and_reports_zero() {
+    // The auto path (no explicit transparent) appends a white entry and keeps clear pixels:
+    // nothing is flattened, so the warning must not fire.
+    let mut s = half_clear();
+    let r = s.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#000000", "#ff0000"], "dither": "none"})).unwrap();
+    assert_eq!(r["flattened"].as_u64(), Some(0));
+    let t = doc(&s).color_table.as_ref().unwrap();
+    assert_eq!(t.transparent, Some(2), "a white transparent entry is auto-appended");
+    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(6, 0)[3], 0.0, "clear pixels stay transparent");
+}
+
+#[test]
+fn color_table_reports_flattened_when_clearing_transparency() {
+    // Clearing the transparent entry makes its own clear pixels opaque and reports how many.
+    let mut s = indexed_with_transparency(); // 8×8, clear at columns 6..=7 (16 px), entry 2 transparent
+    let r = s.execute("image.mode.colorTable", json!({"transparent": null})).unwrap();
+    assert_eq!(r["flattened"].as_u64(), Some(16), "the 16 clear pixels become opaque");
+    let t = doc(&s).color_table.as_ref().unwrap();
+    assert_eq!(t.transparent, None);
+    // The formerly clear pixels are now opaque (the white entry colour at full alpha).
+    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(6, 0), [1.0, 1.0, 1.0, 1.0]);
+}
+
+#[test]
+fn color_table_reports_zero_flattened_when_setting_transparency() {
+    // Setting (not clearing) transparency makes pixels transparent, not opaque: no warning.
+    let mut s = session(8, 4, 8, "rgb");
+    s.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#ff0000", "#00ffff"], "dither": "none"})).unwrap();
+    let r = s.execute("image.mode.colorTable", json!({"transparent": 1})).unwrap();
+    assert_eq!(r["flattened"].as_u64(), Some(0));
+    assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, Some(1));
+}
+
+/// An 8×4 doc: columns 0..=3 opaque white, columns 4..=7 clear.
+fn white_and_clear() -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 4 { [1.0, 1.0, 1.0, 1.0] } else { [0.0; 4] });
+    s
+}
+
+#[test]
+fn transparent_first_keeps_opaque_white() {
+    // "1st index as transparent" with the default forced blackWhite puts the auto-appended
+    // white ahead of the forced white. An opaque white pixel is equidistant from both; it must
+    // take the real entry and stay opaque, not be punched out (review 5941965522).
+    let mut s = white_and_clear();
+    let r = s.execute("image.mode.indexedColor", json!({"dither": "none", "transparentFirst": true})).unwrap();
+    assert_eq!(r["transparentIndex"], json!(0));
+    assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, Some(0));
+    let surf = doc(&s).layers[0].surface().unwrap();
+    assert_eq!(surf.rgba(1, 1), [1.0, 1.0, 1.0, 1.0], "an opaque white pixel stays opaque");
+    assert_eq!(surf.rgba(6, 1)[3], 0.0, "clear pixels are still transparent");
+    // Every dither: the carrying entry never wins an opaque pixel.
+    for dither in ["diffusion", "pattern", "noise"] {
+        let mut s = white_and_clear();
+        s.execute("image.mode.indexedColor", json!({"dither": dither, "transparentFirst": true})).unwrap();
+        let surf = doc(&s).layers[0].surface().unwrap();
+        assert_eq!(surf.rgba(1, 1)[3], 1.0, "{dither}");
+    }
+}
+
+#[test]
+fn color_table_keeps_opaque_white_after_a_transparent_first_conversion() {
+    // The dialog seeds `transparent: 0` from the document, so Color Table must not re-index an
+    // opaque white onto the transparent entry that shares its colour: any edit re-indexes every
+    // pixel (review 5941965522). Index 1 is the forced black, not the forced white.
+    let mut s = white_and_clear();
+    s.execute("image.mode.indexedColor", json!({"dither": "none", "transparentFirst": true})).unwrap();
+    let table = doc(&s).color_table.clone().unwrap();
+    assert_eq!(table.transparent, Some(0));
+    assert_eq!(table.colors[0], [255, 255, 255], "the auto entry heads the table");
+    assert_ne!(table.colors[1], [255, 255, 255], "the forced white is another entry");
+    s.execute("image.mode.colorTable", json!({"entries": {"1": "#123456"}})).unwrap();
+    let surf = doc(&s).layers[0].surface().unwrap();
+    assert_eq!(surf.rgba(1, 1), [1.0, 1.0, 1.0, 1.0], "the opaque white stays opaque");
+    assert_eq!(surf.rgba(6, 1)[3], 0.0, "clear pixels stay transparent");
+}
+
+#[test]
+fn color_table_re_indexes_by_nearest_when_the_indices_are_gone() {
+    // The recorded indices hold only while the layer has exactly the recorded tiles, so any later
+    // edit sends Color Table down the nearest-colour path. An opaque white must still not take the
+    // transparent entry that shares its colour (#7320, review 5941965522).
+    let mut s = white_and_clear();
+    s.execute("image.mode.indexedColor", json!({"dither": "none", "transparentFirst": true})).unwrap();
+    let table = doc(&s).color_table.clone().unwrap();
+    assert_eq!(table.transparent, Some(0));
+    let id = doc(&s).layers[0].id;
+    let holds_now = |s: &Session| {
+        let l = &doc(s).layers[0];
+        doc(s).color_indices.as_ref().is_some_and(|k| l.surface().is_some_and(|p| k.holds(id, p)))
+    };
+    assert!(holds_now(&s), "the conversion recorded indices");
+    // A stroke drops them; the white columns are left untouched.
+    s.execute("paint.stroke", json!({"points": [[6, 1]], "size": 1, "color": "#000000"})).unwrap();
+    assert!(!holds_now(&s), "the stroke dropped the indices");
+    s.execute("image.mode.colorTable", json!({"entries": {"1": "#123456"}})).unwrap();
+    let surf = doc(&s).layers[0].surface().unwrap();
+    assert_eq!(surf.rgba(1, 1), [1.0, 1.0, 1.0, 1.0], "the opaque white stays opaque");
+}
+
+#[test]
+fn a_second_indexed_color_pass_keeps_opaque_white() {
+    // Indexed Color ▸ Palette: Custom… seeds `paletteColors` and `transparent` from the document,
+    // so pressing OK sends an explicit `transparent: 0` on the table the first pass produced: the
+    // opaque white must stay opaque, not be punched out (review 5941965522).
+    let mut s = white_and_clear();
+    s.execute("image.mode.indexedColor", json!({"dither": "none", "transparentFirst": true})).unwrap();
+    let table = doc(&s).color_table.clone().unwrap();
+    assert_eq!(table.transparent, Some(0));
+    let colors: Vec<String> = table.colors.iter().map(|c| format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])).collect();
+    s.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": colors, "transparent": 0, "dither": "none"})).unwrap();
+    let surf = doc(&s).layers[0].surface().unwrap();
+    assert_eq!(surf.rgba(1, 1), [1.0, 1.0, 1.0, 1.0], "the opaque white stays opaque");
+    assert_eq!(surf.rgba(6, 1)[3], 0.0, "clear pixels stay transparent");
+}
+
+#[test]
+fn auto_transparent_entry_does_not_clear_near_white() {
+    // The auto-appended white takes clear pixels only: a near-white opaque pixel with no closer
+    // real entry maps to the nearest table colour and stays opaque.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| {
+        if x < 6 {
+            [0.25, 0.25, 0.25, 1.0]
+        } else if x < 7 {
+            [0.95, 0.95, 0.95, 1.0]
+        } else {
+            [0.0; 4]
+        }
+    });
+    s.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#000000", "#404040"], "dither": "none"})).unwrap();
+    assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, Some(2), "white is appended for the clear column");
+    let surf = doc(&s).layers[0].surface().unwrap();
+    let e = 64.0 / 255.0;
+    assert_eq!(surf.rgba(6, 0), [e, e, e, 1.0], "the near-white pixel takes the nearest real entry");
+    assert_eq!(surf.rgba(7, 0)[3], 0.0, "clear pixels are still transparent");
+}
+
+#[test]
+fn painting_the_transparent_entry_colour_stays_opaque() {
+    // A palette whose transparent entry is index 0 black (common for palette PNG/GIF files): a
+    // stroke in that colour maps to the nearest real entry and stays opaque instead of erasing.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 4 { [1.0, 0.0, 0.0, 1.0] } else { [0.0; 4] });
+    s.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#000000", "#ff0000"], "dither": "none", "transparent": 0})).unwrap();
+    assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, Some(0));
+    s.execute("paint.stroke", json!({"points": [[5, 1], [6, 1]], "size": 3, "color": "#000000"})).unwrap();
+    let surf = doc(&s).layers[0].surface().unwrap();
+    assert_eq!(surf.rgba(5, 1), [1.0, 0.0, 0.0, 1.0], "black paints as the nearest real entry, opaque");
+}

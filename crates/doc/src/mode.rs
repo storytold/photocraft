@@ -36,6 +36,32 @@ impl ColorTable {
         best.1
     }
 
+    /// Nearest entry to `c` for an **opaque** pixel: like [`nearest`](Self::nearest), but the
+    /// transparent entry never wins an exact tie. An opaque pixel cannot be using the entry that
+    /// only carries clear pixels, and that entry's colour is a placeholder that a real entry may
+    /// share — "1st index as transparent" puts the auto white ahead of the forced white, so a
+    /// plain nearest lookup would re-index every opaque white onto it and clear it (#7320). The
+    /// transparent entry is returned only when nothing else is as close.
+    pub fn nearest_opaque(&self, c: [f32; 3]) -> usize {
+        let Some(skip) = self.transparent.map(usize::from) else {
+            return self.nearest(c);
+        };
+        let dist = |i: usize| -> f32 {
+            let e = self.colors[i];
+            (0..3).map(|k| (c[k] - f32::from(e[k]) / 255.0).powi(2)).sum()
+        };
+        let mut best = (f32::MAX, 0);
+        for i in 0..self.colors.len() {
+            if i != skip {
+                let d = dist(i);
+                if d < best.0 {
+                    best = (d, i);
+                }
+            }
+        }
+        if self.colors.get(skip).is_some_and(|_| dist(skip) < best.0) { skip } else { best.1 }
+    }
+
     /// Entry `i` as RGB in 0..=1 (black past the end).
     pub fn rgb(&self, i: usize) -> [f32; 3] {
         self.colors.get(i).map_or([0.0; 3], |e| e.map(|v| f32::from(v) / 255.0))
@@ -250,6 +276,29 @@ mod tests {
         assert_eq!(t.nearest([0.9, 0.1, 0.1]), 2);
         assert_eq!(t.nearest([0.6, 0.6, 0.6]), 1);
         assert_eq!(t.rgb(2), [1.0, 0.0, 0.0]);
+    }
+
+    /// An opaque pixel never takes the transparent entry on an exact tie: "1st index as
+    /// transparent" puts the auto white ahead of the forced white, and a plain `nearest` would
+    /// re-index every opaque white onto the transparent entry and clear it (#7320).
+    #[test]
+    fn color_table_nearest_opaque_avoids_the_transparent_entry() {
+        let dup = ColorTable { colors: vec![[255, 255, 255], [0, 0, 0], [255, 255, 255]], transparent: Some(0) };
+        assert_eq!(dup.nearest([1.0, 1.0, 1.0]), 0, "the plain lookup keeps the lower index");
+        assert_eq!(dup.nearest_opaque([1.0, 1.0, 1.0]), 2, "the other white wins the tie");
+        assert_eq!(dup.nearest_opaque([0.0, 0.0, 0.0]), 1, "a strictly nearer entry still wins");
+
+        // No transparent entry: unchanged.
+        let plain = ColorTable { colors: vec![[255, 255, 255], [0, 0, 0], [255, 255, 255]], transparent: None };
+        assert_eq!(plain.nearest_opaque([1.0, 1.0, 1.0]), 0);
+
+        // The transparent entry is the only entry of its colour, so it is still returned.
+        let only = ColorTable { colors: vec![[255, 255, 255], [0, 0, 0]], transparent: Some(0) };
+        assert_eq!(only.nearest_opaque([1.0, 1.0, 1.0]), 0);
+
+        // A transparent index past the table (never set by the command) cannot panic.
+        let past = ColorTable { colors: vec![[255, 255, 255], [0, 0, 0]], transparent: Some(9) };
+        assert_eq!(past.nearest_opaque([1.0, 1.0, 1.0]), 0);
     }
 
     #[test]
