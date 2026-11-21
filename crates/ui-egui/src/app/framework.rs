@@ -17,7 +17,7 @@ use craft::host::target::{Backend, ShellInfo};
 use craft::host::{AppInfo, Files, Host, SectionStore};
 use craft::i18n::Direction;
 use craft::keymap::Overrides;
-use craft::theme::{AppDefaults, AppSizes, ModeChoice, Size, SuiteChoice, ThemeId, ThemePair, resolve_sized};
+use craft::theme::{AppDefaults, AppSizes, ComponentSet, ModeChoice, Size, SuiteChoice, ThemeId, ThemePair, resolve_sized};
 use craft::theme_store::{SelectionChange, SuiteClient};
 use craft::ui::contract::Tracked;
 use craft::ui::dialog::DialogHost;
@@ -212,13 +212,14 @@ const DEFAULT_DARK: &str = "craft.artcraft";
 const DEFAULT_LIGHT: &str = "craft.pro";
 
 /// What PhotoCraft shows for each suite field nobody has chosen: Pro (Medium Gray) in the dark
-/// mode, Pro in the light, and the dark mode.
+/// mode, Pro in the light, and the dark mode, with the Creative component set.
 fn defaults() -> AppDefaults {
     let theme = |id: &str| ThemeId::parse(id).unwrap_or_else(|_| ThemeId::suite_default());
     AppDefaults {
         theme: ThemePair { light: theme(DEFAULT_LIGHT), dark: theme(DEFAULT_DARK) },
         mode: ModeChoice::Dark,
         size: Size::default(),
+        set: ComponentSet::Creative,
         sizes: (**app_sizes()).clone(),
     }
 }

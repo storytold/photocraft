@@ -70,6 +70,16 @@ impl AuthorizedWorkspace {
         Ok(Self { read: self.read.clone(), write: Some(open_root(path, "write", &self.read)?) })
     }
 
+    /// The read roots as configured at launch, in the order files are looked up.
+    pub fn read_folders(&self) -> Vec<PathBuf> {
+        self.read.iter().map(|root| root.configured_path.clone()).collect()
+    }
+
+    /// The write root as configured at launch, if any.
+    pub fn write_folder(&self) -> Option<PathBuf> {
+        self.write.as_ref().map(|root| root.configured_path.clone())
+    }
+
     /// Read the first matching regular file, trying roots in their configured order.
     /// Only an open that reports NotFound tries the next root. Once opened, errors
     /// (including a non-regular file or a failed bounded read) never select another file.

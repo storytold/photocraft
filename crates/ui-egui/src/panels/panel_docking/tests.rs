@@ -26,24 +26,24 @@ fn saved(app: &PhotocraftApp) -> Value {
 }
 
 fn floating(app: &PhotocraftApp, panel: &str) -> bool {
-    app.ui.docking.layout.floating.iter().any(|window| window.contains(panel))
+    app.ui.docking.layout().floating.iter().any(|window| window.contains(panel))
 }
 
 /// The panel's group is minimized.
 fn minimized(app: &PhotocraftApp, panel: &str) -> bool {
-    let layout = &app.ui.docking.layout;
+    let layout = app.ui.docking.layout();
     layout.place(&panel.to_owned()).is_some_and(|place| layout.group(&place).is_some_and(|group| group.minimized))
 }
 
 /// The panel's column is collapsed to icons.
 fn iconic(app: &PhotocraftApp, panel: &str) -> bool {
-    let layout = &app.ui.docking.layout;
+    let layout = app.ui.docking.layout();
     layout.place(&panel.to_owned()).and_then(|place| layout.column(&place)).is_some_and(|column| column.iconic)
 }
 
 /// The selected tab of the group holding `panel`.
 fn active_tab(app: &PhotocraftApp, panel: &str) -> Option<String> {
-    let layout = &app.ui.docking.layout;
+    let layout = app.ui.docking.layout();
     let place = layout.place(&panel.to_owned())?;
     layout.group(&place)?.active_panel().cloned()
 }
@@ -147,18 +147,18 @@ fn window_panel_ids_drive_the_workspace() {
 
     // A floated panel docks back to where it floated from; a floating group docks all of its panels.
     let mut app = self::app();
-    let before = app.ui.docking.layout.clone();
+    let before = app.ui.docking.layout().clone();
     invoke(&mut app, "window.panel.float", json!({"panel": "properties", "x": 50, "y": 70, "width": 330, "height": 410})).unwrap();
     assert!(floating(&app, "properties"));
-    assert!(app.ui.docking.floated.iter().any(|(panel, _)| panel == "properties"), "the workspace records where it floated from");
+    assert!(app.ui.docking.floated().iter().any(|(panel, _)| panel == "properties"), "the workspace records where it floated from");
     invoke(&mut app, "window.panel.dock", json!({"panel": "properties"})).unwrap();
-    assert_eq!(app.ui.docking.layout, before, "the panel is back where it was");
+    assert_eq!(*app.ui.docking.layout(), before, "the panel is back where it was");
 
     invoke(&mut app, "window.panel.float", json!({"panel": "paths"})).unwrap();
     invoke(&mut app, "window.panel.move", json!({"panel": "history", "anchor": "paths"})).unwrap();
-    assert!(app.ui.docking.layout.floating.iter().any(|w| w.contains("paths") && w.contains("history")));
+    assert!(app.ui.docking.layout().floating.iter().any(|w| w.contains("paths") && w.contains("history")));
     invoke(&mut app, "window.panel.dock", json!({"panel": "paths", "group": true})).unwrap();
-    assert!(!floating(&app, "paths") && !floating(&app, "history"), "{:?}", app.ui.docking.layout.floating);
+    assert!(!floating(&app, "paths") && !floating(&app, "history"), "{:?}", app.ui.docking.layout().floating);
     assert!(is_shown(&app, "paths") && is_shown(&app, "history"));
 
     // A panel no workspace has placed opens in its own group, and the panels of that group meet there.
@@ -203,13 +203,13 @@ fn saved_workspace_restores_the_custom_tree_and_hidden_panel_placement() {
     invoke(&mut app, "window.panel.move", json!({"panel": "swatches", "anchor": "layers", "zone": "top"})).unwrap();
     invoke(&mut app, "window.panel.float", json!({"panel": "properties", "x": 50, "y": 80})).unwrap();
     invoke(&mut app, "window.panel.close", json!({"panel": "swatches"})).unwrap();
-    assert!(app.ui.docking.hidden.iter().any(|(panel, _)| panel == "swatches"));
+    assert!(app.ui.docking.hidden().iter().any(|(panel, _)| panel == "swatches"));
 
     let written = crate::dock::snapshot(&app);
     let mut reloaded = self::app();
     crate::dock::apply(&mut reloaded, &written);
-    assert_eq!(reloaded.ui.docking.layout, app.ui.docking.layout);
-    assert_eq!(reloaded.ui.docking.hidden, app.ui.docking.hidden);
+    assert_eq!(reloaded.ui.docking.layout(), app.ui.docking.layout());
+    assert_eq!(reloaded.ui.docking.hidden(), app.ui.docking.hidden());
     invoke(&mut reloaded, "window.panel.swatches", json!({"show": true})).unwrap();
     assert!(is_front(&reloaded, "swatches"), "the closed panel reopens");
     assert!(!probe::group_of(&reloaded, "layers").contains(&"swatches".to_owned()), "at its own place, in a group above Layers");
@@ -258,7 +258,7 @@ fn a_pre_docking_save_migrates_once() {
     assert!(written.get("dockTabs").is_none() && written.get("dock").is_none(), "the old keys are not written back");
     let mut again = self::app();
     crate::dock::apply(&mut again, &written);
-    assert_eq!((&again.ui.docking.layout, &again.ui.docking.hidden), (&app.ui.docking.layout, &app.ui.docking.hidden), "a second load changes nothing");
+    assert_eq!((again.ui.docking.layout(), again.ui.docking.hidden()), (app.ui.docking.layout(), app.ui.docking.hidden()), "a second load changes nothing");
 }
 
 /// `ui.set` maps the old panel and dock words onto workspace changes, all fields or none.
@@ -284,8 +284,11 @@ fn ui_set_dock_fields_map_onto_the_workspace_atomically() {
     // The end dock's total after a `dockWidth` request.
     assert!(ok(&mut app, json!({"dockWidth": 400.0})));
     let sizes = DockSizes::of(&ctx);
-    let total: f32 =
-        end_columns(&app.ui.docking.layout).expect("the end dock").iter().map(|column| sizes.width(column, &|panel: &String| spec(&app, panel))).sum();
+    let total: f32 = end_columns(app.ui.docking.layout())
+        .expect("the end dock")
+        .iter()
+        .map(|column| sizes.width(column, &|panel: &String| spec(&DockSpecs::of(&app), panel)))
+        .sum();
     assert!((total - 400.0).abs() < 1.0, "{total}");
 
     // One bad field applies nothing, whatever the good fields say.
@@ -332,11 +335,11 @@ fn main_workspace_file_loads_as_the_default_and_saves_as_a_workspace() {
     crate::dock::apply(&mut app, &saved);
     app.ui.docking.validate().expect("the loaded workspace is valid");
     for entry in registry::PANELS {
-        assert!(is_shown(&app, entry.id) || app.ui.docking.hidden.iter().any(|(panel, _)| panel == entry.id), "{} is shown or can be reopened", entry.id);
+        assert!(is_shown(&app, entry.id) || app.ui.docking.hidden().iter().any(|(panel, _)| panel == entry.id), "{} is shown or can be reopened", entry.id);
     }
     assert!(is_shown(&app, "layers"));
     // The save predates the toolbar panel and has no start dock: the toolbar comes back docked at the start.
-    assert_eq!(toolbar_edge(&app), Some(DockEdge::Start), "the toolbar is docked at the start: {:?}", app.ui.docking.layout);
+    assert_eq!(toolbar_edge(&app), Some(DockEdge::Start), "the toolbar is docked at the start: {:?}", app.ui.docking.layout());
 
     invoke(&mut app, "window.panel.float", json!({"panel": "properties"})).unwrap();
     let written = crate::dock::snapshot(&app);
@@ -344,12 +347,12 @@ fn main_workspace_file_loads_as_the_default_and_saves_as_a_workspace() {
     assert_eq!(written["docking"]["version"], json!(craft::behavior::dock::Workspace::<String>::VERSION));
     let mut reloaded = self::app();
     crate::dock::apply(&mut reloaded, &written);
-    assert_eq!((&reloaded.ui.docking.layout, &reloaded.ui.docking.hidden), (&app.ui.docking.layout, &app.ui.docking.hidden));
+    assert_eq!((reloaded.ui.docking.layout(), reloaded.ui.docking.hidden()), (app.ui.docking.layout(), app.ui.docking.hidden()));
 }
 
 /// The dock edge the toolbar's column is docked on.
 fn toolbar_edge(app: &PhotocraftApp) -> Option<DockEdge> {
-    let layout = &app.ui.docking.layout;
+    let layout = app.ui.docking.layout();
     let Some(PanelPlace::Dock { path, .. }) = layout.place(&registry::TOOLBAR.to_owned()) else { return None };
     [DockEdge::Start, DockEdge::End].into_iter().find(|edge| layout.dock_path(*edge).as_ref() == Some(&path))
 }
@@ -364,7 +367,7 @@ fn essentials_keeps_navigator_history_and_brushes_as_icons() {
     }
     for panel in ["navigator", "history", "brushes"] {
         assert!(iconic(&app, panel), "{panel} is an icon");
-        assert_eq!(app.ui.docking.layout.panel_state(&panel.to_owned()), PanelState::Open, "{panel} is open but not showing");
+        assert_eq!(app.ui.docking.layout().panel_state(&panel.to_owned()), PanelState::Open, "{panel} is open but not showing");
     }
     assert_eq!(toolbar_edge(&app), Some(DockEdge::Start), "the toolbar has the start dock to itself");
 }
@@ -416,7 +419,7 @@ fn ui_set_toolbar_columns_sets_the_toolbar_columns_steps() {
     let mut app = app();
     let ctx = app.ctx().clone();
     let steps = |app: &PhotocraftApp| {
-        let layout = &app.ui.docking.layout;
+        let layout = app.ui.docking.layout();
         layout.place(&registry::TOOLBAR.to_owned()).and_then(|place| layout.column(&place)).and_then(|column| column.steps)
     };
     assert!(control_set(&mut app, &ctx, json!({"toolbarColumns": 3}))["ok"] == true);
