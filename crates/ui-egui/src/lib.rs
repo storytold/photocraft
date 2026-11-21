@@ -1041,6 +1041,8 @@ mod artboards_overlap_dialog_tests;
 #[cfg(test)]
 mod artboards_to_files_types_tests;
 #[cfg(test)]
+mod artboards_to_pdf_reverse_tests;
+#[cfg(test)]
 mod browse_field_tests;
 #[cfg(test)]
 mod export_quality_tests;
