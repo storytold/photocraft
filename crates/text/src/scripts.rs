@@ -2,9 +2,9 @@
 //! (Thai, Arabic, Hebrew, the Indic scripts, ...): which characters belong to which script, and
 //! which installed font files to try for it.
 //!
-//! Candidates come from the file names in the platform font directories (the same directories
-//! [`crate::fonts::FontDb`] scans), listed once per process and only when first asked for, so
-//! nothing is read at startup and no path is hard-coded per distribution. Noto fonts are matched
+//! Candidates come from the file names of the installed fonts in the craft font Catalog (the same
+//! files [`crate::fonts::FontDb`] registers), listed once per process and only when first asked
+//! for, so nothing is read at startup and no path is hard-coded per distribution. Noto fonts are matched
 //! by their family-derived file names (`NotoSansThai-Regular.ttf`, `NotoSansThai[wght].ttf`),
 //! platform fonts by their known file names (Leelawadee UI, Nirmala UI, Segoe UI, Geeza Pro,
 //! Kohinoor, DejaVu Sans, Lohit, ...). A file name is only a hint: callers check that a face
@@ -106,7 +106,7 @@ impl Script {
             ],
             Hebrew => &["notosanshebrew", "notoserifhebrew", "segoeui", "arialhb", "sfhebrew", "dejavusans", "arial", "freesans", "culmus"],
             Armenian => &["notosansarmenian", "notoserifarmenian", "segoeui", "sylfaen", "mshtakan", "dejavusans", "freesans"],
-            Georgian => &["notosansgeorgian", "notoserifgeorgian", "segoeui", "sylfaen", "dejavusans", "freesans"],
+            Georgian => &["notosansgeorgian", "notoserifgeorgian", "segoeui", "sylfaen", "sfgeorgian", "dejavusans", "freesans"],
             Ethiopic => &["notosansethiopic", "notoserifethiopic", "ebrima", "kefa", "abyssinicasil"],
             Devanagari => &[
                 "notosansdevanagari",
@@ -247,16 +247,13 @@ pub fn candidates(script: Script, files: &[std::path::PathBuf]) -> Vec<std::path
     ranked.into_iter().take(MAX_CANDIDATES).map(|(_, _, p)| p.clone()).collect()
 }
 
-/// Every font file in the platform font directories, listed on first use and cached for the
+/// Every installed font file of the font Catalog, listed on first use and cached for the
 /// process (names only; nothing is opened).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn system_font_files() -> &'static [std::path::PathBuf] {
     static FILES: std::sync::OnceLock<Vec<std::path::PathBuf>> = std::sync::OnceLock::new();
     FILES.get_or_init(|| {
-        let mut files = Vec::new();
-        for d in crate::fonts::system_font_dirs() {
-            crate::fonts::collect_font_files(&d, 0, &mut files);
-        }
+        let mut files = crate::fonts::installed_font_files();
         files.sort();
         files.dedup();
         files
@@ -278,6 +275,15 @@ pub fn covering_face(bytes: &[u8], c: char) -> Option<u32> {
         FileRef::Font(f) => f.charmap().map(c).map(|_| 0),
         FileRef::Collection(col) => col.iter().position(|f| f.is_ok_and(|f| f.charmap().map(c).is_some())).and_then(|i| u32::try_from(i).ok()),
     }
+}
+
+/// Whether face `index` of `bytes` (a font or collection) maps `c` in its character map.
+/// `false` for an out-of-range face or data that doesn't parse. Never panics.
+pub fn face_covers(bytes: &[u8], index: u32, c: char) -> bool {
+    use skrifa::MetadataProvider;
+
+    let Ok(font) = skrifa::FontRef::from_index(bytes, index) else { return false };
+    font.charmap().map(c).is_some()
 }
 
 #[cfg(test)]
@@ -351,6 +357,10 @@ mod tests {
         for bad in [&b""[..], b"ttcf", b"ttcf\0\x01\0\0\0\0\0\x02\xff\xff\xff\xff\0\0\0\x10", b"\0\x01\0\0\0\xff"] {
             assert_eq!(covering_face(bad, 'A'), None);
         }
+        assert!(face_covers(inter, 0, 'A'));
+        assert!(!face_covers(inter, 0, 'ส'));
+        assert!(!face_covers(inter, 1, 'A'), "a single-face file has no face 1");
+        assert!(!face_covers(b"", 0, 'A'));
     }
 
     /// With the real system fonts, each script that has a candidate installed has one that

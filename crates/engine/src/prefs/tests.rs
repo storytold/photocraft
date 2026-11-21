@@ -1,5 +1,21 @@
 use super::*;
 
+#[test]
+fn system_title_bar_defaults_to_integrated_and_preserves_saved_choices() {
+    let default = false;
+    assert_eq!(Interface::default().system_title_bar, default);
+    for saved in [json!({}), json!({"interface": {}})] {
+        let prefs: Preferences = serde_json::from_value(saved).unwrap();
+        assert_eq!(prefs.interface.system_title_bar, default);
+    }
+    for saved in [false, true] {
+        let prefs: Preferences = serde_json::from_value(json!({"interface": {"systemTitleBar": saved}})).unwrap();
+        assert_eq!(prefs.interface.system_title_bar, saved);
+        let restored: Preferences = serde_json::from_value(prefs.to_json()).unwrap();
+        assert_eq!(restored.interface.system_title_bar, saved);
+    }
+}
+
 fn session() -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
@@ -20,6 +36,21 @@ fn defaults_match_photoshop() {
     for (id, _) in SECTIONS {
         assert!(v.get(id).is_some_and(Value::is_object), "{id}");
     }
+}
+
+#[test]
+fn intermediate_ui_scale_presets_survive_restart() {
+    let mut s = Session::new();
+    assert_eq!(s.execute("prefs.get", json!({"path": "interface.uiScale"})).unwrap(), json!("auto"));
+    for scale in ["100", "105", "110", "115", "120", "125"] {
+        s.execute("prefs.set", json!({"path": "interface.uiScale", "value": scale})).unwrap();
+        let mut restored = Session::new();
+        restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+        assert_eq!(restored.execute("prefs.get", json!({"path": "interface.uiScale"})).unwrap(), json!(scale));
+    }
+    // Presets remain discrete choices: arbitrary values must not silently replace a valid scale.
+    assert!(s.execute("prefs.set", json!({"path": "interface.uiScale", "value": "112"})).is_err());
+    assert_eq!(s.execute("prefs.get", json!({"path": "interface.uiScale"})).unwrap(), json!("125"));
 }
 
 /// #2264: the Studio workspace dot pattern can be hidden without changing themes.
@@ -72,10 +103,10 @@ fn appearance_defaults_and_legacy_theme_migrate() {
     let p = Preferences::default();
     // New users keep Photoshop's default; following the system is opt-in.
     assert_eq!(p.interface.appearance_mode, AppearanceMode::Dark);
-    assert_eq!(p.interface.dark_theme, DarkTheme::ProMedium);
-    assert_eq!(p.interface.light_theme, LightTheme::ProLight);
+    assert_eq!(p.interface.dark_theme, "craft.artcraft");
+    assert_eq!(p.interface.light_theme, "craft.pro");
     for (theme, mode, dark, light) in
-        [("pro", AppearanceMode::Dark, DarkTheme::Pro, LightTheme::ProLight), ("classic", AppearanceMode::Light, DarkTheme::ProMedium, LightTheme::Classic)]
+        [("pro", AppearanceMode::Dark, "craft.pro", "craft.pro"), ("classic", AppearanceMode::Light, "craft.artcraft", "craft.classic")]
     {
         let mut s = Session::new();
         s.load_prefs_json(&json!({"interface": {"theme": theme}}).to_string()).unwrap();
@@ -85,14 +116,35 @@ fn appearance_defaults_and_legacy_theme_migrate() {
     }
 }
 
+/// The Serbian interface language was saved as `sr` before the catalogs moved to craft-i18n,
+/// where it is `sr-latn`: a saved `sr` (any case) loads as `sr-latn` and is saved as `sr-latn`.
+/// Other codes, and `auto`, load as saved.
+#[test]
+fn a_saved_serbian_language_migrates_to_sr_latn() {
+    for saved in ["sr", "SR"] {
+        let mut s = Session::new();
+        s.load_prefs_json(&json!({"interface": {"language": saved}}).to_string()).unwrap();
+        assert_eq!(s.prefs().interface.language, "sr-latn", "{saved}");
+        let resaved: Value = serde_json::from_str(&s.prefs_to_json()).unwrap();
+        assert_eq!(resaved["interface"]["language"], "sr-latn", "saved under the new code");
+    }
+    for kept in ["sr-latn", "bs", "auto", "en"] {
+        let mut s = Session::new();
+        s.load_prefs_json(&json!({"interface": {"language": kept}}).to_string()).unwrap();
+        assert_eq!(s.prefs().interface.language, kept);
+    }
+}
+
 #[test]
 fn legacy_theme_migration_preserves_saved_theme_slots() {
-    for (legacy, slot, saved) in [("proMedium", "darkTheme", "solarizedDark"), ("studioLight", "lightTheme", "adwaita")] {
+    for (legacy, slot, saved, id) in
+        [("proMedium", "darkTheme", "solarizedDark", "craft.solarized-dark"), ("studioLight", "lightTheme", "adwaita", "craft.adwaita")]
+    {
         let mut interface = json!({"theme": legacy});
         interface[slot] = json!(saved);
         let mut session = Session::new();
         session.load_prefs_json(&json!({"interface": interface}).to_string()).unwrap();
-        assert_eq!(session.prefs_value()["interface"][slot], saved, "explicit {slot} survives migration");
+        assert_eq!(session.prefs_value()["interface"][slot], id, "explicit {slot} survives migration");
     }
 }
 
@@ -102,22 +154,22 @@ fn appearance_choices_validate_and_legacy_theme_still_selects() {
     s.execute("prefs.set", json!({"values": {"interface.appearanceMode": "auto", "interface.darkTheme": "studio", "interface.lightTheme": "classic"}}))
         .unwrap();
     assert_eq!(s.prefs().interface.appearance_mode, AppearanceMode::Auto);
-    assert_eq!(s.prefs().interface.dark_theme, DarkTheme::Studio);
-    assert_eq!(s.prefs().interface.light_theme, LightTheme::Classic);
+    assert_eq!(s.prefs().interface.dark_theme, "craft.studio");
+    assert_eq!(s.prefs().interface.light_theme, "craft.classic");
     let mut restarted = Session::new();
     restarted.load_prefs_json(&s.prefs_to_json()).unwrap();
     assert_eq!(restarted.prefs().interface, s.prefs().interface);
-    assert!(s.execute("prefs.set", json!({"path": "interface.darkTheme", "value": "classic"})).is_err());
+    assert!(s.execute("prefs.set", json!({"path": "interface.darkTheme", "value": ""})).is_err());
     s.execute("prefs.set", json!({"path": "interface.theme", "value": "pro"})).unwrap();
     assert_eq!(s.prefs().interface.appearance_mode, AppearanceMode::Dark);
-    assert_eq!(s.prefs().interface.dark_theme, DarkTheme::Pro);
-    assert_eq!(s.prefs().interface.light_theme, LightTheme::Classic);
+    assert_eq!(s.prefs().interface.dark_theme, "craft.pro");
+    assert_eq!(s.prefs().interface.light_theme, "craft.classic");
     s.execute("prefs.set", json!({"path": "interface", "value": {"theme": "studioLight"}})).unwrap();
     assert_eq!(s.prefs().interface.appearance_mode, AppearanceMode::Light);
-    assert_eq!(s.prefs().interface.light_theme, LightTheme::StudioLight);
-    assert_eq!(s.prefs().interface.dark_theme, DarkTheme::Pro);
+    assert_eq!(s.prefs().interface.light_theme, "craft.studio");
+    assert_eq!(s.prefs().interface.dark_theme, "craft.pro");
     // #2661: the light Pro brightness levels are light themes.
-    for (theme, light) in [("proLightGray", LightTheme::ProLightGray), ("proLight", LightTheme::ProLight)] {
+    for (theme, light) in [("proLightGray", "craft.pro-light-gray"), ("proLight", "craft.pro")] {
         s.execute("prefs.set", json!({"path": "interface.theme", "value": theme})).unwrap();
         assert_eq!(s.prefs().interface.appearance_mode, AppearanceMode::Light);
         assert_eq!(s.prefs().interface.light_theme, light);
@@ -129,19 +181,69 @@ fn appearance_choices_validate_and_legacy_theme_still_selects() {
     }
 }
 
+/// Names PhotoCraft saved before theme ids, in any spelling `ui.set` took, read as ids: in the
+/// slots and the favorites. Old clients still read the single theme: the id the appearance mode
+/// shows.
+#[test]
+fn pre_id_theme_names_read_as_ids_where_they_were_saved() {
+    let mut s = Session::new();
+    let saved = json!({
+        "interface": {"appearanceMode": "dark", "darkTheme": "Pro (Medium Gray)", "lightTheme": "gnome", "favoriteThemes": ["breezeDark"]},
+    });
+    s.load_prefs_json(&saved.to_string()).unwrap();
+    let p = s.prefs();
+    assert_eq!((p.interface.dark_theme.as_str(), p.interface.light_theme.as_str()), ("craft.artcraft", "craft.adwaita"));
+    assert_eq!(p.interface.favorite_themes, ["craft.breeze"]);
+    assert_eq!(s.execute("prefs.get", json!({"path": "interface.theme"})).unwrap(), json!("craft.artcraft"));
+    s.execute("prefs.set", json!({"path": "interface.appearanceMode", "value": "light"})).unwrap();
+    assert_eq!(s.execute("prefs.get", json!({"path": "interface.theme"})).unwrap(), json!("craft.adwaita"));
+}
+
+/// The four Window › Workspace commands that moved to the workspace set keep a binding saved
+/// under their old ids; other `window.workspace.*` ids read as saved.
+#[test]
+fn old_workspace_command_ids_read_as_the_workspace_set_ids() {
+    let mut s = Session::new();
+    let saved = json!({
+        "shortcuts": {"window.workspace.lockWorkspace": "F9", "window.workspace.motion": "F12"},
+        "alternateShortcuts": {"window.workspace.resetWorkspace": ["F10"]},
+        "menus": {"colors": {"window.workspace.newWorkspace": "red"}, "hidden": ["window.workspace.deleteWorkspace", "window.workspace.motion"]}
+    });
+    s.load_prefs_json(&saved.to_string()).unwrap();
+    let p = s.prefs();
+    assert_eq!(p.shortcuts.get("workspace.lock").map(String::as_str), Some("F9"), "{:?}", p.shortcuts);
+    assert_eq!(p.shortcuts.get("window.workspace.motion").map(String::as_str), Some("F12"));
+    assert!(!p.shortcuts.contains_key("window.workspace.lockWorkspace"));
+    assert_eq!(p.alternate_shortcuts.get("workspace.reset"), Some(&vec!["F10".to_string()]), "{:?}", p.alternate_shortcuts);
+    assert_eq!(p.menus.colors.get("workspace.new").map(String::as_str), Some("red"), "{:?}", p.menus.colors);
+    assert_eq!(p.menus.hidden, ["workspace.delete", "window.workspace.motion"]);
+}
+
+#[test]
+fn writing_back_the_got_interface_keeps_a_slot_edit() {
+    for root in [false, true] {
+        let mut s = Session::new();
+        let mut interface = s.execute("prefs.get", json!({"path": "interface"})).unwrap();
+        interface["darkTheme"] = json!("craft.breeze");
+        let set = if root { json!({"path": "", "value": {"interface": interface}}) } else { json!({"path": "interface", "value": interface}) };
+        s.execute("prefs.set", set).unwrap();
+        assert_eq!(s.prefs().interface.dark_theme, "craft.breeze", "root object: {root}");
+    }
+}
+
 #[test]
 fn favorite_themes_persist_and_reject_invalid_lists() {
     let mut s = Session::new();
     assert!(s.prefs().interface.favorite_themes.is_empty());
     s.execute("prefs.set", json!({"path": "interface.favoriteThemes", "value": ["classic", "studio"]})).unwrap();
-    assert_eq!(s.prefs().interface.favorite_themes, vec![Theme::Classic, Theme::Studio]);
+    assert_eq!(s.prefs().interface.favorite_themes, vec!["craft.classic", "craft.studio"]);
     s.execute("prefs.set", json!({"path": "interface.theme", "value": "pro"})).unwrap();
     let mut restored = Session::new();
     restored.load_prefs_json(&s.prefs_to_json()).unwrap();
-    assert_eq!(restored.prefs().interface.favorite_themes, vec![Theme::Classic, Theme::Studio]);
-    for invalid in [json!("classic"), json!(["unknown"]), json!(["classic", "classic"]), json!([23])] {
+    assert_eq!(restored.prefs().interface.favorite_themes, vec!["craft.classic", "craft.studio"]);
+    for invalid in [json!("classic"), json!(["bad id"]), json!(["classic", "classic"]), json!([23])] {
         assert!(s.execute("prefs.set", json!({"path": "interface.favoriteThemes", "value": invalid})).is_err());
-        assert_eq!(s.prefs().interface.favorite_themes, vec![Theme::Classic, Theme::Studio]);
+        assert_eq!(s.prefs().interface.favorite_themes, vec!["craft.classic", "craft.studio"]);
     }
 }
 
@@ -205,7 +307,7 @@ fn reset_one_keyed_override() {
     }
     assert_eq!(s.execute("prefs.get", json!({"path": "shortcuts"})).unwrap(), json!({"edit.redo": "Ctrl+Alt+Y"}));
     assert_eq!(s.execute("prefs.get", json!({"path": "menus.colors"})).unwrap(), json!({"edit.fill": "red"}));
-    assert_eq!(s.execute("prefs.get", json!({"path": "interface.theme"})).unwrap(), json!("studioLight"));
+    assert_eq!(s.execute("prefs.get", json!({"path": "interface.lightTheme"})).unwrap(), json!("craft.studio"));
     assert_eq!(s.prefs().shortcut("edit.undo", undo), undo);
 }
 
@@ -343,6 +445,11 @@ fn shortcuts_normalise_and_detect_conflicts() {
     assert_eq!(normalize_shortcut("Cmd++").as_deref(), Some("Cmd++"));
     assert_eq!(normalize_shortcut("Cmd+Shift"), None);
     assert_eq!(normalize_shortcut("Cmd+A+B"), None);
+    // #6827: multi-word key names keep egui's spelling (Title case made `Pageup`, matching no key).
+    assert_eq!(normalize_shortcut("shift+pageup").as_deref(), Some("Shift+PageUp"));
+    assert_eq!(normalize_shortcut("Ctrl+Alt+PAGEDOWN").as_deref(), Some("Ctrl+Alt+PageDown"));
+    assert_eq!(normalize_shortcut("Cmd+openbracket").as_deref(), Some("Cmd+OpenBracket"));
+    assert_eq!(normalize_shortcut("home").as_deref(), Some("Home"));
     let c = conflicts([("a", "Cmd+J"), ("b", "cmd+j"), ("c", "Cmd+K")]);
     assert_eq!(c, vec![("Cmd+J".to_string(), vec!["a".to_string(), "b".to_string()])]);
 }
@@ -415,11 +522,24 @@ fn menus_and_toolbar_customisation_persist() {
     assert_eq!(back.toolbar.hidden, vec!["Sponge".to_string()]);
 }
 
-/// #5096: Edit › Menus can't hide the way back into itself, Preferences, Save or Exit.
+/// A file with the old flat `toolbar.order` loads cleanly with the default layout and keeps its
+/// hidden tools.
+#[test]
+fn an_old_toolbar_order_key_loads_with_the_default_layout() {
+    let mut old = Session::new();
+    let invalid = old.load_prefs_json(&json!({"toolbar": {"hidden": ["Sponge"], "order": ["Move", "Brush"]}}).to_string()).unwrap();
+    assert!(invalid.is_empty(), "{invalid:?}");
+    assert_eq!(old.prefs().toolbar.toolbar, None);
+    assert_eq!(old.prefs().toolbar.hidden, ["Sponge"]);
+    assert!(old.prefs().get("toolbar.order").is_none());
+}
+
+/// #5096, measured in #14335: Edit › Menus can't hide the way back into itself or File's Close,
+/// Save, Save As, Save a Copy, Clear Recent File List and Exit.
 #[test]
 fn menus_refuse_to_hide_essential_items() {
     let mut s = session();
-    for id in ["edit.menus", "edit.keyboardShortcuts", "edit.preferences.general", "file.save", "file.saveAs", "file.exit"] {
+    for id in ["edit.menus", "file.close", "file.save", "file.saveAs", "file.saveACopy", "file.clearRecent", "file.exit"] {
         assert!(s.execute("edit.menus", json!({"hide": ["edit.fade", id]})).is_err(), "{id}");
         assert!(s.prefs().menus.hidden.is_empty(), "{id}: a refused call changes nothing");
     }
@@ -477,6 +597,20 @@ fn svg_group_rasterization_threshold_is_bounded_by_document_depth() {
 }
 
 #[test]
+fn tablet_input_pref_defaults_to_windows_ink() {
+    let mut s = session();
+    assert_eq!(s.prefs().tools.tablet_input, TabletInput::WindowsInk);
+    assert_eq!(s.execute("prefs.get", json!({"path": "tools.tabletInput"})).unwrap(), json!("windowsInk"));
+    assert_eq!(choices("tools.tabletInput"), Some(TabletInput::NAMES));
+    s.execute("prefs.set", json!({"path": "tools.tabletInput", "value": "winTab"})).unwrap();
+    assert_eq!(s.prefs().tools.tablet_input, TabletInput::WinTab);
+    for bad in [json!("ink"), json!(1), json!(true), json!(null)] {
+        assert!(s.execute("prefs.set", json!({"path": "tools.tabletInput", "value": bad})).is_err());
+    }
+    assert_eq!(s.prefs().tools.tablet_input, TabletInput::WinTab, "rejected values change nothing");
+}
+
+#[test]
 fn right_click_with_painting_tools_pref() {
     let mut s = session();
     assert_eq!(s.prefs().tools.right_click_with_painting_tools, RightClickPaint::BrushPicker, "Photoshop: the Brush Preset picker");
@@ -491,6 +625,32 @@ fn right_click_with_painting_tools_pref() {
     // Preferences saved before the option existed load with the default.
     let old: Tools = serde_json::from_value(json!({"showTooltips": false})).unwrap();
     assert_eq!(old.right_click_with_painting_tools, RightClickPaint::BrushPicker);
+}
+
+#[test]
+fn gpu_adapter_round_trips_and_defaults_to_automatic() {
+    let mut s = session();
+    assert_eq!(s.prefs().performance.gpu_adapter, "");
+    s.execute("prefs.set", json!({"path": "performance.gpuAdapter", "value": "NVIDIA"})).unwrap();
+    assert_eq!(s.prefs().performance.gpu_adapter, "NVIDIA");
+    assert!(s.execute("prefs.set", json!({"path": "performance.gpuAdapter", "value": 3})).is_err());
+    assert_eq!(s.prefs().performance.gpu_adapter, "NVIDIA");
+    let mut t = Session::new();
+    t.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert_eq!(t.prefs().performance.gpu_adapter, "NVIDIA");
+    let mut u = Session::new();
+    u.load_prefs_json(r#"{"performance": {"useGpu": true}}"#).unwrap();
+    assert_eq!(u.prefs().performance.gpu_adapter, "");
+}
+
+#[test]
+fn gpu_adapter_names_match_by_word_ignoring_case() {
+    let arc = "Intel(R) Arc(tm) A370M Graphics (DG2)";
+    assert!(gpu_adapter_matches("NVIDIA GeForce RTX 5060 Ti", "nvidia"));
+    assert!(gpu_adapter_matches(arc, " ARC A370M "));
+    assert!(!gpu_adapter_matches(arc, "arc a380"));
+    assert!(!gpu_adapter_matches(arc, ""));
+    assert!(!gpu_adapter_matches(arc, "   "));
 }
 
 #[test]
@@ -553,7 +713,9 @@ fn notification_autohide_preferences() {
 fn linux_only_preferences_show_only_on_linux() {
     assert_eq!(is_hidden("performance.linuxDisplayServer"), !cfg!(target_os = "linux"));
     assert!(!is_hidden("performance.gpuBackend"));
-    assert!(LINUX_ONLY.iter().all(|p| choices(p).is_some()), "every Linux-only preference is a real one");
+    assert!(LINUX_ONLY.contains(&"performance.gpuAdapter"));
+    let free_text = ["performance.gpuAdapter"];
+    assert!(LINUX_ONLY.iter().all(|p| free_text.contains(p) || choices(p).is_some()), "every Linux-only preference is a real one");
 }
 
 #[test]
@@ -656,6 +818,168 @@ fn ruler_units_round_to_their_own_decimal_places() {
     assert_eq!(r.format(100.0, 300.0, 1500.0), "0.333");
 }
 
+/// #2259: arrow-key nudges bundle into one History state by default, within a pause long enough
+/// for a held key's auto-repeat delay; both are Tools preferences with a validated range.
+#[test]
+fn nudge_bundling_preferences() {
+    let p = Preferences::default();
+    assert!(p.tools.bundle_nudges);
+    assert_eq!(p.tools.nudge_bundle_pause_ms, 1000);
+    // Preferences saved before these existed load with the defaults.
+    let old: Preferences = serde_json::from_value(json!({"tools": {"showTooltips": false}})).unwrap();
+    assert!(old.tools.bundle_nudges && !old.tools.show_tooltips);
+    assert_eq!(old.tools.nudge_bundle_pause_ms, 1000);
+
+    let mut s = session();
+    assert_eq!(s.execute("prefs.get", json!({"path": "tools.bundleNudges"})).unwrap(), json!(true));
+    s.execute("prefs.set", json!({"values": {"tools.bundleNudges": false, "tools.nudgeBundlePauseMs": 250}})).unwrap();
+    assert!(!s.prefs().tools.bundle_nudges);
+    assert_eq!(s.prefs().tools.nudge_bundle_pause_ms, 250);
+    for edge in [100, 10_000] {
+        s.execute("prefs.set", json!({"path": "tools.nudgeBundlePauseMs", "value": edge})).unwrap();
+        assert_eq!(s.prefs().tools.nudge_bundle_pause_ms, edge);
+    }
+    for bad in [json!(0), json!(99), json!(10_001), json!(-1), json!(1.5e300), json!("long"), json!(null)] {
+        assert!(s.execute("prefs.set", json!({"path": "tools.nudgeBundlePauseMs", "value": bad.clone()})).is_err(), "{bad}");
+    }
+    assert!(s.execute("prefs.set", json!({"path": "tools.bundleNudges", "value": "yes"})).is_err());
+    assert_eq!(s.prefs().tools.nudge_bundle_pause_ms, 10_000, "a rejected value changes nothing");
+    s.execute("prefs.reset", json!({"path": "tools"})).unwrap();
+    assert!(s.prefs().tools.bundle_nudges);
+    assert_eq!(s.prefs().tools.nudge_bundle_pause_ms, 1000);
+}
+
+/// #3665: Photoshop's second default keys (F2/F3/F4, Shift+F7, Cmd++) are a command's
+/// alternates, beside the main key its menu shows.
+#[test]
+fn commands_have_photoshops_alternate_keys() {
+    let p = Preferences::default();
+    let main = |id: &str| crate::commands::find(id).and_then(|c| c.shortcut);
+    assert_eq!(main("edit.cut"), Some("Cmd+X"));
+    assert_eq!(p.alternates("edit.cut", main("edit.cut")), ["F2"]);
+    assert_eq!(p.alternates("edit.copy", main("edit.copy")), ["F3"]);
+    assert_eq!(p.alternates("edit.paste", main("edit.paste")), ["F4"]);
+    assert_eq!(main("select.inverse"), Some("Cmd+Shift+I"));
+    assert_eq!(p.alternates("select.inverse", main("select.inverse")), ["Shift+F7"]);
+    assert_eq!(p.alternates("edit.fill", main("edit.fill")), ["Shift+Backspace"]);
+    assert_eq!(p.alternates("view.zoomIn", Some("Cmd+=")), ["Cmd++"]);
+    assert!(p.alternates("edit.undo", main("edit.undo")).is_empty());
+    // No alternate is another command's main key or another command's alternate.
+    let mut seen = std::collections::HashMap::new();
+    for c in crate::command_specs() {
+        if let Some(sc) = c.shortcut.and_then(normalize_shortcut) {
+            seen.insert(sc, c.id);
+        }
+    }
+    for (id, sc) in ALTERNATE_SHORTCUTS {
+        let n = normalize_shortcut(sc).unwrap();
+        assert!(seen.insert(n, id).is_none(), "{sc} of {id} is already bound");
+    }
+    // A command's own main key is never repeated as its alternate.
+    assert!(p.alternates("edit.copy", Some("F3")).is_empty());
+}
+
+/// Settings files written before alternates existed still load, keeping their overrides and
+/// gaining the default alternates.
+#[test]
+fn old_settings_without_alternates_load() {
+    let old: Preferences = serde_json::from_str(r#"{"shortcuts": {"edit.copy": "Cmd+K", "edit.undo": ""}}"#).unwrap();
+    assert_eq!(old.shortcut("edit.copy", Some("Cmd+C")), Some("Cmd+K"));
+    assert!(old.alternate_shortcuts.is_empty());
+    // Overriding the main key keeps the alternate (Photoshop edits each row on its own).
+    assert_eq!(old.alternates("edit.copy", old.shortcut("edit.copy", Some("Cmd+C"))), ["F3"]);
+    // And a file with alternates round-trips.
+    let mut p = old.clone();
+    p.set("alternateShortcuts.edit.copy", json!(["f9", "F9"])).unwrap();
+    let back: Preferences = serde_json::from_value(p.to_json()).unwrap();
+    assert_eq!(back.alternate_shortcuts.get("edit.copy"), Some(&vec!["F9".to_string()]));
+}
+
+#[test]
+fn alternate_shortcuts_set_reset_and_reject_bad_input() {
+    let mut s = session();
+    // Through the command: a list replaces the defaults, [] removes them, null restores them.
+    s.execute("edit.keyboardShortcuts", json!({"alternates": {"edit.copy": ["F9"]}})).unwrap();
+    assert_eq!(s.prefs().alternates("edit.copy", Some("Cmd+C")), ["F9"]);
+    let r = s.execute("edit.keyboardShortcuts", json!({"filter": "edit.copy"})).unwrap();
+    let row = r["commands"].as_array().unwrap().iter().find(|c| c["id"] == "edit.copy").unwrap().clone();
+    assert_eq!(row["alternates"], json!(["F9"]));
+    assert_eq!(row["defaultAlternates"], json!(["F3"]));
+    s.execute("edit.keyboardShortcuts", json!({"alternates": {"edit.copy": []}})).unwrap();
+    assert!(s.prefs().alternates("edit.copy", Some("Cmd+C")).is_empty());
+    s.execute("edit.keyboardShortcuts", json!({"alternates": {"edit.copy": null}})).unwrap();
+    assert_eq!(s.prefs().alternates("edit.copy", Some("Cmd+C")), ["F3"]);
+    // Through prefs.set / prefs.reset by path.
+    s.execute("prefs.set", json!({"path": "alternateShortcuts.edit.cut", "value": "F10"})).unwrap();
+    assert_eq!(s.prefs().alternates("edit.cut", Some("Cmd+X")), ["F10"]);
+    s.execute("prefs.reset", json!({"path": "alternateShortcuts.edit.cut"})).unwrap();
+    assert_eq!(s.prefs().alternates("edit.cut", Some("Cmd+X")), ["F2"]);
+    // Reset all clears alternates too.
+    s.execute("edit.keyboardShortcuts", json!({"alternates": {"edit.paste": []}})).unwrap();
+    s.execute("edit.keyboardShortcuts", json!({"reset": true})).unwrap();
+    assert!(s.prefs().alternate_shortcuts.is_empty());
+    // Bad input is an error, not a panic, and changes nothing.
+    for bad in [
+        json!({"alternates": {"edit.copy": "Cmd+Shift"}}),
+        json!({"alternates": {"edit.copy": [3]}}),
+        json!({"alternates": {"edit.copy": {"a": 1}}}),
+        json!({"alternates": {"edit.copy": vec!["F1"; MAX_ALTERNATES + 1]}}),
+        json!({"alternates": {"no.such.command": ["F9"]}}),
+        json!({"alternates": "F3"}),
+    ] {
+        assert!(s.execute("edit.keyboardShortcuts", bad.clone()).is_err(), "{bad}");
+    }
+    assert!(s.prefs().alternate_shortcuts.is_empty());
+    // A bad key in the same call as a reset leaves every shortcut as it was.
+    s.execute("edit.keyboardShortcuts", json!({"set": {"edit.copy": "Cmd+K"}})).unwrap();
+    assert!(s.execute("edit.keyboardShortcuts", json!({"reset": true, "alternates": {"edit.copy": ["Cmd+Shift"]}})).is_err());
+    assert_eq!(s.prefs().shortcut("edit.copy", Some("Cmd+C")), Some("Cmd+K"));
+    assert!(s.execute("prefs.set", json!({"path": "alternateShortcuts", "value": {"edit.copy": ["Cmd+Shift"]}})).is_err());
+    assert!(s.execute("prefs.set", json!({"path": "alternateShortcuts", "value": 7})).is_err());
+}
+
+/// A key given to another command is taken from the command that held it as an alternate
+/// (Photoshop moves a shortcut rather than duplicating it), and kept duplicates are reported.
+#[test]
+fn moving_an_alternate_key_takes_it_from_its_holder() {
+    let mut s = session();
+    // F2 is Cut's alternate; Rename Layer may take it (#2405).
+    let r = s.execute("edit.keyboardShortcuts", json!({"set": {"layer.renameLayer": "F2"}, "removeConflicts": false})).unwrap();
+    assert!(r["conflicts"].as_array().unwrap().iter().any(|c| c["shortcut"] == "F2"), "{r}");
+    s.execute("edit.keyboardShortcuts", json!({"reset": true})).unwrap();
+    let r = s.execute("edit.keyboardShortcuts", json!({"set": {"layer.renameLayer": "F2"}})).unwrap();
+    assert!(r["conflicts"].as_array().unwrap().is_empty(), "{r}");
+    assert!(s.prefs().alternates("edit.cut", Some("Cmd+X")).is_empty());
+    assert_eq!(s.prefs().shortcut("edit.cut", Some("Cmd+X")), Some("Cmd+X"), "Cut keeps its main key");
+    // An alternate assigned to another command takes a main key too.
+    s.execute("edit.keyboardShortcuts", json!({"alternates": {"edit.copy": ["Cmd+Z"]}})).unwrap();
+    assert_eq!(s.prefs().shortcut("edit.undo", Some("Cmd+Z")), None);
+    // Overriding the main key keeps the alternates.
+    s.execute("edit.keyboardShortcuts", json!({"reset": true, "set": {"edit.copy": "Cmd+K"}})).unwrap();
+    assert_eq!(s.prefs().alternates("edit.copy", s.prefs().shortcut("edit.copy", Some("Cmd+C"))), ["F3"]);
+}
+
+/// #3665: a `.kys` row listing a command's default and a function key keeps both; the old
+/// import kept only the first key.
+#[test]
+fn kys_import_keeps_a_rows_second_key() {
+    let mut s = session();
+    let xml = "<photoshop-keyboard-shortcuts>\
+        <command name=\"Copy\"><shortcut>Cmd+C</shortcut><shortcut>F3</shortcut></command>\
+        <command name=\"Cut\"><shortcut>Cmd+X</shortcut></command>\
+        <command name=\"Undo\"><shortcut>Cmd+Z</shortcut><shortcut>F1</shortcut></command>\
+        </photoshop-keyboard-shortcuts>";
+    let r = s.execute("edit.keyboardShortcuts", json!({"importKys": xml})).unwrap();
+    assert_eq!(r["import"]["alternates"], 2);
+    let p = s.prefs();
+    assert_eq!(p.shortcut("edit.copy", Some("Cmd+C")), Some("Cmd+C"));
+    assert_eq!(p.alternates("edit.copy", Some("Cmd+C")), ["F3"]);
+    assert!(!p.alternate_shortcuts.contains_key("edit.copy"), "the default alternate needs no override");
+    // A row without Cut's F2 removes it; Undo gains F1.
+    assert!(p.alternates("edit.cut", Some("Cmd+X")).is_empty());
+    assert_eq!(p.alternates("edit.undo", Some("Cmd+Z")), ["F1"]);
+}
+
 /// #3296: like Photoshop, "Use Shift Key for Tool Switch" is on by default; a stored choice wins.
 #[test]
 fn shift_key_tool_switch_is_on_by_default_and_a_stored_false_is_kept() {
@@ -664,4 +988,315 @@ fn shift_key_tool_switch_is_on_by_default_and_a_stored_false_is_kept() {
     assert!(missing.use_shift_key_for_tool_switch, "a settings file without the key gets the new default");
     let stored: Tools = serde_json::from_value(json!({"useShiftKeyForToolSwitch": false})).unwrap();
     assert!(!stored.use_shift_key_for_tool_switch);
+}
+
+/// #5647: a settings file from before version 2 stored the switch off only because that was the
+/// old default, so it loads with the new default (on); one saved since keeps an explicit off.
+#[test]
+fn old_settings_files_take_the_shift_key_tool_switch_default() {
+    for old in
+        [json!({"tools": {"useShiftKeyForToolSwitch": false}}), json!({"version": 1, "tools": {"useShiftKeyForToolSwitch": false, "showTooltips": false}})]
+    {
+        let mut s = Session::new();
+        s.load_prefs_json(&old.to_string()).unwrap();
+        assert!(s.prefs().tools.use_shift_key_for_tool_switch, "{old}");
+    }
+    let mut s = Session::new();
+    s.load_prefs_json(&json!({"version": 1, "tools": {"showTooltips": false}}).to_string()).unwrap();
+    assert!(!s.prefs().tools.show_tooltips, "other tool settings are kept");
+    // Chosen off and saved now: kept on the next start.
+    s.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false);
+    let saved = s.prefs_to_json();
+    assert_eq!(serde_json::from_str::<Value>(&saved).unwrap()["version"], json!(PREFS_VERSION));
+    let mut restored = Session::new();
+    restored.load_prefs_json(&saved).unwrap();
+    assert!(!restored.prefs().tools.use_shift_key_for_tool_switch);
+}
+
+/// Shortcut exports are all or nothing (#5801): a rename that fails after the first file was
+/// moved in puts the user's files back as they were and leaves nothing staged.
+#[test]
+fn exports_are_written_all_or_nothing() {
+    use super::write_files_atomically;
+    let dir = std::env::temp_dir().join(format!("photocraft-atomic-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (a, b) = (dir.join("a.kys"), dir.join("b.html"));
+    std::fs::write(&a, "old A").unwrap();
+    std::fs::write(&b, "old B").unwrap();
+    let (pa, pb) = (a.to_str().unwrap(), b.to_str().unwrap());
+    let staged_moves = std::cell::Cell::new(0);
+    let failing = |from: &std::path::Path, to: &std::path::Path| {
+        if from.to_string_lossy().ends_with("photocraft-tmp") {
+            staged_moves.set(staged_moves.get() + 1);
+            if staged_moves.get() == 2 {
+                return Err(std::io::Error::other("disk gone"));
+            }
+        }
+        std::fs::rename(from, to)
+    };
+    assert!(write_files_atomically(&[(pa, "new A"), (pb, "new B")], &failing).is_err());
+    assert_eq!((std::fs::read_to_string(&a).unwrap(), std::fs::read_to_string(&b).unwrap()), ("old A".into(), "old B".into()));
+    let leftovers = || std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy().contains(".photocraft-")).count();
+    assert_eq!(leftovers(), 0);
+    // A backup move that fails leaves no empty placeholder behind.
+    let backups = std::cell::Cell::new(0);
+    let failing_backup = |from: &std::path::Path, to: &std::path::Path| {
+        if to.to_string_lossy().ends_with("photocraft-bak") {
+            backups.set(backups.get() + 1);
+            if backups.get() == 2 {
+                return Err(std::io::Error::other("locked"));
+            }
+        }
+        std::fs::rename(from, to)
+    };
+    assert!(write_files_atomically(&[(pa, "new A"), (pb, "new B")], &failing_backup).is_err());
+    assert_eq!((std::fs::read_to_string(&a).unwrap(), std::fs::read_to_string(&b).unwrap()), ("old A".into(), "old B".into()));
+    assert_eq!(leftovers(), 0);
+    // The same target twice is refused before anything is written.
+    assert!(write_files_atomically(&[(pa, "x"), (pa, "y")], &|f, t| std::fs::rename(f, t)).is_err());
+    assert_eq!(std::fs::read_to_string(&a).unwrap(), "old A");
+    // A target named like a staging file is just a file.
+    let odd = dir.join("c.kys.photocraft-tmp");
+    std::fs::write(&odd, "old C").unwrap();
+    write_files_atomically(&[(pa, "new A"), (odd.to_str().unwrap(), "new C")], &|f, t| std::fs::rename(f, t)).unwrap();
+    assert_eq!((std::fs::read_to_string(&a).unwrap(), std::fs::read_to_string(&odd).unwrap()), ("new A".into(), "new C".into()));
+    assert_eq!(leftovers(), 1, "only c.kys.photocraft-tmp itself");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A backup that can't be put back after a failed export is named in the error, and stays where
+/// it is with the user's previous text.
+#[test]
+fn a_stranded_backup_is_named_in_the_error() {
+    use super::write_files_atomically;
+    let dir = std::env::temp_dir().join(format!("photocraft-stranded-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (a, b) = (dir.join("a.kys"), dir.join("b.html"));
+    std::fs::write(&a, "old A").unwrap();
+    std::fs::write(&b, "old B").unwrap();
+    let (pa, pb) = (a.to_str().unwrap(), b.to_str().unwrap());
+    let staged = std::cell::Cell::new(0);
+    // The second staged move fails, and so does putting a.kys's backup back.
+    let rename = |from: &std::path::Path, to: &std::path::Path| {
+        let f = from.to_string_lossy();
+        if f.ends_with("photocraft-tmp") {
+            staged.set(staged.get() + 1);
+            if staged.get() == 2 {
+                return Err(std::io::Error::other("disk gone"));
+            }
+        }
+        if f.ends_with("photocraft-bak") && to == a.as_path() {
+            return Err(std::io::Error::other("locked"));
+        }
+        std::fs::rename(from, to)
+    };
+    let e = write_files_atomically(&[(pa, "new A"), (pb, "new B")], &rename).unwrap_err();
+    assert!(e.contains(&format!("the previous {} is at", a.display())), "{e}");
+    let backup: Vec<_> =
+        std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.to_string_lossy().ends_with("photocraft-bak")).collect();
+    assert_eq!(backup.len(), 1, "{backup:?}");
+    assert!(e.contains(&backup[0].display().to_string()), "{e}");
+    assert_eq!(std::fs::read_to_string(&backup[0]).unwrap(), "old A");
+    assert_eq!(std::fs::read_to_string(&b).unwrap(), "old B");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_wrongly_typed_value_resets_only_that_field() {
+    // #6611: one bad value used to reset every preference.
+    let mut s = Session::new();
+    let invalid = s
+        .load_prefs_json(
+            r#"{"general": {"beepWhenDone": true}, "fileHandling": {"recentFileCount": "ten", "autosaveMinutes": 5},
+                "performance": {"historyStates": 20}, "shortcuts": {"edit.fill": "Cmd+Shift+F", "file.open": 7}}"#,
+        )
+        .unwrap();
+    assert!(s.prefs().general.beep_when_done);
+    assert_eq!(s.prefs().file_handling.autosave_minutes, 5, "a sibling in the same section survives");
+    assert_eq!(s.prefs().file_handling.recent_file_count, 20, "the bad value takes the default");
+    assert_eq!(s.prefs().performance.history_states, 20);
+    assert_eq!(s.prefs().shortcuts.get("edit.fill").map(String::as_str), Some("Cmd+Shift+F"));
+    assert!(!s.prefs().shortcuts.contains_key("file.open"));
+    let paths: Vec<String> = invalid.iter().map(InvalidPref::path).collect();
+    assert_eq!(paths, ["fileHandling.recentFileCount", "shortcuts.file.open"]);
+    assert_eq!(invalid[0].value, json!("ten"));
+    assert_eq!(invalid[1].keys, ["shortcuts", "file.open"]);
+}
+
+#[test]
+fn the_removed_enable_animations_preference_still_loads_and_is_unknown() {
+    // #9479: Interface › Enable animations is gone (Photoshop has no such setting). Files saved
+    // with it still load whole, without a reported bad value, and the key isn't written back.
+    let mut s = Session::new();
+    let invalid =
+        s.load_prefs_json(r#"{"version": 2, "interface": {"enableAnimations": false, "showTooltips": false}, "performance": {"historyStates": 20}}"#).unwrap();
+    assert!(invalid.is_empty(), "{invalid:?}");
+    assert!(!s.prefs().interface.show_tooltips, "its neighbours load");
+    assert_eq!(s.prefs().performance.history_states, 20);
+    assert!(!s.prefs_to_json().contains("enableAnimations"));
+    for value in [json!(true), json!(false), json!("nope")] {
+        let e = s.execute("prefs.set", json!({"values": {"interface.enableAnimations": value}})).unwrap_err();
+        assert!(e.to_string().contains("unknown preference"), "{e}");
+        assert!(s.execute("prefs.set", json!({"path": "interface.enableAnimations", "value": value})).is_err());
+    }
+    assert!(s.execute("prefs.get", json!({"path": "interface.enableAnimations"})).is_err());
+}
+
+#[test]
+fn a_wrongly_typed_section_or_colour_setting_resets_only_that_part() {
+    let mut s = Session::new();
+    let invalid = s
+        .load_prefs_json(
+            r#"{"general": "loud", "performance": {"historyStates": 20},
+                "colorSettings": {"workingRgb": "display-p3", "askOnMismatch": "yes"}}"#,
+        )
+        .unwrap();
+    assert_eq!(s.prefs().general, General::default());
+    assert_eq!(s.prefs().performance.history_states, 20);
+    assert_eq!(s.color.settings.working_rgb, "display-p3", "the rest of the colour settings load");
+    let paths: Vec<String> = invalid.iter().map(InvalidPref::path).collect();
+    assert_eq!(paths, ["general", "colorSettings.askOnMismatch"]);
+    // A valid file reports nothing; one that isn't an object still fails as a whole.
+    assert!(s.load_prefs_json(&s.prefs_to_json()).unwrap().is_empty());
+    for bad in ["[1, 2]", "42", "\"prefs\"", "null", "{", ""] {
+        assert!(s.load_prefs_json(bad).is_err(), "{bad}");
+    }
+    // Deep nesting and odd values don't panic.
+    let deep = format!("{{\"general\": {}1{}}}", "{\"a\":".repeat(100), "}".repeat(100));
+    assert!(s.load_prefs_json(&deep).is_ok());
+    assert!(s.load_prefs_json(r#"{"interface": {"theme": 3, "uiScale": [1]}, "workspaces": {"x": 1}, "menus": 1}"#).is_ok());
+}
+
+/// A saved Memory Usage is kept as stored, and means the same on desktop; only the web build
+/// caps what it honours.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_history_budget_is_the_stored_memory_usage_on_native() {
+    for mb in [0u32, 1, 1536, 8192, 65536, u32::MAX] {
+        let p = Performance { memory_usage_mb: mb, ..Performance::default() };
+        assert_eq!(p.effective_memory_usage_mb(), mb);
+        assert_eq!(p.history_budget_bytes(), (mb as usize) << 20, "{mb} MB");
+    }
+    let mut s = Session::new();
+    s.load_prefs_json(r#"{"performance": {"memoryUsageMb": 8192}}"#).unwrap();
+    assert_eq!(s.prefs().performance.memory_usage_mb, 8192);
+    assert_eq!(s.prefs().performance.history_budget_bytes(), 8192 << 20);
+}
+
+/// The web build honours Memory Usage up to its cap: below and at it as stored, above it the cap.
+#[test]
+fn the_web_build_caps_memory_usage() {
+    for (stored, honoured) in [
+        (0, 0),
+        (1024, 1024),
+        (WASM_MEMORY_USAGE_CAP_MB, WASM_MEMORY_USAGE_CAP_MB),
+        (WASM_MEMORY_USAGE_CAP_MB + 1, WASM_MEMORY_USAGE_CAP_MB),
+        (8192, WASM_MEMORY_USAGE_CAP_MB),
+        (u32::MAX, WASM_MEMORY_USAGE_CAP_MB),
+    ] {
+        assert_eq!(honoured_memory_usage_mb(stored, true), honoured, "web, {stored} MB");
+        assert_eq!(honoured_memory_usage_mb(stored, false), stored, "desktop, {stored} MB");
+    }
+}
+
+#[test]
+fn paths_with_empty_segments_cannot_skip_the_alternate_shortcut_limit() {
+    let mut prefs = Preferences::default();
+    let many: Vec<String> = (1..=100).map(|n| format!("F{n}")).collect();
+    for path in [".alternateShortcuts", "alternateShortcuts..", ".alternateShortcuts.file.save", "interface..systemTitleBar"] {
+        assert!(prefs.set(path, json!({"file.save": many})).is_err(), "{path}");
+    }
+    assert!(prefs.set("alternateShortcuts.file.save", json!(many)).is_err());
+    assert!(prefs.alternate_shortcuts.is_empty());
+    prefs.alternate_shortcuts.insert("file.save".into(), (1..=100).map(|n| format!("F{n}")).collect());
+    assert!(prefs.alternates("file.save", None).len() <= MAX_ALTERNATES);
+}
+
+/// The effect cache budget is the stored MB in bytes, at least 16 MB (a hand-edited 0 included),
+/// at most 1536 MB on a 32-bit address space (the web, 32-bit Windows) and 65536 MB elsewhere,
+/// and never wraps: on wasm32 an uncapped 4096 MB shifted into `usize` was 0. Both kinds of
+/// build are checked on every target, in `u64` so the expectations themselves can't overflow a
+/// 32-bit `usize`.
+#[test]
+fn the_effect_cache_budget_is_capped_on_32_bit_builds_and_never_wraps() {
+    const MB: u64 = 1 << 20;
+    let cap = WASM_MEMORY_USAGE_CAP_MB;
+    for (stored, small_mb, large_mb) in [
+        (0, 16, 16),
+        (15, 16, 16),
+        (16, 16, 16),
+        (768, 768, 768),
+        (cap, cap, cap),
+        (cap + 1, cap, cap + 1),
+        (4096, cap, 4096),
+        (65536, cap, 65536),
+        (u32::MAX, cap, 65536),
+    ] {
+        assert_eq!(effect_cache_budget_bytes_for(stored, true), u64::from(small_mb) * MB, "32-bit, {stored} MB");
+        assert_eq!(effect_cache_budget_bytes_for(stored, false), u64::from(large_mb) * MB, "64-bit, {stored} MB");
+    }
+    let p = Performance { effect_cache_mb: 4096, ..Performance::default() };
+    let expected = effect_cache_budget_bytes_for(4096, cfg!(target_pointer_width = "32"));
+    assert_eq!(u64::try_from(p.effect_cache_budget_bytes()).ok(), Some(expected), "fits this target's usize");
+}
+
+/// The Effect Cache field accepts only what the build honours, so the dialog never shows a value
+/// the cache doesn't get.
+#[test]
+fn the_effect_cache_range_matches_the_honoured_budget() {
+    assert_eq!(effect_cache_max_mb(true), WASM_MEMORY_USAGE_CAP_MB);
+    assert_eq!(effect_cache_max_mb(false), 65536);
+    for small in [true, false] {
+        let max = effect_cache_max_mb(small);
+        assert_eq!(effect_cache_budget_bytes_for(max, small), u64::from(max) << 20, "small = {small}: the largest accepted value is honoured");
+    }
+    assert_eq!(effect_cache_budget_bytes_for(EFFECT_CACHE_MIN_MB, false), u64::from(EFFECT_CACHE_MIN_MB) << 20, "the smallest accepted value is honoured");
+    let small = cfg!(target_pointer_width = "32");
+    assert_eq!(range("performance.effectCacheMb"), Some((f64::from(EFFECT_CACHE_MIN_MB), f64::from(effect_cache_max_mb(small)))));
+    assert!(check_value("performance.effectCacheMb", &json!(effect_cache_max_mb(small))).is_ok());
+    assert!(check_value("performance.effectCacheMb", &json!(effect_cache_max_mb(small) + 1)).is_err());
+    assert!(Performance::default().effect_cache_mb <= effect_cache_max_mb(true), "the default fits the 32-bit cap");
+}
+
+/// An Effect Cache the field no longer accepts loads as the nearest value it does: a 32-bit build
+/// took up to 65536 MB before its 1536 MB cap, and Apply from another Preferences tab sends every
+/// value, so the old one rejected the whole change. On every target: the helper for both kinds of
+/// build, and the load and Apply paths for this one.
+#[test]
+fn an_effect_cache_above_the_cap_loads_clamped_and_does_not_block_apply() {
+    let cap = WASM_MEMORY_USAGE_CAP_MB;
+    for (stored, small_mb, large_mb) in [(0, 16, 16), (768, 768, 768), (cap + 1, cap, cap + 1), (4096, cap, 4096), (65536, cap, 65536), (u32::MAX, cap, 65536)]
+    {
+        assert_eq!(accepted_effect_cache_mb(stored, true), small_mb, "32-bit, {stored} MB");
+        assert_eq!(accepted_effect_cache_mb(stored, false), large_mb, "64-bit, {stored} MB");
+    }
+    let max = effect_cache_max_mb(SMALL_ADDRESS_SPACE);
+    for (saved, loaded) in [(u64::from(max) + 1, max), (u64::from(u32::MAX), max), (0, EFFECT_CACHE_MIN_MB), (768, 768)] {
+        let mut s = session();
+        let invalid = s.load_prefs_json(&json!({"performance": {"effectCacheMb": saved}}).to_string()).unwrap();
+        assert!(invalid.is_empty(), "{saved} MB reads, so it isn't reported: {invalid:?}");
+        assert_eq!(s.execute("prefs.get", json!({"path": "performance.effectCacheMb"})).unwrap(), json!(loaded), "{saved} MB");
+        let mut values = s.execute("prefs.get", json!({"path": ""})).unwrap();
+        values["fileHandling"]["recentFileCount"] = json!(7);
+        s.execute("prefs.set", json!({"path": "", "value": values})).unwrap();
+        assert_eq!(s.execute("prefs.get", json!({"path": "fileHandling.recentFileCount"})).unwrap(), json!(7), "{saved} MB");
+    }
+}
+
+/// A file from before the agents switch whose Control Port started the control server keeps
+/// it on; one without a port, or that already says, is left as it is.
+#[test]
+fn a_saved_control_port_turns_the_agent_connection_on() {
+    let load = |text: &str| {
+        let mut session = Session::new();
+        session.load_prefs_json(text).unwrap();
+        session.prefs().integrations.clone()
+    };
+    let legacy = load(r#"{"integrations":{"allowAgentControl":true,"controlPort":7878}}"#);
+    assert!(legacy.connect_agents);
+    assert_eq!(legacy.agents.control_port, 7878);
+    assert!(!load(r#"{"integrations":{"controlPort":0}}"#).connect_agents);
+    assert!(!load(r#"{"integrations":{"controlPort":70000}}"#).connect_agents, "not a usable port");
+    assert!(!load(r#"{"integrations":{"controlPort":7878,"connectAgents":false}}"#).connect_agents, "an explicit choice wins");
+    assert!(!load("{}").connect_agents, "off by default");
 }

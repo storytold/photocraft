@@ -1,6 +1,6 @@
 use super::*;
-use photocraft_psd::abr::{LegacyBrush, write_v6, write_v6_folders, write_v12};
-use photocraft_psd::descriptor::{Id, UnicodeString};
+use craft_psd::abr::{LegacyBrush, write_v6, write_v6_folders, write_v12};
+use craft_psd::descriptor::{Id, UnicodeString};
 
 fn sample(id: &str, w: u32, h: u32, depth: u16) -> AbrSample {
     let bpp = usize::from(depth / 8);
@@ -129,6 +129,43 @@ fn grit_pattern() -> PsdPattern {
 }
 
 #[test]
+fn pose_axes_abr_import_preserves_independent_stylus_tilt() {
+    let input = photocraft_paint::StrokePoint { tilt_x: 13.0, tilt_y: -27.0, pressure: 0.71, rotation: 67.0, wheel: 0.24, time: 73.0, ..Default::default() };
+    for subversion in [1, 2] {
+        for (x, y) in [(false, false), (true, false), (false, true), (true, true)] {
+            let preset = Descriptor::new("brushPreset")
+                .with("Brsh", Value::Descriptor(Descriptor::new("computedBrush").with("Dmtr", u(b"#Pxl", 47.0))))
+                .with("useBrushPose", Value::Boolean(true))
+                .with("brushPoseTiltX", prc(50.0))
+                .with("brushPoseTiltY", prc(-20.0))
+                .with("overridePoseTiltX", Value::Boolean(x))
+                .with("overridePoseTiltY", Value::Boolean(y));
+            let bytes = write_v6(subversion, &[], &[], &[preset], false).unwrap();
+            let imported = read_abr(&bytes, "Pose axes").unwrap();
+            assert_eq!(imported.presets.len(), 1);
+            let b = &imported.presets[0].brush;
+            assert!(b.pose.enabled);
+            assert_eq!((b.pose.tilt_x, b.pose.tilt_y), (45.0, -18.0), "ABR percentages retain the W3C degree conversion");
+            let mut expected = input;
+            if x {
+                expected.tilt_x = 45.0;
+            }
+            if y {
+                expected.tilt_y = -18.0;
+            }
+            assert_eq!(
+                photocraft_paint::dynamics::apply_pose(b, input),
+                expected,
+                "v6.{subversion}, X={x}, Y={y}: one axis must not override the other's tablet data"
+            );
+            let stored = serde_json::to_vec(&imported.presets[0]).unwrap();
+            let restored: photocraft_paint::BrushPreset = serde_json::from_slice(&stored).unwrap();
+            assert_eq!(photocraft_paint::dynamics::apply_pose(&restored.brush, input), expected, "preset persistence retains the independent flags");
+        }
+    }
+}
+
+#[test]
 fn v6_settings_map_onto_brush_sections() {
     for sub in [1, 2] {
         let computed = Descriptor::new("brushPreset")
@@ -140,7 +177,7 @@ fn v6_settings_map_onto_brush_sections() {
         let p = &imp.presets[0];
         assert_eq!((p.name.as_str(), p.group.as_str(), p.builtin), ("Kitchen Sink", "Test", false));
         let b = &p.brush;
-        let TipShape::Sampled(tile) = &b.tip else { panic!("sampled tip expected") };
+        let TipShape::Sampled(tile) = &*b.tip else { panic!("sampled tip expected") };
         assert_eq!((tile.width, tile.height), (16, 8));
         assert_eq!((tile.data[0], tile.data[1]), (65535, 0));
         assert_eq!((b.size, b.angle, b.roundness, b.spacing, b.flip_x, b.flip_y), (64.0, 30.0, 0.8, 0.4, true, false));
@@ -166,14 +203,14 @@ fn v6_settings_map_onto_brush_sections() {
         assert!(b.transfer.enabled);
         assert_eq!((b.transfer.opacity.control, b.transfer.opacity.minimum), (Control::PenPressure, 0.1));
         assert_eq!((b.transfer.flow.control, b.transfer.flow.jitter), (Control::Fade, 0.15));
-        assert!(b.pose.enabled && b.pose.override_rotation && !b.pose.override_tilt);
+        assert!(b.pose.enabled && b.pose.override_rotation && !b.pose.override_tilt_x && !b.pose.override_tilt_y);
         assert_eq!((b.pose.tilt_x, b.pose.rotation), (45.0, 90.0));
         assert!(b.wet_edges && b.noise && b.build_up);
         assert_eq!((b.opacity, b.flow, b.smoothing.amount, b.pressure_size), (0.8, 0.6, 0.4, true));
         assert!(imp.warnings.iter().any(|w| w.contains("someFutureKey")), "{:?}", imp.warnings);
         // The computed preset.
         let r = &imp.presets[1].brush;
-        assert_eq!((r.tip.clone(), r.size, r.hardness, r.spacing, r.pressure_size), (TipShape::Round, 19.0, 0.0, 0.1, false));
+        assert_eq!(((*r.tip).clone(), r.size, r.hardness, r.spacing, r.pressure_size), (TipShape::Round, 19.0, 0.0, 0.1, false));
     }
 }
 
@@ -285,7 +322,7 @@ fn big_tips_are_downsampled() {
     let s = AbrSample { id: "$big".into(), width: 3000, height: 1500, depth: 8, data: vec![200; 3000 * 1500] };
     let bytes = write_v6(2, &[s], &[], &[], true).unwrap();
     let imp = read_abr(&bytes, "g").unwrap();
-    let TipShape::Sampled(t) = &imp.presets[0].brush.tip else { panic!() };
+    let TipShape::Sampled(t) = &*imp.presets[0].brush.tip else { panic!() };
     assert_eq!((t.width, t.height), (MAX_TIP_EDGE, 1250));
     assert_eq!(imp.presets[0].brush.size, 3000.0);
     assert!(imp.warnings.iter().any(|w| w.contains("downsampled")));

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Image › Analysis › Set Measurement Scale: `pixel_length` pixels equal `logical_length`
 /// `units`. The default is 1 pixel = 1 pixel.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default)]
 pub struct MeasurementScale {
     pub pixel_length: f64,
@@ -30,16 +30,14 @@ impl MeasurementScale {
     }
     /// Photoshop's "Scale" column text, e.g. `1 pixels = 1.0000 pixels`.
     pub fn describe(&self) -> String {
-        format!("{} pixels = {:.4} {}", trim(self.pixel_length), self.logical_length, self.units)
+        // f64 Display already drops a whole number's `.0` (`5`, `0.5`) and, unlike an i64 cast,
+        // prints lengths past i64::MAX in full.
+        format!("{} pixels = {:.4} {}", self.pixel_length, self.logical_length, self.units)
     }
 }
 
-fn trim(v: f64) -> String {
-    if v.fract() == 0.0 { format!("{}", v as i64) } else { format!("{v}") }
-}
-
 /// One Count tool group: its numbered markers (document pixel coordinates, in click order).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default)]
 pub struct CountGroup {
     pub name: String,
@@ -59,7 +57,7 @@ impl Default for CountGroup {
 
 /// The Ruler tool line, optionally with a protractor second arm (⌥-drag from an end point).
 /// `start` is the vertex the angle is measured at when there is a protractor.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Ruler {
     pub start: [f64; 2],
     pub end: [f64; 2],
@@ -68,7 +66,7 @@ pub struct Ruler {
 }
 
 /// Measurement settings and marks of a document.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default)]
 pub struct Measurement {
     pub scale: MeasurementScale,
@@ -89,7 +87,7 @@ impl Measurement {
 }
 
 /// A Note tool annotation (PSD `Anno` text annotation).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default)]
 pub struct Note {
     pub author: String,
@@ -131,6 +129,17 @@ mod tests {
         assert_eq!(s.describe(), "100 pixels = 2.5000 cm");
         assert!(MeasurementScale::default().is_default());
         assert_eq!(MeasurementScale { pixel_length: 0.0, ..Default::default() }.factor(), 1.0);
+    }
+
+    #[test]
+    fn scale_text_prints_large_and_fractional_pixel_lengths() {
+        let big = MeasurementScale { pixel_length: 1e20, logical_length: 1.0, units: "mm".into() };
+        assert_eq!(big.describe(), "100000000000000000000 pixels = 1.0000 mm");
+        assert_eq!(MeasurementScale::default().describe(), "1 pixels = 1.0000 pixels");
+        let s = |p: f64| MeasurementScale { pixel_length: p, ..Default::default() }.describe();
+        assert_eq!(s(5.0), "5 pixels = 1.0000 pixels");
+        assert_eq!(s(0.5), "0.5 pixels = 1.0000 pixels");
+        assert_eq!(s(12.25), "12.25 pixels = 1.0000 pixels");
     }
 
     #[test]

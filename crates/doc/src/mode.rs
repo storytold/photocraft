@@ -1,14 +1,20 @@
-//! Colour-mode side data: the Indexed Color table, Duotone inks, and smart-object stack modes.
+//! Colour-mode side data: the Indexed Color table and pixel indices, Duotone inks, and smart-object stack modes.
 //!
 //! Indexed, Bitmap and Duotone documents keep their pixels expanded (RGB / Gray, see
 //! [`crate::Document::pixel_format`]); these structs carry what the mode adds on top.
 
+use std::sync::Arc;
+
+use photocraft_color::PixelFormat;
+use photocraft_geom::Rect;
+use photocraft_raster::Surface;
 use serde::{Deserialize, Serialize};
 
+use crate::LayerId;
 use crate::adjust::CurvePoint;
 
 /// Image › Mode › Color Table: the palette of an Indexed Color document (at most 256 entries).
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct ColorTable {
     /// sRGB 8-bit entries.
     pub colors: Vec<[u8; 3]>,
@@ -36,8 +42,56 @@ impl ColorTable {
     }
 }
 
+/// The Color Table index of each pixel of an Indexed Color layer, where it is known (#14342).
+/// The layer's pixels are RGB, so two entries of one colour can't be told apart by colour.
+///
+/// The indices hold while the layer still has the very tiles recorded with them, at the same
+/// places. One tile can't prove where its pixels came from: a move shares tiles, and a solid tile
+/// can stand in for another solid tile of the same colour. A move or a paint stroke changes the
+/// tiles at the layer's edges or under the stroke, though, so after any change but Color Table's
+/// the indices are unknown and Color Table falls back to the nearest entry. Recording costs no
+/// pixel copy while the layer is unchanged. A save keeps the indices only while they hold, and an
+/// open pairs them with the layer it loads: identical tiles load as one, so loaded pixels can't
+/// prove they are unchanged.
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
+pub struct ColorIndices {
+    /// The layer the indices are for.
+    pub layer: LayerId,
+    /// The layer's pixels when the indices were recorded.
+    pub pixels: Surface,
+    /// One gray 8-bit sample per pixel: its index.
+    pub indices: Surface,
+}
+
+impl ColorIndices {
+    /// Records `indices`, one byte per pixel row by row over `r`, for `layer`, whose pixels are
+    /// `pixels`. `None` when they don't cover `r` or there's no memory for them.
+    pub fn new(layer: LayerId, pixels: &Surface, r: Rect, indices: &[u8]) -> Option<Self> {
+        let mut map = Surface::new(PixelFormat::GRAY8);
+        map.try_write_interleaved(r, indices).ok()?;
+        Some(ColorIndices { layer, pixels: pixels.clone(), indices: map })
+    }
+
+    /// Whether the indices hold for `layer`, whose pixels are now `pixels`: it is the recorded
+    /// layer and has the very tiles recorded, at the same places. A damaged file can name another
+    /// format for the indices: they don't hold then, rather than give wrong ones.
+    pub fn holds(&self, layer: LayerId, pixels: &Surface) -> bool {
+        layer == self.layer
+            && self.indices.format() == PixelFormat::GRAY8
+            && pixels.format() == self.pixels.format()
+            && pixels.tile_count() == self.pixels.tile_count()
+            && pixels.tiles().zip(self.pixels.tiles()).all(|((a, x), (b, y))| a == b && Arc::ptr_eq(x, y))
+    }
+
+    /// The recorded indices over `r`, one byte per pixel row by row, while they
+    /// [hold](Self::holds).
+    pub fn known(&self, layer: LayerId, pixels: &Surface, r: Rect) -> Option<Vec<u8>> {
+        self.holds(layer, pixels).then(|| self.indices.to_interleaved(r))
+    }
+}
+
 /// One Duotone ink: its display colour and the curve mapping gray density to ink density.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct DuotoneInk {
     pub name: String,
     /// Display colour of the solid ink (sRGB 0..=1).
@@ -53,12 +107,13 @@ impl DuotoneInk {
 }
 
 /// Image › Mode › Duotone: 1–4 inks (Monotone, Duotone, Tritone, Quadtone) printed over paper.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Duotone {
     pub inks: Vec<DuotoneInk>,
     /// The PSD colour-mode data this came from, written back unchanged while the inks are unedited.
+    /// Shared between document snapshots (#4535).
     #[serde(default)]
-    pub psd_raw: Option<Vec<u8>>,
+    pub psd_raw: Option<std::sync::Arc<[u8]>>,
 }
 
 impl DuotoneInk {
@@ -74,7 +129,7 @@ impl Duotone {
         let density = 1.0 - gray.clamp(0.0, 1.0);
         let mut out = [1.0f32; 3];
         for ink in &self.inks {
-            let d = curve_eval(&ink.curve, density);
+            let d = ink.density(density);
             for (o, c) in out.iter_mut().zip(ink.color) {
                 // Each ink filters light: full density transmits the ink colour.
                 *o *= 1.0 - d * (1.0 - c);
@@ -92,7 +147,7 @@ impl Duotone {
             let t = i as f32 / 32.0;
             (t, self.render(t))
         });
-        crate::Adjustment::GradientMap { stops: stops.collect(), reverse: false, dither: false }
+        crate::Adjustment::GradientMap { stops: stops.collect(), reverse: false, dither: false, source: None }
     }
 }
 
@@ -117,7 +172,7 @@ fn curve_eval(pts: &[CurvePoint], x: f32) -> f32 {
 }
 
 /// Layer › Smart Objects › Stack Mode: a per-pixel statistic over the smart object's layers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum StackMode {
     Entropy,
     Kurtosis,
@@ -207,6 +262,22 @@ mod tests {
         let d = Duotone { inks: vec![DuotoneInk::new("Black", [0.0; 3]), DuotoneInk::new("Orange", [1.0, 0.5, 0.0])], psd_raw: None };
         let c = d.render(0.5);
         assert!(c[0] > c[2], "{c:?}");
+    }
+
+    #[test]
+    fn duotone_render_clamps_ink_density_like_multichannel() {
+        // Curves above 100 % (accepted by `image.mode.duotone`) must not push the print out of
+        // gamut: red + blue at full density is black, not green.
+        let over = |name: &str, color| {
+            let mut ink = DuotoneInk::new(name, color);
+            ink.curve = vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 1.0, output: 2.0 }];
+            ink
+        };
+        let d = Duotone { inks: vec![over("Red", [1.0, 0.0, 0.0]), over("Blue", [0.0, 0.0, 1.0])], psd_raw: None };
+        assert_eq!(d.render(0.0), [0.0, 0.0, 0.0]);
+        for g in [0.0, 0.25, 0.5, 1.0] {
+            assert!(d.render(g).iter().all(|c| (0.0..=1.0).contains(c)), "{g}: {:?}", d.render(g));
+        }
     }
 
     #[test]

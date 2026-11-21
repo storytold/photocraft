@@ -74,7 +74,6 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "pattern.presets.select";
     let pat = pattern_key(s, p, CMD)?;
     s.presets.pattern = Some(pat.id.clone());
-    s.presets.rev += 1;
     let mut out = json!({"pattern": pat.id, "name": pat.display_name()});
     if p.get("applyToLayer").and_then(Value::as_bool).unwrap_or(true)
         && let Some(id) = active_pattern_fill(s)
@@ -162,7 +161,7 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
         }
         "move" => {
             let key = req_str(p, "preset", CMD)?;
-            let id = crate::pattern_cmds::resolve(s, key).map(|q| q.id).ok_or_else(|| bad(CMD, format!("no pattern \"{key}\"")))?;
+            let id = crate::pattern_cmds::resolve_id(s, key).ok_or_else(|| bad(CMD, format!("no pattern \"{key}\"")))?;
             let mut q = p.clone();
             q["preset"] = json!(id);
             edit_groups(&mut s.presets.pattern_groups, "move", &q, CMD)?

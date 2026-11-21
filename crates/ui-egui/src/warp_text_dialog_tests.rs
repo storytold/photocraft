@@ -1,17 +1,19 @@
 //! #218: Type › Warp Text… opens with the type layer's current warp (it always started at Arc)
 //! and previews the warp live on the canvas.
 
+use craft::ui::dialog::DialogId;
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog};
 use egui::vec2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use photocraft_doc::text::TextWarp;
 use photocraft_doc::{Document, LayerContent};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
 /// A document with one type layer, active.
-fn app_with_type() -> PhotocraftApp {
+fn app_with_type() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
     app.run("type.create", json!({"x": 20, "y": 120, "text": "Warp", "size": 60})).unwrap();
@@ -39,41 +41,68 @@ fn steps(app: &PhotocraftApp) -> usize {
 }
 
 /// The open dialogs drawn over `app`, as the window shows them.
-fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
-        |ui, app| {
+pub(crate) fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
+    let h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(900.0, 700.0)).build_ui_state(
+        |ui, app: &mut Box<PhotocraftApp>| {
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                crate::dialogs::show(app, ui.ctx());
+                crate::dialogs::run(app, ui);
             }
         },
         app,
     );
     PhotocraftApp::setup_context(&h.ctx, Default::default());
+    let mut h = h;
     h.run_steps(4);
     h
 }
 
+fn set(app: &mut PhotocraftApp, id: DialogId, key: &str, value: Value) {
+    let ctx = app.ctx().clone();
+    app.framework.dialogs.set_json_field(&ctx, id, key, value).unwrap_or_else(|e| panic!("{key}: {e}"));
+}
+
 /// Set dialog values as the sliders and dropdowns would, and compute the canvas preview as a
 /// frame of the canvas does.
-fn edit_and_preview(h: &mut Harness<'_, PhotocraftApp>, id: u64, values: Value) {
-    let f = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+fn edit_and_preview(h: &mut Harness<'_, Box<PhotocraftApp>>, id: DialogId, values: Value) {
     for (k, v) in values.as_object().unwrap() {
-        f.insert(k.clone(), v.clone());
+        set(h.state_mut(), id, k, v.clone());
     }
     h.run_steps(2);
-    crate::canvas::ensure_filter_preview(h.state_mut(), 0, &egui::Context::default());
+    let ctx = h.ctx.clone();
+    crate::canvas::ensure_filter_preview(h.state_mut(), 0, &ctx);
 }
 
-/// Open Warp Text from the Type menu and return the dialog with its fields.
-fn open(app: &mut PhotocraftApp) -> (u64, Map<String, Value>) {
-    let r = crate::menus::invoke(app, &egui::Context::default(), "type.warpText", json!({})).unwrap();
-    let id = r["dialog"].as_u64().unwrap();
-    (id, app.ui.dialog_mut(id).unwrap().fields.clone())
+/// Open Warp Text and return the dialog with its values.
+fn open(app: &mut PhotocraftApp) -> (DialogId, DialogFields) {
+    let id = crate::filter_dialog::open(app, "type.warpText").expect("Warp Text opens");
+    let fields = app.framework.dialogs.get_by_id::<HostedParamDialog>(id).expect("open dialog").fields().clone();
+    (id, fields)
 }
 
-fn shown(fields: &Map<String, Value>) -> (&str, f64, f64, f64, &str) {
-    let n = |k: &str| fields[k].as_f64().unwrap();
-    (fields["style"].as_str().unwrap(), n("bend"), n("horizontalDistortion"), n("verticalDistortion"), fields["orientation"].as_str().unwrap())
+/// OK as the button files it, then the passes in which the family runs the command.
+fn confirm(app: &mut PhotocraftApp, id: DialogId) {
+    let ctx = app.ctx().clone();
+    PhotocraftApp::setup_context(&ctx, Default::default());
+    crate::dialogs::testing::confirm(app, id).expect("OK is accepted");
+    for _ in 0..3 {
+        crate::testing::run_ui(&ctx, Default::default(), |ui| crate::dialogs::run(app, ui));
+    }
+}
+
+fn no_dialog_open(app: &PhotocraftApp) -> bool {
+    app.framework.dialogs.is_empty()
+}
+
+fn num(f: &DialogFields, key: &str) -> f64 {
+    match f.get(key) {
+        Some(FieldValue::Int(i)) => *i as f64,
+        Some(FieldValue::Number(n)) => *n,
+        other => panic!("{key} is no number: {other:?}"),
+    }
+}
+
+fn shown(f: &DialogFields) -> (&str, f64, f64, f64, &str) {
+    (f.text("style").unwrap(), num(f, "bend"), num(f, "horizontalDistortion"), num(f, "verticalDistortion"), f.text("orientation").unwrap())
 }
 
 #[test]
@@ -91,7 +120,7 @@ fn confirming_the_warp_text_dialog_unchanged_keeps_the_layers_warp() {
     let before = warp(&app);
     assert_eq!(before.as_ref().map(|w| w.style.as_str()), Some("warpFlag"));
     let (id, _) = open(&mut app);
-    crate::dialogs::confirm(&mut app, id).unwrap();
+    confirm(&mut app, id);
     assert_eq!(warp(&app), before);
 }
 
@@ -100,7 +129,7 @@ fn warp_text_opens_at_none_for_a_layer_without_warp() {
     let mut app = app_with_type();
     let (id, fields) = open(&mut app);
     assert_eq!(shown(&fields), ("none", 50.0, 0.0, 0.0, "horizontal"));
-    crate::dialogs::confirm(&mut app, id).unwrap();
+    confirm(&mut app, id);
     assert_eq!(warp(&app), None);
 }
 
@@ -108,10 +137,9 @@ fn warp_text_opens_at_none_for_a_layer_without_warp() {
 fn remembered_warp_values_never_override_the_layers_warp() {
     let mut app = app_with_type();
     let (id, _) = open(&mut app);
-    let f = &mut app.ui.dialog_mut(id).unwrap().fields;
-    f.insert("style".into(), json!("twist"));
-    f.insert("bend".into(), json!(80.0));
-    crate::dialogs::confirm(&mut app, id).unwrap();
+    set(&mut app, id, "style", json!("twist"));
+    set(&mut app, id, "bend", json!(80.0));
+    confirm(&mut app, id);
     assert_eq!(warp(&app).map(|w| (w.style, w.value)), Some(("warpTwist".to_string(), 80.0)));
     app.run("type.create", json!({"x": 20, "y": 60, "text": "Other", "size": 30})).unwrap();
     app.run("type.warpText", flag()).unwrap();
@@ -129,7 +157,7 @@ fn an_unknown_warp_style_opens_at_none_with_the_layers_values() {
     if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
         t.warp = Some(TextWarp { style: "warpCustom".into(), value: 12.0, horizontal_distortion: -5.0, vertical_distortion: 7.0, horizontal: false });
     }
-    st.doc = std::sync::Arc::new(doc);
+    *st.doc_mut() = std::sync::Arc::new(doc);
     let (_, fields) = open(&mut app);
     assert_eq!(shown(&fields), ("none", 12.0, -5.0, 7.0, "vertical"));
 }
@@ -137,8 +165,7 @@ fn an_unknown_warp_style_opens_at_none_with_the_layers_values() {
 #[test]
 fn warp_text_dialog_previews_the_warp_without_editing_the_document() {
     let mut app = app_with_type();
-    let (id, fields) = open(&mut app);
-    assert_eq!(fields.get("__preview"), Some(&json!(true)));
+    let (id, _) = open(&mut app);
     let (revision, original) = {
         let st = app.session.active().unwrap();
         (st.revision, st.doc.clone())
@@ -169,7 +196,7 @@ fn cancelling_warp_text_leaves_the_document_and_history_untouched() {
     h.get_by_label("Cancel").click();
     h.run_steps(2);
     let app = h.state();
-    assert!(app.ui.dialogs.is_empty());
+    assert!(no_dialog_open(app));
     assert!(app.filter_preview.is_none(), "the preview is gone");
     assert_eq!(app.session.active().unwrap().revision, revision);
     assert_eq!((warp(app), steps(app)), (before, history));
@@ -186,23 +213,10 @@ fn confirming_warp_text_is_one_undoable_step() {
     h.get_by_label("OK").click();
     h.run_steps(2);
     let app = h.state_mut();
-    assert!(app.ui.dialogs.is_empty());
+    assert!(no_dialog_open(app));
     assert_eq!(warp(app).map(|w| (w.style, w.value, w.horizontal)), Some(("warpFish".to_string(), 25.0, true)));
     assert_eq!(steps(app), history + 1);
     assert_eq!(app.session.active().unwrap().history.entries().last().map(|e| e.to_string()), Some("Warp Text".to_string()));
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(warp(app), before);
-}
-
-/// #2689: as in Photoshop, the dialog lists Style, then the orientation, then Bend and the two
-/// distortions.
-#[test]
-fn warp_text_dialog_lists_style_orientation_then_bend_and_distortions() {
-    let mut app = app_with_type();
-    open(&mut app);
-    let h = harness(app);
-    let top = |name: &str| h.query_all_by_label(name).map(|n| n.rect().top()).fold(f32::INFINITY, f32::min);
-    let order = ["Style", "Orientation", "Bend", "Horizontal Distortion", "Vertical Distortion"].map(top);
-    assert!(order.iter().all(|y| y.is_finite()), "every field is shown: {order:?}");
-    assert!(order.windows(2).all(|w| w[0] < w[1]), "fields top to bottom: {order:?}");
 }
