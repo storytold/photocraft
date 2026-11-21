@@ -249,7 +249,10 @@ pub(crate) fn apply(app: &mut PhotocraftApp, event: PathsEvent<PathRef>) {
                     crate::canvas_tool_menu::pen_dialogs::open(app, "path.stroke", &name);
                 }
                 PathsFooterButton::Stroke => {
-                    run(app, "path.stroke", json!({"name": name, "tool": "brush"}));
+                    if let Err(e) = crate::canvas_tool_menu::pen_dialogs::stroke(app, json!({"name": name, "tool": "brush"})) {
+                        app.ui.status = e;
+                        app.ui.status_error = true;
+                    }
                 }
                 PathsFooterButton::Load => {
                     run(app, "path.toSelection", json!({"name": name}));

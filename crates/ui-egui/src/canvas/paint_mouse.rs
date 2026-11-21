@@ -33,13 +33,28 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
     }
     // The live brush is the outgoing tool's, so save it there before the new one takes over: any
     // edit it made since it was last active is in it, so its copy never goes stale.
-    let current = (*app.session.tools.brush).clone();
-    save_brush(app, app.ui.brush_tool, current.clone());
-    *app.session.tools.brush = match app.ui.tool_brushes.iter().find(|(t, _)| *t == tool) {
+    let brush = tool_brush(app, tool);
+    save_brush(app, app.ui.brush_tool, (*app.session.tools.brush).clone());
+    *app.session.tools.brush = brush;
+    // The picked preset was the outgoing tool's brush: forget it, so Update Brush can't overwrite
+    // that preset with this tool's brush.
+    app.session.tools.current_preset = None;
+    app.session.tools.brush_changed();
+    app.ui.brush_tool = tool;
+}
+
+/// The brush `tool` paints with now: the live brush when it is `tool`'s, else the one `tool` had
+/// when it was last active, or the one it starts with. Stroke Path paints with it (#16182).
+pub(crate) fn tool_brush(app: &PhotocraftApp, tool: Tool) -> BrushSettings {
+    let current: &BrushSettings = &app.session.tools.brush;
+    if app.ui.brush_tool == tool {
+        return current.clone();
+    }
+    match app.ui.tool_brushes.iter().find(|(t, _)| *t == tool) {
         Some((_, b)) => {
             // A brush remembered from the previous run holds its stored tips as references:
             // load their full bitmaps (a missing one keeps painting with its preview).
-            let mut b = session_fields(&current, b);
+            let mut b = session_fields(current, b);
             let _ = app.session.load_brush_tips(&mut b);
             b
         }
@@ -66,14 +81,14 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
                 | Tool::ArtHistoryBrush
         ) =>
         {
-            fresh_brush(tool, &current)
+            fresh_brush(tool, current)
         }
         // The Pencil starts with its own 1 px hard round (#12200) regardless of the Brush, keeping
         // the outgoing opacity.
-        None if tool == Tool::Pencil => BrushSettings { opacity: current.opacity, ..fresh_brush(tool, &current) },
+        None if tool == Tool::Pencil => BrushSettings { opacity: current.opacity, ..fresh_brush(tool, current) },
         // The Eraser starts with its Reset Tool tip and no smoothing (#11936), keeping the outgoing
         // opacity and flow as before (a first use's are not measured).
-        None if tool == Tool::Eraser => BrushSettings { opacity: current.opacity, flow: current.flow, ..fresh_brush(tool, &current) },
+        None if tool == Tool::Eraser => BrushSettings { opacity: current.opacity, flow: current.flow, ..fresh_brush(tool, current) },
         None => {
             let fresh = BrushSettings::default();
             let (opacity, flow) = match tool {
@@ -82,14 +97,9 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
             };
             // The Remove tool starts at its measured 19 px; the rest is the current brush (#12548).
             let size = if tool == Tool::Remove { REMOVE_TOOL_SIZE } else { current.size };
-            BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, flow, size, ..current }
+            BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, flow, size, ..current.clone() }
         }
-    };
-    // The picked preset was the outgoing tool's brush: forget it, so Update Brush can't overwrite
-    // that preset with this tool's brush.
-    app.session.tools.current_preset = None;
-    app.session.tools.brush_changed();
-    app.ui.brush_tool = tool;
+    }
 }
 
 /// The brush `tool` had when it was last active.
