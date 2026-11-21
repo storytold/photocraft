@@ -45,15 +45,21 @@ pub fn capture_recorded(mut cmd: Command, what: &str, file: &std::path::Path) ->
 }
 
 /// Records xtask's own units: `cargo xtask` builds it before it can record anything, and an
-/// unrecorded unit is trimmed from the entry and rebuilt next run. The build is fresh, so this only
-/// prints the messages.
+/// unrecorded unit is trimmed from the entry and rebuilt next run. The build uses the features this
+/// xtask binary was built with, so it is fresh and only prints the messages, and the units recorded
+/// are the ones the alias built.
 pub fn record_xtask() -> Result<(), String> {
     if file().is_none() {
         return Ok(());
     }
     let mut c = crate::cargo();
-    c.args(["build", "-p", "xtask", "--message-format", "json-render-diagnostics"]);
-    run(c, "cargo build -p xtask --message-format json-render-diagnostics")
+    c.args(["build", "--locked", "-p", "xtask"]);
+    if !cfg!(feature = "framework-checks") {
+        c.arg("--no-default-features");
+    }
+    c.args(["--message-format", "json-render-diagnostics"]);
+    let what = crate::shown(&c);
+    run(c, &what)
 }
 
 /// Lines that are Cargo's JSON messages go to `record`, every other line to `out`.
