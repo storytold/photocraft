@@ -32,6 +32,9 @@ jobs:
       # were compiled at opt-level 1 rather than Cargo.toml's test-profile opt-level 0, and that
       # rustc ran the 12 GB guest out of memory (SIGKILL, nightly and dispatched runs on both
       # legs).
+      # The 12 GiB guest exhausted swap with concurrent rustc processes (run 44315493967).
+      # Serialize compilation, not test execution; retain every target and package check.
+      build-jobs: 1
       cargo-build-extra-args: "--features heif --profile test"
       # The test commands reuse that build only if they resolve the same features. `-p
       # photocraft-ui-egui` (or `--exclude photocraft-ui-egui`) leaves out the other members'
