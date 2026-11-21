@@ -24,7 +24,12 @@ impl PhotocraftApp {
         if gate.is_some() {
             self.session.authorize = gate;
         }
+        let journal_from = self.session.journal.len();
         let result = self.run_command(id, params);
+        // A run from an action, a script or the control channel updates the dialog it skipped (#14209).
+        if result.is_ok() {
+            crate::filter_dialog::remember_runs(self, journal_from);
+        }
         if gate.is_some() {
             self.session.authorize = None;
         }
