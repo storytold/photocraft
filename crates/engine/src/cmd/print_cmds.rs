@@ -1236,9 +1236,19 @@ fn dll_loads(dll: &std::path::Path) -> bool {
 /// draws RGB/gray and vector marks only; it must never silently omit requested page content.
 fn native_rgb_compatible(page: &PrintPage, handling: &str) -> bool {
     matches!(page.image.channels, 1 | 3)
-        && (page.image.icc.is_none() || matches!(handling, "photocraftManages" | "photoshopManages" | "noColorManagement"))
+        && (page.image.icc.is_none()
+            || matches!(handling, "photocraftManages" | "photoshopManages" | "noColorManagement")
+            || (handling == "printerManages" && page.image.channels == 3 && icc_is_srgb(page.image.icc.as_deref())))
         && page.description.as_deref().is_none_or(str::is_empty)
         && page.label.as_deref().is_none_or(str::is_empty)
+}
+
+/// Whether `icc` is sRGB by colour (Photoshop's sRGB IEC61966-2.1 included). Under Printer Manages
+/// Colors a Windows driver reads untagged GDI RGB as sRGB, so an sRGB page loses nothing by going
+/// there untagged; any other source profile keeps the PDF route, which embeds it (#10067).
+fn icc_is_srgb(icc: Option<&[u8]>) -> bool {
+    icc.and_then(|b| craft_cms::Profile::parse(b).ok())
+        .is_some_and(|p| p.color_space == craft_cms::ColorSpace::Rgb && p.same_colors(craft_cms::Builtin::Srgb.profile()))
 }
 
 /// Where the settings of the last print are kept in Preferences' remembered dialog settings.
