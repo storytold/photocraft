@@ -64,3 +64,36 @@ fn camera_raw_filter_preserves_identity_alpha_and_smart_filter_parity() {
         assert!((rendered[c] - direct[c]).abs() < 1e-3, "channel {c}: smart {rendered:?} vs direct {direct:?}");
     }
 }
+
+#[test]
+fn camera_raw_filter_legacy_baseline_pixels() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16, "depth": 16})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 16})).unwrap();
+    s.execute("edit.fill", json!({"contents": "color", "color": "#4080c0"})).unwrap();
+    s.execute("select.rect", json!({"x": 8, "y": 0, "width": 8, "height": 16})).unwrap();
+    s.execute("edit.fill", json!({"contents": "color", "color": "#c06020"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+
+    s.execute(
+        "filter.cameraRaw",
+        json!({
+            "temperature": 15.0,
+            "tint": -10.0,
+            "exposure": 0.5,
+            "contrast": 20.0,
+            "highlights": -25.0,
+            "shadows": 30.0,
+            "whites": 10.0,
+            "blacks": -10.0,
+            "vibrance": 15.0,
+            "saturation": -5.0,
+        }),
+    )
+    .unwrap();
+
+    let quantize = |px: [f32; 4]| px.map(|v| (v.clamp(0.0, 1.0) * 65535.0).round() as u16);
+    let got = [quantize(active_pixel(&s, 2, 2)), quantize(active_pixel(&s, 8, 8)), quantize(active_pixel(&s, 13, 13))];
+    assert_eq!(got, [[0; 4]; 3]);
+}

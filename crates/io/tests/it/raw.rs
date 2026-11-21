@@ -686,3 +686,55 @@ fn a_kept_decode_gives_the_same_pixels_and_decodes_once() {
     assert_eq!(pixels(&got), pixels(&import_raw_tuned("a.nef", &nef, &RawTuning::default()).unwrap().0));
     assert_eq!((got.document.size.width, got.document.size.height), (w as u32, h as u32));
 }
+
+#[test]
+fn raw_open_legacy_baseline_pixels() {
+    use photocraft_io::raw::{RawTuning, import_raw_tuned};
+
+    fn fnv1a_u16(bytes: &[u8]) -> u64 {
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        for &b in bytes {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        h
+    }
+
+    fn sample_rgb16(bytes: &[u8], w: usize, x: usize, y: usize) -> [u16; 3] {
+        let off = (y * w + x) * 6;
+        [
+            u16::from_ne_bytes([bytes[off], bytes[off + 1]]),
+            u16::from_ne_bytes([bytes[off + 2], bytes[off + 3]]),
+            u16::from_ne_bytes([bytes[off + 4], bytes[off + 5]]),
+        ]
+    }
+
+    let (w, h) = (16, 16);
+    let mut spec = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 65535));
+    spec.as_shot_neutral = Some([0.6, 1.0, 0.8]);
+    let bytes = spec.build();
+
+    let def = import("pin.dng", &bytes).unwrap();
+    let def_img = photocraft_io::document_to_image(&def.document, &mut Vec::new()).unwrap();
+    let def_px = [sample_rgb16(def_img.data(), w, 0, 0), sample_rgb16(def_img.data(), w, 7, 7), sample_rgb16(def_img.data(), w, 15, 15)];
+    let def_hash = fnv1a_u16(def_img.data());
+
+    let tuning = RawTuning {
+        exposure: 0.75,
+        temperature: 15.0,
+        tint: -10.0,
+        shadows: 25.0,
+        highlights: -20.0,
+        clarity: 15.0,
+        texture: 10.0,
+        dehaze: 5.0,
+        ..Default::default()
+    };
+    let (tuned, wb) = import_raw_tuned("pin.dng", &bytes, &tuning).unwrap();
+    assert!(wb);
+    let tuned_img = photocraft_io::document_to_image(&tuned.document, &mut Vec::new()).unwrap();
+    let tuned_px = [sample_rgb16(tuned_img.data(), w, 0, 0), sample_rgb16(tuned_img.data(), w, 7, 7), sample_rgb16(tuned_img.data(), w, 15, 15)];
+    let tuned_hash = fnv1a_u16(tuned_img.data());
+
+    assert_eq!((def_px, def_hash, tuned_px, tuned_hash), ([[0; 3]; 3], 0, [[0; 3]; 3], 0));
+}
