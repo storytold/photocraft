@@ -302,9 +302,14 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     // the layers are in the source (default: the same canvas position).
     // `centerOutside`: copies that would land wholly off the destination's canvas are centred on it, the rest keep
     // their place, as Duplicate Layer does (#14606); a half pixel rounds towards the top left.
-    let outside = p.get("centerOutside").and_then(Value::as_bool).unwrap_or(false) && content.intersect(&ddoc.bounds()).is_empty();
+    // A shape's cache is clipped to the source canvas, so one lying wholly outside it has no pixel bounds: its place
+    // comes from its geometry, as Align and Distribute measure it (CodeRabbit on #16086).
+    let sample = sdoc.pixel_format().sample;
+    let geometric = copies.layers.iter().filter_map(|l| crate::layer_multi_cmds::align_bounds(l, sdoc.bounds(), sample)).fold(Rect::EMPTY, |a, b| a.union(&b));
+    let placed = if geometric.is_empty() { content } else { geometric };
+    let outside = p.get("centerOutside").and_then(Value::as_bool).unwrap_or(false) && placed.intersect(&ddoc.bounds()).is_empty();
     let (dx, dy) = if outside {
-        let (c, d) = (center(content), center(ddoc.bounds()));
+        let (c, d) = (center(placed), center(ddoc.bounds()));
         ((d[0] - c[0]).floor(), (d[1] - c[1]).floor())
     } else if p.get("center").and_then(Value::as_bool).unwrap_or(false) {
         let (c, d) = (center(content), center(ddoc.bounds()));

@@ -74,3 +74,15 @@ fn without_the_rule_copies_keep_their_place_as_before() {
     let r = copy(&mut s, &ids, false);
     assert_eq!(landed(&s, &r, 0), (175, 125), "a drag between documents keeps today's placement");
 }
+
+/// A shape wholly outside the source canvas has an empty cache; its geometry decides where it lands (CodeRabbit on
+/// #16086).
+#[test]
+fn a_shape_wholly_outside_the_source_canvas_is_centred_too() {
+    let (mut s, _) = docs(&[]);
+    let shape = LayerId(s.execute("shape.create", json!({"kind": "rect", "rect": [500, 400, 40, 20], "fill": "#ff0000"})).unwrap()["layer"].as_u64().unwrap());
+    let r = copy(&mut s, &[shape], true);
+    let id = r["layers"][0].as_u64().unwrap();
+    let info = s.execute("shape.info", json!({"layer": id})).unwrap();
+    assert_eq!(info["live"]["rect"], json!([80.0, 40.0, 40.0, 20.0]), "{info}");
+}

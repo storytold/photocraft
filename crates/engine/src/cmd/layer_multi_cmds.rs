@@ -20,6 +20,7 @@ mod selection;
 mod structure;
 
 use align::{align, distribute};
+pub(crate) use damage::align_bounds;
 pub(crate) use damage::grow_hint;
 #[cfg(any(test, debug_assertions))]
 pub(crate) use damage::{hint_misses, small_change_pct};
