@@ -328,8 +328,12 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
+    // Stack Images leaves the bottom layer showing everywhere, under the sharp parts of the
+    // layers above (#14212). Measured with two layers, Seamless Tones off and no masks before;
+    // the cases not measured keep complementary masks.
+    let reveal_bottom = method == "stack" && !seamless && ids.len() == 2 && ids.iter().all(|id| doc.layer(*id).is_some_and(|l| l.mask.is_none()));
     let (new_layer, depth_layer) = s.edit(label, |doc, active| {
-        for (id, wt) in ids.iter().zip(&weights) {
+        for (i, (id, wt)) in ids.iter().zip(&weights).enumerate() {
             if doc.is_background(*id) {
                 if keep_background {
                     continue;
@@ -337,9 +341,14 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
                 crate::extra_cmds::background_to_layer_for_mask(doc, *id);
             }
             let l = doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?;
-            let mut mask = LayerMask::hide_all();
-            mask.surface.write_region(area, wt);
-            mask.surface.prune();
+            let mask = if reveal_bottom && i == 0 {
+                LayerMask::reveal_all()
+            } else {
+                let mut mask = LayerMask::hide_all();
+                mask.surface.write_region(area, wt);
+                mask.surface.prune();
+                mask
+            };
             l.mask = Some(mask);
         }
         let mut below = top;
@@ -399,3 +408,6 @@ mod tests;
 
 #[cfg(test)]
 mod auto_blend_background_tests;
+
+#[cfg(test)]
+mod auto_blend_stack_bottom_mask_tests;
