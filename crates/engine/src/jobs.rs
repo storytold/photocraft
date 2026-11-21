@@ -1717,26 +1717,6 @@ impl Session {
 
     /// Run the command `id`: inline, or (with `background`) as a job when it is one.
     pub(crate) fn dispatch(&mut self, id: &str, params: Value, background: bool) -> Result<Started> {
-        // Last-resort guard (AGENTS.md, Never crash) around the whole dispatch: the checks before
-        // `run` and the bookkeeping after it see the same untrusted params as `run` (#8604). A
-        // panic there leaves no per-command flag set for the next command. It keeps the process
-        // alive, not the session consistent: anything else a panic left half-changed stays so.
-        // It needs an unwinding build; the desktop profiles unwind, the wasm32 web build aborts.
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.dispatch_unguarded(id, params, background))).unwrap_or_else(|_| {
-            self.jobs.spawn = false;
-            self.coalesce_request = None;
-            self.color_restrict = None;
-            self.filter_mask_layer = None;
-            self.live_commit = None;
-            if let Some(job) = self.jobs.pending.take() {
-                job.ctx.cancel();
-            }
-            Err(EngineError::Other(format!("`{id}` failed with an internal error (logged)")))
-        })
-    }
-
-    /// [`Self::dispatch`] without its outer guard.
-    fn dispatch_unguarded(&mut self, id: &str, params: Value, background: bool) -> Result<Started> {
         // The offer belongs to this one dispatch. Early errors drop it locally, including
         // authorization, validation, floating-selection and admission failures.
         let live_commit = self.live_commit.take();
@@ -1752,7 +1732,25 @@ impl Session {
         } else {
             None
         };
-        let result = self.dispatch_with_commit(id, params, background, live_commit);
+        // Last-resort guard (AGENTS.md, Never crash) around the rest of the dispatch: the checks
+        // before `run` and the bookkeeping after it see the same untrusted params as `run`
+        // (#8604). A panic there leaves no per-command flag set for the next command, and fails
+        // the command like any other error, so the checkpoint above is restored too. It keeps
+        // the process alive, not the session consistent: anything else a panic left half-changed
+        // stays so. It needs an unwinding build; the desktop profiles unwind, the wasm32 web build
+        // aborts.
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.dispatch_with_commit(id, params, background, live_commit))).unwrap_or_else(|_| {
+                self.jobs.spawn = false;
+                self.coalesce_request = None;
+                self.color_restrict = None;
+                self.filter_mask_layer = None;
+                self.live_commit = None;
+                if let Some(job) = self.jobs.pending.take() {
+                    job.ctx.cancel();
+                }
+                Err(EngineError::Other(format!("`{id}` failed with an internal error (logged)")))
+            });
         if result.is_err()
             && let Some((index, state, action_history)) = checkpoint
             && self.docs.get(index).is_some_and(|current| current.doc.id == state.doc.id)
