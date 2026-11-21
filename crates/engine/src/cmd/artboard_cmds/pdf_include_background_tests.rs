@@ -38,6 +38,11 @@ fn export(s: &mut Session, tag: &str, params: Value) -> Vec<u8> {
     let path = std::env::temp_dir().join(format!("photocraft-abpdf-bg-{}-{tag}.pdf", std::process::id()));
     let mut p = params;
     p["path"] = json!(path.to_string_lossy());
+    // Artboard Content Only unless a test says otherwise: Red and Blue Board overlap, and Include Overlapping Areas
+    // (#13646, the default) would put Blue Board's pixels on the Red Board page.
+    if p.get("content").is_none() {
+        p["content"] = json!("artboard");
+    }
     s.execute("file.export.artboardsToPdf", p).unwrap();
     let bytes = std::fs::read(&path).unwrap();
     let _ = std::fs::remove_file(&path);
