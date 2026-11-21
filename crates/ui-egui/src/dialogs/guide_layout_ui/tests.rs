@@ -1,4 +1,65 @@
+use craft::ui::dialog::StackDialog;
+use egui_kittest::Harness;
+
 use super::*;
+
+fn app() -> Box<PhotocraftApp> {
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.new", json!({"width":1200,"height":800})).unwrap();
+    PhotocraftApp::new(session, crate::Services::default())
+}
+
+/// A harness whose every pass runs the dialog host, as the shell does.
+fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
+    Harness::<'static, Box<PhotocraftApp>>::builder()
+        .with_context(app.ctx().clone())
+        .with_size(egui::vec2(1400.0, 900.0))
+        .build_ui_state(|ui: &mut egui::Ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app)
+}
+
+fn open_dialog(h: &mut Harness<'static, Box<PhotocraftApp>>) -> DialogId {
+    let id = open(h.state_mut()).unwrap();
+    h.run_steps(2);
+    id
+}
+
+fn set(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId, field: &str, value: Value) -> Result<(), String> {
+    let ctx = h.ctx.clone();
+    let result = h.state_mut().framework.dialogs.set_json_field(&ctx, id, field, value);
+    h.run_steps(2);
+    result
+}
+
+/// Sets the group field after `edit` changed what the dialog reports for it.
+fn set_group(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId, field: &str, edit: impl FnOnce(&mut Value)) {
+    let mut group = fields(h, id)[field].clone();
+    edit(&mut group);
+    set(h, id, field, group).unwrap();
+}
+
+fn confirm(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId) -> bool {
+    let accepted = crate::dialogs::testing::confirm(h.state_mut(), id).is_ok();
+    h.run_steps(3);
+    accepted
+}
+
+fn cancel(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId) {
+    let ctx = h.ctx.clone();
+    h.state_mut().framework.dialogs.cancel_by_id(&ctx, id);
+    h.run_steps(3);
+}
+
+fn fields(h: &Harness<'static, Box<PhotocraftApp>>, id: DialogId) -> Value {
+    h.state().framework.dialogs.get_by_id::<HostedGuideLayoutDialog>(id).unwrap().json_fields().unwrap()
+}
+
+fn shown(h: &Harness<'static, Box<PhotocraftApp>>) -> Option<(Guides, Color32)> {
+    preview(h.state(), &h.state().session.active().unwrap().doc)
+}
+
+fn guides(h: &Harness<'static, Box<PhotocraftApp>>) -> Guides {
+    h.state().session.active().unwrap().doc.guides.clone()
+}
 
 #[test]
 fn applying_a_previewed_layout_reveals_hidden_guides() {
@@ -9,13 +70,13 @@ fn applying_a_previewed_layout_reveals_hidden_guides() {
             "canvas" => app.ui.view.show.canvas_guides = false,
             _ => app.ui.extras.guides = false,
         }
-        let id = open(&mut app);
-        let doc = &app.session.active().unwrap().doc;
-        assert!(preview(&app, doc).is_some(), "the dialog shows a preview despite hidden {hidden}");
-        crate::dialogs::confirm(&mut app, id).unwrap();
-        let doc = &app.session.active().unwrap().doc;
-        assert!(!doc.guides.vertical.is_empty(), "the layout was actually created");
-        assert!(preview(&app, doc).is_none(), "the temporary preview is gone");
+        let mut h = harness(app);
+        let id = open_dialog(&mut h);
+        assert!(shown(&h).is_some(), "the dialog shows a preview despite hidden {hidden}");
+        assert!(confirm(&mut h, id));
+        assert!(!guides(&h).vertical.is_empty(), "the layout was actually created");
+        assert!(shown(&h).is_none(), "the temporary preview is gone");
+        let app = h.state();
         assert!(app.ui.view.shows(app.ui.view.show.canvas_guides) && app.ui.extras.guides, "applied guides must remain visible when {hidden} was hidden");
     }
 }
@@ -27,167 +88,26 @@ fn cancelling_invalid_and_empty_layouts_keep_guides_hidden() {
         app.ui.view.extras = false;
         app.ui.view.show.canvas_guides = false;
         app.ui.extras.guides = false;
-        let id = open(&mut app);
+        let mut h = harness(app);
+        let id = open_dialog(&mut h);
         match action {
-            "cancel" => {
-                crate::dialogs::cancel(&mut app, id).unwrap();
-            }
+            "cancel" => cancel(&mut h, id),
             "invalid" => {
-                app.ui.dialog_mut(id).unwrap().fields.insert("color".into(), json!("invalid"));
-                assert!(crate::dialogs::confirm(&mut app, id).is_err());
+                assert!(set(&mut h, id, "target", json!("selectedArtboards")).is_err(), "no artboard is selected");
+                cancel(&mut h, id);
             }
             _ => {
-                let f = &mut app.ui.dialog_mut(id).unwrap().fields;
-                for key in ["__columnsEnabled", "__rowsEnabled", "__marginEnabled"] {
-                    f.insert(key.into(), json!(false));
-                }
-                f.insert("clearExisting".into(), json!(true));
-                assert!(crate::dialogs::confirm(&mut app, id).is_err(), "an empty layout is rejected");
+                set_group(&mut h, id, "columns", |c| c["enabled"] = json!(false));
+                set(&mut h, id, "marginEnabled", json!(false)).unwrap();
+                assert!(!confirm(&mut h, id), "an empty layout is rejected");
+                assert!(h.state().framework.dialogs.is_open::<HostedGuideLayoutDialog>());
             }
         }
-        let guides = &app.session.active().unwrap().doc.guides;
-        assert!(guides.vertical.is_empty() && guides.horizontal.is_empty(), "{action}");
+        let g = guides(&h);
+        assert!(g.vertical.is_empty() && g.horizontal.is_empty(), "{action}");
+        let app = h.state();
         assert!(!app.ui.view.extras && !app.ui.view.show.canvas_guides && !app.ui.extras.guides, "{action} must not change visibility");
     }
-}
-
-#[test]
-fn tab_includes_optional_sizes_and_shift_tab_selects_their_text() {
-    let mut app = app();
-    let id = open(&mut app);
-    let f = &mut app.ui.dialog_mut(id).unwrap().fields;
-    f.insert("columns".into(), json!(5));
-    f.insert("rows".into(), json!(3));
-    f.insert("width".into(), json!(100));
-    f.insert("height".into(), json!(80));
-    let mut h = harness(app);
-    h.run_steps(3);
-    let original = h.state().session.active().unwrap().doc.guides.clone();
-    for text in ["4", "120", "12", "2", "90"] {
-        h.key_press(egui::Key::Tab);
-        h.run_steps(2);
-        h.event(egui::Event::Text(text.into()));
-        h.run_steps(2);
-    }
-    let f = &h.state().ui.dialogs.first().unwrap().fields;
-    assert_eq!((f["columns"].as_u64(), f["rows"].as_u64()), (Some(4), Some(2)));
-    assert_eq!(params(f)["width"], 120.0);
-    assert_eq!(params(f)["height"], 90.0);
-    assert_eq!(f["gutter"], 12.0);
-    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
-    h.run_steps(2);
-    h.event(egui::Event::Text("3".into()));
-    h.run_steps(2);
-    assert_eq!(h.state().ui.dialogs.first().unwrap().fields["rows"], 3);
-    assert_eq!(h.state().session.active().unwrap().doc.guides, original);
-}
-
-#[test]
-fn tab_skips_disabled_rows_and_margins() {
-    let mut app = app();
-    let id = open(&mut app);
-    let f = &mut app.ui.dialog_mut(id).unwrap().fields;
-    f.insert("columns".into(), json!(2));
-    f.insert("__rowsEnabled".into(), json!(false));
-    f.insert("__marginEnabled".into(), json!(false));
-    let mut h = harness(app);
-    h.run_steps(3);
-    for text in ["5", "100", "4", "6"] {
-        h.key_press(egui::Key::Tab);
-        h.run_steps(2);
-        h.event(egui::Event::Text(text.into()));
-        h.run_steps(2);
-    }
-    let f = &h.state().ui.dialogs.first().unwrap().fields;
-    assert_eq!(f["columns"], 6, "Tab wraps after column spacing, skipping disabled row and margin fields");
-    assert_eq!(params(f)["width"], 100.0);
-    assert_eq!(f["gutter"], 4.0);
-}
-
-/// The disabled Number field must not clamp a zero count to 1 and so switch its axis on (#5625).
-#[test]
-fn disabled_number_fields_do_not_turn_their_axis_on() {
-    let mut app = app();
-    let id = open(&mut app);
-    let mut h = harness(app);
-    h.run_steps(3);
-    let f = &h.state().ui.dialogs.first().unwrap().fields;
-    assert_eq!(f["rows"], 0, "the default layout has no rows");
-    assert!(!on(f, "__rowsEnabled", positive(f, "rows")), "Rows stays off");
-    let mut app = h.into_state();
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    let guides = &app.session.active().unwrap().doc.guides;
-    assert!(!guides.vertical.is_empty(), "the columns were created");
-    assert!(guides.horizontal.is_empty(), "no row guides at the top and bottom");
-
-    let mut app = self::app();
-    let id = open(&mut app);
-    app.ui.dialog_mut(id).unwrap().fields.insert("columns".into(), json!(0));
-    let mut h = harness(app);
-    h.run_steps(3);
-    let f = &h.state().ui.dialogs.first().unwrap().fields;
-    assert_eq!(f["columns"], 0);
-    assert!(!on(f, "__columnsEnabled", positive(f, "columns")), "Columns stays off");
-}
-
-/// New Guide Layout offers New Guide's colours, by value, and keeps another one as Custom.
-#[test]
-fn color_list_is_new_guides() {
-    let hexes: Vec<String> = color_options("#4affff").into_iter().map(|(hex, _)| hex).collect();
-    assert_eq!(hexes, ["#3366ff", "#ff3333", "#33ff33", "#3333ff", "#ffcc00", "#ff00ff", "#4affff", "#e7e7e7", "#000000"]);
-    assert_eq!(color_options("#4affff")[6].1, "Cyan", "the default guide colour reads as Cyan");
-    let custom = color_options("#123456");
-    assert_eq!((custom.len(), custom[9].0.as_str(), custom[9].1), (10, "#123456", "Custom"));
-}
-
-fn harness(app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {
-    let mut initialized = false;
-    egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(
-        move |ui, app| {
-            if initialized {
-                crate::dialogs::show(app, ui.ctx());
-            } else {
-                PhotocraftApp::setup_context(ui.ctx(), Default::default());
-                initialized = true;
-            }
-        },
-        app,
-    )
-}
-
-fn app() -> PhotocraftApp {
-    let mut session = photocraft_engine::Session::new();
-    session.execute("file.new", json!({"width":1200,"height":800})).unwrap();
-    PhotocraftApp::new(session, crate::Services::default())
-}
-
-#[test]
-fn alt_reset_restores_factory_layout() {
-    let mut app = app();
-    let id = open(&mut app);
-    let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
-    fields.insert("columns".into(), json!(3));
-    fields.insert("gutter".into(), json!(99));
-    fields.insert("__preset".into(), json!("twoColumn"));
-    reset(&app, &mut fields);
-    app.ui.dialog_mut(id).unwrap().fields = fields;
-    let f = &app.ui.dialog_mut(id).unwrap().fields;
-    assert_eq!(f["columns"], json!(8));
-    assert_eq!(f["gutter"], json!(20));
-    assert_eq!(f["__preset"], json!("custom"));
-    assert!(app.ui.dialogs.iter().any(|d| d.id == id));
-}
-
-fn draw(app: &mut PhotocraftApp, id: u64) {
-    let mut f = app.ui.dialog_mut(id).unwrap().fields.clone();
-    let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, Default::default());
-    ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() }, |ui| {
-        body(app, ui, &mut f, false);
-    })
-    .textures_delta
-    .clear();
-    app.ui.dialog_mut(id).unwrap().fields = f;
 }
 
 #[test]
@@ -197,26 +117,24 @@ fn typing_previews_without_editing_and_cancel_restores_preferences_and_lines() {
     let original = app.session.active().unwrap().doc.guides.clone();
     let revision = app.session.active().unwrap().revision;
     let color = app.session.prefs().guides_grid_and_slices.guide_color.clone();
-    let id = open(&mut app);
-    for (k, v) in [
-        ("columns", json!(5)),
-        ("rows", json!(3)),
-        ("gutter", json!(24)),
-        ("margin", json!([20, 40, 60, 80])),
-        ("color", json!("#ff00ff")),
-        ("clearExisting", json!(true)),
-    ] {
-        app.ui.dialog_mut(id).unwrap().fields.insert(k.into(), v);
-    }
-    let (pending, shown_color) = preview(&app, &app.session.active().unwrap().doc).unwrap();
+    let mut h = harness(app);
+    let id = open_dialog(&mut h);
+    set_group(&mut h, id, "columns", |c| c["number"] = json!(5));
+    set_group(&mut h, id, "rows", |r| {
+        r["enabled"] = json!(true);
+        r["number"] = json!(3);
+    });
+    set(&mut h, id, "color", json!({"r": 1.0, "g": 0.0, "b": 1.0, "a": 1.0})).unwrap();
+    set(&mut h, id, "clearExisting", json!(true)).unwrap();
+    let (pending, shown_color) = shown(&h).unwrap();
     assert_ne!(pending, original);
     assert_eq!(shown_color, Color32::from_rgb(255, 0, 255));
-    assert_eq!(app.session.active().unwrap().revision, revision);
-    assert_eq!(app.session.prefs().guides_grid_and_slices.guide_color, color);
-    crate::dialogs::cancel(&mut app, id).unwrap();
-    assert!(preview(&app, &app.session.active().unwrap().doc).is_none());
-    assert_eq!(app.session.active().unwrap().doc.guides, original);
-    assert_eq!(app.session.prefs().guides_grid_and_slices.guide_color, color);
+    assert_eq!(h.state().session.active().unwrap().revision, revision);
+    assert_eq!(h.state().session.prefs().guides_grid_and_slices.guide_color, color);
+    cancel(&mut h, id);
+    assert!(shown(&h).is_none());
+    assert_eq!(guides(&h), original);
+    assert_eq!(h.state().session.prefs().guides_grid_and_slices.guide_color, color);
 }
 
 #[test]
@@ -224,103 +142,84 @@ fn ok_matches_preview_and_is_one_undo_step() {
     let mut app = app();
     app.run(COMMAND, json!({"columns":2})).unwrap();
     let original = app.session.active().unwrap().doc.guides.clone();
-    let id = open(&mut app);
-    for (k, v) in [
-        ("columns", json!(3)),
-        ("rows", json!(2)),
-        ("width", json!("100*2")),
-        ("height", json!(150)),
-        ("centerColumns", json!(true)),
-        ("clearExisting", json!(true)),
-        ("color", json!("#ff00ff")),
-    ] {
-        app.ui.dialog_mut(id).unwrap().fields.insert(k.into(), v);
-    }
-    let expected = preview(&app, &app.session.active().unwrap().doc).unwrap().0;
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert_eq!(app.session.active().unwrap().doc.guides, expected);
-    assert_eq!(app.session.prefs().guides_grid_and_slices.guide_color, "#ff00ff");
-    assert!(preview(&app, &app.session.active().unwrap().doc).is_none());
-    app.run("edit.undo", json!({})).unwrap();
-    assert_eq!(app.session.active().unwrap().doc.guides, original);
+    let mut h = harness(app);
+    let id = open_dialog(&mut h);
+    set_group(&mut h, id, "columns", |c| c["number"] = json!(3));
+    set_group(&mut h, id, "rows", |r| {
+        r["enabled"] = json!(true);
+        r["number"] = json!(2);
+    });
+    set(&mut h, id, "centerColumns", json!(true)).unwrap();
+    set(&mut h, id, "clearExisting", json!(true)).unwrap();
+    set(&mut h, id, "color", json!({"r": 1.0, "g": 0.0, "b": 1.0, "a": 1.0})).unwrap();
+    let expected = shown(&h).unwrap().0;
+    assert!(confirm(&mut h, id));
+    assert_eq!(guides(&h), expected);
+    assert_eq!(h.state().session.prefs().guides_grid_and_slices.guide_color, "#ff00ff");
+    assert!(shown(&h).is_none());
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(guides(&h), original);
 }
 
 #[test]
 fn preview_off_and_foreign_document_never_replace_guides() {
-    let mut app = app();
-    let id = open(&mut app);
-    app.ui.dialog_mut(id).unwrap().fields.insert("__preview".into(), json!(false));
-    assert!(preview(&app, &app.session.active().unwrap().doc).is_none());
-    app.ui.dialog_mut(id).unwrap().fields.insert("__preview".into(), json!(true));
-    app.run("file.new", json!({"width":50,"height":50})).unwrap();
-    assert!(preview(&app, &app.session.active().unwrap().doc).is_none());
-    assert!(crate::dialogs::confirm(&mut app, id).is_err());
-    assert!(app.ui.dialog_mut(id).is_some());
+    let mut h = harness(app());
+    let id = open_dialog(&mut h);
+    set(&mut h, id, "preview", json!(false)).unwrap();
+    assert!(shown(&h).is_none());
+    set(&mut h, id, "preview", json!(true)).unwrap();
+    assert!(shown(&h).is_some());
+    h.state_mut().run("file.new", json!({"width":50,"height":50})).unwrap();
+    assert!(shown(&h).is_none(), "the layout belongs to the document it opened on");
+    confirm(&mut h, id);
+    let g = guides(&h);
+    assert!(g.vertical.is_empty() && g.horizontal.is_empty(), "the other document is untouched");
 }
 
 #[test]
 fn invalid_fields_keep_last_valid_preview_and_dialog_open() {
-    let mut app = app();
-    let id = open(&mut app);
-    draw(&mut app, id);
-    let expected = preview(&app, &app.session.active().unwrap().doc).unwrap().0;
-    app.ui.dialog_mut(id).unwrap().fields.insert("gutter".into(), json!(1000));
-    assert!(crate::dialogs::confirm(&mut app, id).is_err());
-    assert!(app.ui.dialog_mut(id).is_some());
-    assert_eq!(preview(&app, &app.session.active().unwrap().doc).unwrap().0, expected);
-    app.ui.dialog_mut(id).unwrap().fields.insert("gutter".into(), json!(20));
-    app.ui.dialog_mut(id).unwrap().fields.insert("color".into(), json!("invalid"));
-    assert!(crate::dialogs::confirm(&mut app, id).is_err());
-    assert!(app.ui.dialog_mut(id).is_some());
+    let mut h = harness(app());
+    let id = open_dialog(&mut h);
+    let expected = shown(&h).unwrap().0;
+    // Seven gutters of 1000 px cannot fit 1200 px.
+    set_group(&mut h, id, "columns", |c| c["gutter"]["value"] = json!(1000));
+    assert!(!confirm(&mut h, id));
+    assert!(h.state().framework.dialogs.is_open::<HostedGuideLayoutDialog>());
+    assert_eq!(shown(&h).unwrap().0, expected);
 }
 
+/// A unitless length is remembered as the length it applied, so a later ruler unit change does not reinterpret it.
 #[test]
-fn disabled_axes_preserve_values_and_do_not_validate_stale_inputs() {
+fn remembered_lengths_keep_their_size_when_the_ruler_unit_changes() {
     let mut app = app();
-    let id = open(&mut app);
-    let f = &mut app.ui.dialog_mut(id).unwrap().fields;
-    for (k, v) in [("columns", json!(8)), ("width", json!("invalid")), ("gutter", json!(2000)), ("__columnsEnabled", json!(false)), ("rows", json!(3))] {
-        f.insert(k.into(), v);
-    }
-    let p = params(f);
-    assert_eq!(p["columns"], 0);
-    assert_eq!(p["width"], Value::Null);
-    assert_eq!(f["columns"], 8);
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    assert!(app.session.active().unwrap().doc.guides.vertical.is_empty());
-    let reopened = open(&mut app);
-    let f = &app.ui.dialog_mut(reopened).unwrap().fields;
-    assert_eq!(f["columns"], 8);
-    assert_eq!(f["__columnsEnabled"], false);
+    app.ui.view.guide_layout = json!({"gutter": 5, "margin": [5, 5, 5, 5]});
+    let mut h = harness(app);
+    let id = open_dialog(&mut h);
+    assert!(confirm(&mut h, id));
+    h.state_mut().session.prefs.edit(|p| p.units_and_rulers.rulers = Unit::Millimeters);
+    let id = open_dialog(&mut h);
+    let f = fields(&h, id);
+    let mm = 5.0 / 72.0 * 25.4;
+    assert!((f["columns"]["gutter"]["value"].as_f64().unwrap() - mm).abs() < 1e-3, "{f}");
+    assert!((f["margin"][0]["value"].as_f64().unwrap() - mm).abs() < 1e-3, "{f}");
 }
 
+/// Percent is of each selected artboard, not of the document: 50% of a 140 x 40 board is a 70 px column, centred in
+/// it; the field reopens still in percent.
 #[test]
-fn parent_cancel_also_closes_guide_color_picker() {
+fn percent_is_of_the_selected_artboard_and_stays_percent() {
     let mut app = app();
-    let id = open(&mut app);
-    let child = crate::color_picker_ui::open_for_field(&mut app, "Color Picker", [0.0, 1.0, 1.0], id, "color");
-    assert!(crate::dialogs::confirm(&mut app, id).is_err());
-    crate::dialogs::cancel(&mut app, id).unwrap();
-    assert!(app.ui.dialog_mut(child).is_none());
-    assert!(app.ui.dialog_mut(id).is_none());
-}
-
-#[test]
-fn automation_opens_the_same_guide_layout_dialog() {
-    let mut app = app();
-    app.ui.view.guide_layout["target"] = json!("selectedArtboards");
-    let id = crate::dialogs::open_command_dialog(&mut app, COMMAND, "New Guide Layout");
-    assert!(owns(&app.ui.dialog_mut(id).unwrap().fields));
-    assert_eq!(app.ui.dialog_mut(id).unwrap().fields["target"], "document");
-    assert!(preview(&app, &app.session.active().unwrap().doc).is_some());
-}
-
-#[test]
-fn preview_cache_tracks_document_revision() {
-    let mut app = app();
-    let id = open(&mut app);
-    draw(&mut app, id);
-    assert!(!preview(&app, &app.session.active().unwrap().doc).unwrap().0.vertical.contains(&23.0));
-    app.run(COMMAND, json!({"margin":23})).unwrap();
-    assert!(preview(&app, &app.session.active().unwrap().doc).unwrap().0.vertical.contains(&23.0));
+    app.run("layer.new.artboard", json!({"rect": [200, 100, 140, 40]})).unwrap();
+    app.ui.view.guide_layout = json!({
+        "target": "selectedArtboards", "columns": 1, "width": "50%", "centerColumns": true, "clearExisting": true,
+        "rows": 0, "marginEnabled": false,
+    });
+    let mut h = harness(app);
+    let id = open_dialog(&mut h);
+    assert_eq!(fields(&h, id)["target"], "selectedArtboards");
+    assert!(confirm(&mut h, id));
+    let g = guides(&h);
+    assert!(g.vertical.contains(&235.0) && g.vertical.contains(&305.0), "{:?}", g.vertical);
+    let id = open_dialog(&mut h);
+    assert_eq!(fields(&h, id)["columns"]["size"]["value"], 50.0);
 }

@@ -22,13 +22,13 @@ mod tiles;
 /// bring them back with the state's document, as the reference app does. Selecting layers is not
 /// a step of its own, so the session updates the current state's target with
 /// [`History::set_current_layers`] just before recording the next step (#1356).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, craft_ui_macros::PlainData)]
 pub struct LayerTarget {
     pub active: Option<LayerId>,
     pub selected: Vec<LayerId>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub struct HistoryState {
     pub label: String,
     pub doc: Arc<Document>,
@@ -42,13 +42,13 @@ pub struct HistoryState {
 }
 
 /// The context in which a selected action row must remain available after it is folded away.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub enum ActionBrushSource {
     Current(HistoryState),
     Cleared(HistoryState),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub struct History {
     /// Past states; the last one is the state *before* the current document.
     undo: VecDeque<HistoryState>,
@@ -89,10 +89,14 @@ pub struct History {
     /// A snapshot-backed alias of a folded row. Clear History moves this with its row source;
     /// a snapshot selected explicitly by the user remains separate in the document state.
     brush_source_snapshot: Option<u64>,
+    /// See [`History::generation`].
+    generation: u64,
 }
 
+static NEXT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// What [`History::rollback`] needs to take the most recent [`History::record`] back.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 struct LastRecord {
     visibility_capture_before: Option<Arc<Vec<LayerId>>>,
     /// The document it replaced (the state a rollback makes current again).
@@ -109,7 +113,7 @@ struct LastRecord {
 
 /// The undo and redo states [`History::clear_states`] removed, and the History Brush source set
 /// before it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 struct Cleared {
     undo: VecDeque<HistoryState>,
     redo: Vec<HistoryState>,
@@ -147,7 +151,21 @@ impl History {
             next_id: 1,
             brush_source: None,
             brush_source_snapshot: None,
+            generation: NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
+    }
+
+    /// A number that identifies what the history holds: every call that changes it takes a fresh one, clones keep
+    /// it, and no two histories that differ share one, so a history put back in place of another (an action's
+    /// consolidated steps) still reads as a change. The public settings fields ([`History::max_states`],
+    /// [`History::max_bytes`], [`History::non_linear`]) are not part of it; they change the states only through
+    /// the calls that apply them, such as [`History::trim`].
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn changed(&mut self) {
+        self.generation = NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Record that `before` was replaced by a new current document via step `label`, which left
@@ -158,6 +176,7 @@ impl History {
     /// reads `…, before, the former redo states (oldest first), the new step`, so the new step is
     /// appended at the end and every earlier state can still be stepped to.
     pub fn record(&mut self, label: impl Into<String>, before: Arc<Document>, layers: LayerTarget) {
+        self.changed();
         if self.max_bytes == 0 {
             self.tiles = None;
         }
@@ -225,6 +244,7 @@ impl History {
     /// Set the layers the current document targets from its creation on: when it is first
     /// opened, or when its step coalesces or changes the selection after recording.
     pub fn set_current_layers(&mut self, layers: LayerTarget) {
+        self.changed();
         self.current_layers = layers;
     }
 
@@ -240,6 +260,7 @@ impl History {
     /// Note layers whose visibility the current step changed (after [`History::record`], and
     /// again when a later change coalesces into the step).
     pub fn add_current_visibility(&mut self, ids: &[LayerId]) {
+        self.changed();
         merge_ids(&mut self.current_visibility, ids);
         if let Some(capture) = &mut self.visibility_capture {
             merge_ids(Arc::make_mut(capture), ids);
@@ -248,6 +269,7 @@ impl History {
 
     /// Retain only changes that recorded edits make undoable, across trimming and local purges.
     pub fn begin_visibility_capture(&mut self, prefix: &[LayerId]) {
+        self.changed();
         self.visibility_capture = Some(Arc::new(prefix.to_vec()));
     }
 
@@ -258,6 +280,7 @@ impl History {
 
     /// Release an action's accumulator when a purge leaves no grouped step to publish.
     pub fn end_visibility_capture(&mut self) {
+        self.changed();
         self.visibility_capture = None;
     }
 
@@ -270,6 +293,7 @@ impl History {
     /// intermediate state so the caller can retain its pixels as a normal history snapshot.
     /// A source already deleted before consolidation remains unresolved.
     pub fn preserve_action_brush_source(&mut self, later: &Self) -> Option<ActionBrushSource> {
+        self.changed();
         let current = self.current_id;
         let prior_current = later.current_id;
         let collapsed = |id| {
@@ -297,12 +321,14 @@ impl History {
 
     /// Retain a folded row through a native snapshot, without adding a visible Undo state.
     pub fn set_action_brush_snapshot(&mut self, snapshot: u64) {
+        self.changed();
         self.brush_source = None;
         self.brush_source_snapshot = Some(snapshot);
     }
 
     /// Keep a folded source inactive until Undo Clear History restores its source context.
     pub fn set_cleared_brush_snapshot(&mut self, snapshot: u64) {
+        self.changed();
         if let Some(cleared) = &mut self.cleared {
             cleared.brush_source = None;
             cleared.brush_source_snapshot = Some(snapshot);
@@ -312,6 +338,7 @@ impl History {
     /// Undo: `current` becomes redoable; returns the document to make current and the layers it
     /// targeted when it was created.
     pub fn undo(&mut self, current: Arc<Document>) -> Option<(Arc<Document>, LayerTarget)> {
+        self.changed();
         // Undo Clear History: the cleared states come back; the document doesn't change.
         if let Some(cleared) = self.cleared.take() {
             let Cleared { undo, redo, brush_source, brush_source_snapshot } = *cleared;
@@ -341,6 +368,7 @@ impl History {
 
     /// Redo: the mirror of [`Self::undo`].
     pub fn redo(&mut self, current: Arc<Document>) -> Option<(Arc<Document>, LayerTarget)> {
+        self.changed();
         let next = self.redo.pop()?;
         self.last_record = None;
         if let Some(tiles) = &mut self.tiles {
@@ -412,6 +440,7 @@ impl History {
     /// that state while older states fall off, and the state itself is kept when it would fall off
     /// the history (by count or memory); `false` if there is no such row.
     pub fn set_brush_source(&mut self, i: usize) -> bool {
+        self.changed();
         let Some(id) = self.row_id(i) else { return false };
         self.brush_source = Some(id);
         self.brush_source_snapshot = None;
@@ -435,12 +464,14 @@ impl History {
 
     /// Rename the current step (e.g. after folding several steps into one with [`Self::purge_last`]).
     pub fn set_current_label(&mut self, label: impl Into<String>) {
+        self.changed();
         self.current_label = label.into();
     }
 
     /// The user's Edit › Purge › Undo also starts a new action-history boundary. Internal
     /// compound commands use [`Self::purge_last`] to fold their records without this boundary.
     pub fn purge_undo(&mut self) -> bool {
+        self.changed();
         let purged = self.purge_last();
         if purged {
             self.purge_generation = self.purge_generation.wrapping_add(1);
@@ -451,6 +482,7 @@ impl History {
     /// Forget the most recent undo state and every redo state: the
     /// last step can no longer be undone and its pixels are released.
     pub fn purge_last(&mut self) -> bool {
+        self.changed();
         self.clear_redo();
         self.last_record = None;
         if self.cleared.take().is_some() {
@@ -472,6 +504,7 @@ impl History {
     /// either, since every later state would lose its starting point in the list. Returns
     /// whether a state was removed.
     pub fn remove(&mut self, i: usize) -> bool {
+        self.changed();
         if i == 0 {
             return false;
         }
@@ -492,6 +525,7 @@ impl History {
     /// them) and nothing else: the History panel's Delete on a dimmed state in non-linear
     /// history. Returns whether a state was removed.
     pub fn remove_later(&mut self, j: usize) -> bool {
+        self.changed();
         let Some(k) = self.redo.len().checked_sub(j.saturating_add(1)) else { return false };
         let state = self.redo.remove(k);
         self.last_record = None;
@@ -510,6 +544,7 @@ impl History {
     /// redoable: the current state is deleted while the redo states (later states in the
     /// list) stay. Returns the document to make current and the layers it targeted.
     pub fn drop_current(&mut self) -> Option<(Arc<Document>, LayerTarget)> {
+        self.changed();
         let prev = self.undo.pop_back()?;
         self.last_record = None;
         if let Some(tiles) = &mut self.tiles {
@@ -534,6 +569,7 @@ impl History {
     /// (changing nothing) when something else changed the list since that record, e.g. an undo;
     /// the caller then falls back to [`History::undo`].
     pub fn rollback(&mut self) -> Option<(Arc<Document>, LayerTarget)> {
+        self.changed();
         let held = self.last_record.as_ref()?;
         if self.undo.len().saturating_add(held.evicted.len()) <= held.moved {
             return None;
@@ -572,11 +608,13 @@ impl History {
     /// Keep identifiers consumed by a completed compound operation reserved when its history
     /// is consolidated from an earlier snapshot. Removed rows must not name a later state.
     pub fn reserve_ids_from(&mut self, later: &Self) {
+        self.changed();
         self.next_id = self.next_id.max(later.next_id);
     }
 
     /// Forget the redo states, e.g. after undoing half of a compound step that failed.
     pub fn clear_redo(&mut self) {
+        self.changed();
         if !self.redo.is_empty() {
             self.last_record = None;
         }
@@ -592,6 +630,7 @@ impl History {
     /// goes back to the default, the oldest state held (now the current one): a source set on a
     /// state the purge removed would otherwise leave no source.
     pub fn clear(&mut self) {
+        self.changed();
         self.purge_generation = self.purge_generation.wrapping_add(1);
         self.last_record = None;
         self.current_visibility.clear();
@@ -604,6 +643,7 @@ impl History {
 
     /// Make the History Brush's source the default again (the oldest state held), pinning no state.
     pub fn reset_brush_source(&mut self) {
+        self.changed();
         self.brush_source = None;
         self.brush_source_snapshot = None;
     }
@@ -614,6 +654,7 @@ impl History {
     /// The History Brush's source goes back to the default until that undo, as in [`Self::clear`].
     /// Returns false (and changes nothing) when the current state is the only one.
     pub fn clear_states(&mut self) -> bool {
+        self.changed();
         if self.undo.is_empty() && self.redo.is_empty() {
             return false;
         }
@@ -624,6 +665,7 @@ impl History {
     /// Preserve a Clear already accepted during an action when its command-local rows fold
     /// into this captured history, which may have no rows. Ordinary empty Clear still refuses.
     pub fn preserve_action_clear(&mut self, later: &Self) {
+        self.changed();
         if later.is_cleared() && !self.is_cleared() {
             self.clear_states_including_empty();
         }
@@ -718,6 +760,14 @@ impl History {
     /// so they can't take memory beyond it unseen (#4530). The most recent state is still always
     /// kept.
     pub fn trim_with(&mut self, current: &Document, pinned: &[&Document]) -> usize {
+        let dropped = self.drop_over_budget(current, pinned);
+        if dropped > 0 {
+            self.changed();
+        }
+        dropped
+    }
+
+    fn drop_over_budget(&mut self, current: &Document, pinned: &[&Document]) -> usize {
         // While Clear History can be undone, the cleared states are what history holds: the
         // oldest of them go first, as the list's would. The source set before it stays pinned.
         let (undo, redo, brush_source) = match &mut self.cleared {

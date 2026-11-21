@@ -199,6 +199,64 @@ fn smooth_inner_bevel_lights_the_top_edge_inside_only() {
     assert!(at(&maps[0], 20, 15) < 0.05);
 }
 
+/// A gloss contour from Photoshop's 0–255 contour editor points.
+fn gloss_of(points: &[(f32, f32)]) -> Contour {
+    Contour::Custom {
+        name: "gloss".into(),
+        points: points.iter().map(|&(i, o)| photocraft_doc::adjust::CurvePoint { input: i / 255.0, output: o / 255.0 }).collect(),
+        corners: vec![],
+    }
+}
+
+/// Smooth inner bevel highlight and shadow maps of `shape` with `gloss`, light from `angle` at
+/// `altitude`.
+fn gloss_maps(shape: &Map, gloss: Contour, angle: f32, altitude: f32, size: f32, depth: f32) -> Vec<Map> {
+    let mut b = bevel_of(BevelStyle::InnerBevel, BevelTechnique::Smooth);
+    (b.angle, b.altitude, b.size, b.depth, b.gloss_contour) = (angle, altitude, size, depth, gloss);
+    bevel_maps(shape, &b, &GlobalLight::default(), &no_tex(), &PreparedPatterns::new(&[], PREPARED_PATTERN_BYTES)).0
+}
+
+/// The gloss contour maps the shading, and the flat face's own unmapped shading `sin(altitude)`
+/// stays the neutral. Photoshop's own composite of a purchased style pack's type (Rolling Slope -
+/// Descending at altitude 69, 16 px smooth inner bevel at 358 %): the face stays at its colour, with white
+/// glints only where the shading is within ~0.015 of zero (measured per pixel against this
+/// bevel's shading). With the mapped `lut(sin 69°)` = 0.16 as the neutral, every slope pixel
+/// whose mapped shading came out above it took the full highlight, and the type rendered white.
+#[test]
+fn high_altitude_descending_gloss_only_glints_where_the_light_misses() {
+    let n = 80;
+    let mut shape = Map::new(n, n, 0.0);
+    for y in 10..70 {
+        for x in 20..60 {
+            shape.v[y * n + x] = 1.0;
+        }
+    }
+    let rolling = gloss_of(&[(2.0, 255.0), (53.0, 100.0), (97.0, 107.0), (179.0, 153.0), (252.0, 0.0)]);
+    // Light from the left: the bar's right slope faces away from it.
+    let maps = gloss_maps(&shape, rolling, 180.0, 69.0, 16.0, 3.58);
+    let row: Vec<f32> = (20..60).map(|x| maps[0].v[40 * n + x]).collect();
+    let lit = row.iter().filter(|v| **v > 0.05).count();
+    assert!(lit <= 8, "only a few glint pixels, not the whole face: {row:?}");
+    assert!(row[..20].iter().all(|v| *v < 0.05), "no highlight on the slope facing the light: {row:?}");
+    assert!(row[20..].iter().any(|v| *v > 0.9), "a full glint where the slope faces away: {row:?}");
+}
+
+/// Photoshop 27.11 oracles (corpus `bevel-inner-gloss-ramp-peak` / `-double-ring-aa`: 12 px
+/// smooth inner bevel at altitude 30, Screen white and Multiply black at 75 % over (90, 120,
+/// 170)): a contour that maps the flat shading 0.5 above or below 0.5 lights or darkens the flat
+/// face too. Ramp-peak (0,0)(128,255)(255,0) paints the face (214, 221, 234), the full
+/// highlight; double-ring (…, (128, 40), …) paints it (44, 58, 83), a 0.69 shadow.
+#[test]
+fn a_gloss_contour_lights_or_darkens_the_flat_face_around_the_unmapped_neutral() {
+    let shape = square(40, 5, 35);
+    let face = |m: &Map| m.v[20 * 40 + 20];
+    let peak = gloss_maps(&shape, gloss_of(&[(0.0, 0.0), (128.0, 255.0), (255.0, 0.0)]), 120.0, 30.0, 5.0, 1.0);
+    assert!(face(&peak[0]) > 0.99 && face(&peak[1]) == 0.0, "ramp-peak: full highlight, {} / {}", face(&peak[0]), face(&peak[1]));
+    let ring = gloss_maps(&shape, gloss_of(&[(0.0, 0.0), (64.0, 255.0), (128.0, 40.0), (192.0, 255.0), (255.0, 0.0)]), 120.0, 30.0, 5.0, 1.0);
+    // (0.5 − 40/255) / 0.5: 90 × (1 − 0.75 × 0.686) = 43.7.
+    assert!(face(&ring[0]) == 0.0 && (face(&ring[1]) - 0.686).abs() < 0.02, "double-ring: shadow {}", face(&ring[1]));
+}
+
 /// Photoshop 27.11, measured across a straight edge (size 10, depth 100 %, light from the top
 /// at 30°): a chisel facet has the slope `depth × size / (2 (size + 1))`, flat right up to the
 /// edge pixel for Inner Hard; Inner Soft's edge pixel is half as steep again; Outer Hard
@@ -624,7 +682,8 @@ fn chisel_fields_do_not_depend_on_the_threads() {
     for (k, m) in maps.iter().enumerate() {
         for reach in [3.0f32, 12.0] {
             let one = with_threads(1, || (sharp_edges(m), distance_field_of(m, reach)));
-            for threads in [2, 5, 16] {
+            // 2 threads give groups of several units with a short last one, 16 one unit a group: the two ways `par_units` splits work (#15652).
+            for threads in [2, 16] {
                 let many = with_threads(threads, || (sharp_edges(m), distance_field_of(m, reach)));
                 assert_eq!(one.0.slot, many.0.slot, "map {k} sharp slots on {threads} threads");
                 let edges = |s: &SharpEdges| {
@@ -641,48 +700,52 @@ fn chisel_fields_do_not_depend_on_the_threads() {
 
 #[test]
 fn bevel_maps_do_not_depend_on_the_threads() {
-    // Every style and technique, softened or not, and a texture; one thread (in order) is the reference.
-    let mut patchy = aa_disc(101, 101, 40.0);
+    // Compact anti-aliased fixtures keep curved, rounded, clipped oblique and patchy edges.
+    // Dimensions above 16 and below 64 exercise multi-row groups with 2 threads and
+    // one row per group with 8. Odd extents also leave a short final group.
+    let mut patchy = aa_disc(51, 51, 18.0);
+    let patchy_width = patchy.w;
     for (i, v) in patchy.v.iter_mut().enumerate() {
-        if (i % 101 / 13 + i / 101 / 17) % 5 == 0 {
+        if (i % patchy_width / 7 + i / patchy_width / 9).is_multiple_of(5) {
             *v *= 0.6;
         }
     }
-    let shapes = [aa_disc(97, 83, 30.0), aa_round_rect(131, 77, 9.0, 11.0, 120.0, 66.0, 14.0), aa_bar(90, 130, 60.0, 150.0, 25.0), patchy];
+    let shapes = [aa_disc(49, 47, 13.0), aa_round_rect(61, 47, 10.0, 9.0, 51.0, 38.0, 8.0), aa_bar(47, 63, 60.0, 74.0, 15.0), patchy];
     let mut sf = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
     sf.fill_rect(Rect::new(0, 0, 4, 2), &[0.0, 0.0, 0.0, 1.0]);
     sf.fill_rect(Rect::new(0, 2, 4, 4), &[1.0, 1.0, 1.0, 1.0]);
     let pats = [Pattern::new("stripes", sf, 4, 4)];
     let light = GlobalLight::default();
     let styles = [BevelStyle::InnerBevel, BevelStyle::OuterBevel, BevelStyle::Emboss, BevelStyle::PillowEmboss, BevelStyle::StrokeEmboss];
-    for (k, shape) in shapes.iter().enumerate() {
+    let techniques = [BevelTechnique::Smooth, BevelTechnique::ChiselHard, BevelTechnique::ChiselSoft];
+    let settings = [(5.0, 0.0, false), (12.0, 2.0, false), (8.0, 0.0, true)];
+    for (shape_index, shape) in shapes.iter().enumerate() {
         let tex = TextureCtx { rect: Rect::new(3, 5, 3 + shape.w as i32, 5 + shape.h as i32), patterns: &pats, anchor: (0.0, 0.0) };
-        for style in styles {
-            for technique in [BevelTechnique::Smooth, BevelTechnique::ChiselHard, BevelTechnique::ChiselSoft] {
-                for (size, soften, textured) in [(5.0, 0.0, false), (12.0, 2.0, false), (8.0, 0.0, true)] {
-                    let mut b = bevel_of(style, technique);
-                    (b.size, b.soften) = (size, soften);
-                    if textured {
-                        b.texture = Some(photocraft_doc::BevelTexture {
-                            name: "stripes".into(),
-                            id: String::new(),
-                            scale: 1.0,
-                            depth: 1.0,
-                            invert: false,
-                            link: true,
-                            phase: (0.0, 0.0),
-                        });
-                    }
-                    let run = || bevel_maps(shape, &b, &light, &tex, &PreparedPatterns::new(&pats, PREPARED_PATTERN_BYTES)).0;
-                    let one = with_threads(1, run);
-                    for threads in [2, 5, 16] {
-                        let many = with_threads(threads, run);
-                        assert_eq!(one.len(), many.len());
-                        for (j, (a, m)) in one.iter().zip(&many).enumerate() {
-                            assert_eq!(bits(&a.v), bits(&m.v), "shape {k}, {style:?} {technique:?} size {size} map {j} on {threads} threads");
-                        }
-                    }
-                }
+        for (style_index, style) in styles.into_iter().enumerate() {
+            // Rotate each set through shapes. Stepping the settings twice as fast as
+            // the techniques across styles also gives every technique each setting.
+            let technique = techniques[(shape_index + style_index) % techniques.len()];
+            let (size, soften, textured) = settings[(shape_index + 2 * style_index) % settings.len()];
+            let threads = [2, 8][(shape_index + style_index) % 2];
+            let mut b = bevel_of(style, technique);
+            (b.size, b.soften) = (size, soften);
+            if textured {
+                b.texture = Some(photocraft_doc::BevelTexture {
+                    name: "stripes".into(),
+                    id: String::new(),
+                    scale: 1.0,
+                    depth: 1.0,
+                    invert: false,
+                    link: true,
+                    phase: (0.0, 0.0),
+                });
+            }
+            let run = || bevel_maps(shape, &b, &light, &tex, &PreparedPatterns::new(&pats, PREPARED_PATTERN_BYTES)).0;
+            let one = with_threads(1, run);
+            let many = with_threads(threads, run);
+            assert_eq!(one.len(), many.len());
+            for (j, (a, m)) in one.iter().zip(&many).enumerate() {
+                assert_eq!(bits(&a.v), bits(&m.v), "shape {shape_index}, {style:?} {technique:?} size {size} map {j} on {threads} threads");
             }
         }
     }
@@ -854,6 +917,217 @@ fn glows_match_photoshop() {
         let c = glow_map(&shape, &glow(t, 6.0, 0.0, GlowSource::Center), true, (0, 0));
         for x in 20..40 {
             assert!((at(&c, x) - (1.0 - at(&e, x))).abs() < 1e-5, "{t:?} at {x}");
+        }
+    }
+}
+
+/// An outer glow with a custom contour (#11361), Range 50 %, on the 60 px map with the
+/// 20..40 square of `glows_match_photoshop`.
+fn contour_glow(technique: GlowTechnique, size: f32, points: &[(f32, f32)]) -> Glow {
+    Glow {
+        common: photocraft_doc::FxCommon::new(BlendMode::Normal, 1.0),
+        paint: FxPaint::Color(photocraft_color::Color::BLACK),
+        technique,
+        spread: 0.0,
+        size,
+        contour: Contour::Custom {
+            name: "custom".into(),
+            points: points.iter().map(|&(input, output)| photocraft_doc::adjust::CurvePoint { input, output }).collect(),
+            corners: vec![],
+        },
+        anti_alias: false,
+        range: 0.5,
+        jitter: 0.0,
+        noise: 0.0,
+        source: GlowSource::Edge,
+    }
+}
+
+const FLAT: [(f32, f32); 2] = [(0.0, 1.0), (1.0, 1.0)];
+
+fn square_20_40() -> Map {
+    let n = 60;
+    let mut shape = Map::new(n, n, 0.0);
+    for y in 20..40 {
+        for x in 20..40 {
+            shape.v[y * n + x] = 1.0;
+        }
+    }
+    shape
+}
+
+/// Centre-to-centre (dx, dy) from pixel `(x, y)` to the nearest pixel of the 20..40 square.
+fn off_square(x: usize, y: usize) -> (f32, f32) {
+    let d = |v: usize| if v < 20 { 20 - v } else { v.saturating_sub(39) };
+    (d(x) as f32, d(y) as f32)
+}
+
+/// #11361: a contour above 0 at its start (the flat "always 100 %" one, and one starting at
+/// 50 %) used to light every pixel the glow never reaches, out to the effect's rectangle. Nothing
+/// beyond the reach may paint, for either technique: Precise reaches `size + 1` px (centre to
+/// centre, Euclidean), Softer's two-box tent reaches `size` px along each axis.
+#[test]
+fn high_contour_outer_glow_stays_within_its_reach() {
+    let shape = square_20_40();
+    for points in [&FLAT[..], &[(0.0, 0.5), (1.0, 1.0)][..]] {
+        for (t, size) in [(GlowTechnique::Precise, 4.0f32), (GlowTechnique::Precise, 10.0), (GlowTechnique::Softer, 4.0), (GlowTechnique::Softer, 10.0)] {
+            let m = glow_map(&shape, &contour_glow(t, size, points), false, (0, 0));
+            let mut lit = 0;
+            for y in 0..60 {
+                for x in 0..60 {
+                    let (dx, dy) = off_square(x, y);
+                    let beyond = match t {
+                        // Strictly past it: at exactly `size + 1` rounding can leave a 1e-7 residue.
+                        GlowTechnique::Precise => dx.hypot(dy) > size + 1.0 + 1e-3,
+                        GlowTechnique::Softer => dx.max(dy) > size,
+                    };
+                    let v = m.v[y * 60 + x];
+                    if beyond {
+                        assert_eq!(v, 0.0, "{t:?} size {size} {points:?}: ({x}, {y}) is beyond the reach but paints {v}");
+                    }
+                    lit += usize::from(v > 0.0 && (dx, dy) != (0.0, 0.0));
+                }
+            }
+            // The band, not the rectangle: 3200 pixels lay outside the square before the fix.
+            let band = ((20.0 + 2.0 * (size + 1.0)).powi(2) - 400.0) as usize;
+            assert!(lit > 0 && lit <= band, "{t:?} size {size} {points:?}: {lit} glow pixels, the band holds at most {band}");
+        }
+    }
+}
+
+/// #11361: a flat contour paints a solid band up to the shape, ending in one soft pixel set by how
+/// far its centre lies inside the reach (Photoshop's 4 px flat Precise ellipse reads background,
+/// one soft step, then solid glow up to the shape).
+#[test]
+fn flat_contour_outer_glow_is_a_solid_band_with_one_soft_pixel() {
+    let n = 60;
+    let at = |m: &Map, x: usize| m.v[30 * n + x];
+    // Precise, with the square's left column half covered: its edge sits mid-pixel, so the
+    // pixels out from it are 1.5, 2.5, 3.5, 4.5, 5.5 px (centre to centre) from the shape, and
+    // the reach (size + 1 = 5) ends half-way across the 4.5 px one.
+    let mut shape = square_20_40();
+    for y in 20..40 {
+        shape.v[y * n + 19] = 0.5;
+    }
+    let m = glow_map(&shape, &contour_glow(GlowTechnique::Precise, 4.0, &FLAT), false, (0, 0));
+    for x in 16..=19 {
+        assert!(at(&m, x) > 0.999, "precise, solid band at x {x}: {}", at(&m, x));
+    }
+    assert!((at(&m, 15) - 0.5).abs() < 0.05, "precise, the soft outer pixel: {}", at(&m, 15));
+    assert!(at(&m, 14) == 0.0 && at(&m, 0) == 0.0, "precise, beyond the reach: {} {}", at(&m, 14), at(&m, 0));
+    // Precise, pixel-aligned edge: the pixels out from it are 1..5 px (centre to centre) from the
+    // shape and the reach ends at the 5 px one's centre, so the band is solid through Size (x 16,
+    // 4 px out, 1.0) and the next pixel (x 15) is beyond it. Point-sampled, as the measured Linear
+    // falloff is: an area-averaged falloff would leave x 15 half covered (the reach ends 4.5 px
+    // past the shape's edge, half-way across it), not 0.84.
+    let shape = square_20_40();
+    let m = glow_map(&shape, &contour_glow(GlowTechnique::Precise, 4.0, &FLAT), false, (0, 0));
+    for x in 16..20 {
+        assert!(at(&m, x) > 0.999, "precise aligned, solid band at x {x}: {}", at(&m, x));
+    }
+    assert!(at(&m, 15) == 0.0, "precise aligned, beyond the reach: {}", at(&m, 15));
+    // Softer, size 4: the tent's last tap (1/64, at x 16) is above what one opaque pixel gives one
+    // pixel inside its reach (t[3]·t[0] ≈ 0.0137), so a straight edge is solid through its reach.
+    let m = glow_map(&shape, &contour_glow(GlowTechnique::Softer, 4.0, &FLAT), false, (0, 0));
+    for x in 16..20 {
+        assert!(at(&m, x) > 0.999, "softer, solid band at x {x}: {}", at(&m, x));
+    }
+    assert!(at(&m, 15) == 0.0 && at(&m, 0) == 0.0, "softer, beyond the reach: {} {}", at(&m, 15), at(&m, 0));
+    // Softer, size 2: the last tap (1/16, at x 18) is below that (0.25·0.375), so the outermost
+    // pixel is soft: 383 table steps to full, 0.0625 · 4095 / 383 ≈ 0.668.
+    let m = glow_map(&shape, &contour_glow(GlowTechnique::Softer, 2.0, &FLAT), false, (0, 0));
+    assert!(at(&m, 19) > 0.999, "softer size 2, solid band: {}", at(&m, 19));
+    assert!((at(&m, 18) - 0.668).abs() < 0.01, "softer size 2, the soft outer pixel: {}", at(&m, 18));
+    assert!(at(&m, 17) == 0.0, "softer size 2, beyond the reach: {}", at(&m, 17));
+}
+
+/// #11361 review: a feature narrow in both axes has far less Softer coverage at a given distance
+/// than a straight edge. Read through the straight edge's tail (`e = w·√(2v)`), a single pixel's
+/// flat-contour glow was dimmed 2 px inside its reach at size 4 (0.94, 0.66, then 0.33 at the
+/// last pixel) and from about 5 px inside at size 10. The edge now reaches full strength at the
+/// coverage a single opaque pixel gives one pixel inside its reach, so along its row and column
+/// only the outermost pixel is soft.
+#[test]
+fn softer_flat_contour_keeps_a_single_pixel_solid_inside_its_reach() {
+    let n = 60;
+    let mut shape = Map::new(n, n, 0.0);
+    shape.v[30 * n + 30] = 1.0;
+    // (size, reach R in pixels, the outermost pixel's value t[R]·t[0] / knee).
+    // Size 4: t = [7/32, 3/16, 1/8, 1/16, 1/64], knee floor(4095·t[3]·t[0]) = 55 steps.
+    // Size 10: box [.05, .1 ×9, .05], t[0] = .095, t[9] = .01, t[10] = .0025, knee 3 steps.
+    for (size, reach, last) in [(4.0f32, 4usize, 0.2545f32), (10.0, 10, 0.3243)] {
+        let m = glow_map(&shape, &contour_glow(GlowTechnique::Softer, size, &FLAT), false, (0, 0));
+        for d in 0..reach {
+            for (x, y) in [(30 + d, 30), (30 - d, 30), (30, 30 + d), (30, 30 - d)] {
+                let v = m.v[y * n + x];
+                assert!(v > 0.999, "size {size}: ({x}, {y}), {d} px out, paints {v}");
+            }
+        }
+        let v = m.v[30 * n + 30 + reach];
+        assert!((v - last).abs() < 0.01, "size {size}: the outermost pixel paints {v}, not {last}");
+        assert_eq!(m.v[30 * n + 31 + reach], 0.0, "size {size}: beyond the reach");
+    }
+}
+
+/// #11361 review: the table is linear from entry 0 up to a knee on a table entry, so the GPU's and
+/// CPU's linear interpolation paint the model's value at any coverage, the first step
+/// `(0, 1/4095]` included (a large Softer glow's outermost pixel has coverage there).
+#[test]
+fn flat_contour_glow_table_is_linear_up_to_a_knee_on_an_entry() {
+    for t in [GlowTechnique::Precise, GlowTechnique::Softer] {
+        for size in [1.0f32, 2.0, 4.0, 7.5, 10.0, 60.0, 512.0] {
+            let Some(f) = glow_paint_lut(&contour_glow(t, size, &FLAT), false) else { panic!("a flat contour has a table") };
+            assert_eq!(f[0], 0.0);
+            let steps = 1.0 / f[1];
+            assert!(steps >= 1.0 && (steps - steps.round()).abs() < 1e-3, "{t:?} size {size}: the knee at {steps} steps");
+            for (k, v) in f.iter().enumerate() {
+                let want = (k as f32 / steps.round()).min(1.0);
+                assert!((v - want).abs() < 1e-5, "{t:?} size {size}: entry {k} is {v}, not {want}");
+            }
+            // Between entries (here inside the first step) the interpolation is the model.
+            for frac in [0.1f32, 0.5, 0.9] {
+                let v = frac / 4095.0;
+                let want = (frac / steps.round()).min(1.0);
+                assert!((lut_at(&f, v) - want).abs() < 1e-5, "{t:?} size {size}: coverage {v}");
+            }
+        }
+    }
+}
+
+/// #11361's regression guard: the reach cap never paints below what the Linear contour does, so
+/// Linear glows (None, or a custom straight line as PSDs store it) and inner glows keep their
+/// transfer.
+///
+/// The inner half is measured now, not assumed (#11636): in Photoshop 2021 a flat-contour
+/// inner glow fills its whole shape at 100 %, out to the centre — Precise and Softer, sizes
+/// 5 and 15, squares and circles — and PhotoCraft's uncapped inner path matches that render
+/// exactly (0 levels difference across the eight shapes; carl-anders' PSD is attached to
+/// #11636). Newer Photoshop versions are untested.
+#[test]
+fn glow_paint_lut_leaves_linear_and_inner_glows_alone() {
+    for t in [GlowTechnique::Precise, GlowTechnique::Softer] {
+        for size in [1.0f32, 4.0, 10.0, 60.0] {
+            for range in [0.5f32, 1.0] {
+                let linear = Glow { contour: Contour::Linear, range, ..contour_glow(t, size, &FLAT) };
+                assert_eq!(glow_paint_lut(&linear, false), glow_lut(&linear), "{t:?} {size} {range}");
+                let straight = Glow { range, ..contour_glow(t, size, &[(0.0, 0.0), (1.0, 1.0)]) };
+                let (Some(a), Some(b)) = (glow_paint_lut(&straight, false), glow_lut(&straight)) else { panic!("custom contours have a table") };
+                assert_eq!(a.len(), 4096);
+                let worst = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+                assert!(worst < 1e-5, "{t:?} size {size} range {range}: a straight contour moved by {worst}");
+                let flat = Glow { range, ..contour_glow(t, size, &FLAT) };
+                assert_eq!(glow_paint_lut(&flat, true), glow_lut(&flat), "inner glows keep their transfer");
+                let Some(f) = glow_paint_lut(&flat, false) else { panic!("a flat contour has a table") };
+                assert_eq!(f[0], 0.0, "coverage 0 paints nothing");
+                assert!((f[4095] - 1.0).abs() < 1e-6);
+            }
+        }
+    }
+    // Hostile sizes still give a finite table.
+    for size in [f32::NAN, f32::INFINITY, -5.0, 0.0, 1e9] {
+        for t in [GlowTechnique::Precise, GlowTechnique::Softer] {
+            let Some(f) = glow_paint_lut(&contour_glow(t, size, &FLAT), false) else { panic!("table") };
+            assert!(f.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "{t:?} size {size}");
         }
     }
 }
@@ -1046,4 +1320,78 @@ fn shifting_by_hostile_distances_does_not_overflow() {
         let s = m.shifted(d, d, 0.0);
         assert_eq!(s.v.len(), 144);
     }
+}
+
+/// A plane with no pixels but a huge other dimension must not size scratch from it.
+#[test]
+fn an_empty_distance_transform_allocates_nothing() {
+    let (d, n) = edt_nearest(&[], 0, 1 << 30);
+    assert!(d.is_empty() && n.is_empty());
+    assert!(edt(&[], 1 << 30, 0).is_empty());
+}
+
+/// #8639 review: a Stroke Emboss whose stroke lies wholly inside shades with the layer, so its
+/// non-Normal highlight or shadow counts as an interior blend, as an Inner Bevel's does; with the
+/// stroke reaching outside, or no stroke, it doesn't.
+#[test]
+fn an_inside_stroke_emboss_counts_as_an_interior_blend() {
+    let stroke = |position: StrokePosition| {
+        Effect::Stroke(photocraft_doc::StrokeFx {
+            common: photocraft_doc::FxCommon::new(BlendMode::Normal, 1.0),
+            size: 4.0,
+            position,
+            paint: photocraft_doc::FxPaint::Color(photocraft_color::Color::BLACK),
+            overprint: false,
+        })
+    };
+    let layer = |effects: Vec<Effect>| {
+        let mut l =
+            photocraft_doc::Layer::new("L", photocraft_doc::LayerContent::Raster(photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8)));
+        l.effects.items = effects;
+        l
+    };
+    let emboss = Effect::BevelEmboss(bevel_of(BevelStyle::StrokeEmboss, BevelTechnique::Smooth));
+    assert!(super::composite::blends_inside(&layer(vec![stroke(StrokePosition::Inside), emboss.clone()])));
+    assert!(!super::composite::blends_inside(&layer(vec![stroke(StrokePosition::Outside), emboss.clone()])));
+    assert!(!super::composite::blends_inside(&layer(vec![stroke(StrokePosition::Center), emboss.clone()])));
+    assert!(!super::composite::blends_inside(&layer(vec![emboss])));
+}
+
+/// #8639 review, measured in the reference application: Stroke Emboss bevels the union of every
+/// enabled Stroke (a 4 px stroke listed over a 10 px one shades the whole 10 px band), and a
+/// stroke at 0 % opacity still has its band embossed over the backdrop.
+#[test]
+fn stroke_emboss_bevels_every_stroke_even_a_transparent_one() {
+    let stroke = |size: f32, position: StrokePosition, opacity: f32| {
+        Effect::Stroke(photocraft_doc::StrokeFx {
+            common: photocraft_doc::FxCommon::new(BlendMode::Normal, opacity),
+            size,
+            position,
+            paint: photocraft_doc::FxPaint::Color(photocraft_color::Color::BLACK),
+            overprint: false,
+        })
+    };
+    let emboss = Effect::BevelEmboss(bevel_of(BevelStyle::StrokeEmboss, BevelTechnique::Smooth));
+    let maps = |effects: Vec<Effect>| {
+        let mut l =
+            photocraft_doc::Layer::new("L", photocraft_doc::LayerContent::Raster(photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8)));
+        l.effects.items = effects;
+        let n = l.effects.items.len();
+        let m = build_maps(&l, square(60, 20, 40).v, Rect::new(0, 0, 60, 60), &GlobalLight::default(), &no_tex());
+        (m.per[n - 1].clone(), m.bevel_paint[n - 1])
+    };
+    // 7 px above the shape: inside the 10 px band only; the bevel (light from the top) lights it.
+    let lit = |m: &[Map]| m[0].v[13 * 60 + 30];
+    let (two, paint) = maps(vec![stroke(4.0, StrokePosition::Outside, 1.0), stroke(10.0, StrokePosition::Outside, 1.0), emboss.clone()]);
+    assert!(lit(&two) > 0.1, "{}", lit(&two));
+    assert_eq!(paint, BevelPaint::Both);
+    let (thin, _) = maps(vec![stroke(4.0, StrokePosition::Outside, 1.0), emboss.clone()]);
+    assert_eq!(lit(&thin), 0.0);
+    let (clear, _) = maps(vec![stroke(10.0, StrokePosition::Outside, 0.0), emboss.clone()]);
+    assert!(lit(&clear) > 0.1, "{}", lit(&clear));
+    // Inside only when every stroke is.
+    let (_, inside) = maps(vec![stroke(4.0, StrokePosition::Inside, 1.0), stroke(6.0, StrokePosition::Inside, 1.0), emboss.clone()]);
+    assert_eq!(inside, BevelPaint::Inner);
+    let (_, mixed) = maps(vec![stroke(4.0, StrokePosition::Inside, 1.0), stroke(6.0, StrokePosition::Outside, 1.0), emboss]);
+    assert_eq!(mixed, BevelPaint::Both);
 }

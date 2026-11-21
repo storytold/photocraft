@@ -663,3 +663,74 @@ fn destructive_levels_match_independent_signed_hdr_endpoints() {
         }
     }
 }
+
+/// #8351: a Gradient Map's Photoshop gradient goes through the params: kept (with the stops
+/// already baked) while unchanged, baked again when edited, dropped by plain stops or null,
+/// and refused when malformed.
+#[test]
+fn gradient_map_source_params() {
+    let src = json!({"stops": [[0, "#102030"], [1, "#ffcc33"]], "midpoints": [0.3], "smoothness": 0.8, "method": "perceptual"});
+    let a = from_params("gradientMap", &json!({"source": src}), None, ColorMode::Rgb).unwrap();
+    let Adjustment::GradientMap { stops, source: Some(kept), .. } = &a else { panic!("{a:?}") };
+    assert!(stops.len() > 2 && kept.stops.len() == 2 && kept.method == "perceptual");
+    // The params round trip, and an unchanged source keeps the stops as they were.
+    let p = to_params(&a);
+    assert_eq!(p["source"]["midpoints"], json!([0.30000001192092896]));
+    let mut same = a.clone();
+    if let Adjustment::GradientMap { stops, .. } = &mut same {
+        stops[1].1 = [0.5; 3];
+    }
+    let kept_stops = from_params("gradientMap", &json!({"source": to_params(&same)["source"], "reverse": true}), Some(&same), ColorMode::Rgb).unwrap();
+    assert!(matches!(&kept_stops, Adjustment::GradientMap { stops, reverse: true, .. } if stops[1].1 == [0.5; 3]), "not baked again");
+    // An edited source is baked again.
+    let mut edited = p["source"].clone();
+    edited["stops"][1][1] = json!("#00ff00");
+    let b = from_params("gradientMap", &json!({"source": edited}), Some(&a), ColorMode::Rgb).unwrap();
+    let Adjustment::GradientMap { stops: sb, source: Some(kb), .. } = &b else { panic!() };
+    assert_eq!(kb.stops[1].1, [0.0, 1.0, 0.0]);
+    assert_ne!(sb, stops);
+    // Plain stops or null drop it; untouched, it stays.
+    for p in [json!({"stops": [[0, "#000000"], [1, "#ffffff"]]}), json!({"source": null})] {
+        assert!(matches!(from_params("gradientMap", &p, Some(&a), ColorMode::Rgb).unwrap(), Adjustment::GradientMap { source: None, .. }), "{p}");
+    }
+    assert!(matches!(from_params("gradientMap", &json!({"dither": true}), Some(&a), ColorMode::Rgb).unwrap(), Adjustment::GradientMap { source: Some(_), .. }));
+    // Malformed sources are refused.
+    for bad in [
+        json!({"stops": [[0, "#000000"]]}),
+        json!({"stops": [[0, "#000000"], [1, "#ffffff"]], "midpoints": [0.5, 0.5]}),
+        json!({"stops": [[0, "#000000"], [1, "#ffffff"]], "midpoints": [2]}),
+        json!({"stops": [[0, "#000000"], [1, "#ffffff"]], "smoothness": 7}),
+        json!({"stops": [[0, "#000000"], [1, "#ffffff"]], "method": "wavy"}),
+        json!(3),
+    ] {
+        assert!(from_params("gradientMap", &json!({"source": bad}), None, ColorMode::Rgb).is_err(), "{bad}");
+    }
+}
+
+/// #14414: the reference application mixes with whole percentages. Scripted values round to the
+/// nearest whole percent before clamping; the dialog already sends whole percents.
+#[test]
+fn channel_mixer_percentages_are_whole_numbers() {
+    let a = from_params(
+        "channelMixer",
+        &json!({"red": [0.4, 0.5, 50.6, -0.5], "green": [33.3, 33.3, 33.3, 0.0], "blue": [-300.0, 300.0, 0.0, 0.0]}),
+        None,
+        ColorMode::Rgb,
+    )
+    .unwrap();
+    let Adjustment::ChannelMixer { matrix, .. } = a else { panic!("wrong kind") };
+    assert_eq!(matrix[0], [0.0, 0.01, 0.51, -0.01], "0.4 to 0, 0.5 to 1, 50.6 to 51, halves away from zero");
+    assert_eq!(matrix[1], [0.33, 0.33, 0.33, 0.0], "33.3 stores as 33");
+    assert_eq!(matrix[2], [-2.0, 2.0, 0.0, 0.0], "clamps stay -200 and 200");
+    assert_eq!(to_params(&a)["red"], json!([0.0, 1.0, 51.0, -1.0]), "the stored step reads back whole");
+}
+
+/// #14417: tone values are whole percentages; scripted fractions round like the dialog's own
+/// slider pass (away from zero on halves, which no measured case pins to).
+#[test]
+fn color_balance_tones_round_to_whole_numbers() {
+    let a = from_params("colorBalance", &json!({"midtones": [12.7, -0.4, 100.4], "highlights": [-100.4, 0.0, 0.0]}), None, ColorMode::Rgb).unwrap();
+    let Adjustment::ColorBalance { midtones, highlights, .. } = a else { panic!("wrong kind") };
+    assert_eq!(midtones, [13.0, 0.0, 100.0], "12.7 to 13, -0.4 to 0, 100.4 rounds into the clamp");
+    assert_eq!(highlights, [-100.0, 0.0, 0.0], "-100.4 to -100");
+}

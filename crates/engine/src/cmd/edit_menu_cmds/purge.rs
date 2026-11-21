@@ -3,11 +3,11 @@ use super::{Result, Session, Value, json};
 // ------------------------------------------------------------------ Purge
 
 fn history_bytes(s: &Session, all: bool) -> usize {
-    let docs: Vec<&crate::DocState> = if all { s.documents().iter().collect() } else { s.active().into_iter().collect() };
+    let docs: Vec<&crate::DocState> = if all { s.documents().iter().map(|st| &**st).collect() } else { s.active().into_iter().collect() };
     // Purge keeps the snapshots, so the tiles they share with the states aren't freed.
     docs.iter()
         .map(|d| {
-            let snaps: Vec<&photocraft_doc::Document> = d.snapshots.iter().map(|s| &*s.doc).collect();
+            let snaps: Vec<&photocraft_doc::Document> = d.snapshots().iter().map(|s| &*s.doc).collect();
             d.history.unique_bytes_besides(&d.doc, &snaps)
         })
         .sum()
@@ -31,8 +31,8 @@ pub(super) fn purge(s: &mut Session, what: &str) -> Result<Value> {
     }
     if matches!(what, "clipboard" | "all") && (s.clipboard.is_some() || s.style_clipboard.is_some()) {
         freed += clip_bytes(s);
-        s.clipboard = None;
-        s.style_clipboard = None;
+        *s.clipboard = None;
+        *s.style_clipboard = None;
         items.push("clipboard");
     }
     if matches!(what, "histories" | "all") {
@@ -77,6 +77,11 @@ pub(super) fn purge(s: &mut Session, what: &str) -> Result<Value> {
             freed = freed.saturating_add(strokes);
             items.push("shape stroke cache");
         }
+        let luts = photocraft_compose::lut_rows::purge_cache();
+        if luts > 0 {
+            freed = freed.saturating_add(luts);
+            items.push("adjustment table cache");
+        }
     }
     s.edit_state.fade = None;
     let msg = if items.is_empty() { "nothing to purge".to_string() } else { format!("purged {}", items.join(", ")) };
@@ -102,6 +107,7 @@ pub(super) fn can_purge_all(s: &Session) -> std::result::Result<(), String> {
             || crate::smart_cmds::stack_cache_bytes() > 0
             || crate::smart_cmds::source_cache_bytes() > 0
             || photocraft_paint::mip_cache_bytes() > 0
+            || photocraft_compose::lut_rows::cache_bytes() > 0
         {
             Ok(())
         } else {

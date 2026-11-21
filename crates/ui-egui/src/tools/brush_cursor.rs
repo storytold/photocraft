@@ -1,71 +1,111 @@
-//! The painting cursor for brushes with a tip shape: sampled tip outlines and rotated or
-//! flattened round tips. Everything else falls back to the plain circle (`tool_cursor`).
+//! The painting cursor of the brush tools, over the framework's `BrushCursor`.
+//!
+//! The app keeps one [`BrushTip`] for the brush (`PhotocraftApp::brush_tip`), rebuilt by [`sync_tip`] only when
+//! a field the outline depends on changes, so the framework reuses its cursor image while the pointer moves.
+//! The Pencil and the Eraser in Pencil or Block mode have no held tip: their pixel cell follows the pointer, so
+//! [`cursor`] builds it per call.
 
-use std::sync::Arc;
+use craft::behavior::kurbo::Rect;
+use craft::behavior::{Cursor, CursorIcon, PointerSample};
+use craft::ui::canvas::ToolContext;
+use craft::ui::canvas_controls::brush::{BrushCursor, BrushCursorOptions, BrushTip, BrushTipOutline, PaintingCursor, TipPose, TipRings};
+use photocraft_engine::prefs::PaintingCursor as PaintingPref;
+use photocraft_paint::brush::{BrushSettings, Control, TipShape};
+use photocraft_paint::dynamics::{StepInput, apply_pose, control_angle};
 
-use egui::{CursorIcon, Painter, Pos2, Vec2};
-use photocraft_paint::brush::{BrushSettings, TipShape};
+use crate::PhotocraftApp;
+use crate::state::Tool;
 
-/// Below this on-screen radius an outline is unreadable: show the crosshair instead.
-const MIN_RADIUS: f32 = 3.0;
-
-#[derive(Clone)]
-struct Cached {
-    key: Key,
-    rings: Option<Arc<Vec<Vec<[f32; 2]>>>>,
-}
-
-/// The brush fields an outline depends on.
-#[derive(Clone)]
-struct Key {
+/// The brush fields a tip's outline depends on. The size is part of it only for a plain round tip, whose radii
+/// scale with it; a traced outline is in radius units.
+#[derive(Clone, PartialEq)]
+pub(crate) struct TipKey {
     tip: TipShape,
     angle: f32,
     roundness: f32,
     hardness: f32,
     flip_x: bool,
     flip_y: bool,
-    full: bool,
+    /// The size of a plain round tip, 0 for a traced one.
+    size: f32,
 }
 
-impl Key {
-    fn of(b: &BrushSettings, full: bool) -> Self {
-        Self { tip: b.tip.clone(), angle: b.angle, roundness: b.roundness, hardness: b.hardness, flip_x: b.flip_x, flip_y: b.flip_y, full }
-    }
-    fn matches(&self, b: &BrushSettings, full: bool) -> bool {
-        self.tip == b.tip
-            && self.angle == b.angle
-            && self.roundness == b.roundness
-            && self.hardness == b.hardness
-            && self.flip_x == b.flip_x
-            && self.flip_y == b.flip_y
-            && self.full == full
+impl TipKey {
+    fn of(b: &BrushSettings) -> Self {
+        Self {
+            tip: (*b.tip).clone(),
+            angle: b.angle,
+            roundness: b.roundness,
+            hardness: b.hardness,
+            flip_x: b.flip_x,
+            flip_y: b.flip_y,
+            size: if is_plain(b) { b.size } else { 0.0 },
+        }
     }
 }
 
-/// The screen vectors of one tip radius (`size / 2` document pixels) along the document's x and
-/// y axes: the view's zoom, rotation, flip and pixel aspect, which the outline follows as the
-/// stroke does.
-pub(crate) fn tip_axes(xf: &crate::canvas::ViewXform, size: f32) -> [Vec2; 2] {
-    let r = if size.is_finite() { size.max(0.0) / 2.0 } else { 0.0 };
-    [xf.map_vec(Vec2::new(r, 0.0)), xf.map_vec(Vec2::new(0.0, r))]
+/// A round tip with no angle or flattening: the circle says it all.
+fn is_plain(b: &BrushSettings) -> bool {
+    matches!(*b.tip, TipShape::Round) && b.angle == 0.0 && b.roundness >= 1.0
 }
 
-/// Apply pen orientation after the cached tip shape, in document space before the view.
-/// Keeping this outside `rings` avoids retracing a sampled tip on every tablet sample.
-pub(crate) fn pen_axes(xf: &crate::canvas::ViewXform, brush: &BrushSettings, pen: Option<crate::stylus::PenSample>) -> [Vec2; 2] {
-    use photocraft_paint::brush::Control;
-    use photocraft_paint::dynamics::{StepInput, apply_pose, control_angle};
-    let axes = tip_axes(xf, brush.size);
-    if !brush.shape_dynamics.enabled {
-        return axes;
+/// The size and kind of the aliased cursor tip the `tool` has: the Pencil's, the Eraser's in Pencil mode, and the
+/// Eraser's square Block (`true`), which takes the block size.
+fn aliased(app: &PhotocraftApp, tool: Tool) -> Option<(f32, bool)> {
+    if crate::eraser_ui::block_mode(app, tool) {
+        return Some((crate::eraser_ui::block_size(app), true));
     }
-    let Some(pen) = pen else { return axes };
+    (tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool)).then_some((app.session.tools.brush.size, false))
+}
+
+/// Builds the held tip for the active brush when its outline changed; a size change alone only updates the
+/// diameter. Runs once per pass before the tool host, so [`cursor`] only reads.
+pub(crate) fn sync_tip(app: &mut PhotocraftApp) {
+    if aliased(app, app.ui.tool).is_some() {
+        return;
+    }
+    let brush = &app.session.tools.brush;
+    let key = TipKey::of(brush);
+    let size = f64::from(brush.size);
+    if let Some((held, tip)) = &mut app.brush_tip
+        && *held == key
+    {
+        tip.diameter = size;
+        return;
+    }
+    let tip = build(brush);
+    app.brush_tip = Some((key, tip));
+}
+
+/// The tip of `brush`: two circles for a plain round tip, else the engine's traced outlines.
+fn build(brush: &BrushSettings) -> BrushTip {
+    let size = f64::from(brush.size);
+    if !is_plain(brush)
+        && let (Some(normal), Some(full)) = (photocraft_paint::outline::tip_outline(brush, false), photocraft_paint::outline::tip_outline(brush, true))
+    {
+        return BrushTip::new(size, BrushTipOutline::traced(TipRings::new(normal), TipRings::new(full)));
+    }
+    let normal = photocraft_paint::half_coverage_radius(brush.size / 2.0, brush.hardness).max(1.0);
+    BrushTip::round(size, f64::from(normal))
+}
+
+/// The tip's axes for the pen's pose, in document space before the view: the brush angle from the shape dynamics
+/// (pen tilt or barrel rotation), plus the barrel rotation and the tilt's shortening under Brush Projection. Upright
+/// without shape dynamics or a pen.
+pub(crate) fn pose(brush: &BrushSettings, pen: Option<PointerSample>) -> TipPose {
+    let sd = &brush.shape_dynamics;
+    let Some(pen) = pen.filter(|_| sd.enabled) else { return TipPose::upright() };
     let pen = pen.sanitized();
     let point = apply_pose(
         brush,
-        photocraft_paint::StrokePoint { pressure: pen.pressure, tilt_x: pen.tilt_x, tilt_y: pen.tilt_y, rotation: pen.rotation, ..Default::default() },
+        photocraft_paint::StrokePoint {
+            pressure: pen.pressure.clamp(0.0, 1.0),
+            tilt_x: pen.tilt[0].to_degrees(),
+            tilt_y: pen.tilt[1].to_degrees(),
+            rotation: pen.rotation.to_degrees(),
+            ..Default::default()
+        },
     );
-    let sd = &brush.shape_dynamics;
     let step = StepInput { point, direction: 0.0, initial_direction: 0.0, step: 0 };
     let mut angle = match sd.angle.control {
         Control::PenTilt | Control::Rotation => control_angle(sd.angle.control, sd.angle.fade_steps, &step),
@@ -74,188 +114,52 @@ pub(crate) fn pen_axes(xf: &crate::canvas::ViewXform, brush: &BrushSettings, pen
     if sd.brush_projection {
         angle += point.rotation;
     }
-    let (sn, cs) = angle.to_radians().sin_cos();
-    let project = |v: Vec2| {
-        if !sd.brush_projection {
-            return v;
-        }
-        let tilt = point.tilt_x.hypot(point.tilt_y).clamp(0.0, 90.0);
-        if tilt == 0.0 {
-            return v;
-        }
-        let direction = Vec2::new(point.tilt_x, point.tilt_y).normalized();
-        v + direction * v.dot(direction) * (tilt.to_radians().cos().max(0.05) - 1.0)
-    };
-    let x = project(Vec2::new(cs, -sn));
-    let y = project(Vec2::new(sn, cs));
-    [axes[0] * x.x + axes[1] * x.y, axes[0] * y.x + axes[1] * y.y]
+    TipPose::pen(f64::from(angle), sd.brush_projection.then_some([point.tilt_x, point.tilt_y]))
 }
 
-/// Rings in radius units (document orientation) on screen, through [`tip_axes`].
-fn on_screen(rings: &[Vec<[f32; 2]>], axes: [Vec2; 2]) -> Vec<Vec<Vec2>> {
-    rings.iter().map(|r| r.iter().map(|p| axes[0] * p[0] + axes[1] * p[1]).collect()).collect()
+/// Preferences › Cursors › Painting Cursors as the framework names it.
+fn painting_cursor(pref: PaintingPref) -> PaintingCursor {
+    match pref {
+        PaintingPref::Standard => PaintingCursor::Standard,
+        PaintingPref::Precise => PaintingCursor::Precise,
+        PaintingPref::NormalTip => PaintingCursor::NormalBrushTip,
+        PaintingPref::FullSizeTip => PaintingCursor::FullSizeBrushTip,
+    }
 }
 
-/// The brush cursor at `at`. `radius` is the tip's screen radius (size / 2 at the current zoom),
-/// for the plain circle; `axes` comes from [`tip_axes`], for a traced outline. `normal` is
-/// Preferences › Cursors "Normal Brush Tip" (the 50 % contour, not the full tip).
-pub(crate) fn cursor(painter: &Painter, at: Pos2, brush: &BrushSettings, radius: f32, axes: [Vec2; 2], normal: bool, centre: bool) -> CursorIcon {
-    let anisotropic = (axes[0].length_sq() - axes[1].length_sq()).abs() > 0.001 || axes[0].dot(axes[1]).abs() > 0.001;
-    let outline = rings(painter.ctx(), brush, !normal).or_else(|| {
-        // A round tip becomes an ellipse under projection (or a non-square pixel aspect).
-        anisotropic.then(|| photocraft_paint::outline::tip_outline(brush, !normal).map(Arc::new)).flatten()
-    });
-    if let Some(rings) = outline {
-        let pts = on_screen(&rings, axes);
-        let extent = pts.iter().flatten().fold(0.0f32, |m, p| m.max(p.length()));
-        if extent < MIN_RADIUS {
-            return crate::tool_cursor::crosshair(painter, at, 4.0, 0.0);
-        }
-        return crate::tool_cursor::outline(painter, at, pts, centre);
+/// The cursor of the active painting tool over the canvas. Reads the tip [`sync_tip`] built; with no view or no
+/// tip it is the system arrow.
+pub(crate) fn cursor(app: &PhotocraftApp, cx: &ToolContext<'_>) -> Cursor {
+    let arrow = Cursor::System(CursorIcon::Default);
+    let Some(space) = cx.space() else { return arrow };
+    let tool = app.ui.tool;
+    let prefs = &app.session.prefs().cursors;
+    let options = BrushCursorOptions::new(painting_cursor(prefs.painting))
+        .show_only_crosshair_while_painting(prefs.show_only_crosshair_while_painting)
+        .caps_lock_precise(true);
+    let option = cx.mods.alt || app.ui.shell.latched.alt;
+    if crate::canvas::cursor_policy::source_target(tool, option, prefs.painting, cx.caps_lock) {
+        return crate::canvas::cursor_policy::sample_target();
     }
-    let r = if normal { photocraft_paint::half_coverage_radius(radius, brush.hardness).max(1.0) } else { radius };
-    crate::tool_cursor::circle(painter, at, r, centre)
-}
+    let centre = crate::canvas::cursor_policy::brush_tip_centre(tool, option, prefs.show_crosshair_in_brush_tip);
+    let painting = crate::canvas::paint_tool::stroking(app).is_some();
+    // The framework's Standard cursor is the tool's icon.
+    let icon = crate::icons::tool_icon(tool);
+    let brush = &app.session.tools.brush;
+    if let Some((size, block)) = aliased(app, tool) {
+        // The whole-pixel cell the dab fills at the pointer; without a pointer there is nothing to outline.
+        let Some(pointer) = cx.pointer.as_ref() else { return arrow };
+        let at = space.view.to_doc(pointer.pos);
+        let [x0, y0, x1, y1] = photocraft_engine::paint::grid_square(at.x, at.y, size);
 
-/// The tip outline in radius units, cached across frames; `None` when the plain circle says it all
-/// (a plain round tip) or the tip has no traceable shape.
-pub(crate) fn rings(ctx: &egui::Context, brush: &BrushSettings, full: bool) -> Option<Arc<Vec<Vec<[f32; 2]>>>> {
-    if matches!(brush.tip, TipShape::Round) && brush.angle == 0.0 && brush.roundness >= 1.0 {
-        return None;
+        let round = !block && crate::canvas::cursor_policy::pencil_tip_is_round(size);
+        let tip = BrushTip::new(f64::from(size), BrushTipOutline::pixels(Rect::new(x0, y0, x1, y1), round));
+        return BrushCursor::new(&tip).centre(centre).painting(painting).icon(icon).cursor(cx, &options, &space.view);
     }
-    let id = egui::Id::unique("photocraft-tip-outline");
-    if let Some(c) = ctx.data(|d| d.get_temp::<Cached>(id))
-        && c.key.matches(brush, full)
-    {
-        return c.rings;
-    }
-    let traced = photocraft_paint::outline::tip_outline(brush, full).map(Arc::new);
-    ctx.data_mut(|d| d.insert_temp(id, Cached { key: Key::of(brush, full), rings: traced.clone() }));
-    traced
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::canvas::ViewXform;
-    use egui::{Rect, pos2};
-
-    fn view(rotation: f32, flip: bool, aspect: f32) -> ViewXform {
-        ViewXform { rect: Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(400.0, 300.0)), zoom: 2.0, center: [50.0, 40.0], flip, rotation, aspect }
-    }
-
-    fn close(a: Vec2, b: Vec2) -> bool {
-        (a - b).length() < 1e-4
-    }
-
-    /// Component timing only: outline transformation and OS bitmap generation, not presentation
-    /// or tablet latency. Run explicitly in release mode on the same runner for both cases.
-    #[test]
-    #[ignore]
-    fn pen_cursor_cost_probe() {
-        let mut brush = BrushSettings { size: 60.0, roundness: 0.25, hardness: 1.0, ..Default::default() };
-        brush.shape_dynamics.enabled = true;
-        brush.shape_dynamics.angle.control = photocraft_paint::brush::Control::Rotation;
-        let xf = view(0.0, false, 1.0);
-        for dynamic in [false, true] {
-            let ctx = egui::Context::default();
-            for sample in 0..5 {
-                let start = std::time::Instant::now();
-                let _ = ctx.run_ui(Default::default(), |ui| {
-                    for i in 0..360 {
-                        let axes = if dynamic {
-                            pen_axes(&xf, &brush, Some(crate::stylus::PenSample { rotation: i as f32, ..Default::default() }))
-                        } else {
-                            tip_axes(&xf, brush.size)
-                        };
-                        std::hint::black_box(cursor(ui.painter(), pos2(100.0, 100.0), &brush, 60.0, axes, false, false));
-                    }
-                });
-                println!("PEN_CURSOR_COST dynamic={dynamic} sample={sample} us_per_update={:.3}", start.elapsed().as_secs_f64() * 1e6 / 360.0);
-            }
-        }
-    }
-
-    #[test]
-    fn pen_orientation_preserves_mouse_and_disabled_dynamics() {
-        let mut brush = BrushSettings::default();
-        brush.shape_dynamics.angle.control = photocraft_paint::brush::Control::Rotation;
-        let pen = crate::stylus::PenSample { rotation: 90.0, ..Default::default() };
-        let xf = view(30.0, true, 2.0);
-        assert_eq!(pen_axes(&xf, &brush, Some(pen)), tip_axes(&xf, brush.size));
-        brush.shape_dynamics.enabled = true;
-        assert_eq!(pen_axes(&xf, &brush, None), tip_axes(&xf, brush.size));
-    }
-
-    #[test]
-    fn pen_pose_rotation_precedes_the_view_and_reuses_the_tip_cache() {
-        let mut brush = BrushSettings { size: 20.0, roundness: 0.25, ..Default::default() };
-        brush.shape_dynamics.enabled = true;
-        brush.shape_dynamics.angle.control = photocraft_paint::brush::Control::Rotation;
-        brush.pose.enabled = true;
-        brush.pose.override_rotation = true;
-        brush.pose.rotation = 90.0;
-        let ctx = egui::Context::default();
-        let cached = rings(&ctx, &brush, true).unwrap();
-        for (rotation, flip, aspect) in [(0.0, false, 1.0), (30.0, true, 2.0)] {
-            let xf = view(rotation, flip, aspect);
-            let axes = pen_axes(&xf, &brush, Some(crate::stylus::PenSample::default()));
-            assert!(close(axes[0], xf.map_vec(Vec2::new(0.0, -10.0))));
-            assert!(close(axes[1], xf.map_vec(Vec2::new(10.0, 0.0))));
-            assert!(Arc::ptr_eq(&cached, &rings(&ctx, &brush, true).unwrap()));
-        }
-    }
-
-    #[test]
-    fn brush_projection_shortens_the_tilt_axis() {
-        let mut brush = BrushSettings { size: 20.0, ..Default::default() };
-        brush.shape_dynamics.enabled = true;
-        brush.shape_dynamics.brush_projection = true;
-        let xf = view(0.0, false, 1.0);
-        let axes = pen_axes(&xf, &brush, Some(crate::stylus::PenSample { tilt_x: 60.0, ..Default::default() }));
-        assert!(close(axes[0], Vec2::new(10.0, 0.0)));
-        assert!(close(axes[1], Vec2::new(0.0, 20.0)));
-        assert_eq!(pen_axes(&xf, &brush, Some(crate::stylus::PenSample::default())), tip_axes(&xf, brush.size));
-    }
-
-    /// The axes are the screen offsets of the document points one radius right of and below the
-    /// pointer, whatever the view does.
-    #[test]
-    fn tip_axes_follow_the_view_like_to_screen() {
-        for (rotation, flip, aspect) in [(0.0, false, 1.0), (30.0, false, 1.0), (-90.0, true, 1.0), (45.0, true, 2.0), (200.0, false, 0.5)] {
-            let xf = view(rotation, flip, aspect);
-            let [ex, ey] = tip_axes(&xf, 20.0);
-            let o = xf.to_screen(60.0, 30.0);
-            assert!(close(ex, xf.to_screen(70.0, 30.0) - o), "x axis at {rotation}°, flip {flip}, aspect {aspect}");
-            assert!(close(ey, xf.to_screen(60.0, 40.0) - o), "y axis at {rotation}°, flip {flip}, aspect {aspect}");
-        }
-    }
-
-    /// An unrotated, unflipped view gives what upstream's radius scaling gave.
-    #[test]
-    fn a_plain_view_scales_the_outline_by_the_screen_radius() {
-        let rings = vec![vec![[1.0, 0.0], [0.0, 0.5], [-1.0, 0.0]]];
-        let pts = on_screen(&rings, tip_axes(&view(0.0, false, 1.0), 20.0));
-        let want = [Vec2::new(20.0, 0.0), Vec2::new(0.0, 10.0), Vec2::new(-20.0, 0.0)];
-        assert!(pts[0].iter().zip(want).all(|(a, b)| close(*a, b)), "{pts:?}");
-    }
-
-    /// A tip pointing along the document's x axis points down the screen in a view turned 90°,
-    /// and left in a flipped one.
-    #[test]
-    fn the_outline_turns_and_flips_with_the_view() {
-        let rings = vec![vec![[1.0, 0.0]]];
-        let turned = on_screen(&rings, tip_axes(&view(90.0, false, 1.0), 20.0));
-        assert!(close(turned[0][0], Vec2::new(0.0, 20.0)), "{turned:?}");
-        let flipped = on_screen(&rings, tip_axes(&view(0.0, true, 1.0), 20.0));
-        assert!(close(flipped[0][0], Vec2::new(-20.0, 0.0)), "{flipped:?}");
-    }
-
-    #[test]
-    fn hostile_sizes_give_finite_axes() {
-        for size in [f32::NAN, f32::INFINITY, -5.0, 0.0] {
-            let [ex, ey] = tip_axes(&view(30.0, true, 1.0), size);
-            assert!(ex.x.is_finite() && ex.y.is_finite() && ey.x.is_finite() && ey.y.is_finite(), "size {size}");
-        }
-    }
+    let Some((_, tip)) = &app.brush_tip else { return arrow };
+    BrushCursor::new(tip).pose(pose(brush, cx.pointer.as_ref().map(|p| p.sample))).centre(centre).painting(painting).icon(icon).cursor(
+        cx,
+        &options,
+        &space.view,
+    )
 }

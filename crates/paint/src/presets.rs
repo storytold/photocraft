@@ -89,7 +89,7 @@ fn dry_media(base: &BrushSettings) -> Vec<BrushPreset> {
             "Chalk",
             BrushSettings {
                 size: 40.0,
-                tip: TipShape::Sampled(chalk_tip(64, 7)),
+                tip: TipShape::Sampled(chalk_tip(64, 7)).into(),
                 spacing: 0.2,
                 shape_dynamics: ShapeDynamics {
                     enabled: true,
@@ -105,7 +105,7 @@ fn dry_media(base: &BrushSettings) -> Vec<BrushPreset> {
             "Charcoal",
             BrushSettings {
                 size: 45.0,
-                tip: TipShape::Sampled(charcoal_tip(64, 4)),
+                tip: TipShape::Sampled(charcoal_tip(64, 4)).into(),
                 spacing: 0.12,
                 shape_dynamics: ShapeDynamics { enabled: true, size: pressure_min(0.5), angle: Dynamic::controlled(Control::Direction), ..Default::default() },
                 transfer: transfer(pressure_min(0.3), Dynamic::default()),
@@ -119,7 +119,7 @@ fn dry_media(base: &BrushSettings) -> Vec<BrushPreset> {
             "Pastel",
             BrushSettings {
                 size: 50.0,
-                tip: TipShape::Sampled(chalk_tip(64, 31)),
+                tip: TipShape::Sampled(chalk_tip(64, 31)).into(),
                 spacing: 0.15,
                 shape_dynamics: ShapeDynamics {
                     enabled: true,
@@ -155,7 +155,7 @@ fn dry_media(base: &BrushSettings) -> Vec<BrushPreset> {
             "Dry Bristle",
             BrushSettings {
                 size: 50.0,
-                tip: TipShape::Sampled(bristle_tip(64, 5)),
+                tip: TipShape::Sampled(bristle_tip(64, 5)).into(),
                 spacing: 0.04,
                 shape_dynamics: ShapeDynamics { enabled: true, angle: Dynamic::controlled(Control::Direction), ..Default::default() },
                 transfer: Transfer {
@@ -170,7 +170,7 @@ fn dry_media(base: &BrushSettings) -> Vec<BrushPreset> {
             "Rake",
             BrushSettings {
                 size: 60.0,
-                tip: TipShape::Sampled(rake_tip(64, 3, 7)),
+                tip: TipShape::Sampled(rake_tip(64, 3, 7)).into(),
                 spacing: 0.03,
                 shape_dynamics: ShapeDynamics { enabled: true, angle: Dynamic::controlled(Control::Direction), ..Default::default() },
                 transfer: transfer(pressure_min(0.25), Dynamic::default()),
@@ -222,7 +222,7 @@ fn wet_media(base: &BrushSettings) -> Vec<BrushPreset> {
             "Oil Bristle",
             BrushSettings {
                 size: 70.0,
-                tip: TipShape::Sampled(bristle_tip(64, 41)),
+                tip: TipShape::Sampled(bristle_tip(64, 41)).into(),
                 spacing: 0.03,
                 shape_dynamics: ShapeDynamics { enabled: true, angle: Dynamic::controlled(Control::Direction), size: pressure_min(0.6), ..Default::default() },
                 color_dynamics: ColorDynamics { enabled: true, per_tip: false, fg_bg: Dynamic::jitter(0.15), brightness_jitter: 0.05, ..Default::default() },
@@ -251,7 +251,7 @@ fn wet_media(base: &BrushSettings) -> Vec<BrushPreset> {
             "Ink Wash Sponge",
             BrushSettings {
                 size: 70.0,
-                tip: TipShape::Sampled(sponge_tip(96, 8)),
+                tip: TipShape::Sampled(sponge_tip(96, 8)).into(),
                 spacing: 0.3,
                 flow: 0.6,
                 wet_edges: true,
@@ -269,7 +269,7 @@ fn special_effects(base: &BrushSettings) -> Vec<BrushPreset> {
             "Spatter",
             BrushSettings {
                 size: 60.0,
-                tip: TipShape::Sampled(spatter_tip(64, 11, 14)),
+                tip: TipShape::Sampled(spatter_tip(64, 11, 14)).into(),
                 spacing: 0.6,
                 shape_dynamics: ShapeDynamics {
                     enabled: true,
@@ -287,7 +287,7 @@ fn special_effects(base: &BrushSettings) -> Vec<BrushPreset> {
             "Stipple",
             BrushSettings {
                 size: 40.0,
-                tip: TipShape::Sampled(spatter_tip(64, 77, 40)),
+                tip: TipShape::Sampled(spatter_tip(64, 77, 40)).into(),
                 spacing: 0.5,
                 shape_dynamics: ShapeDynamics { enabled: true, angle: Dynamic::jitter(1.0), flip_x_jitter: true, ..Default::default() },
                 scattering: Scattering { enabled: true, scatter: Dynamic::jitter(0.6), both_axes: true, ..Default::default() },
@@ -312,7 +312,7 @@ fn special_effects(base: &BrushSettings) -> Vec<BrushPreset> {
             "Foliage",
             BrushSettings {
                 size: 50.0,
-                tip: TipShape::Sampled(leaf_tip(64)),
+                tip: TipShape::Sampled(leaf_tip(64)).into(),
                 spacing: 0.35,
                 shape_dynamics: ShapeDynamics {
                     enabled: true,
@@ -338,7 +338,7 @@ fn special_effects(base: &BrushSettings) -> Vec<BrushPreset> {
             "Grass",
             BrushSettings {
                 size: 70.0,
-                tip: TipShape::Sampled(grass_tip(96, 6, 11)),
+                tip: TipShape::Sampled(grass_tip(96, 6, 11)).into(),
                 spacing: 0.25,
                 shape_dynamics: ShapeDynamics {
                     enabled: true,
@@ -356,7 +356,7 @@ fn special_effects(base: &BrushSettings) -> Vec<BrushPreset> {
             "Sparkle",
             BrushSettings {
                 size: 40.0,
-                tip: TipShape::Sampled(star_tip(64)),
+                tip: TipShape::Sampled(star_tip(64)).into(),
                 spacing: 1.5,
                 shape_dynamics: ShapeDynamics { enabled: true, size: Dynamic { jitter: 0.8, minimum: 0.15, ..Default::default() }, ..Default::default() },
                 scattering: Scattering { enabled: true, scatter: Dynamic::jitter(2.5), both_axes: true, ..Default::default() },
@@ -368,7 +368,7 @@ fn special_effects(base: &BrushSettings) -> Vec<BrushPreset> {
             "Sponge Texture",
             BrushSettings {
                 size: 60.0,
-                tip: TipShape::Sampled(sponge_tip(64, 19)),
+                tip: TipShape::Sampled(sponge_tip(64, 19)).into(),
                 spacing: 0.45,
                 shape_dynamics: ShapeDynamics { enabled: true, angle: Dynamic::jitter(1.0), ..Default::default() },
                 transfer: transfer(Dynamic::jitter(0.3), Dynamic::default()),
@@ -438,14 +438,33 @@ impl Texture {
     }
 }
 
-/// The built-in preset set, in display order (grouped by [`GROUPS`]).
-pub fn builtin() -> Vec<BrushPreset> {
+#[cfg(test)]
+static BUILTIN_INITIALIZATIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn build_builtin() -> Vec<BrushPreset> {
     let base = BrushSettings { pressure_size: false, spacing: 0.25, ..Default::default() };
     let mut v = general(&base);
     v.extend(dry_media(&base));
     v.extend(wet_media(&base));
     v.extend(special_effects(&base));
     v
+}
+
+/// An owned copy of the built-in preset set, in display order (grouped by [`GROUPS`]).
+pub fn builtin() -> Vec<BrushPreset> {
+    builtin_shared().as_ref().clone()
+}
+
+/// The built-in set shared by new sessions until one is edited.
+pub fn builtin_shared() -> std::sync::Arc<Vec<BrushPreset>> {
+    static BUILTIN: std::sync::OnceLock<std::sync::Arc<Vec<BrushPreset>>> = std::sync::OnceLock::new();
+    BUILTIN
+        .get_or_init(|| {
+            #[cfg(test)]
+            BUILTIN_INITIALIZATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            std::sync::Arc::new(build_builtin())
+        })
+        .clone()
 }
 
 /// Find a preset by name (case-insensitive).
@@ -456,6 +475,16 @@ pub fn find<'a>(presets: &'a [BrushPreset], name: &str) -> Option<&'a BrushPrese
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builtins_initialize_once_across_owned_and_shared_calls() {
+        let first = builtin_shared();
+        let owned = builtin();
+        let second = builtin_shared();
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        assert_eq!(*first, owned);
+        assert_eq!(BUILTIN_INITIALIZATIONS.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
 
     #[test]
     fn builtins_are_grouped_and_unique() {

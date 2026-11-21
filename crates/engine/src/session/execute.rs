@@ -15,7 +15,10 @@ impl Session {
     /// Runs synchronously, including job-capable commands (see [`jobs`]; [`Session::start`] runs
     /// those in the background).
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value> {
-        match self.dispatch(id, params, false)? {
+        let before = self.active_layer_stamp();
+        let result = self.dispatch(id, params, false);
+        self.note_layer_change(before);
+        match result? {
             jobs::Started::Done(v) => Ok(v),
             // Not reached: inline dispatch never starts a job. Waiting is still correct.
             jobs::Started::Job(j) => self.wait_job(j),
@@ -64,7 +67,7 @@ impl Session {
     /// Complete for the commands in [`PRECHECKED`]: there it accepts what `execute` accepts, but
     /// for the group nesting limit (a test holds the two together). For others it checks only what they share.
     pub fn precheck(&mut self, id: &str, params: &Value) -> Result<()> {
-        let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        let spec = crate::registry::spec(id)?;
         if !(params.is_object() || params.is_null()) {
             return Err(EngineError::BadParams { cmd: id.to_string(), msg: "params must be a JSON object".into() });
         }
@@ -90,9 +93,10 @@ impl Session {
         self.admit(id, spec, params).map(|_| ())
     }
 
-    /// What `dispatch` checks once the params are valid and a floating selection has dropped:
-    /// the precondition (on a named layer for commands that take one), a job running on the
-    /// document, a hidden target. The run params (the Channels panel's target filled in) when it
+    /// What `dispatch` checks once the params are valid, before a floating selection drops (so a
+    /// refused command leaves it floating) and again after: the precondition (on a named layer
+    /// for commands that take one), a job running on the document, a hidden target, the Magic
+    /// Eraser's colour-mode alert. The run params (the Channels panel's target filled in) when it
     /// may run.
     pub(crate) fn admit(&mut self, id: &str, spec: &commands::CommandSpec, params: &Value) -> Result<Value> {
         let run_params = channel_cmds::inject_target(self, id, commands::inject_kind(id, params.clone()));
@@ -109,6 +113,13 @@ impl Session {
         if let Some(why) = hidden_target::refusal(self, id, params) {
             return Err(EngineError::Other(why.into()));
         }
+        // The Magic Eraser's alert for an Indexed Color or Bitmap document (#12032), the same
+        // error its `run` gives: checked here too, so a floating selection stays floating (#13169).
+        if id == "paint.magicEraser"
+            && let Some(why) = self.active().and_then(|st| crate::eraser_cmds::magic_eraser_refusal(&st.doc))
+        {
+            return Err(EngineError::Other(why.into()));
+        }
         Ok(run_params)
     }
 
@@ -120,7 +131,8 @@ impl Session {
     /// [`Self::is_enabled`] for a call with `params`: their `"target"` can enable a command, as a
     /// targeted layer mask enables Image › Adjustments › Invert on an adjustment layer (#780).
     pub fn is_enabled_with(&self, id: &str, params: &Value) -> bool {
-        self.disabled_reason_with(id, params).is_none()
+        // An unknown id is disabled; its reason would rank every command id for "did you mean".
+        commands::find(id).is_some_and(|spec| self.spec_disabled_reason(spec, id, params).is_none())
     }
 
     /// Why the command can't run now (None = it can): its own precondition, or a background job
@@ -131,8 +143,16 @@ impl Session {
 
     /// [`Self::disabled_reason`] for a call with `params`.
     pub fn disabled_reason_with(&self, id: &str, params: &Value) -> Option<String> {
-        let Some(s) = commands::find(id) else { return Some(EngineError::UnknownCommand(id.into()).to_string()) };
-        self.precondition(s, &channel_cmds::inject_target(self, id, params.clone())).err().or_else(|| self.job_conflict(id, s.journal))
+        let spec = match crate::registry::spec(id) {
+            Ok(spec) => spec,
+            Err(e) => return Some(e.to_string()),
+        };
+        self.spec_disabled_reason(spec, id, params)
+    }
+
+    /// [`Self::disabled_reason_with`] for the catalogue entry `spec` of `id`.
+    fn spec_disabled_reason(&self, spec: &commands::CommandSpec, id: &str, params: &Value) -> Option<String> {
+        self.precondition(spec, &channel_cmds::inject_target(self, id, params.clone())).err().or_else(|| self.job_conflict(id, spec.journal))
     }
 
     /// The command's own precondition for a call with `params` (their target filled in).
@@ -165,6 +185,9 @@ impl Session {
         if spec.id == "layer.linkLayers" && params.get("linked").and_then(Value::as_bool) == Some(false) {
             let d = self.active().ok_or_else(|| "no document open".to_string())?;
             return if d.selected_layers().is_empty() { Err("no layer selected".into()) } else { Ok(()) };
+        }
+        if let Some(why) = bitmap_mode_refusal(self, spec.id, params) {
+            return Err(why.into());
         }
         channel_cmds::mask_target_enabled(self, spec.id, params).unwrap_or_else(|| (spec.enabled)(self))
     }
@@ -208,7 +231,8 @@ impl Session {
         if d.doc.layer(target).is_none() {
             return Ok(None);
         }
-        let active = d.active_layer.replace(target);
+        let active = d.active_layer;
+        d.set_active_layer(Some(target));
         // The checks see the resolved id: a relative ordinal (`Frwr`, `Bckw`) would otherwise
         // resolve again from the swapped-in active layer and land one layer further.
         let mut resolved = params.clone();
@@ -217,7 +241,7 @@ impl Session {
         }
         let r = self.precondition(spec, &resolved);
         if let Some(d) = self.active_mut() {
-            d.active_layer = active;
+            d.set_active_layer(active);
         }
         Ok(Some(r))
     }
@@ -276,11 +300,11 @@ impl Session {
         }
         if let Err(error) = photocraft_raster::spill::check_since(scratch_generation).and_then(|()| before.scratch_health()).and_then(|()| doc.scratch_health())
         {
-            st.active_layer = previous_active_layer;
+            st.set_active_layer(previous_active_layer);
             return Err(EngineError::Other(error));
         }
-        st.doc = Arc::new(doc);
-        st.active_layer = active;
+        *st.doc_mut() = Arc::new(doc);
+        st.set_active_layer(active);
         fix_selection(st);
         channel_cmds::fix_view(st);
         // A canvas-size change (crop, Canvas Size, Image Size, rotation) moves the Color Sampler
@@ -288,7 +312,9 @@ impl Session {
         // state: not a history step. A mapped edit (the four above) gives the exact map; any other
         // size change falls back to dropping whatever is now outside.
         let mut samplers_removed = 0;
-        if let Some(a) = sampler_map {
+        // The points sit on pixel centres (#11725), so they follow the geometry map, the one the
+        // symmetry gets: `sampler_map` is that map shifted for pixel indices (a flip or rotation).
+        if let Some(a) = sampler_map.and(symmetry_map) {
             let bounds = st.doc.bounds();
             let n = st.color_samplers.len();
             st.color_samplers.retain_mut(|p| {
@@ -325,16 +351,19 @@ impl Session {
         } else if key.is_none() || st.coalesce != key || !st.history.can_undo() {
             st.history.set_current_layers(prior);
             st.history.record(label, before.clone(), layers);
-            st.history.add_current_visibility(&visibility_changes(&before, &st.doc));
+            let changes = visibility_changes(&before, &st.doc);
+            st.history.add_current_visibility(&changes);
             st.trim_history();
             st.coalesce = key;
         } else {
             st.history.set_current_layers(layers);
-            st.history.add_current_visibility(&visibility_changes(&before, &st.doc));
+            let changes = visibility_changes(&before, &st.doc);
+            st.history.add_current_visibility(&changes);
             st.coalesce = key;
         }
         st.bump_revision(keep_clean);
         st.last_damage = damage;
+        st.record_damage();
         self.samplers_removed += samplers_removed;
         #[cfg(any(test, debug_assertions))]
         {
@@ -351,8 +380,10 @@ impl Session {
     /// A command's own rect for the pixels its latest [`Session::edit`] changed: sub-tile precise
     /// for a brush dab, where the edit's own damage ([`layer_multi_cmds::step_damage`]) has tile
     /// precision. The redraw area becomes the intersection of the two, so a hint can only narrow
-    /// it (or bound a change `step_damage` can't). In debug and test builds, a hint that misses a
-    /// tile the edit changed is counted in [`Session::damage_misses`] and logged; it never panics.
+    /// it (or bound a change `step_damage` can't). The hint is first grown as `step_damage` grows
+    /// a change (by a mask's feather and by effects, `grow_hint`), so the intersection keeps a
+    /// dab's soft ring and shadow. In debug and test builds, a hint that misses a tile the edit
+    /// changed is counted in [`Session::damage_misses`] and logged; it never panics.
     pub fn hint_damage(&mut self, rect: photocraft_geom::Rect) {
         #[cfg(any(test, debug_assertions))]
         if let Some(before) = self.hint_before.take()
@@ -367,6 +398,81 @@ impl Session {
             }
         }
         let Some(st) = self.active_mut() else { return };
+        let rect = layer_multi_cmds::grow_hint(&st.doc, rect);
         st.last_damage = Some(st.last_damage.map_or(rect, |d| d.intersect(&rect)));
+        st.record_damage();
+    }
+}
+
+/// A Bitmap document holds only black and white, so Photoshop greys out its filters and its
+/// Image › Adjustments, all but Invert (#10484), filter plug-ins included (`plugin.run`; the
+/// other `plugin.*` commands manage plug-ins). Catalogue queries still answer.
+fn bitmap_mode_refusal(s: &Session, id: &str, params: &Value) -> Option<&'static str> {
+    let edits = (id.starts_with("filter.") || id.starts_with("image.adjustments.") || id == crate::plugin_cmds::RUN)
+        && id != "image.adjustments.invert"
+        && !id.ends_with(".list")
+        // Only the Filter Gallery answers `{"list": true}` with its catalogue; other commands ignore it.
+        && !(id == "filter.filterGallery" && params.get("list").and_then(Value::as_bool) == Some(true));
+    (edits && s.active().is_some_and(|st| st.doc.mode == photocraft_color::ColorMode::Bitmap)).then_some("not available in Bitmap mode")
+}
+
+#[cfg(test)]
+mod bitmap_mode_tests {
+    use serde_json::json;
+
+    use crate::Session;
+
+    /// #10484: Photoshop 2025 on a Bitmap document refuses Gaussian Blur, Add Noise, Levels and
+    /// Brightness/Contrast, and runs Invert. They all ran.
+    #[test]
+    fn bitmap_documents_refuse_filters_and_adjustments_but_invert() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 16, "height": 16, "mode": "grayscale"})).unwrap();
+        s.edit("mode", |doc, _| {
+            doc.mode = photocraft_color::ColorMode::Bitmap;
+            Ok(())
+        })
+        .unwrap();
+        for id in ["filter.blur.gaussianBlur", "filter.noise.addNoise", "image.adjustments.levels", "image.adjustments.brightnessContrast"] {
+            assert!(!s.is_enabled(id), "{id} is greyed out");
+            let e = s.execute(id, json!({})).unwrap_err().to_string();
+            assert!(e.contains("Bitmap mode"), "{id}: {e}");
+        }
+        assert!(s.is_enabled("image.adjustments.invert"));
+        s.execute("image.adjustments.invert", json!({})).unwrap();
+        assert!(s.execute("filter.filterGallery", json!({"list": true})).is_ok(), "a catalogue query still answers");
+        // Grayscale again: the filters are back.
+        s.edit("mode", |doc, _| {
+            doc.mode = photocraft_color::ColorMode::Grayscale;
+            Ok(())
+        })
+        .unwrap();
+        assert!(s.is_enabled("filter.blur.gaussianBlur"));
+    }
+
+    /// `{"list": true}` answers a catalogue only where the command has one (the Filter Gallery);
+    /// HDR Toning ignored it and edited the Bitmap document.
+    #[test]
+    fn bitmap_documents_refuse_a_list_param_on_commands_without_a_catalogue() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 16, "height": 16, "mode": "grayscale", "background": "white"})).unwrap();
+        s.execute("image.mode.bitmap", json!({"method": "threshold"})).unwrap();
+        let steps = s.active().unwrap().history.past_len();
+        let list = json!({"list": true});
+        for spec in crate::commands::command_specs() {
+            let id = spec.id;
+            let edits = (id.starts_with("filter.") || id.starts_with("image.adjustments."))
+                && !matches!(id, "image.adjustments.invert" | "filter.filterGallery")
+                && !id.ends_with(".list");
+            if edits {
+                let why = s.disabled_reason_with(id, &list);
+                assert!(why.as_deref().is_some_and(|w| w.contains("Bitmap mode")), "{id} with {{\"list\": true}}: {why:?}");
+            }
+        }
+        let e = s.execute("image.adjustments.hdrToning", json!({"list": true, "exposure": 1})).unwrap_err().to_string();
+        assert!(e.contains("Bitmap mode"), "{e}");
+        assert_eq!(s.active().unwrap().history.past_len(), steps, "no edit");
+        assert!(s.execute("filter.filterGallery", list).unwrap()["filters"].is_array(), "the gallery catalogue still answers");
+        assert!(s.execute("image.adjustments.colorLookup.list", json!({})).is_ok());
     }
 }

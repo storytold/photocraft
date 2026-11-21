@@ -41,7 +41,7 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
 /// The selected raster layers, bottom to top.
 fn selected_pixel_layers(s: &Session) -> Vec<LayerId> {
     let Some(st) = s.active() else { return Vec::new() };
-    st.selected_layers().into_iter().filter(|id| st.doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Raster(_)))).collect()
+    st.selected_layers().iter().copied().filter(|id| st.doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Raster(_)))).collect()
 }
 
 /// Whether a lock keeps the layer `id` from being moved or warped: lock all, position or pixels.
@@ -171,9 +171,12 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
 const MAX_BLEND_BYTES: u64 = 4 << 30;
 
 /// What Auto-Blend's buffers hold per work-area pixel, as f32: each layer's pixels, luminance,
-/// alpha and mask weight, plus the merged picture and the depth map.
-fn blend_bytes_per_pixel(layers: u64, channels: u64) -> u64 {
-    layers.saturating_mul(channels.saturating_add(3)).saturating_add(channels.saturating_mul(2)).saturating_mul(4)
+/// alpha and mask weight, plus the merged picture and the depth map. A `stack` blend also holds
+/// `fuse_stack`'s pyramids when `fuse` (a `stack` blend with Seamless Tones; 4/3 of a level 0
+/// each): the accumulated and the current image's (`channels` each), and about seven single-channel ones (luma, alpha, energies, winners, halo).
+fn blend_bytes_per_pixel(layers: u64, channels: u64, fuse: bool) -> u64 {
+    let pyramids = if fuse { channels.saturating_mul(2).saturating_add(7).saturating_mul(4).div_ceil(3) } else { 0 };
+    layers.saturating_mul(channels.saturating_add(3)).saturating_add(channels.saturating_mul(2)).saturating_add(pyramids).saturating_mul(4)
 }
 
 /// Auto-Blend's buffers, for allocation errors.
@@ -218,11 +221,22 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
     // whose buffers would exceed `MAX_BLEND_BYTES`, keep to the canvas.
     let canvas = doc.bounds();
     let channels = ids.iter().filter_map(|id| doc.layer(*id).and_then(|l| l.surface()).map(|s| s.channels() as u64)).max().unwrap_or(4);
-    let per_px = blend_bytes_per_pixel(ids.len() as u64, channels);
+    let per_px = blend_bytes_per_pixel(ids.len() as u64, channels, method == "stack" && seamless);
     let fits = px_of(&union).saturating_mul(per_px) <= MAX_BLEND_BYTES && px_of(&union) <= content_px.max(px_of(&canvas)).saturating_mul(2);
     let area = if fits { union } else { union.intersect(&canvas) };
     if area.is_empty() {
         return Err(EngineError::Other("the selected layers are empty".into()));
+    }
+    // The fallback (the canvas) can still be past the budget: a huge canvas, or sparse layers
+    // whose content bounds fill it. Refuse before any layer is expanded into dense buffers.
+    if px_of(&area).saturating_mul(per_px) > MAX_BLEND_BYTES {
+        return Err(EngineError::Other(format!(
+            "Auto-Blend would need more than {} MB for {} layers over {} x {} px; blend fewer or smaller layers",
+            MAX_BLEND_BYTES >> 20,
+            ids.len(),
+            area.width(),
+            area.height()
+        )));
     }
     let (w, h) = (area.width() as usize, area.height() as usize);
     let mut imgs: Vec<Vec<f32>> = Vec::new();
@@ -296,10 +310,32 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
     });
     let top = *ids.last().ok_or_else(|| EngineError::Other("Auto-Blend needs two or more layers".into()))?;
     let label = "Auto-Blend Layers";
+    // The Background can't have a mask. In a two-layer panorama Photoshop leaves it the
+    // Background, unmasked under the other layer (#14214); otherwise (not measured yet) it
+    // becomes a normal layer first, as when adding a mask to it (#5745).
+    let keep_background = method == "panorama" && ids.len() == 2;
+    // The kept Background shows wherever it has pixels, so the other layer shows only where it
+    // doesn't: hidden over the canvas the Background fills, as measured; past the canvas its
+    // seam weights stay as they were.
+    let mut weights = weights;
+    let bg_alpha = ids.iter().zip(&alpha).find(|(id, _)| keep_background && doc.is_background(**id)).map(|(_, a)| a);
+    if let Some(bg_alpha) = bg_alpha {
+        for (id, wt) in ids.iter().zip(weights.iter_mut()) {
+            if !doc.is_background(*id) {
+                for (v, a) in wt.iter_mut().zip(bg_alpha) {
+                    *v *= 1.0 - a;
+                }
+            }
+        }
+    }
     let (new_layer, depth_layer) = s.edit(label, |doc, active| {
         for (id, wt) in ids.iter().zip(&weights) {
-            // The Background can't have a mask: it becomes a normal layer first, as in Photoshop.
-            crate::extra_cmds::background_to_layer_for_mask(doc, *id);
+            if doc.is_background(*id) {
+                if keep_background {
+                    continue;
+                }
+                crate::extra_cmds::background_to_layer_for_mask(doc, *id);
+            }
             let l = doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?;
             let mut mask = LayerMask::hide_all();
             mask.surface.write_region(area, wt);
@@ -360,3 +396,6 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod auto_blend_background_tests;

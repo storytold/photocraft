@@ -8,5 +8,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-photocraft-cms = { workspace = true }
+craft-cms = { workspace = true }
 serde = { workspace = true }
+# Plain data (the engine holds documents in a `Tracked`): the marker and its derive, without the UI.
+craft-tracked = { workspace = true }
+craft-ui-macros = { workspace = true }
