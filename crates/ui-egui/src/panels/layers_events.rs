@@ -494,8 +494,11 @@ fn footer(app: &mut PhotocraftApp, picked: Option<crate::smart_ui::FilterDrag>, 
         LayersFooterAction::NewGroup { from_selection, ask, below, .. } => {
             let groups = from_selection && active.is_some();
             if ask {
-                // Null params go through the menu path, which opens the dialog.
-                let cmd = if groups { crate::new_group_ui::FROM_LAYERS } else { crate::new_group_ui::NEW_GROUP };
+                // Null params go through the menu path, which opens the dialog. Like Photoshop,
+                // ⌥-click asks for New Group from Layers also with one non-Background layer
+                // active, and OK puts that layer in the group (#14717).
+                let one = active.is_some_and(|l| !doc.is_background(l.id));
+                let cmd = if groups || one { crate::new_group_ui::FROM_LAYERS } else { crate::new_group_ui::NEW_GROUP };
                 actions.push((cmd.into(), Value::Null));
             } else if below {
                 actions.push(("layer.new.group".into(), json!({"position": "below"})));
