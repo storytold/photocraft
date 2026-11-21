@@ -53,10 +53,15 @@ pub(super) fn string_entries(items: &[(&str, &str)]) -> Vec<Entry<String>> {
 
 /// A radio group over a string option.
 fn radios(ui: &mut egui::Ui, label: &str, value: &mut String, items: &[(&str, &str)]) {
+    radios_where(ui, label, value, items, |_| true);
+}
+
+/// [`radios`] with only the items `enabled` keeps available.
+fn radios_where(ui: &mut egui::Ui, label: &str, value: &mut String, items: &[(&str, &str)], enabled: impl Fn(&str) -> bool) {
     let picked = RadioGroup::new(label.to_owned(), Bind::given(value.clone()))
         .show(ui, |ui, _| {
             for (v, l) in items {
-                Radio::new((*v).to_owned()).label((*l).to_owned()).show(ui);
+                Radio::new((*v).to_owned()).label((*l).to_owned()).enabled(enabled(v)).show(ui);
             }
         })
         .output
@@ -124,15 +129,22 @@ pub(super) fn content_aware_move(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> 
     first(structure, color)
 }
 
-/// Spot Healing's options.
+/// Spot Healing's options. In an Indexed Color document, which the tool refuses, only Create Texture is offered (and
+/// shown chosen) and Sample All Layers greys, as the reference's bar does; the stored choices stay for other documents
+/// (#12582).
 pub(super) fn spot_healing(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
+    const TEXTURE: &str = "createTexture";
+    let indexed = crate::retouch_ui::spot_healing_indexed(app);
     let o = &mut app.ui.tool_options;
-    radios(
-        ui,
-        tl!("Type"),
-        &mut o.spot_type,
-        &[("contentAware", tl!("Content-Aware")), ("createTexture", tl!("Create Texture")), ("proximityMatch", tl!("Proximity Match"))],
-    );
+    let types = [("contentAware", tl!("Content-Aware")), (TEXTURE, tl!("Create Texture")), ("proximityMatch", tl!("Proximity Match"))];
+    if indexed {
+        let (mut shown, mut sample_all) = (TEXTURE.to_owned(), false);
+        radios_where(ui, tl!("Type"), &mut shown, &types, |v| v == TEXTURE);
+        Divider::vertical().show(ui);
+        check(ui, tl!("Sample All Layers"), &mut sample_all, false, None);
+        return None;
+    }
+    radios(ui, tl!("Type"), &mut o.spot_type, &types);
     Divider::vertical().show(ui);
     check(ui, tl!("Sample All Layers"), &mut o.sample_all.spot_healing, true, None);
     None
