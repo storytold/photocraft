@@ -141,6 +141,8 @@ pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<st
         Target::FilterMask if follows_filter_mask(id) && !PASTE_IDS.contains(&id) => {
             Some(addressed_layer(s, p).and_then(crate::smart_cmds::filter_mask_paintable))
         }
+        // The reference application greys Color Balance on a targeted layer mask (#14416).
+        Target::Mask if id == crate::adjust_cmds::COLOR_BALANCE_ID => Some(Err(crate::adjust_cmds::COLOR_BALANCE_UNAVAILABLE.into())),
         Target::Mask if edits_mask(id) => {
             Some(addressed_layer(s, p).and_then(|l| if l.mask.is_some() { Ok(()) } else { Err("the target layer has no layer mask".into()) }))
         }
