@@ -350,6 +350,15 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                 // Ticked on first open (#13648).
                 Param::new("includeBackground", tl!("Include Background in Export"), ParamKind::bool(true)),
                 Param::new("quality", tl!("Quality"), ParamKind::int(Some(0), Some(12), 10)),
+                // The page mode, a radio pair with no caption, Multi-Page Document first and selected (#13649).
+                Param::new(
+                    "mode",
+                    "",
+                    ParamKind::radio(
+                        opts(&[("multiPage", tl!("Multi-Page Document")), ("perArtboard", tl!("Document Per Artboard"))]),
+                        Some("multiPage".to_owned()),
+                    ),
+                ),
                 // Unticked on first open; the form remembers it as the last run left it (#13644).
                 Param::new("reversePageOrder", tl!("Reverse Page Order"), ParamKind::bool(false)),
             ])
@@ -873,6 +882,9 @@ fn export_contents(app: &mut PhotocraftApp) -> Result<Value, String> {
     })
 }
 
+#[cfg(test)]
+#[path = "artboards_to_pdf_mode_tests.rs"]
+mod artboards_to_pdf_mode_tests;
 #[cfg(test)]
 #[path = "../../artboards_to_pdf_selected_tests.rs"]
 mod artboards_to_pdf_selected_tests;

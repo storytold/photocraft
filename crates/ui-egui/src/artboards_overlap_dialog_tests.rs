@@ -92,7 +92,8 @@ fn layer_comps_to_files_has_no_overlap_choice() {
 fn artboards_to_pdf_offers_the_two_radios_below_the_path() {
     let mut h = harness();
     let dialog = open(&mut h, "file.export.artboardsToPdf");
-    let radios: Vec<String> = h.query_all_by_role(Role::RadioButton).filter_map(|n| n.accesskit_node().label()).collect();
+    // The page mode pair (#13649) follows further down; this pair comes first.
+    let radios: Vec<String> = h.query_all_by_role(Role::RadioButton).filter_map(|n| n.accesskit_node().label()).take(2).collect();
     assert_eq!(radios, [OVERLAPPING, CONTENT_ONLY]);
     assert!(selected(&h, OVERLAPPING) && !selected(&h, CONTENT_ONLY));
     let radio = top(&h, OVERLAPPING);

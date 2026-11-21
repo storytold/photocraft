@@ -1270,14 +1270,34 @@ fn soft_mask(px: &[[f32; 4]]) -> Result<Option<Vec<u8>>> {
     Ok(Some(z.finish().map_err(failed)?))
 }
 
-/// File › Export › Artboards to PDF: one page per board (flattened over white, JPEG-encoded).
+/// File › Export › Artboards to PDF: one page per board (flattened over white, JPEG-encoded),
+/// all in one file at `path`, or with `"mode": "perArtboard"` one single-page file per board
+/// named by [`pdf_file_stems`]. Every page is encoded before any file is written.
 /// With `"includeBackground": false` a white board's fill is left out and the page gets a soft
 /// mask, so a viewer shows its own background where the board has no pixels.
 fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToPdf";
-    let path = str_param(p, "path", cmd)?.to_string();
+    let per_artboard = match p.get("mode") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(m)) if m == "multiPage" => false,
+        Some(Value::String(m)) if m == "perArtboard" => true,
+        Some(other) => return Err(bad(cmd, format!("\"mode\" must be \"multiPage\" or \"perArtboard\", not {other}"))),
+    };
+    let path = if per_artboard { p.get("path").and_then(Value::as_str).unwrap_or_default().to_string() } else { str_param(p, "path", cmd)?.to_string() };
+    // Document Per Artboard: the folder and prefix default to those of `path` (the dialog's
+    // `<folder>/<document name>.pdf`), so `<folder>/<document name><artboard name>.pdf`.
+    let dir = match p.get("dir").and_then(Value::as_str).filter(|d| !d.is_empty()) {
+        Some(d) => d.to_string(),
+        None if per_artboard && path.is_empty() => return Err(bad(cmd, "missing \"dir\" or \"path\"")),
+        None => folder_of(&path),
+    };
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
+    let prefix = match p.get("prefix").and_then(Value::as_str) {
+        Some(prefix) => prefix.to_string(),
+        None if path.is_empty() => stem(&doc.name),
+        None => stem(&path),
+    };
     let quality = f64_param(p, "quality").or(Some(10.0));
     let background = p.get("includeBackground").and_then(Value::as_bool).unwrap_or(true);
     // Reverse Page Order (#13644): the default page order the other way round.
@@ -1288,6 +1308,7 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let overlapping = overlapping_param(p, cmd)?;
     let guard = ScratchGuard::new(&doc)?;
     let mut pages = Vec::new();
+    let mut names = Vec::new();
     // Pages go bottom artboard of the Layers panel first, as in the reference application (#13643);
     // `chosen_board_documents` lists them top first, the order Artboards to Files keeps.
     for (id, mut one) in chosen_board_documents(&doc, p, overlapping)?.into_iter().rev() {
@@ -1297,16 +1318,56 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
         let masked = !background && visible && drop_white_fill(&mut one);
         let (jpeg, mask) = jpeg_page_masked(&one, quality, masked, cmd)?;
         pages.push((one.size.width, one.size.height, doc.resolution_dpi, jpeg, mask));
+        names.push(one.name);
     }
     if pages.is_empty() {
         return Err(bad(cmd, "no matching artboards"));
     }
     if reverse {
         pages.reverse();
+        names.reverse();
     }
     guard.check()?;
-    write_file(&path, &raster_pdf_masked(&pages))?;
-    Ok(json!({"path": path, "pages": pages.len()}))
+    if !per_artboard {
+        write_file(&path, &raster_pdf_masked(&pages))?;
+        return Ok(json!({"path": path, "pages": pages.len(), "files": [path]}));
+    }
+    let mut files = Vec::new();
+    for (page, name) in pages.iter().zip(pdf_file_stems(&prefix, &names)) {
+        let file = join(&dir, &format!("{name}.pdf"));
+        write_file(&file, &raster_pdf_masked(std::slice::from_ref(page)))?;
+        files.push(file);
+    }
+    Ok(json!({"pages": pages.len(), "files": files}))
+}
+
+/// The folder part of `path`: `""` for a bare file name, and the root itself for a file at
+/// the root (`/x.pdf` gives `/`, not the working directory).
+fn folder_of(path: &str) -> String {
+    path.rfind(['/', '\\']).map_or(String::new(), |i| path[..i.max(1)].to_string())
+}
+
+/// Document Per Artboard's file names: `<prefix><artboard name>`, spaces kept and no separator
+/// added, with characters a file name can't hold as `_`. A name an earlier board already took,
+/// ignoring letter case, gets the first `-2`, `-3`… no other board's name takes, so every board
+/// keeps a file of its own on case-insensitive file systems; the first board of a name keeps it.
+fn pdf_file_stems(prefix: &str, names: &[String]) -> Vec<String> {
+    // Upper case of lower case also folds `ß`/`ẞ` and `σ`/`ς`/`Σ` together, as NTFS does.
+    let key = |stem: &str| stem.to_lowercase().to_uppercase();
+    let plain: Vec<String> = names.iter().map(|name| sanitize(&format!("{prefix}{name}"))).collect();
+    let mut taken: HashSet<String> = plain.iter().map(|stem| key(stem)).collect();
+    let mut seen = HashSet::new();
+    plain
+        .into_iter()
+        .map(|stem| {
+            if seen.insert(key(&stem)) {
+                return stem;
+            }
+            // At most 2 x names keys are taken, so one of these many suffixes is always free.
+            let last = u64::try_from(names.len()).unwrap_or(u64::MAX).saturating_mul(2).saturating_add(2);
+            (2..=last).map(|n| format!("{stem}-{n}")).find(|candidate| taken.insert(key(candidate))).unwrap_or(stem)
+        })
+        .collect()
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -1376,7 +1437,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToPdf",
             "Artboards to PDF…",
             &["File", "Export"],
-            r##"{"path":str (.pdf),"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's page also shows the visible boards above it where they overlap it; artboard: Artboard Content Only),"artboards":[id]?,"quality":0..12=10,"includeBackground":bool=true (false: a white board's fill is left out and the page gets a soft mask, so it is transparent where the board's layers have no pixels; an empty board, other fills and documents other than 8-bit RGB keep it),"reversePageOrder":bool=false (the default page order the other way round)} → {path, pages} (one raster page per board, bottom artboard of the Layers panel first)"##,
+            r##"{"path":str (.pdf; with "mode":"perArtboard" only gives the defaults of "dir" and "prefix"),"mode":"multiPage|perArtboard"="multiPage" (Multi-Page Document: one file at "path"; Document Per Artboard: one single-page file per board, "<dir>/<prefix><artboard name>.pdf", spaces kept, characters a file name can't hold become "_", a name an earlier board already took, ignoring case, gets "-2", "-3"…),"dir":folder=folder of "path","prefix":str=file name of "path" without ".pdf", else the document name,"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's page also shows the visible boards above it where they overlap it; artboard: Artboard Content Only),"artboards":[id]?,"quality":0..12=10,"includeBackground":bool=true (false: a white board's fill is left out and the page gets a soft mask, so it is transparent where the board's layers have no pixels; an empty board, other fills and documents other than 8-bit RGB keep it),"reversePageOrder":bool=false (the default page order the other way round)} → {path (multi-page), pages, files} (one raster page per board, bottom artboard of the Layers panel first)"##,
             export_artboards,
             artboards_to_pdf
         ),
@@ -1416,6 +1477,9 @@ mod from_group_hidden_bounds_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/overlapping_areas_tests.rs"]
 mod overlapping_areas_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/pdf_document_per_artboard_tests.rs"]
+mod pdf_document_per_artboard_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/pdf_include_background_tests.rs"]
 mod pdf_include_background_tests;
