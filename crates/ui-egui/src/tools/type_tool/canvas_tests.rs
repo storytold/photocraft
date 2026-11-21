@@ -2445,3 +2445,33 @@ fn styles_at_a_collapsed_caret_shows_the_caret_s_paragraph() {
         assert_eq!(p.align, want, "caret {caret}");
     }
 }
+
+/// #15556: a click with the Type tool, through real frames, opens the session with the placeholder
+/// as the layer text and all of it selected; with the preference off the text is empty. The frames
+/// after the click are those in which the editor first shows and takes focus.
+#[test]
+fn a_canvas_click_starts_with_the_placeholder_selected() {
+    let n = super::PLACEHOLDER.chars().count();
+    for ppp in [1.0, 1.25] {
+        for fill in [true, false] {
+            let mut app = new_app();
+            app.run("prefs.set", json!({"path": "type.fillNewTypeLayersWithPlaceholder", "value": fill})).unwrap();
+            let mut h = harness(ppp, app);
+            let p = canvas_at(h.state(), 300.0, 300.0);
+            click(&mut h, p);
+            for pass in 0..4 {
+                h.run_steps(1);
+                let app = h.state();
+                let ed = app.ui.text_edit.as_ref().unwrap_or_else(|| panic!("ppp {ppp} fill {fill} pass {pass}: no session"));
+                let t = super::current_text(app, LayerId(ed.layer)).unwrap_or_default();
+                eprintln!("DIAG ppp {ppp} fill {fill} pass {pass}: text {t:?} selection {:?}", (ed.anchor, ed.caret));
+                if fill {
+                    assert_eq!(t, super::PLACEHOLDER, "ppp {ppp} pass {pass}: the placeholder is the text");
+                    assert_eq!((ed.anchor, ed.caret), (0, n), "ppp {ppp} pass {pass}: all of it is selected");
+                } else {
+                    assert_eq!(t, "", "ppp {ppp} pass {pass}: preference off, empty text");
+                }
+            }
+        }
+    }
+}
