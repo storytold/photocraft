@@ -365,6 +365,7 @@ impl Session {
         st.last_damage = damage;
         st.record_damage();
         self.samplers_removed += samplers_removed;
+        // An `Arc` clone (history keeps the same document); dropped when the command ends.
         #[cfg(any(test, debug_assertions))]
         {
             self.hint_before = Some(hint_before);
