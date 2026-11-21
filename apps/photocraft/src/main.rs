@@ -53,6 +53,7 @@ mod external_svg;
 mod linux_libs;
 mod logging;
 mod monitor_profile;
+mod nightly_session;
 mod photoshop_settings;
 mod presentation;
 // The print portal needs the session bus (zbus, Linux only); its pure helpers are tested everywhere.
@@ -631,6 +632,20 @@ fn main() -> eframe::Result {
     let app_created = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let created_in_callback = app_created.clone();
     let started_sentinel = sentinel.clone();
+    // After primary IPC claim, before entering the window loop. Stable and secondaries do not
+    // own a Nightly record. No document names, paths or diagnostic payload is collected.
+    let (nightly_session, session_health_warning) = match nightly_session::Session::begin(
+        launch_profile::current().root(),
+        photocraft_engine::build_info::VERSION,
+        photocraft_engine::build_info::git_sha(),
+    ) {
+        Ok(watch) => (watch, false),
+        Err(error) => {
+            log::warn!("Nightly session health is unavailable: {error}");
+            (None, true)
+        }
+    };
+    let previous_nightly_unclean = nightly_session.as_ref().is_some_and(nightly_session::Session::previous_unclean);
     let result = eframe::run_native(
         os_window::name_for(os_window::identity()),
         options,
@@ -835,6 +850,19 @@ fn main() -> eframe::Result {
                 let lines = unreadable_paths.iter().map(|p| i18n::fmt(line, &[("path", p.as_str())])).collect();
                 photocraft_ui_egui::notices::post(&mut app, i18n::t("Could not open"), lines, craft::theme::variant::Tone::Bad, None);
             }
+            if previous_nightly_unclean || session_health_warning {
+                use photocraft_ui_egui::i18n;
+                let message = if previous_nightly_unclean {
+                    i18n::t(
+                        "The previous PhotoCraft Nightly session did not finish normally. You can report a problem from About. No diagnostics have been sent.",
+                    )
+                } else {
+                    i18n::t(
+                        "PhotoCraft Nightly could not record session health in its private profile. You can still edit, but abnormal-exit detection is unavailable.",
+                    )
+                };
+                photocraft_ui_egui::notices::post(&mut app, i18n::t("PhotoCraft Nightly"), vec![message], craft::theme::variant::Tone::Neutral, None);
+            }
             // Portable marker found but its data folder isn't writable (#228): say where settings went.
             if let Some(w) = &app_dirs::current().warning {
                 photocraft_ui_egui::notices::post(&mut app, "Portable mode is off", vec![w.clone()], craft::theme::variant::Tone::Neutral, None);
@@ -847,6 +875,13 @@ fn main() -> eframe::Result {
             Ok(app)
         }),
     );
+    // This is a controlled return, even for a handled startup error or CPU relaunch. Release
+    // health ownership BEFORE primary IPC, so a successor never observes a stale busy owner.
+    if let Some(watch) = nightly_session
+        && let Err(error) = watch.complete()
+    {
+        log::warn!("Nightly session state was left intact: {error}");
+    }
     // The window is gone: refuse further files and free the lock, so a launch that is waiting (or
     // the CPU-compatibility relaunch below) becomes the primary instead of handing its files to a
     // process that is exiting.
