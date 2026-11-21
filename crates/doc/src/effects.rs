@@ -15,7 +15,7 @@ use crate::adjust::CurvePoint;
 pub const PATTERN_SCALE_RANGE: (f32, f32) = (0.01, 10.0);
 
 /// Gradient geometry (fill layers, gradient overlays, gradient strokes).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum GradientStyle {
     #[default]
     Linear,
@@ -26,7 +26,7 @@ pub enum GradientStyle {
 }
 
 /// A gradient: colour stops plus transparency stops (both at `0..=1`).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Gradient {
     pub stops: Vec<(f32, Color)>,
     /// Opacity stops; empty means fully opaque.
@@ -44,7 +44,7 @@ pub struct Gradient {
 /// Editable colour stops behind a Gradient Overlay's baked render stops.
 /// Older documents have no interpolation record and keep their existing appearance.
 /// Writers must rebake `gradient.stops` from this record, or clear it when replacing the curve.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct GradientInterpolation {
     pub method: String,
     pub smoothness: f32,
@@ -67,7 +67,7 @@ impl Default for Gradient {
 }
 
 /// Effect contour (transfer curve applied to the effect's coverage).
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum Contour {
     #[default]
     Linear,
@@ -93,7 +93,7 @@ impl Contour {
 }
 
 /// Paint used by strokes and glows.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum FxPaint {
     Color(Color),
     Gradient(Gradient),
@@ -106,7 +106,7 @@ pub enum FxPaint {
 }
 
 /// Blend mode + opacity + enabled, shared by every effect.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct FxCommon {
     pub enabled: bool,
     pub blend: BlendMode,
@@ -119,7 +119,7 @@ impl FxCommon {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Shadow {
     pub common: FxCommon,
     pub color: Color,
@@ -136,21 +136,21 @@ pub struct Shadow {
     pub knocks_out: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum GlowTechnique {
     #[default]
     Softer,
     Precise,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum GlowSource {
     Center,
     #[default]
     Edge,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Glow {
     pub common: FxCommon,
     pub paint: FxPaint,
@@ -167,14 +167,14 @@ pub struct Glow {
     pub source: GlowSource,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum StrokePosition {
     Outside,
     Inside,
     Center,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct StrokeFx {
     pub common: FxCommon,
     pub size: f32,
@@ -185,7 +185,7 @@ pub struct StrokeFx {
     pub overprint: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Satin {
     pub common: FxCommon,
     pub color: Color,
@@ -197,7 +197,7 @@ pub struct Satin {
     pub invert: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum BevelStyle {
     OuterBevel,
     #[default]
@@ -207,7 +207,7 @@ pub enum BevelStyle {
     StrokeEmboss,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum BevelTechnique {
     #[default]
     Smooth,
@@ -215,7 +215,7 @@ pub enum BevelTechnique {
     ChiselSoft,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Bevel {
     pub enabled: bool,
     pub style: BevelStyle,
@@ -246,7 +246,7 @@ pub struct Bevel {
 }
 
 /// The Contour element of Bevel & Emboss.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct BevelContour {
     pub contour: Contour,
     /// Range `0..=1` (Photoshop's default 50 %): the part of the bevel the contour spans.
@@ -261,7 +261,7 @@ impl Default for BevelContour {
 }
 
 /// The Texture element of Bevel & Emboss.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct BevelTexture {
     pub name: String,
     pub id: String,
@@ -277,7 +277,7 @@ pub struct BevelTexture {
 
 /// One layer effect. Several instances of the same kind are allowed
 /// (Photoshop's multiple strokes/shadows/overlays).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum Effect {
     DropShadow(Shadow),
     InnerShadow(Shadow),
@@ -409,7 +409,7 @@ pub fn yes() -> bool {
 }
 
 /// Document-wide light used by effects with `use_global_light`.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct GlobalLight {
     pub angle: f32,
     pub altitude: f32,

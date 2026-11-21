@@ -12,6 +12,7 @@ use crate::PhotocraftApp;
 
 mod bar;
 pub mod enable_rules;
+pub(crate) mod facts;
 mod invoke;
 mod items;
 pub mod native_menu;
@@ -26,6 +27,8 @@ pub use bar::menu_bar;
 pub use invoke::invoke;
 pub(crate) use invoke::{invoke_unguarded, panel_alias};
 pub use items::{MenuModel, base_rows, is_live, menu_rows, model, row};
+#[cfg(test)]
+pub(crate) use items::{fresh_bar, model_id};
 pub use state::is_enabled;
 pub(crate) use state::reveal_label;
 #[cfg(test)]
@@ -51,7 +54,9 @@ pub(crate) fn menu_gate(app: &PhotocraftApp) -> (Gate, ModalRules) {
 /// ([`refused`]) apply to them: their keys and menu items are one command.
 pub(crate) fn command_gate(app: &PhotocraftApp) -> CommandGate {
     let (gate, rules) = menu_gate(app);
-    CommandGate::new(GateProps { gate, rules, refused: refused(app) }, |props, command| gated(&props.gate, &props.rules, &props.refused, command))
+    // The refusals follow the rows' rules, so they are derived from the facts the menu model is built from.
+    let refused = craft::ui::runtime::derived::derived(app.ctx(), egui::Id::unique("photocraft-refused-commands"), &facts::MenuFacts::of(app), || refused(app));
+    CommandGate::new(GateProps { gate, rules, refused }, |props, command| gated(&props.gate, &props.rules, &props.refused, command))
 }
 
 /// What the runtime's gate reads: the runtime asks it again only when these change.
@@ -59,7 +64,7 @@ pub(crate) fn command_gate(app: &PhotocraftApp) -> CommandGate {
 struct GateProps {
     gate: Gate,
     rules: ModalRules,
-    refused: Vec<CommandRef>,
+    refused: Arc<Vec<CommandRef>>,
 }
 
 /// [`command_gate`]'s test for one command, for callers that hold no gate.
@@ -105,6 +110,9 @@ pub(crate) const DOCUMENT_ITEM: &str = "window.document.";
 mod tests;
 
 #[cfg(test)]
+mod appearance_menu_trials;
+
+#[cfg(test)]
 mod open_recent_position_tests;
 
 #[cfg(test)]
@@ -118,7 +126,7 @@ mod open_recent_tests {
         app.push_recent("/tmp/a.png");
         app.push_recent("/tmp/b.psd");
         app.push_recent("/tmp/a.png"); // de-dupe → moves to front
-        assert_eq!(app.ui.recent_files, vec!["/tmp/a.png".to_string(), "/tmp/b.psd".to_string()]);
+        assert_eq!(*app.ui.recent_files, vec!["/tmp/a.png".to_string(), "/tmp/b.psd".to_string()]);
         for i in 0..15 {
             app.push_recent(&format!("/tmp/f{i}.png"));
         }
@@ -127,10 +135,10 @@ mod open_recent_tests {
             app.push_recent(&format!("/tmp/f{i}.png"));
         }
         assert_eq!(app.ui.recent_files.len(), 20, "capped at Recent File List Contains (20)");
-        assert_eq!(app.session.prefs().file_handling.recent_files, app.ui.recent_files, "stored in the preferences");
+        assert_eq!(app.session.prefs().file_handling.recent_files, *app.ui.recent_files, "stored in the preferences");
 
         // Menu lists them under File › Open Recent, with basenames, plus Clear Recent Files.
-        app.ui.recent_files = vec!["/tmp/a.png".into(), "/dir/b.psd".into()];
+        *app.ui.recent_files = vec!["/tmp/a.png".into(), "/dir/b.psd".into()];
         let rows = menu_rows(&app);
         let labels: Vec<&str> = rows.iter().filter(|r| r.command.id.starts_with("file.openRecent.")).map(|r| r.label.as_str()).collect();
         assert_eq!(labels, vec!["a.png", "b.psd"]);
@@ -150,8 +158,8 @@ mod open_recent_tests {
             app.push_recent(p);
         }
         invoke(&mut app, &ctx, "file.removeRecent", json!({"path": "/tmp/b.psd"})).unwrap();
-        assert_eq!(app.ui.recent_files, vec!["/tmp/a.png".to_string(), "/tmp/c.tif".to_string()]);
-        assert_eq!(app.session.prefs().file_handling.recent_files, app.ui.recent_files, "removed in the preferences too");
+        assert_eq!(*app.ui.recent_files, vec!["/tmp/a.png".to_string(), "/tmp/c.tif".to_string()]);
+        assert_eq!(app.session.prefs().file_handling.recent_files, *app.ui.recent_files, "removed in the preferences too");
         invoke(&mut app, &ctx, "file.removeRecent", json!({"path": "/tmp/not-listed.png"})).unwrap();
         assert_eq!(app.ui.recent_files.len(), 2, "a path that isn't listed changes nothing");
         assert!(invoke(&mut app, &ctx, "file.removeRecent", json!({})).is_err(), "needs a path");
@@ -296,13 +304,11 @@ mod window_documents_tests {
         if crate::i18n::needs_catalogs() {
             let mut app = app(1);
             let ctx = app.ctx().clone();
-            if let Some(d) = app.session.active_mut() {
-                d.saved_to("/tmp/Layers".into());
-            }
+            app.session.saved_to("/tmp/Layers".into());
             let de = crate::i18n::Lang::from_code("de").unwrap();
             let _lang = crate::i18n::language_scope(de);
             let shown = model(&mut app, &ctx);
-            assert_eq!(row(&shown.rows, "window.document.0").map(|r| r.label.as_str()), Some("Layers"));
+            assert_eq!(row(shown.rows(), "window.document.0").map(|r| r.label.as_str()), Some("Layers"));
         }
     }
 }

@@ -156,7 +156,7 @@ impl PaintResize {
         let size = step.dimensions.diameter.round() as f32;
         // Whole percent, like the readout and the options bar.
         let level = ((step.dimensions.level * 100.0).round() / 100.0) as f32;
-        let before = app.session.tools.brush.clone();
+        let before = (*app.session.tools.brush).clone();
         let mut after = before.clone();
         after.size = size;
         if vary {
