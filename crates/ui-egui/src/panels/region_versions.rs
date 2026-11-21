@@ -92,7 +92,7 @@ pub(crate) fn title_bar(app: &PhotocraftApp) -> u64 {
 /// The version of panel `id`'s body. The Navigator shows the active view and the adjustment preview its picture
 /// shows, the Layers panel the layer the Move tool's
 /// rollover outlines on the canvas, which effects lists and groups are open (view state off the document's revision,
-/// `DocState::layers_view_revision`), the Smart Filter row picked on its own and what it is asked to do in its next
+/// the active document's `Tracked` revision, #15709), the Smart Filter row picked on its own and what it is asked to do in its next
 /// pass (open a row for renaming, focus its Name filter, reveal a layer, follow the Move tool's pick), the Info panel the pointer's document pixel, the zoom and the Eyedropper's Sample
 /// Size it samples at and the Crop tool's frame size, the Clone Source panel the pairing at the last hover point, the
 /// Modifier Keys panel the latched keys, which their use releases, the Properties panel the colour its well's open
@@ -109,7 +109,7 @@ pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
         "layers" => {
             let filter_pick = app.session.active().and_then(|st| app.smart_filter_picks.get(&st.doc.id).copied());
             let requests = (app.layers_rename, app.find_layers_focus, app.pending_reveal.as_ref().map(|(layer, _)| *layer), app.move_pick, filter_pick);
-            version(app, (app.canvas_hover_layer, app.session.active().map(|st| st.layers_view_revision()), requests))
+            version(app, (app.canvas_hover_layer, app.session.active_tracked().map(|st| st.revision().count), requests))
         }
         "info" => {
             let crop = crate::crop_ui::info_size(app).map(|size| size.map(f64::to_bits));
