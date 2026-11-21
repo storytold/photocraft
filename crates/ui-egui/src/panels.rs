@@ -59,7 +59,7 @@ pub mod preset_panels;
 mod properties;
 pub(crate) mod registry;
 pub mod smart_ui;
-mod status_bar;
+pub(crate) mod status_bar;
 pub mod swatches_ui;
 pub(super) mod timeline_ui;
 pub(crate) mod title_bar;

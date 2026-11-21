@@ -364,7 +364,7 @@ impl CanvasTool for Preflight<'_, '_> {
                 return ToolAction::Done;
             }
             let at = [doc.x, doc.y];
-            // The Triangle's ⌥ press that samples is the Eyedropper stand-in's, not a shape (#13364).
+            // Let the Eyedropper take an Alt press that samples the shape tool's Fill.
             if self.alt_stand_in && self.scope.with_app(|app| super::cursor_policy::shape_alt_samples(app, pointer.mods, at[0], at[1])) {
                 return ToolAction::Ignored;
             }

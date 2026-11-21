@@ -26,7 +26,7 @@ pub const SLOTS: usize = 5;
 /// A stroke from a slot whose source document was closed.
 pub(crate) const SOURCE_CLOSED: &str = "the clone source's document was closed: set a new source (Alt-click, or cloneSource.set)";
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct CloneSource {
     /// Sample point (document px) set by ⌥-click.
     pub source: Option<[f64; 2]>,
@@ -109,7 +109,7 @@ impl CloneSource {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct CloneOverlay {
     pub show: bool,
     /// Percent.
@@ -128,7 +128,7 @@ impl Default for CloneOverlay {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct CloneSources {
     pub slots: [CloneSource; SLOTS],
     pub active: usize,

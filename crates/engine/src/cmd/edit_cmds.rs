@@ -20,17 +20,20 @@ macro_rules! paste_target {
 pub(crate) use paste_target;
 
 /// Pixels on the session clipboard, with where they came from (for Paste in Place).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub struct Clip {
     /// Original SVG snapshot, when available. The raster mirror belongs to the same source.
     pub svg: Option<std::sync::Arc<Vec<u8>>>,
     /// Native colour indices for a multi-component clip, in channel order. Singletons are grayscale.
     pub components: Option<Vec<usize>>,
+    #[plain_data(assume = "raster tiles: shared copy-on-write pixels, paged to disk unseen; a shared reference can't change them")]
     pub surface: Surface,
+    #[plain_data(assume = "geometry: plain numbers")]
     pub bounds: Rect,
     /// The copied layer itself, when Copy took a whole layer that Paste should recreate rather
     /// than rasterize (see [`whole_layer`]): a scratch document in the source's colour holding it.
     /// `surface` still holds its pixels, for Paste Into, masks, channels and other apps.
+    #[plain_data(assume = "the scratch document is replaced, never changed in place")]
     pub layers: Option<Box<Document>>,
     /// The source document's resolution (ppi): File › New from the clipboard takes it, as
     /// Photoshop's Clipboard preset does. None for an image from another app.
@@ -41,6 +44,7 @@ pub struct Clip {
     /// The artboard the pixels were copied from (its id and rect at the time), when they came
     /// from one: Paste into another board of the same document keeps their place on the board
     /// ([`board_shift`], #8788). None outside boards, across several, or for a copied board.
+    #[plain_data(assume = "a layer id and its rect: plain numbers")]
     pub board: Option<(LayerId, Rect)>,
 }
 
@@ -328,7 +332,7 @@ fn copy(s: &mut Session, merged: bool) -> Result<Value> {
     let b = clip.bounds;
     let board = source_board(d, merged, b);
     let clip = Clip { resolution: Some(d.doc.resolution_dpi), source: Some(d.doc.id), board, ..clip };
-    s.clipboard = Some(clip);
+    *s.clipboard = Some(clip);
     Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()]}))
 }
 
@@ -459,7 +463,7 @@ fn copy_mask(s: &mut Session, filter: bool) -> Result<Value> {
     }
     let b = bounds;
     let (resolution, source) = (Some(d.doc.resolution_dpi), Some(d.doc.id));
-    s.clipboard = Some(Clip { svg: None, components: None, surface, bounds: b, layers: None, resolution, source, board: None });
+    *s.clipboard = Some(Clip { svg: None, components: None, surface, bounds: b, layers: None, resolution, source, board: None });
     Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()], "target": if filter { "filterMask" } else { "mask" }}))
 }
 
@@ -506,7 +510,7 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
         super::vector_clipboard::layer_target(s)?;
     }
     crate::allocation::checkpoint("pasting pixels")?;
-    let clip = s.clipboard.clone().ok_or(EngineError::Other("the clipboard is empty".into()))?;
+    let clip = s.clipboard.as_ref().cloned().ok_or(EngineError::Other("the clipboard is empty".into()))?;
     let Some(d) = s.active() else {
         // Nothing open to paste into: the clipboard becomes a document of its own (#368).
         return new_from_clipboard(s);
@@ -657,7 +661,7 @@ pub(crate) fn shifted(surface: &Surface, dx: i32, dy: i32) -> Surface {
 /// through. One history step.
 pub(crate) fn paste_to_target(s: &mut Session, p: &Value, in_place: bool, limit: Option<&Surface>, label: &str) -> Result<Value> {
     crate::allocation::checkpoint("pasting pixels")?;
-    let clip = s.clipboard.clone().ok_or(EngineError::Other("the clipboard is empty".into()))?;
+    let clip = s.clipboard.as_ref().cloned().ok_or(EngineError::Other("the clipboard is empty".into()))?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
     let layer = d.active_layer;
@@ -691,7 +695,7 @@ pub(crate) fn paste_to_target(s: &mut Session, p: &Value, in_place: bool, limit:
 /// A new document the size of the clipboard image, holding it as its one layer, in the pixel
 /// format it was copied in (#368).
 fn new_from_clipboard(s: &mut Session) -> Result<Value> {
-    let clip = s.clipboard.clone().ok_or(EngineError::Other("the clipboard is empty".into()))?;
+    let clip = s.clipboard.as_ref().cloned().ok_or(EngineError::Other("the clipboard is empty".into()))?;
     let b = clip.bounds;
     let (w, h) = (b.width(), b.height());
     if w == 0 || h == 0 {

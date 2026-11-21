@@ -55,7 +55,7 @@ fn engine_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReq
         "jobs.cancel" => jobs_cancel(app, &req.params),
         "ui.menu.list" => {
             // Report the same enablement the native menu shows, so a listed item is invokable.
-            let rows = crate::menus::model(app, ctx).rows.clone();
+            let rows = crate::menus::model(app, ctx).rows().to_vec();
             ok(menu_list(app, &rows))
         }
         "ui.inspect" => ok(inspect(app, ctx)),

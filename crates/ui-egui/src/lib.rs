@@ -351,6 +351,11 @@ pub struct PhotocraftApp {
     pub(crate) remove_pending: Vec<serde_json::Value>,
     pub(crate) remove_pending_target: Option<retouch_ui::RemoveTarget>,
     pub(crate) remove_trail: Option<stroke_trail::Trail>,
+    /// The numbers that keep apart the textures the app makes for its canvas previews (transform previews, stroke
+    /// trails, Object Finder masks): a preview made again under the same name gets a number no earlier one had, so
+    /// the texture store never shows the old picture for it. One counter for the whole app, since previews of a
+    /// name are made in several places (a transform begins in one, re-renders in another).
+    pub(crate) texture_serials: craft::ui::primitives::Serials,
     /// The menu bar's rows and the English text of its titles, rebuilt when their inputs change
     /// (`menus::MenuModel`).
     pub(crate) menu_model: Option<menus::MenuModel>,
@@ -583,8 +588,6 @@ pub struct PhotocraftApp {
     pub(crate) hover_doc: Option<[f64; 2]>,
     /// Layer hovered in the Layers panel, outlined on the canvas.
     pub(crate) hover_layer: Option<photocraft_doc::LayerId>,
-    /// The commands run from any source (`menus::invoke`, the commands keys and surfaces fire, the control channel).
-    pub(crate) commands_run: u64,
     /// A layer whose row the Layers panel opens for renaming in its next pass (Layer › Rename
     /// Layer, the row menu's Rename Layer…).
     pub(crate) layers_rename: Option<photocraft_doc::LayerId>,
@@ -623,7 +626,7 @@ pub struct PhotocraftApp {
     /// What the chrome derives from each open document, kept per document revision (`app::doc_queries`).
     pub(crate) doc_queries: app::doc_queries::DocQueries,
     /// The saved workspaces and the one shown (`workspace_ui`).
-    pub workspaces: workspace_ui::Workspaces,
+    pub workspaces: craft::ui::contract::Tracked<workspace_ui::Workspaces>,
     /// Autosave timing and its retry state (`prefs_ui`).
     pub(crate) autosave: craft::platform::autosave::Autosave,
     /// GPU canvas renderer, when running on the wgpu backend (see [`Self::set_wgpu`]). Dropped
@@ -946,6 +949,10 @@ mod move_outline_tests;
 mod move_bar_distribute_gear_tests;
 
 #[cfg(test)]
+mod brush_picker_memo_trials;
+#[cfg(test)]
+mod brush_settle_trials;
+#[cfg(test)]
 mod chrome_settle_trials;
 #[cfg(test)]
 mod doc_revision_trials;
@@ -955,6 +962,8 @@ mod drag_settle_trials;
 mod layer_thumb_bounds_tests;
 #[cfg(test)]
 mod mask_thumb_refresh_tests;
+#[cfg(test)]
+mod menu_floor_trials;
 
 #[cfg(test)]
 mod new_doc_remember_tests;

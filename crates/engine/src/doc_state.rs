@@ -352,9 +352,10 @@ fn next_snapshots_generation() -> u64 {
 pub struct ToolState {
     pub foreground: [f32; 4],
     pub background: [f32; 4],
-    pub brush: photocraft_paint::BrushSettings,
-    /// Brush presets (built-ins plus user presets; see `brush.presets.*`).
-    pub presets: Arc<Vec<photocraft_paint::BrushPreset>>,
+    /// Tracked, so a view that shows the brush keys on its revision: every write through `&mut` moves it.
+    pub brush: craft_tracked::Tracked<photocraft_paint::BrushSettings>,
+    /// Brush presets (built-ins plus user presets; see `brush.presets.*`), tracked as the brush is.
+    pub presets: craft_tracked::Tracked<Arc<Vec<photocraft_paint::BrushPreset>>>,
     /// Bumped whenever `presets` changes ([`Session::brush_presets_changed`]); the preset store
     /// syncs when it moves.
     pub presets_rev: u64,
@@ -451,11 +452,11 @@ impl Default for ToolState {
             foreground: Self::PIXEL_COLORS[0],
             background: Self::PIXEL_COLORS[1],
             // Photoshop's Brush tool starts at 10 % Smoothing.
-            brush: photocraft_paint::BrushSettings {
+            brush: craft_tracked::Tracked::new(photocraft_paint::BrushSettings {
                 smoothing: photocraft_paint::brush::Smoothing { amount: 0.1, ..Default::default() },
                 ..Default::default()
-            },
-            presets: photocraft_paint::presets::builtin_shared(),
+            }),
+            presets: craft_tracked::Tracked::new(photocraft_paint::presets::builtin_shared()),
             presets_rev: 0,
             mixer: Default::default(),
             brush_gesture: None,
@@ -471,16 +472,21 @@ impl Default for ToolState {
 
 /// Layer › Layer Style › Copy Layer Style: the effects and the Blending Options, as Photoshop
 /// copies them (Paste Layer Style puts them all on each target).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub struct CopiedStyle {
+    #[plain_data(assume = "document effects: plain values")]
     pub effects: photocraft_doc::Effects,
+    #[plain_data(assume = "an enum")]
     pub blend: photocraft_color::BlendMode,
     pub fill: f32,
+    #[plain_data(assume = "document blending options: plain values")]
     pub advanced: photocraft_doc::AdvancedBlending,
+    #[plain_data(assume = "document blend ranges: plain values")]
     pub blend_if: photocraft_doc::BlendIf,
     pub excluded_channels: u32,
     /// The colour mode it was copied in: Blend If's channel ranges and the channel restrictions
     /// only carry over to a document in the same mode.
+    #[plain_data(assume = "an enum")]
     pub mode: photocraft_color::ColorMode,
 }
 

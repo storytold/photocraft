@@ -181,7 +181,7 @@ fn parse_brush(s: &Session, p: &Value, cmd: &str) -> Result<(Stroke, Option<Laye
             s.load_brush_tips(&mut b).map_err(|e| bad(cmd, e))?;
             b
         }
-        _ => s.tools.brush.clone(),
+        _ => (*s.tools.brush).clone(),
     };
     let mut brush = stroke_brush(&base, p);
     // The Eraser's Erase to History in Pencil or Block mode paints back through that hard tip.

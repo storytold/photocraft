@@ -1248,7 +1248,7 @@ fn automation_open_and_save_use_the_roots_and_reply_with_warnings() {
     assert_eq!(r["result"]["warnings"], json!(["Adjustment layer flattened"]), "{r}");
     assert_eq!(r["result"]["name"], "warn.psd");
     assert_eq!(app.session.active().unwrap().path.as_deref(), Some("in/warn.psd"));
-    assert_eq!(app.ui.recent_files, vec!["in/warn.psd".to_string()]);
+    assert_eq!(*app.ui.recent_files, vec!["in/warn.psd".to_string()]);
     let r = call(&mut app, &ctx, "app.save", json!({"path": "out.png"}));
     assert_eq!(r["result"], json!({"path": "out.png", "warnings": ["Layers were flattened"]}), "{r}");
     assert_eq!(*written.borrow(), vec!["out.png".to_string()]);
@@ -1471,7 +1471,7 @@ fn app_open_opens_a_directory_pcraft_and_falls_back_for_the_zip_form() {
     let r = call(&mut app, &ctx, "app.open", json!({"path": "native.pcraft"}));
     assert_eq!(r["result"], json!({"path": "native.pcraft", "name": "native.pcraft", "warnings": []}), "{r}");
     assert_eq!(app.session.active().unwrap().doc.name, "Native");
-    assert_eq!(app.ui.recent_files, vec!["native.pcraft".to_string()], "the open is recorded in recent files");
+    assert_eq!(*app.ui.recent_files, vec!["native.pcraft".to_string()], "the open is recorded in recent files");
     assert_eq!(app.session.active().unwrap().path, None, "no save-back target: the automation writer replaces files, never directories");
     let r = call(&mut app, &ctx, "app.save", json!({}));
     assert!(r["error"].as_str().unwrap().contains("pass `path`"), "an in-place save is refused up front: {r}");
@@ -2141,7 +2141,7 @@ fn automation_library_open_requires_explicit_save_as_before_implicit_save() {
     let opened = call(&mut app, &ctx, "app.open", json!({"path": "library/same.psd"}));
     assert_eq!(opened["ok"], true, "{opened}");
     assert_eq!(app.session.active().unwrap().path, None);
-    assert_eq!(app.ui.recent_files, vec!["library/same.psd"]);
+    assert_eq!(*app.ui.recent_files, vec!["library/same.psd"]);
     app.run("layer.new.layer", json!({"name": "edit"})).unwrap();
     assert!(app.session.active().unwrap().is_dirty());
     let refused = call(&mut app, &ctx, "app.save", json!({}));

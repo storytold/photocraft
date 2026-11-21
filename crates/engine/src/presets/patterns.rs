@@ -74,7 +74,6 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "pattern.presets.select";
     let pat = pattern_key(s, p, CMD)?;
     s.presets.pattern = Some(pat.id.clone());
-    s.presets.rev += 1;
     let mut out = json!({"pattern": pat.id, "name": pat.display_name()});
     if p.get("applyToLayer").and_then(Value::as_bool).unwrap_or(true)
         && let Some(id) = active_pattern_fill(s)

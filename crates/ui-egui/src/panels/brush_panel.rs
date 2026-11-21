@@ -233,12 +233,12 @@ pub(crate) fn run_fired(app: &mut PhotocraftApp, _ctx: &egui::Context, command: 
             let _ = crate::brush_preset_dialog::open(app, None);
         }
         BrushSettingsCommand::ClearControls => {
-            let before = app.session.tools.brush.clone();
+            let before = (*app.session.tools.brush).clone();
             let cleared = clear_brush_controls(&before);
             commit(app, &before, &cleared);
         }
         BrushSettingsCommand::ResetLocks => {
-            let before = app.session.tools.brush.clone();
+            let before = (*app.session.tools.brush).clone();
             let mut after = before.clone();
             after.locks = photocraft_paint::brush::SectionLocks::default();
             commit(app, &before, &after);

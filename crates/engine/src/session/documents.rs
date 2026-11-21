@@ -27,7 +27,7 @@ impl Session {
         &self.docs
     }
 
-    /// Changes whenever a document is opened or closed.
+    /// Changes whenever a document is opened, closed or renamed.
     pub fn documents_generation(&self) -> u64 {
         self.documents_generation
     }
@@ -42,6 +42,16 @@ impl Session {
 
     pub fn active_mut(&mut self) -> Option<&mut DocState> {
         self.active.and_then(|i| self.docs.get_mut(i))
+    }
+
+    /// Completes a successful save of the active document: the file becomes its path and names it, and its revision is
+    /// the saved one. File identity is not a history step; callers finish the write first and don't call this for a
+    /// copy or export.
+    pub fn saved_to(&mut self, path: String) {
+        let renamed = self.active_mut().is_some_and(|st| st.saved_to(path));
+        if renamed {
+            self.documents_generation = self.documents_generation.wrapping_add(1);
+        }
     }
 
     /// The open document with this id, active or not.

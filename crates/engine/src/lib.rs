@@ -242,10 +242,10 @@ pub struct Session {
     #[cfg(test)]
     batch_history_observer: Option<fn(&Session)>,
     /// Pixels copied with Edit › Copy / Cut (shared by all documents, like Photoshop).
-    pub clipboard: Option<edit_cmds::Clip>,
+    pub clipboard: craft_tracked::Tracked<Option<edit_cmds::Clip>>,
     /// Layer › Layer Style › Copy Layer Style: the effects and the Blending Options
     /// ([`CopiedStyle`]: blend mode, fill opacity, Advanced Blending, Blend If, channels).
-    pub style_clipboard: Option<CopiedStyle>,
+    pub style_clipboard: craft_tracked::Tracked<Option<CopiedStyle>>,
     /// Shape path context menu: copied vector fill and stroke styles.
     pub path_fill_clipboard: Option<photocraft_doc::Fill>,
     pub path_stroke_clipboard: Option<photocraft_doc::ShapeStroke>,
@@ -271,7 +271,7 @@ pub struct Session {
     /// Image › Analysis: Measurement Log and Select Data Points (see `analysis_cmds`).
     pub analysis: analysis_cmds::AnalysisState,
     /// Window › Gradients, Patterns (groups), Styles, Shapes, Tool Presets and Clone Source.
-    pub presets: presets::PresetState,
+    pub presets: craft_tracked::Tracked<presets::PresetState>,
     /// File menu state: Lock Slices, Image Assets, last Print / Save for Web settings, script
     /// event log (see `automate_cmds`).
     pub file_menu: automate_cmds::FileMenuState,

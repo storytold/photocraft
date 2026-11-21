@@ -39,9 +39,10 @@ pub struct ShellUi {
 }
 
 /// The workspaces of the app.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, craft::ui::contract::PlainData)]
 pub struct Workspaces {
     /// Built-in and saved workspaces, the current one, the lock.
+    #[plain_data(assume = "craft-behavior workspace data: plain values and strings")]
     pub set: WorkspaceSet<String>,
 }
 
@@ -113,11 +114,11 @@ pub fn load(app: &mut PhotocraftApp) {
             if set.find(&stored.current).is_some() {
                 set.current = stored.current;
             }
-            app.workspaces = Workspaces { set };
+            *app.workspaces = Workspaces { set };
         }
         None => {
             let moved = migrate(app, &prefs, &mut set);
-            app.workspaces = Workspaces { set };
+            *app.workspaces = Workspaces { set };
             if moved {
                 store(app);
             }
