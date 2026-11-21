@@ -2599,6 +2599,15 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions, ct
             Ok(Some(r))
         }
         ColorMode::Bitmap if format == Format::Tiff && (opts.tiff_ccitt_g4 || opts.encode.tiff_compression == codecs::TiffCompression::None) => {
+            let opaque = match single_layer(doc) {
+                Some(s) => opaque_surface(s, doc.bounds()),
+                None => opaque_bottom(doc),
+            };
+            if !opaque && opts.preserve_alpha {
+                return Err(IoError::Unsupported(
+                    "Save and Close cannot discard TIFF composite transparency; enable tiffTransparency or save to a separate output folder".into(),
+                ));
+            }
             export_tiff_bilevel(doc, opts, ctl).map(Some)
         }
         _ => Ok(None),
@@ -2663,6 +2672,11 @@ fn export_tiff_bilevel(doc: &Document, opts: &ExportOptions, ctl: &photocraft_ra
         for row_idx in 0..band_h {
             let row_start = row_idx * band_w;
             let row_pixels = &band.px[row_start..row_start + band_w];
+            if opts.preserve_alpha && row_pixels.iter().any(|p| p[3] < 1.0) {
+                return Err(IoError::Unsupported(
+                    "Save and Close cannot discard TIFF composite transparency; enable tiffTransparency or save to a separate output folder".into(),
+                ));
+            }
             if let Some((encoder, w_u16)) = enc.as_mut() {
                 let pels = row_pixels.iter().map(|p| {
                     let v = p[0] * p[3] + (1.0 - p[3]);
@@ -2730,6 +2744,10 @@ fn export_tiff_bilevel(doc: &Document, opts: &ExportOptions, ctl: &photocraft_ra
     let mut warnings = vec![warning];
     if opts.tiff_layers && doc.layers.len() > 1 {
         warnings.push("layers are not supported in 1-bit bilevel TIFF; document flattened".into());
+    }
+    let total_channels = doc.channels.len().saturating_add(usize::from(doc.quick_mask.is_some()));
+    if total_channels > 0 {
+        warnings.push("extra channels were not written: 1-bit bilevel TIFF does not support alpha or spot channels".into());
     }
     if opts.encode.embed_metadata {
         if doc.icc_profile.is_some() && opts.encode.embed_icc {
@@ -3735,5 +3753,27 @@ mod bilevel_tiff_tests {
         let px = reopened.layers[0].surface().unwrap();
         assert_eq!(px.pixel(0, 0)[0], 1.0); // White
         assert_eq!(px.pixel(1, 0)[0], 0.0); // Black
+    }
+
+    #[test]
+    fn bilevel_tiff_refuses_when_preserve_alpha_on_transparent() {
+        let mut doc = Document::new("trans", Size::new(2, 1), ColorMode::Bitmap, SampleType::U8);
+        let surface = Surface::from_interleaved(photocraft_color::PixelFormat::RGBA8, Rect::new(0, 0, 2, 1), &[0, 0, 0, 0, 0, 0, 0, 255]);
+        doc.layers.push(photocraft_doc::Layer::new("Layer 1", photocraft_doc::LayerContent::Raster(surface)));
+
+        let mut opts = ExportOptions { tiff_ccitt_g4: true, ..Default::default() };
+        opts.preserve_alpha = true;
+        let err = export_flat(&doc, Format::Tiff, &opts).unwrap_err();
+        assert!(matches!(err, IoError::Unsupported(_)));
+    }
+
+    #[test]
+    fn bilevel_tiff_warns_when_dropping_extra_channels() {
+        let mut doc = import_flat("bilevel.tif", &tiff(1, 1)).unwrap().document;
+        doc.channels.push(photocraft_doc::AlphaChannel::new("Alpha 1", Surface::new(photocraft_color::PixelFormat::GRAY8)));
+
+        let opts = ExportOptions { tiff_ccitt_g4: true, ..Default::default() };
+        let res = export_flat(&doc, Format::Tiff, &opts).unwrap();
+        assert!(res.warnings.iter().any(|w| w.contains("extra channels were not written")));
     }
 }
