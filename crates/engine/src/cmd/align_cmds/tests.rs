@@ -412,15 +412,19 @@ fn smooth_layer(s: &mut Session, name: &str, dx: i32, dy: i32) -> LayerId {
     s.execute("layer.new.layer", json!({"name": name})).unwrap();
     s.edit("smooth", |doc, active| {
         let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
-        for y in 0..150 {
-            for x in 0..200 {
+        let bounds = Rect::new(0, 0, 200, 150);
+        let channels = surf.channels();
+        let mut pixels = Vec::with_capacity(bounds.width() as usize * bounds.height() as usize * channels);
+        for y in bounds.y0..bounds.y1 {
+            for x in bounds.x0..bounds.x1 {
                 let (u, v) = ((x - dx) as f32, (y - dy) as f32);
                 let blob = (-((u - 90.0).powi(2) + (v - 70.0).powi(2)) / (2.0 * 25.0f32.powi(2))).exp();
                 let blob2 = (-((u - 150.0).powi(2) + (v - 40.0).powi(2)) / (2.0 * 15.0f32.powi(2))).exp();
                 let g = 0.2 + 0.5 * blob + 0.25 * blob2 + 0.001 * u;
-                surf.fill_rect(Rect::new(x, y, x + 1, y + 1), &[g, g * 0.8, g * 0.6, 1.0]);
+                pixels.extend_from_slice(&[g, g * 0.8, g * 0.6, 1.0][..channels]);
             }
         }
+        surf.write_region(bounds, &pixels);
         Ok(())
     })
     .unwrap();
