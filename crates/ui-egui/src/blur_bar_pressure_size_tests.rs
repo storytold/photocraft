@@ -68,3 +68,14 @@ fn it_turns_on_the_blur_brush_only_and_reset_tool_turns_it_off() {
     h.run_steps(3);
     assert!(!pressure_size(&h), "off after Reset Tool");
 }
+
+/// Entering Blur for the first time from a Brush that has Pressure for Size on starts it off (CodeRabbit on #16117).
+#[test]
+fn blur_starts_off_when_entered_from_a_pressure_enabled_brush() {
+    let mut h = bar(Tool::Brush);
+    h.state_mut().session.tools.brush.pressure_size = true;
+    switch(&mut h, Tool::Blur);
+    assert!(!pressure_size(&h), "Blur's first use is off");
+    switch(&mut h, Tool::Brush);
+    assert!(pressure_size(&h), "the Brush keeps its own");
+}
