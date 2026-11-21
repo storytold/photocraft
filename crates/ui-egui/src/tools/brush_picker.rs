@@ -17,8 +17,8 @@ use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, MemoProps, MemoView, Outbox, Props as _, SaveKey, Show as _, Tracked, bind_tracked};
 use craft::ui::patterns::presets::PresetSource;
 use craft::ui::runtime::env::Env;
+use photocraft_engine::BrushSettings;
 use photocraft_engine::paint::{BrushPreset, MAX_BRUSH_SIZE, TipShape};
-use photocraft_engine::{BrushSettings, ToolState};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -52,11 +52,6 @@ impl BrushFace {
 }
 
 impl<'a> PickerInput<'a> {
-    /// The presets with the card `parts`, the current preset and the brush values as `tools` hold them now.
-    pub(crate) fn of(tools: &'a ToolState, parts: BrushCardParts) -> Self {
-        Self::new(&tools.presets, &tools.brush.tip, BrushFace::of(&tools.brush), current_key(tools), parts)
-    }
-
     /// The presets of `presets` with the card `parts`, `current` picked, and the brush's `tip` and `face`.
     fn new(presets: &'a Tracked<Arc<Vec<BrushPreset>>>, tip: &'a TipShape, face: BrushFace, current: Option<BrushKey>, parts: BrushCardParts) -> Self {
         let round = *tip == TipShape::Round;
@@ -138,40 +133,83 @@ pub(crate) fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, keys: &[BrushK
 }
 
 /// The picker at the point `app.ui.brush_picker` holds (a right-click on the canvas), while it is open. A tool without
-/// a picker closes it. The Background Eraser shows the compact form with its own rows under the head.
+/// a picker closes it. The Background Eraser shows the compact form with its own rows under the head. A memoized view:
+/// it runs when the presets, the brush's tip or face, the current preset, the picker's state or the eraser's rows
+/// change, or when input reaches its popover.
 pub(crate) fn show_at(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
     let Some(at) = app.ui.brush_picker else { return };
     if !crate::paint_mouse::has_brush_picker(app.ui.tool) {
         close(app);
         return;
     }
-    let mut open = true;
-    let mut eraser = (app.ui.tool == Tool::BackgroundEraser).then(|| {
-        let brush = (*app.session.tools.brush).clone();
-        EraserRows { before: brush.clone(), brush, tolerance: app.ui.tool_options.bg_tolerance_control.clone(), key: None }
-    });
-    let (out, keys) = {
-        let mut input = PickerInput::of(&app.session.tools, app.ui.brush_picker_state.parts);
-        let picker = input.picker(bind_tracked!(app.ui.brush_picker_state)).open_at(egui::pos2(at[0], at[1]), Bind::bound(&mut open));
-        let picker = match eraser.as_mut() {
-            Some(rows) => picker.compact(true).rows(|ui| rows.key = crate::bg_eraser_popup::rows(ui, &mut rows.brush, &mut rows.tolerance)),
-            None => picker,
-        };
-        let out = picker.show(ui);
-        let keys = if out.picks.is_empty() { Vec::new() } else { input.keys(ui) };
-        (out, keys)
+    let mut sent = Vec::new();
+    let tools = &app.session.tools;
+    let eraser = app.ui.tool == Tool::BackgroundEraser;
+    let props = CanvasProps {
+        presets: &tools.presets,
+        tip: &tools.brush.tip,
+        face: BrushFace::of(&tools.brush),
+        current: current_key(tools),
+        state: &mut app.ui.brush_picker_state,
+        at,
+        eraser: eraser.then_some((&tools.brush, &app.ui.tool_options.bg_tolerance_control)),
+        out: Outbox::new(&mut sent),
     };
-    let closed = !open || !out.open;
-    apply(app, ui.ctx(), &keys, out);
-    if let Some(rows) = eraser {
-        commit_keyed(app, &rows.before, &rows.brush, rows.key);
-        if app.ui.tool_options.bg_tolerance_control != rows.tolerance {
-            app.ui.tool_options.bg_tolerance_control = rows.tolerance;
+    let _ = MemoView::new("brush-preset-canvas", props, canvas_view).show(ui);
+    for CanvasEvent { out, keys, eraser, closed } in sent {
+        apply(app, ui.ctx(), &keys, out);
+        if let Some(rows) = eraser {
+            commit_keyed(app, &rows.before, &rows.brush, rows.key);
+            if app.ui.tool_options.bg_tolerance_control != rows.tolerance {
+                app.ui.tool_options.bg_tolerance_control = rows.tolerance;
+            }
+        }
+        if closed {
+            close(app);
         }
     }
-    if closed {
-        close(app);
-    }
+}
+
+/// Every input of the canvas picker: the presets, what it shows of the brush, the picker's view state, the point it
+/// opens at and, for the Background Eraser, the brush and tolerance its rows edit.
+#[derive(MemoProps)]
+struct CanvasProps<'a> {
+    presets: &'a Tracked<Arc<Vec<BrushPreset>>>,
+    tip: &'a Tracked<TipShape>,
+    face: BrushFace,
+    current: Option<BrushKey>,
+    state: &'a mut Tracked<BrushPickerState<BrushKey>>,
+    at: [f32; 2],
+    eraser: Option<(&'a Tracked<BrushSettings>, &'a String)>,
+    out: Outbox<'a, CanvasEvent>,
+}
+
+/// What a run of the canvas picker reports: the picker's output with every row's key when it holds picks, the
+/// eraser's rows as the run left them, and whether the picker closed.
+struct CanvasEvent {
+    out: BrushPresetPickerOutput<BrushKey>,
+    keys: Vec<BrushKey>,
+    eraser: Option<EraserRows>,
+    closed: bool,
+}
+
+/// The canvas picker's view.
+fn canvas_view(props: &mut CanvasProps<'_>, ui: &mut egui::Ui) {
+    let mut open = true;
+    let mut eraser = props.eraser.map(|(brush, tolerance)| {
+        let brush = (**brush).clone();
+        EraserRows { before: brush.clone(), brush, tolerance: tolerance.clone(), key: None }
+    });
+    let mut input = PickerInput::new(props.presets, props.tip, props.face, props.current.clone(), props.state.parts);
+    let picker = input.picker(bind_tracked!(props.state)).open_at(egui::pos2(props.at[0], props.at[1]), Bind::bound(&mut open));
+    let picker = match eraser.as_mut() {
+        Some(rows) => picker.compact(true).rows(|ui| rows.key = crate::bg_eraser_popup::rows(ui, &mut rows.brush, &mut rows.tolerance)),
+        None => picker,
+    };
+    let out = picker.show(ui);
+    let keys = if out.picks.is_empty() { Vec::new() } else { input.keys(ui) };
+    let closed = !open || !out.open;
+    props.out.send(CanvasEvent { out, keys, eraser, closed });
 }
 
 /// Every input of the options bar's picker field: the presets, what it shows of the brush (its tip and face), and the
