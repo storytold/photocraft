@@ -21,6 +21,21 @@ pub(crate) mod log_panel;
 pub(crate) mod note_alerts;
 pub(crate) mod notes_panel;
 
+/// The import time a PDF's notes get (#11796), from this build's clock: the engine's local clock on
+/// the desktop, the browser's (UTC) on the web, which has no local clock in the engine (davidmann4 on
+/// #14798).
+fn notes_import_time() -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        photocraft_engine::notes_cmds::pdf_date()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let since = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).unwrap_or_default();
+        photocraft_engine::notes_cmds::pdf_date_utc(i64::try_from(since.as_secs()).unwrap_or(i64::MAX))
+    }
+}
+
 #[cfg(test)]
 mod tests;
 
@@ -171,7 +186,7 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
         "file.import.notes" => match app.active_doc_id() {
             Ok(doc) => app.pick_file_bytes(move |app, name, bytes| {
                 app.refocus(doc)?;
-                let r = photocraft_engine::notes_cmds::import_notes_from(&mut app.session, &name, &bytes).map_err(|e| e.to_string());
+                let r = photocraft_engine::notes_cmds::import_notes_from(&mut app.session, &name, &bytes, &notes_import_time()).map_err(|e| e.to_string());
                 if r.is_ok() {
                     let _ = crate::panel_docking::show_panel(app, NOTES, Some(true));
                     app.sync_views();

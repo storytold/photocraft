@@ -26,8 +26,9 @@ fn has_notes(s: &Session) -> std::result::Result<(), String> {
 pub const DEFAULT_NOTE_COLOR: [f32; 3] = [1.0, 1.0, 131.0 / 255.0];
 
 /// The PDF date (`D:YYYYMMDDHHMMSS+HH'mm'`) Photoshop stores in a note: local time with its
-/// offset from UTC (#11795), through chrono. Empty without a clock (the web build).
-fn pdf_date() -> String {
+/// offset from UTC (#11795), through chrono. Empty without a clock (the web build), whose shell
+/// passes [`pdf_date_utc`] of the browser clock instead.
+pub fn pdf_date() -> String {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let now = chrono::Local::now();
@@ -39,8 +40,13 @@ fn pdf_date() -> String {
     }
 }
 
+/// The PDF date of `unix_seconds` in UTC: the import time where the build has no local clock (the
+/// web shell, from the browser's clock). Empty for a time chrono cannot represent.
+pub fn pdf_date_utc(unix_seconds: i64) -> String {
+    chrono::DateTime::from_timestamp(unix_seconds, 0).map(|at| pdf_date_at(&at)).unwrap_or_default()
+}
+
 /// [`pdf_date`] for the moment `at`: its own wall-clock time and UTC offset.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn pdf_date_at<Tz: chrono::TimeZone>(at: &chrono::DateTime<Tz>) -> String
 where
     Tz::Offset: std::fmt::Display,
@@ -184,10 +190,10 @@ fn read(path: &str) -> Result<Vec<u8>> {
 /// canvas are pulled inside, as Photoshop does when sizes differ.
 fn import(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "file.import.notes";
-    let path = p.get("path").and_then(Value::as_str).ok_or_else(|| bad(CMD, "pass `path` (.psd, .psb or .pcraft)"))?;
+    let path = p.get("path").and_then(Value::as_str).ok_or_else(|| bad(CMD, "pass `path` (.pdf, .psd, .psb or .pcraft)"))?;
     let bytes = read(path)?;
     let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
-    import_notes_from(s, &name, &bytes)
+    import_notes_from(s, &name, &bytes, &pdf_date())
 }
 
 /// Photoshop's alert when a source gives no notes: one without any, or one it cannot read as a
@@ -205,16 +211,28 @@ fn source_error(name: &str, error: photocraft_io::IoError) -> EngineError {
     }
 }
 
-/// File › Import › Notes… from file bytes (what a file picker returns).
-pub fn import_notes_from(s: &mut Session, name: &str, bytes: &[u8]) -> Result<Value> {
-    // The steps of `file_cmds::import`, with the io error still typed for `source_error`.
-    crate::allocation::checkpoint("importing document")?;
-    let src = photocraft_io::import_for_open(name, bytes, &photocraft_io::ImportOptions::default()).map_err(|e| source_error(name, e))?.0.document;
-    if src.notes.is_empty() {
+/// File › Import › Notes… from file bytes (what a file picker returns). `now` is the import time as
+/// a PDF date, from the caller's clock: [`pdf_date`] on the desktop, [`pdf_date_utc`] of the
+/// browser clock on the web (davidmann4 on #14798).
+pub fn import_notes_from(s: &mut Session, name: &str, bytes: &[u8], now: &str) -> Result<Value> {
+    // A PDF's notes are its first page's text annotations, placed by the page's height and dated
+    // with the import, as the reference application does (#11796). PSD, PSB and .pcraft keep
+    // their own dates.
+    let target_height = f64::from(s.active().ok_or(EngineError::NoDocument)?.doc.size.height);
+    let (src_notes, source_height) = if is_pdf(name, bytes) {
+        let (notes, height) = photocraft_io::pdf::read_notes(bytes).map_err(|e| EngineError::Other(format!("{name}: {e}")))?;
+        (pdf_notes_for_canvas(notes, now, target_height / height), height)
+    } else {
+        // The steps of `file_cmds::import`, with the io error still typed for `source_error`.
+        crate::allocation::checkpoint("importing document")?;
+        let src = photocraft_io::import_for_open(name, bytes, &photocraft_io::ImportOptions::default()).map_err(|e| source_error(name, e))?.0.document;
+        (src.notes, f64::from(src.size.height))
+    };
+    if src_notes.is_empty() {
         return Err(EngineError::Other(NO_NOTES_IMPORTED.into()));
     }
     let d = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
-    let (notes, outside) = place_notes(src.notes, [d.size.width, d.size.height], src.size.height)?;
+    let (notes, outside) = place_notes_from(src_notes, [d.size.width, d.size.height], source_height)?;
     let count = notes.len();
     s.edit("Import Notes", |d, _| {
         d.notes.extend(notes);
@@ -227,17 +245,44 @@ pub fn import_notes_from(s: &mut Session, name: &str, bytes: &[u8]) -> Result<Va
     Ok(r)
 }
 
+/// A PDF's notes ready to place on a canvas `scale` canvas pixels per page point high: each popup's
+/// size in canvas pixels (the page's own is in points; the placement keeps sizes as they are), and
+/// the import's date on each note (`now`; an empty one, a time chrono could not represent, leaves
+/// the notes their own).
+fn pdf_notes_for_canvas(notes: Vec<Note>, now: &str, scale: f64) -> Vec<Note> {
+    notes
+        .into_iter()
+        .map(|mut n| {
+            if scale.is_finite() && scale > 0.0 {
+                n.popup[2] = n.popup[0] + (n.popup[2] - n.popup[0]) * scale;
+                n.popup[3] = n.popup[1] + (n.popup[3] - n.popup[1]) * scale;
+            }
+            if !now.is_empty() {
+                n.modified = now.to_string();
+            }
+            n
+        })
+        .collect()
+}
+
 /// Where imported notes land on a `target` (width, height) canvas, as the reference application
 /// places them (#13914): each icon's top-left and its popup's top-left are multiplied by
 /// s = target height / `source_height` (one factor for x and y; the width ratio plays no part),
 /// the icon and popup keep their sizes, and nothing is clamped or rounded. Also returns whether
 /// any icon's top-left lies outside the canvas. A zero source height, or a scale or position that
 /// overflows, is an error.
-pub(crate) fn place_notes(mut notes: Vec<Note>, target: [u32; 2], source_height: u32) -> Result<(Vec<Note>, bool)> {
-    if source_height == 0 {
+#[cfg(test)]
+pub(crate) fn place_notes(notes: Vec<Note>, target: [u32; 2], source_height: u32) -> Result<(Vec<Note>, bool)> {
+    place_notes_from(notes, target, f64::from(source_height))
+}
+
+/// Where imported notes land (`place_notes` is its whole-pixel form, for the tests), for a
+/// source height that need not be whole: a PDF page's, in points (#11796).
+fn place_notes_from(mut notes: Vec<Note>, target: [u32; 2], source_height: f64) -> Result<(Vec<Note>, bool)> {
+    if !(source_height.is_finite() && source_height > 0.0) {
         return Err(EngineError::Other("the notes' source has no height".into()));
     }
-    let scale = f64::from(target[1]) / f64::from(source_height);
+    let scale = f64::from(target[1]) / source_height;
     let (w, h) = (f64::from(target[0]), f64::from(target[1]));
     let mut outside = false;
     for n in &mut notes {
@@ -252,6 +297,16 @@ pub(crate) fn place_notes(mut notes: Vec<Note>, target: [u32; 2], source_height:
         outside |= !((0.0..w).contains(&px) && (0.0..h).contains(&py));
     }
     Ok((notes, outside))
+}
+
+/// Whether `bytes` are a PDF: its header at the very start, or, for a file named `.pdf`, within
+/// the first KiB where readers accept it. A PSD or another format that happens to hold `%PDF-` in
+/// its first bytes is not one.
+fn is_pdf(name: &str, bytes: &[u8]) -> bool {
+    if bytes.starts_with(b"%PDF-") {
+        return true;
+    }
+    name.to_ascii_lowercase().ends_with(".pdf") && bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-")
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -301,7 +356,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Notes…",
             menu: &["File", "Import"],
             shortcut: None,
-            params: r##"{"path":".psd|.psb|.pcraft with notes"}"##,
+            params: r##"{"path":".pdf|.psd|.psb|.pcraft with notes"}"##,
             enabled: has_doc,
             run: import,
             journal: true,
