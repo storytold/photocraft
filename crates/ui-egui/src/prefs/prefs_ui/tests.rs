@@ -915,6 +915,29 @@ fn restart_cases() -> Vec<Case> {
             }),
         },
         Case {
+            // #9713: Path Options › Thickness and Color are a display setting, remembered with the View items; the
+            // Rubber Band beside them stays the Pen's tool option.
+            name: "Path Options",
+            seed: None,
+            set: Box::new(|app, ctx| {
+                let mut options = crate::vector_ui::path_options(app);
+                (options.color, options.thickness, options.rubber_band) = (Some([255, 42, 42]), Some(2.5), true);
+                crate::vector_ui::store_path_options(app, &options);
+                crate::tool_memory::persist(app, ctx);
+                crate::view_cmds::persist(app, ctx);
+            }),
+            check: Box::new(|app, ctx, stored| {
+                assert_eq!(stored["viewExtras"], json!({"pathOptions": {"color": [255, 42, 42], "thickness": 2.5}}));
+                assert_eq!(stored["toolOptions"]["path_options"], json!({"rubberBand": true}), "the tool options keep only the Rubber Band");
+                let shown = crate::vector_ui::path_options(app);
+                assert_eq!((shown.color, shown.thickness, shown.rubber_band), (Some([255, 42, 42]), Some(2.5), true));
+                // Back to Default: nothing remembered.
+                app.ui.view.path_options = Default::default();
+                crate::view_cmds::persist(app, ctx);
+                assert!(app.session.prefs().view_extras.is_null());
+            }),
+        },
+        Case {
             // #9479: Interface › Enable animations is gone (Photoshop has none). A file saved with it off still
             // loads whole, and egui's fades and scroll glides keep their defaults.
             name: "a saved enable-animations flag",
@@ -1018,6 +1041,35 @@ fn damaged_cases() -> Vec<Case> {
             assert_eq!((o.pattern_stamp_angle, o.marquee_width), (-180.0, 999.0));
             assert_eq!(o.shape_stroke, d.shape_stroke, "an invalid stroke style takes the default");
         },
+    ));
+    // #9713: a hand-edited Path Options colour or thickness that doesn't read keeps its default.
+    for bad in [json!({"color": [256, 0, 0], "thickness": 99.0}), json!({"color": "red", "thickness": "thick"}), json!({"color": [1, 2], "thickness": 0.1})] {
+        cases.push(loaded("Path Options: a bad colour or thickness", json!({"viewExtras": {"pathOptions": bad}}), |app| {
+            assert_eq!(app.ui.view.path_options, crate::view_cmds::PathOptions::default());
+        }));
+    }
+    cases.push(loaded(
+        "Path Options: a good colour with a bad thickness",
+        json!({"viewExtras": {"pathOptions": {"color": [0, 224, 224], "thickness": 9.5}}}),
+        |app| {
+            assert_eq!(app.ui.view.path_options, crate::view_cmds::PathOptions { color: Some([0, 224, 224]), thickness: None });
+        },
+    ));
+    // An earlier build kept Color and Thickness with the Pen's tool options: they become the shared setting, and a
+    // remembered shared setting wins over them.
+    cases.push(loaded(
+        "Path Options: kept with the tool options",
+        json!({"toolOptions": {"path_options": {"color": [1, 2, 3], "thickness": 3.0, "rubberBand": true}}}),
+        |app| {
+            assert_eq!(app.ui.view.path_options, crate::view_cmds::PathOptions { color: Some([1, 2, 3]), thickness: Some(3.0) });
+            let tool = &app.ui.tool_options.path_options;
+            assert_eq!((tool.color, tool.thickness, tool.rubber_band), (None, None, true));
+        },
+    ));
+    cases.push(loaded(
+        "Path Options: remembered over the tool options' own",
+        json!({"toolOptions": {"path_options": {"color": [1, 2, 3], "thickness": 3.0}}, "viewExtras": {"pathOptions": {"color": [9, 9, 9]}}}),
+        |app| assert_eq!(app.ui.view.path_options, crate::view_cmds::PathOptions { color: Some([9, 9, 9]), thickness: Some(3.0) }),
     ));
     cases.push(loaded("tool options: a good value is left alone", json!({"toolOptions": {"feather": 12.5}}), move |app| {
         assert_eq!(app.ui.tool_options, crate::state::ToolOptions { feather: 12.5, ..d() });

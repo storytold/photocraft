@@ -45,6 +45,8 @@ pub(crate) enum PickTarget {
     NoteColor,
     /// The pasteboard's custom colour.
     Pasteboard,
+    /// The Path Options colour, shared by every path tool (#9713).
+    PathColor,
     /// A colour row `key` of `window`, which the app holds itself; the answer waits in [`answer_for_window`].
     Window { window: PickWindow, key: String },
 }
@@ -81,6 +83,7 @@ impl PickTarget {
             PickTarget::ArtboardBackground => "artboardBackground".into(),
             PickTarget::NoteColor => "noteColor".into(),
             PickTarget::Pasteboard => "pasteboard".into(),
+            PickTarget::PathColor => "pathColor".into(),
         }
     }
 }
@@ -107,6 +110,7 @@ impl PickTarget {
             PickTarget::ArtboardBackground => Identity::Plain("artboardBackground"),
             PickTarget::NoteColor => Identity::Plain("noteColor"),
             PickTarget::Pasteboard => Identity::Plain("pasteboard"),
+            PickTarget::PathColor => Identity::Plain("pathColor"),
             PickTarget::Request { parent, key } => Identity::Request(*parent, key),
             PickTarget::Window { window, key } => Identity::Window(*window, key),
             PickTarget::Command { command, document, .. } => Identity::Command(command, document.map(|d| d.0)),
@@ -223,6 +227,7 @@ pub(crate) fn open_for_target(app: &mut PhotocraftApp, target: &str, label: &str
         "artboardBackground" => PickTarget::ArtboardBackground,
         "noteColor" => PickTarget::NoteColor,
         "pasteboard" => PickTarget::Pasteboard,
+        "pathColor" => PickTarget::PathColor,
         other => return Err(format!("unknown colour target: {other}")),
     };
     Ok(open_for(app, label, Srgba::from_rgb_array(rgb), None, which))
@@ -419,6 +424,11 @@ fn commit(app: &mut PhotocraftApp, _id: DialogId, target: PickTarget, picked: &P
         }
         // The pasteboard menu's Select Custom Color…: the custom colour, and use it.
         PickTarget::Pasteboard => app.run("prefs.set", json!({"values": {"interface.canvasColor": "custom", "interface.canvasCustomColor": color}})),
+        // The Pen gear's Path Options › Color, the colour every path tool draws paths in (#9713).
+        PickTarget::PathColor => {
+            app.ui.view.path_options.color = Some(picked.color.to_rgb_array().map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8));
+            Ok(json!({ "color": color }))
+        }
     }
 }
 

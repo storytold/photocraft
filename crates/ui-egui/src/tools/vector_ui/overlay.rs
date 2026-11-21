@@ -143,8 +143,8 @@ pub(crate) fn show_paths(app: &mut PhotocraftApp, ui: &mut egui::Ui, at: egui::R
     let selection = crate::direct_select::selection(app, tool);
     // Given, not bound: the paths come from the document each pass and only an edit's end (`Commit`, `Set`) changes
     // the document, so a drag's own updates are no outside change that cancels it.
-    let output =
-        BezierOverlay::new("Paths", Bind::given(paths), &selection).tool(tool).anchors(anchors).path_options(&app.ui.tool_options.path_options).show_at(ui, at);
+    let options = super::path_options(app);
+    let output = BezierOverlay::new("Paths", Bind::given(paths), &selection).tool(tool).anchors(anchors).path_options(&options).show_at(ui, at);
     Some(BezierShown { output, refs })
 }
 

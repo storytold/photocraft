@@ -20,6 +20,7 @@ mod freeform;
 pub(crate) mod host;
 mod options;
 pub(crate) mod overlay;
+mod path_look;
 mod path_menus;
 mod path_ops;
 mod paths_panel;
@@ -34,6 +35,7 @@ pub use options::{options_bar, shape_properties};
 #[cfg(test)]
 pub(crate) use overlay::selected_saved_path;
 pub(crate) use overlay::selected_saved_path_index;
+pub(crate) use path_look::{path_options, store_path_options, thickness_in_range};
 pub use path_ops::{
     active_path_name, make_shape, path_selection_finish, path_to_selection, pick_shape_at, selected_document_path, takes_path_mask, with_active_path,
 };
@@ -187,6 +189,9 @@ mod pen_indexed_shape_tests;
 
 #[cfg(test)]
 mod pen_rubber_band_tests;
+
+#[cfg(test)]
+mod path_options_tests;
 
 #[cfg(test)]
 mod paint_tests;
