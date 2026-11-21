@@ -288,7 +288,7 @@ fn holds_image(dir: &Dir, relative: &Path) -> bool {
     let Ok(mut file) = dir.open(relative) else { return false };
     let Ok(n) = file.read(&mut head) else { return false };
     let head = &head[..n];
-    head.starts_with(b"8BPS") || photocraft_codecs::detect(head).is_some_and(|format| format.caps().write)
+    photocraft_io::is_psd(head) || photocraft_codecs::detect(head).is_some_and(|format| format.caps().write)
 }
 
 fn read_to_observed_length(reader: &mut impl Read, observed_length: u64) -> Result<Vec<u8>, AutomationError> {
