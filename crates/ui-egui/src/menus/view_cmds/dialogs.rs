@@ -404,7 +404,7 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
             Param::new("detail", tl!("Detail"), ParamKind::number(None, None, 30.0, 1.0, 0)),
             Param::new("saturation", tl!("Saturation"), ParamKind::number(None, None, 20.0, 1.0, 0)),
         ]),
-        crate::dialogs::lens_batch_ui::COMMAND => plain(crate::dialogs::lens_batch_ui::rows(dir.clone())),
+        crate::dialogs::lens_batch_ui::COMMAND => plain(crate::dialogs::lens_batch_ui::rows(app, dir.clone())),
         "file.scripts.imageProcessor" => plain(vec![
             choice(
                 "source",
