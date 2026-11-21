@@ -352,7 +352,7 @@ fn full_layout() -> Layout<String> {
         .iter()
         .filter_map(|panel| panel.float_size.map(|size| (panel.id, size)))
         .zip(1_u64..)
-        .map(|((id, size), window)| Floating::single(vec![id.to_owned()], 0, float_rect(id, size)).with_id(window))
+        .map(|((id, size), window)| Floating::single(window, vec![id.to_owned()], 0, float_rect(id, size)))
         .collect();
     Layout::new(Some(root), floating)
 }

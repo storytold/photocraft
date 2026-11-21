@@ -7,15 +7,17 @@
 
 use craft::behavior::dock::{Action, DockEdge, DockPlacement, Layout, Node, PanelPlace, PanelState, Permissions, SplitSize, Target};
 use craft::behavior::{DockSide, EditEvent, EditEvents, IconId};
-use craft::ui::contract::{Bind, BodyCx, SizeLimits};
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use craft::ui::contract::{Bind, BodyCx, PlainData, SizeLimits, Tracked};
 use craft::ui::docking::{
-    DockCommands, DockConfig, DockEvent, DockPanels, DockScene, DockSizes, DockTo, DragUnit, FloatSpace, GroupAt, HidePanels, PanelSpec, actions, move_actions,
-    request_actions,
+    DockCommands, DockConfig, DockEvent, DockGrid, DockPanels, DockScene, DockSizes, DockTo, DragUnit, FloatSpace, GroupAt, HidePanels, PanelKey, PanelSpec,
+    PanelSpecs, actions, move_actions, request_actions,
 };
 use craft::ui::menu::PanelRow;
 use craft::ui::patterns::dock::{DockArea, DockAreaOutput};
 use craft::ui::primitives::IconSpec;
-use craft::ui::rails::ToolRail;
 use serde_json::{Map, Value, json};
 
 use super::registry::{self, CANVAS, CANVAS_MIN, LEGACY_GROUPS, TOOLBAR};
@@ -37,21 +39,21 @@ fn permissions(panel: &str) -> Permissions {
 
 /// Whether `panel` is in the workspace, docked or floating.
 pub(crate) fn is_shown(app: &PhotocraftApp, id: &str) -> bool {
-    app.ui.docking.layout.contains(&id.to_owned())
+    app.ui.docking.layout().contains(&id.to_owned())
 }
 
 /// Whether `panel`'s Window menu row is checked: it is in the layout, or, in a column collapsed to icons, its flyout is
 /// open.
 pub(crate) fn is_checked(app: &PhotocraftApp, id: &str) -> bool {
     let panel = id.to_owned();
-    if app.ui.docking.layout.opens_in_flyout(&panel) { app.ui.flyout.as_ref() == Some(&panel) } else { is_shown(app, id) }
+    if app.ui.docking.layout().opens_in_flyout(&panel) { app.ui.flyout.as_ref() == Some(&panel) } else { is_shown(app, id) }
 }
 
 /// Whether `panel` shows: the active tab of its group in an expanded column, neither the group minimized nor its column
 /// collapsed, or the panel open in a collapsed column's flyout.
 pub(crate) fn is_front(app: &PhotocraftApp, id: &str) -> bool {
     let panel = id.to_owned();
-    let layout = &app.ui.docking.layout;
+    let layout = app.ui.docking.layout();
     layout.panel_state(&panel) == PanelState::Front || (layout.opens_in_flyout(&panel) && app.ui.flyout.as_ref() == Some(&panel))
 }
 
@@ -63,7 +65,7 @@ pub(crate) fn show_panel(app: &mut PhotocraftApp, id: &str, show: Option<bool>) 
     let panel = registry::normalize(id).ok_or_else(|| format!("`{id}` is not a registered panel"))?;
     let owned = panel.to_owned();
     let show = show.unwrap_or_else(|| !is_front(app, panel));
-    if app.ui.docking.layout.opens_in_flyout(&owned) {
+    if app.ui.docking.layout().opens_in_flyout(&owned) {
         app.ui.flyout = show.then_some(owned);
         return Ok(show);
     }
@@ -73,7 +75,7 @@ pub(crate) fn show_panel(app: &mut PhotocraftApp, id: &str, show: Option<bool>) 
     let action = if show { Action::open(owned.clone(), None) } else { Action::close(owned.clone()) };
     apply(app, vec![action])?;
     // A panel that opened into a column of icons shows in its flyout.
-    if show && app.ui.docking.layout.opens_in_flyout(&owned) {
+    if show && app.ui.docking.layout().opens_in_flyout(&owned) {
         app.ui.flyout = Some(owned);
     }
     Ok(show)
@@ -96,7 +98,7 @@ fn apply_during(app: &mut PhotocraftApp, actions: Vec<Action<String>>, dragging:
     if request_actions(app.ctx(), actions).is_ok() {
         return Ok(closed);
     }
-    app.ui.docking = next;
+    app.ui.docking = Arc::new(next);
     stop_closed_timeline(app, &closed);
     if !dragging {
         crate::dock::persist(app);
@@ -106,7 +108,7 @@ fn apply_during(app: &mut PhotocraftApp, actions: Vec<Action<String>>, dragging:
 
 /// Whether a workspace gesture of the pass (a divider drag, a window move) is still running after it: its last
 /// event is its begin or a step, not its commit or cancel. The area's own one-step edits belong to no gesture.
-fn dragging(edit: &EditEvents<Workspace>) -> bool {
+fn dragging(edit: &EditEvents<Arc<Workspace>>) -> bool {
     edit.iter().rfind(|event| event.id().is_some()).is_some_and(|event| matches!(event, EditEvent::Begin { .. } | EditEvent::Update { .. }))
 }
 
@@ -117,10 +119,10 @@ pub(crate) fn check(app: &PhotocraftApp, actions: &[Action<String>]) -> Result<(
 
 /// The workspace `actions` make of the live one, and the panels they close; the refusals of [`apply`] and [`check`].
 fn planned(app: &PhotocraftApp, actions: &[Action<String>]) -> Result<(Workspace, Vec<String>), String> {
-    let mut next = app.ui.docking.clone();
+    let mut next = Workspace::clone(&app.ui.docking);
     let closed = next.apply_all(actions.iter().cloned(), app.workspaces.set.locked, |panel: &String| permissions(panel)).map_err(|error| error.to_string())?;
     // The model leaves the panel registry to the application: an action may not bring in an unknown panel.
-    if let Some(unknown) = next.layout.panels().into_iter().find(|panel| !registry::registered(panel)) {
+    if let Some(unknown) = next.layout().panels().into_iter().find(|panel| !registry::registered(panel)) {
         return Err(format!("`{unknown}` is not a registered panel"));
     }
     Ok((next, closed))
@@ -133,16 +135,72 @@ fn stop_closed_timeline(app: &mut PhotocraftApp, closed: &[String]) {
     }
 }
 
+/// What of the panels' specs changes while the app runs: the labels, in the interface language, and the toolbar's cell
+/// count. The rest of a spec comes from the registry. The dock holds it in a `Tracked` and reads specs only when its
+/// revision moves.
+#[derive(Clone, Debug, Default, PartialEq, PlainData)]
+pub(crate) struct DockSpecs {
+    /// The interface language the labels are in.
+    lang: String,
+    /// Each registered panel's label, by panel id.
+    labels: Vec<(String, String)>,
+    /// The canvas group's label.
+    documents: String,
+    /// The toolbar's cells ([`super::toolbar::cells`]).
+    toolbar_cells: usize,
+}
+
+impl DockSpecs {
+    /// The specs' model for the interface language and the toolbar now.
+    fn of(app: &PhotocraftApp) -> Self {
+        let labels = registry::PANELS.iter().map(|entry| (entry.id.to_owned(), (entry.label)())).collect();
+        DockSpecs { lang: crate::i18n::current().code().to_owned(), labels, documents: tl!("Documents").to_string(), toolbar_cells: super::toolbar::cells(app) }
+    }
+}
+
+impl PanelSpecs<String> for DockSpecs {
+    fn spec(&self, panel: &String) -> PanelSpec {
+        spec(self, panel)
+    }
+
+    fn permissions(&self, panel: &String) -> Permissions {
+        permissions(panel)
+    }
+}
+
+/// What the dock keeps of the app's panels: the specs, and the panels that stay while Shift+Tab hides the rest.
+pub(crate) struct DockModel {
+    specs: Arc<Tracked<DockSpecs>>,
+    keeps_toolbar: Arc<Tracked<BTreeSet<PanelKey>>>,
+}
+
+impl Default for DockModel {
+    fn default() -> Self {
+        DockModel { specs: Arc::default(), keeps_toolbar: Arc::new(Tracked::new(BTreeSet::from([PanelKey::of(TOOLBAR)]))) }
+    }
+}
+
+/// The spec model for the interface language and the toolbar now: the held one while both are unchanged.
+fn dock_specs(app: &mut PhotocraftApp) -> Arc<Tracked<DockSpecs>> {
+    let lang = crate::i18n::current().code();
+    let toolbar_cells = super::toolbar::cells(app);
+    let held = &app.dock_model.specs;
+    if held.lang != lang || held.toolbar_cells != toolbar_cells || held.labels.is_empty() {
+        app.dock_model.specs = Arc::new(Tracked::new(DockSpecs::of(app)));
+    }
+    Arc::clone(&app.dock_model.specs)
+}
+
 /// What the dock reads of `panel`: its name, icon, least size, group heights, float size and, for the toolbar, the grid
 /// its column is whole steps of and its float in the main window.
-fn spec(app: &PhotocraftApp, panel: &str) -> PanelSpec {
+fn spec(specs: &DockSpecs, panel: &str) -> PanelSpec {
     if panel == CANVAS {
         let least = SizeLimits::at_least(egui::vec2(CANVAS_MIN[0], CANVAS_MIN[1]));
-        return PanelSpec::new(tl!("Documents").to_string()).canvas().limits(least).allow_native(false);
+        return PanelSpec::new(specs.documents.clone()).canvas().limits(least).allow_native(false);
     }
     let Some(entry) = registry::entry(panel) else { return PanelSpec::new(panel.to_owned()) };
-    let mut spec =
-        PanelSpec::new((entry.label)()).icon(IconSpec::svg(IconId::new(entry.icon))).limits(SizeLimits::at_least(egui::vec2(entry.min[0], entry.min[1])));
+    let label = specs.labels.iter().find(|(id, _)| id == panel).map_or_else(|| (entry.label)(), |(_, label)| label.clone());
+    let mut spec = PanelSpec::new(label).icon(IconSpec::svg(IconId::new(entry.icon))).limits(SizeLimits::at_least(egui::vec2(entry.min[0], entry.min[1])));
     if let Some(heights) = entry.heights {
         spec = spec.heights(heights);
     }
@@ -152,7 +210,7 @@ fn spec(app: &PhotocraftApp, panel: &str) -> PanelSpec {
     if panel == TOOLBAR {
         // The toolbar floats in the main window, as production's: its tooltips, tool flyouts and Edit Toolbar drawer
         // open beside the one-button-wide rail, which its own OS window would clip.
-        spec = spec.grid(ToolRail::<crate::state::Tool>::dock_grid(app.ctx(), super::toolbar::cells(app))).allow_native(false);
+        spec = spec.grid(DockGrid::rail(specs.toolbar_cells)).allow_native(false);
     }
     spec
 }
@@ -163,14 +221,6 @@ struct Panels<'a> {
 }
 
 impl DockPanels<String> for Panels<'_> {
-    fn spec(&self, panel: &String) -> PanelSpec {
-        spec(self.app, panel)
-    }
-
-    fn permissions(&self, panel: &String) -> Permissions {
-        permissions(panel)
-    }
-
     fn body(&mut self, panel: &String, ui: &mut egui::Ui, _: &mut BodyCx<'_>) {
         body(self.app, ui, panel);
     }
@@ -227,15 +277,16 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, panels_hidden: bo
     let locked = app.workspaces.set.locked;
     let auto_collapse = app.session.prefs().workspace.auto_collapse_icon_panels;
     // A flyout stays open only while its panel is in a column collapsed to icons.
-    if app.ui.flyout.as_ref().is_some_and(|panel| !app.ui.docking.layout.opens_in_flyout(panel)) {
+    if app.ui.flyout.as_ref().is_some_and(|panel| !app.ui.docking.layout().opens_in_flyout(panel)) {
         app.ui.flyout = None;
     }
     let flyout = app.ui.flyout.clone();
-    let keeps_toolbar = |panel: &String| panel == TOOLBAR;
+    let specs = dock_specs(app);
+    let keeps_toolbar = Arc::clone(&app.dock_model.keeps_toolbar);
     let config = DockConfig::default().group_order_items(true).native_windows(cfg!(not(target_arch = "wasm32")));
     let output: DockAreaOutput<String> = {
         let mut panels = Panels { app: &mut *app };
-        let mut area = DockArea::new(tl!("Panels").to_string(), Bind::given(workspace), &mut panels, config);
+        let mut area = DockArea::new(tl!("Panels").to_string(), Bind::given(workspace), &*specs, &mut panels, config);
         if locked {
             area = area.locked();
         }
@@ -248,7 +299,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, panels_hidden: bo
         area.flyout(Bind::given(flyout)).show(ui)
     };
     #[cfg(test)]
-    probe::record_windows(&ctx, &app.ui.docking.layout, &output.windows);
+    probe::record_windows(&ctx, app.ui.docking.layout(), &output.windows);
     let DockAreaOutput { actions, requested, events, error, edit, window_files, .. } = output;
     if let Some(error) = error {
         app.ui.status = format!("{}: {}", tl!("Invalid panel layout"), error.error);
@@ -288,7 +339,8 @@ pub(crate) fn width_actions(app: &PhotocraftApp, ctx: &egui::Context, total: f32
     if !total.is_finite() || total <= 0.0 {
         return Vec::new();
     }
-    DockSizes::of(ctx).resize_side(&app.ui.docking.layout, DockEdge::End, &|panel: &String| spec(app, panel), total)
+    let specs = DockSpecs::of(app);
+    DockSizes::of(ctx).resize_side(app.ui.docking.layout(), DockEdge::End, &|panel: &String| spec(&specs, panel), total)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -354,13 +406,13 @@ fn show_param(params: &Value) -> Result<Option<bool>, String> {
 /// [`show_panel`] with the protocol's answer.
 fn toggled(app: &mut PhotocraftApp, panel: &str, show: Option<bool>) -> Result<Value, String> {
     let shown = show_panel(app, panel, show)?;
-    Ok(json!({"panel": panel, "shown": shown, "layout": app.ui.docking.layout}))
+    Ok(json!({"panel": panel, "shown": shown, "layout": app.ui.docking.layout()}))
 }
 
 /// Runs `actions` through [`apply`] with the protocol's answer.
 fn run(app: &mut PhotocraftApp, actions: Vec<Action<String>>) -> Result<Value, String> {
     let closed = apply(app, actions)?;
-    Ok(json!({"layout": app.ui.docking.layout, "closed": closed}))
+    Ok(json!({"layout": app.ui.docking.layout(), "closed": closed}))
 }
 
 /// The params as an object, panels named by id or label and `onto` standing for `anchor`. The canvas may be an
@@ -442,7 +494,7 @@ fn with_scene<R>(app: &PhotocraftApp, f: impl FnOnce(&DockScene<'_, String>) -> 
     let space = FloatSpace::new(egui::Rect::NOTHING, &sizes);
     let policy = |panel: &String| permissions(panel);
     let workspace = &app.ui.docking;
-    let scene = DockScene::new(&workspace.layout, &space, app.workspaces.set.locked, &policy).floated(&workspace.floated);
+    let scene = DockScene::new(workspace.layout(), &space, app.workspaces.set.locked, &policy).floated(workspace.floated());
     f(&scene)
 }
 
@@ -546,7 +598,7 @@ fn minimize_command(app: &mut PhotocraftApp, params: &Value) -> Result<Value, St
     let fields = fields(params)?;
     let panel = required_panel(&fields)?;
     let on = match fields.get("minimized") {
-        None | Some(Value::Null) => !minimized(&app.ui.docking.layout, &panel),
+        None | Some(Value::Null) => !minimized(app.ui.docking.layout(), &panel),
         Some(value) => value.as_bool().ok_or("minimized must be a boolean")?,
     };
     run(app, vec![Action::set_minimized(panel, on)])
@@ -557,7 +609,7 @@ fn minimize_command(app: &mut PhotocraftApp, params: &Value) -> Result<Value, St
 fn iconic_command(app: &mut PhotocraftApp, params: &Value) -> Result<Value, String> {
     let fields = fields(params)?;
     let panel = required_panel(&fields)?;
-    let layout = &app.ui.docking.layout;
+    let layout = app.ui.docking.layout();
     let current = layout.place(&panel).and_then(|place| layout.column(&place)).map(|column| column.iconic).ok_or("panel is hidden")?;
     let on = match fields.get("iconic") {
         None | Some(Value::Null) => !current,
@@ -575,7 +627,7 @@ fn window_command(app: &mut PhotocraftApp, params: &Value) -> Result<Value, Stri
     let fields = fields(params)?;
     let panel = required_panel(&fields)?;
     let native = fields.get("native").and_then(Value::as_bool).unwrap_or(true);
-    let floating = matches!(app.ui.docking.layout.place(&panel), Some(PanelPlace::Floating { .. }));
+    let floating = matches!(app.ui.docking.layout().place(&panel), Some(PanelPlace::Floating { .. }));
     let actions = match (native, floating) {
         (true, true) => Vec::new(),
         (true, false) => vec![Action::move_group(panel.clone(), Target::float(float_rect(&fields, &panel)?))],
@@ -650,7 +702,7 @@ fn group_command(app: &mut PhotocraftApp, params: &Value) -> Result<Value, Strin
     if app.workspaces.set.locked {
         return Err("workspace is locked".into());
     }
-    let layout = &app.ui.docking.layout;
+    let layout = app.ui.docking.layout();
     let members = group_members(layout, &panel);
     if members.is_empty() {
         return Err("panel is hidden".into());
@@ -681,7 +733,7 @@ fn group_command(app: &mut PhotocraftApp, params: &Value) -> Result<Value, Strin
         _ => return Err("operation must be close, collapse, expand, move, up or down".into()),
     };
     apply(app, actions)?;
-    Ok(json!({"layout": app.ui.docking.layout}))
+    Ok(json!({"layout": app.ui.docking.layout()}))
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -699,7 +751,7 @@ fn newer(docking: &Value) -> bool {
 /// shows the default; [`snapshot`] writes a newer one back unchanged until the arrangement changes. A save from
 /// before the workspace (`panels`, `dockTabs`, `dock`, `timelineOpen`) migrates once onto the default.
 pub(crate) fn load(app: &mut PhotocraftApp, saved: &Value) {
-    app.ui.docking.replace(loaded(saved));
+    Arc::make_mut(&mut app.ui.docking).replace(loaded(saved));
 }
 
 /// [`load`] at launch: Brush Settings is a transient window, so a remembered workspace that holds it loads with it
@@ -707,12 +759,12 @@ pub(crate) fn load(app: &mut PhotocraftApp, saved: &Value) {
 pub(crate) fn load_at_launch(app: &mut PhotocraftApp, saved: &Value) {
     let mut workspace = loaded(saved);
     let transient = "brushSettings".to_owned();
-    if workspace.layout.contains(&transient)
+    if workspace.layout().contains(&transient)
         && let Err(error) = workspace.apply(Action::close(transient), false, |panel: &String| permissions(panel))
     {
         app.ui.status = error.to_string();
     }
-    app.ui.docking.replace(workspace);
+    Arc::make_mut(&mut app.ui.docking).replace(workspace);
 }
 
 /// The workspace of a saved layout, fitted to the registry. A save that predates the toolbar panel brings the toolbar's
@@ -724,7 +776,7 @@ fn loaded(saved: &Value) -> Workspace {
     let mut workspace = match saved.get("docking") {
         Some(docking) if docking.is_object() => match serde_json::from_value::<Workspace>(docking.clone()) {
             Ok(workspace) if workspace.validate().is_ok() => {
-                predates_toolbar = !workspace.layout.contains(&toolbar) && !workspace.hidden.iter().any(|(panel, _)| *panel == toolbar);
+                predates_toolbar = !workspace.layout().contains(&toolbar) && !workspace.hidden().iter().any(|(panel, _)| *panel == toolbar);
                 workspace
             }
             _ => default.clone(),
@@ -764,7 +816,7 @@ fn migrate_toolbar(workspace: &mut Workspace, panels: Option<&Value>) {
     if panels.get("toolbar").and_then(Value::as_bool) == Some(false) {
         actions.push(Action::close(toolbar.clone()));
     } else {
-        if !workspace.layout.contains(&toolbar) {
+        if !workspace.layout().contains(&toolbar) {
             actions.push(Action::open(toolbar.clone(), None));
         }
         if panels.get("toolbar_double").and_then(Value::as_bool) == Some(true) {
@@ -778,7 +830,7 @@ fn migrate_toolbar(workspace: &mut Workspace, panels: Option<&Value>) {
             _ => false,
         };
         if right {
-            let to = match end_edge_anchor(&workspace.layout, &toolbar) {
+            let to = match end_edge_anchor(workspace.layout(), &toolbar) {
                 Some(anchor) => Target::at(anchor, DockPlacement::column(false)),
                 None => Target::new_dock(DockEdge::End),
             };
@@ -807,7 +859,7 @@ fn migrated(saved: &Value, default: &Workspace) -> Workspace {
     if let Some(picks) = tabs.as_mut().and_then(Value::as_object_mut) {
         picks.retain(|key, _| panels.and_then(|panels| panels.get(key)).and_then(Value::as_bool) != Some(false));
     }
-    let Ok(mut actions) = legacy_on(&default.layout, panels, tabs.as_ref(), dock.as_ref()) else { return default.clone() };
+    let Ok(mut actions) = legacy_on(default.layout(), panels, tabs.as_ref(), dock.as_ref()) else { return default.clone() };
     if saved.get("timelineOpen").and_then(Value::as_bool) == Some(true) {
         actions.push(Action::open("timeline".to_owned(), None));
     }
@@ -823,7 +875,7 @@ fn migrated(saved: &Value, default: &Workspace) -> Workspace {
 pub(crate) fn snapshot(app: &PhotocraftApp) -> Value {
     let kept = app.session.prefs().panel_layout.get("docking").filter(|docking| newer(docking)).cloned();
     let docking = match kept {
-        Some(kept) if app.ui.docking == registry::default_workspace() => kept,
+        Some(kept) if *app.ui.docking == registry::default_workspace() => kept,
         _ => json!(app.ui.docking),
     };
     json!({"panels": app.ui.panels, "docking": docking})
@@ -872,7 +924,7 @@ pub(crate) fn legacy_actions(
     if dock.is_some_and(|dock| dock.get("order").is_some() || dock.get("heights").is_some()) {
         return Err("dock order/heights cannot replace a customized layout; use window.panel.layout".into());
     }
-    legacy_on(&app.ui.docking.layout, panels, dock_tabs, dock)
+    legacy_on(app.ui.docking.layout(), panels, dock_tabs, dock)
 }
 
 /// [`legacy_actions`] on `layout`, without the order and heights refusal.
@@ -942,7 +994,7 @@ fn legacy_on(layout: &Layout<String>, panels: Option<&Value>, dock_tabs: Option<
 /// of the group's panels shows, `dockTabs.<group>` the index of its selected panel in the group's tab order, for the
 /// groups that show.
 pub(crate) fn legacy_view(app: &PhotocraftApp) -> Value {
-    let layout = &app.ui.docking.layout;
+    let layout = app.ui.docking.layout();
     let mut panels = Map::new();
     let mut tabs = Map::new();
     for (key, members) in LEGACY_GROUPS {
@@ -968,7 +1020,7 @@ pub(crate) mod probe {
 
     /// The panels of the tab group holding `panel`, in tab order.
     pub(crate) fn group_of(app: &PhotocraftApp, panel: &str) -> Vec<String> {
-        group_members(&app.ui.docking.layout, &panel.to_owned())
+        group_members(app.ui.docking.layout(), &panel.to_owned())
     }
 
     /// The tab group holding `panel` as the last pass drew it, header and body: the group's node, a tab panel named
