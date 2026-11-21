@@ -1578,7 +1578,7 @@ fn a_picked_path_that_is_not_valid_unicode_is_an_error() {
 #[test]
 fn every_open_format_has_its_own_filter() {
     let types = open_filters(PickRequest::open("document"), &[]).filters;
-    assert_eq!(types[0], FileFilter::new("All Formats", filters::OPEN_EXTS), "All Formats comes first");
+    assert_eq!(types[0], FileFilter::new("All Formats", &["*"]), "All Formats is a short wildcard (#5126)");
     let mut named: Vec<&str> = filters::OPEN_FILTERS.iter().flat_map(|(_, exts)| exts.iter().copied()).collect();
     let total = named.len();
     named.sort_unstable();
@@ -1586,7 +1586,7 @@ fn every_open_format_has_its_own_filter() {
     assert_eq!(named.len(), total, "an extension is listed under two filters");
     let mut all = filters::OPEN_EXTS.to_vec();
     all.sort_unstable();
-    assert_eq!(named, all, "the named filters cover All Formats exactly");
+    assert_eq!(named, all, "the named filters cover every openable extension exactly");
     let names: Vec<&str> = types.iter().map(|t| t.name.as_str()).collect();
     for name in ["Photoshop", "Affinity", "HEIF", "PNG", "JPEG", "TIFF", "Portable Bitmap", "OpenEXR", "Radiance HDR", "Paint.NET"] {
         assert!(names.contains(&name), "{name}");
@@ -1637,11 +1637,11 @@ fn save_as_offers_only_writable_formats_including_ico() {
     for (name, exts) in filters::SAVE_FILTERS {
         for ext in exts.iter().filter(|e| **e != "pdf") {
             if photocraft_codecs::from_extension(ext).is_some_and(|format| !format.caps().read) {
-                assert!(!filters::OPEN_EXTS.contains(ext), "{name}: export-only .{ext} must not appear in All Formats");
+                assert!(!filters::OPEN_EXTS.contains(ext), "{name}: export-only .{ext} must not be an openable extension");
                 assert!(!filters::OPEN_FILTERS.iter().any(|(_, open)| open.contains(ext)), "{name}: export-only .{ext} must not appear in an Open type");
                 continue;
             }
-            assert!(filters::OPEN_EXTS.contains(ext), "{name}: Open's All Formats lacks .{ext}");
+            assert!(filters::OPEN_EXTS.contains(ext), "{name}: the openable extensions lack .{ext}");
             assert!(filters::OPEN_FILTERS.iter().any(|(_, open)| open.contains(ext)), "{name}: no Open type lists .{ext}");
         }
     }
