@@ -217,8 +217,15 @@ fn assert_recovery_after_invalid_encoder(encode_only: bool) {
     let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some((adapter, device, queue)) = device() else { return };
     let mut comp = Compositor::try_new_with_format(&device, Compositor::preferred_acc_format(&adapter)).unwrap();
-    let mut d = doc();
-    d.layers[1].effects.items = vec![photocraft_doc::Effect::default_drop_shadow()];
+    // A single tile is enough to record an effect map and make the shadow visible around the paint.
+    let side = 64;
+    let paint = Rect::new(16, 16, 48, 48);
+    let mut d = Document::with_background("recovery", Size::new(side, side), ColorMode::Rgb, SampleType::U8, Color::rgba(0.9, 0.9, 0.9, 1.0));
+    let mut surface = Surface::new(d.pixel_format());
+    surface.fill_rect(paint, &[0.8, 0.1, 0.1, 0.7]);
+    let mut layer = Layer::new("red", LayerContent::Raster(surface));
+    layer.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+    d.layers.push(layer);
     // Pipeline creation errors are not proof of missing hardware capabilities: check the
     // adapter and the features actually enabled on this device before allowing a skip.
     let required = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
@@ -266,6 +273,17 @@ fn assert_recovery_after_invalid_encoder(encode_only: bool) {
     let recovered = render_to_vec(&mut comp, &device, &queue, &d, d.bounds()).unwrap();
     let mut fresh = Compositor::try_new_with_format(&device, Compositor::preferred_acc_format(&adapter)).unwrap();
     let expected = render_to_vec(&mut fresh, &device, &queue, &d, d.bounds()).unwrap();
+    assert_eq!(expected.len(), (side * side) as usize);
+    assert_eq!(recovered.len(), expected.len());
+    let background_red = expected[0][0];
+    let stride = side as usize;
+    assert!(
+        expected.iter().enumerate().any(|(i, pixel)| {
+            let (x, y) = ((i % stride) as i32, (i / stride) as i32);
+            !paint.contains(x, y) && pixel[0] < background_red - 1.0 / 255.0
+        }),
+        "the fresh render contains a visible shadow outside the painted rectangle"
+    );
     for (a, b) in recovered.iter().zip(expected.iter()) {
         for (a, b) in a.iter().zip(b.iter()) {
             assert!((a - b).abs() <= 1.0 / 255.0, "recovered cached pixels differ: {a} vs {b}");
