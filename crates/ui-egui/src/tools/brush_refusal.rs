@@ -83,7 +83,10 @@ pub fn alert(app: &PhotocraftApp, tool: Tool, hidden: bool) -> Option<String> {
         return (!hidden && pixel_layer && layer_refusal(app, tool) == Some(LOCKED)).then(|| tl!(REMOVE_LOCKED).to_string());
     }
     let name = tool_name(app, tool)?;
-    let template = if hidden { HIDDEN } else { layer_refusal(app, tool)? };
+    // The Dodge tool's hidden-layer alert is for a pixel target only: a targeted mask keeps the status-bar message it had
+    // (CodeRabbit on #16284).
+    let hidden_alert = hidden && (tool != Tool::Dodge || crate::canvas::paint_target(app) == json!("pixels"));
+    let template = if hidden_alert { HIDDEN } else { layer_refusal(app, tool)? };
     Some(crate::i18n::fmt(tl!(template), &[("tool", name)]))
 }
 

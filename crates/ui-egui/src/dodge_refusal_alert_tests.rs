@@ -17,6 +17,20 @@ fn a_hidden_target_layer() {
     assert!(app.ui.status.is_empty() || !app.ui.status_error, "no status-bar error as well: {:?}", app.ui.status);
 }
 
+/// A targeted layer mask on a hidden layer keeps the status-bar refusal: only a pixel target gets the alert (CodeRabbit
+/// on #16284).
+#[test]
+fn a_hidden_layer_with_a_mask_target_keeps_the_status_bar_message() {
+    let mut app = app(Tool::Dodge);
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    let id = active(&app);
+    app.run("layer.setProps", json!({"layer": id, "visible": false})).unwrap();
+    app.ui.mask_target = true;
+    stroke(&mut app);
+    assert!(alerts(&app).is_empty(), "no alert: {:?}", alerts(&app));
+    assert!(app.ui.status_error, "the status bar says it: {:?}", app.ui.status);
+}
+
 #[test]
 fn lock_all_and_lock_image_pixels() {
     for lock in ["all", "pixels"] {
