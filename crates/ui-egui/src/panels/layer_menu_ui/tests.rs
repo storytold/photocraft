@@ -160,7 +160,7 @@ fn row_menu_entries_follow_the_target() {
     let st = app.session.active().unwrap();
     let tree = crate::panels::layers_tree::PhotoLayers::new(&app, st, &Default::default(), false, None);
     let target = MenuTarget::<LayerId>::new(None);
-    let menu = crate::panels::layers_tree::row_menu(&tree, &target);
+    let menu = crate::panels::layers_tree::row_menu(&app, &tree, &target);
     let size = |size: ThumbSize, label: &str| {
         let value = format!("{}{}", crate::panels::layers_tree::THUMB_SIZE, crate::layers_panel_ui::size_key(size));
         Entry::new(value, label.to_string()).checked(size == ThumbSize::Medium)

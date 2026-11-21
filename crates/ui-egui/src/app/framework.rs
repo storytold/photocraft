@@ -17,11 +17,12 @@ use craft::host::target::{Backend, ShellInfo};
 use craft::host::{AppInfo, Files, Host, SectionStore};
 use craft::i18n::Direction;
 use craft::keymap::Overrides;
-use craft::theme::{AppDefaults, AppSizes, ModeChoice, Size, SuiteChoice, ThemeId, ThemePair, resolve_sized};
+use craft::theme::{AppDefaults, AppSizes, ComponentSet, ModeChoice, Size, SuiteChoice, ThemeId, ThemePair, resolve_sized};
 use craft::theme_store::{SelectionChange, SuiteClient};
+use craft::ui::contract::Tracked;
 use craft::ui::dialog::DialogHost;
 use craft::ui::fonts::UiFonts;
-use craft::ui::runtime::commands::{AppCatalog, CommandInput, CommandRef, CommandSet as _, CommandState, Fired, NavCommand};
+use craft::ui::runtime::commands::{AppCatalog, CommandInput, CommandRef, CommandSet as _, CommandState, CommandStates, Fired, NavCommand};
 use craft::ui::runtime::env::{PointSize, RootEnv, Scale, SystemReader};
 use craft::ui::runtime::focus::TabReach;
 use craft::ui::runtime::frame::{FrameInput, FrameOutput};
@@ -109,7 +110,7 @@ pub struct Framework {
     pub(crate) catalog_builds: usize,
     #[cfg(test)]
     pub(crate) overrides_builds: usize,
-    /// The states the keyed command sources last computed ([`command_states`]).
+    /// The command sources' states the runtime reads ([`command_states`]).
     pub(crate) held_states: HeldStates,
     /// The file services the host gives components (pickers, reads and writes); `None` keeps the
     /// host's own default.
@@ -211,13 +212,14 @@ const DEFAULT_DARK: &str = "craft.artcraft";
 const DEFAULT_LIGHT: &str = "craft.pro";
 
 /// What PhotoCraft shows for each suite field nobody has chosen: Pro (Medium Gray) in the dark
-/// mode, Pro in the light, and the dark mode.
+/// mode, Pro in the light, and the dark mode, with the Creative component set.
 fn defaults() -> AppDefaults {
     let theme = |id: &str| ThemeId::parse(id).unwrap_or_else(|_| ThemeId::suite_default());
     AppDefaults {
         theme: ThemePair { light: theme(DEFAULT_LIGHT), dark: theme(DEFAULT_DARK) },
         mode: ModeChoice::Dark,
         size: Size::default(),
+        set: ComponentSet::Creative,
         sizes: (**app_sizes()).clone(),
     }
 }
@@ -324,14 +326,13 @@ impl Framework {
         self.sections.sync(session);
     }
 
-    /// The input for the coming frame, from PhotoCraft's preferences: `states` of every command
+    /// The input for the coming frame, from PhotoCraft's preferences: the held states of every command
     /// source, the held catalog and overrides, and `gate` over the commands.
     fn frame_input(
         &mut self,
         session: &mut Session,
         ctx: &egui::Context,
         theme: &AppTheme,
-        states: Vec<(CommandRef, CommandState)>,
         gate: craft::ui::runtime::commands::CommandGate,
         latched: craft::keymap::Mods,
     ) -> FrameInput {
@@ -359,7 +360,7 @@ impl Framework {
             photocraft_engine::prefs::PointSize::PostScript => PointSize::PostScript,
             photocraft_engine::prefs::PointSize::Traditional => PointSize::Traditional,
         });
-        let mut commands = states.into_iter().fold(CommandInput::new(), |input, (command, state)| input.state(command, state));
+        let mut commands = CommandInput::new().states(&self.held_states.states);
         if let Some(catalog) = &self.catalog {
             commands = commands.catalog(catalog.clone());
         }
@@ -577,19 +578,23 @@ pub(crate) const COMMAND_SOURCES: &[CommandSource] = &[
 /// keys mean equal states.
 pub(crate) type StatesKey = [u64; 4];
 
-/// The states each keyed [`CommandSource`] last computed, by its place in [`COMMAND_SOURCES`], with their key.
+/// The states each [`CommandSource`] last computed, by its place in [`COMMAND_SOURCES`], with their key, and the one
+/// list of all of them the runtime reads.
 #[derive(Default)]
 pub(crate) struct HeldStates {
     kept: Vec<Option<KeptStates>>,
+    /// Every source's states, written only when one source's list changes: the runtime reads them again only when
+    /// the revision moves.
+    pub(crate) states: Tracked<CommandStates>,
     /// How many times each source computed its states, for the count trials.
     #[cfg(test)]
     pub(crate) runs: Vec<usize>,
 }
 
-/// One keyed source's states and the key they were computed at.
+/// One source's states and the key they were computed at (`None` for a source without a key).
 #[derive(Clone)]
 struct KeptStates {
-    key: StatesKey,
+    key: Option<StatesKey>,
     states: Vec<(CommandRef, CommandState)>,
 }
 
@@ -603,29 +608,39 @@ fn tool_states_key(app: &PhotocraftApp) -> StatesKey {
     [app.ui.tool as u64, 0, 0, 0]
 }
 
-/// The states of every command source for the coming frame. A keyed source runs only when its key changed since it
-/// last ran.
-fn command_states(app: &PhotocraftApp, held: &mut HeldStates) -> Vec<(CommandRef, CommandState)> {
+/// Brings the held states up to date for the coming frame. A keyed source runs only when its key changed since it last
+/// ran; a source without a key runs every frame. The held list is written only when a source's states differ from the
+/// ones it last gave.
+fn command_states(app: &PhotocraftApp, held: &mut HeldStates) {
     held.kept.resize(COMMAND_SOURCES.len(), None);
     #[cfg(test)]
     held.runs.resize(COMMAND_SOURCES.len(), 0);
-    let mut states = Vec::new();
+    let mut changed = false;
     for (at, source) in COMMAND_SOURCES.iter().enumerate() {
         let key = source.key.map(|key| key(app));
-        match (&held.kept[at], key) {
-            (Some(kept), Some(key)) if kept.key == key => states.extend_from_slice(&kept.states),
-            _ => {
-                #[cfg(test)]
-                {
-                    held.runs[at] += 1;
-                }
-                let computed = (source.states)(app);
-                states.extend_from_slice(&computed);
-                held.kept[at] = key.map(|key| KeptStates { key, states: computed });
+        if key.is_some() && held.kept[at].as_ref().is_some_and(|kept| kept.key == key) {
+            continue;
+        }
+        #[cfg(test)]
+        {
+            held.runs[at] += 1;
+        }
+        let states = (source.states)(app);
+        match &mut held.kept[at] {
+            Some(kept) if kept.states == states => kept.key = key,
+            slot => {
+                *slot = Some(KeptStates { key, states });
+                changed = true;
             }
         }
     }
-    states
+    if changed {
+        let mut states = CommandStates::new();
+        for (command, state) in held.kept.iter().flatten().flat_map(|kept| &kept.states) {
+            states.set(command.clone(), state.clone());
+        }
+        *held.states = states;
+    }
 }
 
 #[cfg(test)]
@@ -675,7 +690,7 @@ impl PhotocraftApp {
             crate::prefs_ui::show_selected_theme(self, ctx);
         }
         let mut held = std::mem::take(&mut self.framework.held_states);
-        let states = command_states(self, &mut held);
+        command_states(self, &mut held);
         self.framework.held_states = held;
         let gate = crate::menus::command_gate(self);
         let latched = self.ui.shell.latched;
@@ -684,7 +699,7 @@ impl PhotocraftApp {
             self.framework.fired.extend(output.fired);
             self.framework.delivered.extend(output.delivered);
             self.framework.refused |= output.refused;
-            self.framework.frame_input(&mut self.session, ctx, &self.ui.theme, states, gate, latched)
+            self.framework.frame_input(&mut self.session, ctx, &self.ui.theme, gate, latched)
         });
     }
 

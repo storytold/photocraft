@@ -64,7 +64,7 @@ pub fn navigator_waits_for_gpu(app: &PhotocraftApp, idx: usize, ctx: &egui::Cont
         return false;
     }
     ctx.data_mut(|d| d.insert_temp(key, waited + 1));
-    craft::ui::runtime::frame::request_own_repaint(ctx);
+    craft::ui::runtime::frame::request_repaint(ctx);
     true
 }
 

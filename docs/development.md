@@ -346,6 +346,7 @@ desktop directory `.pcraft` reads use only the granted read capabilities.
 
 Tools:
 
+- `agent_folders` (where the app opens and saves files for agents: `read_folder`, `write_folder`; a headless session with several read roots adds `read_folders`. With the preferences' folders empty this is the default agent folder, `Documents/ArtCraft/Agents/PhotoCraft`. In `--bridge` mode both are `null`, with a note: the app's own launch decides)
 - `session_list`
 - `doc_open`, `doc_new`, `doc_place`, `doc_replace_smart_object`, `doc_export_layers`, `doc_export_data_sets`, `doc_import_data_sets`, `doc_save`, `doc_export`, `doc_inspect`, `doc_render_preview` (returns a PNG image), `doc_select`, `doc_close`
 - `command_list`, `command_run`, `command_batch` (several commands per call)
