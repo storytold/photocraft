@@ -387,17 +387,17 @@ fn shapeless_stroke_tile_skips_match_full_region_across_blending_settings() {
                         let tiled = render_tiled(&d, rect, 64);
                         assert_eq!(whole.px, tiled.px, "{depth:?}, {position:?}, {blend:?}, fill={fill}, blend_if={blend_if}");
 
-                        let mut bands = Vec::new();
+                        let mut remaining = whole.px.as_slice();
                         render_bands(&d, rect, 256, |band| -> Result<(), ()> {
-                            bands.push(band);
+                            let Some((expected, rest)) = remaining.split_at_checked(band.px.len()) else {
+                                panic!("banded extra pixels: {depth:?}, {position:?}, {blend:?}, fill={fill}, blend_if={blend_if}");
+                            };
+                            assert_eq!(expected, band.px.as_slice(), "banded: {depth:?}, {position:?}, {blend:?}, fill={fill}, blend_if={blend_if}");
+                            remaining = rest;
                             Ok(())
                         })
                         .unwrap();
-                        let mut band_pixels = Vec::with_capacity(whole.px.len());
-                        for band in bands {
-                            band_pixels.extend(band.into_px());
-                        }
-                        assert_eq!(whole.px, band_pixels, "banded: {depth:?}, {position:?}, {blend:?}, fill={fill}, blend_if={blend_if}");
+                        assert!(remaining.is_empty(), "banded missing pixels: {depth:?}, {position:?}, {blend:?}, fill={fill}, blend_if={blend_if}");
                     }
                 }
             }
