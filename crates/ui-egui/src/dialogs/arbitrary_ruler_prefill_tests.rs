@@ -22,6 +22,16 @@ fn open_ruler(end: [i32; 2]) -> (Box<PhotocraftApp>, DialogId) {
     (app, id)
 }
 
+fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
+    let mut h = Harness::builder()
+        .with_context(app.ctx().clone())
+        .with_size(egui::vec2(900.0, 700.0))
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    h.run_steps(3);
+    h
+}
+
 /// The values the host holds for the dialog: angle and direction.
 fn shown(app: &PhotocraftApp, id: DialogId) -> (f64, String) {
     let dialog = app.framework.dialogs.get_by_id::<HostedParamDialog>(id).expect("open dialog");
@@ -53,6 +63,21 @@ fn ruler_prefill_keeps_the_measured_two_decimal_angle() {
     assert!((angle - 9.46).abs() < 1e-3, "the clockwise pre-fill is {angle}, want 9.46");
 }
 
+#[test]
+fn confirming_the_drawn_ruler_prefill_rotates_at_full_precision() {
+    let (mut app, id) = open_ruler([400, 300]);
+    app.background_jobs = false;
+    let mut h = harness(app);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+
+    let app = h.state();
+    assert!(app.framework.dialogs.get_by_id::<HostedParamDialog>(id).is_none(), "OK closed the Rotate Canvas dialog");
+    let size = app.session.active().unwrap().doc.size;
+    // At 33.69° this document is 441 px across. Rounding the field to 33.7° would make it 442 px.
+    assert_eq!((size.width, size.height), (441, 441));
+}
+
 /// #13067 (f32 double rounding): the 43x27 ruler is 32.1249984 degrees. OK with no shown pass
 /// between open and OK, and again after Alt+Reset, sends 32.12 exactly.
 #[test]
@@ -61,12 +86,7 @@ fn the_ruler_angle_is_rounded_before_the_first_frame() {
     assert_eq!(confirmed_angle(&mut app, id), Some(32.12), "undrawn, OK sends the rounded angle");
 
     let (app, id) = open_ruler([143, 127]);
-    let mut h = Harness::builder()
-        .with_context(app.ctx().clone())
-        .with_size(egui::vec2(900.0, 700.0))
-        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
-    PhotocraftApp::setup_context(&h.ctx, Default::default());
-    h.run_steps(3);
+    let mut h = harness(app);
     // Move off the pre-fill first, so only the reset can bring 32.12 back.
     let set_ctx = h.ctx.clone();
     h.state_mut().framework.dialogs.set_json_field(&set_ctx, id, "angle", json!(5.0)).unwrap();
