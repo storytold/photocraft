@@ -12,7 +12,7 @@ pub mod warp;
 /// Edge length of a raster tile in pixels.
 pub const TILE_SIZE: i32 = 256;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Size {
     pub width: u32,
     pub height: u32,
@@ -31,7 +31,7 @@ impl Size {
 }
 
 /// Integer rectangle, half-open: `[x0, x1) × [y0, y1)`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Rect {
     pub x0: i32,
     pub y0: i32,
@@ -116,7 +116,7 @@ impl Rect {
 }
 
 /// Index of a tile in the infinite tile grid.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct TileCoord {
     pub tx: i32,
     pub ty: i32,
@@ -136,7 +136,7 @@ impl TileCoord {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Point {
     pub x: f64,
     pub y: f64,
@@ -149,7 +149,7 @@ impl Point {
 }
 
 /// 2D affine transform `[a c e; b d f; 0 0 1]` (column vectors).
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Affine {
     pub m: [f64; 6],
 }

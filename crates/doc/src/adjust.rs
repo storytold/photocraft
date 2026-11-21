@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct CurvePoint {
     pub input: f32,
     pub output: f32,
@@ -18,7 +18,7 @@ pub fn is_identity_curve(points: &[CurvePoint]) -> bool {
 }
 
 /// A 3D LUT file format (Photoshop's `LUTFormat`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum LutFormat {
     #[serde(rename = "cube")]
     Cube,
@@ -29,7 +29,7 @@ pub enum LutFormat {
 }
 
 /// A Color Lookup's LUT file as loaded: its format and bytes.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct LutSource {
     pub format: LutFormat,
     pub bytes: Arc<Vec<u8>>,
@@ -92,7 +92,7 @@ pub fn lut3d_len(size: u32) -> Option<usize> {
     usize::try_from(size).ok()?.checked_pow(3)?.checked_mul(3)
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct LevelsChannel {
     pub in_black: f32,
     pub in_white: f32,
@@ -111,7 +111,7 @@ impl Default for LevelsChannel {
 /// happens in display RGB; `Cmyk` and `Lab` records are applied to the pixel converted into that
 /// space (the same conversions the document's surfaces use), so ink and Lab channel edits behave
 /// like Photoshop's in CMYK and Lab documents. Grayscale documents use `Rgb` with the master record.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum ToneSpace {
     /// `per_channel` = red, green, blue.
     #[default]
@@ -125,7 +125,7 @@ pub enum ToneSpace {
 }
 
 /// One of Hue/Saturation's six colour ranges (reds, yellows, greens, cyans, blues, magentas).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct HueRange {
     /// Hue shift in degrees (-180..=180).
     pub hue: f32,
@@ -197,7 +197,7 @@ fn default_hue_ranges() -> [HueRange; 6] {
 /// A gradient as Photoshop's Gradient Editor holds it (#8351): a few colour stops, a midpoint
 /// on each segment, Smoothness and the interpolation method, which renderers bake into dense
 /// linear stops.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct GradientSource {
     /// Colour stops (location 0..1, sRGB), in location order.
     pub stops: Vec<(f32, [f32; 3])>,
@@ -211,7 +211,7 @@ pub struct GradientSource {
 }
 
 /// Photoshop adjustment layers (Layer → New Adjustment Layer).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum Adjustment {
     BrightnessContrast {
         brightness: f32,

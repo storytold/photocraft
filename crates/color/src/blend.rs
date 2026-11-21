@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum BlendMode {
     /// Groups only: children blend directly into the group's backdrop.
     PassThrough,
@@ -46,7 +46,70 @@ pub enum BlendMode {
     PaintNetColorDodge,
 }
 
+/// Parse legacy command names and labels, retaining their case and punctuation tolerance.
+pub fn parse_blend(s: &str) -> Option<BlendMode> {
+    fn normalize(value: &str) -> String {
+        value.to_ascii_lowercase().replace([' ', '_', '-', '(', ')'], "")
+    }
+    static ALIASES: std::sync::OnceLock<std::collections::HashMap<String, BlendMode>> = std::sync::OnceLock::new();
+    let aliases = ALIASES.get_or_init(|| {
+        let mut aliases = std::collections::HashMap::new();
+        for mode in std::iter::once(BlendMode::PassThrough).chain(BlendMode::layer_modes()) {
+            aliases.entry(normalize(mode.label())).or_insert(mode);
+            aliases.entry(normalize(&format!("{mode:?}"))).or_insert(mode);
+        }
+        aliases
+    });
+    aliases.get(&normalize(s)).copied()
+}
+
 impl BlendMode {
+    /// Stable key used by the Layers panel.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::PassThrough => "passthrough",
+            Self::Normal => "normal",
+            Self::Dissolve => "dissolve",
+            Self::Darken => "darken",
+            Self::Multiply => "multiply",
+            Self::ColorBurn => "colorburn",
+            Self::LinearBurn => "linearburn",
+            Self::DarkerColor => "darkercolor",
+            Self::Lighten => "lighten",
+            Self::Screen => "screen",
+            Self::ColorDodge => "colordodge",
+            Self::LinearDodge => "lineardodgeadd",
+            Self::LighterColor => "lightercolor",
+            Self::Overlay => "overlay",
+            Self::SoftLight => "softlight",
+            Self::HardLight => "hardlight",
+            Self::VividLight => "vividlight",
+            Self::LinearLight => "linearlight",
+            Self::PinLight => "pinlight",
+            Self::HardMix => "hardmix",
+            Self::Difference => "difference",
+            Self::Exclusion => "exclusion",
+            Self::Subtract => "subtract",
+            Self::Divide => "divide",
+            Self::Hue => "hue",
+            Self::Saturation => "saturation",
+            Self::Color => "color",
+            Self::Luminosity => "luminosity",
+            Self::Reflect => "reflect",
+            Self::Glow => "glow",
+            Self::Negation => "negation",
+            Self::Xor => "xor",
+            Self::PaintNetColorBurn => "colorburnpaint.net",
+            Self::PaintNetColorDodge => "colordodgepaint.net",
+        }
+    }
+
+    /// Resolve a canonical Layers panel key.
+    pub fn from_key(key: &str) -> Option<Self> {
+        static MODES: std::sync::OnceLock<std::collections::HashMap<&'static str, BlendMode>> = std::sync::OnceLock::new();
+        MODES.get_or_init(|| std::iter::once(Self::PassThrough).chain(Self::layer_modes()).map(|mode| (mode.key(), mode)).collect()).get(key).copied()
+    }
+
     /// Paint.NET modes without an exact Photoshop equivalent.
     pub const PAINT_NET_MODES: [BlendMode; 6] = [Self::Reflect, Self::Glow, Self::Negation, Self::Xor, Self::PaintNetColorBurn, Self::PaintNetColorDodge];
 
@@ -623,3 +686,37 @@ pub fn composite_atop(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opa
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod key_tests {
+    use super::BlendMode;
+
+    #[test]
+    fn parser_preserves_legacy_names_and_normalization() {
+        let normalize = |s: &str| s.to_ascii_lowercase().replace([' ', '_', '-', '(', ')'], "");
+        let legacy = |s: &str| {
+            let wanted = normalize(s);
+            std::iter::once(BlendMode::PassThrough)
+                .chain(BlendMode::layer_modes())
+                .find(|mode| normalize(mode.label()) == wanted || normalize(&format!("{mode:?}")) == wanted)
+        };
+        for mode in std::iter::once(BlendMode::PassThrough).chain(BlendMode::layer_modes()) {
+            for name in [mode.label().to_owned(), format!("{mode:?}"), mode.label().to_ascii_uppercase().replace(' ', "_-")] {
+                assert_eq!(super::parse_blend(&name), legacy(&name), "{name}");
+            }
+        }
+        for name in ["", "not a mode", "color.burn", "é"] {
+            assert_eq!(super::parse_blend(name), legacy(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn canonical_keys_match_legacy_panel_names_and_round_trip() {
+        for mode in std::iter::once(BlendMode::PassThrough).chain(BlendMode::layer_modes()) {
+            let old = mode.label().to_ascii_lowercase().replace([' ', '_', '-', '(', ')'], "");
+            assert_eq!(mode.key(), old);
+            assert_eq!(BlendMode::from_key(&old), Some(mode));
+        }
+        assert_eq!(BlendMode::from_key("no-such-mode"), None);
+    }
+}

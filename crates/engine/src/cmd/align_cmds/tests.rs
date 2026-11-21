@@ -215,9 +215,9 @@ fn auto_blend_panorama_masks_and_seamless_layer() {
     }
 }
 
-/// #5745: the Background can't take a mask, so Auto-Blend turns it into a normal layer first.
+/// #14214: the Background can't take a mask, and Auto-Blend leaves it the Background (no mask).
 #[test]
-fn auto_blend_turns_the_background_into_a_layer() {
+fn auto_blend_keeps_the_background() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 200, "height": 60, "background": "white"})).unwrap();
     let bg = s.active().unwrap().doc.background().unwrap().id;
@@ -231,10 +231,11 @@ fn auto_blend_turns_the_background_into_a_layer() {
     select(&mut s, &[bg, right]);
     s.execute("edit.autoBlendLayers", json!({"method": "panorama"})).unwrap();
     let doc = &s.active().unwrap().doc;
-    assert!(!doc.is_background(bg), "the Background became a layer to take its mask");
-    assert!(doc.layer(bg).unwrap().mask.is_some());
+    assert!(doc.is_background(bg), "the Background stays the Background");
+    assert!(doc.layer(bg).unwrap().mask.is_none());
+    assert!(doc.layer(right).unwrap().mask.is_some());
     s.undo();
-    assert!(s.active().unwrap().doc.is_background(bg), "undo restores the Background");
+    assert!(s.active().unwrap().doc.layer(right).unwrap().mask.is_none(), "undo removes the masks");
 }
 
 /// Seamless Tones and Colors evens out a 10% exposure step between two panorama layers.

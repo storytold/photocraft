@@ -68,11 +68,11 @@ pub fn patched(current: &LayerFilter, v: &Value) -> Result<LayerFilter, String> 
     }
     if let Some(mode) = o.get("mode") {
         let name = mode.as_str().ok_or("layerFilter.mode must be a blend mode name")?;
-        let m = photocraft_engine::commands::blend_from_str(name).filter(|m| BlendMode::LAYER_MODES.contains(m)).ok_or_else(|| {
+        let m = photocraft_engine::commands::parse_blend(name).filter(|m| BlendMode::LAYER_MODES.contains(m)).ok_or_else(|| {
             let modes: Vec<&str> = BlendMode::LAYER_MODES.iter().map(|m| m.label()).collect();
             format!("layerFilter.mode: `{name}` is not a layer blend mode the filter lists (modes: {})", modes.join(", "))
         })?;
-        f.mode = super::layers_tree::blend_key(m);
+        f.mode = m.key().to_string();
     }
     if let Some(e) = o.get("effect") {
         f.effect = choose::<EffectKind>("effect", "effect", &EffectKind::ALL, e)?;
@@ -121,7 +121,7 @@ pub(crate) fn deselect_hidden(app: &mut PhotocraftApp, before: &LayerFilter) {
     let Some(select) = select else { return };
     let Some(st) = app.session.active() else { return };
     let mut actions = Vec::new();
-    super::layers_events::selection_actions(select.change, &st.selected_layers(), &mut actions);
+    super::layers_events::selection_actions(select.change, st.selected_layers(), &mut actions);
     for (id, params) in actions {
         let _ = app.run(&id, params);
     }

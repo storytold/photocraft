@@ -38,14 +38,15 @@ fn mode_tool_name(tool: Tool) -> Option<&'static str> {
 }
 
 /// The tool's name in the alerts, for the tools whose wording was measured: the Brush, the
-/// Sharpen tool (#12952), the Sponge (#13030), the Smudge tool (#12965) and the Classic gradient
-/// (the live Gradient makes a fill layer and isn't measured, #12017).
+/// Sharpen tool (#12952), the Sponge (#13030), the Smudge tool (#12965), the Art History Brush
+/// (#12638) and the Classic gradient (the live Gradient makes a fill layer and isn't measured, #12017).
 pub fn tool_name(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     match tool {
         Tool::Brush => Some(tl!("brush tool")),
         Tool::Sharpen => Some(tl!("sharpen tool")),
         Tool::Sponge => Some(tl!("sponge tool")),
         Tool::Smudge => Some(tl!("smudge tool")),
+        Tool::ArtHistoryBrush => Some(tl!("art history brush")),
         Tool::Gradient if app.ui.tool_options.gradient_classic => Some(tl!("gradient tool")),
         _ => None,
     }
@@ -80,8 +81,25 @@ pub fn alert(app: &PhotocraftApp, tool: Tool, hidden: bool) -> Option<String> {
         return (!hidden && pixel_layer && layer_refusal(app, tool) == Some(LOCKED)).then(|| tl!(REMOVE_LOCKED).to_string());
     }
     let name = tool_name(app, tool)?;
+    // The Art History Brush's hidden alert was measured on a layer's pixels only (#12638): a
+    // hidden mask or channel target keeps the status bar.
+    if hidden && tool == Tool::ArtHistoryBrush && !pixels_target(&crate::canvas::paint_target(app)) {
+        return None;
+    }
     let template = if hidden { HIDDEN } else { layer_refusal(app, tool)? };
     Some(crate::i18n::fmt(tl!(template), &[("tool", name)]))
+}
+
+/// Whether `target`, a `canvas::paint_target` value, is a layer's pixels as the engine reads it
+/// (`channel_cmds::target_of`): not a layer or filter mask, the Quick Mask or an alpha channel. A
+/// set of colour channels edits the layer's pixels.
+pub(crate) fn pixels_target(target: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    match target {
+        Value::String(s) => !matches!(s.as_str(), "mask" | "filterMask" | "quickMask"),
+        Value::Object(o) => o.get("channel").and_then(Value::as_u64).is_none(),
+        _ => true,
+    }
 }
 
 /// [`GROUP`] or [`LOCKED`] when `tool` can't paint the active layer's pixels.
@@ -99,10 +117,11 @@ fn layer_refusal(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     }
 }
 
-/// Whether `locks` refuse `tool`: Lock All, and for the Sharpen, Sponge and Smudge tools Lock Image
-/// Pixels as well (measured for them; the Brush keeps today's behaviour there).
+/// Whether `locks` refuse `tool`: Lock All, and for the Sharpen, Sponge and Smudge tools and the
+/// Art History Brush Lock Image Pixels as well (measured for them; the Brush keeps today's
+/// behaviour there).
 fn locked(locks: photocraft_doc::Locks, tool: Tool) -> bool {
-    locks.all || (matches!(tool, Tool::Sharpen | Tool::Sponge | Tool::Smudge) && locks.pixels)
+    locks.all || (matches!(tool, Tool::Sharpen | Tool::Sponge | Tool::Smudge | Tool::ArtHistoryBrush) && locks.pixels)
 }
 
 #[cfg(test)]
@@ -120,3 +139,7 @@ mod smudge_refusal_alert_tests;
 #[cfg(test)]
 #[path = "remove_hidden_layer_tests.rs"]
 mod remove_hidden_layer_tests;
+
+#[cfg(test)]
+#[path = "art_history_refusal_alert_tests.rs"]
+mod art_history_refusal_alert_tests;

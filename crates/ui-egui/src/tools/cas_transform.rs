@@ -168,7 +168,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     live.serial += 1;
                     live.failed = None;
                     let pixels = PreviewPixels::new(image, [1.0, 1.0]);
-                    live.shown = Some((key, PreviewTextures::new(format!("content-aware-scale-{}", live.serial), pixels)));
+                    live.shown = Some((key, PreviewTextures::new(&mut app.texture_serials, format!("content-aware-scale-{}", live.serial), pixels)));
                 }
                 // A preview cancelled because the box moved on is not a failure of that box.
                 Err(_) if key == want => live.failed = Some(key),
