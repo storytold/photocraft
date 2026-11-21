@@ -114,3 +114,26 @@ fn preset_drops_map_through_the_ruler_inset() {
     let doc = crate::canvas::document_display::doc_point_at(&app, centre).expect("the canvas centre is on the document");
     assert!((doc.x - 32.0).abs() < 1.0 && (doc.y - 24.0).abs() < 1.0, "the canvas centre is the document centre: {doc:?}");
 }
+
+/// The style library the Styles panel and the Layer Style dialog paint from is one snapshot while the styles and the
+/// patterns stay as they are, so their views replay; a change to either builds a new one (#16252).
+#[test]
+fn the_style_library_snapshot_is_kept_until_the_styles_or_patterns_change() {
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, Default::default());
+    let of = |session: &photocraft_engine::Session| {
+        let mut revision = None;
+        let mut out = ctx.run_ui(Default::default(), |ui| revision = Some(StyleLibrary::of(ui.ctx(), session).revision()));
+        out.textures_delta.clear();
+        revision
+    };
+    let mut session = photocraft_engine::Session::new();
+    let first = of(&session);
+    assert!(first.is_some());
+    assert_eq!(of(&session), first, "an unchanged library is the same snapshot");
+    session.presets.edit(|presets| presets.styles.clear());
+    let styles = of(&session);
+    assert_ne!(styles, first, "a change to the styles builds a new snapshot");
+    session.patterns.items.pop();
+    assert_ne!(of(&session), styles, "a change to the patterns builds a new snapshot");
+}

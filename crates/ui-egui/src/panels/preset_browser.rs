@@ -229,6 +229,12 @@ fn pattern_image(pattern: &photocraft_doc::Pattern) -> ColorImage {
     image
 }
 
+/// A texture of `pattern`'s swatch that its holder owns: it stays while the handle lives, where a cached texture
+/// lasts only while something asks for it every frame.
+pub(crate) fn pattern_texture_handle(ctx: &egui::Context, pattern: &photocraft_doc::Pattern) -> egui::TextureHandle {
+    ctx.load_texture(format!("photocraft/pattern-swatch/{}", pattern.id), pattern_image(pattern), egui::TextureOptions::LINEAR)
+}
+
 /// The cached texture of `pattern`'s swatch.
 pub(crate) fn pattern_texture(ctx: &egui::Context, pattern: &photocraft_doc::Pattern) -> egui::TextureId {
     TextureCache::texture(ctx, ("pattern", pattern.id.clone()), || pattern_image(pattern))
@@ -355,10 +361,15 @@ pub(crate) struct StyleLibrary {
 }
 
 impl StyleLibrary {
-    /// The app's styles and patterns now.
-    pub(crate) fn of(session: &photocraft_engine::Session) -> Tracked<Self> {
-        let styles = session.presets.styles.iter().flat_map(|group| group.items.iter().cloned()).collect();
-        Tracked::new(StyleLibrary { styles, patterns: session.patterns.clone() })
+    /// The app's styles and patterns now, derived from the presets' revision and the pattern library's
+    /// [`patterns_key`]: built again only when one of them changed, so an unchanged library is the same `Tracked` and
+    /// the views that show it replay (#16252).
+    pub(crate) fn of(ctx: &egui::Context, session: &photocraft_engine::Session) -> std::sync::Arc<Tracked<Self>> {
+        let facts = (session.presets.revision(), patterns_key(&session.patterns));
+        craft::ui::runtime::derived::derived(ctx, egui::Id::unique("photocraft-style-library"), &facts, || {
+            let styles = session.presets.styles.iter().flat_map(|group| group.items.iter().cloned()).collect();
+            Tracked::new(StyleLibrary { styles, patterns: session.patterns.clone() })
+        })
     }
 
     /// Paints the thumbnail of the style `name`. A picture is rendered on a texture miss only, under one key for
@@ -374,8 +385,21 @@ impl StyleLibrary {
     }
 }
 
+/// What tells one state of `patterns` from another: each pattern's id and size in order, the revision that moves when
+/// a pattern's pixels are replaced under its id, and how many are held unloaded. A pattern library has no `Tracked`
+/// revision of its own.
+fn patterns_key(patterns: &PatternLibrary) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::hash::DefaultHasher::new();
+    (patterns.pixels_rev, patterns.stored.len(), patterns.items.len()).hash(&mut hasher);
+    for pattern in &patterns.items {
+        (&pattern.id, pattern.width, pattern.height).hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// A Styles panel thumbnail.
-fn style_thumb(inputs: &PanelInputs<Tracked<StyleLibrary>>, cx: &ContentPainterCx, rect: Rect, info: ThumbInfo<'_, PresetKey>) {
+fn style_thumb(inputs: &PanelInputs<std::sync::Arc<Tracked<StyleLibrary>>>, cx: &ContentPainterCx, rect: Rect, info: ThumbInfo<'_, PresetKey>) {
     if let PresetKey::Item(name) = info.key {
         inputs.thumbs.paint(cx, rect, name);
     }
@@ -386,7 +410,7 @@ fn style_thumb(inputs: &PanelInputs<Tracked<StyleLibrary>>, cx: &ContentPainterC
 pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let folders = style_folders(app);
     let names = names_of(&folders);
-    let source = panel_source(PanelInputs::new(&app.ui.presets_ui, STYLES, folders, StyleLibrary::of(&app.session)), style_thumb);
+    let source = panel_source(PanelInputs::new(&app.ui.presets_ui, STYLES, folders, StyleLibrary::of(ui.ctx(), &app.session)), style_thumb);
     let zone = canvas_zone(app);
     let look = Look { room_height: Some(STYLES_HEIGHT), ..Look::default() };
     let (events, keys) = show(&mut app.ui.presets_ui, zone, ui, STYLES, &source, look);

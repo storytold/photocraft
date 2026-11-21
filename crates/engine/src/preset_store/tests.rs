@@ -561,6 +561,27 @@ fn the_decoded_tip_cache_stays_within_its_budget() {
     assert!(matches!(&*t.tools.brush.tip, TipShape::Stored(r) if r.is_loaded()));
 }
 
+/// A stored tip the brush holds unloaded (its file failed to load at startup and is back) loads on the next brush
+/// edit, and the brush keeps the loaded bitmap instead of the unloaded tip it compares equal to (#16252).
+#[test]
+fn a_brush_edit_keeps_a_stored_tip_that_loads_only_now() {
+    let (s, mem) = library(1, 64);
+    drop(s);
+    let mut t = Session::new();
+    t.attach_preset_store(open(Box::new(mem)));
+    t.execute("tools.setBrush", json!({"preset": "Big 0"})).unwrap();
+    if let TipShape::Stored(r) = &mut *t.tools.brush.tip {
+        r.full = None;
+    }
+    assert!(matches!(&*t.tools.brush.tip, TipShape::Stored(r) if !r.is_loaded()), "the tip starts unloaded");
+    t.execute("tools.setBrush", json!({"brush": {"size": 30}})).unwrap();
+    assert!(matches!(&*t.tools.brush.tip, TipShape::Stored(r) if r.is_loaded()), "the edit keeps the tip it loaded");
+    // An edit of a brush whose tip is loaded already keeps the tip and its revision.
+    let revision = t.tools.brush.tip.revision();
+    t.execute("tools.setBrush", json!({"brush": {"size": 40}})).unwrap();
+    assert_eq!(t.tools.brush.tip.revision(), revision, "an unchanged loaded tip keeps its revision");
+}
+
 #[test]
 fn missing_corrupt_or_unknown_tips_fail_when_used_without_panicking() {
     let (s, mem) = library(3, 64);
