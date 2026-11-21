@@ -156,6 +156,15 @@ pub(super) fn gray_document(name: &str, like: &Document, plane: &[f32]) -> Docum
 pub(super) fn delete_channel(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "channel.delete";
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    if let Some(color) = p.get("channel").and_then(Value::as_object).filter(|selector| selector.len() == 1).and_then(|selector| selector.get("color")) {
+        let index = color
+            .as_u64()
+            .and_then(|index| usize::try_from(index).ok())
+            .filter(|&index| crate::multichannel_cmds::supports_process_channel_deletion(doc.mode) && index < doc.mode.color_channels())
+            .ok_or_else(|| bad(cmd, "`channel.color` must be an in-range process-channel index for RGB, CMYK or Lab"))?;
+        crate::multichannel_cmds::delete_process_channel(s, index)?;
+        return Ok(Value::Null);
+    }
     let i = match p.get("channel") {
         Some(_) => alpha_index(doc, p, "channel", cmd)?,
         None => match s.active().ok_or(EngineError::NoDocument)?.channel_view.target {

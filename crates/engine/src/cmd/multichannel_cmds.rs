@@ -119,11 +119,27 @@ fn inks_of(doc: &Document) -> Vec<(String, Color, Vec<f32>)> {
     }
 }
 
+/// Whether deleting one process component can convert this mode to Multichannel.
+pub const fn supports_process_channel_deletion(mode: ColorMode) -> bool {
+    matches!(mode, ColorMode::Rgb | ColorMode::Cmyk | ColorMode::Lab)
+}
+
 fn to_multichannel(s: &mut Session, _p: &Value) -> Result<Value> {
-    let Some((old, view)) = s.active().map(|st| (st.doc.channels.len(), (st.channel_view.target, st.channel_view.alpha_visible.clone()))) else {
-        return Err(EngineError::NoDocument);
-    };
-    let names = s.edit("Multichannel", |doc, active| {
+    let names = convert_to_multichannel(s, "Multichannel", None)?;
+    Ok(json!({ "mode": "multichannel", "channels": names }))
+}
+
+pub(crate) fn delete_process_channel(s: &mut Session, index: usize) -> Result<()> {
+    convert_to_multichannel(s, "Delete Channel", Some(index)).map(drop)
+}
+
+fn convert_to_multichannel(s: &mut Session, label: &str, excluded: Option<usize>) -> Result<Vec<String>> {
+    let Some(st) = s.active() else { return Err(EngineError::NoDocument) };
+    let old = st.doc.channels.len();
+    let current = &st.channel_view;
+    let view = (current.target, current.alpha_visible.clone());
+    let solo_alpha = excluded.is_some() && matches!(current.target, ChannelTarget::Alpha(_)) && current.visible_colors(st.doc.mode.color_channels()) == 0;
+    let names = s.edit(label, |doc, active| {
         // Every ink is built as dense planes over the whole canvas (the flattened image, its
         // colour planes, the inverted densities and each clamped channel), however few tiles
         // the document stores: refuse a canvas past the working budget before allocating.
@@ -137,7 +153,7 @@ fn to_multichannel(s: &mut Session, _p: &Value) -> Result<Value> {
         };
         let per_px = cc.saturating_mul(4).saturating_add(inks.saturating_mul(8)).saturating_add(16);
         crate::allocation::check_dense(doc.bounds(), per_px, "converting to Multichannel")?;
-        let inks = inks_of(doc);
+        let inks: Vec<_> = inks_of(doc).into_iter().enumerate().filter_map(|(index, ink)| (Some(index) != excluded).then_some(ink)).collect();
         let mut channels: Vec<AlphaChannel> = inks
             .iter()
             .map(|(name, ink, vals)| AlphaChannel { spot: Some((*ink, 0.0)), ..AlphaChannel::new(name.clone(), channel_surface(doc, vals)) })
@@ -162,8 +178,19 @@ fn to_multichannel(s: &mut Session, _p: &Value) -> Result<Value> {
     })?;
     // The alpha channels moved behind the inks.
     let map: Vec<Option<usize>> = (0..old).map(|i| Some(i + names.len())).collect();
+    if excluded.is_some()
+        && let Some(st) = s.active_mut()
+    {
+        // The native component choices no longer apply. Keep a solo alpha solo by hiding
+        // the Multichannel display composite, whose working format is RGB.
+        st.channel_view.target = ChannelTarget::Composite;
+        st.channel_view.color_hidden.clear();
+        if solo_alpha {
+            st.channel_view.color_hidden.resize(crate::channel_cmds::color_count(&st.doc), true);
+        }
+    }
     remap_view(s, view, &map);
-    Ok(json!({ "mode": "multichannel", "channels": names }))
+    Ok(names)
 }
 
 /// Keep the Channels target and eyes on the same channels after a conversion moved them:

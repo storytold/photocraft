@@ -40,6 +40,9 @@ fn has_channels(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
     if s.active().is_some_and(|d| !d.doc.channels.is_empty()) { Ok(()) } else { Err("the document has no alpha channels".into()) }
 }
+fn can_delete_channel(s: &Session) -> std::result::Result<(), String> {
+    if s.active().is_some_and(|st| crate::multichannel_cmds::supports_process_channel_deletion(st.doc.mode)) { Ok(()) } else { has_channels(s) }
+}
 fn has_selection(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
     if s.active().is_some_and(|d| d.doc.selection.is_some()) { Ok(()) } else { Err("no selection".into()) }
@@ -214,7 +217,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             duplicate_channel
         ),
-        spec!("channel.delete", "Delete Channel", [], None, r##"{"channel":index|name?=targeted}"##, has_channels, delete_channel),
+        spec!(
+            "channel.delete",
+            "Delete Channel",
+            [],
+            None,
+            r##"{"channel":index|name|{"color":index}?=targeted} (a color index deletes one RGB, CMYK or Lab process channel and converts the document to Multichannel)"##,
+            can_delete_channel,
+            delete_channel
+        ),
         spec!("channel.rename", "Rename Channel", [], None, r##"{"channel":index|name,"name":str}"##, has_channels, rename_channel),
         spec!("channel.move", "Reorder Channel", [], None, r##"{"channel":index|name,"to":index}"##, has_channels, move_channel),
         spec!(
