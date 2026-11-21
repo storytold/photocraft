@@ -265,16 +265,26 @@ fn discard_after_flush_removes_the_entry() {
 
 #[test]
 fn new_documents_never_overwrite_surviving_entries() {
+    use photocraft_color::Color;
+    use photocraft_doc::{Layer, Size};
+
     let dir = temp_dir("collision");
+    // Keep a background and one edited raster tile to distinguish snapshots that share a document ID.
+    let snapshot = |x, mode| {
+        let mut doc = Document::with_background("Rich", Size::new(16, 4), mode, SampleType::U8, Color::WHITE);
+        let paint = Layer::raster("Paint", doc.pixel_format());
+        doc.layers.push(paint);
+        edit(doc, 1, x)
+    };
     // An earlier launch (including builds that keyed entries by bare document id) left `doc-1`.
-    let old = version(1, 3, ColorMode::Rgb);
+    let old = snapshot(3, ColorMode::Rgb);
     save_once(&dir, "doc-1", old.clone());
     // A store from another launch left an entry for its own document 1 too.
-    let other = version(1, 6, ColorMode::Grayscale);
+    let other = snapshot(6, ColorMode::Grayscale);
     RecoveryStore::new(&dir).autosave(&Arc::new(other.clone()), 2, None);
     assert_eq!(list_recovery(&dir).len(), 2);
     // This launch adopts `doc-1` for its document 5, and its own new document 1 autosaves.
-    let fresh = version(1, 8, ColorMode::Rgb);
+    let fresh = snapshot(8, ColorMode::Rgb);
     {
         let mut launch = RecoveryStore::new(&dir);
         launch.adopt(5, "doc-1");
