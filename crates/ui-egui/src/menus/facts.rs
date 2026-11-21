@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use craft::ui::contract::{MemoProps, Revision, Tracked};
 use photocraft_doc::DocId;
+use photocraft_engine::DocState;
 
 use crate::PhotocraftApp;
 
@@ -18,10 +19,19 @@ pub(crate) struct MenuFacts<'a> {
     language: &'static str,
     /// The keymap's overrides and catalog generations: the rows show its chords.
     keymap: (u64, u64),
+    rules: RuleFacts<'a>,
+    prefs: PrefFacts<'a>,
+    shown: ShownFacts<'a>,
+}
+
+/// What the enable rules read ([`super::is_enabled`], `Session::is_enabled`): the documents, the session and the shell
+/// state they ask about. A command source whose states follow the rules holds these; the menu model holds them with
+/// what its rows show.
+#[derive(MemoProps)]
+pub(crate) struct RuleFacts<'a> {
     documents: Documents<'a>,
     session: SessionFacts,
-    prefs: PrefFacts<'a>,
-    ui: UiFacts<'a>,
+    ui: UiRuleFacts<'a>,
 }
 
 /// The open documents and the active one.
@@ -31,10 +41,9 @@ struct Documents<'a> {
     generation: u64,
     active_generation: u64,
     active_index: Option<usize>,
-    /// The active document and its revision, which moves with every change to it: its content, layers, selection,
-    /// history, mode and mask state, which most rules read.
-    #[memo_props(hash = "a plain model id")]
-    active: Option<(DocId, u64)>,
+    /// The active document, by its `Tracked` revision, which moves with every change to it: its content, layers,
+    /// selection, history, mode, mask and view state, which most rules read.
+    active: Option<&'a Tracked<DocState>>,
     /// A running job greys the commands that would change its document.
     jobs: (bool, Option<u64>),
     /// Smart Objects › Edit Contents' parent: whether the active document is a smart object's contents.
@@ -65,6 +74,8 @@ struct SessionFacts {
     actions: (u64, Option<(usize, usize)>, u8),
     /// Edit › Undo's label when it undoes an Actions library change.
     undo_label: Option<&'static str>,
+    /// The installed plug-ins' revision: a plug-in's menu item needs it installed.
+    plugins: u64,
 }
 
 /// The preferences the rows show.
@@ -81,9 +92,9 @@ struct PrefFacts<'a> {
     favorite_themes: &'a Vec<String>,
 }
 
-/// The shell's state the rows show.
+/// The shell's state the rules read.
 #[derive(MemoProps)]
-struct UiFacts<'a> {
+struct UiRuleFacts<'a> {
     tool: u64,
     /// The open Free Transform: its undo steps' and phase's revision, Content-Aware Scale, its layer count and a
     /// running commit.
@@ -101,6 +112,19 @@ struct UiFacts<'a> {
     /// a brush resize.
     modal: (usize, bool, Option<&'static str>, bool, bool),
     selected_guide: bool,
+    /// Save, Paste and Place Embedded ask which services this platform has: export, the clipboard image and files.
+    services: (bool, bool, bool),
+    /// The locked workspace greys the panel commands that move, float or close panels.
+    workspaces_locked: bool,
+    /// Window › Arrange: the docked and floating document windows.
+    document_windows: (usize, usize),
+    /// File › Automate › Batch: an action is selected in the Actions panel.
+    batch_action: bool,
+}
+
+/// The shell's state the rows show beside the rules: ticks, labels and the lists they name.
+#[derive(MemoProps)]
+struct ShownFacts<'a> {
     extras: crate::state::Extras,
     view: &'a crate::view_cmds::ViewOptions,
     /// The options, status, menu and contextual task bars.
@@ -113,25 +137,55 @@ struct UiFacts<'a> {
     ticks: Arc<Vec<bool>>,
     recent_files: &'a Tracked<Vec<String>>,
     workspaces: &'a Tracked<crate::workspace_ui::Workspaces>,
-    /// Save and Paste rules ask which services this platform has.
-    services: (bool, bool),
 }
 
 impl<'a> MenuFacts<'a> {
     /// The facts of `app`'s current state.
     pub(crate) fn of(app: &'a PhotocraftApp) -> MenuFacts<'a> {
-        let s = &app.session;
-        let active = s.active();
-        let prefs = s.prefs();
+        let prefs = app.session.prefs();
         let ui = &app.ui;
         MenuFacts {
             language: crate::i18n::current().code(),
             keymap: app.framework.keymap_inputs(),
+            rules: RuleFacts::of(app),
+            prefs: PrefFacts {
+                language: &prefs.interface.language,
+                hidden: &prefs.menus.hidden,
+                colors: &prefs.menus.colors,
+                show_menu_colors: prefs.interface.show_menu_colors,
+                quick_export: prefs.export.quick_export_format.name(),
+                font_preview: prefs.type_.font_preview.name(),
+                generator: prefs.plug_ins.generator_enabled,
+                appearance: prefs.interface.appearance_mode.name(),
+                favorite_themes: &prefs.interface.favorite_themes,
+            },
+            shown: ShownFacts {
+                extras: ui.extras,
+                view: &ui.view,
+                bars: (ui.panels.options_bar, ui.panels.status_bar, ui.panels.menu_bar, ui.panels.context_task_bar),
+                palette: ui.palette.open,
+                theme: (ui.theme.id().as_str(), ui.theme.is_dark()),
+                arrangement: ui.document_windows.arrangement,
+                ticks: window_ticks(app),
+                recent_files: &ui.recent_files,
+                workspaces: &app.workspaces,
+            },
+        }
+    }
+}
+
+impl<'a> RuleFacts<'a> {
+    /// What the rules read in `app`'s current state.
+    pub(crate) fn of(app: &'a PhotocraftApp) -> RuleFacts<'a> {
+        let s = &app.session;
+        let active = s.active();
+        let ui = &app.ui;
+        RuleFacts {
             documents: Documents {
                 generation: s.documents_generation(),
                 active_generation: s.active_generation(),
                 active_index: s.active_index(),
-                active: active.map(|d| (d.doc.id, d.revision)),
+                active: s.active_tracked(),
                 jobs: (s.has_jobs(), s.active_job().map(|job| job.id.0)),
                 smart_child: active.is_some_and(|d| s.smart_links.iter().any(|link| link.child == d.doc.id)),
                 fade: s.edit_state.fade.as_ref().map(|fade| (fade.doc, fade.revision)),
@@ -150,19 +204,9 @@ impl<'a> MenuFacts<'a> {
                 mask_targeted: s.tools.mask_targeted,
                 actions: (s.actions.list.revision(), s.actions.recording, s.actions.playing),
                 undo_label: crate::actions::library::edit_undo_label(app),
+                plugins: photocraft_plugins::registry::revision(),
             },
-            prefs: PrefFacts {
-                language: &prefs.interface.language,
-                hidden: &prefs.menus.hidden,
-                colors: &prefs.menus.colors,
-                show_menu_colors: prefs.interface.show_menu_colors,
-                quick_export: prefs.export.quick_export_format.name(),
-                font_preview: prefs.type_.font_preview.name(),
-                generator: prefs.plug_ins.generator_enabled,
-                appearance: prefs.interface.appearance_mode.name(),
-                favorite_themes: &prefs.interface.favorite_themes,
-            },
-            ui: UiFacts {
+            ui: UiRuleFacts {
                 tool: ui.tool as u64,
                 transform: ui
                     .transform
@@ -181,16 +225,10 @@ impl<'a> MenuFacts<'a> {
                     app.brush_resize.active(),
                 ),
                 selected_guide: crate::guide_select::selected(app).is_some(),
-                extras: ui.extras,
-                view: &ui.view,
-                bars: (ui.panels.options_bar, ui.panels.status_bar, ui.panels.menu_bar, ui.panels.context_task_bar),
-                palette: ui.palette.open,
-                theme: (ui.theme.id().as_str(), ui.theme.is_dark()),
-                arrangement: ui.document_windows.arrangement,
-                ticks: window_ticks(app),
-                recent_files: &ui.recent_files,
-                workspaces: &app.workspaces,
-                services: (app.services.export.is_some(), app.services.clipboard_get_image.is_some()),
+                services: (app.services.export.is_some(), app.services.clipboard_get_image.is_some(), app.services.files.is_some()),
+                workspaces_locked: app.workspaces.set.locked,
+                document_windows: (ui.document_windows.docked.len(), ui.document_windows.floating.len()),
+                batch_action: crate::actions::selected_action(app).is_some(),
             },
         }
     }
