@@ -294,7 +294,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, panels_hidden: bo
             area = area.auto_collapse();
         }
         if panels_hidden {
-            area = area.hide(HidePanels::Except(&*keeps_toolbar));
+            area = area.hide(HidePanels::Except(&keeps_toolbar));
         }
         area.flyout(Bind::given(flyout)).show(ui)
     };
