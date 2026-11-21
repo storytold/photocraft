@@ -667,6 +667,13 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             app.sync_views();
             crate::file_ui::print_status(app, result);
         }
+        // A place run as a command (the control channel, a script) has no tracked place job.
+        JobOutcome::Done(ref result) if matches!(e.command.as_str(), "file.placeEmbedded" | "file.placeLinked") => {
+            app.sync_views();
+            app.ui.status = e.label;
+            app.ui.status_error = false;
+            app.report_place_warnings(result, e.command == "file.placeLinked");
+        }
         JobOutcome::Done(_) if cancelled_batch => {
             app.ui.status = crate::i18n::fmt(tl!("Canceled {label}"), &[("label", &e.label)]);
             app.ui.status_error = false;
