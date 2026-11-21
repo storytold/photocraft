@@ -320,7 +320,9 @@ impl<'a> Planner<'a> {
         p.flags = F_BLEND_IF;
         p.params = blend_if_params(&layer.blend_if);
         let one_channel = self.cx.mode != photocraft_color::ColorMode::Rgb;
-        p.extra = [f32::from(u8::from(one_channel)), f32::from(u8::from(own.is_none())), 0.0, 0.0];
+        // compose::blend_if_weight: split points fade over both ends in 8-bit RGB documents (#14855).
+        let levels = self.cx.depth == photocraft_color::SampleType::U8 && !one_channel;
+        p.extra = [f32::from(u8::from(one_channel)), f32::from(u8::from(own.is_none())), f32::from(u8::from(levels)), 0.0];
         Ok(self.emit(p))
     }
 
@@ -789,6 +791,14 @@ impl<'a> Planner<'a> {
     fn adjust(&mut self, adj: &Adjustment, src: Slot) -> Result<Slot, Unsupported> {
         if !adjustment_on_gpu(adj, self.cx.mode) {
             return Err(Unsupported(format!("{} on CMYK/Lab channels (evaluated on the CPU)", adj.label())));
+        }
+        // An 8/16-bit Grayscale Gradient Map keeps each stop colour's CIE L* (compose::adjust::
+        // gray_from_srgb_lightness); the shader's LUT lookup returns the stop colour itself.
+        if matches!(adj, Adjustment::GradientMap { .. })
+            && self.cx.mode == photocraft_color::ColorMode::Grayscale
+            && self.cx.depth != photocraft_color::SampleType::F32
+        {
+            return Err(Unsupported("Gradient Map in an 8/16-bit Grayscale document (evaluated on the CPU)".into()));
         }
         if let Adjustment::GradientMap { stops, .. } = adj {
             check_gradient_stops(stops)?;

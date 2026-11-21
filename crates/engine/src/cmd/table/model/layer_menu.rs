@@ -6,12 +6,12 @@ use crate::cmd::{
 use photocraft_color::BlendMode;
 
 /// Layer menu, first run: new layers and groups to the solid color fill layer.
-pub(crate) fn specs_before_gradient() -> Vec<CommandSpec> {
+pub fn specs_before_gradient() -> Vec<CommandSpec> {
     [creation(), duplication(), deletion_and_selection(), order_and_clipping(), masks(), merging(), solid_color_fill()].into_iter().flatten().collect()
 }
 
 /// Layer menu, last run: adjustment layers, move and translate.
-pub(crate) fn specs_after_gradient() -> Vec<CommandSpec> {
+pub fn specs_after_gradient() -> Vec<CommandSpec> {
     [adjustments(), placement()].into_iter().flatten().collect()
 }
 

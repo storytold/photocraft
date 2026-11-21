@@ -257,7 +257,7 @@ fn save_settings_start_at_the_opened_files_encoding() {
 
 /// The names of the active document's History panel snapshots.
 fn snapshots(app: &PhotocraftApp) -> Vec<String> {
-    app.session.active().unwrap().snapshots.iter().map(|s| s.name.clone()).collect()
+    app.session.active().unwrap().snapshots().iter().map(|s| s.name.clone()).collect()
 }
 
 /// History Options › Automatically Create New Snapshot When Saving (#2966) through the desktop
@@ -270,7 +270,7 @@ fn a_save_adds_one_snapshot_and_a_copy_none() {
     app.save_as(Some("saved.psd".into())).unwrap();
     assert_eq!(snapshots(&app).len(), before + 1, "the save adds a snapshot");
     let st = app.session.active().unwrap();
-    assert!(std::sync::Arc::ptr_eq(&st.snapshots.last().unwrap().doc, &st.doc), "of the document as saved");
+    assert!(std::sync::Arc::ptr_eq(&st.snapshots().last().unwrap().doc, &st.doc), "of the document as saved");
     app.save_as(Some("saved.psd".into())).unwrap();
     assert_eq!(snapshots(&app).len(), before + 1, "saving an unchanged document adds no duplicate");
 
@@ -301,7 +301,7 @@ fn a_background_save_snapshots_its_own_document() {
     assert_eq!(app.active_doc_id(), Ok(active), "the active document stays active");
     assert_eq!(snapshots(&app).len(), active_snaps, "the active document gets no snapshot");
     let st = app.session.documents().iter().find(|st| st.doc.id == saved_doc).unwrap();
-    assert_eq!(st.snapshots.len(), saved_snaps + 1, "the saved document gets one");
+    assert_eq!(st.snapshots().len(), saved_snaps + 1, "the saved document gets one");
     assert_eq!(st.path.as_deref(), Some("background.psd"));
 }
 
