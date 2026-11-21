@@ -386,11 +386,20 @@ impl PhotocraftApp {
     /// Files dropped onto the window, routed by `to` ([`DropTo`]). Preset files (brushes,
     /// gradients) always go to their libraries. A native drop carries an absolute path, read in
     /// bounded reads (#375); a drop without a path carries its bytes.
+    ///
+    /// Files dropped together to be opened are taken in name order ([`natural_cmp`]: `page_2`
+    /// before `page_10`), not the order the OS happens to list them in, and their tabs keep that
+    /// order however long each takes to open in the background (#12806). Files dropped on the
+    /// canvas are placed in the order they arrive.
     pub(crate) fn open_dropped(&mut self, ctx: &egui::Context, files: Vec<OsFile>, to: DropTo) {
         // Files dragged in from another app's window bring PhotoCraft to the front and give it the keyboard, as
         // Photoshop does, instead of leaving it behind the source (#5687). A drop on a floating panel's window
         // brings the main window.
         ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
+        let mut files: Vec<(String, OsFile)> = files.into_iter().map(|f| (dropped_name(&f), f)).collect();
+        if !matches!(to, DropTo::Canvas { .. }) {
+            files.sort_by(|a, b| natural_cmp(&a.0, &b.0));
+        }
         // The log tells a drop that never reached the app (the operating system, or an elevated
         // process, refused it) from one the app routed (#10492). File names stay out of it.
         log::info!("{} file(s) dropped on the window: {to:?}", files.len());
@@ -405,11 +414,14 @@ impl PhotocraftApp {
         // A box still open from an earlier drop (or any Free Transform) is applied first (#4833):
         // the queue below places the next file only once no box is open, so a separate drop
         // would otherwise wait unseen for ↩. Files dropped together still go one by one.
-        if matches!(to, DropTo::Canvas { .. }) && self.ui.transform.is_some() && files.iter().any(|f| to.route(&dropped_name(f)) == DropRoute::Place) {
+        if matches!(to, DropTo::Canvas { .. }) && self.ui.transform.is_some() && files.iter().any(|(name, _)| to.route(name) == DropRoute::Place) {
             crate::transform_tool::commit(self);
         }
-        for f in files {
-            let name = dropped_name(&f);
+        // Away from the tab strip the files are a set opened together, like File › Open's: a
+        // file that opens sooner than one before it still gets its tab after it. On the strip
+        // each file carries its own slot instead.
+        let batch = slot.is_none().then(|| crate::jobs_ui::begin_batch(self));
+        for (seq, (name, f)) in files.into_iter().enumerate() {
             let route = to.route(&name);
             if let Some(why) = f.path.as_deref().and_then(folder_error) {
                 match route {
@@ -424,11 +436,15 @@ impl PhotocraftApp {
                 }
                 continue;
             }
-            match self.open_dropped_file(&f, &name, slot) {
+            let order = batch.map(|batch| crate::jobs_ui::OpenOrder { batch, seq });
+            match self.open_dropped_file(&f, &name, slot, order) {
                 Ok(true) => slot = slot.map(|s| s + 1),
                 Ok(false) => {}
                 Err(e) => self.open_failed(&name, &e),
             }
+        }
+        if batch.is_some() {
+            crate::jobs_ui::end_batch(self);
         }
     }
 
@@ -479,16 +495,17 @@ impl PhotocraftApp {
     }
 
     /// Open one dropped file; with `slot`, its tab goes there (at once, or when a held prompt is
-    /// answered). True when it took the slot.
-    fn open_dropped_file(&mut self, f: &OsFile, name: &str, slot: Option<usize>) -> Result<bool, String> {
+    /// answered), otherwise to its place (`order`) among the files dropped with it. True when it
+    /// took the slot.
+    fn open_dropped_file(&mut self, f: &OsFile, name: &str, slot: Option<usize>, order: Option<crate::jobs_ui::OpenOrder>) -> Result<bool, String> {
         let (docs, opens) = (self.session.documents().len(), self.jobs.opens.len());
         let held = self.held_opens.len() + self.held_memory_prompts.len();
         // The slot travels with the open through the inline document, a background tab and a
         // memory/profile prompt, so no separate move here can land on another document.
         if let Some(path) = f.path.as_deref().filter(|p| p.is_absolute()) {
-            self.open_path_placed(&path_text(path, false)?, slot, None)?;
+            self.open_path_placed(&path_text(path, false)?, slot, order)?;
         } else if let Some(bytes) = &f.bytes {
-            self.open_bytes_placed(name, bytes, None, slot, None)?;
+            self.open_bytes_placed(name, bytes, None, slot, order)?;
         } else {
             return Err(tl!("couldn't read the file").to_string());
         }
@@ -658,7 +675,7 @@ impl PhotocraftApp {
 /// Order names like a file browser does: runs of digits by their value (`File_2` before
 /// `File_10`), everything else case-insensitively; names equal that way fall back to the exact
 /// text so the order is total.
-pub(crate) fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+pub fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     let (mut x, mut y) = (a.chars().peekable(), b.chars().peekable());
     loop {
