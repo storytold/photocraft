@@ -360,10 +360,10 @@ fn shapeless_stroke_tile_skips_match_full_region_across_blending_settings() {
     use photocraft_doc::BlendRange;
 
     let modes = [BlendMode::Normal, BlendMode::Multiply, BlendMode::Screen, BlendMode::Difference];
-    // The paint crosses a small-tile seam at y=252. The stroke reaches past the production
-    // band seam at y=256. The rightmost tile and the final band are both beyond its reach.
+    // The painted region crosses a small-tile seam at y=252 and the production band seam
+    // at y=256. The rightmost tile and the final band are both beyond the stroke's reach.
     let rect = Rect::new(0, 0, 22, 2 * RENDER_TILE + 1);
-    let content = Rect::new(5, 246, 14, 255);
+    let content = Rect::new(5, 246, 14, RENDER_TILE + 1);
     let tile = 21;
     let far_tile = Rect::new(tile, 252, rect.x1, 252 + tile);
     for depth in DEPTHS {
@@ -391,7 +391,7 @@ fn shapeless_stroke_tile_skips_match_full_region_across_blending_settings() {
 
                         let whole = render_tiled(&d, rect, 1024);
                         if position == StrokePosition::Outside && blend == BlendMode::Normal && fill == 1.0 && !blend_if {
-                            assert_eq!(whole.get(9, RENDER_TILE), RED, "the outside stroke reaches the next band");
+                            assert_eq!(whole.get(9, RENDER_TILE), BLUE, "the painted region reaches the next band");
                         }
                         let tiled = render_tiled(&d, rect, tile);
                         assert_eq!(whole.px, tiled.px, "{depth:?}, {position:?}, {blend:?}, fill={fill}, blend_if={blend_if}");
