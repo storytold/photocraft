@@ -1414,7 +1414,8 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
 pub fn open_at(app: &mut PhotocraftApp, tool: Tool, mods: Mods, at: Pos2, doc: [f64; 2], point: Option<(PathRef, BezierHit)>) -> bool {
     use crate::paint_mouse::ContextPopup;
     // The Custom Shape tool's right-click opens its Shape picker at the pointer, never a menu (#13463).
-    if tool == Tool::CustomShape && at.x.is_finite() && at.y.is_finite() {
+    // Command / Ctrl keep the layer picker, as for every tool (CodeRabbit on #16181).
+    if tool == Tool::CustomShape && !mods.cmd && at.x.is_finite() && at.y.is_finite() {
         crate::panels::preset_browser::open_shape_popover(app, [at.x, at.y]);
         return true;
     } // PLAN: assumed `context_popup(app, tool, mods, doc) -> Option<ContextPopup>` with `Menu(MenuKind)` and `BrushPicker` (cw.P8)

@@ -70,6 +70,16 @@ fn every_measured_state_opens_the_picker() {
     assert!(picker_open(&h) && !menu_open(&h), "Path mode");
 }
 
+/// Command / Ctrl + right-click keeps the layer picker for every tool: the Shape picker doesn't take it over
+/// (CodeRabbit on #16181).
+#[test]
+fn command_right_click_does_not_open_the_picker() {
+    let mut h = custom_shape();
+    let p = screen_of(h.state(), [150.0, 100.0]);
+    right_click(&mut h, p, Modifiers::COMMAND);
+    assert!(!picker_open(&h), "no Shape picker");
+}
+
 #[test]
 fn the_line_tool_keeps_its_menu() {
     let mut h = custom_shape();
