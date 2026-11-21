@@ -9,13 +9,15 @@ use photocraft_color::convert::{lab_to_srgb, srgb_to_lab};
 const SAMPLES: usize = 4096;
 
 /// How a Grayscale document's stored gray relates to CIE L* (D50, relative colorimetric with
-/// black point compensation), from the document's gray profile. Untagged documents, and
-/// profiles that aren't gray or don't convert, use the built-in Dot Gain 20 % compatible
-/// profile, as the engine's `document_profile` does.
+/// black point compensation), from the gray profile the document carries. Untagged documents,
+/// and profiles that aren't gray or don't convert, relate them through sRGB: the reference
+/// application's untagged Grayscale Gradient Map matches that within a level (photoshop corpus
+/// gray8 and gray16 gradient-map.psd, saved without a profile), where reading through a Dot Gain
+/// curve is off by about six levels there.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GrayLightness {
-    /// L* / 100 at gray `i / (SAMPLES - 1)`, never decreasing.
-    l: Vec<f32>,
+    /// L* / 100 at gray `i / (SAMPLES - 1)`, never decreasing; `None`: sRGB.
+    l: Option<Vec<f32>>,
 }
 
 impl GrayLightness {
@@ -27,15 +29,10 @@ impl GrayLightness {
             .map_or_else(|| Arc::clone(Self::untagged()), Arc::new)
     }
 
-    /// The relation of an untagged Grayscale document (Dot Gain 20 % compatible).
+    /// The relation of an untagged Grayscale document (sRGB).
     pub fn untagged() -> &'static Arc<Self> {
         static UNTAGGED: OnceLock<Arc<GrayLightness>> = OnceLock::new();
-        UNTAGGED.get_or_init(|| {
-            Arc::new(Self::sample(Builtin::DotGain20Compat.profile()).unwrap_or_else(|| {
-                // The built-in profile always converts; sGray's curve is the last resort.
-                Self { l: (0..SAMPLES).map(|i| srgb_to_lab([i as f32 / (SAMPLES - 1) as f32; 3])[0] / 100.0).collect() }
-            }))
-        })
+        UNTAGGED.get_or_init(|| Arc::new(Self { l: None }))
     }
 
     fn sample(profile: &Profile) -> Option<Self> {
@@ -48,41 +45,57 @@ impl GrayLightness {
         }
         // Both directions read this one table, so it must be finite and rise from black to white.
         let usable = l.iter().all(|v| v.is_finite()) && l.windows(2).all(|w| w[1] >= w[0]) && l[SAMPLES - 1] > l[0];
-        usable.then_some(Self { l })
+        usable.then_some(Self { l: Some(l) })
     }
 
     /// L* / 100 of stored gray `g` (0–1).
     pub fn lightness(&self, g: f32) -> f32 {
-        let x = g.clamp(0.0, 1.0) * (SAMPLES - 1) as f32;
+        let g = g.clamp(0.0, 1.0);
+        let Some(l) = &self.l else {
+            return srgb_to_lab([g; 3])[0] / 100.0;
+        };
+        let x = g * (SAMPLES - 1) as f32;
         let i = (x as usize).min(SAMPLES - 2);
         let f = x - i as f32;
-        self.l[i] + (self.l[i + 1] - self.l[i]) * f
+        l[i] + (l[i + 1] - l[i]) * f
     }
 
     /// The stored gray (0–1) whose L* / 100 is `l`: the inverse of [`Self::lightness`].
-    pub fn gray(&self, l: f32) -> f32 {
-        let (lo, hi) = (self.l[0], self.l[SAMPLES - 1]);
-        if l <= lo {
+    pub fn gray(&self, lightness: f32) -> f32 {
+        let Some(l) = &self.l else {
+            return lab_to_srgb([lightness * 100.0, 0.0, 0.0])[0].clamp(0.0, 1.0);
+        };
+        let (lo, hi) = (l[0], l[SAMPLES - 1]);
+        if lightness <= lo {
             return 0.0;
         }
-        if l >= hi {
+        if lightness >= hi {
             return 1.0;
         }
-        // First sample at or above `l`; the one before it is below.
-        let j = self.l.partition_point(|&v| v < l).clamp(1, SAMPLES - 1);
-        let (a, b) = (self.l[j - 1], self.l[j]);
-        let f = if b > a { (l - a) / (b - a) } else { 0.0 };
+        // First sample at or above `lightness`; the one before it is below.
+        let j = l.partition_point(|&v| v < lightness).clamp(1, SAMPLES - 1);
+        let (a, b) = (l[j - 1], l[j]);
+        let f = if b > a { (lightness - a) / (b - a) } else { 0.0 };
         ((j - 1) as f32 + f) / (SAMPLES - 1) as f32
     }
 
     /// Where a stored gray sits on a Gradient Map: the sRGB gray of the same L*, so a black to
-    /// white gradient written back through [`Self::encode`] returns the gray it read.
+    /// white gradient written back through [`Self::encode`] returns the gray it read. An
+    /// untagged document's gray is its own position.
     pub(super) fn position(&self, g: f32) -> f32 {
+        if self.l.is_none() {
+            return g;
+        }
         lab_to_srgb([self.lightness(g) * 100.0, 0.0, 0.0])[0].clamp(0.0, 1.0)
     }
 
-    /// A Gradient Map colour as this document stores it: its L* through the gray profile.
+    /// A Gradient Map colour as this document stores it: its L* through the gray profile, or
+    /// the neutral sRGB colour of that L* when untagged.
     pub(super) fn encode(&self, c: [f32; 3]) -> [f32; 3] {
-        [self.gray(srgb_to_lab(c)[0] / 100.0); 3]
+        let l = srgb_to_lab(c)[0];
+        if self.l.is_none() {
+            return [lab_to_srgb([l, 0.0, 0.0])[0]; 3];
+        }
+        [self.gray(l / 100.0); 3]
     }
 }

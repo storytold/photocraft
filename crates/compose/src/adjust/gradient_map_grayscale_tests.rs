@@ -29,7 +29,7 @@ fn render_tagged_strips(depth: SampleType, profile: Option<Builtin>, strips: &[u
     (0..w).map(|x| flat.pixel(x as i32, 0)[0]).collect()
 }
 
-/// L* of a stored gray in an untagged document (its gray profile, not sRGB).
+/// L* of a stored gray in an untagged document (through sRGB).
 fn gray_lstar(g: f32) -> f32 {
     GrayLightness::untagged().lightness(g) * 100.0
 }
@@ -135,13 +135,13 @@ fn grayscale_result_follows_the_document_gray_profile() {
     let strips = [16u8, 128, 240];
     let adj = Adjustment::GradientMap { stops: linear_red_to_blue_stops(), reverse: false, dither: false, source: None };
     for depth in [SampleType::U8, SampleType::U16] {
-        let tagged = render_tagged_strips(depth, Some(Builtin::GrayGamma22), &strips, adj.clone());
-        let untagged = render_grayscale_strips(depth, &strips, adj.clone());
+        let gamma = render_tagged_strips(depth, Some(Builtin::GrayGamma22), &strips, adj.clone());
+        let dot_gain = render_tagged_strips(depth, Some(Builtin::DotGain20Compat), &strips, adj.clone());
         // The reference application stores about 127 at strip 16 in a Gamma 2.2 document.
-        assert!((tagged[0] * 255.0 - 127.0).abs() <= 1.0, "{depth:?}: Gamma 2.2 strip 16 stored {}", tagged[0] * 255.0);
-        // Gamma 2.2 needs a higher gray than the untagged Dot Gain curve for the same lightness.
+        assert!((gamma[0] * 255.0 - 127.0).abs() <= 1.0, "{depth:?}: Gamma 2.2 strip 16 stored {}", gamma[0] * 255.0);
+        // A Dot Gain curve needs a lower gray than Gamma 2.2 for the same lightness.
         for i in 0..strips.len() {
-            assert!(tagged[i] > untagged[i] + 2.0 / 255.0, "{depth:?} strip {}: Gamma 2.2 {} not above Dot Gain {}", strips[i], tagged[i], untagged[i]);
+            assert!(gamma[i] > dot_gain[i] + 2.0 / 255.0, "{depth:?} strip {}: Gamma 2.2 {} not above Dot Gain {}", strips[i], gamma[i], dot_gain[i]);
         }
     }
 }
