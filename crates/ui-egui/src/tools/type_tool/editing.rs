@@ -6,7 +6,7 @@ use super::{LayerId, PhotocraftApp, TextEdit, TextLayer, active_doc_id, byte_ran
 
 /// Marks the session's editor to take the keyboard in the pass that first shows it: the framework knows an editor's
 /// doc key only once it has been shown, so a request made before that finds nothing.
-pub(super) fn focus_editor(ctx: &egui::Context) {
+pub(crate) fn focus_editor(ctx: &egui::Context) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::unique(FOCUS_WANTED), true));
 }
 
