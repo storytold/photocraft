@@ -47,8 +47,18 @@ const DELETE_ASK: &str = "Are you sure you want to send {name} to the recycle bi
 /// Delete box's title is not measured, and this is the title the reference gives the box next to it.
 const BOX_TITLE: &str = "Keyboard Shortcuts and Menus";
 
+/// The number the next dialog session takes: a fresh one for every `open`. See
+/// [`ShortcutsSession::id`].
+static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// The open Keyboard Shortcuts and Menus dialog, at `app.prefs_rt.shortcuts`.
 pub(crate) struct ShortcutsSession {
+    /// Which opening of the dialog this draft belongs to. The dialog's Cancel and `ui.dialog.cancel`
+    /// take the draft away and leave an open question standing, and the next `open` starts a fresh
+    /// draft of the preferences. A question, and a Save dialog it asked for a name through, names
+    /// the session it was opened on, so an answer that arrives late cannot move a draft that never
+    /// saw it (#14450).
+    pub(crate) id: u64,
     /// The dialog's state between passes.
     pub(crate) state: DialogState,
     /// The shortcut sets as the dialog edits them.
@@ -233,10 +243,12 @@ impl MenusDraft {
 }
 
 /// The Menus tab's question about unsaved edits, asked when the row picks another set while the
-/// rows differ from the set in use (#14450). Its tag names the set the row picked: the switch each
-/// answer acts on.
+/// rows differ from the set in use (#14450). Its tag names the set the row picked and the session
+/// it was asked on: the switch, and the draft it belongs to.
 pub(crate) struct SetSwitch {
     target: String,
+    /// The [`ShortcutsSession::id`] of the dialog this box was opened for.
+    session: u64,
 }
 
 /// The Menus tab's Delete question (#14450): "Are you sure you want to send <name> to the recycle
@@ -294,6 +306,7 @@ pub fn open(app: &mut PhotocraftApp, tab: u64) {
     }
     let prefs = app.session.prefs();
     let session = ShortcutsSession {
+        id: NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         state: if tab == 1 { DialogState::new().with_tab("menus") } else { DialogState::new() },
         profiles: profiles_of(prefs),
         keymap: draft_keymap(app),
@@ -401,10 +414,13 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// during the pass, so nothing in the pass reads it through [`recording`].
 fn pass(app: &mut PhotocraftApp, ui: &mut egui::Ui, press_ok: bool) {
     let Some(mut session) = app.prefs_rt.shortcuts.take() else { return };
+    // The session this pass belongs to: the question and the Save dialog it opens can be answered
+    // after this draft is gone and another `open` made a new one.
+    let session_id = session.id;
     let rows = crate::menus::base_rows(app);
     let options = options();
     let builtins = builtins();
-    let ShortcutsSession { state, profiles, keymap, menus, pending_import, remembered } = &mut session;
+    let ShortcutsSession { id: _, state, profiles, keymap, menus, pending_import, remembered } = &mut session;
     if let Some(text) = pending_import.take() {
         review(ui, state, dialog(keymap, profiles, &builtins, &options), &text, remembered);
     }
@@ -440,7 +456,7 @@ fn pass(app: &mut PhotocraftApp, ui: &mut egui::Ui, press_ok: bool) {
     }
     if menus.ask_name {
         menus.ask_name = false;
-        ask_set_name(app, state, &suggested_set_file(app, menus));
+        ask_set_name(app, state, &suggested_set_file(app, menus), session_id);
     }
     // The two questions the Set row raises are opened here, beside the pass's own Save-dialog ask:
     // the row has been drawn and its draft state is settled, and the host draws the box over the
@@ -451,7 +467,7 @@ fn pass(app: &mut PhotocraftApp, ui: &mut egui::Ui, press_ok: bool) {
             // unsaved edits go with it, as the reference's "No" does them.
             menus.choose(&target);
         } else {
-            ask_switch_set(app, &target);
+            ask_switch_set(app, &target, session_id);
         }
     }
     if menus.ask_delete {
@@ -691,13 +707,13 @@ fn suggested_set_file(app: &PhotocraftApp, draft: &MenusDraft) -> String {
 /// file's name without its extension names the set, and the file itself is written there: a saved set
 /// lives as a `.mnu` file, so a set the dialog answered with is stored with the preferences and in
 /// that file (#14450).
-fn ask_set_name(app: &mut PhotocraftApp, state: &mut DialogState, suggested: &str) {
-    let asked = app.pick_save(suggested, |app, path| {
+fn ask_set_name(app: &mut PhotocraftApp, state: &mut DialogState, suggested: &str, session: u64) {
+    let asked = app.pick_save(suggested, move |app, path| {
         let stem = Path::new(&path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         // The engine's own name rules: a name it would refuse (empty, overlong, the built-in one)
         // is an error line, not a set the row could never select; the dialog stays open either way.
         // Its bars belong to the framework's own tab, so the line goes to the app's status line.
-        let refused = match app.prefs_rt.shortcuts.as_mut() {
+        let refused = match app.prefs_rt.shortcuts.as_mut().filter(|draft| draft.id == session) {
             Some(session) => match set_name(&stem) {
                 Ok(name) => {
                     session.menus.store(&name);
@@ -714,7 +730,8 @@ fn ask_set_name(app: &mut PhotocraftApp, state: &mut DialogState, suggested: &st
                 }
                 Err(e) => Some(e),
             },
-            // The dialog went away with the session: nothing to name and nothing to write.
+            // The dialog went away with the session, or another one opened since: the name belongs
+            // to the draft that asked, so nothing is named and nothing is written.
             None => None,
         };
         if let Some(e) = refused {
@@ -737,14 +754,14 @@ fn ask_set_name(app: &mut PhotocraftApp, state: &mut DialogState, suggested: &st
 /// the box's Cancel and answers Escape and the close action, and `Alternate` is No. The footer places
 /// its buttons by role, so Windows stands them Yes, Cancel, No: the reference's literal Yes, No,
 /// Cancel order is not expressible through a hosted `StandardPrompt` (see the PR text).
-fn ask_switch_set(app: &mut PhotocraftApp, target: &str) {
+fn ask_switch_set(app: &mut PhotocraftApp, target: &str, session: u64) {
     let prompt = StandardPrompt::custom(tl!(SWITCH_ASK).to_owned())
         .title(tl!(BOX_TITLE).to_owned())
         .button(PromptChoice::Proceed, tl!("Yes").to_owned())
         .button(PromptChoice::Alternate, tl!("No").to_owned())
         .button(PromptChoice::Cancel, tl!("Cancel").to_owned())
         .dont_show_again()
-        .tag(SetSwitch { target: target.to_owned() });
+        .tag(SetSwitch { target: target.to_owned(), session });
     // An `Err` is a question already open (this one or another family's): the row keeps its set and
     // the next pick asks again.
     let _ = alerts::open_prompt(app, prompt);
@@ -769,11 +786,13 @@ fn ask_delete_set(app: &mut PhotocraftApp, name: &str) {
 /// question: Yes removes the set it named, anything else keeps it. `false` for another family's
 /// answer.
 pub(crate) fn answer(app: &mut PhotocraftApp, _ctx: &egui::Context, answer: &mut PromptAnswer) -> bool {
-    if let Some(SetSwitch { target }) = answer.take_tag::<SetSwitch>() {
+    if let Some(SetSwitch { target, session: asked }) = answer.take_tag::<SetSwitch>() {
         let (choice, skip) = (answer.choice, answer.skip);
         // The dialog can have closed while the box waited (its Cancel, `ui.dialog.cancel`): the
-        // answer then writes nothing, since the draft it belongs to is gone.
-        if let Some(session) = app.prefs_rt.shortcuts.as_mut() {
+        // answer then writes nothing, since the draft it belongs to is gone. A dialog opened again
+        // is another session with a fresh draft, so the answer has to name the session the box was
+        // opened on before it writes into the draft standing now.
+        if let Some(session) = app.prefs_rt.shortcuts.as_mut().filter(|current| current.id == asked) {
             match choice {
                 PromptChoice::Proceed => session.menus.save_then_switch(&target),
                 PromptChoice::Alternate => session.menus.choose(&target),

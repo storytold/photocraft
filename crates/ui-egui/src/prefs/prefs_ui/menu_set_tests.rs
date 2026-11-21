@@ -597,6 +597,33 @@ fn cancel_of_the_switch_question_keeps_the_set_and_its_edits() {
     assert!(modified(p), "and the row still reads modified when it reopens");
 }
 
+/// The switch box outlives the dialog it was asked on: the dialog's Cancel and `ui.dialog.cancel`
+/// take the draft away and leave the box standing, and the next open starts a fresh draft of the
+/// preferences. The answer belongs to the draft that was asked, so in a reopened dialog it loads
+/// nothing and stores nothing.
+#[test]
+fn a_switch_answer_that_arrives_after_a_reopen_changes_nothing() {
+    let mut h = harness(Arc::new(ScriptedFiles::new()));
+    with_saved_sets(h.state_mut());
+    open_menus(&mut h);
+    show_all(&mut h);
+    pick(&mut h, "Web");
+    let id = question::<SetSwitch>(h.state()).expect("the switch question");
+    assert_eq!(row_value(&h), "Painting (modified)", "the box waits with the row unmoved");
+    crate::prefs_ui::shortcuts::cancel(h.state_mut());
+    open_menus(&mut h);
+    assert!(question::<SetSwitch>(h.state()).is_some(), "the box stands on after its dialog was cancelled");
+    assert_eq!(row_value(&h), "Painting", "the reopened dialog is a fresh draft of the preferences");
+    answer_by_choice(&mut h, id, "proceed");
+    assert_eq!(row_value(&h), "Painting", "the answer switched nothing in the session that never saw the box");
+    ok(&mut h);
+    let p = h.state().session.prefs();
+    assert_eq!(p.menu_set, "Painting", "and the reopened dialog wrote the sets as it stood");
+    assert_eq!(p.menus.hidden, ["edit.fade"], "Painting's menus are the ones in use");
+    assert_eq!(p.menu_sets["Painting"].hidden, ["edit.fade"], "the answer stored nothing into Painting");
+    assert_eq!(p.menu_sets["Web"].hidden, ["edit.fade", "layer.mergeVisible"], "nor anything into Web");
+}
+
 /// Yes on a modified saved set stores it first, without a file dialog (the measured Save rule for
 /// a saved set), and then loads the other set.
 #[test]
