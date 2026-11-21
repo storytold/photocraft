@@ -37,6 +37,29 @@ fn opened(id: DialogId) -> Value {
 /// "not Photoshop ExtendScript" error instead of hiding those files from the picker.
 const SCRIPT_EXTENSIONS: &[&str] = &["psjs", "ccjs", "jsx", "js", "jsxbin", "json", "txt", "pcdroplet"];
 
+/// File › Package (#14074): the platform folder picker, titled "Choose package destination" and starting in the
+/// document's folder every time (not the folder picked last). The chosen folder runs `file.package` with it as `dir`;
+/// Cancel writes nothing and says nothing. No other options are asked: the command's `format` stays for scripts.
+#[cfg(not(target_arch = "wasm32"))]
+fn package(app: &mut PhotocraftApp) -> Result<Value, String> {
+    let mut request = craft::host::PickRequest::folder("package").title(tl!("Choose package destination").to_string());
+    let dir = crate::dialogs::file_forms::default_dir(app);
+    if dir != "." {
+        request = request.directory(dir);
+    }
+    app.ask_file(request, |app, picked| {
+        let path = picked.first_path().ok_or(crate::file_dialog::CANCELLED)?;
+        let dir = crate::file_open::path_text(&path, false)?;
+        app.run("file.package", json!({"dir": dir}))
+    })
+}
+
+/// The web build has no folder picker: Package keeps its form with the folder field.
+#[cfg(target_arch = "wasm32")]
+fn package(app: &mut PhotocraftApp) -> Result<Value, String> {
+    Ok(opened(crate::dialogs::file_forms::open_package(app)))
+}
+
 /// Menu items fronted here (dialogs before the engine command). `None` when not ours.
 pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if !no_params(params) {
@@ -67,7 +90,7 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             }));
         }
         "file.scripts.scriptEventsManager" => Ok(opened(crate::dialogs::file_forms::open_script_events(app))),
-        "file.package" => Ok(opened(crate::dialogs::file_forms::open_package(app))),
+        "file.package" => package(app),
         "file.export.pathsToIllustrator" => Ok(opened(crate::dialogs::file_forms::open_paths_to_file(app))),
         _ => return None,
     })
@@ -93,6 +116,9 @@ mod tests;
 
 #[cfg(test)]
 mod custom_paper_tests;
+
+#[cfg(test)]
+mod package_picker_tests;
 
 #[cfg(test)]
 mod contact_sheet_subfolders_tests;
