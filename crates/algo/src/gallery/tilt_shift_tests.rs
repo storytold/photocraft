@@ -208,7 +208,8 @@ fn tilt_shift_depths_models_selection_and_tile_edges_match_reference() {
 #[test]
 fn tilt_shift_cancellation_preserves_source() {
     use std::sync::atomic::{AtomicBool, Ordering};
-    let bounds = Rect::new(0, 0, 512, 256);
+    // Keep two wide-blur tiles in one row for the progress-cancellation check.
+    let bounds = Rect::new(0, 0, 512, 32);
     let mut source = Surface::new(PixelFormat::RGBA8);
     source.write_region(bounds, &image(bounds, 4).data);
     let original = source.clone();
