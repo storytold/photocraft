@@ -40,7 +40,7 @@ fn sections(brush: &mut BrushSettings) -> Vec<BrushSection<usize>> {
 pub(super) fn brush_settings(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let text = Tokens::get(&ctx).text;
-    let before = app.session.tools.brush.clone();
+    let before = (*app.session.tools.brush).clone();
     let mut brush = before.clone();
     // Older UI state and control clients could select any of the 13 entries. Switch rows have
     // no pane, so those selections recover to Brush Tip Shape.
