@@ -516,16 +516,38 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json:
 fn step(app: &mut PhotocraftApp, redo: bool) -> serde_json::Value {
     let Some(t) = app.ui.transform.as_mut() else { return serde_json::Value::Null };
     let had_warp = t.session.warp().is_some();
+    // The warp a Redo out of Warp mode leaves, should that step be a hold (a box mode chosen in Warp mode).
+    let leaving = if redo { t.session.warp().map(|w| w.warp.clone()) } else { None };
+    let was_held = app.transform_preview.as_ref().is_some_and(|pv| pv.held.is_some());
     let moved = if redo { t.session.redo() } else { t.session.undo() };
     if !moved {
         return serde_json::Value::Null;
     }
-    // Across the Warp boundary, a stored warp's edit shows other texels (begin.rs): the step
-    // brings its own box, so only the texels swap.
-    if had_warp != t.session.warp().is_some()
-        && let Some(pv) = app.transform_preview.as_mut()
-    {
-        swap_mode_texels(pv);
+    let (now_warp, start, can_redo) = (t.session.warp().is_some(), t.quad_array(), t.session.can_redo());
+    if let Some(pv) = app.transform_preview.as_mut() {
+        // Across the Warp boundary, a stored warp's edit shows other texels (begin.rs), and Warp on a placed smart
+        // object its contents through their map: the step brings its own box, so only those swap.
+        if had_warp != now_warp {
+            swap_mode_texels(pv);
+        }
+        // A hold lives beside the session: an Undo back into Warp notes whether it undid one, and the Redo of that
+        // step holds the warp again, as `hold_warp` does, instead of dropping it.
+        if !redo && !had_warp && now_warp {
+            pv.redo_holds.push(was_held);
+        }
+        if redo
+            && had_warp
+            && !now_warp
+            && pv.redo_holds.pop() == Some(true)
+            && let Some(warp) = leaving
+        {
+            let other = pv.other_texels.take();
+            let placed = other.as_ref().and_then(|o| o.placed_warp);
+            pv.held = Some(super::HeldWarp { warp, start, placed, texture: other.map(|o| o.texture) });
+        }
+        if !can_redo {
+            pv.redo_holds.clear();
+        }
     }
     json!({"transform": app.ui.transform})
 }

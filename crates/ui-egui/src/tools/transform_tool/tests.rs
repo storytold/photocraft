@@ -2622,3 +2622,48 @@ fn undo_and_redo_across_warp_on_a_perspective_box_applies_the_same_warp() {
     }
     assert_eq!(tripped_at, plain_at, "the same placement");
 }
+
+/// A box mode chosen in Warp mode holds the warp; Undo takes the session back into Warp and Redo must hold it again,
+/// not drop it: Enter then applies what it applies without the round trip (found by the sequence checker).
+#[test]
+fn redo_of_a_box_mode_chosen_in_warp_holds_the_warp_again() {
+    fn run(round_trip: bool) -> (Warp, [f64; 6]) {
+        let (mut app, ctx, id) = turned_smart_object(0.5);
+        begin(&mut app, &ctx).unwrap();
+        begin_warp(&mut app, &ctx).unwrap();
+        settle(&mut app);
+        super::begin::reconcile_held(&mut app);
+        let mut to = warp_mesh(&app);
+        to.points[5] += Vec2::new(-4.0, 3.0);
+        pull_mesh(&mut app, 2, to);
+        settle(&mut app);
+        hold_warp(&mut app);
+        settle(&mut app);
+        super::begin::reconcile_held(&mut app);
+        assert!(app.transform_preview.as_ref().unwrap().held.is_some(), "Scale chosen in Warp mode holds the warp");
+        if round_trip {
+            let _ = intercept(&mut app, "edit.undo");
+            super::begin::reconcile_held(&mut app);
+            assert!(open(&app).session.warp().is_some(), "Undo is back in Warp mode");
+            let _ = intercept(&mut app, "edit.redo");
+            super::begin::reconcile_held(&mut app);
+            assert!(open(&app).session.warp().is_none(), "Redo is back in the box mode");
+            assert!(app.transform_preview.as_ref().unwrap().held.is_some(), "with the warp held again");
+        }
+        commit(&mut app);
+        land_jobs(&mut app);
+        assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+        let LayerContent::Smart(sm) = &app.session.active().unwrap().doc.layer(id).unwrap().content else { panic!("a smart object") };
+        (sm.warp.clone().expect("the held warp is applied"), placement_of(&app, id))
+    }
+    let (plain, plain_at) = run(false);
+    let (tripped, tripped_at) = run(true);
+    assert_eq!(tripped.bounds, plain.bounds);
+    let (a, b) = (tripped.mesh.as_ref().expect("a mesh"), plain.mesh.as_ref().expect("a mesh"));
+    for (p, q) in a.points.iter().zip(&b.points) {
+        assert!((p[0] - q[0]).abs() < 1e-6 && (p[1] - q[1]).abs() < 1e-6, "{p:?} vs {q:?}");
+    }
+    for (a, b) in tripped_at.iter().zip(plain_at) {
+        assert!((a - b).abs() < 1e-9, "{tripped_at:?} vs {plain_at:?}");
+    }
+}

@@ -150,6 +150,9 @@ pub struct OpenPreview {
     pub(crate) placed_warp: Option<([f64; 9], bool)>,
     /// A warp held while the box is in another mode ([`begin::hold_warp`]).
     pub(crate) held: Option<HeldWarp>,
+    /// One entry per undone step that came back into Warp mode, newest last: whether it undid a hold, so its Redo
+    /// holds the warp again rather than dropping it ([`commit::step`]). Emptied once the session has nothing to redo.
+    pub(crate) redo_holds: Vec<bool>,
     /// A smart object's stored warp, for the box's preview once its move is projective ([`WarpedPreview`]).
     pub(crate) warped: Option<WarpedPreview>,
 }
@@ -242,6 +245,7 @@ impl OpenPreview {
             placed: None,
             placed_warp: None,
             held: None,
+            redo_holds: Vec::new(),
             warped: None,
         }
     }
