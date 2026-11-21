@@ -6821,10 +6821,12 @@ dependencies = [
 name = "photocraft-web"
 version = "0.23.1"
 dependencies = [
+ "base64 0.22.1",
  "craft-image-codecs",
  "craft-psd",
  "eframe",
  "egui",
+ "egui_kittest",
  "js-sys",
  "log",
  "photocraft-doc",
