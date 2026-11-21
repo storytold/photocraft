@@ -86,9 +86,7 @@ fn conv_row<const N: usize>(src: &[f32], dst: &mut [f32], kernel: &[f32]) {
     }
 }
 
-fn with_blur(src: &Image, out: Rect, ctx: &Ctx, radius: f32, mut f: impl FnMut(f32, f32) -> f32) -> Vec<f32> {
-    let k = gaussian_kernel(radius);
-    let blurred = conv_sep(src, out, &k, &k, ctx.alpha);
+fn with_blur(src: &Image, out: Rect, ctx: &Ctx, blurred: &[f32], mut f: impl FnMut(f32, f32) -> f32) -> Vec<f32> {
     let mut res = src.crop(out);
     let n = src.ch;
     let cc = if ctx.alpha { n - 1 } else { n };
@@ -104,9 +102,16 @@ fn with_blur(src: &Image, out: Rect, ctx: &Ctx, radius: f32, mut f: impl FnMut(f
 }
 
 pub(crate) fn unsharp(src: &Image, out: Rect, ctx: &Ctx, amount: f32, radius: f32, threshold: f32) -> Vec<f32> {
+    let k = gaussian_kernel(radius);
+    let blurred = conv_sep(src, out, &k, &k, ctx.alpha);
+    unsharp_against_blur(src, out, ctx, amount, threshold, &blurred)
+}
+
+/// Reuse the frozen blur when checking several thresholds for the same input.
+pub(crate) fn unsharp_against_blur(src: &Image, out: Rect, ctx: &Ctx, amount: f32, threshold: f32, blurred: &[f32]) -> Vec<f32> {
     let k = amount / 100.0;
     let t = threshold / 255.0;
-    with_blur(src, out, ctx, radius, |o, b| {
+    with_blur(src, out, ctx, blurred, |o, b| {
         let d = o - b;
         if d.abs() + 1e-6 >= t { o + k * d } else { o }
     })
