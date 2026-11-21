@@ -1,5 +1,7 @@
+use photocraft_color::SampleType;
+
 use super::manage::gray_document;
-use super::planes::{channel_format, edit_mode, next_alpha_name, plane_surface, read_plane, tone};
+use super::planes::{channel_format, next_alpha_name, plane_surface, read_plane, tone};
 use super::refs::{Blending, bad, doc_index, mask_plane, source, source_spec};
 use super::targeting::{Target, is_channel_target, is_spot_target, target_of, target_surface};
 use super::{AlphaChannel, ColorMode, EngineError, Result, SelectionMode, Session, Value, json, sel};
@@ -12,6 +14,14 @@ mod apply_image_preserve_tests;
 // ---------------------------------------------------------------------------------------------
 // Apply Image / Calculations
 
+/// Whether `v` sits on a whole 8-bit level, within the 1e-3-of-a-level tolerance of
+/// [`Blending::apply_truncated_at_8bit`]: the measured case (#14490) divides whole levels, while
+/// a merged composite or a vector-mask plane can carry fractions through an 8-bit document.
+fn whole_level_at_8bit(v: f32) -> bool {
+    let level = f64::from(v) * 255.0;
+    (level - level.round()).abs() <= 1e-3
+}
+
 pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "image.applyImage";
     let blending = Blending::parse(p).map_err(|e| bad(cmd, e))?;
@@ -19,7 +29,9 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
     let preserve = p.get("preserveTransparency").and_then(Value::as_bool).unwrap_or(false);
     let src_spec = source_spec(p, "source", "source").unwrap_or_else(|| json!({}));
     // A composite's planes are in its own document's mode, which may not be the target's.
-    let src_mode = s.documents().get(doc_index(s, &src_spec, "document")?).map(|d| edit_mode(&d.doc)).ok_or(EngineError::NoDocument)?;
+    let (src_fmt, src_doc_mode) =
+        s.documents().get(doc_index(s, &src_spec, "document")?).map(|d| (d.doc.pixel_format(), d.doc.mode)).ok_or(EngineError::NoDocument)?;
+    let src_mode = src_fmt.mode;
     // A CMYK composite reaches a channel or a layer mask as its luminosity, as Calculations reads
     // it: its planes are ink, and an average of their tones would leave Black alone light gray.
     let src = source(s, &src_spec, cmd, src_mode == ColorMode::Cmyk && (is_channel_target(p) || target_of(p) == Target::Mask))?;
@@ -65,6 +77,9 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
         // Lock Transparent Pixels works as Preserve Transparency, ticked or not.
         let preserve = preserve || doc.effective_locks(id).transparency;
         let fmt = doc.pixel_format();
+        // The document's own mode, read before `paint_surface` borrows the doc: the pixel format
+        // folds Indexed and Multichannel to Rgb, and only plain RGB was measured (#14490).
+        let doc_mode = doc.mode;
         // A fully locked or pixel-locked layer still takes the image, as in the reference
         // application, and keeps its transparency as with Preserve transparency. A lock that comes
         // from a group around it still refuses, through `paint_surface`.
@@ -83,6 +98,25 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let n = sf.channels();
         let colors = sf.mode.color_channels();
+        // #14490: at 8 bit Apply Image truncates the Add/Subtract quotient instead of rounding it
+        // to the nearest level. Nothing else is measured, so only that exact configuration takes
+        // the new path: an RGB8 target and an RGB8 source DOCUMENT (the document's own mode, so
+        // Indexed and Multichannel, whose pixels fold to Rgb, stay on the old path), Add or
+        // Subtract with Offset 0, neither a mask nor a selection (even a full-weight one keeps
+        // today's rounding), and only where the values actually blended are whole 8-bit levels:
+        // inside an 8-bit document a merged composite still mixes layers in f32 (a layer at 50 %
+        // opacity reaches the loop as 127.5/255) and a vector mask reads as coverage floats.
+        // Calculations, 16 and 32 bit, the other colour modes, the blend modes and Scale with an
+        // Offset stay as they are.
+        let truncates = match blending {
+            Blending::Add { offset, .. } | Blending::Subtract { offset, .. } => offset == 0.0,
+            Blending::Mode(_) => false,
+        } && sf.sample == SampleType::U8
+            && doc_mode == ColorMode::Rgb
+            && src_fmt.sample == SampleType::U8
+            && src_doc_mode == ColorMode::Rgb
+            && mask.is_none()
+            && selection.is_none();
         // Darker Color / Lighter Color compare RGB luminosity; one plane takes Darken / Lighten.
         let whole = blending.whole_pixel().filter(|_| colors > 1 && color_targets.is_none_or(|t| t.len() >= colors));
         if whole.is_some() && sf.mode != ColorMode::Rgb {
@@ -106,6 +140,13 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
             // alone stays black.
             let k = if src_mode == ColorMode::Cmyk && sf.mode != ColorMode::Cmyk { src.get(3).map_or(1.0, |pl| tone(src_mode, pl[i])) } else { 1.0 };
             let top_of = |c: usize| if src.len() > 1 { tone(src_mode, src.get(c).unwrap_or(&src[0])[i]) * k } else { src[0][i] };
+            // The truncation only replaces today's rounding where the blend is what lands on the
+            // pixel: at full weight (opacity 100 %, no mask, no selection) and on an opaque
+            // pixel, and only when every source sample blended here is a whole 8-bit level --
+            // the measured reference divides whole levels, composites and mask planes can carry
+            // fractions through an 8-bit document, and those cases are not measured (#14490).
+            // Attenuated blends keep the old rounding as well.
+            let lands_whole = truncates && w >= 1.0 && base_a >= 1.0 && (0..colors).all(|c| whole_level_at_8bit(top_of(c)));
             // The whole pixel comes from the side Darker / Lighter Color picks; channels never mix.
             let picked = whole.and_then(|m| {
                 let base = [px.first()?, px.get(1)?, px.get(2)?].map(|&b| tone(sf.mode, b));
@@ -114,7 +155,8 @@ pub(super) fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
             for (c, b) in px[..colors].iter_mut().enumerate() {
                 let top = top_of(c);
                 let base = tone(sf.mode, *b);
-                let mixed = picked.and_then(|p| p.get(c).copied()).unwrap_or_else(|| blending.apply(base, top));
+                let applied = if lands_whole { blending.apply_truncated_at_8bit(base, top) } else { blending.apply(base, top) };
+                let mixed = picked.and_then(|p| p.get(c).copied()).unwrap_or(applied);
                 // With Preserve Transparency the colour takes the full blend and only the alpha
                 // stays the layer's (a pixel at 50% alpha turns fully to the source in Normal).
                 *b = tone(
