@@ -494,10 +494,12 @@ fn painting_a_group_is_refused_at_the_press_with_a_message() {
         let seen = errors(&app).len();
         app.ui.tool = tool;
         tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, M);
-        // Brush and Classic gradient use the measured alerts (#11898, #12017).
+        // Brush, Classic gradient and Red Eye use the measured alerts (#11898, #12017, #12574).
         let want = match tool {
             Tool::Brush => "Could not use the brush tool because the pixels in a group cannot be edited without merging the group.".to_string(),
             Tool::Gradient => "Could not use the gradient tool because the pixels in a group cannot be edited without merging the group.".to_string(),
+            // The Red Eye tool's measured alert (#12574).
+            Tool::RedEye => "Could not use the red eye removal tool because the pixels in a group cannot be edited without merging the group.".to_string(),
             _ => format!("Could not use the {} because the target layer is a group.", tool.label()),
         };
         assert_eq!(errors(&app)[seen..], [want], "{tool:?}");

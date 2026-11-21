@@ -247,7 +247,7 @@ fn mode_refusal(s: &Session) -> Result<()> {
 /// The layer kinds and selections the tool refuses (#12574): a targeted layer mask, an adjustment
 /// layer, and several selected layers when the call names no layer. Alpha channels, colour sets
 /// and the Quick Mask were not measured and keep working.
-fn target_refusal(s: &Session, p: &Value) -> Result<()> {
+pub(crate) fn target_refusal(s: &Session, p: &Value) -> Result<()> {
     let Some(d) = s.active() else { return Ok(()) };
     let named = p.get("layer").is_some();
     let p = crate::channel_cmds::inject_target(s, "paint.redEye", p.clone());

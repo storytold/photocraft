@@ -61,3 +61,28 @@ fn one_visible_pixel_layer_is_corrected() {
     let r = s.execute("paint.redEye", click()).unwrap();
     assert!(r["pixels"].as_u64().unwrap() > 0, "{r}");
 }
+
+/// A selection moved but not yet dropped floats; a refused click must not drop it (#13169's
+/// admission step). An adjustment layer can't float anything, so only the other two reach it.
+#[test]
+fn a_refused_click_leaves_a_floating_selection_floating() {
+    for case in ["mask", "several"] {
+        let (mut s, pupil) = eye();
+        let mut params = click();
+        if case == "mask" {
+            s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+            params = json!({"x": 32, "y": 32, "target": "mask"});
+        } else {
+            let top = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+            s.execute("layer.select", json!({"layers": [top, pupil]})).unwrap();
+        }
+        s.execute("select.rect", json!({"x": 20, "y": 20, "width": 20, "height": 20})).unwrap();
+        s.execute("select.float", json!({"dx": 3, "dy": 2, "target": if case == "mask" { "mask" } else { "pixels" }})).unwrap();
+        let steps = s.active().unwrap().history.past_len();
+        assert!(crate::float_cmds::floating(s.active().unwrap()).is_some(), "{case}: the piece floats");
+        s.execute("paint.redEye", params).unwrap_err();
+        let st = s.active().unwrap();
+        assert!(crate::float_cmds::floating(st).is_some(), "{case}: the refused click leaves the piece floating");
+        assert_eq!(st.history.past_len(), steps, "{case}: no history state");
+    }
+}
