@@ -286,6 +286,25 @@ fn flag_param(p: &Value, cur: bool) -> bool {
     p.get("on").and_then(Value::as_bool).unwrap_or(!cur)
 }
 
+/// Toggle the view mirror without moving the document's centre on screen.
+fn flip_horizontal(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
+    let current = app.ui.view.flip_horizontal;
+    let next = flag_param(p, current);
+    if next == current {
+        return Ok(json!(next));
+    }
+    app.ui.view.flip_horizontal = next;
+
+    if let Some(doc) = app.session.active() {
+        let width = doc.doc.size.width as f32;
+        let index = app.session.active_index().unwrap_or(0);
+        if let Some(view) = app.ui.views.get_mut(index) {
+            view.center[0] = width - view.center[0];
+        }
+    }
+    Ok(json!(next))
+}
+
 fn run(app: &mut PhotocraftApp, id: &str, p: &Value) -> Result<Value, String> {
     if id == "view.rotateView" {
         return rotate_command(app, p);
@@ -299,6 +318,9 @@ fn run(app: &mut PhotocraftApp, id: &str, p: &Value) -> Result<Value, String> {
         let bar = &mut app.ui.panels.context_task_bar;
         *bar = flag_param(p, *bar);
         return Ok(json!(*bar));
+    }
+    if id == "view.flipHorizontal" {
+        return flip_horizontal(app, p);
     }
     let o = &mut app.ui.view;
     if let Some(k) = id.strip_prefix("view.show.") {
@@ -347,10 +369,6 @@ fn run(app: &mut PhotocraftApp, id: &str, p: &Value) -> Result<Value, String> {
         "view.extras" => {
             o.extras = flag_param(p, o.extras);
             Ok(json!(o.extras))
-        }
-        "view.flipHorizontal" => {
-            o.flip_horizontal = flag_param(p, o.flip_horizontal);
-            Ok(json!(o.flip_horizontal))
         }
         "view.pixelAspectRatioCorrection" => {
             o.pixel_aspect_correction = flag_param(p, o.pixel_aspect_correction);
