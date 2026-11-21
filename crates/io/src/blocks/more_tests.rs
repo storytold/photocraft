@@ -494,3 +494,21 @@ fn effects_switch() {
 fn tysh_garbage_is_none() {
     assert!(parse_tysh(&[0; 10]).is_none());
 }
+
+/// A bend preset frames its corners by its control points at the degree the reference stores
+/// them: Inflate 50 over a 128 px box at 96 is a 3 × 3 net whose edge midpoints reach 64 and 256
+/// (its 4 × 4 patch only 74.67 and 245.33), and Arc 50 a 4 × 2 net from 5.49 to 314.51 across,
+/// the reference's own corners for those warps.
+#[test]
+fn a_bend_preset_is_framed_by_its_stored_control_points() {
+    use photocraft_geom::warp::{Warp, WarpStyle};
+    let b = [96.0, 96.0, 224.0, 224.0];
+    let near = |a: [f64; 4], e: [f64; 4], tol: f64| a.iter().zip(e).all(|(x, y)| (x - y).abs() <= tol);
+    let inflate = sold_frame(Some(&Warp::preset(WarpStyle::Inflate, 50.0, b)), 320.0, 320.0);
+    assert!(near(inflate, [64.0, 64.0, 256.0, 256.0], 1e-6), "{inflate:?}");
+    let arc = sold_frame(Some(&Warp::preset(WarpStyle::Arc, 50.0, b)), 320.0, 320.0);
+    assert!((arc[0] - 5.49).abs() < 0.01 && (arc[2] - 314.51).abs() < 0.01 && (arc[3] - 224.0).abs() < 1e-6, "{arc:?}");
+    // No bend: the source rect, as before; and `PlLd` keeps the source rect.
+    assert_eq!(sold_frame(Some(&Warp::preset(WarpStyle::Arc, 0.0, b)), 320.0, 320.0), [0.0, 0.0, 320.0, 320.0]);
+    assert_eq!(placed_frame(Some(&Warp::preset(WarpStyle::Arc, 50.0, b)), 320.0, 320.0), [0.0, 0.0, 320.0, 320.0]);
+}
