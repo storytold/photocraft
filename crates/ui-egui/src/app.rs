@@ -289,6 +289,8 @@ impl eframe::App for PhotocraftApp {
         self.withdraw_stale_input(ctx);
         // A pen held still is no touch screen's press-and-hold right click (stylus.rs).
         let pen_down = self.stylus.pen_contacts.observe(&raw_input.events);
+        // Before craft folds a legacy pinch and reads the wheel: a whole Ctrl/Cmd notch over the canvas.
+        crate::wheel_nav::apply(self, ctx, raw_input);
         stylus::pen_hold_is_no_right_click(ctx, pen_down);
         // The OS's moves.
         let moves = raw_input.events.iter().filter(|e| matches!(e, egui::Event::PointerMoved(_))).count();
