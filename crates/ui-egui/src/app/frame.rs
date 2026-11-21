@@ -75,6 +75,12 @@ impl PhotocraftApp {
         self.check_gpu(ctx);
         #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
         let _ = self.live_tokens.poll(ctx, &self.ui.theme);
+        // Report an Issue's page, once the call that copied the report has delivered it. Here in
+        // `logic`, which a hidden window still runs, and before control commands can queue one.
+        crate::links::open_pending(self, ctx);
+        // The startup reason (a software adapter, CPU mode) before control commands, so a
+        // hidden window's `help.systemInfo` before its first UI pass reports it.
+        crate::render_path::frame(self);
         #[cfg(not(target_arch = "wasm32"))]
         self.drain_control(ctx);
         view_cmds::leave_full_screen_without_document(self);

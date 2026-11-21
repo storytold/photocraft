@@ -340,6 +340,11 @@ pub fn adapter_override_is_process_specific(env: Option<&str>, mode: RenderingMo
     env.is_some_and(|v| !v.trim().is_empty()) && linux && mode != RenderingMode::Cpu
 }
 
+/// Whether [`wanted_adapter`]'s request is `PHOTOCRAFT_GPU_ADAPTER`'s rather than the preference's.
+pub fn adapter_request_from_env(env: Option<&str>) -> bool {
+    env.is_some_and(|v| !v.trim().is_empty())
+}
+
 /// The adapter to ask for: `PHOTOCRAFT_GPU_ADAPTER` when set (for one launch), else
 /// `performance.gpuAdapter`; `None` is automatic.
 pub fn wanted_adapter(env: Option<&str>, pref: &str) -> Option<String> {
