@@ -709,3 +709,112 @@ fn transparency_shapes_off_keeps_the_base_alpha_under_a_clipped_knockout() {
         }
     }
 }
+
+/// The smallest rect holding every pixel that differs between two whole-canvas renders.
+fn changed_rect(a: &Document, b: &Document) -> Rect {
+    let (ra, rb) = (render(a, a.bounds()), render(b, b.bounds()));
+    let w = a.bounds().width() as i32;
+    let mut acc = Rect::EMPTY;
+    for (i, (p, q)) in ra.px.iter().zip(&rb.px).enumerate() {
+        if !close(*p, *q) {
+            let (x, y) = ((i as i32) % w, (i as i32) / w);
+            let px = Rect::from_xywh(x, y, 1, 1);
+            acc = if acc.is_empty() { px } else { acc.union(&px) };
+        }
+    }
+    acc
+}
+
+/// The layer at `path` (indices from the top-level list down through groups), mutably.
+fn at<'a>(layers: &'a mut [Layer], path: &[usize]) -> &'a mut Layer {
+    let (first, rest) = path.split_first().unwrap();
+    let l = &mut layers[*first];
+    if rest.is_empty() { l } else { at(l.children_mut().unwrap(), rest) }
+}
+
+/// Hiding the layer at `path` changes only pixels inside its `change_bounds_in` (or anywhere,
+/// when that is `None`).
+#[track_caller]
+fn hiding_stays_in_change_bounds(d: &Document, path: &[usize], what: &str) {
+    let canvas = d.bounds();
+    let (last, outer) = path.split_last().unwrap();
+    // The sibling list holding the layer, and the lists around it, outermost first.
+    let mut ancestors: Vec<(&[Layer], usize)> = Vec::new();
+    let mut list: &[Layer] = &d.layers;
+    for &i in outer {
+        ancestors.push((list, i));
+        list = list[i].children().unwrap();
+    }
+    let bounds = change_bounds_in(list, *last, &ancestors, d.depth, canvas);
+    let mut hidden = d.clone();
+    at(&mut hidden.layers, path).visible = false;
+    let changed = changed_rect(d, &hidden);
+    if let Some(b) = bounds {
+        assert_eq!(changed.intersect(&b), changed, "{what}: pixels changed in {changed:?}, outside the change bounds {b:?}");
+    }
+}
+
+#[test]
+fn hiding_a_knockout_group_stays_in_its_change_bounds() {
+    for depth in DEPTHS {
+        for blend in [BlendMode::Normal, BlendMode::PassThrough] {
+            for knockout in [Knockout::None, Knockout::Shallow, Knockout::Deep] {
+                for shapes in [true, false] {
+                    for fill in [1.0, 0.5, 0.0] {
+                        let mut d = doc(depth, true);
+                        let green = solid(&d, "green", full(&d), GREEN);
+                        let red = solid(&d, "red", Rect::new(2, 2, 4, 4), RED);
+                        let mut g = Layer::group("g", vec![red]);
+                        g.blend = blend;
+                        g.fill_opacity = fill;
+                        g.advanced.knockout = knockout;
+                        g.advanced.transparency_shapes = shapes;
+                        d.layers.push(green);
+                        d.layers.push(g);
+                        let what = format!("{depth:?} {blend:?} group, {knockout:?}, shapes {shapes}, fill {fill}");
+                        hiding_stays_in_change_bounds(&d, &[2], &what);
+                        // The same group inside a pass-through group, and inside an isolated one.
+                        for outer_blend in [BlendMode::PassThrough, BlendMode::Normal] {
+                            let mut n = doc(depth, true);
+                            let green = solid(&n, "green", full(&n), GREEN);
+                            let g = d.layers[2].clone();
+                            let mut outer = Layer::group("outer", vec![solid(&n, "blue", Rect::new(8, 0, 12, 8), BLUE), g]);
+                            outer.blend = outer_blend;
+                            n.layers.push(green);
+                            n.layers.push(outer);
+                            hiding_stays_in_change_bounds(&n, &[2, 1], &format!("{what}, in a {outer_blend:?} group"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn hiding_a_knockout_layer_in_a_group_stays_in_its_change_bounds() {
+    for depth in DEPTHS {
+        for blend in [BlendMode::Normal, BlendMode::PassThrough] {
+            for knockout in [Knockout::Shallow, Knockout::Deep] {
+                for shapes in [true, false] {
+                    for fill in [0.0, 0.5] {
+                        let mut d = doc(depth, true);
+                        let green = solid(&d, "green", full(&d), GREEN);
+                        let red = solid(&d, "red", full(&d), RED);
+                        let mut k = solid(&d, "knock", Rect::new(2, 2, 4, 4), BLUE);
+                        k.advanced.knockout = knockout;
+                        k.advanced.transparency_shapes = shapes;
+                        k.fill_opacity = fill;
+                        let mut g = Layer::group("g", vec![red, k]);
+                        g.blend = blend;
+                        d.layers.push(green);
+                        d.layers.push(g);
+                        let what = format!("{depth:?} {knockout:?} layer, shapes {shapes}, fill {fill}, in a {blend:?} group");
+                        hiding_stays_in_change_bounds(&d, &[2, 1], &what);
+                        hiding_stays_in_change_bounds(&d, &[2], &format!("{what}: the group"));
+                    }
+                }
+            }
+        }
+    }
+}
