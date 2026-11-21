@@ -256,3 +256,34 @@ fn the_menu_state_follows_the_preferences_the_rows_show() {
     app.session.edit_prefs(|p| p.export.quick_export_format = photocraft_engine::prefs::QuickExportFormat::Jpg);
     assert_ne!(state_hash(&app, None), hidden, "the Quick Export label names the format");
 }
+
+/// ⌘H Hides PhotoCraft (opt-in): Hide takes ⌘H and View › Extras moves to ⌃⌘H, in the menu and in the keymap, with
+/// no input (a `prefs.set`); a key the user gives Extras still wins. Off, Extras keeps Photoshop's ⌘H.
+#[test]
+fn cmd_h_hides_photocraft_and_extras_moves() {
+    let (mut h, synced, _) = harness(true);
+    let shortcut = |synced: &Synced, id: CommandRef| synced.borrow().last().cloned().expect("menus synced").find(&id).and_then(|it| it.shortcut);
+    let extras = || crate::shortcut_dispatch::keymap_command("view.extras");
+    let hide = || craft::menu::Builtin::Hide.command();
+    let key = |s: &str| craft::menu::Chord::parse(s).unwrap();
+    assert_eq!(shortcut(&synced, extras()), Some(key("Cmd+H")), "off by default");
+    assert_eq!(shortcut(&synced, hide()), Some(key("Ctrl+Cmd+H")), "as in Photoshop");
+
+    h.state_mut().session.edit_prefs(|p| p.interface.cmd_h_hides_app = true);
+    h.run_steps(3);
+    if !cfg!(target_os = "macos") {
+        // The preference only applies on macOS: set anyway, Extras keeps ⌘H.
+        assert_eq!(shortcut(&synced, extras()), Some(key("Cmd+H")));
+        return;
+    }
+    assert_eq!(shortcut(&synced, extras()), Some(key("Ctrl+Cmd+H")));
+    assert_eq!(shortcut(&synced, hide()), Some(key("Cmd+H")));
+    assert_eq!(holder(&h.ctx, &key("Ctrl+Cmd+H")), Some(extras()), "the key runs Extras");
+    // Content-Aware Fill's Hide Sampling Area keeps ⌘H inside its workspace; it doesn't keep Hide off ⌘H.
+    assert!(holder(&h.ctx, &key("Cmd+H")).is_none_or(|c| c.id.starts_with("fill.")), "no app-wide command has ⌘H");
+
+    h.state_mut().run("edit.keyboardShortcuts", json!({"set": {"view.extras": "Cmd+H"}, "allowUnknown": true})).unwrap();
+    h.run_steps(3);
+    assert_eq!(shortcut(&synced, hide()), Some(key("Ctrl+Cmd+H")));
+    assert_eq!(shortcut(&synced, extras()), Some(key("Cmd+H")));
+}
