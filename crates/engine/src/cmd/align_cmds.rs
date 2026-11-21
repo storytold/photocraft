@@ -81,7 +81,6 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
         .ok_or_else(|| bad(cmd, format!("unknown projection `{projection}` (auto|perspective|cylindrical|spherical|collage|reposition)")))?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = st.doc.clone();
-    let explicit_reference = p.get("reference").and_then(Value::as_u64).is_some();
     let reference = match p.get("reference").and_then(Value::as_u64) {
         Some(r) if ids.contains(&LayerId(r)) => LayerId(r),
         Some(r) => return Err(bad(cmd, format!("reference {r} is not a selected pixel layer"))),
@@ -89,6 +88,9 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
         // the reference (#7080).
         None => background_reference(&doc, &ids).or_else(|| ids.iter().copied().find(|id| pinned(&doc, *id))).unwrap_or(ids[0]),
     };
+    // Whether `background_reference` chose it: a Background that is the reference some other way (named by the caller,
+    // or taken as the first locked layer because it is locked all) keeps today's refusal to move a locked layer.
+    let auto_background = p.get("reference").and_then(Value::as_u64).is_none() && background_reference(&doc, &ids) == Some(reference);
     let ref_idx = ids.iter().position(|i| *i == reference).unwrap_or(0);
     let area = doc.bounds();
     let surfs: Vec<&Surface> = ids.iter().map(|id| doc.layer(*id).and_then(|l| l.surface()).ok_or(EngineError::NoLayer(*id))).collect::<Result<_>>()?;
@@ -126,7 +128,7 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Onto a Background chosen automatically, a layer held only by its position lock moves too (#14199); an explicit
     // `reference` that would move a locked layer is still refused (CodeRabbit on #16073).
-    let movable = |id: LayerId| !pinned(&doc, id) || (!explicit_reference && doc.is_background(reference) && position_locked_only(&doc, id));
+    let movable = |id: LayerId| !pinned(&doc, id) || (auto_background && position_locked_only(&doc, id));
     if let Some(l) = moves.iter().find(|&&i| !movable(ids[i])).and_then(|&i| doc.layer(ids[i])) {
         return Err(EngineError::Other(format!("Auto-Align can't move the locked layer \"{}\"", l.name)));
     }

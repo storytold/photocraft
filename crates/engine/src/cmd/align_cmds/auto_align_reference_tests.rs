@@ -108,6 +108,16 @@ fn an_explicit_background_reference_still_refuses_to_move_a_position_locked_laye
     assert_eq!(origin(&s, rot), (10, 28), "the locked layer stays put");
 }
 
+/// A Background locked all the way is picked as the reference by the locked-layer rule, not by the Background rule: the
+/// position-locked layer still must not move onto it (CodeRabbit on #16073).
+#[test]
+fn a_background_locked_all_the_way_does_not_let_a_position_locked_layer_move() {
+    let (mut s, bg, _, rot) = setup();
+    lock(&mut s, bg, "all");
+    assert!(s.execute("edit.autoAlignLayers", json!({"projection": "reposition"})).is_err());
+    assert_eq!(origin(&s, rot), (10, 28), "the locked layer stays put");
+}
+
 /// A layer locked all the way (not measured beside a selected Background) keeps today's rule: it is the reference.
 #[test]
 fn a_fully_locked_layer_beside_the_background_keeps_todays_rule() {
