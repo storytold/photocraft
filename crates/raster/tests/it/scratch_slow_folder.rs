@@ -15,6 +15,7 @@ use photocraft_geom::{Rect, TILE_SIZE};
 use photocraft_raster::{Surface, spill};
 
 const TILE_BYTES: usize = (TILE_SIZE * TILE_SIZE) as usize * 4;
+const SHORT_QUERY_WAIT: Duration = Duration::from_millis(100);
 
 /// Folders whose name starts with "hung" stall their queries while this is on.
 static STALL: AtomicBool = AtomicBool::new(false);
@@ -45,6 +46,16 @@ fn release() {
     STALL.store(false, Ordering::SeqCst);
     *GATE.0.lock().unwrap() = true;
     GATE.1.notify_all();
+}
+
+struct QueryHooks;
+
+impl Drop for QueryHooks {
+    fn drop(&mut self) {
+        release();
+        spill::set_query_wait_for_tests(None);
+        spill::set_query_hook_for_tests(None);
+    }
 }
 
 fn poll_until(what: &str, cond: impl Fn() -> bool) {
@@ -109,6 +120,7 @@ fn a_folder_that_stops_answering_never_freezes_the_app() {
     let hung1 = root.join("hung1");
     let hung2 = root.join("hung2");
     let hung3 = root.join("hung3");
+    let hooks = QueryHooks;
     spill::set_query_hook_for_tests(Some(stall));
 
     // A. A healthy folder.
@@ -156,10 +168,14 @@ fn a_folder_that_stops_answering_never_freezes_the_app() {
     assert!(spill::enabled() && !spill::paused() && st.last_error.is_none(), "{st:?}");
 
     // F. A late answer for the current folder applies: spilling resumes by itself.
+    spill::set_query_wait_for_tests(Some((&hung2, SHORT_QUERY_WAIT)));
     arm();
     let result = bounded("configure of a second hung folder", || spill::configure(Some(&hung2), 1 << 20));
-    assert!(result.is_err());
+    spill::set_query_wait_for_tests(None);
+    assert!(result.as_ref().err().is_some_and(|e| e.contains("not responding")), "{result:?}");
     assert!(spill::paused());
+    poll_until("the late preparation to reach the stall", || ENTERED.load(Ordering::SeqCst) > 0);
+    assert_eq!(ENTERED.load(Ordering::SeqCst), 1);
     release();
     poll_until("the late answer to resume spilling", || spill::enabled() && !spill::paused() && spill::last_error().is_none());
     assert_eq!(spill::stats().dir.as_deref(), Some(hung2.as_path()));
@@ -167,8 +183,13 @@ fn a_folder_that_stops_answering_never_freezes_the_app() {
     // G. The open folder stops answering when measured: no answer counts as unknown, spilling
     //    goes on, and asking again costs nothing.
     spill::configure(Some(&hung3), 1 << 20).unwrap();
+    spill::set_query_wait_for_tests(Some((&hung3, SHORT_QUERY_WAIT)));
     arm();
     assert_eq!(bounded("scratch_capacity", spill::scratch_capacity), None);
+    // Joining this query must reuse its expired deadline. A fresh wait uses the full
+    // production duration and would fail the prompt checks below.
+    spill::set_query_wait_for_tests(None);
+    poll_until("the measurement to reach the stall", || ENTERED.load(Ordering::SeqCst) > 0);
     assert!(spill::free_space_unmeasured());
     assert!(spill::stats().free_space_unmeasured);
     assert!(spill::enabled() && !spill::paused());
@@ -187,7 +208,7 @@ fn a_folder_that_stops_answering_never_freezes_the_app() {
     spill::set_budget(8 * TILE_BYTES);
     arm();
     spill::set_size_cap(Some(1 << 50));
-    let trigger_tiles = surface(1, 32);
+    let trigger_tiles = prompt("start the growth check without waiting", || surface(1, 32));
     poll_until("the growth query to reach the stall", || ENTERED.load(Ordering::SeqCst) >= 1);
     let evictions = spill::stats().evictions;
     let tiles = surface(33, 32);
@@ -201,7 +222,7 @@ fn a_folder_that_stops_answering_never_freezes_the_app() {
     spill::set_size_cap(None);
 
     // Cleanup.
-    spill::set_query_hook_for_tests(None);
+    drop(hooks);
     drop(tiles);
     drop(trigger_tiles);
     spill::configure(None, 0).unwrap();
