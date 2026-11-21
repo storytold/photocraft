@@ -36,3 +36,25 @@ fn a_bare_extension_names_no_file() {
     let r = export(&doc(), "pcraft", &ExportOptions::default()).expect("export");
     assert_eq!(manifest_name(&r.bytes), "FirstTest.psd");
 }
+
+/// A bundle copied or renamed outside the app opens under its new file name, as every other
+/// format does, not under the name it was saved with (#13412).
+#[test]
+fn a_renamed_bundle_opens_under_its_file_name() {
+    let saved = export(&doc(), "X.pcraft", &ExportOptions::default()).expect("export").bytes;
+    assert_eq!(import("Y.pcraft", &saved).expect("import").document.name, "Y.pcraft");
+    assert_eq!(import_for_open("/copies/Y.pcraft", &saved, &ImportOptions::default()).expect("open").0.document.name, "Y.pcraft");
+}
+
+/// Opened from disk, the name is the file's on disk.
+#[test]
+fn a_renamed_bundle_on_disk_opens_under_its_file_name() {
+    let saved = export(&doc(), "X.pcraft", &ExportOptions::default()).expect("export").bytes;
+    let dir = std::env::temp_dir().join(format!("photocraft-renamed-bundle-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("dir");
+    let path = dir.join("Y.pcraft");
+    std::fs::write(&path, &saved).expect("write");
+    let opened = import_file("Y.pcraft", &path, &ImportOptions::default(), &photocraft_raster::Interrupt::NONE);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(opened.expect("open").document.name, "Y.pcraft");
+}
