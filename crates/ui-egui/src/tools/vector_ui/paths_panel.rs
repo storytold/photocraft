@@ -135,7 +135,8 @@ fn key_of_name(doc: &Document, name: &str, active: Option<photocraft_doc::LayerI
 
 /// Runs an engine command; an error goes to the status line.
 fn run(app: &mut PhotocraftApp, command: &str, params: Value) -> Option<Value> {
-    match app.run(command, params) {
+    let ran = if command == "path.stroke" { crate::canvas_tool_menu::pen_dialogs::stroke_path(app, params) } else { app.run(command, params) };
+    match ran {
         Ok(v) => Some(v),
         Err(e) => {
             app.ui.status = e;
