@@ -1177,6 +1177,69 @@ fn equalize_smart_filter_uses_selected_pixels_for_its_histogram() {
     }
 }
 
+/// A Curves command's own points are read with the command's rules (whole levels, 16 points), while
+/// a smart filter replays its stored params with the rules for curves a file carries. So the smart
+/// filter must store the curve the command applied, not the raw params: fractional inputs that the
+/// command rounds onto one level would otherwise replay as two different points.
+#[test]
+fn a_curves_smart_filter_stores_and_replays_the_curve_the_command_applied() {
+    for depth in DEPTHS {
+        let mut plain = session(depth, "rgb");
+        let mut smart = session(depth, "rgb");
+        smart.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let params = json!({"points": [[0, 0], [127.1, 10], [127.9, 240], [255, 255]]});
+        for s in [&mut plain, &mut smart] {
+            s.execute("image.adjustments.curves", params.clone()).unwrap();
+        }
+        let applied =
+            crate::adjust_params::to_params(&crate::adjust_params::from_command_params("curves", &params, None, photocraft_color::ColorMode::Rgb).unwrap());
+        let stored = &smart_filters_of(&smart)[0].params;
+        assert_eq!(stored["points"], applied["points"], "depth={depth}: the smart filter keeps the applied curve");
+        assert!(max_diff(&flatten(&plain), &flatten(&smart)) < 2.0 / 255.0, "depth={depth}: the smart filter renders like the destructive command");
+    }
+}
+
+/// A smoothed pencil curve is stored already smoothed, so the smart filter must not smooth it a
+/// second time when it replays.
+#[test]
+fn a_smoothed_pencil_curves_smart_filter_renders_like_the_command() {
+    let jagged: Vec<f64> = (0..photocraft_doc::adjust::CURVE_MAP_LEN).map(|level| if level % 2 == 0 { 40.0 } else { 200.0 }).collect();
+    for depth in DEPTHS {
+        let mut plain = session(depth, "rgb");
+        let mut smart = session(depth, "rgb");
+        smart.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let params = json!({"pencil": true, "smooth": 2, "points": jagged});
+        for s in [&mut plain, &mut smart] {
+            s.execute("image.adjustments.curves", params.clone()).unwrap();
+        }
+        let applied = crate::adjust_params::from_command_params("curves", &params, None, photocraft_color::ColorMode::Rgb).unwrap();
+        let stored = &smart_filters_of(&smart)[0].params;
+        let replayed = crate::adjust_params::from_params("curves", stored, None, photocraft_color::ColorMode::Rgb).unwrap();
+        assert_eq!(replayed, applied, "depth={depth}: the stored filter replays the curve the command applied");
+        assert!(max_diff(&flatten(&plain), &flatten(&smart)) < 2.0 / 255.0, "depth={depth}: the smart filter renders like the destructive command");
+    }
+}
+
+/// The same over an eyedropper pick: the pick resolves to a point curve without smoothing (the
+/// picker drops `smooth` and `pencil` first), so the stored filter must not replay those params.
+#[test]
+fn a_curves_eyedropper_smart_filter_stores_the_resolved_point_curve_not_the_drawing_params() {
+    let drawn: Vec<f64> = (0..photocraft_doc::adjust::CURVE_MAP_LEN).map(|level| if level < 128 { 40.0 } else { 200.0 }).collect();
+    for depth in DEPTHS {
+        let mut plain = session(depth, "rgb");
+        let mut smart = session(depth, "rgb");
+        smart.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let params = json!({"pencil": true, "smooth": 2, "points": drawn, "eyedropper": {"point": "white", "at": [2, 2]}});
+        for s in [&mut plain, &mut smart] {
+            s.execute("image.adjustments.curves", params.clone()).unwrap();
+        }
+        let stored = &smart_filters_of(&smart)[0].params;
+        assert!(stored.get("smooth").is_none(), "depth={depth}: the stored filter does not smooth the pick again");
+        assert!(stored.get("pencil").is_none(), "depth={depth}: the pick is stored as the point curve it resolved to");
+        assert!(max_diff(&flatten(&plain), &flatten(&smart)) < 2.0 / 255.0, "depth={depth}: the smart filter renders like the destructive command");
+    }
+}
+
 #[test]
 fn replace_color_null_records_foreground_and_bad_color_does_not_edit() {
     for depth in DEPTHS {

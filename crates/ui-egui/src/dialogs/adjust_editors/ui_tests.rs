@@ -442,3 +442,46 @@ fn black_white_auto_button_sets_the_weights() {
     assert_ne!(after, before, "the red and blue are told apart");
     assert_eq!(history_len(&h), steps + 1);
 }
+
+/// A Properties commit sends only the keys the user changed (#14444 review): editing the Red curve of a layer
+/// that carries an imported composite curve (19 points, or hundredths of a level) leaves that composite curve
+/// exactly as the file had it, instead of the command refusing it or truncating it. The commit settings come
+/// from `session::commit_params`, the function the panel's commit uses, and go through `layer.setAdjustment`.
+#[test]
+fn curves_properties_edit_of_red_keeps_an_imported_master_exact() {
+    use super::values::{self, ValueCx};
+    let nineteen: Vec<[f64; 2]> = (0..19).map(|k| [k as f64 * 14.0, (k as f64 * 14.0 + 6.0).min(255.0)]).collect();
+    let hundredths: Vec<[f64; 2]> = vec![[0.0, 0.0], [43.35, 33.2], [255.0, 255.0]];
+    for (name, points) in [("19 points", nineteen), ("hundredths of a level", hundredths)] {
+        let mut h = app_harness("curves", "rgb", 8);
+        let (id, _) = layer(&h);
+        let imported = photocraft_engine::adjust_params::from_params("curves", &json!({"points": points}), None, photocraft_color::ColorMode::Rgb).unwrap();
+        let Adjustment::Curves { master: file_master, .. } = &imported else { panic!("{imported:?}") };
+        let file_master = file_master.clone();
+        h.state_mut()
+            .session
+            .edit("Import", |doc, _| {
+                let l = doc.layer_mut(id).ok_or(photocraft_engine::EngineError::NoLayer(id))?;
+                l.content = LayerContent::Adjustment(imported.clone());
+                Ok(())
+            })
+            .unwrap();
+        let steps = history_len(&h);
+        // What the panel holds for the layer, and the same value with a new point on the Red curve.
+        let committed_params = photocraft_engine::adjust_params::to_params(&layer(&h).1);
+        let vcx = ValueCx::new(photocraft_doc::ColorMode::Rgb, committed_params.clone());
+        let committed = values::from_params("curves", &committed_params, &vcx).unwrap();
+        let mut edited_params = committed_params.clone();
+        edited_params["red"] = json!([[0, 0], [128, 160], [255, 255]]);
+        let edited = values::from_params("curves", &edited_params, &vcx).unwrap();
+        let mut p = super::session::commit_params(&committed, &edited, &vcx);
+        assert!(p.get("points").is_none(), "{name}: the untouched composite curve is not sent: {p}");
+        p["layer"] = json!(id.0);
+        h.state_mut().run("layer.setAdjustment", p).unwrap();
+        let (_, after) = layer(&h);
+        let Adjustment::Curves { master, per_channel, .. } = &after else { panic!("{after:?}") };
+        assert_eq!(per_channel[0].len(), 3, "{name}: the Red curve got its new point");
+        assert_eq!(*master, file_master, "{name}: the composite curve is exactly the file's");
+        assert_eq!(history_len(&h), steps + 1, "{name}: one history step");
+    }
+}

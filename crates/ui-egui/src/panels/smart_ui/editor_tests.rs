@@ -118,8 +118,8 @@ fn adjustment_editor_reopens_stored_parameters_and_updates_instead_of_appending(
 }
 
 /// Records `command` on a Smart Object in a `mode` document, opens the filter's editor, lets it
-/// draw and confirms with no edit. The filter's stored params afterwards.
-fn stored_after_confirming_unedited(mode: &str, command: &str, recorded: &serde_json::Value) -> serde_json::Value {
+/// draw and confirms with no edit. The filter's stored params before and after.
+fn stored_after_confirming_unedited(mode: &str, command: &str, recorded: &serde_json::Value) -> (serde_json::Value, serde_json::Value) {
     let (mut app, layer) = app(8, mode);
     app.run(command, recorded.clone()).unwrap();
     let sm = smart(&app, layer).clone();
@@ -137,12 +137,13 @@ fn stored_after_confirming_unedited(mode: &str, command: &str, recorded: &serde_
     confirm(h.state_mut());
     let after = smart(h.state(), layer);
     assert_eq!(after.smart_filters.len(), sm.smart_filters.len(), "{command}: no filter was stacked");
-    after.smart_filters[index].params.clone()
+    (sm.smart_filters[index].params.clone(), after.smart_filters[index].params.clone())
 }
 
 /// Opening an adjustment smart filter and pressing OK changes nothing it renders, whichever of a
 /// setting's equivalent keys it was recorded with: the keys the dialog starts with must not be
-/// read over the recorded ones.
+/// read over the recorded ones. The baseline is the filter as the command stored it, since Levels
+/// and Curves store what the command applied (whole levels, at most 16 points), not the raw params.
 #[test]
 fn confirming_an_unedited_adjustment_smart_filter_keeps_what_it_renders() {
     use photocraft_doc::ColorMode::{Cmyk, Lab, Rgb};
@@ -179,9 +180,9 @@ fn confirming_an_unedited_adjustment_smart_filter_keeps_what_it_renders() {
     for (mode, color_mode, kind, recorded) in cases {
         let read = |params: &serde_json::Value| from_params(kind, params, None, color_mode).unwrap();
         assert_ne!(read(&recorded), default_for(kind, color_mode).unwrap(), "{mode} {kind} {recorded}: the case must record something");
-        let stored = stored_after_confirming_unedited(mode, &format!("image.adjustments.{kind}"), &recorded);
-        if read(&stored) != read(&recorded) {
-            changed.push(format!("{mode} {kind} {recorded} became {stored}"));
+        let (before, stored) = stored_after_confirming_unedited(mode, &format!("image.adjustments.{kind}"), &recorded);
+        if read(&stored) != read(&before) {
+            changed.push(format!("{mode} {kind} {recorded} stored as {before} became {stored}"));
         }
     }
     assert!(changed.is_empty(), "{}", changed.join("\n"));
