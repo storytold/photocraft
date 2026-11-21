@@ -71,6 +71,7 @@ mod gallery_colours;
 mod gauss_small_sigma;
 mod gaussian_edge_profile;
 mod gradient_overlay_strokes;
+mod gradient_text;
 mod guide_layout_limit;
 mod guide_layout_preview;
 mod hdr_gamma_direction;
