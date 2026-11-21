@@ -21,12 +21,7 @@ fn bar() -> (Harness<'static, Box<PhotocraftApp>>, u64) {
     app.ui.tool = Tool::Type;
     crate::theme::install_fonts(app.ctx());
     crate::theme::apply(app.ctx(), &crate::theme::AppTheme::pro());
-    let mut h = Harness::builder()
-        .with_context(app.ctx().clone())
-        .with_size(vec2(1800.0, 300.0))
-        .with_step_dt(1.0 / 60.0)
-        .with_max_steps(16)
-        .build_ui_state(
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1800.0, 300.0)).with_step_dt(1.0 / 60.0).with_max_steps(16).build_ui_state(
         move |ui, app: &mut Box<PhotocraftApp>| {
             crate::panels::options_bar(app, ui);
             // The alert the bar raises is a hosted dialog, drawn by the dialog host.
@@ -67,14 +62,8 @@ fn type_size(h: &mut Harness<'static, Box<PhotocraftApp>>, text: &str) {
 fn the_size_field_takes_001_to_1296_and_the_nearest_limit_outside_it() {
     // (typed, kept, alert once) — typed values are integers only: the field's reader follows the env's regional
     // decimal separator, and this test does not pin that behaviour.
-    let rows: [(&str, f32, bool); 6] = [
-        ("2000", 1296.0, true),
-        ("1297", 1296.0, true),
-        ("0", 0.01, true),
-        ("-5", 0.01, true),
-        ("1", 1.0, false),
-        ("1296", 1296.0, false),
-    ];
+    let rows: [(&str, f32, bool); 6] =
+        [("2000", 1296.0, true), ("1297", 1296.0, true), ("0", 0.01, true), ("-5", 0.01, true), ("1", 1.0, false), ("1296", 1296.0, false)];
     for (typed, kept, alert) in rows {
         let (mut h, id) = bar();
         type_size(&mut h, typed);
