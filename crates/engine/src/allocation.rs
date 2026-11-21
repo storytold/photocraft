@@ -15,21 +15,13 @@ pub(crate) fn filled<T: Clone>(len: usize, value: T, purpose: &str) -> Result<Ve
     Ok(out)
 }
 
-/// Reads a regular file of at most `max` bytes. The opened handle must be a regular file (a
-/// device such as `/dev/zero` never ends) and reading stops one byte past `max`, so neither a
-/// special file nor one that grows after a size check can fill memory.
+/// Reads a regular file of at most `max` bytes ([`photocraft_format::read_file_limited`]). The
+/// open does not wait on a FIFO or device (`O_NONBLOCK` on Unix), the opened handle must be a
+/// regular file (`InvalidInput` otherwise: `/dev/zero` never ends) and reading stops past `max`
+/// (`FileTooLarge`), so neither a special file nor one that grows after a size check can hang
+/// the caller or fill memory.
 pub(crate) fn read_file_within(path: impl AsRef<std::path::Path>, max: u64) -> std::io::Result<Vec<u8>> {
-    use std::io::{Error, ErrorKind, Read};
-    let file = std::fs::File::open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(Error::new(ErrorKind::InvalidInput, "not a regular file"));
-    }
-    let mut out = Vec::new();
-    file.take(max.saturating_add(1)).read_to_end(&mut out)?;
-    if out.len() as u64 > max {
-        return Err(Error::new(ErrorKind::InvalidData, format!("file is larger than {max} bytes")));
-    }
-    Ok(out)
+    photocraft_format::read_file_limited(path.as_ref(), max)
 }
 
 /// Reserve a vector for a known number of operation results.
@@ -189,12 +181,31 @@ mod tests {
         std::fs::write(&path, [7u8; 10]).unwrap();
         let p = path.to_str().unwrap();
         assert_eq!(read_file_within(p, 10).unwrap(), vec![7u8; 10]);
-        assert!(read_file_within(p, 9).is_err_and(|e| e.kind() == std::io::ErrorKind::InvalidData));
+        assert!(read_file_within(p, 9).is_err_and(|e| e.kind() == std::io::ErrorKind::FileTooLarge));
         std::fs::remove_file(&path).unwrap();
         // A directory (and on unix a device that never ends) is not a regular file.
         assert!(read_file_within(std::env::temp_dir().to_str().unwrap(), 10).is_err());
         #[cfg(unix)]
         assert!(read_file_within("/dev/zero", 1 << 30).is_err_and(|e| e.kind() == std::io::ErrorKind::InvalidInput));
+    }
+
+    /// A FIFO is refused without waiting for a writer: the open itself blocked before the
+    /// regular-file check could run, hanging whatever re-rendered the filter or footage that
+    /// named it. The read runs on its own thread so that a regression fails here.
+    #[cfg(unix)]
+    #[test]
+    fn read_file_within_refuses_a_fifo_without_blocking() {
+        let dir = std::env::temp_dir().join(format!("pc-read-within-fifo-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("map.png");
+        let _ = std::fs::remove_file(&fifo);
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success(), "mkfifo failed");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let path = fifo.clone();
+        std::thread::spawn(move || tx.send(read_file_within(&path, 1 << 20).map_err(|e| e.kind())));
+        let result = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("reading a FIFO blocked");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(result, Err(std::io::ErrorKind::InvalidInput));
     }
 
     #[cfg(unix)]

@@ -16,6 +16,10 @@ Remote automation paths are untrusted relative names resolved beneath explicitly
   effects.
 - Non-existent output files are supported when their parent already exists beneath the write
   root. Automation does not create caller-selected directory trees.
+- Automation reads and `.pcraft` bundle entries open without blocking (`O_NONBLOCK` on Unix) and
+  refuse anything but a regular file, so a FIFO or device inside a granted root is an error, not a
+  stalled server. Paths stored in documents (linked files, Displace maps, Color Lookup files,
+  data-set images, video footage) are read the same way, within a size limit.
 - Filesystem-bearing engine commands that have not migrated to capability I/O fail closed for
   automation. Trusted local CLI subcommands and user-driven desktop file pickers keep their
   intended ambient authority.

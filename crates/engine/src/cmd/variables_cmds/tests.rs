@@ -527,6 +527,51 @@ fn pixel_replacement_changes_the_layer() {
     }
 }
 
+/// A data set's image path is document data: one that names a FIFO or a directory is refused
+/// at once as not a regular file. Opening a FIFO with no writer for reading blocked the command
+/// (and the session) until a writer appeared. A watchdog opens the FIFO's write end after 10 s,
+/// so a regression fails here instead of hanging the test run.
+#[cfg(unix)]
+#[test]
+fn pixel_replacement_refuses_a_fifo_or_a_directory_without_blocking() {
+    use std::time::{Duration, Instant};
+    let (mut s, photo, _b, _t) = session();
+    let dir = tmp("px-special");
+    let fifo = format!("{dir}/img.png");
+    let _ = std::fs::remove_file(&fifo);
+    assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success(), "mkfifo failed");
+    let folder = format!("{dir}/folder.png");
+    std::fs::create_dir_all(&folder).unwrap();
+    s.execute("image.variables.define", json!({"defs": [{"name": "img", "layer": photo.0, "type": "pixelReplacement", "method": "conform"}]})).unwrap();
+    s.execute(
+        "image.variables.dataSets",
+        json!({"dataSets": [
+            {"name": "fifo", "values": [{"variable": "img", "kind": "pixels", "value": fifo}]},
+            {"name": "folder", "values": [{"variable": "img", "kind": "pixels", "value": folder}]},
+        ]}),
+    )
+    .unwrap();
+    let (done, finished) = std::sync::mpsc::channel::<()>();
+    let writer_end = fifo.clone();
+    let watchdog = std::thread::spawn(move || {
+        if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) = finished.recv_timeout(Duration::from_secs(10)) {
+            // Still blocked in the open: give it a writer so the command returns and the test fails.
+            let _ = std::fs::OpenOptions::new().write(true).open(&writer_end);
+        }
+    });
+    let started = Instant::now();
+    let result = s.execute("image.applyDataSet", json!({"name": "fifo"}));
+    let elapsed = started.elapsed();
+    let _ = done.send(());
+    watchdog.join().unwrap();
+    let error = result.unwrap_err().to_string();
+    assert!(elapsed < Duration::from_secs(5), "applying the data set waited {elapsed:?} on the FIFO");
+    assert!(error.contains("not a regular file"), "{error}");
+    let error = s.execute("image.applyDataSet", json!({"name": "folder"})).unwrap_err().to_string();
+    assert!(error.contains("not a regular file"), "{error}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn applied_text_is_rendered_in_the_document_and_in_exports() {
     // Applying a text value cleared the type layer's render cache and nothing rebuilt it, so the
