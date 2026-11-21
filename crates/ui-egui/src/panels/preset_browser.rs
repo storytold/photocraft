@@ -726,31 +726,23 @@ fn apply_picker_events(app: &mut PhotocraftApp, events: Vec<PresetEvent<PresetKe
 /// (#13468).
 pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     const ID: &str = "shapePicker";
-    let ctx = ui.ctx().clone();
     let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
     let folders: Vec<Folder> = groups
         .iter()
         .map(|group| Folder { name: group.name.clone(), items: group.items.iter().map(|shape| (shape.name.clone(), shape.name.clone())).collect() })
         .collect();
-    let rows = panel_rows(&app.ui.presets_ui, SHAPES, &folders);
+    let swatches: Vec<Swatch> = groups.iter().flat_map(|group| &group.items).map(|shape| shape_swatch(ui.ctx(), shape)).collect();
+    let source = panel_source(PanelInputs::new(&app.ui.presets_ui, SHAPES, folders, swatches), shape_thumb);
     let mut value = Some(PresetKey::Item(app.ui.presets_ui.shape().to_string()));
     let before = value.clone();
     let mut state = app.ui.presets_ui.browsers.get(ID).cloned().unwrap_or_default();
     (state.view, state.zoom) = shape_picker_view_state(app.ui.presets_ui.shape_picker_view);
-    let picked = PresetPicker::new(tl!("Shape"), Bind::bound(&mut value), &rows, Bind::bound(&mut state))
+    let picked = PresetPicker::new(tl!("Shape"), Bind::bound(&mut value), &source, Bind::bound(&mut state))
         .columns(7)
         .browser_id(shape_picker_browser_id())
         .toolbar(true)
         .search(false)
         .tools(|ui| shape_gear_menu(app, ui))
-        .preview(move |cx: &ContentPainterCx, rect: Rect, info: craft::ui::patterns::presets::ThumbInfo<'_, PresetKey>| {
-            if let PresetKey::Item(name) = info.key
-                && let Some(shape) = groups.iter().flat_map(|g| &g.items).find(|s| &s.name == name)
-            {
-                let texture = shape_texture(&ctx, shape);
-                cx.picture(texture, rect.shrink(2.0), Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), 0.0);
-            }
-        })
         .show(ui);
     app.ui.presets_ui.browsers.insert(ID.to_string(), state);
     apply_picker_events(app, picked.events);
