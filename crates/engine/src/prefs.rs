@@ -333,6 +333,8 @@ impl Default for General {
     }
 }
 
+/// Preferences › Interface. The fields are in the page's order (its groups show in the order of their first row):
+/// Appearance (mode, themes, canvas), Presentation (language, font size, scale), then the options.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Interface {
@@ -349,20 +351,20 @@ pub struct Interface {
     /// Pasteboard colour in standard screen mode (`canvasCustomColor` when "custom").
     pub canvas_color: CanvasColor,
     pub canvas_custom_color: String,
+    /// Document border in standard screen mode.
+    pub canvas_border: CanvasBorder,
+    /// UI language: `auto` (follow the system) or a language code such as `en`, `ja`. The list of
+    /// languages belongs to the shell (`ui-egui` i18n); an unknown code falls back to `auto`.
+    /// Command ids and the control protocol stay English.
+    pub language: String,
+    pub ui_font_size: UiFontSize,
+    pub ui_scale: UiScale,
     /// Show the repeating dot pattern on the canvas surround (including the empty workspace).
     /// Disable for a uniform background, for example on OLED displays (#2264).
     pub show_canvas_dots: bool,
     /// List recent files on the Home screen (the empty workspace). Off hides the list; the
     /// recent files themselves are kept and File > Open Recent still shows them.
     pub show_home_recent_files: bool,
-    /// Document border in standard screen mode.
-    pub canvas_border: CanvasBorder,
-    pub ui_scale: UiScale,
-    /// UI language: `auto` (follow the system) or a language code such as `en`, `ja`. The list of
-    /// languages belongs to the shell (`ui-egui` i18n); an unknown code falls back to `auto`.
-    /// Command ids and the control protocol stay English.
-    pub language: String,
-    pub ui_font_size: UiFontSize,
     pub show_channels_in_color: bool,
     pub dynamic_color_sliders: bool,
     /// Draw menu item colours set with Edit › Menus.

@@ -1730,3 +1730,18 @@ fn the_appearance_mode_row_shows_its_label_once() {
     let shown = painted_texts(&h).into_iter().filter(|(text, _)| text == "Appearance Mode").count();
     assert_eq!(shown, 1, "\"Appearance Mode\" is painted once");
 }
+
+/// #15554: Preferences › Interface shows Appearance (the mode and the canvas), then Presentation (language, font size,
+/// scale), then Options, and the rows of all three share one label column.
+#[test]
+fn the_interface_page_lists_appearance_presentation_then_options_on_one_label_column() {
+    let (_, files) = app_with_store();
+    let h = prefs_harness(&files, "interface", vec2(1280.0, 800.0), |_| {});
+    let texts = painted_texts(&h);
+    let at = |name: &str| texts.iter().find(|(text, _)| text == name).map(|(_, rect)| *rect).unwrap_or_else(|| panic!("{name:?} is painted"));
+    let order = ["Appearance", "Appearance Mode", "Canvas color", "Presentation", "Language", "UI font size", "UI scale", "Options", "Show tooltips"];
+    let tops: Vec<f32> = order.iter().map(|name| at(name).top()).collect();
+    assert!(tops.windows(2).all(|pair| pair[0] < pair[1]), "top to bottom {order:?}: {tops:?}");
+    let ends: Vec<f32> = ["Appearance Mode", "Language", "Notification Duration (seconds)"].iter().map(|name| at(name).right()).collect();
+    assert!(ends.iter().all(|end| (end - ends[0]).abs() < 0.5), "one right-aligned label column: {ends:?}");
+}
