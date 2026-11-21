@@ -117,6 +117,11 @@ pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandSta
     vec![(CommandRef::new(SELECT_AND_MASK), CommandState::new().enabled(crate::menus::is_enabled(app, SELECT_AND_MASK)))]
 }
 
+/// [`command_states`], derived from what the rules read.
+pub(crate) fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    crate::app::framework::derived_states(app, name, &crate::menus::facts::RuleFacts::of(app), || command_states(app))
+}
+
 /// The Select and Mask… button; its enabled state is [`command_states`]'.
 fn select_and_mask(ui: &mut egui::Ui) {
     Button::command(SELECT_AND_MASK).show(ui);

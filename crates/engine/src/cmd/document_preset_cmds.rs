@@ -110,7 +110,7 @@ pub(crate) fn validate_new_params(s: &Session, p: &Value) -> Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentSettings {
     pub width: u32,
@@ -212,7 +212,7 @@ impl DocumentSettings {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct DocumentPreset {
     pub name: String,
     pub settings: DocumentSettings,

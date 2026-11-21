@@ -211,13 +211,13 @@ fn opening_or_closing_a_workspace_without_input_rebuilds_the_menus() {
     let ctx = app.ctx().clone();
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("edit.fill", json!({"color": "#808080"})).unwrap();
-    let closed = state_hash(&app, None);
+    let closed = crate::menus::facts::key(&app);
     crate::gallery_ui::open(&mut app).unwrap();
-    let open = state_hash(&app, None);
+    let open = crate::menus::facts::key(&app);
     assert_ne!(open, closed, "the menus grey out when an agent opens Filter Gallery");
     let id = app.framework.dialogs.stack().top().unwrap();
     app.framework.dialogs.cancel_by_id(&ctx, id);
-    assert_eq!(state_hash(&app, None), closed, "and come back when it is cancelled");
+    assert_eq!(crate::menus::facts::key(&app), closed, "and come back when it is cancelled");
 }
 
 /// The Contextual Task Bar's tick follows the bar when its Hide bar or `ui.set` turns it off without a menu click
@@ -243,16 +243,16 @@ fn the_task_bar_tick_follows_the_bar_hidden_without_a_menu_click() {
 #[test]
 fn the_menu_state_follows_the_preferences_the_rows_show() {
     let mut app = app(false);
-    let shown = state_hash(&app, None);
+    let shown = crate::menus::facts::key(&app);
     app.session.edit_prefs(|p| {
         p.selected_tool = json!("Brush");
         p.tool_colors = Default::default();
     });
-    assert_eq!(state_hash(&app, None), shown, "the saved tool and colours are not in the menus");
+    assert_eq!(crate::menus::facts::key(&app), shown, "the saved tool and colours are not in the menus");
 
     app.session.edit_prefs(|p| p.menus.hidden.push("filter.blur.gaussian".into()));
-    let hidden = state_hash(&app, None);
+    let hidden = crate::menus::facts::key(&app);
     assert_ne!(hidden, shown, "Edit › Menus hides a row");
     app.session.edit_prefs(|p| p.export.quick_export_format = photocraft_engine::prefs::QuickExportFormat::Jpg);
-    assert_ne!(state_hash(&app, None), hidden, "the Quick Export label names the format");
+    assert_ne!(crate::menus::facts::key(&app), hidden, "the Quick Export label names the format");
 }
