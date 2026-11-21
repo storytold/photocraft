@@ -21,8 +21,12 @@ fn damage(s: &Session) -> Option<Rect> {
 /// The composite of `after` equals `before`'s outside `damage`.
 fn unchanged_outside(before: &Document, after: &Document, damage: Rect) -> bool {
     let (x, y) = (photocraft_compose::render(before, before.bounds()), photocraft_compose::render(after, after.bounds()));
-    let w = before.bounds().width() as i32;
-    x.px.iter().zip(&y.px).enumerate().all(|(i, (p, q))| p == q || damage.contains(i as i32 % w, i as i32 / w))
+    composites_unchanged_outside(&x, &y, damage)
+}
+
+fn composites_unchanged_outside(before: &photocraft_compose::Buffer, after: &photocraft_compose::Buffer, damage: Rect) -> bool {
+    let w = before.rect.width() as i32;
+    before.px.iter().zip(&after.px).enumerate().all(|(i, (p, q))| p == q || damage.contains(i as i32 % w, i as i32 / w))
 }
 
 /// The tiles `r` overlaps, as one rect.
@@ -390,6 +394,8 @@ fn painting_command_hints_cover_their_changed_tiles() {
         ("paint.patternStamp", json!({"points": [[200, 200]], "size": 16, "hardness": 100, "pattern": "Checkerboard", "scale": 100, "aligned": true}), None),
     ];
     steps.push(("type.setStyle", json!({"layer": ty, "size": 40}), None));
+    let mut previous = doc(&s);
+    let mut previous_pixels = photocraft_compose::flatten(&previous);
     for (cmd, p, sel) in steps {
         if let Some(r) = sel {
             s.execute("select.rect", json!({"x": r.x0, "y": r.y0, "width": r.width(), "height": r.height()})).unwrap();
@@ -401,11 +407,19 @@ fn painting_command_hints_cover_their_changed_tiles() {
             s.select_layer(layer).unwrap();
         }
         let before = doc(&s);
+        // The compositor ignores the marquee. Verify it is the only document field that can differ before reusing pixels.
+        let mut normalized = before.as_ref().clone();
+        normalized.selection = previous.selection.clone();
+        assert!(&normalized == previous.as_ref(), "{cmd}: setting up the edit changed the composite inputs");
         s.execute(cmd, p).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        let after = doc(&s);
         assert_eq!(s.damage_misses, 0, "{cmd}: its hint missed a changed tile");
-        assert!(!same_pixels(&before, &doc(&s)), "{cmd} changed nothing");
-        let d = damage(&s).unwrap_or_else(|| doc(&s).bounds());
-        assert!(unchanged_outside(&before, &doc(&s), d), "{cmd}: pixels changed outside {d:?}");
+        assert!(!same_pixels(&before, &after), "{cmd} changed nothing");
+        let d = damage(&s).unwrap_or_else(|| after.bounds());
+        let after_pixels = photocraft_compose::flatten(&after);
+        assert!(composites_unchanged_outside(&previous_pixels, &after_pixels, d), "{cmd}: pixels changed outside {d:?}");
+        previous = after;
+        previous_pixels = after_pixels;
     }
 }
 
