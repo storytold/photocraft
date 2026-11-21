@@ -302,7 +302,7 @@ mod tests {
     /// #8697: Photoshop's bicubic variants are accepted and render as Bicubic, for a selection
     /// and for a layer (an imported action keeps them).
     #[test]
-    fn photoshop_bicubic_variants_transform_as_bicubic() {
+    fn transform_selection_draws_the_bicubic_variants_as_bicubic_and_free_transform_with_their_filters() {
         let run = |id: &str, interpolation: &str| {
             let mut s = landscape(8);
             s.execute("select.rect", json!({"x": 20, "y": 10, "width": 60, "height": 40, "feather": 3})).unwrap();
@@ -313,8 +313,15 @@ mod tests {
         for id in ["select.transformSelection", "edit.transform"] {
             let bicubic = run(id, "bicubic");
             assert_ne!(bicubic, run(id, "bilinear"), "{id}: the interpolation matters here");
-            for variant in ["bicubicSharper", "bicubicSmoother", "bicubicAutomatic"] {
-                assert_eq!(run(id, variant), bicubic, "{id} {variant}");
+            // A rotated box: Automatic is Bicubic for both; Transform Selection draws Smoother and
+            // Sharper as Bicubic too, Free Transform with their own filters.
+            assert_eq!(run(id, "bicubicAutomatic"), bicubic, "{id} bicubicAutomatic");
+            for variant in ["bicubicSharper", "bicubicSmoother"] {
+                if id == "edit.transform" {
+                    assert_ne!(run(id, variant), bicubic, "{id} {variant}");
+                } else {
+                    assert_eq!(run(id, variant), bicubic, "{id} {variant}");
+                }
             }
         }
     }

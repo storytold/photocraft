@@ -142,16 +142,92 @@ pub enum Interp {
     Bilinear,
     #[default]
     Bicubic,
+    /// Bicubic Smoother: Image Size's Smoother kernel, reducing first where the transform shrinks.
+    BicubicSmoother,
+    /// Bicubic Sharper: Image Size's Sharper kernel, reducing first where the transform shrinks.
+    BicubicSharper,
+    /// Bicubic Automatic: on a transform that keeps the axes (a scale, a flip, a move), Sharper
+    /// along an axis that shrinks and Smoother along one that grows; on any other, Bicubic.
+    BicubicAutomatic,
 }
 
 impl Interp {
+    /// Nearest, Bilinear or Bicubic: the bicubic variants (and any other text) are Bicubic, as the
+    /// commands that haven't been measured with them draw them.
     pub fn parse(s: &str) -> Self {
+        match Self::parse_all(s) {
+            Interp::BicubicSmoother | Interp::BicubicSharper | Interp::BicubicAutomatic => Interp::Bicubic,
+            m => m,
+        }
+    }
+
+    /// Every method of Free Transform's Interpolation menu by its id ("nearest" or
+    /// "nearestNeighbor", "bilinear", "bicubic", "bicubicSmoother", "bicubicSharper",
+    /// "bicubicAutomatic"); any other text is Bicubic.
+    pub fn parse_all(s: &str) -> Self {
         match s {
             "nearest" | "nearestNeighbor" => Interp::Nearest,
             "bilinear" => Interp::Bilinear,
+            "bicubicSmoother" => Interp::BicubicSmoother,
+            "bicubicSharper" => Interp::BicubicSharper,
+            "bicubicAutomatic" => Interp::BicubicAutomatic,
             _ => Interp::Bicubic,
         }
     }
+
+    /// The Image Size filter this method reduces with, and whether it is one of the bicubics
+    /// (Nearest and Bilinear sample the source directly).
+    fn reducer(self) -> Option<Resample> {
+        match self {
+            Interp::Nearest | Interp::Bilinear => None,
+            Interp::Bicubic => Some(Resample::Bicubic),
+            Interp::BicubicSmoother => Some(Resample::BicubicSmoother),
+            Interp::BicubicSharper => Some(Resample::BicubicSharper),
+            Interp::BicubicAutomatic => Some(Resample::BicubicAutomatic),
+        }
+    }
+}
+
+/// The scale per axis of an affine `h` that keeps the axes (no rotation or skew, maybe a flip),
+/// or `None` for any other, including one with any projective term.
+fn axis_scales(h: &Homography) -> Option<(f64, f64)> {
+    let m = &normalized(h)?.0;
+    let tiny = |v: f64| v.abs() < 1e-9;
+    // No projective term at all: a tiny one dropped here would move pixels far from the origin by many pixels.
+    (tiny(m[1]) && tiny(m[3]) && m[6] == 0.0 && m[7] == 0.0).then(|| (m[0].abs(), m[4].abs()))
+}
+
+/// `h` scaled so its last entry is 1 (the same map), or `None` when that entry is zero or not finite.
+fn normalized(h: &Homography) -> Option<Homography> {
+    let w = h.0[8];
+    (w.is_finite() && w.abs() > 1e-12).then(|| Homography(h.0.map(|v| v / w)))
+}
+
+/// The Keys kernel (`a`, stretch) one axis samples with after any reduction: Bicubic's own, or
+/// Smoother's or Sharper's at full scale.
+fn sampling_kernel(method: Resample) -> (f64, f64) {
+    match method {
+        Resample::BicubicSmoother => (-0.625, 1.15),
+        Resample::BicubicSharper => (-1.0, 1.05),
+        _ => (-0.75, 1.0),
+    }
+}
+
+/// The normalised weights of the Keys kernel `(a, stretch)` for a sample at `t` (0..1) past
+/// source pixel `i`: the taps from `i + 1 − n` to `i + n`, `n` = ⌈2·stretch⌉ (at most 3).
+fn keys_taps(t: f64, (a, stretch): (f64, f64)) -> ([f64; 6], i32) {
+    let n = ((2.0 * stretch).ceil() as i32).clamp(2, 3);
+    let mut w = [0.0; 6];
+    let mut total = 0.0;
+    for (k, wk) in w.iter_mut().enumerate().take((2 * n) as usize) {
+        let x = (t - (k as i32 + 1 - n) as f64) / stretch;
+        *wk = crate::resample::keys_weight(x, a);
+        total += *wk;
+    }
+    if total.abs() > 1e-12 {
+        w.iter_mut().for_each(|v| *v /= total);
+    }
+    (w, n)
 }
 
 /// Photoshop's Bicubic: the Keys cubic at a = −0.75 (Catmull-Rom is −0.5), the weights of the
@@ -391,6 +467,26 @@ fn warp(
     if src_rect.is_empty() || clip.is_some_and(|c| c.is_empty()) {
         return Ok(out);
     }
+    // A transform that keeps the axes (a scale and a move) with Smoother, Sharper or Automatic is
+    // drawn as the reference application draws it: Image Size's passes into the snapped box.
+    if clip.is_none() {
+        let filter = match interp {
+            Interp::BicubicSmoother => Some(crate::scale_axes::Filter::Smoother),
+            Interp::BicubicSharper => Some(crate::scale_axes::Filter::Sharper),
+            Interp::BicubicAutomatic => Some(crate::scale_axes::Filter::Automatic),
+            _ => None,
+        };
+        if let (Some(filter), Some((sx, sy)), Some(n)) = (filter, axis_scales(h), normalized(h))
+            && n.0[0] > 0.0
+            && n.0[4] > 0.0
+        {
+            let m = &n.0;
+            let place = [sx, sy, m[0] * f64::from(src_rect.x0) + m[2], m[4] * f64::from(src_rect.y0) + m[5]];
+            if let Some(done) = crate::scale_axes::scale(src, src_rect, place, filter, ctl) {
+                return Ok(done);
+            }
+        }
+    }
     let mut h = *h;
     let mut src_rect = src_rect;
     // Pre-reduce for large downscales (bicubic alone aliases below ~50%). With a clip, the scale
@@ -405,13 +501,49 @@ fn warp(
     // brought down by the whole local scale first and the warp samples it at about 1:1; a plain
     // 4×4 kernel at 50 % aliased (Photoshop 27.11 Free Transform, 50 % of an impulse image).
     // Bilinear samples the source directly, as Photoshop's does (exact at 50 % without a prefilter).
+    // Bicubic Automatic picks Sharper or Smoother per axis on a transform that keeps the axes,
+    // and is Bicubic on any other. The other bicubics keep their filter on both axes.
+    let axes = axis_scales(&h);
+    let per_axis = |k: f64, m: Interp| match m {
+        Interp::BicubicAutomatic if k < 1.0 => Resample::BicubicSharper,
+        Interp::BicubicAutomatic if k > 1.0 => Resample::BicubicSmoother,
+        Interp::BicubicAutomatic => Resample::Bicubic,
+        m => m.reducer().unwrap_or(Resample::Bicubic),
+    };
+    let (kx, ky) = axes.unwrap_or((scale, scale));
+    let interp = if interp == Interp::BicubicAutomatic && axes.is_none() { Interp::Bicubic } else { interp };
+    let (method_x, method_y) = (per_axis(kx, interp), per_axis(ky, interp));
     if interp == Interp::Bicubic && scale < 0.999 && scale > 0.0 {
         let f = scale.max(1.0 / 64.0);
         reduced = resize_surface(src, f, f, Resample::Bicubic);
         src = &reduced;
         h = h.mul(&Homography([1.0 / f, 0.0, 0.0, 0.0, 1.0 / f, 0.0, 0.0, 0.0, 1.0]));
         src_rect = crate::resample::scaled_rect(src_rect, f, f);
+    } else if interp.reducer().is_some() && interp != Interp::Bicubic {
+        // Each shrinking axis is first reduced with its filter, as Image Size reduces it; the
+        // sampling below then reads the reduced image at about 1:1.
+        let (fx, fy) = ((kx < 0.999 && kx > 0.0).then(|| kx.max(1.0 / 64.0)), (ky < 0.999 && ky > 0.0).then(|| ky.max(1.0 / 64.0)));
+        if fx.is_some() || fy.is_some() {
+            let (fx, fy) = (fx.unwrap_or(1.0), fy.unwrap_or(1.0));
+            let mut r = src.clone();
+            if fx < 1.0 {
+                r = resize_surface(&r, fx, 1.0, method_x);
+            }
+            if fy < 1.0 {
+                r = resize_surface(&r, 1.0, fy, method_y);
+            }
+            reduced = r;
+            src = &reduced;
+            h = h.mul(&Homography([1.0 / fx, 0.0, 0.0, 0.0, 1.0 / fy, 0.0, 0.0, 0.0, 1.0]));
+            src_rect = crate::resample::scaled_rect(src_rect, fx, fy);
+        }
     }
+    // An axis reduced above is read at about 1:1 with plain Bicubic, as Bicubic reads its reduced
+    // image; one that grows samples with its filter's own kernel.
+    let (kernel_x, kernel_y) = (
+        if kx < 0.999 { sampling_kernel(Resample::Bicubic) } else { sampling_kernel(method_x) },
+        if ky < 0.999 { sampling_kernel(Resample::Bicubic) } else { sampling_kernel(method_y) },
+    );
     let Some(inv) = h.inverse() else { return Ok(out) };
     // Destination bounds: the warped corners (plus a pixel for filter support).
     let corners = [(src_rect.x0, src_rect.y0), (src_rect.x1, src_rect.y0), (src_rect.x1, src_rect.y1), (src_rect.x0, src_rect.y1)]
@@ -555,6 +687,18 @@ fn warp(
                             for (dx, wx) in [(0, 1.0 - fx), (1, fx)] {
                                 for (c, s) in acc.iter_mut().enumerate().take(n) {
                                     *s += clamped(ix + dx, iy + dy, c) * wx * wy;
+                                }
+                            }
+                        }
+                    }
+                    Interp::BicubicSmoother | Interp::BicubicSharper | Interp::BicubicAutomatic => {
+                        let (ix, iy) = (u.floor() as i32, v.floor() as i32);
+                        let ((wx, nx), (wy, ny)) = (keys_taps(u - ix as f64, kernel_x), keys_taps(v - iy as f64, kernel_y));
+                        for (j, wyj) in wy.iter().enumerate().take((2 * ny) as usize) {
+                            for (i, wxi) in wx.iter().enumerate().take((2 * nx) as usize) {
+                                let k = wxi * wyj;
+                                for (c, s) in acc.iter_mut().enumerate().take(n) {
+                                    *s += clamped(ix + 1 - nx + i as i32, iy + 1 - ny + j as i32, c) * k;
                                 }
                             }
                         }

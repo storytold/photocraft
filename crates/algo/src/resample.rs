@@ -64,7 +64,7 @@ fn keys(method: Resample, s: f64) -> Kernel {
     Kernel::Keys { a, stretch: stretch / s }
 }
 
-fn keys_weight(x: f64, a: f64) -> f64 {
+pub(crate) fn keys_weight(x: f64, a: f64) -> f64 {
     let x = x.abs();
     if x < 1.0 {
         (a + 2.0) * x * x * x - (a + 3.0) * x * x + 1.0

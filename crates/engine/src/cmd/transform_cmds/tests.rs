@@ -991,3 +991,52 @@ fn step_name_transform_path_is_the_only_name_taken() {
     }
     assert_eq!(s.active().unwrap().history.past_len(), steps, "a refused name changes nothing");
 }
+
+/// The active layer's pixels inside its content bounds.
+fn active_pixels(s: &Session) -> (Rect, Vec<f32>) {
+    let st = s.active().unwrap();
+    let surf = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
+    let b = surf.content_bounds();
+    (b, surf.read_region(b))
+}
+
+#[test]
+fn the_bicubic_variants_scale_pixels_with_their_own_filters_at_every_depth() {
+    for depth in [8, 16, 32] {
+        let run = |interp: &str| {
+            let mut s = session_depth(depth);
+            s.execute("edit.transform", json!({"scaleX": 173, "scaleY": 61, "reference": "center", "interpolation": interp})).unwrap();
+            active_pixels(&s)
+        };
+        let bicubic = run("bicubic");
+        let (smoother, sharper, automatic) = (run("bicubicSmoother"), run("bicubicSharper"), run("bicubicAutomatic"));
+        assert_ne!(smoother, bicubic, "{depth}");
+        assert_ne!(sharper, bicubic, "{depth}");
+        assert_ne!(smoother, sharper, "{depth}");
+        // Automatic: Smoother along x (grows), Sharper along y (shrinks), so neither alone.
+        assert_ne!(automatic, smoother, "{depth}");
+        assert_ne!(automatic, sharper, "{depth}");
+        // 20 × 10 px at 173 % × 61 % about the centre of (10, 10)–(30, 20): each edge rounded.
+        assert_eq!(smoother.0, Rect::new(3, 12, 37, 18), "{depth}");
+    }
+}
+
+#[test]
+fn a_layer_mask_scales_with_the_layers_filter() {
+    let run = |interp: &str| {
+        let mut s = session();
+        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        s.edit("mask", |doc, active| {
+            let l = doc.layer_mut(active.unwrap()).unwrap();
+            let m = l.mask.as_mut().unwrap();
+            m.surface.fill_rect(Rect::new(0, 0, 50, 100), &[0.0]);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("edit.transform", json!({"scaleX": 150, "scaleY": 150, "reference": "center", "interpolation": interp})).unwrap();
+        let st = s.active().unwrap();
+        let m = &st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface;
+        m.read_region(Rect::new(0, 0, 100, 100))
+    };
+    assert_ne!(run("bicubicSmoother"), run("bicubic"));
+}
