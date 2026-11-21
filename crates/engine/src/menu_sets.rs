@@ -18,8 +18,8 @@
 //! changed item, the measured numeric ids ([`REF_ITEMS`]) and colour numbers (0 to 7) - and keep
 //! every entry they could not name ([`Mnu::kept`]), a row coloured 8 to 11 among them
 //! ([`UNNAMED_COLORS`]). A malformed file is an error: bad XML, a colour number outside 0 to 11, or
-//! a file over [`MAX_MNU_BYTES`]. The preferences stay the
-//! store of what the menus in use are; the files are where the named sets live (#14450).
+//! a file over [`MAX_MNU_BYTES`]. The preferences stay the store of what the menus in use are; the
+//! files are where the named sets live (#14450).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -277,7 +277,8 @@ pub fn color_number(color: &str) -> Option<u32> {
 }
 
 /// The colour name of a file's colour number. `None` for a number outside the measured list: 8 to 11
-/// belong to the twelve-entry colour list of #14336, which this issue does not read.
+/// belong to the twelve-entry colour list of #14336 and have no name yet: a row using one is kept as
+/// it was read ([`UNNAMED_COLORS`]).
 pub fn color_name(number: u32) -> Option<&'static str> {
     usize::try_from(number).ok().and_then(|at| COLORS.get(at)).copied()
 }
@@ -439,29 +440,26 @@ pub fn to_mnu(name: &str, set: &MenuSet, kept: &[String]) -> String {
     let key = craft_xml::esc_attr(&format!("{FILE_KEY}/{name}={name}"));
     let mut out = String::from(craft_xml::DECL);
     out.push_str(&format!("<{root} version=\"{FILE_VERSION}\" filename=\"{key}\" modified=\"0\">\n"));
-    // The kept rows of our items whose colour we cannot name yet (#15978), by their index in `kept`.
-    let unnamed: Vec<(usize, craft_xml::El, &str)> =
-        kept.iter().enumerate().filter_map(|(at, entry)| kept_unnamed_color_row(entry).map(|(element, command)| (at, element, command))).collect();
+    // `none` is 0, and 0 is "no colour", so a `none` entry writes no colour of its own.
+    let color_of = |command: &str| set.colors.get(command).and_then(|c| color_number(c)).unwrap_or(0);
+    // The kept row that stands for each of our items whose colour we cannot name yet (#15978): the
+    // first such row of the item, by its index in `kept`. It is written where it stood among the
+    // kept entries, with its colour unchanged and `hidden` as the set has it, in place of a row of
+    // ours, so the item has one row. A colour the set gives the item that we can name replaces it.
+    // Until #14336 names 8 to 11, the set cannot say "no colour" over such a row: clearing the item's
+    // colour leaves the row's own colour, as for any other kept entry.
+    let mut standing: Vec<(usize, craft_xml::El, &str)> = Vec::new();
+    for (at, entry) in kept.iter().enumerate() {
+        if let Some((element, command)) = kept_unnamed_color_row(entry)
+            && !standing.iter().any(|(_, _, seen)| *seen == command)
+        {
+            standing.push((at, element, command));
+        }
+    }
     for item in REF_ITEMS {
         let hidden = set.hidden.iter().any(|id| id == item.command);
-        // `none` is 0, and 0 is "no colour", so a `none` entry writes no colour of its own.
-        let color = set.colors.get(item.command).and_then(|c| color_number(c)).unwrap_or(0);
-        // A kept row with a colour we cannot name stands for this item: it is written in place of
-        // ours with its colour unchanged and `hidden` as the set has it, so the item has one row.
-        // A colour the set gives the item that we can name replaces it.
-        if color == 0
-            && let Some((at, element, _)) = unnamed.iter().find(|(_, _, command)| *command == item.command)
-        {
-            let row = if (element.attr("hidden") == Some("1")) == hidden {
-                kept.get(*at).cloned().unwrap_or_else(|| element.to_xml())
-            } else {
-                let mut element = element.clone();
-                element.set_attr("hidden", u8::from(hidden));
-                element.to_xml()
-            };
-            out.push_str("  ");
-            out.push_str(&row);
-            out.push('\n');
+        let color = color_of(item.command);
+        if color == 0 && standing.iter().any(|(_, _, command)| *command == item.command) {
             continue;
         }
         if !hidden && color == 0 {
@@ -476,12 +474,22 @@ pub fn to_mnu(name: &str, set: &MenuSet, kept: &[String]) -> String {
         ));
     }
     for (at, entry) in kept.iter().enumerate() {
-        // Written above, in the place of the item it stands for, or replaced by the set's own row.
-        if unnamed.iter().any(|(row, _, _)| *row == at) {
-            continue;
+        let mut row = entry.clone();
+        if let Some((_, element, command)) = standing.iter().find(|(row, _, _)| *row == at) {
+            if color_of(command) != 0 {
+                // The set's own row, with a colour we name, was written above instead.
+                continue;
+            }
+            let hidden = set.hidden.iter().any(|id| id == command);
+            // Only `hidden` changes; the row is then written through the XML writer again.
+            if (element.attr("hidden") == Some("1")) != hidden {
+                let mut element = element.clone();
+                element.set_attr("hidden", u8::from(hidden));
+                row = element.to_xml();
+            }
         }
         out.push_str("  ");
-        out.push_str(entry);
+        out.push_str(&row);
         out.push('\n');
     }
     out.push_str(&format!("</{root}>\n"));

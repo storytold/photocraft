@@ -832,3 +832,21 @@ fn saving_over_a_file_with_an_8_to_11_row_keeps_its_colour() {
     assert!(text.contains(&row(1154, 3, 0, 1, 11)), "Fade hidden, still Fuchsia: {text}");
     assert_eq!(text.matches("<command").count(), 2, "{text}");
 }
+
+#[test]
+fn kept_8_to_11_rows_keep_their_place_and_a_repeated_one_is_not_dropped() {
+    // A row stands where it stood among the kept entries, beside a comment of theirs, even when that is
+    // not our numeric order; a second row for the same item stays too, as it was read.
+    let fade = row(1154, 3, 0, 0, 11);
+    let new = row(10, 2, 0, 0, 9);
+    let again = row(10, 2, 0, 0, 8);
+    let read = from_mnu(&mnu(&format!("  <!-- fade -->\n{fade}{new}{again}"))).expect("the file reads");
+    let written = to_mnu("Mine", &read.set, &read.kept);
+    assert_eq!(from_mnu(&written).expect("the rewrite reads"), read, "same entries in the same order: {written}");
+    let (at_comment, at_fade, at_new) = (written.find("<!-- fade -->"), written.find(fade.trim()), written.find(new.trim()));
+    assert!(at_comment < at_fade && at_fade < at_new, "the comment, then Fade, then New: {written}");
+    assert!(written.contains(&again), "the repeated row is still there: {written}");
+    // Hiding File › New changes the row that stands for it, and only that one.
+    let hide = to_mnu("Mine", &set(&["file.new"], &[]), &read.kept);
+    assert!(hide.contains(&row(10, 2, 0, 1, 9)) && hide.contains(&again), "{hide}");
+}
