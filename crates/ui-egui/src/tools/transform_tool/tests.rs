@@ -1,4 +1,6 @@
 use super::*;
+
+mod seq_check;
 use craft::behavior::geometry::quad::BoxState;
 use craft::behavior::kurbo::{Point, Rect, Vec2};
 use craft::behavior::{EditEvent, EditEvents, GestureId, Mixed};
