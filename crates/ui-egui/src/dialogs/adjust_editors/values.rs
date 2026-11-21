@@ -242,6 +242,10 @@ fn object(base: &Value) -> Map<String, Value> {
 // ---------------------------------------------------------------------------------------------
 // Params -> value
 
+/// Why [`from_params`] refuses a CMYK document's Channel Mixer (cyan, magenta, yellow and black outputs, #8047).
+pub const CMYK_MIXER_UNAVAILABLE: &str =
+    "Editing a CMYK Channel Mixer (cyan, magenta, yellow and black outputs) is not available in this editor yet; the mixer is kept as it is";
+
 /// The typed value of the adjustment `kind` the engine reads from `params`.
 ///
 /// The engine parses and clamps first (`adjust_params::from_params`), so the value holds what the engine would apply.
@@ -251,8 +255,20 @@ pub fn from_params(kind: &str, params: &Value, cx: &ValueCx) -> Result<AdjustVal
     let tone = matches!(kind, "levels" | "curves");
     let given = if tone && cx.gray() { adjust_params::gray_tone_params(params) } else { params.clone() };
     let mode = if tone { cx.tone_mode() } else { cx.mode };
+    // The framework Channel Mixer editor has red, green and blue outputs only. Opened on a CMYK mixer (#8047) it
+    // would show RGB defaults, and its edits would be dropped: the engine keeps the ink outputs while the params carry
+    // ink keys. Refuse it, so the mixer is kept as it is, until the framework has an ink-output editor. Checked on the
+    // given params (an imported monochrome one fails the engine's own parse) and on the parsed ones (a CMYK
+    // document's defaults).
+    let cmyk_mixer = |p: &Value| kind == "channelMixer" && adjust_params::MIXER_INKS.iter().any(|k| p.get(*k).is_some());
+    if cmyk_mixer(params) {
+        return Err(CMYK_MIXER_UNAVAILABLE.to_owned());
+    }
     let adjustment = adjust_params::from_params(kind, &given, None, mode).map_err(|e| e.to_string())?;
     let mut v = adjust_params::to_dialog_params(&adjustment);
+    if cmyk_mixer(&v) {
+        return Err(CMYK_MIXER_UNAVAILABLE.to_owned());
+    }
     let space = space_of(&v, cx.mode);
     if tone && space == ToneSpace::Lab && cx.colour_set() {
         let pencil = flag(&v, "pencil", false);
