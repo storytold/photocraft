@@ -274,10 +274,14 @@ fn gradient_overlay_interpolation_roundtrips_in_native_documents() {
     for mode in MODES {
         for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
             let mut doc = rich_doc(mode, depth);
+            // Midpoints and Photoshop's own opacity stops too (#13557).
             let source = GradientInterpolation {
                 method: "smooth".into(),
                 smoothness: 73.0,
                 stops: vec![(0.0, Color::rgb(0.123456, 0.4, 0.9)), (0.4, Color::WHITE), (1.0, Color::BLACK)],
+                midpoints: vec![0.3, 0.65],
+                opacity_stops: vec![(0.0, 1.0), (1.0, 0.25)],
+                opacity_midpoints: vec![0.4],
             };
             let effect = Effect::GradientOverlay {
                 common: FxCommon::new(photocraft_doc::BlendMode::Normal, 1.0),
@@ -311,6 +315,46 @@ fn gradient_map_source_roundtrips_in_native_documents() {
     doc.insert_above(None, Layer::new("map", LayerContent::Adjustment(map)));
     let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
     assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
+}
+
+/// #13557: a Gradient Fill layer keeps Photoshop's own gradient (stops, midpoints, Smoothness,
+/// method, opacity stops) through a native save, in every mode and depth, and a fill saved
+/// before it (no `interpolation` key) still loads.
+#[test]
+fn gradient_fill_source_roundtrips_in_native_documents() {
+    use photocraft_doc::effects::GradientInterpolation;
+    use photocraft_doc::{Color, Fill, GradientStyle};
+    for mode in MODES {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut doc = rich_doc(mode, depth);
+            let mut source = GradientInterpolation::new(
+                "perceptual",
+                100.0,
+                vec![(0.0, Color::rgb(0.9, 0.1, 0.1)), (0.45, Color::rgb(0.1, 0.8, 0.2)), (1.0, Color::rgb(0.1, 0.2, 0.9))],
+            );
+            source.midpoints = vec![0.3, 0.7];
+            source.opacity_stops = vec![(0.0, 1.0), (1.0, 0.4)];
+            source.opacity_midpoints = vec![0.35];
+            let mut fill = Fill::gradient(
+                vec![(0.0, Color::rgb(0.9, 0.1, 0.1)), (0.5, Color::rgb(0.5, 0.5, 0.2)), (1.0, Color::rgb(0.1, 0.2, 0.9))],
+                30.0,
+                1.0,
+                GradientStyle::Radial,
+                false,
+            );
+            if let Fill::Gradient { interpolation, opacity_stops, .. } = &mut fill {
+                *opacity_stops = vec![(0.0, 1.0), (0.5, 0.7), (1.0, 0.4)];
+                *interpolation = Some(Box::new(source));
+            }
+            doc.insert_above(None, Layer::new("fill", LayerContent::Fill(fill.in_mode(mode))));
+            let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+            assert_eq!(load_from_bytes(&bytes).unwrap(), doc, "{mode:?} {depth:?}");
+        }
+    }
+    let plain = Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], 90.0, 1.0, GradientStyle::Linear, false);
+    let json = serde_json::to_value(&plain).unwrap();
+    assert!(json["Gradient"].get("interpolation").is_none(), "nothing written without one");
+    assert_eq!(serde_json::from_value::<Fill>(json).unwrap(), plain);
 }
 
 #[test]

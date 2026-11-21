@@ -118,6 +118,7 @@ fn a_gradient_or_no_fill_becomes_the_sampled_solid_fill() {
         offset: (0.0, 0.0),
         dither: false,
         align: true,
+        interpolation: None,
     };
     for (fill, fill_gradient) in [(true, Some(gradient)), (false, None)] {
         let mut app = app();

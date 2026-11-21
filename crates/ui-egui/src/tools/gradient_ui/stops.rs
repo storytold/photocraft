@@ -74,9 +74,11 @@ fn is_opaque(opacity: &[(f32, f32)]) -> bool {
     opacity.iter().all(|(_, a)| (a - 1.0).abs() < SAME)
 }
 
-/// The framework's stops of the gradient fill `fill`; empty stops for any other fill.
+/// The framework's stops of the gradient fill `fill`; empty stops for any other fill. A fill that keeps Photoshop's own
+/// gradient shows its stops, not the dense ones baked from them (#13557).
 pub(crate) fn of_fill(fill: &Fill) -> GradientStops {
-    let Fill::Gradient { stops, opacity_stops, midpoints, .. } = fill else { return GradientStops::default() };
+    let view = cmds::source_view(fill);
+    let Fill::Gradient { stops, opacity_stops, midpoints, .. } = &view else { return GradientStops::default() };
     let color = sorted(stops)
         .iter()
         .enumerate()
@@ -103,9 +105,11 @@ pub(crate) fn of_preset(preset: &GradientPreset, fg: [f32; 4], bg: [f32; 4]) -> 
 
 /// `fill` with the stops `stops`: a stop whose sRGB did not change keeps its document colour, a picked colour becomes
 /// RGB (the document's mode is applied where the fill is committed). Midpoints are centred when every one is.
-/// A fill that is not a gradient is returned as it is.
+/// A fill that is not a gradient is returned as it is. A fill that keeps Photoshop's own gradient has those stops edited
+/// and baked again; with them unchanged it keeps its stops exactly (#13557).
 pub(crate) fn apply(fill: &Fill, stops: &GradientStops) -> Fill {
-    let Fill::Gradient { stops: old, .. } = fill else { return fill.clone() };
+    let view = cmds::source_view(fill);
+    let Fill::Gradient { stops: old, .. } = &view else { return fill.clone() };
     let old = sorted(old);
     let colors: Vec<(f32, Color)> = stops
         .color
@@ -123,13 +127,13 @@ pub(crate) fn apply(fill: &Fill, stops: &GradientStops) -> Fill {
         mids.clear();
     }
     let opacity: Vec<(f32, f32)> = stops.opacity.iter().map(|s| (s.location, s.opacity)).collect();
-    let mut out = fill.clone();
+    let mut out = view.clone();
     if let Fill::Gradient { stops, midpoints, opacity_stops, .. } = &mut out {
         *stops = colors;
         *midpoints = mids;
         *opacity_stops = if is_opaque(&opacity) { Vec::new() } else { opacity };
     }
-    out
+    cmds::rebake(out, &view, fill)
 }
 
 /// The framework's value of the gradient fill `fill`; a plain linear fill of no stops for any other fill.
@@ -293,5 +297,64 @@ mod tests {
         assert_eq!(stops.color[0].color, Srgba::rgb(1.0, 0.0, 0.0));
         let p = preset_params(&stops);
         assert_eq!(p["stops"], json!([[0.0, "foreground"], [1.0, "background"]]));
+    }
+
+    /// A gradient fill as PSD import leaves a Photoshop gradient with Smoothness 100: three stops kept, rendered as
+    /// their 97 baked stops (#13557).
+    fn photoshop_fill() -> Fill {
+        use photocraft_doc::effects::GradientInterpolation;
+        let src = GradientInterpolation::new(
+            "classic",
+            100.0,
+            vec![(0.0, Color::rgb(1.0, 0.0, 0.0)), (0.5, Color::rgb(0.0, 1.0, 0.0)), (1.0, Color::rgb(0.0, 0.0, 1.0))],
+        );
+        let mut f = Fill::gradient(photocraft_io::gradient_bake::bake_interpolation(&src), 90.0, 1.0, DocStyle::Linear, false);
+        if let Fill::Gradient { interpolation, .. } = &mut f {
+            *interpolation = Some(Box::new(src));
+        }
+        f
+    }
+
+    /// #13557: the Properties editor and the canvas overlay show Photoshop's three stops, not the 97 baked ones, and
+    /// a stop moved there moves the kept stop, which `gradient.fill.set` bakes again.
+    #[test]
+    fn editors_show_and_edit_photoshops_stops_of_a_kept_gradient() {
+        let f = photoshop_fill();
+        let Fill::Gradient { stops: baked, .. } = &f else { panic!("a gradient") };
+        assert!(baked.len() > 90, "{}", baked.len());
+        let before = fill_value(&f);
+        assert_eq!(before.stops.color.iter().map(|s| s.location).collect::<Vec<_>>(), [0.0, 0.5, 1.0]);
+        assert_eq!(of_fill(&f), before.stops, "the overlay shows them too");
+
+        let mut after = before.clone();
+        after.stops.color[1].location = 0.7;
+        let mut p = value_params(&before, &after);
+        assert_eq!(p["stops"].as_array().map(Vec::len), Some(3), "{p}");
+        p["layer"] = json!(1);
+        let layer = photocraft_doc::Layer::new("Gradient Fill 1", photocraft_doc::LayerContent::Fill(f.clone()));
+        let canvas = photocraft_geom::Rect::new(0, 0, 100, 100);
+        let edited = cmds::apply_set(&layer, &f, canvas, &p, [0.0; 4], [1.0; 4]).unwrap();
+        let Fill::Gradient { stops, interpolation: Some(src), .. } = &edited else { panic!("the gradient is kept: {edited:?}") };
+        assert_eq!(src.stops.len(), 3, "{:?}", src.stops);
+        assert!((src.stops[1].0 - 0.7).abs() < 1e-6, "{:?}", src.stops);
+        assert_eq!(*stops, photocraft_io::gradient_bake::bake_interpolation(src), "baked again");
+    }
+
+    /// #13557: the shape editor's `apply_value` keeps a kept gradient exactly when its stops did not change, and
+    /// bakes the moved stop again when one did.
+    #[test]
+    fn apply_keeps_or_bakes_again_a_kept_gradient() {
+        let f = photoshop_fill();
+        let mut value = fill_value(&f);
+        value.angle = 45.0;
+        let Fill::Gradient { stops, angle, interpolation, .. } = apply_value(&f, &value) else { panic!("a gradient") };
+        let Fill::Gradient { stops: baked, interpolation: kept, .. } = &f else { panic!("a gradient") };
+        assert_eq!((&stops, &interpolation, angle), (baked, kept, 45.0));
+
+        value.stops.color[1].location = 0.25;
+        let Fill::Gradient { stops, interpolation: Some(src), .. } = apply(&f, &value.stops) else { panic!("the gradient is kept") };
+        assert_eq!(src.stops.iter().map(|s| s.0).collect::<Vec<_>>(), [0.0, 0.25, 1.0]);
+        assert_eq!(src.stops[1].1, Color::rgb(0.0, 1.0, 0.0), "the moved stop keeps its colour");
+        assert_eq!(stops, photocraft_io::gradient_bake::bake_interpolation(&src));
     }
 }

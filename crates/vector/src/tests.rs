@@ -272,6 +272,7 @@ fn gradient_midpoints_opacity_stops_offset_and_sorted_stops() {
         offset,
         dither: false,
         align: true,
+        interpolation: None,
     };
     // Midpoint 0.25: the colour is half-way at t = 0.25 (pixel 25).
     let px = grad(g(vec![0.25], vec![], (0.0, 0.0), vec![(0.0, Color::BLACK), (1.0, Color::WHITE)]), Rect::new(0, 0, 100, 10));
@@ -301,6 +302,7 @@ fn gradient_without_align_with_layer_uses_the_canvas_frame() {
         offset: (0.0, 0.0),
         dither: false,
         align,
+        interpolation: None,
     };
     // Aligned: the 100-px path bounds are the frame, pixel 55 sits at t = 0.55.
     let px = grad(g(true), canvas);
@@ -323,6 +325,7 @@ fn gradient_dither_is_deterministic_and_one_level() {
         offset: (0.1, -0.1),
         dither,
         align: true,
+        interpolation: None,
     };
     let a = grad(g(true), Rect::new(0, 0, 100, 10));
     let b = grad(g(true), Rect::new(0, 0, 100, 10));

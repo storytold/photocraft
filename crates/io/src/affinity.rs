@@ -433,7 +433,19 @@ impl Builder<'_> {
                 let stops = g.stops.iter().map(|s| (s.offset as f32, Color { alpha: 1.0, ..color(s.color) })).collect();
                 let opacity_stops = g.stops.iter().map(|s| (s.offset as f32, s.color.alpha() as f32)).collect();
                 let midpoints = g.stops.iter().take(g.stops.len().saturating_sub(1)).map(|s| s.half_point() as f32).collect();
-                Some(Fill::Gradient { stops, angle, scale, style, reverse: false, opacity_stops, midpoints, offset, dither: false, align: true })
+                Some(Fill::Gradient {
+                    stops,
+                    angle,
+                    scale,
+                    style,
+                    reverse: false,
+                    opacity_stops,
+                    midpoints,
+                    offset,
+                    dither: false,
+                    align: true,
+                    interpolation: None,
+                })
             }
         }
     }
