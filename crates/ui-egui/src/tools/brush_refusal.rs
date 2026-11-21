@@ -14,6 +14,8 @@ use crate::state::Tool;
 pub const HIDDEN: &str = "Could not use the {tool} because the target layer is hidden.";
 pub const LOCKED: &str = "Could not use the {tool} because the layer is locked.";
 pub const GROUP: &str = "Could not use the {tool} because the pixels in a group cannot be edited without merging the group.";
+/// The Color Replacement tool's group alert (#11924): its own wording, not the Brush's [`GROUP`].
+pub const TARGET_GROUP: &str = "Could not use the {tool} because the target is a group.";
 /// The Remove tool's one measured alert, Lock All (#12552): it doesn't name the tool.
 pub const REMOVE_LOCKED: &str = "Can't use the tool because the layer is locked.";
 
@@ -39,7 +41,8 @@ fn mode_tool_name(tool: Tool) -> Option<&'static str> {
 
 /// The tool's name in the alerts, for the tools whose wording was measured: the Brush, the
 /// Sharpen tool (#12952), the Sponge (#13030), the Smudge tool (#12965), the Art History Brush
-/// (#12638) and the Classic gradient (the live Gradient makes a fill layer and isn't measured, #12017).
+/// (#12638), the Color Replacement tool (#11924) and the Classic gradient (the live Gradient makes a
+/// fill layer and isn't measured, #12017).
 pub fn tool_name(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     match tool {
         Tool::Brush => Some(tl!("brush tool")),
@@ -47,6 +50,7 @@ pub fn tool_name(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
         Tool::Sponge => Some(tl!("sponge tool")),
         Tool::Smudge => Some(tl!("smudge tool")),
         Tool::ArtHistoryBrush => Some(tl!("art history brush")),
+        Tool::ColorReplacement => Some(tl!("Color Replacement tool")),
         Tool::Gradient if app.ui.tool_options.gradient_classic => Some(tl!("gradient tool")),
         _ => None,
     }
@@ -82,6 +86,8 @@ pub fn alert(app: &PhotocraftApp, tool: Tool, hidden: bool) -> Option<String> {
     }
     let name = tool_name(app, tool)?;
     let template = if hidden { HIDDEN } else { layer_refusal(app, tool)? };
+    // The Color Replacement tool says a group differently (#11924).
+    let template = if tool == Tool::ColorReplacement && template == GROUP { TARGET_GROUP } else { template };
     Some(crate::i18n::fmt(tl!(template), &[("tool", name)]))
 }
 
@@ -118,6 +124,10 @@ mod retouch_mode_refusal_alert_tests;
 #[cfg(test)]
 #[path = "../smudge_refusal_alert_tests.rs"]
 mod smudge_refusal_alert_tests;
+
+#[cfg(test)]
+#[path = "../color_replacement_refusal_alert_tests.rs"]
+mod color_replacement_refusal_alert_tests;
 
 #[cfg(test)]
 #[path = "remove_hidden_layer_tests.rs"]
