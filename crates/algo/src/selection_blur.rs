@@ -652,11 +652,10 @@ mod tests {
             for y in 0..h {
                 for x in 0..w {
                     let mut a = 0.0;
-                    for (i, kv) in k.iter().enumerate() {
-                        let xx = x as i64 + i as i64 - r;
-                        if xx >= 0 && xx < w as i64 {
-                            a += m[y * w + xx as usize] * kv;
-                        }
+                    // Out-of-bounds samples contributed nothing. Visit the same taps in order.
+                    let x0 = x as i64;
+                    for dx in (-r).max(-x0)..=r.min(w as i64 - 1 - x0) {
+                        a += m[y * w + (x0 + dx) as usize] * k[(dx + r) as usize];
                     }
                     tmp[y * w + x] = a;
                 }
@@ -665,11 +664,9 @@ mod tests {
             for y in 0..h {
                 for x in 0..w {
                     let mut a = 0.0;
-                    for (i, kv) in k.iter().enumerate() {
-                        let yy = y as i64 + i as i64 - r;
-                        if yy >= 0 && yy < h as i64 {
-                            a += tmp[yy as usize * w + x] * kv;
-                        }
+                    let y0 = y as i64;
+                    for dy in (-r).max(-y0)..=r.min(h as i64 - 1 - y0) {
+                        a += tmp[(y0 + dy) as usize * w + x] * k[(dy + r) as usize];
                     }
                     out[y * w + x] = a;
                 }
@@ -756,10 +753,15 @@ mod tests {
                 for radius in [0.0, 0.4, 1.0, 2.0, 5.0, 16.0, 50.0, 500.0] {
                     // The threshold is hard, so a pixel may only differ where the box average sits
                     // within float rounding of ½ (the running sum adds in another order).
-                    let (fast, slow) = (smooth(&m, w, h, radius), oracle::smooth(&m, w, h, radius));
+                    let fast = smooth(&m, w, h, radius);
                     let avg = oracle::box_blur(&m, w, h, radius.max(0.0).round() as usize);
-                    for (i, (a, b)) in fast.iter().zip(&slow).enumerate() {
-                        assert!(a == b || (avg[i] - 0.5).abs() < 1e-4, "{kind} {w}x{h} r {radius} pixel {i}: {a} vs {b} (average {})", avg[i]);
+                    assert_eq!(fast.len(), avg.len());
+                    for (i, (&actual, &mean)) in fast.iter().zip(&avg).enumerate() {
+                        let expected = if mean >= 0.5 { 1.0 } else { 0.0 };
+                        assert!(
+                            actual == expected || (mean - 0.5).abs() < 1e-4,
+                            "{kind} {w}x{h} r {radius} pixel {i}: {actual} vs {expected} (average {mean})"
+                        );
                     }
                 }
             }
