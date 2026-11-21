@@ -353,6 +353,10 @@ pub struct PhotocraftApp {
     pub(crate) menu_model: Option<menus::MenuModel>,
     /// The toolbar's slots for the stored layout (`tool_commands::ToolbarSlots`).
     pub(crate) toolbar_slots: panels::tool_commands::ToolbarSlots,
+    /// The Layers panel's model, held across passes (`layers_tree::PhotoLayers::held`).
+    pub(crate) layers_tree: Option<craft::ui::contract::Tracked<panels::layers_tree::PhotoLayers>>,
+    /// The dock's spec model and kept panels (`panel_docking::DockModel`).
+    pub(crate) dock_model: panels::panel_docking::DockModel,
     /// Move tool drag shown live (`move_ui`).
     pub(crate) move_preview: Option<move_ui::MovePreview>,
     /// Move tool › Show Highlight on Rollover: the last hover answer (`move_hover`).
