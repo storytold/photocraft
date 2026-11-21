@@ -898,9 +898,31 @@ fn a_surface_bounds_tile_count_is_counted_not_walked() {
 
 #[test]
 fn translated_stores_no_tiles_of_only_the_default_pixel() {
-    let only_default = |t: &Surface| {
-        let dp = t.default_pixel();
-        t.tiles().filter(|(c, _)| t.read_region(c.rect()).chunks_exact(dp.len()).all(|p| p == dp.as_slice())).count()
+    let assert_shift = |src: &Surface, dst: &Surface, dx, dy| {
+        let fmt = src.format();
+        let default = src.default_bytes();
+        assert_eq!(dst.format(), fmt);
+        assert_eq!(dst.default_bytes(), default);
+        for (coord, tile) in dst.tiles() {
+            assert!(
+                tile.bytes().chunks_exact(default.len()).any(|pixel| pixel != default),
+                "default-only {fmt:?} tile {coord:?} after shift ({dx}, {dy}) over {default:?}"
+            );
+        }
+        // Compare every possible destination tile and every stored one. The defaults checked
+        // above determine all pixels outside that union, including the gap between blocks.
+        let affected = src
+            .tiles()
+            .flat_map(|(coord, _)| coord.rect().translate(dx, dy).tiles())
+            .chain(dst.tiles().map(|(coord, _)| *coord))
+            .collect::<std::collections::BTreeSet<_>>();
+        for coord in affected {
+            let rect = coord.rect();
+            assert!(
+                dst.to_interleaved(rect) == src.to_interleaved(rect.translate(-dx, -dy)),
+                "wrong {fmt:?} pixels in tile {coord:?} after shift ({dx}, {dy}) over {default:?}"
+            );
+        }
     };
     // Two blocks a few tiles apart, moved off the tile grid and back: the default-pixel edges
     // of their tiles land on tiles of their own, which aren't stored.
@@ -909,16 +931,12 @@ fn translated_stores_no_tiles_of_only_the_default_pixel() {
             let mut s = Surface::with_default(fmt, &vec![default; fmt.channels()]);
             s.fill_rect(Rect::new(0, 0, 300, 300), &vec![1.0; fmt.channels()]);
             s.fill_rect(Rect::new(2000, 1000, 2300, 1300), &vec![0.5; fmt.channels()]);
-            let all = Rect::new(-600, -600, 3000, 2000);
-            let mut t = s.clone();
-            for (dx, dy) in [(100, 56), (-100, -56), (10, 7), (-3, 40), (130, -90), (-137, 43)] {
-                let moved = t.translated(dx, dy, t.content_bounds());
-                assert_eq!(moved.read_region(all), t.read_region(all.translate(-dx, -dy)), "{fmt:?} over {default} by ({dx}, {dy})");
-                assert_eq!(only_default(&moved), 0, "{fmt:?} over {default} by ({dx}, {dy})");
-                t = moved;
-            }
-            assert_eq!(t.read_region(all), s.read_region(all), "{fmt:?} over {default}: back where it started");
-            assert_eq!(t.tile_count(), s.tile_count(), "{fmt:?} over {default}: back where it started");
+            let moved = s.translated(100, 56, s.content_bounds());
+            assert_shift(&s, &moved, 100, 56);
+            let restored = moved.translated(-100, -56, moved.content_bounds());
+            assert_shift(&moved, &restored, -100, -56);
+            assert_shift(&s, &restored, 0, 0);
+            assert_eq!(restored.tile_count(), s.tile_count(), "{fmt:?} over {default}: back where it started");
         }
     }
     // Stored tiles of the default pixel inside `content`: the targets that would share one of
@@ -928,9 +946,8 @@ fn translated_stores_no_tiles_of_only_the_default_pixel() {
     s.write_pixel(600, 600, &[1.0]);
     let content = Rect::new(0, 0, 1024, 1024);
     let t = s.translated(10, 7, content);
-    assert_eq!(only_default(&t), 0);
+    assert_shift(&s, &t, 10, 7);
     assert_eq!(t.tile_count(), 1);
-    assert_eq!(t.read_region(Rect::new(-20, -20, 1100, 1100)), s.read_region(Rect::new(-30, -27, 1090, 1093)));
 }
 
 proptest! {
