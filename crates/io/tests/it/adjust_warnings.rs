@@ -177,45 +177,49 @@ fn short_color_lookup_table_warns_on_open() {
 
 #[test]
 fn custom_domain_lookup_warns_and_round_trips_verbatim() {
+    // The domain spelling only decides whether the LUT reads as default (`read_lookup`); from
+    // there the block is kept as raw bytes, whose stored lengths are all a multiple of four, so
+    // no spelling changes the containers' padding. Each container takes the spellings in turn:
+    // every spelling still crosses PSD and PSB, and `adjust_map`'s unit tests parse each one.
     let domains = ["DOMAIN_MIN 0 0 0\nDOMAIN_MAX 0.5 0.5 0.5\n", "DOMAIN_MIN 0 0.25 0\nDOMAIN_MAX 1 0.75 1\n", "LUT_3D_INPUT_RANGE 0 0.5\n"];
-    for domain in domains {
+    let containers = [
+        (Version::Psd, 8, "psd"),
+        (Version::Psd, 16, "psd"),
+        (Version::Psd, 32, "psd"),
+        (Version::Psb, 8, "psb"),
+        (Version::Psb, 16, "psb"),
+        (Version::Psb, 32, "psb"),
+    ];
+    for (i, (version, depth, extension)) in containers.into_iter().enumerate() {
+        let domain = domains[i % domains.len()];
         let cube = identity_cube(domain);
-        for (version, depth, extension) in [
-            (Version::Psd, 8, "psd"),
-            (Version::Psd, 16, "psd"),
-            (Version::Psd, 32, "psd"),
-            (Version::Psb, 8, "psb"),
-            (Version::Psb, 16, "psb"),
-            (Version::Psb, 32, "psb"),
-        ] {
-            let input = synthetic_lookup_psd(version, depth, &cube);
-            let (_, source_block) = parsed_lookup_block(&input);
-            let name = format!("input.{extension}");
-            let opened = import(&name, &input).expect("open synthetic PSD/PSB");
-            assert_eq!(unsupported_lookup_raw(&opened.document), source_block, "{extension}, {depth}-bit, {domain:?}");
-            let warnings: Vec<_> = opened.warnings.iter().filter(|warning| warning.contains("Custom-domain LUT")).collect();
-            assert_eq!(warnings.len(), 1, "{extension}, {depth}-bit: {:?}", opened.warnings);
-            assert!(
-                warnings[0].contains("Color Lookup")
-                    && warnings[0].contains("DOMAIN_MIN")
-                    && warnings[0].contains("DOMAIN_MAX")
-                    && warnings[0].to_ascii_lowercase().contains("not supported"),
-                "{}",
-                warnings[0]
-            );
+        let input = synthetic_lookup_psd(version, depth, &cube);
+        let (_, source_block) = parsed_lookup_block(&input);
+        let name = format!("input.{extension}");
+        let opened = import(&name, &input).expect("open synthetic PSD/PSB");
+        assert_eq!(unsupported_lookup_raw(&opened.document), source_block, "{extension}, {depth}-bit, {domain:?}");
+        let warnings: Vec<_> = opened.warnings.iter().filter(|warning| warning.contains("Custom-domain LUT")).collect();
+        assert_eq!(warnings.len(), 1, "{extension}, {depth}-bit: {:?}", opened.warnings);
+        assert!(
+            warnings[0].contains("Color Lookup")
+                && warnings[0].contains("DOMAIN_MIN")
+                && warnings[0].contains("DOMAIN_MAX")
+                && warnings[0].to_ascii_lowercase().contains("not supported"),
+            "{}",
+            warnings[0]
+        );
 
-            let native = export(&opened.document, "preserved.pcraft", &ExportOptions::default()).expect("save native document");
-            let native_open = import("preserved.pcraft", &native.bytes).expect("reopen native document");
-            assert_eq!(unsupported_lookup_raw(&native_open.document), source_block, "native preservation, {extension}, {depth}-bit");
+        let native = export(&opened.document, "preserved.pcraft", &ExportOptions::default()).expect("save native document");
+        let native_open = import("preserved.pcraft", &native.bytes).expect("reopen native document");
+        assert_eq!(unsupported_lookup_raw(&native_open.document), source_block, "native preservation, {extension}, {depth}-bit");
 
-            let output_name = format!("roundtrip.{extension}");
-            let options = ExportOptions { force_psb: version.is_psb(), ..Default::default() };
-            let saved = export(&native_open.document, &output_name, &options).expect("re-export PSD/PSB");
-            let (_, output_block) = parsed_lookup_block(&saved.bytes);
-            assert_eq!(output_block, source_block, "saved block, {extension}, {depth}-bit, {domain:?}");
-            let reopened = import(&output_name, &saved.bytes).expect("reopen re-exported PSD/PSB");
-            assert_eq!(unsupported_lookup_raw(&reopened.document), source_block, "reopened block, {extension}, {depth}-bit");
-        }
+        let output_name = format!("roundtrip.{extension}");
+        let options = ExportOptions { force_psb: version.is_psb(), ..Default::default() };
+        let saved = export(&native_open.document, &output_name, &options).expect("re-export PSD/PSB");
+        let (_, output_block) = parsed_lookup_block(&saved.bytes);
+        assert_eq!(output_block, source_block, "saved block, {extension}, {depth}-bit, {domain:?}");
+        let reopened = import(&output_name, &saved.bytes).expect("reopen re-exported PSD/PSB");
+        assert_eq!(unsupported_lookup_raw(&reopened.document), source_block, "reopened block, {extension}, {depth}-bit");
     }
 }
 
