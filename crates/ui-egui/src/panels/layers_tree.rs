@@ -108,6 +108,10 @@ pub(crate) struct PhotoLayers {
     foreign_drag: bool,
     /// The Smart Filter row selected on its own, as stored ([`crate::smart_ui::selected`]).
     picked: Option<crate::smart_ui::FilterDrag>,
+    /// The Layer Style dialog's live preview of the document while Preview is on: the panel's Opacity, Fill and
+    /// blending badge follow it before OK (#14861).
+    #[plain_data(assume = "the document is replaced, never changed in place, while an Arc to it is shared")]
+    live: Option<Arc<Document>>,
 }
 
 /// Equal when they show the same: the same document value (one `Arc`) and the same state.
@@ -120,6 +124,10 @@ impl PartialEq for PhotoLayers {
                 == (other.mask_target, other.vector_mask_target, other.link_enabled, other.hovered, other.working_text, other.foreign_drag, other.picked)
             && self.empty == other.empty
             && self.missing == other.missing
+            && match (&self.live, &other.live) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (a, b) => a.is_none() && b.is_none(),
+            }
     }
 }
 
@@ -160,6 +168,7 @@ impl PhotoLayers {
             missing,
             foreign_drag,
             picked,
+            live: crate::layer_style::live_document(app, st.doc.id),
         }
     }
 
@@ -170,6 +179,11 @@ impl PhotoLayers {
             Some(held) if *held == self => held,
             _ => Tracked::new(self),
         }
+    }
+
+    /// `l` as the Layer Style dialog's live preview has it while Preview is on, else `l` (#14861).
+    fn live_layer<'a>(&'a self, l: &'a Layer) -> &'a Layer {
+        self.live.as_deref().and_then(|d| d.layer(l.id)).unwrap_or(l)
     }
 
     fn doc(&self) -> &Document {
@@ -294,7 +308,8 @@ impl LayerTree for PhotoLayers {
         info.blend_key = l.blend.key().to_string();
         info.blend_label = (!matches!(l.blend, BlendMode::Normal | BlendMode::PassThrough)).then(|| tl!(l.blend.label()).to_string());
         info.effect_kinds = l.effects.items.iter().filter(|e| e.enabled()).filter_map(effect_kind).collect();
-        info.advanced_blending = l.excluded_channels != 0 || l.advanced != Default::default() || !l.blend_if.is_default();
+        let blended = self.live_layer(l);
+        info.advanced_blending = blended.excluded_channels != 0 || blended.advanced != Default::default() || !blended.blend_if.is_default();
         if let LayerContent::Smart(sm) = &l.content {
             info.smart = Some(match sm.source {
                 photocraft_doc::SmartSource::Linked { .. } => SmartSource::Linked,
@@ -410,8 +425,9 @@ impl LayerTree for PhotoLayers {
         let mut p = LayerProperties::new(l.blend.key().to_string());
         // Pass Through is a group's mode: offered only when every target is a group.
         p.group = self.targets().iter().all(|id| self.layer(id).is_some_and(Layer::is_group));
-        p.opacity = f64::from(l.opacity) * 100.0;
-        p.fill = f64::from(l.fill_opacity) * 100.0;
+        let shown = self.live_layer(l);
+        p.opacity = f64::from(shown.opacity) * 100.0;
+        p.fill = f64::from(shown.fill_opacity) * 100.0;
         p.locks = self.info(&l.id).locks;
         p.editable = !self.doc().is_background(l.id);
         Some(p)
