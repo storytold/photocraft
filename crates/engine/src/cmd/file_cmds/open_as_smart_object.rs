@@ -5,7 +5,7 @@
 //! size and position `0, 0`) and put into the document before it is admitted, so the opening
 //! snapshot already shows it.
 
-use super::open::import_result_for_open;
+use super::open::decode_open_source;
 use super::paths::{file_name, read_file, stem, untitled_name};
 use super::{Affine, Arc, Document, Layer, LayerContent, Result, Session, SmartObject, SmartSource, Value, flattened_checked, json, str_param};
 use crate::layer_place::Place;
@@ -26,35 +26,41 @@ pub(super) fn open_as_smart_object(s: &mut Session, p: &Value) -> Result<Value> 
     let opts = crate::jobs::import_options(s.prefs());
     // An interactive caller (the app) asks before opening a PSD that had damaged data, as File > Open does.
     let confirm_damage = p.get("confirmDamage").and_then(Value::as_bool).unwrap_or(false);
-    crate::jobs::run(
+    crate::jobs::run_open(
         s,
         &format!("Opening {name}"),
-        false,
         move |ctx| {
             ctx.progress(0.0, "Reading");
             let bytes = read_file(&path)?;
             ctx.check()?;
             ctx.progress(0.05, "Decoding");
-            let (r, damaged) = import_result_for_open(&name, &bytes, &opts)?;
+            let decoded = decode_open_source(&name, &bytes, &opts)?;
+            Ok((path, name, Arc::new(bytes), decoded))
+        },
+        move |ctx, (path, name, bytes, mut decoded)| {
+            super::recover_decoded_native_caches(&mut decoded, ctx)?;
             ctx.check()?;
             ctx.progress(0.9, "Flattening");
+            let photocraft_io::DecodedOpen { imported: r, damaged, .. } = decoded;
             // The file as one image: the smart object's rendered contents.
-            let pixels = flattened_checked(&r.document, r.document.pixel_format(), CMD)?;
-            Ok((path, name, Arc::new(bytes), r, pixels, confirm_damage && damaged))
+            let pixels = crate::jobs::scratch_checked(Some(&r.document), || flattened_checked(&r.document, r.document.pixel_format(), CMD))?;
+            let raw_render_recipe = photocraft_io::raw::developed_demosaic(&r.warnings).map(|method| photocraft_doc::RawRenderRecipe {
+                version: 1,
+                demosaic: method.id().into(),
+                source_hash: *blake3::hash(&bytes).as_bytes(),
+            });
+            ctx.check()?;
+            // The original file name retains its extension for Edit Contents.
+            let source = SmartSource::Embedded { file_name: name.clone(), bytes };
+            let mut smart = SmartObject::new(source, Affine::IDENTITY, Some(pixels));
+            smart.raw_render_recipe = raw_render_recipe;
+            Ok((path, name, r, smart, confirm_damage && damaged))
         },
-        |s, (path, name, bytes, r, pixels, damaged)| apply(s, &path, &name, bytes, r, pixels, damaged),
+        |s, (path, name, r, smart, damaged)| apply(s, &path, &name, r, smart, damaged),
     )
 }
 
-fn apply(
-    s: &mut Session,
-    path: &str,
-    file: &str,
-    bytes: Arc<Vec<u8>>,
-    r: photocraft_io::ImportResult,
-    pixels: photocraft_raster::Surface,
-    damaged: bool,
-) -> Result<Value> {
+fn apply(s: &mut Session, path: &str, file: &str, r: photocraft_io::ImportResult, smart: SmartObject, damaged: bool) -> Result<Value> {
     let warnings = r.warnings;
     let mut src = r.document;
     super::tag_exr_colorspace(s, file, &mut src);
@@ -69,10 +75,7 @@ fn apply(
     doc.color_table = src.color_table.clone();
     doc.duotone = src.duotone.clone();
 
-    // Embedded (not linked): the original file name keeps its extension, so Edit Contents opens it.
-    let source = SmartSource::Embedded { file_name: file.to_string(), bytes };
-    let so = SmartObject::new(source, Affine { m: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }, Some(pixels));
-    let layer = Layer::new(layer_name, LayerContent::Smart(so));
+    let layer = Layer::new(layer_name, LayerContent::Smart(smart));
     let layer_id = layer.id;
     crate::layer_place::insert_new(&mut doc, None, layer, Place::AutoEditable);
 

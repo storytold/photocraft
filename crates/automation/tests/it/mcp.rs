@@ -577,6 +577,44 @@ async fn bridge_doc_save_forwards_maximize_compatibility() {
     app.abort();
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn bridge_doc_save_forwards_explicit_pcraft_render_cache_choice() {
+    let (addr, app) = fake_app().await;
+    let client = connect(PhotocraftMcp::bridge(&addr, CONTROL_TOKEN).unwrap()).await;
+    for choice in [None, Some(false), Some(true)] {
+        let mut params = json!({"path": "out.pcraft"});
+        if let Some(keep) = choice {
+            params["pcraftRenderCaches"] = json!(keep);
+        }
+        let saved = json_of(&call(&client, "doc_save", params.clone()).await);
+        assert_eq!(saved, json!({"saved": params}));
+    }
+    client.cancel().await.unwrap();
+    app.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn headless_mcp_pcraft_render_cache_opt_out_in_workspace() {
+    use super::native_render_caches::{assert_saved_cache, raw_smart_object};
+
+    let root = tmp("pcraft-render-cache-opt-out");
+    let original = raw_smart_object(&root.join("source.dng"));
+    let native = photocraft_format::save_to_bytes(&original, &Default::default()).unwrap();
+    std::fs::write(root.join("source.pcraft"), native).unwrap();
+    let client = connect(headless_in(&root)).await;
+    json_of(&call(&client, "doc_open", json!({"path": "source.pcraft"})).await);
+    for (name, choice) in [("default.pcraft", None), ("omit.pcraft", Some(false)), ("keep.pcraft", Some(true))] {
+        let mut params = json!({"path": name});
+        if let Some(keep) = choice {
+            params["pcraftRenderCaches"] = json!(keep);
+        }
+        json_of(&call(&client, "doc_save", params).await);
+        assert_saved_cache(&root.join(name), choice.unwrap_or(true));
+    }
+    client.cancel().await.unwrap();
+    cleanup(&root);
+}
+
 /// An oversized app reply drops the connection with a budget error and never retries the
 /// operation on a fresh, authenticated connection.
 #[tokio::test(flavor = "multi_thread")]

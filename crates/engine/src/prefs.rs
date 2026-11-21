@@ -628,6 +628,8 @@ pub struct FileHandling {
     /// A `.pcraft` save also writes the flattened document at its canvas size as
     /// `composite/full.png`. Off by default.
     pub pcraft_full_composite: bool,
+    /// Keep Smart Object render caches in native files. Off permits verified exact reconstruction.
+    pub pcraft_render_caches: bool,
     /// SVG groups deeper than this are rasterised on import; parser and document safety caps remain fixed.
     pub rasterize_svg_groups_deeper_than: u32,
     pub recent_file_count: u32,
@@ -678,6 +680,7 @@ impl Default for FileHandling {
             ask_before_saving_layered_tiff: true,
             maximize_psd_compatibility: Ask::Always,
             pcraft_full_composite: false,
+            pcraft_render_caches: true,
             rasterize_svg_groups_deeper_than: photocraft_doc::MAX_GROUP_DEPTH as u32,
             recent_file_count: 20,
             recent_files: Vec::new(),

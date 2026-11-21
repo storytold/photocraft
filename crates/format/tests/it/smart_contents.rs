@@ -175,3 +175,35 @@ fn native_vector_display_preview_roundtrips_separately_from_original_payload() {
     assert!(smart.vector_preview.is_none());
     assert_eq!(smart.source, SmartSource::Embedded { file_name: "Artwork.ai".into(), bytes: source });
 }
+
+#[test]
+fn native_raw_recipe_roundtrips_and_legacy_absence_keeps_the_cache() {
+    use photocraft_doc::{RawRenderRecipe, Surface};
+
+    let mut doc = Document::new("RAW cache", Size::new(1, 1), ColorMode::Rgb, SampleType::U16);
+    let encoded = Arc::new(b"encoded RAW source fixture".to_vec());
+    let mut cache = Surface::new(doc.pixel_format());
+    cache.write_pixel(0, 0, &[0.25, 0.5, 0.75, 1.0]);
+    let source = SmartSource::Embedded { file_name: "photo.ARW".into(), bytes: encoded.clone() };
+    let mut smart = SmartObject::new(source, Affine::IDENTITY, Some(cache.clone()));
+    assert!(smart.raw_render_recipe.is_none());
+    let recipe = RawRenderRecipe { version: 1, demosaic: "mhc".into(), source_hash: *blake3::hash(&encoded).as_bytes() };
+    smart.raw_render_recipe = Some(recipe.clone());
+    doc.layers.push(Layer::new("RAW", LayerContent::Smart(smart)));
+
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
+    let legacy = rewrite_manifest(&bytes, |manifest| {
+        let content = manifest["document"]["layers"][0]["content"].as_object_mut().unwrap();
+        assert_eq!(content.remove("raw_render_recipe"), Some(serde_json::to_value(&recipe).unwrap()));
+    });
+    let back = load_from_bytes(&legacy).unwrap();
+    let LayerContent::Smart(smart) = &back.layers[0].content else { panic!("RAW smart object lost") };
+    assert!(smart.raw_render_recipe.is_none());
+    assert_eq!(smart.cache.as_ref(), Some(&cache));
+
+    let resaved = save_to_bytes(&back, &SaveOptions::default()).unwrap();
+    let zip = zip::ZipReader::new(&resaved).unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&zip.read_by_name("manifest.json", 1 << 20).unwrap()).unwrap();
+    assert!(!manifest["document"]["layers"][0]["content"].as_object().unwrap().contains_key("raw_render_recipe"));
+}

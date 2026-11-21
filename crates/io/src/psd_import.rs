@@ -714,6 +714,7 @@ impl Ctx<'_> {
             contents_id,
             source: SmartSource::Linked { path: id },
             vector_preview,
+            raw_render_recipe: None,
             transform,
             smart_filters: stack.filters,
             cache: Some(cache),

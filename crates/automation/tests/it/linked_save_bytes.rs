@@ -21,6 +21,7 @@ fn a_linked_smart_object_is_not_read_into_the_bytes() {
         stack_mode: None,
         perspective: None,
         vector_preview: None,
+        raw_render_recipe: None,
     };
     doc.layers.push(Layer::new("Linked", LayerContent::Smart(smart)));
     let (bytes, warnings) = files::save_bytes(&doc, "out.psd", None, &Default::default()).unwrap();

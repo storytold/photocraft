@@ -534,6 +534,7 @@ impl PhotocraftApp {
             image_previews: previews,
             psd_maximize_compatibility: maximize,
             pcraft_full_composite: file_handling.pcraft_full_composite,
+            pcraft_render_caches: file_handling.pcraft_render_caches,
             ..ExportSettings::default()
         };
         if let Some(st) = self.session.active() {

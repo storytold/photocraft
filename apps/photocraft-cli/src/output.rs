@@ -15,6 +15,9 @@ impl From<&ExportArgs> for ExportOptions {
             pcraft_full_composite: a.pcraft_full_composite,
             ..Default::default()
         };
+        if a.no_pcraft_render_caches {
+            o.pcraft_render_caches = false;
+        }
         if let Some(q) = a.quality {
             o.encode.jpeg_quality = q;
             // Asking for a quality asks for a lossy WebP; the default WebP stays lossless.

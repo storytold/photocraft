@@ -772,6 +772,68 @@ fn fresh_ids_option() {
 }
 
 #[test]
+fn save_options_omit_only_selected_smart_object_caches_from_zip_and_directory() {
+    use std::sync::Arc;
+
+    use photocraft_doc::{SmartObject, SmartSource};
+    use photocraft_geom::{Affine, Size, TILE_SIZE};
+    use photocraft_raster::Surface;
+
+    let mut doc = Document::new("Smart Object caches", Size::new(TILE_SIZE as u32 + 1, 1), ColorMode::Rgb, SampleType::U8);
+    let mut cache = Surface::new(doc.pixel_format());
+    cache.write_pixel(0, 0, &[1.0, 0.0, 0.0, 1.0]);
+    cache.write_pixel(TILE_SIZE, 0, &[0.0, 0.0, 1.0, 1.0]);
+    let source = SmartSource::Embedded { file_name: "source.png".into(), bytes: Arc::new(vec![1, 2, 3]) };
+    let first = Layer::new("First", LayerContent::Smart(SmartObject::new(source, Affine::IDENTITY, Some(cache))));
+    let mut second = first.duplicate();
+    let LayerContent::Smart(smart) = &mut second.content else { panic!("expected a Smart Object") };
+    smart.cache.as_mut().unwrap().write_pixel(0, 0, &[0.0, 1.0, 0.0, 1.0]);
+    let omitted_id = first.id;
+    doc.layers.extend([Layer::group("Nested", vec![first]), second]);
+    let original = doc.clone();
+    let mut expected = doc.clone();
+    let LayerContent::Smart(smart) = &mut expected.layer_mut(omitted_id).unwrap().content else { panic!("expected a Smart Object") };
+    smart.cache = None;
+
+    let preview = |width| {
+        let mut preview = Rgba8Image::new(width, 1);
+        preview.pixels[..4].copy_from_slice(&[124, 86, 51, 255]);
+        preview
+    };
+    let default = SaveOptions { thumbnail: Some(preview(2)), composite: Some(preview(3)), full_composite: Some(preview(doc.size.width)), ..Default::default() };
+    let omit = SaveOptions { omit_smart_object_caches: [omitted_id].into(), ..default.clone() };
+    let mut writer = PcraftWriter::new();
+    let (zip_default, zip_default_stats) = writer.save_zip(&doc, &default).unwrap();
+    let (zip_omitted, zip_stats) = writer.save_zip(&doc, &omit).unwrap();
+    let dir = temp_dir("omit-smart-object-cache");
+    let dir_default_stats = writer.save_dir(&doc, &dir, &default).unwrap();
+    assert_eq!(load_path(&dir).unwrap(), original);
+    let dir_stats = writer.save_dir(&doc, &dir, &omit).unwrap();
+
+    assert_eq!((zip_default_stats.tiles_total, dir_default_stats.tiles_total), (3, 3));
+    assert_eq!((zip_stats.tiles_total, dir_stats.tiles_total), (2, 2), "omit only the first layer's unique tile");
+    assert_eq!(load_from_bytes(&zip_default).unwrap(), original);
+    assert_eq!(load_from_bytes(&zip_omitted).unwrap(), expected);
+    assert_eq!(load_path(&dir).unwrap(), expected);
+    assert_eq!(dir_stats.objects_removed, 1);
+    let before = zip::ZipReader::new(&zip_default).unwrap();
+    let after = zip::ZipReader::new(&zip_omitted).unwrap();
+    assert_eq!(after.entries.iter().filter(|entry| entry.name.starts_with("tiles/")).count(), 2);
+    assert_eq!(std::fs::read_dir(dir.join("tiles")).unwrap().count(), 2);
+    for tile in before.entries.iter().filter(|entry| entry.name.starts_with("tiles/")) {
+        assert_eq!(dir.join(&tile.name).is_file(), after.find(&tile.name).is_some());
+    }
+    for path in ["thumb.png", "composite/preview.png", "composite/full.png"] {
+        let preview = before.read_by_name(path, usize::MAX).unwrap();
+        assert_eq!(after.read_by_name(path, usize::MAX).unwrap(), preview);
+        assert_eq!(std::fs::read(dir.join(path)).unwrap(), preview);
+    }
+    assert_eq!(doc, original);
+    assert_eq!(writer.save_zip(&doc, &default).unwrap().0, zip_default);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn previews_embedded_and_readable() {
     let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
     let mut thumb = Rgba8Image::new(4, 3);
@@ -1393,4 +1455,33 @@ fn file_encoding_source_images_roundtrips_and_defaults_when_absent() {
         let old: photocraft_format::manifest::DocM = serde_json::from_value(json).unwrap();
         assert_eq!(old.file_encoding, photocraft_doc::FileEncoding { jpeg_quality: Some(80), ..Default::default() });
     }
+}
+
+#[test]
+fn duplicate_layer_ids_keep_every_selected_smart_cache() {
+    use std::sync::Arc;
+
+    use photocraft_doc::{SmartObject, SmartSource};
+    use photocraft_geom::{Affine, Size};
+    use photocraft_raster::Surface;
+
+    let mut doc = Document::new("Older Smart Objects", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+    let cached = |name, color: &[f32]| {
+        let source = SmartSource::Embedded { file_name: "source.png".into(), bytes: Arc::new(vec![1, 2, 3]) };
+        let mut cache = Surface::new(doc.pixel_format());
+        cache.write_pixel(0, 0, color);
+        Layer::new(name, LayerContent::Smart(SmartObject::new(source, Affine::IDENTITY, Some(cache))))
+    };
+    let first = cached("First", &[1.0, 0.0, 0.0, 1.0]);
+    let mut second = cached("Second", &[0.0, 1.0, 0.0, 1.0]);
+    let duplicate = first.id;
+    second.id = duplicate;
+    assert_ne!(first.surface(), second.surface());
+    doc.layers.extend([first, Layer::group("Nested", vec![second])]);
+
+    let loaded = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    assert_eq!(loaded, doc, "ordinary saving and loading preserve duplicate IDs and both caches");
+    let omit = SaveOptions { omit_smart_object_caches: [duplicate].into(), ..Default::default() };
+    let saved = load_from_bytes(&save_to_bytes(&loaded, &omit).unwrap()).unwrap();
+    assert_eq!(saved, doc, "an ambiguous ID cannot stand for an individually verified layer");
 }

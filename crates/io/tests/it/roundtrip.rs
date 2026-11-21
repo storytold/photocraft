@@ -117,6 +117,7 @@ fn text_shape_smart_raw_blocks_survive() {
         LayerContent::Smart(SmartObject {
             contents_id: SmartContentsId::fresh(),
             vector_preview: None,
+            raw_render_recipe: None,
             source: SmartSource::Linked { path: String::new() },
             transform: photocraft_geom::Affine::IDENTITY,
             smart_filters: vec![],

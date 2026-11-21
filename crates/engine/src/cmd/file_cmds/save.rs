@@ -48,6 +48,8 @@ pub(crate) struct SaveOpts {
     /// File Handling › Save Full-Size Composite in .pcraft Files, off by default). The save may
     /// omit it; check the manifest's `full_composite` member.
     pub pcraft_full_composite: bool,
+    /// `.pcraft`: keep render caches (defaults to the File Handling preference).
+    pub pcraft_render_caches: bool,
 }
 
 impl Default for SaveOpts {
@@ -67,6 +69,7 @@ impl Default for SaveOpts {
             image_previews: true,
             psd_maximize_compatibility: true,
             pcraft_full_composite: false,
+            pcraft_render_caches: true,
         }
     }
 }
@@ -96,6 +99,7 @@ impl SaveOpts {
             image_previews: file_handling.image_previews != crate::prefs::Ask::Never,
             psd_maximize_compatibility: maximize_compatibility_param(p, cmd)?.unwrap_or(file_handling.maximize_psd_compatibility != crate::prefs::Ask::Never),
             pcraft_full_composite: pcraft_full_composite_param(p, cmd)?.unwrap_or(file_handling.pcraft_full_composite),
+            pcraft_render_caches: pcraft_render_caches_param(p, cmd)?.unwrap_or(file_handling.pcraft_render_caches),
         })
     }
 
@@ -137,13 +141,12 @@ pub fn tga_bits_param(p: &Value, cmd: &str) -> Result<Option<photocraft_io::TgaB
 /// Whether `p` asks a `.pcraft` save for the full-size composite (`"pcraftFullComposite": bool`;
 /// absent or null: `None`, the caller's default). Anything else is a bad parameter of command `cmd`.
 pub fn pcraft_full_composite_param(p: &Value, cmd: &str) -> Result<Option<bool>> {
-    match p.get("pcraftFullComposite") {
-        None | Some(Value::Null) => Ok(None),
-        Some(v) => v
-            .as_bool()
-            .map(Some)
-            .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: format!("`pcraftFullComposite` must be true or false, got {v}") }),
-    }
+    optional_bool_param(p, "pcraftFullComposite", cmd)
+}
+
+/// Whether a native save keeps Smart Object caches. Absent and null use the caller's default.
+pub fn pcraft_render_caches_param(p: &Value, cmd: &str) -> Result<Option<bool>> {
+    optional_bool_param(p, "pcraftRenderCaches", cmd)
 }
 
 /// One save's Maximize Compatibility in `p` (`"maximizeCompatibility": bool`, Photoshop's checkbox
@@ -178,6 +181,10 @@ pub fn tiff_compression_param(p: &Value, cmd: &str) -> Result<Option<photocraft_
 /// (Save Image Pyramid), `true` or `false`; absent or null: unset. Anything else is a bad
 /// parameter of command `cmd` (#8827).
 pub fn tiff_bool_param(p: &Value, key: &str, cmd: &str) -> Result<Option<bool>> {
+    optional_bool_param(p, key, cmd)
+}
+
+fn optional_bool_param(p: &Value, key: &str, cmd: &str) -> Result<Option<bool>> {
     match p.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Bool(b)) => Ok(Some(*b)),
@@ -254,6 +261,7 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
         image_previews: save.image_previews,
         psd_maximize_compatibility: save.psd_maximize_compatibility,
         pcraft_full_composite: save.pcraft_full_composite,
+        pcraft_render_caches: save.pcraft_render_caches,
         // Linked files a PSD embeds are resolved against the document being worked on.
         document_path: crate::doc_path::current(),
         // An untrusted session's stored paths are document data: embed none of them.

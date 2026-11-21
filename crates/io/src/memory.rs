@@ -321,6 +321,28 @@ pub fn resolve_budget(snapshot: MemorySnapshot, caller_limit: Option<u64>) -> Me
     resolve_budget_for(active_platform(), snapshot, caller_limit)
 }
 
+/// The automatic working allowance for rebuilding missing native Smart Object caches.
+/// A save uses the same allowance and document order before it omits any caches.
+pub struct NativeCacheBudget(u64);
+
+impl NativeCacheBudget {
+    pub fn current() -> Self {
+        Self(resolve_budget(MemorySnapshot::current(), None).soft_limit)
+    }
+
+    pub fn remaining(&self) -> u64 {
+        self.0
+    }
+
+    /// Rebuilt tiles stay live while recovering the rest of the document.
+    pub fn retain(&mut self, surface: &photocraft_raster::Surface) -> bool {
+        let bytes = photocraft_raster::stored_tiles_bytes(surface.tile_count() as u64, &surface.format());
+        let Some(remaining) = self.0.checked_sub(bytes) else { return false };
+        self.0 = remaining;
+        true
+    }
+}
+
 /// [`resolve_budget`] for an import whose estimate includes `spillable` bytes of tile pixels.
 ///
 /// While the scratch disk is spilling (on and not paused), tiles beyond the residency budget are

@@ -178,6 +178,12 @@ pub fn is_raw(bytes: &[u8]) -> bool {
     craft_raw::probe(bytes).is_some()
 }
 
+/// Reads the sensor dimensions from the same headers the decoder checks, before decoding samples.
+pub fn probe_dimensions(bytes: &[u8]) -> Result<(usize, usize), RawError> {
+    let info = craft_raw::probe_info(bytes).map_err(shared_error)?;
+    Ok((info.width, info.height))
+}
+
 /// Reads the undeveloped sensor data and metadata.
 pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Sensor, RawError> {
     let max_samples = usize::try_from(limits.max_pixels.saturating_mul(3).min(limits.max_alloc / 4)).unwrap_or(usize::MAX);
