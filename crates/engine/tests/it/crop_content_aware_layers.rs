@@ -183,6 +183,8 @@ fn turned_rows_sample_each_target_and_leave_other_layers_at_plain_crop() {
     let (x, y) = extension_sample();
     let (mut s, ids) = scene();
     let original = doc(&s).clone();
+    let crop_frame = frame(true);
+    let mut locked_reference = None;
     for row in 0..3 {
         // Uniform donors isolate target selection from the existing turned-fill sampling policy.
         s.edit("Uniform Quads", |d, _| {
@@ -198,10 +200,21 @@ fn turned_rows_sample_each_target_and_leave_other_layers_at_plain_crop() {
         let active = if row == 1 { ids.edge } else { ids.quads };
         select(&mut s, active);
         let before = doc(&s).clone();
-        let p = frame(true);
-        let plain = plain_control(&mut s, &p);
+        let background = s.tools.background;
+        let plain = if row == 1 {
+            // A plain crop turns the whole document. The selected layer determines only the content-aware target.
+            let (source, source_background, plain) = locked_reference.take().expect("plain crop with the Background locked");
+            assert!(source == before && source_background == background, "the first two rows share the plain crop inputs");
+            plain
+        } else {
+            let plain = plain_control(&mut s, &crop_frame);
+            if row == 0 {
+                locked_reference = Some((before.clone(), background, plain.clone()));
+            }
+            plain
+        };
         let past = s.active().unwrap().history.past_len();
-        let mut p = p;
+        let mut p = crop_frame.clone();
         p["contentAware"] = json!(true);
         s.execute("image.crop", p).unwrap_or_else(|error| panic!("turned row {row}, active {active:?}: {error}"));
         let d = doc(&s);
