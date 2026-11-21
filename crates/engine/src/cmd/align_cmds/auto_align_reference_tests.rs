@@ -100,6 +100,14 @@ fn an_explicit_reference_still_wins() {
     assert_eq!(r["reference"], rot.0, "{r}");
 }
 
+/// An explicit `reference` is the caller's choice: naming the Background does not let a position-locked layer move.
+#[test]
+fn an_explicit_background_reference_still_refuses_to_move_a_position_locked_layer() {
+    let (mut s, bg, _, rot) = setup();
+    assert!(s.execute("edit.autoAlignLayers", json!({"projection": "reposition", "reference": bg.0})).is_err());
+    assert_eq!(origin(&s, rot), (10, 28), "the locked layer stays put");
+}
+
 /// A layer locked all the way (not measured beside a selected Background) keeps today's rule: it is the reference.
 #[test]
 fn a_fully_locked_layer_beside_the_background_keeps_todays_rule() {

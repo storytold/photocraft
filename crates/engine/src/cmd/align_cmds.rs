@@ -81,6 +81,7 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
         .ok_or_else(|| bad(cmd, format!("unknown projection `{projection}` (auto|perspective|cylindrical|spherical|collage|reposition)")))?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = st.doc.clone();
+    let explicit_reference = p.get("reference").and_then(Value::as_u64).is_some();
     let reference = match p.get("reference").and_then(Value::as_u64) {
         Some(r) if ids.contains(&LayerId(r)) => LayerId(r),
         Some(r) => return Err(bad(cmd, format!("reference {r} is not a selected pixel layer"))),
@@ -123,8 +124,9 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
     if moves.is_empty() {
         return Err(EngineError::Other("Auto-Align couldn't find enough matching detail between the layers".into()));
     }
-    // Onto the Background, a layer held only by its position lock moves too (#14199).
-    let movable = |id: LayerId| !pinned(&doc, id) || (doc.is_background(reference) && position_locked_only(&doc, id));
+    // Onto a Background chosen automatically, a layer held only by its position lock moves too (#14199); an explicit
+    // `reference` that would move a locked layer is still refused (CodeRabbit on #16073).
+    let movable = |id: LayerId| !pinned(&doc, id) || (!explicit_reference && doc.is_background(reference) && position_locked_only(&doc, id));
     if let Some(l) = moves.iter().find(|&&i| !movable(ids[i])).and_then(|&i| doc.layer(ids[i])) {
         return Err(EngineError::Other(format!("Auto-Align can't move the locked layer \"{}\"", l.name)));
     }
