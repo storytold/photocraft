@@ -1419,9 +1419,9 @@ mod multi_channel_dialog_tests {
     fn mask_view_dialogs_capture_the_mask_for_preview_and_confirmation() {
         for mode in ["rgb", "cmyk", "lab"] {
             for depth in [8, 16, 32] {
+                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                let ctx = app.ctx().clone();
                 for command in ["image.adjustments.levels", "image.adjustments.curves", "filter.blur.gaussianBlur"] {
-                    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-                    let ctx = app.ctx().clone();
                     app.run("file.new", json!({"width":32,"height":24,"mode":mode,"depth":depth})).unwrap();
                     app.run("layer.layerMask.revealAll", json!({})).unwrap();
                     app.session
@@ -1461,6 +1461,9 @@ mod multi_channel_dialog_tests {
                     let actual = app.session.active().unwrap().doc.layer(layer).unwrap();
                     assert_eq!(actual.surface(), before.surface());
                     assert_eq!(actual.mask.as_ref().unwrap().surface, shown.mask.as_ref().unwrap().surface);
+                    assert!(app.framework.dialogs.get_dyn(id).is_none(), "{command} should close its dialog");
+                    app.run("file.close", json!({"save":"discard"})).unwrap();
+                    assert!(app.session.documents().is_empty(), "{command} should leave no document open");
                 }
             }
         }
