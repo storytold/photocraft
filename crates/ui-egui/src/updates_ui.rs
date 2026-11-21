@@ -21,13 +21,48 @@ impl Default for Runtime {
     fn default() -> Self {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
-            updater: craft::update::updater::Updater::new(&crate::UPDATE_APP, photocraft_engine::build_info::VERSION),
+            updater: craft::update::updater::Updater::new(&crate::UPDATE_APP, photocraft_engine::build_info::VERSION)
+                .with_source(std::sync::Arc::new(check_skipping_a_failed_install)),
             #[cfg(not(target_arch = "wasm32"))]
             result_dialog: None,
             #[cfg(not(target_arch = "wasm32"))]
             outcome_announced: false,
         }
     }
+}
+
+/// The `Updater`'s own check, except for a release this copy installed itself a moment ago and
+/// still is not: the install did not take effect here, so offering it again would only loop
+/// (update, restart, the same prompt). The check says why instead (#10477).
+#[cfg(not(target_arch = "wasm32"))]
+fn check_skipping_a_failed_install() -> Result<Option<craft::update::Release>, String> {
+    let app = &crate::UPDATE_APP;
+    let running = photocraft_engine::build_info::VERSION;
+    let http = craft::update::Http::new(&format!("{}/Update", app.name))?;
+    let found = craft::update::check_for_update(app, &http, running)?;
+    match found {
+        Some(release) if craft::update::Paths::for_app(app).is_ok_and(|paths| installed_in(&paths, &release.tag)) => {
+            let version = release.tag.trim_start_matches(['v', 'V']);
+            Err(crate::i18n::fmt(
+                crate::i18n::t(
+                    "PhotoCraft {version} was installed a moment ago, but the copy that is running still reports {running}, so the installer did not replace it.",
+                ),
+                &[("version", version), ("running", running)],
+            ))
+        }
+        found => Ok(found),
+    }
+}
+
+/// Whether the release tagged `tag` is the one this copy installed itself within the last day. The
+/// marker holds the tag as GitHub published it, and releases may be tagged with or without the
+/// `v` (docs/releasing.md), so `tag` matches in either form.
+#[cfg(not(target_arch = "wasm32"))]
+fn installed_in(paths: &craft::update::Paths, tag: &str) -> bool {
+    let bare = tag.trim_start_matches(['v', 'V']);
+    [bare.to_owned(), format!("v{bare}"), format!("V{bare}")]
+        .into_iter()
+        .any(|tag| craft::update::self_update::just_updated_to(paths, &craft::update::Release { tag, ..Default::default() }))
 }
 
 /// Help ▸ Check for Updates: starts a check whose outcome the result window shows.
@@ -201,5 +236,49 @@ mod tests {
         assert!(app.ui.updates_open);
         assert_eq!(call(&mut app, "ui.set", serde_json::json!({"updatesOpen": false}))["ok"], true);
         assert!(!app.ui.updates_open);
+    }
+
+    fn paths() -> (tempfile::TempDir, craft::update::Paths) {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = craft::update::Paths::under(dir.path());
+        (dir, paths)
+    }
+
+    /// #10477: a release this copy installed a moment ago is recognised, so the check explains the
+    /// failed install instead of offering the same release again.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_release_installed_a_moment_ago_is_recognised_only_for_that_tag() {
+        let (_dir, paths) = paths();
+        assert!(!installed_in(&paths, "v0.18.0"), "no record");
+        let marker = paths.data.join("self-update.txt");
+        std::fs::create_dir_all(&paths.data).unwrap();
+        let now = craft::update::now();
+        std::fs::write(&marker, format!("v0.18.0
+{now}
+")).unwrap();
+        assert!(installed_in(&paths, "v0.18.0"));
+        assert!(!installed_in(&paths, "v0.19.0"), "another release is still on offer");
+        std::fs::write(&marker, format!("v0.18.0
+{}
+", now - 2 * 24 * 3600)).unwrap();
+        assert!(!installed_in(&paths, "v0.18.0"), "a day later the record no longer blocks an install");
+        std::fs::write(&marker, "garbage").unwrap();
+        assert!(!installed_in(&paths, "v0.18.0"));
+    }
+
+    /// docs/releasing.md allows tags without the `v`; the marker then holds `0.18.0` while the
+    /// release found is `v0.18.0`, and the loop must still be caught.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_release_with_a_bare_tag_is_recognised_whichever_way_it_is_asked_for() {
+        let (_dir, paths) = paths();
+        std::fs::create_dir_all(&paths.data).unwrap();
+        std::fs::write(paths.data.join("self-update.txt"), format!("0.18.0
+{}
+", craft::update::now())).unwrap();
+        assert!(installed_in(&paths, "v0.18.0"));
+        assert!(installed_in(&paths, "0.18.0"));
+        assert!(!installed_in(&paths, "v0.19.0"));
     }
 }
