@@ -861,7 +861,7 @@ fn main() -> eframe::Result {
                         "PhotoCraft Nightly could not record session health in its private profile. You can still edit, but abnormal-exit detection is unavailable.",
                     )
                 };
-                photocraft_ui_egui::notices::post(&mut app, i18n::t("PhotoCraft Nightly"), vec![message], craft::theme::variant::Tone::Neutral, None);
+                photocraft_ui_egui::notices::post(&mut app, i18n::t("PhotoCraft Nightly"), vec![message.to_owned()], craft::theme::variant::Tone::Neutral, None);
             }
             // Portable marker found but its data folder isn't writable (#228): say where settings went.
             if let Some(w) = &app_dirs::current().warning {
