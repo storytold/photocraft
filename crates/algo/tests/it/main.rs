@@ -3,6 +3,7 @@
 mod gallery_reach_extreme;
 mod liquify_extreme_stroke;
 mod liquify_freeze_formats;
+mod liquify_past_bounds;
 mod liquify_source_footprint;
 mod retouch_blur_exact;
 mod retouch_sharpen_exact;
