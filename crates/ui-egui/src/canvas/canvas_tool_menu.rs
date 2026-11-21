@@ -833,7 +833,7 @@ pub(crate) fn row_label(app: &PhotocraftApp, menu: &CanvasToolMenu, label: &'sta
     if menu.tool == Tool::AddAnchorPoint {
         return add_anchor_row_label(app, menu, label, command);
     }
-    if command != "path.transform" || menu.tool != Tool::Pen {
+    if command != "path.transform" || !matches!(menu.tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen) {
         return label;
     }
     if pen_pending(app) {
@@ -1446,6 +1446,12 @@ pub fn open_at(app: &mut PhotocraftApp, tool: Tool, mods: Mods, at: Pos2, doc: [
 /// a tool without the menu, Content-Aware Move outside RGB, Gray and Lab, an unmeasured Red Eye.
 pub fn open(app: &mut PhotocraftApp, tool: Tool, kind: MenuKind, at: Pos2, doc: [f64; 2], point: Option<(PathRef, BezierHit)>) -> bool {
     if !at.x.is_finite() || !at.y.is_finite() || !doc.iter().all(|v| v.is_finite()) {
+        return false;
+    }
+    // The Freeform and Curvature Pens' path menu was measured in Path mode only: their Shape-mode right-click keeps
+    // opening nothing (#12837, #12753).
+    if matches!(tool, Tool::FreeformPen | Tool::CurvaturePen) && kind == MenuKind::Tool && app.ui.tool_options.vector_mode == craft::draw::ui::VectorMode::Shape
+    {
         return false;
     }
     let mut menu = CanvasToolMenu {
