@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::sync::{PoisonError, RwLock};
+
 use craft::menu::{Labeled, MenuBarUi};
 
 use super::PhotocraftApp;
@@ -26,8 +29,38 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let (gate, _) = menu_gate(app);
     let ctx = ui.ctx().clone();
     let model = items::model(app, &ctx);
-    let english = english_of(model);
-    MenuBarUi::new(&model.bar).english(&english).mnemonics(&TOP_PREFERRED).help_search(true).keyboard(!(gate.modal || gate.recording_shortcut)).show(ui);
+    publish_english(model);
+    MenuBarUi::new(&model.bar).english(english_name).mnemonics(&TOP_PREFERRED).help_search(true).keyboard(!(gate.modal || gate.recording_shortcut)).show(ui);
+}
+
+/// The English names of the menu model the bar last drew, by its state: the bar's English hook is a capture-free
+/// function, so it reads them here.
+struct EnglishNames {
+    state: u64,
+    labels: HashMap<(String, String), String>,
+    titles: HashMap<String, String>,
+}
+
+static ENGLISH: RwLock<Option<EnglishNames>> = RwLock::new(None);
+
+/// Keeps [`ENGLISH`] at `model`'s names; copies them only when the model's state changed.
+fn publish_english(model: &items::MenuModel) {
+    let mut names = ENGLISH.write().unwrap_or_else(PoisonError::into_inner);
+    if names.as_ref().map(|n| n.state) != Some(model.state()) {
+        let (labels, titles) = model.english_names();
+        *names = Some(EnglishNames { state: model.state(), labels, titles });
+    }
+}
+
+/// The English name of a command or menu title of the bar's model, for its mnemonics and Help search.
+fn english_name(labeled: Labeled<'_>) -> Option<String> {
+    let names = ENGLISH.read().unwrap_or_else(PoisonError::into_inner);
+    let names = names.as_ref()?;
+    match labeled {
+        Labeled::Command(command) => names.labels.get(&items::command_key(command)).cloned(),
+        Labeled::Title(title) => names.titles.get(title).cloned(),
+        _ => None,
+    }
 }
 
 /// The English name of a command or menu title of `model`, for the bar's and the palette's search.

@@ -44,8 +44,8 @@ impl Reset {
 }
 
 /// What the bar's commit and cancel buttons end.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum End {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum End {
     /// The Transform Symmetry session.
     Symmetry,
     /// The live crop.

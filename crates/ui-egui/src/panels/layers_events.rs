@@ -188,7 +188,7 @@ fn map_event(app: &mut PhotocraftApp, ctx: &egui::Context, event: LayersEvent<La
                 SelectionChange::Set(ids) if ids.len() == 1 => ids.first().copied(),
                 _ => None,
             };
-            selection_actions(select.change, &selection, actions);
+            selection_actions(select.change, selection, actions);
             let Some(id) = single else { return };
             let Some(l) = layer(&id) else { return };
             target_on_click(app, l, active == Some(id), select.part, actions);
