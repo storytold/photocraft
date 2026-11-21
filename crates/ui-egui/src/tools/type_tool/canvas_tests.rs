@@ -2445,3 +2445,56 @@ fn styles_at_a_collapsed_caret_shows_the_caret_s_paragraph() {
         assert_eq!(p.align, want, "caret {caret}");
     }
 }
+
+/// Live pin of the two invariants the deleted #1091 benchmark (`temporary_type_transform_large_document_preview`)
+/// carried: a held Ctrl/Cmd corner-handle move damages only the type layer's own tiles on the canvas,
+/// and a stationary pointer reuses the already-rendered preview (same key, same Arc) instead of a
+/// fresh render. Same mechanism as the benchmark, on a small document, so CI runs it.
+#[test]
+fn temporary_type_transform_damage_stays_on_the_type_layer_and_a_still_pointer_reuses_the_render() {
+    /// The tiles `layer`'s rendered surface occupies in `d`: the only region a preview swap may damage.
+    fn layer_tiles(d: &photocraft_doc::Document, layer: LayerId) -> photocraft_geom::Rect {
+        d.layer(layer).and_then(|l| l.surface()).map(|s| s.tile_bounds()).unwrap_or(photocraft_geom::Rect::EMPTY)
+    }
+    let mut app = new_app();
+    app.run("file.new", json!({"width": 1200, "height": 800})).unwrap();
+    let layer = LayerId(app.run("type.create", json!({"text": "Preview pin", "size": 48, "x": 100, "y": 140})).unwrap()["layer"].as_u64().unwrap());
+    begin_edit(&mut app).unwrap();
+    let frame = frame_of(&mut app).unwrap();
+    let doc = app.session.active().unwrap().doc.id;
+    let revision = app.session.active().unwrap().revision;
+    let index = app.session.active_index().unwrap();
+    // The document shown before the first move; later moves swap previews, so the previous
+    // preview is the one before it.
+    let mut previous = layer_tiles(&app.session.active().unwrap().doc, layer);
+    assert!(!previous.is_empty(), "the type layer owns tiles before the drag");
+    let a = frame.quad[2];
+    tool_event(&mut app, ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, type_command());
+    let mut before = 0u64;
+    for i in 1..=4 {
+        tool_event(&mut app, ToolEvent::Move { x: a[0] + f64::from(i) * 12.0, y: a[1] + f64::from(i) * 6.0, pressure: 1.0 }, type_command());
+        let (rendered, after) = crate::type_transform::display_doc(&mut app, index).unwrap();
+        let damage = crate::type_transform::damage(&app, doc, revision, before, after).unwrap();
+        let area = i64::from(damage.width()) * i64::from(damage.height());
+        let shown = layer_tiles(&rendered, layer);
+        assert!(!shown.is_empty(), "move {i}: the preview renders the type layer");
+        assert!(
+            (1..=480_000).contains(&area),
+            "move {i}: preview damage {damage:?} ({area} px) must stay in the type layer's region, at most half of the 960000 px canvas"
+        );
+        // The size bound alone would still pass a damage rect of the right size in the wrong place,
+        // so pin where it is: exactly the union of the type layer's tiles in the two documents the
+        // pointer swaps. A tile outside the text layer fails here even when the area stays small.
+        assert_eq!(
+            damage,
+            previous.union(&shown),
+            "move {i}: damage must cover the type layer's tiles in the swapped previews ({previous:?} union {shown:?}), not a region of that size elsewhere on the canvas"
+        );
+        let (reused, same) = crate::type_transform::display_doc(&mut app, index).unwrap();
+        assert_eq!(same, after, "stationary pointer reuses the rendered preview");
+        assert!(std::sync::Arc::ptr_eq(&rendered, &reused), "the still-pointer call hands back the same rendered document, no second render");
+        before = after;
+        previous = shown;
+    }
+    crate::type_transform::cancel_drag(&mut app);
+}

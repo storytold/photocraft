@@ -1192,45 +1192,6 @@ fn select_subject_timing() {
     }
 }
 
-/// Writes the #2788 scenes and the Select Subject mask over them as PPM files into
-/// `$SUBJECT_DUMP` (for the PR's before/after pictures).
-#[test]
-#[ignore = "writes pictures"]
-fn select_subject_dump_pictures() {
-    let Ok(dir) = std::env::var("SUBJECT_DUMP") else { return };
-    let write = |name: &str, img: &RgbImage, reg: Option<&Region>| {
-        let mut out = format!("P6\n{} {}\n255\n", img.w, img.h).into_bytes();
-        for y in 0..img.h {
-            for x in 0..img.w {
-                let mut c = img.at(x, y);
-                if let Some(r) = reg
-                    && r.at(x as i32, y as i32) >= 0.5
-                {
-                    c = [c[0] * 0.5 + 0.5, c[1] * 0.5, c[2] * 0.5 + 0.5];
-                }
-                out.extend(c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8));
-            }
-        }
-        std::fs::write(format!("{dir}/{name}.ppm"), out).unwrap();
-    };
-    let (img, _, _) = low_contrast_figure(7);
-    let s = ImageSampler { img: &img, origin: (0, 0) };
-    let reg = subject::select_subject(&s, Rect::new(0, 0, 240, 200));
-    write("figure", &img, None);
-    write("figure-selected", &img, reg.as_ref());
-    let (w, h) = (220usize, 200usize);
-    let mut rng = Rng::new(11);
-    let img = RgbImage::from_fn(w, h, |x, y| {
-        let d = (x as f32 - 110.0).hypot(y as f32 - 100.0);
-        let n = 0.012 * rng.normal();
-        if (17.0..80.0).contains(&d) { [0.2 + n, 0.15 + n, 0.35 + n] } else { [0.95 + n, 0.94 + n, 0.92 + n] }.map(|v| v.clamp(0.0, 1.0))
-    });
-    let s = ImageSampler { img: &img, origin: (0, 0) };
-    let reg = subject::select_subject(&s, Rect::new(0, 0, w as i32, h as i32));
-    write("ring", &img, None);
-    write("ring-selected", &img, reg.as_ref());
-}
-
 /// A dark square on a light background with a square hole that shows the background colour.
 fn square_with_hole(hole: usize) -> RgbImage {
     let (w, h) = (400usize, 300usize);
