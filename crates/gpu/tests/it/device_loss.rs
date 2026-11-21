@@ -219,6 +219,12 @@ fn assert_recovery_after_invalid_encoder(encode_only: bool) {
     let mut comp = Compositor::try_new_with_format(&device, Compositor::preferred_acc_format(&adapter)).unwrap();
     let mut d = doc();
     d.layers[1].effects.items = vec![photocraft_doc::Effect::default_drop_shadow()];
+    // Layer effects use the CPU compositor on the GL backend, so the effect-map rebuild this
+    // test recovers from has nothing to do here.
+    if adapter.get_info().backend == wgpu::Backend::Gl {
+        eprintln!("skipping effect-map recovery test: layer effects use the CPU compositor on the GL backend");
+        return;
+    }
     // Pipeline creation errors are not proof of missing hardware capabilities: check the
     // adapter and the features actually enabled on this device before allowing a skip.
     let required = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;

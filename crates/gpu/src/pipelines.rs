@@ -29,6 +29,9 @@ pub(crate) struct Pipelines {
     vertex: wgpu::ShaderModule,
     layout: wgpu::PipelineLayout,
     kernels: Vec<KernelPipelines>,
+    /// Effect maps are absent on the GL backend: its float targets composite garbage on the
+    /// adapters we can test (Intel HD 4600), so layer effects use the CPU compositor (#7331).
+    skip_maps: bool,
 }
 
 /// One kernel's pipelines, one per target format, built together.
@@ -50,8 +53,19 @@ fn building() -> std::sync::MutexGuard<'static, ()> {
 
 impl Pipelines {
     /// The shaders and layout of every pipeline of [`table`]. Builds no pipeline.
-    pub(crate) fn new(device: &wgpu::Device, acc_format: wgpu::TextureFormat, bgl0: &wgpu::BindGroupLayout, bgl1: &wgpu::BindGroupLayout) -> Self {
-        let kernels = table(acc_format);
+    pub(crate) fn new(
+        device: &wgpu::Device,
+        acc_format: wgpu::TextureFormat,
+        bgl0: &wgpu::BindGroupLayout,
+        bgl1: &wgpu::BindGroupLayout,
+        skip_maps: bool,
+    ) -> Self {
+        let kernels = if skip_maps {
+            log::info!("GPU compositor: layer effects use the CPU compositor on the GL backend");
+            table(acc_format).into_iter().filter(|k| !k.kernel.is_map()).collect()
+        } else {
+            table(acc_format)
+        };
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pc_compose"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
         let vertex = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("pc_compose_vertex"),
@@ -62,7 +76,7 @@ impl Pipelines {
             bind_group_layouts: &[Some(bgl0), Some(bgl1)],
             immediate_size: 0,
         });
-        Self { module, vertex, layout, kernels }
+        Self { module, vertex, layout, kernels, skip_maps }
     }
 
     /// The pipeline drawing `kernel` into `format`, built now if no draw needed it before. A
@@ -115,8 +129,12 @@ impl Pipelines {
     }
 
     /// `k`'s pipelines, each inside its own error scope on the calling thread (wgpu's scopes are
-    /// per thread). The caller holds [`building`].
+    /// per thread). The caller holds [`building`]. Where the device's calls may not overlap
+    /// ([`crate::device_calls`]) they are held for the whole build: on GL the driver compiles the
+    /// shader under the context lock, and a concurrent device call panics after a second and
+    /// aborts the process (#7331).
     fn build(&self, device: &wgpu::Device, k: &KernelPipelines) -> Vec<Result<wgpu::RenderPipeline, String>> {
+        let _calls = crate::device_calls::device_calls(device.adapter_info().backend);
         k.formats
             .iter()
             .map(|&format| {
@@ -148,7 +166,7 @@ impl Pipelines {
 
     /// Whether no effect-map pipeline has failed to build (one not built yet is assumed to work).
     pub(crate) fn effect_maps(&self) -> bool {
-        self.kernels.iter().filter(|k| k.kernel.is_map()).all(|k| k.built.get().is_none_or(|b| b.iter().all(Result::is_ok)))
+        !self.skip_maps && self.kernels.iter().filter(|k| k.kernel.is_map()).all(|k| k.built.get().is_none_or(|b| b.iter().all(Result::is_ok)))
     }
 
     /// How many pipelines have been built (or failed to build) so far, and how many there are.
@@ -185,16 +203,18 @@ pub(crate) fn table(acc_format: wgpu::TextureFormat) -> Vec<KernelPipelines> {
 /// while still cached (gfx-rs/wgpu#10547, #9173). Each copy costs one compile of a three-line
 /// shader. Once a wgpu release fixes the cache, go back to one `vs` in `compose.wgsl` and build
 /// each pipeline on its own.
+///
+/// Each entry returns the position itself, not a struct holding only `@builtin(position)`: naga
+/// emits `VOut _tmp = VOut(...); gl_Position = _tmp.pos;`, which Intel's Windows OpenGL driver
+/// rejects (`GLSL compile failed`, empty log), so every pipeline failed to build and the canvas
+/// fell back to the CPU (#7331). The fragment entry points in `compose.wgsl` do the same.
 pub(crate) fn vertex_shader<'a>(names: impl Iterator<Item = &'a str>) -> String {
-    let mut s = String::from(
-        "struct VOut { @builtin(position) pos: vec4<f32> };
-",
-    );
+    let mut s = String::new();
     for name in names {
         s.push_str(&format!(
-            "@vertex fn {name}(@builtin(vertex_index) vi: u32) -> VOut {{
+            "@vertex fn {name}(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {{
     let uv = vec2(f32((vi << 1u) & 2u), f32(vi & 2u));
-    return VOut(vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0));
+    return vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
 }}
 "
         ));
