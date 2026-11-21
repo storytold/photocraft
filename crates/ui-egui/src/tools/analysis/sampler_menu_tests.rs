@@ -35,21 +35,25 @@ fn the_sampler_menu_only_deletes_the_point_under_the_pointer() {
     app.run("view.colorSamplers.add", json!({"x": 180, "y": 90})).unwrap();
     let before = samplers(&app);
     let expected_rows = [
-        SAMPLER_DELETE,
-        "colorSampler.readout.actual",
-        "colorSampler.readout.proof",
-        "colorSampler.readout.gray",
-        "colorSampler.readout.rgb",
-        "colorSampler.readout.web",
-        "colorSampler.readout.hsb",
-        "colorSampler.readout.hsl",
-        "colorSampler.readout.cmyk",
-        "colorSampler.readout.lab",
-        "colorSampler.readout.gray16",
-        "colorSampler.readout.rgb16",
-        "colorSampler.readout.cmyk16",
-        "colorSampler.readout.lab16",
-        "colorSampler.readout.totalInk",
+        Some(SAMPLER_DELETE),
+        None,
+        Some("colorSampler.readout.actual"),
+        Some("colorSampler.readout.proof"),
+        None,
+        Some("colorSampler.readout.gray"),
+        Some("colorSampler.readout.rgb"),
+        Some("colorSampler.readout.web"),
+        Some("colorSampler.readout.hsb"),
+        Some("colorSampler.readout.hsl"),
+        Some("colorSampler.readout.cmyk"),
+        Some("colorSampler.readout.lab"),
+        None,
+        Some("colorSampler.readout.gray16"),
+        Some("colorSampler.readout.rgb16"),
+        Some("colorSampler.readout.cmyk16"),
+        Some("colorSampler.readout.lab16"),
+        None,
+        Some("colorSampler.readout.totalInk"),
     ];
 
     for ((x, y), can_delete) in [((70.0, 40.0), false), ((120.0, 60.0), true)] {
@@ -57,9 +61,9 @@ fn the_sampler_menu_only_deletes_the_point_under_the_pointer() {
         assert_eq!(samplers(&app), before, "a right-click never places a sampler");
         let inspected = control(&mut app, "ui.inspect", json!({}));
         let rows = inspected.pointer("/result/canvasToolMenu/entries").and_then(serde_json::Value::as_array).expect("the open sampler menu");
-        let ids: Vec<_> = rows.iter().filter_map(|row| row["id"].as_str()).collect();
-        assert_eq!(ids, expected_rows);
-        assert_eq!(rows.iter().filter(|row| row["separator"] == true).count(), 4);
+        let order: Vec<_> =
+            rows.iter().map(|row| if row["separator"] == true { None } else { Some(row["id"].as_str().expect("expected a menu item id")) }).collect();
+        assert_eq!(order, expected_rows);
         let enabled: Vec<_> = rows.iter().filter(|row| row["enabled"] == true).map(|row| row["id"].as_str().unwrap()).collect();
         let expected_enabled: &[&str] = if can_delete { &[SAMPLER_DELETE] } else { &[] };
         assert_eq!(enabled, expected_enabled, "right-click at ({x}, {y})");
