@@ -144,6 +144,12 @@ fn host(app: &mut PhotocraftApp, id: DialogId) -> Option<&mut Hosted> {
     app.framework.dialogs.get_mut_by_id::<Hosted>(id)
 }
 
+/// The "Don't show again" preference of the alert that choosing Custom shows (#14249).
+pub(crate) const CUSTOM_SAMPLING_PREF: &str = "contentAwareFill.customSampling";
+
+/// The alert choosing Custom sampling shows, as in Photoshop (#14249).
+pub(crate) const CUSTOM_SAMPLING_ALERT: &str = "Use the Sampling Brush Tool to add to the sampling area in order to fill the selected region.";
+
 /// Acts on what the workspace reported since the last call: the host's answer to OK, the events of its passes and
 /// the colour the picker child returned. Every pass may call it: what it drains is gone for the next call, so a
 /// second pass in one frame finds nothing to apply twice.
@@ -157,10 +163,11 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     };
     let events = hosted.take_events();
     let ok = hosted.take_ok();
+    let custom = hosted.workspace().settings().sampling == craft::imaging::ui::fill::SamplingMode::Custom;
 
     // `rebased`: the plan's inputs outside the session changed (the document, Sample All Layers).
     let (mut replan, mut rebased, mut committed) = (false, false, false);
-    let (mut applies, mut picks) = (Vec::new(), Vec::new());
+    let (mut applies, mut picks, mut custom_chosen) = (Vec::new(), Vec::new(), false);
     if let Some(c) = app.caf.as_mut() {
         for event in events {
             match event {
@@ -176,6 +183,8 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     c.dirty = true;
                     replan |= !c.known.strokes.is_empty() || c.mask != c.base_px;
                 }
+                // Choosing Custom (again) clears the sampling area and asks for the Sampling Brush (#14249).
+                FillEvent::Reset(craft::imaging::ui::fill::FillReset::Sampling) if custom => (replan, custom_chosen) = (true, true),
                 FillEvent::FillArea(_) | FillEvent::Reset(_) => replan = true,
                 FillEvent::SettingsChanged(settings) => {
                     if settings.sample_all_layers != c.sample_all {
@@ -240,6 +249,10 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
             h.set_source(source);
         }
         ctx.request_repaint();
+    }
+
+    if custom_chosen {
+        let _ = crate::dialogs::alerts::alert_once(app, tl!(CUSTOM_SAMPLING_ALERT), CUSTOM_SAMPLING_PREF);
     }
 }
 

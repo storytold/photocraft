@@ -251,4 +251,6 @@ impl FillSource for PcFillSource {
 }
 
 #[cfg(test)]
+mod custom_alert_tests;
+#[cfg(test)]
 mod tests;
