@@ -498,6 +498,9 @@ fn shown(c: &Command) -> String {
 fn step_tests(o: &CiOptions, panic_hunt: bool) -> Result<(), String> {
     let mut c = cargo();
     if o.partition.is_none() && o.selection == Selection::All && !nextest_available() {
+        if o.from.is_some() {
+            return Err("cargo-nextest is required to run tests from an archive".into());
+        }
         if panic_hunt {
             // `-- --ignored` across the workspace would run every ignored test, not only the hunt. The
             // engine has no `heif` feature of its own; it reaches the decoder through photocraft-io.
