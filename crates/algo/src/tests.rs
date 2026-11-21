@@ -121,6 +121,7 @@ fn all_filters() -> Vec<FilterParams> {
         FilterParams::Emboss { angle: 135.0, height: 2.0, amount: 100.0 },
         FilterParams::FindEdges,
         FilterParams::Solarize,
+        FilterParams::SolarizeThreshold { threshold: 64.0 },
         FilterParams::Invert,
         FilterParams::Desaturate,
         FilterParams::Twirl { angle: 90.0 },
@@ -501,6 +502,51 @@ fn find_edges_and_solarize_treat_cmyk_as_ink() {
     assert!(e[..3].iter().all(|v| (v - 1.0).abs() < 1e-6), "{e:?}");
     let so = run(&s, &FilterParams::Solarize).pixel(3, 3);
     assert!(so.iter().zip([0.1, 0.2, 0.2, 1.0]).all(|(a, b)| (a - b).abs() < 0.01), "{so:?}");
+}
+
+/// Solarize with Threshold inverts only the channels strictly lighter than the threshold: 0 inverts
+/// every channel above black, 255 changes nothing, a value equal to the threshold is kept, 127.5 is
+/// plain Solarize at every depth and in CMYK, and alpha is never touched.
+#[test]
+fn solarize_threshold_inverts_only_channels_above_it() {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let s = flat(depth, R, [0.1, 0.4, 0.8, 0.6]);
+        let plain = run(&s, &FilterParams::Solarize).pixel(3, 3);
+        let half = run(&s, &FilterParams::SolarizeThreshold { threshold: 127.5 }).pixel(3, 3);
+        assert!(plain.iter().zip(&half).all(|(a, b)| (a - b).abs() < 1e-6), "{depth:?} 127.5 = Solarize: {plain:?} {half:?}");
+        let low = run(&s, &FilterParams::SolarizeThreshold { threshold: 0.0 }).pixel(3, 3);
+        assert!(low.iter().zip([0.9, 0.6, 0.2, 0.6]).all(|(a, b)| (a - b).abs() < 0.01), "{depth:?} threshold 0: {low:?}");
+        let mid = run(&s, &FilterParams::SolarizeThreshold { threshold: 64.0 }).pixel(3, 3);
+        assert!(mid.iter().zip([0.1, 0.6, 0.2, 0.6]).all(|(a, b)| (a - b).abs() < 0.01), "{depth:?} threshold 64: {mid:?}");
+        let high = run(&s, &FilterParams::SolarizeThreshold { threshold: 255.0 }).pixel(3, 3);
+        assert!(high.iter().zip([0.1, 0.4, 0.8, 0.6]).all(|(a, b)| (a - b).abs() < 0.01), "{depth:?} threshold 255: {high:?}");
+    }
+    // An 8-bit value equal to the threshold is not lighter than it, so it is kept.
+    let gray = flat(SampleType::U8, R, [128.0 / 255.0, 129.0 / 255.0, 127.0 / 255.0, 1.0]);
+    let px = run(&gray, &FilterParams::SolarizeThreshold { threshold: 128.0 }).pixel(3, 3);
+    assert!(px.iter().zip([128.0 / 255.0, 126.0 / 255.0, 127.0 / 255.0, 1.0]).all(|(a, b)| (a - b).abs() < 1e-6), "boundary: {px:?}");
+    // CMYK is ink: at 127.5 it matches plain Solarize, at 0 every channel with less than full ink inverts.
+    let f = PixelFormat::new(ColorMode::Cmyk, SampleType::U8, true);
+    let mut s = Surface::new(f);
+    s.fill_rect(R, &[0.1, 0.2, 0.8, 0.9, 0.6]);
+    let plain = run(&s, &FilterParams::Solarize).pixel(3, 3);
+    let half = run(&s, &FilterParams::SolarizeThreshold { threshold: 127.5 }).pixel(3, 3);
+    assert!(plain.iter().zip(&half).all(|(a, b)| (a - b).abs() < 1e-6), "CMYK 127.5 = Solarize: {plain:?} {half:?}");
+    let low = run(&s, &FilterParams::SolarizeThreshold { threshold: 0.0 }).pixel(3, 3);
+    assert!(low.iter().zip([0.9, 0.8, 0.2, 0.1, 0.6]).all(|(a, b)| (a - b).abs() < 0.01), "CMYK threshold 0: {low:?}");
+}
+
+/// Out-of-range and NaN thresholds reaching the algorithm directly are clamped, never a panic.
+#[test]
+fn solarize_threshold_survives_hostile_values() {
+    let s = flat(SampleType::F32, R, [0.1, 0.4, 0.8, 1.0]);
+    let plain = run(&s, &FilterParams::Solarize).pixel(3, 3);
+    let nan = run(&s, &FilterParams::SolarizeThreshold { threshold: f32::NAN }).pixel(3, 3);
+    assert!(plain.iter().zip(&nan).all(|(a, b)| (a - b).abs() < 1e-6), "NaN acts as plain Solarize: {nan:?}");
+    for t in [-1e9, 1e9, f32::INFINITY, f32::NEG_INFINITY] {
+        let px = run(&s, &FilterParams::SolarizeThreshold { threshold: t }).pixel(3, 3);
+        assert!(px.iter().all(|v| v.is_finite()), "{t}: {px:?}");
+    }
 }
 
 #[test]

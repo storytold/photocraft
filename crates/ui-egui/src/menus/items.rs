@@ -46,6 +46,7 @@ const PLACE_AFTER: &[(&str, &str)] = &[
     ("view.rotateRight", "view.rotateLeft"),
     ("view.resetView", "view.rotateRight"),
     ("filter.other.colorToAlpha", "filter.other.offset"),
+    ("filter.stylize.solarizeThreshold", "filter.stylize.solarize"),
 ];
 
 /// The menu rows of one state of the app, built once and kept until a fact they show changes

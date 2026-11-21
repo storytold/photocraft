@@ -71,6 +71,7 @@ fn fields(id: &str) -> Option<&'static [(&'static str, Rule)]> {
         "filter.noise.median" => &[("radius", Number(1.0, 500.0))],
         "filter.noise.dustAndScratches" => &[("radius", Number(1.0, 500.0)), ("threshold", Number(0.0, 255.0))],
         "filter.pixelate.mosaic" => &[("cellSize", Number(2.0, 200.0))],
+        "filter.stylize.solarizeThreshold" => &[("threshold", Number(0.0, 255.0))],
         "filter.stylize.emboss" => &[("angle", Number(-180.0, 180.0)), ("height", Number(1.0, 100.0)), ("amount", Number(1.0, 500.0))],
         "filter.distort.twirl" => &[("angle", Number(-999.0, 999.0))],
         "filter.distort.pinch" => &[("amount", Number(-100.0, 100.0))],
