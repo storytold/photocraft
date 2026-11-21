@@ -58,6 +58,27 @@ it with `cargo xtask version set` before building, so the binaries report it too
 needs the `release` environment, which only the `release` branch can use, so pick that branch
 in the dialog.
 
+## Inspecting the committed contributor snapshot
+
+The [Release workflow](../.github/workflows/release.yml) generates and validates a snapshot
+for the release commit before packaging. The shared `credits` job supplies the snapshot to
+all release builds; it does not commit the generated file back. See the
+[contributor data sources](contributors.md#decision).
+
+To inspect the snapshot committed to a branch or historical revision, run this optional
+read-only diagnostic from the PhotoCraft repository root with Python 3.11+ and complete Git history:
+
+```sh
+python3 scripts/check_contributor_snapshot.py --revision <commit>
+```
+
+Omit `--revision` to inspect `HEAD`. The check compares the snapshot's recorded commit with
+its history, allowing snapshot-only commits, empty commits and workspace-version-only updates.
+Other changes can require a newer snapshot even if they were later reverted. Exit status 0
+means no uncovered changes were found under these rules; 1 reports an invalid or stale snapshot
+or incomplete local history. This checker is specific to PhotoCraft's committed snapshot and
+is not a release preflight; a stale result does not describe the freshly generated artifact.
+
 ## What gets built
 
 | Platform | Artifacts | Built on |
