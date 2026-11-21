@@ -248,13 +248,18 @@ mod tests {
     }
 
     #[test]
-    fn reset_to_factory_defaults_removes_the_recorded_method() {
+    fn reset_to_factory_defaults_restores_the_factory_gradient_and_method() {
         let mut gradient = Gradient::default();
         let mut source = None;
-        overlay(&mut gradient, &mut source, &json!({"method": "smooth", "from": "#ff0000"}));
+        overlay(&mut gradient, &mut source, &json!({"method": "classic", "from": "#ff0000"}));
         overlay(&mut gradient, &mut source, &super::super::effect_defaults("gradientOverlay"));
-        assert!(source.is_none());
-        assert_eq!(gradient, Gradient::default());
+        let Some(Effect::GradientOverlay { gradient: factory, interpolation: factory_source, .. }) =
+            super::super::effect_from_params("gradientOverlay", &json!({}))
+        else {
+            panic!("no factory overlay")
+        };
+        assert_eq!(source, factory_source, "#14900: the factory overlay records Smooth grey 215 to white");
+        assert_eq!(gradient, factory);
     }
 }
 
