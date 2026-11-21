@@ -24,6 +24,8 @@ path = "src/lib.rs"
 [[bin]]
 name = "photocraft-cli"
 path = "src/main.rs"
+# Integration tests build this executable. Its entry point has no unit tests.
+test = false
 
 [[example]]
 name = "gpu_bench"
@@ -63,4 +65,3 @@ xtask = { path = "../../xtask" }
 [build-dependencies]
 # Icon + VERSIONINFO for photocraft-cli.exe; build.rs only uses it when targeting Windows.
 winresource = "0.1"
-
