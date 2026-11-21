@@ -1,7 +1,10 @@
 use super::PSD_MAX_FILE_SIZE;
 use super::estimate::{MERGED_RENDERED, MERGED_WEIGHT, fit_psd_size, psd_version, sign_global_blocks};
 use super::merged::{cmyk_of, merged_planes, placeholder_planes};
-use super::resources::{global_block, guides_resource, keep_imported_resource, legacy_name, pascal_names_resource, path_resources, unicode_names_resource};
+use super::resources::{
+    global_block, guides_resource, imported_clipping_flatness_edit, imported_resource_data, keep_imported_resource, legacy_name, pascal_names_resource,
+    path_resources, unicode_names_resource,
+};
 use super::smart::{SmartOut, link_group_resource};
 use super::{
     ColorMode, Compression, Document, Ex, GlobalLayerMask, Header, ImageData, ImageResource, Interrupt, LayerContent, LayerInfo, LayerInfoPlacement,
@@ -243,6 +246,7 @@ fn export_supported_document(
     if let Some(warning) = slices_warning {
         ex.warnings.push(warning);
     }
+    let clipping_flatness = imported_clipping_flatness_edit(doc);
     for (id, name, data) in &doc.metadata.psd_resources {
         // Layer comps: the preserved list while unchanged, else regenerated (or dropped) below.
         if *id == crate::comps_map::LAYER_COMPS && comps_resource.is_some() {
@@ -261,7 +265,7 @@ fn export_supported_document(
         if *id == crate::channel_map::ALPHA_IDENTIFIERS {
             continue;
         }
-        let mut r = ImageResource::new(*id, data.to_vec());
+        let mut r = ImageResource::new(*id, imported_resource_data(*id, data, clipping_flatness));
         r.name = legacy_name(name);
         resources.push(r);
     }
