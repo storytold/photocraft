@@ -243,6 +243,16 @@ fn define_custom_shape_enabled(app: &PhotocraftApp) -> bool {
     let Some(s) = app.session.active() else {
         return false;
     };
+    let ok = |p: &photocraft_doc::Path| !p.subpaths.is_empty();
+    let targeted = match app.ui.selected_path.as_deref() {
+        // The layer's own path row is the shape-layer case below.
+        None | Some("layer") => false,
+        Some("work") => s.doc.work_path.as_ref().is_some_and(ok),
+        Some(name) => s.doc.paths.iter().any(|n| n.name == name && ok(&n.path)),
+    };
+    if targeted {
+        return true;
+    }
     // Tools whose enabled state was not measured keep the engine's rule, whatever the layer is (CodeRabbit on #16186).
     let measured = matches!(
         app.ui.tool,
@@ -273,16 +283,6 @@ fn define_custom_shape_enabled(app: &PhotocraftApp) -> bool {
     );
     if !measured {
         return app.session.is_enabled("edit.defineCustomShape");
-    }
-    let ok = |p: &photocraft_doc::Path| !p.subpaths.is_empty();
-    let targeted = match app.ui.selected_path.as_deref() {
-        // The layer's own path row is the shape-layer case below.
-        None | Some("layer") => false,
-        Some("work") => s.doc.work_path.as_ref().is_some_and(ok),
-        Some(name) => s.doc.paths.iter().any(|n| n.name == name && ok(&n.path)),
-    };
-    if targeted {
-        return true;
     }
     let layer_path = s
         .active_layer

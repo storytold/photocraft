@@ -154,3 +154,11 @@ fn an_unmeasured_tool_keeps_the_engines_rule_with_a_work_path() {
     assert!(app.session.is_enabled(ID), "the engine enables it with a Work Path");
     assert!(enabled_with(&mut app, Tool::CloneStamp), "and the unmeasured Clone Stamp follows the engine");
 }
+
+/// A path targeted in the Paths panel enables it with any tool, an unmeasured one included (CodeRabbit on #16186).
+#[test]
+fn a_targeted_saved_path_enables_it_with_an_unmeasured_tool() {
+    let mut app = app();
+    app.ui.selected_path = Some("Badge".into());
+    assert!(enabled_with(&mut app, Tool::CloneStamp), "the targeted saved path wins over the engine's rule");
+}
