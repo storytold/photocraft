@@ -208,18 +208,29 @@ fn cell_filters_match_scalar_models_edges_and_fractional_cells() {
             for pattern in 0..5 {
                 for halo in [0, 7] {
                     let src = fixture(bounds.inflate(halo), &ctx, pattern);
-                    for out in [bounds, Rect::new(-23, -15, 37, 31), Rect::new(-7, 2, 18, 13)] {
-                        // Retain every mode/alpha pair and all four cell sizes for each mode.
-                        for (ci, cell) in [2.0, 3.75, 10.0, 300.0].into_iter().enumerate() {
-                            if ci % 2 != (mi + ai) % 2 {
-                                continue;
-                            }
-                            for seed in [0, u32::MAX] {
+                    let outer = Rect::new(-23, -15, 37, 31);
+                    let outputs = [bounds, outer, Rect::new(-7, 2, 18, 13)];
+                    // Retain every mode/alpha pair and all four cell sizes for each mode.
+                    for (ci, cell) in [2.0, 3.75, 10.0, 300.0].into_iter().enumerate() {
+                        if ci % 2 != (mi + ai) % 2 {
+                            continue;
+                        }
+                        for seed in [0, u32::MAX] {
+                            for out in outputs {
                                 let got = cells::crystallize(&src, out, &ctx, cell, seed).unwrap();
                                 assert_bits(&got, &crystallize_direct(&src, out, &ctx, cell, seed));
-                                for bg in [[1.0; 4], [0.1, 0.8, 0.4, 0.25]] {
+                            }
+                            for bg in [[1.0; 4], [0.1, 0.8, 0.4, 0.25]] {
+                                // The Pointillize oracle searches from each document pixel independently.
+                                // The outer reference therefore also covers the two contained rectangles.
+                                let want = Image { rect: outer, ch: src.ch, data: pointillize_direct(&src, outer, &ctx, cell, seed, bg) };
+                                for out in outputs {
                                     let got = cells::pointillize(&src, out, &ctx, cell, seed, bg).unwrap();
-                                    assert_bits(&got, &pointillize_direct(&src, out, &ctx, cell, seed, bg));
+                                    if out == outer {
+                                        assert_bits(&got, &want.data);
+                                    } else {
+                                        assert_bits(&got, &want.crop(out));
+                                    }
                                 }
                             }
                         }
