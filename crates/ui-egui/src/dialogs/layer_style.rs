@@ -40,6 +40,8 @@ mod contour;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
+#[cfg(test)]
+mod panel_live_tests;
 
 /// The Styles preset gallery page id.
 pub const STYLES_PAGE: &str = "styles";
@@ -964,6 +966,21 @@ fn build_preview(app: &PhotocraftApp, style: &LayerStyle, layer: LayerId) -> Res
 pub(crate) fn preview_document(app: &PhotocraftApp) -> Option<(Arc<Document>, u64)> {
     let (style, layer, key) = preview_source(app, app.session.active_index()?)?;
     build_preview(app, &style, layer).ok().map(|doc| (Arc::new(doc), key))
+}
+
+/// The open dialog's live preview of document `doc`, as the canvas shows it while Preview is on, for the Layers panel's
+/// Opacity, Fill and blending badge (#14861). `None` with Preview off, while comparing, on another document, or before
+/// the canvas built the preview for the dialog's current values.
+pub(crate) fn live_document(app: &PhotocraftApp, doc: photocraft_doc::DocId) -> Option<Arc<Document>> {
+    let idx = app.session.active_index()?;
+    if app.session.active()?.doc.id != doc {
+        return None;
+    }
+    let (_, _, key) = preview_source(app, idx)?;
+    match &app.style_preview {
+        Some((built, Ok(shown))) if *built == key => Some(Arc::clone(shown)),
+        _ => None,
+    }
 }
 
 /// The Layer Style step of `canvas::display_doc`: the preview for document `idx`, built once per
