@@ -211,6 +211,9 @@ pub fn texture_combine(mode: MaskMode, v: f32, t: f32, d: f32) -> f32 {
 #[derive(Clone, Debug)]
 pub struct BrushContext {
     pub brush: BrushSettings,
+    /// The stroke paints a layer's colour pixels (not a mask or channel, which hold coverage): a
+    /// 32-bit float target then keeps the values above 1 the float blend gives (#11126).
+    pub color_target: bool,
     tip: Option<Arc<Mips>>,
     dual_tip: Option<Arc<Mips>>,
     texture: Option<Arc<PatternImage>>,
@@ -255,6 +258,7 @@ impl BrushContext {
             dual_tip: if brush.dual_brush.enabled { mips(&brush.dual_brush.tip) } else { None },
             texture: prepare_pattern(&brush),
             brush,
+            color_target: false,
         }
     }
 
@@ -1273,6 +1277,7 @@ impl StrokeRenderer {
         let a_idx = alpha_index(&fmt);
         let nc = fmt.mode.color_channels();
         let b = &self.ctx.brush;
+        let float_color = self.ctx.color_target && fmt.sample == photocraft_color::SampleType::F32;
         let opacity = b.opacity.clamp(0.0, 1.0);
         let mut src = [0.0f32; 8];
         from_rgba_into(&fmt, b.color, &mut src);
@@ -1381,11 +1386,7 @@ impl StrokeRenderer {
                         } else {
                             let d = to_rgba(&fmt, px);
                             let sr = to_rgba(&fmt, &src[..n]);
-                            let o = if lock_transparency {
-                                photocraft_color::blend::composite_atop(b.mode, d, sr, k)
-                            } else {
-                                photocraft_color::blend::composite(b.mode, d, sr, k)
-                            };
+                            let o = photocraft_color::blend::composite_as(float_color, lock_transparency, b.mode, d, sr, k);
                             let mut enc = [0.0f32; 8];
                             from_rgba_into(&fmt, o, &mut enc);
                             px.copy_from_slice(&enc[..n]);
@@ -1422,7 +1423,7 @@ pub fn render_stroke(
     lock_transparency: bool,
     zoom: f32,
 ) -> Rect {
-    render_stroke_clipped(target, brush, points, selection, lock_transparency, zoom, None)
+    render_stroke_to(target, brush, points, selection, lock_transparency, zoom, false, None)
 }
 
 /// [`render_stroke`] that only rasterizes dabs reaching `clip` (see [`StrokeRenderer::with_clip`]).
@@ -1435,11 +1436,27 @@ pub fn render_stroke_clipped(
     zoom: f32,
     clip: Option<Rect>,
 ) -> Rect {
+    render_stroke_to(target, brush, points, selection, lock_transparency, zoom, false, clip)
+}
+
+/// [`render_stroke_clipped`] onto a layer's colour pixels when `color_target` ([`BrushContext::color_target`]).
+#[allow(clippy::too_many_arguments)]
+pub fn render_stroke_to(
+    target: &mut Surface,
+    brush: &BrushSettings,
+    points: &[StrokePoint],
+    selection: Option<&Surface>,
+    lock_transparency: bool,
+    zoom: f32,
+    color_target: bool,
+    clip: Option<Rect>,
+) -> Rect {
     if points.is_empty() {
         return Rect::EMPTY;
     }
     let pre = target.clone();
     let mut r = StrokeRenderer::new(brush, Some(target.format()), zoom);
+    r.ctx.color_target = color_target;
     if let Some(c) = clip {
         r = r.with_clip(c);
     }

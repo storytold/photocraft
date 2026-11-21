@@ -224,7 +224,17 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
         let (surf, lock) = crate::channel_cmds::target_surface(doc, Some(id), target)?;
         let area = band.content_bounds().intersect(&canvas);
         if !area.is_empty() {
-            crate::fill_cmds::blend_color_mask(surf, area, color, picked, &band, mode, opacity, preserve || lock)?;
+            crate::fill_cmds::blend_color_mask(
+                surf,
+                area,
+                color,
+                picked,
+                &band,
+                mode,
+                opacity,
+                preserve || lock,
+                crate::channel_cmds::is_color_target(target),
+            )?;
             surf.prune();
         }
         Ok(())
