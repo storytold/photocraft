@@ -19,7 +19,9 @@ fn js<T: serde::Serialize>(h: &mut DefaultHasher, v: &T) {
 fn tile_sig(h: &mut DefaultHasher, t: &paint::GrayTile) {
     (t.width, t.height, t.data.len()).hash(h);
     let step = (t.data.len() / 4096).max(1);
-    t.data.iter().step_by(step).for_each(|v| v.hash(h));
+    // One write of the whole sample: hashing value by value costs a hasher round per value.
+    let sample: Vec<u16> = t.data.iter().step_by(step).copied().collect();
+    sample.hash(h);
 }
 
 /// A stored tile (#1843) by its key, size and whether its full bitmap is loaded (the preview

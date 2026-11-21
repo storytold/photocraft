@@ -285,7 +285,7 @@ fn selected_layers_changed(st: &photocraft_engine::DocState, t: &FreeTransform, 
         return false;
     }
     let Some(opened) = opened else { return false };
-    let mut now = st.selected_layers();
+    let mut now = st.selected_layers().to_vec();
     now.sort_unstable();
     now != opened
 }
