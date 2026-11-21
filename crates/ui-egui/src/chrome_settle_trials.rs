@@ -3,7 +3,7 @@
 //! What the chrome shows runs it again: the UI language, the toolbar's slots, the title and whether the menu bar
 //! takes the menu keys.
 
-use craft::ui::runtime::measure::last_pass_runs;
+use craft::ui::runtime::measure::{MemoRun, last_pass_memo_runs, last_pass_runs};
 use egui::accesskit::Role;
 use egui::{Event, Key, Modifiers, vec2};
 use egui_kittest::Harness;
@@ -39,6 +39,37 @@ fn chrome_runs(h: &H) -> Vec<(&'static str, u32)> {
 /// Whether the chrome component named `name` ran in the last pass.
 fn ran(h: &H, name: &str) -> bool {
     chrome_runs(h).iter().any(|(ty, _)| ty.contains(name))
+}
+
+/// The chrome's memoized views in the last pass, by type name, and how each took part.
+fn chrome_views(h: &H) -> Vec<(&'static str, MemoRun)> {
+    const CHROME: [&str; 3] = ["docking::group::TabRow<", "dock_column::bar::BarProps<", "menu::bar::BarProps<"];
+    last_pass_memo_runs(&h.ctx).into_iter().filter(|(name, _, _)| CHROME.iter().any(|c| name.contains(c))).map(|(name, _, run)| (name, run)).collect()
+}
+
+/// The panel tab strips the last pass ran.
+fn tab_strip_runs(h: &H) -> Vec<(&'static str, u32)> {
+    last_pass_runs(&h.ctx).into_iter().filter(|(ty, _)| ty.contains("TabStrip<'_, craft_ui_panels::docking::PanelKey>")).collect()
+}
+
+/// A hover over the canvas replays the dock's tab rows and column bars and the menu bar (memoized views) and runs no
+/// panel tab strip.
+#[test]
+fn a_hover_over_the_canvas_replays_the_dock_chrome_and_the_menu_bar() {
+    let mut h = harness();
+    let at = h.state().last_canvas_rect.center();
+    assert!(!last_pass_runs(&h.ctx).is_empty(), "the frame runs components");
+    for step in 1..=3 {
+        h.event(Event::PointerMoved(at + vec2(step as f32, 0.0)));
+        h.run_steps(1);
+        let views = chrome_views(&h);
+        for kind in ["TabRow", "dock_column::bar::BarProps", "menu::bar::BarProps"] {
+            assert!(views.iter().any(|(name, _)| name.contains(kind)), "hover step {step}: the chrome shows a {kind} view: {views:?}");
+        }
+        let ran: Vec<_> = views.iter().filter(|(_, run)| *run != MemoRun::Replayed).collect();
+        assert_eq!(ran, Vec::<&(&str, MemoRun)>::new(), "hover step {step}: the chrome's views replay their last run");
+        assert_eq!(tab_strip_runs(&h), [], "hover step {step}: no panel tab strip runs");
+    }
 }
 
 #[test]

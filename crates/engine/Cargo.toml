@@ -12,11 +12,14 @@ workspace = true
 corpus = []
 
 [dependencies]
+craft-tracked = { workspace = true }
+# `#[derive(PlainData)]` for the session areas held in `Tracked`.
+craft-ui-macros = { workspace = true }
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 craft-cms = { workspace = true }
 # PCTIP codec from craft-libs#1564; isolated pin until the shared revision is adopted workspace-wide.
-craft-pcraft-tip = { package = "craft-pcraft-format", git = "https://github.com/storytold/craft-libs", rev = "860d6cc62b25c3aa70a1b149c59257fe890c9027" }
+craft-pcraft-tip = { package = "craft-pcraft-format", git = "https://github.com/storytold/craft-libs", rev = "a7e10921bd00b7bc1120b654ac0d4dc6aa8a9198" }
 photocraft-raster = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-ops = { workspace = true }

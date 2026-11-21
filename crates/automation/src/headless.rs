@@ -441,9 +441,7 @@ impl Headless {
         if ext.as_deref().is_some_and(|e| file_cmds::holds(&doc, e)) {
             // Saving by index must not retarget the next automation command.
             self.on_doc(Some(i), |this| {
-                if let Some(st) = this.session.active_mut() {
-                    st.saved_to(target.to_string_lossy().into_owned());
-                }
+                this.session.saved_to(target.to_string_lossy().into_owned());
                 // History Options › Automatically Create New Snapshot When Saving (#2966).
                 photocraft_engine::history_options_cmds::snapshot_on_save(&mut this.session);
                 Ok(())

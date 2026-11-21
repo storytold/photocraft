@@ -31,6 +31,8 @@ const MATCH_COLOR: &str = "image.adjustments.matchColor";
 const SCALE_EFFECTS: &str = "layer.layerStyle.scaleEffects";
 #[cfg(test)]
 pub(crate) const MATCH_COLOR_DESTINATION: &str = "__matchColorDestination";
+/// The key of the document id Lens Blur captures at open (see [`validate_lens_blur_document`]).
+const LENS_BLUR_DOCUMENT: &str = "lensBlurDocument";
 
 /// The decimals of the Rotate Canvas angle: it keeps hundredths of a degree, so the ruler's
 /// straightening angle reaches the dialog as 33.69 and not 33.7 (#12035).
@@ -576,7 +578,14 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Result<DialogId, String> 
     let spec = photocraft_engine::commands::find(command).ok_or_else(|| format!("{command} has no dialog"))?;
     let params = params(app, command, spec.params);
     let fields = fields(app, command, &params);
-    let captured = if command == MATCH_COLOR { json!(app.session.active().map(|st| (st.doc.id, st.active_layer))) } else { Value::Null };
+    let captured = if command == MATCH_COLOR {
+        json!(app.session.active().map(|st| (st.doc.id, st.active_layer)))
+    } else if command == rows::LENS_BLUR {
+        // The Depth Map Source lists this document's alpha channels by index.
+        json!({ LENS_BLUR_DOCUMENT: app.session.active().map(|st| st.doc.id) })
+    } else {
+        Value::Null
+    };
     let reset = reset_values(&params, &fields);
     // Photoshop titles the Scale Effects… dialog with the longer name (#14996).
     let title = if command == SCALE_EFFECTS { Label::from(tl!("Scale Layer Effects")) } else { title_of(spec.label) };
@@ -659,6 +668,14 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
             map.insert("matte".into(), color);
         }
     }
+    // Lens Blur's Source menu names an alpha channel `channel:N` (by index: two channels may share a name); the command
+    // takes the `channel` source and the channel's index.
+    if command == rows::LENS_BLUR
+        && let Some(index) = map.get("depthMap").and_then(Value::as_str).and_then(rows::channel_of_choice)
+    {
+        map.insert("depthMap".into(), json!("channel"));
+        map.insert("depthChannel".into(), json!(index));
+    }
     if command == "filter.blur.radialBlur"
         && let Some([x, y]) = fields.point("center")
     {
@@ -701,11 +718,28 @@ pub(crate) fn validate_match_color_destination(app: &PhotocraftApp, command: &st
     Ok(())
 }
 
-/// The held-OK check of Match Color: the destination captured at open still holds.
+/// Lens Blur's Depth Map Source names an alpha channel by its index in the document the dialog opened on (`captured`):
+/// if another document became active since (the control channel can switch it under the dialog), that index would pick
+/// a channel of the other document, so preview and OK refuse it. The other sources do not name a channel.
+/// `depth_map` is the `depthMap` param as [`command_params`] makes it.
+pub(crate) fn validate_lens_blur_document(app: &PhotocraftApp, command: &str, captured: &Value, depth_map: Option<&str>) -> Result<(), String> {
+    if command != rows::LENS_BLUR || depth_map != Some("channel") {
+        return Ok(());
+    }
+    // Only the dialog `open` made captures its document; a Smart Filter edit captures its own target and is checked there.
+    let Some(opened) = captured.get(LENS_BLUR_DOCUMENT) else { return Ok(()) };
+    let opened = opened.as_u64();
+    let active = app.session.active().map(|st| st.doc.id.0);
+    if opened.is_some() && opened == active { Ok(()) } else { Err("the Lens Blur depth map channel belongs to another document".into()) }
+}
+
+/// The held-OK check: Match Color's destination and Lens Blur's depth channel document captured at open still hold.
 pub(crate) fn check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
     let destination = crate::dialogs::params::captured(app, &result.key);
     let fields = fields_map(&result.fields);
     validate_match_color_destination(app, &result.key, &destination, &fields).map_err(Label::from)?;
+    let params = command_params(&result.key, &result.fields);
+    validate_lens_blur_document(app, &result.key, &destination, params.get("depthMap").and_then(Value::as_str)).map_err(Label::from)?;
     validate_match_color_source_layer(app, &result.key, &fields).map_err(Label::from)
 }
 
