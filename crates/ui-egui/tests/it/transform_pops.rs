@@ -406,3 +406,14 @@ fn the_first_warp_pull_after_perspective_redistributes_like_the_reference() {
         assert!(((a - b) - 14.0).abs() <= 2.0, "column {i}: the boundary moved {} px on the first pull; the reference's moved 14", a - b);
     }
 }
+
+/// Perspective with two drags, then Warp left untouched, then Enter: the result is what the preview showed, the box's
+/// exact map (an untouched warp is no warp). Stored as an identity warp, the render drew it from control points carried
+/// through the perspective, 8 content px off the preview (found by the sweep).
+#[test]
+fn enter_on_an_untouched_warp_after_perspective_applies_what_the_preview_shows() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    use Step::*;
+    let order = [Persp, PerspDrag, PerspDrag, Warp];
+    run(false, &order).unwrap_or_else(|e| panic!("{order:?}: {e}"));
+}

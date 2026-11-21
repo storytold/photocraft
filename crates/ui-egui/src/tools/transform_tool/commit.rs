@@ -84,6 +84,11 @@ pub fn commit(app: &mut PhotocraftApp) {
     }
     let interpolation = result.interpolation.id();
     let warp = result.warp.map(|w| w.warp);
+    // An untouched warp is no warp: on a moved smart object without a warp of its own, a flat grid applies the box's
+    // move alone, as the reference applies it. Stored as a warp, the render would draw it from its control points
+    // carried through the move, which spread the rows evenly: not what the preview showed.
+    let placed_warp = preview.as_ref().and_then(|pv| pv.placed_warp);
+    let warp = warp.filter(|w| app.session.active().and_then(|st| super::warp::flat_placed_warp(&st.doc, t.layer, w, placed_warp)).is_none());
     if t.selection {
         let mut p = json!({"rect": rect, "interpolation": interpolation});
         match &warp {
