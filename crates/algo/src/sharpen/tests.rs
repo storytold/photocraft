@@ -166,7 +166,7 @@ fn exact_threshold_boundary_and_degenerate_images() {
             for (&o, &b) in src.data.iter().zip(&blurred).take(8) {
                 let boundary = ((o - b).abs() + 1e-6) * 255.0;
                 for threshold in [boundary, f32::from_bits(boundary.to_bits().saturating_sub(1)), f32::from_bits(boundary.to_bits() + 1)] {
-                    same_bits(&unsharp(&src, out, &ctx, 500.0, radius, threshold), &reference::unsharp(&src, out, &ctx, 500.0, radius, threshold));
+                    same_bits(&unsharp(&src, out, &ctx, 500.0, radius, threshold), &reference::unsharp_from_blur(&src, out, &ctx, 500.0, threshold, &blurred));
                 }
             }
         }
