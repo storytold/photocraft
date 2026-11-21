@@ -659,6 +659,54 @@ fn reset_transform_refuses_a_stack_it_cannot_re_render() {
     assert!(cleared.warp.is_none(), "with the warp");
 }
 
+/// A filter this build can't apply (a PSD's Camera Raw Filter) shows only in the pixels the file
+/// came with. Hiding it, toggling the stack or moving it would re-render without it and lose that
+/// effect for good, also once shown again, so those edits are refused (#15448). Deleting it still
+/// re-renders from the contents.
+#[test]
+fn smart_filter_edits_keep_the_effect_of_a_filter_they_cannot_re_render() {
+    let mut s = session(8);
+    paint(&mut s);
+    let unfiltered = flat(&s);
+    convert(&mut s);
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
+    // As an imported PSD leaves it: the kept filter on top, its effect only in the cached pixels.
+    s.edit("imported", |doc, active| {
+        let LayerContent::Smart(sm) = &mut doc.layer_mut(active.unwrap()).unwrap().content else { panic!("a smart object") };
+        sm.smart_filters.push(SmartFilter {
+            command: UNSUPPORTED_FILTER.into(),
+            params: json!({"name": "Camera Raw Filter"}),
+            blend: BlendMode::Normal,
+            opacity: 1.0,
+            visible: true,
+        });
+        sm.cache.as_mut().unwrap().fill_rect(Rect::new(0, 0, W, H), &[1.0, 0.0, 0.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    let baked = flat(&s);
+    let stack = active_smart(&s).smart_filters;
+    let states = s.active().unwrap().history.entries().len();
+    for (cmd, p) in [
+        ("layer.smartFilter.setVisible", json!({"index": 1})),
+        ("layer.smartFilter.disableSmartFilters", json!({})),
+        ("layer.smartFilter.move", json!({"index": 1, "to": 0})),
+        ("layer.smartFilter.setVisible", json!({"index": 0})),
+        ("layer.smartFilter.delete", json!({"index": 0})),
+    ] {
+        let err = s.execute(cmd, p).unwrap_err().to_string();
+        assert!(err.contains("Camera Raw Filter"), "{cmd}: the error names the filter: {err}");
+        assert_eq!(flat(&s), baked, "{cmd}: the imported effect stays");
+        assert_eq!(active_smart(&s).smart_filters, stack, "{cmd}: the stack is left alone");
+        assert_eq!(s.active().unwrap().history.entries().len(), states, "{cmd}: no history state");
+    }
+    s.execute("layer.smartFilter.delete", json!({"index": 1})).unwrap();
+    assert_eq!(active_smart(&s).smart_filters.len(), 1, "deleting the kept filter goes through");
+    assert!(max_diff(&flat(&s), &baked) > 0.1, "and re-renders from the contents");
+    s.execute("layer.smartFilter.setVisible", json!({"index": 0})).unwrap();
+    assert_eq!(flat(&s), unfiltered, "then the stack edits as usual");
+}
+
 /// Enabled for a smart object only, and one undo step back (#11662).
 #[test]
 fn reset_transform_needs_a_smart_object_and_undoes_in_one_step() {
