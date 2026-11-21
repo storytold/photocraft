@@ -17,6 +17,7 @@ use craft::imaging::layer_style::{
     StyleParams, StyleValue,
 };
 use craft::imaging::ui::layer_style::{ContourEditorDialog, HostedLayerStyle, LayerStyleAsk};
+use craft::settings::Remembered;
 use craft::theme::Srgba;
 use craft::ui::contract::Entry;
 use craft::ui::contract::Tracked;
@@ -43,6 +44,8 @@ mod contour;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
+#[cfg(test)]
+mod pattern_overlay_last_values_tests;
 
 /// The Styles preset gallery page id.
 pub const STYLES_PAGE: &str = "styles";
@@ -73,6 +76,10 @@ fn defaults(kind: &str) -> Value {
     let mut p = photocraft_engine::layer_style::effect_defaults(kind);
     if kind == "gradientOverlay" {
         drop_from_to(&mut p);
+    }
+    if kind == EffectKind::PatternOverlay.key() {
+        p["phaseX"] = json!(0.0);
+        p["phaseY"] = json!(0.0);
     }
     p
 }
@@ -466,6 +473,57 @@ fn blending_json(b: &Blending, layer: LayerId) -> Value {
 
 // ------------------------------------------------------------------ opening
 
+/// The edit order of enabled Pattern Overlays in the open dialog.
+#[derive(Default)]
+pub(crate) struct PatternOverlayEdits {
+    overlays: HashMap<EffectId, (StyleParams, u64)>,
+    edit_order: u64,
+}
+
+fn enabled_pattern_overlay_drafts(style: &LayerStyle) -> impl Iterator<Item = &EffectInstance> {
+    style.effects.iter().filter(|effect| effect.on && effect.kind == EffectKind::PatternOverlay)
+}
+
+impl PatternOverlayEdits {
+    fn new(style: &LayerStyle) -> Self {
+        Self { overlays: enabled_pattern_overlay_drafts(style).map(|effect| (effect.id, (effect.params.clone(), 0))).collect(), edit_order: 0 }
+    }
+
+    fn observe(&mut self, style: &LayerStyle) {
+        let enabled: HashSet<_> = enabled_pattern_overlay_drafts(style).map(|effect| effect.id).collect();
+        self.overlays.retain(|id, _| enabled.contains(id));
+        // An atomic preset can change several overlays in one pass. Use their draft order.
+        for effect in enabled_pattern_overlay_drafts(style) {
+            if self.overlays.get(&effect.id).is_some_and(|(params, _)| params == &effect.params) {
+                continue;
+            }
+            self.edit_order = self.edit_order.saturating_add(1);
+            self.overlays.insert(effect.id, (effect.params.clone(), self.edit_order));
+        }
+    }
+
+    fn order_of(&self, id: EffectId) -> Option<u64> {
+        self.overlays.get(&id).map(|(_, order)| *order).filter(|order| *order != 0)
+    }
+}
+
+fn last_pattern_overlay() -> Remembered<Value> {
+    Remembered::new("photocraft.layerStyle.patternOverlay")
+}
+
+/// Resolves a stored id or name against this document and the library. A missing preset falls
+/// back to the first library pattern while keeping the other remembered controls.
+fn restore_pattern(session: &Session, mut params: Value) -> Value {
+    if let Some(key) = params["pattern"].as_str().filter(|key| !key.is_empty()) {
+        params["pattern"] = json!(
+            photocraft_engine::pattern_cmds::resolve_id(session, key)
+                .or_else(|| session.patterns.items.first().map(|pattern| pattern.id.clone()))
+                .unwrap_or_default()
+        );
+    }
+    params
+}
+
 /// Opens the Layer Style dialog on the active layer; `select` is a `KINDS` key, `STYLES_PAGE` or
 /// `BLENDING`. `None` when there is no active layer, or when a Free Transform box refuses to apply.
 pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
@@ -482,10 +540,15 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
     let layer_id = st.active_layer?;
     let layer = st.doc.layer(layer_id)?.clone();
     let (light, mode, doc) = (st.doc.global_light.angle, st.doc.mode, st.doc.id);
-    let user: Map<String, Value> = app.session.presets.layer_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let mut user: Map<String, Value> = app.session.presets.layer_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let pattern = EffectKind::PatternOverlay.key();
+    if let Some(params) = last_pattern_overlay().recall(app.framework.host()).or_else(|| user.remove(pattern)) {
+        user.insert(pattern.into(), restore_pattern(&app.session, params));
+    }
     let keys = blend_keys();
     let specs = specs(&keys, &user, light);
     let mut draft = LayerStyleDraft::new(draft_of(&layer, light, mode));
+    app.layer_style_pattern_edits = PatternOverlayEdits::new(&draft.style);
     match select {
         None => {
             if let Some(first) = draft.style.effects.first() {
@@ -819,13 +882,16 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.layer_style_target = None;
         app.style_preview = None;
         discard_child(app, id);
+        let mut edits = std::mem::take(&mut app.layer_style_pattern_edits);
         if let DialogResult::Ok(style) = result {
-            finish(app, doc, layer, &style);
+            edits.observe(&style);
+            finish(app, doc, layer, &style, &edits);
         }
         return;
     }
     if app.framework.dialogs.get_by_id::<HostedLayerStyle>(id).is_none() {
         app.layer_style_target = None;
+        app.layer_style_pattern_edits = PatternOverlayEdits::default();
         return;
     }
     // The document or layer went away under the dialog: the cancel result is taken on the next pass.
@@ -862,15 +928,44 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     color_picker::answered(app, id);
     contour::answered(app, id);
+    if let Some(dialog) = app.framework.dialogs.get_by_id::<HostedLayerStyle>(id) {
+        app.layer_style_pattern_edits.observe(&dialog.draft().style);
+    }
+}
+
+fn enabled_pattern_overlay_params(effect: &Effect) -> Option<Value> {
+    (effect.enabled() && matches!(effect, Effect::PatternOverlay { .. })).then(|| values_of(effect, 0.0))
 }
 
 /// OK: replaces the layer's effects with the style's, as one history step.
-fn finish(app: &mut PhotocraftApp, doc: photocraft_doc::DocId, layer: LayerId, style: &LayerStyle) {
-    let Some(light) = app.session.active().filter(|s| s.doc.id == doc).map(|s| f64::from(s.doc.global_light.angle)) else {
+fn finish(app: &mut PhotocraftApp, doc: photocraft_doc::DocId, layer: LayerId, style: &LayerStyle, edits: &PatternOverlayEdits) {
+    let Some(active) = app.session.active().filter(|s| s.doc.id == doc) else {
         return fail(app, "Layer Style target document changed".into());
     };
+    let light = f64::from(active.doc.global_light.angle);
+    let before: HashMap<_, _> = active
+        .doc
+        .layer(layer)
+        .into_iter()
+        .flat_map(|layer| layer.effects.items.iter().enumerate())
+        .filter_map(|(i, effect)| enabled_pattern_overlay_params(effect).map(|params| (EffectId(i as u32 + 1), params)))
+        .collect();
     if let Err(error) = apply(style, layer, Some(light), |id, p| app.run(id, p)) {
-        fail(app, error);
+        return fail(app, error);
+    }
+
+    // Replace keeps the draft order, so pair each applied effect with its draft ID.
+    // A new instance has no snapshot, even when it reuses the ID of a removed effect.
+    let applied = app.session.active().and_then(|s| s.doc.layer(layer)).into_iter().flat_map(|layer| &layer.effects.items).zip(&style.effects);
+    let latest = applied
+        .filter_map(|(effect, instance)| {
+            let order = edits.order_of(instance.id)?;
+            let params = enabled_pattern_overlay_params(effect)?;
+            (instance.params.get("fx").is_none() || before.get(&instance.id) != Some(&params)).then_some((order, params))
+        })
+        .max_by_key(|(order, _)| *order);
+    if let Some((_, params)) = latest {
+        last_pattern_overlay().store(app.framework.host(), &params);
     }
 }
 
@@ -923,6 +1018,9 @@ fn reset_to_default(app: &mut PhotocraftApp, dialog: DialogId, instance: EffectI
     let Ok(v) = app.run("layer.layerStyle.defaultFor", json!({"kind": kind.key()})) else { return };
     let mut values = v["params"].clone();
     drop_from_to(&mut values);
+    if kind == EffectKind::PatternOverlay {
+        values = restore_pattern(&app.session, with_defaults(kind.key(), &values));
+    }
     if values.get("useGlobalLight").and_then(Value::as_bool) == Some(true)
         && let Some(o) = values.as_object_mut()
     {
