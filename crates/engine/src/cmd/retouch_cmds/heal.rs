@@ -148,6 +148,35 @@ pub(super) fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &
     }
 }
 
+/// `src` in format `fmt` over `r`: the surface itself when the formats match, else only the tiles
+/// `r` touches converted (a small stroke on a large image converts a few tiles, not the whole
+/// source; it reads within `r` exactly as a full conversion would, #11594).
+pub(super) fn source_in_format(src: Surface, fmt: PixelFormat, r: Rect) -> Surface {
+    if src.format() == fmt { src } else { convert_source(&src, fmt, r) }
+}
+
+/// `src` converted to `fmt` over `r` (the tiles `r` touches).
+pub(super) fn convert_source(src: &Surface, fmt: PixelFormat, r: Rect) -> Surface {
+    #[cfg(test)]
+    if FULL_CONVERSION.with(std::cell::Cell::get) {
+        return src.convert(fmt);
+    }
+    let out = src.convert_region(fmt, r);
+    #[cfg(test)]
+    CONVERTED_TILES.with(|c| c.set(c.get() + out.tile_count()));
+    out
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests set this to convert history sources whole, as before #11594: the oracle the
+    /// region-limited conversion must match bit for bit.
+    pub(super) static FULL_CONVERSION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The tiles the region-limited conversion has produced on this thread: tests bound a
+    /// command's conversion work with it.
+    pub(super) static CONVERTED_TILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `paint.historyBrush`: paints the stroke from the `history_source` surface. With `eraseToHistory`
 /// it is the Eraser's Erase to History, and its History row says History Eraser.
 pub(super) fn history_brush(s: &mut Session, p: &Value) -> Result<Value> {
@@ -168,10 +197,8 @@ pub(super) fn history_brush(s: &mut Session, p: &Value) -> Result<Value> {
             *surf = l.surface;
             return Ok(l.bounds);
         }
-        let fmt = surf.format();
-        let src = if src_surface.format() == fmt { src_surface } else { src_surface.convert(fmt) };
         let (bounds, cov) = coverage(CMD, &stroke)?;
-        let paint = Region::read(&src, bounds);
+        let paint = Region::read(&source_in_format(src_surface, surf.format(), bounds), bounds);
         Ok(apply_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode))
     })?;
     let mut r = json!({ "damage": damage_json(dmg) });
