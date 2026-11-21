@@ -394,7 +394,17 @@ fn a_cooperative_place_moves_its_pixels_a_few_tiles_per_poll() {
         let id = job(s.start_place_bytes("drop.png", bytes.clone(), None, params).unwrap());
         let (e, polls) = poll_to_end(&mut s, id);
         assert!(matches!(e.outcome, JobOutcome::Done(_)), "{e:?}");
-        assert_eq!(layer_pixels(&s), layer_pixels(&inline), "at {center:?}");
+        let actual = s.active().unwrap();
+        let expected = inline.active().unwrap();
+        let got = actual.doc.layer(actual.active_layer.unwrap()).unwrap().surface().unwrap();
+        let want = expected.doc.layer(expected.active_layer.unwrap()).unwrap().surface().unwrap();
+        let area = actual.doc.bounds().union(&got.content_bounds());
+        assert_eq!(area, expected.doc.bounds().union(&want.content_bounds()), "at {center:?}: comparison bounds");
+        assert_eq!(got.format(), want.format(), "at {center:?}: pixel format");
+        assert_eq!(got.default_pixel(), want.default_pixel(), "at {center:?}: default pixel");
+        // Outside both layers' stored tiles, all the samples in the comparison area are defaults.
+        let stored = got.tile_bounds().union(&want.tile_bounds()).intersect(&area);
+        assert_eq!(got.read_region(stored), want.read_region(stored), "at {center:?}");
         polls
     };
     // The image lands at (256, 256), a whole number of tiles, or at (257, 3).
