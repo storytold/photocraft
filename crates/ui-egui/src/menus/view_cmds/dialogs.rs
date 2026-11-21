@@ -7,6 +7,9 @@ use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDi
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::requests::PathKind;
 
+#[path = "artboard_export_options.rs"]
+mod artboard_export_options;
+pub(crate) use artboard_export_options::nest as nest_artboard_export_options;
 #[path = "artboard_name_options.rs"]
 mod artboard_name_options;
 pub(crate) use artboard_name_options::strip as strip_artboard_name_options;
@@ -63,6 +66,9 @@ fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>,
 /// form's builder runs at each): a row takes one `visible_when` condition, so a row shown by two values is shown by a
 /// shell key that combines them.
 fn derive(id: &str, fields: &mut DialogFields) {
+    if id == artboard_export_options::COMMAND {
+        artboard_export_options::derive(fields);
+    }
     if id == artboard_name_options::COMMAND {
         artboard_name_options::derive(fields);
     }
@@ -102,6 +108,12 @@ fn choice(key: &str, label: &'static str, options: Vec<(String, Label)>, default
 /// The file formats the exports to files write.
 fn export_formats() -> Vec<(String, Label)> {
     opts(&[("png", tl!("PNG")), ("jpg", tl!("JPEG")), ("psd", tl!("PSD")), ("tiff", tl!("TIFF")), ("webp", tl!("WebP")), ("bmp", tl!("BMP"))])
+}
+
+/// The reference application's File Type list of Artboards to Files, in its order (#13635). Format names, not
+/// translated.
+fn artboard_formats() -> Vec<(String, Label)> {
+    opts(&[("bmp", "BMP"), ("jpg", "JPEG"), ("pdf", "PDF"), ("psd", "PSD"), ("tga", "Targa"), ("tiff", "TIFF"), ("png8", "PNG-8"), ("png24", "PNG-24")])
 }
 
 /// The blending modes of the channel dialogs.
@@ -307,9 +319,11 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                         Some("overlapping".to_owned()),
                     ),
                 ),
-                choice("format", tl!("File Type"), export_formats(), "png"),
-                export_quality(),
+                // The reference application's list, PSD chosen when the dialog opens (#13635).
+                choice("format", tl!("File Type"), artboard_formats(), "psd"),
             ];
+            // Export Options and each file type's settings (#13636); the JPEG quality is one of them.
+            rows.extend(artboard_export_options::rows());
             // Include Artboard Name and its Name Options (#13637).
             rows.extend(artboard_name_options::rows(&crate::type_tool::families()));
             plain(rows)
@@ -320,6 +334,8 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                 Param::new("path", tl!("File"), ParamKind::text(format!("{dir}/{}.pdf", stem(&name)))),
                 export_selected_artboards(selected_artboards(app)),
                 Param::new("quality", tl!("Quality"), ParamKind::int(Some(0), Some(12), 10)),
+                // Unticked on first open; the form remembers it as the last run left it (#13644).
+                Param::new("reversePageOrder", tl!("Reverse Page Order"), ParamKind::bool(false)),
             ])
         }
         "file.export.dataSetsAsFiles" => {

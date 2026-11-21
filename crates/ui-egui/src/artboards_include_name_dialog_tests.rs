@@ -113,7 +113,7 @@ fn the_checkbox_starts_unticked_and_ticking_it_shows_the_name_options_with_their
 fn the_checkbox_is_kept_per_file_type() {
     let mut h = harness();
     let dialog = open(&mut h, ARTBOARDS);
-    set(&mut h, dialog, "format", json!("png"));
+    set(&mut h, dialog, "format", json!("png24"));
     click(&mut h);
     assert!(ticked(&h));
     set(&mut h, dialog, "format", json!("psd"));
@@ -121,8 +121,8 @@ fn the_checkbox_is_kept_per_file_type() {
     assert!(!has_label(&h, "Font"));
     set(&mut h, dialog, "format", json!("tiff"));
     assert!(!ticked(&h));
-    set(&mut h, dialog, "format", json!("png"));
-    assert!(ticked(&h), "PNG's tick comes back");
+    set(&mut h, dialog, "format", json!("png24"));
+    assert!(ticked(&h), "PNG-24's tick comes back");
     assert_eq!(params(&h, dialog)["includeName"], true);
 }
 
@@ -133,7 +133,7 @@ fn ok_runs_the_export_with_the_name_options() {
     // Removed when dropped, also when an assertion fails.
     let dir = tempfile::tempdir().unwrap();
     set(&mut h, dialog, "dir", json!(dir.path().to_string_lossy()));
-    set(&mut h, dialog, "format", json!("png"));
+    set(&mut h, dialog, "format", json!("png24"));
     click(&mut h);
     set(&mut h, dialog, "extension", json!("black"));
     crate::dialogs::testing::confirm(h.state_mut(), dialog).unwrap();
@@ -163,9 +163,9 @@ fn a_file_type_set_by_a_control_client_brings_its_own_tick_at_once() {
     let dialog = open(&mut h, ARTBOARDS);
     let dir = tempfile::tempdir().unwrap();
     set(&mut h, dialog, "dir", json!(dir.path().to_string_lossy()));
-    set(&mut h, dialog, "format", json!("png"));
+    set(&mut h, dialog, "format", json!("png24"));
     click(&mut h);
-    assert!(ticked(&h), "PNG ticked");
+    assert!(ticked(&h), "PNG-24 ticked");
     let ctx = h.ctx.clone();
     h.state_mut().framework.dialogs.set_json_field(&ctx, dialog, "format", json!("jpg")).unwrap();
     // OK in the same frame: no border around the board.
