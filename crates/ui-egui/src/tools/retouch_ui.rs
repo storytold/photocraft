@@ -21,10 +21,12 @@ pub(crate) fn alt_flipped(tool: Tool, alt: bool) -> Tool {
 }
 
 /// A Smudge stroke with ⌥ held at the press turns Finger Painting the other way for that one stroke, as in Photoshop
-/// (#12957): `p` is the stroke's `paint.smudge` params. The options bar keeps its value.
+/// (#12957): `p` is the stroke's `paint.smudge` params. The options bar keeps its value. Only measured at Strength
+/// 100 %, so a lower Strength keeps today's behaviour (the issue's "not measured" case).
 pub(crate) fn alt_finger_painting(tool: Tool, alt: bool, p: &mut Value) {
     if tool == Tool::Smudge
         && alt
+        && p.get("strength").and_then(Value::as_f64).is_some_and(|s| s >= 100.0)
         && let Some(on) = p.get("fingerPainting").and_then(Value::as_bool)
     {
         p["fingerPainting"] = json!(!on);

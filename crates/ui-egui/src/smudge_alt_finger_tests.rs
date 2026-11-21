@@ -79,11 +79,20 @@ fn without_alt_the_checkbox_decides() {
 #[test]
 fn alt_flips_finger_painting_for_the_smudge_tool_only() {
     for tool in [Tool::Blur, Tool::Sharpen, Tool::Dodge, Tool::Burn] {
-        let mut p = json!({"fingerPainting": false});
+        let mut p = json!({"strength": 100.0, "fingerPainting": false});
         crate::retouch_ui::alt_finger_painting(tool, true, &mut p);
         assert_eq!(p["fingerPainting"], false, "{tool:?}");
     }
-    let mut p = json!({"fingerPainting": false});
+    let mut p = json!({"strength": 100.0, "fingerPainting": false});
     crate::retouch_ui::alt_finger_painting(Tool::Smudge, true, &mut p);
     assert_eq!(p["fingerPainting"], true);
+}
+
+#[test]
+fn alt_below_full_strength_keeps_the_checkbox_value() {
+    for on in [false, true] {
+        let mut p = json!({"strength": 50.0, "fingerPainting": on});
+        crate::retouch_ui::alt_finger_painting(Tool::Smudge, true, &mut p);
+        assert_eq!(p["fingerPainting"], on, "Alt at Strength 50 % is not measured: the stroke follows the checkbox");
+    }
 }
