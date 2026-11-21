@@ -34,7 +34,8 @@ pub struct NativeContextOptions {
     pub power_preference: wgpu::PowerPreference,
     /// Force software/fallback adapter selection (e.g. WARP/llvmpipe).
     pub force_fallback_adapter: bool,
-    /// Allowed backend flags. Default is all available native backends.
+    /// Allowed backend flags. Default is [`default_backends`]: all native backends, except GL on
+    /// Windows, which is then tried only when no other adapter is found.
     pub backends: wgpu::Backends,
     /// Bounded timeout for adapter/device initialization. When set, requests exceeding
     /// this duration return [`GpuContextError::NoAdapter`]. Default is 10 seconds.
@@ -52,10 +53,24 @@ impl Default for NativeContextOptions {
         Self {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
-            backends: wgpu::Backends::all(),
+            backends: default_backends(cfg!(windows)),
             timeout: Some(Duration::from_secs(10)),
         }
     }
+}
+
+/// The default instance backends: all of them, except GL on Windows. wgpu's WGL instance keeps a
+/// hidden window on a thread that never reads its messages, and any message sent to the app's
+/// windows then waits forever: a keyboard layout switch while the Save dialog was open froze
+/// PhotoCraft (#15304, #9219).
+pub fn default_backends(windows: bool) -> wgpu::Backends {
+    if windows { wgpu::Backends::all().difference(wgpu::Backends::GL) } else { wgpu::Backends::all() }
+}
+
+/// The backends to try again with when `backends` found no adapter: GL added, only for Windows'
+/// [`default_backends`]. Backends the caller chose are kept as they are.
+fn gl_retry(backends: wgpu::Backends, windows: bool) -> Option<wgpu::Backends> {
+    (windows && backends == default_backends(true)).then_some(backends | wgpu::Backends::GL)
 }
 
 /// A headless, windowless GPU context managing a [`wgpu::Device`], [`wgpu::Queue`],
@@ -92,28 +107,36 @@ impl NativeContext {
     pub fn request(options: &NativeContextOptions) -> Result<Self, GpuContextError> {
         let opts = options.clone();
         let init_work = move || -> Result<Self, GpuContextError> {
-            let instance =
-                wgpu::Instance::new(wgpu::InstanceDescriptor { backends: opts.backends, ..wgpu::InstanceDescriptor::new_without_display_handle_from_env() });
-
-            let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: opts.power_preference,
-                force_fallback_adapter: opts.force_fallback_adapter,
-                compatible_surface: None,
-                ..Default::default()
-            }))
-            .or_else(|e| {
-                if !opts.force_fallback_adapter {
-                    pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                        power_preference: wgpu::PowerPreference::None,
-                        force_fallback_adapter: true,
-                        compatible_surface: None,
-                        ..Default::default()
-                    }))
-                } else {
-                    Err(e)
-                }
-            })
-            .map_err(|e| GpuContextError::NoAdapter(format!("request_adapter failed: {e}")))?;
+            let find_adapter = |backends: wgpu::Backends| {
+                let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends, ..wgpu::InstanceDescriptor::new_without_display_handle_from_env() });
+                pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: opts.power_preference,
+                    force_fallback_adapter: opts.force_fallback_adapter,
+                    compatible_surface: None,
+                    ..Default::default()
+                }))
+                .or_else(|e| {
+                    if !opts.force_fallback_adapter {
+                        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                            power_preference: wgpu::PowerPreference::None,
+                            force_fallback_adapter: true,
+                            compatible_surface: None,
+                            ..Default::default()
+                        }))
+                    } else {
+                        Err(e)
+                    }
+                })
+            };
+            let adapter = find_adapter(opts.backends)
+                .or_else(|e| match gl_retry(opts.backends, cfg!(windows)) {
+                    Some(backends) => {
+                        log::info!("GPU native context: no adapter without GL ({e}), trying with GL");
+                        find_adapter(backends)
+                    }
+                    None => Err(e),
+                })
+                .map_err(|e| GpuContextError::NoAdapter(format!("request_adapter failed: {e}")))?;
 
             let info = adapter.get_info();
             log::info!("GPU native context: selected adapter '{}' ({:?}, {:?})", info.name, info.backend, info.device_type);
@@ -223,5 +246,23 @@ impl NativeContext {
     /// Whether the device is healthy and has not reported a lost device or uncaptured error.
     pub fn is_healthy(&self) -> bool {
         self.health.is_ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #15304: no WGL instance (and its hidden window) on Windows unless nothing else is found.
+    #[test]
+    fn windows_leaves_gl_for_a_retry() {
+        assert!(!default_backends(true).contains(wgpu::Backends::GL));
+        assert_eq!(default_backends(false), wgpu::Backends::all());
+        assert_eq!(NativeContextOptions::default().backends, default_backends(cfg!(windows)));
+        assert_eq!(gl_retry(default_backends(true), true), Some(wgpu::Backends::all()));
+        // A caller's own backends, and other platforms, get no retry.
+        assert_eq!(gl_retry(wgpu::Backends::DX12, true), None);
+        assert_eq!(gl_retry(wgpu::Backends::all(), true), None);
+        assert_eq!(gl_retry(default_backends(false), false), None);
     }
 }
