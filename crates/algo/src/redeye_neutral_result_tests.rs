@@ -156,3 +156,19 @@ fn pupil_size_no_longer_limits_the_search() {
     let n50 = click(&mut px, 50.0, 50.0);
     assert_eq!(n1, n50, "Pupil Size 1 changes the same pixels as 50");
 }
+
+#[test]
+fn a_second_click_on_the_highlight_leaves_the_skin_alone() {
+    // A first click on the highlight still finds and corrects the red pupil.
+    let mut px = eye(RED, true);
+    assert!(apply(&mut px, SIDE, SIDE, (206, 194), ORIGIN, 50.0, 50.0) > 900);
+    assert!(centre(&px).iter().all(|&c| c <= 30), "centre {:?}", centre(&px));
+    // Clicking the same point again must not flood the skin around the eye (#16148 review).
+    let once = px.clone();
+    apply(&mut px, SIDE, SIDE, (206, 194), ORIGIN, 50.0, 50.0);
+    for (a, b) in once.iter().zip(&px) {
+        for c in 0..3 {
+            assert!((a[c] - b[c]).abs() * 255.0 <= 5.0, "second click on the highlight moved {a:?} to {b:?}");
+        }
+    }
+}

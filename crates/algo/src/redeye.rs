@@ -76,16 +76,6 @@ fn idx(x: usize, y: usize, w: usize) -> Option<usize> {
     y.checked_mul(w).and_then(|row| row.checked_add(x))
 }
 
-/// Window index of a document pixel, if it lies in the window.
-fn idx_of(p: (i32, i32), origin: (i32, i32), w: usize, h: usize) -> Option<usize> {
-    let x = usize::try_from(p.0.checked_sub(origin.0)?).ok()?;
-    let y = usize::try_from(p.1.checked_sub(origin.1)?).ok()?;
-    if x >= w || y >= h {
-        return None;
-    }
-    idx(x, y, w)
-}
-
 fn within_search(dx: i32, dy: i32, radius: f32) -> bool {
     let d = (dx as f32).hypot(dy as f32);
     d.is_finite() && d <= radius
@@ -200,8 +190,9 @@ fn measure(px: &[[f32; 4]], mask: &[bool], w: usize) -> Option<Pupil> {
 /// the red region connected to the red pixel nearest the click within [`SEARCH_RADIUS`]; pixels
 /// farther than that from `click` are left untouched. Each pupil pixel becomes a neutral grey at
 /// its own luminance (`0.2126 R + 0.7874 (G+B)/2`), darkened by a radial profile around the pupil's
-/// centroid whose core width follows `pupil_size` (1..=100) and depth `darken` (0..=100). A click
-/// on a dark neutral pixel (a corrected pupil) changes nothing, so a second click is a no-op.
+/// centroid whose core width follows `pupil_size` (1..=100) and depth `darken` (0..=100). When a
+/// dark neutral pixel (a corrected pupil) is nearer the click than any red one, nothing changes,
+/// so a second click is a no-op wherever in the pupil it lands.
 pub fn apply(px: &mut [[f32; 4]], w: usize, h: usize, click: (i32, i32), origin: (i32, i32), pupil_size: f32, darken: f32) -> u32 {
     let n = w.saturating_mul(h);
     if w == 0 || h == 0 || px.len() < n {
@@ -214,26 +205,34 @@ pub fn apply(px: &mut [[f32; 4]], w: usize, h: usize, click: (i32, i32), origin:
         return 0;
     }
     let s_pupil = if pupil_size.is_finite() { pupil_size.clamp(1.0, 100.0) / 100.0 } else { 0.5 };
-    // A click on a pupil that is already dark and neutral (a corrected one) has nothing to fix;
-    // without this the nearest red would be the skin around the eye.
-    let at_click = idx_of(click, origin, w, h).and_then(|i| px.get(i).copied());
-    if at_click.is_some_and(is_dark_neutral) {
-        return 0;
-    }
     let mut hard = vec![false; n];
+    // Squared distance from the click to the nearest red and the nearest dark neutral pixel.
+    let (mut red_d2, mut dark_d2) = (i64::MAX, i64::MAX);
     for y in 0..h {
         for x in 0..w {
             let Some(i) = idx(x, y, w) else { continue };
             let Some(p) = px.get(i).copied() else { continue };
             let dx = origin.0.saturating_add(x as i32).saturating_sub(click.0);
             let dy = origin.1.saturating_add(y as i32).saturating_sub(click.1);
-            if within_search(dx, dy, radius)
-                && is_red_eye(p)
-                && let Some(slot) = hard.get_mut(i)
-            {
-                *slot = true;
+            if !within_search(dx, dy, radius) {
+                continue;
+            }
+            let d2 = i64::from(dx).saturating_mul(i64::from(dx)).saturating_add(i64::from(dy).saturating_mul(i64::from(dy)));
+            if is_red_eye(p) {
+                if let Some(slot) = hard.get_mut(i) {
+                    *slot = true;
+                }
+                red_d2 = red_d2.min(d2);
+            } else if is_dark_neutral(p) {
+                dark_d2 = dark_d2.min(d2);
             }
         }
+    }
+    // A click on or in a pupil that is already dark and neutral (a corrected one, also when the
+    // press lands on its highlight) has nothing to fix: the corrected pupil is nearer than any red,
+    // which would otherwise be the skin around the eye.
+    if dark_d2 < red_d2 {
+        return 0;
     }
     let Some(seed) = nearest_seed(&hard, w, h, origin, click, radius) else {
         return 0;
