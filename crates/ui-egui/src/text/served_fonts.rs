@@ -99,10 +99,11 @@ pub fn install(app: &mut PhotocraftApp, ctx: &egui::Context, delivered: Vec<(Str
     }
 }
 
-/// Adds to `layers` the type layers to redraw once `families` arrive, in every open document and
-/// in its first History snapshot (the document as opened), which is checked on its own: since
-/// then its layers may have been edited (a PSD layer re-rendered) or deleted (#6087).
-fn pick(session: &photocraft_engine::Session, families: &[String], layers: &mut Vec<TypeLayerRef>) {
+/// Adds to `layers` the type layers to redraw once `families` arrive (served, or installed while
+/// the app runs: `installed_fonts`), in every open document and in its first History snapshot
+/// (the document as opened), which is checked on its own: since then its layers may have been
+/// edited (a PSD layer re-rendered) or deleted (#6087).
+pub(super) fn pick(session: &photocraft_engine::Session, families: &[String], layers: &mut Vec<TypeLayerRef>) {
     for st in session.documents() {
         let first = st.snapshots().iter().find(|s| s.id == 0).map(|s| &s.doc);
         // While it still is the open document, a layer picked there is picked in the snapshot too
