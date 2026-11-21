@@ -668,7 +668,7 @@ fn tool_presets_reject_invalid_colors_before_applying_the_brush() {
         let mut s = Session::new();
         s.execute("tools.setColors", json!({"foreground": [0.2, 0.4, 0.6, 0.8]})).unwrap();
         let color = s.tools.foreground;
-        let brush = s.tools.brush.clone();
+        let brush = (*s.tools.brush).clone();
         let brush_rev = s.tools.brush_rev;
         s.execute(
             "tool.presets.new",
@@ -679,7 +679,7 @@ fn tool_presets_reject_invalid_colors_before_applying_the_brush() {
         .unwrap();
         assert!(s.execute("tool.presets.select", json!({"preset": "Invalid"})).is_err(), "{values}");
         assert_eq!(s.tools.foreground, color, "{values}");
-        assert_eq!(s.tools.brush, brush, "{values}");
+        assert_eq!(*s.tools.brush, brush, "{values}");
         assert_eq!(s.tools.brush_rev, brush_rev, "{values}");
     }
 }
