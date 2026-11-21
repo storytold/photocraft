@@ -45,7 +45,7 @@ use bevel::{bevel_maps, satin_map};
 use blur::{blur, box_line, dilate, tent, tent_direct};
 pub use blur::{size_one_kernel, tent_kernel};
 pub(crate) use composite::{VectorStroke, build_maps_prepared, composite_with_effects_prepared_with, map_count};
-pub use composite::{build_maps, composite_with_effects, outline_share, premerges_layer, shadow_see_through, stroke_widths};
+pub use composite::{build_maps, composite_with_effects, outline_share, premerges_layer, shadow_see_through, stroke_overprint_shown, stroke_widths};
 pub use distance::{FieldKind, STROKE_CHAMFER_MAX, bevel_distance_fields, distance_field, stroke_outside_exact};
 #[cfg(test)]
 use distance::{
@@ -250,6 +250,8 @@ impl FxMaps {
 mod inner_shadow_anti_alias_tests;
 #[cfg(test)]
 mod outer_glow_noise_tests;
+#[cfg(test)]
+mod stroke_overprint_tests;
 
 #[cfg(test)]
 mod inner_shadow_noise_tests;

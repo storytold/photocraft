@@ -550,6 +550,90 @@ fn row_keys_cover_exactly_what_the_rows_are_built_from() {
     assert_eq!(lower::row_key(&Adjustment::Vibrance { vibrance: 10.0, saturation: 0.0 }, SampleType::U8), None);
 }
 
+/// #15000: Overprint makes an inside stroke blend with what lies under the layer (off) or over the
+/// layer's own pixels (on). `fs_fxpaint` blends into one chain and cannot knock the layer chain out
+/// by the band coverage, so every configuration where the flag has an effect is refused and the CPU
+/// composites the layer, the route the Stroke Emboss guard takes, which is how the two agree here.
+/// What stays on the GPU paints exactly as before the flag was read: Overprint off with a Normal
+/// mode replaces the layer (`F_REPLACE`), an unmeasured configuration (a gradient paint, a Fill
+/// below 100 %) ignores the flag.
+#[test]
+fn inside_stroke_overprint_composites_on_the_cpu() {
+    use super::planner::F_REPLACE;
+    use photocraft_doc::{FxCommon, Gradient, StrokeFx, StrokePosition};
+    let blue = FxPaint::Color(Color::rgb(0.0, 0.0, 1.0));
+    let gradient = FxPaint::Gradient(Gradient { stops: vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], angle: 90.0, ..Default::default() });
+    let doc = |blend: BlendMode, overprint: bool, paint: &FxPaint| {
+        let mut d = Document::with_background("overprint", Size::new(64, 48), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        let mut l = Layer::raster("Shape", d.pixel_format());
+        l.surface_mut().unwrap().fill_rect(Rect::new(16, 12, 48, 36), &[1.0, 0.5, 0.0, 1.0]);
+        l.effects.items.push(Effect::Stroke(StrokeFx {
+            common: FxCommon::new(blend, 1.0),
+            size: 10.0,
+            position: StrokePosition::Inside,
+            paint: paint.clone(),
+            overprint,
+        }));
+        d.layers.push(l);
+        d
+    };
+    // The one interior paint pass of these documents is the stroke; `F_REPLACE` says replace.
+    let stroke_replaces = |d: &Document| {
+        let p = plan(d).unwrap();
+        let replace: Vec<bool> = p.passes.iter().filter(|pass| pass.kernel == Kernel::FxPaint).map(|pass| pass.flags & F_REPLACE != 0).collect();
+        assert_eq!(replace.len(), 1, "{:?}", p.passes.iter().map(|p| p.kernel).collect::<Vec<_>>());
+        replace[0]
+    };
+    // Pixels at full fill, a solid colour: the measured configuration, so the flag's rule goes to
+    // the CPU in every form the table measured.
+    for (blend, overprint) in [(BlendMode::Multiply, false), (BlendMode::Normal, true), (BlendMode::Multiply, true)] {
+        let err = plan(&doc(blend, overprint, &blue)).unwrap_err();
+        assert!(err.0.contains("Overprint"), "{blend:?}, overprint {overprint}: {err}");
+    }
+    // Overprint off with Normal is what the GPU already did right (#6735): it stays, replacing.
+    assert!(stroke_replaces(&doc(BlendMode::Normal, false, &blue)), "Normal without Overprint replaces the layer");
+    // Unmeasured configurations keep today's plan and today's flags, so the flag stays ignored.
+    assert!(stroke_replaces(&doc(BlendMode::Normal, true, &gradient)), "a gradient stroke ignores Overprint on");
+    assert!(!stroke_replaces(&doc(BlendMode::Multiply, false, &gradient)), "a gradient stroke in Multiply blends over the layer");
+    let mut d = doc(BlendMode::Multiply, false, &blue);
+    d.layers[1].fill_opacity = 0.5;
+    assert!(!stroke_replaces(&d), "a Fill below 100 % is unmeasured: the plan keeps today's blend");
+    // Not measured (#15249 review): a layer whose own blend mode is not Normal. The flag stays
+    // ignored there, so the plan keeps today's flags for every combination instead of refusing.
+    for overprint in [false, true] {
+        let mut d = doc(BlendMode::Normal, overprint, &blue);
+        d.layers[1].blend = BlendMode::Multiply;
+        assert!(stroke_replaces(&d), "a Multiply layer, Normal stroke, Overprint {overprint}: today's plan keeps the replace");
+        let mut d = doc(BlendMode::Multiply, overprint, &blue);
+        d.layers[1].blend = BlendMode::Multiply;
+        assert!(!stroke_replaces(&d), "a Multiply layer, Multiply stroke, Overprint {overprint}: today's plan blends over the layer");
+    }
+    // The exact configuration the review named: a Multiply layer with Blend Interior Effects as
+    // Group never reaches the stroke rule at all - the pre-existing Advanced Blending guard
+    // (`check_advanced`) sends the whole layer to the CPU, so the two compositors cannot split.
+    let mut d = doc(BlendMode::Normal, false, &blue);
+    d.layers[1].blend = BlendMode::Multiply;
+    d.layers[1].advanced.blend_interior = true;
+    let e = plan(&d).unwrap_err();
+    assert!(e.0.contains("Advanced Blending") && !e.0.contains("Overprint"), "Blend Interior as Group: {e}");
+    // Not measured: an RGB raster layer in a CMYK document. Whatever else the planner decides
+    // there, it must not refuse the layer because of the Overprint flag: the document is RGB-gated.
+    let mut cmyk = Document::with_background("cmyk overprint", Size::new(64, 48), ColorMode::Cmyk, SampleType::U8, Color::WHITE);
+    let mut l = Layer::raster("Shape", photocraft_color::PixelFormat::RGBA8);
+    l.surface_mut().unwrap().fill_rect(Rect::new(16, 12, 48, 36), &[1.0, 0.5, 0.0, 1.0]);
+    l.effects.items.push(Effect::Stroke(StrokeFx {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        size: 10.0,
+        position: StrokePosition::Inside,
+        paint: blue.clone(),
+        overprint: true,
+    }));
+    cmyk.layers.push(l);
+    if let Err(e) = plan(&cmyk) {
+        assert!(!e.0.contains("Overprint"), "an RGB layer in a CMYK document must not be refused by the Overprint rule: {e}");
+    }
+}
+
 #[test]
 fn planning_reads_cached_rows_instead_of_rebuilding_them() {
     use photocraft_compose::lut_rows;
