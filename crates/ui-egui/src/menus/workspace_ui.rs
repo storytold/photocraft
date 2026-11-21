@@ -139,7 +139,7 @@ fn migrate(app: &mut PhotocraftApp, prefs: &Preferences, set: &mut WorkspaceSet<
         let layout = std::mem::replace(&mut app.ui.docking, live);
         let has = |key: &str| entry.get(key).is_some();
         let keeps = WorkspaceKeeps::new(has("shortcuts"), has("menus"), has("toolbar"));
-        let Ok(id) = set.save(name, layout, WorkspaceChrome::default(), keeps) else { continue };
+        let Ok(id) = set.save(name, std::sync::Arc::unwrap_or_clone(layout), WorkspaceChrome::default(), keeps) else { continue };
         let captured: Map<String, Value> = EXTRAS.iter().filter_map(|key| entry.get(*key).map(|value| ((*key).to_owned(), value.clone()))).collect();
         if !captured.is_empty() {
             extras.insert(id, Value::Object(captured));
@@ -202,7 +202,7 @@ fn restore_extras(app: &mut PhotocraftApp, id: &str) {
 /// Makes workspace `id` current: its layout replaces the live one, its captured extras are restored, the dock's
 /// layout is remembered. The host's chrome flags (menu bar, rail) stay as the host has them.
 pub fn select(app: &mut PhotocraftApp, id: &str) -> Result<(), String> {
-    app.workspaces.set.select(id, &mut app.ui.docking).map_err(refused)?;
+    app.workspaces.set.select(id, std::sync::Arc::make_mut(&mut app.ui.docking)).map_err(refused)?;
     restore_extras(app, id);
     crate::dock::persist(app);
     store(app);
@@ -215,7 +215,7 @@ pub fn save(app: &mut PhotocraftApp, name: &str) -> Result<String, String> {
 }
 
 fn save_keeping(app: &mut PhotocraftApp, name: &str, keeps: WorkspaceKeeps) -> Result<String, String> {
-    let live = app.ui.docking.clone();
+    let live = craft::behavior::dock::Workspace::clone(&app.ui.docking);
     let id = app.workspaces.set.save(name, live, WorkspaceChrome::default(), keeps).map_err(refused)?;
     let extras = captured(app.session.prefs(), keeps);
     app.session.prefs.edit(|p| {
@@ -254,7 +254,7 @@ fn delete_id(app: &mut PhotocraftApp, id: &str) -> Result<(), String> {
 
 /// Runs a workspace command. New and Delete without a name open their hosted dialog and return its id.
 pub fn run(app: &mut PhotocraftApp, _ctx: &egui::Context, command: WorkspaceCommands) -> Result<Value, String> {
-    let ask = run_workspace(&mut app.workspaces.set, &mut app.ui.docking, command);
+    let ask = run_workspace(&mut app.workspaces.set, std::sync::Arc::make_mut(&mut app.ui.docking), command);
     match ask {
         Some(WorkspaceAsk::Name) => {
             let dialog = HostedNewWorkspace::new(&app.workspaces.set).offered(WorkspaceKeeps::new(true, true, true));
