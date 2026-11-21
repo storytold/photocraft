@@ -15,6 +15,10 @@ use crate::state::{Tool, ToolOptions};
 fn bar(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
+    hosted_bar(app, tool)
+}
+
+fn hosted_bar(mut app: Box<PhotocraftApp>, tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     app.ui.tool = tool;
     crate::theme::install_fonts(app.ctx());
     crate::theme::apply(app.ctx(), &crate::theme::AppTheme::pro());
@@ -85,6 +89,59 @@ fn options_bar_fields_that_alert_past_their_range() {
             assert!(shown.is_empty(), "{what}: no alert, got {shown:?}");
         }
     }
+}
+
+#[test]
+fn sponge_flow_clamped_in_the_bar_reaches_the_painted_pixel() {
+    let seeded = || {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 80, "height": 80, "depth": 32, "background": "#c82828"})).unwrap();
+        app.ui.tool = Tool::Sponge;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        app.run("tools.setBrush", json!({"brush": {"size": 40, "hardness": 1.0, "spacing": 0.1}})).unwrap();
+        app.ui.tool_options.sponge_mode = "desaturate".into();
+        app.ui.tool_options.vibrance = false;
+        app
+    };
+    let pixel = |app: &PhotocraftApp| {
+        let state = app.session.active().unwrap();
+        let layer = state.doc.layer(state.active_layer.unwrap()).unwrap();
+        let surface = layer.surface().unwrap();
+        assert_eq!(surface.format().sample, photocraft_doc::SampleType::F32);
+        surface.rgba(40, 40)
+    };
+    let mut h = hosted_bar(seeded(), Tool::Sponge);
+    let untouched = pixel(h.state());
+    let history = h.state().session.active().unwrap().history.past_len();
+    type_into(&mut h, "Flow", "0");
+    let messages = alerts(&h);
+    assert_eq!(messages.len(), 1);
+    assert!(messages[0].contains("Closest value inserted"));
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    assert!(alerts(&h).is_empty());
+    assert_eq!(h.state().ui.tool_options.sponge_flow, 1.0);
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+
+    crate::canvas::testing::click(h.state_mut(), [40.0, 40.0], egui::Modifiers::NONE);
+    assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
+    let (command, params) = h.state().session.journal.last().unwrap();
+    assert_eq!(command, "paint.sponge");
+    assert_eq!(params["flow"].as_f64(), Some(1.0));
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
+
+    let mut reference = seeded();
+    assert_eq!(pixel(&reference), untouched);
+    reference
+        .run(
+            "paint.sponge",
+            json!({"points": [[40.0, 40.0, 1.0]], "size": 40, "hardness": 100, "spacing": 10, "mode": "desaturate", "vibrance": false, "flow": 1}),
+        )
+        .unwrap();
+    let expected = pixel(&reference);
+    assert!(expected[0] < untouched[0] - 1e-6, "the 1% reference dab lowers the red channel: {expected:?} from {untouched:?}");
+    let painted = pixel(h.state());
+    assert!(painted.iter().zip(expected).all(|(actual, expected)| (actual - expected).abs() < 1e-6), "{painted:?} vs {expected:?}");
 }
 
 #[test]
