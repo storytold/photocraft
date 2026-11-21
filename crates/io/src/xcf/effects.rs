@@ -21,6 +21,7 @@ mod graph_resources;
 mod graph_schema;
 mod graph_stock;
 mod graph_tone;
+mod mapping_support;
 mod residual_coverage;
 mod residual_geometry;
 mod residual_render;
@@ -33,6 +34,7 @@ mod spatial;
 mod tone;
 
 pub(super) use config::parse_config;
+pub(super) use mapping_support::MappingFailure;
 
 #[cfg(test)]
 pub(super) use envelope::POINTER_READS;
@@ -193,42 +195,6 @@ impl<'a> Config<'a> {
 }
 
 impl<'a> StoredEffect<'a> {
-    /// Resolve only the frozen compatibility aliases for one-time native mapping.
-    /// Keep `operation` itself unchanged for source identity and historical reporting.
-    pub fn canonical_operation(&self) -> &str {
-        match self.operation {
-            "gegl:abs" => "gegl:absolute",
-            "gegl:color-reduction" => "gegl:dither",
-            "gegl:invert" => "gegl:invert-linear",
-            "gegl:motion-blur" => "gegl:motion-blur-linear",
-            "gegl:little-planet" => "gegl:stereographic-projection",
-            operation => operation,
-        }
-    }
-    /// Construct a visible, full-strength synthetic stored effect with neutral envelope fields for independent mapping tests.
-    #[cfg(test)]
-    pub fn test(operation: &'a str, arguments: Vec<Argument<'a>>) -> Self {
-        Self {
-            name: "",
-            icon: "",
-            operation,
-            version: None,
-            arguments,
-            visible: true,
-            opacity: 1.0,
-            mode: 0,
-            blend_space: 0,
-            composite_space: 0,
-            composite_mode: 0,
-            clip: false,
-            region: 0,
-            mask_offset: 0,
-            record_offset: 0,
-            raw: &[],
-            unknown_properties: Vec::new(),
-            errors: Vec::new(),
-        }
-    }
     /// Resolve a unique named stored argument; duplicate source fields are invalid instead of silently overwritten.
     pub fn argument(&self, name: &str) -> std::result::Result<Option<&ArgumentValue<'a>>, String> {
         let mut matches = self.arguments.iter().filter(|arg| arg.name == name);
@@ -498,33 +464,6 @@ impl Default for NativeBranch {
 /// None: identity belongs to another helper. Err: known identity cannot be safely
 /// mapped for these arguments; preserve/report it without changing siblings.
 pub(super) type MappingResult = Option<std::result::Result<NativeMapping, MappingFailure>>;
-
-#[derive(Debug)]
-pub(super) struct MappingFailure {
-    pub reason: photocraft_doc::import_conversion::ConversionReason,
-    pub message: String,
-}
-
-impl MappingFailure {
-    /// Classify an unavailable resource separately from an unfinished native mapping.
-    pub fn resource(message: impl Into<String>) -> Self {
-        Self { reason: photocraft_doc::import_conversion::ConversionReason::ResourceUnavailable, message: message.into() }
-    }
-}
-
-impl From<String> for MappingFailure {
-    /// Turn an owned adapter diagnostic into an explicit missing-mapping disposition for retained source data.
-    fn from(message: String) -> Self {
-        Self { reason: photocraft_doc::import_conversion::ConversionReason::MissingMapping, message }
-    }
-}
-
-impl From<&str> for MappingFailure {
-    /// Preserve a borrowed adapter diagnostic through the same owned missing-mapping conversion.
-    fn from(message: &str) -> Self {
-        message.to_owned().into()
-    }
-}
 
 /// Create a visible full-strength native Smart Filter whose supplied command and parameters remain ordinary native data.
 pub(super) fn native_filter(command: &str, params: serde_json::Value) -> SmartFilter {
