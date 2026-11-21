@@ -1,5 +1,6 @@
 use craft::ui::canvas::ShieldColor;
 use craft::ui::patterns::form_dialogs::HostedParamDialog;
+use craft::ui::runtime::commands::{self, EditCommands, FireSource};
 use craft::ui::runtime::requests::ColorRequest;
 use serde_json::{Value, json};
 
@@ -185,8 +186,30 @@ fn fill_undo_ignores_cancelled_previews_and_reverts_one_accepted_colour() {
     h.run_steps(4);
     assert_eq!(held_color(h.state(), fill, &key).as_deref(), Some("#336699"), "the picker has answered the Fill row");
     let accepted = values(h.state(), fill);
+    let undo_before = commands::resolve(h.state().ctx(), EditCommands::Undo);
+    let redo_before = commands::resolve(h.state().ctx(), EditCommands::Redo);
     undo(&mut h);
-    assert_eq!(values(h.state(), fill), before, "one Undo takes the row straight back to the opening colour");
+    let after_key = values(h.state(), fill);
+    if after_key != before {
+        let undo_after = commands::resolve(h.state().ctx(), EditCommands::Undo);
+        let redo_after = commands::resolve(h.state().ctx(), EditCommands::Redo);
+        let document_unchanged = h.state().session.active().unwrap().doc == original && past(h.state()) == steps;
+        let try_direct = undo_after.enabled && undo_after.instance.is_some() && redo_before.enabled == redo_after.enabled;
+        let direct_queued = try_direct && commands::fire(h.state().ctx(), EditCommands::Undo, FireSource::Menu);
+        if direct_queued {
+            h.run_steps(4);
+        }
+        let direct_restored = values(h.state(), fill) == before;
+        panic!(
+            "Undo must restore the opening colour: {before:?} vs {after_key:?}
+             Undo before key: {undo_before:?}
+Undo after key: {undo_after:?}
+             Redo before key: {redo_before:?}
+Redo after key: {redo_after:?}
+             Document unchanged after key: {document_unchanged}
+             Direct command attempted: {try_direct}, queued: {direct_queued}, restored Fill: {direct_restored}"
+        );
+    }
     assert_eq!(past(h.state()), steps, "dialog Undo never steps document history");
     assert_eq!(h.state().session.active().unwrap().doc, original, "the document is unchanged");
 
