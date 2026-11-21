@@ -5,13 +5,13 @@
 
 use craft::draw::ui::VectorMode;
 use craft::keymap::Mods;
-use egui::Modifiers;
+use egui::{Event, Modifiers, PointerButton};
 use photocraft_doc::{LayerContent, vector::PathOp};
 use serde_json::json;
 
 use super::shape_alt_samples;
 use crate::PhotocraftApp;
-use crate::canvas::testing::click;
+use crate::canvas::testing::{click, frame_with_events, to_screen};
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
@@ -85,13 +85,19 @@ fn alt_drag_ending_on_white_picks_white() {
 #[test]
 fn the_release_point_colour_is_the_one_kept() {
     let mut app = app();
-    // The last move is on the red layer, the release on the white Background.
+    let history = steps(&app);
+    let document = app.session.active().unwrap().doc.clone();
     tool_event(&mut app, ToolEvent::Down { x: 200.0, y: 175.0, pressure: 1.0 }, Modifiers::ALT);
     tool_event(&mut app, ToolEvent::Move { x: 250.0, y: 200.0, pressure: 1.0 }, Modifiers::ALT);
     assert_eq!(foreground(&app), [220, 30, 30], "red while over the layer");
-    tool_event(&mut app, ToolEvent::Up { x: 500.0, y: 350.0 }, Modifiers::ALT);
+
+    // The button event is the first input over white.
+    let pos = to_screen(&app, [500.0, 350.0]);
+    frame_with_events(&mut app, vec![Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::ALT }]);
     assert_eq!(foreground(&app), [255, 255, 255], "white where released");
     assert_eq!(tool_fill(&app), [255, 255, 255], "Fill white");
+    assert!(std::sync::Arc::ptr_eq(&document, &app.session.active().unwrap().doc));
+    assert_eq!(steps(&app), history);
 }
 
 #[test]
