@@ -4,6 +4,8 @@
 //!
 //! The command reads the composite reduced to at most [`SAMPLE_SIDE`] pixels across (area
 //! averaged, so the sun's energy is kept), and changes nothing, so it records no history step.
+//! The document keeps that reduced composite until its next revision, so the dialog's drag on the
+//! image only measures again.
 //! With `at` it measures the sun at that document point instead of finding it, for when the
 //! brightest area is not the sun.
 
@@ -64,10 +66,18 @@ fn find_sun(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     };
-    let doc = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
+    let st = s.active_mut().ok_or(EngineError::NoDocument)?;
+    let doc = st.doc.clone();
     let size = doc.bounds();
     let (doc_w, doc_h) = (f64::from(size.width().max(1)), f64::from(size.height().max(1)));
-    let reduced = photocraft_compose::thumbnail_buffer(&doc, SAMPLE_SIDE);
+    let reduced = match &st.sun_sample {
+        Some((revision, buffer)) if *revision == st.revision => buffer.clone(),
+        _ => {
+            let buffer = std::sync::Arc::new(photocraft_compose::thumbnail_buffer(&doc, SAMPLE_SIDE));
+            st.sun_sample = Some((st.revision, buffer.clone()));
+            buffer
+        }
+    };
     let (w, h) = (reduced.rect.width() as usize, reduced.rect.height() as usize);
     let sky = Sky { px: &reduced.px, width: w, height: h, linear: doc.depth == SampleType::F32 };
 

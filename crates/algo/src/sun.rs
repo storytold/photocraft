@@ -167,13 +167,80 @@ pub fn linear_to_srgb(c: f64) -> f64 {
     if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
 }
 
-/// Linear RGB of pixel `p` (black when mostly transparent).
-fn rgb(sky: &Sky<'_>, p: [f32; 4]) -> Option<[f64; 3]> {
-    if p[3] < 0.5 {
-        return None;
+/// sRGB decoding sampled at 4096 steps, read with linear interpolation: [`measure`] decodes every
+/// pixel of an 8/16-bit sky, and a power per channel made dragging the sun in the dialog slow.
+struct Decode(Vec<f64>);
+
+impl Decode {
+    const STEPS: usize = 4096;
+
+    fn new(linear: bool) -> Self {
+        Decode(if linear { Vec::new() } else { (0..=Self::STEPS).map(|i| srgb_to_linear(i as f64 / Self::STEPS as f64)).collect() })
     }
-    let c = [f64::from(p[0]), f64::from(p[1]), f64::from(p[2])].map(|c| if c.is_finite() { c } else { 0.0 });
-    Some(if sky.linear { c } else { c.map(srgb_to_linear) })
+
+    fn channel(&self, c: f64) -> f64 {
+        if self.0.is_empty() {
+            return c;
+        }
+        let t = c.clamp(0.0, 1.0) * Self::STEPS as f64;
+        let i = (t as usize).min(Self::STEPS - 1);
+        let f = t - i as f64;
+        self.0[i] + (self.0[i + 1] - self.0[i]) * f
+    }
+
+    /// Linear RGB of pixel `p` (`None` when mostly transparent).
+    fn rgb(&self, p: [f32; 4]) -> Option<[f64; 3]> {
+        if p[3] < 0.5 {
+            return None;
+        }
+        Some([p[0], p[1], p[2]].map(|c| self.channel(if c.is_finite() { f64::from(c) } else { 0.0 })))
+    }
+}
+
+/// Pixel-centre directions of a `w × h` sky as sines and cosines per column and row, so a pass over
+/// every pixel does no trigonometry.
+struct Grid {
+    lon: Vec<(f64, f64)>,
+    lat: Vec<(f64, f64)>,
+}
+
+impl Grid {
+    fn new(w: usize, h: usize) -> Self {
+        Grid {
+            lon: (0..w).map(|x| (((x as f64 + 0.5) / w as f64 - 0.5) * TAU).sin_cos()).collect(),
+            lat: (0..h).map(|y| (FRAC_PI_2 - (y as f64 + 0.5) / h as f64 * PI).sin_cos()).collect(),
+        }
+    }
+
+    fn direction(&self, x: usize, y: usize) -> [f64; 3] {
+        let ((sin_lon, cos_lon), (sin_lat, cos_lat)) = (self.lon[x], self.lat[y]);
+        [cos_lat * sin_lon, sin_lat, cos_lat * cos_lon]
+    }
+
+    /// Rows that can hold a direction within `degrees` of `d`: those whose latitude is that close.
+    fn rows_near(&self, d: [f64; 3], degrees: f64) -> std::ops::Range<usize> {
+        let h = self.lat.len();
+        let lat = d[1].clamp(-1.0, 1.0).asin();
+        let reach = degrees.to_radians();
+        let row = |lat: f64| ((FRAC_PI_2 - lat) / PI * h as f64).clamp(0.0, h as f64);
+        (row(lat + reach).floor() as usize)..(row(lat - reach).ceil() as usize).min(h)
+    }
+
+    /// Columns that can hold a direction within `degrees` of `d`, wrapping across the left/right
+    /// seam: every column when that cap reaches a pole.
+    fn columns_near(&self, d: [f64; 3], degrees: f64) -> Vec<usize> {
+        let w = self.lon.len();
+        let (lat, reach) = (d[1].clamp(-1.0, 1.0).asin(), degrees.to_radians());
+        if lat.abs() + reach >= FRAC_PI_2 {
+            return (0..w).collect();
+        }
+        // Half the cap's width in longitude, and a column's width of margin each side.
+        let half = (reach.sin() / lat.cos()).clamp(-1.0, 1.0).asin();
+        let span = ((half / TAU * w as f64).ceil() as usize + 1).min(w / 2);
+        let centre = ((d[0].atan2(d[2]) / TAU + 0.5) * w as f64).floor() as isize;
+        let w = w as isize;
+        (-(span as isize)..=span as isize).map(|i| (centre + i).rem_euclid(w) as usize).collect()
+    }
 }
 
 /// The sun in `sky`, or `None` when there is no light at all (or the image is unusable).
@@ -249,16 +316,17 @@ pub fn measure(sky: &Sky<'_>, sun: [f64; 3]) -> Option<Light> {
     let sun = normalize(sun);
     let (w, h) = (sky.width, sky.height);
     let (d_lon, d_lat) = (TAU / w as f64, PI / h as f64);
+    let (grid, decode) = (Grid::new(w, h), Decode::new(sky.linear));
     // The sun is looked for within 10° of `sun`; the sky in the ring from 10° to 16° is its
     // background.
     let (cos_sun, cos_ring) = (10f64.to_radians().cos(), 16f64.to_radians().cos());
     let mut ring: [Vec<f64>; 3] = Default::default();
     let mut peak = 0.0f64;
-    for y in 0..h {
-        let v = (y as f64 + 0.5) / h as f64;
-        for x in 0..w {
-            let Some(c) = rgb(sky, sky.px[y * w + x]) else { continue };
-            let k = dot(direction((x as f64 + 0.5) / w as f64, v), sun);
+    let columns_ring = grid.columns_near(sun, 16.0);
+    for y in grid.rows_near(sun, 16.0) {
+        for &x in &columns_ring {
+            let Some(c) = decode.rgb(sky.px[y * w + x]) else { continue };
+            let k = dot(grid.direction(x, y), sun);
             if k < cos_ring {
                 continue;
             }
@@ -277,18 +345,36 @@ pub fn measure(sky: &Sky<'_>, sun: [f64; 3]) -> Option<Light> {
     });
     let background_luma = luma(background);
     // The sun's energy above the background (E), and the sky's light on flat ground (D).
-    let (mut e, mut ground) = ([0.0f64; 3], [0.0f64; 3]);
-    for y in 0..h {
-        let v = (y as f64 + 0.5) / h as f64;
-        let solid_angle = (FRAC_PI_2 - v * PI).cos() * d_lon * d_lat;
-        for x in 0..w {
-            let Some(c) = rgb(sky, sky.px[y * w + x]) else { continue };
-            let d = direction((x as f64 + 0.5) / w as f64, v);
-            if dot(d, sun) >= cos_sun && luma(c) > 2.0 * background_luma + 1e-4 {
+    // The sun's energy above the background (E): every pixel near it.
+    let in_sun = |d: [f64; 3], c: [f64; 3]| dot(d, sun) >= cos_sun && luma(c) > 2.0 * background_luma + 1e-4;
+    let mut e = [0.0f64; 3];
+    let near_sun = grid.rows_near(sun, 10.0);
+    let columns_sun = grid.columns_near(sun, 10.0);
+    for y in near_sun.clone() {
+        let solid_angle = grid.lat[y].1 * d_lon * d_lat;
+        for &x in &columns_sun {
+            let Some(c) = decode.rgb(sky.px[y * w + x]) else { continue };
+            if in_sun(grid.direction(x, y), c) {
                 for i in 0..3 {
                     e[i] += (c[i] - background[i]).max(0.0) * solid_angle;
                 }
-            } else if d[1] > 0.0 {
+            }
+        }
+    }
+    let measured = sky.linear && peak >= 1.5 && luma(e) > 0.0;
+    // The sky's light on flat ground (D), which only an estimate needs. The sky's light changes
+    // slowly across the sky, so every `step`-th pixel each way stands for its `step × step` block.
+    let mut ground = [0.0f64; 3];
+    if !measured {
+        let step = if w >= 512 { 4 } else { 1 };
+        for y in (0..h).step_by(step).filter(|&y| grid.lat[y].0 > 0.0) {
+            let solid_angle = grid.lat[y].1 * d_lon * d_lat * (step * step) as f64;
+            for x in (0..w).step_by(step) {
+                let Some(c) = decode.rgb(sky.px[y * w + x]) else { continue };
+                let d = grid.direction(x, y);
+                if near_sun.contains(&y) && in_sun(d, c) {
+                    continue;
+                }
                 for i in 0..3 {
                     ground[i] += c[i] * d[1] * solid_angle;
                 }
@@ -296,7 +382,6 @@ pub fn measure(sky: &Sky<'_>, sun: [f64; 3]) -> Option<Light> {
         }
     }
     let elevation = sun[1].clamp(-1.0, 1.0).asin().to_degrees();
-    let measured = sky.linear && peak >= 1.5 && luma(e) > 0.0;
     let (colour, intensity) = if measured {
         let m = e[0].max(e[1]).max(e[2]);
         (e.map(|c| c / m), m / PI)

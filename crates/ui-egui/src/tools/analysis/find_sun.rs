@@ -140,7 +140,7 @@ fn body(ui: &mut egui::Ui, options: &mut SunOptions, result: &Result<Value, Stri
         NumberField::new(label(tl!("Sky rotation")), Bind::bound(&mut options.heading))
             .range(-360.0..=360.0)
             .unit("°")
-            .tooltip(label(tl!("Turn this many degrees to the right if your sky is shown turned, so the image centre faces somewhere else.")))
+            .tooltip(label(tl!("Turn this many degrees to the right if your sky is shown turned, so the image centre faces somewhere else. In Unity: 0 for a cubemap imported from this image, 90 for the Panoramic skybox, plus the skybox material's Rotation.")))
             .show(ui);
     });
     readout(ui, format!("{}: {}", tl!("Direction to the sun"), triple(&r["direction"], 4)), tl!("Copy direction"), None, triple(&r["direction"], 7), copied);

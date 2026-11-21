@@ -73,6 +73,9 @@ pub struct DocState {
     /// rows) change only when it moves, so a selection-only or view-only step keeps them. Written only by
     /// `Session::dispatch` and the job apply path.
     pub pixel_revision: u64,
+    /// Find Sun's reduced composite and the `revision` it is of, so dragging the sun in its dialog
+    /// measures again without compositing again (`sun_cmds`).
+    pub(crate) sun_sample: Option<(u64, Arc<photocraft_compose::Buffer>)>,
 }
 
 /// Read-only document and layer selection inputs. Mutations go through `DocState` methods.
@@ -152,6 +155,7 @@ impl DocState {
             source_snapshot: None,
             typed_names: Default::default(),
             pixel_revision: 0,
+            sun_sample: None,
         }
     }
     /// The History panel snapshots, oldest first.
