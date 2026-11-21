@@ -337,12 +337,6 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
             if document_derived(command, &p.key) {
                 p = p.not_remembered();
             }
-            // #14465: the row opens from Preferences › General › Image Interpolation on every
-            // opening, so a pick there applies to that opening only; the row stays out of the
-            // remembered values, as the rows above do.
-            if command == "image.rotation.arbitrary" && p.key == "interpolation" {
-                p = p.not_remembered();
-            }
             // Global Light's Altitude takes whole degrees, as its Angle does (#14980).
             if command == "layer.layerStyle.globalLight" && p.key == "altitude" {
                 p = p.decimals(0);
@@ -437,17 +431,9 @@ fn command_defaults(app: &PhotocraftApp, command: &str, params: &[Param]) -> Map
     let mut map = Map::new();
     if command == "image.rotation.arbitrary" {
         straighten_defaults(app, &mut map);
-        // #14465: the reference dialog offers no interpolation choice; its resampling
-        // follows Preferences › General › Image Interpolation (the dropdown itself goes
-        // away with #14462). The *not measured* variants show and act as Bicubic, as the
-        // Free Transform options bar renders them.
-        use photocraft_engine::prefs::Interpolation;
-        let interp = match app.session.prefs().general.image_interpolation {
-            Interpolation::Nearest => "nearest",
-            Interpolation::Bilinear => "bilinear",
-            _ => "bicubic",
-        };
-        map.insert("interpolation".into(), json!(interp));
+        // #14465: the reference dialog offers no interpolation choice, and the dialog has no row
+        // for it (#14462): it sends none, so the command resamples as Preferences › General ›
+        // Image Interpolation says on every run.
     }
     if command == "type.warpText" {
         warp_defaults(app, &mut map);
