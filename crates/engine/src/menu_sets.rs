@@ -447,7 +447,8 @@ pub fn to_mnu(name: &str, set: &MenuSet, kept: &[String]) -> String {
     // kept entries, with its colour unchanged and `hidden` as the set has it, in place of a row of
     // ours, so the item has one row. A colour the set gives the item that we can name replaces it.
     // Until #14336 names 8 to 11, the set cannot say "no colour" over such a row: clearing the item's
-    // colour leaves the row's own colour, as for any other kept entry.
+    // colour leaves the row's own colour, as for any other kept entry. Like every kept entry, the row
+    // lives in its file only, so a set written to a new file (Save As) goes without it.
     let mut standing: Vec<(usize, craft_xml::El, &str)> = Vec::new();
     for (at, entry) in kept.iter().enumerate() {
         if let Some((element, command)) = kept_unnamed_color_row(entry)
