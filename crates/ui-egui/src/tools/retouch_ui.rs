@@ -46,6 +46,12 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     Some(p)
 }
 
+/// The Spot Healing Brush in an Indexed Color document, which it refuses; its options bar then offers only Create
+/// Texture and greys Sample All Layers, as the reference's does (#12582).
+pub(crate) fn spot_healing_indexed(app: &PhotocraftApp) -> bool {
+    app.ui.tool == Tool::SpotHealing && app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Indexed)
+}
+
 /// The Clone Stamp in an Indexed Color document, where the reference greys Sample at Current Layer
 /// and names the Normal Mode "Threshold" (#12613).
 pub(crate) fn clone_stamp_indexed(app: &PhotocraftApp) -> bool {
@@ -205,7 +211,20 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
     let o = app.ui.tool_options.clone();
     let pts = json!(points);
     let (cmd, mut p): (&str, Value) = match tool {
-        Tool::SpotHealing => ("paint.spotHealing", json!({"type": o.spot_type, "sampleAllLayers": o.sample_all.spot_healing})),
+        Tool::SpotHealing => {
+            // Indexed Color: the reference's alert with OK, and nothing heals (#12582); the engine refuses with the same
+            // words.
+            // The stroke's own tool decides, not the tool chosen now: it may have changed before the release
+            // (CodeRabbit on #16105).
+            if app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Indexed) {
+                let _ = crate::dialogs::alerts::alert(
+                    app,
+                    tl!("Could not use the spot healing brush because it does not work with Indexed Color images (convert image to RGB Color mode to edit)."),
+                );
+                return true;
+            }
+            ("paint.spotHealing", json!({"type": o.spot_type, "sampleAllLayers": o.sample_all.spot_healing}))
+        }
         Tool::Remove => {
             if !o.remove_after_each_stroke {
                 remove_pending_add(app, points);
@@ -717,6 +736,10 @@ mod tests;
 #[cfg(test)]
 #[path = "../healing_indexed_alert_tests.rs"]
 mod healing_indexed_alert_tests;
+
+#[cfg(test)]
+#[path = "../spot_healing_indexed_alert_tests.rs"]
+mod spot_healing_indexed_alert_tests;
 
 #[cfg(test)]
 #[path = "../clone_stamp_no_source_alert_tests.rs"]
