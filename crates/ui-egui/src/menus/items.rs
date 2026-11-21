@@ -6,6 +6,7 @@ use craft::menu::{
     Alternate, Customization, ItemKind, ItemRole, LanguageChoice, LanguageLabels, LanguageMenu, LayoutOptions, MenuBar, MenuRole, Node, Platforms, Row, Target,
     ThemeLabels, from_items, layout,
 };
+use craft::ui::contract::Tracked;
 use serde_json::json;
 
 use super::invoke::{panel_alias, proof_preset, workspace_id};
@@ -57,11 +58,22 @@ pub struct MenuModel {
     english_titles: HashMap<String, String>,
     /// The rows with labels as shown, after the user's Edit › Menus customization.
     pub rows: Vec<Row>,
-    /// The menus laid out for this platform, titles as shown.
-    pub bar: MenuBar,
+    /// The menus laid out for this platform, titles as shown, each translated title and label with its English name.
+    /// A rebuild that lays out the same menus keeps the held value, so the bar's key stays.
+    pub bar: Tracked<MenuBar>,
 }
 
 impl MenuModel {
+    /// [`crate::native_menu::state_hash`] of the state this model was built from.
+    pub(super) fn state(&self) -> u64 {
+        self.state
+    }
+
+    /// Copies of the English labels and titles, for a lookup that cannot borrow the model.
+    pub(super) fn english_names(&self) -> (HashMap<(String, String), String>, HashMap<String, String>) {
+        (self.english.clone(), self.english_titles.clone())
+    }
+
     /// The English label of the row that runs `command`.
     pub(super) fn english_label(&self, command: &CommandRef) -> Option<String> {
         self.english.get(&command_key(command)).cloned()
@@ -74,7 +86,7 @@ impl MenuModel {
 }
 
 /// The key of a command in the English-name map: its id and its parameters, since one id (`app.theme`) runs many rows.
-fn command_key(command: &CommandRef) -> (String, String) {
+pub(super) fn command_key(command: &CommandRef) -> (String, String) {
     (command.id.clone(), command.params.to_string())
 }
 
@@ -94,14 +106,23 @@ fn collect_english(node: &Node, english: &mut HashMap<(String, String), String>)
 /// list. A second pass of that frame sees no input, so it hashes differently and rebuilds once,
 /// after the first pass's commands ran.
 pub fn model<'a>(app: &'a mut PhotocraftApp, ctx: &egui::Context) -> &'a MenuModel {
-    let state = crate::native_menu::state_hash(app, craft::menu::had_input(ctx).then_some(app.frame));
+    let state = crate::native_menu::state_hash(app, had_input(ctx).then_some(app.frame));
     match app.menu_model.take() {
         Some(held) if held.state == state => app.menu_model.insert(held),
-        _ => {
-            let built = build(app, state);
+        held => {
+            let mut built = build(app, state);
+            if let Some(held) = held.filter(|held| held.bar == built.bar) {
+                built.bar = held.bar;
+            }
             app.menu_model.insert(built)
         }
     }
+}
+
+/// Whether this frame had a key press or a button release, which may change state [`crate::native_menu::state_hash`]
+/// does not list.
+pub(crate) fn had_input(ctx: &egui::Context) -> bool {
+    craft::ui::runtime::keys::keyed(ctx) || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::PointerButton { pressed: false, .. })))
 }
 
 /// The row that runs `id`.
@@ -414,5 +435,5 @@ fn build(app: &PhotocraftApp, state: u64) -> MenuModel {
     let mut bar = layout(&bar, Target::current(), &options).bar;
     let mut english_titles = HashMap::new();
     translate_titles(&mut bar, lang, &mut english_titles);
-    MenuModel { state, english, english_titles, rows, bar }
+    MenuModel { state, english, english_titles, rows, bar: Tracked::new(bar) }
 }

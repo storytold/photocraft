@@ -26,6 +26,7 @@ mod panel;
 mod pointer;
 pub mod task_bar;
 mod values;
+mod vertical_cursor;
 
 pub(crate) use controls::canvas_controls;
 #[cfg(test)]
@@ -104,6 +105,9 @@ fn byte_range(text: &str, a: usize, b: usize) -> (usize, usize) {
 
 #[cfg(test)]
 mod vertical_align_buttons_tests;
+
+#[cfg(test)]
+mod vertical_cursor_tests;
 
 #[cfg(test)]
 mod canvas_tests;
