@@ -667,8 +667,10 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
     if matches!(command, "file.export.layersToFiles" | "file.export.layerCompsToFiles") && map.get("format").and_then(Value::as_str) != Some("jpg") {
         map.remove("quality");
     }
-    // Artboards to Files sends the chosen file type's Export Options, and only while the box is ticked (#13636).
+    // Artboards to Files sends its Name Options only while Include Artboard Name is ticked (#13637), and the chosen
+    // file type's Export Options only while that box is ticked (#13636).
     if command == "file.export.artboardsToFiles" {
+        crate::menus::view_cmds::strip_artboard_name_options(&mut map);
         crate::menus::view_cmds::nest_artboard_export_options(&mut map);
     }
     // An emptied embedded LUT is no data: a stored empty `data` would be read over the chosen `lut`.
