@@ -24,10 +24,19 @@ macro_rules! tl {
         $crate::i18n::t($s)
     };
 }
+/// A temporary `DIAG` line on stderr, only when `PHOTOCRAFT_DIAG` is set (`diag.rs`).
+macro_rules! diag {
+    ($($arg:tt)*) => {
+        if $crate::diag::on() {
+            eprintln!("DIAG {}", format_args!($($arg)*));
+        }
+    };
+}
 mod brush_mode_menu;
 pub mod canvas;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod control;
+pub(crate) mod diag;
 pub mod dialogs;
 pub mod dock;
 pub(crate) mod edit_session;
