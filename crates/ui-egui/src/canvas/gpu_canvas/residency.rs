@@ -21,6 +21,9 @@ use super::texels::texel_bytes;
 const TAG_BITS: u64 = !((1u64 << 58) - 1);
 /// The tag of a document's viewport pages (`viewport_pages::stream_key`).
 const PAGES_BIT: u64 = 1u64 << 57;
+/// A background texture set more than this many times the bytes asked for is kept while the
+/// total stays within the allowance over the budget ([`Residency::victims`]).
+const LARGE_FACTOR: u64 = 4;
 
 impl DocTextures {
     /// GPU bytes of every texture (all mip levels) in this set or page set.
@@ -36,8 +39,13 @@ impl Resources {
     /// can hold `bytes` within the canvas budget.
     pub(super) fn make_room(&mut self, key: u64, bytes: u64) {
         let budget = self.canvas_budget.load(Ordering::Relaxed);
+        // A quarter over the budget only on a card whose own memory is known: the budget is 3/8
+        // of it (`vram_share`), so that stays under half. Otherwise (integrated or software
+        // adapters, or a card that can't be read) the budget comes from system memory, which
+        // the textures share, and it is kept to.
+        let allowance = if self.card_memory_known { budget / 4 } else { 0 };
         let held: Vec<(u64, u64)> = self.docs.iter().map(|(k, d)| (*k, d.bytes())).collect();
-        for k in self.residency.victims(&held, key, bytes, budget) {
+        for k in self.residency.victims(&held, key, bytes, budget, allowance) {
             log::debug!("freeing the display textures of background key {k:#x} for {key:#x}");
             self.docs.remove(&k);
         }
@@ -98,8 +106,10 @@ impl Residency {
     /// `bytes` within `budget`: the texture sets and pages of documents no window shows, least
     /// recently shown first. Never a shown document's, nor `key`'s own document's, nor a preview
     /// or a key of a document never shown (an adjustment proxy). It may not free enough: what
-    /// a shown document takes is bounded by its share instead.
-    pub(super) fn victims(&self, held: &[(u64, u64)], key: u64, bytes: u64, budget: u64) -> Vec<u64> {
+    /// a shown document takes is bounded by its share instead. Sets many times `bytes`
+    /// ([`LARGE_FACTOR`]) go last, and not at all while the total is within `allowance` over
+    /// the budget.
+    pub(super) fn victims(&self, held: &[(u64, u64)], key: u64, bytes: u64, budget: u64, allowance: u64) -> Vec<u64> {
         let owner = |k: u64| (k & TAG_BITS == 0).then_some(k & !PAGES_BIT);
         let mut total = held.iter().filter(|(k, _)| *k != key).map(|(_, b)| *b).fold(bytes, u64::saturating_add);
         if total <= budget {
@@ -115,8 +125,23 @@ impl Residency {
             })
             .collect();
         cold.sort_unstable();
+        // A background texture set many times the size of what is asked for is the expensive
+        // one to lose: a gigapixel storyboard filled the budget alone, so showing any other tab
+        // freed it and switching back redrew it from scratch (about 6 s). Smaller ones go first;
+        // the large ones stay while the total is within `allowance` over the budget.
+        let large = |b: u64| b > bytes.saturating_mul(LARGE_FACTOR);
         let mut out = Vec::new();
-        for (_, k, b) in cold {
+        for &(_, k, b) in cold.iter().filter(|(_, _, b)| !large(*b)) {
+            if total <= budget {
+                return out;
+            }
+            total -= b;
+            out.push(k);
+        }
+        if total <= budget.saturating_add(allowance) {
+            return out;
+        }
+        for &(_, k, b) in cold.iter().filter(|(_, _, b)| large(*b)) {
             if total <= budget {
                 break;
             }
@@ -197,13 +222,36 @@ mod tests {
         let pages = |d: u64| d ^ PAGES_BIT;
         let held = [(1, GB), (pages(2), GB / 2), (2, GB / 2), (3, GB), (1 << 61 | 3, GB), (99, GB)];
         // Room enough: nothing goes.
-        assert!(r.victims(&held, 4, GB, 16 * GB).is_empty());
+        assert!(r.victims(&held, 4, GB, 16 * GB, 0).is_empty());
         // 4 needs 2 GB within 6 GB (5 held): tab 1 goes first, then tab 2's pages and set.
-        assert_eq!(r.victims(&held, 4, 2 * GB, 6 * GB), vec![1]);
-        assert_eq!(r.victims(&held, 4, 3 * GB, 6 * GB), vec![1, 2, pages(2)]);
+        assert_eq!(r.victims(&held, 4, 2 * GB, 6 * GB, 0), vec![1]);
+        assert_eq!(r.victims(&held, 4, 3 * GB, 6 * GB, 0), vec![1, 2, pages(2)]);
         // Never a shown document's, a preview's or an unknown key's, even when that isn't enough.
-        assert_eq!(r.victims(&held, 4, 10 * GB, 6 * GB), vec![1, 2, pages(2), 3]);
+        assert_eq!(r.victims(&held, 4, 10 * GB, 6 * GB, 0), vec![1, 2, pages(2), 3]);
         // Nor the document's own: its pages make room by evicting the other tabs.
-        assert_eq!(r.victims(&held, pages(3), GB, 4 * GB), vec![1, 2, pages(2)]);
+        assert_eq!(r.victims(&held, pages(3), GB, 4 * GB, 0), vec![1, 2, pages(2)]);
+    }
+
+    /// A background canvas many times the size asked for stays while the total is within the
+    /// allowance over the budget, smaller background sets going first. Past the allowance, or with
+    /// none (the card's own memory unknown), large sets go too, least recently shown first.
+    #[test]
+    fn a_large_background_canvas_survives_a_small_tab() {
+        let mut r = Residency::default();
+        // Tabs shown in turn: storyboards 1 and 2 (6 GB each), small tab 3 (1 GB), then tab 4,
+        // which asks for half a GB: a set over 2 GB counts as large.
+        for d in 1..=4 {
+            r.publish(&[(d, GB)]);
+        }
+        let ask = |held: &[(u64, u64)], budget: u64, allowance: u64| r.victims(held, 4, GB / 2, budget, allowance);
+        // One storyboard fills the 6 GB budget: kept within a quarter over it.
+        assert!(ask(&[(1, 6 * GB)], 6 * GB, 6 * GB / 4).is_empty(), "kept: within the allowance");
+        // Without an allowance (the card's memory unknown), the budget is kept to.
+        assert_eq!(ask(&[(1, 6 * GB)], 6 * GB, 0), vec![1], "no allowance: it goes");
+        // A small set goes first, even though it was shown more recently; the storyboard stays.
+        assert_eq!(ask(&[(1, 6 * GB), (3, GB)], 6 * GB, 6 * GB / 4), vec![3], "the small set goes first");
+        // Past the allowance even without the small set: the least recently shown large set
+        // goes (1, not 2), and only as many as needed.
+        assert_eq!(ask(&[(1, 6 * GB), (2, 6 * GB), (3, GB)], 8 * GB, 2 * GB), vec![3, 1], "least recently shown large set next");
     }
 }
