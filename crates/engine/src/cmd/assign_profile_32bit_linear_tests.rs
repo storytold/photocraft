@@ -219,3 +219,17 @@ fn a_singular_matrix_with_lookup_tables_is_refused_and_nothing_changes() {
     assert!(s.execute("edit.assignProfile", json!({"profile": path})).is_err());
     assert_eq!((tag(&s), history(&s).len()), (before, steps), "the document is not changed");
 }
+
+/// `(x - 0.5)^1 + 0.5` looks like the identity from its parameters, but the evaluator clamps a power base at or below
+/// zero, so it is not linear below 0.5 (CodeRabbit on #16083).
+#[test]
+fn a_type_4_curve_whose_power_base_is_clamped_is_not_linear() {
+    let mut s = doc("rgb", 32);
+    let mut odd = Builtin::Srgb.profile().clone();
+    odd.description = "Clamped base".into();
+    odd.trc = Some(std::array::from_fn(|_| Curve::Parametric { kind: 4, p: [1.0, 1.0, -0.5, 1.0, 0.0, 0.5, 0.0] }));
+    (odd.a2b, odd.b2a) = ([None, None, None], [None, None, None]);
+    let (_dir, path) = icc_file(&odd);
+    s.execute("edit.assignProfile", json!({"profile": path})).unwrap();
+    assert!(tagged(&s).description.ends_with("(Linear RGB Profile)"), "derived, not kept: {}", tagged(&s).description);
+}

@@ -1085,7 +1085,10 @@ fn curve_is_linear(c: &craft_cms::Curve) -> bool {
             };
             let lower_len = split.clamp(0.0, 1.0);
             let upper_len = 1.0 - split.clamp(0.0, 1.0);
-            let upper_ok = upper_len <= 0.0 || ((g - 1.0).abs() < EPS && (a - 1.0).abs() < EPS && (b + upper_offset).abs() < EPS);
+            // The evaluator clamps a power base at or below zero, so `a x + b` must stay nonnegative over the branch
+            // for the offsets to cancel: at its lower end, `a x + b` with `a = 1`.
+            let upper_start = split.clamp(0.0, 1.0);
+            let upper_ok = upper_len <= 0.0 || ((g - 1.0).abs() < EPS && (a - 1.0).abs() < EPS && (b + upper_offset).abs() < EPS && upper_start + b >= -EPS);
             let lower_ok = lower_len <= 0.0 || (matches!(kind, 3 | 4) && (cc - 1.0).abs() < EPS && (if *kind == 4 { f } else { 0.0 }).abs() < EPS);
             upper_ok && lower_ok
         }
