@@ -260,6 +260,9 @@ fn run(steps: &[Step], end: u8) -> Result<(), String> {
         if !applied {
             continue;
         }
+        if std::env::var("SEQ_TRACE").is_ok() {
+            eprintln!("  after {step:?}: {:?} untouched {} can_undo {}", fp(&app), open(&app).session.is_untouched(), open(&app).session.can_undo());
+        }
         check_now(&app, start.texels).map_err(at)?;
         if matches!(step, Step::Undo) && fp(&app) != was {
             let undone = fp(&app);
@@ -277,8 +280,9 @@ fn run(steps: &[Step], end: u8) -> Result<(), String> {
     }
     match end % 2 {
         0 => {
+            // Every step the session can take back (a held warp leaves the session "untouched" with steps to undo).
             for _ in 0..200 {
-                if open(&app).session.is_untouched() {
+                if !open(&app).session.can_undo() {
                     break;
                 }
                 let _ = intercept(&mut app, "edit.undo");
@@ -286,6 +290,9 @@ fn run(steps: &[Step], end: u8) -> Result<(), String> {
             }
             // Warp's texels may stay stashed for a Redo, and an unchanged stored warp held under a box mode is no step
             // to undo (the ending below shows whether it applies anything); everything else is as the session opened.
+            if std::env::var("SEQ_TRACE").is_ok() {
+                eprintln!("  undone: {:?} untouched {} can_undo {}", fp(&app), open(&app).session.is_untouched(), open(&app).session.can_undo());
+            }
             let back = Fp { other: start.other, held: start.held, ..fp(&app) };
             if back != start {
                 return Err(format!("undoing every step does not give back the opened session:\n  opened {start:?}\n  now    {back:?}"));
@@ -341,6 +348,13 @@ fn shrink(mut steps: Vec<Step>, end: u8, err: &str) -> (Vec<Step>, String) {
             return (steps, last);
         }
     }
+}
+
+#[test]
+#[ignore = "trace one walk: SEQ_TRACE=1"]
+fn seq_trace() {
+    let steps = vec![Step::EnterWarp, Step::Pull(12, 0.5328682829823546, -2.727784454104415), Step::HoldWarp];
+    eprintln!("{:?}", run_caught(&steps, 4));
 }
 
 #[test]
