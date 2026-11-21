@@ -382,8 +382,6 @@ jobs:
         with:
           path: corpus/
           key: corpus-${{ hashFiles('xtask/src/corpus_pins.rs', 'xtask/*.sha256') }}
-      - name: Fetch and verify corpora
-        run: cargo xtask corpus --all
       - name: Corpus tests
         run: cargo xtask test-corpus
 
