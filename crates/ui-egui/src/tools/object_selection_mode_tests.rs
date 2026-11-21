@@ -176,7 +176,9 @@ fn object_finder_off_dab_subtracts_with_alt_and_in_subtract_mode() {
         app.ui.selection_mode = bar;
         click(&mut app, RED, mods);
         assert!(!selected(&app, RED), "bar mode {bar}, {mods:?} subtracts");
-        assert!(selected(&app, [20.0, 20.0]), "bar mode {bar}, {mods:?} keeps the rest");
+        // The rest is what the layer has: (20, 20) is transparent on it, which a Quick Selection stroke now drops from
+        // the selection (#12919); the blue disc is opaque and stays.
+        assert!(selected(&app, BLUE), "bar mode {bar}, {mods:?} keeps the rest");
     }
 }
 

@@ -56,7 +56,7 @@ fn purge_all_reports_and_empties_the_source_cache() {
     let mut s = session_with_smart_object(&bytes);
     // Nothing else holds anything to purge: only the source cache enables Purge All.
     s.execute("edit.purge.histories", json!({})).unwrap();
-    s.clipboard = None;
+    *s.clipboard = None;
     assert!(!s.is_enabled("edit.purge.all"));
     decode(&s, &bytes);
     assert!(smart_cmds::source_cache_bytes() > 0);

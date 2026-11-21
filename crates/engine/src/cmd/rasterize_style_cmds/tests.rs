@@ -137,7 +137,7 @@ fn several_selected_layers_bake_in_one_step() {
     s.execute("select.deselect", json!({})).unwrap();
     s.execute("layer.layerStyle.stroke", json!({"size": 2})).unwrap();
     let plain = s.execute("layer.new.layer", json!({"name": "plain"})).unwrap()["layer"].as_u64().unwrap();
-    s.active_mut().unwrap().selected_layers = vec![LayerId(a), LayerId(b), LayerId(plain)];
+    *s.active_mut().unwrap().selection_mut() = vec![LayerId(a), LayerId(b), LayerId(plain)];
     let steps = s.active().unwrap().history.past_len();
     let r = s.execute(ID, json!({})).unwrap();
     assert_eq!(r["layers"], json!([a, b]));

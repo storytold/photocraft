@@ -146,7 +146,7 @@ fn an_imported_out_of_range_fill_keeps_its_fields_when_the_phase_changes() {
     // A PSD may carry values outside the dialog's ranges; opening never rewrites them.
     {
         let st = app.session.active_mut().unwrap();
-        let doc = Arc::make_mut(&mut st.doc);
+        let doc = Arc::make_mut(st.doc_mut());
         let LayerContent::Fill(Fill::Pattern { name, id: pattern, .. }) = &doc.layer(id).unwrap().content else { panic!() };
         let (name, pattern) = (name.clone(), pattern.clone());
         doc.layer_mut(id).unwrap().content =
@@ -290,7 +290,7 @@ fn a_new_fill_dialog_rejects_a_changed_insertion_layer() {
     assert_eq!(st.doc.layers.len(), before.layers.len() + 1);
     // No active layer is a valid insertion context too.
     let layers = st.doc.layers.len();
-    app.session.active_mut().unwrap().active_layer = None;
+    app.session.active_mut().unwrap().set_active_layer(None);
     let dialog = open_new(&mut app).unwrap();
     assert!(drag_target(&app).is_some());
     assert!(display_doc(&mut app, 0).is_some());

@@ -1,3 +1,3 @@
-pub(crate) mod edit_menu;
-pub(crate) mod image_menu;
-pub(crate) mod layer_menu;
+pub mod edit_menu;
+pub mod image_menu;
+pub mod layer_menu;

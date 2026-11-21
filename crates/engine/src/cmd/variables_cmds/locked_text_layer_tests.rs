@@ -206,3 +206,27 @@ fn data_sets_as_files_keeps_exporting_a_locked_type_layer() {
     assert_eq!(text_of(&s, title), "Old", "the export leaves the document alone");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// The Apply Data Set dialog's Preview (#14496) shows what the command would do, so it refuses the
+/// same set and previews none of it; once the layer is unlocked it shows the new text.
+#[test]
+fn preview_of_a_set_with_locked_text_shows_nothing() {
+    let (mut s, _photo, badge, title) = session();
+    data_sets(
+        &mut s,
+        json!([{"name": "Zed", "values": [
+            {"variable": "showBadge", "kind": "visibility", "value": false},
+            {"variable": "headline", "kind": "text", "value": "New"},
+        ]}]),
+    );
+    lock(&mut s, title, all());
+    let r = data_set_preview(&s, 0);
+    assert!(matches!(&r, Err(EngineError::Other(m)) if m == DATA_SET_LAYER_LOCKED), "{:?}", r.map(|d| d.layers.len()));
+    assert_eq!(text_of(&s, title), "Old");
+    assert!(visible(&s, badge));
+
+    lock(&mut s, title, Locks::default());
+    let previewed = data_set_preview(&s, 0).unwrap();
+    assert!(matches!(&previewed.layer(title).unwrap().content, LayerContent::Text(t) if t.text == "New"));
+    assert!(!previewed.layer(badge).unwrap().visible);
+}
