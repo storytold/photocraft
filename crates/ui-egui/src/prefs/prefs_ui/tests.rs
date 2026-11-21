@@ -1745,3 +1745,17 @@ fn the_interface_page_lists_appearance_presentation_then_options_on_one_label_co
     let ends: Vec<f32> = ["Appearance Mode", "Language", "Notification Duration (seconds)"].iter().map(|name| at(name).right()).collect();
     assert!(ends.iter().all(|end| (end - ends[0]).abs() < 0.5), "one right-aligned label column: {ends:?}");
 }
+
+/// The rows of Preferences › Performance that draw their own label or heading show it once: the window adds no second
+/// "Rendering mode" beside the select's own, and no "Memory usage (MB)" beside the Memory Usage heading. Memory Usage
+/// Percent's check box shows no text, so the window's label is its only one.
+#[test]
+fn self_labelled_performance_rows_show_their_label_once() {
+    let (_, files) = app_with_store();
+    let h = prefs_harness(&files, "performance", vec2(1280.0, 800.0), |_| {});
+    let texts: Vec<String> = painted_texts(&h).into_iter().map(|(text, _)| text.to_lowercase()).collect();
+    let count = |wanted: &dyn Fn(&str) -> bool| texts.iter().filter(|text| wanted(text)).count();
+    assert_eq!(count(&|t| t == "rendering mode"), 1, "Rendering Mode is labelled once: {texts:?}");
+    assert_eq!(count(&|t| t.starts_with("memory usage") && t != "memory usage percent"), 1, "Memory Usage is labelled once: {texts:?}");
+    assert_eq!(count(&|t| t == "memory usage percent"), 1, "Memory Usage Percent is labelled once: {texts:?}");
+}

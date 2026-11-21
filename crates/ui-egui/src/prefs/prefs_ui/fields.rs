@@ -158,8 +158,6 @@ pub(super) fn rules() -> Vec<SettingRule> {
     // Rows the app draws itself (`PrefsCustom`).
     for path in [
         "performance.memoryUsagePercent",
-        "performance.memoryUsageMb",
-        "performance.renderingMode",
         "performance.gpuAdapter",
         "tools.pressureCurve",
         "scratchDisks.disks",
@@ -168,8 +166,11 @@ pub(super) fn rules() -> Vec<SettingRule> {
     ] {
         tweak(&mut rules, path, |r| r.custom());
     }
-    // The Appearance page draws whole rows with their own labels (Appearance Mode, the themes), so the window adds none.
-    tweak(&mut rules, "interface.appearanceMode", |r| r.custom_rows());
+    // Rows that draw their own label or heading, so the window adds none: the Appearance page (Appearance Mode, the
+    // themes), Rendering Mode's select and the Memory Usage block.
+    for path in ["interface.appearanceMode", "performance.renderingMode", "performance.memoryUsageMb"] {
+        tweak(&mut rules, path, |r| r.custom_rows());
+    }
     // The favourite fonts are the user's library, not a Type setting.
     tweak(&mut rules, "type.favoriteFonts", |r| r.keep_on_reset());
 
