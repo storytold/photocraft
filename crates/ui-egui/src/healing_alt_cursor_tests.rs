@@ -1,7 +1,7 @@
 //! #12113: with Painting Cursors = Normal Brush Tip, holding ⌥ with the Healing Brush shows the
 //! reference's fixed sample target whatever the tip size, and releasing ⌥ brings the tip outline
-//! back. The Clone Stamp keeps its tip with a centre mark, and the unmeasured Painting Cursors
-//! settings keep the cursors they had. Driven through real egui input on the real canvas; the
+//! back. The unmeasured Painting Cursors settings keep the cursors they had (the Clone Stamp's ⌥,
+//! #12610, is in `clone_stamp_alt_cursor_tests.rs`). Driven through real egui input on the real canvas; the
 //! assertions read the cursor the tool (or its ⌥ stand-in) asked the tool host for.
 
 use craft::behavior::{Cursor, PaintedCursor};
@@ -28,14 +28,6 @@ fn cursor(h: &mut Harness<'static, Box<PhotocraftApp>>, m: Modifiers) -> Option<
 fn centre_marked(c: &Option<Cursor>) -> Option<bool> {
     match c {
         Some(Cursor::Painted(PaintedCursor::Circle { centre, .. } | PaintedCursor::Outline { centre, .. })) => Some(*centre),
-        _ => None,
-    }
-}
-
-/// A brush-tip cursor without its centre mark and badge: the tip's shape alone.
-fn tip(c: &Option<Cursor>) -> Option<PaintedCursor> {
-    match c {
-        Some(Cursor::Painted(p @ (PaintedCursor::Circle { .. } | PaintedCursor::Outline { .. }))) => Some(p.clone().marked(false, None)),
         _ => None,
     }
 }
@@ -70,17 +62,6 @@ fn the_target_stays_while_an_alt_click_is_held() {
     assert_eq!(held, Some(sample_target()), "the target stays while the ⌥-click is held");
     h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::ALT });
     h.run_steps(2);
-}
-
-#[test]
-fn the_clone_stamp_keeps_its_tip_with_a_centre_mark() {
-    let mut h = harness(Tool::CloneStamp);
-    tip_size(&mut h, 100.0);
-    let plain = cursor(&mut h, Modifiers::NONE);
-    assert_eq!(centre_marked(&plain), Some(false), "no centre mark without ⌥");
-    let alt = cursor(&mut h, Modifiers::ALT);
-    assert_eq!(centre_marked(&alt), Some(true), "⌥ adds the centre mark");
-    assert_eq!(tip(&alt), tip(&plain), "the tip keeps the tip size");
 }
 
 /// Standard, Precise and Full Size Brush Tip were not measured with the Healing Brush's ⌥, so ⌥
