@@ -68,14 +68,25 @@ fn has_active_artboard(s: &Session) -> std::result::Result<(), String> {
 fn has_plain_group(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
     let id = d.active_layer.ok_or("no active layer")?;
-    let l = d.doc.layer(id).ok_or("no active layer")?;
+    group_source(&d.doc, id).map(|_| ()).map_err(str::to_string)
+}
+
+/// Where Artboard from Group takes group `id` from: `None` for a top-level group, or the index of
+/// the top-level layer a nested group moves out above (#14559); otherwise why it can't.
+fn group_source(doc: &Document, id: LayerId) -> std::result::Result<Option<usize>, &'static str> {
+    let l = doc.layer(id).ok_or("no active layer")?;
     if !l.is_group() || l.artboard().is_some() {
-        return Err("select a layer group".into());
+        return Err("select a layer group");
     }
-    if !d.doc.layers.iter().any(|t| t.id == id) {
-        return Err("artboards must be top-level: select a group that is not nested".into());
+    let path = doc.path_of(id).ok_or("no active layer")?;
+    if path.len() == 1 {
+        return Ok(None);
     }
-    Ok(())
+    // Not measured in the reference: a hidden or fully locked nested group stays refused.
+    if !doc.shown_at(&path) || doc.locks_at(&path).all {
+        return Err("a hidden or fully locked group inside another group can't become an artboard");
+    }
+    Ok(path.first().copied())
 }
 
 fn has_free_layers(s: &Session) -> std::result::Result<(), String> {
@@ -366,8 +377,10 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
     let canvas = d.doc.bounds();
     let background = if apply_background { background_param(p, cmd)?.unwrap_or_default() } else { ArtboardBackground::White };
     let (rect, shift) = s.edit("Artboard from Group", |doc, active| {
-        if !doc.layers.iter().any(|t| t.id == id && t.is_group() && t.artboard().is_none()) {
-            return Err(EngineError::Other("artboards are made from a top-level layer group".into()));
+        // A nested group moves out to the top level, directly above its top-level ancestor.
+        if let Some(top) = group_source(doc, id).map_err(|e| EngineError::Other(e.into()))? {
+            let g = doc.remove(id).ok_or(EngineError::NoLayer(id))?;
+            doc.layers.insert(top + 1, g);
         }
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         // A hidden group keeps today's measure (not measured in the reference).
@@ -981,7 +994,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.new.artboardFromGroup",
             "Artboard from Group",
             &["Layer", "New"],
-            r##"{"layer":id? (a top-level group; default active),"background":…?,"color":[r,g,b]|"#rrggbb"?,"preset":str? (tag only; does not resize),"guideIDs":[int]? (ignored recording metadata),"changeBackground":int? (1 or absent applies background/color; other integers give white; legacy true = 1)} → {layer, rect}"##,
+            r##"{"layer":id? (a group; a nested one moves to the top level above its top-level ancestor; default active),"background":…?,"color":[r,g,b]|"#rrggbb"?,"preset":str? (tag only; does not resize),"guideIDs":[int]? (ignored recording metadata),"changeBackground":int? (1 or absent applies background/color; other integers give white; legacy true = 1)} → {layer, rect}"##,
             has_plain_group,
             artboard_from_group
         ),
@@ -1053,6 +1066,10 @@ mod from_layers_history_name_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/from_group_hidden_bounds_tests.rs"]
 mod from_group_hidden_bounds_tests;
+
+#[cfg(test)]
+#[path = "artboard_cmds/from_group_nested_tests.rs"]
+mod from_group_nested_tests;
 
 #[cfg(test)]
 #[path = "artboard_cmds/overlapping_areas_tests.rs"]
