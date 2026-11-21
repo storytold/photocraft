@@ -728,7 +728,8 @@ fn banded_layers_write_the_bytes_of_whole_ones() {
         (ColorMode::Lab, SampleType::U16),
     ];
     for (mode, depth) in cases {
-        let doc = banding_document(mode, depth, 203, 157);
+        // The inset layer is 97 by 33, with 40-pixel runs and a five-row tail in seven-row bands.
+        let doc = banding_document(mode, depth, 109, 38);
         for force_psb in [false, true] {
             for staged in [false, true] {
                 stage::DIR_FOR_TESTS.with(|d| *d.borrow_mut() = staged.then(|| dir.clone()));
@@ -736,14 +737,19 @@ fn banded_layers_write_the_bytes_of_whole_ones() {
                 let (want, want_warnings) = export_banded(&doc, &options, None);
                 for rows in [1, 7, 1000] {
                     let what = format!("{mode:?} {depth:?}, psb {force_psb}, staged {staged}, {rows} rows a band");
+                    banded::BANDS_DONE.set(0);
                     let (file, warnings) = export_banded(&doc, &options, Some(rows));
                     assert_eq!(warnings, want_warnings, "{what}");
                     let layer = &file.layers()[0];
                     assert_eq!(layer.rect, want.layers()[0].rect, "{what}");
+                    assert_eq!(banded::BANDS_DONE.get(), (layer.rect.height() as usize).div_ceil(rows), "{what}: bands encoded");
                     if staged {
                         assert!(layer.channels.iter().all(|c| c.stored.is_some() && c.data.is_empty()), "{what}: banded channels are staged");
                     }
                     if depth == SampleType::F32 {
+                        if staged {
+                            assert!(file.image_data.stored.is_some() && file.image_data.data.is_empty(), "{what}: the raw merged image is staged");
+                        }
                         // One zlib stream fed band by band packs differently from one fed whole
                         // (the encoder sees a different amount of input ahead), so the ZIP
                         // channels are compared decoded, here and as the streamed file reads back.
