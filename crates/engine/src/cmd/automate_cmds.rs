@@ -432,7 +432,10 @@ exec "$cli" droplet {quoted_abs} "$@"
 /// and folders as arguments, so the launcher forwards them (`%*`) to the CLI. The body is
 /// pure ASCII and names the droplet through the launcher's own location (`%~dp0%~n0`) rather
 /// than embedding the path: spaces, `&`, `^`, `%` and non-ASCII characters in either path
-/// then never reach the batch parser or the console codepage.
+/// then never reach the batch parser or the console codepage. `setlocal DisableDelayedExpansion`
+/// opens the body, so a cmd.exe that was given delayed expansion globally (registry, or the
+/// AutoRun `cmd /v:on`) still keeps every `!` in `PHOTOCRAFT_CLI`, in the launcher's own location
+/// and in the dropped paths literal instead of substituting what sits between two of them.
 /// The CLI is looked up like the macOS shim looks up its app bundle: `PHOTOCRAFT_CLI` first,
 /// then the per-user install folder (`%LOCALAPPDATA%\Programs\ArtCraft\PhotoCraft`), then the
 /// per-machine ones (`%ProgramFiles%\ArtCraft\PhotoCraft` and, on 64-bit Windows, the folder the
@@ -462,7 +465,7 @@ fn write_shim(droplet: &str) -> Result<String> {
     let machine_cli = r"%ProgramFiles%\ArtCraft\PhotoCraft\photocraft-cli.exe";
     let machine_x86_cli = r"%ProgramFiles(x86)%\ArtCraft\PhotoCraft\photocraft-cli.exe";
     let body = format!(
-        "@echo off\r\nrem PhotoCraft droplet: drop files and folders on this file to run the stored action on them.\r\nrem The CLI, in order: PHOTOCRAFT_CLI, per-user install folder, per-machine install folder, per-machine 32-bit install folder, PATH.\r\nset \"PC_CLI=\"\r\nif defined PHOTOCRAFT_CLI set \"PC_CLI=%PHOTOCRAFT_CLI%\"\r\nif not defined PC_CLI if exist \"{user_cli}\" set \"PC_CLI={user_cli}\"\r\nif not defined PC_CLI if exist \"{machine_cli}\" set \"PC_CLI={machine_cli}\"\r\nif not defined PC_CLI if exist \"{machine_x86_cli}\" set \"PC_CLI={machine_x86_cli}\"\r\nif not defined PC_CLI set \"PC_CLI=photocraft-cli\"\r\n\"%PC_CLI%\" droplet \"%~dp0%~n0{ext}\" %*\r\n"
+        "@echo off\r\nsetlocal DisableDelayedExpansion\r\nrem PhotoCraft droplet: drop files and folders on this file to run the stored action on them.\r\nrem The CLI, in order: PHOTOCRAFT_CLI, per-user install folder, per-machine install folder, per-machine 32-bit install folder, PATH.\r\nset \"PC_CLI=\"\r\nif defined PHOTOCRAFT_CLI set \"PC_CLI=%PHOTOCRAFT_CLI%\"\r\nif not defined PC_CLI if exist \"{user_cli}\" set \"PC_CLI={user_cli}\"\r\nif not defined PC_CLI if exist \"{machine_cli}\" set \"PC_CLI={machine_cli}\"\r\nif not defined PC_CLI if exist \"{machine_x86_cli}\" set \"PC_CLI={machine_x86_cli}\"\r\nif not defined PC_CLI set \"PC_CLI=photocraft-cli\"\r\n\"%PC_CLI%\" droplet \"%~dp0%~n0{ext}\" %*\r\n"
     );
     crate::file_cmds::write_file(&shim, body.as_bytes())?;
     Ok(shim)

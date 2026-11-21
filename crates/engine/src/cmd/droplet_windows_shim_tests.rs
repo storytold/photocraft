@@ -100,6 +100,11 @@ fn run_lookup_probe(
     // cmd.exe sets %ProgramFiles% and %ProgramFiles(x86)% from the registry when it starts, so a
     // per-machine install folder cannot be faked in the child's environment: a one-line wrapper
     // sets them inside the same cmd process and calls the launcher with the same quoted argument.
+    // The wrapper's own source stays ASCII: the launcher, input and fake install paths arrive
+    // through the child's environment (handed to cmd.exe as UTF-16 by the spawner) and are only
+    // expanded inside the batch. Embedding them in the .cmd text instead would decode them with
+    // the console codepage the file is read in, which corrupts a non-ASCII TEMP path (a user
+    // like Jose with an accent) whenever that codepage is not UTF-8.
     let mut invoked = launcher.to_string();
     let has_machine = machine.is_some_and(|m| !m.is_empty());
     let has_x86 = x86.is_some_and(|x| !x.is_empty());
@@ -107,21 +112,25 @@ fn run_lookup_probe(
         let wrapper = format!(r"{launcher}.wrapper.cmd");
         let mut sets = String::new();
         if has_machine {
-            sets.push_str(&format!("set \"ProgramFiles={machine}\"\r\n", machine = machine.unwrap_or_default()));
+            sets.push_str("set \"ProgramFiles=%PCW_MACHINE%\"\r\n");
         }
         if has_x86 {
-            sets.push_str(&format!("set \"ProgramFiles(x86)={x86}\"\r\n", x86 = x86.unwrap_or_default()));
+            sets.push_str("set \"ProgramFiles(x86)=%PCW_X86%\"\r\n");
         } else {
             // No fake asked for: clear the registry's own folder, so a PhotoCraft installed on the
             // test machine can never be what a leg below the one under test picks.
             sets.push_str("set \"ProgramFiles(x86)=\"\r\n");
         }
-        std::fs::write(&wrapper, format!("@echo off\r\n{sets}call \"{launcher}\" \"{input}\"\r\n")).unwrap();
+        std::fs::write(&wrapper, format!("@echo off\r\n{sets}call \"%PCW_LAUNCHER%\" \"%PCW_INPUT%\"\r\n")).unwrap();
         invoked = wrapper;
     }
     let arg_line = if invoked == launcher { format!(" \"{input}\"") } else { String::new() };
     let mut cmd = std::process::Command::new("cmd.exe");
     cmd.raw_arg(format!("/d /c \"\"{invoked}\"{arg_line}\""))
+        .env("PCW_LAUNCHER", launcher)
+        .env("PCW_INPUT", input)
+        .env("PCW_MACHINE", machine.unwrap_or(""))
+        .env("PCW_X86", x86.unwrap_or(""))
         .env("LOCALAPPDATA", local.unwrap_or(""))
         .env("ProgramFiles", machine.unwrap_or(""))
         .env("ProgramFiles(x86)", x86.unwrap_or(""))
@@ -152,6 +161,7 @@ fn windows_create_droplet_default_writes_a_runnable_cmd_launcher() {
     assert!(std::path::Path::new(shim).exists(), "the launcher is written next to the droplet");
     let text = std::fs::read_to_string(shim).unwrap();
     assert!(text.starts_with("@echo off"), "runnable batch content: {text}");
+    assert!(text.contains("setlocal DisableDelayedExpansion"), "an exclamation mark in a path stays literal even when cmd has delayed expansion on: {text}");
     assert!(text.contains("photocraft-cli"), "the launcher runs the CLI: {text}");
     assert!(text.contains("%~dp0%~n0.pcdroplet"), "the launcher points at the droplet beside it: {text}");
     assert!(text.contains("%*"), "dropped paths are passed to the CLI: {text}");
@@ -200,7 +210,11 @@ fn the_unix_command_shim_is_unchanged() {
     assert!(text.contains("if [ -n \"${PHOTOCRAFT_CLI:-}\" ]; then"), "PHOTOCRAFT_CLI keeps priority: {text}");
     assert!(text.contains("elif [ -x /Applications/PhotoCraft.app/Contents/MacOS/photocraft-cli ]; then"), "the bundle lookup stays: {text}");
     let abs = std::fs::canonicalize(&droplet).unwrap().to_string_lossy().into_owned();
-    assert!(text.contains(&format!("exec \"$cli\" droplet '{abs}' \"$@\"")), "the canonicalized droplet path stays single-quoted: {text}");
+    // write_shim escapes an apostrophe in the path by the shell quote-splice rule; the
+    // expectation applies the same escape, so a TMPDIR like /tmp/o'connor still matches the
+    // correctly escaped launcher content instead of failing on it.
+    let quoted_abs = abs.replace('\'', "'\\''");
+    assert!(text.contains(&format!("exec \"$cli\" droplet '{quoted_abs}' \"$@\"")), "the canonicalized droplet path stays single-quoted: {text}");
 }
 
 #[test]
@@ -460,6 +474,16 @@ fn windows_launcher_splits_an_unquoted_dropped_path() {
     // A `.lnk` launcher - Explorer then hands the paths straight to the exe - is the way out,
     // and writing a Shell Link is a decision for the maintainers.
     let dir = tmp("unquoted-drop");
+    if dir.contains(' ') {
+        // The probe feeds the dropped paths to cmd UNQUOTED, exactly as Explorer's command line
+        // for a drop without a space does. If the scratch path itself contains a space, cmd cuts
+        // that path at the space before `&` or `^` ever reach the parser, and the recorded
+        // arguments would pin the scratch location instead of the parser behaviour. Skip with the
+        // reason on such a machine; drops that carry a space stay pinned, quoted, by
+        // windows_launcher_runs_the_cli_on_every_dropped_path.
+        eprintln!("skipping the unquoted-path probe: the scratch path contains a space ({dir})");
+        return;
+    }
     let stub = cli_stub(&dir);
     let pics = format!(r"{dir}\pics");
     std::fs::create_dir_all(&pics).unwrap();
