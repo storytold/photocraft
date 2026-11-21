@@ -111,6 +111,44 @@ pub fn polygon(x: f64, y: f64, w: f64, h: f64, sides: u32, star_ratio: f64) -> P
     Path::new(vec![Subpath::polygon(&pts)])
 }
 
+/// Regular polygon (or star when `star_ratio < 1`) stretched so that its tight box is the rectangle
+/// (#13298): an odd side count puts a vertex at the top centre, an even one a flat edge at the top.
+/// The anchors run clockwise from the first vertex at or right of the top centre; a star's outer
+/// points land where the polygon's vertices do, its inner points at `star_ratio` of the way in. A
+/// negative size extends from the origin to the left or up, and the shape is the same.
+pub fn polygon_in_box(x: f64, y: f64, w: f64, h: f64, sides: u32, star_ratio: f64) -> Path {
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+    let (x, w) = if w < 0.0 { (x + w, -w) } else { (x, w) };
+    let (y, h) = if h < 0.0 { (y + h, -h) } else { (y, h) };
+    let sides = sides.clamp(3, 100) as usize;
+    let star = is_star(star_ratio);
+    let count = if star { sides * 2 } else { sides };
+    let start = -FRAC_PI_2 + if sides.is_multiple_of(2) { PI / sides as f64 } else { 0.0 };
+    let unit = |i: usize, n: usize| {
+        let a = start + TAU * i as f64 / n as f64;
+        (a.cos(), a.sin())
+    };
+    // The tight box of the outer points, on the unit circle.
+    let (mut x0, mut x1, mut y0, mut y1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+    for (ux, uy) in (0..sides).map(|i| unit(i, sides)) {
+        (x0, x1, y0, y1) = (x0.min(ux), x1.max(ux), y0.min(uy), y1.max(uy));
+    }
+    let (sx, sy) = (w / (x1 - x0), h / (y1 - y0));
+    let pts: Vec<(f64, f64)> = (0..count)
+        .map(|i| {
+            let (ux, uy) = unit(i, count);
+            let k = if star && i % 2 == 1 { star_ratio } else { 1.0 };
+            (x + (k * ux - x0) * sx, y + (k * uy - y0) * sy)
+        })
+        .collect();
+    Path::new(vec![Subpath::polygon(&pts)])
+}
+
+/// The sharp outline of a live polygon: [`polygon_in_box`] with `fills_box`, else [`polygon`].
+pub fn regular_polygon(x: f64, y: f64, w: f64, h: f64, sides: u32, star_ratio: f64, fills_box: bool) -> Path {
+    if fills_box { polygon_in_box(x, y, w, h, sides, star_ratio) } else { polygon(x, y, w, h, sides, star_ratio) }
+}
+
 /// Triangle filling the rectangle: the apex at the centre of the top edge, then the bottom right
 /// and the bottom left corner. A negative size extends from the origin to the left or up, and the
 /// apex stays on top.
@@ -315,8 +353,8 @@ pub fn live_path(s: &LiveShape) -> Path {
     match s {
         LiveShape::Rect { rect: [x, y, w, h], radii } => rounded_rect(*x, *y, *w, *h, *radii),
         LiveShape::Ellipse { rect: [x, y, w, h] } => ellipse(*x, *y, *w, *h),
-        LiveShape::Polygon { rect: [x, y, w, h], sides, star_ratio, corner_radius } => {
-            round_corners_where(polygon(*x, *y, *w, *h, *sides, *star_ratio), *corner_radius, |i| polygon_rounds_vertex(*star_ratio, i))
+        LiveShape::Polygon { rect: [x, y, w, h], sides, star_ratio, corner_radius, fills_box } => {
+            round_corners_where(regular_polygon(*x, *y, *w, *h, *sides, *star_ratio, *fills_box), *corner_radius, |i| polygon_rounds_vertex(*star_ratio, i))
         }
         LiveShape::Triangle { rect: [x, y, w, h], corner_radius } => round_corners(triangle(*x, *y, *w, *h), *corner_radius),
         LiveShape::Line { from, to, weight } => line((from[0], from[1]), (to[0], to[1]), *weight),
@@ -406,7 +444,7 @@ mod tests {
 
     #[test]
     fn a_star_rounds_its_outer_vertices_only() {
-        let p = live_path(&LiveShape::Polygon { rect: [0.0, 0.0, 200.0, 200.0], sides: 5, star_ratio: 0.5, corner_radius: 6.0 });
+        let p = live_path(&LiveShape::Polygon { rect: [0.0, 0.0, 200.0, 200.0], sides: 5, star_ratio: 0.5, corner_radius: 6.0, fills_box: false });
         assert_eq!(p.subpaths[0].knots.len(), 15);
     }
 
@@ -451,6 +489,10 @@ mod star_outer_corner_radius_tests;
 #[cfg(test)]
 #[path = "triangle_box_geometry_tests.rs"]
 mod triangle_box_geometry_tests;
+
+#[cfg(test)]
+#[path = "polygon_box_geometry_tests.rs"]
+mod polygon_box_geometry_tests;
 
 #[cfg(test)]
 #[path = "line_arrow_concavity_tests.rs"]

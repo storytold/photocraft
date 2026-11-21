@@ -88,7 +88,7 @@ fn from_center_and_the_other_tools() {
     let id = only_dialog(&app);
     set(&mut app, id, json!({"width": 50, "height": 60, "sides": 7, "starRatio": 50}));
     confirm_by_id(&mut app, id);
-    assert_eq!(live(&app), LiveShape::Polygon { rect: [10.0, 10.0, 50.0, 60.0], sides: 7, star_ratio: 0.5, corner_radius: 0.0 });
+    assert_eq!(live(&app), LiveShape::Polygon { rect: [10.0, 10.0, 50.0, 60.0], sides: 7, star_ratio: 0.5, corner_radius: 0.0, fills_box: true });
 
     // Away from the polygon just drawn: its scale box, still selected, takes a press at its handles.
     click(&mut app, Tool::Triangle, [305.0, 206.0]);

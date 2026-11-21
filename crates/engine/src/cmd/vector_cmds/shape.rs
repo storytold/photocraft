@@ -232,8 +232,8 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
                     LiveShape::Rect { rect: r(rect), radii: radii.map(|v| v * k) }
                 }
                 LiveShape::Ellipse { rect } => LiveShape::Ellipse { rect: r(rect) },
-                LiveShape::Polygon { rect, sides, star_ratio, corner_radius } => {
-                    LiveShape::Polygon { rect: r(rect), sides, star_ratio, corner_radius: corner_radius * m0.min(m3) }
+                LiveShape::Polygon { rect, sides, star_ratio, corner_radius, fills_box } => {
+                    LiveShape::Polygon { rect: r(rect), sides, star_ratio, corner_radius: corner_radius * m0.min(m3), fills_box }
                 }
                 LiveShape::Triangle { rect, corner_radius } => LiveShape::Triangle { rect: r(rect), corner_radius: corner_radius * m0.min(m3) },
                 LiveShape::ArrowLine { from, to, weight, start, end, width, length, concavity } => {

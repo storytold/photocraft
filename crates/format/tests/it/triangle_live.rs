@@ -59,7 +59,7 @@ fn a_live_triangle_is_written_beside_live_so_older_builds_open_the_file() {
 
 #[test]
 fn a_three_sided_polygon_from_an_older_file_stays_a_polygon() {
-    let doc = document(LiveShape::Polygon { rect: [400.0, 300.0, 200.0, 100.0], sides: 3, star_ratio: 1.0, corner_radius: 0.0 });
+    let doc = document(LiveShape::Polygon { rect: [400.0, 300.0, 200.0, 100.0], sides: 3, star_ratio: 1.0, corner_radius: 0.0, fills_box: false });
     let saved = content(&doc);
     assert_eq!(saved["live"]["kind"], "polygon");
     assert!(saved.get("triangle_live").is_none());
