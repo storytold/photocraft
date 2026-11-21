@@ -2835,3 +2835,72 @@ fn a_long_pull_under_a_perspective_does_not_flip() {
     }
     assert!(app.transform_preview.as_ref().unwrap().drag_placed.is_none(), "the drag's start map goes with the release");
 }
+
+/// A warped smart object: Warp and a long pull, a box mode chosen (the warp held), a corner of the box moved, and Warp
+/// again. The move took the held warp's points past the box's horizon, where carried they had gone through infinity:
+/// every point must stay on the picture's side, the map giving way as under a pull (found by the sequence checker).
+#[test]
+fn a_held_warp_moved_by_the_box_stays_on_the_pictures_side_of_its_horizon() {
+    let (mut app, ctx, _) = {
+        let mut app = app_with_square(96, photocraft_geom::Rect::new(16, 16, 48, 40));
+        let ctx = app.ctx().clone();
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        begin(&mut app, &ctx).unwrap();
+        begin_warp(&mut app, &ctx).unwrap();
+        settle(&mut app);
+        let mut to = warp_mesh(&app);
+        to.points[6] += Vec2::new(4.0, -3.0);
+        pull_mesh(&mut app, 1, to);
+        settle(&mut app);
+        commit(&mut app);
+        land_jobs(&mut app);
+        (app, ctx, id)
+    };
+    begin(&mut app, &ctx).unwrap();
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    super::begin::reconcile_held(&mut app);
+    let start = warp_mesh(&app);
+    let (a, len) = (4.802292692204863f64, 269.5955745602801f64);
+    let pulled = super::warp::rule_mesh(
+        &start,
+        super::warp::RuleEdit::Surface { s: 0.6616269562899482, t: 0.4973305551415017, by: [len * a.cos(), len * a.sin()] },
+        1.0,
+    )
+    .expect("a pulled mesh");
+    let gesture = GestureId::new(3);
+    let mut events = EditEvents::new();
+    events.push(EditEvent::begin(gesture, Mixed::Same(start.clone()), "Warp".into(), None));
+    events.push(EditEvent::commit(gesture, Mixed::Same(start), pulled));
+    grid_edit(&mut app, &events, false);
+    settle(&mut app);
+    hold_warp(&mut app);
+    settle(&mut app);
+    super::begin::reconcile_held(&mut app);
+    let q = quad_of(open(&app));
+    let pivot = open(&app).session.state().pivot;
+    let moved = [[q[0][0] - 1.182275882846704, q[0][1] + 4.621861299596933], q[1], q[2], q[3]];
+    box_events(&mut app, 2, &[BoxState::new(moved.map(|[x, y]| Point::new(x, y)), pivot)]);
+    settle(&mut app);
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    super::begin::reconcile_held(&mut app);
+    let (m, _) = app.transform_preview.as_ref().unwrap().placed_warp.expect("Warp edits the contents through the moved box");
+    let back = photocraft_algo::transform::Homography(m).inverse().unwrap();
+    let w = |x: f64, y: f64| m[6] * x + m[7] * y + m[8];
+    let mesh = warp_mesh(&app);
+    let contents: Vec<[f64; 2]> = mesh
+        .points
+        .iter()
+        .map(|p| {
+            let (x, y) = back.apply(p.x, p.y);
+            [x, y]
+        })
+        .collect();
+    let (cx, cy) = (contents.iter().map(|p| p[0]).sum::<f64>() / 16.0, contents.iter().map(|p| p[1]).sum::<f64>() / 16.0);
+    let side = w(cx, cy).signum();
+    for (i, p) in contents.iter().enumerate() {
+        assert!(w(p[0], p[1]) * side > 0.0, "point {i} lies past the horizon (weight {} against {})", w(p[0], p[1]), w(cx, cy));
+    }
+}

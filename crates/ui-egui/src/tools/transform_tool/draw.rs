@@ -154,7 +154,7 @@ fn show_preview(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &m
     let source = LayerStyleSource::new(app).filter(|_| boxed && pv.styled.is_some());
     // A warp held under a box mode moves with the box ([`super::HeldWarp`]).
     let held = pv.held.as_ref().filter(|_| t.session.warp().is_none()).map(|h| {
-        let w = h.carried(t.quad_array());
+        let (w, _) = h.given_way(t.quad_array());
         let source = craft::behavior::kurbo::Rect::new(w.bounds[0], w.bounds[1], w.bounds[2], w.bounds[3]);
         (SessionWarp::new(w, false).mesh, source, h.texture.as_ref())
     });

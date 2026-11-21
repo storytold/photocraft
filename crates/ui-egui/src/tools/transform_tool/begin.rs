@@ -743,8 +743,7 @@ pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
             (None, Some(placed)) => placed,
             _ => held,
         };
-        let warp = held.carried(quad);
-        let placed = held.placed_at(quad);
+        let (warp, placed) = held.given_way(quad);
         if let Some(pv) = app.transform_preview.as_mut() {
             if let Some(texture) = held.texture {
                 pv.other_texels = Some(OtherTexels { texture: std::mem::replace(&mut pv.textures, texture), placed_warp: None });

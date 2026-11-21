@@ -52,8 +52,8 @@ pub fn commit(app: &mut PhotocraftApp) {
     {
         let quad = result.as_ref().map_or_else(|| t.quad_array(), |r| r.state.quad.map(|p| [p.x, p.y]));
         let interpolation = result.as_ref().map_or_else(|| t.session.interpolation(), |r| r.interpolation).id();
-        let warp = held.carried(quad);
-        let r = match held.placed_at(quad) {
+        let (warp, placed) = held.given_way(quad);
+        let r = match placed {
             Some((to_doc, moved)) => match photocraft_algo::transform::Homography(to_doc).inverse() {
                 Some(back) => {
                     let mesh = warp.to_mesh(1, 1).map_points(|p| {

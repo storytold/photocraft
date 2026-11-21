@@ -207,6 +207,36 @@ impl HeldWarp {
         }
     }
 
+    /// The warp and its contents-to-document map once the box moved to `quad`, as [`carried`](Self::carried) and
+    /// [`placed_at`](Self::placed_at), but where the move takes the warp's points to its horizon the map gives way, as
+    /// it does under a pull ([`warp::horizon_squeeze`]): past the horizon the carried points would go through infinity.
+    pub(crate) fn given_way(&self, quad: [[f64; 2]; 4]) -> (Warp, Option<([f64; 9], bool)>) {
+        let (warp, placed) = (self.carried(quad), self.placed_at(quad));
+        let Some(h) = Homography::quad_to_quad(self.start, quad).filter(|_| quad != self.start) else { return (warp, placed) };
+        let source = self.warp.to_mesh(1, 1);
+        let (total, source) = match self.placed {
+            Some((m, _)) => {
+                let Some(back) = Homography(m).inverse() else { return (warp, placed) };
+                let contents = source.map_points(|p| {
+                    let (x, y) = back.apply(p[0], p[1]);
+                    [x, y]
+                });
+                (h.mul(&Homography(m)), contents)
+            }
+            None => (h, source),
+        };
+        let Some(squeeze) = warp::horizon_squeeze(total.0, &source.points, self.warp.bounds) else { return (warp, placed) };
+        let given = total.mul(&Homography(squeeze));
+        if !given.0.iter().all(|v| v.is_finite()) {
+            return (warp, placed);
+        }
+        let doc = source.map_points(|p| {
+            let (x, y) = given.apply(p[0], p[1]);
+            [x, y]
+        });
+        (Warp::custom(doc, self.warp.bounds), placed.map(|_| (given.0, true)))
+    }
+
     /// The contents-to-document map once the box moved from where the warp was held to `quad`, and whether the
     /// placement changed at all.
     pub(crate) fn placed_at(&self, quad: [[f64; 2]; 4]) -> Option<([f64; 9], bool)> {
