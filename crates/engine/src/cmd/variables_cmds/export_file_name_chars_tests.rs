@@ -69,3 +69,23 @@ fn index_keeps_three_digits() {
 fn names_stay_inside_the_folder_and_off_device_names() {
     assert_eq!(exported(&["../up", "nul"], "{name}"), [".._up.png", "nul_.png"]);
 }
+
+/// A name of only dots and spaces would name the folder or its parent on Windows: it becomes `_` (CodeRabbit on #16239).
+#[test]
+fn names_of_only_dots_and_spaces_become_an_underscore() {
+    assert_eq!(exported(&["..."], "{name}"), ["_.png"]);
+    assert_eq!(exported(&[". ."], "{name}"), ["_.png"]);
+    assert_eq!(exported(&[".."], "{name}"), ["_.png"]);
+}
+
+/// Two data sets with the same name keep their own places: `{number}` tells them apart (CodeRabbit on #16239).
+#[test]
+fn repeated_data_set_names_get_their_own_numbers() {
+    assert_eq!(exported(&["A", "A"], "{number}"), ["1.png", "2.png"]);
+}
+
+/// A token typed in a data set's name stays literal; only the template's own tokens expand (CodeRabbit on #16239).
+#[test]
+fn a_token_inside_a_data_set_name_stays_literal() {
+    assert_eq!(exported(&["{number}", "1"], "{name}"), ["{number}.png", "1.png"]);
+}
