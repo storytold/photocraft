@@ -820,6 +820,10 @@ fn feather_window_is_bounded_and_clipped_before_growing() {
 #[test]
 fn windowed_tool_feather_matches_full_canvas() {
     let area = Rect::new(0, 0, 192, 160);
+    let mut old_selection = Surface::new(photocraft_color::PixelFormat::GRAY8);
+    old_selection.fill_rect(Rect::new(3, 4, 180, 150), &[0.6]);
+    old_selection.fill_rect(Rect::new(70, 60, 90, 80), &[1.0]);
+    let read = |v: &Option<Surface>| sel::mask_from_surface(v.as_ref(), area);
     let shapes = [
         Rect::new(72, 61, 97, 89),
         Rect::new(-12, -7, 24, 25),
@@ -829,26 +833,22 @@ fn windowed_tool_feather_matches_full_canvas() {
         Rect::new(-5, -5, 200, 170),
     ];
     for (case, r) in shapes.into_iter().enumerate() {
+        let pts =
+            [(r.x0 as f32 + 0.125, r.y0 as f32 + 0.375), (r.x1 as f32, r.y0 as f32), (r.x1 as f32 - 0.25, r.y1 as f32 + 0.125), (r.x0 as f32, r.y1 as f32)];
         for tool in ["rect", "ellipse", "lasso"] {
             for aa in [false, true] {
-                for radius in [0.05, 2.5, 7.0] {
-                    let pts = [
-                        (r.x0 as f32 + 0.125, r.y0 as f32 + 0.375),
-                        (r.x1 as f32, r.y0 as f32),
-                        (r.x1 as f32 - 0.25, r.y1 as f32 + 0.125),
-                        (r.x0 as f32, r.y1 as f32),
-                    ];
-                    let input = if tool == "lasso" {
-                        sel::polygon(&pts, area, aa)
+                let input = if tool == "lasso" {
+                    sel::polygon(&pts, area, aa)
+                } else {
+                    let mut shape = Surface::new(photocraft_color::PixelFormat::GRAY8);
+                    if tool == "ellipse" {
+                        shape = sel::ellipse_surface(r, area, aa);
                     } else {
-                        let mut shape = Surface::new(photocraft_color::PixelFormat::GRAY8);
-                        if tool == "ellipse" {
-                            shape = sel::ellipse_surface(r, area, aa);
-                        } else {
-                            shape.fill_rect(r.intersect(&area), &[1.0]);
-                        }
-                        sel::mask_from_surface(Some(&shape), area)
-                    };
+                        shape.fill_rect(r.intersect(&area), &[1.0]);
+                    }
+                    sel::mask_from_surface(Some(&shape), area)
+                };
+                for radius in [0.05, 2.5, 7.0] {
                     let mask = sel::feather(&input, area.width() as usize, area.height() as usize, radius);
                     for m in ["replace", "add", "subtract", "intersect"] {
                         for has_old in [false, true] {
@@ -856,10 +856,7 @@ fn windowed_tool_feather_matches_full_canvas() {
                             s.execute("file.new", json!({"width": area.width(), "height": area.height()})).unwrap();
                             if has_old {
                                 s.edit("soft selection", |doc, _| {
-                                    let mut old = Surface::new(photocraft_color::PixelFormat::GRAY8);
-                                    old.fill_rect(Rect::new(3, 4, 180, 150), &[0.6]);
-                                    old.fill_rect(Rect::new(70, 60, 90, 80), &[1.0]);
-                                    doc.selection = Some(old);
+                                    doc.selection = Some(old_selection.clone());
                                     Ok(())
                                 })
                                 .unwrap();
@@ -873,8 +870,8 @@ fn windowed_tool_feather_matches_full_canvas() {
                                 s.execute("select.rect", json!({"x": r.x0, "y": r.y0, "width": r.width(), "height": r.height(), "ellipse": tool == "ellipse", "antiAlias": aa, "feather": radius, "mode": m})).unwrap()
                             };
                             let got = s.active().unwrap().doc.selection.clone();
-                            let read = |v: &Option<Surface>| sel::mask_from_surface(v.as_ref(), area);
-                            assert_eq!(read(&got), read(&want), "case {case}, {tool}, aa={aa}, radius={radius}, mode={m}, old={has_old}");
+                            let want_coverage = read(&want);
+                            assert_eq!(read(&got), want_coverage, "case {case}, {tool}, aa={aa}, radius={radius}, mode={m}, old={has_old}");
                             assert_eq!(got.is_some(), want.is_some());
                             if tool == "lasso" {
                                 assert_eq!(result["selected"], want.is_some());
@@ -883,7 +880,7 @@ fn windowed_tool_feather_matches_full_canvas() {
                             s.execute("edit.undo", json!({})).unwrap();
                             assert_eq!(read(&s.active().unwrap().doc.selection), read(&before));
                             s.execute("edit.redo", json!({})).unwrap();
-                            assert_eq!(read(&s.active().unwrap().doc.selection), read(&want));
+                            assert_eq!(read(&s.active().unwrap().doc.selection), want_coverage);
                         }
                     }
                 }
