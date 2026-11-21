@@ -38,7 +38,6 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["File"], "---", None, "---"),
     (&["File"], "Place Embedded…", None, "file.placeEmbedded"),
     (&["File"], "Place Linked…", None, "file.placeLinked"),
-    (&["File"], "---", None, "---"),
     (&["File"], "Package…", None, "file.package"),
     (&["File"], "---", None, "---"),
     (&["File", "Automate"], "Batch…", None, "file.automate.batch"),
