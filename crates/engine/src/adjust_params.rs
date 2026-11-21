@@ -1230,9 +1230,9 @@ fn gradient_source(cmd: &str, v: &Value) -> Result<photocraft_doc::adjust::Gradi
     };
     let method = match o.get("method").and_then(Value::as_str) {
         None => "classic".to_string(),
-        Some(m) => photocraft_io::gradient_bake::Method::from_name(m)
+        Some(m) => photocraft_io::gradient_bake::Method::for_gradient_map(m)
             .map(|m| m.name().to_string())
-            .ok_or_else(|| bad(cmd, "`source.method` must be classic, perceptual, linear or smooth"))?,
+            .ok_or_else(|| bad(cmd, "`source.method` must be classic, perceptual, linear, smooth or stripes"))?,
     };
     Ok(photocraft_doc::adjust::GradientSource { stops, midpoints, smoothness, method })
 }

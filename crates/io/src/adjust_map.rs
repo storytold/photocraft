@@ -711,7 +711,9 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
         Adjustment::ColorLookup { name, lut, size, dither, source, .. } => {
             return block(b"clrL", encode::color_lookup(name, lut.as_deref().map(Vec::as_slice), *size, *dither, source.as_ref()));
         }
-        Adjustment::GradientMap { source: Some(src), reverse, dither, .. } if src.stops.len() >= 2 => {
+        // How a PSD stores Stripes wasn't measured: a Stripes map is written as its baked hard steps below, which
+        // keep its look (#14688).
+        Adjustment::GradientMap { source: Some(src), reverse, dither, .. } if src.stops.len() >= 2 && !src.method.eq_ignore_ascii_case("stripes") => {
             // Photoshop's own gradient, as its editor holds it, rather than the dense baked stops (#8351).
             let mut stops = src.stops.clone();
             stops.sort_by(|a, b| a.0.total_cmp(&b.0));
