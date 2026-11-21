@@ -310,12 +310,14 @@ impl Layouter {
             _ => None,
         };
         let small_caps = small_caps_modes(fonts, &styles);
+        let substitutes: Vec<Option<String>> = styles.iter().map(|s| fonts.substitute_family(&s.font_family)).collect();
         let env = Env {
             text: &t.text,
             runs: &runs,
             styles: &styles,
             run_starts: &run_starts,
             small_caps: &small_caps,
+            substitutes: &substitutes,
             k,
             vertical,
             is_box,
@@ -375,6 +377,8 @@ struct Env<'a> {
     /// Start offset of each run.
     run_starts: &'a [usize],
     small_caps: &'a [SmallCapsMode],
+    /// Installed family drawing each run's missing family ([`FontDb::substitute_family`]).
+    substitutes: &'a [Option<String>],
     k: f32,
     vertical: bool,
     is_box: bool,
