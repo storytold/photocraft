@@ -63,7 +63,12 @@ pub fn open_with_options(path: &Path, opts: &photocraft_io::ImportOptions) -> Re
 
 /// Previews for a `.pcraft` bundle.
 pub fn previews(doc: &Document) -> SaveOptions {
-    SaveOptions { thumbnail: Some(photocraft_compose::thumbnail(doc, 256)), composite: Some(photocraft_compose::thumbnail(doc, 1024)), ..Default::default() }
+    SaveOptions {
+        thumbnail: Some(photocraft_compose::thumbnail(doc, 256)),
+        composite: Some(photocraft_compose::thumbnail(doc, 1024)),
+        preview_icc: Some(std::sync::Arc::new(photocraft_io::pcraft_full_composite_icc(doc))),
+        ..Default::default()
+    }
 }
 
 /// [`previews`], plus the full-size composite when `opts` asks for it and it can be rendered
