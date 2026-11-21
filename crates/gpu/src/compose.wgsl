@@ -790,15 +790,16 @@ fn adjust(c: vec3<f32>) -> vec3<f32> {
 // ---- fills ----------------------------------------------------------------------------------
 
 fn gradient_t(d: vec2<i32>) -> f32 {
-    // p0 = (angle°, scale, reverse, style), p1 = frame (x0, y0, w, h)
+    // p0 = (angle°, scale, reverse, style), p1 = frame (x0, y0, w, h), p3.xy = (sin, cos) of the
+    // angle from the CPU (plan::lower::gradient_trig): shader sin/cos may be off by 2^-11.
     let w = max(op.p1.z, 1.0);
     let h = max(op.p1.w, 1.0);
     // p2.xy: centre offset as a fraction of the bounds (gradient overlays; 0 for fills).
     let cx = op.p1.x + w / 2.0 + op.p2.x * w;
     let cy = op.p1.y + h / 2.0 + op.p2.y * h;
     let a = radians(op.p0.x);
-    let s = sin(a);
-    let c = cos(a);
+    let s = op.p3.x;
+    let c = op.p3.y;
     let dx = f32(d.x) + 0.5 - cx;
     let dy = f32(d.y) + 0.5 - cy;
     let along = dx * c - dy * s;
