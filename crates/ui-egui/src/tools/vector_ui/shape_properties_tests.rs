@@ -114,3 +114,25 @@ fn selected_shape_numeric_drags_are_live_and_undo_as_separate_gestures() {
     h.run_steps(3);
     assert_eq!(width(&h), first, "undo steps back one gesture");
 }
+
+#[test]
+fn a_stroke_width_edit_reaches_every_selected_shape() {
+    // #15586: with two shape layers selected, Properties edits both, not just the active one, in one step.
+    let mut h = properties_harness(json!({"kind": "rect", "rect": [4, 4, 20, 20]}), 8);
+    let first = h.state().session.active().unwrap().active_layer.unwrap();
+    let second = h.state_mut().run("shape.create", json!({"kind": "rect", "rect": [40, 4, 20, 20], "fill": "#d92070"})).unwrap()["layer"].as_u64().unwrap();
+    h.state_mut().run("layer.select", json!({"layer": first.0, "mode": "add"})).unwrap();
+    h.run_steps(3);
+    let before = steps(&h);
+    type_into(&mut h, "Stroke width", "9");
+    let st = h.state().session.active().unwrap();
+    let widths: Vec<f32> = [first.0, second]
+        .iter()
+        .map(|id| match &st.doc.layer(photocraft_doc::LayerId(*id)).unwrap().content {
+            photocraft_doc::LayerContent::Shape(sh) => sh.stroke.as_ref().map_or(0.0, |s| s.width),
+            _ => panic!("a shape layer"),
+        })
+        .collect();
+    assert_eq!(widths, vec![9.0, 9.0], "both selected shapes take the width");
+    assert_eq!(steps(&h), before + 1, "one History step");
+}
