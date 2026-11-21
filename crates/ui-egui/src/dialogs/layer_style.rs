@@ -615,9 +615,9 @@ struct StylePresets {
 }
 
 /// The Styles page's presets.
-fn style_presets(app: &PhotocraftApp) -> PresetSource<'static, String> {
+fn style_presets(app: &mut PhotocraftApp) -> PresetSource<'static, String> {
     let groups = app.session.presets.styles.iter().map(|group| (group.name.clone(), group.items.iter().map(|st| st.name.clone()).collect())).collect();
-    let inputs = StylePresets { groups, library: StyleLibrary::of(app.ctx(), &app.session) };
+    let inputs = StylePresets { groups, library: StyleLibrary::held(app) };
     PresetSource::new(inputs, PresetFns::new(style_rows).thumb(style_thumb))
 }
 
