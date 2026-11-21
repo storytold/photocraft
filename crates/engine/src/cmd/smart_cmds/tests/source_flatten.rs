@@ -22,11 +22,6 @@ fn block(fmt: &PixelFormat, r: Rect) -> Surface {
     s
 }
 
-/// Everything the smart object cache would hold, bit for bit.
-fn pixels(s: &Surface, bounds: Rect) -> Vec<u32> {
-    s.read_region(bounds).iter().map(|v| v.to_bits()).collect()
-}
-
 /// The composite through the full-size RGBA buffer, the way sources were rendered before.
 fn through_buffer(doc: &Document, fmt: PixelFormat) -> Surface {
     source_surface_from_buffer(doc, &photocraft_compose::flatten(doc), fmt).unwrap()
@@ -35,7 +30,16 @@ fn through_buffer(doc: &Document, fmt: PixelFormat) -> Surface {
 fn same(label: &str, doc: &Document, fmt: PixelFormat) {
     let (old, new) = (through_buffer(doc, fmt), flattened_source(doc, fmt).unwrap());
     assert_eq!(new.format(), old.format(), "{label}: format");
-    assert!(pixels(&old, doc.bounds()) == pixels(&new, doc.bounds()), "{label}: pixels differ");
+    let bounds = doc.bounds();
+    let rows_per_band = photocraft_geom::TILE_SIZE;
+    // Compare the whole canvas in bands to bound the sample buffers.
+    for y0 in (bounds.y0..bounds.y1).step_by(rows_per_band as usize) {
+        let y1 = (y0 + rows_per_band).min(bounds.y1);
+        let band = Rect::new(bounds.x0, y0, bounds.x1, y1);
+        let old_pixels = old.read_region(band);
+        let new_pixels = new.read_region(band);
+        assert!(old_pixels.iter().map(|v| v.to_bits()).eq(new_pixels.iter().map(|v| v.to_bits())), "{label}: pixels differ in rows {y0}..{y1}");
+    }
 }
 
 #[test]
