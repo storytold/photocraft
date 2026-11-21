@@ -130,6 +130,14 @@ pub(crate) fn confirm(app: &mut PhotocraftApp, dialog: DialogId, command: &str, 
     outcome
 }
 
+/// The editor `from` passes its step to `to`, the dialog its OK opened (Conditional Mode Change's target mode): `to`
+/// holds its OK and its answer replaces the step.
+pub(crate) fn hand_over(app: &mut PhotocraftApp, from: DialogId, to: DialogId) {
+    let Some(held) = app.held_record_again.as_mut().filter(|held| held.dialog == from) else { return };
+    held.dialog = to;
+    super::runner::hold_editor_ok(app, to);
+}
+
 /// A different dialog cannot discard this editor's selection or authority.
 pub(crate) fn cancel(app: &mut PhotocraftApp, dialog: DialogId) {
     if owns_dialog(app, dialog) {
