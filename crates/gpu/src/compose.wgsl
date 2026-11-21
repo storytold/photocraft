@@ -827,7 +827,7 @@ fn dither_noise(d: vec2<i32>) -> f32 {
     h = h ^ (h >> 15u);
     h = h * 0x2C1B3C6Du;
     h = h ^ (h >> 12u);
-    return f32(h & 0xFFFFu) / 65535.0;
+    return f32(h & 0xFFFFu) / 65536.0;
 }
 
 fn layer_texel(d: vec2<i32>) -> vec4<f32> {
