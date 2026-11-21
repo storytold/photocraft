@@ -85,6 +85,7 @@ impl CanvasTool for DialogTool<'_> {
                 DialogPick::Locator => (canvas_input::locate(app, at), true),
                 DialogPick::ShadowDrag => (canvas_input::drag_shadow(app, at, [0.0, 0.0]), false),
                 DialogPick::GradientDrag => (canvas_input::drag_gradient(app, at, [0.0, 0.0]), false),
+                DialogPick::SatinDrag => (canvas_input::drag_satin(app, true, [0.0, 0.0]), false),
                 DialogPick::PatternPhase => {
                     state.phase = pattern_fill_ui::press(app, at);
                     (state.phase.is_some(), false)
@@ -121,6 +122,9 @@ impl CanvasTool for DialogTool<'_> {
             DialogPick::GradientDrag => {
                 canvas_input::drag_gradient(app, start, total);
             }
+            DialogPick::SatinDrag => {
+                canvas_input::drag_satin(app, false, total);
+            }
             DialogPick::PatternPhase => {
                 // `false`: a pick change, an unlink or an outside phase change ended the gesture.
                 if let Some(mut drag) = state.phase.take()
@@ -137,9 +141,15 @@ impl CanvasTool for DialogTool<'_> {
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         let at = doc_point(pointer, cx);
         let pick = self.pick;
+        let press = self.state.press;
         let state = &mut *self.state;
         // The release's own position counts, so a drag ending past the last move still lands there.
         self.scope.with_app(|app| {
+            if pick == DialogPick::SatinDrag
+                && let Some(start) = press
+            {
+                canvas_input::drag_satin(app, false, [at[0] - start[0], at[1] - start[1]]);
+            }
             if let Some(drag) = state.phase.take() {
                 pattern_fill_ui::release(app, drag, at);
             }
@@ -157,10 +167,10 @@ impl CanvasTool for DialogTool<'_> {
         false
     }
 
-    /// The drags that move content (the pattern's phase, a shadow's offset, a gradient's offset) follow every move from
+    /// The drags that move content (the pattern's phase, a shadow's or Satin's offset, a gradient's offset) follow every move from
     /// the press, so a move of a pixel or two moves it, as production's dialog drags; none of them reads a click.
     fn takes_every_move(&self) -> bool {
-        self.state.press.is_some() && matches!(self.pick, DialogPick::PatternPhase | DialogPick::ShadowDrag | DialogPick::GradientDrag)
+        self.state.press.is_some() && matches!(self.pick, DialogPick::PatternPhase | DialogPick::ShadowDrag | DialogPick::SatinDrag | DialogPick::GradientDrag)
     }
 
     fn paint(&self, _draw: &Draw<'_>, _cx: &ToolContext<'_>) {}

@@ -12,7 +12,7 @@
 use craft::behavior::{Cursor, CursorIcon, IconId, PaintedCursor};
 use craft::color_ui::ui::ColorPickerDialog;
 use craft::draw::ui::pattern::PatternFillDialog;
-use craft::imaging::layer_style::EffectSpec;
+use craft::imaging::layer_style::{EffectKind, EffectSpec};
 use craft::imaging::ui::adjust::TonePicker;
 use craft::imaging::ui::color_range::HostedColorRange;
 use craft::imaging::ui::layer_style::HostedLayerStyle;
@@ -38,6 +38,8 @@ pub(crate) enum DialogPick {
     ColorRange,
     /// A drag on the image moves the selected shadow's angle and distance.
     ShadowDrag,
+    /// A drag on the image moves the selected Satin's angle and distance (#14985).
+    SatinDrag,
     /// A drag on the image moves the selected Gradient Overlay's offset.
     GradientDrag,
     /// A drag on the image moves the Pattern Fill phase (`pattern_fill_ui`'s gesture).
@@ -72,6 +74,9 @@ pub(crate) fn armed(app: &PhotocraftApp) -> Option<DialogPick> {
         let draft = style.draft();
         if draft.drags_shadow() {
             return Some(DialogPick::ShadowDrag);
+        }
+        if draft.drags_satin() {
+            return Some(DialogPick::SatinDrag);
         }
         return draft.drags_gradient().then_some(DialogPick::GradientDrag);
     }
@@ -193,6 +198,27 @@ pub(crate) fn drag_shadow(app: &mut PhotocraftApp, _start: [f64; 2], total: [f64
     true
 }
 
+/// The options bar's hint while a drag on the image edits the selected Layer Style page (#14985). Only the Satin page has
+/// one for now; other pages keep the bar they have.
+pub(crate) fn drag_hint(app: &PhotocraftApp) -> Option<&'static str> {
+    let top = app.framework.dialogs.stack().top()?;
+    let draft = app.framework.dialogs.get_by_id::<HostedLayerStyle>(top)?.draft();
+    draft.drags_satin().then(|| tl!("Click and drag to adjust the satin effect."))
+}
+
+/// A drag step with a Satin page selected in Layer Style (#14985). `start` is true on the press, `total` the pointer's
+/// travel since it in document pixels; the draft sets the Angle and Distance (the maths lives in craft-libs). `false`
+/// when no Satin page is selected; `true` when the page took the step, even if nothing changed.
+pub(crate) fn drag_satin(app: &mut PhotocraftApp, start: bool, total: [f64; 2]) -> bool {
+    let Some(dialog) = app.framework.dialogs.get_mut::<HostedLayerStyle>() else { return false };
+    let draft = dialog.draft_mut();
+    if !draft.drags_satin() {
+        return false;
+    }
+    draft.drag_satin(&EffectSpec::photoshop(EffectKind::Satin).defaults, start, total);
+    true
+}
+
 /// A drag step with a Gradient Overlay page selected in Layer Style: the offset moves by the travel over the layer's size.
 /// Nothing for an empty or removed layer.
 pub(crate) fn drag_gradient(app: &mut PhotocraftApp, _start: [f64; 2], total: [f64; 2]) -> bool {
@@ -215,7 +241,7 @@ pub(crate) fn locate(app: &mut PhotocraftApp, at: [f64; 2]) -> bool {
 
 /// The end of a gesture of `pick`: a Layer Style drag ends. The other picks have nothing to end.
 pub(crate) fn release(app: &mut PhotocraftApp, pick: DialogPick) {
-    if matches!(pick, DialogPick::ShadowDrag | DialogPick::GradientDrag)
+    if matches!(pick, DialogPick::ShadowDrag | DialogPick::SatinDrag | DialogPick::GradientDrag)
         && let Some(dialog) = app.framework.dialogs.get_mut::<HostedLayerStyle>()
     {
         dialog.draft_mut().end_drag();
@@ -239,7 +265,7 @@ pub(crate) fn cursor(app: &PhotocraftApp, pick: DialogPick) -> Cursor {
             pipette(badge)
         }
         DialogPick::CurvesPoint => pipette(None),
-        DialogPick::ShadowDrag | DialogPick::GradientDrag | DialogPick::PatternPhase => Cursor::System(CursorIcon::Move),
+        DialogPick::ShadowDrag | DialogPick::SatinDrag | DialogPick::GradientDrag | DialogPick::PatternPhase => Cursor::System(CursorIcon::Move),
         DialogPick::Locator => Cursor::Painted(PaintedCursor::Locator),
     }
 }
