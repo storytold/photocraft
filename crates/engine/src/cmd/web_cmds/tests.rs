@@ -1315,6 +1315,59 @@ fn save_for_web_webp_all_keeps_an_exif_only_photos_exif() {
     }
 }
 
+/// A little-endian EXIF whose Exif IFD holds the camera sensor's PixelX/YDimension, 8192 × 5464.
+fn sensor_exif() -> Vec<u8> {
+    let entry = |v: &mut Vec<u8>, tag: u16, ty: u16, count: u32, value: u32| {
+        v.extend_from_slice(&tag.to_le_bytes());
+        v.extend_from_slice(&ty.to_le_bytes());
+        v.extend_from_slice(&count.to_le_bytes());
+        v.extend_from_slice(&value.to_le_bytes());
+    };
+    let mut v = b"II*\0".to_vec();
+    v.extend_from_slice(&8u32.to_le_bytes());
+    v.extend_from_slice(&1u16.to_le_bytes());
+    entry(&mut v, 0x8769, 4, 1, 26);
+    v.extend_from_slice(&0u32.to_le_bytes());
+    v.extend_from_slice(&2u16.to_le_bytes());
+    entry(&mut v, 40962, 4, 1, 8192);
+    entry(&mut v, 40963, 4, 1, 5464);
+    v.extend_from_slice(&0u32.to_le_bytes());
+    v
+}
+
+/// PixelXDimension and PixelYDimension of a little-endian EXIF (with or without the `Exif\0\0` header).
+fn pixel_size(exif: &[u8]) -> Option<(u32, u32)> {
+    let t = exif.strip_prefix(b"Exif\0\0").unwrap_or(exif);
+    let u16_at = |o: usize| u16::from_le_bytes([t[o], t[o + 1]]);
+    let u32_at = |o: usize| u32::from_le_bytes([t[o], t[o + 1], t[o + 2], t[o + 3]]);
+    let entries = |dir: usize| (0..u16_at(dir) as usize).map(move |k| dir + 2 + k * 12).collect::<Vec<_>>();
+    let value = |e: usize| if u16_at(e + 2) == 3 { u32::from(u16_at(e + 8)) } else { u32_at(e + 8) };
+    let exif_ifd = entries(u32_at(4) as usize).into_iter().find(|e| u16_at(*e) == 0x8769).map(|e| value(e) as usize)?;
+    let find = |tag: u16| entries(exif_ifd).into_iter().find(|e| u16_at(*e) == tag).map(value);
+    Some((find(40962)?, find(40963)?))
+}
+
+/// The camera EXIF names the sensor's pixel size; Save for Web (JPEG, WebP) and Quick Export (JPEG)
+/// write the exported file's own.
+#[test]
+fn web_exports_write_the_outputs_own_pixel_size_not_the_sensors() {
+    let dir = tmp("exif_pixel_size");
+    let mut s = photo_session(sensor_exif());
+    assert_eq!(pixel_size(&sensor_exif()), Some((8192, 5464)));
+    for (format, ext) in [("jpeg", "jpg"), ("webp", "webp")] {
+        let path = format!("{dir}/resized.{ext}");
+        s.execute("file.export.saveForWebLegacy", json!({"format": format, "metadata": "all", "width": 40, "height": 30, "path": path})).unwrap();
+        let exif = if format == "jpeg" { exif_app1(&std::fs::read(&path).unwrap()) } else { decode(&path).meta.exif };
+        assert_eq!(pixel_size(&exif.unwrap_or_else(|| panic!("{format}: EXIF"))), Some((40, 30)), "{format} Save for Web");
+        assert_eq!(decode(&path).dimensions(), (40, 30));
+    }
+    s.execute("file.export.exportPreferences", json!({"quickExportFormat": "jpg", "metadata": "all"})).unwrap();
+    let path = format!("{dir}/quick.jpg");
+    s.execute("file.export.quickExport", json!({"path": path})).unwrap();
+    assert_eq!(pixel_size(&exif_app1(&std::fs::read(&path).unwrap()).expect("EXIF")), Some((64, 48)), "Quick Export");
+    s.execute("prefs.reset", json!({"path": "export"})).unwrap();
+}
+
 #[test]
 fn quick_export_all_writes_the_photos_exif() {
     let dir = tmp("quick_exif");

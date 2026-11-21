@@ -33,6 +33,7 @@ photocraft-text = { workspace = true }
 photocraft-vector = { workspace = true }
 photocraft-io = { workspace = true }
 craft-xml = { workspace = true }
+craft-metadata = { workspace = true }
 craft-psd = { workspace = true }
 photocraft-format = { workspace = true }
 photocraft-plugins = { workspace = true }
