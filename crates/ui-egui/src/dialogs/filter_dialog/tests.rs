@@ -269,6 +269,8 @@ fn global_light_dialog_reflects_active_document_light() {
     const CMD: &str = "layer.layerStyle.globalLight";
     let mut app = new_app();
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    // A document holding only the Background greys Global Light (#14681).
+    app.run("layer.new.layer", json!({})).unwrap();
     let doc1_id = app.session.active().unwrap().doc.id;
     let light = |app: &PhotocraftApp| {
         let gl = app.session.active().unwrap().doc.global_light;
@@ -310,6 +312,8 @@ fn global_light_dialog_reflects_active_document_light() {
 
     // 5. Each document opens the dialog at its own light.
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    // A document holding only the Background greys Global Light (#14681).
+    app.run("layer.new.layer", json!({})).unwrap();
     let doc2_id = app.session.active().unwrap().doc.id;
     assert_ne!(doc1_id, doc2_id);
     app.run(CMD, json!({"angle": -45.0, "altitude": 15.0})).unwrap();
