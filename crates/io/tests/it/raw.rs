@@ -731,10 +731,9 @@ fn raw_open_legacy_baseline_pixels() {
         ..Default::default()
     };
     let (tuned, wb) = import_raw_tuned("pin.dng", &bytes, &tuning).unwrap();
-    assert!(wb);
     let tuned_img = photocraft_io::document_to_image(&tuned.document, &mut Vec::new()).unwrap();
     let tuned_px = [sample_rgb16(tuned_img.data(), w, 0, 0), sample_rgb16(tuned_img.data(), w, 7, 7), sample_rgb16(tuned_img.data(), w, 15, 15)];
     let tuned_hash = fnv1a_u16(tuned_img.data());
 
-    assert_eq!((def_px, def_hash, tuned_px, tuned_hash), ([[0; 3]; 3], 0, [[0; 3]; 3], 0));
+    assert_eq!((def_px, def_hash, wb, tuned_px, tuned_hash), ([[0; 3]; 3], 0, false, [[0; 3]; 3], 0));
 }
