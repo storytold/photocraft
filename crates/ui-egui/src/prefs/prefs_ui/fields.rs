@@ -152,6 +152,8 @@ pub(super) fn rules() -> Vec<SettingRule> {
     // The browser presents frames itself: Low-Latency Drawing does nothing there.
     if cfg!(target_arch = "wasm32") {
         tweak(&mut rules, "performance.lowLatencyDrawing", |r| r.hidden());
+        // The browser cannot start an external raw editor.
+        tweak(&mut rules, "rawDefaults.externalEditor", |r| r.hidden());
     }
     // WinTab is a Windows-only opt-in, drawn with its note.
     if cfg!(target_os = "windows") {

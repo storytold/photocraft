@@ -491,6 +491,8 @@ file.export.colorLookupTables
 view.newGuideLayout
 view.newGuidesFromShape
 view.clearCanvasGuides
+file.editInRawEditor
+file.developInRawEditor
 file.exrParts
 file.openExrParts
 type.antiAlias.none
