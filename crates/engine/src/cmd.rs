@@ -22,6 +22,8 @@ mod adjust_params;
 pub mod align_cmds;
 pub mod analysis_cmds;
 pub mod artboard_cmds;
+#[cfg(test)]
+mod assign_profile_32bit_linear_tests;
 pub mod atn_cmds;
 pub mod automate_cmds;
 pub mod background_cmds;
