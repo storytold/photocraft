@@ -52,6 +52,18 @@ fn a_click_and_a_drag_in_indexed_color_alert_and_heal_nothing() {
     }
 }
 
+/// The tool can change while the button is down: the stroke that started with the Spot Healing Brush still gets the
+/// alert, not the engine's refusal in the status bar.
+#[test]
+fn a_stroke_started_with_spot_healing_alerts_even_if_the_tool_changed_before_the_release() {
+    let mut app = spotted(true);
+    let before = state(&app);
+    app.ui.tool = Tool::Brush;
+    assert!(crate::retouch_ui::finish_stroke(&mut app, Tool::SpotHealing, &[[48.0, 30.0, 1.0]], Mods::NONE, false));
+    assert_eq!(alerts(&app), [MESSAGE]);
+    assert!(state(&app) == before, "nothing healed, no history state");
+}
+
 #[test]
 fn an_rgb_document_heals_without_an_alert() {
     let mut app = spotted(false);

@@ -214,7 +214,9 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
         Tool::SpotHealing => {
             // Indexed Color: the reference's alert with OK, and nothing heals (#12582); the engine refuses with the same
             // words.
-            if spot_healing_indexed(app) {
+            // The stroke's own tool decides, not the tool chosen now: it may have changed before the release
+            // (CodeRabbit on #16105).
+            if app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Indexed) {
                 let _ = crate::dialogs::alerts::alert(
                     app,
                     tl!("Could not use the spot healing brush because it does not work with Indexed Color images (convert image to RGB Color mode to edit)."),
