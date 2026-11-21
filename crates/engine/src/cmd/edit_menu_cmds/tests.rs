@@ -934,3 +934,27 @@ fn tool_preset_import_is_validated_before_mutation_and_accepts_old_files() {
     let result = s.execute("edit.presets.exportImportPresets", json!({"action":"import", "data":{"format":PRESET_FORMAT, "version":1}})).unwrap();
     assert_eq!(result["tools"], 0);
 }
+
+/// #15603: Fade in a blend mode after a step that ran inside a selection changed the whole layer.
+/// Outside the selection the step left the pixels as they were, but a pixel blended with itself
+/// changes in most modes (Multiply darkens grey). Fade now leaves the pixels outside alone, at every
+/// depth, in the dialog's preview as on OK.
+#[test]
+fn fade_in_a_blend_mode_stays_inside_the_steps_selection() {
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+        s.execute("image.adjustments.invert", json!({})).unwrap();
+        let (inside, outside) = (px(&s, 5, 5)[0], px(&s, 30, 30)[0]);
+        let p = json!({"opacity": 100, "mode": "multiply"});
+        let id = s.active().unwrap().active_layer.unwrap();
+        let shown = fade_preview(&s, &p).and_then(FadePreview::render).unwrap().layer(id).unwrap().surface().unwrap().pixel(30, 30)[0];
+        s.execute("edit.fade", p).unwrap();
+        assert!((px(&s, 30, 30)[0] - outside).abs() < 1e-6, "depth {depth}: outside the selection stays {outside}, got {}", px(&s, 30, 30)[0]);
+        assert!((shown - outside).abs() < 1e-6, "depth {depth}: the preview agrees, got {shown}");
+        // Inside, Multiply of the grey and its inverse, as before.
+        let want = outside * inside;
+        assert!((px(&s, 5, 5)[0] - want).abs() < 0.01, "depth {depth}: inside {} want {want}", px(&s, 5, 5)[0]);
+    }
+}
