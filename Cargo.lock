@@ -6774,6 +6774,7 @@ dependencies = [
  "craft-image-codecs",
  "craft-print",
  "craft-psd",
+ "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=bafb4522899d9f814a07dad636cdefcbf705dead)",
  "eframe",
  "egui",
  "egui_extras",
