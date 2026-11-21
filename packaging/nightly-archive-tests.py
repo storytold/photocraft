@@ -3,6 +3,9 @@
 import gzip
 import importlib.util
 import os
+import runpy
+import sys
+from unittest import mock
 from pathlib import Path
 import subprocess
 import tarfile
@@ -91,6 +94,19 @@ class ArchivePolicy(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "case-colliding"):
             ARCHIVE.linux_archive(self.stage, self.output)
         self.assertFalse(self.output.exists())
+
+    def test_cli_dispatches_only_the_supported_archive_kind(self):
+        helper = HERE / "nightly-archive.py"
+        with mock.patch.object(sys, "argv", [str(helper), "linux", str(self.stage), str(self.output)]):
+            runpy.run_path(str(helper), run_name="__main__")
+        with tarfile.open(self.output) as archive:
+            self.assertEqual({member.name for member in archive}, self.required)
+        refused = self.root / "refused.tar.gz"
+        for args in ([str(helper)], [str(helper), "unknown", str(self.stage), str(refused)]):
+            with self.subTest(args=args), mock.patch.object(sys, "argv", args):
+                with self.assertRaises(SystemExit):
+                    runpy.run_path(str(helper), run_name="__main__")
+                self.assertFalse(refused.exists())
 
     def test_existing_archive_is_unchanged(self):
         self.output.write_bytes(b"owned earlier artifact")

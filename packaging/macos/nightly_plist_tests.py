@@ -3,6 +3,9 @@
 import importlib.util
 from pathlib import Path
 import plistlib
+import runpy
+import sys
+from unittest import mock
 import tempfile
 import unittest
 
@@ -55,6 +58,49 @@ class NightlyMetadata(unittest.TestCase):
         with self.assertRaises(ValueError):
             POLICY.write_plist(self.template, self.output, VERSION, COMMIT)
         self.assertFalse(self.output.exists())
+
+    def test_cli_writes_the_requested_identity_without_replacing_the_template(self):
+        helper = HERE / "nightly_plist.py"
+        argv = [str(helper), "--template", str(self.template), "--output", str(self.output), "--version", VERSION, "--source-commit", COMMIT]
+        with mock.patch.object(sys, "argv", argv):
+            runpy.run_path(str(helper), run_name="__main__")
+        result = plistlib.loads(self.output.read_bytes())
+        self.assertEqual(result["PhotoCraftVersion"], VERSION)
+        self.assertEqual(result["PhotoCraftBuildCommit"], COMMIT)
+        self.assertEqual(self.template.read_bytes(), self.original)
+
+    def test_template_alias_or_nonfile_refuses_before_output(self):
+        alias = self.root / "template-alias"
+        alias.symlink_to(self.template)
+        for template in (alias, self.root, self.root / "missing-template"):
+            with self.subTest(template=template), self.assertRaises(ValueError):
+                POLICY.write_plist(template, self.output, VERSION, COMMIT)
+            self.assertFalse(self.output.exists())
+            self.assertEqual(self.template.read_bytes(), self.original)
+
+    def test_failed_write_cleans_owned_output_but_preserves_a_replacement(self):
+        sentinel = b"generated replacement artifact"
+        for disposition in ("owned", "missing", "replacement"):
+            with self.subTest(disposition=disposition):
+                if self.output.exists():
+                    self.output.unlink()
+
+                def fail_sync(_descriptor):
+                    # macOS/Linux allow unlink of an open file: exercise the real
+                    # cleanup ownership check, not a mocked inode comparison.
+                    if disposition != "owned":
+                        self.output.unlink()
+                    if disposition == "replacement":
+                        self.output.write_bytes(sentinel)
+                    raise OSError("generated fsync failure")
+
+                with mock.patch.object(POLICY.os, "fsync", side_effect=fail_sync), self.assertRaises(OSError):
+                    POLICY.write_plist(self.template, self.output, VERSION, COMMIT)
+                if disposition == "replacement":
+                    self.assertEqual(self.output.read_bytes(), sentinel)
+                else:
+                    self.assertFalse(self.output.exists())
+                self.assertEqual(self.template.read_bytes(), self.original)
 
     def test_exclusive_output_preserves_existing_bytes_and_symlink_targets(self):
         sentinel = b"generated owned sentinel, not an existing app or user file"
