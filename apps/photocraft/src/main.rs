@@ -438,13 +438,14 @@ fn report_launch_profile_error(error: &str) {
     }
 }
 
-fn main() -> eframe::Result {
+/// Select the immutable launch profile before any startup service or side effect.
+fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
     // The trusted Launcher protocol is decided before logger/crash/update/font/prefs access.
     let argv: Vec<_> = std::env::args_os().skip(1).collect();
     if build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1 && build_flavor::version_query(&argv) {
         use std::io::Write as _;
         let _ = writeln!(std::io::stdout(), "PhotoCraft {}", build_flavor::version(build_flavor::COMPILED, env!("PHOTOCRAFT_BUILT_VERSION")));
-        return Ok(());
+        return None;
     }
     let early = launch_profile::parse(argv)
         .and_then(|launch| {
@@ -464,6 +465,12 @@ fn main() -> eframe::Result {
         report_launch_profile_error(&error);
         std::process::exit(2);
     }
+
+    Some(early.args)
+}
+
+fn main() -> eframe::Result {
+    let Some(arguments) = prepare_launch() else { return Ok(()) };
 
     // Before anything starts a thread: may re-execute this process with glibc tuned to return
     // the memory of closed documents (#8743).
@@ -488,7 +495,7 @@ fn main() -> eframe::Result {
     // option, a missing or bad value, a bad PHOTOCRAFT_CONTROL_PORT: issues #701, #6429, #6431)
     // names the argument on standard error and exits 2, so a launcher sees the failure. Neither
     // panics when the stream is closed or a pipe (`photocraft --help | head -1`).
-    let launch = launch_args::parse(launch_args::command(), early.args).unwrap_or_else(|e| e.exit());
+    let launch = launch_args::parse(launch_args::command(), arguments).unwrap_or_else(|e| e.exit());
     let launch_args::FileNames { openable: files, unreadable: unreadable_paths } = launch.file_names();
     let launch_args::LaunchArgs {
         files: _,
@@ -861,7 +868,13 @@ fn main() -> eframe::Result {
                         "PhotoCraft Nightly could not record session health in its private profile. You can still edit, but abnormal-exit detection is unavailable.",
                     )
                 };
-                photocraft_ui_egui::notices::post(&mut app, i18n::t("PhotoCraft Nightly"), vec![message.to_owned()], craft::theme::variant::Tone::Neutral, None);
+                photocraft_ui_egui::notices::post(
+                    &mut app,
+                    i18n::t("PhotoCraft Nightly"),
+                    vec![message.to_owned()],
+                    craft::theme::variant::Tone::Neutral,
+                    None,
+                );
             }
             // Portable marker found but its data folder isn't writable (#228): say where settings went.
             if let Some(w) = &app_dirs::current().warning {
