@@ -91,7 +91,14 @@ fn retain_action_scopes(d: &Descriptor, id: &str, params: &mut Value) {
     }
 }
 
-fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Vec<Unsupported>, replacing: bool) -> Action {
+fn convert_action(
+    file: &AtnFile,
+    a: &AtnAction,
+    set: &str,
+    own: &std::collections::HashSet<String>,
+    unsupported: &mut Vec<Unsupported>,
+    replacing: bool,
+) -> Action {
     let name = clip_name(&a.name.to_string_lossy());
     let mut action = Action::new(name.clone(), Vec::new());
     action.set = Some(clip_name(set));
@@ -121,6 +128,21 @@ fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Ve
                 retain_action_scopes(descriptor, &s.0, &mut s.1);
             }
             normalise(&mut s.1);
+            // A Play step qualified with the set this very file is: the qualifier names the set
+            // every action of this import belongs to, so it carries no target. Dropping it here
+            // keeps a call of a *different* set, which is the one that must survive (#11523). A
+            // child this set does not hold keeps the qualifier too: bare, the call would reach a
+            // same-named action of another loaded set, so the load reports it and playback refuses.
+            // A whole-library replacement resolves its explicit scopes against the archive and
+            // keeps them all (retain_action_scopes above).
+            if !replacing
+                && s.0 == "actions.play"
+                && s.1.get("set").and_then(Value::as_str) == Some(set)
+                && s.1.get("action").and_then(Value::as_str).is_none_or(|child| own.contains(&clip_name(child)))
+                && let Some(object) = s.1.as_object_mut()
+            {
+                object.remove("set");
+            }
             let idx = action.steps.len();
             action.steps.push(s.into());
             if !enabled {
@@ -187,8 +209,9 @@ fn convert_set(file: &AtnFile, mut unsupported_rows: Option<&mut Vec<usize>>) ->
     let set = file.name.to_string_lossy();
     let set = if set.trim().is_empty() { DEFAULT_SET.to_string() } else { clip_name(&set) };
     let mut out = Imported { set: set.clone(), warnings: file.warnings.clone(), encoding: file.encoding.clone(), ..Default::default() };
+    let own: std::collections::HashSet<String> = file.actions.iter().map(|a| clip_name(&a.name.to_string_lossy())).collect();
     for (row, a) in file.actions.iter().enumerate() {
-        let action = convert_action(file, a, &set, &mut out.unsupported, unsupported_rows.is_some());
+        let action = convert_action(file, a, &set, &own, &mut out.unsupported, unsupported_rows.is_some());
         if let Some(owners) = unsupported_rows.as_deref_mut() {
             owners.resize(out.unsupported.len(), row);
         }
