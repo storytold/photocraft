@@ -160,7 +160,7 @@ The transport is the framework's control server (`craft::automation::server` in 
 - `ui.inspect` `rects` maps each open document's canvas (`canvas.<index>`), each hosted dialog (its `dialogs` id) and `taskBar` to its last on-screen rect `[x0, y0, x1, y1]` in screen points; an id with no rect (absent, behind a modal dialog) is left out
 - `ui.pointer` queues its events for the active document's canvas and replies at once; the canvas takes them on its next frame, so a following request sees their effect only after a frame has run. With no open document or no canvas shown it fails with `no canvas to drive` and queues nothing. `modifiers.space` is held as the Space key for the request
 - `ui.screenshot {path?, focus?, window?}`: capture the main window, or the document window `window` (its id as `ui.window.open` replied it; `main` is the main window) (PNG). With no path the reply contains
-  base64 PNG data; a path is relative to the automation write root. Raises the window first
+  base64 PNG data; a supplied path may be relative to the automation write root or absolute beneath its canonical or configured spelling. Raises the window first
   (default) because occluded macOS windows stop rendering. A request sent before the first frame
   is queued (within the same limits and deadline) and captures once the window geometry is known,
   as on 0.15. At most four captures may be outstanding (waiting for geometry, rendered or awaiting
