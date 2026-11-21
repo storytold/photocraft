@@ -296,7 +296,10 @@ fn transform_pops() {
     };
     seqs.retain(|s| valid(s));
     let mut failures = Vec::new();
-    for s in &seqs {
+    for (i, s) in seqs.iter().enumerate() {
+        if i % 100 == 0 {
+            eprintln!("progress: {i} of {} sequences, {} with a pop", seqs.len(), failures.len());
+        }
         match run(gpu, s) {
             Err(e) => {
                 eprintln!("POP {s:?}: {e}");
