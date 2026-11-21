@@ -153,11 +153,15 @@ fn each_tool_resets_and_first_uses_its_own_tip() {
         let previous = live(&a);
         pick(&mut a, tool);
         let first_smoothing = starting(&a, other(tool)).smoothing;
-        let want = match rule {
+        let mut want = match rule {
             FirstUse::Fresh => starting(&a, tool),
             FirstUse::SizeOnly => Tip { size: starting(&a, tool).size, smoothing: first_smoothing, ..previous },
             FirstUse::Current => Tip { smoothing: first_smoothing, ..previous },
         };
+        // Blur's Pressure for Size is its own bar control: off at first use whatever the other tool had (#12648).
+        if tool == Tool::Blur {
+            want.pressure_size = false;
+        }
         assert_eq!(live(&a), want, "{tool:?}: first use ({rule:?})");
         a.session.tools.brush.size = 42.0;
         pick(&mut a, other(tool));
