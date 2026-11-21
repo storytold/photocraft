@@ -487,13 +487,14 @@ fn an_out_of_canvas_point_over_pixels_past_the_edge_promises_no_error() {
     s.execute("file.new", json!({"width": W, "height": H, "depth": 8})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Overhang"})).unwrap();
     paint_rect(&mut s, Rect::new(W - 10, 100, W + 90, 120), |_, _| [220.0 / 255.0, 30.0 / 255.0, 30.0 / 255.0, 1.0]);
-    let d = s.active().unwrap();
-    let (doc, layer) = (std::sync::Arc::clone(&d.doc), d.active_layer);
+    let (doc, layer) = {
+        let d = s.active().unwrap();
+        (std::sync::Arc::clone(&d.doc), d.active_layer)
+    };
     let surface = doc.layer(layer.unwrap()).unwrap().surface().unwrap();
     assert!(surface.content_bounds().x1 > W, "the layer's pixels reach past the canvas edge: {}", surface.content_bounds().x1);
     assert!(!point_reports_sampled_pixels_error(&doc, layer, false, Rect::from_xywh(W + 20, 110, 1, 1)), "no #5246 message where the layer has pixels");
     assert!(point_reports_sampled_pixels_error(&doc, layer, false, Rect::from_xywh(W + 200, 110, 1, 1)), "and the message where it has none");
-    drop(d);
     let r = s.execute("select.object", json!({"point": [W + 20, 110]})).unwrap();
     assert_eq!(r["changed"], false, "the click over the off-canvas pixels stays the silent nothing-found");
     assert!(s.active().unwrap().doc.selection.is_none(), "and selects nothing");
