@@ -1633,15 +1633,17 @@ mod tests {
     }
 
     #[test]
-    fn a_dashed_zero_length_line_falls_back() {
+    fn a_dashed_zero_length_subpath_with_butt_caps_paints_nothing_and_the_line_stays_editable() {
+        // ISO 32000-2 §8.5.3.2: a degenerate subpath is stroked only with round caps. The
+        // interpreter drops it for butt caps, so only the dashed line reaches the importer.
         let bytes = pdf("[1 1] 0 d 10 10 m 20 20 l 30 30 m h S");
         let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
         let imported = import_with_options_and_interrupt("dash.pdf", &bytes, &options, &Interrupt::NONE).expect("import");
-        assert!(
-            imported.warnings.iter().any(|warning| warning.contains("dashed zero-length subpath") && warning.contains("rasterised")),
-            "{:?}",
-            imported.warnings
-        );
+        assert!(imported.warnings.is_empty(), "{:?}", imported.warnings);
+        let layers = children(&imported.document);
+        let Some(LayerContent::Shape(shape)) = layers.first().map(|layer| &layer.content) else { panic!("not a shape: {:?}", imported.warnings) };
+        assert_eq!(shape.path.subpaths.len(), 1, "only the visible line is kept");
+        assert!(shape.stroke.as_ref().is_some_and(|stroke| !stroke.dashes.is_empty()), "the line keeps its dashes");
     }
 
     #[test]

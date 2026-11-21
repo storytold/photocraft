@@ -82,27 +82,6 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// A key of what the bar shows of the open session: the box, its skew, the phase, the interpolation, the reference
-/// point, the Warp group's values and the armed split. A drag on the canvas changes them without a command, so the
-/// options bar's content version holds this key.
-pub(crate) fn bar_key(app: &PhotocraftApp) -> Option<u64> {
-    use std::hash::{Hash, Hasher};
-    let t = app.ui.transform.as_ref()?;
-    let s = &t.session;
-    let state = s.state();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for p in state.quad.iter().chain([&state.pivot]) {
-        (p.x.to_bits(), p.y.to_bits()).hash(&mut hasher);
-    }
-    (s.skew_v().to_bits(), s.phase(), s.interpolation(), s.reference_point(), s.allows()).hash(&mut hasher);
-    if let Some(w) = s.warp() {
-        let v = warp_values(w);
-        (v.style, v.vertical, v.bend.to_bits(), v.horizontal.to_bits(), v.vertical_distortion.to_bits(), v.grid, w.on_type).hash(&mut hasher);
-    }
-    app.transform_preview.as_ref().and_then(|pv| pv.split).hash(&mut hasher);
-    Some(hasher.finish())
-}
-
 /// The units of the W and H menu, in Photoshop's order.
 fn size_unit_entries() -> Vec<Entry<UnitKind>> {
     let name = |name: &str| Label::from(name.to_string());

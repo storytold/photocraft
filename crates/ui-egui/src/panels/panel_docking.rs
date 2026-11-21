@@ -7,7 +7,7 @@
 
 use craft::behavior::dock::{Action, DockEdge, DockPlacement, Layout, Node, PanelPlace, PanelState, Permissions, SplitSize, Target};
 use craft::behavior::{DockSide, EditEvent, EditEvents, IconId};
-use craft::ui::contract::{Bind, BodyCx, Lazy, SizeLimits};
+use craft::ui::contract::{Bind, BodyCx, SizeLimits};
 use craft::ui::docking::{
     DockCommands, DockConfig, DockEvent, DockPanels, DockScene, DockSizes, DockTo, DragUnit, FloatSpace, GroupAt, HidePanels, PanelSpec, actions, move_actions,
     request_actions,
@@ -175,20 +175,6 @@ impl DockPanels<String> for Panels<'_> {
         body(self.app, ui, panel);
     }
 
-    /// Each group's header and tab strip and each column's bar settle as the panel bodies do.
-    fn spec_version(&self) -> Option<u64> {
-        Some(super::region_versions::dock_chrome(self.app))
-    }
-
-    fn content(&self, panel: &String) -> Option<u64> {
-        match panel.as_str() {
-            // The canvas shows state that changes without a command: the view, redraw progress, animation and job overlays.
-            CANVAS => None,
-            TOOLBAR => Some(super::region_versions::toolbar(self.app)),
-            _ => Some(super::region_versions::panel(self.app, panel)),
-        }
-    }
-
     /// The canvas group is the document area: it draws its own tabs and documents in the group's rect. The toolbar's
     /// group is its rail, which takes the group's full rect and measures its height at a width.
     fn group_view(&mut self, panels: &[String], _: usize, ui: &mut egui::Ui, at: GroupAt, _: &mut BodyCx<'_>) -> Option<f32> {
@@ -196,11 +182,8 @@ impl DockPanels<String> for Panels<'_> {
             return Some(match at {
                 GroupAt::Measure(width) => super::toolbar::measure(self.app, ui, width),
                 GroupAt::Show(rect) => {
-                    // The rail settles as a panel body does: while nothing it shows changed and no input reaches it,
-                    // the frame repaints its last run instead of running every tool button again (#15493).
-                    let version = super::region_versions::toolbar_drawn(self.app, ui);
-                    let app = &mut *self.app;
-                    Lazy::new("toolbar", 0.0).settles(true).content(version).show(ui, |ui| super::toolbar::toolbar(app, ui));
+                    // The rail is a memoized view of the framework: it replays while nothing it reads changed.
+                    super::toolbar::toolbar(self.app, ui);
                     rect.height()
                 }
             });
