@@ -14,7 +14,9 @@
 //!   exactly as today (guard tests: they pass before and after);
 //! - the boards define the exported area, so real content that lies outside every board is not in
 //!   the file (same rule as exporting artboards only), while content that only crosses into the
-//!   area still travels; a hidden board counts toward the area as much as a visible one;
+//!   area still travels; which of an effect's sources survive the crop follows the canvas's own
+//!   edge clipping (three pins at the end); a hidden board counts toward the area as much as a
+//!   visible one;
 //! - Scale All exports every row from that area, not from the grown canvas;
 //! - the engine's canvas rule (#14565 owns any change there) and the Layer > Export As path
 //!   (#11479 and #13736 own picking a board or one file per board) are untouched.
@@ -343,4 +345,77 @@ fn scale_all_exports_the_boards_area_at_every_row_size() {
     assert!(!app.ui.status_error, "{}", app.ui.status);
     let sizes: Vec<(u32, u32)> = sent.borrow().iter().map(|d| (d.size.width, d.size.height)).collect();
     assert_eq!(sizes, vec![(100, 100), (200, 200)], "one file per row, each at the board area scaled by that row");
+}
+
+/// Pins measured behaviour, green on purpose: an Outer Glow whose source layer lies wholly
+/// outside the boards' union but reaches back inside it. A stroke-only shape's glow is visible
+/// on the canvas inside the area but absent from the file: the crop re-renders shape caches
+/// clipped to the cropped canvas, and the SAME clipping already cuts effect sources at the
+/// canvas edge today (a shape wholly outside the canvas shows no glow on the canvas itself).
+/// This pins canvas-edge semantics moved with the area; revisit only if compose ever renders
+/// the region before cropping.
+#[test]
+fn a_stroke_only_shape_outside_the_area_loses_its_glow_in_the_file() {
+    let (mut app, sent) = artboard_app(300, 200);
+    app.run("layer.new.artboard", json!({"rect": [0, 0, 100, 100], "background": "white"})).unwrap();
+    app.run("shape.create", json!({"kind": "rect", "rect": [110, 40, 20, 20], "fill": null, "stroke": {"width": 4, "color": "#00ff00"}})).unwrap();
+    app.run("layer.layerStyle.outerGlow", json!({"color": "#ff0000", "size": 30, "opacity": 100, "blend": "normal"})).unwrap();
+    let on_canvas = app.session.active().unwrap().doc.clone();
+    let c = at(&on_canvas, 90, 50);
+    assert!(c[0] > c[1], "the canvas shows the red glow inside the board area: {c:?}");
+
+    let mut h = harness(app);
+    let id = open_and_settle(&mut h);
+    sent.borrow_mut().clear();
+    export_with(&mut h, id, &png_options());
+    assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
+    let png = exported(&sent);
+    assert_eq!((png.size.width, png.size.height), (100, 100), "the board area, as always here");
+    let p = at(&png, 90, 50);
+    assert_eq!(p, [1.0, 1.0, 1.0, 1.0], "the glow the canvas shows there is absent from the file: {p:?}");
+}
+
+/// The other side of that pin: a FILLED shape outside the area carries its glow into the file,
+/// because fill pixels are kept by the crop rather than re-rendered from a clipped cache.
+#[test]
+fn a_filled_shape_outside_the_area_carries_its_glow_into_the_file() {
+    let (mut app, sent) = artboard_app(300, 200);
+    app.run("layer.new.artboard", json!({"rect": [0, 0, 100, 100], "background": "white"})).unwrap();
+    app.run("shape.create", json!({"kind": "rect", "rect": [110, 40, 20, 20], "fill": "#00ff00"})).unwrap();
+    app.run("layer.layerStyle.outerGlow", json!({"color": "#ff0000", "size": 30, "opacity": 100, "blend": "normal"})).unwrap();
+    let on_canvas = app.session.active().unwrap().doc.clone();
+    let c = at(&on_canvas, 90, 50);
+    assert!(c[0] > c[1], "the canvas shows the red glow inside the board area: {c:?}");
+
+    let mut h = harness(app);
+    let id = open_and_settle(&mut h);
+    sent.borrow_mut().clear();
+    export_with(&mut h, id, &png_options());
+    assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
+    let png = exported(&sent);
+    let p = at(&png, 90, 50);
+    assert!(p[0] > p[1], "the glow travels into the file, red-dominant as on the canvas: canvas {c:?} file {p:?}");
+}
+
+/// The third source kind: a rasterised (pixel) layer outside the area carries its glow into
+/// the file too, like the filled shape and unlike the stroke-only one.
+#[test]
+fn a_rasterised_layer_outside_the_area_carries_its_glow_into_the_file() {
+    let (mut app, sent) = artboard_app(300, 200);
+    app.run("layer.new.artboard", json!({"rect": [0, 0, 100, 100], "background": "white"})).unwrap();
+    let id = app.run("shape.create", json!({"kind": "rect", "rect": [110, 40, 20, 20], "fill": "#00ff00"})).unwrap()["layer"].as_u64().unwrap();
+    app.run("layer.rasterize.layer", json!({"layer": id})).unwrap();
+    app.run("layer.layerStyle.outerGlow", json!({"color": "#ff0000", "size": 30, "opacity": 100, "blend": "normal"})).unwrap();
+    let on_canvas = app.session.active().unwrap().doc.clone();
+    let c = at(&on_canvas, 90, 50);
+    assert!(c[0] > c[1], "the canvas shows the red glow inside the board area: {c:?}");
+
+    let mut h = harness(app);
+    let dialog = open_and_settle(&mut h);
+    sent.borrow_mut().clear();
+    export_with(&mut h, dialog, &png_options());
+    assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
+    let png = exported(&sent);
+    let p = at(&png, 90, 50);
+    assert!(p[0] > p[1], "the glow travels into the file, red-dominant as on the canvas: canvas {c:?} file {p:?}");
 }

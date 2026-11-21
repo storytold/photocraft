@@ -528,9 +528,12 @@ fn area_of(f: &Map<String, Value>, canvas: Size) -> Result<Option<Rect>, String>
 }
 
 /// The document cropped to `area`, on a private session: the copy an export writes, never the
-/// user's document. Cropped pixels are kept (`deleteCroppedPixels: false`), so content that
-/// starts outside the area but paints into it (an effect bleeding over an edge) still exports,
-/// exactly as it does on today's canvas.
+/// user's document. Cropped pixels are kept (`deleteCroppedPixels: false`): a filled shape or
+/// a pixel layer outside the area carries its bleeding effect across the edge into the file.
+/// A stroke-only shape wholly outside it loses that effect there, because the crop re-renders
+/// shape caches clipped to the cropped canvas - the same clipping that already cuts effect
+/// sources at today's canvas edge - and gradient fills re-lay out over the cropped canvas
+/// instead of the original one. Pinned by three tests in `artboard_export_area_tests`.
 fn crop_to(doc: &Document, area: Rect) -> Result<Document, String> {
     let mut session = photocraft_engine::Session::new();
     session.add_document(doc.clone(), None);
