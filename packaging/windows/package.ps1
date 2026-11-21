@@ -50,6 +50,8 @@ $MsiVersion = ($Version -split '-')[0]
 $Target = switch ($Arch) { 'x64' { 'x86_64-pc-windows-msvc' } 'x86' { 'i686-pc-windows-msvc' } 'arm64' { 'aarch64-pc-windows-msvc' } }
 $Dist = if ($env:DIST) { $env:DIST } else { Join-Path $Root 'dist\release' }
 $TargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $Root 'target' }
+# Resolve relative overrides before the build temporarily switches to the workspace.
+$TargetDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($TargetDir)
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 
 if (-not $env:PHOTOCRAFT_BUILD_SHA) { $env:PHOTOCRAFT_BUILD_SHA = (git -C $Root rev-parse HEAD 2>$null) }
@@ -64,7 +66,11 @@ if (-not $SkipBuild) {
   [Environment]::SetEnvironmentVariable($flagVar, '-C target-feature=+crt-static')
   # Fail the build (rather than warn) if the icon/VERSIONINFO can't be embedded.
   $env:PHOTOCRAFT_REQUIRE_WINRES = '1'
-  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p photocraft -p photocraft-cli --features heif --target $Target }
+  # Toolchain overrides and Cargo configuration are selected from the working directory.
+  Push-Location -LiteralPath $Root
+  try {
+    Invoke-Native "cargo build ($Target)" { cargo build --manifest-path (Join-Path $Root 'Cargo.toml') --target-dir $TargetDir --release --locked -p photocraft -p photocraft-cli --features heif --target $Target }
+  } finally { Pop-Location }
 }
 
 $Bin = Join-Path $TargetDir "$Target\release"
