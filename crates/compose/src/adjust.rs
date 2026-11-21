@@ -12,6 +12,7 @@ use crate::Buffer;
 
 mod channels;
 mod color;
+mod gray_lightness;
 mod tone;
 
 #[cfg(test)]
@@ -20,13 +21,14 @@ pub use channels::{
     LAB_NEUTRAL, LabOp, apply_cmy, cmy_adjustment, cmyk_channel_adjustment, ink_brightness_contrast_lut, ink_luma, ink_through, lab_channel_adjustment,
     lab_stored_op, stored_channel_adjustment, stored_channels, threshold_white,
 };
-use channels::{apply_lab, gray_from_srgb_lightness, legacy_brightness_contrast, legacy_brightness_contrast_hdr};
+use channels::{apply_lab, legacy_brightness_contrast, legacy_brightness_contrast_hdr};
 use color::gradient;
 pub use color::{
     BalanceCurve, VIBRANCE_BOOST, VIBRANCE_GREY, bayer4, black_white_gray, color_balance_channel, colorize_saturation, hdr_saturation_factor, hsl_to_rgb,
     hue_range_tables, hue_saturation, hue_saturation_in, lut3d_sample, photo_filter_matrix, range_lightness, rgb_to_hsl, selective_color,
     selective_color_weights, vibrance_lin, vibrance_px,
 };
+pub use gray_lightness::GrayLightness;
 #[cfg(test)]
 use tone::LUT_SIZE;
 pub(crate) use tone::apply_tone;
@@ -103,12 +105,12 @@ pub fn apply_with(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer) {
 /// unrounded). Integer depths work on whole levels like Photoshop's (see [`levels_q`] and
 /// `adjustment_quantum`), 32-bit documents get its float Levels (see [`levels_float`]).
 pub fn apply_depth(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth: Option<SampleType>) {
-    apply_depth_mode(adj, buf, transfer, depth, ColorMode::Rgb);
+    apply_depth_mode(adj, buf, transfer, depth, ColorMode::Rgb, GrayLightness::untagged());
 }
 
 /// [`apply_depth`] in a document of colour `mode` (which decides whether float curves extend,
-/// see [`float_tone_extrapolates`]).
-fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth: Option<SampleType>, mode: ColorMode) {
+/// see [`float_tone_extrapolates`]) whose gray profile relates gray to L* as `gray` does.
+fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth: Option<SampleType>, mode: ColorMode, gray: &GrayLightness) {
     match adj {
         Adjustment::Invert => map_rgb(buf, |c| [1.0 - c[0], 1.0 - c[1], 1.0 - c[2]]),
         Adjustment::Threshold { level } => map_rgb(buf, |c| [if threshold_white(c, *level, depth) { 1.0 } else { 0.0 }; 3]),
@@ -248,7 +250,10 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
         }
         Adjustment::GradientMap { stops, reverse, dither, .. } => {
             let (w, x0, y0) = (buf.rect.width().max(1) as usize, buf.rect.x0, buf.rect.y0);
-            let gray_lightness = mode == ColorMode::Grayscale && depth != Some(SampleType::F32);
+            // 8/16-bit Grayscale stores the gradient colour's L* through the document's gray
+            // profile, and reads each gray through that profile to place it on the gradient,
+            // so black to white still maps every gray to itself (#15868).
+            let gray_lightness = (mode == ColorMode::Grayscale && depth != Some(SampleType::F32)).then_some(gray);
             for (i, p) in buf.px.iter_mut().enumerate() {
                 if p[3] <= 0.0 {
                     continue;
@@ -260,9 +265,12 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
                 if *reverse {
                     t = 1.0 - t;
                 }
+                if let Some(g) = gray_lightness {
+                    t = g.position(t);
+                }
                 let mut o = gradient(stops, t);
-                if gray_lightness {
-                    o = gray_from_srgb_lightness(o);
+                if let Some(g) = gray_lightness {
+                    o = g.encode(o);
                 }
                 if *dither {
                     let d = bayer4(x0 + (i % w) as i32, y0 + (i / w) as i32) / 255.0;
@@ -299,6 +307,12 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
 /// and CMYK documents the adjustments Photoshop evaluates on the document's own channels do so
 /// (see [`lab_channel_adjustment`] and [`cmyk_channel_adjustment`]).
 pub fn apply_in(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth: Option<SampleType>, mode: ColorMode) {
+    apply_in_gray(adj, buf, transfer, depth, mode, GrayLightness::untagged());
+}
+
+/// [`apply_in`] in a document whose gray profile relates gray to L* as `gray` does (see
+/// [`GrayLightness::for_profile`]); [`apply_in`] assumes an untagged document.
+pub fn apply_in_gray(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth: Option<SampleType>, mode: ColorMode, gray: &GrayLightness) {
     if mode == ColorMode::Lab && lab_channel_adjustment(adj) {
         apply_lab(adj, buf, depth);
     } else if mode == ColorMode::Cmyk && cmyk_channel_adjustment(adj) {
@@ -323,7 +337,7 @@ pub fn apply_in(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth: O
             });
         }
     } else {
-        apply_depth_mode(adj, buf, transfer, depth, mode);
+        apply_depth_mode(adj, buf, transfer, depth, mode, gray);
     }
 }
 
