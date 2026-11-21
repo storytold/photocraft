@@ -411,6 +411,13 @@ fn content_aware_fill_as(s: &mut Session, p: &Value, cmd: &'static str, label: &
             // the fill would be black (#6532), so refuse instead. The workspace's preview builds
             // the same plan and may show an empty area while the Sampling Brush adds to it.
             if !source.iter().any(|s| *s) {
+                // With the whole canvas to fill, Auto sampling has nothing left to sample, and the
+                // fill does nothing, without an error or a history state (#14253).
+                let canvas = doc.bounds();
+                let whole_canvas = || hole.par_iter().filter(|h| **h).count() as u64 == u64::from(canvas.width()) * u64::from(canvas.height());
+                if str_or(&p, "sampling", "auto") == "auto" && whole_canvas() {
+                    return Ok(None);
+                }
                 return Err(bad(cmd, "nothing to sample from: the sampling area has no pixels outside the fill area"));
             }
             let (w, h) = (rect.width() as usize, rect.height() as usize);
@@ -432,9 +439,12 @@ fn content_aware_fill_as(s: &mut Session, p: &Value, cmd: &'static str, label: &
                     }
                 });
             }
-            Ok((layer, rect, fmt, output, FilledWindow { filled, bounds: (bx0, by0, bx1, by1), original, cover, n_hole }))
+            Ok(Some((layer, rect, fmt, output, FilledWindow { filled, bounds: (bx0, by0, bx1, by1), original, cover, n_hole })))
         },
-        move |s, (layer, rect, fmt, output, done)| apply_content_aware_fill(s, label, layer, &output, fmt, rect, done),
+        move |s, done| match done {
+            Some((layer, rect, fmt, output, done)) => apply_content_aware_fill(s, label, layer, &output, fmt, rect, done),
+            None => Ok(json!({"layer": id.0, "filled": 0})),
+        },
     )
 }
 
