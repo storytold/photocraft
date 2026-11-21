@@ -165,9 +165,10 @@ fn admit_step(app: &mut PhotocraftApp, params: Value) -> Result<(), String> {
     Ok(())
 }
 
-/// Export As wrote its files: a waiting Export As step continues.
+/// Export As wrote its files: a waiting Export As step continues. Another export, finished while a
+/// Save As or Save a Copy step waits, is not that step's save.
 pub(crate) fn exported(app: &mut PhotocraftApp) {
-    if let Some(waiting) = app.paused_playbacks.save.as_mut() {
+    if let Some(waiting) = app.paused_playbacks.save.as_mut().filter(|w| w.id == crate::export_dialog::COMMAND) {
         waiting.exported = true;
     }
 }

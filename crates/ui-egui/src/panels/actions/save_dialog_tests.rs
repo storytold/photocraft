@@ -288,6 +288,14 @@ fn a_save_made_another_way_while_the_dialog_is_open_doesnt_continue_a_cancelled_
     answer(&mut app, &files, Picked::Cancelled);
     assert!(!after_ran(&app), "Cancel stops the action: the JPEG save wasn't the dialog's");
     assert_eq!(app.ui.status, "Action playback stopped");
+
+    // The same with another Export As finishing while the step's save dialog is open.
+    let (mut app, files, _written) = setup(("file.saveAs", json!({"path": "/out/played.psd"})));
+    play(&mut app);
+    save_dialog::exported(&mut app);
+    answer(&mut app, &files, Picked::Cancelled);
+    assert!(!after_ran(&app), "Cancel stops the action: that export wasn't the step's");
+    assert_eq!(app.ui.status, "Action playback stopped");
 }
 
 /// Answers the open JPEG Options with OK, then lets the next frame see the dialogs end.
