@@ -1514,9 +1514,32 @@ impl LayerMaskOverlay {
 
 /// The remembered swatches (`ToolState::saved_colors`); its default is the default swatches, so a file without them
 /// and a reset key both mean black over white.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct ToolColors(pub Value);
+
+#[path = "prefs/tool_colors.rs"]
+mod tool_colors;
+
+#[path = "prefs/tool_color_merge.rs"]
+mod tool_color_merge;
+
+/// Merge browser swatches by role, retaining independent edits and recent native picks.
+pub fn merge_tool_colors(base: &Value, ours: &Value, theirs: &Value) -> Value {
+    tool_color_merge::merge(base, ours, theirs)
+}
+
+/// Record recency when picks change, without making settings serialization depend on the clock.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn stamp_tool_color_picks(value: &mut Value, previous: &Value) {
+    tool_colors::stamp_picks(value, previous);
+}
+
+impl<'de> Deserialize<'de> for ToolColors {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        Value::deserialize(deserializer).map(|value| Self(tool_colors::decode(value)))
+    }
+}
 
 impl Default for ToolColors {
     fn default() -> Self {
@@ -1802,6 +1825,8 @@ impl Serialize for SavedPrefs {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
         let mut v = self.prefs.to_json();
         if let Value::Object(m) = &mut v {
+            // Match inks by their RGB stand-in through SettingsStore's concurrent table merge.
+            m.insert("toolColors".into(), tool_colors::encode(&self.prefs.tool_colors));
             m.insert("colorSettings".into(), serde_json::to_value(&self.color_settings).map_err(serde::ser::Error::custom)?);
             m.insert("presets".into(), self.presets.clone());
         }

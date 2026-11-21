@@ -199,6 +199,35 @@ fn bucket_fill_contiguous() {
     assert_eq!(px(&s, 5, 5), vec![0.0, 0.0, 1.0, 1.0]);
 }
 
+#[test]
+fn bucket_null_color_uses_native_foreground_inks() {
+    for depth in [8, 16, 32] {
+        let cyan = [1.0f32, 0.0, 0.0, 0.0];
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 10, "height": 10, "mode": "cmyk", "depth": depth, "background": "transparent"})).unwrap();
+
+        let rgb = photocraft_color::convert::cmyk_to_rgb(cyan).map(|c| c.clamp(0.0, 1.0));
+        s.execute(
+            "tools.setColors",
+            json!({
+                "foreground": rgb,
+                "foregroundCmyk": cyan
+            }),
+        )
+        .unwrap();
+
+        let result = s.execute("paint.bucket", json!({"x": 2, "y": 2, "color": null, "antiAlias": false})).unwrap();
+
+        assert_eq!(result["filled"], true);
+
+        let st = s.active().unwrap();
+        let surface = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
+        let inks: Vec<f32> = surface.read_region(Rect::new(5, 5, 6, 6)).into_iter().take(4).collect();
+
+        assert_eq!(inks.len(), 4);
+        assert!(inks.iter().zip(cyan).all(|(&value, expected)| (value - expected).abs() < 0.02), "Paint Bucket must retain the original CMYK inks: {inks:?}");
+    }
+}
 /// #4196: the Paint Bucket and Edit > Stroke write a CMYK pick as its inks into a CMYK document,
 /// not as its sRGB stand-in converted back (100/0/0/0 cyan would come out as about 100/28/0/17).
 #[test]

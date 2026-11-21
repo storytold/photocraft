@@ -362,5 +362,3 @@ eframe = { git = "https://github.com/storytold/egui.git", rev = "8a3c5ecb29ab867
 egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "8a3c5ecb29ab8679d57035f2cb51d7ec8a5c080f" }
 egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "8a3c5ecb29ab8679d57035f2cb51d7ec8a5c080f" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
-
-

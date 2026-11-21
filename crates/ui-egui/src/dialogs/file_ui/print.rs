@@ -140,6 +140,7 @@ pub fn open_print(app: &mut PhotocraftApp) -> DialogId {
             fields.set(k, v);
         }
     }
+    write_settings(&mut fields, &state.settings);
     let sections = sections(&fields);
     app.framework.dialogs.open(HostedPrint::new(state, fields, sections).json_form(|fields, listing| {
         if fields.text("paper") == Some("custom") {
