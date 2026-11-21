@@ -642,6 +642,13 @@ pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandSta
         .collect()
 }
 
+/// [`command_states`], derived from the panel's settings and whether a document with a selection is open.
+pub(crate) fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    let active = app.session.active();
+    let facts = (&app.ui.histogram, active.is_some(), active.is_some_and(|st| st.doc.selection.is_some()));
+    crate::app::framework::derived_states(app, name, &facts, || command_states(app))
+}
+
 /// Runs a scope command the menu or a key fired: the settings change, then they persist; Uncached Refresh recounts.
 /// Returns whether the command belongs to this panel.
 pub(crate) fn run_fired(app: &mut PhotocraftApp, _ctx: &egui::Context, command: &CommandRef) -> bool {

@@ -432,7 +432,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
                 return Err(bad(CMD, "document requires a source point"));
             }
             let index = value.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(CMD, "document must be an open document index"))?;
-            Some(s.documents().get(index).ok_or_else(|| bad(CMD, "the source document is not open"))?)
+            Some(&**s.documents().get(index).ok_or_else(|| bad(CMD, "the source document is not open"))?)
         }
     };
     let (document, active_layer) = (doc.map(|st| st.doc.id), doc.and_then(|st| st.active_layer).map(|id| id.0));

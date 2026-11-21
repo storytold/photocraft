@@ -1,3 +1,5 @@
+use craft::menu::{LANGUAGE_COMMAND, THEME_COMMAND};
+
 use super::invoke::{panel_alias, proof_preset, workspace_id};
 use super::{DOCUMENT_ITEM, PhotocraftApp, Value};
 
@@ -72,6 +74,8 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         i if crate::links::url_for(i).is_some() => true,
         // Interface brightness works with or without a document, as in Photoshop.
         "view.darkenInterface" | "view.lightenInterface" => true,
+        // Appearance and Language rows: the theme and the language change with or without a document.
+        THEME_COMMAND | LANGUAGE_COMMAND => true,
         "file.save" | "file.saveAs" | "file.export.exportAs" | "file.export.quickExportAsPng" => {
             app.session.active().is_some() && app.services.export.is_some()
         }
