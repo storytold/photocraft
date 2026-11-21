@@ -398,9 +398,19 @@ fn write_grdm(stops: &[(f32, [f32; 3])], mids: &[f32], smooth: f32, method: crat
         put16(&mut v, u);
     }
     put16(&mut v, stops.len().min(usize::from(u16::MAX)) as u16);
-    for (k, (t, c)) in stops.iter().take(usize::from(u16::MAX)).enumerate() {
+    // Locations in 4096ths. A hard step ends one hair before its stop (a Stripes map's baked steps), which rounds onto
+    // the stop itself; at the very end that would leave two stops at 4096 and a reader would take the earlier colour
+    // at t = 1, so the step before the final stop moves one 4096th down (CodeRabbit on #16161).
+    let mut locs: Vec<u32> = stops.iter().take(usize::from(u16::MAX)).map(|(t, _)| (t.clamp(0.0, 1.0) * 4096.0).round() as u32).collect();
+    if let [.., before, last] = locs.as_mut_slice()
+        && *last == 4096
+        && *before == 4096
+    {
+        *before = 4095;
+    }
+    for (k, (_, c)) in stops.iter().take(usize::from(u16::MAX)).enumerate() {
         let mid = k.checked_sub(1).and_then(|s| mids.get(s)).copied().filter(|m| m.is_finite()).map_or(50, |m| (m.clamp(0.05, 0.95) * 100.0).round() as u32);
-        v.extend_from_slice(&((t.clamp(0.0, 1.0) * 4096.0).round() as u32).to_be_bytes());
+        v.extend_from_slice(&locs[k].to_be_bytes());
         v.extend_from_slice(&mid.to_be_bytes());
         put16(&mut v, 0);
         for x in c {
