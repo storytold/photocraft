@@ -203,6 +203,9 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, step: &Step, gesture: &mu
             });
             let gesture = GestureId::new(*gesture);
             let mut shown = start.points.clone();
+            // How often each point has passed through infinity in this drag: the reference's picture passes the
+            // horizon once and settles; back and forth is the flipping that was the bug.
+            let mut passes = vec![0usize; start.points.len()];
             let frames = (*len / 10.0).ceil().max(1.0) as usize;
             for f in 1..=frames {
                 let d = len * f as f64 / frames as f64;
@@ -234,7 +237,10 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, step: &Step, gesture: &mu
                         return Err(format!("frame {f} of the drag: point {i} is not finite"));
                     }
                     if crossed(p.x - c.x, q.x - c.x) || crossed(p.y - c.y, q.y - c.y) {
-                        return Err(format!("frame {f} of the drag: point {i} flipped through infinity: {q:?} -> {p:?}"));
+                        passes[i] += 1;
+                        if passes[i] > 1 {
+                            return Err(format!("frame {f} of the drag: point {i} flipped back through infinity: {q:?} -> {p:?}"));
+                        }
                     }
                 }
                 shown = now;
