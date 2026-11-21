@@ -115,6 +115,29 @@ pub fn snap45(origin: [f64; 2], p: [f64; 2]) -> [f64; 2] {
     }
 }
 
+/// The ⇧ handle lock of the Convert Point tool (#12739), measured in the reference app: of the
+/// steps that keep the offset's x component — the horizontal step (dx, 0) and the 45° diagonal
+/// (dx, ±|dx|) — the one nearest the pointer wins: (+60,+25) gives (+60,0) and (−78,+140) gives
+/// (−78,+78). That rule puts the axis band at atan(½) ≈ 26.6°, between the two measured angles
+/// (22.6° goes axis, 29.1° from the axis goes diagonal); a plain 45° rounding (a 22.5° band) or
+/// the anchor drags' 30° band (craft-libs `AXIS_BAND_DEGREES`, #13243) each miss one of them.
+/// None means "leave the offset as it is": a zero or non-finite offset, and the vertical band
+/// (|dx| ≤ |dy|/2, its half-open side), where which component the reference keeps was *not
+/// measured* (#12739), so that drag stays today's.
+pub fn handle_step_keep_x(dx: f64, dy: f64) -> Option<[f64; 2]> {
+    if !dx.is_finite() || !dy.is_finite() || (dx == 0.0 && dy == 0.0) {
+        return None;
+    }
+    let (ax, ay) = (dx.abs(), dy.abs());
+    if 2.0 * ay <= ax {
+        Some([dx, 0.0])
+    } else if 2.0 * ax <= ay {
+        None
+    } else {
+        Some([dx, dy.signum() * ax])
+    }
+}
+
 /// Constrain the pointer at `p` for a drag of `tool` that started at `start` and has reached
 /// `last`. `axis` carries the stroke's lock between events; `zoom` converts the lock distance
 /// to document pixels. The lock follows the tool's [`snap_mode`]: horizontal/vertical for the
