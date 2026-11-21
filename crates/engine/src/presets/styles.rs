@@ -19,11 +19,9 @@ use crate::{EngineError, Result, Session};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct StylePreset {
     pub name: String,
-    #[plain_data(assume = "document effects: plain values")]
     pub effects: Vec<Effect>,
     /// Blending options saved with the style ("Include Layer Blending Options").
     #[serde(default)]
-    #[plain_data(assume = "an enum")]
     pub blend: Option<BlendMode>,
     #[serde(default)]
     pub fill_opacity: Option<f32>,

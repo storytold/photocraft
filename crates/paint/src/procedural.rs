@@ -37,7 +37,8 @@ fn fbm(x: f32, y: f32, size: f32, cells: i32, octaves: u32, salt: u64) -> f32 {
 pub fn pattern(style: PatternStyle, size: u32, seed: u32) -> PatternImage {
     let n = size.clamp(8, 1024) as usize;
     let s = n as f32;
-    let salt = u64::from(seed) * 0x0100_0000_01B3 + 17;
+    // Seed hashing wraps so every u32 seed also works in checked builds.
+    let salt = u64::from(seed).wrapping_mul(0x0100_0000_01B3).wrapping_add(17);
     let mut data = vec![0.0f32; n * n];
     for y in 0..n {
         for x in 0..n {
@@ -279,6 +280,18 @@ mod tests {
         let p = pattern(PatternStyle::Noise, 64, 1);
         let seam: f32 = (0..64).map(|y| (p.data[y * 64] - p.data[y * 64 + 63]).abs()).sum::<f32>() / 64.0;
         assert!(seam < 0.08, "{seam}");
+    }
+
+    #[test]
+    fn patterns_accept_full_seed_range() {
+        for seed in [0, 1, (1 << 24) - 1, 1 << 24, u32::MAX] {
+            for style in [PatternStyle::Noise, PatternStyle::Paper, PatternStyle::Canvas, PatternStyle::Dots] {
+                let p = pattern(style, 8, seed);
+                assert_eq!((p.width, p.height, p.data.len()), (8, 8, 64));
+                assert!(p.data.iter().all(|v| (0.0..=1.0).contains(v)), "{style:?} seed {seed}");
+                assert_eq!(p.data, pattern(style, 8, seed).data);
+            }
+        }
     }
 
     #[test]

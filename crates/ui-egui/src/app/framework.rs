@@ -19,7 +19,7 @@ use craft::i18n::Direction;
 use craft::keymap::Overrides;
 use craft::theme::{AppDefaults, AppSizes, ComponentSet, ModeChoice, Size, SuiteChoice, ThemeId, ThemePair, resolve_sized};
 use craft::theme_store::{SelectionChange, SuiteClient};
-use craft::ui::contract::Tracked;
+use craft::ui::contract::{MemoProps, Tracked};
 use craft::ui::dialog::DialogHost;
 use craft::ui::fonts::UiFonts;
 use craft::ui::runtime::commands::{AppCatalog, CommandInput, CommandRef, CommandSet as _, CommandState, CommandStates, Fired, NavCommand};
@@ -546,97 +546,106 @@ impl Framework {
     }
 }
 
+/// One source's command states.
+pub(crate) type SourceStates = Vec<(CommandRef, CommandState)>;
+
+/// The id a command source's states are derived under.
+pub(crate) fn states_id(source: &'static str) -> egui::Id {
+    egui::Id::unique(("photocraft-states", source))
+}
+
+/// `build`'s states for `source`, derived from `facts`: the kept `Arc` while the facts are unchanged, else a new build.
+/// The facts can hold only checked inputs, but nothing checks that they hold everything `build` reads: a read they
+/// leave out keeps stale states, which the held-equals-fresh trial catches.
+pub(crate) fn derived_states<K: MemoProps>(app: &PhotocraftApp, source: &'static str, facts: &K, build: impl FnOnce() -> SourceStates) -> Arc<SourceStates> {
+    craft::ui::runtime::derived::derived(app.ctx(), states_id(source), facts, build)
+}
+
+/// The states of a source that has no command states: one shared empty list, whatever the source's name.
+pub(crate) fn no_states(app: &PhotocraftApp, _name: &'static str) -> Arc<SourceStates> {
+    derived_states(app, "none", &(), Vec::new)
+}
+
+/// A source's states for the coming frame, derived under the source's name ([`states_id`]) from what they read.
+pub(crate) type StatesOf = fn(&PhotocraftApp, &'static str) -> Arc<SourceStates>;
+
 /// One user of the framework's command sets: the states its commands show and the runner of the
 /// ones it fires.
 pub(crate) struct CommandSource {
-    /// The states of the source's commands for the coming frame.
-    states: fn(&PhotocraftApp) -> Vec<(CommandRef, CommandState)>,
-    /// What `states` reads, for a source whose every input is a plain value or a revision that moves exactly when
-    /// the data changes: the states are computed again only when the key changes. `None`: computed every frame,
-    /// because what the source reads has no such revision yet.
-    key: Option<fn(&PhotocraftApp) -> StatesKey>,
+    /// The name the source's states are derived under.
+    pub(crate) name: &'static str,
+    /// The states of the source's commands.
+    pub(crate) states: StatesOf,
     /// Runs `command` when it is this source's; whether it was.
     run: fn(&mut PhotocraftApp, &egui::Context, &CommandRef) -> bool,
 }
 
-/// Every command source, in the order [`run_command`] tries them. The theme has no entry: it has
-/// no command state, and its picks run through `menus::invoke`.
+/// Every command source besides the panels' ([`crate::panels::registry::PANELS`], one source each), in the order
+/// [`run_command`] tries them after the panels. The theme has no entry: it has no command state, and its picks run
+/// through `menus::invoke`.
 pub(crate) const COMMAND_SOURCES: &[CommandSource] = &[
-    CommandSource { states: crate::panels::registry::states, key: None, run: crate::panels::registry::run_fired },
-    CommandSource { states: tool_states, key: Some(tool_states_key), run: run_tool },
-    CommandSource { states: crate::workspace_ui::states, key: None, run: crate::workspace_ui::run_fired },
-    CommandSource { states: crate::slice_ui::command_states, key: Some(crate::slice_ui::command_states_key), run: crate::slice_ui::run_fired },
-    CommandSource { states: crate::align_bar::command_states, key: None, run: crate::align_bar::run_fired },
-    CommandSource { states: crate::artboard_tool::command_states, key: Some(crate::artboard_tool::command_states_key), run: crate::artboard_tool::run_fired },
+    CommandSource { name: "tool", states: tool_states, run: run_tool },
+    CommandSource { name: "workspace", states: crate::workspace_ui::source_states, run: crate::workspace_ui::run_fired },
+    CommandSource { name: "slice", states: crate::slice_ui::source_states, run: crate::slice_ui::run_fired },
+    CommandSource { name: "align", states: crate::align_bar::source_states, run: crate::align_bar::run_fired },
+    CommandSource { name: "artboard", states: crate::artboard_tool::source_states, run: crate::artboard_tool::run_fired },
     // Space+F: the pasteboard colour keys of the held Hand.
-    CommandSource { states: |_| Vec::new(), key: Some(|_| StatesKey::default()), run: crate::canvas_tool_menu::run_canvas_color },
+    CommandSource { name: "canvasColor", states: no_states, run: crate::canvas_tool_menu::run_canvas_color },
     // The options bar's engine-command buttons: their commands run through `shortcuts::handle`.
-    CommandSource { states: crate::panels::options_bar::selection::command_states, key: None, run: |_, _, _| false },
+    CommandSource { name: "selection", states: crate::panels::options_bar::selection::source_states, run: |_, _, _| false },
 ];
 
-/// The key of a [`CommandSource`]'s states: the plain values and exact revisions they are computed from, so equal
-/// keys mean equal states.
-pub(crate) type StatesKey = [u64; 4];
+/// Every source by its name, with its states: the command sources, then the panels, each under its panel id. A later
+/// source's state wins for a command two sources name.
+pub(crate) fn sources() -> impl Iterator<Item = (&'static str, StatesOf)> {
+    let panels = crate::panels::registry::PANELS.iter().map(|panel| (panel.id, panel.states));
+    COMMAND_SOURCES.iter().map(|source| (source.name, source.states)).chain(panels)
+}
 
-/// The states each [`CommandSource`] last computed, by its place in [`COMMAND_SOURCES`], with their key, and the one
-/// list of all of them the runtime reads.
+/// Every source's states, in [`sources`]' order.
+fn source_states(app: &PhotocraftApp) -> impl Iterator<Item = Arc<SourceStates>> + '_ {
+    sources().map(move |(name, states)| states(app, name))
+}
+
+/// The states each source last gave, in [`source_states`]' order, and the one list of all of them the runtime reads.
 #[derive(Default)]
 pub(crate) struct HeldStates {
-    kept: Vec<Option<KeptStates>>,
+    kept: Vec<Arc<SourceStates>>,
     /// Every source's states, written only when one source's list changes: the runtime reads them again only when
     /// the revision moves.
     pub(crate) states: Tracked<CommandStates>,
-    /// How many times each source computed its states, for the count trials.
-    #[cfg(test)]
-    pub(crate) runs: Vec<usize>,
-}
-
-/// One source's states and the key they were computed at (`None` for a source without a key).
-#[derive(Clone)]
-struct KeptStates {
-    key: Option<StatesKey>,
-    states: Vec<(CommandRef, CommandState)>,
 }
 
 /// The tool commands: the current tool's row is checked.
-fn tool_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandState)> {
+fn build_tool_states(app: &PhotocraftApp) -> SourceStates {
     Tool::ALL.iter().map(|&tool| (CommandRef::from(crate::panels::tool_commands::command_of(tool)), CommandState::new().checked(app.ui.tool == tool))).collect()
 }
 
-/// What [`tool_states`] reads: the tool.
-fn tool_states_key(app: &PhotocraftApp) -> StatesKey {
-    [app.ui.tool as u64, 0, 0, 0]
+/// [`build_tool_states`], derived from the tool.
+fn tool_states(app: &PhotocraftApp, name: &'static str) -> Arc<SourceStates> {
+    derived_states(app, name, &(app.ui.tool as u64), || build_tool_states(app))
 }
 
-/// Brings the held states up to date for the coming frame. A keyed source runs only when its key changed since it last
-/// ran; a source without a key runs every frame. The held list is written only when a source's states differ from the
-/// ones it last gave.
+/// Brings the held states up to date for the coming frame. A source whose states are the `Arc` it last gave costs a
+/// pointer compare; the held list is written only when a source's states differ by value from the ones it last gave.
 fn command_states(app: &PhotocraftApp, held: &mut HeldStates) {
-    held.kept.resize(COMMAND_SOURCES.len(), None);
-    #[cfg(test)]
-    held.runs.resize(COMMAND_SOURCES.len(), 0);
     let mut changed = false;
-    for (at, source) in COMMAND_SOURCES.iter().enumerate() {
-        let key = source.key.map(|key| key(app));
-        if key.is_some() && held.kept[at].as_ref().is_some_and(|kept| kept.key == key) {
-            continue;
-        }
-        #[cfg(test)]
-        {
-            held.runs[at] += 1;
-        }
-        let states = (source.states)(app);
-        match &mut held.kept[at] {
-            Some(kept) if kept.states == states => kept.key = key,
-            slot => {
-                *slot = Some(KeptStates { key, states });
+    for (at, states) in source_states(app).enumerate() {
+        match held.kept.get_mut(at) {
+            Some(kept) if Arc::ptr_eq(kept, &states) => {}
+            Some(kept) => {
+                changed |= **kept != *states;
+                *kept = states;
+            }
+            None => {
+                held.kept.push(states);
                 changed = true;
             }
         }
     }
     if changed {
         let mut states = CommandStates::new();
-        for (command, state) in held.kept.iter().flatten().flat_map(|kept| &kept.states) {
+        for (command, state) in held.kept.iter().flat_map(|kept| kept.iter()) {
             states.set(command.clone(), state.clone());
         }
         *held.states = states;
@@ -655,9 +664,9 @@ fn run_tool(app: &mut PhotocraftApp, _ctx: &egui::Context, command: &CommandRef)
     true
 }
 
-/// Runs `command` through the first source that owns it; whether one did.
+/// Runs `command` through the first source that owns it, the panels first; whether one did.
 pub(crate) fn run_command(app: &mut PhotocraftApp, ctx: &egui::Context, command: &CommandRef) -> bool {
-    COMMAND_SOURCES.iter().any(|source| (source.run)(app, ctx, command))
+    crate::panels::registry::run_fired(app, ctx, command) || COMMAND_SOURCES.iter().any(|source| (source.run)(app, ctx, command))
 }
 
 impl PhotocraftApp {

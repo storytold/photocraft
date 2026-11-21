@@ -1,21 +1,21 @@
 use super::{Arc, Document, History, LayerId, LayerTarget, channel_cmds, float_cmds, history_cmds, layer_multi_cmds, symmetry_cmds};
 
-/// Per-document editing state.
-#[derive(Clone, Debug)]
+/// Per-document editing state. Plain data: the session holds each in a `Tracked`, whose revision moves with every
+/// write, view state included.
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub struct DocState {
     inputs: DocStateInputs,
-    selected_cache: std::sync::OnceLock<Vec<LayerId>>,
+    selected_cache: SelectedOrder,
     pub history: History,
     /// Anchor of range selection (the last plainly or command-clicked layer).
     pub layer_anchor: Option<LayerId>,
     pub path: Option<String>,
     /// An Affinity document (or its preview) must not acquire the native source as its Save path.
     pub source_read_only: bool,
-    /// Increments on every change; UIs re-render when it moves.
+    /// Counts the edit steps: save state ([`Self::is_dirty`]) and damage measure from it. Views key on the `Tracked`
+    /// revision the session holds the state in, which also moves with view state.
     pub revision: u64,
     pub saved_revision: u64,
-    /// Native save cache shared with this document's workers, released with the editing state.
-    pub pcraft_cache: photocraft_io::PcraftExportCache,
     /// How much of `revision` came from view-only changes (channel eyes, targeting): pixel caches can ignore those.
     pub view_revision: u64,
     /// Area changed since revision [`DocState::damage_from`] (None = assume everything changed):
@@ -38,8 +38,6 @@ pub struct DocState {
     /// Layers panel: layers whose effects list is collapsed under their row (the fx triangle;
     /// view state, not history). Effects lists start open.
     pub fx_collapsed: Vec<LayerId>,
-    /// See [`DocState::layers_view_revision`].
-    layers_view_revision: u64,
     /// ⌥-click on a layer's eye (`layer.showOnly`): the layer shown alone and every layer's
     /// visibility before, so the next ⌥-click restores it (view state, not history).
     pub show_only: Option<(LayerId, Vec<(LayerId, bool)>)>,
@@ -76,7 +74,7 @@ pub struct DocState {
 }
 
 /// Read-only document and layer selection inputs. Mutations go through `DocState` methods.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub struct DocStateInputs {
     /// The current document.
     pub doc: Arc<Document>,
@@ -85,6 +83,15 @@ pub struct DocStateInputs {
     /// The raw selection in selection order. Undo and redo restore it with the target state.
     pub selected_layers: Vec<LayerId>,
 }
+
+/// The selected layers in document order ([`DocState::selected_layers`]), built on the first read after a write.
+#[derive(Clone, Debug, Default)]
+struct SelectedOrder(std::sync::OnceLock<Vec<LayerId>>);
+
+// The order is a pure function of the document and the raw selection: every write to either goes through a
+// `DocState` method that drops it (`doc_mut`, `set_active_layer`, `selection_mut`), and readers get the same answer
+// whether it is built or not. So a shared reference can't change what readers see.
+impl craft_tracked::PlainData for SelectedOrder {}
 
 impl std::ops::Deref for DocState {
     type Target = DocStateInputs;
@@ -124,14 +131,13 @@ impl DocState {
         let first = history_cmds::Snapshot { id: 0, name: doc.name.clone(), doc: doc.clone(), layers: target };
         Self {
             inputs: DocStateInputs { doc, active_layer, selected_layers: active_layer.into_iter().collect() },
-            selected_cache: std::sync::OnceLock::new(),
+            selected_cache: SelectedOrder::default(),
             history,
             layer_anchor: active_layer,
             path,
             source_read_only: false,
             revision: 1,
             saved_revision: 1,
-            pcraft_cache: Default::default(),
             view_revision: 0,
             last_damage: None,
             damage_span: None,
@@ -141,7 +147,6 @@ impl DocState {
             isolated_layers: Vec::new(),
             symmetry: None,
             fx_collapsed: Vec::new(),
-            layers_view_revision: 0,
             show_only: None,
             floating: None,
             color_samplers: Vec::new(),
@@ -179,7 +184,7 @@ impl DocState {
     }
     /// Mutable access invalidates the ordered selection, including on document replacement.
     pub fn doc_mut(&mut self) -> &mut Arc<Document> {
-        self.selected_cache.take();
+        self.selected_cache.0.take();
         &mut self.inputs.doc
     }
     /// The active layer, if any.
@@ -189,7 +194,7 @@ impl DocState {
     /// Set the active layer and invalidate the held ordered selection.
     pub fn set_active_layer(&mut self, active: Option<LayerId>) {
         if self.inputs.active_layer != active {
-            self.selected_cache.take();
+            self.selected_cache.0.take();
             self.inputs.active_layer = active;
         }
     }
@@ -199,14 +204,14 @@ impl DocState {
     }
     /// Mutate the raw selection, invalidating the held ordered selection before access.
     pub fn selection_mut(&mut self) -> &mut Vec<LayerId> {
-        self.selected_cache.take();
+        self.selected_cache.0.take();
         &mut self.inputs.selected_layers
     }
     /// Selected layers in bottom-to-top document order, including the active layer.
     /// Missing IDs are skipped; if the active layer is not in the raw selection, only it is used.
     /// The first read after a mutation builds the held slice; later reads reuse it.
     pub fn selected_layers(&self) -> &[LayerId] {
-        self.selected_cache.get_or_init(|| selected_in(&self.inputs.doc, self.inputs.active_layer, &self.inputs.selected_layers))
+        self.selected_cache.0.get_or_init(|| selected_in(&self.inputs.doc, self.inputs.active_layer, &self.inputs.selected_layers))
     }
     pub fn is_layer_selected(&self, id: LayerId) -> bool {
         self.active_layer == Some(id) || (self.active_layer.is_some_and(|a| self.selected_layers.contains(&a)) && self.selected_layers.contains(&id))
@@ -313,15 +318,6 @@ impl DocState {
         self.bump_revision(!self.is_dirty());
         self.last_damage = Some(photocraft_geom::Rect::EMPTY);
         self.record_damage();
-    }
-    /// Moves when an effects list or a group in the Layers panel opens or closes. That is view
-    /// state, not an edit, so [`DocState::revision`] stays; the Layers panel's rows key on this.
-    pub fn layers_view_revision(&self) -> u64 {
-        self.layers_view_revision
-    }
-    /// Count an effects list or group opened or closed (see [`Self::layers_view_revision`]).
-    pub(crate) fn note_disclosure_change(&mut self) {
-        self.layers_view_revision += 1;
     }
     /// Move to the next revision for a view-only change (channel eyes, a history state deleted,
     /// Layers panel isolation): readers keyed on the revision follow it, pixel caches ignore it
@@ -471,19 +467,14 @@ impl Default for ToolState {
 /// copies them (Paste Layer Style puts them all on each target).
 #[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub struct CopiedStyle {
-    #[plain_data(assume = "document effects: plain values")]
     pub effects: photocraft_doc::Effects,
-    #[plain_data(assume = "an enum")]
     pub blend: photocraft_color::BlendMode,
     pub fill: f32,
-    #[plain_data(assume = "document blending options: plain values")]
     pub advanced: photocraft_doc::AdvancedBlending,
-    #[plain_data(assume = "document blend ranges: plain values")]
     pub blend_if: photocraft_doc::BlendIf,
     pub excluded_channels: u32,
     /// The colour mode it was copied in: Blend If's channel ranges and the channel restrictions
     /// only carry over to a document in the same mode.
-    #[plain_data(assume = "an enum")]
     pub mode: photocraft_color::ColorMode,
 }
 
