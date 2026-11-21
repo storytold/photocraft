@@ -161,3 +161,172 @@ fn a_user_shortcut_wins_over_a_default_it_was_not_moved_from() {
     let log = crate::shortcut_dispatch::take_log(&ctx);
     assert_eq!(log.last().map(|i| i.0.as_str()), Some("select.modify.feather"), "{log:?}");
 }
+
+/// Exercises the PhotoCraft tab body even on a framework pin whose tab strip overflows.
+fn open_toolbar(h: &mut Harness<'_, Box<PhotocraftApp>>) {
+    crate::prefs_ui::open_shortcuts(h.state_mut(), 0);
+    h.state_mut().prefs_rt.shortcuts.as_mut().unwrap().state = craft::menu::shortcuts::DialogState::new().with_tab("toolbar");
+    h.run_steps(5);
+    let session = h.state().prefs_rt.shortcuts.as_ref().unwrap();
+    assert_eq!(session.state.snapshot(&session.keymap).unwrap().tab, "toolbar");
+}
+
+fn toolbar_shows_shortcut(h: &Harness<'_, Box<PhotocraftApp>>, tool: &str, shortcut: &str) -> bool {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT as _, Queryable as _, by};
+
+    let checkbox = h.get_by_role_and_label(Role::CheckBox, tool).rect();
+    h.query_all(by().label(shortcut).include_labels()).any(|node| {
+        let position = node.rect().center();
+        node.accesskit_node().role() == Role::Label && position.x > checkbox.right() && checkbox.y_range().contains(position.y)
+    })
+}
+
+#[test]
+fn shortcuts_toolbar_shows_the_draft_bindings() {
+    let mut h = harness();
+    open_toolbar(&mut h);
+    assert!(toolbar_shows_shortcut(&h, "Move Tool", "V"));
+    assert!(toolbar_shows_shortcut(&h, "Artboard Tool", "V"));
+
+    let move_tool = CommandRef::new("tools.select.move");
+    let single_row = CommandRef::new("tools.select.singleRowMarquee");
+    rebind(h.state_mut(), &move_tool, Binding::parse("Q").unwrap(), Policy::Steal).unwrap();
+    rebind(h.state_mut(), &single_row, Binding::parse("F6").unwrap(), Policy::Steal).unwrap();
+    h.run_steps(3);
+    assert!(toolbar_shows_shortcut(&h, "Move Tool", "Q"), "show the in-dialog edit");
+    assert!(!toolbar_shows_shortcut(&h, "Move Tool", "V"));
+    assert!(toolbar_shows_shortcut(&h, "Single Row Marquee Tool", "F6"), "show a binding for a tool that had no default");
+    assert!(!h.state().session.prefs().shortcuts.contains_key("tools.select.move"), "the draft is not saved yet");
+
+    // A menu command takes the key from the tool. Tools in the same group can share keys.
+    let feather = CommandRef::new("select.modify.feather");
+    rebind(h.state_mut(), &feather, Binding::parse("Q").unwrap(), Policy::Steal).unwrap();
+    h.run_steps(3);
+    assert!(!toolbar_shows_shortcut(&h, "Move Tool", "Q"), "the earlier owner no longer displays the stolen shortcut");
+    assert!(toolbar_shows_shortcut(&h, "Artboard Tool", "V"), "an unrelated tool keeps its default");
+
+    let draft = &mut h.state_mut().prefs_rt.shortcuts.as_mut().unwrap().keymap;
+    assert!(draft.clear(&CommandRef::new("tools.select.artboard")));
+    assert!(draft.reset(&move_tool));
+    assert!(draft.reset(&single_row));
+    h.run_steps(3);
+    assert!(!toolbar_shows_shortcut(&h, "Artboard Tool", "V"), "clearing leaves the shortcut empty");
+    assert!(toolbar_shows_shortcut(&h, "Move Tool", "V"), "resetting restores the default");
+    assert!(!toolbar_shows_shortcut(&h, "Single Row Marquee Tool", "F6"));
+}
+
+#[test]
+fn shortcuts_toolbar_visibility_is_saved_only_on_ok() {
+    use egui::accesskit::{Role, Toggled};
+    use egui_kittest::kittest::{NodeT as _, Queryable as _};
+
+    let mut h = harness();
+    let app = h.state_mut();
+    app.run(
+        "prefs.set",
+        json!({"path": "toolbar", "value": {
+            "hidden": ["Artboard Tool", "Future Tool"], "toolbar": [["Move", "Artboard"], ["Brush"]], "extras": [["Patch", "Pen"]]
+        }}),
+    )
+    .unwrap();
+    let initial = app.session.prefs().toolbar.clone();
+
+    open_toolbar(&mut h);
+    let move_tool = h.get_by_role_and_label(Role::CheckBox, "Move Tool").rect();
+    let artboard = h.get_by_role_and_label(Role::CheckBox, "Artboard Tool");
+    let row_spacing = artboard.rect().top() - move_tool.top();
+    assert!((0.0..36.0).contains(&row_spacing), "the first two tool labels fit on single lines: {row_spacing} pt between rows");
+    assert_eq!(artboard.accesskit_node().toggled(), Some(Toggled::False));
+    h.get_by_role_and_label(Role::CheckBox, "Move Tool").click();
+    h.run_steps(3);
+    assert_eq!(h.get_by_role_and_label(Role::CheckBox, "Move Tool").accesskit_node().toggled(), Some(Toggled::False));
+    assert_eq!(h.state().session.prefs().toolbar, initial, "edits stay in the draft");
+    h.get_by_label("Cancel").click();
+    h.run_steps(5);
+    assert!(!crate::prefs_ui::shortcuts_open(h.state()));
+    assert_eq!(h.state().session.prefs().toolbar, initial);
+
+    open_toolbar(&mut h);
+    h.get_by_role_and_label(Role::CheckBox, "Artboard Tool").click();
+    h.get_by_role_and_label(Role::CheckBox, "Move Tool").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(5);
+    assert!(!crate::prefs_ui::shortcuts_open(h.state()));
+    let saved = &h.state().session.prefs().toolbar;
+    assert_eq!(saved.hidden, ["Future Tool", "Move"]);
+    assert_eq!(saved.toolbar, initial.toolbar);
+    assert_eq!(saved.extras, initial.extras);
+    assert_eq!(saved.layout().toolbar[0], ["Artboard"]);
+
+    open_toolbar(&mut h);
+    h.get_by_label("Restore Defaults").click();
+    h.run_steps(3);
+    assert_eq!(h.get_by_role_and_label(Role::CheckBox, "Move Tool").accesskit_node().toggled(), Some(Toggled::True));
+    h.get_by_label("OK").click();
+    h.run_steps(5);
+    let saved = &h.state().session.prefs().toolbar;
+    assert!(saved.hidden.is_empty());
+    assert_eq!(saved.toolbar, initial.toolbar);
+    assert_eq!(saved.extras, initial.extras);
+}
+
+#[test]
+fn unchanged_shortcuts_toolbar_draft_preserves_newer_toolbar_settings() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable as _;
+
+    for reverted in [false, true] {
+        let mut h = harness();
+        h.state_mut().run("prefs.set", json!({"path": "toolbar.hidden", "value": ["Artboard Tool"]})).unwrap();
+        if reverted {
+            open_toolbar(&mut h);
+            for _ in 0..2 {
+                h.get_by_role_and_label(Role::CheckBox, "Artboard Tool").click();
+                h.run_steps(3);
+            }
+        } else {
+            crate::prefs_ui::open_shortcuts(h.state_mut(), 0);
+            h.run_steps(5);
+        }
+        // A preferences command can be applied while this dialog is open.
+        h.state_mut().run("prefs.set", json!({"path": "toolbar.hidden", "value": ["Move"]})).unwrap();
+        h.get_by_label("OK").click();
+        h.run_steps(5);
+        assert!(!crate::prefs_ui::shortcuts_open(h.state()));
+        assert_eq!(h.state().session.prefs().toolbar.hidden, ["Move"], "reverted={reverted}");
+    }
+}
+
+#[test]
+fn shortcuts_toolbar_applies_visibility_edits_to_current_settings() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable as _;
+
+    let mut h = harness();
+    let set_hidden = |app: &mut PhotocraftApp, hidden: &[&str]| {
+        app.run("prefs.set", json!({"path": "toolbar.hidden", "value": hidden})).unwrap();
+    };
+    set_hidden(h.state_mut(), &["Artboard Tool", "Future Tool"]);
+    open_toolbar(&mut h);
+
+    // A different settings writer adds overrides and uses a canonical spelling for Artboard.
+    set_hidden(h.state_mut(), &["Patch Tool", "Artboard", "Future Tool", "Unknown Added Tool"]);
+    h.get_by_role_and_label(Role::CheckBox, "Artboard Tool").click();
+    h.get_by_role_and_label(Role::CheckBox, "Move Tool").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(5);
+    assert!(!crate::prefs_ui::shortcuts_open(h.state()));
+    assert_eq!(h.state().session.prefs().toolbar.hidden, ["Patch Tool", "Future Tool", "Unknown Added Tool", "Move"]);
+
+    open_toolbar(&mut h);
+    set_hidden(h.state_mut(), &["Patch Tool", "Brush Tool", "Future Tool", "Unknown Added Tool", "Move", "Another Future Tool"]);
+    h.get_by_label("Restore Defaults").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(5);
+    assert!(!crate::prefs_ui::shortcuts_open(h.state()));
+    assert_eq!(h.state().session.prefs().toolbar.hidden, ["Brush Tool", "Another Future Tool"]);
+}
