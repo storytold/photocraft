@@ -191,3 +191,31 @@ fn a_reopened_32_bit_document_keeps_the_linear_variant_of_its_working_space() {
     assert_eq!(report["action"], "kept", "{report}");
     assert_eq!(reopened.icc_profile, s.active().unwrap().doc.icc_profile, "the tag is unchanged");
 }
+
+/// A type 3 curve that is zero below 1/64 passes any coarse probe of the diagonal but isn't linear (CodeRabbit on #16083).
+#[test]
+fn a_parametric_curve_that_is_linear_only_at_the_probes_is_not_linear() {
+    let mut s = doc("rgb", 32);
+    let mut odd = Builtin::Srgb.profile().clone();
+    odd.description = "Gap below 1/64".into();
+    odd.trc = Some(std::array::from_fn(|_| Curve::Parametric { kind: 3, p: [1.0, 1.0, 0.0, 0.0, 1.0 / 64.0, 0.0, 0.0] }));
+    (odd.a2b, odd.b2a) = ([None, None, None], [None, None, None]);
+    let (_dir, path) = icc_file(&odd);
+    s.execute("edit.assignProfile", json!({"profile": path})).unwrap();
+    let got = tagged(&s);
+    assert!(got.description.ends_with("(Linear RGB Profile)"), "it is derived, not kept: {}", got.description);
+}
+
+/// Tables made the profile usable but its matrix is singular: without the tables it can't convert, so it is refused.
+#[test]
+fn a_singular_matrix_with_lookup_tables_is_refused_and_nothing_changes() {
+    let mut s = doc("rgb", 32);
+    let mut odd = Builtin::AdobeRgbCompat.profile().clone();
+    odd.description = "Singular matrix with tables".into();
+    odd.matrix = Some([[0.0; 3]; 3]);
+    (odd.a2b, odd.b2a) = ([identity_tables(), None, None], [identity_tables(), None, None]);
+    let (_dir, path) = icc_file(&odd);
+    let (before, steps) = (tag(&s), history(&s).len());
+    assert!(s.execute("edit.assignProfile", json!({"profile": path})).is_err());
+    assert_eq!((tag(&s), history(&s).len()), (before, steps), "the document is not changed");
+}

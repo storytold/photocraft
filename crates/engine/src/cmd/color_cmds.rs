@@ -1066,7 +1066,30 @@ fn assign_profile(s: &mut Session, p: &Value) -> Result<Value> {
 /// Whether a tone curve is linear: the identity, or any gamma, parametric or table form that evaluates as one
 /// (`Curve::is_identity` is false for every parametric curve above type 0, even `[1, 1, 0, 1, 0, 0, 0]`).
 fn curve_is_linear(c: &craft_cms::Curve) -> bool {
-    c.is_identity() || (0..=32).all(|i| (c.eval64(i as f64 / 32.0) - i as f64 / 32.0).abs() < 1e-6)
+    use craft_cms::Curve;
+    const EPS: f64 = 1e-9;
+    match c {
+        // Gamma 1, a type 0 curve with g = 1 and a table whose every entry is on the diagonal.
+        Curve::Identity | Curve::Gamma(_) | Curve::Table(_) => c.is_identity(),
+        Curve::Parametric { kind: 0, .. } => c.is_identity(),
+        // Types 1-4 are two branches split at `d` (types 1 and 2 at -b/a): the upper `(a x + b)^g + e`, the lower
+        // constant (1, 2) or `c x + f` (3, 4). Each branch that covers part of [0, 1] must itself be the identity; the
+        // branches are checked from their parameters, not by probing the curve, so a short piece can't hide.
+        Curve::Parametric { kind, p } => {
+            let [g, a, b, cc, d, e, f] = *p;
+            let (split, upper_offset) = match kind {
+                1 => (if a != 0.0 { -b / a } else { f64::INFINITY }, 0.0),
+                2 => (if a != 0.0 { -b / a } else { f64::INFINITY }, cc),
+                3 => (d, 0.0),
+                _ => (d, e),
+            };
+            let lower_len = split.clamp(0.0, 1.0);
+            let upper_len = 1.0 - split.clamp(0.0, 1.0);
+            let upper_ok = upper_len <= 0.0 || ((g - 1.0).abs() < EPS && (a - 1.0).abs() < EPS && (b + upper_offset).abs() < EPS);
+            let lower_ok = lower_len <= 0.0 || (matches!(kind, 3 | 4) && (cc - 1.0).abs() < EPS && (if *kind == 4 { f } else { 0.0 }).abs() < EPS);
+            upper_ok && lower_ok
+        }
+    }
 }
 
 /// Whether `emb` is the linear variant of the working profile `working` (what a 32-bit document is tagged with after
@@ -1116,7 +1139,14 @@ fn linear_variant(prof: &Profile) -> Result<Arc<Vec<u8>>> {
     linear.a2b = [None, None, None];
     linear.b2a = [None, None, None];
     linear.description = format!("{} ({suffix})", prof.description);
-    Ok(linear.with_encoded_bytes().to_bytes())
+    let linear = linear.with_encoded_bytes();
+    // The tables are gone, so the matrix has to carry both directions: a profile whose tables made it usable but whose
+    // matrix is singular must be refused before the tag changes (CodeRabbit on #16083).
+    let intent = Intent::RelativeColorimetric;
+    if linear.pcs_to_device(intent).is_err() || linear.device_to_pcs(intent).is_err() {
+        return Err(EngineError::Other(format!("profile `{}` has no usable linear variant for a 32-bit document", prof.description)));
+    }
+    Ok(linear.to_bytes())
 }
 
 /// Read opt-in destructive profile options without accepting malformed values as defaults.
