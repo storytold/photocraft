@@ -128,6 +128,22 @@ fn switching_units_converts_width_and_height() {
     });
 }
 
+/// A pixel size too small for two decimals in inches survives the switch to inches and back.
+#[test]
+fn switching_units_keeps_a_small_pixel_size() {
+    crate::i18n::with_language(crate::i18n::Lang::EN, || {
+        let (mut h, id) = opened();
+        pick_unit(&mut h, id, "pixels");
+        set(&mut h, id, "resolution", json!(10_000.0));
+        set(&mut h, id, "width", json!(16.0));
+        set(&mut h, id, "height", json!(16.0));
+        pick_unit(&mut h, id, "inches");
+        assert!(num(&h, id, "width") > 0.0 && num(&h, id, "height") > 0.0, "the size is not lost in inches");
+        pick_unit(&mut h, id, "pixels");
+        assert_eq!((num(&h, id, "width"), num(&h, id, "height")), (16.0, 16.0));
+    });
+}
+
 /// Picks `unit` in the Units list, as the list's pick does.
 fn pick_unit(h: &mut H, id: DialogId, unit: &str) {
     set(h, id, "units", json!(unit));

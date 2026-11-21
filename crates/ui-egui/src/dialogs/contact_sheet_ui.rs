@@ -73,8 +73,9 @@ fn follow_units(ui: &mut egui::Ui, fields: &mut DialogFields, _: &mut CustomCont
         let (from, to) = (unit_of(&shown), unit_of(&units));
         for (key, default) in [("width", 8.0), ("height", 10.0)] {
             let v = to.from_px(from.to_px(fields.number(key).unwrap_or(default), ppi, 0.0, 72.0), ppi, 0.0, 72.0);
-            // Rounded to the field's two decimals, so a round trip comes back to the value it left.
-            fields.set(key, if to == Unit::Pixels { v.round() } else { (v * 100.0).round() / 100.0 });
+            // Kept unrounded (the field shows two decimals): a small pixel size at a high resolution would round to
+            // 0 in, which the command reads as no size. Pixels are whole.
+            fields.set(key, if to == Unit::Pixels { v.round() } else { v });
         }
     }
     if fields.text(UNITS_SHOWN) != Some(units.as_str()) {
