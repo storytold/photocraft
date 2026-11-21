@@ -59,6 +59,9 @@ impl PhotocraftApp {
     }
 
     fn run_command_at_depth(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // Commands never see Apply Data Set's Preview: it is not the document (a Save would write
+        // it). The dialog shows it again on the next frame.
+        crate::panels::apply_data_set_ui::end_preview(self);
         if !vector_ui::cancel_stale(self) {
             return Err(self.ui.status.clone());
         }
@@ -220,6 +223,10 @@ impl PhotocraftApp {
             Err(e) => {
                 self.ui.status = e.clone();
                 self.ui.status_error = true;
+                if id == "image.applyDataSet" && e == photocraft_engine::DATA_SET_LAYER_LOCKED {
+                    // The reference application refuses a locked type layer with an alert (#14499).
+                    let _ = crate::dialogs::alerts::alert(self, tl!(photocraft_engine::DATA_SET_LAYER_LOCKED));
+                }
             }
         }
         if suppress_events {
@@ -336,9 +343,9 @@ impl PhotocraftApp {
 
     /// Reconciles canvas view state with open documents in the session.
     pub fn sync_views(&mut self) {
-        // The Paths panel selection belongs to the active document. Ordinary edits replace the
-        // snapshot and advance its revision; a replaced snapshot without a newer revision is a
-        // reopened document, even with the same ID.
+        // The Paths panel selection and canvas context menu belong to the active document.
+        // Ordinary edits replace the snapshot and advance its revision; a replaced snapshot
+        // without a newer revision is a reopened document, even with the same ID.
         let document = self.session.active().map(|st| (st.doc.id, st.revision, std::sync::Arc::downgrade(&st.doc)));
         // Crop's Fill goes back to its default entry when another document that was already open
         // becomes active (a tab switch, or closing the active one), as in the reference
@@ -357,6 +364,7 @@ impl PhotocraftApp {
         };
         if !same_document {
             self.ui.selected_path = None;
+            self.ui.canvas_tool_menu = None;
         }
         self.path_document = document;
         vector_ui::cancel_stale_pen(self);

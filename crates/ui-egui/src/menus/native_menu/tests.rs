@@ -219,3 +219,40 @@ fn opening_or_closing_a_workspace_without_input_rebuilds_the_menus() {
     app.framework.dialogs.cancel_by_id(&ctx, id);
     assert_eq!(state_hash(&app, None), closed, "and come back when it is cancelled");
 }
+
+/// The Contextual Task Bar's tick follows the bar when its Hide bar or `ui.set` turns it off without a menu click
+/// (#15489).
+#[test]
+fn the_task_bar_tick_follows_the_bar_hidden_without_a_menu_click() {
+    let (mut h, synced, _) = harness(true);
+    let ticked = |synced: &Synced| {
+        let bar = synced.borrow().last().cloned().expect("menus synced");
+        bar.find(&CommandRef::new("window.panel.contextualTaskBar")).and_then(|it| it.kind.checked())
+    };
+    assert_eq!(ticked(&synced), Some(true));
+    h.state_mut().ui.panels.context_task_bar = false;
+    h.run_steps(2);
+    assert_eq!(ticked(&synced), Some(false), "unticked once the bar is hidden");
+    h.state_mut().ui.panels.context_task_bar = true;
+    h.run_steps(2);
+    assert_eq!(ticked(&synced), Some(true), "ticked again once it shows");
+}
+
+/// The menus follow the preferences they show, even when they change without input (settings merged from another
+/// instance), and not the tool and colour preferences the app saves on every change.
+#[test]
+fn the_menu_state_follows_the_preferences_the_rows_show() {
+    let mut app = app(false);
+    let shown = state_hash(&app, None);
+    app.session.edit_prefs(|p| {
+        p.selected_tool = json!("Brush");
+        p.tool_colors = Default::default();
+    });
+    assert_eq!(state_hash(&app, None), shown, "the saved tool and colours are not in the menus");
+
+    app.session.edit_prefs(|p| p.menus.hidden.push("filter.blur.gaussian".into()));
+    let hidden = state_hash(&app, None);
+    assert_ne!(hidden, shown, "Edit › Menus hides a row");
+    app.session.edit_prefs(|p| p.export.quick_export_format = photocraft_engine::prefs::QuickExportFormat::Jpg);
+    assert_ne!(state_hash(&app, None), hidden, "the Quick Export label names the format");
+}
