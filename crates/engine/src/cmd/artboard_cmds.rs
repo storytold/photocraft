@@ -695,9 +695,13 @@ fn overlapping_boards(doc: &Document, id: LayerId, rect: Rect) -> Vec<Layer> {
             continue;
         }
         let mut board = l.clone();
+        // The board's own shadow or glow is built from all its layers, so they stay whole.
+        let fx = photocraft_compose::effects::has_effects(&board);
         if let LayerContent::Group(g) = &mut board.content {
             g.artboard = None;
-            cut_pixels(&mut g.children, overlap, 0);
+            if !fx {
+                cut_pixels(&mut g.children, overlap, 0);
+            }
         }
         let bg = ab.background.rgba();
         let mut group = if stacks_like_its_layers(&board) {
@@ -793,6 +797,19 @@ fn chosen_documents(doc: &Document, p: &Value, overlapping: bool) -> Result<Vec<
         out.push(one);
     }
     Ok(out)
+}
+
+/// `"content"`: `"overlapping"` (Include Overlapping Areas, the default) or `"artboard"` (Artboard
+/// Content Only).
+fn overlapping_param(p: &Value, cmd: &str) -> Result<bool> {
+    match p.get("content") {
+        None | Some(Value::Null) => Ok(true),
+        Some(v) => match v.as_str() {
+            Some("overlapping") => Ok(true),
+            Some("artboard") => Ok(false),
+            _ => Err(bad(cmd, format!("`content` must be \"overlapping\" or \"artboard\", not {v}"))),
+        },
+    }
 }
 
 /// The artboards an export covers: `"artboards": [ids]`, else all, top of the Layers panel first.
@@ -1009,14 +1026,7 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let border = name_border_param(p, cmd)?.filter(|_| !keeps_layers(&format));
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
-    let overlapping = match p.get("content") {
-        None | Some(Value::Null) => true,
-        Some(v) => match v.as_str() {
-            Some("overlapping") => true,
-            Some("artboard") => false,
-            _ => return Err(bad(cmd, format!("`content` must be \"overlapping\" or \"artboard\", not {v}"))),
-        },
-    };
+    let overlapping = overlapping_param(p, cmd)?;
     let doc = d.doc.clone();
     let guard = ScratchGuard::new(&doc)?;
     let mut boards = chosen_documents(&doc, p, overlapping)?;
@@ -1191,11 +1201,12 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => false,
         Some(v) => v.as_bool().ok_or_else(|| bad(cmd, "`reversePageOrder` must be true or false"))?,
     };
+    let overlapping = overlapping_param(p, cmd)?;
     let guard = ScratchGuard::new(&doc)?;
     let mut pages = Vec::new();
     // Pages go bottom artboard of the Layers panel first, as in the reference application (#13643);
     // `chosen_documents` lists them top first, the order Artboards to Files keeps.
-    for one in chosen_documents(&doc, p, false)?.into_iter().rev() {
+    for one in chosen_documents(&doc, p, overlapping)?.into_iter().rev() {
         let jpeg = jpeg_page(&one, quality, cmd)?;
         pages.push((one.size.width, one.size.height, doc.resolution_dpi, jpeg));
     }
@@ -1277,7 +1288,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToPdf",
             "Artboards to PDF…",
             &["File", "Export"],
-            r##"{"path":str (.pdf),"artboards":[id]?,"quality":0..12=10,"reversePageOrder":bool=false (the default page order the other way round)} → {path, pages} (one raster page per board, bottom artboard of the Layers panel first)"##,
+            r##"{"path":str (.pdf),"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's page also shows the visible boards above it where they overlap it; artboard: Artboard Content Only),"artboards":[id]?,"quality":0..12=10,"reversePageOrder":bool=false (the default page order the other way round)} → {path, pages} (one raster page per board, bottom artboard of the Layers panel first)"##,
             export_artboards,
             artboards_to_pdf
         ),
@@ -1317,6 +1328,9 @@ mod from_group_hidden_bounds_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/overlapping_areas_tests.rs"]
 mod overlapping_areas_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/pdf_overlapping_areas_tests.rs"]
+mod pdf_overlapping_areas_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/pdf_page_order_tests.rs"]
 mod pdf_page_order_tests;
