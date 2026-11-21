@@ -10,12 +10,14 @@
 
 use std::sync::Arc;
 
+use craft::behavior::NumberCodec;
 use craft::host::{PickRequest, Picked};
-use craft::ui::contract::Bind;
+use craft::ui::contract::{Bind, Show as _};
 use craft::ui::dialog::{DialogId, dialog_id};
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult};
-use craft::ui::runtime::env::{Label, UnitKind};
+use craft::ui::runtime::env::{Env, Label, UnitKind};
 use craft::ui::runtime::requests::PathKind;
+use craft::ui::text::NumberField;
 use photocraft_doc::Document;
 use photocraft_engine::color_cmds::ColorSettings;
 use serde_json::{Map, Value, json};
@@ -26,6 +28,7 @@ mod rows;
 pub(crate) use rows::{REPLACE_COLOR, replace_color_sample};
 
 const MATCH_COLOR: &str = "image.adjustments.matchColor";
+const SCALE_EFFECTS: &str = "layer.layerStyle.scaleEffects";
 #[cfg(test)]
 pub(crate) const MATCH_COLOR_DESTINATION: &str = "__matchColorDestination";
 
@@ -302,6 +305,9 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
                 let kind = if command == "layer.layerStyle.globalLight" { ParamKind::angle_in(min, max, default, 0) } else { ParamKind::angle(default) };
                 p = Param::new(p.key, p.label, kind);
             }
+            if command == SCALE_EFFECTS && p.key == "scale" {
+                return scale_effects_row(p);
+            }
             if let ParamKind::Range { max, .. } = p.kind {
                 if is_pixel_param_of(command, &p.key) {
                     p = p.unit(UnitKind::Pixels);
@@ -326,6 +332,12 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
                 p = p.not_remembered();
             }
             if document_derived(command, &p.key) {
+                p = p.not_remembered();
+            }
+            // #14465: the row opens from Preferences › General › Image Interpolation on every
+            // opening, so a pick there applies to that opening only; the row stays out of the
+            // remembered values, as the rows above do.
+            if command == "image.rotation.arbitrary" && p.key == "interpolation" {
                 p = p.not_remembered();
             }
             // Global Light's Altitude takes whole degrees, as its Angle does (#14980).
@@ -363,6 +375,30 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
     list
 }
 
+/// Scale Layer Effects' row, as in Photoshop (#14996): a whole-percent field whose arrow opens a linear slider over
+/// the range, where the schema's range row would draw an always-shown logarithmic slider for 1..1000.
+fn scale_effects_row(p: Param) -> Param {
+    let ParamKind::Range { min, max, default, .. } = p.kind else { return p };
+    let label = p.label;
+    Param::custom("scale", label.clone(), move |ui, fields, _| {
+        let value = fields.number("scale").unwrap_or(default);
+        let codec = NumberCodec::new(Env::of(ui).units().reader(None), 0);
+        let shown = NumberField::new(label.clone(), Bind::given(Some(value)))
+            .codec(codec)
+            .range(min..=max)
+            .step(1.0)
+            .commit_decimals(0)
+            .unit("%")
+            .popup_slider(min..=max)
+            .show(ui);
+        if let Some(v) = shown.edit.value().copied().flatten() {
+            fields.set("scale", v.round());
+        }
+        shown.edit.response
+    })
+    .opens_with(default)
+}
+
 /// The values `command`'s dialog opens with before the remembered ones: the open document's, the
 /// session's and the captured editing target. Each is the dialog's own opening state, so the Alt
 /// reset restores them too (through [`reset_values`]).
@@ -391,6 +427,17 @@ fn command_defaults(app: &PhotocraftApp, command: &str, params: &[Param]) -> Map
     let mut map = Map::new();
     if command == "image.rotation.arbitrary" {
         straighten_defaults(app, &mut map);
+        // #14465: the reference dialog offers no interpolation choice; its resampling
+        // follows Preferences › General › Image Interpolation (the dropdown itself goes
+        // away with #14462). The *not measured* variants show and act as Bicubic, as the
+        // Free Transform options bar renders them.
+        use photocraft_engine::prefs::Interpolation;
+        let interp = match app.session.prefs().general.image_interpolation {
+            Interpolation::Nearest => "nearest",
+            Interpolation::Bilinear => "bilinear",
+            _ => "bicubic",
+        };
+        map.insert("interpolation".into(), json!(interp));
     }
     if command == "type.warpText" {
         warp_defaults(app, &mut map);
@@ -531,7 +578,9 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Result<DialogId, String> 
     let fields = fields(app, command, &params);
     let captured = if command == MATCH_COLOR { json!(app.session.active().map(|st| (st.doc.id, st.active_layer))) } else { Value::Null };
     let reset = reset_values(&params, &fields);
-    let build = builder(app, command, title_of(spec.label), params, reset);
+    // Photoshop titles the Scale Effects… dialog with the longer name (#14996).
+    let title = if command == SCALE_EFFECTS { Label::from(tl!("Scale Layer Effects")) } else { title_of(spec.label) };
+    let build = builder(app, command, title, params, reset);
     let id = crate::dialogs::params::open_param(app, command, fields, captured, build);
     if command == MATCH_COLOR {
         reconcile_match_color(app);
@@ -1011,8 +1060,8 @@ pub(crate) fn ask_displace_map(app: &mut PhotocraftApp, command: String, result:
     app.ask_file(request, move |app, picked| {
         let path = match picked {
             Picked::Paths(paths) => paths.into_iter().next().ok_or("no displacement map was chosen")?,
-            Picked::Cancelled => return Err(crate::file_dialog::CANCELLED.into()),
-            Picked::Unavailable(error) => return Err(error),
+            Picked::Cancelled | Picked::Downloaded(_) => return Err(crate::file_dialog::CANCELLED.into()),
+            Picked::Unavailable(error) | Picked::Failed(error) => return Err(error),
             Picked::Contents(_) => return Err("open the displacement map as a document, then choose it as the Map Document".into()),
         };
         let mut params = command_params(&command, &result.fields);

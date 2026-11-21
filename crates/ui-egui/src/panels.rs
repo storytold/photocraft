@@ -17,6 +17,7 @@ use crate::{PhotocraftApp, icons};
 pub mod actions;
 pub mod adjust_ui;
 pub mod apply_color;
+pub mod apply_data_set_ui;
 pub(crate) mod blend_preview;
 #[cfg(test)]
 mod blend_rows_tests;
@@ -56,7 +57,6 @@ pub(super) mod panel_docking;
 pub(crate) mod preset_browser;
 pub mod preset_panels;
 mod properties;
-pub(crate) mod region_versions;
 pub(crate) mod registry;
 pub mod smart_ui;
 mod status_bar;

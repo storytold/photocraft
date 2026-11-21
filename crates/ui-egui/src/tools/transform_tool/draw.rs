@@ -105,6 +105,10 @@ pub fn show_in_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Re
     if let Some(t) = app.ui.transform.as_mut() {
         t.session.settle(now, busy);
     }
+    // A pass that ended the session (Cancel, or a commit that finished at once) hands back no picture: its moving
+    // pixels would paint over the restored document. A commit still running in the background keeps the preview, and
+    // with it the picture.
+    let picture = if app.transform_preview.is_some() { picture } else { Vec::new() };
     SessionShown { shown: true, snapped, picture }
 }
 

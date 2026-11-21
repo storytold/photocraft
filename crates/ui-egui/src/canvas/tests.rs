@@ -995,7 +995,7 @@ fn a_floating_document_follows_navigator_and_status_bar_zoom() {
     // A Navigator in a column of icons shows in a flyout, which the click into the status bar closes: expand its column
     // so the panel stays while both fields are typed into.
     let navigator = "navigator".to_owned();
-    if h.state().ui.docking.layout.opens_in_flyout(&navigator) {
+    if h.state().ui.docking.layout().opens_in_flyout(&navigator) {
         crate::panel_docking::apply(h.state_mut(), vec![craft::behavior::dock::Action::set_iconic(navigator.clone(), false)]).unwrap();
         h.state_mut().ui.flyout = None;
         crate::panel_docking::show_panel(h.state_mut(), "navigator", Some(true)).unwrap();

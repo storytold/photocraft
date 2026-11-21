@@ -9,14 +9,10 @@ use photocraft_geom::Affine;
 
 /// `brst` (channel blending restrictions): a list of big-endian u32 channel indices left out of
 /// blending → a bit mask (bit `i` = channel `i`; indices above 31 are ignored).
-pub fn parse_brst(data: &[u8]) -> u32 {
-    data.as_chunks::<4>().0.iter().map(|c| u32::from_be_bytes([c[0], c[1], c[2], c[3]])).filter(|&i| i < 32).fold(0, |m, i| m | 1 << i)
-}
+pub use craft_psd::tagged::channel_restrictions as parse_brst;
 
 /// Inverse of [`parse_brst`]; `None` when every channel blends (no block).
-pub fn brst_data(mask: u32) -> Option<Vec<u8>> {
-    (mask != 0).then(|| (0..32u32).filter(|i| mask & 1 << i != 0).flat_map(u32::to_be_bytes).collect())
-}
+pub use craft_psd::tagged::channel_restrictions_data as brst_data;
 
 /// The Advanced Blending blocks, as (key, value for `a`, Photoshop's default value): `knko`
 /// (0 none, 1 shallow, 2 deep), `infx`, `clbl`, `tsly`, `lmgm`, `vmgm`. Each is stored as one

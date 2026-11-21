@@ -260,14 +260,15 @@ fn pencil_auto_erase_probes_a_cmyk_pick_with_the_picked_inks() {
 
 #[test]
 fn mixer_brush_reservoir_and_cleaning() {
-    let mut s = session(200, 30);
+    // The load lasts for a length of stroke (390 px at the lowest Load), so the stroke is longer.
+    let mut s = session(800, 30);
     s.execute("tools.setColors", json!({"foreground": "#ff0000"})).unwrap();
     s.execute(
         "paint.mixerBrush",
-        json!({"points": [[5, 15], [195, 15]], "size": 8, "wet": 0, "load": 0, "mix": 0, "brush": {"pressureSize": false, "spacing": 0.25}}),
+        json!({"points": [[5, 15], [795, 15]], "size": 8, "wet": 0, "load": 0, "mix": 0, "brush": {"pressureSize": false, "spacing": 0.25}}),
     )
     .unwrap();
-    assert!(rgba(&s, 10, 15)[3] > 0.95 && rgba(&s, 190, 15)[3] < 0.5, "low load dries out");
+    assert!(rgba(&s, 10, 15)[3] > 0.95 && rgba(&s, 790, 15)[3] < 0.5, "low load dries out");
     assert!(s.tools.mixer.pickup.is_none(), "cleaned after stroke");
     // Wet, not cleaned: the pickup persists into the session.
     s.execute("paint.mixerBrush", json!({"points": [[5, 5], [100, 5]], "size": 8, "wet": 100, "mix": 80, "cleanAfterStroke": false})).unwrap();
@@ -1046,7 +1047,8 @@ fn new_brush_controls_round_trip_through_set_brush() {
 
 #[test]
 fn mixer_brush_uses_the_brush_mixer_settings() {
-    let mut s = session(200, 30);
+    // The load lasts for a length of stroke (390 px at the lowest Load), so the stroke is longer.
+    let mut s = session(800, 30);
     s.execute("tools.setColors", json!({"foreground": "#ff0000"})).unwrap();
     // No wet/load params: the brush's Mixer settings (a dry brush with 0 % Load) apply.
     s.execute(
@@ -1054,11 +1056,11 @@ fn mixer_brush_uses_the_brush_mixer_settings() {
         json!({"brush": {"pressureSize": false, "spacing": 0.25, "mixer": {"wet": 0, "load": 0, "mix": 0}, "smoothing": {"catchUpOnEnd": true}}}),
     )
     .unwrap();
-    s.execute("paint.mixerBrush", json!({"points": [[5, 15], [195, 15]], "size": 8})).unwrap();
-    assert!(rgba(&s, 10, 15)[3] > 0.95 && rgba(&s, 190, 15)[3] < 0.5, "the brush's 0 % Load dries out");
+    s.execute("paint.mixerBrush", json!({"points": [[5, 15], [795, 15]], "size": 8})).unwrap();
+    assert!(rgba(&s, 10, 15)[3] > 0.95 && rgba(&s, 790, 15)[3] < 0.5, "the brush's 0 % Load dries out");
     // A param still overrides the brush.
-    s.execute("paint.mixerBrush", json!({"points": [[5, 5], [195, 5]], "size": 8, "load": 100})).unwrap();
-    assert!(rgba(&s, 190, 5)[3] > 0.95);
+    s.execute("paint.mixerBrush", json!({"points": [[5, 5], [795, 5]], "size": 8, "load": 100})).unwrap();
+    assert!(rgba(&s, 790, 5)[3] > 0.95);
 }
 
 /// A red image with an empty layer above it, a blue foreground, and a Mixer Brush that samples all
@@ -1529,6 +1531,56 @@ fn brush_and_pencil_paint_a_cmyk_pick_with_the_picked_inks() {
         let got: Vec<f32> = surf.read_region(Rect::new(8, 8, 9, 9)).into_iter().take(4).collect();
         assert!(got.iter().zip(cyan).all(|(a, b)| (a - b).abs() < 0.02), "{cmd}: {got:?}");
     }
+}
+
+/// The `paint.stroke` result's `warnings`, as strings (an absent list reads as empty).
+fn stroke_warnings(r: &Value) -> Vec<String> {
+    r["warnings"].as_array().map(|w| w.iter().filter_map(|m| m.as_str().map(str::to_string)).collect()).unwrap_or_default()
+}
+
+/// #8389: `spacing` multiplies the brush diameter, so `size: 150, spacing: 5` steps dabs 750 px
+/// apart and a 320 px stroke gets its first dab only. The result reports that pitch and warns
+/// instead of losing the rest of the stroke's coverage silently.
+#[test]
+fn a_stroke_shorter_than_its_dab_pitch_reports_the_pitch_and_warns() {
+    let mut s = session(400, 400);
+    let r = s.execute("paint.stroke", json!({"points": [[200, 40], [200, 360]], "size": 150, "spacing": 5, "color": "#ff0000"})).unwrap();
+    assert_eq!(r["pitch"].as_f64(), Some(750.0), "{r}");
+    let warnings = stroke_warnings(&r);
+    assert_eq!(warnings.len(), 1, "{r}");
+    assert!(warnings[0].contains("750") && warnings[0].contains("320"), "names the pitch and the path length: {r}");
+    // Only the first dab landed: the far end of the stroke is untouched.
+    assert_eq!(rgba(&s, 200, 330)[3], 0.0);
+}
+
+/// #8389: the warning is only for strokes that lose coverage, and their result keeps its old
+/// shape (no `pitch`, no `warnings`). A normal spacing, a tap (a path the first dab already
+/// covers) and Spacing turned off (dabs follow the stroke's speed, so there is no pitch) all
+/// paint without one.
+#[test]
+fn strokes_that_keep_their_coverage_do_not_warn() {
+    let mut s = session(400, 400);
+    let quiet = |r: &Value| r.get("pitch").is_none() && r.get("warnings").is_none();
+    let r = s.execute("paint.stroke", json!({"points": [[200, 40], [200, 360]], "size": 150, "spacing": 0.25})).unwrap();
+    assert!(quiet(&r), "{r}");
+    let tap = s.execute("paint.stroke", json!({"points": [[100, 100], [130, 100]], "size": 150, "spacing": 5})).unwrap();
+    assert!(quiet(&tap), "the first dab covers the whole path: {tap}");
+    let timed = s.execute("paint.stroke", json!({"points": [[20, 20], [380, 20]], "size": 10, "spacing": 5, "brush": {"spacingEnabled": false}})).unwrap();
+    assert!(quiet(&timed), "{timed}");
+}
+
+/// #8389: whether the first dab covers the path is judged by that dab's diameter, not the brush
+/// size. With the default pressure sizing, a first point at pressure 0.2 makes a `size: 150` dab
+/// 30 px wide, so `spacing: 5` steps 150 px and a 50 px path reaches past the dab and still warns.
+#[test]
+fn a_light_first_point_is_judged_by_its_own_dab_diameter() {
+    let mut s = session(400, 400);
+    s.execute("tools.setBrush", json!({"brush": {"pressureSize": true}})).unwrap();
+    let r = s.execute("paint.stroke", json!({"points": [[100, 200, 0.2], [150, 200, 0.2]], "size": 150, "spacing": 5, "color": "#ff0000"})).unwrap();
+    assert_eq!(r["pitch"].as_f64(), Some(150.0), "{r}");
+    let warnings = stroke_warnings(&r);
+    assert_eq!(warnings.len(), 1, "{r}");
+    assert!(warnings[0].contains("30.0 px") && warnings[0].contains("150.0 px apart") && warnings[0].contains("50.0 px path"), "{r}");
 }
 
 #[test]

@@ -114,7 +114,7 @@ the opted-in test; an unset variable leaves the ordinary behavior tests availabl
 After review, remove only the two generated PNGs and their owned temporary directory. The same
 Rust test and variable work on Windows with the native shell's environment-variable syntax.
 
-**GPU tests without a GPU.** Linux CI uses the shared `craft-common-actions` gate with Mesa's Vulkan driver installed. The gate runs the tests in shards (`scripts/ci-test-shard.sh`, which calls `cargo xtask ci tests`). One shard runs the configured `gpu` group alone, through `python3 scripts/ci-gpu-lavapipe.py`, with `WGPU_BACKEND=vulkan` and the lavapipe ICD explicitly selected; the other shards split the remaining tests. The script requires Vulkan parity evidence in that shard's output and rejects authored skips, except the documented software-adapter timing exceptions. xtask reads the group's filter from `.config/nextest.toml`, so no second filter needs maintaining. To run locally on Linux, install `mesa-vulkan-drivers libvulkan1` and run `python3 scripts/ci-gpu-lavapipe.py cargo xtask ci tests --gpu`. Windows uses WARP; this check does not certify Windows skip coverage.
+**GPU tests without a GPU.** Linux CI uses the shared `craft-common-actions` gate with Mesa's Vulkan driver installed. The gate builds the tests once into a nextest archive (`cargo xtask ci archive`) and runs them in shards from it (`cargo xtask ci tests`). One shard runs the configured `gpu` group alone, through `python3 scripts/ci-gpu-lavapipe.py`, with `WGPU_BACKEND=vulkan` and the lavapipe ICD explicitly selected; the other shards split the remaining tests. The script requires Vulkan parity evidence in that shard's output and rejects authored skips, except the documented software-adapter timing exceptions. xtask reads the group's filter from `.config/nextest.toml`, so no second filter needs maintaining. To run locally on Linux, install `mesa-vulkan-drivers libvulkan1`, build an archive and run `python3 scripts/ci-gpu-lavapipe.py <extracted>/target/debug/xtask ci tests --from <extracted> --gpu` as `scripts/ci-test-shard.sh` does. Windows uses WARP; this check does not certify Windows skip coverage.
 
 ## Fonts (craft-fonts)
 
@@ -346,6 +346,7 @@ desktop directory `.pcraft` reads use only the granted read capabilities.
 
 Tools:
 
+- `agent_folders` (where the app opens and saves files for agents: `read_folder`, `write_folder`; a headless session with several read roots adds `read_folders`. With the preferences' folders empty this is the default agent folder, `Documents/ArtCraft/Agents/PhotoCraft`. In `--bridge` mode both are `null`, with a note: the app's own launch decides)
 - `session_list`
 - `doc_open`, `doc_new`, `doc_place`, `doc_replace_smart_object`, `doc_export_layers`, `doc_export_data_sets`, `doc_import_data_sets`, `doc_save`, `doc_export`, `doc_inspect`, `doc_render_preview` (returns a PNG image), `doc_select`, `doc_close`
 - `command_list`, `command_run`, `command_batch` (several commands per call)

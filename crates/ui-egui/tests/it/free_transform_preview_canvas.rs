@@ -23,8 +23,13 @@ fn square() -> Rect {
 }
 
 fn harness(gpu_canvas: bool) -> Option<Harness> {
-    let built = std::panic::catch_unwind(|| {
+    // Only a panic before the app callback runs (no adapter, no render state) is a skip; one from the app's own setup
+    // is a failure.
+    let entered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = entered.clone();
+    let built = std::panic::catch_unwind(move || {
         egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 640.0)).with_pixels_per_point(1.0).with_max_steps(64).wgpu().build_eframe(move |cc| {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
             let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
             if gpu_canvas && let Some(rs) = cc.wgpu_render_state.as_ref() {
@@ -35,6 +40,7 @@ fn harness(gpu_canvas: bool) -> Option<Harness> {
     });
     match built {
         Ok(h) => Some(h),
+        Err(panic) if entered.load(std::sync::atomic::Ordering::SeqCst) => std::panic::resume_unwind(panic),
         Err(_) => {
             eprintln!("skipping: no GPU adapter");
             None
@@ -234,4 +240,39 @@ fn right_click_in_warp_opens_the_transform_menu_on_the_gpu_canvas() {
 #[test]
 fn right_click_in_warp_opens_the_transform_menu_on_the_cpu_canvas() {
     right_click_in_warp_opens_the_transform_menu(false);
+}
+
+/// Escape after a move puts the square back in the frame that cancels: the cancelled preview's moving pixels are not
+/// painted over the restored document where the box had taken them.
+fn cancelling_shows_no_moved_pixels(gpu_canvas: bool) {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut h) = harness(gpu_canvas) else { return };
+    setup(&mut h);
+    control(&mut h, "ui.menu.invoke", json!({"id": "edit.freeTransform"}));
+    let (from, to) = (screen(&h, 150.0, 150.0), screen(&h, 210.0, 150.0));
+    pointer_move(&mut h, from);
+    button(&mut h, from, true);
+    for i in 1..=6 {
+        pointer_move(&mut h, from + (to - from) * (i as f32 / 6.0));
+    }
+    button(&mut h, to, false);
+    assert!(is_red(rgb_at(&mut h, 230.5, 130.5)), "the box moved the square");
+
+    h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.step();
+    assert!(h.state().ui.transform.is_none(), "Escape ended Free Transform");
+    let moved = rgb_at(&mut h, 230.5, 130.5);
+    assert!(is_white(moved), "the cancelling frame shows no moved pixels: {moved:?}");
+    let back = rgb_at(&mut h, 150.5, 130.5);
+    assert!(is_red(back), "the square is back in its place: {back:?}");
+}
+
+#[test]
+fn cancelling_free_transform_shows_no_moved_pixels_on_the_gpu_canvas() {
+    cancelling_shows_no_moved_pixels(true);
+}
+
+#[test]
+fn cancelling_free_transform_shows_no_moved_pixels_on_the_cpu_canvas() {
+    cancelling_shows_no_moved_pixels(false);
 }
