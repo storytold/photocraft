@@ -32,8 +32,10 @@ use crate::PhotocraftApp;
 use crate::gpu_canvas::GpuCanvas;
 
 /// Side of a block in document pixels: whole render tiles, and a power of two so each block's
-/// mip levels don't depend on its neighbours.
-const BLOCK: i32 = 1024;
+/// mip levels don't depend on its neighbours. A canvas's own side (`GpuCanvas::redraw_block`) is
+/// this for every real canvas; a test canvas asks for a smaller one so a small document still has
+/// more than [`BATCH`] blocks to draw (#15370).
+pub(crate) const BLOCK: i32 = 1024;
 
 /// Blocks composited at once (in parallel, on top of each block's own tiles), and how many
 /// finished blocks may wait for the UI thread: bounds the memory a redraw holds.
@@ -248,17 +250,19 @@ pub(crate) fn enabled(app: &PhotocraftApp) -> bool {
     cfg!(not(target_arch = "wasm32")) && app.background_jobs
 }
 
-/// `bounds` cut into [`BLOCK`]-sized blocks, row by row.
-fn blocks(bounds: Rect) -> Vec<Rect> {
+/// `bounds` cut into `block`-sized blocks, row by row.
+fn blocks(bounds: Rect, block: i32) -> Vec<Rect> {
+    // At least 1: `GpuCanvas::redraw_block` is `BLOCK` or a test's side, and the loop must advance.
+    let block = block.max(1);
     let mut out = Vec::new();
     let mut y = bounds.y0;
     while y < bounds.y1 {
         let mut x = bounds.x0;
         while x < bounds.x1 {
-            out.push(Rect::new(x, y, (x + BLOCK).min(bounds.x1), (y + BLOCK).min(bounds.y1)));
-            x += BLOCK;
+            out.push(Rect::new(x, y, (x + block).min(bounds.x1), (y + block).min(bounds.y1)));
+            x += block;
         }
-        y += BLOCK;
+        y += block;
     }
     out
 }
@@ -291,7 +295,7 @@ pub(crate) fn start(
     fallback: Option<crate::render_path::CpuReason>,
     gpu_attempt_ms: f64,
 ) {
-    let all = blocks(doc.bounds());
+    let all = blocks(doc.bounds(), gpu.redraw_block());
     // What the texture stores, like `texture_key`: a Multichannel document's inks follow the Spot
     // dot gain, so blocks drawn with another gain aren't this state's.
     let display_key = display.as_deref().map_or(0, |d| d.texture_key) ^ super::display::ink_preview_key(&doc);

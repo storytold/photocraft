@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn blocks_cover_the_document_once() {
     let bounds = Rect::new(0, 0, 2500, 1100);
-    let b = blocks(bounds);
+    let b = blocks(bounds, BLOCK);
     assert_eq!(b.len(), 3 * 2);
     assert_eq!(b.iter().map(|r| r.width() as u64 * r.height() as u64).sum::<u64>(), 2500 * 1100);
     for (i, r) in b.iter().enumerate() {
@@ -16,7 +16,7 @@ fn blocks_cover_the_document_once() {
 
 #[test]
 fn visible_blocks_come_first_nearest_the_view_centre() {
-    let b = blocks(Rect::new(0, 0, 4096, 4096));
+    let b = blocks(Rect::new(0, 0, 4096, 4096), BLOCK);
     // The view shows the right half of the second block row.
     let visible = Rect::new(2100, 1100, 4000, 1900);
     let o = order(&b, 0..b.len(), visible);
@@ -30,9 +30,27 @@ fn visible_blocks_come_first_nearest_the_view_centre() {
     assert_eq!(order(&b, [3, 9].into_iter(), visible).len(), 2);
 }
 
+/// The block geometry the small-document tests in `gpu_tests` rely on (#15370), checked where no
+/// adapter is needed. Those tests return early when `gpu_app()` finds no GPU, so on such a machine
+/// the production constants, the 4x3 grid of the small documents and the tile-size relation were
+/// never checked (#15430). They are plain numbers and a pure function, so they run here, everywhere;
+/// `gpu_tests` keeps only what needs a canvas.
+#[test]
+fn the_small_test_documents_keep_the_production_block_geometry() {
+    use super::gpu_tests::{SMALL_BLOCK, SMALL_DEFER_PX, SMALL_H, SMALL_W};
+    assert_eq!(crate::gpu_canvas::DEFER_PX, 4 * 1024 * 1024, "the production threshold itself: 4.19 MP, unchanged by these hooks");
+    assert_eq!(BLOCK, 1024, "the production block side");
+    assert_eq!(blocks(Rect::new(0, 0, SMALL_W as i32, SMALL_H as i32), SMALL_BLOCK).len(), 12, "the small document keeps a 4x3 grid of blocks");
+    assert_eq!(blocks(Rect::new(0, 0, 4096, 3072), BLOCK).len(), 12, "like the 4096x3072 documents had at BLOCK");
+    assert_eq!(SMALL_BLOCK, photocraft_geom::TILE_SIZE, "the test block is a whole render tile");
+    assert!((SMALL_BLOCK as u32).is_power_of_two() && BLOCK % SMALL_BLOCK == 0, "and divides the production block, as BLOCK's own docs ask");
+    assert!(SMALL_W as u64 * SMALL_H as u64 >= SMALL_DEFER_PX, "a full refresh of the small document still reaches the deferred branch");
+    assert!((SMALL_BLOCK as u64) * (SMALL_BLOCK as u64) < SMALL_DEFER_PX, "and one block-sized corner edit is still drawn at once");
+}
+
 /// A kept composite of `doc`: `bytes` texels per block.
 fn kept(doc: &Arc<Document>, bytes: usize) -> Kept {
-    let all = blocks(doc.bounds());
+    let all = blocks(doc.bounds(), BLOCK);
     let texels: Vec<Vec<u8>> = all.iter().map(|_| vec![1u8; bytes]).collect();
     Kept {
         doc: Arc::downgrade(doc),
@@ -56,7 +74,7 @@ fn kept_composites_come_back_only_for_the_exact_state_and_stay_bounded() {
     }
     a.layers.push(layer);
     let a = Arc::new(a);
-    let all = blocks(a.bounds());
+    let all = blocks(a.bounds(), BLOCK);
     let changed = |f: &dyn Fn(&mut Document)| {
         let mut d = (*a).clone();
         f(&mut d);
