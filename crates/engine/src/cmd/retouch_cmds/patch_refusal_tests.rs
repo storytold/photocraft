@@ -81,3 +81,15 @@ fn a_layer_with_pixels_still_patches_and_content_aware_on_an_empty_layer_runs() 
     patch(&mut s).unwrap();
     assert_eq!(state(&s).1, steps + 1, "a normal patch on pixels runs");
 }
+
+/// A mask or channel target keeps today's checks on an Indexed Color image: it is not the Indexed alert's business
+/// (CodeRabbit on #16178).
+#[test]
+fn a_mask_target_on_an_indexed_image_does_not_get_the_indexed_alert() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 128, "height": 64, "background": "#808080"})).unwrap();
+    s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})).unwrap();
+    s.execute("select.rect", json!({"x": 16, "y": 22, "width": 20, "height": 20})).unwrap();
+    let e = s.execute("paint.patch", json!({"offset": [50, 0], "target": "mask"})).unwrap_err().to_string();
+    assert_ne!(e, super::INDEXED, "{e}");
+}

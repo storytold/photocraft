@@ -466,9 +466,18 @@ pub fn finish_patch(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
             "sampleAllLayers": o.sample_all.patch,
             "target": crate::canvas::paint_target(app),
         });
+        // Its refusals (a locked layer, Indexed Color, a hidden layer) come as the reference's alert too, not only in
+        // the status bar (CodeRabbit on #16178).
         if let Err(e) = app.run("paint.patch", p) {
-            app.ui.status = e;
-            app.ui.status_error = true;
+            match patch_refusal(&e) {
+                Some(alert) => {
+                    let _ = crate::dialogs::alerts::alert(app, alert);
+                }
+                None => {
+                    app.ui.status = e;
+                    app.ui.status_error = true;
+                }
+            }
         }
         return;
     }
@@ -737,6 +746,10 @@ mod tests;
 #[cfg(test)]
 #[path = "../healing_indexed_alert_tests.rs"]
 mod healing_indexed_alert_tests;
+
+#[cfg(test)]
+#[path = "../patch_content_aware_alert_tests.rs"]
+mod patch_content_aware_alert_tests;
 
 #[cfg(test)]
 #[path = "../clone_stamp_no_source_alert_tests.rs"]

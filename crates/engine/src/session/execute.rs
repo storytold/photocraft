@@ -120,6 +120,12 @@ impl Session {
         {
             return Err(EngineError::Other(why.into()));
         }
+        // The Patch tool's refusals that need no geometry, for the same reason (CodeRabbit on #16178).
+        if id == "paint.patch"
+            && let Some(why) = crate::retouch_cmds::patch_admit_refusal(self, &run_params)
+        {
+            return Err(EngineError::Other(why.into()));
+        }
         Ok(run_params)
     }
 

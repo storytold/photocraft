@@ -169,11 +169,13 @@ pub const INDEXED: &str = "Could not use the patch tool because it does not work
 /// area, as the reference does, so the empty check is the normal patch's only.
 fn refuse(s: &Session, p: &Value, id: Option<LayerId>, repaired: Rect) -> Result<()> {
     let Some(st) = s.active() else { return Ok(()) };
-    if st.doc.mode == photocraft_color::ColorMode::Indexed {
-        return Err(EngineError::Other(INDEXED.into()));
-    }
+    // Only the layer's own pixels: a mask or channel target keeps today's checks, an Indexed Color image included
+    // (CodeRabbit on #16178).
     if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
         return Ok(());
+    }
+    if st.doc.mode == photocraft_color::ColorMode::Indexed {
+        return Err(EngineError::Other(INDEXED.into()));
     }
     let Some(layer) = id.and_then(|id| st.doc.layer(id)) else { return Ok(()) };
     let locks = st.doc.effective_locks(layer.id);
@@ -189,6 +191,22 @@ fn refuse(s: &Session, p: &Value, id: Option<LayerId>, repaired: Rect) -> Result
     let n = surf.channels();
     let empty = area.is_empty() || surf.read_region(area).chunks_exact(n).all(|px| px.get(a).is_none_or(|v| *v <= 0.0));
     if empty { Err(EngineError::Other(EMPTY_AREA.into())) } else { Ok(()) }
+}
+
+/// The refusals of [`refuse`] that need no geometry, for `Session::admit`: checked before a floating selection drops,
+/// so a refused Patch leaves the piece floating and changes nothing (CodeRabbit on #16178). The empty-area check
+/// stays in [`plan`]: what the area holds can depend on the piece that drops first.
+pub(crate) fn admit_refusal(s: &Session, p: &Value) -> Option<&'static str> {
+    let st = s.active()?;
+    if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
+        return None;
+    }
+    if st.doc.mode == photocraft_color::ColorMode::Indexed {
+        return Some(INDEXED);
+    }
+    let id = target_layer(s, p).ok().flatten()?;
+    let locks = st.doc.effective_locks(id);
+    (locks.all || locks.pixels).then_some(LOCKED)
 }
 
 fn plan(s: &Session, p: &Value) -> Result<Plan> {

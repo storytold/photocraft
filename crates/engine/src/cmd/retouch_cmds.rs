@@ -36,6 +36,7 @@ pub use pattern_stamp::{
 mod periodic;
 mod remove;
 pub use content_aware_move::{ContentAwarePreview, preview as content_aware_move_preview};
+pub(crate) use patch::admit_refusal as patch_admit_refusal;
 pub use patch::preview as patch_preview;
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
