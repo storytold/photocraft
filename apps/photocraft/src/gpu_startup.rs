@@ -35,6 +35,8 @@ use serde_json::{Value, json};
 pub const MARKER_FILE: &str = "gpu-starting.json";
 /// PCI vendor id of Intel.
 pub const INTEL: u32 = 0x8086;
+/// PCI vendor id of AMD.
+pub const AMD: u32 = 0x1002;
 /// Qualcomm's vendor id as its Vulkan driver reports it.
 pub const QUALCOMM: u32 = 0x5143;
 /// Qualcomm's vendor id as DXGI (DX12) reports it: "QCOM".
@@ -251,10 +253,13 @@ pub fn dx12_compiler(env: Option<&str>, exe_dir: Option<&Path>) -> wgpu::Dx12Com
 /// The GPU makers whose Windows Vulkan driver `auto` avoids, so DX12 comes first: Intel's
 /// (`igvk64.dll` crashed while the device was created, #4) and Qualcomm's Adreno driver on
 /// Windows on ARM (it lost the device mid-session and the window went with it; DX12 on the same
-/// machine didn't, #7537). The name is for System Info.
+/// machine didn't, #7537), and AMD's, whose swapchain acquire blocked the UI thread for 1–5 s when
+/// the window was resized (Radeon 780M, driver 25.11.1; DX12 on the same machine took
+/// milliseconds). The name is for System Info.
 fn dx12_first_on_windows(vendor: u32) -> Option<&'static str> {
     match vendor {
         INTEL => Some("Intel"),
+        AMD => Some("AMD"),
         QUALCOMM | QUALCOMM_DXGI => Some("Qualcomm"),
         _ => None,
     }
@@ -274,7 +279,7 @@ pub struct Candidate {
 
 /// Rank of an adapter (lower is better): high-performance device types first (egui's power
 /// preference) or software adapters first for `cpu`; then backends, with DX12 before Vulkan for
-/// Intel and Qualcomm on Windows ([`dx12_first_on_windows`]). For `cpu`, any GL adapter comes
+/// Intel, AMD and Qualcomm on Windows ([`dx12_first_on_windows`]). For `cpu`, any GL adapter comes
 /// before Vulkan, which is only the fallback for presenting the window (see [`backends`]). On
 /// Windows GL comes after every other adapter, WARP included: GL there (VMware's SVGA3D, GL-only
 /// old GPUs) drew a black window (#5191, #1788).

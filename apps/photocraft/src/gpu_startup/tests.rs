@@ -261,6 +261,21 @@ fn qualcomm_on_windows_defaults_to_dx12() {
     assert_eq!(adreno[pick(&adreno, Auto, Os::Other).unwrap()].backend, B::Vulkan);
 }
 
+/// On Windows the AMD Vulkan driver blocked the UI thread for seconds in the swapchain acquire
+/// when the window was resized (Radeon 780M); DX12 on the same machine didn't.
+#[test]
+fn amd_on_windows_defaults_to_dx12() {
+    use wgpu::{Backend as B, DeviceType as T};
+    let radeon = [cand(AMD, T::IntegratedGpu, B::Vulkan), cand(AMD, T::IntegratedGpu, B::Dx12)];
+    let i = pick(&radeon, Auto, Os::Windows).unwrap();
+    assert_eq!(radeon[i].backend, B::Dx12);
+    assert_eq!(dx12_default_applied(&radeon, i, Os::Windows, false), Some("AMD"));
+    // Only Vulkan offered: still Vulkan, and no note.
+    assert_eq!(pick(&radeon[..1], Auto, Os::Windows), Some(0));
+    // Elsewhere Vulkan stays first.
+    assert_eq!(radeon[pick(&radeon, Auto, Os::Other).unwrap()].backend, B::Vulkan);
+}
+
 /// #4: an instance with Vulkan loads the Intel Vulkan driver, which crashed at startup, before
 /// the selector picks Intel's DX12 adapter. With an Intel adapter in the DX12 list, `auto` on
 /// Windows creates the instance without Vulkan.
