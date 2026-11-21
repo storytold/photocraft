@@ -15,15 +15,18 @@ fn walk(dir: &Path, c: &mut Counts) {
         return;
     };
     for e in rd.flatten() {
+        // Do not count linked source trees twice or follow a directory link back to an ancestor.
+        let Ok(kind) = e.file_type() else { continue };
         let p = e.path();
         let name = e.file_name();
         let name = name.to_string_lossy();
-        if p.is_dir() {
+        if kind.is_dir() {
             // Nested fuzz workspaces and build output are not part of the crate.
             if name != "target" && name != "fuzz" && !name.starts_with('.') {
                 walk(&p, c);
             }
-        } else if name.ends_with(".rs")
+        } else if kind.is_file()
+            && name.ends_with(".rs")
             && let Ok(s) = std::fs::read_to_string(&p)
         {
             c.files += 1;
@@ -108,7 +111,63 @@ pub fn run(_root: &Path, exact: bool) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::count_tests;
+    use super::{Counts, count_tests, walk};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Fixture(PathBuf);
+
+    impl Fixture {
+        fn new() -> Self {
+            static NEXT: AtomicUsize = AtomicUsize::new(0);
+            let root = std::env::temp_dir().join(format!("photocraft-stats-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+            std::fs::create_dir(&root).unwrap();
+            Self(root)
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            // Remove the fixture's known links before recursively removing its own directory.
+            let _ = std::fs::remove_file(self.0.join("project/linked.rs"));
+            #[cfg(unix)]
+            let _ = std::fs::remove_file(self.0.join("project/linked-dir"));
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn walk_counts_sources_and_skips_excluded_directories() {
+        let fixture = Fixture::new();
+        for dir in ["src/nested", "target", "fuzz", ".hidden"] {
+            std::fs::create_dir_all(fixture.0.join(dir)).unwrap();
+        }
+        std::fs::write(fixture.0.join("src/a.rs"), "#[test]\nfn a() {}\n").unwrap();
+        std::fs::write(fixture.0.join("src/nested/b.rs"), "proptest! {}\n").unwrap();
+        for path in ["target/a.rs", "fuzz/a.rs", ".hidden/a.rs", "src/not-rust.txt"] {
+            std::fs::write(fixture.0.join(path), "#[test]\n").unwrap();
+        }
+
+        let mut counts = Counts::default();
+        walk(&fixture.0, &mut counts);
+        assert_eq!((counts.files, counts.lines, counts.tests, counts.proptests), (2, 3, 1, 1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walk_ignores_linked_sources() {
+        let fixture = Fixture::new();
+        std::fs::create_dir(fixture.0.join("project")).unwrap();
+        std::fs::create_dir(fixture.0.join("external")).unwrap();
+        std::fs::write(fixture.0.join("project/real.rs"), "#[test]\nfn real() {}\n").unwrap();
+        std::fs::write(fixture.0.join("external/extra.rs"), "#[test]\nfn extra() {}\n").unwrap();
+        std::os::unix::fs::symlink(fixture.0.join("external"), fixture.0.join("project/linked-dir")).unwrap();
+        std::os::unix::fs::symlink(fixture.0.join("external/extra.rs"), fixture.0.join("project/linked.rs")).unwrap();
+
+        let mut counts = Counts::default();
+        walk(&fixture.0.join("project"), &mut counts);
+        assert_eq!((counts.files, counts.lines, counts.tests, counts.proptests), (1, 2, 1, 0));
+    }
 
     #[test]
     fn counts_attributes_and_proptest_blocks() {
