@@ -11,6 +11,9 @@ use crate::Session;
 /// Photoshop's alert text.
 pub const HIDDEN: &str = "Could not complete your request because the target layer is hidden.";
 
+/// The Art History Brush's own alert text (#12638).
+pub const ART_HISTORY_HIDDEN: &str = "Could not use the art history brush because the target layer is hidden.";
+
 /// Commands that paint on, or move, the target layer.
 const GATED: &[&str] = &[
     "paint.stroke",
@@ -32,6 +35,7 @@ const GATED: &[&str] = &[
     "paint.sharpen",
     "paint.smudge",
     "paint.historyBrush",
+    "paint.artHistoryBrush",
     "layer.translate",
 ];
 
@@ -51,8 +55,11 @@ pub fn refusal(s: &Session, id: &str, params: &Value) -> Option<&'static str> {
         return None;
     }
     let st = s.active()?;
-    let layer = params.get("layer").and_then(Value::as_u64).map(LayerId).or(st.active_layer)?;
-    (st.doc.layer(layer).is_some() && !shown(&st.doc, layer)).then_some(HIDDEN)
+    let layer = crate::commands::layer_param(s, &params).ok()?;
+    // The Art History Brush's text was measured on a layer's pixels only.
+    let pixels = crate::channel_cmds::target_of(&params) == crate::channel_cmds::Target::Pixels;
+    let why = if id == "paint.artHistoryBrush" && pixels { ART_HISTORY_HIDDEN } else { HIDDEN };
+    (st.doc.layer(layer).is_some() && !shown(&st.doc, layer)).then_some(why)
 }
 
 #[cfg(test)]
@@ -111,5 +118,20 @@ mod tests {
         s.execute("layer.setProps", json!({"layer": id, "visible": false})).unwrap();
         s.execute("channel.new", json!({})).unwrap();
         s.execute("paint.stroke", json!({"points": [[10, 10], [20, 20]], "target": {"channel": 0}})).unwrap();
+    }
+
+    #[test]
+    fn named_destinations_cannot_bypass_hidden_layer_protection() {
+        let (mut s, hidden) = session();
+        s.execute("layer.setProps", json!({"layer":hidden,"name":"hidden","visible":false})).unwrap();
+        s.execute("layer.new.layer", json!({"name":"visible"})).unwrap();
+        for command in ["paint.stroke", "paint.pencil", "paint.bucket", "paint.gradient"] {
+            let params = json!({"layer":"hidden","target":{"colors":[0,2]},"points":[[8,8]],"from":[0,0],"to":[16,16],"x":8,"y":8});
+            let before = s.active().unwrap().doc.clone();
+            let steps = s.active().unwrap().history.past_len();
+            assert!(s.execute(command, params).unwrap_err().to_string().contains(HIDDEN));
+            assert_eq!(s.active().unwrap().doc.layer(photocraft_doc::LayerId(hidden)), before.layer(photocraft_doc::LayerId(hidden)));
+            assert_eq!(s.active().unwrap().history.past_len(), steps);
+        }
     }
 }

@@ -270,6 +270,10 @@ impl Default for Pattern {
 pub struct Texture {
     pub enabled: bool,
     pub pattern: Pattern,
+    /// The id of the library pattern `pattern` was made from; `None` once `pattern` is anything else. The pattern
+    /// picker shows it as selected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pattern_id: Option<String>,
     pub invert: bool,
     /// Pattern scale (1 = 100 %).
     pub scale: f32,
@@ -306,6 +310,7 @@ impl Default for Texture {
         Self {
             enabled: false,
             pattern: Pattern::default(),
+            pattern_id: None,
             invert: false,
             scale: 1.0,
             brightness: 0.0,
@@ -526,11 +531,13 @@ pub struct Smoothing {
     pub enabled: bool,
     /// 0..1.
     pub amount: f32,
-    /// Lazy-mouse: paint only when the pointer pulls a string of `amount × 100 px` taut.
+    /// Lazy-mouse: paint only when the pointer pulls a string of `amount × 300 px` taut
+    /// ([`crate::dynamics::MAX_STRING_PX`], screen pixels before Adjust for Zoom).
     pub pulled_string: bool,
     /// Keep catching up with the pointer while it pauses (uses point timestamps).
     pub catch_up: bool,
-    /// Finish the stroke at the last pointer position.
+    /// Finish the stroke at the last pointer position. No effect in Pulled String Mode, where the
+    /// stroke ends the string's length behind the pointer (measured, #11888).
     pub catch_up_on_end: bool,
     /// Divide the string length by the view zoom (the command's `zoom` param).
     pub adjust_for_zoom: bool,
@@ -538,7 +545,7 @@ pub struct Smoothing {
 
 impl Default for Smoothing {
     fn default() -> Self {
-        Self { enabled: true, amount: 0.0, pulled_string: false, catch_up: true, catch_up_on_end: true, adjust_for_zoom: true }
+        Self { enabled: true, amount: 0.0, pulled_string: false, catch_up: true, catch_up_on_end: false, adjust_for_zoom: true }
     }
 }
 
@@ -576,6 +583,8 @@ pub struct BrushSettings {
     pub background: [f32; 4],
     /// Erase instead of paint.
     pub erase: bool,
+    /// Paint beneath existing pixels; opaque pixels and transparency-locked layers are unchanged.
+    pub behind: bool,
     /// Brush blend mode (Normal, Multiply, Dissolve…).
     pub mode: BlendMode,
     // --- Brush Tip Shape ---
@@ -628,12 +637,14 @@ impl Default for BrushSettings {
             spacing_enabled: true,
             opacity: 1.0,
             flow: 1.0,
-            pressure_size: true,
+            // Off, as the reference application leaves it after Reset Tool (#11809).
+            pressure_size: false,
             pressure_opacity: false,
             color: [0.0, 0.0, 0.0, 1.0],
             color_cmyk: None,
             background: [1.0, 1.0, 1.0, 1.0],
             erase: false,
+            behind: false,
             mode: BlendMode::Normal,
             tip: TipShape::Round,
             angle: 0.0,
@@ -652,7 +663,8 @@ impl Default for BrushSettings {
             noise: false,
             wet_edges: false,
             build_up: false,
-            build_up_rate: 20.0,
+            // About ten dabs a second while held still, Photoshop's Airbrush rate (#11886).
+            build_up_rate: 10.0,
             smoothing: Smoothing::default(),
             protect_texture: false,
             locks: SectionLocks::default(),
@@ -699,6 +711,15 @@ impl BrushSettings {
         brush.dual_brush.size = safe_size(brush.dual_brush.size);
         brush.scattering.scatter.jitter = safe_scatter(brush.scattering.scatter.jitter);
         brush.dual_brush.scatter = safe_scatter(brush.dual_brush.scatter);
+        // A NaN here would paint fully opaque (`f32::min` returns the other operand) or not at all;
+        // it falls back to the default (the values of `BrushSettings::default` and `DualBrush::default`). Every other value, infinities included, is left to the clamps downstream.
+        let nan_or = |v: f32, d: f32| if v.is_nan() { d } else { v };
+        brush.opacity = nan_or(brush.opacity, 1.0);
+        brush.flow = nan_or(brush.flow, 1.0);
+        brush.hardness = nan_or(brush.hardness, 1.0);
+        brush.spacing = nan_or(brush.spacing, 0.1);
+        brush.dual_brush.hardness = nan_or(brush.dual_brush.hardness, 1.0);
+        brush.dual_brush.spacing = nan_or(brush.dual_brush.spacing, 0.25);
         brush
     }
 
@@ -759,10 +780,35 @@ impl BrushSettings {
     }
 }
 
+/// Keeps the pre-#12169 rate of 20 dabs per second for a saved Airbrush preset with no rate.
+pub fn deserialize_preset_brush<'de, D: serde::Deserializer<'de>>(d: D) -> Result<BrushSettings, D::Error> {
+    fn present_build_up_rate<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f32>, D::Error> {
+        f32::deserialize(d).map(Some)
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SavedBrush {
+        #[serde(default, deserialize_with = "present_build_up_rate")]
+        build_up_rate: Option<f32>,
+        #[serde(flatten)]
+        brush: BrushSettings,
+    }
+
+    let SavedBrush { mut brush, build_up_rate } = SavedBrush::deserialize(d)?;
+    if let Some(rate) = build_up_rate {
+        brush.build_up_rate = rate;
+    } else if brush.build_up {
+        brush.build_up_rate = 20.0;
+    }
+    Ok(brush)
+}
+
 /// A named brush preset (session tool state; serde round-trips).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BrushPreset {
     pub name: String,
+    #[serde(deserialize_with = "deserialize_preset_brush")]
     pub brush: BrushSettings,
     /// Shipped with PhotoCraft (built-ins can be deleted from a session but are regenerated on reset).
     #[serde(default)]

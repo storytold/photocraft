@@ -232,7 +232,7 @@ mod tests {
         Box::new(move |r| outcomes.borrow_mut().push((label, r)))
     }
 
-    fn app(rx: Receiver<ControlRequest>) -> Harness<'static, PhotocraftApp> {
+    fn app(rx: Receiver<ControlRequest>) -> Harness<'static, Box<PhotocraftApp>> {
         let rx = RefCell::new(Some(rx));
         Harness::builder().with_size(egui::vec2(1000.0, 700.0)).with_max_steps(64).build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
