@@ -747,8 +747,8 @@ mod tests {
     fn defined_patterns_over_4096_squared_paint_or_are_refused() {
         for depth in [8, 16] {
             let mut s = Session::new();
-            s.execute("file.new", json!({"width": 4100, "height": 4100, "depth": depth})).unwrap();
-            s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
+            // Seed the solid background at creation to avoid repainting the whole source.
+            s.execute("file.new", json!({"width": 4100, "height": 4100, "depth": depth, "background": "#336699"})).unwrap();
             s.execute("edit.definePattern", json!({"name": "Big"})).unwrap();
             assert!(s.patterns.items.iter().any(|p| p.name == "Big" && p.is_paintable()), "depth {depth}");
             s.execute("file.new", json!({"width": 40, "height": 30, "depth": depth})).unwrap();
