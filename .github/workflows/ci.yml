@@ -244,7 +244,8 @@ jobs:
       timeout-minutes: 100
       lint-command: cargo xtask ci clippy
       archive-command: cargo xtask-gate archive
-      after-archive-command: cargo xtask-gate doctest
+      # Diagnostic branch only (do not merge): runs the real app for #15549, #15556 and #15870.
+      after-archive-command: ${{ github.head_ref == 'win-diag' && 'bash scripts/win-diag.sh' || 'cargo xtask-gate doctest' }}
       test-shards: 6
       shard-archives: true
       shard-command: bash scripts/ci-test-shard.sh
