@@ -386,7 +386,8 @@ fn visibility_export_session(names: &[&str]) -> Session {
 #[test]
 fn export_data_sets_rejects_collisions_before_writing() {
     for (label, names, naming, collision) in [
-        ("sanitized", ["unique", "a b", "a_b"], "{name}", "a_b.png"),
+        // A space is kept (#13758); `/` maps to `_`.
+        ("sanitized", ["unique", "a/b", "a_b"], "{name}", "a_b.png"),
         ("constant", ["unique", "a b", "a_b"], "{document}", "card.png"),
         ("case", ["unique", "Card", "card"], "{name}", "card.png"),
     ] {
@@ -459,7 +460,7 @@ fn export_data_sets_unique_paths_preserve_variations_and_document() {
     for (label, names, naming, selected, expected) in [
         ("indexed", ["a b", "a_b"], "card-{index}", None, vec!["card-001.png", "card-002.png"]),
         ("distinct", ["a-b", "a_b"], "{name}", None, vec!["a-b.png", "a_b.png"]),
-        ("subset", ["a b", "a_b"], "{name}", Some(vec!["a b"]), vec!["a_b.png"]),
+        ("subset", ["a b", "a_b"], "{name}", Some(vec!["a b"]), vec!["a b.png"]),
     ] {
         let mut s = visibility_export_session(&names);
         let before = s.active().unwrap().doc.clone();

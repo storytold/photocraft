@@ -502,9 +502,32 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
     // Match the case-insensitive comparison used by the other batch exporters.
     let mut claimed = std::collections::HashMap::new();
     let mut names = Vec::new();
+    // As in Photoshop (#13758): a data set name keeps its spaces and other legal characters, and only the nine
+    // characters Windows refuses are mapped, one for one. Typed text in `naming` maps the same ones, except the
+    // separators `/` and `\`, which make folders there. `{number}` is the set's place among the document's data
+    // sets, `{paddedNumber}` the same padded to the digits of their count.
+    let file_char = |c: char| match c {
+        '/' | '\\' | '|' => '_',
+        ':' | '*' | '?' => '-',
+        '"' => '\'',
+        '<' => '(',
+        '>' => ')',
+        c if c.is_control() => '_',
+        c => c,
+    };
+    let typed: String = template.chars().map(|c| if c == '/' || c == '\\' { c } else { file_char(c) }).collect();
+    let width = vars.data_sets.len().to_string().len();
     for (n, set) in sets.iter().enumerate() {
-        let safe: String = set.name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
-        let stem = template.replace("{name}", &safe).replace("{index}", &format!("{:03}", n + 1)).replace("{document}", &doc_stem);
+        let safe: String = set.name.chars().map(file_char).collect();
+        // `.` and `..` would name the folder itself, or its parent before a `/` in the template.
+        let safe = if matches!(safe.as_str(), "" | "." | "..") { "_".to_string() } else { safe };
+        let number = vars.data_sets.iter().position(|d| d.name == set.name).unwrap_or(n) + 1;
+        let stem = typed
+            .replace("{name}", &safe)
+            .replace("{index}", &format!("{:03}", n + 1))
+            .replace("{number}", &number.to_string())
+            .replace("{paddedNumber}", &format!("{number:0width$}"))
+            .replace("{document}", &doc_stem);
         // Each folder the template makes is checked too: `{document}/{name}` of `nul.psd` would
         // otherwise write into the `nul` device.
         let name: String = format!("{stem}.{format}")
@@ -613,6 +636,8 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+mod export_file_name_chars_tests;
 #[cfg(test)]
 mod import_history_tests;
 #[cfg(test)]
