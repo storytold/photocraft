@@ -14,7 +14,9 @@
 //! - Colours elsewhere in the image make no difference (no global colour model).
 //! - It works on the whole document when it has at most 512 x 512 pixels and at exactly half
 //!   resolution above (any size, any brush), aligned to the document's corner; the mask is then
-//!   scaled up bilinearly (edges show a 25 % / 75 % step).
+//!   scaled up bilinearly (edges show a 25 % / 75 % step). A click that never grew past its own
+//!   footprint is the exception: its disc is known exactly, and is drawn at document resolution
+//!   with the constant [`CLICK_MARGIN`] margin (#12922).
 //!
 //! The model reproducing this is one min cut (Boykov & Jolly, ICCV 2001; max-flow by Boykov &
 //! Kolmogorov, PAMI 2004) over the working image minimising
@@ -45,6 +47,9 @@ pub struct Tuning {
     pub sigma: f32,
     pub k: f32,
     /// The footprint grows by `grow + grow_frac * radius` working pixels (Photoshop's settled click).
+    /// The growth prices how far a click reaches into an object - an object is worth taking when it
+    /// costs less than cutting the ring around this grown footprint - and it is not part of what a
+    /// plain click selects: see the trim in [`select_working_using`] and #12922.
     pub grow: f32,
     pub grow_frac: f32,
     /// Larger working windows are cut coarse to fine: at half size first, then again only in a
@@ -144,7 +149,7 @@ pub(super) fn quick_select_batched<const OPTIMIZED: bool>(
             return Attempt::Cancelled;
         }
         let inner = [window.x0 > canvas.x0, window.y0 > canvas.y0, window.x1 < canvas.x1, window.y1 < canvas.y1];
-        let Some(low) = select_working_using::<OPTIMIZED>(&img, &seeds, rw, t, &cancel) else { return Attempt::Cancelled };
+        let Some((low, trimmed)) = select_working_using::<OPTIMIZED>(&img, &seeds, rw, points.len() == 1, t, &cancel) else { return Attempt::Cancelled };
         let touches = |side: usize| match side {
             0 => (0..lh).any(|y| low[y * lw]),
             1 => (0..lw).any(|x| low[x]),
@@ -155,7 +160,7 @@ pub(super) fn quick_select_batched<const OPTIMIZED: bool>(
             return Attempt::Touches;
         }
         kept.fetch_min(index, std::sync::atomic::Ordering::Relaxed);
-        Attempt::Done { window, low, lw, lh }
+        Attempt::Done { window, low, lw, lh, trimmed: trimmed.then_some(points[0]) }
     };
     let mut margin = (48.0f32).max(2.0 * rw) as i32 * step;
     let mut sizes = 0;
@@ -181,8 +186,14 @@ pub(super) fn quick_select_batched<const OPTIMIZED: bool>(
                 // Only a window larger than one already kept is cancelled, and that one comes
                 // first in this order, so a cancelled attempt is never reached.
                 Attempt::Touches | Attempt::Cancelled => continue,
-                Attempt::Done { window, low, lw, lh } => {
-                    let mask = upsample(&low, lw, lh, step as usize, window.width() as usize, window.height() as usize);
+                Attempt::Done { window, low, lw, lh, trimmed } => {
+                    // A trimmed click is drawn at document resolution: its mask is the brush disc
+                    // plus the constant margin, so it does not need the working-resolution mask
+                    // and the bilinear upsample that comes with it (#12922).
+                    let mask = match trimmed {
+                        Some(at) => click_disc(window, at, r),
+                        None => upsample(&low, lw, lh, step as usize, window.width() as usize, window.height() as usize),
+                    };
                     return super::trim_region(Region { bbox: window, mask }).map(|region| (region, sizes));
                 }
             }
@@ -205,11 +216,21 @@ enum Attempt {
         low: Vec<bool>,
         lw: usize,
         lh: usize,
+        /// The click point (document pixels) when this is a single click whose cut reached
+        /// nothing beyond the grown footprint: its mask is the brush footprint itself, drawn at
+        /// document resolution - see [`click_disc`].
+        trimmed: Option<(f32, f32)>,
     },
 }
 
 /// Window sizes cut together: most strokes settle within this many doublings.
 const SPECULATE: usize = 4;
+
+/// The margin a click's disc reaches beyond the brush footprint, in document pixels. Constant at
+/// every brush size (#12922: Photoshop's uniform-area click is 7, 33 and 103 px wide for brushes
+/// 5, 30 and 100), unlike the model's footprint growth `grow + grow_frac * radius`, which prices
+/// how far a click reaches into an object and is not part of what a plain click selects.
+pub const CLICK_MARGIN: f32 = 1.0;
 
 /// The next `count` margins from `margin`, doubling, stopping at the first one whose window
 /// already covers the whole canvas (a larger one would be the same window).
@@ -227,12 +248,20 @@ pub(super) fn margins_to_try(margin: i32, bbox: Rect, canvas: Rect, count: usize
 }
 
 /// The model at working resolution: `seeds` (the brush footprint, `radius` working pixels) are
-/// selected; returns the selection.
+/// selected; returns the selection and, for a single click that was trimmed back to its own
+/// footprint, that flag (see [`select_working_using`] and [`click_disc`]).
 pub fn select_working(img: &RgbImage, seeds: &[bool], radius: f32, t: &Tuning) -> Vec<bool> {
-    select_working_using::<true>(img, seeds, radius, t, &|| false).unwrap_or_default()
+    select_working_using::<true>(img, seeds, radius, false, t, &|| false).map(|(lab, _)| lab).unwrap_or_default()
 }
 
-fn select_working_using<const OPTIMIZED: bool>(img: &RgbImage, seeds: &[bool], radius: f32, t: &Tuning, cancel: &dyn Fn() -> bool) -> Option<Vec<bool>> {
+fn select_working_using<const OPTIMIZED: bool>(
+    img: &RgbImage,
+    seeds: &[bool],
+    radius: f32,
+    click: bool,
+    t: &Tuning,
+    cancel: &dyn Fn() -> bool,
+) -> Option<(Vec<bool>, bool)> {
     let (w, h) = (img.w, img.h);
     let d = crate::selection::edt(seeds, w, h);
     let grow = (t.grow + t.grow_frac * radius).max(0.0);
@@ -243,7 +272,53 @@ fn select_working_using<const OPTIMIZED: bool>(img: &RgbImage, seeds: &[bool], r
     if cancel() {
         return None;
     }
-    cut_levels::<OPTIMIZED>(img, &fixed, &cost_fg, &weight, 1.0, t.direct_px.max(1024), cancel)
+    let mut lab = cut_levels::<OPTIMIZED>(img, &fixed, &cost_fg, &weight, 1.0, t.direct_px.max(1024), cancel)?;
+    // A click that never reached anything beyond its own grown footprint keeps the brush footprint.
+    // `grow` is what prices "is this object worth taking" (the cut either pays the ring around the
+    // grown footprint or takes the object), it is not part of what a plain click selects: with the
+    // growth left in, one click on a uniform area selected a disc 5 px wider than a 5 px brush,
+    // 8 px wider than a 30 px one and 18 px wider than a 100 px one, where Photoshop's is 2, 3 and
+    // 3 px wider (#12922). Only single clicks: drags were not measured and keep today's result.
+    // The trimmed click is then drawn at document resolution with a constant margin, which the
+    // half-resolution mask and its bilinear upsample cannot give: see [`click_disc`].
+    if click && lab.iter().zip(d.iter()).all(|(v, &dist)| !*v || dist <= grow) {
+        for (l, s) in lab.iter_mut().zip(seeds) {
+            *l = *s;
+        }
+        return Some((lab, true));
+    }
+    Some((lab, false))
+}
+
+/// The mask of a trimmed click at document resolution: the brush disc of radius `r` document
+/// pixels centred at `at`, clipped to `window`. A document pixel is fully selected when the brush
+/// disc covers it whole, and partly selected in the band that reaches [`CLICK_MARGIN`] document
+/// pixels beyond the disc - the same margin at every brush size, where the model's footprint
+/// growth `grow + grow_frac * radius` scales with it (#12922, Photoshop 25.4: 7, 33 and 103 px
+/// wide for brushes 5, 30 and 100). The band's values run 128 to 254, as Photoshop's rim does.
+fn click_disc(window: Rect, at: (f32, f32), r: f32) -> Vec<u8> {
+    let w = window.width() as usize;
+    let mut mask = vec![0u8; w * window.height() as usize];
+    let outer = r + CLICK_MARGIN;
+    let edge = |v: f32| v.clamp(-1e9, 1e9) as i32;
+    let (x0, y0) = (window.x0.max(edge(at.0 - outer - 1.0)), window.y0.max(edge(at.1 - outer - 1.0)));
+    let (x1, y1) = (window.x1.min(edge(at.0 + outer + 2.0)), window.y1.min(edge(at.1 + outer + 2.0)));
+    for y in y0..y1 {
+        let dy = y as f32 + 0.5 - at.1;
+        let fy = (y as f32 - at.1).abs().max(y as f32 + 1.0 - at.1);
+        let row = (y - window.y0) as usize * w;
+        for x in x0..x1 {
+            let dx = x as f32 + 0.5 - at.0;
+            let centre = (dx * dx + dy * dy).sqrt();
+            if centre > outer {
+                continue;
+            }
+            let fx = (x as f32 - at.0).abs().max(x as f32 + 1.0 - at.0);
+            let v = if fx * fx + fy * fy <= r * r { 255.0 } else { 128.0 + 126.0 * ((outer - centre) / CLICK_MARGIN).clamp(0.0, 1.0) };
+            mask[row + (x - window.x0) as usize] = v as u8;
+        }
+    }
+    mask
 }
 
 /// Band half-width (pixels) re-cut at each finer level.
