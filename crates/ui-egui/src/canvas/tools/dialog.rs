@@ -9,6 +9,7 @@ use craft::behavior::value::CancelReason;
 use craft::keymap::Mods;
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft::ui::primitives::Draw;
+use craft::ui::runtime::sampler::{self, CanvasGesture};
 
 use super::{FamilyTool, ToolScope};
 use crate::canvas::document_display::CanvasHost;
@@ -43,6 +44,12 @@ pub(super) fn doc_point(pointer: &ToolPointer, cx: &ToolContext<'_>) -> [f64; 2]
 /// (the dialog edits the active document). `None` leaves the selected tool in charge.
 pub(crate) fn dialog_tool<'a>(scope: &'a ToolScope<'a>, state: &'a mut DialogTools, host: CanvasHost) -> Option<FamilyTool<'a>> {
     let pick = scope.with_app(|app| (app.session.active_index() == Some(host.idx)).then(|| canvas_input::armed(app)).flatten())?;
+    // Fill has no control of its own that takes the press, so the host lets it through the dialog's modal layer, which
+    // keeps this canvas's view open (`params::open_with` gives every parameter dialog the canvas).
+    if pick == DialogPick::FillForeground {
+        let ctx = scope.with_app(|app| app.ctx().clone());
+        sampler::pass_tool_gesture(&ctx, host.canvas_id(), CanvasGesture::PRIMARY);
+    }
     Some(Box::new(DialogTool { scope, state, pick }))
 }
 
@@ -58,7 +65,7 @@ pub(crate) fn end_if_disarmed(app: &crate::PhotocraftApp, state: &mut DialogTool
 
 /// Whether the pick samples a colour from the image, so the precise cursor (Caps Lock) shows a crosshair.
 fn samples(pick: DialogPick) -> bool {
-    matches!(pick, DialogPick::TonePicker(_) | DialogPick::Color | DialogPick::ParamDropper | DialogPick::ColorRange)
+    matches!(pick, DialogPick::TonePicker(_) | DialogPick::Color | DialogPick::ParamDropper | DialogPick::FillForeground | DialogPick::ColorRange)
 }
 
 struct DialogTool<'a> {
@@ -80,6 +87,8 @@ impl CanvasTool for DialogTool<'_> {
                 DialogPick::CurvesPoint => (canvas_input::add_curve_point(app, at, mods.shift), true),
                 DialogPick::Color => (canvas_input::pick_color(app, at), !follows),
                 DialogPick::ParamDropper => (canvas_input::pick_dropper(app, at, mods), !follows),
+                // A drag after the press was not measured, so the press is the whole gesture.
+                DialogPick::FillForeground => (canvas_input::pick_fill_foreground(app, at, mods), true),
                 DialogPick::ColorRange => (canvas_input::pick_color_range(app, at, mods), !follows),
                 // A drag after the locator's press does nothing (#9648).
                 DialogPick::Locator => (canvas_input::locate(app, at), true),

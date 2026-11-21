@@ -91,7 +91,8 @@ fn ending(app: &PhotocraftApp, tool: Tool) -> Option<Ending> {
 ///
 /// Each pass applies the commit or cancel its own bar took; a second pass of a frame applies none of the first pass's.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let tool = app.ui.tool;
+    // While Fill is open the bar is the Eyedropper's (`canvas_input::shown_tool`); the selected tool stays.
+    let tool = crate::dialogs::canvas_input::shown_tool(app);
     let ending = ending(app, tool);
     let mut bar = Bar::new(tl!("Options").to_owned(), BarKind::Options);
     if let Some(ending) = &ending {
@@ -146,7 +147,7 @@ fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if crate::distort_ui::options_bar(app, ui) {
         return;
     }
-    let tool = app.ui.tool;
+    let tool = crate::dialogs::canvas_input::shown_tool(app);
     // The bar shows the active tool's brush: switch it in before drawing, so a tool change swaps the brush with it
     // (Photoshop keeps one per tool).
     crate::paint_mouse::sync_tool_brush(app);
@@ -193,7 +194,8 @@ fn lead(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     // The tool picker is greyed while warping, as in the reference.
     let warping = app.ui.transform.as_ref().is_some_and(|t| t.session.warp().is_some());
-    let tool = BarTool::new(icons::tool_icon(app.ui.tool), tl!(app.ui.tool.label()).to_owned()).enabled(!warping).show(ui);
+    let shown = crate::dialogs::canvas_input::shown_tool(app);
+    let tool = BarTool::new(icons::tool_icon(shown), tl!(shown.label()).to_owned()).enabled(!warping).show(ui);
     // Photoshop: right-click the tool icon for Reset Tool / Reset All Tools.
     let rows = [Entry::new(Reset::Tool, tl!("Reset Tool").to_owned()), Entry::new(Reset::All, tl!("Reset All Tools").to_owned())];
     if let Some(reset) = Menu::context(tl!("Tool").to_owned(), &tool.response).pick(ui, &rows).picked
