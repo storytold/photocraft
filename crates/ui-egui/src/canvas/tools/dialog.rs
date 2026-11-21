@@ -141,9 +141,15 @@ impl CanvasTool for DialogTool<'_> {
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         let at = doc_point(pointer, cx);
         let pick = self.pick;
+        let press = self.state.press;
         let state = &mut *self.state;
         // The release's own position counts, so a drag ending past the last move still lands there.
         self.scope.with_app(|app| {
+            if pick == DialogPick::SatinDrag
+                && let Some(start) = press
+            {
+                canvas_input::drag_satin(app, false, [at[0] - start[0], at[1] - start[1]]);
+            }
             if let Some(drag) = state.phase.take() {
                 pattern_fill_ui::release(app, drag, at);
             }
