@@ -1,4 +1,5 @@
 use craft::imaging::ui::fill::{FillCommand, SamplingMode};
+use craft::imaging::ui::select_mask::EditMode;
 use egui::Color32;
 use photocraft_doc::{Document, LayerId};
 use photocraft_geom::Rect;
@@ -26,6 +27,25 @@ impl Base {
 /// The preview's error when the sampling area has no pixels outside the fill area (the engine's
 /// fill refuses that case with the same words).
 pub(super) const NOTHING_TO_SAMPLE: &str = "nothing to sample from: the sampling area has no pixels outside the fill area";
+
+/// Custom sampling and no Sampling Brush stroke that adds: nothing painted yet, or only erasing strokes, which
+/// leave Custom's empty area empty. The fill refuses it (it needs an area to sample), so it isn't planned.
+pub(super) fn custom_without_added_strokes(command: &FillCommand) -> bool {
+    command.sampling == SamplingMode::Custom && !command.strokes.iter().any(|s| s.mode == EditMode::Add)
+}
+
+/// Custom sampling that would sample nothing (#10621): no added stroke, or every pixel the strokes leave painted is
+/// inside the fill area or off the canvas. Decided by the fill's own plan, at full resolution, so it agrees with what
+/// Apply and OK would sample, not with the proxy the workspace tints.
+pub(super) fn custom_has_nothing_to_sample(doc: &Document, layer: LayerId, command: &FillCommand) -> bool {
+    if command.sampling != SamplingMode::Custom {
+        return false;
+    }
+    if custom_without_added_strokes(command) {
+        return true;
+    }
+    photocraft_engine::edit_menu_cmds::content_aware_plan(doc, layer, &plan_params(command, layer), CMD).is_ok_and(|plan| !plan.source.iter().any(|s| *s))
+}
 
 /// `edit.contentAwareFill`'s parameters for `command` on `layer`: the command's own serialisation plus the layer.
 pub(super) fn plan_params(command: &FillCommand, layer: LayerId) -> Value {
