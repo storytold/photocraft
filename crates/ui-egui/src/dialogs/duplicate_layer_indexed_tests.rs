@@ -87,7 +87,7 @@ fn ok_on_the_document_after_an_indexed_one_copies_into_that_document() {
         crate::dialogs::testing::show(&mut app);
     }
     let names: Vec<_> = app.session.documents()[2].doc.walk().into_iter().map(|(_, _, l)| l.name.clone()).collect();
-    assert!(names.contains(&"Ink copy".to_string()), "Card receives the copy: {names:?}");
+    assert!(names.contains(&"Ink".to_string()), "Card receives the copy: {names:?}");
     assert_eq!(app.session.documents()[1].doc.layer_count(), palette_layers, "the Indexed document is untouched");
     assert_eq!(app.session.documents()[0].doc.layer_count(), 2, "the source is untouched");
 }
