@@ -1,8 +1,8 @@
 //! Edit › Fill… (`edit.fill`): Photoshop's Fill dialog as one command.
 //!
 //! Contents: Foreground / Background / Color / Content-Aware / Pattern / History / Black /
-//! 50% Gray / White, blended with `mode` at `opacity`, optionally preserving the target's
-//! transparency. The selection (or the whole canvas) is filled, as one history step ("Fill").
+//! 50% Gray / White, blended with `mode` (a blend mode, or the painting modes Behind and Clear) at
+//! `opacity`, optionally preserving the target's transparency. The selection (or the whole canvas) is filled, as one history step ("Fill").
 //! Every parameter is validated: a bad one is an error, never a panic.
 
 use photocraft_algo::content_aware::FillOptions;
@@ -63,10 +63,34 @@ fn contents(p: &Value) -> Result<&str> {
     }
 }
 
-fn mode(p: &Value) -> Result<BlendMode> {
+/// Fill's Mode: a blend mode, or one of the two painting modes that are not layer modes (as on the
+/// Brush, #3439), so they are not a [`BlendMode`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Blend(BlendMode),
+    /// Paint beneath the pixels: only their transparent part takes the fill.
+    Behind,
+    /// Take the pixels' alpha away by the fill's coverage.
+    Clear,
+}
+
+impl Mode {
+    const NORMAL: Mode = Mode::Blend(BlendMode::Normal);
+
+    /// Behind and Clear work on the target's transparency.
+    fn on_alpha(self) -> bool {
+        matches!(self, Mode::Behind | Mode::Clear)
+    }
+}
+
+fn mode(p: &Value) -> Result<Mode> {
     match p.get("mode") {
-        None | Some(Value::Null) => Ok(BlendMode::Normal),
-        Some(Value::String(m)) => parse_blend(m).filter(|m| *m != BlendMode::PassThrough).ok_or_else(|| bad(format!("unknown blend mode `{m}`"))),
+        None | Some(Value::Null) => Ok(Mode::NORMAL),
+        Some(Value::String(m)) if m.eq_ignore_ascii_case("behind") => Ok(Mode::Behind),
+        Some(Value::String(m)) if m.eq_ignore_ascii_case("clear") => Ok(Mode::Clear),
+        Some(Value::String(m)) => {
+            parse_blend(m).filter(|m| *m != BlendMode::PassThrough).map(Mode::Blend).ok_or_else(|| bad(format!("unknown blend mode `{m}`")))
+        }
         Some(v) => Err(bad(format!("`mode` must be a blend mode name, not {v}"))),
     }
 }
@@ -100,6 +124,10 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     let id = if channel { None } else { Some(layer_param(s, p)?) };
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc_bounds = st.doc.bounds();
+    // Behind and Clear need transparency to work on: not the Background layer, a mask or a channel.
+    if mode.on_alpha() && (id.is_some_and(|l| st.doc.is_background(l)) || !crate::channel_cmds::read_target_surface(&st.doc, id, p)?.format().alpha) {
+        return Err(bad("Behind and Clear need a target with transparency; the Background layer, a layer mask and a channel have none"));
+    }
     let sel = st.doc.selection.clone();
     let area = sel.as_ref().map_or(doc_bounds, |m| m.content_bounds().intersect(&doc_bounds));
     let mut out = json!({ "contents": contents });
@@ -201,13 +229,13 @@ fn read_rgba(src: &Surface, area: Rect, purpose: &str) -> Result<Vec<[f32; 4]>> 
 /// a paste into a layer mask or channel, which keeps the pasted pixels' luminosity (#1035).
 pub(crate) fn composite_over(surf: &mut Surface, src: &Surface, area: Rect, limit: Option<&Surface>) -> Result<()> {
     let source = Source::Pixels(area, read_rgba(src, area, "pasting pixels")?);
-    blend_into(surf, area, &source, limit, Blend { mode: BlendMode::Normal, opacity: 1.0, keep_alpha: false, restore: false })
+    blend_into(surf, area, &source, limit, Blend { mode: Mode::NORMAL, opacity: 1.0, keep_alpha: false, restore: false })
 }
 
 /// `area` of `surf` filled with an opaque `color` (Normal, 100 %), weighted by `sel` when given:
 /// Clear on a targeted alpha channel or the Quick Mask (#2734).
 pub(crate) fn fill_color(surf: &mut Surface, area: Rect, color: [f32; 4], sel: Option<&Surface>) -> Result<()> {
-    blend_into(surf, area, &Source::Color(color), sel, Blend { mode: BlendMode::Normal, opacity: 1.0, keep_alpha: false, restore: false })
+    blend_into(surf, area, &Source::Color(color), sel, Blend { mode: Mode::NORMAL, opacity: 1.0, keep_alpha: false, restore: false })
 }
 
 /// Reuse Edit › Fill's compositing for Edit › Stroke. The stroke's rasterized band
@@ -228,7 +256,7 @@ pub(crate) fn blend_color_mask(
         Some(cmyk) if color[3] >= 1.0 => Source::Cmyk { rgba: color, cmyk },
         _ => Source::Color(color),
     };
-    blend_into(surf, area, &source, Some(coverage), Blend { mode, opacity, keep_alpha: preserve_transparency, restore: false })
+    blend_into(surf, area, &source, Some(coverage), Blend { mode: Mode::Blend(mode), opacity, keep_alpha: preserve_transparency, restore: false })
 }
 
 /// The selection filled from its surroundings (`photocraft_algo::content_aware`), as straight
@@ -357,7 +385,7 @@ pub(crate) fn read_window_mask(surf: &Surface, r: Rect, cancelled: &(dyn Fn() ->
 /// How the source goes onto the target.
 #[derive(Clone, Copy)]
 struct Blend {
-    mode: BlendMode,
+    mode: Mode,
     opacity: f32,
     /// Leave every pixel's alpha as it was (Preserve Transparency, or locked transparency).
     keep_alpha: bool,
@@ -385,7 +413,7 @@ fn blend_into(surf: &mut Surface, area: Rect, source: &Source, sel: Option<&Surf
     // one shared solid tile (copy-on-write), which costs nothing per pixel.
     let mut enc = [0.0f32; 8];
     let solid = match encode_color(&fmt, source, &mut enc) {
-        Some(n) if b.mode == BlendMode::Normal && b.opacity >= 1.0 && (!b.keep_alpha || !fmt.alpha) => Some(surf.solid_tile(enc.get(..n).unwrap_or(&[]))),
+        Some(n) if b.mode == Mode::NORMAL && b.opacity >= 1.0 && (!b.keep_alpha || !fmt.alpha) => Some(surf.solid_tile(enc.get(..n).unwrap_or(&[]))),
         _ => None,
     };
     let count = area.tiles().count();
@@ -460,13 +488,16 @@ fn blend_tile(bytes: &mut [u8], fmt: &photocraft_color::PixelFormat, origin: Rec
     let Blend { mode, opacity, keep_alpha, restore } = b;
     let n = fmt.channels();
     let bpp = fmt.bytes_per_pixel();
-    let blend = if mode == BlendMode::Dissolve { BlendMode::Normal } else { mode };
+    let blend = match mode {
+        Mode::Blend(BlendMode::Dissolve) | Mode::Behind | Mode::Clear => BlendMode::Normal,
+        Mode::Blend(m) => m,
+    };
     let mut px = [0.0f32; 8];
     let mut enc = [0.0f32; 8];
     // An opaque colour at full coverage in Normal mode just replaces the colour (and the alpha
     // unless it is kept): copy its encoded bytes.
     let opaque = match encode_color(fmt, source, &mut enc) {
-        Some(m) if mode == BlendMode::Normal => {
+        Some(m) if mode == Mode::NORMAL => {
             let mut bytes = vec![0u8; bpp];
             photocraft_raster::encode_pixel(fmt, enc.get(..m.min(n)).unwrap_or(&[]), &mut bytes);
             // Keeping alpha: copy the colour samples only (alpha is the last sample).
@@ -484,6 +515,13 @@ fn blend_tile(bytes: &mut [u8], fmt: &photocraft_color::PixelFormat, origin: Rec
             }
             let i = (row + (x - origin.x0) as usize) * bpp;
             let Some(pb) = bytes.get_mut(i..i + bpp) else { continue };
+            if mode.on_alpha() {
+                // With the alpha kept there is nothing for them to change (as on the Brush).
+                if !keep_alpha && fmt.alpha {
+                    behind_or_clear(pb, fmt, mode, k, source, x, y);
+                }
+                continue;
+            }
             if k >= 1.0
                 && let Some((enc_px, keep)) = &opaque
             {
@@ -497,7 +535,7 @@ fn blend_tile(bytes: &mut [u8], fmt: &photocraft_color::PixelFormat, origin: Rec
             }
             let d = to_rgba(fmt, &px[..n.min(8)]);
             let mut c = source.at(x, y);
-            if mode == BlendMode::Dissolve {
+            if mode == Mode::Blend(BlendMode::Dissolve) {
                 // Dissolve: each pixel is either fully painted or untouched, with the coverage as odds.
                 k = if photocraft_color::dither_noise(x, y) < c[3] * k { 1.0 } else { 0.0 };
                 c[3] = 1.0;
@@ -524,5 +562,55 @@ fn blend_tile(bytes: &mut [u8], fmt: &photocraft_color::PixelFormat, origin: Rec
     }
 }
 
+/// Behind or Clear on one pixel's encoded samples `pb` at coverage `k`, in the target's own channels
+/// (alpha last), as the Brush paints them: Behind puts the source under what is there, so an opaque
+/// pixel keeps its colour; Clear takes the alpha away, and a pixel left fully transparent keeps no
+/// colour either.
+fn behind_or_clear(pb: &mut [u8], fmt: &photocraft_color::PixelFormat, mode: Mode, k: f32, source: &Source, x: i32, y: i32) {
+    let n = fmt.channels();
+    if n == 0 || n > 8 {
+        return;
+    }
+    let a = n - 1;
+    let mut px = [0.0f32; 8];
+    for (c, v) in px.iter_mut().enumerate().take(n) {
+        *v = photocraft_color::read_sample(pb, fmt.sample, c);
+    }
+    let da = px[a];
+    let k = k.min(1.0);
+    if mode == Mode::Clear {
+        px[a] = da * (1.0 - k);
+        if px[a] <= 0.0 {
+            px = [0.0; 8];
+        }
+    } else {
+        if da >= 1.0 {
+            return;
+        }
+        let mut src = [0.0f32; 8];
+        // An opaque colour in the target's samples (a CMYK pick keeps its inks), else this pixel's.
+        let sa = if encode_color(fmt, source, &mut src).is_some() {
+            1.0
+        } else {
+            let c = source.at(x, y);
+            from_rgba_into(fmt, [c[0], c[1], c[2], 1.0], &mut src);
+            c[3]
+        };
+        let under = sa * k * (1.0 - da);
+        let alpha = da + under;
+        if alpha <= 0.0 {
+            return;
+        }
+        for (d, s) in px.iter_mut().zip(src).take(a) {
+            *d = (*d * da + s * under) / alpha;
+        }
+        px[a] = alpha;
+    }
+    photocraft_raster::encode_pixel(fmt, &px[..n], pb);
+}
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod behind_clear_tests;

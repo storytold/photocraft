@@ -15,7 +15,7 @@ use photocraft_color::BlendMode;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::dialogs::blend_options::{blending_params, blending_rows};
+use crate::dialogs::blend_options::{blending_params, fill_blending_rows};
 use crate::dialogs::params::{captured, open_param};
 
 /// The command of the dialog, which is also its dialog key.
@@ -41,8 +41,8 @@ pub(crate) fn hex(c: [f32; 3]) -> String {
     format!("#{:02x}{:02x}{:02x}", b(c[0]), b(c[1]), b(c[2]))
 }
 
-/// The dialog's rows.
-fn rows(foreground: [f32; 3], first_pattern: Option<String>) -> Vec<Param> {
+/// The dialog's rows; Behind and Clear are greyed unless the target has `transparency`.
+fn rows(foreground: [f32; 3], first_pattern: Option<String>, transparency: bool) -> Vec<Param> {
     let contents = CONTENTS.iter().map(|(k, l)| (k.to_string(), Label::from(tl!(l)))).collect();
     let mut rows = vec![
         Param::new("contents", tl!("Contents:"), ParamKind::choice(contents, Some("foreground".into()))),
@@ -50,8 +50,18 @@ fn rows(foreground: [f32; 3], first_pattern: Option<String>) -> Vec<Param> {
         Param::new("pattern", tl!("Custom Pattern:"), ParamKind::pattern(first_pattern)).visible_when("contents", "pattern"),
         Param::new("colorAdaptation", tl!("Color Adaptation"), ParamKind::bool(true)).visible_when("contents", "contentAware"),
     ];
-    rows.extend(blending_rows());
+    rows.extend(fill_blending_rows(transparency));
     rows
+}
+
+/// Whether Fill's `target` (as `edit.fill` takes it) has transparency for Behind and Clear: not the Background
+/// layer, a mask or a channel.
+fn has_transparency(app: &PhotocraftApp, target: &Value) -> bool {
+    let Some(st) = app.session.active() else { return false };
+    if st.active_layer.is_some_and(|id| st.doc.is_background(id)) && target.as_str() == Some("pixels") {
+        return false;
+    }
+    photocraft_engine::channel_cmds::read_target_surface(&st.doc, st.active_layer, &json!({ "target": target })).is_ok_and(|s| s.format().alpha)
 }
 
 /// Photoshop's Fill defaults, which Alt+Reset restores instead of the last-used values.
@@ -86,7 +96,7 @@ pub fn open(app: &mut PhotocraftApp) -> DialogId {
     let first = app.session.patterns.items.first().map(|p| p.id.clone());
     let ctx = app.ctx().clone();
     let patterns = crate::panels::preset_browser::pattern_rows(app, &ctx);
-    let rows = rows([r, g, b], first.clone());
+    let rows = rows([r, g, b], first.clone(), has_transparency(app, &target));
     let reset = defaults([r, g, b], first);
     let title = Label::from(tl!("Fill"));
     open_param(app, COMMAND, DialogFields::new(), held, move |fields| {
