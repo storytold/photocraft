@@ -446,3 +446,31 @@ pub fn split(app: &mut PhotocraftApp, id: &str, at: Option<[f64; 2]>) -> Result<
     }
     edit_session_warp(app, id, &p)
 }
+
+/// Warp mode on a moved smart object (its contents shown through `placed`, [`super::OpenPreview::placed_warp`]) that has
+/// no warp of its own, while the grid is still flat: the reference shows and applies that as the box's move alone, its
+/// exact map, and changes the picture only once the warp is edited (from then on the control points carried through the
+/// move, which spread the rows evenly). The contents' corners in the document then, else `None`.
+pub(super) fn flat_placed_warp(doc: &photocraft_doc::Document, layer: u64, warp: &Warp, placed: Option<([f64; 9], bool)>) -> Option<[[f64; 2]; 4]> {
+    let (m, _) = placed?;
+    let photocraft_doc::LayerContent::Smart(sm) = &doc.layer(photocraft_doc::LayerId(layer))?.content else { return None };
+    if sm.warp.as_ref().is_some_and(|w| !w.is_identity()) {
+        return None;
+    }
+    let to_doc = photocraft_algo::transform::Homography(m);
+    let back = to_doc.inverse()?;
+    let b = warp.bounds;
+    let (mesh, flat) = (warp.to_mesh(1, 1), photocraft_geom::warp::BezierMesh::identity(b, 1, 1));
+    let tol = 1e-6 * ((b[2] - b[0]).abs() + (b[3] - b[1]).abs()).max(1.0);
+    let unmoved = mesh.points.len() == flat.points.len()
+        && mesh.points.iter().zip(&flat.points).all(|(p, q)| {
+            let (x, y) = back.apply(p[0], p[1]);
+            (x - q[0]).abs() <= tol && (y - q[1]).abs() <= tol
+        });
+    unmoved.then(|| {
+        [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]].map(|p| {
+            let (x, y) = to_doc.apply(p[0], p[1]);
+            [x, y]
+        })
+    })
+}

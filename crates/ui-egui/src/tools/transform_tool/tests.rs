@@ -2730,3 +2730,59 @@ fn warp_after_undoing_a_turned_warp_on_a_warped_smart_object_is_a_fresh_warp() {
         assert!((p[0] - q[0]).abs() < 1e-6 && (p[1] - q[1]).abs() < 1e-6, "{p:?} vs {q:?}");
     }
 }
+
+/// Perspective on a smart object, then Warp without a pull: the reference shows the picture exactly as the Perspective
+/// left it and Enter applies the Perspective alone; the picture changes only once the warp is pulled. A flat grid's
+/// control points carried through the move would spread the rows evenly (the picture popped toward the middle).
+#[test]
+fn warp_after_an_unapplied_perspective_keeps_it_until_the_first_pull() {
+    fn perspective_box() -> (Box<PhotocraftApp>, egui::Context, LayerId) {
+        let mut app = app_with_square(100, photocraft_geom::Rect::new(20, 30, 80, 70));
+        let ctx = app.ctx().clone();
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        begin(&mut app, &ctx).unwrap();
+        let pivot = open(&app).session.state().pivot;
+        let quad = [[42.0, 30.0], [58.0, 30.0], [80.0, 70.0], [20.0, 70.0]];
+        box_events(&mut app, 1, &[BoxState::new(quad.map(|[x, y]| Point::new(x, y)), pivot)]);
+        settle(&mut app);
+        (app, ctx, id)
+    }
+    let flat = |app: &PhotocraftApp| {
+        let t = open(app);
+        let w = t.session.warp().expect("in Warp mode");
+        super::warp::flat_placed_warp(&app.session.active().unwrap().doc, t.layer, &w.warp, app.transform_preview.as_ref().unwrap().placed_warp)
+    };
+    // The Perspective applied on its own.
+    let (mut want, _, wid) = perspective_box();
+    commit(&mut want);
+    land_jobs(&mut want);
+    let want_at = placement_of(&want, wid);
+
+    // Warp, untouched: shown and applied as the Perspective.
+    let (mut app, ctx, id) = perspective_box();
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    let corners = flat(&app).expect("an untouched grid shows the box's exact map");
+    for (c, q) in corners.iter().zip([[42.0, 30.0], [58.0, 30.0], [80.0, 70.0], [20.0, 70.0]]) {
+        assert!((c[0] - q[0]).abs() < 1e-6 && (c[1] - q[1]).abs() < 1e-6, "{corners:?}");
+    }
+    commit(&mut app);
+    land_jobs(&mut app);
+    assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+    let LayerContent::Smart(sm) = &app.session.active().unwrap().doc.layer(id).unwrap().content else { panic!("a smart object") };
+    assert!(sm.warp.as_ref().is_none_or(|w| w.is_identity()), "no warp stored");
+    for (a, b) in placement_of(&app, id).iter().zip(want_at) {
+        assert!((a - b).abs() < 1e-9, "{:?} vs {want_at:?}", placement_of(&app, id));
+    }
+
+    // A pull ends it: from then on the carried points.
+    let (mut app, ctx, _) = perspective_box();
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    let mut to = warp_mesh(&app);
+    to.points[5] += Vec2::new(2.0, 1.0);
+    pull_mesh(&mut app, 2, to);
+    settle(&mut app);
+    assert!(flat(&app).is_none(), "a pulled warp is drawn from its carried points");
+}

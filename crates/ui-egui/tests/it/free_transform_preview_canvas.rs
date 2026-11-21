@@ -137,3 +137,63 @@ fn free_transform_shows_the_layer_inside_its_box_on_the_gpu_canvas() {
 fn free_transform_shows_the_layer_inside_its_box_on_the_cpu_canvas() {
     shows_the_layer_inside_the_box(false);
 }
+
+fn is_blue(c: [u8; 3]) -> bool {
+    c[2] > 200 && c[0] < 60 && c[1] < 60
+}
+
+/// Perspective on a smart object, then Warp without a pull: the picture stays as the Perspective drew it, as the
+/// reference shows it. A smart object red over blue (x 60..240, red y 90..150, blue y 150..210), its top narrowed to
+/// x 126..174: the exact map puts the content's middle row at y ≈ 115, a flat grid's control points carried through
+/// the move at y ≈ 126. Document point (135, 120.5) is blue in the first and red in the second.
+fn warp_after_perspective_keeps_the_picture(gpu_canvas: bool) {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut h) = harness(gpu_canvas) else { return };
+    {
+        let app = h.state_mut();
+        app.run("file.new", json!({"width": 400, "height": 300, "background": "white"})).expect("new");
+        app.run("layer.new.layer", json!({})).expect("new layer");
+        app.session
+            .edit("paint", |doc, active| {
+                let id = active.expect("the new layer is active");
+                let surface = doc.layer_mut(id).and_then(|l| l.surface_mut()).expect("a raster layer");
+                surface.fill_rect(Rect::new(60, 90, 240, 150), &[1.0, 0.0, 0.0, 1.0]);
+                surface.fill_rect(Rect::new(60, 150, 240, 210), &[0.0, 0.0, 1.0, 1.0]);
+                Ok(())
+            })
+            .expect("paint");
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).expect("smart object");
+        app.sync_views();
+        app.ui.extras.rulers = false;
+    }
+    control(&mut h, "ui.set", json!({"tool": "move", "zoom": 1.0, "center": [200, 150]}));
+    h.run_steps(3);
+    control(&mut h, "ui.menu.invoke", json!({"id": "edit.transform.perspective"}));
+    assert!(h.state().ui.transform.is_some(), "Perspective is open");
+    let (from, to) = (screen(&h, 60.0, 90.0), screen(&h, 126.0, 90.0));
+    pointer_move(&mut h, from);
+    button(&mut h, from, true);
+    for i in 1..=8 {
+        pointer_move(&mut h, from + (to - from) * (i as f32 / 8.0));
+    }
+    button(&mut h, to, false);
+    h.run_steps(4);
+    let persp = rgb_at(&mut h, 135.5, 120.5);
+    assert!(is_blue(persp), "the Perspective foreshortens the red top: {persp:?}");
+
+    control(&mut h, "ui.menu.invoke", json!({"id": "edit.transform.warp"}));
+    assert!(h.state().ui.transform.as_ref().is_some_and(|t| t.session.warp().is_some()), "in Warp mode");
+    h.run_steps(4);
+    let warp = rgb_at(&mut h, 135.5, 120.5);
+    assert!(is_blue(warp), "Warp shows the picture as the Perspective left it until the warp is pulled: {warp:?}");
+}
+
+#[test]
+fn warp_after_perspective_keeps_the_picture_on_the_gpu_canvas() {
+    warp_after_perspective_keeps_the_picture(true);
+}
+
+#[test]
+fn warp_after_perspective_keeps_the_picture_on_the_cpu_canvas() {
+    warp_after_perspective_keeps_the_picture(false);
+}
