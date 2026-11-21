@@ -1042,6 +1042,7 @@ fn finish(
     }
     if outcome.is_ok() && cmd == "view.newGuideLayout" {
         app.ui.view.guide_layout = params;
+        app.ui.view.guide_layout_saved = true;
     }
     if outcome.is_ok() {
         result.remember(ctx);
