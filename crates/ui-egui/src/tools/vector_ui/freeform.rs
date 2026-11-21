@@ -45,6 +45,10 @@ pub(crate) struct FreeformPenTool {
     admit: Admit,
     /// A press was refused as `Locked` since the host last asked.
     refused: bool,
+    /// This pass, ↩ follows a stroke into the Work Path and deselects it (#12833); set by the host.
+    enter_armed: bool,
+    /// ↩ was taken while `enter_armed`, until the host asks.
+    entered: bool,
     /// The trace being drawn: a drag draws freehand, ⌥ switches to straight segments.
     pub(crate) draft: OutlineDraft,
     /// The destination captured when the trace began.
@@ -67,6 +71,8 @@ impl Default for FreeformPenTool {
         Self {
             admit: Admit::Open,
             refused: false,
+            enter_armed: false,
+            entered: false,
             draft: OutlineDraft::new(DraftKind::Mixed, DraftReach::new(0.0, 0.0)).locking_shift_drags(),
             owner: None,
             target: None,
@@ -139,6 +145,16 @@ impl FreeformPenTool {
     /// Whether a press was refused for a locked shape since the last call; the host words the refusal.
     pub(super) fn take_refused(&mut self) -> bool {
         std::mem::take(&mut self.refused)
+    }
+
+    /// Sets whether ↩ after the last stroke is the tool's this pass ([`super::pen::freeform_enter_armed`]).
+    pub(super) fn enter_after_stroke(&mut self, armed: bool) {
+        self.enter_armed = armed;
+    }
+
+    /// Whether ↩ was taken after a stroke since the last call; the host deselects the Work Path.
+    pub(super) fn take_entered(&mut self) -> bool {
+        std::mem::take(&mut self.entered)
     }
 
     /// Keeps what the draft reported: a closed trace waits for the host.
@@ -249,8 +265,14 @@ impl CanvasTool for FreeformPenTool {
     }
 
     /// Between clicks: Enter closes, Escape cancels, Backspace and Delete retract.
+    /// Right after a stroke into the Work Path, Enter is the tool's too (#12833).
     fn key(&mut self, key: &ToolKey, _cx: &mut ToolContext<'_>) -> bool {
         if !self.draft.takes_retract() {
+            if matches!(key, ToolKey::Submit) && self.enter_armed {
+                self.enter_armed = false;
+                self.entered = true;
+                return true;
+            }
             return false;
         }
         match key {
