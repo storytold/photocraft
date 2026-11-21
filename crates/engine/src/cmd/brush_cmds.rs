@@ -1575,3 +1575,6 @@ mod define_brush_no_selection_tests;
 
 #[cfg(test)]
 mod define_brush_color_density_tests;
+
+#[cfg(test)]
+mod define_brush_size_limit_tests;
