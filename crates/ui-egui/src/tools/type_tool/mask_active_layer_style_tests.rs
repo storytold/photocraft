@@ -309,12 +309,13 @@ fn a_non_finite_layer_size_keeps_the_tool_size() {
 #[test]
 fn a_shown_layer_size_outside_the_create_range_keeps_the_tool_size() {
     // A plain document reaches the too-large case: 800 pt is a size the commands write, only the
-    // transform pushes the shown product past the maximum. The vertical 0.7 keeps the glyph band
-    // well above y = 400, so the click at (700, 550) starts a new mask instead of editing the
-    // layer's glyphs under it (#12075).
+    // transform pushes the shown product past the maximum. The transformed glyph band then sits
+    // entirely right of x = 189 and above y = 120, so the same click this file's other cases use
+    // does not land on the layer's glyphs (which would edit the layer, #12075) but starts a
+    // fresh mask.
     let (mut app, id) = txt_active(800.0);
     app.run("type.edit", json!({"layer": id.0, "transform": [4.0, 0.0, 0.0, 0.7, 60.0, 120.0]})).unwrap();
-    mask(&mut app, (700.0, 550.0), "MASK");
+    mask(&mut app, (60.0, 300.0), "MASK");
     assert_eq!(mask_style(&app), ("Inter".into(), "Bold".into(), 48.0), "the tool's size, not the 1338 pt the create refuses");
     // And the corrupt-document case below the accepted minimum.
     let (mut app, id) = txt_active(80.0);
@@ -333,3 +334,4 @@ fn taking_the_active_layers_style_leaves_the_tool_options_as_they_are() {
     let o = &app.ui.tool_options;
     assert_eq!((o.type_font.as_str(), o.type_style.as_str(), o.type_size), ("Tool Font", "Regular", 48.0), "the tool options are untouched");
 }
+
