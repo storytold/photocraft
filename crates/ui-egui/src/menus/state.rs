@@ -118,6 +118,7 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
             Some(t) => t.session.warp().is_none(),
             None => app.session.active().and_then(|s| s.active_layer).is_some(),
         },
+        "edit.defineCustomShape" => define_custom_shape_enabled(app),
         // A targeted layer mask enables what edits it (Invert on an adjustment layer's mask).
         i => app.session.is_enabled_with(i, &app.with_mask_target(i, Value::Null)),
     }
@@ -235,4 +236,82 @@ pub(super) fn translated_menu_label(lang: crate::i18n::Lang, id: &str, label: &s
         return crate::i18n::tr_id(lang, id, "Quick Export as PNG").replace("PNG", fmt);
     }
     crate::i18n::tr_id(lang, id, label).to_string()
+}
+
+/// Define Custom Shape, as in Photoshop (#14285): a saved path or the Work Path targeted in the
+/// Paths panel enables it with any tool. Otherwise only a shape layer or a layer with a vector
+/// mask does, and only with a path tool, Move or Type. Tools the reference wasn't measured with
+/// keep the engine's rule.
+fn define_custom_shape_enabled(app: &PhotocraftApp) -> bool {
+    use crate::state::Tool;
+    let Some(s) = app.session.active() else {
+        return false;
+    };
+    let ok = |p: &photocraft_doc::Path| !p.subpaths.is_empty();
+    let targeted = match app.ui.selected_path.as_deref() {
+        // The layer's own path row is the shape-layer case below.
+        None | Some("layer") => false,
+        Some("work") => s.doc.work_path.as_ref().is_some_and(ok),
+        Some(name) => s.doc.paths.iter().any(|n| n.name == name && ok(&n.path)),
+    };
+    if targeted {
+        return true;
+    }
+    // Tools whose enabled state was not measured keep the engine's rule, whatever the layer is (CodeRabbit on #16186).
+    let measured = matches!(
+        app.ui.tool,
+        Tool::PathSelection
+            | Tool::DirectSelection
+            | Tool::Pen
+            | Tool::FreeformPen
+            | Tool::CurvaturePen
+            | Tool::AddAnchorPoint
+            | Tool::Rectangle
+            | Tool::EllipseShape
+            | Tool::Triangle
+            | Tool::Polygon
+            | Tool::Star
+            | Tool::Line
+            | Tool::CustomShape
+            | Tool::Move
+            | Tool::Type
+            | Tool::RectMarquee
+            | Tool::EllipseMarquee
+            | Tool::Lasso
+            | Tool::Brush
+            | Tool::Eraser
+            | Tool::Crop
+            | Tool::Eyedropper
+            | Tool::Hand
+            | Tool::Zoom
+    );
+    if !measured {
+        return app.session.is_enabled("edit.defineCustomShape");
+    }
+    let layer_path = s
+        .active_layer
+        .and_then(|id| s.doc.layer(id))
+        .is_some_and(|l| matches!(&l.content, photocraft_doc::LayerContent::Shape(sh) if ok(&sh.path)) || l.vector_mask.as_ref().is_some_and(|v| ok(&v.path)));
+    if !layer_path {
+        return false;
+    }
+    match app.ui.tool {
+        Tool::PathSelection
+        | Tool::DirectSelection
+        | Tool::Pen
+        | Tool::FreeformPen
+        | Tool::CurvaturePen
+        | Tool::AddAnchorPoint
+        | Tool::Rectangle
+        | Tool::EllipseShape
+        | Tool::Triangle
+        | Tool::Polygon
+        | Tool::Star
+        | Tool::Line
+        | Tool::CustomShape
+        | Tool::Move
+        | Tool::Type => true,
+        Tool::RectMarquee | Tool::EllipseMarquee | Tool::Lasso | Tool::Brush | Tool::Eraser | Tool::Crop | Tool::Eyedropper | Tool::Hand | Tool::Zoom => false,
+        _ => app.session.is_enabled("edit.defineCustomShape"),
+    }
 }

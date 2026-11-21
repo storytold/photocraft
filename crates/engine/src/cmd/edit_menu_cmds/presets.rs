@@ -14,7 +14,7 @@ pub(super) fn define_brush_preset(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// The path Define Custom Shape uses: `"work"`, a saved path name, else the work path, the
-/// active shape layer, the active layer's vector mask, or the last saved path.
+/// active shape layer or the active layer's vector mask. Never the last saved path (#14285).
 pub(crate) fn current_path(doc: &Document, active: Option<LayerId>, spec: Option<&str>) -> Option<Path> {
     let ok = |p: &Path| !p.subpaths.is_empty();
     match spec {
@@ -35,7 +35,8 @@ pub(crate) fn current_path(doc: &Document, active: Option<LayerId>, spec: Option
             return Some(vm.path.clone());
         }
     }
-    doc.paths.last().map(|n| n.path.clone()).filter(ok)
+    // Never "the last saved path": with nothing targeted Photoshop greys the item (#14285).
+    None
 }
 
 pub(super) fn can_define_shape(s: &Session) -> std::result::Result<(), String> {
