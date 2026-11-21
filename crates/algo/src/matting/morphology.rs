@@ -156,29 +156,32 @@ fn cross(src: &[f32], dst: &mut [f32], w: usize, h: usize, d: usize, grow: bool)
 fn repeated(src: &[f32], w: usize, h: usize, r: usize, grow: bool) -> Vec<f32> {
     let mut cur = src.to_vec();
     let mut nxt = cur.clone();
-    let pick = |a: f32, b: f32| if grow { a.max(b) } else { a.min(b) };
     for k in 0..r {
-        let square = k % 2 == 0;
-        for y in 0..h {
-            for x in 0..w {
-                let mut v = cur[y * w + x];
-                for dy in -1i32..=1 {
-                    for dx in -1i32..=1 {
-                        if (dx != 0 && dy != 0 && !square) || (dx == 0 && dy == 0) {
-                            continue;
-                        }
-                        let (nx, ny) = (x as i32 + dx, y as i32 + dy);
-                        if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
-                            v = pick(v, cur[ny as usize * w + nx as usize]);
-                        }
-                    }
-                }
-                nxt[y * w + x] = v;
-            }
-        }
+        repeat_step(&cur, &mut nxt, w, h, k % 2 == 0, grow);
         std::mem::swap(&mut cur, &mut nxt);
     }
     cur
+}
+
+fn repeat_step(src: &[f32], dst: &mut [f32], w: usize, h: usize, square: bool, grow: bool) {
+    let pick = |a: f32, b: f32| if grow { a.max(b) } else { a.min(b) };
+    for y in 0..h {
+        for x in 0..w {
+            let mut v = src[y * w + x];
+            for dy in -1i32..=1 {
+                for dx in -1i32..=1 {
+                    if (dx != 0 && dy != 0 && !square) || (dx == 0 && dy == 0) {
+                        continue;
+                    }
+                    let (nx, ny) = (x as i32 + dx, y as i32 + dy);
+                    if nx >= 0 && ny >= 0 && (nx as usize) < w && (ny as usize) < h {
+                        v = pick(v, src[ny as usize * w + nx as usize]);
+                    }
+                }
+            }
+            dst[y * w + x] = v;
+        }
+    }
 }
 
 #[cfg(test)]
