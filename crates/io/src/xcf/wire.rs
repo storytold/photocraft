@@ -371,6 +371,7 @@ fn palette_continuation(
             let mut next = offset.saturating_add(16);
             for _ in 0..custom_unit_strings(version) {
                 if next.saturating_add(4) > limit {
+                    continuation.invalid = input.palette_lookahead_is_complete();
                     break 'properties;
                 }
                 let Some(length) = input.peek(next, 4)?.and_then(be_u32).map(|n| n as usize) else {

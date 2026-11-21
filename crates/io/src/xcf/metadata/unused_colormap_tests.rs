@@ -233,6 +233,29 @@ fn legacy_palette_lookahead_understands_versioned_custom_units() {
 }
 
 #[test]
+fn legacy_palette_discards_an_overlapping_custom_unit_that_runs_past_eof() {
+    let mut image = TestImage::rgb8(1, 1);
+    image.version = 26;
+    image.image_props.push((1, vec![0, 0, 0, 1, 255, 0, 0]));
+    // At the short boundary the palette tail and unknown tag resemble PROP_USER_UNIT.
+    // Its first apparent string skips past the end of this file.
+    let mut unknown = vec![0; 32];
+    unknown[6..10].copy_from_slice(&4096u32.to_be_bytes());
+    image.image_props.push((0x0018_0000, unknown));
+    image.image_props.push((19, [240f32.to_be_bytes(); 2].concat()));
+    image.layers.push(TestLayer::rgba("Visible", 1, 1, vec![17, 31, 57, 255]));
+    let mut source = image.write();
+    let palette_length = 30 + 9 + 4;
+    source[palette_length..palette_length + 4].copy_from_slice(&5u32.to_be_bytes());
+
+    let document = crate::import("palette-overlap.xcf", &source).unwrap().document;
+    assert_eq!(document.resolution_dpi, 240.);
+    assert_eq!(document.layers[0].surface().unwrap().pixel(0, 0), [17. / 255., 31. / 255., 57. / 255., 1.]);
+    let wrapped = crabz2::compress(&source, crabz2::Level::default());
+    assert_eq!(crate::xcf::source_geometry("palette-overlap.xcf.bz2", &wrapped, &photocraft_raster::Interrupt::NONE).unwrap(), Some(((1., 1.), 240.)));
+}
+
+#[test]
 fn legacy_palette_boundary_accepts_an_unknown_following_property() {
     let mut image = TestImage::rgb8(1, 1);
     image.version = 26;
