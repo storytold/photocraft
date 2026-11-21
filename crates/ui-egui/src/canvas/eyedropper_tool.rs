@@ -4,8 +4,8 @@
 //! As the Eyedropper tool, a press and each drag sample the foreground (Alt: the background). As
 //! the Alt stand-in, every sample goes to the foreground, because Alt is the key that called the
 //! stand-in, and Shift+Alt adds a colour sampler at the clicked pixel instead (#11890). As the
-//! Triangle's stand-in, a sample also becomes the tool's solid Fill, and Shift+Alt samples as Alt
-//! does (#13364).
+//! Triangle's or the Line tool's stand-in, a sample also becomes the tool's solid Fill, and Shift+Alt
+//! samples as Alt does (#13364, #13245).
 
 use craft::behavior::{CancelReason, Cursor, PointerButton};
 use craft::color_ui::ui::{EyedropperTool, SampleSize, SampleSource};
@@ -37,7 +37,7 @@ pub(crate) struct PcEyedropper<'a> {
     inner: EyedropperTool<'a>,
     /// Runs as the Alt stand-in of a painting tool.
     stand_in: bool,
-    /// Runs as the Triangle's Alt stand-in: a pick also sets the tool's Fill.
+    /// Runs as the Triangle's or the Line tool's Alt stand-in: a pick also sets the tool's Fill.
     shape_fill: bool,
 }
 
@@ -58,20 +58,20 @@ pub(crate) fn drain(_app: &mut PhotocraftApp, _state: &mut EyedropperState, _res
 
 impl<'a> PcEyedropper<'a> {
     fn new(scope: &'a ToolScope<'a>, state: &'a mut EyedropperState, stand_in: bool) -> Self {
-        let (mut options, foreground, precise, triangle) = scope.with_app(|app| {
+        let (mut options, foreground, precise, shape_tool) = scope.with_app(|app| {
             let [r, g, b, _] = app.session.tools.foreground;
             let precise = app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise;
-            (app.ui.tool_options.eyedropper, Srgba::rgb(r, g, b), precise, app.ui.tool == Tool::Triangle)
+            (app.ui.tool_options.eyedropper, Srgba::rgb(r, g, b), precise, matches!(app.ui.tool, Tool::Triangle | Tool::Line))
         });
         // Preferences › Cursors › Other Cursors = Precise wants the plain crosshair, so no ring.
         options.show_ring &= !precise;
         let sample = move |at: [f64; 2], size: SampleSize, source: SampleSource| {
             scope.with_app(|app| sampling::pick(app, at, size, source)).map(|c| Srgba::rgb(c[0], c[1], c[2]))
         };
-        PcEyedropper { scope, state, inner: EyedropperTool::new(options, sample).foreground(foreground), stand_in, shape_fill: stand_in && triangle }
+        PcEyedropper { scope, state, inner: EyedropperTool::new(options, sample).foreground(foreground), stand_in, shape_fill: stand_in && shape_tool }
     }
 
-    /// Writes the newest pick to its swatch; as the Triangle's stand-in, also makes the tool's Fill
+    /// Writes the newest pick to its swatch; as the Triangle's or Line tool's stand-in, also makes the tool's Fill
     /// solid, so it follows the foreground (`vector_ui::shapes::tool_paint`).
     fn apply(&mut self) {
         let Some(pick) = self.inner.take() else { return };
