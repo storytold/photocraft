@@ -100,7 +100,7 @@ On a native host with a working wgpu adapter, capture the two images into a fres
     set -eu
     shortcut_snapshots="$(mktemp -d)"
     PHOTOCRAFT_SHORTCUT_SNAPSHOTS="$shortcut_snapshots" cargo test -p photocraft-ui-egui --lib \
-        prefs_ui::shortcut_capture_tests::captured_shortcut_gpu_snapshots -- --exact
+        prefs::prefs_ui::shortcut_capture_tests::captured_shortcut_gpu_snapshots -- --exact
     test -s "$shortcut_snapshots/ctrl-k-1x.png"
     test -s "$shortcut_snapshots/ctrl-k-2x.png"
     printf 'Review the shortcut row and conflict message in %s\n' "$shortcut_snapshots"
