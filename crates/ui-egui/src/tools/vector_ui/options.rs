@@ -528,3 +528,7 @@ mod line_arrow_concavity_field_tests;
 #[cfg(test)]
 #[path = "pen_make_mask_tests.rs"]
 mod pen_make_mask_tests;
+
+#[cfg(test)]
+#[path = "custom_shape_path_make_tests.rs"]
+mod custom_shape_path_make_tests;
