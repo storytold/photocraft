@@ -153,6 +153,21 @@ impl PhotocraftApp {
         self.note_capture_pass(&ctx);
         // A pass whose input carries an injected step acts for the automation client.
         self.automation_input = WindowHost::of(&ctx).injected_pass();
+        if crate::diag::on() {
+            let host = WindowHost::of(&ctx);
+            let (injected, idle) = (host.injected_pass(), host.injected_idle());
+            let (focused, events) = ctx.input(|i| (i.focused, crate::diag::events(&i.raw.events)));
+            if injected || events.is_some() {
+                diag!(
+                    "pass frame={} pass={} viewport={:?} ppp={} focused={focused} injected_pass={injected} injected_idle={idle} {}",
+                    ctx.cumulative_frame_nr(),
+                    ctx.cumulative_pass_nr(),
+                    ctx.viewport_id(),
+                    ctx.pixels_per_point(),
+                    events.unwrap_or_default()
+                );
+            }
+        }
         self.hover_layer = None;
         // The contextual task bar reports itself again if this frame draws it (#10890).
         self.ui.task_bar_shown = None;
@@ -163,6 +178,12 @@ impl PhotocraftApp {
         crate::render_path::frame(self);
         // Every frame that started its stage record closes it, whichever way `ui_body` returns.
         self.ui_body(ui);
+        if crate::diag::on() {
+            let text = serde_json::to_string(&self.ui.text_edit).unwrap_or_default();
+            if crate::diag::text_changed(&text) {
+                diag!("text frame={} pass={} {text}", ctx.cumulative_frame_nr(), ctx.cumulative_pass_nr());
+            }
+        }
         // What an injected step changed is the target of the rest of its request: only a change
         // between passes withdraws queued input (`withdraw_stale_input`).
         #[cfg(not(target_arch = "wasm32"))]
