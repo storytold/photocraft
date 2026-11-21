@@ -109,7 +109,9 @@ fn worker_counts_are_bit_identical() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn parallel_square_matches_serial_for_partial_blocks_and_thin_images() {
-    for (w, h) in [(769, 351), (513, 512), (3, 90001), (90001, 3)] {
+    // Exercise full blocks and partial tails in the 32 x 32 transposes, including
+    // a partial block along the long axis of each thin orientation.
+    for (w, h) in [(97, 95), (65, 96), (3, 81), (81, 3)] {
         let src: Vec<_> = (0..w * h).map(|i| ((i * 101 + i / w * 37) % 251) as f32 / 250.0).collect();
         for r in [0, 1, 3, 16, 32] {
             for grow in [true, false] {
