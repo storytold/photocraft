@@ -3,11 +3,14 @@
 use std::sync::Arc;
 
 use photocraft_doc::{DocId, Document, Rect};
-use photocraft_gpu::context::{NativeContext, NativeContextOptions};
+use photocraft_gpu::context::{AbandonedRequest, GpuContextError, NativeContext, NativeContextOptions};
 use photocraft_gpu::{Compositor, readback};
 use photocraft_io::{BandRenderer, IoError, RenderBand, RenderError};
 
 use crate::AutomationError;
+
+/// The shortest time a dropped renderer waits for its timed-out GPU request to finish.
+const ABANDONED_REQUEST_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Headless GPU renderer implementing [`BandRenderer`] with device and compositor reuse.
 pub struct GpuRenderer {
@@ -19,6 +22,8 @@ pub struct GpuRenderer {
     init_error: Option<String>,
     diagnostics: Vec<String>,
     adapter_reported: bool,
+    /// This renderer's GPU request that timed out, still running inside the driver.
+    abandoned: Option<AbandonedRequest>,
 }
 
 impl GpuRenderer {
@@ -40,6 +45,7 @@ impl GpuRenderer {
             init_error: None,
             diagnostics: Vec::new(),
             adapter_reported: false,
+            abandoned: None,
         }
     }
 
@@ -54,6 +60,7 @@ impl GpuRenderer {
             init_error: None,
             diagnostics: Vec::new(),
             adapter_reported: false,
+            abandoned: None,
         }
     }
 
@@ -96,6 +103,9 @@ impl GpuRenderer {
                     }
                 },
                 Err(e) => {
+                    if let GpuContextError::TimedOut { pending, .. } = &e {
+                        self.abandoned = Some(pending.clone());
+                    }
                     let msg = format!("no GPU adapter available: {e}");
                     self.push_diag(msg.clone());
                     self.init_error = Some(msg.clone());
@@ -142,6 +152,19 @@ impl GpuRenderer {
             comp.reset_cache();
         }
         self.last_doc_id = None;
+    }
+}
+
+impl Drop for GpuRenderer {
+    /// This renderer's request that timed out left its thread inside the driver. Give it time to
+    /// finish, so the process does not exit under it: Lavapipe then crashes the process. A driver
+    /// that really hangs costs this wait once, after its request already failed. Past the limit the
+    /// drop returns anyway and accepts that risk rather than hanging.
+    fn drop(&mut self) {
+        if let Some(pending) = self.abandoned.take() {
+            let timeout = self.options.timeout.unwrap_or_default();
+            pending.wait(timeout.max(ABANDONED_REQUEST_WAIT));
+        }
     }
 }
 

@@ -281,4 +281,29 @@ mod gpu_tests {
         assert!(res.is_ok(), "bounded staging readback must succeed: {res:?}");
         assert_eq!(received_rows, 128);
     }
+
+    /// A renderer whose GPU request timed out waits for the abandoned initialization thread when
+    /// it is dropped. Without that, a test that took the "no GPU adapter" path still passed and
+    /// then crashed with SIGSEGV as the process exited under the thread (#9824).
+    #[test]
+    fn a_renderer_whose_request_timed_out_waits_for_it_when_dropped() {
+        use photocraft_gpu::{NativeContext, NativeContextOptions};
+
+        let options = NativeContextOptions { timeout: Some(std::time::Duration::ZERO), ..Default::default() };
+        let mut gpu_renderer = GpuRenderer::with_options(options);
+        let doc = make_test_doc(16, 16, SampleType::U8);
+        let res = gpu_renderer.render_bands(&doc, doc.bounds(), 16, &photocraft_raster::Interrupt::NONE, &mut |_| Ok::<(), photocraft_io::IoError>(()));
+        match &res {
+            Err(photocraft_io::RenderError::Unavailable(msg)) if msg.contains("timed out") => {}
+            // The driver answered before the caller even waited: there is no timed-out request.
+            Ok(()) | Err(photocraft_io::RenderError::Unavailable(_)) => {
+                eprintln!("SKIPPED: the GPU request did not time out ({res:?})");
+                return;
+            }
+            Err(e) => panic!("unexpected render error: {e:?}"),
+        }
+
+        drop(gpu_renderer);
+        assert!(NativeContext::wait_for_abandoned_requests(std::time::Duration::ZERO), "the drop returned with the request still inside the driver");
+    }
 }
