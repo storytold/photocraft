@@ -10,7 +10,6 @@ use craft::ui::form::Field;
 use craft::ui::pickers::Select;
 use craft::ui::primitives::IconSpec;
 use craft::ui::text::RangeAlert;
-use serde_json::json;
 
 use crate::PhotocraftApp;
 use crate::tools::option_cells::{hint, number};
@@ -130,7 +129,7 @@ pub(crate) const ART_HISTORY_TOLERANCE_ALERT: &str = "An integer between 0 and 1
 /// Pattern Stamp: Aligned, Impressionist, Pattern, Scale, Angle.
 pub(super) fn pattern_stamp(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
     let patterns: Vec<Entry<String>> = app.session.patterns.items.iter().map(|p| Entry::new(p.id.clone(), p.display_name().to_string())).collect();
-    let held = photocraft_engine::presets::patterns::current(&app.session).or(app.session.patterns.items.first()).map(|p| p.id.clone());
+    let held = crate::retouch_ui::pattern_stamp_pattern_id(app);
     let mut picked = held.clone().unwrap_or_default();
     let o = &mut app.ui.tool_options;
     Checkbox::new(Bind::bound(&mut o.pattern_stamp_aligned)).label(tl!("Aligned")).show(ui);
@@ -145,8 +144,10 @@ pub(super) fn pattern_stamp(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Optio
     }
     let scale = number(tl!("Scale"), &mut o.pattern_stamp_scale, 1.0..=1000.0).unit("%").show(ui).out_of_range;
     let angle = number(tl!("Angle"), &mut o.pattern_stamp_angle, -180.0..=180.0).unit("°").show(ui).out_of_range;
+    // The Pattern Stamp's own choice (#12868): picking here must not change the shared pattern
+    // that Fill and the Paint Bucket paint with.
     if !patterns.is_empty() && held.as_deref() != Some(picked.as_str()) {
-        let _ = app.run("pattern.presets.select", json!({"pattern": picked}));
+        app.ui.tool_options.pattern_stamp_pattern = Some(picked);
     }
     scale.or(angle)
 }
