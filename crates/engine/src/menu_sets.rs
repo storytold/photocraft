@@ -120,11 +120,24 @@ pub fn store(next: &mut Preferences, p: &Value) -> Result<bool, String> {
         let mut sets = BTreeMap::new();
         for (name, s) in obj {
             let name = crate::shortcut_sets::set_name(name)?;
+            // The name is stored trimmed, so one `sets` map can hold two keys that name one set.
+            // Inserting the second over the first would answer with one set where the call sent two
+            // and drop the other's menus without a word, so the collision is the error.
+            if sets.contains_key(&name) {
+                return Err(format!("`{name}` is sent twice"));
+            }
             let set: MenuSet = serde_json::from_value(s.clone()).map_err(|e| format!("set `{name}`: {e}"))?;
             validate(&set).map_err(|e| format!("set `{name}`: {e}"))?;
             sets.insert(name, normalized(&set));
         }
         next.menu_sets = sets;
+        // A set the replacement left out is gone, as `deleteSet` says it is: its name does not stay
+        // behind as the set in use. Left there, it names a set the preferences do not hold, and the
+        // next replacement that happens to bring that name back would report it as the one in use
+        // with no `useSet` and no `activeSet` in the call that did it.
+        if !next.menu_sets.contains_key(&next.menu_set) {
+            next.menu_set = String::new();
+        }
         changed = true;
     }
     if let Some(v) = p.get("deleteSet") {

@@ -131,6 +131,40 @@ fn the_dialogs_ok_sends_every_set_and_the_one_in_use() {
 }
 
 #[test]
+fn a_replacement_that_leaves_out_the_set_in_use_clears_its_name() {
+    // `sets` replaces every saved set, so a set the replacement leaves out is gone - the same as
+    // `deleteSet`. Its name does not stay behind as the one in use: a later replacement that holds
+    // that name again would otherwise select it with no `useSet` and no `activeSet` in the call.
+    let mut s = Session::new();
+    s.execute("edit.menus", json!({"hide": ["edit.fade"], "saveSet": "A"})).unwrap();
+    s.execute("edit.menus", json!({"sets": {}})).unwrap();
+    assert!(s.prefs().menu_set.is_empty(), "the set the replacement left out is not the one in use");
+    let r = menus(&mut s, json!({"sets": {"A": {"hidden": ["file.new"]}}}));
+    assert_eq!(r["sets"], json!(["A"]), "the name is saved again");
+    assert_eq!(r["activeSet"], json!(""), "but nothing loaded it");
+    assert_eq!(s.prefs().menu_set, "", "and the stored preferences say the same");
+    // A replacement that keeps the set in use keeps its name.
+    s.execute("edit.menus", json!({"useSet": "A"})).unwrap();
+    let r = menus(&mut s, json!({"sets": {"A": {"hidden": ["file.new"]}, "B": {}}}));
+    assert_eq!(r["activeSet"], json!("A"), "A is still saved, so it stays the set in use");
+}
+
+#[test]
+fn two_names_that_are_one_set_name_after_the_trim_are_refused() {
+    // A set name is stored trimmed (`bad_set_names_are_errors_and_a_good_one_is_trimmed`), so in one
+    // `sets` map `A` and ` A ` name the same set. Letting the later entry replace the earlier one
+    // would answer with one set where the call sent two, and lose one set's menus without a word.
+    let mut s = Session::new();
+    let err = s.execute("edit.menus", json!({"sets": {"A": {"hidden": ["edit.fade"]}, " A ": {"hidden": ["edit.paste"]}}})).unwrap_err().to_string();
+    assert!(err.contains("twice"), "{err}");
+    let r = menus(&mut s, json!({}));
+    assert_eq!(r["sets"], json!([]), "the refused replacement left the saved sets as they were");
+    // One name with spaces around it is still stored trimmed, as it was.
+    let r = menus(&mut s, json!({"sets": {"  A  ": {}}}));
+    assert_eq!(r["sets"], json!(["A"]), "a lone name keeps its trimmed spelling");
+}
+
+#[test]
 fn modified_flag_ignores_the_none_colour_sentinel() {
     // `"none"` is the colour picker's no-colour choice, not a colour: the `color` param removes the
     // entry rather than storing one. A saved set may still carry one (the dialog's OK sends what it
