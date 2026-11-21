@@ -750,6 +750,9 @@ pub mod preset_group_prompt;
 pub mod rasterize_prompt;
 #[cfg(test)]
 mod scale_effects_layout_tests;
+
+#[cfg(test)]
+mod auto_align_no_match_tests;
 pub mod screen_picker;
 pub mod select_mask_ui;
 pub mod shape_dialog;
