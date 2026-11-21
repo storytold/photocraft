@@ -6,6 +6,8 @@ pub(super) enum Paint<'a> {
     None,
     Color([f32; 3]),
     Gradient(&'a Gradient),
+    /// A Gradient Overlay's gradient (`effects::paint_gradient_overlay`).
+    OverlayGradient(&'a Gradient),
     /// A glow's gradient with its opacity gain (`effects::paint_glow`).
     GlowGradient(&'a Gradient, f32),
     Pattern(&'a Pattern, Placement),

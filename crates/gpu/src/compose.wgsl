@@ -799,8 +799,13 @@ fn gradient_t(d: vec2<i32>) -> f32 {
     let a = radians(op.p0.x);
     let s = sin(a);
     let c = cos(a);
-    let dx = f32(d.x) + 0.5 - cx;
-    let dy = f32(d.y) + 0.5 - cy;
+    // p0.w: style, + 8 for a Gradient Overlay (effects::overlay_gradient_t), whose Radial, Angle
+    // and Diamond sample the pixel's top-left corner and whose Diamond is a pixel shorter.
+    let overlay = i32(op.p0.w) >= 8;
+    let style = i32(op.p0.w) % 8;
+    let corner_px = select(0.0, 0.5, overlay && (style == 1 || style == 2 || style == 4));
+    let dx = f32(d.x) + 0.5 - corner_px - cx;
+    let dy = f32(d.y) + 0.5 - corner_px - cy;
     let along = dx * c - dy * s;
     let across = dx * s + dy * c;
     let len = max(sqrt((c * w) * (c * w) + (s * h) * (s * h)), 1.0) * max(op.p0.y, 1e-3);
@@ -809,11 +814,12 @@ fn gradient_t(d: vec2<i32>) -> f32 {
     // Linear / Reflected sample the pixel's top-left corner (effects::gradient_t).
     let corner = 0.5 * (c - s);
     var t: f32;
-    switch i32(op.p0.w) {
+    switch style {
         case 1: { t = sqrt(dx * dx + dy * dy) / (len / 2.0); }                  // Radial
-        case 2: { t = rem_euclid((a - atan2(-dy, dx)) / 6.28318530718, 1.0); }   // Angle
+        // Angle; an overlay's centre pixel samples (0, 0) exactly, where Rust's atan2 is 0.
+        case 2: { t = rem_euclid((a - select(atan2(-dy, dx), 0.0, overlay && dx == 0.0 && dy == 0.0)) / 6.28318530718, 1.0); }
         case 3: { t = abs((along - corner) / (chord / 2.0)); }                  // Reflected
-        case 4: { t = (abs(along) + abs(across)) / (len / 2.0); }               // Diamond
+        case 4: { t = (abs(along) + abs(across)) / select(len / 2.0, max(len / 2.0 - 1.0, 0.5), overlay); } // Diamond
         default: { t = (along - corner) / chord + 0.5; }                        // Linear
     }
     t = clamp(t, 0.0, 1.0);
