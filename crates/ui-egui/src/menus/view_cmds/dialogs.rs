@@ -50,7 +50,9 @@ fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>,
     let title = crate::dialogs::filter_dialog::title_of(title);
     let key = id.to_owned();
     crate::dialogs::params::open_param(app, id, fields, fixed, move |fields: &mut DialogFields| {
-        ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields))
+        // Lens Correction greys OK while it has nothing to correct (#13986).
+        let ready = key != crate::dialogs::lens_batch_ui::COMMAND || crate::dialogs::lens_batch_ui::missing(fields).is_none();
+        ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields)).ok_enabled(ready)
     })
 }
 
@@ -397,7 +399,7 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
             Param::new("detail", tl!("Detail"), ParamKind::number(None, None, 30.0, 1.0, 0)),
             Param::new("saturation", tl!("Saturation"), ParamKind::number(None, None, 20.0, 1.0, 0)),
         ]),
-        crate::dialogs::lens_batch_ui::COMMAND => plain(crate::dialogs::lens_batch_ui::rows(dir.clone())),
+        crate::dialogs::lens_batch_ui::COMMAND => plain(crate::dialogs::lens_batch_ui::rows(app)),
         "file.scripts.imageProcessor" => plain(vec![
             choice(
                 "source",
