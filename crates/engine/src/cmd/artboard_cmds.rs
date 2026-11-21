@@ -16,7 +16,7 @@ use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, color_param, int, int_i32};
-use crate::file_cmds::{SaveOpts, encode, f64_param, join, native_doc, sanitize, stem, str_param, write_file};
+use crate::file_cmds::{encode, f64_param, join, native_doc, sanitize, stem, str_param, write_file};
 use crate::{EngineError, Result, Session};
 
 /// Artboard size presets (name, width, height) in pixels, Photoshop's common devices and pages.
