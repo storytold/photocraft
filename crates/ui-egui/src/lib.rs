@@ -348,6 +348,11 @@ pub struct PhotocraftApp {
     pub(crate) remove_pending: Vec<serde_json::Value>,
     pub(crate) remove_pending_target: Option<retouch_ui::RemoveTarget>,
     pub(crate) remove_trail: Option<stroke_trail::Trail>,
+    /// The numbers that keep apart the textures the app makes for its canvas previews (transform previews, stroke
+    /// trails, Object Finder masks): a preview made again under the same name gets a number no earlier one had, so
+    /// the texture store never shows the old picture for it. One counter for the whole app, since previews of a
+    /// name are made in several places (a transform begins in one, re-renders in another).
+    pub(crate) texture_serials: craft::ui::primitives::Serials,
     /// The menu bar's rows and the English text of its titles, rebuilt when their inputs change
     /// (`menus::MenuModel`).
     pub(crate) menu_model: Option<menus::MenuModel>,

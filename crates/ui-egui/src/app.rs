@@ -68,6 +68,7 @@ impl PhotocraftApp {
             remove_pending: Vec::new(),
             remove_pending_target: None,
             remove_trail: None,
+            texture_serials: Default::default(),
             menu_model: None,
             toolbar_slots: Default::default(),
             layers_tree: None,
