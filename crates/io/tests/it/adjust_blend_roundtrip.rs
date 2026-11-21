@@ -9,13 +9,13 @@ use crate::common;
 use std::sync::Arc;
 
 use common::*;
+use craft_psd::PsdFile;
 use photocraft_color::{BlendMode, ColorMode, SampleType};
 use photocraft_doc::adjust::{CurvePoint, LevelsChannel};
 use photocraft_doc::adjust::{HueRange, ToneSpace};
 use photocraft_doc::*;
 use photocraft_geom::Rect;
 use photocraft_io::*;
-use photocraft_psd::PsdFile;
 
 const TOL: f32 = 1.0 / 255.0 + 1e-5;
 
@@ -42,7 +42,7 @@ fn q16(v: u16) -> f32 {
 fn adjustments() -> Vec<(Adjustment, bool)> {
     let pts = |v: &[(u8, u8)]| v.iter().map(|&(i, o)| CurvePoint { input: g(i), output: g(o) }).collect::<Vec<_>>();
     let lc = |a: u8, b: u8, gamma: f32| LevelsChannel { in_black: g(a), in_white: g(b), gamma, out_black: g(5), out_white: g(250) };
-    let lut = photocraft_cms::lutfile::LutFile::from_fn("t", 5, |c| [c[1], c[2] * 0.5, 1.0 - c[0]]);
+    let lut = craft_cms::lutfile::LutFile::from_fn("t", 5, |c| [c[1], c[2] * 0.5, 1.0 - c[0]]).unwrap();
     let all = vec![
         (Adjustment::BrightnessContrast { brightness: 30.0, contrast: -20.0, legacy: false }, true),
         (Adjustment::BrightnessContrast { brightness: -40.0, contrast: 50.0, legacy: true }, true),
@@ -80,9 +80,20 @@ fn adjustments() -> Vec<(Adjustment, bool)> {
         (Adjustment::PhotoFilter { color: [q16(0), q16(39321), q16(65535)], density: 0.3, preserve_luminosity: false }, true),
         (Adjustment::ChannelMixer { matrix: [[0.5, 0.3, 0.2, 0.0], [0.1, 0.8, 0.1, 0.05], [0.0, 0.2, 0.9, -0.05]], monochrome: false }, true),
         (Adjustment::ChannelMixer { matrix: [[0.4, 0.4, 0.2, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], monochrome: true }, true),
-        (Adjustment::ColorLookup { name: "Look.cube".into(), lut: Some(Arc::new(lut.data)), size: 5, tetrahedral: false, dither: false }, true),
+        // The LUT file is embedded as loaded (here a .cube), so it reads back with its source.
+        (
+            Adjustment::ColorLookup {
+                name: "Look.cube".into(),
+                source: Some(adjust::LutSource { format: adjust::LutFormat::Cube, bytes: Arc::new(craft_cms::lutfile::write_cube(&lut).into_bytes()) }),
+                lut: Some(Arc::new(lut.data)),
+                size: 5,
+                tetrahedral: false,
+                dither: false,
+            },
+            true,
+        ),
         // No table chosen: written as an identity cube (renders the same, comes back with a table).
-        (Adjustment::ColorLookup { name: String::new(), lut: None, size: 0, tetrahedral: false, dither: false }, false),
+        (Adjustment::ColorLookup { name: String::new(), lut: None, size: 0, tetrahedral: false, dither: false, source: None }, false),
         (Adjustment::Invert, true),
         (Adjustment::Posterize { levels: 4 }, true),
         (Adjustment::Threshold { level: g(140) }, true),
@@ -91,17 +102,18 @@ fn adjustments() -> Vec<(Adjustment, bool)> {
                 stops: vec![(0.0, [q16(6554), 0.0, q16(19661)]), (0.5, [1.0, 0.2, 0.0]), (1.0, [1.0, 1.0, 0.8])],
                 reverse: false,
                 dither: false,
+                source: None,
             },
             true,
         ),
-        (Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 1.0]), (1.0, [1.0, 1.0, 0.0])], reverse: true, dither: false }, true),
+        (Adjustment::GradientMap { stops: vec![(0.0, [0.0, 0.0, 1.0]), (1.0, [1.0, 1.0, 0.0])], reverse: true, dither: false, source: None }, true),
         // Fewer than two stops: written as the equivalent two-stop gradient.
-        (Adjustment::GradientMap { stops: vec![], reverse: false, dither: false }, false),
-        (Adjustment::GradientMap { stops: vec![(0.4, [0.2, 0.6, 0.4])], reverse: false, dither: false }, false),
+        (Adjustment::GradientMap { stops: vec![], reverse: false, dither: false, source: None }, false),
+        (Adjustment::GradientMap { stops: vec![(0.4, [0.2, 0.6, 0.4])], reverse: false, dither: false, source: None }, false),
         (Adjustment::SelectiveColor { relative: true, adjustments: std::array::from_fn(|r| [r as f32 * 10.0 - 40.0, 5.0, -30.0, 20.0]) }, true),
         (Adjustment::SelectiveColor { relative: false, adjustments: std::array::from_fn(|r| [0.0, r as f32 * 5.0, 0.0, -10.0]) }, true),
         // A block this version cannot read (a truncated Selective Color) is kept verbatim.
-        (Adjustment::Unsupported { psd_key: "selc".into(), raw: vec![0, 1, 0, 0] }, true),
+        (Adjustment::Unsupported { psd_key: "selc".into(), raw: vec![0, 1, 0, 0].into() }, true),
     ];
     // Compile-time guard: a new Adjustment kind must be added to the list above.
     for (a, _) in &all {
@@ -205,9 +217,10 @@ fn every_adjustment_kind_round_trips_16bit() {
 /// save must say so (#1347). Trilinear saves without a warning.
 #[test]
 fn color_lookup_tetrahedral_warns_on_psd_save() {
-    let lut = photocraft_cms::lutfile::LutFile::from_fn("t", 2, |c| if c == [1.0; 3] { [1.0; 3] } else { [0.0; 3] });
+    let lut = craft_cms::lutfile::LutFile::from_fn("t", 2, |c| if c == [1.0; 3] { [1.0; 3] } else { [0.0; 3] }).unwrap();
     for tetrahedral in [true, false] {
-        let adj = Adjustment::ColorLookup { name: "test.cube".into(), lut: Some(Arc::new(lut.data.clone())), size: 2, tetrahedral, dither: false };
+        let adj =
+            Adjustment::ColorLookup { name: "test.cube".into(), lut: Some(Arc::new(lut.data.clone())), size: 2, tetrahedral, dither: false, source: None };
         let mut d = Document::new("lut", photocraft_geom::Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
         let fmt = d.pixel_format();
         d.layers.push(raster("Background", fmt, d.bounds(), 1, false));
@@ -267,7 +280,7 @@ fn every_blend_mode_round_trips() {
             let adj = Layer::new("inside", LayerContent::Adjustment(Adjustment::Invert));
             d.layers.push(Layer::group("pass-through adj", vec![raster("px", fmt, Rect::new(0, 0, 6, 6), 6, true), adj]));
             let (back, _, file) = export_import(&d);
-            assert!(file.layers().iter().any(|l| l.blend_mode == photocraft_psd::BlendMode::PassThrough), "pass key written");
+            assert!(file.layers().iter().any(|l| l.blend_mode == craft_psd::BlendMode::PassThrough), "pass key written");
             assert_docs_eq(&d, &back);
             assert_composite_eq(&d, &back, "pass-through");
             continue;

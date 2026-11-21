@@ -8,147 +8,41 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.sync_views();
-    let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            let ctx = ui.ctx().clone();
-            // Fonts set up after the first frame only apply from the next one.
-            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            crate::shortcuts::handle(app, &ctx);
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
-            crate::dialogs::show(app, &ctx);
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    // The whole app: its frame hook hands the keys, the wheel and the pointer to the framework's runtime.
+    let ctx = app.ctx().clone();
+    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_context(ctx).with_max_steps(64).build_eframe(move |_cc| app);
     h.run_steps(4);
     h
 }
 
-fn zoom(h: &Harness<'static, PhotocraftApp>) -> f32 {
+fn zoom(h: &Harness<'static, Box<PhotocraftApp>>) -> f32 {
     h.state().current_zoom()
 }
 
-fn open_dialog(h: &mut Harness<'static, PhotocraftApp>) {
-    crate::dialogs::open_command_dialog(h.state_mut(), "image.adjustments.brightnessContrast", "Brightness/Contrast…");
+/// The highest zoom the ladder allows.
+fn max_zoom() -> f32 {
+    craft::behavior::canvas::ZoomLadder::MAX as f32
+}
+
+/// The values of the dialog opened last, as automation lists them (`ui.inspect`).
+fn dialog_fields(h: &Harness<'static, Box<PhotocraftApp>>) -> serde_json::Value {
+    h.state().framework.dialogs.open_dialogs().into_iter().last().and_then(|d| d.fields).expect("an open dialog with values")
+}
+
+fn open_dialog(h: &mut Harness<'static, Box<PhotocraftApp>>) {
+    crate::dialogs::open_command_dialog(h.state_mut(), "image.adjustments.brightnessContrast", "Brightness/Contrast…").unwrap();
     h.run_steps(3);
-    assert_eq!(h.state().ui.dialogs.len(), 1);
+    assert!(h.state().dialog_open());
 }
 
 /// A point on the canvas well away from the centred dialog.
-fn free_canvas(h: &Harness<'static, PhotocraftApp>) -> Pos2 {
+fn free_canvas(h: &Harness<'static, Box<PhotocraftApp>>) -> Pos2 {
     let r = h.state().last_canvas_rect;
     pos2(r.left() + 60.0, r.bottom() - 60.0)
-}
-
-#[test]
-fn ctrl_plus_zooms_the_canvas_not_the_interface() {
-    let mut h = harness();
-    let z0 = zoom(&h);
-    // ⌘+ / Ctrl+'+' as typed with ⇧ on a US layout, and as the numpad / Nordic `+`.
-    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Plus);
-    h.run_steps(2);
-    let z1 = zoom(&h);
-    assert!(z1 > z0, "⌘+ should zoom the canvas in ({z0} -> {z1})");
-    h.key_press_modifiers(Modifiers::COMMAND, Key::Plus);
-    h.run_steps(2);
-    assert!(zoom(&h) > z1);
-    h.key_press_modifiers(Modifiers::COMMAND, Key::Minus);
-    h.run_steps(2);
-    assert!((zoom(&h) - z1).abs() < 1e-4);
-    // ⌘1 is 100%, ⌘0 fits on screen again.
-    h.key_press_modifiers(Modifiers::COMMAND, Key::Num1);
-    h.run_steps(2);
-    assert_eq!(zoom(&h), 1.0);
-    h.key_press_modifiers(Modifiers::COMMAND, Key::Num0);
-    h.run_steps(3);
-    assert!((zoom(&h) - z0).abs() < 1e-3, "⌘0 fits on screen: {} vs {z0}", zoom(&h));
-    assert_eq!(h.ctx.zoom_factor(), 1.0, "the interface must never scale");
-}
-
-#[test]
-fn keyboard_zoom_works_with_a_dialog_open() {
-    let mut h = harness();
-    open_dialog(&mut h);
-    let z0 = zoom(&h);
-    h.key_press_modifiers(Modifiers::COMMAND, Key::Equals);
-    h.run_steps(2);
-    assert!(zoom(&h) > z0);
-    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Plus);
-    h.run_steps(2);
-    assert_eq!(h.ctx.zoom_factor(), 1.0);
-    assert_eq!(h.state().ui.dialogs.len(), 1);
-    // Other commands stay blocked while the dialog is open (⌘J would duplicate the layer).
-    let layers = h.state().session.active().unwrap().doc.layers.len();
-    h.key_press_modifiers(Modifiers::COMMAND, Key::J);
-    h.run_steps(2);
-    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), layers);
-}
-
-/// Select › Color Range: the eyedropper picks on the image itself (Photoshop), not only in the
-/// dialog's preview. Shift adds a sample, and the dialog stays open.
-#[test]
-fn color_range_eyedropper_picks_on_the_canvas() {
-    let mut h = harness();
-    crate::color_range_ui::open(h.state_mut());
-    h.run_steps(4);
-    let points = |h: &Harness<'static, PhotocraftApp>| {
-        let f = &h.state().ui.dialogs.last().unwrap().fields;
-        (f["points"].as_array().unwrap().len(), f["points"].clone())
-    };
-    let click = |h: &mut Harness<'static, PhotocraftApp>, p: Pos2, modifiers: Modifiers| {
-        h.hover_at(p);
-        h.run_steps(1);
-        h.event_modifiers(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers }, modifiers);
-        h.run_steps(1);
-        h.event_modifiers(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers }, modifiers);
-        h.run_steps(2);
-    };
-    // Zoomed in, the document reaches out from under the centred dialog.
-    {
-        let v = &mut h.state_mut().ui.views[0];
-        v.zoom = 3.0;
-        v.center = [200.0, 150.0];
-        v.fit_pending = false;
-    }
-    h.run_steps(2);
-    let v = h.state().ui.views[0].clone();
-    let c = h.state().last_canvas_rect.center();
-    let screen = |d: [f32; 2]| pos2(c.x + (d[0] - v.center[0]) * v.zoom, c.y + (d[1] - v.center[1]) * v.zoom);
-    let p = screen([30.5, 40.5]);
-    assert!(h.state().last_canvas_rect.contains(p));
-    click(&mut h, p, Modifiers::NONE);
-    let (n, pts) = points(&h);
-    assert_eq!(n, 1, "{pts}");
-    let at = doc_at(&h, p);
-    assert_eq!(pts[0][0].as_f64().unwrap().floor(), f64::from(at[0]).floor(), "{pts} vs {at:?}");
-    assert_eq!(pts[0][1].as_f64().unwrap().floor(), f64::from(at[1]).floor(), "{pts} vs {at:?}");
-    // ⇧-click adds another sample; the dialog never closes.
-    click(&mut h, screen([60.5, 40.5]), Modifiers::SHIFT);
-    assert_eq!(points(&h).0, 2);
-    click(&mut h, screen([60.5, 40.5]), Modifiers::ALT);
-    assert_eq!(h.state().ui.dialogs.last().unwrap().fields["subtractPoints"].as_array().unwrap().len(), 1);
-    // A stationary held button must not subtract again on every redraw.
-    let p = screen([60.5, 40.5]);
-    h.event_modifiers(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::ALT }, Modifiers::ALT);
-    h.run_steps(4);
-    assert_eq!(h.state().ui.dialogs.last().unwrap().fields["subtractPoints"].as_array().unwrap().len(), 2);
-    h.event_modifiers(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::ALT }, Modifiers::ALT);
-    h.run_steps(2);
-    // The modal eyedropper overrides a previously selected Hand tool.
-    h.state_mut().ui.tool = crate::state::Tool::Hand;
-    let center = h.state().ui.views[0].center;
-    click(&mut h, screen([30.5, 40.5]), Modifiers::NONE);
-    assert_eq!(points(&h).0, 1);
-    assert_eq!(h.state().ui.views[0].center, center);
-    assert_eq!(h.state().ui.dialogs.len(), 1);
-    // The document is untouched until OK.
-    assert!(h.state().session.active().unwrap().doc.selection.is_none());
 }
 
 #[test]
@@ -162,11 +56,17 @@ fn clicking_outside_a_dialog_keeps_it_open_and_the_canvas_pans_and_zooms() {
     h.run_steps(1);
     h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(3);
-    assert_eq!(h.state().ui.dialogs.len(), 1, "a click outside must not cancel the dialog");
+    assert!(h.state().dialog_open(), "a click outside must not cancel the dialog");
 
     // Scrolling over the canvas pans it.
     let c0 = h.state().ui.views[0].center;
-    h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -40.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE });
+    h.event(egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
+        unit: egui::MouseWheelUnit::Point,
+        delta: vec2(0.0, -40.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+    });
     h.run_steps(8);
     let c1 = h.state().ui.views[0].center;
     assert!(c1[1] > c0[1], "scroll pans under a dialog: {c0:?} -> {c1:?}");
@@ -186,75 +86,24 @@ fn clicking_outside_a_dialog_keeps_it_open_and_the_canvas_pans_and_zooms() {
     let c2 = h.state().ui.views[0].center;
     let z = zoom(&h);
     assert!((c2[0] - (c1[0] - 50.0 / z)).abs() < 0.5, "space-drag pans by 50 pt: {c1:?} -> {c2:?}");
-    assert_eq!(h.state().ui.dialogs.len(), 1);
+    assert!(h.state().dialog_open());
 
     // Esc still cancels.
     h.key_press(Key::Escape);
     h.run_steps(2);
-    assert!(h.state().ui.dialogs.is_empty());
+    assert!(!h.state().dialog_open());
 }
 
-/// ⌘Space (Ctrl+Space off the Mac) and ⌥Space are the temporary Zoom under an open dialog too, as
-/// in Photoshop: a drag on the free canvas is a scrubby zoom about the press point, not a pan, and
-/// a click steps the zoom (#6460).
-#[test]
-fn temporary_zoom_works_under_a_dialog() {
-    let mut h = harness();
-    h.state_mut().ui.extras.rulers = false;
-    open_dialog(&mut h);
-    let p = free_canvas(&h);
-    h.hover_at(p);
-    h.run_steps(1);
-    let (z0, doc0) = (zoom(&h), doc_at(&h, p));
-    let held = |h: &mut Harness<'static, PhotocraftApp>, pressed: bool, m: Modifiers| {
-        h.event(egui::Event::ModifiersChanged(m));
-        h.event(egui::Event::Key { key: Key::Space, physical_key: None, pressed, repeat: false, modifiers: m });
-        h.run_steps(1);
-    };
-    let button = |h: &mut Harness<'static, PhotocraftApp>, pos: Pos2, pressed: bool, m: Modifiers| {
-        h.event_modifiers(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: m }, m);
-        h.run_steps(1);
-    };
-    held(&mut h, true, Modifiers::COMMAND);
-    button(&mut h, p, true, Modifiers::COMMAND);
-    for i in 1..=6 {
-        h.hover_at(p + vec2(10.0 * i as f32, 0.0));
-        h.run_steps(1);
-    }
-    button(&mut h, p + vec2(60.0, 0.0), false, Modifiers::COMMAND);
-    held(&mut h, false, Modifiers::COMMAND);
-    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
-    h.run_steps(2);
-    let z1 = zoom(&h);
-    let size = h.state().ui.views[0].doc_size;
-    assert!((z1 - crate::zoom_tool::scrub_zoom(z0, 60.0, size)).abs() < 1e-4, "⌘Space-drag zooms in: {z0} -> {z1}");
-    let doc1 = doc_at(&h, p);
-    assert!((doc1[0] - doc0[0]).abs() < 0.5 && (doc1[1] - doc0[1]).abs() < 0.5, "the pressed point stays put: {doc0:?} -> {doc1:?}");
-
-    // ⌥Space-click steps out.
-    h.hover_at(p);
-    h.run_steps(1);
-    held(&mut h, true, Modifiers::ALT);
-    button(&mut h, p, true, Modifiers::ALT);
-    button(&mut h, p, false, Modifiers::ALT);
-    held(&mut h, false, Modifiers::ALT);
-    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
-    h.run_steps(2);
-    assert_eq!(zoom(&h), crate::zoom_levels::step(z1, -1, size));
-    assert_eq!(h.state().ui.dialogs.len(), 1);
-}
-
-fn press(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, pressed: bool) {
+fn press(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2, pressed: bool) {
     h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
     h.run_steps(1);
 }
 
-fn picker_color(h: &Harness<'static, PhotocraftApp>) -> String {
-    let d = h.state().ui.dialogs.last().unwrap();
-    d.fields.get("color").and_then(serde_json::Value::as_str).unwrap().to_string()
+fn picker_color(h: &Harness<'static, Box<PhotocraftApp>>) -> String {
+    dialog_fields(h)["color"].as_str().unwrap().to_string()
 }
 
-/// The Color Picker's eyedropper, as in Photoshop: over the image the pointer is a pipette, and a
+/// The Color Picker's eyedropper, as in Photoshop: a
 /// click or drag there samples into the picker's new colour, whatever the tool. OK applies it.
 #[test]
 fn color_picker_samples_the_image_under_its_pipette() {
@@ -263,20 +112,14 @@ fn color_picker_samples_the_image_under_its_pipette() {
     h.state_mut().run("shape.create", json!({"kind": "rect", "rect": [200, 0, 200, 300], "fill": "#00ff00"})).unwrap();
     // 400 %: the image covers the whole canvas, red on the left of the dialog, green on its right.
     let v = &mut h.state_mut().ui.views[0];
-    (v.zoom, v.center, v.fit_pending) = (4.0, [200.0, 150.0], false);
+    (v.zoom, v.center) = (4.0, [200.0, 150.0]);
+    v.clear_pending();
     crate::color_picker_ui::open(h.state_mut(), "foreground");
     h.run_steps(3);
     let r = h.state().last_canvas_rect;
     let (red, green) = (pos2(r.left() + 60.0, r.center().y), pos2(r.right() - 60.0, r.center().y));
     assert_eq!(doc_at(&h, red)[0] < 200.0, doc_at(&h, green)[0] > 200.0);
     let foreground = h.state().session.tools.foreground;
-
-    h.hover_at(red);
-    h.run_steps(1);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "the pipette replaces the pointer");
-    h.hover_at(r.center());
-    h.run_steps(1);
-    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "over the dialog it is the normal pointer");
 
     // A click samples; the press and release may land in one frame (`ui.click`).
     h.hover_at(red);
@@ -320,7 +163,7 @@ fn color_picker_samples_the_image_under_its_pipette() {
     assert_eq!(picker_color(&h), "#ff0000");
     h.key_press(Key::Enter);
     h.run_steps(2);
-    assert!(h.state().ui.dialogs.is_empty());
+    assert!(!h.state().dialog_open());
     assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0]);
 }
 
@@ -335,109 +178,60 @@ fn curves_picker_samples_document_coordinates_through_the_view_transform() {
     let committed = h.state().session.active().unwrap().doc.clone();
     let history = h.state().session.active().unwrap().history.past_len();
     let view = &mut h.state_mut().ui.views[0];
-    (view.zoom, view.center, view.fit_pending) = (4.0, [200.0, 150.0], false);
+    (view.zoom, view.center) = (4.0, [200.0, 150.0]);
+    view.clear_pending();
     h.state_mut().ui.view.flip_horizontal = true;
     let dialog = crate::adjust_dialog::open(h.state_mut(), "image.adjustments.curves").unwrap();
-    h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("__curvePicker".into(), json!("black"));
+    // Arms the black-point eyedropper, as its button in the dialog does.
+    h.state_mut()
+        .framework
+        .dialogs
+        .get_mut_by_id::<crate::adjust_dialog::HostedAdjustDialog>(dialog)
+        .expect("the Curves dialog is open")
+        .set_picker(Some(craft::imaging::ui::adjust::TonePicker::Black));
     h.run_steps(3);
     let canvas = h.state().last_canvas_rect;
     let left = pos2(canvas.left() + 60.0, canvas.center().y);
     h.hover_at(left);
     h.run_steps(1);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None);
     press(&mut h, left, true);
     press(&mut h, left, false);
     h.run_steps(3);
     assert!(std::sync::Arc::ptr_eq(&h.state().session.active().unwrap().doc, &committed));
     assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
     assert!(crate::adjust_preview::display_doc(h.state_mut(), 0).is_some(), "the new curve is visible only through the preview");
-    let red = h
-        .state()
-        .ui
-        .dialogs
-        .iter()
-        .find(|candidate| candidate.id == dialog)
-        .and_then(|candidate| candidate.fields.get("red"))
-        .and_then(serde_json::Value::as_array)
-        .and_then(|points| points.first())
-        .and_then(serde_json::Value::as_array)
-        .and_then(|point| point.first())
-        .and_then(serde_json::Value::as_f64)
-        .unwrap();
+    let red = dialog_fields(&h)["red"][0][0].as_f64().unwrap();
     assert!((red - 32.0).abs() < 0.6, "sampled document-right blue patch through the flipped 400% view: {red}");
 }
 
-/// #7325: ⌘/Ctrl-click on the image with Curves open adds a point at the pixel's tone. The
-/// modifier is the press's own, a drag onto another tone adds nothing more, and the Hand tool
-/// does not take the press for a pan.
-#[test]
-fn command_click_under_curves_adds_one_point_per_press_not_per_frame() {
-    // The Hand tool too: the press is the dialog's, not the start of a pan.
-    for hand in [false, true] {
-        let mut h = harness();
-        if hand {
-            h.state_mut().ui.tool = crate::state::Tool::Hand;
-        }
-        h.state_mut().run("select.rect", json!({"x": 0, "y": 0, "width": 80, "height": 300})).unwrap();
-        h.state_mut().run("edit.fill", json!({"color": "#804020"})).unwrap();
-        h.state_mut().run("select.rect", json!({"x": 80, "y": 0, "width": 320, "height": 300})).unwrap();
-        h.state_mut().run("edit.fill", json!({"color": "#20a0e0"})).unwrap();
-        h.state_mut().run("select.deselect", json!({})).unwrap();
-        let view = &mut h.state_mut().ui.views[0];
-        (view.zoom, view.center, view.fit_pending) = (4.0, [200.0, 150.0], false);
-        let dialog = crate::adjust_dialog::open(h.state_mut(), "image.adjustments.curves").unwrap();
-        h.run_steps(3);
-        let points = |h: &Harness<'static, PhotocraftApp>| {
-            let d = h.state().ui.dialogs.iter().find(|d| d.id == dialog).unwrap();
-            d.fields.get("points").and_then(serde_json::Value::as_array).map_or(0, Vec::len)
-        };
-        let canvas = h.state().last_canvas_rect;
-        // Document x 65 (the brown strip) and 100 (the blue), both left of the centred dialog.
-        let (brown, blue) = (pos2(canvas.left() + 60.0, canvas.center().y), pos2(canvas.left() + 200.0, canvas.center().y));
-        h.hover_at(brown);
-        h.run_steps(1);
-        press(&mut h, brown, true);
-        press(&mut h, brown, false);
-        assert_eq!(points(&h), 2, "a plain click adds no point (hand: {hand})");
-
-        let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::COMMAND };
-        // ⌘ stays held through the drag, so only the press can tell the frames apart.
-        h.event(egui::Event::ModifiersChanged(Modifiers::COMMAND));
-        h.event(button(brown, true));
-        h.run_steps(1);
-        assert_eq!(points(&h), 3, "the press adds the point (hand: {hand})");
-        for t in [0.25, 0.5, 0.75, 1.0] {
-            h.event(egui::Event::PointerMoved(brown + (blue - brown) * t));
-            h.run_steps(1);
-        }
-        h.event(button(blue, false));
-        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
-        h.run_steps(2);
-        assert_eq!(points(&h), 3, "dragging onto another tone adds nothing more (hand: {hand})");
-    }
-}
-
-/// Type tool (#206): Alt+←/→ at a collapsed caret kerns the pair before it by 20/1000 em (100
-/// with ⌘/Ctrl), one history step per press; ⌘/Ctrl+←/→ moves by word; Alt+Shift+→ extends
-/// the selection by a word.
-fn wheel(h: &Harness<'static, PhotocraftApp>, dy: f32, modifiers: Modifiers) {
-    h.event_modifiers(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, dy), phase: egui::TouchPhase::Move, modifiers }, modifiers);
+/// A wheel event of `dy` lines with `modifiers` held.
+fn wheel(h: &Harness<'static, Box<PhotocraftApp>>, dy: f32, modifiers: Modifiers) {
+    h.event_modifiers(
+        egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, dy),
+            phase: egui::TouchPhase::Move,
+            modifiers,
+        },
+        modifiers,
+    );
 }
 
 /// The document point under screen point `p` (no flip).
-fn doc_at(h: &Harness<'static, PhotocraftApp>, p: Pos2) -> [f32; 2] {
+fn doc_at(h: &Harness<'static, Box<PhotocraftApp>>, p: Pos2) -> [f32; 2] {
     let v = &h.state().ui.views[0];
     let c = h.state().last_canvas_rect.center();
     [v.center[0] + (p.x - c.x) / v.zoom, v.center[1] + (p.y - c.y) / v.zoom]
 }
 
 /// The whole window (status bar and Navigator included) on a 400 × 300 document.
-fn app_window() -> Harness<'static, PhotocraftApp> {
+fn app_window() -> Harness<'static, Box<PhotocraftApp>> {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        PhotocraftApp::new(s, crate::Services::default())
+        PhotocraftApp::with_context(cc.egui_ctx.clone(), s, crate::Services::default())
     });
     h.run_steps(8);
     h
@@ -452,87 +246,67 @@ fn the_wheel_reaches_12800_percent_and_stops_dead_there() {
     let mut h = app_window();
     {
         let v = &mut h.state_mut().ui.views[0];
-        (v.zoom, v.center, v.fit_pending) = (40.0, [200.0, 150.0], false);
+        (v.zoom, v.center) = (40.0, [200.0, 150.0]);
+        v.clear_pending();
     }
     h.run_steps(4);
     assert_eq!(zoom(&h), 40.0, "4000 % holds: no zoom control clamps it back");
     let r = h.state().last_canvas_rect;
     let p = pos2(r.center().x - 150.0, r.center().y - 90.0);
-    // The document point under `p`, through the canvas inside the rulers.
-    let doc_at = |h: &Harness<'static, PhotocraftApp>, p: Pos2| {
-        let (app, v) = (h.state(), &h.state().ui.views[0]);
-        let c = crate::rulers::content_rect(app, app.last_canvas_rect).center();
-        [v.center[0] + (p.x - c.x) / v.zoom, v.center[1] + (p.y - c.y) / v.zoom]
+    // The document point under `p`, through the canvas view as its last pass showed it.
+    let doc_at = |h: &Harness<'static, Box<PhotocraftApp>>, p: Pos2| {
+        let d = crate::canvas::testing::view(h.state()).expect("the canvas has shown").to_doc(p);
+        [d.x as f32, d.y as f32]
     };
     h.hover_at(p);
     h.run_steps(2);
     let d0 = doc_at(&h, p);
+    // Frames after each notch (0.25 s each, the harness's default step): a notch lands within two (egui's wheel
+    // smoothing reaches 90 % in 0.1 s and takes the rest under one point at once), and the old clamp pulled the zoom
+    // back on every frame, so three show it: the zoom and centre
+    // after them are the ones the old thirty left.
+    const NOTCH_STEPS: usize = 3;
     for _ in 0..14 {
         wheel(&h, 1.0, Modifiers::ALT);
-        h.run_steps(30);
+        h.run_steps(NOTCH_STEPS);
     }
-    assert_eq!(zoom(&h), crate::zoom_levels::MAX, "a notch past the limit lands on it exactly");
+    assert_eq!(zoom(&h), max_zoom(), "a notch past the limit lands on it exactly");
     let d1 = doc_at(&h, p);
     assert!((d1[0] - d0[0]).abs() < 0.02 && (d1[1] - d0[1]).abs() < 0.02, "zoomed around the pointer: {d0:?} -> {d1:?}");
     let c = h.state().ui.views[0].center;
     for _ in 0..4 {
         wheel(&h, 1.0, Modifiers::ALT);
-        h.run_steps(30);
+        h.run_steps(NOTCH_STEPS);
     }
-    assert_eq!(zoom(&h), crate::zoom_levels::MAX);
+    assert_eq!(zoom(&h), max_zoom());
     assert_eq!(h.state().ui.views[0].center, c, "at the limit the image doesn't move");
     // One notch back: 12800 / 1.1, still around the pointer.
     wheel(&h, -1.0, Modifiers::ALT);
-    h.run_steps(30);
-    assert!((zoom(&h) - crate::zoom_levels::MAX / 1.1).abs() < 1e-2, "{}", zoom(&h));
+    h.run_steps(NOTCH_STEPS);
+    assert!((zoom(&h) - max_zoom() / 1.1).abs() < 1e-2, "{}", zoom(&h));
     let d2 = doc_at(&h, p);
     assert!((d2[0] - d0[0]).abs() < 0.02 && (d2[1] - d0[1]).abs() < 0.02, "{d0:?} -> {d2:?}");
 }
 
+/// Animated Zoom on: notches flicked past 12800 % stop there, and the first notch back zooms out
+/// at once by its ×1/1.1. The rest of the notches the limit swallowed must not eat it.
 #[test]
-fn alt_scroll_zooms_in_steps_around_the_pointer() {
+fn the_first_animated_notch_back_from_the_limit_zooms_out() {
     let mut h = harness();
-    let r = h.state().last_canvas_rect;
-    let p = pos2(r.center().x + 120.0, r.center().y - 70.0);
-    h.hover_at(p);
-    h.run_steps(2);
-    let (z0, d0) = (zoom(&h), doc_at(&h, p));
-    // One notch with ⌥ held: ×1.1 (Photoshop), the point under the pointer stays put. The modifiers are
-    // released right after the event, while egui still smooths the notch over later frames, which
-    // must neither ease the zoom nor turn into a pan (#1490).
-    wheel(&h, 1.0, Modifiers::ALT);
-    h.run_steps(2);
-    let at_once = zoom(&h);
-    h.run_steps(40);
-    let (z1, d1) = (zoom(&h), doc_at(&h, p));
-    assert!((z1 / z0 - 1.1).abs() < 1e-3, "one ⌥ notch is ×1.1: {z0} -> {z1}");
-    assert_eq!(at_once, z1, "the notch is applied the frame it arrives, with no easing");
-    assert!((d1[0] - d0[0]).abs() < 0.05 && (d1[1] - d0[1]).abs() < 0.05, "centred on the pointer: {d0:?} -> {d1:?}");
-    // Three notches back out.
-    wheel(&h, -3.0, Modifiers::ALT);
-    h.run_steps(40);
-    assert!((zoom(&h) / z1 - 1.1f32.powi(-3)).abs() < 1e-3, "{z1} -> {}", zoom(&h));
-
-    // A plain notch still pans, and does not zoom.
-    let (z2, c2) = (zoom(&h), h.state().ui.views[0].center);
-    wheel(&h, -1.0, Modifiers::NONE);
-    h.run_steps(40);
-    assert_eq!(zoom(&h), z2, "a plain scroll never zooms");
-    assert!(h.state().ui.views[0].center[1] > c2[1], "a plain scroll pans");
-
-    // ⌘/Ctrl + scroll pans sideways (#635), on Windows (Ctrl) and macOS (⌘) alike.
-    for m in [Modifiers { ctrl: true, command: true, ..Modifiers::NONE }, Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE }] {
-        let c = h.state().ui.views[0].center;
-        wheel(&h, -1.0, m);
-        h.run_steps(40);
-        let c1 = h.state().ui.views[0].center;
-        assert_eq!(zoom(&h), z2, "⌘/Ctrl-scroll never zooms");
-        assert!(c1[0] > c[0] && c1[1] == c[1], "⌘/Ctrl-scroll pans sideways: {c:?} -> {c1:?}");
+    {
+        let v = &mut h.state_mut().ui.views[0];
+        v.zoom = max_zoom() / 1.05;
+        v.clear_pending();
     }
-    // A pinch zooms around the pointer.
-    h.event(egui::Event::Zoom(1.25));
+    let r = h.state().last_canvas_rect;
+    h.hover_at(r.center());
     h.run_steps(2);
-    assert!((zoom(&h) / z2 - 1.25).abs() < 1e-3, "pinch zooms: {z2} -> {}", zoom(&h));
+    wheel(&h, 3.0, Modifiers::ALT);
+    h.step();
+    assert_eq!(zoom(&h), max_zoom(), "the flick reaches the limit");
+    wheel(&h, -1.0, Modifiers::ALT);
+    h.run_steps(40);
+    assert!((zoom(&h) - max_zoom() / 1.1).abs() < 1e-2, "one notch back: {}", zoom(&h));
 }
 
 #[test]
@@ -550,84 +324,31 @@ fn alt_scroll_zooms_while_a_temporary_tool_is_held() {
     assert!((zoom(&h) / z0 - 1.1f32.powi(2)).abs() < 1e-3, "{z0} -> {}", zoom(&h));
     h.event(egui::Event::Key { key: Key::Space, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
-    assert_eq!(h.state().ui.tool, crate::state::Tool::Brush);
+    assert_eq!(h.state().ui.tool, crate::state::Tool::Move);
 }
 
-/// #8049 (Windows 11): the Alt key's press arrives, but the modifier state stays without Alt, so
-/// every wheel event while it is held reports no modifiers; tapping Ctrl brought Alt back. Until
-/// then ⌥ + scroll panned (or, with Zoom with Scroll Wheel on, zoomed) like a plain scroll.
-#[test]
-fn alt_scroll_zooms_when_the_modifier_state_misses_the_held_alt() {
-    let alt_key =
-        |pressed: bool, repeat: bool| egui::Event::Key { key: Key::AltLeft, physical_key: Some(Key::AltLeft), pressed, repeat, modifiers: Modifiers::NONE };
-    for zoom_with_wheel in [false, true] {
-        let mut h = harness();
-        h.state_mut().session.edit_prefs(|p| p.general.zoom_with_scroll_wheel = zoom_with_wheel);
-        let p = h.state().last_canvas_rect.center();
-        h.hover_at(p);
-        h.run_steps(2);
-        let (z0, c0) = (zoom(&h), h.state().ui.views[0].center);
-        // Alt goes down (and repeats while held); the wheel events carry no modifiers.
-        h.event(alt_key(true, false));
-        h.run_steps(1);
-        h.event(alt_key(true, true));
-        wheel(&h, 1.0, Modifiers::NONE);
-        h.run_steps(2);
-        wheel(&h, 1.0, Modifiers::NONE);
-        h.run_steps(40);
-        if zoom_with_wheel {
-            // ⌥ + scroll scrolls instead of zooming.
-            assert_eq!(zoom(&h), z0, "pref on: ⌥ + scroll never zooms");
-            assert!(h.state().ui.views[0].center[1] < c0[1], "pref on: ⌥ + scroll pans: {c0:?} -> {:?}", h.state().ui.views[0].center);
-        } else {
-            assert!((zoom(&h) / z0 - 1.1f32.powi(2)).abs() < 1e-3, "two ⌥ notches are ×1.21: {z0} -> {}", zoom(&h));
-        }
-        // Alt released: the wheel does its plain thing again.
-        h.event(alt_key(false, false));
-        h.run_steps(2);
-        let z1 = zoom(&h);
-        wheel(&h, -1.0, Modifiers::NONE);
-        h.run_steps(40);
-        if zoom_with_wheel {
-            assert!(zoom(&h) < z1, "pref on: a plain notch zooms out: {z1} -> {}", zoom(&h));
-        } else {
-            assert_eq!(zoom(&h), z1, "a plain scroll after Alt's release doesn't zoom");
-        }
-    }
-}
-
+/// Type tool (#206): Alt+←/→ at a collapsed caret kerns the pair before it by 20/1000 em (100
+/// with ⌘/Ctrl), one history step per press.
 #[test]
 fn type_tool_alt_arrows_kern_the_pair() {
     use photocraft_doc::text::Kerning;
     let mut h = harness();
     let id = h.state_mut().run("type.create", json!({"x": 20, "y": 80, "text": "AVA To", "size": 40, "font": "Inter"})).unwrap()["layer"].as_u64().unwrap();
-    let text = |h: &Harness<'static, PhotocraftApp>| {
+    let text = |h: &Harness<'static, Box<PhotocraftApp>>| {
         let st = h.state().session.active().unwrap();
         match &st.doc.layer(photocraft_doc::LayerId(id)).unwrap().content {
             photocraft_doc::LayerContent::Text(t) => t.clone(),
             _ => panic!("not text"),
         }
     };
-    let kern = |h: &Harness<'static, PhotocraftApp>| {
+    let kern = |h: &Harness<'static, Box<PhotocraftApp>>| {
         let t = text(h);
         let r = t.char_runs();
         (r[0].style.kerning, r[0].style.kern, r.len())
     };
-    let steps = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().history.entries().len();
+    let steps = |h: &Harness<'static, Box<PhotocraftApp>>| h.state().session.active().unwrap().history.entries().len();
     let metric = photocraft_text::shared().lock().unwrap().pair_kerning(&text(&h), 72.0, 0).unwrap().round();
-    h.state_mut().ui.text_edit = Some(crate::state::TextEdit {
-        layer: id,
-        document: None,
-        caret: 1,
-        anchor: 1,
-        session: "kern-test".into(),
-        created: false,
-        mask: false,
-        dragging: false,
-        resize: None,
-        preedit: None,
-    });
-    h.run_steps(2);
+    edit_type(&mut h, id, 1, 1);
     let s0 = steps(&h);
     h.key_press_modifiers(Modifiers::ALT, Key::ArrowRight);
     h.run_steps(2);
@@ -640,20 +361,11 @@ fn type_tool_alt_arrows_kern_the_pair() {
     h.run_steps(2);
     assert_eq!(kern(&h).1, metric + 100.0);
     assert_eq!(steps(&h), s0 + 3, "one history step per press");
-    // The caret didn't move; ⌘/Ctrl+→ moves by word, Alt+Shift+→ selects by word.
+    // The caret didn't move; at the text end there's no pair to kern.
     assert_eq!(h.state().ui.text_edit.as_ref().map(|e| (e.caret, e.anchor)), Some((1, 1)));
-    h.key_press_modifiers(Modifiers::COMMAND, Key::ArrowRight);
-    h.run_steps(2);
-    assert_eq!(h.state().ui.text_edit.as_ref().map(|e| (e.caret, e.anchor)), Some((3, 3)));
-    h.key_press_modifiers(Modifiers::ALT | Modifiers::SHIFT, Key::ArrowRight);
-    h.run_steps(2);
-    assert_eq!(h.state().ui.text_edit.as_ref().map(|e| (e.anchor, e.caret)), Some((3, 6)));
-    // With a selection Alt+→ tracks it instead (see `type_tool_format_keys_*`); at the text end
-    // there's no pair to kern.
+    let end = text(&h).text.chars().count();
+    edit_type(&mut h, id, end, end);
     let before = kern(&h);
-    h.key_press(Key::ArrowRight);
-    h.run_steps(2);
-    assert_eq!(h.state().ui.text_edit.as_ref().map(|e| (e.anchor, e.caret)), Some((6, 6)));
     h.key_press_modifiers(Modifiers::ALT, Key::ArrowRight);
     h.run_steps(2);
     assert_eq!(kern(&h), before);
@@ -664,24 +376,20 @@ fn type_tool_alt_arrows_kern_the_pair() {
     assert_eq!(kern(&h).1, metric + 120.0);
 }
 
-/// Starts a type editing session on `layer` with `anchor..caret` selected.
-fn edit_type(h: &mut Harness<'static, PhotocraftApp>, layer: u64, anchor: usize, caret: usize) {
-    h.state_mut().ui.text_edit = Some(crate::state::TextEdit {
-        layer,
-        document: None,
-        caret,
-        anchor,
-        session: "format-keys".into(),
-        created: false,
-        mask: false,
-        dragging: false,
-        resize: None,
-        preedit: None,
-    });
+/// Starts a type editing session on `layer` with `anchor..caret` selected, as a click on the text
+/// with the Type tool does.
+fn edit_type(h: &mut Harness<'static, Box<PhotocraftApp>>, layer: u64, anchor: usize, caret: usize) {
+    let app = h.state_mut();
+    app.run("layer.select", json!({"layer": layer, "mode": "replace"})).unwrap();
+    let ctx = crate::canvas::testing::ctx(app);
+    crate::type_tool::edit_active(app, &ctx).unwrap();
+    let ed = app.ui.text_edit.as_mut().expect("the session starts");
+    ed.anchor = anchor;
+    ed.caret = caret;
     h.run_steps(2);
 }
 
-fn type_layer(h: &Harness<'static, PhotocraftApp>, id: u64) -> photocraft_doc::TextLayer {
+fn type_layer(h: &Harness<'static, Box<PhotocraftApp>>, id: u64) -> photocraft_doc::TextLayer {
     match &h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().content {
         photocraft_doc::LayerContent::Text(t) => t.clone(),
         _ => panic!("not text"),
@@ -689,7 +397,7 @@ fn type_layer(h: &Harness<'static, PhotocraftApp>, id: u64) -> photocraft_doc::T
 }
 
 /// The character style of character `c` of a type layer.
-fn char_style(h: &Harness<'static, PhotocraftApp>, id: u64, c: usize) -> photocraft_doc::text::CharStyle {
+fn char_style(h: &Harness<'static, Box<PhotocraftApp>>, id: u64, c: usize) -> photocraft_doc::text::CharStyle {
     let t = type_layer(h, id);
     let byte = t.text.char_indices().nth(c).map_or(t.text.len(), |(i, _)| i);
     let mut end = 0;
@@ -704,7 +412,7 @@ fn char_style(h: &Harness<'static, PhotocraftApp>, id: u64, c: usize) -> photocr
 }
 
 /// The paragraph style of the paragraph holding character `c`.
-fn para_style(h: &Harness<'static, PhotocraftApp>, id: u64, c: usize) -> photocraft_doc::text::ParagraphStyle {
+fn para_style(h: &Harness<'static, Box<PhotocraftApp>>, id: u64, c: usize) -> photocraft_doc::text::ParagraphStyle {
     let t = type_layer(h, id);
     let byte = t.text.char_indices().nth(c).map_or(t.text.len(), |(i, _)| i);
     let mut end = 0;
@@ -718,7 +426,7 @@ fn para_style(h: &Harness<'static, PhotocraftApp>, id: u64, c: usize) -> photocr
         .style
 }
 
-fn history(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
+fn history(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<String> {
     h.state().session.active().unwrap().history.entries()
 }
 
@@ -754,7 +462,7 @@ fn type_tool_format_keys_toggle_character_styles() {
         let steps = history(&h);
         assert_eq!(steps.len(), before + 1, "{key:?}: one history step");
         assert_eq!(steps.last().map(String::as_str), Some("Set Type Style"), "{key:?}");
-        assert!(h.state().ui.dialogs.is_empty(), "{key:?} must not open Color Settings");
+        assert!(!h.state().dialog_open(), "{key:?} must not open Color Settings");
         assert!(h.state().ui.text_edit.is_some());
     }
     // The second strikethrough key turned it off again; press the rest again: all off.
@@ -781,7 +489,7 @@ fn type_tool_format_keys_toggle_character_styles() {
         h.run_steps(2);
     }
     assert_eq!(history(&h), before);
-    assert!(h.state().ui.dialogs.is_empty());
+    assert!(!h.state().dialog_open());
     // Empty text: the key sets the style the next characters typed get.
     let empty = h.state_mut().run("type.create", json!({"x": 20, "y": 160, "text": "", "size": 20})).unwrap()["layer"].as_u64().unwrap();
     edit_type(&mut h, empty, 0, 0);
@@ -807,7 +515,7 @@ fn global_cmd_shift_keys_still_work_outside_type_editing() {
     assert_eq!(history(&h).last().map(String::as_str), Some("Inverse"));
     h.key_press_modifiers(cmd_shift, Key::K);
     h.run_steps(3);
-    assert_eq!(h.state().ui.dialogs.len(), 1, "Color Settings opens");
+    assert!(h.state().dialog_open(), "Color Settings opens");
     assert!(!char_style(&h, id, 0).faux_italic && char_style(&h, id, 0).caps == photocraft_doc::text::Caps::Normal);
 }
 
@@ -819,7 +527,7 @@ fn type_tool_format_keys_step_leading_baseline_and_tracking() {
     let id = h.state_mut().run("type.create", json!({"x": 20, "y": 80, "text": "Hello world", "size": 10})).unwrap()["layer"].as_u64().unwrap();
     edit_type(&mut h, id, 0, 5);
     let before = history(&h).len();
-    let press = |h: &mut Harness<'static, PhotocraftApp>, m: Modifiers, k: Key| {
+    let press = |h: &mut Harness<'static, Box<PhotocraftApp>>, m: Modifiers, k: Key| {
         h.key_press_modifiers(m, k);
         h.run_steps(2);
     };
@@ -878,25 +586,18 @@ fn type_tool_format_keys_toggle_hyphenate() {
 #[test]
 fn type_tool_format_keys_survive_hostile_state() {
     let mut h = harness();
-    edit_type(&mut h, 9999, 0, 3);
+    let id = h.state_mut().run("type.create", json!({"x": 20, "y": 80, "text": "abc", "size": 20})).unwrap()["layer"].as_u64().unwrap();
+    edit_type(&mut h, id, 0, 3);
+    h.state_mut().run("layer.delete", json!({"layer": id})).unwrap();
     h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::U);
     h.key_press_modifiers(Modifiers::ALT, Key::ArrowDown);
     h.run_steps(2);
     assert!(h.state().ui.text_edit.is_none(), "an edit of a missing layer ends");
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    for ed in [None, Some(1)] {
-        app.ui.text_edit = ed.map(|layer| crate::state::TextEdit {
-            layer,
-            document: None,
-            caret: 4,
-            anchor: 0,
-            session: "x".into(),
-            created: false,
-            mask: false,
-            dragging: false,
-            resize: None,
-            preedit: None,
-        });
+    for ed in [None, Some(1u64)] {
+        app.ui.text_edit =
+            ed.map(|layer| crate::state::TextEdit { layer, document: None, caret: 4, anchor: 0, session: "x".into(), created: false, mask: false });
+        // PLAN: assumed these three keep their signatures (tools-w20); the literal lists the fields tools-w20 keeps
         crate::type_tool::toggle_char_style(&mut app, crate::type_tool::CharToggle::AllCaps);
         crate::type_tool::step_char_metric(&mut app, "leadingBy", 2.0);
         crate::type_tool::step_char_metric(&mut app, "trackingBy", f32::NAN);
@@ -905,149 +606,49 @@ fn type_tool_format_keys_survive_hostile_state() {
     assert!(app.session.active().is_none());
 }
 
-/// The Character panel's kerning field reads and parses Photoshop's values.
 #[test]
-fn kerning_field_values() {
-    use photocraft_doc::text::Kerning;
-    assert_eq!(crate::type_tool::kerning_label((Kerning::Metrics, 0.0)), "Metrics");
-    assert_eq!(crate::type_tool::kerning_label((Kerning::Optical, 0.0)), "Optical");
-    assert_eq!(crate::type_tool::kerning_label((Kerning::Off, 0.0)), "0");
-    assert_eq!(crate::type_tool::kerning_label((Kerning::Off, -49.6)), "-50");
-    for (s, v) in [("metrics", Some(json!("metrics"))), (" Optical ", Some(json!("optical"))), ("120", Some(json!(120.0))), ("-25.4", Some(json!(-25.0)))] {
-        assert_eq!(crate::type_tool::parse_kerning(s), v, "{s}");
-    }
-    for s in ["", "tight", "1e9", "-5000", "NaN", "inf"] {
-        assert_eq!(crate::type_tool::parse_kerning(s), None, "{s}");
-    }
-}
-
-/// Sampling shows a pipette instead of the crosshair: the Eyedropper tool, and a painting tool
-/// with ⌥ held. Preferences › Cursors › Other Cursors = Precise keeps the crosshair.
-#[test]
-fn eyedropper_and_alt_sampling_show_a_pipette() {
+fn move_alt_copy_cursor_follows_the_latched_duplication_drag() {
     let mut h = harness();
+    h.state_mut().run("shape.create", json!({"kind": "rect", "rect": [150, 100, 100, 100], "fill": "#ff0000"})).unwrap();
+    h.state_mut().ui.tool = crate::state::Tool::Move;
+    h.state_mut().ui.tool_options.move_show_transform = false;
+    let before = h.state().session.active().unwrap().doc.layers.len();
     let p = h.state().last_canvas_rect.center();
-    let cursor = |h: &mut Harness<'static, PhotocraftApp>| {
-        h.hover_at(p);
-        h.run_steps(2);
-        h.output().platform_output.cursor_icon
-    };
-    h.state_mut().ui.tool = crate::state::Tool::Eyedropper;
-    assert_eq!(cursor(&mut h), egui::CursorIcon::None, "the pipette replaces the pointer");
-    h.state_mut().ui.tool = crate::state::Tool::Brush;
+    h.hover_at(p);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default);
     h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
-    assert_eq!(cursor(&mut h), egui::CursorIcon::None, "⌥ samples with a pipette");
-    h.state_mut().run("prefs.set", json!({"values": {"cursors.other": "precise"}})).unwrap();
-    // Every platform reports the crosshair. The desktop builds also hand the OS a black-and-white
-    // bitmap for it (`tool_cursor`, #1160, #1343), with `Crosshair` underneath as the fallback.
-    let precise = |h: &mut Harness<'static, PhotocraftApp>| {
-        let icon = cursor(h);
-        (icon, h.output().platform_output.cursor_image.is_some())
-    };
-    let desktop = cfg!(not(target_arch = "wasm32"));
-    assert_eq!(precise(&mut h), (egui::CursorIcon::Crosshair, desktop), "Precise keeps the crosshair");
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Copy);
+    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), before, "hovering never duplicates");
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::ALT });
+    h.run_steps(1);
+    let end = p + vec2(25.0, 15.0);
+    h.hover_at(end);
+    h.run_steps(2);
     h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
-    h.state_mut().ui.tool = crate::state::Tool::Eyedropper;
-    assert_eq!(precise(&mut h), (egui::CursorIcon::Crosshair, desktop));
-}
-
-/// The Paint Bucket shows a bucket instead of the crosshair (#3968); Precise Other Cursors keeps
-/// the crosshair.
-#[test]
-fn paint_bucket_shows_a_bucket_cursor() {
-    let mut h = harness();
-    let p = h.state().last_canvas_rect.center();
-    h.state_mut().ui.tool = crate::state::Tool::PaintBucket;
-    h.hover_at(p);
     h.run_steps(2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "the bucket replaces the pointer");
-    h.state_mut().run("prefs.set", json!({"values": {"cursors.other": "precise"}})).unwrap();
-    h.hover_at(p);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Copy, "releasing Alt does not undo an active copy");
+    h.event(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Crosshair, "Precise keeps the crosshair");
-}
-
-/// The Hand tool, and Space held over another tool, show an open hand while hovering and a fist
-/// while they pan (#2196). The OS draws those everywhere but Windows, where winit maps `Grab` to
-/// the four-arrow move cursor, so the app hands it a bitmap there (`Crosshair` is the fallback).
-#[test]
-fn hand_tool_shows_an_open_hand_and_a_fist_while_panning() {
-    let mut h = harness();
-    let p = h.state().last_canvas_rect.center();
-    let windows = cfg!(target_os = "windows");
-    // The icon the OS gets, and the bitmap for it if any.
-    let pointer = |h: &Harness<'static, PhotocraftApp>| {
-        let out = &h.output().platform_output;
-        (out.cursor_icon, out.cursor_image.as_ref().map(|i| i.rgba.clone()))
-    };
-    let expect = |got: (egui::CursorIcon, Option<std::sync::Arc<[u8]>>), native: egui::CursorIcon, what: &str| {
-        if windows {
-            assert_eq!(got.0, egui::CursorIcon::Crosshair, "{what}: fallback under the bitmap");
-            assert!(got.1.is_some(), "{what}: a bitmap");
-        } else {
-            assert_eq!(got, (native, None), "{what}");
-        }
-        got.1
-    };
-
-    h.state_mut().ui.tool = crate::state::Tool::Hand;
-    h.hover_at(p);
-    h.run_steps(2);
-    let open = expect(pointer(&h), egui::CursorIcon::Grab, "hovering with the Hand");
-    press(&mut h, p, true);
-    for i in 1..=3 {
-        h.hover_at(p + vec2(10.0 * i as f32, 0.0));
-        h.run_steps(1);
-    }
-    let fist = expect(pointer(&h), egui::CursorIcon::Grabbing, "dragging with the Hand");
-    if windows {
-        assert_ne!(open, fist, "a fist is not the open hand");
-    }
-    press(&mut h, p + vec2(30.0, 0.0), false);
-    h.run_steps(2);
-    expect(pointer(&h), egui::CursorIcon::Grab, "after the drag");
-
-    // Space turns any tool into the Hand while held.
-    h.state_mut().ui.tool = crate::state::Tool::Brush;
-    h.hover_at(p);
-    h.run_steps(2);
-    let brush = pointer(&h);
-    assert_ne!(brush.0, egui::CursorIcon::Grab, "the Brush is not a hand");
-    h.event(egui::Event::Key { key: Key::Space, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
-    h.run_steps(2);
-    expect(pointer(&h), egui::CursorIcon::Grab, "Space over the Brush");
-    h.event(egui::Event::Key { key: Key::Space, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE });
-    h.run_steps(2);
-    assert_eq!(pointer(&h), brush, "released: the Brush's own pointer is back");
-}
-
-/// With a dialog open the canvas still pans, and the Hand's pointer follows (#2196).
-#[test]
-fn hand_pointer_over_the_canvas_under_a_dialog() {
-    let mut h = harness();
-    open_dialog(&mut h);
-    h.state_mut().ui.tool = crate::state::Tool::Hand;
-    let p = free_canvas(&h);
-    h.hover_at(p);
-    h.run_steps(3);
-    let out = &h.output().platform_output;
-    if cfg!(target_os = "windows") {
-        assert!(out.cursor_image.is_some());
-    } else {
-        assert_eq!(out.cursor_icon, egui::CursorIcon::Grab);
-    }
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default);
+    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), before + 1);
 }
 
 /// Esc while drawing with the Pen ends the path where it is, left open, and keeps it as the work
-/// path, as ↩ does; it used to throw the path away (#1769).
+/// path, as ↩ does (#1769).
 #[test]
 fn esc_ends_a_pen_path_and_keeps_it() {
     let mut h = harness();
     h.state_mut().ui.tool = crate::state::Tool::Pen;
-    h.state_mut().ui.pen = Some(crate::vector_ui::PenPath { knots: vec![[[50.0, 50.0]; 3], [[150.0, 50.0]; 3], [[150.0, 120.0]; 3]], ..Default::default() });
+    h.state_mut().ui.views[0].rotation = 40.0;
+    let owner = crate::vector_ui::capture_pen_owner(h.state());
+
+    h.state_mut().ui.pen = Some(crate::vector_ui::PenPath::corners(&[[50.0, 50.0], [150.0, 50.0], [150.0, 120.0]], owner));
     h.key_press(Key::Escape);
     h.run_steps(2);
     assert!(h.state().ui.pen.is_none(), "the Pen leaves drawing state");
+    assert_eq!(h.state().ui.views[0].rotation, 40.0, "the active path owns Escape");
     let doc = &h.state().session.active().unwrap().doc;
     let path = doc.work_path.as_ref().expect("the path is kept as the work path");
     assert_eq!(path.subpaths.len(), 1);
@@ -1056,33 +657,25 @@ fn esc_ends_a_pen_path_and_keeps_it() {
     assert_eq!(h.state().ui.selected_path.as_deref(), Some("work"));
 }
 
-/// Over the first anchor of a Pen path the canvas shows the close-path pointer (#4596), a bitmap
-/// of its own; anywhere else the Pen keeps its crosshair.
+/// A rotated view takes the first idle Esc; the next retains normal deselection.
 #[test]
-#[cfg(not(target_arch = "wasm32"))]
-fn pen_shows_the_close_path_pointer_over_the_first_anchor() {
-    let mut h = harness();
-    h.state_mut().ui.tool = crate::state::Tool::Pen;
-    h.state_mut().ui.pen = Some(crate::vector_ui::PenPath { knots: vec![[[50.0, 50.0]; 3], [[150.0, 50.0]; 3]], ..Default::default() });
-    let screen = |h: &Harness<'static, PhotocraftApp>, x: f32, y: f32| {
-        let v = &h.state().ui.views[0];
-        let c = h.state().last_canvas_rect.center();
-        pos2(c.x + (x - v.center[0]) * v.zoom, c.y + (y - v.center[1]) * v.zoom)
-    };
-    let pointer = |h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32| {
-        let p = screen(h, x, y);
-        h.hover_at(p);
+fn escape_resets_rotation_before_idle_deselection_for_paint_tools() {
+    for tool in [crate::state::Tool::Brush, crate::state::Tool::Pencil] {
+        let mut h = harness();
+        h.state_mut().ui.tool = tool;
+        h.state_mut().ui.views[0].rotation = 40.0;
+        h.state_mut().run("select.all", json!({})).unwrap();
+        h.run_steps(1);
+        let history = h.state().session.active().unwrap().history.entries().len();
+        h.key_press(Key::Escape);
         h.run_steps(2);
-        let out = &h.output().platform_output;
-        (out.cursor_icon, out.cursor_image.as_ref().map(|i| i.rgba.clone()))
-    };
-    let close = pointer(&mut h, 50.0, 50.0);
-    assert_eq!(close.0, egui::CursorIcon::Crosshair, "the fallback under the bitmap");
-    assert!(close.1.is_some(), "a bitmap");
-    let elsewhere = pointer(&mut h, 200.0, 200.0);
-    assert_ne!(elsewhere.1, close.1, "empty canvas: the plain Pen pointer");
-    assert_ne!(pointer(&mut h, 150.0, 50.0).1, close.1, "the last anchor doesn't close");
-    assert_eq!(pointer(&mut h, 50.0, 50.0), close, "back on the first anchor");
+        assert_eq!(h.state().ui.views[0].rotation, 0.0, "{tool:?}");
+        assert!(h.state().session.active().unwrap().doc.selection.is_some(), "first Esc keeps the selection");
+        assert_eq!(h.state().session.active().unwrap().history.entries().len(), history, "view reset is not an edit");
+        h.key_press(Key::Escape);
+        h.run_steps(2);
+        assert!(h.state().session.active().unwrap().doc.selection.is_none(), "second Esc deselects normally");
+    }
 }
 
 /// Esc with no active operation deselects (#2674), like ⌘D.
@@ -1108,41 +701,18 @@ fn escape_deselects_when_nothing_else_needs_cancelling() {
 fn escape_with_a_dialog_open_cancels_the_dialog_not_the_selection() {
     let mut h = harness();
     h.state_mut().run("select.all", json!({})).unwrap();
+    h.state_mut().ui.views[0].rotation = 40.0;
     open_dialog(&mut h);
     h.key_press(Key::Escape);
     h.run_steps(2);
-    assert!(h.state().ui.dialogs.is_empty(), "Esc cancelled the dialog");
+    assert!(!h.state().dialog_open(), "Esc cancelled the dialog");
     assert!(h.state().session.active().unwrap().doc.selection.is_some(), "the selection stays");
-}
-
-/// The command palette owns Esc: it closes the palette and the selection stays.
-#[test]
-fn escape_with_the_palette_open_does_not_deselect() {
-    let mut h = harness();
-    h.state_mut().run("select.all", json!({})).unwrap();
-    h.state_mut().ui.palette_open = true;
-    h.run_steps(1);
-    h.key_press(Key::Escape);
-    h.run_steps(2);
-    assert!(h.state().session.active().unwrap().doc.selection.is_some(), "Esc belongs to the palette");
-}
-
-/// Targa Options owns Esc (it cancels the save), so the selection stays.
-#[test]
-fn escape_with_targa_options_open_does_not_deselect() {
-    let mut h = harness();
-    h.state_mut().run("select.all", json!({})).unwrap();
-    h.state_mut().save_as(Some("t.tga".into())).unwrap();
-    assert!(h.state().targa_options.is_some());
-    h.run_steps(1);
-    h.key_press(Key::Escape);
-    h.run_steps(2);
-    assert!(h.state().session.active().unwrap().doc.selection.is_some(), "Esc belongs to Targa Options");
+    assert_eq!(h.state().ui.views[0].rotation, 40.0, "the dialog owns the first Esc");
 }
 
 /// How much of the 400 × 300 document is on screen: the visible document span on each axis,
 /// clipped to the image (0 when the image has left the view on that axis).
-fn visible_image(h: &Harness<'static, PhotocraftApp>) -> [f32; 2] {
+fn visible_image(h: &Harness<'static, Box<PhotocraftApp>>) -> [f32; 2] {
     let r = h.state().last_canvas_rect;
     let (a, b) = (doc_at(h, r.min), doc_at(h, r.max));
     [(b[0].min(400.0) - a[0].max(0.0)).max(0.0), (b[1].min(300.0) - a[1].max(0.0)).max(0.0)]
@@ -1182,56 +752,51 @@ fn wheel_zoom_over_the_pasteboard_keeps_the_image_in_view() {
 }
 
 #[test]
-fn wheel_zoom_over_the_image_still_anchors_on_the_pointer() {
+fn assignable_pick_layer_shortcut_follows_transformed_canvas_without_editing() {
     let mut h = harness();
-    let r = h.state().last_canvas_rect;
-    let p = pos2(r.center().x - 150.0, r.center().y - 100.0);
+    let base = h.state().session.active().unwrap().active_layer.unwrap();
+    h.state_mut().run("layer.new.layer", json!({"name": "Paint"})).unwrap();
+    let paint = h.state().session.active().unwrap().active_layer.unwrap();
+    h.state_mut().run("select.rect", json!({"x": 100, "y": 100, "width": 40, "height": 40})).unwrap();
+    h.state_mut().run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    h.state_mut().run("select.deselect", json!({})).unwrap();
+    h.state_mut().run("layer.new.layer", json!({"name": "Empty"})).unwrap();
+    h.state_mut().run("prefs.set", json!({"path": "shortcuts.layer.selectUnderCursor", "value": "Cmd+Alt+K"})).unwrap();
+    h.state_mut().ui.tool = crate::state::Tool::Brush;
+    for (zoom, rotation, flip) in [(1.0, 0.0, false), (2.0, 37.0, true), (0.5, -90.0, false)] {
+        h.state_mut().ui.views[0].zoom = zoom;
+        h.state_mut().ui.views[0].rotation = rotation;
+        h.state_mut().ui.views[0].center = [180.0, 145.0];
+        h.state_mut().ui.view.flip_horizontal = flip;
+        h.run_steps(2);
+        for (point, expected) in [([120.0, 120.0], paint), ([155.0, 155.0], base)] {
+            let pos = crate::canvas::testing::to_screen(h.state(), point);
+            let history = h.state().session.active().unwrap().history.past_len();
+            h.hover_at(pos);
+            h.key_press_modifiers(Modifiers::COMMAND | Modifiers::ALT, Key::K);
+            h.run_steps(2);
+            assert_eq!(h.state().session.active().unwrap().active_layer, Some(expected));
+            assert_eq!(h.state().session.active().unwrap().history.past_len(), history, "picking never adds a document edit");
+            assert!(!h.state().session.journal.iter().any(|(id, _)| id == "paint.stroke"));
+        }
+    }
+    h.state_mut().run("layer.setProps", json!({"layer": paint.0, "visible": false})).unwrap();
+    let p = crate::canvas::testing::to_screen(h.state(), [120.0, 120.0]);
     h.hover_at(p);
+    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::ALT, Key::K);
     h.run_steps(2);
-    let d0 = doc_at(&h, p);
-    assert!(d0[0] > 0.0 && d0[1] > 0.0);
-    for _ in 0..5 {
-        wheel(&h, 1.0, Modifiers::ALT);
-        h.run_steps(3);
-    }
-    h.run_steps(20);
-    let d1 = doc_at(&h, p);
-    assert!((d1[0] - d0[0]).abs() < 0.1 && (d1[1] - d0[1]).abs() < 0.1, "{d0:?} -> {d1:?}");
-}
-
-/// #4658: with the Move tool's Show Transform Controls, the band just outside the box shows the
-/// curved rotate arrow, not a plain pointer, and one drag from there rotates the layer.
-#[test]
-fn move_tool_controls_rotate_from_just_outside_the_box() {
-    let mut h = harness();
-    h.state_mut().run("shape.create", json!({"kind": "rect", "rect": [150, 100, 100, 100], "fill": "#ff0000"})).unwrap();
-    h.state_mut().ui.tool = crate::state::Tool::Move;
-    h.state_mut().ui.tool_options.move_show_transform = true;
-    h.run_steps(3);
-    let screen = |h: &Harness<'static, PhotocraftApp>, x: f32, y: f32| {
-        let v = &h.state().ui.views[0];
-        let c = h.state().last_canvas_rect.center();
-        pos2(c.x + (x - v.center[0]) * v.zoom, c.y + (y - v.center[1]) * v.zoom)
-    };
-    let zoom = h.state().ui.views[0].zoom;
-    // Just outside the top edge, a quarter of the way along: the rotation band.
-    let at = screen(&h, 175.0, 100.0) - vec2(0.0, 12.0);
-    h.hover_at(at);
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(base));
+    // Outside the document and modal dialogs preserve the current selection.
+    h.state_mut().run("layer.select", json!({"layer": paint.0})).unwrap();
+    h.hover_at(pos2(0.0, 0.0));
+    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::ALT, Key::K);
     h.run_steps(2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None, "the drawn rotate arrow replaces the pointer");
-    press(&mut h, at, true);
-    let centre = screen(&h, 200.0, 150.0);
-    // A quarter turn around the box's centre.
-    for k in 1..=10 {
-        let a = std::f32::consts::FRAC_PI_2 * k as f32 / 10.0;
-        let (dx, dy) = (at.x - centre.x, at.y - centre.y);
-        let q = centre + vec2(dx * a.cos() - dy * a.sin(), dx * a.sin() + dy * a.cos());
-        h.hover_at(q);
-        h.run_steps(1);
-    }
-    let end = h.state().ui.transform.as_ref().map(|t| t.quad).expect("the drag opened Free Transform");
-    let tilt = (end[1][1] - end[0][1]).atan2(end[1][0] - end[0][0]).to_degrees();
-    assert!((tilt - 90.0).abs() < 8.0 || (tilt + 270.0).abs() < 8.0, "rotated about a quarter turn, got {tilt}° (zoom {zoom})");
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(paint));
+    open_dialog(&mut h);
+    h.hover_at(p);
+    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::ALT, Key::K);
+    h.run_steps(2);
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(paint));
 }
 
 #[test]

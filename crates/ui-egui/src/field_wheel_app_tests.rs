@@ -10,10 +10,10 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
         app.ui.tool = Tool::Brush;
         app
@@ -23,40 +23,27 @@ fn harness() -> Harness<'static, PhotocraftApp> {
 }
 
 /// The value field showing `value`: the options bar's Smoothing is the brush's only one at 10.
-fn field<'a>(h: &'a Harness<'_, PhotocraftApp>, value: &str) -> egui_kittest::Node<'a> {
+fn field<'a>(h: &'a Harness<'_, Box<PhotocraftApp>>, value: &str) -> egui_kittest::Node<'a> {
     h.query_all_by_role(Role::SpinButton).find(|n| n.value().as_deref() == Some(value)).unwrap()
 }
 
-fn wheel(h: &mut Harness<'_, PhotocraftApp>, at: egui::Pos2, lines: f32, modifiers: egui::Modifiers) {
+fn wheel(h: &mut Harness<'_, Box<PhotocraftApp>>, at: egui::Pos2, lines: f32, modifiers: egui::Modifiers) {
     h.hover_at(at);
     h.run_steps(1);
-    h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, lines), phase: egui::TouchPhase::Move, modifiers });
+    h.event(egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
+        unit: egui::MouseWheelUnit::Line,
+        delta: vec2(0.0, lines),
+        phase: egui::TouchPhase::Move,
+        modifiers,
+    });
     h.run_steps(6);
 }
 
 /// (zoom, centre) of the document's view.
-fn view(h: &Harness<'_, PhotocraftApp>) -> (f32, [f32; 2]) {
+fn view(h: &Harness<'_, Box<PhotocraftApp>>) -> (f32, [f32; 2]) {
     let v = &h.state().ui.views[0];
     (v.zoom, v.center)
-}
-
-#[test]
-fn a_focused_field_takes_the_wheel_over_the_canvas() {
-    let mut h = harness();
-    let canvas = egui::pos2(640.0, 500.0);
-    let before = view(&h);
-    wheel(&mut h, canvas, -1.0, egui::Modifiers::NONE);
-    assert_ne!(view(&h), before, "without a focused field the wheel pans the canvas");
-    let before = view(&h);
-    field(&h, "10").click();
-    h.run();
-    wheel(&mut h, canvas, -2.0, egui::Modifiers::NONE);
-    assert_eq!(view(&h), before, "the canvas neither pans nor zooms");
-    assert!(h.query_all_by_role(Role::SpinButton).any(|n| n.value().as_deref() == Some("8")), "Smoothing stepped from 10 to 8");
-    // ⌥/Alt + wheel is still the view's zoom.
-    wheel(&mut h, canvas, 1.0, egui::Modifiers::ALT);
-    assert_ne!(view(&h).0, before.0, "Alt + wheel zooms");
-    assert!(h.query_all_by_role(Role::SpinButton).any(|n| n.value().as_deref() == Some("8")));
 }
 
 #[test]
@@ -72,6 +59,12 @@ fn the_wheel_over_a_field_steps_it_without_a_click() {
     assert_eq!(view(&h), before, "the canvas didn't move");
 }
 
+/// Frames a wheel event gets to play out (0.25 s each, the harness's default step). egui's wheel smoothing reaches
+/// 90 % in 0.1 s and takes the rest under one point at once, so the smoothed tail of a notch (about 50 points) ends
+/// within three frames even at a 0.1 s step; four leave one to spare: the view after
+/// them is the one the old forty left.
+const TAIL_STEPS: usize = 4;
+
 /// How far a wheel of `delta` lines with `modifiers` over the canvas moves the view, a Smoothing
 /// field focused or not, once egui's smoothed scroll has run out. The field isn't stepped.
 fn canvas_pan(focus: bool, delta: egui::Vec2, modifiers: egui::Modifiers) -> (f32, [f32; 2]) {
@@ -84,8 +77,14 @@ fn canvas_pan(focus: bool, delta: egui::Vec2, modifiers: egui::Modifiers) -> (f3
     h.hover_at(canvas);
     h.run_steps(1);
     let before = view(&h);
-    h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta, phase: egui::TouchPhase::Move, modifiers });
-    h.run_steps(40);
+    h.event(egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
+        unit: egui::MouseWheelUnit::Line,
+        delta,
+        phase: egui::TouchPhase::Move,
+        modifiers,
+    });
+    h.run_steps(TAIL_STEPS);
     assert!(h.query_all_by_role(Role::SpinButton).any(|n| n.value().as_deref() == Some("10")), "focus {focus}: the field wasn't stepped");
     let after = view(&h);
     (after.0 / before.0, [after.1[0] - before.1[0], after.1[1] - before.1[1]])

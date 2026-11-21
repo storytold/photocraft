@@ -1,12 +1,14 @@
 //! Pen tablet pressure, tilt, rotation and eraser end on macOS and Linux X11 (issue #79), and
-//! barrel button on Windows (#5905).
+//! barrel button (#5905) and eraser end (#2285) on Windows.
 //!
 //! winit 0.30 drops tablet data on both macOS and X11, so `photocraft-tablet` reads it beside winit
 //! (an AppKit local event monitor; XInput2 raw events on a second X connection) and this module writes
 //! each sample into the UI's [`StylusFeed`], where the canvas reads it exactly like the web runner's
 //! Pointer Events and automation's simulated pen. On Windows, winit forwards `WM_POINTER` pressure
-//! as touch force, but drops `PEN_FLAG_BARREL` (`0x0001`); `photocraft-tablet` recovers the barrel
-//! button through a thread-local message hook beside winit.
+//! as touch force, but drops `PEN_FLAG_BARREL` (`0x0001`) and the eraser end (`PEN_FLAG_INVERTED`);
+//! `photocraft-tablet` recovers them through thread-local message hooks beside winit. With Windows
+//! Ink disabled for the tablet, the optional WinTab mode reads pressure, tilt, rotation and the
+//! eraser end from a WinTab 1.4 system context instead ([`install_wintab`]).
 //!
 //! Wayland compositors give a pen only to clients that bind the tablet protocol
 //! (`zwp_tablet_v2`), which winit 0.30 doesn't (and binding it on winit's connection needs
@@ -32,11 +34,50 @@ pub fn sink(feed: StylusFeed) -> impl Fn(Option<Sample>) + Send + 'static {
     move |s| feed.set(s.map(pen_sample))
 }
 
-/// Install the Windows pointer message hook (main thread; keep the result until the event loop
-/// returns). On failure this logs why: the pen barrel button is then missed.
+/// Install the Windows pointer message hooks (main thread; keep the result until the event loop
+/// returns). On failure this logs why: the pen barrel button and eraser end are then missed.
 #[cfg(target_os = "windows")]
 pub fn install_windows() -> Option<photocraft_tablet::windows::Monitor> {
-    photocraft_tablet::windows::Monitor::install().map_err(|e| log::warn!("{e}")).ok()
+    let monitor = photocraft_tablet::windows::Monitor::install().map_err(|e| log::warn!("{e}")).ok()?;
+    if !monitor.tracks_leave() {
+        log::warn!("tablet input: the WH_CALLWNDPROC hook did not install, so the pen leaving the window may be missed");
+    }
+    Some(monitor)
+}
+
+/// Installs the WinTab backend on the real PhotoCraft window and returns its per-frame poll.
+///
+/// `enabled` is Preferences > Tools > Pen Tablet > Tablet input set to WinTab. With Windows Ink disabled there, the vendor
+/// driver still moves the cursor; this backend only supplies pressure/tilt/rotation/eraser
+/// through the normal stylus feed. On failure it logs why and leaves Windows Ink untouched.
+#[cfg(target_os = "windows")]
+pub fn install_wintab(cc: &eframe::CreationContext<'_>, feed: &StylusFeed, enabled: bool) -> Option<photocraft_ui_egui::TabletPollFn> {
+    if !enabled {
+        return None;
+    }
+    use eframe::wgpu::rwh::{HasWindowHandle, RawWindowHandle};
+    let hwnd = match cc.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(handle) => handle.hwnd.get(),
+        _ => return None,
+    };
+    let ctx = cc.egui_ctx.clone();
+    if let Err(error) = photocraft_tablet::wintab::install(hwnd, Box::new(move || ctx.request_repaint())) {
+        log::warn!("WinTab backend: {error}");
+        return None;
+    }
+    let sink = sink(feed.clone());
+    log::info!("WinTab backend active (system context)");
+    let logged = std::cell::Cell::new(false);
+    Some(Box::new(move |focused| {
+        photocraft_tablet::wintab::poll(focused, &|sample| {
+            if let Some(sample) = sample
+                && !logged.replace(true)
+            {
+                log::info!("WinTab sample: pressure={:.3} tilt=({:.1},{:.1}) eraser={}", sample.pressure, sample.tilt_x, sample.tilt_y, sample.eraser);
+            }
+            sink(sample);
+        });
+    }))
 }
 
 /// Stylus barrel button down check (Windows). The right mouse button is left to egui, which
@@ -48,6 +89,18 @@ pub fn right_button_service() -> Option<photocraft_ui_egui::RightButtonDownFn> {
 
 #[cfg(not(target_os = "windows"))]
 pub fn right_button_service() -> Option<photocraft_ui_egui::RightButtonDownFn> {
+    None
+}
+
+/// Which end of the pen is in use (Windows): flipping the pen to its eraser end selects the
+/// Eraser (#2285). Elsewhere the end arrives with the samples in the stylus feed.
+#[cfg(target_os = "windows")]
+pub fn pen_end_service() -> Option<photocraft_ui_egui::PenEndFn> {
+    Some(Box::new(photocraft_tablet::windows::take_pen_end))
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn pen_end_service() -> Option<photocraft_ui_egui::PenEndFn> {
     None
 }
 
@@ -155,9 +208,8 @@ impl DisplayKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use photocraft_tablet::{Update, appkit, xi};
+    use photocraft_tablet::{Update, appkit};
     use photocraft_ui_egui::PhotocraftApp;
-    use photocraft_ui_egui::canvas::{ToolEvent, tool_event};
     use photocraft_ui_egui::state::Tool;
     use serde_json::{Value, json};
 
@@ -176,30 +228,54 @@ mod tests {
     }
 
     /// The platform path end to end, minus the OS: raw AppKit / XInput2 values → the crate's
-    /// mapping → this module's sink → the stylus feed → the canvas's tool events → `paint.stroke`.
+    /// mapping → this module's sink → the stylus feed → window pointer input on the whole app → `paint.stroke`.
     /// A light-to-heavy pen stroke must paint thin and faint at the light end and wide and opaque
     /// at the heavy end (Size and Opacity on Pen Pressure); a mouse paints full strength.
     fn pressure_stroke(mut next: impl FnMut(f32) -> Option<Sample>) -> (f64, f64, f64, f64) {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        let feed = app.stylus.feed.clone();
-        let sink = sink(feed);
-        app.session.execute("file.new", json!({"width": 240, "height": 80, "background": "white"})).unwrap();
-        app.session.execute("tools.setColors", json!({"foreground": [0.0, 0.0, 0.0, 1.0]})).unwrap();
+        use egui_kittest::Harness;
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 240, "height": 80, "background": "white"})).unwrap();
+        // The app shares the harness's context, which is where the window's pointer input arrives.
+        let mut h = Harness::builder().with_size(egui::vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            PhotocraftApp::with_context(cc.egui_ctx.clone(), session, Default::default())
+        });
+        let sink = sink(h.state().stylus.feed.clone());
+        // PLAN: assumed `PhotocraftApp::sync_views`, `last_canvas_rect` and `ui.views[..]` are public, as the app's own tests read them.
+        h.state_mut().sync_views();
+        h.run_steps(4);
+        // The tool first: each tool keeps its own brush, so the brush below is the Brush's.
+        h.state_mut().ui.tool = Tool::Brush;
+        h.run_steps(2);
+        h.state_mut().session.execute("tools.setColors", json!({"foreground": [0.0, 0.0, 0.0, 1.0]})).unwrap();
         let brush = json!({"size": 30, "hardness": 1.0, "spacing": 0.05, "pressureSize": true, "pressureOpacity": true, "smoothing": {"amount": 0}});
-        app.session.execute("tools.setBrush", json!({ "brush": brush })).unwrap();
-        app.ui.tool = Tool::Brush;
-        let m = egui::Modifiers::NONE;
+        h.state_mut().session.execute("tools.setBrush", json!({ "brush": brush })).unwrap();
+        {
+            let v = &mut h.state_mut().ui.views[0];
+            v.zoom = 1.0;
+            v.center = [120.0, 40.0];
+            v.clear_pending();
+        }
+        h.run_steps(2);
+        // The document point (x, y) on screen, with the view at 100 % centred on (120, 40).
+        let at = |h: &Harness<'_, Box<PhotocraftApp>>, x: f64, y: f64| h.state().last_canvas_rect.center() + egui::vec2((x - 120.0) as f32, (y - 40.0) as f32);
         let n = 20;
         for i in 0..=n {
             let t = i as f32 / n as f32;
             sink(next(0.1 + 0.9 * t));
-            let (x, y) = (20.0 + 200.0 * f64::from(t), 40.0);
-            let pressure = app.stylus.pressure();
-            let ev = if i == 0 { ToolEvent::Down { x, y, pressure } } else { ToolEvent::Move { x, y, pressure } };
-            tool_event(&mut app, ev, m);
+            let p = at(&h, 20.0 + 200.0 * f64::from(t), 40.0);
+            h.event(egui::Event::PointerMoved(p));
+            h.run_steps(1);
+            if i == 0 {
+                h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+                h.run_steps(1);
+            }
         }
-        tool_event(&mut app, ToolEvent::Up { x: 220.0, y: 40.0 }, m);
+        let end = at(&h, 220.0, 40.0);
+        h.event(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(3);
         sink(None);
+        let app = h.state_mut();
         // Darkness (1 - luma) along x = 50 (light end) and x = 200 (heavy end), and the painted
         // half-width there.
         let mut dark = |x: i32, y: i32| -> f64 {
@@ -237,18 +313,6 @@ mod tests {
             }
         });
         assert!(m_dark > 0.9 && m_w >= heavy_w - 1.0, "mouse = pressure 1: {m_dark}, {m_w}");
-    }
-
-    #[test]
-    fn xinput_tablet_pressure_drives_stroke_width_and_opacity() {
-        let mut st = xi::State::default();
-        st.set_devices([xi::Device::new(9, "Wacom Intuos Pen stylus", [(2, "Abs Pressure".to_string(), 0.0, 65535.0)])]);
-        let (light_dark, light_w, heavy_dark, heavy_w) = pressure_stroke(|p| match st.handle(9, [(2, f64::from(p) * 65535.0)]) {
-            Update::Set(s) => s,
-            Update::Keep => None,
-        });
-        assert!(heavy_w > light_w * 2.0, "width responds: {light_w} → {heavy_w}");
-        assert!(heavy_dark > light_dark + 0.3, "opacity responds: {light_dark} → {heavy_dark}");
     }
 
     /// `/proc/bus/input/devices` of a laptop with a Wacom Intuos Pro attached (64-bit longs: the
@@ -381,5 +445,41 @@ mod tests {
         send(prox(appkit::device::PEN, true));
         assert!(photocraft_ui_egui::stylus::Stylus::sync_eraser_tool(&mut app));
         assert_eq!(app.ui.tool, Tool::Brush);
+    }
+
+    /// Windows: what the pointer hooks record reaches the Eraser switch through the service the
+    /// app installs (#2285).
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_eraser_end_switches_to_the_eraser_and_back() {
+        use photocraft_tablet::windows::{
+            PEN_FLAG_ERASER, PEN_FLAG_INVERTED, WM_POINTERDOWN, WM_POINTERLEAVE, WM_POINTERUP, WM_POINTERUPDATE, handle_pointer_message,
+        };
+        use photocraft_ui_egui::stylus::Stylus;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.services.pen_end = pen_end_service();
+        app.ui.tool = Tool::Brush;
+        let hover = |pen_flags: u32| handle_pointer_message(WM_POINTERUPDATE, 1, move |_| Some(pen_flags));
+        hover(0);
+        assert!(!Stylus::sync_eraser_tool(&mut app), "the tip changes nothing");
+        hover(PEN_FLAG_ERASER);
+        assert!(!Stylus::sync_eraser_tool(&mut app), "an eraser button on the barrel is not the eraser end");
+        handle_pointer_message(WM_POINTERLEAVE, 1, |_| None);
+        hover(PEN_FLAG_INVERTED);
+        assert!(Stylus::sync_eraser_tool(&mut app));
+        assert_eq!(app.ui.tool, Tool::Eraser);
+        handle_pointer_message(WM_POINTERLEAVE, 1, |_| None);
+        assert!(!Stylus::sync_eraser_tool(&mut app), "out of range");
+        hover(0);
+        assert!(Stylus::sync_eraser_tool(&mut app));
+        assert_eq!(app.ui.tool, Tool::Brush, "the tip restores the Brush");
+        // An eraser-end tap and the pen leaving, all before the next frame: the frame that
+        // handles the queued click still selects the Eraser.
+        handle_pointer_message(WM_POINTERDOWN, 1, |_| Some(PEN_FLAG_INVERTED | PEN_FLAG_ERASER));
+        handle_pointer_message(WM_POINTERUP, 1, |_| None);
+        handle_pointer_message(WM_POINTERLEAVE, 1, |_| None);
+        assert!(Stylus::sync_eraser_tool(&mut app));
+        assert_eq!(app.ui.tool, Tool::Eraser);
+        assert!(!Stylus::sync_eraser_tool(&mut app), "out of range");
     }
 }

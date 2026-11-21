@@ -1,221 +1,170 @@
 # Dialogs
 
-Modal and modeless parameter windows in the egui shell. They mirror Photoshop: no dimmed backdrop,
-canvas pan/zoom under an open dialog, Tab cycles text and number fields only, Esc cancels, Enter
-confirms when OK is enabled. Automation drives the same `fields` map as the UI (`ui.dialog.*` in
-[`control-protocol.md`](control-protocol.md)).
+Modal parameter windows hosted by the craft framework's `DialogHost`. They mirror Photoshop: no
+dimmed backdrop, canvas pan/zoom under an open dialog, Tab cycles text and number fields only, Esc
+cancels, Enter confirms when OK is enabled. Automation drives the same field map as the UI
+(`ui.dialog.*` in [`control-protocol.md`](control-protocol.md)).
 
 ## Architecture
 
 | Piece | Location | Role |
 |---|---|---|
-| Frame, routing, OK/Cancel/Esc, stacking | `crates/ui-egui/src/dialogs.rs` | Single hub for every `UiState::dialogs` entry |
-| Alt+Cancel → Reset (opt-in) | `crates/ui-egui/src/dialog_alt_reset.rs` | Relabels Cancel while Alt is held; dispatches per-marker `reset` |
-| Tab-through-fields | `crates/ui-egui/src/field_tab.rs` | Photoshop-style Tab / ⇧Tab (tests in same file) |
-| State | `crates/ui-egui/src/state.rs` | `Dialog`, `DialogKind`, `open_dialog` |
-| Button row | `crates/ui-egui/src/widgets.rs` | `dialog_buttons`, `focus_first_field`; `number_edit` registers for Tab |
-| Menu / command entry | `dialogs::open_command_dialog`, `menus.rs` | Picks a dedicated module, schema dialog, or bare confirm |
-| Filters | `filter_dialog.rs` | Schema from engine params, live preview |
+| Hosted-dialog glue | `crates/ui-egui/src/dialogs.rs` | `run`, `take_results`, `TAKERS`, `PROMPTS`, `PARAM_FAMILIES`, `confirm`, `cancel`, `open_command_dialog`, `move_memories` |
+| Dialog host | `app.framework.dialogs` (`DialogHost`) | Draws every open dialog, stacks them, routes OK, Cancel and Esc, keeps the results until taken |
+| Chrome | framework `DialogFrame` | Title, close box, footer buttons in platform order, `FocusPolicy::DIALOG` with `initial: FirstField` |
+| Parameter dialogs | framework `HostedParamDialog` over `ParamDialog` | Rows from a `Param` list, remembered values, Alt+Cancel → Reset (`alt_resets`, `reset_to`), own undo history |
+| Prompts | framework `StandardPrompt` | Question with Proceed / Alternate / Cancel and "Don't show again" |
+| Menu / command entry | `dialogs::open_command_dialog` | Picks a dedicated opener, the adjustment editor, the schema dialog, or a bare command form |
+| Filters | `filter_dialog.rs` | Schema from engine params, live preview, the generic family |
 | Adjustments | `adjust_dialog.rs` | Shared editors with Properties; preview via `adjust_preview` |
-| Generic forms | `view_cmds.rs` | `__form` grids for simple command params |
-| Dedicated bodies | See **Command routing** below | `body` + usually `open` / `confirm` |
+| Family modules | one module per dialog family | `open`, and either `owns` + `run` (a parameter family), `answer` (a prompt) or `take` (its own results) |
 
-**Routing.** Non-command kinds use `DialogKind` alone. `DialogKind::Command` bodies are chosen by
-marker keys on `fields` (`owns()` or `contains_key("__export")`, etc.); **first match in
-`dialogs::show` wins**, so new markers must not collide with an earlier arm. `show`, `confirm`, and
-`cancel` share the same dispatch table—wire all three when adding a dialog.
+**Frame.** `dialogs::run(app, ui)` runs once per pass. It syncs the guide edit, shows the command
+palette, feeds the filter preview, runs the host, then calls `take_results`. The host applies only a
+pass's own input and every result is taken once, so a second pass in one frame acts on nothing twice.
 
-**Field contract.** `Dialog.fields` is a JSON map: command parameters agents read and write, plus
-private keys prefixed with `__`. Never use `__` for user-facing or engine params.
+**Results.** `take_results(app, ctx)` runs after every host pass and at once after `confirm`,
+`cancel` and an automation `ui.dialog.set`, so an answer acts inside the request that caused it.
+In order it runs:
 
-### `DialogKind` (top-level stack)
+1. `params::take`: each finished `HostedParamDialog` goes to the first `PARAM_FAMILIES` row whose
+   `owns(key)` is true. OK calls the row's `run`; Cancel calls its `cancel` hook. Then held OKs and
+   the dialogs' requests are answered (see below).
+2. `prompts_take`: each finished `StandardPrompt` answer goes to the `PROMPTS` rows in order until one
+   returns true. Only an `Ok` carries an answer; a prompt's own Cancel button answers `Ok` with
+   `PromptChoice::Cancel`. The host keeps one plain result per dialog type, so only `prompts_take`
+   takes `StandardPrompt` results.
+3. Each `TAKERS` entry: the family modules that take their own dialog types.
 
-| Kind | Body module | Typical entry |
-|---|---|---|
-| `NewDocument` | `new_doc_ui.rs` | File › New, `file.new` with no size params |
-| `About` | `dialogs.rs` (About / Contributors / Models tabs) | Help › About PhotoCraft; `systemInfo: true` → System Info variant |
-| `Command` | Routed—see below | Most menu commands with parameters |
-| `LayerStyle` | `layer_style.rs` | Layer › Layer Style… |
-| `Error` | inline in `dialogs.rs` | `message` field only (e.g. move lock, locked transform) |
+**Field contract.** A dialog's values are its `DialogFields`, keyed by parameter. Keys never start
+with `__`. Automation sets them through `DialogHost::set_json_field`.
 
-### Command routing (`DialogKind::Command`)
+### Parameter families (`dialogs::params`)
 
-Dispatch order matches `dialogs::show` in `dialogs.rs` (check earlier rows before adding a marker).
-
-| Match | Module | Role |
-|---|---|---|
-| `__guideLayout` | `guide_layout_ui.rs` | View › New Guide Layout… |
-| `__fill` | `fill_ui.rs` | Edit › Fill… |
-| `__patternFill` | `pattern_fill_ui.rs` | Pattern Fill layer / New Fill Layer › Pattern… |
-| `__stroke` | `stroke_ui.rs` | Edit › Stroke… |
-| `__createShape` | `shape_dialog.rs` | Click-with-shape-tool creation (rectangle, ellipse, …) |
-| `__deleteLayer` | `delete_layer_prompt.rs` | Layers panel trash confirmation |
-| `__replaceSaved` | `replace_prompt.rs` | Replace prompt when a save's added or lowercased extension names an existing file |
-| `__newLayer` | `new_layer_ui.rs` | Layer › New › Layer… (⇧⌘N; ⌥⇧⌘N makes the layer without it) |
-| `__rasterize` | `rasterize_prompt.rs` | Rasterize-before-paint prompt |
-| `__resetAllTools` | `tool_reset.rs` | Reset All Tools confirmation |
-| `__cropPresetNew` / `__cropPresetDelete` | `crop_presets.rs` | New / delete crop preset |
-| `__variables` | `variables_ui.rs` | Image › Variables (Define, Data Sets, Apply) |
-| `__web` / `__print` | `file_ui.rs` | Save for Web, Print |
-| `__colorPicker` | `color_picker_ui.rs` | Foreground/background, nested field/command pickers (see nested keys below) |
-| `__colorRange` | `color_range_ui.rs` | Select › Color Range… |
-| `__prefsui` | `prefs_ui.rs` | Edit › Preferences… and related preset/import subdialogs |
-| `__export` | `export_dialog.rs` | Export As (document or layer) |
-| `__sizing` | `sizing.rs` | Image › Image Size… / Canvas Size… |
-| `__adjust` | `adjust_dialog.rs` | Image › Adjustments… (also sets `__filter` + `__preview` for live preview) |
-| `__filter` | `filter_dialog.rs` (+ `select_mask_view.rs` when `__command` is `select.refineEdge`) | Filter Gallery commands, Edit › Color Settings…, Select and Mask, and other schema dialogs |
-| `__form` | `view_cmds.rs` | Simple param grids (e.g. slice options, many Image › Apply Image-style commands) |
-| (none of the above) | — | **Bare confirm**: title + OK/Cancel only; OK runs `__command` with fields via generic `confirm` |
-
-**Menu shortcut.** `dialogs::open_command_dialog` opens guide layout, stroke, and color range
-directly; then tries `adjust_dialog::open`, then `filter_dialog::open`; otherwise a bare confirm
-with `__command` + `__label`. Other dedicated modules are opened from `menus.rs`, tools, or panel
-actions with their marker already set.
-
-### Shared private keys
-
-| Key | Meaning |
+| Item | Role |
 |---|---|
-| `__command` | Engine command id run on OK (bare confirm, filters, sizing, …) |
-| `__label` | Menu/catalog label for the title |
-| `__document` | Target document id (validate staleness) |
-| `__dialog` / `__field` | Nested color picker: parent dialog id and field name to write on OK |
-| `__params` | Extra command params for command-targeted color pickers |
-| `__preview` | Live canvas preview enabled (filters and adjustments) |
-| `__choices` | Dropdown options for `__form` dialogs |
-| `__filter` | Filter-schema body (`filter_dialog`); also set on adjustments for preview plumbing |
-| `__adjust` | Image › Adjustments editor kind (`adjust_dialog`) |
-| `__form` | Generic `view_cmds::form_body` |
-| `__formOrig` | Snapshot of non-`__` params at open; Alt+Reset restores it for `__form` dialogs |
-| `__variablesOrig` | Snapshot of `__variables` at open; Alt+Reset restores it |
-| `__altReset` | Set to `false` to opt a dialog out of Alt+Cancel → Reset |
-| `__export` | Export As |
-| `__sizing` | Image Size / Canvas Size |
+| `ParamFamily` | `owns`, `run`, and optional `check`, `listing`, `footer`, `cancel`, `document` |
+| `PARAM_FAMILIES` | Every family in match order; the generic filter family is last and owns every engine command |
+| `open_param(app, key, fields, captured, build)` | Opens the dialog with history, remembered values under `photocraft.<key>` and the active document's canvas for droppers; `captured` is the per-open state the family reads with `params::captured` and `take` drops |
+| `answer_held` | Runs a family's `check` on a held OK and answers the dialog; a refusal shows under the rows |
+| `answer_requests` | Colour rows open the Color Picker as a child (`color_picker_ui::open_for_request`) and its OK comes back through `answer_for`; Browse rows pick through `host.files()`; droppers arm through `canvas_input`; files rows ask the family's `listing`; footer buttons go to `footer` |
 
-### Routing markers (dedicated `Command` bodies)
+`confirm(app, ctx, id)` answers a dialog with OK and takes the results; a refused held OK comes back
+as the error text. `cancel(app, ctx, id)` cancels and takes the results. `cancel_for_closed` cancels
+the dialogs whose family reports a closed document from the captured value.
 
-| Key | Module |
+### Remembered values
+
+A parameter dialog remembers its values in the `remembered` settings section under
+`photocraft.<key>` (`Remembered`). `move_memories(prefs, host)` runs once before the first frame and
+moves the old `Preferences.dialogs` entries there. It applies three parts in order:
+
+1. **Keep**: the keys the engine reads (`ui.layersPanelOptions`, `file.print`, the Save for Web
+   memory) and every don't-show-again key.
+2. **Route**: a key a library crate names (`filter.cameraRaw.scope`, `image.adjustments.<kind>`,
+   `shape.create.<kind>`).
+3. **Generic**: every other entry moves to `photocraft.<key>`, nulls dropped.
+
+### Command routing
+
+`open_command_dialog(app, command, label)` returns the new dialog's id or the opener's refusal text.
+First match wins:
+
+| Command | Opener |
 |---|---|
-| `__guideLayout` | `guide_layout_ui` |
-| `__fill` | `fill_ui` |
-| `__patternFill` | `pattern_fill_ui` |
-| `__stroke` | `stroke_ui` |
-| `__createShape` | `shape_dialog` |
-| `__deleteLayer` | `delete_layer_prompt` |
-| `__replaceSaved` | `replace_prompt` |
-| `__newLayer` | `new_layer_ui` |
-| `__rasterize` | `rasterize_prompt` |
-| `__resetAllTools` | `tool_reset` |
-| `__cropPresetNew`, `__cropPresetDelete` | `crop_presets` |
-| `__variables` | `variables_ui` |
-| `__web`, `__print` | `file_ui` |
-| `__colorPicker` | `color_picker_ui` |
-| `__colorRange` | `color_range_ui` |
-| `__prefsui` | `prefs_ui` (string sub-kind: `prefs`, `presetsIO`, …) |
+| `view.newGuideLayout` | `guide_layout_ui::open` |
+| `edit.stroke` | `stroke_ui::open` |
+| Equalize, when it asks | `equalize_ui::open` |
+| New Group fronts | `new_group_ui::open` |
+| `select.colorRange` | `color_range_ui::open` |
+| `slice.set`, `slice.divide` | `slice_ui::open_options`, `slice_ui::open_divide` |
+| `image.adjustments.*` | `adjust_dialog::open` |
+| commands with a parameter schema | `filter_dialog::open` |
+| anything else | a bare command form that the generic filter family runs |
 
-### Nested color pickers (`__colorPicker` on the stack)
+Other dedicated families open from their menu, tool or panel code with their own `open`.
 
-Same hub entry as standalone pickers; `color_picker_ui::confirm` branches on extra keys:
-
-| Extra key | Behaviour |
-|---|---|
-| `__layerStyleColor` | Layer Style child; OK writes effect colour on parent `LayerStyle` dialog |
-| `__textStyleColor` | Character/paragraph style colour (type panels) |
-| `__shapeFill` | Shape layer solid fill via `shape.edit` |
-| `__command` = `layer.fill.solidColor.set` | Solid Color fill layer (no `__shapeFill`) |
-| `__dialog` + `__field` | OK updates one field on a parent command dialog (e.g. Fill › Color…) |
-
-## Parallel modal systems (not the main stack)
+## Parallel modal systems
 
 | System | Location | When |
 |---|---|---|
-| Unsaved changes | `discard_ui.rs` | Close, Revert, Close Others/All, Exit—Save / Don't Save / Cancel |
+| Unsaved changes | `discard_ui.rs` | Close, Close Others/All, Exit—Save / Don't Save / Cancel, where on macOS ⌘D is Don't Save too (#11282); Revert—Revert / Cancel, with no Don't Save for ⌘D to press |
 | Shell dialog | `control.rs`, `ui.inspect` id `"shell"` | Workspace, custom pixel aspect, show-extras options |
 | Camera Raw | `camera_raw_ui.rs` | Separate OS window on desktop; see control-protocol § Camera Raw |
-| Error message | `DialogKind::Error` | e.g. `move_lock`—message + OK |
-| Nested pickers | `color_picker_ui` (+ markers in **Nested color pickers**) | Stack on parent; parent confirm refused while child open |
+| Nested pickers | `color_picker_ui` | Open as a child of the dialog that asked; the parent closes them |
 
 ## Rules
 
 ### Architecture and commands
 
-1. **Thin UI, engine command on OK.** Run `app.run` or a dedicated `*_ui::confirm`; one history step unless the command itself batches.
-2. **Register in the hub.** Add `owns()` (or a stable marker), `body()`, `open()` if needed, and matching arms in `dialogs::show`, `confirm`, and `cancel` (and `open_command_dialog` when menu-driven).
-3. **Extend existing paths first.** Filters → `filter_dialog`; adjustments → `adjust_dialog`; simple param grids → `__form`; avoid a second modal stack unless product needs Camera Raw–level UX.
-4. **`fields` is the automation contract.** Anything agents must drive lives in named fields, not only in local egui state.
-5. **Remember last-used values** after successful OK where Photoshop does (`filter_dialog::remember`, prefs `dialogs["…"]`, module-specific helpers).
+1. **Thin UI, engine command on OK.** A family's `run` calls the engine command; one history step unless the command itself batches.
+2. **Register in the glue.** A parameter family adds a `PARAM_FAMILIES` row; a prompt adds a `PROMPTS` row; a module with its own dialog type adds a `TAKERS` row. Add the opener to `open_command_dialog` when it is menu-driven.
+3. **Extend existing paths first.** Filters → `filter_dialog`; adjustments → `adjust_dialog`; a command form with rows → `ParamDialog::command`.
+4. **The field map is the automation contract.** Anything agents must drive lives in named fields, not in local egui state.
+5. **Remember last-used values** through `ParamResult::remember` after the command succeeds.
 
 ### Chrome and layout
 
-6. **Use `dialog_buttons`** for OK / Cancel / Apply—platform order via `ButtonRole` (macOS default action in the corner).
-7. **Respect width rules** in `dialogs::show` unless `file_ui::dialog_width`, color picker, or kind-specific mins apply (typical 380–440; Layer Style / export / picker up to 600; New Document 800).
-8. **Scroll long bodies** inside the content (`DIALOG_CHROME` for filters); title and button row stay visible.
-9. **Transparent backdrop**—no dimming; previews are judged at true contrast.
-10. **Position:** first open centered; then persist offset (`place_id` per command or kind); title bar drag; clamp on screen.
-11. **Stacking:** only the **top** dialog is interactive; non-top instances render disabled; raise the live dialog if an older modal steals focus.
+6. **Footer buttons** come from the framework `DialogFrame`: platform order, the default action in the corner.
+7. **Dialogs are sized from their content** by the framework.
+8. **Transparent backdrop**: no dimming; previews are judged at true contrast.
+9. **Placement** is remembered by the framework; the first open is centred.
+10. **Stacking:** only the top dialog is interactive; a child opens over its parent and closes with it.
 
 ### Keyboard and focus
 
-12. **Tab / ⇧Tab:** text and number fields only. Frame calls `field_tab::begin` / `end`; each field calls `field_tab::register` (`number_edit` does this; custom `TextEdit` must register manually).
-13. **Do not rely on egui default Tab** through sliders, dropdowns, checkboxes, or preset cards.
-14. **Open on first value:** `first_field_focused` + `widgets::focus_first_field` for value-first dialogs (most filters; Image/Canvas Size; not Select and Mask view keys).
-15. **Select-all on focus** when reached via Tab or field arrows (`field_tab::select_all`; see `value_field`, `new_doc_ui`).
-16. **Enter** confirms when OK is enabled (`can_ok`); exceptions must be explicit (`guide_layout_ui`, color picker).
-17. **Esc** on topmost dialog with no popup open → Cancel. **Click outside does not dismiss** (canvas may still pan/zoom via `free_pointer_over`, `pan_delta`, `free_press`). Esc ignores Alt (it does not become Reset).
-18. **Alt** turns Cancel into **Reset** when the dialog opts in via `dialog_alt_reset::supported` (dialog stays open). Opt-in markers: `__guideLayout`, `__fill`, `__variables`, `__colorPicker`, `__sizing`, `__adjust` (all kinds), `__filter`, `__form`. Each module implements its own `reset`; set `"__altReset": false` to disable.
+11. **Tab / ⇧Tab** move between text and number fields (`FocusPolicy::DIALOG` with `initial: FirstField`), with select-all on keyboard arrival.
+12. **Open on first value:** value-first dialogs focus their first field.
+13. **Enter** confirms when OK is enabled.
+14. **Esc** on the top dialog with no popup open cancels. **Click outside does not dismiss.** Esc ignores Alt.
+15. **Alt** turns Cancel into **Reset** when the dialog has `alt_resets`; Reset restores `reset_to` or the opening values.
 
 ### Canvas and preview
 
-19. **Live preview** for filters/adjustments uses `filter_preview` / `adjust_preview`; `cancel()` clears preview and related shell state.
-20. **Under-dialog canvas** respects dialog rects and open popups; Hand / Space / middle-button pan on free canvas only.
+16. **Live preview** for filters and adjustments uses `filter_preview` / `adjust_preview`; a family's Cancel handling clears it.
+17. **Under-dialog canvas:** a dialog with `ParamDialog::canvas` keeps the canvas view usable under the modal layer; droppers sample it through `canvas_input`.
 
 ### Labels and i18n
 
-21. **Titles:** command dialogs use `__label` (catalogued; trailing `…` stripped in chrome); fixed kinds use `dialogs::title` + `tl!`.
-22. **User-visible strings:** `tl!("…")`; command labels from the menu catalog where possible.
+18. **Titles:** command forms use the command's catalogued label; fixed dialogs use `tl!`.
+19. **User-visible strings:** `tl!("…")`.
 
 ### Confirm / cancel safety
 
-23. **Child dialogs first**—refuse parent confirm if a nested color picker is open; cancel parent closes children where implemented.
-24. **Validate before close** when params can be inconsistent (`guide_layout_ui::validate` in `confirm`).
-25. **Disable OK** when required input is missing (`crop_presets::can_confirm`, Preferences Apply when unchanged).
-26. **Preferences over control:** whole-dialog OK/Apply may be refused; safe single prefs via `prefs.set` (see control-protocol).
+20. **Child dialogs first:** a parent's OK is refused while a child picker is open; cancelling a parent closes its children.
+21. **Validate before close** through the family's `check`.
+22. **Disable OK** when required input is missing.
+23. **Cancel side effects** (guide edit, live preview, Actions record) run from the family's `take` or `cancel` hook on a Cancel result.
 
 ### Testing
 
-27. **egui_kittest:** open dialog, `run_steps`, key presses, assert `fields` or accessibility roles (`field_tab` tests are the reference harness).
-28. **Tab-order regressions:** add tests when a dialog gains multiple text/number fields.
-29. **Filter preview:** `dialogs.rs` tests for preview persistence across background jobs.
+24. **egui_kittest:** open the dialog, `run_steps`, press keys, assert the dialog's fields. `dialogs::testing::{confirm, cancel}` answer a dialog from a test.
+25. **Filter preview:** `dialogs/tests.rs` covers preview persistence across background jobs.
 
 ### Anti-patterns
 
-30. No panics in `body` / `confirm` on bad input—errors to status or validation.
-31. No hard-coded colours or radii—`theme::Tokens` and `widgets.rs`.
-32. Do not skip `confirm` dispatch—Enter and `ui.dialog.confirm` use it.
-33. Do not expect click-outside-to-close on `egui::Modal`.
-34. Do not register sliders or dropdowns for `field_tab` unless product explicitly changes Photoshop parity.
+26. No panics in `run` or `check` on bad input; return the refusal.
+27. No hard-coded colours or radii; use the framework theme tokens and components.
+28. Do not skip `take_results` after a programmatic confirm or cancel.
+29. Do not expect click-outside-to-close.
 
 ## Adding a command dialog (checklist)
 
-1. Choose path: see **Command routing** (`adjust_dialog`, `filter_dialog`, `__form`, `__sizing`, …, or new `*_ui` with a unique marker).
-2. `open`: build `fields` (`__command`, `__label`, params, marker); `app.ui.open_dialog(DialogKind::Command, f)`.
-3. `body(app, ui, &mut fields)`—mutate `fields` only; use shared widgets.
-4. `confirm` / `cancel` arms in `dialogs.rs` (or delegate to module `confirm`).
-5. Tab: register every text/number field; use `value_field` / `number_edit` where possible.
-6. **Alt+Reset (optional):** implement `reset` on the module and add an arm in `dialog_alt_reset` (same dispatch order as `dialogs::show`). Snapshot open values under a `__*Orig` key when Reset should restore “as opened” rather than factory defaults.
-7. Tests: at least open + confirm or Tab sequence if non-trivial; if Alt+Reset is supported, assert Reset restores fields and leaves the dialog open.
-8. If menu-visible: command already in engine; menu id opens dialog via existing menu wiring.
+1. Choose the path: `adjust_dialog`, `filter_dialog`, a bare command form, or a new family module.
+2. `open`: build the `DialogFields` and call `params::open_param(app, key, fields, captured, build)`.
+3. `run(app, ctx, result)`: call the engine command, then `result.remember(ctx)`.
+4. Add the `PARAM_FAMILIES` row (before the generic filter family) and, when menu-driven, the `open_command_dialog` arm.
+5. Cancel work (preview, record): set the row's `cancel` hook.
+6. Tests: open, set fields through `set_json_field`, `dialogs::testing::confirm`, assert the engine or family state.
 
 ## Known gaps
 
-- **Tab registration** for plain `TextEdit` is manual; generic `__form` string fields may not join `field_tab` unless wired.
-- **“Dialog module”** is any UI routed from `dialogs::show`, not only files named `*dialog*`.
+- **“Dialog module”** is any UI whose family is routed from `dialogs.rs`, not only files named `*dialog*`.
 - **Numeric field parity** (units in expressions, scrubby labels) is tracked in [`ui-parity.md`](ui-parity.md) (Navigation / numeric fields), not duplicated here.
 
 ## Revision history
 
 | Date | Change |
 |---|---|
+| 2026-11-06 | New Guide / Edit Selected Guides: Position Tab focus and exact edit-position handling |
 | 2026-10-11 | Initial doc from dialog codebase audit |
-| 2026-10-11 | Document all `DialogKind` values and `Command` routing markers |
-| 2026-10-11 | Alt+Cancel → Reset hub (`dialog_alt_reset`); opt-in markers |
