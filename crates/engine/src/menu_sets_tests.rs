@@ -60,8 +60,10 @@ fn the_first_edit_marks_the_set_modified_and_save_clears_it() {
     // Save is only enabled while modified; at the command level saving an unchanged set is fine.
     s.execute("edit.menus", json!({"hide": ["edit.paste"]})).unwrap();
     assert_eq!(menus(&mut s, json!({}))["modified"], json!(true), "a further edit to a saved set");
-    s.execute("edit.menus", json!({"saveSet": "Mine"})).unwrap();
-    assert_eq!(menus(&mut s, json!({}))["modified"], json!(false), "the set holds both items now");
+    // The reply of the save itself, not the one read before it: only a fresh reply says what this
+    // `saveSet` did to the list of sets.
+    let r = menus(&mut s, json!({"saveSet": "Mine"}));
+    assert_eq!(r["modified"], json!(false), "the set holds both items now");
     assert_eq!(s.prefs().menus.hidden, vec!["edit.fade".to_string(), "edit.paste".to_string()]);
     assert_eq!(r["sets"], json!(["Mine"]), "saving over a set does not add one");
 }
@@ -206,6 +208,28 @@ fn a_hand_edited_set_leaves_an_item_that_cannot_be_hidden_shown() {
     assert_eq!(menus(&mut s, json!({}))["activeSet"], json!("Old"));
     // A set sent by a call is checked the same way the command checks `hide`.
     assert!(s.execute("edit.menus", json!({"sets": {"A": {"hidden": ["file.close"]}}})).is_err(), "file.close can't be hidden");
+}
+
+#[test]
+fn a_save_of_a_legacy_set_keeps_the_row_the_engine_cannot_hide() {
+    // `saveSet` stores the menus as they stand, including a row that the test above leaves shown.
+    // The engine's rule for that row is to load it and show it, never to refuse it, and a copy of it
+    // is the same data: checking the snapshot here would answer a Save of the menus in front of the
+    // user with "`file.close` can't be hidden" for a row they never hid, and a set from an older or
+    // hand-edited file could then never be saved under another name. What a CALL may send stays
+    // checked: the same rows through `sets` are an error, pinned below and in
+    // `a_hand_edited_set_leaves_an_item_that_cannot_be_hidden_shown`.
+    let mut s = Session::new();
+    s.execute("prefs.set", json!({"values": {"menuSets": {"Old": {"hidden": ["file.close", "edit.fade"], "colors": {}}}, "menuSet": "Old"}})).unwrap();
+    s.execute("edit.menus", json!({"useSet": "Old"})).unwrap();
+    let r = menus(&mut s, json!({"saveSet": "Copy"}));
+    assert_eq!(r["sets"], json!(["Copy", "Old"]), "the copy is a saved set");
+    assert_eq!(r["activeSet"], json!("Copy"), "and the set in use");
+    assert_eq!(r["modified"], json!(false), "it holds the menus exactly as they stood");
+    assert_eq!(s.prefs().menu_sets["Copy"].hidden, ["edit.fade", "file.close"], "the legacy row came with it, ordered");
+    assert!(!s.prefs().menus.is_hidden("file.close"), "and it still reads as shown");
+    assert!(s.execute("edit.menus", json!({"sets": {"Copy": {"hidden": ["file.close", "edit.fade"]}}})).is_err(), "a call sending those rows is refused");
+    assert_eq!(s.prefs().menu_sets["Copy"].hidden, ["edit.fade", "file.close"], "and the refused call changed nothing");
 }
 
 #[test]
