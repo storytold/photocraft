@@ -17,6 +17,7 @@ use craft::imaging::layer_style::{
     StyleParams, StyleValue,
 };
 use craft::imaging::ui::layer_style::{ContourEditorDialog, HostedLayerStyle, LayerStyleAsk};
+use craft::settings::Remembered;
 use craft::theme::Srgba;
 use craft::ui::contract::Entry;
 use craft::ui::contract::Tracked;
@@ -43,6 +44,8 @@ mod contour;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
+#[cfg(test)]
+mod gradient_overlay_last_values_tests;
 
 /// The Styles preset gallery page id.
 pub const STYLES_PAGE: &str = "styles";
@@ -482,7 +485,8 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
     let layer_id = st.active_layer?;
     let layer = st.doc.layer(layer_id)?.clone();
     let (light, mode, doc) = (st.doc.global_light.angle, st.doc.mode, st.doc.id);
-    let user: Map<String, Value> = app.session.presets.layer_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let mut user: Map<String, Value> = app.session.presets.layer_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    recall_last_ok(app.framework.host(), &mut user);
     let keys = blend_keys();
     let specs = specs(&keys, &user, light);
     let mut draft = LayerStyleDraft::new(draft_of(&layer, light, mode));
@@ -537,6 +541,52 @@ pub(crate) fn open_layer(app: &PhotocraftApp) -> Option<LayerId> {
     let (id, doc, layer) = app.layer_style_target?;
     app.framework.dialogs.get_by_id::<HostedLayerStyle>(id)?;
     (app.session.active()?.doc.id == doc).then_some(layer)
+}
+
+// ------------------------------------------------------------------ last committed values
+
+/// The effect kinds whose new instance opens with the values of the last instance of that kind
+/// committed with the dialog's OK (#14899), kept in the app's settings so they survive a restart.
+/// Another page opts in by joining the list (Color Overlay #14870, Drop Shadow #14877, Inner
+/// Shadow #14932, Pattern Overlay #14972).
+const REMEMBERS_LAST_OK: &[EffectKind] = &[EffectKind::GradientOverlay];
+
+/// Where the last committed values of `kind` live: `photocraft.layerStyle.<kind>`.
+fn last_ok(kind: EffectKind) -> Remembered<Value> {
+    Remembered::new(format!("photocraft.layerStyle.{}", kind.key()))
+}
+
+/// Lays the last committed values of each remembering kind over its Make Default entry in `user`:
+/// the reference application opens a new instance with the last OK even after a Make Default, which
+/// only Reset to Default reads. A kind with nothing committed yet keeps its Make Default values.
+fn recall_last_ok(host: &craft::host::Host, user: &mut Map<String, Value>) {
+    for kind in REMEMBERS_LAST_OK {
+        if let Some(values) = last_ok(*kind).recall(host).filter(Value::is_object) {
+            user.insert(kind.key().into(), values);
+        }
+    }
+}
+
+/// Whether instance `e` was added or changed in the dialog: it has no snapshot of a loaded effect
+/// (`fx`), or its values or on state differ from that snapshot's. A loaded effect confirmed as it
+/// was (made by a script, a preset or a file) is not a value the user set on the page.
+fn edited_in_dialog(e: &EffectInstance, light: f32) -> bool {
+    let Some(loaded) = fx_of(&e.params).and_then(|fx| serde_json::from_value::<Effect>(fx).ok()) else { return true };
+    loaded.enabled() != e.on || style_params_json(&effect_params(e.kind, &loaded, light)) != style_params_json(&e.params)
+}
+
+/// After a successful OK: stores, per remembering kind, the values of the last enabled instance in
+/// `style` the user added or changed. A kind with no such instance keeps what it had.
+fn remember_last_ok(host: &craft::host::Host, style: &LayerStyle) {
+    for kind in REMEMBERS_LAST_OK {
+        let last = style.effects.iter().rev().find(|e| e.kind == *kind && e.on && edited_in_dialog(e, style.global_light));
+        let Some(mut values) = last.map(|e| style_params_json(&e.params)) else { continue };
+        // Settings are TOML, which has no null: a value the grammar left empty is not stored.
+        if let Some(o) = values.as_object_mut() {
+            o.retain(|_, v| !v.is_null());
+        }
+        last_ok(*kind).store(host, &values);
+    }
 }
 
 /// The effect pages with the user's defaults (Make Default) over the factory ones.
@@ -869,8 +919,9 @@ fn finish(app: &mut PhotocraftApp, doc: photocraft_doc::DocId, layer: LayerId, s
     let Some(light) = app.session.active().filter(|s| s.doc.id == doc).map(|s| f64::from(s.doc.global_light.angle)) else {
         return fail(app, "Layer Style target document changed".into());
     };
-    if let Err(error) = apply(style, layer, Some(light), |id, p| app.run(id, p)) {
-        fail(app, error);
+    match apply(style, layer, Some(light), |id, p| app.run(id, p)) {
+        Ok(_) => remember_last_ok(app.framework.host(), style),
+        Err(error) => fail(app, error),
     }
 }
 
@@ -928,7 +979,12 @@ fn reset_to_default(app: &mut PhotocraftApp, dialog: DialogId, instance: EffectI
     {
         o.insert("angle".into(), json!(light));
     }
-    let params = style_params(kind, &values, None);
+    let mut params = style_params(kind, &values, None);
+    if REMEMBERS_LAST_OK.contains(&kind) {
+        // A new instance of this kind may start from the last OK, so a key the stored default
+        // leaves out goes back to the page's factory value instead of keeping the last OK's.
+        params = params.over(&EffectSpec::photoshop(kind).defaults);
+    }
     if let Some(d) = app.framework.dialogs.get_mut_by_id::<HostedLayerStyle>(dialog) {
         for (key, value) in params.0 {
             d.draft_mut().set_param(instance, &key, value);
