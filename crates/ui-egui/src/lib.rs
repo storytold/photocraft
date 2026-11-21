@@ -720,6 +720,8 @@ mod cam_no_pixels_alert_tests;
 #[cfg(test)]
 mod eyedropper_context_menu_tests;
 #[cfg(test)]
+mod layer_style_submenu_separator_tests;
+#[cfg(test)]
 mod menu_automate_groups_tests;
 #[cfg(test)]
 mod patch_shift_constrain_tests;
