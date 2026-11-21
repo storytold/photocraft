@@ -124,7 +124,20 @@ pub fn group_layers(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let opts = crate::group_options::GroupOptions::parse("layer.groupLayers", p)?;
     let gid = s.edit("Group Layers", |doc, active| {
+        // A base takes the layers clipped to it into the group, still clipped, whether they were
+        // selected or not; a clipped layer that goes in without its base is released, as in the
+        // reference application (#14713).
+        let mut ids = top_level(doc, &ids);
+        let bases: Vec<LayerId> = ids.clone();
+        for id in bases {
+            ids.extend(crate::clip_group::clipped_to(doc, id));
+        }
         let ids = top_level(doc, &ids);
+        let release: Vec<LayerId> = ids
+            .iter()
+            .copied()
+            .filter(|&id| doc.layer(id).is_some_and(|l| l.clipped) && crate::clip_group::base_of(doc, id).is_none_or(|base| !ids.contains(&base)))
+            .collect();
         // Artboards stay at the top level: inside a group they would stop being boards.
         if ids.iter().any(|id| doc.layer(*id).is_some_and(|l| l.artboard().is_some())) {
             return Err(EngineError::Other("artboards can't go into a group".into()));
@@ -140,6 +153,9 @@ pub fn group_layers(s: &mut Session, p: &Value) -> Result<Value> {
         let mut children = Vec::with_capacity(ids.len());
         for id in &ids {
             children.push(doc.remove(*id).ok_or(EngineError::NoLayer(*id))?);
+        }
+        for child in children.iter_mut().filter(|l| release.contains(&l.id)) {
+            child.clipped = false;
         }
         let group = doc.layer_mut(gid).ok_or(EngineError::NoLayer(gid))?;
         *group.children_mut().ok_or(EngineError::NoLayer(gid))? = children;

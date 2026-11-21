@@ -184,3 +184,6 @@ mod layers_panel_parity_tests;
 
 #[cfg(test)]
 mod tile_damage_tests;
+
+#[cfg(test)]
+mod group_from_layers_clipping_tests;
