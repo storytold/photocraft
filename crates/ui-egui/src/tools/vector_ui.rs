@@ -224,6 +224,9 @@ mod ellipse_shift_circle_tests;
 mod triangle_align_edges_tests;
 
 #[cfg(test)]
+mod line_align_edges_tests;
+
+#[cfg(test)]
 mod triangle_shift_equilateral_tests;
 
 #[cfg(test)]
