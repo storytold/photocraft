@@ -369,23 +369,34 @@ fn maximum_roundness_grows_a_point_into_a_disc() {
         for radius in [1.0f32, 2.0, 3.5, 6.0] {
             let round = run(&s, &FilterParams::Maximum { radius, preserve: Preserve::Roundness });
             let square = run(&s, &FilterParams::Maximum { radius, preserve: Preserve::Squareness });
-            let rs = radius.round() as i32;
+            let (rs, ri) = (radius.round() as i32, radius.floor() as i32);
             for y in R.y0..R.y1 {
                 for x in R.x0..R.x1 {
                     let (dx, dy) = (x - 20, y - 15);
-                    let in_disc = (dx * dx + dy * dy) as f32 <= radius * radius;
+                    let in_disc = dx * dx + dy * dy <= ri * ri + ri;
                     assert_eq!(round.pixel(x, y)[0] > 0.5, in_disc, "{depth:?} r {radius} at {dx},{dy}");
                     assert_eq!(square.pixel(x, y)[0] > 0.5, dx.abs() <= rs && dy.abs() <= rs, "{depth:?} r {radius} at {dx},{dy}");
                 }
             }
         }
     }
-    // Radius 1: the four neighbours, not the diagonals (a 3×3 square would take them).
-    let mut s = flat(SampleType::U8, R, [0.0, 0.0, 0.0, 1.0]);
-    s.write_pixel(20, 15, &[1.0, 1.0, 1.0, 1.0]);
-    let r1 = run(&s, &FilterParams::Maximum { radius: 1.0, preserve: Preserve::Roundness });
-    assert_eq!(r1.pixel(21, 15)[0], 1.0);
-    assert_eq!(r1.pixel(21, 16)[0], 0.0);
+}
+
+/// The reference application's Roundness disc has radius `r + 0.5` (#15156): Minimum on one black
+/// pixel, measured half-width per row `dy = 0, 1, …`, nothing beyond row `r`.
+#[test]
+fn minimum_roundness_disc_rows_match_reference() {
+    let mut s = flat(SampleType::U8, R, [1.0, 1.0, 1.0, 1.0]);
+    s.write_pixel(20, 15, &[0.0, 0.0, 0.0, 1.0]);
+    for (radius, rows) in [(1.0f32, &[1, 1][..]), (2.0, &[2, 2, 1]), (3.0, &[3, 3, 2, 1]), (5.0, &[5, 5, 5, 4, 3, 2]), (5.9, &[5, 5, 5, 4, 3, 2])] {
+        let got = run(&s, &FilterParams::Minimum { radius, preserve: Preserve::Roundness });
+        let half_width = |dy: i32| (0..20).take_while(|dx| got.pixel(20 + dx, 15 + dy)[0] < 0.5).last();
+        for dy in 0..=rows.len() as i32 {
+            let want = rows.get(dy as usize).copied();
+            assert_eq!(half_width(dy), want, "r {radius} row {dy}");
+            assert_eq!(half_width(-dy), want, "r {radius} row -{dy}");
+        }
+    }
 }
 
 #[test]
@@ -409,7 +420,7 @@ fn minimum_maximum_roundness_match_brute_force() {
                         let mut want = if max { f32::MIN } else { f32::MAX };
                         for dy in -ri..=ri {
                             for dx in -ri..=ri {
-                                if (dx * dx + dy * dy) as f32 <= radius * radius
+                                if dx * dx + dy * dy <= ri * ri + ri
                                     && let Some(v) = at(x + dx, y + dy, c)
                                 {
                                     want = if max { want.max(v) } else { want.min(v) };
