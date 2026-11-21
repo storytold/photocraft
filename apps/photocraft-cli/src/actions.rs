@@ -43,11 +43,15 @@ fn names(actions: &[Action]) -> Vec<String> {
     actions.iter().map(|a| a.name.clone()).collect()
 }
 
+fn parse_actions_json(text: &str) -> Result<Value, ActionsError> {
+    serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(text)).map_err(ActionsError::Json)
+}
+
 /// Parse an actions file: the steps of a recorded action or a droplet (`[id, params]` pairs,
 /// `{"command": id, "params": {…}}` objects or bare ids; `"id"` is accepted for `"command"`), as a
 /// list or wrapped in `{"actions": […]}`, `{"steps": […]}` or a droplet (#489).
 pub fn parse_actions(text: &str) -> Result<Vec<(String, Value)>, ActionsError> {
-    let v: Value = serde_json::from_str(text).map_err(ActionsError::Json)?;
+    let v = parse_actions_json(text)?;
     steps_of(&v)
 }
 
@@ -63,7 +67,7 @@ pub type Steps = Vec<(String, Value)>;
 /// the action `name` picks (optional when the set holds one) with the whole set loaded, as
 /// Photoshop's Batch does; anything else is one action's steps ([`parse_actions`]) (#2786).
 pub fn load_actions(text: &str, name: Option<&str>) -> Result<(Steps, Vec<Action>), ActionsError> {
-    let v: Value = serde_json::from_str(text).map_err(ActionsError::Json)?;
+    let v = parse_actions_json(text)?;
     let list = v.get("actions").unwrap_or(&v);
     let is_set = list.as_array().is_some_and(|a| !a.is_empty() && a.iter().all(|x| x.get("name").is_some_and(Value::is_string)));
     if !is_set {
