@@ -48,8 +48,28 @@ pub fn tone_luts_q(adj: &Adjustment, quantum: Option<f32>) -> [Vec<f32>; 4] {
         }
         Adjustment::Curves { master, per_channel, space, black, pencil } => {
             let m = if *space == ToneSpace::Lab { curve_lut(&[]) } else { curve_lut_mode(master, *pencil) };
-            let row = |c: &[CurvePoint]| curve_lut_mode(c, *pencil).iter().map(|&v| lut(&m, v)).collect();
-            [row(&per_channel[0]), row(&per_channel[1]), row(&per_channel[2]), row(if *space == ToneSpace::Cmyk { black } else { &[] })]
+            // In an 8-bit document the channel curve's output sits on a whole level before the
+            // composite curve is applied to it, as every Levels step is above (#14446, measured:
+            // Red 0,0 128,64 255,255 with composite 0,0 128,200 255,255 gives gray 192 as 217,
+            // 128 as 114 and 64 as 37). The channel's input is snapped to its level as well, so
+            // the row is flat across a level and the table cannot blend two levels' results at a
+            // document sample - the way [`levels_q`] is exact at every level. 16-bit and float
+            // documents were not measured, nor CMYK and Lab curves, so only the 8-bit quantum.
+            let level = (*space == ToneSpace::Rgb && quantum == Some(EIGHT_BIT_LEVELS)).then_some(EIGHT_BIT_LEVELS);
+            let row = |c: &[CurvePoint], level: Option<f32>| match level {
+                Some(q) => {
+                    let channel = curve_lut_mode(c, *pencil);
+                    let at_level = |v: f32| whole_levels(v, Some(q));
+                    (0..LUT_SIZE).map(|k| lut(&m, at_level(lut(&channel, at_level(x(k)))))).collect()
+                }
+                None => curve_lut_mode(c, *pencil).iter().map(|&v| lut(&m, v)).collect(),
+            };
+            [
+                row(&per_channel[0], level),
+                row(&per_channel[1], level),
+                row(&per_channel[2], level),
+                row(if *space == ToneSpace::Cmyk { black } else { &[] }, None),
+            ]
         }
         _ => std::array::from_fn(|_| (0..LUT_SIZE).map(x).collect()),
     }
@@ -66,6 +86,20 @@ pub fn tone_luts_depth(adj: &Adjustment, depth: Option<SampleType>) -> [Vec<f32>
             [row(&per_channel[0]), row(&per_channel[1]), row(&per_channel[2]), (0..LUT_SIZE).map(x).collect()]
         }
         _ => tone_luts_q(adj, depth.and_then(crate::adjustment_quantum)),
+    }
+}
+
+/// A document's quantum in whole 8-bit levels: [`crate::adjustment_quantum`]'s 8-bit step (see
+/// [`levels_q`], which rounds each of its three steps to these).
+const EIGHT_BIT_LEVELS: f32 = 255.0;
+
+/// [`levels_q`]'s round-half-up to a whole level, for a Curves channel's output; `None` (any other
+/// depth) leaves the sample where the spline put it.
+#[inline]
+fn whole_levels(v: f32, quantum: Option<f32>) -> f32 {
+    match quantum {
+        Some(q) => (v * q + 0.5).floor() / q,
+        None => v,
     }
 }
 
