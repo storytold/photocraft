@@ -1473,7 +1473,7 @@ fn fs_mblur(in: VOut) -> @location(0) vec4<f32> {
     return mout(acc);
 }
 
-// Precise glow from a distance map (`effects::glow_map`): p0 = (solid, soft, alpha distance scale).
+// Precise glow from a distance map (`effects::glow_map`): p0 = (solid, soft, alpha distance scale, contour).
 // Coverage is 0.5 at the edge falling to 0 at `size + 1` px centre to centre (the field is
 // 0.5 px short of that), solid within the spread / choke. For #14955, tex_b is the shape alpha.
 @fragment
@@ -1483,17 +1483,18 @@ fn fs_mglow(in: VOut) -> @location(0) vec4<f32> {
     if (op.p0.z > 0.0 && d == 0.0 && all(p > vec2(0)) && all(p + vec2(1) < chunk.size)) {
         let a = textureLoad(tex_b, p, 0).r;
         if (a > 0.0 && a < 1.0) {
-            var flat = true;
-            for (var y = -1; y <= 1; y++) {
-                for (var x = -1; x <= 1; x++) {
-                    flat = flat && textureLoad(tex_b, p + vec2(x, y), 0).r == a;
-                }
+            let axes = vec4(textureLoad(tex_b, p + vec2(-1, 0), 0).r, textureLoad(tex_b, p + vec2(1, 0), 0).r,
+                            textureLoad(tex_b, p + vec2(0, -1), 0).r, textureLoad(tex_b, p + vec2(0, 1), 0).r);
+            if (all(axes == vec4(a))) {
+                let corners = vec4(textureLoad(tex_b, p + vec2(-1, -1), 0).r, textureLoad(tex_b, p + vec2(1, -1), 0).r,
+                                   textureLoad(tex_b, p + vec2(-1, 1), 0).r, textureLoad(tex_b, p + vec2(1, 1), 0).r);
+                if (all(corners == vec4(a))) { d = (1.0 - a) * op.p0.z; }
             }
-            if (flat) { d = (1.0 - a) * op.p0.z; }
         }
     }
     var m = 0.5 * clamp(1.0 - (d - op.p0.x) / op.p0.y, 0.0, 1.0);
     if (d <= op.p0.x) { m = 1.0; }
+    if (op.p0.w > 0.5) { m = lut(0, m); }
     return mout(m);
 }
 
