@@ -231,6 +231,8 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Image"], "Duplicate…", None, "image.duplicate"),
     (&["Image"], "Apply Image…", None, "image.applyImage"),
     (&["Image"], "Calculations…", None, "image.calculations"),
+    (&["Image"], "DTF Spot Channel…", None, "image.dtf"),
+    (&["Image"], "Install DTF Action", None, "image.installDtfAction"),
     (&["Image"], "---", None, "---"),
     (&["Image", "Variables"], "Define…", None, "image.variables.define"),
     (&["Image", "Variables"], "Data Sets…", None, "image.variables.dataSets"),

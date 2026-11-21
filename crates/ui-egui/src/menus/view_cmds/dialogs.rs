@@ -429,8 +429,54 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
         ]),
         "file.automate.batch" => batch_form(app, &dir),
         "select.saveSelection" | "select.loadSelection" | "image.applyImage" | "image.calculations" => channel_form(app, id),
+        "image.dtf" => Some(dtf_form(app)),
         _ => None,
     }
+}
+
+/// Image › DTF Spot Channel…: the last values the command remembered, with the note the old form showed.
+fn dtf_form(app: &PhotocraftApp) -> (Vec<Param>, DialogFields) {
+    let saved = photocraft_engine::dtf_cmds::dialog_fields(app.session.prefs().dialogs.get("image.dtf"));
+    let text = |key: &str, fallback: &str| saved.get(key).and_then(Value::as_str).unwrap_or(fallback).to_owned();
+    let number = |key: &str, fallback: f64| saved.get(key).and_then(Value::as_f64).unwrap_or(fallback);
+    let source = text("source", "layer");
+    let source = if source == "composite" { source } else { "layer".to_owned() };
+    let contract = number("contract", 1.0);
+    let name = text("name", "Spot Color 1");
+    let solidity = number("solidity", 60.0);
+    let bounds = saved.get("applyAtCanvasBounds").and_then(Value::as_bool).unwrap_or(false);
+    let color = dtf_color(saved.get("color"));
+    let rows = vec![
+        Param::section(tl!("Builds a spot channel from the artwork transparency.")),
+        Param::new("source", tl!("Source"), ParamKind::choice(opts(&[("layer", tl!("Layer")), ("composite", tl!("Composite"))]), Some(source.clone()))),
+        Param::new("contract", tl!("Contract"), ParamKind::number(Some(0.0), Some(500.0), contract, 1.0, 1)),
+        Param::new("name", tl!("Name"), ParamKind::text(name.clone())),
+        Param::new("color", tl!("Color"), ParamKind::color(Some(color))),
+        Param::new("solidity", tl!("Solidity"), ParamKind::number(Some(0.0), Some(100.0), solidity, 1.0, 0)),
+        Param::new("applyAtCanvasBounds", tl!("Apply at Canvas Bounds"), ParamKind::bool(bounds)),
+    ];
+    let fields = DialogFields::from_pairs([
+        ("source", FieldValue::Text(source)),
+        ("contract", FieldValue::Number(contract)),
+        ("name", FieldValue::Text(name)),
+        ("color", FieldValue::Color(color)),
+        ("solidity", FieldValue::Number(solidity)),
+        ("applyAtCanvasBounds", FieldValue::Bool(bounds)),
+    ]);
+    (rows, fields)
+}
+
+/// The spot colour the dialog opens on: `#rrggbb`, or RGB numbers, else red.
+fn dtf_color(value: Option<&Value>) -> [f32; 3] {
+    let Some(value) = value else { return [1.0, 0.0, 0.0] };
+    if let Some(text) = value.as_str()
+        && let Some(rgb) = crate::color_picker_ui::parse_hex(text)
+    {
+        return rgb;
+    }
+    let Some(channels) = value.as_array() else { return [1.0, 0.0, 0.0] };
+    let channel = |index: usize| channels.get(index).and_then(Value::as_f64).map(|n| if n > 1.0 { (n as f32) / 255.0 } else { n as f32 }).unwrap_or(0.0);
+    [channel(0), channel(1), channel(2)]
 }
 
 /// File › File Info…: the document's metadata in Photoshop's order and labels, then its read-only Camera Data.
@@ -729,6 +775,15 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         "file.scripts.loadFilesIntoStack" => Some(Ok(json!({"dialog": crate::stack_dialog::open(app).value().to_string()}))),
         "file.export.dataSetsAsFiles" if cfg!(target_arch = "wasm32") => Some(Err(tl!("Data Sets as Files is unavailable on the web").to_string())),
         "file.automate.batch" if crate::actions::selected_action(app).is_none() => Some(Err("record an action in the Actions panel first".into())),
+        "image.dtf" => {
+            let (rows, fields) = dtf_form(app);
+            let key = id.to_owned();
+            let title = crate::dialogs::filter_dialog::title_of(label);
+            let dialog = crate::dialogs::params::open_param_unsaved(app, id, fields, Value::Null, move |fields: &mut DialogFields| {
+                ParamDialog::command(key.clone(), title.clone(), rows.clone()).values(Bind::bound(fields))
+            });
+            Some(Ok(opened(dialog)))
+        }
         _ if is_form(id) => {
             let (rows, fields) = params_for(app, id)?;
             Some(Ok(opened(open_form(app, id, label, rows, fields, Value::Null))))

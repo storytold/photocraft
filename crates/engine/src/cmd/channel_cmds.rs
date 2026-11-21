@@ -129,6 +129,7 @@ mod apply_image_locked_layer_tests;
 use calc::{apply_image, calculations};
 use manage::{delete_channel, duplicate_channel, move_channel, new_channel, new_spot, options, rename_channel, set_visible};
 use planes::edit_mode;
+pub(crate) use planes::plane_surface;
 pub(crate) use planes::tone;
 pub use planes::{
     GraySurface, IsolatedCurveChannel, channel_format, color_count, curve_channel_for_colors, filter_mask_curve_channel, isolated_curve_channel,
@@ -145,8 +146,8 @@ pub(crate) use targeting::{
 };
 pub use targeting::{follows_filter_mask, follows_target, follows_vector_mask_target, gray_target, read_target_surface};
 pub use tone_target::{ToneTarget, resolve_tone_target};
-pub(crate) use view::fix_view;
 pub use view::{ChannelTarget, ChannelView, QuickMaskOptions, color_names, composite_name};
+pub(crate) use view::{fix_view, touch};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![

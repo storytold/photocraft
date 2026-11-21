@@ -163,7 +163,8 @@ fn command_dialogs_open_and_refuse() {
         app.run("image.variables.dataSets", json!({"dataSets": [{"name": "Set 1", "values": []}]})).unwrap();
     };
     let sets_open = if cfg!(target_arch = "wasm32") { Err("unavailable on the web") } else { Ok(()) };
-    let cases: [(&str, Setup, Result<(), &str>); 9] = [
+    let cases: [(&str, Setup, Result<(), &str>); 10] = [
+        ("image.dtf", nothing, Ok(())),
         ("file.automate.fitImage", nothing, Ok(())),
         ("file.fileInfo", nothing, Ok(())),
         ("layer.videoLayers.interpretFootage", nothing, Ok(())),
@@ -209,6 +210,24 @@ fn command_dialogs_open_and_refuse() {
     assert_eq!(app.ui.views[0].zoom, 4.0);
     crate::menus::invoke_unguarded(&mut app, &ctx, "file.closeAll", json!({})).unwrap();
     assert!(app.ui.views.is_empty() && app.session.documents().is_empty());
+}
+
+/// The DTF dialog opens on the values the command remembered, including a colour, and does not
+/// install the action by itself.
+#[test]
+fn dtf_dialog_reopens_on_the_remembered_values() {
+    let (mut app, ctx) = app_with(1);
+    app.run("image.dtf", json!({"source": "composite", "contract": 4, "name": "White", "color": "#00ff00", "solidity": 80, "applyAtCanvasBounds": true}))
+        .unwrap();
+    assert!(app.session.actions.list.actions().iter().all(|action| action.name != "DTF"), "running the command does not install the action");
+    let id = open_form(&mut app, &ctx, "image.dtf");
+    let values = fields(&app, id);
+    assert_eq!(values["source"], "composite");
+    assert_eq!(values["name"], "White");
+    assert_eq!(values["contract"].as_f64(), Some(4.0));
+    assert_eq!(values["solidity"].as_f64(), Some(80.0));
+    assert_eq!(values["applyAtCanvasBounds"], true);
+    assert_eq!(values["color"], json!([0.0, 1.0, 0.0]));
 }
 
 #[test]

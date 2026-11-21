@@ -510,6 +510,29 @@ fn modify(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
     set_selection(s, label, area, out, SelectionMode::Replace)
 }
 
+/// Contract a full `w`×`h` mask the way Select › Modify › Contract does, including Photoshop's
+/// "Apply effect at canvas bounds". Shared with Image › DTF Spot Channel.
+pub(crate) fn contract_mask(m: &[f32], w: usize, h: usize, r: f32, at_bounds: bool) -> std::result::Result<Vec<f32>, String> {
+    if !r.is_finite() || !(0.0..=500.0).contains(&r) {
+        return Err(format!("radius {r} is not a usable number"));
+    }
+    if r == 0.0 {
+        return Ok(m.to_vec());
+    }
+    let reach = r.ceil() as usize;
+    let pad = if touches_edge(m, w, h) { reach.saturating_add(2) } else { 0 };
+    let grown = |n: usize| pad.checked_mul(2).and_then(|p| n.checked_add(p));
+    let (Some(pw), Some(ph)) = (grown(w), grown(h)) else {
+        return Err("the selection is too large to modify".into());
+    };
+    if pw.checked_mul(ph).is_none_or(|n| n > MAX_MODIFY_PIXELS) {
+        return Err("the selection is too large to modify".into());
+    }
+    let padded = if pad == 0 { m.to_vec() } else { pad_mask(m, w, h, pad, at_bounds) };
+    let out = sel::contract(&padded, pw, ph, r);
+    Ok(if pad == 0 { out } else { crop_mask(&out, pw, pad, w, h) })
+}
+
 /// The largest padded mask Modify works on (a 300000 × 300000 canvas is 9e10 pixels; this caps a
 /// padded copy at ~4 GB of f32, beyond which the edit is refused rather than aborting on allocation).
 const MAX_MODIFY_PIXELS: usize = 1 << 30;
