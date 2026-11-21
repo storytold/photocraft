@@ -14,7 +14,7 @@ use craft::ui::text::NumberField;
 use super::path_menus::{path_alignment_menu, path_arrangement_menu, path_operations_menu};
 use super::path_ops::{active_path_name, indexed_document};
 use super::shapes::is_shape_tool;
-use super::{LayerContent, PhotocraftApp, Tool, Value, copy_arrow_to_tool_defaults, json};
+use super::{LayerContent, PenPath, PhotocraftApp, Tool, Value, copy_arrow_to_tool_defaults, json};
 use crate::history_keys;
 
 // ---------------------------------------------------------------------------------------------
@@ -171,6 +171,9 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
     }
     Divider::vertical().show(ui);
     if app.ui.tool_options.vector_mode == VectorMode::Shape {
+        // #12907: the row leads with the Fill and Stroke swatches, the shape tools' chips with
+        // their popups; a pick sets the tool defaults the next Pen shape is painted with.
+        crate::shape_options::pen_paint_swatches(app, ui);
         let ppi = document_ppi(app);
         let o = &mut app.ui.tool_options;
         let look = fw::ShapeAppearance::new(Paint::None, Paint::None, f64::from(o.stroke_width)).stroke_style((&o.shape_stroke).into());
@@ -190,6 +193,18 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
         if let Some(alert) = out.out_of_range {
             crate::option_cells::range_alert(app, ui, &alert);
         }
+        // W and H (#12907): 0 px with no shape and the live size of the shape being drawn. What
+        // typing into them does was not measured, so it keeps today's behaviour — there was no
+        // field and no effect: these fields apply no edit (the Shape tools have no size fields
+        // yet either, #2496).
+        let (w, h) = pen_shape_size(app.ui.pen.as_ref());
+        NumberField::new(label(tl!("W:")), Bind::given(Some(w))).unit_kind(UnitKind::Pixels).show(ui);
+        NumberField::new(label(tl!("H:")), Bind::given(Some(h))).unit_kind(UnitKind::Pixels).show(ui);
+        // Align Edges (#12907): on by default and shown only in Shape mode; Path mode shows no
+        // paint row at all (the issue allows absent or greyed). The checkbox writes the option the
+        // Triangle's checkbox writes (#13370); Pen drawing keeps today's snapping until the
+        // wider-stroke rendering settles (#11756, #12688).
+        Checkbox::new(Bind::bound(&mut app.ui.tool_options.align_edges)).label(label(tl!("Align Edges"))).show(ui);
     }
     Divider::vertical().show(ui);
     path_operations_menu(app, ui);
@@ -232,6 +247,23 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
         Divider::vertical().show(ui);
         make_buttons(app, ui);
     }
+}
+
+/// The W / H the Pen Shape-mode bar shows (#12907): the size of the path being drawn, 0 px when
+/// there is no draft. The anchors' box: the measured shapes are straight (200 × 200 px), and what
+/// a handle beyond the anchors or a typed size does was not measured and changes nothing today.
+fn pen_shape_size(pen: Option<&PenPath>) -> (f64, f64) {
+    let Some(knots) = pen.map(|p| &p.draft.knots) else { return (0.0, 0.0) };
+    let Some(first) = knots.first() else { return (0.0, 0.0) };
+    let (mut x0, mut y0, mut x1, mut y1) = (first.anchor.x, first.anchor.y, first.anchor.x, first.anchor.y);
+    for k in knots.iter().skip(1) {
+        let (x, y) = (k.anchor.x, k.anchor.y);
+        x0 = x0.min(x);
+        y0 = y0.min(y);
+        x1 = x1.max(x);
+        y1 = y1.max(y);
+    }
+    (x1 - x0, y1 - y0)
 }
 
 /// Path mode's "Make:" row, as in Photoshop's options bar: Selection…, Mask and Shape, from the
