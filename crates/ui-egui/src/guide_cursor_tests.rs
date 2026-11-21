@@ -47,8 +47,10 @@ fn drag(h: &mut Harness<'static, Box<PhotocraftApp>>, from: f32, to: f32, m: Mod
     h.run_steps(1);
     h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: m });
     h.run_steps(1);
-    for k in 1..=4 {
-        let q = screen(h, from + (to - from) * k as f32 / 4.0, 150.0);
+    // Two moves: the guide follows the pointer, so one intermediate point is enough to drive the drag and the
+    // fourth one only cost another whole-app frame each row (#15941).
+    for k in 1..=2 {
+        let q = screen(h, from + (to - from) * k as f32 / 2.0, 150.0);
         h.event(egui::Event::PointerMoved(q));
         h.run_steps(1);
     }
@@ -57,20 +59,35 @@ fn drag(h: &mut Harness<'static, Box<PhotocraftApp>>, from: f32, to: f32, m: Mod
     h.run_steps(2);
 }
 
+/// The vertical guides as they stand.
+fn guides(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<f64> {
+    h.state().session.active().unwrap().doc.guides.vertical.clone()
+}
+
+/// Put the guide back at 200 after a row dragged it, through the ruler's own command, so the next row starts
+/// where the first one did without paying for another app.
+fn put_guide_back(h: &mut Harness<'static, Box<PhotocraftApp>>) {
+    h.state_mut().run("view.moveGuide", json!({"orientation": "vertical", "index": 0, "position": 200})).unwrap();
+    h.run_steps(2);
+    assert_eq!(guides(h), vec![200.0], "the guide is back at 200 for the next row");
+}
+
 /// The cursor over the guide with ⌘ held (or latched in Window › Modifier Keys, with no key held),
-/// and where a ⌘-drag from 200 to 240 leaves it.
-fn command_drag(tool: Tool, locked: bool, latched: bool) -> (egui::CursorIcon, Vec<f64>) {
-    let mut h = harness(tool);
+/// and where a ⌘-drag from 200 to 240 leaves it, on the shared harness `h`.
+fn command_drag(h: &mut Harness<'static, Box<PhotocraftApp>>, tool: Tool, locked: bool, latched: bool) -> (egui::CursorIcon, Vec<f64>) {
+    h.state_mut().ui.tool = tool;
     h.state_mut().ui.extras.lock_guides = locked;
     let held = if latched {
         h.state_mut().ui.shell.latched = craft::keymap::Mods::CMD;
         Modifiers::NONE
     } else {
+        h.state_mut().ui.shell.latched = craft::keymap::Mods::NONE;
         Modifiers::COMMAND
     };
-    let c = hover(&mut h, 200.0, 150.0, held);
-    drag(&mut h, 200.0, 240.0, held);
-    (c, h.state().session.active().unwrap().doc.guides.vertical.clone())
+    h.run_steps(1);
+    let c = hover(h, 200.0, 150.0, held);
+    drag(h, 200.0, 240.0, held);
+    (c, guides(h))
 }
 
 const GUIDE: egui::CursorIcon = egui::CursorIcon::ResizeHorizontal;
@@ -114,13 +131,43 @@ fn command_over_a_guide_takes_it_where_command_is_the_move_tool() {
         (Tool::Rectangle, false, false, false),
         (Tool::Slice, false, false, false),
     ];
-    for (tool, locked, latched, takes_guide) in rows {
-        let (cursor, guides) = command_drag(tool, locked, latched);
+    let check = |h: &mut Harness<'static, Box<PhotocraftApp>>, tool: Tool, locked: bool, latched: bool, takes_guide: bool| {
+        let (cursor, moved) = command_drag(h, tool, locked, latched);
         if takes_guide {
-            assert_eq!((cursor, guides), (GUIDE, vec![240.0]), "{tool:?} latched={latched}");
+            assert_eq!((cursor, moved), (GUIDE, vec![240.0]), "{tool:?} latched={latched}");
+            put_guide_back(h);
         } else {
             assert_ne!(cursor, GUIDE, "{tool:?} locked={locked}");
-            assert_eq!(guides, vec![200.0], "{tool:?} locked={locked}");
+            assert_eq!(moved, vec![200.0], "{tool:?} locked={locked}");
+        }
+    };
+    // One app for the rows whose ⌘ press the Move tool takes and for the rows that ask a locked guide to stay:
+    // `harness` builds the whole app and its settle frames, while the selected tool, the ⌘ latch and the locked
+    // guides are state the app reads each frame. The split is by what a row expects, not by tool name: a takes-row
+    // puts the guide back with the ruler's own command (`view.moveGuide`, what a user does to move it again) and a
+    // locked row moves nothing, so neither leaves state for the rows after it (#15941).
+    let mut shared = harness(Tool::Brush);
+    let mut ran = 0;
+    for (tool, locked, latched, takes_guide) in rows {
+        if takes_guide || locked {
+            check(&mut shared, tool, locked, latched, takes_guide);
+            ran += 1;
         }
     }
+    // The tools that keep ⌘ for themselves share an app too. The Type tool goes last: its ⌘-drag leaves an open
+    // text edit, and `moves_with_command` refuses the guides while one is open, so a later row would be decided by
+    // that instead of by its tool. The Crop tool keeps an app of its own for the same reason: its drag leaves a
+    // pending crop frame holding the canvas.
+    let mut keeps = harness(Tool::Pen);
+    for tool in [Tool::Pen, Tool::Hand, Tool::Zoom, Tool::Rectangle, Tool::Slice, Tool::Type] {
+        // Cheap guard on the reason this app is ordered: no row so far left an open text edit that would decide
+        // this one instead of its tool.
+        assert!(keeps.state().ui.text_edit.is_none(), "no text edit open before {tool:?} in the keeps app");
+        check(&mut keeps, tool, false, false, false);
+        ran += 1;
+    }
+    let mut crop = harness(Tool::Crop);
+    check(&mut crop, Tool::Crop, false, false, false);
+    ran += 1;
+    assert_eq!(ran, rows.len(), "every row ran once: {} shared, 6 keeps, 1 crop", ran - 7);
 }

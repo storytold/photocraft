@@ -82,13 +82,11 @@ pub(crate) fn tap(h: &mut Harness<'_, Box<PhotocraftApp>>, key: Key, mods: Modif
     h.run_steps(3);
 }
 
+/// A press and release queued in one input frame, then the frames that take it and run its command: two, not
+/// [`tap`]'s three - the runtime takes the key in the first and the app runs the command it fired in the second
+/// (`quick_shift_press` in `tool_shift_cycle_order_tests` measures the same for the tool letters). The third frame
+/// only drew the app again (#15941).
 fn press(h: &mut Harness<'_, Box<PhotocraftApp>>, sc: &str) {
-    let sc = parse(sc).unwrap_or_else(|| panic!("unparsable shortcut {sc}"));
-    tap(h, sc.logical_key, sc.modifiers);
-}
-
-/// Queue one press/release in one input frame, then let the runtime collect and the app dispatch it.
-fn press_in_one_frame(h: &mut Harness<'_, Box<PhotocraftApp>>, sc: &str) {
     let sc = parse(sc).unwrap_or_else(|| panic!("unparsable shortcut {sc}"));
     let m = platform(sc.modifiers);
     h.input_mut().events.extend([
@@ -349,6 +347,8 @@ fn every_displayed_shortcut_runs_its_menu_item() {
 fn every_kind_of_shortcut_dispatches_from_where_focus_usually_is() {
     let mut failures = Vec::new();
     for place in [Place::Canvas, Place::LayersRow, Place::FocusedWidget, Place::OpacityField] {
+        // One app per place: the presses below include the panel toggles the runtime runs itself, so the next
+        // place could not count on the Layers panel still being there.
         let mut h = harness();
         set_dry_run(&h.ctx, true);
         put_focus(&mut h, place);
@@ -358,7 +358,7 @@ fn every_kind_of_shortcut_dispatches_from_where_focus_usually_is() {
             // A press the focused component holds (the Layers rows' stacking and visibility keys)
             // is the component's and reaches no app command.
             let held = focus_holds(&h.ctx, chord);
-            press_in_one_frame(&mut h, &sc);
+            press(&mut h, &sc);
             let log = take_log(&h.ctx);
             if typing && !chord.has_command() && !chord.is_function_key() {
                 // A focused text field keeps its typing / editing keys: nothing may fire.
@@ -384,7 +384,7 @@ fn every_kind_of_shortcut_dispatches_from_where_focus_usually_is() {
         for t in one.into_iter().chain(many) {
             let start = if t.key() == 'H' { Tool::Move } else { Tool::Hand };
             h.state_mut().ui.tool = start;
-            press_in_one_frame(&mut h, &t.key().to_string());
+            press(&mut h, &t.key().to_string());
             let want = if typing { start } else { t };
             if h.state().ui.tool.key() != want.key() {
                 failures.push(format!("{place:?}: tool key {} left {:?}, expected a {} tool", t.key(), h.state().ui.tool, want.key()));
@@ -461,8 +461,8 @@ fn keys_run_their_commands() {
     set_dry_run(&h.ctx, false);
 
     // #352: ⌥[ ⌥] ⌥, ⌥. and ⇧⌥[ walk the Layers panel's rows. Rows, top to bottom: paint, Hello (type), group,
-    // in-group, Background.
-    let mut h = harness();
+    // in-group, Background. The same app: the dry-run presses above ran no command, so the document is still the
+    // harness's own (#15941).
     assert_eq!(active_name(&h), "paint");
     for (key, want) in [("Alt+[", "Hello"), ("Alt+[", "group"), ("Alt+[", "in-group"), ("Alt+]", "group"), ("Alt+,", "Background"), ("Alt+.", "paint")] {
         press(&mut h, key);
@@ -512,11 +512,14 @@ fn keys_run_their_commands() {
 fn delete_key_targets() {
     // The selected layer, from the canvas or the Layers panel, in one undo step.
     for place in [Place::Canvas, Place::LayersRow] {
+        // One app per place: each key's delete is undone by the end of its case, so the next key starts from the
+        // same document without paying for another whole app (#15941).
+        let mut h = harness();
+        put_focus(&mut h, place);
         for key in ["Delete", "Backspace"] {
-            let mut h = harness();
-            put_focus(&mut h, place);
             let s = &mut h.state_mut().session;
-            s.execute("select.deselect", json!({})).unwrap();
+            // The first case of the app deselects the harness's own selection; the ones after it start without one.
+            s.execute("select.deselect", json!({})).ok();
             let adj = photocraft_doc::LayerId(s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap());
             h.run_steps(2);
             let before = names(&h);
@@ -526,15 +529,21 @@ fn delete_key_targets() {
             assert_eq!(names(&h).len(), before.len() - 1, "{place:?} {key}: only it");
             press(&mut h, "Cmd+Z");
             assert_eq!(names(&h), before, "{place:?} {key}: one undo brings it back");
+            // The undo's own log entry goes here: the next key of this app starts with an empty log, as the
+            // app-per-key version did.
+            take_log(&h.ctx);
         }
     }
 
     // The layer mask targeted: a selection fills the mask with the background colour, no selection deletes the mask.
+    // One app for both keys: the first case leaves the layer without a mask and without a selection, and the case
+    // puts both back before it starts (#15941).
+    let mut h = harness();
+    put_focus(&mut h, Place::Canvas);
     for key in ["Delete", "Backspace"] {
-        let mut h = harness();
-        put_focus(&mut h, Place::Canvas);
         let s = &mut h.state_mut().session;
         let layer = s.active().unwrap().active_layer.unwrap();
+        s.execute("select.rect", json!({"x": 20, "y": 20, "width": 80, "height": 60})).unwrap();
         s.execute("layer.layerMask.revealAll", json!({})).unwrap();
         let sel = s.active().unwrap().doc.selection.as_ref().expect("the harness keeps a selection").content_bounds();
         let (x, y) = ((sel.x0 + sel.x1) / 2, (sel.y0 + sel.y1) / 2);
