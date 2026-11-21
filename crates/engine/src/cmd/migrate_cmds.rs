@@ -7,16 +7,15 @@ use serde_json::{Value, json};
 use crate::presets::{Group, PresetState};
 use crate::{EngineError, Result, Session};
 
-/// Append incoming groups whose name the library doesn't already have; returns how many were added.
-fn merge_groups<T>(cur: &mut Vec<Group<T>>, incoming: Vec<Group<T>>) -> usize {
-    let mut added = 0;
+/// The incoming groups whose name neither the library nor an earlier incoming group has.
+fn new_groups<T>(cur: &[Group<T>], incoming: Vec<Group<T>>) -> Vec<Group<T>> {
+    let mut fresh: Vec<Group<T>> = Vec::new();
     for g in incoming {
-        if !cur.iter().any(|e| e.name == g.name) {
-            cur.push(g);
-            added += 1;
+        if !cur.iter().chain(&fresh).any(|e| e.name == g.name) {
+            fresh.push(g);
         }
     }
-    added
+    fresh
 }
 
 /// Deserialize `v[key]` into `Vec<Group<T>>`, defaulting to empty.
@@ -34,30 +33,39 @@ fn migrate(s: &mut Session, p: &Value) -> Result<Value> {
     // Accept a full preferences file (has a `presets` section) or a bare presets object.
     let v = root.get("presets").cloned().unwrap_or(root);
 
-    let ps: &mut PresetState = &mut s.presets;
-    let mut counts = serde_json::Map::new();
-    let g = merge_groups(&mut ps.gradients, groups(&v, "gradients"));
-    let st = merge_groups(&mut ps.styles, groups(&v, "styles"));
-    let sh = merge_groups(&mut ps.shapes, groups(&v, "shapes"));
-    let pt = merge_groups(&mut ps.pattern_groups, groups(&v, "pattern_groups"));
+    // Work out what is new against the library as it is, and write the presets only when something
+    // is added: a write through `&mut` moves their revision, and every view that shows them runs again.
+    let ps: &PresetState = &s.presets;
+    let gradients = new_groups(&ps.gradients, groups(&v, "gradients"));
+    let styles = new_groups(&ps.styles, groups(&v, "styles"));
+    let shapes = new_groups(&ps.shapes, groups(&v, "shapes"));
+    let pattern_groups = new_groups(&ps.pattern_groups, groups(&v, "pattern_groups"));
     // Tool presets are a flat list, matched by name. Read them like the launch loader does (entry by
     // entry, checked names), and keep the library within its cap, so what we import survives a restart.
-    let mut tp = 0usize;
+    let mut tool_presets = Vec::new();
     if let Some(arr) = v.get("tool_presets").cloned() {
+        let room = crate::presets::tools::MAX_PRESETS.saturating_sub(ps.tool_presets.len());
         for t in crate::presets::tools::load(arr) {
-            if ps.tool_presets.len() >= crate::presets::tools::MAX_PRESETS {
+            if tool_presets.len() >= room {
                 break;
             }
-            if !ps.tool_presets.iter().any(|e| e.name == t.name) {
-                ps.tool_presets.push(t);
-                tp += 1;
+            if !ps.tool_presets.iter().chain(&tool_presets).any(|e| e.name == t.name) {
+                tool_presets.push(t);
             }
         }
     }
+    let (g, st, sh, pt, tp) = (gradients.len(), styles.len(), shapes.len(), pattern_groups.len(), tool_presets.len());
     let total = g + st + sh + pt + tp;
     if total > 0 {
+        let ps: &mut PresetState = &mut s.presets;
+        ps.gradients.extend(gradients);
+        ps.styles.extend(styles);
+        ps.shapes.extend(shapes);
+        ps.pattern_groups.extend(pattern_groups);
+        ps.tool_presets.extend(tool_presets);
         s.presets_changed();
     }
+    let mut counts = serde_json::Map::new();
     counts.insert("gradients".into(), json!(g));
     counts.insert("styles".into(), json!(st));
     counts.insert("shapes".into(), json!(sh));
