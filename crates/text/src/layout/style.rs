@@ -85,6 +85,26 @@ pub(super) fn feature_list(st: &CharStyle, small_caps: SmallCapsMode) -> Vec<Str
     feats
 }
 
+/// The OpenType feature that sets CJK characters on their proportional widths.
+pub(super) const PALT: &str = "\"palt\" 1";
+
+/// Whether horizontal type in this style takes the font's proportional CJK widths (`palt`).
+/// Photoshop's Metrics kerning does: Photoshop 2026 closes up 月, 日 and kana of a Japanese
+/// OpenType face by exactly their `palt` values, while "0" (manual) leaves them on full-width
+/// cells. A character with a manual kern is manually kerned whatever its mode, as for `kern`; an
+/// explicit `palt` setting in the style's features wins.
+pub(super) fn proportional_metrics(st: &CharStyle) -> bool {
+    st.kerning == Kerning::Metrics && st.kern == 0.0 && !st.features.iter().any(|f| f.tag == "palt")
+}
+
+/// CJK punctuation (JIS X 4051's brackets, hyphens, dividing, middle-dot, full-stop, comma and
+/// inseparable classes): Metrics kerning leaves it on its full-width cell, its spacing belongs to
+/// the mojikumi (a full-width ！ keeps its cell in Photoshop 2026, though its `palt`
+/// would narrow it by more than half).
+pub(super) fn is_cjk_punctuation(c: char) -> bool {
+    is_opening(c) || is_closing(c) || "‘“’”〝〟⦅⦆‐–〜～゠？！‼⁇⁈⁉・：；—…‥〳〴〵".contains(c)
+}
+
 /// The font variations for a run: the explicit axis values, plus `opsz` at the type size when the
 /// style doesn't set it (as CSS `font-optical-sizing: auto`). A font without an `opsz` axis
 /// ignores it.
