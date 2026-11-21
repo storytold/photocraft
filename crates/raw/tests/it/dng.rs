@@ -866,6 +866,122 @@ fn map_polynomial_follows_the_linearization_table() {
     assert_eq!(s.polynomials.len(), 1);
 }
 
+/// With an OpcodeList1 present, the shared decoder leaves the LinearizationTable to its caller.
+/// PhotoCraft still applies the table. The list holds an identity polynomial, so the decoded
+/// samples are the table's values whichever of the two runs first.
+#[test]
+fn an_opcode_list1_does_not_leave_the_linearization_table_unapplied() {
+    let (w, h) = (16, 8);
+    let data = noise(w * h, 12);
+    let table: Vec<u16> = (0..4096u16).map(|i| i * 2).collect();
+    let mut spec = DngSpec::cfa(w, h, data.clone());
+    spec.bits = 12;
+    spec.white = 8190;
+    spec.linearization = Some(table.clone());
+    spec.raw_extra = vec![(51008, Val::Undefined(testgen::map_polynomial_opcode_list([0, 0, h as u32, w as u32], &[(0, vec![0.0, 1.0])])))];
+    let s = sensor(&spec.build());
+    assert!(s.linearization.is_none());
+    assert_eq!(s.data, data.iter().map(|&value| table[usize::from(value)]).collect::<Vec<_>>());
+}
+
+/// A 12-bit LinearizationTable that is not a straight line: `T[i] = i² / 4096`.
+fn square_table() -> Vec<u16> {
+    (0..4096u32).map(|i| (i * i / 4096) as u16).collect()
+}
+
+/// An OpcodeList1 MapPolynomial runs on the stored codes, before the LinearizationTable, and is
+/// not handed on to development. `2x` doubles a stored code, so a sample `v` decodes to `T[2v]`;
+/// applying the table first would give `T[v]` and leave the polynomial for development. The larger
+/// image has more samples than there are 16-bit codes, so the polynomial is tabulated there.
+#[test]
+fn an_opcode_list1_map_polynomial_runs_on_the_stored_codes_before_the_table() {
+    for (w, h) in [(16, 8), (320, 256)] {
+        let data = noise(w * h, 11);
+        let table = square_table();
+        let mut spec = DngSpec::cfa(w, h, data.clone());
+        spec.bits = 12;
+        spec.white = 4094;
+        spec.linearization = Some(table.clone());
+        spec.raw_extra = vec![(51008, Val::Undefined(testgen::map_polynomial_opcode_list([0, 0, h as u32, w as u32], &[(0, vec![0.0, 2.0])])))];
+        let s = sensor(&spec.build());
+        assert_eq!(s.data, data.iter().map(|&v| table[usize::from(v) * 2]).collect::<Vec<_>>(), "{w}x{h}");
+        assert!(s.polynomials.is_empty(), "the OpcodeList1 polynomial is not applied again in development");
+    }
+}
+
+/// An OpcodeList1 GainMap also runs on the stored codes before the table: a gain of 2 everywhere
+/// decodes a sample `v` to `T[2v]`, and the map is not handed on to development.
+#[test]
+fn an_opcode_list1_gain_map_runs_on_the_stored_codes_before_the_table() {
+    let (w, h) = (16, 8);
+    let data = noise(w * h, 11);
+    let table = square_table();
+    let mut spec = DngSpec::cfa(w, h, data.clone());
+    spec.bits = 12;
+    spec.white = 4094;
+    spec.linearization = Some(table.clone());
+    spec.raw_extra = vec![(51008, Val::Undefined(testgen::gain_map_opcode_list([0, 0, h as u32, w as u32], 1, [[2.0, 2.0], [2.0, 2.0]])))];
+    let s = sensor(&spec.build());
+    assert_eq!(s.data, data.iter().map(|&v| table[usize::from(v) * 2]).collect::<Vec<_>>());
+    assert!(s.gain_maps.is_empty(), "the OpcodeList1 gain map is not applied again in development");
+}
+
+/// A large OpcodeList1 gain saturates a stored code at the top of the 16-bit range instead of
+/// overflowing: every sample but 0 maps to the table's last entry.
+#[test]
+fn an_opcode_list1_gain_map_saturates_large_gains() {
+    let (w, h) = (16, 8);
+    let data = noise(w * h, 11);
+    let table = square_table();
+    let mut spec = DngSpec::cfa(w, h, data.clone());
+    spec.bits = 12;
+    spec.white = 4094;
+    spec.linearization = Some(table.clone());
+    spec.raw_extra = vec![(51008, Val::Undefined(testgen::gain_map_opcode_list([0, 0, h as u32, w as u32], 1, [[1e38, 1e38], [1e38, 1e38]])))];
+    let s = sensor(&spec.build());
+    assert_eq!(s.data, data.iter().map(|&v| table[if v == 0 { 0 } else { 4095 }]).collect::<Vec<_>>());
+}
+
+/// An OpcodeList1 GainMap with a vertical spacing of 0 does not change the stored codes at decode;
+/// it is handed on to development with the other maps.
+#[test]
+fn an_opcode_list1_gain_map_with_zero_spacing_is_not_applied_to_the_stored_codes() {
+    let (w, h) = (16, 8);
+    let data = noise(w * h, 11);
+    let table = square_table();
+    let mut list = testgen::gain_map_opcode_list([0, 0, h as u32, w as u32], 1, [[2.0, 2.0], [2.0, 2.0]]);
+    // List count, then the opcode's id, version, flags and size, then ten 32-bit area and map fields.
+    list[60..68].copy_from_slice(&0.0f64.to_be_bytes());
+    let mut spec = DngSpec::cfa(w, h, data.clone());
+    spec.bits = 12;
+    spec.white = 4094;
+    spec.linearization = Some(table.clone());
+    spec.raw_extra = vec![(51008, Val::Undefined(list))];
+    let s = sensor(&spec.build());
+    assert_eq!(s.data, data.iter().map(|&v| table[usize::from(v)]).collect::<Vec<_>>());
+    assert_eq!(s.gain_maps.len(), 1);
+    assert_eq!(s.gain_maps[0].spacing_v, 0.0);
+}
+
+/// OpcodeList1 runs on the image as stored, so its areas are in stored-image coordinates, not
+/// relative to the ActiveArea: a polynomial over rows 0 and 1 changes the two masked rows above an
+/// ActiveArea that starts at row 2, and leaves the active rows as the table maps them.
+#[test]
+fn an_opcode_list1_area_is_in_stored_image_coordinates() {
+    let (w, h) = (16, 8);
+    let data = noise(w * h, 11);
+    let table = square_table();
+    let mut spec = DngSpec::cfa(w, h, data.clone());
+    spec.bits = 12;
+    spec.white = 4094;
+    spec.active_area = Some([2, 0, h as u32, w as u32]);
+    spec.linearization = Some(table.clone());
+    spec.raw_extra = vec![(51008, Val::Undefined(testgen::map_polynomial_opcode_list([0, 0, 2, w as u32], &[(0, vec![0.0, 2.0])])))];
+    let s = sensor(&spec.build());
+    let want: Vec<u16> = data.iter().enumerate().map(|(i, &v)| table[usize::from(v) * if i < 2 * w { 2 } else { 1 }]).collect();
+    assert_eq!(s.data, want);
+}
+
 /// A LinearizationTable maps integer samples: floating-point data ignores one.
 #[test]
 fn floating_point_raw_data_ignores_a_linearization_table() {
