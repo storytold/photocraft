@@ -322,10 +322,15 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                 // The reference application's list, PSD chosen when the dialog opens (#13635).
                 choice("format", tl!("File Type"), artboard_formats(), "psd"),
             ];
-            // Export Options and each file type's settings (#13636); the JPEG quality is one of them.
-            rows.extend(artboard_export_options::rows());
-            // Include Artboard Name and its Name Options (#13637).
-            rows.extend(artboard_name_options::rows(&crate::type_tool::families()));
+            // Export Options and each file type's settings (#13636; the JPEG quality is one of them), then Include Artboard
+            // Name and its Name Options (#13637). A section's body runs to the next section and hides with it, so both
+            // checkboxes come before the Options section: after it, Include Artboard Name would show only with Export Options.
+            let mut export = artboard_export_options::rows().into_iter();
+            let mut name = artboard_name_options::rows(&crate::type_tool::families()).into_iter();
+            rows.extend(export.next());
+            rows.extend(name.next());
+            rows.extend(export);
+            rows.extend(name);
             plain(rows)
         }
         "file.export.artboardsToPdf" => {

@@ -16,7 +16,7 @@ use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, color_param, int, int_i32, parse_hex};
-use crate::file_cmds::{SaveOpts, encode, f64_param, join, native_doc, sanitize, stem, str_param, write_file};
+use crate::file_cmds::{encode, f64_param, join, native_doc, sanitize, stem, str_param, write_file};
 use crate::{EngineError, Result, Session};
 
 /// Artboard size presets (name, width, height) in pixels, Photoshop's common devices and pages.
@@ -1076,7 +1076,9 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
             Some(_) if truecolour && one.mode != ColorMode::Rgb => encode(&rgb_copy(&one)?, &path, save)?,
             Some(_) => encode(&one, &path, save)?,
             // The PNG-8 writer does not interlace; say so, as the palette PNG path of a save does.
-            None if save.png_interlaced == Some(true) => (png8(&one, cmd)?, vec!["written without interlacing: the PNG-8 exporter does not interlace".to_owned()]),
+            None if save.png_interlaced == Some(true) => {
+                (png8(&one, cmd)?, vec!["written without interlacing: the PNG-8 exporter does not interlace".to_owned()])
+            }
             None => (png8(&one, cmd)?, Vec::new()),
         };
         guard.check()?;
@@ -1374,7 +1376,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToPdf",
             "Artboards to PDF…",
             &["File", "Export"],
-            r##"{"path":str (.pdf),"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's page also shows the visible boards above it where they overlap it; artboard: Artboard Content Only),"artboards":[id]?,"quality":0..12=10,"includeBackground":bool=true (false: a white board's fill is left out and the page gets a soft mask, so it is transparent where the board's layers have no pixels; an empty board, other fills and documents other than 8-bit RGB keep it),"reversePageOrder":bool=false (the default page order the other way round)} â†’ {path, pages} (one raster page per board, bottom artboard of the Layers panel first)"##,
+            r##"{"path":str (.pdf),"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's page also shows the visible boards above it where they overlap it; artboard: Artboard Content Only),"artboards":[id]?,"quality":0..12=10,"includeBackground":bool=true (false: a white board's fill is left out and the page gets a soft mask, so it is transparent where the board's layers have no pixels; an empty board, other fills and documents other than 8-bit RGB keep it),"reversePageOrder":bool=false (the default page order the other way round)} → {path, pages} (one raster page per board, bottom artboard of the Layers panel first)"##,
             export_artboards,
             artboards_to_pdf
         ),
@@ -1397,11 +1399,11 @@ mod file_types_tests;
 #[path = "artboard_cmds/first_board_background_tests.rs"]
 mod first_board_background_tests;
 #[cfg(test)]
-#[path = "artboard_cmds/include_name_tests.rs"]
-mod include_name_tests;
-#[cfg(test)]
 #[path = "artboard_cmds/from_group_reset_props_tests.rs"]
 mod from_group_reset_props_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/include_name_tests.rs"]
+mod include_name_tests;
 
 #[cfg(test)]
 #[path = "artboard_cmds/from_layers_history_name_tests.rs"]
