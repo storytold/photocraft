@@ -102,6 +102,7 @@ mod path_transform_target;
 mod pdn;
 mod pen_path_append;
 mod photoshop_oracles;
+mod pixel_align_stroke;
 mod pixel_lock_edits;
 mod place_steps_measure;
 mod precheck;

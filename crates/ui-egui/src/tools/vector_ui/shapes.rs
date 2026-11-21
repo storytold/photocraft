@@ -216,6 +216,7 @@ fn geometry_params(app: &PhotocraftApp, geometry: &ShapeGeometry, kind: ShapeKin
 /// `shape.create` params with the options bar's fill and stroke.
 fn create_params(app: &PhotocraftApp, geometry: &ShapeGeometry, kind: ShapeKind) -> Result<Value, String> {
     let mut p = geometry_params(app, geometry, kind)?;
+    p["useAlignedRendering"] = json!(app.ui.tool_options.use_aligned_rendering);
     p["fill"] = fill_param(app);
     p["stroke"] = stroke_param(app);
     Ok(p)
@@ -277,7 +278,10 @@ pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeo
                 }
             };
             let path = photocraft_engine::vector_cmds::path_json(&outline);
-            if let Err(e) = app.run("shape.create", json!({"kind": "path", "path": path, "addTo": id.0, "op": op})) {
+            if let Err(e) = app.run(
+                "shape.create",
+                json!({"kind": "path", "path": path, "addTo": id.0, "op": op, "useAlignedRendering": app.ui.tool_options.use_aligned_rendering}),
+            ) {
                 report(app, e);
             }
             return;
@@ -410,8 +414,25 @@ fn preview_layer(app: &PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry,
     let o = &app.ui.tool_options;
     let path = shape_outline(app, kind, geometry, keep_angle)?;
     let paint = !draws_path(o);
+    let snapped_geometry = snapped(geometry, keep_angle, snaps_to_pixels(app, kind))?;
+    let live = if let ShapeGeometry::Line { from, to, weight } = snapped_geometry {
+        Some(photocraft_doc::LiveShape::ArrowLine {
+            from: [from.x, from.y],
+            to: [to.x, to.y],
+            weight,
+            start: o.arrow_start,
+            end: o.arrow_end,
+            width: f64::from(o.arrow_width),
+            length: f64::from(o.arrow_length),
+            concavity: if o.arrow_concavity.is_finite() { f64::from(o.arrow_concavity.round().clamp(-50.0, 50.0)) } else { 0.0 },
+        })
+    } else {
+        None
+    };
     Some(photocraft_doc::ShapeLayer {
         path,
+        use_aligned_rendering: paint && o.use_aligned_rendering,
+        live,
         fill: (paint && o.shape_fill).then(|| tool_paint(app, false)),
         stroke: (paint && o.stroke_width > 0.0).then(|| o.shape_stroke.stroke(o.stroke_width, tool_paint(app, true))),
         ..Default::default()
@@ -444,6 +465,16 @@ pub fn show_preview(app: &PhotocraftApp, ui: &egui::Ui, at: egui::Rect, view: &C
     let Some((kind, geometry)) = super::host::shape_preview(app) else { return };
     let shift = craft::ui::runtime::pointer::frame(ui.ctx()).mods.shift;
     let Some(mut shape) = preview_layer(app, kind, geometry, shift) else { return };
+    if shape.use_aligned_rendering {
+        let origin = view.to_screen(Point::new(0.0, 0.0));
+        let x = view.to_screen(Point::new(1.0, 0.0));
+        let y = view.to_screen(Point::new(0.0, 1.0));
+        let transform = photocraft_geom::Affine { m: [x.x - origin.x, x.y - origin.y, y.x - origin.x, y.y - origin.y, origin.x, origin.y].map(f64::from) };
+        if let Some(st) = app.session.active() {
+            crate::shape_stroke_ui::paint_document_shape_preview(&ui.painter().with_clip_rect(at), &shape, &transform, st.doc.bounds());
+        }
+        return;
+    }
     shape.path = path_on_screen(&shape.path, view);
     if let Some(stroke) = &mut shape.stroke {
         // `view.zoom` is screen points per document unit.

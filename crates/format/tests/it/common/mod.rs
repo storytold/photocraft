@@ -156,6 +156,8 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
                 dashes: vec![2.0, 1.0],
                 dash_offset: 0.5,
             }),
+            use_aligned_rendering: false,
+            psd_coordinate_frame: Some([300, 280]),
             live: Some(LiveShape::Rect { rect: [1.0, 2.0, 30.0, 40.0], radii: [4.0, 0.0, 4.0, 0.0] }),
             cache: Some(cache.clone()),
             psd_raw: Some(blob(10, 30)),

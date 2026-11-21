@@ -98,16 +98,19 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool, fre
         r
     } else if let (Some(op), Some(layer), true) = (op, into_shape, shape_mode) {
         // The selected shape layer keeps its fill and stroke; the new component cuts, intersects…
-        app.run("shape.create", json!({"kind": "path", "path": path, "addTo": layer, "op": op}))
+        app.run(
+            "shape.create",
+            json!({"kind": "path", "path": path, "addTo": layer, "op": op, "useAlignedRendering": app.ui.tool_options.use_aligned_rendering}),
+        )
     } else if shape_mode {
         let fill = if closed { fill_param(app) } else { Value::Null };
         let stroke = if closed { stroke_param(app) } else { super::shapes::open_pen_stroke_param(app) };
-        app.run("shape.create", json!({"kind": "path", "path": path, "fill": fill, "stroke": stroke, "historyName": freeform.then_some("Freeform Pen")}))
+        app.run("shape.create", json!({"kind": "path", "path": path, "fill": fill, "stroke": stroke, "useAlignedRendering": app.ui.tool_options.use_aligned_rendering, "historyName": freeform.then_some("Freeform Pen")}))
     } else if let Some((name, p)) =
         pen.resumes.as_ref().and_then(|r| app.session.active().and_then(|st| with_resumed_subpath(&st.doc, r, &path)).map(|p| (r.path.clone(), p)))
     {
         // The resumed subpath, carried on, takes its old place: one step, no second subpath.
-        app.run("path.set", json!({"name": name, "path": p, "historyName": freeform.then_some("Freeform Pen")})).inspect(|_| app.ui.selected_path = Some(name))
+        app.run("path.set", json!({"name": name, "path": p, "useAlignedRendering": app.ui.tool_options.use_aligned_rendering, "historyName": freeform.then_some("Freeform Pen")})).inspect(|_| app.ui.selected_path = Some(name))
     } else if let Some((id, existing)) = targeted_vector_mask(app) {
         // A targeted vector mask takes the new subpath (#196), as in Photoshop.
         let mut p = path_json(&existing);
@@ -355,6 +358,9 @@ fn commit_resumed_on_layer(app: &mut PhotocraftApp, pen: &PenPath, path: &Value,
     if closed && (pen.live_layer || (pen_paint && sh.path.subpaths.iter().all(|s| !s.closed))) {
         params["fill"] = fill_param(app);
         params["stroke"] = stroke_param(app);
+    }
+    if app.ui.tool_options.vector_mode == craft::draw::ui::shape::VectorMode::Shape {
+        params["useAlignedRendering"] = json!(app.ui.tool_options.use_aligned_rendering);
     }
     Some(app.run("shape.edit", params))
 }
@@ -785,7 +791,7 @@ pub(super) fn make_shape_from_draft(app: &mut PhotocraftApp, pen: &PenPath) -> R
     let selected = app.ui.selected_path.clone();
     let params = |app: &mut PhotocraftApp| {
         let (path, consume) = draft_shape_path(app, pen).ok_or_else(|| tl!("No document").to_string())?;
-        let params = json!({"path": path, "consumeWorkPath": consume, "fill": fill_param(app), "stroke": stroke_param(app)});
+        let params = json!({"path": path, "consumeWorkPath": consume, "useAlignedRendering": app.ui.tool_options.use_aligned_rendering, "fill": fill_param(app), "stroke": stroke_param(app)});
         Ok::<_, String>((params, consume))
     };
     let made = match &owner {

@@ -2307,6 +2307,7 @@ dependencies = [
  "egui_kittest",
  "epaint_default_fonts",
  "flate2",
+ "fontique",
  "image",
  "inventory",
  "libtest-mimic",

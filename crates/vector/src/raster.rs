@@ -152,6 +152,64 @@ impl Rasterizer {
         self.inverted
     }
 
+    /// Translate compiled edges by a finite render-only offset without retessellating dashes.
+    pub(crate) fn translated(&self, dx: f64, dy: f64) -> Self {
+        let mut shifted = self.clone();
+        for edge in &mut shifted.edges {
+            edge.x0 += dx;
+            edge.y0 += dy;
+            edge.y1 += dy;
+        }
+        shifted.bounds = shifted.bounds.map(|(x0, y0, x1, y1)| (x0 + dx, y0 + dy, x1 + dx, y1 + dy));
+        shifted
+    }
+
+    /// Sample the compiled outline without integrating pixel area. Used only on isolated
+    /// aligned butt-dash runs, where a subpixel dash may still contain a pixel center.
+    pub(crate) fn point_samples(&self, rect: Rect, offset: (f64, f64)) -> Vec<f32> {
+        let mut out = vec![0.0; rect.width() as usize * rect.height() as usize];
+        let mut active = Vec::new();
+        let mut crossings = Vec::new();
+        let mut wind = vec![0i32; self.comps.len()];
+        let mut next = 0;
+        for (row, y) in (rect.y0..rect.y1).enumerate() {
+            let y = f64::from(y) + offset.1;
+            active.retain(|&i: &usize| self.edges.get(i).is_some_and(|e| e.y1 > y));
+            while let Some(e) = self.edges.get(next).filter(|e| e.y0 <= y) {
+                if e.y1 > y {
+                    active.push(next);
+                }
+                next += 1;
+            }
+            crossings.clear();
+            for &i in &active {
+                if let Some(e) = self.edges.get(i) {
+                    crossings.push((e.x_at(y), e.comp, e.dir));
+                }
+            }
+            crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
+            wind.fill(0);
+            let mut union_count = 0;
+            let mut crossing = 0;
+            for (column, x) in (rect.x0..rect.x1).enumerate() {
+                let x = f64::from(x) + offset.0;
+                while let Some(&(_, comp, dir)) = crossings.get(crossing).filter(|e| e.0 <= x) {
+                    if let Some(w) = wind.get_mut(comp as usize) {
+                        let was = self.comp_inside(comp as usize, *w);
+                        *w = w.saturating_add(dir);
+                        let now = self.comp_inside(comp as usize, *w);
+                        union_count += i32::from(now) - i32::from(was);
+                    }
+                    crossing += 1;
+                }
+                if let Some(value) = out.get_mut(row * rect.width() as usize + column) {
+                    *value = f32::from(self.inside(&wind, union_count));
+                }
+            }
+        }
+        out
+    }
+
     /// Whether the combined shape is inside given per-component winding numbers.
     #[inline]
     fn inside(&self, wind: &[i32], union_count: i32) -> bool {

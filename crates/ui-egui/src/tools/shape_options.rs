@@ -228,7 +228,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
         Divider::vertical().show(ui);
         // Only a shape layer has pixel edges to align: greyed in Path mode (#13370).
         let shape_mode = app.ui.tool_options.shape_mode == VectorMode::Shape;
-        let on = Checkbox::new(Bind::given(app.ui.tool_options.align_edges)).label(tl!("Align Edges").to_owned()).enabled(shape_mode).show(ui);
+        let on = Checkbox::new(Bind::given(app.ui.tool_options.align_edges)).label(tl!("Snap Bounding Box").to_owned()).enabled(shape_mode).show(ui);
         if let Some(next) = on.value().copied() {
             app.ui.tool_options.align_edges = next;
         }
@@ -346,6 +346,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
         // An `Err` is the alert that was not opened because one is already up.
         let _ = app.framework.dialogs.open_unless_open(HostedAlert::new(alert));
     }
+    crate::vector_ui::alignment::shape_option(app, ui, target.as_ref().map(|s| s.layer), paint);
     if tool == Tool::CustomShape {
         crate::preset_panels::shape_picker(app, ui);
     }

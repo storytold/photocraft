@@ -73,18 +73,18 @@ fn a_greyed_checkbox_keeps_snapping_in_path_mode() {
 #[test]
 fn options_bar_shows_align_edges_for_the_triangle_only() {
     let mut h = harness(Tool::Triangle);
-    let node = h.get_by_label("Align Edges");
+    let node = h.get_by_label("Snap Bounding Box");
     assert!(!node.accesskit_node().is_disabled(), "enabled in Shape mode");
     assert_eq!(node.accesskit_node().toggled(), Some(Toggled::True));
-    h.get_by_label("Align Edges").click();
+    h.get_by_label("Snap Bounding Box").click();
     h.run_steps(3);
     assert!(!h.state().ui.tool_options.align_edges, "clicking toggles the option");
-    assert_eq!(h.get_by_label("Align Edges").accesskit_node().toggled(), Some(Toggled::False));
+    assert_eq!(h.get_by_label("Snap Bounding Box").accesskit_node().toggled(), Some(Toggled::False));
 
     h.state_mut().ui.tool_options.shape_mode = VectorMode::Path;
     h.run_steps(4);
-    assert!(h.get_by_label("Align Edges").accesskit_node().is_disabled(), "greyed in Path mode");
+    assert!(h.get_by_label("Snap Bounding Box").accesskit_node().is_disabled(), "greyed in Path mode");
 
     let h = harness(Tool::Rectangle);
-    assert!(h.query_by_label("Align Edges").is_none());
+    assert!(h.query_by_label("Snap Bounding Box").is_none());
 }

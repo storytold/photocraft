@@ -191,6 +191,9 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
             crate::option_cells::range_alert(app, ui, &alert);
         }
     }
+    if app.ui.tool_options.vector_mode == VectorMode::Shape {
+        super::alignment::pen_option(app, ui);
+    }
     Divider::vertical().show(ui);
     path_operations_menu(app, ui);
     let o = &mut app.ui.tool_options;
@@ -464,6 +467,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
         .show(ui);
     let fw::ShapePanelOutput { events, pick_color, out_of_range, .. } = output;
     let paint_gradients = [library.gradient(fw::ShapePaint::Fill), library.gradient(fw::ShapePaint::Stroke)];
+    super::alignment::option(app, ui, Some(id), false);
 
     let mut applied = false;
     let mut recent: Option<[f32; 3]> = None;
