@@ -1162,7 +1162,8 @@ fn convert_depth(s: &mut Session, depth: SampleType) -> Result<Value> {
         // History::record clears redo even when an edit closure leaves the document unchanged.
         return Ok(Value::Null);
     }
-    s.edit("Bit Depth", |doc, _| {
+    // Named after the menu item, e.g. "16 Bits/Channel", as the reference application does.
+    s.edit(&format!("{} Bits/Channel", depth.bits()), |doc, _| {
         change_depth(doc, depth);
         Ok(())
     })?;

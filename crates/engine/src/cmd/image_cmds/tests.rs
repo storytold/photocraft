@@ -1289,3 +1289,25 @@ fn trim_and_duplicate_merged_on_too_large_document_fail_gracefully_without_panic
     assert_eq!(doc(&s).bounds(), initial_bounds, "canvas size unchanged after failed duplicate");
     assert_eq!(s.active().unwrap().revision, initial_rev, "revision unchanged after failed duplicate");
 }
+
+/// #15176: each Image › Mode conversion names its history state after the menu item, not
+/// "Mode Change" / "Bit Depth".
+#[test]
+fn mode_conversions_name_history_after_menu_item() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    for (cmd, label) in [
+        ("image.mode.grayscale", "Grayscale"),
+        ("image.mode.rgb", "RGB Color"),
+        ("image.mode.cmyk", "CMYK Color"),
+        ("image.mode.lab", "Lab Color"),
+        ("image.mode.multichannel", "Multichannel"),
+        ("image.mode.rgb", "RGB Color"),
+        ("image.mode.bits16", "16 Bits/Channel"),
+        ("image.mode.bits32", "32 Bits/Channel"),
+        ("image.mode.bits8", "8 Bits/Channel"),
+    ] {
+        s.execute(cmd, json!({})).unwrap();
+        assert_eq!(s.active().unwrap().history.undo_label(), Some(label), "{cmd}");
+    }
+}
