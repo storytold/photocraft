@@ -177,6 +177,32 @@ fn batch_rejects_too_many_steps() {
 }
 
 #[test]
+fn render_rejects_malformed_requests_and_keeps_missing_or_null_path_behavior() {
+    let h = session();
+    let mut g = h.lock().unwrap();
+    g.handle("doc.new", json!({"width": 8, "height": 8})).unwrap();
+    let before = g.inspect(None).unwrap();
+    for params in [json!([]), json!([0]), json!(123), json!(false), json!("out.png")] {
+        let error = g.handle("doc.render", params.clone()).unwrap_err();
+        assert!(matches!(&error, AutomationError::BadRequest(_)), "{params}: {error}");
+        assert!(error.to_string().contains("doc.render params must be an object"), "{params}: {error}");
+        assert_eq!(g.inspect(None).unwrap(), before, "invalid params {params} changed the document");
+    }
+    for path in [json!(123), json!(false), json!([]), json!({})] {
+        let error = g.handle("doc.render", json!({"path": path})).unwrap_err();
+        assert!(matches!(&error, AutomationError::BadRequest(_)), "{path}: {error}");
+        assert!(error.to_string().contains("`path` must be a string"), "{path}: {error}");
+        assert_eq!(g.inspect(None).unwrap(), before, "invalid path {path} changed the document");
+    }
+    for params in [Value::Null, json!({}), json!({"path": null})] {
+        let reply = g.handle("doc.render", params.clone()).unwrap();
+        assert_eq!(reply["mime"], "image/png", "{params}: {reply}");
+        let png = base64::engine::general_purpose::STANDARD.decode(reply["base64"].as_str().unwrap()).unwrap();
+        assert_eq!(photocraft_codecs::decode(&png).unwrap().dimensions(), (8, 8));
+    }
+}
+
+#[test]
 fn render_to_file_and_base64() {
     let h = session();
     let mut g = h.lock().unwrap();

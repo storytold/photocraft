@@ -223,6 +223,15 @@ impl Headless {
             }
             "doc.inspect" => self.inspect(index_of(&p)?),
             "doc.render" => {
+                // Invalid file requests must not fall back to a base64 response.
+                if !p.is_object() {
+                    return Err(bad("doc.render params must be an object"));
+                }
+                let path = match p.get("path") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(path)) => Some(path.as_str()),
+                    Some(_) => return Err(bad("`path` must be a string")),
+                };
                 let max = match p.get("maxSide") {
                     None => 1024,
                     Some(value) => {
@@ -232,7 +241,7 @@ impl Headless {
                 let png = self.render_png(index_of(&p)?, max)?;
                 // A GPU to CPU fallback is reported with this reply, not on the next save.
                 let warnings = self.drain_diagnostics();
-                let mut reply = match str_of(&p, "path") {
+                let mut reply = match path {
                     Some(path) => {
                         self.write_render(&PathBuf::from(path), &png)?;
                         json!({"path": path, "bytes": png.len()})
