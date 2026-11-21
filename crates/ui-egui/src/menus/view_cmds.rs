@@ -207,6 +207,10 @@ const LANGUAGE: [&str; 3] = ["defaultFeatures", "eastAsianFeatures", "middleEast
 mod tests;
 
 #[cfg(test)]
+#[path = "view_cmds/calculations_remember_tests.rs"]
+mod calculations_remember_tests;
+
+#[cfg(test)]
 #[path = "view_cmds/fit_image_sticky_tests.rs"]
 mod fit_image_sticky_tests;
 
