@@ -1,8 +1,8 @@
 //! #12707: a drag from a segment with Add Anchor Point inserts the anchor and pulls out its
 //! handles, as the Pen does: the outgoing handle follows the pointer and the incoming one mirrors
 //! it. ⇧ turns the handle to 45°, ⌥ breaks the pair; the add and the drag are one history step,
-//! Add Anchor Point. The drag is the overlay's (`PathEdit::PullAnchor`, storytold/craft-libs#2285);
-//! the tests that need it stay ignored until the craft-libs pin carries it and PhotoCraft maps it.
+//! Add Anchor Point. The drag is the overlay's (`PathEdit::PullAnchor`, storytold/craft-libs#2285),
+//! mapped in `direct_select/edits.rs` (`add_and_pull`).
 
 use egui::Modifiers;
 use photocraft_doc::Knot;
@@ -65,7 +65,6 @@ fn assert_knot(k: &Knot, anchor: [f64; 2], out: [f64; 2], inc: [f64; 2]) {
 }
 
 #[test]
-#[ignore = "needs storytold/craft-libs#2285 in the craft-libs pin and its PathEdit::PullAnchor mapped"]
 fn a_drag_from_the_bottom_edge_pulls_out_mirrored_handles_in_one_step() {
     let mut app = square();
     let (before, n) = (saved(&app), steps(&app));
@@ -85,7 +84,6 @@ fn a_drag_from_the_bottom_edge_pulls_out_mirrored_handles_in_one_step() {
 }
 
 #[test]
-#[ignore = "needs storytold/craft-libs#2285 in the craft-libs pin and its PathEdit::PullAnchor mapped"]
 fn shift_turns_the_handle_to_45_degrees_and_the_in_handle_mirrors_it() {
     // The anchor goes in at (200,500); the drags are offsets from it.
     for (d, want) in [
@@ -106,7 +104,6 @@ fn shift_turns_the_handle_to_45_degrees_and_the_in_handle_mirrors_it() {
 }
 
 #[test]
-#[ignore = "needs storytold/craft-libs#2285 in the craft-libs pin and its PathEdit::PullAnchor mapped"]
 fn alt_during_the_drag_breaks_the_pair_so_only_the_out_handle_follows() {
     let mut app = square();
     let n = steps(&app);
@@ -121,7 +118,6 @@ fn alt_during_the_drag_breaks_the_pair_so_only_the_out_handle_follows() {
 }
 
 #[test]
-#[ignore = "needs storytold/craft-libs#2285 in the craft-libs pin and its PathEdit::PullAnchor mapped"]
 fn the_drag_works_on_a_shape_layers_path_in_one_step() {
     // 800 x 600, a shape from (450,100) to (650,250), made the active layer.
     let (mut app, shape) = super::delete_anchor_targeted_path_tests::setup(Tool::AddAnchorPoint);
