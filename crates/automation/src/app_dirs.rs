@@ -72,7 +72,9 @@ pub fn platform_dir(env: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> 
     if cfg!(windows) {
         return env("APPDATA").filter(|a| !a.is_empty()).map(|a| PathBuf::from(a).join("Photocraft"));
     }
-    env("XDG_CONFIG_HOME").filter(|x| !x.is_empty()).map(PathBuf::from).or_else(|| home.map(|h| h.join(".config"))).map(|c| c.join("photocraft"))
+    // XDG requires absolute paths. With Windows handled above, a root is sufficient,
+    // including on wasm where is_absolute does not recognize rooted paths.
+    env("XDG_CONFIG_HOME").map(PathBuf::from).filter(|x| x.has_root()).or_else(|| home.map(|h| h.join(".config"))).map(|c| c.join("photocraft"))
 }
 
 /// The first portable marker file in `exe_dir`, if any.
@@ -111,4 +113,65 @@ pub fn ensure_writable(dir: &Path) -> std::io::Result<()> {
 pub fn from_env() -> DataDir {
     let exe = std::env::current_exe().ok();
     resolve(|k| std::env::var_os(k), exe.as_deref().and_then(Path::parent))
+}
+
+#[cfg(all(test, not(windows), not(target_os = "macos")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relative_xdg_config_home_is_ignored() {
+        for xdg in ["relative/config", ".", "~/config"] {
+            for (home, expected) in [(Some("/home/test"), Some("/home/test/.config/photocraft")), (None, None), (Some(""), None)] {
+                let env = |key: &str| {
+                    match key {
+                        "HOME" => home,
+                        "XDG_CONFIG_HOME" => Some(xdg),
+                        _ => None,
+                    }
+                    .map(OsString::from)
+                };
+                assert_eq!(platform_dir(&env), expected.map(PathBuf::from), "HOME={home:?}, XDG_CONFIG_HOME={xdg:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn absolute_and_default_xdg_config_home_still_work() {
+        for (xdg, home, expected) in [
+            (Some("/config"), Some("/home/test"), Some("/config/photocraft")),
+            (Some("/config"), None, Some("/config/photocraft")),
+            (None, Some("/home/test"), Some("/home/test/.config/photocraft")),
+            (Some(""), Some("/home/test"), Some("/home/test/.config/photocraft")),
+            (None, None, None),
+            (Some(""), None, None),
+        ] {
+            let env = |key: &str| {
+                match key {
+                    "HOME" => home,
+                    "XDG_CONFIG_HOME" => xdg,
+                    _ => None,
+                }
+                .map(OsString::from)
+            };
+            assert_eq!(platform_dir(&env), expected.map(PathBuf::from), "HOME={home:?}, XDG_CONFIG_HOME={xdg:?}");
+        }
+    }
+
+    #[test]
+    fn custom_config_override_still_accepts_relative_paths() {
+        let env = |key: &str| {
+            match key {
+                "PHOTOCRAFT_CONFIG_DIR" => Some("custom/config"),
+                "XDG_CONFIG_HOME" => Some("/config"),
+                "HOME" => Some("/home/test"),
+                _ => None,
+            }
+            .map(OsString::from)
+        };
+        let result = resolve(env, None);
+        assert_eq!(result.dir, Some(PathBuf::from("custom/config")));
+        assert_eq!(result.mode, Mode::Override);
+        assert!(result.warning.is_none());
+    }
 }
