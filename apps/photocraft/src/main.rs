@@ -414,7 +414,7 @@ fn write_start_marker(sentinel: &gpu_startup::SharedSentinel, plan: &gpu_startup
     }
 }
 
-fn initialize_nightly_process_identity() -> Result<(), String> {
+fn initialize_nightly_process_identity() -> Result<(), process_identity::IdentityError> {
     process_identity::initialize(build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1, os_window::id_for(os_window::LaunchIdentity::NightlyV1))
 }
 
@@ -450,7 +450,7 @@ fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
     let early = launch_profile::parse(argv)
         .and_then(|launch| {
             build_flavor::require_profile(build_flavor::COMPILED, &launch.profile)?;
-            initialize_nightly_process_identity()?;
+            initialize_nightly_process_identity().map_err(|error| error.to_string())?;
             Ok(launch)
         })
         .and_then(|launch| {

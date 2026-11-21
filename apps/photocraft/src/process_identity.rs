@@ -3,7 +3,13 @@
 
 use std::sync::OnceLock;
 
-pub fn initialize(nightly: bool, app_id: &str) -> Result<(), String> {
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum IdentityError {
+    #[error("{0}")]
+    Configuration(String),
+}
+
+pub fn initialize(nightly: bool, app_id: &str) -> Result<(), IdentityError> {
     configure(nightly && cfg!(windows), app_id, |id| {
         static RESULT: OnceLock<Result<(), String>> = OnceLock::new();
         RESULT
@@ -26,6 +32,7 @@ pub fn initialize(nightly: bool, app_id: &str) -> Result<(), String> {
             })
             .clone()
     })
+    .map_err(IdentityError::Configuration)
 }
 
 fn configure(explicit_nightly: bool, app_id: &str, set: impl FnOnce(&str) -> Result<(), String>) -> Result<(), String> {
