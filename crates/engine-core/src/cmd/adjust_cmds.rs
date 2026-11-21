@@ -448,6 +448,34 @@ pub(crate) fn black_white_empty_refusal(s: &Session, p: &Value) -> Result<()> {
     empty_layer_refusal(s, p, BLACK_WHITE_EMPTY)
 }
 
+/// Image › Adjustments › Color Balance's id.
+pub(crate) const COLOR_BALANCE_ID: &str = "image.adjustments.colorBalance";
+/// The reference application's alert for Color Balance where it is greyed.
+pub(crate) const COLOR_BALANCE_UNAVAILABLE: &str = "The command \"Color Balance\" is not currently available.";
+/// The reference application's alert for Color Balance on an empty pixel layer.
+pub(crate) const COLOR_BALANCE_EMPTY: &str = "Could not complete the Color Balance command because the active layer is empty.";
+
+/// Color Balance's precondition (#14416): not in a Grayscale or Multichannel document, nor on a
+/// hidden pixel layer, as in the reference application; otherwise [`has_adjustable`]'s. Bitmap is
+/// refused by the shared Bitmap gate and a targeted layer mask by `mask_target_enabled`.
+pub(crate) fn color_balance_enabled(s: &Session) -> std::result::Result<(), String> {
+    use photocraft_color::ColorMode;
+    let p = crate::channel_cmds::inject_target(s, COLOR_BALANCE_ID, Value::Null);
+    greyed_on_pixels(
+        s,
+        &p,
+        &[ColorMode::Grayscale, ColorMode::Multichannel],
+        &[ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Indexed],
+        COLOR_BALANCE_UNAVAILABLE,
+    )
+    .unwrap_or_else(|| has_adjustable(s))
+}
+
+/// Color Balance with `p` (its target filled in) stops on an empty pixel layer (#14416).
+pub(crate) fn color_balance_empty_refusal(s: &Session, p: &Value) -> Result<()> {
+    empty_layer_refusal(s, p, COLOR_BALANCE_EMPTY)
+}
+
 /// An adjustment's precondition for a call with `p` (its target filled in), which the reference
 /// application greys with `unavailable` on the layer's pixels in a document of one of `greyed`,
 /// or on a hidden pixel layer (the active one or the one `"layer"` names) in one of `measured`.

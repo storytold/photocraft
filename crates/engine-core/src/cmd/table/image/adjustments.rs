@@ -119,19 +119,21 @@ pub fn specs() -> Vec<CommandSpec> {
                 _ => params,
             },
             // Brightness/Contrast also refuses a hidden pixel layer (#14359); Black & White is RGB
-            // only and refuses a hidden pixel layer (#14401).
+            // only and refuses a hidden pixel layer (#14401); Color Balance refuses Grayscale,
+            // Multichannel and a hidden pixel layer (#14416).
             enabled: match kind {
                 "brightnessContrast" => crate::adjust_cmds::brightness_contrast_enabled,
                 "blackWhite" => crate::adjust_cmds::black_white_enabled,
+                "colorBalance" => crate::adjust_cmds::color_balance_enabled,
                 _ => crate::adjust_cmds::has_adjustable,
             },
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
-                if kind == "brightnessContrast" {
-                    crate::adjust_cmds::brightness_contrast_empty_refusal(s, p)?;
-                }
-                if kind == "blackWhite" {
-                    crate::adjust_cmds::black_white_empty_refusal(s, p)?;
+                match kind.as_str() {
+                    "brightnessContrast" => crate::adjust_cmds::brightness_contrast_empty_refusal(s, p)?,
+                    "blackWhite" => crate::adjust_cmds::black_white_empty_refusal(s, p)?,
+                    "colorBalance" => crate::adjust_cmds::color_balance_empty_refusal(s, p)?,
+                    _ => {}
                 }
                 let filled;
                 let p = if kind == "colorLookup" {
