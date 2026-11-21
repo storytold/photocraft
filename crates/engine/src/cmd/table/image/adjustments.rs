@@ -95,9 +95,20 @@ pub fn specs() -> Vec<CommandSpec> {
                 _ => None,
             },
             params,
-            enabled: crate::adjust_cmds::has_adjustable,
+            // Black & White is RGB only and refuses a hidden pixel layer (#14401); Color Balance
+            // refuses Grayscale, Multichannel and a hidden pixel layer (#14416).
+            enabled: match kind {
+                "blackWhite" => crate::adjust_cmds::black_white_enabled,
+                "colorBalance" => crate::adjust_cmds::color_balance_enabled,
+                _ => crate::adjust_cmds::has_adjustable,
+            },
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
+                match kind.as_str() {
+                    "blackWhite" => crate::adjust_cmds::black_white_empty_refusal(s, p)?,
+                    "colorBalance" => crate::adjust_cmds::color_balance_empty_refusal(s, p)?,
+                    _ => {}
+                }
                 if matches!(kind.as_str(), "levels" | "curves") {
                     crate::channel_cmds::resolve_tone_target(s, false, p)?;
                 }
