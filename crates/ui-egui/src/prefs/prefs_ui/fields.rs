@@ -153,9 +153,9 @@ pub(super) fn rules() -> Vec<SettingRule> {
     if cfg!(target_arch = "wasm32") {
         tweak(&mut rules, "performance.lowLatencyDrawing", |r| r.hidden());
     }
-    // WinTab is a Windows-only opt-in, drawn with its note.
+    // WinTab is a Windows-only opt-in, drawn with its note; the row labels itself.
     if cfg!(target_os = "windows") {
-        tweak(&mut rules, "tools.tabletInput", |r| r.custom());
+        tweak(&mut rules, "tools.tabletInput", |r| r.custom_rows());
     } else {
         tweak(&mut rules, "tools.tabletInput", |r| r.hidden());
     }
@@ -170,10 +170,11 @@ pub(super) fn rules() -> Vec<SettingRule> {
         "scratchDisks.disks",
         "fileHandling.recentFiles",
         "type.favoriteFonts",
-        "interface.appearanceMode",
     ] {
         tweak(&mut rules, path, |r| r.custom());
     }
+    // The Appearance page draws whole rows with their own labels (Appearance Mode, the themes), so the window adds none.
+    tweak(&mut rules, "interface.appearanceMode", |r| r.custom_rows());
     // The favourite fonts are the user's library, not a Type setting.
     tweak(&mut rules, "type.favoriteFonts", |r| r.keep_on_reset());
 

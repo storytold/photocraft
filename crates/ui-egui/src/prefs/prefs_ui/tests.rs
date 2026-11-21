@@ -1706,3 +1706,27 @@ fn integrations_apply_without_a_restart() {
         assert!(!super::fields::read_at_launch(&format!("integrations.{key}")), "{key}");
     }
 }
+
+/// The texts the last frame painted, without a trailing colon, with each one's laid-out rect.
+fn painted_texts(h: &egui_kittest::Harness<'static, Box<PhotocraftApp>>) -> Vec<(String, egui::Rect)> {
+    fn collect(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+        match shape {
+            egui::Shape::Text(text) => out.push((text.galley.text().trim_end_matches(':').to_owned(), text.galley.rect.translate(text.pos.to_vec2()))),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    h.output().shapes.iter().for_each(|clipped| collect(&clipped.shape, &mut out));
+    out
+}
+
+/// #15553: Preferences › Interface labels Appearance Mode once: the Appearance page draws the row with its own label,
+/// and the window adds none.
+#[test]
+fn the_appearance_mode_row_shows_its_label_once() {
+    let (_, files) = app_with_store();
+    let h = prefs_harness(&files, "interface", vec2(1280.0, 800.0), |_| {});
+    let shown = painted_texts(&h).into_iter().filter(|(text, _)| text == "Appearance Mode").count();
+    assert_eq!(shown, 1, "\"Appearance Mode\" is painted once");
+}
