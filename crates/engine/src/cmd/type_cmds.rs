@@ -83,7 +83,7 @@ fn range_param(text: &str, p: &Value) -> (usize, usize) {
 /// Photoshop's manual kerning range (1/1000 em).
 pub const KERN_MIN: f64 = -1000.0;
 pub const KERN_MAX: f64 = 10_000.0;
-pub const TYPE_SIZE_MIN_PT: f64 = 0.1;
+pub const TYPE_SIZE_MIN_PT: f64 = 0.01;
 pub const TYPE_SIZE_MAX_PT: f64 = 1296.0;
 pub const TRACKING_MIN: f64 = -1000.0;
 pub const TRACKING_MAX: f64 = 10_000.0;
@@ -1004,7 +1004,7 @@ pub fn name_selection_commit(s: &mut Session) {
     }
 }
 
-const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.1..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","baseline":"normal|superscript|subscript","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str"##;
+const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.01..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","baseline":"normal|superscript|subscript","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str"##;
 
 /// The Type commands: create and edit type layers, set styles, fill paths, and the queries about them.
 pub fn specs() -> Vec<CommandSpec> {
