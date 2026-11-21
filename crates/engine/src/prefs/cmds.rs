@@ -228,7 +228,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Menus…",
             ["Edit"],
             Some("Cmd+Alt+Shift+M"),
-            r##"{"hide":["<id>",…]?,"show":["<id>",…]?,"color":{"<id>":"red|orange|yellow|green|blue|violet|gray|none"}?,"reset":bool=false}"##,
+            r##"{"hide":["<id>",…]?,"show":["<id>",…]?,"color":{"<id>":"red|orange|yellow|green|blue|violet|gray|none"}?,"reset":bool=false,"useSet":"<name>"|""(the built-in set)? (loads it before the other changes),"saveSet":"<name>"? (saves the menus as they end up and uses it; New is a saveSet under a fresh name),"deleteSet":"<name>"?,"sets":{"<name>":{"hidden":[…],"colors":{…}}}? (replaces every saved set, as the dialog's OK does),"activeSet":"<name>"|""?} → the menus as they now are, plus sets, activeSet, defaultsName and modified (the menus differ from the set in use: the dialog marks it "(modified)")"##,
             menus,
             true
         ),

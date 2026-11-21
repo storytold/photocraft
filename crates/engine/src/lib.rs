@@ -33,6 +33,7 @@ pub mod link_watch;
 pub mod malloc_tuning;
 pub mod memory;
 pub mod memory_gate;
+pub mod menu_sets;
 pub mod new_layer;
 mod param_check;
 mod pixels;
@@ -381,5 +382,7 @@ mod dense_budget_tests;
 #[cfg(test)]
 mod brush_clear_background_tests;
 pub mod command_hints;
+#[cfg(test)]
+mod menu_sets_tests;
 #[cfg(test)]
 mod pencil_auto_erase_exact_tests;
