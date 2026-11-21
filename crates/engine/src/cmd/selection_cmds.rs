@@ -135,11 +135,32 @@ pub(crate) fn sample_rgba8(s: &Session, all_layers: bool) -> Result<(Rect, Vec<[
     }
 }
 
+fn selected_wand_rgb_channel(s: &Session) -> Option<usize> {
+    let st = s.active()?;
+    let color_mode = st.doc.mode;
+    if color_mode != photocraft_doc::ColorMode::Rgb {
+        return None;
+    }
+    let channels = st.channel_view.color_selection(color_mode.color_channels())?;
+    channels.indices().next().filter(|_| channels.len() == 1)
+}
+
 fn magic_wand(s: &mut Session, p: &Value) -> Result<Value> {
     let (x, y) = (f(p, "x", 0.0).floor() as i32, f(p, "y", 0.0).floor() as i32);
     let (area, img) = match shown_gray(s) {
         Some(plane) => plane,
-        None => sample_rgba8(s, b(p, "sampleAllLayers", false))?,
+        None => {
+            let (area, mut img) = sample_rgba8(s, b(p, "sampleAllLayers", false))?;
+            if let Some(channel) = selected_wand_rgb_channel(s) {
+                for pixel in &mut img {
+                    // The wand compares the chosen component while retaining the sample's alpha.
+                    if let Some(value) = pixel.get(channel).copied() {
+                        pixel[..3].fill(value);
+                    }
+                }
+            }
+            (area, img)
+        }
     };
     let m = mode(p);
     // Subtract and Intersect grow the region from the seed through the selection only (#11779).
@@ -798,3 +819,6 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod wand_rgb_channel_tests;
