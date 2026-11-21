@@ -732,7 +732,7 @@ fn the_preview_on_a_smart_object_follows_its_filter_mask() {
     let Some(photocraft_doc::LayerContent::Smart(sm)) = st.doc.layer(st.active_layer.unwrap()).map(|l| &l.content) else { panic!("not a smart object") };
     let placed = photocraft_engine::smart_cmds::render_below_filter(&st.doc, sm, 0).unwrap().unwrap();
     let d = eng(&app);
-    let placed = ProxyImage::new(&placed, d.canvas, PROXY_SIDE);
+    let placed = ProxyImage::new_within(&placed, d.canvas, d.proxy.w.max(d.proxy.h), PROXY_MAX_PIXELS);
     let mut original = vec![[0u8; 4]; d.proxy.w * d.proxy.h];
     placed.render(&LiquifyField::new(d.canvas, d.cell), [0, 0, d.proxy.w, d.proxy.h], &mut original);
     // Inside the mask it edits the blurred pixels: the blur alone must not count as the Liquify.
@@ -749,4 +749,90 @@ fn the_preview_on_a_smart_object_follows_its_filter_mask() {
         }
     }
     assert!(masked > 0 && shown_changed > 0, "masked {masked}, changed inside the mask {shown_changed}");
+}
+
+/// Release timing for a brush on a 24 MP layer as the display reads it (factor 1, the base
+/// texture's on a 16384-texel GPU): open, the first whole read, then each pointer event's update
+/// and the read of its damage. `cargo test --release -p photocraft-ui-egui --lib liquify_24mp_timing -- --ignored --nocapture`
+#[test]
+#[ignore = "release timing"]
+fn liquify_24mp_timing() {
+    use std::time::Instant;
+    let (w, h) = (6000, 4000);
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.execute("file.new", json!({"width": w, "height": h, "depth": 8})).unwrap();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.session
+        .edit("paint", |doc, active| {
+            let s = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            for y in (0..h).step_by(40) {
+                s.fill_rect(Rect::new(0, y, w, y + 20), &[0.9, 0.2, 0.1, 1.0]);
+            }
+            Ok(())
+        })
+        .unwrap();
+    app.sync_views();
+    // An Apple-silicon GPU's texture side, which also makes the display read at factor 1.
+    app.ctx().clone().input_mut(|i| i.max_texture_side = 16384);
+    let t = Instant::now();
+    open_ws(&mut app).unwrap();
+    let open_ms = t.elapsed().as_secs_f64() * 1e3;
+    let t = Instant::now();
+    let mut whole = ColorImage::filled([w as usize, h as usize], Color32::TRANSPARENT);
+    eng(&app).read(pixel_rect(Rect::new(0, 0, w, h)), 1, &mut whole);
+    let whole_ms = t.elapsed().as_secs_f64() * 1e3;
+    let tool = StepTool::ForwardWarp;
+    let mut brush = LiquifySettings::default().brush;
+    brush.size = 800.0;
+    let start = StepStroke::new(tool, &brush, vec![[2000.0, 2000.0, 1.0]]);
+    eng(&app).stroke(StrokeEvent::Begin(start));
+    let (mut upd, mut rd, mut worst) = (0.0, 0.0, 0.0f64);
+    let n = 40;
+    for i in 1..=n {
+        let rev = eng(&app).revision;
+        let x = 2000.0 + f64::from(i) * 3.0;
+        let t = Instant::now();
+        eng(&app).stroke(StrokeEvent::Update(StepStroke::new(tool, &brush, vec![[x, 2000.0, 1.0]])));
+        let u = t.elapsed().as_secs_f64() * 1e3;
+        let t = Instant::now();
+        let damage = eng(&app).damage(rev).unwrap_or_default();
+        let mut img = ColorImage::filled([damage.width().max(1) as usize, damage.height().max(1) as usize], Color32::TRANSPARENT);
+        eng(&app).read(damage, 1, &mut img);
+        let r = t.elapsed().as_secs_f64() * 1e3;
+        upd += u;
+        rd += r;
+        worst = worst.max(u + r);
+    }
+    let scale = eng(&app).proxy.scale;
+    eprintln!(
+        "24 MP, proxy scale {scale}: open {open_ms:.0} ms, first whole read {whole_ms:.0} ms, per event: update {:.1} ms + damage read {:.1} ms (worst {worst:.1} ms)",
+        upd / f64::from(n),
+        rd / f64::from(n)
+    );
+}
+
+/// The proxy is the layer at document resolution, so the display reads it as it is at any zoom;
+/// a GPU texture side below the layer's is respected by downsampling.
+#[test]
+fn the_proxy_is_at_document_resolution_within_the_texture_side() {
+    let mut app = app_with_layer();
+    open_ws(&mut app).unwrap();
+    let e = eng(&app);
+    assert_eq!((e.proxy.scale, e.proxy.w, e.proxy.h), (1.0, 120, 80));
+    let mut whole = ColorImage::filled([120, 80], Color32::TRANSPARENT);
+    e.read(pixel_rect(Rect::new(0, 0, 120, 80)), 1, &mut whole);
+    let out = e.out.clone();
+    assert!(whole.pixels.iter().zip(&out).all(|(c, p)| c.to_array() == *p), "a factor-1 read is the proxy's picture");
+}
+
+/// A GPU texture side below the layer's is respected: the proxy is downsampled to fit it.
+#[test]
+fn the_proxy_fits_a_small_texture_side() {
+    let ctx = egui::Context::default();
+    ctx.input_mut(|i| i.max_texture_side = 64);
+    assert_eq!(proxy_side(&ctx), 64);
+    let surf = Surface::new(photocraft_color::PixelFormat::RGBA8);
+    let p = ProxyImage::new_within(&surf, Rect::new(0, 0, 120, 80), proxy_side(&ctx), PROXY_MAX_PIXELS);
+    assert_eq!(p.scale, 2.0);
+    assert!(p.w <= 64 && p.h <= 64);
 }

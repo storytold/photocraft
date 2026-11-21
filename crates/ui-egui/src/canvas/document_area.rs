@@ -171,6 +171,14 @@ fn document(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: Rect) {
     app.last_canvas_rect = rect;
     app.last_canvas_layer = ui.layer_id();
     app.drop_canvas_rect = Some(rect);
+    // A full-window workspace (Liquify, Select and Mask, Content-Aware Fill, Filter Gallery…) covers the main
+    // window's canvas: its document is neither refreshed nor drawn underneath, so the workspace's frames don't pay
+    // for a hidden picture. A floating document window draws in its own viewport and keeps its image.
+    if crate::distort_ui::modal_workspace(app).is_some() {
+        return;
+    }
+    #[cfg(test)]
+    MAIN_PASSES.with(|n| n.set(n.get() + 1));
     if arranged(app, ui, rect, active) {
         return;
     }
@@ -260,3 +268,12 @@ fn arranged(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: Rect, active: usiz
     }
     true
 }
+
+#[cfg(test)]
+thread_local! {
+    /// How many passes drew the main window's document area (`covered_tests`).
+    pub(crate) static MAIN_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod covered_tests;
