@@ -64,9 +64,24 @@ fn pointer_right_click(h: &mut Harness<'static, Box<PhotocraftApp>>) {
 fn a_mouse_right_click_with_strokes_waiting_opens_nothing_and_keeps_them() {
     let mut h = waiting();
     let before = snapshot(h.state());
-    mouse_right_click(&mut h);
+    let st = h.state().session.active().unwrap();
+    let (document, layer) = (st.doc.clone(), st.active_layer);
+    let at = mouse_right_click(&mut h);
     assert!(nothing_open(h.state()), "no picker, no menu");
     assert_eq!(snapshot(h.state()), before, "the strokes, their tint and the document stay");
+
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    let app = h.state();
+    let st = app.session.active().unwrap();
+    assert_eq!(app.ui.tool, Tool::Remove);
+    assert!(app.remove_pending.is_empty() && app.remove_trail.is_none(), "Escape drops the stroke and its tint");
+    assert_eq!(st.active_layer, layer);
+    assert!(std::sync::Arc::ptr_eq(&st.doc, &document));
+    assert_eq!((st.history.past_len(), app.session.journal.len()), (before.2, before.3));
+
+    assert_eq!(mouse_right_click(&mut h), at);
+    assert_eq!(crate::brush_picker::opened_at(h.state()), Some(at), "the same right-click opens the brush picker after Escape");
 }
 
 #[test]
