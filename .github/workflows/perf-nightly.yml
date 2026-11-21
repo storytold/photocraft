@@ -1,6 +1,6 @@
 name: Perf (nightly)
 
-# The performance scorecard (#221): `cargo xtask perf` on a fixed macOS runner (Apple silicon,
+# The performance scorecard (#221) runs on a fixed macOS runner (Apple silicon,
 # Metal), every night and on demand. It never runs on pull requests, so it can't block one.
 # It fails when an enforced budget in perf/budgets.toml breaks or a scenario's p50 regresses
 # more than 15 % against perf/baseline.json from the same machine class (other classes are
@@ -70,7 +70,7 @@ jobs:
           if [ "$QUICK" = "true" ]; then args+=(--quick); fi
           # This runner is never idle: a baseline from it is recorded labelled as contended.
           if [ "$UPDATE" = "true" ]; then args+=(--update-baseline --allow-contended); fi
-          cargo xtask perf "${args[@]}"
+          cargo run -p xtask --no-default-features -- perf "${args[@]}"
 
       - name: Job summary
         if: always()
