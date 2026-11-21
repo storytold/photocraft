@@ -112,7 +112,7 @@ fn path_string(path: &Path) -> String {
 fn path_strings(picked: &Picked) -> Vec<String> {
     match picked {
         Picked::Paths(paths) => paths.iter().map(|p| path_string(p)).collect(),
-        Picked::Contents(_) | Picked::Cancelled | Picked::Unavailable(_) => Vec::new(),
+        Picked::Contents(_) | Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => Vec::new(),
     }
 }
 
@@ -138,8 +138,8 @@ impl PhotocraftApp {
         };
         let saving = request.kind == PickKind::Save;
         let then: Then = Box::new(move |app, picked| match picked {
-            Picked::Cancelled => Err(CANCELLED.into()),
-            Picked::Unavailable(why) => Err(why),
+            Picked::Cancelled | Picked::Downloaded(_) => Err(CANCELLED.into()),
+            Picked::Unavailable(why) | Picked::Failed(why) => Err(why),
             Picked::Paths(paths) => {
                 // A lossy copy of a name that isn't valid Unicode would name another file (#6601).
                 for path in &paths {
@@ -311,7 +311,7 @@ impl PhotocraftApp {
                     app.open_paths_in_order(&path_strings(&picked));
                 }
                 Picked::Contents(files) => app.open_contents(files),
-                Picked::Cancelled | Picked::Unavailable(_) => return Err(UNEXPECTED.into()),
+                Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => return Err(UNEXPECTED.into()),
             }
             Ok(Value::Null)
         })
@@ -500,7 +500,7 @@ fn read_picked(picked: Picked) -> Result<(String, Vec<u8>), String> {
             let bytes = photocraft_format::read_file(Path::new(&path)).map_err(|e| format!("{}: {e}", display_name(&path)))?;
             Ok((path, bytes))
         }
-        Picked::Cancelled | Picked::Unavailable(_) => Err(UNEXPECTED.into()),
+        Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => Err(UNEXPECTED.into()),
     }
 }
 

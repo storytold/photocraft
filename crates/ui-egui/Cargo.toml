@@ -7,6 +7,12 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+# craft's component derives gate their story-suite registrations on a crate's own `suite` feature
+# (storytold/craft-libs#2363); without one they need craft's test kit in every build. PhotoCraft runs
+# no craft story suite, so this stays off.
+suite = ["craft/suite"]
+
 [dependencies]
 chrono = { workspace = true }
 craft-print = { workspace = true }

@@ -25,6 +25,17 @@ enum Filesystem {
     Workspace(AuthorizedWorkspace),
 }
 
+/// The folders a session may open from and save to (`agent_folders`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionFolders {
+    /// Read roots in lookup order; empty is none.
+    pub read: Vec<PathBuf>,
+    /// The write root, if any.
+    pub write: Option<PathBuf>,
+    /// A trusted local session: any path the user can reach, no folder limits.
+    pub any_path: bool,
+}
+
 /// A headless editing session.
 pub struct Headless {
     pub session: Session,
@@ -86,6 +97,15 @@ impl Headless {
     /// Each step of `actions.play` is checked with [`authorize_engine_step`].
     pub fn with_workspace(workspace: AuthorizedWorkspace) -> Self {
         untrusted(Filesystem::Workspace(workspace))
+    }
+
+    /// The folders this session may open from and save to.
+    pub fn folders(&self) -> SessionFolders {
+        match &self.filesystem {
+            Filesystem::Denied => SessionFolders::default(),
+            Filesystem::TrustedLocal => SessionFolders { any_path: true, ..SessionFolders::default() },
+            Filesystem::Workspace(w) => SessionFolders { read: w.read_folders(), write: w.write_folder(), any_path: false },
+        }
     }
 
     /// Configure a custom [`photocraft_io::BandRenderer`] for flat exports and previews.

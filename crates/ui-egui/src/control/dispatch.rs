@@ -1165,7 +1165,7 @@ fn input_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequ
         return Some(pointer(app, ctx, &req.params));
     }
     let view = crate::canvas::document_display::active_view(app);
-    let map = move |at: egui::Pos2| view.as_ref().map(|view| view.to_screen(Point::new(f64::from(at.x), f64::from(at.y))));
+    let map = move |_page: usize, at: egui::Pos2| view.as_ref().map(|view| view.to_screen(Point::new(f64::from(at.x), f64::from(at.y))));
     let host = WindowHost::of(ctx);
     let queued = craft::automation::synthetic::input_method(&req.method, &req.params, &host, egui::ViewportId::ROOT, &map)?;
     Some(match queued {

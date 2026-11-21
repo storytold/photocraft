@@ -510,7 +510,10 @@ fn canvas_controls(
     if !app.ui.view.hides_chrome() {
         let size = app.session.documents()[host.idx].doc.size;
         let bounds = Rect64::from_origin_size(Point::ZERO, Size::new(f64::from(size.width), f64::from(size.height)));
-        CanvasScrollbars::new("Scroll bars", Bind::bound(&mut shown), bounds).overscroll(app.session.prefs().tools.overscroll).show_at(ui, rect);
+        CanvasScrollbars::new("Scroll bars", Bind::bound(&mut shown), bounds)
+            .overscroll(app.session.prefs().tools.overscroll)
+            .document_chrome()
+            .show_at(ui, rect);
     }
     if RotateView::visible(shown.rotation) {
         let mut rotation = shown.rotation;
@@ -664,8 +667,15 @@ mod tests {
             let track = horizontal.rect();
             let thumb_center = vertical.rect().center();
             if rulers {
-                // As in 0.23.1, the scroll bars run along the view inside the rulers.
-                assert!((vertical.rect().top() - view.rect.top()).abs() < 0.5, "the vertical scroll bar starts at the view's top, below the ruler");
+                // As in 0.23.1, the scroll bars run along the view inside the rulers; the document chrome puts a step arrow,
+                // as long as the bar is thick, before each track.
+                let arrow = vertical.rect().width();
+                let top = vertical.rect().top() - arrow;
+                assert!(
+                    (top - view.rect.top()).abs() < 0.5,
+                    "the vertical bar's top arrow starts at the view's top, below the ruler: {top} vs {}",
+                    view.rect.top()
+                );
             }
             let room = |length: f32, document: f64| if overscroll { f64::from(length) - document } else { 0.0 };
             let x_room = room(view.rect.width(), 400.0);
