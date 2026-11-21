@@ -1,4 +1,5 @@
 use super::{CustomShape, Deserialize, Document, EngineError, LayerContent, LayerId, Path, Result, Serialize, Session, Value, bad, json, str_or};
+use photocraft_doc::vector::PathOp;
 
 // ------------------------------------------------------------------ Define Brush / Custom Shape
 
@@ -25,17 +26,36 @@ pub(crate) fn current_path(doc: &Document, active: Option<LayerId>, spec: Option
     if let Some(p) = doc.work_path.clone().filter(ok) {
         return Some(p);
     }
-    if let Some(l) = active.and_then(|id| doc.layer(id)) {
-        if let LayerContent::Shape(sh) = &l.content
-            && ok(&sh.path)
-        {
-            return Some(sh.path.clone());
-        }
-        if let Some(vm) = l.vector_mask.as_ref().filter(|v| ok(&v.path)) {
-            return Some(vm.path.clone());
-        }
+    if let Some(p) = layer_path(doc, active) {
+        return Some(p.clone());
     }
     doc.paths.last().map(|n| n.path.clone()).filter(ok)
+}
+
+/// The active layer's shape path, else its vector mask's path, when not empty.
+fn layer_path(doc: &Document, active: Option<LayerId>) -> Option<&Path> {
+    let ok = |p: &&Path| !p.subpaths.is_empty();
+    let l = active.and_then(|id| doc.layer(id))?;
+    let shape = match &l.content {
+        LayerContent::Shape(sh) => Some(&sh.path).filter(ok),
+        _ => None,
+    };
+    shape.or_else(|| l.vector_mask.as_ref().map(|v| &v.path).filter(ok))
+}
+
+/// `targeted` stored together with the active layer's path, at their document positions: the
+/// targeted path joins as a shape of its own, and every subpath is closed.
+fn with_layer_path(layer: &Path, targeted: Path) -> Path {
+    let mut out = layer.clone();
+    let first = out.subpaths.len();
+    out.subpaths.extend(targeted.subpaths);
+    if let Some(s) = out.subpaths.get_mut(first) {
+        s.op = PathOp::Combine;
+    }
+    for s in &mut out.subpaths {
+        s.closed = true;
+    }
+    out
 }
 
 pub(super) fn can_define_shape(s: &Session) -> std::result::Result<(), String> {
@@ -45,7 +65,13 @@ pub(super) fn can_define_shape(s: &Session) -> std::result::Result<(), String> {
 
 pub(super) fn define_custom_shape(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let path = current_path(&st.doc, st.active_layer, p.get("path").and_then(Value::as_str)).ok_or_else(|| bad("edit.defineCustomShape", "no such path"))?;
+    let spec = p.get("path").and_then(Value::as_str);
+    let path = current_path(&st.doc, st.active_layer, spec).ok_or_else(|| bad("edit.defineCustomShape", "no such path"))?;
+    // A targeted path is stored together with the active shape layer's path or vector mask.
+    let path = match spec.and(layer_path(&st.doc, st.active_layer)) {
+        Some(layer) => with_layer_path(layer, path),
+        None => path,
+    };
     let name = p
         .get("name")
         .and_then(Value::as_str)
@@ -148,3 +174,7 @@ pub struct PresetFile {
 }
 
 pub const PRESET_FORMAT: &str = "photocraft-presets";
+
+#[cfg(test)]
+#[path = "define_custom_shape_combine_tests.rs"]
+mod define_custom_shape_combine_tests;
