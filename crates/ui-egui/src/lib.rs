@@ -238,11 +238,11 @@ pub(crate) use services::SAVE_OPTIONS_OPEN;
 #[cfg(test)]
 pub(crate) use services::saved_revision_after_write;
 pub use services::{
-    AdoptAutosaveFn, AppendTextFn, AutomationAuthorizeFn, AutomationCommandFn, AutomationOpenPcraftFn, AutomationReadFn, AutomationServices, AutomationWriteFn,
-    AutosaveFn, AutosaveResultsFn, CapsLockFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn,
-    ExportFn, ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn,
-    Inbox, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox, RecoverFn, Recoverable, RightButtonDownFn,
-    SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
+    AdoptAutosaveFn, AppendTextFn, AutomationAuthorizeFn, AutomationCommandFn, AutomationLocateFn, AutomationOpenPcraftFn, AutomationReadFn,
+    AutomationServices, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn,
+    CursorPosFn, DiscardAutosaveFn, ExportFn, ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp,
+    FileStampFn, FormatChoices, ImportFn, Inbox, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox, RecoverFn,
+    Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
 };
 pub(crate) use services::{opaque_layer, saves_flat_in_place};
 pub use text::cjk_fonts;
@@ -360,8 +360,6 @@ pub struct PhotocraftApp {
     pub(crate) menu_model: Option<menus::MenuModel>,
     /// The toolbar's slots for the stored layout (`tool_commands::ToolbarSlots`).
     pub(crate) toolbar_slots: panels::tool_commands::ToolbarSlots,
-    /// The Layers panel's model, held across passes (`layers_tree::PhotoLayers::held`).
-    pub(crate) layers_tree: Option<craft::ui::contract::Tracked<panels::layers_tree::PhotoLayers>>,
     /// The dock's spec model and kept panels (`panel_docking::DockModel`).
     pub(crate) dock_model: panels::panel_docking::DockModel,
     /// Move tool drag shown live (`move_ui`).
@@ -954,7 +952,11 @@ mod brush_settle_trials;
 #[cfg(test)]
 mod chrome_settle_trials;
 #[cfg(test)]
+mod command_state_trials;
+#[cfg(test)]
 mod doc_revision_trials;
+#[cfg(test)]
+mod doc_tracked_trials;
 #[cfg(test)]
 mod drag_settle_trials;
 #[cfg(test)]
@@ -1027,6 +1029,8 @@ mod window_frame_tests;
 
 #[cfg(test)]
 mod artboards_overlap_dialog_tests;
+#[cfg(test)]
+mod artboards_to_files_types_tests;
 #[cfg(test)]
 mod browse_field_tests;
 #[cfg(test)]

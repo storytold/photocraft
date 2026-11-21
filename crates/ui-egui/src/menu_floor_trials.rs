@@ -6,6 +6,7 @@
 use craft::ui::runtime::measure::{MemoRun, last_frame_derived_builds, last_frame_memo_runs, last_pass_memo_key_bytes};
 use egui::{Event, Pos2, vec2};
 use egui_kittest::Harness;
+use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -155,4 +156,32 @@ fn the_held_menu_model_equals_a_fresh_build_after_each_step() {
     held_is_fresh(&mut h, "closing it");
     h.state_mut().session.saved_to("/tmp/Renamed.psd".into());
     held_is_fresh(&mut h, "a save that renames the document");
+}
+
+#[test]
+fn the_status_bar_sits_inside_the_window_when_its_views_run_and_replay() {
+    let mut h = harness(1, 0, 0);
+    let screen = h.ctx.content_rect();
+    // The status bar's zoom field: the lowest node named Zoom that shows the percentage as its value.
+    let field = |h: &H| {
+        h.query_all_by_label("Zoom")
+            .filter(|n| {
+                let a = n.accesskit_node();
+                a.role() != egui::accesskit::Role::Slider && a.value().is_some() && a.bounding_box().is_some()
+            })
+            .map(|n| n.rect())
+            .max_by(|a, b| a.bottom().total_cmp(&b.bottom()))
+    };
+    // A settled frame replays the bar's views; a status message runs its body again.
+    for step in ["settled", "a status message"] {
+        if step == "a status message" {
+            h.state_mut().ui.status = "Saved".into();
+        }
+        h.run_steps(2);
+        let Some(field) = field(&h) else { panic!("{step}: the status bar shows its zoom field") };
+        assert!(
+            field.bottom() <= screen.bottom() && field.top() >= screen.bottom() - 40.0,
+            "{step}: the zoom field {field:?} sits in the status bar inside the window {screen:?}, not moved down past its edge"
+        );
+    }
 }

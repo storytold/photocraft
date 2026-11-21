@@ -670,7 +670,7 @@ fn with_rig<R>(
         if let Some(tool) = crop_tool {
             tools.crop.tool = tool;
         }
-        crop::finish(app, output);
+        crop::finish(app, &mut tools.crop.tool, output);
     }
     result
 }

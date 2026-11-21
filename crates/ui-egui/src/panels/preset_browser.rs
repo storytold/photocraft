@@ -445,6 +445,14 @@ pub(crate) fn styles_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandStat
         .collect()
 }
 
+/// [`styles_states`], derived from what it reads: the presets the styles live in, the selected style and the browser's
+/// view.
+pub(crate) fn styles_source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    let view = app.ui.presets_ui.browsers.get(STYLES.id).map_or(PresetView::Grid, |state| state.view);
+    let facts = (app.session.presets.revision(), app.ui.presets_ui.selected.get(STYLES.id), view);
+    crate::app::framework::derived_states(app, name, &facts, || styles_states(app))
+}
+
 /// Runs a Styles panel menu command; `false` when `cmd` is not one of its commands.
 pub(crate) fn styles_run(app: &mut PhotocraftApp, ctx: &egui::Context, cmd: &CommandRef) -> bool {
     let Some(command) = PresetCommands::from_ref(cmd) else { return false };

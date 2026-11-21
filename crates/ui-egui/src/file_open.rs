@@ -15,6 +15,10 @@ use photocraft_engine::file_cmds::{is_template, untitled_name};
 /// The Paths UI addresses saved paths by name, so duplicates and its reserved targets
 /// cannot represent an exact imported index without selecting or editing a different path.
 pub(crate) fn apply_initial_path(app: &mut PhotocraftApp) {
+    // A mutable document borrow advances its tracked revision even when there is no path hint.
+    if app.session.active().is_none_or(|st| st.initial_path_selection.is_none()) {
+        return;
+    }
     let selected = app.session.active_mut().and_then(|st| {
         let index = st.initial_path_selection.take()?;
         let path = st.doc.paths.get(index)?;
@@ -258,6 +262,13 @@ impl PhotocraftApp {
     /// Record that the active document was just opened from `path`: File › Save writes back to it
     /// (unless it's a template or derivative preview) and it goes to the top of Open Recent.
     pub(crate) fn opened_from(&mut self, path: &str) {
+        self.opened_from_listed(path, Some(path));
+    }
+
+    /// [`Self::opened_from`], with `recent` the path Open Recent lists for it (`None`: not listed).
+    /// An automation open is requested by a root-relative path, which names nothing outside
+    /// automation, so it lists where the file is on disk instead.
+    pub(crate) fn opened_from_listed(&mut self, path: &str, recent: Option<&str>) {
         if !is_template(path)
             && let Some(st) = self.session.active_mut()
             && !st.source_read_only
@@ -266,7 +277,9 @@ impl PhotocraftApp {
             let doc = st.doc.id;
             self.remember_stamp(doc, path);
         }
-        self.push_recent(path);
+        if let Some(recent) = recent {
+            self.push_recent(recent);
+        }
     }
 
     /// The name a file called `name` opens under: its own, or the first free "Untitled-N" for a

@@ -89,7 +89,8 @@ fn artboards_to_files_sends_a_custom_jpeg_quality() {
     let via_command = tmp();
     // Custom off: the quality row is greyed out for any format but JPEG, and an untouched JPEG export writes what
     // the command writes with no quality.
-    let dialog = open(&mut app, &ctx, ARTBOARDS, via_dialog.path(), "png");
+    // Artboards to Files has the reference application's list: PNG-24, no plain PNG (#13635).
+    let dialog = open(&mut app, &ctx, ARTBOARDS, via_dialog.path(), "png24");
     assert!(app.framework.dialogs.set_json_field(&ctx, dialog, "quality", json!(5)).is_err(), "PNG: the quality row takes no input");
     set(&mut app, &ctx, dialog, "format", json!("jpg"));
     assert!(fields(&app, dialog).get("quality").is_none_or(Value::is_null), "no quality is sent while Custom is off");
@@ -114,24 +115,31 @@ fn artboards_to_files_sends_a_custom_jpeg_quality() {
 fn export_to_files_quality_leaves_png_and_webp_as_they_were() {
     let (mut app, ctx) = app();
     for id in EXPORTS {
+        // Artboards to Files lists PNG-24 and no WebP (#13635).
+        let png = if id == ARTBOARDS { "png24" } else { "png" };
         // A quality typed for JPEG, then another format: nothing is sent, so a WebP stays lossless (a VP8L
-        // bitstream, not lossy VP8).
+        // bitstream, not lossy VP8) and a PNG-24 is a PNG.
         let dir = tmp();
         let dialog = open(&mut app, &ctx, id, dir.path(), "jpg");
         set(&mut app, &ctx, dialog, "quality", json!(4));
-        set(&mut app, &ctx, dialog, "format", json!("webp"));
+        let other = if id == ARTBOARDS { png } else { "webp" };
+        set(&mut app, &ctx, dialog, "format", json!(other));
         let bytes = exported(&mut app, &ctx, dialog, dir.path());
-        assert!(bytes.windows(4).any(|w| w == b"VP8L"), "{id}: the WebP stays lossless");
+        if other == "webp" {
+            assert!(bytes.windows(4).any(|w| w == b"VP8L"), "{id}: the WebP stays lossless");
+        } else {
+            assert!(bytes.starts_with(b"\x89PNG"), "{id}: the PNG-24 is a PNG");
+        }
 
         let dir = tmp();
-        let dialog = open(&mut app, &ctx, id, dir.path(), "png");
+        let dialog = open(&mut app, &ctx, id, dir.path(), png);
         assert!(app.framework.dialogs.set_json_field(&ctx, dialog, "quality", json!(4)).is_err(), "{id}: PNG takes no quality");
         crate::dialogs::cancel(&mut app, &ctx, dialog).unwrap();
 
         // Back to JPEG, the quality typed before is still there.
         let dialog = open(&mut app, &ctx, id, dir.path(), "jpg");
         set(&mut app, &ctx, dialog, "quality", json!(4));
-        for format in ["png", "jpg"] {
+        for format in [png, "jpg"] {
             set(&mut app, &ctx, dialog, "format", json!(format));
         }
         assert_eq!(fields(&app, dialog)["quality"].as_f64(), Some(4.0), "{id}: the round trip keeps the quality");

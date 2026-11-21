@@ -13,7 +13,7 @@ use craft::layers::ui::tree::{
     SubRows, ThumbBadge,
 };
 use craft::theme::LabelColor as UiLabel;
-use craft::ui::contract::{Entry, PlainData, ReorderMove, Tracked};
+use craft::ui::contract::{Entry, MemoProps, PlainData, ReorderMove, Tracked};
 use craft::ui::list::ThumbSize;
 use craft::ui::patterns::blend_keys::{BlendKeyEntry, blend_entries};
 use craft::ui::primitives::textures::{Revision, ThumbRender, ThumbRequest, ThumbSource, thumb_image};
@@ -79,12 +79,92 @@ pub(crate) fn listed_filter(app: &PhotocraftApp) -> Option<crate::smart_ui::Filt
     PhotoLayers::new(app, st, &app.ui.layer_filter, false, picked).selected_filter()
 }
 
+/// What the Layers panel's model is built from ([`PhotoLayers::new`]): the document as the session tracks it, whose
+/// revision moves with every change to it, view state included, and the app's answers for its rows.
+#[derive(MemoProps)]
+struct LayersFacts<'a> {
+    doc: &'a Tracked<DocState>,
+    filter: &'a LayerFilter,
+    #[memo_props(hash = "craft-layers part: a fieldless enum")]
+    target: LayerPart,
+    mask_target: bool,
+    vector_mask_target: bool,
+    link_enabled: bool,
+    #[memo_props(hash = "a plain model id")]
+    hovered: Option<LayerId>,
+    working_text: Option<u64>,
+    /// The missing linked files of the open documents (the Smart Object filter).
+    missing: craft::ui::contract::Revision,
+    foreign_drag: bool,
+    picked: Option<crate::smart_ui::FilterDrag>,
+}
+
+/// The id the Layers panel's model is derived under.
+pub(crate) fn model_id() -> egui::Id {
+    egui::Id::unique("photocraft-layers-model")
+}
+
+/// The value the Layers panel's model is derived as: `None` while no document is open.
+pub(crate) type Model = Option<Tracked<PhotoLayers>>;
+
+/// The Layers panel's model of the active document `st`, derived from what it is built from: built again only when
+/// one of [`LayersFacts`] changed. A new build is a new `Tracked`, so the panel's key moves exactly then. It is always
+/// `Some`.
+pub(crate) fn model(
+    app: &PhotocraftApp,
+    st: &Tracked<DocState>,
+    filter: &LayerFilter,
+    foreign_drag: bool,
+    picked: Option<crate::smart_ui::FilterDrag>,
+) -> Arc<Model> {
+    let facts = LayersFacts {
+        doc: st,
+        filter,
+        target: edit_target(app, st),
+        mask_target: app.ui.mask_target,
+        vector_mask_target: app.ui.vector_mask_target,
+        link_enabled: app.session.is_enabled("layer.linkLayers"),
+        hovered: app.canvas_hover_layer,
+        working_text: working_text(app),
+        missing: app.session.missing_links_revision(),
+        foreign_drag,
+        picked,
+    };
+    craft::ui::runtime::derived::derived(app.ctx(), model_id(), &facts, || Some(Tracked::new(PhotoLayers::new(app, st, filter, foreign_drag, picked))))
+}
+
+/// Derives the model as `None` while no document is open: the kept model, which holds the document it showed, is
+/// replaced in the pass that finds the document gone.
+pub(crate) fn no_model(app: &PhotocraftApp) {
+    let _ = craft::ui::runtime::derived::derived(app.ctx(), model_id(), &(), || Model::None);
+}
+
+/// A Type Mask session's working text, which the panel never lists.
+fn working_text(app: &PhotocraftApp) -> Option<u64> {
+    app.ui.text_edit.as_ref().filter(|ed| ed.mask).map(|ed| ed.layer)
+}
+
+/// The part of the active layer edits go to ([`LayerTree::selection`]).
+fn edit_target(app: &PhotocraftApp, st: &DocState) -> LayerPart {
+    let ui = &app.ui;
+    match st.active_layer.and_then(|id| st.doc.layer(id)) {
+        Some(l) if l.frame.is_some() => match crate::frame_tool::target(app, l) {
+            crate::frame_tool::Target::Frame => LayerPart::FrameShape,
+            crate::frame_tool::Target::Content => LayerPart::FrameContent,
+            crate::frame_tool::Target::Both => LayerPart::Pixels,
+        },
+        Some(l) if ui.filter_mask_target == Some(l.id.0) && app.filter_mask_targeted() => LayerPart::FilterMask,
+        Some(l) if ui.vector_mask_target && l.vector_mask.is_some() => LayerPart::VectorMask,
+        Some(l) if ui.mask_target && l.mask.is_some() => LayerPart::LayerMask,
+        _ => LayerPart::Pixels,
+    }
+}
+
 /// The Layers panel's model of the active document: the document, the parts of its state the rows show and what the
 /// app decides for them (the edit target, the hovered layer, the filter's answers). Plain data: the panel holds it in a
-/// `Tracked`, and the host writes a new one only when what it holds changed ([`PhotoLayers::held`]).
+/// `Tracked`, derived from [`LayersFacts`] ([`model`]).
 #[derive(Clone, PlainData)]
 pub(crate) struct PhotoLayers {
-    #[plain_data(assume = "the document is replaced, never changed in place, while an Arc to it is shared")]
     doc: Arc<Document>,
     active_layer: Option<LayerId>,
     selected: Vec<LayerId>,
@@ -110,39 +190,15 @@ pub(crate) struct PhotoLayers {
     picked: Option<crate::smart_ui::FilterDrag>,
 }
 
-/// Equal when they show the same: the same document value (one `Arc`) and the same state.
-impl PartialEq for PhotoLayers {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.doc, &other.doc)
-            && (&self.active_layer, &self.selected, &self.isolated_layers, &self.fx_collapsed, &self.filter, self.target)
-                == (&other.active_layer, &other.selected, &other.isolated_layers, &other.fx_collapsed, &other.filter, other.target)
-            && (self.mask_target, self.vector_mask_target, self.link_enabled, self.hovered, self.working_text, self.foreign_drag, self.picked)
-                == (other.mask_target, other.vector_mask_target, other.link_enabled, other.hovered, other.working_text, other.foreign_drag, other.picked)
-            && self.empty == other.empty
-            && self.missing == other.missing
-    }
-}
-
 impl PhotoLayers {
     pub(crate) fn new(app: &PhotocraftApp, st: &DocState, filter: &LayerFilter, foreign_drag: bool, picked: Option<crate::smart_ui::FilterDrag>) -> Self {
-        let working_text = app.ui.text_edit.as_ref().filter(|ed| ed.mask).map(|ed| ed.layer);
         let empty = match (filter.by, filter.attribute) {
             (FilterBy::Attribute, LayerAttribute::Empty | LayerAttribute::NotEmpty) => crate::layer_filter_ui::attribute::empty_layers(app),
             _ => None,
         };
         let missing = if filter.by == FilterBy::SmartObject { app.session.missing_links() } else { HashSet::new() };
         let ui = &app.ui;
-        let target = match st.active_layer.and_then(|id| st.doc.layer(id)) {
-            Some(l) if l.frame.is_some() => match crate::frame_tool::target(app, l) {
-                crate::frame_tool::Target::Frame => LayerPart::FrameShape,
-                crate::frame_tool::Target::Content => LayerPart::FrameContent,
-                crate::frame_tool::Target::Both => LayerPart::Pixels,
-            },
-            Some(l) if ui.filter_mask_target == Some(l.id.0) && app.filter_mask_targeted() => LayerPart::FilterMask,
-            Some(l) if ui.vector_mask_target && l.vector_mask.is_some() => LayerPart::VectorMask,
-            Some(l) if ui.mask_target && l.mask.is_some() => LayerPart::LayerMask,
-            _ => LayerPart::Pixels,
-        };
+        let target = edit_target(app, st);
         Self {
             doc: Arc::clone(&st.doc),
             active_layer: st.active_layer,
@@ -155,20 +211,11 @@ impl PhotoLayers {
             vector_mask_target: ui.vector_mask_target,
             link_enabled: app.session.is_enabled("layer.linkLayers"),
             hovered: app.canvas_hover_layer,
-            working_text,
+            working_text: working_text(app),
             empty,
             missing,
             foreign_drag,
             picked,
-        }
-    }
-
-    /// `self` in `held`: the held value while it is equal, else a new `Tracked`, so the panel's key moves only when
-    /// what it shows changed.
-    pub(crate) fn held(self, held: Option<Tracked<PhotoLayers>>) -> Tracked<PhotoLayers> {
-        match held {
-            Some(held) if *held == self => held,
-            _ => Tracked::new(self),
         }
     }
 
