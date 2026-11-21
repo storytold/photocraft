@@ -314,7 +314,10 @@ fn stamp_dab(work: &mut Region, fmt: &PixelFormat, tile: &Tile, fp: &Footprint, 
     }
     let at = |c: f64| (c.floor() as i32).saturating_sub(1);
     let (sx, sy) = (at(fp.dab.center.x), at(fp.dab.center.y));
-    let Some(&px) = render(tile, place, Rect::new(sx, sy, sx.saturating_add(1), sy.saturating_add(1))).first() else { return };
+    // The one tile pixel under that point: mapped through the placement, then snapped to a pixel centre, so a scale or
+    // rotation can't blend neighbours or average several taps (CodeRabbit on #16226).
+    let (u, v) = place.map(f64::from(sx) + 0.5, f64::from(sy) + 0.5);
+    let px = tile.sample(u.floor() + 0.5, v.floor() + 0.5);
     let n = work.ch;
     let mut enc = [0.0f32; 8];
     from_rgba_into(fmt, px, &mut enc);

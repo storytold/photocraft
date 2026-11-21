@@ -141,3 +141,12 @@ fn mode_opacity_and_the_selection_still_apply() {
     assert_eq!(px(&s, 590, 450), GREEN, "inside the selection");
     assert_eq!(px(&s, 610, 450), [GREY, GREY, GREY, 1.0], "outside the selection");
 }
+
+/// At 200 % the point one pixel up and left of the dab's centre maps to tile (9.75, 4.75): the single tile pixel there
+/// is red, where a bilinear lookup would mix red and green (CodeRabbit on #16226).
+#[test]
+fn a_scaled_pattern_still_gives_one_pure_pattern_pixel() {
+    let (mut s, id) = session(8);
+    stamp(&mut s, &id, &[[20.0, 10.0]], json!({"scale": 200}));
+    assert_eq!(px(&s, 20, 10), RED);
+}
