@@ -13,6 +13,9 @@ use crate::commands::{CommandSpec, parse_blend};
 use crate::presets::{always, bad};
 use crate::{EngineError, Result, Session};
 
+#[cfg(test)]
+#[path = "layer_style/color_overlay_defaults_tests.rs"]
+mod color_overlay_defaults_tests;
 mod gradient_overlay;
 
 /// Parses a gradient style name (`linear`, `radial`, `angle`, `reflected`, `diamond`).
@@ -160,7 +163,8 @@ pub fn effect_defaults(kind: &str) -> Value {
             json!({"blend": "Screen", "opacity": 75, "color": "#ffffbe", "technique": "softer", "source": "edge", "choke": 0, "size": 5, "range": 50, "contour": "Linear", "antiAlias": false, "noise": 0})
         }
         "stroke" => json!({"size": 1, "position": "inside", "blend": "Normal", "opacity": 100, "overprint": false, "color": "#000000"}),
-        "colorOverlay" => json!({"blend": "Normal", "color": "#ff0000", "opacity": 100}),
+        // Mid grey, as the reference application's factory Color Overlay (#14867).
+        "colorOverlay" => json!({"blend": "Normal", "color": "#818181", "opacity": 100}),
         "gradientOverlay" => {
             json!({"blend": "Normal", "opacity": 100, "from": "#000000", "to": "#ffffff", "reverse": false, "style": "linear", "angle": 90, "scale": 100, "method": "custom"})
         }
@@ -552,6 +556,9 @@ pub fn contour_to_shc_all(list: &[&Contour]) -> Result<Vec<u8>> {
 }
 
 /// An effect of `kind` with its factory settings (before params are applied).
+/// The factory Color Overlay's grey, 129 of 255 per channel (#14867).
+const GREY_129: f32 = 129.0 / 255.0;
+
 fn fresh_effect(kind: &str) -> Option<Effect> {
     let shadow = |inner: bool| Shadow {
         common: FxCommon::new(BlendMode::Multiply, 0.75),
@@ -594,7 +601,7 @@ fn fresh_effect(kind: &str) -> Option<Effect> {
             paint: FxPaint::Color(Color::BLACK),
             overprint: false,
         }),
-        "colorOverlay" => Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), color: Color::rgb(1.0, 0.0, 0.0) },
+        "colorOverlay" => Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), color: Color::rgb(GREY_129, GREY_129, GREY_129) },
         "gradientOverlay" => {
             Effect::GradientOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), gradient: Gradient::default(), dither: false, interpolation: None }
         }
