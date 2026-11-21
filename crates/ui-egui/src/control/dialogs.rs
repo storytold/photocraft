@@ -252,6 +252,7 @@ pub(crate) const FIELD_KEYS: &[FieldKey] = &[
     prompt!(crate::dialogs::rasterize_prompt::Rasterize, &[("rasterize", "proceed"), ("smartObject", "alternate"), CANCEL]),
     prompt!(crate::dialogs::preset_group_prompt::PresetClash, &[("new", "proceed"), ("replace", "alternate"), CANCEL]),
     prompt!(crate::dialogs::live_shape_prompt::LiveShapeAsk, &[("yes", "proceed"), ("no", "cancel"), CANCEL]),
+    prompt!(crate::dialogs::assign_profile_layers_alert::AssignProfileAsk, &[("ok", "proceed"), CANCEL]),
     prompt!(crate::dialogs::delete_layer_prompt::PendingDelete, &[("delete", "proceed"), CANCEL]),
     prompt!(crate::dialogs::open_prompt::DamageTag, &[("continue", "proceed"), ("open", "proceed"), CANCEL]),
     prompt!(crate::dialogs::open_prompt::MemoryTag, &[("continue", "proceed"), ("open", "proceed"), CANCEL]),
