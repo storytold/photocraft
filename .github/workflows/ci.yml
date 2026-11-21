@@ -287,9 +287,8 @@ jobs:
 
   # The same codecs without the optional decoder: HEIC must stay a clear "not in this build" error
   # for distributors who leave it out. Runs beside the gate and restores the gate's newest rolling
-  # cache entry without saving one: the dependencies are the same, and the 10 GB cache budget is
-  # tight (#2688). Its sources keep their checkout mtimes, so the workspace crates it builds are
-  # rebuilt.
+  # cache entry without saving one, keeping within the 10 GB cache budget (#2688). Restore source
+  # mtimes so Cargo can reuse unchanged units with matching features and build inputs.
   test-without-heif:
     if: github.event_name != 'schedule' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci')
     timeout-minutes: 60
@@ -336,6 +335,11 @@ jobs:
           job: gate
           cache-workspace-crates: "true"
           align-environment: "true"
+
+      - name: Restore mtimes
+        uses: storytold/craft-common-actions/actions/restore-mtimes@bf191401c5b42eb6ac209e953880ae948a41570a
+        with:
+          mode: restore
 
       - uses: step-security/taiki-e-install-action@76747d22a7567cc4438546a84f11bdf18e670ab8 # v2.87.32
         with:
