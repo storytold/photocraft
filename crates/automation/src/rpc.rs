@@ -167,6 +167,15 @@ impl Headless {
             }
             "doc.new" => self.command_run("file.new", p),
             "doc.save" => {
+                // A malformed Save As request must not become an implicit save to the stored path.
+                if !p.is_object() {
+                    return Err(bad("doc.save params must be an object"));
+                }
+                for key in ["path", "format"] {
+                    if p.get(key).is_some_and(|value| !value.is_null() && !value.is_string()) {
+                        return Err(bad(format!("`{key}` must be a string")));
+                    }
+                }
                 let tga_bits = photocraft_engine::file_cmds::tga_bits_param(&p, "doc.save").map_err(|e| bad(e.to_string()))?;
                 let pdf_spot_plates = photocraft_engine::file_cmds::pdf_spot_plates_param(&p, "doc.save").map_err(|e| bad(e.to_string()))?;
                 let mut opts = photocraft_io::ExportOptions {
