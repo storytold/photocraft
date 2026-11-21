@@ -2,12 +2,13 @@
 //! Manager, Package and Export Paths to File. Each is a hosted command form whose key is the command id; OK runs
 //! the command through the `filter_dialog` family runner.
 
-use craft::ui::contract::Bind;
+use craft::ui::contract::{Bind, Entry, Outcome as _, Props as _, Show as _};
 use craft::ui::dialog::DialogId;
-use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamDialog, ParamKind};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind};
+use craft::ui::pickers::Select;
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::requests::PathKind;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 use crate::dialogs::params;
@@ -115,6 +116,12 @@ pub(crate) fn open_create_droplet(app: &mut PhotocraftApp) -> Result<DialogId, S
     rows.push(Param::new("action", tl!("Action"), ParamKind::choice(names(&action_names), Some(name))));
     rows.push(Param::new("output", tl!("Output"), ParamKind::text(format!("{dir}/droplet-output"))).browse(PathKind::Folder));
     rows.push(Param::new("format", tl!("Format"), ParamKind::choice(ids(&["same", "png", "jpg", "psd", "tiff"]), Some("same".into()))));
+    // File Naming rows, the starting serial and the Compatibility checkboxes (#13712). The
+    // reference greys them unless Destination is Folder; that dropdown is #13711's (#15562, open),
+    // and this form has no destination state, so the rows stay visible like the output row.
+    rows.push(naming_rows_param());
+    rows.push(Param::new("startingSerial", tl!("Starting Serial #"), ParamKind::int(Some(0), Some(9999), 1)));
+    rows.push(compatibility_param());
     Ok(open_form(app, CREATE_DROPLET, tl!("Create Droplet"), rows))
 }
 
@@ -168,6 +175,190 @@ pub(crate) fn paths_to_file_rows(app: &PhotocraftApp) -> Vec<Param> {
         Param::new("path", tl!("Path"), ParamKind::text(format!("{dir}/{stem}.ai"))),
         Param::new("paths", tl!("Paths"), ParamKind::choice(options, Some(selected))).not_remembered(),
     ]
+}
+
+/// The File Naming rows of the Create Droplet form (#13712): six rows of text field plus rule
+/// dropdown over the `namingComponents` the batch engine already names with. The Batch dialog's
+/// own rows are #13661; until that lands this widget stays with this form.
+///
+/// The dropdown's `None` entry and an empty field store nothing: a droplet with no naming keeps
+/// each input's name, as before this change.
+const NAMING_NONE: &str = "none";
+
+/// The rule dropdown's entries in the reference's order, 19 with `None` last: each is the engine
+/// component id Batch names with (docs/atn.md) and the entry's label.
+const NAMING_RULES: &[(&str, &str)] = &[
+    ("name", "Document Name"),
+    ("nameLower", "document name"),
+    ("nameUpper", "DOCUMENT NAME"),
+    ("serial1", "1 Digit Serial Number"),
+    ("serial2", "2 Digit Serial Number"),
+    ("serial3", "3 Digit Serial Number"),
+    ("serial4", "4 Digit Serial Number"),
+    ("letter", "Serial Letter (a, b, c...)"),
+    ("LETTER", "Serial Letter (A, B, C...)"),
+    ("mmddyy", "mmddyy (date)"),
+    ("mmdd", "mmdd (date)"),
+    ("yyyymmdd", "yyyymmdd (date)"),
+    ("yymmdd", "yymmdd (date)"),
+    ("yyddmm", "yyddmm (date)"),
+    ("ddmmyy", "ddmmyy (date)"),
+    ("ddmm", "ddmm (date)"),
+    ("extension", "extension"),
+    ("EXTENSION", "EXTENSION"),
+    (NAMING_NONE, "None"),
+];
+
+/// One shown row: the chosen rule id (`NAMING_NONE` for a literal-text row) and the field text.
+#[derive(Clone, PartialEq)]
+struct NamingRow {
+    rule: String,
+    text: String,
+}
+
+/// The stored value of `key` as JSON, as a custom row and automation keep it.
+fn field_json(fields: &DialogFields, key: &str) -> Option<Value> {
+    fields.get(key).and_then(|value| serde_json::to_value(value).ok())
+}
+
+/// The rule a stored component names, or `None` for a literal text row and for a component this
+/// form does not offer: it reads back as an empty `None` row and a later store drops it, as it
+/// does the components past the six shown rows.
+fn component_rule(part: &Value) -> Option<&'static str> {
+    let rule = part.get("component").and_then(Value::as_str)?;
+    NAMING_RULES.iter().find(|(id, _)| *id == rule).map(|(id, _)| *id)
+}
+
+/// The label of a rule, empty for `None`.
+fn rule_label(rule: &str) -> &'static str {
+    NAMING_RULES.iter().find(|(id, _)| *id == rule).map_or("", |(_, label)| *label)
+}
+
+/// The six shown rows the fields hold: a component row shows its entry's label in the field, a
+/// text row shows its text under `None`, and rows past the stored components are empty `None`s.
+fn naming_rows(fields: &DialogFields) -> Vec<NamingRow> {
+    let stored = field_json(fields, "namingComponents").filter(Value::is_array).unwrap_or_else(|| Value::Array(Vec::new()));
+    let parts: &[Value] = stored.as_array().map_or(&[], Vec::as_slice);
+    let mut rows: Vec<NamingRow> = parts
+        .iter()
+        .take(6)
+        .map(|part| match component_rule(part) {
+            Some(rule) => NamingRow { rule: rule.to_string(), text: rule_label(rule).to_string() },
+            None => NamingRow { rule: NAMING_NONE.to_string(), text: part.get("text").and_then(Value::as_str).unwrap_or_default().to_string() },
+        })
+        .collect();
+    rows.resize(6, NamingRow { rule: NAMING_NONE.to_string(), text: String::new() });
+    rows
+}
+
+/// The components the rows stand for, in row order, empty `None` rows left out; `None` when every
+/// row is `None`, which stores no naming and keeps each input's name as before (#13712).
+fn naming_components(rows: &[NamingRow]) -> Option<Vec<Value>> {
+    let parts: Vec<Value> = rows
+        .iter()
+        .filter_map(|row| match row.rule.as_str() {
+            NAMING_NONE if row.text.is_empty() => None,
+            NAMING_NONE => Some(json!({"text": row.text.as_str()})),
+            rule => Some(json!({"component": rule})),
+        })
+        .collect();
+    (!parts.is_empty()).then_some(parts)
+}
+
+/// The Example line: the name the fields' rows and starting serial give the sample document
+/// `MyFile.gif`, planned by the engine's own batch naming; empty when there is nothing to show.
+fn naming_example(fields: &DialogFields) -> String {
+    let Some(components) = naming_components(&naming_rows(fields)) else { return String::new() };
+    let params = json!({"namingComponents": components, "startingSerial": fields.int("startingSerial").unwrap_or(1)});
+    let inputs = [photocraft_engine::file_cmds::BatchInput { path: "MyFile.gif".into(), rel_dir: String::new() }];
+    photocraft_engine::file_cmds::plan_batch_names(&inputs, "", "same", &params)
+        .ok()
+        .flatten()
+        .and_then(|names| names.into_iter().next())
+        .map(|path| path.rsplit(['/', '\\']).next().unwrap_or(path.as_str()).to_owned())
+        .unwrap_or_default()
+}
+
+/// The File Naming custom row: the Example line, then six rows of text field plus rule dropdown
+/// with the reference's static "+" right of rows 1-5. Picking an entry writes its label into the
+/// field; typing turns the row into literal text and jumps its dropdown to `None`.
+fn naming_rows_param() -> Param {
+    Param::custom("namingComponents", Label::from(tl!("File Naming")), |ui, fields, _cx| {
+        let before = naming_rows(fields);
+        let mut rows = before.clone();
+        let mut response = ui
+            .horizontal(|ui| {
+                ui.label(tl!("Example:"));
+                ui.label(naming_example(fields));
+            })
+            .response;
+        let entries: Vec<Entry<String>> = NAMING_RULES.iter().map(|(id, label)| Entry::new((*id).to_string(), Label::from(tl!(label)))).collect();
+        for (index, (row, stored)) in rows.iter_mut().zip(before.iter()).enumerate() {
+            response = ui
+                .horizontal(|ui| {
+                    let typed = ui
+                        .add(egui::TextEdit::singleline(&mut row.text).desired_width(150.0))
+                        .on_hover_text(tl!("Type specific text to be included in final file name"));
+                    // Typing into a rule row makes the row literal text, and its dropdown follows (#13661 wording).
+                    if row.text != stored.text && row.rule != NAMING_NONE {
+                        row.rule = NAMING_NONE.to_string();
+                    }
+                    let out = Select::new(Label::Empty, Bind::given(row.rule.clone()), &entries).id_salt(("droplet-naming-rule", index)).show(ui);
+                    if let Some(rule) = out.value()
+                        && rule.as_str() != row.rule.as_str()
+                    {
+                        row.rule = rule.clone();
+                        if rule.as_str() != NAMING_NONE {
+                            row.text = tl!(rule_label(rule)).to_string();
+                        } else if row.text == tl!(rule_label(&stored.rule)) || row.text == rule_label(&stored.rule) {
+                            // Picking `None` on a rule row empties it: the old rule's LABEL is
+                            // not literal text (read back raw at naming_rows(), shown tl'd on a
+                            // pick — match either). A typed text stays under `None`.
+                            row.text = String::new();
+                        }
+                    }
+                    if index < 5 {
+                        ui.label("+");
+                    }
+                    out.response().clone().on_hover_text(tl!("Select a specific rule to be included in final file name")).union(typed)
+                })
+                .response;
+        }
+        if rows != before {
+            match naming_components(&rows) {
+                Some(parts) => fields.set("namingComponents", FieldValue::Json(Value::Array(parts))),
+                None => drop(fields.remove("namingComponents")),
+            }
+        }
+        response
+    })
+    .opens_with(FieldValue::Json(json!([{"component": "name"}, {"component": "extension"}])))
+    .tooltip(tl!("Specify a rule for naming final files"))
+}
+
+/// The Compatibility custom row: Windows checked and greyed on Windows, Mac OS and Unix off.
+fn compatibility_param() -> Param {
+    Param::custom("compatibility", Label::from(tl!("Compatibility")), |ui, fields, _cx| {
+        let held = field_json(fields, "compatibility").unwrap_or_else(|| json!({}));
+        let flag = |name: &str, default: bool| held.get(name).and_then(Value::as_bool).unwrap_or(default);
+        let (mut windows, mut macintosh, mut unix) = (flag("windows", cfg!(windows)), flag("macintosh", false), flag("unix", false));
+        let before = (windows, macintosh, unix);
+        let response = ui
+            .horizontal(|ui| {
+                // On Windows the box is checked and greyed, as in the reference.
+                ui.add_enabled_ui(!cfg!(windows), |ui| {
+                    ui.checkbox(&mut windows, tl!("Windows"));
+                });
+                ui.checkbox(&mut macintosh, tl!("Mac OS"));
+                ui.checkbox(&mut unix, tl!("Unix"));
+            })
+            .response;
+        if (windows, macintosh, unix) != before {
+            fields.set("compatibility", FieldValue::Json(json!({"macintosh": macintosh, "windows": windows, "unix": unix})));
+        }
+        response
+    })
+    .opens_with(FieldValue::Json(json!({"macintosh": false, "windows": cfg!(windows), "unix": false})))
 }
 
 #[cfg(test)]

@@ -376,7 +376,9 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     let name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&path));
     let steps_json: Vec<Value> = steps.iter().map(|(id, pr)| json!([id, pr])).collect();
     let mut options = serde_json::Map::new();
-    for k in ["output", "format", "quality", "suffix", "overrideOpen"] {
+    // The File Naming rows, the starting serial and the compatibility flags are stored as the
+    // batch command takes them (#13712); Batch's own checks run when the droplet runs.
+    for k in ["output", "format", "quality", "suffix", "overrideOpen", "namingComponents", "startingSerial", "compatibility"] {
         if let Some(v) = p.get(k) {
             options.insert(k.into(), v.clone());
         }
@@ -468,9 +470,26 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
         bp["action"] = name.clone();
     }
     // Override Open is saved with the droplet: a recorded Open then reads each dropped input.
+    // The File Naming rows, the starting serial and the compatibility flags ride along the same
+    // way (#13712); droplets written before it store none and keep each input's name, and a key
+    // stored as null counts as not stored.
     for key in ["quality", "overrideOpen"] {
         if let Some(value) = opts.get(key) {
             bp[key] = value.clone();
+        }
+    }
+    // Batch validates the starting serial and refuses a `compatibility` without `namingComponents`
+    // before it settles for keeping input names, so both ride along only when the droplet stores
+    // naming rows: all-None rows store none, and the run then keeps each input's name whatever
+    // serial the form sent.
+    let has_naming = opts.get("namingComponents").is_some_and(|value| !value.is_null());
+    if has_naming {
+        bp["namingComponents"] = opts["namingComponents"].clone();
+        if let Some(value) = opts.get("startingSerial").filter(|value| !value.is_null()) {
+            bp["startingSerial"] = value.clone();
+        }
+        if let Some(value) = opts.get("compatibility").filter(|value| !value.is_null()) {
+            bp["compatibility"] = value.clone();
         }
     }
     if let Some(called) = v.get("calledActions") {
@@ -707,6 +726,9 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+#[path = "droplet_file_naming_tests.rs"]
+mod droplet_file_naming_tests;
 #[cfg(test)]
 #[path = "droplet_skip_non_images_tests.rs"]
 mod droplet_skip_non_images_tests;
