@@ -451,6 +451,8 @@ pub(crate) struct PathSelectionDrag {
     pub last: [f64; 2],
     /// The modifiers held at the press; the cursor keeps them for the drag.
     pub mods: craft::keymap::Mods,
+    /// Whether Shift is held now, during the drag.
+    pub shift: bool,
     /// What the press targeted; a drag whose owner is no longer valid shows and commits nothing.
     pub owner: Option<super::VectorOwner>,
 }
@@ -500,7 +502,7 @@ fn doc_point(pointer: &craft::ui::canvas::ToolPointer, cx: &craft::ui::canvas::T
 impl craft::ui::canvas::CanvasTool for PathSelectionPass<'_> {
     fn press(&mut self, pointer: &craft::ui::canvas::ToolPointer, cx: &mut craft::ui::canvas::ToolContext<'_>) -> craft::ui::canvas::ToolAction {
         let Some(at) = doc_point(pointer, cx) else { return craft::ui::canvas::ToolAction::Ignored };
-        self.tool.drag = Some(PathSelectionDrag { start: at, last: at, mods: pointer.mods, owner: None });
+        self.tool.drag = Some(PathSelectionDrag { start: at, last: at, mods: pointer.mods, shift: pointer.mods.shift, owner: None });
         self.tool.events.push(PathSelectionEvent::Press { at, shift: pointer.mods.shift });
         craft::ui::canvas::ToolAction::Claimed
     }
@@ -508,13 +510,22 @@ impl craft::ui::canvas::CanvasTool for PathSelectionPass<'_> {
     fn drag(&mut self, pointer: &craft::ui::canvas::ToolPointer, cx: &mut craft::ui::canvas::ToolContext<'_>) {
         if let (Some(d), Some(at)) = (&mut self.tool.drag, doc_point(pointer, cx)) {
             d.last = at;
+            d.shift = pointer.mods.shift;
         }
     }
 
     fn release(&mut self, pointer: &craft::ui::canvas::ToolPointer, cx: &mut craft::ui::canvas::ToolContext<'_>) {
-        let Some(d) = self.tool.drag.take() else { return };
-        let end = doc_point(pointer, cx).unwrap_or(d.last);
+        let Some(mut d) = self.tool.drag.take() else { return };
+        d.shift = pointer.mods.shift;
+        let end = path_selection_end(&d, doc_point(pointer, cx).unwrap_or(d.last));
         self.tool.events.push(PathSelectionEvent::Release { start: d.start, end, owner: d.owner });
+    }
+
+    /// ⇧ pressed or let go with the pointer still changes the constrained move (#13285).
+    fn each_pass(&mut self, cx: &mut craft::ui::canvas::ToolContext<'_>) {
+        if let Some(d) = &mut self.tool.drag {
+            d.shift = cx.mods.shift;
+        }
     }
 
     fn cancel(&mut self, _reason: craft::behavior::CancelReason, _cx: &mut craft::ui::canvas::ToolContext<'_>) {
@@ -558,6 +569,29 @@ impl craft::ui::canvas::CanvasTool for PathSelectionPass<'_> {
     }
 }
 
+/// Where Path Selection drag `d` ends for the pointer at `end`, for its live outline and its
+/// release alike. ⇧ pressed after the press locks the move to the nearer of the axis point, which
+/// keeps the longer leg, and the 45° point, which keeps the shorter one: the reference application
+/// moves (+60,+25) by (60,0) and (+60,+50) by (50,50) (#13285). Where it switches between them is
+/// not measured, nor is ⇧ let go again (the drag then moves freely, as before). ⇧ held at the
+/// press keeps adding or removing components (`path_components::press`) and its drag moves freely
+/// as before, although the reference application moves nothing then.
+pub(crate) fn path_selection_end(d: &PathSelectionDrag, end: [f64; 2]) -> [f64; 2] {
+    if !d.shift || d.mods.shift {
+        return end;
+    }
+    let (dx, dy) = (end[0] - d.start[0], end[1] - d.start[1]);
+    let (long, short) = (dx.abs().max(dy.abs()), dx.abs().min(dy.abs()));
+    let [dx, dy] = if long < 2.0 * short {
+        [short.copysign(dx), short.copysign(dy)]
+    } else if dx.abs() >= dy.abs() {
+        [dx, 0.0]
+    } else {
+        [0.0, dy]
+    };
+    [d.start[0] + dx, d.start[1] + dy]
+}
+
 /// The path a Path Selection drag in progress shows moved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MovedPath {
@@ -576,7 +610,7 @@ pub(crate) fn path_selection_preview(app: &PhotocraftApp, doc: &Document) -> Opt
     if app.session.active().is_none_or(|st| st.doc.id != doc.id) {
         return None;
     }
-    let [dx, dy] = path_selection_offset(d.start, d.last).filter(|o| o.iter().all(|v| v.is_finite()))?;
+    let [dx, dy] = path_selection_offset(d.start, path_selection_end(d, d.last)).filter(|o| o.iter().all(|v| v.is_finite()))?;
     if let Some((r, path)) = crate::path_components::moved_selected(app, [dx, dy]) {
         return match r {
             crate::direct_select::PathRef::Work => Some((MovedPath::Work, path)),
@@ -632,3 +666,7 @@ pub fn path_selection_finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64
         PathRef::TypePath(_) | PathRef::Pen => return,
     };
 }
+
+#[cfg(test)]
+#[path = "../path_selection_shift_constrain_tests.rs"]
+mod path_selection_shift_constrain_tests;
