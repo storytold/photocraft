@@ -747,7 +747,7 @@ pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let placed = held.placed_at(quad);
         if let Some(pv) = app.transform_preview.as_mut() {
             if let Some(texture) = held.texture {
-                pv.other_texels = Some(OtherTexels { texture: std::mem::replace(&mut pv.textures, texture) });
+                pv.other_texels = Some(OtherTexels { texture: std::mem::replace(&mut pv.textures, texture), placed_warp: None });
             }
             pv.placed_warp = placed;
         }
@@ -782,6 +782,12 @@ pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     if enter_placed_warp(app, ctx) {
         return;
+    }
+    // A warp of the box as it is: the texels shown are the box's own, so nothing an earlier Warp mode left for an Undo
+    // across it (its texels, its map from the contents) belongs to this one.
+    if let Some(pv) = app.transform_preview.as_mut() {
+        pv.other_texels = None;
+        pv.placed_warp = None;
     }
     let Some(t) = app.ui.transform.as_ref() else { return };
     let (rect, quad) = (t.rect_array(), t.quad_array());
@@ -832,7 +838,7 @@ fn preview_without_smart_warp(app: &mut PhotocraftApp, ctx: &egui::Context, r: [
     let Some(pv) = app.transform_preview.as_mut() else { return false };
     let (image, uv) = preview_image(&plain, id, None, b, max_side, pv.styled.is_some());
     let unwarped = PreviewTextures::new(format!("transform-{session}-unwarped"), PreviewPixels::new(image, uv));
-    pv.other_texels = Some(OtherTexels { texture: std::mem::replace(&mut pv.textures, unwarped) });
+    pv.other_texels = Some(OtherTexels { texture: std::mem::replace(&mut pv.textures, unwarped), placed_warp: None });
     true
 }
 
@@ -998,7 +1004,7 @@ fn enter_placed_warp(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     // The stored warp, not yet changed: committing it as it is changes nothing.
     let stored = quad == start && matches!(&layer.content, LayerContent::Smart(sm) if sm.warp.is_some());
     if let Some(pv) = app.transform_preview.as_mut() {
-        pv.other_texels = Some(OtherTexels { texture: std::mem::replace(&mut pv.textures, texture) });
+        pv.other_texels = Some(OtherTexels { texture: std::mem::replace(&mut pv.textures, texture), placed_warp: None });
         pv.placed_warp = Some((to_doc.0, quad != start));
     }
     report_warp(app, Warp::custom(mesh, source.bounds), false, stored);
@@ -1093,7 +1099,7 @@ pub(crate) fn reconcile_held(app: &mut PhotocraftApp) {
     if warping {
         if let Some(held) = pv.held.take() {
             if let Some(texture) = held.texture {
-                pv.other_texels = Some(OtherTexels { texture: std::mem::replace(&mut pv.textures, texture) });
+                pv.other_texels = Some(OtherTexels { texture: std::mem::replace(&mut pv.textures, texture), placed_warp: None });
             }
             pv.placed_warp = held.placed;
         }

@@ -327,13 +327,19 @@ fn style_reach(doc: &Document, ids: &[LayerId]) -> i32 {
 /// The box each covers is the session's own: its undo steps bring the box with the warp.
 struct OtherTexels {
     texture: PreviewTextures,
+    /// The other mode's map from a smart object's contents ([`OpenPreview::placed_warp`]): Warp mode's when the box
+    /// is showing, `None` (the box's) while Warp is. It goes with the texels, so Undo and Redo across Warp mode bring
+    /// both back together.
+    placed_warp: Option<([f64; 9], bool)>,
 }
 
 /// Swaps the session's texels with the other mode's, when there are any: the stored warp's edit
-/// shows the source without the warp, the box the render with it.
+/// shows the source without the warp, the box the render with it; Warp on a placed smart object
+/// shows its contents through `placed_warp`, which swaps with them.
 fn swap_mode_texels(pv: &mut OpenPreview) {
     if let Some(o) = pv.other_texels.as_mut() {
         std::mem::swap(&mut pv.textures, &mut o.texture);
+        std::mem::swap(&mut pv.placed_warp, &mut o.placed_warp);
     }
 }
 
