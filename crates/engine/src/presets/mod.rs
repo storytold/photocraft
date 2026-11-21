@@ -218,6 +218,7 @@ impl Session {
         }
         if let Some(t) = p.tool_presets {
             st.tool_presets = tools::load(t);
+            collisions_changed |= collisions::make_flat_item_names_unique(&mut st.tool_presets);
         }
         if let Some(d) = p.documents {
             st.documents = crate::document_preset_cmds::load(d);
@@ -289,8 +290,8 @@ pub(crate) fn find<T: Named>(groups: &[Group<T>], name: &str, group: Option<&str
     groups
         .iter()
         .enumerate()
-        .filter(|(_, g)| group.is_none_or(|n| g.name == n))
-        .find_map(|(gi, g)| g.items.iter().position(|i| i.name() == name).map(|ii| (gi, ii)))
+        .filter(|(_, g)| group.is_none_or(|n| g.name.eq_ignore_ascii_case(n)))
+        .find_map(|(gi, g)| g.items.iter().position(|i| i.name().eq_ignore_ascii_case(name)).map(|ii| (gi, ii)))
 }
 
 /// `base`, or `base 2`, `base 3`… so names stay unique across all groups (Photoshop allows
@@ -303,7 +304,7 @@ pub(crate) fn unique_name<T: Named>(groups: &[Group<T>], base: &str) -> String {
 /// "Presets" when there is none).
 pub(crate) fn group_index<T>(groups: &mut Vec<Group<T>>, group: Option<&str>) -> usize {
     match group {
-        Some(n) => groups.iter().position(|g| g.name == n).unwrap_or_else(|| {
+        Some(n) => groups.iter().position(|g| g.name.eq_ignore_ascii_case(n)).unwrap_or_else(|| {
             groups.push(Group::new(n, Vec::new()));
             groups.len() - 1
         }),
@@ -325,7 +326,7 @@ pub(crate) fn edit_groups<T: Named>(groups: &mut Vec<Group<T>>, action: &str, p:
             let name = req_str(p, "preset", cmd)?;
             let to = req_str(p, "name", cmd)?.to_string();
             let (gi, ii) = find(groups, name, group).ok_or_else(|| bad(cmd, format!("no preset \"{name}\"")))?;
-            if name != to && find(groups, &to, None).is_some() {
+            if !name.eq_ignore_ascii_case(&to) && find(groups, &to, None).is_some() {
                 return Err(bad(cmd, format!("a preset named \"{to}\" already exists")));
             }
             groups[gi].items[ii].set_name(to.clone());
@@ -365,16 +366,15 @@ pub(crate) fn edit_groups<T: Named>(groups: &mut Vec<Group<T>>, action: &str, p:
         }
         "newGroup" => {
             let base = str_param(p, "name").unwrap_or("Group");
-            let taken = |n: &str| groups.iter().any(|g| g.name == n);
-            let name = if taken(base) { (1..).map(|i| format!("{base} {i}")).find(|n| !taken(n)).unwrap_or_default() } else { base.to_string() };
+            let name = collisions::unique_group_name(groups, base);
             groups.push(Group::new(&name, Vec::new()));
             Ok(json!({"group": name}))
         }
         "renameGroup" => {
             let g = req_str(p, "group", cmd)?;
             let to = req_str(p, "name", cmd)?.to_string();
-            let i = groups.iter().position(|x| x.name == g).ok_or_else(|| bad(cmd, format!("no group \"{g}\"")))?;
-            if g != to && groups.iter().any(|x| x.name == to) {
+            let i = groups.iter().position(|x| x.name.eq_ignore_ascii_case(g)).ok_or_else(|| bad(cmd, format!("no group \"{g}\"")))?;
+            if !g.eq_ignore_ascii_case(&to) && groups.iter().any(|x| x.name.eq_ignore_ascii_case(&to)) {
                 return Err(bad(cmd, format!("a group named \"{to}\" already exists")));
             }
             groups[i].name = to.clone();
@@ -382,7 +382,7 @@ pub(crate) fn edit_groups<T: Named>(groups: &mut Vec<Group<T>>, action: &str, p:
         }
         "deleteGroup" => {
             let g = req_str(p, "group", cmd)?;
-            let i = groups.iter().position(|x| x.name == g).ok_or_else(|| bad(cmd, format!("no group \"{g}\"")))?;
+            let i = groups.iter().position(|x| x.name.eq_ignore_ascii_case(g)).ok_or_else(|| bad(cmd, format!("no group \"{g}\"")))?;
             let removed = groups.remove(i);
             Ok(json!({"group": g, "deleted": removed.items.len()}))
         }

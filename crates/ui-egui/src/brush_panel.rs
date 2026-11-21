@@ -324,8 +324,9 @@ fn settings_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         let (r, _) = ui.allocate_exact_size(vec2(STRIP.0 as f32, STRIP.1 as f32), Sense::hover());
         ui.painter().rect_filled(r, t.radius_sm, t.field);
-        let tex = brush_preview::stroke_texture(ui.ctx(), "settings-strip", &b, STRIP.0, STRIP.1, t.text);
-        ui.painter().image(tex.id(), r, full_uv(), Color32::WHITE);
+        let tex = brush_preview::tip_texture(ui.ctx(), "settings-strip-tip", &b.tip, (b.hardness, b.angle, b.roundness), STRIP.1, t.text);
+        let tip_rect = egui::Rect::from_center_size(r.center(), vec2(STRIP.1 as f32, STRIP.1 as f32));
+        ui.painter().with_clip_rect(r).image(tex.id(), tip_rect, full_uv(), Color32::WHITE);
         ui.vertical(|ui| {
             let new = icons::button(ui, "square-plus", 24.0, false, tl!("Create new brush from these settings"));
             if crate::pickers::adapters::brush_picker::named(new, "Create new brush from these settings").clicked() {
@@ -412,92 +413,236 @@ pub fn copy_texture_to_other_tools(app: &mut PhotocraftApp) {
     }
 }
 
-/// The Brush Settings panel menu actions (hamburger menu).
-pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let panel = if app.ui.brush_picker.is_some() { "brush-picker" } else { "brushes" };
-    if ui.button(tl!("New Brush Preset…")).clicked() {
-        let name = new_preset_name(&app.session.tools.presets);
-        if run_or_status(app, "brush.presets.save", json!({ "name": name }))
-            && let Some(preset) = app.session.tools.presets.iter().find(|p| p.name == name)
-        {
-            app.ui.brushes_panel.renaming = Some(Renaming { group: false, name: name.clone(), folder: Vec::new(), text: String::new() });
-            let target = (
-                preset.group.clone(),
-                crate::pickers::browser::asset_browser::ItemView {
-                    key: crate::pickers::adapters::brushes::preview_identity(preset),
-                    name: preset.name.clone(),
-                    group_path: preset.folder.clone(),
-                },
-            );
-            crate::pickers::browser::asset_browser::begin_item_rename(&mut app.ui.presets_ui, panel, &[target]);
-        }
-        ui.close();
-    }
-    if ui.button(tl!("New Brush Group…")).clicked() {
-        crate::pickers::browser::popup_dialogs::request_new_group(ui.ctx(), panel);
-        ui.close();
-    }
-    ui.separator();
-    let current = app
-        .session
-        .tools
-        .current_preset
-        .as_deref()
-        .filter(|name| !crate::pickers::adapters::brushes::is_ambiguous_preset_name(&app.session.tools.presets, name))
-        .and_then(|name| app.session.tools.presets.iter().find(|preset| preset.name.eq_ignore_ascii_case(name)))
-        .map(|preset| preset.name.clone());
-    if ui.add_enabled(current.is_some(), egui::Button::new(tl!("Rename Brush…"))).clicked()
-        && let Some(name) = current.as_ref()
+/// Resolve the menu's current brush when the browser has no explicit selection.
+fn brush_menu_selection(app: &PhotocraftApp, state: &crate::pickers::state::PresetUi, panel: &str) -> crate::pickers::browser::selection::BrowserSelection {
+    let mut selection = state.browser_selection_snapshot.get(panel).cloned().unwrap_or_default();
+    if selection.targets.is_empty()
+        && let Some(name) = app.session.tools.current_preset.as_deref()
+        && !crate::pickers::adapters::brushes::is_ambiguous_preset_name(&app.session.tools.presets, name)
+        && let Some(preset) = app.session.tools.presets.iter().find(|preset| preset.name.eq_ignore_ascii_case(name))
     {
-        app.ui.brushes_panel.renaming = Some(Renaming { group: false, name: name.clone(), folder: Vec::new(), text: name.clone() });
-        if panel == "brush-picker" {
-            let target = app.session.tools.presets.iter().find(|preset| preset.name == *name).map(|preset| {
-                (
-                    preset.group.clone(),
-                    crate::pickers::browser::asset_browser::ItemView {
-                        key: crate::pickers::adapters::brushes::preview_identity(preset),
-                        name: preset.name.clone(),
-                        group_path: preset.folder.clone(),
-                    },
-                )
-            });
-            if let Some(target) = target {
-                crate::pickers::browser::asset_browser::begin_item_rename(&mut app.ui.presets_ui, panel, &[target]);
-            }
-        } else {
+        let key = crate::pickers::adapters::brushes::preview_identity(preset);
+        selection.targets.push(crate::pickers::browser::selection::SelectionTarget::Item {
+            group: preset.group.clone(),
+            path: preset.folder.clone(),
+            key: key.clone(),
+        });
+        selection.cards.push((preset.group.clone(), key));
+        selection.contains_card = true;
+        selection.contains_selected_card = true;
+    }
+    selection
+}
+
+fn brush_menu_leading(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut crate::pickers::state::PresetUi, panel: &str) {
+    use crate::pickers::browser::{context_menu::SelectionMenuModel, popup_dialogs};
+
+    if crate::menu_keys::menu_item_button(ui, tl!("New Brush Preset…"), true).clicked() {
+        crate::brush_preset_dialog::open(app, None);
+        ui.close();
+    }
+    if crate::menu_keys::menu_item_button(ui, tl!("New Brush Group…"), true).clicked() {
+        popup_dialogs::request_new_group(ui.ctx(), panel);
+        if panel == "brushes" {
             app.ui.brush_tab = 1;
         }
         ui.close();
     }
-    if ui.add_enabled(current.is_some(), egui::Button::new(tl!("Delete Brush…"))).clicked()
-        && let Some(name) = current
-    {
-        run_or_status(app, "brush.presets.delete", json!({ "name": name }));
+    ui.separator();
+
+    let selection = brush_menu_selection(app, state, panel);
+    let menu = SelectionMenuModel::new(tl!("Brush"), &selection);
+    if crate::menu_keys::menu_item_button(ui, tl!("Rename Brush…"), menu.rename_action.is_some()).clicked() {
+        if let Some(action) = menu.rename_action {
+            popup_dialogs::request_rename_selection(ui.ctx(), panel, action);
+            if panel == "brushes" {
+                app.ui.brush_tab = 1;
+            }
+        }
+        ui.close();
+    }
+    let requested = if crate::menu_keys::menu_item_button(ui, tl!("Delete Brush…"), !menu.delete_actions.is_empty()).clicked() {
+        menu.delete_actions
+    } else {
+        Vec::new()
+    };
+    let confirmed = popup_dialogs::confirm_deletions(ui, panel, &crate::pickers::adapters::brushes::browser_groups(&app.session.tools.presets), requested);
+    if !confirmed.is_empty() {
+        let actions = crate::pickers::adapters::brushes::browser_actions_to_actions(&app.session.tools.presets, confirmed, Some(&selection));
+        crate::pickers::adapters::brushes::apply(app, actions);
         ui.close();
     }
     ui.separator();
-    if ui.button(tl!("Append Default Brushes…")).on_hover_text("Built-in brush presets are already included in the library.").clicked() {
+}
+
+fn export_selected_brushes(app: &mut PhotocraftApp, keys: &[String]) -> Result<Value, String> {
+    use photocraft_engine::edit_menu_cmds::{PRESET_FORMAT, PresetFile};
+    let mut brushes =
+        keys.iter().filter_map(|key| crate::pickers::adapters::brushes::preset_by_identity(&app.session.tools.presets, key).cloned()).collect::<Vec<_>>();
+    for preset in &mut brushes {
+        app.session.load_brush_tips(&mut preset.brush)?;
+    }
+    if brushes.is_empty() {
+        return Err("No selected brushes could be exported.".into());
+    }
+    let count = brushes.len();
+    let file = PresetFile { format: PRESET_FORMAT.into(), version: 1, brushes, custom_shapes: Vec::new() };
+    let bytes = serde_json::to_vec_pretty(&file).map_err(|error| error.to_string())?;
+    app.pick_save("Brushes.pcpresets", move |app, path| {
+        let write = app.services.write.as_mut().ok_or("no writer configured")?;
+        write(&path, &bytes)?;
+        app.ui.status_error = false;
+        app.ui.status = format!("Exported {count} brush preset{} to {}", if count == 1 { "" } else { "s" }, crate::file_open::display_name(&path));
+        Ok(json!({"path": path, "count": count}))
+    })
+}
+
+fn brush_menu_trailing(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &crate::pickers::state::PresetUi, panel: &str) {
+    if crate::menu_keys::menu_item_button(ui, tl!("Append Default Brushes…"), true).clicked() {
         app.ui.status_error = false;
         app.ui.status = "Built-in brush presets are already included in the library.".into();
         ui.close();
     }
-    if ui.button(tl!("Import Brushes…")).clicked() {
-        let _ = crate::preset_files_ui::import_brushes(app);
+    if crate::menu_keys::menu_item_button(ui, tl!("Import Brushes…"), true).clicked() {
+        ui.close();
+        if let Err(error) = crate::preset_files_ui::import_brushes(app)
+            && error != crate::file_dialog::CANCELLED
+        {
+            app.ui.status = error;
+            app.ui.status_error = true;
+        }
+    }
+    let selection = brush_menu_selection(app, state, panel);
+    let menu = crate::pickers::browser::context_menu::SelectionMenuModel::new(tl!("Brush"), &selection);
+    if crate::menu_keys::menu_item_button(ui, tl!("Export Selected Brushes…"), !menu.export_items.is_empty()).clicked() {
+        ui.close();
+        if let Err(error) = export_selected_brushes(app, &menu.export_items)
+            && error != crate::file_dialog::CANCELLED
+        {
+            app.ui.status = error;
+            app.ui.status_error = true;
+        }
+    }
+}
+
+fn brush_view_toggle(ui: &mut egui::Ui, checked: bool, label: &str) -> egui::Response {
+    let text = crate::menu_keys::menu_row_text(ui, checked, tl!(label), None);
+    let response = ui.add(egui::Button::new(text));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!(label)));
+    response
+}
+
+/// The docked Brushes panel and the compact picker deliberately share these options.
+fn brush_library_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) {
+    let mut state = std::mem::take(&mut app.ui.presets_ui);
+    brush_menu_leading(app, ui, &mut state, panel);
+    let view = &mut state.brush_picker;
+    if brush_view_toggle(ui, view.show_name, "Brush Name").clicked() {
+        view.show_name = !view.show_name;
+    }
+    if brush_view_toggle(ui, view.show_stroke, "Brush Stroke").clicked() {
+        view.show_stroke = !view.show_stroke;
+    }
+    if brush_view_toggle(ui, view.show_tip, "Brush Tip").clicked() {
+        view.show_tip = !view.show_tip;
+    }
+    if !view.show_name && !view.show_stroke && !view.show_tip {
+        view.show_tip = true;
+    }
+    ui.separator();
+    let search_visible = state.search_visible.get(panel).copied().unwrap_or(true);
+    if brush_view_toggle(ui, search_visible, "Show Search Bar").clicked() {
+        state.search_visible.insert(panel.to_owned(), !search_visible);
+        if search_visible {
+            state.search.remove(panel);
+        }
+    }
+    let recents_visible = state.recents_visible(panel);
+    if brush_view_toggle(ui, recents_visible, "Show Recent Brushes").clicked() {
+        state.recents_visible.insert(panel.to_owned(), !recents_visible);
+    }
+    ui.separator();
+    brush_menu_trailing(app, ui, &state, panel);
+    app.ui.presets_ui = state;
+}
+
+/// The docked Brushes panel menu.
+pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    brush_library_menu(app, ui, "brushes");
+}
+
+/// The floating picker uses the same menu contents but keeps its own display preferences.
+pub fn picker_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    brush_library_menu(app, ui, "brush-picker");
+}
+
+/// Menu for the separate Brush Settings editor, not the docked Brushes library.
+pub fn settings_panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if crate::menu_keys::menu_item_button(ui, tl!("New Brush Preset…"), true).clicked() {
+        crate::brush_preset_dialog::open(app, None);
         ui.close();
     }
-    let has_selection = app.ui.presets_ui.browser_selection_snapshot.get(panel).is_some_and(|selection| selection.contains_card);
-    if ui.add_enabled(has_selection, egui::Button::new(tl!("Export Selected Brushes…"))).clicked() {
-        app.ui.status = "Exporting selected brushes is not supported yet.".into();
+    ui.separator();
+    if crate::menu_keys::menu_item_button(ui, tl!("Clear Brush Controls"), true).clicked() {
+        let before = app.session.tools.brush.clone();
+        let after = clear_brush_controls(&before);
+        commit(app, &before, &after);
+        ui.close();
+    }
+    if crate::menu_keys::menu_item_button(ui, tl!("Reset All Locked Settings"), true).clicked() {
+        let before = app.session.tools.brush.clone();
+        let after = reset_locked_settings(&before);
+        commit(app, &before, &after);
+        ui.close();
+    }
+    if crate::menu_keys::menu_item_button(ui, tl!("Copy Texture to Other Tools"), true).clicked() {
+        copy_texture_to_other_tools(app);
         ui.close();
     }
 }
 
-/// Compose the common asset-picker menu first, then append brush-library commands.
-pub fn picker_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let panel = if app.ui.brush_picker.is_some() { "brush-picker" } else { "brushes" };
-    crate::pickers::shell::picker_menu_contents(ui, &mut app.ui.presets_ui, panel, crate::pickers::shell::PickerMenuOptions::for_panel(panel), None);
-    ui.separator();
-    panel_menu(app, ui);
+fn reset_locked_settings(current: &BrushSettings) -> BrushSettings {
+    let mut after = current.clone();
+    let defaults = BrushSettings::default();
+    let locks = &current.locks;
+    if locks.shape_dynamics {
+        after.shape_dynamics = defaults.shape_dynamics;
+    }
+    if locks.scattering {
+        after.scattering = defaults.scattering;
+    }
+    if locks.texture {
+        after.texture = defaults.texture;
+    }
+    if locks.dual_brush {
+        after.dual_brush = defaults.dual_brush;
+    }
+    if locks.color_dynamics {
+        after.color_dynamics = defaults.color_dynamics;
+    }
+    if locks.transfer {
+        after.transfer = defaults.transfer;
+    }
+    if locks.pose {
+        after.pose = defaults.pose;
+    }
+    if locks.noise {
+        after.noise = defaults.noise;
+    }
+    if locks.wet_edges {
+        after.wet_edges = defaults.wet_edges;
+    }
+    if locks.build_up {
+        after.build_up = defaults.build_up;
+        after.build_up_rate = defaults.build_up_rate;
+    }
+    if locks.smoothing {
+        after.smoothing = defaults.smoothing;
+    }
+    if locks.protect_texture {
+        after.protect_texture = defaults.protect_texture;
+    }
+    after
 }
 
 pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
@@ -535,18 +680,20 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     }
                     let menu_btn = widgets::panel_menu_button(ui, "Panel menu");
                     egui::Popup::menu(&menu_btn).show(|ui| {
-                        widgets::style_spectrum_popup_menu(ui);
-                        ui.set_min_width(180.0);
-                        picker_menu(app, ui);
-                        ui.separator();
-                        if ui.button(tl!("Close")).clicked() {
-                            open = false;
-                            ui.close();
-                        }
-                        if ui.button(tl!("Close Tab Group")).clicked() {
-                            open = false;
-                            ui.close();
-                        }
+                        crate::menu_keys::with_menu_item_indent(ui, |ui| {
+                            widgets::style_spectrum_popup_menu(ui);
+                            ui.set_min_width(180.0);
+                            settings_panel_menu(app, ui);
+                            ui.separator();
+                            if crate::menu_keys::menu_item_button(ui, tl!("Close"), true).clicked() {
+                                open = false;
+                                ui.close();
+                            }
+                            if crate::menu_keys::menu_item_button(ui, tl!("Close Tab Group"), true).clicked() {
+                                open = false;
+                                ui.close();
+                            }
+                        });
                     });
                 });
             });
@@ -561,5 +708,102 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
         });
     if !open {
         app.ui.panels.brush_settings = false;
+    }
+}
+
+#[cfg(test)]
+mod panel_menu_tests {
+    use egui::vec2;
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT, Queryable},
+    };
+
+    use super::{panel_menu, settings_panel_menu};
+    use crate::PhotocraftApp;
+
+    #[test]
+    fn brushes_panel_menu_renders_the_requested_brush_library_options_in_order() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut harness = Harness::builder().with_size(vec2(520.0, 620.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                crate::pickers::shell::picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| panel_menu(app, ui));
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(2);
+        harness.get_by_label("Panel menu").click();
+        harness.run_steps(2);
+
+        let labels = [
+            "New Brush Preset…",
+            "New Brush Group…",
+            "Rename Brush…",
+            "Delete Brush…",
+            "Brush Name",
+            "Brush Stroke",
+            "Brush Tip",
+            "Show Search Bar",
+            "Show Recent Brushes",
+            "Append Default Brushes…",
+            "Import Brushes…",
+            "Export Selected Brushes…",
+        ];
+        let mut previous_bottom = None;
+        for label in labels {
+            let rect = harness.get_by_label(label).rect();
+            if let Some(bottom) = previous_bottom {
+                assert!(rect.top() >= bottom, "{label} must follow the previous menu entry");
+            }
+            previous_bottom = Some(rect.bottom());
+        }
+        let gap = |before: &str, after: &str| harness.get_by_label(after).rect().top() - harness.get_by_label(before).rect().bottom();
+        let row_gap = gap("New Brush Preset…", "New Brush Group…");
+        for (before, after) in [
+            ("New Brush Group…", "Rename Brush…"),
+            ("Delete Brush…", "Brush Name"),
+            ("Brush Tip", "Show Search Bar"),
+            ("Show Recent Brushes", "Append Default Brushes…"),
+        ] {
+            assert!(gap(before, after) > row_gap, "{before} and {after} must be separate menu sections");
+        }
+        for (before, after) in [
+            ("New Brush Preset…", "New Brush Group…"),
+            ("Brush Name", "Brush Stroke"),
+            ("Brush Stroke", "Brush Tip"),
+            ("Show Search Bar", "Show Recent Brushes"),
+        ] {
+            assert!(gap(before, after) <= row_gap, "{before} and {after} belong to the same section");
+        }
+        assert!(harness.get_by_label("Rename Brush…").accesskit_node().is_disabled());
+        assert!(harness.get_by_label("Delete Brush…").accesskit_node().is_disabled());
+        assert!(harness.get_by_label("Export Selected Brushes…").accesskit_node().is_disabled());
+    }
+
+    #[test]
+    fn brush_settings_menu_has_only_settings_actions() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut harness = Harness::builder().with_size(vec2(420.0, 360.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                crate::pickers::shell::picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
+                    settings_panel_menu(app, ui);
+                    ui.separator();
+                    crate::menu_keys::menu_item_button(ui, tl!("Close"), true);
+                    crate::menu_keys::menu_item_button(ui, tl!("Close Tab Group"), true);
+                });
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(2);
+        harness.get_by_label("Panel menu").click();
+        harness.run_steps(2);
+        for label in ["New Brush Preset…", "Clear Brush Controls", "Reset All Locked Settings", "Copy Texture to Other Tools", "Close", "Close Tab Group"] {
+            assert!(harness.query_all_by_label(label).count() > 0, "missing {label}");
+        }
+        for label in ["New Brush Group…", "Brush Name", "Brush Stroke", "Brush Tip", "Show Search Bar", "Show Recent Brushes", "Append Default Brushes…"] {
+            assert_eq!(harness.query_all_by_label(label).count(), 0, "settings menu must not contain {label}");
+        }
     }
 }

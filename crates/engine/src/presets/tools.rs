@@ -48,8 +48,9 @@ fn checked_name(name: &str, cmd: &str) -> Result<String> {
     Ok(name.to_string())
 }
 
-/// Read saved tool presets entry by entry, so a damaged entry (wrong type, empty or overlong name,
-/// a duplicate name) is skipped without discarding the others.
+/// Read saved tool presets entry by entry, so a damaged entry (wrong type, empty or overlong name)
+/// is skipped without discarding the others. Duplicate names are retained here and repaired by
+/// the shared startup collision migration, rather than silently dropping a user's preset.
 pub(crate) fn load(value: Value) -> Vec<ToolPreset> {
     let Some(entries) = value.as_array() else { return Vec::new() };
     let mut presets: Vec<ToolPreset> = Vec::new();
@@ -59,7 +60,7 @@ pub(crate) fn load(value: Value) -> Vec<ToolPreset> {
         }
         let Ok(mut preset) = serde_json::from_value::<ToolPreset>(entry.clone()) else { continue };
         let Ok(name) = checked_name(&preset.name, "") else { continue };
-        if preset.tool.trim().is_empty() || presets.iter().any(|p| p.name == name) {
+        if preset.tool.trim().is_empty() {
             continue;
         }
         if !preset.options.is_object() {

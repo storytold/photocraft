@@ -260,6 +260,9 @@ pub(crate) fn generic_with_state(
                 false
             }
         }
+        BrowserAction::AppendDefault if prefix == "style.presets" || prefix == "shape.presets" => {
+            run(app, &format!("{prefix}.reset"), json!({"append": true})).is_some()
+        }
         BrowserAction::SelectItem { .. }
         | BrowserAction::ActivateItem { .. }
         | BrowserAction::Drop(_, _)

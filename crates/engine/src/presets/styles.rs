@@ -272,12 +272,9 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn reset(s: &mut Session, p: &Value) -> Result<Value> {
-    let mut b = builtin();
+    let b = builtin();
     if p.get("append").and_then(Value::as_bool).unwrap_or(false) {
-        for g in &mut b {
-            g.name = super::gradients::unique_group(&s.presets.styles, &g.name);
-        }
-        s.presets.styles.extend(b);
+        super::collisions::append_groups_unique(&mut s.presets.styles, b);
     } else {
         s.presets.styles = b;
     }

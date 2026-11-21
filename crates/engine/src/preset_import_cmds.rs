@@ -323,8 +323,12 @@ fn import_grd(s: &mut Session, p: &Value) -> Result<Value> {
     let st = &mut s.presets;
     let replace = p.get("replace").and_then(Value::as_bool).unwrap_or(true);
     let group = if replace {
-        st.gradients.retain(|g| g.name != requested_group);
-        requested_group
+        // Gradient group identity is case-insensitive throughout the picker. Remove a matching
+        // group using the same rule, otherwise importing `fire` beside `Fire` creates a group
+        // collision that the item-name repair below cannot resolve.
+        let existing_name = st.gradients.iter().find(|g| g.name.eq_ignore_ascii_case(&requested_group)).map(|g| g.name.clone());
+        st.gradients.retain(|g| !g.name.eq_ignore_ascii_case(&requested_group));
+        existing_name.unwrap_or(requested_group)
     } else {
         crate::presets::gradients::unique_group(&st.gradients, &requested_group)
     };
@@ -447,6 +451,11 @@ mod tests {
         let n = s.presets.gradients.len();
         s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Fire"})).unwrap();
         assert_eq!(s.presets.gradients.len(), n);
+        // Group collisions are case-insensitive; replacing with a case variant must replace the
+        // existing group and preserve its display casing rather than creating `fire` beside it.
+        let r = s.execute("gradient.presets.importGrd", json!({"data": data, "group": "fire"})).unwrap();
+        assert_eq!(r["group"], "Fire");
+        assert_eq!(s.presets.gradients.iter().filter(|g| g.name.eq_ignore_ascii_case("fire")).count(), 1);
         // A non-replacing import preserves the existing group and chooses a unique name.
         let existing_fire = s.presets.gradients.iter().find(|g| g.name == "Fire").unwrap().items.clone();
         let r = s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Fire", "replace": false})).unwrap();

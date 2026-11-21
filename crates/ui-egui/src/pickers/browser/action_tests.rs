@@ -9,6 +9,20 @@ use super::identity::PickerNodeIdentity;
 use super::path_identity_model::{HierarchyNode, PickerBrowserHierarchy, PickerId};
 
 #[test]
+fn append_default_is_dispatched_for_styles_and_shapes() {
+    let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let mut state = crate::pickers::state::PresetUi::default();
+
+    let styles_before = app.session.presets.styles.len();
+    assert!(generic_with_state(&mut app, &mut state, "styles", "style.presets", &BrowserAction::AppendDefault, serde_json::json!({})));
+    assert!(app.session.presets.styles.len() > styles_before);
+
+    let shapes_before = app.session.presets.shapes.len();
+    assert!(generic_with_state(&mut app, &mut state, "shapes", "shape.presets", &BrowserAction::AppendDefault, serde_json::json!({})));
+    assert!(app.session.presets.shapes.len() > shapes_before);
+}
+
+#[test]
 fn selected_parent_group_coalesces_descendant_delete_actions() {
     let parent = PickerId::group("Parent");
     let nested = PickerId::group_path(["Parent"], "Nested");

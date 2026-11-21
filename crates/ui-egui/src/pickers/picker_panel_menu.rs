@@ -106,7 +106,8 @@ fn search_toggle(ui: &mut egui::Ui, st: &mut PresetUi, panel: &str) {
 /// Common visibility control for the standard pickers' recent-items strip.
 fn recents_toggle(ui: &mut egui::Ui, st: &mut PresetUi, panel: &str) {
     let visible = st.recents_visible(panel);
-    if menu_check_item(ui, visible, tl!("Show Recents"), true).clicked() {
+    let label = if matches!(panel, "brushes" | "brush-picker") { tl!("Show Recent Brushes") } else { tl!("Show Recents") };
+    if menu_check_item(ui, visible, label, true).clicked() {
         let visible = !visible;
         st.recents_visible.insert(panel.to_owned(), visible);
         ui.close();

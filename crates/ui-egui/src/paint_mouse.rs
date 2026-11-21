@@ -208,7 +208,7 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &b);
         let closes = picks.iter().any(crate::pickers::adapters::brush_picker::Pick::closes);
-        crate::pickers::adapters::brush_picker::apply(app, ui.ctx(), picks);
+        crate::pickers::adapters::brush_picker::apply(app, picks);
         closes
     });
     // Not a press on a menu the picker opened (the gear, a preset's context menu), nor on the

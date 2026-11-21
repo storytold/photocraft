@@ -141,8 +141,8 @@ fn picker_context_menu_actions(
         "gradients" => Some((tl!("Gradient"), tl!("Gradients"), true, true, true)),
         "patterns" => Some((tl!("Pattern"), tl!("Patterns"), true, true, true)),
         "swatches" => Some((tl!("Swatch"), tl!("Swatches"), true, true, true)),
-        "styles" => Some((tl!("Style"), tl!("Styles"), false, false, false)),
-        "shapes" => Some((tl!("Shape"), tl!("Shapes"), false, false, false)),
+        "styles" => Some((tl!("Style"), tl!("Styles"), true, false, false)),
+        "shapes" => Some((tl!("Shape"), tl!("Shapes"), true, false, false)),
         "toolPresets" => Some((tl!("Tool Preset"), tl!("Tool Presets"), false, false, false)),
         "cloneSource" => Some((tl!("Clone Source"), tl!("Clone Sources"), false, false, false)),
         _ => None,
@@ -490,7 +490,7 @@ mod tests {
             ] {
                 assert!(harness.query_by_label(&label).is_some(), "missing {panel} context-menu entry: {label}");
             }
-            assert!(harness.get_by_label(&format!("Append Default {plural}…")).accesskit_node().is_disabled());
+            assert!(!harness.get_by_label(&format!("Append Default {plural}…")).accesskit_node().is_disabled());
             assert!(harness.get_by_label(&format!("Import {plural}…")).accesskit_node().is_disabled());
             assert!(harness.get_by_label(&format!("Export Selected {plural}…")).accesskit_node().is_disabled());
             assert!(!harness.get_by_label(&format!("New {singular} Preset…")).accesskit_node().is_disabled());

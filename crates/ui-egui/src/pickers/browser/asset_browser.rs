@@ -855,7 +855,9 @@ fn allocate_browser_item_grid(ui: &mut egui::Ui, item_count: usize, layout: Item
     let (cell, cols, rows) = if let Some(size) = custom_item_size {
         let cell = vec2(size.x.min((width - pad).max(0.0)), size.y.max(1.0));
         let capacity = ((width - pad + gap) / (cell.x + gap)).floor().max(1.0) as usize;
-        let cols = if center_grid { capacity.min(max_grid_items.max(1)) } else { 1 };
+        // Custom-sized cards still form a normal left-aligned grid. `center_grid` controls only
+        // horizontal centering; it must not collapse the grid to a single column.
+        let cols = capacity.min(max_grid_items.max(1));
         (cell, cols, item_count.div_ceil(cols))
     } else if list {
         let row_height = display_mode.item_height();

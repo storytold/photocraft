@@ -339,18 +339,12 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => false,
         Some(v) => v.as_bool().ok_or_else(|| bad(CMD, "`append` must be true or false"))?,
     };
-    let mut b = builtin();
+    let b = builtin();
     if append {
         if total(&s.presets.swatches) + total(&b) > MAX_SWATCHES || s.presets.swatches.len() + b.len() > MAX_GROUPS {
             return Err(bad(CMD, "the Swatches panel is full"));
         }
-        for g in &mut b {
-            g.name = unique_group(&s.presets.swatches, &g.name);
-            for sw in &mut g.items {
-                sw.name = unique_name(&s.presets.swatches, &sw.name);
-            }
-            s.presets.swatches.push(g.clone());
-        }
+        crate::presets::collisions::append_groups_unique(&mut s.presets.swatches, b);
     } else {
         s.presets.swatches = b;
     }

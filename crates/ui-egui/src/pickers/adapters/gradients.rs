@@ -19,7 +19,9 @@ use crate::pickers::state::HierarchyOrderEntry;
 
 /// The engine's fallback owner for gradients created when the library has no groups. The shared
 /// hierarchy treats it as an invisible backing group while its cards live at the root.
-const ROOT_ITEMS_GROUP: &str = "Presets";
+// Keep the backing owner distinct from ordinary user-created groups. `Presets` was previously
+// used for this purpose, which made a perfectly valid user group with that name disappear.
+const ROOT_ITEMS_GROUP: &str = "__photocraft_root_items__";
 
 fn gradient_projection_keys(groups: &[GroupView]) -> PickerProjectionKeys {
     let mut keys = PickerProjectionKeys::default();
@@ -379,6 +381,27 @@ mod tests {
         h.run_steps(3);
         assert!(last_group_headers(&h.ctx, "gradients").is_empty(), "root placement must come from the saved gradient library, not transient UI state");
         assert!(h.query_all_by_label("Custom").next().is_some(), "the card must stay at root even when picker layout state is reset");
+    }
+
+    #[test]
+    fn user_group_named_presets_remains_visible() {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("gradient.presets.edit", serde_json::json!({"action": "newGroup", "name": "Presets"})).unwrap();
+        session.execute("gradient.presets.new", serde_json::json!({"name": "User Gradient", "group": "Presets"})).unwrap();
+        let app = PhotocraftApp::new(session, crate::Services::default());
+        let mut h = Harness::builder().with_size(vec2(360.0, 900.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
+                    gradients_panel(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        h.run_steps(3);
+
+        assert!(last_group_headers(&h.ctx, "gradients").iter().any(|(name, _)| name == "Presets"));
+        assert!(h.query_all_by_label("User Gradient").next().is_some());
     }
 
     #[test]

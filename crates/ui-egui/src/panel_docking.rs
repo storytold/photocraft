@@ -874,13 +874,19 @@ struct PanelContent<'a> {
 }
 
 fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) {
-    shared_picker_menu(app, ui, panel);
+    if panel != "brushes" && panel != "brushSettings" && panel != "brush_settings" {
+        shared_picker_menu(app, ui, panel);
+    }
     match panel {
         "layers" => {
             crate::layer_row_ui::panel_menu(app, ui);
             ui.separator();
         }
         "brushSettings" | "brush_settings" => {
+            crate::brush_panel::settings_panel_menu(app, ui);
+            ui.separator();
+        }
+        "brushes" => {
             crate::brush_panel::panel_menu(app, ui);
             ui.separator();
         }

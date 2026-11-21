@@ -363,6 +363,40 @@ fn appending_default_gradients_deduplicates_group_and_preset_names() {
 }
 
 #[test]
+fn appending_default_styles_and_shapes_deduplicates_group_and_item_names() {
+    use crate::presets::{Group, Named};
+
+    fn assert_unique<T: Named>(groups: &[Group<T>]) {
+        let mut group_names = Vec::new();
+        let mut item_names = Vec::new();
+        for group in groups {
+            assert!(!group_names.iter().any(|name: &String| name.eq_ignore_ascii_case(&group.name)));
+            group_names.push(group.name.clone());
+            for item in &group.items {
+                assert!(!item_names.iter().any(|name: &String| name.eq_ignore_ascii_case(item.name())));
+                item_names.push(item.name().to_string());
+            }
+        }
+    }
+
+    let mut s = Session::new();
+    let style_name = s.presets.styles[0].items[0].name.clone();
+    s.execute("style.presets.reset", json!({"append": true})).unwrap();
+    assert_eq!(s.presets.styles[0].items[0].name, style_name);
+    assert_unique(&s.presets.styles);
+    s.execute("style.presets.reset", json!({"append": true})).unwrap();
+    assert_unique(&s.presets.styles);
+
+    let mut s = Session::new();
+    let shape_name = s.presets.shapes[0].items[0].name.clone();
+    s.execute("shape.presets.reset", json!({"append": true})).unwrap();
+    assert_eq!(s.presets.shapes[0].items[0].name, shape_name);
+    assert_unique(&s.presets.shapes);
+    s.execute("shape.presets.reset", json!({"append": true})).unwrap();
+    assert_unique(&s.presets.shapes);
+}
+
+#[test]
 fn gradient_rename_group_refuses_a_name_another_group_has() {
     let mut s = Session::new();
     s.execute("gradient.presets.edit", json!({"action": "newGroup", "name": "Pastels"})).unwrap();
@@ -371,12 +405,16 @@ fn gradient_rename_group_refuses_a_name_another_group_has() {
     };
     let before = names(&mut s);
     assert!(before.contains(&json!("Blues")));
-    let err = s.execute("gradient.presets.edit", json!({"action": "renameGroup", "group": "Pastels", "name": "Blues"})).unwrap_err();
+    let err = s.execute("gradient.presets.edit", json!({"action": "renameGroup", "group": "Pastels", "name": "blues"})).unwrap_err();
     assert!(err.to_string().contains("already exists"), "{err}");
     assert_eq!(names(&mut s), before, "a refused rename leaves the groups unchanged");
+    let created = s.execute("gradient.presets.edit", json!({"action": "newGroup", "name": "pastels"})).unwrap();
+    assert_eq!(created["group"], "pastels 1");
     // Renaming a group to its own name is fine.
-    s.execute("gradient.presets.edit", json!({"action": "renameGroup", "group": "Pastels", "name": "Pastels"})).unwrap();
-    assert_eq!(names(&mut s), before);
+    s.execute("gradient.presets.edit", json!({"action": "renameGroup", "group": "pastels", "name": "Pastels"})).unwrap();
+    let after = names(&mut s);
+    assert_eq!(after.iter().filter(|name| **name == json!("Pastels")).count(), 1);
+    assert!(after.contains(&json!("pastels 1")));
 }
 
 #[test]
@@ -897,6 +935,75 @@ fn a_damaged_preset_set_keeps_the_other_sets() {
     assert_eq!(next.presets.tool_presets.len(), Session::new().presets.tool_presets.len());
     assert_eq!(next.presets.gradients.len(), Session::new().presets.gradients.len());
     assert_eq!(next.presets.documents, s.presets.documents);
+}
+
+#[test]
+fn startup_repairs_case_insensitive_collisions_in_every_persisted_picker() {
+    use crate::presets::{Group, Named};
+
+    fn assert_unique<T: Named>(groups: &[Group<T>]) {
+        let mut group_names = Vec::<String>::new();
+        let mut item_names = Vec::<String>::new();
+        for group in groups {
+            assert!(!group_names.iter().any(|name| name.eq_ignore_ascii_case(&group.name)));
+            group_names.push(group.name.clone());
+            for item in &group.items {
+                assert!(!item_names.iter().any(|name| name.eq_ignore_ascii_case(item.name())));
+                item_names.push(item.name().to_string());
+            }
+        }
+    }
+
+    let defaults = Session::new();
+    let mut saved = defaults.presets.to_json(&defaults);
+    for key in ["gradients", "styles", "shapes", "swatches"] {
+        let groups = saved[key].as_array_mut().unwrap();
+        let first = groups[0].clone();
+        let mut duplicate = first.clone();
+        duplicate["name"] = json!(first["name"].as_str().unwrap().to_ascii_lowercase());
+        groups.push(duplicate);
+        let items = groups[1]["items"].as_array_mut().unwrap();
+        let mut duplicate_item = items[0].clone();
+        duplicate_item["name"] = json!(items[0]["name"].as_str().unwrap().to_ascii_lowercase());
+        items.push(duplicate_item);
+    }
+    let pattern_groups = saved["pattern_groups"].as_array_mut().unwrap();
+    let mut duplicate_group = pattern_groups[0].clone();
+    duplicate_group["name"] = json!(pattern_groups[0]["name"].as_str().unwrap().to_ascii_lowercase());
+    pattern_groups.push(duplicate_group);
+    saved["tool_presets"] = json!([
+        {"name": "Duplicate Tool", "tool": "brush", "options": {}},
+        {"name": "duplicate tool", "tool": "eraser", "options": {}}
+    ]);
+
+    let mut restored = Session::new();
+    restored.load_presets_json(saved);
+    assert_unique(&restored.presets.gradients);
+    assert_unique(&restored.presets.styles);
+    assert_unique(&restored.presets.shapes);
+    assert_unique(&restored.presets.swatches);
+    let mut pattern_group_names = Vec::<String>::new();
+    for group in &restored.presets.pattern_groups {
+        assert!(!pattern_group_names.iter().any(|name| name.eq_ignore_ascii_case(&group.name)));
+        pattern_group_names.push(group.name.clone());
+    }
+    assert!(!restored.presets.tool_presets[0].name.eq_ignore_ascii_case(&restored.presets.tool_presets[1].name));
+    assert_eq!(restored.presets.tool_presets.len(), 2, "repair should preserve both tool presets");
+
+    // The repaired names are what the next preferences save serializes, so startup only repairs once.
+    let round_trip = restored.presets.to_json(&restored);
+    let mut next = Session::new();
+    next.load_presets_json(round_trip);
+    assert_unique(&next.presets.gradients);
+    assert_unique(&next.presets.styles);
+    assert_unique(&next.presets.shapes);
+    assert_unique(&next.presets.swatches);
+    let mut pattern_group_names = Vec::<String>::new();
+    for group in &next.presets.pattern_groups {
+        assert!(!pattern_group_names.iter().any(|name| name.eq_ignore_ascii_case(&group.name)));
+        pattern_group_names.push(group.name.clone());
+    }
+    assert_eq!(next.presets.tool_presets, restored.presets.tool_presets);
 }
 
 // ------------------------------------------------------------------ export presets

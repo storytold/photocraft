@@ -636,18 +636,9 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     let append = p.get("append").and_then(Value::as_bool).unwrap_or(false);
-    let mut b = builtin();
+    let b = builtin();
     if append {
-        for g in &mut b {
-            g.name = unique_group(&s.presets.gradients, &g.name);
-        }
-        // Appending defaults follows the same library-wide name policy as importing a GRD
-        // or creating/renaming a preset: existing cards keep their names, while collisions
-        // in the appended defaults receive the next available suffix.
-        let mut merged = s.presets.gradients.clone();
-        merged.extend(b);
-        make_gradient_names_unique(&mut merged);
-        s.presets.gradients = merged;
+        super::collisions::append_groups_unique(&mut s.presets.gradients, b);
     } else {
         s.presets.gradients = b;
     }

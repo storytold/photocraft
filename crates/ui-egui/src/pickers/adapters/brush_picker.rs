@@ -29,14 +29,12 @@ pub const MIN_SIZE: [f32; 2] = [230.0, 170.0];
 /// this wide: a picker dragged wider keeps the controls their size, the space past them empty.
 pub(crate) const HEAD_MAX_W: f32 = 350.0;
 /// What the picker asks for beyond the size and hardness edits.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub enum Pick {
     /// A preset-list action: pick, reorder, rename or delete a preset, as in the Brushes panel.
     List(Action),
-    /// Open the Brush Settings panel (Window › Brush Settings, F5).
-    OpenSettings,
     /// Open the picker options menu anchored to its header button.
-    OpenMenu(egui::Id),
+    OpenMenu(egui::Response),
     /// Save the current brush as a new preset, then name it in the rename bar.
     NewPreset,
 }
@@ -45,7 +43,7 @@ impl Pick {
     /// Does this pick dismiss the picker? A double-click on a preset does (Photoshop), and so does
     /// anything that opens another panel or dialog.
     pub fn closes(&self) -> bool {
-        matches!(self, Pick::List(Action::Choose(_) | Action::NewPreset) | Pick::OpenSettings)
+        matches!(self, Pick::List(Action::Choose(_) | Action::NewPreset))
     }
 }
 
@@ -88,19 +86,18 @@ pub fn close(ui: &mut crate::state::UiState) {
 }
 
 /// Run what the picker asked for.
-pub fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, picks: Vec<Pick>) {
+pub fn apply(app: &mut PhotocraftApp, picks: Vec<Pick>) {
     for pick in picks {
         match pick {
             Pick::List(a) => brushes_tab::apply(app, vec![a]),
-            Pick::OpenSettings => open_settings(app, ctx),
-            Pick::OpenMenu(id) => {
-                if let Some(response) = ctx.read_response(id) {
-                    egui::Popup::menu(&response).show(|ui| {
+            Pick::OpenMenu(response) => {
+                crate::pickers::picker_panel_menu::panel_menu_popup(&response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+                    crate::menu_keys::with_menu_item_indent(ui, |ui| {
                         widgets::style_spectrum_popup_menu(ui);
                         ui.set_min_width(180.0);
                         crate::brush_panel::picker_menu(app, ui);
                     });
-                }
+                });
             }
             // Photoshop asks for the new preset's name and what it captures first, in a dialog that
             // takes the picker's place.
@@ -109,17 +106,6 @@ pub fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, picks: Vec<Pick>) {
                 crate::brush_preset_dialog::open(app, None);
             }
         }
-    }
-}
-
-/// Show the Brush Settings panel on its settings tab (what F5 does when it is hidden).
-pub fn open_settings(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    if app.ui.panels.brush_settings {
-        app.ui.brush_tab = 0;
-        return;
-    }
-    if let Err(e) = crate::menus::invoke(app, ctx, "window.panel.brushSettings", json!({})) {
-        app.ui.status = e;
     }
 }
 
@@ -165,9 +151,14 @@ pub fn body(
     ui.set_max_height(size.y);
     let top = ui.cursor().min.y;
     // These are brush-tool controls, not part of the shared picker shell. Keep them stacked above
-    // the shell so its header/search/browser layout stays consistent with other pickers.
-    ui.vertical(|ui| {
-        ui.set_max_width(ui.available_width().min(HEAD_MAX_W));
+    // the shell so its header/search/browser layout stays consistent with other pickers. The
+    // action buttons own a real column: sliders never paint or interact underneath them.
+    let row_top = ui.cursor().min;
+    let controls_width = (size.x - 44.0).min(HEAD_MAX_W).max(60.0);
+    let controls_rect = egui::Rect::from_min_size(row_top, vec2(controls_width, size.y));
+    let mut controls_ui = ui.new_child(egui::UiBuilder::new().max_rect(controls_rect));
+    controls_ui.set_width(controls_width);
+    controls_ui.vertical(|ui| {
         ui.horizontal(|ui| {
             ui.label(RichText::new(tl!("Size")).color(t.text_dim));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -192,26 +183,25 @@ pub fn body(
             dismiss_popup(&hardness);
         }
     });
+    let row_height = (controls_ui.cursor().min.y - row_top.y).max(56.0);
+    let (row_rect, _) = ui.allocate_exact_size(vec2(size.x, row_height), egui::Sense::hover());
+    let gear_rect = egui::Rect::from_min_size(egui::pos2(row_rect.right() - 32.0, row_rect.top()), vec2(24.0, 24.0));
+    let mut gear_ui = ui.new_child(egui::UiBuilder::new().max_rect(gear_rect));
+    let gear = icons::button(&mut gear_ui, "settings", 24.0, false, tl!("Brush Preset Options"));
+    picks.borrow_mut().push(Pick::OpenMenu(gear));
+    let new_preset_rect = gear_rect.translate(vec2(0.0, 28.0));
+    let mut new_preset_ui = ui.new_child(egui::UiBuilder::new().max_rect(new_preset_rect));
+    if named(icons::button(&mut new_preset_ui, "square-plus", 24.0, false, tl!("Create new brush preset from the current settings")), "New Brush Preset")
+        .clicked()
+    {
+        picks.borrow_mut().push(Pick::NewPreset);
+    }
     // The Size/Hardness block sits above the shared shell, so reserve its measured height from
     // the shell's total budget. The shell subtracts its own header/search/footer; without this
     // outer reservation the picker grows by the height of these brush-specific controls.
     let controls_h = (ui.cursor().min.y - top).max(0.0);
-    let mut header = |ui: &mut egui::Ui| {
-        let new_tip = "Create new brush preset from the current settings";
-        let settings_tip = "Brush Settings…  (F5): every option of this brush";
-        if named(icons::button(ui, "square-plus", 24.0, false, tl!(new_tip)), "New Brush Preset").clicked() {
-            picks.borrow_mut().push(Pick::NewPreset);
-        }
-        if named(icons::button(ui, "sliders-horizontal", 24.0, false, tl!(settings_tip)), "Brush Settings…").clicked() {
-            picks.borrow_mut().push(Pick::OpenSettings);
-        }
-        let menu = widgets::panel_menu_button(ui, "Brush Preset Options");
-        if menu.clicked() {
-            picks.borrow_mut().push(Pick::OpenMenu(menu.id));
-        }
-    };
     let mut footer = |ui: &mut egui::Ui, state: &mut crate::pickers::state::PresetUi| -> Vec<crate::pickers::browser::asset_browser::BrowserAction> {
-        crate::pickers::adapters::brushes::draw_brush_footer_controls(ui, state, presets, "brush-picker")
+        crate::pickers::adapters::brushes::draw_brush_footer_controls(ui, state, presets, "brush-picker", true)
     };
     let actions = crate::pickers::adapters::brushes::picker_browser_with_shell(
         ui,
@@ -219,7 +209,6 @@ pub fn body(
         current,
         preset_ui,
         crate::pickers::shell::ShellOptions {
-            header: Some(&mut header),
             custom_footer: Some((&mut footer, 28.0)),
             max_total_height: Some((size.y - controls_h).max(0.0)),
             ..Default::default()
@@ -282,4 +271,70 @@ pub fn resize_grip(ui: &mut egui::Ui, frame: egui::Rect, content: egui::Vec2) ->
         let start: egui::Vec2 = grip_ui.ctx().data_mut(|d| d.get_temp(start_id)).unwrap_or(content);
         (start + resp.total_drag_delta().unwrap_or_default()).clamp(min, max)
     })
+}
+
+#[cfg(test)]
+mod menu_tests {
+    use egui::vec2;
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT, Queryable},
+    };
+
+    use super::{apply, body};
+    use crate::PhotocraftApp;
+
+    #[test]
+    fn gear_menu_opens_and_renders_the_brush_picker_menu_contents() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut harness = Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                let mut brush = app.session.tools.brush.clone();
+                let presets = app.session.tools.presets.clone();
+                let current = app.session.tools.current_preset.clone();
+                let mut preset_ui = std::mem::take(&mut app.ui.presets_ui);
+                let picks = body(ui, &mut brush, &presets, current.as_deref(), &mut preset_ui, vec2(420.0, 620.0));
+                app.ui.presets_ui = preset_ui;
+                apply(app, picks);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(3);
+
+        harness.get_by_label("Brush Preset Options").click();
+        harness.run_steps(3);
+
+        let gear = harness.get_by_label("Brush Preset Options").rect();
+        assert!((gear.right() - 420.0).abs() < 1.0, "gear must sit 8px from the picker right edge: {gear:?}");
+        let first_item = harness.get_by_label("New Brush Preset…").rect();
+        assert!(first_item.left() >= gear.right() - 1.0, "popup item left {} must meet gear right {}", first_item.left(), gear.right());
+        assert!((first_item.top() - gear.top()).abs() < 20.0, "popup item top {} must align with gear top {}", first_item.top(), gear.top());
+
+        let labels = [
+            "New Brush Preset…",
+            "New Brush Group…",
+            "Rename Brush…",
+            "Delete Brush…",
+            "Brush Name",
+            "Brush Stroke",
+            "Brush Tip",
+            "Show Search Bar",
+            "Show Recent Brushes",
+            "Append Default Brushes…",
+            "Import Brushes…",
+            "Export Selected Brushes…",
+        ];
+        let mut previous_bottom = None;
+        for label in labels {
+            let rect = harness.get_by_label(label).rect();
+            if let Some(bottom) = previous_bottom {
+                assert!(rect.top() >= bottom, "{label} must follow the previous menu entry");
+            }
+            previous_bottom = Some(rect.bottom());
+        }
+        assert!(harness.get_by_label("Rename Brush…").accesskit_node().is_disabled());
+        assert!(harness.get_by_label("Delete Brush…").accesskit_node().is_disabled());
+        assert!(harness.get_by_label("Export Selected Brushes…").accesskit_node().is_disabled());
+    }
 }

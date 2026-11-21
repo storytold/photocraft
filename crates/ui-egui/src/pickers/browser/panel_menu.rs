@@ -96,12 +96,8 @@ fn browser_actions_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut 
     ui.separator();
 }
 
-/// Keep the domain-action menu surface aligned with Patterns while clearly disabling operations
-/// that Styles and Shapes do not yet implement.
-fn unavailable_asset_actions_menu(ui: &mut egui::Ui, plural: &str, show_append: bool) {
-    if show_append {
-        let _ = crate::menu_keys::menu_item_button(ui, &format!("Append Default {plural}…"), false);
-    }
+/// Keep unsupported import/export entries visible while their formats are not implemented.
+fn unavailable_asset_actions_menu(ui: &mut egui::Ui, plural: &str) {
     let _ = crate::menu_keys::menu_item_button(ui, &format!("Import {plural}…"), false);
     let _ = crate::menu_keys::menu_item_button(ui, &format!("Export Selected {plural}…"), false);
     let _ = crate::menu_keys::menu_item_button(ui, &format!("Export {plural}…"), false);
@@ -132,9 +128,15 @@ pub(crate) fn shared_picker_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, pan
                     let _ = crate::pickers::browser::browser_actions::run(&mut app, "style.presets.reset", serde_json::json!({"append": true}));
                     ui.close();
                 }
-                unavailable_asset_actions_menu(ui, "Styles", false);
+                unavailable_asset_actions_menu(ui, "Styles");
             }
-            "shapes" => unavailable_asset_actions_menu(ui, "Shapes", true),
+            "shapes" => {
+                if crate::menu_keys::menu_item_button(ui, tl!("Append Default Shapes…"), true).clicked() {
+                    let _ = crate::pickers::browser::browser_actions::run(&mut app, "shape.presets.reset", serde_json::json!({"append": true}));
+                    ui.close();
+                }
+                unavailable_asset_actions_menu(ui, "Shapes");
+            }
             _ => {}
         }
     };
@@ -315,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn styles_exposes_supported_default_append_while_shapes_keeps_unimplemented_actions_disabled() {
+    fn styles_and_shapes_expose_default_append_while_import_export_remain_disabled() {
         for panel in ["styles", "shapes"] {
             let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
             let mut harness = Harness::builder().with_size(vec2(520.0, 520.0)).build_ui_state(
@@ -334,7 +336,7 @@ mod tests {
             let plural = if panel == "styles" { "Styles" } else { "Shapes" };
             let append_label = format!("Append Default {plural}…");
             let append = harness.get_by_label(&append_label);
-            assert_eq!(append.accesskit_node().is_disabled(), panel == "shapes");
+            assert!(!append.accesskit_node().is_disabled());
             for action in [format!("Import {plural}…"), format!("Export Selected {plural}…"), format!("Export {plural}…")] {
                 assert!(harness.get_by_label(&action).accesskit_node().is_disabled(), "{panel} keeps unsupported action {action} visible but disabled");
             }

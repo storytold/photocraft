@@ -715,14 +715,41 @@ fn shared_picker_menu_is_scoped_and_preserves_domain_extensions() {
         app(),
     );
     ordinary_menu.run_steps(2);
-    assert!(ordinary_menu.query_all_by_label("New Brush Preset…").count() > 0, "ordinary panel-specific actions remain available");
+    assert!(ordinary_menu.query_all_by_label("New Brush Preset…").count() > 0, "Brush Settings has its own menu actions");
     assert!(ordinary_menu.query_all_by_label("Clear Brush Controls").count() > 0);
-    assert_eq!(ordinary_menu.query_all_by_label("Text Only").count(), 3, "Brush Settings keeps its three domain-owned picker display sections");
-    assert_eq!(
-        ordinary_menu.query_all_by_label("Show Search Bar").count(),
-        0,
-        "ordinary panel menus do not inherit the shared picker search-visibility control"
+    assert!(ordinary_menu.query_all_by_label("Reset All Locked Settings").count() > 0);
+    assert!(ordinary_menu.query_all_by_label("Copy Texture to Other Tools").count() > 0);
+    assert_eq!(ordinary_menu.query_all_by_label("Show Search Bar").count(), 0, "Brush Settings does not inherit Brushes library visibility controls");
+
+    let mut ready = false;
+    let mut brushes_menu = Harness::builder().build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            if !ready {
+                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                ready = true;
+            }
+            panel_menu(app, ui, "brushes");
+        },
+        app(),
     );
+    brushes_menu.run_steps(2);
+    for label in [
+        "New Brush Preset…",
+        "New Brush Group…",
+        "Rename Brush…",
+        "Delete Brush…",
+        "Brush Name",
+        "Brush Stroke",
+        "Brush Tip",
+        "Show Search Bar",
+        "Show Recent Brushes",
+        "Append Default Brushes…",
+        "Import Brushes…",
+        "Export Selected Brushes…",
+    ] {
+        assert!(brushes_menu.query_all_by_label(label).count() > 0, "Brushes dock menu is missing {label}");
+    }
+    assert_eq!(brushes_menu.query_all_by_label("Text Only").count(), 0, "Brushes uses its three brush-specific display toggles");
 }
 
 #[test]

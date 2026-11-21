@@ -94,6 +94,13 @@ pub fn make_group_names_unique<T>(groups: &mut [Group<T>]) -> bool {
     changed
 }
 
+/// Append defaults without changing existing names or leaving collisions in the library.
+pub fn append_groups_unique<T: Named>(groups: &mut Vec<Group<T>>, defaults: Vec<Group<T>>) {
+    groups.extend(defaults);
+    make_group_item_names_unique(groups);
+    make_group_names_unique(groups);
+}
+
 fn next_available(taken: &[String], reserved: &[String], base: &str) -> String {
     (1..)
         .map(|index| format!("{base}_{index}"))

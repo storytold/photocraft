@@ -275,6 +275,10 @@ fn brush_group_views(presets: &[BrushPreset]) -> Vec<BrushGroupView<'_>> {
     groups
 }
 
+pub(crate) fn browser_groups(presets: &[BrushPreset]) -> Vec<GroupView> {
+    brush_group_views(presets).into_iter().map(|group| group.view).collect()
+}
+
 /// Brush owns the identity policy: stable preset names are qualified by their current group/path,
 /// while the reverse metadata retains the preview occurrence key for exact command targeting.
 fn brush_projection_keys(groups: &[GroupView]) -> PickerProjectionKeys {
@@ -633,7 +637,13 @@ macro_rules! brush_browser_adapter {
 
 /// Brush-specific footer controls shared by the docked Brushes tab and floating right-click picker.
 /// The shell owns their placement; this adapter only translates the three controls into browser actions.
-pub(crate) fn draw_brush_footer_controls(ui: &mut egui::Ui, state: &mut PresetUi, presets: &[BrushPreset], panel: &str) -> Vec<BrowserAction> {
+pub(crate) fn draw_brush_footer_controls(
+    ui: &mut egui::Ui,
+    state: &mut PresetUi,
+    presets: &[BrushPreset],
+    panel: &str,
+    preview_size: bool,
+) -> Vec<BrowserAction> {
     let selection = state.browser_selection_snapshot.get(panel);
     let mut delete_targets = selection
         .into_iter()
@@ -660,6 +670,13 @@ pub(crate) fn draw_brush_footer_controls(ui: &mut egui::Ui, state: &mut PresetUi
         if crate::icons::button(ui, "folder-plus", 24.0, false, tl!("Create new group")).clicked() {
             actions.push(BrowserAction::NewGroup);
         }
+        if preview_size {
+            ui.add_space(8.0);
+            let response = crate::widgets::slider(ui, &mut state.brush_picker.scale, 0.15..=2.0, None);
+            if response.is_pointer_button_down_on() {
+                egui::Popup::close_all(&response.ctx);
+            }
+        }
     });
     actions
 }
@@ -677,6 +694,8 @@ pub(crate) fn picker_browser_with_shell(
     // match when two groups contain a brush with the same name, painting the wrong preview.
     let group_views = brush_group_views(presets);
     let root_sequence = brush_root_sequence(presets);
+    let view = preset_ui.brush_picker.clone();
+    preset_ui.custom_item_sizes.insert(PANEL.into(), brush_picker_card_size(&view));
     let groups: Vec<GroupView> = group_views
         .iter()
         .map(|group| GroupView {
@@ -686,7 +705,13 @@ pub(crate) fn picker_browser_with_shell(
                 .view
                 .items
                 .iter()
-                .map(|item| ItemView { key: item.key.clone(), name: item.name.clone(), group_path: item.group_path.clone() })
+                .map(|item| ItemView {
+                    key: item.key.clone(),
+                    // Keep the real identity label in the browser projection even when the
+                    // adapter hides its painted text; an empty label breaks card presentation.
+                    name: item.name.clone(),
+                    group_path: item.group_path.clone(),
+                })
                 .collect(),
         })
         .collect();
@@ -709,7 +734,7 @@ pub(crate) fn picker_browser_with_shell(
     let mut paint_item = |ui: &egui::Ui, rect: egui::Rect, group_index: usize, item_index: usize, state: ItemPaintState| {
         let Some(preset) = group_views.get(group_index).and_then(|group| group.presets.get(item_index)).copied() else { return };
         let _ = state;
-        paint_brush_thumbnail(ui, rect, preset);
+        paint_brush_presentation(ui, rect, preset, &view);
     };
     let options = BrowserOptions {
         canvas: egui::Rect::NOTHING,
@@ -739,8 +764,49 @@ pub(crate) fn picker_browser_with_shell(
     actions
 }
 
+fn brush_picker_card_size(view: &crate::pickers::state::BrushPickerView) -> egui::Vec2 {
+    let scale = view.scale.clamp(0.15, 2.0);
+    // Keep the tip card close to the largest thumbnail actually painted inside it
+    // (80% of the cell). Text visibility must not change preview hit-target geometry.
+    let tip_side = 40.0 * scale;
+    let stroke_length = 128.0 * scale;
+    let stroke_height = 32.0 * scale;
+    let preview_gap = 8.0 * scale;
+    const NAME_HEIGHT: f32 = 20.0;
+    const NAME_GAP: f32 = 4.0;
+    let preview_width = match (view.show_tip, view.show_stroke) {
+        (true, true) => tip_side + preview_gap + stroke_length,
+        (true, false) => tip_side,
+        (false, true) => stroke_length,
+        (false, false) => 0.0,
+    };
+    let preview_height = if view.show_tip {
+        tip_side
+    } else if view.show_stroke {
+        stroke_height
+    } else {
+        0.0
+    };
+    let name_in_stroke_slot = view.show_name && view.show_tip && !view.show_stroke;
+    let width = if name_in_stroke_slot {
+        tip_side + preview_gap + stroke_length
+    } else if preview_width == 0.0 && view.show_name {
+        180.0
+    } else {
+        preview_width
+    };
+    let height = if view.show_name && preview_height > 0.0 && view.show_stroke {
+        preview_height + NAME_GAP + NAME_HEIGHT
+    } else if preview_height == 0.0 && view.show_name {
+        NAME_HEIGHT
+    } else {
+        preview_height
+    };
+    egui::vec2(width.max(1.0), height.max(1.0))
+}
+
 /// Translate the shared browser's asset-neutral events into brush preset commands.
-fn browser_actions_to_actions(
+pub(crate) fn browser_actions_to_actions(
     presets: &[BrushPreset],
     browser_actions: Vec<BrowserAction>,
     selection: Option<&crate::pickers::state::BrowserSelectionSnapshot>,
@@ -811,6 +877,76 @@ fn paint_brush_thumbnail(ui: &egui::Ui, rect: egui::Rect, preset: &BrushPreset) 
     let side = rect.width().min(rect.height()).max(1.0) * 0.8 * crate::brush_sections::thumb_scale(brush.size);
     let thumb = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(side));
     ui.painter().with_clip_rect(rect.intersect(ui.clip_rect())).image(texture.id(), thumb, full_uv(), Color32::WHITE);
+}
+
+fn paint_brush_presentation(ui: &egui::Ui, rect: egui::Rect, preset: &BrushPreset, view: &crate::pickers::state::BrushPickerView) {
+    let tokens = Tokens::get(ui.ctx());
+    let scale = view.scale.clamp(0.15, 2.0);
+    let tip_side = 40.0 * scale;
+    let stroke_length = 128.0 * scale;
+    let stroke_height = 32.0 * scale;
+    const NAME_HEIGHT: f32 = 20.0;
+    let tip_rect = egui::Rect::from_min_size(rect.min, egui::vec2(tip_side, tip_side));
+    if view.show_tip {
+        paint_brush_thumbnail(ui, tip_rect, preset);
+    }
+    if view.show_stroke {
+        let stroke_left = if view.show_tip { tip_rect.right() + 8.0 * scale } else { rect.left() };
+        let stroke_top = if view.show_tip { rect.top() + (tip_side - stroke_height) * 0.5 } else { rect.top() };
+        let stroke_rect = egui::Rect::from_min_size(egui::pos2(stroke_left, stroke_top), egui::vec2(stroke_length, stroke_height));
+        if ui.is_rect_visible(stroke_rect) {
+            let texture = brush_preview::stroke_texture(ui.ctx(), &format!("brushes-stroke:{}", preview_identity(preset)), &preset.brush, 128, 32, tokens.text);
+            ui.painter().with_clip_rect(stroke_rect.intersect(ui.clip_rect())).image(texture.id(), stroke_rect, full_uv(), Color32::WHITE);
+        }
+    }
+    if view.show_name {
+        let name_rect = if !view.show_tip && !view.show_stroke {
+            rect
+        } else if view.show_tip && !view.show_stroke {
+            let left = tip_rect.right() + 8.0 * scale;
+            egui::Rect::from_min_size(egui::pos2(left, rect.center().y - NAME_HEIGHT * 0.5), egui::vec2((rect.right() - left).max(0.0), NAME_HEIGHT))
+        } else {
+            // When a stroke is visible, put the name on its own row beneath both previews.
+            egui::Rect::from_min_size(egui::pos2(rect.left(), rect.top() + rect.height() - NAME_HEIGHT), egui::vec2(rect.width(), NAME_HEIGHT))
+        };
+        ui.painter().with_clip_rect(name_rect.intersect(ui.clip_rect())).text(
+            egui::pos2(name_rect.left() + 4.0, name_rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            &preset.name,
+            egui::FontId::proportional(11.5),
+            tokens.text,
+        );
+    }
+}
+
+#[cfg(test)]
+mod brush_picker_presentation_tests {
+    use super::brush_picker_card_size;
+    use crate::pickers::state::BrushPickerView;
+
+    #[test]
+    fn brush_tip_keeps_its_base_size_when_other_previews_are_enabled() {
+        let base = BrushPickerView { show_name: false, show_stroke: false, show_tip: true, scale: 1.0 };
+        let with_name = BrushPickerView { show_name: true, ..base.clone() };
+        let with_stroke = BrushPickerView { show_stroke: true, ..base.clone() };
+        let with_both = BrushPickerView { show_name: true, show_stroke: true, ..base };
+
+        assert_eq!(brush_picker_card_size(&with_name), egui::vec2(176.0, 40.0));
+        assert_eq!(brush_picker_card_size(&with_stroke), egui::vec2(176.0, 40.0));
+        assert_eq!(brush_picker_card_size(&with_both), egui::vec2(176.0, 64.0));
+    }
+
+    #[test]
+    fn stroke_only_cards_do_not_reserve_space_for_a_hidden_tip() {
+        let view = BrushPickerView { show_name: true, show_stroke: true, show_tip: false, scale: 1.0 };
+        assert_eq!(brush_picker_card_size(&view), egui::vec2(128.0, 56.0));
+    }
+
+    #[test]
+    fn name_only_cards_match_text_only_card_height() {
+        let view = BrushPickerView { show_name: true, show_stroke: false, show_tip: false, scale: 1.0 };
+        assert_eq!(brush_picker_card_size(&view), egui::vec2(180.0, 20.0));
+    }
 }
 
 /// Deepest nested group the panel draws; deeper groups show at this depth.
@@ -1071,6 +1207,7 @@ pub fn apply(app: &mut PhotocraftApp, acts: Vec<Action>) {
                 crate::brush_preset_dialog::open(app, None);
             }
             Action::CreateGroup { group, presets } => {
+                let presets = if presets.is_empty() { app.session.tools.current_preset.iter().cloned().collect::<Vec<_>>() } else { presets };
                 if presets.is_empty() {
                     app.ui.status = "Select at least one brush before creating a group.".into();
                     continue;
@@ -1135,6 +1272,8 @@ pub fn preset_list(
     sync_brush_state_to_browser(st, preset_ui, presets, current, PANEL);
     let group_views = brush_group_views(presets);
     let root_sequence = brush_root_sequence(presets);
+    let view = preset_ui.brush_picker.clone();
+    preset_ui.custom_item_sizes.insert(PANEL.into(), brush_picker_card_size(&view));
     let groups: Vec<GroupView> = group_views
         .iter()
         .map(|group| GroupView {
@@ -1153,9 +1292,9 @@ pub fn preset_list(
     let mut paint_item = |ui: &egui::Ui, rect: egui::Rect, group_index: usize, item_index: usize, state: ItemPaintState| {
         let Some(preset) = group_views.get(group_index).and_then(|group| group.presets.get(item_index)).copied() else { return };
         let _ = state;
-        paint_brush_thumbnail(ui, rect, preset);
+        paint_brush_presentation(ui, rect, preset, &view);
     };
-    let mut footer = |ui: &mut egui::Ui, state: &mut PresetUi| draw_brush_footer_controls(ui, state, presets, PANEL);
+    let mut footer = |ui: &mut egui::Ui, state: &mut PresetUi| draw_brush_footer_controls(ui, state, presets, PANEL, true);
     let browser_actions = {
         let mut rekey = |hierarchy: &PickerBrowserHierarchy, projection: &BTreeMap<PickerId, PickerNodeIdentity>, registry: &mut PickerIdRegistry| {
             rekey_brush_hierarchy(hierarchy, projection, presets, registry);
@@ -1171,7 +1310,7 @@ pub fn preset_list(
             BrowserOptions {
                 canvas: egui::Rect::NOTHING,
                 flush: false,
-                center_grid: true,
+                center_grid: false,
                 all_groups_open: true,
                 compact_context_menus: false,
                 domain_hierarchy_actions: true,
