@@ -473,7 +473,7 @@ def type_pointer(app):
     app.call("ui.key", {"key": "Escape"})
 
 
-def round_(exe, label, scale):
+def round_(exe, label, scale, drags=False):
     app = App(exe, label)
     try:
         if not app.conn:
@@ -509,7 +509,7 @@ def round_(exe, label, scale):
             focus(app.hwnd)
             case(app, "b2 ui.pointer brush stroke, window focused", lambda: pointer_stroke(app))
             case(app, "g2 type ui.click, window focused", lambda: type_click(app))
-            if not scale:
+            if drags:
                 corner_drags(app.hwnd, "main")
                 app.new_lines()
     finally:
@@ -543,7 +543,7 @@ def main():
     exe = os.path.abspath(sys.argv[1])
     say(f"screen {SCREEN_W}x{SCREEN_H}, exe {exe} exists={os.path.exists(exe)}")
     for label, scale, body in (
-        ("100", None, lambda: round_(exe, "100", None)),
+        ("100", None, lambda: round_(exe, "100", None, drags=True)),
         ("125-set", "125", lambda: round_(exe, "125-set", "125")),
         ("125", None, lambda: round_(exe, "125", None)),
         ("v0.23.1", None, release_drags),
