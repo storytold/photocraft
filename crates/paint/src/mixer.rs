@@ -46,7 +46,7 @@ pub fn supply_left(load: f32, travelled: f32) -> f32 {
 }
 
 /// Mixer Brush options (all 0..1).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 pub struct MixerSettings {
     pub wet: f32,

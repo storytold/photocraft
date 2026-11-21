@@ -10,7 +10,8 @@ use std::sync::{Mutex, Once, PoisonError, mpsc};
 use std::time::Duration;
 
 fn fresh() -> Session {
-    // Belt and braces with the EXTERNAL skip below: nothing in this process may reach a printer.
+    // Belt and braces with CI's PHOTOCRAFT_NO_PRINT: nothing in this process may reach a printer
+    // or its driver (file.print.page refuses to ask one, so a hung driver can't hold SPOOLER).
     photocraft_engine::print_cmds::disable_printing();
     let mut s = Session::new();
     // `file.printers` and `file.print.printers` list no printers and do not ask the spooler.
