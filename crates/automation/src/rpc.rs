@@ -253,7 +253,13 @@ impl Headless {
                 let i = index_of(&p)?.ok_or_else(|| bad("doc.select needs `index`"))?;
                 self.select(i)
             }
-            "doc.close" => self.close(index_of(&p)?),
+            "doc.close" => {
+                // A non-object would look like a missing index and close the active document.
+                if !p.is_object() {
+                    return Err(bad("doc.close params must be an object"));
+                }
+                self.close(index_of(&p)?)
+            }
             "batch" => self.batch(&p),
             "methods" => Ok(json!(METHODS)),
             other => Err(bad(format!("{} (try `methods`)", photocraft_engine::command_hints::unknown_method(other, METHODS)))),
