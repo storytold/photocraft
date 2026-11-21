@@ -698,8 +698,10 @@ pub fn begin_selection(app: &mut PhotocraftApp, _ctx: &egui::Context) -> Result<
 /// `now` only for a box nudge, so the app's latest frame time is the one clock.
 fn report_warp(app: &mut PhotocraftApp, warp: Warp, on_type: bool, stored: bool) {
     let now = app.nudge_bundle.now;
+    let placed = app.transform_preview.as_ref().and_then(|pv| pv.placed_warp);
     if let Some(t) = app.ui.transform.as_mut() {
-        let warp = SessionWarp::new(warp, on_type);
+        let mut warp = SessionWarp::new(warp, on_type);
+        warp.placed = placed;
         t.session.apply(TransformEdit::Warp(if stored { warp.stored() } else { warp }), now);
     }
 }

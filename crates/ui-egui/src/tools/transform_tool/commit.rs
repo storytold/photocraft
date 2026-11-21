@@ -524,6 +524,8 @@ fn step(app: &mut PhotocraftApp, redo: bool) -> serde_json::Value {
         return serde_json::Value::Null;
     }
     let (now_warp, start, can_redo) = (t.session.warp().is_some(), t.quad_array(), t.session.can_redo());
+    // The map from the contents the warp now shown was made with: the step brings it back with the warp.
+    let stamped = t.session.warp().map(|w| w.placed);
     if let Some(pv) = app.transform_preview.as_mut() {
         // Across the Warp boundary, a stored warp's edit shows other texels (begin.rs), and Warp on a placed smart
         // object its contents through their map: the step brings its own box, so only those swap.
@@ -547,6 +549,11 @@ fn step(app: &mut PhotocraftApp, redo: bool) -> serde_json::Value {
         }
         if !can_redo {
             pv.redo_holds.clear();
+        }
+        if let Some(placed) = stamped
+            && pv.held.is_none()
+        {
+            pv.placed_warp = placed;
         }
     }
     json!({"transform": app.ui.transform})

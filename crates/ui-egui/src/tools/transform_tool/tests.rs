@@ -2904,3 +2904,66 @@ fn a_held_warp_moved_by_the_box_stays_on_the_pictures_side_of_its_horizon() {
         assert!(w(p[0], p[1]) * side > 0.0, "point {i} lies past the horizon (weight {} against {})", w(p[0], p[1]), w(cx, cy));
     }
 }
+
+/// A surface drag through the pull rule, frame by frame as the canvas reports it (busy until the release).
+fn drag_surface(app: &mut PhotocraftApp, id: u64, s: f64, t: f64, angle: f64, len: f64) {
+    let start = warp_mesh(app);
+    let maps = app.transform_preview.as_ref().and_then(|pv| pv.placed_warp).and_then(|(m, _)| {
+        let h = photocraft_algo::transform::Homography(m);
+        Some((h, h.inverse()?))
+    });
+    let gesture = GestureId::new(id);
+    let frames = (len / 10.0).ceil().max(1.0) as usize;
+    for f in 1..=frames {
+        let d = len * f as f64 / frames as f64;
+        let by = [d * angle.cos(), d * angle.sin()];
+        let edit = super::warp::RuleEdit::Surface { s, t, by };
+        let pulled = match &maps {
+            Some((to_doc, back)) => super::warp::in_contents(&start, edit, 1.0, to_doc, back),
+            None => super::warp::rule_mesh(&start, edit, 1.0),
+        }
+        .expect("a pulled mesh");
+        let mut events = EditEvents::new();
+        if f == 1 {
+            events.push(EditEvent::begin(gesture, Mixed::Same(start.clone()), "Warp".into(), None));
+        }
+        events.push(if f == frames { EditEvent::commit(gesture, Mixed::Same(start.clone()), pulled) } else { EditEvent::update(gesture, pulled) });
+        grid_edit(app, &events, false);
+        let now = app.nudge_bundle.now;
+        app.ui.transform.as_mut().unwrap().session.settle(now, f < frames);
+    }
+}
+
+/// Warp on a smart object under a Distort box: a long pull makes the placement give way, a small pull follows, and
+/// Undo takes the small pull back. The map from the contents comes back with the warp it was made with; it stayed as
+/// the undone pull left it, so the next drag carried the warp through the wrong map and jumped (found by the sequence
+/// checker).
+#[test]
+fn undo_of_a_pull_brings_back_the_map_its_warp_was_made_with() {
+    let (mut app, ctx, _) = turned_smart_object(0.5);
+    begin(&mut app, &ctx).unwrap();
+    let pivot = open(&app).session.state().pivot;
+    let q = quad_of(open(&app));
+    let (sin, cos) = 0.1597282707915736f64.sin_cos();
+    let c = [(q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4.0, (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4.0];
+    let turned = q.map(|p| [c[0] + (p[0] - c[0]) * cos - (p[1] - c[1]) * sin, c[1] + (p[0] - c[0]) * sin + (p[1] - c[1]) * cos]);
+    box_events(&mut app, 1, &[BoxState::new(turned.map(|[x, y]| Point::new(x, y)), pivot)]);
+    settle(&mut app);
+    let mut distorted = turned;
+    distorted[2] = [turned[2][0] - 3.5494413803294567, turned[2][1] - 3.1396337075350877];
+    box_events(&mut app, 2, &[BoxState::new(distorted.map(|[x, y]| Point::new(x, y)), pivot)]);
+    settle(&mut app);
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    drag_surface(&mut app, 3, 0.4339069484806843, 0.31281510135156776, 1.2864430371535345, 233.2823628870126);
+    settle(&mut app);
+    let (after_long, mesh_long) = (app.transform_preview.as_ref().unwrap().placed_warp, warp_mesh(&app));
+    let mut to = warp_mesh(&app);
+    to.points[5] += Vec2::new(1.8128934714029672, 3.0611538757835515);
+    pull_mesh(&mut app, 4, to);
+    settle(&mut app);
+    let _ = intercept(&mut app, "edit.undo");
+    super::begin::reconcile_held(&mut app);
+    assert_eq!(warp_mesh(&app), mesh_long, "Undo takes the small pull back");
+    assert_eq!(app.transform_preview.as_ref().unwrap().placed_warp, after_long, "with the map that warp was made with");
+}

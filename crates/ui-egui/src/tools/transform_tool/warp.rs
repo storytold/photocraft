@@ -11,8 +11,10 @@ use crate::state::SessionWarp;
 pub(super) fn set_warp(app: &mut PhotocraftApp, warp: Warp) {
     let now = app.nudge_bundle.now;
     let on_type = app.ui.transform.as_ref().and_then(|t| t.session.warp()).map_or_else(|| warps_type(app), |w| w.on_type);
+    let mut warp = SessionWarp::new(warp, on_type);
+    warp.placed = app.transform_preview.as_ref().and_then(|pv| pv.placed_warp);
     if let Some(t) = app.ui.transform.as_mut() {
-        t.session.apply(TransformEdit::Warp(SessionWarp::new(warp, on_type)), now);
+        t.session.apply(TransformEdit::Warp(warp), now);
     }
 }
 
