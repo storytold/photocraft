@@ -164,8 +164,13 @@ fn clear_layer(fmt: PixelFormat) -> Surface {
 }
 
 fn same_pixels(a: &Surface, b: &Surface) -> bool {
-    let r = Rect::new(-10, -10, 800, 800);
-    a.read_region(r) == b.read_region(r)
+    if a.format() != b.format() || a.default_pixel() != b.default_pixel() {
+        return false;
+    }
+    // The defaults describe every absent tile. Read the full union of stored tiles so pixels
+    // beyond the edit rectangle still participate, even when the edit drops a tile.
+    let tiles = a.tiles().chain(b.tiles()).map(|(coord, _)| *coord).collect::<std::collections::BTreeSet<_>>();
+    tiles.into_iter().all(|coord| a.read_region(coord.rect()) == b.read_region(coord.rect()))
 }
 
 #[test]
@@ -178,11 +183,13 @@ fn tiled_clear_and_fill_match_one_pass_over_the_area() {
     }
     formats.push(PixelFormat { mode: ColorMode::Rgb, sample: SampleType::U8, alpha: false });
     formats.push(PixelFormat { mode: ColorMode::Cmyk, sample: SampleType::U16, alpha: false });
-    // A soft (feathered) selection: fully selected over the first tile, fading out across the next.
+    // The selection covers the first tile completely and feathers across the right tiles,
+    // including the unstored diagonal tile.
     let mut soft = Surface::new(PixelFormat::GRAY8);
-    let sr = Rect::new(0, 0, 600, 400);
-    soft.write_region(sr, &(0..sr.height()).flat_map(|_| (0..sr.width()).map(|x| (1.0 - (x as f32 - 256.0).max(0.0) / 300.0).max(0.0))).collect::<Vec<_>>());
-    let canvas = Rect::new(0, 0, 700, 600);
+    let sr = Rect::new(0, 0, 268, 272);
+    soft.write_region(sr, &(0..sr.height()).flat_map(|_| (0..sr.width()).map(|x| 1.0 - (x as f32 - 256.0).max(0.0) / 12.0)).collect::<Vec<_>>());
+    soft.write_pixel(261, 248, &[0.0]);
+    let canvas = Rect::new(0, 0, 272, 272);
     // Pixel formats and fill settings are independent: a run takes a quarter of their combinations,
     // a different quarter each day.
     let sweep = photocraft_testkit::Sweep::new(4);
@@ -192,7 +199,13 @@ fn tiled_clear_and_fill_match_one_pass_over_the_area() {
         sweep.includes(case)
     };
     for fmt in formats {
-        let s = clear_layer(fmt);
+        let mut s = Surface::new(fmt);
+        s.fill_rect(Rect::new(0, 0, 256, 256), &from_rgba(&fmt, [0.2, 0.7, 0.4, 0.8]));
+        // Paint extends past the right and bottom edit edges. The diagonal tile starts absent.
+        s.fill_rect(Rect::new(256, 240, 281, 256), &from_rgba(&fmt, [0.3, 0.2, 0.7, 0.6]));
+        s.fill_rect(Rect::new(240, 256, 256, 282), &from_rgba(&fmt, [0.8, 0.2, 0.4, 0.3]));
+        s.write_pixel(260, 250, &from_rgba(&fmt, [0.9, 0.1, 0.1, 0.0]));
+        assert!(!s.has_tiles_in(Rect::new(256, 256, 272, 272)), "the diagonal tile starts unstored");
         for sel in [None, Some(&soft)] {
             let area = sel.map_or(canvas, |m| m.content_bounds());
             let what = format!("{fmt:?} selection {}", sel.is_some());
