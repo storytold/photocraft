@@ -2,6 +2,7 @@
 //! `GradientFillEditor` over the layer's fill.
 
 use craft::behavior::EditEvent;
+use craft::color_ui::ui::gradient::StopRef;
 use craft::draw::ui::gradient::{GradientFill, GradientFillEditor, GradientRef};
 use craft::ui::contract::{Bind, ShowContainer as _};
 use craft::ui::patterns::presets::PresetState;
@@ -14,9 +15,10 @@ use crate::PhotocraftApp;
 
 /// The Gradient section for `layer`. An edit is one `gradient.fill.set` on commit, and only for the fields it changed. A
 /// drag in progress previews through `LiveGradient::panel` and is dropped on cancel. The editor reads no input in a second
-/// pass of a frame, so the events kept from the pass that did are applied once.
-pub(super) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
-    let Some(fill) = fill_of(layer) else { return };
+/// pass of a frame, so the events kept from the pass that did are applied once. Returns the stops editor's selection
+/// (`None` when the section is collapsed).
+pub(super) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) -> Option<StopRef> {
+    let fill = fill_of(layer)?;
     let committed = stops::fill_value(fill);
     let preview = app.gradient.panel.clone().filter(|(id, _)| *id == layer.id);
     let mut value = match &preview {
@@ -35,6 +37,7 @@ pub(super) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let mut events: Vec<EditEvent<GradientFill>> = Vec::new();
     let mut requested = None;
     let mut pick = None;
+    let mut selected = None;
     ui.push_id(("gradient-properties", document, layer.id.0), |ui| {
         // The body can run twice in a pass; only the run that read the input has events, and they are kept.
         let _ = Section::new(tl!("Gradient").to_string()).show(ui, |ui, _| {
@@ -49,6 +52,7 @@ pub(super) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
             if out.screen_pick.is_some() {
                 pick = out.screen_pick;
             }
+            selected = out.selected;
         });
     });
     for event in &events {
@@ -73,4 +77,5 @@ pub(super) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     if let Some(gesture) = pick {
         crate::screen_picker::hold(app, ui.ctx(), owner, gesture);
     }
+    selected
 }
