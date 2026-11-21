@@ -720,6 +720,8 @@ mod brush_picker_escape_tests;
 #[cfg(test)]
 mod cam_no_pixels_alert_tests;
 #[cfg(test)]
+mod export_data_sets_choose_set_tests;
+#[cfg(test)]
 mod eyedropper_context_menu_tests;
 #[cfg(test)]
 mod menu_automate_groups_tests;

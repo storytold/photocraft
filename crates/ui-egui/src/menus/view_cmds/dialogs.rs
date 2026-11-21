@@ -178,6 +178,39 @@ fn export_selected_artboards(selected: Vec<u64>) -> Param {
     if any { row.opens_with(FieldValue::Json(opening)) } else { row }
 }
 
+/// Data Sets as Files' Data Set dropdown (#13762), full width at the top: All Data Sets, a separator, then every data
+/// set by name in document order. It writes the command's own `dataSets`: one name, or null for every set. It opens on
+/// All Data Sets (remembering the last export is #13765).
+fn export_data_set(app: &PhotocraftApp) -> Param {
+    use craft::ui::contract::Entry;
+    use craft::ui::pickers::Select;
+    let names: Vec<String> = app.session.active().map(|st| st.doc.variables.data_sets.iter().map(|d| d.name.clone()).collect()).unwrap_or_default();
+    let label = Label::from(tl!("Data Set"));
+    Param::custom("dataSets", Label::Empty, move |ui, fields, _| {
+        let shown = match fields.get("dataSets") {
+            Some(FieldValue::Json(Value::Array(a))) => {
+                a.first().and_then(Value::as_str).and_then(|n| names.iter().position(|m| m == n)).map_or(-1, |i| i as i64)
+            }
+            _ => -1,
+        };
+        let mut entries = vec![Entry::new(-1i64, Label::from(tl!("All Data Sets"))), Entry::separator()];
+        entries.extend(names.iter().enumerate().map(|(i, name)| Entry::new(i as i64, Label::from(name.clone()))));
+        let out = Select::new(label.clone(), Bind::given(shown), &entries).show(ui);
+        match out.value().copied() {
+            Some(-1) => fields.set("dataSets", FieldValue::Json(Value::Null)),
+            Some(i) => {
+                if let Some(name) = usize::try_from(i).ok().and_then(|i| names.get(i)) {
+                    fields.set("dataSets", FieldValue::Json(json!([name])));
+                }
+            }
+            None => {}
+        }
+        out.response().clone()
+    })
+    .full_width()
+    .not_remembered()
+}
+
 /// A document's name without its extension.
 fn stem(name: &str) -> String {
     name.rsplit_once('.').map_or(name, |(a, _)| a).to_owned()
@@ -308,6 +341,7 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
         "file.export.dataSetsAsFiles" => {
             doc?;
             plain(vec![
+                export_data_set(app),
                 folder("dir", tl!("Destination"), dir),
                 Param::new("naming", tl!("File Naming"), ParamKind::text("{name}")),
                 choice("format", tl!("File Type"), export_formats(), "png"),
