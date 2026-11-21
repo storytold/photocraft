@@ -277,8 +277,65 @@ pub fn covering_face(bytes: &[u8], c: char) -> Option<u32> {
     }
 }
 
-/// Whether face `index` of `bytes` (a font or collection) maps `c` in its character map.
-/// `false` for an out-of-range face or data that doesn't parse. Never panics.
+/// An [`OutlinePen`](skrifa::outline::OutlinePen) that counts drawable segments drawn into a glyph,
+/// ignoring zero-length collapsed lines and curves whose control points and endpoint all coincide
+/// with the current point.
+#[derive(Default)]
+struct ContourCount {
+    segments: usize,
+    start: Option<(f32, f32)>,
+    current: Option<(f32, f32)>,
+}
+
+impl skrifa::outline::OutlinePen for ContourCount {
+    /// Starts a new contour at (`x`, `y`) without incrementing the drawable segment count.
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.start = Some((x, y));
+        self.current = Some((x, y));
+    }
+    /// Appends a straight line segment unless its endpoint equals the current point.
+    fn line_to(&mut self, x: f32, y: f32) {
+        if self.current != Some((x, y)) {
+            self.segments = self.segments.saturating_add(1);
+        }
+        self.current = Some((x, y));
+    }
+    /// Appends a quadratic Bézier curve segment unless its control point and endpoint equal the current point.
+    fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
+        if self.current != Some((cx0, cy0)) || self.current != Some((x, y)) {
+            self.segments = self.segments.saturating_add(1);
+        }
+        self.current = Some((x, y));
+    }
+    /// Appends a cubic Bézier curve segment unless both control points and endpoint equal the current point.
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+        if self.current != Some((cx0, cy0)) || self.current != Some((cx1, cy1)) || self.current != Some((x, y)) {
+            self.segments = self.segments.saturating_add(1);
+        }
+        self.current = Some((x, y));
+    }
+    /// Closes the current contour, returning the current point to the contour start.
+    fn close(&mut self) {
+        self.current = self.start;
+    }
+}
+
+/// Whether `font` really contains a drawable outline for character `c` (or maps `c` as whitespace).
+/// Unmapped characters (including unmapped whitespace) and fonts whose character map maps `c`
+/// but lack an outline or produce no drawable segments return `false`.
+pub fn font_has_glyph_outline(font: &skrifa::FontRef<'_>, c: char) -> bool {
+    use skrifa::MetadataProvider;
+
+    let Some(id) = font.charmap().map(c) else { return false };
+    if c.is_whitespace() {
+        return true;
+    }
+    let Some(outline) = font.outline_glyphs().get(id) else { return false };
+    let mut pen = ContourCount::default();
+    let settings = skrifa::outline::DrawSettings::unhinted(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
+    outline.draw(settings, &mut pen).is_ok() && pen.segments > 0
+}
+
 pub fn face_covers(bytes: &[u8], index: u32, c: char) -> bool {
     use skrifa::MetadataProvider;
 
@@ -346,6 +403,79 @@ mod tests {
         assert_eq!(names(Script::Tamil), ["Nirmala.ttc", "Lohit-Tamil.ttf"]);
         assert!(names(Script::Ethiopic).is_empty());
         assert!(candidates(Script::Thai, &[]).is_empty());
+    }
+
+    /// Verifies that `font_has_glyph_outline` checks drawable contours, allows mapped whitespace
+    /// without an outline, and rejects unmapped whitespace.
+    #[test]
+    fn font_has_glyph_outline_checks_drawable_contours_and_whitespace() {
+        use skrifa::MetadataProvider;
+
+        let inter = crate::fonts::INTER_REGULAR.as_slice();
+        let font = skrifa::FontRef::from_index(inter, 0).expect("bundled Inter font is valid");
+        let space_id = font.charmap().map(' ').expect("Inter maps ASCII space");
+        let space_outline = font.outline_glyphs().get(space_id).expect("Inter space glyph exists");
+        let mut space_pen = ContourCount::default();
+        let settings = skrifa::outline::DrawSettings::unhinted(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
+        space_outline.draw(settings, &mut space_pen).expect("space outline draws");
+        assert_eq!(space_pen.segments, 0, "space has no drawable contours");
+
+        assert!(font.charmap().map('\t').is_none(), "Inter does not map tab");
+        assert!(font.charmap().map('\u{3000}').is_none(), "Inter does not map ideographic space");
+
+        assert!(font_has_glyph_outline(&font, 'A'));
+        assert!(font_has_glyph_outline(&font, ' '));
+        assert!(!font_has_glyph_outline(&font, '\t'));
+        assert!(!font_has_glyph_outline(&font, '\u{3000}'));
+        assert!(!font_has_glyph_outline(&font, 'ส'));
+    }
+
+    #[test]
+    fn contour_count_ignores_collapsed_segments_and_counts_drawable_ones() {
+        use skrifa::outline::OutlinePen;
+
+        // Positive test: a normal rectangle counts its four drawable segments.
+        let mut rect = ContourCount::default();
+        rect.move_to(0.0, 0.0);
+        rect.line_to(10.0, 0.0);
+        rect.line_to(10.0, 10.0);
+        rect.line_to(0.0, 10.0);
+        rect.line_to(0.0, 0.0);
+        rect.close();
+        assert_eq!(rect.segments, 4);
+
+        // Collapsed line, quadratic curve, and cubic curve at the current point are ignored.
+        let mut collapsed = ContourCount::default();
+        collapsed.move_to(5.0, 5.0);
+        collapsed.line_to(5.0, 5.0);
+        collapsed.quad_to(5.0, 5.0, 5.0, 5.0);
+        collapsed.curve_to(5.0, 5.0, 5.0, 5.0, 5.0, 5.0);
+        collapsed.close();
+        assert_eq!(collapsed.segments, 0);
+
+        // Curves whose endpoint equals the start point still count when a control point differs.
+        let mut quad_loop = ContourCount::default();
+        quad_loop.move_to(5.0, 5.0);
+        quad_loop.quad_to(10.0, 5.0, 5.0, 5.0);
+        assert_eq!(quad_loop.segments, 1);
+
+        let mut curve_loop_c0 = ContourCount::default();
+        curve_loop_c0.move_to(5.0, 5.0);
+        curve_loop_c0.curve_to(10.0, 5.0, 5.0, 5.0, 5.0, 5.0);
+        assert_eq!(curve_loop_c0.segments, 1);
+
+        let mut curve_loop_c1 = ContourCount::default();
+        curve_loop_c1.move_to(5.0, 5.0);
+        curve_loop_c1.curve_to(5.0, 5.0, 10.0, 5.0, 5.0, 5.0);
+        assert_eq!(curve_loop_c1.segments, 1);
+
+        // Closing returns the current point to the contour start.
+        let mut after_close = ContourCount::default();
+        after_close.move_to(0.0, 0.0);
+        after_close.line_to(10.0, 0.0);
+        after_close.close();
+        after_close.line_to(0.0, 0.0);
+        assert_eq!(after_close.segments, 1);
     }
 
     #[test]
