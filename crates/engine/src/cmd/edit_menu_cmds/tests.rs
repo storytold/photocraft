@@ -251,7 +251,7 @@ fn purge_all_releases_prepared_brush_tips_even_without_a_document() {
     let _purge_test_guard = PURGE_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     use photocraft_paint::{BrushContext, BrushSettings, Dab, GrayTile, TipShape};
     let mut s = Session::new();
-    let brush = BrushSettings { tip: TipShape::Sampled(GrayTile::from_fn(31, 17, |x, y| ((x + y) % 5) as f32 / 4.0)), ..Default::default() };
+    let brush = BrushSettings { tip: TipShape::Sampled(GrayTile::from_fn(31, 17, |x, y| ((x + y) % 5) as f32 / 4.0)).into(), ..Default::default() };
     let ctx = BrushContext::new(&brush);
     let dab = Dab::round(photocraft_geom::Point::new(12.5, 14.5), 10.0, 1.0);
     let rect = ctx.dab_rect(&dab, false);

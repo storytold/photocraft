@@ -185,7 +185,7 @@ pub(crate) fn clone_source(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<Clon
         radius.to_bits(),
         brush_alpha.to_bits()
     );
-    let brush = overlay.clipped.then_some(&app.session.tools.brush);
+    let brush = overlay.clipped.then_some(&*app.session.tools.brush);
     if app.clone_preview.as_ref().is_none_or(|c| {
         let same_source = match (&c.source_document, &source_document) {
             (Some(a), Some(b)) => std::sync::Weak::ptr_eq(a, b),

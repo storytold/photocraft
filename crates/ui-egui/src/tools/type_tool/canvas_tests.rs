@@ -1785,7 +1785,7 @@ mod multi_layer_formatting {
         app.run("type.orientation.horizontal", json!({"layer": ids[1].0})).unwrap();
         let checks = |app: &mut PhotocraftApp| -> Vec<String> {
             let ctx = app.ctx().clone();
-            let rows = &crate::menus::model(app, &ctx).rows;
+            let rows = crate::menus::model(app, &ctx).rows();
             for id in ["type.antiAlias.none", "type.antiAlias.crisp", "type.orientation.horizontal", "type.orientation.vertical"] {
                 let it = crate::menus::row(rows, id).unwrap();
                 assert!(it.kind.checked().is_some(), "{id} is a check item");

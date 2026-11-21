@@ -23,11 +23,11 @@ impl Session {
         Self::default()
     }
 
-    pub fn documents(&self) -> &[DocState] {
+    pub fn documents(&self) -> &[craft_tracked::Tracked<DocState>] {
         &self.docs
     }
 
-    /// Changes whenever a document is opened or closed.
+    /// Changes whenever a document is opened, closed or renamed.
     pub fn documents_generation(&self) -> u64 {
         self.documents_generation
     }
@@ -37,22 +37,49 @@ impl Session {
     }
 
     pub fn active(&self) -> Option<&DocState> {
+        self.active_tracked().map(|st| &**st)
+    }
+
+    /// The active document as the session tracks it, for views that key on its revision.
+    pub fn active_tracked(&self) -> Option<&craft_tracked::Tracked<DocState>> {
         self.active.and_then(|i| self.docs.get(i))
     }
 
+    /// The active document to change: the borrow moves its `Tracked` revision, so a caller that may write nothing
+    /// reads through [`Self::active`] first.
     pub fn active_mut(&mut self) -> Option<&mut DocState> {
-        self.active.and_then(|i| self.docs.get_mut(i))
+        self.active.and_then(|i| self.docs.get_mut(i)).map(|st| &mut **st)
+    }
+
+    /// The open document with this id as the session tracks it, active or not.
+    pub fn tracked(&self, id: photocraft_doc::DocId) -> Option<&craft_tracked::Tracked<DocState>> {
+        self.docs.iter().find(|d| d.doc.id == id)
+    }
+
+    /// The native save cache of the open document `id`, which its save workers share.
+    pub fn pcraft_cache(&self, id: photocraft_doc::DocId) -> Option<&photocraft_io::PcraftExportCache> {
+        self.pcraft_caches.get(&id)
+    }
+
+    /// Completes a successful save of the active document: the file becomes its path and names it, and its revision is
+    /// the saved one. File identity is not a history step; callers finish the write first and don't call this for a
+    /// copy or export.
+    pub fn saved_to(&mut self, path: String) {
+        let renamed = self.active_mut().is_some_and(|st| st.saved_to(path));
+        if renamed {
+            self.documents_generation = self.documents_generation.wrapping_add(1);
+        }
     }
     /// Release an interactive channel target, including after its document was switched/closed.
     pub fn clear_channel_transforms(&mut self) {
-        for st in &mut self.docs {
+        for st in self.docs.iter_mut().filter(|st| st.channel_transform.is_some()) {
             st.channel_transform = None;
         }
     }
 
     /// The open document with this id, active or not.
     pub fn document_mut(&mut self, id: photocraft_doc::DocId) -> Option<&mut DocState> {
-        self.docs.iter_mut().find(|d| d.doc.id == id)
+        self.docs.iter_mut().find(|d| d.doc.id == id).map(|st| &mut **st)
     }
 
     /// Monotonic active-document generation. It changes when a different document becomes
@@ -204,7 +231,8 @@ impl Session {
         if !self.prefs.get().history_options.automatically_create_first_snapshot {
             st.snapshots_mut().clear();
         }
-        self.docs.push(st);
+        self.pcraft_caches.insert(st.doc.id, Default::default());
+        self.docs.push(craft_tracked::Tracked::new(st));
         self.documents_generation = self.documents_generation.wrapping_add(1);
         let i = self.docs.len() - 1;
         self.active = Some(i);
@@ -242,10 +270,13 @@ impl Session {
             self.subject_cache.forget_doc(id);
             self.object_finder.forget_doc(id);
             self.presets.clone.forget_doc(id);
-            self.link_missing.retain(|(d, _)| *d != id.0);
+            if self.link_missing.iter().any(|(d, _)| *d == id.0) {
+                self.link_missing.retain(|(d, _)| *d != id.0);
+            }
             self.link_scan = None;
         }
-        let d = self.docs.remove(index);
+        let d = self.docs.remove(index).into_inner();
+        self.pcraft_caches.remove(&d.doc.id);
         self.documents_generation = self.documents_generation.wrapping_add(1);
         self.open_document_order.retain(|&id| id != d.doc.id);
         self.active = if self.docs.is_empty() {

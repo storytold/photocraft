@@ -504,7 +504,7 @@ fn menu_place_preserves_an_unfinished_transform() {
 fn open_starts_in_the_last_used_folder() {
     let (mut app, files, _) = app();
     let ctx = egui::Context::default();
-    app.ui.recent_files = vec!["/pics/cat.psd".into(), "/old/dog.png".into()];
+    *app.ui.recent_files = vec!["/pics/cat.psd".into(), "/old/dog.png".into()];
     menus::invoke(&mut app, &ctx, "file.open", json!({})).unwrap();
     let asked = last_request(&files);
     assert_eq!(asked.kind, PickKind::OpenMany);
@@ -515,7 +515,7 @@ fn open_starts_in_the_last_used_folder() {
 #[test]
 fn ask_folder_uses_the_async_dialog_and_returns_the_selected_path() {
     let (mut app, files, _) = app();
-    app.ui.recent_files = vec!["/pics/cat.psd".into()];
+    *app.ui.recent_files = vec!["/pics/cat.psd".into()];
     let selected = Rc::new(RefCell::new(None));
     let result = selected.clone();
 

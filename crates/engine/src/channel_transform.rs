@@ -11,9 +11,10 @@ use crate::channel_cmds::ChannelTarget;
 use crate::{EngineError, Result, Session};
 
 /// Frozen identity of the channel being transformed by an interactive frontend.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub struct Guard {
     pub layer: Option<LayerId>,
+    #[plain_data(assume = "JSON values: plain data")]
     pub target: Value,
 }
 

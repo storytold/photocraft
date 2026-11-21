@@ -127,7 +127,7 @@ fn changed_document_refuses_live_pixels() {
     s.execute("paint.stroke", json!({"points":[[40,40],[80,60]],"color":"#ffffff","size":20})).unwrap();
     let mut replay = Session::new();
     replay.add_document((*s.active().unwrap().doc).clone(), None);
-    replay.tools.brush = s.tools.brush.clone();
+    *replay.tools.brush = (*s.tools.brush).clone();
     s.offer_live_dab(live).unwrap();
     assert!(s.execute("paint.blur", p.clone()).unwrap().get("fromLive").is_none());
     replay.execute("paint.blur", p).unwrap();

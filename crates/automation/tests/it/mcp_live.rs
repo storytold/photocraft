@@ -128,7 +128,92 @@ fn live(dir: &Path, when_closed: Option<WhenAppClosed>) -> LiveConfig {
     // The machine's own ArtCraft Launcher and feature flags stay out of the tests: agents are
     // allowed exactly when the test's preferences say so (as without the AI-MCP flag).
     c.allowed = |i| i.connect_agents;
+    // Nor the machine's own Documents folder: tests that want a default agent folder set one.
+    c.default_folder = None;
     c
+}
+
+fn answer(r: &CallToolResult) -> Value {
+    assert_eq!(r.is_error, Some(false), "{}", text(r));
+    serde_json::from_str(&text(r)).unwrap()
+}
+
+fn shown(p: &Path) -> Value {
+    json!(p.to_string_lossy())
+}
+
+/// A closed app, agents allowed, "headless", no folders set: the session opens and saves in the
+/// default agent folder, and `agent_folders` says so. A folder the person set wins.
+#[tokio::test(flavor = "multi_thread")]
+async fn agent_folders_names_the_default_agent_folder_of_a_headless_session() {
+    let dir = settings_dir("folders-headless");
+    let default = dir.join("Agents").join("PhotoCraft");
+    prefs(&dir, json!({"connectAgents": true, "whenAppClosed": "headless"}));
+    let mut config = live(&dir, None);
+    config.default_folder = Some(default.clone());
+    let client = connect(PhotocraftMcp::live(config)).await;
+    assert!(client.list_all_tools().await.unwrap().iter().any(|t| t.name == "agent_folders"));
+    let a = answer(&call(&client, "agent_folders", json!({})).await);
+    assert_eq!(a, json!({"read_folder": shown(&default), "write_folder": shown(&default)}));
+    assert!(default.is_dir(), "the default agent folder is created");
+    // The session really uses it: a new document saves there.
+    assert_eq!(call(&client, "doc_new", json!({"width": 4, "height": 4})).await.is_error, Some(false));
+    let r = call(&client, "doc_save", json!({"path": "out.png"})).await;
+    assert_eq!(r.is_error, Some(false), "{}", text(&r));
+    assert!(default.join("out.png").is_file());
+    client.cancel().await.unwrap();
+
+    let own = dir.join("mine");
+    std::fs::create_dir_all(&own).unwrap();
+    prefs(&dir, json!({"connectAgents": true, "whenAppClosed": "headless", "writeRoot": own.to_string_lossy()}));
+    let mut config = live(&dir, None);
+    config.default_folder = Some(default.clone());
+    let client = connect(PhotocraftMcp::live(config)).await;
+    let a = answer(&call(&client, "agent_folders", json!({})).await);
+    assert_eq!(a, json!({"read_folder": shown(&default), "write_folder": shown(&own)}));
+    // No arguments: anything else is refused, not ignored.
+    assert!(client.call_tool(CallToolRequestParams::new("agent_folders").with_arguments(json!({"x": 1}).as_object().unwrap().clone())).await.is_err());
+    client.cancel().await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Calls going to the open window: `agent_folders` names the window's folders, its saved ones
+/// with the default for an empty setting, as its agent link opens them.
+#[tokio::test(flavor = "multi_thread")]
+async fn agent_folders_names_the_open_windows_folders() {
+    let dir = settings_dir("folders-window");
+    let default = dir.join("Agents").join("PhotoCraft");
+    let own = dir.join("in");
+    prefs(&dir, json!({"connectAgents": true, "whenAppClosed": "error", "readRoot": own.to_string_lossy()}));
+    let app = fake_app(&dir, "window");
+    let mut config = live(&dir, None);
+    config.default_folder = Some(default.clone());
+    let client = connect(PhotocraftMcp::live(config)).await;
+    let a = answer(&call(&client, "agent_folders", json!({})).await);
+    assert_eq!(a, json!({"read_folder": shown(&own), "write_folder": shown(&default)}));
+    client.cancel().await.unwrap();
+    quit(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `--headless` with root flags: `agent_folders` names them, every read root in lookup order.
+#[tokio::test(flavor = "multi_thread")]
+async fn agent_folders_names_the_root_flags_of_a_headless_session() {
+    let dir = settings_dir("folders-flags");
+    let (a_in, b_in, out) = (dir.join("a"), dir.join("b"), dir.join("out"));
+    for d in [&a_in, &b_in, &out] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let workspace = photocraft_automation::AuthorizedWorkspace::with_read_roots([a_in.as_path(), b_in.as_path()], Some(&out)).unwrap();
+    let client = connect(PhotocraftMcp::headless_with_workspace(workspace)).await;
+    let a = answer(&call(&client, "agent_folders", json!({})).await);
+    assert_eq!(a, json!({"read_folder": shown(&a_in), "write_folder": shown(&out), "read_folders": [shown(&a_in), shown(&b_in)]}));
+    client.cancel().await.unwrap();
+
+    let client = connect(PhotocraftMcp::headless_with_workspace(photocraft_automation::AuthorizedWorkspace::default())).await;
+    assert_eq!(answer(&call(&client, "agent_folders", json!({})).await), json!({"read_folder": null, "write_folder": null}));
+    client.cancel().await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test(flavor = "multi_thread")]
