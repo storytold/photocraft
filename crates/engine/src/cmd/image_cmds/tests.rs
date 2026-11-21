@@ -205,8 +205,20 @@ fn image_size_keeps_canvas_edges_opaque() {
             let mut s = Session::new();
             s.execute("file.new", json!({"width": 30, "height": 20, "depth": depth, "background": "#336699"})).unwrap();
             s.execute("select.all", json!({})).unwrap();
+            // The Crop tool's W x H x Resolution mode still resamples the selection with the
+            // pixels: a full selection keeps reaching the canvas edges.
+            let mut cropped = (*doc(&s)).clone();
+            let ch = (20 * w + 15) / 30;
+            resample_doc(&mut cropped, "test", w, ch, Resample::Bicubic).unwrap();
+            let sel = cropped.selection.as_ref().unwrap();
+            let (x1, y1) = (cropped.size.width as i32 - 1, cropped.size.height as i32 - 1);
+            for (x, y) in [(0, 0), (x1, 0), (0, y1), (x1, y1)] {
+                assert!(sel.pixel(x, y)[0] > 0.99, "{depth} {resample}: selection at ({x},{y})");
+            }
             s.execute("image.imageSize", json!({"width": w, "resample": resample})).unwrap();
             let d = doc(&s);
+            // Image Size drops the selection when it resamples (#13856).
+            assert!(d.selection.is_none(), "{depth} {resample}: Image Size dropped the selection");
             let flat = photocraft_compose::flatten(d);
             let (w, h) = (flat.rect.width() as usize, flat.rect.height() as usize);
             let mid = flat.px[(h / 2) * w + w / 2];
@@ -214,11 +226,6 @@ fn image_size_keeps_canvas_edges_opaque() {
             for p in &flat.px {
                 let off = p.iter().zip(mid).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
                 assert!(off < 0.01, "{depth} {resample} {w}: {p:?} vs {mid:?}");
-            }
-            let sel = d.selection.as_ref().unwrap();
-            let (x1, y1) = (d.size.width as i32 - 1, d.size.height as i32 - 1);
-            for (x, y) in [(0, 0), (x1, 0), (0, y1), (x1, y1)] {
-                assert!(sel.pixel(x, y)[0] > 0.99, "{depth} {resample}: selection at ({x},{y})");
             }
         }
     }
@@ -791,16 +798,18 @@ fn crop_at_a_small_angle_keeps_the_frame_size_in_every_mode() {
 #[test]
 fn turned_crop_deleting_pixels_matches_turning_the_whole_canvas() {
     use photocraft_color::PixelFormat;
-    let pixels = || (0..500).flat_map(|y| (0..700).map(move |x| (x, y)));
     for depth in [8, 16, 32] {
         for angle in [3.0, -7.5, 33.0, 181.0] {
+            let (w, h) = if depth == 8 && angle == 33.0 { (700, 500) } else { (140, 100) };
+            let scale = w / 140;
+            let pixels = || (0..h).flat_map(|y| (0..w).map(move |x| (x, y)));
             let mut sessions = [true, false].map(|delete| {
                 let mut s = Session::new();
-                s.execute("file.new", json!({"width": 700, "height": 500, "depth": depth, "background": "white"})).unwrap();
+                s.execute("file.new", json!({"width": w, "height": h, "depth": depth, "background": "white"})).unwrap();
                 s.execute("layer.new.layer", json!({})).unwrap();
                 s.edit("paint", |doc, active| {
                     let wave = |x: i32, y: i32, k: i32| ((x * 7 + y * 13 + k * 31) % 97) as f32 / 96.0;
-                    let all = Rect::new(0, 0, 700, 500);
+                    let all = Rect::new(0, 0, w, h);
                     let rgba: Vec<f32> = pixels().flat_map(|(x, y)| [wave(x, y, 0), wave(x, y, 1), wave(x, y, 2), wave(y, x, 3)]).collect();
                     let gray: Vec<f32> = pixels().map(|(x, y)| wave(y, x, 4)).collect();
                     let l = doc.layer_mut(active.unwrap()).unwrap();
@@ -817,7 +826,7 @@ fn turned_crop_deleting_pixels_matches_turning_the_whole_canvas() {
                     Ok(())
                 })
                 .unwrap();
-                let p = json!({"x": 150, "y": 120, "width": 330, "height": 290, "angle": angle, "deleteCroppedPixels": delete});
+                let p = json!({"x": 30 * scale, "y": 24 * scale, "width": 66 * scale, "height": 58 * scale, "angle": angle, "deleteCroppedPixels": delete});
                 s.execute("image.crop", p).unwrap();
                 s
             });

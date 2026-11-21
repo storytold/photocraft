@@ -7,6 +7,8 @@ use std::path::{Path as FsPath, PathBuf};
 #[cfg(feature = "corpus")]
 use std::sync::Arc;
 
+#[cfg(feature = "corpus")]
+use craft_psd::PsdFile;
 use photocraft_color::{Color, ColorMode, SampleType};
 use photocraft_doc::{
     Document, Fill, Knot, Layer, LayerContent, LineCap, LineJoin, LiveShape, NamedPath, Path, PathOp, ShapeLayer, ShapeStroke, Size, StrokeAlign, Subpath,
@@ -14,8 +16,6 @@ use photocraft_doc::{
 };
 use photocraft_geom::{Point, Rect};
 use photocraft_io::*;
-#[cfg(feature = "corpus")]
-use photocraft_psd::PsdFile;
 
 fn roundtrip(d: &Document) -> Document {
     let r = export(d, "x.psd", &ExportOptions::default()).unwrap();
@@ -76,6 +76,88 @@ fn saved_paths_work_path_and_clipping_roundtrip() {
     let mut b3 = c.clone();
     b3.clipping_path = None;
     assert!(roundtrip(&b3).clipping_path.is_none());
+}
+
+#[test]
+fn clipping_path_resource_2999_unchanged_flatness_only_and_new_export() {
+    let mut d = doc();
+    d.paths.push(NamedPath { name: "Outline".into(), path: path(), psd_raw: None });
+    d.clipping_path = Some(photocraft_doc::ClippingPath { name: "Outline".into(), flatness: 2.5 });
+
+    // New export: writes Pascal name + 16.16 fixed flatness.
+    let fresh_bytes = export(&d, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let fresh_file = craft_psd::PsdFile::from_bytes(&fresh_bytes).unwrap();
+    let fresh_2999 = fresh_file.resources.iter().find(|r| r.id == 2999).expect("2999 resource");
+    assert_eq!(fresh_2999.data, b"\x07Outline\x00\x02\x80\x00");
+
+    // Imported 2999 with extra trailing bytes (e.g. fill-rule) is preserved unchanged when name matches.
+    let mut custom_file = fresh_file.clone();
+    let custom_payload = b"\x07Outline\x00\x01\x00\x00\x00\x00\x00\x01".to_vec();
+    custom_file.resources.iter_mut().find(|r| r.id == 2999).unwrap().data = custom_payload.clone();
+    let mut imported = import("x.psd", &custom_file.to_bytes().unwrap()).unwrap().document;
+    assert_eq!(imported.clipping_path.as_ref().unwrap().flatness, 1.0);
+    let reexported = export(&imported, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let reexported_2999 = craft_psd::PsdFile::from_bytes(&reexported).unwrap().resources.into_iter().find(|r| r.id == 2999).unwrap();
+    assert_eq!(reexported_2999.data, custom_payload);
+
+    // A flatness-only edit changes only the fixed-point field, not the Pascal name or suffix.
+    imported.clipping_path.as_mut().unwrap().flatness = 5.0;
+    let flatness_edit = export(&imported, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let flatness_2999 = craft_psd::PsdFile::from_bytes(&flatness_edit).unwrap().resources.into_iter().find(|r| r.id == 2999).unwrap();
+    assert_eq!(flatness_2999.data, b"\x07Outline\x00\x05\x00\x00\x00\x00\x00\x01");
+    let mut edited = import("x.psd", &flatness_edit).unwrap().document;
+    assert_eq!(edited.clipping_path.as_ref().unwrap().flatness, 5.0);
+
+    // Printer default (zero) is also an explicit edit and retains the fill rule and tail.
+    edited.clipping_path.as_mut().unwrap().flatness = 0.0;
+    let reset = export(&edited, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let reset_2999 = craft_psd::PsdFile::from_bytes(&reset).unwrap().resources.into_iter().find(|r| r.id == 2999).unwrap();
+    assert_eq!(reset_2999.data, b"\x07Outline\x00\x00\x00\x00\x00\x00\x00\x01");
+
+    // Legacy resources without a flatness field keep their bytes unless flatness is edited.
+    let resource = custom_file.resources.iter_mut().find(|r| r.id == 2999).unwrap();
+    resource.data = b"\x07Outline".to_vec();
+    let mut legacy = import("x.psd", &custom_file.to_bytes().unwrap()).unwrap().document;
+    let legacy_unchanged = export(&legacy, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let legacy_2999 = craft_psd::PsdFile::from_bytes(&legacy_unchanged).unwrap().resources.into_iter().find(|r| r.id == 2999).unwrap();
+    assert_eq!(legacy_2999.data, b"\x07Outline");
+    legacy.clipping_path.as_mut().unwrap().flatness = 1.5;
+    let legacy_edit = export(&legacy, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let legacy_2999 = craft_psd::PsdFile::from_bytes(&legacy_edit).unwrap().resources.into_iter().find(|r| r.id == 2999).unwrap();
+    assert_eq!(legacy_2999.data, b"\x07Outline\x00\x01\x80\x00");
+}
+
+#[test]
+fn clipping_path_resource_2999_duplicate_and_rename_parity() {
+    let mut d = doc();
+    d.paths.push(NamedPath { name: "Outline".into(), path: path(), psd_raw: None });
+    d.paths.push(NamedPath { name: "Other".into(), path: path(), psd_raw: None });
+    d.clipping_path = Some(photocraft_doc::ClippingPath { name: "Outline".into(), flatness: 1.0 });
+
+    let fresh_bytes = export(&d, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let mut file = craft_psd::PsdFile::from_bytes(&fresh_bytes).unwrap();
+    let last_payload = b"\x07Outline\x00\x03\x00\x00\x00\x00\x00\x01".to_vec();
+    file.resources.push(craft_psd::ImageResource::new(2999, last_payload.clone()));
+
+    let mut imported = import("x.psd", &file.to_bytes().unwrap()).unwrap().document;
+    assert_eq!(imported.clipping_path.as_ref().unwrap().flatness, 3.0);
+
+    // Unchanged relative to the last matching 2999 resource preserves its bytes.
+    let unchanged = export(&imported, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let unchanged_2999: Vec<_> = craft_psd::PsdFile::from_bytes(&unchanged).unwrap().resources.into_iter().filter(|r| r.id == 2999).map(|r| r.data).collect();
+    assert_eq!(unchanged_2999.last().unwrap(), &last_payload);
+
+    // Flatness edit updates the fixed-point field while preserving the trailing fill-rule bytes.
+    imported.clipping_path.as_mut().unwrap().flatness = 4.0;
+    let edited = export(&imported, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let edited_2999: Vec<_> = craft_psd::PsdFile::from_bytes(&edited).unwrap().resources.into_iter().filter(|r| r.id == 2999).map(|r| r.data).collect();
+    assert_eq!(edited_2999.last().unwrap(), b"\x07Outline\x00\x04\x00\x00\x00\x00\x00\x01");
+
+    // Renaming the clipping path drops the old 2999 resources and emits a fresh one.
+    imported.clipping_path = Some(photocraft_doc::ClippingPath { name: "Other".into(), flatness: 2.0 });
+    let renamed = export(&imported, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let renamed_2999: Vec<_> = craft_psd::PsdFile::from_bytes(&renamed).unwrap().resources.into_iter().filter(|r| r.id == 2999).map(|r| r.data).collect();
+    assert_eq!(renamed_2999, vec![b"\x05Other\x00\x02\x00\x00".to_vec()]);
 }
 
 #[test]
@@ -222,7 +304,7 @@ fn shape_density_and_feather_roundtrip_through_mask_parameters() {
             sh.cache = Some(photocraft_vector::render_shape(&sh, d.pixel_format(), d.bounds()));
             d.layers.push(Layer::new("Shape", LayerContent::Shape(sh)));
             let bytes = export(&d, "x.psd", &ExportOptions::default()).unwrap().bytes;
-            let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
+            let file = craft_psd::PsdFile::from_bytes(&bytes).unwrap();
             let rec = file.layers().last().unwrap();
             let p = rec.layer_mask().and_then(|m| m.parameters).expect("mask parameters");
             assert_eq!((p.vector_density, p.vector_feather), (Some(128), Some(6.0)), "{depth:?}");
@@ -241,7 +323,7 @@ fn shape_density_and_feather_roundtrip_through_mask_parameters() {
     let mut d = doc();
     d.layers.push(shape_layer(ShapeLayer { path: square, fill: Some(Fill::Solid(Color::BLACK)), ..ShapeLayer::default() }));
     let bytes = export(&d, "x.psd", &ExportOptions::default()).unwrap().bytes;
-    let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
+    let file = craft_psd::PsdFile::from_bytes(&bytes).unwrap();
     assert!(file.layers().last().unwrap().layer_mask().and_then(|m| m.parameters).is_none());
     let LayerContent::Shape(back) = &import("x.psd", &bytes).unwrap().document.layers[1].content else { panic!("a shape") };
     assert_eq!((back.density, back.feather), (1.0, 0.0));
