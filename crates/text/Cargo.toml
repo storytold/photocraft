@@ -21,6 +21,8 @@ craft-plist = { workspace = true }
 craft = { workspace = true, default-features = false, features = ["font-catalog", "font-manager"] }
 parley = { version = "0.11", default-features = false, features = ["std"] }
 skrifa = "0.47"
+# First strong character of a paragraph (its Auto direction), already in the tree through parley.
+icu_properties = { version = "2.1.2", default-features = false, features = ["compiled_data"] }
 flate2 = { workspace = true }
 # Subresource Integrity values for served fonts.
 base64 = "0.23"

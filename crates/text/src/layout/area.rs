@@ -1,11 +1,13 @@
 use super::{CharStyle, Layout, ParagraphStyle, PositionedLayoutItem, RunBrush, Slot};
 
 /// A line's ascent, descent and leading (px); for area type, the largest over a paragraph.
+/// `px` is the line's largest type size (px), which a solved line's gap is a percentage of.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct LineMetrics {
     pub(super) ascent: f32,
     pub(super) descent: f32,
     pub(super) leading: f32,
+    pub(super) px: f32,
 }
 
 /// Most line-breaking passes area type makes for one paragraph, over all its plans (each span
@@ -192,8 +194,69 @@ fn break_area_pass(layout: &mut Layout<RunBrush>, rows: &mut AreaRows<'_>, inset
     (slots, overflow)
 }
 
+/// Places one solved Dynamic Text area line (laid out unwrapped in `layout`, at its solved
+/// scale), as [`crate::fit::solve_area`] planned it. The line starts at the baseline `from`
+/// (stacked on the previous line), or for the first line at the first row area type's row
+/// search finds from `from` (a span at least `first` wide), and goes down in steps of
+/// ROW_SKIP_STEP of its height, at most ROW_SKIP_STEPS steps, to the first band whose widest
+/// span holds the line. It goes in the first span, left to right, that holds it. No band left: no slot
+/// (the line is hidden, never drawn past the shape). Horizontal scale applies after shaping:
+/// the line's width is its advance times `scale`, and it is aligned in its span divided by it.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn place_solved_area(
+    layout: &mut Layout<RunBrush>,
+    area: &crate::area::AreaShape,
+    from: f32,
+    m: LineMetrics,
+    // The first line: its first character's size (px), the row search's least span width.
+    first: Option<f32>,
+    indents: (f32, f32),
+    first_indent: f32,
+    scale: f32,
+) -> (Vec<Slot>, bool) {
+    use crate::fit::{AREA_MARGIN, ROW_SKIP_STEP, ROW_SKIP_STEPS};
+    let inset = indents.0 + indents.1;
+    let width = layout.lines().next().map_or(0.0, |l| l.metrics().advance - l.metrics().trailing_whitespace) * scale;
+    let step = ROW_SKIP_STEP * (m.ascent + m.descent);
+    // The first line starts at area type's own row search.
+    let row = match first {
+        Some(min_width) => area.next_row(from, m.ascent, m.descent, min_width),
+        None => Some((from, Vec::new())),
+    };
+    for i in 0..=ROW_SKIP_STEPS {
+        let Some((from, ref row_spans)) = row else { break };
+        let (b, spans) = if i == 0 && first.is_some() {
+            (from, row_spans.clone())
+        } else {
+            let b = from + i as f32 * step;
+            if b + m.descent > area.bounds[3] || b.is_nan() {
+                break;
+            }
+            (b, area.spans(b - m.ascent, b + m.descent, 0.0))
+        };
+        let widest = spans.iter().map(|s| s.1 - s.0).fold(0.0f32, f32::max);
+        if widest <= 0.0 || width > AREA_MARGIN * (widest - inset - first_indent) + 0.1 {
+            continue;
+        }
+        let Some(&(x0, x1)) = spans.iter().find(|s| width <= s.1 - s.0 - inset - first_indent + 0.5) else { continue };
+        let w = (x1 - x0 - inset).max(1.0);
+        let mut br = layout.break_lines();
+        br.state_mut().set_layout_max_advance(f32::INFINITY);
+        br.state_mut().set_line_max_advance(w / scale);
+        if br.break_next().is_some() {
+            br.set_prior_line_width(w / scale);
+        }
+        br.finish();
+        return (vec![Slot { baseline: b, x: x0, width: w, row: 0, span: 0 }], false);
+    }
+    // Hidden: still break the line, so the layout has one.
+    layout.break_all_lines(None);
+    (Vec::new(), true)
+}
+
 /// One laid-out line's ascent, descent and leading, as the line loop stacks it. `fallback` is
-/// the paragraph's first style, used for a line with no glyph runs.
+/// the paragraph's first style, used for a line with no glyph runs. With Dynamic Text (`line_gap`,
+/// percent) the leading is the line's natural height plus the line gap, a percentage of its largest size.
 pub(super) fn line_metrics(
     line: &parley::Line<'_, RunBrush>,
     styles: &[CharStyle],
@@ -201,15 +264,18 @@ pub(super) fn line_metrics(
     k: f32,
     fallback: &CharStyle,
     vertical: bool,
+    line_gap: Option<f32>,
 ) -> LineMetrics {
     let first_px = fallback.size_pt * k;
     let m = line.metrics();
     // Largest leading among the glyph runs, and half the largest em (a vertical column's half width).
     let mut leading = 0.0f32;
     let mut half = 0.0f32;
+    let mut max_px = 0.0f32;
     for item in line.items() {
         if let PositionedLayoutItem::GlyphRun(gr) = item {
             let px = gr.run().font_size();
+            max_px = max_px.max(px);
             half = half.max(px * 0.5);
             let lp = styles.get(gr.style().brush.0 as usize).and_then(|st| st.leading_pt);
             leading = leading.max(lp.map_or(ps.auto_leading * px, |l| l * k));
@@ -226,13 +292,26 @@ pub(super) fn line_metrics(
     } else {
         (first_px * 0.8, first_px * 0.2)
     };
-    LineMetrics { ascent, descent, leading }
+    let px = if max_px > 0.0 { max_px } else { first_px };
+    if let Some(gap) = line_gap {
+        leading = ascent + descent + gap / 100.0 * px;
+    }
+    LineMetrics { ascent, descent, leading, px }
 }
 
 /// Largest ascent, descent and leading over the lines of a broken paragraph, by
 /// [`line_metrics`], so an area paragraph's rows are planned with the metrics it is stacked with.
-pub(super) fn area_metrics(layout: &Layout<RunBrush>, styles: &[CharStyle], ps: &ParagraphStyle, k: f32, fallback: &CharStyle, vertical: bool) -> LineMetrics {
-    layout.lines().map(|line| line_metrics(&line, styles, ps, k, fallback, vertical)).fold(LineMetrics { ascent: 0.0, descent: 0.0, leading: 0.0 }, |a, b| {
-        LineMetrics { ascent: a.ascent.max(b.ascent), descent: a.descent.max(b.descent), leading: a.leading.max(b.leading) }
-    })
+pub(super) fn area_metrics(
+    layout: &Layout<RunBrush>,
+    styles: &[CharStyle],
+    ps: &ParagraphStyle,
+    k: f32,
+    fallback: &CharStyle,
+    vertical: bool,
+    line_gap: Option<f32>,
+) -> LineMetrics {
+    layout.lines().map(|line| line_metrics(&line, styles, ps, k, fallback, vertical, line_gap)).fold(
+        LineMetrics { ascent: 0.0, descent: 0.0, leading: 0.0, px: 0.0 },
+        |a, b| LineMetrics { ascent: a.ascent.max(b.ascent), descent: a.descent.max(b.descent), leading: a.leading.max(b.leading), px: a.px.max(b.px) },
+    )
 }
