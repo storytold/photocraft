@@ -152,7 +152,6 @@ impl PhotocraftApp {
             layer_box: None,
             finished_pens: Vec::new(),
             hover_doc: None,
-            commands_run: 0,
             hover_layer: None,
             layers_rename: None,
             smart_filter_picks: HashMap::new(),
