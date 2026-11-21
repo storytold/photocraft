@@ -1354,6 +1354,23 @@ fn reset_tools_clear_the_remembered_options_and_brushes() {
 // --- the Preferences window ----------------------------------------------------------------------------------------
 
 #[test]
+fn default_save_format_round_trips_through_preferences() {
+    let (mut app, store) = app_with_store();
+    let ctx = egui::Context::default();
+    tick(&mut app, &ctx);
+    open_prefs(&mut app, "fileHandling");
+    edit(&mut app, "fileHandling.defaultSaveFormat", PrefValue::Choice("png".into()));
+    apply_window(&mut app).unwrap();
+    tick(&mut app, &ctx);
+    assert_eq!(app.session.prefs().file_handling.default_save_format, prefs::SaveFormat::Png);
+    let mut reopened = app_on(&store);
+    tick(&mut reopened, &ctx);
+    assert_eq!(reopened.session.prefs().file_handling.default_save_format, prefs::SaveFormat::Png);
+    assert_eq!(super::fields::choice_label("pcraft"), "PhotoCraft");
+    assert_eq!(super::fields::choice_label("tif"), "TIFF");
+}
+
+#[test]
 fn preferences_dialog_round_trip() {
     let (mut app, _) = app_with_store();
     open_prefs(&mut app, "cursors");

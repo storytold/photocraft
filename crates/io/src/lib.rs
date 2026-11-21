@@ -50,6 +50,7 @@ pub mod export_estimate;
 mod exr_native;
 pub mod exr_parts;
 mod flat;
+pub use flat::flat_holds;
 pub mod gradient_bake;
 pub mod guides_map;
 mod png_steps;
