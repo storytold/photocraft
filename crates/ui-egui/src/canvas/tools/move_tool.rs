@@ -186,8 +186,11 @@ fn press_at(app: &mut PhotocraftApp, p: [f64; 2], mods: Mods, style: ConstrainSt
         return (ToolAction::Done, None);
     }
     // Auto-Select (or ⌘-click while it is off) picks the layer under the pointer first, not when
-    // the selected pixels move. A stand-in keeps the ordinary point-pick behaviour.
-    if !pixels_now && app.ui.tool_options.move_auto_select != mods.cmd {
+    // the selected pixels move. A stand-in keeps the ordinary point-pick behaviour, and takes
+    // Auto-Select as it is set, as in Photoshop: the ⌘ that summons it doesn't turn it round too
+    // (#9619). Only in the Move tool itself does ⌘ flip the option.
+    let flip = mods.cmd && !standing_in;
+    if !pixels_now && app.ui.tool_options.move_auto_select != flip {
         let target = app.ui.tool_options.move_target.clone();
         let auto = !standing_in;
         let mode = if !mods.shift {
