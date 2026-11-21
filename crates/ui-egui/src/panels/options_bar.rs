@@ -87,13 +87,6 @@ fn ending(app: &PhotocraftApp, tool: Tool) -> Option<Ending> {
     }
 }
 
-/// A key of the bar's commit and cancel cells and of the open outline its hints follow: the canvas opens and ends these
-/// edits (a type session, a crop frame, a removal stroke, a lasso outline) without a command, so the options bar's
-/// content version holds this key.
-pub(crate) fn edit_key(app: &PhotocraftApp) -> (Option<End>, bool) {
-    (ending(app, app.ui.tool).map(|ending| ending.end), app.canvas_tools.selection.outline_open())
-}
-
 /// The options bar of the active tool. It is the same arrangement in every theme.
 ///
 /// Each pass applies the commit or cancel its own bar took; a second pass of a frame applies none of the first pass's.

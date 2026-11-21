@@ -1511,6 +1511,7 @@ async fn convention_tool_hints_match_what_each_tool_does() {
     const ADDS: (bool, bool, bool) = (false, false, false);
     const EDITS: (bool, bool, bool) = (false, true, false);
     let expected = [
+        ("agent_folders", READ),
         ("command_list", READ),
         ("doc_inspect", READ),
         ("session_list", READ),

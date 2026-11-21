@@ -576,8 +576,7 @@ pub struct PhotocraftApp {
     pub(crate) hover_doc: Option<[f64; 2]>,
     /// Layer hovered in the Layers panel, outlined on the canvas.
     pub(crate) hover_layer: Option<photocraft_doc::LayerId>,
-    /// The commands run from any source (`menus::invoke`, the commands keys and surfaces fire, the control channel). Every
-    /// settling region's version holds it (`panels::region_versions`): a command may change anything a region shows.
+    /// The commands run from any source (`menus::invoke`, the commands keys and surfaces fire, the control channel).
     pub(crate) commands_run: u64,
     /// A layer whose row the Layers panel opens for renaming in its next pass (Layer › Rename
     /// Layer, the row menu's Rename Layer…).
@@ -947,8 +946,6 @@ mod drag_settle_trials;
 mod layer_thumb_bounds_tests;
 #[cfg(test)]
 mod mask_thumb_refresh_tests;
-#[cfg(test)]
-mod region_version_trials;
 
 #[cfg(test)]
 mod new_doc_remember_tests;
