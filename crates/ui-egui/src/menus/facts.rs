@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use craft::ui::contract::{MemoProps, Revision, Tracked};
 use photocraft_doc::DocId;
+use photocraft_engine::DocState;
 
 use crate::PhotocraftApp;
 
@@ -31,10 +32,9 @@ struct Documents<'a> {
     generation: u64,
     active_generation: u64,
     active_index: Option<usize>,
-    /// The active document and its revision, which moves with every change to it: its content, layers, selection,
-    /// history, mode and mask state, which most rules read.
-    #[memo_props(hash = "a plain model id")]
-    active: Option<(DocId, u64)>,
+    /// The active document, by its `Tracked` revision, which moves with every change to it: its content, layers,
+    /// selection, history, mode, mask and view state, which most rules read.
+    active: Option<&'a Tracked<DocState>>,
     /// A running job greys the commands that would change its document.
     jobs: (bool, Option<u64>),
     /// Smart Objects › Edit Contents' parent: whether the active document is a smart object's contents.
@@ -131,7 +131,7 @@ impl<'a> MenuFacts<'a> {
                 generation: s.documents_generation(),
                 active_generation: s.active_generation(),
                 active_index: s.active_index(),
-                active: active.map(|d| (d.doc.id, d.revision)),
+                active: s.active_tracked(),
                 jobs: (s.has_jobs(), s.active_job().map(|job| job.id.0)),
                 smart_child: active.is_some_and(|d| s.smart_links.iter().any(|link| link.child == d.doc.id)),
                 fade: s.edit_state.fade.as_ref().map(|fade| (fade.doc, fade.revision)),

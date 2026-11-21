@@ -1874,7 +1874,6 @@ impl Session {
                     } else if !st.fx_collapsed.contains(&layer_id) {
                         st.fx_collapsed.push(layer_id);
                     }
-                    st.note_disclosure_change();
                 }
                 self.after_command(id, params, spec.journal, automation, Some(nested_from), pre_selected.as_deref(), &record_before);
                 Ok(Started::Done(v))
@@ -1898,7 +1897,11 @@ impl Session {
     /// keeps the damage it reported. Debug and test builds also count a whole-document redraw of
     /// a small change ([`Session::whole_redraws`]).
     pub(crate) fn note_command_damage(&mut self, id: &str, before: &Arc<Document>, from: u64) {
-        let Some(st) = self.active_mut().filter(|st| st.doc.id == before.id && st.revision > from) else { return };
+        // Read first: the borrow moves the document's `Tracked` revision, and this runs after every command.
+        if !self.active().is_some_and(|st| st.doc.id == before.id && st.revision > from) {
+            return;
+        }
+        let Some(st) = self.active_mut() else { return };
         if st.revision - from > 1 {
             st.last_damage = crate::layer_multi_cmds::step_damage(before, &st.doc);
             st.damage_span = Some((from, st.revision));
@@ -1931,10 +1934,13 @@ impl Session {
     /// stroke on a layer with a Gradient Overlay reports the stroke, but the gradient is laid out
     /// again over the whole grown layer (#4053). `before` is the active document before.
     fn add_relayout_damage(&mut self, before: &Arc<Document>) {
-        let Some(st) = self.active_mut().filter(|st| st.doc.id == before.id && !Arc::ptr_eq(&st.doc, before)) else { return };
+        // Read first: the borrow moves the document's `Tracked` revision, and this runs after every command.
+        let Some(st) = self.active().filter(|st| st.doc.id == before.id && !Arc::ptr_eq(&st.doc, before)) else { return };
         let Some(d) = st.last_damage.filter(|d| !d.is_empty()) else { return };
         let extra = photocraft_compose::relayout_damage(before, &st.doc);
-        if !extra.is_empty() {
+        if !extra.is_empty()
+            && let Some(st) = self.active_mut()
+        {
             st.last_damage = Some(d.union(&extra));
             st.record_damage();
         }
@@ -1971,9 +1977,12 @@ impl Session {
         pre_selected: Option<&[LayerId]>,
         before: &crate::actions_record::Before,
     ) {
-        // A layer-mask view ends when another layer becomes active (#196).
-        if let Some(st) = self.active_mut() {
-            crate::mask_view_cmds::fix(st);
+        // A layer-mask view ends when another layer becomes active (#196). Borrowed to change only when it does: the
+        // borrow moves the document's `Tracked` revision, and this runs after every command.
+        if self.active().is_some_and(crate::mask_view_cmds::stale)
+            && let Some(st) = self.active_mut()
+        {
+            st.channel_view.layer_mask = None;
         }
         crate::edit_menu_cmds::after_command(self, id, &params);
         crate::automate_cmds::after_command(self, id);
