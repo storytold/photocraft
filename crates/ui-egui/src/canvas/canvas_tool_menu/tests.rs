@@ -743,6 +743,33 @@ fn stroke_path_reopens_with_the_simulate_pressure_that_was_applied() {
     assert_eq!(pressure_on_open(&mut app), Some(true), "a failed confirmation remembers nothing");
 }
 
+/// The rows of the column x = 11 (the path's top edge) a stroke left ink on.
+fn ink_rows(app: &PhotocraftApp) -> usize {
+    let st = app.session.active().unwrap();
+    let surface = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
+    (0..8).filter(|&y| surface.rgba(11, y)[0] < 0.99).count()
+}
+
+/// Stroke Path with Tool: Brush paints with the Brush's own size, not the Eraser's that was picked
+/// after it (#16182), and leaves the last brush tool's brush live.
+#[test]
+fn stroke_path_paints_with_the_chosen_tools_own_brush() {
+    let mut app = stroke_app();
+    let ctx = app.ctx().clone();
+    for (tool, size) in [(Tool::Brush, 3.0), (Tool::Eraser, 80.0)] {
+        app.ui.tool = tool;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        app.session.tools.brush.size = size;
+        app.session.tools.brush.hardness = 1.0;
+    }
+    app.ui.tool = Tool::Pen;
+    open_stroke(&mut app);
+    confirm_hosted(&mut app, &ctx);
+    let rows = ink_rows(&app);
+    assert!((1..=5).contains(&rows), "the 3 px Brush stroked {rows} rows");
+    assert_eq!((app.ui.brush_tool, app.session.tools.brush.size), (Tool::Eraser, 80.0), "the Eraser's brush is live again");
+}
+
 #[test]
 fn pen_shape_menu_enables_shape_ops_and_style_copy_only_when_applicable() {
     let mut app = app();
