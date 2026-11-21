@@ -200,6 +200,9 @@ mod triangle_properties_fields_tests;
 mod pen_resume_tests;
 
 #[cfg(test)]
+mod stroke_path_tool_brush_tests;
+
+#[cfg(test)]
 mod pen_enter_deselects_tests;
 
 #[cfg(test)]
