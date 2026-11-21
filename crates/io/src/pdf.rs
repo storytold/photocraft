@@ -265,9 +265,11 @@ pub fn export_with(
         // A page keeps `device` bytes a pixel for its composite and one a pixel for each plate.
         let retained = page_pixels.saturating_mul((device.unwrap_or(0) + plate_count) as u64);
         // One page renders at a time: its f32 composite surface plus the region read back from
-        // it, both `n` channels at 4 bytes per pixel. The whole-document canvas is never held.
+        // it, both `n` channels at 4 bytes per pixel, and between them the resampled surface when
+        // the page is downsampled. The whole-document canvas is never held.
         let largest = artboards.iter().map(|(_, _, a)| rect_pixels(a.rect)).max().unwrap_or(0);
-        let temporary = largest.saturating_mul(n as u64).saturating_mul(4).saturating_mul(2);
+        let stores = if image_scale < 1.0 { 3 } else { 2 };
+        let temporary = largest.saturating_mul(n as u64).saturating_mul(4).saturating_mul(stores);
         let estimate = retained.saturating_add(temporary);
         if estimate > MAX_PDF_EXPORT_BYTES {
             return Err(IoError::Unsupported(format!(
