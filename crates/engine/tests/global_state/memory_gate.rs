@@ -10,12 +10,15 @@ use photocraft_engine::Session;
 use photocraft_raster::headroom;
 use serde_json::json;
 
-/// Holds the lock and the simulated room; resets the simulation when dropped.
+/// Holds the lock and the simulated room; resets the simulation when dropped. It also sets the
+/// transform budget to the default Memory Usage, since other tests in this binary lower it through
+/// the preferences and do not restore it.
 struct Room(#[allow(dead_code)] MutexGuard<'static, ()>);
 
 impl Room {
     fn new(bytes: Option<u64>) -> Room {
         let guard = Room(crate::lock(&crate::PROCESS));
+        photocraft_engine::transform_cmds::set_budget(u64::from(photocraft_engine::prefs::DEFAULT_MEMORY_USAGE_MB) << 20);
         headroom::simulate_available(bytes);
         guard
     }
