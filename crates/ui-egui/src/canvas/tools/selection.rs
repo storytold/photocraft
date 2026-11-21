@@ -80,6 +80,16 @@ impl SelectionTools {
         }
     }
 
+    /// The offset of a pixel drag, whose kind stays latched when Command is released.
+    pub(crate) fn pixel_drag_offset(&self) -> Option<(i32, i32)> {
+        [self.marquee.phase(), self.lasso.phase(), self.polygon.phase(), self.magnetic.phase(), self.wand.drag.phase()].into_iter().find_map(
+            |phase| match phase {
+                SelectPhase::Dragging(drag) if matches!(drag.kind, DragKind::Pixels { .. }) => Some((drag.delta[0], drag.delta[1])),
+                _ => None,
+            },
+        )
+    }
+
     /// The whole-pixel offset of the selection drag in progress, from the tool that runs it.
     pub(crate) fn drag_offset(&self) -> Option<(i32, i32)> {
         [self.marquee.phase(), self.lasso.phase(), self.polygon.phase(), self.magnetic.phase(), self.wand.drag.phase()].into_iter().find_map(drag_delta)
@@ -211,7 +221,14 @@ impl PcSelection {
             (st.doc.id.0 ^ app.session.active_generation(), PixelSize::new(b.width(), b.height()))
         });
         let piece = st.and_then(photocraft_engine::float_cmds::floating).map(|f| Piece { offset: f.offset, outline: f.parts.outline().cloned() });
-        Self { document, size, has_selection: crate::tool_feedback::has_selection(app), selection: st.and_then(|st| st.doc.selection.clone()), piece }
+        Self {
+            document,
+            size,
+            has_selection: st.is_some_and(|st| st.doc.selection.as_ref().is_some_and(|s| s.default_pixel().first().is_some_and(|v| *v > 0.0)))
+                || crate::tool_feedback::has_selection(app),
+            selection: st.and_then(|st| st.doc.selection.clone()),
+            piece,
+        }
     }
 }
 
@@ -236,11 +253,18 @@ impl SelectionProbe for PcSelection {
     }
 
     fn inside_selection(&self, at: Point) -> bool {
-        self.selection.as_ref().is_some_and(|sel| covers(sel, at))
+        self.selection.as_ref().is_some_and(|sel| {
+            let implicit = sel.default_pixel().first().is_some_and(|v| *v > 0.0);
+            (!implicit || (at.x >= 0.0 && at.y >= 0.0 && at.x < f64::from(self.size.width) && at.y < f64::from(self.size.height))) && covers(sel, at)
+        })
     }
 
     fn bounds(&self) -> Option<Rect> {
-        let b = self.selection.as_ref()?.content_bounds();
+        let s = self.selection.as_ref()?;
+        if s.default_pixel().first().is_some_and(|v| *v > 0.0) {
+            return Some(Rect::new(0.0, 0.0, f64::from(self.size.width), f64::from(self.size.height)));
+        }
+        let b = s.content_bounds();
         (!b.is_empty()).then(|| Rect::new(f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)))
     }
 
@@ -616,6 +640,8 @@ fn drag_event(app: &mut PhotocraftApp, prompted: &mut bool, edit: EditEvent<Sele
         }
         EditEvent::Cancel { .. } => {
             *prompted = false;
+            app.move_preview = None;
+            app.move_gpu_preview = None;
             // A cut that never moved goes back, so Undo isn't spent on it.
             if piece_offset(app) == Some((0, 0)) {
                 run(app, "select.drop", json!({}));
@@ -629,6 +655,9 @@ fn drag_event(app: &mut PhotocraftApp, prompted: &mut bool, edit: EditEvent<Sele
 /// already there where it is). A layer that cannot float refuses at the drag's first move instead (`refuse_pixel_drag`).
 fn begin_drag(app: &mut PhotocraftApp, kind: DragKind) {
     let DragKind::Pixels { copy, .. } = kind else { return };
+    if crate::move_ui::color_target(app).is_some() {
+        return;
+    }
     let floating = piece_offset(app).is_some();
     if floating && !copy {
         return;
@@ -657,6 +686,12 @@ fn refuse_pixel_drag(app: &mut PhotocraftApp, prompted: &mut bool, drag: Selecti
 fn finish_drag(app: &mut PhotocraftApp, drag: SelectionDrag) {
     let pixels = matches!(drag.kind, DragKind::Pixels { .. });
     let [dx, dy] = drag.delta;
+    if pixels && crate::move_ui::color_target(app).is_some() {
+        if !crate::move_lock::pixels_locked(app) {
+            crate::move_ui::finish(app, f64::from(dx), f64::from(dy));
+        }
+        return;
+    }
     let offset = piece_offset(app);
     match (pixels, dx == 0 && dy == 0) {
         (true, true) if offset == Some((0, 0)) => {

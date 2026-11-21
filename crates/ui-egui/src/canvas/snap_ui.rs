@@ -42,7 +42,10 @@ pub(crate) struct SnapCache {
 /// tool that hands its press to the Move stand-in. Read before the press so the targets do not
 /// change at it.
 fn moves_as_move_tool(app: &PhotocraftApp) -> bool {
-    app.ui.tool == Tool::Move || (crate::canvas::tools::takes_command_stand_in(app.ui.tool) && craft::ui::runtime::pointer::frame(app.ctx()).mods.cmd)
+    app.canvas_tools.mover.dragging()
+        || (crate::move_ui::color_target(app).is_some() && app.canvas_tools.selection.pixel_drag_offset().is_some())
+        || app.ui.tool == Tool::Move
+        || (crate::canvas::tools::takes_command_stand_in(app.ui.tool) && craft::ui::runtime::pointer::frame(app.ctx()).mods.cmd)
 }
 
 /// The selected pixels move with the drag, so the selection is not a place to snap to (#6290).
@@ -57,6 +60,10 @@ fn selection_moves(app: &PhotocraftApp) -> bool {
 /// group does not snap to its own layers' starting edges), the type layer being edited (a paragraph-box handle drag
 /// does not snap to the text it resizes, #6819) and the layers of the open Free Transform.
 fn moving_set(app: &PhotocraftApp) -> Vec<LayerId> {
+    if moves_as_move_tool(app) && crate::move_ui::color_target(app).is_some() {
+        return app.session.active().and_then(|st| st.active_layer).into_iter().collect();
+    }
+
     let mut set = Vec::new();
     if moves_as_move_tool(app)
         && let Some(st) = app.session.active()

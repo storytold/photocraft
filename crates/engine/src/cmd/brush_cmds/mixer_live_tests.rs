@@ -32,6 +32,41 @@ fn target(s: &Session) -> Surface {
     st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().clone()
 }
 
+#[test]
+fn mixer_live_color_channel_commit_matches_replay_and_preserves_other_samples() {
+    for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+        let mut sessions = [fixture(fmt), fixture(fmt)];
+        for s in &mut sessions {
+            s.execute("edit.fill", json!({"color": "#445566"})).unwrap();
+            s.execute("channel.target", json!({"channel": "green"})).unwrap();
+        }
+        let [mut live_session, mut replay_session] = sessions;
+        let before = target(&live_session);
+        let params = json!({"points": [[40,48], [80,48]], "seed": 47, "size": 24, "wet": 0, "mix": 0, "color": "#ffffff", "cleanAfterStroke": false});
+        let live = LiveMixer::begin(&live_session, &params).unwrap();
+        let commit = live.prepare_commit(&mut live_session).unwrap();
+        let points = parse_points(&commit, "paint.mixerBrush").unwrap();
+        assert!(live_session.live_commit.as_ref().unwrap().matches(&live_session, "paint.mixerBrush", &commit, &points), "reuse the restricted live result");
+        live_session.execute("paint.mixerBrush", commit.clone()).unwrap();
+        replay_session.execute("paint.mixerBrush", commit).unwrap();
+        let after = target(&live_session);
+        let bounds = live_session.active().unwrap().doc.bounds();
+        let actual = after.try_to_interleaved(bounds).unwrap();
+        assert_eq!(actual, target(&replay_session).try_to_interleaved(bounds).unwrap());
+        assert_eq!(live_session.tools.mixer, replay_session.tools.mixer);
+        let original = before.try_to_interleaved(bounds).unwrap();
+        assert!(actual != original, "the green samples changed: {fmt:?}");
+        let bytes = fmt.sample.bytes();
+        for (a, b) in actual.chunks_exact(fmt.bytes_per_pixel()).zip(original.chunks_exact(fmt.bytes_per_pixel())) {
+            for c in [0, 2, 3] {
+                assert_eq!(&a[c * bytes..(c + 1) * bytes], &b[c * bytes..(c + 1) * bytes], "{fmt:?}, channel {c}");
+            }
+        }
+        live_session.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(target(&live_session).try_to_interleaved(bounds).unwrap(), original);
+    }
+}
+
 /// All-layer previews match replay and Undo exactly across supported depths without editing source layers.
 #[test]
 fn mixer_live_empty_layer_exact_commit_undo_source_preservation_and_chunking() {

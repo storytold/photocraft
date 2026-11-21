@@ -703,6 +703,59 @@ fn a_whole_layer_flip_carries_only_a_linked_vector_mask() {
 
 /// An empty targeted vector mask is refused before anything is recorded, so history is unchanged.
 #[test]
+fn vector_mask_presets_keep_explicit_whole_layer_priority() {
+    for many in [false, true] {
+        let (mut s, id) = vector_mask_session(false, asymmetric_vector_path());
+        paint_square(&mut s, Rect::new(2, 2, 4, 6), [1.0, 0.0, 0.0, 1.0]);
+        paint_square(&mut s, Rect::new(4, 2, 6, 6), [0.0, 0.0, 1.0, 1.0]);
+        s.execute("channel.target", json!({"channel":"vectorMask"})).unwrap();
+        let before = mask_path(&s, id);
+        let p = if many { json!({"layers":[id.0]}) } else { json!({"layer":id.0}) };
+        s.execute("edit.transform.flipHorizontal", p).unwrap();
+        assert_eq!(pixel(&s, 2, 2), vec![0.0, 0.0, 1.0, 1.0], "the named layer's pixels flip");
+        assert_eq!(mask_path(&s, id), before, "its unlinked vector mask stays put");
+    }
+}
+
+#[test]
+fn vector_mask_presets_honour_an_explicit_inactive_layer_and_reject_layer_sets() {
+    let (mut s, id) = vector_mask_session(false, asymmetric_vector_path());
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let active = s.active().unwrap().active_layer;
+    s.execute("edit.transform.flipHorizontal", json!({"layer":id.0,"target":"vectorMask"})).unwrap();
+    assert_eq!(mask_path(&s, id).subpaths[0].knots[0].anchor.x, 32.0);
+    assert_eq!(s.active().unwrap().active_layer, active, "the edit does not retarget the panel");
+    let before = s.active().unwrap().doc.clone();
+    let past = s.active().unwrap().history.past_len();
+    assert!(s.execute("edit.transform.flipHorizontal", json!({"layers":[id.0],"target":"vectorMask"})).is_err());
+    assert_eq!(s.active().unwrap().doc, before);
+    assert_eq!(s.active().unwrap().history.past_len(), past);
+}
+
+#[test]
+fn an_explicit_colour_preset_wins_over_the_vector_mask_panel_target() {
+    let (mut s, id) = vector_mask_session(false, asymmetric_vector_path());
+    paint_square(&mut s, Rect::new(2, 2, 4, 6), [1.0, 0.0, 0.0, 1.0]);
+    paint_square(&mut s, Rect::new(4, 2, 6, 6), [0.0, 0.0, 1.0, 1.0]);
+    s.execute("channel.target", json!({"channel":"vectorMask"})).unwrap();
+    let path = mask_path(&s, id);
+    let bounds = doc(&s).bounds();
+    let before = active(&s).surface().unwrap().read_region(bounds);
+    s.execute("edit.transform.flipHorizontal", json!({"target":{"color":0}})).unwrap();
+    let after = active(&s).surface().unwrap().read_region(bounds);
+    assert_eq!(mask_path(&s, id), path);
+    assert_ne!(after, before, "the colour component did move");
+    for (a, b) in before.as_chunks::<4>().0.iter().zip(after.as_chunks::<4>().0) {
+        assert_eq!(&a[1..], &b[1..], "untargeted components and alpha stay exact");
+    }
+    let before = s.active().unwrap().doc.clone();
+    for command in ["edit.transform", "edit.transform.warp"] {
+        assert!(s.execute(command, json!({"target":"vectorMask"})).is_err(), "vector paths use their own workflow");
+        assert_eq!(s.active().unwrap().doc, before);
+    }
+}
+
+#[test]
 fn an_empty_targeted_vector_mask_refuses_without_history() {
     let (mut s, id) = vector_mask_session(true, photocraft_doc::Path::default());
     let before = s.active().unwrap().doc.clone();

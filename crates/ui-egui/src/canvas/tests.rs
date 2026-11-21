@@ -1145,6 +1145,12 @@ fn free_transform_redraws_only_the_moving_layer_when_the_box_opens_and_closes() 
     assert!(damage_since(&app, 0, (rev, key ^ dk), (rev + 2, 0), dk, (rev + 1, Some(moved))).is_none(), "a later revision isn't ours");
 }
 
+#[path = "channel_merge_guide_ants_tests.rs"]
+mod channel_merge_guide_ants_tests;
+
+#[path = "channel_merge_tests.rs"]
+mod channel_merge_tests;
+
 mod gpu_tests {
     use super::*;
 

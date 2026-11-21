@@ -2361,3 +2361,6 @@ fn the_unsaved_changes_prompt_is_listed_as_discard_and_answered_by_that_id() {
     crate::canvas::testing::frame(&mut app);
     assert!(app.session.documents().is_empty(), "Don't Save closed the document");
 }
+
+#[path = "channel_merge_tests.rs"]
+mod channel_merge_tests;

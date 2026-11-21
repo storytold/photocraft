@@ -343,6 +343,7 @@ impl PhotocraftApp {
 
     /// Reconciles canvas view state with open documents in the session.
     pub fn sync_views(&mut self) {
+        crate::move_ui::cancel_stale_gpu(self);
         // The Paths panel selection and canvas context menu belong to the active document.
         // Ordinary edits replace the snapshot and advance its revision; a replaced snapshot
         // without a newer revision is a reopened document, even with the same ID.

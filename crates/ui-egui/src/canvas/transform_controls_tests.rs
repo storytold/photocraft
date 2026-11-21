@@ -322,3 +322,6 @@ fn the_background_among_several_joins_the_frame_and_its_handles_refuse() {
     assert_eq!(begin_controls(&mut app, &ctx), ControlsPress::Started);
     assert_eq!(app.ui.transform.as_ref().unwrap().layers, [a.0, b.0]);
 }
+
+#[path = "channel_merge_transform_controls_tests.rs"]
+mod channel_merge_tests;

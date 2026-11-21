@@ -394,10 +394,14 @@ impl PhotocraftApp {
         // The log tells a drop that never reached the app (the operating system, or an elevated
         // process, refused it) from one the app routed (#10492). File names stay out of it.
         log::info!("{} file(s) dropped on the window: {to:?}", files.len());
-        let frame = match to {
-            DropTo::Canvas { at } => at.and_then(|p| crate::frame_tool::frame_at(self, p)),
-            DropTo::Slot(_) | DropTo::Window => None,
-        };
+        // Capture the destination before a preceding placement can change the active document.
+        let destination = self.session.active().filter(|_| matches!(to, DropTo::Canvas { .. })).map(|st| {
+            let frame = match to {
+                DropTo::Canvas { at } => at.and_then(|p| crate::frame_tool::frame_at(self, p)),
+                DropTo::Slot(_) | DropTo::Window => None,
+            };
+            (st.doc.id, frame)
+        });
         let mut slot = match to {
             DropTo::Slot(slot) => Some(slot),
             DropTo::Canvas { .. } | DropTo::Window => None,
@@ -405,7 +409,11 @@ impl PhotocraftApp {
         // A box still open from an earlier drop (or any Free Transform) is applied first (#4833):
         // the queue below places the next file only once no box is open, so a separate drop
         // would otherwise wait unseen for ↩. Files dropped together still go one by one.
-        if matches!(to, DropTo::Canvas { .. }) && self.ui.transform.is_some() && files.iter().any(|f| to.route(&dropped_name(f)) == DropRoute::Place) {
+        if matches!(to, DropTo::Canvas { .. })
+            && self.ui.transform.is_some()
+            && !photocraft_engine::channel_transform::locked(&self.session)
+            && files.iter().any(|f| to.route(&dropped_name(f)) == DropRoute::Place)
+        {
             crate::transform_tool::commit(self);
         }
         for f in files {
@@ -419,7 +427,7 @@ impl PhotocraftApp {
                 continue;
             }
             if route == DropRoute::Place {
-                if let Some(doc) = self.session.active().map(|st| st.doc.id) {
+                if let Some((doc, frame)) = destination {
                     self.queue_drop(doc, DropPlace::At { source: Box::new(DropPlace::File(f)), frame });
                 }
                 continue;
@@ -445,13 +453,14 @@ impl PhotocraftApp {
     /// [`Services::place_inbox`](crate::Services::place_inbox) and the rest through
     /// [`Services::inbox`](crate::Services::inbox). The pointer comes from
     /// [`cursor_pos`](Self::cursor_pos). As with a desktop canvas drop, a Free
-    /// Transform still open is applied first (#4833).
+    /// Transform still open is applied first (#4833), except an isolated channel transform,
+    /// whose placement queue waits for an explicit commit or cancel.
     pub fn dropped_on_canvas(&mut self, ctx: &egui::Context, names: &[String]) -> Vec<bool> {
         let at = self.cursor_pos(ctx);
         let to = self.drop_to(ctx, at);
         let canvas = matches!(to, DropTo::Canvas { .. });
         let places: Vec<bool> = names.iter().map(|n| canvas && to.route(n) == DropRoute::Place).collect();
-        if places.contains(&true) && self.ui.transform.is_some() {
+        if places.contains(&true) && self.ui.transform.is_some() && !photocraft_engine::channel_transform::locked(&self.session) {
             crate::transform_tool::commit(self);
         }
         places
@@ -520,7 +529,12 @@ impl PhotocraftApp {
         }
         // A box still preparing (or its canceled job not yet handled) holds the queue too: the
         // next place would lock the document before a canceled place could be taken back.
-        while self.ui.transform.is_none() && self.transform_preparing.is_none() && self.jobs.place.is_none() && self.session.active_job().is_none() {
+        while self.ui.transform.is_none()
+            && !photocraft_engine::channel_transform::locked(&self.session)
+            && self.transform_preparing.is_none()
+            && self.jobs.place.is_none()
+            && self.session.active_job().is_none()
+        {
             let Some(active) = self.session.active().map(|st| st.doc.id) else { return };
             let Some((_, next)) = self.drop_places.iter().position(|(doc, _)| *doc == active).and_then(|i| self.drop_places.remove(i)) else {
                 return;

@@ -146,13 +146,17 @@ fn rect4(r: photocraft_geom::Rect) -> [f64; 4] {
 /// along.
 fn moving_box(app: &PhotocraftApp, pixels: bool) -> Option<[f64; 4]> {
     let st = app.session.active()?;
-    if pixels {
+    if pixels || (crate::move_ui::color_target(app).is_some() && st.doc.selection.is_some()) {
         let sel = st.doc.selection.as_ref()?;
         let b = match photocraft_engine::float_cmds::floating(st) {
             Some(f) => f.parts.outline().unwrap_or(sel).content_bounds().translate(f.offset.0, f.offset.1),
+            None if crate::move_ui::color_target(app).is_some() && sel.default_pixel().first().is_some_and(|v| *v > 0.0) => st.doc.bounds(),
             None => sel.content_bounds(),
         };
         return (!b.is_empty()).then(|| rect4(b));
+    }
+    if crate::move_ui::color_target(app).is_some() {
+        return st.active_layer.and_then(|id| crate::snap_ui::tree_rect(&st.doc, id));
     }
     photocraft_engine::layer_multi_cmds::move_targets(&st.doc, st.selected_layers())
         .into_iter()
@@ -180,14 +184,9 @@ fn press_at(app: &mut PhotocraftApp, p: [f64; 2], mods: Mods, style: ConstrainSt
     if !pixels_now && app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some()) {
         let _ = app.run("select.drop", json!({}));
     }
-    // PLAN: `multiple_color_target` lives in `canvas/strokes.rs`; its owner may move it.
-    if crate::canvas::strokes::multiple_color_target(app) {
-        app.ui.status = "Move and transforms on several color channels are not implemented yet".into();
-        return (ToolAction::Done, None);
-    }
     // Auto-Select (or ⌘-click while it is off) picks the layer under the pointer first, not when
     // the selected pixels move. A stand-in keeps the ordinary point-pick behaviour.
-    if !pixels_now && app.ui.tool_options.move_auto_select != mods.cmd {
+    if !pixels_now && crate::move_ui::color_target(app).is_none() && app.ui.tool_options.move_auto_select != mods.cmd {
         let target = app.ui.tool_options.move_target.clone();
         let auto = !standing_in;
         let mode = if !mods.shift {
@@ -238,10 +237,16 @@ fn press_at(app: &mut PhotocraftApp, p: [f64; 2], mods: Mods, style: ConstrainSt
     if crate::move_lock::blocked(app, standing_in) {
         return (ToolAction::Claimed, Some(Run::plain(Kind::Refused, p)));
     }
+
+    if mods.alt && crate::move_ui::native_copy_unsupported(app) {
+        app.ui.status = crate::move_ui::COPY_SET_DRAG_UNSUPPORTED.into();
+        app.ui.status_error = true;
+        return (ToolAction::Done, None);
+    }
     let gesture = MoveGesture::press(&style, Point::new(p[0], p[1]), mods, Directions::Eight);
     // With a selection: cut the selected pixels (⌥ copies them) and drag them as a floating piece,
     // from anywhere.
-    if crate::move_ui::moves_selected_pixels_with(app, Tool::Move) {
+    if crate::move_ui::floats_selected_pixels_with(app, Tool::Move) {
         let before = app.session.active().and_then(photocraft_engine::float_cmds::floating).cloned();
         if !crate::move_ui::float_selected_for_drag(app, mods.alt) {
             return (ToolAction::Done, None);
@@ -265,14 +270,14 @@ fn press_at(app: &mut PhotocraftApp, p: [f64; 2], mods: Mods, style: ConstrainSt
 /// (`readout`), the readout; the release applies its last sample without one.
 /// A pass applies only its own pointer sample, so a second pass of a frame moves the offset to
 /// the sample it is given and never re-applies an earlier one.
-fn follow(run: &mut Run, app: &mut PhotocraftApp, pointer: &ToolPointer, cx: &mut ToolContext<'_>, readout: bool) {
-    let Some(space) = cx.space() else { return };
-    let Some(gesture) = run.gesture.as_mut() else { return };
+fn follow(run: &mut Run, app: &mut PhotocraftApp, pointer: &ToolPointer, cx: &mut ToolContext<'_>, readout: bool) -> bool {
+    let Some(space) = cx.space() else { return true };
+    let Some(gesture) = run.gesture.as_mut() else { return true };
     let zoom = space.view.zoom;
     gesture.follow(space.view.to_doc(pointer.pos), pointer.mods, zoom);
     // Inside its press the move is still a click: nothing snaps or moves.
     if !gesture.left_press() {
-        return;
+        return true;
     }
     let mut delta = gesture.value().delta;
     if let Some(b) = run.box_rect {
@@ -280,7 +285,15 @@ fn follow(run: &mut Run, app: &mut PhotocraftApp, pointer: &ToolPointer, cx: &mu
     }
     if run.kind == Kind::Layers {
         // PLAN: assumed `move_mods::moved(app, screen_len)` (tools-w65) duplicates once past its threshold.
-        crate::move_mods::moved(app, delta.hypot() * zoom);
+        if !crate::move_mods::moved(app, delta.hypot() * zoom) {
+            run.kind = Kind::Refused;
+            run.prompted = true;
+            run.moved = false;
+            app.move_preview = None;
+            app.move_gpu_preview = None;
+            crate::move_mods::finish(app);
+            return false;
+        }
     }
     let whole = |v: f64| v.round().clamp(-1e7, 1e7) as i32;
     let (dx, dy) = (whole(delta.x), whole(delta.y));
@@ -290,6 +303,7 @@ fn follow(run: &mut Run, app: &mut PhotocraftApp, pointer: &ToolPointer, cx: &mu
     if readout {
         cx.readout(vec![(Label::from("ΔX"), format!("{dx} px")), (Label::from("ΔY"), format!("{dy} px"))]);
     }
+    true
 }
 
 impl CanvasTool for MoveRun<'_> {
@@ -330,7 +344,11 @@ impl CanvasTool for MoveRun<'_> {
                     self.scope.with_app(crate::move_lock::prompt);
                 }
             }
-            Kind::Layers | Kind::Pixels => self.scope.with_app(|app| follow(run, app, pointer, cx, true)),
+            Kind::Layers | Kind::Pixels => {
+                if !self.scope.with_app(|app| follow(run, app, pointer, cx, true)) {
+                    self.state.run = None;
+                }
+            }
         }
     }
 
@@ -345,7 +363,9 @@ impl CanvasTool for MoveRun<'_> {
             Kind::Refused => {}
             Kind::Layers | Kind::Pixels => {
                 // A click (released without leaving its press) never moves: `follow` snaps nothing inside the press.
-                follow(&mut run, app, pointer, cx, false);
+                if !follow(&mut run, app, pointer, cx, false) {
+                    return;
+                }
                 let (dx, dy) = run.offset;
                 if run.kind == Kind::Layers {
                     if run.moved {
@@ -427,6 +447,9 @@ impl CanvasTool for MoveRun<'_> {
     }
 
     fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        if let Some(cursor) = self.scope.with_app(|app| crate::move_ui::native_selection_cursor(app, cx.mods, self.state.offset().is_some())) {
+            return cursor;
+        }
         let alt = cx.mods.alt;
         if self.scope.with_app(|app| crate::move_mods::copying(app, alt)) { Cursor::System(CursorIcon::Copy) } else { Cursor::System(CursorIcon::Default) }
     }

@@ -52,6 +52,7 @@ mod gpu_tests {
     mod adjust_preview_gpu;
     mod arbitrary_rotation_preview;
     mod canvas_16f;
+    mod channel_mask_preview;
     mod checker_canvas;
     mod color_managed_canvas;
     mod display_shadows;

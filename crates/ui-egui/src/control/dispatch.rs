@@ -781,6 +781,17 @@ struct PanelSet {
 
 impl PanelSet {
     fn parse(app: &PhotocraftApp, p: &Value) -> std::result::Result<Self, String> {
+        let mask_target = bool_field(p, "maskTarget")?;
+        let vector_mask_target = bool_field(p, "vectorMaskTarget")?;
+        let filter_mask_target = bool_field(p, "filterMaskTarget")?;
+        if photocraft_engine::channel_transform::locked(&app.session)
+            && (mask_target.is_some_and(|v| v != app.ui.mask_target)
+                || vector_mask_target.is_some_and(|v| v != app.ui.vector_mask_target)
+                || filter_mask_target.is_some_and(|v| v != app.ui.filter_mask_target.is_some()))
+        {
+            return Err(photocraft_engine::channel_transform::LOCKED.into());
+        }
+
         let mut writes: Vec<Write> = Vec::new();
         // The Histogram panel: its options, the dragged tonal range ([from, to] levels or
         // null) and Uncached Refresh.

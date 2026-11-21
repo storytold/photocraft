@@ -469,6 +469,11 @@ fn blending_json(b: &Blending, layer: LayerId) -> Value {
 /// Opens the Layer Style dialog on the active layer; `select` is a `KINDS` key, `STYLES_PAGE` or
 /// `BLENDING`. `None` when there is no active layer, or when a Free Transform box refuses to apply.
 pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
+    if photocraft_engine::channel_transform::locked(&app.session) {
+        app.ui.status = photocraft_engine::channel_transform::LOCKED.into();
+        app.ui.status_error = true;
+        return None;
+    }
     // An open Free Transform box is applied first, as in Photoshop (#4821): the canvas shows the
     // box's preview while it is open, so the dialog's preview would not show until Enter.
     if app.ui.transform.is_some() {
@@ -525,6 +530,11 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
 /// Double-click on an effect row of the Layers panel: open Layer Style for that row's layer. A
 /// row of another layer selects it first, as its right-click menu does (Photoshop does the same).
 pub fn open_for_layer(app: &mut PhotocraftApp, layer: LayerId, select: Option<&str>) -> Option<DialogId> {
+    if photocraft_engine::channel_transform::locked(&app.session) {
+        app.ui.status = "Finish or cancel the channel transform before changing its edit target".into();
+        app.ui.status_error = true;
+        return None;
+    }
     let active = app.session.active().is_some_and(|s| s.active_layer == Some(layer));
     if !active {
         app.run("layer.select", json!({"layer": layer.0})).ok()?;

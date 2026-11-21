@@ -236,6 +236,88 @@ fn cpu_pixel_grid_is_not_drawn_over_empty_checker() {
     }
 }
 
+#[test]
+fn channel_transform_preview_hides_the_cached_pixel_grid_until_cancel() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut h) = harness_with(false) else { return };
+    h.run_steps(4);
+    let (before, x0, y0, _) = render_on(&mut h, false, 8.0, 24, true, true);
+    let (x, y) = (x0 + 8, y0 + 28);
+    assert!(!lit_columns(&before, x, y, 64).is_empty(), "the ordinary canvas draws the grid");
+
+    h.state_mut().run("channel.target", json!({"channel":"green"})).unwrap();
+    control(&mut h, "ui.menu.invoke", json!({"id":"edit.freeTransform"}));
+    assert!(h.state().ui.transform.is_some());
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(4);
+    let with_grid = h.render().unwrap();
+
+    h.state_mut().ui.view.show.pixel_grid = false;
+    h.run_steps(4);
+    let without_grid = h.render().unwrap();
+    for x in x..x + 64 {
+        assert_eq!(with_grid.get_pixel(x, y), without_grid.get_pixel(x, y), "stale grid at ({x}, {y})");
+    }
+
+    h.state_mut().ui.view.show.pixel_grid = true;
+    photocraft_ui_egui::transform_tool::cancel(h.state_mut());
+    h.run_steps(4);
+    let after = h.render().unwrap();
+    for x in x..x + 64 {
+        assert_eq!(after.get_pixel(x, y).0, before.at(x, y), "the grid returns at ({x}, {y})");
+    }
+}
+
+#[test]
+fn isolated_colour_drag_replaces_the_document_picture_until_commit() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    for gpu in [false, true] {
+        let Some(mut h) = harness_with(gpu) else { return };
+        let (_, x0, y0, _) = render_on(&mut h, gpu, 2.0, 96, true, false);
+        let app = h.state_mut();
+        app.background_jobs = false;
+        app.session.tools.background = [0.0, 0.0, 0.0, 1.0];
+        app.session
+            .edit("Synthetic channel preview fixture", |doc, active| {
+                let bounds = doc.bounds();
+                let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                surface.fill_rect(bounds, &[0.2, 0.0, 0.4, 1.0]);
+                surface.fill_rect(photocraft_geom::Rect::new(16, 32, 32, 64), &[0.2, 1.0, 0.4, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.run("channel.target", json!({"channel":"green"})).unwrap();
+        app.run("channel.setVisible", json!({"channel":"composite","visible":true})).unwrap();
+        let doc = app.session.active().unwrap().doc.clone();
+        let read = |h: &mut Harness| {
+            h.run_steps(8);
+            let image = h.render().unwrap();
+            [24, 60].map(|x| image.get_pixel(x0 + 2 * x + 1, y0 + 81).0)
+        };
+        let [green, plain] = read(&mut h);
+        assert!(green[1] > 240 && plain[1] < 10, "fixture has a distinct green patch: {green:?} {plain:?}");
+
+        control(&mut h, "ui.menu.invoke", json!({"id":"edit.freeTransform"}));
+        assert!(h.state().ui.transform.is_some());
+        let position = |x: f32| egui::pos2(x0 as f32 + 2.0 * x, y0 as f32 + 88.0);
+        let drag_button =
+            |x, pressed| egui::Event::PointerButton { pos: position(x), button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        h.event(egui::Event::PointerMoved(position(38.0)));
+        h.event(drag_button(38.0, true));
+        h.event(egui::Event::PointerMoved(position(74.0)));
+        let preview = read(&mut h);
+        assert!(h.state().ui.transform.is_some());
+        assert!(std::sync::Arc::ptr_eq(&h.state().session.active().unwrap().doc, &doc));
+        assert_eq!(preview, [plain, green], "GPU canvas {gpu}: show the moved green patch once, under the handles");
+
+        h.event(drag_button(74.0, false));
+        h.key_press(egui::Key::Enter);
+        let committed = read(&mut h);
+        assert!(h.state().ui.transform.is_none());
+        assert_eq!(committed, preview, "GPU canvas {gpu}: preview agrees with commit");
+    }
+}
+
 /// The pixel grid over a flat `grey` document at 800%: the largest difference, in 8-bit levels,
 /// between a grid line and the pixel interior beside it.
 fn grid_line_contrast_over_grey(h: &mut Harness, grey: u8) -> i32 {

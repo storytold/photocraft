@@ -290,3 +290,6 @@ fn moving_selected_pixels_snaps_to_a_linked_layer() {
     assert_eq!(sel, Some(80), "snapped to the linked layer's top");
     assert_eq!(child_bounds(&app, "linked").y0, 120, "the linked layer stayed put");
 }
+
+#[path = "channel_merge_tests.rs"]
+mod channel_merge_tests;

@@ -111,6 +111,8 @@ pub(crate) fn damage(
 /// full-resolution textures of those pixels.
 pub struct OpenPreview {
     pub session: u64,
+    // The native caches stay on the heap so opening a transform does not grow the app stack.
+    pub(crate) channel: Option<Box<crate::channel_transform_preview::Preview>>,
     pub doc: Arc<Document>,
     pub textures: PreviewTextures,
     pub opacity: f32,
@@ -148,6 +150,7 @@ impl OpenPreview {
     fn new(session: u64, doc: Arc<Document>, textures: PreviewTextures, tool: Tool) -> Self {
         Self {
             session,
+            channel: None,
             doc,
             textures,
             opacity: 1.0,

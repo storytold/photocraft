@@ -361,7 +361,11 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
         let doc = current.as_ref().unwrap_or(doc);
         let size = PixelSize::new(doc.size.width, doc.size.height);
         // The picture is prepared after the controls, so a gradient's live proposal shows in the pass that made it.
-        let picture = gpu_ok
+        if app.gpu.as_ref().is_some_and(super::channel_transform_gpu::poll_validation) {
+            ctx.request_repaint();
+        }
+        let isolated_texture = super::channel_transform_preview::texture(app, ctx, idx, output).or_else(|| super::move_ui::channel_texture(app, idx, output));
+        let picture = (gpu_ok && isolated_texture.is_none())
             .then(|| {
                 let (xf, target) = (&drawn, &given);
                 // PLAN: `live` is the field canvas-widgets-w32 adds to `GpuRequest` (cw.P19); its name follows w32's decision.
@@ -378,13 +382,14 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
         }
         let prepared = match picture {
             Some(picture) => Some(Prepared::Gpu(picture)),
-            None => CompositePrep::new(app, ctx, idx, output, live.as_ref()).map(Prepared::Cpu),
+            None if isolated_texture.is_none() => CompositePrep::new(app, ctx, idx, output, live.as_ref()).map(Prepared::Cpu),
+            None => None,
         };
         // The grid reads the committed composite; with the GPU picture on there is no CPU one yet.
         let grid_prep = (app.ui.view.shows(app.ui.view.show.pixel_grid) && matches!(prepared, Some(Prepared::Gpu(_))))
             .then(|| CompositePrep::new(app, ctx, idx, output, None))
             .flatten();
-        let overlay = OverlayPrep::new(app, ctx, idx, output, live.as_ref());
+        let overlay = isolated_texture.is_none().then(|| OverlayPrep::new(app, ctx, idx, output, live.as_ref())).flatten();
         // The canvas edge isn't outlined while the pixels past it show (Photoshop's crop preview), nor while the Crop
         // tool hides everything outside its box (Show Cropped Area off).
         let edge = border == PageBorder::Line && !crate::crop_ui::shows_beyond_canvas(app) && !crate::crop_ui::hides_canvas_edge(app);
@@ -398,11 +403,14 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
             Some(Prepared::Cpu(prep)) => (None, Some(prep.source(app))),
             None => (None, None),
         };
-        let overlay = overlay.map(|prep| prep.source(app));
+        let overlay = overlay.filter(|_| isolated_texture.is_none()).map(|prep| prep.source(app));
         let bounds = gpu.as_ref().map(GpuPicture::bounds).or_else(|| composite.as_ref().map(|c| c.bounds())).unwrap_or_else(|| doc.bounds());
         let mapping = (bounds != doc.bounds()).then(|| placement(bounds));
         let frame = Frame { checker: checker.as_ref(), edge, mapping, pattern, region };
-        if let Some(picture) = &gpu {
+        if let Some(texture) = isolated_texture {
+            let paint = super::channel_transform_preview::paint(texture, [doc.size.width, doc.size.height]);
+            frame.apply(RasterDisplay::painted(label.clone(), size, paint)).picture().show_at(ui, body.rect);
+        } else if let Some(picture) = &gpu {
             frame.apply(RasterDisplay::painted(label.clone(), size, picture.clone().into_paint())).picture().show_at(ui, body.rect);
         } else if let Some(composite) = &composite {
             let started = crate::gpu_canvas::now_ms();
@@ -471,22 +479,33 @@ fn pasteboards(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: Rect, idx: usiz
 
 /// The selection's marching ants, the Layer Edges outline and the pixel grid.
 fn selection_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: Rect, idx: usize, label: &str) {
-    let ants = ants_shown(app, idx);
-    if let Some(state) = app.session.documents().get(idx) {
-        let doc = state.doc.clone();
-        if let Some(selection) = doc.selection.as_ref() {
-            let mask = super::outline::SurfaceMask::new(selection, selection.generation(), [doc.size.width, doc.size.height]);
-            // The map is `transform_tool::selection_map` while a Free Transform carries the selection.
-            let mut overlay = SelectionOverlay::new(label.to_owned(), &mask).visible(ants.is_some()).offset(ants.map_or([0, 0], |(x, y)| [x, y]));
-            if let Some(map) = crate::transform_tool::selection_map(app, doc.id) {
-                overlay = overlay.mapped(map);
-            }
-            overlay.show_at(ui, rect);
-        }
-    }
+    show_selection(app, ui, rect, idx, label);
     if let Some(edges) = super::transform_controls::layer_edges(app, idx) {
         SelectionOutline::solid(label.to_owned(), std::slice::from_ref(&edges)).show_at(ui, rect);
     }
+}
+
+/// The shared selection overlay, with the same bounded and wrapped coverage the native edit commits.
+pub(super) fn show_selection(
+    app: &PhotocraftApp,
+    ui: &mut egui::Ui,
+    rect: Rect,
+    idx: usize,
+    label: &str,
+) -> Option<craft::imaging::ui::selection::SelectionOverlayOutput> {
+    let ants = ants_shown(app, idx);
+    let state = app.session.documents().get(idx)?;
+    let doc = &state.doc;
+    let floated = super::tools::selection::floating_outline(app, idx);
+    let selection = floated.as_ref().or(doc.selection.as_ref())?;
+    let wrapped = floated.is_none().then(|| crate::move_ui::wrapped_selection_offset(app, idx)).flatten();
+    let mask = super::outline::SurfaceMask::new(selection, selection.generation(), [doc.size.width, doc.size.height]).wrapped(wrapped);
+    let offset = if wrapped.is_some() { [0, 0] } else { ants.map_or([0, 0], |(x, y)| [x, y]) };
+    let mut overlay = SelectionOverlay::new(label.to_owned(), &mask).visible(ants.is_some()).offset(offset);
+    if let Some(map) = crate::transform_tool::selection_map(app, doc.id) {
+        overlay = overlay.mapped(map);
+    }
+    Some(overlay.show_at(ui, rect))
 }
 
 /// The controls the tools show over the document, in the order that decides who takes a press: a control shown later

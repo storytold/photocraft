@@ -23,6 +23,8 @@ use photocraft_raster::{Surface, from_rgba, to_rgba};
 use crate::PhotocraftApp;
 
 struct CompositeSource<'a> {
+    display: Option<&'a photocraft_engine::display_color::CanvasDisplay>,
+    band_rows: i32,
     /// What printed spot inks go through on their way to the screen.
     screen: &'a Screen,
 }
@@ -80,8 +82,7 @@ pub struct Screen {
 
 impl Screen {
     /// How the canvas shows `doc` on `display` (`None`: the main window's).
-    pub fn of(app: &PhotocraftApp, doc: &Document, display: Option<u32>) -> Screen {
-        let color = &app.session.color;
+    pub fn of(color: &photocraft_engine::color_cmds::ColorState, doc: &Document, display: Option<u32>) -> Screen {
         let display = display.or(color.main_display);
         let Ok(d) = color.canvas_display_for(doc, display) else { return Screen::default() };
         let proof = color.proof_ref(doc.id).is_some_and(|p| p.enabled);
@@ -90,8 +91,7 @@ impl Screen {
     }
 
     /// A key that changes with [`Screen::of`].
-    pub fn key(app: &PhotocraftApp, doc: &Document, display: Option<u32>) -> u64 {
-        let color = &app.session.color;
+    pub fn key(color: &photocraft_engine::color_cmds::ColorState, doc: &Document, display: Option<u32>) -> u64 {
         color.display_signature_for(doc, display.or(color.main_display))
     }
 
@@ -131,9 +131,11 @@ fn proxy(doc: &Document, r: Rect, factor: u32) -> Option<Document> {
 
 /// Composite RGBA (over white, like Photoshop's channel views) at `factor` stride.
 /// Render in bands instead of allocating a full-resolution float composite to sample a preview.
-fn composite(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
+fn composite(doc: &Document, r: Rect, factor: u32, band_rows: i32) -> Vec<[f32; 4]> {
     let (w, h) = (r.width().div_ceil(factor), r.height().div_ceil(factor));
-    if let Some(p) = proxy(doc, r, factor) {
+    if band_rows == 0
+        && let Some(p) = proxy(doc, r, factor)
+    {
         let mut out = Vec::with_capacity((w * h) as usize);
         let _ = photocraft_compose::render_bands(&p, Rect::new(0, 0, w as i32, h as i32), 0, |band| -> Result<(), ()> {
             out.extend(band.px.iter().map(|p| {
@@ -146,21 +148,23 @@ fn composite(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
             return out;
         }
     }
-    composite_sampled(doc, r, factor)
+    composite_sampled(doc, r, factor, band_rows)
 }
 
 /// A CMYK document's inks (see [`ink_samples`]) of `r` at `factor` stride, from the [`proxy`]
 /// when there is one.
-fn inks(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
-    if let Some(p) = proxy(doc, r, factor) {
+fn inks(doc: &Document, r: Rect, factor: u32, band_rows: i32) -> Vec<[f32; 4]> {
+    if band_rows == 0
+        && let Some(p) = proxy(doc, r, factor)
+    {
         let (w, h) = (r.width().div_ceil(factor) as i32, r.height().div_ceil(factor) as i32);
         let (xs, ys): (Vec<i32>, Vec<i32>) = ((0..w).collect(), (0..h).collect());
-        return ink_samples(&p, &xs, &ys);
+        return ink_samples_banded(&p, &xs, &ys, band_rows);
     }
     let f = factor as usize;
     let xs: Vec<i32> = (r.x0..r.x1).step_by(f).collect();
     let ys: Vec<i32> = (r.y0..r.y1).step_by(f).collect();
-    ink_samples(doc, &xs, &ys)
+    ink_samples_banded(doc, &xs, &ys, band_rows)
 }
 
 /// The C, M, Y and K inks of `doc` flattened onto white paper (no ink) at document pixels `xs` ×
@@ -168,12 +172,16 @@ fn inks(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
 /// views show them, not the composite separated again from RGB: a 100/100/100/0 black has no K
 /// (#8359). Composited in bands, so no full-size ink composite is held.
 pub(crate) fn ink_samples(doc: &Document, xs: &[i32], ys: &[i32]) -> Vec<[f32; 4]> {
+    ink_samples_banded(doc, xs, ys, 0)
+}
+
+fn ink_samples_banded(doc: &Document, xs: &[i32], ys: &[i32], band_rows: i32) -> Vec<[f32; 4]> {
     let mut out = Vec::with_capacity(xs.len() * ys.len());
     let (Some(&x0), Some(&x1)) = (xs.first(), xs.last()) else {
         return out;
     };
     let fmt = PixelFormat { alpha: false, ..doc.pixel_format() };
-    let rows = photocraft_compose::band_rows_for((x1 - x0 + 1) as u32, 0);
+    let rows = photocraft_compose::band_rows_for((x1 - x0 + 1) as u32, band_rows);
     let mut row = Vec::new();
     let mut i = 0;
     while i < ys.len() {
@@ -202,11 +210,11 @@ fn shows_inks(doc: &Document, v: &ChannelView) -> bool {
 }
 
 /// [`composite`] sampled from the full-resolution composite, rendered in bands.
-fn composite_sampled(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
+fn composite_sampled(doc: &Document, r: Rect, factor: u32, band_rows: i32) -> Vec<[f32; 4]> {
     let (w, h) = (r.width().div_ceil(factor), r.height().div_ceil(factor));
     let mut out = Vec::with_capacity((w * h) as usize);
     let f = factor as i32;
-    let _ = photocraft_compose::render_bands(doc, r, 0, |band| -> Result<(), ()> {
+    let _ = photocraft_compose::render_bands(doc, r, band_rows, |band| -> Result<(), ()> {
         let first = band.rect.y0 + (r.y0 - band.rect.y0).rem_euclid(f);
         for y in (first..band.rect.y1).step_by(factor as usize) {
             for x in (r.x0..r.x1).step_by(factor as usize) {
@@ -220,17 +228,13 @@ fn composite_sampled(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
     out
 }
 
-/// The samples of `r` (see [`composite`], or [`inks`] when `ink`).
-fn composite_px(doc: &Document, r: Rect, factor: u32, ink: bool) -> Vec<[f32; 4]> {
-    if ink { inks(doc, r, factor) } else { composite(doc, r, factor) }
-}
-
 /// The samples of `r` (see [`composite`]) at the grid indices `inked` (ascending), in that order.
 /// A few inked pixels of a big document render just their bounding box; when that costs no less
 /// than the whole composite (a proxy renders it at about 1/factor² of the pixels), the whole one
-/// is used.
-fn composite_at(doc: &Document, r: Rect, factor: u32, inked: &[usize]) -> Vec<[f32; 4]> {
+/// is used. The framework raster source caches the rendered overlay by revision.
+fn composite_at(doc: &Document, r: Rect, factor: u32, inked: &[usize], band_rows: i32) -> Vec<[f32; 4]> {
     let w = r.width().div_ceil(factor) as usize;
+    let pick = |px: &[[f32; 4]]| -> Vec<[f32; 4]> { inked.iter().filter_map(|&k| px.get(k).copied()).collect() };
     let (Some(&first), Some(&last)) = (inked.first(), inked.last()) else { return Vec::new() };
     if w == 0 {
         return Vec::new();
@@ -241,18 +245,17 @@ fn composite_at(doc: &Document, r: Rect, factor: u32, inked: &[usize]) -> Vec<[f
     let f = factor as usize;
     let at = |o: i32, s: usize| o.saturating_add((s * f) as i32);
     let area = Rect::new(at(r.x0, bx0), at(r.y0, by0), at(r.x0, bx1 - 1).saturating_add(1).min(r.x1), at(r.y0, by1 - 1).saturating_add(1).min(r.y1));
-    let proxy = factor > 1 && r == doc.bounds() && proxy_matches(doc);
+    let proxy = band_rows == 0 && factor > 1 && r == doc.bounds() && proxy_matches(doc);
     let whole_cost = r.size().area() / if proxy { u64::from(factor) * u64::from(factor) } else { 1 };
     if area.size().area() < whole_cost {
-        let (px, bw) = (composite_sampled(doc, area, factor), bx1 - bx0);
+        let (px, bw) = (composite_sampled(doc, area, factor, band_rows), bx1 - bx0);
         return inked.iter().filter_map(|&k| px.get((k / w - by0) * bw + k % w - bx0).copied()).collect();
     }
-    let px = composite_px(doc, r, factor, false);
-    inked.iter().filter_map(|&k| px.get(k).copied()).collect()
+    pick(&composite(doc, r, factor, band_rows))
 }
 
 /// Whether `v` prints spot inks of `doc` over its composite, through the [`Screen`].
-fn prints_inks(doc: &Document, v: &ChannelView) -> bool {
+pub(crate) fn prints_inks(doc: &Document, v: &ChannelView) -> bool {
     let colors = color_count(doc);
     v.visible_colors(colors) == colors && (0..doc.channels.len()).any(|i| v.alpha_shown(i) && photocraft_compose::multichannel::is_overprint_spot(doc, i))
 }
@@ -285,7 +288,34 @@ pub(crate) fn proxy_matches(doc: &Document) -> bool {
 /// The channel view of `r` (document pixels, sampled every `factor` px) as premultiplied pixels,
 /// or `None` when the plain composite is all there is to show.
 pub fn render(doc: &Document, v: &ChannelView, r: Rect, factor: u32, look: Look, active: Option<photocraft_doc::LayerId>) -> Option<Vec<Color32>> {
-    render_with_source(doc, v, r, factor, look, active, CompositeSource { screen: &Screen::default() })
+    render_with_source(doc, v, r, factor, look, active, CompositeSource { display: None, band_rows: 0, screen: &Screen::default() })
+}
+
+/// As [`render`], but colour-manage the opaque colour-component base before screen-space alpha,
+/// Quick Mask and layer-mask overlays are composited onto it.
+pub(crate) fn render_for_display(
+    doc: &Document,
+    v: &ChannelView,
+    r: Rect,
+    factor: u32,
+    look: Look,
+    display: Option<&photocraft_engine::display_color::CanvasDisplay>,
+    screen: &Screen,
+) -> Option<Vec<Color32>> {
+    render_with_source(doc, v, r, factor, look, None, CompositeSource { display, band_rows: 0, screen })
+}
+
+/// Channel-transform previews bound native band storage even when sampling an unreduced document.
+pub(crate) fn render_for_display_bounded(
+    doc: &Document,
+    v: &ChannelView,
+    r: Rect,
+    factor: u32,
+    look: Look,
+    display: Option<&photocraft_engine::display_color::CanvasDisplay>,
+    screen: &Screen,
+) -> Option<Vec<Color32>> {
+    render_with_source(doc, v, r, factor, look, None, CompositeSource { display, band_rows: 1, screen })
 }
 
 fn render_with_source(
@@ -294,7 +324,7 @@ fn render_with_source(
     r: Rect,
     factor: u32,
     look: Look,
-    active: Option<photocraft_doc::LayerId>,
+    _active: Option<photocraft_doc::LayerId>,
     source: CompositeSource<'_>,
 ) -> Option<Vec<Color32>> {
     if v.is_plain(doc) || r.is_empty() {
@@ -306,15 +336,17 @@ fn render_with_source(
     // ⌥-click mask view (#196): the pixel mask alone, in grayscale (white reveals); ⇧⌥ with
     // nothing else shown: just the rubylith. Use the compositor's cached feather for the pixel
     // mask, but leave vector masks out: this view targets the pixel mask channel by itself.
-    let feathered_mask = v
-        .layer_mask
-        .and_then(|view| doc.layer(view.layer))
-        .filter(|layer| layer.mask.as_ref().is_some_and(|mask| mask.enabled && photocraft_compose::masks::feather_sigma(mask.feather) > 0.0))
-        .and_then(|layer| {
-            let mut pixel_mask_layer = layer.clone();
-            pixel_mask_layer.vector_mask = None;
-            photocraft_compose::masks::combined_mask(&pixel_mask_layer, doc.bounds())
-        });
+    let feathered_mask = v.layer_mask.and_then(|view| {
+        let layer = doc.layer(view.layer)?;
+        let mask = photocraft_engine::mask_view_cmds::viewed_mask(layer, view.filter)?;
+        if !mask.enabled || photocraft_compose::masks::feather_sigma(mask.feather) <= 0.0 {
+            return None;
+        }
+        let mut pixel_mask_layer = layer.clone();
+        pixel_mask_layer.mask = Some(mask.clone());
+        pixel_mask_layer.vector_mask = None;
+        photocraft_compose::masks::combined_mask(&pixel_mask_layer, doc.bounds())
+    });
     let shown_mask = layer_mask.map(|(m, mode)| (feathered_mask.as_ref().unwrap_or(&m.surface), mode));
     let only_mask = ChannelView { layer_mask: None, ..v.clone() }.is_plain(doc);
     match shown_mask {
@@ -373,16 +405,16 @@ fn render_with_source(
             solo_mask = true;
             gray(m)
         } else {
-            let m = active.and_then(|id| doc.layer(id)).and_then(|l| l.mask.as_ref())?;
-            solo_mask = true;
-            gray(&m.surface)
+            // Every eye may be off during a channel transform and after commit/cancel.
+            // Cover the composite so hidden channels never leak through.
+            vec![[1.0; 4]; n]
         }
     } else if vis < colors {
         let fmt = doc.pixel_format();
         let mode = fmt.mode;
         let shown: Vec<usize> = (0..colors).filter(|k| v.color_visible(*k)).collect();
         let ink = shows_inks(doc, v);
-        let pixels = composite_px(doc, r, factor, ink);
+        let pixels = if ink { inks(doc, r, factor, source.band_rows) } else { composite(doc, r, factor, source.band_rows) };
         // The inks show through the document's own CMYK profile, as in its composite.
         let space = photocraft_compose::cmyk_space(doc);
         photocraft_color::convert::with_cmyk_space(space.as_ref(), || {
@@ -417,7 +449,7 @@ fn render_with_source(
         // The inked pixels become the opaque printed picture, the rest stay transparent so the
         // normal canvas (display LUT, proofing, full resolution) shows. Only the inked area of the
         // composite is rendered.
-        let mut printed = composite_at(doc, r, factor, &inked);
+        let mut printed = composite_at(doc, r, factor, &inked, source.band_rows);
         if printed.len() == inked.len() {
             for (ink, vals) in &spots {
                 ink.apply_with_gain(&mut printed, inked.iter().map(|&k| vals.get(k).copied().unwrap_or(0.0)), gain);
@@ -432,6 +464,19 @@ fn render_with_source(
     } else if vis < colors {
         for (ink, vals) in &spots {
             ink.apply_with_gain(&mut out, vals.iter().copied(), gain);
+        }
+    }
+    if vis > 0
+        && vis < colors
+        && let Some(display) = source.display.filter(|display| !display.is_identity())
+    {
+        // Partial colour views are in the document's composite profile. Convert their base
+        // before adding channel/mask overlays, whose UI colours are screen-space values.
+        let converted = display.composite_pixels_to_rgba8(&out);
+        for (pixel, converted) in out.iter_mut().zip(converted) {
+            for (component, value) in pixel.iter_mut().zip(converted) {
+                *component = f32::from(value) / 255.0;
+            }
         }
     }
     let overlays: Vec<&AlphaChannel> = overlays.into_iter().filter_map(|i| doc.channels.get(i)).collect();
@@ -496,6 +541,17 @@ fn mask_px(s: &Surface, r: Rect, factor: u32, color: impl Fn(f32) -> Color32 + S
     px
 }
 
+/// Composite screen-space channel pixels over an already display-converted canvas.
+pub(crate) fn blend_overlay(base: &mut [Color32], overlay: Vec<Color32>) {
+    for (base, over) in base.iter_mut().zip(overlay) {
+        let weight = u32::from(255 - over.a());
+        let b = base.to_array();
+        let o = over.to_array();
+        let result = std::array::from_fn::<_, 4, _>(|i| (u32::from(o[i]) + (u32::from(b[i]) * weight + 127) / 255).min(255) as u8);
+        *base = Color32::from_rgba_premultiplied(result[0], result[1], result[2], result[3]);
+    }
+}
+
 /// A float in 0..=1 as an 8-bit channel value.
 fn q(x: f32) -> u8 {
     (x.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
@@ -508,12 +564,12 @@ fn view_key(v: &ChannelView, look: Look) -> u64 {
     s.bytes().fold(seed, |h, b| h.wrapping_mul(1_099_511_628_211).wrapping_add(b as u64))
 }
 
-/// A channel or mask view as the canvas's raster source draws it over the composite, for any region at any factor.
 pub(crate) struct Overlay {
     view: ChannelView,
     look: Look,
     active: Option<photocraft_doc::LayerId>,
     screen: Screen,
+    display: Option<std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>>,
     /// Changes with the view, its look and, for printed spot inks, the display transform.
     pub(crate) key: u64,
 }
@@ -529,15 +585,25 @@ impl Overlay {
         }
         let look = Look::of(&app.session);
         let inks = prints_inks(doc, &view);
-        let (screen, screen_key) = if inks { (Screen::of(app, doc, display), Screen::key(app, doc, display)) } else { (Screen::default(), 0) };
-        let key = view_key(&view, look) ^ screen_key.rotate_left(17);
-        Some(Overlay { view, look, active: st.active_layer, screen, key })
+        let (screen, screen_key) =
+            if inks { (Screen::of(&app.session.color, doc, display), Screen::key(&app.session.color, doc, display)) } else { (Screen::default(), 0) };
+        let (display, display_key) = crate::canvas::canvas_display(app, doc, display);
+        let key = view_key(&view, look) ^ screen_key.rotate_left(17) ^ display_key;
+        Some(Overlay { view, look, active: st.active_layer, screen, display, key })
     }
 
     /// The view's pixels over `r` of `doc`, one sample every `factor` pixels from `r`'s origin, row by row
     /// (`r`'s size divided by `factor`, rounded up); `None` where it draws nothing.
     pub(crate) fn render(&self, doc: &Document, r: Rect, factor: u32) -> Option<Vec<Color32>> {
-        render_with_source(doc, &self.view, r, factor, self.look, self.active, CompositeSource { screen: &self.screen })
+        render_with_source(
+            doc,
+            &self.view,
+            r,
+            factor,
+            self.look,
+            self.active,
+            CompositeSource { display: self.display.as_deref(), band_rows: 0, screen: &self.screen },
+        )
     }
 }
 

@@ -72,6 +72,14 @@ pub fn navigator_texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     // Keyed by the document snapshot, not its revision: selecting a layer changes no pixels.
     let (snapshot, id, revision, damage_from, last_damage) =
         app.session.documents().get(idx).map(|st| (std::sync::Arc::downgrade(&st.doc), st.doc.id, st.revision, st.damage_from(), st.last_damage))?;
+    // Ask before display_doc: that would otherwise build a full-resolution CPU Move
+    // preview even when the canvas is using its captured native GPU source.
+    if app.session.active_index() == Some(idx)
+        && super::move_ui::drag_offset(app).is_some()
+        && let Some((_, _, _, texture)) = app.navigator_textures.get(&id)
+    {
+        return Some(texture.id());
+    }
     let (doc, preview_key) = display_doc(app, idx);
     let (display, display_key) = canvas_display(app, &doc, None);
     let preview_key = preview_key ^ display_key;

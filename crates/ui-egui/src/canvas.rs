@@ -27,6 +27,8 @@ pub mod artboard_ui;
 pub(crate) mod background_redraw;
 pub(crate) mod cam_preview;
 pub mod canvas_tool_menu;
+pub(crate) mod channel_transform_gpu;
+pub(crate) mod channel_transform_preview;
 pub mod channel_view;
 pub(crate) mod cursor_policy;
 mod display;

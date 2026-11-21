@@ -14,6 +14,9 @@ pub const MESSAGE: &str = "Could not use the move tool because the layer is lock
 /// locked. The selection family's ⌘-drag of pixels asks this.
 pub fn pixels_locked(app: &PhotocraftApp) -> bool {
     let Some(st) = app.session.active() else { return false };
+    if crate::move_ui::color_target(app).is_some() {
+        return blocked(app, false);
+    }
     photocraft_engine::float_cmds::floating(st).is_none()
         && st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| photocraft_engine::float_cmds::locked_for_float(&st.doc, l))
 }
@@ -31,6 +34,14 @@ fn layers_locked(app: &PhotocraftApp) -> bool {
 /// `standing_in` is true when the Move tool stands in for another tool's ⌘ press.
 pub fn blocked(app: &PhotocraftApp, standing_in: bool) -> bool {
     let Some(st) = app.session.active() else { return false };
+
+    if crate::move_ui::color_target(app).is_some() {
+        let selected_pixels = st.doc.selection.is_some();
+        return st.active_layer.is_none_or(|id| {
+            let locks = st.doc.effective_locks(id);
+            (locks.position && !(selected_pixels && st.doc.is_background(id))) || locks.all || locks.pixels
+        });
+    }
     if standing_in {
         return layers_locked(app);
     }

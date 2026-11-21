@@ -678,3 +678,6 @@ fn pattern_preview_drag_wraps_pixels_across_the_canvas_edge() {
     let committed = &app.session.active().unwrap().doc;
     assert!(blue(committed, 2) && !blue(committed, 30), "release commits the wrap");
 }
+
+#[path = "channel_merge_tests.rs"]
+mod channel_merge_tests;

@@ -54,12 +54,17 @@ pub fn begin(app: &mut PhotocraftApp, alt: bool) {
 /// The drag has moved `screen_len` screen points from the press: the first time past
 /// [`DUPLICATE_THRESHOLD`] of an ⌥-drag of layers duplicates them. Once per drag, even if
 /// duplicating failed.
-pub fn moved(app: &mut PhotocraftApp, screen_len: f64) {
+pub fn moved(app: &mut PhotocraftApp, screen_len: f64) -> bool {
     let m = &app.move_mods;
     if m.active && m.alt && !m.pixels && m.dup_from.is_none() && screen_len >= DUPLICATE_THRESHOLD {
         app.move_mods.dup_from = duplicate(app);
         app.move_mods.alt = false;
+        if app.move_mods.dup_from.is_none() {
+            app.ui.status_error = true;
+            return false;
+        }
     }
+    true
 }
 
 /// The pointer reflects the pending copy, then the latched duplication for the whole drag.
@@ -72,7 +77,7 @@ pub fn copying(app: &PhotocraftApp, alt: bool) -> bool {
 fn duplicate(app: &mut PhotocraftApp) -> Option<usize> {
     let before = past_len(app)?;
     // In place: the copy follows the pointer from the original, artboards too (#1531).
-    match app.run("layer.duplicate", json!({"inPlace": true})) {
+    match crate::move_ui::duplicate_for_geometry(app) {
         // The state just before the copy's: in non-linear history the copy's step also moved
         // the later states in front of it (`History::record`), and those must stay.
         Ok(_) => Some(past_len(app).and_then(|n| n.checked_sub(1)).unwrap_or(before).max(before)),
@@ -180,11 +185,22 @@ fn brush_arrow_keys(app: &mut PhotocraftApp, direction: egui::Vec2, mods: Mods) 
 /// (also when ⌘ makes it the temporary Move tool). Nudges that follow each other are one History
 /// state (`nudge_bundle`); the selected pixels float until dropped, which is one state already.
 pub fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64, duplicate_first: bool) {
-    if crate::move_ui::moves_selected_pixels_with(app, Tool::Move) {
+    if crate::move_ui::floats_selected_pixels_with(app, Tool::Move) {
         crate::move_ui::float_selected(app, duplicate_first, dx, dy);
         return;
     }
-    let from = if duplicate_first { duplicate(app) } else { None };
+
+    if duplicate_first && crate::move_ui::native_copy_unsupported(app) {
+        app.ui.status = "Copy-nudging selected colour channels is not supported; use Copy and Paste into the selected channels".into();
+        app.ui.status_error = true;
+        return;
+    }
+    let from = if duplicate_first {
+        let Some(from) = duplicate(app) else { return };
+        Some(from)
+    } else {
+        None
+    };
     let revision = app.session.active().map(|st| st.revision);
     let moved = if duplicate_first {
         // A copy is a state of its own, folded with its move below.

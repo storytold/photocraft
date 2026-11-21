@@ -371,6 +371,17 @@ impl CanvasTool for Preflight<'_, '_> {
             // The Control+Alt resize drag changes the brush, not the layer: it runs where a stroke would be refused
             // (a hidden layer, a Clone Stamp without a source), as quick pick does before it.
             let resizes = crate::brush_resize::PaintResize::chord(tool, pointer.button, pointer.mods);
+            if !resizes
+                && pointer.mods.alt
+                && (tool == Tool::Move || (pointer.mods.cmd && takes_command_stand_in(tool)))
+                && self.scope.with_app(|app| crate::move_ui::native_copy_unsupported(app))
+            {
+                self.scope.with_app(|app| {
+                    app.ui.status = crate::move_ui::COPY_SET_DRAG_UNSUPPORTED.into();
+                    app.ui.status_error = true;
+                });
+                return ToolAction::Done;
+            }
             if !resizes && self.refused(pointer, at) {
                 return ToolAction::Done;
             }
@@ -420,6 +431,12 @@ impl CanvasTool for Preflight<'_, '_> {
     }
 
     fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        if cx.mods.alt
+            && (self.tool == Tool::Move || (cx.mods.cmd && takes_command_stand_in(self.tool)))
+            && self.scope.with_app(|app| crate::move_ui::native_copy_unsupported(app))
+        {
+            return craft::behavior::CursorIcon::Default.into();
+        }
         self.inner.cursor(cx)
     }
 

@@ -142,6 +142,10 @@ pub struct SessionShown {
 /// The moving pixels as the session maps them (warped, skewed or styled), then the layers above
 /// them, both in the canvas's picture, under the grid, guides and controls. Nothing is shown for the Frame tool's transform.
 fn show_preview(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &mut egui::Ui, rect: egui::Rect) -> Vec<egui::Shape> {
+    // The canvas draws the isolated channel preview as its document picture.
+    if pv.channel.is_some() {
+        return Vec::new();
+    }
     if crate::frame_tool::frame_transform(t) {
         return Vec::new();
     }

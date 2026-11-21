@@ -797,6 +797,8 @@ impl LiveDab {
             points: self.points,
             surface,
             bounds: self.bounds,
+            layer: self.id,
+            colors: self.colors,
         })
     }
 }

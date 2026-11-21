@@ -77,6 +77,15 @@ pub(crate) fn whole_layer_bounds(doc: &Document, layer: &Layer) -> Rect {
 /// Warp a surface whose pixels outside the content read as `default` (masks, selections):
 /// warp the content with alpha, then flatten back onto the default value.
 pub(crate) fn warp_gray(s: &Surface, h: &Homography, interp: Interp) -> Result<Surface> {
+    warp_gray_with(s, h, interp, &Interrupt::NONE)
+}
+
+fn check_cancelled(ctl: &Interrupt) -> Result<()> {
+    if ctl.cancelled() { Err(EngineError::Cancelled) } else { Ok(()) }
+}
+
+pub(crate) fn warp_gray_with(s: &Surface, h: &Homography, interp: Interp, ctl: &Interrupt) -> Result<Surface> {
+    check_cancelled(ctl)?;
     let default = s.default_pixel().first().copied().unwrap_or(0.0);
     let fmt = s.format();
     let src = s.content_bounds();
@@ -95,7 +104,8 @@ pub(crate) fn warp_gray(s: &Surface, h: &Homography, interp: Interp) -> Result<S
         px.copy_from_slice(&[*g, 1.0]);
     }
     tmp.try_write_region(src, &lifted)?;
-    let w = warp_surface(&tmp, src, h, interp)?;
+    check_cancelled(ctl)?;
+    let w = warp_surface_with(&tmp, src, h, interp, ctl)?.ok_or(EngineError::Cancelled)?;
     // Clear the old content region, then composite the warped content over it. These are written as
     // two sparse regions rather than one dense `src ∪ warped` block: a transform that moves the
     // content far away (e.g. a huge translation) would otherwise allocate a buffer spanning both and
@@ -113,6 +123,7 @@ pub(crate) fn warp_gray(s: &Surface, h: &Homography, interp: Interp) -> Result<S
         out.try_write_region(b, &flat)?;
     }
     out.prune();
+    check_cancelled(ctl)?;
     Ok(out)
 }
 
@@ -120,6 +131,11 @@ pub(crate) fn warp_gray(s: &Surface, h: &Homography, interp: Interp) -> Result<S
 /// selection: (the selected values as grey + alpha = selection, the surface with the selected
 /// values replaced by the default). `None` for surfaces that aren't a single grey channel.
 pub fn split_gray_selected(s: &Surface, sel: &Surface) -> Result<Option<(Surface, Surface)>> {
+    split_gray_selected_with(s, sel, &Interrupt::NONE)
+}
+
+fn split_gray_selected_with(s: &Surface, sel: &Surface, ctl: &Interrupt) -> Result<Option<(Surface, Surface)>> {
+    check_cancelled(ctl)?;
     let fmt = s.format();
     if fmt.alpha || fmt.channels() != 1 {
         return Ok(None);
@@ -141,6 +157,9 @@ pub fn split_gray_selected(s: &Surface, sel: &Surface) -> Result<Option<(Surface
     )?;
     let mut rp = crate::allocation::capacity(v.len(), "transforming a selected mask or channel")?;
     for (i, g) in v.iter().enumerate() {
+        if i % w == 0 {
+            check_cancelled(ctl)?;
+        }
         let (x, y) = (area.x0 + (i % w) as i32, area.y0 + (i / w) as i32);
         let k = sel.sample_channel(x, y, 0);
         lp.extend([*g, k]);
@@ -156,7 +175,17 @@ pub fn split_gray_selected(s: &Surface, sel: &Surface) -> Result<Option<(Surface
 /// [`warp_gray`] limited to a selection: only the selected values move (the vacated area reads as
 /// the default), as the selected pixels of the layer do.
 pub(crate) fn warp_gray_selected(s: &Surface, sel: &Surface, h: &Homography, interp: Interp) -> Result<Surface> {
-    move_gray_selected(s, sel, &|lifted, src| Ok(warp_surface(lifted, src, h, interp)?), &|s| warp_gray(s, h, interp))
+    warp_gray_selected_with(s, sel, h, interp, &Interrupt::NONE)
+}
+
+fn warp_gray_selected_with(s: &Surface, sel: &Surface, h: &Homography, interp: Interp, ctl: &Interrupt) -> Result<Surface> {
+    move_gray_selected_with(
+        s,
+        sel,
+        &|lifted, src| warp_surface_with(lifted, src, h, interp, ctl)?.ok_or(EngineError::Cancelled),
+        &|s| warp_gray_with(s, h, interp, ctl),
+        ctl,
+    )
 }
 
 /// [`warp_gray_selected`] with any geometric warp: `warp` moves the lifted grey + alpha values
@@ -167,7 +196,17 @@ pub(crate) fn move_gray_selected(
     warp: &dyn Fn(&Surface, Rect) -> Result<Surface>,
     whole: &dyn Fn(&Surface) -> Result<Surface>,
 ) -> Result<Surface> {
-    let Some((lifted, mut out)) = split_gray_selected(s, sel)? else { return whole(s) };
+    move_gray_selected_with(s, sel, warp, whole, &Interrupt::NONE)
+}
+
+pub(crate) fn move_gray_selected_with(
+    s: &Surface,
+    sel: &Surface,
+    warp: &dyn Fn(&Surface, Rect) -> Result<Surface>,
+    whole: &dyn Fn(&Surface) -> Result<Surface>,
+    ctl: &Interrupt,
+) -> Result<Surface> {
+    let Some((lifted, mut out)) = split_gray_selected_with(s, sel, ctl)? else { return whole(s) };
     let src = lifted.content_bounds();
     if src.is_empty() {
         return Ok(out);
@@ -179,26 +218,30 @@ pub(crate) fn move_gray_selected(
         let under = crate::allocation::read_region(&out, b, "compositing transformed mask pixels")?;
         let mut flat = crate::allocation::filled(under.len(), 0.0, "compositing transformed mask pixels")?;
         for (i, (p, u)) in moved.as_chunks::<2>().0.iter().zip(&under).enumerate() {
+            if i % b.width() as usize == 0 {
+                check_cancelled(ctl)?;
+            }
             flat[i] = p[0] * p[1] + u * (1.0 - p[1]);
         }
         out.try_write_region(b, &flat)?;
     }
     out.prune();
+    check_cancelled(ctl)?;
     Ok(out)
 }
 
 /// The surface Free Transform moves by itself when the params target one (`"target"`): an
-/// unlinked layer mask, an alpha channel or the Quick Mask. `None` means the layer, with its
-/// linked masks (a targeted *linked* mask moves together with its layer, as in Photoshop).
+/// layer mask, an alpha channel or the Quick Mask. Explicit mask targeting isolates even a
+/// linked mask; an ordinary layer transform still carries its linked masks.
 pub fn lone_target<'a>(doc: &'a Document, layer: Option<LayerId>, p: &Value) -> Result<Option<&'a Surface>> {
     use crate::channel_cmds::Target;
-    match crate::channel_cmds::target_of(p) {
+    let surface = match crate::channel_cmds::target_of(p) {
         Target::Pixels => Ok(None),
         Target::Mask => {
             let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
             let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
             let m = l.mask.as_ref().ok_or_else(|| EngineError::Other("layer has no mask".into()))?;
-            Ok((!m.linked).then_some(&m.surface))
+            Ok(Some(&m.surface))
         }
         // A filter mask is not transformed on its own: the smart object transforms, as in Photoshop.
         Target::FilterMask => Ok(None),
@@ -208,7 +251,11 @@ pub fn lone_target<'a>(doc: &'a Document, layer: Option<LayerId>, p: &Value) -> 
             .map(|c| Some(&c.surface))
             .ok_or_else(|| EngineError::Other(format!("no alpha channel {i} (document has {})", doc.channels.len()))),
         Target::QuickMask => doc.quick_mask.as_ref().map(|c| Some(&c.surface)).ok_or_else(|| EngineError::Other("not in Quick Mask mode".into())),
+    }?;
+    if surface.is_some_and(|s| s.format().alpha || s.format().channels() != 1) {
+        return Err(bad("a mask or channel transform requires one component without alpha"));
     }
+    Ok(surface)
 }
 
 /// [`lone_target`], mutably.
@@ -310,7 +357,7 @@ pub fn box_targets(doc: &Document, targets: &[LayerId]) -> Vec<LayerId> {
 
 /// The `layers` param: the layers one box transforms together (at most 10000, each in the
 /// document), without those a listed group carries. `None` when it isn't given.
-fn layers_param(doc: &Document, p: &Value) -> Result<Option<Vec<LayerId>>> {
+pub(crate) fn layers_param(doc: &Document, p: &Value) -> Result<Option<Vec<LayerId>>> {
     let a = match p.get("layers") {
         None | Some(Value::Null) => return Ok(None),
         Some(Value::Array(a)) if !a.is_empty() && a.len() <= 10_000 => a,
@@ -340,7 +387,7 @@ pub fn transform_bounds_of(doc: &Document, ids: &[LayerId]) -> Rect {
     ids.iter().filter_map(|id| doc.layer(*id)).map(|l| transform_bounds(doc, l)).filter(|b| !b.is_empty()).fold(Rect::EMPTY, |a, b| a.union(&b))
 }
 
-/// The memory (bytes) a single Free Transform warp's result may take: Preferences › Performance ›
+/// The memory (bytes) one Free Transform result or retained colour-source collection may take: Preferences › Performance ›
 /// Memory Usage, which [`Session::apply_prefs`] sets, rather than a fixed 2³⁰ px, so a stitched
 /// layer of a few gigapixels transforms on a machine that has the memory for it (#7807). Only the
 /// size of the result counts, not where it lands, so moving a layer far off the canvas stays
@@ -384,6 +431,34 @@ pub(crate) fn check_budget(src: Rect, h: &Homography, what: &str, format: PixelF
 /// [`check_budget`] against `budget` bytes (the tests price the production budget with it).
 fn check_budget_with_limit(src: Rect, h: &Homography, what: &str, format: PixelFormat, budget: u64) -> Result<()> {
     let Some((w, ht)) = warp_output_size(src, h) else { return Ok(()) };
+    check_output_budget_with_limit(w, ht, what, format, budget)?;
+    if warp_output_clipped(src, h) {
+        return Err(EngineError::Other(format!(
+            "too large to transform: the transformed {what} would reach past ±{WARP_REACH} px, the farthest a transform places pixels; the document was not changed"
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn check_output_budget(w: u64, h: u64, what: &str, format: PixelFormat) -> Result<()> {
+    check_output_budget_with_limit(w, h, what, format, active_budget())
+}
+
+/// Captured colour planes coexist, unlike their resampled results, which are written one
+/// at a time. Price that source collection separately against the same Memory Usage limit.
+pub(crate) fn check_source_budget(bytes: u64) -> Result<()> {
+    let limit = active_budget();
+    if bytes > limit {
+        return Err(EngineError::Other(format!(
+            "too large to transform: captured channel sources would need {} MB, more than the {} MB Memory Usage allows (Preferences › Performance); the document was not changed",
+            bytes.div_ceil(1 << 20),
+            limit >> 20,
+        )));
+    }
+    Ok(())
+}
+
+fn check_output_budget_with_limit(w: u64, ht: u64, what: &str, format: PixelFormat, budget: u64) -> Result<()> {
     // The warp writes each tile into the result as it goes, so the result is what it holds; it
     // adds alpha to a format without it.
     let bpp = PixelFormat::new(format.mode, format.sample, true).bytes_per_pixel() as u64;
@@ -394,11 +469,6 @@ fn check_budget_with_limit(src: Rect, h: &Homography, what: &str, format: PixelF
             "too large to transform: the transformed {what} would be {w} x {ht} px ({} MB), more than the {} MB Memory Usage allows (Preferences › Performance); the document was not changed",
             mb(bytes),
             budget >> 20
-        )));
-    }
-    if warp_output_clipped(src, h) {
-        return Err(EngineError::Other(format!(
-            "too large to transform: the transformed {what} would reach past ±{WARP_REACH} px, the farthest a transform places pixels; the document was not changed"
         )));
     }
     Ok(())
@@ -538,7 +608,7 @@ fn apply_transform(
                 *c = warp_surface(c, src, h, interp)?;
             }
             if let Some(m) = &mut sm.filter_mask {
-                m.surface = warp_gray(&m.surface, h, interp)?;
+                m.surface = warp_gray_with(&m.surface, h, interp, ctl)?;
             }
         }
         _ => {
@@ -565,8 +635,8 @@ fn apply_transform(
         && m.linked
     {
         m.surface = match mask_sel {
-            Some(sel) => warp_gray_selected(&m.surface, sel, h, interp)?,
-            None => warp_gray(&m.surface, h, interp)?,
+            Some(sel) => warp_gray_selected_with(&m.surface, sel, h, interp, ctl)?,
+            None => warp_gray_with(&m.surface, h, interp, ctl)?,
         };
     }
     if let Some(vm) = l.vector_mask.as_mut()
@@ -843,20 +913,7 @@ fn quad_param(p: &Value) -> Option<[[f64; 2]; 4]> {
     Some(q)
 }
 
-/// `p`, with the Channels panel's targeted alpha channel or Quick Mask as its `"target"` when it
-/// names neither a target nor a layer (#2835).
-fn with_panel_target(s: &Session, p: &Value) -> Value {
-    let mut p = if p.is_object() { p.clone() } else { json!({}) };
-    if p.get("target").is_none()
-        && p.get("layer").is_none()
-        && p.get("layers").is_none()
-        && let (Some(m), Some(Value::Object(t))) = (p.as_object_mut(), crate::channel_cmds::targeted_channel(s))
-    {
-        m.extend(t);
-    }
-    p
-}
-
+/// Transform the resolved layer or isolated scalar channel through one geometric map.
 fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     // The shape tools' bounding box scales live shapes with this command and names the step as
     // the reference does. Passed in, not renamed after: the edit may land later as a job.
@@ -865,18 +922,29 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::String(n)) if n == TRANSFORM_PATH => TRANSFORM_PATH,
         Some(_) => return Err(bad("`stepName` must be \"Transform Path\"")),
     };
-    let p = &with_panel_target(s, p);
+    let p = &crate::channel_transform::params(s, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let many = layers_param(&st.doc, p)?;
     if many.is_some()
-        && (!matches!(p.get("layer"), None | Some(Value::Null)) || !matches!(crate::channel_cmds::target_of(p), crate::channel_cmds::Target::Pixels))
+        && (!matches!(p.get("layer"), None | Some(Value::Null))
+            || !matches!(crate::channel_cmds::target_of(p), crate::channel_cmds::Target::Pixels)
+            || crate::channel_transform::is_color(p))
     {
         return Err(bad("`layers` moves layers: pass it without `layer` or a mask or channel `target`"));
     }
     let explicit = crate::commands::explicit_layer(s, p)?;
     let id = explicit.or(st.active_layer);
-    let lone = if many.is_some() { None } else { lone_target(&st.doc, id, p)? };
-    let id = match (id, lone.is_some() && crate::channel_cmds::is_channel_target(p)) {
+    crate::channel_transform::check_locks(&st.doc, id, p)?;
+    let lone_bounds = if many.is_some() || p["target"] == "pixels" {
+        None
+    } else if crate::channel_transform::is_color(p) {
+        crate::channel_transform::source_bounds(&st.doc, id, p)?
+    } else {
+        // Borrowing a scalar surface is cheap; price only its selected working region in
+        // the worker. Untouched, distant sparse samples must not impose the colour cap.
+        lone_target(&st.doc, id, p)?.map(|surf| crate::channel_transform::bounds(&st.doc, id, surf, p)).transpose()?
+    };
+    let id = match (id, lone_bounds.is_some() && crate::channel_cmds::is_channel_target(p)) {
         (_, true) => None,
         (Some(id), false) => Some(id),
         (None, false) if many.is_some() => None,
@@ -886,7 +954,7 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     // The layers the box moves: those listed, the one named, or else the layer selection (#6501).
     let mut ids: Vec<LayerId> = match (many, explicit) {
         (Some(ids), _) => ids,
-        _ if lone.is_some() => Vec::new(),
+        _ if lone_bounds.is_some() => Vec::new(),
         (None, Some(id)) => vec![id],
         (None, None) => {
             let ids = selection_targets(st);
@@ -913,8 +981,8 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
             [v[0], v[1], v[2], v[3]]
         }
         _ => {
-            let b = match lone {
-                Some(surf) => target_bounds(&st.doc, surf),
+            let b = match lone_bounds {
+                Some(bounds) => bounds,
                 None => transform_bounds_of(&st.doc, &ids),
             };
             if b.is_empty() {
@@ -944,17 +1012,79 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     let affine =
         (m[6].abs() < 1e-12 && m[7].abs() < 1e-12).then(|| Affine { m: [m[0] / m[8], m[3] / m[8], m[1] / m[8], m[4] / m[8], m[2] / m[8], m[5] / m[8]] });
     let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
-    let lone = lone.is_some();
+    let params = p.clone();
+    let background = s.tools.background;
     let layers: Vec<u64> = ids.iter().map(|id| id.0).collect();
-    let p = p.clone();
     // A background job when started with `Session::start` (#1015): the warp of a large layer runs
     // on a worker with progress, and can be cancelled.
     crate::jobs::edit_job(
         s,
         step_name,
-        move |doc, _, ctx| ctx.stage(0.0, 1.0, "Transforming", |ctl| transform_doc(doc, id, &ids, &p, lone, &h, affine, interp, ctl)),
+        move |doc, _, ctx| {
+            ctx.stage(0.0, 1.0, "Transforming", |ctl| {
+                check_cancelled(ctl)?;
+                let planes = crate::channel_transform::planes_with_interrupt(doc, id, &params, background, ctl)?;
+                if let Some(planes) = &planes {
+                    validate_planes(doc, planes, &h)?;
+                }
+                transform_doc(doc, id, &ids, planes.as_deref(), &h, affine, interp, ctl)
+            })
+        },
         move |()| json!({"rect": rect, "layers": layers}),
     )
+}
+
+/// Validate the captured native planes in the worker, before any write is published.
+fn validate_planes(doc: &Document, planes: &[crate::channel_transform::Plane], h: &Homography) -> Result<()> {
+    for plane in planes {
+        let source = doc.selection.as_ref().map_or_else(|| plane.surface.content_bounds(), Surface::content_bounds);
+        check_channel_geometry(source, plane.surface.format(), h, plane.original_area())?;
+    }
+    Ok(())
+}
+
+/// The native scalar output limits shared by commits and interactive preview preflight.
+/// This performs only bounded geometry arithmetic; it allocates no source or output pixels.
+pub fn check_channel_geometry(source: Rect, format: PixelFormat, h: &Homography, original: Option<Rect>) -> Result<()> {
+    crate::channel_transform::validate_area(source)?;
+    let source_corners = [
+        [f64::from(source.x0), f64::from(source.y0)],
+        [f64::from(source.x1), f64::from(source.y0)],
+        [f64::from(source.x1), f64::from(source.y1)],
+        [f64::from(source.x0), f64::from(source.y1)],
+    ];
+    let denominators = source_corners.map(|[x, y]| h.0[6] * x + h.0[7] * y + h.0[8]);
+    if denominators.iter().any(|v| !v.is_finite() || v.abs() < 1e-12) || denominators.iter().any(|v| v.signum() != denominators[0].signum()) {
+        return Err(bad("channel transform crosses a perspective horizon"));
+    }
+    let points = source_corners.map(|[x, y]| h.apply(x, y));
+    let b = points
+        .iter()
+        .fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, &(x, y)| [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)]);
+    if b.iter().any(|v| !v.is_finite() || v.abs() > f64::from(1 << 28)) {
+        return Err(bad("channel transform coordinates are out of range"));
+    }
+    // Report the user's transform-memory budget before the additional tile-padding cap.
+    check_budget(source, h, "mask or channel", format)?;
+    crate::channel_transform::validate_area(Rect::new(b[0].floor() as i32, b[1].floor() as i32, b[2].ceil() as i32, b[3].ceil() as i32))?;
+    if let Some(original) = original {
+        let m = h.0;
+        let integer_translation = m[0] == m[8]
+            && m[4] == m[8]
+            && m[1] == 0.0
+            && m[3] == 0.0
+            && m[6] == 0.0
+            && m[7] == 0.0
+            && (m[2] / m[8]).fract() == 0.0
+            && (m[5] / m[8]).fract() == 0.0;
+        let output = if integer_translation {
+            Rect::new(b[0].floor() as i32, b[1].floor() as i32, b[2].ceil() as i32, b[3].ceil() as i32)
+        } else {
+            photocraft_algo::transform::warp_output_bounds(source, h).unwrap_or(Rect::EMPTY)
+        };
+        crate::channel_transform::validate_area(original.union(&output))?;
+    }
+    Ok(())
 }
 
 /// The edit of [`transform`]: the layers `ids` (or the lone mask or channel of `id`) and the
@@ -964,8 +1094,7 @@ fn transform_doc(
     doc: &mut Document,
     id: Option<LayerId>,
     ids: &[LayerId],
-    p: &Value,
-    lone: bool,
+    planes: Option<&[crate::channel_transform::Plane]>,
     h: &Homography,
     affine: Option<Affine>,
     interp: Interp,
@@ -976,18 +1105,24 @@ fn transform_doc(
     if let Some(sel) = sel.as_ref().filter(|_| !h.is_identity()) {
         check_budget(sel.content_bounds(), h, "selection", sel.format())?;
     }
-    if lone {
-        // A targeted unlinked mask, alpha channel or Quick Mask transforms by itself.
+    if let Some(planes) = planes {
         if !h.is_identity() {
-            let (surf, _) = crate::channel_cmds::target_surface(doc, id, p)?;
-            let src = sel.as_ref().map_or_else(|| surf.content_bounds(), Surface::content_bounds);
-            check_budget(src, h, "mask or channel", surf.format())?;
-            *surf = match &sel {
-                Some(sel) => warp_gray_selected(surf, sel, h, interp)?,
-                None => warp_gray(surf, h, interp)?,
-            };
+            for plane in planes {
+                let surf = &plane.surface;
+                if ctl.cancelled() {
+                    return Err(EngineError::Cancelled);
+                }
+                let src = sel.as_ref().map_or_else(|| surf.content_bounds(), Surface::content_bounds);
+                check_budget(src, h, "mask or channel", surf.format())?;
+                let moved = match &sel {
+                    Some(sel) => warp_gray_selected_with(surf, sel, h, interp, ctl)?,
+                    None => warp_gray_with(surf, h, interp, ctl)?,
+                };
+                plane.write(doc, id, moved, ctl)?;
+            }
+            // Move the outline once, after every plane used the original coverage.
             if let Some(sel) = &doc.selection {
-                doc.selection = Some(warp_gray(sel, h, Interp::Bilinear)?).filter(|s| !s.content_bounds().is_empty());
+                doc.selection = Some(warp_gray_with(sel, h, Interp::Bilinear, ctl)?).filter(|s| !s.content_bounds().is_empty());
             }
         }
         return Ok(());
@@ -1025,7 +1160,7 @@ fn transform_doc(
         crate::smart_cmds::restore_unrendered(doc, taken, |c| warp_surface(c, c.content_bounds(), h, interp))?;
         // The selection outline moves with the pixels.
         if let Some(sel) = &doc.selection {
-            doc.selection = Some(warp_gray(sel, h, Interp::Bilinear)?).filter(|s| !s.content_bounds().is_empty());
+            doc.selection = Some(warp_gray_with(sel, h, Interp::Bilinear, ctl)?).filter(|s| !s.content_bounds().is_empty());
         }
     }
     Ok(())
@@ -1037,7 +1172,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Free Transform",
         menu: &[],
         shortcut: None,
-        params: r##"{"layer":id?,"layers":[id,…]? (several layers moved by one box, one step; default with neither = the selected layers, as Photoshop's Free Transform with several selected; refused as locked when the Background is among several),"rect":[x0,y0,x1,y1]? (source frame; default = the layers' content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px?,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center" (relative alternative: scale and rotate about this point, then move),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"stepName":"Transform Path"? (History step name; the shape tools' bounding box sends it; default "Free Transform"; any other value is refused),"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, an alpha channel or the Quick Mask transforms alone; a linked mask moves with its layer)}"##,
+        params: r##"{"layer":id|name?,"layers":[id,…]? (several whole layers; mutually exclusive with layer or a channel target; default for pixels = selected layers; refused as locked when Background is among several),"rect":[x0,y0,x1,y1]? (source frame; default = raster pixels: layer content intersected with selection; group, text, shape or smart pixels: whole layer; mask or saved channel: selection bounds if present, otherwise target content; colour: native sample area intersected with selection. Relative reference points use this frame),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px?,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center" (relative alternative: scale and rotate about this point, then move),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"stepName":"Transform Path"? (History step name; the shape tools' bounding box sends it; default "Free Transform"; any other value is refused),"target":"pixels"|"mask"|"quickMask"|{"channel":i}|{"color":i}|{"colors":[i,…]}=Channels panel target (selected colour components share one geometry and selection outline; a single component, mask including linked masks, alpha/spot channel or Quick Mask transforms alone; an explicit layer without target transforms the layer)}"##,
         enabled: has_layer,
         journal: true,
         run: transform,
