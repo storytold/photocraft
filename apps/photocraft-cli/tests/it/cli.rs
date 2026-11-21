@@ -310,6 +310,39 @@ fn info_and_convert_report_decode_warnings() {
     std::fs::remove_dir_all(d).unwrap();
 }
 
+/// A 2 x 1 Macintosh PICT: a line, which is not drawn, and a 32-bit DirectBitsRect of a red and a
+/// blue pixel, from the published QuickDraw opcodes.
+fn pict_red_blue() -> Vec<u8> {
+    // picSize, picFrame, version 2, and an extended version 2 header at 72 ppi.
+    let mut v: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 1, 0, 2, 0x00, 0x11, 0x02, 0xFF, 0x0C, 0x00];
+    v.extend_from_slice(&[0xFF, 0xFE, 0, 0, 0, 72, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 1, 0, 2, 0, 0, 0, 0]);
+    v.extend_from_slice(&[0x00, 0x20, 0, 0, 0, 0, 0, 1, 0, 1]); // Line
+    // DirectBitsRect: base address, rowBytes 8, bounds, stored rows (pack type 1), 32-bit, 3 components.
+    v.extend_from_slice(&[0x00, 0x9A, 0, 0, 0, 0xFF, 0x80, 0x08, 0, 0, 0, 0, 0, 1, 0, 2]);
+    v.extend_from_slice(&[0, 0, 0, 1, 0, 0, 0, 0, 0, 72, 0, 0, 0, 72, 0, 0, 0, 16, 0, 32, 0, 3, 0, 8]);
+    v.extend_from_slice(&[0; 12]);
+    v.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0, 2, 0, 0, 0, 0, 0, 1, 0, 2, 0, 0]); // srcRect, dstRect, srcCopy
+    v.extend_from_slice(&[0, 255, 0, 0, 0, 0, 0, 255, 0x00, 0xFF]); // red, blue, opEndPic
+    v
+}
+
+/// A Macintosh PICT opens: `info` reports its size and the drawing it skipped, and `convert`
+/// writes its pixels.
+#[test]
+fn info_and_convert_open_a_pict() {
+    let d = tmp("pict");
+    let file = d.join("photo.pct");
+    std::fs::write(&file, pict_red_blue()).unwrap();
+    let v: Value = serde_json::from_str(&ok(bin().arg("info").arg(&file).arg("--compact")).stdout).unwrap();
+    assert_eq!((v["width"].as_u64(), v["height"].as_u64()), (Some(2), Some(1)));
+    assert!(v["warnings"].to_string().contains("1 PICT drawing operation"), "{v}");
+    ok(bin().arg("convert").arg(&file).arg(d.join("photo.png")));
+    let png = photocraft_codecs::decode(&std::fs::read(d.join("photo.png")).unwrap()).unwrap();
+    assert_eq!(png.dimensions(), (2, 1));
+    assert_eq!(png.to_rgba8(), [255, 0, 0, 255, 0, 0, 255, 255]);
+    std::fs::remove_dir_all(d).unwrap();
+}
+
 #[test]
 fn run_commands_and_save() {
     let d = tmp("run");
