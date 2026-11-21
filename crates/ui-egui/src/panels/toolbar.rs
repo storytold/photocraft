@@ -267,6 +267,22 @@ fn measure_now(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32 {
 /// in its footer, and, while the Edit Toolbar drawer is open, the drawer beside it. The Toolbar panel's group view
 /// shows it in the group's full rect; the rail takes as many tool columns as the rect's width holds.
 ///
+/// The temp key for the tool flyout's open state, recorded by [`toolbar`] from the
+/// rail's output (#4096).
+fn tool_flyout_open_id() -> egui::Id {
+    egui::Id::unique("tool-flyout-open")
+}
+
+/// A tool flyout is open (recorded when the toolbar last drew).
+pub(super) fn tool_flyout_open(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(tool_flyout_open_id())).unwrap_or(false)
+}
+
+/// Forgets the recorded tool flyout, e.g. when the peek that drew it ends.
+pub(super) fn close_tool_flyout(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.remove::<bool>(tool_flyout_open_id()));
+}
+
 /// A frame can run this twice. Every outcome comes from the pass's own widgets (a click, a drop), and the slots and
 /// remembered tools are read again at the start of each pass, so a second pass applies only its own input.
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -276,6 +292,10 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let current = app.ui.tool;
     let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
     let out = rail(&slots, &current, &remembered, opens, editing).show_rail(ui, |ui, at| footer(app, ui, at));
+    // The tool flyout's open state, for the auto-show peek's hold (#4096): the rail
+    // reports it only while the toolbar draws, so record it for the frame after. It is
+    // refreshed every frame the toolbar draws, and the peek clears it when it ends.
+    ctx.data_mut(|d| d.insert_temp(tool_flyout_open_id(), out.flyout.is_some()));
 
     if let Some(tool) = out.select {
         crate::tool_memory::select(app, tool);

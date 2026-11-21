@@ -333,6 +333,55 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, panels_hidden: bo
     }
 }
 
+/// The peek's dock column (#4096): only the end-side dock column of `layout`, in a locked
+/// area over a throwaway workspace, so nothing moves, floats or closes. The area reports
+/// the changes the user made through it; only the actions that keep the arrangement (a
+/// tab pick, a minimize, a resize) apply to the real workspace, so a drag out of the
+/// peek neither floats nor moves a panel.
+pub(crate) fn show_column(app: &mut PhotocraftApp, ui: &mut egui::Ui, layout: &Layout<String>) {
+    let workspace = Workspace::new(layout.clone());
+    let auto_collapse = app.session.prefs().workspace.auto_collapse_icon_panels;
+    let config = DockConfig::default().group_order_items(true).native_windows(cfg!(not(target_arch = "wasm32")));
+    let output: DockAreaOutput<String> = {
+        let mut panels = Panels { app: &mut *app };
+        let mut area = DockArea::new("Peek".to_string(), Bind::given(workspace), &mut panels, config);
+        area = area.locked();
+        if auto_collapse {
+            area = area.auto_collapse();
+        }
+        area.show(ui)
+    };
+    let DockAreaOutput { actions, requested, error, .. } = output;
+    if let Some(error) = error {
+        app.ui.status = format!("{}: {}", tl!("Invalid panel layout"), error.error);
+    }
+    let kept: Vec<Action<String>> = actions.into_iter().chain(requested).filter(keeps_arrangement).collect();
+    if !kept.is_empty()
+        && let Err(error) = apply(app, kept)
+    {
+        app.ui.status = error;
+    }
+}
+
+/// An action the peek may pass to the main layout: it names its panel and leaves the
+/// arrangement as it is, so it means the same in the dock column and in the full layout.
+fn keeps_arrangement(action: &Action<String>) -> bool {
+    matches!(
+        action,
+        Action::Activate { .. }
+            | Action::Close { .. }
+            | Action::CloseGroup { .. }
+            | Action::CloseOthers { .. }
+            | Action::SetMinimized { .. }
+            | Action::SetIconic { .. }
+            | Action::SetStackOpen { .. }
+            | Action::ResizeColumn { .. }
+            | Action::ResizeGroup { .. }
+            | Action::ResizeStack { .. }
+            | Action::ResizeIconic { .. }
+    )
+}
+
 /// The actions that give the end dock the total width `total`, its columns scaled within their bounds. Empty when
 /// there is no end dock, the width is not a positive number or the columns already have it.
 pub(crate) fn width_actions(app: &PhotocraftApp, ctx: &egui::Context, total: f32) -> Vec<Action<String>> {
