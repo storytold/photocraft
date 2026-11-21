@@ -4,8 +4,6 @@
 //! White) with the content's own options, then Blending: Mode, Opacity and Preserve
 //! Transparency. OK remembers the choices in the saved tier.
 
-use std::borrow::Cow;
-
 use craft::ui::contract::Bind;
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamResult};
@@ -17,7 +15,6 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 use crate::dialogs::blend_options::{blending_params, blending_rows};
 use crate::dialogs::params::{captured, open_param};
-use crate::panels::layers_tree::blend_key;
 
 /// The command of the dialog, which is also its dialog key.
 pub const COMMAND: &str = "edit.fill";
@@ -64,7 +61,7 @@ fn defaults(foreground: [f32; 3], first_pattern: Option<String>) -> DialogFields
         f.set("pattern", id);
     }
     f.set("colorAdaptation", true);
-    f.set("mode", blend_key(BlendMode::Normal));
+    f.set("mode", BlendMode::Normal.key().to_string());
     f.set("opacity", 100.0);
     f.set("preserveTransparency", false);
     f
@@ -85,8 +82,7 @@ pub fn open(app: &mut PhotocraftApp) -> DialogId {
     }
     let [r, g, b, _] = app.session.tools.foreground;
     let first = app.session.patterns.items.first().map(|p| p.id.clone());
-    let ctx = app.ctx().clone();
-    let patterns = crate::panels::preset_browser::pattern_rows(app, &ctx);
+    let patterns = crate::panels::preset_browser::pattern_swatches(app);
     let rows = rows([r, g, b], first.clone());
     let reset = defaults([r, g, b], first);
     let title = Label::from(tl!("Fill"));
@@ -95,7 +91,7 @@ pub fn open(app: &mut PhotocraftApp) -> DialogId {
             .values(Bind::bound(fields))
             .remember(SaveKey::named(REMEMBER))
             .reset_to(reset.clone())
-            .patterns(Cow::Owned(patterns.clone()))
+            .patterns(crate::panels::preset_browser::pattern_source(patterns.clone()))
     })
 }
 

@@ -209,7 +209,7 @@ fn end_dock_column(layout: &Layout<String>) -> Option<Node<String>> {
 /// at all gives nothing to peek. A column without a width of its own counts as the
 /// minimum dock width.
 pub(crate) fn peek_layout(app: &PhotocraftApp) -> Option<(Layout<String>, f32)> {
-    let base = app.ui.docking.layout.clone();
+    let base = app.ui.docking.layout().clone();
     let dock = end_dock_column(&base)?;
     let width = match &dock {
         Node::Dock { columns, .. } => {

@@ -509,7 +509,7 @@ fn tab_rect(h: &Harness<'static, Box<PhotocraftApp>>, panel: &str) -> Rect {
 fn a_tab_dragged_in_the_peek_does_not_rearrange_the_layout() {
     let mut h = harness(400.0, 300.0);
     peek_dock(&mut h);
-    let before = h.state().ui.docking.layout.clone();
+    let before = h.state().ui.docking.layout().clone();
     // The column alone cannot say where a drop would land in the full layout, so a tab
     // dragged out of the peek neither floats nor moves.
     // Layers dragged onto the Color group's tabs, then out over the canvas.
@@ -521,7 +521,7 @@ fn a_tab_dragged_in_the_peek_does_not_rearrange_the_layout() {
         }
         release(&mut h, target);
         h.run_steps(2);
-        assert_eq!(h.state().ui.docking.layout, before, "the layout is unchanged after a drop at {target:?}");
+        assert_eq!(h.state().ui.docking.layout().clone(), before, "the layout is unchanged after a drop at {target:?}");
         peek_dock_again(&mut h);
     }
 }

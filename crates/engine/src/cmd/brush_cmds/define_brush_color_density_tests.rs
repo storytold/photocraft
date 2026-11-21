@@ -76,7 +76,7 @@ fn rgb_source(depth: u32, rgba: [f32; 4]) -> Session {
 }
 
 fn tip(s: &Session) -> &GrayTile {
-    let TipShape::Sampled(tip) = &s.tools.brush.tip else { panic!("expected a sampled tip") };
+    let TipShape::Sampled(tip) = &*s.tools.brush.tip else { panic!("expected a sampled tip") };
     tip
 }
 
@@ -145,12 +145,12 @@ fn command_density_applies_alpha_before_gray_and_selection_once() {
         assert!((half - opaque).abs() <= 1.0 / 65535.0);
 
         let mut transparent = rgb_source(32, [0.0, 0.0, 1.0, 0.0]);
-        let brush = transparent.tools.brush.clone();
-        let presets = transparent.tools.presets.clone();
+        let brush = (*transparent.tools.brush).clone();
+        let presets = (*transparent.tools.presets).clone();
         let err = transparent.execute(command, json!({"name": "Transparent colour"})).unwrap_err();
         assert!(err.to_string().contains("contain no paint"), "{err}");
-        assert_eq!(transparent.tools.brush, brush);
-        assert_eq!(transparent.tools.presets, presets);
+        assert_eq!(*transparent.tools.brush, brush);
+        assert_eq!(*transparent.tools.presets, presets);
     }
 }
 
@@ -301,8 +301,8 @@ fn sampled_trcs_cannot_hide_non_finite_contributing_channels() {
                 assert_eq!(stored, rgba.map(f32::to_bits), "non-finite values must reach the source read unchanged");
                 let doc = s.active().unwrap().doc.clone();
                 let history = s.active().unwrap().history.past_len();
-                let brush = s.tools.brush.clone();
-                let presets = s.tools.presets.clone();
+                let brush = (*s.tools.brush).clone();
+                let presets = (*s.tools.presets).clone();
                 let current = s.tools.current_preset.clone();
                 let revision = s.tools.brush_rev;
                 let journal = s.journal.clone();
@@ -316,8 +316,8 @@ fn sampled_trcs_cannot_hide_non_finite_contributing_channels() {
                 assert_eq!(s.active().unwrap().doc.selection.is_some(), selected);
                 assert_eq!(s.active().unwrap().doc.icc_profile.as_ref(), Some(&icc));
                 assert_eq!(s.active().unwrap().doc.layer(active).unwrap().surface().unwrap().rgba(20, 20).map(f32::to_bits), stored);
-                assert_eq!(s.tools.brush, brush);
-                assert_eq!(s.tools.presets, presets);
+                assert_eq!(*s.tools.brush, brush);
+                assert_eq!(*s.tools.presets, presets);
                 assert_eq!(s.tools.current_preset, current);
                 assert_eq!(s.tools.brush_rev, revision);
                 assert_eq!(s.journal, journal);

@@ -1,6 +1,9 @@
 //! The Magnetic Lasso through `tool_event` (mouse and `ui.pointer` alike): the `PcEdges` adapter and
 //! the commit mapping.
 
+use craft::behavior::{Cursor, PaintedCursor};
+use craft::ui::primitives::ToolIcon;
+use craft::ui::runtime::{cursor, windows::WindowHost};
 use egui::Modifiers;
 use photocraft_geom::Rect;
 use serde_json::json;
@@ -8,6 +11,7 @@ use serde_json::json;
 use super::inspect;
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
+use crate::guide_cursor_tests::{harness, hover};
 use crate::state::Tool;
 
 const SQUARE: Rect = Rect::new(50, 40, 130, 110);
@@ -116,4 +120,38 @@ fn a_document_edit_while_drawing_is_traced_on() {
     let end = v["live"].as_array().and_then(|l| l.last()).expect("a live segment");
     let y = end[1].as_f64().unwrap();
     assert!((y - 30.0).abs() < 0.01, "on the new edge: {end}");
+}
+
+/// The live Cursors preference reaches the Magnetic Lasso through the app's canvas (#15466).
+#[test]
+fn the_magnetic_lasso_cursor_follows_other_cursors_and_caps_lock() {
+    let mut h = harness(Tool::MagneticLasso);
+    h.state_mut().ui.tool_options.magnetic.width = 10.0;
+    let host = WindowHost::of(&h.ctx);
+    let lasso = ToolIcon::MagneticLasso.icon();
+
+    for (preference, caps_lock, zoom, radius) in [
+        ("standard", false, 1.0, None),
+        ("precise", false, 1.0, Some(10.0)),
+        ("precise", true, 1.0, None),
+        ("standard", true, 1.0, Some(10.0)),
+        ("standard", true, 2.0, Some(20.0)),
+        ("standard", false, 2.0, None),
+    ] {
+        h.state_mut().run("prefs.set", json!({"path": "cursors.other", "value": preference})).unwrap();
+        let view = &mut h.state_mut().ui.views[0];
+        view.zoom = zoom;
+        view.clear_pending();
+        host.set_caps_lock(Some(caps_lock));
+        // The fixture's vertical guide is at x = 200. Hover clear of it.
+        hover(&mut h, 100.0, 100.0, Modifiers::NONE);
+
+        let shown = cursor::current(&h.ctx);
+        let matches = match (radius, &shown) {
+            (Some(expected), Some(Cursor::Painted(PaintedCursor::Circle { radius, .. }))) => (*radius - expected).abs() < 1e-3,
+            (None, Some(Cursor::Painted(PaintedCursor::Tool { icon, .. }))) => *icon == lasso,
+            _ => false,
+        };
+        assert!(matches, "{preference}, Caps Lock {caps_lock}, zoom {zoom}: expected radius {radius:?} or a lasso icon, got {shown:?}");
+    }
 }

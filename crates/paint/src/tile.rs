@@ -9,7 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 ///
 /// The samples are shared: cloning a tile (brush settings are cloned on every pointer event of a
 /// stroke, #4534) copies a pointer, not a sampled tip that may be thousands of pixels across.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, craft_ui_macros::PlainData)]
 pub struct GrayTile {
     pub width: u32,
     pub height: u32,
@@ -86,7 +86,7 @@ pub const PREVIEW_SIDE: u32 = 96;
 /// could not load it, so a missing file degrades the stroke instead of failing it.
 ///
 /// Two stored tiles are equal when their key and size are (the key names the content).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredTile {
     /// The owner's key for the bitmap (the preset store uses the content hash).
@@ -396,9 +396,9 @@ mod tests {
         let c = t.clone();
         assert!(std::sync::Arc::ptr_eq(&t.data, &c.data));
         assert_eq!(t, c);
-        let brush = crate::brush::BrushSettings { tip: crate::brush::TipShape::Sampled(t.clone()), ..Default::default() };
+        let brush = crate::brush::BrushSettings { tip: crate::brush::TipShape::Sampled(t.clone()).into(), ..Default::default() };
         let copy = brush.clone();
-        let crate::brush::TipShape::Sampled(ct) = &copy.tip else { panic!("sampled") };
+        let crate::brush::TipShape::Sampled(ct) = &*copy.tip else { panic!("sampled") };
         assert!(std::sync::Arc::ptr_eq(&t.data, &ct.data), "the settings' clone shares the tip");
     }
 

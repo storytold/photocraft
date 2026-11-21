@@ -208,7 +208,7 @@ fn rotate_arbitrary_turns_unlinked_layer_masks() {
             assert!(at(4, 4) < 0.1, "{depth}-bit, grouped {grouped}: nothing left at the old place");
             // Rotate 180° and a crop turned by 180° over the whole canvas give the same mask.
             for (id_, p) in [("image.imageRotation.180", json!({})), ("image.crop", json!({"x": 0, "y": 0, "width": 40, "height": 30, "angle": 180}))] {
-                s.active_mut().unwrap().doc = base.clone();
+                *s.active_mut().unwrap().doc_mut() = base.clone();
                 s.execute(id_, p).unwrap();
                 let turned = mask(&s);
                 for y in 0..30 {
@@ -219,10 +219,10 @@ fn rotate_arbitrary_turns_unlinked_layer_masks() {
                 }
             }
             // 90° pins the direction too (180° is its own inverse).
-            s.active_mut().unwrap().doc = base.clone();
+            *s.active_mut().unwrap().doc_mut() = base.clone();
             s.execute("image.rotation.arbitrary", json!({"angle": 90, "interpolation": "nearest"})).unwrap();
             let arbitrary = mask(&s);
-            s.active_mut().unwrap().doc = base.clone();
+            *s.active_mut().unwrap().doc_mut() = base.clone();
             s.execute("image.imageRotation.90cw", json!({})).unwrap();
             let turned = mask(&s);
             for y in 0..40 {
@@ -437,6 +437,105 @@ fn indexed_matte_without_transparency_fills_clear_pixels_and_rejects_bad_input_a
     s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none", "transparency": false, "matte": "#0000ff"})).unwrap();
     assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(0, 0), [0.0, 0.0, 1.0, 1.0]);
     assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, None);
+}
+
+#[test]
+fn indexed_exact_rejects_full_opaque_palette_with_clear_pixels_atomically() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 257, "height": 1, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 256 { [x as f32 / 255.0, x as f32 / 255.0, x as f32 / 255.0, 1.0] } else { [0.0; 4] });
+    let before = doc(&s).layers[0].surface().unwrap().to_interleaved(doc(&s).bounds());
+    let history = s.active().unwrap().history.past_len();
+    let revision = s.active().unwrap().revision;
+    let error = s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none", "transparency": true})).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("255") && message.contains("transparent entry"), "{message}");
+    assert_eq!(doc(&s).mode, ColorMode::Rgb);
+    assert!(doc(&s).color_table.is_none());
+    assert_eq!(doc(&s).layers[0].surface().unwrap().to_interleaved(doc(&s).bounds()), before);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+    assert_eq!(s.active().unwrap().revision, revision);
+}
+
+#[test]
+fn indexed_exact_reserves_transparency_only_when_needed_and_available() {
+    for (opaque, clear) in [(255u32, true), (256, false)] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": opaque + u32::from(clear), "height": 1, "background": "transparent"})).unwrap();
+        paint(&mut s, |x, _| if x < opaque as i32 { [x as f32 / 255.0, x as f32 / 255.0, x as f32 / 255.0, 1.0] } else { [0.0; 4] });
+        let result = s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none", "transparency": true})).unwrap();
+        assert_eq!(doc(&s).mode, ColorMode::Indexed);
+        let table = doc(&s).color_table.as_ref().unwrap();
+        assert_eq!(table.colors.len(), 256);
+        assert_eq!(table.transparent, if clear { Some(255) } else { None });
+        assert_eq!(result["transparentIndex"], if clear { json!(255) } else { Value::Null });
+        let surface = doc(&s).layers[0].surface().unwrap();
+        for x in 0..opaque as i32 {
+            let gray = x as f32 / 255.0;
+            assert_eq!(surface.rgba(x, 0), [gray, gray, gray, 1.0]);
+        }
+        if clear {
+            assert_eq!(surface.rgba(opaque as i32, 0)[3], 0.0);
+        }
+    }
+}
+
+#[test]
+fn indexed_exact_failure_restores_a_floating_copy_and_redo() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 258, "height": 1, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 256 { [x as f32 / 255.0, x as f32 / 255.0, x as f32 / 255.0, 1.0] } else { [0.0; 4] });
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 1, "height": 1})).unwrap();
+    s.edit("redo marker", |doc, _| {
+        doc.name.push_str(" changed");
+        Ok(())
+    })
+    .unwrap();
+    assert!(s.undo());
+    s.execute("select.float", json!({"dx": 256, "copy": true})).unwrap();
+    let before = s.active().unwrap().clone();
+    assert!(before.history.can_redo());
+    let piece = crate::float_cmds::floating(&before).unwrap();
+    let pixels = before.doc.layers[0].surface().unwrap().to_interleaved(before.doc.bounds());
+
+    let error = s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none", "transparency": true})).unwrap_err();
+    assert!(error.to_string().contains("255"), "{error}");
+    let after = s.active().unwrap();
+    let restored = crate::float_cmds::floating(after).unwrap();
+    assert_eq!(after.doc.id, before.doc.id);
+    assert_eq!(after.doc.mode, ColorMode::Rgb);
+    assert!(std::sync::Arc::ptr_eq(&after.doc, &before.doc));
+    assert_eq!(after.doc.layers[0].surface().unwrap().to_interleaved(after.doc.bounds()), pixels);
+    assert_eq!((restored.layer, restored.offset, restored.revision, restored.moved), (piece.layer, piece.offset, piece.revision, piece.moved));
+    assert!(std::sync::Arc::ptr_eq(&restored.parts, &piece.parts));
+    assert_eq!(after.revision, before.revision);
+    assert_eq!(after.history.past_len(), before.history.past_len());
+    assert!(after.history.can_redo());
+    assert_eq!(after.active_layer, before.active_layer);
+    assert_eq!(after.selected_layers, before.selected_layers);
+}
+
+#[test]
+fn indexed_exact_success_drops_the_floating_copy_before_counting_colours() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 257, "height": 1, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 256 { [x as f32 / 255.0, x as f32 / 255.0, x as f32 / 255.0, 1.0] } else { [0.0; 4] });
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 1, "height": 1})).unwrap();
+    s.execute("select.float", json!({"dx": 256, "copy": true})).unwrap();
+    let history = s.active().unwrap().history.past_len();
+    let result = s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none", "transparency": true})).unwrap();
+    assert_eq!(doc(&s).mode, ColorMode::Indexed);
+    assert_eq!(doc(&s).color_table.as_ref().unwrap().colors.len(), 256);
+    assert_eq!(result["transparentIndex"], Value::Null);
+    assert!(crate::float_cmds::floating(s.active().unwrap()).is_none());
+    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(256, 0), [0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(s.active().unwrap().history.past_len(), history + 2, "drop and conversion remain separate history steps");
+    assert!(s.undo());
+    assert_eq!(doc(&s).mode, ColorMode::Rgb);
+    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(256, 0)[3], 1.0);
+    assert!(s.undo());
+    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(256, 0)[3], 0.0);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
 }
 
 #[test]
@@ -860,13 +959,13 @@ fn bitmap_pixels(d: &Document) -> Vec<f32> {
 
 #[test]
 fn bitmap_in_bands_matches_one_full_canvas_conversion() {
-    // #8477: the composite is converted in bands (32768 px wide: 256 rows each, so 300 rows are
-    // two). Diffusion carries its error across the band edge, and pattern, halftone and custom
+    // #8477: 300 rows cross a 256-row compositor band. Diffusion carries its error across the
+    // band edge, and pattern, halftone and custom
     // pattern stay anchored to the image's rows: the result equals one full-canvas conversion.
-    let (w, h) = (32_768u32, 300u32);
+    let (w, h) = (64u32, 300u32);
     let mut s = session(w, h, 8, "grayscale");
     paint(&mut s, |x, y| {
-        let v = ((x % 509) as f32 / 509.0 * 0.6 + (y as f32 / 300.0) * 0.4).fract();
+        let v = ((x % 61) as f32 / 61.0 * 0.6 + (y as f32 / 300.0) * 0.4).fract();
         [v, v, v, 1.0]
     });
     add_pattern(&mut s, "Cells", 3, 2, &[10, 200, 90, 250, 150, 40]);
@@ -888,7 +987,7 @@ fn bitmap_in_bands_matches_one_full_canvas_conversion() {
         if method == "customPattern" {
             p["pattern"] = json!("Cells");
         }
-        s.execute("image.mode.bitmap", p.clone()).unwrap();
+        bitmap_in_bands(&mut s, &p, 256).unwrap();
         let want = match method {
             "halftone" => {
                 let cell = (before.resolution_dpi / 53.0).max(2.0);
@@ -902,6 +1001,9 @@ fn bitmap_in_bands_matches_one_full_canvas_conversion() {
         };
         // Grayscale stores 0/1 the way `from_rgba` turns the old RGBA output into gray.
         let want: Vec<f32> = want.iter().map(|g| photocraft_raster::from_rgba(&storage_format(ColorMode::Bitmap), [*g, *g, *g, 1.0])[0]).collect();
+        if method == "threshold" {
+            assert!(want.contains(&0.0) && want.contains(&1.0), "the gradient crosses the threshold");
+        }
         let got = bitmap_pixels(doc(&s));
         let diff = got.iter().zip(&want).filter(|(a, b)| (**a - **b).abs() > 1e-6).count();
         assert_eq!(diff, 0, "{method}: {diff} of {} pixels differ", got.len());
