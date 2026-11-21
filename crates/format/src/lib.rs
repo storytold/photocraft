@@ -62,8 +62,8 @@ pub enum FormatError {
     Corrupt(String),
     #[error("unsupported .pcraft feature: {0}")]
     Unsupported(String),
-    #[error("bundle written by a newer version (format {found}, this build reads up to {supported})")]
-    TooNew { found: u32, supported: u32 },
+    #[error("bundle written by a newer version (format {found}, this build reads up to {supported}){writer}. Open it in the same or a newer build, including the pre-release if that is where it was saved; this file has not been changed", writer = newer_writer_hint(.generator.as_deref()))]
+    TooNew { found: u32, supported: u32, generator: Option<String> },
     #[error("limit exceeded: {0}")]
     LimitExceeded(String),
     #[error("`{path}` is NaN or infinite, which a .pcraft manifest cannot hold; reset that value and save again")]
@@ -72,6 +72,21 @@ pub enum FormatError {
     Io(#[from] std::io::Error),
     #[error("manifest JSON: {0}")]
     Json(#[from] serde_json::Error),
+}
+
+// Generator is untrusted manifest data. Keep complete ordinary build identities, but never
+// carry a manifest-sized string into a diagnostic/Debug value or interpret it as a format version.
+fn bounded_writer(value: String) -> String {
+    let mut chars = value.chars();
+    let mut bounded: String = chars.by_ref().take(256).collect();
+    if chars.next().is_some() {
+        bounded.push('…');
+    }
+    bounded
+}
+
+fn newer_writer_hint(generator: Option<&str>) -> String {
+    generator.filter(|value| !value.trim().is_empty()).map(|value| format!("; reported writer: {value:?}")).unwrap_or_default()
 }
 
 impl FormatError {
@@ -86,7 +101,7 @@ impl From<craft_pcraft_format::Error> for FormatError {
         match e {
             Error::Corrupt(m) => FormatError::Corrupt(m),
             Error::Unsupported(m) => FormatError::Unsupported(m),
-            Error::TooNew { found, supported, .. } => FormatError::TooNew { found, supported },
+            Error::TooNew { found, supported, generator, .. } => FormatError::TooNew { found, supported, generator: generator.map(bounded_writer) },
             Error::LimitExceeded(m) => FormatError::LimitExceeded(m),
             Error::Json(e) => FormatError::Json(e),
             other => FormatError::Corrupt(other.to_string()),

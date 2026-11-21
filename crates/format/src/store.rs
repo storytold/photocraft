@@ -1126,7 +1126,10 @@ impl PcraftWriter {
         convert::check_nesting(&doc.layers)?;
         let mut c = Collect { hash_cache: Some(&mut self.hash_cache), blob_hash_cache: Some(&mut self.blob_hash_cache), ..Default::default() };
         let document = convert::doc_m(doc, &mut c)?;
-        let mut model = Manifest::new(format!("photocraft-format {}", env!("CARGO_PKG_VERSION")), document);
+        // Reuse the existing shared build-version override; stable without it is byte-identical.
+        // This is writer provenance only, never a format-version bump or a migration trigger.
+        let writer_version = option_env!("PHOTOCRAFT_OVERRIDE_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
+        let mut model = Manifest::new(format!("photocraft-format {writer_version}"), document);
         model.thumbnail = opts.thumbnail.as_ref().map(|_| THUMB.to_owned());
         model.composite = opts.composite.as_ref().map(|_| COMPOSITE.to_owned());
         let full_composite = opts.full_composite.is_some();
