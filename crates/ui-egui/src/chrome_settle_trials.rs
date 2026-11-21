@@ -4,7 +4,7 @@
 //! and whether the menu bar takes the menu keys. A dock group itself holds its tab strip and body, which are memoized
 //! views, and runs with the dock area around them, so it is not counted.
 
-use craft::ui::runtime::measure::{MemoRun, last_frame_memo_runs, last_pass_memo_runs, last_pass_runs};
+use craft::ui::runtime::measure::{MemoRun, last_frame_memo_runs, last_pass_runs};
 use egui::accesskit::Role;
 use egui::{Event, Key, Modifiers, vec2};
 use egui_kittest::Harness;
@@ -46,15 +46,11 @@ fn views_ran(h: &H, name: &str) -> usize {
     views(h, name, MemoRun::Ran)
 }
 
-/// Whether the chrome component named `name` ran in the last pass.
-fn ran(h: &H, name: &str) -> bool {
-    chrome_runs(h).iter().any(|(ty, _)| ty.contains(name))
-}
-
-/// The chrome's memoized views in the last pass, by type name, and how each took part.
+/// The chrome's memoized views in the last frame, by type name, and how each took part: a view that ran in a discarded
+/// pass and replayed in the last one counts as run.
 fn chrome_views(h: &H) -> Vec<(&'static str, MemoRun)> {
     const CHROME: [&str; 3] = ["docking::group::TabRow<", "dock_column::bar::BarProps<", "menu::bar::BarProps<"];
-    last_pass_memo_runs(&h.ctx).into_iter().filter(|(name, _, _)| CHROME.iter().any(|c| name.contains(c))).map(|(name, _, run)| (name, run)).collect()
+    last_frame_memo_runs(&h.ctx).into_iter().filter(|(name, _, _)| CHROME.iter().any(|c| name.contains(c))).map(|(name, _, run)| (name, run)).collect()
 }
 
 /// The panel tab strips the last pass ran.
@@ -85,9 +81,8 @@ fn a_hover_over_the_canvas_replays_the_dock_chrome_and_the_menu_bar() {
     }
 }
 
-/// A hover over the canvas replays the title bar, the options bar, the status bar (its own view) and the panel bodies. The Layers
-/// panel reads the pointer frame for its modifiers and runs on every pointer move until storytold/craft-libs#2812 is
-/// pinned, so one panel body may run.
+/// A hover over the canvas replays the title bar, the options bar, the status bar (its own view) and every panel body: the
+/// panels read the modifiers, not the pointer frame (storytold/craft-libs#2812), so a pointer move runs none of them.
 #[test]
 fn a_hover_over_the_canvas_replays_the_bars_and_the_panel_bodies() {
     let mut h = harness();
@@ -99,7 +94,7 @@ fn a_hover_over_the_canvas_replays_the_bars_and_the_panel_bodies() {
             assert_eq!((views_ran(&h, slot), views(&h, slot, MemoRun::Replayed)), (0, 1), "hover step {step}: the {slot} view replays");
         }
         let bodies = (views_ran(&h, "region_versions::PanelBody<"), views(&h, "region_versions::PanelBody<", MemoRun::Replayed));
-        assert!(bodies.0 <= 1 && bodies.1 >= 2, "hover step {step}: the panel bodies replay, Layers aside: {bodies:?}");
+        assert!(bodies.0 == 0 && bodies.1 >= 2, "hover step {step}: every panel body replays: {bodies:?}");
     }
 }
 
@@ -127,7 +122,10 @@ fn the_chrome_runs_when_what_it_shows_changes() {
     if crate::i18n::needs_catalogs() {
         h.state_mut().session.prefs.edit(|prefs| prefs.interface.language = "fr".into());
         h.run_steps(1);
-        assert!(ran(&h, "TabStrip<") && views_ran(&h, "TitleSlot<") > 0, "a new language runs the tab strips and the title bar: {:?}", chrome_runs(&h));
+        // The new tab titles change label widths, so the frame takes a second pass that replays what the first ran:
+        // the frame's views tell.
+        let (tabs, title) = (views_ran(&h, "docking::group::TabRow<"), views_ran(&h, "TitleSlot<"));
+        assert!(tabs > 0 && title > 0, "a new language runs the tab rows and the title bar: {tabs} tab rows, {title} title bars");
         h.run_steps(2);
     }
 

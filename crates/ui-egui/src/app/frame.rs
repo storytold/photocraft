@@ -248,7 +248,8 @@ impl PhotocraftApp {
             .show(ui, self);
         self.ui.view.screen_mode = mode;
         // The Properties Reset session starts anew once the panel was not shown (`properties_hidden`).
-        if !crate::panel_docking::is_front(self, "properties") {
+        // Home shows no dock, so no Properties panel either.
+        if home || !crate::panel_docking::is_front(self, "properties") {
             self.properties_hidden = self.properties_hidden.saturating_add(2);
         }
         // Over the window: the background job and update dialogs before the host runs, then every

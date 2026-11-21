@@ -73,7 +73,9 @@ pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
     let sessions =
         (crate::transform_tool::bar_key(app), crate::puppet_ui::bar_key(app), crate::perspective_ui::bar_key(app), crate::crop_ui::bar::bar_key(app));
     let shown = (serialized(&app.ui.tool_options), super::options_bar::edit_key(app), text_target(app));
-    version(app, (view(app), sessions, shown, brush(app), colours(app)))
+    // A canvas gesture's start and end change what the bar enables (the symmetry menu's Transform entry).
+    let gesture = crate::canvas::tools::in_gesture(app);
+    version(app, (view(app), sessions, shown, brush(app), colours(app), gesture))
 }
 
 /// The version of the title bar: the title it shows (the active document's name and its unsaved mark), the language
@@ -87,13 +89,15 @@ pub(crate) fn title_bar(app: &PhotocraftApp) -> u64 {
     version(app, (super::title_bar::title_text(app), crate::i18n::current().code(), app.services.native_menu.is_none(), keys))
 }
 
-/// The version of panel `id`'s body. The Navigator shows the active view, the Layers panel the layer the Move tool's
+/// The version of panel `id`'s body. The Navigator shows the active view and the adjustment preview its picture
+/// shows, the Layers panel the layer the Move tool's
 /// rollover outlines on the canvas, which effects lists and groups are open (view state off the document's revision,
 /// `DocState::layers_view_revision`), the Smart Filter row picked on its own and what it is asked to do in its next
 /// pass (open a row for renaming, focus its Name filter, reveal a layer, follow the Move tool's pick), the Info panel the pointer's document pixel, the zoom and the Eyedropper's Sample
 /// Size it samples at and the Crop tool's frame size, the Clone Source panel the pairing at the last hover point, the
 /// Modifier Keys panel the latched keys, which their use releases, the Properties panel the colour its well's open
-/// Color Picker previews and the answer that picker left, the Histogram the adjustment preview it counts. Brush
+/// Color Picker previews and the answer that picker left, the Histogram the adjustment preview it counts and the
+/// histograms its worker lands (`histogram_panel::update`, with no command). Brush
 /// Settings and Brushes show the brush and its presets; Color, Swatches, Gradients and the Gradient Editor show the
 /// colours, and so do Properties (a shape layer's fill and stroke swatches, a gradient fill's Foreground and
 /// Background stops, the adjustment editors' swatches) and Character (the colour of new type is the foreground).
@@ -101,7 +105,7 @@ pub(crate) fn title_bar(app: &PhotocraftApp) -> u64 {
 /// type being edited, which Glyphs inserts at. Every other panel shows only what every version holds.
 pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
     match id {
-        "navigator" => version(app, view(app)),
+        "navigator" => version(app, (view(app), adjustment_preview(app))),
         "layers" => {
             let filter_pick = app.session.active().and_then(|st| app.smart_filter_picks.get(&st.doc.id).copied());
             let requests = (app.layers_rename, app.find_layers_focus, app.pending_reveal.as_ref().map(|(layer, _)| *layer), app.move_pick, filter_pick);
@@ -115,7 +119,7 @@ pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
         "modifierKeys" => version(app, app.ui.shell.latched),
         "properties" => version(app, (crate::color_picker_ui::window_picker_state(app, PickWindow::Properties), colours(app), text_target(app))),
         "brushSettings" | "brushes" => version(app, brush(app)),
-        "histogram" => version(app, adjustment_preview(app)),
+        "histogram" => version(app, (adjustment_preview(app), histograms(app))),
         "character" => version(app, (colours(app), type_defaults(app), text_target(app))),
         "paragraph" => version(app, (type_defaults(app), text_target(app))),
         "glyphs" => version(app, text_target(app)),
@@ -127,10 +131,12 @@ pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
 /// What every slot may show, joined with `extra`: the commands run (any of them may change anything), the active
 /// document, its revision, its active layers and which part of them is targeted (the layer mask, the vector mask, a
 /// filter mask, the selected path; the Layers, Channels, Paths and Properties panels and the canvas set it without a
-/// command), and the tool.
+/// command), the tool and the preferences (Preferences' Apply and OK and other writers change them through the engine
+/// or `prefs.edit`, not as a counted command: units, the language, toolbar slots).
 fn version(app: &PhotocraftApp, extra: impl Hash) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     app.commands_run.hash(&mut hasher);
+    app.session.prefs.rev().hash(&mut hasher);
     app.session.active_generation().hash(&mut hasher);
     app.session.active_layer_changes().hash(&mut hasher);
     app.session.active().map(|st| st.revision).hash(&mut hasher);
@@ -175,6 +181,11 @@ fn type_defaults(app: &PhotocraftApp) -> impl Hash + '_ {
 /// values) or an Image › Adjustments dialog's preview. Both change on every move with no command until the release.
 fn adjustment_preview(app: &PhotocraftApp) -> impl Hash + '_ {
     (app.live_adjust.as_ref(), crate::adjust_preview::shown_key(app))
+}
+
+/// The histograms the Histogram panel shows, by when each landed: a worker lands one with no command or revision.
+fn histograms(app: &PhotocraftApp) -> [Option<u64>; 2] {
+    [app.doc_hist.as_ref().map(|h| h.at.to_bits()), app.doc_hist_preview.as_ref().map(|h| h.at.to_bits())]
 }
 
 /// The caret and selection of the type being edited: the type members show the values there, and a click, a drag or an
@@ -263,7 +274,12 @@ mod tests {
         assert_eq!(caret, ["properties", "character", "paragraph", "glyphs", "optionsBar"], "the caret moved in the type being edited");
         assert_eq!(moved(&mut app, &|app| app.canvas_hover_layer = Some(photocraft_doc::LayerId(1))), ["layers"], "the Move tool's rollover on the canvas");
         let preview = moved(&mut app, &|app| app.live_adjust = Some((photocraft_doc::LayerId(1), serde_json::json!({"brightness": 10}))));
-        assert_eq!(preview, ["histogram"], "an adjustment layer's live preview");
+        assert_eq!(preview, ["navigator", "histogram"], "an adjustment layer's live preview");
+        let landed = moved(&mut app, &|app| {
+            let key = crate::histogram_panel::HistKey { doc: photocraft_doc::DocId(1), revision: 0, source: 0, preview: 0, max_level: 0 };
+            app.doc_hist = Some(crate::histogram_panel::PanelHist { key, at: 30.0, hist: Default::default() });
+        });
+        assert_eq!(landed, ["histogram"], "a histogram the worker landed");
     }
 
     /// Opening or closing a layer's effects list or a group is view state off the document's revision, and a command
@@ -294,6 +310,9 @@ mod tests {
         every(&mut app, "the tool", &|app| app.ui.tool = Tool::Brush);
         every(&mut app, "the layer mask targeted", &|app| app.ui.mask_target = true);
         every(&mut app, "a path selected", &|app| app.ui.selected_path = Some("work".into()));
+        every(&mut app, "a preference written", &|app| {
+            app.session.prefs.edit(|p| p.general.image_interpolation = photocraft_engine::prefs::Interpolation::Nearest)
+        });
     }
 
     /// The UI language moves the title bar's version (its menu titles).
