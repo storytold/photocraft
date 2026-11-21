@@ -9,6 +9,7 @@ mod brush_reset_defaults;
 mod camera_raw_histogram;
 mod camera_raw_scope;
 mod clipboard_svg;
+mod control_pointer_stroke;
 mod crop_ctrl_straighten;
 mod crop_defaults;
 mod crop_options_bar_chrome;

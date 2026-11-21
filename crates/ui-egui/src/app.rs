@@ -273,6 +273,11 @@ impl eframe::App for PhotocraftApp {
     /// Drain the platform's optional WinTab queue before the frame's input is processed.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         let frame_start = gpu_canvas::now_ms();
+        if crate::diag::on()
+            && let Some(events) = crate::diag::events(&raw_input.events)
+        {
+            diag!("raw frame={} viewport={:?} focused={} {events}", ctx.cumulative_frame_nr(), raw_input.viewport_id, raw_input.focused);
+        }
         self.framework_before_input(ctx);
         if let Some(tablet_poll) = self.services.tablet_poll.as_mut() {
             tablet_poll(raw_input.focused);

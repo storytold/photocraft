@@ -700,6 +700,25 @@ pub(crate) fn run(app: &mut PhotocraftApp, ui: &egui::Ui, host: CanvasHost, out:
     tools.zoom.options.scrubby_zoom = app.ui.tool_options.zoom_scrubby;
     let smart = super::snap_ui::smart_guide_color(app);
     let mut response = with_rig(app, &ctx, host, &mut tools, primary, shown, |selected, tool_host| tool_host.smart_guide_color(smart).run(ui, out, selected));
+    if crate::diag::on() {
+        let events = ctx.input(|i| crate::diag::events(&i.raw.events));
+        if events.is_some() || response.gesture.is_some() || response.ignored_press.is_some() {
+            diag!(
+                "toolhost frame={} pass={} canvas={:?} viewport={:?} primary={primary} tool={tool:?} injected_pass={} rect={:?} press={:?} gesture={:?} ignored_press={:?} in_gesture={} {}",
+                ctx.cumulative_frame_nr(),
+                ctx.cumulative_pass_nr(),
+                out.id,
+                ctx.viewport_id(),
+                craft::ui::runtime::windows::WindowHost::of(&ctx).injected_pass(),
+                out.rect,
+                out.press,
+                response.gesture,
+                response.ignored_press,
+                ToolHost::in_gesture(&ctx, host.canvas_id()),
+                events.unwrap_or_default()
+            );
+        }
+    }
     // The autoscroll moves the view the pass ended with; the caller copies the response's view into its own.
     if let (Some(scroll), Some(space)) = (response.scroll, out.space.as_ref()) {
         let size = app.session.documents().get(host.idx).map(|state| Size::new(f64::from(state.doc.size.width), f64::from(state.doc.size.height)));
