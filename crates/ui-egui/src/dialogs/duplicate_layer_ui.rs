@@ -63,15 +63,23 @@ pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
     let mut options: Vec<(String, Label)> = destinations(app).into_iter().map(|(key, name)| (key, Label::from(name))).collect();
     options.push(("new".to_string(), Label::from(tl!("New"))));
     // Another document or New proposes the layer's own name; the source document, "<name> copy" again (#14604).
-    let names = name.clone().map(|copy| (copy, layer.name.clone()));
+    // A group's naming is not measured and stays as it was (CodeRabbit on #16090).
+    let names = name.clone().filter(|_| !layer.is_group()).map(|copy| (copy, layer.name.clone()));
     let shown_for = std::sync::Mutex::new(source.to_string());
+    // The proposal the As: field currently holds: only an untouched one is replaced when the destination changes.
+    let proposal = std::sync::Mutex::new(name.clone().unwrap_or_default());
     Ok(params::open_param(app, KEY, DialogFields::new(), captured, move |fields: &mut DialogFields| {
         if let Some((copy, plain)) = &names {
             let chosen = fields.text("document").map(str::to_owned);
             let mut shown = shown_for.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(chosen) = chosen.filter(|chosen| *chosen != *shown) {
                 let proposed = if chosen == source.to_string() { copy } else { plain };
-                fields.set("name", FieldValue::Text(proposed.clone()));
+                let mut last = proposal.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                // A name the user typed is theirs: keep it across destination changes (CodeRabbit on #16090).
+                if fields.text("name").is_none_or(|now| now.is_empty() || now == *last) {
+                    fields.set("name", FieldValue::Text(proposed.clone()));
+                    *last = proposed.clone();
+                }
                 *shown = chosen;
             }
         }
@@ -127,8 +135,9 @@ fn duplicate(app: &mut PhotocraftApp, fields: &DialogFields) -> Result<Value, St
             params.insert("name".into(), json!(name));
         }
         // An empty As: another document or New takes the layer's own name, as the dialog proposes for them (#14604).
+        // A group keeps its previous behaviour (CodeRabbit on #16090).
         Some(_) if !matches!(destination, Destination::Document(d) if d == index) => {
-            if let Some(layer) = app.session.active().and_then(|st| st.active_layer.and_then(|id| st.doc.layer(id))) {
+            if let Some(layer) = app.session.active().and_then(|st| st.active_layer.and_then(|id| st.doc.layer(id))).filter(|l| !l.is_group()) {
                 params.insert("name".into(), json!(layer.name));
             }
         }

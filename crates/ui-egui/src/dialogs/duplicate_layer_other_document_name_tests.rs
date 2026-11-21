@@ -156,3 +156,33 @@ fn an_empty_name_for_a_background_into_another_document_is_background() {
     ok(&mut app, dialog);
     assert_eq!(count(&app, 1, "Background"), 2, "the target's own Background and the copy: {:?}", names(&app, 1));
 }
+
+/// A name the user typed survives a change of destination; only an untouched proposal is rewritten (CodeRabbit on #16090).
+#[test]
+fn a_typed_name_survives_a_change_of_destination() {
+    let mut app = app();
+    let dialog = open(&mut app);
+    set(&mut app, dialog, "name", json!("Shadow")).unwrap();
+    let target = doc_key(&app, 1);
+    choose(&mut app, dialog, target);
+    assert_eq!(proposed(&app, dialog), json!("Shadow"), "another document");
+    choose(&mut app, dialog, json!("new"));
+    assert_eq!(proposed(&app, dialog), json!("Shadow"), "New");
+    let source = doc_key(&app, 0);
+    choose(&mut app, dialog, source);
+    assert_eq!(proposed(&app, dialog), json!("Shadow"), "the source again");
+}
+
+/// A group is outside the new proposal policy: its "<name> copy" stays whatever the destination (CodeRabbit on #16090).
+#[test]
+fn a_groups_proposal_does_not_change_with_the_destination() {
+    let mut app = app();
+    app.run("layer.new.group", json!({"name": "Folder"})).unwrap();
+    let dialog = open(&mut app);
+    assert_eq!(proposed(&app, dialog), json!("Folder copy"));
+    let target = doc_key(&app, 1);
+    choose(&mut app, dialog, target);
+    assert_eq!(proposed(&app, dialog), json!("Folder copy"), "another document");
+    choose(&mut app, dialog, json!("new"));
+    assert_eq!(proposed(&app, dialog), json!("Folder copy"), "New");
+}
