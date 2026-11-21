@@ -28,8 +28,10 @@ pub(crate) struct Waiting {
     /// step writing there ([`admit`]).
     id: String,
     params: Value,
-    /// The journal's length when the dialogs opened: each save written since journals its step.
-    journal: usize,
+    /// The journal's length when the dialogs last let a write through ([`admit_step`]): only a
+    /// save journaled from there on is the dialog's own. A save made some other way while the
+    /// save dialog was still open (a control request) doesn't count, so Cancel still stops.
+    admitted: Option<usize>,
     /// Set when Export As has written its files: several Scale All sizes journal no step.
     exported: bool,
     /// The document the step saves. Nothing is written once another one is active ([`admit_step`]),
@@ -57,7 +59,7 @@ pub(super) fn pause(app: &mut PhotocraftApp, action: &Action, i: usize, id: &str
         token,
         id: id.to_owned(),
         params: params.clone(),
-        journal: app.session.journal.len(),
+        admitted: None,
         exported: false,
         doc: app.session.active().map(|d| d.doc.id),
         background: std::mem::replace(&mut app.background_jobs, false),
@@ -109,8 +111,9 @@ pub(crate) fn admit(app: &mut PhotocraftApp, path: &str) -> Result<(), String> {
 
 /// The write a waiting save step's dialog is about to make, as the step with `params`: refused
 /// once another document is active, then judged by the gate the playback paused under and the
-/// current one, as an edited step dialog's values are. `Ok` when no save step is waiting (a save
-/// by hand).
+/// current one, as an edited step dialog's values are. Called right before each write the
+/// dialogs make (the chosen file, a format's options, Export As's OK). `Ok` when no save step is
+/// waiting (a save by hand).
 pub(crate) fn admit_step(app: &mut PhotocraftApp, params: Value) -> Result<(), String> {
     let Some(waiting) = app.paused_playbacks.save.as_ref() else { return Ok(()) };
     if waiting.doc.is_some() && waiting.doc != app.session.active().map(|d| d.doc.id) {
@@ -118,7 +121,12 @@ pub(crate) fn admit_step(app: &mut PhotocraftApp, params: Value) -> Result<(), S
     }
     let id = waiting.id.clone();
     let gate = app.paused_playbacks.paused.get(&waiting.token).and_then(|p| p.gate);
-    runner::authorize_owned(app, &id, &params, gate, false)
+    runner::authorize_owned(app, &id, &params, gate, false)?;
+    let journal = app.session.journal.len();
+    if let Some(waiting) = app.paused_playbacks.save.as_mut() {
+        waiting.admitted = Some(journal);
+    }
+    Ok(())
 }
 
 /// Export As wrote its files: a waiting Export As step continues.
@@ -142,8 +150,11 @@ pub(crate) fn tick(app: &mut PhotocraftApp) {
     }
     let Some(waiting) = app.paused_playbacks.save.take() else { return };
     app.background_jobs = waiting.background;
-    let saved =
-        waiting.exported || app.session.journal.get(waiting.journal..).is_some_and(|steps| steps.iter().any(|(id, _)| actions_cmds::shell_save_command(id)));
+    let saved = waiting.exported
+        || waiting
+            .admitted
+            .and_then(|from| app.session.journal.get(from..))
+            .is_some_and(|steps| steps.iter().any(|(id, _)| actions_cmds::shell_save_command(id)));
     if !saved {
         // A failed or refused write keeps its own error in the status bar; Cancel says the action
         // stopped.

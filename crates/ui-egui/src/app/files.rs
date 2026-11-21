@@ -783,11 +783,15 @@ impl PhotocraftApp {
     /// the save.
     pub(crate) fn write_answered_save(&mut self, ctx: &egui::Context, doc: DocId, path: String, settings: &ExportSettings, copy: bool, step: (&str, Value)) {
         let (record, mut step) = step;
-        let written = self.with_document(doc, |app| {
-            // Before the save renames the document: a Save As that keeps its own name records
-            // only the folder (#5305).
-            app.record_answered_save_as(record, &mut step);
-            app.write_document(path, settings, copy)
+        // A played save step's dialog checks its write again right before it (#15945): the
+        // document or the gate may have changed while the prompt was open.
+        let written = crate::actions::save_dialog::admit(self, &path).and_then(|()| {
+            self.with_document(doc, |app| {
+                // Before the save renames the document: a Save As that keeps its own name records
+                // only the folder (#5305).
+                app.record_answered_save_as(record, &mut step);
+                app.write_document(path, settings, copy)
+            })
         });
         if written.is_ok() {
             photocraft_engine::actions_cmds::note_automation_step(&mut self.session, record, &step);

@@ -264,3 +264,48 @@ fn a_save_answered_on_another_active_document_writes_nothing_and_ends_the_action
     assert!(app.ui.status_error && app.ui.status.contains("active document changed"), "{}", app.ui.status);
     assert!(app.paused_playbacks.paused.is_empty() && app.paused_playbacks.save.is_none());
 }
+
+#[test]
+fn a_save_made_another_way_while_the_dialog_is_open_doesnt_continue_a_cancelled_step() {
+    let (mut app, files, written) = setup(("file.saveAs", json!({"path": "/out/played.psd"})));
+    play(&mut app);
+    // A control request saves the document while the step's save dialog is still open.
+    app.save_as(Some("/elsewhere/by-request.psd".into())).unwrap();
+    assert_eq!(*written.borrow(), ["/elsewhere/by-request.psd"]);
+    answer(&mut app, &files, Picked::Cancelled);
+    assert!(!after_ran(&app), "Cancel stops the action: that save wasn't the dialog's");
+    assert_eq!(app.ui.status, "Action playback stopped");
+}
+
+/// Answers the open JPEG Options with OK, then lets the next frame see the dialogs end.
+fn confirm_jpeg_options(app: &mut PhotocraftApp) {
+    let ctx = app.ctx().clone();
+    crate::format_prompts::confirm(app, &ctx);
+    save_dialog::tick(app);
+}
+
+#[test]
+fn a_format_options_write_is_checked_again_when_it_is_confirmed() {
+    // Another document came to the front while JPEG Options was open.
+    let (mut app, files, written) = setup(("file.saveAs", json!({"path": "/out/played.psd"})));
+    play(&mut app);
+    answer(&mut app, &files, chose("/out/chosen.jpg"));
+    assert!(app.save_options_open());
+    app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
+    confirm_jpeg_options(&mut app);
+    assert!(written.borrow().is_empty(), "nothing is written for the step's document once another is active");
+    assert!(!after_ran(&app));
+    assert!(app.ui.status_error && app.ui.status.contains("active document changed"), "{}", app.ui.status);
+
+    // A gate in force by the time JPEG Options is confirmed refuses the write.
+    let (mut app, files, written) = setup(("file.saveACopy", json!({"path": "/out/copy.psd"})));
+    play(&mut app);
+    answer(&mut app, &files, chose("/outside/copy.jpg"));
+    assert!(app.save_options_open());
+    app.session.authorize = Some(deny_outside);
+    confirm_jpeg_options(&mut app);
+    assert!(written.borrow().is_empty(), "the current gate judges the format options' write");
+    assert!(!after_ran(&app));
+    assert!(app.ui.status_error && app.ui.status.contains("denied"), "{}", app.ui.status);
+    assert!(app.paused_playbacks.paused.is_empty() && app.paused_playbacks.save.is_none());
+}
