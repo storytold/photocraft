@@ -393,10 +393,16 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
 pub const ACT_COLORS: usize = craft_psd::act::COLOR_COUNT;
 
 /// `.act` bytes as `#rrggbb` colors plus the transparent index, for the Color Table dialog.
+/// A trailer count of 0 gives one white entry, as Photoshop loads it, never an empty table
+/// that `image.mode.colorTable` would refuse.
 pub fn act_table(bytes: &[u8]) -> std::result::Result<(Vec<String>, Option<u64>), String> {
     let f = craft_psd::act::parse(bytes).map_err(|e| e.to_string())?;
     let hex = |c: &[u8; 3]| format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]);
-    Ok((f.used().iter().map(hex).collect(), f.transparent_index().map(|i| i as u64)))
+    let mut colors: Vec<String> = f.used().iter().map(hex).collect();
+    if colors.is_empty() {
+        colors.push(hex(&[255, 255, 255]));
+    }
+    Ok((colors, f.transparent_index().map(|i| i as u64)))
 }
 
 /// Encode colors as `.act` bytes (at most [`ACT_COLORS`]); the transparent index is kept.
@@ -706,3 +712,6 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod act_zero_count_tests;

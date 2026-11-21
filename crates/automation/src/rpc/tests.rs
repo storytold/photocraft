@@ -760,7 +760,7 @@ fn workspace_psd_saves_embed_no_file_a_linked_smart_object_names() {
     session.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
     session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     let state = session.active_mut().unwrap();
-    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
+    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(state.doc_mut()).layers[0].content else { panic!("smart object") };
     smart.source = SmartSource::Linked { path: outside.to_string_lossy().into_owned() };
     std::fs::write(root.join("in.pcraft"), photocraft_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
     // A trusted export embeds the linked file, as before.
@@ -792,7 +792,7 @@ fn allowed_filters_do_not_rerender_a_smart_object_from_its_linked_file() {
     session.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
     session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     let state = session.active_mut().unwrap();
-    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
+    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(state.doc_mut()).layers[0].content else { panic!("smart object") };
     smart.source = SmartSource::Linked { path: outside.to_string_lossy().into_owned() };
     std::fs::write(root.join("p.pcraft"), photocraft_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
 
@@ -824,7 +824,7 @@ fn workspace_layer_exports_keep_linked_smart_objects_as_pixels() {
     session.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
     session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     let state = session.active_mut().unwrap();
-    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
+    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(state.doc_mut()).layers[0].content else { panic!("smart object") };
     smart.source = SmartSource::Linked { path: outside.to_string_lossy().into_owned() };
     std::fs::write(root.join("in.pcraft"), photocraft_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
 
