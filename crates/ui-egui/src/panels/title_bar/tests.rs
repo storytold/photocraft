@@ -64,6 +64,16 @@ fn the_close_caption_asks_about_unsaved_work_unless_the_device_is_lost() {
     assert!(lost.state().framework.dialogs.is_empty(), "no prompt opened");
 }
 
+#[test]
+fn the_close_caption_closes_a_window_without_documents() {
+    let mut h = integrated_app(|_| {});
+    assert!(h.state().session.active().is_none(), "there is no open document");
+    h.get_by_label("Close").click();
+    let quits = commands(&mut h, 6);
+    assert!(quits.iter().any(|c| matches!(c, ViewportCommand::Close)), "the empty window receives Close: {quits:?}");
+    assert!(h.state().framework.dialogs.is_empty(), "there is no unsaved-work prompt");
+}
+
 /// The whole app with the menu bar set as given.
 fn whole_app(menu_bar: bool) -> Harness<'static, Box<PhotocraftApp>> {
     integrated_app(move |app| app.ui.panels.menu_bar = menu_bar)
