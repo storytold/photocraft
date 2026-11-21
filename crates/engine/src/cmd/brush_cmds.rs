@@ -854,10 +854,11 @@ fn mixer_load(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(serde_json::to_value(&s.tools.mixer).unwrap_or_default())
 }
 
-/// `brush.mixer.clean`: Clean Brush empties the Mixer Brush. The next stroke starts empty unless
-/// a different color is chosen first. Returns the paint the brush now carries.
+/// `brush.mixer.clean`: Clean Brush empties the Mixer Brush. The next strokes start empty, also
+/// with Load the brush after each stroke on (#15327), until a different color is chosen, Load
+/// Brush runs or the canvas is sampled. Returns the paint the brush now carries.
 fn mixer_clean(s: &mut Session, _: &Value) -> Result<Value> {
-    s.tools.mixer.clean();
+    s.tools.mixer.clean_brush();
     s.tools.mixer.color = Some(s.tools.foreground);
     Ok(serde_json::to_value(&s.tools.mixer).unwrap_or_default())
 }
