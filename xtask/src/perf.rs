@@ -869,7 +869,11 @@ pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
             return Err(format!("perf: unknown bench `{name}` (see {BUDGETS})"));
         }
     }
-    let baseline_value: Option<Value> = std::fs::read_to_string(root.join(BASELINE)).ok().and_then(|t| serde_json::from_str(&t).ok());
+    let baseline_value: Option<Value> = match std::fs::read_to_string(root.join(BASELINE)) {
+        Ok(text) => Some(serde_json::from_str(&text).map_err(|e| format!("parse {BASELINE}: {e}"))?),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("read {BASELINE}: {e}")),
+    };
     if !o.from.is_empty() {
         return baseline_from_files(root, &budgets, baseline_value.as_ref(), &o);
     }
@@ -1574,6 +1578,60 @@ row = "r99"
             assert_eq!(result, Err(format!("perf: unknown bench `unknown` (see {BUDGETS})")));
         }
         assert_eq!(after, baseline, "an unknown bench must not update the baseline");
+    }
+
+    struct BaselineFixture(PathBuf);
+
+    impl Drop for BaselineFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn invalid_baseline_stops_before_benchmarks_or_saved_run_updates() {
+        let root = std::env::temp_dir().join(format!("photocraft-perf-invalid-baseline-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let _cleanup = BaselineFixture(root.clone());
+        std::fs::create_dir(root.join("perf")).unwrap();
+        std::fs::write(root.join(BUDGETS), "[settings]\nbaseline_min_runs = 1\n").unwrap();
+        let saved = root.join("run.json");
+        std::fs::write(&saved, r#"{"mode":"quick","machine":{"class":"test"},"scenarios":{}}"#).unwrap();
+        let modes = [vec!["--update-baseline", "--from", saved.to_str().unwrap()], vec![], vec!["--update-baseline"]];
+        for (bytes, context) in [(b"{malformed".as_slice(), "parse"), (b"\xff".as_slice(), "read")] {
+            for args in &modes {
+                std::fs::write(root.join(BASELINE), bytes).unwrap();
+                let result = run(&root, args);
+                let after = std::fs::read(root.join(BASELINE)).unwrap();
+                assert!(result.as_ref().is_err_and(|e| e.starts_with(&format!("{context} {BASELINE}:"))), "{args:?}: {result:?}");
+                assert_eq!(after, bytes, "a failed load must not replace the baseline");
+            }
+        }
+        std::fs::remove_file(root.join(BASELINE)).unwrap();
+        std::fs::create_dir(root.join(BASELINE)).unwrap();
+        for args in &modes {
+            assert!(run(&root, args).is_err_and(|e| e.starts_with(&format!("read {BASELINE}:"))), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn saved_run_updates_allow_a_missing_baseline_and_preserve_other_valid_modes() {
+        let root = std::env::temp_dir().join(format!("photocraft-perf-load-baseline-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let _cleanup = BaselineFixture(root.clone());
+        std::fs::create_dir(root.join("perf")).unwrap();
+        std::fs::write(root.join(BUDGETS), "[settings]\nbaseline_min_runs = 1\n").unwrap();
+        let saved = root.join("run.json");
+        std::fs::write(&saved, r#"{"mode":"quick","machine":{"class":"test"},"scenarios":{}}"#).unwrap();
+        let args = ["--update-baseline", "--from", saved.to_str().unwrap()];
+        run(&root, &args).unwrap();
+        let initial: Value = serde_json::from_str(&std::fs::read_to_string(root.join(BASELINE)).unwrap()).unwrap();
+        assert!(initial["modes"]["quick"].is_object());
+        std::fs::write(root.join(BASELINE), r#"{"machine_class":"test","modes":{"full":{"sentinel":true}}}"#).unwrap();
+        run(&root, &args).unwrap();
+        let updated: Value = serde_json::from_str(&std::fs::read_to_string(root.join(BASELINE)).unwrap()).unwrap();
+        assert_eq!(updated["modes"]["full"]["sentinel"], true);
+        assert!(updated["modes"]["quick"].is_object());
     }
 
     #[test]
