@@ -49,6 +49,8 @@ pub enum MenuKind {
     TypeEdit {
         /// The misspelled word under the pointer when the menu opened: its suggestions head the menu.
         spelling: Option<Spelling>,
+        /// A Type Mask is being edited: no type layer rows (#12084).
+        mask: bool,
     },
     /// Opened with a Type tool over committed type (no edit running): the type layer rows.
     TypeLayer {
@@ -182,6 +184,36 @@ pub const TYPE_EDIT_MENU: &[Row] = &[
     None,
     Some(("Horizontal", "type.orientation.horizontal")),
     Some(("Vertical", "type.orientation.vertical")),
+    None,
+    Some(("None", "type.antiAlias.none")),
+    Some(("Sharp", "type.antiAlias.sharp")),
+    Some(("Crisp", "type.antiAlias.crisp")),
+    Some(("Strong", "type.antiAlias.strong")),
+    Some(("Smooth", "type.antiAlias.smooth")),
+    Some(("Windows LCD", "type.antiAlias.windowsLcd")),
+    Some(("Windows", "type.antiAlias.windows")),
+    None,
+    Some(("Convert to Paragraph Text", "type.convertToParagraphText")),
+    Some(("Convert to Point Text", "type.convertToPointText")),
+    Some(("Warp Text…", "type.warpText")),
+];
+
+/// Right-click while a Type Mask is edited (#12084): [`TYPE_EDIT_MENU`] without the type layer rows a mask has no
+/// layer for (Rasterize Type, Create Work Path, Convert to Shape) and without Horizontal and Vertical, as the
+/// reference's menu.
+pub const TYPE_MASK_EDIT_MENU: &[Row] = &[
+    Some(("Undo", "edit.undo")),
+    None,
+    Some(("Cut", "edit.cut")),
+    Some(("Copy", "edit.copy")),
+    Some(("Paste", "edit.paste")),
+    Some(("Select All", "select.all")),
+    None,
+    Some(("Check Spelling…", "edit.checkSpelling")),
+    Some(("Find and Replace Text…", "edit.findAndReplaceText")),
+    None,
+    Some(("Faux Bold", FAUX_BOLD)),
+    Some(("Faux Italic", FAUX_ITALIC)),
     None,
     Some(("None", "type.antiAlias.none")),
     Some(("Sharp", "type.antiAlias.sharp")),
@@ -1082,6 +1114,7 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
                 VIEW_MENU
             }
         }
+        MenuKind::TypeEdit { mask: true, .. } => TYPE_MASK_EDIT_MENU,
         MenuKind::TypeEdit { .. } => TYPE_EDIT_MENU,
         MenuKind::TypeLayer { .. } => type_layer_rows(menu),
         MenuKind::Tool => {
@@ -1223,7 +1256,7 @@ fn spelling_at(app: &mut PhotocraftApp, doc: [f64; 2]) -> Option<Spelling> {
 /// The spelling rows heading the type edit menu (label, id): the suggestions, or a greyed note
 /// when there are none, then Add to Dictionary. Empty away from a misspelled word.
 pub fn spelling_rows(menu: &CanvasToolMenu) -> Vec<(String, String)> {
-    let MenuKind::TypeEdit { spelling: Some(sp) } = &menu.kind else { return Vec::new() };
+    let MenuKind::TypeEdit { spelling: Some(sp), .. } = &menu.kind else { return Vec::new() };
     let mut rows: Vec<(String, String)> = sp.suggestions.iter().enumerate().map(|(i, s)| (s.clone(), format!("{SPELLING_REPLACE}{i}"))).collect();
     if rows.is_empty() {
         rows.push(("No Spelling Suggestions".into(), SPELLING_NONE.into()));
@@ -1278,7 +1311,7 @@ pub fn engine_call(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) ->
 /// The `edit.checkSpelling` call a spelling row makes: replace the word with a suggestion, or add
 /// it to the user dictionary.
 fn spelling_call(menu: &CanvasToolMenu, command: &str) -> (String, Value) {
-    let MenuKind::TypeEdit { spelling: Some(sp) } = &menu.kind else { return ("edit.checkSpelling".into(), json!({})) };
+    let MenuKind::TypeEdit { spelling: Some(sp), .. } = &menu.kind else { return ("edit.checkSpelling".into(), json!({})) };
     let replace = command.strip_prefix(SPELLING_REPLACE).and_then(|n| n.parse::<usize>().ok()).and_then(|n| sp.suggestions.get(n));
     match replace {
         Some(to) => {
@@ -1331,7 +1364,7 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
                 SPELLING_NONE => false,
                 c if is_spelling(menu, c) => app.ui.text_edit.is_some(),
                 FAUX_BOLD | FAUX_ITALIC => app.ui.text_edit.is_some(),
-                c => TYPE_EDIT_MENU.iter().flatten().any(|(_, id)| *id == c) && crate::menus::is_enabled(app, c),
+                c => rows(menu).iter().flatten().any(|(_, id)| *id == c) && crate::menus::is_enabled(app, c),
             };
         }
         MenuKind::TypeLayer { .. } => {
@@ -1489,7 +1522,8 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, kind: MenuKind, at: Pos2, doc: 
             if !editing_text(app, tool) {
                 return false;
             }
-            menu.kind = MenuKind::TypeEdit { spelling: spelling_at(app, doc) };
+            let mask = app.ui.text_edit.as_ref().is_some_and(|ed| ed.mask);
+            menu.kind = MenuKind::TypeEdit { spelling: spelling_at(app, doc), mask };
             capture(app, &mut menu, doc, None);
         }
         MenuKind::TypeLayer { .. } => {
@@ -1867,6 +1901,9 @@ mod make_selection_dialog_tests;
 
 #[cfg(test)]
 mod type_layer_menu_tests;
+
+#[cfg(test)]
+mod mask_edit_menu_tests;
 
 #[cfg(test)]
 mod add_anchor_menu_tests;
