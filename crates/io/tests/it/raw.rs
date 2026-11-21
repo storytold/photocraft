@@ -800,5 +800,13 @@ fn raw_open_camera_wb_legacy_baseline_pixels() {
     let tuned_px = [sample_rgb16(tuned_img.data(), w, 0, 0), sample_rgb16(tuned_img.data(), w, 7, 7), sample_rgb16(tuned_img.data(), w, 15, 15)];
     let tuned_hash = fnv1a_u16(tuned_img.data());
 
-    assert_eq!((def_px, def_hash, tuned_px, tuned_hash), ([[0; 3]; 3], 0, [[0; 3]; 3], 0));
+    assert_eq!(
+        (def_px, def_hash, tuned_px, tuned_hash),
+        (
+            [[32172, 25684, 55879], [51905, 40291, 54669], [54973, 41164, 49114]],
+            11_079_887_031_689_206_845,
+            [[41995, 33769, 65535], [65535, 53416, 65535], [65535, 54256, 62211]],
+            14_795_269_389_460_323_633,
+        )
+    );
 }
