@@ -270,6 +270,13 @@ pub(crate) fn command_rows(app: &PhotocraftApp) -> Vec<CommandDef> {
         def.defaults.extend(binding(&format!("Shift+{}", letter.to_ascii_uppercase())));
         push_row(&mut rows, &mut index, def);
     }
+    // A letter the user gave several tools steps them with Shift+letter too (#14208).
+    for (letter, first) in crate::tool_shortcuts::shared_letters(app) {
+        let label = format!("Next {} ({letter})", first.label());
+        let mut def = app_row(&next_in_group_id(letter), &label).with_path(vec!["Tools".into(), label.clone()]);
+        def.defaults.extend(binding(&format!("Shift+{letter}")));
+        push_row(&mut rows, &mut seen, def);
+    }
     // The held erase key is momentary; the hand and zoom keys are the runtime's.
     for &(id, label, key) in photocraft_engine::prefs::TEMPORARY_TOOLS {
         if is_bridged(id) {
@@ -613,13 +620,16 @@ pub(crate) fn run_fired(app: &mut PhotocraftApp, ctx: &egui::Context, fired: &[F
         let keyed_tool = || (f.source == FireSource::Key).then(|| crate::panels::tool_commands::ToolCommand::from_ref(&f.command)).flatten();
         if let Some(tool) = crate::tool_shortcuts::tool(id).or_else(|| keyed_tool().map(crate::panels::tool_commands::tool_of)) {
             match f.phase {
-                // A key the user gave this tool selects exactly it (#4086); its letter belongs to the group.
-                FirePhase::Press if !crate::tool_shortcuts::uses_default(app, tool) => crate::tool_memory::select(app, tool),
-                FirePhase::Press => {
-                    let step = tool_step(app, f);
-                    pick_tool(app, tool.key(), step, true, f.time);
-                }
-                FirePhase::Release => crate::spring_tools::released(app, tool.key(), f.time),
+                // A key the user gave this tool alone selects exactly it (#4086); a letter tools share picks
+                // within them (#14208).
+                FirePhase::Press => match crate::tool_shortcuts::letter(app, tool) {
+                    Some(letter) => {
+                        let step = tool_step(app, f);
+                        pick_tool(app, letter, step, true, f.time);
+                    }
+                    None => crate::tool_memory::select(app, tool),
+                },
+                FirePhase::Release => crate::spring_tools::released(app, crate::tool_shortcuts::letter(app, tool).unwrap_or(tool.key()), f.time),
                 FirePhase::Repeat => {}
             }
             continue;
@@ -644,11 +654,11 @@ fn tool_step(app: &PhotocraftApp, fired: &Fired) -> PickStep {
     if app.session.prefs().tools.use_shift_key_for_tool_switch { PickStep::Last } else { PickStep::of(fired) }
 }
 
-/// Selects the tool the key `letter` picks. The group is the tools of that letter the user has not remapped, in the
+/// Selects the tool the key `letter` picks. The group is the tools [`crate::tool_shortcuts::letter`] gives that letter, in the
 /// toolbar layout's order across slots (Edit › Toolbar); the rail's last-used memory is `app.ui.group_tools`, with the group's index among the letters as
 /// the slot. `plain` is a letter press with no Shift step: only those spring (#2672). `at` is the press's input time.
 fn pick_tool(app: &mut PhotocraftApp, letter: char, step: PickStep, plain: bool, at: f64) {
-    let mut group: Vec<Tool> = Tool::ALL.iter().copied().filter(|t| t.key() == letter && crate::tool_shortcuts::uses_default(app, *t)).collect();
+    let mut group: Vec<Tool> = Tool::ALL.iter().copied().filter(|t| crate::tool_shortcuts::letter(app, *t) == Some(letter)).collect();
     let order = crate::panels::toolbar::layout_order(&app.session.prefs().toolbar);
     group.sort_by_key(|t| order.iter().position(|x| x == t).unwrap_or(usize::MAX));
     let tools: Vec<RailTool<Tool>> = group.iter().map(|t| RailTool::new(*t, crate::panels::tool_commands::command_of(*t))).collect();

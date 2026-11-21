@@ -90,7 +90,15 @@ pub fn pressed(app: &mut PhotocraftApp, letter: char, before: Tool, plain: bool,
     }
     // The current group's own key cycles it (or keeps it), as a tap always has.
     let tool = app.ui.tool;
-    app.ui.spring = (before.key() != letter).then(|| Spring { previous: before, tool, keys: vec![letter], since: at, up: None, used: false, released: false });
+    app.ui.spring = (crate::tool_shortcuts::letter(app, before) != Some(letter)).then(|| Spring {
+        previous: before,
+        tool,
+        keys: vec![letter],
+        since: at,
+        up: None,
+        used: false,
+        released: false,
+    });
 }
 
 /// Is `tool` in effect only while its letter is held (or its drag finishes)? A tap that turns out

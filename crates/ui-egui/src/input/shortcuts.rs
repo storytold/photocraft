@@ -416,3 +416,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tool_key_default_tests.rs"]
 mod tool_key_default_tests;
+
+#[cfg(test)]
+#[path = "shared_tool_letter_tests.rs"]
+mod shared_tool_letter_tests;
