@@ -151,7 +151,7 @@ fn fill_undo_ignores_cancelled_previews_and_reverts_one_accepted_colour() {
     h.run_steps(4);
     let before = values(h.state(), fill);
     let undo = |h: &mut egui_kittest::Harness<'_, Box<PhotocraftApp>>| {
-        assert_eq!(top_of(h.state()), Some(fill), "Fill is the top dialog after its picker closes");
+        assert_eq!(h.state().framework.dialogs.stack().top(), Some(fill), "Fill is the top dialog after its picker closes");
         crate::shortcut_dispatch::tests::tap(h, egui::Key::Z, egui::Modifiers::COMMAND);
     };
 
