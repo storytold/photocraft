@@ -31,6 +31,21 @@ fn a_hidden_layer_with_a_mask_target_keeps_the_status_bar_message() {
     assert!(app.ui.status_error, "the status bar says it: {:?}", app.ui.status);
 }
 
+/// The same for a hidden group whose mask is the target (the case #12685 marks "not measured"): no alert either (CodeRabbit
+/// on #16284).
+#[test]
+fn a_hidden_group_with_a_mask_target_keeps_the_status_bar_message() {
+    let mut app = app(Tool::Dodge);
+    app.run("layer.new.group", json!({})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    let id = active(&app);
+    app.run("layer.setProps", json!({"layer": id, "visible": false})).unwrap();
+    app.ui.mask_target = true;
+    stroke(&mut app);
+    assert!(alerts(&app).is_empty(), "no alert: {:?}", alerts(&app));
+    assert!(app.ui.status_error, "the status bar says it: {:?}", app.ui.status);
+}
+
 #[test]
 fn lock_all_and_lock_image_pixels() {
     for lock in ["all", "pixels"] {
