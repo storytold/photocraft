@@ -363,6 +363,26 @@ fn resize(s: &Surface, sx: f64, sy: f64, filter: Resample, canvas: Option<Rect>)
     resize_with_budget(s, sx, sy, filter, canvas, READ_BUDGET)
 }
 
+/// [`resize_surface`] with Bicubic, but each axis filtered for its own scale: two Image Sizes, the
+/// smaller scale first. Image Size designs one filter for both axes, which blurs the axis that
+/// shrinks less; a transform's prefilter filters each for its own scale instead, so an axis that
+/// shrinks less stays as sharp as it can (#4864). Equal scales, or one of exactly 1, give what
+/// [`resize_surface`] gives.
+pub(crate) fn resize_surface_per_axis(s: &Surface, sx: f64, sy: f64) -> Surface {
+    let x = Pass { sx, sy: 1.0, kx: keys(Resample::Bicubic, sx), ky: Kernel::Nearest };
+    let y = Pass { sx: 1.0, sy, kx: Kernel::Nearest, ky: keys(Resample::Bicubic, sy) };
+    let passes = match (sx == 1.0, sy == 1.0) {
+        (true, true) => Vec::new(),
+        (true, false) => vec![y],
+        (false, true) => vec![x],
+        _ if sy < sx => vec![y, x],
+        _ => vec![x, y],
+    };
+    let mut out = run_passes(s, passes, None, READ_BUDGET, &photocraft_raster::Interrupt::NONE);
+    out.prune();
+    out
+}
+
 /// Runs `filter`'s passes. Between two passes the image is stored in its own format, which
 /// clips it (and rounds it at 8 and 16 bits) as Photoshop does; the smaller scale goes first, so
 /// the intermediate image is never larger than the result when an axis grows, but is when both
@@ -387,9 +407,20 @@ pub fn resize_surface_with_interrupt(
 }
 
 fn resize_controlled(s: &Surface, sx: f64, sy: f64, filter: Resample, canvas: Option<Rect>, budget: usize, ctl: &photocraft_raster::Interrupt) -> Surface {
+    let out = run_passes(s, plan(filter, sx, sy), canvas, budget, ctl);
+    if ctl.cancelled() {
+        return out;
+    }
+    let mut out = preserve_details(out, filter, sx, sy);
+    out.prune();
+    out
+}
+
+/// Runs `passes` in order, each on the result of the one before.
+fn run_passes(s: &Surface, passes: Vec<Pass>, canvas: Option<Rect>, budget: usize, ctl: &photocraft_raster::Interrupt) -> Surface {
     let mut cur: Option<Surface> = None;
     let mut canvas = canvas;
-    for p in plan(filter, sx, sy) {
+    for p in passes {
         if ctl.cancelled() {
             return Surface::new(s.format());
         }
@@ -397,9 +428,7 @@ fn resize_controlled(s: &Surface, sx: f64, sy: f64, filter: Resample, canvas: Op
         canvas = canvas.map(|c| scaled_rect(c, p.sx, p.sy));
         cur = Some(next);
     }
-    let mut out = preserve_details(cur.unwrap_or_else(|| s.clone()), filter, sx, sy);
-    out.prune();
-    out
+    cur.unwrap_or_else(|| s.clone())
 }
 
 /// Preserve Details' light sharpening of an enlargement (Lanczos's output, for the other filters
