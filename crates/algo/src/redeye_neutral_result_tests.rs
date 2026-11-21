@@ -172,3 +172,65 @@ fn a_second_click_on_the_highlight_leaves_the_skin_alone() {
         }
     }
 }
+
+const LASH: [u8; 3] = [30, 30, 30];
+const GREY_IRIS: [u8; 3] = [60, 60, 60];
+
+/// Paint `c` into the document pixels of `px` (a read window) where `f(x, y)` holds.
+fn paint(px: &mut [[f32; 4]], c: [u8; 3], f: impl Fn(usize, usize) -> bool) {
+    for wy in 0..SIDE {
+        for wx in 0..SIDE {
+            if f(wx + ORIGIN.0 as usize, wy + ORIGIN.1 as usize) {
+                px[wy * SIDE + wx] = px8(c);
+            }
+        }
+    }
+}
+
+/// A first click must still correct the red pupil: no red pixel left, dark neutral centre.
+fn assert_pupil_corrected(px: &[[f32; 4]], n: u32, what: &str) {
+    assert!(n > 900, "{what}: the whole pupil changes ({n} px)");
+    assert!(centre(px).iter().all(|&c| c <= 30), "{what}: centre {:?}", centre(px));
+    for y in 182..218 {
+        for x in 182..218 {
+            if in_disc(x, y, 200.0, 200.0, 18.0) && !((204..208).contains(&x) && (192..196).contains(&y)) {
+                assert_ne!(at(px, x, y), [210, 40, 40], "{what}: ({x},{y}) kept its red");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_first_click_between_a_dark_lash_and_the_pupil_corrects_the_pupil() {
+    // A dark neutral lash stroke on rows 176–177 above the pupil (top edge at row 182); the click
+    // at row 179 is 2 px from the lash and 3 px from the red.
+    let mut px = eye(RED, true);
+    paint(&mut px, LASH, |x, y| (190..211).contains(&x) && (176..178).contains(&y));
+    let n = apply(&mut px, SIDE, SIDE, (200, 179), ORIGIN, 50.0, 50.0);
+    assert_pupil_corrected(&px, n, "lash");
+    assert_eq!(at(&px, 200, 176), [30, 30, 30], "the lash is left alone");
+}
+
+#[test]
+fn a_first_click_on_a_dark_grey_iris_ring_corrects_the_pupil() {
+    // A dark grey iris from the pupil edge (r 18) out to r 24; the click lands on the ring.
+    let mut px = eye(RED, true);
+    paint(&mut px, GREY_IRIS, |x, y| in_disc(x, y, 200.0, 200.0, 24.0) && !in_disc(x, y, 200.0, 200.0, 18.0));
+    let n = apply(&mut px, SIDE, SIDE, (200, 179), ORIGIN, 50.0, 50.0);
+    assert_pupil_corrected(&px, n, "iris ring");
+    assert_eq!(at(&px, 200, 178), [60, 60, 60], "the iris is left alone");
+    // A second click on the corrected eye (now one dark disc with the iris) changes nothing.
+    let once = px.clone();
+    assert_eq!(apply(&mut px, SIDE, SIDE, (206, 194), ORIGIN, 50.0, 50.0), 0);
+    assert_eq!(once, px);
+}
+
+#[test]
+fn a_first_click_on_a_dark_core_inside_a_red_ring_corrects_the_ring() {
+    // Partial red-eye: the pupil's middle (r 6) is already dark, the rest of it is red.
+    let mut px = eye(RED, false);
+    paint(&mut px, LASH, |x, y| in_disc(x, y, 200.0, 200.0, 6.0));
+    let n = click(&mut px, 50.0, 50.0);
+    assert!(n > 800, "the red ring changes ({n} px)");
+    assert_ne!(at(&px, 200, 188), [210, 40, 40], "the ring kept its red");
+}

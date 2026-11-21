@@ -144,6 +144,46 @@ fn flood_keep(mask: &mut [bool], w: usize, h: usize, seed: usize) {
     }
 }
 
+/// Whether the dark neutral region connected to `seed` looks like a corrected pupil: roughly a
+/// disc (bounding box near square and at least 60% filled, so not a lash stroke or an iris ring)
+/// with no red ring around it (under a quarter of the pixels within half its radius outside it
+/// are red, so not a partial red-eye with a dark core). `dark` is flood-filled in place.
+fn is_corrected_pupil(dark: &mut [bool], red: &[bool], w: usize, h: usize, seed: usize) -> bool {
+    flood_keep(dark, w, h, seed);
+    let (mut n, mut sx, mut sy) = (0usize, 0.0f64, 0.0f64);
+    let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
+    for (i, on) in dark.iter().enumerate() {
+        if !*on || w == 0 {
+            continue;
+        }
+        let (x, y) = (i % w, i / w);
+        n = n.saturating_add(1);
+        sx += x as f64 + 0.5;
+        sy += y as f64 + 0.5;
+        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+    }
+    if n == 0 {
+        return false;
+    }
+    let (bw, bh) = (x1.saturating_sub(x0).saturating_add(1), y1.saturating_sub(y0).saturating_add(1));
+    let (long, short) = (bw.max(bh) as f64, bw.min(bh) as f64);
+    let fill = n as f64 / (long * short).max(1.0);
+    if long > 1.5 * short || fill < 0.6 {
+        return false;
+    }
+    let (cx, cy) = (sx / n as f64, sy / n as f64);
+    let r = (n as f64 / std::f64::consts::PI).sqrt();
+    let (mut ring, mut ring_red) = (0usize, 0usize);
+    for (i, is_red) in red.iter().enumerate() {
+        let d = ((i % w) as f64 + 0.5 - cx).hypot((i / w) as f64 + 0.5 - cy);
+        if d > r && d <= 1.5 * r + 1.0 {
+            ring = ring.saturating_add(1);
+            ring_red = ring_red.saturating_add(usize::from(*is_red));
+        }
+    }
+    ring_red.saturating_mul(4) < ring
+}
+
 /// Darkening at the core for a Darken Amount fraction `t` in 0..=1 (before the redness weight).
 fn depth(t: f32) -> f32 {
     let u = 1.0 - t.clamp(0.0, 1.0);
@@ -190,9 +230,10 @@ fn measure(px: &[[f32; 4]], mask: &[bool], w: usize) -> Option<Pupil> {
 /// the red region connected to the red pixel nearest the click within [`SEARCH_RADIUS`]; pixels
 /// farther than that from `click` are left untouched. Each pupil pixel becomes a neutral grey at
 /// its own luminance (`0.2126 R + 0.7874 (G+B)/2`), darkened by a radial profile around the pupil's
-/// centroid whose core width follows `pupil_size` (1..=100) and depth `darken` (0..=100). When a
-/// dark neutral pixel (a corrected pupil) is nearer the click than any red one, nothing changes,
-/// so a second click is a no-op wherever in the pupil it lands.
+/// centroid whose core width follows `pupil_size` (1..=100) and depth `darken` (0..=100). When the
+/// dark neutral pixel nearest the click is nearer than any red one and belongs to a corrected
+/// pupil (see [`is_corrected_pupil`]), nothing changes, so a second click is a no-op wherever in
+/// the pupil it lands. A lash, a dark iris ring or a dark core inside a red ring is not one.
 pub fn apply(px: &mut [[f32; 4]], w: usize, h: usize, click: (i32, i32), origin: (i32, i32), pupil_size: f32, darken: f32) -> u32 {
     let n = w.saturating_mul(h);
     if w == 0 || h == 0 || px.len() < n {
@@ -206,8 +247,9 @@ pub fn apply(px: &mut [[f32; 4]], w: usize, h: usize, click: (i32, i32), origin:
     }
     let s_pupil = if pupil_size.is_finite() { pupil_size.clamp(1.0, 100.0) / 100.0 } else { 0.5 };
     let mut hard = vec![false; n];
+    let mut dark = vec![false; n];
     // Squared distance from the click to the nearest red and the nearest dark neutral pixel.
-    let (mut red_d2, mut dark_d2) = (i64::MAX, i64::MAX);
+    let (mut red_d2, mut dark_d2, mut dark_seed) = (i64::MAX, i64::MAX, None);
     for y in 0..h {
         for x in 0..w {
             let Some(i) = idx(x, y, w) else { continue };
@@ -224,14 +266,23 @@ pub fn apply(px: &mut [[f32; 4]], w: usize, h: usize, click: (i32, i32), origin:
                 }
                 red_d2 = red_d2.min(d2);
             } else if is_dark_neutral(p) {
-                dark_d2 = dark_d2.min(d2);
+                if let Some(slot) = dark.get_mut(i) {
+                    *slot = true;
+                }
+                if d2 < dark_d2 {
+                    dark_d2 = d2;
+                    dark_seed = Some(i);
+                }
             }
         }
     }
     // A click on or in a pupil that is already dark and neutral (a corrected one, also when the
-    // press lands on its highlight) has nothing to fix: the corrected pupil is nearer than any red,
-    // which would otherwise be the skin around the eye.
-    if dark_d2 < red_d2 {
+    // press lands on its highlight) has nothing to fix: the nearest red would otherwise be the
+    // skin around the eye. A nearer lash or dark iris must not stop a first click, though.
+    if dark_d2 < red_d2
+        && let Some(seed) = dark_seed
+        && is_corrected_pupil(&mut dark, &hard, w, h, seed)
+    {
         return 0;
     }
     let Some(seed) = nearest_seed(&hard, w, h, origin, click, radius) else {
