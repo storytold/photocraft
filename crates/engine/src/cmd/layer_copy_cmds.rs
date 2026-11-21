@@ -304,17 +304,21 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     // their place, as Duplicate Layer does (#14606); a half pixel rounds towards the top left.
     // A shape's cache is clipped to the source canvas, so one lying wholly outside it has no pixel bounds: its place
     // comes from its geometry, as Align and Distribute measure it (CodeRabbit on #16086).
-    // Measured only when `centerOutside` is asked for: it can render a shape again.
+    // Measured only when `centerOutside` is asked for: it can render a shape again. The group is centred only when
+    // every copy lies wholly off the destination, by the joint bounds of the copies; if any copy meets the canvas,
+    // all keep their place (CodeRabbit on #16086).
     let center_outside = p.get("centerOutside").and_then(Value::as_bool).unwrap_or(false);
-    let placed = if center_outside {
+    let (placed, outside) = if center_outside {
         let sample = sdoc.pixel_format().sample;
-        let geometric =
-            copies.layers.iter().filter_map(|l| crate::layer_multi_cmds::align_bounds(l, sdoc.bounds(), sample)).fold(Rect::EMPTY, |a, b| a.union(&b));
-        if geometric.is_empty() { content } else { geometric }
+        let each: Vec<Rect> = copies.layers.iter().filter_map(|l| crate::layer_multi_cmds::align_bounds(l, sdoc.bounds(), sample)).collect();
+        let joint = each.iter().fold(Rect::EMPTY, |a, b| a.union(b));
+        let placed = if joint.is_empty() { content } else { joint };
+        let dest = ddoc.bounds();
+        let all_off = if each.is_empty() { placed.intersect(&dest).is_empty() } else { each.iter().all(|r| r.intersect(&dest).is_empty()) };
+        (placed, all_off)
     } else {
-        content
+        (content, false)
     };
-    let outside = center_outside && placed.intersect(&ddoc.bounds()).is_empty();
     let (dx, dy) = if outside {
         let (c, d) = (center(placed), center(ddoc.bounds()));
         ((d[0] - c[0]).floor(), (d[1] - c[1]).floor())

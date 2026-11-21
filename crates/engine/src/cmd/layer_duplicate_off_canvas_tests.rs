@@ -86,3 +86,23 @@ fn a_shape_wholly_outside_the_source_canvas_is_centred_too() {
     let info = s.execute("shape.info", json!({"layer": id})).unwrap();
     assert_eq!(info["live"]["rect"], json!([80.0, 40.0, 40.0, 20.0]), "{info}");
 }
+
+/// Two copies that are each wholly off the destination can still have a joint hull that meets it; only a group whose
+/// every copy is off is centred, by its joint bounds (CodeRabbit on #16086).
+#[test]
+fn a_group_whose_every_copy_is_off_the_canvas_is_centred_by_its_joint_bounds() {
+    // Each 10x10 copy lies off the 200x100 destination (A right of it, B below it), but their 65x65 hull reaches in.
+    let (mut s, ids) = docs(&[("A", 205, 50, 10, 10), ("B", 150, 105, 10, 10)]);
+    let r = copy(&mut s, &ids, true);
+    let (a, b) = (landed(&s, &r, 0), landed(&s, &r, 1));
+    assert_eq!((b.0 - a.0, b.1 - a.1), (-55, 55), "the copies keep their layout");
+    assert_eq!(a, (122, 17), "the hull is centred as one");
+}
+
+/// A group with one copy that meets the canvas keeps every place.
+#[test]
+fn a_group_with_a_copy_on_the_canvas_keeps_all_its_places() {
+    let (mut s, ids) = docs(&[("A", 20, 20, 10, 10), ("B", 250, 150, 10, 10)]);
+    let r = copy(&mut s, &ids, true);
+    assert_eq!(landed(&s, &r, 0), (20, 20));
+}
