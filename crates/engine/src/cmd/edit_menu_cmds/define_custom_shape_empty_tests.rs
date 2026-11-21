@@ -90,3 +90,23 @@ fn a_closed_two_anchor_path_keeps_being_stored() {
     s.execute("edit.defineCustomShape", json!({"name": "Two"})).unwrap();
     assert_eq!(stored(&s), 1);
 }
+
+/// A thin rectangle has area, however narrow (CodeRabbit on #16238).
+#[test]
+fn a_very_thin_rectangle_is_stored() {
+    let mut s = with_work_path(Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (10.0, 0.0), (10.0, 0.000_000_5), (0.0, 0.000_000_5)])]));
+    assert_eq!(define_custom_shape_refusal(&s), None);
+    s.execute("edit.defineCustomShape", json!({"name": "Thin"})).unwrap();
+    assert_eq!(stored(&s), 1);
+}
+
+/// A path that only intersects keeps being stored: its behaviour isn't measured.
+#[test]
+fn an_intersect_only_collinear_path_keeps_being_stored() {
+    let mut sub = Subpath::polygon(&[(10.0, 10.0), (60.0, 35.0), (110.0, 60.0)]);
+    sub.op = PathOp::Intersect;
+    let mut s = with_work_path(Path::new(vec![sub]));
+    assert_eq!(define_custom_shape_refusal(&s), None);
+    s.execute("edit.defineCustomShape", json!({"name": "Cut"})).unwrap();
+    assert_eq!(stored(&s), 1);
+}

@@ -60,8 +60,11 @@ fn refusal(path: &Path) -> Option<ShapeRefusal> {
     if !path.subpaths.is_empty() && path.subpaths.iter().all(|sp| sp.op == photocraft_doc::PathOp::Subtract) {
         return Some(ShapeRefusal::SubtractOnly);
     }
-    // A closed path of two anchors keeps today's behaviour: it is stored (not measured, CodeRabbit on #16238).
-    if path.subpaths.iter().any(|sp| sp.closed && sp.knots.len() == 2) {
+    // Not measured, so they keep today's behaviour and are stored: a closed path of two anchors, and a path whose every
+    // subpath intersects (CodeRabbit on #16238).
+    if path.subpaths.iter().any(|sp| sp.closed && sp.knots.len() == 2)
+        || (!path.subpaths.is_empty() && path.subpaths.iter().all(|sp| sp.op == photocraft_doc::PathOp::Intersect))
+    {
         return None;
     }
     // Every flattened point on one line (or one point): nothing is enclosed. Not the signed area, which cancels for a
@@ -76,7 +79,8 @@ fn refusal(path: &Path) -> Option<ShapeRefusal> {
     let len = (far.0 - p0.0).hypot(far.1 - p0.1);
     let off_line =
         if len <= 1e-9 { 0.0 } else { pts.iter().map(|p| ((p.0 - p0.0) * (far.1 - p0.1) - (p.1 - p0.1) * (far.0 - p0.0)).abs() / len).fold(0.0, f64::max) };
-    (off_line <= 1e-6).then_some(ShapeRefusal::Empty)
+    // Collinear to floating-point noise only: a thin rectangle has area and is stored, however narrow.
+    (off_line <= 1e-9 * (1.0 + len)).then_some(ShapeRefusal::Empty)
 }
 
 /// What Define Custom Shape would refuse for the path it would use on the active document (the menu
