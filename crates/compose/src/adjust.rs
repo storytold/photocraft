@@ -434,6 +434,9 @@ mod gradient_map_grayscale_tests;
 #[cfg(test)]
 mod tone_tests;
 
+#[cfg(test)]
+mod hue_range_edges_tests;
+
 /// Legacy Brightness/Contrast scales contrast around 128 of 255 (contrast 80 keeps 128 at 128,
 /// measured on Photoshop 27.11; a 0.5 pivot moved it to 130).
 pub const LEGACY_PIVOT: f32 = 128.0 / 255.0;

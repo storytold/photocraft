@@ -399,6 +399,10 @@ impl Adjustment {
 }
 
 #[cfg(test)]
+#[path = "adjust_hue_range_edges_tests.rs"]
+mod hue_range_edges_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
