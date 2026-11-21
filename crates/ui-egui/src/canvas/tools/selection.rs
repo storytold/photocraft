@@ -539,8 +539,13 @@ pub(crate) fn run_commit(app: &mut PhotocraftApp, tool: Tool, shape: SelectionSh
             if tool == Tool::PolygonLasso {
                 params["polygonal"] = json!(true);
             }
-            if tool == Tool::Patch {
-                params["historyName"] = json!("Patch Tool");
+            let tool_step = match tool {
+                Tool::Patch => Some("Patch Tool"),
+                Tool::ContentAwareMove => Some("Content-Aware Move Tool"),
+                _ => None,
+            };
+            if let Some(name) = tool_step {
+                params["historyName"] = json!(name);
             }
             run(app, "select.lasso", params);
         }
