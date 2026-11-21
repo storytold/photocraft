@@ -542,7 +542,8 @@ mod tests {
     /// at every motion model that contains the truth, with or without coarsening.
     #[test]
     fn registers_a_similarity_to_a_tenth_of_a_pixel() {
-        let (w, h) = (320, 240);
+        // Keep three pyramid levels (132, 66, and 33 rows) and the 4:3 aspect ratio.
+        let (w, h) = (176, 132);
         let reference = texture(w, h, 3);
         let truth = Pose { dx: 3.3 / w as f64, dy: -2.1 / h as f64, scale: 1.012, rot: 0.6f64.to_radians(), ..Pose::IDENTITY };
         // The pose maps the target's pixels onto the reference's: target(u) = reference(M u).
