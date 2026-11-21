@@ -3161,8 +3161,9 @@ mod fused_tile_tests {
                     let img = image(w, h, layout, sample);
                     let (tl, ts) = target(layout, sample);
                     let fused = image_surface(&img, tl, ts).unwrap();
-                    // The band sizes: a band per row, a few rows, and the whole image.
-                    for band in [1, 5000, BAND_BYTES] {
+                    // The direct interleaved copy ignores the band budget. Check every budget when converting.
+                    let bands: &[usize] = if img.layout() == tl && img.sample_type() == ts { &[BAND_BYTES] } else { &[1, 5000, BAND_BYTES] };
+                    for &band in bands {
                         assert_same(&fused, &banded_surface(&img, tl, ts, band), &format!("{w}x{h} {layout:?} {sample:?} band {band}"));
                     }
                 }
