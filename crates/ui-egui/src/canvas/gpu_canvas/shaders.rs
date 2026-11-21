@@ -47,8 +47,6 @@ fn matrix_display(c: vec3<f32>) -> vec3<f32> {
     return display_curve(u, 4097u, 4095.0);
 }
 
-struct VOut { @builtin(position) pos: vec4<f32> };
-
 fn corner(i: u32) -> vec2<f32> {
     var c = array<vec2<f32>, 6>(vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, 1.0), vec2(1.0, 0.0), vec2(1.0, 1.0));
     return c[i];
@@ -90,15 +88,18 @@ fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
 
 // --- document tiles ------------------------------------------------------------------------
 
+// The position is returned directly, not through a position-only struct: naga emits a temporary
+// `VOut` and an assignment to `gl_Position`, which Intel's Windows OpenGL driver rejects (the
+// same pattern the compositor's shaders hit in #7331).
 @vertex
-fn vs_tile(@builtin(vertex_index) vi: u32) -> VOut {
+fn vs_tile(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
     let p = doc_to_px(tile.r.xy + tile.r.zw * corner(vi));
-    return VOut(px_to_clip(p));
+    return px_to_clip(p);
 }
 
 @fragment
-fn fs_tile(in: VOut) -> @location(0) vec4<f32> {
-    let p = in.pos.xy;
+fn fs_tile(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = pos.xy;
     let scale = view.a.z;
     let d = px_to_doc(p);                  // document pixel coordinates
     // A viewport page's apron is only sampled; its neighbour draws those pixels.
