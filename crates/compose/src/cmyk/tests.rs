@@ -1570,18 +1570,53 @@ proptest! {
             prop_assert!(same(m[0], q[0]) && same(m[1], p[0]) && same(m[2], q[0]), "mixed {i}: {m:?} vs {p:?} / {q:?}");
         }
     }
+}
 
-    /// Effects don't depend on the tiling or banding (beyond the RGB compositor's own float
-    /// rounding, which can differ by an ulp between tilings).
+fn compare_split_tiles(d: &Document, tile: i32) -> Result<(), proptest::test_runner::TestCaseError> {
+    let whole = render_cmyk_tiled(d, d.bounds(), 1024).expect("supported");
+    let tiled = render_cmyk_tiled(d, d.bounds(), tile).expect("supported");
+    prop_assert_eq!(tiled.rect, whole.rect);
+    prop_assert_eq!(tiled.px.len(), whole.px.len());
+    // The RGB compositor can round by an ulp differently between tilings.
+    for (i, (p, q)) in tiled.px.iter().zip(&whole.px).enumerate() {
+        prop_assert!(p.iter().zip(q).all(|(a, b)| (a - b).abs() <= 1e-6), "tile {tile}, pixel {i}: {p:?} vs {q:?}");
+    }
+    Ok(())
+}
+
+/// A visible layer effect forces the split route, with content across both tile seams.
+#[test]
+fn split_tiling_is_invisible() {
+    let mut d = doc(7, 5);
+    let mut l = layer(&[(Rect::new(1, 1, 4, 4), [0.7, 0.25, 0.1, 0.8, 1.0]), (Rect::new(4, 2, 6, 4), [0.2, 0.4, 0.55, 0.1, 0.6])]);
+    l.effects.enabled = true;
+    l.effects.items.push(make_effect(&FxSpec::Shadow {
+        inner: false,
+        color: [0.1, 0.2, 0.3, 0.4],
+        blend: BlendMode::Multiply,
+        opacity: 0.75,
+        distance: 2.0,
+        size: 1.0,
+        spread: 0.0,
+        knocks_out: true,
+    }));
+    d.layers.push(l);
+    assert!(!supports(&d) && split::supports(&d));
+    // Both axes split, and neither the last column nor the last row of tiles is full.
+    compare_split_tiles(&d, 3).unwrap();
+}
+
+proptest! {
+    // The fixed case guarantees a seam. Sample stack and effect variation here, and keep
+    // the full channel-by-channel effect property above.
+    #![proptest_config(ProptestConfig { cases: 12, ..ProptestConfig::default() })]
+
     #[test]
-    fn split_tiling_is_invisible(s in spec(), fx in prop::collection::vec((0usize..8, fx_spec()), 1..3), tile in 1i32..9) {
+    fn split_tiling_is_invisible_on_varied_stacks(s in spec(), fx in prop::collection::vec((0usize..8, fx_spec()), 1..3), tile in 1i32..9) {
+        prop_assume!(tile < s.w || tile < s.h);
         let d = with_effects(&s, &fx, None);
-        prop_assume!(split::supports(&d));
-        let whole = render_cmyk_tiled(&d, d.bounds(), 1024).unwrap_or_else(|| panic!("supported"));
-        let tiled = render_cmyk_tiled(&d, d.bounds(), tile).unwrap_or_else(|| panic!("supported"));
-        for (p, q) in tiled.px.iter().zip(&whole.px) {
-            prop_assert!(p.iter().zip(q).all(|(a, b)| (a - b).abs() <= 1e-6), "{p:?} vs {q:?}");
-        }
+        prop_assume!(!supports(&d) && split::supports(&d));
+        compare_split_tiles(&d, tile)?;
     }
 }
 
