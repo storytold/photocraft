@@ -347,22 +347,35 @@ pub(crate) const BLACK_WHITE_EMPTY: &str = "Could not complete the Black & White
 /// Mask target and the modes not measured (Bitmap, Duotone, Multichannel) keep [`has_adjustable`].
 pub(crate) fn black_white_enabled(s: &Session) -> std::result::Result<(), String> {
     use photocraft_color::ColorMode;
-    let p = crate::channel_cmds::inject_target(s, BLACK_WHITE_ID, Value::Null);
-    if crate::channel_cmds::target_of(&p) != crate::channel_cmds::Target::Pixels {
-        return has_adjustable(s);
-    }
-    let d = s.active().ok_or("no document open")?;
-    if matches!(d.doc.mode, ColorMode::Grayscale | ColorMode::Cmyk | ColorMode::Lab | ColorMode::Indexed) {
-        return Err(BLACK_WHITE_UNAVAILABLE.into());
-    }
-    let layer = d.active_layer.and_then(|id| d.doc.layer(id));
-    let hidden = layer.is_some_and(|l| !l.visible && matches!(l.content, LayerContent::Raster(_)));
-    if hidden { Err(BLACK_WHITE_UNAVAILABLE.into()) } else { has_adjustable(s) }
+    greyed_on_pixels(s, BLACK_WHITE_ID, &[ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Indexed], BLACK_WHITE_UNAVAILABLE)
 }
 
 /// Black & White with `p` (its target filled in) stops on an empty pixel layer before it edits
 /// anything (#14401); its other refusals are the precondition's, checked before `run`.
 pub(crate) fn black_white_empty_refusal(s: &Session, p: &Value) -> Result<()> {
+    empty_layer_refusal(s, p, BLACK_WHITE_EMPTY)
+}
+
+/// The precondition of adjustment `id` that the reference application greys with `unavailable`
+/// on the layer's pixels in a document of one of `modes` or on a hidden pixel layer; any other
+/// target, and any other case, keeps [`has_adjustable`]'s.
+fn greyed_on_pixels(s: &Session, id: &str, modes: &[photocraft_color::ColorMode], unavailable: &str) -> std::result::Result<(), String> {
+    let p = crate::channel_cmds::inject_target(s, id, Value::Null);
+    if crate::channel_cmds::target_of(&p) != crate::channel_cmds::Target::Pixels {
+        return has_adjustable(s);
+    }
+    let d = s.active().ok_or("no document open")?;
+    if modes.contains(&d.doc.mode) {
+        return Err(unavailable.into());
+    }
+    let layer = d.active_layer.and_then(|id| d.doc.layer(id));
+    let hidden = layer.is_some_and(|l| !l.visible && matches!(l.content, LayerContent::Raster(_)));
+    if hidden { Err(unavailable.into()) } else { has_adjustable(s) }
+}
+
+/// An adjustment with `p` (its target filled in) stops with `empty` on an empty pixel layer
+/// before it edits anything.
+fn empty_layer_refusal(s: &Session, p: &Value, empty: &str) -> Result<()> {
     if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
         return Ok(());
     }
@@ -370,7 +383,7 @@ pub(crate) fn black_white_empty_refusal(s: &Session, p: &Value) -> Result<()> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let layer = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     if matches!(layer.content, LayerContent::Raster(_)) && crate::layer_multi_cmds::layer_bounds(layer).is_none() {
-        return Err(EngineError::Other(BLACK_WHITE_EMPTY.into()));
+        return Err(EngineError::Other(empty.into()));
     }
     Ok(())
 }
