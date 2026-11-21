@@ -124,6 +124,8 @@ const ART_HISTORY_BRUSH_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
 const REMOVE_TOOL_SIZE: f32 = 19.0;
 /// The Smudge tool's tip after Reset Tool (#12964): a 13 px soft round at 25 % spacing.
 const SMUDGE_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
+/// The Color Replacement tool's measured tip after Reset Tool (#11932).
+const COLOR_REPLACEMENT_TIP: (f32, f32, f32) = (13.0, 1.0, 0.25);
 
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
@@ -131,9 +133,9 @@ const SMUDGE_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
 /// Eraser's [`ERASER_TOOL_TIP`] with no smoothing, the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
 /// [`HEALING_BRUSH_TIP`], the Burn, Dodge and Sponge tools' [`TONING_TOOL_TIP`], the Clone Stamp's
 /// [`CLONE_STAMP_TIP`] and the Art History Brush's [`ART_HISTORY_BRUSH_TIP`], both with no
-/// smoothing, the Remove tool's size [`REMOVE_TOOL_SIZE`], the Smudge
-/// tool's [`SMUDGE_TOOL_TIP`] and the Pencil's [`PENCIL_TOOL_TIP`]; the other tools keep the
-/// default tip.
+/// smoothing, the Remove tool's size [`REMOVE_TOOL_SIZE`], the Smudge tool's [`SMUDGE_TOOL_TIP`],
+/// the Color Replacement tool's [`COLOR_REPLACEMENT_TIP`] and the Pencil's [`PENCIL_TOOL_TIP`];
+/// the other tools keep the default tip.
 pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
     let mut brush = BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() };
     match tool {
@@ -157,6 +159,7 @@ pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings 
         Tool::Pencil => (brush.size, brush.hardness, brush.spacing) = PENCIL_TOOL_TIP,
         Tool::Burn | Tool::Dodge | Tool::Sponge => (brush.size, brush.hardness, brush.spacing) = TONING_TOOL_TIP,
         Tool::Smudge => (brush.size, brush.hardness, brush.spacing) = SMUDGE_TOOL_TIP,
+        Tool::ColorReplacement => (brush.size, brush.hardness, brush.spacing) = COLOR_REPLACEMENT_TIP,
         Tool::CloneStamp => {
             (brush.size, brush.hardness, brush.spacing) = CLONE_STAMP_TIP;
             brush.smoothing.amount = 0.0;
