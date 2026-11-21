@@ -968,6 +968,182 @@ fn merging_keeps_layer_effects_outside_the_pixels() {
 }
 
 #[test]
+fn merging_down_keeps_the_lower_layers_style_live_on_the_union() {
+    // Merge Down over a styled layer keeps its style live, as in Photoshop, where it
+    // re-composes over the merged pixels: the glow that only surrounded the lower layer now
+    // surrounds the union of both layers' content.
+    let probe = |s: &Session| {
+        let d = doc(s);
+        photocraft_compose::render(d, d.bounds()).get(75, 26)
+    };
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        let lower = rect_layer(&mut s, Rect::new(10, 10, 30, 30));
+        let upper = rect_layer(&mut s, Rect::new(60, 20, 72, 32));
+        s.execute("layer.layerStyle.outerGlow", json!({"layer": lower.0, "blend": "normal", "size": 6, "color": "#000000", "add": true})).unwrap();
+        let before = probe(&s);
+        assert!(before.iter().all(|v| *v > 0.9), "depth {depth}: the glow never reaches the probe before the merge: {before:?}");
+        s.execute("layer.mergeDown", json!({"layer": upper.0})).unwrap();
+        let merged = doc(&s).layer(lower).unwrap().clone();
+        assert!(doc(&s).layer(upper).is_none());
+        assert_eq!(merged.effects.items.len(), 1);
+        assert!(merged.effects.items.iter().all(photocraft_doc::Effect::enabled), "the style stays live on the merged layer");
+        let after = probe(&s);
+        assert!(
+            after.iter().take(3).zip(&before).all(|(a, b)| *a < *b - 0.03),
+            "depth {depth}: the glow re-applies to the merged union: {before:?} -> {after:?}"
+        );
+    }
+}
+
+#[test]
+fn merging_down_inherits_the_lower_layers_fill_opacity() {
+    // Photoshop inherits the fill onto the merged layer (fixtures in PR #8750): merging onto a
+    // Fill-0% lower layer keeps the union ink in the pixels but invisible, and only the live
+    // style — re-rendered around the union — shows. The property is not reset to opaque.
+    let ink = |s: &Session| {
+        let d = doc(s);
+        photocraft_compose::render(d, d.bounds()).get(66, 26)
+    };
+    let glow = |s: &Session| {
+        let d = doc(s);
+        photocraft_compose::render(d, d.bounds()).get(75, 26)
+    };
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        let lower = rect_layer(&mut s, Rect::new(10, 10, 30, 30));
+        let upper = rect_layer(&mut s, Rect::new(60, 20, 72, 32));
+        s.execute("layer.layerStyle.outerGlow", json!({"layer": lower.0, "blend": "normal", "size": 6, "color": "#000000", "add": true})).unwrap();
+        s.edit("zero fill", |doc, _| {
+            doc.layer_mut(lower).unwrap().fill_opacity = 0.0;
+            Ok(())
+        })
+        .unwrap();
+        let before_ink = ink(&s);
+        let before_glow = glow(&s);
+        s.execute("layer.mergeDown", json!({"layer": upper.0})).unwrap();
+        let merged = doc(&s).layer(lower).unwrap().clone();
+        assert_eq!(merged.fill_opacity, 0.0, "depth {depth}: the fill inherits onto the merged layer");
+        assert_eq!(merged.effects.items.len(), 1, "depth {depth}: the style stays live");
+        let after_ink = ink(&s);
+        assert!(after_ink.iter().take(3).all(|v| *v > 0.9), "depth {depth}: the inherited zero fill hides the union ink: {before_ink:?} -> {after_ink:?}");
+        let after_glow = glow(&s);
+        assert!(
+            after_glow.iter().take(3).zip(&before_glow).all(|(a, b)| *a < *b - 0.03),
+            "depth {depth}: the glow re-renders around the invisible union: {before_glow:?} -> {after_glow:?}"
+        );
+    }
+}
+
+#[test]
+fn merging_down_applies_the_inherited_fill_to_the_baked_ink() {
+    // Observed in Photoshop (fixtures in PR #8750: each layer holds one opaque circle and one
+    // painted at 50% brush opacity). Merge Down bakes the visible pixels — with the lower
+    // layer's Fill already applied — onto the merged layer, and the merged layer inherits that
+    // same Fill, so the lower content is attenuated twice: at Fill 50% the opaque circle lands
+    // on a quarter (0.5 × 0.5) and the half-transparent one on an eighth, while the upper
+    // circles stay at half and a quarter. At Fill 0% the lower ink is already empty when baked
+    // and the rest leaves the composite through the inherited fill — as in the fixtures, where
+    // the lower shape and its glow vanish; at Fill 100% the merge changes nothing visible.
+    let alpha_at = |s: &Session, x: i32, y: i32| {
+        let d = doc(s);
+        photocraft_compose::render(d, d.bounds()).get(x, y)[3]
+    };
+    let alphas = |s: &Session| [alpha_at(s, 30, 30), alpha_at(s, 30, 80), alpha_at(s, 130, 30), alpha_at(s, 130, 80)];
+    let close = |got: &[f32; 4], want: [f32; 4]| got.iter().zip(&want).all(|(g, w)| (g - w).abs() < 0.01);
+    let (all, top_only) = (Rect::new(10, 10, 150, 100), Rect::new(110, 10, 150, 100));
+    // (Fill, alpha of [lower opaque, lower half, upper opaque, upper half] after the merge,
+    //  the ink baked into the merged layer)
+    let cases = [(1.0f32, [1.0, 0.5, 1.0, 0.5], all), (0.5, [0.25, 0.125, 0.5, 0.25], all), (0.0, [0.0; 4], top_only)];
+    for (fill, after, baked) in cases {
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 160, "height": 120, "depth": depth, "background": "transparent"})).unwrap();
+            let lower = rect_layer(&mut s, Rect::new(10, 10, 50, 50));
+            let upper = rect_layer(&mut s, Rect::new(110, 10, 150, 50));
+            let half = |s: &mut Session, id: LayerId, r: Rect| {
+                s.edit("half", |doc, _| {
+                    doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(r, &[0.0, 0.0, 1.0, 0.5]);
+                    Ok(())
+                })
+                .unwrap();
+            };
+            half(&mut s, lower, Rect::new(10, 60, 50, 100));
+            half(&mut s, upper, Rect::new(110, 60, 150, 100));
+            s.edit("fill", |doc, _| {
+                doc.layer_mut(lower).unwrap().fill_opacity = fill;
+                Ok(())
+            })
+            .unwrap();
+            let before = alphas(&s);
+            assert!(
+                close(&before, [fill, fill * 0.5, 1.0, 0.5]),
+                "depth {depth}, fill {fill}: the lower layer's own fill attenuates it once before the merge: {before:?}"
+            );
+            let layers_before = doc(&s).layer_count();
+            s.execute("layer.mergeDown", json!({"layer": upper.0})).unwrap();
+            let merged = doc(&s).layer(lower).unwrap().clone();
+            assert!(doc(&s).layer(upper).is_none(), "depth {depth}, fill {fill}: the upper layer merged down");
+            assert_eq!(doc(&s).layer_count(), layers_before - 1, "depth {depth}, fill {fill}: the merge took one layer");
+            assert_eq!(merged.fill_opacity, fill, "depth {depth}, fill {fill}: the fill inherits onto the merged layer");
+            assert_eq!(layer_bounds(&merged).unwrap(), baked, "depth {depth}, fill {fill}: the merge bakes the visible pixels of both layers");
+            let got = alphas(&s);
+            assert!(close(&got, after), "depth {depth}, fill {fill}: the inherited fill applies to the baked ink again: {got:?}, want {after:?}");
+            s.undo();
+            assert_eq!(doc(&s).layer_count(), layers_before, "depth {depth}, fill {fill}: undo brings both layers back");
+            assert!(doc(&s).layer(upper).is_some(), "depth {depth}, fill {fill}: undo restores the upper layer");
+            assert_eq!(doc(&s).layer(lower).unwrap().fill_opacity, fill, "depth {depth}, fill {fill}: undo restores the fill");
+            assert!(close(&alphas(&s), before), "depth {depth}, fill {fill}: undo restores the composite");
+        }
+    }
+}
+
+#[test]
+fn merging_selected_layers_bakes_the_bottom_layers_style_to_pixels() {
+    // Observed in Photoshop (fixtures in PR #8750): ⌘E over a selection merges the selected
+    // layers preserving the visible composite — the bottommost layer's style is baked into
+    // the merged pixels and no longer carried as a live effect, so it keeps drawing only
+    // around its own shape and never wraps the upper layers' content.
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        let lower = rect_layer(&mut s, Rect::new(10, 10, 30, 30));
+        let upper = rect_layer(&mut s, Rect::new(60, 20, 72, 32));
+        s.execute("layer.layerStyle.outerGlow", json!({"layer": lower.0, "blend": "normal", "size": 6, "color": "#000000", "add": true})).unwrap();
+        let before = photocraft_compose::render(doc(&s), doc(&s).bounds());
+        select_all(&mut s, &[lower, upper]);
+        let m = LayerId(s.execute("layer.mergeLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+        assert!(doc(&s).layer(m).unwrap().effects.items.is_empty(), "depth {depth}: Merge Layers drops the style");
+        let after = photocraft_compose::render(doc(&s), doc(&s).bounds());
+        let worst = before.px.iter().zip(&after.px).map(|(a, b)| a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max)).fold(0.0f32, f32::max);
+        assert!(worst <= 1.5 / 255.0, "depth {depth}: Merge Layers preserves the visible composite (off by {worst})");
+    }
+}
+
+#[test]
+fn merging_down_inside_the_shaped_layer_is_a_pixel_match() {
+    // With the upper layer fully inside the lower one's shape, the union is the same shape, so
+    // a correct merge is a pixel-for-pixel match: the style is neither lost, nor applied
+    // twice, and Global Light follows the document instead of `Document::new` defaults.
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        let lower = rect_layer(&mut s, Rect::new(10, 10, 60, 60));
+        let upper = rect_layer(&mut s, Rect::new(25, 25, 45, 45));
+        s.edit("light", |doc, _| {
+            doc.global_light = photocraft_doc::GlobalLight { angle: 20.0, altitude: 40.0 };
+            Ok(())
+        })
+        .unwrap();
+        s.execute("layer.layerStyle.dropShadow", json!({"layer": lower.0, "blend": "normal", "useGlobalLight": true, "angle": 120, "distance": 5, "spread": 0, "size": 0, "opacity": 100, "color": "#000000"})).unwrap();
+        let before = photocraft_compose::render(doc(&s), doc(&s).bounds());
+        s.execute("layer.mergeDown", json!({"layer": upper.0})).unwrap();
+        assert!(!doc(&s).layer(lower).unwrap().effects.items.is_empty());
+        let after = photocraft_compose::render(doc(&s), doc(&s).bounds());
+        let worst = before.px.iter().zip(&after.px).map(|(a, b)| a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max)).fold(0.0f32, f32::max);
+        assert!(worst <= 1.5 / 255.0, "depth {depth}: merge down changed the composite (off by {worst})");
+    }
+}
+
+#[test]
 fn merging_a_group_down_preserves_the_composite() {
     for depth in [8, 16, 32] {
         let mut s = session(depth);
