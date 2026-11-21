@@ -32,6 +32,9 @@ pub(crate) struct Waiting {
     /// save journaled from there on is the dialog's own. A save made some other way while the
     /// save dialog was still open (a control request) doesn't count, so Cancel still stops.
     admitted: Option<usize>,
+    /// The file the step's save dialog returned: a format's options writing anything else are
+    /// another save's, which this step neither judges nor counts ([`admit_answered`]).
+    chosen: Option<String>,
     /// Set when Export As has written its files: several Scale All sizes journal no step.
     exported: bool,
     /// The document the step saves. Nothing is written once another one is active ([`admit_step`]),
@@ -60,6 +63,7 @@ pub(super) fn pause(app: &mut PhotocraftApp, action: &Action, i: usize, id: &str
         id: id.to_owned(),
         params: params.clone(),
         admitted: None,
+        chosen: None,
         exported: false,
         doc: app.session.active().map(|d| d.doc.id),
         background: std::mem::replace(&mut app.background_jobs, false),
@@ -96,25 +100,57 @@ pub(super) fn pause(app: &mut PhotocraftApp, action: &Action, i: usize, id: &str
     Ok(())
 }
 
-/// The file chosen in a waiting save step's dialog: [`admit_step`] for the recorded step writing
-/// at `path`.
+/// The file a waiting Save As or Save a Copy step's own save dialog returned: kept as the step's
+/// file, then [`admit_step`] for the recorded step writing at `path`. Only the step's own picker
+/// calls this.
 pub(crate) fn admit(app: &mut PhotocraftApp, path: &str) -> Result<(), String> {
+    let Some(waiting) = app.paused_playbacks.save.as_mut() else { return Ok(()) };
+    waiting.chosen = Some(path.to_owned());
+    admit_step(app, recorded_at(&waiting_params(app), path))
+}
+
+/// A format's options about to write `path` (`write_answered_save`): [`admit`]'s check again
+/// when it is the waiting step's own file. Any other save's options (another request made while
+/// the step's save dialog was open) are neither judged nor counted as the step's.
+pub(crate) fn admit_answered(app: &mut PhotocraftApp, path: &str) -> Result<(), String> {
     let Some(waiting) = app.paused_playbacks.save.as_ref() else { return Ok(()) };
-    let mut params = waiting.params.clone();
+    if waiting.chosen.as_deref() != Some(path) {
+        return Ok(());
+    }
+    admit_step(app, recorded_at(&waiting_params(app), path))
+}
+
+/// Export As about to write `params` (its settings and file): [`admit_step`] when the waiting step
+/// is an Export As, whose dialog this is. `Ok` otherwise.
+pub(crate) fn admit_export(app: &mut PhotocraftApp, params: Value) -> Result<(), String> {
+    match app.paused_playbacks.save.as_ref() {
+        Some(waiting) if waiting.id == crate::export_dialog::COMMAND => admit_step(app, params),
+        _ => Ok(()),
+    }
+}
+
+/// The waiting step's recorded params (`Null` when none is waiting).
+fn waiting_params(app: &PhotocraftApp) -> Value {
+    app.paused_playbacks.save.as_ref().map_or(Value::Null, |w| w.params.clone())
+}
+
+/// The recorded step `params` writing at `path`.
+fn recorded_at(params: &Value, path: &str) -> Value {
+    let mut params = params.clone();
     if let Some(object) = params.as_object_mut() {
         object.remove("folder");
         object.remove("extension");
         object.insert("path".into(), json!(path));
     }
-    admit_step(app, params)
+    params
 }
 
 /// The write a waiting save step's dialog is about to make, as the step with `params`: refused
 /// once another document is active, then judged by the gate the playback paused under and the
-/// current one, as an edited step dialog's values are. Called right before each write the
-/// dialogs make (the chosen file, a format's options, Export As's OK). `Ok` when no save step is
-/// waiting (a save by hand).
-pub(crate) fn admit_step(app: &mut PhotocraftApp, params: Value) -> Result<(), String> {
+/// current one, as an edited step dialog's values are. Called right before each write the step's
+/// own dialogs make ([`admit`], [`admit_answered`], [`admit_export`]); a write it lets through is
+/// the one whose save continues the action.
+fn admit_step(app: &mut PhotocraftApp, params: Value) -> Result<(), String> {
     let Some(waiting) = app.paused_playbacks.save.as_ref() else { return Ok(()) };
     if waiting.doc.is_some() && waiting.doc != app.session.active().map(|d| d.doc.id) {
         return Err(DOCUMENT_CHANGED.into());

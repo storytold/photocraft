@@ -856,7 +856,7 @@ fn drive(app: &mut PhotocraftApp, ctx: &egui::Context, open: &mut ExportOpen) ->
             // written the action continues.
             let mut step = settings_of(&settings_from(&result.options, open.source));
             step.insert("path".into(), json!(result.path.to_string_lossy()));
-            match crate::actions::save_dialog::admit_step(app, Value::Object(step)).and_then(|()| finish(app, ctx, open, result)) {
+            match crate::actions::save_dialog::admit_export(app, Value::Object(step)).and_then(|()| finish(app, ctx, open, result)) {
                 Ok(_) => crate::actions::save_dialog::exported(app),
                 Err(error) => {
                     app.ui.status = error;

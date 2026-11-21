@@ -275,6 +275,19 @@ fn a_save_made_another_way_while_the_dialog_is_open_doesnt_continue_a_cancelled_
     answer(&mut app, &files, Picked::Cancelled);
     assert!(!after_ran(&app), "Cancel stops the action: that save wasn't the dialog's");
     assert_eq!(app.ui.status, "Action playback stopped");
+
+    // The same with a JPEG, whose JPEG Options write goes through the format prompts' write.
+    let (mut app, files, written) = setup(("file.saveAs", json!({"path": "/out/played.psd"})));
+    app.session.authorize = Some(deny_outside);
+    play(&mut app);
+    app.save_as(Some("/outside/by-request.jpg".into())).unwrap();
+    assert!(app.save_options_open(), "the request's own JPEG Options");
+    let ctx = app.ctx().clone();
+    crate::format_prompts::confirm(&mut app, &ctx);
+    assert_eq!(*written.borrow(), ["/outside/by-request.jpg"], "another request's save is neither judged nor refused as the step's");
+    answer(&mut app, &files, Picked::Cancelled);
+    assert!(!after_ran(&app), "Cancel stops the action: the JPEG save wasn't the dialog's");
+    assert_eq!(app.ui.status, "Action playback stopped");
 }
 
 /// Answers the open JPEG Options with OK, then lets the next frame see the dialogs end.

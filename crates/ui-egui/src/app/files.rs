@@ -785,7 +785,7 @@ impl PhotocraftApp {
         let (record, mut step) = step;
         // A played save step's dialog checks its write again right before it (#15945): the
         // document or the gate may have changed while the prompt was open.
-        let written = crate::actions::save_dialog::admit(self, &path).and_then(|()| {
+        let written = crate::actions::save_dialog::admit_answered(self, &path).and_then(|()| {
             self.with_document(doc, |app| {
                 // Before the save renames the document: a Save As that keeps its own name records
                 // only the folder (#5305).
