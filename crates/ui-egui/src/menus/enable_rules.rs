@@ -28,6 +28,7 @@ fn background_blocks(id: &str, has_selection: bool) -> bool {
         "layer.createClippingMask"
             | "layer.releaseClippingMask"
             | "layer.mergeDown"
+            | "layer.mergeLayers"
             // The Background can't go into a group (#12866, measured on the canvas menu).
             | "layer.new.groupFromLayers"
             | "layer.lockLayers"
@@ -101,7 +102,8 @@ fn selection_targets(id: &str) -> Option<Targets> {
         | "layer.rasterize.type"
         | "layer.rasterize.shape"
         | "layer.rasterize.fillContent"
-        | "layer.rasterize.smartObject" => Targets::Any,
+        | "layer.rasterize.smartObject"
+        | "layer.mergeLayers" => Targets::Any,
         "layer.releaseClippingMask" | "layer.layerStyle.pasteLayerStyle" | "layer.layerStyle.clear" => Targets::Any,
         "layer.createClippingMask" => Targets::AllButLowest,
         "layer.layerMask.revealAll" | "layer.layerMask.hideAll" | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection" => Targets::WithoutMask,
@@ -515,3 +517,63 @@ mod tests {
 #[cfg(test)]
 #[path = "warp_split_enable_tests.rs"]
 mod warp_split_enable_tests;
+
+#[cfg(test)]
+mod merge_layers_selection_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    /// #12427: with two or more layers selected and the Background active, Merge Layers is judged
+    /// by the whole selection, so Ctrl+E is not greyed by the active layer alone.
+    #[test]
+    fn merge_layers_follows_the_selection_not_the_active_layer() {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 20, "height": 20})).unwrap();
+        let bg = s.active().unwrap().doc.layers[0].id;
+        s.execute("layer.new.layer", json!({"name": "R1"})).unwrap();
+        let r1 = s.active().unwrap().active_layer.unwrap();
+        s.execute("layer.new.layer", json!({"name": "R2"})).unwrap();
+        let r2 = s.active().unwrap().active_layer.unwrap();
+        // R1 and R2 are in the selection, and the Background is the active layer.
+        s.execute("layer.select", json!({"layer": r1.0})).unwrap();
+        s.execute("layer.select", json!({"layer": r2.0, "mode": "add"})).unwrap();
+        s.execute("layer.select", json!({"layer": bg.0, "mode": "add"})).unwrap();
+        let mut app = crate::PhotocraftApp::new(s, crate::Services::default());
+        assert_eq!(app.session.active().unwrap().active_layer, Some(bg));
+        assert_eq!(app.session.active().unwrap().selected_layers().len(), 3);
+        assert!(!disabled(&app, "layer.mergeLayers"), "Merge Layers stays enabled with several layers selected");
+        assert!(crate::menus::is_enabled(&app, "layer.mergeLayers"));
+        app.session.execute("layer.mergeLayers", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.walk().len(), 1);
+    }
+
+    /// A single layer is still mergeable: with one layer selected the command merges down onto
+    /// the layer below, so it stays enabled (unlike a lone Background, which has nothing below).
+    #[test]
+    fn a_single_layer_still_merges_down() {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 20, "height": 20})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        let app = crate::PhotocraftApp::new(s, crate::Services::default());
+        assert!(!disabled(&app, "layer.mergeLayers"), "a single layer merges down onto the layer below");
+    }
+
+    /// With only the Background selected (whether alone or in a multi-layer document), Merge Layers
+    /// delegates to Merge Down and stays greyed.
+    #[test]
+    fn background_alone_greys_merge_layers() {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 20, "height": 20})).unwrap();
+        let app = crate::PhotocraftApp::new(s, crate::Services::default());
+        assert!(disabled(&app, "layer.mergeLayers"), "a lone Background cannot merge down");
+
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 20, "height": 20})).unwrap();
+        let bg = s.active().unwrap().doc.layers[0].id;
+        s.execute("layer.new.layer", json!({"name": "R1"})).unwrap();
+        s.execute("layer.select", json!({"layer": bg.0})).unwrap();
+        let app = crate::PhotocraftApp::new(s, crate::Services::default());
+        assert!(disabled(&app, "layer.mergeLayers"), "Background alone cannot merge down even with another layer above");
+    }
+}
