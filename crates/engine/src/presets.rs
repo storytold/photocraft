@@ -94,7 +94,6 @@ pub struct PresetState {
     #[plain_data(assume = "craft-color-ui swatch groups: plain values and strings")]
     pub swatches: Vec<swatches::SwatchGroup>,
     /// The user contour library of the Layer Style dialog (`layer.layerStyle.contours.*`).
-    #[plain_data(assume = "document contours: plain numbers")]
     pub contours: Vec<photocraft_doc::Contour>,
 }
 
