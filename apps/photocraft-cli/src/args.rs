@@ -308,6 +308,7 @@ pub(crate) struct McpArgs {
 /// Each request is a JSON line {"id", "method", "params"}. Methods: engine.execute,
 /// jobs.list/cancel, engine.commands,
 /// doc.open/new/place/save/exportLayers/exportDataSets/importDataSets/inspect/render/select/close,
+/// doc.replaceSmartObject,
 /// session.list, batch, methods (docs/control-protocol.md#headless-server). The token flags require
 /// --port (or PHOTOCRAFT_CONTROL_PORT); stdio needs no control token.
 #[derive(Args)]
