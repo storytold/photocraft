@@ -3,11 +3,15 @@ use super::{D50, HueRange, SRGB_TO_XYZ_D50, SampleType, Transfer, XYZ_D50_TO_SRG
 
 /// Hue/Saturation's range edits as three hue-indexed tables (hue shift in degrees, saturation and
 /// lightness as fractions), sampled at hue `k / (len - 1)` turns. Ranges add up where they overlap.
+/// A hard edge takes in the table step it falls in, so the lookup's interpolation doesn't fade
+/// the hues just inside it: hue 15.06 is fully in 345/345/15/15 (#14744).
 pub fn hue_range_tables(ranges: &[HueRange; 6]) -> [Vec<f32>; 3] {
+    let step = 360.0 / (LUT_SIZE - 1) as f32;
     let at = |k: usize| {
-        let deg = k as f32 / (LUT_SIZE - 1) as f32 * 360.0;
+        let deg = k as f32 * step;
         ranges.iter().filter(|r| !r.is_neutral()).fold([0.0f32; 3], |acc, r| {
             let w = r.weight(deg);
+            let w = if w == 0.0 && r.weight(deg - step).max(r.weight(deg + step)) == 1.0 { 1.0 } else { w };
             [acc[0] + w * r.hue, acc[1] + w * r.saturation / 100.0, acc[2] + w * r.lightness / 100.0]
         })
     };
