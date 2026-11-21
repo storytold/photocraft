@@ -1,7 +1,8 @@
 //! The Retouch options bar's healing family: Remove, Patch, Content-Aware Move, Spot Healing, Clone Stamp and
 //! Healing Brush. Also holds the cells the toning and selection families share.
 
-use craft::behavior::Value;
+use craft::behavior::{IconId, Value};
+use craft::ui::buttons::ToggleButton;
 use craft::ui::choice::{Checkbox, Radio, RadioGroup};
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
@@ -139,16 +140,31 @@ pub(super) fn spot_healing(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option
 }
 
 /// The options of Clone Stamp and Healing Brush. In an Indexed Color document the Clone Stamp's
-/// Sample greys at Current Layer and keeps the stored choice for other documents (#12613).
+/// Sample greys at Current Layer and keeps the stored choice for other documents (#12613). The
+/// Clone Stamp's Ignore adjustment layers toggle follows Sample (#12606).
 pub(super) fn clone(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
     let source_unset = app.session.presets.clone.active().source.is_none();
     let indexed = crate::retouch_ui::clone_stamp_indexed(app);
+    let clone_stamp = app.ui.tool == crate::state::Tool::CloneStamp;
     let o = &mut app.ui.tool_options;
     check(ui, tl!("Aligned"), &mut o.clone_aligned, true, None);
     let samples = string_entries(&[("current", tl!("Current Layer")), ("currentAndBelow", tl!("Current & Below")), ("all", tl!("All Layers"))]);
     let mut greyed = "current".to_owned();
     let sample = if indexed { &mut greyed } else { &mut o.clone_sample };
     choose(ui, tl!("Sample"), sample, &samples, !indexed, None);
+    if clone_stamp {
+        // Dimmed while Sample is Current Layer, so in Indexed Color too (#12606).
+        let enabled = !indexed && o.clone_sample != "current";
+        let ignore = ToggleButton::new(tl!("Ignore adjustment layers"), Bind::given(o.clone_ignore_adjustments))
+            .icon(IconId::new("ban"))
+            .icon_only()
+            .enabled(enabled)
+            .tooltip(tl!("Turn on to ignore adjustment layers when cloning").to_owned())
+            .show(ui);
+        if let Some(on) = ignore.value().copied() {
+            o.clone_ignore_adjustments = on;
+        }
+    }
     if source_unset {
         Divider::vertical().show(ui);
         hint(ui, crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));

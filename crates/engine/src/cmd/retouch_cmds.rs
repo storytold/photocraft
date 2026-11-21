@@ -259,7 +259,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: brush_params!(
-                r#","source":[sx,sy] (sampled under the first point) | "offset":[dx,dy],"aligned":bool=true,"sampleLayer":"current|currentAndBelow|all"="current","sourceLayer":id? (Current Layer: this layer, else the picked slot's layer/document, else the paint target; explicit source/offset use this document),"mode":"normal|multiply|…"="normal","wrap":bool=false (repeat source and stroke at document edges for Pattern Preview) → {"damage","offset","aligned","nextSource"}"#
+                r#","source":[sx,sy] (sampled under the first point) | "offset":[dx,dy],"aligned":bool=true,"sampleLayer":"current|currentAndBelow|all"="current","sourceLayer":id? (Current Layer: this layer, else the picked slot's layer/document, else the paint target; explicit source/offset use this document),"mode":"normal|multiply|…"="normal","wrap":bool=false (repeat source and stroke at document edges for Pattern Preview),"ignoreAdjustments":bool=false (All Layers samples with the top-level adjustment layers hidden) → {"damage","offset","aligned","nextSource"}"#
             ),
             enabled: has_pixel_layer,
             run: clone_stamp,
@@ -423,6 +423,8 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod clone_ignore_adjustments_tests;
 #[cfg(test)]
 mod clone_source_layer_tests;
 
