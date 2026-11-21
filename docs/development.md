@@ -38,6 +38,8 @@ building locally; the downloaded app is still subject to Windows application-con
 
 On Linux and FreeBSD, PhotoCraft keeps its integrated client-side decorated title bar by default (#4439), including desktop-matched buttons. Enabling **System Title Bar** in Preferences switches to the system frame at the next launch: on GNOME/Wayland, winit provides font-free Adwaita controls; on X11, the window manager supplies the frame. Explicit saved choices are respected and Windows/macOS defaults are unchanged.
 
+A clipboard read waits for the app that owns the clipboard: arboard's Wayland data-control read has no time limit, and its X11 read waits up to 4 s for each format. On Linux and the BSDs, a paste reads the system clipboard on a worker thread with an arboard handle of its own, which the worker opens at its first read (`apps/photocraft/src/services/clipboard_reads.rs`). The window waits at most 2 s for copied files or text and 10 s for a bitmap, including opening that handle and the Wayland read of other image types. A read with no answer in that time fails the paste with an error, and later pastes fail at once until that app answers or a copy in PhotoCraft replaces the clipboard's contents. PhotoCraft keeps at most four such unanswered reads; past that, a copy does not start a new reader, and pastes fail until one of them ends. On X11, and on every backend on the BSDs, quitting within 25 s of an unanswered read waits for that read to end, so the app's own handle is the last one and hands what PhotoCraft copied to the clipboard manager.
+
 ```sh
 cargo run --release -p photocraft -- path/to/image.psd      # desktop app
 cargo run --release -p photocraft -- --control 7878 --control-token-file .private/control.token \
