@@ -485,3 +485,7 @@ mod find_replace_change_tests;
 #[cfg(test)]
 #[path = "edit_menu_cmds/find_replace_order_tests.rs"]
 mod find_replace_order_tests;
+
+#[cfg(test)]
+#[path = "edit_menu_cmds/find_replace_history_tests.rs"]
+mod find_replace_history_tests;

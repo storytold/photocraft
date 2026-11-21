@@ -2,6 +2,10 @@ use super::{Document, EngineError, FindCursor, LayerContent, LayerId, Result, Se
 
 // ------------------------------------------------------------------ Find and Replace Text
 
+/// The history state of every replacement, as in Photoshop. The window passes one `coalesce` key
+/// per session, so all its replacements share one state.
+const HISTORY_NAME: &str = "Find Replace";
+
 /// Byte ranges of `find` in `text` (case-insensitive unless `case`; whole words only with `whole`).
 pub fn find_matches(text: &str, find: &str, case: bool, whole: bool) -> Vec<(usize, usize)> {
     if find.is_empty() {
@@ -91,7 +95,7 @@ pub(super) fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
                 s.edit_state.find_start = None;
                 return Ok(json!({"count": 0, "layers": 0}));
             }
-            s.edit("Replace All Text", |doc, _| {
+            s.edit(HISTORY_NAME, |doc, _| {
                 let (dpi, format) = (doc.resolution_dpi, doc.pixel_format());
                 for (id, matches) in &plan {
                     if let Some(LayerContent::Text(t)) = doc.layer_mut(*id).map(|l| &mut l.content) {
@@ -126,7 +130,7 @@ pub(super) fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
                 && text_of(&doc, id).is_some_and(|t| find_matches(&t, &find, case, whole).contains(&(a, b)))
             {
                 crate::type_cmds::check_text_unlocked(&doc, id)?;
-                s.edit("Replace Text", |doc, _| {
+                s.edit(HISTORY_NAME, |doc, _| {
                     let (dpi, format) = (doc.resolution_dpi, doc.pixel_format());
                     if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
                         crate::type_cmds::replace_text(t, a, b, &replace);
