@@ -354,3 +354,8 @@ fn leaving_the_window_without_a_grab_says_nothing() {
     assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0]);
     assert_ne!(h.state().ui.status, crate::alt_grab::message());
 }
+
+#[test]
+fn trial_marker_test_runs_fresh_code() {
+    assert!(true);
+}

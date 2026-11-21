@@ -167,3 +167,5 @@ pub(crate) fn fold_keystroke(s: &mut Session, id: &str, params: &Value, previous
 
 #[cfg(test)]
 mod tests;
+
+// Trial marker: a comment-only change to measure an incremental engine rebuild.

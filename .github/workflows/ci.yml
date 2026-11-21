@@ -165,7 +165,7 @@ jobs:
   gate:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
-    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
+    uses: aiongg/craft-common-actions/.github/workflows/gate.yml@trial-keep-artifacts
     with:
       # egui/winit/rfd.
       packages: >-
@@ -178,7 +178,9 @@ jobs:
       # test build drops from ~19 to ~6.5 GB. A panic still names its file and line; only
       # backtrace frames lose names and lines. Local builds keep Cargo.toml's line tables.
       dev-debug: "0"
-      cache-version: v2
+      cache-version: v2-keep
+      cache-workspace-crates: true
+      trial-save-on-pull-request: true
       env: |
         PHOTOCRAFT_FULL_SWEEP=${{ inputs.full_sweep && '1' || '0' }}
         PHOTOCRAFT_NO_PRINT=1
