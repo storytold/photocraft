@@ -5,7 +5,7 @@ use std::sync::Arc;
 use craft::keymap::CommandRef;
 use craft::menu::{Gate, ModalRules, PendingRule};
 use craft::ui::contract::MemoProps;
-use craft::ui::runtime::commands::CommandGate;
+use craft::ui::runtime::commands::{CommandGate, CommandSet as _, EditCommands};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -50,7 +50,11 @@ pub(crate) fn menu_gate(app: &PhotocraftApp) -> (Gate, ModalRules) {
 /// screen-mode commands are judged as their View › Screen Mode rows, and the rows' own rules
 /// ([`refused`]) apply to them: their keys and menu items are one command.
 pub(crate) fn command_gate(app: &PhotocraftApp) -> CommandGate {
-    let (gate, rules) = menu_gate(app);
+    let (gate, mut rules) = menu_gate(app);
+    if app.dialog_open() {
+        // Let Craft route these to a dialog that declares its own history.
+        rules.in_dialogs.extend([EditCommands::Undo.id().to_owned(), EditCommands::Redo.id().to_owned()]);
+    }
     CommandGate::new(GateProps { gate, rules, refused: refused(app) }, |props, command| gated(&props.gate, &props.rules, &props.refused, command))
 }
 
