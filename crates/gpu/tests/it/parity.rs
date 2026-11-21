@@ -507,10 +507,11 @@ fn disjoint_partial_damages_admit_whole_chunks_not_damage_rects() {
     doc.layers.push(alone(noise_layer("middle", PixelFormat::RGBA8, doc.bounds(), 2, 0.2)));
     doc.layers.push(alone(noise_layer("top", PixelFormat::RGBA8, doc.bounds(), 3, 0.2)));
     check(&mut g, &doc, "warm");
-    // Each series paints 8 rectangles. The second series' rectangles are all new (5 px across
-    // and 65 px down from the first's) but in the same chunk (the 300 x 260 document is one
-    // chunk at `CHUNK`), so a cache entry per damage rectangle would add 8 entries. (The four
-    // series of 24 this replaces painted the same 24 rectangles every time.)
+    // Each series paints 8 rectangles. The second series' damage rectangles are distinct from
+    // the first's (5 px across and 65 px down), but their pixels land in the same chunk the
+    // first series already made resident (the 300 x 260 document is one chunk at `CHUNK`), so
+    // only admission could grow the cache: an entry per damage rectangle would add 8 entries.
+    // (The four series of 24 this replaces painted the same 24 rectangles every time.)
     let strokes = |g: &mut Gpu, doc: &Document, pass: i32| {
         for i in 0..8 {
             let (x, y) = (20 + i * 30 + pass * 5, 20 + pass * 65);
@@ -1220,8 +1221,9 @@ fn formats_offsets_and_chunks() {
 #[test]
 fn incremental_updates_follow_the_document() {
     let Some(mut g) = gpu() else { return };
-    // 300 x 260 (#15927, was 600 x 300): the painted area is still one 256 px tile at the same
-    // corner; upload bookkeeping is per tile.
+    // 300 x 260 (#15927, was 600 x 300): the top layer still spans a 2 x 2 grid of 256 px tiles,
+    // and the paint below still lands in one tile at the same corner; upload bookkeeping is
+    // per tile.
     let mut d = base_doc(300, 260);
     d.layers.push(noise_layer("top", PixelFormat::RGBA8, Rect::new(0, 0, 300, 260), 61, 0.0));
     check(&mut g, &d, "initial");
@@ -1282,17 +1284,19 @@ fn duplicates_copy_their_source_texture() {
 #[test]
 fn changed_mask_default_updates_absent_tiles() {
     let Some(mut g) = gpu() else { return };
-    // 300 x 260 (#15927, was 600 x 300): the opposite-corner tiles still span a 2 x 2 resident
-    // texture with two absent tiles between them.
+    // 300 x 260 (#15927, was 600 x 300): the two stored tiles still span a 2 x 2 resident
+    // texture whose other two tiles stay absent. A patch reaching the opposite corner at
+    // (230,190) would store all four tiles and leave the default with nothing to cover.
     let mut d = base_doc(300, 260);
     d.layers.push(noise_layer("top", PixelFormat::RGBA8, Rect::new(0, 0, 300, 260), 61, 0.5));
-    // Tiles in opposite corners: the resident texture spans the absent tiles between them.
-    let corners = [Rect::new(0, 0, 70, 70), Rect::new(230, 190, 300, 260)];
-    let data = vec![0.5f32; 70 * 70];
+    // Tiles in opposite corners only, the far one starting on the 256 px boundary: the resident
+    // texture spans the absent tile column and the absent tile row between them.
+    let corners = [Rect::new(0, 0, 70, 70), Rect::new(256, 256, 300, 260)];
     for default in [0.0, 1.0] {
         let mut m = LayerMask::reveal_all();
         m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[default]);
         for r in corners {
+            let data = vec![0.5f32; r.width() as usize * r.height() as usize];
             m.surface.write_region(r, &data);
         }
         d.layers[1].mask = Some(m);
