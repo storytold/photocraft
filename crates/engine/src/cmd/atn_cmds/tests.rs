@@ -3589,7 +3589,7 @@ fn image_size_explicit_sides_keep_precedence_over_percent() {
             assert_eq!((size.width, size.height), expected, "native {params} at {depth} bits");
 
             let mut recorded = Session::new();
-            recorded.actions.list.push(Action::new("Resize", vec![ActionStep::new("image.imageSize", params.clone())]));
+            recorded.actions.list.push(Action::new("Resize", vec![ActionStep::new("image.imageSize", params.clone())])).unwrap();
             let before = recorded.actions.list.clone();
             let saved = recorded.execute("actions.save", json!({"action": "Resize"})).unwrap();
             assert_eq!(saved["skipped"], json!([]));
