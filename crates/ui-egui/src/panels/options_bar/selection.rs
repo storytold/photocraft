@@ -118,7 +118,7 @@ pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandSta
 }
 
 /// The Select and Mask… button; its enabled state is [`command_states`]'.
-fn select_and_mask(ui: &mut egui::Ui) {
+pub(crate) fn select_and_mask(ui: &mut egui::Ui) {
     Button::command(SELECT_AND_MASK).show(ui);
 }
 
