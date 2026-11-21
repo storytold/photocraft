@@ -192,7 +192,7 @@ pub(crate) fn place_copy(doc: &mut Document, id: LayerId) -> Result<(i32, i32)> 
 /// Alt-drag copy of a plain layer must stay exportable to .atn (#7200).
 pub(crate) fn recorded_duplicate(s: &Session, mut p: Value) -> Value {
     let Some(st) = s.active() else { return p };
-    if st.selected_layers().into_iter().any(|id| st.doc.layer(id).is_some_and(|l| l.artboard().is_some())) {
+    if st.selected_layers().iter().copied().any(|id| st.doc.layer(id).is_some_and(|l| l.artboard().is_some())) {
         return p;
     }
     if let Some(fields) = p.as_object_mut() {
@@ -370,8 +370,12 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(EngineError::Other("artboards are made from a top-level layer group".into()));
         }
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        let rect = crate::layer_multi_cmds::layer_bounds(l).unwrap_or(canvas);
+        // A hidden group keeps today's measure (not measured in the reference).
+        let rect = if l.visible { shown_children_bounds(l) } else { crate::layer_multi_cmds::layer_bounds(l) }.unwrap_or(canvas);
         set_artboard(l, Artboard { rect, background, preset });
+        // As in the reference application, the new artboard is Normal at 100 % whatever the group had.
+        l.blend = photocraft_color::BlendMode::Normal;
+        l.opacity = 1.0;
         let shift = fit_canvas(doc);
         *active = Some(id);
         Ok((rect, shift))
@@ -379,6 +383,16 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
     follow_shift(s, shift);
     crate::layer_multi_cmds::set_selection(s, vec![id], Some(id), Some(id))?;
     Ok(json!({"layer": id.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
+}
+
+/// [`layer_multi_cmds::layer_bounds`](crate::layer_multi_cmds::layer_bounds) of what shows: a
+/// group unions only its visible children, so hidden layers (and a hidden group's children) don't
+/// size the board Artboard from Group makes (#14553).
+fn shown_children_bounds(l: &Layer) -> Option<Rect> {
+    match l.children() {
+        Some(children) => children.iter().filter(|c| c.visible).filter_map(shown_children_bounds).reduce(|a, b| a.union(&b)),
+        None => crate::layer_multi_cmds::layer_bounds(l),
+    }
 }
 
 /// The layers' union bounds, or the canvas when they have none: the board Artboard from Layers
@@ -410,7 +424,7 @@ fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
     // A size of the user's own (a post, a story…) from the layers' top left; 0 or none keeps
     // their bounds on that axis (#9087).
     let size = [int(p, "width").filter(|v| *v != 0), int(p, "height").filter(|v| *v != 0)];
-    let (gid, rect, shift) = s.edit("Artboard from Layers", |doc, active| {
+    let (gid, rect, shift) = s.edit("New Artboard From Layers", |doc, active| {
         let ids = crate::layer_multi_cmds::top_level(doc, &sel);
         if ids.is_empty() || ids.iter().any(|id| doc.artboard_of(*id).is_some()) {
             return Err(EngineError::Other("select layers that are not in an artboard".into()));
@@ -1028,6 +1042,18 @@ mod file_names_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/first_board_background_tests.rs"]
 mod first_board_background_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/from_group_reset_props_tests.rs"]
+mod from_group_reset_props_tests;
+
+#[cfg(test)]
+#[path = "artboard_cmds/from_layers_history_name_tests.rs"]
+mod from_layers_history_name_tests;
+
+#[cfg(test)]
+#[path = "artboard_cmds/from_group_hidden_bounds_tests.rs"]
+mod from_group_hidden_bounds_tests;
+
 #[cfg(test)]
 #[path = "artboard_cmds/overlapping_areas_tests.rs"]
 mod overlapping_areas_tests;

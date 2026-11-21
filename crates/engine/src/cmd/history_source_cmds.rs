@@ -44,7 +44,7 @@ pub enum HistorySource {
 /// The document's History Brush source, `None` once the source state or snapshot is gone.
 pub fn source(st: &DocState) -> Option<HistorySource> {
     match st.source_snapshot.or_else(|| st.history.brush_source_snapshot()) {
-        Some(id) => st.snapshots.iter().any(|s| s.id == id).then_some(HistorySource::Snapshot(id)),
+        Some(id) => st.snapshots().iter().any(|s| s.id == id).then_some(HistorySource::Snapshot(id)),
         None => st.history.brush_source().map(HistorySource::State),
     }
 }
@@ -52,7 +52,7 @@ pub fn source(st: &DocState) -> Option<HistorySource> {
 fn source_of(st: &DocState, src: HistorySource) -> Option<Arc<Document>> {
     match src {
         HistorySource::State(i) => st.history.row_doc(i, &st.doc),
-        HistorySource::Snapshot(id) => st.snapshots.iter().find(|s| s.id == id).map(|s| s.doc.clone()),
+        HistorySource::Snapshot(id) => st.snapshots().iter().find(|s| s.id == id).map(|s| s.doc.clone()),
     }
 }
 
@@ -71,7 +71,7 @@ fn parse(st: &DocState, p: &Value, cmd: &str) -> Result<Option<HistorySource>> {
         }
         (None, Some(v)) => {
             let id = index("snapshot", v)?;
-            if !st.snapshots.iter().any(|s| s.id == id) {
+            if !st.snapshots().iter().any(|s| s.id == id) {
                 return Err(bad(format!("no snapshot {id}")));
             }
             Ok(Some(HistorySource::Snapshot(id)))
@@ -168,7 +168,7 @@ pub fn source_json(st: &DocState) -> Value {
             json!({ "state": i, "label": label })
         }
         Some(HistorySource::Snapshot(id)) => {
-            json!({ "snapshot": id, "name": st.snapshots.iter().find(|s| s.id == id).map(|s| s.name.clone()) })
+            json!({ "snapshot": id, "name": st.snapshots().iter().find(|s| s.id == id).map(|s| s.name.clone()) })
         }
     }
 }
