@@ -296,8 +296,8 @@ impl Para<'_> {
             if a.start < self.prefix.len() {
                 continue;
             }
-            let st = &env.styles[env.style_at(self.map_offset(a.start))];
-            let next = &env.styles[env.style_at(self.map_offset(b.start))];
+            let st = &env.styles[self.sst(env.style_at(self.map_offset(a.start)))];
+            let next = &env.styles[self.sst(env.style_at(self.map_offset(b.start)))];
             let mut units = if st.kern.is_finite() { st.kern } else { 0.0 };
             if optical_pair(st, next, a, b) {
                 units += optical_kern(optical, st, a, b).unwrap_or(0.0);
@@ -378,7 +378,14 @@ impl Para<'_> {
     /// Where line `index` of `nlines` goes, advancing `flow` past it; `None` if a box clips it.
     pub(super) fn frame_line(&self, line: &Line<'_>, index: usize, nlines: usize, slot: Option<Slot>, flow: &mut Flow) -> Option<LineFrame> {
         let env = self.env;
-        let LineMetrics { ascent, descent, leading } = line_metrics(line, env.styles, &self.ps, env.k, self.first_style(), env.vertical);
+        let LineMetrics { ascent, descent, leading, px } = line_metrics(line, env.styles, &self.ps, env.k, self.first_style(), env.vertical, env.line_gap);
+        // Dynamic Text box lines (solved): the previous line's descent, this line's ascent and the
+        // gap, a percentage of the larger of the two sizes. Photoshop's 0% Line Gap is tight but
+        // never collides.
+        let leading = match (env.solved, env.line_gap, flow.prev_line) {
+            (true, Some(gap), Some((prev_descent, prev_px))) => prev_descent + ascent + gap / 100.0 * prev_px.max(px),
+            _ => leading,
+        };
         let (box_x, box_y, box_w, box_h) = env.box_rect;
         let baseline = match (slot, flow.prev_baseline) {
             (Some(s), _) => s.baseline,
@@ -404,6 +411,7 @@ impl Para<'_> {
             return None;
         }
         flow.prev_baseline = Some(baseline);
+        flow.prev_line = Some((descent, px));
         Some(LineFrame { index, last: index + 1 == nlines, slot, baseline, ascent, descent })
     }
 
@@ -438,11 +446,22 @@ impl Para<'_> {
         }
         let lr = line.text_range();
         let x0 = dx + m.offset;
+        let x1 = x0 + adv + state.extra - trailing_tabs - trailing_growth;
+        // A word too long to wrap: parley's own line advance (before horizontal scale and
+        // kerning, which it doesn't see) is wider than the width it broke the line at, which on a
+        // paragraph's first line has the first-line indent taken off. A solved Dynamic Text line
+        // was sized by its visible width, so that is what counts.
+        let measured = if env.solved { x1 - x0 } else { adv * self.break_scale };
+        if let Some(w) = self.line_avail(f)
+            && measured > w - if f.index == 0 { self.first_indent } else { 0.0 } + 0.5
+        {
+            out.overflowed = true;
+        }
         out.lines.push(LineInfo {
             range: self.map_offset(lr.start)..self.map_offset(lr.end).min(self.content_end),
             baseline: f.baseline,
             x0,
-            x1: x0 + adv + state.extra - trailing_tabs - trailing_growth,
+            x1,
             ascent: f.ascent,
             descent: f.descent,
             paragraph: self.index,
