@@ -141,6 +141,43 @@ fn made(v: serde_json::Value) -> u64 {
     v["layer"].as_u64().unwrap()
 }
 
+/// Undoing layer creation reveals the previously active layer even after the list has scrolled away.
+#[test]
+fn undoing_a_new_layer_reveals_the_restored_active_layer() {
+    use crate::layers_panel_nodes::row_drawn;
+
+    let mut session = Session::new();
+    session.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    session.execute("layer.new.layer", json!({"name": "Deep layer"})).unwrap();
+    for index in 0..40 {
+        session.execute("layer.new.layer", json!({"name": format!("Stack {index:02}")})).unwrap();
+    }
+    session.execute("layer.new.layer", json!({"name": "Top layer"})).unwrap();
+    let mut h = harness(session);
+    let deep = layer_id(h.state(), "Deep layer");
+    let top = layer_id(h.state(), "Top layer");
+    assert!(row_drawn(&h, "Top layer"));
+    assert!(!row_drawn(&h, "Deep layer"), "the document has enough rows to scroll");
+
+    h.state_mut().run("layer.select", json!({"layer": deep.0})).unwrap();
+    h.run_steps(4);
+    assert!(row_drawn(&h, "Deep layer"), "selecting the layer reveals it");
+    h.state_mut().run("layer.new.layer", json!({"name": "Scratch"})).unwrap();
+    let scratch = layer_id(h.state(), "Scratch");
+    h.run_steps(4);
+    h.state_mut().run("layer.select", json!({"layer": top.0})).unwrap();
+    h.run_steps(4);
+    assert!(row_drawn(&h, "Top layer"));
+    assert!(!row_drawn(&h, "Deep layer"), "the layer is offscreen before Undo");
+
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(4);
+    let state = h.state().session.active().unwrap();
+    assert!(state.doc.layer(scratch).is_none(), "Undo removes the new layer");
+    assert_eq!(state.active_layer, Some(deep), "Undo restores the old active layer");
+    assert!(row_drawn(&h, "Deep layer"), "the Layers panel scrolls to the restored layer");
+}
+
 /// Edit Text (the type thumbnail's double-click) on no document or a non-type layer changes nothing.
 #[test]
 fn edit_type_command_rejects_missing_or_non_type_layers_without_changes() {
