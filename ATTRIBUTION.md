@@ -134,3 +134,5 @@ longer used or shipped.
 | Dependency | Authors | Source | License and notices |
 |---|---|---|---|
 | `jpeg-encoder` 0.6.1, through `craft-image-codecs` | Upstream jpeg-encoder, IJG and SIMD authors named in the notices | [Published crate](https://crates.io/crates/jpeg-encoder/0.6.1) | `(MIT OR Apache-2.0) AND IJG`; complete notices in [NOTICE](NOTICE), source texts and checksums in [licenses/jpeg-encoder-0.6.1](licenses/jpeg-encoder-0.6.1) |
+
+Mac Nightly metadata tests (`packaging/macos/nightly_plist_tests.py`) generate plist dictionaries and owned sentinel bytes from this repository's app-owned Info.plist template. They use no native binaries, signing credentials, external products or archives; @skylartaylor.
