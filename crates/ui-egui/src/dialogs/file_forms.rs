@@ -131,7 +131,8 @@ pub(crate) fn open_script_events(app: &mut PhotocraftApp) -> DialogId {
     open_form(app, SCRIPT_EVENTS, tl!("Script Events Manager"), rows)
 }
 
-/// File › Package.
+/// File › Package on the web build, which has no folder picker (the desktop asks with one, #14074).
+#[cfg(target_arch = "wasm32")]
 pub(crate) fn open_package(app: &mut PhotocraftApp) -> DialogId {
     let rows = vec![Param::new("dir", tl!("Dir"), ParamKind::text(default_dir(app))).browse(PathKind::Folder)];
     open_form(app, PACKAGE, tl!("Package"), rows)
