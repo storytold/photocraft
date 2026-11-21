@@ -310,7 +310,7 @@ pub struct Session {
     symmetry_map: Option<photocraft_geom::Affine>,
     /// Each open document's linked smart objects' files: size and modification time when last
     /// seen ([`link_watch`]).
-    pub link_stamps: std::collections::HashMap<(u64, String), link_watch::Stamp>,
+    pub link_stamps: std::collections::HashMap<(u64, String), link_watch::LinkStamp>,
     /// The stamps being taken on a worker thread ([`Session::start_link_scan`]).
     pub link_scan: Option<link_watch::LinkScan>,
     /// Each open document's linked smart objects' files that were not there when last looked at

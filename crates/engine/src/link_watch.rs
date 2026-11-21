@@ -14,14 +14,15 @@
 //! Stamps are kept per document: one in the background is looked at when it comes to the front.
 //! A file seen for the first time is only remembered (one changed while its document was closed
 //! keeps waiting for Update Modified Content, as in Photoshop). For a historical XCF, the first
-//! look also checks its saved fingerprint and warns if relinking is needed. One that can't be read (another app
-//! is still writing it) is tried again once it changes again, not on every look. Only smart objects
+//! look also checks its saved fingerprint and warns if relinking is needed. This fingerprint
+//! check is retried when the file couldn't be read. Regular refreshes of files that can't be read
+//! are tried again once the stamp changes. Only smart objects
 //! of the document itself follow their files, not ones nested in another smart object's contents.
 //! While a background job runs on the document, its files aren't looked at: an update would replace
 //! the snapshot the job works on and its result would be thrown away. The first look after the job
 //! ends catches up.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use photocraft_doc::{Document, LayerContent, LayerId, SmartSource};
@@ -31,6 +32,13 @@ use crate::{EngineError, Result, Session};
 
 /// A file's size and modification time (nanoseconds since 1970).
 pub type Stamp = (u64, u128);
+
+/// Last stamp and whether the initial historical XCF fingerprint comparison succeeded.
+#[derive(Clone, Copy)]
+pub struct LinkStamp {
+    file: Stamp,
+    digest_checked: bool,
+}
 
 /// One linked file observed by the watcher.
 pub struct LinkObservation {
@@ -57,17 +65,29 @@ fn stamp(_: Option<&std::path::Path>) -> Option<Stamp> {
     None
 }
 
-/// The files of `d`'s linked smart objects, with the layers showing each.
-pub fn linked_files(d: &Document) -> Vec<(String, Vec<u64>)> {
-    let mut by_file: BTreeMap<String, Vec<u64>> = BTreeMap::new();
+#[derive(Default)]
+struct LinkedLayers {
+    ids: Vec<u64>,
+    has_historical_digest: bool,
+}
+
+fn linked_files_by_path(d: &Document) -> BTreeMap<String, LinkedLayers> {
+    let mut by_file: BTreeMap<String, LinkedLayers> = BTreeMap::new();
     for (_, _, l) in d.walk() {
         if let LayerContent::Smart(sm) = &l.content
             && let SmartSource::Linked { path } = &sm.source
         {
-            by_file.entry(path.clone()).or_default().push(l.id.0);
+            let layers = by_file.entry(path.clone()).or_default();
+            layers.ids.push(l.id.0);
+            layers.has_historical_digest |= sm.historical_xcf_link_digest.is_some();
         }
     }
-    by_file.into_iter().collect()
+    by_file
+}
+
+/// The files of `d`'s linked smart objects, with the layers showing each.
+pub fn linked_files(d: &Document) -> Vec<(String, Vec<u64>)> {
+    linked_files_by_path(d).into_iter().map(|(path, layers)| (path, layers.ids)).collect()
 }
 
 /// `layer.smartObjects.updateChanged`: stamp the active document's linked files now and update
@@ -134,15 +154,15 @@ fn saved_digest(doc: &Document, layer: u64) -> Option<[u8; 32]> {
 /// Resolve the disk paths and identify first observations that need a fingerprint.
 fn resolved_files(s: &Session, st: &crate::DocState) -> Vec<ResolvedLink> {
     let document = st.path.as_deref().map(std::path::Path::new);
-    linked_files(&st.doc)
+    linked_files_by_path(&st.doc)
         .into_iter()
         .map(|(path, layers)| {
             let file = crate::doc_path::resolve_in(&path, document).ok();
             let check_first_digest = file.is_some()
-                && !s.link_stamps.contains_key(&(st.doc.id.0, path.clone()))
-                && layers.iter().any(|&layer| saved_digest(&st.doc, layer).is_some())
+                && s.link_stamps.get(&(st.doc.id.0, path.clone())).is_none_or(|stamp| !stamp.digest_checked)
+                && layers.has_historical_digest
                 && s.authorize.is_none_or(|gate| gate("layer.smartObjects.updateModifiedContent", &json!({"path":path})).is_ok());
-            ResolvedLink { path, file, layers, check_first_digest }
+            ResolvedLink { path, file, layers: layers.ids, check_first_digest }
         })
         .collect()
 }
@@ -227,7 +247,7 @@ impl Session {
         }
         // This document's last stamps; those of closed documents are dropped.
         let open: HashSet<u64> = self.documents().iter().map(|d| d.doc.id.0).collect();
-        let mut before: HashMap<String, Stamp> = HashMap::new();
+        let mut before = HashMap::new();
         self.link_stamps.retain(|(d, p), s| {
             if *d == doc {
                 before.insert(p.clone(), *s);
@@ -237,7 +257,7 @@ impl Session {
             }
         });
         let mut changed = Vec::new();
-        let mut warnings = Vec::new();
+        let mut warnings = BTreeSet::new();
         for LinkObservation { path, layers, stamp, first_digest } in now {
             match (before.get(&path), stamp) {
                 // Not there right now (an app saving by delete and rename): keep the last stamp.
@@ -245,16 +265,17 @@ impl Session {
                     self.link_stamps.insert((doc, path), *old);
                 }
                 (old, Some(new)) => {
-                    if old.is_some_and(|o| *o != new) {
-                        changed.push((path.clone(), layers));
-                    } else if old.is_none()
-                        && let Some(digest) = first_digest
+                    if let Some(digest) = first_digest
                         && let Some(state) = self.active()
                         && layers.iter().filter_map(|&layer| saved_digest(&state.doc, layer)).any(|saved| saved != digest)
                     {
-                        warnings.push(format!("{path}: {}", photocraft_io::linked::HISTORICAL_XCF_LINK_CHANGED));
+                        warnings.insert(format!("{path}: {}", photocraft_io::linked::HISTORICAL_XCF_LINK_CHANGED));
                     }
-                    self.link_stamps.insert((doc, path), new);
+                    if old.is_some_and(|old| old.file != new) {
+                        changed.push((path.clone(), layers));
+                    }
+                    let digest_checked = first_digest.is_some() || old.is_some_and(|old| old.digest_checked);
+                    self.link_stamps.insert((doc, path), LinkStamp { file: new, digest_checked });
                 }
                 (None, None) => {}
             }
@@ -285,7 +306,11 @@ impl Session {
                 updated.extend(refreshed);
             }
             if let Some(message) = stale {
-                warnings.push(format!("{path}: {message}"));
+                warnings.insert(format!("{path}: {message}"));
+                // The refresh itself verified the digest even if the first read failed.
+                if let Some(stamp) = self.link_stamps.get_mut(&(doc, path)) {
+                    stamp.digest_checked = true;
+                }
             }
         }
         if warnings.is_empty() { Ok(json!({"updated": updated})) } else { Ok(json!({"updated": updated, "warnings": warnings})) }
@@ -395,6 +420,39 @@ mod tests {
         assert_eq!(result["updated"], json!([]));
         assert_eq!(result["warnings"].as_array().unwrap().len(), 1);
         assert!(result["warnings"][0].as_str().unwrap().contains("relink and choose"));
+        assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &before));
+        assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
+    }
+
+    #[test]
+    fn an_unreadable_first_fingerprint_is_retried_at_the_same_stamp() {
+        use crate::jobs::historical_xcf_fixture::historical_pixel;
+        let folder = tempfile::tempdir().unwrap();
+        let source = folder.path().join("source.xcf");
+        std::fs::write(&source, historical_pixel(false)).unwrap();
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":1,"height":1})).unwrap();
+        s.execute("file.placeLinked", json!({"path":source,"historicalXcfSampleOrder":"big-endian"})).unwrap();
+        std::fs::write(&source, historical_pixel(true)).unwrap();
+        let state = s.active().unwrap();
+        let doc = state.doc.id.0;
+        let before = state.doc.clone();
+        let mut files = super::resolved_files(&s, state);
+        let resolved = files.pop().unwrap();
+        assert!(resolved.check_first_digest);
+        let stamp = super::stamp(resolved.file.as_deref()).unwrap();
+        let key = (doc, resolved.path.clone());
+        // Stat succeeded, but the worker could not read the file for its fingerprint.
+        let unreadable = super::LinkObservation { path: resolved.path, layers: resolved.layers, stamp: Some(stamp), first_digest: None };
+        assert_eq!(s.apply_link_stamps(doc, vec![unreadable]).unwrap(), json!({"updated":[]}));
+        assert_eq!(s.link_stamps[&key].file, stamp);
+
+        let retried = s.execute("layer.smartObjects.updateChanged", json!({})).unwrap();
+        assert_eq!(retried["updated"], json!([]));
+        assert_eq!(retried["warnings"].as_array().unwrap().len(), 1);
+        assert!(retried["warnings"][0].as_str().unwrap().contains("relink and choose"));
+        assert_eq!(s.link_stamps[&key].file, stamp);
+        assert!(s.link_stamps[&key].digest_checked);
         assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &before));
         assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
     }
@@ -510,6 +568,26 @@ mod tests {
         std::fs::write(&path, png(10, 10, "#0000ff")).unwrap();
         s.execute("layer.smartObjects.updateChanged", json!({})).unwrap();
         assert!(s.missing_links().is_empty(), "the file is back");
+    }
+
+    #[test]
+    fn an_ordinary_link_changed_while_closed_keeps_the_saved_pixels_until_manual_update() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("art.png");
+        let saved = directory.path().join("doc.pcraft");
+        std::fs::write(&path, png(10, 10, "#ff0000")).unwrap();
+        let (mut s, layer) = placed(&path);
+        s.execute("file.saveACopy", json!({"path":saved})).unwrap();
+        assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
+        s.close(0);
+        save(&path, &png(10, 10, "#0000ff"));
+        for session in [&mut s, &mut Session::new()] {
+            session.execute("file.openAs", json!({"path":saved})).unwrap();
+            assert_eq!(session.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
+            assert!(is(centre(session), RED));
+            assert_eq!(session.execute("layer.smartObjects.updateAllModifiedContent", json!({})).unwrap()["updated"], json!([layer]));
+            assert!(is(centre(session), BLUE));
+        }
     }
 
     #[test]

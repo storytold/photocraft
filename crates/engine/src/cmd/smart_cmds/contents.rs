@@ -310,7 +310,11 @@ pub(super) fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(order) = recovered_order {
         s.edit("Set Historical XCF Sample Byte Order", |doc, _| {
             for layer in instances(doc, contents_id) {
+                if !unapplied_filters(smart(doc, layer)?).is_empty() {
+                    return Err(other("hide unsupported Smart Filters before recovering the historical XCF sample byte order"));
+                }
                 smart_mut(doc, layer)?.historical_xcf_sample_order = Some(order);
+                refresh_or_fail(doc, layer)?;
             }
             Ok(())
         })?;

@@ -213,23 +213,24 @@ fn fresh_replacement_requires_its_own_order_and_native_replacement_clears_it() {
 fn edit_contents_recovers_a_legacy_embedded_big_endian_xcf_after_explicit_choice() {
     let bytes = fixture::historical_pixel(false);
     let mut s = session();
-    let id = s
+    let (id, copy_id) = s
         .edit("Legacy embedded XCF", |doc, active| {
-            // The older importer stored original bytes and a big-endian rendered cache,
-            // without a sample-order field. Build that legacy state directly.
+            // A legacy bundle has original bytes and saved pixels without an order field.
+            // Start with the samples rendered under the other byte order.
             let mut cache = photocraft_raster::Surface::new(doc.pixel_format());
-            cache.fill_rect(photocraft_geom::Rect::new(0, 0, 1, 1), &[0x1234 as f32 / 65535., 0x4567 as f32 / 65535., 0x89ab as f32 / 65535., 1.]);
+            cache.fill_rect(photocraft_geom::Rect::new(0, 0, 1, 1), &[0x3412 as f32 / 65535., 0x6745 as f32 / 65535., 0xab89 as f32 / 65535., 1.]);
             let mut object = SmartObject::new(
                 SmartSource::Embedded { file_name: "historical.xcf".into(), bytes: Arc::new(bytes.clone()) },
                 photocraft_geom::Affine::IDENTITY,
                 None,
             );
             object.cache = Some(cache);
-            let layer = photocraft_doc::Layer::new("Legacy", LayerContent::Smart(object));
-            let id = layer.id;
-            doc.layers.push(layer);
+            let layer = photocraft_doc::Layer::new("Legacy", LayerContent::Smart(object.clone()));
+            let copy = photocraft_doc::Layer::new("Shared copy", LayerContent::Smart(object));
+            let (id, copy_id) = (layer.id, copy.id);
+            doc.layers.extend([layer, copy]);
             *active = Some(id);
-            Ok(id)
+            Ok((id, copy_id))
         })
         .unwrap();
     let mut reopened = roundtrip(&s);
@@ -240,12 +241,39 @@ fn edit_contents_recovers_a_legacy_embedded_big_endian_xcf_after_explicit_choice
     ));
     assert_eq!(reopened.documents().len(), 1);
     assert!(Arc::ptr_eq(&before, &reopened.active().unwrap().doc));
-    reopened.execute("layer.smartObjects.editContents", json!({"layer":id.0,"historicalXcfSampleOrder":"big-endian"})).unwrap();
+    reopened
+        .edit("Add a filter to the second instance", |doc, _| {
+            smart_mut(doc, copy_id)?.smart_filters.push(photocraft_doc::SmartFilter {
+                command: "filter.test.unmapped".into(),
+                params: json!({}),
+                blend: photocraft_doc::BlendMode::Normal,
+                opacity: 1.0,
+                visible: true,
+            });
+            Ok(())
+        })
+        .unwrap();
+    let before_failed_refresh = reopened.active().unwrap().doc.clone();
+    let chosen = json!({"layer":id.0,"historicalXcfSampleOrder":"big-endian"});
+    let error = reopened.execute("layer.smartObjects.editContents", chosen.clone()).unwrap_err();
+    assert!(error.to_string().contains("hide unsupported Smart Filters"));
+    assert_eq!(reopened.documents().len(), 1);
+    assert!(Arc::ptr_eq(&before_failed_refresh, &reopened.active().unwrap().doc));
+
+    assert!(reopened.undo());
+    reopened.execute("layer.smartObjects.editContents", chosen).unwrap();
     assert_child_pixels(&reopened);
     assert!(reopened.set_active(0));
-    assert_eq!(object(&reopened, id).historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::BigEndian));
+    for layer in [id, copy_id] {
+        let smart = object(&reopened, layer);
+        assert_eq!(smart.historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::BigEndian));
+        assert!((smart.cache.as_ref().unwrap().pixel(0, 0)[0] - f32::from(0x1234u16) / 65535.0).abs() <= 1.0 / 65535.0);
+    }
     assert_eq!(contents_of(&reopened.active().unwrap().doc, id).unwrap().1.as_slice(), bytes);
     let mut restored = roundtrip(&reopened);
+    for layer in [id, copy_id] {
+        assert_eq!(object(&restored, layer).cache, object(&reopened, layer).cache);
+    }
     restored.execute("layer.smartObjects.editContents", json!({"layer":id.0})).unwrap();
     assert_child_pixels(&restored);
 }
