@@ -573,6 +573,10 @@ An `index` targets that one call: `doc.place`, `doc.exportLayers`, `doc.exportDa
 without making it the active one, so the next call without `index` still runs on the document
 that was active before (`doc.select` is the method that changes it).
 
+`doc.render` treats omitted `params` and `"params": null` as `{}`. Pass a string `path`
+for a file reply. An omitted or null `path` requests an inline PNG. Other parameter
+container or path types return an error before rendering.
+
 ```sh
 printf '%s\n' \
   '{"id":1,"method":"doc.open","params":{"path":"in.jpg"}}' \
