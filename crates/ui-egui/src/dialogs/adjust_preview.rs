@@ -234,6 +234,11 @@ fn dialog(app: &PhotocraftApp) -> Option<(String, Value, bool)> {
     let hosted = crate::adjust_dialog::hosted(app, open.id)?;
     let params = hosted.value().params(hosted.edited());
     crate::actions::authorize_panel_preview(app, open.id, &open.command, &params).ok()?;
+    // Building the preview reads what the params name (a Color Lookup `file`): a dialog
+    // automation drove has no layer preview the policy would refuse to confirm.
+    if crate::automation_preview::refusal(app, open.id, &open.command, &params).is_some() {
+        return None;
+    }
     Some((open.kind.clone(), params, hosted.is_previewing() && !hosted.is_comparing()))
 }
 
