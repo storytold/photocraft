@@ -307,18 +307,30 @@ fn eviction_walks_oldest_first_through_mixed_types_and_capacities() {
     release();
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 /// Verifies the idle-release worker clears an unused pooled buffer.
 fn idle_pool_is_released_by_the_background_thread() {
-    // Idle release stays on here: it is what this test checks.
-    let _g = lock_serial();
+    use std::time::{Duration, Instant};
+
+    struct RestoreInterval(u64);
+    impl Drop for RestoreInterval {
+        fn drop(&mut self) {
+            set_idle_release_ms_for_tests(self.0);
+        }
+    }
+
+    let _g = serial();
+    let _interval = RestoreInterval(set_idle_release_ms_for_tests(40));
     release();
     give(vec![0u8; MIN_POOLED_BYTES]);
     assert_eq!(retained_bytes(), MIN_POOLED_BYTES);
-    // Released after one full idle interval without use (at most two from the give).
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3 * IDLE_RELEASE_SECS + 1);
-    while retained_bytes() > 0 && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(100));
+    set_idle_release(true);
+
+    // Under cargo test an earlier test may have started a sleep at the default interval.
+    let deadline = Instant::now() + Duration::from_secs(IDLE_RELEASE_SECS + 1);
+    while retained_bytes() > 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
     }
     assert_eq!(retained_bytes(), 0);
 }
