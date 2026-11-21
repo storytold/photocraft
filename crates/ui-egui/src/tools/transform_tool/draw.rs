@@ -198,7 +198,12 @@ fn show_preview(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &m
     // Warp on a moved smart object, its grid still flat: the box's exact map, as the reference shows it.
     let flat = t.session.warp().and_then(|w| {
         let doc = app.session.active().map(|st| &st.doc)?;
-        super::warp::flat_placed_warp(doc, t.layer, &w.warp, pv.placed_warp)
+        match pv.placed_warp {
+            Some(_) => super::warp::flat_placed_warp(doc, t.layer, &w.warp, pv.placed_warp),
+            // A pixel layer's warp, still flat in a box in perspective: the box's exact map too.
+            None if !w.on_type && !w.stored => super::warp::flat_projective_in_box(&w.warp, t.rect_array(), t.quad_array()),
+            None => None,
+        }
     });
     let (map, textures) = match (t.session.warp(), &held) {
         (Some(_), _) if let Some(q) = flat => (PreviewMap::quad(q.map(|[x, y]| Point::new(x, y))), &pv.textures),

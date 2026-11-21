@@ -507,6 +507,15 @@ pub(super) fn flat_placed_warp(doc: &photocraft_doc::Document, layer: u64, warp:
     })
 }
 
+/// A pixel layer's (or an upright smart object's) warp still flat in a box in perspective: the box's corners, else
+/// `None`. The reference shows and applies that as the box's exact map until the warp is edited, as for a moved smart
+/// object ([`flat_placed_warp`]); in an affine box the flat grid already is the exact map.
+pub(super) fn flat_projective_in_box(warp: &Warp, rect: [f64; 4], quad: [[f64; 2]; 4]) -> Option<[[f64; 2]; 4]> {
+    let h = photocraft_algo::transform::Homography::rect_to_quad(rect, quad)?;
+    let projective = (h.0[6].abs() + h.0[7].abs()) > 1e-12 * h.0[8].abs().max(1e-300);
+    (projective && flat_in_box(warp, rect, quad)).then_some(quad)
+}
+
 /// Whether `warp`, built over the box's frame `rect` and shown through the box at `quad` (a pixel layer's warp, or an
 /// upright smart object's edited in the document), is still the flat grid: its points are the frame's thirds carried
 /// through the box's map.

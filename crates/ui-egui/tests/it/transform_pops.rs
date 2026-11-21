@@ -71,9 +71,7 @@ fn drag(h: &mut Harness, from: Pos2, to: Pos2) {
 }
 
 /// A white 400 × 300 document with the position-coded object as a smart object, at 100 %.
-fn setup(h: &mut Harness) {
-    let subject = subject();
-    let subject = subject.as_str();
+fn setup(h: &mut Harness, subject: &str) {
     {
         let app = h.state_mut();
         app.run("file.new", json!({"width": 400, "height": 300, "background": "white"})).expect("new");
@@ -216,9 +214,23 @@ impl Step {
 }
 
 /// One sequence; `Err` names the first pop. `Ok` carries what the canvas showed before Enter.
+/// POPS_DUMP=<dir>: save what the canvas shows under `name`, and print the box, for looking at one sequence.
+fn dump(h: &mut Harness, name: &str) {
+    let Ok(dir) = std::env::var("POPS_DUMP") else { return };
+    let quad = h.state().ui.transform.as_ref().map(|t| t.quad_array());
+    eprintln!("dump {name}: box {quad:?}");
+    let img = h.render().expect("render");
+    img.save(std::path::Path::new(&dir).join(format!("{name}.png"))).expect("save");
+}
+
 fn run(gpu: bool, steps: &[Step]) -> Result<Vec<Option<(f64, f64)>>, String> {
+    run_on(gpu, &subject(), steps)
+}
+
+/// [`run`] on a named subject.
+fn run_on(gpu: bool, subject: &str, steps: &[Step]) -> Result<Vec<Option<(f64, f64)>>, String> {
     let Some(mut h) = harness(gpu) else { return Ok(Vec::new()) };
-    setup(&mut h);
+    setup(&mut h, subject);
     // A capture that finds no object proves nothing: the object must show at most sample points before the first step.
     let seen = capture(&mut h).iter().filter(|c| c.is_some()).count();
     if seen * 4 < samples().len() * 3 {
@@ -259,6 +271,7 @@ fn run(gpu: bool, steps: &[Step]) -> Result<Vec<Option<(f64, f64)>>, String> {
             _ => return Ok(Vec::new()),
         };
         h.run_steps(4);
+        dump(&mut h, &format!("step{n}-{step:?}"));
         let after = capture(&mut h);
         let j = jump(&before, &after);
         if !edit && j > 3.0 {
@@ -279,10 +292,11 @@ fn run(gpu: bool, steps: &[Step]) -> Result<Vec<Option<(f64, f64)>>, String> {
         let before = shown.clone();
         h.event(egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
         h.run_steps(8);
+        dump(&mut h, "enter");
         let after = capture(&mut h);
         let j = jump(&before, &after);
         if j > 3.0 {
-            return Err(format!("Enter: the result differs from the preview by {j:.1} content px"));
+            return Err(format!("Enter:the result differs from the preview by {j:.1} content px"));
         }
     }
     Ok(shown)
@@ -326,6 +340,11 @@ fn transform_pops() {
         s.first().is_some_and(|f| f.menu().is_some())
     };
     seqs.retain(|s| valid(s));
+    // POPS_SEQ=Persp,PerspDrag,...: only that sequence (with POPS_DUMP to look at it).
+    if let Ok(one) = std::env::var("POPS_SEQ") {
+        seqs.retain(|s| format!("{s:?}").replace(' ', "") == format!("[{one}]"));
+        assert!(!seqs.is_empty(), "POPS_SEQ names no valid sequence of up to POPS_LEN steps");
+    }
     let mut failures = Vec::new();
     for (i, s) in seqs.iter().enumerate() {
         if i % 100 == 0 {
@@ -359,7 +378,8 @@ fn transform_pops() {
     assert!(failures.is_empty(), "{} sequences pop", failures.len());
 }
 
-/// The orders recorded on the reference application (none of them moves its picture): Warp left untouched, then
+/// The orders recorded on the reference application (none of them moves its picture, on a smart object or a pixel
+/// layer): Warp left untouched, then
 /// Perspective and a drag, then Warp again; Perspective and a drag, Warp, Perspective; a real pull, then Perspective, a
 /// drag and Warp; Distort and a drag, Warp, Distort. Checked on every run, on the CPU canvas.
 #[test]
@@ -368,15 +388,17 @@ fn the_recorded_orders_keep_the_picture() {
     use Step::*;
     let orders: [&[Step]; 4] =
         [&[Warp, Persp, PerspDrag, Warp], &[Persp, PerspDrag, Warp, Persp], &[Warp, Pull, Persp, PerspDrag, Warp], &[Distort, DistortDrag, Warp, Distort]];
-    for order in orders {
-        let shown = run(false, order).unwrap_or_else(|e| panic!("{order:?}: {e}"));
-        // An untouched warp is no warp.
-        if !order.contains(&Pull) {
-            let plain: Vec<Step> = order.iter().copied().filter(|&s| s != Warp).collect();
-            let want = run(false, &plain).unwrap_or_else(|e| panic!("{plain:?}: {e}"));
-            if !shown.is_empty() && !want.is_empty() {
-                let j = jump(&shown, &want);
-                assert!(j <= 3.0, "{order:?}: an untouched warp changed the picture by {j:.1} content px");
+    for subject in ["smart", "pixel"] {
+        for order in orders {
+            let shown = run_on(false, subject, order).unwrap_or_else(|e| panic!("{subject} {order:?}: {e}"));
+            // An untouched warp is no warp.
+            if !order.contains(&Pull) {
+                let plain: Vec<Step> = order.iter().copied().filter(|&s| s != Warp).collect();
+                let want = run_on(false, subject, &plain).unwrap_or_else(|e| panic!("{subject} {plain:?}: {e}"));
+                if !shown.is_empty() && !want.is_empty() {
+                    let j = jump(&shown, &want);
+                    assert!(j <= 3.0, "{subject} {order:?}: an untouched warp changed the picture by {j:.1} content px");
+                }
             }
         }
     }
@@ -390,7 +412,28 @@ fn the_recorded_orders_keep_the_picture() {
 #[test]
 fn the_first_warp_pull_after_perspective_redistributes_like_the_reference() {
     let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut h) = harness(false) else { return };
+    let Some(moved) = first_pull(true, 240.0, [336.0, 280.0], &[200.0, 230.0, 260.0]) else { return };
+    for (i, d) in moved.iter().enumerate().skip(1) {
+        assert!((d - 14.0).abs() <= 2.0, "column {i}: the boundary moved {d} px on the first pull; the reference's moved 14");
+    }
+}
+
+/// The same on a pixel layer (the reference's recording: the top-left corner 100 px in, Warp, a pull from (330, 280) to
+/// (336, 286): the red/blue boundary at columns 230 and 260 moved 16 and 19 px).
+#[test]
+fn the_first_warp_pull_after_perspective_redistributes_a_pixel_layer_like_the_reference() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(moved) = first_pull(false, 250.0, [336.0, 286.0], &[230.0, 260.0]) else { return };
+    for (d, want) in moved.iter().zip([16.0, 19.0]) {
+        assert!((d - want).abs() <= 2.0, "the boundary moved {d} px on the first pull; the reference's moved {want}: {moved:?}");
+    }
+}
+
+/// The reference's probe document (quadrants red, green, blue, gold over (150, 125)-(450, 325)), as a smart object or a
+/// pixel layer: Perspective with the top-left corner dragged to `corner_x`, Warp, a pull from (330, 280) to `pull_to`.
+/// How far the red/blue boundary moved at each of `cols`; `None` without a canvas.
+fn first_pull(smart: bool, corner_x: f64, pull_to: [f64; 2], cols: &[f64]) -> Option<Vec<f64>> {
+    let mut h = harness(false)?;
     {
         let app = h.state_mut();
         app.run("file.new", json!({"width": 600, "height": 450})).expect("new");
@@ -406,19 +449,21 @@ fn the_first_warp_pull_after_perspective_redistributes_like_the_reference() {
                 Ok(())
             })
             .expect("paint");
-        app.run("layer.smartObjects.convertToSmartObject", json!({})).expect("smart object");
+        if smart {
+            app.run("layer.smartObjects.convertToSmartObject", json!({})).expect("smart object");
+        }
         app.sync_views();
         app.ui.extras.rulers = false;
         app.ui.panels.context_task_bar = false;
     }
     control(&mut h, "ui.set", json!({"tool": "move", "zoom": 1.0, "center": [300, 225]}));
     control(&mut h, "ui.menu.invoke", json!({"id": "edit.transform.perspective"}));
-    let (a, b) = (screen(&h, 150.0, 125.0), screen(&h, 240.0, 125.0));
+    let (a, b) = (screen(&h, 150.0, 125.0), screen(&h, corner_x, 125.0));
     drag(&mut h, a, b);
     control(&mut h, "ui.menu.invoke", json!({"id": "edit.transform.warp"}));
     h.run_steps(6);
     let boundary = |h: &mut Harness| -> Vec<Option<f64>> {
-        let cols: Vec<(f64, Pos2)> = [200.0, 230.0, 260.0].iter().map(|&x| (x, screen(h, x, 0.0))).collect();
+        let cols: Vec<(f64, Pos2)> = cols.iter().map(|&x| (x, screen(h, x, 0.0))).collect();
         let img = h.render().expect("render");
         cols.iter()
             .map(|(_, p)| {
@@ -432,13 +477,20 @@ fn the_first_warp_pull_after_perspective_redistributes_like_the_reference() {
             .collect()
     };
     let before = boundary(&mut h);
-    let (a, b) = (screen(&h, 330.0, 280.0), screen(&h, 336.0, 280.0));
+    let (a, b) = (screen(&h, 330.0, 280.0), screen(&h, pull_to[0], pull_to[1]));
     drag(&mut h, a, b);
     let after = boundary(&mut h);
-    for (i, (b, a)) in before.iter().zip(&after).enumerate().skip(1) {
-        let (Some(b), Some(a)) = (b, a) else { panic!("column {i}: no boundary: {before:?} {after:?}") };
-        assert!(((a - b) - 14.0).abs() <= 2.0, "column {i}: the boundary moved {} px on the first pull; the reference's moved 14", a - b);
-    }
+    Some(
+        before
+            .iter()
+            .zip(&after)
+            .enumerate()
+            .map(|(i, (b, a))| match (b, a) {
+                (Some(b), Some(a)) => a - b,
+                _ => panic!("column {i}: no boundary: {before:?} {after:?}"),
+            })
+            .collect(),
+    )
 }
 
 /// Perspective with two drags, then Warp left untouched, then Enter: the result is what the preview showed, the box's
@@ -449,5 +501,18 @@ fn enter_on_an_untouched_warp_after_perspective_applies_what_the_preview_shows()
     let _gpu = photocraft_testkit::gpu_lock();
     use Step::*;
     let order = [Persp, PerspDrag, PerspDrag, Warp];
-    run(false, &order).unwrap_or_else(|e| panic!("{order:?}: {e}"));
+    for subject in ["smart", "pixel"] {
+        run_on(false, subject, &order).unwrap_or_else(|e| panic!("{subject} {order:?}: {e}"));
+    }
+}
+
+/// Perspective with the top edge squeezed to a point (the same corner dragged twice), then Enter: the layer is the
+/// triangle the preview showed. The commit's pre-reduction took the scale at the centre and rounded its frame outward
+/// past the map's horizon, which left a 2 × 1 px pixel layer (found by the sweep).
+#[test]
+fn enter_on_a_perspective_squeezed_to_a_point_applies_what_the_preview_shows() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    use Step::*;
+    let order = [Persp, PerspDrag, PerspDrag];
+    run_on(false, "pixel", &order).unwrap_or_else(|e| panic!("pixel {order:?}: {e}"));
 }
