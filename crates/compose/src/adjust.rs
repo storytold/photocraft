@@ -178,7 +178,7 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
             apply_tone(buf, *space, &luts, identity, float_tone_extrapolates(adj, depth, mode));
         }
         Adjustment::HueSaturation { hue, saturation, lightness, colorize, ranges } => {
-            let table = (!*colorize && ranges.iter().any(|r| !r.is_neutral())).then(|| hue_range_tables(ranges));
+            let table = (!*colorize && ranges.iter().any(|r| !r.is_neutral())).then(|| hue_range_tables(ranges, depth == Some(SampleType::U8)));
             map_rgb(buf, |c| {
                 let (dh, ds, dl) = match &table {
                     Some(t) => {

@@ -115,9 +115,9 @@ pub(super) fn row_key(adj: &Adjustment, depth: photocraft_color::SampleType) -> 
                 curve(&mut h, c);
             }
         }
-        // adjust::hue_range_tables reads only the ranges, at any depth.
+        // adjust::hue_range_tables reads the ranges, and whether the depth is 8 bits.
         Adjustment::HueSaturation { ranges, .. } => {
-            2u8.hash(&mut h);
+            (2u8, depth == photocraft_color::SampleType::U8).hash(&mut h);
             for HueRange { hue, saturation, lightness, bounds } in ranges {
                 [hue, saturation, lightness].map(|v| v.to_bits()).hash(&mut h);
                 bounds.map(f32::to_bits).hash(&mut h);
@@ -243,7 +243,13 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             if !*colorize && ranges.iter().any(|r| !r.is_neutral()) {
                 // Range edits: hue-indexed rows (shift, saturation, lightness), as on the CPU.
                 p[1][0] = 1.0;
-                (8, p, Some(cached_rows(adj, depth, || adjust::hue_range_tables(ranges).iter().map(|t| to_row(t)).collect())))
+                (
+                    8,
+                    p,
+                    Some(cached_rows(adj, depth, || {
+                        adjust::hue_range_tables(ranges, depth == photocraft_color::SampleType::U8).iter().map(|t| to_row(t)).collect()
+                    })),
+                )
             } else {
                 (8, p, None)
             }
