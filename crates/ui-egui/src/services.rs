@@ -108,6 +108,8 @@ pub struct ExportSettings {
     pub tiff_layers: bool,
     /// TIFF Options › Image Compression.
     pub tiff_compression: photocraft_codecs::TiffCompression,
+    /// TIFF Options › CCITT Group 4 (T.6) compression for bilevel images.
+    pub tiff_ccitt_g4: bool,
     /// TIFF Options › Save Transparency (`None`: kept unless the document has alpha or spot
     /// channels; see [`photocraft_io::ExportOptions::tiff_transparency`]).
     pub tiff_transparency: Option<bool>,
@@ -158,6 +160,7 @@ impl Default for ExportSettings {
             webp_quality: None,
             tiff_layers: true,
             tiff_compression: photocraft_codecs::TiffCompression::None,
+            tiff_ccitt_g4: false,
             tiff_transparency: None,
             tiff_pyramid: false,
             xmp_all: true,
@@ -193,6 +196,7 @@ impl ExportSettings {
         opts.encode.embed_metadata = self.embed_metadata;
         opts.tiff_layers = self.tiff_layers;
         opts.tiff_transparency = self.tiff_transparency;
+        opts.tiff_ccitt_g4 = self.tiff_ccitt_g4;
         opts.encode.tiff_compression = self.tiff_compression;
         opts.encode.tiff_pyramid = self.tiff_pyramid;
         opts.xmp = if self.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };

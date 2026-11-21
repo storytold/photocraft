@@ -1374,6 +1374,9 @@ impl PhotocraftMcp {
                 if let Some(c) = tiff_compression {
                     opts.encode.tiff_compression = c;
                 }
+                if matches!(p.tiff_compression.as_deref(), Some("g4" | "ccitt" | "ccitt_g4")) {
+                    opts.tiff_ccitt_g4 = true;
+                }
                 opts.encode.tiff_pyramid = p.tiff_pyramid;
                 opts.encode.dds = photocraft_io::DdsOptions { compression: dds_compression.unwrap_or_default(), mipmaps: p.dds_mipmaps };
                 if let Some(maximize) = p.maximize_compatibility {
