@@ -37,6 +37,16 @@ static IDLE_RELEASE: AtomicBool = AtomicBool::new(true);
 /// Seconds without a [`take`] or [`give`] after which the idle thread releases the pool.
 pub const IDLE_RELEASE_SECS: u64 = 2;
 
+#[cfg(not(target_arch = "wasm32"))]
+static IDLE_RELEASE_MS: AtomicU64 = AtomicU64::new(IDLE_RELEASE_SECS * 1_000);
+
+/// Use a shorter interval in an isolated test, returning the previous interval for restoration.
+#[cfg(not(target_arch = "wasm32"))]
+#[doc(hidden)]
+pub fn set_idle_release_ms_for_tests(ms: u64) -> u64 {
+    IDLE_RELEASE_MS.swap(ms.max(1), Ordering::Relaxed)
+}
+
 /// Starts the idle-release thread once (off wasm, where there are threads). If the thread
 /// can't be spawned the pool still works; it is then released only by [`release`].
 fn start_idle_release() {
@@ -47,7 +57,8 @@ fn start_idle_release() {
             let _ = std::thread::Builder::new().name("scratch-idle".into()).spawn(|| {
                 let mut seen = uses();
                 loop {
-                    std::thread::sleep(std::time::Duration::from_secs(IDLE_RELEASE_SECS));
+                    let ms = IDLE_RELEASE_MS.load(Ordering::Relaxed);
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
                     let now = uses();
                     if now == seen {
                         // Decided under the lock, so `set_idle_release(false)` can't return
