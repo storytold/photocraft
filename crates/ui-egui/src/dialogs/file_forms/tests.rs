@@ -16,6 +16,12 @@ fn set(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId, field: &str, 
     app.framework.dialogs.set_json_field(ctx, id, field, value).unwrap_or_else(|e| panic!("{field}: {e}"));
 }
 
+/// One pass of the dialogs, so a row's own draw sees the writes the form made.
+fn pass(app: &mut PhotocraftApp) {
+    let ctx = app.ctx().clone();
+    ctx.run_ui(Default::default(), |ui| crate::dialogs::run(app, ui)).textures_delta.clear();
+}
+
 /// Actions in sets A and B: Create Droplet starts on the selected action's set and saves that action's steps, not
 /// the first action's.
 #[test]
@@ -60,13 +66,17 @@ fn create_droplet_uses_the_action_selected_in_the_form() {
     }
     app.ui.actions.panel.selected = Some(ActionSelection::Action(0));
     let id = open_create_droplet(&mut app).unwrap();
-    assert!(app.framework.dialogs.set_json_field(&ctx, id, "action", json!("Missing")).is_err(), "the action choice offers the listed actions");
-    set(&mut app, &ctx, id, "action", json!("Rotate"));
+    // Owner decision (a) on #13672: the Action row submits the action's index in the action list.
+    // It takes an index write as an open row does - a closed choice list refused one - and its next
+    // draw keeps an index the chosen Set entry holds.
+    assert!(app.framework.dialogs.set_json_field(&ctx, id, "action", json!(7)).is_ok(), "the follow row takes the write");
+    set(&mut app, &ctx, id, "action", json!(1));
+    pass(&mut app);
     set(&mut app, &ctx, id, "path", json!(path));
     set(&mut app, &ctx, id, "output", json!(output));
     crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
     let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(saved["action"]["steps"], json!([["image.imageRotation.90cw", {}]]));
+    assert_eq!(saved["action"]["steps"], json!([["image.imageRotation.90cw", {}]]), "the droplet holds the action at index 1");
     let result = photocraft_engine::Session::new().execute("file.automate.runDroplet", json!({"droplet": path, "input": [input]})).unwrap();
     assert_eq!(result["errors"], json!([]));
     let image = photocraft_io::import("source.png", &std::fs::read(result["files"][0].as_str().unwrap()).unwrap()).unwrap().document;

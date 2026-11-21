@@ -59,11 +59,6 @@ fn opts(list: &[(&'static str, &'static str)]) -> Vec<(String, Label)> {
     list.iter().map(|(id, label)| ((*id).to_owned(), Label::from(*label))).collect()
 }
 
-/// Options named by the user's own text (action and set names): shown as they are.
-fn named(list: &[String]) -> Vec<(String, Label)> {
-    list.iter().map(|n| (n.clone(), Label::from(n.clone()))).collect()
-}
-
 /// Channel and layer options: the engine's fixed ids read as English words, every other name is data.
 fn channels(list: &[String]) -> Vec<(String, Label)> {
     let special = |id: &str| -> Option<Label> {
@@ -487,16 +482,10 @@ fn file_info_form(app: &mut PhotocraftApp) -> Option<(Vec<Param>, DialogFields)>
 
 /// File › Automate › Batch…: the selected action and its set, and where the files come from and go.
 fn batch_form(app: &PhotocraftApp, dir: &str) -> Option<(Vec<Param>, DialogFields)> {
-    let action = crate::actions::selected_action(app)?;
-    let (name, set) = (action.name.clone(), action.set.clone());
-    let (names, sets) = crate::actions::action_form_choices(app);
-    let mut rows = Vec::new();
-    // The Set dropdown picks between same-named actions; an action outside any set has none.
-    if !sets.is_empty() {
-        rows.push(Param::new("set", tl!("Set"), ParamKind::choice(named(&sets), set)));
-    }
+    // The Set dropdown is always shown and the Action dropdown lists only the chosen set's
+    // actions (#13672); both rows come from the Actions panel module.
+    let mut rows = crate::actions::set_and_action_rows(app)?;
     rows.extend([
-        choice("action", tl!("Action"), named(&names), &name),
         choice("source", tl!("Source"), opts(&[("folder", tl!("Folder")), ("open", tl!("Opened Files"))]), "folder"),
         folder("input", tl!("Input Folder"), dir),
         Param::new("includeSubfolders", tl!("Include All Subfolders"), ParamKind::bool(false)),

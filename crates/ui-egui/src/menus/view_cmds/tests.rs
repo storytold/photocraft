@@ -415,8 +415,8 @@ fn stylistic_set_checkmark_follows_the_toggle() {
     }
 }
 
-/// Actions of two sets: the Batch form lists every action name and both sets, starts on the selected action's set,
-/// and runs that action.
+/// Actions of two sets: the Batch form lists both sets and opens on the chosen set's own action,
+/// held as its index in the action list (#13672, owner decision (a)), and runs that action.
 #[test]
 fn batch_menu_starts_on_the_selected_actions_set_and_runs_its_action() {
     let (mut app, ctx) = app_with(0);
@@ -432,10 +432,9 @@ fn batch_menu_starts_on_the_selected_actions_set_and_runs_its_action() {
     }
     app.ui.actions.panel.selected = Some(ActionSelection::Action(1));
     let id = open_form(&mut app, &ctx, "file.automate.batch");
-    assert_eq!(choice_ids(&mut app, "file.automate.batch", "action"), ["Retouch", "Turn"]);
     assert_eq!(choice_ids(&mut app, "file.automate.batch", "set"), ["A", "B"]);
     let shown = fields(&app, id);
-    assert_eq!((&shown["action"], &shown["set"]), (&json!("Turn"), &json!("B")));
+    assert_eq!((&shown["action"], &shown["set"]), (&json!(1), &json!("B")), "the chosen set's own action, by its list index");
     set(&mut app, &ctx, id, "input", json!(dir.path().to_string_lossy()));
     set(&mut app, &ctx, id, "output", json!(output.to_string_lossy()));
     confirm(&mut app, &ctx, id).unwrap();
@@ -444,7 +443,8 @@ fn batch_menu_starts_on_the_selected_actions_set_and_runs_its_action() {
     assert_eq!((image.size.width, image.size.height), (1, 2), "set B's action (a rotation) ran");
 }
 
-/// Choosing a different action changes the output; cancelled or deleted choices write nothing.
+/// Choosing a different action changes the output - the form submits the action's index in the
+/// list (#13672, owner decision (a)); cancelled or deleted choices write nothing.
 #[test]
 fn batch_menu_runs_the_action_chosen_in_the_form() {
     let (mut app, ctx) = app_with(0);
@@ -462,8 +462,8 @@ fn batch_menu_runs_the_action_chosen_in_the_form() {
     assert!(!fields(&app, id).as_object().unwrap().contains_key("steps"));
     set(&mut app, &ctx, id, "input", json!(source.to_string_lossy()));
     set(&mut app, &ctx, id, "output", json!(output.to_string_lossy()));
-    set(&mut app, &ctx, id, "action", json!("RotateRGB"));
-    assert_eq!(fields(&app, id)["action"], "RotateRGB");
+    set(&mut app, &ctx, id, "action", json!(1));
+    assert_eq!(fields(&app, id)["action"], json!(1), "the second action of the list, by index");
     confirm(&mut app, &ctx, id).unwrap();
     let written = names_in(&output);
     assert_eq!(written.len(), 1);
@@ -477,13 +477,14 @@ fn batch_menu_runs_the_action_chosen_in_the_form() {
     assert!(!cancelled.exists());
 
     let id = open_form(&mut app, &ctx, "file.automate.batch");
-    set(&mut app, &ctx, id, "action", json!("RotateRGB"));
+    set(&mut app, &ctx, id, "action", json!(1));
     set(&mut app, &ctx, id, "output", json!(cancelled.to_string_lossy()));
     let rotate = app.session.actions.list.actions().iter().position(|action| action.name == "RotateRGB").unwrap();
     app.session.actions.list.delete_action(rotate).unwrap();
-    // The run's refusal reaches the user through the status bar and a notice, as a failed filter's does.
+    // The run's refusal reaches the user through the status bar and a notice, as a failed filter's
+    // does; the form named the action by its index, so that is what the command reports.
     confirm(&mut app, &ctx, id).unwrap();
-    assert!(app.ui.status_error && app.ui.status.contains("no action named"), "{}", app.ui.status);
+    assert!(app.ui.status_error && app.ui.status.contains("no action at index"), "{}", app.ui.status);
     assert!(!cancelled.exists());
 }
 
