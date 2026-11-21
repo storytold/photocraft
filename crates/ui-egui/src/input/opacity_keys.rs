@@ -313,6 +313,30 @@ mod tests {
         assert_eq!(m.session.tools.brush.smoothing.enabled, before.enabled);
     }
 
+    #[test]
+    fn alt_digits_set_brush_smoothing_only_on_tools_that_show_it() {
+        use crate::shortcut_dispatch::tests::{app_harness, tap};
+
+        let mut a = app(Tool::Brush);
+        a.run("tools.setBrush", json!({"brush": {"smoothing": {"enabled": false, "amount": 0.5}}})).unwrap();
+        let mut h = app_harness(a);
+        let before = snap(h.state());
+        tap(&mut h, Key::Num3, egui::Modifiers::ALT);
+        let smoothing = &h.state().session.tools.brush.smoothing;
+        assert!(smoothing.enabled && (smoothing.amount - 0.3).abs() < 1e-6, "Alt+3 enables 30% Smoothing: {smoothing:?}");
+        assert_snap(snap(h.state()), before, &[], "Alt+3 only changes Smoothing");
+
+        h.state_mut().ui.tool = Tool::Move;
+        h.run_steps(3);
+        let before = snap(h.state());
+        let smoothing = &h.state().session.tools.brush.smoothing;
+        let (amount, enabled) = (smoothing.amount, smoothing.enabled);
+        tap(&mut h, Key::Num8, egui::Modifiers::ALT);
+        let smoothing = &h.state().session.tools.brush.smoothing;
+        assert_eq!((smoothing.amount, smoothing.enabled), (amount, enabled), "Move has no Smoothing field");
+        assert_snap(snap(h.state()), before, &[], "Move's layer values stay");
+    }
+
     /// Through the whole app: number keys and ⇧[ ⇧] from the canvas (no widget focused).
     #[test]
     fn keys_work_in_the_app() {
