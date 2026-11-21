@@ -1,0 +1,6 @@
+hakari-package = "workspace-hack"
+dep-format-version = "4"
+resolver = "2"
+platforms = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc", "x86_64-apple-darwin", "aarch64-apple-darwin", "wasm32-unknown-unknown"]
+
+# The trial script adds the codec exclusions from the checked-out workspace manifest.

@@ -1,0 +1,40 @@
+# The trial copies this manifest into a disposable workspace member. Selecting it
+# alongside photocraft-io aligns host and target features independently. The
+# workspace patches select the same egui sources as the application.
+[package]
+name = "no-heif-ci-features"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+bitflags = { version = "2.13.2", default-features = false, features = ["serde", "serde_core"] }
+chrono = { version = "0.4.45", default-features = false, features = ["serde"] }
+digest = { version = "0.10.7", default-features = false, features = ["mac", "subtle"] }
+ecolor = { version = "0.37.0", default-features = false, features = ["bytemuck", "serde"] }
+either = { version = "1.19.0", default-features = false, features = ["std", "use_std"] }
+emath = { version = "0.37.0", default-features = false, features = ["bytemuck", "serde"] }
+font-types = { version = "0.12.7", default-features = false, features = ["serde"] }
+gpu-allocator = { version = "0.28.0", default-features = false, features = ["d3d12"] }
+icu_collections = { version = "2.3.0", default-features = false, features = ["alloc", "serde"] }
+icu_normalizer = { version = "2.3.0", default-features = false, features = ["serde"] }
+icu_properties = { version = "2.3.0", default-features = false, features = ["serde"] }
+icu_provider_blob = { version = "2.3.0", default-features = false, features = ["alloc"] }
+indexmap = { version = "2.14.2", default-features = false, features = ["serde"] }
+linux-raw-sys = { version = "0.12.1", default-features = false, features = ["system"] }
+naga = { version = "30.0.1", default-features = false, features = ["glsl-out", "hlsl-out"] }
+postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
+rustix = { version = "1.1.5", default-features = false, features = ["pipe", "shm", "system"] }
+serde_json = { version = "1.0.154", default-features = false, features = ["alloc"] }
+skrifa = { version = "0.44.0", default-features = false, features = ["autohint_shaping"] }
+toml = { version = "1.2.1", default-features = false, features = ["default", "display"] }
+typenum = { version = "1.20.1", default-features = false, features = ["const-generics"] }
+uuid = { version = "1.29.2", default-features = false, features = ["default", "rng", "serde", "std", "v4"] }
+wayland-sys = { version = "0.31.11", default-features = false, features = ["client", "dlopen", "egl", "once_cell"] }
+wgpu-types = { version = "30.0.1", default-features = false, features = ["fragile-send-sync-non-atomic-wasm", "web"] }
+
+[build-dependencies]
+flate2 = { version = "1.1.11", default-features = false, features = ["miniz_oxide", "rust_backend"] }
+proc-macro2 = { version = "1.0.107", default-features = false, features = ["span-locations"] }
+syn2 = { package = "syn", version = "2.0.119", default-features = false, features = ["fold"] }
+syn3 = { package = "syn", version = "3.0.10", default-features = false, features = ["full", "visit-mut"] }

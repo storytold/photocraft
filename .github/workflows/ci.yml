@@ -293,7 +293,11 @@ jobs:
   test-without-heif:
     if: github.event_name != 'schedule' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci')
     timeout-minutes: 60
-    name: test (without heif)
+    name: ${{ matrix.variant == 'helper' && 'test (without heif, CI feature package)' || matrix.variant == 'helper-dev' && 'test (without heif, dev feature package)' || 'test (without heif)' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON(github.head_ref == 'ci/15703-no-heif-trial' && '["control","helper","helper-dev"]' || '["control"]') }}
     # The gate's runner: its cache entry is keyed on the OS.
     runs-on: ubuntu-24.04
     env:
@@ -337,12 +341,62 @@ jobs:
           cache-workspace-crates: "true"
           align-environment: "true"
 
+      - name: Record restored Cargo fingerprints for the trial
+        if: github.head_ref == 'ci/15703-no-heif-trial'
+        run: python3 scripts/no_heif_trial_fingerprints.py before "${CARGO_BUILD_BUILD_DIR:-${CARGO_TARGET_DIR:-target}}" "$RUNNER_TEMP/io-fingerprints.json"
+
       - uses: step-security/taiki-e-install-action@76747d22a7567cc4438546a84f11bdf18e670ab8 # v2.87.32
         with:
           tool: cargo-nextest@0.9.150
 
+      - name: Prepare the CI-only feature package
+        if: matrix.variant == 'helper' || matrix.variant == 'helper-dev'
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          if [[ "$VARIANT" == helper-dev ]]; then
+            python3 scripts/prepare_no_heif_features.py --dev
+          else
+            python3 scripts/prepare_no_heif_features.py
+          fi
+
+      - name: Check the decoder selection
+        if: github.head_ref == 'ci/15703-no-heif-trial'
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          packages=(-p photocraft-io)
+          if [[ "$VARIANT" == helper || "$VARIANT" == helper-dev ]]; then packages+=(-p no-heif-ci-features); fi
+          cargo tree --color never --locked "${packages[@]}" --prefix none --format '{p}' > "$RUNNER_TEMP/no-heif-tree"
+          if grep -q '^craft-heif v' "$RUNNER_TEMP/no-heif-tree"; then
+            echo 'The no-HEIF build selected the HEIF decoder' >&2
+            exit 1
+          fi
+          cargo tree --color never --locked "${packages[@]}" --features photocraft-io/heif --prefix none --format '{p}' > "$RUNNER_TEMP/heif-tree"
+          grep -q '^craft-heif v' "$RUNNER_TEMP/heif-tree"
+
       - name: Test without heif
+        if: github.head_ref != 'ci/15703-no-heif-trial'
         run: cargo nextest run -p photocraft-io --locked --profile ci
+
+      - name: Test without heif (trial)
+        if: github.head_ref == 'ci/15703-no-heif-trial'
+        env:
+          CARGO_TERM_COLOR: never
+          VARIANT: ${{ matrix.variant }}
+        shell: bash
+        run: |
+          set -o pipefail
+          started=$SECONDS
+          packages=(-p photocraft-io)
+          if [[ "$VARIANT" == helper || "$VARIANT" == helper-dev ]]; then packages+=(-p no-heif-ci-features); fi
+          cargo nextest run "${packages[@]}" --locked --profile ci 2>&1 | tee "$RUNNER_TEMP/no-heif-test.log"
+          echo "Test command elapsed seconds: $((SECONDS - started))" >> "$GITHUB_STEP_SUMMARY"
+          awk '/^[[:space:]]*Compiling / {n++} END {print "Compiling lines: " n+0}' "$RUNNER_TEMP/no-heif-test.log" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report Cargo fingerprint changes for the trial
+        if: github.head_ref == 'ci/15703-no-heif-trial'
+        run: python3 scripts/no_heif_trial_fingerprints.py after "${CARGO_BUILD_BUILD_DIR:-${CARGO_TARGET_DIR:-target}}" "$RUNNER_TEMP/io-fingerprints.json"
 
   corpus:
     if: github.event_name != 'schedule' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci')
