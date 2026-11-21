@@ -549,7 +549,7 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
                 crate::file_cmds::portable_device_name(part.strip_suffix(sep).unwrap_or(part).to_string()) + sep
             })
             .collect();
-        if let Some(first) = claimed.insert(name.to_lowercase(), &set.name) {
+        if let Some(first) = claimed.insert(collision_key(&name), &set.name) {
             return Err(bad(
                 "file.export.dataSetsAsFiles",
                 format!("data sets `{first}` and `{}` resolve to the same output `{name}`; include {{index}} in `naming` to use distinct filenames", set.name),
@@ -568,6 +568,12 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
         written.push(name.clone());
     }
     Ok(written)
+}
+
+/// What two planned outputs must differ by: the path compared case-insensitively, with the trailing dots and spaces of
+/// each folder segment dropped as Windows does, so `A./out.png` and `A/out.png` are the same file (CodeRabbit on #16239).
+fn collision_key(name: &str) -> String {
+    name.split(['/', '\\']).map(|segment| segment.trim_end_matches(['.', ' '])).collect::<Vec<_>>().join("/").to_lowercase()
 }
 
 /// `template` with each token replaced by its value in one pass: what a value contains is appended as it is, so a data

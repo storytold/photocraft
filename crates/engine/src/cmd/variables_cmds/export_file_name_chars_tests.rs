@@ -89,3 +89,14 @@ fn repeated_data_set_names_get_their_own_numbers() {
 fn a_token_inside_a_data_set_name_stays_literal() {
     assert_eq!(exported(&["{number}", "1"], "{name}"), ["{number}.png", "1.png"]);
 }
+
+/// Windows drops the trailing dots of a folder name: `A./out.png` and `A/out.png` are one file, so the batch is
+/// refused before anything is written (CodeRabbit on #16239).
+#[test]
+fn folders_that_differ_only_by_a_trailing_dot_collide() {
+    let mut s = session(&["A", "A."]);
+    let dir = tempfile::tempdir().unwrap();
+    let err = s.execute("file.export.dataSetsAsFiles", json!({"dir": dir.path().to_string_lossy(), "format": "png", "naming": "{name}/out"})).unwrap_err();
+    assert!(err.to_string().contains("same output"), "{err}");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0, "nothing was written");
+}
