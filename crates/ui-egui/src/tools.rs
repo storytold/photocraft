@@ -76,6 +76,8 @@ mod object_selection_mode_tests;
 mod path_selection_ctrl_direct_tests;
 #[cfg(test)]
 mod path_selection_shape_over_saved_path_tests;
+#[cfg(test)]
+mod quick_selection_mode_bar_tests;
 
 #[cfg(test)]
 mod art_history_reset_tip_tests;

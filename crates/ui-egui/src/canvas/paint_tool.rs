@@ -9,9 +9,13 @@
 //! at once. `PaintResize` lives in `app.brush_resize`: each call that needs the app too takes it out
 //! with `std::mem::take` first.
 
+use std::cell::RefCell;
 use std::time::Duration;
 
+use craft::behavior::geometry::SelectionOperation;
+use craft::behavior::kurbo::Point;
 use craft::behavior::{CancelReason, Cursor, CursorIcon, PaintedCursor, PointerButton};
+use craft::imaging::ui::select::{DragKind, PressRule, SelectionProbe, drag_kind};
 use craft::keymap::{Chord, Key, Mods};
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolClaims, ToolContext, ToolHostResponse, ToolKey, ToolPath, ToolPointer};
 use craft::ui::primitives::Draw;
@@ -25,6 +29,7 @@ use super::strokes::{
     HOLD_REPEAT_MS, begin_live_stroke, feed_live_stroke, live_stroke, live_stroke_busy, paint_target, snap_aliased_tip, stroke_params, stroke_wants_time,
     strokes_live, tap_at_peak_pressure,
 };
+use super::tools::selection::{InsideSelectionDrag, PcSelection, drag_delta};
 use super::tools::{FamilyTool, ToolScope};
 use crate::state::Tool;
 use serde_json::json;
@@ -78,21 +83,51 @@ impl PaintStroke {
 }
 
 /// The paint family's state, in `CanvasTools::paint`.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct PaintState {
     /// The stroke being drawn, from the press to the release.
     pub(crate) stroke: Option<PaintStroke>,
+    /// The Quick Selection's New-mode press inside its selection (#11837): a click deselects and a
+    /// drag moves the outline, as with the other selection tools (#11782).
+    pub(crate) drag: InsideSelectionDrag,
+}
+
+impl PaintState {
+    /// The whole-pixel offset of the Quick Selection's outline drag in progress, for `selection::shown_offset`.
+    pub(crate) fn drag_offset(&self) -> Option<(i32, i32)> {
+        drag_delta(self.drag.phase())
+    }
 }
 
 /// The paint tool for one pass.
 pub(crate) struct PaintTool<'a> {
     scope: &'a ToolScope<'a>,
-    state: &'a mut PaintState,
+    state: RefCell<&'a mut PaintState>,
+    tool: Tool,
+    probe: PcSelection,
+    bar: SelectionOperation,
+}
+
+impl PaintTool<'_> {
+    /// In New mode, a Quick Selection press inside a non-floating selection acts on the selection
+    /// (#11837): a click deselects and a drag moves the outline, as the other selection tools do
+    /// (#11782). Shift adds and Alt subtracts.
+    fn drags_outline(&self, at: [f64; 2], mods: Mods) -> bool {
+        self.tool == Tool::QuickSelection
+            && !self.probe.floating()
+            && drag_kind(&self.probe, Point::new(at[0], at[1]), mods, self.bar, PressRule::Drags) == Some(DragKind::Outline)
+    }
 }
 
 /// The paint family's tool for this pass.
 pub(crate) fn tool<'a>(scope: &'a ToolScope<'a>, state: &'a mut PaintState, _host: CanvasHost) -> FamilyTool<'a> {
-    Box::new(PaintTool { scope, state })
+    let (tool, probe, bar) = scope.with_app(|app| {
+        let tool = app.ui.tool;
+        let bar = crate::tool_feedback::selection_op(tool, crate::tool_feedback::bar_mode(app, tool), Mods::NONE, true);
+        (tool, PcSelection::of(app), bar)
+    });
+    state.drag.operation(bar);
+    Box::new(PaintTool { scope, state: RefCell::new(state), tool, probe, bar })
 }
 
 /// The stroke being drawn, for readers outside the host's run (tests, `retouch_ui`, the clone
@@ -105,6 +140,7 @@ pub(crate) fn stroking(app: &PhotocraftApp) -> Option<&PaintStroke> {
 /// so the stroke shows them in the same pass. Only the points not yet fed are fed, so a second
 /// pass of the same frame (which sees only its own moves) never repeats the first one's.
 pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut PaintState, _response: &ToolHostResponse) {
+    state.drag.drain(app, Tool::QuickSelection);
     let Some(stroke) = state.stroke.as_ref() else { return };
     feed_live_stroke(app, stroke);
     let ctx = app.ctx().clone();
@@ -318,9 +354,10 @@ impl CanvasTool for PaintTool<'_> {
     /// stroke whose document or revision moved on is dropped (its uncommitted paint belongs to the
     /// old picture).
     fn each_pass(&mut self, cx: &mut ToolContext<'_>) {
-        let Self { scope, state } = self;
+        let mut state = self.state.borrow_mut();
+        state.drag.each_pass(&self.probe, cx);
         let now_ms = cx.time * 1000.0;
-        scope.with_app(|app| {
+        self.scope.with_app(|app| {
             crate::brush_cursor::sync_tip(app);
             // The readout request lasts one pass: a pass without pointer input repeats it.
             app.brush_resize.hud(cx);
@@ -328,7 +365,7 @@ impl CanvasTool for PaintTool<'_> {
             let stale_mixer =
                 stroke.tool == Tool::MixerBrush && app.live_stroke.is_some() && app.session.active_index().is_none_or(|idx| live_stroke(app, idx).is_none());
             if stale_mixer {
-                drop_stroke(app, state);
+                drop_stroke(app, &mut state);
                 return;
             }
             if hold_due(app, now_ms) {
@@ -342,13 +379,20 @@ impl CanvasTool for PaintTool<'_> {
 
     fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
         let Some(at) = doc_point(cx, pointer.pos) else { return ToolAction::Ignored };
-        let Self { scope, state } = self;
-        scope.with_app(|app| begin(app, state, pointer, at, cx))
+        if pointer.button == PointerButton::Primary && self.drags_outline(at, pointer.mods) {
+            return self.state.borrow_mut().drag.press(&self.probe, pointer, cx);
+        }
+        let mut state = self.state.borrow_mut();
+        self.scope.with_app(|app| begin(app, &mut state, pointer, at, cx))
     }
 
     fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
-        let Self { scope, state } = self;
-        scope.with_app(|app| {
+        let mut state = self.state.borrow_mut();
+        if state.drag.active() {
+            state.drag.drag(&self.probe, pointer, cx);
+            return;
+        }
+        self.scope.with_app(|app| {
             if with_resize(app, |r, app| {
                 let active = r.active();
                 if active {
@@ -380,9 +424,13 @@ impl CanvasTool for PaintTool<'_> {
     }
 
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        let mut state = self.state.borrow_mut();
+        if state.drag.active() {
+            state.drag.release(&self.probe, pointer, cx);
+            return;
+        }
         let at = doc_point(cx, pointer.pos);
-        let Self { scope, state } = self;
-        scope.with_app(|app| {
+        self.scope.with_app(|app| {
             if with_resize(app, |r, app| {
                 let active = r.active();
                 if active {
@@ -419,10 +467,11 @@ impl CanvasTool for PaintTool<'_> {
         });
     }
 
-    fn cancel(&mut self, _reason: CancelReason, cx: &mut ToolContext<'_>) {
-        let Self { scope, state } = self;
-        scope.with_app(|app| {
-            drop_stroke(app, state);
+    fn cancel(&mut self, reason: CancelReason, cx: &mut ToolContext<'_>) {
+        let mut state = self.state.borrow_mut();
+        state.drag.cancel(&self.probe, reason, cx);
+        self.scope.with_app(|app| {
+            drop_stroke(app, &mut state);
             with_resize(app, |r, app| r.cancel(app, cx));
             // A cancelled right-press (Escape) ends the HUD whoever opened it; the held button's release is then no gesture.
             crate::color_hud::close(&mut app.ui);
@@ -457,6 +506,13 @@ impl CanvasTool for PaintTool<'_> {
     fn paint(&self, _draw: &Draw<'_>, _cx: &ToolContext<'_>) {}
 
     fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        {
+            let mut state = self.state.borrow_mut();
+            let over = state.stroke.is_none() && cx.pointer.as_ref().and_then(|p| doc_point(cx, p.pos)).is_some_and(|at| self.drags_outline(at, cx.mods));
+            if state.drag.active() || over {
+                return state.drag.cursor(&self.probe, cx);
+            }
+        }
         self.scope.with_app(|app| {
             if app.brush_resize.active() {
                 return Cursor::Painted(PaintedCursor::Hidden);

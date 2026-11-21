@@ -70,7 +70,7 @@ impl RetouchTools {
 pub(crate) fn tool<'a>(scope: &'a ToolScope<'a>, state: &'a mut RetouchTools, _host: CanvasHost) -> FamilyTool<'a> {
     let (tool, probe, bar, finder) = scope.with_app(|app| {
         let tool = app.ui.tool;
-        let bar = tool_feedback::selection_op(tool, app.ui.selection_mode, Mods::NONE, true);
+        let bar = tool_feedback::selection_op(tool, tool_feedback::bar_mode(app, tool), Mods::NONE, true);
         // Indexed Color and Bitmap refuse Object Selection: the press must reach `finish_object_selection` for the
         // tool's alert (#12867), never deselect or move the outline.
         let refused = app.session.active().is_some_and(|st| photocraft_engine::smartselect_cmds::object_mode_refusal(st.doc.mode).is_some());

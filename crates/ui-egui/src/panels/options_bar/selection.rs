@@ -63,6 +63,22 @@ pub(crate) fn operation_segments(app: &mut PhotocraftApp, ui: &mut egui::Ui, ena
     }
 }
 
+/// The Quick Selection's New, Add and Subtract segments over `app.ui.tool_options.quick_selection_mode`:
+/// its own bar, which has no Intersect, as in Photoshop (#11837). An out-of-range value clamps to Add.
+pub(crate) fn quick_selection_segments(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if app.ui.tool_options.quick_selection_mode > 2 {
+        app.ui.tool_options.quick_selection_mode = 1;
+    }
+    let words = Env::of(ui).words::<SelectionOpWords>();
+    let [new, add, subtract, _intersect] = selection_operations(&words);
+    let entries = [new, add, subtract];
+    let current = operation_of(app.ui.tool_options.quick_selection_mode);
+    let picked = Segmented::new(label("Selection mode"), Bind::given(current), &entries).show(ui).value().copied();
+    if let Some(operation) = picked {
+        app.ui.tool_options.quick_selection_mode = selection_mode_of(operation).min(2);
+    }
+}
+
 /// A captioned number cell over `value`; the new value when the user edited it. A body can run more
 /// than once in a pass and only the run that reads the input reports, so an edit is kept once seen.
 fn number(
@@ -118,7 +134,7 @@ pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandSta
 }
 
 /// The Select and Mask… button; its enabled state is [`command_states`]'.
-fn select_and_mask(ui: &mut egui::Ui) {
+pub(crate) fn select_and_mask(ui: &mut egui::Ui) {
     Button::command(SELECT_AND_MASK).show(ui);
 }
 

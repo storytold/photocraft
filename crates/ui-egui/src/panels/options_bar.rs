@@ -150,6 +150,10 @@ fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // The bar shows the active tool's brush: switch it in before drawing, so a tool change swaps the brush with it
     // (Photoshop keeps one per tool).
     crate::paint_mouse::sync_tool_brush(app);
+    if tool == Tool::QuickSelection {
+        selection::quick_selection_segments(app, ui);
+        Divider::vertical().show(ui);
+    }
     if (tool.is_brushlike() && !matches!(tool, Tool::Brush | Tool::Pencil | Tool::MixerBrush | Tool::Eraser)) || tool == Tool::QuickSelection {
         crate::brush_picker::show_field(ui, app, true);
         crate::brush_picker::settings_toggle(ui, app);

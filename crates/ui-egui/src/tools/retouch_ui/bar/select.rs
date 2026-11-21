@@ -30,6 +30,8 @@ pub(super) fn quick_selection(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Opt
     hint(ui, crate::i18n::fmt(tl!("{key} to subtract"), &[("key", &crate::shortcuts::pretty("Alt"))]));
     Divider::vertical().show(ui);
     select_subject(ui, app, tl!("No subject found — try Object Selection or the Lasso"));
+    Divider::vertical().show(ui);
+    crate::panels::options_bar::selection::select_and_mask(ui);
     None
 }
 

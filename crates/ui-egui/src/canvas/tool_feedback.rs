@@ -34,19 +34,22 @@ pub fn is_selection_tool(tool: Tool) -> bool {
 /// subtract from or intersect with, so it draws a new selection, as in Photoshop; an options-bar
 /// Subtract or Intersect is kept (#1106).
 pub fn selection_op(tool: Tool, bar: u8, mods: Mods, has_selection: bool) -> SelectionOperation {
-    match tool {
-        // Quick Selection always adds (⌥ subtracts), like Photoshop's after the first stroke.
-        Tool::QuickSelection => {
-            if mods.alt {
-                SelectionOperation::Subtract
-            } else {
-                SelectionOperation::Add
-            }
-        }
-        // Every other selection tool, Object Selection included (#12853): the options bar's mode, with ⇧ adding, ⌥
-        // subtracting and ⇧⌥ intersecting.
-        _ => SelectionOperation::resolve(SelectionOperation::ALL[usize::from(bar.min(3))], mods, has_selection),
+    // Every selection tool, the Quick Selection and Object Selection (#12853) included, follows
+    // the options bar's mode (New / Add / Subtract / Intersect): ⇧ adds, ⌥ subtracts, ⇧⌥
+    // intersects, and ⌥ with nothing selected draws a new one (#1106).
+    // The Quick Selection has no Intersect, as in Photoshop, and `select.quick` has no intersect
+    // mode (it would add): ⇧⌥ subtracts, as ⌥ alone does (#11837).
+    if tool == Tool::QuickSelection {
+        let mods = if mods.shift && mods.alt { Mods { shift: false, ..mods } } else { mods };
+        return SelectionOperation::resolve(SelectionOperation::ALL[usize::from(bar.min(2))], mods, has_selection);
     }
+    SelectionOperation::resolve(SelectionOperation::ALL[usize::from(bar.min(3))], mods, has_selection)
+}
+
+/// The options-bar mode that applies to `tool`: the Quick Selection keeps its own New / Add /
+/// Subtract mode (#11837); every other selection tool follows the document's.
+pub fn bar_mode(app: &PhotocraftApp, tool: Tool) -> u8 {
+    if tool == Tool::QuickSelection { app.ui.tool_options.quick_selection_mode } else { app.ui.selection_mode }
 }
 
 /// The engine's word for `op`: its selection commands call New "replace", where
@@ -134,9 +137,13 @@ mod tests {
             (Tool::Lasso, 2, shift, true, Add),
             (Tool::RectMarquee, 3, Mods::NONE, false, Intersect),
             (Tool::RectMarquee, 200, Mods::NONE, true, Intersect),
-            // Smart selection tools ignore the bar.
-            (Tool::QuickSelection, 2, Mods::NONE, false, Add),
-            (Tool::QuickSelection, 0, ALT, true, Subtract),
+            // The Quick Selection follows its own bar (#11837) and the keys like the other selection
+            // tools do theirs.
+            (Tool::QuickSelection, 2, Mods::NONE, false, Subtract),
+            (Tool::QuickSelection, 0, Mods::NONE, true, New),
+            (Tool::QuickSelection, 0, shift, true, Add),
+            (Tool::QuickSelection, 1, ALT, true, Subtract),
+            (Tool::QuickSelection, 0, both, true, Subtract),
             // Object Selection follows the options bar and the keys like the other selection tools (#12853).
             (Tool::ObjectSelection, 3, Mods::NONE, true, Intersect),
             (Tool::ObjectSelection, 0, Mods::NONE, true, New),

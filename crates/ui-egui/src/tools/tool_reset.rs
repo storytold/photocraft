@@ -204,7 +204,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Lasso | Tool::PolygonLasso => reset!(feather, anti_alias),
         Tool::MagneticLasso => reset!(feather, anti_alias, magnetic),
         Tool::MagicWand => reset!(tolerance, anti_alias, contiguous),
-        Tool::QuickSelection => reset!(enhance_edge),
+        Tool::QuickSelection => reset!(enhance_edge, quick_selection_mode),
         Tool::ObjectSelection => reset!(enhance_edge, object_finder, object_subtract, object_finder_mode, object_hard_edge),
         Tool::Crop => reset!(crop),
         Tool::PerspectiveCrop => reset!(perspective_crop, perspective_crop_grid),

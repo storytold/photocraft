@@ -313,7 +313,7 @@ pub(crate) fn tool<'a>(scope: &'a ToolScope<'a>, state: &'a mut SelectionTools, 
             // PLAN: assumed `magnetic_lasso_ui::prepare(app: &mut PhotocraftApp, tool: &mut MagneticLassoTool<PcEdges>)` (tools-w64).
             magnetic_lasso_ui::prepare(app, &mut state.magnetic);
         }
-        (PcSelection::of(app), tool, crate::tool_feedback::selection_op(tool, app.ui.selection_mode, Mods::NONE, true), constraint(app))
+        (PcSelection::of(app), tool, crate::tool_feedback::selection_op(tool, crate::tool_feedback::bar_mode(app, tool), Mods::NONE, true), constraint(app))
     });
     state.marquee.kind(marquee_kind(tool)).operation(bar).constraint(constraint);
     state.lasso.operation(bar);
@@ -691,6 +691,7 @@ pub(crate) fn shown_offset(app: &PhotocraftApp) -> Option<(i32, i32)> {
     crate::move_ui::floating_offset(app)
         .or_else(|| app.canvas_tools.selection.drag_offset())
         .or_else(|| app.canvas_tools.retouch.drag_offset())
+        .or_else(|| app.canvas_tools.paint.drag_offset())
         .or_else(|| crate::move_ui::carries_selection(app).then(|| app.canvas_tools.mover.offset()).flatten())
 }
 

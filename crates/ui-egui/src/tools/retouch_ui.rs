@@ -257,11 +257,19 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
                 return true;
             }
             let size = app.session.tools.brush.size;
-            let mode = if mods.alt { "subtract" } else { "add" };
+            // Its own New / Add / Subtract bar, with ⇧ adding and ⌥ subtracting (#11837).
+            let had_selection = crate::tool_feedback::has_selection(app);
+            let bar = crate::tool_feedback::bar_mode(app, Tool::QuickSelection);
+            let mode = crate::tool_feedback::mode_name(crate::tool_feedback::selection_op(Tool::QuickSelection, bar, mods, had_selection));
             let xy: Vec<[f64; 2]> = points.iter().map(|q| [q[0], q[1]]).collect();
             let (sample_all, enhance) = (o.sample_all.quick_selection, o.enhance_edge);
             let r = app.run("select.quick", json!({"points": xy, "size": size, "mode": mode, "enhanceEdge": enhance, "sampleAllLayers": sample_all}));
+            let changed = matches!(r, Ok(ref v) if v.get("changed").and_then(Value::as_bool) == Some(true));
             report_smart_result(app, r, tl!("Quick Selection found nothing there"));
+            // New flips to Add after its first stroke on an empty selection, as in Photoshop.
+            if app.ui.tool_options.quick_selection_mode == 0 && changed && !had_selection {
+                app.ui.tool_options.quick_selection_mode = 1;
+            }
             return true;
         }
         _ => return false,
