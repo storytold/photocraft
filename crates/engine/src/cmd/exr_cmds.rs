@@ -6,8 +6,107 @@
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::file_cmds::{native, read_file, stem};
+use crate::file_cmds::{extension, native, native_doc, read_file, same_file, stem, str_param};
 use crate::{EngineError, Result, Session};
+use photocraft_doc::{ColorMode, LayerId};
+use photocraft_format::atomic::StreamWriter;
+use photocraft_io::{LayeredExrCompression, LayeredExrOptions};
+use photocraft_raster::Interrupt;
+
+/// The registered command for tiled multipart EXR export.
+pub const LAYERED_EXR: &str = "file.export.layeredExr";
+
+fn bad_layered_exr(msg: impl Into<String>) -> EngineError {
+    EngineError::BadParams { cmd: LAYERED_EXR.into(), msg: msg.into() }
+}
+
+fn exr_bool(p: &Value, key: &str, default: bool) -> Result<bool> {
+    match p.get(key) {
+        None => Ok(default),
+        Some(value) => value.as_bool().ok_or_else(|| bad_layered_exr(format!("`{key}` must be true or false"))),
+    }
+}
+
+fn layered_exr_options(s: &Session, p: &Value, warnings: &mut Vec<String>) -> Result<LayeredExrOptions> {
+    let selected = exr_bool(p, "selectedOnly", false)?;
+    let state = s.active().ok_or(EngineError::NoDocument)?;
+    let layers = match p.get("layers") {
+        Some(_) if selected => return Err(bad_layered_exr("choose either `layers` or `selectedOnly`")),
+        Some(value) => {
+            let ids = value.as_array().ok_or_else(|| bad_layered_exr("`layers` must be an array of layer IDs"))?;
+            if ids.len() > state.doc.layer_count() {
+                return Err(bad_layered_exr("more layer IDs than layers in the document"));
+            }
+            Some(
+                ids.iter()
+                    .map(|id| id.as_u64().map(LayerId).ok_or_else(|| bad_layered_exr("`layers` must contain only unsigned integer layer IDs")))
+                    .collect::<Result<Vec<_>>>()?,
+            )
+        }
+        None if selected => {
+            let selection = state.selected_layers();
+            let ids: Vec<_> = selection.iter().copied().filter(|id| state.doc.layer(*id).is_some_and(photocraft_io::is_layered_exr_raster)).collect();
+            if ids.is_empty() {
+                return Err(bad_layered_exr("select one or more RGB raster layers first"));
+            }
+            if ids.len() < selection.len() {
+                warnings.push("Only selected RGB raster layers were exported as editable pixels".into());
+            }
+            Some(ids)
+        }
+        None => None,
+    };
+    let compression = match p.get("compression").map(Value::as_str) {
+        None | Some(Some("zip")) => LayeredExrCompression::Zip,
+        Some(Some("none")) => LayeredExrCompression::None,
+        Some(Some("rle")) => LayeredExrCompression::Rle,
+        Some(Some("zips")) => LayeredExrCompression::Zips,
+        Some(Some("piz")) => LayeredExrCompression::Piz,
+        _ => return Err(bad_layered_exr("`compression` must be none, rle, zips, zip or piz")),
+    };
+    Ok(LayeredExrOptions { composite: exr_bool(p, "composite", true)?, layers, compression })
+}
+
+/// Encode the active document into an atomic seekable staging writer. Automation supplies the
+/// writer from its granted workspace to avoid opening the caller's path with ambient authority.
+pub fn export_layered_exr_with(s: &Session, p: &Value, write: impl FnOnce(&str, &mut StreamWriter<'_>) -> Result<()>) -> Result<Value> {
+    let p_map = p.as_object().ok_or_else(|| bad_layered_exr("parameters must be an object"))?;
+    if let Some(key) = p_map.keys().find(|k| !matches!(k.as_str(), "path" | "layers" | "selectedOnly" | "composite" | "compression" | "overwrite")) {
+        return Err(bad_layered_exr(format!("unknown parameter `{key}`")));
+    }
+    let path = str_param(p, "path", LAYERED_EXR)?;
+    if extension(path).as_deref() != Some("exr") {
+        return Err(bad_layered_exr("`path` must end in .exr"));
+    }
+    exr_bool(p, "overwrite", false)?;
+    let mut warnings = Vec::new();
+    let opts = layered_exr_options(s, p, &mut warnings)?;
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    write(path, &mut |out| {
+        warnings.extend(photocraft_io::write_layered_exr(&d.doc, out, &opts, &Interrupt::NONE).map_err(std::io::Error::other)?);
+        Ok(())
+    })?;
+    Ok(json!({"path": path, "warnings": warnings}))
+}
+
+fn export_layered_exr(s: &mut Session, p: &Value) -> Result<Value> {
+    export_layered_exr_with(s, p, |path, write| {
+        let d = s.active().ok_or(EngineError::NoDocument)?;
+        if p.get("overwrite").and_then(Value::as_bool) != Some(true) && d.path.as_deref().is_some_and(|own| same_file(path, own)) {
+            return Err(bad_layered_exr("choose a new path or pass `overwrite: true` to replace the document's own file"));
+        }
+        photocraft_format::atomic_write_stream(std::path::Path::new(path), write).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+    })
+}
+
+fn can_export_layered_exr(s: &Session) -> std::result::Result<(), String> {
+    native_doc(s)?;
+    let doc = s.active().ok_or_else(|| "no document open".to_string())?;
+    if doc.doc.mode != ColorMode::Rgb {
+        return Err("Layered OpenEXR requires an RGB document".into());
+    }
+    Ok(())
+}
 
 fn entries_json(path: &str) -> Result<Value> {
     let bytes = read_file(path)?;
@@ -83,6 +182,15 @@ pub fn specs() -> Vec<CommandSpec> {
             r##"{"path":str (the EXR file),"view":"both|left|right"="both","part/<name>":bool (import this part as a layer),"group/<name>":bool (import this channel group as a layer),"precomp":bool=false (add the additive beauty precomp from the AOVs)}"##,
             native,
             open_exr_parts
+        ),
+        spec!(
+            LAYERED_EXR,
+            "Layered OpenEXR…",
+            &["File", "Export"],
+            None,
+            r##"{"path":str (.exr),"composite":bool=true (include the composite part),"layers":[layerId]? (default all eligible layers),"selectedOnly":bool=false (export eligible layers from the current selection),"compression":"none|rle|zips|zip|piz"="zip","overwrite":bool=false (replace the document's own file)} → {path,warnings}"##,
+            can_export_layered_exr,
+            export_layered_exr
         ),
     ]
 }

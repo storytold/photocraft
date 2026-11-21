@@ -530,6 +530,14 @@ are migrated to the same capability interface. Extra read roots do not enable am
 or headless directory-bundle access. Desktop `app.open` supports directory `.pcraft` only through
 its granted read capabilities. Interactive desktop file pickers retain normal user-selected access.
 
+Headless `engine.execute` and MCP `command_run` accept `file.export.layeredExr` with an
+explicit `path` ending in `.exr`. The command streams tiled multipart OpenEXR into a
+staging file beneath the write root. Use `composite: false` to omit Beauty, `layers` with
+layer IDs or `selectedOnly: true` to choose the layers, and `compression` to choose
+`none`, `rle`, `zips`, `zip` (the default), or `piz`. The reply is `{path, warnings}`.
+Replacing the open document's own file requires `overwrite: true`. The export leaves the
+document's saved state intact. In the desktop app, use **File › Export › Layered OpenEXR…**.
+
 ## Headless server
 
 An unused TCP headless server exits after 30 minutes without a client connection, releasing

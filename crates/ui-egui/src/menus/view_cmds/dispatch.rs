@@ -228,6 +228,7 @@ fn wraps(id: &str) -> bool {
             | "file.automate.mergeToHdrPro"
             | "file.automate.lensCorrection"
             | "file.export.layersToFiles"
+            | "file.export.layeredExr"
             | "file.export.layerCompsToFiles"
             | "file.export.artboardsToFiles"
             | "file.export.artboardsToPdf"
