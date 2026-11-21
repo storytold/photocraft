@@ -624,6 +624,66 @@ mod tests {
         app
     }
 
+    /// The status Zoom keeps its typed value on the pasteboard and applies it on Enter.
+    #[test]
+    fn status_zoom_keeps_its_draft_on_the_pasteboard_until_enter() {
+        use egui::accesskit::Role;
+        use egui::{Event, Key, PointerButton, pos2, vec2};
+        use egui_kittest::kittest::{NodeT, Queryable};
+
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).with_pixels_per_point(1.0).build_eframe(|cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            let mut session = photocraft_engine::Session::new();
+            session.prefs.edit(|prefs| {
+                prefs.interface.language = "en".into();
+                prefs.general.animated_zoom = false;
+            });
+            let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), session, crate::Services::default());
+            app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+            app.ui.tool = Tool::Hand;
+            app
+        });
+        h.run_steps(6);
+        let view = &mut h.state_mut().ui.views[0];
+        view.zoom = 1.0;
+        view.center = [32.0, 24.0];
+        view.clear_pending();
+        h.run_steps(3);
+
+        let view = active_view(h.state()).expect("the document is shown");
+        assert_eq!(view.zoom, 1.0, "the status readout starts at 100%");
+        let at = pos2(view.rect.left() + view.rect.width() * 0.2, view.rect.center().y);
+        assert!(doc_point_at(h.state(), at).expect("the click is inside the canvas").x < 0.0, "the click is left of the image");
+        let state = h.state().session.active().unwrap();
+        let (document, steps) = (state.doc.clone(), state.history.past_len());
+
+        let status = h
+            .query_all_by_role(Role::SpinButton)
+            .find(|node| node.rect().center().y > view.rect.bottom() && node.accesskit_node().label().as_deref() == Some("Zoom"))
+            .expect("the status bar has its Zoom field");
+        status.click();
+        h.run_steps(2);
+        crate::shortcut_dispatch::tests::tap(&mut h, Key::A, Modifiers::COMMAND);
+        h.event(Event::Text("50".into()));
+        h.run_steps(2);
+        assert_eq!(h.state().ui.views[0].zoom, 1.0, "typing leaves the view at 100%");
+
+        h.event(Event::PointerMoved(at));
+        for pressed in [true, false] {
+            h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+        }
+        h.run_steps(1);
+        assert_eq!(h.state().ui.views[0].zoom, 1.0, "the pasteboard click leaves the draft unapplied");
+        h.key_press(Key::Enter);
+        h.run_steps(3);
+        assert_eq!(h.state().ui.views[0].zoom, 0.5, "Enter applies the held 50% zoom");
+
+        let state = h.state().session.active().unwrap();
+        assert_eq!(state.history.past_len(), steps, "changing view zoom creates no document edit");
+        assert_eq!(state.doc, document);
+    }
+
     /// #15529: a fitting document can still move through its scroll bars when Overscroll is on.
     #[test]
     fn canvas_scrollbars_follow_overscroll_for_a_fitting_document() {
