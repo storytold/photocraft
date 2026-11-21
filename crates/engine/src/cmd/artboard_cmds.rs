@@ -940,7 +940,9 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
             Some(_) if truecolour && one.mode != ColorMode::Rgb => encode(&rgb_copy(&one)?, &path, save)?,
             Some(_) => encode(&one, &path, save)?,
             // The PNG-8 writer does not interlace; say so, as the palette PNG path of a save does.
-            None if save.png_interlaced == Some(true) => (png8(&one, cmd)?, vec!["written without interlacing: the PNG-8 exporter does not interlace".to_owned()]),
+            None if save.png_interlaced == Some(true) => {
+                (png8(&one, cmd)?, vec!["written without interlacing: the PNG-8 exporter does not interlace".to_owned()])
+            }
             None => (png8(&one, cmd)?, Vec::new()),
         };
         guard.check()?;
