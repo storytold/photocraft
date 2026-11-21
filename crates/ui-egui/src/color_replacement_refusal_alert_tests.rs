@@ -18,6 +18,20 @@ fn a_hidden_target_layer() {
     assert_eq!(photocraft_engine::hidden_target::HIDDEN, "Could not complete your request because the target layer is hidden.", "the shared text is unchanged");
 }
 
+/// A targeted layer mask on a hidden layer keeps the status-bar refusal: only a pixel target gets the alert (CodeRabbit
+/// on #16279).
+#[test]
+fn a_hidden_layer_with_a_mask_target_keeps_the_status_bar_message() {
+    let mut app = app(Tool::ColorReplacement);
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    let id = active(&app);
+    app.run("layer.setProps", json!({"layer": id, "visible": false})).unwrap();
+    app.ui.mask_target = true;
+    stroke(&mut app);
+    assert!(alerts(&app).is_empty(), "no alert: {:?}", alerts(&app));
+    assert!(app.ui.status_error, "the status bar says it: {:?}", app.ui.status);
+}
+
 #[test]
 fn lock_all() {
     let mut app = app(Tool::ColorReplacement);
