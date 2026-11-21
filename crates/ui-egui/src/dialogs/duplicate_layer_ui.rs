@@ -123,6 +123,8 @@ fn duplicate(app: &mut PhotocraftApp, fields: &DialogFields) -> Result<Value, St
         Destination::Document(destination) if destination == index => app.run_command("layer.duplicate", Value::Object(params)),
         Destination::Document(destination) => {
             params.insert("document".into(), json!(destination));
+            // A copy that would land off the other document's canvas is centred on it (#14606).
+            params.insert("centerOutside".into(), json!(true));
             app.run_command("layer.copyToDocument", Value::Object(params))
         }
     }
