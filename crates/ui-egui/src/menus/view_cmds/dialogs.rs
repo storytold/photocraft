@@ -585,22 +585,50 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
                 choice("maskChannel", tl!("Mask Channel"), channels(&masks), "none"),
             ]
         }
+        // Calculations: Blending is remembered for every document; the other rows come back only on the document the
+        // last OK ran on (#14531, `calculations_opened`).
         _ => vec![
-            choice("source1Channel", tl!("Source 1 Channel"), channels(&load), &chans[0]),
-            Param::new("source1Invert", tl!("Invert Source 1"), ParamKind::bool(false)),
-            choice("source2Channel", tl!("Source 2 Channel"), channels(&load), &chans[0]),
-            Param::new("source2Invert", tl!("Invert Source 2"), ParamKind::bool(false)),
+            choice("source1Channel", tl!("Source 1 Channel"), channels(&load), &chans[0]).not_remembered(),
+            Param::new("source1Invert", tl!("Invert Source 1"), ParamKind::bool(false)).not_remembered(),
+            choice("source2Channel", tl!("Source 2 Channel"), channels(&load), &chans[0]).not_remembered(),
+            Param::new("source2Invert", tl!("Invert Source 2"), ParamKind::bool(false)).not_remembered(),
             choice("blending", tl!("Blending"), blend_modes(), "multiply"),
-            Param::new("opacity", tl!("Opacity"), ParamKind::number(Some(0.0), Some(100.0), 100.0, 1.0, 0)),
+            Param::new("opacity", tl!("Opacity"), ParamKind::number(Some(0.0), Some(100.0), 100.0, 1.0, 0)).not_remembered(),
             choice(
                 "result",
                 tl!("Result"),
                 opts(&[("newChannel", tl!("New Channel")), ("newDocument", tl!("New Document")), ("selection", tl!("Selection"))]),
                 "newChannel",
-            ),
+            )
+            .not_remembered(),
         ],
     };
-    Some((rows, DialogFields::new()))
+    let fields = if id == "image.calculations" { calculations_opened(app, d.id, &load) } else { DialogFields::new() };
+    Some((rows, fields))
+}
+
+/// Where the confirmed Calculations values of a document are kept for this session (#14531).
+fn calculations_memory(doc: photocraft_doc::DocId) -> egui::Id {
+    egui::Id::unique("photocraft.image.calculations").with(doc.0)
+}
+
+/// The values Calculations opens with on `doc`: those of the last OK on it, Blending aside (the dialog's own memory
+/// keeps that for every document); a channel no longer in `channels` falls back to the default.
+fn calculations_opened(app: &PhotocraftApp, doc: photocraft_doc::DocId, channels: &[String]) -> DialogFields {
+    let mut fields: DialogFields = app.ctx().data(|d| d.get_temp(calculations_memory(doc))).unwrap_or_default();
+    for key in ["source1Channel", "source2Channel"] {
+        if fields.text(key).is_some_and(|name| !channels.iter().any(|c| c == name)) {
+            fields.remove(key);
+        }
+    }
+    fields
+}
+
+/// After a successful OK in Calculations opened on `doc`: keeps its values for the next opening on that document.
+pub(crate) fn calculations_confirmed(app: &PhotocraftApp, doc: photocraft_doc::DocId, fields: &DialogFields) {
+    let mut kept = fields.clone();
+    kept.remove("blending");
+    app.ctx().data_mut(|d| d.insert_temp(calculations_memory(doc), kept));
 }
 
 /// Handle menu commands that need a shell action or a parameter dialog before execution.
