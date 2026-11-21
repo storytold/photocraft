@@ -515,8 +515,10 @@ fn row_keys_cover_exactly_what_the_rows_are_built_from() {
     // Levels and Curves round to the document's quantum, so their keys hold the depth.
     assert_ne!(key(&levels, SampleType::U8), key(&levels, SampleType::U16));
     assert_ne!(key(&curves, SampleType::U16), key(&curves, SampleType::F32));
-    // Hue/Saturation range tables and Color Balance curves don't depend on depth.
-    assert_eq!(key(&hue_sat, SampleType::U8), key(&hue_sat, SampleType::F32));
+    // Hue/Saturation range tables take the measured edges at 8 bits only (#14744); Color Balance
+    // curves don't depend on depth.
+    assert_ne!(key(&hue_sat, SampleType::U8), key(&hue_sat, SampleType::U16));
+    assert_eq!(key(&hue_sat, SampleType::U16), key(&hue_sat, SampleType::F32));
     assert_eq!(key(&balance, SampleType::U8), key(&balance, SampleType::U16));
     // Dragging the master Hue/Saturation sliders leaves the range tables (and their entry) alone.
     let Adjustment::HueSaturation { ranges, .. } = &hue_sat else { panic!("Hue/Saturation") };
