@@ -1,4 +1,5 @@
 pub(super) mod alt_grab;
+pub(super) mod alt_keys;
 pub(super) mod blend_keys;
 pub mod hold_keys;
 pub mod nudge_bundle;

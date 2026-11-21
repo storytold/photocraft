@@ -177,6 +177,7 @@ pub use dialogs::tiff_options_ui;
 pub use dialogs::vp_ui;
 pub use dialogs::wide_angle_ui;
 use input::alt_grab;
+use input::alt_keys;
 use input::blend_keys;
 pub use input::hold_keys;
 pub use input::nudge_bundle;
