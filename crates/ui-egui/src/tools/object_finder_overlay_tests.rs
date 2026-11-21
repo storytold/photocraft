@@ -292,9 +292,12 @@ fn quick_selection_gains_nothing_of_the_object_selection_section() {
     assert!(field(&h, "Opacity").is_none() && field(&h, "Outline").is_none(), "and no Overlay Options fields");
 }
 
-// --- The tests above drive the popup and the bar as they are drawn; they compile and fail on
-// upstream/main. The tests below name the new settings and `object_finder::overlay_look`, so they
-// only compile with this change. ---
+// --- The tests above drive the popup and the bar as they are drawn; they fail on upstream/main.
+// They compile there once the two references to the new settings are dropped: the
+// `object_overlay_show` assertions in `picking_a_radio_moves_only_that_radio` and the
+// `OverlayShow` in the `use` line at the top of the file. That cut gives eight tests, six of them
+// red. The tests below name the new settings and `object_finder::overlay_look`, so they only
+// compile with this change. ---
 
 #[test]
 fn the_outline_field_takes_the_measured_values_and_alerts() {
@@ -318,21 +321,11 @@ fn the_opacity_field_takes_the_measured_values_and_alerts() {
     }
 }
 
-#[test]
-fn a_typed_fraction_is_clamped_like_any_other_value_out_of_range() {
-    // The reference application rounds a typed fraction (12,5 becomes 12; 33,6 becomes 34) and says
-    // nothing. The framework's whole-number field takes no separator at all, so the digits join into
-    // 125 and 336 and the range rule inserts the closest value with its alert. Pinned as PhotoCraft
-    // behaves today; rounding a typed fraction belongs to the framework's number field.
-    let mut h = gear();
-    type_into(&mut h, "Outline", "12.5");
-    assert_eq!(h.state().ui.tool_options.object_overlay_outline, 50.0, "12.5 reads as 125, the closest is 50");
-    assert_eq!(alerts(&h), 1, "with the range alert");
-    let mut h = gear();
-    type_into(&mut h, "Opacity", "33.6");
-    assert_eq!(h.state().ui.tool_options.object_overlay_opacity, 100.0, "33.6 reads as 336, the closest is 100");
-    assert_eq!(alerts(&h), 1, "with the range alert");
-}
+// No typed-fraction case is pinned here on purpose: the framework's whole-number field reads the
+// separators of the machine's own locale, so "12.5" joins to 125 and clamps on a comma-decimal box
+// while a point-decimal one reads twelve and a half and rounds. What a separator does belongs to
+// the framework's number field, not to this ticket; the integer clamps in the two tests above hold
+// whatever the locale is.
 
 #[test]
 fn the_colour_dropdown_holds_all_thirteen_names_in_its_steps() {
