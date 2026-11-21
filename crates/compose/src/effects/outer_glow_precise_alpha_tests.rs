@@ -1,5 +1,6 @@
 use super::{Contour, Effect, FxPaint, Glow, GlowSource, GlowTechnique};
 use photocraft_color::{BlendMode, Color, ColorMode, SampleType};
+use photocraft_doc::adjust::CurvePoint;
 use photocraft_doc::{Document, FxCommon, Layer};
 use photocraft_geom::{Rect, Size};
 
@@ -41,8 +42,7 @@ fn precise_outer_glow_attenuates_under_translucent_squares() {
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let image = squares(depth, glow(GlowTechnique::Precise));
         let actual = [rgb(&image, 120, 60), rgb(&image, 200, 60)];
-        let expected = [[139, 75, 11], [89, 57, 25]];
-        assert!(actual.iter().flatten().zip(expected.iter().flatten()).all(|(a, b)| a.abs_diff(*b) <= 3), "{depth:?}: got {actual:?}, expected {expected:?}");
+        assert_eq!(actual, [[139, 75, 11], [89, 57, 25]], "{depth:?}");
     }
 }
 
@@ -66,6 +66,15 @@ fn softer_and_other_precise_settings_keep_the_translucent_centers() {
         Glow { size: 6.0, ..precise.clone() },
         Glow { spread: 0.25, ..precise.clone() },
         Glow { range: 0.65, ..precise.clone() },
+        Glow { anti_alias: true, ..precise.clone() },
+        Glow {
+            contour: Contour::Custom {
+                name: "Identity".into(),
+                points: vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 1.0, output: 1.0 }],
+                corners: vec![],
+            },
+            ..precise.clone()
+        },
         Glow { common: FxCommon::new(BlendMode::Multiply, 1.0), ..precise },
     ] {
         let image = squares(SampleType::U8, effect);
@@ -85,4 +94,17 @@ fn precise_outer_glow_keeps_the_coverage_at_an_antialiased_edge() {
     let map = super::glow_map(&shape, &glow(GlowTechnique::Precise), false, (0, 0));
     assert_eq!(map.get(3, 4), 1.0);
     assert_eq!(map.get(4, 4), 1.0);
+}
+
+#[test]
+fn precise_outer_glow_handles_empty_and_single_pixel_shapes() {
+    let effect = glow(GlowTechnique::Precise);
+    let mut shape = super::Map::new(9, 9, 0.0);
+    let empty = super::glow_map(&shape, &effect, false, (0, 0));
+    assert!(empty.v.iter().all(|&alpha| alpha == 0.0));
+
+    shape.v[4 * 9 + 4] = 0.5;
+    let single = super::glow_map(&shape, &effect, false, (0, 0));
+    assert_eq!(single.get(4, 4), 1.0);
+    assert!((single.get(5, 4) - 0.75).abs() < 1e-6);
 }

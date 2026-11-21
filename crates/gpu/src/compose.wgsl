@@ -1473,14 +1473,14 @@ fn fs_mblur(in: VOut) -> @location(0) vec4<f32> {
     return mout(acc);
 }
 
-// Precise glow from a distance map (`effects::glow_map`): p0 = (solid, soft, attenuate).
+// Precise glow from a distance map (`effects::glow_map`): p0 = (solid, soft, alpha distance scale).
 // Coverage is 0.5 at the edge falling to 0 at `size + 1` px centre to centre (the field is
 // 0.5 px short of that), solid within the spread / choke. For #14955, tex_b is the shape alpha.
 @fragment
 fn fs_mglow(in: VOut) -> @location(0) vec4<f32> {
     let p = local(in.pos);
     var d = textureLoad(tex_a, p, 0).r + 0.5;
-    if (op.p0.z > 0.5 && d == 0.0 && all(p > vec2(0)) && all(p + vec2(1) < chunk.size)) {
+    if (op.p0.z > 0.0 && d == 0.0 && all(p > vec2(0)) && all(p + vec2(1) < chunk.size)) {
         let a = textureLoad(tex_b, p, 0).r;
         if (a > 0.0 && a < 1.0) {
             var flat = true;
@@ -1489,7 +1489,7 @@ fn fs_mglow(in: VOut) -> @location(0) vec4<f32> {
                     flat = flat && textureLoad(tex_b, p + vec2(x, y), 0).r == a;
                 }
             }
-            if (flat) { d = 1.0 - a; }
+            if (flat) { d = (1.0 - a) * op.p0.z; }
         }
     }
     var m = 0.5 * clamp(1.0 - (d - op.p0.x) / op.p0.y, 0.0, 1.0);

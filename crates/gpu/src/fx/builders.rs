@@ -63,8 +63,9 @@ impl B {
                 let d = self.field(if inner { FieldKind::Inside } else { FieldKind::Outside }, g.size);
                 let solid = g.size * g.spread;
                 let soft = (g.size + 1.0 - solid).max(1e-3);
-                let attenuate = fx::attenuates_precise_outer_glow(g, inner);
-                self.push(stage(Kernel::MGlow, Some(d), attenuate.then_some(In::Shape), [solid, soft, flag(attenuate), 0.0], i32::from(attenuate)))
+                let alpha_distance_scale = fx::precise_outer_glow_alpha_distance_scale(g, inner);
+                let reads_alpha = alpha_distance_scale > 0.0;
+                self.push(stage(Kernel::MGlow, Some(d), reads_alpha.then_some(In::Shape), [solid, soft, alpha_distance_scale, 0.0], i32::from(reads_alpha)))
             }
             GlowTechnique::Softer => {
                 // Inner glows spread 1 - alpha.

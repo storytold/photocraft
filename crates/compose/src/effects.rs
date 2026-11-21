@@ -54,8 +54,8 @@ use distance::{
 };
 use paint::dissolves;
 pub use paint::{
-    aa_shift, anti_aliased_contour, attenuates_precise_outer_glow, bevel_contour_lut, glow_gradient_gain, glow_lut, glow_paint_lut, gradient_t, gradient_units,
-    hash_noise, ranged_lut, sample_gradient, satin_lut, spread_split,
+    aa_shift, anti_aliased_contour, bevel_contour_lut, glow_gradient_gain, glow_lut, glow_paint_lut, gradient_t, gradient_units, hash_noise,
+    precise_outer_glow_alpha_distance_scale, ranged_lut, sample_gradient, satin_lut, spread_split,
 };
 #[cfg(test)]
 use paint::{glow_map, lut_at, noise, offset, shadow_map};

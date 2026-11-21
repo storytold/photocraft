@@ -464,9 +464,9 @@ pub(super) fn shadow_map(shape: &Map, s: &Shadow, light: &GlobalLight, inner: bo
     m
 }
 
-/// The Precise Outer Glow settings measured under partially opaque pixels in #14955.
-pub fn attenuates_precise_outer_glow(g: &Glow, inner: bool) -> bool {
-    !inner
+/// Subpixel offset per unit of missing alpha for the Precise Outer Glow settings measured in #14955.
+pub fn precise_outer_glow_alpha_distance_scale(g: &Glow, inner: bool) -> f32 {
+    if !inner
         && g.technique == GlowTechnique::Precise
         && g.size == 5.0
         && g.spread == 0.0
@@ -477,6 +477,13 @@ pub fn attenuates_precise_outer_glow(g: &Glow, inner: bool) -> bool {
         && matches!(g.paint, FxPaint::Color(_))
         && g.common.blend == BlendMode::Normal
         && g.common.opacity == 1.0
+    {
+        // Fit the interior ramp to Photoshop's 11 and 25 blue-channel levels through the
+        // 50% and 25% orange squares. The exterior ramp uses the original distances.
+        1.045
+    } else {
+        0.0
+    }
 }
 
 /// A flat partial-alpha neighbourhood identifies the measured translucent interior.
@@ -507,19 +514,19 @@ pub(super) fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -
             let d = if inner { dist_inside(shape) } else { dist_outside(&src) };
             let solid = g.size * g.spread;
             let soft = (g.size + 1.0 - solid).max(1e-3);
-            let attenuate = attenuates_precise_outer_glow(g, inner);
+            let alpha_distance_scale = precise_outer_glow_alpha_distance_scale(g, inner);
             let mut m = Map::new(shape.w, shape.h, 0.0);
             for (i, (o, d)) in m.v.iter_mut().zip(d).enumerate() {
                 let mut d = d + 0.5;
                 // Missing alpha shifts the flat interior onto the existing falloff ramp.
-                if attenuate
+                if alpha_distance_scale > 0.0
                     && d == 0.0
                     && let Some(&alpha) = shape.v.get(i)
                     && alpha > 0.0
                     && alpha < 1.0
                     && flat_glow_alpha(shape, i, alpha)
                 {
-                    d = 1.0 - alpha;
+                    d = (1.0 - alpha) * alpha_distance_scale;
                 }
                 *o = if d <= solid { 1.0 } else { 0.5 * (1.0 - (d - solid) / soft).clamp(0.0, 1.0) };
             }
