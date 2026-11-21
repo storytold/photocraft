@@ -1412,7 +1412,12 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
 /// canvas's router (`paint_mouse::context_popup`) what opens, then opens it. `false` when nothing
 /// opens.
 pub fn open_at(app: &mut PhotocraftApp, tool: Tool, mods: Mods, at: Pos2, doc: [f64; 2], point: Option<(PathRef, BezierHit)>) -> bool {
-    use crate::paint_mouse::ContextPopup; // PLAN: assumed `context_popup(app, tool, mods, doc) -> Option<ContextPopup>` with `Menu(MenuKind)` and `BrushPicker` (cw.P8)
+    use crate::paint_mouse::ContextPopup;
+    // The Custom Shape tool's right-click opens its Shape picker at the pointer, never a menu (#13463).
+    if tool == Tool::CustomShape && at.x.is_finite() && at.y.is_finite() {
+        crate::panels::preset_browser::open_shape_popover(app, [at.x, at.y]);
+        return true;
+    } // PLAN: assumed `context_popup(app, tool, mods, doc) -> Option<ContextPopup>` with `Menu(MenuKind)` and `BrushPicker` (cw.P8)
     match crate::paint_mouse::context_popup(app, tool, mods, doc) {
         Some(ContextPopup::Menu(kind)) => open(app, tool, kind, at, doc, point),
         Some(ContextPopup::BrushPicker) => {
@@ -1849,6 +1854,7 @@ pub(crate) fn run(
         }
     }
     crate::brush_picker::show_at(ui, app);
+    crate::panels::preset_browser::show_shape_popover(ui, app);
 }
 
 #[cfg(test)]
@@ -1867,6 +1873,9 @@ mod make_selection_dialog_tests;
 
 #[cfg(test)]
 mod type_layer_menu_tests;
+
+#[cfg(test)]
+mod custom_shape_picker_tests;
 
 #[cfg(test)]
 mod add_anchor_menu_tests;

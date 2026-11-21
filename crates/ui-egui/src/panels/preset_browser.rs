@@ -524,13 +524,22 @@ fn keep_picker_state(presets: &mut PresetUi, id: &str, state: PresetState<String
 
 /// Options-bar shape picker for the Custom Shape tool.
 pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    const GROUP: &str = "group:";
-    const ID: &str = "shapePicker";
+    show_shape_picker(app, ui, None);
+}
+
+/// The Shape picker's group rows are keyed with this prefix; a pick of one is not a shape.
+const SHAPE_GROUP: &str = "group:";
+/// The Shape picker's saved view state, shared by the options bar's field and the canvas popover.
+const SHAPE_PICKER: &str = "shapePicker";
+
+/// The Shape picker: the options bar's field, or with `at` the popover a right-click on the canvas opens there with no
+/// field (#13463). A pick sets the Custom Shape tool's shape. Returns whether the popover is still open.
+fn show_shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui, at: Option<Pos2>) -> bool {
     let ctx = ui.ctx().clone();
     let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
     let mut rows: Vec<PresetRow<String>> = Vec::new();
     for group in &groups {
-        rows.push(PresetRow::group(format!("{GROUP}{}", group.name), group.name.clone(), 0));
+        rows.push(PresetRow::group(format!("{SHAPE_GROUP}{}", group.name), group.name.clone(), 0));
         for shape in &group.items {
             let texture = shape_texture(&ctx, shape);
             rows.push(PresetRow::item(shape.name.clone(), shape.name.clone(), 1).tooltip(shape.name.clone()).preview(ThumbAspect::SQUARE, move |cx, rect| {
@@ -540,11 +549,45 @@ pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let mut value = Some(app.ui.presets_ui.shape().to_string());
     let before = value.clone();
-    let mut state = picker_state(&app.ui.presets_ui, ID);
-    let _ = PresetPicker::new(tl!("Shape"), Bind::bound(&mut value), &rows, Bind::bound(&mut state)).columns(7).show(ui); // the picked value comes back through `value`
-    keep_picker_state(&mut app.ui.presets_ui, ID, state);
-    if let Some(picked) = value.filter(|picked| before.as_ref() != Some(picked) && !picked.starts_with(GROUP)) {
+    let mut state = picker_state(&app.ui.presets_ui, SHAPE_PICKER);
+    let mut open = true;
+    let picker = PresetPicker::new(tl!("Shape"), Bind::bound(&mut value), &rows, Bind::bound(&mut state)).columns(7);
+    // The picked value comes back through `value`.
+    let shown = match at {
+        Some(at) => picker.open_at(at, Bind::bound(&mut open)).show(ui).open,
+        None => {
+            let _ = picker.show(ui);
+            true
+        }
+    };
+    keep_picker_state(&mut app.ui.presets_ui, SHAPE_PICKER, state);
+    if let Some(picked) = value.filter(|picked| before.as_ref() != Some(picked) && !picked.starts_with(SHAPE_GROUP)) {
         app.ui.presets_ui.custom_shape = picked;
+    }
+    open && shown
+}
+
+/// Where the canvas Shape picker is open, in screen points: kept for the session in the context's memory.
+fn shape_popover_id() -> egui::Id {
+    egui::Id::unique("photocraft.customShape.canvasPicker")
+}
+
+/// Opens the Shape picker at screen point `at`, as a right-click on the canvas with the Custom Shape tool does (#13463).
+pub(crate) fn open_shape_popover(app: &PhotocraftApp, at: [f32; 2]) {
+    app.ctx().data_mut(|d| d.insert_temp(shape_popover_id(), at));
+}
+
+/// Where the canvas Shape picker is open; `None` while it is closed.
+pub(crate) fn shape_popover_at(app: &PhotocraftApp) -> Option<[f32; 2]> {
+    app.ctx().data(|d| d.get_temp(shape_popover_id()))
+}
+
+/// The canvas Shape picker while it is open; it closes on an outside press, Escape, a pick, or another tool.
+pub(crate) fn show_shape_popover(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
+    let Some(at) = shape_popover_at(app) else { return };
+    let still = app.ui.tool == crate::state::Tool::CustomShape && show_shape_picker(app, ui, Some(pos2(at[0], at[1])));
+    if !still {
+        app.ctx().data_mut(|d| d.remove_temp::<[f32; 2]>(shape_popover_id()));
     }
 }
 
