@@ -17,7 +17,7 @@ fn new_clipboard_document_rejects_an_unrepresentable_origin() {
     let mut s = Session::new();
     let mut surface = Surface::new(PixelFormat::RGBA8);
     surface.write_pixel(i32::MIN, 0, &[1.0, 0.0, 0.0, 1.0]);
-    s.clipboard = Some(Clip {
+    *s.clipboard = Some(Clip {
         svg: None,
         components: None,
         surface,
@@ -48,7 +48,7 @@ fn paste_centres_pixels_from_another_document() {
     let r = s.execute("edit.paste", json!({})).unwrap();
     assert_eq!(r["offset"], json!([30, 25]), "into another document: centred");
     // An image from another app has no source document: centred too.
-    s.clipboard = s.clipboard.take().map(|c| Clip { source: None, ..c });
+    *s.clipboard = s.clipboard.take().map(|c| Clip { source: None, ..c });
     let r = s.execute("edit.paste", json!({})).unwrap();
     assert_eq!(r["offset"], json!([30, 25]));
     // Paste in Place still keeps the position.
@@ -138,7 +138,7 @@ fn injected_paste_failure_does_not_change_document_or_clipboard() {
     let mut s = session();
     s.execute("select.rect", json!({"x": 10, "y": 10, "width": 8, "height": 8})).unwrap();
     s.execute("edit.copy", json!({})).unwrap();
-    let before_clip = s.clipboard.clone();
+    let before_clip = s.clipboard.as_ref().cloned();
     let st = s.active().unwrap();
     let before_doc = (*st.doc).clone();
     let revision = st.revision;
@@ -250,7 +250,7 @@ fn external_clip_session(w: i32, h: i32, cw: i32, ch: i32) -> Session {
     s.execute("file.new", json!({"width": w, "height": h})).unwrap();
     let mut surface = Surface::new(PixelFormat::RGBA8);
     surface.fill_rect(Rect::new(0, 0, cw, ch), &[1.0, 0.0, 0.0, 1.0]);
-    s.clipboard =
+    *s.clipboard =
         Some(Clip { svg: None, components: None, surface, bounds: Rect::new(0, 0, cw, ch), layers: None, resolution: None, source: None, board: None });
     s
 }
@@ -454,7 +454,7 @@ fn copy_with_the_mask_targeted_takes_the_mask_as_grayscale() {
         let r = s.execute("edit.copy", json!({"target": "mask"})).unwrap();
         assert_eq!(r["bounds"], json!([0, 0, 40, 40]), "{depth}-bit: a mask copies whole, as in Photoshop");
         assert_eq!(s.active().unwrap().history.past_len(), steps, "{depth}-bit: copy adds no history step");
-        let clip = s.clipboard.clone().unwrap();
+        let clip = s.clipboard.as_ref().cloned().unwrap();
         let px = clip.surface.rgba(10, 10);
         assert!((px[0] - 0.75).abs() < 2.0 / 255.0, "{depth}-bit: {} vs 0.75", px[0]);
         assert!(clip.surface.rgba(30, 30)[0] < 0.01, "{depth}-bit: the hidden area copies as black");
@@ -475,7 +475,7 @@ fn an_untouched_mask_copies_the_whole_canvas_at_its_default() {
     s.execute("layer.layerMask.revealAll", json!({})).unwrap();
     let r = s.execute("edit.copy", json!({"target": "mask"})).unwrap();
     assert_eq!(r["bounds"], json!([0, 0, 40, 40]), "a plain Reveal All mask still transfers");
-    assert!(s.clipboard.clone().unwrap().surface.rgba(20, 20)[0] > 0.99);
+    assert!(s.clipboard.as_ref().cloned().unwrap().surface.rgba(20, 20)[0] > 0.99);
 }
 
 #[test]
@@ -489,7 +489,7 @@ fn mask_copy_takes_only_the_selection() {
     s.execute("select.rect", json!({"x": 8, "y": 8, "width": 4, "height": 4})).unwrap();
     let r = s.execute("edit.copy", json!({"target": "mask"})).unwrap();
     assert_eq!(r["bounds"], json!([8, 8, 4, 4]));
-    let clip = s.clipboard.clone().unwrap();
+    let clip = s.clipboard.as_ref().cloned().unwrap();
     assert!((clip.surface.rgba(9, 9)[0] - 0.75).abs() < 2.0 / 255.0);
     assert!(clip.surface.rgba(5, 5)[3] < 0.01, "nothing outside the selection");
 }
@@ -715,8 +715,9 @@ fn layer_via_copy_and_cut_deselect_in_one_step() {
 }
 
 /// #2777: with several layers selected and no pixel selection, Layer via Copy (Cmd+J) copies
-/// every selected layer in one step, each copy above its original and the copies selected.
-/// With a pixel selection it still copies the active layer's selected pixels only.
+/// every selected layer in one step, the copies stacked above the topmost selected original in
+/// the originals' order (#11915), and the copies selected. With a pixel selection it still copies
+/// the active layer's selected pixels only.
 #[test]
 fn layer_via_copy_duplicates_every_selected_layer() {
     let mut s = session();
@@ -728,11 +729,12 @@ fn layer_via_copy_duplicates_every_selected_layer() {
     s.execute("layer.new.layerViaCopy", json!({})).unwrap();
     let st = s.active().unwrap();
     let ids: Vec<LayerId> = st.doc.layers.iter().map(|l| l.id).collect();
-    assert_eq!(ids.len(), 5, "background, a, a copy, b, b copy");
-    assert_eq!((ids[1], ids[3]), (a, b), "each copy sits above its original");
-    let mut selected = st.selected_layers();
-    selected.sort_by_key(|l| l.0);
-    assert_eq!(selected, vec![ids[2], ids[4]], "the copies become the selection");
+    assert_eq!(ids.len(), 5, "background, a, b, a copy, b copy");
+    assert_eq!((ids[1], ids[2]), (a, b), "the originals keep their order");
+    assert_eq!(st.selected_layers(), vec![ids[3], ids[4]], "the copies become the selection, in document order");
+    let surface = |id: LayerId| st.doc.layer(id).unwrap().surface().unwrap();
+    assert_eq!(surface(ids[3]), surface(a), "the first copy came from a");
+    assert_eq!(surface(ids[4]), surface(b), "the second copy came from b");
     assert_eq!(st.history.past_len(), steps + 1, "one undo step");
     assert!(s.undo());
     s.execute("layer.select", json!({"layer": b.0})).unwrap();
@@ -864,6 +866,93 @@ fn paste_several_layers_into_another_document() {
     }
 }
 
+/// #9736: a clipped layer copied without its base pastes released, as Photoshop's Copy/Paste does,
+/// so it can't clip to an unrelated layer it lands on. Copied with its base, it stays clipped to it.
+#[test]
+fn a_clipped_layer_copied_without_its_base_pastes_released() {
+    let mut s = session();
+    let base = s.active().unwrap().active_layer.unwrap();
+    let mid = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("type.create", json!({"text": "H", "size": 30, "x": 20, "y": 60})).unwrap();
+    let text = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.setProps", json!({"layer": text.0, "clipped": true})).unwrap();
+    s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let pasted = |s: &mut Session, ids: &[LayerId]| {
+        s.set_active(0);
+        s.execute("layer.select", json!({"layer": ids[0].0})).unwrap();
+        for id in &ids[1..] {
+            s.execute("layer.select", json!({"layer": id.0, "mode": "toggle"})).unwrap();
+        }
+        s.execute("edit.copy", json!({})).unwrap();
+        s.set_active(1);
+        s.execute("edit.paste", json!({})).unwrap();
+        let st = s.active().unwrap();
+        let top = &st.doc.layers[st.doc.layers.len() - ids.len()..];
+        let clipped: Vec<bool> = top.iter().map(|l| l.clipped).collect();
+        assert!(s.undo());
+        clipped
+    };
+    assert_eq!(pasted(&mut s, &[text]), [false], "alone: released, not clipped to the destination layer");
+    assert_eq!(pasted(&mut s, &[mid, text]), [false, true], "with its base: still clipped to it");
+    assert_eq!(pasted(&mut s, &[base, text]), [false, false], "its base left behind: not clipped to another copied layer");
+    s.set_active(0);
+    assert!(s.active().unwrap().doc.layer(text).unwrap().clipped, "the source is untouched");
+}
+
+/// #9736: a clipped layer's base is the nearest unclipped layer below it, not the next one, and a
+/// clipped group is released like a layer.
+#[test]
+fn a_clipped_layer_keeps_its_clip_with_its_base_however_far_below() {
+    let mut s = session();
+    let base = s.active().unwrap().active_layer.unwrap();
+    let add = |s: &mut Session| {
+        let id = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+        s.edit("paint", |doc, _| {
+            doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(Rect::new(20, 20, 40, 40), &[0.0, 0.0, 1.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("layer.setProps", json!({"layer": id.0, "clipped": true})).unwrap();
+        id
+    };
+    let (c1, c2, inner) = (add(&mut s), add(&mut s), add(&mut s));
+    s.execute("layer.groupLayers", json!({})).unwrap();
+    let group = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.setProps", json!({"layer": group.0, "clipped": true})).unwrap();
+    assert_eq!(crate::clip_group::base_of(&s.active().unwrap().doc, group), Some(base));
+    let inner_clipped = s.active().unwrap().doc.layer(inner).unwrap().clipped;
+    s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let pasted = |s: &mut Session, ids: &[LayerId]| {
+        s.set_active(0);
+        s.execute("layer.select", json!({"layer": ids[0].0})).unwrap();
+        for id in &ids[1..] {
+            s.execute("layer.select", json!({"layer": id.0, "mode": "toggle"})).unwrap();
+        }
+        s.execute("edit.copy", json!({})).unwrap();
+        s.set_active(1);
+        s.execute("edit.paste", json!({})).unwrap();
+        let st = s.active().unwrap();
+        let top = &st.doc.layers[st.doc.layers.len() - ids.len()..];
+        let clipped: Vec<bool> = top.iter().map(|l| l.clipped).collect();
+        let inner_clipped = top.iter().find_map(|l| match &l.content {
+            LayerContent::Group(g) => g.children.first().map(|c| c.clipped),
+            _ => None,
+        });
+        assert!(s.undo());
+        (clipped, inner_clipped)
+    };
+    assert_eq!(pasted(&mut s, &[base, c2]).0, [false, true], "c1 between them left behind: c2 still clips to the base");
+    assert_eq!(pasted(&mut s, &[c1, c2]).0, [false, false], "two clipped layers without their base");
+    assert_eq!(pasted(&mut s, &[group]), (vec![false], Some(inner_clipped)), "the group is released, its contents untouched");
+    assert_eq!(pasted(&mut s, &[base, group]).0, [false, true], "the group with its base");
+    s.set_active(0);
+    let doc = &s.active().unwrap().doc;
+    assert!([c1, c2, group].iter().all(|id| doc.layer(*id).unwrap().clipped), "the source is untouched");
+    assert_eq!(doc.layer(inner).unwrap().clipped, inner_clipped);
+}
+
 /// #2478: the Background in a multi-layer copy pastes as an ordinary, unlocked layer.
 #[test]
 fn copying_the_background_with_another_layer_pastes_an_ordinary_layer() {
@@ -976,7 +1065,7 @@ fn cross_document_group_paste_renders_shapes_on_destination_canvas() {
             s.execute("layer.layerStyle.dropShadow", json!({"size":4,"distance":3})).unwrap();
             ids.push(s.active().unwrap().active_layer.unwrap());
         }
-        s.active_mut().unwrap().selected_layers = ids;
+        *s.active_mut().unwrap().selection_mut() = ids;
         s.execute("layer.groupLayers", json!({})).unwrap();
         s.execute("edit.copy", json!({})).unwrap();
         s.execute("file.new", json!({"width":800,"height":600,"depth":depth})).unwrap();
@@ -1049,7 +1138,7 @@ fn copy_paste_keeps_fill_and_adjustment_layers() {
         let src = s.active().unwrap().active_layer.unwrap();
         assert!(s.is_enabled("edit.copy"), "{depth}-bit: a fill layer can be copied");
         assert_eq!(s.execute("edit.copy", json!({})).unwrap()["bounds"], json!([0, 0, 60, 40]), "{depth}-bit: what it shows");
-        let clip = s.clipboard.clone().unwrap();
+        let clip = s.clipboard.as_ref().cloned().unwrap();
         assert!(clip.surface.rgba(59, 20)[0] > clip.surface.rgba(0, 20)[0], "{depth}-bit: the clip holds the gradient's pixels");
         let steps = s.active().unwrap().history.past_len();
         s.execute("edit.pasteSpecial.pasteInPlace", json!({})).unwrap();
@@ -1666,7 +1755,7 @@ fn paste_on_the_same_artboard_or_off_the_boards_is_unchanged() {
     s.execute("layer.select", json!({"layer": bg.0})).unwrap();
     assert_eq!(s.execute("edit.paste", json!({})).unwrap()["offset"], json!([0, 0]));
     // Paste Into's `clampToCanvas: false` keeps its own centring.
-    let clip = s.clipboard.clone().unwrap();
+    let clip = s.clipboard.as_ref().cloned().unwrap();
     let doc = &s.active().unwrap().doc;
     let on_b = doc.artboards().iter().find(|x| x.1 == "B").map(|x| x.0);
     let inside = doc.layer(on_b.unwrap()).unwrap().id;
@@ -1839,9 +1928,10 @@ fn paste_onto_a_smaller_artboard_keeps_the_offset_and_the_board_clips_the_rest()
     assert!(!(px(315, 35)[0] > 0.99 && px(315, 35)[1] < 0.01), "clipped past S's edge");
 }
 
-/// A pasted layer that joins a board keeps its own clipping while the board already holds a layer
-/// it can clip to, and drops it on an empty board (#10538 review): a clipped group copied whole
-/// from board A and pasted onto smaller boards S (holding a layer) and E (empty).
+/// A clipped group copied without its base is released, including when it joins a board that
+/// already holds a layer (#9736, #9833): Copy drops the clip so the paste does not attach to
+/// whatever it lands on. #10538 used to keep the clip when the destination board already had a
+/// layer; that no longer applies once the base is left behind.
 #[test]
 fn a_clipped_paste_joining_a_board_stays_clipped_only_over_a_layer() {
     let (mut s, red, a, _b) = two_boards();
@@ -1871,7 +1961,7 @@ fn a_clipped_paste_joining_a_board_stays_clipped_only_over_a_layer() {
         let id = st.active_layer.unwrap();
         (st.doc.artboard_of(id), st.doc.layer(id).unwrap().clipped)
     };
-    assert_eq!(paste_on(&mut s, sb), (Some(sb), true), "S holds a layer to clip to");
+    assert_eq!(paste_on(&mut s, sb), (Some(sb), false), "released even though S holds a layer");
     assert_eq!(paste_on(&mut s, eb), (Some(eb), false), "E is empty");
 }
 

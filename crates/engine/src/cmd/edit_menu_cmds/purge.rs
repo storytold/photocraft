@@ -7,7 +7,7 @@ fn history_bytes(s: &Session, all: bool) -> usize {
     // Purge keeps the snapshots, so the tiles they share with the states aren't freed.
     docs.iter()
         .map(|d| {
-            let snaps: Vec<&photocraft_doc::Document> = d.snapshots.iter().map(|s| &*s.doc).collect();
+            let snaps: Vec<&photocraft_doc::Document> = d.snapshots().iter().map(|s| &*s.doc).collect();
             d.history.unique_bytes_besides(&d.doc, &snaps)
         })
         .sum()
@@ -31,8 +31,8 @@ pub(super) fn purge(s: &mut Session, what: &str) -> Result<Value> {
     }
     if matches!(what, "clipboard" | "all") && (s.clipboard.is_some() || s.style_clipboard.is_some()) {
         freed += clip_bytes(s);
-        s.clipboard = None;
-        s.style_clipboard = None;
+        *s.clipboard = None;
+        *s.style_clipboard = None;
         items.push("clipboard");
     }
     if matches!(what, "histories" | "all") {

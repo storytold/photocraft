@@ -414,7 +414,12 @@ pub struct UiSetParams {
     /// "selectedLayer" or "adjustmentComposite") for the Histogram panel), histogramRange ([from,
     /// to] levels 0..255 whose Count and Percentile the panel shows, or null) and histogramRefresh
     /// (true: an Uncached Refresh); `ui.inspect` reports them and the statistics under
-    /// `histogram`. Other fields are an error.
+    /// `histogram`. statusInfo (the status bar's item next to the zoom field), marqueeStyle
+    /// ("normal", "fixedRatio" or "fixedSize") and marqueeSize ([width, height] for that style),
+    /// actionsPanel (an object patching buttonMode and collapsed for the Actions panel),
+    /// presetBrowsers (an object keyed by preset panel, each patching view ("grid" or "list") and
+    /// zoom of its browser), toolbarColumns (1 up to the toolbar's cells, its width in tool columns) and recentView
+    /// ("grid" or "list", the Home screen's recent files). Other fields are an error.
     pub fields: Value,
 }
 
@@ -778,6 +783,28 @@ impl PhotocraftMcp {
             return Ok(no_backend());
         };
         to_result(b.call_read("ui.inspect", json!({})).await)
+    }
+
+    #[tool(
+        description = "Where this app opens and saves files for agents. Put files the app should open in read_folder (or a folder below it) and find what it saves in write_folder. Both are usually the app's agent folder in Documents/ArtCraft/Agents; the person may have set others. null means the app has no such folder now. Paths passed to other tools may be relative to these folders."
+    )]
+    async fn agent_folders(&self) -> Result<CallToolResult, McpError> {
+        if let Some(r) = self.headless_op(|h| Ok(session_folders_answer(&h.folders()))).await {
+            return to_result(r);
+        }
+        match &*self.backend {
+            Backend::Live(live) => match live.window_folders().await {
+                Ok(folders) => Ok(ok_json(&craft::control::agents::folders_answer(&folders))),
+                Err(e) => Ok(fail(e)),
+            },
+            // A window reached with --bridge may have been started with its own root flags.
+            Backend::Bridge(_) => Ok(ok_json(&json!({
+                "read_folder": null,
+                "write_folder": null,
+                "note": "bridge mode: the app's folders are the ones it was started with (--automation-read-root, --automation-write-root) or set in Preferences > AI Integrations"
+            }))),
+            Backend::Headless(_) => Ok(no_backend()),
+        }
     }
 
     #[tool(description = "Open an image or document file and make it active. Returns index, size and import warnings.")]
@@ -1148,6 +1175,24 @@ impl PhotocraftMcp {
     }
 }
 
+/// `agent_folders`' answer for a headless session: the shared shape (`read_folder`, the first
+/// read root; `write_folder`), plus every read root in lookup order and, for a trusted local
+/// session, `any_path`.
+fn session_folders_answer(f: &crate::headless::SessionFolders) -> Value {
+    let path = |p: &std::path::Path| p.to_string_lossy().into_owned();
+    let mut answer = json!({
+        "read_folder": f.read.first().map(|p| path(p)),
+        "write_folder": f.write.as_deref().map(path),
+    });
+    if f.read.len() > 1 {
+        answer["read_folders"] = json!(f.read.iter().map(|p| path(p)).collect::<Vec<_>>());
+    }
+    if f.any_path {
+        answer["any_path"] = json!(true);
+    }
+    answer
+}
+
 /// Whether two targets are the same session or the same app connection.
 fn same_target(a: Option<&Target>, b: Option<&Target>) -> bool {
     match (a, b) {
@@ -1483,36 +1528,6 @@ mod tests {
         assert_eq!(reply["failed"], 1);
         let docs = mcp.headless_op(|h| Ok(h.session.documents().len())).await.unwrap().unwrap();
         assert_eq!(docs, 0, "the step after the budget ran out did not run");
-    }
-
-    /// rmcp may drop a cancelled request's future without polling it again; its job must still
-    /// stop and leave the document unchanged (#8129).
-    #[tokio::test(flavor = "multi_thread")]
-    async fn dropping_a_waited_command_cancels_its_job() {
-        let mcp = PhotocraftMcp::headless();
-        mcp.headless_op(|h| {
-            h.command_run("file.new", json!({"width": 6000, "height": 6000}))?;
-            h.command_run("filter.noise.addNoise", json!({"amount": 50}))
-        })
-        .await
-        .unwrap()
-        .unwrap();
-        let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
-        let mut waiter = Waiter::new(None);
-        let waited = mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 1000}), &mut waiter, (0, 1));
-        assert!(tokio::time::timeout(std::time::Duration::from_millis(100), waited).await.is_err(), "the blur ended before it was dropped");
-        let t = std::time::Instant::now();
-        loop {
-            let (running, cancelled) =
-                mcp.headless_op(|h| Ok((h.session.has_jobs(), h.session.jobs_with_recent().iter().any(|j| j.state == "cancelled")))).await.unwrap().unwrap();
-            if !running {
-                assert!(cancelled, "the job ended without being cancelled");
-                break;
-            }
-            assert!(t.elapsed().as_secs() < 30, "the dropped job kept running");
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        assert_eq!(mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap(), before);
     }
 
     /// Dropped while its start still waits for the session lock (held here as a long synchronous

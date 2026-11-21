@@ -16,12 +16,14 @@ use crate::commands::CommandSpec;
 use crate::layer_style::effect_from_params;
 use crate::{EngineError, Result, Session};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct StylePreset {
     pub name: String,
+    #[plain_data(assume = "document effects: plain values")]
     pub effects: Vec<Effect>,
     /// Blending options saved with the style ("Include Layer Blending Options").
     #[serde(default)]
+    #[plain_data(assume = "an enum")]
     pub blend: Option<BlendMode>,
     #[serde(default)]
     pub fill_opacity: Option<f32>,
@@ -280,7 +282,7 @@ fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
         },
-        blend: p.get("blend").and_then(Value::as_str).and_then(crate::commands::blend_from_str).or_else(|| with_blend.then_some(l.blend)),
+        blend: p.get("blend").and_then(Value::as_str).and_then(crate::commands::parse_blend).or_else(|| with_blend.then_some(l.blend)),
         fill_opacity: p.get("fillOpacity").and_then(Value::as_f64).map(|v| (v / 100.0).clamp(0.0, 1.0) as f32).or_else(|| with_blend.then_some(l.fill_opacity)),
         opacity: p.get("opacity").and_then(Value::as_f64).map(|v| (v / 100.0).clamp(0.0, 1.0) as f32).or_else(|| with_blend.then_some(l.opacity)),
     };
