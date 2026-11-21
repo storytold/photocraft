@@ -452,7 +452,14 @@ fn write_params(value: &AdjustValue, cx: &ValueCx) -> Value {
             write_levels(&mut out, &entries, levels, space, cx);
         }
         AdjustValue::Curves { curves } => {
-            let space = space_of(&cx.base, cx.mode);
+            // A grayscale document's Curves is its one Gray curve: the records of another mode its params still hold (a
+            // Lab `lightness`, CMYK inks, an RGB document's Red curve recalled with ⌥⌘M) are dropped, as reading drops
+            // them, or the engine would render them instead of the curve shown (CodeRabbit on #9234).
+            let base = if is_gray(cx.mode) && cx.isolated.is_none() { adjust_params::gray_tone_params(&cx.base) } else { cx.base.clone() };
+            if base != cx.base {
+                out = object(&base);
+            }
+            let space = space_of(&base, cx.mode);
             let entries = tone_entries(space, cx.gray(), cx.isolated.as_ref());
             write_curves(&mut out, &entries, curves, space, cx);
         }

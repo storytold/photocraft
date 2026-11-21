@@ -442,3 +442,128 @@ fn black_white_auto_button_sets_the_weights() {
     assert_ne!(after, before, "the red and blue are told apart");
     assert_eq!(history_len(&h), steps + 1);
 }
+
+/// The Curves Preset menu (#9221): the dropdown named Preset, if the editor shows one.
+fn preset_shown(h: &Harness<'_, Box<PhotocraftApp>>) -> Option<String> {
+    h.query_all_by_role(Role::ComboBox).find(|n| n.accesskit_node().label().as_deref() == Some("Preset")).map(|n| n.value().unwrap_or_default())
+}
+
+/// Opens the Preset menu and picks the entry `label`.
+fn pick_preset(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str) {
+    h.query_all_by_role(Role::ComboBox).find(|n| n.accesskit_node().label().as_deref() == Some("Preset")).expect("the Preset menu").click();
+    h.run_steps(4);
+    h.get_all_by_label(label).rfind(|n| n.accesskit_node().role() != Role::ComboBox).unwrap_or_else(|| panic!("a {label} entry")).click();
+    h.run_steps(4);
+}
+
+fn points(curve: &[photocraft_doc::adjust::CurvePoint]) -> Vec<[f32; 2]> {
+    curve.iter().map(|p| [(p.input * 255.0 * 100.0).round() / 100.0, (p.output * 255.0 * 100.0).round() / 100.0]).collect()
+}
+
+/// #9221: the Preset menu loads a preset's curves into the layer as one history step, names it,
+/// and reads Custom once the curve is edited by hand.
+#[test]
+fn curves_preset_menu_loads_a_preset_and_reads_custom_after_an_edit() {
+    let mut h = app_harness("curves", "rgb", 8);
+    assert_eq!(preset_shown(&h).as_deref(), Some("Default"), "a new Curves layer is at Default");
+    let steps = history_len(&h);
+    pick_preset(&mut h, "Strong Contrast");
+    let (id, adjustment) = layer(&h);
+    match adjustment {
+        Adjustment::Curves { master, per_channel, pencil, .. } => {
+            assert_eq!(points(&master), [[0.0, 0.0], [72.0, 45.0], [144.0, 142.0], [160.0, 167.0], [192.0, 208.0], [255.0, 255.0]]);
+            assert!(per_channel.iter().all(|c| c.is_empty() || points(c) == [[0.0, 0.0], [255.0, 255.0]]), "a tone preset leaves the channels straight");
+            assert!(!pencil);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(history_len(&h), steps + 1, "one history step");
+    assert_eq!(preset_shown(&h).as_deref(), Some("Strong Contrast"), "the menu shows the preset");
+    h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "points": [[0, 0], [64, 30], [192, 220], [255, 255]]})).unwrap();
+    h.run_steps(4);
+    assert_eq!(preset_shown(&h).as_deref(), Some("Custom"), "an edited curve is Custom");
+    pick_preset(&mut h, "Cross Process");
+    match layer(&h).1 {
+        Adjustment::Curves { master, per_channel, .. } => {
+            assert_eq!(points(&master), [[0.0, 0.0], [255.0, 255.0]], "a colour preset leaves the composite straight");
+            assert_eq!(points(&per_channel[1])[1], [32.0, 9.0], "and sets each channel's curve");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// #9221: the presets are RGB curves, so a CMYK or Lab Curves layer has no Preset menu; an RGB or a
+/// grayscale one does, and a grayscale one offers only the tone presets.
+#[test]
+fn curves_preset_menu_only_in_rgb_and_grayscale() {
+    for (mode, shown) in [("rgb", true), ("grayscale", true), ("cmyk", false), ("lab", false)] {
+        let mut h = app_harness("curves", mode, 8);
+        assert!(h.query_all_by_role(Role::ComboBox).next().is_some(), "{mode}: the Curves editor is drawn");
+        assert_eq!(preset_shown(&h).is_some(), shown, "{mode}: the Preset menu");
+        if mode == "grayscale" {
+            h.query_all_by_role(Role::ComboBox).find(|n| n.accesskit_node().label().as_deref() == Some("Preset")).unwrap().click();
+            h.run_steps(4);
+            assert!(h.query_by_label("Darker").is_some() && h.query_by_label("Cross Process").is_none(), "{mode}: tone presets only");
+        }
+    }
+}
+
+/// #9221: a preset goes through the engine into the layer and the editor, reading the layer back,
+/// still names it (the engine keeps the points to 0.01), in RGB and in a grayscale document.
+#[test]
+fn curves_presets_keep_their_names_through_the_engine() {
+    for (mode, gray) in [("rgb", false), ("grayscale", true)] {
+        let mut h = app_harness("curves", mode, 8);
+        let presets: Vec<&crate::curves_presets::CurvesPreset> = crate::curves_presets::available(gray).collect();
+        for preset in presets.iter().skip(1).chain(presets.first()) {
+            pick_preset(&mut h, preset.label);
+            assert_eq!(preset_shown(&h).as_deref(), Some(preset.label), "{mode}: {}", preset.id);
+        }
+    }
+}
+
+/// CodeRabbit on #9234: a Curves layer made in a Lab document keeps its Lab records through
+/// Image › Mode › Grayscale. A preset chosen in its Properties panel turns it into the Gray curve
+/// it shows and the image follows (the engine would read the stale `lightness` record instead).
+#[test]
+fn grayscale_curves_layer_with_lab_records_follows_a_preset() {
+    use photocraft_doc::adjust::ToneSpace;
+    let mut h = app_harness("curves", "lab", 8);
+    h.state_mut().run("image.mode.grayscale", json!({})).unwrap();
+    h.run_steps(4);
+    assert!(matches!(layer(&h).1, Adjustment::Curves { space: ToneSpace::Lab, .. }), "{:?}", layer(&h).1);
+    let gray = |h: &mut Harness<'_, Box<PhotocraftApp>>| h.state_mut().run("document.pixel", json!({"x": 10, "y": 10})).unwrap()[0].as_f64().unwrap();
+    let before = gray(&mut h);
+    assert_eq!(preset_shown(&h).as_deref(), Some("Default"), "the Preset menu, at Default");
+    pick_preset(&mut h, "Darker");
+    match layer(&h).1 {
+        Adjustment::Curves { space, master, .. } => {
+            assert_eq!(space, ToneSpace::Rgb, "the Gray curve's tone space");
+            assert!((master[1].input * 255.0 - 128.0).abs() < 0.01 && (master[1].output * 255.0 - 99.0).abs() < 0.01, "Darker: {master:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+    let after = gray(&mut h);
+    assert!(after < before - 0.02, "Darker darkened the image: {before} -> {after}");
+}
+
+/// CodeRabbit on #9234: an RGB Curves layer with a bent Red curve, after Image › Mode › Grayscale,
+/// shows its one Gray curve; Darker chosen there renders Darker alone, not over the stale Red curve.
+#[test]
+fn grayscale_curves_layer_with_a_red_curve_renders_a_preset_alone() {
+    let gray = |h: &mut Harness<'_, Box<PhotocraftApp>>| h.state_mut().run("document.pixel", json!({"x": 70, "y": 10})).unwrap()[0].as_f64().unwrap();
+    // Darker's gray on this image, from a grayscale document's own Curves layer.
+    let mut h = app_harness("curves", "grayscale", 8);
+    pick_preset(&mut h, "Darker");
+    let expected = gray(&mut h);
+    let mut h = app_harness("curves", "rgb", 8);
+    let id = layer(&h).0;
+    h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "red": [[0, 0], [64, 230], [255, 255]]})).unwrap();
+    h.state_mut().run("image.mode.grayscale", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(preset_shown(&h).as_deref(), Some("Default"), "the Gray curve is straight");
+    pick_preset(&mut h, "Darker");
+    assert_eq!(preset_shown(&h).as_deref(), Some("Darker"));
+    let after = gray(&mut h);
+    assert!((after - expected).abs() < 1.0 / 255.0, "Darker alone renders {expected}, got {after}");
+}
