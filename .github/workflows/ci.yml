@@ -297,7 +297,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: ${{ fromJSON(github.head_ref == 'ci/15703-no-heif-dev-trial' && '["control","helper","helper-dev"]' || '["control"]') }}
+        variant: ${{ fromJSON(github.head_ref == 'ci/15703-no-heif-trial' && '["control","helper","helper-dev"]' || '["control"]') }}
     # The gate's runner: its cache entry is keyed on the OS.
     runs-on: ubuntu-24.04
     env:
@@ -342,7 +342,7 @@ jobs:
           align-environment: "true"
 
       - name: Record restored Cargo fingerprints for the trial
-        if: github.head_ref == 'ci/15703-no-heif-dev-trial'
+        if: github.head_ref == 'ci/15703-no-heif-trial'
         run: python3 scripts/no_heif_trial_fingerprints.py before "${CARGO_BUILD_BUILD_DIR:-${CARGO_TARGET_DIR:-target}}" "$RUNNER_TEMP/io-fingerprints.json"
 
       - uses: step-security/taiki-e-install-action@76747d22a7567cc4438546a84f11bdf18e670ab8 # v2.87.32
@@ -361,7 +361,7 @@ jobs:
           fi
 
       - name: Check the decoder selection
-        if: github.head_ref == 'ci/15703-no-heif-dev-trial'
+        if: github.head_ref == 'ci/15703-no-heif-trial'
         env:
           VARIANT: ${{ matrix.variant }}
         run: |
@@ -376,11 +376,11 @@ jobs:
           grep -q '^craft-heif v' "$RUNNER_TEMP/heif-tree"
 
       - name: Test without heif
-        if: github.head_ref != 'ci/15703-no-heif-dev-trial'
+        if: github.head_ref != 'ci/15703-no-heif-trial'
         run: cargo nextest run -p photocraft-io --locked --profile ci
 
       - name: Test without heif (trial)
-        if: github.head_ref == 'ci/15703-no-heif-dev-trial'
+        if: github.head_ref == 'ci/15703-no-heif-trial'
         env:
           CARGO_TERM_COLOR: never
           VARIANT: ${{ matrix.variant }}
@@ -395,7 +395,7 @@ jobs:
           awk '/^[[:space:]]*Compiling / {n++} END {print "Compiling lines: " n+0}' "$RUNNER_TEMP/no-heif-test.log" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Report Cargo fingerprint changes for the trial
-        if: github.head_ref == 'ci/15703-no-heif-dev-trial'
+        if: github.head_ref == 'ci/15703-no-heif-trial'
         run: python3 scripts/no_heif_trial_fingerprints.py after "${CARGO_BUILD_BUILD_DIR:-${CARGO_TARGET_DIR:-target}}" "$RUNNER_TEMP/io-fingerprints.json"
 
   corpus:
