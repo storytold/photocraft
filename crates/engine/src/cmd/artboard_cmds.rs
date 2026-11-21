@@ -953,8 +953,12 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => true,
         Some(v) => v.as_bool().ok_or_else(|| bad(cmd, "`includeIcc` must be true or false"))?,
     };
-    // Only a profile whose header says RGB can describe the RGB page images (#13653); any other is left out.
-    let icc = doc.icc_profile.as_deref().map(Vec::as_slice).filter(|icc| include_icc && icc.len() >= 128 && icc.get(16..20) == Some(b"RGB "));
+    // Only a readable RGB profile can describe the RGB page images (#13653); any other is left out.
+    let icc = doc
+        .icc_profile
+        .as_deref()
+        .map(Vec::as_slice)
+        .filter(|icc| include_icc && craft_cms::Profile::parse(icc).is_ok_and(|p| p.color_space == craft_cms::ColorSpace::Rgb));
     let mut pages = Vec::new();
     // Pages go bottom artboard of the Layers panel first, as in the reference application (#13643);
     // `chosen_documents` lists them top first, the order Artboards to Files keeps.

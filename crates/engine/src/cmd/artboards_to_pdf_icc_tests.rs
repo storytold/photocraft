@@ -99,11 +99,24 @@ fn unticked_no_page_has_a_colour_space_resource() {
     assert!(!String::from_utf8_lossy(&pdf).contains("ICCBased"));
 }
 
+/// 128 zero bytes with only the RGB colour space in the header: not a profile the ICC parser reads.
+fn rgb_header_only() -> Arc<Vec<u8>> {
+    let mut bytes = vec![0u8; 128];
+    bytes[16..20].copy_from_slice(b"RGB ");
+    Arc::new(bytes)
+}
+
 #[test]
 fn a_profile_that_is_not_rgb_or_unreadable_is_left_out() {
     let gray = Builtin::SGray.profile().to_bytes();
     let cmyk = Builtin::CoatedCmyk.profile().to_bytes();
-    for (tag, profile) in [("gray", Some(gray)), ("cmyk", Some(cmyk)), ("short", Some(Arc::new(b"RGB junk".to_vec()))), ("none", None)] {
+    for (tag, profile) in [
+        ("gray", Some(gray)),
+        ("cmyk", Some(cmyk)),
+        ("short", Some(Arc::new(b"RGB junk".to_vec()))),
+        ("rgb header only", Some(rgb_header_only())),
+        ("none", None),
+    ] {
         let mut s = session(profile);
         let pdf = export(&mut s, tag, json!({"includeIcc": true})).unwrap_or_else(|e| panic!("{tag}: {e}"));
         let pages = pages(&pdf);
