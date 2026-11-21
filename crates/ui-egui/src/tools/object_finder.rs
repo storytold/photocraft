@@ -25,7 +25,7 @@ use craft::ui::canvas_controls::{HoverMask, HoverOutline, HoverShape};
 use craft::ui::contract::Show as _;
 use photocraft_algo::selection::Region;
 use photocraft_doc::{DocId, Document, LayerId};
-use photocraft_engine::smartselect_cmds::{empty_sampled_area, find_object, sampled_target};
+use photocraft_engine::smartselect_cmds::{find_object, plain_group_active, point_reports_sampled_pixels_error, sampled_target};
 
 use crate::PhotocraftApp;
 use crate::canvas::tools::in_gesture;
@@ -75,7 +75,7 @@ pub(crate) struct Update {
     pub hint: Option<&'static str>,
 }
 
-/// The status-bar hint while hovering where the sampled layer has no pixels (the click reports the same as an error).
+/// The status-bar hint while hovering where the click answers #5246's error ([`point_reports_sampled_pixels_error`]).
 fn empty_layer_hint() -> &'static str {
     tl!("The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels")
 }
@@ -113,6 +113,17 @@ pub(crate) fn update(app: &mut PhotocraftApp, at: Option<[f64; 2]>, pressed: boo
     let px = [at[0].floor() as i32, at[1].floor() as i32];
     let fresh = app.object_finder.as_ref().is_some_and(|f| f.doc == doc && f.revision == revision && f.target == target && f.all_layers == all_layers);
     let doc_arc = Arc::clone(&st.doc);
+    // A plain group's click commits the whole canvas (#12863): a settled highlight on a
+    // composite object under the pointer would name an object the click does not select, so
+    // hover shows nothing in exactly that state (#15472 review).
+    if plain_group_active(&doc_arc, layer, all_layers) {
+        return Update {
+            shown: None,
+            #[cfg(test)]
+            busy: false,
+            hint: None,
+        };
+    }
     if !fresh {
         let manual = app.ui.tool_options.object_finder_mode == ObjectFinderMode::Manual;
         match app.object_finder.as_mut() {
@@ -130,9 +141,10 @@ pub(crate) fn update(app: &mut PhotocraftApp, at: Option<[f64; 2]>, pressed: boo
             _ => app.object_finder = start(app),
         }
     }
-    // The click reports an empty sampled layer; the hover says so too instead of showing nothing.
+    // The click answers #5246's error at exactly the points the shared predicate names; the
+    // hover hints there, and nowhere else on the canvas (#15472 review).
     let here = photocraft_geom::Rect::from_xywh(px[0], px[1], 1, 1);
-    if doc_arc.bounds().contains(px[0], px[1]) && empty_sampled_area(&doc_arc, layer, all_layers, here).is_some() {
+    if doc_arc.bounds().contains(px[0], px[1]) && point_reports_sampled_pixels_error(&doc_arc, layer, all_layers, here) {
         return Update {
             shown: None,
             #[cfg(test)]
@@ -360,6 +372,62 @@ mod tests {
         app.ui.tool_options.sample_all.object_selection = true;
         assert!(update(&mut app, Some([100.0, 80.0]), false, 100.0, &ctx).hint.is_none());
         assert!(hover(&mut app, [100.0, 80.0]).shown.is_some());
+    }
+
+    /// #15472 review round 2 (smartselect_cmds.rs:535): with a plain group active and Sample
+    /// All Layers off, the click commits the whole canvas (#12863). Hovering the composite's
+    /// object inside that group would name an object the click does not select - so hover
+    /// stays silent in exactly that state.
+    #[test]
+    fn hovering_a_plain_group_highlights_nothing_the_click_would_not_select() {
+        let mut app = disc_app();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        app.session
+            .edit("paint", |doc, a| {
+                let s = doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap();
+                for y in 0..160 {
+                    for x in 0..200 {
+                        let (dx, dy) = (x as f32 + 0.5 - 100.0, y as f32 + 0.5 - 80.0);
+                        if dx * dx + dy * dy <= 45.0 * 45.0 {
+                            s.fill_rect(photocraft_geom::Rect::new(x, y, x + 1, y + 1), &[0.9, 0.2, 0.1, 1.0]);
+                        }
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
+        let card = app.session.active().unwrap().active_layer.unwrap();
+        app.session.execute("layer.groupLayers", json!({"layer": card, "name": "Group"})).unwrap();
+        let group = app.session.active().unwrap().doc.layers.iter().find(|l| l.name == "Group").unwrap().id;
+        app.session.execute("layer.select", json!({"layer": group})).unwrap();
+        let u = hover(&mut app, [100.0, 80.0]);
+        assert!(u.shown.is_none(), "the group's click commits the whole canvas - hover names no composite object");
+        assert!(u.hint.is_none(), "and the click gives no #5246 error - hover hints nothing");
+        assert_eq!(app.session.object_finder.len(), 0, "the composite fallback never enters the cache");
+    }
+
+    /// #15472 review round 2 (retouch_ui.rs:612): the "no pixels" hint belongs where the click
+    /// answers #5246's error - an empty sampled layer, on the canvas. Over the empty spot of a
+    /// layer that has pixels elsewhere the click answers silently or with an area (#12863),
+    /// so hover says nothing either.
+    #[test]
+    fn hovering_transparency_on_a_layer_with_pixels_elsewhere_stays_silent() {
+        let mut app = disc_app();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        app.session
+            .edit("paint", |doc, a| {
+                let s = doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap();
+                for y in 40..120 {
+                    for x in 60..140 {
+                        s.fill_rect(photocraft_geom::Rect::new(x, y, x + 1, y + 1), &[0.9, 0.2, 0.1, 1.0]);
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
+        let u = hover(&mut app, [4.0, 4.0]);
+        assert!(u.hint.is_none(), "pixels elsewhere on the layer: no #5246 error at the spot, so no hint");
+        assert!(u.shown.is_none(), "and nothing is highlighted there");
     }
 
     #[test]

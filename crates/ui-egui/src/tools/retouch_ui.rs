@@ -621,13 +621,15 @@ pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f
     if (w < 2.0 || h < 2.0) && app.ui.tool_options.object_finder {
         // Object Finder (#4087): the object under the click, as hovering highlighted it.
         // A click that finds nothing stays silent, as in the reference application (#12861):
-        // where the sampled layer has no pixels the engine's error is not run into either.
+        // where the point click would only report the engine's empty-sampled-pixels error, the
+        // command is not run at all - gated on the shared #12863 predicate, so a plain-group
+        // click and the flat-area answers keep running and commit their selection (#12863).
         let here = photocraft_geom::Rect::from_xywh((end[0] as f32).floor() as i32, (end[1] as f32).floor() as i32, 1, 1);
-        let empty = app
+        let no_pixels = app
             .session
             .active()
-            .is_some_and(|st| photocraft_engine::smartselect_cmds::empty_sampled_area(&st.doc, st.active_layer, sample_all, here).is_some());
-        if !empty {
+            .is_some_and(|st| photocraft_engine::smartselect_cmds::point_reports_sampled_pixels_error(&st.doc, st.active_layer, sample_all, here));
+        if !no_pixels {
             let _ = app.run("select.object", json!({"point": [end[0], end[1]], "mode": mode, "sampleAllLayers": sample_all, "hardEdge": hard_edge}));
         }
         crate::object_finder::clear(app);

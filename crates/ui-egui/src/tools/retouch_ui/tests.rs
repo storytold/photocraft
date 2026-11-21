@@ -391,6 +391,42 @@ fn selection_tools_send_their_bar_values() {
     }
 }
 
+#[test]
+fn object_selection_finder_click_on_a_uniform_background_selects_the_whole_canvas() {
+    // #12863: an Object Finder click on a flat white Background selects the canvas in one
+    // step; it no longer answers "No object found there".
+    let mut app = app();
+    app.ui.tool = Tool::ObjectSelection;
+    app.ui.tool_options.object_finder = true;
+    let m = egui::Modifiers::NONE;
+    tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 30.0, pressure: 1.0 }, m);
+    tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 30.0 }, m);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    let st = app.session.active().unwrap();
+    let sel = st.doc.selection.as_ref().expect("the whole canvas is selected");
+    assert!(sel.sample_channel(1, 1, 0) > 0.99 && sel.sample_channel(98, 58, 0) > 0.99, "every corner of the 100 x 60 canvas");
+    assert!(app.ui.status.is_empty(), "no empty-result message for a click that selects: {:?}", app.ui.status);
+}
+
+#[test]
+fn object_selection_finder_click_that_finds_nothing_stays_silent() {
+    // #12863 (shared with #12861): a click that finds nothing selects nothing, shows no
+    // message and adds no History step.
+    let mut app = app();
+    app.run("paint.pencil", json!({"points": [[20, 10]], "size": 8, "color": "#ff0000"})).unwrap();
+    app.ui.tool = Tool::ObjectSelection;
+    app.ui.tool_options.object_finder = true;
+    let before = app.session.active().unwrap().history.past_len();
+    let m = egui::Modifiers::NONE;
+    tool_event(&mut app, ToolEvent::Down { x: 85.0, y: 45.0, pressure: 1.0 }, m);
+    tool_event(&mut app, ToolEvent::Up { x: 85.0, y: 45.0 }, m);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert!(app.ui.status.is_empty(), "silent: {:?}", app.ui.status);
+    let st = app.session.active().unwrap();
+    assert!(st.doc.selection.is_none(), "nothing selected");
+    assert_eq!(st.history.past_len(), before, "no history step");
+}
+
 /// Bug #668: setting the source (⌥-click) leaves nothing on the canvas; the marker shows while a stroke is painted.
 #[test]
 fn clone_marker_shows_only_while_painting() {

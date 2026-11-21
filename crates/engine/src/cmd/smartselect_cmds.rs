@@ -81,15 +81,35 @@ impl Sampler for FlatSampler {
     }
 }
 
+/// A plain group: no frame, no artboard. The group kind whose clicks are measured for Quick
+/// Selection (#12933) and Object Selection (#12863); artboards and frames keep today's answer.
+fn plain_group(l: &Layer) -> bool {
+    l.frame.is_none() && matches!(&l.content, LayerContent::Group(g) if g.artboard.is_none())
+}
+
+/// Whether `select.object` with `"point"` answers the whole-canvas area for this target
+/// (#12863): a plain group active with Sample All Layers off. The Object Finder hover runs on
+/// the same predicate, so its highlight never names an object the click will not commit
+/// (#15472 review).
+pub fn plain_group_active(doc: &Document, layer: Option<LayerId>, all_layers: bool) -> bool {
+    !all_layers && layer.and_then(|id| doc.layer(id)).is_some_and(plain_group)
+}
+
 /// Runs `f` with Quick Selection's sampler: [`with_sampler`]'s, except that with a group active
 /// and Sample All Layers off it reads a flat area, so a click selects only the brush disc instead
 /// of the composite's shapes, as the reference application does (#12933). Artboards and frames,
 /// groups too but not measured, keep reading the composite.
 fn with_quick_sampler<R>(s: &Session, all_layers: bool, f: impl FnOnce(&dyn Sampler, &Document) -> R) -> Result<R> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let plain_group = |l: &Layer| l.frame.is_none() && matches!(&l.content, LayerContent::Group(g) if g.artboard.is_none());
     let group = d.active_layer.and_then(|id| d.doc.layer(id)).is_some_and(plain_group);
     if group && !all_layers { Ok(f(&FlatSampler, &d.doc)) } else { with_sampler(s, all_layers, f) }
+}
+
+/// Whether the layer's own pixels are the edit target. Quick Selection's transparent-pixel drop
+/// (#12919) and Object Selection's area answers (#12863) were measured there; with a targeted layer
+/// mask or a single channel those clicks keep the answer from before the items (#15472 review).
+fn pixels_targeted(s: &Session) -> bool {
+    !s.tools.mask_targeted && s.active().is_some_and(|d| d.channel_view.target == crate::channel_cmds::ChannelTarget::Composite)
 }
 
 /// Stores `region` combined with the current selection by `m` as one history step.
@@ -263,8 +283,7 @@ fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let bounds = region.content_bounds();
     // Only for the layer's pixels as the target: a targeted layer mask or a single channel (not
     // measured) keeps today's result.
-    let pixels_targeted = !s.tools.mask_targeted && s.active().is_some_and(|d| d.channel_view.target == crate::channel_cmds::ChannelTarget::Composite);
-    let active = s.active().and_then(|d| d.active_layer).filter(|_| pixels_targeted);
+    let active = s.active().and_then(|d| d.active_layer).filter(|_| pixels_targeted(s));
     let selected = s.edit("Quick Selection", |doc, _| {
         let empty = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
         let old = doc.selection.as_ref().unwrap_or(&empty);
@@ -435,6 +454,25 @@ pub fn empty_sampled_area(doc: &Document, layer: Option<LayerId>, all_layers: bo
     Some(if surf.content_bounds().is_empty() { "the active layer is empty" } else { "the active layer has no pixels in that area" })
 }
 
+/// Where `select.object` with `"point"` answers #5246's clear message instead of #12863's
+/// area answer or silence: a completely empty sampled layer, a point outside the canvas that the
+/// sampled layer's pixels do not reach, or a spot with no pixels on a Smart Object or type
+/// target - those layers' clicks keep their pre-#12863 answer (#15472 review). The Object Finder
+/// hover hints on exactly these points, so hover and click agree in every state (#15472 review).
+pub fn point_reports_sampled_pixels_error(doc: &Document, layer: Option<LayerId>, all_layers: bool, area: Rect) -> bool {
+    let Some(target) = sampled_target(doc, layer, all_layers) else { return false };
+    let Some(l) = doc.layer(target) else { return false };
+    if matches!(l.content, LayerContent::Smart(_) | LayerContent::Text(_)) {
+        return empty_sampled_area(doc, layer, all_layers, area).is_some();
+    }
+    // Layer pixels can hang past the canvas edge (#3043); there #5246's own content test has
+    // nothing to report, and this predicate must not promise a message the checker stays silent
+    // about (#15472 review).
+    let Some(surf) = l.surface() else { return false };
+    let content = surf.content_bounds();
+    content.is_empty() || (!doc.bounds().contains(area.x0, area.y0) && content.intersect(&area).is_empty())
+}
+
 /// Hard Edge off: [`soften_edge`]'s horizontal taps in 256ths, for the pixels two and one to the
 /// left, the pixel itself and the pixel to the right.
 const SOFT_EDGE_ACROSS: [f64; 4] = [30.0 / 256.0, 6.0 / 256.0, 118.0 / 256.0, 102.0 / 256.0];
@@ -496,15 +534,20 @@ fn soften_edge(region: &Region, canvas: Rect) -> Region {
 }
 
 /// `r` (`w` pixels wide) cut down to its selected pixels, so the reported bounds are the
-/// selection's: [`soften_edge`]'s box has a spare pixel on each side that the ramp may empty.
-fn trimmed(r: Region, w: usize) -> Region {
-    let rows: Vec<&[u8]> = r.mask.chunks_exact(w).collect();
-    let used_rows: Vec<usize> = rows.iter().enumerate().filter(|(_, row)| row.iter().any(|v| *v > 0)).map(|(y, _)| y).collect();
-    let used_cols: Vec<usize> = (0..w).filter(|x| rows.iter().any(|row| row[*x] > 0)).collect();
-    let (Some(&y0), Some(&y1), Some(&x0), Some(&x1)) = (used_rows.first(), used_rows.last(), used_cols.first(), used_cols.last()) else {
+/// selection's: [`soften_edge`]'s box has a spare pixel on each side that the ramp may empty, and
+/// [`area_region`]'s cut mask keeps the extent its cut leaves. The kept rows and columns are
+/// compacted in the buffer that is already owned, so trimming a canvas-sized mask never needs a
+/// second one and never aborts on that allocation (#15472 review). Rows and columns that are empty
+/// only inside the used extent stay, as they do for a found object with a hole.
+fn trimmed(mut r: Region, w: usize) -> Region {
+    let rows = r.mask.chunks_exact(w).count();
+    let row_used = |y: usize| r.mask[y * w..(y + 1) * w].iter().any(|v| *v > 0);
+    let col_used = |x: usize| r.mask.chunks_exact(w).any(|row| row[x] > 0);
+    let (Some(y0), Some(y1), Some(x0), Some(x1)) =
+        ((0..rows).find(|&y| row_used(y)), (0..rows).rev().find(|&y| row_used(y)), (0..w).find(|&x| col_used(x)), (0..w).rev().find(|&x| col_used(x)))
+    else {
         return Region { bbox: Rect::new(r.bbox.x0, r.bbox.y0, r.bbox.x0, r.bbox.y0), mask: Vec::new() };
     };
-    let mask = rows[y0..=y1].iter().flat_map(|row| row[x0..=x1].iter().copied()).collect();
     let at = |d: usize| i32::try_from(d).unwrap_or(i32::MAX);
     let bbox = Rect::new(
         r.bbox.x0.saturating_add(at(x0)),
@@ -512,7 +555,18 @@ fn trimmed(r: Region, w: usize) -> Region {
         r.bbox.x0.saturating_add(at(x1 + 1)),
         r.bbox.y0.saturating_add(at(y1 + 1)),
     );
-    Region { bbox, mask }
+    // Kept row `y` lands at row `y - y0`, and its kept columns start at `x0 >= 0`, so every copy
+    // moves towards the front of the buffer and `copy_within` handles the rows it overlaps.
+    let whole_buffer = y0 == 0 && x0 == 0 && y1 + 1 == rows && x1 + 1 == w && r.mask.len() == rows * w;
+    if !whole_buffer {
+        let (kept, mut write) = (x1 - x0 + 1, 0usize);
+        for y in y0..=y1 {
+            r.mask.copy_within(y * w + x0..y * w + x0 + kept, write);
+            write += kept;
+        }
+        r.mask.truncate(write);
+    }
+    Region { bbox, mask: r.mask }
 }
 
 /// `select.object`'s `"hardEdge"` (default on): off, the found object gets [`soften_edge`]'s rim;
@@ -520,6 +574,159 @@ fn trimmed(r: Region, w: usize) -> Region {
 fn object_edge<'a>(canvas: Rect, p: &Value, region: Option<&'a Region>) -> Option<Cow<'a, Region>> {
     let region = region?;
     Some(if b(p, "hardEdge", true) { Cow::Borrowed(region) } else { Cow::Owned(soften_edge(region, canvas)) })
+}
+
+/// #12863's partly-selected coverage: the reference application's model-style area answers
+/// never mark a pixel fully selected; every touched pixel sits at 254 (99.6 %).
+const MODEL_AREA_COVERAGE: u8 = 254;
+
+/// The whole canvas at [`MODEL_AREA_COVERAGE`], with `cut`'s at-least-half-opaque pixels at 0
+/// (the canvas minus the sampled layer's own pixels). `cut` is read in row bands, so a large
+/// layer is never held whole; the mask is reserved fallibly, and a canvas whose coverage would
+/// not fit in memory answers `None` (the plain nothing-found, like an out-of-memory canvas on
+/// the size check). A cut answer reports [`trimmed`]'s bounds - whole empty mask rows and
+/// columns at the edges go, as they do for found objects - so the reported bounds are the
+/// selection's extent (#15472 review); the uncut canvas keeps the whole canvas.
+fn area_region(canvas: Rect, cut: Option<&photocraft_raster::Surface>) -> Option<Region> {
+    let (cw, ch) = (canvas.width() as usize, canvas.height() as usize);
+    let len = cw.checked_mul(ch)?;
+    let mut mask = Vec::new();
+    mask.try_reserve_exact(len).ok()?;
+    mask.resize(len, MODEL_AREA_COVERAGE);
+    if let Some(surf) = cut {
+        const BAND: i32 = 64;
+        let part = surf.content_bounds().intersect(&canvas);
+        let smp = SurfaceSampler(surf);
+        for y0 in (part.y0..part.y1).step_by(BAND as usize) {
+            let band = Rect::new(part.x0, y0, part.x1, (y0 + BAND).min(part.y1));
+            let bw = band.width() as usize;
+            for (i, p) in smp.rgba(band).iter().enumerate() {
+                if p[3] >= 0.5 {
+                    let (x, y) = (band.x0 + (i % bw) as i32, band.y0 + (i / bw) as i32);
+                    if let Some(m) = mask.get_mut((y - canvas.y0) as usize * cw + (x - canvas.x0) as usize) {
+                        *m = 0;
+                    }
+                }
+            }
+        }
+    }
+    Some(if cut.is_some() { trimmed(Region { bbox: canvas, mask }, cw) } else { Region { bbox: canvas, mask } })
+}
+
+/// Opaque 8-connected areas in the `w` x `h` scan, counting up to `stop + 1` and stopping.
+/// Every index below is a fresh `0..opaque.len()` counter or checked against `opaque.len()`
+/// before use, and `seen` is built to `opaque.len()`.
+fn opaque_areas(opaque: &[bool], w: usize, h: usize, stop: usize) -> usize {
+    let mut seen = vec![false; opaque.len()];
+    let mut areas = 0;
+    for start in 0..opaque.len() {
+        if !opaque[start] || seen[start] {
+            continue;
+        }
+        areas += 1;
+        if areas > stop {
+            return areas;
+        }
+        let mut stack = vec![start];
+        seen[start] = true;
+        while let Some(j) = stack.pop() {
+            let (jx, jy) = ((j % w) as i64, (j / w) as i64);
+            for dy in -1..=1i64 {
+                for dx in -1..=1i64 {
+                    let (nx, ny) = (jx + dx, jy + dy);
+                    if nx < 0 || ny < 0 || nx >= w as i64 || ny >= h as i64 {
+                        continue;
+                    }
+                    let k = (ny * w as i64 + nx) as usize;
+                    if k < opaque.len() && opaque[k] && !seen[k] {
+                        seen[k] = true;
+                        stack.push(k);
+                    }
+                }
+            }
+        }
+    }
+    areas
+}
+
+/// Whether every raw pixel of `area` on `surf` is at least half opaque and identical: one flat
+/// area. Identical stored samples convert to identical floats, so the exact compare is honest on
+/// raw pixels - the box-averaged working scan below is not: a canvas whose bounds are not a
+/// multiple of the step averages its edge boxes over different counts, and the partial sums sit
+/// an ulp apart for most 8-bit colours (#15472 review). Read in row bands, giving up at the
+/// first difference.
+fn surface_is_flat(surf: &photocraft_raster::Surface, area: Rect) -> bool {
+    const BAND: i32 = 64;
+    let smp = SurfaceSampler(surf);
+    let mut first: Option<[f32; 4]> = None;
+    for y0 in (area.y0..area.y1).step_by(BAND as usize) {
+        let band = Rect::new(area.x0, y0, area.x1, (y0 + BAND).min(area.y1));
+        for p in smp.rgba(band) {
+            if p[3] < 0.5 {
+                return false;
+            }
+            match first {
+                None => first = Some(p),
+                Some(f) if f == p => {}
+                Some(_) => return false,
+            }
+        }
+    }
+    first.is_some()
+}
+
+/// The click answers the reference application measures for flat targets (#12863): with a
+/// sampled layer uniform over the whole canvas, or with a plain group active and Sample All
+/// Layers off, the whole canvas; on an empty spot of a sampled layer holding exactly one
+/// opaque object, the canvas with that layer's pixels cut out. A click on the opaque part of
+/// its layer (its own pixel, at full resolution), a layer with several objects (measured on
+/// Shapes: nothing found), and every other target (composite, adjustment, Smart Object, type)
+/// answer `None` and keep the plain nothing-found - Smart Object and type are filtered by
+/// content kind, because [`Layer::surface`] hands their rendered cache here and those clicks
+/// keep their answer from before #12863, as do a targeted layer mask and channel, which the
+/// caller skips ([`pixels_targeted`], #15472 review). Uniformity is probed on the raw pixels
+/// over the canvas ([`surface_is_flat`]): a solid area floating on transparency is one object to
+/// cut out, not a uniform layer; the object areas are scanned at the
+/// Object Finder's working resolution, where a coarse step can merge areas that sit within one
+/// step of each other, which only ever answers "several" for detail finer than the scan.
+/// `target` is [`sampled_target`]'s sampled layer.
+fn flat_area_answer(doc: &Document, target: Option<LayerId>, group: bool, x: f32, y: f32) -> Option<Region> {
+    let canvas = doc.bounds();
+    let (px, py) = (x.floor() as i32, y.floor() as i32);
+    if !canvas.contains(px, py) {
+        return None;
+    }
+    if group {
+        return area_region(canvas, None);
+    }
+    let surf = target.and_then(|id| doc.layer(id)).filter(|l| !matches!(l.content, LayerContent::Smart(_) | LayerContent::Text(_))).and_then(Layer::surface)?;
+    let content = surf.content_bounds().intersect(&canvas);
+    if content.is_empty() {
+        return None;
+    }
+    if surface_is_flat(surf, canvas) {
+        return area_region(canvas, None);
+    }
+    let step = photocraft_algo::segment::scale_for(content, grabcut::OBJECT_AT_WORK_PX);
+    let rgba = SurfaceSampler(surf).rgba_scaled(content, step);
+    let (w, h) = ((content.width() as usize).div_ceil(step), (content.height() as usize).div_ceil(step));
+    if w == 0 || h == 0 || rgba.len() < w * h {
+        return None;
+    }
+    let rgba = &rgba[..w * h];
+    let opaque: Vec<bool> = rgba.iter().map(|p| p[3] >= 0.5).collect();
+    // The opaque-part gate reads the clicked pixel itself, not the averaged working cell: a small
+    // transparent spot inside an opaque area averages to opaque there, and the click would answer
+    // nothing-found where the documented answer is the canvas with the object cut out. Object
+    // Finder's seed check reads the single pixel for the same reason (#13070, #15472 review);
+    // pixels past the layer's content sample as transparent, so no bounds test is needed.
+    if SurfaceSampler(surf).rgba(Rect::from_xywh(px, py, 1, 1)).first().is_some_and(|p| p[3] >= 0.5) {
+        return None;
+    }
+    if opaque_areas(&opaque, w, h, 1) != 1 {
+        return None;
+    }
+    area_region(canvas, Some(surf))
 }
 
 /// Does sampling `layer` (unless `all_layers`) find no pixel at all in `area`? Unlike
@@ -539,26 +746,56 @@ fn no_sampled_pixels(doc: &Document, layer: Option<LayerId>, all_layers: bool, a
     })
 }
 
-/// `select.object` with `"point"`: the Object Finder's object under the point (cached).
+/// `select.object` with `"point"`: the Object Finder's object under the point (cached), else
+/// the reference application's area answer for a flat target (#12863).
 fn object_at_point(s: &mut Session, p: &Value, (x, y): (f32, f32)) -> Result<Value> {
     let all_layers = b(p, "sampleAllLayers", false);
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    check_sampled_pixels(&d.doc, d.active_layer, all_layers, Rect::from_xywh(x.floor() as i32, y.floor() as i32, 1, 1))?;
-    let target = sampled_target(&d.doc, d.active_layer, all_layers);
     let canvas = d.doc.bounds();
-    let region = match s.object_finder.lookup(&d.doc, target, x, y) {
-        Some(r) => Some(r),
-        None => {
-            let doc = std::sync::Arc::clone(&d.doc);
-            let found = find_object(&doc, d.active_layer, all_layers, x, y).map(std::sync::Arc::new);
-            if let Some(r) = &found {
-                s.object_finder.insert(&doc, target, std::sync::Arc::clone(r));
+    let (px, py) = (x.floor() as i32, y.floor() as i32);
+    let target = sampled_target(&d.doc, d.active_layer, all_layers);
+    // #5246's clear answer stands for the cases its comment names - a completely empty sampled
+    // layer and a point outside the canvas - and, as before #12863, for a Smart Object or type
+    // target with no pixels under the point (#15472 review). Inside the canvas, a pixel layer
+    // with pixels elsewhere is answered like the reference application instead (#12863), not
+    // by the error.
+    let here = Rect::from_xywh(px, py, 1, 1);
+    if point_reports_sampled_pixels_error(&d.doc, d.active_layer, all_layers, here) {
+        check_sampled_pixels(&d.doc, d.active_layer, all_layers, here)?;
+    }
+    let group = plain_group_active(&d.doc, d.active_layer, all_layers);
+    let doc = std::sync::Arc::clone(&d.doc);
+    let active = d.active_layer;
+    let found = if group {
+        // A plain group's click answers from the whole canvas (#12863), not from the composite
+        // fallback `with_doc_sampler` gives it; the hover cache holds composite objects and is
+        // not consulted.
+        None
+    } else {
+        match s.object_finder.lookup(&doc, target, x, y) {
+            Some(r) => Some(r),
+            None => {
+                let found = find_object(&doc, active, all_layers, x, y).map(std::sync::Arc::new);
+                if let Some(r) = &found {
+                    s.object_finder.insert(&doc, target, std::sync::Arc::clone(r));
+                }
+                found
             }
-            found
         }
     };
-    // The cache keeps the object as found; Hard Edge only shapes what is stored.
-    let region = object_edge(canvas, p, region.as_deref());
+    // A found object wins; the area answer is not cached (it is the layer's flatness, not a
+    // remembered object, and a canvas-sized mask in the cache would swallow later real clicks).
+    // #12863 measures the area answers with the layer's pixels as the edit target; with a targeted
+    // layer mask or single channel the click keeps its pre-#12863 nothing-found (#15472 review).
+    let area = if found.is_none() && pixels_targeted(s) { flat_area_answer(&doc, target, group, x, y) } else { None };
+    // Hard Edge off (#12855) reshapes found objects only: soften_edge's taps sum to 1.0 and its
+    // ramp maps the area answers' 254 back to fully selected, so an area answer keeps the
+    // measured partly-selected coverage as it is (#15472 review).
+    let region = match found.as_deref().or(area.as_ref()) {
+        Some(r) if found.is_some() => object_edge(canvas, p, Some(r)),
+        Some(r) => Some(Cow::Borrowed(r)),
+        None => None,
+    };
     let out = apply(s, "Object Selection", region.as_deref(), mode(p, "replace"))?;
     if let Some(d) = s.active() {
         let doc = std::sync::Arc::clone(&d.doc);
@@ -894,6 +1131,8 @@ pub fn specs() -> Vec<CommandSpec> {
 mod object_hard_edge_tests;
 #[cfg(test)]
 mod object_transparent_layer_tests;
+#[cfg(test)]
+mod object_uniform_target_tests;
 #[cfg(test)]
 mod tests;
 
