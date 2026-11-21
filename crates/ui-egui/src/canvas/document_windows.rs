@@ -89,6 +89,9 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             view = after;
         });
         let output = inner.output;
+        if let Some((_, r)) = app.ui.document_windows.floating.iter_mut().find(|(g, _)| g.id == id) {
+            *r = output.response.rect;
+        }
         if output.close_requested.is_some() {
             closed.push(id);
         }
