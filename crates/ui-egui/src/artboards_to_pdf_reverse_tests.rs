@@ -35,6 +35,8 @@ fn open(h: &mut H, path: &str) -> DialogId {
     let dialog = h.state().framework.dialogs.open_dialogs().into_iter().map(|d| d.id).find(|d| d.value().to_string() == want).unwrap();
     h.run_steps(4);
     h.state_mut().framework.dialogs.set_json_field(&ctx, dialog, "path", json!(path)).unwrap();
+    // Every board, not only the selected one: Export Selected Artboards opens ticked while a board is selected (#13647).
+    h.state_mut().framework.dialogs.set_json_field(&ctx, dialog, "artboards", serde_json::Value::Null).unwrap();
     h.run_steps(4);
     dialog
 }
