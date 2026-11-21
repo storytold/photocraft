@@ -5,8 +5,9 @@
 //!
 //! The copies keep their names, content, masks, styles and blending; they land above the
 //! destination's active layer as one history step there, and the destination becomes the active
-//! document. Pixels are converted to the destination's colour profile (Color Settings' intent and
-//! black point compensation) and bit depth, as Photoshop converts dragged layers.
+//! document (with `activate` false, as Duplicate Layer… sends, the active document stays active).
+//! Pixels are converted to the destination's colour profile (Color Settings' intent and black
+//! point compensation) and bit depth, as Photoshop converts dragged layers.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -219,6 +220,11 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     if src == dest {
         return Err(bad("the destination is the source document (use layer.duplicate)"));
     }
+    let activate = match p.get("activate") {
+        None => true,
+        Some(Value::Bool(on)) => *on,
+        Some(_) => return Err(bad("`activate` must be a boolean")),
+    };
     let (from, to) = (&s.documents()[src], &s.documents()[dest]);
     let (sdoc, ddoc) = (from.doc.clone(), to.doc.clone());
     let floating = crate::float_cmds::floating(from).cloned();
@@ -313,6 +319,7 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     translate_copies(&mut copies, &ddoc, dx, dy);
     let patterns: Vec<_> = sdoc.patterns.iter().filter(|pat| !ddoc.patterns.iter().any(|d| d.id == pat.id)).cloned().collect();
     let styles = std::mem::take(&mut copies.text_styles);
+    let was = s.active().map(|st| st.doc.id);
     s.set_active(dest);
     let label = if ids.len() == 1 { "Duplicate Layer" } else { "Duplicate Layers" };
     let edited = s.edit(label, |doc, active| {
@@ -343,6 +350,11 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let last = new.last().copied();
     crate::layer_multi_cmds::reselect(s, new.clone(), last);
+    // Duplicate Layer… into another document leaves the active document active (#14605); a drag
+    // shows the destination. Found by id, so it still holds if the tabs move before a copy lands.
+    if !activate && let Some(i) = s.documents().iter().position(|d| Some(d.doc.id) == was) {
+        s.set_active(i);
+    }
     Ok(json!({"document": dest, "layers": new.iter().map(|l| l.0).collect::<Vec<_>>(), "offset": [dx, dy]}))
 }
 
@@ -425,7 +437,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Copy Layers to Document",
         menu: &[],
         shortcut: None,
-        params: r##"{"document":index (destination),"layers":[id,…]?=the source's selected layers,"source":index?=active,"selectionOnly":bool=false (copy selected pixels from one raster layer),"center":bool=false (centre on the destination's canvas),"at":[x,y]? (centre the copies on this point),"offset":[dx,dy]?=[0,0] (from their place in the source),"name":str? (one layer: the copy's name)}"##,
+        params: r##"{"document":index (destination),"layers":[id,…]?=the source's selected layers,"source":index?=active,"selectionOnly":bool=false (copy selected pixels from one raster layer),"center":bool=false (centre on the destination's canvas),"at":[x,y]? (centre the copies on this point),"offset":[dx,dy]?=[0,0] (from their place in the source),"name":str? (one layer: the copy's name),"activate":bool=true (false: the active document stays active)}"##,
         enabled,
         run: copy_to_document,
         journal: true,
