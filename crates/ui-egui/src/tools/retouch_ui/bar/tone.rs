@@ -1,8 +1,9 @@
 //! The Retouch options bar's toning family: Dodge and Burn, Sponge, Blur, Sharpen and Smudge, Color Replacement.
 
 use craft::behavior::IconId;
+use craft::ui::buttons::ToggleButton;
 use craft::ui::choice::Segmented;
-use craft::ui::contract::{Bind, Entry, Show as _};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
 use craft::ui::display::Divider;
 use craft::ui::primitives::IconSpec;
 use craft::ui::text::RangeAlert;
@@ -51,6 +52,23 @@ pub(super) fn sponge(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<Range
     flow
 }
 
+/// Smudge's pressure-for-size switch edits the active tool's own brush through
+/// the same command and gesture path as the current Background Eraser controls.
+fn smudge_pressure_size(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
+    let before = app.session.tools.brush.clone();
+    let mut brush = before.clone();
+    let pressure = ToggleButton::new(tl!("Always use pressure for size"), Bind::given(brush.pressure_size))
+        .icon(IconId::new("target"))
+        .icon_only()
+        .tooltip(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure").to_owned())
+        .show(ui);
+    if let Some(on) = pressure.value().copied() {
+        brush.pressure_size = on;
+    }
+    let key = pressure.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e));
+    crate::brush_panel::commit_keyed(app, &before, &brush, key);
+}
+
 /// The options of Blur, Sharpen and Smudge.
 pub(super) fn blur_sharpen_smudge(ui: &mut egui::Ui, app: &mut PhotocraftApp, tool: Tool) -> Option<RangeAlert> {
     let o = &mut app.ui.tool_options;
@@ -67,6 +85,7 @@ pub(super) fn blur_sharpen_smudge(ui: &mut egui::Ui, app: &mut PhotocraftApp, to
     }
     if tool == Tool::Smudge {
         check(ui, tl!("Finger Painting"), &mut o.finger_painting, true, None);
+        smudge_pressure_size(ui, app);
     }
     strength
 }
