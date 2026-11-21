@@ -528,11 +528,14 @@ fn psd_lut_format(format: LutFormat) -> &'static str {
 }
 
 /// The source file of a Color Lookup to embed as is: only while it still parses to the
-/// layer's table, so an edited table is never saved with stale bytes.
+/// layer's table, so an edited table is never saved with stale bytes, and over the plain 0..1
+/// domain. A 3D `.cube` whose `DOMAIN_MAX` Color Lookup ignores (#14425) is saved as a plain
+/// `.cube` of the same table instead, because a PSD read still refuses a custom domain and the
+/// layer would not reopen.
 fn lut_source_for<'a>(source: Option<&'a LutSource>, table: &[f32], size: usize) -> Option<&'a LutSource> {
     let source = source?;
     let file = parse_lut_source(source.format, &source.bytes).ok()?;
-    (file.size == size && file.data == table).then_some(source)
+    (file.size == size && file.data == table && file.domain_is_default()).then_some(source)
 }
 
 /// `name` with a `.3dl` / `.look` extension swapped for `.cube`, for a table saved as `.cube`.
