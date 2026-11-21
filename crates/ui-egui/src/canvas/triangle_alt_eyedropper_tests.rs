@@ -4,13 +4,13 @@
 //! centre, and with a shape layer active ⌥ at the press does not sample.
 
 use craft::keymap::Mods;
-use egui::Modifiers;
+use egui::{Event, Modifiers, PointerButton};
 use photocraft_doc::{Color, Fill, LayerContent};
 use serde_json::json;
 
 use super::shape_alt_samples;
 use crate::PhotocraftApp;
-use crate::canvas::testing::in_gesture;
+use crate::canvas::testing::{frame_with_events, in_gesture, to_screen};
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
@@ -94,14 +94,20 @@ fn an_alt_drag_keeps_the_colour_under_the_release_point() {
     for press in [Modifiers::ALT, Modifiers::SHIFT | Modifiers::ALT] {
         let mut app = app();
         let before = document_state(&app);
-        // The last move is still on red; the release is on white.
+        let document = app.session.active().unwrap().doc.clone();
         tool_event(&mut app, ToolEvent::Down { x: ON_RED[0], y: ON_RED[1], pressure: 1.0 }, press);
         tool_event(&mut app, ToolEvent::Move { x: 250.0, y: 200.0, pressure: 1.0 }, press);
-        assert_eq!(foreground(&app), RED, "{press:?}: the drag samples as it goes");
-        tool_event(&mut app, ToolEvent::Up { x: ON_WHITE[0], y: ON_WHITE[1] }, press);
+        assert_eq!(foreground(&app), RED, "{press:?}: the last move samples red");
+        assert!(in_gesture(&app));
+
+        // The button event is the first input at the white point.
+        let pos = to_screen(&app, ON_WHITE);
+        frame_with_events(&mut app, vec![Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: press }]);
         assert_eq!(foreground(&app), WHITE, "{press:?}: foreground");
         assert_eq!(tool_fill(&app), WHITE, "{press:?}: Fill");
-        assert_eq!(document_state(&app), before, "{press:?}: no shape and no History state");
+        assert!(!in_gesture(&app), "{press:?}: the release ends sampling");
+        assert!(std::sync::Arc::ptr_eq(&document, &app.session.active().unwrap().doc), "{press:?}: the document stays intact");
+        assert_eq!(document_state(&app), before, "{press:?}: no History state, layer, dialog or colour sampler");
     }
 }
 
