@@ -115,7 +115,8 @@ fn positive_threshold_dispatch_retains_exact_pixel_decisions() {
     let area = Rect::new(-3, 2, 253, 258);
     // The FFT gate has no depth branch; only the positive threshold turns it away here. The exact kernel at every
     // depth is `sharpen::tests::exact_tiled_selected_outputs_and_cancellation` (#15652).
-    let s = source(area, PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
+    // Gray plus alpha keeps fractional coverage and the same FFT eligibility with two channels.
+    let s = source(area, PixelFormat::new(ColorMode::Grayscale, SampleType::U8, true));
     let p = FilterParams::UnsharpMask { amount: 500.0, radius: 64.0, threshold: 8.0 };
     let expected = crate::sharpen::tests::apply_reference(&s, &p, area, area, None, Some(area), 256);
     let actual = crate::apply_in(&s, &p, area, area, None, area);
