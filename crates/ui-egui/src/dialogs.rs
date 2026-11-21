@@ -617,8 +617,9 @@ pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) 
     Ok(params::open_bare(app, command, label))
 }
 
-/// Preference entries the engine reads itself, by key: the engine has no settings store, so they cannot move.
-const ENGINE_READ: &[&str] = &["ui.layersPanelOptions", "file.print", "file.export.saveForWebLegacy"];
+/// Preference entries the engine reads itself, by key: the engine has no settings store, so they cannot move. The
+/// remembered Proof Setup is the proof condition new documents start from after a restart (#12820).
+const ENGINE_READ: &[&str] = &["ui.layersPanelOptions", "file.print", "file.export.saveForWebLegacy", photocraft_engine::color_cmds::PROOF_SETUP_PREF];
 
 /// The "Don't show again" entries (`{"skip": true}`), by key, as their prompt modules read them. Told apart by key, not
 /// by the shape of the value.

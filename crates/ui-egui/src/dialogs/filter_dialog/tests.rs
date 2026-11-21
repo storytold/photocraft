@@ -400,6 +400,53 @@ fn proof_setup_dialog_reflects_active_document_proof_condition() {
     assert_eq!(app.session.color.proof(doc2_id).setup.name, "display-p3");
 }
 
+/// #12820: OK in Custom Proof Setup is the proof condition after a restart: a new document there
+/// starts from Gray Gamma 2.2, Proof Colors shows it and the dialog opens on it.
+#[test]
+fn proof_setup_ok_is_the_proof_condition_after_a_restart() {
+    let mut app = new_app();
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let d = open(&mut app, "view.proofSetup").unwrap();
+    set(&mut app, d, "profile", json!("gray-gamma-2.2"));
+    ok(&mut app, d);
+    let mut restarted = restart_keeps_proof_setup(&app, "gray-gamma-2.2");
+    let d = open(&mut restarted, "view.proofSetup").unwrap();
+    assert_eq!(fields_of(&restarted, d).text("profile"), Some("gray-gamma-2.2"));
+}
+
+/// #12820 with an .icc file no menu lists: the engine's record of the path is what the next
+/// launch proofs with.
+#[test]
+fn a_custom_icc_proof_setup_survives_a_restart() {
+    let tmp = tempfile::tempdir().unwrap();
+    let icc = tmp.path().join("press.icc");
+    std::fs::write(&icc, craft::cms::builtin::COATED_CMYK_ICC).unwrap();
+    let profile = icc.to_string_lossy().into_owned();
+    let mut app = new_app();
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    app.run("view.proofSetup", json!({"profile": profile, "intent": "relative", "bpc": true, "simulatePaper": false})).unwrap();
+    restart_keeps_proof_setup(&app, &profile);
+}
+
+/// `app` saved Proof Setup on `profile`: the preference holds it, and a launch on those
+/// preferences proofs new documents with it, Proof Colors included. Returns that launch.
+fn restart_keeps_proof_setup(app: &PhotocraftApp, profile: &str) -> PhotocraftApp {
+    assert_eq!(
+        app.session.prefs().dialogs.get("view.proofSetup"),
+        Some(&json!({"profile": profile, "intent": "relative", "bpc": true, "simulatePaper": false}))
+    );
+    let mut session = photocraft_engine::Session::new();
+    session.load_prefs_json(&app.session.prefs_to_json()).unwrap();
+    let mut restarted = PhotocraftApp::new(session, crate::Services::default());
+    restarted.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let id = restarted.session.active().unwrap().doc.id;
+    assert_eq!(restarted.session.color.proof(id).setup.name, profile);
+    restarted.run("view.proofColors", json!({})).unwrap();
+    let pv = restarted.session.color.proof(id);
+    assert_eq!((pv.setup.name.as_str(), pv.enabled), (profile, true));
+    restarted
+}
+
 /// The Color Lookup dialog's own fields run the command: `fileName` used to be filled with `0`
 /// (no dialog kind for `text?`, so every OK failed) and `lutFormat` with `cube`, which made a
 /// .3dl file from the LUT folder fail to parse.
