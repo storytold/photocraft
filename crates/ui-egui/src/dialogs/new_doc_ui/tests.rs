@@ -1,12 +1,55 @@
 use super::*;
 use crate::new_doc_remember_tests::{app, fields, harness, open, press_create};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 /// The default settings with `edit` applied.
 fn options(edit: impl FnOnce(&mut DocumentOptions)) -> DocumentOptions {
     let mut options = DocumentOptions::default();
     edit(&mut options);
     options
+}
+
+#[test]
+fn points_and_picas_follow_the_point_size_preference() {
+    for (point_size, unit, dimension, value) in [
+        ("traditional", UnitKind::Points, "Width", "7227"),
+        ("traditional", UnitKind::Picas, "Width", "602.25"),
+        ("postScript", UnitKind::Points, "Width", "7200"),
+        ("postScript", UnitKind::Picas, "Width", "600"),
+        ("traditional", UnitKind::Points, "Height", "7227"),
+        ("traditional", UnitKind::Picas, "Height", "602.25"),
+        ("postScript", UnitKind::Points, "Height", "7200"),
+        ("postScript", UnitKind::Picas, "Height", "600"),
+    ] {
+        let mut app = app();
+        app.session.execute("prefs.set", json!({"path": "unitsAndRulers.pointSize", "value": point_size})).unwrap();
+        let ctx = app.ctx().clone();
+        // The app's root environment carries Point/Pica Size into hosted length fields.
+        app.framework_before_input(&ctx);
+        let mut h = harness(app);
+        let id = open(&mut h);
+        let mut shown = crate::new_doc_remember_tests::options(h.state(), id);
+        shown.size = PixelSize::new(20, 2);
+        shown.pixels_per_inch = 100.0;
+        shown.unit = unit;
+        crate::new_doc_remember_tests::set_options(&mut h, id, &shown);
+
+        h.get_all_by_label(dimension).find(|node| node.accesskit_node().value().is_some()).expect("the dimension field").click();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run_steps(2);
+        h.get_all_by_label(dimension).find(|node| node.accesskit_node().value().is_some()).expect("the dimension field").type_text(value);
+        h.run_steps(2);
+        h.key_press(egui::Key::Tab);
+        h.run_steps(4);
+
+        let expected = if dimension == "Width" { PixelSize::new(10_000, 2) } else { PixelSize::new(20, 10_000) };
+        assert_eq!(crate::new_doc_remember_tests::options(h.state(), id).size, expected, "{point_size} {unit:?} {dimension}");
+        assert!(press_create(&mut h, id), "Create is enabled");
+        let doc = &h.state().session.active().unwrap().doc;
+        assert_eq!((doc.size.width, doc.size.height), (expected.width, expected.height), "{point_size} {unit:?} {dimension}");
+        assert_eq!(doc.resolution_dpi, 100.0);
+    }
 }
 
 /// #321: New Document offers the working space and the other profiles of the mode's space.
