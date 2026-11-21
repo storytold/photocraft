@@ -121,8 +121,11 @@ fn set_vars(s: &mut Session, f: impl FnOnce(&mut Variables)) -> Result<()> {
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     let mut doc = (*st.doc).clone();
     f(&mut doc.variables);
-    st.doc = Arc::new(doc);
+    *st.doc_mut() = Arc::new(doc);
     st.revision += 1;
+    st.record_unknown_damage();
+    st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+    st.record_damage();
     Ok(())
 }
 
@@ -291,6 +294,25 @@ fn apply_data_set(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"applied": set.name, "index": idx}))
 }
 
+/// The document as `image.applyDataSet {"index": index}` would leave it, built without touching the
+/// session: the Apply Data Set dialog's Preview (#14496). It reads replacement images as the
+/// command does (the same path gate, relative to the document) and fails as a whole, so a set
+/// that can't be applied never gives a partly applied preview.
+pub fn data_set_preview(s: &Session, index: usize) -> Result<Document> {
+    let (set, _) = resolve_set(s, &json!({"index": index}), "image.applyDataSet")?;
+    authorize_pixel_paths(s, &set)?;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let _authorization = crate::jobs::render_authorization_scope(s.authorize);
+    let _document = crate::doc_path::scope(st.path.as_deref().map(std::path::Path::new));
+    // The command refuses a set that replaces locked text and applies none of it (#14499).
+    if replaces_locked_text(&st.doc, &st.doc.variables, &set) {
+        return Err(EngineError::Other(DATA_SET_LAYER_LOCKED.into()));
+    }
+    let mut doc = (*st.doc).clone();
+    apply_to_doc(&mut doc, &st.doc.variables, &set)?;
+    Ok(doc)
+}
+
 /// The reference application's alert when Apply Data Set would replace the text of a layer
 /// under Lock All.
 pub const DATA_SET_LAYER_LOCKED: &str = "Could not apply data set because the layer is locked.";
@@ -357,7 +379,7 @@ pub fn import_data_sets_text(s: &mut Session, text: &str, p: &Value) -> Result<V
             let Some(cell) = cells.get(ci) else { continue };
             let Some(def) = vars.def(var) else { continue };
             let value = match def.kind {
-                VarKind::Visibility => VarValue::Visibility(matches!(cell.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "visible" | "on")),
+                VarKind::Visibility => VarValue::Visibility(cell.trim().eq_ignore_ascii_case("true")),
                 VarKind::PixelReplacement { .. } => VarValue::Pixels(cell.clone()),
                 VarKind::TextReplacement => VarValue::Text(cell.clone()),
             };
@@ -593,6 +615,8 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod import_history_tests;
+#[cfg(test)]
+mod import_visibility_tests;
 #[cfg(test)]
 mod tests;
 

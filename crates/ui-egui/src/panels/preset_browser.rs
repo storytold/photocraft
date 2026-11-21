@@ -6,18 +6,21 @@ use craft::color_ui::ui::gradient::GradientRamp;
 use craft::keymap::CommandRef;
 use craft::theme::Srgba;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, DropZone, Props as _, Show as _};
+use craft::ui::contract::{Bind, DropZone, MemoProps, PlainData, Props as _, Show as _, Tracked};
 use craft::ui::list::ThumbAspect;
 use craft::ui::menu::PanelRow;
 use craft::ui::patterns::presets::{
-    CellShape, DefaultOpen, PresetBrowser, PresetCommands, PresetEvent, PresetExport, PresetFileRequest, PresetFiles, PresetFooterEvent, PresetFooterOptions,
-    PresetMenuAction, PresetPanelMenu, PresetPicker, PresetReorder, PresetRow, PresetState, PresetView,
+    CellShape, DefaultOpen, PresetBrowser, PresetCommands, PresetEvent, PresetExport, PresetFileRequest, PresetFiles, PresetFns, PresetFooterEvent,
+    PresetFooterOptions, PresetMenuAction, PresetPanelMenu, PresetPicker, PresetReorder, PresetRow, PresetSource, PresetState, PresetView, ThumbFn, ThumbInfo,
 };
 use craft::ui::primitives::ContentPainterCx;
 use craft::ui::primitives::textures::TextureCache;
 use craft::ui::runtime::commands::{CommandSet as _, CommandState};
+use craft::ui::runtime::env::Env;
 use craft::ui::tile_grid::TileZoom;
-use egui::{Color32, ColorImage, Pos2, Rect, pos2};
+use egui::{Color32, ColorImage, Pos2, Rect, TextureId, pos2};
+use photocraft_engine::pattern_cmds::PatternLibrary;
+use photocraft_engine::presets::styles::StylePreset;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -26,7 +29,7 @@ use crate::PhotocraftApp;
 use crate::state::Tool;
 
 /// A row of a preset browser: a folder by name, or a preset by its key in the panel (a pattern id, a style name).
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, MemoProps)]
 pub enum PresetKey {
     Group(String),
     Item(String),
@@ -60,24 +63,56 @@ pub(crate) const TOOL_PRESETS: PresetPanel =
     PresetPanel { id: "toolPresets", label: "Tool Presets", prefix: "tool.presets", new_params: || json!({}), rename_new: true };
 
 /// A folder of a panel: its name and its presets as (key, name).
+#[derive(MemoProps)]
 pub(crate) struct Folder {
     pub(crate) name: String,
     pub(crate) items: Vec<(String, String)>,
 }
 
-/// The browser's rows: the folders in `order` (library indices), each followed by its presets.
-fn rows(folders: &[Folder], order: &[usize]) -> Vec<PresetRow<PresetKey>> {
+/// What a panel's presets are built from: its folders, their display order (library indices) and what its
+/// thumbnails paint from.
+#[derive(MemoProps)]
+struct PanelInputs<T> {
+    folders: Vec<Folder>,
+    order: Vec<usize>,
+    thumbs: T,
+}
+
+impl<T: MemoProps> PanelInputs<T> {
+    /// `panel`'s `folders` in the panel's folder order, with `thumbs`.
+    fn new(presets: &PresetUi, panel: PresetPanel, folders: Vec<Folder>, thumbs: T) -> Self {
+        let order = presets.display_order(panel.id, &names_of(&folders));
+        PanelInputs { folders, order, thumbs }
+    }
+}
+
+/// The browser's rows: the folders in their order, each followed by its presets.
+fn panel_rows<T>(inputs: &PanelInputs<T>, _: &Env) -> Vec<PresetRow<PresetKey>> {
     let mut rows = Vec::new();
-    for folder in order.iter().filter_map(|&at| folders.get(at)) {
+    for folder in inputs.order.iter().filter_map(|&at| inputs.folders.get(at)) {
         rows.push(PresetRow::group(PresetKey::Group(folder.name.clone()), folder.name.clone(), 0));
         rows.extend(folder.items.iter().map(|(key, name)| PresetRow::item(PresetKey::Item(key.clone()), name.clone(), 1)));
     }
     rows
 }
 
-/// The rows of `panel`'s `folders` in the panel's folder order.
-fn panel_rows(presets: &PresetUi, panel: PresetPanel, folders: &[Folder]) -> Vec<PresetRow<PresetKey>> {
-    rows(folders, &presets.display_order(panel.id, &names_of(folders)))
+/// The source of a panel's presets over `inputs`, its thumbnails painted by `thumb`.
+fn panel_source<T: MemoProps + Send + 'static>(inputs: PanelInputs<T>, thumb: ThumbFn<PanelInputs<T>, PresetKey>) -> PresetSource<'static, PresetKey> {
+    PresetSource::new(inputs, PresetFns::new(panel_rows).thumb(thumb))
+}
+
+/// A thumbnail held in the framework's texture store: the preset's key and name, and the texture.
+#[derive(Clone, MemoProps)]
+pub(crate) struct Swatch {
+    key: String,
+    name: String,
+    #[memo_props(hash = "a texture handle: the texture store keeps one picture under it")]
+    texture: TextureId,
+}
+
+/// The swatch of `key` among `swatches`.
+fn swatch_of<'a>(swatches: &'a [Swatch], key: &str) -> Option<&'a Swatch> {
+    swatches.iter().find(|swatch| swatch.key == key)
 }
 
 /// The thumbnail sizes of every preset panel, as factors of the grid's large thumbnail (48 pt): 20 to 96 pt in 6 pt
@@ -114,15 +149,14 @@ struct Look<'a> {
     flat: bool,
 }
 
-/// Shows `panel`'s browser over `rows` with `thumb` painting a preset's thumbnail, and returns its events with the
-/// keys of the rows it showed, in order. `presets` is the panel state, `zone` the canvas.
+/// Shows `panel`'s browser over the presets of `source`, and returns its events with the keys of the rows it showed,
+/// in order. `presets` is the panel state, `zone` the canvas.
 fn show(
     presets: &mut PresetUi,
     zone: DropZone,
     ui: &mut egui::Ui,
     panel: PresetPanel,
-    rows: Vec<PresetRow<PresetKey>>,
-    thumb: &dyn Fn(&ContentPainterCx, Rect, &str),
+    source: &PresetSource<'_, PresetKey>,
     look: Look<'_>,
 ) -> (Vec<PresetEvent<PresetKey>>, Vec<PresetKey>) {
     let selected = presets.selected.get(panel.id).cloned().map(PresetKey::Item);
@@ -135,7 +169,7 @@ fn show(
     if let Some(leading) = look.leading {
         footer = footer.leading(leading);
     }
-    let mut browser = PresetBrowser::new(tl!(panel.label), Bind::bound(&mut state), &rows);
+    let mut browser = PresetBrowser::new(tl!(panel.label), Bind::bound(&mut state), source);
     if let Some(key) = selected.clone() {
         browser = browser.selected(key);
     }
@@ -154,20 +188,10 @@ fn show(
     if !look.flat {
         browser = browser.reorder(PresetReorder::items_and_groups());
     }
-    let out = browser
-        .browser_id(browser_id(panel))
-        .default_open(DefaultOpen::First)
-        .thumb_range(THUMB_RANGE)
-        .drop_zone(zone)
-        .footer(footer)
-        .thumb(|cx, rect, info| {
-            if let PresetKey::Item(key) = info.key {
-                thumb(cx, rect, key);
-            }
-        })
-        .show(ui);
+    let out = browser.browser_id(browser_id(panel)).default_open(DefaultOpen::First).thumb_range(THUMB_RANGE).drop_zone(zone).footer(footer).show(ui);
     presets.browsers.insert(panel.id.to_string(), state);
-    (out.events, rows.into_iter().map(|row| row.key).collect())
+    let keys = if out.events.is_empty() { Vec::new() } else { source.rows(ui.ctx(), &Env::of(ui)).iter().map(|row| row.key.clone()).collect() };
+    (out.events, keys)
 }
 
 pub(crate) fn browser_id(panel: PresetPanel) -> egui::Id {
@@ -210,8 +234,23 @@ pub(crate) fn pattern_texture(ctx: &egui::Context, pattern: &photocraft_doc::Pat
     TextureCache::texture(ctx, ("pattern", pattern.id.clone()), || pattern_image(pattern))
 }
 
-fn paint_pattern(cx: &ContentPainterCx, rect: Rect, pattern: &photocraft_doc::Pattern) {
-    cx.picture(pattern_texture(cx.painter.ctx(), pattern), rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), 0.0);
+/// The swatch of `pattern`, keyed by its id and named by its display name.
+fn pattern_swatch(ctx: &egui::Context, pattern: &photocraft_doc::Pattern) -> Swatch {
+    Swatch { key: pattern.id.clone(), name: pattern.display_name().to_string(), texture: pattern_texture(ctx, pattern) }
+}
+
+/// Paints the whole of `texture` into `rect`.
+fn paint_texture(cx: &ContentPainterCx, rect: Rect, texture: TextureId) {
+    cx.picture(texture, rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), 0.0);
+}
+
+/// A pattern panel thumbnail: the preset's swatch.
+fn swatch_thumb(inputs: &PanelInputs<Vec<Swatch>>, cx: &ContentPainterCx, rect: Rect, info: ThumbInfo<'_, PresetKey>) {
+    if let PresetKey::Item(key) = info.key
+        && let Some(swatch) = swatch_of(&inputs.thumbs, key)
+    {
+        paint_texture(cx, rect, swatch.texture);
+    }
 }
 
 // ------------------------------------------------------------------ Gradients
@@ -227,22 +266,31 @@ fn paint_gradient(cx: &ContentPainterCx, rect: Rect, stops: &[(f32, [f32; 4])]) 
 /// applies it.
 pub fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
-    let groups = app.session.presets.gradients.clone();
+    let groups = &app.session.presets.gradients;
     // PLAN: the current-gradient strip above the browser needs a painter component; the browser's selected row shows it.
     let folders: Vec<Folder> = groups
         .iter()
         .map(|group| Folder { name: group.name.clone(), items: group.items.iter().map(|preset| (preset.name.clone(), preset.name.clone())).collect() })
         .collect();
-    let rows = panel_rows(&app.ui.presets_ui, GRADIENTS, &folders);
-    let thumb = |cx: &ContentPainterCx, rect: Rect, name: &str| {
-        if let Some(preset) = groups.iter().flat_map(|group| &group.items).find(|preset| preset.name == name) {
-            paint_gradient(cx, rect, &preset.resolve(fg, bg));
-        }
-    };
+    let names = names_of(&folders);
+    let stops: Vec<ResolvedGradient> = groups.iter().flat_map(|group| &group.items).map(|preset| (preset.name.clone(), preset.resolve(fg, bg))).collect();
+    let source = panel_source(PanelInputs::new(&app.ui.presets_ui, GRADIENTS, folders, stops), gradient_thumb);
     let zone = canvas_zone(app);
     let look = Look { cell: Some(CellShape::ratio(32, 18)), ..Look::default() };
-    let (events, keys) = show(&mut app.ui.presets_ui, zone, ui, GRADIENTS, rows, &thumb, look);
-    apply(app, ui.ctx(), GRADIENTS, &names_of(&folders), &keys, events);
+    let (events, keys) = show(&mut app.ui.presets_ui, zone, ui, GRADIENTS, &source, look);
+    apply(app, ui.ctx(), GRADIENTS, &names, &keys, events);
+}
+
+/// A gradient preset's name and its stops (offset, RGBA), resolved against the current colours.
+type ResolvedGradient = (String, Vec<(f32, [f32; 4])>);
+
+/// A gradient panel thumbnail: the preset's stops, resolved against the current colours.
+fn gradient_thumb(inputs: &PanelInputs<Vec<ResolvedGradient>>, cx: &ContentPainterCx, rect: Rect, info: ThumbInfo<'_, PresetKey>) {
+    if let PresetKey::Item(name) = info.key
+        && let Some((_, stops)) = inputs.thumbs.iter().find(|(preset, _)| preset == name)
+    {
+        paint_gradient(cx, rect, stops);
+    }
 }
 
 // ------------------------------------------------------------------ Patterns
@@ -255,7 +303,7 @@ pub fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if app.services.preset_store.is_none() {
         photocraft_engine::presets::patterns::sync(&mut app.session);
     }
-    let library = app.session.patterns.items.clone();
+    let library = &app.session.patterns.items;
     let folders: Vec<Folder> = app
         .session
         .presets
@@ -271,15 +319,17 @@ pub fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 .collect(),
         })
         .collect();
-    let rows = panel_rows(&app.ui.presets_ui, PATTERNS, &folders);
-    let thumb = |cx: &ContentPainterCx, rect: Rect, id: &str| {
-        if let Some(pattern) = library.iter().find(|pattern| pattern.id == id) {
-            paint_pattern(cx, rect, pattern);
-        }
-    };
+    let names = names_of(&folders);
+    let swatches: Vec<Swatch> = folders
+        .iter()
+        .flat_map(|folder| &folder.items)
+        .filter_map(|(id, _)| library.iter().find(|pattern| &pattern.id == id))
+        .map(|pattern| pattern_swatch(ui.ctx(), pattern))
+        .collect();
+    let source = panel_source(PanelInputs::new(&app.ui.presets_ui, PATTERNS, folders, swatches), swatch_thumb);
     let zone = canvas_zone(app);
-    let (events, keys) = show(&mut app.ui.presets_ui, zone, ui, PATTERNS, rows, &thumb, Look::default());
-    apply(app, ui.ctx(), PATTERNS, &names_of(&folders), &keys, events);
+    let (events, keys) = show(&mut app.ui.presets_ui, zone, ui, PATTERNS, &source, Look::default());
+    apply(app, ui.ctx(), PATTERNS, &names, &keys, events);
 }
 
 // ------------------------------------------------------------------ Styles
@@ -294,22 +344,53 @@ pub(crate) fn style_image(session: &photocraft_engine::Session, preset: &photocr
     ColorImage::from_rgba_unmultiplied([S as usize, S as usize], &px)
 }
 
+/// What the style thumbnails draw from: every style and the patterns their effects use, as the app holds them when the
+/// thumbnails' presets are built.
+#[derive(PlainData)]
+pub(crate) struct StyleLibrary {
+    #[plain_data(assume = "engine presets: owned values with no interior mutability")]
+    styles: Vec<StylePreset>,
+    #[plain_data(assume = "the engine's pattern library: owned patterns with no interior mutability")]
+    patterns: PatternLibrary,
+}
+
+impl StyleLibrary {
+    /// The app's styles and patterns now.
+    pub(crate) fn of(session: &photocraft_engine::Session) -> Tracked<Self> {
+        let styles = session.presets.styles.iter().flat_map(|group| group.items.iter().cloned()).collect();
+        Tracked::new(StyleLibrary { styles, patterns: session.patterns.clone() })
+    }
+
+    /// Paints the thumbnail of the style `name`. A picture is rendered on a texture miss only, under one key for
+    /// every place that shows the style, so they share the textures.
+    pub(crate) fn paint(&self, cx: &ContentPainterCx, rect: Rect, name: &str) {
+        let Some(style) = self.styles.iter().find(|style| style.name == name) else { return };
+        let key = ("style", style.name.clone(), style.effects.len(), format!("{:?}{:?}", style.blend, style.fill_opacity));
+        picture(cx, rect, key, || {
+            let mut scratch = photocraft_engine::Session::new();
+            scratch.patterns = self.patterns.clone();
+            style_image(&scratch, style)
+        });
+    }
+}
+
+/// A Styles panel thumbnail.
+fn style_thumb(inputs: &PanelInputs<Tracked<StyleLibrary>>, cx: &ContentPainterCx, rect: Rect, info: ThumbInfo<'_, PresetKey>) {
+    if let PresetKey::Item(name) = info.key {
+        inputs.thumbs.paint(cx, rect, name);
+    }
+}
+
 /// Window › Styles: a click applies the style to the selected layers (Shift adds its effects), a drop on the canvas
 /// applies it to the active layer.
 pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let groups = app.session.presets.styles.clone();
     let folders = style_folders(app);
-    let rows = panel_rows(&app.ui.presets_ui, STYLES, &folders);
+    let names = names_of(&folders);
+    let source = panel_source(PanelInputs::new(&app.ui.presets_ui, STYLES, folders, StyleLibrary::of(&app.session)), style_thumb);
     let zone = canvas_zone(app);
-    let session = &app.session;
-    let thumb = |cx: &ContentPainterCx, rect: Rect, name: &str| {
-        let Some(style) = groups.iter().flat_map(|group| &group.items).find(|style| style.name == name) else { return };
-        let key = ("style", style.name.clone(), style.effects.len(), format!("{:?}{:?}", style.blend, style.fill_opacity));
-        picture(cx, rect, key, || style_image(session, style));
-    };
     let look = Look { room_height: Some(STYLES_HEIGHT), ..Look::default() };
-    let (events, keys) = show(&mut app.ui.presets_ui, zone, ui, STYLES, rows, &thumb, look);
-    apply(app, ui.ctx(), STYLES, &names_of(&folders), &keys, events);
+    let (events, keys) = show(&mut app.ui.presets_ui, zone, ui, STYLES, &source, look);
+    apply(app, ui.ctx(), STYLES, &names, &keys, events);
 }
 
 /// The Styles folders: each style group with its styles, keyed and named by the style's name.
@@ -464,6 +545,20 @@ fn shape_texture(ctx: &egui::Context, shape: &photocraft_engine::presets::shapes
     TextureCache::texture(ctx, shape_key(shape), || shape_image(shape))
 }
 
+/// The swatch of `shape`, keyed and named by its name.
+fn shape_swatch(ctx: &egui::Context, shape: &photocraft_engine::presets::shapes::ShapePreset) -> Swatch {
+    Swatch { key: shape.name.clone(), name: shape.name.clone(), texture: shape_texture(ctx, shape) }
+}
+
+/// A Shapes panel thumbnail: the shape's raster, inset from the tile's edge.
+fn shape_thumb(inputs: &PanelInputs<Vec<Swatch>>, cx: &ContentPainterCx, rect: Rect, info: ThumbInfo<'_, PresetKey>) {
+    if let PresetKey::Item(key) = info.key
+        && let Some(swatch) = swatch_of(&inputs.thumbs, key)
+    {
+        paint_texture(cx, rect.shrink(2.0), swatch.texture);
+    }
+}
+
 /// Window › Shapes: a click picks the shape for the Custom Shape tool, a double click places it, and a drop on the
 /// canvas places it where it lands.
 pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -472,15 +567,12 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .iter()
         .map(|group| Folder { name: group.name.clone(), items: group.items.iter().map(|shape| (shape.name.clone(), shape.name.clone())).collect() })
         .collect();
-    let rows = panel_rows(&app.ui.presets_ui, SHAPES, &folders);
-    let thumb = |cx: &ContentPainterCx, rect: Rect, name: &str| {
-        if let Some(shape) = groups.iter().flat_map(|group| &group.items).find(|shape| shape.name == name) {
-            picture(cx, rect.shrink(2.0), shape_key(shape), || shape_image(shape));
-        }
-    };
+    let names = names_of(&folders);
+    let swatches: Vec<Swatch> = groups.iter().flat_map(|group| &group.items).map(|shape| shape_swatch(ui.ctx(), shape)).collect();
+    let source = panel_source(PanelInputs::new(&app.ui.presets_ui, SHAPES, folders, swatches), shape_thumb);
     let zone = canvas_zone(app);
-    let (events, keys) = show(&mut app.ui.presets_ui, zone, ui, SHAPES, rows, &thumb, Look::default());
-    apply(app, ui.ctx(), SHAPES, &names_of(&folders), &keys, events);
+    let (events, keys) = show(&mut app.ui.presets_ui, zone, ui, SHAPES, &source, Look::default());
+    apply(app, ui.ctx(), SHAPES, &names, &keys, events);
 }
 
 fn shape_fill(app: &PhotocraftApp) -> Value {
@@ -524,28 +616,38 @@ fn keep_picker_state(presets: &mut PresetUi, id: &str, state: PresetState<String
 
 /// Options-bar shape picker for the Custom Shape tool.
 pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    const GROUP: &str = "group:";
     const ID: &str = "shapePicker";
-    let ctx = ui.ctx().clone();
-    let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
-    let mut rows: Vec<PresetRow<String>> = Vec::new();
-    for group in &groups {
-        rows.push(PresetRow::group(format!("{GROUP}{}", group.name), group.name.clone(), 0));
-        for shape in &group.items {
-            let texture = shape_texture(&ctx, shape);
-            rows.push(PresetRow::item(shape.name.clone(), shape.name.clone(), 1).tooltip(shape.name.clone()).preview(ThumbAspect::SQUARE, move |cx, rect| {
-                cx.picture(texture, rect.shrink(2.0), Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), 0.0);
-            }));
-        }
-    }
+    let groups: Vec<(String, Vec<Swatch>)> = photocraft_engine::presets::shapes::all_groups(&app.session)
+        .iter()
+        .map(|group| (group.name.clone(), group.items.iter().map(|shape| shape_swatch(ui.ctx(), shape)).collect()))
+        .collect();
+    let source = PresetSource::new(groups, PresetFns::new(shape_rows));
     let mut value = Some(app.ui.presets_ui.shape().to_string());
     let before = value.clone();
     let mut state = picker_state(&app.ui.presets_ui, ID);
-    let _ = PresetPicker::new(tl!("Shape"), Bind::bound(&mut value), &rows, Bind::bound(&mut state)).columns(7).show(ui); // the picked value comes back through `value`
+    let _ = PresetPicker::new(tl!("Shape"), Bind::bound(&mut value), &source, Bind::bound(&mut state)).columns(7).show(ui); // the picked value comes back through `value`
     keep_picker_state(&mut app.ui.presets_ui, ID, state);
-    if let Some(picked) = value.filter(|picked| before.as_ref() != Some(picked) && !picked.starts_with(GROUP)) {
+    if let Some(picked) = value.filter(|picked| before.as_ref() != Some(picked) && !picked.starts_with(SHAPE_GROUP)) {
         app.ui.presets_ui.custom_shape = picked;
     }
+}
+
+/// The key prefix of a shape group's row in the shape picker.
+const SHAPE_GROUP: &str = "group:";
+
+/// The shape picker's rows: each group, then its shapes with their rasters, named in their tooltips.
+fn shape_rows(groups: &Vec<(String, Vec<Swatch>)>, _: &Env) -> Vec<PresetRow<String>> {
+    let mut rows = Vec::new();
+    for (group, shapes) in groups {
+        rows.push(PresetRow::group(format!("{SHAPE_GROUP}{group}"), group.clone(), 0));
+        for shape in shapes {
+            let texture = shape.texture;
+            rows.push(PresetRow::item(shape.key.clone(), shape.name.clone(), 1).tooltip(shape.name.clone()).preview(ThumbAspect::SQUARE, move |cx, rect| {
+                paint_texture(cx, rect.shrink(2.0), texture);
+            }));
+        }
+    }
+    rows
 }
 
 /// Custom Shape tool drag: places the selected shape in the dragged rect (⇧ keeps proportions).
@@ -565,17 +667,15 @@ pub fn finish_custom_shape(app: &mut PhotocraftApp, rect: [f64; 4], keep: bool, 
 pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let only = app.ui.presets_ui.current_tool_only;
     let current = app.ui.tool;
-    let rows: Vec<PresetRow<PresetKey>> = app
+    let presets: Vec<(String, String)> = app
         .session
         .presets
         .tool_presets
         .iter()
         .filter(|preset| !only || Tool::from_name(&preset.tool) == Some(current))
-        .map(|preset| {
-            let icon = Tool::from_name(&preset.tool).map_or_else(|| craft::behavior::IconId::new("settings"), crate::icons::tool_icon);
-            PresetRow::item(PresetKey::Item(preset.name.clone()), preset.name.clone(), 0).icon(icon)
-        })
+        .map(|preset| (preset.name.clone(), preset.tool.clone()))
         .collect();
+    let source = PresetSource::new(presets.as_slice(), PresetFns::new(tool_preset_rows));
     // The footer's closure is `Fn`, so the check box's value goes through a cell.
     let flag = std::cell::Cell::new(only);
     let leading = |ui: &mut egui::Ui| {
@@ -591,9 +691,20 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         leading: Some(Box::new(leading)),
         ..Look::default()
     };
-    let (events, keys) = show(&mut app.ui.presets_ui, zone, ui, TOOL_PRESETS, rows, &|_, _, _| {}, look);
+    let (events, keys) = show(&mut app.ui.presets_ui, zone, ui, TOOL_PRESETS, &source, look);
     app.ui.presets_ui.current_tool_only = flag.get();
     apply(app, ui.ctx(), TOOL_PRESETS, &[], &keys, events);
+}
+
+/// The Tool Presets rows: each preset, as (name, tool name), with its tool's icon.
+fn tool_preset_rows(presets: &&[(String, String)], _: &Env) -> Vec<PresetRow<PresetKey>> {
+    presets
+        .iter()
+        .map(|(name, tool)| {
+            let icon = Tool::from_name(tool).map_or_else(|| craft::behavior::IconId::new("settings"), crate::icons::tool_icon);
+            PresetRow::item(PresetKey::Item(name.clone()), name.clone(), 0).icon(icon)
+        })
+        .collect()
 }
 
 // ------------------------------------------------------------------ events
@@ -746,19 +857,26 @@ fn after(app: &mut PhotocraftApp, ctx: &egui::Context, panel: PresetPanel, event
 
 // ------------------------------------------------------------------ pattern picker
 
-/// The library's patterns as picker rows, each with its swatch and its name as the tooltip. The pattern picker and the
-/// dialogs' pattern lists show these.
-pub(crate) fn pattern_rows(app: &PhotocraftApp, ctx: &egui::Context) -> Vec<PresetRow<String>> {
-    app.session
-        .patterns
-        .items
+/// The library's patterns as swatches, in library order. The pattern picker and the dialogs' pattern lists show these
+/// through [`pattern_source`].
+pub(crate) fn pattern_swatches(app: &PhotocraftApp, ctx: &egui::Context) -> Vec<Swatch> {
+    app.session.patterns.items.iter().map(|pattern| pattern_swatch(ctx, pattern)).collect()
+}
+
+/// The presets of `swatches`: one row per pattern, keyed by its id, with its swatch and its name as the tooltip.
+pub(crate) fn pattern_source(swatches: Vec<Swatch>) -> PresetSource<'static, String> {
+    PresetSource::new(swatches, PresetFns::new(|swatches, env| swatch_rows(swatches, env)))
+}
+
+/// The rows of [`pattern_source`].
+fn swatch_rows(swatches: &[Swatch], _: &Env) -> Vec<PresetRow<String>> {
+    swatches
         .iter()
-        .map(|pattern| {
-            let texture = pattern_texture(ctx, pattern);
-            let name = pattern.display_name().to_string();
-            PresetRow::item(pattern.id.clone(), name.clone(), 0).tooltip(name).preview(ThumbAspect::SQUARE, move |cx, rect| {
-                cx.picture(texture, rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), 0.0);
-            })
+        .map(|swatch| {
+            let texture = swatch.texture;
+            PresetRow::item(swatch.key.clone(), swatch.name.clone(), 0)
+                .tooltip(swatch.name.clone())
+                .preview(ThumbAspect::SQUARE, move |cx, rect| paint_texture(cx, rect, texture))
         })
         .collect()
 }
@@ -767,11 +885,11 @@ pub(crate) fn pattern_rows(app: &PhotocraftApp, ctx: &egui::Context) -> Vec<Pres
 /// each named in its tooltip. Returns the id of a newly picked pattern.
 pub(crate) fn pattern_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui, selected: &str) -> Option<String> {
     const ID: &str = "patternPicker";
-    let rows = pattern_rows(app, ui.ctx());
+    let source = pattern_source(pattern_swatches(app, ui.ctx()));
     let mut value = Some(selected.to_string()).filter(|id| app.session.patterns.items.iter().any(|pattern| &pattern.id == id));
     let before = value.clone();
     let mut state = picker_state(&app.ui.presets_ui, ID);
-    let _ = PresetPicker::new(tl!("Patterns"), Bind::bound(&mut value), &rows, Bind::bound(&mut state)).show(ui);
+    let _ = PresetPicker::new(tl!("Patterns"), Bind::bound(&mut value), &source, Bind::bound(&mut state)).show(ui);
     keep_picker_state(&mut app.ui.presets_ui, ID, state);
     value.filter(|picked| before.as_ref() != Some(picked))
 }

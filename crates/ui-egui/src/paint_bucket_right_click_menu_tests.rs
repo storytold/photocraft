@@ -103,7 +103,16 @@ fn a_right_click_on_a_free_transform_box_opens_only_the_transform_menu() {
     app.run("select.deselect", json!({})).unwrap();
     let ctx = testing::ctx(&app);
     crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).unwrap();
-    testing::secondary_click(&mut app, [32.0, 32.0], Modifiers::NONE);
+    testing::frame(&mut app);
+    let view = testing::view(&app).unwrap();
+    let quad = app.ui.transform.as_ref().unwrap().session.quad();
+    let screen = egui::Rect::from_points(&quad.map(|p| view.to_screen(p)));
+    let center = screen.center();
+    let [x0, y0, x1, y1] = crate::transform_task_bar::shown_rect(&app, &ctx).expect("the transform bar remains visible");
+    assert!(view.rect.contains(center), "the click remains on the canvas");
+    assert!(!egui::Rect::from_min_max(egui::pos2(x0, y0), egui::pos2(x1, y1)).contains(center), "the click targets the box, not its bar");
+    let at = view.to_doc(center);
+    testing::secondary_click(&mut app, [at.x, at.y], Modifiers::NONE);
     // The box's own menu is the framework transform overlay's context menu, not a canvas tool menu.
     assert!(app.ui.canvas_tool_menu.is_none(), "no canvas tool menu over the box");
     assert!(mode_menu(&app).is_none(), "not the Mode list");

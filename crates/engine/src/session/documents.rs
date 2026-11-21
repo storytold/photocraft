@@ -17,6 +17,9 @@ pub fn move_item<T>(v: &mut Vec<T>, i: usize, to: usize) -> Option<usize> {
 
 impl Session {
     pub fn new() -> Self {
+        // Commands run through the process-wide registry; the first session installs it, and a
+        // conflicting install reports itself at the first command.
+        let _ = crate::install::install();
         Self::default()
     }
 
@@ -24,7 +27,7 @@ impl Session {
         &self.docs
     }
 
-    /// Changes whenever a document is opened or closed.
+    /// Changes whenever a document is opened, closed or renamed.
     pub fn documents_generation(&self) -> u64 {
         self.documents_generation
     }
@@ -39,6 +42,21 @@ impl Session {
 
     pub fn active_mut(&mut self) -> Option<&mut DocState> {
         self.active.and_then(|i| self.docs.get_mut(i))
+    }
+
+    /// Completes a successful save of the active document: the file becomes its path and names it, and its revision is
+    /// the saved one. File identity is not a history step; callers finish the write first and don't call this for a
+    /// copy or export.
+    pub fn saved_to(&mut self, path: String) {
+        let renamed = self.active_mut().is_some_and(|st| st.saved_to(path));
+        if renamed {
+            self.documents_generation = self.documents_generation.wrapping_add(1);
+        }
+    }
+
+    /// The open document with this id, active or not.
+    pub fn document_mut(&mut self, id: photocraft_doc::DocId) -> Option<&mut DocState> {
+        self.docs.iter_mut().find(|d| d.doc.id == id)
     }
 
     /// Monotonic active-document generation. It changes when a different document becomes
@@ -81,11 +99,15 @@ impl Session {
     }
 
     /// Make `layer` the active document's active layer and nothing else (the selection list and
-    /// anchor are left as they are), counted in [`Self::active_layer_changes`].
+    /// anchor are left as they are), counted in [`Self::active_layer_changes`]. Like
+    /// [`Self::select_layer`], not an edit.
     pub fn set_active_layer(&mut self, layer: Option<LayerId>) {
         let before = self.active_layer_stamp();
-        if let Some(st) = self.active_mut() {
-            st.active_layer = layer;
+        if let Some(st) = self.active_mut()
+            && st.active_layer != layer
+        {
+            st.set_active_layer(layer);
+            st.bump_selection_revision();
         }
         self.note_layer_change(before);
     }
@@ -184,7 +206,7 @@ impl Session {
         // History Options › Automatically Create First Snapshot off: no snapshot of the document
         // as opened, so the History panel starts at the opening state (#2966).
         if !self.prefs.get().history_options.automatically_create_first_snapshot {
-            st.snapshots.clear();
+            st.snapshots_mut().clear();
         }
         self.docs.push(st);
         self.documents_generation = self.documents_generation.wrapping_add(1);
@@ -246,7 +268,7 @@ impl Session {
 
 pub(super) fn fix_active(st: &mut DocState) {
     if st.active_layer.is_none_or(|id| st.doc.layer(id).is_none()) {
-        st.active_layer = st.doc.top_layer();
+        st.set_active_layer(st.doc.top_layer());
     }
     fix_selection(st);
     channel_cmds::fix_view(st);
