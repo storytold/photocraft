@@ -208,7 +208,9 @@ fn canvas_view(props: &mut CanvasProps<'_>, ui: &mut egui::Ui) {
     };
     let out = picker.show(ui);
     let keys = if out.picks.is_empty() { Vec::new() } else { input.keys(ui) };
-    let closed = !open || !out.open;
+    // The popover writes its binding when it closes. Its output reports it closed in a run that shows no layer (the
+    // view's measuring run) too, so that is no close.
+    let closed = !open;
     props.out.send(CanvasEvent { out, keys, eraser, closed });
 }
 
