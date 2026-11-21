@@ -104,6 +104,59 @@ fn a_refused_input_named_like_a_source_does_not_stop_an_in_place_batch() {
     assert_eq!(errors, 2);
 }
 
+/// A folder of PNGs where the names in `broken` hold bytes that are not an image, run with `naming`.
+fn run_broken(label: &str, files: &[&str], broken: &[&str], in_place: bool, naming: Value) -> (Vec<String>, Vec<String>, String) {
+    let dir = tmp(label);
+    let input = join(&dir, "in");
+    std::fs::create_dir_all(&input).unwrap();
+    for name in files {
+        if broken.contains(name) {
+            std::fs::write(join(&input, name), b"not an image").unwrap();
+        } else {
+            write_png(&join(&input, name));
+        }
+    }
+    let output = if in_place { input.clone() } else { join(&dir, "out") };
+    let log = join(&dir, "errors.txt");
+    let mut p = json!({"input": input, "output": output, "steps": [], "format": "same", "startingSerial": 5, "errorLog": log});
+    let key = if naming.is_string() { "naming" } else { "namingComponents" };
+    p[key] = naming;
+    let result = Session::new().execute("file.automate.batch", p).unwrap();
+    let names = |key: &str, field: Option<&str>| -> Vec<String> {
+        let list = result[key].as_array().unwrap().iter();
+        list.map(|v| file_name(field.map_or(v, |f| &v[f]).as_str().unwrap()).to_string()).collect()
+    };
+    // The log is UTF-16 big-endian.
+    let words: Vec<u16> = std::fs::read(&log).unwrap_or_default().as_chunks::<2>().0.iter().map(|&b| u16::from_be_bytes(b)).collect();
+    (names("files", None), names("errors", Some("file")), String::from_utf16_lossy(&words))
+}
+
+#[test]
+fn a_file_that_fails_to_open_does_not_use_up_a_serial_number() {
+    let naming = json!([{"component":"serial3"}, {"component":"extension"}, {"text":"_x"}]);
+    let (files, errors, log) = run_broken("open-gap", &["a.png", "b.png", "c.png"], &["b.png"], false, naming);
+    assert_eq!(files, ["005png_x", "006png_x"]);
+    assert_eq!(errors, ["b.png"]);
+    assert!(log.contains("b.png"), "{log}");
+}
+
+#[test]
+fn a_file_that_fails_to_open_does_not_use_up_a_serial_letter() {
+    let (files, errors, _) = run_broken("open-letters", &["a.png", "b.png", "c.png"], &["b.png"], false, json!([{"component":"letter"}, {"text":"_x"}]));
+    assert_eq!(files, ["a_x", "b_x"]);
+    assert_eq!(errors, ["b.png"]);
+}
+
+#[test]
+fn a_renumbered_name_that_would_replace_an_input_fails_that_input() {
+    // In place, `b.png` fails to open, so `c.png` would take 006 and become `c_006.png`, another
+    // input. `c.png` fails instead; it did not fail to open, so it keeps its number and
+    // `c_006.png` takes 007.
+    let (files, errors, _) = run_broken("open-in-place", &["a.png", "b.png", "c.png", "c_006.png"], &["b.png"], true, json!("{name}_{serial:3}.png"));
+    assert_eq!(files, ["a_005.png", "c_006_007.png"]);
+    assert_eq!(errors, ["b.png", "c.png"]);
+}
+
 #[test]
 fn the_error_log_may_take_a_refused_inputs_name() {
     // `d.txt` takes no number, so its name `d_003.png` is never written and the log can use it.

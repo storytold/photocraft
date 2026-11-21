@@ -581,7 +581,7 @@ pub(super) fn process_batch_outputs(
     ctx: &crate::jobs::JobCtx,
     f: &dyn Fn(&mut Session, &str) -> Result<bool>,
 ) -> Result<Value> {
-    process_batch_outputs_with(BatchRun { raw_ppi, format, save, policy, input: None, check_duplicates: false }, outputs, ctx, &|scratch, out| {
+    process_batch_outputs_with(BatchRun { raw_ppi, format, save, policy, input: None, check_duplicates: false, rename: None }, outputs, ctx, &|scratch, out| {
         f(scratch, out).map_err(FileFailure::from)
     })
 }
@@ -593,6 +593,9 @@ struct BatchRun<'a> {
     policy: &'a BatchPolicy,
     input: Option<&'a InputPolicy<'a>>,
     check_duplicates: bool,
+    /// The output for the input at an index when it differs from the planned one; an error
+    /// fails that input.
+    rename: Option<&'a dyn Fn(usize) -> Result<Option<String>>>,
 }
 
 /// Share background progress, interruption and write ordering across native and recorded inputs.
@@ -603,7 +606,7 @@ fn process_batch_outputs_with(
     ctx: &crate::jobs::JobCtx,
     f: &dyn Fn(&mut Session, &str) -> std::result::Result<bool, FileFailure>,
 ) -> Result<Value> {
-    let BatchRun { raw_ppi, format, save, policy, input, check_duplicates } = config;
+    let BatchRun { raw_ppi, format, save, policy, input, check_duplicates, rename } = config;
     let mut written = OutputClaims::default();
     let total = outputs.len();
     let mut files = Vec::new();
@@ -621,16 +624,17 @@ fn process_batch_outputs_with(
             break;
         }
         ctx.progress(index as f32 / total.max(1) as f32, &format!("{} of {total}: {}", index + 1, file_name(path)));
-        let result = process_one(
-            raw_ppi,
-            path,
-            out,
-            save,
-            ProcessOptions { format: Some(format), written: check_duplicates.then_some(&written), ctx: Some(ctx), input, unique: false },
-            f,
-        );
+        let (out, result) = match rename.map_or(Ok(None), |rename| rename(index)) {
+            Ok(renamed) => {
+                let out = renamed.unwrap_or_else(|| out.clone());
+                let options = ProcessOptions { format: Some(format), written: check_duplicates.then_some(&written), ctx: Some(ctx), input, unique: false };
+                let result = process_one(raw_ppi, path, &out, save, options, f);
+                (out, result)
+            }
+            Err(error) => (out.clone(), Err(FileFailure::from(error))),
+        };
         if result.is_ok() {
-            written.record(out, path);
+            written.record(&out, path);
         }
         // An input that failed on its own (not because it was stopped) stays a failure with its
         // reason, even when a cancel or Esc lands while it runs.
@@ -992,7 +996,19 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         let _ = (input, check_folder_format);
         true
     };
-    let names = if save_and_close { None } else { batch_naming::plan_counting(&inputs, &output, &format, p, &counts)? };
+    let naming = if save_and_close { None } else { batch_naming::naming(&output, &format, p)? };
+    let names = naming.as_ref().map(|naming| naming.plan(&inputs, &counts)).transpose()?;
+    // The serial index each input takes when every input opens.
+    let mut next = 0;
+    let serials: Vec<Option<usize>> = inputs
+        .iter()
+        .map(|input| {
+            counts(input).then(|| {
+                next += 1;
+                next - 1
+            })
+        })
+        .collect();
     let mut save = SaveOpts::from_params(s, p, cmd)?;
     if save_and_close {
         save.tiff_layers = save_close_tiff_layers;
@@ -1037,8 +1053,11 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
             let notices = std::cell::RefCell::new(Vec::new());
             // Whether this input's source opened read-only; Save and Close must not replace it.
             let read_only_source = std::cell::Cell::new(false);
+            // Whether this input's bytes were read, so a failure after it is in its data.
+            let bytes_read = std::cell::Cell::new(false);
             let prepare = |scratch: &mut Session, path: &str| -> Result<()> {
                 read_only_source.set(false);
+                bytes_read.set(false);
                 #[cfg(not(target_arch = "wasm32"))]
                 if check_folder_format && !super::paths::openable_name(path) {
                     return Err(EngineError::Other(format!("unsupported Batch folder input: {path}")));
@@ -1062,6 +1081,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     scratch.batch_open = Some(super::open::BatchOpen { path: path.to_string(), sources: Vec::new(), raw_ppi, read_only: false });
                 } else {
                     let bytes = read_file(path)?;
+                    bytes_read.set(true);
                     if quiet_profiles || quiet_raw {
                         super::open::open_bytes_as(scratch, &file_name(path), &bytes, None, Some(path.to_string()))?;
                         read_only_source.set(scratch.active().is_some_and(|state| state.source_read_only));
@@ -1073,7 +1093,33 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                 }
                 Ok(())
             };
-            let input = InputPolicy { prepare: &prepare, notices: &notices };
+            // An input whose data does not open (corrupt or truncated) fails before its action
+            // starts, so it gives its serial number and letter to the next input (#14875). A
+            // missing or unreadable input keeps its number; one refused by its name took none.
+            let failed_opens = std::cell::Cell::new(0usize);
+            let open = |scratch: &mut Session, path: &str| -> Result<()> {
+                let result = prepare(scratch, path);
+                if result.is_err() && bytes_read.get() {
+                    failed_opens.set(failed_opens.get() + 1);
+                }
+                result
+            };
+            #[cfg(not(target_arch = "wasm32"))]
+            let sources = std::cell::OnceCell::new();
+            let rename = |index: usize| -> Result<Option<String>> {
+                let failed = failed_opens.get();
+                let (Some(naming), Some(Some(serial)), Some(input)) = (&naming, serials.get(index), inputs.get(index)) else { return Ok(None) };
+                if failed == 0 {
+                    return Ok(None);
+                }
+                // The planned names were checked against the inputs and the error log; check the new one too.
+                let out = naming.name(input, serial.saturating_sub(failed), true)?;
+                #[cfg(not(target_arch = "wasm32"))]
+                batch_naming::check_replaces_no_input(sources.get_or_init(|| batch_naming::input_identities(&inputs)), &out)?;
+                validate_error_log(&policy, [], [out.clone()])?;
+                Ok(Some(out))
+            };
+            let input = InputPolicy { prepare: &open, notices: &notices };
             let run = |scratch: &mut Session, out: &str| -> std::result::Result<bool, FileFailure> {
                 let source_id = scratch.active().map(|state| state.doc.id);
                 let source_path = scratch
@@ -1207,7 +1253,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                 result
             };
             let mut result = process_batch_outputs_with(
-                BatchRun { raw_ppi, format: &format, save, policy: &policy, input: Some(&input), check_duplicates },
+                BatchRun { raw_ppi, format: &format, save, policy: &policy, input: Some(&input), check_duplicates, rename: Some(&rename) },
                 outputs,
                 ctx,
                 &run,
