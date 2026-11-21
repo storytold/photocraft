@@ -1865,3 +1865,63 @@ fn indexed_matte_other_shows_the_color_row_and_none_hides_it() {
     assert_eq!(fields_of(harness.state(), id).text("matte"), Some("none"));
     assert!(try_set(harness.state_mut(), id, "matteColor", json!([0.0, 0.0, 1.0])).is_err(), "None hides the colour row");
 }
+
+/// An alpha channel chosen as Lens Blur's depth map reaches the command as the `channel` source and its index: the
+/// menu's own `channel:N` id was sent as is, and the engine refused it at OK and in the preview.
+#[test]
+fn lens_blur_alpha_channel_source_runs() {
+    let mut app = new_app();
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    for name in ["Mask", "Depth"] {
+        app.run("select.all", json!({})).unwrap();
+        app.run("select.saveSelection", json!({"name": name})).unwrap();
+    }
+    app.run("select.deselect", json!({})).unwrap();
+    let id = open(&mut app, LENS_BLUR).unwrap();
+    passes(&mut app, 2);
+    set(&mut app, id, "depthMap", json!("channel:1"));
+    passes(&mut app, 2);
+    let params = command_params(LENS_BLUR, &fields_of(&app, id));
+    assert_eq!((&params["depthMap"], &params["depthChannel"]), (&json!("channel"), &json!(1)), "{params}");
+    app.run(LENS_BLUR, params).expect("the command takes the channel source");
+    // The other sources pass through.
+    set(&mut app, id, "depthMap", json!("transparency"));
+    let params = command_params(LENS_BLUR, &fields_of(&app, id));
+    assert_eq!((&params["depthMap"], params.get("depthChannel")), (&json!("transparency"), None));
+}
+
+/// A Lens Blur depth channel is an index into the document the dialog opened on: when the control channel makes another
+/// document active under the open dialog, preview and OK refuse the channel instead of blurring by that document's
+/// channel at the same index; back on the first document, OK applies it there.
+#[test]
+fn lens_blur_refuses_a_depth_channel_after_the_document_changed() {
+    let mut app = new_app();
+    for _ in 0..2 {
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        for name in ["Mask", "Depth"] {
+            app.run("select.all", json!({})).unwrap();
+            app.run("select.saveSelection", json!({"name": name})).unwrap();
+        }
+        app.run("select.deselect", json!({})).unwrap();
+    }
+    let ctx = app.ctx().clone();
+    match_color_control(&mut app, &ctx, "ui.window.open", json!({"document": 0}));
+    let id = open(&mut app, LENS_BLUR).unwrap();
+    passes(&mut app, 2);
+    set(&mut app, id, "depthMap", json!("channel:1"));
+    passes(&mut app, 2);
+    let steps: Vec<_> = app.session.documents().iter().map(|st| st.history.past_len()).collect();
+
+    match_color_control(&mut app, &ctx, "ui.window.open", json!({"document": 1}));
+    assert!(crate::canvas::ensure_filter_preview(&mut app, 1, &ctx).is_none(), "no preview with the other document's channel");
+    assert!(!ok(&mut app, id), "OK is refused and the dialog stays open");
+    assert_eq!(app.session.documents().iter().map(|st| st.history.past_len()).collect::<Vec<_>>(), steps, "nothing was blurred");
+    // Sources that name no channel are not bound to a document.
+    let opened = crate::dialogs::params::captured(&app, LENS_BLUR);
+    assert!(validate_lens_blur_document(&app, LENS_BLUR, &opened, Some("transparency")).is_ok());
+
+    match_color_control(&mut app, &ctx, "ui.window.open", json!({"document": 0}));
+    assert!(ok(&mut app, id), "on the document it opened on, the channel is accepted");
+    assert_eq!(app.session.documents()[0].history.past_len(), steps[0] + 1, "Lens Blur ran on the first document");
+    assert_eq!(app.session.documents()[1].history.past_len(), steps[1], "the second document is untouched");
+}
