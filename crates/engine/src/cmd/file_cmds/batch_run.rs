@@ -1,4 +1,3 @@
-use super::open::import_at_raw_ppi;
 use super::paths::{extension, file_name, join, list_files, list_images, read_file, sanitize, stem, write_file};
 use super::processing::parse_steps;
 use super::save::{SaveOpts, encode, save_doc, save_doc_as};
@@ -140,7 +139,7 @@ pub(crate) fn process_files(
     f: &dyn Fn(&mut Session) -> Result<()>,
 ) -> Value {
     let inputs: Vec<BatchInput> = inputs.iter().map(|path| BatchInput { path: path.clone(), rel_dir: String::new() }).collect();
-    process_tree(s, &inputs, output, format, save, TreeNaming::Suffix(suffix), &|scratch, _| f(scratch).map(|()| false))
+    process_tree(s, (&inputs, None), output, format, save, TreeNaming::Suffix(suffix), &|scratch, _| f(scratch).map(|()| false))
 }
 
 pub(super) enum TreeNaming<'a> {
@@ -154,7 +153,7 @@ pub(super) enum TreeNaming<'a> {
 /// recorded save marked); otherwise the active document is saved after it.
 pub(super) fn process_tree(
     s: &Session,
-    inputs: &[BatchInput],
+    (inputs, order): (&[BatchInput], Option<photocraft_io::HistoricalXcfSampleOrder>),
     output: &str,
     format: &str,
     save: SaveOpts,
@@ -169,7 +168,7 @@ pub(super) fn process_tree(
         let ext = if format == "same" { same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
         (path.as_str(), join(&join(output, rel_dir), &format!("{}{suffix}.{ext}", stem(path))))
     });
-    process_outputs(s, outputs, save, unique, f)
+    process_outputs(s, outputs, save, unique, order, f)
 }
 
 /// The extension a batch output takes with Format "Same": the input's own, except for formats
@@ -185,7 +184,25 @@ pub fn same_format(path: &str) -> String {
         &["pdn", "kra", "krz", "af", "afdesign", "afphoto", "afpub", "heic", "heif", "hif", "svg", "svgz", "cin", "pcx", "xpm", "xcf", "xcfgz", "gz", "psdt"];
     let ext = extension(path).unwrap_or_else(|| "png".into());
     let no_writer = photocraft_formats::from_extension(&ext).is_some_and(|f| f.capabilities().write != photocraft_formats::Availability::Available);
-    if photocraft_io::raw::EXTENSIONS.contains(&ext.as_str()) || IMPORT_ONLY.contains(&ext.as_str()) || no_writer { "psd".into() } else { ext }
+    if photocraft_io::is_xcf_input_name(path) || photocraft_io::raw::EXTENSIONS.contains(&ext.as_str()) || IMPORT_ONLY.contains(&ext.as_str()) || no_writer {
+        "psd".into()
+    } else {
+        ext
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn same_format_maps_all_xcf_aliases_without_claiming_other_archives() {
+    for suffix in ["xcf", "xcf.gz", "xcfgz", "xcf.bz2", "xcfbz2", "xcf.xz", "xcfxz"] {
+        for name in [format!("/in/page.{suffix}"), format!("C:\\in\\PAGE.{}", suffix.to_ascii_uppercase())] {
+            assert!(photocraft_io::is_xcf_input_name(&name), "{name}");
+            assert_eq!(same_format(&name), "psd", "{name}");
+        }
+    }
+    for (name, expected) in [("/in/archive.tar.bz2", "bz2"), ("/in/notes.xz", "xz"), ("/in/page.xcf.xz.backup", "backup"), ("/in/page.png", "png")] {
+        assert_eq!(same_format(name), expected, "{name}");
+    }
 }
 
 #[cfg(test)]
@@ -250,6 +267,7 @@ fn process_outputs<'a>(
     outputs: impl IntoIterator<Item = (&'a str, String)>,
     save: SaveOpts,
     unique: bool,
+    order: Option<photocraft_io::HistoricalXcfSampleOrder>,
     f: &dyn Fn(&mut Session, &str) -> Result<bool>,
 ) -> Value {
     // The scratch sessions have default preferences; a raw opens at the user's Raw Defaults.
@@ -266,7 +284,7 @@ fn process_outputs<'a>(
         f(scratch, out).map_err(FileFailure::from)
     };
     for (path, out) in outputs {
-        let options = ProcessOptions { format: None, written: (!unique).then_some(&written), ctx: None, input: None, unique };
+        let options = ProcessOptions { format: None, written: (!unique).then_some(&written), ctx: None, input: None, order, unique };
         let r = process_one(raw_ppi, path, &out, save, options, &run);
         match r {
             Ok(Some(PublishedOutput { path: out, warning })) => {
@@ -328,7 +346,7 @@ pub(super) fn process_document_copies(
         let notices = std::cell::RefCell::new(Vec::new());
         let input = InputPolicy { prepare: &prepare, notices: &notices };
         let run = |scratch: &mut Session, out: &str| f(scratch, out).map_err(FileFailure::from);
-        let options = ProcessOptions { format: Some(&ext), written: Some(&written), ctx: None, input: Some(&input), unique: false };
+        let options = ProcessOptions { format: Some(&ext), written: Some(&written), ctx: None, input: Some(&input), order: None, unique: false };
         match process_one(s.prefs().raw_defaults.resolution, &path, &out, save, options, &run) {
             Ok(_) => {
                 written.record(&out, &path);
@@ -350,6 +368,7 @@ struct ProcessOptions<'a> {
     written: Option<&'a OutputClaims>,
     ctx: Option<&'a crate::jobs::JobCtx>,
     input: Option<&'a InputPolicy<'a>>,
+    order: Option<photocraft_io::HistoricalXcfSampleOrder>,
     unique: bool,
 }
 
@@ -372,8 +391,9 @@ fn process_one(
             (input.prepare)(&mut scratch, path)?;
         } else {
             let bytes = read_file(path)?;
-            let doc = import_at_raw_ppi(raw_ppi, &file_name(path), &bytes)?;
-            scratch.add_document(doc, Some(path.to_string()));
+            let opts = photocraft_io::ImportOptions { historical_xcf_sample_order: options.order, ..Default::default() };
+            let imported = super::open::import_source_at_raw_ppi(raw_ppi, &file_name(path), &bytes, &opts)?;
+            scratch.add_document(imported.document, Some(path.to_string()));
         }
         if let Some(ctx) = options.ctx {
             ctx.publish_batch_preview(path, scratch.active().map(|state| state.doc.clone()));
@@ -626,7 +646,7 @@ fn process_batch_outputs_with(
             path,
             out,
             save,
-            ProcessOptions { format: Some(format), written: check_duplicates.then_some(&written), ctx: Some(ctx), input, unique: false },
+            ProcessOptions { format: Some(format), written: check_duplicates.then_some(&written), ctx: Some(ctx), input, order: None, unique: false },
             f,
         );
         if result.is_ok() {
@@ -780,6 +800,7 @@ pub(crate) fn batch_action(list: &[crate::actions_cmds::Action], p: &Value) -> R
 pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
     check_batch_depth(s, cmd)?;
+    let historical_xcf_sample_order = super::open::historical_xcf_sample_order(p, cmd)?;
     let quiet_raw = match p.get("suppressOpenOptions") {
         None | Some(Value::Null) => false,
         Some(Value::Bool(value)) => *value,
@@ -1045,6 +1066,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                 }
                 #[cfg(target_arch = "wasm32")]
                 let _ = check_folder_format;
+                scratch.batch_open_notices = Some(Vec::new());
                 if quiet_profiles || quiet_raw {
                     scratch.prefs = prefs.clone();
                     scratch.color.settings = color_settings.clone();
@@ -1056,19 +1078,28 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     if quiet_raw {
                         scratch.batch_raw_open = Some(raw_settings.clone());
                     }
-                    scratch.batch_open_notices = Some(Vec::new());
                 }
                 if override_open {
-                    scratch.batch_open = Some(super::open::BatchOpen { path: path.to_string(), sources: Vec::new(), raw_ppi, read_only: false });
+                    scratch.batch_open =
+                        Some(super::open::BatchOpen { path: path.to_string(), sources: Vec::new(), raw_ppi, historical_xcf_sample_order, read_only: false });
                 } else {
                     let bytes = read_file(path)?;
                     if quiet_profiles || quiet_raw {
-                        super::open::open_bytes_as(scratch, &file_name(path), &bytes, None, Some(path.to_string()))?;
+                        let mut opts = crate::jobs::import_options(scratch.prefs());
+                        opts.historical_xcf_sample_order = historical_xcf_sample_order;
+                        super::open::open_bytes_as_with_import_options(scratch, &file_name(path), &bytes, None, Some(path.to_string()), &opts)?;
                         read_only_source.set(scratch.active().is_some_and(|state| state.source_read_only));
                     } else {
-                        let (doc, read_only) = super::open::import_source_at_raw_ppi(raw_ppi, &file_name(path), &bytes)?;
-                        read_only_source.set(read_only);
-                        scratch.add_document(doc, Some(path.to_string()));
+                        let opts = photocraft_io::ImportOptions { historical_xcf_sample_order, ..Default::default() };
+                        let mut imported = super::open::import_source_at_raw_ppi(raw_ppi, &file_name(path), &bytes, &opts)?;
+                        read_only_source.set(imported.source_read_only);
+                        let (_, (), warning) = scratch.admit_import_with_initial_view(imported.source_read_only, imported.initial_view, |s| {
+                            (s.add_document(imported.document, Some(path.to_string())), ())
+                        })?;
+                        imported.warnings.extend(warning);
+                        if !imported.warnings.is_empty() {
+                            super::open::batch_open_notice(scratch, path, &imported.warnings, &Value::Null);
+                        }
                     }
                 }
                 Ok(())

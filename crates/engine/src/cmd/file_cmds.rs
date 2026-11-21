@@ -24,6 +24,7 @@ mod batch_run;
 mod export;
 mod info;
 mod open;
+pub(crate) use open::import_result_for_open;
 mod open_as_smart_object;
 mod paths;
 mod place_steps;
@@ -49,11 +50,15 @@ pub use info::{CAMERA_FIELDS, camera_data, copyright_marked, read_file_info, wri
 #[cfg(test)]
 use info::{exposure_text, find_element};
 pub(crate) use open::{BatchOpen, batch_open_notice, batch_open_params, remember_batch_open};
-pub use open::{PLACE_EMBEDDED, open_bytes_as, open_bytes_as_with_options, place_bytes, raw_defaults};
-pub(crate) use open::{PlaceInput, apply_place, import, import_with_options, tag_exr_colorspace};
+pub use open::{
+    PLACE_EMBEDDED, fresh_import_options, historical_xcf_sample_order, import_options_from_params, open_bytes_as, open_bytes_as_with_import_options,
+    open_bytes_as_with_options, place_bytes, raw_defaults,
+};
+pub(crate) use open::{PlaceInput, apply_place, import, import_with_options, place_input, tag_exr_colorspace};
 use open::{approve_memory, close_all, close_others, open_as, place, revert};
 pub use open_as_smart_object::admit_as_smart_object;
 use open_as_smart_object::open_as_smart_object;
+pub(crate) use open_as_smart_object::resume_smart_object;
 use paths::is_file;
 pub(crate) use paths::openable_name;
 pub use paths::{
@@ -311,7 +316,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open As…",
             &["File"],
             Some("Cmd+Alt+Shift+O"),
-            r##"{"path":str,"as":"psd|png|jpg|tiff|…"? (decode as this format),"approveHighMemory":bool=false (explicitly approve high memory usage)}"##,
+            r##"{"path":str,"as":"psd|png|jpg|tiff|…"? (decode as this format),"approveHighMemory":bool=false (explicitly approve high memory usage),"historicalXcfSampleOrder":"little-endian|big-endian"? (required for unmarked multibyte XCF7–11; never inferred)}"##,
             native,
             open_as
         ),
@@ -320,7 +325,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open as Smart Object…",
             &["File"],
             None,
-            r##"{"path":str,"confirmDamage":bool=false (a damaged PSD waits for an answer, as File > Open's does)} (opens the file as a new untitled document named "<file name without its last extension>-N" with the file's size, resolution, colour mode, bit depth and profile, holding one embedded smart object layer named after the file) → {document, docId, name, layer, warnings, color, smartObject} (or {held, name, warnings, color, damaged, smartObject} while a prompt waits)"##,
+            r##"{"path":str,"confirmDamage":bool=false (a damaged PSD waits for an answer, as File > Open's does),"askHistoricalXcfSampleOrder":bool=false (hold the source and return a historical question if needed),"approveHighMemory":bool=false,"historicalXcfSampleOrder":"little-endian|big-endian"? (required for unmarked multibyte XCF7–11; never inferred)} (opens the file as a new untitled document named "<file name without its last extension>-N" with the file's size, resolution, colour mode, bit depth and profile, holding one embedded smart object layer named after the file) → {document, docId, name, layer, warnings, color, smartObject} (or {held, name, warnings, color, damaged, smartObject} while a profile/damage prompt waits, or {heldHistoricalXcfOpen, historicalXcfSampleOrderRequired} while a sample-order prompt waits)"##,
             native,
             open_as_smart_object
         ),
@@ -343,7 +348,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Embedded…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
+            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"historicalXcfSampleOrder":"little-endian|big-endian"? (required for unmarked multibyte XCF7–11; never inferred),"frame":id|false? (default: selected frame)}"##,
             native_doc,
             |s, p| place(s, p, false)
         ),
@@ -352,7 +357,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Linked…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%?,"fit":bool? (default: Preferences > General > Resize Image During Place),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
+            r##"{"path":str,"scale":%?,"fit":bool? (default: Preferences > General > Resize Image During Place),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"historicalXcfSampleOrder":"little-endian|big-endian"? (required for unmarked multibyte XCF7–11; never inferred),"frame":id|false? (default: selected frame)}"##,
             native_doc,
             |s, p| place(s, p, true)
         ),
@@ -392,7 +397,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Batch…",
             &["File", "Automate"],
             None,
-            r##"{"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (for a named action),"steps":[[commandId,params]|{"command":id,"params":{}}…] (a recorded action; a Save, Save As or Save a Copy step marks the document written to output, in this command's format and options: as the save found it if it was closed or another document is active at the end, else as the action leaves it; with no such step, the active document at the end),"source":"folder|open"="folder" (open runs on live documents),"input":folder|[paths] (folder source),"errorLog":path? (blank disables it),"suppressOpenOptions":bool=false (use caller RAW defaults and fully supported prior XMP without a dialog; unsupported prior settings or unanswerable profile questions fail the input),"suppressWarnings":bool=false (apply caller opening policy without profile questions; import diagnostics remain in notices),"overrideOpen":bool=false (execute action Open steps with the current input path, retaining other Open options; without an executed Open the input fails),"includeNonImages":bool=false (folder inputs report unsupported files as per-file errors instead of skipping them; arrays are unchanged),"includeSubfolders":bool=false (a folder input also takes the images in its subfolders, up to 32 levels and 100000 files; ordinary outputs are flat; namingComponents can retain subfolders when flatOutput is false),"destination":"folder|saveAndClose"="folder" (Save and Close writes the same source path/format; rejects already-open sources and changed result document identity),"output":folder? (required only for folder; omit for Save and Close),"format":"same|png|jpg|psd|tiff|…"="same" (Save and Close requires same),"quality":0..12?,"jpegFormat":"baseline|optimized|progressive"?,"namingComponents":[{"component":choice}|{"text":str}]? (up to six; the exact filename, with no automatic extension),"compatibility":{"macintosh":bool,"windows":bool,"unix":bool}?,"flatOutput":bool=false (structured naming only; put every result directly under output, dropping its subfolder path; duplicate output names make later results error entries),"overrideSaveAs":bool? (recorded routing; requires a directly represented Save configuration),"stopOnError":bool=false (report the first failed input and stop; earlier outputs remain saved),"naming":string? (blank keeps source names; {name}/{NAME}/{Name}, {serial}/{serial:1..4}, {letter}/{LETTER}, {date} and date formats, {ext}/{EXT}; template determines the whole filename),"startingSerial":1..4294967295=1 (position among the inputs; a folder input the opener refuses by name, with includeNonImages, does not use up a number, while an input that fails later, in its import, action or save, still does),"tiffLayers":bool? (Folder default false; Save and Close default true, with false refused when TIFF layer data would be lost),"tiffCompression":"none|lzw|zip"?,"tiffTransparency":bool?,"tiffPyramid":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain),"maximizeCompatibility":bool? (PSD/PSB: write the real merged image; unset, Preferences > File Handling > Maximize PSD and PSB File Compatibility),"pdfSpotPlates":bool=true (PDF: spot channels as overprinting Separation plates after the image; a Multichannel document as plates alone, so false refuses it),"calledActions":[{"name","steps"}…]? (internal action references; default: the session's; a named source is selected from the caller)} → {files, errors, stopped?, skipped?, errorLog?, documents?} (structured naming, includeNonImages and Save and Close refuse duplicate results; ordinary native templates keep the later result)"##,
+            r##"{"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (for a named action),"steps":[[commandId,params]|{"command":id,"params":{}}…] (a recorded action; a Save, Save As or Save a Copy step marks the document written to output, in this command's format and options: as the save found it if it was closed or another document is active at the end, else as the action leaves it; with no such step, the active document at the end),"source":"folder|open"="folder" (open runs on live documents),"input":folder|[paths] (folder source),"historicalXcfSampleOrder":"little-endian|big-endian"? (folder XCF inputs),"errorLog":path? (blank disables it),"suppressOpenOptions":bool=false (use caller RAW defaults and fully supported prior XMP without a dialog; unsupported prior settings or unanswerable profile questions fail the input),"suppressWarnings":bool=false (apply caller opening policy without profile questions; import diagnostics remain in notices),"overrideOpen":bool=false (execute action Open steps with the current input path and the Batch XCF order when the step leaves it unspecified, retaining other Open options; without an executed Open the input fails),"includeNonImages":bool=false (folder inputs report unsupported files as per-file errors instead of skipping them; arrays are unchanged),"includeSubfolders":bool=false (a folder input also takes the images in its subfolders, up to 32 levels and 100000 files; ordinary outputs are flat; namingComponents can retain subfolders when flatOutput is false),"destination":"folder|saveAndClose"="folder" (Save and Close writes the same source path/format; rejects already-open sources and changed result document identity),"output":folder? (required only for folder; omit for Save and Close),"format":"same|png|jpg|psd|tiff|…"="same" (Save and Close requires same),"quality":0..12?,"jpegFormat":"baseline|optimized|progressive"?,"namingComponents":[{"component":choice}|{"text":str}]? (up to six; the exact filename, with no automatic extension),"compatibility":{"macintosh":bool,"windows":bool,"unix":bool}?,"flatOutput":bool=false (structured naming only; put every result directly under output, dropping its subfolder path; duplicate output names make later results error entries),"overrideSaveAs":bool? (recorded routing; requires a directly represented Save configuration),"stopOnError":bool=false (report the first failed input and stop; earlier outputs remain saved),"naming":string? (blank keeps source names; {name}/{NAME}/{Name}, {serial}/{serial:1..4}, {letter}/{LETTER}, {date} and date formats, {ext}/{EXT}; template determines the whole filename),"startingSerial":1..4294967295=1 (position among the inputs; a folder input the opener refuses by name, with includeNonImages, does not use up a number, while an input that fails later, in its import, action or save, still does),"tiffLayers":bool? (Folder default false; Save and Close default true, with false refused when TIFF layer data would be lost),"tiffCompression":"none|lzw|zip"?,"tiffTransparency":bool?,"tiffPyramid":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain),"maximizeCompatibility":bool? (PSD/PSB: write the real merged image; unset, Preferences > File Handling > Maximize PSD and PSB File Compatibility),"pdfSpotPlates":bool=true (PDF: spot channels as overprinting Separation plates after the image; a Multichannel document as plates alone, so false refuses it),"calledActions":[{"name","steps"}…]? (internal action references; default: the session's; a named source is selected from the caller)} → {files, errors, stopped?, skipped?, errorLog?, documents?} (structured naming, includeNonImages and Save and Close refuse duplicate results; ordinary native templates keep the later result)"##,
             native,
             batch
         ),
@@ -401,7 +406,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Image Processor…",
             &["File", "Scripts"],
             None,
-            r##"{"source":"folder|current|open"="folder" (current processes a copy of the active document; open processes copies of all open documents, including unsaved edits; originals and history stay unchanged),"input":folder|[paths]? (required for folder source),"includeSubfolders":bool=false (a folder input also takes the images in its subfolders, up to 32 levels and 100000 files; each result keeps its subfolder under output),"output":folder,"format":"jpg|png|psd|tiff|…"="jpg","quality":0..12=8,"jpegFormat":"baseline|optimized|progressive"?,"tiffLayers":bool=false,"tiffCompression":"none|lzw|zip"?,"tiffTransparency":bool?,"tiffPyramid":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain),"maximizeCompatibility":bool? (PSD/PSB: write the real merged image; unset, Preferences > File Handling > Maximize PSD and PSB File Compatibility),"pdfSpotPlates":bool=true (PDF: spot channels as overprinting Separation plates after the image; a Multichannel document as plates alone, so false refuses it),"width":px?,"height":px? (fit, never enlarge),"convertToSrgb":bool=false,"jpeg":{enabled?:bool=true,quality?:1..12=5,convertToSrgb?:bool=false,resize?:bool=false,width?:1..30000=1,height?:1..30000=1}|false?,"psd":{enabled?:bool=true,maximizeCompatibility?:bool=true,resize?:bool=false,width?:1..30000=1,height?:1..30000=1}|false?,"tiff":{enabled?:bool=true,lzw?:bool=false,resize?:bool=false,width?:1..30000=1,height?:1..30000=1}|false?} → {files, errors} (without format, supplying jpeg/psd/tiff selects per-format mode; omitted, null, false or disabled sections are skipped; at least one must be enabled. Errors in per-format mode identify the format.)"##,
+            r##"{"source":"folder|current|open"="folder" (current processes a copy of the active document; open processes copies of all open documents, including unsaved edits; originals and history stay unchanged),"input":folder|[paths]? (required for folder source),"historicalXcfSampleOrder":"little-endian|big-endian"? (folder XCF inputs),"includeSubfolders":bool=false (a folder input also takes the images in its subfolders, up to 32 levels and 100000 files; each result keeps its subfolder under output),"output":folder,"format":"jpg|png|psd|tiff|…"="jpg","quality":0..12=8,"jpegFormat":"baseline|optimized|progressive"?,"tiffLayers":bool=false,"tiffCompression":"none|lzw|zip"?,"tiffTransparency":bool?,"tiffPyramid":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain),"maximizeCompatibility":bool? (PSD/PSB: write the real merged image; unset, Preferences > File Handling > Maximize PSD and PSB File Compatibility),"pdfSpotPlates":bool=true (PDF: spot channels as overprinting Separation plates after the image; a Multichannel document as plates alone, so false refuses it),"width":px?,"height":px? (fit, never enlarge),"convertToSrgb":bool=false,"jpeg":{enabled?:bool=true,quality?:1..12=5,convertToSrgb?:bool=false,resize?:bool=false,width?:1..30000=1,height?:1..30000=1}|false?,"psd":{enabled?:bool=true,maximizeCompatibility?:bool=true,resize?:bool=false,width?:1..30000=1,height?:1..30000=1}|false?,"tiff":{enabled?:bool=true,lzw?:bool=false,resize?:bool=false,width?:1..30000=1,height?:1..30000=1}|false?} → {files, errors} (without format, supplying jpeg/psd/tiff selects per-format mode; omitted, null, false or disabled sections are skipped; at least one must be enabled. Errors in per-format mode identify the format.)"##,
             native,
             image_processor
         ),
@@ -410,7 +415,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Load Files into Stack…",
             &["File", "Scripts"],
             None,
-            r##"{"paths":[str]|folder,"align":bool=false (Auto-Align Layers on them first),"createSmartObject":bool=false} → new document with one layer per file (inside one smart object with createSmartObject)"##,
+            r##"{"paths":[str]|folder,"historicalXcfSampleOrder":"little-endian|big-endian"?,"align":bool=false (Auto-Align Layers on them first),"createSmartObject":bool=false} → new document with one layer per file (inside one smart object with createSmartObject)"##,
             native,
             load_files_into_stack
         ),
@@ -479,6 +484,10 @@ mod place_job_tests;
 #[cfg(test)]
 #[path = "file_cmds/open_as_smart_object_tests.rs"]
 mod open_as_smart_object_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "file_cmds/historical_place_tests.rs"]
+mod historical_place_tests;
 
 #[cfg(test)]
 #[path = "file_cmds/batch_serial_skip_failed_tests.rs"]

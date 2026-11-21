@@ -93,7 +93,7 @@ pub(crate) fn openable_name(_path: &str) -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn openable_name(path: &str) -> bool {
     let lower = file_name(path).to_ascii_lowercase();
-    lower.ends_with(".xcf.gz")
+    photocraft_io::is_xcf_input_name(&lower)
         || lower.rsplit_once('.').is_some_and(|(_, ext)| OPENABLE.contains(&ext) || photocraft_codecs::from_extension(ext).is_some_and(|f| f.caps().read))
 }
 
@@ -105,8 +105,7 @@ pub(crate) fn openable_name(path: &str) -> bool {
 /// process silently.
 #[cfg(not(target_arch = "wasm32"))]
 const OPENABLE: &[&str] = &[
-    "pdn", "ora", "xcf", "xcfgz", "kra", "krz", "psd", "psb", "psdt", "pcraft", "svg", "svgz", "af", "afdesign", "afphoto", "afpub", "dng", "cr2", "nef",
-    "nrw", "arw", "pef",
+    "pdn", "ora", "kra", "krz", "psd", "psb", "psdt", "pcraft", "svg", "svgz", "af", "afdesign", "afphoto", "afpub", "dng", "cr2", "nef", "nrw", "arw", "pef",
 ];
 
 pub(crate) fn file_name(path: &str) -> String {
@@ -352,4 +351,26 @@ pub(crate) fn is_windows_device_name(component: &str) -> bool {
     matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$" | "CONIN$" | "CONOUT$")
         || stem.strip_prefix("COM").is_some_and(port)
         || stem.strip_prefix("LPT").is_some_and(port)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod xcf_compound_suffix_tests {
+    #[test]
+    fn batch_openable_names_require_xcf_compounds_for_compressed_inputs() {
+        for name in [
+            "/in/pixel.xcf",
+            "/in/pixel.xcfgz",
+            "/in/pixel.xcf.gz",
+            "/in/pixel.xcf.bz2",
+            "/in/pixel.xcf.xz",
+            "/in/PIXEL.XCF.XZ",
+            "/in/PIXEL.XCFBZ2",
+            "/in/pixel.xcfxz",
+        ] {
+            assert!(super::openable_name(name), "{name}");
+        }
+        for name in ["/in/archive.tar.gz", "/in/notes.gz", "/in/notes.bz2", "/in/notes.xz", "/in/pixel.xcf.gz.backup"] {
+            assert!(!super::openable_name(name), "{name}");
+        }
+    }
 }

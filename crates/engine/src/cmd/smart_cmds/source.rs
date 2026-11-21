@@ -1,10 +1,11 @@
 use std::sync::PoisonError;
 
+use photocraft_doc::HistoricalXcfSampleOrder;
 use photocraft_geom::TILE_SIZE;
 
 use super::{
     Arc, ColorMode, Document, Layer, LayerContent, LayerId, Metadata, Mutex, PixelFormat, Rect, Result, SampleType, Session, SmartObject, SmartSource, Surface,
-    base_name, decode_source, json, other,
+    base_name, json, other,
 };
 
 /// A linked file's bytes; `None` when it is missing or its path is not followed
@@ -32,7 +33,7 @@ pub fn source_bytes(meta: &Metadata, src: &SmartSource) -> Option<(String, Arc<V
 }
 
 /// Memory-only resolution also covers Photoshop's embedded files addressed by a `Linked` UUID.
-fn embedded_source_bytes(meta: &Metadata, src: &SmartSource) -> Option<(String, Arc<Vec<u8>>)> {
+pub(super) fn embedded_source_bytes(meta: &Metadata, src: &SmartSource) -> Option<(String, Arc<Vec<u8>>)> {
     match src {
         SmartSource::Embedded { file_name, bytes } => Some((file_name.clone(), bytes.clone())),
         SmartSource::Linked { path } => photocraft_io::linked::find_linked_file(meta, path).map(|f| (f.file_name, Arc::new(f.bytes))),
@@ -70,7 +71,7 @@ pub struct SourceImage {
     pub bounds: Rect,
 }
 
-pub(super) type CacheKey = ([u8; 32], PixelFormat, Option<[u8; 32]>);
+pub(super) type CacheKey = ([u8; 32], PixelFormat, Option<HistoricalXcfSampleOrder>, Option<[u8; 32]>);
 
 struct CacheEntry {
     key: CacheKey,
@@ -99,14 +100,14 @@ fn cache() -> std::sync::MutexGuard<'static, Vec<CacheEntry>> {
     SOURCE_CACHE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+#[cfg(test)]
 pub(super) fn cache_key(bytes: &[u8], fmt: PixelFormat) -> CacheKey {
-    (*blake3::hash(bytes).as_bytes(), fmt, None)
+    (*blake3::hash(bytes).as_bytes(), fmt, None, None)
 }
 
 /// Keep automatic recognition and caller-supplied classifications separate. The filename
 /// also selects extension-sensitive importers. Neither decision may be bypassed by a hit.
-pub(super) fn source_cache_key(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: Option<bool>) -> CacheKey {
-    let mut key = cache_key(bytes, fmt);
+pub(super) fn source_cache_key(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: Option<bool>, order: Option<HistoricalXcfSampleOrder>) -> CacheKey {
     let mut context = blake3::Hasher::new();
     context.update(b"source-decode-context-v1\0");
     context.update(&[match svg {
@@ -115,8 +116,7 @@ pub(super) fn source_cache_key(file_name: &str, bytes: &[u8], fmt: PixelFormat, 
         Some(true) => 2,
     }]);
     context.update(file_name.as_bytes());
-    key.2 = Some(*context.finalize().as_bytes());
-    key
+    (*blake3::hash(bytes).as_bytes(), fmt, order, Some(*context.finalize().as_bytes()))
 }
 
 pub(super) fn cache_get(key: &CacheKey) -> Option<SourceImage> {
@@ -151,8 +151,13 @@ fn cache_put_within(key: CacheKey, image: SourceImage, limit: usize) {
 
 /// How many times these contents were decoded at this pixel format (0 = never / evicted).
 pub fn source_decode_count(bytes: &[u8], fmt: PixelFormat) -> u32 {
-    let key = cache_key(bytes, fmt);
-    cache().iter().filter(|e| e.key.0 == key.0 && e.key.1 == fmt).fold(0u32, |total, e| total.saturating_add(e.decodes))
+    source_decode_count_with_order(bytes, fmt, None)
+}
+
+/// Decode accounting for exactly this persisted source interpretation.
+pub fn source_decode_count_with_order(bytes: &[u8], fmt: PixelFormat, order: Option<HistoricalXcfSampleOrder>) -> u32 {
+    let digest = *blake3::hash(bytes).as_bytes();
+    cache().iter().filter(|e| (e.key.0, e.key.1, e.key.2) == (digest, fmt, order)).fold(0u32, |total, e| total.saturating_add(e.decodes))
 }
 
 /// Bytes held by cached source composites.
@@ -307,7 +312,7 @@ pub fn svg_source_image(bytes: &[u8], fmt: PixelFormat, scale: f64) -> Result<So
     let mut h = blake3::Hasher::new();
     h.update(bytes);
     h.update(&scale.to_bits().to_le_bytes());
-    let key = (*h.finalize().as_bytes(), fmt, None);
+    let key = (*h.finalize().as_bytes(), fmt, None, None);
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
@@ -334,7 +339,7 @@ pub(super) fn svg_source_image_in(bytes: &[u8], doc: &Document, scale: f64) -> R
     h.update(bytes);
     h.update(&scale.to_bits().to_le_bytes());
     h.update(&profile.to_bytes());
-    let key = (*h.finalize().as_bytes(), fmt, None);
+    let key = (*h.finalize().as_bytes(), fmt, None, None);
     if let Some(image) = cache_get(&key) {
         return Ok(image);
     }
@@ -369,23 +374,40 @@ pub(crate) fn vector_scale(sm: &SmartObject) -> f64 {
 
 /// The composited source image of `bytes` in pixel format `fmt` (decoded once, then cached).
 pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat) -> Result<SourceImage> {
-    source_image_inner(file_name, bytes, fmt, None)
+    source_image_with_order(file_name, bytes, fmt, None)
 }
 
-pub(super) fn source_image_classified(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: bool) -> Result<SourceImage> {
-    source_image_inner(file_name, bytes, fmt, Some(svg))
+/// Decode and cache only pixels produced with the requested historical XCF interpretation.
+pub fn source_image_with_order(file_name: &str, bytes: &[u8], fmt: PixelFormat, order: Option<HistoricalXcfSampleOrder>) -> Result<SourceImage> {
+    source_image_inner(file_name, bytes, fmt, None, order, &photocraft_raster::Interrupt::NONE)
 }
 
-fn source_image_inner(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: Option<bool>) -> Result<SourceImage> {
-    let key = source_cache_key(file_name, bytes, fmt, svg);
+pub(super) fn source_image_classified(
+    file_name: &str,
+    bytes: &[u8],
+    fmt: PixelFormat,
+    svg: bool,
+    order: Option<HistoricalXcfSampleOrder>,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<SourceImage> {
+    source_image_inner(file_name, bytes, fmt, Some(svg), order, ctl)
+}
+
+fn source_image_inner(
+    file_name: &str,
+    bytes: &[u8],
+    fmt: PixelFormat,
+    svg: Option<bool>,
+    order: Option<HistoricalXcfSampleOrder>,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<SourceImage> {
+    ctl.check().map_err(|_| crate::EngineError::Cancelled)?;
+    let key = source_cache_key(file_name, bytes, fmt, svg, order);
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
     crate::memory_gate::ensure(&format!("render the smart object \u{201c}{file_name}\u{201d}"), crate::memory_gate::smart_render_need(bytes))?;
-    let doc = match svg {
-        Some(svg) => super::decode_source_classified(file_name, bytes, svg)?,
-        None => decode_source(file_name, bytes)?,
-    };
+    let doc = super::decode_source_classified(file_name, bytes, svg.unwrap_or_else(|| photocraft_io::svg::is_svg(bytes)), order, ctl)?;
     let img = SourceImage { surface: Arc::new(flattened_source(&doc, fmt)?), bounds: doc.bounds() };
     cache_put(key, img.clone());
     Ok(img)
@@ -396,14 +418,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn source_cache_keys_preserve_filename_and_classification() {
+    fn source_cache_keys_preserve_filename_classification_and_sample_order() {
         let bytes = b"source context regression";
         let fmt = PixelFormat::RGBA8;
         let keys = [
-            source_cache_key("source.png", bytes, fmt, None),
-            source_cache_key("source.dat", bytes, fmt, None),
-            source_cache_key("source.png", bytes, fmt, Some(false)),
-            source_cache_key("source.png", bytes, fmt, Some(true)),
+            source_cache_key("source.png", bytes, fmt, None, None),
+            source_cache_key("source.dat", bytes, fmt, None, None),
+            source_cache_key("source.png", bytes, fmt, Some(false), None),
+            source_cache_key("source.png", bytes, fmt, Some(true), None),
+            source_cache_key("source.png", bytes, fmt, Some(false), Some(HistoricalXcfSampleOrder::LittleEndian)),
+            source_cache_key("source.png", bytes, fmt, Some(false), Some(HistoricalXcfSampleOrder::BigEndian)),
             cache_key(bytes, fmt),
         ];
         for (i, key) in keys.iter().enumerate() {
@@ -411,8 +435,8 @@ mod tests {
                 assert_ne!(key, other);
             }
         }
-        assert_eq!(keys[0], source_cache_key("source.png", bytes, fmt, None));
-        assert_ne!(keys[0], source_cache_key("source.png", bytes, PixelFormat::RGBA32F, None));
+        assert_eq!(keys[0], source_cache_key("source.png", bytes, fmt, None, None));
+        assert_ne!(keys[0], source_cache_key("source.png", bytes, PixelFormat::RGBA32F, None, None));
     }
 
     #[test]
@@ -420,9 +444,12 @@ mod tests {
         let raster = photocraft_codecs::Image::from_u8(1, 1, photocraft_codecs::ChannelLayout::Rgb, vec![13, 47, 91]).unwrap();
         let png = photocraft_codecs::encode(&raster, photocraft_codecs::Format::Png, &Default::default()).unwrap();
         let name = "source-classification-regression.png";
-        let first = source_image_classified(name, &png, PixelFormat::RGBA8, false).unwrap();
+        let first = source_image_classified(name, &png, PixelFormat::RGBA8, false, None, &photocraft_raster::Interrupt::NONE).unwrap();
         assert_eq!(first.bounds, Rect::new(0, 0, 1, 1));
-        assert!(source_image_classified(name, &png, PixelFormat::RGBA8, true).is_err(), "a warm raster hit must not skip strict SVG decoding");
+        assert!(
+            source_image_classified(name, &png, PixelFormat::RGBA8, true, None, &photocraft_raster::Interrupt::NONE).is_err(),
+            "a warm raster hit must not skip strict SVG decoding"
+        );
         assert!(source_image(name, &png, PixelFormat::RGBA8).is_ok());
     }
     fn image(side: i32) -> SourceImage {
@@ -433,7 +460,7 @@ mod tests {
 
     #[test]
     fn a_source_larger_than_the_limit_is_returned_but_not_cached() {
-        let key = cache_key(b"oversize", PixelFormat::RGBA8);
+        let key = source_cache_key("oversize.png", b"oversize", PixelFormat::RGBA8, None, None);
         let img = image(256);
         let bytes = super::super::stack_cache::surface_bytes(&img.surface);
         cache_put_within(key, img.clone(), bytes - 1);

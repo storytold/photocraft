@@ -69,6 +69,7 @@ sys-locale = "=0.3.2"
 winsafe = { version = "=0.0.29", default-features = false, features = ["kernel", "dxgi", "advapi"] }
 
 [dev-dependencies]
+flate2 = { workspace = true }
 photocraft-io = { workspace = true, features = ["testgen"] }
 # egui's own default fonts in tests, so contexts made with `Context::default()` (no
 # install_fonts) can lay out text.

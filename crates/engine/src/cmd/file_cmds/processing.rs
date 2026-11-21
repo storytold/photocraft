@@ -1,5 +1,4 @@
 use super::batch_run::{BatchInput, TreeNaming, batch_inputs_tree, process_document_copies, process_tree};
-use super::open::import_opened;
 use super::paths::{file_name, list_images, read_file, stem, untitled_name};
 use super::save::SaveOpts;
 use super::{
@@ -104,6 +103,7 @@ pub(super) fn parse_steps(v: &Value) -> Result<Vec<(String, Value)>> {
 /// return an error; processing failures and output-name collisions appear in per-file errors.
 pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = IMAGE_PROCESSOR;
+    let order = super::open::historical_xcf_sample_order(p, cmd)?;
     let source = match p.get("source") {
         None | Some(Value::Null) => "folder",
         Some(Value::String(source)) if matches!(source.as_str(), "folder" | "current" | "open") => source.as_str(),
@@ -111,7 +111,7 @@ pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let output = str_param(p, "output", cmd)?.to_string();
     if p.get("format").is_none() && ["jpeg", "psd", "tiff"].iter().any(|key| p.get(key).is_some()) {
-        return image_processor_formats(s, p, source, &output);
+        return image_processor_formats(s, p, source, &output, order);
     }
     let format = p.get("format").and_then(Value::as_str).unwrap_or("jpg");
     // The format becomes a filename extension, never a path supplied by a caller.
@@ -135,7 +135,7 @@ pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let r = if source == "folder" {
         let inputs = batch_inputs_tree(p, cmd, &output)?;
-        process_tree(s, &inputs, &output, format, save, TreeNaming::Unique, &process)
+        process_tree(s, (&inputs, order), &output, format, save, TreeNaming::Unique, &process)
     } else {
         let documents = if source == "current" { vec![s.active().ok_or(EngineError::NoDocument)?] } else { s.documents().iter().map(|st| &**st).collect() };
         if documents.is_empty() {
@@ -210,7 +210,7 @@ enum ProcessorInputs<'a> {
     Documents(Vec<&'a crate::DocState>),
 }
 
-fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -> Result<Value> {
+fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str, order: Option<photocraft_io::HistoricalXcfSampleOrder>) -> Result<Value> {
     // Resolve all settings and collect inputs before a format can write any files.
     let mut formats = Vec::new();
     for (key, extension) in [("jpeg", "jpg"), ("psd", "psd"), ("tiff", "tif")] {
@@ -249,7 +249,7 @@ fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -
             Ok(false)
         };
         let mut result = match &inputs {
-            ProcessorInputs::Folder(inputs) => process_tree(s, inputs, output, format.extension, format.save, TreeNaming::Unique, &process),
+            ProcessorInputs::Folder(inputs) => process_tree(s, (inputs, order), output, format.extension, format.save, TreeNaming::Unique, &process),
             ProcessorInputs::Documents(documents) => process_document_copies(s, documents, output, format.extension, format.save, &process),
         };
         if let Some(Value::Array(written)) = result.get_mut("files").map(Value::take) {
@@ -270,6 +270,8 @@ fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -
 
 pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.scripts.loadFilesIntoStack";
+    let opts = photocraft_io::ImportOptions { historical_xcf_sample_order: super::open::historical_xcf_sample_order(p, cmd)?, ..Default::default() };
+    let raw_ppi = s.prefs().raw_defaults.resolution;
     let paths: Vec<String> = match p.get("paths").or_else(|| p.get("input")) {
         Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
         Some(Value::String(dir)) => list_images(dir)?,
@@ -281,7 +283,9 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
     let mut docs = Vec::new();
     for path in &paths {
         let bytes = read_file(path)?;
-        docs.push((file_name(path), import_opened(s, &file_name(path), &bytes)?));
+        let name = file_name(path);
+        let document = super::open::import_source_at_raw_ppi(raw_ppi, &name, &bytes, &opts)?.document;
+        docs.push((name, document));
     }
     let first = &docs[0].1;
     let w = docs.iter().map(|(_, d)| d.size.width).max().unwrap_or(1);

@@ -15,9 +15,7 @@ fn app_over(files: Option<std::sync::Arc<dyn craft::host::Files>>) -> Box<Photoc
         Session::new(),
         Services {
             files,
-            import: Some(Box::new(|name, bytes, opts| {
-                photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
-            })),
+            import: Some(Box::new(|name, bytes, opts| photocraft_io::import_with_options(name, bytes, opts).map_err(|e| e.to_string()))),
             export: Some(Box::new(|doc, path, _| {
                 photocraft_io::export(doc, path, &Default::default()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
             })),

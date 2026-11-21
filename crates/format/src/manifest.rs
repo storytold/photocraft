@@ -271,6 +271,10 @@ pub enum ContentM {
         color: Color,
         transform: Affine,
         cache: Option<SurfaceM>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        cache_uses_raster_blending: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        keep_layer_name: bool,
         psd_raw: Option<Hash>,
         #[serde(default)]
         runs: Vec<text::TextRun>,
@@ -315,6 +319,10 @@ pub enum ContentM {
         #[serde(default)]
         contents_id: Option<u64>,
         source: SmartSourceM,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        historical_xcf_sample_order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        historical_xcf_link_digest: Option<[u8; 32]>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         vector_preview: Option<VectorPreviewM>,
         transform: Affine,

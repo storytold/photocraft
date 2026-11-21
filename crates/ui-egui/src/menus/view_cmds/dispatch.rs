@@ -258,7 +258,7 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
         return Some(result);
     }
     if wraps(id) {
-        return front(app, ctx, id, params);
+        return front(app, id, params);
     }
     if !handles(id) {
         return None;

@@ -11,6 +11,38 @@ use craft::ui::runtime::windows::{WindowAction, WindowHost};
 use photocraft_doc::DocId;
 use photocraft_engine::file_cmds::{is_template, untitled_name};
 
+/// Consume the native import's one-time path selection after installing its view.
+/// The Paths UI addresses saved paths by name, so duplicates and its reserved targets
+/// cannot represent an exact imported index without selecting or editing a different path.
+pub(crate) fn apply_initial_path(app: &mut PhotocraftApp) {
+    // A mutable document borrow advances its tracked revision even when there is no path hint.
+    if app.session.active().is_none_or(|st| st.initial_path_selection.is_none()) {
+        return;
+    }
+    let selected = app.session.active_mut().and_then(|st| {
+        let index = st.initial_path_selection.take()?;
+        let path = st.doc.paths.get(index)?;
+        let reason = if matches!(path.name.as_str(), "work" | "layer") {
+            Some("the saved path name is reserved by the Paths UI")
+        } else if st.doc.paths.iter().filter(|other| other.name == path.name).take(2).count() != 1 {
+            Some("the saved path name is not unique")
+        } else {
+            None
+        };
+        Some((st.doc.name.clone(), reason.is_none().then(|| path.name.clone()), reason))
+    });
+    let Some((document, name, reason)) = selected else { return };
+    if let Some(reason) = reason {
+        app.ui.selected_path = None;
+        // Names are source-controlled and can be large; diagnostics need no owned name copy.
+        let warning = format!("Imported path selection was not applied: {reason}. The saved path and its geometry are unchanged.");
+        let opened = crate::i18n::fmt(tl!("Opened {name}"), &[("name", document.as_str())]);
+        notices::io_warnings(app, &opened, &[warning]);
+    } else if let Some(name) = name {
+        app.ui.selected_path = Some(name);
+    }
+}
+
 /// A request from the operating system, delivered by the platform shell through
 /// [`Services::os_events`](crate::Services::os_events).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -349,6 +381,11 @@ impl PhotocraftApp {
         } else if let Some(o) = self.jobs.opens.iter().find(|o| o.path.as_deref().is_some_and(|p| !is_template(p) && same(p))) {
             // A template still loading opens as another Untitled, as it does once loaded.
             self.jobs.focus = Some(o.job);
+        } else if self.historical_opens.iter().any(|held| held.path.as_deref().is_some_and(|p| !is_template(p) && same(p))) {
+            // Reopening a source awaiting its explicit order focuses the existing choice.
+            crate::open_prompt::advance(self);
+            self.ui.chrome.home = None;
+            return true;
         } else if self.held_memory_prompts.iter().any(|m| m.path.as_deref().is_some_and(|p| !is_template(p) && same(p))) {
             // The file's high-memory prompt is already waiting: show it, don't queue a second
             // prompt and a second open for the same file. A template still opens again as
@@ -482,7 +519,7 @@ impl PhotocraftApp {
     /// answered). True when it took the slot.
     fn open_dropped_file(&mut self, f: &OsFile, name: &str, slot: Option<usize>) -> Result<bool, String> {
         let (docs, opens) = (self.session.documents().len(), self.jobs.opens.len());
-        let held = self.held_opens.len() + self.held_memory_prompts.len();
+        let held = self.held_opens.len() + self.held_memory_prompts.len() + self.historical_opens.len();
         // The slot travels with the open through the inline document, a background tab and a
         // memory/profile prompt, so no separate move here can land on another document.
         if let Some(path) = f.path.as_deref().filter(|p| p.is_absolute()) {
@@ -495,7 +532,9 @@ impl PhotocraftApp {
         if slot.is_none() {
             return Ok(false);
         }
-        let took = self.jobs.opens.len() > opens || self.session.documents().len() > docs || self.held_opens.len() + self.held_memory_prompts.len() > held;
+        let took = self.jobs.opens.len() > opens
+            || self.session.documents().len() > docs
+            || self.held_opens.len() + self.held_memory_prompts.len() + self.historical_opens.len() > held;
         Ok(took)
     }
 
@@ -520,7 +559,12 @@ impl PhotocraftApp {
         }
         // A box still preparing (or its canceled job not yet handled) holds the queue too: the
         // next place would lock the document before a canceled place could be taken back.
-        while self.ui.transform.is_none() && self.transform_preparing.is_none() && self.jobs.place.is_none() && self.session.active_job().is_none() {
+        while self.ui.transform.is_none()
+            && self.transform_preparing.is_none()
+            && self.jobs.place.is_none()
+            && self.session.active_job().is_none()
+            && !self.historical_opens.iter().any(|held| held.place.is_some())
+        {
             let Some(active) = self.session.active().map(|st| st.doc.id) else { return };
             let Some((_, next)) = self.drop_places.iter().position(|(doc, _)| *doc == active).and_then(|i| self.drop_places.remove(i)) else {
                 return;
@@ -529,10 +573,11 @@ impl PhotocraftApp {
                 DropPlace::At { source, frame } => (*source, Some(frame)),
                 next => (next, None),
             };
-            let params = frame.map_or_else(
+            let mut params = frame.map_or_else(
                 || serde_json::json!({}),
                 |frame| serde_json::json!({"frame": frame.map_or(serde_json::Value::Bool(false), |id| serde_json::json!(id.0))}),
             );
+            params["askHistoricalXcfSampleOrder"] = serde_json::Value::Bool(true);
             let (name, placed) = match next {
                 DropPlace::At { .. } => {
                     self.failed(tl!("Invalid nested file drop").into());
@@ -562,12 +607,8 @@ impl PhotocraftApp {
                 // Running in the background: Free Transform starts when the layer has landed.
                 Ok(started) if crate::jobs_ui::track_place(self, &name, &started) => return,
                 Ok(result) => {
-                    crate::notices::io_result_warnings(self, &result, &name);
-                    if result.get("frame").and_then(serde_json::Value::as_u64).is_some() {
-                        continue;
-                    }
-                    if let Err(e) = crate::transform_tool::begin_placed(self, ctx) {
-                        self.ui.status = e;
+                    if let Err(error) = crate::jobs_ui::finish_place_result(self, ctx, &name, active, &result) {
+                        self.place_failed(&name, &error);
                     }
                 }
                 Err(e) => self.place_failed(&name, &e),
@@ -617,11 +658,17 @@ impl PhotocraftApp {
         discarded
     }
 
-    /// Place a file's bytes as a smart object layer (File › Place; `linked`: Place Linked, to that
-    /// path), for files that weren't read from a path the command can read. With background jobs
+    /// Place a picked file's bytes and verify a historical link after the sample-order prompt. With background jobs
     /// on it starts a job (`{"job", "pending": true}`; see [`crate::jobs_ui::track_place`]).
-    pub(crate) fn place_bytes(&mut self, name: &str, bytes: Vec<u8>, linked: Option<String>) -> Result<serde_json::Value, String> {
-        self.place_bytes_with(name, bytes, linked, &serde_json::json!({}))
+    pub(crate) fn place_bytes(
+        &mut self,
+        name: &str,
+        bytes: Vec<u8>,
+        linked: Option<String>,
+        order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+    ) -> Result<serde_json::Value, String> {
+        let verify_link = linked.is_some() && order.is_some();
+        self.place_bytes_with(name, bytes, linked, &serde_json::json!({"historicalXcfSampleOrder":order,"verifyHistoricalXcfLink":verify_link}))
     }
 
     /// [`PhotocraftApp::place_bytes`] with the command's `params` (a frame to fill): a job where

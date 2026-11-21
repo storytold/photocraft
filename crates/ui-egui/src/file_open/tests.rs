@@ -32,7 +32,7 @@ fn app_over(files: Arc<ScriptedFiles>) -> (Box<PhotocraftApp>, Written) {
                 return Err("not an image".into());
             }
             let warnings = if name.contains("warn") { vec!["Adjustment layer \"Curves 1\" was flattened".to_string()] } else { Vec::new() };
-            Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), warnings))
+            Ok(crate::services::imported((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), warnings)))
         })),
         export: Some(Box::new(|_doc: &Document, path: &str, _s: &crate::ExportSettings| {
             let warnings = if path.ends_with(".png") { vec!["Layers were flattened".to_string()] } else { Vec::new() };
@@ -265,9 +265,8 @@ fn a_flat_file_that_keeps_the_document_saves_in_place() {
 #[test]
 fn save_in_place_skips_files_it_would_write_back_with_less() {
     let (mut app, written) = app_with(vec![Picked::Cancelled; 3]);
-    app.services.import = Some(Box::new(|name: &str, bytes: &[u8], _opts: &photocraft_io::ImportOptions| {
-        photocraft_io::import(name, bytes).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
-    }));
+    app.services.import =
+        Some(Box::new(|name: &str, bytes: &[u8], _opts: &photocraft_io::ImportOptions| photocraft_io::import(name, bytes).map_err(|e| e.to_string())));
     let ctx = egui::Context::default();
     let save = |app: &mut PhotocraftApp| menus::invoke(app, &ctx, "file.save", json!({})).unwrap();
     // One icon size: written back.
@@ -1547,11 +1546,11 @@ fn opening_type_in_a_missing_font_warns() {
     let already = warning.clone();
     let services = Services {
         import: Some(Box::new(move |name: &str, _bytes: &[u8], _opts: &photocraft_io::ImportOptions| {
-            Ok(match name {
+            Ok(crate::services::imported(match name {
                 "installed.psd" => (installed.clone(), Vec::new()),
                 "warned.psd" => (with_missing.clone(), vec![already.clone()]),
                 _ => (with_missing.clone(), Vec::new()),
-            })
+            }))
         })),
         ..Default::default()
     };
@@ -1699,11 +1698,15 @@ fn error_titles(app: &PhotocraftApp) -> Vec<String> {
 fn files_dropped_with_no_document_open_all_open() {
     let dir = scratch("home");
     let names = ["a.png", "b.jpg", "c.psd", "d.tif"];
+    // The shared format detector routes a .tif suffix through typed IO even when
+    // the shell's import service is replaced. Supply real TIFF bytes for that route.
+    let image = photocraft_codecs::Image::from_u8(4, 4, photocraft_codecs::ChannelLayout::Rgb, [17u8, 31, 57].repeat(16)).unwrap();
+    let tiff = photocraft_codecs::encode(&image, photocraft_codecs::Format::Tiff, &Default::default()).unwrap();
     let files: Vec<_> = names
         .iter()
         .map(|n| {
             let p = dir.join(n);
-            std::fs::write(&p, b"x").unwrap();
+            std::fs::write(&p, if *n == "d.tif" { tiff.as_slice() } else { b"x" }).unwrap();
             dropped(p, Err("read from the path".into()))
         })
         .collect();
@@ -1868,6 +1871,31 @@ fn open_as_smart_object_opens_in_the_background_in_name_order() {
 }
 
 #[test]
+fn synchronous_dropped_svg_placement_reports_omissions_and_keeps_silent_success_quiet() {
+    for omitted in [false, true] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+        app.background_jobs = false;
+        app.session.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+        let doc = app.session.active().unwrap().doc.id;
+        let before = app.session.active().unwrap().doc.layers.len();
+        let child = if omitted { "<image width='2' height='2' href='data:image/png,%00'/>" } else { "" };
+        let svg = format!("<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'><rect width='2' height='2' fill='red'/>{child}</svg>");
+        app.drop_places.push_back((doc, crate::file_open::DropPlace::Bytes("Dropped.svg".into(), svg.into_bytes())));
+        app.place_next_dropped(&egui::Context::default());
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), before + 1);
+        assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+        if omitted {
+            assert_eq!(app.ui.notices.len(), 1);
+            assert!(app.ui.notices[0].title.contains("Dropped.svg"));
+            assert!(app.ui.notices[0].lines.iter().any(|line| line.contains("embedded") && line.contains("omitted")));
+            assert_ne!(app.ui.notices[0].tone, craft::theme::variant::Tone::Bad);
+        } else {
+            assert!(app.ui.notices.is_empty(), "{:?}", app.ui.notices);
+        }
+    }
+}
+
+#[test]
 fn synchronous_svg_place_displays_omitted_image_warning() {
     let mut app = app_with_canvas();
     app.background_jobs = false;
@@ -1876,4 +1904,73 @@ fn synchronous_svg_place_displays_omitted_image_warning() {
     app.drop_places.push_back((doc, crate::file_open::DropPlace::Bytes("omitted.svg".into(), svg.to_vec())));
     app.place_next_dropped(&egui::Context::default());
     assert!(app.ui.notices.iter().any(|notice| notice.lines.iter().any(|line| line.contains("embedded") && line.contains("omitted"))));
+}
+
+#[test]
+fn historical_canvas_drops_hold_the_picked_path_or_bytes_until_answered() {
+    use crate::dialogs::historical_sample_order::tests_support::{cancel, confirm, dialogs, set_order};
+    use photocraft_doc::{HistoricalXcfSampleOrder, LayerContent, SmartSource};
+    use std::io::Write;
+
+    for path_drop in [false, true] {
+        for accept in [false, true] {
+            let folder = tempfile::tempdir().unwrap();
+            let path = folder.path().join("picked.xcf");
+            let mut app = app_with_canvas();
+            app.background_jobs = path_drop;
+            let ctx = app.ctx().clone();
+            let doc = app.session.active().unwrap().doc.id;
+            let layers = layer_count(&app);
+            let history = history_steps(&app);
+            let raw = crate::historical_xcf_fixture::historical_pixel(true);
+            let expected = if path_drop {
+                std::fs::write(&path, &raw).unwrap();
+                app.open_dropped(&ctx, vec![dropped(path.clone(), Err("use the file read job".into()))], DropTo::Canvas { at: None });
+                raw
+            } else {
+                let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+                encoder.write_all(&raw).unwrap();
+                let wrapped = encoder.finish().unwrap();
+                app.drop_places.push_back((doc, DropPlace::Bytes("picked.xcf.gz".into(), wrapped.clone())));
+                wrapped
+            };
+            app.drop_places.push_back((doc, DropPlace::Bytes("later.png".into(), png_bytes(2, 2))));
+            app.place_next_dropped(&ctx);
+            tick_until(&mut app, &ctx, |app| !app.historical_opens.is_empty());
+            let held = &app.historical_opens[0];
+            assert_eq!(held.place, Some(doc));
+            let id = held.id;
+            let dialog = dialogs(&app).into_iter().find(|d| d.fields.contains_key("__historicalXcfOpen")).expect("historical byte order prompt");
+            assert!(dialog.fields["historicalXcfSampleOrder"].is_null());
+            app.place_next_dropped(&ctx);
+            assert_eq!(app.drop_places.len(), 1, "the later drop waits for the answer");
+            assert_eq!(layer_count(&app), layers);
+            assert_eq!(history_steps(&app), history);
+            assert!(app.ui.transform.is_none());
+
+            if !accept {
+                cancel(&mut app, dialog.id).unwrap();
+                assert_eq!(layer_count(&app), layers);
+                assert!(!app.session.holds_historical_xcf_open(id));
+                app.place_next_dropped(&ctx);
+                tick_until(&mut app, &ctx, |app| app.ui.transform.is_some());
+                assert_eq!(layer_count(&app), layers + 1, "the later PNG advances after Cancel");
+                continue;
+            }
+            if path_drop {
+                std::fs::write(&path, crate::historical_xcf_fixture::historical_pixel(false)).unwrap();
+            }
+            set_order(&mut app, dialog.id, json!("little-endian"));
+            confirm(&mut app, dialog.id).unwrap();
+            tick_until(&mut app, &ctx, |app| app.ui.transform.is_some());
+            let state = app.session.active().unwrap();
+            let LayerContent::Smart(smart) = &state.doc.layer(state.active_layer.unwrap()).unwrap().content else { panic!("placed XCF Smart Object") };
+            assert_eq!(smart.historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::LittleEndian));
+            let SmartSource::Embedded { bytes, .. } = &smart.source else { panic!("original source bytes") };
+            assert_eq!(bytes.as_slice(), expected);
+            assert!(!app.session.holds_historical_xcf_open(id));
+            assert_eq!(layer_count(&app), layers + 1);
+            assert_eq!(app.drop_places.len(), 1, "the later drop waits for Free Transform");
+        }
+    }
 }

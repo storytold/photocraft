@@ -30,6 +30,10 @@ mod indexed_presets;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "web/open_extensions.rs"]
+mod open_extensions;
+
 #[cfg(target_arch = "wasm32")]
 fn main() {
     web::start();

@@ -37,9 +37,17 @@ pub const BUDGET: usize = 256 << 20;
 
 /// The first stage: what placing `bytes` (the source contents) through the smart object's
 /// transform, warp or perspective gives at pixel format `fmt` on `canvas`.
-pub(super) fn placed_key(bytes: &[u8], fmt: PixelFormat, sm: &SmartObject, canvas: Rect) -> StageKey {
+pub(super) fn placed_key(name: &str, bytes: &[u8], fmt: PixelFormat, sm: &SmartObject, canvas: Rect) -> StageKey {
     let mut h = blake3::Hasher::new();
     h.update(bytes);
+    // Decode routing can differ even when the encoded data is identical.
+    h.update(blake3::hash(name.as_bytes()).as_bytes());
+    // Equal source bytes can encode different pixels under explicit historical sample orders.
+    h.update(&[match sm.historical_xcf_sample_order {
+        None => 0,
+        Some(photocraft_doc::HistoricalXcfSampleOrder::LittleEndian) => 1,
+        Some(photocraft_doc::HistoricalXcfSampleOrder::BigEndian) => 2,
+    }]);
     for v in sm.transform.m {
         h.update(&v.to_bits().to_le_bytes());
     }

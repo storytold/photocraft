@@ -23,9 +23,16 @@ fn old_stack_key(bytes: &[u8], fmt: PixelFormat, mode: photocraft_doc::StackMode
 }
 
 fn old_placed_key(bytes: &[u8], doc: &Document, smart: &SmartObject) -> StageKey {
-    let key = stack_cache::placed_key(bytes, doc.pixel_format(), smart, doc.bounds());
+    // Reproduce the old source key without the filename or sample order.
+    let mut key = blake3::Hasher::new();
+    key.update(bytes);
+    for value in smart.transform.m {
+        key.update(&value.to_bits().to_le_bytes());
+    }
+    let (fmt, canvas) = (doc.pixel_format(), doc.bounds());
+    key.update(format!("{fmt:?}|{:?}|{:?}|{:?}|{canvas:?}", smart.warp, smart.perspective, smart.stack_mode).as_bytes());
     let mut hash = blake3::Hasher::new();
-    hash.update(&key);
+    hash.update(key.finalize().as_bytes());
     hash.update(&crate::color_cmds::document_profile(doc).to_bytes());
     *hash.finalize().as_bytes()
 }

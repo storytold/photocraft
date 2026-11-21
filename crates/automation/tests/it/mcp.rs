@@ -10,6 +10,8 @@ use rmcp::{ClientHandler, RoleClient, ServiceExt};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+use photocraft_testkit::xcf as historical_xcf_fixture;
+
 const CONTROL_TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 #[derive(Clone, Default)]
@@ -896,6 +898,41 @@ async fn doc_replace_smart_object_is_capability_scoped() {
     cleanup(&base);
 }
 
+#[tokio::test]
+async fn headless_smart_object_tools_use_explicit_historical_xcf_order() {
+    use photocraft_doc::{HistoricalXcfSampleOrder, LayerContent};
+
+    let root = tmp("historical-smart-object");
+    std::fs::write(root.join("little.xcf"), historical_xcf_fixture::historical_pixel(true)).unwrap();
+    std::fs::write(root.join("big.xcf"), historical_xcf_fixture::historical_pixel(false)).unwrap();
+    std::fs::write(root.join("modern.xcf"), historical_xcf_fixture::modern_pixel(0x1234)).unwrap();
+    let client = connect(headless_in(&root)).await;
+    json_of(&call(&client, "doc_new", json!({"width": 8, "height": 8})).await);
+
+    let placed = json_of(&call(&client, "doc_place", json!({"path": "little.xcf", "historical_xcf_sample_order": "little-endian"})).await);
+    let layer = placed["layer"].clone();
+    for (path, replacement, order) in [
+        ("placed.pcraft", None, Some(HistoricalXcfSampleOrder::LittleEndian)),
+        ("replaced.pcraft", Some("big.xcf"), Some(HistoricalXcfSampleOrder::BigEndian)),
+        ("modern.pcraft", Some("modern.xcf"), None),
+    ] {
+        if let Some(source) = replacement {
+            let requested = order.unwrap_or(HistoricalXcfSampleOrder::LittleEndian);
+            json_of(&call(&client, "doc_replace_smart_object", json!({"path":source,"layer":layer,"historical_xcf_sample_order":requested})).await);
+        }
+        json_of(&call(&client, "doc_save", json!({"path": path})).await);
+        let document = photocraft_format::load_from_bytes(&std::fs::read(root.join(path)).unwrap()).unwrap();
+        let id = photocraft_doc::LayerId(layer.as_u64().unwrap());
+        let LayerContent::Smart(smart) = &document.layer(id).unwrap().content else { panic!("Smart Object") };
+        assert_eq!(smart.historical_xcf_sample_order, order);
+        if order.is_none() {
+            assert!((smart.cache.as_ref().unwrap().pixel(4, 4)[0] - f32::from(0x1234u16) / 65535.).abs() <= 1. / 255.);
+        }
+    }
+    client.cancel().await.unwrap();
+    cleanup(&root);
+}
+
 /// #3216: the export half of #2810. The write root scopes both exports, the read root the CSV,
 /// and the three ambient commands keep their refusal.
 #[tokio::test(flavor = "multi_thread")]
@@ -1289,6 +1326,28 @@ async fn bridge_replace_smart_object_rejects_a_document_index() {
     assert_eq!(executed.len(), 1, "the indexed call must not reach the app: {seen:?}");
     assert_eq!(executed[0]["params"]["command"], "layer.smartObjects.replaceContents");
     assert_eq!(executed[0]["params"]["params"], json!({"path": "new.png", "layer": 7}));
+}
+
+#[tokio::test]
+async fn bridge_smart_object_tools_forward_only_valid_historical_xcf_orders() {
+    let (addr, app) = fake_app().await;
+    let client = connect(PhotocraftMcp::bridge(&addr, CONTROL_TOKEN).unwrap()).await;
+    let actions = [("doc_place", "file.placeEmbedded", "little-endian"), ("doc_replace_smart_object", "layer.smartObjects.replaceContents", "big-endian")];
+    for (tool, _, order) in actions {
+        let valid = call(&client, tool, json!({"path": "source.xcf", "historical_xcf_sample_order": order})).await;
+        assert_ne!(valid.is_error, Some(true), "{}", text(&valid));
+        let invalid = json!({"path": "source.xcf", "historical_xcf_sample_order": "native"}).as_object().unwrap().clone();
+        let rejected = client.call_tool(CallToolRequestParams::new(tool).with_arguments(invalid)).await;
+        assert!(rejected.is_err() || rejected.is_ok_and(|result| result.is_error == Some(true)));
+    }
+    client.cancel().await.unwrap();
+    let seen = tokio::time::timeout(std::time::Duration::from_secs(5), app).await.unwrap().unwrap();
+    let executed: Vec<_> = seen.iter().filter(|request| request["method"] == "engine.execute").collect();
+    assert_eq!(executed.len(), actions.len());
+    for ((_, command, order), request) in actions.into_iter().zip(executed) {
+        assert_eq!(request["params"]["command"], command);
+        assert_eq!(request["params"]["params"], json!({"path":"source.xcf", "historicalXcfSampleOrder":order}));
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

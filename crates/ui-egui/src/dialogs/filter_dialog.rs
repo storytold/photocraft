@@ -701,6 +701,9 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
     if command == crate::dialogs::image_processor_ui::COMMAND {
         crate::dialogs::image_processor_ui::nest(&mut map);
     }
+    if map.get("historicalXcfSampleOrder").and_then(Value::as_str) == Some("") {
+        map.remove("historicalXcfSampleOrder");
+    }
     if command == super::rotate_canvas_ui::COMMAND {
         super::rotate_canvas_ui::command_params(&mut map);
     }

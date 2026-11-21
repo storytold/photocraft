@@ -127,6 +127,8 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
             color: Color::rgb(0.2, 0.4, 0.6),
             transform: Affine::translate(10.5, 20.25),
             cache: Some(cache.clone()),
+            cache_uses_raster_blending: true,
+            keep_layer_name: true,
             psd_raw: Some(blob(9, 100)),
             runs: vec![
                 TextRun { len: 1, style: CharStyle { kerning: text::Kerning::Off, kern: 120.0, ..CharStyle::default() } },
@@ -174,6 +176,8 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
         "Smart",
         LayerContent::Smart(SmartObject {
             contents_id: SmartContentsId::fresh(),
+            historical_xcf_sample_order: None,
+            historical_xcf_link_digest: None,
             vector_preview: None,
             source: SmartSource::Embedded { file_name: "inner.png".into(), bytes: blob(11, 2000) },
             transform: Affine::scale(0.5),
@@ -204,6 +208,8 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
         "Linked",
         LayerContent::Smart(SmartObject {
             contents_id: SmartContentsId::fresh(),
+            historical_xcf_sample_order: None,
+            historical_xcf_link_digest: None,
             vector_preview: None,
             source: SmartSource::Linked { path: "/tmp/linked.psd".into() },
             transform: Affine::IDENTITY,

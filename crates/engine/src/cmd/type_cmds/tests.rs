@@ -1,5 +1,28 @@
 use super::*;
 
+#[test]
+fn native_reopened_text_keeps_its_explicit_name_when_edited() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":32,"height":32})).unwrap();
+    s.execute("type.create", json!({"x":2,"y":20,"text":"Title","name":"Title"})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.edit("Set imported text policy", |doc, _| {
+        let LayerContent::Text(text) = &mut doc.layer_mut(id).unwrap().content else { panic!("type layer") };
+        text.keep_layer_name = true;
+        text.cache_uses_raster_blending = true;
+        Ok(())
+    })
+    .unwrap();
+    let saved = photocraft_format::save_to_bytes(s.active().unwrap().doc(), &Default::default()).unwrap();
+    let doc = photocraft_format::load_from_bytes(&saved).unwrap();
+    let mut reopened = Session::new();
+    reopened.add_document(doc, None);
+    reopened.execute("type.edit", json!({"layer":id.0,"text":"New title"})).unwrap();
+    let layer = reopened.active().unwrap().doc.layer(id).unwrap();
+    assert_eq!(layer.name, "Title");
+    assert!(matches!(&layer.content, LayerContent::Text(text) if text.text == "New title" && !text.cache_uses_raster_blending));
+}
+
 fn session() -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 200, "height": 100, "background": "transparent"})).unwrap();

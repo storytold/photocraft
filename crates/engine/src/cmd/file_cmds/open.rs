@@ -6,18 +6,26 @@ pub(crate) struct BatchOpen {
     pub path: String,
     pub sources: Vec<photocraft_doc::DocId>,
     pub raw_ppi: f64,
+    pub historical_xcf_sample_order: Option<photocraft_io::HistoricalXcfSampleOrder>,
     /// A recorded Open read a source that must not be replaced (Affinity, Krita, XCF, PDN).
     pub read_only: bool,
 }
 
-/// Replace only the file choice before either authorization gate; malformed params stay invalid.
+/// Bind the file and any unspecified XCF sample order before either authorization gate.
 pub(crate) fn batch_open_params(s: &Session, id: &str, params: &Value) -> Option<Value> {
     let binding = s.batch_open.as_ref()?;
     if !matches!(id, "file.openAs" | "file.openExrParts") || !(params.is_object() || params.is_null()) {
         return None;
     }
     let mut effective = if params.is_null() { super::json!({}) } else { params.clone() };
-    effective.as_object_mut()?.insert("path".into(), Value::String(binding.path.clone()));
+    let fields = effective.as_object_mut()?;
+    fields.insert("path".into(), Value::String(binding.path.clone()));
+    if id == "file.openAs"
+        && let Some(order) = binding.historical_xcf_sample_order
+        && matches!(fields.get("historicalXcfSampleOrder"), None | Some(Value::Null))
+    {
+        fields.insert("historicalXcfSampleOrder".into(), json!(order));
+    }
     Some(effective)
 }
 
@@ -55,34 +63,34 @@ pub(crate) fn import_opened(s: &Session, name: &str, bytes: &[u8]) -> Result<Doc
 }
 
 pub(super) fn import_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8]) -> Result<Document> {
-    import_source_at_raw_ppi(raw_ppi, name, bytes).map(|(doc, _)| doc)
+    import_source_at_raw_ppi(raw_ppi, name, bytes, &Default::default()).map(|imported| imported.document)
 }
 
 /// [`import_at_raw_ppi`], also telling whether the source must not be replaced by a save
 /// (`ImportResult::source_read_only`: Affinity, Krita, XCF, PDN, whatever its extension says).
-pub(super) fn import_source_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8]) -> Result<(Document, bool)> {
-    let r = import_result(name, bytes)?;
-    let mut doc = r.document;
-    raw_resolution(raw_ppi, &r.warnings, &mut doc);
-    Ok((doc, r.source_read_only))
-}
-
-fn import_result(name: &str, bytes: &[u8]) -> Result<photocraft_io::ImportResult> {
-    import_result_with(name, bytes, &photocraft_io::ImportOptions::default())
+pub(super) fn import_source_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<photocraft_io::ImportResult> {
+    let mut imported = import_result_with(name, bytes, opts)?;
+    raw_resolution(raw_ppi, &imported.warnings, &mut imported.document);
+    Ok(imported)
 }
 
 /// The one import path every caller shares: allocation checkpoint, native `.pcraft` and format
 /// dispatch through `photocraft_io::import_with_options`, typed memory refusals, and the
 /// preview-only refusal wherever the import came from.
 pub(super) fn import_result_with(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<photocraft_io::ImportResult> {
-    import_result_for_open(name, bytes, opts).map(|(r, _)| r)
+    import_result_for_open(name, bytes, opts, &photocraft_raster::Interrupt::NONE).map(|(r, _)| r)
 }
 
 /// [`import_result_with`], also telling whether a PSD/PSB had damaged data it recovered from, as
 /// File › Open's job learns it (`photocraft_io::import_for_open`), so an interactive caller can ask.
-pub(super) fn import_result_for_open(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<(photocraft_io::ImportResult, bool)> {
+pub(crate) fn import_result_for_open(
+    name: &str,
+    bytes: &[u8],
+    opts: &photocraft_io::ImportOptions,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<(photocraft_io::ImportResult, bool)> {
     crate::allocation::checkpoint("importing document")?;
-    let (r, damaged) = photocraft_io::import_for_open(name, bytes, opts).map_err(|e| crate::error::io_open_error(name, e))?;
+    let (r, damaged) = photocraft_io::import_for_open_with(name, bytes, opts, ctl).map_err(|e| crate::error::io_open_error(name, e))?;
     // Auxiliary imports return only a document and cannot surface the preview's fidelity warning.
     // Open has its own warning-preserving path; never silently place or process a thumbnail.
     if r.preview_only {
@@ -188,16 +196,28 @@ pub fn open_bytes_as_with_options(
     path: Option<String>,
     approve_high_memory: bool,
 ) -> Result<Value> {
+    let mut opts = crate::jobs::import_options(s.prefs());
+    opts.psd_high_memory_approved = approve_high_memory;
+    open_bytes_as_with_import_options(s, name, bytes, as_ext, path, &opts)
+}
+
+/// Decode this import with explicit per-source options, including ambiguous historical XCF samples.
+pub fn open_bytes_as_with_import_options(
+    s: &mut Session,
+    name: &str,
+    bytes: &[u8],
+    as_ext: Option<&str>,
+    path: Option<String>,
+    opts: &photocraft_io::ImportOptions,
+) -> Result<Value> {
     crate::allocation::checkpoint("importing document")?;
+    let opts = fresh_import_options(*opts);
     let decode_name = match as_ext {
         Some(ext) => format!("{}.{}", stem(name), ext.trim_start_matches('.')),
         None => name.to_string(),
     };
-    let mut opts = crate::jobs::import_options(s.prefs());
-    opts.psd_high_memory_approved = approve_high_memory;
-    opts.psd_approved_estimate = None;
     let raw = super::raw_open::prepare(s, &decode_name, &file_name(name), path.as_deref(), bytes)?;
-    let (r, raw_settings) = if let Some((imported, settings)) = raw {
+    let (mut r, raw_settings) = if let Some((imported, settings)) = raw {
         (imported, Some(settings))
     } else {
         let r = photocraft_io::import_with_options_as(&decode_name, bytes, as_ext, &opts).map_err(|e| match as_ext {
@@ -226,9 +246,10 @@ pub fn open_bytes_as_with_options(
         return Err(EngineError::Other(format!("{name}: a color profile question requires interactive opening or suppressWarnings")));
     }
     // Color Settings policies (preserve / convert / discard the embedded profile).
-    let (i, color) = s.open_document(doc, path.filter(|_| !r.source_read_only));
-    if let Some(st) = s.active_mut() {
-        st.source_read_only = r.source_read_only;
+    let (i, color, view_warning) =
+        s.admit_import_with_initial_view(r.source_read_only, r.initial_view, |s| s.open_document(doc, path.filter(|_| !r.source_read_only)))?;
+    if let Some(warning) = view_warning {
+        r.warnings.push(warning);
     }
     if let Some(settings) = raw_settings {
         super::raw_open::finish(s, settings)?;
@@ -238,11 +259,24 @@ pub fn open_bytes_as_with_options(
     Ok(json!({"document": i, "color": color, "warnings": r.warnings}))
 }
 
+/// A saved estimate authorizes only the verified source in the explicit approval flow.
+/// Fresh-source entry points must request approval again instead of reusing that capability.
+pub fn fresh_import_options(mut options: photocraft_io::ImportOptions) -> photocraft_io::ImportOptions {
+    if options.psd_approved_estimate.take().is_some() {
+        // Clearing only the estimate would turn its bounded approval into an unbounded one.
+        options.psd_high_memory_approved = false;
+    }
+    options
+}
+
 /// Extensions Open As reads besides the codec formats, the camera raw formats
 /// (`photocraft_io::raw::EXTENSIONS`) and the Affinity ones (`photocraft_io::affinity::EXTENSIONS`):
 /// the document and vector formats `photocraft_io::import` handles, and `raw`, the Open As type
 /// for any camera raw.
-const OPEN_AS_EXTRA: &[&str] = &["raw", "pdn", "ora", "xcf", "xcf.gz", "xcfgz", "kra", "krz", "psd", "psb", "psdt", "pcraft", "svg", "svgz", "pdf", "ai"];
+const OPEN_AS_EXTRA: &[&str] = &[
+    "raw", "pdn", "ora", "xcf", "xcf.gz", "xcfgz", "xcf.bz2", "xcfbz2", "xcf.xz", "xcfxz", "kra", "krz", "psd", "psb", "psdt", "pcraft", "svg", "svgz", "pdf",
+    "ai",
+];
 
 /// Whether `ext` (the `as` value of Open As) names a format PhotoCraft reads.
 fn is_open_as_format(ext: &str) -> bool {
@@ -256,24 +290,42 @@ fn is_open_as_format(ext: &str) -> bool {
 
 /// Open the selected file with its decoder options and record its Batch source identity.
 pub(super) fn open_as(s: &mut Session, p: &Value) -> Result<Value> {
+    let opts = import_options_from_params(crate::jobs::import_options(s.prefs()), p, "file.openAs")?;
     let path = str_param(p, "path", "file.openAs")?.to_string();
     let as_ext = p.get("as").or_else(|| p.get("format")).and_then(Value::as_str);
-    let approve_high_memory = match p.get("approveHighMemory") {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(b)) => *b,
-        Some(_) => {
-            return Err(EngineError::BadParams { cmd: "file.openAs".into(), msg: "expected boolean for \"approveHighMemory\"".into() });
-        }
-    };
     if let Some(ext) = as_ext
         && !is_open_as_format(ext)
     {
         return Err(EngineError::BadParams { cmd: "file.openAs".into(), msg: format!("\"as\" names no format PhotoCraft reads: {ext:?}") });
     }
+
     let bytes = read_file(&path)?;
-    let result = open_bytes_as_with_options(s, &path, &bytes, as_ext, Some(path.clone()), approve_high_memory)?;
+    let result = open_bytes_as_with_import_options(s, &path, &bytes, as_ext, Some(path.clone()), &opts)?;
     remember_batch_open(s);
     Ok(result)
+}
+
+/// Parse shared fresh-open controls over the caller's explicit preference/default base.
+/// Missing/null choices never inherit a previous source's approval or byte-order choice;
+/// unrelated decoding preferences and resource limits remain the caller's policy.
+pub fn import_options_from_params(base: photocraft_io::ImportOptions, p: &Value, cmd: &str) -> Result<photocraft_io::ImportOptions> {
+    let approved = match p.get("approveHighMemory") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(value)) => *value,
+        _ => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "expected boolean for \"approveHighMemory\"".into() }),
+    };
+    let order = historical_xcf_sample_order(p, cmd)?;
+    Ok(photocraft_io::ImportOptions { psd_high_memory_approved: approved, psd_approved_estimate: None, historical_xcf_sample_order: order, ..base })
+}
+
+/// Parse an explicit per-import choice. Neither a missing value nor null infers an order.
+pub fn historical_xcf_sample_order(p: &Value, cmd: &str) -> Result<Option<photocraft_io::HistoricalXcfSampleOrder>> {
+    match p.get("historicalXcfSampleOrder") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) if value == "little-endian" => Ok(Some(photocraft_io::HistoricalXcfSampleOrder::LittleEndian)),
+        Some(Value::String(value)) if value == "big-endian" => Ok(Some(photocraft_io::HistoricalXcfSampleOrder::BigEndian)),
+        _ => Err(EngineError::BadParams { cmd: cmd.into(), msg: "historicalXcfSampleOrder must be little-endian or big-endian".into() }),
+    }
 }
 
 /// Answers a pending high-memory preflight: `approve` false cancels it; true rechecks the hard
@@ -350,7 +402,7 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
 }
 
 /// Run a place: in the background when the command was started with [`Session::start`].
-fn place_input(s: &mut Session, input: PlaceInput) -> Result<Value> {
+pub(crate) fn place_input(s: &mut Session, input: PlaceInput) -> Result<Value> {
     let label = input.job_label();
     crate::jobs::run_stepped(s, &label, true, PlaceSteps::new(input, s.cooperative_jobs()), apply_place)
 }
@@ -392,7 +444,11 @@ pub(crate) struct PlaceInput {
 impl PlaceInput {
     /// The input of a place of `bytes` already read (named `name`; `linked`: Place Linked to that path).
     pub(crate) fn new(s: &Session, name: &str, bytes: Vec<u8>, linked: Option<String>, p: &Value) -> Result<Self> {
-        Self::with_file(s, name, PlaceFile::Bytes(Arc::new(bytes)), linked, p)
+        Self::from_shared_bytes(s, name, Arc::new(bytes), linked, p)
+    }
+
+    pub(crate) fn from_shared_bytes(s: &Session, name: &str, bytes: Arc<Vec<u8>>, linked: Option<String>, p: &Value) -> Result<Self> {
+        Self::with_file(s, name, PlaceFile::Bytes(bytes), linked, p)
     }
 
     /// The input of a place of `file`, with the destination (canvas or frame), preferences and
@@ -418,16 +474,8 @@ impl PlaceInput {
             let [a, b, c, d, _, _] = f.transform.m;
             (a.hypot(b), c.hypot(d))
         });
-        let approve = match p.get("approveHighMemory") {
-            None | Some(Value::Null) => false,
-            Some(Value::Bool(b)) => *b,
-            Some(_) => {
-                return Err(EngineError::BadParams { cmd: "file.placeEmbedded".into(), msg: "expected boolean for \"approveHighMemory\"".into() });
-            }
-        };
-        let mut opts = crate::jobs::import_options(prefs);
-        opts.psd_high_memory_approved = approve;
-        opts.psd_approved_estimate = None;
+        let cmd = if linked.is_some() { "file.placeLinked" } else { "file.placeEmbedded" };
+        let opts = import_options_from_params(crate::jobs::import_options(prefs), p, cmd)?;
         Ok(Self {
             name: name.to_string(),
             canvas,
@@ -440,7 +488,7 @@ impl PlaceInput {
             // an embedded place lands as a plain pixel layer.
             smart: linked.is_some() || p.get("smartObject").and_then(Value::as_bool).unwrap_or(prefs.general.always_create_smart_objects_when_placing),
             doc: match &file {
-                PlaceFile::Bytes(bytes) => (frame.is_some() || photocraft_io::is_svg_input(name, bytes)).then(|| Arc::clone(&d.doc)),
+                PlaceFile::Bytes(bytes) => (frame.is_some() || photocraft_io::svg::is_svg(bytes)).then(|| Arc::clone(&d.doc)),
                 PlaceFile::Path(_) => Some(Arc::clone(&d.doc)),
             },
             frame,
@@ -448,6 +496,10 @@ impl PlaceInput {
             file,
             linked,
         })
+    }
+
+    pub(crate) fn set_import_options(&mut self, options: photocraft_io::ImportOptions) {
+        self.opts = options;
     }
 
     /// The job's name in the progress UI.
@@ -462,6 +514,18 @@ impl PlaceInput {
 }
 
 /// A place decoded, flattened and fitted, ready to be inserted by [`apply_place`].
+pub(crate) enum PlaceOutcome {
+    Ready(Box<Prepared>),
+    Historical {
+        name: String,
+        bytes: Arc<Vec<u8>>,
+        question: photocraft_io::HistoricalXcfSampleOrderRequest,
+        options: photocraft_io::ImportOptions,
+        linked: Option<String>,
+        params: Value,
+    },
+}
+
 pub(crate) struct Prepared {
     pub(super) warnings: Vec<String>,
     pub(super) content: LayerContent,
@@ -476,8 +540,14 @@ pub(crate) struct Prepared {
 }
 
 /// Insert the prepared layer as one undo step and report the place. Runs on the session's thread.
-pub(crate) fn apply_place(s: &mut Session, p: Prepared) -> Result<Value> {
-    let Prepared { warnings, content, layer_name, label, scale, bounds, smart, frame } = p;
+pub(crate) fn apply_place(s: &mut Session, outcome: PlaceOutcome) -> Result<Value> {
+    let prepared = match outcome {
+        PlaceOutcome::Ready(prepared) => prepared,
+        PlaceOutcome::Historical { name, bytes, question, options, linked, params } => {
+            return crate::jobs::hold_place(s, name, bytes, question, options, linked, params);
+        }
+    };
+    let Prepared { warnings, content, layer_name, label, scale, bounds, smart, frame } = *prepared;
     let layer = Layer::new(layer_name, content);
     let id = layer.id;
     s.edit(label, move |doc, active| {
@@ -511,4 +581,125 @@ pub(super) fn place(s: &mut Session, p: &Value, linked: bool) -> Result<Value> {
     // The file is read by the place itself, on the job's worker when it runs in the background.
     let input = PlaceInput::with_file(s, &path, PlaceFile::Path(path.clone()), link, p)?;
     place_input(s, input)
+}
+
+#[cfg(test)]
+mod compressed_svg_placement_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod open_as_alias_tests;
+
+#[cfg(test)]
+mod import_options_parser_tests {
+    use super::*;
+    use photocraft_io::{HistoricalXcfSampleOrder, ImportOptions};
+
+    fn base() -> ImportOptions {
+        ImportOptions {
+            max_group_depth: 7,
+            keep_raw: true,
+            pdf_dpi: 144.,
+            pdf_pages: Some((2, 4)),
+            pdf_editable: true,
+            psd_max_pixel_bytes: 12345,
+            flat_max_pixel_bytes: 6789,
+            psd_high_memory_approved: true,
+            psd_approved_estimate: Some(u64::MAX),
+            historical_xcf_sample_order: Some(HistoricalXcfSampleOrder::BigEndian),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn fresh_open_parser_preserves_base_preferences_but_never_inherits_source_choices() {
+        for params in [json!({}), json!({"approveHighMemory":null,"historicalXcfSampleOrder":null})] {
+            let mut expected = base();
+            expected.psd_high_memory_approved = false;
+            expected.psd_approved_estimate = None;
+            expected.historical_xcf_sample_order = None;
+            for command in ["file.openAs", "app.open", "doc.open"] {
+                assert_eq!(import_options_from_params(base(), &params, command).unwrap(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn fresh_open_parser_forwards_explicit_order_and_fresh_boolean_approval() {
+        for (name, order) in [("little-endian", HistoricalXcfSampleOrder::LittleEndian), ("big-endian", HistoricalXcfSampleOrder::BigEndian)] {
+            for approved in [false, true] {
+                let params = json!({"approveHighMemory":approved,"historicalXcfSampleOrder":name});
+                let mut expected = base();
+                expected.psd_high_memory_approved = approved;
+                expected.psd_approved_estimate = None;
+                expected.historical_xcf_sample_order = Some(order);
+                assert_eq!(import_options_from_params(base(), &params, "file.openAs").unwrap(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn fresh_open_parser_rejects_wrong_types_and_unknown_orders_with_host_context() {
+        for (field, invalid) in [
+            ("approveHighMemory", vec![json!(0), json!("true"), json!([]), json!({})]),
+            ("historicalXcfSampleOrder", vec![json!(false), json!(1), json!("LE"), json!("native"), json!([]), json!({})]),
+        ] {
+            for value in invalid {
+                for host in ["file.openAs", "app.open", "doc.open"] {
+                    let mut params = json!({});
+                    params[field] = value.clone();
+                    let EngineError::BadParams { cmd, msg } = import_options_from_params(base(), &params, host).unwrap_err() else {
+                        panic!("typed params error")
+                    };
+                    assert_eq!(cmd, host);
+                    assert!(msg.contains(field), "{msg}");
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod fresh_source_approval_tests {
+    use super::*;
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn saved_estimate_cannot_approve_a_fresh_foreground_or_background_source() {
+        let gb = 1u64 << 30;
+        let bytes = crate::jobs::psd_open_fixture::make_psd(false);
+        let memory = photocraft_io::memory::MemorySnapshot { available_ram: Some(8 * gb), swap_free: None, commit_headroom: None };
+        photocraft_io::memory::with_mock_memory(memory, || {
+            photocraft_io::psd_budget::with_test_estimate_charge(4 * gb + 1, || {
+                let stale = photocraft_io::ImportOptions { psd_high_memory_approved: true, psd_approved_estimate: Some(u64::MAX), ..Default::default() };
+                for route in 0..3 {
+                    let mut s = Session::new();
+                    s.set_cooperative_jobs(true);
+                    s.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
+                    let previous = s.active().unwrap().doc.clone();
+                    let result = match route {
+                        0 => open_bytes_as_with_import_options(&mut s, "different.psd", &bytes, None, None, &stale),
+                        1 => s.start_open_with_options("different.psd", crate::jobs::OpenSource::Bytes(Arc::new(bytes.clone())), &stale).map(|_| Value::Null),
+                        _ => match s
+                            .start_open_for_user_with_options("different.psd", crate::jobs::OpenSource::Bytes(Arc::new(bytes.clone())), &stale, false)
+                            .unwrap()
+                        {
+                            crate::jobs::Started::Done(value) => {
+                                assert!(value.get("pendingPreflight").is_some(), "fresh approval must be requested: {value}");
+                                Ok(value)
+                            }
+                            other => panic!("expected inline preflight, got {other:?}"),
+                        },
+                    };
+                    if route != 2 {
+                        assert!(matches!(result, Err(EngineError::PsdApprovalRequired { .. })), "route {route}: {result:?}");
+                    }
+                    assert_eq!(s.documents().len(), 1);
+                    assert!(Arc::ptr_eq(&previous, &s.active().unwrap().doc));
+                }
+                // Explicit approval for these fresh bytes remains supported without a saved estimate.
+                let mut s = Session::new();
+                open_bytes_as_with_options(&mut s, "approved.psd", &bytes, None, None, true).unwrap();
+                assert_eq!(s.documents().len(), 1);
+            });
+        });
+    }
 }

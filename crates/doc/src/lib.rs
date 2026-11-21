@@ -451,8 +451,12 @@ pub struct TextLayer {
     pub size_pt: f32,
     pub color: Color,
     pub transform: Affine,
-    /// Rasterized appearance (from PSD or our text engine).
+    /// Rasterized appearance from an imported file or the text engine.
     pub cache: Option<Surface>,
+    /// Saved pixels already reflect their source's text rendering and blend as raster.
+    pub cache_uses_raster_blending: bool,
+    /// Keep the layer's name when its text changes, even when the two match.
+    pub keep_layer_name: bool,
     /// Data of the PSD `TySh` block. On export it replaces the `TySh` entry in
     /// [`Layer::psd_blocks`] (the text engine updates this field when it edits text).
     pub psd_raw: Option<Arc<Vec<u8>>>,
@@ -478,6 +482,8 @@ impl Default for TextLayer {
             color: Color::BLACK,
             transform: Affine::IDENTITY,
             cache: None,
+            cache_uses_raster_blending: false,
+            keep_layer_name: false,
             psd_raw: None,
             runs: Vec::new(),
             paragraphs: Vec::new(),
@@ -490,6 +496,12 @@ impl Default for TextLayer {
 }
 
 impl TextLayer {
+    /// Install a fresh raster from PhotoCraft's text engine.
+    pub fn set_rendered_cache(&mut self, surface: Surface) {
+        self.cache = Some(surface);
+        self.cache_uses_raster_blending = false;
+    }
+
     /// Character runs covering exactly `text.len()` bytes, each on a char boundary.
     pub fn char_runs(&self) -> Vec<text::TextRun> {
         let base = text::CharStyle { font_family: self.font_family.clone(), size_pt: self.size_pt, color: self.color, ..Default::default() };
@@ -565,12 +577,34 @@ pub struct VectorPreview {
     pub svg: Arc<Vec<u8>>,
 }
 
+/// Explicit sample byte order for development XCF7–11 high-depth pixel data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
+#[serde(rename_all = "kebab-case")]
+pub enum HistoricalXcfSampleOrder {
+    BigEndian,
+    LittleEndian,
+}
+
+impl std::fmt::Display for HistoricalXcfSampleOrder {
+    /// Formats the explicit historical sample-order choice for user and agent diagnostics.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::BigEndian => "big-endian",
+            Self::LittleEndian => "little-endian",
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct SmartObject {
     /// Ordinary layer duplicates share this identity; independent contents receive a fresh one.
     pub contents_id: SmartContentsId,
     /// Embedded source file bytes (PSD, PNG, …) or linked path.
     pub source: SmartSource,
+    /// Explicit interpretation of ambiguous historical XCF sample bytes; never inferred.
+    pub historical_xcf_sample_order: Option<HistoricalXcfSampleOrder>,
+    /// Identity of linked bytes explicitly assigned that interpretation.
+    pub historical_xcf_link_digest: Option<[u8; 32]>,
     /// Optional source-pixel display preview for AI/PDF/EPS; ignored after source bytes change.
     pub vector_preview: Option<VectorPreview>,
     pub transform: Affine,
@@ -604,6 +638,8 @@ impl SmartObject {
         Self {
             contents_id: SmartContentsId::fresh(),
             source,
+            historical_xcf_sample_order: None,
+            historical_xcf_link_digest: None,
             vector_preview: None,
             transform,
             smart_filters: Vec::new(),

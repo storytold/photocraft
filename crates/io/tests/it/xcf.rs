@@ -105,9 +105,10 @@ fn layers_8bit_open_with_their_properties_and_pixels() {
     assert!((px(s, 15, 31)[3] * 255.0 - alpha(23, 11, 24, 12, 255) as f32).abs() < 0.51);
     // Hidden.
     assert!(!d.layers[3].visible);
-    // The only note: GIMP composites this file in linear light.
-    assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
-    assert!(r.warnings[0].contains("linear light"), "{:?}", r.warnings);
+    // Compositing uses different coverage and color-space rules.
+    assert_eq!(r.warnings.len(), 2, "{:?}", r.warnings);
+    assert!(r.warnings.iter().any(|warning| warning.contains("underlying layers are transparent")));
+    assert!(r.warnings.iter().any(|warning| warning.contains("linear light")));
 }
 
 /// Per mode: our composite of the `legacy-modes-perceptual.xcf` cell against GIMP's. Modes with
@@ -210,11 +211,22 @@ fn gray16_keeps_its_depth_and_mode() {
 }
 
 #[test]
+/// Checks the published float-linear fixture retains native F32 data and independently verified linear
+/// profile meaning.
 fn float_linear_opens_as_32_bit_float_with_a_linear_profile() {
     let d = open("float-linear.xcf").document;
     assert_eq!((d.mode, d.depth), (ColorMode::Rgb, SampleType::F32));
     let icc = d.icc_profile.as_ref().expect("a linear-light profile");
-    assert_eq!(**icc, craft_cms::Builtin::LinearSrgb.profile().to_bytes().as_ref().clone());
+    let profile = craft_cms::Profile::parse(icc).expect("usable native ICC");
+    let expected = craft_cms::Profile::parse(&craft_cms::Builtin::LinearSrgb.profile().to_bytes()).unwrap();
+    assert_eq!(profile.color_space, craft_cms::ColorSpace::Rgb);
+    assert_eq!(profile.matrix, expected.matrix, "implicit source sRGB colorants are preserved");
+    assert_eq!(profile.white_point, expected.white_point);
+    for curve in profile.trc.as_ref().expect("native RGB curves") {
+        for value in [-0.25, 0.0, 0.25, 0.5, 1.0, 2.0] {
+            assert!((curve.eval64(value) - value).abs() < 0.00001, "linear curve at {value}");
+        }
+    }
     let bg = &d.layers[0];
     for (x, y) in [(0, 0), (39, 29), (5, 21)] {
         let p = px(bg, x as i32, y as i32);
@@ -237,14 +249,15 @@ fn indexed_opens_as_rgb_with_a_note() {
 }
 
 #[test]
-fn text_layers_open_as_pixels_with_a_note() {
-    let r = open("text.xcf");
-    assert_eq!(names(&r.document.layers), ["Background", "XCF"]);
-    assert!(r.warnings.iter().any(|w| w.contains("text layer")), "{:?}", r.warnings);
-    let text = &r.document.layers[1];
-    let s = raster(text);
-    let region = s.read_region(Rect::new(10, 10, 10 + 60, 10 + 30));
-    assert!(region.as_chunks::<4>().0.iter().any(|p| p[3] > 0.5), "the rendered glyphs are there");
+fn saved_text_pixels_match_gimp_when_source_float_paint_is_ambiguous() {
+    for (name, tolerance) in [("text.xcf", 80. / 255.), ("text-perceptual.xcf", 2. / 255.)] {
+        let r = open(name);
+        assert_eq!(names(&r.document.layers), ["Background", "XCF"]);
+        assert!(r.document.layers[1].surface().is_some());
+        let png = name.replace(".xcf", ".png");
+        let (worst, over, at) = composite_error(&r.document, &png, tolerance);
+        assert_eq!(over, 0., "{name}: difference {worst} at {at}");
+    }
 }
 
 #[test]
@@ -308,7 +321,6 @@ const COMPOSITES: &[(&str, f32, f32, &str)] = &[
         "groups and pass-through in gamma space; the 15% over are where GIMP's Clip to backdrop hides the Multiply and Screen children above the transparent part of the background",
     ),
     ("mask-perceptual.xcf", 2.5 / 255.0, 0.0, "masks in gamma space"),
-    ("text-perceptual.xcf", 2.5 / 255.0, 0.0, "antialiased text in gamma space"),
     (
         "legacy-modes-perceptual.xcf",
         2.5 / 255.0,
@@ -321,7 +333,6 @@ const COMPOSITES: &[(&str, f32, f32, &str)] = &[
     ("layers-8bit.xcf", 40.0 / 255.0, 0.0, "GIMP's default: Multiply blended in linear light"),
     ("groups.xcf", 140.0 / 255.0, 0.0, "GIMP's default: linear light and Clip to backdrop over a transparent background"),
     ("mask.xcf", 60.0 / 255.0, 0.0, "GIMP's default: alpha composited in linear light"),
-    ("text.xcf", 75.0 / 255.0, 0.0, "GIMP's default: antialiased edges composited in linear light"),
 ];
 
 #[test]

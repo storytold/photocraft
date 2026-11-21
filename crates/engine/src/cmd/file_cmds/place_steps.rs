@@ -12,7 +12,7 @@ use photocraft_io::PngImport;
 use photocraft_raster::{Surface, TranslateSteps};
 use web_time::Instant;
 
-use super::open::{PLACE_EMBEDDED, PlaceFile, PlaceInput, Prepared};
+use super::open::{PLACE_EMBEDDED, PlaceFile, PlaceInput, PlaceOutcome, Prepared};
 use super::paths::{file_name, read_file, stem};
 use super::{
     Affine, Arc, Document, EngineError, LayerContent, Resample, Result, SmartObject, SmartSource, Value, check_flattenable, f64_param, flattened_checked,
@@ -57,6 +57,8 @@ enum Stage {
     /// The pixels in place (none for a frame's image, which renders from its source), to wrap in
     /// a layer.
     Finish(Option<Surface>),
+    /// SVGZ Smart Objects use their native raster and the same warp as a later refresh.
+    FinishDecoded(Box<Document>),
     Spent,
 }
 
@@ -78,19 +80,49 @@ impl PlaceSteps {
     }
 
     /// One unit of work; `Some` when the place is prepared.
-    fn advance(&mut self, ctx: &JobCtx, deadline: Instant) -> Result<Option<Prepared>> {
+    fn advance(&mut self, ctx: &JobCtx, deadline: Instant) -> Result<Option<PlaceOutcome>> {
         match std::mem::replace(&mut self.stage, Stage::Spent) {
             Stage::Decode => {
                 self.read(ctx)?;
                 let input = &self.input;
                 let bytes = &self.bytes;
+                if input.params.get("askHistoricalXcfSampleOrder").and_then(Value::as_bool) == Some(true)
+                    && input.opts.historical_xcf_sample_order.is_none()
+                    && photocraft_io::import_compression(bytes).is_some()
+                    && let Some(question) = ctx
+                        .stage(0.0, 0.05, "Reading", |ctl| photocraft_io::historical_xcf_sample_order_request_with(&input.name, bytes, ctl))
+                        .map_err(|error| self.io_error(error))?
+                {
+                    return Ok(Some(PlaceOutcome::Historical {
+                        name: input.name.clone(),
+                        bytes: Arc::clone(bytes),
+                        question,
+                        options: input.opts,
+                        linked: input.linked.clone(),
+                        params: input.params.clone(),
+                    }));
+                }
                 let png = if self.fine { PngImport::new(&input.name, bytes).map_err(|e| self.io_error(e))? } else { None };
                 match png {
                     Some(png) => self.stage = Stage::DecodePng(Box::new(png)),
                     None => {
-                        let imported = ctx
-                            .stage(0.0, 0.6, "Decoding", |ctl| photocraft_io::import_with_options_and_interrupt(&input.name, bytes, &input.opts, ctl))
-                            .map_err(|e| self.io_error(e))?;
+                        let imported =
+                            ctx.stage(0.0, 0.6, "Decoding", |ctl| photocraft_io::import_with_options_and_interrupt(&input.name, bytes, &input.opts, ctl));
+                        let imported = match imported {
+                            Err(photocraft_io::IoError::HistoricalXcfSampleOrderRequired(question))
+                                if input.params.get("askHistoricalXcfSampleOrder").and_then(Value::as_bool) == Some(true) =>
+                            {
+                                return Ok(Some(PlaceOutcome::Historical {
+                                    name: input.name.clone(),
+                                    bytes: Arc::clone(bytes),
+                                    question,
+                                    options: input.opts,
+                                    linked: input.linked.clone(),
+                                    params: input.params.clone(),
+                                }));
+                            }
+                            result => result.map_err(|error| self.io_error(error))?,
+                        };
                         self.decoded(imported, false, ctx)?;
                     }
                 }
@@ -123,7 +155,8 @@ impl PlaceSteps {
                     None => Stage::Translate(shift),
                 };
             }
-            Stage::Finish(px) => return self.finish(px, ctx).map(Some),
+            Stage::Finish(px) => return self.finish(px, None, ctx).map(|prepared| Some(PlaceOutcome::Ready(Box::new(prepared)))),
+            Stage::FinishDecoded(src) => return self.finish(None, Some(&src), ctx).map(|prepared| Some(PlaceOutcome::Ready(Box::new(prepared)))),
             Stage::Spent => return Err(EngineError::Other("internal error: the place was already prepared".into())),
         }
         Ok(None)
@@ -144,7 +177,7 @@ impl PlaceSteps {
         let (name, fmt) = (&self.input.name, self.input.fmt);
         crate::memory_gate::ensure(&format!("place \u{201c}{}\u{201d}", file_name(name)), crate::memory_gate::place_need(&self.bytes, fmt.bytes_per_pixel()))?;
         // A path isn't read when the input is made, so whether it is a vector source is decided now.
-        let vector = self.input.frame.is_some() || photocraft_io::is_svg_input(name, &self.bytes);
+        let vector = self.input.frame.is_some() || photocraft_io::svg::is_svg(&self.bytes);
         self.input.doc = self.input.doc.take().filter(|_| vector);
         Ok(())
     }
@@ -198,6 +231,15 @@ impl PlaceSteps {
             self.stage = Stage::Finish(None);
             return Ok(());
         }
+        if self.input.smart
+            && photocraft_io::import_compression(&self.bytes) == Some(photocraft_io::ImportCompression::Gzip)
+            && ctx
+                .stage(0.6, 0.65, "Identifying raster source", |ctl| photocraft_io::is_svg_input_with(&self.input.name, &self.bytes, ctl))
+                .map_err(|error| self.io_error(error))?
+        {
+            self.stage = Stage::FinishDecoded(Box::new(src));
+            return Ok(());
+        }
         ctx.progress(0.6, "Flattening");
         self.stage = Stage::Flatten(Box::new(Flatten::new(src, banded && self.fine, self.input.fmt, self.input.command())?));
         Ok(())
@@ -230,7 +272,7 @@ impl PlaceSteps {
     }
 
     /// Wraps the pixels, already in place, in the layer's content.
-    fn finish(&mut self, px: Option<Surface>, ctx: &JobCtx) -> Result<Prepared> {
+    fn finish(&mut self, px: Option<Surface>, raster_source: Option<&Document>, ctx: &JobCtx) -> Result<Prepared> {
         let Plan { w, h, scale, dx, dy } = self.plan;
         let input = &self.input;
         let (cw, ch) = input.canvas;
@@ -253,9 +295,34 @@ impl PlaceSteps {
                 None => SmartSource::Embedded { file_name: file_name(&input.name), bytes: Arc::clone(&self.bytes) },
             };
             let mut so = SmartObject::new(source, placement, px);
+            so.historical_xcf_sample_order = ctx
+                .stage(0.95, 1., "Placing", |ctl| {
+                    photocraft_io::applicable_historical_xcf_sample_order(&input.name, &self.bytes, input.opts.historical_xcf_sample_order, ctl)
+                })
+                .map_err(|error| self.io_error(error))?;
+            if let Some(path) = input.linked.as_deref()
+                && so.historical_xcf_sample_order.is_some()
+            {
+                // A resumed picker holds the approved bytes while the linked path can change.
+                if input.params.get("verifyHistoricalXcfLink").and_then(Value::as_bool) == Some(true) {
+                    ctx.progress(0.95, "Verifying linked source");
+                    let current = super::paths::read_file_limited(path, self.bytes.len() as u64)
+                        .map_err(|error| EngineError::Other(format!("could not verify the linked source {path}: {error}. Pick the file again")))?;
+                    ctx.check()?;
+                    if current.as_slice() != self.bytes.as_slice() {
+                        return Err(EngineError::Other("the linked source changed while choosing the sample byte order. Pick the file again".into()));
+                    }
+                }
+                so.historical_xcf_link_digest = Some(photocraft_io::linked::historical_xcf_digest(&self.bytes));
+            }
             // A vector source (SVG) or a frame's image renders at its placement scale instead of
             // as a resampled raster.
-            if let Some(doc) = &input.doc {
+            if let Some(src) = raster_source {
+                ctx.progress(0.9, "Rendering");
+                ctx.check()?;
+                so.cache = Some(crate::smart_cmds::place_decoded_raster(src, &so, input.fmt)?);
+                ctx.check()?;
+            } else if let Some(doc) = &input.doc {
                 ctx.progress(0.9, "Rendering");
                 ctx.check()?;
                 let (sharp, warnings) = crate::smart_cmds::render_with_warnings(doc, &so)?;
@@ -296,9 +363,9 @@ fn physical_scale(src_ppi: f64, doc_ppi: f64) -> f64 {
     if doc_ppi > 0.0 && src_ppi > doc_ppi && src_ppi.is_finite() { doc_ppi / src_ppi } else { 1.0 }
 }
 
-impl StepWork<Prepared> for PlaceSteps {
+impl StepWork<PlaceOutcome> for PlaceSteps {
     /// Runs units of work until `deadline` (at least one), checking for a cancel between them.
-    fn step(&mut self, ctx: &JobCtx, deadline: Instant) -> Result<Option<Prepared>> {
+    fn step(&mut self, ctx: &JobCtx, deadline: Instant) -> Result<Option<PlaceOutcome>> {
         loop {
             ctx.check()?;
             if let Some(prepared) = self.advance(ctx, deadline)? {

@@ -104,6 +104,7 @@ pub(crate) mod params {
             ..ParamFamily::new(|key| key == image_processor_ui::COMMAND, filter_dialog::run)
         },
         ParamFamily { cancel: Some(filter_dialog::cancel), ..ParamFamily::new(crate::view_cmds::dialogs::is_form, filter_dialog::run) },
+        super::historical_sample_order::FAMILY,
         crate::prefs_ui::PRESETS_FAMILY,
         ParamFamily { check: Some(crate::crop_presets::check), ..ParamFamily::new(crate::crop_presets::owns, crate::crop_presets::run) },
         crate::actions::dialogs::NEW_SET_FAMILY,
@@ -725,6 +726,9 @@ pub(crate) mod format_prompts;
 pub mod gallery_ui;
 pub(crate) mod guide_edit;
 pub mod guide_layout_ui;
+pub(crate) mod historical_replace;
+pub(crate) mod historical_sample_order;
+pub(crate) mod historical_xcf;
 pub mod history_options_ui;
 pub(crate) mod image_processor_ui;
 pub mod jpeg_options_ui;

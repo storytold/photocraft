@@ -1,0 +1,34 @@
+[package]
+name = "photocraft-io-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+# Separate cargo-fuzz workspace, following the other format crates.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+photocraft-io = { path = ".." }
+
+[[bin]]
+name = "xcf_import"
+path = "fuzz_targets/xcf_import.rs"
+test = false
+doc = false
+bench = false
+
+# A separate fuzz workspace does not inherit the host workspace patches.
+# craft-pdf requires the same reviewed Hayro API as the application.
+[patch.crates-io]
+hayro = { git = "https://github.com/storytold/craft-libs", rev = "7d8b9615150cc8cdb70d2ca2c3ac085b42af99f3" }
+hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "7d8b9615150cc8cdb70d2ca2c3ac085b42af99f3" }
+hayro-interpret = { git = "https://github.com/storytold/craft-libs", rev = "7d8b9615150cc8cdb70d2ca2c3ac085b42af99f3" }
+hayro-jbig2 = { git = "https://github.com/storytold/craft-libs", rev = "7d8b9615150cc8cdb70d2ca2c3ac085b42af99f3" }
+# Hayro calls the workspace-patched Vello CPU coverage API.
+vello_common = { git = "https://github.com/storytold/craft-libs", rev = "7d8b9615150cc8cdb70d2ca2c3ac085b42af99f3" }
+vello_cpu = { git = "https://github.com/storytold/craft-libs", rev = "7d8b9615150cc8cdb70d2ca2c3ac085b42af99f3" }

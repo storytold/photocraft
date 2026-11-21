@@ -397,7 +397,7 @@ fn batch_override_open_authorizes_effective_path_and_carries_failure_budget() {
     let intact = std::fs::read(&existing).unwrap();
     let mut s = Session::new();
     s.actions.list.push(crate::actions_cmds::Action::new("Open", vec![ActionStep::new("file.openAs", json!({"path":"/recorded.png","as":"png"}))])).unwrap();
-    s.batch_open = Some(BatchOpen { path: first.clone(), sources: Vec::new(), raw_ppi: 300.0, read_only: false });
+    s.batch_open = Some(BatchOpen { path: first.clone(), sources: Vec::new(), raw_ppi: 300.0, historical_xcf_sample_order: None, read_only: false });
     assert!(matches!(s.execute("file.openAs", json!([1])), Err(EngineError::BadParams { .. })));
     assert!(s.documents().is_empty());
     s.batch_open = None;

@@ -48,6 +48,8 @@ pub struct DocState {
     /// pixel coordinates. Per-document view state: discarded when the document closes, never saved
     /// to `.pcraft` or PSD, and not a history step.
     pub color_samplers: Vec<[f64; 2]>,
+    /// One-time Paths panel selection from an import; a host consumes it without editing the document.
+    pub initial_path_selection: Option<usize>,
     /// History panel snapshots, oldest first (`history.newSnapshot`, #2966): the first (id 0) is
     /// the document as opened (unless History Options › Automatically Create First Snapshot is
     /// off). Kept for the session only, as in Photoshop: not history states,
@@ -150,6 +152,7 @@ impl DocState {
             show_only: None,
             floating: None,
             color_samplers: Vec::new(),
+            initial_path_selection: None,
             snapshots: vec![first],
             snapshots_generation: next_snapshots_generation(),
             next_snapshot: 1,

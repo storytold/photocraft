@@ -141,12 +141,7 @@ impl Headless {
             "session.list" => Ok(self.session_list()),
             "doc.open" => {
                 let path = str_of(&p, "path").ok_or_else(|| bad("doc.open needs `path`"))?;
-                let approve = match p.get("approveHighMemory") {
-                    None | Some(Value::Null) => false,
-                    Some(Value::Bool(b)) => *b,
-                    Some(_) => return Err(bad("`approveHighMemory` must be a boolean")),
-                };
-                self.open_with_approval(&PathBuf::from(path), approve)
+                self.open_with_parameters(&PathBuf::from(path), &p)
             }
             "doc.place" => {
                 let path = str_of(&p, "path").ok_or_else(|| bad("doc.place needs `path`"))?;

@@ -1,10 +1,35 @@
 # GIMP XCF documents
 
-PhotoCraft opens GIMP's native `.xcf` files (and `.xcf.gz`) with their layers, read only. File ›
+PhotoCraft opens GIMP's native `.xcf` files, including gzip, bzip2 and XZ wrappers, with their layers, read only. File ›
 Open, recent files, drops, the CLI (`convert`, `info`, `batch`) and automation (`doc.open`, MCP)
-use the same import in `photocraft-io` (`crates/io/src/xcf.rs`), on craft-libs' `craft-xcf` reader. A file is recognised by its
+use the same enhanced import in `photocraft-io` (`crates/io/src/xcf.rs`). This adapter retains the precision, metadata and editable-content decoder while the other format adapters use shared craft-libs readers. A file is recognised by its
 `gimp xcf ` signature, so an XCF with another extension still opens as one. Save suggests
 `.pcraft`, which keeps everything PhotoCraft holds; exporting as `.xcf` fails with a message.
+
+## Historical sample byte order
+
+Unmarked XCF versions 7–11 with multi-byte samples require the byte order used when the file was
+saved. Select **Little-endian** or **Big-endian** when desktop Open, Replace Contents, or Relink
+to File asks. Edit Contents also asks when an older bundle embeds such a source without a saved
+choice. The chosen order is stored with the Smart Object. Relink keeps the previous choice when
+the source bytes match.
+
+For CLI Convert, Info, Run, Batch, and Droplet, pass `--historical-xcf-sample-order little-endian` or
+`--historical-xcf-sample-order big-endian`. Use `historical_xcf_sample_order` for MCP `doc_open`
+and for headless MCP `doc_place` and `doc_replace_smart_object`.
+For desktop control `app.open`, use `historicalXcfSampleOrder`. Both parameters accept
+`"little-endian"` or `"big-endian"`.
+Use **Historical XCF Sample Order** in desktop Batch, Image Processor, Create Droplet, Load
+Files into Stack, Statistics, and Contact Sheet II. Choose **Unspecified** to leave files that
+require a choice as import errors. Create Droplet saves the choice for later runs.
+When Batch runs with `overrideOpen`, an order in the recorded Open step takes precedence.
+Open steps without an order use the Batch choice.
+
+## Decoder ownership
+
+PhotoCraft keeps the enhanced XCF decoder in its own IO crate because it is the only current
+consumer of the XCF reader. We will revisit moving it to `craft-xcf` only if another app needs
+XCF import.
 
 ## What is kept
 
@@ -16,18 +41,22 @@ use the same import in `photocraft-io` (`crates/io/src/xcf.rs`), on craft-libs' 
 | Layer masks | yes, applied or disabled as in GIMP |
 | Blend modes | the 2.10 set and the legacy set, mapped to Photoshop's (table below) |
 | Locks (alpha, content, position), colour tags | yes |
-| Precision | 8 and 16-bit integer as such; 32-bit integer as 16-bit; 16/32/64-bit float as 32-bit float |
-| Linear-light precisions | the document gets a linear sRGB (or linear gray) profile |
-| Colour profile (`icc-profile` parasite), resolution, guides, comment | yes |
+| Precision | 8-bit and 16-bit integer remain integer. U32 and 16-bit, 32-bit, or 64-bit float import as F32 |
+| Linear-light precisions | a usable assigned linear RGB profile can preserve its colorants with a linear transfer curve. The fallback is linear sRGB or linear gray |
+| Colour profile (`icc-profile` parasite), resolution, guides, comment | usable profiles and the other fields are retained. Unusable profile assignments fall back with an import diagnostic |
 | Grayscale, RGB | as such; indexed images open as RGB |
 | Extra channels, the saved selection | yes (alpha channels, the selection) |
-| Text, vector and link layers | as their pixels, with a note |
-| Compression | none, RLE, zlib |
+| Text and vector layers | supported records become editable native content; other records keep usable saved pixels and a conversion report |
+| Linked content | inert references and saved pixels; external resources are not fetched |
+| Compression | none, RLE, zlib; gzip, bzip2 and XZ transport wrappers |
 | XCF versions | 0 to 26 (GIMP 1.x to 3.2); newer files open with a note, unknown parts skipped |
 
-Not kept, each with a note on open: non-destructive layer effects (GIMP 3's layer filters; the
-layer opens unfiltered), paths, floating selections, item sets, sample points. Layer effects are
-not representable without GEGL's operations; paths could follow later.
+Text layers in documents with unequal horizontal and vertical DPI keep their saved pixels.
+Vector layers with an enabled pattern also keep their saved pixels, with the source path
+available separately for editing. Active paint that cannot be decoded, including writer-endian
+float colours without byte-order evidence, also preserves the saved appearance.
+
+Saved paths, guides and supported editing-view selections are imported. Floating pixels remain separate raster layers. Unsupported layer effects and optional records are disclosed in the conversion report. Retention limits omit optional data while preserving usable pixels; structural and pixel allocation limits still reject unsafe inputs.
 
 ## Blend modes
 

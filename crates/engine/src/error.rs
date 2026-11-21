@@ -41,6 +41,12 @@ pub enum EngineError {
     /// The document is discarded and is not opened.
     #[error("“{name}” changed since it was checked; open it again to approve the new file")]
     SourceChanged { name: String },
+    /// The linked XCF no longer matches the bytes approved for a sample order.
+    #[error("{0}")]
+    HistoricalXcfLinkChanged(&'static str),
+    /// Edit Contents can recover an older embedded XCF when the user supplies its order.
+    #[error("{question}; choose a sample byte order for the embedded source")]
+    EmbeddedHistoricalXcfOrder { layer: LayerId, question: photocraft_io::HistoricalXcfSampleOrderRequest, source_name: String },
     #[error("{0}")]
     Other(String),
     /// A batch or droplet stopped at its nesting or shared playback-step limit. A batch whose
@@ -146,6 +152,7 @@ pub(crate) fn io_open_error(name: &str, error: photocraft_io::IoError) -> Engine
         }
         IoError::PsdImportBudget { required, limit, free_memory } => EngineError::PsdHardBudget { name: name.to_string(), required, limit, free_memory },
         IoError::SourceChanged => EngineError::SourceChanged { name: name.to_string() },
+        IoError::Cancelled => EngineError::Cancelled,
         error => EngineError::Other(format!("{name}: {error}")),
     }
 }

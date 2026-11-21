@@ -260,7 +260,7 @@ pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result
     let bytes = encode_source(&sub)?;
     // The encoded native document is non-SVG; match the classified render/bounds path.
     cache_put(
-        source_cache_key(&sub.name, &bytes, fmt, Some(false)),
+        source_cache_key(&sub.name, &bytes, fmt, Some(false), None),
         SourceImage { surface: Arc::new(translate_surface(&cache, -b.x0, -b.y0)), bounds: sub.bounds() },
     );
 
@@ -331,7 +331,9 @@ pub(super) fn via_copy(s: &mut Session, p: &Value) -> Result<Value> {
             // Independent contents: resolve to embedded bytes and drop the shared PSD uuid.
             sm.contents_id = SmartContentsId::fresh();
             if let Some((file_name, bytes)) = source_bytes(&doc.metadata, &sm.source) {
+                photocraft_io::linked::check_historical_xcf_digest(sm.historical_xcf_link_digest, &bytes).map_err(other)?;
                 sm.source = SmartSource::Embedded { file_name, bytes };
+                sm.historical_xcf_link_digest = None;
             }
         } else {
             return Err(other("the layer is not a smart object"));

@@ -1,0 +1,510 @@
+#![allow(clippy::unwrap_used, clippy::panic)]
+
+use super::*;
+use crate::jobs::{Started, historical_xcf_fixture as fixture};
+use photocraft_doc::{HistoricalXcfSampleOrder, SmartObject};
+
+fn session() -> Session {
+    let mut s = Session::new();
+    s.color.settings.ask_on_missing = false;
+    s.color.settings.ask_on_mismatch = false;
+    s.execute("file.new", json!({"width":1,"height":1,"depth":16})).unwrap();
+    s
+}
+
+fn object(s: &Session, id: LayerId) -> &SmartObject {
+    smart(&s.active().unwrap().doc, id).unwrap()
+}
+
+fn roundtrip(s: &Session) -> Session {
+    let bytes = photocraft_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap();
+    let doc = photocraft_format::load_from_bytes(&bytes).unwrap();
+    let mut reopened = Session::new();
+    reopened.add_document(doc, None);
+    reopened
+}
+
+fn assert_child_pixels(s: &Session) {
+    let doc = &s.active().unwrap().doc;
+    let LayerContent::Raster(surface) = &doc.layers[0].content else { panic!("decoded source pixel layer") };
+    let mut pixel = [0.; 4];
+    surface.read_pixel(0, 0, &mut pixel);
+    assert_eq!(pixel, [0x1234 as f32 / 65535., 0x4567 as f32 / 65535., 0x89ab as f32 / 65535., 1.]);
+}
+
+#[test]
+fn historical_smart_placements_native_reopen_edit_and_save_contents_keep_source_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    for (little, order, interpretation) in
+        [(true, "little-endian", HistoricalXcfSampleOrder::LittleEndian), (false, "big-endian", HistoricalXcfSampleOrder::BigEndian)]
+    {
+        let bytes = fixture::historical_pixel(little);
+        let path = dir.path().join(format!("source-{order}.xcf"));
+        std::fs::write(&path, &bytes).unwrap();
+        for command in ["file.placeEmbedded", "file.placeLinked", "file.openAsSmartObject"] {
+            let mut s = session();
+            let reply = s.execute(command, json!({"path":path,"historicalXcfSampleOrder":order})).unwrap();
+            let id = LayerId(reply["layer"].as_u64().unwrap());
+            let contents_id = object(&s, id).contents_id;
+            assert_eq!(object(&s, id).historical_xcf_sample_order, Some(interpretation), "{command}");
+            let mut reopened = roundtrip(&s);
+            assert_eq!(object(&reopened, id).contents_id, contents_id);
+            assert_eq!(object(&reopened, id).historical_xcf_sample_order, Some(interpretation));
+            assert_eq!(contents_of(&reopened.active().unwrap().doc, id).unwrap().1.as_slice(), bytes);
+            let parent_id = reopened.active().unwrap().doc.id;
+            reopened.execute("layer.smartObjects.editContents", json!({"layer":id.0})).unwrap();
+            assert_ne!(reopened.active().unwrap().doc.id, parent_id);
+            assert!(reopened.active().unwrap().path.is_none());
+            assert_child_pixels(&reopened);
+            reopened.execute("layer.renameLayer", json!({"name":"Edited source"})).unwrap();
+            reopened.execute("layer.smartObjects.saveContents", json!({})).unwrap();
+            assert!(!reopened.active().unwrap().is_dirty());
+            assert!(reopened.set_active(0));
+            let sm = object(&reopened, id);
+            assert_eq!(sm.contents_id, contents_id);
+            assert_eq!(sm.historical_xcf_sample_order, None, "native replacement no longer contains historical samples");
+            let SmartSource::Embedded { file_name, bytes: native } = &sm.source else { panic!("edited contents are embedded") };
+            assert!(file_name.ends_with(".pcraft"));
+            assert_ne!(native.as_slice(), bytes);
+            let mut saved_again = roundtrip(&reopened);
+            saved_again.execute("layer.smartObjects.editContents", json!({"layer":id.0})).unwrap();
+            assert_child_pixels(&saved_again);
+            assert_eq!(saved_again.active().unwrap().doc.layers[0].name, "Edited source");
+            assert_eq!(std::fs::read(&path).unwrap(), bytes, "original source is never rewritten");
+        }
+    }
+}
+
+#[test]
+fn historical_byte_placements_store_the_explicit_source_interpretation() {
+    for (little, order, interpretation) in
+        [(true, "little-endian", HistoricalXcfSampleOrder::LittleEndian), (false, "big-endian", HistoricalXcfSampleOrder::BigEndian)]
+    {
+        for linked in [None, Some("not-read-during-byte-placement.xcf".into())] {
+            let mut s = session();
+            let bytes = fixture::historical_pixel(little);
+            let started = s.start_place_bytes("source.xcf", bytes.clone(), linked, json!({"historicalXcfSampleOrder":order})).unwrap();
+            let reply = match started {
+                Started::Done(reply) => reply,
+                Started::Job(id) => s.wait_job(id).unwrap(),
+            };
+            let id = LayerId(reply["layer"].as_u64().unwrap());
+            assert_eq!(object(&s, id).historical_xcf_sample_order, Some(interpretation));
+            if let SmartSource::Embedded { bytes: retained, .. } = &object(&s, id).source {
+                assert_eq!(retained.as_slice(), bytes);
+            }
+        }
+    }
+}
+
+#[test]
+fn historical_relink_missing_old_file_preserves_order_and_storage_conversions_do_too() {
+    let dir = tempfile::tempdir().unwrap();
+    for (little, order, interpretation) in
+        [(true, "little-endian", HistoricalXcfSampleOrder::LittleEndian), (false, "big-endian", HistoricalXcfSampleOrder::BigEndian)]
+    {
+        let old = dir.path().join(format!("old-{order}.xcf"));
+        let relocated = dir.path().join(format!("relocated-{order}.xcf"));
+        let linked_again = dir.path().join(format!("embedded-{order}.xcf"));
+        let bytes = fixture::historical_pixel(little);
+        std::fs::write(&old, &bytes).unwrap();
+        let mut s = session();
+        let reply = s.execute("file.placeLinked", json!({"path":old,"historicalXcfSampleOrder":order})).unwrap();
+        let id = LayerId(reply["layer"].as_u64().unwrap());
+        let native = photocraft_format::save_to_bytes(s.active().unwrap().doc(), &Default::default()).unwrap();
+        let reopened = photocraft_format::load_from_bytes(&native).unwrap();
+        let mut s = Session::new();
+        s.add_document(reopened, None);
+        std::fs::rename(&old, &relocated).unwrap();
+        s.execute("layer.smartObjects.relinkToFile", json!({"layer":id.0,"path":relocated})).unwrap();
+        assert_eq!(object(&s, id).historical_xcf_sample_order, Some(interpretation));
+        let before = s.active().unwrap().doc.clone();
+        assert!(s.execute("layer.smartObjects.relinkToFile", json!({"layer":id.0,"path":relocated,"historicalXcfSampleOrder":null})).is_err());
+        assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc), "clearing an order must not guess how to decode historical samples");
+        s.execute("layer.smartObjects.convertToEmbedded", json!({"layer":id.0})).unwrap();
+        assert_eq!(object(&s, id).historical_xcf_sample_order, Some(interpretation));
+        s.execute("layer.smartObjects.convertToLinked", json!({"layer":id.0,"path":linked_again})).unwrap();
+        assert_eq!(object(&s, id).historical_xcf_sample_order, Some(interpretation));
+        assert_eq!(std::fs::read(&linked_again).unwrap(), bytes);
+        s.execute("layer.smartObjects.editContents", json!({"layer":id.0})).unwrap();
+        assert_child_pixels(&s);
+        assert_eq!(std::fs::read(&relocated).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn historical_relink_explicit_order_replaces_the_old_interpretation() {
+    let dir = tempfile::tempdir().unwrap();
+    let little = dir.path().join("little.xcf");
+    let big = dir.path().join("big.xcf");
+    std::fs::write(&little, fixture::historical_pixel(true)).unwrap();
+    std::fs::write(&big, fixture::historical_pixel(false)).unwrap();
+    let mut s = session();
+    let reply = s.execute("file.placeLinked", json!({"path":little,"historicalXcfSampleOrder":"little-endian"})).unwrap();
+    let id = LayerId(reply["layer"].as_u64().unwrap());
+    let before = s.active().unwrap().doc().clone();
+    let error = s.execute("layer.smartObjects.relinkToFile", json!({"layer":id.0,"path":big})).unwrap_err();
+    assert!(error.to_string().contains("sample byte order"), "{error}");
+    assert!(Arc::ptr_eq(&before, s.active().unwrap().doc()));
+    s.execute("layer.smartObjects.relinkToFile", json!({"layer":id.0,"path":big,"historicalXcfSampleOrder":"big-endian"})).unwrap();
+    assert_eq!(object(&s, id).historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::BigEndian));
+    s.execute("layer.smartObjects.editContents", json!({"layer":id.0})).unwrap();
+    assert_child_pixels(&s);
+}
+
+#[test]
+fn historical_converted_export_and_convert_to_layers_decode_the_stored_order() {
+    let dir = tempfile::tempdir().unwrap();
+    for (little, order) in [(true, "little-endian"), (false, "big-endian")] {
+        let path = dir.path().join(format!("source-{order}.xcf"));
+        let native = dir.path().join(format!("export-{order}.pcraft"));
+        let bytes = fixture::historical_pixel(little);
+        std::fs::write(&path, &bytes).unwrap();
+        let mut s = session();
+        let reply = s.execute("file.placeEmbedded", json!({"path":path,"historicalXcfSampleOrder":order})).unwrap();
+        let id = LayerId(reply["layer"].as_u64().unwrap());
+        let result = s.execute("layer.smartObjects.exportContents", json!({"layer":id.0,"path":native})).unwrap();
+        assert_eq!(result["converted"], true);
+        let exported = photocraft_format::load_from_bytes(&std::fs::read(&native).unwrap()).unwrap();
+        let mut exported_session = Session::new();
+        exported_session.add_document(exported.clone(), None);
+        assert_child_pixels(&exported_session);
+        // Match profiles so this also checks exact decoded samples rather than an unrelated
+        // profile conversion when unpacking into the destination.
+        s.edit("Match source profile", |doc, _| {
+            doc.icc_profile = exported.icc_profile.clone();
+            Ok(())
+        })
+        .unwrap();
+        s.execute("layer.smartObjects.convertToLayers", json!({"layer":id.0})).unwrap();
+        let layer = s.active().unwrap().doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap();
+        let LayerContent::Raster(surface) = &layer.content else { panic!("single source layer unpacked") };
+        let mut pixel = [0.; 4];
+        surface.read_pixel(0, 0, &mut pixel);
+        assert_eq!(pixel, [0x1234 as f32 / 65535., 0x4567 as f32 / 65535., 0x89ab as f32 / 65535., 1.]);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn fresh_replacement_requires_its_own_order_and_native_replacement_clears_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("little.xcf");
+    std::fs::write(&path, fixture::historical_pixel(true)).unwrap();
+    let mut s = session();
+    let reply = s.execute("file.placeEmbedded", json!({"path":path,"historicalXcfSampleOrder":"little-endian"})).unwrap();
+    let id = LayerId(reply["layer"].as_u64().unwrap());
+    let before = s.active().unwrap().doc.clone();
+    assert!(replace_contents_from_bytes(&mut s, &json!({"layer":id.0}), "big.xcf", fixture::historical_pixel(false)).is_err());
+    assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc), "a fresh source cannot inherit the old order");
+    replace_contents_from_bytes(&mut s, &json!({"layer":id.0,"historicalXcfSampleOrder":"big-endian"}), "big.xcf", fixture::historical_pixel(false)).unwrap();
+    assert_eq!(object(&s, id).historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::BigEndian));
+    s.execute("layer.smartObjects.editContents", json!({"layer":id.0})).unwrap();
+    assert_child_pixels(&s);
+    let native = encode_source(&s.active().unwrap().doc).unwrap();
+    assert!(s.set_active(0));
+    replace_contents_bytes(&mut s, id, "replacement.pcraft", native).unwrap();
+    assert_eq!(object(&s, id).historical_xcf_sample_order, None);
+    s.execute("layer.smartObjects.editContents", json!({"layer":id.0})).unwrap();
+    assert_child_pixels(&s);
+}
+
+#[test]
+fn edit_contents_recovers_a_legacy_embedded_big_endian_xcf_after_explicit_choice() {
+    let bytes = fixture::historical_pixel(false);
+    let mut s = session();
+    let (id, copy_id) = s
+        .edit("Legacy embedded XCF", |doc, active| {
+            // A legacy bundle has original bytes and saved pixels without an order field.
+            // Start with the samples rendered under the other byte order.
+            let mut cache = photocraft_raster::Surface::new(doc.pixel_format());
+            cache.fill_rect(photocraft_geom::Rect::new(0, 0, 1, 1), &[0x3412 as f32 / 65535., 0x6745 as f32 / 65535., 0xab89 as f32 / 65535., 1.]);
+            let mut object = SmartObject::new(
+                SmartSource::Embedded { file_name: "historical.xcf".into(), bytes: Arc::new(bytes.clone()) },
+                photocraft_geom::Affine::IDENTITY,
+                None,
+            );
+            object.cache = Some(cache);
+            let layer = photocraft_doc::Layer::new("Legacy", LayerContent::Smart(object.clone()));
+            let copy = photocraft_doc::Layer::new("Shared copy", LayerContent::Smart(object));
+            let (id, copy_id) = (layer.id, copy.id);
+            doc.layers.extend([layer, copy]);
+            *active = Some(id);
+            Ok((id, copy_id))
+        })
+        .unwrap();
+    let mut reopened = roundtrip(&s);
+    let before = reopened.active().unwrap().doc.clone();
+    assert!(matches!(
+        reopened.execute("layer.smartObjects.editContents", json!({"layer":id.0})),
+        Err(EngineError::EmbeddedHistoricalXcfOrder { layer, .. }) if layer == id
+    ));
+    assert_eq!(reopened.documents().len(), 1);
+    assert!(Arc::ptr_eq(&before, &reopened.active().unwrap().doc));
+    reopened
+        .edit("Add a filter to the second instance", |doc, _| {
+            smart_mut(doc, copy_id)?.smart_filters.push(photocraft_doc::SmartFilter {
+                command: "filter.test.unmapped".into(),
+                params: json!({}),
+                blend: photocraft_doc::BlendMode::Normal,
+                opacity: 1.0,
+                visible: true,
+            });
+            Ok(())
+        })
+        .unwrap();
+    let before_failed_refresh = reopened.active().unwrap().doc.clone();
+    let chosen = json!({"layer":id.0,"historicalXcfSampleOrder":"big-endian"});
+    let error = reopened.execute("layer.smartObjects.editContents", chosen.clone()).unwrap_err();
+    assert!(error.to_string().contains("hide unsupported Smart Filters"));
+    assert_eq!(reopened.documents().len(), 1);
+    assert!(Arc::ptr_eq(&before_failed_refresh, &reopened.active().unwrap().doc));
+
+    assert!(reopened.undo());
+    reopened.execute("layer.smartObjects.editContents", chosen).unwrap();
+    assert_child_pixels(&reopened);
+    assert!(reopened.set_active(0));
+    for layer in [id, copy_id] {
+        let smart = object(&reopened, layer);
+        assert_eq!(smart.historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::BigEndian));
+        assert!((smart.cache.as_ref().unwrap().pixel(0, 0)[0] - f32::from(0x1234u16) / 65535.0).abs() <= 1.0 / 65535.0);
+    }
+    assert_eq!(contents_of(&reopened.active().unwrap().doc, id).unwrap().1.as_slice(), bytes);
+    let mut restored = roundtrip(&reopened);
+    for layer in [id, copy_id] {
+        assert_eq!(object(&restored, layer).cache, object(&reopened, layer).cache);
+    }
+    restored.execute("layer.smartObjects.editContents", json!({"layer":id.0})).unwrap();
+    assert_child_pixels(&restored);
+}
+
+#[test]
+fn update_all_keeps_healthy_refreshes_when_another_link_needs_relinking() {
+    let dir = tempfile::tempdir().unwrap();
+    let stale = dir.path().join("stale.xcf");
+    let healthy = dir.path().join("healthy.xcf");
+    std::fs::write(&stale, fixture::historical_pixel(false)).unwrap();
+    std::fs::write(&healthy, fixture::modern_pixel(0x1111)).unwrap();
+    let mut s = session();
+    let stale_layer =
+        LayerId(s.execute("file.placeLinked", json!({"path":stale, "historicalXcfSampleOrder":"big-endian"})).unwrap()["layer"].as_u64().unwrap());
+    let healthy_layer = LayerId(s.execute("file.placeLinked", json!({"path":healthy})).unwrap()["layer"].as_u64().unwrap());
+    std::fs::write(&stale, fixture::historical_pixel(true)).unwrap();
+    std::fs::write(&healthy, fixture::modern_pixel(0x7777)).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let result = s.execute("layer.smartObjects.updateAllModifiedContent", json!({})).unwrap();
+    assert_eq!(result["updated"], json!([healthy_layer.0]));
+    assert!(result["warnings"][0].as_str().unwrap().contains("relink and choose"));
+    assert_eq!(s.active().unwrap().doc.layer(stale_layer), before.layer(stale_layer));
+    assert!((object(&s, healthy_layer).cache.as_ref().unwrap().pixel(0, 0)[0] - f32::from(0x7777u16) / 65535.).abs() <= 1. / 65535.);
+    assert!(s.undo());
+    assert_eq!(s.active().unwrap().doc.layer(healthy_layer), before.layer(healthy_layer));
+}
+
+#[test]
+fn replacing_vector_source_clears_an_unrelated_historical_interpretation() {
+    let mut s = session();
+    let original = r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="red"/></svg>"#;
+    let replacement = original.replace("red", "blue");
+    let reply = crate::file_cmds::place_bytes(&mut s, "Artwork.svg", original.as_bytes().to_vec(), None, &json!({"smartObject":true})).unwrap();
+    let id = LayerId(reply["layer"].as_u64().unwrap());
+    s.edit("Old source interpretation", |doc, _| {
+        smart_mut(doc, id)?.historical_xcf_sample_order = Some(HistoricalXcfSampleOrder::LittleEndian);
+        Ok(())
+    })
+    .unwrap();
+    let handoff = s.execute("layer.smartObjects.exportSvg", json!({"layer":id.0})).unwrap();
+    s.execute(
+        "layer.smartObjects.updateSvg",
+        json!({
+            "document":handoff["document"],"layer":id.0,"svg":replacement,
+            "fingerprint":handoff["fingerprint"],"contentsId":handoff["contentsId"]
+        }),
+    )
+    .unwrap();
+    assert_eq!(object(&s, id).historical_xcf_sample_order, None);
+}
+
+#[test]
+fn storage_conversions_ignore_unrelated_order_parameters_and_preserve_source_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.xcf");
+    let destination = dir.path().join("converted.xcf");
+    let bytes = fixture::historical_pixel(true);
+    std::fs::write(&source, &bytes).unwrap();
+    for unrelated in [json!("big-endian"), Value::Null, json!("invalid")] {
+        let mut s = session();
+        let reply = s.execute("file.placeLinked", json!({"path":source,"historicalXcfSampleOrder":"little-endian"})).unwrap();
+        let id = LayerId(reply["layer"].as_u64().unwrap());
+        s.execute("layer.smartObjects.convertToEmbedded", json!({"layer":id.0,"historicalXcfSampleOrder":unrelated})).unwrap();
+        assert_eq!(object(&s, id).historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::LittleEndian));
+        assert_eq!(contents_of(&s.active().unwrap().doc, id).unwrap().1.as_slice(), bytes);
+        s.execute("layer.smartObjects.convertToLinked", json!({"layer":id.0,"path":destination,"historicalXcfSampleOrder":unrelated})).unwrap();
+        assert_eq!(object(&s, id).historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::LittleEndian));
+        assert_eq!(std::fs::read(&destination).unwrap(), bytes);
+        s.execute("layer.smartObjects.editContents", json!({"layer":id.0})).unwrap();
+        assert_child_pixels(&s);
+    }
+}
+
+#[test]
+fn relink_invalid_order_reports_its_command_before_attempting_file_io() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.xcf");
+    std::fs::write(&source, fixture::historical_pixel(true)).unwrap();
+    let mut s = session();
+    let reply = s.execute("file.placeLinked", json!({"path":source,"historicalXcfSampleOrder":"little-endian"})).unwrap();
+    let id = LayerId(reply["layer"].as_u64().unwrap());
+    let before = s.active().unwrap().doc.clone();
+    let error = s
+        .execute("layer.smartObjects.relinkToFile", json!({"layer":id.0,"path":dir.path().join("missing.xcf"),"historicalXcfSampleOrder":"invalid"}))
+        .unwrap_err();
+    assert!(matches!(error, EngineError::BadParams { cmd, .. } if cmd == "layer.smartObjects.relinkToFile"));
+    assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+}
+
+#[test]
+fn changed_historical_links_refuse_decode_and_storage_commands_atomically() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("historical.xcf");
+    let output = dir.path().join("wrong.pcraft");
+    let approved = fixture::historical_pixel(true);
+    std::fs::write(&source, &approved).unwrap();
+    let mut s = session();
+    let placed = s.execute("file.placeLinked", json!({"path":source,"historicalXcfSampleOrder":"little-endian"})).unwrap();
+    let id = LayerId(placed["layer"].as_u64().unwrap());
+    let before = s.active().unwrap().doc().clone();
+    std::fs::write(&source, fixture::historical_pixel(false)).unwrap();
+    for command in ["editContents", "convertToLayers", "exportContents", "convertToEmbedded", "embedAllLinked", "convertToLinked", "newSmartObjectViaCopy"] {
+        let error = s.execute(&format!("layer.smartObjects.{command}"), json!({"layer":id.0,"path":output})).unwrap_err();
+        assert!(error.to_string().contains("relink and choose"), "{command}: {error}");
+        assert!(Arc::ptr_eq(&before, s.active().unwrap().doc()), "{command} changed the parent");
+        assert!(!output.exists());
+        assert_eq!(s.documents().len(), 1);
+    }
+    let original_format = dir.path().join("wrong.xcf");
+    let error = s.execute("layer.smartObjects.exportContents", json!({"layer":id.0,"path":original_format})).unwrap_err();
+    assert!(error.to_string().contains("relink and choose"));
+    assert!(!original_format.exists());
+    assert!(matches!(contents_of(&s.active().unwrap().doc, id), Err(EngineError::HistoricalXcfLinkChanged(_))));
+    std::fs::write(&source, &approved).unwrap();
+    assert_eq!(contents_of(&s.active().unwrap().doc, id).unwrap().1.as_slice(), approved);
+    s.execute("layer.smartObjects.embedAllLinked", json!({})).unwrap();
+    let object = object(&s, id);
+    assert_eq!(object.historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::LittleEndian));
+    assert!(object.historical_xcf_link_digest.is_none());
+    assert!(matches!(&object.source, SmartSource::Embedded { bytes, .. } if bytes.as_slice() == approved));
+}
+
+#[test]
+fn warning_render_refuses_svg_that_replaced_an_approved_historical_xcf_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("historical.xcf");
+    std::fs::write(&path, fixture::historical_pixel(true)).unwrap();
+    let mut s = session();
+    let layer = s.execute("file.placeLinked", json!({"path":path,"historicalXcfSampleOrder":"little-endian"})).unwrap();
+    let id = LayerId(layer["layer"].as_u64().unwrap());
+    let doc = s.active().unwrap().doc();
+    let object = object(&s, id);
+    assert!(crate::smart_cmds::render_with_warnings(doc, object).unwrap().0.is_some());
+
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="red"/></svg>"#;
+    std::fs::write(&path, svg).unwrap();
+    assert!(matches!(crate::smart_cmds::render_with_warnings(doc, object), Err(EngineError::HistoricalXcfLinkChanged(_))));
+}
+
+#[test]
+fn relink_renders_every_instance_from_the_verified_file_revision() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("source.xcf");
+    let bytes = fixture::modern_pixel(0x4321);
+    std::fs::write(&path, fixture::modern_pixel(0x2222)).unwrap();
+    let mut s = session();
+    s.execute("file.placeEmbedded", json!({"path":path})).unwrap();
+    let first = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.duplicate", json!({})).unwrap();
+    let second = s.active().unwrap().active_layer.unwrap();
+    assert_ne!(first, second);
+    std::fs::write(&path, &bytes).unwrap();
+    let ctx = JobCtx::new();
+    let doc = s.active().unwrap().doc().clone();
+    let path_name = path.to_str().unwrap().to_owned();
+    let expected = Some(photocraft_io::linked::historical_xcf_digest(&bytes));
+    let verified = read_relink_source(&doc, first, path_name.clone(), None, expected, &ctx).unwrap();
+    std::fs::write(&path, fixture::modern_pixel(0x9876)).unwrap();
+    assert!(read_relink_source(&doc, first, path_name, None, expected, &ctx).is_err(), "a fresh pick verification detects the changed modern source");
+    let prepared = prepare_source_change(&doc, first, verified, &ctx).unwrap();
+    let published = publish_source_change(&mut s, first, "Relink to File", prepared).unwrap();
+    assert_eq!(published["instances"].as_array().unwrap().len(), 2);
+    for id in [first, second] {
+        let sm = object(&s, id);
+        assert!(sm.historical_xcf_link_digest.is_none());
+        let pixel = sm.cache.as_ref().unwrap().pixel(0, 0);
+        assert!((pixel[0] - f32::from(0x4321u16) / 65535.).abs() <= 1. / 65535.);
+    }
+}
+
+#[test]
+fn historical_relink_confirmation_authenticates_the_picked_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let original = dir.path().join("original.xcf");
+    let picked = dir.path().join("picked.xcf");
+    let little = fixture::historical_pixel(true);
+    let big = fixture::historical_pixel(false);
+    std::fs::write(&original, &little).unwrap();
+    std::fs::write(&picked, &little).unwrap();
+    let mut s = session();
+    let placed = s.execute("file.placeLinked", json!({"path":original,"historicalXcfSampleOrder":"little-endian"})).unwrap();
+    let id = LayerId(placed["layer"].as_u64().unwrap());
+    let before = s.active().unwrap().doc().clone();
+    let expected = photocraft_io::linked::historical_xcf_digest(&little);
+    std::fs::write(&picked, &big).unwrap();
+    let error = s.execute(RELINK, json!({"layer":id.0,"path":picked,"historicalXcfSampleOrder":"little-endian","expectedSourceDigest":expected})).unwrap_err();
+    assert!(error.to_string().contains("changed after it was picked"));
+    assert!(Arc::ptr_eq(&before, s.active().unwrap().doc()));
+    let expected = photocraft_io::linked::historical_xcf_digest(&big);
+    s.execute(RELINK, json!({"layer":id.0,"path":picked,"historicalXcfSampleOrder":"big-endian","expectedSourceDigest":expected})).unwrap();
+    assert_eq!(object(&s, id).historical_xcf_link_digest, Some(expected));
+}
+
+#[test]
+fn same_path_historical_relink_discards_an_in_flight_fingerprint() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("source.xcf");
+    std::fs::write(&path, fixture::historical_pixel(false)).unwrap();
+    let mut s = session();
+    let response = s.execute("file.placeLinked", json!({"path":path,"historicalXcfSampleOrder":"big-endian"})).unwrap();
+    let id = LayerId(response["layer"].as_u64().unwrap());
+    s.start_link_scan();
+    assert!(s.link_scan.is_some());
+    std::fs::write(&path, fixture::historical_pixel(true)).unwrap();
+    s.execute("layer.smartObjects.relinkToFile", json!({"layer":id.0,"path":path,"historicalXcfSampleOrder":"little-endian"})).unwrap();
+    assert!(s.link_scan.is_none());
+    assert!(s.poll_link_scan().is_none());
+    assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
+}
+
+#[test]
+fn a_psd_embedded_historical_source_without_pcxo_recovers_in_edit_contents() {
+    let bytes = fixture::historical_pixel(false);
+    let mut s = session();
+    crate::file_cmds::place_bytes(&mut s, "legacy.xcf", bytes.clone(), None, &json!({"smartObject":true,"historicalXcfSampleOrder":"big-endian"})).unwrap();
+    let native = s.active().unwrap().doc();
+    let encoded = photocraft_io::export(native, "legacy.psd", &Default::default()).unwrap().bytes;
+    let mut psd = craft_psd::PsdFile::from_bytes(&encoded).unwrap();
+    for layer in psd.layers_mut() {
+        layer.blocks.retain(|block| &block.key != b"pcXO");
+    }
+    let imported = photocraft_io::import("legacy.psd", &psd.to_bytes().unwrap()).unwrap().document;
+    let mut reopened = Session::new();
+    reopened.add_document(imported, None);
+    let id = reopened.active().unwrap().active_layer().unwrap();
+    let SmartSource::Linked { path } = &object(&reopened, id).source else { panic!("PSD embedded UUID") };
+    assert_eq!(photocraft_io::linked::embedded_payload(&reopened.active().unwrap().doc().metadata, path).unwrap().1, bytes);
+    assert!(matches!(reopened.execute("layer.smartObjects.editContents", json!({})),
+        Err(EngineError::EmbeddedHistoricalXcfOrder { source_name, .. }) if source_name == "legacy.xcf"));
+    reopened.execute("layer.smartObjects.editContents", json!({"historicalXcfSampleOrder":"big-endian"})).unwrap();
+    assert_child_pixels(&reopened);
+    assert!(reopened.set_active(0));
+    assert_eq!(object(&reopened, id).historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::BigEndian));
+}

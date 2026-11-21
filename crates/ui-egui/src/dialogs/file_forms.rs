@@ -71,6 +71,7 @@ fn open_form(app: &mut PhotocraftApp, key: &'static str, title: &str, rows: Vec<
 pub(crate) fn open_contact_sheet(app: &mut PhotocraftApp) -> DialogId {
     let rows = vec![
         Param::new("input", tl!("Input"), ParamKind::text(default_dir(app))).browse(PathKind::Folder),
+        super::historical_sample_order::order_choice(),
         // Source Images: the folder, then Include Subfolders (on) and, right below it, Group Images by
         // Folder (off, greyed while Include Subfolders is off).
         Param::new("includeSubfolders", tl!("Include Subfolders"), ParamKind::bool(true)),
@@ -114,6 +115,7 @@ pub(crate) fn open_create_droplet(app: &mut PhotocraftApp) -> Result<DialogId, S
     }
     rows.push(Param::new("action", tl!("Action"), ParamKind::choice(names(&action_names), Some(name))));
     rows.push(Param::new("output", tl!("Output"), ParamKind::text(format!("{dir}/droplet-output"))).browse(PathKind::Folder));
+    rows.push(super::historical_sample_order::order_choice());
     rows.push(Param::new("format", tl!("Format"), ParamKind::choice(ids(&["same", "png", "jpg", "psd", "tiff"]), Some("same".into()))));
     Ok(open_form(app, CREATE_DROPLET, tl!("Create Droplet"), rows))
 }

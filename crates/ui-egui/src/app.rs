@@ -209,6 +209,8 @@ impl PhotocraftApp {
             save_dirs: HashMap::new(),
             disk_stamps: HashMap::new(),
             held_opens: Default::default(),
+            historical_opens: Default::default(),
+            historical_replacements: Default::default(),
             held_memory_prompts: Default::default(),
             prompt_order: Default::default(),
             held_record_again: None,

@@ -24,6 +24,7 @@ pdf-editable = ["dep:kurbo"]
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 craft-cms = { workspace = true }
+craft-raster-codecs = { workspace = true }
 photocraft-raster = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-compose = { workspace = true }
@@ -42,7 +43,6 @@ craft-pdf = { workspace = true }
 craft-docpath = { workspace = true }
 craft-ora = { workspace = true }
 craft-kra = { workspace = true }
-craft-xcf = { workspace = true }
 craft-pdn = { workspace = true }
 craft-svg = { workspace = true }
 craft-tiff = { workspace = true }
@@ -54,6 +54,11 @@ serde_json = { workspace = true }
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 # pdn.rs inflates Paint.NET's gzip pixel chunks.
 flate2 = { workspace = true }
+# Enhanced XCF transport uses safe decoders with explicit memory limits.
+crabz2 = { workspace = true }
+lzma-rust2 = { workspace = true }
+# Native XCF text/metadata uses the bounded borrowed DOM; shared XML owns its DOM.
+roxmltree = { workspace = true }
 # flat.rs reads a palette PNG's pixel indices (Color Table, #14342). The png 0.18 that
 # craft-image-codecs already links; naming it adds no crate to the graph.
 png = "0.18"
@@ -67,6 +72,7 @@ craft-pdf = { workspace = true }
 kurbo = { version = "0.13", optional = true }
 
 [dev-dependencies]
+tempfile = "3"
 lopdf = { version = "0.38", default-features = false }
 miniz_oxide = "0.9"
 crc32fast = "1.5"
@@ -79,3 +85,4 @@ proptest = { workspace = true }
 # Lossless JPEG XL encoder for the JPEG XL DNG preview test (tests only), as in photocraft-raw.
 zune-jpegxl = { version = "=0.5.2", default-features = false, features = ["std"] }
 zune-core = { workspace = true }
+tiff = { workspace = true }

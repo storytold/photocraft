@@ -161,7 +161,10 @@ pub(crate) fn save_preferences(app: &mut PhotocraftApp) -> Result<(), String> {
 fn link_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
     match app.session.poll_link_scan() {
         Some(Ok(r)) => {
-            if let Some(n) = r["updated"].as_array().map(Vec::len).filter(|n| *n > 0) {
+            if let Some(warnings) = r["warnings"].as_array().filter(|warnings| !warnings.is_empty()) {
+                let message = warnings.iter().filter_map(serde_json::Value::as_str).collect::<Vec<_>>().join("\n");
+                crate::notices::error(app, message);
+            } else if let Some(n) = r["updated"].as_array().map(Vec::len).filter(|n| *n > 0) {
                 app.ui.status = crate::i18n::trn(
                     crate::i18n::current(),
                     n as u64,

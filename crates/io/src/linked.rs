@@ -11,6 +11,22 @@
 
 use photocraft_doc::Metadata;
 
+/// The linked bytes may no longer use the saved interpretation.
+pub const HISTORICAL_XCF_LINK_CHANGED: &str = "the linked historical XCF bytes changed; relink and choose their sample byte order";
+
+/// Identify the exact encoded snapshot to which a historical XCF order applies.
+pub fn historical_xcf_digest(bytes: &[u8]) -> [u8; 32] {
+    *blake3::hash(bytes).as_bytes()
+}
+
+/// Gate decoding or persisting a source with its previously approved interpretation.
+pub fn check_historical_xcf_digest(expected: Option<[u8; 32]>, bytes: &[u8]) -> Result<(), &'static str> {
+    if expected.is_some_and(|digest| digest != historical_xcf_digest(bytes)) {
+        return Err(HISTORICAL_XCF_LINK_CHANGED);
+    }
+    Ok(())
+}
+
 /// An embedded file found in a linked-layer block.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LinkedFile {

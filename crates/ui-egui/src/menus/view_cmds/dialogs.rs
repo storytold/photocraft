@@ -414,6 +414,7 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
             ),
             folder("input", tl!("Input Folder"), dir.clone()).visible_when("source", "folder"),
             Param::new("includeSubfolders", tl!("Include All Subfolders"), ParamKind::bool(false)).visible_when("source", "folder"),
+            historical_xcf_order_choice(),
             folder("output", tl!("Output Folder"), format!("{dir}/processed")),
             Param::section(tl!("File Type")),
             // One section per format: the checkbox that enables it, then its own options and size.
@@ -500,6 +501,7 @@ fn batch_form(app: &PhotocraftApp, dir: &str) -> Option<(Vec<Param>, DialogField
         choice("source", tl!("Source"), opts(&[("folder", tl!("Folder")), ("open", tl!("Opened Files"))]), "folder"),
         folder("input", tl!("Input Folder"), dir),
         Param::new("includeSubfolders", tl!("Include All Subfolders"), ParamKind::bool(false)),
+        historical_xcf_order_choice(),
         folder("output", tl!("Output Folder"), format!("{dir}/batch")),
         choice(
             "format",
@@ -522,6 +524,10 @@ fn batch_form(app: &PhotocraftApp, dir: &str) -> Option<(Vec<Param>, DialogField
         Param::new("errorLog", tl!("Error Log"), ParamKind::text("")),
     ]);
     Some((rows, DialogFields::new()))
+}
+
+fn historical_xcf_order_choice() -> Param {
+    crate::dialogs::historical_sample_order::order_choice().visible_when("source", "folder")
 }
 
 /// The channel workflow forms (see channels_panel.rs for the channel references): Save and Load Selection, Apply
@@ -611,7 +617,7 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
 }
 
 /// Handle menu commands that need a shell action or a parameter dialog before execution.
-pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
+pub(super) fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if id == "file.closeAll" || id == "file.closeOthers" {
         // Keep the remaining document's view (views are index-aligned with documents).
         let keep = app.session.active_index().and_then(|i| app.ui.views.get(i).cloned());
@@ -659,44 +665,22 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                 Err(e) => return Some(Err(e)),
             };
             let linked = id == "file.placeLinked";
-            let ctx = ctx.clone();
-            Some(app.pick_file_bytes(move |app, name, bytes| {
-                if app.ui.transform.is_some() {
-                    return Err("Commit or cancel the transform first".into());
-                }
-                app.refocus(doc)?;
-                let linked = linked.then(|| name.clone());
-                let result = app.place_bytes(&name, bytes, linked)?;
-                // In the background, Free Transform starts when the layer has landed.
-                if result.get("frame").and_then(Value::as_u64).is_none() && !crate::jobs_ui::track_place(app, &name, &result) {
-                    crate::transform_tool::begin_placed(app, &ctx)?;
-                }
-                Ok(result)
-            }))
+            Some(app.pick_file_bytes(move |app, name, bytes| crate::dialogs::historical_replace::pick_place(app, doc, name, bytes, linked)))
         }
         "layer.smartObjects.replaceContents" => {
-            let st = app.session.active()?;
-            let (doc, layer) = (st.doc.id, st.active_layer?);
-            Some(app.pick_file_bytes(move |app, name, bytes| {
-                app.with_document(doc, |app| {
-                    let r = photocraft_engine::smart_cmds::replace_contents_bytes(&mut app.session, layer, &name, bytes).map_err(|e| e.to_string());
-                    app.sync_views();
-                    r
-                })
-            }))
+            let target = match crate::dialogs::historical_replace::target(app) {
+                Ok(target) => target,
+                Err(error) => return Some(Err(error)),
+            };
+            Some(app.pick_file_bytes(move |app, name, bytes| crate::dialogs::historical_replace::pick(app, target, name, bytes)))
         }
         "layer.smartObjects.exportContents" => Some(export_contents(app)),
         "layer.smartObjects.relinkToFile" => {
-            let st = app.session.active()?;
-            let (doc, layer) = (st.doc.id, st.active_layer?);
-            // A link needs a file on disk: the desktop picker answers its full path, the web
-            // picker only a name and the bytes, which can't be linked to.
-            Some(app.pick_file_bytes(move |app, path, _| {
-                if !std::path::Path::new(&path).is_absolute() {
-                    return Err(format!("{path}: Relink to File needs a file on disk"));
-                }
-                app.with_document(doc, |app| app.run("layer.smartObjects.relinkToFile", json!({"layer": layer.0, "path": path})))
-            }))
+            let target = match crate::dialogs::historical_replace::target(app) {
+                Ok(target) => target,
+                Err(error) => return Some(Err(error)),
+            };
+            Some(app.pick_file_bytes(move |app, path, bytes| crate::dialogs::historical_replace::pick_relink(app, target, path, bytes)))
         }
         "layer.smartObjects.convertToLinked" => {
             let st = app.session.active()?;

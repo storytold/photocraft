@@ -43,6 +43,8 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
     let opts = ExportOptions::from(&a.export);
     refuse_overwriting_input(a.in_place, input, output)?;
     let import_opts = photocraft_io::ImportOptions {
+        historical_xcf_sample_order: files::import_options_from_params(&json!({"historicalXcfSampleOrder": a.historical_xcf_sample_order}))?
+            .historical_xcf_sample_order,
         psd_high_memory_approved: a.approve_high_memory,
         pdf_dpi: a.pdf_dpi.unwrap_or(300.0),
         pdf_pages: a.pdf_pages.as_deref().map(parse_pdf_pages).transpose()?,
@@ -74,7 +76,7 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
 pub(crate) fn info(a: &InfoArgs, out: &mut dyn Write) -> Result {
     let file = &a.file;
     let mut h = Headless::trusted_local();
-    let opened = h.open_with_approval(file, a.approve_high_memory)?;
+    let opened = h.open_with_parameters(file, &json!({"approveHighMemory":a.approve_high_memory,"historicalXcfSampleOrder":a.historical_xcf_sample_order}))?;
     let mut doc = match (a.detail, h.session.active()) {
         (true, Some(st)) => photocraft_engine::inspect::document_detail(st),
         _ => h.inspect(None)?,
@@ -125,7 +127,7 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
         if let Some(out) = &a.out {
             refuse_overwriting_input(a.in_place, file, out)?;
         }
-        let o = h.open_with_approval(file, a.approve_high_memory)?;
+        let o = h.open_with_parameters(file, &json!({"approveHighMemory":a.approve_high_memory,"historicalXcfSampleOrder":a.historical_xcf_sample_order}))?;
         let ws: Vec<String> = serde_json::from_value(o["warnings"].clone()).unwrap_or_default();
         warn_all(err, &ws);
         reported_fonts.extend(ws);
@@ -286,6 +288,41 @@ mod missing_font_warning_tests {
         let Invoke { code, stderr, .. } = invoke(&["convert", &native_str, &png_str]);
         assert_eq!(code, 0, "{stderr}");
         assert!(!stderr.contains("font '"), "{stderr}");
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+}
+
+#[cfg(test)]
+mod historical_order_tests {
+    use crate::test_support::invoke;
+
+    #[test]
+    fn historical_order_flag_reaches_info_run_and_convert_without_guessing() {
+        let folder = std::env::temp_dir().join(format!("photocraft-cli-historical-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let input = folder.join("source.xcf");
+        let mut bytes = b"gimp xcf v007\0".to_vec();
+        for value in [1u32, 1, 0, 250, 0, 0, 0, 0] {
+            bytes.extend_from_slice(&value.to_be_bytes());
+        }
+        std::fs::write(&input, bytes).unwrap();
+        let input = input.to_str().unwrap();
+        assert_ne!(invoke(&["info", input]).code, 0);
+        for order in ["little-endian", "big-endian"] {
+            let output = folder.join(format!("{order}.pcraft"));
+            let output = output.to_str().unwrap();
+            for args in [
+                vec!["info", input, "--historical-xcf-sample-order", order],
+                vec!["run", input, "--historical-xcf-sample-order", order, "--out", output],
+                vec!["convert", input, output, "--historical-xcf-sample-order", order],
+            ] {
+                let result = invoke(&args);
+                assert_eq!(result.code, 0, "{args:?}: {}", result.stderr);
+            }
+        }
+        let invalid = invoke(&["info", input, "--historical-xcf-sample-order", "native"]);
+        assert_ne!(invalid.code, 0);
+        assert!(invalid.stderr.contains("possible values"));
         let _ = std::fs::remove_dir_all(&folder);
     }
 }

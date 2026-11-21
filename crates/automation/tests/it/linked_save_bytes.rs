@@ -10,6 +10,8 @@ fn a_linked_smart_object_is_not_read_into_the_bytes() {
     let linked = std::env::current_exe().unwrap();
     let smart = SmartObject {
         contents_id: SmartContentsId::fresh(),
+        historical_xcf_sample_order: None,
+        historical_xcf_link_digest: None,
         source: SmartSource::Linked { path: linked.to_string_lossy().into_owned() },
         transform: photocraft_geom::Affine::IDENTITY,
         smart_filters: vec![],
