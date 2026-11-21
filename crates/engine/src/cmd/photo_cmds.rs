@@ -387,7 +387,7 @@ const DIRECT_MIN_OVERLAP: f64 = 0.25;
 const DIRECT_MIN_CORRELATION: f64 = 0.5;
 
 /// The error of either registration when the layers have no detail in common.
-pub(crate) const NO_DETAIL: &str = "Auto-Align couldn't find enough matching detail between the layers";
+pub const NO_DETAIL: &str = "Auto-Align couldn't find enough matching detail between the layers";
 
 /// Registers `images` (surface, content area, all of one size) by intensity
 /// ([`photocraft_algo::direct`]), for layers that nearly coincide (a focus or exposure bracket,
