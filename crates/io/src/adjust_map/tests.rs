@@ -728,7 +728,7 @@ fn gradient_map_keeps_photoshops_stops_midpoints_and_smoothness() {
     use photocraft_doc::adjust::GradientSource;
     let src =
         GradientSource { stops: vec![(0.0, [0.1, 0.2, 0.6]), (1.0, [1.0, 0.8, 0.2])], midpoints: vec![0.3], smoothness: 0.8, method: "perceptual".into() };
-    let block = write_grdm(&src.stops, &src.midpoints, src.smoothness, crate::gradient_bake::Method::Perceptual, false, true);
+    let block = write_grdm(&src.stops, &src.midpoints, src.smoothness, crate::gradient_bake::Method::Perceptual, false, true, false);
     let a = parse(b"grdm", &block, None, Channels::Rgb);
     let Adjustment::GradientMap { stops, dither: true, source: Some(kept), .. } = &a else { panic!("{a:?}") };
     assert!(stops.len() > 2, "rendered from the baked stops");
@@ -741,4 +741,50 @@ fn gradient_map_keeps_photoshops_stops_midpoints_and_smoothness() {
     assert_eq!(back, a);
     let Adjustment::GradientMap { source: Some(again), .. } = &back else { panic!() };
     assert_eq!(again.stops.len(), 2, "two stops in the file, not the baked ones");
+}
+
+/// A Stripes map is saved as its baked hard steps; the step before the final stop must not land on the same 4096th as
+/// that stop, or the reopened map reads the earlier colour at t = 1 (CodeRabbit on #16161).
+#[test]
+fn a_stripes_map_keeps_its_final_colour_after_save_and_reopen() {
+    let src = photocraft_doc::adjust::GradientSource {
+        stops: vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])],
+        midpoints: vec![0.5],
+        smoothness: 1.0,
+        method: "stripes".into(),
+    };
+    let adj = Adjustment::GradientMap { stops: crate::gradient_bake::bake_source(&src), reverse: false, dither: false, source: Some(src) };
+    let blocks = write(&adj);
+    let Adjustment::GradientMap { stops, .. } = parse(b"grdm", &blocks[0].1, None, Channels::Rgb) else { panic!("not a gradient map") };
+    let (before, last) = (stops[stops.len() - 2], stops[stops.len() - 1]);
+    assert_eq!(last.1, [1.0; 3], "the final colour is white");
+    assert!(before.0 < last.0, "the last two stops are apart: {before:?} {last:?}");
+}
+
+/// Every stripe boundary keeps the later colour at its own location, not only the final one (CodeRabbit on #16161).
+#[test]
+fn a_stripes_map_keeps_the_later_colour_at_every_boundary() {
+    let src = photocraft_doc::adjust::GradientSource {
+        stops: vec![(0.0, [0.0; 3]), (0.5, [1.0, 0.0, 0.0]), (1.0, [1.0; 3])],
+        midpoints: vec![0.5; 2],
+        smoothness: 1.0,
+        method: "stripes".into(),
+    };
+    let adj = Adjustment::GradientMap { stops: crate::gradient_bake::bake_source(&src), reverse: false, dither: false, source: Some(src) };
+    let blocks = write(&adj);
+    let Adjustment::GradientMap { stops, .. } = parse(b"grdm", &blocks[0].1, None, Channels::Rgb) else { panic!("not a gradient map") };
+    // The stop at 0.5 (2048/4096) with the red colour is not the first of two stops sharing the location.
+    let at_half: Vec<_> = stops.iter().filter(|(t, _)| (*t - 0.5).abs() < 1e-4).collect();
+    assert_eq!(at_half.len(), 1, "one stop at the boundary: {stops:?}");
+    assert_eq!(at_half[0].1, [1.0, 0.0, 0.0], "and it is the later colour");
+}
+
+/// Only baked Stripes stops are moved: any other map keeps a repeated end stop's location exactly.
+#[test]
+fn a_non_stripes_map_keeps_its_stop_locations() {
+    let stops = vec![(0.0, [0.0; 3]), (1.0, [0.5; 3]), (1.0, [1.0; 3])];
+    let Adjustment::GradientMap { stops: back, .. } = parse(b"grdm", &write_gradient_map(&stops, false, false), None, Channels::Rgb) else {
+        panic!("not a gradient map")
+    };
+    assert_eq!(back.iter().filter(|(t, _)| *t == 1.0).count(), 2, "both stops at 1.0 stay at 1.0: {back:?}");
 }
