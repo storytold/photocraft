@@ -20,6 +20,8 @@ enum Step {
     Perspective(f64),
     EnterWarp,
     Pull(usize, f64, f64),
+    /// A drag of the surface at `(s, t)` through the real pull rule, `len` px at `angle`, frame by frame.
+    LongPull(f64, f64, f64, f64),
     HoldWarp,
     LeaveWarp,
     Undo,
@@ -53,7 +55,11 @@ fn random_step(r: &mut Rng) -> Step {
         3 => Step::Corner(r.pick(4), r.range(-5.0, 5.0), r.range(-5.0, 5.0)),
         4 => Step::Perspective(r.range(-5.0, 5.0)),
         5 | 6 => Step::EnterWarp,
-        7 => Step::Pull(r.pick(16), r.range(-4.0, 4.0), r.range(-4.0, 4.0)),
+        7 => if r.pick(3) == 0 {
+            Step::LongPull(r.range(0.05, 0.95), r.range(0.05, 0.95), r.range(0.0, std::f64::consts::TAU), r.range(40.0, 400.0))
+        } else {
+            Step::Pull(r.pick(16), r.range(-4.0, 4.0), r.range(-4.0, 4.0))
+        },
         8 => if r.pick(2) == 0 { Step::HoldWarp } else { Step::LeaveWarp },
         9 => Step::Undo,
         _ => Step::Redo,
@@ -85,7 +91,8 @@ fn fp(app: &PhotocraftApp) -> Fp {
 }
 
 /// The walk's subject, by `kind`: 0 a smart object placed at 1.5 × 1.25 of its contents (its contents' texels and its
-/// box's differ in size), 1 one turned by 0.5 rad, 2 one with a stored warp (a pull applied first).
+/// box's differ in size), 1 one turned by 0.5 rad, 2 one with a stored warp (a pull applied first), 3 one placed in a
+/// perspective (its top 18 px narrower).
 fn subject(kind: u8) -> (Box<PhotocraftApp>, egui::Context, LayerId) {
     let mut app = app_with_square(96, photocraft_geom::Rect::new(16, 16, 48, 40));
     let ctx = app.ctx().clone();
@@ -95,6 +102,12 @@ fn subject(kind: u8) -> (Box<PhotocraftApp>, egui::Context, LayerId) {
     match kind {
         0 => scale_box(&mut app, 1.5, 1.25),
         1 => turn_box(&mut app, 0.5),
+        3 => {
+            let q = quad_of(open(&app));
+            let pivot = open(&app).session.state().pivot;
+            let persp = [[q[0][0] + 9.0, q[0][1]], [q[1][0] - 9.0, q[1][1]], q[2], q[3]];
+            box_events(&mut app, 1, &[BoxState::new(persp.map(|[x, y]| Point::new(x, y)), pivot)]);
+        }
         _ => {
             begin_warp(&mut app, &ctx).unwrap();
             settle(&mut app);
@@ -176,6 +189,49 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, step: &Step, gesture: &mu
             let k = *i % to.points.len();
             to.points[k] += Vec2::new(*dx, *dy);
             pull_mesh(app, *gesture, to);
+            true
+        }
+        Step::LongPull(s, t, angle, len) => {
+            if !warping(app) {
+                return Ok(false);
+            }
+            let start = warp_mesh(app);
+            let placed = app.transform_preview.as_ref().and_then(|pv| pv.placed_warp);
+            let maps = placed.and_then(|(m, _)| {
+                let h = photocraft_algo::transform::Homography(m);
+                Some((h, h.inverse()?))
+            });
+            let gesture = GestureId::new(*gesture);
+            let mut shown = start.points.clone();
+            let frames = (*len / 10.0).ceil().max(1.0) as usize;
+            for f in 1..=frames {
+                let d = len * f as f64 / frames as f64;
+                let by = [d * angle.cos(), d * angle.sin()];
+                let pulled = match &maps {
+                    Some((to_doc, back)) => super::super::warp::in_contents(&start, super::super::warp::RuleEdit::Surface { s: *s, t: *t, by }, 1.0, to_doc, back),
+                    None => super::super::warp::rule_mesh(&start, super::super::warp::RuleEdit::Surface { s: *s, t: *t, by }, 1.0),
+                };
+                let Some(pulled) = pulled else { return Ok(f > 1) };
+                let mut events = EditEvents::new();
+                if f == 1 {
+                    events.push(EditEvent::begin(gesture, Mixed::Same(start.clone()), "Warp".into(), None));
+                }
+                events.push(if f == frames { EditEvent::commit(gesture, Mixed::Same(start.clone()), pulled) } else { EditEvent::update(gesture, pulled) });
+                grid_edit(app, &events, false);
+                frame(app);
+                let now = warp_mesh(app).points;
+                let c = now.iter().fold(Point::ZERO, |a, p| Point::new(a.x + p.x / now.len() as f64, a.y + p.y / now.len() as f64));
+                let crossed = |a: f64, b: f64| a * b < 0.0 && a.abs() > 2000.0 && b.abs() > 2000.0;
+                for (i, (p, q)) in now.iter().zip(&shown).enumerate() {
+                    if !(p.x.is_finite() && p.y.is_finite()) {
+                        return Err(format!("frame {f} of the drag: point {i} is not finite"));
+                    }
+                    if crossed(p.x - c.x, q.x - c.x) || crossed(p.y - c.y, q.y - c.y) {
+                        return Err(format!("frame {f} of the drag: point {i} flipped through infinity: {q:?} -> {p:?}"));
+                    }
+                }
+                shown = now;
+            }
             true
         }
         Step::HoldWarp => {
@@ -366,7 +422,7 @@ fn seq_check() {
     for seed in seed0..seed0 + seeds {
         let mut r = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
         let steps: Vec<Step> = (0..len).map(|_| random_step(&mut r)).collect();
-        let end = (seed % 6) as u8;
+        let end = (seed % 8) as u8;
         if let Err(e) = run_caught(&steps, end) {
             let (steps, e) = shrink(steps, end, &e);
             let kind = e.split(':').skip(1).collect::<Vec<_>>().join(":").lines().next().unwrap_or("").trim().to_string();
