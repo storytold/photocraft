@@ -835,7 +835,8 @@ fn chosen_artboards(doc: &Document, p: &Value) -> Vec<LayerId> {
     }
 }
 
-/// Artboards to Files' Include Artboard Name and its Name Options (#13637).
+/// Artboards to Files' and Artboards to PDF's Include Artboard Name and its Name Options (#13637,
+/// #13654).
 struct NameBorder {
     /// `{"font", "fontStyle", "size", "color"}` for [`crate::type_cmds::apply_char_props`].
     style: Value,
@@ -1316,6 +1317,8 @@ fn soft_mask(px: &[[f32; 4]]) -> Result<Option<Vec<u8>>> {
 /// mask, so a viewer shows its own background where the board has no pixels.
 fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToPdf";
+    // Include Artboard Name (#13654): the options and border of Artboards to Files' (#13637).
+    let border = name_border_param(p, cmd)?;
     let per_artboard = match p.get("mode") {
         None | Some(Value::Null) => false,
         Some(Value::String(m)) if m == "multiPage" => false,
@@ -1363,6 +1366,9 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
         // shows the board, so its visibility is read from the source.
         let visible = doc.layer(id).is_some_and(|l| l.visible);
         let masked = !background && visible && drop_white_fill(&mut one);
+        if let Some(o) = &border {
+            add_name_border(&mut one, o, cmd)?;
+        }
         let (jpeg, mask) = jpeg_page_masked(&one, quality, zip, masked, cmd)?;
         pages.push((one.size.width, one.size.height, doc.resolution_dpi, jpeg, mask));
         names.push(one.name);
@@ -1484,7 +1490,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToPdf",
             "Artboards to PDF…",
             &["File", "Export"],
-            r##"{"path":str (.pdf; with "mode":"perArtboard" only gives the defaults of "dir" and "prefix"),"mode":"multiPage|perArtboard"="multiPage" (Multi-Page Document: one file at "path"; Document Per Artboard: one single-page file per board, "<dir>/<prefix><artboard name>.pdf", spaces kept, characters a file name can't hold become "_", a name an earlier board already took, ignoring case, gets "-2", "-3"…),"dir":folder=folder of "path","prefix":str=file name of "path" without ".pdf", else the document name,"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's page also shows the visible boards above it where they overlap it; artboard: Artboard Content Only),"artboards":[id]?,"quality":0..12=10,"includeBackground":bool=true (false: a white board's fill is left out and the page gets a soft mask, so it is transparent where the board's layers have no pixels; an empty board, other fills and documents other than 8-bit RGB keep it),"reversePageOrder":bool=false (the default page order the other way round),"encoding":"jpeg|zip"="jpeg" (zip: lossless Flate pages, quality ignored)} → {path (multi-page), pages, files} (one raster page per board, bottom artboard of the Layers panel first)"##,
+            r##"{"path":str (.pdf; with "mode":"perArtboard" only gives the defaults of "dir" and "prefix"),"mode":"multiPage|perArtboard"="multiPage" (Multi-Page Document: one file at "path"; Document Per Artboard: one single-page file per board, "<dir>/<prefix><artboard name>.pdf", spaces kept, characters a file name can't hold become "_", a name an earlier board already took, ignoring case, gets "-2", "-3"…),"dir":folder=folder of "path","prefix":str=file name of "path" without ".pdf", else the document name,"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's page also shows the visible boards above it where they overlap it; artboard: Artboard Content Only),"artboards":[id]?,"quality":0..12=10,"includeBackground":bool=true (false: a white board's fill is left out and the page gets a soft mask, so it is transparent where the board's layers have no pixels; an empty board, other fills and documents other than 8-bit RGB keep it),"reversePageOrder":bool=false (the default page order the other way round),"encoding":"jpeg|zip"="jpeg" (zip: lossless Flate pages, quality ignored),"includeName":bool=false (Include Artboard Name: the page grows by a border of (w + h) / 20 px on each side, the name in the top one, drawn into the page image),"font":family="Arial","fontStyle":"Regular|Italic|Bold|Bold Italic|Black"="Regular","fontSize":pt|numeric str=12 (else an error),"extension":"white|black|other"|"#rrggbb"|[r,g,b]="white" (Canvas Extension; "other" takes "extensionColor":[r,g,b]),"textColor":"#rrggbb"|[r,g,b]=black} → {path (multi-page), pages, files} (one raster page per board, bottom artboard of the Layers panel first)"##,
             export_artboards,
             artboards_to_pdf
         ),

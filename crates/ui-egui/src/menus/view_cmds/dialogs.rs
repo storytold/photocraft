@@ -356,6 +356,10 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
         }
         "file.export.artboardsToPdf" => {
             let (_, _, name) = doc?;
+            let mut fonts = crate::type_tool::families().to_vec();
+            if !fonts.iter().any(|f| f == "Arial") {
+                fonts.insert(0, "Arial".to_owned());
+            }
             plain(vec![
                 Param::new("path", tl!("File"), ParamKind::text(format!("{dir}/{}.pdf", stem(&name)))),
                 export_selected_artboards(selected_artboards(app)),
@@ -383,6 +387,31 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                 ),
                 // Unticked on first open; the form remembers it as the last run left it (#13644).
                 Param::new("reversePageOrder", tl!("Reverse Page Order"), ParamKind::bool(false)),
+                // Include Artboard Name and its Name Options, shown only while it is ticked (#13654). Hidden
+                // rows keep their values; the command reads them only with the box ticked.
+                Param::new("includeName", tl!("Include Artboard Name"), ParamKind::bool(false)),
+                Param::section(tl!("Name Options")).visible_when("includeName", true),
+                choice("font", tl!("Font"), named(&fonts), "Arial").searchable().visible_when("includeName", true),
+                choice(
+                    "fontStyle",
+                    tl!("Style"),
+                    opts(&[
+                        ("Regular", tl!("Regular")),
+                        ("Italic", tl!("Italic")),
+                        ("Bold", tl!("Bold")),
+                        ("Bold Italic", tl!("Bold Italic")),
+                        ("Black", tl!("Black")),
+                    ]),
+                    "Regular",
+                )
+                .visible_when("includeName", true),
+                Param::new("fontSize", tl!("Size (pt)"), ParamKind::text("12")).visible_when("includeName", true),
+                choice("extension", tl!("Canvas Extension"), opts(&[("white", tl!("White")), ("black", tl!("Black")), ("other", tl!("Other..."))]), "white")
+                    .visible_when("includeName", true),
+                Param::new("extensionColor", tl!("Canvas Extension Color"), ParamKind::color(Some([0.5, 0.5, 0.5])))
+                    .visible_when("includeName", true)
+                    .enabled_when("extension", "other"),
+                Param::new("textColor", tl!("Text"), ParamKind::color(Some([0.0, 0.0, 0.0]))).visible_when("includeName", true),
             ])
         }
         "file.export.dataSetsAsFiles" => {
