@@ -3,7 +3,7 @@
 use super::{
     AlphaChannel, BlendMode, Channel, ConversionDisposition, ConversionEntry, ConversionReason, Image, Interrupt, IoError, LabelColor, Layer, LayerContent,
     LayerMask, MAX_DEPTH, NativeTargetRef, Node, PendingLayerEffects, PixelFormat, Pixels, Prop, Rect, Result, Surface, be_f32, be_i32, be_u32, blend_mode,
-    conversion, finish, invalid, label, metadata, paths, place, props, resources, text, write_pixels,
+    conversion, drawable_rect, finish, invalid, label, metadata, paths, place, props, resources, text, write_pixels,
 };
 
 // Each vector style can construct two color transforms, even for a small ICC
@@ -592,7 +592,16 @@ impl<'a> Image<'a> {
     }
 
     /// Decode a layer's declared sample layout and restore the image model even when decoding fails or is cancelled.
-    pub(super) fn layer_hierarchy(&mut self, hptr: usize, kind: u32, alpha: bool, floating: bool, name: &str, ctl: &Interrupt<'_>) -> Result<Pixels> {
+    fn layer_hierarchy(
+        &mut self,
+        hptr: usize,
+        kind: u32,
+        floating: bool,
+        name: &str,
+        target: Option<(&mut Surface, Rect)>,
+        ctl: &Interrupt<'_>,
+    ) -> Result<Pixels> {
+        let alpha = !kind.is_multiple_of(2);
         let source_base_type = if floating {
             match kind {
                 0 | 1 => 0,
@@ -614,7 +623,7 @@ impl<'a> Image<'a> {
         self.base_type = source_base_type;
         // Gray samples remain color even for a floating selection attached to a
         // channel or mask. The hierarchy validates its alpha plane as coverage.
-        let decoded = self.hierarchy_with_alpha(hptr, source_channels, false, !alpha, ctl);
+        let decoded = self.decode_hierarchy(hptr, source_channels, false, !alpha, target, ctl);
         self.base_type = saved_base_type;
         decoded.map_err(|error| match error {
             error @ (IoError::Cancelled | IoError::OutOfMemory(_)) => error,
@@ -822,26 +831,42 @@ impl<'a> Image<'a> {
         }
         self.layer_compositing(&layer, outcome, layer_mode, group, composite_mode)?;
         let linear = composite_space.unsigned_abs() == 1 || blend_space.unsigned_abs() == 1;
-        if linear || composite_space.unsigned_abs() > 2 || blend_space.unsigned_abs() > 2 {
-            self.outcomes.detail(
+        let native_space = if self.precision.linear {
+            1
+        } else if self.precision.perceptual {
+            3
+        } else {
+            2
+        };
+        let differs = [blend_space, composite_space].into_iter().map(i32::unsigned_abs).any(|space| space != 0 && space != native_space);
+        if differs {
+            self.outcomes.notice(
                 outcome,
                 "xcf.compositing_space",
-                ConversionReason::NativePolicy,
-                format!("GIMP blend space {blend_space}, composite space {composite_space}"),
-                "Native document encoding and PhotoCraft compositing rules".into(),
+                ConversionReason::NativeLimitation,
+                (
+                    format!("GIMP blend space {blend_space}, composite space {composite_space}"),
+                    format!("PhotoCraft uses native document sample encoding (XCF space {native_space}); blends or soft edges can differ"),
+                ),
+                (self.precision.linear || !linear).then_some("uses a different blend or composite encoding from the native document; appearance can differ"),
+                &mut self.warnings,
             )?;
         }
 
         if !group && hptr != 0 {
-            let mut px = self.layer_hierarchy(hptr, kind, alpha, floating, &name, ctl)?;
+            let mut surface = Surface::new(fmt);
+            let stream = !alpha && !gray_floating;
+            let target = if stream { Some((&mut surface, drawable_rect(lw, lh, x, y)?)) } else { None };
+            let mut px = self.layer_hierarchy(hptr, kind, floating, &name, target, ctl)?;
             if (px.width, px.height) != (lw, lh) {
                 return Err(invalid(format!("layer '{name}' pixels are {}x{} where {lw}x{lh} were declared", px.width, px.height)));
             }
             if gray_floating {
                 px = resources::gray_to_rgb(px, &mut self.budget, ctl)?;
             }
-            let mut surface = Surface::new(fmt);
-            write_pixels(&mut surface, &px, x, y, &mut self.budget)?;
+            if !stream {
+                write_pixels(&mut surface, &px, x, y, &mut self.budget)?;
+            }
             self.precision_underflow(outcome, &px)?;
             layer.content = LayerContent::Raster(surface);
             if !alpha {

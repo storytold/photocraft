@@ -1359,36 +1359,6 @@ fn a_path_failing_below_the_top_level_lands_at_the_top_level() {
     assert!(r.warnings.iter().any(|w| w.contains("Stray") && w.contains("item path")), "{:?}", r.warnings);
 }
 
-/// A parasite name field: u32 `len+1`, then the bytes and a trailing NUL.
-fn parasite_name(out: &mut Vec<u8>, name: &str) {
-    out.extend_from_slice(&((name.len() as u32) + 1).to_be_bytes());
-    out.extend_from_slice(name.as_bytes());
-    out.push(0);
-}
-
-/// One PROP_PARASITES record: name, u32 flags, u32 len, then the payload.
-fn parasite_record(out: &mut Vec<u8>, name: &str, payload: &[u8]) {
-    parasite_name(out, name);
-    out.extend_from_slice(&0u32.to_be_bytes());
-    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    out.extend_from_slice(payload);
-}
-
-#[test]
-fn duplicate_parasites_keep_order_and_last_value() {
-    // Duplicate names must resolve to the last payload while keeping first-seen order.
-    // This is the behavior the name->index map must preserve versus the old linear scan.
-    let mut data = Vec::new();
-    parasite_record(&mut data, "gimp-comment", b"first");
-    parasite_record(&mut data, "gimp-image-grid", b"grid");
-    parasite_record(&mut data, "gimp-comment", b"second");
-    let out = parasites(&data);
-    assert_eq!(out.len(), 2, "duplicate collapses to one slot");
-    assert_eq!(out[0].0, "gimp-comment");
-    assert_eq!(out[0].1, b"second", "last value wins");
-    assert_eq!(out[1].0, "gimp-image-grid", "insertion order preserved");
-}
-
 /// Compare every integer normalization endpoint with the checked scalar decoder and require malformed rows to leave output untouched.
 #[test]
 fn integer_row_fast_path_matches_checked_decoder_for_every_native_integer_encoding() {
@@ -1697,5 +1667,60 @@ fn malformed_layer_markers_keep_rasters_and_do_not_shift_group_indices() {
     let Some(ImportConversion::Report(report)) = result.document.metadata.import_conversion.as_deref() else { panic!("report") };
     for code in ["xcf.source_property.29", "xcf.source_property.30"] {
         assert!(report.entries.iter().any(|entry| entry.feature_code == code && entry.reason == ConversionReason::InvalidOptionalData));
+    }
+}
+
+#[test]
+fn saved_alpha_channels_use_their_own_dimensions_but_selections_match_the_canvas() {
+    let fixture = |selection, hierarchy_width| {
+        let mut w = W::new(11);
+        for word in [64, 64, 0, 150] {
+            w.u32(word);
+        }
+        w.prop(17, &[0]);
+        w.end();
+        w.ptr(0); // End layers.
+        let spot = w.slot();
+        w.ptr(0); // End channels.
+        let at = w.out.len();
+        w.patch(spot, at);
+        w.u32(16);
+        w.u32(16);
+        w.string("Small coverage");
+        if selection {
+            w.prop(4, &[]);
+        }
+        w.end();
+        let pixels = w.slot();
+        let at = hierarchy(&mut w, hierarchy_width, 16, 1, &vec![117; hierarchy_width as usize * 16], Compression::None);
+        w.patch(pixels, at);
+        w.out
+    };
+    let good = open(&fixture(false, 16)).unwrap().document;
+    assert_eq!(good.channels.len(), 1);
+    let channel = &good.channels[0].surface;
+    assert_eq!(channel.pixel(15, 15), [117. / 255.]);
+    assert_eq!(channel.pixel(16, 15), [0.]);
+    assert!(matches!(open(&fixture(true, 16)), Err(IoError::Xcf(message)) if message.contains("saved selection dimensions")));
+    assert!(matches!(open(&fixture(false, 15)), Err(IoError::Xcf(message)) if message.contains("hierarchy dimensions")));
+}
+
+#[test]
+fn profile_compositing_on_linear_samples_is_reported_as_an_approximation() {
+    for requested in [1i32, 2] {
+        let mut source = TestImage::rgb8(1, 1);
+        source.precision = 600; // Linear F32.
+        let samples = |pixel: [f32; 4]| pixel.into_iter().flat_map(f32::to_be_bytes).collect();
+        let mut white = TestLayer::rgba("White", 1, 1, samples([1., 1., 1., 0.5]));
+        white.props.push((36, requested.to_be_bytes().to_vec()));
+        source.layers.push(white);
+        source.layers.push(TestLayer::rgba("Black", 1, 1, samples([0., 0., 0., 1.])));
+        let result = open(&source.write()).unwrap();
+        assert!((photocraft_compose::flatten(&result.document).px[0][0] - 0.5).abs() < 1e-4);
+        assert_eq!(result.warnings.iter().any(|w| w.contains("different blend or composite encoding")), requested == 2);
+        let Some(photocraft_doc::import_conversion::ImportConversion::Report(report)) = result.document.metadata.import_conversion.as_deref() else {
+            panic!("report")
+        };
+        assert_eq!(report.entries.iter().any(|e| e.feature_code == "xcf.compositing_space" && e.reason == ConversionReason::NativeLimitation), requested == 2);
     }
 }

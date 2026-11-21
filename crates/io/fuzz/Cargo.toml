@@ -25,7 +25,10 @@ bench = false
 # A separate fuzz workspace does not inherit the host workspace patches.
 # craft-pdf requires the same reviewed Hayro API as the application.
 [patch.crates-io]
-hayro = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a" }
-hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a" }
-hayro-interpret = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a" }
-hayro-jbig2 = { git = "https://github.com/storytold/craft-libs", rev = "fe6b443acf3eccaf514064812e6e6bf24257652a" }
+hayro = { git = "https://github.com/storytold/craft-libs", rev = "7d8b9615150cc8cdb70d2ca2c3ac085b42af99f3" }
+hayro-syntax = { git = "https://github.com/storytold/craft-libs", rev = "7d8b9615150cc8cdb70d2ca2c3ac085b42af99f3" }
+hayro-interpret = { git = "https://github.com/storytold/craft-libs", rev = "7d8b9615150cc8cdb70d2ca2c3ac085b42af99f3" }
+hayro-jbig2 = { git = "https://github.com/storytold/craft-libs", rev = "7d8b9615150cc8cdb70d2ca2c3ac085b42af99f3" }
+# Hayro calls the workspace-patched Vello CPU coverage API.
+vello_common = { git = "https://github.com/storytold/craft-libs", rev = "7d8b9615150cc8cdb70d2ca2c3ac085b42af99f3" }
+vello_cpu = { git = "https://github.com/storytold/craft-libs", rev = "7d8b9615150cc8cdb70d2ca2c3ac085b42af99f3" }

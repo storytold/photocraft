@@ -6435,6 +6435,7 @@ dependencies = [
  "photocraft-io",
  "photocraft-raster",
  "photocraft-raw",
+ "photocraft-testkit",
  "pollster 1.0.1",
  "rmcp",
  "rustix 1.1.5",
@@ -6464,6 +6465,7 @@ dependencies = [
  "photocraft-io",
  "photocraft-raster",
  "photocraft-raw",
+ "photocraft-testkit",
  "serde",
  "serde_json",
  "tempfile",
@@ -6770,6 +6772,7 @@ dependencies = [
 name = "photocraft-testkit"
 version = "0.23.1"
 dependencies = [
+ "crc32fast",
  "memory-stats",
  "serde_json",
  "wgpu",

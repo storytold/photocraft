@@ -46,7 +46,7 @@ pub enum EngineError {
     HistoricalXcfLinkChanged(&'static str),
     /// Edit Contents can recover an older embedded XCF when the user supplies its order.
     #[error("{question}; choose a sample byte order for the embedded source")]
-    EmbeddedHistoricalXcfOrder { layer: LayerId, question: photocraft_io::HistoricalXcfSampleOrderRequest },
+    EmbeddedHistoricalXcfOrder { layer: LayerId, question: photocraft_io::HistoricalXcfSampleOrderRequest, source_name: String },
     #[error("{0}")]
     Other(String),
     /// A batch or droplet stopped at its nesting or shared playback-step limit. A batch whose

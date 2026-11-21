@@ -8,3 +8,6 @@ pub mod sweep;
 
 pub use gpu::gpu_lock;
 pub use sweep::Sweep;
+
+/// Independent XCF and XZ wire fixtures.
+pub mod xcf;

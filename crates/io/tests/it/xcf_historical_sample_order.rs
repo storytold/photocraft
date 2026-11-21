@@ -4,6 +4,7 @@ use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::{Document, LayerContent};
 use photocraft_io::{HistoricalXcfSampleOrder as Order, ImportOptions};
 use photocraft_raster::Interrupt;
+use photocraft_testkit::xcf::xz;
 
 struct Wire {
     bytes: Vec<u8>,
@@ -315,52 +316,6 @@ fn file_open_keeps_historical_xcf_options_view_report_and_magic_priority() {
         }
     }
     std::fs::remove_file(path).unwrap();
-}
-
-// One uncompressed LZMA2 block, CRC32 check and index/footer, independently
-// framed as in the existing native transport test (no encoder feature needed).
-/// Wrap a bounded fixture in an independently framed uncompressed LZMA2 block with valid XZ checksums and index.
-fn xz(bytes: &[u8]) -> Vec<u8> {
-    /// Encode an XZ variable-length integer for the independently authored block index.
-    fn vli(mut value: usize, out: &mut Vec<u8>) {
-        loop {
-            let byte = (value & 127) as u8;
-            value >>= 7;
-            out.push(if value == 0 { byte } else { byte | 128 });
-            if value == 0 {
-                break;
-            }
-        }
-    }
-    assert!(!bytes.is_empty() && bytes.len() <= 65536);
-    let mut out = b"\xfd7zXZ\0\0\x01".to_vec();
-    out.extend(crc32fast::hash(&[0, 1]).to_le_bytes());
-    let mut header = vec![2, 0, 0x21, 1, 0, 0, 0, 0];
-    header.extend(crc32fast::hash(&header).to_le_bytes());
-    out.extend(&header);
-    let mut data = vec![1];
-    data.extend(((bytes.len() - 1) as u16).to_be_bytes());
-    data.extend(bytes);
-    data.push(0);
-    out.extend(&data);
-    while !out.len().is_multiple_of(4) {
-        out.push(0);
-    }
-    out.extend(crc32fast::hash(bytes).to_le_bytes());
-    let mut index = vec![0, 1];
-    vli(header.len() + data.len() + 4, &mut index);
-    vli(bytes.len(), &mut index);
-    while !index.len().is_multiple_of(4) {
-        index.push(0);
-    }
-    index.extend(crc32fast::hash(&index).to_le_bytes());
-    out.extend(&index);
-    let mut footer = ((index.len() / 4 - 1) as u32).to_le_bytes().to_vec();
-    footer.extend([0, 1]);
-    out.extend(crc32fast::hash(&footer).to_le_bytes());
-    out.extend(footer);
-    out.extend(b"YZ");
-    out
 }
 
 /// Verify all supported outer transports preserve the typed order request and native pixel planes, including source-free native persistence.

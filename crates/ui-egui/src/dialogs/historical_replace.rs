@@ -94,12 +94,15 @@ fn target_in(state: &photocraft_engine::DocState, layer: LayerId) -> Result<Targ
 }
 
 /// Edit Contents already inspected this embedded source and asked for its byte order.
-pub(crate) fn prompt_edit(app: &mut PhotocraftApp, layer: LayerId, question: photocraft_io::HistoricalXcfSampleOrderRequest) -> Result<Value, String> {
+pub(crate) fn prompt_edit(
+    app: &mut PhotocraftApp,
+    layer: LayerId,
+    source_name: String,
+    question: photocraft_io::HistoricalXcfSampleOrderRequest,
+) -> Result<Value, String> {
     let state = app.session.active().ok_or("no document")?;
     let target = target_in(state, layer)?;
-    let Some(LayerContent::Smart(smart)) = state.doc.layer(layer).map(|layer| &layer.content) else { return Err("the layer is not a smart object".into()) };
-    let photocraft_doc::SmartSource::Embedded { file_name, .. } = &smart.source else { return Err("the source is no longer embedded".into()) };
-    let id = hold(app, Action::Edit(target), file_name.clone(), None, Some(question), None)?;
+    let id = hold(app, Action::Edit(target), source_name, None, Some(question), None)?;
     crate::open_prompt::advance(app);
     Ok(json!({"heldHistoricalXcfEdit": id}))
 }

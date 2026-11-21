@@ -37,8 +37,7 @@ pub mod frame_stages;
 pub mod gpu_memo;
 pub mod gpu_status;
 #[cfg(test)]
-#[path = "../../engine/src/historical_xcf_open/fixture.rs"]
-pub(crate) mod historical_xcf_fixture;
+pub(crate) use photocraft_testkit::xcf as historical_xcf_fixture;
 mod history_keys;
 pub mod home_recent_ui;
 pub mod i18n;

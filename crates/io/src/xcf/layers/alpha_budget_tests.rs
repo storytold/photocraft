@@ -258,3 +258,85 @@ fn opaque_f32_24mp_alpha_emission_timing() {
         bytes.len()
     );
 }
+
+#[test]
+fn an_opaque_layer_fits_when_its_full_scratch_and_native_tiles_would_exceed_the_budget() {
+    let (width, height) = (512, 256);
+    let mut writer = W { out: vec![0; 4], wide: true };
+    let layer = writer.out.len();
+    for value in [width, height, 0] {
+        writer.u32(value);
+    }
+    writer.string("Opaque budget");
+    writer.prop(15, &[(-17i32).to_be_bytes(), 19i32.to_be_bytes()].concat());
+    writer.end();
+    let raster = writer.slot();
+    writer.ptr(0);
+    let mut bytes = Vec::new();
+    for y in 0..height {
+        for x in 0..width {
+            bytes.extend([x as u8, y as u8, 57]);
+        }
+    }
+    let at = hierarchy(&mut writer, width, height, 3, &bytes, Compression::None);
+    writer.patch(raster, at);
+    let logical = width as usize * height as usize * 16;
+    let bounded_scratch = TILE as usize * TILE as usize * 16;
+    let mut decoder = image(&writer.out, logical + bounded_scratch, 0, Precision::GAMMA8);
+    let (node, _) = decoder.layer(0, layer, PixelFormat::RGBA8, PixelFormat::GRAY8, &Interrupt::NONE).unwrap().unwrap();
+    assert_eq!(decoder.budget, 0);
+    let surface = node.layer.surface().unwrap();
+    for (x, y) in [(0, 0), (63, 63), (64, 64), (255, 200), (511, 255)] {
+        assert_eq!(surface.pixel(x - 17, y + 19), [x as u8 as f32 / 255., y as u8 as f32 / 255., 57. / 255., 1.]);
+    }
+}
+
+#[test]
+#[ignore = "7680 x 7680 layer retains 225 MiB of native tiles"]
+fn opaque_rgb8_7680_square_fits_the_default_pixel_budget() {
+    let side = 7680;
+    let mut writer = W::new(11);
+    for value in [side, side, 0, 150] {
+        writer.u32(value);
+    }
+    writer.prop(17, &[1]); // RLE, one repeated run per channel and tile.
+    writer.end();
+    let layer = writer.slot();
+    writer.ptr(0);
+    writer.ptr(0);
+    let at = writer.out.len();
+    writer.patch(layer, at);
+    for value in [side, side, 0] {
+        writer.u32(value);
+    }
+    writer.string("Opaque RGB");
+    writer.end();
+    let raster = writer.slot();
+    writer.ptr(0);
+    let at = writer.out.len();
+    writer.patch(raster, at);
+    for value in [side, side, 3] {
+        writer.u32(value);
+    }
+    let level = writer.slot();
+    writer.ptr(0);
+    let at = writer.out.len();
+    writer.patch(level, at);
+    writer.u32(side);
+    writer.u32(side);
+    let tiles = (side / TILE).pow(2) as usize;
+    let first = writer.out.len() + (tiles + 1) * 8;
+    let data = [127, 16, 0, 17, 127, 16, 0, 31, 127, 16, 0, 57];
+    for n in 0..tiles {
+        writer.ptr(first + n * data.len());
+    }
+    writer.ptr(0);
+    for _ in 0..tiles {
+        writer.out.extend(data);
+    }
+
+    let result = crate::import("large-opaque.xcf", &writer.out).unwrap();
+    let surface = result.document.layers[0].surface().unwrap();
+    assert_eq!(surface.pixel(7679, 7679), [17. / 255., 31. / 255., 57. / 255., 1.]);
+    assert_eq!(surface.tile_count(), 900);
+}

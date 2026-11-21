@@ -8,6 +8,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+crc32fast = "1.5"
 serde_json = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

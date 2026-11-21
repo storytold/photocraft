@@ -194,10 +194,10 @@ pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, St
     let place = matches!(id, "file.placeEmbedded" | "file.placeLinked") && place_in_background(app);
     let started = if !app.background_jobs && !place { app.session.execute(id, params).map(Started::Done) } else { app.session.start(id, params) };
     match started {
-        Err(photocraft_engine::EngineError::EmbeddedHistoricalXcfOrder { layer, question })
+        Err(photocraft_engine::EngineError::EmbeddedHistoricalXcfOrder { layer, question, source_name })
             if !app.automation_input && app.session.authorize.is_none() && app.run_depth == 1 =>
         {
-            crate::dialogs::historical_replace::prompt_edit(app, layer, question)
+            crate::dialogs::historical_replace::prompt_edit(app, layer, source_name, question)
         }
         Err(error) => Err(error.to_string()),
         Ok(Started::Done(v)) => Ok(v),

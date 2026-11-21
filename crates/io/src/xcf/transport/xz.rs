@@ -20,12 +20,12 @@ fn vli(input: &mut &[u8]) -> Result<u64> {
         value |= u64::from(encoded & 127) << shift;
         if encoded < 128 {
             if shift != 0 && encoded == 0 {
-                return Err(invalid("noncanonical XZ Index integer"));
+                return Err(invalid("noncanonical XZ variable-length integer"));
             }
             return Ok(value);
         }
     }
-    Err(invalid("XZ Index integer is too long"))
+    Err(invalid("XZ variable-length integer is too long"))
 }
 
 fn pair(hash: &mut blake3::Hasher, unpadded: u64, uncompressed: u64) {
@@ -36,7 +36,11 @@ fn pair(hash: &mut blake3::Hasher, unpadded: u64, uncompressed: u64) {
 /// Read the already-decoded block's LZMA2 chunk framing. Each decoded chunk
 /// produced its declared output length. XZ's BCJ and Delta filters preserve that length.
 fn block_record(input: &mut &[u8], header_size: usize, check_size: usize, ctl: &Interrupt<'_>) -> Result<(u64, u64)> {
-    take(input, header_size)?;
+    let header = take(input, header_size)?;
+    let flags = header.get(1).ok_or_else(|| invalid("truncated XZ Block Header"))?;
+    let mut sizes = header.get(2..header_size.saturating_sub(4)).ok_or_else(|| invalid("truncated XZ Block Header"))?;
+    let declared_compressed = (flags & 0x40 != 0).then(|| vli(&mut sizes)).transpose()?;
+    let declared_uncompressed = (flags & 0x80 != 0).then(|| vli(&mut sizes)).transpose()?;
     let start = input.len();
     let mut uncompressed = 0u64;
     loop {
@@ -63,6 +67,12 @@ fn block_record(input: &mut &[u8], header_size: usize, check_size: usize, ctl: &
         uncompressed = uncompressed.checked_add(decoded as u64).ok_or_else(|| invalid("XZ block output size overflow"))?;
     }
     let data_size = start - input.len();
+    if declared_compressed.is_some_and(|declared| declared != data_size as u64) {
+        return Err(invalid("XZ Block Header compressed size does not match its data"));
+    }
+    if declared_uncompressed.is_some_and(|declared| declared != uncompressed) {
+        return Err(invalid("XZ Block Header uncompressed size does not match its data"));
+    }
     let padding = (4 - data_size % 4) % 4;
     take(input, padding + check_size)?;
     Ok((header_size as u64 + data_size as u64 + check_size as u64, uncompressed))

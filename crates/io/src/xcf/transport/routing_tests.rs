@@ -1,6 +1,7 @@
 use super::*;
 use crate::xcf::tests::{TestImage, TestLayer};
 use crate::{ImportCompression, ImportOptions, ImportPreflight, Route};
+use photocraft_testkit::xcf::{xz, xz_blocks, xz_with_header_sizes};
 use std::io::Write;
 
 fn reset_counts() {
@@ -23,60 +24,6 @@ fn wrappers(bytes: &[u8]) -> Vec<Vec<u8>> {
     let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     gzip.write_all(bytes).unwrap();
     vec![gzip.finish().unwrap(), crabz2::compress(bytes, crabz2::Level::default()), xz(bytes)]
-}
-
-/// Original uncompressed LZMA2 chunks in an XZ CRC32 stream; no encoder feature is needed.
-fn xz(bytes: &[u8]) -> Vec<u8> {
-    xz_blocks(&[bytes], |_, _| {})
-}
-
-fn xz_blocks(blocks: &[&[u8]], change_record: impl Fn(usize, &mut (usize, usize))) -> Vec<u8> {
-    fn vli(mut value: usize, out: &mut Vec<u8>) {
-        loop {
-            let byte = (value & 127) as u8;
-            value >>= 7;
-            out.push(if value == 0 { byte } else { byte | 128 });
-            if value == 0 {
-                break;
-            }
-        }
-    }
-    let mut out = b"\xfd7zXZ\0\0\x01".to_vec();
-    out.extend(crc32fast::hash(&[0, 1]).to_le_bytes());
-    let mut header = vec![2, 0, 0x21, 1, 0, 0, 0, 0];
-    header.extend(crc32fast::hash(&header).to_le_bytes());
-    let mut index = vec![0];
-    vli(blocks.len(), &mut index);
-    for (block, bytes) in blocks.iter().enumerate() {
-        out.extend(&header);
-        let mut data = Vec::new();
-        for chunk in bytes.chunks(65536) {
-            data.push(1);
-            data.extend(((chunk.len() - 1) as u16).to_be_bytes());
-            data.extend(chunk);
-        }
-        data.push(0);
-        out.extend(&data);
-        while !out.len().is_multiple_of(4) {
-            out.push(0);
-        }
-        out.extend(crc32fast::hash(bytes).to_le_bytes());
-        let mut record = (header.len() + data.len() + 4, bytes.len());
-        change_record(block, &mut record);
-        vli(record.0, &mut index);
-        vli(record.1, &mut index);
-    }
-    while !index.len().is_multiple_of(4) {
-        index.push(0);
-    }
-    index.extend(crc32fast::hash(&index).to_le_bytes());
-    out.extend(&index);
-    let mut footer = ((index.len() / 4 - 1) as u32).to_le_bytes().to_vec();
-    footer.extend([0, 1]);
-    out.extend(crc32fast::hash(&footer).to_le_bytes());
-    out.extend(footer);
-    out.extend(b"YZ");
-    out
 }
 
 #[test]
@@ -426,4 +373,17 @@ fn explicit_af_alias_keeps_upstream_precedence_except_for_real_xcf_magic() {
         crate::import_with_options_as("drawing.af", &gzip, Some("svg"), &ImportOptions::default()).unwrap().document.size,
         photocraft_geom::Size::new(1, 1)
     );
+}
+
+#[test]
+fn xz_validates_optional_block_sizes_independently_of_the_index() {
+    let source = plain();
+    for (compressed, uncompressed) in [(true, false), (false, true), (true, true)] {
+        let wrapped = xz_with_header_sizes(&source, |packed, output| (compressed.then_some(packed), uncompressed.then_some(output)));
+        assert!(crate::import("sizes.xcf.xz", &wrapped).is_ok());
+    }
+    for (compressed, uncompressed, message) in [(1, 0, "compressed size"), (0, 1, "uncompressed size")] {
+        let wrapped = xz_with_header_sizes(&source, |packed, output| (Some(packed + compressed), Some(output + uncompressed)));
+        assert!(matches!(crate::import("sizes.xcf.xz", &wrapped), Err(IoError::Xcf(error)) if error.contains("XZ Block Header") && error.contains(message)));
+    }
 }

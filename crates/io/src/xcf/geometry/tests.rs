@@ -1,6 +1,7 @@
 use super::super::source_geometry;
 use super::*;
 use crate::HistoricalXcfSampleOrder as Order;
+use photocraft_testkit::xcf::xz;
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -21,53 +22,6 @@ fn header(properties: &[(u32, Vec<u8>)]) -> Vec<u8> {
 
 fn dpi(x: f32, y: f32) -> (u32, Vec<u8>) {
     (19, [x.to_be_bytes(), y.to_be_bytes()].concat())
-}
-
-/// The same independent one-block, uncompressed LZMA2 framing used by the native transport
-/// tests: CRC32 block check, one index record and footer. No encoder feature is required.
-fn xz(bytes: &[u8]) -> Vec<u8> {
-    fn vli(mut value: usize, out: &mut Vec<u8>) {
-        loop {
-            let byte = (value & 127) as u8;
-            value >>= 7;
-            out.push(if value == 0 { byte } else { byte | 128 });
-            if value == 0 {
-                break;
-            }
-        }
-    }
-    assert!(!bytes.is_empty());
-    let mut out = b"\xfd7zXZ\0\0\x01".to_vec();
-    out.extend(crc32fast::hash(&[0, 1]).to_le_bytes());
-    let mut block_header = vec![2, 0, 0x21, 1, 0, 0, 0, 0];
-    block_header.extend(crc32fast::hash(&block_header).to_le_bytes());
-    out.extend(&block_header);
-    let mut data = Vec::new();
-    for chunk in bytes.chunks(65536) {
-        data.push(1);
-        data.extend(((chunk.len() - 1) as u16).to_be_bytes());
-        data.extend(chunk);
-    }
-    data.push(0);
-    out.extend(&data);
-    while !out.len().is_multiple_of(4) {
-        out.push(0);
-    }
-    out.extend(crc32fast::hash(bytes).to_le_bytes());
-    let mut index = vec![0, 1];
-    vli(block_header.len() + data.len() + 4, &mut index);
-    vli(bytes.len(), &mut index);
-    while !index.len().is_multiple_of(4) {
-        index.push(0);
-    }
-    index.extend(crc32fast::hash(&index).to_le_bytes());
-    out.extend(&index);
-    let mut footer = ((index.len() / 4 - 1) as u32).to_le_bytes().to_vec();
-    footer.extend([0, 1]);
-    out.extend(crc32fast::hash(&footer).to_le_bytes());
-    out.extend(footer);
-    out.extend(b"YZ");
-    out
 }
 
 fn wrappers(bytes: &[u8]) -> Vec<(&'static str, Vec<u8>)> {

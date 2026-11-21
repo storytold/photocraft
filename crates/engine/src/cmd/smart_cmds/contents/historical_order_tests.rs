@@ -466,3 +466,45 @@ fn historical_relink_confirmation_authenticates_the_picked_bytes() {
     s.execute(RELINK, json!({"layer":id.0,"path":picked,"historicalXcfSampleOrder":"big-endian","expectedSourceDigest":expected})).unwrap();
     assert_eq!(object(&s, id).historical_xcf_link_digest, Some(expected));
 }
+
+#[test]
+fn same_path_historical_relink_discards_an_in_flight_fingerprint() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("source.xcf");
+    std::fs::write(&path, fixture::historical_pixel(false)).unwrap();
+    let mut s = session();
+    let response = s.execute("file.placeLinked", json!({"path":path,"historicalXcfSampleOrder":"big-endian"})).unwrap();
+    let id = LayerId(response["layer"].as_u64().unwrap());
+    s.start_link_scan();
+    assert!(s.link_scan.is_some());
+    std::fs::write(&path, fixture::historical_pixel(true)).unwrap();
+    s.execute("layer.smartObjects.relinkToFile", json!({"layer":id.0,"path":path,"historicalXcfSampleOrder":"little-endian"})).unwrap();
+    assert!(s.link_scan.is_none());
+    assert!(s.poll_link_scan().is_none());
+    assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
+}
+
+#[test]
+fn a_psd_embedded_historical_source_without_pcxo_recovers_in_edit_contents() {
+    let bytes = fixture::historical_pixel(false);
+    let mut s = session();
+    crate::file_cmds::place_bytes(&mut s, "legacy.xcf", bytes.clone(), None, &json!({"smartObject":true,"historicalXcfSampleOrder":"big-endian"})).unwrap();
+    let native = s.active().unwrap().doc();
+    let encoded = photocraft_io::export(native, "legacy.psd", &Default::default()).unwrap().bytes;
+    let mut psd = craft_psd::PsdFile::from_bytes(&encoded).unwrap();
+    for layer in psd.layers_mut() {
+        layer.blocks.retain(|block| &block.key != b"pcXO");
+    }
+    let imported = photocraft_io::import("legacy.psd", &psd.to_bytes().unwrap()).unwrap().document;
+    let mut reopened = Session::new();
+    reopened.add_document(imported, None);
+    let id = reopened.active().unwrap().active_layer().unwrap();
+    let SmartSource::Linked { path } = &object(&reopened, id).source else { panic!("PSD embedded UUID") };
+    assert_eq!(photocraft_io::linked::embedded_payload(&reopened.active().unwrap().doc().metadata, path).unwrap().1, bytes);
+    assert!(matches!(reopened.execute("layer.smartObjects.editContents", json!({})),
+        Err(EngineError::EmbeddedHistoricalXcfOrder { source_name, .. }) if source_name == "legacy.xcf"));
+    reopened.execute("layer.smartObjects.editContents", json!({"historicalXcfSampleOrder":"big-endian"})).unwrap();
+    assert_child_pixels(&reopened);
+    assert!(reopened.set_active(0));
+    assert_eq!(object(&reopened, id).historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::BigEndian));
+}

@@ -1,6 +1,7 @@
 //! Transport cases use the existing published source pin, not private research fixtures.
 #![cfg(feature = "corpus")]
 
+use photocraft_testkit::xcf::xz_with_dictionary as xz;
 use std::io::Write;
 
 /// Read the pinned public layered XCF fixture, failing with the corpus-fetch instruction when it is unavailable.
@@ -19,55 +20,6 @@ fn gzip(bytes: &[u8]) -> Vec<u8> {
 /// Create a complete bzip2 member around independently selected source-stream bytes.
 fn bzip2(bytes: &[u8]) -> Vec<u8> {
     crabz2::compress(bytes, crabz2::Level::default())
-}
-
-// Independent wire writer from the XZ/LZMA2 specifications: an uncompressed LZMA2 chunk,
-// CRC32 check, one block and one index record. No XZ encoder feature is enabled.
-/// Build an independent one-block XZ stream with an uncompressed LZMA2 payload, checksums and caller-selected dictionary property.
-fn xz(bytes: &[u8], dictionary: u8) -> Vec<u8> {
-    /// Write the XZ index integer encoding without depending on an XZ encoder implementation.
-    fn vli(mut value: usize, out: &mut Vec<u8>) {
-        loop {
-            let mut byte = (value & 127) as u8;
-            value >>= 7;
-            if value != 0 {
-                byte |= 128;
-            }
-            out.push(byte);
-            if value == 0 {
-                break;
-            }
-        }
-    }
-    assert!(!bytes.is_empty() && bytes.len() <= 65536);
-    let mut out = b"\xfd7zXZ\0\0\x01".to_vec();
-    out.extend_from_slice(&crc32fast::hash(&[0, 1]).to_le_bytes());
-    let mut header = vec![2, 0, 0x21, 1, dictionary, 0, 0, 0];
-    header.extend_from_slice(&crc32fast::hash(&header).to_le_bytes());
-    out.extend_from_slice(&header);
-    let mut data = vec![1]; // Uncompressed LZMA2 chunk, dictionary reset.
-    data.extend_from_slice(&((bytes.len() - 1) as u16).to_be_bytes());
-    data.extend_from_slice(bytes);
-    data.push(0); // LZMA2 end marker.
-    out.extend_from_slice(&data);
-    while !out.len().is_multiple_of(4) {
-        out.push(0);
-    }
-    out.extend_from_slice(&crc32fast::hash(bytes).to_le_bytes());
-    let mut index = vec![0, 1];
-    vli(header.len() + data.len() + 4, &mut index);
-    vli(bytes.len(), &mut index);
-    while !index.len().is_multiple_of(4) {
-        index.push(0);
-    }
-    index.extend_from_slice(&crc32fast::hash(&index).to_le_bytes());
-    out.extend_from_slice(&index);
-    let mut footer = ((index.len() / 4 - 1) as u32).to_le_bytes().to_vec();
-    footer.extend_from_slice(&[0, 1]);
-    out.extend_from_slice(&crc32fast::hash(&footer).to_le_bytes());
-    out.extend_from_slice(&footer);
-    out.extend_from_slice(b"YZ");
-    out
 }
 
 /// Verify plain or compressed XCF signatures select layered native import even when the filename suggests another known format.

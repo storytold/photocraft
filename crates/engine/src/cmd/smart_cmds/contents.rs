@@ -162,6 +162,9 @@ fn report_source_change(s: &mut Session, id: LayerId, change: ChangedInstances) 
     // An old editor must not overwrite newly replaced/relinked contents on close. Keep its
     // document open, but the next Edit Contents opens the replacement source.
     s.smart_links.retain(|l| l.parent != parent || l.contents_id != contents_id);
+    // The path and layer IDs can survive a same-path relink, but an in-flight
+    // fingerprint belongs to the source before this transaction.
+    s.link_scan = None;
     // Every instance changed, not only `layer`: list them, so a caller doesn't repeat the
     // command once per copy (#4075).
     json!({"layer": id.0, "instances": layers.iter().map(|l| l.0).collect::<Vec<_>>(), "warnings": warnings})
@@ -295,14 +298,19 @@ pub(super) fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let sm = smart(&st.doc, id)?;
     let source = &sm.source;
-    let (name, bytes) = authorized_source_bytes(s, CMD, &st.doc.metadata, source)?.ok_or_else(|| other("the smart object's contents are unavailable"))?;
+    let embedded = embedded_source_bytes(&st.doc.metadata, source);
+    let is_embedded = embedded.is_some();
+    let (name, bytes) = match embedded {
+        Some(source) => source,
+        None => authorized_source_bytes(s, CMD, &st.doc.metadata, source)?.ok_or_else(|| other("the smart object's contents are unavailable"))?,
+    };
     photocraft_io::linked::check_historical_xcf_digest(sm.historical_xcf_link_digest, &bytes).map_err(EngineError::HistoricalXcfLinkChanged)?;
     let saved_order = sm.historical_xcf_sample_order;
     let recovered_order = if saved_order.is_none()
-        && matches!(source, SmartSource::Embedded { .. })
+        && is_embedded
         && let Some(question) = photocraft_io::historical_xcf_sample_order_request(&name, &bytes).map_err(|error| other(error.to_string()))?
     {
-        Some(explicit.ok_or(EngineError::EmbeddedHistoricalXcfOrder { layer: id, question })?)
+        Some(explicit.ok_or_else(|| EngineError::EmbeddedHistoricalXcfOrder { layer: id, question, source_name: name.clone() })?)
     } else {
         None
     };

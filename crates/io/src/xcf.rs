@@ -90,7 +90,7 @@ use samples::integer_samples;
 use samples::{Precision, row_samples};
 use wire::{Compression, Cursor, Prop, be_f32, be_i32, be_u32, decode_tile, props};
 #[cfg(test)]
-use wire::{parasites, props_version, rle_decode};
+use wire::{props_version, rle_decode};
 
 type Result<T> = std::result::Result<T, IoError>;
 
@@ -309,6 +309,20 @@ impl<'a> Image<'a> {
     /// Decode directly into the final native channel layout. Opaque source layers
     /// synthesize alpha in this allocation, rather than retaining a second full buffer.
     fn hierarchy_with_alpha(&mut self, hptr: usize, source_channels: usize, coverage: bool, synthesize_alpha: bool, ctl: &Interrupt<'_>) -> Result<Pixels> {
+        self.decode_hierarchy(hptr, source_channels, coverage, synthesize_alpha, None, ctl)
+    }
+
+    /// Decode through one XCF-sized tile buffer when the caller can write directly
+    /// into native tiles. Channels and layers needing model conversion retain their samples.
+    fn decode_hierarchy(
+        &mut self,
+        hptr: usize,
+        source_channels: usize,
+        coverage: bool,
+        synthesize_alpha: bool,
+        mut target: Option<(&mut Surface, Rect)>,
+        ctl: &Interrupt<'_>,
+    ) -> Result<Pixels> {
         ctl.check().map_err(|_| IoError::Cancelled)?;
         if synthesize_alpha && (coverage || !matches!((self.base_type, source_channels), (0, 3) | (1 | 2, 1))) {
             return Err(invalid("opaque alpha synthesis does not match the drawable color layout"));
@@ -329,7 +343,19 @@ impl<'a> Image<'a> {
         let channels = (if indexed { source_channels + 2 } else { source_channels }) + usize::from(synthesize_alpha);
         let count = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(channels)).ok_or_else(|| invalid("drawable overflow"))?;
         let bytes = count.checked_mul(4).ok_or_else(|| invalid("drawable overflow"))?;
-        self.budget = self.budget.checked_sub(bytes).ok_or_else(|| invalid("the layers exceed the 1 GiB pixel limit"))?;
+        let scratch_count = if target.is_some() { w.min(TILE) as usize * h.min(TILE) as usize * channels } else { count };
+        self.budget = self.budget.checked_sub(scratch_count * 4).ok_or_else(|| invalid("the layers exceed the 1 GiB pixel limit"))?;
+        if let Some((surface, rect)) = &target {
+            if (rect.width(), rect.height()) != (w, h) || surface.channels() != channels {
+                return Err(invalid("hierarchy dimensions or layout differ from its declared drawable"));
+            }
+            // Retain the logical sample charge as an admission floor. The full
+            // native tile allocation must also fit while the bounded scratch is live.
+            let tiles = usize::try_from(photocraft_raster::tile_storage_bytes(*rect, &surface.format())).unwrap_or(usize::MAX);
+            if tiles.max(bytes) > self.budget {
+                return Err(invalid("the layers exceed the 1 GiB pixel limit"));
+            }
+        }
         let lptr = c.ptr()?;
         let mut l = self.c.at(lptr);
         let (lw, lh) = (l.u32()?, l.u32()?);
@@ -349,7 +375,7 @@ impl<'a> Image<'a> {
         if l.ptr_wire()? != 0 {
             return Err(invalid("the tile list is missing its zero terminator"));
         }
-        let mut data = allocate_samples(count)?;
+        let mut data = allocate_samples(scratch_count)?;
         let mut underflow = false;
         let mut coverage_clamped = false;
         let mut palette_fallback = false;
@@ -362,12 +388,17 @@ impl<'a> Image<'a> {
             let (tw, th) = ((w - tx * TILE).min(TILE), (h - ty * TILE).min(TILE));
             let end = tiles.get(i + 1).copied().filter(|&n| n > at).unwrap_or(self.c.b.len());
             let raw = decode_tile(&self.c, at, end, self.compression, bpp, (tw * th) as usize)?;
+            let (first, row_stride) = if target.is_some() {
+                (0, tw as usize * channels)
+            } else {
+                (ty as usize * TILE as usize * stride + tx as usize * TILE as usize * channels, stride)
+            };
             if !indexed {
                 let samples = tw as usize * channels;
                 let row_bytes = tw as usize * bpp;
                 for py in 0..th as usize {
                     let src = py * row_bytes;
-                    let dst = (ty as usize * TILE as usize + py) * stride + tx as usize * TILE as usize * channels;
+                    let dst = first + py * row_stride;
                     let input = raw.get(src..src + row_bytes).ok_or_else(|| invalid("tile row is cut short"))?;
                     let output = data.get_mut(dst..dst + samples).ok_or_else(|| invalid("tile row exceeds its drawable"))?;
                     let decoded_samples = tw as usize * source_channels;
@@ -398,17 +429,15 @@ impl<'a> Image<'a> {
                         }
                     }
                 }
-                continue;
-            }
-            for py in 0..th as usize {
-                for px in 0..tw as usize {
-                    let src = (py * tw as usize + px) * bpp;
-                    let dst = (ty as usize * TILE as usize + py) * stride + (tx as usize * TILE as usize + px) * channels;
-                    let end = src.checked_add(bpp).ok_or_else(|| invalid("pixel byte range overflows"))?;
-                    let pixel = raw.get(src..end).ok_or_else(|| invalid("tile pixel is cut short"))?;
-                    let end = dst.checked_add(channels).ok_or_else(|| invalid("pixel sample range overflows"))?;
-                    let output = data.get_mut(dst..end).ok_or_else(|| invalid("tile pixel exceeds its drawable"))?;
-                    if indexed {
+            } else {
+                for py in 0..th as usize {
+                    for px in 0..tw as usize {
+                        let src = (py * tw as usize + px) * bpp;
+                        let dst = first + py * row_stride + px * channels;
+                        let end = src.checked_add(bpp).ok_or_else(|| invalid("pixel byte range overflows"))?;
+                        let pixel = raw.get(src..end).ok_or_else(|| invalid("tile pixel is cut short"))?;
+                        let end = dst.checked_add(channels).ok_or_else(|| invalid("pixel sample range overflows"))?;
+                        let output = data.get_mut(dst..end).ok_or_else(|| invalid("tile pixel exceeds its drawable"))?;
                         let idx = usize::from(*pixel.first().ok_or_else(|| invalid("indexed pixel has no palette index"))?);
                         let [r, g, b] = self.colormap.get(idx).copied().unwrap_or_else(|| {
                             palette_fallback = true;
@@ -425,6 +454,23 @@ impl<'a> Image<'a> {
                     }
                 }
             }
+            if let Some((surface, rect)) = &mut target {
+                // The tile lies within the checked full rectangle.
+                let x = rect.x0 + (tx * TILE) as i32;
+                let y = rect.y0 + (ty * TILE) as i32;
+                let tile = Rect::new(x, y, x + tw as i32, y + th as i32);
+                let samples = data.get(..tw as usize * th as usize * channels).ok_or_else(|| invalid("native tile samples are missing"))?;
+                surface.try_write_region(tile, samples).map_err(drawable_tile_error)?;
+            }
+        }
+        if let Some((surface, _)) = target {
+            surface.prune();
+            let stored = photocraft_raster::stored_tiles_bytes(surface.tile_count() as u64, &surface.format());
+            self.budget = self
+                .budget
+                .checked_sub(bytes.max(usize::try_from(stored).unwrap_or(usize::MAX)))
+                .ok_or_else(|| invalid("the layers exceed the 1 GiB pixel limit"))?;
+            data = Vec::new();
         }
         Ok(Pixels { width: w, height: h, channels, data, underflow, coverage_clamped, palette_fallback })
     }
@@ -434,13 +480,13 @@ impl<'a> Image<'a> {
     fn channel(&mut self, ptr: usize, expected: (u32, u32), layer_mask: bool, ctl: &Interrupt<'_>) -> Result<Channel<'a>> {
         let mut c = self.c.at(ptr);
         let (width, height) = (c.u32()?, c.u32()?);
-        if (width, height) != expected {
-            let (expected_width, expected_height) = expected;
-            let (channel, owner) = if layer_mask { ("layer mask", "layer") } else { ("image channel", "canvas") };
-            return Err(invalid(format!("{channel} dimensions {width}x{height} differ from the {owner}'s {expected_width}x{expected_height}")));
-        }
         let (name, name_limited) = self.metadata_name(&mut c, "Channel")?;
         let props = props(&mut c)?;
+        if (layer_mask || metadata::active(&props, 4)) && (width, height) != expected {
+            let (expected_width, expected_height) = expected;
+            let (channel, owner) = if layer_mask { ("layer mask", "layer") } else { ("saved selection", "canvas") };
+            return Err(invalid(format!("{channel} dimensions {width}x{height} differ from the {owner}'s {expected_width}x{expected_height}")));
+        }
         let hptr = c.ptr()?;
         let (effect_pointers, effects_limited) = if self.version >= 26 { self.optional_effect_pointers(&mut c, ctl)? } else { (Vec::new(), false) };
         let saved_base_type = self.base_type;
@@ -795,12 +841,7 @@ fn label(tag: u32) -> LabelColor {
 /// tiles that creates to `budget`: the drawable was admitted by its logical samples, and a
 /// narrow drawable (or one referenced by many layer pointers) stores far more in whole tiles.
 fn write_pixels(surface: &mut Surface, px: &Pixels, x: i32, y: i32, budget: &mut usize) -> Result<()> {
-    let w = i32::try_from(px.width).map_err(|_| invalid("drawable width overflow"))?;
-    let h = i32::try_from(px.height).map_err(|_| invalid("drawable height overflow"))?;
-    if w == 0 || h == 0 {
-        return Err(invalid("drawable dimensions must be positive"));
-    }
-    let rect = Rect::new(x, y, x.checked_add(w).ok_or_else(|| invalid("offset overflow"))?, y.checked_add(h).ok_or_else(|| invalid("offset overflow"))?);
+    let rect = drawable_rect(px.width, px.height, x, y)?;
     let expected = (px.width as usize)
         .checked_mul(px.height as usize)
         .and_then(|pixels| pixels.checked_mul(px.channels))
@@ -820,6 +861,15 @@ fn write_pixels(surface: &mut Surface, px: &Pixels, x: i32, y: i32, budget: &mut
     let added = surface.tile_count().saturating_sub(before) as u64;
     *budget = budget.saturating_sub(usize::try_from(photocraft_raster::stored_tiles_bytes(added, &surface.format())).unwrap_or(usize::MAX));
     Ok(())
+}
+
+fn drawable_rect(width: u32, height: u32, x: i32, y: i32) -> Result<Rect> {
+    let w = i32::try_from(width).map_err(|_| invalid("drawable width overflow"))?;
+    let h = i32::try_from(height).map_err(|_| invalid("drawable height overflow"))?;
+    if w == 0 || h == 0 {
+        return Err(invalid("drawable dimensions must be positive"));
+    }
+    Ok(Rect::new(x, y, x.checked_add(w).ok_or_else(|| invalid("offset overflow"))?, y.checked_add(h).ok_or_else(|| invalid("offset overflow"))?))
 }
 
 fn drawable_tile_error(error: AllocationError) -> IoError {
@@ -1378,7 +1428,6 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
             if effect.blend_space != 0 || effect.composite_space != 0 || effect.composite_mode != 0 || effect.clip || effect.region != 0 {
                 notes.push(format!("Native document blending/coverage applies; stored blend space {}, composite space {}, composite mode {}, clip {}, region {} are historical", effect.blend_space, effect.composite_space, effect.composite_mode, effect.clip, effect.region));
             }
-            let disposition = ConversionDisposition::RetainedUnapplied;
             let reason = if malformed { ConversionReason::InvalidOptionalData } else { ConversionReason::MissingMapping };
             let explanation = if malformed { "Effect contains invalid optional fields or arguments." } else { "This effect has no native mapping." };
             let native = format!("{explanation} Usable native owner content preserved. The effect was left unapplied. {}", notes.join("; "));
@@ -1386,7 +1435,7 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                 feature_code: "xcf.layer_effect".into(),
                 source,
                 targets: vec![NativeTargetRef { layer_id: Some(pending.layer), label: "Native owner".into(), ..Default::default() }],
-                disposition,
+                disposition: ConversionDisposition::SkippedNonessential,
                 reason,
                 source_description: format!(
                     "{} ({}) version {}; visible {}, opacity {}, owner bounds {:?}",
@@ -1400,7 +1449,7 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                 native_description: native,
                 attachments: Vec::new(),
             })?;
-            image.outcomes.property_with_reason(outcome, 45, effect.record_offset, effect.raw, reason)?;
+            image.outcomes.primary_property(outcome, 45, effect.record_offset, effect.raw, reason)?;
             if effect.mask_offset != 0 {
                 // This slice retains the envelope, not the referenced mask channel/tiles.
                 // A later mask adapter must replace this loss disclosure when it retains

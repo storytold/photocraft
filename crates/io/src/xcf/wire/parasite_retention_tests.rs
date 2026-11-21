@@ -12,33 +12,6 @@ fn record(out: &mut Vec<u8>, name: &str, data: &[u8]) {
 }
 
 #[test]
-fn parasite_collection_bounds_bookkeeping_and_keeps_final_duplicates_after_the_cap() {
-    let mut data = Vec::new();
-    record(&mut data, "keep", b"old");
-    for n in 0..200 {
-        record(&mut data, &format!("unused-{n}"), b"unused");
-    }
-    record(&mut data, "keep", b"final");
-    let result = collect_parasites(&data, 512, 1, &Interrupt::NONE).unwrap();
-    assert!(result.limited && !result.malformed);
-    assert_eq!(result.values, vec![("keep".into(), b"final".to_vec())]);
-    let zero = collect_parasites(&data, 0, MAX_PARASITES, &Interrupt::NONE).unwrap();
-    assert!(zero.limited && zero.values.is_empty());
-    record(&mut data, "keep", b"");
-    let result = collect_parasites(&data, 512, 1, &Interrupt::NONE).unwrap();
-    assert_eq!(result.values, vec![("keep".into(), Vec::new())], "zero-length final values replace old payloads");
-}
-
-#[test]
-fn oversized_final_duplicate_is_omitted_instead_of_restoring_stale_metadata() {
-    let mut data = Vec::new();
-    record(&mut data, "keep", b"old");
-    record(&mut data, "keep", &[42; 512]);
-    let result = collect_parasites(&data, 256, 1, &Interrupt::NONE).unwrap();
-    assert!(result.limited && result.values.is_empty());
-}
-
-#[test]
 fn borrowed_image_icc_scan_ignores_a_name_flood_and_preserves_empty_record_semantics() {
     let mut first = Vec::new();
     record(&mut first, "icc-profile", b"first property");
@@ -65,21 +38,29 @@ fn borrowed_image_icc_scan_ignores_a_name_flood_and_preserves_empty_record_seman
 }
 
 #[test]
-fn borrowed_and_owned_parasite_scans_cancel_mid_flood_and_distinguish_malformed_tails() {
+fn borrowed_parasite_scan_cancels_mid_flood_and_keeps_a_valid_prefix() {
     let mut data = Vec::new();
     for _ in 0..100 {
         record(&mut data, "same", b"value");
     }
     let polls = AtomicUsize::new(0);
     let cancel = || polls.fetch_add(1, Ordering::Relaxed) >= 17;
-    assert!(matches!(collect_parasites(&data, 1024, 1, &Interrupt::cancel_only(&cancel)), Err(crate::IoError::Cancelled)));
+    let scan = scan_parasites_with_work(&data, &mut ParasiteWork::default(), &Interrupt::cancel_only(&cancel), |_| Ok(true));
+    assert!(matches!(scan, Err(crate::IoError::Cancelled)));
     assert_eq!(polls.load(Ordering::Relaxed), 18);
     let mut valid = Vec::new();
     record(&mut valid, "kept", b"value");
+    let tail = valid.len();
     valid.extend_from_slice(&[0, 0]);
-    let result = collect_parasites(&valid, 1024, 1, &Interrupt::NONE).unwrap();
+    let mut seen = Vec::new();
+    let result = scan_parasites_with_work(&valid, &mut ParasiteWork::default(), &Interrupt::NONE, |record| {
+        seen.push((record.name, record.payload));
+        Ok(true)
+    })
+    .unwrap();
     assert!(result.malformed && !result.limited);
-    assert_eq!(result.values, vec![("kept".into(), b"value".to_vec())]);
+    assert_eq!(result.stopped_at, tail);
+    assert_eq!(seen, vec![(b"kept".as_slice(), b"value".as_slice())]);
 }
 
 #[test]

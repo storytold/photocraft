@@ -233,12 +233,26 @@ fn with_xcf_prefix_limit<T>(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit
     let strict = std::cell::Cell::new(true);
     let mut decoder = compressed_reader(kind, &mut input, &strict);
     let mut magic = [0; MAGIC.len()];
-    let result = decoder.read_exact(&mut magic);
-    ctl.check().map_err(|_| IoError::Cancelled)?;
-    if let Err(error) = result {
-        return if crate::is_xcf_input_name(name) { Err(invalid(format!("compressed XCF prefix: {error}"))) } else { Ok(None) };
+    let mut filled = 0;
+    while filled < magic.len() {
+        let target = magic.get_mut(filled..).ok_or_else(|| invalid("invalid XCF prefix length"))?;
+        match decoder.read(target) {
+            Ok(0) => break,
+            Ok(count) => filled += count,
+            Err(error) => {
+                check_decoder_error(&error, ctl)?;
+                return if crate::is_xcf_input_name(name) { Err(invalid(format!("compressed XCF prefix: {error}"))) } else { Ok(None) };
+            }
+        }
     }
-    if magic != MAGIC {
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    if filled != magic.len() || magic != MAGIC {
+        if kind == crate::ImportCompression::Gzip && name.to_ascii_lowercase().ends_with(".xcf") {
+            let mut prefix = magic.get(..filled).ok_or_else(|| invalid("invalid XCF prefix length"))?.to_vec();
+            if probe_svg(decoder.as_mut(), &mut prefix, ctl, SVG_PROBE_BYTES)? {
+                return Ok(None);
+            }
+        }
         return if crate::is_xcf_input_name(name) {
             Err(invalid("compressed content is not a plain XCF file; recursive wrapping is unsupported"))
         } else {

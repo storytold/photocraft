@@ -581,7 +581,7 @@ fn a_selection_must_match_the_canvas_even_when_its_hierarchy_matches_the_channel
     let mut bytes = channel_file(&[(4, Vec::new())], (2, 1));
     bytes[14..18].copy_from_slice(&1u32.to_be_bytes());
     let error = import("wrong-channel.xcf", &bytes, &Interrupt::NONE).err().unwrap();
-    assert!(error.to_string().contains("image channel dimensions 2x1 differ from the canvas's 1x1"), "{error}");
+    assert!(error.to_string().contains("saved selection dimensions 2x1 differ from the canvas's 1x1"), "{error}");
 }
 
 #[test]

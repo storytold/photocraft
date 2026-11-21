@@ -145,6 +145,23 @@ fn metadata_parasites<'a>(
     Ok((selected, limited, malformed))
 }
 
+#[test]
+fn metadata_parasite_selection_preserves_first_order_and_final_empty_values() {
+    let mut records = super::tests::W { out: Vec::new(), wide: false };
+    for (name, value) in [("gimp-comment", "old"), ("gimp-metadata", "xml"), ("gimp-comment", "")] {
+        records.string(name);
+        records.u32(0);
+        records.u32(value.len() as u32);
+        records.out.extend_from_slice(value.as_bytes());
+    }
+    records.out.extend_from_slice(&[0; 2]); // Malformed tail.
+    let props = [Prop { kind: 21, offset: 0, data: &records.out }];
+    let (selected, limited, malformed) = metadata_parasites(&props, &mut Default::default(), &photocraft_raster::Interrupt::NONE).unwrap();
+    assert!(malformed && !limited);
+    let winners: Vec<_> = selected.iter().filter_map(|slot| slot.data.map(|data| (slot.name, data))).collect();
+    assert_eq!(winners, [("gimp-comment", b"".as_slice()), ("gimp-metadata", b"xml".as_slice())]);
+}
+
 #[allow(clippy::too_many_arguments)] // Guide conversion shares the image's storage budget and report.
 fn image_guides(
     doc: &mut Document,

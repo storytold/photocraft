@@ -2335,8 +2335,7 @@ mod psd_open_confirmation_tests {
 }
 
 #[cfg(test)]
-#[path = "historical_xcf_open/fixture.rs"]
-pub(crate) mod historical_xcf_fixture;
+pub(crate) use photocraft_testkit::xcf as historical_xcf_fixture;
 
 #[cfg(test)]
 #[path = "jobs/historical_source_tests.rs"]

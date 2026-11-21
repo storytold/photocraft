@@ -33,6 +33,7 @@ const OMITTED_OWNER: usize = usize::MAX;
 
 struct Pending<'a> {
     entry: usize,
+    retained_owner: Option<usize>,
     property: u32,
     bytes: &'a [u8],
     reason: ConversionReason,
@@ -241,6 +242,23 @@ impl<'a> Outcomes<'a> {
 
     /// Record optional source configuration as an explicit outcome and defer copying its bytes until mandatory reporting fits.
     pub(super) fn property_with_reason(&mut self, owner: usize, property: u32, offset: usize, bytes: &'a [u8], reason: ConversionReason) -> Result<()> {
+        self.retain_property(owner, property, offset, bytes, reason, None)
+    }
+
+    /// The primary configuration controls whether the source owner can claim retention.
+    pub(super) fn primary_property(&mut self, owner: usize, property: u32, offset: usize, bytes: &'a [u8], reason: ConversionReason) -> Result<()> {
+        self.retain_property(owner, property, offset, bytes, reason, Some(owner))
+    }
+
+    fn retain_property(
+        &mut self,
+        owner: usize,
+        property: u32,
+        offset: usize,
+        bytes: &'a [u8],
+        reason: ConversionReason,
+        retained_owner: Option<usize>,
+    ) -> Result<()> {
         let owner = self.entry(owner)?;
         if self.truncated {
             return Ok(());
@@ -260,7 +278,7 @@ impl<'a> Outcomes<'a> {
             attachments: Vec::new(),
         })?;
         if index != OMITTED_OWNER && self.pending.len() < MAX_CONVERSION_ATTACHMENTS {
-            self.pending.push(Pending { entry: index, property, bytes, reason });
+            self.pending.push(Pending { entry: index, retained_owner, property, bytes, reason });
         }
         Ok(())
     }
@@ -356,6 +374,10 @@ impl<'a> Outcomes<'a> {
             entry.attachments.push(self.report.attachments.len() as u32);
             attachment.bytes = std::sync::Arc::new(pending.bytes.to_vec());
             self.report.attachments.push(attachment);
+            if let Some(owner) = pending.retained_owner {
+                let owner = self.report.entries.get_mut(owner).ok_or_else(|| invalid("missing XCF source outcome"))?;
+                owner.disposition = ConversionDisposition::RetainedUnapplied;
+            }
             self.retained = retained;
             self.encoded = self.encoded.saturating_add(count.0.saturating_sub(base)).saturating_add(16);
             payload_bytes = payload_bytes.saturating_add(pending.bytes.len());
@@ -428,6 +450,34 @@ mod tests {
         assert!(report.attachments.is_empty());
         let omitted = report.entries.iter().find(|e| e.feature_code == "xcf.source_property.999").unwrap();
         assert_eq!((omitted.disposition, omitted.reason), (ConversionDisposition::SkippedNonessential, ConversionReason::RetentionLimit));
+    }
+
+    #[test]
+    fn effect_owner_claims_retention_only_when_its_envelope_is_kept() {
+        let mut outcomes = Outcomes::new(26).unwrap();
+        let large = [7; 4096];
+        let mut ids = Vec::new();
+        for (ordinal, bytes) in [b"kept".as_slice(), large.as_slice()].into_iter().enumerate() {
+            let id = outcomes
+                .push(ConversionEntry {
+                    feature_code: "xcf.layer_effect".into(),
+                    source: source("layer_effect", ordinal, ordinal, "Effect", &[], None),
+                    targets: Vec::new(),
+                    disposition: ConversionDisposition::SkippedNonessential,
+                    reason: ConversionReason::MissingMapping,
+                    source_description: String::new(),
+                    native_description: String::new(),
+                    attachments: Vec::new(),
+                })
+                .unwrap();
+            outcomes.primary_property(id, 45, ordinal, bytes, ConversionReason::MissingMapping).unwrap();
+            ids.push(id);
+        }
+        outcomes.retained = MAX_CONVERSION_BYTES - 1024;
+        let ImportConversion::Report(report) = outcomes.finish().unwrap() else { panic!("typed report") };
+        assert_eq!(report.entries[ids[0]].disposition, ConversionDisposition::RetainedUnapplied);
+        assert_eq!(report.entries[ids[1]].disposition, ConversionDisposition::SkippedNonessential);
+        assert_eq!(report.attachments.len(), 1);
     }
 
     /// Exercise the attachment-count ceiling and require excess optional records to remain visibly omitted in a valid report.

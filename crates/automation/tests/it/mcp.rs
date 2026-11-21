@@ -10,8 +10,7 @@ use rmcp::{ClientHandler, RoleClient, ServiceExt};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-#[path = "../../../engine/src/historical_xcf_open/fixture.rs"]
-mod historical_xcf_fixture;
+use photocraft_testkit::xcf as historical_xcf_fixture;
 
 const CONTROL_TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 

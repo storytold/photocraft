@@ -58,8 +58,6 @@ pub(super) enum ArgumentValue<'a> {
     UInt(u32),
     Bool(bool),
     Float(f32),
-    /// Numeric graph literals are text, not an XCF binary32 argument.
-    Literal(f64),
     /// Portable graph text colors, with an explicit source transfer encoding.
     /// Never constructed by the binary XCF argument decoder.
     LiteralColor {
@@ -137,42 +135,6 @@ impl<'a> Config<'a> {
 }
 
 impl<'a> StoredEffect<'a> {
-    /// Resolve only the frozen compatibility aliases for one-time native mapping.
-    /// Keep `operation` itself unchanged for source identity and historical reporting.
-    pub fn canonical_operation(&self) -> &str {
-        match self.operation {
-            "gegl:abs" => "gegl:absolute",
-            "gegl:color-reduction" => "gegl:dither",
-            "gegl:invert" => "gegl:invert-linear",
-            "gegl:motion-blur" => "gegl:motion-blur-linear",
-            "gegl:little-planet" => "gegl:stereographic-projection",
-            operation => operation,
-        }
-    }
-    /// Construct a visible, full-strength synthetic stored effect with neutral envelope fields for independent mapping tests.
-    #[cfg(test)]
-    pub fn test(operation: &'a str, arguments: Vec<Argument<'a>>) -> Self {
-        Self {
-            name: "",
-            icon: "",
-            operation,
-            version: None,
-            arguments,
-            visible: true,
-            opacity: 1.0,
-            mode: 0,
-            blend_space: 0,
-            composite_space: 0,
-            composite_mode: 0,
-            clip: false,
-            region: 0,
-            mask_offset: 0,
-            record_offset: 0,
-            raw: &[],
-            unknown_properties: Vec::new(),
-            errors: Vec::new(),
-        }
-    }
     /// Resolve a unique named stored argument; duplicate source fields are invalid instead of silently overwritten.
     pub fn argument(&self, name: &str) -> std::result::Result<Option<&ArgumentValue<'a>>, String> {
         let mut matches = self.arguments.iter().filter(|arg| arg.name == name);
@@ -187,7 +149,6 @@ impl<'a> StoredEffect<'a> {
         match self.argument(name)? {
             None => Ok(None),
             Some(ArgumentValue::Float(value)) => Ok(Some(f64::from(*value))),
-            Some(ArgumentValue::Literal(value)) => Ok(Some(*value)),
             Some(ArgumentValue::Int(value)) => Ok(Some(f64::from(*value))),
             Some(ArgumentValue::UInt(value)) => Ok(Some(f64::from(*value))),
             _ => Err(format!("effect argument {name} is not a number")),
@@ -216,32 +177,5 @@ impl<'a> StoredEffect<'a> {
             Some(ArgumentValue::Config(value)) => Ok(Some(value)),
             _ => Err(format!("effect argument {name} is not configuration text")),
         }
-    }
-}
-
-#[derive(Debug)]
-pub(super) struct MappingFailure {
-    pub reason: photocraft_doc::import_conversion::ConversionReason,
-    pub message: String,
-}
-
-impl MappingFailure {
-    /// Classify an unavailable resource separately from an unfinished native mapping.
-    pub fn resource(message: impl Into<String>) -> Self {
-        Self { reason: photocraft_doc::import_conversion::ConversionReason::ResourceUnavailable, message: message.into() }
-    }
-}
-
-impl From<String> for MappingFailure {
-    /// Turn an owned adapter diagnostic into an explicit missing-mapping disposition for retained source data.
-    fn from(message: String) -> Self {
-        Self { reason: photocraft_doc::import_conversion::ConversionReason::MissingMapping, message }
-    }
-}
-
-impl From<&str> for MappingFailure {
-    /// Preserve a borrowed adapter diagnostic through the same owned missing-mapping conversion.
-    fn from(message: &str) -> Self {
-        message.to_owned().into()
     }
 }

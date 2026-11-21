@@ -64,3 +64,12 @@ fn svg_prefix_recognizes_a_large_drawing_without_validating_its_unread_body() {
     assert!(svg_prefix("invalid.svgz", &gzip(b"not SVG"), &Interrupt::NONE).unwrap().is_none());
     assert!(svg_prefix("source.svgz", &gzip(&[MAGIC, &vec![0; SVG_PROBE_BYTES]].concat()), &Interrupt::NONE).unwrap().is_none());
 }
+
+#[test]
+fn compressed_svg_under_a_plain_xcf_suffix_falls_back_to_svg_geometry() {
+    let wrapped = gzip(b"<svg xmlns='http://www.w3.org/2000/svg' width='40' height='30'><rect x='10' y='12' width='5' height='6'/></svg>");
+    assert!(crate::xcf::source_geometry("Drawing.XCF", &wrapped, &Interrupt::NONE).unwrap().is_none());
+    let geometry = crate::linked::source_geometry("Drawing.XCF", &wrapped, &Interrupt::NONE).unwrap();
+    assert_eq!(geometry.0, (40.0, 30.0));
+    assert!(crate::xcf::source_geometry("Drawing.xcf.gz", &wrapped, &Interrupt::NONE).is_err());
+}
