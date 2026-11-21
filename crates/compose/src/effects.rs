@@ -257,6 +257,9 @@ mod inner_shadow_noise_tests;
 mod tests;
 
 #[cfg(test)]
+mod outer_glow_range_one_tests;
+
+#[cfg(test)]
 mod satin_invert_contour_tests;
 #[cfg(test)]
 mod satin_size_one_tests;
