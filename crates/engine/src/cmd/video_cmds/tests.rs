@@ -493,7 +493,7 @@ fn edits_to_a_frame_survive_scrubbing_and_render() {
     let out = tmpdir("edited");
     s.execute("file.export.renderVideo", json!({"dir": out, "format": "png"})).unwrap();
     let stem = s.active().unwrap().doc.name.rsplit_once('.').map_or(s.active().unwrap().doc.name.clone(), |(a, _)| a.to_string());
-    let f1 = std::fs::read(format!("{out}/{stem}_0001.png")).unwrap();
+    let f1 = std::fs::read(format!("{out}/{stem}0001.png")).unwrap();
     let doc = photocraft_io::import("f1.png", &f1).unwrap().document;
     let flat = crate::file_cmds::flattened(&doc, doc.pixel_format());
     let q = flat.pixel(2, 2);
