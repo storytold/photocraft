@@ -110,9 +110,15 @@ impl Dictionary {
     }
 
     /// Up to `max` suggestions for a misspelled word, nearest first (then most common), with the
-    /// word's case pattern applied.
+    /// word's case pattern and possessive ending applied.
     pub fn suggest(&self, word: &str, max: usize) -> Vec<String> {
-        let w = normalize(word);
+        let normalized = normalize(word);
+        let (w, suffix) = normalized
+            .strip_suffix("'s")
+            .filter(|w| !w.is_empty())
+            .map(|w| (w, "'s"))
+            .or_else(|| normalized.strip_suffix("'S").filter(|w| !w.is_empty()).map(|w| (w, "'S")))
+            .unwrap_or((&normalized, ""));
         let lower = w.to_lowercase();
         let lc: Vec<char> = lower.chars().collect();
         let n = lc.len();
@@ -132,6 +138,10 @@ impl Dictionary {
                 continue;
             };
             for (cand, cc, lvl) in bucket {
+                // The input's ending is restored below; do not append it to another possessive.
+                if !suffix.is_empty() && cand.ends_with("'s") {
+                    continue;
+                }
                 if let Some(d) = distance(&lc, cc, max_d, &mut rows) {
                     found.push((d, !anagram(cand), *lvl, cand));
                 }
@@ -146,14 +156,15 @@ impl Dictionary {
             let mut forms: Vec<&String> = self.by_lower.get(cand).into_iter().flatten().collect();
             forms.sort_by_key(|f| f.chars().any(char::is_uppercase));
             for form in forms {
-                let s = if all_caps {
+                let mut s = if all_caps {
                     form.to_uppercase()
                 } else if first_cap {
                     capitalize(form)
                 } else {
                     form.clone()
                 };
-                if !out.contains(&s) && s != w {
+                s.push_str(suffix);
+                if !out.contains(&s) && s != normalized {
                     out.push(s);
                 }
             }
@@ -296,6 +307,35 @@ mod tests {
         assert_eq!(d.suggest("Wrold", 1), vec!["World".to_string()]);
         assert_eq!(d.suggest("brwon", 1), vec!["brown".to_string()]);
         assert_eq!(d.suggest("HELO", 5).first().map(|s| s.chars().all(|c| c.is_uppercase())), Some(true));
+    }
+
+    #[test]
+    fn possessive_suggestions_keep_the_ending_and_case() {
+        let d = Dictionary::from_list("#10\nworld\nworlds\nMonday\n");
+        for (word, want) in [("wrold's", "world's"), ("Wrold's", "World's"), ("WROLD'S", "WORLD'S"), ("WROLD's", "WORLD's"), ("Mnday's", "Monday's")] {
+            assert_eq!(d.suggest(word, 1), vec![want.to_string()], "{word}");
+        }
+        assert!(d.suggest("wrold's", 0).is_empty());
+        assert_eq!(d.suggest("wrold", 1), vec!["world".to_string()]);
+    }
+
+    #[test]
+    fn possessive_suggestions_normalize_apostrophes_without_doubling_the_ending() {
+        let d = Dictionary::from_list("world\nworld's\n");
+        for apostrophe in ['\'', '\u{2019}', '\u{2018}', '\u{02BC}'] {
+            assert_eq!(d.suggest(&format!("wrold{apostrophe}s"), 1), vec!["world's".to_string()]);
+        }
+        assert!(d.suggest("world's", 8).is_empty(), "a listed possessive must not gain a second ending");
+    }
+
+    #[test]
+    fn bundled_dictionary_suggests_a_correction_for_a_misspelled_possessive() {
+        let d = Dictionary::english();
+        let text = "The wrold's best photo.";
+        let found = d.misspellings(text, &none());
+        assert_eq!(found, vec![Misspelling { start: 4, end: 11, word: "wrold's".into() }]);
+        assert_eq!(d.suggest(&found[0].word, 1), vec!["world's".to_string()]);
+        assert!(d.check("world's", &none()));
     }
 
     #[test]
