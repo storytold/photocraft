@@ -36,6 +36,8 @@ pub(crate) const MATCH_COLOR_DESTINATION: &str = "__matchColorDestination";
 /// straightening angle reaches the dialog as 33.69 and not 33.7 (#12035).
 const ARBITRARY_ANGLE_DECIMALS: u32 = 2;
 
+const HDR_TONING: &str = "image.adjustments.hdrToning";
+
 /// Parameter keys measured in pixels (scaled for proxy previews).
 fn is_pixel_param(key: &str) -> bool {
     matches!(
@@ -175,7 +177,7 @@ pub const PREVIEWED: &[&str] = &[
     "image.adjustments.shadowsHighlights",
     "image.adjustments.replaceColor",
     MATCH_COLOR,
-    "image.adjustments.hdrToning",
+    HDR_TONING,
     "image.rotation.arbitrary",
     "image.mode.indexedColor",
     "image.mode.bitmap",
@@ -581,7 +583,12 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Result<DialogId, String> 
     // Photoshop titles the Scale Effects… dialog with the longer name (#14996).
     let title = if command == SCALE_EFFECTS { Label::from(tl!("Scale Layer Effects")) } else { title_of(spec.label) };
     let build = builder(app, command, title, params, reset);
-    let id = crate::dialogs::params::open_param(app, command, fields, captured, build);
+    // HDR Toning reopens at its factory defaults after every OK, as in the reference application (#14737).
+    let id = if command == HDR_TONING {
+        crate::dialogs::params::open_param_unsaved(app, command, fields, captured, build)
+    } else {
+        crate::dialogs::params::open_param(app, command, fields, captured, build)
+    };
     if command == MATCH_COLOR {
         reconcile_match_color(app);
     }
@@ -1326,6 +1333,9 @@ pub struct FilterPreviewKey {
 mod global_light_angle_range_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hdr_toning_reopen_tests;
 
 #[cfg(test)]
 mod multi_channel_dialog_tests {
