@@ -2454,13 +2454,13 @@ fn black_white_fractional_coefficients_refuse_lossy_export() {
             if id == "layer.setAdjustment" {
                 params["kind"] = json!("blackWhite");
             }
-            let action = Action::new("Fractional BW", vec![(id.into(), params.clone())]);
+            let action = Action::new("Fractional BW", vec![ActionStep::new(id, params.clone())]);
             let error = export("BW", &[&action], &[], false).unwrap_err();
             assert!(error.contains(id) && error.contains("skipUnsupported"), "{id} {key}: {error}");
             let (bytes, skipped) = export("BW", &[&action], &[], true).unwrap();
             assert_eq!(skipped, vec![Skipped { action: "Fractional BW".into(), step: 0, id: id.into() }]);
             assert!(import(&bytes).unwrap().actions[0].steps.is_empty());
-            assert_eq!(action.steps[0].1, params, "export must preserve the native action");
+            assert_eq!(action.steps[0].params, params, "export must preserve the native action");
         }
     }
 }
@@ -2479,12 +2479,13 @@ fn black_white_whole_coefficients_and_defaults_round_trip() {
             if id == "layer.setAdjustment" {
                 params["kind"] = json!("blackWhite");
             }
-            let action = Action::new("Whole BW", vec![(id.into(), params.clone())]);
+            let action = Action::new("Whole BW", vec![ActionStep::new(id, params.clone())]);
             let (bytes, skipped) = export("BW", &[&action], &[], false).unwrap();
             assert!(skipped.is_empty());
             let imported = import(&bytes).unwrap();
             assert!(imported.unsupported.is_empty() && imported.warnings.is_empty());
-            let (back_id, back) = &imported.actions[0].steps[0];
+            let step = &imported.actions[0].steps[0];
+            let (back_id, back) = (&step.command, &step.params);
             assert_eq!(back_id, id);
             for key in ["reds", "yellows", "greens", "cyans", "blues", "magentas"] {
                 assert_eq!(back.get(key).and_then(Value::as_f64), params.get(key).and_then(Value::as_f64), "{id} {key}: {back}");
@@ -3588,7 +3589,7 @@ fn image_size_explicit_sides_keep_precedence_over_percent() {
             assert_eq!((size.width, size.height), expected, "native {params} at {depth} bits");
 
             let mut recorded = Session::new();
-            recorded.actions.list.push(Action::new("Resize", vec![("image.imageSize".into(), params.clone())]));
+            recorded.actions.list.push(Action::new("Resize", vec![ActionStep::new("image.imageSize", params.clone())]));
             let before = recorded.actions.list.clone();
             let saved = recorded.execute("actions.save", json!({"action": "Resize"})).unwrap();
             assert_eq!(saved["skipped"], json!([]));
@@ -3614,7 +3615,7 @@ fn image_size_explicit_sides_do_not_hide_invalid_percent() {
         let mut native = Session::new();
         native.execute("file.new", json!({"width": 32, "height": 24})).unwrap();
         assert!(native.execute("image.imageSize", params.clone()).is_err(), "{params}");
-        let action = Action::new("Resize", vec![("image.imageSize".into(), params.clone())]);
+        let action = Action::new("Resize", vec![ActionStep::new("image.imageSize", params.clone())]);
         assert!(export("Size", &[&action], &[], false).is_err(), "{params}");
         let (_, skipped) = export("Size", &[&action], &[], true).unwrap();
         assert_eq!(skipped.len(), 1, "{params}");
@@ -3629,7 +3630,7 @@ fn image_size_dimensions_have_unique_atn_keys() {
         (json!({"width": 20, "height": 18, "percent": 50}), D::UnitFloat { unit: PX, value: 20.0 }, D::UnitFloat { unit: PX, value: 18.0 }, None),
         (json!({"percent": 50}), pct(50.0), pct(50.0), Some(true)),
     ] {
-        let action = Action::new("Resize", vec![("image.imageSize".into(), params.clone())]);
+        let action = Action::new("Resize", vec![ActionStep::new("image.imageSize", params.clone())]);
         let (bytes, skipped) = export("Size", &[&action], &[], false).unwrap();
         assert!(skipped.is_empty());
         let file = atn::parse(&bytes).unwrap();
