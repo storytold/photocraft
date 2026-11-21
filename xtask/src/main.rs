@@ -41,7 +41,7 @@ commands:
   ci [lint | archive [--gpu-shard] | build | tests [--from <dir> [--shard <k>]] [--gpu | --no-gpu] | <step>]
                   the CI gate: fmt --check, egui-fork, clippy -D warnings, layers, panel-commands, scorecard --check,
                   tests (nextest --profile ci), panic_hunt, doctests, wasm and the i18n-report, with --locked
-                  --features heif (stops at first failure). The gate splits it over its jobs: `lint` runs the
+                  --features heif,jxl (stops at first failure). The gate splits it over its jobs: `lint` runs the
                   steps that need no test build; `archive` builds the tests into the nextest archive at
                   $NEXTEST_ARCHIVE_FILE (the gate's build job, which then runs `doctest`), or with $NEXTEST_ARCHIVE_DIR one
                   archive per gate shard ($GATE_SHARDS of them, at $NEXTEST_ARCHIVE_DIR/<k>/$NEXTEST_ARCHIVE_NAME), each
@@ -235,7 +235,7 @@ fn wasm_set() -> Result<Vec<String>, String> {
 
 /// Optional features that official builds enable and the web app ships, also checked for wasm32:
 /// (package, feature).
-const WASM_FEATURES: &[(&str, &str)] = &[("photocraft-io", "heif")];
+const WASM_FEATURES: &[(&str, &str)] = &[("photocraft-io", "heif"), ("photocraft-io", "jxl")];
 
 /// One `cargo check` for the whole set: each crate is checked once, and `--keep-going` still
 /// reports every failing crate. Features unify across the set, so each crate is checked with the
@@ -290,9 +290,9 @@ fn cmd_test() -> Result<(), String> {
     run(c, &format!("cargo {tool} {}", TEST_TARGETS.join(" ")))
 }
 
-/// What the CI gate adds to every build: `--locked`, and the optional craft-heif decoder that
-/// official builds open HEIC photos with.
-const GATE_ARGS: [&str; 4] = ["--workspace", "--locked", "--features", "heif"];
+/// What the CI gate adds to every build: `--locked`, and the optional craft-heif and craft-jxl
+/// decoders that official builds open HEIC photos and JPEG XL images with.
+const GATE_ARGS: [&str; 4] = ["--workspace", "--locked", "--features", "heif,jxl"];
 
 /// Where a `ci` step runs when the gate splits the work over its jobs. `cargo xtask ci` alone runs
 /// every step, in the order of [`CI_STEPS`].
@@ -374,7 +374,7 @@ fn step_fmt(_: &CiOptions) -> Result<(), String> {
 fn step_clippy(_: &CiOptions) -> Result<(), String> {
     let mut c = cargo();
     c.arg("clippy").args(GATE_ARGS).args(["--all-targets", "--keep-going", "--", "-D", "warnings"]);
-    run(c, "cargo clippy --workspace --locked --features heif --all-targets --keep-going -- -D warnings")
+    run(c, "cargo clippy --workspace --locked --features heif,jxl --all-targets --keep-going -- -D warnings")
 }
 
 fn step_doctest(o: &CiOptions) -> Result<(), String> {
@@ -500,8 +500,19 @@ fn step_tests(o: &CiOptions, panic_hunt: bool) -> Result<(), String> {
     if o.partition.is_none() && o.selection == Selection::All && !nextest_available() {
         if panic_hunt {
             // `-- --ignored` across the workspace would run every ignored test, not only the hunt. The
-            // engine has no `heif` feature of its own; it reaches the decoder through photocraft-io.
-            c.args(["test", "-p", "photocraft-engine", "--locked", "--features", "photocraft-io/heif", "--test", "panic_hunt", "--", "--ignored"]);
+            // engine has no `heif` or `jxl` feature of its own; it reaches the decoders through photocraft-io.
+            c.args([
+                "test",
+                "-p",
+                "photocraft-engine",
+                "--locked",
+                "--features",
+                "photocraft-io/heif,photocraft-io/jxl",
+                "--test",
+                "panic_hunt",
+                "--",
+                "--ignored",
+            ]);
         } else {
             eprintln!("note: cargo-nextest is not installed, running cargo test (cargo install cargo-nextest --locked)");
             c.arg("test").args(test_build_args(&o.exclude));
@@ -820,7 +831,7 @@ mod ci_tests {
             selection: Selection::NoGpu,
             exclude: vec!["photocraft-web".into()],
         };
-        let build = "--workspace --locked --features heif --exclude photocraft-web --lib --bins --tests";
+        let build = "--workspace --locked --features heif,jxl --exclude photocraft-web --lib --bins --tests";
         let args = nextest_args(&options, false, Some("package(g)"), None).join(" ");
         assert_eq!(args, format!("nextest run --profile ci {build} --partition hash:2/3 -E not (package(g))"));
         let gpu = CiOptions { selection: Selection::Gpu, partition: None, ..options.clone() };

@@ -16,7 +16,8 @@ incorrect default 8-bit alpha header is corrected to explicitly describe
 16-bit alpha, with an independent decoder oracle checking alpha values.
 The bare codestream has no ICC, EXIF, XMP or DPI boxes; the export path
 converts tagged RGB to sRGB and surfaces metadata losses as fidelity warnings.
-JPEG XL opening remains under review in #2868.
+
+File › Open reads JPEG XL (`.jxl`, both the bare codestream and the container) in pure Rust through `jxl-oxide`, wrapped by the optional `craft-jxl` crate from craft-libs behind the `jxl` cargo feature (`cargo build -p photocraft --features jxl`): official builds include it; without it `.jxl` files are still recognised and opening one reports that JPEG XL support isn't included in that build. Modular and VarDCT images open at 8 or 16 bits per sample, or as 32-bit float, in gray or RGB with alpha. The first frame of an animation opens; CMYK files are refused as unsupported. The ICC profile, Exif and XMP come through, and the header's orientation is applied to the pixels. Brotli-compressed metadata boxes (`brob`) are bounded in `craft-jxl` before they are inflated, so a small file cannot expand into gigabytes of metadata; an over-large one is dropped and the pixels still open.
 
 ## WebP
 

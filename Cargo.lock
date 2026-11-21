@@ -1789,6 +1789,7 @@ dependencies = [
  "craft-dds",
  "craft-heif",
  "craft-jpeg",
+ "craft-jxl",
  "craft-metadata",
  "craft-tiff",
  "crc32fast",
@@ -1837,6 +1838,16 @@ name = "craft-jpeg"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=7d8b9615150cc8cdb70d2ca2c3ac085b42af99f3#7d8b9615150cc8cdb70d2ca2c3ac085b42af99f3"
 dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-jxl"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=7d8b9615150cc8cdb70d2ca2c3ac085b42af99f3#7d8b9615150cc8cdb70d2ca2c3ac085b42af99f3"
+dependencies = [
+ "brotli-decompressor 5.0.3",
+ "jxl-oxide",
  "thiserror 2.0.21",
 ]
 
