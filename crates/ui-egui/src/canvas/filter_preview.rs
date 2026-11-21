@@ -81,6 +81,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         // Previews edit what the command will: a targeted layer mask included (#780).
         let target = crate::dialogs::params::captured(app, &key);
         crate::filter_dialog::validate_match_color_destination(app, &key, &target, &fields).ok()?;
+        crate::filter_dialog::validate_lens_blur_document(app, &key, &target, fields.get("depthMap").and_then(serde_json::Value::as_str)).ok()?;
         let (cmd, params) = if crate::smart_filter_dialog::owns(&key) {
             crate::smart_filter_dialog::blend_command(app, &target, &dialog_fields).ok()?
         } else if crate::smart_filter_dialog::is_target(&target) {
