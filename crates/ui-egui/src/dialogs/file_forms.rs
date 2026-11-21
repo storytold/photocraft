@@ -13,7 +13,7 @@ use crate::PhotocraftApp;
 use crate::dialogs::params;
 use crate::menus::view_cmds::dialogs::label_of;
 
-const CONTACT_SHEET: &str = "file.automate.contactSheetII";
+const CONTACT_SHEET: &str = crate::dialogs::contact_sheet_ui::COMMAND;
 const CREATE_DROPLET: &str = "file.automate.createDroplet";
 const SCRIPT_EVENTS: &str = "file.scripts.scriptEventsManager";
 const PACKAGE: &str = "file.package";
@@ -62,37 +62,16 @@ fn names(names: &[String]) -> Vec<(String, Label)> {
 
 fn open_form(app: &mut PhotocraftApp, key: &'static str, title: &str, rows: Vec<Param>) -> DialogId {
     let title = Label::from(title.to_string());
+    // Contact Sheet II's Load…, Save… and Reset… (#13698).
+    let extra = if key == CONTACT_SHEET { crate::dialogs::contact_sheet_ui::footer_buttons() } else { Vec::new() };
     params::open_param(app, key, DialogFields::new(), Value::Null, move |fields: &mut DialogFields| {
-        ParamDialog::command(key, title.clone(), rows.clone()).values(Bind::bound(fields))
+        ParamDialog::command(key, title.clone(), rows.clone()).values(Bind::bound(fields)).extra_buttons(extra.clone())
     })
 }
 
 /// File › Automate › Contact Sheet II.
 pub(crate) fn open_contact_sheet(app: &mut PhotocraftApp) -> DialogId {
-    let rows = vec![
-        Param::new("input", tl!("Input"), ParamKind::text(default_dir(app))).browse(PathKind::Folder),
-        // Source Images: the folder, then Include Subfolders (on) and, right below it, Group Images by
-        // Folder (off, greyed while Include Subfolders is off).
-        Param::new("includeSubfolders", tl!("Include Subfolders"), ParamKind::bool(true)),
-        Param::new("groupByFolder", tl!("Group Images by Folder"), ParamKind::bool(false))
-            .enabled_when("includeSubfolders", true)
-            .tooltip(tl!("Images in subfolders will start on a new Contact Sheet")),
-        Param::new("units", tl!("Units"), ParamKind::choice(ids(&["inches", "cm", "pixels"]), Some("inches".into()))),
-        Param::new("width", tl!("Width"), ParamKind::number(Some(0.0), None, 8.0, 0.5, 2)),
-        Param::new("height", tl!("Height"), ParamKind::number(Some(0.0), None, 10.0, 0.5, 2)),
-        Param::new("resolution", tl!("Resolution"), ParamKind::number(Some(1.0), None, 300.0, 1.0, 0)),
-        Param::new("mode", tl!("Mode"), ParamKind::choice(ids(&["rgb", "gray", "cmyk", "lab"]), Some("rgb".into()))),
-        Param::new("depth", tl!("Depth"), ParamKind::int(Some(1), None, 8)),
-        Param::new("columns", tl!("Columns"), ParamKind::int(Some(1), None, 5)),
-        Param::new("rows", tl!("Rows"), ParamKind::int(Some(1), None, 6)),
-        Param::new("placeAcrossFirst", tl!("Place across first"), ParamKind::bool(true)),
-        Param::new("autoSpacing", tl!("Auto spacing"), ParamKind::bool(true)),
-        Param::new("rotateForBestFit", tl!("Rotate for best fit"), ParamKind::bool(false)),
-        Param::new("caption", tl!("Caption"), ParamKind::bool(true)),
-        Param::new("font", tl!("Font"), ParamKind::text(photocraft_text::fonts::DEFAULT_FAMILY)),
-        Param::new("fontSize", tl!("Font size"), ParamKind::number(Some(1.0), None, 12.0, 1.0, 1)),
-        Param::new("flatten", tl!("Flatten"), ParamKind::bool(false)),
-    ];
+    let rows = crate::dialogs::contact_sheet_ui::rows(app);
     open_form(app, CONTACT_SHEET, tl!("Contact Sheet II"), rows)
 }
 
