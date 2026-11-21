@@ -12,11 +12,19 @@
 //!   stays inside it (a rect union, not a trim to painted pixels);
 //! - a document without artboards, and one whose boards already cover the canvas, keep the canvas
 //!   exactly as today (guard tests: they pass before and after);
+//! - the boards define the exported area, so real content that lies outside every board is not in
+//!   the file (same rule as exporting artboards only), while content that only crosses into the
+//!   area still travels; a hidden board counts toward the area as much as a visible one;
+//! - Scale All exports every row from that area, not from the grown canvas;
 //! - the engine's canvas rule (#14565 owns any change there) and the Layer > Export As path
 //!   (#11479 and #13736 own picking a board or one file per board) are untouched.
 
 use super::*;
 
+use craft::{
+    host::{Picked, ScriptedFiles},
+    ui::patterns::form_dialogs::ScaleSize,
+};
 use egui_kittest::Harness;
 
 type AppHarness = Harness<'static, Box<PhotocraftApp>>;
@@ -24,11 +32,14 @@ type AppHarness = Harness<'static, Box<PhotocraftApp>>;
 /// The documents the mocked exporter was asked to encode, in order.
 type Sent = std::rc::Rc<std::cell::RefCell<Vec<Document>>>;
 
-/// An app whose exporter and writer accept everything and record what the exporter is handed.
-fn artboard_app(width: u32, height: u32) -> (Box<PhotocraftApp>, Sent) {
+/// An app whose exporter and writer accept everything and record what the exporter is handed, with
+/// the file dialogs held open so a test can answer them itself (Scale All asks for a folder).
+fn artboard_app_with_picks(width: u32, height: u32) -> (Box<PhotocraftApp>, Sent, Arc<ScriptedFiles>) {
     let sent: Sent = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let log = sent.clone();
+    let files = Arc::new(ScriptedFiles::held());
     let services = crate::Services {
+        files: Some(files.clone()),
         export: Some(Box::new(move |doc, _, _| {
             log.borrow_mut().push(doc.clone());
             Ok((Vec::new(), Vec::new()))
@@ -38,6 +49,12 @@ fn artboard_app(width: u32, height: u32) -> (Box<PhotocraftApp>, Sent) {
     };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
     app.run("file.new", json!({"width": width, "height": height, "background": "transparent"})).unwrap();
+    (app, sent, files)
+}
+
+/// As [`artboard_app_with_picks`], without the handle on its file dialogs.
+fn artboard_app(width: u32, height: u32) -> (Box<PhotocraftApp>, Sent) {
+    let (app, sent, _files) = artboard_app_with_picks(width, height);
     (app, sent)
 }
 
@@ -254,4 +271,76 @@ fn a_replayed_export_as_step_crops_the_same_boards_area() {
     replay(app.as_mut(), &json!({"path": "/out/x.png", "format": "png", "scale": 100})).unwrap();
     let png = exported(&sent);
     assert_eq!((png.size.width, png.size.height), (100, 100), "the replay matches what the dialog records (#7207)");
+}
+
+/// The designed rule for real content outside every board: the boards define the exported area, so
+/// what lies on the canvas ground outside them is not in the file - the same rule as exporting
+/// artboards only. A layer that crosses the area's edge keeps the part inside it; the part outside
+/// every board is dropped, and the document itself is untouched by that.
+#[test]
+fn content_outside_every_board_is_dropped_from_the_export() {
+    let (mut app, sent) = artboard_app(300, 200);
+    app.run("layer.new.artboard", json!({"rect": [0, 0, 100, 100], "background": "white"})).unwrap();
+    // A red band that crosses the board's bottom edge and goes on over the ground beside it.
+    app.run("shape.create", json!({"kind": "rect", "rect": [0, 80, 300, 40], "fill": "#ff0000"})).unwrap();
+    let on_canvas = app.session.active().unwrap().doc.clone();
+    assert_eq!(at(&on_canvas, 150, 90), [1.0, 0.0, 0.0, 1.0], "the document paints outside every board");
+
+    let mut h = harness(app);
+    let id = open_and_settle(&mut h);
+    assert_eq!(h.state().export_open.as_ref().unwrap().source, PixelSize::new(100, 100), "the board defines the area, not the canvas the band paints on");
+    sent.borrow_mut().clear();
+    export_with(&mut h, id, &png_options());
+    assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
+    let png = exported(&sent);
+    assert_eq!((png.size.width, png.size.height), (100, 100), "the band's ground outside the board is not in the file");
+    assert_eq!(at(&png, 50, 90), [1.0, 0.0, 0.0, 1.0], "the part that crosses into the area travels with it");
+    assert_eq!(at(&png, 50, 50), [1.0, 1.0, 1.0, 1.0], "the board's own white under the band");
+}
+
+/// Not measured by the issue; hidden boards currently count. `artboard_area` walks
+/// `doc.artboards()`, which lists every top-level board whatever its eye says, so hiding one board
+/// leaves the exported area as wide as if it were shown - while it paints nothing into it. Pinned
+/// as today's behaviour, not a claim that it is the rule to keep.
+#[test]
+fn a_hidden_board_still_widens_the_exported_area() {
+    let (mut app, sent) = artboard_app(300, 200);
+    let ids = three_boards(app.as_mut());
+    app.run("layer.setProps", json!({"layer": ids[2].0, "visible": false})).unwrap();
+    let mut h = harness(app);
+    let id = open_and_settle(&mut h);
+    assert_eq!(
+        h.state().export_open.as_ref().unwrap().source,
+        PixelSize::new(350, 150),
+        "the hidden board's rect still counts: the two shown ones alone would give 250 x 100"
+    );
+    sent.borrow_mut().clear();
+    export_with(&mut h, id, &png_options());
+    assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
+    let png = exported(&sent);
+    assert_eq!((png.size.width, png.size.height), (350, 150), "pin: hiding a board does not narrow the area");
+    assert_eq!(at(&png, 300, 100), [0.0, 0.0, 0.0, 0.0], "the hidden board widens the area but paints nothing in it");
+    assert_eq!(at(&png, 50, 50), [1.0, 1.0, 1.0, 1.0], "the boards that are shown still paint");
+}
+
+/// Scale All on an artboard document: each row scales the boards' area, not the canvas, because the
+/// batch gets the same `__area` field the single file does (#15028 and #15291 meeting).
+#[test]
+fn scale_all_exports_the_boards_area_at_every_row_size() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut app, sent, files) = artboard_app_with_picks(300, 200);
+    let ids = three_boards(app.as_mut());
+    delete_two(app.as_mut(), &ids);
+    let id = open(app.as_mut()).unwrap();
+    let ctx = app.ctx().clone();
+    let rows = [ScaleRow::new(ScaleSize::X1, ""), ScaleRow::new(ScaleSize::X2, "@2x")];
+    app.framework.dialogs.set_json_field(&ctx, id, "scale_all", serde_json::to_value(&rows).unwrap()).unwrap();
+    crate::dialogs::confirm(app.as_mut(), &ctx, id).expect("OK is enabled");
+    files.answer(Picked::Paths(vec![dir.path().to_path_buf()])).expect("a folder choice is open");
+    app.poll_file_dialog();
+    sent.borrow_mut().clear();
+    crate::dialogs::confirm(app.as_mut(), &ctx, id).expect("OK is enabled");
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    let sizes: Vec<(u32, u32)> = sent.borrow().iter().map(|d| (d.size.width, d.size.height)).collect();
+    assert_eq!(sizes, vec![(100, 100), (200, 200)], "one file per row, each at the board area scaled by that row");
 }
