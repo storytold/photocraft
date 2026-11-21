@@ -368,7 +368,7 @@ use fade::{can_fade, fade};
 pub use find_replace::find_matches;
 use find_replace::{find_replace, has_type_layer};
 pub(crate) use presets::current_path;
-pub use presets::{PRESET_FORMAT, PresetFile};
+pub use presets::{EMPTY_PATH, PRESET_FORMAT, PresetFile, ShapeRefusal, define_custom_shape_refusal};
 use presets::{can_define_shape, define_brush_preset, define_custom_shape, preset_manager};
 use purge::{can_purge_all, can_purge_clipboard, can_purge_histories, can_purge_undo, purge};
 
@@ -481,6 +481,10 @@ mod caf_new_layer_name_tests;
 #[cfg(test)]
 #[path = "edit_menu_cmds/find_replace_change_tests.rs"]
 mod find_replace_change_tests;
+
+#[cfg(test)]
+#[path = "edit_menu_cmds/define_custom_shape_empty_tests.rs"]
+mod define_custom_shape_empty_tests;
 
 #[cfg(test)]
 #[path = "edit_menu_cmds/find_replace_order_tests.rs"]

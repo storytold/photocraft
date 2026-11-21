@@ -68,6 +68,13 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             crate::monitor_status::read_now(app);
             dialog(crate::filter_dialog::open(app, "edit.colorSettings"))
         }
+        // A path with no area opens no dialog, as in Photoshop (#14295): an alert, or nothing for a subtract-only path.
+        "edit.defineCustomShape" if app.session.is_enabled(id) && photocraft_engine::edit_menu_cmds::define_custom_shape_refusal(&app.session).is_some() => {
+            if photocraft_engine::edit_menu_cmds::define_custom_shape_refusal(&app.session) == Some(photocraft_engine::edit_menu_cmds::ShapeRefusal::Empty) {
+                let _ = crate::dialogs::alerts::alert(app, tl!("Could not define the custom shape because the current path is empty."));
+            }
+            Some(Ok(json!({})))
+        }
         "edit.fade" | "edit.findAndReplaceText" | "edit.defineBrushPreset" | "edit.defineCustomShape" | "edit.autoAlignLayers" | "edit.autoBlendLayers" => {
             if !app.session.is_enabled(id) {
                 return Some(Err(photocraft_engine::commands::find(id)

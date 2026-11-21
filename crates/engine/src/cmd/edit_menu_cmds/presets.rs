@@ -43,8 +43,49 @@ pub(super) fn can_define_shape(s: &Session) -> std::result::Result<(), String> {
     current_path(&d.doc, d.active_layer, None).map(|_| ()).ok_or_else(|| "select a path or shape layer first".into())
 }
 
+/// What Define Custom Shape refuses to store, as in Photoshop (#14295).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShapeRefusal {
+    /// A path with no area (a single anchor, a straight line): an alert says so ([`EMPTY_PATH`]).
+    Empty,
+    /// A path whose every subpath subtracts: nothing happens, with no alert.
+    SubtractOnly,
+}
+
+/// The alert of a Define Custom Shape refused for a path with no area.
+pub const EMPTY_PATH: &str = "Could not define the custom shape because the current path is empty.";
+
+/// Why `path` can't be a custom shape, if it can't.
+fn refusal(path: &Path) -> Option<ShapeRefusal> {
+    if !path.subpaths.is_empty() && path.subpaths.iter().all(|sp| sp.op == photocraft_doc::PathOp::Subtract) {
+        return Some(ShapeRefusal::SubtractOnly);
+    }
+    // Each subpath is filled closed, so a straight open line encloses nothing either.
+    let area: f64 = photocraft_vector::flatten_path(path, 0.05)
+        .iter()
+        .map(|line| {
+            let pts = &line.pts;
+            (0..pts.len()).map(|i| pts[i].0 * pts[(i + 1) % pts.len()].1 - pts[(i + 1) % pts.len()].0 * pts[i].1).sum::<f64>().abs() / 2.0
+        })
+        .sum();
+    (area.is_nan() || area <= 1e-6).then_some(ShapeRefusal::Empty)
+}
+
+/// What Define Custom Shape would refuse for the path it would use on the active document (the menu
+/// checks this before opening its dialog). `None` when it would store a shape, or has no path.
+pub fn define_custom_shape_refusal(s: &Session) -> Option<ShapeRefusal> {
+    let d = s.active()?;
+    refusal(&current_path(&d.doc, d.active_layer, None)?)
+}
+
 pub(super) fn define_custom_shape(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
+    if let Some(r) = current_path(&st.doc, st.active_layer, p.get("path").and_then(Value::as_str)).as_ref().and_then(refusal) {
+        return Err(match r {
+            ShapeRefusal::Empty => EngineError::Other(EMPTY_PATH.into()),
+            ShapeRefusal::SubtractOnly => bad("edit.defineCustomShape", "the path only subtracts: there is no shape to define"),
+        });
+    }
     let path = current_path(&st.doc, st.active_layer, p.get("path").and_then(Value::as_str)).ok_or_else(|| bad("edit.defineCustomShape", "no such path"))?;
     let name = p
         .get("name")
