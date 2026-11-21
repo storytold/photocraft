@@ -936,3 +936,21 @@ bench = "pen_cursor_bench"
 row = "Pen painted cursor"
 budget_ms = 0.25
 enforce = false  # advisory until measured on the nightly runner
+
+[[scenario]]
+id = "P95"
+title = "Filter dialog preview publish at k 1, 36 MP (display + texels)"
+issue = 5772
+bench = "interactive_bench"
+row = "filter preview publish, k 1 (display + texels)"
+budget_ms = 16
+enforce = false  # 64 ms measured 2026-10-24 (worst step, RTX 4090 Laptop): the whole result is converted
+
+[[scenario]]
+id = "P96"
+title = "Filter dialog preview window texture at k 1, 36 MP (whole image)"
+issue = 5772
+bench = "interactive_bench"
+row = "filter preview window texture, k 1 (whole image)"
+budget_ms = 16
+enforce = false  # not measured since the framework's preview pane (2026-11-20): the window's texture is now the whole image, not its view (3.2 ms cropped, 2026-10-24)
