@@ -158,6 +158,17 @@ pub fn cell_order(pos: &[[f64; 2]], rest: &[[f64; 2]], row: usize) -> Vec<usize>
 
 /// Folds stack as `fold` says.
 fn mesh(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), fold: Fold, interp: Interp, ctl: &Interrupt) -> Surface {
+    // Clear pixels carry no colour once premultiplied, so they are not content whatever colour they are stored in
+    // (white and black copies of one shape must warp alike, #10639): with a clear default only the covered
+    // part of the rect is warped. An opaque default keeps the whole rect (see `warp_source_rect`).
+    // Only a stacked fold narrows: its clear parts composite to nothing, so leaving them out never
+    // changes what is drawn. In row order the last cell drawn replaces what is under it, so a clear
+    // cell still counts there (lens corrections and distortions warp as before). Callers that size a
+    // row-order rect by their content narrow it themselves (Perspective Warp, panorama and Auto-Align).
+    let src_rect = match fold {
+        Fold::Stack(_) => crate::transform::warp_source_rect(src, src_rect),
+        Fold::Rows => src_rect,
+    };
     if src_rect.is_empty() {
         let fmt = src.format();
         return Surface::new(PixelFormat::new(fmt.mode, fmt.sample, true));
@@ -1128,6 +1139,112 @@ mod tests {
     }
 
     #[test]
+    // A warp in place (stacked folds) leaves clear pixels out of the source rect; row order keeps
+    // them, as a clear cell drawn last still covers what is under it.
+    fn white_and_black_clear_pixels_warp_alike() {
+        let mut white = Surface::new(PixelFormat::RGBA8);
+        white.fill_rect(Rect::new(0, 0, 96, 96), &[1.0, 1.0, 1.0, 0.0]);
+        let mut black = Surface::new(PixelFormat::RGBA8);
+        black.fill_rect(Rect::new(0, 0, 96, 96), &[0.0, 0.0, 0.0, 0.0]);
+        for src in [&mut white, &mut black] {
+            src.fill_rect(Rect::new(32, 32, 64, 64), &[0.2, 0.4, 0.6, 1.0]);
+        }
+        assert_eq!(white.content_bounds(), Rect::new(0, 0, 96, 96));
+        assert_eq!(black.content_bounds(), Rect::new(32, 32, 64, 64));
+        let (sin, cos) = 15.0_f64.to_radians().sin_cos();
+        let rotate = |x: f64, y: f64| (48.0 + 0.6 * ((x - 48.0) * cos - (y - 48.0) * sin), 48.0 + 0.6 * ((x - 48.0) * sin + (y - 48.0) * cos));
+        for interp in [Interp::Nearest, Interp::Bilinear, Interp::Bicubic] {
+            let a = warp_mesh_surface_with(&white, white.content_bounds(), &rotate, Fold::IN_PLACE, interp, &Interrupt::NONE).unwrap();
+            let b = warp_mesh_surface_with(&black, black.content_bounds(), &rotate, Fold::IN_PLACE, interp, &Interrupt::NONE).unwrap();
+            let bounds = a.tile_bounds().union(&b.tile_bounds()).inflate(8);
+            for y in bounds.y0..bounds.y1 {
+                for x in bounds.x0..bounds.x1 {
+                    let aa = a.sample_channel(x, y, 3);
+                    let ba = b.sample_channel(x, y, 3);
+                    assert!((aa - ba).abs() <= 1e-4, "{interp:?} ({x}, {y}): white {aa}, black {ba}");
+                }
+            }
+        }
+    }
+
+    fn clear_surfaces() -> (Surface, Surface) {
+        let mut white = Surface::new(PixelFormat::RGBA8);
+        white.fill_rect(Rect::new(0, 0, 96, 96), &[1.0, 1.0, 1.0, 0.0]);
+        let mut black = Surface::new(PixelFormat::RGBA8);
+        black.fill_rect(Rect::new(0, 0, 96, 96), &[0.0, 0.0, 0.0, 0.0]);
+        for src in [&mut white, &mut black] {
+            src.fill_rect(Rect::new(32, 32, 64, 64), &[0.2, 0.4, 0.6, 1.0]);
+        }
+        (white, black)
+    }
+
+    fn assert_alpha_alike(a: &Surface, b: &Surface, what: &str) {
+        let bounds = a.tile_bounds().union(&b.tile_bounds()).inflate(8);
+        for y in bounds.y0..bounds.y1 {
+            for x in bounds.x0..bounds.x1 {
+                let (aa, ba) = (a.sample_channel(x, y, 3), b.sample_channel(x, y, 3));
+                assert!((aa - ba).abs() <= 1e-4, "{what} ({x}, {y}): {aa} vs {ba}");
+            }
+        }
+    }
+
+    #[test]
+    fn white_and_black_clear_pixels_transform_alike() {
+        use crate::transform::{Homography, warp_surface};
+        let (white, black) = clear_surfaces();
+        let (sin, cos) = 15.0_f64.to_radians().sin_cos();
+        let (a, b, c, d) = (0.6 * cos, -0.6 * sin, 0.6 * sin, 0.6 * cos);
+        let h = Homography([a, b, 48.0 - a * 48.0 - b * 48.0, c, d, 48.0 - c * 48.0 - d * 48.0, 0.0, 0.0, 1.0]);
+        for interp in [Interp::Nearest, Interp::Bilinear, Interp::Bicubic] {
+            let (Ok(x), Ok(y)) = (warp_surface(&white, white.content_bounds(), &h, interp), warp_surface(&black, black.content_bounds(), &h, interp)) else {
+                panic!("allocation");
+            };
+            assert_alpha_alike(&x, &y, &format!("{interp:?}"));
+        }
+    }
+
+    #[test]
+    fn tight_and_padded_source_rects_warp_alike() {
+        let (_, black) = clear_surfaces();
+        let (sin, cos) = 15.0_f64.to_radians().sin_cos();
+        let rotate = |x: f64, y: f64| (48.0 + 0.6 * ((x - 48.0) * cos - (y - 48.0) * sin), 48.0 + 0.6 * ((x - 48.0) * sin + (y - 48.0) * cos));
+        for interp in [Interp::Nearest, Interp::Bilinear, Interp::Bicubic] {
+            let tight = warp_mesh_surface_with(&black, black.content_bounds(), &rotate, Fold::IN_PLACE, interp, &Interrupt::NONE).unwrap();
+            let padded = warp_mesh_surface_with(&black, black.content_bounds().inflate(8), &rotate, Fold::IN_PLACE, interp, &Interrupt::NONE).unwrap();
+            assert_alpha_alike(&tight, &padded, &format!("{interp:?}"));
+        }
+    }
+
+    #[test]
+    fn a_selection_rect_keeps_a_hard_edge() {
+        use crate::transform::{Homography, warp_surface};
+        // Opaque red all over; the source rect cuts it. Nothing outside the rect may be pulled in.
+        let mut src = Surface::new(PixelFormat::RGBA8);
+        src.fill_rect(Rect::new(0, 0, 64, 64), &[1.0, 0.0, 0.0, 1.0]);
+        let rect = Rect::new(16, 16, 48, 48);
+        let (sin, cos) = 15.0_f64.to_radians().sin_cos();
+        let rotate = |x: f64, y: f64| (32.0 + (x - 32.0) * cos - (y - 32.0) * sin, 32.0 + (x - 32.0) * sin + (y - 32.0) * cos);
+        let h = Homography([cos, -sin, 32.0 - 32.0 * cos + 32.0 * sin, sin, cos, 32.0 - 32.0 * sin - 32.0 * cos, 0.0, 0.0, 1.0]);
+        for interp in [Interp::Nearest, Interp::Bilinear, Interp::Bicubic] {
+            let mesh = warp_mesh_surface(&src, rect, &rotate, interp);
+            let Ok(hom) = warp_surface(&src, rect, &h, interp) else { panic!("allocation") };
+            for (name, out) in [("mesh", &mesh), ("homography", &hom)] {
+                for y in -10..80 {
+                    for x in -10..80 {
+                        // Where this output pixel's centre comes from in the source.
+                        let (px, py) = (f64::from(x) + 0.5 - 32.0, f64::from(y) + 0.5 - 32.0);
+                        let (u, v) = (32.0 + px * cos + py * sin, 32.0 - px * sin + py * cos);
+                        let outside = (16.0 - u).max(u - 48.0).max(16.0 - v).max(v - 48.0);
+                        if outside >= 1.5 {
+                            let a = out.sample_channel(x, y, 3);
+                            assert!(a < 1e-4, "{name} {interp:?} ({x}, {y}): alpha {a}, {outside:.2} px outside the rect");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #[test]
     fn a_rotated_soft_edged_sprite_keeps_its_colour() {
         // #6203, as in Free Transform: the bicubic alpha overshoots past 1 next to the half
         // transparent edge, and must not lighten the colour.
@@ -1248,6 +1365,90 @@ mod tests {
         assert_eq!(o.pixel(0, 0), vec![1.0]);
         assert_eq!(o.pixel(12, 6), vec![0.0]);
         assert_eq!(o.pixel(5, 6), vec![1.0]);
+    }
+
+    /// A surface whose untouched pixels are opaque black, with a red patch on it.
+    fn opaque_default_surface() -> Surface {
+        let mut src = Surface::with_default(PixelFormat::RGBA8, &[0.0, 0.0, 0.0, 1.0]);
+        src.fill_rect(Rect::new(8, 8, 16, 16), &[1.0, 0.0, 0.0, 1.0]);
+        src
+    }
+
+    #[test]
+    fn an_opaque_default_survives_a_mesh_warp() {
+        let src = opaque_default_surface();
+        let identity = |x: f64, y: f64| (x, y);
+        for interp in [Interp::Nearest, Interp::Bilinear, Interp::Bicubic] {
+            let out = warp_mesh_surface(&src, Rect::new(0, 0, 32, 32), &identity, interp);
+            assert!((out.sample_channel(2, 2, 3) - 1.0).abs() < 1e-4, "{interp:?}: background alpha {}", out.sample_channel(2, 2, 3));
+            assert!((out.sample_channel(12, 12, 0) - 1.0).abs() < 1e-4, "{interp:?}: patch");
+        }
+    }
+
+    #[test]
+    fn an_opaque_default_survives_a_homography_warp() {
+        use crate::transform::{Homography, warp_surface};
+        let src = opaque_default_surface();
+        for interp in [Interp::Nearest, Interp::Bilinear, Interp::Bicubic] {
+            let Ok(out) = warp_surface(&src, Rect::new(0, 0, 32, 32), &Homography::IDENTITY, interp) else { panic!("allocation") };
+            assert!((out.sample_channel(2, 2, 3) - 1.0).abs() < 1e-4, "{interp:?}: background alpha {}", out.sample_channel(2, 2, 3));
+            assert!((out.sample_channel(12, 12, 0) - 1.0).abs() < 1e-4, "{interp:?}: patch");
+        }
+    }
+
+    /// A translucent default is content too: it keeps the whole rect, so the background keeps its half alpha.
+    #[test]
+    fn a_translucent_default_survives_a_mesh_warp() {
+        let mut src = Surface::with_default(PixelFormat::RGBA8, &[0.0, 0.0, 0.0, 0.5]);
+        src.fill_rect(Rect::new(8, 8, 16, 16), &[1.0, 0.0, 0.0, 1.0]);
+        let identity = |x: f64, y: f64| (x, y);
+        let out = warp_mesh_surface(&src, Rect::new(0, 0, 32, 32), &identity, Interp::Bilinear);
+        assert!((out.sample_channel(2, 2, 3) - 0.5).abs() < 0.01, "background alpha {}", out.sample_channel(2, 2, 3));
+    }
+
+    /// A source without alpha (a Background layer) keeps its default-coloured areas through a mesh warp.
+    #[test]
+    fn a_source_without_alpha_keeps_its_background_through_a_mesh_warp() {
+        let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, false);
+        let mut src = Surface::with_default(fmt, &[0.0, 0.0, 0.0]);
+        src.fill_rect(Rect::new(8, 8, 16, 16), &[1.0, 0.0, 0.0]);
+        let identity = |x: f64, y: f64| (x, y);
+        let out = warp_mesh_surface(&src, Rect::new(0, 0, 32, 32), &identity, Interp::Bilinear);
+        assert!((out.sample_channel(2, 2, 3) - 1.0).abs() < 1e-4, "background alpha {}", out.sample_channel(2, 2, 3));
+        assert!((out.sample_channel(12, 12, 0) - 1.0).abs() < 1e-4, "patch");
+    }
+
+    /// The stacked fold keeps the whole rect of a non-clear default too: opaque, half-translucent and alpha-less.
+    #[test]
+    fn a_stacked_fold_keeps_a_non_clear_defaults_rect_whole() {
+        let identity = |x: f64, y: f64| (x, y);
+        let rgb = PixelFormat::new(ColorMode::Rgb, SampleType::U8, false);
+        let cases = [
+            (opaque_default_surface(), 1.0),
+            (
+                {
+                    let mut s = Surface::with_default(PixelFormat::RGBA8, &[0.0, 0.0, 0.0, 0.5]);
+                    s.fill_rect(Rect::new(8, 8, 16, 16), &[1.0, 0.0, 0.0, 1.0]);
+                    s
+                },
+                0.5,
+            ),
+            (
+                {
+                    let mut s = Surface::with_default(rgb, &[0.0, 0.0, 0.0]);
+                    s.fill_rect(Rect::new(8, 8, 16, 16), &[1.0, 0.0, 0.0]);
+                    s
+                },
+                1.0,
+            ),
+        ];
+        for (src, alpha) in &cases {
+            for interp in [Interp::Nearest, Interp::Bilinear, Interp::Bicubic] {
+                let out = warp_mesh_surface_with(src, Rect::new(0, 0, 32, 32), &identity, Fold::IN_PLACE, interp, &Interrupt::NONE).unwrap();
+                assert!((out.sample_channel(2, 2, 3) - alpha).abs() < 0.01, "{interp:?}: background alpha {}", out.sample_channel(2, 2, 3));
+                assert!((out.sample_channel(12, 12, 0) - 1.0).abs() < 1e-4, "{interp:?}: patch");
+            }
+        }
     }
 
     /// Tiles are drawn on the thread pool, and the first one that meets a fold works out the
