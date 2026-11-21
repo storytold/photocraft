@@ -99,7 +99,9 @@ impl Session {
         // Nothing to look at: no links, or none that is followed. None of them is listed as
         // missing either, so a link added back isn't shown missing before its first look.
         if files.iter().all(|(_, file, _)| file.is_none()) {
-            self.link_missing.retain(|(d, _)| *d != doc);
+            if self.link_missing.iter().any(|(d, _)| *d == doc) {
+                self.link_missing.retain(|(d, _)| *d != doc);
+            }
             return;
         }
         let slot: LinkScan = Arc::default();
@@ -121,19 +123,26 @@ impl Session {
         self.link_missing.iter().filter(|(d, _)| *d == doc).map(|(_, p)| p.clone()).collect()
     }
 
+    /// Moves whenever the missing linked files ([`Self::missing_links`]) of any open document change.
+    pub fn missing_links_revision(&self) -> craft_tracked::Revision {
+        self.link_missing.revision()
+    }
+
     /// Remember which of document `doc`'s files in `now` were not there, and forget the files of
     /// closed documents. The web app has no files to look at, so it lists none.
     fn note_missing_links(&mut self, doc: u64, now: &[(String, Vec<u64>, Option<Stamp>)]) {
         let open: HashSet<u64> = self.documents().iter().map(|d| d.doc.id.0).collect();
-        self.link_missing.retain(|(d, _)| *d != doc && open.contains(d));
-        if cfg!(target_arch = "wasm32") {
-            return;
-        }
-        let document = self.active().and_then(|st| st.path.clone());
-        for (path, _, stamp) in now {
-            if stamp.is_none() && crate::doc_path::resolve_in(path, document.as_deref().map(std::path::Path::new)).is_ok() {
-                self.link_missing.insert((doc, path.clone()));
+        let mut missing: HashSet<(u64, String)> = self.link_missing.iter().filter(|(d, _)| *d != doc && open.contains(d)).cloned().collect();
+        if !cfg!(target_arch = "wasm32") {
+            let document = self.active().and_then(|st| st.path.clone());
+            for (path, _, stamp) in now {
+                if stamp.is_none() && crate::doc_path::resolve_in(path, document.as_deref().map(std::path::Path::new)).is_ok() {
+                    missing.insert((doc, path.clone()));
+                }
             }
+        }
+        if *self.link_missing != missing {
+            *self.link_missing = missing;
         }
     }
 
