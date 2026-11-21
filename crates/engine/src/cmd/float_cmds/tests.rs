@@ -187,6 +187,55 @@ fn copy_floats_a_duplicate_and_leaves_the_original() {
 }
 
 #[test]
+fn a_floating_copy_back_at_its_origin_looks_the_same_before_and_after_drop() {
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 80, "height": 60, "background": "transparent", "depth": depth})).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        s.edit("paint", |doc, _| {
+            doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(Rect::new(10, 10, 30, 30), &[1.0, 0.0, 0.0, 0.5]);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+        let sample = json!({"x": 20, "y": 20});
+        let original = s.execute("document.sampleColor", sample.clone()).unwrap();
+        let original_alpha = alpha(&s.active().unwrap().doc, id, 20, 20);
+        s.execute("select.float", json!({"dx": 30, "dy": 10, "copy": true})).unwrap();
+
+        let st = s.active().unwrap();
+        let moved = displayed(st, (0, 0)).unwrap();
+        assert_eq!(alpha(&moved, id, 50, 30), original_alpha, "{depth}-bit: the moved copy is visible");
+        let shown = displayed(st, (-30, -10)).unwrap();
+        assert_eq!(alpha(&shown, id, 20, 20), original_alpha, "{depth}-bit: preview at effective zero offset");
+        assert_eq!(alpha(&shown, id, 50, 30), 0.0, "{depth}-bit: the preview copy came back");
+
+        s.execute("select.float", json!({"dx": -30, "dy": -10})).unwrap();
+        let shown = displayed(s.active().unwrap(), (0, 0)).unwrap();
+        assert_eq!(alpha(&shown, id, 20, 20), original_alpha, "{depth}-bit: the copy returned");
+        assert_eq!(s.execute("document.sampleColor", sample).unwrap(), original, "{depth}-bit: an implicit drop leaves the same pixels");
+        assert!(floating(s.active().unwrap()).is_none(), "{depth}-bit: the sample command dropped the copy");
+    }
+}
+
+#[test]
+fn mixer_brush_loads_the_original_opacity_at_zero_float_offset() {
+    let (mut s, id) = session();
+    s.edit("soften", |doc, _| {
+        doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(Rect::new(10, 10, 30, 30), &[1.0, 0.0, 0.0, 0.5]);
+        Ok(())
+    })
+    .unwrap();
+    let sample = json!({"points": [[20, 20]], "size": 8});
+    s.execute("brush.mixer.sample", sample.clone()).unwrap();
+    let original = s.tools.mixer.spatial.clone().unwrap();
+    s.execute("select.float", json!({"copy": true})).unwrap();
+    s.execute("brush.mixer.sample", sample).unwrap();
+    assert!(s.tools.mixer.spatial.as_deref() == Some(original.as_slice()), "the Mixer Brush picked up the original opacity");
+    assert!(floating(s.active().unwrap()).is_some(), "sampling kept the copy floating");
+}
+
+#[test]
 fn float_with_the_mask_target_moves_the_mask_not_the_layer() {
     let (mut s, id) = session();
     s.edit("mask", |doc, _| {
