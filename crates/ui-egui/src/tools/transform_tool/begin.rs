@@ -760,6 +760,13 @@ pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return enter_type_warp(app, ctx);
     }
     let existing = app.session.active().and_then(|d| d.doc.layer(LayerId(layer)).and_then(photocraft_engine::warp_cmds::smart_warp_doc_space));
+    // Texels kept for the Redo of an undone Warp on a placed smart object (its map from the contents with them) are
+    // dead once Warp begins afresh: this is a new step, and the box may have moved since.
+    if let Some(pv) = app.transform_preview.as_mut()
+        && pv.other_texels.as_ref().is_some_and(|o| o.placed_warp.is_some())
+    {
+        pv.other_texels = None;
+    }
     // Back into Warp mode after leaving it: the texels it showed are kept.
     if untouched
         && let Some(w) = &existing

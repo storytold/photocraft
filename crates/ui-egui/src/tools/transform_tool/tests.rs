@@ -2667,3 +2667,66 @@ fn redo_of_a_box_mode_chosen_in_warp_holds_the_warp_again() {
         assert!((a - b).abs() < 1e-9, "{tripped_at:?} vs {plain_at:?}");
     }
 }
+
+/// A smart object with a stored warp: a turn of its box, Warp, and both undone. Warp afresh edits the stored warp as
+/// a fresh session does, not through the undone turn's map kept for a Redo (found by the sequence checker).
+#[test]
+fn warp_after_undoing_a_turned_warp_on_a_warped_smart_object_is_a_fresh_warp() {
+    fn warped() -> (Box<PhotocraftApp>, egui::Context, LayerId) {
+        let mut app = app_with_square(96, photocraft_geom::Rect::new(16, 16, 48, 40));
+        let ctx = app.ctx().clone();
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        begin(&mut app, &ctx).unwrap();
+        begin_warp(&mut app, &ctx).unwrap();
+        settle(&mut app);
+        let mut to = warp_mesh(&app);
+        to.points[6] += Vec2::new(4.0, -3.0);
+        pull_mesh(&mut app, 1, to);
+        settle(&mut app);
+        commit(&mut app);
+        land_jobs(&mut app);
+        begin(&mut app, &ctx).unwrap();
+        (app, ctx, id)
+    }
+    fn ending(app: &mut PhotocraftApp, ctx: &egui::Context, id: LayerId) -> (Warp, [f64; 6]) {
+        begin_warp(app, ctx).unwrap();
+        settle(app);
+        super::begin::reconcile_held(app);
+        let mut to = warp_mesh(app);
+        to.points[5] += Vec2::new(-3.0, 2.0);
+        pull_mesh(app, 9, to);
+        settle(app);
+        commit(app);
+        land_jobs(app);
+        assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+        let LayerContent::Smart(sm) = &app.session.active().unwrap().doc.layer(id).unwrap().content else { panic!("a smart object") };
+        (sm.warp.clone().expect("a stored warp"), placement_of(app, id))
+    }
+    let (mut fresh, ctx, id) = warped();
+    let want = ending(&mut fresh, &ctx, id);
+
+    let (mut app, ctx, id) = warped();
+    turn_box(&mut app, -0.07);
+    settle(&mut app);
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    super::begin::reconcile_held(&mut app);
+    for _ in 0..8 {
+        if open(&app).session.is_untouched() {
+            break;
+        }
+        let _ = intercept(&mut app, "edit.undo");
+        super::begin::reconcile_held(&mut app);
+    }
+    assert!(open(&app).session.is_untouched(), "every step undone");
+    let got = ending(&mut app, &ctx, id);
+    assert_eq!(got.0.bounds, want.0.bounds, "stored over the contents' box");
+    for (a, b) in got.1.iter().zip(want.1) {
+        assert!((a - b).abs() < 1e-9, "placement {:?} vs {:?}", got.1, want.1);
+    }
+    let (a, b) = (got.0.mesh.as_ref().expect("a mesh"), want.0.mesh.as_ref().expect("a mesh"));
+    for (p, q) in a.points.iter().zip(&b.points) {
+        assert!((p[0] - q[0]).abs() < 1e-6 && (p[1] - q[1]).abs() < 1e-6, "{p:?} vs {q:?}");
+    }
+}
