@@ -1,7 +1,8 @@
 use super::*;
 use crate::canvas::{ToolEvent, tool_event};
 use egui_kittest::kittest::Queryable;
-use photocraft_doc::LayerId;
+use photocraft_color::{Color, ColorMode, SampleType};
+use photocraft_doc::{Document, LayerId, Size};
 
 fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) {
     let m = egui::Modifiers::NONE;
@@ -32,6 +33,39 @@ fn app() -> Box<PhotocraftApp> {
     app.ui.extras.snap = false;
     app.ui.tool = Tool::Frame;
     app
+}
+
+/// A Frame-tool app over a document in `mode`, for the mode refusals (#13886).
+fn app_with_mode(mode: ColorMode) -> PhotocraftApp {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.add_document(Document::with_background("mode", Size::new(400, 300), mode, SampleType::U8, Color::rgb(0.5, 0.5, 0.5)), None);
+    app.sync_views();
+    app.ui.extras.snap = false;
+    app.ui.tool = Tool::Frame;
+    app
+}
+
+/// Bitmap and Indexed Color documents make no frame: a pointer drag leaves no layer, History
+/// step, preview or alert. Removing the press gate must fail this even with the engine guard.
+#[test]
+fn bitmap_and_indexed_drags_make_no_frame_preview_or_alert() {
+    for mode in [ColorMode::Bitmap, ColorMode::Indexed] {
+        let mut app = app_with_mode(mode);
+        let (layers, steps) = {
+            let st = app.session.active().unwrap();
+            (st.doc.layers.len(), st.history.past_len())
+        };
+        let m = egui::Modifiers::NONE;
+        crate::canvas::testing::frame(&mut app);
+        tool_event(&mut app, ToolEvent::Down { x: 20., y: 30., pressure: 1. }, m);
+        tool_event(&mut app, ToolEvent::Move { x: 120., y: 110., pressure: 1. }, m);
+        assert!(app.frame_preview.is_none(), "{mode:?}: no preview");
+        tool_event(&mut app, ToolEvent::Up { x: 120., y: 110. }, m);
+        let st = app.session.active().unwrap();
+        assert_eq!(st.doc.layers.len(), layers, "{mode:?}: no layer");
+        assert_eq!(st.history.past_len(), steps, "{mode:?}: no History step");
+        assert!(!app.ui.status_error, "{mode:?}: no alert: {}", app.ui.status);
+    }
 }
 
 /// Adds a red raster layer under the next frame's drawn rect and makes it the active layer.
