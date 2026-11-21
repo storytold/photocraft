@@ -288,11 +288,20 @@ pub fn selective_color_weights(c: [f32; 3]) -> [f32; 9] {
 }
 
 /// Photoshop Selective Color: each range shifts the cyan, magenta and yellow ink (1 − R, G, B) by
-/// its percentage, plus its black percentage on every ink, weighted by how much the colour belongs
-/// to the range. Relative mode scales the shift by the ink already present (so it can't tint pure
-/// white). Absolute mode scales it by the room the ink has: adding ink by min(1, 2 × (1 − ink)),
-/// removing it by min(1, 2 × ink), so Neutrals Cyan +50 darkens red 64 by 32, not 64 (all 72
-/// absolute range × ink cases within 1 level of Photoshop 27.11).
+/// its percentage, weighted by how much the colour belongs to the range. Relative mode scales the
+/// shift by the ink already present (so it can't tint pure white). Absolute mode scales it by the
+/// room the ink has: adding ink by min(1, 2 × (1 − ink)), removing it by min(1, 2 × ink), so
+/// Neutrals Cyan +50 darkens red 64 by 32, not 64 (all 72 absolute range × ink cases within 1
+/// level of Photoshop 27.11).
+///
+/// The black percentage `k` is not more ink on each channel. Each range moves every channel down
+/// by `k` (Absolute) or `k` × the channel's ink (Relative), clipped to 0..1 within the range, and
+/// mixes that move in by its weight. So Black +100 scales a colour by 1 − weight (Reds +100 takes
+/// (0.9, 0.1, 0.1) to × 0.2), Black +50 on channels above 0.5 subtracts evenly, and Black −100 on
+/// the six colour ranges with +100 on Whites, Neutrals and Blacks lands on the grey max − min
+/// (maintainer's reference measurements on #11409, 8- and 16-bit sRGB: Black ±100 and +50, within
+/// 1 level; Relative greys sit up to 1 level darker). Black together with cyan, magenta or yellow
+/// in one range is unmeasured; the two shifts add.
 pub fn selective_color(c: [f32; 3], relative: bool, adj: &[[f32; 4]; 9]) -> [f32; 3] {
     let w = selective_color_weights(c);
     let mut delta = [0.0f32; 3];
@@ -303,14 +312,18 @@ pub fn selective_color(c: [f32; 3], relative: bool, adj: &[[f32; 4]; 9]) -> [f32
         let a = adj[r].map(|v| v / 100.0);
         for i in 0..3 {
             let ink = 1.0 - c[i];
-            let d = a[i] + a[3];
-            let d = if relative {
+            let d = a[i];
+            let mut d = if relative {
                 d * ink
             } else if d > 0.0 {
                 d * (2.0 * (1.0 - ink)).min(1.0)
             } else {
                 d * (2.0 * ink).min(1.0)
             };
+            if a[3] != 0.0 {
+                let k = if relative { a[3] * ink } else { a[3] };
+                d += c[i] - (c[i] - k).clamp(0.0, 1.0);
+            }
             delta[i] += d * wr;
         }
     }
