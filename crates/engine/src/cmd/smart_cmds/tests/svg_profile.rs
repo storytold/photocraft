@@ -38,9 +38,26 @@ fn svg_smart_rerender_checks_embedded_raster_dimensions() {
 /// File › Open does, under the SVG import's own retained-pixel budget.
 #[test]
 fn svg_smart_contents_and_stack_open_many_shapes_as_layers() {
-    let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"256\" height=\"256\">{}</svg>", "<rect width=\"256\" height=\"256\"/>".repeat(400));
+    // A quarter of the frames are white and the rest black, so the mean (a quarter grey) differs
+    // from the first frame, the median, the minimum and the maximum.
+    let svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"256\" height=\"256\">{}{}</svg>",
+        "<rect width=\"256\" height=\"256\" fill=\"#fff\"/>".repeat(100),
+        "<rect width=\"256\" height=\"256\"/>".repeat(300)
+    );
     assert_eq!(decode_source("Clipboard.svg", svg.as_bytes()).unwrap().layers.len(), 400);
-    assert!(stack_image("Clipboard.svg", svg.as_bytes(), PixelFormat::RGBA32F, photocraft_doc::StackMode::Mean).is_ok());
+    let stacked = stack_image("Clipboard.svg", svg.as_bytes(), PixelFormat::RGBA32F, photocraft_doc::StackMode::Mean).unwrap();
+    let square = Rect::from_xywh(0, 0, 256, 256);
+    assert_eq!(stacked.bounds, square);
+    assert_eq!(stacked.surface.content_bounds(), square);
+    let px = stacked.surface.pixel(128, 128);
+    assert_eq!(px[3], 1.0, "every frame is opaque");
+    // The mean is a quarter grey in the SVG's 8-bit sRGB (64 of 255), which the 32-bit surface
+    // holds as linear light.
+    let quarter = ((64.0 / 255.0 + 0.055) / 1.055f32).powf(2.4);
+    for &c in &px[..3] {
+        assert!((c - quarter).abs() < 1e-4, "the mean of 100 white and 300 black frames is {quarter}, got {c}");
+    }
 }
 
 /// Stack Mode renders a float frame per layer: an SVG whose shapes would need more than 1 GiB of
@@ -85,7 +102,13 @@ fn convert_to_layers_unpacks_full_canvas_shapes_in_a_4k_document() {
     let id = LayerId(placed["layer"].as_u64().unwrap());
     let LayerContent::Smart(sm) = &mut Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(id).unwrap().content else { panic!("smart") };
     sm.transform = Affine { m: [10.0, 0.0, 0.0, 10.0, 0.0, 0.0] };
-    s.execute("layer.smartObjects.convertToLayers", json!({"layer": id.0})).unwrap();
+    let r = s.execute("layer.smartObjects.convertToLayers", json!({"layer": id.0})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    let shapes = doc.layer(LayerId(r["layer"].as_u64().unwrap())).unwrap().children().expect("Convert to Layers makes a group");
+    assert_eq!(shapes.len(), 4, "the four shapes become four layers");
+    for (i, shape) in shapes.iter().enumerate() {
+        assert_eq!(shape.surface().map(Surface::content_bounds), Some(doc.bounds()), "shape {i} is scaled to fill the 4K canvas");
+    }
 }
 
 /// An SVG with an embedded image the bounded resolver can't read (an unknown MIME type) places

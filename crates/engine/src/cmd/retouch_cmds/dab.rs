@@ -802,28 +802,8 @@ impl LiveDab {
 }
 
 #[cfg(test)]
-#[path = "dodge_refuses_indexed_tests.rs"]
-mod dodge_refuses_indexed_tests;
-
-#[cfg(test)]
-#[path = "sharpen_refuses_indexed_tests.rs"]
-mod sharpen_refuses_indexed_tests;
-
-#[cfg(test)]
-#[path = "burn_refuses_indexed_tests.rs"]
-mod burn_refuses_indexed_tests;
-
-#[cfg(test)]
-#[path = "sponge_refuses_indexed_tests.rs"]
-mod sponge_refuses_indexed_tests;
-
-#[cfg(test)]
-#[path = "blur_refuses_indexed_tests.rs"]
-mod blur_refuses_indexed_tests;
-
-#[cfg(test)]
-#[path = "smudge_refuses_indexed_tests.rs"]
-mod smudge_refuses_indexed_tests;
+#[path = "refuses_indexed_tests.rs"]
+mod refuses_indexed_tests;
 
 #[cfg(test)]
 #[path = "smudge_mode_tests.rs"]
