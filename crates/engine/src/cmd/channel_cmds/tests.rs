@@ -1282,3 +1282,29 @@ fn merge_channels_waits_for_three_grayscale_documents() {
     s.execute("channel.merge", json!({"mode": "lab"})).unwrap();
     assert_eq!(s.documents().len(), 2, "the three of one size merged; the other is left");
 }
+
+/// Merge Spot Channel prints over the image flattened onto white paper, as the preview shows it:
+/// transparent pixels become paper, half-transparent ones their colour over white, and the
+/// merged image is opaque.
+#[test]
+fn merge_spot_prints_over_the_image_flattened_onto_white() {
+    let mut s = session();
+    s.edit("see-through", |doc, active| {
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        surf.write_region(Rect::new(0, 0, 3, 1), &[1.0, 0.0, 0.0, 0.5, 0.3, 0.6, 0.9, 0.0, 0.3, 0.6, 0.9, 0.0]);
+        Ok(())
+    })
+    .unwrap();
+    let r = s.execute("channel.newSpot", json!({"color": "#00ff00", "solidity": 100, "fromSelection": false})).unwrap();
+    let i = r["channel"].as_u64().unwrap() as usize;
+    s.edit("ink", |doc, _| {
+        doc.channels[i].surface.write_region(Rect::new(2, 0, 3, 1), &[1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("channel.mergeSpot", json!({"channel": i})).unwrap();
+    let near = |p: Vec<f32>, want: [f32; 3]| p[3] == 1.0 && p[..3].iter().zip(want).all(|(a, b)| (a - b).abs() < 0.01);
+    assert!(near(px(&s, 0, 0), [1.0, 0.5, 0.5]), "half-transparent red over white: {:?}", px(&s, 0, 0));
+    assert!(near(px(&s, 1, 0), [1.0, 1.0, 1.0]), "transparent, no ink: paper: {:?}", px(&s, 1, 0));
+    assert!(near(px(&s, 2, 0), [0.0, 1.0, 0.0]), "solid opaque ink: {:?}", px(&s, 2, 0));
+}
