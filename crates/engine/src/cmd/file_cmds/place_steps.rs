@@ -12,7 +12,7 @@ use photocraft_io::PngImport;
 use photocraft_raster::{Surface, TranslateSteps};
 use web_time::Instant;
 
-use super::open::{PLACE_EMBEDDED, PlaceFile, PlaceInput, Prepared};
+use super::open::{PlaceFile, PlaceInput, Prepared, place_label};
 use super::paths::{file_name, read_file, stem};
 use super::{
     Affine, Arc, Document, EngineError, LayerContent, Resample, Result, SmartObject, SmartSource, Value, check_flattenable, f64_param, flattened_checked,
@@ -244,9 +244,9 @@ impl PlaceSteps {
             corners.iter().map(|q| q.x).fold(f64::NEG_INFINITY, f64::max),
             corners.iter().map(|q| q.y).fold(f64::NEG_INFINITY, f64::max),
         ];
-        let label = if input.linked.is_some() { "Place Linked" } else { PLACE_EMBEDDED };
         // A frame's image is always a smart object.
         let smart = input.smart || input.frame.is_some();
+        let label = place_label(input.linked.is_some(), smart);
         let content = if smart {
             let source = match &input.linked {
                 Some(path) => SmartSource::Linked { path: path.clone() },

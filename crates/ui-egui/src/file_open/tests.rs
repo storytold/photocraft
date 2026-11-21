@@ -619,7 +619,7 @@ fn files_dropped_onto_the_canvas_are_placed_in_free_transform_one_by_one() {
     // ↩ without changes: the place stays as it is.
     crate::transform_tool::commit(&mut app);
     assert_eq!((layer_count(&app), history_steps(&app)), (layers + 1, steps + 1));
-    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Place Embedded"));
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Place Embedded Smart Object"));
     // Next frame: the undecodable file is reported, the next one placed and transformed.
     app.place_next_dropped(&ctx);
     assert_eq!(app.ui.notices.iter().filter(|n| n.tone == craft::theme::variant::Tone::Bad).count(), 1);
@@ -889,8 +889,8 @@ fn skip_transform_when_placing_places_background_drops_without_free_transform() 
     assert!(app.ui.transform.is_none() && app.drop_places.is_empty());
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "second");
-    assert_eq!((layer_count(&app), history_steps(&app)), (layers + 2, steps + 2), "one Place Embedded step each");
-    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Place Embedded"));
+    assert_eq!((layer_count(&app), history_steps(&app)), (layers + 2, steps + 2), "one Place Embedded Smart Object step each");
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Place Embedded Smart Object"));
 }
 
 /// #8492: inline (background jobs off, as on the web) the preference places every queued drop
@@ -1236,7 +1236,7 @@ fn switching_documents_after_a_canvas_drop_undoes_only_the_place() {
     assert!(!origin.history.can_redo());
 }
 
-/// Moving a placed file in its Free Transform and committing makes one Place Embedded step.
+/// Moving a placed file in its Free Transform and committing makes one Place Embedded Smart Object step.
 #[test]
 fn a_transformed_place_is_one_history_step() {
     let mut app = app_with_canvas();
@@ -1251,7 +1251,7 @@ fn a_transformed_place_is_one_history_step() {
     t.session.apply(craft::draw::ui::transform::TransformEdit::Box(event), 0.0);
     crate::transform_tool::commit(&mut app);
     assert_eq!((layer_count(&app), history_steps(&app)), (layers + 1, steps + 1));
-    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Place Embedded"));
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Place Embedded Smart Object"));
     app.session.undo();
     assert_eq!(layer_count(&app), layers, "one undo removes the place and the move");
 }

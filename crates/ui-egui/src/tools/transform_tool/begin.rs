@@ -407,7 +407,7 @@ pub fn begin_copy(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), St
 }
 
 /// Free Transform on the layer a file dropped on the canvas just placed, like the reference app's
-/// Place: Esc takes the place back, ↩ makes the place and the transform one Place Embedded step.
+/// Place: Esc takes the place back, ↩ makes the place and the transform one step named as the place is.
 /// With Preferences ▸ General ▸ Skip Transform when Placing on, the place stands as it is.
 pub fn begin_placed(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
     if app.session.prefs().general.skip_transform_when_placing {
@@ -508,7 +508,8 @@ pub(super) fn take_back_made(app: &mut PhotocraftApp, document: DocId, layer: La
 }
 
 /// After the transform: the step that made the layer and the transform become one history step,
-/// the transform's for a copy and Place Embedded for a placed file.
+/// the transform's for a copy and the place's own name for a placed file (Place Embedded Smart
+/// Object, Place Linked Smart Object or Place Image, whichever the place made).
 pub(super) fn fold_made(app: &mut PhotocraftApp, document: DocId, layer: LayerId, made: MadeLayer) {
     // A background commit lands in its own document, which need not be the active one by then.
     let Some(index) = app.session.documents().iter().position(|st| st.doc.id == document) else { return };
@@ -520,8 +521,15 @@ pub(super) fn fold_made(app: &mut PhotocraftApp, document: DocId, layer: LayerId
         && st.history.past_len().checked_sub(2).and_then(|i| st.history.state(i)).is_some_and(|before| before.layer(layer).is_none())
     {
         st.history.purge_last();
-        if made == MadeLayer::Place {
-            st.history.set_current_label(photocraft_engine::file_cmds::PLACE_EMBEDDED);
+        // Named as the place itself names what it made (a linked or embedded smart object, or a
+        // pixel layer): the box doesn't change which of them the layer is.
+        if made == MadeLayer::Place
+            && let Some(l) = st.doc.layer(layer)
+        {
+            use photocraft_doc::{LayerContent, SmartSource};
+            let linked = matches!(&l.content, LayerContent::Smart(so) if matches!(so.source, SmartSource::Linked { .. }));
+            let label = photocraft_engine::file_cmds::place_label(linked, matches!(l.content, LayerContent::Smart(_)));
+            st.history.set_current_label(label);
         }
     }
     if let Some(active) = active {
@@ -868,3 +876,7 @@ pub fn leave_warp(app: &mut PhotocraftApp) {
         pv.split = None;
     }
 }
+
+#[cfg(test)]
+#[path = "place_history_names_tests.rs"]
+mod place_history_names_tests;
