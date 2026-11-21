@@ -534,3 +534,20 @@ fn box_blur_honours_a_cancel_at_every_check() {
         assert!(box_blur(src, &read, out, n, true, &boxes, &Interrupt::cancel_only(&cancel)).is_none(), "cancelled at check {k}");
     }
 }
+
+/// #14918: Box Blur drops a fractional radius, as Photoshop does. A 1 px white line spreads
+/// over `2 * floor(radius) + 1` pixels, on the direct-kernel path and on the box passes.
+#[test]
+fn box_blur_drops_the_fraction_of_its_radius() {
+    let canvas = Rect::new(0, 0, 41, 30);
+    let mut s = Surface::new(PixelFormat::RGBA8);
+    s.fill_rect(canvas, &[0.0, 0.0, 0.0, 1.0]);
+    s.fill_rect(Rect::new(20, 0, 21, 30), &[1.0, 1.0, 1.0, 1.0]);
+    for (radius, width) in [(2.0f32, 5), (2.4, 5), (2.6, 5), (10.0, 21), (10.7, 21)] {
+        let out = crate::apply(&s, &FilterParams::BoxBlur { radius }, canvas, canvas, None);
+        let lit: Vec<f32> = (0..41).map(|x| out.pixel(x, 15)[0]).filter(|&v| v > 0.5 / 255.0).collect();
+        assert_eq!(lit.len(), width, "radius {radius}: lit pixels {lit:?}");
+        let each = 1.0 / width as f32;
+        assert!(lit.iter().all(|v| (v - each).abs() <= 1.0 / 255.0), "radius {radius}: {lit:?}, want {each} each");
+    }
+}
