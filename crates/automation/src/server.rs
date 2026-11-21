@@ -85,6 +85,10 @@ pub struct PlaceParams {
     /// Explicitly approve high-memory PSD/PSB imports that fit within the hard memory budget.
     #[serde(default)]
     pub approve_high_memory: bool,
+    /// Explicit order for ambiguous high-depth XCF 7–11 samples, little-endian or big-endian.
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub historical_xcf_sample_order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -99,6 +103,10 @@ pub struct ReplaceSmartObjectParams {
     /// The Smart Object layer: an id or a name (default: the active layer).
     #[serde(default)]
     pub layer: Option<Value>,
+    /// Explicit order for ambiguous high-depth XCF 7–11 samples, little-endian or big-endian.
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub historical_xcf_sample_order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -603,6 +611,9 @@ fn place_options(p: &PlaceParams) -> Value {
     if p.approve_high_memory {
         opts.insert("approveHighMemory".into(), json!(true));
     }
+    if let Some(order) = p.historical_xcf_sample_order {
+        opts.insert("historicalXcfSampleOrder".into(), json!(order));
+    }
     Value::Object(opts)
 }
 
@@ -832,7 +843,7 @@ impl PhotocraftMcp {
     }
 
     #[tool(
-        description = "Place a file into the document as a Smart Object layer (Place Embedded), reading `path` beneath the read root. `scale` (percent), `fit`, `center` and `approve_high_memory` (one-shot PSD/PSB consent, default false) are the command's own."
+        description = "Place a file into the document as a Smart Object layer (Place Embedded), reading `path` beneath the read root. `scale` (percent), `fit`, `center` and `approve_high_memory` (one-shot PSD/PSB consent, default false) are the command's own. Choose `historical_xcf_sample_order` for ambiguous high-depth XCF."
     )]
     async fn doc_place(&self, Parameters(p): Parameters<PlaceParams>) -> Result<CallToolResult, McpError> {
         let opts = place_options(&p);
@@ -849,12 +860,15 @@ impl PhotocraftMcp {
     }
 
     #[tool(
-        description = "Replace a Smart Object's contents with the file at `path` beneath the read root, keeping its transform and filters (the capability-scoped Replace Contents). `layer` is the Smart Object's id or name (default: the active layer)."
+        description = "Replace a Smart Object's contents with the file at `path` beneath the read root, keeping its transform and filters (the capability-scoped Replace Contents). `layer` is the Smart Object's id or name (default: the active layer). Choose `historical_xcf_sample_order` for ambiguous high-depth XCF."
     )]
     async fn doc_replace_smart_object(&self, Parameters(p): Parameters<ReplaceSmartObjectParams>) -> Result<CallToolResult, McpError> {
         let mut opts = serde_json::Map::new();
         if let Some(v) = p.layer {
             opts.insert("layer".into(), v);
+        }
+        if let Some(order) = p.historical_xcf_sample_order {
+            opts.insert("historicalXcfSampleOrder".into(), json!(order));
         }
         let opts = Value::Object(opts);
         // Bridge mode runs the app on this machine, which reads the path itself like any command.

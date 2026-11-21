@@ -561,3 +561,26 @@ fn desktop_place_and_open_as_smart_object_resume_the_picked_historical_source() 
         assert!(app.prompt_order.is_empty());
     }
 }
+
+#[test]
+fn desktop_place_linked_refuses_a_file_changed_during_the_historical_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("picked.xcf");
+    std::fs::write(&path, fixture::historical_pixel(true)).unwrap();
+    let mut app = app(vec![Some(Picked::Paths(vec![path.clone()]))], HistoricalXcfSampleOrder::BigEndian);
+    let before = app.session.active().unwrap().doc.clone();
+    let prior_history = app.session.active().unwrap().history.past_len();
+    crate::menus::invoke(&mut app, &egui::Context::default(), "file.placeLinked", json!({})).unwrap();
+    app.poll_file_dialog();
+    app.poll_file_dialog();
+    let dialog = dialogs(&app).into_iter().find(|dialog| owns(&dialog.fields)).expect("order prompt");
+    std::fs::write(&path, fixture::historical_pixel(false)).unwrap();
+
+    set_order(&mut app, dialog.id, json!("little-endian"));
+    confirm(&mut app, dialog.id).unwrap();
+    assert!(app.ui.status_error && app.ui.status.contains("linked source changed"), "{}", app.ui.status);
+    let active = app.session.active().unwrap();
+    assert!(Arc::ptr_eq(&before, &active.doc));
+    assert_eq!(active.history.past_len(), prior_history);
+    assert!(app.prompt_order.is_empty());
+}

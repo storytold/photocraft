@@ -205,6 +205,10 @@ fn overlapping_non_end_headers_keep_the_real_resolution_and_drawable_tables() {
 
 #[test]
 fn palette_lookahead_skips_large_properties_without_accepting_empty_tables_inside_them() {
+    use photocraft_doc::{Document, Layer, LayerContent, SmartObject, SmartSource};
+    use photocraft_geom::Affine;
+    use std::sync::Arc;
+
     for version in [3, 11, 26] {
         for legacy_length in [true, false] {
             let mut image = TestImage::rgb8(1, 1);
@@ -226,6 +230,22 @@ fn palette_lookahead_skips_large_properties_without_accepting_empty_tables_insid
             assert_eq!(result.document.resolution_dpi, 240.);
             assert_eq!(result.document.layers[0].surface().unwrap().pixel(0, 0), [17. / 255., 31. / 255., 57. / 255., 1.]);
             assert_eq!(result.document.channels[0].surface.pixel(0, 0), [64. / 255.]);
+
+            let name = "long-continuation.xcf.bz2";
+            let wrapped = crabz2::compress(&source, crabz2::Level::default());
+            let expected_dpi = f64::from(result.document.resolution_dpi);
+            for (name, bytes) in [("long-continuation.xcf", source), (name, wrapped)] {
+                assert_eq!(crate::xcf::source_geometry(name, &bytes, &photocraft_raster::Interrupt::NONE).unwrap(), Some(((1., 1.), expected_dpi)));
+                let mut doc = Document::new("Placed XCF", result.document.size, result.document.mode, result.document.depth);
+                let cache = result.document.layers[0].surface().unwrap().clone();
+                let source = SmartSource::Embedded { file_name: name.into(), bytes: Arc::new(bytes) };
+                doc.layers.push(Layer::new("Historical palette", LayerContent::Smart(SmartObject::new(source, Affine::IDENTITY, Some(cache)))));
+                let exported = crate::export(&doc, "placed.psd", &Default::default()).unwrap();
+                let psd = craft_psd::PsdFile::from_bytes(&exported.bytes).unwrap();
+                let layer = &psd.layer_info.unwrap().layers[0];
+                let placed = crate::smart_map::parse_sold(&layer.block(b"SoLd").unwrap().data).unwrap();
+                assert_eq!(crate::blocks::num(placed.descriptor.get("Rslt")), Some(expected_dpi), "{name}, XCF v{version}, legacy length {legacy_length}");
+            }
         }
     }
 }

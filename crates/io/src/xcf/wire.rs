@@ -151,6 +151,9 @@ pub(super) trait PropertyInput {
     fn compare_palette_tables(&self, _declared: usize, _repaired: usize, _version: u32, _ctl: &photocraft_raster::Interrupt<'_>) -> Result<Option<bool>> {
         Ok(None)
     }
+
+    /// A prefix reader can request a retry with source-wide framing evidence.
+    fn unresolved_palette_boundary(&mut self) {}
 }
 
 impl PropertyInput for Cursor<'_> {
@@ -313,8 +316,11 @@ fn repair_palette_boundary(
     {
         return Ok(preference);
     }
-    // The geometry probe can stop before drawable data. An exact fixed-size
-    // record is stronger evidence than an overlapping header with an odd size.
+    if !repaired.invalid && !(declared.invalid && repaired.end.is_some()) {
+        input.unresolved_palette_boundary();
+    }
+    // An exact fixed-size record is stronger evidence than an overlapping
+    // header with an odd size when the drawable tables do not distinguish them.
     Ok(repaired.end.is_some() && (declared.invalid || repaired.unusual_lengths < declared.unusual_lengths))
 }
 

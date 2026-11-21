@@ -12,7 +12,8 @@ Unmarked XCF versions 7–11 with multi-byte samples require the byte order used
 saved. Select **Little-endian** or **Big-endian** when desktop Open, Replace Contents, or Relink to File asks. Relink keeps the previous choice when the source bytes match.
 
 For CLI Convert, Info, Run, and Batch, pass `--historical-xcf-sample-order little-endian` or
-`--historical-xcf-sample-order big-endian`. For MCP `doc_open`, use `historical_xcf_sample_order`.
+`--historical-xcf-sample-order big-endian`. Use `historical_xcf_sample_order` for MCP `doc_open`
+and for headless MCP `doc_place` and `doc_replace_smart_object`.
 For desktop control `app.open`, use `historicalXcfSampleOrder`. Both parameters accept
 `"little-endian"` or `"big-endian"`.
 

@@ -2,16 +2,33 @@
 
 use std::io::Read;
 
-use super::{Interrupt, IoError, Result, invalid, metadata, read_header, read_version, transport, wire};
+use super::{Interrupt, IoError, Result, invalid, is_xcf, metadata, read_header, read_version, transport, wire};
 
-/// Unclaimed input stays available to the ordinary non-XCF geometry reader. This
-/// prefix query stops at image-property END: it does not validate unread drawable
-/// bytes, compression trailers or tails. Complete import still validates them.
-pub(super) fn source_geometry(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Option<((f64, f64), f64)>> {
-    transport::with_xcf_prefix(name, bytes, ctl, |reader| scan(reader, ctl))
+type Geometry = ((f64, f64), f64);
+
+/// Unclaimed input stays available to the ordinary non-XCF geometry reader.
+/// The usual prefix scan stops at image-property END. Competing palette boundaries
+/// can require the complete envelope and drawable table framing.
+pub(super) fn source_geometry(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Option<Geometry>> {
+    match transport::with_xcf_prefix(name, bytes, ctl, |reader| scan(reader, ctl))? {
+        None => Ok(None),
+        Some(Some(geometry)) => Ok(Some(geometry)),
+        Some(None) if is_xcf(bytes) => scan_authoritative(bytes, ctl).map(Some),
+        Some(None) => {
+            let source = transport::decode_import(name, bytes, ctl, false)?.ok_or_else(|| invalid("could not read the XCF palette boundary"))?;
+            scan_authoritative(&source.bytes, ctl).map(Some)
+        }
+    }
 }
 
-fn scan(reader: &mut dyn Read, ctl: &Interrupt<'_>) -> Result<((f64, f64), f64)> {
+/// Resolve competing property boundaries using the same image framing as full import.
+fn scan_authoritative(bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Geometry> {
+    let (mut cursor, header) = read_header(bytes)?;
+    let properties = wire::props_image_with_interrupt(&mut cursor, header.version, header.base_type == 2, ctl)?;
+    Ok(((f64::from(header.width), f64::from(header.height)), f64::from(metadata::image_resolution(&properties, 72.))))
+}
+
+fn scan(reader: &mut dyn Read, ctl: &Interrupt<'_>) -> Result<Option<Geometry>> {
     // Use the shared version/header validators, including legacy 26-byte headers.
     let mut bytes = [0; 30];
     read(reader, bytes.get_mut(..14).ok_or_else(|| invalid("invalid geometry header range"))?)?;
@@ -26,10 +43,13 @@ fn scan(reader: &mut dyn Read, ctl: &Interrupt<'_>) -> Result<((f64, f64), f64)>
     loop {
         ctl.check().map_err(|_| IoError::Cancelled)?;
         let Some((kind, declared)) = wire::property_header(&mut input, count)? else {
-            return Ok(((f64::from(header.width), f64::from(header.height)), f64::from(dpi)));
+            return Ok(Some(((f64::from(header.width), f64::from(header.height)), f64::from(dpi))));
         };
         count += 1;
         let remaining = wire::property_payload(&mut input, kind, declared, Some(header.version), header.base_type == 2, ctl)?;
+        if input.unresolved_palette {
+            return Ok(None);
+        }
         if kind == 19 && remaining >= 8 {
             let mut pair = [0; 8];
             input.read_exact(&mut pair)?;
@@ -46,11 +66,12 @@ struct Stream<'a> {
     reader: &'a mut dyn Read,
     buffered: Vec<u8>,
     consumed: usize,
+    unresolved_palette: bool,
 }
 
 impl<'a> Stream<'a> {
     fn new(reader: &'a mut dyn Read) -> Self {
-        Self { reader, buffered: Vec::new(), consumed: 0 }
+        Self { reader, buffered: Vec::new(), consumed: 0, unresolved_palette: false }
     }
 
     fn read_exact(&mut self, output: &mut [u8]) -> Result<()> {
@@ -68,6 +89,10 @@ impl<'a> Stream<'a> {
 }
 
 impl wire::PropertyInput for Stream<'_> {
+    fn unresolved_palette_boundary(&mut self) {
+        self.unresolved_palette = true;
+    }
+
     fn word(&mut self) -> Result<u32> {
         let mut bytes = [0; 4];
         self.read_exact(&mut bytes)?;

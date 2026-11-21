@@ -641,8 +641,7 @@ impl PhotocraftApp {
         discarded
     }
 
-    /// Place a file's bytes as a smart object layer (File › Place; `linked`: Place Linked, to that
-    /// path), for files that weren't read from a path the command can read. With background jobs
+    /// Place a picked file's bytes and verify a historical link after the sample-order prompt. With background jobs
     /// on it starts a job (`{"job", "pending": true}`; see [`crate::jobs_ui::track_place`]).
     pub(crate) fn place_bytes(
         &mut self,
@@ -651,7 +650,8 @@ impl PhotocraftApp {
         linked: Option<String>,
         order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
     ) -> Result<serde_json::Value, String> {
-        self.place_bytes_with(name, bytes, linked, &serde_json::json!({"historicalXcfSampleOrder":order}))
+        let verify_link = linked.is_some() && order.is_some();
+        self.place_bytes_with(name, bytes, linked, &serde_json::json!({"historicalXcfSampleOrder":order,"verifyHistoricalXcfLink":verify_link}))
     }
 
     /// [`PhotocraftApp::place_bytes`] with the command's `params` (a frame to fill): a job where

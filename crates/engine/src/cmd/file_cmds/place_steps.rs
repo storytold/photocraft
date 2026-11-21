@@ -272,8 +272,20 @@ impl PlaceSteps {
                     photocraft_io::applicable_historical_xcf_sample_order(&input.name, &self.bytes, input.opts.historical_xcf_sample_order, ctl)
                 })
                 .map_err(|error| self.io_error(error))?;
-            if input.linked.is_some() && so.historical_xcf_sample_order.is_some() {
-                so.historical_xcf_link_digest = Some(*blake3::hash(&self.bytes).as_bytes());
+            if let Some(path) = input.linked.as_deref()
+                && so.historical_xcf_sample_order.is_some()
+            {
+                // A resumed picker holds the approved bytes while the linked path can change.
+                if input.params.get("verifyHistoricalXcfLink").and_then(Value::as_bool) == Some(true) {
+                    ctx.progress(0.95, "Verifying linked source");
+                    let current = super::paths::read_file_limited(path, self.bytes.len() as u64)
+                        .map_err(|error| EngineError::Other(format!("could not verify the linked source {path}: {error}. Pick the file again")))?;
+                    ctx.check()?;
+                    if current.as_slice() != self.bytes.as_slice() {
+                        return Err(EngineError::Other("the linked source changed while choosing the sample byte order. Pick the file again".into()));
+                    }
+                }
+                so.historical_xcf_link_digest = Some(photocraft_io::linked::historical_xcf_digest(&self.bytes));
             }
             // A vector source (SVG) or a frame's image renders at its placement scale instead of
             // as a resampled raster.

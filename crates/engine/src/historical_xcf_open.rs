@@ -122,6 +122,9 @@ impl Session {
                 }
                 let mut params = params.clone();
                 params["historicalXcfSampleOrder"] = json!(order);
+                if linked.is_some() {
+                    params["verifyHistoricalXcfLink"] = json!(true);
+                }
                 let mut input = crate::file_cmds::PlaceInput::from_shared_bytes(self, &name, bytes, linked.clone(), &params)?;
                 input.set_import_options(options);
                 let command = input.command();
