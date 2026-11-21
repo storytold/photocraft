@@ -95,6 +95,30 @@ Scale to Fit Media fills the printable area the driver reports for that page (`p
 paper, and a print sent to a Windows printer reads it from the driver itself. Without a driver
 page (CUPS, IPP, a PDF or a preview) it fits the paper less an 18 pt margin, as before.
 
+## Recording the settings (Done)
+
+The Print dialog's buttons are Cancel, Done and Print at all times, as Photoshop's are (#11655), recording
+or not. Done closes the dialog without printing and keeps the settings the user chose; while an
+action records, that same click is what becomes the action's step. Print One Copy is then what sends
+them, one copy. `file.printSettings` writes them
+where a print leaves them, so Print opens with the same settings again and they survive a relaunch
+with the remembered dialog settings.
+
+What is stored is `file.print`'s settings — printer and driver settings, paper and orientation,
+position and scale, marks, colour handling, Emulsion Down — and not what only said how one job went
+out: `output`, `send`, `dryRun` and the driver's printable area are dropped, as they are after a
+print. The values are checked the way `file.print` checks them on its way to the spooler, so a step
+recorded today replays with the settings it was set up with rather than failing at the printer
+later. Nothing is asked and nothing is written: no printer, driver, file or profile, so the command
+also works headless (CLI, tests, Batch, `PHOTOCRAFT_NO_PRINT`), and the document is untouched — the
+step adds no history entry, since Photoshop's Done changes no document either.
+
+Cancel records and keeps nothing. The settings are held session-wide (and in the remembered dialog
+settings), not per document: Photoshop keeps them as properties of each open document, so another
+open image keeps its own there; here the last Done or Print wins for every document. Done is the
+dialog's own button: a dialog an agent confirms answers as Print, never as Done, so automation still
+prints where a human clicks Done.
+
 ## Results
 
 `file.print` returns `sent`, `backend` (`lp`, `windows`, `ipp`, `portal`), `spooler` (where the

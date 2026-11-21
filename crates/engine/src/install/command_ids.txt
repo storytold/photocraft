@@ -939,6 +939,7 @@ file.print.printers
 file.print.page
 file.printers
 file.printOneCopy
+file.printSettings
 file.package
 file.export.pathsToIllustrator
 edit.installedProfiles
