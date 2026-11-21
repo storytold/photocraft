@@ -131,3 +131,13 @@ fn a_merge_that_aligns_everything_has_no_warning() {
     assert!(r["failed"].as_array().unwrap().is_empty() && r["warning"].is_null(), "{r}");
     assert_eq!(layers(&s).len(), 2);
 }
+
+#[test]
+fn the_blend_allowance_leaves_room_for_the_unplaced_sources() {
+    // Without unplaced sources the allowance is as before: the budget less the fixed buffers.
+    assert_eq!(blend_band_budget(1000, 300, 0), 700);
+    // Retained unplaced sources stay allocated during the blend, so they come off the allowance too.
+    assert_eq!(blend_band_budget(1000, 300, 200), 500);
+    // Never negative.
+    assert_eq!(blend_band_budget(1000, 900, 200), 0);
+}

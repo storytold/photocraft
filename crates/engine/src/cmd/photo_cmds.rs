@@ -487,6 +487,12 @@ pub(crate) fn plane_matrix(pl: &Placement, origin: (f64, f64)) -> Option<Homogra
     })
 }
 
+/// What the blend may spend on bands: the budget less what its fixed buffers use (`fixed_during_bands`) and less the
+/// sources that could not be aligned, which stay allocated as layers of their own while it runs (#14095).
+fn blend_band_budget(budget: usize, fixed_during_bands: usize, unplaced_bytes: usize) -> usize {
+    budget.saturating_sub(fixed_during_bands).saturating_sub(unplaced_bytes)
+}
+
 /// Photomerge's working-memory budget in bytes, from [`budget_from`]: the `memoryBudget` param,
 /// else `PHOTOCRAFT_PHOTOMERGE_BUDGET_MB`, else half of the machine's physical memory.
 fn photomerge_memory_budget(p: &Value) -> usize {
@@ -1002,7 +1008,7 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
                 let pls: Vec<Placement> = placements.iter().map(|p| (*p).clone()).collect();
                 let order = seam_order(&warped, ref_pos);
                 let geo = vignette.then_some((pls.as_slice(), sizes.as_slice(), offset));
-                let remaining_band_budget = budget.saturating_sub(fixed_during_bands);
+                let remaining_band_budget = blend_band_budget(budget, fixed_during_bands, unplaced_bytes);
                 let check_cancel = || ctx.check();
                 let opt = BlendOptions { seamless: true, gains: true, geometry: geo, budget: Some(remaining_band_budget) };
                 let b = seam_blend(warped, canvas, &order, opt, Some(&check_cancel))?;
