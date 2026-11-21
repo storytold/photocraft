@@ -2202,3 +2202,15 @@ fn ending_the_transform_brings_back_the_tools_options_bar() {
         assert!(h.query_by_label("Reverse").is_some(), "after {key:?} the Gradient members are back");
     }
 }
+
+/// #15548: Free Transform on an unturned, unskewed box shows the horizontal skew as "0", not "-0".
+#[test]
+fn an_unskewed_box_shows_its_horizontal_skew_as_zero() {
+    use egui_kittest::kittest::Queryable as _;
+    let mut h = harness(app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24)), egui::vec2(1400.0, 900.0));
+    h.run_steps(4);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.get_by_label("Horizontal skew").value().as_deref(), Some("0"));
+}
