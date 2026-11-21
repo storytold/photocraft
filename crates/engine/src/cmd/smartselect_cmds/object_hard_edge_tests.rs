@@ -192,6 +192,31 @@ fn soften_edge_survives_odd_regions() {
 }
 
 #[test]
+fn trimmed_compacts_the_mask_to_its_used_extent() {
+    // #15472 review: the kept rows are moved within the buffer that is already owned, so this
+    // pins the copy. A 6 x 5 mask with empty outer rows and columns: the interior empty row and
+    // the interior empty column stay, and the kept bytes line up with the reported box.
+    let r = trimmed(
+        Region {
+            bbox: Rect::new(10, 20, 16, 25),
+            mask: vec![
+                0, 0, 0, 0, 0, 0, //
+                0, 9, 0, 0, 0, 0, //
+                0, 0, 0, 0, 0, 0, //
+                0, 7, 0, 5, 0, 0, //
+                0, 0, 0, 0, 0, 0, //
+            ],
+        },
+        6,
+    );
+    assert_eq!(r.bbox, Rect::new(11, 21, 14, 24), "used rows 1..=3, used columns 1..=3");
+    assert_eq!(r.mask, vec![9, 0, 0, 0, 0, 0, 7, 0, 5], "3 rows of 3 kept columns");
+    // A mask whose used extent already is the whole buffer comes back byte for byte.
+    let cut = trimmed(Region { bbox: Rect::new(0, 0, 3, 2), mask: vec![1, 0, 2, 3, 0, 4] }, 3);
+    assert_eq!((cut.bbox, cut.mask), (Rect::new(0, 0, 3, 2), vec![1, 0, 2, 3, 0, 4]));
+}
+
+#[test]
 fn the_params_string_documents_hard_edge() {
     let specs = specs();
     let spec = specs.iter().find(|c| c.id == "select.object").unwrap();

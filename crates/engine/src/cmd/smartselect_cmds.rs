@@ -105,6 +105,13 @@ fn with_quick_sampler<R>(s: &Session, all_layers: bool, f: impl FnOnce(&dyn Samp
     if group && !all_layers { Ok(f(&FlatSampler, &d.doc)) } else { with_sampler(s, all_layers, f) }
 }
 
+/// Whether the layer's own pixels are the edit target. Quick Selection's transparent-pixel drop
+/// (#12919) and Object Selection's area answers (#12863) were measured there; with a targeted layer
+/// mask or a single channel those clicks keep the answer from before the items (#15472 review).
+fn pixels_targeted(s: &Session) -> bool {
+    !s.tools.mask_targeted && s.active().is_some_and(|d| d.channel_view.target == crate::channel_cmds::ChannelTarget::Composite)
+}
+
 /// Stores `region` combined with the current selection by `m` as one history step.
 /// Finding nothing never destroys work: the selection (and history) is left alone and the
 /// caller gets `changed: false`, whatever the mode. (Select Subject and Object Selection run
@@ -276,8 +283,7 @@ fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let bounds = region.content_bounds();
     // Only for the layer's pixels as the target: a targeted layer mask or a single channel (not
     // measured) keeps today's result.
-    let pixels_targeted = !s.tools.mask_targeted && s.active().is_some_and(|d| d.channel_view.target == crate::channel_cmds::ChannelTarget::Composite);
-    let active = s.active().and_then(|d| d.active_layer).filter(|_| pixels_targeted);
+    let active = s.active().and_then(|d| d.active_layer).filter(|_| pixels_targeted(s));
     let selected = s.edit("Quick Selection", |doc, _| {
         let empty = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
         let old = doc.selection.as_ref().unwrap_or(&empty);
@@ -449,17 +455,22 @@ pub fn empty_sampled_area(doc: &Document, layer: Option<LayerId>, all_layers: bo
 }
 
 /// Where `select.object` with `"point"` answers #5246's clear message instead of #12863's
-/// area answer or silence: a completely empty sampled layer, a point outside the canvas, or a
-/// spot with no pixels on a Smart Object or type target - those layers' clicks keep their
-/// pre-#12863 answer (#15472 review). The Object Finder hover hints on exactly these points,
-/// so hover and click agree in every state (#15472 review).
+/// area answer or silence: a completely empty sampled layer, a point outside the canvas that the
+/// sampled layer's pixels do not reach, or a spot with no pixels on a Smart Object or type
+/// target - those layers' clicks keep their pre-#12863 answer (#15472 review). The Object Finder
+/// hover hints on exactly these points, so hover and click agree in every state (#15472 review).
 pub fn point_reports_sampled_pixels_error(doc: &Document, layer: Option<LayerId>, all_layers: bool, area: Rect) -> bool {
     let Some(target) = sampled_target(doc, layer, all_layers) else { return false };
     let Some(l) = doc.layer(target) else { return false };
     if matches!(l.content, LayerContent::Smart(_) | LayerContent::Text(_)) {
         return empty_sampled_area(doc, layer, all_layers, area).is_some();
     }
-    l.surface().is_some_and(|surf| surf.content_bounds().is_empty() || !doc.bounds().contains(area.x0, area.y0))
+    // Layer pixels can hang past the canvas edge (#3043); there #5246's own content test has
+    // nothing to report, and this predicate must not promise a message the checker stays silent
+    // about (#15472 review).
+    let Some(surf) = l.surface() else { return false };
+    let content = surf.content_bounds();
+    content.is_empty() || (!doc.bounds().contains(area.x0, area.y0) && content.intersect(&area).is_empty())
 }
 
 /// Hard Edge off: [`soften_edge`]'s horizontal taps in 256ths, for the pixels two and one to the
@@ -523,15 +534,20 @@ fn soften_edge(region: &Region, canvas: Rect) -> Region {
 }
 
 /// `r` (`w` pixels wide) cut down to its selected pixels, so the reported bounds are the
-/// selection's: [`soften_edge`]'s box has a spare pixel on each side that the ramp may empty.
-fn trimmed(r: Region, w: usize) -> Region {
-    let rows: Vec<&[u8]> = r.mask.chunks_exact(w).collect();
-    let used_rows: Vec<usize> = rows.iter().enumerate().filter(|(_, row)| row.iter().any(|v| *v > 0)).map(|(y, _)| y).collect();
-    let used_cols: Vec<usize> = (0..w).filter(|x| rows.iter().any(|row| row[*x] > 0)).collect();
-    let (Some(&y0), Some(&y1), Some(&x0), Some(&x1)) = (used_rows.first(), used_rows.last(), used_cols.first(), used_cols.last()) else {
+/// selection's: [`soften_edge`]'s box has a spare pixel on each side that the ramp may empty, and
+/// [`area_region`]'s cut mask keeps the extent its cut leaves. The kept rows and columns are
+/// compacted in the buffer that is already owned, so trimming a canvas-sized mask never needs a
+/// second one and never aborts on that allocation (#15472 review). Rows and columns that are empty
+/// only inside the used extent stay, as they do for a found object with a hole.
+fn trimmed(mut r: Region, w: usize) -> Region {
+    let rows = r.mask.chunks_exact(w).count();
+    let row_used = |y: usize| r.mask[y * w..(y + 1) * w].iter().any(|v| *v > 0);
+    let col_used = |x: usize| r.mask.chunks_exact(w).any(|row| row[x] > 0);
+    let (Some(y0), Some(y1), Some(x0), Some(x1)) =
+        ((0..rows).find(|&y| row_used(y)), (0..rows).rev().find(|&y| row_used(y)), (0..w).find(|&x| col_used(x)), (0..w).rev().find(|&x| col_used(x)))
+    else {
         return Region { bbox: Rect::new(r.bbox.x0, r.bbox.y0, r.bbox.x0, r.bbox.y0), mask: Vec::new() };
     };
-    let mask = rows[y0..=y1].iter().flat_map(|row| row[x0..=x1].iter().copied()).collect();
     let at = |d: usize| i32::try_from(d).unwrap_or(i32::MAX);
     let bbox = Rect::new(
         r.bbox.x0.saturating_add(at(x0)),
@@ -539,7 +555,18 @@ fn trimmed(r: Region, w: usize) -> Region {
         r.bbox.x0.saturating_add(at(x1 + 1)),
         r.bbox.y0.saturating_add(at(y1 + 1)),
     );
-    Region { bbox, mask }
+    // Kept row `y` lands at row `y - y0`, and its kept columns start at `x0 >= 0`, so every copy
+    // moves towards the front of the buffer and `copy_within` handles the rows it overlaps.
+    let whole_buffer = y0 == 0 && x0 == 0 && y1 + 1 == rows && x1 + 1 == w && r.mask.len() == rows * w;
+    if !whole_buffer {
+        let (kept, mut write) = (x1 - x0 + 1, 0usize);
+        for y in y0..=y1 {
+            r.mask.copy_within(y * w + x0..y * w + x0 + kept, write);
+            write += kept;
+        }
+        r.mask.truncate(write);
+    }
+    Region { bbox, mask: r.mask }
 }
 
 /// `select.object`'s `"hardEdge"` (default on): off, the found object gets [`soften_edge`]'s rim;
@@ -652,13 +679,14 @@ fn surface_is_flat(surf: &photocraft_raster::Surface, area: Rect) -> bool {
 /// sampled layer uniform over the whole canvas, or with a plain group active and Sample All
 /// Layers off, the whole canvas; on an empty spot of a sampled layer holding exactly one
 /// opaque object, the canvas with that layer's pixels cut out. A click on the opaque part of
-/// its layer, a layer with several objects (measured on Shapes: nothing found), and every
-/// other target (composite, adjustment, Smart Object, type) answer `None` and keep the plain
-/// nothing-found - Smart Object and type are filtered by content kind, because
-/// [`Layer::surface`] hands their rendered cache here and those clicks keep their answer from
-/// before #12863 (#15472 review). Uniformity is probed on the raw pixels over the canvas
-/// ([`surface_is_flat`]): a solid area floating on transparency is one object to cut out, not
-/// a uniform layer; the object areas are scanned at the
+/// its layer (its own pixel, at full resolution), a layer with several objects (measured on
+/// Shapes: nothing found), and every other target (composite, adjustment, Smart Object, type)
+/// answer `None` and keep the plain nothing-found - Smart Object and type are filtered by
+/// content kind, because [`Layer::surface`] hands their rendered cache here and those clicks
+/// keep their answer from before #12863, as do a targeted layer mask and channel, which the
+/// caller skips ([`pixels_targeted`], #15472 review). Uniformity is probed on the raw pixels
+/// over the canvas ([`surface_is_flat`]): a solid area floating on transparency is one object to
+/// cut out, not a uniform layer; the object areas are scanned at the
 /// Object Finder's working resolution, where a coarse step can merge areas that sit within one
 /// step of each other, which only ever answers "several" for detail finer than the scan.
 /// `target` is [`sampled_target`]'s sampled layer.
@@ -687,10 +715,12 @@ fn flat_area_answer(doc: &Document, target: Option<LayerId>, group: bool, x: f32
     }
     let rgba = &rgba[..w * h];
     let opaque: Vec<bool> = rgba.iter().map(|p| p[3] >= 0.5).collect();
-    // `rgba` was sliced to exactly `w * h` above, so clamping `sx` and `sy` keeps this and
-    // every later scan index in bounds.
-    let (sx, sy) = (((px - content.x0) as usize / step).min(w - 1), ((py - content.y0) as usize / step).min(h - 1));
-    if content.contains(px, py) && opaque[sy * w + sx] {
+    // The opaque-part gate reads the clicked pixel itself, not the averaged working cell: a small
+    // transparent spot inside an opaque area averages to opaque there, and the click would answer
+    // nothing-found where the documented answer is the canvas with the object cut out. Object
+    // Finder's seed check reads the single pixel for the same reason (#13070, #15472 review);
+    // pixels past the layer's content sample as transparent, so no bounds test is needed.
+    if SurfaceSampler(surf).rgba(Rect::from_xywh(px, py, 1, 1)).first().is_some_and(|p| p[3] >= 0.5) {
         return None;
     }
     if opaque_areas(&opaque, w, h, 1) != 1 {
@@ -755,7 +785,9 @@ fn object_at_point(s: &mut Session, p: &Value, (x, y): (f32, f32)) -> Result<Val
     };
     // A found object wins; the area answer is not cached (it is the layer's flatness, not a
     // remembered object, and a canvas-sized mask in the cache would swallow later real clicks).
-    let area = if found.is_none() { flat_area_answer(&doc, target, group, x, y) } else { None };
+    // #12863 measures the area answers with the layer's pixels as the edit target; with a targeted
+    // layer mask or single channel the click keeps its pre-#12863 nothing-found (#15472 review).
+    let area = if found.is_none() && pixels_targeted(s) { flat_area_answer(&doc, target, group, x, y) } else { None };
     // Hard Edge off (#12855) reshapes found objects only: soften_edge's taps sum to 1.0 and its
     // ramp maps the area answers' 254 back to fully selected, so an area answer keeps the
     // measured partly-selected coverage as it is (#15472 review).

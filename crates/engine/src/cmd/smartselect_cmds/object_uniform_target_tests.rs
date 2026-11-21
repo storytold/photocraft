@@ -403,6 +403,102 @@ fn a_smart_object_target_takes_no_area_answer_and_keeps_its_no_pixels_error() {
     assert!(s.active().unwrap().doc.selection.is_none(), "and selects nothing");
 }
 
+/// Writes `px` (straight RGBA) over `rect`, which may reach past the canvas edge: a layer surface
+/// keeps its off-canvas tiles (crates/engine/src/cmd/layer_menu_cmds.rs:184, #3043).
+fn paint_rect(s: &mut Session, rect: Rect, px: impl Fn(i32, i32) -> [f32; 4]) {
+    s.edit("paint", |doc, _| {
+        let Some(surf) = doc.layers.last_mut().and_then(Layer::surface_mut) else {
+            return Err(EngineError::Other("the new layer has no surface".into()));
+        };
+        let n = surf.channels();
+        let mut data = Vec::with_capacity((rect.width() * rect.height()) as usize * n);
+        for y in rect.y0..rect.y1 {
+            for x in rect.x0..rect.x1 {
+                let c = px(x, y);
+                if n >= 4 {
+                    data.extend_from_slice(&c);
+                } else {
+                    data.extend_from_slice(&c[..n.min(3)]);
+                }
+            }
+        }
+        surf.write_region(rect, &data);
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// #15472 review round 3 (smartselect_cmds.rs:554): #12863 lists the layer mask and a channel
+/// "as the target" among the cases that keep today's behaviour. With the layer mask the edit
+/// target, a flat raster's click keeps its pre-#12863 answer: nothing found, no selection, no
+/// step. Quick Selection applies the same gate to its #12919 transparency drop (:279).
+#[test]
+fn a_targeted_layer_mask_takes_no_area_answer() {
+    let mut s = flat_background_document("#dc1e1e");
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    for channel in ["mask", "red"] {
+        s.execute("channel.target", json!({"channel": channel})).unwrap();
+        let d = s.active().unwrap();
+        assert!(d.channel_view.target != crate::channel_cmds::ChannelTarget::Composite, "{channel} is the edit target");
+        let before = steps(&s);
+        let r = s.execute("select.object", json!({"point": [200, 175]})).unwrap();
+        assert_eq!(r["changed"], false, "a {channel} target keeps today's nothing-found answer");
+        assert!(s.active().unwrap().doc.selection.is_none(), "and leaves no selection, {channel}");
+        assert_eq!(steps(&s), before, "no history step, {channel}");
+    }
+    // Back on the composite, the same click keeps the measured area answer.
+    s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+    let r = s.execute("select.object", json!({"point": [200, 175]})).unwrap();
+    assert_eq!(r["changed"], true, "a non-mask target keeps the whole-canvas answer");
+    assert_eq!(select_counts(&s), (0, 480_000, 480_000), "the composite target answers 254 everywhere");
+}
+
+/// #15472 review round 3 (smartselect_cmds.rs:695): the opaque-part gate read the working scan,
+/// which averages a cell. A 400 x 300 card scans at step 2, so a 1 px transparent hole inside it
+/// sits in a cell of mean alpha 0.75 - the click was judged to be on the opaque part and answered
+/// nothing-found. The clicked pixel is transparent, and the layer holds exactly one opaque object:
+/// the documented answer is the canvas with the card's own pixels cut out, the hole at 254.
+#[test]
+fn a_one_pixel_hole_in_a_card_is_a_transparent_spot_not_the_opaque_part() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": W, "height": H, "depth": 8})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Card"})).unwrap();
+    paint_new_layer(&mut s, |x, y| {
+        if (100..500).contains(&x) && (100..400).contains(&y) && (x, y) != (301, 251) {
+            return [220.0 / 255.0, 30.0 / 255.0, 30.0 / 255.0, 1.0];
+        }
+        [0.0, 0.0, 0.0, 0.0]
+    });
+    let r = s.execute("select.object", json!({"point": [301, 251]})).unwrap();
+    assert_eq!(r["changed"], true, "the clicked pixel is transparent on the card");
+    assert_eq!(bounds(&s), [0, 0, 800, 600], "the canvas, as the disc's rule");
+    assert_eq!(cov8(&s, 301, 251), 254, "the hole joins the area answer");
+    assert_eq!(cov8(&s, 300, 251), 0, "the card's own pixels stay unselected");
+    assert_eq!(select_counts(&s), (0, 480_000 - (400 * 300 - 1), 480_000 - (400 * 300 - 1)), "the canvas minus the card's pixels, all at 254");
+}
+
+/// #15472 review round 3 (smartselect_cmds.rs:462): the predicate marks the points where the click
+/// runs #5246's check, and that check tests the layer's own pixels. A layer whose pixels hang past
+/// the canvas edge has pixels at an out-of-canvas point, so no message applies there: the click
+/// keeps the silent nothing-found it had before #12863, and the predicate says the same.
+#[test]
+fn an_out_of_canvas_point_over_pixels_past_the_edge_promises_no_error() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": W, "height": H, "depth": 8})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Overhang"})).unwrap();
+    paint_rect(&mut s, Rect::new(W - 10, 100, W + 90, 120), |_, _| [220.0 / 255.0, 30.0 / 255.0, 30.0 / 255.0, 1.0]);
+    let d = s.active().unwrap();
+    let (doc, layer) = (std::sync::Arc::clone(&d.doc), d.active_layer);
+    let surface = doc.layer(layer.unwrap()).unwrap().surface().unwrap();
+    assert!(surface.content_bounds().x1 > W, "the layer's pixels reach past the canvas edge: {}", surface.content_bounds().x1);
+    assert!(!point_reports_sampled_pixels_error(&doc, layer, false, Rect::from_xywh(W + 20, 110, 1, 1)), "no #5246 message where the layer has pixels");
+    assert!(point_reports_sampled_pixels_error(&doc, layer, false, Rect::from_xywh(W + 200, 110, 1, 1)), "and the message where it has none");
+    drop(d);
+    let r = s.execute("select.object", json!({"point": [W + 20, 110]})).unwrap();
+    assert_eq!(r["changed"], false, "the click over the off-canvas pixels stays the silent nothing-found");
+    assert!(s.active().unwrap().doc.selection.is_none(), "and selects nothing");
+}
+
 /// #15472 review round 2 (smartselect_cmds.rs:483): same for a type layer whose rendered cache
 /// is flat - its click keeps #5246's clear error, never an area answer.
 #[test]
