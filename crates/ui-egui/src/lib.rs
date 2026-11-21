@@ -451,6 +451,8 @@ pub struct PhotocraftApp {
     pub(crate) adjust_session: Option<adjust_editors::PropertiesAdjust>,
     /// The Color Picker dialog asking for a screen sample: the dialog and the field that took it.
     pub(crate) dialog_dropper: Option<(craft::ui::dialog::DialogId, String)>,
+    /// The method the open Image Size showed after a recorded step was applied, kept by an OK with Resample off.
+    pub(crate) image_size_opening: Option<craft::ui::patterns::form_dialogs::Resample>,
     /// The child dialog (colour picker or contour editor) the open Layer Style dialog has, with that dialog's id.
     pub(crate) layer_style_child: Option<(craft::ui::dialog::DialogId, dialogs::layer_style::Child)>,
     /// What each open Color Picker edits (`color_picker_ui`).
