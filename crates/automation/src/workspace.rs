@@ -103,6 +103,18 @@ impl AuthorizedWorkspace {
         Ok((bytes, save_path))
     }
 
+    /// Where the file or `.pcraft` folder that `path` names is on disk: below the first read
+    /// root that holds it (the root `read` and `open_pcraft` pick), as that root was configured
+    /// at launch. Open Recent lists this, since the person reopens the file outside automation,
+    /// where a root-relative request path names nothing. It grants no access.
+    pub fn location(&self, path: &str) -> Option<PathBuf> {
+        self.read.iter().find_map(|root| {
+            let relative = scoped_path(path, root).ok()??;
+            root.dir.metadata(&relative).ok()?;
+            Some(root.configured_path.join(relative))
+        })
+    }
+
     fn open_read(&self, path: &str) -> Result<(cap_std::fs::File, &RootCapability), AutomationError> {
         if self.read.is_empty() {
             return Err(AutomationError::BadRequest(format!("{DENIED}: read authority is absent")));
