@@ -6,6 +6,7 @@ param(
   [string] $TargetDir,
   [string] $Dist,
   [switch] $SkipBuild,
+  [switch] $BuildOnly,
   [switch] $FunctionsOnly
 )
 $ErrorActionPreference = 'Stop'
@@ -15,6 +16,7 @@ function Get-NightlyArchiveSpec([string] $Version, [string] $Arch) {
   if (-not $Version -or $Version -cnotmatch '^\d+\.\d+\.\d+-nightly\.\d{8}\.\d+\.\d+\.g[0-9a-f]{12}\z') { throw 'invalid nightly artifact version' }
   return @{
     Archive = "photocraft-$Version-windows-x86_64-nightly.zip"
+    UnsignedArchive = "photocraft-$Version-windows-x86_64-nightly.unsigned.zip"
     Executables = @('photocraft.exe')
     Channel = 'nightly-v1'
     AppId = 'ai.storyteller.photocraft.nightly-v1'
@@ -48,6 +50,9 @@ if (-not $env:PHOTOCRAFT_VERSION -or $Version -cne $env:PHOTOCRAFT_VERSION) { th
 $Spec = Get-NightlyArchiveSpec $Version $Arch
 if ($SkipBuild) { throw 'nightly-v1 forbids -SkipBuild; the executable flavor must be built in this operation' }
 if ($Target -ne 'x86_64-pc-windows-msvc') { throw 'nightly-v1 target must be x86_64-pc-windows-msvc' }
+if (-not $BuildOnly) { throw 'Nightly compilation requires -BuildOnly; final archives are produced in the separate trusted signing job' }
+# No key values may enter compilation. This produces an internal intermediate, not a feed artifact.
+& (Join-Path $PSScriptRoot 'sign.ps1') -CheckBuildEnvironment
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $oldChannel = $env:PHOTOCRAFT_BUILD_CHANNEL
 $oldVersionOverride = $env:PHOTOCRAFT_OVERRIDE_VERSION
@@ -82,15 +87,15 @@ $Stage = Join-Path $TargetDir 'windows-package\nightly-v1-x86_64'
 if (Test-Path -LiteralPath $Stage) { Remove-Item -LiteralPath $Stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
 Copy-Item -LiteralPath $Exe -Destination (Join-Path $Stage 'photocraft.exe')
-# Reuse existing signing policy; this script does not discover or change any signing secret.
-& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'photocraft.exe')
+# Signing happens only in the separate trusted step, using sign.ps1 -Required.
+# The intermediate's filename cannot satisfy the feed-ready archive contract.
 Copy-NightlyNotices $Root $env:CRAFT_FONTS_DIR $Stage
 if ((Get-ChildItem -LiteralPath $Stage -Filter '*.exe').Count -ne 1 -or (Test-Path (Join-Path $Stage 'portable.txt'))) {
   throw 'nightly stage contains an unexpected executable or portable fallback marker'
 }
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
-$Zip = Join-Path $Dist $Spec.Archive
-if (Test-Path -LiteralPath $Zip) { Remove-Item -LiteralPath $Zip -Force }
+$Zip = Join-Path $Dist $Spec.UnsignedArchive
+if (Test-Path -LiteralPath $Zip) { throw 'Nightly output already exists; refusing to replace prepared artifact bytes' }
 Compress-Archive -Path (Join-Path $Stage '*') -DestinationPath $Zip
 $Archive = [System.IO.Compression.ZipFile]::OpenRead($Zip)
 try {
@@ -99,4 +104,4 @@ try {
     throw 'nightly ZIP payload violates the GUI-only profile contract'
   }
 } finally { $Archive.Dispose() }
-Write-Output "Nightly artifact: $Zip ($VersionOutput)"
+Write-Output "Nightly build intermediate (not publishable): $Zip ($VersionOutput)"
