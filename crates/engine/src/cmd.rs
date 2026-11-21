@@ -31,6 +31,8 @@ pub mod brush_cmds;
 pub mod brush_key_cmds;
 pub mod brush_preset_cmds;
 pub mod channel_cmds;
+#[cfg(test)]
+mod color_balance_refusals_tests;
 pub mod color_cmds;
 pub mod color_to_alpha_cmds;
 pub mod comps_cmds;

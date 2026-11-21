@@ -24,16 +24,16 @@ fn session_at(depth: u32) -> Session {
     s
 }
 
-fn session() -> Session {
+pub(super) fn session() -> Session {
     session_at(8)
 }
 
-fn steps(s: &Session) -> usize {
+pub(super) fn steps(s: &Session) -> usize {
     s.active().unwrap().history.past_len()
 }
 
 /// The active layer's pixel at 4,4 (inside the red half).
-fn pixel(s: &Session) -> [f32; 4] {
+pub(super) fn pixel(s: &Session) -> [f32; 4] {
     let st = s.active().unwrap();
     st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().rgba(4, 4)
 }
