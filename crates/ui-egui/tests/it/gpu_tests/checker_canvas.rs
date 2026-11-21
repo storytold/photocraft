@@ -96,19 +96,25 @@ fn render(h: &mut Harness, zoom: f32, doc: u32, black: bool, grid: bool) -> (Sho
 
 /// [`render`] on the GPU canvas (`gpu`) or the CPU canvas.
 fn render_on(h: &mut Harness, gpu: bool, zoom: f32, doc: u32, black: bool, grid: bool) -> (Shot, u32, u32, u32) {
-    {
-        let app = h.state_mut();
-        while app.session.active().is_some() {
-            app.run("file.close", json!({"discard": true})).expect("close");
-        }
-        let background = if black { "white" } else { "transparent" };
-        app.run("file.new", json!({"width": doc, "height": doc, "background": background})).expect("new");
-        if black {
-            app.run("edit.fill", json!({"color": "#000000"})).expect("fill");
-        }
-        app.sync_views();
-        app.ui.view.show.pixel_grid = grid;
+    open_grid_document(h, doc, black, grid);
+    capture_grid(h, gpu, zoom, doc, black)
+}
+
+fn open_grid_document(h: &mut Harness, doc: u32, black: bool, grid: bool) {
+    let app = h.state_mut();
+    while app.session.active().is_some() {
+        app.run("file.close", json!({"discard": true})).expect("close");
     }
+    let background = if black { "white" } else { "transparent" };
+    app.run("file.new", json!({"width": doc, "height": doc, "background": background})).expect("new");
+    if black {
+        app.run("edit.fill", json!({"color": "#000000"})).expect("fill");
+    }
+    app.sync_views();
+    app.ui.view.show.pixel_grid = grid;
+}
+
+fn capture_grid(h: &mut Harness, gpu: bool, zoom: f32, doc: u32, black: bool) -> (Shot, u32, u32, u32) {
     control(h, "ui.set", json!({"zoom": zoom, "center": [doc as f32 / 2.0, doc as f32 / 2.0]}));
     h.run_steps(3);
     assert_eq!(h.state().perf.gpu, gpu, "zoom {zoom}: expected the {} canvas", if gpu { "GPU" } else { "CPU" });
@@ -170,10 +176,11 @@ fn pixel_grid_shows_above_500_percent_and_lightens_a_dark_pixel_by_about_a_quart
     let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut h) = harness() else { return };
     h.run_steps(4);
-    let (flat, x0, y0, _) = render(&mut h, 5.0, 48, true, true);
+    open_grid_document(&mut h, 48, true, true);
+    let (flat, x0, y0, _) = capture_grid(&mut h, true, 5.0, 48, true);
     assert!(lit_columns(&flat, x0, y0 + 20, 100).is_empty(), "no grid at 500%");
     for zoom in [6.0f32, 8.0, 12.0] {
-        let (img, x0, y0, _) = render(&mut h, zoom, 48, true, true);
+        let (img, x0, y0, _) = capture_grid(&mut h, true, zoom, 48, true);
         let lit = lit_columns(&img, x0, y0 + (zoom * 3.5) as u32, (zoom * 10.0) as u32);
         assert_eq!(lit.len(), 10, "zoom {zoom}: grid columns {lit:?}");
         assert!(lit.windows(2).all(|p| p[1] - p[0] == zoom as u32), "zoom {zoom}: spacing of {lit:?}");
@@ -204,10 +211,11 @@ fn cpu_pixel_grid_shows_above_500_percent_over_content() {
     for ppp in [1.0, 2.0] {
         let Some(mut h) = harness_with_scale(false, ppp) else { return };
         h.run_steps(4);
-        let (flat, x0, y0, _) = render_on(&mut h, false, 5.0, 48, true, true);
+        open_grid_document(&mut h, 48, true, true);
+        let (flat, x0, y0, _) = capture_grid(&mut h, false, 5.0, 48, true);
         assert!(lit_columns(&flat, x0, y0 + 20, 100).is_empty(), "no grid at 500%");
         for zoom in [6.0f32, 8.0, 12.0] {
-            let (img, x0, y0, _) = render_on(&mut h, false, zoom, 48, true, true);
+            let (img, x0, y0, _) = capture_grid(&mut h, false, zoom, 48, true);
             let y = y0 + (zoom * 3.5) as u32;
             let lit = lit_columns(&img, x0, y, (zoom * 10.0) as u32);
             assert_eq!(lit.len(), 10, "scale {ppp}, zoom {zoom}: one physical pixel per line, columns {lit:?}");
