@@ -25,6 +25,7 @@ mod options_bar;
 mod panel;
 mod pointer;
 mod values;
+mod vertical_cursor;
 
 pub(crate) use controls::canvas_controls;
 #[cfg(test)]
@@ -35,6 +36,7 @@ use defaults::apply;
 use defaults::{default_style_params, default_styles, shown_scale};
 pub use defaults::{foreground_changed, open_color_picker};
 pub(crate) use defaults::{formatting_params, target, target_text};
+pub(crate) use editing::commit_before_selecting;
 pub use editing::{cancel, commit, commit_with, edit_active, edit_at, end_if_left};
 #[cfg(test)]
 pub(crate) use editing::{step_char_metric, toggle_char_style, toggle_hyphenate};
@@ -103,6 +105,9 @@ fn byte_range(text: &str, a: usize, b: usize) -> (usize, usize) {
 mod vertical_align_buttons_tests;
 
 #[cfg(test)]
+mod vertical_cursor_tests;
+
+#[cfg(test)]
 mod canvas_tests;
 #[cfg(test)]
 mod ctrl_period_cancel_tests;
@@ -129,3 +134,6 @@ mod locked_layer_alert_tests;
 mod ime_tests;
 #[cfg(test)]
 mod mask_escape_tests;
+
+#[cfg(test)]
+mod unchanged_edit_history_tests;
