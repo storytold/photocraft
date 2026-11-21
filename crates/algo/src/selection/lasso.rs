@@ -18,6 +18,9 @@ const TS: usize = TILE_SIZE as usize;
 /// worth, 256 MB as GRAY8. A thin shape touches a whole tile wherever it passes, so this, not
 /// its area, bounds what painting it allocates.
 pub const MAX_PAINTED_TILES: usize = (1 << 28) / (TS * TS);
+/// Most edge crossings a polygon may need: every edge is visited on each sub-row it spans, so
+/// many tall, overlapping edges multiply work the tile count never shows.
+pub const MAX_EDGE_SAMPLES: u64 = 1 << 28;
 
 /// The part of the segment `a`–`b` inside `r` (Liang–Barsky), or `None` when it misses it.
 pub(crate) fn clip_segment(a: (f32, f32), b: (f32, f32), r: Rect) -> Option<((f32, f32), (f32, f32))> {
@@ -93,6 +96,18 @@ struct Edge {
     b: (f32, f32),
 }
 
+/// Edge samples rasterizing `points` over the rows of `clip` costs at `sub` sub-rows per row: every
+/// edge is visited on every sub-row it spans, so this is the work, to compare with [`MAX_EDGE_SAMPLES`].
+pub fn polygon_edge_samples(points: &[(f32, f32)], clip: Rect, sub: u64) -> u64 {
+    let (y0, y1) = (clip.y0 as f32, clip.y1 as f32);
+    points
+        .iter()
+        .zip(points.iter().cycle().skip(1))
+        .filter(|(a, b)| a.1 < b.1 || b.1 < a.1)
+        .map(|(a, b)| ((a.1.max(b.1).min(y1) - a.1.min(b.1).max(y0)).max(0.0) as u64 + 1).saturating_mul(sub))
+        .fold(0u64, u64::saturating_add)
+}
+
 /// The anti-aliased (even-odd) polygon through `points`, cut to `clip`, as a GRAY8 selection: the
 /// bytes of [`super::polygon`] over `clip`, quantised. Edge tiles are rasterised, tiles wholly
 /// inside share one solid tile. `None` when the edges cross more than [`MAX_PAINTED_TILES`] tiles.
@@ -102,8 +117,12 @@ pub fn polygon_surface(points: &[(f32, f32)], clip: Rect) -> Option<Surface> {
     if area.is_empty() {
         return Some(s);
     }
-    let edge_tiles = polygon_edge_tiles(points, clip, MAX_PAINTED_TILES)?;
     const SUB: usize = 4;
+    // The cheap sum of edge samples first: an outline past it is refused before any tile discovery.
+    if polygon_edge_samples(points, clip, SUB as u64) > MAX_EDGE_SAMPLES {
+        return None;
+    }
+    let edge_tiles = polygon_edge_tiles(points, clip, MAX_PAINTED_TILES)?;
     // Sample rows as `polygon` over `clip` takes them, so the bytes match.
     let sample_y = |y: i32, k: usize| clip.y0 as f32 + (y - clip.y0) as f32 + (k as f32 + 0.5) / SUB as f32;
     let mut edges: Vec<Edge> = points
@@ -267,6 +286,16 @@ mod tests {
 
     /// A thin sliver across a 100,000 px canvas: only the tiles along it are built (the dense
     /// rasteriser allocated its 10-billion-pixel bounding box; the #8783 review).
+    #[test]
+    fn many_tall_overlapping_edges_are_refused_before_rasterising() {
+        // Coincident edges cover few tiles but are each visited on every sub-row they span.
+        let clip = Rect::new(0, 0, 4, 1 << 15);
+        let points: Vec<(f32, f32)> = (0..20_000).map(|i| if i % 2 == 0 { (1.0, 0.0) } else { (2.0, (1 << 15) as f32) }).collect();
+        assert!(polygon_edge_tiles(&points, clip, MAX_PAINTED_TILES).is_some(), "the tile check alone admits it");
+        assert!(polygon_surface(&points, clip).is_none());
+        assert!(polygon_surface(&points[..20], clip).is_some(), "a few such edges are fine");
+    }
+
     #[test]
     fn a_thin_sliver_across_a_huge_canvas_costs_its_edge_tiles() {
         let clip = Rect::new(0, 0, 100_000, 100_000);

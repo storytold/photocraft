@@ -353,12 +353,19 @@ pub fn drop_floating(s: &mut Session) -> Result<Value> {
         }
         return Ok(json!({"dropped": true, "offset": [0, 0]}));
     }
-    s.edit(&name, |doc, _| {
+    let placed = s.edit(&name, |doc, _| {
         f.parts.place(doc, dx, dy)?;
         let sel = f.parts.outline().or(doc.selection.as_ref());
         doc.selection = sel.map(|sel| photocraft_algo::resample::translate_surface(sel, dx, dy));
         Ok(())
-    })?;
+    });
+    // A drop that fails (a moved mask that cannot be allocated) changed nothing: the piece floats on.
+    if placed.is_err()
+        && let Some(st) = s.active_mut()
+    {
+        st.floating = Some(f);
+    }
+    placed?;
     Ok(json!({"dropped": true, "offset": [dx, dy]}))
 }
 
@@ -368,6 +375,7 @@ fn keeps_floating(id: &str) -> bool {
         id,
         "select.float"
             | "select.drop"
+            | "file.export.saveForWebLegacy"
             | "layer.copyToDocument"
             | "file.scripts.imageProcessor"
             | "brush.mixer.sample"

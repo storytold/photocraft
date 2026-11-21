@@ -731,6 +731,46 @@ fn lasso_polygon() {
     assert_eq!(coverage(&s, 2, 2), 1.0);
 }
 
+/// A non-finite x takes the full-width rows; finite points keep the narrow band.
+#[test]
+fn lasso_band_is_full_width_for_a_non_finite_x() {
+    use super::polygon_window_rect;
+    let area = photocraft_geom::Rect::new(0, 0, 100, 100);
+    let finite = [(10.0f32, 10.0f32), (20.0, 10.0), (10.0, 20.0)];
+    let band = polygon_window_rect(&finite, area);
+    assert!(band.x0 > 0 && band.x1 < 100);
+    let wide = [(10.0f32, 10.0f32), (1e40f64 as f32, 10.0), (10.0, 20.0)];
+    let band = polygon_window_rect(&wide, area);
+    assert_eq!((band.x0, band.x1), (0, 100));
+}
+
+/// Non-finite or huge coordinates (of either axis) take the full-width rows too: a narrow band
+/// could cut coverage that an edge's `f32` crossing reaches outside the vertices' columns.
+#[test]
+fn lasso_band_is_full_width_for_a_non_finite_y_or_a_huge_coordinate() {
+    use super::polygon_window_rect;
+    let area = photocraft_geom::Rect::new(0, 0, 100, 100);
+    for pts in
+        [[(10.0f32, f32::INFINITY), (20.0, -1.0), (20.0, 2.0)], [(-1e10, -1e9), (600.0, 1.0), (0.0, 1.0)], [(10.0, 10.0), (20.0, f32::NAN), (10.0, 20.0)]]
+    {
+        let band = polygon_window_rect(&pts, area);
+        assert_eq!((band.x0, band.x1), (0, 100), "{pts:?}");
+    }
+}
+
+/// The lasso command refuses an outline whose rows x edges work passes the lasso limit, as the
+/// Select and Mask edits do, before rasterizing anything.
+#[test]
+fn lasso_refuses_too_many_edge_samples() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 1000})).unwrap();
+    let zigzag: Vec<[u32; 2]> = (0..80_000).map(|i| if i % 2 == 0 { [1, 0] } else { [2, 999] }).collect();
+    let e = s.execute("select.lasso", json!({"points": zigzag})).unwrap_err().to_string();
+    assert!(e.contains("too many edges"), "{e}");
+    assert!(s.active().unwrap().doc.selection.is_none());
+    assert!(s.execute("select.lasso", json!({"points": [[0, 0], [20, 0], [0, 20]]})).is_ok());
+}
+
 /// The previous per-sample padding and cropping, kept as the oracle for the row-wise ones.
 fn old_pad_mask(m: &[f32], w: usize, h: usize, pad: usize, outside_empty: bool) -> Vec<f32> {
     let pw = w + 2 * pad;
