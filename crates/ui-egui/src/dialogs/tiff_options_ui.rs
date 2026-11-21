@@ -106,8 +106,6 @@ pub struct Parked {
     has_transparency: bool,
     /// The layered-file note ("Ask Before Saving Layered TIFF Files") shows.
     layer_note: bool,
-    /// The document is in Bitmap mode (1-bit bilevel).
-    is_bitmap: bool,
 }
 
 /// The framework's compression for the codec's (PackBits, which the dialog doesn't offer, as none).
@@ -159,25 +157,23 @@ pub fn park_dialog(app: &mut PhotocraftApp, path: String, copy: bool, record: &'
     options.compression = ui_compression(compression);
     options.pyramid = pyramid;
     options.transparency = transparency;
-    let is_bitmap = st.doc.mode == photocraft_doc::ColorMode::Bitmap;
     let dialog =
         HostedFormatOptions::new(app.ctx(), ExportOptionsKind::Tiff).initial(FormatOptions::Tiff(options)).tiff_document(layered, has_transparency, layer_note);
-    let parked = Parked { layered, has_transparency, layer_note, is_bitmap };
+    let parked = Parked { layered, has_transparency, layer_note };
     format_prompts::park(app, ParkedSave { doc, path, copy, record, format: ParkedFormat::Tiff(parked) }, dialog)
 }
 
 /// OK: writes the parked save with the dialog's answer, and journals it.
 pub(crate) fn finish(app: &mut PhotocraftApp, ctx: &egui::Context, save: ParkedSave, options: TiffOptions) {
-    let ParkedFormat::Tiff(Parked { layered, has_transparency, layer_note, is_bitmap }) = save.format else { return };
+    let ParkedFormat::Tiff(Parked { layered, has_transparency, layer_note }) = save.format else { return };
     if layer_note && options.dont_show_again && !options.discard_layers {
         app.session.edit_prefs(|prefs| prefs.file_handling.ask_before_saving_layered_tiff = false);
     }
     let compression = codec_compression(options.compression);
     app.tiff_remembered = Remembered { compression, pyramid: options.pyramid };
-    let ccitt_g4 = is_bitmap && options.compression != UiTiffCompression::None;
     let choice = TiffChoice {
         compression,
-        ccitt_g4,
+        ccitt_g4: false,
         transparency: has_transparency.then_some(options.transparency),
         pyramid: options.pyramid,
         layers: layered.then_some(!options.discard_layers),
@@ -234,5 +230,16 @@ mod tests {
         );
         // No layers answer keeps what the save would do.
         assert!(TiffChoice::default().apply(base).tiff_layers);
+    }
+
+    #[test]
+    fn record_persists_g4() {
+        let mut step = json!({});
+        TiffChoice { ccitt_g4: true, ..Default::default() }.record(&mut step);
+        assert_eq!(step["tiffCompression"], "g4");
+
+        let mut step_lzw = json!({});
+        TiffChoice { compression: TiffCompression::Lzw, ccitt_g4: false, ..Default::default() }.record(&mut step_lzw);
+        assert_eq!(step_lzw["tiffCompression"], "lzw");
     }
 }
