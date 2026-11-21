@@ -300,7 +300,7 @@ impl ColorState {
     /// colour space. The answer is kept per tag and working setting: the tab asks every frame, and the comparison
     /// samples the whole gamut.
     pub fn differs_from_working(&self, mode: ColorMode, tag: &Arc<Vec<u8>>) -> bool {
-        type Cache = Mutex<Vec<(Weak<Vec<u8>>, ColorMode, Option<String>, Option<FileStamp>, bool)>>;
+        type Cache = Mutex<Vec<(Weak<Vec<u8>>, ColorMode, Option<String>, Option<FileStamp>, Intent, bool)>>;
         static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
         let cache = CACHE.get_or_init(Default::default);
         let space = mode_space(mode);
@@ -308,15 +308,20 @@ impl ColorState {
         // A working space named by an ICC file resolves to whatever that file holds now: replacing or restoring the
         // file changes the answer although the setting's text doesn't (CodeRabbit on #16082).
         let stamp = spec.as_deref().and_then(file_stamp);
+        // `working()` only accepts a profile that converts both ways under the current rendering intent, so the intent
+        // is part of the answer too (CodeRabbit on #16082).
+        let intent = self.settings.intent();
         {
             let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
             c.retain(|(w, ..)| w.strong_count() > 0);
-            if let Some((.., differs)) = c.iter().find(|(w, m, s, f, _)| w.as_ptr() == Arc::as_ptr(tag) && *m == mode && *s == spec && *f == stamp) {
+            if let Some((.., differs)) =
+                c.iter().find(|(w, m, s, f, i, _)| w.as_ptr() == Arc::as_ptr(tag) && *m == mode && *s == spec && *f == stamp && *i == intent)
+            {
                 return *differs;
             }
         }
         let differs = profile_from_bytes(tag).is_ok_and(|p| p.color_space == space && !p.same_colors(&self.working(mode)));
-        cache.lock().unwrap_or_else(|e| e.into_inner()).push((Arc::downgrade(tag), mode, spec, stamp, differs));
+        cache.lock().unwrap_or_else(|e| e.into_inner()).push((Arc::downgrade(tag), mode, spec, stamp, intent, differs));
         differs
     }
 

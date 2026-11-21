@@ -5,9 +5,9 @@ use super::*;
 
 #[test]
 fn replacing_the_working_profile_file_drops_the_cached_answer() {
-    let dir = std::env::temp_dir().join(format!("pc-working-profile-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("working.icc");
+    // Removed with its guard, also when an assertion fails.
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("working.icc");
     let srgb = Builtin::Srgb.profile().to_bytes();
     let p3 = Builtin::DisplayP3.profile().to_bytes();
     std::fs::write(&file, srgb.as_slice()).unwrap();
@@ -26,5 +26,4 @@ fn replacing_the_working_profile_file_drops_the_cached_answer() {
     assert!(s.color.differs_from_working(ColorMode::Rgb, &tag), "an unreadable file falls back to sRGB");
     std::fs::write(&file, p3.as_slice()).unwrap();
     assert!(!s.color.differs_from_working(ColorMode::Rgb, &tag), "recovering the file is noticed");
-    let _ = std::fs::remove_dir_all(&dir);
 }
