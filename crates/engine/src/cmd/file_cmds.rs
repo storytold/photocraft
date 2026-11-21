@@ -45,7 +45,7 @@ pub(crate) use batch_run::{batch_action, batch_inputs, batch_keeps_step, batch_s
 pub use export::{LayerExportReport, SkippedExportLayer, bake_cube, export_layers_report_with, export_layers_with};
 use export::{color_lookup_tables, layers_to_files, push_unique};
 use info::file_info;
-pub use info::{CAMERA_FIELDS, camera_data, copyright_marked, read_file_info, write_file_info};
+pub use info::{CAMERA_FIELDS, camera_data, copyright_marked, read_file_info, starting_xmp, write_file_info};
 #[cfg(test)]
 use info::{exposure_text, find_element};
 pub(crate) use open::{BatchOpen, batch_open_notice, batch_open_params, remember_batch_open};
@@ -455,6 +455,10 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("view.clearCanvasGuides", "Clear Canvas Guides", &["View"], None, "{}", has_doc, |s, _| clear_canvas_guides(s)),
     ]
 }
+
+#[cfg(test)]
+#[path = "file_cmds/new_document_xmp_tests.rs"]
+mod new_document_xmp_tests;
 
 #[cfg(test)]
 #[path = "file_cmds/tests.rs"]

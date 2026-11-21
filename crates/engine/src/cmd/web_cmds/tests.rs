@@ -1294,6 +1294,8 @@ fn save_for_web_all_writes_the_photos_exif() {
 fn save_for_web_webp_all_keeps_an_exif_only_photos_exif() {
     let dir = tmp("webp_exif");
     let mut s = session(8);
+    // The source photo is EXIF-only, not a new document carrying its starting XMP.
+    std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).metadata.xmp = None;
     s.edit("exif", |doc, _| {
         doc.metadata.exif = Some(std::sync::Arc::new(camera_exif()));
         Ok(())

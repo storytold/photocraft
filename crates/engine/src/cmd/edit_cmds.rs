@@ -710,6 +710,7 @@ fn new_from_clipboard(s: &mut Session) -> Result<Value> {
     let mut l = Layer::raster(doc.next_layer_name("Layer"), target);
     *crate::pixels_mut(&mut l)? = if moved.format() == target { moved } else { moved.convert(target) };
     doc.layers.push(l);
+    doc.metadata.xmp = Some(crate::file_cmds::starting_xmp(&doc).into());
     let i = s.add_document(doc, None);
     // Clipboard content has never been saved; closing this tab must ask before discarding it.
     if let Some(st) = s.active_mut() {

@@ -64,6 +64,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     doc.icc_profile = Some(prof.to_bytes());
                 }
+                doc.metadata.xmp = Some(crate::file_cmds::starting_xmp(&doc).into());
                 let i = s.add_document(doc, None);
                 // A new document's first History state is "New"; opened files keep "Open" (#14029).
                 if let Some(st) = s.active_mut() {
