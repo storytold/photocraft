@@ -145,14 +145,21 @@ fn thin_and_partial_windows_match() {
 
 #[test]
 fn block_bounds_cover_float_rounding_and_ties() {
-    for offset in [0, -(1 << 22), (1 << 22) - 80] {
+    let cases = [0, -(1 << 22), (1 << 22) - 80].map(|offset| {
         let bounds = Rect::new(offset, offset, offset + 64, offset + 49);
         let ctx = Ctx { bounds, mode: ColorMode::Rgb, alpha: true };
-        let src = image(bounds, 4, 1);
-        for size in [2.0, 7.0, 19.0] {
-            let spec = ExtrudeSpec { kind: ExtrudeType::Blocks, size, depth: 255.0, level_based: true, solid_front: true, mask_incomplete: false, seed: 42 };
-            assert!(extrude::blocks(&src, bounds, &ctx, &spec).is_some());
-            assert_eq!(bits(extrude(&src, bounds, &ctx, &spec)), bits(extrude_direct(&src, bounds, &ctx, &spec)));
+        (image(bounds, 4, 1), ctx)
+    });
+    let (origin, origin_ctx) = &cases[0];
+    for size in [2.0, 7.0, 19.0] {
+        let spec = ExtrudeSpec { kind: ExtrudeType::Blocks, size, depth: 255.0, level_based: true, solid_front: true, mask_incomplete: false, seed: 42 };
+        // Pixel, cell and document centers are exact integers or half-integers at all three offsets.
+        // The solid-front scalar search uses their differences, so translating the fixture leaves its samples unchanged.
+        let want = bits(extrude_direct(origin, origin_ctx.bounds, origin_ctx, &spec));
+        for (src, ctx) in &cases {
+            let bounds = ctx.bounds;
+            assert!(extrude::blocks(src, bounds, ctx, &spec).is_some(), "offset {}, size {size} must use the fast block path", bounds.x0);
+            assert_eq!(bits(extrude(src, bounds, ctx, &spec)), want, "offset {}, size {size}", bounds.x0);
         }
     }
 }
