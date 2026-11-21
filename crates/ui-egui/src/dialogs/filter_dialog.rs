@@ -1060,8 +1060,8 @@ pub(crate) fn ask_displace_map(app: &mut PhotocraftApp, command: String, result:
     app.ask_file(request, move |app, picked| {
         let path = match picked {
             Picked::Paths(paths) => paths.into_iter().next().ok_or("no displacement map was chosen")?,
-            Picked::Cancelled => return Err(crate::file_dialog::CANCELLED.into()),
-            Picked::Unavailable(error) => return Err(error),
+            Picked::Cancelled | Picked::Downloaded(_) => return Err(crate::file_dialog::CANCELLED.into()),
+            Picked::Unavailable(error) | Picked::Failed(error) => return Err(error),
             Picked::Contents(_) => return Err("open the displacement map as a document, then choose it as the Map Document".into()),
         };
         let mut params = command_params(&command, &result.fields);
