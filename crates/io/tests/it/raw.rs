@@ -735,5 +735,14 @@ fn raw_open_legacy_baseline_pixels() {
     let tuned_px = [sample_rgb16(tuned_img.data(), w, 0, 0), sample_rgb16(tuned_img.data(), w, 7, 7), sample_rgb16(tuned_img.data(), w, 15, 15)];
     let tuned_hash = fnv1a_u16(tuned_img.data());
 
-    assert_eq!((def_px, def_hash, wb, tuned_px, tuned_hash), ([[0; 3]; 3], 0, false, [[0; 3]; 3], 0));
+    assert_eq!(
+        (def_px, def_hash, wb, tuned_px, tuned_hash),
+        (
+            [[29624, 25113, 50386], [47838, 39368, 49721], [54364, 41011, 44877]],
+            4_077_782_316_697_218_873,
+            false,
+            [[39218, 33230, 65535], [63447, 52123, 65535], [65535, 54111, 59021]],
+            13_721_670_327_866_894_160,
+        )
+    );
 }
