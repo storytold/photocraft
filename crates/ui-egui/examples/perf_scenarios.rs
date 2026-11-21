@@ -410,6 +410,8 @@ struct Sizes {
     huge_doc: (u32, u32),
     /// The new document whose compositor builds in the background.
     first_document: (u32, u32),
+    /// The 36 MP photo whose layer the #9332 rows move and paste.
+    photo_36mp: (u32, u32),
 }
 
 /// The most `--reps` a run takes: each sample is kept, and a mistyped count must not allocate for them all.
@@ -428,6 +430,7 @@ const FULL: Sizes = Sizes {
     huge_new: (78_740, 39_370),
     huge_doc: (30_000, 30_000),
     first_document: (1920, 1080),
+    photo_36mp: (7360, 4912),
 };
 
 const QUICK: Sizes = Sizes {
@@ -443,6 +446,7 @@ const QUICK: Sizes = Sizes {
     huge_new: (20_000, 10_000),
     huge_doc: (8_000, 8_000),
     first_document: (640, 480),
+    photo_36mp: (1600, 1068),
 };
 
 /// The layered document of #209: a background, six pixel layers with a drop shadow and a stroke,
@@ -537,7 +541,7 @@ fn main() {
     // A panic in one group (a crash the scenario found) is reported against the row that was
     // running, and the other groups still run.
     type Group = fn(&mut Bench, &Sizes);
-    let groups: [(&str, Group); 9] = [
+    let groups: [(&str, Group); 10] = [
         ("layered", layered_scenarios),
         ("many layers", many_layer_scenarios),
         ("full-canvas layers", full_canvas_layer_scenarios),
@@ -547,6 +551,7 @@ fn main() {
         ("huge document", huge_document_scenarios),
         ("first document", first_document_scenarios),
         ("redraw area", redraw_area_scenarios),
+        ("photo layer", photo_layer_scenarios),
     ];
     let use_gpu = b.gpu.is_some();
     if let Some(wanted) = arg(&args, "--group")
@@ -1832,4 +1837,125 @@ fn paste_into_frame_scenario(b: &mut Bench, name: &str, w: u32, h: u32) {
     // The rows' document handle: the harness's session.
     let st = std::mem::take(&mut harness.state_mut().session);
     b.record(name, &st, &samples, &[], run);
+}
+
+/// The share of a surface's stored tiles that are its own (not one shared tile standing for
+/// many, as a solid fill or `Surface::share_uniform_tiles` leaves them).
+fn distinct_tile_share(surf: &Surface) -> f64 {
+    let distinct: std::collections::HashSet<_> = surf.tiles().map(|(_, t)| std::sync::Arc::as_ptr(t)).collect();
+    distinct.len() as f64 / surf.tile_count().max(1) as f64
+}
+
+/// `move_ui::LIVE_LIMIT`: a Move drag of layers storing more than this shows a snapshot instead
+/// of copying them for every frame.
+const MOVE_LIVE_LIMIT: u64 = 512 << 20;
+
+/// #9332: a layer of photo pixels (every tile its own, unlike the solid fills P14 and the
+/// full-canvas drag rows move, which `Surface::translated` shares as one tile), copied from the
+/// Background of a 36 MP photo (Layer via Copy) in a two-layer document: moved by a command,
+/// one Move tool drag frame of it, and the photo pasted into its layer mask.
+fn photo_layer_scenarios(b: &mut Bench, sz: &Sizes) {
+    let mv = "move photo layer 36 MP + refresh";
+    let drag = "move tool drag frame, 36 MP photo layer";
+    let paste = "paste 36 MP into a layer mask + refresh";
+    if !b.wanted(mv) && !b.wanted(drag) && !b.wanted(paste) {
+        return;
+    }
+    let first = [mv, drag, paste].into_iter().find(|n| b.wanted(n)).unwrap_or(mv);
+    b.current = Some(first.to_string());
+    let (w, h) = sz.photo_36mp;
+    let built = open_photo(w, h).and_then(|mut s| {
+        exec(&mut s, "layer.new.layerViaCopy", json!({}))?;
+        let layer = active_layer(&s)?;
+        let doc = &s.active().ok_or("no document")?.doc;
+        let surf = doc.layer(photocraft_doc::LayerId(layer)).and_then(photocraft_doc::Layer::surface).ok_or("the copy has no pixels")?;
+        let share = distinct_tile_share(surf);
+        if share < 0.9 {
+            return Err(format!("path check: only {:.0} % of the photo layer's tiles are its own, not >= 90 %", share * 100.0));
+        }
+        if doc.layers.len() != 2 {
+            return Err(format!("path check: the document has {} layers, not 2", doc.layers.len()));
+        }
+        Ok((s, layer))
+    });
+    let (mut s, layer) = match built {
+        Ok(v) => v,
+        Err(e) => return b.errors.push((first.to_string(), e)),
+    };
+    let _ = b.refresh(&s, true);
+    let reps = b.reps;
+
+    // Each sample moves from the same place: the move is undone (untimed), so History doesn't
+    // grow with the reps and later rows start from the same document.
+    b.time(mv, &mut s, reps, true, |b, s, _| {
+        let before = s.active().ok_or("no document")?.doc.clone();
+        let t = Instant::now();
+        exec(s, "layer.translate", json!({"layer": layer, "dx": 7, "dy": 3}))?;
+        let took = b.after_cmd(s, t, false)?;
+        let after = s.active().ok_or("no document")?.doc.clone();
+        if photocraft_engine::layer_multi_cmds::step_damage(&before, &after).is_some_and(|r| r.is_empty()) {
+            return Err("path check: the move changed no pixels".into());
+        }
+        exec(s, "edit.undo", json!({}))?;
+        b.refresh(s, false)?;
+        Ok(took)
+    });
+
+    if b.wanted(drag) {
+        // The live path: each frame copies the layer (`move_ui::display_doc`), not a snapshot.
+        let stored = s
+            .active()
+            .and_then(|st| st.doc.layer(photocraft_doc::LayerId(layer)))
+            .and_then(photocraft_doc::Layer::surface)
+            .map(|surf| photocraft_raster::stored_tiles_bytes(surf.tile_count() as u64, &surf.format()));
+        match stored {
+            Some(bytes) if bytes < MOVE_LIVE_LIMIT => {
+                let _ = b.refresh(&s, true);
+                b.time(drag, &mut s, reps, true, |b, s, i| b.drag_frame(s, layer, i));
+            }
+            Some(bytes) => b.errors.push((drag.to_string(), format!("path check: the layer stores {} MB, past the live drag limit", bytes >> 20))),
+            None => b.errors.push((drag.to_string(), "the photo layer has no pixels".into())),
+        }
+    }
+
+    if !b.wanted(paste) {
+        return;
+    }
+    // The clipboard holds the whole photo; the copy layer gets a hide-all mask, which each
+    // sample's paste fills with the photo's luminosity (`fill_cmds::composite_over`) and then
+    // undoes, untimed.
+    b.current = Some(paste.to_string());
+    let ready = (|| -> Res<()> {
+        exec(&mut s, "layer.select", json!({"layer": layer}))?;
+        exec(&mut s, "select.all", json!({}))?;
+        exec(&mut s, "edit.copy", json!({}))?;
+        exec(&mut s, "select.deselect", json!({}))?;
+        exec(&mut s, "layer.layerMask.hideAll", json!({}))?;
+        Ok(())
+    })();
+    if let Err(e) = ready {
+        return b.errors.push((paste.to_string(), e));
+    }
+    let _ = b.refresh(&s, true);
+    let mask_at = |s: &Session, x: i32, y: i32| -> Res<f32> {
+        let doc = &s.active().ok_or("no document")?.doc;
+        let l = doc.layer(photocraft_doc::LayerId(layer)).ok_or("no photo layer")?;
+        Ok(l.mask.as_ref().ok_or("the photo layer has no mask")?.value(x, y))
+    };
+    let (cx, cy) = (w as i32 / 2, h as i32 / 2);
+    b.time(paste, &mut s, reps.min(5), true, |b, s, _| {
+        let layers = s.active().ok_or("no document")?.doc.layers.len();
+        let t = Instant::now();
+        let r = exec(s, "edit.paste", json!({"target": "mask"}))?;
+        let took = b.after_cmd(s, t, false)?;
+        if r.get("target").and_then(Value::as_str) != Some("mask") || s.active().ok_or("no document")?.doc.layers.len() != layers {
+            return Err("path check: the paste did not go into the mask".into());
+        }
+        if mask_at(s, cx, cy)? <= 0.0 {
+            return Err("path check: the paste left the hide-all mask unchanged".into());
+        }
+        exec(s, "edit.undo", json!({}))?;
+        b.refresh(s, false)?;
+        Ok(took)
+    });
 }
