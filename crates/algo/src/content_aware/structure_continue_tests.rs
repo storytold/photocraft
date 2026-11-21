@@ -67,14 +67,11 @@ fn window_buffers() -> (Vec<f32>, Vec<bool>, usize) {
     (img, hole, ww)
 }
 
-/// Fill the measured document the way the command does with `opts` and Auto or Rectangular
-/// sampling, and return the filled window.
-fn fill_measured_document(sampling: &str, opts: &FillOptions) -> Vec<f32> {
+/// Fill the measured document the way the command does with `opts` and Auto sampling, and return
+/// the filled window.
+fn fill_measured_document(opts: &FillOptions) -> Vec<f32> {
     let (img, hole, ww) = window_buffers();
-    let source = match sampling {
-        "auto" => auto_sampling(ww, 400, 3, &img, &hole),
-        _ => hole.iter().map(|h| !h).collect(),
-    };
+    let source = auto_sampling(ww, 400, 3, &img, &hole);
     fill(ww, 400, 3, &img, &hole, &source, opts)
 }
 
@@ -169,49 +166,29 @@ fn boundary_mismatches(out: &[f32]) -> (usize, usize) {
     (green_above, cold_below)
 }
 
+/// The measured fill, computed once: Auto and Rectangular give `fill` the same area on this
+/// document ([`measured_auto_area_is_the_rectangular_one`]), so one fill stands for both. The
+/// checks are collected first, so a failure reports every one that is off.
 #[test]
-fn auto_fill_continues_the_bands_and_stripes_at_the_measured_samples() {
+fn measured_fill_continues_the_bands_and_stripes_and_keeps_the_boundary_at_y_200() {
     assert_eq!(window(), Rect::new(100, 0, 500, 400), "the sampling window #14191 measured");
-    let out = fill_measured_document("auto", &FillOptions::default());
+    let out = fill_measured_document(&FillOptions::default());
+    let mut failures = Vec::new();
     let off = samples_off(&out);
-    assert!(off.is_empty(), "Auto sampling: {} of 9 samples off\n{}", off.len(), off.join("\n"));
-}
-
-#[test]
-fn rectangular_fill_continues_the_bands_and_stripes_at_the_measured_samples() {
-    let out = fill_measured_document("rectangular", &FillOptions::default());
-    let off = samples_off(&out);
-    assert!(off.is_empty(), "Rectangular sampling: {} of 9 samples off\n{}", off.len(), off.join("\n"));
-}
-
-#[test]
-fn auto_fill_keeps_the_blue_green_boundary_at_y_200() {
-    let out = fill_measured_document("auto", &FillOptions::default());
+    if !off.is_empty() {
+        failures.push(format!("{} of 9 samples off\n{}", off.len(), off.join("\n")));
+    }
     let (green_above, cold_below) = boundary_mismatches(&out);
-    assert_eq!(green_above, 0, "pixels above y 200 that took a colour of the green half");
-    assert_eq!(cold_below, 0, "pixels below y 200 that took a colour of the blue half");
-}
-
-#[test]
-fn rectangular_fill_keeps_the_blue_green_boundary_at_y_200() {
-    let out = fill_measured_document("rectangular", &FillOptions::default());
-    let (green_above, cold_below) = boundary_mismatches(&out);
-    assert_eq!(green_above, 0, "pixels above y 200 that took a colour of the green half");
-    assert_eq!(cold_below, 0, "pixels below y 200 that took a colour of the blue half");
-}
-
-#[test]
-fn auto_fill_keeps_the_band_and_stripe_phase_across_the_whole_hole() {
-    let out = fill_measured_document("auto", &FillOptions::default());
+    if (green_above, cold_below) != (0, 0) {
+        failures.push(format!(
+            "the blue / green boundary moved: {green_above} pixels above y 200 took a colour of the green half, {cold_below} below it one of the blue half"
+        ));
+    }
     let (worst, within, n) = phase_through_the_hole(&out);
-    assert_eq!((within, n), (10_000, 10_000), "{within} of {n} hole pixels carry the document's own colour within 12 levels (worst {worst})");
-}
-
-#[test]
-fn rectangular_fill_keeps_the_band_and_stripe_phase_across_the_whole_hole() {
-    let out = fill_measured_document("rectangular", &FillOptions::default());
-    let (worst, within, n) = phase_through_the_hole(&out);
-    assert_eq!((within, n), (10_000, 10_000), "{within} of {n} hole pixels carry the document's own colour within 12 levels (worst {worst})");
+    if within != n {
+        failures.push(format!("{within} of {n} hole pixels carry the document's own colour within 12 levels (worst {worst})"));
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// Per-channel slack for the unmeasured pins below. The exact values hold bit for bit on Windows
@@ -273,7 +250,7 @@ fn unmeasured_geometric_adaptation() -> Vec<(&'static str, FillOptions, [i32; 27
 }
 
 fn check_unmeasured(what: &str, opts: &FillOptions, want: &[i32; 27]) {
-    let out = fill_measured_document("auto", opts);
+    let out = fill_measured_document(opts);
     let got: Vec<i32> = SAMPLES.iter().flat_map(|((x, y), _)| filled_at(&out, *x, *y)).collect();
     let off: Vec<String> = SAMPLES
         .iter()
@@ -307,8 +284,8 @@ fn unmeasured_geometric_adaptation_keeps_todays_fill() {
 
 #[test]
 fn measured_auto_area_is_the_rectangular_one() {
-    // What the measured Auto and Rectangular fills above rest on: on this document Auto keeps the
-    // whole window, as in the reference application.
+    // What the measured fill above rests on: on this document Auto keeps the whole window, as in
+    // the reference application, so the Auto fill is the Rectangular one.
     let (img, hole, ww) = window_buffers();
     assert_eq!(auto_sampling(ww, 400, 3, &img, &hole), hole.iter().map(|h| !h).collect::<Vec<bool>>());
 }
