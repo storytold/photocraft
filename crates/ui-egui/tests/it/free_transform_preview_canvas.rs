@@ -9,6 +9,7 @@
 
 use craft::behavior::kurbo::Point;
 use egui::{Modifiers, PointerButton, Pos2};
+use egui_kittest::kittest::Queryable;
 use photocraft_geom::Rect;
 use photocraft_ui_egui::PhotocraftApp;
 use photocraft_ui_egui::control::{ControlRequest, handle};
@@ -196,4 +197,41 @@ fn warp_after_perspective_keeps_the_picture_on_the_gpu_canvas() {
 #[test]
 fn warp_after_perspective_keeps_the_picture_on_the_cpu_canvas() {
     warp_after_perspective_keeps_the_picture(false);
+}
+
+/// Right-click over the warp grid in Warp mode opens the transform menu in its Warp form, as the reference does
+/// (#12493): the box modes, Warp with the Split Warp entries, and the rest; Scale picked there leaves Warp mode for the
+/// box, as the Edit menu's Scale does (the warp held under it).
+fn right_click_in_warp_opens_the_transform_menu(gpu_canvas: bool) {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut h) = harness(gpu_canvas) else { return };
+    setup(&mut h);
+    control(&mut h, "ui.menu.invoke", json!({"id": "edit.transform.warp"}));
+    assert!(h.state().ui.transform.as_ref().is_some_and(|t| t.session.warp().is_some()), "in Warp mode");
+    let rows = ["Free Transform", "Scale", "Perspective", "Split Warp Crosswise", "Remove Warp Split", "Puppet Warp", "Flip Vertical"];
+    let before: Vec<usize> = rows.iter().map(|row| h.query_all_by_label(row).count()).collect();
+    let at = screen(&h, 150.0, 150.0);
+    pointer_move(&mut h, at);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.step();
+    }
+    h.run_steps(4);
+    for (row, before) in rows.iter().zip(before) {
+        assert!(h.query_all_by_label(row).count() > before, "the Warp menu lists {row}");
+    }
+    h.query_all_by_label("Scale").last().expect("the menu's Scale row").click();
+    h.run_steps(4);
+    let t = h.state().ui.transform.as_ref().expect("the transform stays open");
+    assert!(t.session.warp().is_none(), "Scale picked in the Warp menu leaves Warp mode for the box");
+}
+
+#[test]
+fn right_click_in_warp_opens_the_transform_menu_on_the_gpu_canvas() {
+    right_click_in_warp_opens_the_transform_menu(true);
+}
+
+#[test]
+fn right_click_in_warp_opens_the_transform_menu_on_the_cpu_canvas() {
+    right_click_in_warp_opens_the_transform_menu(false);
 }

@@ -4,14 +4,18 @@
 
 use craft::behavior::EditEvents;
 use craft::behavior::geometry::SnapLine;
+use craft::behavior::geometry::TransformMode;
 use craft::behavior::kurbo::{CubicBez, ParamCurve, Point, Rect};
 use craft::draw::ui::pen::{AnchorsShown, BezierOverlay, BezierTool, EditPath, EditSubpath, Knot, PathSelection};
-use craft::draw::ui::transform::{ApplyBy, Interpolation, TransformEdit, TransformOverlay, TransformPhase, TransformRequest};
+use craft::draw::ui::transform::{
+    ApplyBy, Interpolation, TransformChoice, TransformEdit, TransformMenuWords, TransformOverlay, TransformPhase, TransformRequest,
+};
 use craft::imaging::ui::selection::PointMap;
 use craft::imaging::ui::transform_preview::{PreviewDisplay, PreviewMap, TransformPreview};
 use craft::imaging::ui::warp::{CylinderValues, CylinderWarp, WarpEdit, WarpGrid, WarpMesh};
 use craft::ui::canvas::RasterDisplay;
-use craft::ui::contract::{Bind, Show as _};
+use craft::ui::contract::{Bind, Entry, Show as _};
+use craft::ui::menu::Menu;
 use craft::ui::primitives::PaintSlot;
 use photocraft_doc::DocId;
 use photocraft_geom::warp::WarpStyle;
@@ -41,6 +45,8 @@ struct Shown {
     busy: bool,
     /// The preview's shapes, for the canvas's picture slot after the document ([`SessionShown::picture`]).
     picture: Vec<egui::Shape>,
+    /// The command picked in Warp mode's right-click menu ([`warp_menu`]), run after the pass's edits.
+    menu_command: Option<&'static str>,
 }
 
 /// Shows the open Free Transform in the canvas body at `rect`, and applies what its controls
@@ -62,7 +68,7 @@ pub fn show_in_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Re
         let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview) else { return SessionShown::default() };
         show_session(app, t, pv, ui, rect)
     };
-    let Shown { edits, snapped, apply, discard, mesh, cylinder, busy, picture } = shown;
+    let Shown { edits, snapped, apply, discard, mesh, cylinder, busy, picture, menu_command } = shown;
     let mut need_warp = false;
     if let Some(t) = app.ui.transform.as_mut() {
         for edit in edits.iter().cloned() {
@@ -89,6 +95,13 @@ pub fn show_in_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Re
         cancel(app);
     }
     commit::auto_commit(app, &edits);
+    // Warp mode's right-click menu: the picked row runs as the Edit menu runs it.
+    if let Some(id) = menu_command
+        && let Err(error) = crate::menus::invoke(app, ui.ctx(), id, serde_json::json!({}))
+    {
+        app.ui.status = error;
+        app.ui.status_error = true;
+    }
     if let Some(t) = app.ui.transform.as_mut() {
         t.session.settle(now, busy);
     }
@@ -114,7 +127,7 @@ fn show_session(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &m
         Some(w) => {
             // A screen pixel in document units, for the pull's reach along a line.
             let unit = crate::canvas::active_view(app).map_or(1.0, |v| 1.0 / v.zoom.max(1e-6));
-            show_warp(t, pv, w, ui, rect, unit, &mut out)
+            show_warp(app, t, pv, w, ui, rect, unit, &mut out)
         }
         None => {
             let settings = super::settings(app);
@@ -246,7 +259,8 @@ pub(crate) fn styled_composite(app: &PhotocraftApp, zoom: f32) -> Option<(egui::
 }
 
 /// The warp grid, or the cylinder editor for a cylinder, with its events for the caller to apply.
-fn show_warp(t: &FreeTransform, pv: &OpenPreview, w: &SessionWarp, ui: &mut egui::Ui, rect: egui::Rect, unit: f64, out: &mut Shown) {
+#[allow(clippy::too_many_arguments)]
+fn show_warp(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, w: &SessionWarp, ui: &mut egui::Ui, rect: egui::Rect, unit: f64, out: &mut Shown) {
     if w.warp.style == WarpStyle::Cylinder {
         if let Some(values) = warp::cylinder_values(&w.warp) {
             let shown = CylinderWarp::new("Warp cylinder", Bind::given(values), &w.mesh).show_at(ui, rect);
@@ -273,6 +287,16 @@ fn show_warp(t: &FreeTransform, pv: &OpenPreview, w: &SessionWarp, ui: &mut egui
         grid = grid.split(split);
     }
     let shown = grid.show_at(ui, rect);
+    // A right-click over the grid opens the transform menu in its Warp form, as the reference does (#12493).
+    let words = craft::ui::runtime::env::Env::of(ui).words::<TransformMenuWords>();
+    let (entries, rows) = warp_menu(app, t, &words);
+    if let Some(choice) = Menu::context(tl!("Warp").to_owned(), &shown.mesh.response).pick(ui, &entries).picked {
+        out.menu_command = match choice {
+            TransformChoice::Mode(mode) => mode_command(mode),
+            TransformChoice::Row(i) => rows.get(i).copied().flatten(),
+            _ => None,
+        };
+    }
     out.busy |= gesture_open(&shown.mesh.events);
     out.mesh = Some((shown.mesh.events, matches!(shown.edit, Some(WarpEdit::Split { .. }))));
 }
@@ -457,4 +481,74 @@ pub(crate) fn selection_map(app: &PhotocraftApp, document: DocId) -> Option<Poin
         Some(h) => PointMap::new(move |p| h.apply_in_front(p, rect)).bends(),
         None => PointMap::new(|_| None),
     })
+}
+
+/// The Edit menu command that picks box mode `mode` (the first whose mode it is): from Warp mode it holds the warp
+/// under that mode.
+fn mode_command(mode: TransformMode) -> Option<&'static str> {
+    ["edit.freeTransform", "edit.transform.scale", "edit.transform.rotate", "edit.transform.skew", "edit.transform.distort", "edit.transform.perspective"]
+        .into_iter()
+        .find(|id| super::mode_for_command(id) == mode)
+}
+
+/// Warp mode's right-click menu, in the reference's order (#12493): Free Transform; the box modes; Warp (checked) with
+/// the Split Warp entries and Remove Warp Split; Convert warp anchor point; Toggle Guides; Content-Aware Scale and
+/// Puppet Warp; Rotate Object; the rotations; the flips. The rows after Warp run their Edit › Transform commands,
+/// enabled as that menu enables them; the reference greys Convert warp anchor point, Content-Aware Scale, Puppet Warp
+/// and Rotate Object with no warp point selected, and PhotoCraft has neither a point selection nor Toggle Guides yet,
+/// so those stay greyed. The session greys the rotations and flips in Warp mode. Also the rows' commands, by index.
+pub(super) fn warp_menu(app: &PhotocraftApp, t: &FreeTransform, words: &TransformMenuWords) -> (Vec<Entry<TransformChoice>>, Vec<Option<&'static str>>) {
+    let session = t.session.menu(words);
+    // The session's menu: the six box modes, Warp, a separator, three rotations, a separator, two flips.
+    if session.len() != 14 {
+        return (session, Vec::new());
+    }
+    let rows: [(&str, Option<&'static str>); 9] = [
+        (tl!("Split Warp Horizontally"), Some("edit.transform.splitWarpHorizontally")),
+        (tl!("Split Warp Vertically"), Some("edit.transform.splitWarpVertically")),
+        (tl!("Split Warp Crosswise"), Some("edit.transform.splitWarpCrosswise")),
+        (tl!("Remove Warp Split"), Some("edit.transform.removeWarpSplit")),
+        (tl!("Convert warp anchor point"), None),
+        (tl!("Toggle Guides"), None),
+        (tl!("Content-Aware Scale"), None),
+        (tl!("Puppet Warp"), None),
+        (tl!("Rotate Object"), None),
+    ];
+    let row = |i: usize| {
+        let (label, id) = rows[i];
+        Entry::new(TransformChoice::Row(i), label.to_owned()).enabled(id.is_some_and(|id| !crate::menus::enable_rules::disabled(app, id)))
+    };
+    let e = |i: usize| session[i].clone();
+    let entries = vec![
+        e(0),
+        Entry::separator(),
+        e(1),
+        e(2),
+        e(3),
+        e(4),
+        e(5),
+        Entry::separator(),
+        e(6),
+        row(0),
+        row(1),
+        row(2),
+        row(3),
+        Entry::separator(),
+        row(4),
+        Entry::separator(),
+        row(5),
+        Entry::separator(),
+        row(6),
+        row(7),
+        Entry::separator(),
+        row(8),
+        Entry::separator(),
+        e(8),
+        e(9),
+        e(10),
+        Entry::separator(),
+        e(12),
+        e(13),
+    ];
+    (entries, rows.iter().map(|r| r.1).collect())
 }
