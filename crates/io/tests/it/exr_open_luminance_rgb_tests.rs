@@ -103,6 +103,7 @@ fn assert_rgb(route: &str, r: &ImportResult, left: [f32; 4], right: [f32; 4]) {
 #[test]
 fn luminance_exr_opens_as_rgb_through_file_open() {
     assert_rgb("Y File > Open", &open_file("y", &y_only()), [0.7, 0.7, 0.7, 1.0], [0.2, 0.2, 0.2, 1.0]);
+    assert_rgb("Z File > Open", &open_file("z", &z_only()), [5.0, 5.0, 5.0, 1.0], [0.25, 0.25, 0.25, 1.0]);
     assert_rgb("Y+A File > Open", &open_file("ya", &y_a()), [0.7, 0.7, 0.7, 1.0], [0.2, 0.2, 0.2, 0.5]);
 }
 
@@ -123,12 +124,11 @@ fn rgba_exr_opens_as_before() {
 }
 
 /// Open point: the whole-file decoder in `flat.rs` (the bytes import, and File > Open's
-/// fallback for headers the band decoder refuses, such as a Z-only file) still maps a gray EXR
-/// to Grayscale. That file is outside this item's scope until the epic owner agrees.
+/// fallback for headers the band decoder refuses) still maps a gray EXR to Grayscale. That file
+/// is outside this item's scope until the epic owner agrees.
 #[test]
 #[ignore = "flat.rs still opens gray EXRs as Grayscale (#14069 open point)"]
 fn luminance_exr_opens_as_rgb_through_whole_file_decoder() {
-    assert_rgb("Z File > Open", &open_file("z", &z_only()), [5.0, 5.0, 5.0, 1.0], [0.25, 0.25, 0.25, 1.0]);
     assert_rgb("Y bytes", &import("f.exr", &y_only()).unwrap(), [0.7, 0.7, 0.7, 1.0], [0.2, 0.2, 0.2, 1.0]);
     assert_rgb("Z bytes", &import("f.exr", &z_only()).unwrap(), [5.0, 5.0, 5.0, 1.0], [0.25, 0.25, 0.25, 1.0]);
     assert_rgb("Y+A bytes", &import("f.exr", &y_a()).unwrap(), [0.7, 0.7, 0.7, 1.0], [0.2, 0.2, 0.2, 0.5]);
