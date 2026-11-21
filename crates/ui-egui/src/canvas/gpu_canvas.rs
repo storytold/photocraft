@@ -165,7 +165,7 @@ pub struct GpuCanvas {
     compositor_completion: compositor_build::Completion,
 }
 
-/// Whether `regenerate_mips` builds each level in a scratch texture and copies it back: on
+/// Whether `regenerate_mips` builds each level in a scratch texture and draws it back: on
 /// Intel adapters under DX12 only, where some drivers corrupt reduced previews when a pass
 /// samples one mip level and renders into another of the same texture (#892, Intel UHD 620).
 /// Everywhere else it renders straight into the level: on an NVIDIA DX12 adapter the scratch
