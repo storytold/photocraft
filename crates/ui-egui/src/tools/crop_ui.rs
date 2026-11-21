@@ -230,9 +230,19 @@ pub fn frame(app: &PhotocraftApp) -> Option<CropBox> {
     app.canvas_tools.crop.tool.frame()
 }
 
-/// The canvas shows the pixels past its edges under the shield.
+/// The canvas shows the pixels past its edges under the shield. Default mode only: in Classic Mode the frame lies over
+/// the pasteboard and the layers stop at the canvas edge, as in Photoshop.
 pub(crate) fn shows_beyond_canvas(app: &PhotocraftApp) -> bool {
-    app.ui.tool == Tool::Crop && app.canvas_tools.crop.tool.shows_beyond_canvas()
+    app.ui.tool == Tool::Crop && app.ui.tool_options.crop.image_mode() && app.canvas_tools.crop.tool.shows_beyond_canvas()
+}
+
+/// The colour the area a crop adds past the canvas previews in (`shows_beyond_canvas`), as the commit fills it: the
+/// background colour on a visible Background with Delete Cropped Pixels on and Fill: Background. `None` previews
+/// transparency (Delete off turns the Background into a layer; Content-Aware Fill makes its own pixels).
+pub(crate) fn grown_fill(app: &PhotocraftApp, doc: &photocraft_doc::Document) -> Option<[f32; 4]> {
+    let crop = &app.ui.tool_options.crop;
+    let fills = crop.delete_pixels && crop.fill == CropFill::Background && doc.background().is_some_and(|layer| layer.visible);
+    fills.then_some(app.session.tools.background)
 }
 
 /// Show Cropped Area is off with the Crop tool showing a frame: nothing outside it shows.
