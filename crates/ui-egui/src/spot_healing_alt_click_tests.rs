@@ -172,3 +172,35 @@ fn the_clone_stamp_and_the_healing_brush_alt_click_still_set_the_source() {
         assert_eq!(steps(&app), before + 1, "{tool:?}: the click paints");
     }
 }
+
+#[test]
+fn the_dont_show_again_entry_survives_the_next_launch_move() {
+    let mut app = app(Tool::SpotHealing);
+    alt_click_refused(&mut app);
+    let (ctx, id) = (app.ctx().clone(), alerts(&app)[0]);
+    app.framework.dialogs.set_json_field(&ctx, id, "skip", json!(true)).unwrap();
+    crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
+    // The first frame of the next launch moves the remembered dialog values out of the preferences.
+    app.framework.move_memories(&mut app.session);
+    assert_eq!(
+        app.session.prefs().dialogs.get(crate::retouch_ui::SPOT_HEALING_ALT_PREF),
+        Some(&json!({"skip": true})),
+        "still kept with the dialog preferences"
+    );
+    click(&mut app, SPOT, Modifiers::ALT);
+    assert!(alerts(&app).is_empty(), "no alert after the move");
+}
+
+#[test]
+fn an_alt_click_with_a_group_target_shows_the_spot_healing_alert() {
+    let mut app = app(Tool::SpotHealing);
+    app.run("layer.new.group", json!({})).unwrap();
+    assert!(app.session.active().and_then(|st| st.doc.layer(st.active_layer?)).is_some_and(photocraft_doc::Layer::is_group), "a group is the target");
+    let ctx = app.ctx().clone();
+    let mut h =
+        egui_kittest::Harness::builder().with_size(egui::vec2(800.0, 600.0)).with_context(ctx).build_ui_state(|ui, app| crate::dialogs::run(app, ui), app);
+    click(h.state_mut(), SPOT, Modifiers::ALT);
+    h.run_steps(5);
+    assert!(h.query_by_label(MESSAGE).is_some(), "the Spot Healing alert");
+    assert!(h.query_by_label_contains("because the target layer is a group").is_none(), "not the group alert");
+}

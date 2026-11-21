@@ -463,11 +463,13 @@ impl Preflight<'_, '_> {
         self.scope.with_app(|app| {
             // Auto-Select's press picks the layer to move, so the hidden active layer is not its target.
             let picks = tool == Tool::Move && !crate::move_ui::moves_selected_pixels_with(app, tool) && app.ui.tool_options.move_auto_select != mods.cmd;
-            (!picks && press_refused(app, tool))
+            // The Spot Healing Brush's Alt-click heals nothing whatever the target is, so its alert comes before the
+            // target-painting refusals (#12563).
+            crate::retouch_ui::spot_healing_alt_click(app, tool, mods)
+                || (!picks && press_refused(app, tool))
                 || crate::rasterize_prompt::intercept(app, tool, at[0], at[1], pressure)
                 || refuse_group(app, tool)
                 || crate::retouch_ui::clone_stamp_without_source(app, tool)
-                || crate::retouch_ui::spot_healing_alt_click(app, tool, mods)
         })
     }
 }
