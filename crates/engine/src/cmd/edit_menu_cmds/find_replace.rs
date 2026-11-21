@@ -63,7 +63,8 @@ pub fn find_matches_with(text: &str, find: &str, case: bool, whole: bool, ignore
                 end += text[end..].chars().take_while(|c| norm(*c).is_empty()).map(char::len_utf8).sum::<usize>();
             }
             let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
-            let before = text[..at].chars().next_back();
+            // Ignoring accents, a mark before the match belongs to the letter it follows.
+            let before = text[..at].chars().rev().find(|c| !ignore_accents || !norm(*c).is_empty());
             let after = text[end..].chars().next();
             if !whole || (!word(before) && !word(after)) {
                 out.push((at, end));

@@ -39,6 +39,11 @@ fn ignore_accents_works_with_case_and_whole_word() {
     assert_eq!(on("cafe", json!({"caseSensitive": true})), "CAFÉ Café teas");
     assert_eq!(on("Cafe", json!({"caseSensitive": true})), "CAFÉ tea cafés");
     assert_eq!(on("cafe", json!({"wholeWord": true})), "tea tea cafés");
+    // A word ending inside "écafé": composed and decomposed, the mark belongs to the "e" before it.
+    for text in ["\u{e9}caf\u{e9}", "e\u{301}cafe\u{301}"] {
+        assert!(find_matches_with(text, "cafe", false, true, true).is_empty(), "{text:?}");
+        assert_eq!(find_matches_with(text, "cafe", false, false, true).len(), 1, "{text:?}");
+    }
 }
 
 #[test]
