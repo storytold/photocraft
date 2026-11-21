@@ -5,8 +5,9 @@ use craft::draw::ui::shape::{self as fw, Arrowheads, ArrowheadsPopover, ShapePan
 use craft::theme::Srgba;
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, SideLabel, clicked};
 use craft::ui::display::{Divider, Text};
+use craft::ui::form::Field;
 use craft::ui::layout_components::Row;
 use craft::ui::runtime::env::{Label, UnitKind};
 use craft::ui::text::NumberField;
@@ -198,8 +199,16 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
         // field and no effect: these fields apply no edit (the Shape tools have no size fields
         // yet either, #2496).
         let (w, h) = pen_shape_size(app.ui.pen.as_ref());
-        NumberField::new(label(tl!("W:")), Bind::given(Some(w))).unit_kind(UnitKind::Pixels).show(ui);
-        NumberField::new(label(tl!("H:")), Bind::given(Some(h))).unit_kind(UnitKind::Pixels).show(ui);
+        // The Field shows the "W:" / "H:" caption, as the reference's row prints them; in a bar a
+        // Field already takes its content width. The fields are views: their output applies nothing.
+        let _ = Field::new(label(tl!("W:")))
+            .id_salt("pen-w")
+            .side(SideLabel::new().scrub(true))
+            .show(ui, |ui, _| NumberField::new(label(tl!("W:")), Bind::given(Some(w))).unit_kind(UnitKind::Pixels).show(ui));
+        let _ = Field::new(label(tl!("H:")))
+            .id_salt("pen-h")
+            .side(SideLabel::new().scrub(true))
+            .show(ui, |ui, _| NumberField::new(label(tl!("H:")), Bind::given(Some(h))).unit_kind(UnitKind::Pixels).show(ui));
         // Align Edges (#12907): on by default and shown only in Shape mode; Path mode shows no
         // paint row at all (the issue allows absent or greyed). The checkbox writes the option the
         // Triangle's checkbox writes (#13370); Pen drawing keeps today's snapping until the
