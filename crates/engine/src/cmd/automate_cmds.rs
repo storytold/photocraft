@@ -6,7 +6,8 @@
 //! droplet) or a plain-text list with one `command.id {json params}` per line (`#` comments).
 //! Droplets are JSON files (`.pcdroplet`) holding an action plus batch options; `photocraft-cli
 //! droplet <file> <inputs…>` runs one, and on Unix a `.command` shim makes it
-//! double-clickable / drop-target-able from the shell.
+//! double-clickable / drop-target-able from the shell. On Windows a `.cmd` launcher beside the
+//! droplet takes File Explorer drops and runs them through the CLI (#13718).
 //!
 //! Script events (Start Application, New / Open / Save / Close Document, Print, Export) are
 //! bound in Preferences (`scriptEvents`) and fired by [`fire_event`]: the engine fires New,
@@ -387,13 +388,13 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let text = serde_json::to_string_pretty(&droplet).unwrap_or_default();
     write_file(&path, text.as_bytes())?;
-    let shim = p.get("shim").and_then(Value::as_bool).unwrap_or(cfg!(unix));
+    let shim = p.get("shim").and_then(Value::as_bool).unwrap_or(cfg!(unix) || cfg!(windows));
     let shim_path = if shim { Some(write_shim(&path)?) } else { None };
     Ok(json!({"path": path, "shim": shim_path, "steps": steps.len()}))
 }
 
 /// A tiny shell script next to the droplet: drop files on it (or pass them) to run the droplet.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(windows)))]
 fn write_shim(droplet: &str) -> Result<String> {
     let abs = std::fs::canonicalize(droplet).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| droplet.to_string());
     let base = abs.trim_end_matches(".pcdroplet").trim_end_matches(".json");
@@ -424,6 +425,46 @@ exec "$cli" droplet {quoted_abs} "$@"
         // local account read and execute it.
         let _ = std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o700));
     }
+    Ok(shim)
+}
+
+/// Windows launcher for the droplet (#13718): Explorer runs a `.cmd` with the dropped files
+/// and folders as arguments, so the launcher forwards them (`%*`) to the CLI. The body is
+/// pure ASCII and names the droplet through the launcher's own location (`%~dp0%~n0`) rather
+/// than embedding the path: spaces, `&`, `^`, `%` and non-ASCII characters in either path
+/// then never reach the batch parser or the console codepage.
+/// The CLI is looked up like the macOS shim looks up its app bundle: `PHOTOCRAFT_CLI` first,
+/// then the per-user install folder (`%LOCALAPPDATA%\Programs\ArtCraft\PhotoCraft`), then the
+/// per-machine ones (`%ProgramFiles%\ArtCraft\PhotoCraft` and, on 64-bit Windows, the folder the
+/// MSI really installs into, `%ProgramFiles(x86)%\ArtCraft\PhotoCraft`), then PATH. The installer
+/// puts `photocraft-cli.exe` in the install folder and does not add that folder to PATH, so a
+/// PATH-only lookup fails on a default install; and a native 64-bit `cmd.exe` resolves
+/// `%ProgramFiles%` to the 64-bit folder, so the 32-bit install is only found when both machine
+/// folders are searched (`packaging/windows/install-policy.wxi`: `CraftDefaultMachineFolder` uses
+/// `[%ProgramFiles(x86)]` when `VersionNT64`). Each candidate is its own flat line and the
+/// `if exist` operand is quoted whole, so the `)` of the variable name never reaches the parser
+/// unquoted.
+/// Kept limitation, pinned by `windows_launcher_splits_an_unquoted_dropped_path`: Explorer
+/// quotes a dropped path only when it contains a space, so an unquoted path carrying `&` or
+/// `^` is already split or unescaped while cmd.exe parses the command line that starts the
+/// launcher - before its first line runs. No batch body can undo that; see the PR discussion
+/// about a `.lnk` launcher, which hands the paths to the exe directly.
+#[cfg(windows)]
+fn write_shim(droplet: &str) -> Result<String> {
+    let abs = std::fs::canonicalize(droplet).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| droplet.to_string());
+    let ext = if abs.ends_with(".json") { ".json" } else { ".pcdroplet" };
+    // Strip only the matched extension, once: `Rotate.json.pcdroplet` must become
+    // `Rotate.json.cmd`, because the launcher recovers the droplet as `%~dp0%~n0` + ext
+    // (trimming both suffixes would self-locate a `Rotate.pcdroplet` that does not exist).
+    let base = abs.strip_suffix(ext).unwrap_or(abs.as_str());
+    let shim = format!("{base}.cmd");
+    let user_cli = r"%LOCALAPPDATA%\Programs\ArtCraft\PhotoCraft\photocraft-cli.exe";
+    let machine_cli = r"%ProgramFiles%\ArtCraft\PhotoCraft\photocraft-cli.exe";
+    let machine_x86_cli = r"%ProgramFiles(x86)%\ArtCraft\PhotoCraft\photocraft-cli.exe";
+    let body = format!(
+        "@echo off\r\nrem PhotoCraft droplet: drop files and folders on this file to run the stored action on them.\r\nrem The CLI, in order: PHOTOCRAFT_CLI, per-user install folder, per-machine install folder, per-machine 32-bit install folder, PATH.\r\nset \"PC_CLI=\"\r\nif defined PHOTOCRAFT_CLI set \"PC_CLI=%PHOTOCRAFT_CLI%\"\r\nif not defined PC_CLI if exist \"{user_cli}\" set \"PC_CLI={user_cli}\"\r\nif not defined PC_CLI if exist \"{machine_cli}\" set \"PC_CLI={machine_cli}\"\r\nif not defined PC_CLI if exist \"{machine_x86_cli}\" set \"PC_CLI={machine_x86_cli}\"\r\nif not defined PC_CLI set \"PC_CLI=photocraft-cli\"\r\n\"%PC_CLI%\" droplet \"%~dp0%~n0{ext}\" %*\r\n"
+    );
+    crate::file_cmds::write_file(&shim, body.as_bytes())?;
     Ok(shim)
 }
 #[cfg(target_arch = "wasm32")]
@@ -668,7 +709,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.createDroplet",
             "Create Droplet…",
             &["File", "Automate"],
-            r##"{"path":str (.pcdroplet),"steps":[[id,params]…]?,"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (with a named action: that set's action of the name),"name":str?,"output":folder?,"format":"same|png|jpg|…"?,"quality":0..12?,"shim":bool=true on Unix (writes <name>.command calling `photocraft-cli droplet`)} → {path, shim} (the actions its Play Action and Conditional steps call are saved in the droplet)"##,
+            r##"{"path":str (.pcdroplet),"steps":[[id,params]…]?,"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (with a named action: that set's action of the name),"name":str?,"output":folder?,"format":"same|png|jpg|…"?,"quality":0..12?,"shim":bool=true on Unix and Windows (Unix writes <name>.command, Windows <name>.cmd, both calling `photocraft-cli droplet`)} → {path, shim} (the actions its Play Action and Conditional steps call are saved in the droplet)"##,
             native,
             create_droplet
         ),
@@ -710,6 +751,9 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "droplet_skip_non_images_tests.rs"]
 mod droplet_skip_non_images_tests;
+#[cfg(test)]
+#[path = "droplet_windows_shim_tests.rs"]
+mod droplet_windows_shim_tests;
 #[cfg(test)]
 #[path = "automate_cmds/tests.rs"]
 mod tests;
