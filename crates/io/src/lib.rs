@@ -397,9 +397,11 @@ pub struct ExportOptions {
     pub force_psb: bool,
     /// TIFF: keep the layers (Photoshop layer data in tag 37724). Off by default, so scripted
     /// and agent saves (CLI, batch, MCP) write a flat TIFF unless they ask for layers; the app's
-    /// Save As sets it from its Layers option, which keeps them as Photoshop does. `false` is
-    /// Photoshop's "Discard Layers and Save a Copy".
+    /// TIFF: keep the layers. Save As sets it from its Layers option, which keeps them as Photoshop
+    /// does. `false` is Photoshop's "Discard Layers and Save a Copy".
     pub tiff_layers: bool,
+    /// TIFF: CCITT Group 4 (T.6) compression for bilevel (1-bit / Bitmap mode) images.
+    pub tiff_ccitt_g4: bool,
     /// TIFF: Photoshop's "Save Transparency" for the composite (the merged image other readers
     /// see; each layer of a layered TIFF keeps its own transparency either way). `Some(true)`
     /// stores the transparency as the first extra sample (unassociated alpha), ahead of any
@@ -455,6 +457,7 @@ impl Default for ExportOptions {
             encode: EncodeOptions::default(),
             force_psb: false,
             tiff_layers: false,
+            tiff_ccitt_g4: false,
             tiff_transparency: None,
             preserve_alpha: false,
             xmp: XmpEmbed::All,
@@ -1309,7 +1312,7 @@ fn export_stages_with_renderer(
     let format = photocraft_formats::from_extension(&ext)
         .and_then(photocraft_formats::Format::raster_codec)
         .ok_or_else(|| IoError::UnknownFormat(name_or_ext.to_string()))?;
-    if format == photocraft_codecs::Format::Tiff && opts.tiff_layers && tiff_layers::would_write_layers(doc) {
+    if format == photocraft_codecs::Format::Tiff && !opts.tiff_ccitt_g4 && opts.tiff_layers && tiff_layers::would_write_layers(doc) {
         let mut res = tiff_layers::export_layered(doc, opts, ctl)?;
         if let Some(r) = renderer {
             res.warnings.push("TIFF layered export uses CPU compositor; GPU rendering applies to flat formats".into());

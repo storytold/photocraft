@@ -33,8 +33,10 @@ pub(crate) struct SaveOpts {
     pub png_interlaced: Option<bool>,
     /// DPX: 8, 10, 12 or 16 bits per sample (`"dpxBits"`); unset, 8 for an 8-bit document, else 16.
     pub dpx_bits: Option<photocraft_io::DpxBits>,
-    /// TIFF: the image compression (`"tiffCompression": "none" | "lzw" | "zip"`); unset, none.
+    /// TIFF: the image compression (`"tiffCompression": "none" | "lzw" | "zip" | "g4"`); unset, none.
     pub tiff_compression: Option<photocraft_codecs::TiffCompression>,
+    /// TIFF: CCITT Group 4 (T.6) compression for bilevel (1-bit / Bitmap mode) images.
+    pub tiff_ccitt_g4: bool,
     /// TIFF: Save Transparency (`"tiffTransparency": bool`); unset, the transparency is kept
     /// unless the document has alpha or spot channels ([`photocraft_io::ExportOptions::tiff_transparency`]).
     pub tiff_transparency: Option<bool>,
@@ -71,6 +73,7 @@ impl Default for SaveOpts {
             png_interlaced: None,
             dpx_bits: None,
             tiff_compression: None,
+            tiff_ccitt_g4: false,
             tiff_transparency: None,
             preserve_alpha: false,
             tiff_pyramid: false,
@@ -103,6 +106,8 @@ impl SaveOpts {
             png_interlaced: None,
             dpx_bits: dpx_bits_param(p, cmd)?,
             tiff_compression: tiff_compression_param(p, cmd)?,
+            tiff_ccitt_g4: matches!(p.get("tiffCompression").and_then(Value::as_str), Some("g4" | "ccitt" | "ccitt_g4"))
+                || p.get("tiffCcittG4").and_then(Value::as_bool).unwrap_or(false),
             tiff_transparency: tiff_bool_param(p, "tiffTransparency", cmd)?,
             preserve_alpha: false,
             tiff_pyramid: tiff_bool_param(p, "tiffPyramid", cmd)?.unwrap_or(false),
@@ -174,8 +179,8 @@ pub fn maximize_compatibility_param(p: &Value, cmd: &str) -> Result<Option<bool>
     }
 }
 
-/// The TIFF compression in `p` (`"tiffCompression": "none" | "lzw" | "zip"`, Photoshop's TIFF
-/// Options; absent or null: none). Anything else is a bad parameter of command `cmd` (#5301).
+/// The TIFF compression in `p` (`"tiffCompression": "none" | "lzw" | "zip" | "g4"`, Photoshop's TIFF
+/// Options; absent or null: none). Anything else is a bad parameter of command `cmd` (#5301, #15995).
 pub fn tiff_compression_param(p: &Value, cmd: &str) -> Result<Option<photocraft_codecs::TiffCompression>> {
     use photocraft_codecs::TiffCompression;
     match p.get("tiffCompression") {
@@ -184,7 +189,8 @@ pub fn tiff_compression_param(p: &Value, cmd: &str) -> Result<Option<photocraft_
             Some("none") => Ok(Some(TiffCompression::None)),
             Some("lzw") => Ok(Some(TiffCompression::Lzw)),
             Some("zip") => Ok(Some(TiffCompression::Deflate)),
-            _ => Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("`tiffCompression` must be \"none\", \"lzw\" or \"zip\", got {v}") }),
+            Some("g4" | "ccitt" | "ccitt_g4") => Ok(None),
+            _ => Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("`tiffCompression` must be \"none\", \"lzw\", \"zip\" or \"g4\", got {v}") }),
         },
     }
 }
@@ -283,6 +289,7 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
     if let Some(c) = save.tiff_compression {
         opts.encode.tiff_compression = c;
     }
+    opts.tiff_ccitt_g4 = save.tiff_ccitt_g4;
     opts.encode.tiff_pyramid = save.tiff_pyramid;
     if let Some(embed) = save.embed_icc {
         opts.encode.embed_icc = embed;

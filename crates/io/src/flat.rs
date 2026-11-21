@@ -1868,6 +1868,9 @@ pub fn export_flat_with_renderer(
     ctl: &photocraft_raster::Interrupt,
     mut renderer: Option<&mut dyn BandRenderer>,
 ) -> Result<ExportResult, IoError> {
+    if opts.tiff_ccitt_g4 && (format != Format::Tiff || doc.mode != ColorMode::Bitmap) {
+        return Err(IoError::Unsupported("CCITT Group 4 (G4) compression is only supported for bilevel (Bitmap mode) documents".into()));
+    }
     if let Some(mut r) = export_mode_specific(doc, format, opts, ctl)? {
         // Palette PNG/BMP/GIF and Duotone exports render on their own paths before the renderer
         // branch: say so, or `--gpu` would silently do nothing for them.
@@ -1875,6 +1878,7 @@ pub fn export_flat_with_renderer(
             let why = match doc.mode {
                 ColorMode::Indexed => "palette (Indexed Color) PNG/BMP/GIF export uses the CPU compositor",
                 ColorMode::Duotone => "Duotone export uses the CPU compositor",
+                ColorMode::Bitmap => "bilevel (Bitmap mode) TIFF export uses the CPU compositor",
                 _ => "this export uses the CPU compositor",
             };
             renderer.push_diagnostic(format!("custom renderer unsupported: {why}; falling back to CPU"));
@@ -2594,8 +2598,104 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions, ct
             r.warnings.push(format!("Duotone ({} inks) written as RGB", d.inks.len()));
             Ok(Some(r))
         }
+        ColorMode::Bitmap if format == Format::Tiff => export_tiff_bilevel(doc, opts, ctl).map(Some),
         _ => Ok(None),
     }
+}
+
+/// Bilevel (1-bit / Bitmap mode) TIFF export, with optional CCITT Group 4 (T.6) compression (#15995).
+fn export_tiff_bilevel(doc: &Document, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ExportResult, IoError> {
+    let (w, h) = (doc.size.width, doc.size.height);
+    if w == 0 || h == 0 {
+        return Err(IoError::Unsupported("cannot export an empty document".into()));
+    }
+    let w_u16 = u16::try_from(w).map_err(|_| IoError::Unsupported("TIFF bilevel export width exceeds 65535 pixels".into()))?;
+
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+
+    let mut enc = if opts.tiff_ccitt_g4 { Some(fax::encoder::Encoder::new(fax::VecWriter::new())) } else { None };
+
+    let row_bytes = (w as usize).div_ceil(8);
+    let mut uncompressed_data = if enc.is_none() {
+        let total_bytes = row_bytes.checked_mul(h as usize).ok_or_else(|| IoError::Unsupported("image too large".into()))?;
+        Some(try_buffer(total_bytes, 1)?)
+    } else {
+        None
+    };
+
+    photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> Result<(), IoError> {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        let band_w = band.rect.width() as usize;
+        let band_h = band.rect.height() as usize;
+        for row_idx in 0..band_h {
+            let row_start = row_idx * band_w;
+            let row_pixels = &band.px[row_start..row_start + band_w];
+            if let Some(encoder) = enc.as_mut() {
+                let pels = row_pixels.iter().map(|p| if p[0] >= 0.5 { fax::Color::White } else { fax::Color::Black });
+                encoder.encode_line(pels, w_u16).map_err(|e| IoError::Unsupported(format!("fax encoding error: {e:?}")))?;
+            } else if let Some(uncomp) = uncompressed_data.as_mut() {
+                let mut row_buf = vec![0u8; row_bytes];
+                for (x, p) in row_pixels.iter().enumerate() {
+                    if p[0] < 0.5 {
+                        // Photometric 0 (WhiteIsZero): 0 is white, 1 is black
+                        row_buf[x / 8] |= 0x80 >> (x % 8);
+                    }
+                }
+                uncomp.extend_from_slice(&row_buf);
+            }
+        }
+        Ok(())
+    })?;
+
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+
+    let (image_data, compression, warning) = if let Some(encoder) = enc {
+        let g4_bytes = encoder.finish().map_err(|e| IoError::Unsupported(format!("fax encoder finish error: {e:?}")))?.finish();
+        (g4_bytes, 4u16, "written as a bilevel TIFF with CCITT Group 4 (T.6) compression".to_string())
+    } else if let Some(uncomp) = uncompressed_data {
+        (uncomp, 1u16, "written as a bilevel TIFF (uncompressed)".to_string())
+    } else {
+        return Err(IoError::Unsupported("internal export error".into()));
+    };
+
+    let mut ifd = craft_tiff::writer::IfdBuilder::new();
+    ifd.set(craft_tiff::tags::IMAGE_WIDTH, craft_tiff::Value::Long(vec![w]));
+    ifd.set(craft_tiff::tags::IMAGE_LENGTH, craft_tiff::Value::Long(vec![h]));
+    ifd.set(craft_tiff::tags::BITS_PER_SAMPLE, craft_tiff::Value::Short(vec![1]));
+    ifd.set(craft_tiff::tags::COMPRESSION, craft_tiff::Value::Short(vec![compression]));
+    ifd.set(craft_tiff::tags::PHOTOMETRIC, craft_tiff::Value::Short(vec![0])); // WhiteIsZero
+    ifd.set(craft_tiff::tags::FILL_ORDER, craft_tiff::Value::Short(vec![1])); // MSB-first
+    ifd.set(craft_tiff::tags::SAMPLES_PER_PIXEL, craft_tiff::Value::Short(vec![1]));
+
+    if compression == 4 {
+        // Tag 292 is T4Options, Tag 293 is T6Options (TIFF 6.0 section 14)
+        ifd.set(292, craft_tiff::Value::Long(vec![0]));
+        ifd.set(293, craft_tiff::Value::Long(vec![0]));
+    }
+
+    if doc.resolution_dpi > 0.0 {
+        let dpi = (doc.resolution_dpi.round() as u32).max(1);
+        ifd.set(craft_tiff::tags::X_RESOLUTION, craft_tiff::Value::Rational(vec![(dpi, 1)]));
+        ifd.set(craft_tiff::tags::Y_RESOLUTION, craft_tiff::Value::Rational(vec![(dpi, 1)]));
+        ifd.set(craft_tiff::tags::RESOLUTION_UNIT, craft_tiff::Value::Short(vec![2])); // Inch
+    }
+
+    if let Some(xmp) = doc.metadata.xmp.as_ref().filter(|_| opts.encode.embed_metadata && opts.xmp != XmpEmbed::None) {
+        ifd.set(craft_tiff::tags::XMP, craft_tiff::Value::Byte(xmp.as_bytes().to_vec()));
+    }
+
+    ifd.set_image(craft_tiff::writer::ImageData::Strips { rows_per_strip: h, strips: vec![image_data] });
+
+    let order = if codecs::tiff_writes_little_endian() { craft_tiff::ByteOrder::Little } else { craft_tiff::ByteOrder::Big };
+    let writer = craft_tiff::writer::TiffWriter::new(order, false);
+    let bytes = writer.write(&[ifd]).map_err(|e| IoError::Unsupported(format!("TIFF write error: {e}")))?;
+
+    let mut warnings = vec![warning];
+    if opts.tiff_layers && doc.layers.len() > 1 {
+        warnings.push("layers are not supported in 1-bit bilevel TIFF; document flattened".into());
+    }
+
+    Ok(ExportResult { bytes, warnings })
 }
 
 #[cfg(test)]
@@ -3423,5 +3523,125 @@ mod bilevel_tiff_tests {
         assert_eq!(second.document.mode, ColorMode::Bitmap);
         let first = import_tiff_page("pages.tif", &bytes, Some(0)).unwrap();
         assert_eq!(first.document.mode, ColorMode::Grayscale);
+    }
+
+    /// #15995: CCITT Group 4 (T.6) compressed 1-bit TIFF decodes and opens in Bitmap mode.
+    #[test]
+    fn a_g4_bilevel_tiff_decodes_and_opens_in_bitmap_mode() {
+        let (w, h) = (16u32, 8u32);
+        let mut enc = fax::encoder::Encoder::new(fax::VecWriter::new());
+        for _ in 0..h {
+            let row_pels = (0..w).map(|x| if x % 2 == 0 { fax::Color::White } else { fax::Color::Black });
+            enc.encode_line(row_pels, w as u16).unwrap();
+        }
+        let g4 = enc.finish().unwrap().finish();
+
+        let mut ifd = craft_tiff::writer::IfdBuilder::new();
+        ifd.set(craft_tiff::tags::IMAGE_WIDTH, craft_tiff::Value::Long(vec![w]));
+        ifd.set(craft_tiff::tags::IMAGE_LENGTH, craft_tiff::Value::Long(vec![h]));
+        ifd.set(craft_tiff::tags::BITS_PER_SAMPLE, craft_tiff::Value::Short(vec![1]));
+        ifd.set(craft_tiff::tags::COMPRESSION, craft_tiff::Value::Short(vec![4])); // CCITT Group 4
+        ifd.set(craft_tiff::tags::PHOTOMETRIC, craft_tiff::Value::Short(vec![0])); // WhiteIsZero
+        ifd.set(craft_tiff::tags::SAMPLES_PER_PIXEL, craft_tiff::Value::Short(vec![1]));
+        ifd.set_image(craft_tiff::writer::ImageData::Strips { rows_per_strip: h, strips: vec![g4] });
+
+        let writer = craft_tiff::writer::TiffWriter::new(craft_tiff::ByteOrder::Little, false);
+        let bytes = writer.write(&[ifd]).unwrap();
+
+        let r = import_flat("g4.tif", &bytes).unwrap();
+        assert_eq!(r.document.mode, ColorMode::Bitmap);
+        let px = |x: i32, y: i32| r.document.layers[0].surface().unwrap().pixel(x, y)[0];
+        for y in 0..h as i32 {
+            for x in 0..w as i32 {
+                let expected = if x % 2 == 0 { 1.0 } else { 0.0 };
+                assert_eq!(px(x, y), expected, "at ({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn bitmap_document_exports_to_tiff_with_ccitt_g4() {
+        let imported = import_flat("bilevel.tif", &tiff(1, 1)).unwrap().document;
+        assert_eq!(imported.mode, ColorMode::Bitmap);
+
+        let opts = ExportOptions { tiff_ccitt_g4: true, ..Default::default() };
+        let res = export_flat(&imported, Format::Tiff, &opts).unwrap();
+        assert!(res.warnings.iter().any(|w| w.contains("CCITT Group 4")));
+
+        // Verify TIFF IFD tags
+        let parsed = craft_tiff::Tiff::parse(&res.bytes).unwrap();
+        let comp = parsed.ifds[0].u16(craft_tiff::tags::COMPRESSION).unwrap();
+        assert_eq!(comp, 4); // CCITT Group 4
+        let bps = parsed.ifds[0].u16(craft_tiff::tags::BITS_PER_SAMPLE).unwrap();
+        assert_eq!(bps, 1);
+        let photo = parsed.ifds[0].u16(craft_tiff::tags::PHOTOMETRIC).unwrap();
+        assert_eq!(photo, 0); // WhiteIsZero
+
+        // Re-open and verify bit-identical pixels
+        let reopened = import_flat("exported_g4.tif", &res.bytes).unwrap().document;
+        assert_eq!(reopened.mode, ColorMode::Bitmap);
+        assert_eq!(reopened.size, imported.size);
+        let px_orig = |x: i32, y: i32| imported.layers[0].surface().unwrap().pixel(x, y)[0];
+        let px_reop = |x: i32, y: i32| reopened.layers[0].surface().unwrap().pixel(x, y)[0];
+        for y in 0..imported.size.height as i32 {
+            for x in 0..imported.size.width as i32 {
+                assert_eq!(px_orig(x, y), px_reop(x, y), "pixel at ({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn bitmap_document_exports_uncompressed_tiff_when_g4_false() {
+        let imported = import_flat("bilevel.tif", &tiff(1, 1)).unwrap().document;
+        let opts = ExportOptions { tiff_ccitt_g4: false, ..Default::default() };
+        let res = export_flat(&imported, Format::Tiff, &opts).unwrap();
+        let parsed = craft_tiff::Tiff::parse(&res.bytes).unwrap();
+        assert_eq!(parsed.ifds[0].u16(craft_tiff::tags::COMPRESSION).unwrap(), 1);
+
+        let reopened = import_flat("uncompressed.tif", &res.bytes).unwrap().document;
+        assert_eq!(reopened.mode, ColorMode::Bitmap);
+        let px_orig = |x: i32, y: i32| imported.layers[0].surface().unwrap().pixel(x, y)[0];
+        let px_reop = |x: i32, y: i32| reopened.layers[0].surface().unwrap().pixel(x, y)[0];
+        for y in 0..imported.size.height as i32 {
+            for x in 0..imported.size.width as i32 {
+                assert_eq!(px_orig(x, y), px_reop(x, y), "pixel at ({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn g4_compression_on_non_bitmap_document_is_refused() {
+        let gray_doc = import_flat("gray.tif", &tiff(8, 1)).unwrap().document;
+        assert_eq!(gray_doc.mode, ColorMode::Grayscale);
+        let opts = ExportOptions { tiff_ccitt_g4: true, ..Default::default() };
+        let err = export_flat(&gray_doc, Format::Tiff, &opts).unwrap_err();
+        assert!(matches!(err, IoError::Unsupported(_)));
+    }
+
+    #[test]
+    fn g4_compression_achieves_significant_ratio_on_large_bitmap() {
+        let (w, h) = (200u32, 200u32);
+        let mut enc = fax::encoder::Encoder::new(fax::VecWriter::new());
+        for y in 0..h {
+            let row = (0..w).map(|x| if (x + y) % 20 < 10 { fax::Color::White } else { fax::Color::Black });
+            enc.encode_line(row, w as u16).unwrap();
+        }
+        let g4 = enc.finish().unwrap().finish();
+
+        let mut ifd = craft_tiff::writer::IfdBuilder::new();
+        ifd.set(craft_tiff::tags::IMAGE_WIDTH, craft_tiff::Value::Long(vec![w]));
+        ifd.set(craft_tiff::tags::IMAGE_LENGTH, craft_tiff::Value::Long(vec![h]));
+        ifd.set(craft_tiff::tags::BITS_PER_SAMPLE, craft_tiff::Value::Short(vec![1]));
+        ifd.set(craft_tiff::tags::COMPRESSION, craft_tiff::Value::Short(vec![4]));
+        ifd.set(craft_tiff::tags::PHOTOMETRIC, craft_tiff::Value::Short(vec![0]));
+        ifd.set(craft_tiff::tags::SAMPLES_PER_PIXEL, craft_tiff::Value::Short(vec![1]));
+        ifd.set_image(craft_tiff::writer::ImageData::Strips { rows_per_strip: h, strips: vec![g4] });
+        let bytes = craft_tiff::writer::TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[ifd]).unwrap();
+
+        let doc = import_flat("large.tif", &bytes).unwrap().document;
+        let g4_export = export_flat(&doc, Format::Tiff, &ExportOptions { tiff_ccitt_g4: true, ..Default::default() }).unwrap();
+        let uncompressed_export = export_flat(&doc, Format::Tiff, &ExportOptions { tiff_ccitt_g4: false, ..Default::default() }).unwrap();
+
+        assert!(g4_export.bytes.len() < uncompressed_export.bytes.len() / 2);
     }
 }
