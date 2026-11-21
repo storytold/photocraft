@@ -408,13 +408,28 @@ fn a_move_drag_between_floating_windows() {
     let before = source_square(&h, paint);
     let host0 = CanvasHost::primary(h.state(), 0);
     let view0 = ToolHost::shown_space(&h.ctx, host0.canvas_id()).unwrap().view;
-    let grab = to_screen(&view0, 9.0, 11.0);
+    let grab_doc = [9.0, 11.0];
+    let grab = to_screen(&view0, grab_doc[0], grab_doc[1]);
+
     let host1 = CanvasHost::primary(h.state(), 1);
     let view1 = ToolHost::shown_space(&h.ctx, host1.canvas_id()).unwrap().view;
-    let drop = view1.rect.center();
+    // Known off-center drop point in destination document coordinates (dest-doc size is 60×50, center is (30, 25))
+    let drop_doc = [25.0, 35.0];
+    let drop = to_screen(&view1, drop_doc[0], drop_doc[1]);
+
     drag_along(&mut h, &[grab, drop], Modifiers::NONE);
     assert_eq!(h.state().session.documents()[1].doc.layers.len(), 2, "dest document should receive the dragged layer from move tool");
     assert_eq!(h.state().session.documents()[1].doc.layers[1].name, "paint");
+
+    let (name, copied) = copy(&h);
+    assert_eq!(name, "paint");
+    let offset_x = (drop_doc[0] - grab_doc[0]).round() as i32;
+    let offset_y = (drop_doc[1] - grab_doc[1]).round() as i32;
+    let expected_bounds = before.translate(offset_x, offset_y);
+    let expected_rect =
+        Rect::from_min_max(egui::pos2(expected_bounds.x0 as f32, expected_bounds.y0 as f32), egui::pos2(expected_bounds.x1 as f32, expected_bounds.y1 as f32));
+    assert_eq!(copied, expected_rect, "copied layer bounds should match source bounds translated by drop-minus-grab offset");
+
     assert_eq!(h.state().session.active_index(), Some(1), "dest document becomes active after drop");
     assert_eq!(source_square(&h, paint), before, "the move transfer preserves the source layer");
     assert_eq!(h.state().ui.document_windows.floating.len(), 2);
