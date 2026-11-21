@@ -737,6 +737,7 @@ pub(crate) fn validate_lens_blur_document(app: &PhotocraftApp, command: &str, ca
 pub(crate) fn check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
     let destination = crate::dialogs::params::captured(app, &result.key);
     let fields = fields_map(&result.fields);
+    crate::dialogs::define_name::check(app, &result.key, &fields)?;
     validate_match_color_destination(app, &result.key, &destination, &fields).map_err(Label::from)?;
     let params = command_params(&result.key, &result.fields);
     validate_lens_blur_document(app, &result.key, &destination, params.get("depthMap").and_then(Value::as_str)).map_err(Label::from)?;
