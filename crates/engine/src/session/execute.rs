@@ -120,6 +120,12 @@ impl Session {
         {
             return Err(EngineError::Other(why.into()));
         }
+        // The Red Eye tool's refusals (a layer mask, an adjustment layer, several selected layers),
+        // the same errors its `run` gives: checked here too, so a floating selection stays
+        // floating (#12574).
+        if id == "paint.redEye" {
+            crate::redeye_cmds::target_refusal(self, params)?;
+        }
         Ok(run_params)
     }
 

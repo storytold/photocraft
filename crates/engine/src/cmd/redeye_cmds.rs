@@ -19,6 +19,12 @@ const MISS: &str = "no red-eye pixels near the click";
 /// The reference's alert for a Red Eye click in a CMYK, Grayscale or Indexed Color document (#12575).
 pub const MODE_REFUSAL: &str = "Could not use the red eye removal tool because it only works in full color modes.";
 
+/// The targeted layer mask or an adjustment layer (#12574).
+pub const NOT_PIXEL_REFUSAL: &str = "Could not use the red eye removal tool because the target is not a pixel-based layer.";
+
+/// Several layers selected, no `layer` given (#12574).
+pub const MANY_LAYERS_REFUSAL: &str = "Could not use the red eye removal tool because more than one layer is selected.";
+
 fn bad(msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: CMD.into(), msg: msg.into() }
 }
@@ -238,8 +244,27 @@ fn mode_refusal(s: &Session) -> Result<()> {
     }
 }
 
+/// The layer kinds and selections the tool refuses (#12574): a targeted layer mask, an adjustment
+/// layer, and several selected layers when the call names no layer. Alpha channels, colour sets
+/// and the Quick Mask were not measured and keep working.
+pub(crate) fn target_refusal(s: &Session, p: &Value) -> Result<()> {
+    let Some(d) = s.active() else { return Ok(()) };
+    let named = p.get("layer").is_some();
+    let p = crate::channel_cmds::inject_target(s, "paint.redEye", p.clone());
+    let id = if named { crate::commands::layer_param(s, &p).ok() } else { d.active_layer };
+    let adjustment = id.and_then(|id| d.doc.layer(id)).is_some_and(|l| matches!(l.content, photocraft_doc::LayerContent::Adjustment(_)));
+    if adjustment || crate::channel_cmds::target_of(&p) == crate::channel_cmds::Target::Mask {
+        return Err(EngineError::Other(NOT_PIXEL_REFUSAL.into()));
+    }
+    if !named && d.selected_layers().len() > 1 {
+        return Err(EngineError::Other(MANY_LAYERS_REFUSAL.into()));
+    }
+    Ok(())
+}
+
 fn red_eye(s: &mut Session, p: &Value) -> Result<Value> {
     mode_refusal(s)?;
+    target_refusal(s, p)?;
     let pts = clicks(p)?;
     let pupil_raw = num(p, "pupilSize", 50.0)?;
     let darken = num(p, "darken", 50.0)?;
@@ -489,3 +514,7 @@ mod redeye_color_mode_tests;
 #[cfg(test)]
 #[path = "redeye_outside_selection_tests.rs"]
 mod redeye_outside_selection_tests;
+
+#[cfg(test)]
+#[path = "redeye_target_refusal_tests.rs"]
+mod redeye_target_refusal_tests;
