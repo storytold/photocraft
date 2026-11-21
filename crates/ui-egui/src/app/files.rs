@@ -476,6 +476,22 @@ impl PhotocraftApp {
         }
     }
 
+    /// A played `file.saveAs` step with its dialog on (#15945): the save dialog opens on the file
+    /// the step would write, and the chosen file is saved as File › Save As saves it, its format's
+    /// options prompt included. Continues on a later frame, like [`Self::save_as`]; `ready` gets
+    /// the chosen file before anything is written, and its error writes nothing.
+    pub(crate) fn save_as_dialog(&mut self, params: &Value, ready: impl FnOnce(&mut Self, &str) -> Result<(), String> + 'static) -> Result<Value, String> {
+        if self.save_options_open() {
+            return Err(SAVE_OPTIONS_OPEN.into());
+        }
+        let suggested = self.recorded_save_path(params)?;
+        let doc = self.session.active().ok_or("no document")?.doc.id;
+        self.pick_save(&suggested, move |app, path| {
+            ready(app, &path)?;
+            app.with_document(doc, |app| app.save_to(path, FormatChoices::default()))
+        })
+    }
+
     /// Replays a recorded `file.save` / `file.saveAs` / `file.saveACopy` / `file.export.exportAs`
     /// step: no dialog or prompt, and the recorded TIFF, Targa, DDS or JPEG answer (if any) stands
     /// in for its prompt.
@@ -767,11 +783,15 @@ impl PhotocraftApp {
     /// the save.
     pub(crate) fn write_answered_save(&mut self, ctx: &egui::Context, doc: DocId, path: String, settings: &ExportSettings, copy: bool, step: (&str, Value)) {
         let (record, mut step) = step;
-        let written = self.with_document(doc, |app| {
-            // Before the save renames the document: a Save As that keeps its own name records
-            // only the folder (#5305).
-            app.record_answered_save_as(record, &mut step);
-            app.write_document(path, settings, copy)
+        // A played save step's dialog checks its write again right before it (#15945): the
+        // document or the gate may have changed while the prompt was open.
+        let written = crate::actions::save_dialog::admit_answered(self, &path).and_then(|()| {
+            self.with_document(doc, |app| {
+                // Before the save renames the document: a Save As that keeps its own name records
+                // only the folder (#5305).
+                app.record_answered_save_as(record, &mut step);
+                app.write_document(path, settings, copy)
+            })
         });
         if written.is_ok() {
             photocraft_engine::actions_cmds::note_automation_step(&mut self.session, record, &step);

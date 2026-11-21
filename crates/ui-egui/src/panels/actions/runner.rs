@@ -10,7 +10,7 @@ use web_time::Duration;
 
 use photocraft_engine::actions_cmds::{self, Action};
 
-use super::{dialogs, label_of, playback, record_again};
+use super::{dialogs, label_of, playback, record_again, save_dialog};
 use crate::PhotocraftApp;
 
 /// Play `targets` one after another, stopping at the first that fails or can't start. One that
@@ -55,10 +55,12 @@ pub(crate) fn play_targets(app: &mut PhotocraftApp, targets: &[usize], from: usi
     Ok(last)
 }
 
-/// The dialog a paused playback waits at: a step dialog by id, Check Spelling, or Step by Step and
+/// The dialog a paused playback waits at: a step dialog by id, Check Spelling, a save step's dialogs, or Step by Step and
 /// Pause For's wait before the next step.
 fn waiting_dialog(paused: &Value) -> Option<&Value> {
-    paused.get("dialog").filter(|d| d.is_u64() || matches!(d.as_str(), Some(crate::type_panels_ui::SPELLING | playback::PLAYBACK_TIMER)))
+    paused
+        .get("dialog")
+        .filter(|d| d.is_u64() || matches!(d.as_str(), Some(crate::type_panels_ui::SPELLING | playback::PLAYBACK_TIMER | save_dialog::SAVE_DIALOG)))
 }
 
 /// The token of the paused playback waiting at `dialog` (see [`waiting_dialog`]).
@@ -66,6 +68,7 @@ fn paused_token(app: &PhotocraftApp, dialog: &Value) -> Option<u64> {
     match dialog.as_u64() {
         Some(id) => app.paused_playbacks.paused.iter().find(|(_, p)| p.dialog.is_some_and(|d| d.value() == id)).map(|(token, _)| *token),
         None if dialog.as_str() == Some(playback::PLAYBACK_TIMER) => playback::waiting(app),
+        None if dialog.as_str() == Some(save_dialog::SAVE_DIALOG) => app.paused_playbacks.save.as_ref().map(|w| w.token),
         None => app.ui.type_panels.spell.as_ref().and_then(|d| d.resume),
     }
 }
@@ -443,6 +446,14 @@ impl ActionRunner for ShellRunner<'_> {
                 d.resume = Some(token);
             }
             return self.pause(json!({"step": i, "id": id, "dialog": crate::type_panels_ui::SPELLING}));
+        }
+        // A save step's dialogs: the save dialog on the recorded file (or Export As on its recorded
+        // settings), then the format's options; a file written continues the action (#15945).
+        if show_dialog && interactive && save_dialog::asks(id) && !actions_cmds::saves_smart_contents(&self.app.session, id) {
+            return match save_dialog::pause(self.app, action, i, id, &p) {
+                Ok(()) => self.pause(json!({"step": i, "id": id, "dialog": save_dialog::SAVE_DIALOG})),
+                Err(error) => StepOutcome::Failed(error),
+            };
         }
         let app = &mut *self.app;
         let target = app.session.active().map(|d| d.doc.id);
@@ -824,6 +835,8 @@ pub(crate) struct PausedPlaybacks {
     pub(super) paused: std::collections::HashMap<u64, PausedPlayback>,
     /// The Step by Step or Pause For playback waiting for its next step ([`playback::tick`]).
     pub(super) timer: Option<playback::Timer>,
+    /// The playback waiting at a save step's dialogs ([`save_dialog::tick`]).
+    pub(super) save: Option<save_dialog::Waiting>,
 }
 
 impl PausedPlaybacks {
