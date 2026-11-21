@@ -59,8 +59,9 @@ fn framed_by_selection(doc: &Document, bounds: Rect) -> Rect {
     }
 }
 
-/// A group moves all its descendants, so its frame must not clip raster children to the selection.
-pub(crate) fn whole_layer_bounds(doc: &Document, layer: &Layer) -> Rect {
+/// Document-space content bounds before selection clipping.
+/// A group includes every descendant without clipping raster children to the selection.
+pub fn whole_layer_bounds(doc: &Document, layer: &Layer) -> Rect {
     if let Some(f) = &layer.frame {
         return f.bounds();
     }

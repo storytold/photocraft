@@ -185,12 +185,7 @@ fn any_layer(l: &Layer, f: &dyn Fn(&Layer) -> bool) -> bool {
     f(l) || l.children().is_some_and(|c| c.iter().any(|c| any_layer(c, f)))
 }
 
-/// Builds the smart-object layer replacing `l` in `doc`: the layer (with its mask, effects and
-/// fill opacity) becomes a nested document cropped to its rendered bounds; visibility, opacity,
-/// blend mode, clipping and label stay on the smart layer. The cache is the exact composite, so
-/// the document looks the same before and after.
-pub fn layer_to_smart(doc: &Document, l: &Layer) -> Result<Layer> {
-    let background = doc.is_background(l.id);
+fn smart_contents_layer(l: &Layer, background: bool) -> Layer {
     let mut inner = l.clone();
     inner.visible = true;
     inner.opacity = 1.0;
@@ -202,7 +197,29 @@ pub fn layer_to_smart(doc: &Document, l: &Layer) -> Result<Layer> {
     if background {
         inner.name = "Layer 0".into();
     }
-    let mut out = layers_to_smart(doc, &l.name, vec![inner])?;
+    inner
+}
+
+/// Whether converting `l` has any rendered contents, with the same masks, effects and
+/// fill opacity as [`layer_to_smart`]. Layer opacity, visibility and clipping stay outside
+/// the embedded contents and do not make a convertible layer empty.
+pub fn layer_has_smart_content(doc: &Document, l: &Layer) -> Result<bool> {
+    let (_, region, buf) = render_smart_contents(doc, &l.name, vec![smart_contents_layer(l, doc.is_background(l.id))]);
+    // The compositor refuses an oversized render with an empty-rect buffer. Keep the
+    // conversion's error in that case rather than treating an unrendered layer as empty.
+    if buf.rect != region {
+        return Err(other("the layer is empty, so there is nothing to convert"));
+    }
+    Ok(buf.px.iter().any(|p| p[3] > 0.0))
+}
+
+/// Builds the smart-object layer replacing `l` in `doc`: the layer (with its mask, effects and
+/// fill opacity) becomes a nested document cropped to its rendered bounds; visibility, opacity,
+/// blend mode, clipping and label stay on the smart layer. The cache is the exact composite, so
+/// the document looks the same before and after.
+pub fn layer_to_smart(doc: &Document, l: &Layer) -> Result<Layer> {
+    let background = doc.is_background(l.id);
+    let mut out = layers_to_smart(doc, &l.name, vec![smart_contents_layer(l, background)])?;
     if background {
         out.name = "Layer 0".into();
     }
@@ -217,11 +234,7 @@ pub fn layer_to_smart(doc: &Document, l: &Layer) -> Result<Layer> {
     Ok(out)
 }
 
-/// Builds a smart-object layer named `name` whose nested document holds `layers` (bottom to top)
-/// at its top level, as Photoshop does when several layers are converted: no wrapper group. The
-/// nested document is cropped to the rendered bounds and the cache is the exact composite (the
-/// same as the layers inside a pass-through group). The smart layer is visible, opaque and Normal.
-pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result<Layer> {
+fn render_smart_contents(doc: &Document, name: &str, layers: Vec<Layer>) -> (Document, Rect, photocraft_compose::Buffer) {
     let canvas = doc.bounds();
     let mut sub = Document::new(format!("{name}.pcraft"), doc.size, doc.mode, doc.depth);
     sub.resolution_dpi = doc.resolution_dpi;
@@ -239,6 +252,15 @@ pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result
     sub.layers = layers.into();
 
     let buf = photocraft_compose::render(&sub, region);
+    (sub, region, buf)
+}
+
+/// Builds a smart-object layer named `name` whose nested document holds `layers` (bottom to top)
+/// at its top level, as Photoshop does when several layers are converted: no wrapper group. The
+/// nested document is cropped to the rendered bounds and the cache is the exact composite (the
+/// same as the layers inside a pass-through group). The smart layer is visible, opaque and Normal.
+pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result<Layer> {
+    let (mut sub, region, buf) = render_smart_contents(doc, name, layers);
     let w = region.width() as usize;
     let mut b = Rect::EMPTY;
     for (i, p) in buf.px.iter().enumerate() {
