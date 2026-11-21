@@ -1264,11 +1264,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(warning, None);
-        let canonical_stable = std::fs::canonicalize(&stable).unwrap();
-        assert_eq!(ws.read_folders(), vec![canonical_stable.clone()]);
-        assert_eq!(ws.write_folder(), Some(canonical_stable));
+        // These accessors preserve the configured spelling, not Windows' canonical
+        // verbatim prefix or expanded short names. The held capability still opens it.
+        assert_eq!(ws.read_folders(), vec![stable.clone()]);
+        assert_eq!(ws.write_folder(), Some(stable.clone()));
         ws.write("stable-document", b"stable document bytes").unwrap();
         assert_eq!(std::fs::read(stable.join("stable-document")).unwrap(), b"stable document bytes");
+        assert_eq!(ws.read("stable-document").unwrap(), b"stable document bytes");
+        assert_eq!(ws.read_with_save_path("stable-document").unwrap().1.as_deref(), Some("stable-document"));
         drop(ws);
         std::fs::remove_dir_all(dir).unwrap();
     }
