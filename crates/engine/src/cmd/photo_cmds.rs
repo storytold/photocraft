@@ -59,6 +59,7 @@ pub(crate) struct Source {
     pub w: usize,
     pub h: usize,
     pub exif: exif::CameraInfo,
+    original_format: PixelFormat,
 }
 
 /// Loaded sources, the common pixel format and the first source's ICC profile.
@@ -97,6 +98,11 @@ fn bytes_text(bytes: usize) -> String {
         format!("{bytes} B")
     }
 }
+
+#[cfg(test)]
+mod photomerge_mixed_mode_tests;
+#[cfg(test)]
+mod photomerge_whole_pixel_tests;
 
 /// Keeps a Photomerge's sources inside the command's memory budget while they are loaded.
 ///
@@ -267,20 +273,26 @@ impl SourceLoad {
     }
 }
 
-/// Sources collected so far, with the common format and the first source's ICC profile.
+/// Sources collected so far, with the first source's format and ICC profile.
 #[derive(Default)]
 struct Sources {
     out: Vec<Source>,
     fmt: Option<PixelFormat>,
     icc: Option<std::sync::Arc<Vec<u8>>>,
+    // A grayscale-first 8-bit Photomerge may become RGB. Keep any RGB source in
+    // colour until we know whether all sources are in the supported combination.
+    gray_first: bool,
+    has_rgb: bool,
+    rgb_icc: Option<std::sync::Arc<Vec<u8>>>,
 }
 
 impl Sources {
     /// Flattens `d` into the common format, admitted by `load` first.
     fn add(&mut self, load: &mut SourceLoad, name: String, d: &Document, encoded: usize, cmd: &str) -> Result<()> {
         let source_fmt = d.pixel_format();
-        // Registration and blending work in RGB, so the result is RGB.
-        let output_fmt = *self.fmt.get_or_insert_with(|| {
+        // These modes need an RGB intermediate for registration and blending.
+        let mut output_fmt = *self.fmt.get_or_insert_with(|| {
+            self.gray_first = cmd == "file.automate.photomerge" && source_fmt.mode == ColorMode::Grayscale && source_fmt.sample == SampleType::U8;
             if matches!(source_fmt.mode, ColorMode::Cmyk | ColorMode::Lab | ColorMode::Multichannel) {
                 PixelFormat::new(ColorMode::Rgb, source_fmt.sample, true)
             } else {
@@ -290,9 +302,26 @@ impl Sources {
         if self.out.is_empty() && source_fmt.mode == output_fmt.mode {
             self.icc = d.icc_profile.clone();
         }
+        if source_fmt.sample != SampleType::U8 || !matches!(source_fmt.mode, ColorMode::Grayscale | ColorMode::Rgb) {
+            self.gray_first = false;
+        }
+        if self.gray_first && source_fmt.mode == ColorMode::Rgb {
+            output_fmt = PixelFormat::RGBA8;
+            if !self.has_rgb {
+                self.has_rgb = true;
+                self.rgb_icc = d.icc_profile.clone();
+            }
+        }
         let info = d.metadata.exif.as_ref().map(|e| exif::read(e)).unwrap_or_default();
         load.admit(cmd, d, output_fmt.bytes_per_pixel(), encoded)?;
-        self.out.push(Source { name, surf: flattened_checked(d, output_fmt, cmd)?, w: d.size.width as usize, h: d.size.height as usize, exif: info });
+        self.out.push(Source {
+            name,
+            surf: flattened_checked(d, output_fmt, cmd)?,
+            w: d.size.width as usize,
+            h: d.size.height as usize,
+            exif: info,
+            original_format: source_fmt,
+        });
         Ok(())
     }
 }
@@ -323,12 +352,34 @@ fn load_sources(s: &Session, p: &Value, cmd: &str, budget: Option<usize>) -> Res
     if src.out.is_empty() {
         return Err(bad(cmd, "pass \"paths\" (files or a folder) or \"useOpenDocuments\": true"));
     }
-    let Some(fmt) = src.fmt else { return Err(bad(cmd, "no readable image sources")) };
+    let Some(mut fmt) = src.fmt else { return Err(bad(cmd, "no readable image sources")) };
+    if src.gray_first && src.has_rgb {
+        fmt = PixelFormat::RGBA8;
+        src.icc = src.rgb_icc;
+    }
+    for image in &mut src.out {
+        let old = image.surf.format();
+        if old == fmt {
+            continue;
+        }
+        // Both surfaces are live while a source is converted. Charge the larger
+        // final format as well as this transient peak before allocating tiles.
+        let bytes = surface_bytes(image.w, image.h, fmt.bytes_per_pixel());
+        if bytes > load.remaining(cmd)? {
+            return Err(crate::allocation::error(cmd, &format!("converting {} needs another {} for its pixels", image.name, bytes_text(bytes))));
+        }
+        image.surf = image.surf.try_convert(fmt)?;
+        load.retained = load.retained.saturating_sub(surface_bytes(image.w, image.h, old.bytes_per_pixel())).saturating_add(bytes);
+    }
     Ok((src.out, fmt, src.icc))
 }
 
 /// Luminance and coverage of `surf` over `area`, box-downsampled by `k`.
 pub(crate) fn luma_alpha(surf: &Surface, area: Rect, k: usize) -> (usize, usize, Vec<f32>, Vec<f32>) {
+    registration_plane(surf, area, k, |[r, g, b]| 0.2126 * r + 0.7152 * g + 0.0722 * b)
+}
+
+fn registration_plane(surf: &Surface, area: Rect, k: usize, luminance: impl Fn([f32; 3]) -> f32) -> (usize, usize, Vec<f32>, Vec<f32>) {
     let fmt = surf.format();
     let n = fmt.channels();
     let (w, h) = (area.width() as usize, area.height() as usize);
@@ -341,7 +392,7 @@ pub(crate) fn luma_alpha(surf: &Surface, area: Rect, k: usize) -> (usize, usize,
             let Some(px) = row.get(x * n..(x + 1) * n) else { break };
             let p = to_rgba(&fmt, px);
             let i = (y / k) * sw + x / k;
-            l[i] += (0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]) * p[3] + (1.0 - p[3]) * 0.0;
+            l[i] += luminance([p[0], p[1], p[2]]) * p[3];
             a[i] += p[3];
             cnt[i] += 1.0;
         }
@@ -357,20 +408,58 @@ pub(crate) fn luma_alpha(surf: &Surface, area: Rect, k: usize) -> (usize, usize,
 /// Registers `images` (surface, content area) and returns full-resolution placements.
 /// `focal35` is the 35 mm-equivalent focal length when known (EXIF).
 pub(crate) fn register(images: &[(&Surface, Rect)], layout: Layout, reference: Option<usize>, geometric: bool, focal35: Option<f64>) -> Option<Alignment> {
+    register_features(images, AlignOptions { layout, reference, geometric, focal: None }, focal35, TranslationCheck::Off)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TranslationCheck {
+    Off,
+    StandardLuma,
+    GrayscaleLuma,
+}
+
+fn register_features(images: &[(&Surface, Rect)], mut opts: AlignOptions, focal35: Option<f64>, translation_check: TranslationCheck) -> Option<Alignment> {
     let side = images.iter().map(|(_, r)| r.width().max(r.height()) as usize).max().unwrap_or(1);
     let k = side.div_ceil(REGISTER_SIDE).max(1);
-    let prepared: Vec<panorama::PreparedImage> = images
-        .iter()
-        .map(|(s, r)| {
-            let (w, h, l, a) = luma_alpha(s, *r, k);
-            let valid = a.iter().any(|v| *v < 0.5).then(|| a.iter().map(|v| *v > 0.5).collect());
-            (w, h, l, valid)
-        })
-        .collect();
-    let feats = panorama::detect_many(&prepared, 800);
-    let matches = panorama::match_pairs(&feats);
-    let focal = focal35.map(|f| f / 36.0 * side as f64 / k as f64);
-    let a = panorama::align(&feats, &matches, &AlignOptions { layout, focal, reference, geometric })?;
+    opts.focal = focal35.map(|f| f / 36.0 * side as f64 / k as f64);
+    let prepare = |mixed_gray: bool| -> Vec<panorama::PreparedImage> {
+        images
+            .iter()
+            .map(|(s, r)| {
+                let (w, h, l, a) = if mixed_gray {
+                    // Use the same luma weights and quantization as converting an RGB tile to Gray.
+                    registration_plane(s, *r, k, |rgb| (photocraft_color::convert::rgb_to_gray(rgb) * 255.0).round() / 255.0)
+                } else {
+                    luma_alpha(s, *r, k)
+                };
+                let valid = a.iter().any(|v| *v < 0.5).then(|| a.iter().map(|v| *v > 0.5).collect());
+                (w, h, l, valid)
+            })
+            .collect()
+    };
+    let features = |prepared: &[panorama::PreparedImage]| {
+        let feats = panorama::detect_many(prepared, 800);
+        let matches = panorama::match_pairs(&feats);
+        (feats, matches)
+    };
+    let a = if translation_check == TranslationCheck::GrayscaleLuma && k == 1 {
+        let gray = prepare(true);
+        let (feats, matches) = features(&gray);
+        panorama::align_translated_crops(&gray, &feats, &matches, &opts)
+    } else {
+        None
+    }
+    .or_else(|| {
+        let prepared = prepare(false);
+        let (feats, matches) = features(&prepared);
+        if translation_check == TranslationCheck::StandardLuma
+            && k == 1
+            && let Some(a) = panorama::align_translated_crops(&prepared, &feats, &matches, &opts)
+        {
+            return Some(a);
+        }
+        panorama::align(&feats, &matches, &opts)
+    })?;
     let kf = k as f64;
     Some(Alignment { placements: a.placements.iter().map(|p| p.as_ref().map(|p| p.scaled(kf))).collect(), focal: a.focal * kf, rms: a.rms * kf, ..a })
 }
@@ -867,6 +956,27 @@ pub(crate) fn seam_order(warped: &[Surface], reference: usize) -> Vec<usize> {
 
 // ---------- Photomerge ----------
 
+/// Canonicalize a planar placement only when every corner lands within arithmetic noise
+/// of the same integer shift. A fractional translation, skew or other projection still warps.
+fn whole_pixel_shift(pl: &Placement, w: usize, h: usize) -> Option<(i32, i32)> {
+    const EPSILON: f64 = 1e-6;
+    let matrix = plane_matrix(pl, (0.0, 0.0))?;
+    let (x, y) = matrix.apply(0.0, 0.0);
+    let (dx, dy) = (x.round(), y.round());
+    let limit = f64::from(photocraft_algo::transform::WARP_REACH);
+    if !((-limit..=limit).contains(&dx) && (-limit..=limit).contains(&dy)) {
+        return None;
+    }
+    let corners = [(0.0, 0.0), (w as f64, 0.0), (0.0, h as f64), (w as f64, h as f64)];
+    corners
+        .into_iter()
+        .all(|(x, y)| {
+            let (u, v) = matrix.apply(x, y);
+            matrix.w(x, y) > 0.0 && (u - x - dx).abs() <= EPSILON && (v - y - dy).abs() <= EPSILON
+        })
+        .then_some((dx as i32, dy as i32))
+}
+
 fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.photomerge";
     let t0 = Stopwatch::start();
@@ -896,21 +1006,45 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
             ctx.progress(0.0, "Photomerge: aligning images");
             let focal35 = focal_param.or_else(|| exif_focal(&srcs));
             let images: Vec<(&Surface, Rect)> = srcs.iter().map(|s| (&s.surf, Rect::new(0, 0, s.w as i32, s.h as i32))).collect();
-            let al = register(&images, layout, None, geometric, focal35)
+            let check_translation = layout == Layout::Auto
+                && !geometric
+                && focal35.is_none()
+                && srcs.iter().all(|s| s.original_format.sample == SampleType::U8 && matches!(s.original_format.mode, ColorMode::Grayscale | ColorMode::Rgb));
+            let translation_check = if !check_translation {
+                TranslationCheck::Off
+            } else if fmt.mode == ColorMode::Rgb && srcs.iter().any(|s| s.original_format.mode == ColorMode::Grayscale) {
+                TranslationCheck::GrayscaleLuma
+            } else {
+                TranslationCheck::StandardLuma
+            };
+            let opts = AlignOptions { layout, reference: None, geometric, focal: None };
+            let al = register_features(&images, opts, focal35, translation_check)
                 .ok_or_else(|| EngineError::Other("Photomerge couldn't find enough matching detail between the images".into()))?;
             let t_reg = t0.ms() / 1000.0;
             ctx.check()?;
             ctx.progress(0.35, "Photomerge: warping images");
             let placed: Vec<usize> = (0..srcs.len()).filter(|&i| al.placements.get(i).is_some_and(Option::is_some)).collect();
             // Parallel to `placed`.
-            let placements: Vec<&Placement> = placed.iter().filter_map(|&i| al.placements.get(i).and_then(Option::as_ref)).collect();
+            let placements: Vec<(&Placement, Option<(i32, i32)>)> = placed
+                .iter()
+                .filter_map(|&i| {
+                    let pl = al.placements.get(i)?.as_ref()?;
+                    Some((pl, whole_pixel_shift(pl, srcs[i].w, srcs[i].h)))
+                })
+                .collect();
             let failed: Vec<String> = (0..srcs.len()).filter(|&i| al.placements.get(i).is_none_or(Option::is_none)).map(|i| srcs[i].name.clone()).collect();
             // Canvas: union of the placed images.
             let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
             // Each placed image's warped extent (the bounds of its placement).
             let mut extents: Vec<(f64, f64)> = Vec::with_capacity(placed.len());
-            for (&i, pl) in placed.iter().zip(&placements) {
-                let b = pl.bounds(srcs[i].w as f64, srcs[i].h as f64);
+            for (&i, &(pl, shift)) in placed.iter().zip(&placements) {
+                let (w, h) = (srcs[i].w as f64, srcs[i].h as f64);
+                let b = if let Some((x, y)) = shift {
+                    let (x, y) = (f64::from(x), f64::from(y));
+                    [x, y, x + w, y + h]
+                } else {
+                    pl.bounds(w, h)
+                };
                 extents.push((b[2] - b[0], b[3] - b[1]));
                 x0 = x0.min(b[0]);
                 y0 = y0.min(b[1]);
@@ -944,11 +1078,15 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
             let mut warped: Vec<Surface> = Vec::with_capacity(placed.len());
-            for (k, (&i, pl)) in placed.iter().zip(&placements).enumerate() {
+            for (k, (&i, &(pl, shift))) in placed.iter().zip(&placements).enumerate() {
                 ctx.check()?;
                 ctx.progress(0.35 + 0.25 * k as f32 / placed.len().max(1) as f32, "");
                 let src_rect = Rect::new(0, 0, srcs[i].w as i32, srcs[i].h as i32);
-                let w = warp_placed(&srcs[i].surf, src_rect, (0.0, 0.0), pl, offset, Interp::Bicubic)?;
+                let w = if let Some((dx, dy)) = shift {
+                    srcs[i].surf.translated(dx.saturating_add(offset.0 as i32), dy.saturating_add(offset.1 as i32), src_rect)
+                } else {
+                    warp_placed(&srcs[i].surf, src_rect, (0.0, 0.0), pl, offset, Interp::Bicubic)?
+                };
                 srcs[i].surf = Surface::new(fmt);
                 warped.push(w);
             }
@@ -960,7 +1098,7 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
             let mut info = json!({});
             let ref_pos = placed.iter().position(|&i| i == al.reference).unwrap_or(0);
             if blend {
-                let pls: Vec<Placement> = placements.iter().map(|p| (*p).clone()).collect();
+                let pls: Vec<Placement> = placements.iter().map(|(p, _)| (*p).clone()).collect();
                 let order = seam_order(&warped, ref_pos);
                 let geo = vignette.then_some((pls.as_slice(), sizes.as_slice(), offset));
                 let remaining_band_budget = budget.saturating_sub(fixed_during_bands);
