@@ -26,10 +26,16 @@
     #photocraft_stopped a { color: #ffffff; }
     #photocraft_stopped_detail { color: #b8b8b8; }
   </style>
+  <noscript>
+    <style>#photocraft_loading > p { display: none; }</style>
+  </noscript>
 </head>
 <body>
   <canvas id="photocraft_canvas"></canvas>
   <div id="photocraft_loading">
+    <noscript>
+      <p>PhotoCraft needs JavaScript to run. Allow JavaScript for this site, then <a href="">Reload</a> to start.</p>
+    </noscript>
     <p>Loading PhotoCraft&hellip;</p>
     <p id="photocraft_stalled">This is taking longer than usual. If PhotoCraft doesn't start, its files may have failed to
       download or come from a different version of this page. <a href="">Reload</a> to try again; the browser
