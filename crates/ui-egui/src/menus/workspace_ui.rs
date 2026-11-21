@@ -321,6 +321,11 @@ pub fn states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandState)> {
     workspace_states(&app.workspaces.set).into_iter().map(|(command, state)| (CommandRef::from(command), state)).collect()
 }
 
+/// [`states`], derived from the workspaces.
+pub fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    crate::app::framework::derived_states(app, name, &app.workspaces, || states(app))
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Menu commands.
 // ---------------------------------------------------------------------------------------------------------------

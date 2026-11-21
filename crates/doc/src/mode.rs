@@ -14,7 +14,7 @@ use crate::LayerId;
 use crate::adjust::CurvePoint;
 
 /// Image › Mode › Color Table: the palette of an Indexed Color document (at most 256 entries).
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct ColorTable {
     /// sRGB 8-bit entries.
     pub colors: Vec<[u8; 3]>,
@@ -53,7 +53,7 @@ impl ColorTable {
 /// pixel copy while the layer is unchanged. A save keeps the indices only while they hold, and an
 /// open pairs them with the layer it loads: identical tiles load as one, so loaded pixels can't
 /// prove they are unchanged.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct ColorIndices {
     /// The layer the indices are for.
     pub layer: LayerId,
@@ -91,7 +91,7 @@ impl ColorIndices {
 }
 
 /// One Duotone ink: its display colour and the curve mapping gray density to ink density.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct DuotoneInk {
     pub name: String,
     /// Display colour of the solid ink (sRGB 0..=1).
@@ -107,7 +107,7 @@ impl DuotoneInk {
 }
 
 /// Image › Mode › Duotone: 1–4 inks (Monotone, Duotone, Tritone, Quadtone) printed over paper.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Duotone {
     pub inks: Vec<DuotoneInk>,
     /// The PSD colour-mode data this came from, written back unchanged while the inks are unedited.
@@ -172,7 +172,7 @@ fn curve_eval(pts: &[CurvePoint], x: f32) -> f32 {
 }
 
 /// Layer › Smart Objects › Stack Mode: a per-pixel statistic over the smart object's layers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum StackMode {
     Entropy,
     Kurtosis,
