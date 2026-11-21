@@ -16,7 +16,7 @@ use crate::PhotocraftApp;
 use crate::state::Tool;
 
 /// Tools on which ⌘-arrows nudge as the Move tool's arrows do: the tools whose ⌘ press the Move
-/// stand-in takes. Photoshop excepts the Hand, Rotate View, Zoom, Slice, Path and Direct
+/// stand-in takes. Photoshop excepts the Hand, Rotate View, Slice, Path and Direct
 /// Selection, shape, Pen and Type tools (⌘ means something else to each), the Crop tools and the
 /// marquees, lassos and Magic Wand (those are added back by [`cmd_nudges`] as selection tools).
 fn nudges_with_cmd(t: Tool) -> bool {
@@ -26,7 +26,6 @@ fn nudges_with_cmd(t: Tool) -> bool {
             Tool::Move
                 | Tool::Hand
                 | Tool::RotateView
-                | Tool::Zoom
                 | Tool::Crop
                 | Tool::PerspectiveCrop
                 | Tool::Slice

@@ -352,7 +352,7 @@ fn cmd_gives_the_move_tool_only_where_the_tool_does_not_take_cmd() {
     // another shape (`selection.rs`, `MarqueeKind`).
     // One app per group, with the tool switched between cases and a fresh layer for each: starting
     // the whole app dominates the cost of a case.
-    let moves = [Tool::Brush, Tool::Gradient, Tool::CloneStamp, Tool::Eyedropper, Tool::Move, Tool::RectMarquee, Tool::Lasso];
+    let moves = [Tool::Brush, Tool::Gradient, Tool::CloneStamp, Tool::Eyedropper, Tool::Zoom, Tool::Move, Tool::RectMarquee, Tool::Lasso];
     let mut h = harness(moves[0]);
     for tool in moves {
         h.state_mut().ui.tool = tool;
@@ -369,7 +369,7 @@ fn cmd_gives_the_move_tool_only_where_the_tool_does_not_take_cmd() {
     // The Crop and Rotate View tools go last, in an app of their own: they leave a pending crop and
     // a turned view behind.
     let keeps = [
-        vec![Tool::Hand, Tool::Zoom, Tool::Pen, Tool::Rectangle, Tool::Type, Tool::VerticalType, Tool::PathSelection, Tool::DirectSelection],
+        vec![Tool::Hand, Tool::Pen, Tool::Rectangle, Tool::Type, Tool::VerticalType, Tool::PathSelection, Tool::DirectSelection],
         vec![Tool::Crop, Tool::RotateView],
     ];
     for group in keeps {
@@ -389,6 +389,34 @@ fn keeps_the_layer(h: &mut Harness<'static, Box<PhotocraftApp>>, tool: Tool) {
     assert_eq!(bounds(h, id), Rect::new(100, 100, 160, 160), "{tool:?}: the layer stays");
     assert_ne!(h.state().session.active().unwrap().history.undo_label(), Some("Move"), "{tool:?}");
     assert_eq!(h.state().ui.tool, tool);
+}
+
+/// #9931: a ⌘-drag with the Zoom tool moves the layer and does not zoom, held or latched in
+/// Window › Modifier Keys; the Zoom tool is back afterwards. ⌘Space still holds the Zoom (Zoom In).
+#[test]
+fn cmd_drag_with_the_zoom_tool_moves_the_layer_and_does_not_zoom() {
+    for latched in [false, true] {
+        let mut h = harness(Tool::Zoom);
+        let id = with_layer(&mut h);
+        let held = if latched {
+            h.state_mut().ui.shell.latched = craft::keymap::Mods::CMD;
+            Modifiers::NONE
+        } else {
+            Modifiers::COMMAND
+        };
+        let z0 = zoom(&h);
+        drag_with(&mut h, held, 130.0, 130.0, 170.0, 150.0);
+        assert_eq!(bounds(&h, id), Rect::new(140, 120, 200, 180), "latched={latched}: the layer moved by (40, 20)");
+        assert_eq!(zoom(&h), z0, "latched={latched}: no zoom");
+        assert_eq!(h.state().ui.tool, Tool::Zoom, "latched={latched}");
+    }
+    let mut h = harness(Tool::Zoom);
+    let z0 = zoom(&h);
+    key(&mut h, Key::Space, true, Modifiers::COMMAND);
+    click(&mut h, 200.0, 150.0, Modifiers::COMMAND);
+    key(&mut h, Key::Space, false, Modifiers::COMMAND);
+    hold_mods(&mut h, Modifiers::NONE);
+    assert!(zoom(&h) > z0, "⌘Space-click zooms in");
 }
 
 /// ⌘⌥-drag duplicates the layer first and moves the copy, as the Move tool's ⌥-drag does. Off
