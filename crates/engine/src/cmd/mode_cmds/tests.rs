@@ -208,7 +208,7 @@ fn rotate_arbitrary_turns_unlinked_layer_masks() {
             assert!(at(4, 4) < 0.1, "{depth}-bit, grouped {grouped}: nothing left at the old place");
             // Rotate 180° and a crop turned by 180° over the whole canvas give the same mask.
             for (id_, p) in [("image.imageRotation.180", json!({})), ("image.crop", json!({"x": 0, "y": 0, "width": 40, "height": 30, "angle": 180}))] {
-                s.active_mut().unwrap().doc = base.clone();
+                *s.active_mut().unwrap().doc_mut() = base.clone();
                 s.execute(id_, p).unwrap();
                 let turned = mask(&s);
                 for y in 0..30 {
@@ -219,10 +219,10 @@ fn rotate_arbitrary_turns_unlinked_layer_masks() {
                 }
             }
             // 90° pins the direction too (180° is its own inverse).
-            s.active_mut().unwrap().doc = base.clone();
+            *s.active_mut().unwrap().doc_mut() = base.clone();
             s.execute("image.rotation.arbitrary", json!({"angle": 90, "interpolation": "nearest"})).unwrap();
             let arbitrary = mask(&s);
-            s.active_mut().unwrap().doc = base.clone();
+            *s.active_mut().unwrap().doc_mut() = base.clone();
             s.execute("image.imageRotation.90cw", json!({})).unwrap();
             let turned = mask(&s);
             for y in 0..40 {

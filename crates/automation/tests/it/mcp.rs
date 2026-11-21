@@ -1040,7 +1040,7 @@ async fn smart_object_commands_refuse_real_linked_files_without_changing_the_ses
     session.execute("file.new", json!({"width": 16, "height": 8, "background": "white"})).unwrap();
     let layer = session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap()["layer"].clone();
     let state = session.active_mut().unwrap();
-    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
+    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(state.doc_mut()).layers[0].content else { panic!("smart object") };
     smart.source = SmartSource::Linked { path: dir.join("external.png").to_string_lossy().into_owned() };
     std::fs::write(dir.join("parent.pcraft"), photocraft_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
     let client = connect(headless_in(&dir)).await;
@@ -1511,6 +1511,7 @@ async fn convention_tool_hints_match_what_each_tool_does() {
     const ADDS: (bool, bool, bool) = (false, false, false);
     const EDITS: (bool, bool, bool) = (false, true, false);
     let expected = [
+        ("agent_folders", READ),
         ("command_list", READ),
         ("doc_inspect", READ),
         ("session_list", READ),

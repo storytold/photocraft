@@ -298,6 +298,7 @@ impl TipRefs {
 #[serde(rename_all = "camelCase")]
 struct StoredPreset {
     name: String,
+    #[serde(deserialize_with = "photocraft_paint::brush::deserialize_preset_brush")]
     brush: BrushSettings,
     #[serde(default)]
     tips: TipRefs,

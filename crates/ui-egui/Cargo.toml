@@ -7,6 +7,12 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+# craft's component derives gate their story-suite registrations on a crate's own `suite` feature
+# (storytold/craft-libs#2363); without one they need craft's test kit in every build. PhotoCraft runs
+# no craft story suite, so this stays off.
+suite = ["craft/suite"]
+
 [dependencies]
 chrono = { workspace = true }
 craft-print = { workspace = true }
@@ -39,6 +45,7 @@ craft-psd = { workspace = true }
 egui = { workspace = true, features = ["serde"] }
 egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
 eframe = { workspace = true, features = ["wgpu", "accesskit", "clipboard"] }
+rustc-hash = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # The tables of craft-host's `SectionStore` (`app/framework.rs`); already linked through craft-host.
