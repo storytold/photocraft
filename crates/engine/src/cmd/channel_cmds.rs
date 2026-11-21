@@ -30,6 +30,10 @@ mod apply_image_lock_transparency_tests;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+#[path = "channel_cmds/calculations_new_channel_view_tests.rs"]
+mod calculations_new_channel_view_tests;
+
 // ---------------------------------------------------------------------------------------------
 // Enabled predicates
 
