@@ -428,39 +428,68 @@ pub(crate) fn black_white_enabled(s: &Session) -> std::result::Result<(), String
 /// channel or Quick Mask target and the modes not measured (Bitmap, Duotone, Multichannel) keep
 /// [`has_adjustable`]; `None` for a layer mask or a filter mask, which keep their own checks.
 pub(crate) fn black_white_enabled_with(s: &Session, p: &Value) -> Option<std::result::Result<(), String>> {
-    use crate::channel_cmds::Target;
     use photocraft_color::ColorMode;
-    match crate::channel_cmds::target_of(p) {
-        Target::Mask | Target::FilterMask => None,
-        Target::Alpha(_) | Target::QuickMask => Some(has_adjustable(s)),
-        Target::Pixels => {
-            let d = s.active()?;
-            Some(match d.doc.mode {
-                ColorMode::Grayscale | ColorMode::Cmyk | ColorMode::Lab | ColorMode::Indexed => Err(BLACK_WHITE_UNAVAILABLE.into()),
-                // Not measured, so a hidden layer there is not refused either.
-                ColorMode::Bitmap | ColorMode::Duotone | ColorMode::Multichannel => has_adjustable(s),
-                ColorMode::Rgb => {
-                    let layer = crate::commands::layer_param(s, p).ok().and_then(|id| d.doc.layer(id));
-                    let hidden = layer.is_some_and(|l| !l.visible && matches!(l.content, LayerContent::Raster(_)));
-                    if hidden { Err(BLACK_WHITE_UNAVAILABLE.into()) } else { has_adjustable(s) }
-                }
-            })
-        }
-    }
+    greyed_on_pixels(
+        s,
+        p,
+        &[ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Indexed],
+        &[ColorMode::Rgb],
+        BLACK_WHITE_UNAVAILABLE,
+    )
 }
 
 /// Black & White with `p` (its target filled in) stops on an empty pixel layer before it edits
 /// anything (#14401); its other refusals are the precondition's, checked before `run`. Only RGB
 /// was measured: the other modes are greyed or keep today's behaviour.
 pub(crate) fn black_white_empty_refusal(s: &Session, p: &Value) -> Result<()> {
-    if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels || s.active().is_some_and(|d| d.doc.mode != photocraft_color::ColorMode::Rgb) {
+    if s.active().is_some_and(|d| d.doc.mode != photocraft_color::ColorMode::Rgb) {
+        return Ok(());
+    }
+    empty_layer_refusal(s, p, BLACK_WHITE_EMPTY)
+}
+
+/// An adjustment's precondition for a call with `p` (its target filled in), which the reference
+/// application greys with `unavailable` on the layer's pixels in a document of one of `greyed`,
+/// or on a hidden pixel layer (the active one or the one `"layer"` names) in one of `measured`.
+/// An alpha channel or Quick Mask target and any other mode keep [`has_adjustable`]'s; `None` for
+/// a layer mask or a filter mask, which keep their own checks.
+fn greyed_on_pixels(
+    s: &Session,
+    p: &Value,
+    greyed: &[photocraft_color::ColorMode],
+    measured: &[photocraft_color::ColorMode],
+    unavailable: &str,
+) -> Option<std::result::Result<(), String>> {
+    use crate::channel_cmds::Target;
+    match crate::channel_cmds::target_of(p) {
+        Target::Mask | Target::FilterMask => None,
+        Target::Alpha(_) | Target::QuickMask => Some(has_adjustable(s)),
+        Target::Pixels => {
+            let d = s.active()?;
+            if greyed.contains(&d.doc.mode) {
+                return Some(Err(unavailable.into()));
+            }
+            if !measured.contains(&d.doc.mode) {
+                return Some(has_adjustable(s));
+            }
+            let layer = crate::commands::layer_param(s, p).ok().and_then(|id| d.doc.layer(id));
+            let hidden = layer.is_some_and(|l| !l.visible && matches!(l.content, LayerContent::Raster(_)));
+            Some(if hidden { Err(unavailable.into()) } else { has_adjustable(s) })
+        }
+    }
+}
+
+/// An adjustment with `p` (its target filled in) stops with `empty` on an empty pixel layer
+/// before it edits anything.
+fn empty_layer_refusal(s: &Session, p: &Value, empty: &str) -> Result<()> {
+    if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
         return Ok(());
     }
     let id = crate::commands::layer_param(s, p)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let layer = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     if matches!(layer.content, LayerContent::Raster(_)) && crate::layer_multi_cmds::layer_bounds(layer).is_none() {
-        return Err(EngineError::Other(BLACK_WHITE_EMPTY.into()));
+        return Err(EngineError::Other(empty.into()));
     }
     Ok(())
 }
