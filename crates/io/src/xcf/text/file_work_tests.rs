@@ -60,6 +60,7 @@ fn image(bytes: &[u8], work: DecodeWork) -> Image<'_> {
         colormap: Vec::new(),
         budget: MAX_PIXEL_BYTES,
         meta_budget: MAX_METADATA_BYTES,
+        name_work_left: crate::xcf::MAX_METADATA_BYTES,
         vector_style_work_left: crate::xcf::MAX_METADATA_BYTES,
         link_work_left: crate::xcf::MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),

@@ -340,12 +340,18 @@ fn decode_stream(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pr
         }
         output.extend_from_slice(chunk.get(..count).ok_or_else(|| invalid("invalid decoded output length"))?);
     }
-    // Readers verify every member and consume only their admitted terminal padding
-    // (zero bytes for gzip, standard stream padding for XZ). No unchecked tail remains.
+    // Readers verify every member and consume admitted terminal padding. The pinned
+    // XZ reader may accept unaligned zero padding at EOF. XZ streams and inter-stream
+    // padding are each four-byte aligned, so the full envelope must be aligned too.
     drop(decoder);
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    if !prefix_only && !input.remaining.is_empty() && is_xcf {
-        return Err(invalid(format!("unconsumed data after the {compression} stream")));
+    if !prefix_only && is_xcf {
+        if !input.remaining.is_empty() {
+            return Err(invalid(format!("unconsumed data after the {compression} stream")));
+        }
+        if kind == crate::ImportCompression::Xz && !bytes.len().is_multiple_of(4) {
+            return Err(invalid("XZ stream padding must be a multiple of four bytes"));
+        }
     }
     if !is_xcf && !declared_svg && !svg_signature(&output) {
         return Ok(None);

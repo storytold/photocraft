@@ -260,6 +260,19 @@ fn explicit_sample_order_covers_all_native_widths_roles_compressions_and_tile_ed
     }
 }
 
+#[test]
+fn byte_order_and_precision_report_independent_outcomes_for_historical_u32() {
+    use photocraft_doc::import_conversion::ImportConversion;
+    let order = Order::LittleEndian;
+    let document = open(&image(11, Sample::U32, order, false, 0), order);
+    assert_eq!(document.depth, SampleType::F32);
+    let Some(ImportConversion::Report(report)) = document.metadata.import_conversion.as_deref() else { panic!("native conversion report") };
+    let byte_order = report.entries.iter().find(|entry| entry.feature_code == "xcf.historical_sample_order").unwrap();
+    assert_eq!(byte_order.native_description, "Explicit little-endian sample byte order selected before decoding. Structural fields remain big-endian.");
+    let precision = report.entries.iter().find(|entry| entry.feature_code == "xcf.precision").unwrap();
+    assert!(precision.native_description.contains("Native F32 samples") && precision.native_description.contains("reduces source precision"));
+}
+
 /// The streamed-PSD file entry point must leave historical XCF choices, native view hints and source protection intact.
 #[cfg(any(unix, windows))]
 #[test]

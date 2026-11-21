@@ -489,6 +489,15 @@ fn a_layer_decodes_with_every_compression() {
 }
 
 #[test]
+fn image_compression_property_requires_exactly_one_byte() {
+    for payload in [vec![], vec![0, 0], vec![1, 0], vec![2, 0, 0, 0]] {
+        let mut img = TestImage::rgb8(1, 1);
+        img.image_props.push((17, payload));
+        assert!(matches!(open(&img.write()), Err(IoError::Xcf(message)) if message.contains("compression property must contain exactly one byte")));
+    }
+}
+
+#[test]
 fn xcf_import_can_be_cancelled_while_parsing_layer_metadata() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1569,6 +1578,7 @@ pub(super) fn decoder_image(bytes: &[u8]) -> Image<'_> {
         colormap: Vec::new(),
         budget: MAX_PIXEL_BYTES,
         meta_budget: MAX_METADATA_BYTES,
+        name_work_left: MAX_METADATA_BYTES,
         vector_style_work_left: MAX_METADATA_BYTES,
         link_work_left: MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),

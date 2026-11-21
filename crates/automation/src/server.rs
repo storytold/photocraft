@@ -1731,17 +1731,42 @@ mod tests {
         assert_eq!(v["available"], 12000);
     }
 
-    #[test]
-    fn mcp_open_order_parameter_remains_explicit_and_strict() {
-        for order in ["little-endian", "big-endian"] {
-            let parsed: OpenParams = serde_json::from_value(json!({"path":"source.xcf","historical_xcf_sample_order":order})).unwrap();
-            let opts = crate::files::import_options_from_params(&json!({"historicalXcfSampleOrder":parsed.historical_xcf_sample_order})).unwrap();
-            assert_eq!(opts.historical_xcf_sample_order.unwrap().to_string(), order);
-        }
+    #[tokio::test]
+    async fn mcp_open_order_parameter_remains_explicit_and_strict() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
         let omitted: OpenParams = serde_json::from_value(json!({"path":"source.xcf"})).unwrap();
         assert!(omitted.historical_xcf_sample_order.is_none());
         assert!(serde_json::from_value::<OpenParams>(json!({"path":"source.xcf","historical_xcf_sample_order":1})).is_err());
         assert!(crate::files::import_options_from_params(&json!({"historicalXcfSampleOrder":"native"})).is_err());
+
+        const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let bridge = BridgeClient::new(listener.local_addr().unwrap().to_string(), TOKEN).unwrap().with_timeout(std::time::Duration::from_secs(5));
+        let mcp = PhotocraftMcp::with_backend(Backend::Bridge(Arc::new(bridge)));
+        let orders = [Some("little-endian"), Some("big-endian"), None];
+        let app = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let (read, mut write) = socket.into_split();
+            let mut lines = tokio::io::BufReader::new(read).lines();
+            assert!(fake_app_handshake(&mut lines, &mut write, TOKEN).await);
+            for order in orders {
+                let request: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+                assert_eq!(request["method"], "app.open");
+                assert_eq!(request["params"]["path"], "source.xcf");
+                assert_eq!(request["params"].get("historicalXcfSampleOrder").map(|value| value.as_str().unwrap()), order);
+                let reply = json!({"id": request["id"], "ok": true, "result": {"opened": true}});
+                write.write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+            }
+        });
+        for order in orders {
+            let mut arguments = json!({"path": "source.xcf"});
+            if let Some(order) = order {
+                arguments["historical_xcf_sample_order"] = json!(order);
+            }
+            let result = mcp.doc_open(Parameters(serde_json::from_value(arguments).unwrap())).await.unwrap();
+            assert_ne!(result.is_error, Some(true), "{result:?}");
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), app).await.unwrap().unwrap();
     }
 
     /// #10897: the MCP `doc_place` tool takes the same strict, defaulted approval as `doc_open`

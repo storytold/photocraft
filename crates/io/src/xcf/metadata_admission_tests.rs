@@ -80,6 +80,54 @@ fn coverage_owner(image: &mut Image<'_>) -> usize {
 }
 
 #[test]
+fn oversized_names_skip_validation_and_rejected_lossy_names_spend_work() {
+    let mut w = W { out: Vec::new(), wide: true };
+    w.string("Too long");
+    let lossy = w.out.len();
+    w.u32(5);
+    w.out.extend([b'a', b'b', b'c', 0xff, 0]);
+    let short = w.out.len();
+    w.string("OK");
+    let mut image = image(&w.out, 5);
+    image.name_work_left = 6;
+
+    let mut cursor = image.c.at(0);
+    assert_eq!(image.metadata_name(&mut cursor, "Layer").unwrap(), ("Layer".into(), true));
+    assert_eq!(cursor.pos, lossy);
+    assert_eq!(image.name_work_left, 6, "over-budget names consume no validation work");
+
+    assert_eq!(image.metadata_name(&mut cursor, "Layer").unwrap(), ("Layer".into(), true));
+    assert_eq!(image.name_work_left, 2, "a lossy name may fail storage admission after validation");
+    assert_eq!(image.meta_budget, 5);
+
+    image.meta_budget = 32;
+    let mut cursor = image.c.at(lossy);
+    assert_eq!(image.metadata_name(&mut cursor, "Channel").unwrap(), ("Channel".into(), true));
+    assert_eq!(image.name_work_left, 2, "repeated references cannot resume validation after a refusal");
+    assert_eq!(cursor.pos, short);
+    assert_eq!(image.metadata_name(&mut cursor, "Mask").unwrap(), ("OK".into(), false));
+    assert_eq!(image.name_work_left, 0);
+}
+
+#[test]
+fn auxiliary_mask_skips_full_wire_width_hierarchy_and_reads_children() {
+    let mut w = W { out: Vec::new(), wide: true };
+    w.u32(1);
+    w.u32(1);
+    w.string("Mask");
+    w.end();
+    let pointer = w.out.len();
+    w.out.extend(u64::MAX.to_be_bytes());
+    w.ptr(1);
+    w.ptr(0);
+
+    let record = image(&w.out, MAX_METADATA_BYTES).coverage_mask_header(0, &Interrupt::NONE).unwrap();
+    assert_eq!(record.name, "Mask");
+    assert_eq!(record.children, [1]);
+    assert!(image(&w.out[..pointer + 7], MAX_METADATA_BYTES).coverage_mask_header(0, &Interrupt::NONE).is_err());
+}
+
+#[test]
 fn optional_effect_frame_overflow_keeps_groups_without_decoding_hierarchy_or_queuing_effects() {
     fn group(w: &mut W, width: u32, height: u32, x: i32, y: i32) -> usize {
         let effect = effect(w, 0);

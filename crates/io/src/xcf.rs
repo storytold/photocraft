@@ -80,7 +80,7 @@ use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::import_conversion::{ConversionDisposition, ConversionEntry, ConversionReason, NativeTargetRef};
 use photocraft_doc::{AlphaChannel, Document, LabelColor, Layer, LayerContent, LayerMask};
 use photocraft_geom::{Rect, Size};
-use photocraft_raster::{Interrupt, Surface};
+use photocraft_raster::{AllocationError, Interrupt, Surface};
 
 use crate::ora::Warnings;
 use crate::{ImportResult, IoError};
@@ -144,6 +144,8 @@ struct Image<'a> {
     /// offsets referencing one record with a large name would otherwise allocate an owned
     /// copy per reference, multiplying a small file into gigabytes of retained metadata.
     meta_budget: usize,
+    /// Nonrefundable raw name bytes admitted to UTF-8 validation across all drawables.
+    name_work_left: usize,
     vector_style_work_left: usize,
     link_work_left: usize,
     /// Nonrefundable effect decoding work shared across all drawable/coverage owners.
@@ -231,14 +233,17 @@ impl<'a> Image<'a> {
         )
     }
 
-    /// Borrow framing first; do not allocate an input-sized name after its retention budget is gone.
+    /// Bound validation work independently of the bytes actually retained.
     fn metadata_name(&mut self, cursor: &mut Cursor<'a>, fallback: &str) -> Result<(String, bool)> {
         let raw = cursor.string_bytes()?;
-        let worst = if std::str::from_utf8(raw).is_ok() { raw.len() } else { raw.len().saturating_mul(3) };
-        if worst > self.meta_budget {
+        if raw.len() > self.meta_budget || !work_budget::WorkBudget::new(&mut self.name_work_left).keep_remaining(raw.len()) {
             return Ok((fallback.into(), true));
         }
-        let name = String::from_utf8_lossy(raw).into_owned();
+        let name = match std::str::from_utf8(raw) {
+            Ok(valid) => valid.to_owned(),
+            Err(_) if raw.len().saturating_mul(3) > self.meta_budget => return Ok((fallback.into(), true)),
+            Err(_) => String::from_utf8_lossy(raw).into_owned(),
+        };
         let Some(remaining) = self.meta_budget.checked_sub(name.capacity()) else {
             return Ok((fallback.into(), true));
         };
@@ -461,14 +466,13 @@ impl<'a> Image<'a> {
         let mut c = self.c.at(offset);
         let (width, height) = (c.u32()?, c.u32()?);
         validate_canvas(width, height)?;
-        // Admit UTF-8 name validation even when storage admission substitutes a
-        // short fallback; repeated mask references must not rescan an uncharged name.
+        // Account for the name field in the effect traversal's own work limit.
         let mut name_cursor = c.at(c.pos);
         self.effect_decode_work.charge(name_cursor.string_bytes()?.len().saturating_add(4))?;
         let (name, name_limited) = self.metadata_name(&mut c, "Mask")?;
         let properties = wire::props_with_work(&mut c, ctl, &mut |bytes| self.effect_decode_work.charge(bytes))?;
         self.effect_decode_work.charge(8)?;
-        let _hierarchy = c.ptr()?;
+        c.ptr_wire()?;
         let children =
             if self.version >= 26 { effects::read_pointers_with_work(&mut c, &mut self.meta_budget, &mut self.effect_decode_work, ctl)? } else { Vec::new() };
         // metadata_name already charged the admitted name allocation. The fallback
@@ -811,11 +815,19 @@ fn write_pixels(surface: &mut Surface, px: &Pixels, x: i32, y: i32, budget: &mut
         return Err(invalid("the layers exceed the 1 GiB pixel limit"));
     }
     let before = surface.tile_count();
-    surface.try_write_region(rect, &px.data).map_err(|error| invalid(format!("drawable tile allocation failed: {error}")))?;
+    surface.try_write_region(rect, &px.data).map_err(drawable_tile_error)?;
     surface.prune();
     let added = surface.tile_count().saturating_sub(before) as u64;
     *budget = budget.saturating_sub(usize::try_from(photocraft_raster::stored_tiles_bytes(added, &surface.format())).unwrap_or(usize::MAX));
     Ok(())
+}
+
+fn drawable_tile_error(error: AllocationError) -> IoError {
+    let message = format!("drawable tile write failed: {error}");
+    match error {
+        AllocationError::NotEnoughMemory { .. } => IoError::OutOfMemory(message),
+        _ => invalid(message),
+    }
 }
 
 /// Parses legacy or numeric XCF version tags and rejects malformed header framing.
@@ -945,12 +957,12 @@ fn read_image_metadata_with_work<'a>(
         match p.kind {
             1 if indexed => colormap = palette_colors(p.data, version)?,
             17 => {
-                compression = match p.data.first() {
-                    Some(0) => Compression::None,
-                    Some(1) => Compression::Rle,
-                    Some(2) => Compression::Zlib,
-                    Some(k) => return Err(invalid(format!("unknown compression {k}"))),
-                    None => return Err(invalid("empty compression property")),
+                compression = match p.data {
+                    [0] => Compression::None,
+                    [1] => Compression::Rle,
+                    [2] => Compression::Zlib,
+                    [k] => return Err(invalid(format!("unknown compression {k}"))),
+                    _ => return Err(invalid("compression property must contain exactly one byte")),
                 }
             }
             21 => {
@@ -1102,6 +1114,7 @@ fn import_with_sample_order_and_parasite_work(
         colormap,
         budget: MAX_PIXEL_BYTES,
         meta_budget: MAX_METADATA_BYTES,
+        name_work_left: MAX_METADATA_BYTES,
         vector_style_work_left: MAX_METADATA_BYTES,
         link_work_left: MAX_METADATA_BYTES,
         effect_decode_work: Default::default(),
@@ -1162,7 +1175,7 @@ fn import_with_sample_order_and_parasite_work(
             "xcf.historical_sample_order",
             ConversionReason::NativePolicy,
             format!("Development XCF version {version} with {}-bit samples has no reliable sample byte-order marker", precision.bytes * 8),
-            format!("Explicit {sample_order} sample byte order selected before decoding; structural fields remain big-endian. Native samples retain their declared precision and source transfer curve"),
+            format!("Explicit {sample_order} sample byte order selected before decoding. Structural fields remain big-endian."),
         )?;
     }
     let mut document = Document::new(name, Size::new(w, h), mode, depth);

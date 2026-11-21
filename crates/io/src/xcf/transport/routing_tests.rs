@@ -71,6 +71,25 @@ fn xz(bytes: &[u8]) -> Vec<u8> {
 }
 
 #[test]
+fn full_xz_import_checks_terminal_padding_alignment_and_header_probe_stays_bounded() {
+    let name = "padding.xcf.xz";
+    let source = plain();
+    let wrapped = xz(&source);
+    let header = &source[..MAGIC.len() + 5 + 4 * 4];
+    for padding in [1, 2, 3, 4, 8] {
+        let mut padded = wrapped.clone();
+        padded.resize(padded.len() + padding, 0);
+        assert_eq!(header_prefix(name, &padded, &Interrupt::NONE).unwrap().as_deref(), Some(header));
+        let imported = crate::import(name, &padded);
+        if padding.is_multiple_of(4) {
+            assert!(imported.is_ok(), "valid XZ padding rejected: {padding}");
+        } else {
+            assert!(matches!(imported, Err(IoError::Xcf(message)) if message.contains("XZ stream padding")));
+        }
+    }
+}
+
+#[test]
 fn compressed_detector_counter_observes_the_actual_detector_argument() {
     // This control deliberately crosses the boundary directly. A broken counter
     // must not make every bounded-routing assertion below pass vacuously.

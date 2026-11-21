@@ -1,6 +1,13 @@
 use super::*;
 
 #[test]
+fn tile_memory_refusal_uses_the_typed_import_error() {
+    let error = drawable_tile_error(AllocationError::NotEnoughMemory { bytes: 16_384 });
+    assert!(matches!(error, IoError::OutOfMemory(message) if message.contains("drawable tile") && message.contains("16384")));
+    assert!(matches!(drawable_tile_error(AllocationError::ScratchRead("unreadable".into())), IoError::Xcf(_)));
+}
+
+#[test]
 fn tile_admission_checks_offsets_and_native_formats_before_writing() {
     for (mode, depth, alpha) in [
         (ColorMode::Rgb, SampleType::U8, true),
