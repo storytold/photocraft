@@ -273,8 +273,7 @@ pub fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .map(|group| Folder { name: group.name.clone(), items: group.items.iter().map(|preset| (preset.name.clone(), preset.name.clone())).collect() })
         .collect();
     let names = names_of(&folders);
-    let stops: Vec<(String, Vec<(f32, [f32; 4])>)> =
-        groups.iter().flat_map(|group| &group.items).map(|preset| (preset.name.clone(), preset.resolve(fg, bg))).collect();
+    let stops: Vec<ResolvedGradient> = groups.iter().flat_map(|group| &group.items).map(|preset| (preset.name.clone(), preset.resolve(fg, bg))).collect();
     let source = panel_source(PanelInputs::new(&app.ui.presets_ui, GRADIENTS, folders, stops), gradient_thumb);
     let zone = canvas_zone(app);
     let look = Look { cell: Some(CellShape::ratio(32, 18)), ..Look::default() };
@@ -282,8 +281,11 @@ pub fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     apply(app, ui.ctx(), GRADIENTS, &names, &keys, events);
 }
 
+/// A gradient preset's name and its stops (offset, RGBA), resolved against the current colours.
+type ResolvedGradient = (String, Vec<(f32, [f32; 4])>);
+
 /// A gradient panel thumbnail: the preset's stops, resolved against the current colours.
-fn gradient_thumb(inputs: &PanelInputs<Vec<(String, Vec<(f32, [f32; 4])>)>>, cx: &ContentPainterCx, rect: Rect, info: ThumbInfo<'_, PresetKey>) {
+fn gradient_thumb(inputs: &PanelInputs<Vec<ResolvedGradient>>, cx: &ContentPainterCx, rect: Rect, info: ThumbInfo<'_, PresetKey>) {
     if let PresetKey::Item(name) = info.key
         && let Some((_, stops)) = inputs.thumbs.iter().find(|(preset, _)| preset == name)
     {
@@ -673,7 +675,7 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .filter(|preset| !only || Tool::from_name(&preset.tool) == Some(current))
         .map(|preset| (preset.name.clone(), preset.tool.clone()))
         .collect();
-    let source = PresetSource::new(presets, PresetFns::new(tool_preset_rows));
+    let source = PresetSource::new(presets.as_slice(), PresetFns::new(tool_preset_rows));
     // The footer's closure is `Fn`, so the check box's value goes through a cell.
     let flag = std::cell::Cell::new(only);
     let leading = |ui: &mut egui::Ui| {
@@ -695,7 +697,7 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 /// The Tool Presets rows: each preset, as (name, tool name), with its tool's icon.
-fn tool_preset_rows(presets: &Vec<(String, String)>, _: &Env) -> Vec<PresetRow<PresetKey>> {
+fn tool_preset_rows(presets: &&[(String, String)], _: &Env) -> Vec<PresetRow<PresetKey>> {
     presets
         .iter()
         .map(|(name, tool)| {
@@ -863,11 +865,11 @@ pub(crate) fn pattern_swatches(app: &PhotocraftApp, ctx: &egui::Context) -> Vec<
 
 /// The presets of `swatches`: one row per pattern, keyed by its id, with its swatch and its name as the tooltip.
 pub(crate) fn pattern_source(swatches: Vec<Swatch>) -> PresetSource<'static, String> {
-    PresetSource::new(swatches, PresetFns::new(swatch_rows))
+    PresetSource::new(swatches, PresetFns::new(|swatches, env| swatch_rows(swatches, env)))
 }
 
 /// The rows of [`pattern_source`].
-fn swatch_rows(swatches: &Vec<Swatch>, _: &Env) -> Vec<PresetRow<String>> {
+fn swatch_rows(swatches: &[Swatch], _: &Env) -> Vec<PresetRow<String>> {
     swatches
         .iter()
         .map(|swatch| {

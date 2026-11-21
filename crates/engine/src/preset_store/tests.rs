@@ -704,7 +704,7 @@ fn imported_abr_folders_persist_and_old_stores_load_flat() {
     mem.write(&group_file_name("Deep"), &serde_json::to_vec(&deep).unwrap()).unwrap();
     let mut d = Session::new();
     d.attach_preset_store(open(Box::new(mem.clone())));
-    assert_eq!(photocraft_paint::presets::find(&*d.tools.presets, "Deep").unwrap().folder.len(), crate::brush_preset_cmds::MAX_FOLDER_DEPTH);
+    assert_eq!(photocraft_paint::presets::find(&d.tools.presets, "Deep").unwrap().folder.len(), crate::brush_preset_cmds::MAX_FOLDER_DEPTH);
     assert!(photocraft_paint::presets::find(&d.tools.presets, "Blank").unwrap().folder.is_empty());
 }
 

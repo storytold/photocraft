@@ -510,7 +510,7 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
         .specs(specs)
         .blend_keys(keys)
         .blend_modes(blend_modes(&layer))
-        .patterns(PresetSource::new(pattern_list(app), PresetFns::new(pattern_rows)))
+        .patterns(PresetSource::new(pattern_list(app), PresetFns::new(|patterns, env| pattern_rows(patterns, env))))
         .user_contours(contour::user_contours(app))
         .sampler(contour::sampler)
         .style_presets(style_presets(app))
@@ -587,7 +587,7 @@ pub fn pattern_list(app: &PhotocraftApp) -> Vec<(String, String)> {
 }
 
 /// One row per pattern of [`pattern_list`], keyed by its id.
-fn pattern_rows(patterns: &Vec<(String, String)>, _: &Env) -> Vec<PresetRow<String>> {
+fn pattern_rows(patterns: &[(String, String)], _: &Env) -> Vec<PresetRow<String>> {
     patterns.iter().map(|(id, name)| PresetRow::item(id.clone(), name.clone(), 0)).collect()
 }
 
