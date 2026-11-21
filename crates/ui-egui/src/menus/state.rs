@@ -243,6 +243,37 @@ fn define_custom_shape_enabled(app: &PhotocraftApp) -> bool {
     let Some(s) = app.session.active() else {
         return false;
     };
+    // Tools whose enabled state was not measured keep the engine's rule, whatever the layer is (CodeRabbit on #16186).
+    let measured = matches!(
+        app.ui.tool,
+        Tool::PathSelection
+            | Tool::DirectSelection
+            | Tool::Pen
+            | Tool::FreeformPen
+            | Tool::CurvaturePen
+            | Tool::AddAnchorPoint
+            | Tool::Rectangle
+            | Tool::EllipseShape
+            | Tool::Triangle
+            | Tool::Polygon
+            | Tool::Star
+            | Tool::Line
+            | Tool::CustomShape
+            | Tool::Move
+            | Tool::Type
+            | Tool::RectMarquee
+            | Tool::EllipseMarquee
+            | Tool::Lasso
+            | Tool::Brush
+            | Tool::Eraser
+            | Tool::Crop
+            | Tool::Eyedropper
+            | Tool::Hand
+            | Tool::Zoom
+    );
+    if !measured {
+        return app.session.is_enabled("edit.defineCustomShape");
+    }
     let ok = |p: &photocraft_doc::Path| !p.subpaths.is_empty();
     let targeted = match app.ui.selected_path.as_deref() {
         // The layer's own path row is the shape-layer case below.

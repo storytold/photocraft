@@ -163,6 +163,14 @@ impl Session {
         if self.names_existing_layer(spec.id, params) {
             return Ok(());
         }
+        // Define Custom Shape on a path the call names (`work` or a saved path): the precondition judges that path,
+        // not only the implicit one, as the command itself resolves it (CodeRabbit on #16186).
+        if spec.id == "edit.defineCustomShape"
+            && let Some(named) = params.get("path").and_then(Value::as_str)
+        {
+            let d = self.active().ok_or("no document open")?;
+            return crate::edit_menu_cmds::current_path(&d.doc, d.active_layer, Some(named)).map(|_| ()).ok_or_else(|| "no such path".to_string());
+        }
         // A recorded invalid comp index succeeds without an edit, even with no comps.
         // Ordinary Apply and references by id/name retain the command's usual precondition.
         if spec.id == "layerComp.apply"

@@ -137,3 +137,20 @@ fn running_it_never_stores_the_last_saved_path() {
     let mut app = app();
     assert!(app.session.execute(ID, json!({"name": "Fallback"})).is_err());
 }
+
+/// A tool whose state was not measured keeps the engine's rule: a pixel layer with a nonempty untargeted Work Path
+/// enables it (CodeRabbit on #16186).
+#[test]
+fn an_unmeasured_tool_keeps_the_engines_rule_with_a_work_path() {
+    let mut app = app();
+    app.run("path.set", json!({"name": "work", "path": square(10.0, 20.0, 24.0), "work": true})).ok();
+    app.session
+        .edit("work path", |doc, _| {
+            doc.work_path = Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(1.0, 1.0), (11.0, 1.0), (11.0, 11.0), (1.0, 11.0)])]));
+            Ok(())
+        })
+        .unwrap();
+    app.ui.selected_path = None;
+    assert!(app.session.is_enabled(ID), "the engine enables it with a Work Path");
+    assert!(enabled_with(&mut app, Tool::CloneStamp), "and the unmeasured Clone Stamp follows the engine");
+}

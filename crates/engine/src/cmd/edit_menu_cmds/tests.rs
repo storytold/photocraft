@@ -682,6 +682,22 @@ fn square_path(x: f64, y: f64, w: f64) -> Path {
     Path::new(vec![Subpath::polygon(&[(x, y), (x + w, y), (x + w, y + w), (x, y + w)])])
 }
 
+/// With only a saved path in the document, a call that names it is not refused by the precondition, which looked at
+/// the implicit path only (CodeRabbit on #16186).
+#[test]
+fn define_custom_shape_accepts_a_named_saved_path() {
+    let mut s = session(8);
+    s.edit("saved", |doc, _| {
+        doc.paths.push(photocraft_doc::NamedPath { name: "Badge".into(), path: square_path(4.0, 4.0, 10.0), psd_raw: None });
+        Ok(())
+    })
+    .unwrap();
+    assert!(!s.is_enabled("edit.defineCustomShape"), "nothing is targeted without a name");
+    s.execute("edit.defineCustomShape", json!({"path": "Badge", "name": "From Badge"})).unwrap();
+    assert_eq!(custom_shapes(&s).len(), 1);
+    assert!(s.execute("edit.defineCustomShape", json!({"path": "Missing"})).is_err(), "an unknown name is still refused");
+}
+
 #[test]
 fn define_custom_shape_and_preset_manager() {
     let mut s = session(8);
