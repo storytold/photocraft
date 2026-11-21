@@ -659,7 +659,10 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
     if command == "image.adjustments.colorLookup" && map.get("data").and_then(Value::as_str).is_some_and(str::is_empty) {
         map.remove("data");
     }
-    if command == "image.mode.indexedColor" {
+    // Conditional Mode Change to Indexed Color runs with the Indexed Color dialog's values (#13678).
+    if command == "image.mode.indexedColor"
+        || (command == crate::dialogs::conditional_mode_change_dialog::COMMAND && map.get("to").and_then(Value::as_str) == Some("indexed"))
+    {
         // The matte colour row belongs to the "custom" choice, which the command takes as the colour itself.
         let color = map.remove(rows::MATTE_COLOR);
         if map.get("matte").and_then(Value::as_str) == Some("custom")
