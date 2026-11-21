@@ -25,6 +25,8 @@ pub mod artboard_cmds;
 pub mod atn_cmds;
 pub mod automate_cmds;
 pub mod background_cmds;
+#[cfg(test)]
+mod black_white_refusals_tests;
 pub mod brush_cmds;
 pub mod brush_key_cmds;
 pub mod brush_preset_cmds;
