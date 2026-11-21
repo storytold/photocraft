@@ -2599,15 +2599,6 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions, ct
             Ok(Some(r))
         }
         ColorMode::Bitmap if format == Format::Tiff && (opts.tiff_ccitt_g4 || opts.encode.tiff_compression == codecs::TiffCompression::None) => {
-            let opaque = match single_layer(doc) {
-                Some(s) => opaque_surface(s, doc.bounds()),
-                None => opaque_bottom(doc),
-            };
-            if !opaque && opts.preserve_alpha {
-                return Err(IoError::Unsupported(
-                    "Save and Close cannot discard TIFF composite transparency; enable tiffTransparency or save to a separate output folder".into(),
-                ));
-            }
             export_tiff_bilevel(doc, opts, ctl).map(Some)
         }
         _ => Ok(None),
@@ -3765,6 +3756,15 @@ mod bilevel_tiff_tests {
         opts.preserve_alpha = true;
         let err = export_flat(&doc, Format::Tiff, &opts).unwrap_err();
         assert!(matches!(err, IoError::Unsupported(_)));
+    }
+
+    #[test]
+    fn opaque_bilevel_tiff_succeeds_when_preserve_alpha() {
+        let imported = import_flat("bilevel.tif", &tiff(1, 1)).unwrap().document;
+        let mut opts = ExportOptions { tiff_ccitt_g4: true, ..Default::default() };
+        opts.preserve_alpha = true;
+        let res = export_flat(&imported, Format::Tiff, &opts);
+        assert!(res.is_ok());
     }
 
     #[test]
