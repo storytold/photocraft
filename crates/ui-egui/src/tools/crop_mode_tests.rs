@@ -5,7 +5,7 @@ use egui::Modifiers;
 use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
 use serde_json::json;
 
-use crate::canvas::testing::{ToolEvent, frame, tool_event};
+use crate::canvas::testing::{ToolEvent, frame, key, tool_event};
 use crate::state::Tool;
 use crate::{PhotocraftApp, crop_ui};
 
@@ -100,4 +100,26 @@ fn a_dropped_crop_turns_its_own_documents_view_upright() {
     frame(&mut app);
     assert!(!crop_ui::pending(&app), "the turned crop is dropped with its document");
     assert_eq!(app.ui.views[0].rotation, 0.0, "its own document's view is upright again");
+}
+
+#[test]
+fn escape_discards_a_turned_crop_and_the_next_frame_starts_upright() {
+    let mut app = app();
+    turn_the_view(&mut app);
+    assert_ne!(crop_ui::frame(&app).unwrap().angle, 0.0, "the outside drag turned the crop frame");
+    assert_ne!(app.ui.views[0].rotation, 0.0, "the view turned with the crop");
+    let state = app.session.active().unwrap();
+    let document = state.doc.clone();
+    let steps = state.history.past_len();
+
+    key(&mut app, egui::Key::Escape, NONE);
+    assert!(!crop_ui::pending(&app), "Escape discards the pending crop");
+    assert_eq!(app.ui.views[0].rotation, 0.0, "the view is upright again");
+
+    drag(&mut app, &[[20.0, 15.0], [80.0, 45.0], [100.0, 70.0]]);
+    assert!(crop_ui::pending(&app), "an interior drag draws a new frame");
+    assert_eq!(crop_ui::frame(&app).unwrap().angle, 0.0, "the new frame starts upright");
+    let state = app.session.active().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&document, &state.doc));
+    assert_eq!(state.history.past_len(), steps, "discarding and drawing a frame leave document history intact");
 }
