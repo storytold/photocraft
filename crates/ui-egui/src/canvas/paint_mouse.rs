@@ -249,6 +249,8 @@ pub(crate) enum ContextPopup {
     Menu(MenuKind),
     /// The Brush Preset picker.
     BrushPicker,
+    /// The gradient preset picker of the Gradient tool (#12013).
+    GradientPicker,
 }
 
 /// The popup a context press (a press its tool refused, or a press with no tool use) of `tool` with
@@ -286,6 +288,10 @@ pub(crate) fn context_popup(app: &mut PhotocraftApp, tool: Tool, mods: Mods, doc
     // A waiting Remove stroke takes no right-click: nothing opens over its tint (#12551).
     if right_click_picker(tool) && !crate::retouch_ui::remove_pending_live(app) {
         return Some(ContextPopup::BrushPicker);
+    }
+    // The Gradient tool opens its preset picker over a pixel layer, in both modes (#12013).
+    if tool == Tool::Gradient && crate::gradient_ui::right_click_picks_preset(app) {
+        return Some(ContextPopup::GradientPicker);
     }
     if menu::editing_text(app, tool) {
         return Some(ContextPopup::Menu(MenuKind::TypeEdit { spelling: None }));

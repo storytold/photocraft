@@ -1419,6 +1419,10 @@ pub fn open_at(app: &mut PhotocraftApp, tool: Tool, mods: Mods, at: Pos2, doc: [
             crate::brush_picker::open(app, [at.x, at.y]);
             true
         }
+        Some(ContextPopup::GradientPicker) => {
+            crate::gradient_ui::open_picker(app, [at.x, at.y]);
+            true
+        }
         None => false,
     }
 }
@@ -1849,6 +1853,7 @@ pub(crate) fn run(
         }
     }
     crate::brush_picker::show_at(ui, app);
+    crate::gradient_ui::show_picker(ui, app);
 }
 
 #[cfg(test)]

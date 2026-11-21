@@ -6,6 +6,7 @@ use serde_json::json;
 use super::*;
 use crate::canvas::{ToolEvent, tool_event};
 
+mod gradient_right_click;
 mod right_click;
 
 pub(super) fn harness(prefs: Option<&str>) -> Harness<'static, Box<PhotocraftApp>> {

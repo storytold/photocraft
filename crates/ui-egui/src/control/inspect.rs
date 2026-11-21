@@ -135,6 +135,8 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         }),
         "layerPicker": app.ui.layer_picker,
         "brushModeMenu": menu.filter(|menu| matches!(menu.kind, MenuKind::BrushMode { .. })).map(|menu| brush_mode_menu(app, menu)),
+        // The gradient preset picker a right-click with the Gradient tool opens (#12013): its screen point, or null.
+        "gradientPicker": app.ui.gradient_picker.map(|pos| json!({"pos": pos})),
         "brushPicker": app.ui.brush_picker.map(|pos| json!({
             "pos": pos,
             "list": {
