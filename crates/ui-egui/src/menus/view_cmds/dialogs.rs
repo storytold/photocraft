@@ -3,6 +3,7 @@ use super::{PhotocraftApp, Value, json};
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Outcome as _, Props as _, Show as _};
 use craft::ui::dialog::DialogId;
+use craft::ui::patterns::blend_keys::BlendKeyEntry;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind};
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::requests::PathKind;
@@ -110,6 +111,51 @@ fn blend_modes() -> Vec<(String, Label)> {
         ("add", tl!("Add")),
         ("subtract", tl!("Subtract")),
     ])
+}
+
+/// Image ▸ Apply Image's Blending list (#14479): the reference application's modes in its order, as the command's
+/// keys with their names. Dissolve and the non-separable modes (Hue, Saturation, Color, Luminosity) are not in its
+/// list; Darker Color and Lighter Color join once the engine blends with them (#14478). Image ▸ Calculations keeps
+/// [`blend_modes`]: the issue marks it not measured.
+const APPLY_IMAGE_BLENDS: [(&str, &str); 21] = [
+    ("normal", "Normal"),
+    ("darken", "Darken"),
+    ("multiply", "Multiply"),
+    ("colorBurn", "Color Burn"),
+    ("linearBurn", "Linear Burn"),
+    ("lighten", "Lighten"),
+    ("screen", "Screen"),
+    ("colorDodge", "Color Dodge"),
+    ("linearDodge", "Linear Dodge (Add)"),
+    ("overlay", "Overlay"),
+    ("softLight", "Soft Light"),
+    ("hardLight", "Hard Light"),
+    ("vividLight", "Vivid Light"),
+    ("linearLight", "Linear Light"),
+    ("pinLight", "Pin Light"),
+    ("hardMix", "Hard Mix"),
+    ("add", "Add"),
+    ("subtract", "Subtract"),
+    ("difference", "Difference"),
+    ("exclusion", "Exclusion"),
+    ("divide", "Divide"),
+];
+
+/// Apply Image's Blending row: a blend select over [`APPLY_IMAGE_BLENDS`], so the framework draws the line above each
+/// group head (Darken, Lighten, Overlay, Difference) as in every other blend list. Add and Subtract are Apply Image's
+/// own modes with no Shift+Alt letter (`unlettered`).
+fn apply_image_blending() -> Param {
+    let modes = APPLY_IMAGE_BLENDS
+        .iter()
+        .map(|(key, name)| {
+            let entry = match photocraft_engine::commands::parse_blend(key) {
+                Some(m) if !matches!(*key, "add" | "subtract") => crate::panels::blend_entry((*key).to_owned(), m),
+                _ => BlendKeyEntry::unlettered((*key).to_owned()),
+            };
+            (entry, Label::from(tl!(name)))
+        })
+        .collect();
+    Param::new("blending", tl!("Blending"), ParamKind::blend(modes, Some("multiply".to_owned())))
 }
 
 /// A choice id read as words ("colorDodge" is "Color dodge"), translated when the catalog has the sentence.
@@ -577,7 +623,7 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
                 choice("sourceLayer", tl!("Layer"), channels(&layers), "merged"),
                 choice("sourceChannel", tl!("Source Channel"), channels(&load), &chans[0]),
                 Param::new("sourceInvert", tl!("Invert"), ParamKind::bool(false)),
-                choice("blending", tl!("Blending"), blend_modes(), "multiply"),
+                apply_image_blending(),
                 Param::new("opacity", tl!("Opacity"), ParamKind::number(Some(0.0), Some(100.0), 100.0, 1.0, 0)),
                 Param::new("scale", tl!("Scale"), ParamKind::number(Some(0.001), Some(2.0), 1.0, 0.1, 3)),
                 Param::new("offset", tl!("Offset"), ParamKind::int(Some(-255), Some(255), 0)),
@@ -823,6 +869,10 @@ fn export_contents(app: &mut PhotocraftApp) -> Result<Value, String> {
         Ok(json!({"path": path, "fileName": name, "bytes": bytes.len()}))
     })
 }
+
+#[cfg(test)]
+#[path = "apply_image_blending_list_tests.rs"]
+mod apply_image_blending_list_tests;
 
 #[cfg(test)]
 #[path = "../../artboards_to_pdf_selected_tests.rs"]
