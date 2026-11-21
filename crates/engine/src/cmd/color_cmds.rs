@@ -1046,7 +1046,7 @@ fn assign_profile(s: &mut Session, p: &Value) -> Result<Value> {
         if prof.color_space != mode_space(doc.mode) {
             return Err(EngineError::Other(format!("profile `{}` is {:?}; the document is {:?}", prof.description, prof.color_space, doc.mode)));
         }
-        Some(prof.to_bytes())
+        if doc.depth == SampleType::F32 { Some(linear_variant(&prof)?) } else { Some(prof.to_bytes()) }
     };
     let desc = match &bytes {
         Some(b) => profile_from_bytes(b).map(|p| p.description.clone()).unwrap_or_default(),
@@ -1057,6 +1057,39 @@ fn assign_profile(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(json!({ "profile": desc }))
+}
+
+/// The profile a 32-bit document is tagged with when `prof` is assigned (#14239): 32-bit samples are linear, so an
+/// RGB or Gray matrix/TRC profile becomes its linear variant (same primaries and white point, tone curves of gamma
+/// 1.0), named "<description> (Linear RGB Profile)" or "(Linear Grayscale Profile)". A profile that is already linear,
+/// or of another colour space, is kept as it is; an RGB or Gray profile with only lookup tables (no tone curves)
+/// can't be made linear and is refused.
+fn linear_variant(prof: &Profile) -> Result<Arc<Vec<u8>>> {
+    let suffix = match prof.color_space {
+        ColorSpace::Rgb => "Linear RGB Profile",
+        ColorSpace::Gray => "Linear Grayscale Profile",
+        _ => return Ok(prof.to_bytes()),
+    };
+    let shaper = prof.matrix.is_some() && prof.trc.is_some() || prof.gray_trc.is_some();
+    if !shaper {
+        return Err(EngineError::Other(format!("profile `{}` is built from lookup tables and has no linear variant for a 32-bit document", prof.description)));
+    }
+    let curves = prof.trc.iter().flatten().chain(prof.gray_trc.iter());
+    if curves.clone().all(craft_cms::Curve::is_identity) {
+        return Ok(prof.to_bytes());
+    }
+    let mut linear = prof.clone();
+    if let Some(trc) = linear.trc.as_mut() {
+        *trc = std::array::from_fn(|_| craft_cms::Curve::Gamma(1.0));
+    }
+    if linear.gray_trc.is_some() {
+        linear.gray_trc = Some(craft_cms::Curve::Gamma(1.0));
+    }
+    // Tables made for the gamma-encoded curves would no longer match: the variant is matrix/TRC only.
+    linear.a2b = [None, None, None];
+    linear.b2a = [None, None, None];
+    linear.description = format!("{} ({suffix})", prof.description);
+    Ok(linear.with_encoded_bytes().to_bytes())
 }
 
 /// Read opt-in destructive profile options without accepting malformed values as defaults.

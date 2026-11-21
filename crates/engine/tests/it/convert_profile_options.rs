@@ -40,6 +40,15 @@ fn layered(depth: u32, mode: &str) -> Session {
     if let Some(profile) = profile {
         s.execute("edit.assignProfile", json!({"profile": profile})).unwrap();
     }
+    // Assigned to a 32-bit document, sRGB becomes its linear variant (#14239); the source-space blending this fixture
+    // separates needs the gamma-encoded sRGB, which a 32-bit file can still carry.
+    if mode == "rgb" && depth == 32 {
+        s.edit("Embedded sRGB", |doc, _| {
+            doc.icc_profile = Some(Builtin::Srgb.profile().to_bytes());
+            Ok(())
+        })
+        .unwrap();
+    }
     s
 }
 
