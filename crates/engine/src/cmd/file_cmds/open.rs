@@ -63,16 +63,15 @@ pub(crate) fn import_opened(s: &Session, name: &str, bytes: &[u8]) -> Result<Doc
 }
 
 pub(super) fn import_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8]) -> Result<Document> {
-    import_source_at_raw_ppi(raw_ppi, name, bytes, &Default::default()).map(|(doc, _)| doc)
+    import_source_at_raw_ppi(raw_ppi, name, bytes, &Default::default()).map(|imported| imported.document)
 }
 
 /// [`import_at_raw_ppi`], also telling whether the source must not be replaced by a save
 /// (`ImportResult::source_read_only`: Affinity, Krita, XCF, PDN, whatever its extension says).
-pub(super) fn import_source_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<(Document, bool)> {
-    let r = import_result_with(name, bytes, opts)?;
-    let mut doc = r.document;
-    raw_resolution(raw_ppi, &r.warnings, &mut doc);
-    Ok((doc, r.source_read_only))
+pub(super) fn import_source_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<photocraft_io::ImportResult> {
+    let mut imported = import_result_with(name, bytes, opts)?;
+    raw_resolution(raw_ppi, &imported.warnings, &mut imported.document);
+    Ok(imported)
 }
 
 /// The one import path every caller shares: allocation checkpoint, native `.pcraft` and format

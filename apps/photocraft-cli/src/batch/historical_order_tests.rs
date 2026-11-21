@@ -39,6 +39,7 @@ fn batch_wrapped_historical_inputs_exclude_unrelated_archives_in_both_listing_mo
         assert_eq!(result.code, 0, "{args:?}: {}{}", result.stdout, result.stderr);
         assert!(result.stdout.contains("6 succeeded, 0 failed"), "{}", result.stdout);
         assert!(!result.stderr.contains("FAIL"), "{}", result.stderr);
+        assert!(result.stderr.lines().any(|line| line.contains("bzip.xcf.bz2") && line.contains("explicit little-endian choice")));
         assert_eq!(std::fs::read_dir(&output).unwrap().count(), 6);
         for (name, bytes) in sources {
             let stem = std::path::Path::new(name).file_stem().unwrap().to_string_lossy();

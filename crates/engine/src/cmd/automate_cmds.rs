@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::file_cmds::{file_name, import, join, list_images, list_images_tree, read_file, stem, write_file};
+use crate::file_cmds::{file_name, join, list_images, list_images_tree, read_file, stem, write_file};
 use crate::{EngineError, Result, Session};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -359,6 +359,7 @@ pub(crate) fn named_action_steps(s: &Session, p: &Value, cmd: &str) -> Result<Ve
 /// Save the chosen action's enabled steps and dependencies as a runnable droplet.
 fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.createDroplet";
+    let order = crate::file_cmds::historical_xcf_sample_order(p, cmd)?;
     let path = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty()).ok_or_else(|| bad(cmd, "missing \"path\" (where to save the droplet)"))?;
     let mut steps = match p.get("steps").or_else(|| p.get("action").filter(|v| v.is_array())) {
         Some(steps) => parse_steps(steps, cmd)?,
@@ -380,6 +381,9 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(v) = p.get(k) {
             options.insert(k.into(), v.clone());
         }
+    }
+    if let Some(order) = order {
+        options.insert("historicalXcfSampleOrder".into(), json!(order));
     }
     let mut droplet = json!({"photocraftDroplet": 1, "name": name, "action": {"name": name, "steps": steps_json}, "options": options});
     if !called.is_empty() {
@@ -473,6 +477,9 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
             bp[key] = value.clone();
         }
     }
+    if let Some(order) = p.get("historicalXcfSampleOrder").or_else(|| opts.get("historicalXcfSampleOrder")) {
+        bp["historicalXcfSampleOrder"] = order.clone();
+    }
     if let Some(called) = v.get("calledActions") {
         bp["calledActions"] = called.clone();
     }
@@ -491,7 +498,9 @@ fn statistics(s: &mut Session, p: &Value) -> Result<Value> {
         .ok_or_else(|| bad(cmd, format!("unknown stack mode `{mode}`")))?;
     let input = p.get("input").or_else(|| p.get("paths")).cloned().ok_or_else(|| bad(cmd, "missing \"input\" (files or a folder)"))?;
     let align = p.get("align").and_then(Value::as_bool).unwrap_or(false);
-    let r = s.execute("file.scripts.loadFilesIntoStack", json!({"paths": input, "align": align, "createSmartObject": true}))?;
+    let order = crate::file_cmds::historical_xcf_sample_order(p, cmd)?;
+    let r =
+        s.execute("file.scripts.loadFilesIntoStack", json!({"paths": input, "align": align, "createSmartObject": true, "historicalXcfSampleOrder":order}))?;
     let n = r["layers"].as_u64().unwrap_or(0);
     let id = s.active().and_then(|d| d.doc.layers.first().map(|l| l.id)).ok_or(EngineError::NoDocument)?;
     s.select_layer(id)?;
@@ -539,6 +548,7 @@ fn contact_sheet_sources(p: &Value, cmd: &str) -> Result<Vec<Vec<String>>> {
 
 fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.contactSheetII";
+    let opts = photocraft_io::ImportOptions { historical_xcf_sample_order: crate::file_cmds::historical_xcf_sample_order(p, cmd)?, ..Default::default() };
     let groups = contact_sheet_sources(p, cmd)?;
     if groups.iter().all(Vec::is_empty) {
         return Err(bad(cmd, "no images to place"));
@@ -586,7 +596,7 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
             let y0 = vs + f64::from(r) * (cell_h + vs);
             let thumb = (|| -> Result<photocraft_doc::Surface> {
                 let bytes = read_file(path)?;
-                let src = import(&file_name(path), &bytes)?;
+                let src = crate::file_cmds::import_with_options(&file_name(path), &bytes, &opts)?;
                 let mut t = Session::new();
                 t.add_document(src, None);
                 let (w, h) = t.active().map(|d| (f64::from(d.doc.size.width), f64::from(d.doc.size.height))).unwrap_or((1.0, 1.0));
@@ -660,7 +670,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.contactSheetII",
             "Contact Sheet II…",
             &["File", "Automate"],
-            r##"{"input":folder|[paths],"units":"inches|cm|mm|pixels"="inches","width":8,"height":10,"resolution":ppi=300,"mode":"rgb|gray|cmyk|lab"="rgb","depth":8|16=8,"columns":5,"rows":6,"placeAcrossFirst":bool=true,"autoSpacing":bool=true,"horizontal":units?,"vertical":units?,"rotateForBestFit":bool=false,"caption":bool=true (file name as caption),"font":family?,"fontSize":pt=12,"flatten":bool=false,"includeSubfolders":bool=true (a folder input also takes its subfolders' images, depth first after its own),"groupByFolder":bool=false (with includeSubfolders: each folder starts a new sheet)} → {documents, pages, images}"##,
+            r##"{"input":folder|[paths],"historicalXcfSampleOrder":"little-endian|big-endian"?,"units":"inches|cm|mm|pixels"="inches","width":8,"height":10,"resolution":ppi=300,"mode":"rgb|gray|cmyk|lab"="rgb","depth":8|16=8,"columns":5,"rows":6,"placeAcrossFirst":bool=true,"autoSpacing":bool=true,"horizontal":units?,"vertical":units?,"rotateForBestFit":bool=false,"caption":bool=true (file name as caption),"font":family?,"fontSize":pt=12,"flatten":bool=false,"includeSubfolders":bool=true (a folder input also takes its subfolders' images, depth first after its own),"groupByFolder":bool=false (with includeSubfolders: each folder starts a new sheet)} → {documents, pages, images}"##,
             native,
             contact_sheet
         ),
@@ -668,7 +678,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.createDroplet",
             "Create Droplet…",
             &["File", "Automate"],
-            r##"{"path":str (.pcdroplet),"steps":[[id,params]…]?,"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (with a named action: that set's action of the name),"name":str?,"output":folder?,"format":"same|png|jpg|…"?,"quality":0..12?,"shim":bool=true on Unix (writes <name>.command calling `photocraft-cli droplet`)} → {path, shim} (the actions its Play Action and Conditional steps call are saved in the droplet)"##,
+            r##"{"path":str (.pcdroplet),"steps":[[id,params]…]?,"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (with a named action: that set's action of the name),"name":str?,"output":folder?,"format":"same|png|jpg|…"?,"quality":0..12?,"historicalXcfSampleOrder":"little-endian|big-endian"?,"shim":bool=true on Unix (writes <name>.command calling `photocraft-cli droplet`)} → {path, shim} (the actions its Play Action and Conditional steps call are saved in the droplet)"##,
             native,
             create_droplet
         ),
@@ -676,7 +686,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.runDroplet",
             "Run Droplet",
             &[],
-            r##"{"droplet":path,"input":[files or folders],"output":folder? (default: droplet's, else <input folder>/droplet-output)} → {files, errors} (an input whose output name was already written in the run goes to errors)"##,
+            r##"{"droplet":path,"input":[files or folders],"historicalXcfSampleOrder":"little-endian|big-endian"?,"output":folder? (default: droplet's, else <input folder>/droplet-output)} → {files, errors} (an input whose output name was already written in the run goes to errors)"##,
             native,
             run_droplet
         ),
@@ -684,7 +694,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.scripts.statistics",
             "Statistics…",
             &["File", "Scripts"],
-            r##"{"mode":"mean|median|maximum|minimum|range|summation|variance|standardDeviation|skewness|kurtosis|entropy"="median","input":folder|[paths],"align":bool=false (Auto-Align first)} → new document with one stack-mode smart object"##,
+            r##"{"mode":"mean|median|maximum|minimum|range|summation|variance|standardDeviation|skewness|kurtosis|entropy"="median","input":folder|[paths],"historicalXcfSampleOrder":"little-endian|big-endian"?,"align":bool=false (Auto-Align first)} → new document with one stack-mode smart object"##,
             native,
             statistics
         ),

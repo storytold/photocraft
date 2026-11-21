@@ -308,7 +308,7 @@ fn apply_source(
     let (Action::Replace(target) | Action::Relink(target)) = action else { return Err("unsupported Smart Object source action".into()) };
     let result = app.with_document(target.doc, |app| {
         if matches!(action, Action::Relink(_)) {
-            let expected = order.map(|_| photocraft_io::linked::historical_xcf_digest(&bytes));
+            let expected = photocraft_io::linked::historical_xcf_digest(&bytes);
             let result = app.run(
                 "layer.smartObjects.relinkToFile",
                 json!({"layer":target.layer.0,"path":name,"historicalXcfSampleOrder":order,"expectedSourceDigest":expected}),

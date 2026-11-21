@@ -365,6 +365,9 @@ impl PhotocraftApp {
         if !same_document {
             self.ui.selected_path = None;
             self.ui.canvas_tool_menu = None;
+            self.ui.mask_target = false;
+            self.ui.vector_mask_target = false;
+            self.ui.filter_mask_target = None;
         }
         self.path_document = document;
         crate::file_open::apply_initial_path(self);

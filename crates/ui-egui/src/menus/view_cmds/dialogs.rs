@@ -520,13 +520,7 @@ fn batch_form(app: &PhotocraftApp, dir: &str) -> Option<(Vec<Param>, DialogField
 }
 
 fn historical_xcf_order_choice() -> Param {
-    choice(
-        "historicalXcfSampleOrder",
-        tl!("Historical XCF Sample Order"),
-        opts(&[("", tl!("Unspecified")), ("little-endian", tl!("Little-endian")), ("big-endian", tl!("Big-endian"))]),
-        "",
-    )
-    .visible_when("source", "folder")
+    crate::dialogs::historical_sample_order::order_choice().visible_when("source", "folder")
 }
 
 /// The channel workflow forms (see channels_panel.rs for the channel references): Save and Load Selection, Apply

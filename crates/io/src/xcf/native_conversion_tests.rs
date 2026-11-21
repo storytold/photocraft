@@ -158,6 +158,31 @@ fn repeated_text_offsets_charge_native_allocations_and_keep_rasters_when_full() 
 }
 
 #[test]
+fn editable_perceptual_text_matches_saved_raster_before_and_after_native_reopen() {
+    let mut source = TestImage::rgb8(1, 1);
+    source.version = 26;
+    let mut text = TestLayer::rgba("Title", 1, 1, vec![0, 0, 0, 127]);
+    text.props.push((26, 1u32.to_be_bytes().to_vec()));
+    text.props.push((21, parasite("gimp-text-layer", b"(text \"Title\") (font \"Inter\") (font-size 12)")));
+    source.layers.push(text);
+    source.layers.push(TestLayer::rgba("White", 1, 1, vec![255, 255, 255, 255]));
+    let doc = crate::import("editable.xcf", &source.write()).unwrap().document;
+    source.layers[0].props[0].1 = 3u32.to_be_bytes().to_vec();
+    let raster = crate::import("saved.xcf", &source.write()).unwrap().document;
+    let expected = photocraft_compose::flatten(&raster);
+    assert_eq!(expected.px.len(), 1);
+    assert!(expected.px[0][..3].iter().all(|value| (value - 128. / 255.).abs() <= 1. / 255.));
+    assert_eq!(expected.px[0][3], 1.);
+    let saved = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
+    let reopened = photocraft_format::load_from_bytes(&saved).unwrap();
+    for document in [&doc, &reopened] {
+        let title = document.layers.iter().find(|layer| layer.name == "Title").unwrap();
+        assert!(matches!(&title.content, LayerContent::Text(text) if text.keep_layer_name && text.cache_uses_raster_blending));
+        assert_eq!(photocraft_compose::flatten(document).px, expected.px);
+    }
+}
+
+#[test]
 fn unavailable_native_vector_colors_preserve_the_saved_raster() {
     let bytes = vector_layer("R'G'B'A u8");
     let mut image = image(&bytes);

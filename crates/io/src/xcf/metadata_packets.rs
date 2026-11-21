@@ -274,25 +274,43 @@ fn exif(tree: &roxmltree::Document<'_>) -> Option<Vec<u8>> {
 
 /// Source packets lack a type registry. Only unambiguous known schema fields
 /// become native packets; existing native raw packets take priority.
-pub(super) fn translate(doc: &mut Document, tree: &roxmltree::Document<'_>, budget: &mut usize) -> (bool, bool) {
-    let mut imported = (false, false);
-    if doc.metadata.xmp.is_none()
-        && let Some(packet) = xmp(tree)
-        && let Some(left) = budget.checked_sub(packet.len())
-    {
-        *budget = left;
-        doc.metadata.xmp = Some(packet.into());
-        imported.0 = true;
+pub(super) fn translate(doc: &mut Document, tree: &roxmltree::Document<'_>, budget: &mut usize) -> (PacketStatus, PacketStatus) {
+    let xmp = if doc.metadata.xmp.is_none() {
+        retain_packet(xmp(tree), budget, String::len, |packet| doc.metadata.xmp = Some(packet.into()))
+    } else {
+        PacketStatus::Unavailable
+    };
+    let exif = if doc.metadata.exif.is_none() {
+        retain_packet(exif(tree), budget, Vec::len, |packet| doc.metadata.exif = Some(std::sync::Arc::new(packet)))
+    } else {
+        PacketStatus::Unavailable
+    };
+    (xmp, exif)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PacketStatus {
+    Retained,
+    Unavailable,
+    OverBudget,
+}
+
+impl PacketStatus {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Retained => "retained",
+            Self::Unavailable => "no new packet",
+            Self::OverBudget => "omitted by the native metadata allowance",
+        }
     }
-    if doc.metadata.exif.is_none()
-        && let Some(packet) = exif(tree)
-        && let Some(left) = budget.checked_sub(packet.len())
-    {
-        *budget = left;
-        doc.metadata.exif = Some(std::sync::Arc::new(packet));
-        imported.1 = true;
-    }
-    imported
+}
+
+fn retain_packet<T>(packet: Option<T>, budget: &mut usize, len: impl FnOnce(&T) -> usize, save: impl FnOnce(T)) -> PacketStatus {
+    let Some(packet) = packet else { return PacketStatus::Unavailable };
+    let Some(left) = budget.checked_sub(len(&packet)) else { return PacketStatus::OverBudget };
+    *budget = left;
+    save(packet);
+    PacketStatus::Retained
 }
 
 #[cfg(test)]
@@ -307,14 +325,14 @@ mod tests {
         let tree = roxmltree::Document::parse(source).unwrap();
         let mut doc = Document::new("Metadata", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
         let mut empty = 0;
-        assert_eq!(translate(&mut doc, &tree, &mut empty), (false, false));
+        assert_eq!(translate(&mut doc, &tree, &mut empty), (PacketStatus::OverBudget, PacketStatus::OverBudget));
         assert!(doc.metadata.xmp.is_none() && doc.metadata.exif.is_none());
         let mut budget = super::super::MAX_METADATA_BYTES;
-        assert_eq!(translate(&mut doc, &tree, &mut budget), (true, true));
+        assert_eq!(translate(&mut doc, &tree, &mut budget), (PacketStatus::Retained, PacketStatus::Retained));
         let packet = doc.metadata.exif.as_ref().unwrap();
         assert_eq!(packet.get(18..22), Some(b"AB\0\0".as_slice()));
         let before = (doc.metadata.xmp.clone(), doc.metadata.exif.clone(), budget);
-        assert_eq!(translate(&mut doc, &tree, &mut budget), (false, false));
+        assert_eq!(translate(&mut doc, &tree, &mut budget), (PacketStatus::Unavailable, PacketStatus::Unavailable));
         assert_eq!((doc.metadata.xmp, doc.metadata.exif, budget), before);
     }
     /// Reject oversized escaped XMP and malformed language labels instead of publishing partial RDF packets.

@@ -1348,7 +1348,7 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
             let mut notes: Vec<_> = effect.errors.iter().take(4).map(|error| error[..error.floor_char_boundary(128)].to_owned()).collect();
             let mut malformed = !effect.errors.is_empty();
             if !effect.icon.is_empty() {
-                notes.push("Source icon identity remains inert presentation metadata".into());
+                notes.push("Source icon identity was not applied".into());
             }
             for argument in &effect.arguments {
                 malformed |= matches!(argument.value, effects::ArgumentValue::Invalid { .. });
@@ -1358,7 +1358,7 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                 let name = &argument.name[..argument.name.floor_char_boundary(128)];
                 match &argument.value {
                     effects::ArgumentValue::String(value) => notes.push(format!(
-                        "Stored string argument {} ({} bytes) remains bounded source configuration; source strings grant no external resource access",
+                        "Stored string argument {} ({} bytes) was not applied. Source strings grant no external resource access",
                         name,
                         value.len()
                     )),
@@ -1366,7 +1366,7 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                         notes.push(format!("Stored configuration {name} ({} bytes) was decoded only as bounded data", config.raw.len()))
                     }
                     effects::ArgumentValue::Unknown { kind, bytes } => {
-                        notes.push(format!("Unknown argument {name} type {kind} ({} bytes) is retained inert", bytes.len()))
+                        notes.push(format!("Unknown argument {name} type {kind} ({} bytes) was not applied", bytes.len()))
                     }
                     effects::ArgumentValue::Invalid { kind, bytes, message } => {
                         let message = &message[..message.floor_char_boundary(128)];
@@ -1381,7 +1381,7 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
             let disposition = ConversionDisposition::RetainedUnapplied;
             let reason = if malformed { ConversionReason::InvalidOptionalData } else { ConversionReason::MissingMapping };
             let explanation = if malformed { "Effect contains invalid optional fields or arguments." } else { "This effect has no native mapping." };
-            let native = format!("{explanation} Usable native owner content preserved and stored effect configuration retained inert. {}", notes.join("; "));
+            let native = format!("{explanation} Usable native owner content preserved. The effect was left unapplied. {}", notes.join("; "));
             let outcome = image.outcomes.push(ConversionEntry {
                 feature_code: "xcf.layer_effect".into(),
                 source,
@@ -1415,9 +1415,7 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                     disposition: ConversionDisposition::SkippedNonessential,
                     reason: ConversionReason::NativeLimitation,
                     source_description: "Stored effect references a separate mask channel and tile data".into(),
-                    native_description:
-                        "Referenced effect mask data is not retained in this decoder slice; stored effect configuration remains inert and is not executed"
-                            .into(),
+                    native_description: "Referenced effect mask data is not retained. The effect was left unapplied".into(),
                     attachments: Vec::new(),
                 })?;
                 image.warnings.layer(&original.name, "has a deferred effect mask whose referenced data is not retained; see the conversion report");
@@ -1426,7 +1424,7 @@ fn import_native_effects<'a>(document: &mut Document, image: &mut Image<'a>, ctl
                 image.outcomes.property(outcome, property.kind, property.offset, property.bytes)?;
             }
         }
-        image.warnings.layer(&original.name, "contains source effects that were retained without application; see the conversion report");
+        image.warnings.layer(&original.name, "contains source effects that were left unapplied. See the conversion report");
     }
     Ok(())
 }

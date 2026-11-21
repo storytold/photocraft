@@ -392,8 +392,8 @@ fn process_one(
         } else {
             let bytes = read_file(path)?;
             let opts = photocraft_io::ImportOptions { historical_xcf_sample_order: options.order, ..Default::default() };
-            let (doc, _) = super::open::import_source_at_raw_ppi(raw_ppi, &file_name(path), &bytes, &opts)?;
-            scratch.add_document(doc, Some(path.to_string()));
+            let imported = super::open::import_source_at_raw_ppi(raw_ppi, &file_name(path), &bytes, &opts)?;
+            scratch.add_document(imported.document, Some(path.to_string()));
         }
         if let Some(ctx) = options.ctx {
             ctx.publish_batch_preview(path, scratch.active().map(|state| state.doc.clone()));
@@ -1091,9 +1091,12 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                         read_only_source.set(scratch.active().is_some_and(|state| state.source_read_only));
                     } else {
                         let opts = photocraft_io::ImportOptions { historical_xcf_sample_order, ..Default::default() };
-                        let (doc, read_only) = super::open::import_source_at_raw_ppi(raw_ppi, &file_name(path), &bytes, &opts)?;
-                        read_only_source.set(read_only);
-                        scratch.add_document(doc, Some(path.to_string()));
+                        let imported = super::open::import_source_at_raw_ppi(raw_ppi, &file_name(path), &bytes, &opts)?;
+                        read_only_source.set(imported.source_read_only);
+                        if !imported.warnings.is_empty() {
+                            notices.borrow_mut().push(json!({"file":path,"warnings":imported.warnings,"color":null}));
+                        }
+                        scratch.add_document(imported.document, Some(path.to_string()));
                     }
                 }
                 Ok(())

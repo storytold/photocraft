@@ -359,7 +359,7 @@ impl<'a> Image<'a> {
     pub(super) fn layer_text(&mut self, layer: &mut Layer, properties: &[Prop<'a>], position: (i32, i32), outcome: usize, ctl: &Interrupt<'_>) -> Result<()> {
         ctl.check().map_err(|_| IoError::Cancelled)?;
         let (x, y) = position;
-        let modified = properties.iter().find(|p| p.kind == 26).and_then(|p| be_u32(p.data)).is_some_and(|flags| flags & 2 != 0);
+        let flags = properties.iter().find(|p| p.kind == 26).and_then(|p| be_u32(p.data)).unwrap_or(0);
         let mut config: Option<(&str, &[u8])> = None;
         for property in properties.iter().filter(|p| p.kind == 21) {
             let mut native = None;
@@ -401,7 +401,7 @@ impl<'a> Image<'a> {
                 config = Some(candidate);
             }
         }
-        if modified {
+        if flags & 2 != 0 {
             self.outcomes.notice(
                 outcome,
                 "xcf.text",
@@ -427,7 +427,7 @@ impl<'a> Image<'a> {
                 text::decode_with_work(config, self.resolution_dpi, (x, y), ctl, &mut self.point_text_work_left, &mut self.text_decode_work)
             };
             match decoded {
-                Ok(Some(decoded)) => {
+                Ok(Some(mut decoded)) => {
                     ctl.check().map_err(|_| IoError::Cancelled)?;
                     let Some(remaining) = self.meta_budget.checked_sub(text::retained_allocation(&decoded.layer)) else {
                         return self.text_retention_fallback(outcome);
@@ -435,9 +435,11 @@ impl<'a> Image<'a> {
                     self.meta_budget = remaining;
                     // The already-budgeted saved pixels are the initial document-space
                     // cache. Native text edits refresh it using PhotoCraft typography.
+                    decoded.layer.keep_layer_name = flags & 1 != 0;
                     let previous = std::mem::replace(&mut layer.content, LayerContent::Text(decoded.layer));
                     if let (LayerContent::Raster(pixels), LayerContent::Text(text)) = (previous, &mut layer.content) {
                         text.cache = Some(pixels);
+                        text.cache_uses_raster_blending = true;
                     }
                     self.outcomes.notice(
                         outcome,

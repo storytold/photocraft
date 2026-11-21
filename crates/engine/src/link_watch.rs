@@ -195,20 +195,31 @@ impl Session {
         let mut updated = Vec::new();
         let mut warnings = Vec::new();
         for (path, ids) in changed {
+            let mut stale = None;
             let r = self.edit("Update Modified Content", |d, _| {
-                for id in &ids {
-                    if !crate::smart_cmds::refresh(d, LayerId(*id))? {
-                        return Err(EngineError::Other(format!("{path} can't be read")));
+                let mut refreshed = Vec::new();
+                for id in ids {
+                    match crate::smart_cmds::refresh(d, LayerId(id)) {
+                        Ok(true) => refreshed.push(id),
+                        Err(EngineError::HistoricalXcfLinkChanged(message)) => stale = Some(message),
+                        Ok(false) => return Err(EngineError::Other(format!("{path} can't be read"))),
+                        Err(error) => return Err(error),
                     }
                 }
-                Ok(())
+                if refreshed.is_empty()
+                    && let Some(message) = stale
+                {
+                    return Err(EngineError::HistoricalXcfLinkChanged(message));
+                }
+                Ok(refreshed)
             });
             // Not readable (still being written, or not a format smart objects read): the edit left
             // nothing behind, and the file is tried again once it changes again, not on every look.
-            match r {
-                Ok(()) => updated.extend(ids),
-                Err(EngineError::HistoricalXcfLinkChanged(message)) => warnings.push(format!("{path}: {message}")),
-                Err(_) => {}
+            if let Ok(refreshed) = r {
+                updated.extend(refreshed);
+            }
+            if let Some(message) = stale {
+                warnings.push(format!("{path}: {message}"));
             }
         }
         if warnings.is_empty() { Ok(json!({"updated": updated})) } else { Ok(json!({"updated": updated, "warnings": warnings})) }
@@ -287,6 +298,41 @@ mod tests {
         assert!(result["warnings"][0].as_str().unwrap().contains("relink and choose"));
         assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &before));
         assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
+    }
+
+    #[test]
+    fn a_stale_historical_link_does_not_block_a_healthy_link_to_the_same_path() {
+        use crate::jobs::historical_xcf_fixture::{historical_pixel, modern_pixel};
+        for historical_first in [false, true] {
+            let folder = tempfile::tempdir().unwrap();
+            let path = folder.path().join("source.xcf");
+            std::fs::write(&path, historical_pixel(true)).unwrap();
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width":1,"height":1,"depth":16})).unwrap();
+            let old = s.execute("file.placeLinked", json!({"path":path,"historicalXcfSampleOrder":"little-endian"})).unwrap()["layer"].as_u64().unwrap();
+            save(&path, &modern_pixel(0x2222));
+            let current = s.execute("file.placeLinked", json!({"path":path})).unwrap()["layer"].as_u64().unwrap();
+            s.edit("Order links", |doc, _| {
+                let left = doc.layers.iter().position(|layer| layer.id.0 == old).unwrap();
+                let right = doc.layers.iter().position(|layer| layer.id.0 == current).unwrap();
+                if (left < right) != historical_first {
+                    doc.layers.swap(left, right);
+                }
+                Ok(())
+            })
+            .unwrap();
+            let before = s.active().unwrap().doc.clone();
+            s.execute("layer.smartObjects.updateChanged", json!({})).unwrap();
+            save(&path, &modern_pixel(0x4321));
+            let refreshed = s.execute("layer.smartObjects.updateChanged", json!({})).unwrap();
+            assert_eq!(refreshed["updated"], json!([current]));
+            assert_eq!(refreshed["warnings"].as_array().unwrap().len(), 1);
+            let doc = &s.active().unwrap().doc;
+            assert_eq!(doc.layer(photocraft_doc::LayerId(old)), before.layer(photocraft_doc::LayerId(old)));
+            let pixel = doc.layer(photocraft_doc::LayerId(current)).unwrap().surface().unwrap().pixel(0, 0);
+            assert!((pixel[0] - f32::from(0x4321u16) / 65535.).abs() <= 1. / 65535.);
+            assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
+        }
     }
 
     #[test]

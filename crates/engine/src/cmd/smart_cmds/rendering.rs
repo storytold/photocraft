@@ -247,6 +247,16 @@ fn place_with_svg(
         Some(mode) => stack_image_classified(name, bytes, fmt, mode, Some(is_svg), order, ctl)?,
         None => source_image_classified(name, bytes, fmt, is_svg, order, ctl)?,
     };
+    warp_source(&img, sm, fmt)
+}
+
+/// Place a source already imported at its native raster size, the same route used by refresh.
+pub(crate) fn place_decoded_raster(src: &Document, sm: &SmartObject, fmt: PixelFormat) -> Result<Surface> {
+    let image = SourceImage { surface: Arc::new(super::source::flattened_source(src, fmt)?), bounds: src.bounds() };
+    warp_source(&image, sm, fmt)
+}
+
+fn warp_source(img: &SourceImage, sm: &SmartObject, fmt: PixelFormat) -> Result<Surface> {
     // The placed stage is unclipped: a large enough placement (an image scaled to fill a huge
     // frame) would otherwise fill memory before any allocation could fail.
     let h = placement(sm);
@@ -611,7 +621,7 @@ pub fn refresh_layer(doc: &Document, l: &mut Layer) -> Result<bool> {
     if matches!(&l.content, LayerContent::Smart(sm) if !unapplied_filters(sm).is_empty()) {
         return Ok(false);
     }
-    refresh_layer_in(doc, l, &JobCtx::new())
+    refresh_layer_in(doc, l, &JobCtx::new(), None)
 }
 
 pub(super) fn unapplied_filters(sm: &SmartObject) -> Vec<String> {
@@ -622,9 +632,9 @@ pub(super) fn unapplied_filters(sm: &SmartObject) -> Vec<String> {
         .collect()
 }
 
-fn refresh_layer_in(doc: &Document, l: &mut Layer, ctx: &JobCtx) -> Result<bool> {
+fn refresh_layer_in(doc: &Document, l: &mut Layer, ctx: &JobCtx, source: Option<(String, Arc<Vec<u8>>)>) -> Result<bool> {
     let LayerContent::Smart(sm) = &mut l.content else { return Ok(false) };
-    match render_in(doc, sm, ctx)? {
+    match render_in_with_source(doc, sm, ctx, source)? {
         Some(px) => {
             sm.cache = Some(px);
             Ok(true)
@@ -635,15 +645,15 @@ fn refresh_layer_in(doc: &Document, l: &mut Layer, ctx: &JobCtx) -> Result<bool>
 
 /// Re-renders the smart object `id` of `doc`.
 pub fn refresh(doc: &mut Document, id: LayerId) -> Result<bool> {
-    refresh_in(doc, id, &JobCtx::new())
+    refresh_in(doc, id, &JobCtx::new(), None)
 }
 
-fn refresh_in(doc: &mut Document, id: LayerId, ctx: &JobCtx) -> Result<bool> {
+fn refresh_in(doc: &mut Document, id: LayerId, ctx: &JobCtx, source: Option<(String, Arc<Vec<u8>>)>) -> Result<bool> {
     let mut l = doc.layer(id).cloned().ok_or(EngineError::NoLayer(id))?;
     if !matches!(l.content, LayerContent::Smart(_)) {
         return Err(other("the layer is not a smart object"));
     }
-    let ok = refresh_layer_in(doc, &mut l, ctx)?;
+    let ok = refresh_layer_in(doc, &mut l, ctx, source)?;
     if ok && let Some(dst) = doc.layer_mut(id) {
         dst.content = l.content;
     }
@@ -655,7 +665,11 @@ pub(super) fn refresh_or_fail(doc: &mut Document, id: LayerId) -> Result<()> {
 }
 
 pub(super) fn refresh_or_fail_in(doc: &mut Document, id: LayerId, ctx: &JobCtx) -> Result<()> {
-    if refresh_in(doc, id, ctx)? {
+    refresh_or_fail_from_source(doc, id, ctx, None)
+}
+
+pub(super) fn refresh_or_fail_from_source(doc: &mut Document, id: LayerId, ctx: &JobCtx, source: Option<(String, Arc<Vec<u8>>)>) -> Result<()> {
+    if refresh_in(doc, id, ctx, source)? {
         return Ok(());
     }
     if let SmartSource::Linked { path } = &smart(doc, id)?.source

@@ -90,6 +90,27 @@ fn full_xz_import_checks_terminal_padding_alignment_and_header_probe_stays_bound
 }
 
 #[test]
+fn concatenated_xz_import_rejects_an_inconsistent_footer_backward_size() {
+    let bytes = plain();
+    let split = 48;
+    let first = xz(&bytes[..split]);
+    let second = xz(&bytes[split..]);
+    let join = |first: &[u8], second: &[u8]| [first, &[0; 8], second, &[0; 4]].concat();
+    assert!(crate::import("joined.xcf.xz", &join(&first, &second)).is_ok());
+    for bad_member in [0, 1] {
+        let mut members = [first.clone(), second.clone()];
+        let member = &mut members[bad_member];
+        let footer = member.len() - 12;
+        member[footer + 4..footer + 8].copy_from_slice(&0u32.to_le_bytes()); // Claims four bytes for a larger Index.
+        let crc = crc32fast::hash(&member[footer + 4..footer + 10]);
+        member[footer..footer + 4].copy_from_slice(&crc.to_le_bytes());
+        let wrapped = join(&members[0], &members[1]);
+        assert!(header_prefix("joined.xcf.xz", &wrapped, &Interrupt::NONE).unwrap().is_some());
+        assert!(matches!(crate::import("joined.xcf.xz", &wrapped), Err(IoError::Xcf(message)) if message.contains("XZ stream Index")));
+    }
+}
+
+#[test]
 fn compressed_detector_counter_observes_the_actual_detector_argument() {
     // This control deliberately crosses the boundary directly. A broken counter
     // must not make every bounded-routing assertion below pass vacuously.

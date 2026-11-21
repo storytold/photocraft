@@ -11,6 +11,15 @@ const OPEN: &str = "historicalXcfOpen";
 const REPLACE: &str = "historicalXcfReplacement";
 const ORDER: &str = "historicalXcfSampleOrder";
 
+/// Explicit order for processing workflows that cannot stop for per-file questions.
+pub(crate) fn order_choice() -> Param {
+    let options = [("", tl!("Unspecified")), ("little-endian", tl!("Little-endian")), ("big-endian", tl!("Big-endian"))]
+        .into_iter()
+        .map(|(value, label)| (value.to_owned(), Label::from(label)))
+        .collect();
+    Param::new(ORDER, tl!("Historical XCF Sample Order"), ParamKind::choice(options, Some(String::new())))
+}
+
 pub(crate) const FAMILY: params::ParamFamily = params::ParamFamily { check: Some(check), cancel: Some(cancel), ..params::ParamFamily::new(owns, run) };
 
 fn owns(key: &str) -> bool {

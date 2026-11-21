@@ -451,8 +451,12 @@ pub struct TextLayer {
     pub size_pt: f32,
     pub color: Color,
     pub transform: Affine,
-    /// Rasterized appearance (from PSD or our text engine).
+    /// Rasterized appearance from an imported file or the text engine.
     pub cache: Option<Surface>,
+    /// Saved pixels already reflect their source's text rendering and blend as raster.
+    pub cache_uses_raster_blending: bool,
+    /// Keep the layer's name when its text changes, even when the two match.
+    pub keep_layer_name: bool,
     /// Data of the PSD `TySh` block. On export it replaces the `TySh` entry in
     /// [`Layer::psd_blocks`] (the text engine updates this field when it edits text).
     pub psd_raw: Option<Arc<Vec<u8>>>,
@@ -478,6 +482,8 @@ impl Default for TextLayer {
             color: Color::BLACK,
             transform: Affine::IDENTITY,
             cache: None,
+            cache_uses_raster_blending: false,
+            keep_layer_name: false,
             psd_raw: None,
             runs: Vec::new(),
             paragraphs: Vec::new(),
@@ -490,6 +496,12 @@ impl Default for TextLayer {
 }
 
 impl TextLayer {
+    /// Install a fresh raster from PhotoCraft's text engine.
+    pub fn set_rendered_cache(&mut self, surface: Surface) {
+        self.cache = Some(surface);
+        self.cache_uses_raster_blending = false;
+    }
+
     /// Character runs covering exactly `text.len()` bytes, each on a char boundary.
     pub fn char_runs(&self) -> Vec<text::TextRun> {
         let base = text::CharStyle { font_family: self.font_family.clone(), size_pt: self.size_pt, color: self.color, ..Default::default() };

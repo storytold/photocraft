@@ -1253,6 +1253,48 @@ fn native_view_services(doc: photocraft_doc::Document, view: photocraft_io::Nati
 }
 
 #[test]
+fn opening_composite_view_clears_previous_tab_mask_target_before_first_edit() {
+    let (mut doc, mut view) = native_view_fixture();
+    view.target = photocraft_io::NativeImportTarget::Composite;
+    view.show_layer_mask = false;
+    view.selected_layers.truncate(1);
+    let id = view.active_layer.unwrap();
+    let layer = doc.layer_mut(id).unwrap();
+    layer.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 8, 6), &[1., 0., 0., 1.]);
+    let mask = layer.mask.clone();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), native_view_services(doc, view));
+    app.run("file.new", json!({"width":8,"height":6})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    assert!(app.ui.mask_target);
+    app.open_bytes("composite.xcf", b"fixture").unwrap();
+    assert!(!app.ui.mask_target);
+    app.run("image.adjustments.invert", json!({})).unwrap();
+    let layer = app.session.active().unwrap().doc.layer(id).unwrap();
+    assert_eq!(layer.surface().unwrap().pixel(0, 0), [0., 1., 1., 1.]);
+    assert_eq!(layer.mask, mask);
+}
+
+#[test]
+fn two_immediate_opens_in_one_poll_keep_the_second_saved_path() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width":8,"height":6})).unwrap();
+    let mut jobs = Vec::new();
+    for name in ["first", "second"] {
+        let (mut doc, view) = native_view_fixture();
+        doc.paths[1].name = format!("{name} selected");
+        let id = doc.id;
+        let index = app.session.add_document(doc, None);
+        app.session.apply_import_initial_view(Some(view)).unwrap();
+        jobs.push((name, json!({"document":index,"docId":id.0,"hasInitialView":true,"initialPathSelection":1})));
+    }
+    // Both documents have been admitted, as when the engine applies two completions before dispatching them.
+    for (name, result) in jobs {
+        super::finish_open(&mut app, name, None, &result, Some(0), None).unwrap();
+        assert_eq!(app.ui.selected_path.as_deref(), Some(format!("{name} selected").as_str()));
+    }
+}
+
+#[test]
 fn foreground_and_automation_import_install_native_view_and_consume_path_once() {
     for automation in [false, true] {
         let (doc, view) = native_view_fixture();

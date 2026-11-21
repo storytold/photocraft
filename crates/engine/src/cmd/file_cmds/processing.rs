@@ -1,5 +1,4 @@
 use super::batch_run::{BatchInput, TreeNaming, batch_inputs_tree, process_document_copies, process_tree};
-use super::open::import_opened;
 use super::paths::{file_name, list_images, read_file, stem, untitled_name};
 use super::save::SaveOpts;
 use super::{
@@ -271,6 +270,8 @@ fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str, o
 
 pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.scripts.loadFilesIntoStack";
+    let opts = photocraft_io::ImportOptions { historical_xcf_sample_order: super::open::historical_xcf_sample_order(p, cmd)?, ..Default::default() };
+    let raw_ppi = s.prefs().raw_defaults.resolution;
     let paths: Vec<String> = match p.get("paths").or_else(|| p.get("input")) {
         Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
         Some(Value::String(dir)) => list_images(dir)?,
@@ -282,7 +283,9 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
     let mut docs = Vec::new();
     for path in &paths {
         let bytes = read_file(path)?;
-        docs.push((file_name(path), import_opened(s, &file_name(path), &bytes)?));
+        let name = file_name(path);
+        let document = super::open::import_source_at_raw_ppi(raw_ppi, &name, &bytes, &opts)?.document;
+        docs.push((name, document));
     }
     let first = &docs[0].1;
     let w = docs.iter().map(|(_, d)| d.size.width).max().unwrap_or(1);

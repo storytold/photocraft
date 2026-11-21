@@ -141,7 +141,7 @@ impl TextEngine {
     /// Re-renders `layer.cache` from its model. Returns the document-space rectangle drawn.
     pub fn render_layer(&mut self, layer: &mut TextLayer, dpi: f32, format: PixelFormat) -> photocraft_geom::Rect {
         let (_, r) = self.render(layer, dpi, format);
-        layer.cache = Some(r.surface);
+        layer.set_rendered_cache(r.surface);
         r.rect
     }
 

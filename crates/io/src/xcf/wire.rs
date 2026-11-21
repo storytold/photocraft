@@ -146,6 +146,11 @@ pub(super) trait PropertyInput {
         64 * 1024
     }
 
+    /// A full cursor can distinguish premature EOF from a bounded lookahead.
+    fn palette_lookahead_is_complete(&self) -> bool {
+        false
+    }
+
     /// Only full import can validate target offsets. The geometry probe may
     /// stop at image-property END even for a truncated drawable stream.
     fn compare_palette_tables(&self, _declared: usize, _repaired: usize, _version: u32, _ctl: &photocraft_raster::Interrupt<'_>) -> Result<Option<bool>> {
@@ -174,6 +179,10 @@ impl PropertyInput for Cursor<'_> {
     fn palette_lookahead_limit(&self) -> usize {
         // The in-memory cursor can jump over a large payload without reading it.
         self.b.len().saturating_sub(self.pos)
+    }
+
+    fn palette_lookahead_is_complete(&self) -> bool {
+        true
     }
 
     fn compare_palette_tables(&self, declared: usize, repaired: usize, version: u32, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Option<bool>> {
@@ -342,6 +351,7 @@ fn palette_continuation(
     'properties: for _ in 0..64 {
         ctl.check().map_err(|_| super::IoError::Cancelled)?;
         if offset > limit.saturating_sub(8) {
+            continuation.invalid = input.palette_lookahead_is_complete();
             break;
         }
         let Some(header) = input.peek(offset, 8)? else {
@@ -351,11 +361,9 @@ fn palette_continuation(
         let Some(kind) = be_u32(header) else { break };
         let Some(length) = header.get(4..).and_then(be_u32).map(|n| n as usize) else { break };
         if kind == 0 {
-            if length == 0 {
-                continuation.end = Some(offset + 8);
-            } else {
-                continuation.invalid = true;
-            }
+            // PROP_END ignores its length. Prefer a canonical END when both choices terminate.
+            continuation.end = Some(offset + 8);
+            continuation.unusual_lengths += usize::from(length != 0);
             break;
         }
         if kind == 24 {
@@ -405,10 +413,10 @@ fn plausible_property(bytes: Option<&[u8]>) -> bool {
     let kind = be_u32(bytes);
     let length = bytes.get(4..).and_then(be_u32);
     match (kind, length) {
-        (Some(0), Some(0)) => true,
+        (Some(0), Some(_)) => true,
         (Some(17), Some(n)) => (1..=MAX_PAYLOAD).contains(&(n as usize)),
         (Some(19), Some(n)) => (8..=MAX_PAYLOAD).contains(&(n as usize)),
-        (Some(1..=49), Some(n)) => n as usize <= MAX_PAYLOAD,
+        (Some(1..), Some(n)) => n as usize <= MAX_PAYLOAD,
         _ => false,
     }
 }

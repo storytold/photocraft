@@ -123,6 +123,7 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
         let ext = format.map_or_else(|| photocraft_engine::file_cmds::batch_same_format(&input.to_string_lossy()), str::to_owned);
         let mut h = Headless::trusted_local();
         h.set_renderer(renderer.take());
+        let mut import_warnings: Vec<String> = Vec::new();
         let r = (|| -> Result<Vec<String>> {
             if let Some(parent) = target.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -130,7 +131,9 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
             // Steps that play another action find it in the set; the session's playback stack
             // stops an action that calls itself.
             h.session.actions.list = ActionList::from_file(ActionsFile::new(set.clone(), Vec::new()));
-            h.open_with_parameters(input, &json!({"approveHighMemory":a.approve_high_memory,"historicalXcfSampleOrder":a.historical_xcf_sample_order}))?;
+            let opened =
+                h.open_with_parameters(input, &json!({"approveHighMemory":a.approve_high_memory,"historicalXcfSampleOrder":a.historical_xcf_sample_order}))?;
+            import_warnings = serde_json::from_value(opened["warnings"].clone()).unwrap_or_default();
             for (id, p) in &actions {
                 if photocraft_engine::actions_cmds::shell_view_command(id)
                     || photocraft_engine::actions_cmds::shell_save_command(id)
@@ -154,6 +157,9 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
         }
         if let Some(recovered) = h.take_renderer() {
             renderer = Some(recovered);
+        }
+        for warning in &import_warnings {
+            let _ = writeln!(err, "warning: {}: {warning}", input.display());
         }
         match r {
             Ok(ws) => {
@@ -201,6 +207,9 @@ pub(crate) fn droplet(a: &DropletArgs, out: &mut dyn Write, err: &mut dyn Write)
     let mut p = json!({"droplet": file, "input": inputs});
     if let Some(o) = &a.out {
         p["output"] = json!(o);
+    }
+    if let Some(order) = &a.historical_xcf_sample_order {
+        p["historicalXcfSampleOrder"] = json!(order);
     }
     let mut s = photocraft_engine::Session::new();
     let r = s.execute("file.automate.runDroplet", p)?;

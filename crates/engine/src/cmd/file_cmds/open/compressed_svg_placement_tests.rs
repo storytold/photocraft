@@ -70,6 +70,25 @@ fn renamed_and_nameless_svgz_placement_uses_raster_pixels_and_preserves_original
 }
 
 #[test]
+fn scaled_linked_svgz_refresh_keeps_the_initial_cache_after_native_reopen() {
+    let folder = tempfile::tempdir().unwrap();
+    let source = folder.path().join("art.svgz");
+    std::fs::write(&source, gzip(SVG)).unwrap();
+    let mut s = session(32);
+    let placed = s.execute("file.placeLinked", json!({"path":source,"scale":200,"fit":false})).unwrap();
+    let original = smart(&s, &placed).cache.unwrap();
+    s.execute("layer.smartObjects.updateModifiedContent", json!({"layer":placed["layer"]})).unwrap();
+    assert_eq!(smart(&s, &placed).cache.as_ref(), Some(&original));
+    let saved = photocraft_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap();
+    let document = photocraft_format::load_from_bytes(&saved).unwrap();
+    let mut reopened = Session::new();
+    reopened.add_document(document, None);
+    assert_eq!(smart(&reopened, &placed).cache.as_ref(), Some(&original));
+    reopened.execute("layer.smartObjects.updateModifiedContent", json!({"layer":placed["layer"]})).unwrap();
+    assert_eq!(smart(&reopened, &placed).cache.as_ref(), Some(&original));
+}
+
+#[test]
 fn ordinary_gzip_archives_and_explicit_affinity_names_fail_without_placing() {
     for (name, bytes) in [("notes.gz", gzip(b"not an SVG or XCF")), ("drawing.af", gzip(SVG))] {
         let mut session = session(8);

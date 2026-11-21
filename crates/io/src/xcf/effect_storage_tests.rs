@@ -160,6 +160,10 @@ fn successful_effect_decodes_keep_their_charges_in_both_import_paths() {
     native.pending_effects.push(PendingLayerEffects { layer: id, owner: source, bounds: Rect::new(0, 0, 1, 1), pointers: vec![effect] });
     import_native_effects(&mut document, &mut native, &Interrupt::NONE).unwrap();
     assert_eq!(native.meta_budget, PROBE_ALLOWANCE - retained);
+    let ImportConversion::Report(report) = native.outcomes.finish().unwrap() else { panic!("conversion report") };
+    let effect = report.entries.iter().find(|entry| entry.feature_code == "xcf.layer_effect").unwrap();
+    assert!(effect.native_description.contains("effect was left unapplied"));
+    assert!(!effect.native_description.contains("stored effect configuration retained"));
 }
 
 #[test]

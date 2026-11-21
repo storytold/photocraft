@@ -410,9 +410,9 @@ fn ambiguous_xmp_types_namespaces_and_duplicate_scalars_remain_inert() {
 }
 
 /// Run the actual metadata charge path with a tiny injected allowance and the reader's separate inert parasite retention.
-fn legacy_exif_with_budget(record: &[u8], mut budget: usize) -> (photocraft_doc::Document, usize) {
+fn image_metadata_with_budget(record: &[u8], mut budget: usize) -> (photocraft_doc::Document, usize) {
     use photocraft_doc::import_conversion::{ConversionDisposition, ConversionEntry, ConversionReason, NativeTargetRef};
-    let mut doc = photocraft_doc::Document::new("Bounded legacy Exif", photocraft_geom::Size::new(2, 2), ColorMode::Rgb, SampleType::U8);
+    let mut doc = photocraft_doc::Document::new("Bounded metadata", photocraft_geom::Size::new(2, 2), ColorMode::Rgb, SampleType::U8);
     let mut outcomes = conversion::Outcomes::new(11).unwrap();
     let owner = outcomes
         .push(ConversionEntry {
@@ -446,6 +446,19 @@ fn legacy_exif_with_budget(record: &[u8], mut budget: usize) -> (photocraft_doc:
 
 /// A valid legacy TIFF omitted by native metadata admission must disclose partial retention while preserving its exact inert source record.
 #[test]
+fn synthesized_packet_omission_is_reported_even_when_plain_metadata_fits() {
+    use photocraft_doc::import_conversion::{ConversionReason, ImportConversion};
+    let xml = br#"<metadata><tag name="Xmp.xmp.Label">Label</tag></metadata>"#;
+    let record = parasite("gimp-image-metadata", xml);
+    let (document, _) = image_metadata_with_budget(&record, 128);
+    assert_eq!(document.metadata.text, vec![("Xmp.xmp.Label".into(), "Label".into())]);
+    assert!(document.metadata.xmp.is_none());
+    let Some(ImportConversion::Report(report)) = document.metadata.import_conversion.as_deref() else { panic!("conversion report") };
+    assert!(report.entries.iter().any(|entry| entry.feature_code == "xcf.metadata_partial" && entry.reason == ConversionReason::RetentionLimit));
+    assert!(report.entries.iter().any(|entry| entry.native_description.contains("Native XMP: omitted")));
+}
+
+#[test]
 fn legacy_exif_tiff_budget_boundary_reports_omission_and_preserves_source_evidence() {
     use photocraft_doc::import_conversion::{ConversionReason, ImportConversion};
     for tiff in [b"II\x2a\0\x08\0\0\0\0\0\0\0\0\0".as_slice(), b"MM\0\x2a\0\0\0\x08\0\0\0\0\0\0".as_slice()] {
@@ -453,7 +466,7 @@ fn legacy_exif_tiff_budget_boundary_reports_omission_and_preserves_source_eviden
             let mut payload = if prefixed { b"Exif\0\0".to_vec() } else { Vec::new() };
             payload.extend_from_slice(tiff);
             let record = parasite("exif-data", &payload);
-            let (omitted, remaining) = legacy_exif_with_budget(&record, tiff.len() - 1);
+            let (omitted, remaining) = image_metadata_with_budget(&record, tiff.len() - 1);
             assert!(omitted.metadata.exif.is_none());
             assert_eq!(remaining, tiff.len() - 1, "a failed whole-packet charge consumes no metadata allowance");
             let Some(ImportConversion::Report(report)) = omitted.metadata.import_conversion.as_deref() else { panic!("durable conversion report") };
@@ -470,7 +483,7 @@ fn legacy_exif_tiff_budget_boundary_reports_omission_and_preserves_source_eviden
             let reopened = photocraft_format::load_from_bytes(&encoded).unwrap();
             assert!(reopened.metadata.exif.is_none());
             assert_eq!(reopened.metadata.import_conversion, omitted.metadata.import_conversion);
-            let (accepted, remaining) = legacy_exif_with_budget(&record, tiff.len());
+            let (accepted, remaining) = image_metadata_with_budget(&record, tiff.len());
             assert_eq!(remaining, 0);
             assert_eq!(
                 accepted.metadata.exif.as_deref().map(Vec::as_slice),
@@ -490,7 +503,7 @@ fn legacy_non_tiff_exif_layout_remains_inert_without_budget_omission_disclosure(
     use photocraft_doc::import_conversion::ImportConversion;
     for payload in [b"legacy unsupported Exif layout".as_slice(), b"Exif\0\0legacy unsupported layout".as_slice()] {
         let record = parasite("exif-data", payload);
-        let (doc, remaining) = legacy_exif_with_budget(&record, 0);
+        let (doc, remaining) = image_metadata_with_budget(&record, 0);
         assert_eq!(remaining, 0);
         assert!(doc.metadata.exif.is_none());
         let Some(ImportConversion::Report(report)) = doc.metadata.import_conversion.as_deref() else { panic!("durable conversion report") };

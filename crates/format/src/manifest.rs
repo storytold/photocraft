@@ -271,6 +271,10 @@ pub enum ContentM {
         color: Color,
         transform: Affine,
         cache: Option<SurfaceM>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        cache_uses_raster_blending: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        keep_layer_name: bool,
         psd_raw: Option<Hash>,
         #[serde(default)]
         runs: Vec<text::TextRun>,

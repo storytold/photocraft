@@ -56,3 +56,40 @@ pub(crate) fn historical_pixel(little: bool) -> Vec<u8> {
     }
     bytes
 }
+
+/// A modern big-endian U16 XCF with a selectable red sample.
+pub(crate) fn modern_pixel(red: u16) -> Vec<u8> {
+    fn words(bytes: &mut Vec<u8>, values: &[u32]) {
+        bytes.extend(values.iter().flat_map(|word| word.to_be_bytes()));
+    }
+    fn point(bytes: &mut [u8], slot: usize, address: usize) {
+        bytes[slot..slot + 8].copy_from_slice(&(address as u64).to_be_bytes());
+    }
+    let mut bytes = b"gimp xcf v012\0".to_vec();
+    words(&mut bytes, &[1, 1, 0, 250, 17, 1]);
+    bytes.push(0);
+    words(&mut bytes, &[0, 0]);
+    let slot = bytes.len();
+    bytes.extend([0; 24]); // Layer pointer, end layers, end channels.
+    let layer = bytes.len();
+    point(&mut bytes, slot, layer);
+    words(&mut bytes, &[1, 1, 1, 2]);
+    bytes.extend(b"m\0");
+    words(&mut bytes, &[0, 0]);
+    let slot = bytes.len();
+    bytes.extend([0; 16]); // Hierarchy pointer and no mask.
+    let hierarchy = bytes.len();
+    point(&mut bytes, slot, hierarchy);
+    words(&mut bytes, &[1, 1, 8]);
+    let slot = bytes.len();
+    bytes.extend([0; 16]);
+    let level = bytes.len();
+    point(&mut bytes, slot, level);
+    words(&mut bytes, &[1, 1]);
+    let slot = bytes.len();
+    bytes.extend([0; 16]);
+    let tile = bytes.len();
+    point(&mut bytes, slot, tile);
+    bytes.extend([red, 0x5678u16, 0x9abc, 0xffff].into_iter().flat_map(u16::to_be_bytes));
+    bytes
+}

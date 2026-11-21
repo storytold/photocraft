@@ -57,6 +57,8 @@ enum Stage {
     /// The pixels in place (none for a frame's image, which renders from its source), to wrap in
     /// a layer.
     Finish(Option<Surface>),
+    /// SVGZ Smart Objects use their native raster and the same warp as a later refresh.
+    FinishDecoded(Box<Document>),
     Spent,
 }
 
@@ -153,7 +155,8 @@ impl PlaceSteps {
                     None => Stage::Translate(shift),
                 };
             }
-            Stage::Finish(px) => return self.finish(px, ctx).map(|prepared| Some(PlaceOutcome::Ready(Box::new(prepared)))),
+            Stage::Finish(px) => return self.finish(px, None, ctx).map(|prepared| Some(PlaceOutcome::Ready(Box::new(prepared)))),
+            Stage::FinishDecoded(src) => return self.finish(None, Some(&src), ctx).map(|prepared| Some(PlaceOutcome::Ready(Box::new(prepared)))),
             Stage::Spent => return Err(EngineError::Other("internal error: the place was already prepared".into())),
         }
         Ok(None)
@@ -228,6 +231,15 @@ impl PlaceSteps {
             self.stage = Stage::Finish(None);
             return Ok(());
         }
+        if self.input.smart
+            && photocraft_io::import_compression(&self.bytes) == Some(photocraft_io::ImportCompression::Gzip)
+            && ctx
+                .stage(0.6, 0.65, "Identifying raster source", |ctl| photocraft_io::is_svg_input_with(&self.input.name, &self.bytes, ctl))
+                .map_err(|error| self.io_error(error))?
+        {
+            self.stage = Stage::FinishDecoded(Box::new(src));
+            return Ok(());
+        }
         ctx.progress(0.6, "Flattening");
         self.stage = Stage::Flatten(Box::new(Flatten::new(src, banded && self.fine, self.input.fmt, self.input.command())?));
         Ok(())
@@ -260,7 +272,7 @@ impl PlaceSteps {
     }
 
     /// Wraps the pixels, already in place, in the layer's content.
-    fn finish(&mut self, px: Option<Surface>, ctx: &JobCtx) -> Result<Prepared> {
+    fn finish(&mut self, px: Option<Surface>, raster_source: Option<&Document>, ctx: &JobCtx) -> Result<Prepared> {
         let Plan { w, h, scale, dx, dy } = self.plan;
         let input = &self.input;
         let (cw, ch) = input.canvas;
@@ -305,7 +317,12 @@ impl PlaceSteps {
             }
             // A vector source (SVG) or a frame's image renders at its placement scale instead of
             // as a resampled raster.
-            if let Some(doc) = &input.doc {
+            if let Some(src) = raster_source {
+                ctx.progress(0.9, "Rendering");
+                ctx.check()?;
+                so.cache = Some(crate::smart_cmds::place_decoded_raster(src, &so, input.fmt)?);
+                ctx.check()?;
+            } else if let Some(doc) = &input.doc {
                 ctx.progress(0.9, "Rendering");
                 ctx.check()?;
                 let (sharp, warnings) = crate::smart_cmds::render_with_warnings(doc, &so)?;

@@ -519,6 +519,21 @@ fn relink_picker_reuses_identical_bytes_and_asks_for_different_source_bytes() {
 }
 
 #[test]
+fn relink_picker_refuses_a_changed_modern_source_before_rendering() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("modern.xcf");
+    let picked = fixture::modern_pixel(0x1234);
+    std::fs::write(&path, fixture::modern_pixel(0x4321)).unwrap();
+    let mut app = app(vec![Some(contents(path.to_str().unwrap(), picked))], HistoricalXcfSampleOrder::BigEndian);
+    let before = app.session.active().unwrap().doc.clone();
+    crate::menus::invoke(&mut app, &egui::Context::default(), "layer.smartObjects.relinkToFile", json!({})).unwrap();
+    app.poll_file_dialog();
+    app.poll_file_dialog();
+    assert!(app.ui.status_error && app.ui.status.contains("changed after it was picked"), "{}", app.ui.status);
+    assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+}
+
+#[test]
 fn desktop_place_and_open_as_smart_object_resume_the_picked_historical_source() {
     for command in ["file.placeEmbedded", "file.placeLinked", "file.openAsSmartObject"] {
         let dir = tempfile::tempdir().unwrap();

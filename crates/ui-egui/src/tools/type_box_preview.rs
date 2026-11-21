@@ -326,7 +326,7 @@ fn publish(app: &mut PhotocraftApp, boxed: [f64; 4], surface: Surface) {
         let Some(l) = doc.layer_mut(layer) else { return };
         let LayerContent::Text(t) = &mut l.content else { return };
         photocraft_engine::type_cmds::apply_box(t, boxed);
-        t.cache = Some(surface);
+        t.set_rendered_cache(surface);
     }
     let doc = Arc::new(photocraft_engine::mode_cmds::display_document(&doc).unwrap_or(doc));
     let Some(p) = app.type_box_preview.as_mut() else { return };

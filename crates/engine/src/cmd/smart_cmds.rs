@@ -227,7 +227,7 @@ use rendering::refresh_or_fail;
 pub(crate) use rendering::{DISPLAY_NATIVE_HASH_BYTES, WARNING_SOURCE_DECODES, WARNING_SOURCE_LIMIT};
 #[cfg(test)]
 use rendering::{NativeDigests, blend_surfaces, place, render_in};
-pub(crate) use rendering::{WarningRenderSources, render_with_warnings, render_with_warnings_using, source_box};
+pub(crate) use rendering::{WarningRenderSources, place_decoded_raster, render_with_warnings, render_with_warnings_using, source_box};
 pub use rendering::{
     apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image, stack_image_with_order,
 };

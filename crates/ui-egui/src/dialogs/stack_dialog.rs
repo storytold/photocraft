@@ -40,6 +40,7 @@ fn open_for(app: &mut PhotocraftApp, command: &'static str, title: &str, statist
         rows.push(Param::new("mode", tl!("Choose Stack Mode:"), ParamKind::choice(modes, Some("median".into()))));
     }
     rows.push(Param::files("files", tl!("Source Files")).folder_mode(true).open_files(open_files(app)));
+    rows.push(super::historical_sample_order::order_choice());
     rows.push(Param::new("align", tl!("Attempt to Automatically Align Source Images"), ParamKind::bool(false)));
     if !statistics {
         rows.push(Param::new("smartObject", tl!("Create Smart Object after Loading Layers"), ParamKind::bool(false)));
@@ -83,12 +84,13 @@ pub(crate) fn run(app: &mut PhotocraftApp, _ctx: &egui::Context, result: ParamRe
         return;
     };
     let align = result.fields.bool("align").unwrap_or(false);
+    let order = result.fields.text("historicalXcfSampleOrder").filter(|order| !order.is_empty());
     let outcome = if result.key == STATISTICS {
         let mode = result.fields.text("mode").unwrap_or("median");
-        app.run(STATISTICS, json!({"paths": paths, "align": align, "mode": mode}))
+        app.run(STATISTICS, json!({"paths": paths, "align": align, "mode": mode, "historicalXcfSampleOrder":order}))
     } else {
         let smart = result.fields.bool("smartObject").unwrap_or(false);
-        app.run(COMMAND, json!({"paths": paths, "align": align, "createSmartObject": smart}))
+        app.run(COMMAND, json!({"paths": paths, "align": align, "createSmartObject": smart, "historicalXcfSampleOrder":order}))
     };
     match outcome {
         Ok(_) => app.sync_views(),

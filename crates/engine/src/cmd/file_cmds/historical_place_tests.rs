@@ -93,42 +93,6 @@ fn byte_placement_options_keep_approval_and_sample_order_explicit_per_source() {
     }
 }
 
-fn modern_pixel(red: u16) -> Vec<u8> {
-    fn words(bytes: &mut Vec<u8>, values: &[u32]) {
-        bytes.extend(values.iter().flat_map(|word| word.to_be_bytes()));
-    }
-    fn point(bytes: &mut [u8], slot: usize, address: usize) {
-        bytes[slot..slot + 8].copy_from_slice(&(address as u64).to_be_bytes());
-    }
-    let mut bytes = b"gimp xcf v012\0".to_vec();
-    words(&mut bytes, &[1, 1, 0, 250, 17, 1]);
-    bytes.push(0);
-    words(&mut bytes, &[0, 0]);
-    let slot = bytes.len();
-    bytes.extend([0; 24]); // Layer pointer, end layers, end channels.
-    let layer = bytes.len();
-    point(&mut bytes, slot, layer);
-    words(&mut bytes, &[1, 1, 1, 2]);
-    bytes.extend(b"m\0");
-    words(&mut bytes, &[0, 0]);
-    let slot = bytes.len();
-    bytes.extend([0; 16]); // Hierarchy pointer and no mask.
-    let hierarchy = bytes.len();
-    point(&mut bytes, slot, hierarchy);
-    words(&mut bytes, &[1, 1, 8]);
-    let slot = bytes.len();
-    bytes.extend([0; 16]);
-    let level = bytes.len();
-    point(&mut bytes, slot, level);
-    words(&mut bytes, &[1, 1]);
-    let slot = bytes.len();
-    bytes.extend([0; 16]);
-    let tile = bytes.len();
-    point(&mut bytes, slot, tile);
-    bytes.extend([red, 0x5678u16, 0x9abc, 0xffff].into_iter().flat_map(u16::to_be_bytes));
-    bytes
-}
-
 fn active_smart(s: &Session) -> Option<&SmartObject> {
     let state = s.active()?;
     match &state.doc.layer(state.active_layer?)?.content {
@@ -145,7 +109,7 @@ fn scripted_place_open_and_relink_ignore_unused_sample_order_for_modern_xcf() {
     std::fs::write(&historical, fixture::historical_pixel(true)).unwrap();
     let options = json!({"path":path,"historicalXcfSampleOrder":"little-endian"});
     for command in ["file.placeEmbedded", "file.placeLinked", "file.openAsSmartObject", "layer.smartObjects.relinkToFile"] {
-        std::fs::write(&path, modern_pixel(0x1234)).unwrap();
+        std::fs::write(&path, fixture::modern_pixel(0x1234)).unwrap();
         let mut s = session();
         if command == "layer.smartObjects.relinkToFile" {
             s.execute("file.placeLinked", json!({"path":historical,"historicalXcfSampleOrder":"little-endian"})).unwrap();
@@ -157,7 +121,7 @@ fn scripted_place_open_and_relink_ignore_unused_sample_order_for_modern_xcf() {
         assert!(smart.historical_xcf_link_digest.is_none(), "{command}");
         assert!((smart.cache.as_ref().unwrap().pixel(0, 0)[0] - f32::from(0x1234u16) / 65535.).abs() <= 1. / 65535.);
         if matches!(command, "file.placeLinked" | "layer.smartObjects.relinkToFile") {
-            std::fs::write(&path, modern_pixel(0x4321)).unwrap();
+            std::fs::write(&path, fixture::modern_pixel(0x4321)).unwrap();
             s.execute("layer.smartObjects.updateModifiedContent", json!({})).unwrap();
             assert!((active_smart(&s).unwrap().cache.as_ref().unwrap().pixel(0, 0)[0] - f32::from(0x4321u16) / 65535.).abs() <= 1. / 65535.);
         }
@@ -255,9 +219,46 @@ fn folder_batch_and_image_processor_use_explicit_historical_xcf_order() {
         params["historicalXcfSampleOrder"] = json!("big-endian");
         let result = s.execute(id, params).unwrap();
         assert!(result["errors"].as_array().unwrap().is_empty(), "{result:?}");
+        if name == "batch" {
+            let notice = &result["notices"][0];
+            assert!(notice["file"].as_str().unwrap().ends_with("big.xcf"));
+            assert!(notice["warnings"].as_array().unwrap().iter().any(|warning| warning.as_str().unwrap().contains("explicit big-endian choice")));
+        }
         let written = result["files"][0].as_str().unwrap();
         assert!(std::path::Path::new(written).is_file(), "{result:?}");
     }
+}
+
+#[test]
+fn historical_sample_order_reaches_stack_statistics_contact_sheet_and_droplets() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("historical.xcf");
+    std::fs::write(&path, fixture::historical_pixel(false)).unwrap();
+    let mut s = session();
+    let order = "big-endian";
+    for command in ["file.scripts.loadFilesIntoStack", "file.scripts.statistics", "file.automate.contactSheetII"] {
+        let params = json!({"input":[path],"historicalXcfSampleOrder":order,"mode":if command == "file.scripts.statistics" {"mean"} else {"rgb"},
+            "units":"pixels","width":16,"height":16,"depth":16,"columns":1,"rows":1,"caption":false});
+        let result = s.execute(command, params).unwrap();
+        assert_eq!(result["layers"].as_u64().or_else(|| result["images"].as_u64()), Some(1), "{command}: {result}");
+        let doc = s.active().unwrap().doc();
+        let imported = doc.layers.last().unwrap().surface().unwrap();
+        let bounds = imported.content_bounds();
+        let actual = imported.pixel(bounds.x0, bounds.y0);
+        assert!((actual[0] - f32::from(0x1234u16) / 65535.).abs() <= 1. / 65535., "{command}: {actual:?}");
+    }
+    let droplet = dir.path().join("historical.pcdroplet");
+    let output = dir.path().join("result");
+    s.execute(
+        "file.automate.createDroplet",
+        json!({"path":droplet,"format":"pcraft","shim":false,"steps":[["layer.new.layer",{}]],"historicalXcfSampleOrder":order}),
+    )
+    .unwrap();
+    let result = s.execute("file.automate.runDroplet", json!({"droplet":droplet,"input":[path],"output":output})).unwrap();
+    assert_eq!(result["errors"], json!([]), "{result}");
+    let written = std::fs::read(result["files"][0].as_str().unwrap()).unwrap();
+    let doc = photocraft_format::load_from_bytes(&written).unwrap();
+    assert_eq!(doc.layers[0].surface().unwrap().pixel(0, 0)[0], f32::from(0x1234u16) / 65535.);
 }
 
 #[test]

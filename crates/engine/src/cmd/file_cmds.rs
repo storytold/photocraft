@@ -412,7 +412,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Load Files into Stack…",
             &["File", "Scripts"],
             None,
-            r##"{"paths":[str]|folder,"align":bool=false (Auto-Align Layers on them first),"createSmartObject":bool=false} → new document with one layer per file (inside one smart object with createSmartObject)"##,
+            r##"{"paths":[str]|folder,"historicalXcfSampleOrder":"little-endian|big-endian"?,"align":bool=false (Auto-Align Layers on them first),"createSmartObject":bool=false} → new document with one layer per file (inside one smart object with createSmartObject)"##,
             native,
             load_files_into_stack
         ),

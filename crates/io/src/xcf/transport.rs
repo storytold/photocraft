@@ -36,6 +36,7 @@ pub(crate) fn svg_prefix(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Resul
 }
 
 mod bzip;
+mod xz;
 
 #[cfg(test)]
 mod bzip_member_tests;
@@ -307,11 +308,9 @@ fn decode_stream(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pr
             IoError::Svg(format!("compressed SVG inflates past {limit} bytes"))
         }
     };
-    let mut output = Vec::with_capacity(CHUNK.min(limit));
-    if prefix_len > limit {
-        return Err(oversized());
-    }
-    output.extend_from_slice(prefix.get(..prefix_len).ok_or_else(|| invalid("invalid transport prefix length"))?);
+    let mut output = Vec::new();
+    let prefix = prefix.get(..prefix_len).ok_or_else(|| invalid("invalid transport prefix length"))?;
+    append_output(&mut output, prefix, limit, oversized)?;
     if !is_xcf && !declared_svg && !probe_svg(decoder.as_mut(), &mut output, ctl, limit)? {
         return Ok(None);
     }
@@ -335,10 +334,8 @@ fn decode_stream(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pr
         if count == 0 {
             break;
         }
-        if output.len().checked_add(count).is_none_or(|size| size > limit) {
-            return Err(oversized());
-        }
-        output.extend_from_slice(chunk.get(..count).ok_or_else(|| invalid("invalid decoded output length"))?);
+        let bytes = chunk.get(..count).ok_or_else(|| invalid("invalid decoded output length"))?;
+        append_output(&mut output, bytes, limit, oversized)?;
     }
     // Readers verify every member and consume admitted terminal padding. The pinned
     // XZ reader may accept unaligned zero padding at EOF. XZ streams and inter-stream
@@ -349,14 +346,35 @@ fn decode_stream(name: &str, bytes: &[u8], ctl: &Interrupt<'_>, limit: usize, pr
         if !input.remaining.is_empty() {
             return Err(invalid(format!("unconsumed data after the {compression} stream")));
         }
-        if kind == crate::ImportCompression::Xz && !bytes.len().is_multiple_of(4) {
-            return Err(invalid("XZ stream padding must be a multiple of four bytes"));
+        if kind == crate::ImportCompression::Xz {
+            xz::validate_envelope(bytes, output.len(), ctl)?;
         }
     }
     if !is_xcf && !declared_svg && !svg_signature(&output) {
         return Ok(None);
     }
     Ok(Some(DecodedImport { is_xcf, bytes: output }))
+}
+
+#[cfg(test)]
+thread_local! {
+    static OUTPUT_RESERVATION_LIMIT: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+}
+
+/// Reserve before copying. Grow geometrically within the transport limit.
+fn append_output(output: &mut Vec<u8>, bytes: &[u8], limit: usize, oversized: impl FnOnce() -> IoError) -> Result<()> {
+    let Some(end) = output.len().checked_add(bytes.len()).filter(|size| *size <= limit) else { return Err(oversized()) };
+    if end > output.capacity() {
+        let capacity = end.max(CHUNK).max(output.capacity().saturating_mul(2)).min(limit);
+        let exhausted = || IoError::OutOfMemory(format!("unable to reserve {capacity} bytes for inflated image data"));
+        #[cfg(test)]
+        if OUTPUT_RESERVATION_LIMIT.with(|cap| capacity > cap.get()) {
+            return Err(exhausted());
+        }
+        output.try_reserve_exact(capacity - output.len()).map_err(|_| exhausted())?;
+    }
+    output.extend_from_slice(bytes);
+    Ok(())
 }
 
 /// Unknown gzip bodies need only a bounded signature before filename fallback.
@@ -378,7 +396,8 @@ fn probe_svg(decoder: &mut dyn Read, output: &mut Vec<u8>, ctl: &Interrupt<'_>, 
         if count == 0 {
             break;
         }
-        output.extend_from_slice(chunk.get(..count).ok_or_else(|| invalid("invalid SVG probe length"))?);
+        let bytes = chunk.get(..count).ok_or_else(|| invalid("invalid SVG probe length"))?;
+        append_output(output, bytes, limit, || IoError::Svg(format!("compressed SVG inflates past {limit} bytes")))?;
     }
     ctl.check().map_err(|_| IoError::Cancelled)?;
     Ok(svg_signature(output))
@@ -432,6 +451,18 @@ mod tests {
         let wrapped = gzip(&bytes);
         assert!(decode_inner("limit.xcf.gz", &wrapped, &Interrupt::NONE, 128, false).is_err());
         assert_eq!(decode_inner("limit.xcf.gz", &wrapped, &Interrupt::NONE, bytes.len(), false).unwrap().unwrap(), bytes);
+    }
+
+    #[test]
+    fn inflated_output_reservation_failure_is_typed() {
+        let wrapped = gzip(&[MAGIC, &[0; CHUNK]].concat());
+        let result = OUTPUT_RESERVATION_LIMIT.with(|cap| {
+            let previous = cap.replace(CHUNK);
+            let result = decode("pressure.xcf.gz", &wrapped, &Interrupt::NONE);
+            cap.set(previous);
+            result
+        });
+        assert!(matches!(result, Err(IoError::OutOfMemory(_))));
     }
 
     #[test]

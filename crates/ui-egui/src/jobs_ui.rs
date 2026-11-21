@@ -813,6 +813,7 @@ pub(crate) fn finish_open_with_held(
     // handler may have moved or closed tabs, so the apply-time index is no longer authority.
     let document = v.get("docId").and_then(Value::as_u64).map(DocId).ok_or("the open job returned no document identity")?;
     let index = app.session.documents().iter().position(|st| st.doc.id == document).ok_or("the open job's document is missing")?;
+    let path_hint = v.get("initialPathSelection").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok());
     // An earlier file is waiting on its prompt: this document waits after it, in order.
     if crate::open_prompt::waiting(app)
         && let Some(st) = app.session.close(index)
@@ -829,7 +830,7 @@ pub(crate) fn finish_open_with_held(
             samplers: st.color_samplers.clone(),
             // A preceding job event may already have synchronized the active UI and consumed
             // its one-time path hint. The open result retains the exact index, even for duplicate names.
-            selected_path: st.initial_path_selection.or_else(|| v.get("initialPathSelection").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok())),
+            selected_path: st.initial_path_selection.or(path_hint),
             visible_alpha_channels: st.channel_view.alpha_visible.iter().enumerate().filter_map(|(i, visible)| visible.then_some(i)).collect(),
             show_layer_mask: st.channel_view.layer_mask.is_some(),
         });
@@ -840,6 +841,14 @@ pub(crate) fn finish_open_with_held(
         let doc = Arc::try_unwrap(st.into_document()).unwrap_or_else(|d| (*d).clone());
         crate::open_prompt::arrive(app, held(doc, read_only, initial_view, None, true));
         return Ok(Some(document));
+    }
+    // Moving this tab synchronizes the active view. Focus this completion before it
+    // can consume a different job's path hint.
+    app.session.set_active(index);
+    if let Some(hint) = path_hint
+        && let Some(st) = app.session.active_mut()
+    {
+        st.initial_path_selection = Some(hint);
     }
     if let Some(slot) = tab_slot(app, slot, order) {
         let _ = app.run("document.move", json!({"document": index, "to": slot}));

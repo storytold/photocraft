@@ -422,10 +422,14 @@ pub(super) fn image_with_work<'a>(
                             retention_limited |= omitted;
                         }
                     }
-                    let packets = super::metadata_packets::translate(doc, &tree, budget);
+                    use super::metadata_packets::PacketStatus;
+                    let (xmp, exif) = super::metadata_packets::translate(doc, &tree, budget);
+                    let omitted = [xmp, exif].contains(&PacketStatus::OverBudget);
+                    metadata_incomplete |= omitted;
+                    retention_limited |= omitted;
                     outcomes.detail(owner, "xcf.metadata", Reason::NativePolicy,
                         "Serialized source EXIF/XMP/IPTC tag values".into(),
-                        format!("Plain tags retained as native image text. Known unambiguous schema fields translated into native XMP packet: {}; native EXIF packet: {}. Existing raw packets take priority. Unknown, binary or ambiguous source structures remain inert; full packet equivalence is not claimed", packets.0, packets.1))?;
+                        format!("Plain tags retained as native image text. Native XMP: {}. Native EXIF: {}. Existing raw packets take priority. Unknown, binary or ambiguous source structures remain inert; full packet equivalence is not claimed", xmp.label(), exif.label()))?;
                 }
             }
             _ => {}

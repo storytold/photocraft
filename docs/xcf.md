@@ -11,13 +11,14 @@ use the same enhanced import in `photocraft-io` (`crates/io/src/xcf.rs`). This a
 Unmarked XCF versions 7–11 with multi-byte samples require the byte order used when the file was
 saved. Select **Little-endian** or **Big-endian** when desktop Open, Replace Contents, or Relink to File asks. Relink keeps the previous choice when the source bytes match.
 
-For CLI Convert, Info, Run, and Batch, pass `--historical-xcf-sample-order little-endian` or
+For CLI Convert, Info, Run, Batch, and Droplet, pass `--historical-xcf-sample-order little-endian` or
 `--historical-xcf-sample-order big-endian`. Use `historical_xcf_sample_order` for MCP `doc_open`
 and for headless MCP `doc_place` and `doc_replace_smart_object`.
 For desktop control `app.open`, use `historicalXcfSampleOrder`. Both parameters accept
 `"little-endian"` or `"big-endian"`.
-In the desktop Batch and Image Processor dialogs, use **Historical XCF Sample Order** for
-folder inputs. Choose **Unspecified** to leave files that require a choice as per-file errors.
+Use **Historical XCF Sample Order** in desktop Batch, Image Processor, Create Droplet, Load
+Files into Stack, Statistics, and Contact Sheet II. Choose **Unspecified** to leave files that
+require a choice as import errors. Create Droplet saves the choice for later runs.
 When Batch runs with `overrideOpen`, an order in the recorded Open step takes precedence.
 Open steps without an order use the Batch choice.
 
@@ -37,9 +38,9 @@ XCF import.
 | Layer masks | yes, applied or disabled as in GIMP |
 | Blend modes | the 2.10 set and the legacy set, mapped to Photoshop's (table below) |
 | Locks (alpha, content, position), colour tags | yes |
-| Precision | 8 and 16-bit integer as such; 32-bit integer as 16-bit; 16/32/64-bit float as 32-bit float |
-| Linear-light precisions | the document gets a linear sRGB (or linear gray) profile |
-| Colour profile (`icc-profile` parasite), resolution, guides, comment | yes |
+| Precision | 8-bit and 16-bit integer remain integer. U32 and 16-bit, 32-bit, or 64-bit float import as F32 |
+| Linear-light precisions | a usable assigned linear RGB profile can preserve its colorants with a linear transfer curve. The fallback is linear sRGB or linear gray |
+| Colour profile (`icc-profile` parasite), resolution, guides, comment | usable profiles and the other fields are retained. Unusable profile assignments fall back with an import diagnostic |
 | Grayscale, RGB | as such; indexed images open as RGB |
 | Extra channels, the saved selection | yes (alpha channels, the selection) |
 | Text and vector layers | supported records become editable native content; other records keep usable saved pixels and a conversion report |

@@ -233,6 +233,24 @@ fn legacy_palette_lookahead_understands_versioned_custom_units() {
 }
 
 #[test]
+fn legacy_palette_boundary_accepts_an_unknown_following_property() {
+    let mut image = TestImage::rgb8(1, 1);
+    image.version = 26;
+    image.image_props.push((1, vec![0, 0, 0, 2, 255, 64, 0, 0, 0, 17]));
+    image.image_props.push((50_000, vec![1, 2, 3, 4]));
+    image.image_props.push((19, [240f32.to_be_bytes(); 2].concat()));
+    image.layers.push(TestLayer::rgba("Visible", 1, 1, vec![17, 31, 57, 255]));
+    let mut source = image.write();
+    let palette_length = 30 + 9 + 4;
+    source[palette_length..palette_length + 4].copy_from_slice(&6u32.to_be_bytes());
+    let document = crate::import("palette-unknown.xcf", &source).unwrap().document;
+    assert_eq!(document.resolution_dpi, 240.);
+    assert_eq!(document.layers[0].surface().unwrap().pixel(0, 0), [17. / 255., 31. / 255., 57. / 255., 1.]);
+    let wrapped = crabz2::compress(&source, crabz2::Level::default());
+    assert_eq!(crate::xcf::source_geometry("palette-unknown.xcf.bz2", &wrapped, &photocraft_raster::Interrupt::NONE).unwrap(), Some(((1., 1.), 240.)));
+}
+
+#[test]
 fn palette_lookahead_skips_large_properties_without_accepting_empty_tables_inside_them() {
     use photocraft_doc::{Document, Layer, LayerContent, SmartObject, SmartSource};
     use photocraft_geom::Affine;

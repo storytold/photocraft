@@ -269,6 +269,9 @@ pub(crate) struct DropletArgs {
     /// The folder to write the results to
     #[arg(long, value_name = "DIR")]
     pub(crate) out: Option<String>,
+    /// Explicit sample byte order for ambiguous high-depth XCF 7–11 inputs
+    #[arg(long, value_parser = ["little-endian", "big-endian"])]
+    pub(crate) historical_xcf_sample_order: Option<String>,
 }
 
 /// List the engine command registry

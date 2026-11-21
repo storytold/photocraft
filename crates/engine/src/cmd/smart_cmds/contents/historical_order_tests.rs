@@ -344,6 +344,37 @@ fn warning_render_refuses_svg_that_replaced_an_approved_historical_xcf_link() {
 }
 
 #[test]
+fn relink_renders_every_instance_from_the_verified_file_revision() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("source.xcf");
+    let bytes = fixture::modern_pixel(0x4321);
+    std::fs::write(&path, fixture::modern_pixel(0x2222)).unwrap();
+    let mut s = session();
+    s.execute("file.placeEmbedded", json!({"path":path})).unwrap();
+    let first = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.duplicate", json!({})).unwrap();
+    let second = s.active().unwrap().active_layer.unwrap();
+    assert_ne!(first, second);
+    std::fs::write(&path, &bytes).unwrap();
+    let ctx = JobCtx::new();
+    let doc = s.active().unwrap().doc().clone();
+    let path_name = path.to_str().unwrap().to_owned();
+    let expected = Some(photocraft_io::linked::historical_xcf_digest(&bytes));
+    let verified = read_relink_source(&doc, first, path_name.clone(), None, expected, &ctx).unwrap();
+    std::fs::write(&path, fixture::modern_pixel(0x9876)).unwrap();
+    assert!(read_relink_source(&doc, first, path_name, None, expected, &ctx).is_err(), "a fresh pick verification detects the changed modern source");
+    let prepared = prepare_source_change(&doc, first, verified, &ctx).unwrap();
+    let published = publish_source_change(&mut s, first, "Relink to File", prepared).unwrap();
+    assert_eq!(published["instances"].as_array().unwrap().len(), 2);
+    for id in [first, second] {
+        let sm = object(&s, id);
+        assert!(sm.historical_xcf_link_digest.is_none());
+        let pixel = sm.cache.as_ref().unwrap().pixel(0, 0);
+        assert!((pixel[0] - f32::from(0x4321u16) / 65535.).abs() <= 1. / 65535.);
+    }
+}
+
+#[test]
 fn historical_relink_confirmation_authenticates_the_picked_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let original = dir.path().join("original.xcf");
