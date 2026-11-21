@@ -123,12 +123,17 @@ fn whole_box(rect: &Rect, whole: bool) -> Option<Rect> {
     (w >= 1.0 && h >= 1.0).then(|| Rect::new(x0, y0, x0 + w, y0 + h))
 }
 
-/// Whether a drag of `kind` lands on whole pixels. Align Edges (#13370) is the Triangle tool's
-/// option, and only in Shape mode, where its checkbox is enabled; the other Shape tools, and a
-/// greyed checkbox, still snap.
+/// Whether a drag of `kind` lands on whole pixels. Align Edges is the Triangle tool's option in
+/// Shape mode (#13370) and the Ellipse tool's in Shape and Path mode (#13237), where their checkbox
+/// is enabled; the other Shape tools, and a greyed checkbox, still snap.
 pub(super) fn snaps_to_pixels(app: &PhotocraftApp, kind: ShapeKind) -> bool {
     let o = &app.ui.tool_options;
-    !(kind == ShapeKind::Triangle && o.shape_mode == super::VectorMode::Shape && !o.align_edges)
+    let applies = match kind {
+        ShapeKind::Triangle => o.shape_mode == super::VectorMode::Shape,
+        ShapeKind::Ellipse => o.shape_mode != super::VectorMode::Pixels,
+        _ => false,
+    };
+    !(applies && !o.align_edges)
 }
 
 /// `geometry` as a drag commits it: boxes on whole pixels, a line aligned to pixel edges
