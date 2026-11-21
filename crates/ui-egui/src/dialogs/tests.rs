@@ -157,6 +157,26 @@ fn the_one_time_move_stores_owned_dialog_values_once_and_leaves_engine_read_keys
     assert_eq!(table("photocraft.filter.gaussianBlur"), Some(toml::Table::new()));
 }
 
+/// The Content-Aware Fill settings an empty recorded step reads stay in the preferences; the workspace's own memory
+/// gets them only while it has none (#14254).
+#[test]
+fn the_move_keeps_the_content_aware_fill_settings_and_never_replaces_the_workspaces() {
+    let host = Host::builder(AppInfo { id: "photocraft", name: "PhotoCraft", version: "0" }).settings(Arc::new(MemorySections::default())).build();
+    let key = photocraft_engine::atn_cmds::CAF_WORKSPACE_PREFS;
+    let workspace = Remembered::<toml::Table>::new(params::memory_scope(key));
+    let output = |table: Option<toml::Table>| table.and_then(|t| t.get("output").cloned());
+    let mut prefs = photocraft_engine::prefs::Preferences::default();
+    prefs.dialogs.insert(key.into(), json!({"output": "current"}));
+    move_memories(&mut prefs, &host);
+    assert_eq!(prefs.dialogs.get(key), Some(&json!({"output": "current"})), "the engine's copy stays");
+    assert_eq!(output(workspace.recall(&host)), Some(toml::Value::String("current".into())), "an empty workspace memory gets it");
+
+    prefs.dialogs.insert(key.into(), json!({"output": "new"}));
+    move_memories(&mut prefs, &host);
+    assert_eq!(output(workspace.recall(&host)), Some(toml::Value::String("current".into())), "the workspace's own memory wins");
+    assert_eq!(prefs.dialogs.get(key), Some(&json!({"output": "new"})));
+}
+
 struct MarkA;
 struct MarkB;
 

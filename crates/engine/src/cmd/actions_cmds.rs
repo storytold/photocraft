@@ -176,6 +176,9 @@ pub fn playback_params(s: &Session, id: &str, p: &Value) -> Result<Value> {
     {
         object.remove("__atnCustom");
     }
+    if id == "edit.contentAwareFill" {
+        crate::atn_cmds::caf_remembered(&mut p, s.prefs());
+    }
     if id == "layer.setProps"
         && let Some(target) = p.get("_actionLayer")
     {

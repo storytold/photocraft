@@ -620,6 +620,10 @@ pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) 
 /// Preference entries the engine reads itself, by key: the engine has no settings store, so they cannot move.
 const ENGINE_READ: &[&str] = &["ui.layersPanelOptions", "file.print", "file.export.saveForWebLegacy"];
 
+/// Preference entries the engine reads that a workspace also remembers in the framework's store: they stay, and are
+/// copied there only while it holds none. An empty recorded Content-Aware Fill step plays with the engine's copy (#14254).
+const ENGINE_READ_SHARED: &[&str] = &[photocraft_engine::atn_cmds::CAF_WORKSPACE_PREFS];
+
 /// The "Don't show again" entries (`{"skip": true}`), by key, as their prompt modules read them. Told apart by key, not
 /// by the shape of the value.
 fn dont_show_again_keys() -> [&'static str; 4] {
@@ -667,7 +671,8 @@ fn convert_blend_mode(key: &str, value: &mut Value) {
 
 /// Moves the dialogs' last-used values out of `Preferences.dialogs` into the remembered section of `host`, once, before
 /// the first frame. Entries the engine reads and the don't-show-again entries stay; a second run finds nothing to move
-/// because every moved entry left `Preferences.dialogs`. An entry that has no table form stays too.
+/// because every moved entry left `Preferences.dialogs`. An entry that has no table form stays too, and a shared entry
+/// ([`ENGINE_READ_SHARED`]) never replaces what the framework already remembers.
 pub(crate) fn move_memories(prefs: &mut Preferences, host: &Host) {
     let keys: Vec<String> = prefs.dialogs.keys().cloned().collect();
     for key in keys {
@@ -676,7 +681,14 @@ pub(crate) fn move_memories(prefs: &mut Preferences, host: &Host) {
         let mut value = without_nulls(old.clone());
         convert_blend_mode(&key, &mut value);
         let Ok(table) = toml::Table::try_from(&value) else { continue };
-        Remembered::<toml::Table>::new(scope).store(host, &table);
+        let remembered = Remembered::<toml::Table>::new(scope);
+        if ENGINE_READ_SHARED.contains(&key.as_str()) {
+            if remembered.recall(host).is_none() {
+                remembered.store(host, &table);
+            }
+            continue;
+        }
+        remembered.store(host, &table);
         prefs.dialogs.remove(&key);
     }
 }

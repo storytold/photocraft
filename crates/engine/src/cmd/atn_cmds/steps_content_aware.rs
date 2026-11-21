@@ -6,17 +6,38 @@ use super::{D, Descriptor, Map, Value};
 
 const CMD: &str = "edit.contentAwareFill";
 const SOURCE: &str = "_atnCafDescriptor";
-// The measured row bounds these values; its ellipses are not additional enum bindings.
-const SAMPLING: &[(&str, &str)] = &[("cafSamplingRegionRectangular", "rectangular")];
-const COLOR: &[(&str, &str)] = &[("cafColorAdaptationDefault", "default")];
-const ROTATION: &[(&str, &str)] = &[("cafRotationAmountNone", "none")];
-// Current Layer is also explicit in the primary Action Manager example cited in docs/atn.md.
-const OUTPUT: &[(&str, &str)] = &[("cafOutputToNewLayer", "new"), ("cafOutputToCurrentLayer", "current")];
+// Every value the workspace showed when such a step was played with dialogs on (#14254).
+const SAMPLING: &[(&str, &str)] = &[("cafSamplingRegionAuto", "auto"), ("cafSamplingRegionRectangular", "rectangular"), ("cafSamplingRegionCustom", "custom")];
+const COLOR: &[(&str, &str)] = &[
+    ("cafColorAdaptationNone", "none"),
+    ("cafColorAdaptationDefault", "default"),
+    ("cafColorAdaptationHigh", "high"),
+    ("cafColorAdaptationVeryHigh", "veryHigh"),
+];
+const ROTATION: &[(&str, &str)] = &[
+    ("cafRotationAmountNone", "none"),
+    ("cafRotationAmountLow", "low"),
+    ("cafRotationAmountMedium", "medium"),
+    ("cafRotationAmountHigh", "high"),
+    ("cafRotationAmountFull", "full"),
+];
+const OUTPUT: &[(&str, &str)] = &[("cafOutputToCurrentLayer", "current"), ("cafOutputToNewLayer", "new"), ("cafOutputToDuplicateLayer", "duplicate")];
 const KEYS: &[&str] = &["cafSamplingRegion", "cafSampleAllLayers", "cafColorAdaptationLevel", "cafRotationAmount", "cafScale", "cafMirror", "cafOutput"];
 const PARAMS: &[&str] = &["sampling", "sampleAllLayers", "colorAdaptation", "rotationAdaptation", "scale", "mirror", "output"];
+/// Marks a step recorded with an empty descriptor: it plays with the workspace's remembered
+/// settings ([`caf_remembered`]) instead of fixed values.
+const REMEMBERED: &str = "_atnCafRemembered";
+/// The `prefs.dialogs` key under which the Content-Aware Fill workspace remembers its settings.
+pub const CAF_WORKSPACE_PREFS: &str = "edit.contentAwareFill.workspace";
 
-/// All seven settings are recorded. Missing keys have no measured Photoshop default here.
+/// All seven settings are recorded, or none: an empty descriptor uses the remembered settings.
+/// Other missing keys have no measured Photoshop default here.
 fn recorded(d: &Descriptor) -> Option<Value> {
+    if d.items.is_empty() {
+        let mut p = Map::new();
+        p.insert(REMEMBERED.into(), true.into());
+        return Some(Value::Object(p));
+    }
     if d.items.len() != KEYS.len() || KEYS.iter().any(|name| d.items.iter().filter(|(key, _)| key.is(name)).count() != 1) {
         return None;
     }
@@ -35,13 +56,22 @@ fn recorded(d: &Descriptor) -> Option<Value> {
     Some(Value::Object(p))
 }
 
-/// Write only represented native options, making their defaults explicit in all seven fields.
+/// Write only represented native options, making their defaults explicit in all seven fields. A step without
+/// `sampleAllLayers` is refused: the command then samples the composite when the layer is empty, which neither
+/// recorded value says.
 fn descriptor(p: &Value) -> Option<Descriptor> {
     let object = p.as_object()?;
     if !super::events::pixel_target(p)
-        || object.keys().any(|key| !PARAMS.contains(&key.as_str()) && !matches!(key.as_str(), "target" | "seed" | SOURCE))
+        || object.keys().any(|key| !PARAMS.contains(&key.as_str()) && !matches!(key.as_str(), "target" | "seed" | SOURCE | REMEMBERED))
         || p.get("seed").is_some_and(|seed| seed.as_u64() != Some(1))
     {
+        return None;
+    }
+    if let Some(remembered) = p.get(REMEMBERED) {
+        // Values next to the mark would be dropped by an empty descriptor.
+        return (remembered.as_bool() == Some(true) && !PARAMS.iter().any(|param| object.contains_key(*param))).then(|| desc("null"));
+    }
+    if !object.contains_key(PARAMS[1]) {
         return None;
     }
     let enumeration = |key: &str, param: &str, table: &[(&str, &str)], default: &str| {
@@ -65,6 +95,24 @@ fn descriptor(p: &Value) -> Option<Descriptor> {
             .with(KEYS[5], boolean(PARAMS[5])?)
             .with(KEYS[6], enumeration(KEYS[6], PARAMS[6], OUTPUT, "current")?),
     )
+}
+
+/// Resolve an empty recorded step: the remembered settings fill what the step doesn't name, and
+/// before any were remembered it writes to a new layer. Playing never changes what is remembered.
+pub(crate) fn caf_remembered(p: &mut Value, prefs: &crate::prefs::Preferences) {
+    let Some(object) = p.as_object_mut() else { return };
+    if object.remove(REMEMBERED).and_then(|v| v.as_bool()) != Some(true) {
+        return;
+    }
+    let saved = prefs.dialogs.get(CAF_WORKSPACE_PREFS);
+    for (param, flag) in PARAMS.iter().map(|param| (*param, matches!(*param, "sampleAllLayers" | "scale" | "mirror"))) {
+        // Only well-typed values: a damaged entry must not turn into another setting.
+        let value = saved.and_then(|v| v.get(param)).filter(|v| if flag { v.is_boolean() } else { v.is_string() });
+        if let Some(value) = value.filter(|_| !object.contains_key(param)) {
+            object.insert(param.into(), value.clone());
+        }
+    }
+    object.entry("output").or_insert_with(|| "new".into());
 }
 
 /// Import the verified seven-field form, retaining noncanonical wire data for an unchanged save.
