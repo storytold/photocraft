@@ -108,6 +108,9 @@ mod tests;
 mod open_recent_position_tests;
 
 #[cfg(test)]
+mod layer_style_check_marks_tests;
+
+#[cfg(test)]
 mod open_recent_tests {
     use super::*;
     use serde_json::json;

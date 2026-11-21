@@ -159,6 +159,15 @@ pub(super) fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     if id == "edit.transform.warp" {
         return Some(crate::transform_tool::warps_active_layer(app));
     }
+    // Layer › Layer Style carries a check mark in front of each effect the active layer has (#14844).
+    // Several instances of one kind are allowed, so an entry is checked while the layer holds at
+    // least one of that kind, switched on or off. The mark follows the active layer. The submenu's
+    // other entries (Blending Options…, Copy Layer Style, …) name no effect and keep the state they
+    // have today.
+    if let Some(kind) = id.strip_prefix("layer.layerStyle.").filter(|k| crate::layer_style::KINDS.iter().any(|(known, _)| *known == *k)) {
+        let active = app.session.active().and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id)));
+        return Some(active.is_some_and(|l| l.effects.items.iter().any(|e| photocraft_engine::layer_style::kind_of(e) == kind)));
+    }
     if id == "view.proofColors" || id == "view.gamutWarning" {
         let Some(d) = app.session.active() else { return Some(false) };
         let pv = app.session.color.proof(d.doc.id);
