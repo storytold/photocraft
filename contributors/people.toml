@@ -358,3 +358,7 @@ sync_github_name = true
 
 [people.MMexicann]
 display_name = "mexicann"
+
+[people.guopengwu1990]
+display_name = "吴国鹏"
+sync_github_name = true
