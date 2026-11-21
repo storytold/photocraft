@@ -9,6 +9,11 @@
 //!
 //! The Windows CI runners have no GPU: their adapter is WARP over DX12, so this runs FXC there.
 
+use photocraft_color::{Color, ColorMode, SampleType};
+use photocraft_doc::Document;
+use photocraft_geom::Size;
+use photocraft_gpu::{Compositor, render_to_vec};
+
 use crate::GPU_LOCK;
 
 #[test]
@@ -45,10 +50,42 @@ fn every_compositor_pipeline_builds() {
                 continue;
             };
             let info = adapter.get_info();
-            let format = photocraft_gpu::Compositor::preferred_acc_format(&adapter);
-            if let Err(e) = photocraft_gpu::Compositor::try_new_with_format(&device, format) {
+            let format = Compositor::preferred_acc_format(&adapter);
+            // Draws build only the pipelines they use; this builds every one.
+            let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+            if let Err(e) = Compositor::try_new_with_format_threads(&device, format, threads) {
                 panic!("{:?} adapter {} (driver {}): {e}", info.backend, info.name, info.driver_info);
             }
         }
     }
+}
+
+/// #15439: a compositor builds a pipeline when a draw first needs it, so a process that draws one
+/// layer compiles a few shaders, not all of them (FXC on the Windows runners' WARP adapter took
+/// 3 to 7.5 s per process for all of them). Siblings share what any of them built.
+#[test]
+fn a_draw_builds_only_the_pipelines_it_uses() {
+    let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let instance = crate::instance();
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+        return eprintln!("skipping: no adapter");
+    };
+    let Ok((device, queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())) else {
+        return eprintln!("skipping: no device");
+    };
+    let mut comp = match Compositor::try_new_with_format(&device, Compositor::preferred_acc_format(&adapter)) {
+        Ok(c) => c,
+        Err(e) => return eprintln!("skipping: {e}"),
+    };
+    let (built, all) = comp.pipeline_counts();
+    assert_eq!(built, 0, "creating a compositor builds no pipeline");
+    let doc = Document::with_background("one layer", Size::new(16, 16), ColorMode::Rgb, SampleType::U8, Color::rgba(0.25, 0.5, 0.75, 1.0));
+    render_to_vec(&mut comp, &device, &queue, &doc, doc.bounds()).expect("one layer renders on the GPU");
+    let (one_layer, _) = comp.pipeline_counts();
+    assert!(one_layer > 0 && one_layer * 4 < all, "one layer built {one_layer} of {all} pipelines");
+    // Drawing it again, or from a sibling, builds nothing new.
+    render_to_vec(&mut comp, &device, &queue, &doc, doc.bounds()).expect("second render");
+    let mut sibling = comp.sibling();
+    render_to_vec(&mut sibling, &device, &queue, &doc, doc.bounds()).expect("sibling render");
+    assert_eq!(sibling.pipeline_counts(), (one_layer, all));
 }

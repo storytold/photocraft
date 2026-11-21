@@ -3,85 +3,57 @@
 //! document, its layers merged, or only the current layer). The command stays directly callable
 //! with the same params by agents and Actions.
 
-use serde_json::{Map, Value, json};
+use craft::ui::contract::Bind;
+use craft::ui::dialog::DialogId;
+use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamDialog, ParamKind, ParamResult};
+use craft::ui::runtime::env::Label;
+use serde_json::{Map, json};
 
 use crate::PhotocraftApp;
+use crate::dialogs::params;
 
+/// The command the dialog runs; also the dialog's key.
 pub const COMMAND: &str = "history.newSnapshot";
-const MARK: &str = "__newSnapshot";
 
-pub fn owns(fields: &Map<String, Value>) -> bool {
-    fields.contains_key(MARK)
+/// Whether the hosted dialog with `key` is this one.
+pub(crate) fn owns(key: &str) -> bool {
+    key == COMMAND
 }
 
 /// Open the dialog on the active document, suggesting the name the camera button would give.
 /// Not while a Free Transform is open: it owns the document until committed or cancelled, so the
 /// camera button does nothing then either (#6087).
-pub fn open(app: &mut PhotocraftApp) -> Option<u64> {
+pub fn open(app: &mut PhotocraftApp) -> Option<DialogId> {
     if app.ui.transform.is_some() {
         return None;
     }
     let name = photocraft_engine::history_cmds::next_snapshot_name(app.session.active()?);
-    let mut f = Map::new();
-    f.insert(MARK.into(), json!(true));
-    f.insert("__command".into(), json!(COMMAND));
-    f.insert("__label".into(), json!("New Snapshot"));
-    f.insert("name".into(), json!(name));
-    f.insert("from".into(), json!("fullDocument"));
-    Some(app.ui.open_dialog(crate::state::DialogKind::Command, f))
+    Some(params::open_param(app, COMMAND, DialogFields::new(), serde_json::Value::Null, move |fields: &mut DialogFields| {
+        let sources: Vec<(String, Label)> = vec![
+            ("fullDocument".to_string(), Label::from(tl!("Full Document"))),
+            ("mergedLayers".to_string(), Label::from(tl!("Merged Layers"))),
+            ("currentLayer".to_string(), Label::from(tl!("Current Layer"))),
+        ];
+        let rows = vec![
+            Param::new("name", tl!("Name:"), ParamKind::text(name.clone())),
+            Param::new("from", tl!("From:"), ParamKind::choice(sources, Some("fullDocument".to_string()))),
+        ];
+        ParamDialog::command(COMMAND, tl!("New Snapshot"), rows).values(Bind::bound(fields))
+    }))
 }
 
 /// Takes the snapshot. A cleared Name gets the next default name, as the camera button would give
 /// (#6087); agents calling the command with an empty name still get an error.
-pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+pub(crate) fn run(app: &mut PhotocraftApp, _ctx: &egui::Context, result: ParamResult) {
     let mut p = Map::new();
-    if let Some(name) = f.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()) {
+    if let Some(name) = result.fields.text("name").map(str::trim).filter(|n| !n.is_empty()) {
         p.insert("name".into(), json!(name));
     }
-    if let Some(from) = f.get("from") {
-        p.insert("from".into(), from.clone());
+    if let Some(from) = result.fields.text("from") {
+        p.insert("from".into(), json!(from));
     }
-    app.run(COMMAND, Value::Object(p))
-}
-
-/// Label column bounds for [`crate::widgets::label_column_width`]: the English labels' width, and what the 260 pt name field leaves of the dialog.
-const LABEL_MIN_W: f32 = 64.0;
-const LABEL_MAX_W: f32 = 160.0;
-/// Every label in the column, measured in the current language.
-const LABELS: [&str; 2] = ["Name:", "From:"];
-
-/// The Name field (focused and selected when the dialog opens) and the From menu, their labels
-/// in one column measured over [`LABELS`].
-pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    ui.spacing_mut().item_spacing.y = 6.0;
-    let label_w = crate::widgets::label_column_width(ui, &LABELS.map(crate::i18n::t), LABEL_MIN_W, LABEL_MAX_W);
-    let label = |ui: &mut egui::Ui, text: &str| {
-        crate::widgets::column_label(ui, text, label_w);
-    };
-    ui.horizontal(|ui| {
-        label(ui, tl!("Name:"));
-        let mut name = f.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
-        let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(260.0));
-        // Opens on the name, selected, so typing replaces it (Photoshop).
-        if !ui.is_sizing_pass() && !f.contains_key("__named") {
-            r.request_focus();
-            crate::field_tab::select_all(ui.ctx(), r.id, &name);
-            f.insert("__named".into(), json!(true));
-        }
-        f.insert("name".into(), json!(name));
-    });
-    ui.horizontal(|ui| {
-        label(ui, tl!("From:"));
-        let mut from = f.get("from").and_then(Value::as_str).unwrap_or("fullDocument").to_string();
-        let opts = [
-            ("fullDocument".to_string(), tl!("Full Document")),
-            ("mergedLayers".to_string(), tl!("Merged Layers")),
-            ("currentLayer".to_string(), tl!("Current Layer")),
-        ];
-        if crate::widgets::dropdown(ui, "new-snapshot-from", tl!("From"), &mut from, &opts, 170.0) {
-            f.insert("from".into(), json!(from));
-        }
-    });
+    let outcome = app.run(COMMAND, serde_json::Value::Object(p));
+    super::alerts::report(app, outcome);
 }
 
 #[cfg(test)]
@@ -89,8 +61,9 @@ mod tests {
     use serde_json::json;
 
     use crate::PhotocraftApp;
+    use crate::new_layer_ui::testing::set;
 
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
         app.run("layer.new.layer", json!({})).unwrap();
@@ -103,11 +76,11 @@ mod tests {
     #[test]
     fn does_not_open_during_free_transform() {
         let mut app = app();
-        let ctx = egui::Context::default();
+        let ctx = app.ctx().clone();
         crate::transform_tool::begin(&mut app, &ctx).unwrap();
         assert!(app.ui.transform.is_some());
         assert_eq!(super::open(&mut app), None);
-        assert!(app.ui.dialogs.is_empty());
+        assert!(app.framework.dialogs.is_empty());
         crate::transform_tool::cancel(&mut app);
         assert!(super::open(&mut app).is_some());
     }
@@ -117,12 +90,12 @@ mod tests {
     #[test]
     fn a_cleared_name_gets_the_default_name() {
         let mut app = app();
+        let ctx = app.ctx().clone();
         for (typed, want) in [("", "Snapshot 1"), ("   ", "Snapshot 2"), ("  Mine ", "Mine")] {
             let id = super::open(&mut app).unwrap();
-            let d = app.ui.dialogs.iter_mut().find(|d| d.id == id).unwrap();
-            d.fields.insert("name".into(), json!(typed));
-            crate::dialogs::confirm(&mut app, id).unwrap();
-            assert_eq!(app.session.active().unwrap().snapshots.last().unwrap().name, want);
+            set(&mut app, id, "name", json!(typed)).unwrap();
+            crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
+            assert_eq!(app.session.active().unwrap().snapshots().last().unwrap().name, want);
         }
         assert!(app.run(super::COMMAND, json!({"name": ""})).is_err(), "agents still get the error");
     }
