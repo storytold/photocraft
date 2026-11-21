@@ -24,7 +24,7 @@ fn bad(msg: impl Into<String>) -> EngineError {
 }
 
 /// What a pixel of the filled area gets before blending.
-enum Source {
+enum Source<'a> {
     Color([f32; 4]),
     /// An opaque colour that was picked as CMYK inks: `rgba` is its sRGB stand-in (what other
     /// colour models and blend modes use), `cmyk` the inks a CMYK target gets as they are.
@@ -34,9 +34,12 @@ enum Source {
     },
     /// Straight RGBA per pixel of `rect` (row-major).
     Pixels(Rect, Vec<[f32; 4]>),
+    /// Another surface's pixels, as straight RGBA. [`blend_into`] reads them a tile at a time,
+    /// so no buffer the size of the filled area is ever held (#9332).
+    Surface(&'a Surface),
 }
 
-impl Source {
+impl Source<'_> {
     fn at(&self, x: i32, y: i32) -> [f32; 4] {
         match self {
             Source::Color(c) => *c,
@@ -48,6 +51,7 @@ impl Source {
                 let i = (y - r.y0) as usize * r.width() as usize + (x - r.x0) as usize;
                 px.get(i).copied().unwrap_or([0.0; 4])
             }
+            Source::Surface(src) => src.rgba(x, y),
         }
     }
 }
@@ -104,6 +108,8 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     let area = sel.as_ref().map_or(doc_bounds, |m| m.content_bounds().intersect(&doc_bounds));
     let mut out = json!({ "contents": contents });
     let restore = contents == "history";
+    // The History source document, kept for the fill: its surface is read a tile at a time.
+    let history_doc;
     let source = match contents {
         "foreground" => color_source(s, s.tools.foreground),
         // As the document takes the swatch: its gray profile's value in a Grayscale document (#11940).
@@ -123,10 +129,10 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
         }
         "history" => {
             // A History panel row `state` or a `snapshot`, else the History Brush's source.
-            let source_doc = crate::history_source_cmds::paint_source(st, p, CMD)?;
-            let src = crate::channel_cmds::read_target_surface(source_doc.as_ref(), id, p)
+            history_doc = crate::history_source_cmds::paint_source(st, p, CMD)?;
+            let src = crate::channel_cmds::read_target_surface(history_doc.as_ref(), id, p)
                 .map_err(|_| EngineError::Other("the target did not exist (as pixels, a mask or a channel) in that history state".into()))?;
-            Source::Pixels(area, read_rgba(src, area, "reading Fill's history source")?)
+            Source::Surface(src)
         }
         "contentAware" => {
             let sel = sel.as_ref().ok_or_else(|| EngineError::Other("Content-Aware fill needs a selection".into()))?;
@@ -164,7 +170,7 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// A fill colour: the inks it was picked as when it was picked as CMYK (#4196), else plain sRGB.
-fn color_source(s: &Session, c: [f32; 4]) -> Source {
+fn color_source(s: &Session, c: [f32; 4]) -> Source<'static> {
     match s.tools.picked_cmyk([c[0], c[1], c[2]]) {
         Some(cmyk) if c[3] >= 1.0 => Source::Cmyk { rgba: c, cmyk },
         _ => Source::Color(c),
@@ -188,20 +194,29 @@ fn encode_color(fmt: &photocraft_color::PixelFormat, source: &Source, enc: &mut 
     Some(n)
 }
 
-fn read_rgba(src: &Surface, area: Rect, purpose: &str) -> Result<Vec<[f32; 4]>> {
-    let len = (area.width() as usize)
-        .checked_mul(area.height() as usize)
-        .ok_or_else(|| EngineError::Other(format!("not enough memory for {purpose} (requested size overflowed); the document was not changed")))?;
-    let mut px = crate::allocation::filled(len, [0.0f32; 4], purpose)?;
-    src.read_rgba_into(area, &mut px);
+/// `src`'s straight RGBA over `tr`, which lies in one tile (so the buffer is at most a tile's).
+fn read_tile_rgba(src: &Surface, tr: Rect) -> Result<Vec<[f32; 4]>> {
+    let len = tr.width() as usize * tr.height() as usize;
+    let mut px = Vec::new();
+    px.try_reserve_exact(len).map_err(|_| EngineError::Other("not enough memory while reading a pixel tile; the document was not changed".into()))?;
+    px.resize(len, [0.0f32; 4]);
+    src.read_rgba_into(tr, &mut px);
     Ok(px)
 }
 
 /// `src` over `surf` across `area` (Normal, 100 %), each pixel weighted by `limit` when given:
 /// a paste into a layer mask or channel, which keeps the pasted pixels' luminosity (#1035).
 pub(crate) fn composite_over(surf: &mut Surface, src: &Surface, area: Rect, limit: Option<&Surface>) -> Result<()> {
-    let source = Source::Pixels(area, read_rgba(src, area, "pasting pixels")?);
-    blend_into(surf, area, &source, limit, Blend { mode: BlendMode::Normal, opacity: 1.0, keep_alpha: false, restore: false })
+    blend_into(surf, area, &Source::Surface(src), limit, Blend { mode: BlendMode::Normal, opacity: 1.0, keep_alpha: false, restore: false })
+}
+
+/// [`composite_over`] as it read its source before #9332: the whole area as one straight-RGBA
+/// buffer. The oracle the per-tile reads are checked against.
+#[cfg(test)]
+pub(crate) fn composite_over_area_buffer(surf: &mut Surface, src: &Surface, area: Rect, limit: Option<&Surface>) -> Result<()> {
+    let mut px = vec![[0.0f32; 4]; area.width() as usize * area.height() as usize];
+    src.read_rgba_into(area, &mut px);
+    blend_into(surf, area, &Source::Pixels(area, px), limit, Blend { mode: BlendMode::Normal, opacity: 1.0, keep_alpha: false, restore: false })
 }
 
 /// `area` of `surf` filled with an opaque `color` (Normal, 100 %), weighted by `sel` when given:
@@ -233,7 +248,7 @@ pub(crate) fn blend_color_mask(
 
 /// The selection filled from its surroundings (`photocraft_algo::content_aware`), as straight
 /// RGBA over the sampling window. Only the selected pixels are used.
-fn content_aware(surf: &Surface, sel: &Surface, canvas: Rect, options: &FillOptions) -> Result<Source> {
+fn content_aware(surf: &Surface, sel: &Surface, canvas: Rect, options: &FillOptions) -> Result<Source<'static>> {
     let hole_bounds = sel.content_bounds().intersect(&canvas);
     if hole_bounds.is_empty() {
         return Err(EngineError::Other("the selection is outside the canvas".into()));
@@ -415,6 +430,15 @@ fn blend_into(surf: &mut Surface, area: Rect, source: &Source, sel: Option<&Surf
             Err(tile) => tile
                 .try_clone()
                 .map_err(|e| EngineError::Other(format!("not enough memory while blending a pixel tile ({e}); the document was not changed")))?,
+        };
+        // A surface source is read for this tile only.
+        let read;
+        let source = match source {
+            Source::Surface(src) => {
+                read = Source::Pixels(tr, read_tile_rgba(src, tr)?);
+                &read
+            }
+            other => other,
         };
         blend_tile(&mut tile.bytes_mut(), &fmt, tc.rect(), tr, source, mask.as_ref(), b);
         done.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((tc, std::sync::Arc::new(tile)));
