@@ -1603,3 +1603,17 @@ fn csh_import_with_inline_data_ignores_an_unreadable_path() {
     assert_eq!(result["names"], serde_json::json!(["Inline"]), "{result}");
     assert_eq!(result["group"], "Inline Set", "{result}");
 }
+
+#[cfg(unix)]
+#[test]
+fn write_keeps_the_mode_of_the_file_it_replaces() {
+    use std::os::unix::fs::PermissionsExt;
+    let (inside, _, workspace) = roots("keep-mode");
+    // A file kind the workspace may replace (see `written_kind`), so the write reaches the permission step.
+    let target = inside.join("secret.png");
+    std::fs::write(&target, b"old").unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+    workspace.write("secret.png", b"new").unwrap();
+    assert_eq!(std::fs::read(&target).unwrap(), b"new");
+    assert_eq!(std::fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o600);
+}

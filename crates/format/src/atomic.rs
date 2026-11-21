@@ -68,6 +68,21 @@ pub trait AtomicFs {
         write(&mut bytes)?;
         self.write_new(tmp, bytes.get_ref())
     }
+    /// [`write_new_progress`](Self::write_new_progress) for a temporary file that is going to replace
+    /// an existing file (`replacing`). [`RealFs`] then creates it owner-only, so the new bytes are
+    /// never readable by more people than the file they replace, whatever the process umask says;
+    /// the original's mode follows with [`copy_metadata`](Self::copy_metadata). By default it is
+    /// `write_new_progress` (test doubles).
+    fn write_new_like(&self, tmp: &Path, bytes: &[u8], progress: &dyn Fn(f32), replacing: bool) -> io::Result<()> {
+        let _ = replacing;
+        self.write_new_progress(tmp, bytes, progress)
+    }
+    /// [`write_new_stream`](Self::write_new_stream) for a temporary file that is going to replace an
+    /// existing file; see [`write_new_like`](Self::write_new_like).
+    fn write_new_stream_like(&self, tmp: &Path, write: &mut StreamWriter<'_>, replacing: bool) -> io::Result<()> {
+        let _ = replacing;
+        self.write_new_stream(tmp, write)
+    }
     /// Rename `from` over `to`, replacing it.
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
     /// Remove a (temporary) file.
@@ -93,6 +108,31 @@ impl<T: Write + Seek + ?Sized> WriteSeek for T {}
 /// Fills the temporary file of a streaming atomic write, starting at its beginning.
 pub type StreamWriter<'a> = dyn FnMut(&mut dyn WriteSeek) -> io::Result<()> + 'a;
 
+/// A refused permission change (`EPERM`/`ENOTSUP`) is not an error: file systems such as vfat and
+/// exFAT drives and many SMB/NTFS mounts reject `chmod` yet save fine, and the file then keeps the
+/// mode the mount gives every file. Any other failure is passed on.
+pub fn tolerate_chmod_refusal(result: io::Result<()>) -> io::Result<()> {
+    match result {
+        Err(e) if matches!(e.kind(), io::ErrorKind::PermissionDenied | io::ErrorKind::Unsupported) => Ok(()),
+        other => other,
+    }
+}
+
+/// Create the temporary file `tmp` (it must not exist). When it will replace an existing file it is
+/// created owner-only on Unix, so a file system that later refuses the permission copy still never
+/// holds the new bytes under the process default mode (e.g. 0644) while the original was 0600.
+fn create_tmp(tmp: &Path, replacing: bool) -> io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    if replacing {
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    }
+    #[cfg(not(unix))]
+    let _ = replacing;
+    options.open(tmp)
+}
+
 /// The real file system.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RealFs;
@@ -105,7 +145,10 @@ impl AtomicFs for RealFs {
         self.write_new_progress(tmp, bytes, &|_| {})
     }
     fn write_new_progress(&self, tmp: &Path, bytes: &[u8], progress: &dyn Fn(f32)) -> io::Result<()> {
-        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(tmp)?;
+        self.write_new_like(tmp, bytes, progress, false)
+    }
+    fn write_new_like(&self, tmp: &Path, bytes: &[u8], progress: &dyn Fn(f32), replacing: bool) -> io::Result<()> {
+        let mut f = create_tmp(tmp, replacing)?;
         let mut written = 0usize;
         for chunk in bytes.chunks(WRITE_CHUNK) {
             f.write_all(chunk)?;
@@ -115,7 +158,10 @@ impl AtomicFs for RealFs {
         sync_file(&f)
     }
     fn write_new_stream(&self, tmp: &Path, write: &mut StreamWriter<'_>) -> io::Result<()> {
-        let f = std::fs::OpenOptions::new().write(true).create_new(true).open(tmp)?;
+        self.write_new_stream_like(tmp, write, false)
+    }
+    fn write_new_stream_like(&self, tmp: &Path, write: &mut StreamWriter<'_>, replacing: bool) -> io::Result<()> {
+        let f = create_tmp(tmp, replacing)?;
         let mut out = io::BufWriter::new(f);
         // `AlreadyExists` means a temporary name collided, which makes the caller retry with
         // another name and leave this one alone: from the writer, once the file is ours, it is
@@ -236,14 +282,14 @@ pub fn atomic_write_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, byt
 
 /// [`atomic_write_with`] reporting write progress (see [`atomic_write_progress`]).
 pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, bytes: &[u8], progress: &dyn Fn(f32)) -> io::Result<()> {
-    replace_with(fs, retry, path, true, &mut |tmp| fs.write_new_progress(tmp, bytes, progress))
+    replace_with(fs, retry, path, true, &mut |tmp, replacing| fs.write_new_like(tmp, bytes, progress, replacing))
 }
 
 /// [`atomic_write`] that never follows a symlink at `path`: a link there is replaced by the new
 /// file (the rename swaps the directory entry), so a link planted between a caller's own check
 /// and this write cannot carry it outside the folder (a store managing its own entries).
 pub fn atomic_write_no_follow(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    replace_with(&RealFs, RenameRetry::platform(), path, false, &mut |tmp| RealFs.write_new_progress(tmp, bytes, &|_| {}))
+    replace_with(&RealFs, RenameRetry::platform(), path, false, &mut |tmp, replacing| RealFs.write_new_like(tmp, bytes, &|_| {}, replacing))
 }
 
 /// [`atomic_write`] for a file serialized as it is written (#6607): `write` fills the temporary
@@ -268,7 +314,7 @@ pub fn atomic_write_stream_progress(path: &Path, expected_len: u64, progress: &d
 
 /// [`atomic_write_stream`] through an explicit file system and retry policy.
 pub fn atomic_write_stream_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, write: &mut StreamWriter<'_>) -> io::Result<()> {
-    replace_with(fs, retry, path, true, &mut |tmp| fs.write_new_stream(tmp, write))
+    replace_with(fs, retry, path, true, &mut |tmp, replacing| fs.write_new_stream_like(tmp, write, replacing))
 }
 
 /// A stream reporting how far it has got (see [`atomic_write_stream_progress`]), every
@@ -311,7 +357,7 @@ impl Seek for Progress<'_, '_> {
 
 /// The steps every atomic write shares: `write_tmp` fills a fresh temporary file beside the
 /// target, which is then renamed over it.
-fn replace_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, follow: bool, write_tmp: &mut dyn FnMut(&Path) -> io::Result<()>) -> io::Result<()> {
+fn replace_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, follow: bool, write_tmp: &mut dyn FnMut(&Path, bool) -> io::Result<()>) -> io::Result<()> {
     let target = if follow { resolve_symlink(path).map_err(|e| context(e, format!("cannot save {}", path.display())))? } else { path.to_path_buf() };
     let name = target.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("{}: not a file path", path.display())))?;
     let dir = match target.parent() {
@@ -326,9 +372,14 @@ fn replace_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, follow: bool
     // Create a fresh temporary file next to the target (same directory, so the rename never
     // crosses a device). The name is unique per process and call; retry a few on collisions.
     let mut tmp = None;
+    let exists = target.exists();
+    // A link that is replaced rather than followed has nothing to carry over: reading the target's
+    // attributes would open whatever it points at (a FIFO with no writer blocks there).
+    let replaced_link = !follow && std::fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink());
+    let replacing = exists && !replaced_link;
     for _ in 0..8 {
         let candidate = dir.join(temp_name(&name.to_string_lossy()));
-        match write_tmp(&candidate) {
+        match write_tmp(&candidate, replacing) {
             Ok(()) => {
                 tmp = Some(candidate);
                 break;
@@ -346,18 +397,14 @@ fn replace_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, follow: bool
     // Keep what the file being replaced carried: its mode (e.g. 0600) instead of the process
     // default, its extended attributes, and its ACL. Best effort, and before the swap, so the
     // file the user ends up with never passes through a more permissive state.
-    let replacing = target.exists();
-    // A link that is replaced rather than followed has nothing to carry over: reading the target's
-    // attributes would open whatever it points at (a FIFO with no writer blocks there).
-    let replaced_link = !follow && std::fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink());
-    if replacing && !replaced_link {
+    if replacing {
         let _ = fs.copy_metadata(&target, &tmp);
     }
 
     // Replacing an existing file goes through `replace_existing`, which on Windows is the one
     // call that can keep the destination's DACL and named streams; creating a new one is a
     // plain rename, with nothing to preserve.
-    let swap = || if replacing { fs.replace_existing(&tmp, &target) } else { fs.rename(&tmp, &target) };
+    let swap = || if exists { fs.replace_existing(&tmp, &target) } else { fs.rename(&tmp, &target) };
     if let Err(e) = retry_rename(retry, swap) {
         let _ = fs.remove(&tmp);
         return Err(rename_error(e, path));
