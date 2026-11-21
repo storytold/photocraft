@@ -24,7 +24,12 @@ const HEIF_CRATES: &[&str] = &["photocraft-io"];
 
 /// Paths whose changes make `test-corpus --changed` run (the file-format and rendering crates,
 /// and the engine's `.atn` import and export).
-const CRITICAL: &[&str] = &["crates/io/", "crates/compose/", "crates/gpu/", "crates/text/", "crates/format/", "crates/raw/", "crates/engine/src/atn_cmds"];
+const CRITICAL: &[&str] = &["crates/io/", "crates/compose/", "crates/gpu/", "crates/text/", "crates/format/", "crates/raw/", "crates/engine/src/cmd/atn_cmds/"];
+
+fn is_critical(path: &str) -> bool {
+    path == "crates/engine/src/cmd/atn_cmds.rs" || CRITICAL.iter().any(|prefix| path.starts_with(prefix))
+}
+
 /// `cargo xtask corpus [--all | --pngsuite | --download | --psd | --psd-tools | --heif | --exr | --pixls | --affinity | --atn | --photoshop [--local] | --gimp [--local]] [--update-manifest]`
 pub fn cmd(args: &[&str]) -> Result<(), String> {
     let update = args.contains(&"--update-manifest");
@@ -417,7 +422,7 @@ pub fn test_cmd(args: &[&str]) -> Result<(), String> {
     let mut raw_changed = false;
     if ours.contains(&"--changed") {
         let changed = changed_files()?;
-        let hits: Vec<&String> = changed.iter().filter(|f| CRITICAL.iter().any(|c| f.starts_with(c))).collect();
+        let hits: Vec<&String> = changed.iter().filter(|f| is_critical(f)).collect();
         if hits.is_empty() {
             println!("test-corpus --changed: nothing under {} changed since origin/main; skipping", CRITICAL.join(", "));
             return Ok(());

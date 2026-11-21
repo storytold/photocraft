@@ -20,17 +20,27 @@ pub fn builtin_groups() -> Vec<Group<String>> {
     vec![Group::new("Geometric", ids(&["Checkerboard", "Diagonal Lines", "Dots", "Grid"])), Group::new("Textures", ids(&["Bricks", "Weave", "Paper Noise"]))]
 }
 
-/// Bring the groups in line with the library (see the module docs).
+/// Bring the groups in line with the library (see the module docs). Groups already in line are left unwritten: a
+/// write moves the presets' revision, which the menus and the preset views rebuild on, and the Patterns panel syncs
+/// in every pass it shows.
 pub fn sync(s: &mut Session) {
-    let lib: Vec<String> = s.patterns.items.iter().map(|p| p.id.clone()).collect();
+    let lib = &s.patterns.items;
+    let in_lib = |id: &String| lib.iter().any(|p| &p.id == id);
+    let groups = &s.presets.pattern_groups;
+    let stale = groups.iter().any(|g| !g.items.iter().all(in_lib));
+    let loose: Vec<String> = lib.iter().map(|p| &p.id).filter(|id| !groups.iter().any(|g| g.items.contains(id))).cloned().collect();
+    if !stale && loose.is_empty() {
+        return;
+    }
     let groups = &mut s.presets.pattern_groups;
     for g in groups.iter_mut() {
-        g.items.retain(|id| lib.contains(id));
+        g.items.retain(in_lib);
     }
-    let loose: Vec<String> = lib.iter().filter(|id| !groups.iter().any(|g| g.items.contains(id))).cloned().collect();
     if !loose.is_empty() {
         let gi = group_index(groups, Some(UNGROUPED));
-        groups[gi].items.extend(loose);
+        if let Some(group) = groups.get_mut(gi) {
+            group.items.extend(loose);
+        }
     }
 }
 
@@ -74,7 +84,6 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "pattern.presets.select";
     let pat = pattern_key(s, p, CMD)?;
     s.presets.pattern = Some(pat.id.clone());
-    s.presets.rev += 1;
     let mut out = json!({"pattern": pat.id, "name": pat.display_name()});
     if p.get("applyToLayer").and_then(Value::as_bool).unwrap_or(true)
         && let Some(id) = active_pattern_fill(s)

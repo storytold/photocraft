@@ -33,7 +33,7 @@ pub(crate) struct TipKey {
 impl TipKey {
     fn of(b: &BrushSettings) -> Self {
         Self {
-            tip: b.tip.clone(),
+            tip: (*b.tip).clone(),
             angle: b.angle,
             roundness: b.roundness,
             hardness: b.hardness,
@@ -46,7 +46,7 @@ impl TipKey {
 
 /// A round tip with no angle or flattening: the circle says it all.
 fn is_plain(b: &BrushSettings) -> bool {
-    matches!(b.tip, TipShape::Round) && b.angle == 0.0 && b.roundness >= 1.0
+    matches!(*b.tip, TipShape::Round) && b.angle == 0.0 && b.roundness >= 1.0
 }
 
 /// The size and kind of the aliased cursor tip the `tool` has: the Pencil's, the Eraser's in Pencil mode, and the

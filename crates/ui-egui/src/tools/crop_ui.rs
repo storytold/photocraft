@@ -65,10 +65,14 @@ pub(crate) fn document(app: &PhotocraftApp) -> Option<CropDocument> {
     Some(CropDocument::new(CropDocKey::new(st.doc.id.0), size, f64::from(st.doc.resolution_dpi)).selection(bounds))
 }
 
-/// Maps what a pass of the tool reported to the app.
-pub(crate) fn finish(app: &mut PhotocraftApp, output: CropOutput) {
+/// Maps what a canvas pass reported and acknowledges the crop on the tool that emitted it.
+pub(crate) fn finish(app: &mut PhotocraftApp, tool: &mut CropTool, output: CropOutput) {
     for event in output.events {
-        handle_event(app, event);
+        if let CropEvent::Apply(commit) = event {
+            tool.applied(apply_commit(app, &commit));
+        } else {
+            handle_event(app, event);
+        }
     }
 }
 
@@ -122,7 +126,11 @@ pub(crate) fn toggle_straighten(app: &mut PhotocraftApp) {
 /// Runs one event of the tool. True for an `Apply` that cropped the document.
 pub(super) fn handle_event(app: &mut PhotocraftApp, event: impl Into<Option<CropEvent>>) -> bool {
     match event.into() {
-        Some(CropEvent::Apply(commit)) => apply_commit(app, &commit),
+        Some(CropEvent::Apply(commit)) => {
+            let accepted = apply_commit(app, &commit);
+            app.canvas_tools.crop.tool.applied(accepted);
+            accepted
+        }
         Some(CropEvent::Discard(key)) => {
             upright_view(app, key);
             false
@@ -137,7 +145,7 @@ pub(super) fn handle_event(app: &mut PhotocraftApp, event: impl Into<Option<Crop
     }
 }
 
-/// `image.crop` for `commit`; the tool is told whether the document took it.
+/// Runs `image.crop` for `commit` and returns whether the document accepted it.
 fn apply_commit(app: &mut PhotocraftApp, commit: &CropCommit) -> bool {
     let rect = commit.frame.rect;
     let px = |v: f64| v.round().max(1.0) as u64;
@@ -164,13 +172,11 @@ fn apply_commit(app: &mut PhotocraftApp, commit: &CropCommit) -> bool {
             if let Some(view) = app.session.active_index().and_then(|i| app.ui.views.get_mut(i)) {
                 view.place(craft::ui::canvas::ViewCommands::FitOnScreen);
             }
-            app.canvas_tools.crop.tool.applied(true);
             true
         }
         Err(error) => {
             app.ui.status = error;
             app.ui.status_error = true;
-            app.canvas_tools.crop.tool.applied(false);
             false
         }
     }
