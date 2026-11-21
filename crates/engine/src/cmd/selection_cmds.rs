@@ -18,6 +18,8 @@ mod color_range_performance;
 #[cfg(test)]
 mod color_range_window_tests;
 #[cfg(test)]
+mod wand_group_target_tests;
+#[cfg(test)]
 mod wand_seed_outside_tests;
 
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
@@ -121,7 +123,11 @@ fn shown_gray(s: &Session) -> Option<(Rect, Vec<[u8; 4]>)> {
     Some((area, sel::rgba8_image(surf, area)))
 }
 
-/// 8-bit RGBA of the active layer (or the composite with `all_layers`) over the canvas.
+/// 8-bit RGBA of the active layer (or the composite with `all_layers`) over the canvas. A layer
+/// with no surface of its own -- a group, an adjustment -- reads as the composite whatever
+/// `all_layers` says; the Magic Wand refuses its group case itself ([`WAND_GROUP_TARGET_ERROR`]),
+/// and only when `sampleAllLayers` is off and no gray plane is shown, because the Paint Bucket and
+/// the Background Eraser rely on this fallback (#11784).
 pub(crate) fn sample_rgba8(s: &Session, all_layers: bool) -> Result<(Rect, Vec<[u8; 4]>)> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let area = d.doc.bounds();
@@ -135,11 +141,37 @@ pub(crate) fn sample_rgba8(s: &Session, all_layers: bool) -> Result<(Rect, Vec<[
     }
 }
 
+/// The reference's refusal of a Magic Wand click whose target is a layer group with Sample All
+/// Layers off (#11784). The UI shows it in an error dialog with an OK button.
+pub const WAND_GROUP_TARGET_ERROR: &str = "Could not use the magic wand because the target is a group.";
+
+/// Is the targeted layer the group the reference case measured: a group with layers in it, not
+/// inside another group and with no group inside it? An empty group and nested groups were not
+/// measured and keep reading the composite, as before (#11784).
+fn group_target(s: &Session) -> bool {
+    s.active().is_some_and(|d| {
+        let top = d.active_layer.and_then(|id| d.doc.layers.iter().find(|l| l.id == id));
+        top.and_then(|l| l.children()).is_some_and(|c| !c.is_empty() && !c.iter().any(|l| l.is_group()))
+    })
+}
+
 fn magic_wand(s: &mut Session, p: &Value) -> Result<Value> {
     let (x, y) = (f(p, "x", 0.0).floor() as i32, f(p, "y", 0.0).floor() as i32);
     let (area, img) = match shown_gray(s) {
+        // A gray plane on show (a shown alpha, the Quick Mask or a layer mask) is the picture the
+        // canvas is showing and the picture the wand reads. That is unchanged for a group target,
+        // which the reference case did not measure.
         Some(plane) => plane,
-        None => sample_rgba8(s, b(p, "sampleAllLayers", false))?,
+        None => {
+            let all_layers = b(p, "sampleAllLayers", false);
+            // Check first, before anything is sampled: a refused click changes neither the
+            // selection nor the history. `sample_rgba8`'s composite fallback stays as it is for
+            // the Paint Bucket and the Background Eraser, which share it.
+            if !all_layers && group_target(s) {
+                return Err(EngineError::Other(WAND_GROUP_TARGET_ERROR.into()));
+            }
+            sample_rgba8(s, all_layers)?
+        }
     };
     let m = mode(p);
     // Subtract and Intersect grow the region from the seed through the selection only (#11779).
@@ -746,7 +778,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.magicWand",
             "Magic Wand",
             [],
-            r##"{"x":px,"y":px,"tolerance":0..255=32,"contiguous":bool=true,"antiAlias":bool=true,"sampleAllLayers":bool=false,"mode":"replace|add|subtract|intersect"="replace"} (samples the visible alpha, Quick Mask, or layer mask when that is the picture)"##,
+            r##"{"x":px,"y":px,"tolerance":0..255=32,"contiguous":bool=true,"antiAlias":bool=true,"sampleAllLayers":bool=false,"mode":"replace|add|subtract|intersect"="replace"} (samples the visible alpha, Quick Mask, or layer mask when that is the picture; otherwise a group target with sampleAllLayers false is refused, and the selection and history stay as they are)"##,
             has_doc,
             magic_wand
         ),
