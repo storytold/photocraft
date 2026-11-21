@@ -190,7 +190,7 @@ fn capitalize(w: &str) -> String {
 
 /// Byte ranges of the words in `text`: letters/digits with inner apostrophes (hyphens split).
 pub fn words(text: &str) -> Vec<(usize, usize)> {
-    let is_apos = |c: char| matches!(c, '\'' | '\u{2019}' | '\u{02BC}');
+    let is_apos = |c: char| matches!(c, '\'' | '\u{2019}' | '\u{2018}' | '\u{02BC}');
     let mut out = Vec::new();
     let mut start: Option<usize> = None;
     let chars: Vec<(usize, char)> = text.char_indices().collect();
@@ -308,6 +308,29 @@ mod tests {
         assert_eq!(d.misspellings(text, &user).len(), 2);
         let mm = &d.misspellings(text, &none())[0];
         assert_eq!(&text[mm.start..mm.end], "wrld");
+    }
+
+    #[test]
+    fn normalized_apostrophes_stay_inside_words() {
+        let d = Dictionary::english();
+        for word in ["doesn't", "doesn\u{2019}t", "doesn\u{2018}t", "doesn\u{02BC}t"] {
+            let text = format!("({word})");
+            assert!(d.check(word, &none()), "{word}");
+            assert_eq!(words(&text), vec![(1, 1 + word.len())], "{word}");
+        }
+    }
+
+    #[test]
+    fn normalized_contractions_are_not_reported_as_misspellings() {
+        let d = Dictionary::english();
+        for word in ["doesn't", "doesn\u{2019}t", "doesn\u{2018}t", "doesn\u{02BC}t"] {
+            let text = format!("({word})");
+            let found = d.misspellings(&text, &none());
+            assert!(found.is_empty(), "{word}: {found:?}");
+        }
+        let typo = "doesn\u{2018}tt";
+        let found = d.misspellings(typo, &none());
+        assert_eq!(found, vec![Misspelling { start: 0, end: typo.len(), word: typo.into() }]);
     }
 
     /// `cargo test --release -p photocraft-text -- --ignored --nocapture spell_timing`
