@@ -218,7 +218,14 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, step: &Step, gesture: &mu
                 }
                 events.push(if f == frames { EditEvent::commit(gesture, Mixed::Same(start.clone()), pulled) } else { EditEvent::update(gesture, pulled) });
                 grid_edit(app, &events, false);
-                frame(app);
+                // As the canvas does: busy while the pointer is down on the grid, so the drag is one undo step.
+                let now_s = app.nudge_bundle.now;
+                app.ui.transform.as_mut().expect("open").session.settle(now_s, f < frames);
+                super::super::begin::reconcile_held(app);
+                if std::env::var("SEQ_TRACE").is_ok() {
+                    let pv = app.transform_preview.as_ref().expect("a preview");
+                    eprintln!("    frame {f}: base {:?} placed {:?}", pv.drag_placed.map(|(m, _)| [m[6], m[7], m[8]]), pv.placed_warp.map(|(m, _)| [m[6], m[7], m[8]]));
+                }
                 let now = warp_mesh(app).points;
                 let c = now.iter().fold(Point::ZERO, |a, p| Point::new(a.x + p.x / now.len() as f64, a.y + p.y / now.len() as f64));
                 let crossed = |a: f64, b: f64| a * b < 0.0 && a.abs() > 2000.0 && b.abs() > 2000.0;
@@ -413,8 +420,15 @@ fn shrink(mut steps: Vec<Step>, end: u8, err: &str) -> (Vec<Step>, String) {
 #[test]
 #[ignore = "trace one walk: SEQ_TRACE=1"]
 fn seq_trace() {
-    let steps = vec![Step::EnterWarp, Step::Pull(12, 0.5328682829823546, -2.727784454104415), Step::HoldWarp];
-    eprintln!("{:?}", run_caught(&steps, 4));
+    let steps = vec![
+        Step::EnterWarp,
+        Step::LongPull(0.6616269562899482, 0.4973305551415017, 4.802292692204863, 269.5955745602801),
+        Step::HoldWarp,
+        Step::Corner(0, -1.182275882846704, 4.621861299596933),
+        Step::EnterWarp,
+        Step::LongPull(0.3442365635296523, 0.6643854913256297, 1.4322961589882712, 170.276387293623),
+    ];
+    eprintln!("{:?}", run_caught(&steps, 4).map_err(|e| e.lines().next().unwrap_or("").to_string()));
 }
 
 #[test]
