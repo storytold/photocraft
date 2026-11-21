@@ -2,7 +2,8 @@
 //! swatches with the shape tools' popups, stroke width and type, W / H, and Align Edges, in the
 //! reference's order: Fill: swatch, Stroke: swatch, width, type, W:, H:, Align Edges (on).
 //! W and H read 0 px with no shape and the live size of the shape being drawn (200 x 200 for a
-//! 200 x 200 triangle); a one-anchor or a flat (line) draft keeps 0 px on its flat axis. The
+//! 200 x 200 triangle); a one-anchor or a flat (line) draft keeps 0 px on its flat axis, and a
+//! Freeform Pen trace still under the pointer is measured from that tool's own outline points. The
 //! not-measured cases (the stroke default, typing into W / H) keep today's behaviour.
 
 use egui::Modifiers;
@@ -114,6 +115,13 @@ fn field<'h>(h: &'h Harness<'static, Box<PhotocraftApp>>, label: &'h str) -> egu
 /// The text the field labelled `label` shows (its accessible value: the bare number).
 fn field_text(h: &Harness<'static, Box<PhotocraftApp>>, label: &str) -> String {
     field(h, label).value().unwrap_or_else(|| panic!("the {label} field shows a value"))
+}
+
+/// The number the view field labelled `label` shows, as a `f64` for the cases whose size comes
+/// back through the document's screen mapping and is not a round integer.
+fn field_number(h: &Harness<'static, Box<PhotocraftApp>>, label: &str) -> f64 {
+    let shown = field_text(h, label);
+    shown.parse().unwrap_or_else(|e| panic!("the {label} field shows a number, not {shown:?} ({e})"))
 }
 
 /// Clicks a closed square with the Pen: four corners and the click back on the first anchor.
@@ -256,6 +264,30 @@ fn degenerate_drafts_show_zero_on_the_flat_axis() {
     h.run_steps(2);
     assert_eq!(field_text(&h, "W:"), "200", "the line draft: 200 px wide");
     assert_eq!(field_text(&h, "H:"), "0", "the line draft: 0 px tall, not a negative height");
+}
+
+/// A Freeform Pen trace that is still under the pointer (#12907 review): while a trace is being
+/// dragged its points live in the Freeform tool's own outline draft, and the shared pen draft holds
+/// nothing until the pass ends, so the row measures the trace being drawn. The number itself is not
+/// a measured case (the issue's measured live size is the click-drawn 200 x 200 triangle above, and
+/// a freehand run has no reference number), so this pins the one thing the row must do here: follow
+/// the trace instead of reading 0 px while it is still under the pointer.
+#[test]
+fn w_and_h_follow_a_freeform_trace_still_under_the_pointer() {
+    let mut h = bar(Tool::FreeformPen);
+    pick_mode(&mut h, "Shape");
+    assert_eq!(field_number(&h, "W:"), 0.0, "no trace: 0 px");
+    assert_eq!(field_number(&h, "H:"), 0.0, "no trace: 0 px");
+    let app = h.state_mut();
+    testing::press(app, [20.0, 20.0], Modifiers::NONE);
+    for at in [[120.0, 20.0], [220.0, 20.0], [220.0, 120.0], [220.0, 220.0]] {
+        testing::move_to(app, at, Modifiers::NONE);
+    }
+    assert!(app.canvas_tools.vector.freeform.draft.is_open(), "the trace is still being dragged");
+    assert!(app.ui.pen.is_none(), "and the shared pen draft holds nothing yet");
+    h.run_steps(2);
+    assert!((field_number(&h, "W:") - 200.0).abs() < 1.0, "the trace in progress is 200 px wide, not 0");
+    assert!((field_number(&h, "H:") - 200.0).abs() < 1.0, "the trace in progress is 200 px tall, not 0");
 }
 
 /// Not measured: what typing into W / H does. It keeps today's behaviour — the field shows the

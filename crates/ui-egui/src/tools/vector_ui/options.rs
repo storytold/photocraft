@@ -1,4 +1,6 @@
 use craft::behavior::EditEvent;
+use craft::behavior::geometry::OutlineDraft;
+use craft::behavior::kurbo::Rect;
 use craft::color_ui::ui::Paint;
 use craft::draw::ui::pen::PathOptionsPopover;
 use craft::draw::ui::shape::{self as fw, Arrowheads, ArrowheadsPopover, ShapePanel, StrokeCells, VectorMode, VectorModeSelect};
@@ -15,7 +17,7 @@ use craft::ui::text::NumberField;
 use super::path_menus::{path_alignment_menu, path_arrangement_menu, path_operations_menu};
 use super::path_ops::{active_path_name, indexed_document};
 use super::shapes::is_shape_tool;
-use super::{LayerContent, PenPath, PhotocraftApp, Tool, Value, copy_arrow_to_tool_defaults, json};
+use super::{LayerContent, PhotocraftApp, Tool, Value, copy_arrow_to_tool_defaults, json};
 use crate::history_keys;
 
 // ---------------------------------------------------------------------------------------------
@@ -198,7 +200,7 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
         // typing into them does was not measured, so it keeps today's behaviour — there was no
         // field and no effect: these fields apply no edit (the Shape tools have no size fields
         // yet either, #2496).
-        let (w, h) = pen_shape_size(app.ui.pen.as_ref());
+        let (w, h) = pen_shape_size(app, tool);
         // The Field shows the "W:" / "H:" caption, as the reference's row prints them; in a bar a
         // Field already takes its content width. The fields are views: their output applies nothing,
         // so their label offers no scrub handle either (scrub(false), unlike the editing fields).
@@ -259,14 +261,33 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
     }
 }
 
-/// The W / H the Pen Shape-mode bar shows (#12907): the size of the path being drawn, 0 px when
-/// there is no draft. Reuses the crate's one finite-guarded path bounds helper
-/// (`photocraft_text::area::path_bounds`, anchors and handles): the measured shapes are straight
-/// (200 × 200 px), and what a handle beyond the anchors or a typed size does was not measured and
-/// changes nothing today.
-fn pen_shape_size(pen: Option<&PenPath>) -> (f64, f64) {
-    let Some(pen) = pen.filter(|p| !p.draft.knots.is_empty()) else { return (0.0, 0.0) };
+/// The W / H the Pen Shape-mode bar shows (#12907): the size of the shape being drawn, 0 px when
+/// there is none. The Pen and the Curvature Pen draw into `app.ui.pen`, measured with the crate's
+/// one finite-guarded path bounds helper (`photocraft_text::area::path_bounds`, anchors and
+/// handles): the measured shapes are straight (200 × 200 px), and what a handle beyond the anchors
+/// or a typed size does was not measured and changes nothing today. A Freeform Pen trace is not a
+/// path while the pointer is down: the tool keeps its live points in its own outline draft and fits
+/// them into a path only when the pass ends, so that tool's row measures the draft's points and
+/// falls back to `app.ui.pen` (the fitted path of a trace whose commit failed) once no trace is in
+/// progress.
+fn pen_shape_size(app: &PhotocraftApp, tool: Tool) -> (f64, f64) {
+    if tool == Tool::FreeformPen
+        && let Some(size) = freeform_trace_size(&app.canvas_tools.vector.freeform.draft)
+    {
+        return size;
+    }
+    let Some(pen) = app.ui.pen.as_ref().filter(|p| !p.draft.knots.is_empty()) else { return (0.0, 0.0) };
     photocraft_text::area::path_bounds(&super::pen_path(pen)).map_or((0.0, 0.0), |(x0, y0, x1, y1)| (x1 - x0, y1 - y0))
+}
+
+/// The box the Freeform Pen's live trace covers, from the points the tool paints between presses
+/// (document units); `None` with no trace in progress. One point is the flat 0 x 0 the pen drafts
+/// show. The draft never holds a non-finite point — a non-finite sample is dropped where it comes
+/// in — so this needs no guard of its own.
+fn freeform_trace_size(draft: &OutlineDraft) -> Option<(f64, f64)> {
+    let first = *draft.points().first()?;
+    let box_ = draft.points().iter().fold(Rect::from_points(first, first), |box_, &at| box_.union_pt(at));
+    Some((box_.width(), box_.height()))
 }
 
 /// Path mode's "Make:" row, as in Photoshop's options bar: Selection…, Mask and Shape, from the
