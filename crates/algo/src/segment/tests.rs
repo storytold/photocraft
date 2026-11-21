@@ -546,12 +546,13 @@ fn quick_select_works_at_full_or_exactly_half_resolution() {
     assert_eq!(quick::working_step(520, 300), 1);
     assert_eq!(quick::working_step(900, 300), 2);
     assert_eq!(quick::working_step(5000, 3500), 2);
-    // Half resolution: the mask is scaled up bilinearly, so a selected square's edge steps
-    // 64, 191, 255 (Photoshop's own values on a 640 px document).
+    // Half resolution: the mask is scaled up bilinearly inside the selected working pixels, so a
+    // selected square's edge steps 191, 255 from its first pixel (x 220) and nothing outside it is
+    // selected (the reference application's values, #12920).
     let img = qs_square(640, 200, QS_RED, QS_BLUE);
     let r = qs(&img, &[(320.0, 320.0)], 30.0);
     let row: Vec<u8> = (216..223).map(|x| (r.at(x, 320) * 255.0).round() as u8).collect();
-    assert_eq!(row, [0, 0, 0, 64, 191, 255, 255]);
+    assert_eq!(row, [0, 0, 0, 0, 191, 255, 255]);
 }
 
 #[test]
