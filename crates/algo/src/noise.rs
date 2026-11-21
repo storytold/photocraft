@@ -269,11 +269,21 @@ mod tests {
         let out = Rect::new(-14, -3, 30, 34);
         for kind in 0..3 {
             let img = noisy(src_rect, kind);
+            let centers = img.crop(out);
             for r in [2, 3, 7, 16] {
+                let direct = median_direct(&img, out, r, None);
+                assert_eq!(centers.len(), direct.len(), "kind {kind} r {r}");
                 for t in [None, Some(0.0), Some(10.0 / 255.0), Some(1.0)] {
-                    let bits = |v: Vec<f32>| v.into_iter().map(f32::to_bits).collect::<Vec<_>>();
-                    let fast = bits(median_ranked(&img, out, r, t));
-                    assert_eq!(fast, bits(median_direct(&img, out, r, t)), "kind {kind} r {r} threshold {t:?}");
+                    let fast = median_ranked(&img, out, r, t).into_iter().map(f32::to_bits).collect::<Vec<_>>();
+                    let expected = centers
+                        .iter()
+                        .zip(&direct)
+                        .map(|(&center, &m)| match t {
+                            Some(t) if (center - m).abs() <= t => center.to_bits(),
+                            _ => m.to_bits(),
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(fast, expected, "kind {kind} r {r} threshold {t:?}");
                 }
             }
         }
