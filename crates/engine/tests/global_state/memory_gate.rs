@@ -10,12 +10,15 @@ use photocraft_engine::Session;
 use photocraft_raster::headroom;
 use serde_json::json;
 
-/// Holds the lock and the simulated room; resets the simulation when dropped.
+/// Holds the lock and the simulated room; resets the simulation when dropped. It also sets the
+/// transform budget to the default Memory Usage, since other tests in this binary lower it through
+/// the preferences and do not restore it.
 struct Room(#[allow(dead_code)] MutexGuard<'static, ()>);
 
 impl Room {
     fn new(bytes: Option<u64>) -> Room {
         let guard = Room(crate::lock(&crate::PROCESS));
+        photocraft_engine::transform_cmds::set_budget(u64::from(photocraft_engine::prefs::DEFAULT_MEMORY_USAGE_MB) << 20);
         headroom::simulate_available(bytes);
         guard
     }
@@ -110,6 +113,41 @@ fn smart_object_render_that_does_not_fit_is_refused_by_name() {
     assert!(err.contains("Not enough memory to render the smart object \u{201c}src.png\u{201d}"), "{err}");
     room.set(None);
     assert!(photocraft_engine::smart_cmds::source_image("src.png", &bytes, fmt).is_ok());
+}
+
+/// A VectorCraft artboard placed at a large scale is drawn at that scale. The place check counts
+/// the artboard at the size it opens at, so the scaled drawing asks for its own room first.
+#[test]
+fn a_vectorcraft_artboard_drawn_at_a_large_scale_is_refused_when_it_does_not_fit() {
+    let room = Room::new(None);
+    let content = "0 0 1 rg 0 0 100 200 re f";
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length {} >>\nstream\n{content}\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n",
+        content.len()
+    );
+    let mut bytes = format!(
+        r#"{{"format":"vectorcraft","version":4,"generator":"VectorCraft 0.1.0","pdf":{{"mime":"application/pdf","blob":[0,{}]}},"document":{{"artboards":[],"layers":[]}}}}"#,
+        pdf.len()
+    )
+    .into_bytes();
+    bytes.extend_from_slice(b"\n\0VCBLOBS\0");
+    bytes.extend_from_slice(pdf.as_bytes());
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("Logo.vectorcraft");
+    std::fs::write(&path, &bytes).unwrap();
+    let mut s = new_doc();
+    let before = state(&s);
+    // 200 x 200 points fit at 100%; drawn at 800% the artboard is 1600 x 1600 px.
+    room.set(Some(SMALL));
+    s.execute("file.placeEmbedded", json!({"path": path})).unwrap();
+    assert_eq!(state(&s).2, before.2 + 1);
+    assert!(s.undo());
+    let err = s.execute("file.placeEmbedded", json!({"path": path, "scale": 800})).unwrap_err().to_string();
+    assert!(err.contains("Not enough memory to draw the VectorCraft smart object \u{201c}Logo.vectorcraft\u{201d}"), "{err}");
+    assert_eq!(state(&s).2, before.2);
+    room.set(None);
+    s.execute("file.placeEmbedded", json!({"path": path, "scale": 800})).unwrap();
+    assert_eq!(state(&s).2, before.2 + 1);
 }
 
 #[test]

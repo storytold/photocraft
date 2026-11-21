@@ -317,6 +317,68 @@ pub fn svg_source_image(bytes: &[u8], fmt: PixelFormat, scale: f64) -> Result<So
     Ok(img)
 }
 
+#[cfg(test)]
+thread_local! { pub(crate) static VECTORCRAFT_DRAWS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+/// A VectorCraft source's first artboard drawn from its PDF at `scale` times the size it opens at
+/// (cached per scale and destination profile), its sRGB colors converted into `doc`'s profile as
+/// an SVG source's are, so the smart object stays sharp however it is placed. Before a drawing
+/// that is not cached, `before_draw` gets the bounds the artboard will be drawn at and can refuse
+/// it.
+pub(super) fn vectorcraft_source_image_in(
+    file_name: &str,
+    bytes: &[u8],
+    doc: &Document,
+    scale: f64,
+    before_draw: impl FnOnce(Rect) -> Result<()>,
+) -> Result<SourceImage> {
+    let fmt = doc.pixel_format();
+    let profile = crate::color_cmds::document_profile(doc);
+    let srgb = doc.mode == ColorMode::Rgb && profile.to_bytes().as_ref() == craft_cms::Builtin::Srgb.profile().to_bytes().as_ref();
+    let mut h = blake3::Hasher::new();
+    h.update(b"vectorcraft\0");
+    h.update(bytes);
+    h.update(&scale.to_bits().to_le_bytes());
+    if !srgb {
+        h.update(&profile.to_bytes());
+    }
+    let key = (*h.finalize().as_bytes(), fmt, None);
+    if let Some(img) = cache_get(&key) {
+        return Ok(img);
+    }
+    // `import_scaled` draws the size it opens at times `scale`, rounded.
+    let (open_w, open_h) = photocraft_io::vectorcraft::drawn_size(bytes).map_err(|e| other(format!("can't draw the VectorCraft smart object: {e}")))?;
+    let side = |opened: u32| (f64::from(opened) * scale).round().clamp(1.0, f64::from(i32::MAX)) as i32;
+    let drawn_bounds = Rect::new(0, 0, side(open_w), side(open_h));
+    before_draw(drawn_bounds)?;
+    // The bytes a pixel alive together at the peak of the drawing. While the artboard opens: its
+    // 8-bit raster and the opened 8-bit layer. After, beside the opened layer: the flattened result
+    // (with the 8-bit composite a 32-bit result is converted from), or, when colors are converted,
+    // the flattened 8-bit copy, its 8-bit conversion and the result.
+    let result_bpp = PixelFormat::new(fmt.mode, fmt.sample, true).bytes_per_pixel() as u64;
+    let after = if srgb {
+        4 + result_bpp + if fmt.sample == SampleType::F32 { 4 } else { 0 }
+    } else {
+        4 + 4 + PixelFormat::new(fmt.mode, SampleType::U8, true).bytes_per_pixel() as u64 + result_bpp
+    };
+    crate::transform_cmds::check_draw_budget(drawn_bounds, after.max(8), "VectorCraft smart object")?;
+    let drawn_px = u64::from(drawn_bounds.width()).saturating_mul(u64::from(drawn_bounds.height()));
+    crate::memory_gate::ensure(&format!("draw the VectorCraft smart object \u{201c}{file_name}\u{201d}"), drawn_px.saturating_mul(after.max(8)))?;
+    #[cfg(test)]
+    VECTORCRAFT_DRAWS.with(|n| n.set(n.get() + 1));
+    let drawn = photocraft_io::vectorcraft::import_scaled(file_name, bytes, scale as f32, &photocraft_raster::Interrupt::NONE)
+        .map_err(|e| other(format!("can't draw the VectorCraft smart object: {e}")))?
+        .document;
+    let img = if srgb {
+        SourceImage { surface: Arc::new(flattened_source(&drawn, fmt)?), bounds: drawn.bounds() }
+    } else {
+        let source = SourceImage { surface: Arc::new(flattened_source(&drawn, drawn.pixel_format())?), bounds: drawn.bounds() };
+        convert_svg_source(source, doc)?
+    };
+    cache_put(key, img.clone());
+    Ok(img)
+}
+
 /// Render SVG's sRGB colours into the destination profile before placement. The profile is
 /// part of the source cache key, so assigning a different profile cannot reuse old colours.
 pub(super) fn svg_source_image_in(bytes: &[u8], doc: &Document, scale: f64) -> Result<SourceImage> {

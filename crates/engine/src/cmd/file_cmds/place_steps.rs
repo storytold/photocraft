@@ -12,7 +12,7 @@ use photocraft_io::PngImport;
 use photocraft_raster::{Surface, TranslateSteps};
 use web_time::Instant;
 
-use super::open::{PLACE_EMBEDDED, PlaceFile, PlaceInput, Prepared};
+use super::open::{PLACE_EMBEDDED, PlaceFile, PlaceInput, Prepared, is_vector_input};
 use super::paths::{file_name, read_file, stem};
 use super::{
     Affine, Arc, Document, EngineError, LayerContent, Resample, Result, SmartObject, SmartSource, Value, check_flattenable, f64_param, flattened_checked,
@@ -33,7 +33,12 @@ pub(crate) struct PlaceSteps {
     stage: Stage,
     /// Where the placed image lands, known once it is decoded.
     plan: Plan,
+    /// Whether the file is a VectorCraft file, known once it is read.
+    vectorcraft: bool,
+    /// What the import left out, such as artboards or artwork, reported with the place.
     warnings: Vec<String>,
+    /// The mode and profile a VectorCraft file's sRGB pixels are converted to once flattened.
+    convert: Option<(photocraft_color::ColorMode, Arc<craft_cms::Profile>)>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -64,7 +69,7 @@ impl PlaceSteps {
     /// `fine` cuts the work into pieces of a few milliseconds, as a session without worker
     /// threads needs; without it each stage is one unit of work.
     pub(crate) fn new(input: PlaceInput, fine: bool) -> Self {
-        Self { input, bytes: Arc::new(Vec::new()), fine, stage: Stage::Decode, plan: Plan::default(), warnings: Vec::new() }
+        Self { input, bytes: Arc::new(Vec::new()), fine, stage: Stage::Decode, plan: Plan::default(), vectorcraft: false, warnings: Vec::new(), convert: None }
     }
 
     /// An import error as the engine reports it: a cancel stays one and a refused memory budget
@@ -105,7 +110,7 @@ impl PlaceSteps {
             Stage::Flatten(mut flatten) => {
                 ctx.progress(0.6 + 0.1 * flatten.progress(), "Flattening");
                 match flatten.advance()? {
-                    Some(px) => self.flattened(px, ctx),
+                    Some(px) => self.flattened(px, ctx)?,
                     None => self.stage = Stage::Flatten(flatten),
                 }
             }
@@ -144,8 +149,9 @@ impl PlaceSteps {
         let (name, fmt) = (&self.input.name, self.input.fmt);
         crate::memory_gate::ensure(&format!("place \u{201c}{}\u{201d}", file_name(name)), crate::memory_gate::place_need(&self.bytes, fmt.bytes_per_pixel()))?;
         // A path isn't read when the input is made, so whether it is a vector source is decided now.
-        let vector = self.input.frame.is_some() || photocraft_io::is_svg_input(name, &self.bytes);
+        let vector = self.input.frame.is_some() || is_vector_input(name, &self.bytes);
         self.input.doc = self.input.doc.take().filter(|_| vector);
+        self.vectorcraft = photocraft_io::vectorcraft::is_vectorcraft(&self.bytes);
         Ok(())
     }
 
@@ -199,12 +205,27 @@ impl PlaceSteps {
             return Ok(());
         }
         ctx.progress(0.6, "Flattening");
-        self.stage = Stage::Flatten(Box::new(Flatten::new(src, banded && self.fine, self.input.fmt, self.input.command())?));
+        // Convert the imported sRGB pixels before resampling or changing color model. A raster
+        // placement has no smart-object render later to perform this conversion for it.
+        let target = self.input.target.as_deref().filter(|_| self.vectorcraft && !self.input.smart);
+        self.convert = target.map(|d| (d.mode, crate::color_cmds::document_profile(d))).filter(|(mode, profile)| {
+            let srgb = craft_cms::Builtin::Srgb.profile();
+            !(*mode == photocraft_color::ColorMode::Rgb && profile.to_bytes().as_ref() == srgb.to_bytes().as_ref())
+        });
+        let flatten_fmt = if self.convert.is_some() { src.pixel_format() } else { self.input.fmt };
+        self.stage = Stage::Flatten(Box::new(Flatten::new(src, banded && self.fine, flatten_fmt, self.input.command())?));
         Ok(())
     }
 
     /// The image is flattened: on to resizing it to fit, if it needs that.
-    fn flattened(&mut self, px: Surface, ctx: &JobCtx) {
+    fn flattened(&mut self, mut px: Surface, ctx: &JobCtx) -> Result<()> {
+        if let Some((_, profile)) = self.convert.take() {
+            use craft_cms::{Builtin, Intent, Transform};
+            let transform = Transform::new(Builtin::Srgb.profile(), &profile, Intent::RelativeColorimetric, true)
+                .map_err(|e| EngineError::Other(format!("can't convert the VectorCraft placement's colours: {e}")))?;
+            let fmt = self.input.fmt;
+            px = crate::color_cmds::convert_surface(&px, photocraft_color::ColorMode::Rgb, fmt, &transform).convert(fmt);
+        }
         let scale = self.plan.scale;
         if (scale - 1.0).abs() <= 1e-9 {
             self.fitted(px);
@@ -214,6 +235,7 @@ impl PlaceSteps {
             ctx.progress(0.7, "Resizing");
             self.fitted(resize_surface(&px, scale, scale, Resample::Bicubic));
         }
+        Ok(())
     }
 
     /// The pixels are fitted: on to moving them to where they land. A cooperative session does
@@ -253,8 +275,8 @@ impl PlaceSteps {
                 None => SmartSource::Embedded { file_name: file_name(&input.name), bytes: Arc::clone(&self.bytes) },
             };
             let mut so = SmartObject::new(source, placement, px);
-            // A vector source (SVG) or a frame's image renders at its placement scale instead of
-            // as a resampled raster.
+            // A vector source (SVG, VectorCraft) or a frame's image renders at its placement scale
+            // instead of as a resampled raster.
             if let Some(doc) = &input.doc {
                 ctx.progress(0.9, "Rendering");
                 ctx.check()?;

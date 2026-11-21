@@ -1205,6 +1205,29 @@ fn asynchronous_place_completion_displays_result_warnings() {
     let warning = "SVG: 1 embedded image was omitted";
     let place = super::PlaceJob { job: JobId(1), name: "omitted.svg".into(), doc };
     // A frame placement bypasses transform startup but must still display its warnings.
-    super::finish_place(&mut app, &egui::Context::default(), place, photocraft_engine::jobs::JobOutcome::Done(json!({"frame":1,"warnings":[warning]})));
+    super::finish_place(&mut app, &egui::Context::default(), place, photocraft_engine::jobs::JobOutcome::Done(json!({"frame":1,"warnings":[warning]})), false);
     assert!(app.ui.notices.iter().any(|notice| notice.lines.iter().any(|line| line == warning)));
+}
+
+/// A background place run as a command (the control channel, a script) has no tracked place job,
+/// and still reports its import warnings when it finishes.
+#[test]
+fn untracked_background_place_reports_its_warnings() {
+    let warning = "VectorCraft: 1 of 2 artboards was placed; the other was omitted";
+    for (command, label) in [("file.placeEmbedded", "Place Embedded"), ("file.placeLinked", "Place Linked")] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
+        let event = photocraft_engine::jobs::JobEvent {
+            id: JobId(7),
+            command: command.into(),
+            label: "Placing Pages.vectorcraft".into(),
+            document: Some(app.session.active().unwrap().doc.id),
+            outcome: photocraft_engine::jobs::JobOutcome::Done(json!({"layer": 2, "warnings": [warning]})),
+            error: None,
+        };
+        super::on_event(&mut app, &egui::Context::default(), event);
+        assert!(app.ui.notices.iter().any(|notice| notice.lines.iter().any(|line| line == warning)), "{command}");
+        assert!(app.ui.status.starts_with(label), "{}", app.ui.status);
+        assert!(app.ui.status_error, "{}", app.ui.status);
+    }
 }
