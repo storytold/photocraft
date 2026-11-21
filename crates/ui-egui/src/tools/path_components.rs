@@ -98,12 +98,29 @@ pub(crate) fn set_op(app: &mut PhotocraftApp, op: &str) -> Result<(), String> {
 }
 
 fn run_selected_command(app: &mut PhotocraftApp, id: &str, params: serde_json::Value) -> Result<(), String> {
+    run_keeping_selection(app, |app| app.run(id, params))
+}
+
+/// Runs `run`, a command on the selected components' path, and keeps the selection on the
+/// revision it made.
+fn run_keeping_selection(app: &mut PhotocraftApp, run: impl FnOnce(&mut PhotocraftApp) -> Result<serde_json::Value, String>) -> Result<(), String> {
     let selection = std::mem::take(&mut app.ui.direct_selection);
-    let result = app.run(id, params);
+    let result = run(app);
     if result.is_ok() || crate::direct_select::still_valid(app, &selection) {
         crate::direct_select::keep_after_command(app, selection);
     }
     result.map(|_| ())
+}
+
+/// Runs `run`, a move of the path `r` the selected components are on, and keeps them selected:
+/// the selection is rebound to the move's revision and re-signed, as the geometry changed (the
+/// signature must hash the moved path, not the press-time one), so later unrelated edits keep it.
+pub(crate) fn run_move(app: &mut PhotocraftApp, r: PathRef, run: impl FnOnce(&mut PhotocraftApp) -> Result<serde_json::Value, String>) -> Result<(), String> {
+    let moved = run_keeping_selection(app, run);
+    if moved.is_ok() {
+        app.ui.direct_selection.signature = crate::direct_select::path_of(app, &r).map(|p| selection_signature(&p));
+    }
+    moved
 }
 
 /// The component of `path` under `at`: on its outline within `tol`, else inside it. The frontmost
@@ -238,17 +255,21 @@ pub(crate) fn press(app: &mut PhotocraftApp, at: [f64; 2], shift: bool) {
 /// components, one History step. `None` with none or all of them selected: the whole path moves
 /// instead, which keeps a live rectangle or ellipse live.
 pub(crate) fn move_selected(app: &mut PhotocraftApp, d: [f64; 2]) -> Option<Result<(), String>> {
+    move_selected_with(app, d, |app, id, params| app.run(id, params))
+}
+
+/// [`move_selected`], with `run` running its command: an arrow-key nudge runs it as part of its
+/// run of nudges (`nudge_bundle`).
+pub(crate) fn move_selected_with(
+    app: &mut PhotocraftApp,
+    d: [f64; 2],
+    run: impl FnOnce(&mut PhotocraftApp, &str, serde_json::Value) -> Result<serde_json::Value, String>,
+) -> Option<Result<(), String>> {
     let (r, _) = moving_selected(app)?;
     let mut params = r.params(app);
     params["anchors"] = json!(app.ui.direct_selection.anchors);
     params["move"] = json!(d);
-    let moved = run_selected_command(app, "path.moveAnchors", params);
-    if moved.is_ok() {
-        // The geometry changed: re-sign the selection, so later unrelated edits keep it (the
-        // signature must hash the moved path, not the press-time one).
-        app.ui.direct_selection.signature = crate::direct_select::path_of(app, &r).map(|p| selection_signature(&p));
-    }
-    Some(moved)
+    Some(run_move(app, r, |app| run(app, "path.moveAnchors", params)))
 }
 
 /// The path [`move_selected`] moves components of, with some but not all of them selected.
@@ -308,3 +329,7 @@ mod tests;
 #[cfg(test)]
 #[path = "path_selection_enter_escape_tests.rs"]
 mod path_selection_enter_escape_tests;
+
+#[cfg(test)]
+#[path = "path_selection_nudge_tests.rs"]
+mod path_selection_nudge_tests;

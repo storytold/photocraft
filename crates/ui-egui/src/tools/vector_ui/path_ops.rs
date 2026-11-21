@@ -524,9 +524,16 @@ impl craft::ui::canvas::CanvasTool for PathSelectionPass<'_> {
     /// #13287: with components of the saved path targeted in the Paths panel selected, a bare Enter deselects the
     /// components and also untargets the path (its row and outline go), with no History step. With no component of
     /// that path selected, or a modifier held, Enter passes on. Esc is the window's idle Esc (`shortcuts::escape_keys`),
-    /// after its pixel deselect.
+    /// after its pixel deselect. The arrow keys nudge the selected components ([`path_selection_nudge`], #10920).
     fn key(&mut self, key: &craft::ui::canvas::ToolKey, cx: &mut craft::ui::canvas::ToolContext<'_>) -> bool {
-        if !matches!(key, craft::ui::canvas::ToolKey::Submit) || cx.mods != craft::keymap::Mods::NONE || self.tool.drag.is_some() {
+        if self.tool.drag.is_some() {
+            return false;
+        }
+        if let craft::ui::canvas::ToolKey::Nudge { direction, mods, .. } = key {
+            let (direction, mods, now) = ([f64::from(direction.x), f64::from(direction.y)], *mods, cx.time);
+            return self.scope.with_app(|app| path_selection_nudge(app, direction, mods, now));
+        }
+        if !matches!(key, craft::ui::canvas::ToolKey::Submit) || cx.mods != craft::keymap::Mods::NONE {
             return false;
         }
         self.scope.with_app(|app| {
@@ -616,19 +623,61 @@ pub fn path_selection_finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64
         }
         return;
     }
-    let Some((target, path)) = target_path(app) else { return };
+    let Some((_, id, params)) = whole_path_move(app, [dx, dy]) else { return };
+    let _ = app.run(id, params);
+}
+
+/// The path Path Selection edits ([`target_path`]) and the command that moves all of it by `d`.
+/// `None` without such a path, and for a Type Path.
+fn whole_path_move(app: &PhotocraftApp, [dx, dy]: [f64; 2]) -> Option<(PathRef, &'static str, Value)> {
+    let (target, path) = target_path(app)?;
     let moved_json = || photocraft_engine::vector_cmds::path_json(&path.transform(&Affine::translate(dx, dy)));
-    let _ = match target {
+    match target {
         // The targeted vector mask's pixels move through its own command; a shape layer's through the shape's.
         PathRef::Layer(id) if targeted_vector_mask(app).is_some_and(|(mask, _)| mask == id) => {
-            app.run("layer.vectorMask.edit", json!({"layer": id, "path": moved_json()}))
+            Some((target, "layer.vectorMask.edit", json!({"layer": id, "path": moved_json()})))
         }
-        PathRef::Layer(id) => app.run("shape.edit", json!({"layer": id, "move": [dx, dy]})),
+        PathRef::Layer(id) => Some((target, "shape.edit", json!({"layer": id, "move": [dx, dy]}))),
         PathRef::Work | PathRef::Saved(_) => {
             let mut params = target.params(app);
             params["path"] = moved_json();
-            app.run("path.set", params)
+            Some((target, "path.set", params))
         }
-        PathRef::TypePath(_) | PathRef::Pen => return,
+        PathRef::TypePath(_) | PathRef::Pen => None,
+    }
+}
+
+/// Path Selection's arrow keys (#10920), as in Photoshop: with components selected on the path it
+/// edits, an arrow moves what a drag would, 1 px (⇧ 10 px) along the arrow, through the same
+/// command: the selected components, or the whole path with all of them selected, which keeps a
+/// live rectangle or ellipse live. A run of nudges of the same components is one History state
+/// (`nudge_bundle`) and they stay selected. `direction` is the arrow's unit screen vector and `now`
+/// the egui time of the press. Not Path Selection's (false) with no component selected there,
+/// during a transform or text edit, or with ⌘, Ctrl or ⌥ held.
+fn path_selection_nudge(app: &mut PhotocraftApp, direction: [f64; 2], mods: craft::keymap::Mods, now: f64) -> bool {
+    if app.ui.tool != Tool::PathSelection || app.ui.transform.is_some() || app.ui.text_edit.is_some() || mods.cmd || mods.ctrl || mods.alt {
+        return false;
+    }
+    let step = if mods.shift { 10.0 } else { 1.0 };
+    let d = direction.map(|v| v.round() * step);
+    if d.iter().any(|v| !v.is_finite()) || d == [0.0, 0.0] {
+        return false;
+    }
+    let Some((r, _, heads)) = crate::path_components::selected(app) else { return false };
+    app.nudge_bundle.now = now;
+    // Nudges of other components, or of another path, are another run.
+    let what = format!("path components:{}:{heads:?}", r.key());
+    let nudge = |app: &mut PhotocraftApp, id: &str, params: Value| crate::nudge_bundle::run(app, &what, id, params);
+    let moved = match crate::path_components::move_selected_with(app, d, nudge) {
+        Some(moved) => moved,
+        None => match whole_path_move(app, d) {
+            Some((target, id, params)) if target == r => crate::path_components::run_move(app, r, |app| nudge(app, id, params)),
+            _ => return false,
+        },
     };
+    if let Err(e) = moved {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+    true
 }
