@@ -77,9 +77,9 @@ const GUIDE: egui::CursorIcon = egui::CursorIcon::ResizeHorizontal;
 
 /// (tool, guides locked, ⌘ latched instead of held) → whether ⌘ takes the guide: the guide cursor
 /// over it, and the guide after a drag from 200 to 240. ⌘ is the Move tool on the painting, selection,
-/// Frame and Artboard tools. The tools that keep ⌘ for themselves (Photoshop: the Pen's Direct
-/// Selection, the Hand, Zoom, Crop, type, shapes, slices) neither show the guide cursor nor drag
-/// the guide, and a locked guide never moves. A latched ⌘ takes the guide and shows its cursor as a
+/// Frame and Artboard tools, and on the Type tools once the text is committed (#9994). The tools
+/// that keep ⌘ for themselves (Photoshop: the Pen's Direct Selection, the Hand, Zoom, Crop, shapes,
+/// slices) neither show the guide cursor nor drag the guide, and a locked guide never moves. A latched ⌘ takes the guide and shows its cursor as a
 /// held one does (the press took the guide but the cursor stayed the brush's).
 #[test]
 fn command_over_a_guide_takes_it_where_command_is_the_move_tool() {
@@ -102,6 +102,7 @@ fn command_over_a_guide_takes_it_where_command_is_the_move_tool() {
         // is the Move tool on them, so the guide cursor promised a drag that never moved the guide.
         takes(Tool::Frame, false),
         takes(Tool::Artboard, false),
+        takes(Tool::Type, false),
         takes(Tool::Brush, true),
         takes(Tool::RectMarquee, true),
         (Tool::Brush, true, false, false),
@@ -110,7 +111,6 @@ fn command_over_a_guide_takes_it_where_command_is_the_move_tool() {
         (Tool::Hand, false, false, false),
         (Tool::Zoom, false, false, false),
         (Tool::Crop, false, false, false),
-        (Tool::Type, false, false, false),
         (Tool::Rectangle, false, false, false),
         (Tool::Slice, false, false, false),
     ];
