@@ -600,8 +600,7 @@ fn custom_shapes_join_the_shapes_panel() {
     s.execute("shape.create", json!({"kind": "star", "rect": [0, 0, 30, 30]})).unwrap();
     s.execute("edit.defineCustomShape", json!({"name": "My Star"})).unwrap();
     let v = s.execute("shape.presets.list", json!({})).unwrap();
-    let last = v["groups"].as_array().unwrap().last().unwrap().clone();
-    assert_eq!(last["name"], super::shapes::CUSTOM_GROUP);
+    assert_eq!(v["shapes"][0]["name"], "My Star", "a defined shape sits at the top level (#14296)");
     s.execute("shape.presets.place", json!({"preset": "My Star"})).unwrap();
     s.execute("shape.presets.edit", json!({"action": "rename", "preset": "My Star", "name": "Star 2"})).unwrap();
     s.execute("shape.presets.edit", json!({"action": "delete", "preset": "Star 2"})).unwrap();

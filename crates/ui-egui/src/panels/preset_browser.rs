@@ -464,6 +464,14 @@ fn shape_texture(ctx: &egui::Context, shape: &photocraft_engine::presets::shapes
     TextureCache::texture(ctx, shape_key(shape), || shape_image(shape))
 }
 
+/// A Shape picker row for a shape outside any group (a Define Custom Shape result).
+fn top_level_shape_row(ctx: &egui::Context, shape: &photocraft_engine::presets::shapes::ShapePreset) -> PresetRow<String> {
+    let texture = shape_texture(ctx, shape);
+    PresetRow::item(shape.name.clone(), shape.name.clone(), 0).tooltip(shape.name.clone()).preview(ThumbAspect::SQUARE, move |cx, rect| {
+        cx.picture(texture, rect.shrink(2.0), Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), 0.0);
+    })
+}
+
 /// Window › Shapes: a click picks the shape for the Custom Shape tool, a double click places it, and a drop on the
 /// canvas places it where it lands.
 pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -527,7 +535,9 @@ pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     const GROUP: &str = "group:";
     const ID: &str = "shapePicker";
     let ctx = ui.ctx().clone();
-    let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
+    // Define Custom Shape results sit at the top level, after the last group, as in Photoshop (#14296).
+    let (top, groups): (Vec<_>, Vec<_>) =
+        photocraft_engine::presets::shapes::all_groups(&app.session).into_iter().partition(|g| g.name == photocraft_engine::presets::shapes::CUSTOM_GROUP);
     let mut rows: Vec<PresetRow<String>> = Vec::new();
     for group in &groups {
         rows.push(PresetRow::group(format!("{GROUP}{}", group.name), group.name.clone(), 0));
@@ -538,6 +548,7 @@ pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }));
         }
     }
+    rows.extend(top.iter().flat_map(|g| &g.items).map(|shape| top_level_shape_row(&ctx, shape)));
     let mut value = Some(app.ui.presets_ui.shape().to_string());
     let before = value.clone();
     let mut state = picker_state(&app.ui.presets_ui, ID);

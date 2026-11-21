@@ -22,7 +22,13 @@ mod csh;
 #[path = "custom_shape_layer_name_tests.rs"]
 mod custom_shape_layer_name_tests;
 
-/// Group listing Edit › Define Custom Shape results (`EditState::custom_shapes`).
+#[cfg(test)]
+#[path = "define_custom_shape_picker_tests.rs"]
+mod define_custom_shape_picker_tests;
+
+/// Group holding Edit › Define Custom Shape results (`EditState::custom_shapes`) in [`all_groups`], so lookups by name
+/// find them. `shape.presets.list` and the Shape picker show them at the top level instead, after the last group, as
+/// in Photoshop (#14296); the Shapes panel keeps this group.
 pub const CUSTOM_GROUP: &str = "Custom Shapes";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -342,24 +348,17 @@ pub fn fit(path: &Path, rect: [f64; 4], keep: bool) -> Path {
 }
 
 fn list(s: &mut Session, _: &Value) -> Result<Value> {
-    let groups: Vec<Value> = all_groups(s)
-        .iter()
-        .map(|g| {
-            let items: Vec<Value> = g
-                .items
-                .iter()
-                .map(|i| {
-                    let mut item = json!({"name": i.name, "subpaths": i.path.subpaths.len()});
-                    if let Some(id) = &i.id {
-                        item["id"] = json!(id);
-                    }
-                    item
-                })
-                .collect();
-            json!({"name": g.name, "shapes": items})
-        })
-        .collect();
-    Ok(json!({"groups": groups}))
+    let item = |i: &ShapePreset| {
+        let mut item = json!({"name": i.name, "subpaths": i.path.subpaths.len()});
+        if let Some(id) = &i.id {
+            item["id"] = json!(id);
+        }
+        item
+    };
+    let groups: Vec<Value> = s.presets.shapes.iter().map(|g| json!({"name": g.name, "shapes": g.items.iter().map(item).collect::<Vec<_>>()})).collect();
+    // Define Custom Shape results sit at the top level, after the last group, in the order defined (#14296).
+    let custom: Vec<Value> = s.edit_state.custom_shapes.iter().map(|c| json!({"name": c.name, "subpaths": c.path.subpaths.len()})).collect();
+    Ok(json!({"groups": groups, "shapes": custom}))
 }
 
 fn place(s: &mut Session, p: &Value) -> Result<Value> {
@@ -486,7 +485,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Shape Presets",
             menu: &[],
             shortcut: None,
-            params: "{} → {groups:[{name,shapes:[{name,id?,subpaths}]}]}",
+            params: "{} → {groups:[{name,shapes:[{name,id?,subpaths}]}],shapes:[{name,subpaths}]}",
             enabled: always,
             run: list,
             journal: false,
