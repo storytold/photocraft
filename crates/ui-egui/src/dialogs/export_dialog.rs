@@ -227,13 +227,13 @@ fn dialog_formats() -> Vec<ExportFormat> {
     formats
 }
 
-/// The resample methods the engine's Image Size implements, Preserve Details included (#13737). The framework lists
-/// them in its own order.
+/// The resample methods the engine's Image Size implements, Preserve Details included (#13737), in the order of the
+/// engine's `RESAMPLE`.
 const RESAMPLE_CHOICES: [Resample; 7] = [
-    Resample::Automatic,
     Resample::Bicubic,
-    Resample::BicubicSmoother,
+    Resample::Automatic,
     Resample::BicubicSharper,
+    Resample::BicubicSmoother,
     Resample::Bilinear,
     Resample::NearestNeighbor,
     Resample::PreserveDetails,

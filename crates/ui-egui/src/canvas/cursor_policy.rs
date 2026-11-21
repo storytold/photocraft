@@ -82,21 +82,23 @@ pub(crate) fn alt_samples(tool: Tool, mods: craft::keymap::Mods) -> bool {
     mods.alt && !mods.ctrl && matches!(tool, Tool::Brush | Tool::Pencil | Tool::Gradient | Tool::PaintBucket | Tool::BackgroundEraser | Tool::ColorReplacement)
 }
 
-/// Whether the Eyedropper is `tool`'s ⌥ stand-in: the tools ⌥ makes sample ([`alt_samples`]), and
-/// the Triangle, whose ⌥ press samples where [`shape_alt_samples`] holds (#13364).
+/// Whether the Eyedropper can be `tool`'s ⌥ stand-in.
 pub(crate) fn alt_eyedropper(tool: Tool) -> bool {
-    alt_samples(tool, Mods::ALT) || tool == Tool::Triangle
+    alt_samples(tool, Mods::ALT) || shape_alt_sets_fill(tool)
 }
 
-/// Whether the Triangle tool's press at (x, y) with `mods` samples the colour there as the
-/// foreground and the tool's Fill instead of drawing (#13364): ⌥ (⇧⌥ too) held at the press, in
-/// Shape mode, with no shape layer active (with one, ⌥ subtracts from it). Path or Pixels mode and
-/// a press with nothing to sample (off the image, over transparency) were not measured and keep
-/// drawing from the centre; Control+⌥ stays the brush-resize drag, as in [`alt_samples`].
+/// Shape tools whose Alt Eyedropper also updates the tool's Fill.
+pub(super) fn shape_alt_sets_fill(tool: Tool) -> bool {
+    matches!(tool, Tool::Triangle | Tool::CustomShape)
+}
+
+/// Whether an Alt or Shift+Alt press samples the Triangle or Custom Shape foreground and Fill
+/// (#13364, #15856). Sampling requires Shape mode, no active shape layer, and a sampleable pixel.
+/// Control+Alt is excluded here, as in [`alt_samples`].
 pub(crate) fn shape_alt_samples(app: &mut PhotocraftApp, mods: Mods, x: f64, y: f64) -> bool {
     mods.alt
         && !mods.ctrl
-        && app.ui.tool == Tool::Triangle
+        && shape_alt_sets_fill(app.ui.tool)
         && app.ui.tool_options.shape_mode == craft::draw::ui::VectorMode::Shape
         && crate::vector_ui::active_shape_path(app).is_none()
         && super::sampling::eyedropper_color(app, [x, y]).is_some()
@@ -155,3 +157,7 @@ mod paint_bucket_cursor_tests;
 #[cfg(test)]
 #[path = "triangle_alt_eyedropper_tests.rs"]
 mod triangle_alt_eyedropper_tests;
+
+#[cfg(test)]
+#[path = "custom_shape_alt_eyedropper_tests.rs"]
+mod custom_shape_alt_eyedropper_tests;

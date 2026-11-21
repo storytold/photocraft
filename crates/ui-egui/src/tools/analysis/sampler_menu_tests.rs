@@ -25,6 +25,63 @@ fn samplers(app: &PhotocraftApp) -> Vec<[f64; 2]> {
     app.session.active().unwrap().color_samplers.clone()
 }
 
+/// The mouse opens the same ordered menu the control channel sees, and only a hit can be deleted.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_sampler_menu_only_deletes_the_point_under_the_pointer() {
+    use crate::canvas::testing::{control, key};
+
+    let (mut app, _) = app();
+    app.run("view.colorSamplers.add", json!({"x": 180, "y": 90})).unwrap();
+    let before = samplers(&app);
+    let expected_rows = [
+        Some(SAMPLER_DELETE),
+        None,
+        Some("colorSampler.readout.actual"),
+        Some("colorSampler.readout.proof"),
+        None,
+        Some("colorSampler.readout.gray"),
+        Some("colorSampler.readout.rgb"),
+        Some("colorSampler.readout.web"),
+        Some("colorSampler.readout.hsb"),
+        Some("colorSampler.readout.hsl"),
+        Some("colorSampler.readout.cmyk"),
+        Some("colorSampler.readout.lab"),
+        None,
+        Some("colorSampler.readout.gray16"),
+        Some("colorSampler.readout.rgb16"),
+        Some("colorSampler.readout.cmyk16"),
+        Some("colorSampler.readout.lab16"),
+        None,
+        Some("colorSampler.readout.totalInk"),
+    ];
+
+    for ((x, y), can_delete) in [((70.0, 40.0), false), ((120.0, 60.0), true)] {
+        right_click(&mut app, x, y);
+        assert_eq!(samplers(&app), before, "a right-click never places a sampler");
+        let inspected = control(&mut app, "ui.inspect", json!({}));
+        let rows = inspected.pointer("/result/canvasToolMenu/entries").and_then(serde_json::Value::as_array).expect("the open sampler menu");
+        let order: Vec<_> =
+            rows.iter().map(|row| if row["separator"] == true { None } else { Some(row["id"].as_str().expect("expected a menu item id")) }).collect();
+        assert_eq!(order, expected_rows);
+        let enabled: Vec<_> = rows.iter().filter(|row| row["enabled"] == true).map(|row| row["id"].as_str().unwrap()).collect();
+        let expected_enabled: &[&str] = if can_delete { &[SAMPLER_DELETE] } else { &[] };
+        assert_eq!(enabled, expected_enabled, "right-click at ({x}, {y})");
+
+        let reply = control(&mut app, "ui.context.choose", json!({"id": SAMPLER_DELETE}));
+        assert_eq!(reply["ok"], can_delete, "right-click at ({x}, {y}): {reply}");
+        if !can_delete {
+            assert_eq!(samplers(&app), before, "an unavailable Delete changes nothing");
+            key(&mut app, egui::Key::Escape, egui::Modifiers::NONE);
+        }
+        assert!(app.ui.canvas_tool_menu.is_none(), "the menu closes");
+    }
+
+    assert_eq!(samplers(&app), [[20.5, 20.5], [180.5, 90.5]], "only the middle sampler is removed");
+    let listed = app.run("view.colorSamplers.list", json!({})).unwrap();
+    assert_eq!(listed["samplers"][1]["number"], 2, "the last sampler becomes number 2");
+}
+
 /// Delete never removes a different sampler when the list changes while the menu is open: one
 /// deleted meanwhile, or another document with a sampler at the same index and spot.
 #[test]

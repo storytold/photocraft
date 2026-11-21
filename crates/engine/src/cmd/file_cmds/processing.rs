@@ -137,7 +137,7 @@ pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
         let inputs = batch_inputs_tree(p, cmd, &output)?;
         process_tree(s, &inputs, &output, format, save, TreeNaming::Unique, &process)
     } else {
-        let documents = if source == "current" { vec![s.active().ok_or(EngineError::NoDocument)?] } else { s.documents().iter().collect() };
+        let documents = if source == "current" { vec![s.active().ok_or(EngineError::NoDocument)?] } else { s.documents().iter().map(|st| &**st).collect() };
         if documents.is_empty() {
             return Err(EngineError::NoDocument);
         }
@@ -227,7 +227,7 @@ fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -
         "folder" => ProcessorInputs::Folder(batch_inputs_tree(p, IMAGE_PROCESSOR, output)?),
         "current" => ProcessorInputs::Documents(vec![s.active().ok_or(EngineError::NoDocument)?]),
         _ if s.documents().is_empty() => return Err(EngineError::NoDocument),
-        _ => ProcessorInputs::Documents(s.documents().iter().collect()),
+        _ => ProcessorInputs::Documents(s.documents().iter().map(|st| &**st).collect()),
     };
     let mut files = Vec::new();
     let mut errors = Vec::new();
