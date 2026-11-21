@@ -81,8 +81,25 @@ fn overlapping_ranges_still_add() {
     let mut ranges = HueRange::defaults();
     ranges[0].saturation = -100.0;
     ranges[1].saturation = -100.0;
-    let both = hue_range_tables(&ranges);
+    let both = hue_range_tables(&ranges, true);
     let k = (LUT_SIZE - 1) / 12; // about hue 30°, between reds and yellows
-    let one = |i: usize| ranges[i].weight(k as f32 * 360.0 / (LUT_SIZE - 1) as f32);
+    let one = |i: usize| ranges[i].weight_8bit(k as f32 * 360.0 / (LUT_SIZE - 1) as f32);
     assert!((both[1][k] + one(0) + one(1)).abs() < 1e-5, "{}", both[1][k]);
+}
+
+/// The edges were measured at 8 bits only: at 16 and 32 bits a pixel at hue 330, halfway up the
+/// default reds' fade-in, keeps the sliders' weight (more desaturated than at 8 bits, which fade in
+/// 0.85° later).
+#[test]
+fn other_depths_keep_the_sliders_ramp() {
+    let desaturate = reds(DEFAULT_REDS, 0.0, -100.0, 0.0);
+    let c = [1.0, 0.0, 0.5];
+    let saturation = |depth: SampleType| {
+        let mut b = Buffer { rect: Rect::new(0, 0, 1, 1), px: vec![[c[0], c[1], c[2], 1.0]] };
+        apply_depth(&desaturate, &mut b, Transfer::Srgb, Some(depth));
+        rgb_to_hsl([b.px[0][0], b.px[0][1], b.px[0][2]]).1
+    };
+    let (eight, sixteen, float) = (saturation(SampleType::U8), saturation(SampleType::U16), saturation(SampleType::F32));
+    assert!((sixteen - float).abs() < 0.005, "16 and 32 bits agree: {sixteen} vs {float}");
+    assert!(eight > sixteen + 0.005, "8 bits fade in later: {eight} vs {sixteen}");
 }

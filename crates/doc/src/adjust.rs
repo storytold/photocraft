@@ -169,11 +169,32 @@ impl HueRange {
         self.hue == 0.0 && self.saturation == 0.0 && self.lightness == 0.0
     }
 
-    /// How much a pixel of hue `deg` (degrees) belongs to this range, 0..=1. The reference
-    /// application fades in 0.85° and out 0.08° later than the sliders say (#14744): the default
-    /// reds give 0.14 at hue 320.24 and 0.84 at hue 20, and the hard-edged 345/345/15/15 takes
-    /// hue 15.06 in full but leaves 344.94 alone.
+    /// How much a pixel of hue `deg` (degrees) belongs to this range, 0..=1, on the sliders' own
+    /// ramp: depths other than 8 bits, where the reference's edges were not measured (#14744).
     pub fn weight(&self, deg: f32) -> f32 {
+        let [a, b, c, d] = self.bounds;
+        // Measure from the range's start so wrap-around ranges (reds) work.
+        let rel = |x: f32| if x.is_finite() { (x - a).rem_euclid(360.0) } else { 0.0 };
+        let b = rel(b);
+        let c = rel(c).max(b);
+        let d = rel(d).max(c);
+        let h = rel(deg);
+        if h <= b {
+            if b <= 0.0 { 1.0 } else { h / b }
+        } else if h <= c {
+            1.0
+        } else if h <= d {
+            if d <= c { 1.0 } else { (d - h) / (d - c) }
+        } else {
+            0.0
+        }
+    }
+
+    /// [`Self::weight`] in an 8-bit document, where the reference application fades in 0.85° and
+    /// out 0.08° later than the sliders say (#14744): the default reds give 0.14 at hue 320.24 and
+    /// 0.84 at hue 20, and the hard-edged 345/345/15/15 takes hue 15.06 in full but leaves 344.94
+    /// alone.
+    pub fn weight_8bit(&self, deg: f32) -> f32 {
         let [a, b, c, d] = self.bounds;
         // Measure from the range's start so wrap-around ranges (reds) work.
         let rel = |x: f32| if x.is_finite() { (x - a).rem_euclid(360.0) } else { 0.0 };
@@ -411,8 +432,10 @@ mod tests {
         let reds = HueRange::neutral(0);
         assert_eq!(reds.weight(0.0), 1.0);
         assert_eq!(reds.weight(350.0), 1.0);
-        assert!((reds.weight(30.08) - 0.5).abs() < 1e-5);
-        assert!((reds.weight(330.85) - 0.5).abs() < 1e-5);
+        assert!((reds.weight(30.0) - 0.5).abs() < 1e-5);
+        assert!((reds.weight(330.0) - 0.5).abs() < 1e-5);
+        assert!((reds.weight_8bit(30.08) - 0.5).abs() < 1e-5);
+        assert!((reds.weight_8bit(330.85) - 0.5).abs() < 1e-5);
         assert_eq!(reds.weight(60.0), 0.0);
         assert_eq!(reds.weight(180.0), 0.0);
         let blues = HueRange::neutral(4);
