@@ -275,6 +275,25 @@ fn arabic_plural_rule_has_six_forms() {
 }
 
 #[test]
+fn hebrew_resolves_and_pluralises() {
+    let he = Lang::from_code("he").expect("he registered");
+    assert_eq!(he.name(), "עברית");
+    for tag in ["he", "HE", "he-IL", "he_IL.UTF-8", "he-Hebr-IL", "iw", "iw-IL", "iw_IL.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(he), "{tag}");
+        assert_eq!(Lang::from_pref(tag), he, "{tag}");
+    }
+    assert_eq!(he.dir(), Dir::Rtl);
+    assert_eq!(dir_for_code("he"), Dir::Rtl);
+    assert_eq!(dir_for_code("iw-IL"), Dir::Rtl);
+    assert_eq!(tr(he, "File"), "קובץ");
+    let forms: Vec<usize> = [0, 1, 2, 3, 21].into_iter().map(he.0.plural).collect();
+    assert_eq!(forms, [2, 0, 1, 2, 2]);
+    assert_eq!(trn(he, 1, "{n} Layer", "{n} Layers"), "1 שכבה");
+    assert_eq!(trn(he, 2, "{n} Layer", "{n} Layers"), "2 שכבות");
+    assert_eq!(trn(he, 3, "{n} Layer", "{n} Layers"), "3 שכבות");
+}
+
+#[test]
 fn serbian_resolves_locales_and_preferences() {
     let sr = Lang::from_code("sr").expect("sr registered");
     assert_eq!(sr.name(), "Srpski");

@@ -4,11 +4,15 @@ use super::*;
 use crate::{PhotocraftApp, Services};
 use serde_json::json;
 
+fn menu_title(lang: Lang, title: &str, key: char) -> String {
+    let (shown, _) = crate::menu_keys::localized(&[tr(lang, title).to_string()], &[title], &[Some(key)]);
+    shown.into_iter().next().unwrap_or_default()
+}
+
 /// The File menu's title as the menu bar draws it in `lang`: the translation, plus the English
 /// access key where it has no Latin letter of its own ("文件(F)", #5863).
 fn file_title(lang: Lang) -> String {
-    let (shown, _) = crate::menu_keys::localized(&[tr(lang, "File").to_string()], &["File"], &[Some('F')]);
-    shown.into_iter().next().unwrap_or_default()
+    menu_title(lang, "File", 'F')
 }
 
 fn lang(code: &str) -> Lang {
@@ -31,6 +35,8 @@ fn requested_languages_resolve_regional_preferences() {
         ("vi-VN", "vi"),
         ("sr-RS", "sr"),
         ("bs-BA", "bs"),
+        ("he-IL", "he"),
+        ("iw-IL", "he"),
     ] {
         assert_eq!(Lang::from_pref(tag), lang(code), "{tag}");
     }
@@ -245,6 +251,8 @@ fn first_launch_renders_the_system_language_without_overwriting_auto() {
         ("fi-FI", "fi"),
         ("da-DK", "da"),
         ("nb-NO", "nb"),
+        ("he-IL", "he"),
+        ("iw-IL", "he"),
     ] {
         system::with_system_tags(&[tag], || {
             with_language(Lang::EN, || {
@@ -312,7 +320,7 @@ fn a_control_request_changes_the_drawing_language_in_the_same_frame() {
     with_language(Lang::EN, || {
         let mut h = harness();
         let document = h.state().session.active().expect("document").doc.clone();
-        for code in ["zh-hans", "ja", "ko", "ru", "uk", "fr", "id", "en"] {
+        for code in ["zh-hans", "ja", "ko", "ru", "uk", "fr", "id", "he", "en"] {
             let (tx, rx) = std::sync::mpsc::channel();
             h.state_mut().control_rx = Some(rx);
             let (request, reply) =
@@ -503,5 +511,30 @@ fn arabic_names_are_laid_out_right_to_left() {
         let galley = h.ctx.fonts_mut(|f| f.layout_job(job));
         assert!(x_in(&galley, 'ل') > x_in(&galley, 'م'), "{title}: the name's first word right of its second");
         assert!(x_in(&galley, 'P') > x_in(&galley, 'ل'), "{title}: PhotoCraft stays at the right");
+    });
+}
+
+#[test]
+fn hebrew_labels_and_shell_chrome_are_right_to_left() {
+    use egui_kittest::kittest::Queryable as _;
+
+    with_language(Lang::EN, || {
+        let mut h = harness();
+        h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "he"})).unwrap();
+        h.run_steps(4);
+        assert_eq!(current(), lang("he"));
+        assert!(crate::direction::is_rtl(), "Hebrew mirrors window chrome right to left");
+        let file = h.query_all_by_label(&file_title(lang("he"))).next().expect("File menu drawn").rect().center().x;
+        let help = h.query_all_by_label(&menu_title(lang("he"), "Help", 'H')).next().expect("Help menu drawn").rect().center().x;
+        assert!(file > help, "File starts menu bar at right: {file} vs {help}");
+        let x_of = |text: &str, c: char| {
+            let galley = h.ctx.fonts_mut(|f| f.layout_no_wrap(text.to_string(), egui::FontId::proportional(13.0), egui::Color32::WHITE));
+            galley.rows.iter().flat_map(|r| r.glyphs.iter()).find(|g| g.chr == c).map(|g| g.pos.x).expect("glyph")
+        };
+        let label = tr(lang("he"), "No properties");
+        assert_eq!(label, "אין מאפיינים");
+        assert!(x_of(label, 'א') > x_of(label, 'ם'), "{label}: Hebrew lays out right to left");
+        let join = tr(lang("he"), "Camera Raw Defaults");
+        assert!(x_of(join, 'C') < x_of(join, 'ד'), "{join}: Camera Raw after Hebrew lead-in");
     });
 }

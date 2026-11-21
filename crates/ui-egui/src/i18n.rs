@@ -58,13 +58,31 @@ pub enum Dir {
 }
 
 /// Languages written right to left, by primary subtag: Arabic, Sorani Kurdish, Dhivehi, Persian,
-/// Hebrew, Pashto, Sindhi, Uyghur, Urdu, Yiddish.
-const RTL_LANGUAGES: [&str; 10] = ["ar", "ckb", "dv", "fa", "he", "ps", "sd", "ug", "ur", "yi"];
+/// Hebrew (and legacy `iw`), Pashto, Sindhi, Uyghur, Urdu, Yiddish.
+const RTL_LANGUAGES: [&str; 11] = ["ar", "ckb", "dv", "fa", "he", "iw", "ps", "sd", "ug", "ur", "yi"];
 
-/// The reading direction of a language code (`ar`, `fa-ir`, `he`; any case).
+/// The reading direction of a language code (`ar`, `fa-ir`, `he`, `iw-il`, `sr-Arab-RS`; any case).
+/// Subtags after a private-use `-x-` singleton are ignored so `x-he` and `en-x-arab` stay LTR.
 pub fn dir_for_code(code: &str) -> Dir {
-    let primary = code.split(['-', '_']).next().unwrap_or("");
-    if RTL_LANGUAGES.iter().any(|l| l.eq_ignore_ascii_case(primary)) { Dir::Rtl } else { Dir::Ltr }
+    let mut parts = code.split(['-', '_']).filter(|p| !p.is_empty());
+    let Some(primary) = parts.next() else {
+        return Dir::Ltr;
+    };
+    if primary.eq_ignore_ascii_case("x") {
+        return Dir::Ltr;
+    }
+    if RTL_LANGUAGES.iter().any(|l| l.eq_ignore_ascii_case(primary)) {
+        return Dir::Rtl;
+    }
+    for subtag in parts {
+        if subtag.eq_ignore_ascii_case("x") {
+            break;
+        }
+        if matches!(subtag.to_ascii_lowercase().as_str(), "arab" | "hebr" | "syrc" | "thaa" | "nkoo" | "adlm") {
+            return Dir::Rtl;
+        }
+    }
+    Dir::Ltr
 }
 
 fn plural_one_other(n: u64) -> usize {
@@ -114,6 +132,15 @@ fn plural_polish(n: u64) -> usize {
         1
     } else {
         2
+    }
+}
+
+/// Hebrew: 1 → one, 2 → two, everything else (0, 3+) → other.
+fn plural_he(n: u64) -> usize {
+    match n {
+        1 => 0,
+        2 => 1,
+        _ => 2,
     }
 }
 
@@ -201,7 +228,7 @@ fn expand(packed: &str, keys: &[&str]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 28] = [
+pub static LANGUAGES: [LangInfo; 29] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -243,6 +270,9 @@ pub static LANGUAGES: [LangInfo; 28] = [
     // Arabic (Modern Standard); `ar-SA`, `ar-EG` and the other regional locales resolve here. The
     // chrome mirrors right to left (`dir_for_code`), and egui lays each label out right to left.
     LangInfo { code: "ar", name: "العربية", source: catalog!("ar"), plural: plural_arabic, complete_menus: true, catalog: OnceLock::new() },
+    // Hebrew; `he-IL` and legacy `iw` locales resolve here. The chrome mirrors right to left
+    // (`dir_for_code`), and egui lays each label out right to left.
+    LangInfo { code: "he", name: "עברית", source: catalog!("he"), plural: plural_he, complete_menus: true, catalog: OnceLock::new() },
     // Swedish; `sv-SE` and `sv-FI` locales resolve here.
     LangInfo { code: "sv", name: "Svenska", source: catalog!("sv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     // Finnish; `fi-FI` resolves here (Swedish in Finland, `sv-FI`, stays Swedish). One/other: the
@@ -386,6 +416,10 @@ fn candidates(tag: &str) -> Vec<String> {
         // The only Norwegian catalog is Bokmål; the macrolanguage code and Nynorsk use it rather
         // than English.
         out.insert(out.len() - 1, "nb".to_string());
+    }
+    if primary == "iw" && !out.iter().any(|c| c == "he") {
+        // Legacy ISO 639-1 code for Hebrew maps to `he`.
+        out.push("he".to_string());
     }
     out
 }
