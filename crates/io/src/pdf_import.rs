@@ -45,15 +45,82 @@ pub fn import(_name: &str, _bytes: &[u8], _opts: &ImportOptions, _ctl: &Interrup
     Err(IoError::Unsupported("PDF import needs the desktop build".into()))
 }
 
+/// The most pages one import renders.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_PAGES: usize = 16;
+/// Gap between the artboards, in document pixels.
+#[cfg(not(target_arch = "wasm32"))]
+const GAP: u32 = 80;
+/// The document-wide raster budget across every imported page, in pixels.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_UNION_PIXELS: u64 = 200_000_000;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod placed;
+#[cfg(not(target_arch = "wasm32"))]
+pub use placed::import_placed;
+
+/// A placed PDF can't be drawn in its frame in the web build.
+#[cfg(target_arch = "wasm32")]
+pub fn import_placed(_name: &str, _bytes: &[u8], _placed: &crate::smart_map::PlacedPdf, _ctl: &Interrupt) -> Result<photocraft_doc::Document, IoError> {
+    Err(IoError::Unsupported("PDF import needs the desktop build".into()))
+}
+
+/// How another application placed the PDF `bytes` as a smart object, from the layer's placed
+/// block `sold` (`SoLd`/`SoLE` data), when its frame isn't the canvas the PDF opens to by
+/// itself. Photoshop stores the placement's crop there, often the artwork's bounds, and the
+/// layer's corners map from it: drawing the whole page into them blows the artwork up to the
+/// page's size (#15650). PhotoCraft's own placements store the canvas, so they get `None` and
+/// keep the ordinary import.
+pub fn placement(bytes: &[u8], sold: &[u8]) -> Option<crate::smart_map::PlacedPdf> {
+    if !bytes.starts_with(b"%PDF-") {
+        return None;
+    }
+    let placed = crate::smart_map::placed_pdf(&crate::smart_map::sold_descriptor(sold)?)?;
+    (default_canvas(bytes)? != (placed.frame.0.round() as u64, placed.frame.1.round() as u64)).then_some(placed)
+}
+
+/// The canvas size [`import`] gives `bytes` with default options (every page side by side at
+/// 300 dpi), worked out from the page sizes without rendering. `None` when the PDF doesn't open.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn default_canvas(bytes: &[u8]) -> Option<(u64, u64)> {
+    let pdf = craft_pdf::open_slice_with_options(bytes, None, &craft_pdf::OpenOptions::default()).ok()?;
+    let sizes = pdf.pages().iter().take(MAX_PAGES).enumerate().map(|(index, page)| page_size(page, index + 1)).collect::<Result<Vec<_>, _>>().ok()?;
+    if sizes.is_empty() {
+        return None;
+    }
+    let dpi = effective_dpi(f64::from(ImportOptions::default().pdf_dpi), &sizes, u64::from(raster::MAX_SIDE), raster::MAX_PIXELS, MAX_UNION_PIXELS);
+    Some(strip_size(&sizes, dpi))
+}
+
+/// PDF import is not available in the web build.
+#[cfg(target_arch = "wasm32")]
+pub fn default_canvas(_bytes: &[u8]) -> Option<(u64, u64)> {
+    None
+}
+
+/// A page's rendered size in points (after its crop box, rotation and user unit).
+#[cfg(not(target_arch = "wasm32"))]
+fn page_size(page: &craft_pdf::syntax::page::Page<'_>, number: usize) -> Result<(f64, f64), IoError> {
+    let (width, height) = page.render_dimensions();
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return Err(IoError::Unsupported(format!("PDF page {number} has no area")));
+    }
+    Ok((f64::from(width), f64::from(height)))
+}
+
+/// The pixel size of the strip of pages [`import`] lays out at `dpi`: side by side, [`GAP`] apart.
+#[cfg(not(target_arch = "wasm32"))]
+fn strip_size(sizes: &[(f64, f64)], dpi: f64) -> (u64, u64) {
+    let width = sizes.iter().map(|&(w, _)| u64::from(page_pixels(w, dpi))).fold(0u64, u64::saturating_add);
+    let gaps = u64::from(GAP).saturating_mul(sizes.len().saturating_sub(1) as u64);
+    let height = sizes.iter().map(|&(_, h)| u64::from(page_pixels(h, dpi))).max().unwrap_or(0);
+    (width.saturating_add(gaps), height)
+}
+
 /// Renders the selected PDF pages and opens each as one artboard.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -> Result<ImportResult, IoError> {
-    /// The most pages one import renders.
-    const MAX_PAGES: usize = 16;
-    /// Gap between the artboards, in document pixels.
-    const GAP: u32 = 80;
-    /// The document-wide raster budget across every imported page, in pixels.
-    const MAX_UNION_PIXELS: u64 = 200_000_000;
     /// The default pixel-memory budget when the caller sets none: a zero
     /// [`ImportOptions::flat_max_pixel_bytes`] still bounds the import.
     const DEFAULT_MAX_PIXEL_BYTES: u64 = 2 << 30;
@@ -82,25 +149,17 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
     // Page sizes in points first: the effective DPI must fit the renderer's bounds without
     // changing any page's physical size.
     let mut sizes = Vec::with_capacity(count);
-    for index in 0..count {
-        let page = &pdf.pages()[first - 1 + index];
-        let (width, height) = page.render_dimensions();
-        if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
-            return Err(IoError::Unsupported(format!("PDF page {} has no area", first + index)));
-        }
-        sizes.push((f64::from(width), f64::from(height)));
+    for (index, page) in pdf.pages().iter().skip(first - 1).take(count).enumerate() {
+        sizes.push(page_size(page, first + index)?);
         ctl.check().map_err(|_| IoError::Cancelled)?;
     }
     let dpi = effective_dpi(requested, &sizes, u64::from(raster::MAX_SIDE), raster::MAX_PIXELS, MAX_UNION_PIXELS);
 
-    let mut doc_width: u64 = 0;
-    let mut doc_height: u64 = 0;
+    let (doc_width, doc_height) = strip_size(&sizes, dpi);
     let mut retained: u64 = 0;
-    for (index, &(width_pt, height_pt)) in sizes.iter().enumerate() {
+    for &(width_pt, height_pt) in &sizes {
         let width = page_pixels(width_pt, dpi);
         let height = page_pixels(height_pt, dpi);
-        doc_width = doc_width.saturating_add(u64::from(width)).saturating_add(if index + 1 < count { u64::from(GAP) } else { 0 });
-        doc_height = doc_height.max(u64::from(height));
         let tiles_x = (u64::from(width)).div_ceil(256);
         let tiles_y = (u64::from(height)).div_ceil(256);
         retained = retained.saturating_add(tiles_x.saturating_mul(tiles_y).saturating_mul(256 * 256 * 4));
@@ -206,24 +265,7 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
         ctl.check().map_err(|_| IoError::Cancelled)?;
 
         let mut surface = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
-        let bytes = rendered.bytes();
-        // Convert and write in row bands: the f32 buffer stays bounded instead of a second
-        // 16-bytes-per-pixel copy of the whole page, and cancellation is polled per band.
-        const BAND_ROWS: usize = 256;
-        let row_bytes = width as usize * 4;
-        let band_bytes = row_bytes.saturating_mul(BAND_ROWS);
-        let mut data: Vec<f32> = Vec::new();
-        if data.try_reserve_exact(band_bytes).is_err() {
-            return Err(IoError::Unsupported(format!("PDF page {page_number} needs more memory than is available")));
-        }
-        for (band, rows) in bytes.chunks(band_bytes).enumerate() {
-            ctl.check().map_err(|_| IoError::Cancelled)?;
-            data.clear();
-            data.extend(rows.iter().map(|&value| f32::from(value) / 255.0));
-            let top = (band * BAND_ROWS) as i32;
-            let band_height = (rows.len() / row_bytes) as u32;
-            surface.write_region(Rect::from_xywh(x as i32, top, width, band_height), &data);
-        }
+        write_raster(&mut surface, x as i32, width, rendered.bytes(), false, &format!("PDF page {page_number}"), ctl)?;
         let layer = Layer::new(format!("Page {page_number}"), LayerContent::Raster(surface));
         let group = Group { children: vec![layer], expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
         doc.layers.push(Layer::new(format!("Page {page_number}"), LayerContent::Group(group)));
@@ -236,6 +278,39 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
     }
 
     Ok(ImportResult { warnings, document: doc, source_read_only: false, preview_only: false })
+}
+
+/// Writes a rendered RGBA8 raster `width` pixels wide into `surface` from column `x`, in row
+/// bands: the f32 buffer stays bounded instead of a second 16-bytes-per-pixel copy of the page,
+/// and cancellation is polled per band. `premultiplied` output is divided back to straight alpha.
+/// `what` names the raster in the out-of-memory error.
+#[cfg(not(target_arch = "wasm32"))]
+fn write_raster(surface: &mut Surface, x: i32, width: u32, bytes: &[u8], premultiplied: bool, what: &str, ctl: &Interrupt) -> Result<(), IoError> {
+    const BAND_ROWS: usize = 256;
+    let row_bytes = width as usize * 4;
+    let band_bytes = row_bytes.saturating_mul(BAND_ROWS);
+    let mut data: Vec<f32> = Vec::new();
+    data.try_reserve_exact(band_bytes).map_err(|_| IoError::Unsupported(format!("{what} needs more memory than is available")))?;
+    for (band, rows) in bytes.chunks(band_bytes).enumerate() {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        data.clear();
+        if premultiplied {
+            for &[r, g, b, a] in rows.as_chunks::<4>().0 {
+                if a == 0 {
+                    data.extend([0.0; 4]);
+                } else {
+                    let a = f32::from(a);
+                    data.extend([r, g, b].map(|c| (f32::from(c) / a).min(1.0)));
+                    data.push(a / 255.0);
+                }
+            }
+        } else {
+            data.extend(rows.iter().map(|&value| f32::from(value) / 255.0));
+        }
+        let band_height = (rows.len() / row_bytes) as u32;
+        surface.write_region(Rect::from_xywh(x, (band * BAND_ROWS) as i32, width, band_height), &data);
+    }
+    Ok(())
 }
 
 /// Renders one page, forwarding `ctl`'s cancellation to craft-pdf while it interprets content.

@@ -1,6 +1,7 @@
 use super::*;
 
 mod filter_mask_paint;
+mod placed_pdf;
 mod selection;
 mod source_flatten;
 mod stack_cache;

@@ -85,6 +85,27 @@ fn decode_source_classified(file_name: &str, bytes: &[u8], svg: bool) -> Result<
     crate::file_cmds::import(file_name, bytes).map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))
 }
 
+/// [`decode_source`] for the smart object `sm`, in the coordinates its placement maps from: a
+/// PDF another application placed in a frame of its own opens cropped to that frame (#15650).
+/// `None` when it can't be drawn in that frame, so the saved pixels stand in for it; running out
+/// of memory is an error instead.
+fn decode_placed_source(file_name: &str, bytes: &[u8], sm: &SmartObject) -> Result<Option<Document>> {
+    let Some(placed) = sm.psd_raw.as_ref().and_then(|raw| photocraft_io::pdf_placement(bytes, raw)) else {
+        return decode_source(file_name, bytes).map(Some);
+    };
+    match photocraft_io::import_placed_pdf(file_name, bytes, &placed, &photocraft_raster::Interrupt::NONE) {
+        Ok(doc) => Ok(Some(doc)),
+        Err(e @ photocraft_io::IoError::OutOfMemory(_)) => Err(other(format!("can't read smart object contents \"{file_name}\": {e}"))),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Whether `sm`'s contents are a PDF placed with a frame (`Sz  `), which is drawn cropped to it
+/// (#15650). PDF contents hold no smart objects of their own.
+pub(crate) fn is_placed_pdf(doc: &Document, sm: &SmartObject) -> bool {
+    source::source_bytes(&doc.metadata, &sm.source).is_some_and(|(_, bytes)| source::placed_pdf(&bytes, sm).is_some())
+}
+
 fn base_name(path: &str) -> String {
     path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
 }

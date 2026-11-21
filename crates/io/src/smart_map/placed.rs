@@ -267,6 +267,31 @@ pub fn plld_bytes(s: &PlacedSpec<'_>, warnings: &mut Vec<String>) -> Vec<u8> {
     pad4(out)
 }
 
+/// A PDF placed as a smart object, as its `soLD` descriptor records it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlacedPdf {
+    /// `Sz  `: the box the page was cropped to, in the units the layer's corners map from.
+    pub frame: (f64, f64),
+    /// `PgNm`: the page, from 1.
+    pub page: u32,
+    /// `Rslt`: the pixels per inch the frame was measured at, when stored.
+    pub dpi: Option<f64>,
+}
+
+/// The placed-PDF fields of a `soLD` descriptor. `None` without a frame, or with a page number
+/// that isn't a positive integer (drawing another page would be worse than keeping the pixels).
+pub fn placed_pdf(d: &Descriptor) -> Option<PlacedPdf> {
+    let frame = stored_size(d)?;
+    let page = match d.get("PgNm") {
+        None => 1,
+        Some(Value::Integer(n)) => u32::try_from(*n).ok()?,
+        Some(Value::LargeInteger(n)) => u32::try_from(*n).ok()?,
+        Some(_) => return None,
+    };
+    let dpi = num(d.get("Rslt")).filter(|r| r.is_finite() && *r > 0.0);
+    (page >= 1).then_some(PlacedPdf { frame, page, dpi })
+}
+
 /// The source size a `soLD` descriptor stores (`Sz  `).
 pub fn stored_size(d: &Descriptor) -> Option<(f64, f64)> {
     let sz = get_desc(d, "Sz  ")?;

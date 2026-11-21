@@ -639,9 +639,48 @@ fn split(s: &mut Session, p: &Value, cmd: &str, how: Split) -> Result<Value> {
         if let Some(Layer { content: LayerContent::Smart(sm), .. }) = doc.layer_mut(id) {
             sm.warp = Some(out.clone());
         }
-        crate::smart_cmds::refresh(doc, id).map(|_| ())
+        refresh_keeping_saved(doc, id, &w, &out)
     })?;
     Ok(json!({"layer": id.0, "warp": out}))
+}
+
+/// Re-renders smart object `id` after its warp changed from `before` to `after` (a split or a new
+/// grid). When a placed PDF can't be drawn in its frame (#15650) and the warp still bends its
+/// contents the same way, the pixels it was saved with stay, as a transform keeps them; any other
+/// failure, including a smart filter the session may not run, is the command's.
+fn refresh_keeping_saved(doc: &mut Document, id: LayerId, before: &Warp, after: &Warp) -> Result<()> {
+    let Some(LayerContent::Smart(sm)) = doc.layer(id).map(|l| &l.content) else { return Err(EngineError::NoLayer(id)) };
+    for f in sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible) {
+        crate::jobs::authorize_render_command(&f.command, &f.params)?;
+    }
+    let keeps = sm.cache.is_some() && crate::smart_cmds::is_placed_pdf(doc, sm) && same_surface(before, after);
+    match crate::smart_cmds::refresh(doc, id) {
+        Err(_) if keeps => Ok(()),
+        r => r.map(|_| ()),
+    }
+}
+
+/// Whether warps `a` and `b` map their contents alike. Between the knots of either mesh both
+/// surfaces are bicubic, and a bicubic is fixed by its values at the thirds of its cell, so
+/// agreeing there to a hundredth of a pixel bounds the difference everywhere (to under three
+/// hundredths), however small the patch an edit rebuilt.
+fn same_surface(a: &Warp, b: &Warp) -> bool {
+    let (a, b) = (a.to_mesh(1, 1), b.to_mesh(1, 1));
+    let thirds = |x: &[f64], y: &[f64]| {
+        let mut knots: Vec<f64> = x.iter().chain(y).copied().filter(|k| k.is_finite()).collect();
+        knots.sort_by(f64::total_cmp);
+        knots.dedup();
+        let mut at: Vec<f64> = knots.windows(2).flat_map(|w| [w[0], w[0] + (w[1] - w[0]) / 3.0, w[0] + 2.0 * (w[1] - w[0]) / 3.0]).collect();
+        at.extend(knots.last());
+        at
+    };
+    let (ss, ts) = (thirds(&a.us, &b.us), thirds(&a.vs, &b.vs));
+    ss.iter().all(|&s| {
+        ts.iter().all(|&t| {
+            let (p, q) = (a.eval(s, t), b.eval(s, t));
+            (p[0] - q[0]).hypot(p[1] - q[1]) < 0.01
+        })
+    })
 }
 
 /// Square preset size. `"default"` is 1. Numbers outside 1..=64 are rejected, not clamped.
@@ -705,7 +744,7 @@ fn grid(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(Layer { content: LayerContent::Smart(sm), .. }) = doc.layer_mut(id) {
             sm.warp = Some(out.clone());
         }
-        crate::smart_cmds::refresh(doc, id).map(|_| ())
+        refresh_keeping_saved(doc, id, &w, &out)
     })?;
     Ok(json!({"layer": id.0, "warp": out}))
 }

@@ -1,6 +1,7 @@
 use super::filters::smart;
 use super::source::{
-    SourceImage, cache_get, cache_key, cache_put, convert_svg_source, source_bytes, source_surface_from_buffer, svg_source_image_in, vector_scale,
+    SourceImage, cache_get, cache_key, cache_put, convert_svg_source, placed_source_image, source_bytes, source_surface_from_buffer, svg_source_image_in,
+    vector_scale,
 };
 use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, JobCtx, Layer, LayerContent, LayerId, PixelFormat, Rect, Result, SmartFilter, SmartObject,
@@ -220,7 +221,7 @@ fn place_with_svg(
         Some(mode) if is_svg => convert_svg_source(stack_image_classified(name, bytes, PixelFormat::RGBA32F, mode, Some(is_svg))?, doc)?,
         None if is_svg => svg(bytes, 1.0)?,
         Some(mode) => stack_image_classified(name, bytes, fmt, mode, Some(is_svg))?,
-        None => super::source::source_image_classified(name, bytes, fmt, is_svg)?,
+        None => placed_source_image(name, bytes, fmt, sm, Some(is_svg))?,
     };
     // The placed stage is unclipped: a large enough placement (an image scaled to fill a huge
     // frame) would otherwise fill memory before any allocation could fail.
@@ -328,7 +329,7 @@ pub(crate) fn source_box(doc: &Document, sm: &SmartObject) -> Option<[f64; 4]> {
     let r = match sm.stack_mode {
         None if photocraft_io::svg::is_svg(&bytes) => photocraft_io::svg::bounded_canvas_bounds(&bytes, 24_000_000).ok()?,
         Some(mode) => stack_image(&name, &bytes, fmt, mode).ok()?.bounds,
-        None => super::source::source_image(&name, &bytes, fmt).ok()?.bounds,
+        None => placed_source_image(&name, &bytes, fmt, sm, None).ok()?.bounds,
     };
     Some([f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1)])
 }
@@ -505,6 +506,9 @@ fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapsho
     h.update(blake3::hash(name.as_bytes()).as_bytes());
     if is_svg {
         h.update(&crate::color_cmds::document_profile(doc).to_bytes());
+    }
+    if let Some(placed) = super::source::placed_pdf(&bytes, sm) {
+        h.update(format!("placed-pdf:{placed:?}").as_bytes());
     }
     let placed_key: StageKey = *h.finalize().as_bytes();
     let placed = || -> Result<Stage> {
