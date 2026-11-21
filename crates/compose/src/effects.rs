@@ -249,6 +249,8 @@ impl FxMaps {
 #[cfg(test)]
 mod inner_shadow_anti_alias_tests;
 #[cfg(test)]
+mod outer_glow_anti_alias_tests;
+#[cfg(test)]
 mod outer_glow_noise_tests;
 
 #[cfg(test)]

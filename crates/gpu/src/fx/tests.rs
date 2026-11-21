@@ -318,6 +318,144 @@ fn bands_end_at_the_coordinate_ceiling() {
     assert_eq!(super::bands(Rect::new(0, 0, 8, 10), 0).len(), 10, "a zero step still makes progress");
 }
 
+/// #14951: the GPU's Outer Glow program takes the same sub-pixel source offset as the CPU's
+/// `glow_map` - without a device, by asking what stages the effect builds. Only the measured gate
+/// (Anti-aliased on, Gaussian contour, the outer Softer path) adds the stage; the Precise
+/// technique, the Inner Glow (#14927) and an unmeasured contour keep today's stages.
+#[test]
+fn anti_aliased_outer_glow_shifts_the_map_stage() {
+    use photocraft_doc::{Contour, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique};
+    let pts: [(f32, f32); 11] = [
+        (0.0, 0.0),
+        (0.117, 0.023),
+        (0.172, 0.055),
+        (0.234, 0.117),
+        (0.305, 0.234),
+        (0.383, 0.414),
+        (0.523, 0.688),
+        (0.617, 0.812),
+        (0.703, 0.891),
+        (0.805, 0.953),
+        (1.0, 1.0),
+    ];
+    let gaussian = Contour::Custom {
+        name: "Gaussian".into(),
+        points: pts.iter().map(|(input, output)| photocraft_doc::adjust::CurvePoint { input: *input, output: *output }).collect(),
+        corners: (0..pts.len()).map(|i| i > 0 && i < pts.len() - 1).collect(),
+    };
+    let glow = |anti_aliased: bool, contour: Contour, technique: GlowTechnique| Glow {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        paint: FxPaint::Color(photocraft_color::Color::BLACK),
+        technique,
+        spread: 0.0,
+        size: 10.0,
+        contour,
+        anti_alias: anti_aliased,
+        range: 0.5,
+        jitter: 0.0,
+        noise: 0.0,
+        source: GlowSource::Edge,
+    };
+    fn shift_stages(p: &MapProgram) -> Vec<&Stage> {
+        p.stages.iter().filter(|s| s.kernel == Kernel::MShift).collect()
+    }
+    let light = GlobalLight::default();
+    let aa = photocraft_compose::effects::aa_shift(true, &gaussian, 10.0, 0.0);
+    assert_eq!(aa, -1.0 / 3.0, "the CPU offset the GPU has to copy at the measured Size 10, Spread 0");
+    // An outer Softer glow at Spread 0 normally builds no shift stage at all.
+    let off = program(&Effect::OuterGlow(glow(false, gaussian.clone(), GlowTechnique::Softer)), &light, false);
+    assert_eq!(shift_stages(&off).len(), 0, "an outer glow without Anti-aliased takes no shift stage");
+    let on = program(&Effect::OuterGlow(glow(true, gaussian.clone(), GlowTechnique::Softer)), &light, false);
+    assert_eq!(shift_stages(&on).len(), 1, "the Anti-aliased outer glow adds exactly its sub-pixel shift stage");
+    assert_eq!(shift_stages(&on)[0].p0, [aa, aa, 0.0, 0.0], "the shift stage must carry the CPU's sub-pixel source offset (no invert, 0 outside)");
+    assert!(
+        shift_stages(&on)[0].radius >= 1,
+        "a sub-pixel shift reads the tap beyond its base, so the stage radius must cover it: {}",
+        shift_stages(&on)[0].radius
+    );
+    assert_ne!(on.key, off.key, "the flag has to invalidate the cached program");
+    // Unmeasured cases keep today's stages.
+    let linear = program(&Effect::OuterGlow(glow(true, Contour::Linear, GlowTechnique::Softer)), &light, false);
+    assert_eq!(shift_stages(&linear).len(), 0, "a Linear-contour outer glow still ignores Anti-aliased (#14951 leaves that contour unmeasured)");
+    let precise_on = program(&Effect::OuterGlow(glow(true, gaussian.clone(), GlowTechnique::Precise)), &light, false);
+    let precise_off = program(&Effect::OuterGlow(glow(false, gaussian.clone(), GlowTechnique::Precise)), &light, false);
+    assert_eq!(precise_on.key, precise_off.key, "the Precise technique still ignores Anti-aliased (#14951 leaves it unmeasured)");
+    let inner_on = program(&Effect::InnerGlow(glow(true, gaussian.clone(), GlowTechnique::Softer)), &light, false);
+    let inner_off = program(&Effect::InnerGlow(glow(false, gaussian, GlowTechnique::Softer)), &light, false);
+    assert_eq!(inner_on.key, inner_off.key, "the Inner Glow still ignores Anti-aliased (#14927 is its own item)");
+    assert_eq!(shift_stages(&inner_on).len(), 1, "the inner glow keeps its one (invert) stage");
+    assert_eq!(shift_stages(&inner_on)[0].p0, [0.0, 0.0, 0.0, 1.0], "and that stage stays the identity shift");
+}
+
+/// #14951 review: the GPU's gate is the CPU's rule, including its two degenerate neighbours. At
+/// Size 1, and at Size 2 with Spread 50 %, the blur the map gets has width 1, which is the
+/// identity, so a sub-pixel source offset would be the entire map; at any Spread that dilates the
+/// CPU recomputes its distance field on the offset map while this builder hands `dilate` a
+/// whole-pixel `StrokeOutside` field of the unshifted shape with no field shift at all. In every
+/// one of those the program must be the Anti-aliased-off program, stages and key included. Away
+/// from the degeneracies the offset follows the inputs, not the measured Size 10.
+#[test]
+fn anti_aliased_outer_glow_stage_follows_the_measured_geometry() {
+    use photocraft_doc::{Contour, FxCommon, FxPaint, Glow, GlowSource, GlowTechnique};
+    let pts: [(f32, f32); 11] = [
+        (0.0, 0.0),
+        (0.117, 0.023),
+        (0.172, 0.055),
+        (0.234, 0.117),
+        (0.305, 0.234),
+        (0.383, 0.414),
+        (0.523, 0.688),
+        (0.617, 0.812),
+        (0.703, 0.891),
+        (0.805, 0.953),
+        (1.0, 1.0),
+    ];
+    let gaussian = || Contour::Custom {
+        name: "Gaussian".into(),
+        points: pts.iter().map(|(input, output)| photocraft_doc::adjust::CurvePoint { input: *input, output: *output }).collect(),
+        corners: (0..pts.len()).map(|i| i > 0 && i < pts.len() - 1).collect(),
+    };
+    let glow = |size: f32, spread: f32, anti_aliased: bool| Glow {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        paint: FxPaint::Color(photocraft_color::Color::BLACK),
+        technique: GlowTechnique::Softer,
+        spread,
+        size,
+        contour: gaussian(),
+        anti_alias: anti_aliased,
+        range: 0.5,
+        jitter: 0.0,
+        noise: 0.0,
+        source: GlowSource::Edge,
+    };
+    // An outer Softer glow normally builds no shift stage at all: this is the stage the flag adds.
+    let shifts_key = |e: &Effect| -> (Vec<[f32; 4]>, u64) {
+        let p = program(e, &GlobalLight::default(), false);
+        (p.stages.iter().filter(|s| s.kernel == Kernel::MShift).map(|s| s.p0).collect(), p.key)
+    };
+    for (size, spread, what) in [
+        (1.0, 0.0, "Size 1 (blur width 1: the identity)"),
+        (2.0, 0.5, "Size 2 Spread 50 % (blur width 1)"),
+        (10.0, 0.5, "Size 10 Spread 50 % (the CPU dilates an offset map, the GPU a whole-pixel field)"),
+        (10.0, 0.05, "Size 10 Spread 5 % (dilates 1 px too)"),
+    ] {
+        let on = shifts_key(&Effect::OuterGlow(glow(size, spread, true)));
+        let off = shifts_key(&Effect::OuterGlow(glow(size, spread, false)));
+        assert_eq!(on, off, "the {what} outer glow program moved with Anti-aliased: on {:?}, off {:?}", on.0, off.0);
+    }
+    // Away from the degeneracies the rule is in the inputs: Size 1.5 and Size 20 take the offset
+    // exactly as the measured Size 10 does, and so does a Spread that dilates nothing.
+    for size in [1.5, 2.0, 3.0, 20.0] {
+        let (p0, _) = shifts_key(&Effect::OuterGlow(glow(size, 0.0, true)));
+        assert_eq!(p0, vec![[-1.0 / 3.0, -1.0 / 3.0, 0.0, 0.0]], "Size {size} at Spread 0 must carry the CPU's sub-pixel offset");
+    }
+    let thin = shifts_key(&Effect::OuterGlow(glow(10.0, 0.04, true)));
+    assert_eq!(thin.0, vec![[-1.0 / 3.0, -1.0 / 3.0, 0.0, 0.0]], "Spread 4 % dilates nothing (round(0.4) = 0), so the map shape is the measured one");
+    let thin_off = shifts_key(&Effect::OuterGlow(glow(10.0, 0.04, false)));
+    assert_eq!(thin_off.0.len(), 0, "and that program has no shift stage with the flag off");
+    assert_ne!(thin.1, thin_off.1, "the flag still invalidates that program's key");
+}
+
 /// #14934: the GPU's Inner Shadow program takes the same sub-pixel source offset as the CPU's
 /// `shadow_map` - without a device, by asking what stages the effect builds. The measured gate
 /// (Anti-aliased on, Gaussian contour, the inner branch) is what adds the stage; a Linear contour
