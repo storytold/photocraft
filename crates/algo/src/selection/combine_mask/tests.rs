@@ -36,7 +36,7 @@ fn reference_band(old: Option<&Surface>, mask: &[f32], area: Rect, mode: Selecti
     let mut out = old.clone();
     out.write_region(area, &values);
     out.prune();
-    (out.tile_count() > 0).then_some(out)
+    selects_something(&out).then_some(out)
 }
 
 #[test]
@@ -137,6 +137,64 @@ fn tiles_stay_shared_or_are_pruned() {
     assert!(Arc::ptr_eq(full.tile(tc).unwrap(), full.tile(TileCoord::new(1, 0)).unwrap()));
     assert!(combine_band(Some(&old), &vec![1.0; 768 * 256], area, SelectionMode::Subtract).is_none());
     assert!(combine(None, &[], area, SelectionMode::Replace).is_none());
+}
+
+// A full selection with no tiles: every pixel reads selected, `content_bounds()` is empty.
+fn full_tileless() -> Surface {
+    Surface::with_default(PixelFormat::GRAY8, &[1.0])
+}
+
+#[test]
+fn add_to_a_full_tileless_selection_keeps_it_selected() {
+    let old = full_tileless();
+    let bbox = Rect::new(10, 20, 300, 40);
+    let region = Region { bbox, mask: vec![255; (bbox.width() * bbox.height()) as usize] };
+    let out = combine_region(Some(&old), Some(&region), SelectionMode::Add).expect("Add must not deselect a full selection");
+    for (x, y) in [(0, 0), (15, 25), (299, 39), (1000, 1000), (-5, -5)] {
+        assert_eq!(out.pixel(x, y), vec![1.0], "({x}, {y})");
+    }
+    let floats = vec![1.0; region.mask.len()];
+    let banded = combine_band(Some(&old), &floats, bbox, SelectionMode::Add).expect("Add band must not deselect a full selection");
+    assert_eq!(banded.pixel(1000, 1000), vec![1.0]);
+}
+
+#[test]
+fn nothing_added_or_subtracted_keeps_a_full_tileless_selection() {
+    let old = full_tileless();
+    for mode in [SelectionMode::Add, SelectionMode::Subtract] {
+        let out = combine_region(Some(&old), None, mode).expect("an empty region must leave the selection as it was");
+        assert_eq!(out.pixel(7, 7), vec![1.0], "{mode:?}");
+        assert!(combine_band(Some(&old), &[], Rect::EMPTY, mode).is_some(), "band {mode:?}");
+    }
+    assert!(combine_region(Some(&old), None, SelectionMode::Intersect).is_none());
+}
+
+#[test]
+fn subtract_from_a_full_tileless_selection_removes_only_the_region() {
+    let old = full_tileless();
+    let bbox = Rect::new(10, 20, 300, 40);
+    let region = Region { bbox, mask: vec![255; (bbox.width() * bbox.height()) as usize] };
+    let out = combine_region(Some(&old), Some(&region), SelectionMode::Subtract).expect("the rest stays selected");
+    assert_eq!(out.pixel(10, 20), vec![0.0]);
+    assert_eq!(out.pixel(299, 39), vec![0.0]);
+    for (x, y) in [(9, 20), (300, 39), (10, 40), (0, 0), (1000, 1000)] {
+        assert_eq!(out.pixel(x, y), vec![1.0], "({x}, {y})");
+    }
+    // Intersect keeps only the region.
+    let out = combine_region(Some(&old), Some(&region), SelectionMode::Intersect).expect("the region stays selected");
+    assert_eq!(out.pixel(10, 20), vec![1.0]);
+    assert_eq!(out.pixel(0, 0), vec![0.0]);
+}
+
+#[test]
+fn unusual_full_tileless_selection_keeps_the_rest_on_add() {
+    let old = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[1.0]);
+    let bbox = Rect::new(0, 0, 4, 4);
+    let region = Region { bbox, mask: vec![255; 16] };
+    let out = combine_region(Some(&old), Some(&region), SelectionMode::Add).expect("Add must not deselect a full selection");
+    assert_eq!(out.pixel(100, 100), vec![1.0]);
+    assert!(combine_region(Some(&old), None, SelectionMode::Subtract).is_some());
+    assert!(combine_band(Some(&old), &[1.0; 16], bbox, SelectionMode::Add).is_some());
 }
 
 /// Run only in release on CI: compares the former implementation, including dense reads and
