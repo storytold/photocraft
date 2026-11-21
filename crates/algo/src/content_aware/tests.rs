@@ -331,15 +331,18 @@ fn strings_scene(w: usize, h: usize, margin: f32) -> (Vec<f32>, Vec<f32>, Vec<bo
     let fine = noise(w, h, 11);
     // Out-of-focus colour: broad blobs over two gradients.
     let blob = noise(3, 3, 5);
-    let bg: Vec<f32> = (0..w * h * 3)
-        .map(|i| {
-            let (x, y, c) = (((i / 3) % w) as f32 / w as f32, ((i / 3) / w) as f32 / h as f32, i % 3);
-            let mut v = [0.18 + 0.25 * x, 0.22 + 0.1 * y, 0.3 - 0.1 * x][c];
+    let bg: Vec<f32> = (0..w * h)
+        .flat_map(|i| {
+            let (x, y) = ((i % w) as f32 / w as f32, (i / w) as f32 / h as f32);
+            let mut rgb = [0.18 + 0.25 * x, 0.22 + 0.1 * y, 0.3 - 0.1 * x];
             for b in blob.as_chunks::<3>().0 {
                 let (bx, by, s) = (b[0] * 1.6 - 0.3, b[1] * 1.6 - 0.3, 0.1 + 0.25 * b[2]);
-                v += (b[(c + 1) % 3] - 0.2) * 0.5 * (-((x - bx).powi(2) + (y - by).powi(2) * 0.56) / (2.0 * s * s)).exp();
+                let weight = (-((x - bx).powi(2) + (y - by).powi(2) * 0.56) / (2.0 * s * s)).exp();
+                for (c, v) in rgb.iter_mut().enumerate() {
+                    *v += (b[(c + 1) % 3] - 0.2) * 0.5 * weight;
+                }
             }
-            v + (fine[i] - 0.5) * 0.03
+            [0, 1, 2].map(|c| rgb[c] + (fine[i * 3 + c] - 0.5) * 0.03)
         })
         .collect();
     // Signed distance to each object's surface, stamped from points along it.
