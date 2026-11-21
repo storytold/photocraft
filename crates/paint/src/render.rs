@@ -87,14 +87,12 @@ fn for_each_item<T: Send>(items: &mut [T], pixels: usize, f: impl Fn(&mut T) + S
 }
 
 /// `f` over `items`, collecting its results in order, in parallel when `pixels` are worth it.
+#[cfg(not(target_arch = "wasm32"))]
 fn map_items<T: Sync, R: Send>(items: &[T], pixels: usize, f: impl Fn(&T) -> R + Sync) -> Vec<R> {
-    #[cfg(not(target_arch = "wasm32"))]
     if parallel(pixels) {
         use rayon::prelude::*;
         return items.par_iter().map(&f).collect();
     }
-    #[cfg(target_arch = "wasm32")]
-    let _ = pixels;
     items.iter().map(&f).collect()
 }
 // Tests: scan every pixel of a sampled dab's square on this thread, as before rows were cut to
