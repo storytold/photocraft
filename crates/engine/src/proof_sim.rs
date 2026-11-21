@@ -28,7 +28,7 @@ use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
 /// What a proof simulates.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub enum ProofKind {
     /// The proof profile (Working CMYK, Custom…).

@@ -90,6 +90,12 @@ fn export_formats() -> Vec<(String, Label)> {
     opts(&[("png", tl!("PNG")), ("jpg", tl!("JPEG")), ("psd", tl!("PSD")), ("tiff", tl!("TIFF")), ("webp", tl!("WebP")), ("bmp", tl!("BMP"))])
 }
 
+/// The reference application's File Type list of Artboards to Files, in its order (#13635). Format names, not
+/// translated.
+fn artboard_formats() -> Vec<(String, Label)> {
+    opts(&[("bmp", "BMP"), ("jpg", "JPEG"), ("pdf", "PDF"), ("psd", "PSD"), ("tga", "Targa"), ("tiff", "TIFF"), ("png8", "PNG-8"), ("png24", "PNG-24")])
+}
+
 /// The blending modes of the channel dialogs.
 fn blend_modes() -> Vec<(String, Label)> {
     opts(&[
@@ -293,7 +299,8 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                         Some("overlapping".to_owned()),
                     ),
                 ),
-                choice("format", tl!("File Type"), export_formats(), "png"),
+                // The reference application's list, PSD chosen when the dialog opens (#13635).
+                choice("format", tl!("File Type"), artboard_formats(), "psd"),
                 export_quality(),
             ])
         }

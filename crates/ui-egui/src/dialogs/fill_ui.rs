@@ -4,8 +4,6 @@
 //! White) with the content's own options, then Blending: Mode, Opacity and Preserve
 //! Transparency. OK remembers the choices in the saved tier.
 
-use std::borrow::Cow;
-
 use craft::ui::contract::Bind;
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamResult};
@@ -87,7 +85,7 @@ pub fn open(app: &mut PhotocraftApp) -> DialogId {
     let [r, g, b, _] = app.session.tools.foreground;
     let first = app.session.patterns.items.first().map(|p| p.id.clone());
     let ctx = app.ctx().clone();
-    let patterns = crate::panels::preset_browser::pattern_rows(app, &ctx);
+    let patterns = crate::panels::preset_browser::pattern_swatches(app, &ctx);
     let rows = rows([r, g, b], first.clone());
     let inks = crate::color_picker_ui::ink_value(craft::theme::Srgba::rgb(r, g, b), app.session.tools.picked_role_cmyk(0));
     let reset = defaults([r, g, b], first, app.session.tools.picked_role_cmyk(0));
@@ -101,7 +99,7 @@ pub fn open(app: &mut PhotocraftApp) -> DialogId {
             .values(Bind::bound(fields))
             .remember(SaveKey::named(REMEMBER))
             .reset_to(reset.clone())
-            .patterns(Cow::Owned(patterns.clone()))
+            .patterns(crate::panels::preset_browser::pattern_source(patterns.clone()))
     })
 }
 
