@@ -31,8 +31,8 @@ pub(super) fn purge(s: &mut Session, what: &str) -> Result<Value> {
     }
     if matches!(what, "clipboard" | "all") && (s.clipboard.is_some() || s.style_clipboard.is_some()) {
         freed += clip_bytes(s);
-        s.clipboard = None;
-        s.style_clipboard = None;
+        *s.clipboard = None;
+        *s.style_clipboard = None;
         items.push("clipboard");
     }
     if matches!(what, "histories" | "all") {

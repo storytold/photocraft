@@ -102,7 +102,7 @@ pub fn begin(app: &mut PhotocraftApp, _ctx: &egui::Context, command: &str) -> Re
     let image = crate::distort_ui::surface_image(&surface, bounds, 2048);
     let document = st.doc.id;
     let key = app.ui.alloc_id();
-    let textures = PreviewTextures::new(format!("persp-{key}"), PreviewPixels::new(image, [1.0, 1.0]));
+    let textures = PreviewTextures::new(&mut app.texture_serials, format!("persp-{key}"), PreviewPixels::new(image, [1.0, 1.0]));
     app.distort.perspective = Some(PerspSession {
         key,
         document,
