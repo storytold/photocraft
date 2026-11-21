@@ -55,6 +55,8 @@ pub mod os_window;
 pub mod panels;
 pub mod preset_files_ui;
 pub mod proxy;
+#[cfg(not(target_arch = "wasm32"))]
+mod recent_files;
 pub mod render_path;
 pub mod state;
 pub mod texel_guard;
