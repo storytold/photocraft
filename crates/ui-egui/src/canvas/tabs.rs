@@ -240,8 +240,12 @@ pub(crate) fn tab_title_at(app: &PhotocraftApp, i: usize, zoom: f32) -> String {
 /// The document's name as its tab and window title show it: "© name" when File Info marks it
 /// Copyrighted, as Photoshop does (#13821).
 pub(crate) fn titled_name(app: &PhotocraftApp, st: &photocraft_engine::DocState) -> String {
-    let copyrighted = app.doc_queries.copyrighted(&app.session, st);
-    format!("{}{}", if copyrighted { "\u{a9} " } else { "" }, st.doc.name)
+    format!("{}{}", copyright_prefix(app, st), st.doc.name)
+}
+
+/// "© " when File Info marks the document Copyrighted, otherwise nothing.
+pub(crate) fn copyright_prefix(app: &PhotocraftApp, st: &photocraft_engine::DocState) -> &'static str {
+    if app.doc_queries.copyrighted(&app.session, st) { "\u{a9} " } else { "" }
 }
 
 /// The documents with a tab in the main window, in document order: every one not floating in its own window.
