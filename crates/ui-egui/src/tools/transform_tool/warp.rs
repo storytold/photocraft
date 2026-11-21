@@ -502,3 +502,18 @@ pub(super) fn flat_placed_warp(doc: &photocraft_doc::Document, layer: u64, warp:
         })
     })
 }
+
+/// Whether `warp`, built over the box's frame `rect` and shown through the box at `quad` (a pixel layer's warp, or an
+/// upright smart object's edited in the document), is still the flat grid: its points are the frame's thirds carried
+/// through the box's map.
+pub(super) fn flat_in_box(warp: &Warp, rect: [f64; 4], quad: [[f64; 2]; 4]) -> bool {
+    let Some(h) = photocraft_algo::transform::Homography::rect_to_quad(rect, quad) else { return false };
+    let b = warp.bounds;
+    let (mesh, flat) = (warp.to_mesh(1, 1), photocraft_geom::warp::BezierMesh::identity(rect, 1, 1));
+    let tol = 1e-6 * ((b[2] - b[0]).abs() + (b[3] - b[1]).abs()).max(1.0);
+    mesh.points.len() == flat.points.len()
+        && mesh.points.iter().zip(&flat.points).all(|(p, q)| {
+            let (x, y) = h.apply(q[0], q[1]);
+            (p[0] - x).abs() <= tol && (p[1] - y).abs() <= tol
+        })
+}

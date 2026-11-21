@@ -1024,13 +1024,28 @@ fn enter_placed_warp(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
 /// with it and the commit applies both. Warp Text has no box of its own to hold it under: it leaves Warp as before.
 pub fn hold_warp(app: &mut PhotocraftApp) {
     let now = app.nudge_bundle.now;
+    let placed_before = app.transform_preview.as_ref().and_then(|pv| pv.placed_warp);
+    let doc = app.session.active().map(|st| st.doc.clone());
     let Some(t) = app.ui.transform.as_mut() else { return };
     let Some(w) = t.session.warp() else { return };
-    let (warp, on_type) = (w.warp.clone(), w.on_type);
+    let (warp, on_type, stored) = (w.warp.clone(), w.on_type, w.stored);
     t.session.apply(TransformEdit::LeaveWarp, now);
     let start = t.quad_array();
+    // An untouched warp is no warp: the reference shows and applies the box mode's picture exactly as without it, also
+    // when Warp mode comes back later. It is left as Warp's own toggle leaves it, not held.
+    let flat = !on_type
+        && !stored
+        && match placed_before {
+            Some(_) => doc.as_deref().is_some_and(|doc| super::warp::flat_placed_warp(doc, t.layer, &warp, placed_before).is_some()),
+            None => super::warp::flat_in_box(&warp, t.rect_array(), start),
+        };
     let Some(pv) = app.transform_preview.as_mut() else { return };
     pv.split = None;
+    if flat {
+        swap_mode_texels(pv);
+        pv.placed_warp = None;
+        return;
+    }
     // The box shows the layer's own texels again; the warp keeps the ones it maps (a smart object's source).
     let texture = pv.other_texels.take().map(|o| std::mem::replace(&mut pv.textures, o.texture));
     let placed = pv.placed_warp.take();

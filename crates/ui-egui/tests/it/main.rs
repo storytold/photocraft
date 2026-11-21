@@ -19,6 +19,7 @@ mod flatpak_updates;
 mod free_transform_preview_canvas;
 mod gpu_device_loss;
 mod healing_reset_tip;
+mod transform_pops;
 // The interactive bench's `#[cfg(test)]` reporting tests: CI runs `--tests`, never examples.
 // Embedding the example leaves its other entrypoints unused in this binary.
 #[path = "../../examples/interactive_bench.rs"]
