@@ -370,8 +370,9 @@ pub struct UiState {
     pub palette: crate::palette::PaletteState,
     /// The panel layout: every panel's place, the docks, the floating panels and where each one
     /// docks back to.
-    #[serde(default = "crate::panels::registry::default_workspace")]
-    pub docking: craft::behavior::dock::Workspace<String>,
+    /// One `Arc` across frames: the dock keys what it derives on the workspace's revision.
+    #[serde(default = "default_docking")]
+    pub docking: std::sync::Arc<craft::behavior::dock::Workspace<String>>,
     /// The panel open in the flyout of a column collapsed to icons (`Layout::opens_in_flyout`); the dock area shows it.
     /// Not saved: a flyout is closed at launch.
     #[serde(skip)]
@@ -444,6 +445,11 @@ pub struct UiState {
     /// Status bar info field, Home screen (see `chrome_ui`).
     #[serde(default)]
     pub chrome: crate::chrome_ui::ChromeState,
+}
+
+/// The panel layout at start and for a saved state without one.
+fn default_docking() -> std::sync::Arc<craft::behavior::dock::Workspace<String>> {
+    std::sync::Arc::new(crate::panels::registry::default_workspace())
 }
 
 /// The Brushes panel's state at start and for a saved state without one: the list view.
@@ -521,7 +527,7 @@ impl Default for UiState {
             window_views: HashMap::new(),
             theme: crate::theme::AppTheme::default(),
             palette: Default::default(),
-            docking: crate::panels::registry::default_workspace(),
+            docking: default_docking(),
             flyout: None,
             color_panel: Default::default(),
             color_panel_synced: None,
