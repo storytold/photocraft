@@ -7,7 +7,7 @@
 use craft::behavior::{Anchor9, PixelSize};
 use craft::settings::Remembered;
 use craft::ui::contract::Bind;
-use craft::ui::dialog::{DialogId, DialogResult, dialog_id};
+use craft::ui::dialog::{DialogId, DialogResult, StackDialog as _, dialog_id};
 use craft::ui::patterns::form_dialogs::{
     CanvasExtension, CanvasSize, CanvasSizeResult, CanvasSizeValues, HostedCanvasSize, HostedImageSize, ImageSize, ImageSizeResult, ImageSizeValues, Resample,
 };
@@ -189,6 +189,7 @@ pub(crate) fn open_with(app: &mut PhotocraftApp, command: &str, params: &Value) 
     let dpi = f64::from(d.resolution_dpi);
     let bytes_per_pixel = d.layers.first().and_then(|l| l.surface()).map_or(4, |s| s.format().bytes_per_pixel()) as f64;
     let image_bytes_per_pixel = flat_bytes_per_pixel(d);
+    let mut opening = None;
     let id = if command == IMAGE_COMMAND {
         // The last OK's units, Resample and method (#14799); the preferences until there is one.
         let memory = image_memory().recall(app.framework.host());
@@ -206,6 +207,7 @@ pub(crate) fn open_with(app: &mut PhotocraftApp, command: &str, params: &Value) 
             }
             values = values.resampling(m.resampling);
         }
+        opening = Some(method);
         app.framework.dialogs.open(HostedImageSize::new(values, move |values: Bind<'_, ImageSizeValues>| {
             ImageSize::new(values).methods(methods.clone()).bytes_per_pixel(image_bytes_per_pixel)
         }))
@@ -217,6 +219,14 @@ pub(crate) fn open_with(app: &mut PhotocraftApp, command: &str, params: &Value) 
             .open(HostedCanvasSize::new(values, move |values: Bind<'_, CanvasSizeValues>| CanvasSize::new(values).bytes_per_pixel(bytes_per_pixel)))
     };
     seed(app, id, command == IMAGE_COMMAND, params);
+    // A recorded method replaces the opening one; the dialog shows it only while Resample is on.
+    let seeded_method = app
+        .framework
+        .dialogs
+        .get_by_id::<HostedImageSize>(id)
+        .and_then(|dialog| dialog.json_fields())
+        .and_then(|fields| serde_json::from_value::<Resample>(fields["resample"].clone()).ok());
+    app.image_size_opening = opening.map(|method| seeded_method.filter(|_| params.get("resample").is_some()).unwrap_or(method));
     Some(id)
 }
 
@@ -261,10 +271,12 @@ pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
     if let Some(result) = app.framework.dialogs.take::<HostedImageSize>() {
         let params = match result {
             DialogResult::Ok(r) => {
-                let kept =
-                    image_memory().recall(app.framework.host()).map_or_else(|| resample_of(app.session.prefs().general.image_interpolation), |m| m.method);
-                let indexed = app.session.active().is_some_and(|st| st.doc.mode == photocraft_color::ColorMode::Indexed);
-                let opening = opening_method(kept, indexed);
+                let opening = app.image_size_opening.take().unwrap_or_else(|| {
+                    let kept =
+                        image_memory().recall(app.framework.host()).map_or_else(|| resample_of(app.session.prefs().general.image_interpolation), |m| m.method);
+                    let indexed = app.session.active().is_some_and(|st| st.doc.mode == photocraft_color::ColorMode::Indexed);
+                    opening_method(kept, indexed)
+                });
                 remember_image(app, &r, opening);
                 Some(image_params(app, &r))
             }

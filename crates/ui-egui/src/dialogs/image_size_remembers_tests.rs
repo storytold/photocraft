@@ -153,6 +153,26 @@ fn resample_off_on_an_indexed_document_keeps_the_method_it_showed() {
     assert_eq!(kept.method, Resample::NearestNeighbor);
 }
 
+/// A recorded step's method replaces the kept one: an OK with Resample off then keeps the method the dialog showed
+/// (the recorded Nearest Neighbor), not the Bicubic kept before.
+#[test]
+fn resample_off_after_a_recorded_method_keeps_that_method() {
+    let mut app = app();
+    let id = opened(&mut app);
+    set(&mut app, id, "resample", to(Resample::Bicubic));
+    ok(&mut app, id);
+
+    let recorded = json!({"width": 300, "height": 200, "resolution": 150, "resample": "nearest"});
+    let id = super::open_with(&mut app, COMMAND, &recorded).expect("a document is open");
+    assert_eq!(fields(&app, id)["resample"], to(Resample::NearestNeighbor), "the recorded method shows");
+    set(&mut app, id, "resample", Value::Null);
+    ok(&mut app, id);
+
+    let kept = super::image_memory().recall(app.framework.host()).expect("the OK kept its settings");
+    assert!(!kept.resampling);
+    assert_eq!(kept.method, Resample::NearestNeighbor);
+}
+
 /// A recorded step's resolution is in pixels/inch: a kept Pixels/Centimeter unit doesn't reread it, so the
 /// dialog shows the recorded resolution unchanged.
 #[test]
