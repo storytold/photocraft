@@ -1595,6 +1595,41 @@ fn every_open_format_has_its_own_filter() {
     assert_eq!(open_filters(PickRequest::open("file"), &["cube"]).filters, [FileFilter::new("Supported Files", &["cube"])]);
 }
 
+/// #15532: a dropped PDF opened, but File › Open hid .pdf files. The picker now lists them under
+/// All Formats and their own PDF type, and a PDF picked there opens like a dropped one.
+#[test]
+fn file_open_lists_and_opens_pdf_files() {
+    // The app's own importer, as the desktop app wires it, so the picked PDF really opens.
+    let files = Arc::new(ScriptedFiles::held());
+    let services = Services {
+        import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
+            photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+        })),
+        files: Some(files.clone()),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.open_dialog_file().unwrap();
+    let asked = last_request(&files);
+    assert!(asked.filters[0].extensions.iter().any(|e| e == "pdf"), "All Formats lacks .pdf: {:?}", asked.filters[0]);
+    assert!(asked.filters.iter().any(|f| f.name == "PDF" && f.extensions.iter().any(|e| e == "pdf")), "no PDF type");
+    // A one-page PDF, written the way File › Save As writes one.
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
+    let pdf = photocraft_io::export(&s.active().unwrap().doc, "page.pdf", &Default::default()).unwrap();
+    let dir = std::env::temp_dir().join(format!("photocraft-15532-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("page.pdf");
+    std::fs::write(&path, &pdf.bytes).unwrap();
+    let documents = app.session.documents().len();
+    // Tests open inline, so the document is there once the answer is handled.
+    answer(&files, Picked::Paths(vec![path]));
+    app.poll_file_dialog();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert_eq!(app.session.documents().len(), documents + 1, "the PDF opened as a document");
+}
+
 /// The save types of a Save dialog suggesting `suggested`: (name, extensions).
 fn save_types(suggested: &str) -> Vec<(String, Vec<String>)> {
     save_request("document", suggested).filters.into_iter().map(|f| (f.name, f.extensions)).collect()
@@ -1635,7 +1670,7 @@ fn save_as_offers_only_writable_formats_including_ico() {
     // File Open lists readable Save As formats in their own type. Export-only formats must
     // stay absent from both Open filters rather than advertising an unavailable decoder.
     for (name, exts) in filters::SAVE_FILTERS {
-        for ext in exts.iter().filter(|e| **e != "pdf") {
+        for ext in exts.iter() {
             if photocraft_codecs::from_extension(ext).is_some_and(|format| !format.caps().read) {
                 assert!(!filters::OPEN_EXTS.contains(ext), "{name}: export-only .{ext} must not appear in All Formats");
                 assert!(!filters::OPEN_FILTERS.iter().any(|(_, open)| open.contains(ext)), "{name}: export-only .{ext} must not appear in an Open type");
