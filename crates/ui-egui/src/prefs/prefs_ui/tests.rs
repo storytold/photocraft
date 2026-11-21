@@ -747,7 +747,7 @@ fn run_loaded(cases: Vec<Loaded>) {
         tick(&mut app, &ctx);
         let (reread, report) = services_on(&files).settings.unwrap();
         assert!(report.section_errors.is_empty(), "{}: {:?}", case.name, report.section_errors);
-        // As written: the file has no nulls, which the preset libraries hold in memory.
+        // Compared as written: the file has no nulls, while the preset libraries hold some in memory.
         let written = |p: &prefs::SavedPrefs| serde_json::to_value(p).unwrap();
         assert_eq!(written(reread.get()), written(&app.session.saved_prefs()), "{}", case.name);
     }
