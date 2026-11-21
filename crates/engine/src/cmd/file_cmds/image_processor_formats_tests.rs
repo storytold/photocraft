@@ -160,3 +160,23 @@ fn legacy_format_and_resize_parameters_still_work() {
     let png = reopen(&files[0]).unwrap();
     assert_eq!((png.size.width, png.size.height), (20, 10));
 }
+
+/// #15924: Convert to Profile refuses a Bitmap document, so the JPEG's sRGB conversion takes it to
+/// RGB first; a format without the conversion keeps the Bitmap mode.
+#[test]
+fn a_bitmap_document_converts_to_srgb_through_rgb() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::new();
+    s.execute("file.new", json!({"name": "Plate", "width": 40, "height": 20, "mode": "gray", "background": "#ffffff"})).unwrap();
+    s.execute("image.mode.bitmap", json!({"method": "threshold"})).unwrap();
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Bitmap);
+    let result = s.execute(COMMAND, json!({"source": "current", "output": dir.path(), "jpeg": {"convertToSrgb": true}, "psd": {}})).unwrap();
+    assert_eq!(result["errors"], json!([]), "{result}");
+    let files = paths(&result).unwrap();
+    assert_eq!(files, ["Plate.jpg", "Plate.psd"].map(|name| dir.path().join(name)));
+    let jpeg = reopen(&files[0]).unwrap();
+    assert_eq!(jpeg.mode, ColorMode::Rgb);
+    assert_eq!(crate::color_cmds::document_profile(&jpeg).description, craft_cms::Builtin::Srgb.profile().description);
+    assert_eq!(reopen(&files[1]).unwrap().mode, ColorMode::Bitmap);
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Bitmap, "the open document is unchanged");
+}
