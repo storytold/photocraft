@@ -169,7 +169,10 @@ impl HueRange {
         self.hue == 0.0 && self.saturation == 0.0 && self.lightness == 0.0
     }
 
-    /// How much a pixel of hue `deg` (degrees) belongs to this range, 0..=1.
+    /// How much a pixel of hue `deg` (degrees) belongs to this range, 0..=1. The reference
+    /// application fades in 0.85° and out 0.08° later than the sliders say (#14744): the default
+    /// reds give 0.14 at hue 320.24 and 0.84 at hue 20, and the hard-edged 345/345/15/15 takes
+    /// hue 15.06 in full but leaves 344.94 alone.
     pub fn weight(&self, deg: f32) -> f32 {
         let [a, b, c, d] = self.bounds;
         // Measure from the range's start so wrap-around ranges (reds) work.
@@ -177,18 +180,28 @@ impl HueRange {
         let b = rel(b);
         let c = rel(c).max(b);
         let d = rel(d).max(c);
-        let h = rel(deg);
-        if h <= b {
-            if b <= 0.0 { 1.0 } else { h / b }
-        } else if h <= c {
+        let (up, down) = (rel(deg - FADE_IN_LAG), rel(deg - FADE_OUT_LAG));
+        let rise = if up > d {
+            0.0
+        } else if up >= b {
             1.0
-        } else if h <= d {
-            if d <= c { 1.0 } else { (d - h) / (d - c) }
+        } else {
+            up / b
+        };
+        let fall = if down <= c {
+            1.0
+        } else if down <= d {
+            (d - down) / (d - c)
         } else {
             0.0
-        }
+        };
+        rise.min(fall)
     }
 }
+
+/// Degrees the reference application's range fade-in and fade-out sit past the sliders.
+const FADE_IN_LAG: f32 = 0.85;
+const FADE_OUT_LAG: f32 = 0.08;
 
 fn default_hue_ranges() -> [HueRange; 6] {
     HueRange::defaults()
@@ -394,8 +407,8 @@ mod tests {
         let reds = HueRange::neutral(0);
         assert_eq!(reds.weight(0.0), 1.0);
         assert_eq!(reds.weight(350.0), 1.0);
-        assert!((reds.weight(30.0) - 0.5).abs() < 1e-5);
-        assert!((reds.weight(330.0) - 0.5).abs() < 1e-5);
+        assert!((reds.weight(30.08) - 0.5).abs() < 1e-5);
+        assert!((reds.weight(330.85) - 0.5).abs() < 1e-5);
         assert_eq!(reds.weight(60.0), 0.0);
         assert_eq!(reds.weight(180.0), 0.0);
         let blues = HueRange::neutral(4);
