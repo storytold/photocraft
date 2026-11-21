@@ -52,8 +52,17 @@ pub fn record_xtask() -> Result<(), String> {
         return Ok(());
     }
     let mut c = crate::cargo();
-    c.args(["build", "-p", "xtask", "--message-format", "json-render-diagnostics"]);
-    run(c, "cargo build -p xtask --message-format json-render-diagnostics")
+    xtask_build_args(&mut c, cfg!(feature = "framework-checks"));
+    let what = crate::shown(&c);
+    run(c, &what)
+}
+
+fn xtask_build_args(c: &mut Command, framework_checks: bool) {
+    c.args(["build", "--locked", "-p", "xtask", "--message-format", "json-render-diagnostics"]);
+    // Match the features of the running bootstrap, including `cargo xtask-gate`.
+    if !framework_checks {
+        c.arg("--no-default-features");
+    }
 }
 
 /// Lines that are Cargo's JSON messages go to `record`, every other line to `out`.
@@ -77,6 +86,19 @@ fn route(mut input: impl BufRead, record: &mut impl Write, out: &mut impl Write)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xtask_record_build_matches_bootstrap_features() {
+        for enabled in [false, true] {
+            let mut c = Command::new("cargo");
+            xtask_build_args(&mut c, enabled);
+            let args: Vec<_> = c.get_args().map(|s| s.to_string_lossy().into_owned()).collect();
+            assert_eq!(args.contains(&"--no-default-features".into()), !enabled);
+            assert!(args.contains(&"--locked".into()));
+            assert!(args.windows(2).any(|p| p == ["-p", "xtask"]));
+            assert!(args.windows(2).any(|p| p == ["--message-format", "json-render-diagnostics"]));
+        }
+    }
 
     #[test]
     fn cargo_messages_are_recorded_and_test_output_passes_through() {
