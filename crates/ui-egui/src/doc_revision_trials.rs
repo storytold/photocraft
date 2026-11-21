@@ -3,7 +3,6 @@
 //! walks no document and rebuilds nothing derived from it.
 
 use craft::layers::ui::thumbs::{LayerThumb, ThumbContents};
-use craft::layers::ui::tree::LayerTree;
 use craft::ui::primitives::textures::{ThumbRequest, ThumbSource};
 use egui_kittest::Harness;
 use photocraft_doc::{Fill, Layer, LayerContent, LayerId, PixelFormat};
@@ -11,7 +10,7 @@ use photocraft_engine::Session;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::panels::layers_tree::{PhotoLayers, PhotoThumbs};
+use crate::panels::layers_tree::PhotoThumbs;
 use crate::state::Tool;
 
 type H = Harness<'static, Box<PhotocraftApp>>;
@@ -113,10 +112,9 @@ fn layers_rows_follow_renames_and_both_toggles() {
     })
     .unwrap();
     let mut h = harness(s);
-    let revision = |h: &H| {
-        let app = h.state();
-        PhotoLayers::new(app, app.session.active().unwrap(), &Default::default(), false, None).revision()
-    };
+    // The panel's model, which the app holds across passes and replaces only when what the rows show changed.
+    let revision = |h: &H| h.state().layers_tree.as_ref().map(|model| model.revision());
+    h.run_steps(2);
     let start = revision(&h);
     assert!(start.is_some());
     h.run_steps(10);
