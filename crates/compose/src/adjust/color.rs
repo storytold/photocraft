@@ -30,15 +30,18 @@ pub fn colorize_saturation(s: f32, lightness: f32, colorize: bool, depth: Option
 /// Colorize sets the hue and saturation instead of shifting them; at 0% it leaves only the
 /// lightness, as in Photoshop (#2326). Ticking Colorize in the dialog starts saturation at 25%.
 pub fn hue_saturation(c: [f32; 3], hue: f32, s: f32, l: f32, colorize: bool) -> [f32; 3] {
-    hue_saturation_in(c, hue, s, l, colorize, None)
+    hue_saturation_in(c, hue, s, 0.0, l, colorize, None)
 }
 
 /// [`hue_saturation`] in a document of `depth`. At 32 bits Photoshop doesn't clip the raised
 /// saturation, so saturated colours leave 0..1 (red with Hue +40, Saturation +25, Lightness -10
 /// becomes (1.0477, 0.649, -0.1477)), and it scales each colour's chroma around its lightness by
 /// [`hdr_saturation_factor`], so colours at or above lightness 1 keep their hue too: the photoshop
-/// corpus's rgb32 hue-saturation.psd is exact so.
-pub fn hue_saturation_in(c: [f32; 3], hue: f32, s: f32, l: f32, colorize: bool, depth: Option<SampleType>) -> [f32; 3] {
+/// corpus's rgb32 hue-saturation.psd is exact so. A colour range's saturation `range_s` scales
+/// the pixel's saturation again after the master's, so their factors multiply: Master -50 with
+/// Reds -50 leaves a quarter of red's saturation, (255, 0, 0) becomes (159, 95, 95) in the
+/// reference application (#14741). Colorize ignores it, as ranges don't apply there.
+pub fn hue_saturation_in(c: [f32; 3], hue: f32, s: f32, range_s: f32, l: f32, colorize: bool, depth: Option<SampleType>) -> [f32; 3] {
     let hdr = depth == Some(SampleType::F32);
     let lighten = |v: f32| if l > 0.0 { v + (1.0 - v) * l } else { v * (1.0 + l) };
     if colorize {
@@ -56,12 +59,13 @@ pub fn hue_saturation_in(c: [f32; 3], hue: f32, s: f32, l: f32, colorize: bool, 
     if hdr {
         // The chroma, not the HSL saturation, whose `2 - max - min` divisor is 0 at lightness 1
         // and negative above it: (2, 0, 0) with Hue +40 becomes (2, 1.333, 0) in Photoshop.
-        let d = (lc[0].max(lc[1]).max(lc[2]) - lc[0].min(lc[1]).min(lc[2])) * hdr_saturation_factor(s);
+        let d = (lc[0].max(lc[1]).max(lc[2]) - lc[0].min(lc[1]).min(lc[2])) * (hdr_saturation_factor(s) * hdr_saturation_factor(range_s));
         return hue_rgb(hh, ll - d / 2.0, ll + d / 2.0);
     }
     // Raising saturation divides by 1 - s, lowering it multiplies by 1 + s: +50 % doubles it
     // (measured in Photoshop 27.11); +100 % saturates any colour that has some.
-    let ss = if s > 0.0 { ss / (1.0 - s).max(1.0 / 512.0) } else { ss * (1.0 + s) }.clamp(0.0, 1.0);
+    let scale = |v: f32, by: f32| if by > 0.0 { v / (1.0 - by).max(1.0 / 512.0) } else { v * (1.0 + by) };
+    let ss = scale(scale(ss, s), range_s).clamp(0.0, 1.0);
     hsl_to_rgb(hh, ss, ll)
 }
 
@@ -71,7 +75,7 @@ pub fn hue_saturation_in(c: [f32; 3], hue: f32, s: f32, l: f32, colorize: bool, 
 /// 1/256 and stops at 32767/256, so +25 % gives 340/256, +99 % 63.75 and +100 % 127.996.
 /// compose.wgsl's Hue/Saturation does the same in whole numbers.
 pub fn hdr_saturation_factor(s: f32) -> f32 {
-    // The 1e-4 keeps a master plus range sum on its step: -0.46 + 0.96 is 0.49999997 in f32.
+    // The 1e-4 keeps a value a rounding error under a step on that step: 0.49999997 is +50 %.
     let s = s.clamp(-1.0, 1.0);
     if s <= 0.0 {
         return 1.0 - (-s * 256.0 + 1e-4).floor() / 256.0;

@@ -87,13 +87,8 @@ fn thirty_two_bit_hue_saturation_keeps_bright_colours() {
         let got = hdr(&adj, c);
         assert!(near(got, want), "hue {hue}, saturation {sat}, {c:?}: {got:?}, Photoshop {want:?}");
     }
-    // A master plus a range edit that add up to a whole step stay on it: Reds +96 over a master
-    // -46 scales red as much as a master +50 alone (in f32 the sum is 0.49999997).
-    let mut ranges = HueRange::defaults();
-    ranges[0].saturation = 96.0;
-    let summed = Adjustment::HueSaturation { hue: 0.0, saturation: -46.0, lightness: 0.0, colorize: false, ranges };
-    let single = Adjustment::HueSaturation { hue: 0.0, saturation: 50.0, lightness: 0.0, colorize: false, ranges: HueRange::defaults() };
-    assert_eq!(hdr(&summed, [1.0, 0.0, 0.0]), hdr(&single, [1.0, 0.0, 0.0]));
+    // A value a rounding error under a step stays on it: 0.49999997 is +50 %.
+    assert_eq!(hdr_saturation_factor(0.49999997), hdr_saturation_factor(0.5));
     // Lightness 0 with a negative channel divides by zero the same way.
     let adj = Adjustment::HueSaturation { hue: 40.0, saturation: 25.0, lightness: 0.0, colorize: false, ranges: HueRange::defaults() };
     assert!(hdr(&adj, [0.25, -0.25, 0.0]).iter().all(|v| v.is_finite()));
