@@ -19,6 +19,7 @@
 //!
 //! The canvas keeps showing the pre-job state: workers never touch the session's documents.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -163,11 +164,21 @@ pub struct SaveJob {
     pub foreground: bool,
 }
 
+/// A path waiting to be admitted as a background image-opening job.
+#[derive(Clone, Debug)]
+pub struct PendingOpen {
+    pub path: String,
+    pub slot: Option<usize>,
+    pub order: Option<OpenOrder>,
+}
+
 /// The shell's job bookkeeping.
 #[derive(Default)]
 pub struct JobsUi {
     /// Background opens, in tab order.
     pub opens: Vec<OpenTab>,
+    /// Paths waiting for an available background job slot.
+    pub pending_opens: VecDeque<PendingOpen>,
     /// Sets of files opened together that still have members opening (see [`OpenOrder`]).
     pub(crate) batches: Vec<OpenBatch>,
     /// The id of the next set.
@@ -331,7 +342,7 @@ pub(crate) fn start_open_as_smart_object(app: &mut PhotocraftApp, path: &str, or
 pub(crate) fn begin_batch(app: &mut PhotocraftApp) -> u64 {
     let id = app.jobs.next_batch;
     app.jobs.next_batch = app.jobs.next_batch.wrapping_add(1);
-    let base = app.session.documents().len() + app.jobs.opens.len();
+    let base = app.session.documents().len() + app.jobs.opens.len() + app.jobs.pending_opens.len();
     app.jobs.batches.push(OpenBatch { id, base, opened: Vec::new() });
     id
 }
@@ -350,8 +361,10 @@ pub(crate) fn opened_in_order(jobs: &mut JobsUi, order: OpenOrder) {
 pub(crate) fn end_batch(app: &mut PhotocraftApp) {
     let waiting: Vec<u64> =
         app.held_memory_prompts.iter().filter_map(|m| m.order.map(|o| o.batch)).chain(app.held_opens.iter().filter_map(|h| h.order.map(|o| o.batch))).collect();
-    let JobsUi { opens, batches, .. } = &mut app.jobs;
-    batches.retain(|b| opens.iter().any(|o| o.order.is_some_and(|x| x.batch == b.id)) || waiting.contains(&b.id));
+    let JobsUi { opens, pending_opens, batches, .. } = &mut app.jobs;
+    batches.retain(|b| opens.iter().any(|o| o.order.is_some_and(|x| x.batch == b.id))
+        || pending_opens.iter().any(|o| o.order.is_some_and(|x| x.batch == b.id))
+        || waiting.contains(&b.id));
 }
 
 /// The tab position for a member of a set that just opened: after the members before it that
@@ -486,12 +499,40 @@ fn close_after_saves(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
+/// Admit queued path opens as worker slots become available. The engine also counts
+/// cancelled workers still winding down, so a capacity refusal is retried later.
+#[cfg(not(target_arch = "wasm32"))]
+fn drain_pending_opens(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    while !app.jobs.pending_opens.is_empty() {
+        // Leave some capacity for saves, filters and other commands.
+        if app.session.jobs().len() >= 12 {
+            break;
+        }
+        let next = app.jobs.pending_opens.pop_front().expect("nonempty pending open queue");
+        let result = app.open_path_placed(&next.path, next.slot, next.order);
+        match result {
+            Ok(_) => {}
+            Err(err) if err.contains("too many background jobs") => {
+                app.jobs.pending_opens.push_front(next);
+                break;
+            }
+            Err(err) => app.open_failed(&crate::file_open::display_name(&next.path), &err),
+        }
+    }
+    end_batch(app);
+    if !app.jobs.pending_opens.is_empty() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
+    }
+}
+
 /// Per frame: apply finished jobs and react to them; keep frames coming while jobs run; Esc
 /// cancels the job in view.
 pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     for e in app.session.poll_jobs() {
         on_event(app, ctx, e);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    drain_pending_opens(app, ctx);
     // A focused open tab that ended (or was cancelled elsewhere) gives way to the documents.
     if app.jobs.focus.is_some_and(|j| !app.jobs.opens.iter().any(|o| o.job == j)) {
         app.jobs.focus = app.jobs.opens.last().map(|o| o.job);

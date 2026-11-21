@@ -268,7 +268,7 @@ impl PhotocraftApp {
     /// [`Self::open_path`] for a file dropped on a tab slot or opened as one of a set: the slot
     /// and order survive an inline memory/profile prompt and the document's final placement.
     #[cfg(not(target_arch = "wasm32"))]
-    fn open_path_placed(&mut self, path: &str, slot: Option<usize>, order: Option<crate::jobs_ui::OpenOrder>) -> Result<Vec<String>, String> {
+    pub(crate) fn open_path_placed(&mut self, path: &str, slot: Option<usize>, order: Option<crate::jobs_ui::OpenOrder>) -> Result<Vec<String>, String> {
         if self.show_if_open(path) {
             return Ok(Vec::new());
         }
@@ -325,9 +325,24 @@ impl PhotocraftApp {
             if self.show_if_open(abs) {
                 continue;
             }
+            if !photocraft_engine::file_cmds::is_template(abs)
+                && self.jobs.pending_opens.iter().any(|p| p.path == *abs)
+            {
+                continue;
+            }
             let order = crate::jobs_ui::OpenOrder { batch, seq };
             // The order travels with the open: a background tab, an inline document, or a memory
             // prompt that is answered later all place the file at its place in the set.
+            if self.background_jobs {
+                // Queue paths, not image bytes; the worker reads each file only when admitted.
+                // Presets retain their existing synchronous import path.
+                let ext = std::path::Path::new(abs).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+                if !crate::preset_files_ui::PRESET_EXTS.contains(&ext.as_str()) {
+                    self.jobs.pending_opens.push_back(crate::jobs_ui::PendingOpen { path: abs.clone(), slot: None, order: Some(order) });
+                    opened += 1;
+                    continue;
+                }
+            }
             match self.open_path_placed(abs, None, Some(order)) {
                 Ok(_) => opened += 1,
                 Err(e) => self.open_failed(&display_name(abs), &e),
@@ -349,6 +364,9 @@ impl PhotocraftApp {
         } else if let Some(o) = self.jobs.opens.iter().find(|o| o.path.as_deref().is_some_and(|p| !is_template(p) && same(p))) {
             // A template still loading opens as another Untitled, as it does once loaded.
             self.jobs.focus = Some(o.job);
+        } else if self.jobs.pending_opens.iter().any(|p| !is_template(&p.path) && same(&p.path)) {
+            self.ui.chrome.home = None;
+            return true;
         } else if self.held_memory_prompts.iter().any(|m| m.path.as_deref().is_some_and(|p| !is_template(p) && same(p))) {
             // The file's high-memory prompt is already waiting: show it, don't queue a second
             // prompt and a second open for the same file. A template still opens again as
