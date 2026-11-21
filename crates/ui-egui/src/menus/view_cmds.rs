@@ -26,7 +26,7 @@ pub use dispatch::{checked, handles, invoke, is_enabled, leave_full_screen_witho
 pub use options::{persist, pixel_aspect_ratio, restore};
 
 /// View › Show flags (Photoshop defaults).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, craft::ui::contract::MemoProps)]
 #[serde(default)]
 pub struct Show {
     pub layer_edges: bool,
@@ -65,7 +65,7 @@ impl Default for Show {
 }
 
 /// View › Snap To targets (snapping itself is the `view.snap` master switch).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, craft::ui::contract::MemoProps)]
 #[serde(default)]
 pub struct SnapTo {
     pub guides: bool,
@@ -82,11 +82,12 @@ impl Default for SnapTo {
 }
 
 /// View-, window- and type-preference state of the shell.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft::ui::contract::MemoProps)]
 #[serde(default)]
 pub struct ViewOptions {
     /// View › Screen Mode (F cycles). Saved as "standard" | "fullScreenWithMenuBar" | "fullScreen".
     #[serde(with = "screen_mode_names")]
+    #[memo_props(hash = "craft-shell's screen mode: a fieldless enum")]
     pub screen_mode: ScreenMode,
     /// View › Extras (⌘H): master switch for guides, grid, edges and other overlays.
     pub extras: bool,

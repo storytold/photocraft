@@ -275,20 +275,6 @@ pub(crate) fn window_picker_open(app: &PhotocraftApp, window: PickWindow) -> boo
         .any(|(id, t)| matches!(t, PickTarget::Window { window: w, .. } if *w == window) && app.framework.dialogs.get_by_id::<ColorPickerDialog>(*id).is_some())
 }
 
-/// What `window` shows of its picker, for the content version of the region that holds it: the colour its open
-/// picker shows (`None` while none is open) and how many of its answers wait. A settled region runs again when either
-/// changes, so it previews the picker's colour and takes its answer without input of its own.
-pub(crate) fn window_picker_state(app: &PhotocraftApp, window: PickWindow) -> (Option<Option<[u32; 4]>>, usize) {
-    let shown = find(app, |t| matches!(t, PickTarget::Window { window: w, .. } if *w == window)).map(|(id, _)| {
-        app.framework.dialogs.get_by_id::<ColorPickerDialog>(id).and_then(ColorPickerDialog::current).map(|picked| {
-            let c = picked.color;
-            [c.r, c.g, c.b, c.a].map(f32::to_bits)
-        })
-    });
-    let waiting = app.color_answers.iter().filter(|(parent, ..)| *parent == window.answers()).count();
-    (shown, waiting)
-}
-
 /// The Color Picker, when it is the top dialog (another dialog opened over it takes the input).
 pub(crate) fn top(app: &PhotocraftApp) -> Option<DialogId> {
     let id = app.framework.dialogs.stack().top()?;

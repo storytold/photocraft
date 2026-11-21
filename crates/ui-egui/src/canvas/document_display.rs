@@ -9,7 +9,7 @@ use craft::behavior::{CanvasView, PixelSize};
 use craft::imaging::ui::SelectionOverlay;
 use craft::ui::canvas::{
     Canvas, CanvasOutput, CanvasScrollbars, CanvasSpace, Extent, NavigationOptions, PageBorder, PageFrame, Pasteboard, PasteboardColor, PixelRect,
-    RasterDisplay, RasterSource, RotateView, ToolHost, ToolHostResponse, ViewTarget, canvas_space, easing_view, tool_pass,
+    RasterDisplay, RasterSource, RotateView, ToolHost, ToolHostResponse, ViewTarget, canvas_space, easing_view, ruler_guide, tool_pass,
 };
 use craft::ui::canvas_controls::{GuidesOutput, SelectionOutline};
 use craft::ui::contract::{Bind, Props, Show, ShowContainer};
@@ -289,6 +289,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
     // The view commands asked of this view (a menu row, an action step, a new document's fit) run in the canvas's pass.
     let queued = view.pending.clone();
     let mut bound = given;
+    let mut ruler_zero = Point::ZERO;
     let mut canvas = Canvas::new(label.clone())
         .id(id)
         .view(Bind::bound(&mut bound))
@@ -298,8 +299,8 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
         .snap(snap)
         .pasteboard(pasteboard)
         .navigation(navigation)
-        // The view lies inside the rulers' strips, which `rulers::show` draws along the body's top and left edges.
-        .show_rulers(app.ui.extras.rulers)
+        // The canvas shows the rulers along its top and left edges, and its view lies inside the strips.
+        .with_rulers(super::rulers::strips(app, host, &mut ruler_zero))
         .view_follows_pointer(follows_pointer)
         .precise_cursors(app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise)
         .tool_regions(regions);
@@ -316,7 +317,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
     let shown = canvas.show_at(ui, rect, |ui, body| {
         let Some(space) = canvas_space(&body.env) else { return };
         pasteboards(app, ui, body.rect, idx, border, label.clone());
-        guides = super::rulers::show(app, ui, host);
+        guides = super::rulers::show(app, ui, host, ruler_guide(&body.env));
         selection_controls(app, ui, body.rect, idx, &label);
         // The Levels clipping display, over the picture and under the controls: it joins the canvas's picture slot
         // after the picture.
@@ -438,18 +439,16 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
     if !measuring {
         view.pending.drain(..queued.len().min(view.pending.len()));
     }
+    if let Some(rulers) = &shown.output.rulers {
+        super::rulers::run_rulers(app, rulers);
+    }
     let canvas_output = shown.output;
-    if let Some(next) = canvas_output.view.as_ref() {
-        view.set_from(next, ppp);
-    }
-    // The scroll bars' and the compass's change: the bars drag the view, the compass turns it.
-    if let Some(next) = turned.as_ref() {
-        view.set_from(next, ppp);
-    }
     let response = hosted.unwrap_or_default();
-    // A view a tool set (the Crop tool's slide) is the one the app keeps; the canvas's own otherwise.
-    if let Some(next) = response.view.as_ref() {
-        view.set_from(next, ppp);
+    // The host also echoes the canvas's view (for example when rulers inset its rect). Only an actual tool
+    // edit takes precedence over the scroll bars or compass.
+    let tool_view = response.view.filter(|next| Some(*next) != canvas_output.view);
+    if let Some(next) = tool_view.or(turned).or(canvas_output.view) {
+        view.set_from(&next, ppp);
     }
     Shown { output: canvas_output, response, guides, overlay_context }
 }
@@ -511,7 +510,10 @@ fn canvas_controls(
     if !app.ui.view.hides_chrome() {
         let size = app.session.documents()[host.idx].doc.size;
         let bounds = Rect64::from_origin_size(Point::ZERO, Size::new(f64::from(size.width), f64::from(size.height)));
-        CanvasScrollbars::new("Scroll bars", Bind::bound(&mut shown), bounds).show_at(ui, rect);
+        CanvasScrollbars::new("Scroll bars", Bind::bound(&mut shown), bounds)
+            .overscroll(app.session.prefs().tools.overscroll)
+            .document_chrome()
+            .show_at(ui, rect);
     }
     if RotateView::visible(shown.rotation) {
         let mut rotation = shown.rotation;
@@ -620,6 +622,107 @@ mod tests {
         app.session.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
         testing::frame(&mut app);
         app
+    }
+
+    /// #15529: a fitting document can still move through its scroll bars when Overscroll is on.
+    #[test]
+    fn canvas_scrollbars_follow_overscroll_for_a_fitting_document() {
+        check_canvas_scrollbar_overscroll(false);
+    }
+
+    #[test]
+    fn canvas_scrollbars_follow_overscroll_with_rulers() {
+        check_canvas_scrollbar_overscroll(true);
+    }
+
+    fn check_canvas_scrollbar_overscroll(rulers: bool) {
+        use egui::accesskit::Role;
+        use egui::{Event, PointerButton, pos2, vec2};
+        use egui_kittest::kittest::{NodeT, Queryable};
+
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).with_pixels_per_point(1.0).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+            app.ui.extras.rulers = rulers;
+            app
+        });
+        h.run_steps(6);
+        let view = &mut h.state_mut().ui.views[0];
+        view.zoom = 1.0;
+        view.center = [200.0, 150.0];
+        view.clear_pending();
+        h.run_steps(3);
+
+        for overscroll in [false, true] {
+            h.state_mut().session.prefs.edit(|prefs| prefs.tools.overscroll = overscroll);
+            h.run_steps(3);
+            let view = testing::view(h.state()).expect("the document is shown");
+            assert_eq!(view.zoom, 1.0, "100% at one pixel per point");
+            assert_eq!(view.center, Point::new(200.0, 150.0));
+            assert!(view.rect.width() > 600.0 && view.rect.height() > 450.0, "the 400 × 300 document fits");
+
+            let horizontal = h.get_by_role_and_label(Role::ScrollBar, "Horizontal scroll bar");
+            let vertical = h.get_by_role_and_label(Role::ScrollBar, "Vertical scroll bar");
+            let track = horizontal.rect();
+            let thumb_center = vertical.rect().center();
+            if rulers {
+                // As in 0.23.1, the scroll bars run along the view inside the rulers; the document chrome puts a step arrow,
+                // as long as the bar is thick, before each track.
+                let arrow = vertical.rect().width();
+                let top = vertical.rect().top() - arrow;
+                assert!(
+                    (top - view.rect.top()).abs() < 0.5,
+                    "the vertical bar's top arrow starts at the view's top, below the ruler: {top} vs {}",
+                    view.rect.top()
+                );
+            }
+            let room = |length: f32, document: f64| if overscroll { f64::from(length) - document } else { 0.0 };
+            let x_room = room(view.rect.width(), 400.0);
+            let y_room = room(view.rect.height(), 300.0);
+            assert_eq!(horizontal.accesskit_node().max_numeric_value(), Some(x_room), "horizontal scroll room with Overscroll {overscroll}");
+            assert_eq!(vertical.accesskit_node().max_numeric_value(), Some(y_room), "vertical scroll room with Overscroll {overscroll}");
+
+            // On a fitting document a page press reaches the end of the scrollable range.
+            let at = pos2(track.right() - 3.0, track.center().y);
+            h.hover_at(at);
+            h.run_steps(2);
+            for pressed in [true, false] {
+                h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+                h.run_steps(2);
+            }
+            let paged = testing::view(h.state()).expect("the document is shown");
+            assert!((paged.center.x - (view.center.x + x_room / 2.0)).abs() < 0.5, "track page position with Overscroll {overscroll}: {paged:?}");
+            assert_eq!(paged.center.y, view.center.y);
+
+            // The vertical thumb is centred and its drag can move only its own axis.
+            h.hover_at(thumb_center);
+            h.run_steps(2);
+            h.drag_at(thumb_center);
+            h.run_steps(1);
+            for distance in [8.0, 24.0, 40.0] {
+                h.hover_at(thumb_center + vec2(0.0, distance));
+                h.run_steps(1);
+            }
+            h.event(Event::PointerButton { pos: thumb_center + vec2(0.0, 40.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.run_steps(2);
+            let dragged = testing::view(h.state()).expect("the document is shown");
+            assert_eq!(dragged.center.x, paged.center.x);
+            if overscroll {
+                assert!(dragged.center.y > view.center.y + 10.0 && dragged.center.y <= view.center.y + y_room / 2.0, "{dragged:?}");
+            } else {
+                assert_eq!(dragged.center.y, view.center.y);
+            }
+        }
+
+        // Turning Overscroll off after both axes have moved restores the centred view.
+        h.state_mut().session.prefs.edit(|prefs| prefs.tools.overscroll = false);
+        h.run_steps(3);
+        assert_eq!(testing::view(h.state()).expect("the document is shown").center, Point::new(200.0, 150.0));
+        for label in ["Horizontal scroll bar", "Vertical scroll bar"] {
+            let bar = h.get_by_role_and_label(Role::ScrollBar, label);
+            assert_eq!(bar.accesskit_node().max_numeric_value(), Some(0.0), "{label} after turning Overscroll off");
+        }
     }
 
     /// Four conditions decide whether the selection's ants show; each hides them alone, and Escape on an open polygon

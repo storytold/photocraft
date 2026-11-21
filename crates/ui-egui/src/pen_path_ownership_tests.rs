@@ -112,7 +112,8 @@ fn captured_path_and_shape_mode_do_not_follow_later_ui_selection() {
             assert_eq!(path(&app, "Saved drawing").subpaths.len(), 2);
             assert_eq!(app.ui.selected_path.as_deref(), Some("Saved drawing"));
         }
-        assert_eq!(steps(&app), n + 1);
+        // A Shape draft made its layer on the first anchor and edited it for the second (#12909).
+        assert_eq!(steps(&app), n + if shape { 2 } else { 1 });
     }
 }
 
@@ -138,7 +139,8 @@ fn captured_pen_paint_preserves_float_colour_and_alpha_after_toolbar_changes() {
         let st = app.session.active().unwrap();
         let LayerContent::Shape(shape) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("expected Pen shape") };
         let paint = |c: [f32; 4]| photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(c[0], c[1], c[2], c[3]));
-        assert_eq!(shape.fill, closed.then(|| paint(foreground)));
+        // The layer is made on the first click with the fill, open or not (#12909).
+        assert_eq!(shape.fill, Some(paint(foreground)));
         // Open and closed shapes both take the captured stroke paint.
         assert_eq!(shape.stroke.as_ref().unwrap().paint, paint(background));
     }

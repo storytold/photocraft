@@ -192,8 +192,8 @@ jobs:
       # missing-translations report (`cargo xtask ci lint`, xtask/src/main.rs), and the CI scripts'
       # own tests.
       lint-command: python3 scripts/test-ci-gpu-lavapipe.py && python3 scripts/test-ci-windows-gpu-tests.py && python3 scripts/test-ci-test-times.py && cargo xtask ci lint
-      archive-command: cargo xtask ci archive --gpu-shard
-      after-archive-command: cargo xtask ci doctest
+      archive-command: cargo xtask-gate archive --gpu-shard
+      after-archive-command: cargo xtask-gate doctest
       test-shards: 4
       shard-archives: true
       # The tests and panic_hunt with `--locked --features heif` (TEST_TARGETS in xtask/src/main.rs).
@@ -243,8 +243,8 @@ jobs:
         PHOTOCRAFT_CI_EXCLUDE=photocraft-web photocraft-web-boot ${{ needs.platforms.outputs.windows_gpu == 'false' && 'photocraft-gpu' || '' }} ${{ needs.platforms.outputs.windows_skip }}
       timeout-minutes: 100
       lint-command: cargo xtask ci clippy
-      archive-command: cargo xtask ci archive
-      after-archive-command: cargo xtask ci doctest
+      archive-command: cargo xtask-gate archive
+      after-archive-command: cargo xtask-gate doctest
       test-shards: 6
       shard-archives: true
       shard-command: bash scripts/ci-test-shard.sh
