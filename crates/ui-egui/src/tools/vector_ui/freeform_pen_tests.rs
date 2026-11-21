@@ -135,6 +135,35 @@ fn another_freeform_trace_cannot_replace_a_failed_owned_draft_or_retry_it_automa
 }
 
 #[test]
+fn freeform_alt_release_in_the_next_press_keeps_the_failed_draft() {
+    let mut app = app();
+    app.ui.tool_options.vector_mode = VectorMode::Path;
+    app.session.authorize = Some(|id, _| if id == "path.set" { Err(photocraft_engine::EngineError::Other("refused path fixture".into())) } else { Ok(()) });
+    freeform_run_and_straight_click(&mut app);
+    let st = app.session.active().unwrap();
+    let source = st.doc.clone();
+    let history = st.history.past_len();
+
+    // The modifier release and the new press reach the canvas in one frame.
+    let press = testing::to_screen(&app, [240.0, 120.0]);
+    let end = testing::to_screen(&app, [280.0, 150.0]);
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    testing::frame_with_events(&mut app, vec![egui::Event::ModifiersChanged(Modifiers::NONE), egui::Event::PointerMoved(press), button(press, true)]);
+    let failed = app.ui.pen.clone().expect("the refused commit keeps the fitted draft");
+    assert!(failed.commit_failed && failed.owner.is_some());
+    assert!(!tracing(&app), "the press that finished the failed draft must leave no new trace");
+
+    let journal = app.session.journal.len();
+    testing::frame_with_events(&mut app, vec![egui::Event::PointerMoved(end)]);
+    testing::frame_with_events(&mut app, vec![button(end, false)]);
+    assert_eq!(app.ui.pen.as_ref(), Some(&failed));
+    assert_eq!(app.session.journal.len(), journal);
+    let st = app.session.active().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&source, &st.doc));
+    assert_eq!(st.history.past_len(), history);
+}
+
+#[test]
 fn shift_drag_constrains_freeform_pen_to_a_straight_line() {
     let mut app = app();
     app.ui.tool_options.vector_mode = VectorMode::Path;
