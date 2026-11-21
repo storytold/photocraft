@@ -347,3 +347,62 @@ fn the_recorded_orders_keep_the_picture() {
         }
     }
 }
+
+/// Deliberate parity: after Perspective, Warp shows the box's exact map until the first warp edit, which then draws the
+/// warp from its carried control points and so redistributes the picture once, as the reference does (its recording:
+/// Perspective with the top-left corner 90 px in, Warp, a 6 px pull at (330, 280): the red/blue boundary moved from row
+/// 310 to 324). Replayed on the reference's probe document; the jump must match its 14 px within 2. The reference saves
+/// placed warps in that carried model, so this is how PSD files render too: don't smooth it.
+#[test]
+fn the_first_warp_pull_after_perspective_redistributes_like_the_reference() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut h) = harness(false) else { return };
+    {
+        let app = h.state_mut();
+        app.run("file.new", json!({"width": 600, "height": 450})).expect("new");
+        app.run("layer.new.layer", json!({})).expect("new layer");
+        app.session
+            .edit("paint", |doc, active| {
+                let id = active.expect("active");
+                let s = doc.layer_mut(id).and_then(|l| l.surface_mut()).expect("raster");
+                s.fill_rect(Rect::new(150, 125, 300, 225), &[1.0, 0.0, 0.0, 1.0]);
+                s.fill_rect(Rect::new(300, 125, 450, 225), &[0.0, 0.784, 0.0, 1.0]);
+                s.fill_rect(Rect::new(150, 225, 300, 325), &[0.0, 0.0, 1.0, 1.0]);
+                s.fill_rect(Rect::new(300, 225, 450, 325), &[1.0, 0.784, 0.0, 1.0]);
+                Ok(())
+            })
+            .expect("paint");
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).expect("smart object");
+        app.sync_views();
+        app.ui.extras.rulers = false;
+        app.ui.panels.context_task_bar = false;
+    }
+    control(&mut h, "ui.set", json!({"tool": "move", "zoom": 1.0, "center": [300, 225]}));
+    control(&mut h, "ui.menu.invoke", json!({"id": "edit.transform.perspective"}));
+    let (a, b) = (screen(&h, 150.0, 125.0), screen(&h, 240.0, 125.0));
+    drag(&mut h, a, b);
+    control(&mut h, "ui.menu.invoke", json!({"id": "edit.transform.warp"}));
+    h.run_steps(6);
+    let boundary = |h: &mut Harness| -> Vec<Option<f64>> {
+        let cols: Vec<(f64, Pos2)> = [200.0, 230.0, 260.0].iter().map(|&x| (x, screen(h, x, 0.0))).collect();
+        let img = h.render().expect("render");
+        cols.iter()
+            .map(|(_, p)| {
+                (0..img.height())
+                    .find(|&y| {
+                        let px = img.get_pixel(p.x.floor() as u32, y);
+                        px[2] > 200 && px[0] < 60 && px[1] < 60
+                    })
+                    .map(|y| f64::from(y))
+            })
+            .collect()
+    };
+    let before = boundary(&mut h);
+    let (a, b) = (screen(&h, 330.0, 280.0), screen(&h, 336.0, 280.0));
+    drag(&mut h, a, b);
+    let after = boundary(&mut h);
+    for (i, (b, a)) in before.iter().zip(&after).enumerate().skip(1) {
+        let (Some(b), Some(a)) = (b, a) else { panic!("column {i}: no boundary: {before:?} {after:?}") };
+        assert!(((a - b) - 14.0).abs() <= 2.0, "column {i}: the boundary moved {} px on the first pull; the reference's moved 14", a - b);
+    }
+}

@@ -479,6 +479,10 @@ pub fn split(app: &mut PhotocraftApp, id: &str, at: Option<[f64; 2]>) -> Result<
 /// no warp of its own, while the grid is still flat: the reference shows and applies that as the box's move alone, its
 /// exact map, and changes the picture only once the warp is edited (from then on the control points carried through the
 /// move, which spread the rows evenly). The contents' corners in the document then, else `None`.
+///
+/// Deliberate parity: the first warp edit therefore redistributes the picture once (the reference's own recording: a
+/// 6 px pull after a Perspective moved a boundary 14 px, ours too). The reference saves placed warps in that carried
+/// model, so drawing pulled warps any other way would also render PSD files differently from it.
 pub(super) fn flat_placed_warp(doc: &photocraft_doc::Document, layer: u64, warp: &Warp, placed: Option<([f64; 9], bool)>) -> Option<[[f64; 2]; 4]> {
     let (m, _) = placed?;
     let photocraft_doc::LayerContent::Smart(sm) = &doc.layer(photocraft_doc::LayerId(layer))?.content else { return None };
