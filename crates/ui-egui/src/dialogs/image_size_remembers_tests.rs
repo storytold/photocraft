@@ -134,3 +134,39 @@ fn a_kept_bicubic_opens_as_nearest_neighbor_on_an_indexed_document() {
     assert_eq!(fields(&app, id)["resample"], to(Resample::NearestNeighbor));
     cancel(&mut app, id);
 }
+
+/// On an Indexed Color document an OK with Resample off keeps the method the dialog showed (Nearest Neighbor),
+/// not the Bicubic kept before it.
+#[test]
+fn resample_off_on_an_indexed_document_keeps_the_method_it_showed() {
+    let mut app = app();
+    let id = opened(&mut app);
+    set(&mut app, id, "resample", to(Resample::Bicubic));
+    ok(&mut app, id);
+    app.session.execute("image.mode.indexedColor", json!({})).unwrap();
+    let id = opened(&mut app);
+    set(&mut app, id, "resample", Value::Null);
+    ok(&mut app, id);
+
+    let kept = super::image_memory().recall(app.framework.host()).expect("the OK kept its settings");
+    assert!(!kept.resampling);
+    assert_eq!(kept.method, Resample::NearestNeighbor);
+}
+
+/// A recorded step's resolution is in pixels/inch: a kept Pixels/Centimeter unit doesn't reread it, so the
+/// dialog shows the recorded resolution unchanged.
+#[test]
+fn a_recorded_resolution_opens_in_pixels_per_inch_with_a_kept_unit() {
+    let mut app = app();
+    let id = opened(&mut app);
+    set(&mut app, id, "resolutionUnit", to(UnitKind::PixelsPerCentimetre));
+    ok(&mut app, id);
+
+    let recorded = json!({"width": 300, "height": 200, "resolution": 72, "resample": "none"});
+    let id = super::open_with(&mut app, COMMAND, &recorded).expect("a document is open");
+    let f = fields(&app, id);
+    assert_eq!(f["resolutionUnit"], to(UnitKind::PixelsPerInch));
+    let shown = f["resolution"].as_f64().unwrap();
+    assert!((shown - 72.0).abs() < 0.01, "the recorded 72 ppi shows as 72 ppi: {shown}");
+    cancel(&mut app, id);
+}

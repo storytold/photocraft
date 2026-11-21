@@ -43,6 +43,11 @@ fn remember_image(app: &PhotocraftApp, r: &ImageSizeResult, opening: Resample) {
     image_memory().store(app.framework.host(), &memory);
 }
 
+/// The method Image Size opens with: Indexed Color resamples with Nearest Neighbor only, as the command does (#6019).
+fn opening_method(method: Resample, indexed: bool) -> Resample {
+    if indexed && method != Resample::Automatic { Resample::NearestNeighbor } else { method }
+}
+
 /// The dialog unit of the Units & Rulers preference.
 pub(crate) fn pref_unit(u: photocraft_engine::prefs::Unit) -> UnitKind {
     use photocraft_engine::prefs::Unit;
@@ -187,20 +192,19 @@ pub(crate) fn open_with(app: &mut PhotocraftApp, command: &str, params: &Value) 
     let id = if command == IMAGE_COMMAND {
         // The last OK's units, Resample and method (#14799); the preferences until there is one.
         let memory = image_memory().recall(app.framework.host());
-        // Indexed Color resamples with Nearest Neighbor only, as the command does (#6019).
         let indexed = d.mode == photocraft_color::ColorMode::Indexed;
-        let mut method = memory.map_or_else(|| resample_of(interpolation), |m| m.method);
-        if indexed && method != Resample::Automatic {
-            method = Resample::NearestNeighbor;
-        }
+        let method = opening_method(memory.map_or_else(|| resample_of(interpolation), |m| m.method), indexed);
         let methods = if indexed { vec![Resample::Automatic, Resample::NearestNeighbor] } else { Vec::new() };
         let mut values = ImageSizeValues::new(size).pixels_per_inch(dpi).points_per_inch(points).unit(unit).method(method).column_size(columns);
         if let Some(m) = memory {
-            // A recorded size stays in pixels.
+            // A recorded size stays in pixels, and a recorded resolution in pixels/inch.
             if !seeded {
                 values = values.unit(m.unit);
             }
-            values = values.resolution_unit(m.resolution_unit).resampling(m.resampling);
+            if params.get("resolution").is_none() {
+                values = values.resolution_unit(m.resolution_unit);
+            }
+            values = values.resampling(m.resampling);
         }
         app.framework.dialogs.open(HostedImageSize::new(values, move |values: Bind<'_, ImageSizeValues>| {
             ImageSize::new(values).methods(methods.clone()).bytes_per_pixel(image_bytes_per_pixel)
@@ -257,8 +261,10 @@ pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
     if let Some(result) = app.framework.dialogs.take::<HostedImageSize>() {
         let params = match result {
             DialogResult::Ok(r) => {
-                let opening =
+                let kept =
                     image_memory().recall(app.framework.host()).map_or_else(|| resample_of(app.session.prefs().general.image_interpolation), |m| m.method);
+                let indexed = app.session.active().is_some_and(|st| st.doc.mode == photocraft_color::ColorMode::Indexed);
+                let opening = opening_method(kept, indexed);
                 remember_image(app, &r, opening);
                 Some(image_params(app, &r))
             }
