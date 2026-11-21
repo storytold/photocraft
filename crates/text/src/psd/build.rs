@@ -65,6 +65,17 @@ pub(crate) fn style_sheet_data(s: &CharStyle, font: usize, k: f32) -> E {
         ("FillFlag".into(), E::Bool(true)),
         ("FillColor".into(), E::Dict(vec![("Type".into(), E::Int(color_type)), ("Values".into(), E::Array(values))])),
     ];
+    if !s.variations.is_empty() {
+        let overrides: Vec<E> = s
+            .variations
+            .iter()
+            .filter(|v| v.axis.len() == 4 && v.axis.is_ascii() && v.value.is_finite())
+            .map(|v| E::Array(vec![E::String(v.axis.clone()), real(v.value)]))
+            .collect();
+        if !overrides.is_empty() {
+            dict.push((super::VARIATION_OVERRIDES.into(), E::Array(overrides)));
+        }
+    }
     dict.append(&mut opentype);
     E::Dict(dict)
 }

@@ -558,8 +558,15 @@ fn apply_engine_data(layer: &mut TextLayer, e: &E, txt: Option<&str>, k: f32) {
     }
 }
 
+fn lookup_with_sheet<'a>(run: &'a E, base: &[Option<&'a E>], key: &str) -> Option<(&'a E, &'a E)> {
+    if let Some(v) = run.get(key) {
+        return Some((run, v));
+    }
+    base.iter().flatten().find_map(|b| b.get(key).map(|v| (*b, v)))
+}
+
 fn lookup<'a>(run: &'a E, base: &[Option<&'a E>], key: &str) -> Option<&'a E> {
-    run.get(key).or_else(|| base.iter().flatten().find_map(|b| b.get(key)))
+    lookup_with_sheet(run, base, key).map(|(_, v)| v)
 }
 
 pub(crate) fn char_style(base: &[Option<&E>], d: &E, fonts: &[String], k: f32) -> CharStyle {
@@ -569,8 +576,22 @@ pub(crate) fn char_style(base: &[Option<&E>], d: &E, fonts: &[String], k: f32) -
     let numk = |key: &str, k: f32| num(key).map(|v| v as f32 * k).filter(|v| v.is_finite());
     let flag = |key: &str| g(key).and_then(E::as_bool);
     let mut s = CharStyle::default();
-    if let Some(ps) = g("Font").and_then(E::as_i64).and_then(|i| usize::try_from(i).ok()).and_then(|i| fonts.get(i)).filter(|ps| !ps.is_empty()) {
-        let r = guess_from_postscript(ps);
+    if let Some((font_sheet, ps)) = lookup_with_sheet(d, base, "Font")
+        .and_then(|(sheet, v)| v.as_i64().and_then(|i| usize::try_from(i).ok()).and_then(|i| fonts.get(i)).filter(|ps| !ps.is_empty()).map(|ps| (sheet, ps)))
+    {
+        if let Some(instance) = crate::fonts::VariationName::parse(ps) {
+            s.variations = instance.axes;
+        }
+        if let Some(axes) = font_sheet.get(super::VARIATION_OVERRIDES).and_then(E::as_array) {
+            for v in axes.iter().take(crate::fonts::MAX_COLLECTION_AXES) {
+                let Some([tag, value]) = v.as_array() else { continue };
+                let Some(axis) = tag.as_str().filter(|tag| tag.len() == 4 && tag.is_ascii()) else { continue };
+                let Some(value) = value.as_f64().map(|x| x as f32).filter(|x| x.is_finite()) else { continue };
+                s.variations.retain(|existing| existing.axis != axis);
+                s.variations.push(photocraft_doc::text::FontVariation { axis: axis.into(), value });
+            }
+        }
+        let r = guess_from_postscript(ps).with_variations(&s.variations);
         s.font_family = r.family;
         s.weight = r.weight;
         s.italic = r.italic;

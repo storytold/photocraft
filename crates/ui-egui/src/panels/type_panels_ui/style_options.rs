@@ -157,6 +157,21 @@ pub(crate) fn character_values(style: &CharStyle) -> CharacterValues {
     values.strikethrough = Some(style.strikethrough);
     values.opentype = opentype;
     values.language = style.language.clone();
+    let mut axes: Vec<([u8; 4], f32)> = style.variations.iter().filter_map(|v| Some((v.axis.as_bytes().try_into().ok()?, v.value))).collect();
+    if let Some(ps) = &style.postscript_name
+        && let Some(engine) = photocraft_text::try_shared()
+        && let Some(instance) = engine.lock().unwrap_or_else(|e| e.into_inner()).fonts.instance_by_postscript(&style.font_family, ps)
+    {
+        for (tag, value) in instance.axes {
+            if let Ok(tag) = tag.as_bytes().try_into()
+                && !axes.iter().any(|(t, _)| *t == tag)
+            {
+                axes.push((tag, value));
+            }
+        }
+    }
+    axes.sort_by_key(|(tag, _)| *tag);
+    values.axes = (!axes.is_empty()).then_some(axes);
     values
 }
 

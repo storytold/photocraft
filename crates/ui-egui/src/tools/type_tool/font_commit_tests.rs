@@ -313,6 +313,22 @@ fn backspace_and_delete_preserve_pending_caret_font() {
 }
 
 #[test]
+fn caret_instance_change_resets_inherited_width_only_on_inserted_text() {
+    super::canvas_tests::register_ui_variable_font();
+    let (mut h, id) = fixture(0, "ab");
+    h.state_mut().run("type.setStyle", json!({"layer": id.0, "font": "UI Var Test", "fontStyle": "Light Condensed"})).unwrap();
+    select(&mut h, [1, 1]);
+    super::apply(h.state_mut(), json!({"fontStyle": "Heavy"}), None);
+    super::host::type_text(h.state_mut(), "X");
+    let runs = layer(&h.state().session.active().unwrap().doc, id).char_runs();
+    assert_eq!(runs.iter().map(|r| r.len).collect::<Vec<_>>(), [1, 1, 1]);
+    assert_eq!(runs[1].style.postscript_name.as_deref(), Some("UIVarTest-Black"));
+    assert!(runs[1].style.variations.iter().all(|v| v.axis != "wdth" || v.value == 100.0));
+    assert!(runs[0].style.variations.iter().any(|v| v.axis == "wdth" && v.value == 75.0));
+    assert_eq!(runs[0].style, runs[2].style);
+}
+
+#[test]
 fn caret_font_insertion_preserves_variable_axes_and_style_changes_can_clear_weight_axis() {
     let (mut h, id) = fixture(0, "abcdef");
     h.state_mut().run("type.setStyle", json!({"layer": id.0, "variations": {"wght": 650, "wdth": 95}})).unwrap();

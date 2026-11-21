@@ -79,7 +79,14 @@ pub(super) fn default_style_params(app: &PhotocraftApp) -> serde_json::Value {
         {
             continue;
         }
-        if photocraft_engine::type_cmds::apply_char_props(&mut c, &one) | photocraft_engine::type_cmds::apply_para_props(&mut para, &one) {
+        // Checking the shape of saved axes needs no installed face. Applying an axis edit
+        // would resolve the font on the UI thread while the system scan is still running.
+        let recognized = if key == "variations" {
+            value.is_object()
+        } else {
+            photocraft_engine::type_cmds::apply_char_props(&mut c, &one) | photocraft_engine::type_cmds::apply_para_props(&mut para, &one)
+        };
+        if recognized {
             p[key] = value.clone();
         }
     }
@@ -109,18 +116,23 @@ fn finite_style_value(value: &serde_json::Value) -> bool {
 }
 
 pub(super) fn default_styles(app: &PhotocraftApp) -> (photocraft_doc::text::CharStyle, photocraft_doc::text::ParagraphStyle) {
+    default_styles_with_fonts(app, photocraft_text::try_shared().is_some())
+}
+
+pub(super) fn default_styles_with_fonts(app: &PhotocraftApp, fonts_ready: bool) -> (photocraft_doc::text::CharStyle, photocraft_doc::text::ParagraphStyle) {
     let (mut c, mut para) = app.session.type_defaults.clone().unwrap_or_default();
     let mut p = default_style_params(app);
     // The saved panels can appear on the very first frame. Style parsing resolves the named
     // font through shared(), which waits for the font scan; display the saved names meanwhile,
     // and let fonts_ready/axis_sliders expose the font controls when try_shared is ready.
-    if photocraft_text::try_shared().is_none() {
+    if !fonts_ready {
         c.font_family = app.ui.tool_options.type_font.clone();
         c.font_style = app.ui.tool_options.type_style.clone();
         c.postscript_name = None;
         if let Some(p) = p.as_object_mut() {
             p.remove("font");
             p.remove("fontStyle");
+            p.remove("variations");
         }
     }
     photocraft_engine::type_cmds::apply_char_props(&mut c, &p);

@@ -44,7 +44,7 @@ fn adopt_postscript_face(fonts: &mut FontDb, s: &mut CharStyle) {
     if fonts.faces(&s.font_family).iter().any(|f| f.postscript_name.as_deref() == Some(&ps)) {
         return;
     }
-    let f = fonts.resolve_postscript(&ps);
+    let f = fonts.resolve_postscript(&ps).with_variations(&s.variations);
     // An exact face match wins; a guessed family only fills a missing family.
     if f.exact || (!fonts.has_family(&s.font_family) && fonts.has_family(&f.family)) {
         s.font_family = f.family;
