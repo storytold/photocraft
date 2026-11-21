@@ -125,6 +125,11 @@ fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
     if id == "layer.frame.convert" && params.as_object().is_none_or(|o| o.is_empty()) {
         return Some(frame_convert_dialog(app, id));
     }
+    // Artboard from Group from the menu makes the Artboard tool current, its bar showing the new board, as in Photoshop
+    // (#14563). Run through the engine, an action or the control channel's command, the tool stays.
+    if id == "layer.new.artboardFromGroup" {
+        return Some(app.run(id, params.clone()).inspect(|_| crate::tool_memory::select(app, crate::state::Tool::Artboard)));
+    }
     if id == "help.checkForUpdates" {
         return Some(crate::updates_ui::check(app, ctx, params.clone()));
     }
