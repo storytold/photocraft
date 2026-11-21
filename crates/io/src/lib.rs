@@ -828,7 +828,7 @@ pub fn import_file_for_open_verified(
 ) -> Result<(ImportResult, bool), IoError> {
     let read_failed = |e: std::io::Error| IoError::Read(format!("{}: {e}", path.display()));
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    let source = craft_psd::FileSource::open(path).map_err(read_failed)?;
+    let source = photocraft_format::open_for_read(path).and_then(craft_psd::FileSource::new).map_err(read_failed)?;
     let metadata = source.file().metadata().map_err(read_failed)?;
     if !metadata.is_file() {
         return Err(IoError::Read(format!("{}: not a regular file", path.display())));

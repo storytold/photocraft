@@ -135,7 +135,7 @@ fn attach_decode(raw: &mut RawOpen) {
     let file = match (&raw.bytes, &raw.path) {
         (Some(b), _) => Some(std::borrow::Cow::Borrowed(b.as_slice())),
         #[cfg(not(target_arch = "wasm32"))]
-        (None, Some(p)) => std::fs::read(p).ok().map(std::borrow::Cow::Owned),
+        (None, Some(p)) => read_raw_file(p).ok().map(std::borrow::Cow::Owned),
         _ => None,
     };
     if let Some(b) = file {
@@ -576,7 +576,7 @@ const MAX_RAW_REREAD_BYTES: u64 = 2 << 30;
 #[cfg(not(target_arch = "wasm32"))]
 fn read_raw_file(path: &str) -> std::io::Result<Vec<u8>> {
     use std::io::{Error, ErrorKind, Read};
-    let file = std::fs::File::open(path)?;
+    let file = photocraft_format::open_for_read(std::path::Path::new(path))?;
     let metadata = file.metadata()?;
     if !metadata.is_file() {
         return Err(Error::new(ErrorKind::InvalidInput, "not a regular file"));
