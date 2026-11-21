@@ -1300,11 +1300,11 @@ mod file_types_tests;
 #[path = "artboard_cmds/first_board_background_tests.rs"]
 mod first_board_background_tests;
 #[cfg(test)]
-#[path = "artboard_cmds/include_name_tests.rs"]
-mod include_name_tests;
-#[cfg(test)]
 #[path = "artboard_cmds/from_group_reset_props_tests.rs"]
 mod from_group_reset_props_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/include_name_tests.rs"]
+mod include_name_tests;
 
 #[cfg(test)]
 #[path = "artboard_cmds/from_layers_history_name_tests.rs"]
