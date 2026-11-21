@@ -6460,6 +6460,8 @@ name = "photocraft-color"
 version = "0.23.1"
 dependencies = [
  "craft-cms",
+ "craft-tracked",
+ "craft-ui-macros",
  "serde",
 ]
 
@@ -6571,6 +6573,8 @@ dependencies = [
 name = "photocraft-geom"
 version = "0.23.1"
 dependencies = [
+ "craft-tracked",
+ "craft-ui-macros",
  "serde",
 ]
 
@@ -6661,6 +6665,8 @@ dependencies = [
 name = "photocraft-ops"
 version = "0.23.1"
 dependencies = [
+ "craft-tracked",
+ "craft-ui-macros",
  "photocraft-doc",
 ]
 
@@ -6701,6 +6707,8 @@ dependencies = [
 name = "photocraft-raster"
 version = "0.23.1"
 dependencies = [
+ "craft-tracked",
+ "craft-ui-macros",
  "crc32fast",
  "lz4_flex",
  "photocraft-color",

@@ -56,6 +56,21 @@ pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandSta
     ITEMS.iter().flatten().map(|&id| (CommandRef::new(id), CommandState::new().enabled(command_state(app, resolve(id, snapshot).0)))).collect()
 }
 
+/// What [`command_states`] reads: the rules (the Pen and Crop histories and an open Free Transform among them) and the
+/// snapshot selected in the panel.
+#[derive(craft::ui::contract::MemoProps)]
+struct StatesFacts<'a> {
+    rules: crate::menus::facts::RuleFacts<'a>,
+    #[memo_props(hash = "a plain model id, a snapshot id and the history spot: plain values")]
+    snapshot: &'a Option<(photocraft_doc::DocId, u64, crate::panels::history::HistorySpot)>,
+}
+
+/// [`command_states`], derived from [`StatesFacts`].
+pub(crate) fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    let facts = StatesFacts { rules: crate::menus::facts::RuleFacts::of(app), snapshot: &app.ui.history_snapshot };
+    crate::app::framework::derived_states(app, name, &facts, || command_states(app))
+}
+
 /// Runs the item `command` and reports whether it is one of this menu's. History Options… opens its
 /// dialog, as the menu bar's command does. Step Backward/Forward over a Pen path step it as Edit ›
 /// Undo/Redo do (`vector_ui::pen_history_step`).
