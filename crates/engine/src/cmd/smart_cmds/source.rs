@@ -3,8 +3,8 @@ use std::sync::PoisonError;
 use photocraft_geom::TILE_SIZE;
 
 use super::{
-    Arc, ColorMode, Document, Layer, LayerContent, LayerId, Metadata, Mutex, PixelFormat, Rect, Result, SampleType, Session, SmartObject, SmartSource, Surface,
-    base_name, decode_source, json, other,
+    Arc, ColorMode, Document, JobCtx, Layer, LayerContent, LayerId, Metadata, Mutex, PixelFormat, Rect, Result, SampleType, Session, SmartObject, SmartSource,
+    Surface, base_name, json, other,
 };
 
 /// A linked file's bytes; `None` when it is missing or its path is not followed
@@ -369,23 +369,20 @@ pub(crate) fn vector_scale(sm: &SmartObject) -> f64 {
 
 /// The composited source image of `bytes` in pixel format `fmt` (decoded once, then cached).
 pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat) -> Result<SourceImage> {
-    source_image_inner(file_name, bytes, fmt, None)
+    source_image_inner(file_name, bytes, fmt, None, &JobCtx::new())
 }
 
-pub(super) fn source_image_classified(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: bool) -> Result<SourceImage> {
-    source_image_inner(file_name, bytes, fmt, Some(svg))
+pub(super) fn source_image_classified(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: bool, ctx: &JobCtx) -> Result<SourceImage> {
+    source_image_inner(file_name, bytes, fmt, Some(svg), ctx)
 }
 
-fn source_image_inner(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: Option<bool>) -> Result<SourceImage> {
+fn source_image_inner(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: Option<bool>, ctx: &JobCtx) -> Result<SourceImage> {
     let key = source_cache_key(file_name, bytes, fmt, svg);
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
     crate::memory_gate::ensure(&format!("render the smart object \u{201c}{file_name}\u{201d}"), crate::memory_gate::smart_render_need(bytes))?;
-    let doc = match svg {
-        Some(svg) => super::decode_source_classified(file_name, bytes, svg)?,
-        None => decode_source(file_name, bytes)?,
-    };
+    let doc = super::decode_source_for_render(file_name, bytes, svg.unwrap_or_else(|| photocraft_io::svg::is_svg(bytes)), ctx)?;
     let img = SourceImage { surface: Arc::new(flattened_source(&doc, fmt)?), bounds: doc.bounds() };
     cache_put(key, img.clone());
     Ok(img)
@@ -420,9 +417,9 @@ mod tests {
         let raster = photocraft_codecs::Image::from_u8(1, 1, photocraft_codecs::ChannelLayout::Rgb, vec![13, 47, 91]).unwrap();
         let png = photocraft_codecs::encode(&raster, photocraft_codecs::Format::Png, &Default::default()).unwrap();
         let name = "source-classification-regression.png";
-        let first = source_image_classified(name, &png, PixelFormat::RGBA8, false).unwrap();
+        let first = source_image_classified(name, &png, PixelFormat::RGBA8, false, &JobCtx::new()).unwrap();
         assert_eq!(first.bounds, Rect::new(0, 0, 1, 1));
-        assert!(source_image_classified(name, &png, PixelFormat::RGBA8, true).is_err(), "a warm raster hit must not skip strict SVG decoding");
+        assert!(source_image_classified(name, &png, PixelFormat::RGBA8, true, &JobCtx::new()).is_err(), "a warm raster hit must not skip strict SVG decoding");
         assert!(source_image(name, &png, PixelFormat::RGBA8).is_ok());
     }
     fn image(side: i32) -> SourceImage {

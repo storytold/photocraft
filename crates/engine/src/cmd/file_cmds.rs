@@ -23,7 +23,11 @@ use crate::{EngineError, Result, Session};
 mod batch_run;
 mod export;
 mod info;
+mod native_cache;
+pub use native_cache::{recover_decoded_native_caches, recover_native_embedded_caches};
+
 mod open;
+pub(crate) use open::import_smart_source;
 mod open_as_smart_object;
 mod paths;
 mod place_steps;

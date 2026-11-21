@@ -553,7 +553,9 @@ impl eframe::App for WebShell {
 fn services(inbox: Inbox, place_inbox: PlaceInbox, cursor_pos: photocraft_ui_egui::CursorPosFn) -> Services {
     Services {
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
-            photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+            let mut decoded = photocraft_io::decode_for_open(name, bytes, None, opts, &photocraft_raster::Interrupt::NONE).map_err(|e| e.to_string())?;
+            photocraft_engine::file_cmds::recover_decoded_native_caches(&mut decoded, &photocraft_engine::jobs::JobCtx::new()).map_err(|e| e.to_string())?;
+            Ok((decoded.imported.document, decoded.imported.warnings))
         })),
         export: Some(Box::new(|doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings| {
             photocraft_io::export(doc, path, &settings.io_options()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())

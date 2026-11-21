@@ -201,6 +201,17 @@ pub struct ImportResult {
     pub preview_only: bool,
 }
 
+/// An open's decoded document and the facts learned while decoding it.
+#[derive(Debug, Clone)]
+pub struct DecodedOpen {
+    /// The imported document and its notes.
+    pub imported: ImportResult,
+    /// The PSD/PSB decoder recovered readable content from damaged data.
+    pub damaged: bool,
+    /// The native .pcraft decoder supplied the document.
+    pub native_pcraft: bool,
+}
+
 /// Identity of the file behind an opened handle, read from that handle.
 ///
 /// A one-shot high-memory approval is bound to a file, not to a path: the importer opens the
@@ -275,9 +286,9 @@ pub(crate) fn unequal_resolution_warning(x: f64, y: f64) -> Option<String> {
         .then(|| format!("the vertical resolution ({y:.2} ppi) differs from the horizontal ({x:.2} ppi); the document keeps {x:.2} ppi for both"))
 }
 
-/// Warnings about a loaded document's layers that render without their stored effect, for
-/// sources that carry no import warnings of their own (a crafted `.pcraft`): a Color Lookup
-/// whose table can't be applied silently renders as the identity instead (#1763).
+/// Warnings about a loaded native document's missing layer data. A Color Lookup without a
+/// usable table renders as the identity (#1763), and a Smart Object without a saved cache has
+/// no pixels to composite (#15799).
 pub fn open_warnings(doc: &Document) -> Vec<String> {
     let mut out = Vec::new();
     // Iterative, so no document's nesting can make this recurse.
@@ -295,6 +306,8 @@ pub fn open_warnings(doc: &Document) -> Vec<String> {
                     out.push(format!("layer \"{}\": its Color Lookup has no usable table for a {size}³ lookup; the layer renders without the lookup", l.name))
                 }
             }
+        } else if matches!(&l.content, LayerContent::Smart(smart) if smart.cache.is_none()) {
+            out.push(format!("layer \"{}\": its Smart Object has no saved render cache and opens without rendered pixels", l.name));
         }
         if let Some(children) = l.children() {
             stack.extend(children.iter().rev());
@@ -638,7 +651,7 @@ pub fn import_with_options(name: &str, bytes: &[u8], opts: &ImportOptions) -> Re
 
 /// [`import_with_options`] forcing the decoder named by `as_ext` when provided (`File › Open As`).
 pub fn import_with_options_as(name: &str, bytes: &[u8], as_ext: Option<&str>, opts: &ImportOptions) -> Result<ImportResult, IoError> {
-    import_for_open_with_as(name, bytes, as_ext, opts, &photocraft_raster::Interrupt::NONE).map(|(result, _)| result)
+    decode_for_open(name, bytes, as_ext, opts, &photocraft_raster::Interrupt::NONE).map(|decoded| decoded.imported)
 }
 
 /// [`import_with`] with the user's import settings.
@@ -660,27 +673,35 @@ pub fn import_for_open(name: &str, bytes: &[u8], opts: &ImportOptions) -> Result
 
 /// [`import_for_open`] with cancellation and progress, shared with [`import_with_options_and_interrupt`].
 pub fn import_for_open_with(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &photocraft_raster::Interrupt) -> Result<(ImportResult, bool), IoError> {
-    import_for_open_with_as(name, bytes, None, opts, ctl)
+    decode_for_open(name, bytes, None, opts, ctl).map(|decoded| (decoded.imported, decoded.damaged))
 }
 
-fn import_for_open_with_as(
+#[derive(Default)]
+struct DecodeFlags {
+    damaged: bool,
+    native_pcraft: bool,
+}
+
+/// Decodes bytes for Open, recording the actual decoder provenance with the damage flag.
+/// `as_ext` forces a decoder for File › Open As; otherwise the dispatch uses the name and bytes.
+pub fn decode_for_open(
     name: &str,
     bytes: &[u8],
     as_ext: Option<&str>,
     opts: &ImportOptions,
     ctl: &photocraft_raster::Interrupt,
-) -> Result<(ImportResult, bool), IoError> {
+) -> Result<DecodedOpen, IoError> {
     photocraft_compose::discard_unreadable_pixel_caches();
     let scratch_generation = photocraft_raster::spill::read_error_generation();
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    let mut damaged = false;
-    let result = import_stages(name, bytes, as_ext, ctl, opts, &mut damaged)?;
+    let mut flags = DecodeFlags::default();
+    let result = import_stages(name, bytes, as_ext, ctl, opts, &mut flags)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
     // The imported document's own tiles, and anything that failed or recovered meanwhile.
     photocraft_raster::spill::check_since(scratch_generation).map_err(IoError::Unsupported)?;
     result.document.scratch_health().map_err(IoError::Unsupported)?;
-    Ok((result, damaged))
+    Ok(DecodedOpen { imported: result, damaged: flags.damaged, native_pcraft: flags.native_pcraft })
 }
 
 /// The PSD/PSB part of an import, from a parse that takes [`PsdFile::from_bytes_and_merged_recovering`]'s
@@ -826,6 +847,19 @@ pub fn import_file_for_open_verified(
     ctl: &photocraft_raster::Interrupt,
     identity_out: &mut Option<FileIdentity>,
 ) -> Result<(ImportResult, bool), IoError> {
+    decode_file_for_open_verified(name, path, expected, opts, ctl, identity_out).map(|decoded| (decoded.imported, decoded.damaged))
+}
+
+/// Like [`import_file_for_open_verified`], with the decoder provenance of the same opened file.
+#[cfg(any(unix, windows))]
+pub fn decode_file_for_open_verified(
+    name: &str,
+    path: &std::path::Path,
+    expected: Option<&FileIdentity>,
+    opts: &ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    identity_out: &mut Option<FileIdentity>,
+) -> Result<DecodedOpen, IoError> {
     let read_failed = |e: std::io::Error| IoError::Read(format!("{}: {e}", path.display()));
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let source = craft_psd::FileSource::open(path).map_err(read_failed)?;
@@ -844,7 +878,11 @@ pub fn import_file_for_open_verified(
     let mut magic = [0u8; 4];
     let psd = !has_extension(name, photocraft_format::EXTENSION) && craft_psd::ReadAt::read_at(&source, 0, &mut magic).is_ok() && is_psd(&magic);
     let result = if psd {
-        import_source_with_options(name, craft_psd::Source::new(source), ctl, opts)
+        import_source_with_options(name, craft_psd::Source::new(source), ctl, opts).map(|(imported, damaged)| DecodedOpen {
+            imported,
+            damaged,
+            native_pcraft: false,
+        })
     } else {
         // Read from the handle that was just identified, not by opening the path again.
         let mut file = source.file();
@@ -871,10 +909,10 @@ pub fn import_file_for_open_verified(
             }
         }
         match streamed {
-            Some(result) => Ok((result, false)),
+            Some(imported) => Ok(DecodedOpen { imported, damaged: false, native_pcraft: false }),
             None => {
                 let bytes = photocraft_format::read::read_all(&mut file, craft_psd::ReadAt::len(&source)).map_err(read_failed)?;
-                import_for_open_with(name, &bytes, opts, ctl)
+                decode_for_open(name, &bytes, None, opts, ctl)
             }
         }
     };
@@ -1001,7 +1039,7 @@ fn import_stages(
     as_ext: Option<&str>,
     ctl: &photocraft_raster::Interrupt,
     opts: &ImportOptions,
-    damaged: &mut bool,
+    flags: &mut DecodeFlags,
 ) -> Result<ImportResult, IoError> {
     let selected = if let Some(ext) = as_ext {
         let ext = ext.trim_start_matches('.').to_ascii_lowercase();
@@ -1025,9 +1063,12 @@ fn import_stages(
     match selected {
         Route::Pcraft => {
             let document = photocraft_format::load_from_bytes(bytes)?;
+            flags.native_pcraft = true;
             Ok(ImportResult { warnings: open_warnings(&document), document, source_read_only: false, preview_only: false })
         }
-        Route::Psd | Route::NamedPsd => import_psd(name, ctl, damaged, opts, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)),
+        Route::Psd | Route::NamedPsd => {
+            import_psd(name, ctl, &mut flags.damaged, opts, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover))
+        }
         Route::Affinity => affinity::import(name, bytes, ctl),
         Route::Ora => ora::import(name, bytes, ctl),
         Route::Kra => kra::import(name, bytes, ctl),
@@ -1433,6 +1474,56 @@ mod tests {
         assert_eq!(import_preflight("x.afphoto", b"Affinity"), ImportPreflight::Unbounded);
         // A Photoshop extension whose bytes are a readable flat image follows the image.
         assert_eq!(import_preflight("misnamed.psd", png), ImportPreflight::Flat);
+    }
+
+    fn native_bundle() -> (super::Document, Vec<u8>) {
+        let document =
+            super::Document::new("Native document", photocraft_geom::Size::new(4, 3), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        let bytes = photocraft_format::save_to_bytes(&document, &Default::default()).unwrap();
+        (document, bytes)
+    }
+
+    #[test]
+    fn open_provenance_follows_the_decoder_instead_of_the_name() {
+        use photocraft_raster::Interrupt;
+
+        let (document, bundle) = native_bundle();
+        let opts = ImportOptions::default();
+        for forced in [None, Some(".PCRAFT")] {
+            let decoded = super::decode_for_open("renamed.png", &bundle, forced, &opts, &Interrupt::NONE).unwrap();
+            assert!(decoded.native_pcraft, "forced decoder: {forced:?}");
+            assert!(!decoded.damaged);
+            assert_eq!(decoded.imported.document, document);
+        }
+
+        let image = photocraft_codecs::Image::from_u8(2, 3, photocraft_codecs::ChannelLayout::Rgb, vec![64; 18]).unwrap();
+        let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+        let decoded = super::decode_for_open("misnamed.pcraft", &png, None, &opts, &Interrupt::NONE).unwrap();
+        assert!(!decoded.native_pcraft);
+        assert!(!decoded.damaged);
+        assert_eq!(decoded.imported.document.size, photocraft_geom::Size::new(2, 3));
+        assert!(matches!(super::decode_for_open("misnamed.pcraft", &png, Some("pcraft"), &opts, &Interrupt::NONE), Err(super::IoError::Pcraft(_))));
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn open_provenance_follows_the_native_bundle_from_the_verified_handle() {
+        use photocraft_raster::Interrupt;
+
+        let (document, bundle) = native_bundle();
+        let dir = std::env::temp_dir().join(format!("photocraft-verified-native-origin-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("renamed.png");
+        std::fs::write(&path, bundle).unwrap();
+        let expected = super::FileIdentity::of_path(&path).unwrap();
+        let mut identity = None;
+        let decoded = super::decode_file_for_open_verified("renamed.png", &path, Some(&expected), &ImportOptions::default(), &Interrupt::NONE, &mut identity);
+        std::fs::remove_dir_all(dir).unwrap();
+        let decoded = decoded.unwrap();
+        assert_eq!(identity, Some(expected));
+        assert!(decoded.native_pcraft);
+        assert!(!decoded.damaged);
+        assert_eq!(decoded.imported.document, document);
     }
 
     /// Verifies a valid PSD remains editable after import.

@@ -4,8 +4,9 @@
 use std::path::Path;
 
 use photocraft_doc::Document;
+use photocraft_engine::{file_cmds, jobs::JobCtx};
 use photocraft_format::{PcraftWriter, SaveOptions};
-use photocraft_io::{BandRenderer, ExportOptions};
+use photocraft_io::{BandRenderer, DecodedOpen, ExportOptions};
 
 use crate::AutomationError;
 
@@ -24,10 +25,19 @@ pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<Opened, AutomationError> {
 /// Decode a document that was read through a filesystem capability with custom import options.
 pub fn open_bytes_with_options(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<Opened, AutomationError> {
     if Path::new(name).extension().is_some_and(|extension| extension.eq_ignore_ascii_case(photocraft_format::EXTENSION)) {
-        let document = photocraft_format::load_from_bytes(bytes)?;
-        return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false });
+        return open_native(photocraft_format::load_from_bytes(bytes)?);
     }
-    let r = photocraft_io::import_with_options(name, bytes, opts)?;
+    open_decoded(photocraft_io::decode_for_open(name, bytes, None, opts, &photocraft_raster::Interrupt::NONE)?)
+}
+
+fn open_native(mut document: Document) -> Result<Opened, AutomationError> {
+    file_cmds::recover_native_embedded_caches(&mut document, &JobCtx::new())?;
+    Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false })
+}
+
+fn open_decoded(mut decoded: DecodedOpen) -> Result<Opened, AutomationError> {
+    file_cmds::recover_decoded_native_caches(&mut decoded, &JobCtx::new())?;
+    let r = decoded.imported;
     Ok(Opened { document: r.document, warnings: r.warnings, source_read_only: r.source_read_only })
 }
 
@@ -40,19 +50,20 @@ pub fn open(path: &Path) -> Result<Opened, AutomationError> {
 /// Open a document from disk with custom import options.
 pub fn open_with_options(path: &Path, opts: &photocraft_io::ImportOptions) -> Result<Opened, AutomationError> {
     if path.is_dir() {
-        let document = photocraft_format::load_path(path)?;
-        return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false });
+        return open_native(photocraft_format::load_path(path)?);
     }
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     // A PSD/PSB is parsed from the open file (channel data read as it is decoded), so a CLI
     // convert or info of a 2 GB file does not hold the file in memory next to the document.
     #[cfg(any(unix, windows))]
     {
-        let r = photocraft_io::import_file(&name, path, opts, &photocraft_raster::Interrupt::NONE).map_err(|e| match e {
-            photocraft_io::IoError::Read(msg) => AutomationError::Io(msg),
-            e => e.into(),
-        })?;
-        Ok(Opened { document: r.document, warnings: r.warnings, source_read_only: r.source_read_only })
+        let mut identity = None;
+        let decoded =
+            photocraft_io::decode_file_for_open_verified(&name, path, None, opts, &photocraft_raster::Interrupt::NONE, &mut identity).map_err(|e| match e {
+                photocraft_io::IoError::Read(msg) => AutomationError::Io(msg),
+                e => e.into(),
+            })?;
+        open_decoded(decoded)
     }
     #[cfg(not(any(unix, windows)))]
     {
