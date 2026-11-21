@@ -98,7 +98,8 @@ if [[ -n "${PHOTOCRAFT_WEB_FONTS_DIR:-}" ]]; then
   mkdir -p "$WORK/$NAME/fonts"
   cp "$FONTS_MANIFEST" "$WORK/$NAME/fonts/manifest.txt"
   # Field 3 is the font file, field 6 (if any) its licence file; both relative to the folder.
-  awk -F' [|] ' '!/^[[:space:]]*(#|$)/ { print $3; if ($6 != "") print $6 }' "$FONTS_MANIFEST" | sort -u | while IFS= read -r f; do
+  # CRLF manifests are valid at runtime; do not include the trailing CR in a path.
+  awk -F' [|] ' '{ sub(/\r$/, "") } !/^[[:space:]]*(#|$)/ { print $3; if ($6 != "") print $6 }' "$FONTS_MANIFEST" | sort -u | while IFS= read -r f; do
     case "$f" in
       "" | /* | *..* | *\\* | *://*) echo "error: $FONTS_MANIFEST: '$f' is not a relative path inside the folder" >&2; exit 1 ;;
     esac
