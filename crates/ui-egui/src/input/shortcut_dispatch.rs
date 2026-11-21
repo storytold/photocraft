@@ -594,6 +594,10 @@ pub(crate) fn run_fired(app: &mut PhotocraftApp, ctx: &egui::Context, fired: &[F
         // The chrome toggles come back as the framework's command; the canvas runs its view commands itself.
         // The Swatches and Workspace commands run through their sets' handlers (`run_pressed`).
         if let Some((id, bridged)) = bridge_of(&f.command).filter(|(_, bridged)| !matches!(bridged, Bridged::Swatches(_) | Bridged::Workspace(_))) {
+            // The host can open a dialog before the runtime has shown its modal layer.
+            if app.dialog_open() && matches!(bridged, Bridged::Edit(EditCommands::Undo | EditCommands::Redo)) {
+                continue;
+            }
             if matches!(bridged, Bridged::Chrome(_) | Bridged::Edit(_) | Bridged::Stack(_)) && f.phase == FirePhase::Press {
                 dispatch(app, ctx, id);
             }
