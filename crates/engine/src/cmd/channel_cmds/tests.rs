@@ -1212,6 +1212,71 @@ fn layers_panel_mask_target_isolates_the_curve_channel() {
     assert_eq!((row.name.as_str(), row.gray), ("Quick Mask", Some(GraySurface::QuickMask)));
 }
 
+/// #10152: Channel Options keeps the grey a channel shows, as Photoshop does. An alpha channel
+/// (white inside the rectangle, black around it) turned into a spot channel prints where it was
+/// black, so the ink lands around the rectangle, not on it; turning it back restores the alpha
+/// channel exactly, and one Undo takes back the conversion.
+#[test]
+fn turning_an_alpha_channel_into_a_spot_channel_keeps_its_tone() {
+    let mut s = session();
+    rect(&mut s, 0, 0, 10, 10, "replace");
+    s.execute("channel.new", json!({"fill": "selection"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    assert_eq!((chan(&s, 0, 5, 5), chan(&s, 0, 20, 15)), (1.0, 0.0), "white inside, black around");
+    s.execute("channel.options", json!({"channel": 0, "indicates": "spot", "color": "#ff0000", "solidity": 100})).unwrap();
+    assert!(doc(&s).channels[0].spot.is_some());
+    assert_eq!((chan(&s, 0, 5, 5), chan(&s, 0, 20, 15)), (0.0, 1.0), "ink where the channel was black");
+    // Changing only the spot's options keeps its ink.
+    s.execute("channel.options", json!({"channel": 0, "color": "#00ff00"})).unwrap();
+    assert_eq!((chan(&s, 0, 5, 5), chan(&s, 0, 20, 15)), (0.0, 1.0));
+    s.execute("channel.options", json!({"channel": 0, "indicates": "masked"})).unwrap();
+    assert!(doc(&s).channels[0].spot.is_none());
+    assert_eq!((chan(&s, 0, 5, 5), chan(&s, 0, 20, 15)), (1.0, 0.0), "back to the alpha channel it was");
+    s.undo();
+    s.undo();
+    s.undo();
+    assert!(doc(&s).channels[0].spot.is_none());
+    assert_eq!((chan(&s, 0, 5, 5), chan(&s, 0, 20, 15)), (1.0, 0.0), "Undo takes the conversion back");
+}
+
+/// #10152 at every depth, with the greys of a feathered edge: each pixel's ink is one minus the
+/// tone it had, within the depth's step, and turning it back gives that tone again.
+#[test]
+fn an_alpha_to_spot_conversion_keeps_intermediate_greys_at_every_depth() {
+    for depth in [8, 16, 32] {
+        let mut s = session_depth(depth);
+        rect(&mut s, 0, 0, 20, 20, "replace");
+        s.execute("select.modify.feather", json!({"radius": 4})).unwrap();
+        s.execute("channel.new", json!({"fill": "selection"})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        let row = |s: &Session| (0..40).map(|x| chan(s, 0, x, 10)).collect::<Vec<f32>>();
+        let tone = row(&s);
+        assert!(tone.iter().any(|v| *v > 0.05 && *v < 0.95), "depth {depth}: a feathered edge has greys, {tone:?}");
+        let step = if depth == 8 { 1.5 / 255.0 } else { 1e-4 };
+        s.execute("channel.options", json!({"channel": 0, "indicates": "spot"})).unwrap();
+        for (x, (ink, t)) in row(&s).iter().zip(&tone).enumerate() {
+            assert!((ink - (1.0 - t)).abs() <= step, "depth {depth}, x {x}: ink {ink} for tone {t}");
+        }
+        s.execute("channel.options", json!({"channel": 0, "indicates": "masked"})).unwrap();
+        for (x, (back, t)) in row(&s).iter().zip(&tone).enumerate() {
+            assert!((back - t).abs() <= step, "depth {depth}, x {x}: {back} back for {t}");
+        }
+    }
+}
+
+/// The conversion turns the whole channel, tile by tile: every row of a tall channel, the last one
+/// included.
+#[test]
+fn an_alpha_to_spot_conversion_turns_every_row_of_a_tall_channel() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 600})).unwrap();
+    s.execute("channel.new", json!({"fill": "white"})).unwrap();
+    s.execute("channel.options", json!({"channel": 0, "indicates": "spot"})).unwrap();
+    for y in [0, 255, 256, 511, 512, 599] {
+        assert_eq!(chan(&s, 0, 3, y), 0.0, "row {y}: white tone is bare paper");
+    }
+}
+
 /// An opened RGB or CMYK document shows its spot channels (they print over the composite) and
 /// hides its alpha channels; a Multichannel document's inks are its composite, so their eyes stay off.
 #[test]
@@ -1281,4 +1346,81 @@ fn merge_channels_waits_for_three_grayscale_documents() {
     assert!(s.is_enabled("channel.merge"));
     s.execute("channel.merge", json!({"mode": "lab"})).unwrap();
     assert_eq!(s.documents().len(), 2, "the three of one size merged; the other is left");
+}
+
+/// A document with an empty spot channel (no ink anywhere), targeted in the Channels panel.
+fn spot_session() -> Session {
+    let mut s = session();
+    let r = s.execute("channel.newSpot", json!({"color": "#ff0000", "solidity": 100})).unwrap();
+    let spot = r["channel"].as_u64().unwrap();
+    s.execute("channel.target", json!({"channel": spot})).unwrap();
+    assert_eq!(chan(&s, 0, 5, 5), 0.0, "no ink yet");
+    s
+}
+
+/// CodeRabbit on #10217: a spot channel takes the Paint Bucket as the tone it shows. Black lays
+/// solid ink, white takes it away; the paper around the selection keeps none.
+#[test]
+fn the_paint_bucket_fills_a_spot_channel_by_its_tone() {
+    let mut s = spot_session();
+    rect(&mut s, 0, 0, 10, 10, "replace");
+    s.execute("paint.bucket", json!({"x": 5, "y": 5, "color": "#000000", "antiAlias": false})).unwrap();
+    assert_eq!((chan(&s, 0, 5, 5), chan(&s, 0, 20, 15)), (1.0, 0.0), "black is solid ink, inside the selection only");
+    s.execute("paint.bucket", json!({"x": 5, "y": 5, "color": "#ffffff", "antiAlias": false})).unwrap();
+    assert_eq!(chan(&s, 0, 5, 5), 0.0, "white takes the ink away");
+}
+
+/// CodeRabbit on #10217: a black-to-white gradient on a spot channel is solid ink at black and
+/// none at white, a gradient of the tone the channel shows.
+#[test]
+fn a_gradient_on_a_spot_channel_lays_ink_where_it_is_dark() {
+    let mut s = spot_session();
+    s.execute("paint.gradient", json!({"from": [0, 10], "to": [39, 10], "colors": ["#000000", "#ffffff"], "dither": false})).unwrap();
+    let (left, mid, right) = (chan(&s, 0, 0, 10), chan(&s, 0, 20, 10), chan(&s, 0, 39, 10));
+    assert!(left > 0.95 && right < 0.05, "ink at the black end, none at the white end: {left} {right}");
+    assert!((mid - 0.5).abs() < 0.05, "half ink halfway: {mid}");
+}
+
+/// CodeRabbit on #10217: Edit › Fill on a spot channel fills its tone: black is solid ink, 50 %
+/// gray half ink, white none. History Fill brings back the ink the channel stored.
+#[test]
+fn edit_fill_fills_a_spot_channel_by_its_tone() {
+    let mut s = spot_session();
+    rect(&mut s, 0, 0, 10, 10, "replace");
+    s.execute("edit.fill", json!({"contents": "black"})).unwrap();
+    assert_eq!((chan(&s, 0, 5, 5), chan(&s, 0, 20, 15)), (1.0, 0.0), "black is solid ink, inside the selection only");
+    let inked = s.execute("history.newSnapshot", json!({})).unwrap()["snapshot"].clone();
+    s.execute("edit.fill", json!({"contents": "gray"})).unwrap();
+    assert!((chan(&s, 0, 5, 5) - 0.5).abs() < 0.01, "gray is half ink: {}", chan(&s, 0, 5, 5));
+    s.execute("edit.fill", json!({"contents": "color", "color": "#ffffff"})).unwrap();
+    assert_eq!(chan(&s, 0, 5, 5), 0.0, "white is no ink");
+    s.execute("edit.fill", json!({"contents": "history", "snapshot": inked})).unwrap();
+    assert_eq!(chan(&s, 0, 5, 5), 1.0, "History Fill brings the stored ink back as ink");
+}
+
+/// The review on #10217: the Brush paints a spot channel by its tone: a black stroke is solid
+/// ink, a white one over it takes the ink away.
+#[test]
+fn the_brush_paints_a_spot_channel_by_its_tone() {
+    let mut s = spot_session();
+    s.execute("paint.stroke", json!({"points": [[10, 10]], "size": 8, "hardness": 1.0, "color": "#000000"})).unwrap();
+    assert_eq!((chan(&s, 0, 10, 10), chan(&s, 0, 30, 10)), (1.0, 0.0), "black is solid ink where the brush went");
+    s.execute("paint.stroke", json!({"points": [[10, 10]], "size": 8, "hardness": 1.0, "color": "#ffffff"})).unwrap();
+    assert_eq!(chan(&s, 0, 10, 10), 0.0, "white takes it away");
+}
+
+/// CodeRabbit on #10217: a blend mode works on the tone a spot channel shows, in the stroke the
+/// canvas previews and in the one it commits. Multiply with black on bare paper is solid ink
+/// (the tone goes to black); Screen with black over that ink changes nothing.
+#[test]
+fn the_brush_blends_on_a_spot_channel_by_its_tone() {
+    let mut s = spot_session();
+    let multiply = json!({"points": [[10, 10]], "size": 8, "hardness": 1.0, "color": "#000000", "mode": "multiply", "smoothing": 0.0, "seed": 1});
+    let preview = crate::brush_cmds::LiveStroke::begin(&s, &multiply).unwrap();
+    let shown = preview.doc.channels[0].surface.sample_channel(10, 10, 0);
+    s.execute("paint.stroke", multiply).unwrap();
+    assert_eq!((chan(&s, 0, 10, 10), chan(&s, 0, 30, 10)), (1.0, 0.0), "Multiply with black lays solid ink");
+    assert_eq!(shown, 1.0, "the preview shows the ink the commit lays");
+    s.execute("paint.stroke", json!({"points": [[10, 10]], "size": 8, "hardness": 1.0, "color": "#000000", "mode": "screen"})).unwrap();
+    assert_eq!(chan(&s, 0, 10, 10), 1.0, "Screen with black keeps the ink");
 }
