@@ -301,20 +301,21 @@ fn a_non_finite_layer_size_keeps_the_tool_size() {
 }
 
 /// A shown size can also leave the range `type.create` accepts while staying finite: an 800 pt
-/// layer under a 2x transform shows 1600 pt, above the engine's 1296 pt maximum, and a corrupt
-/// document can carry a 0 pt run, below its 0.1 pt minimum. Inheriting a refused size fails the
-/// whole create, so the click would make no mask at all. The size stays out of the parameters
-/// there too, and the mask still starts - at the tool's own size, the layer's font and style
-/// taken. Red before the range gate: no mask session opens (1600 pt case), or the create answer
-/// refuses the click (0 pt case).
+/// layer under a 4x/0.7x transform shows sqrt(2.8) * 800 = 1338 pt, above the engine's 1296 pt
+/// maximum, and a corrupt document can carry a 0 pt run, below its 0.1 pt minimum. Inheriting a
+/// refused size fails the whole create, so the click would make no mask at all. The size stays
+/// out of the parameters there too, and the mask still starts - at the tool's own size, the
+/// layer's font and style taken. Red before the range gate: no mask session opens.
 #[test]
 fn a_shown_layer_size_outside_the_create_range_keeps_the_tool_size() {
     // A plain document reaches the too-large case: 800 pt is a size the commands write, only the
-    // transform makes the shown size leave the accepted range.
+    // transform pushes the shown product past the maximum. The vertical 0.7 keeps the glyph band
+    // well above y = 400, so the click at (700, 550) starts a new mask instead of editing the
+    // layer's glyphs under it (#12075).
     let (mut app, id) = txt_active(800.0);
-    app.run("type.edit", json!({"layer": id.0, "transform": [2.0, 0.0, 0.0, 2.0, 60.0, 120.0]})).unwrap();
-    mask(&mut app, (60.0, 300.0), "MASK");
-    assert_eq!(mask_style(&app), ("Inter".into(), "Bold".into(), 48.0), "the tool's size, not the 1600 pt the create refuses");
+    app.run("type.edit", json!({"layer": id.0, "transform": [4.0, 0.0, 0.0, 0.7, 60.0, 120.0]})).unwrap();
+    mask(&mut app, (700.0, 550.0), "MASK");
+    assert_eq!(mask_style(&app), ("Inter".into(), "Bold".into(), 48.0), "the tool's size, not the 1338 pt the create refuses");
     // And the corrupt-document case below the accepted minimum.
     let (mut app, id) = txt_active(80.0);
     corrupt_layer_size(&mut app, id, 0.0);

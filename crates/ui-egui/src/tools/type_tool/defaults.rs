@@ -118,10 +118,14 @@ pub(super) fn mask_style_from_active_layer(app: &PhotocraftApp) -> Option<serde_
         p["fontStyle"] = json!(c.font_style);
     }
     let size = c.size_pt * shown_scale(app);
-    // Gate the f32 itself: `json!` turns a non-finite size into `null`, `finite_style_value`
-    // accepts `null`, and `type.create` then refuses the whole click. A document carrying such a
-    // size keeps the tool's own, as it does for a family or style the layer does not name.
-    if size.is_finite() {
+    // Only inherit a size `type.create` would itself accept, asked through the engine's own
+    // `check_size_tracking` so the range stays single-sourced (0.1-1296 pt today). `json!` turns
+    // a non-finite product into `null`, which the check refuses; a FINITE shown size can leave
+    // the range too: an 800 pt layer under a 2x transform shows 1600 pt, and a corrupt document
+    // can carry a 0 pt run. A refused parameter fails the whole create, and the click would make
+    // no mask at all - so such a size stays out of the parameters and the tool's own applies, as
+    // it does for a family or style the layer does not name.
+    if photocraft_engine::type_cmds::check_size_tracking(&json!({ "size": size })).is_ok() {
         p["size"] = json!(size);
     }
     Some(p)
