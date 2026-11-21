@@ -2,6 +2,7 @@
 //! and the event mapping the Brush Preset picker shares: rows in the engine's panel order, and one
 //! mapping from preset events to `brush.presets.*` and `tools.setBrush`.
 
+use std::collections::HashSet;
 use std::hash::Hash;
 
 use craft::behavior::{EditEvent, GesturePhase};
@@ -28,7 +29,7 @@ use crate::theme::Tokens;
 /// What a row of the brush lists is: a preset, or a group (`folder` empty) or a folder of a group.
 /// One type serves all three because their names can be equal. `group` is the group's name as the
 /// engine stores it on its presets (empty for the ungrouped).
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) enum BrushKey {
     /// A preset, by name.
     Preset(String),
@@ -145,6 +146,42 @@ pub(crate) fn preset_rows(app: &PhotocraftApp, env: &Env, parts: BrushCardParts)
     rows
 }
 
+/// Restores the two views independently. Old preferences have no keys, so every folder starts open.
+pub(crate) fn restore_folders(app: &mut PhotocraftApp) {
+    let prefs = app.session.prefs();
+    let panel = read_folders(&prefs.brushes_panel_collapsed);
+    let picker = read_folders(&prefs.brush_picker_collapsed);
+    app.ui.brushes_panel.toggled = panel;
+    app.ui.brush_picker_state.browser.toggled = picker;
+}
+
+fn read_folders(saved: &Value) -> HashSet<BrushKey> {
+    saved.as_array().into_iter().flatten().filter_map(|v| serde_json::from_value(v.clone()).ok()).filter(|key| matches!(key, BrushKey::Folder { .. })).collect()
+}
+
+/// Remember the groups the browser opened or closed. It also prunes missing rows, which may
+/// still be loading on disk, so only changes to rows currently present count as disclosures.
+pub(crate) fn updated_folders(before: &HashSet<BrushKey>, after: &HashSet<BrushKey>, saved: &Value, rows: &[BrushKey]) -> Option<Value> {
+    if before == after {
+        return None;
+    }
+    let visible: HashSet<_> = rows.iter().collect();
+    let mut changed = before.symmetric_difference(after).filter(|key| visible.contains(*key)).peekable();
+    changed.peek()?;
+    let mut folders = read_folders(saved);
+    for key in changed {
+        if after.contains(key) {
+            folders.insert(key.clone());
+        } else {
+            folders.remove(key);
+        }
+    }
+    let mut folders: Vec<_> = folders.into_iter().collect();
+    folders.sort_unstable();
+    let value = if folders.is_empty() { Value::Null } else { serde_json::to_value(folders).ok()? };
+    (value != *saved).then_some(value)
+}
+
 /// The `brushes` registry body: the Size field over the presets, in a list or a grid.
 pub(crate) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let env = Env::of(ui);
@@ -153,6 +190,7 @@ pub(crate) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let current = app.session.tools.current_preset.as_deref().and_then(|c| app.session.tools.presets.iter().find(|p| p.name.eq_ignore_ascii_case(c)));
     let current = current.map(|p| BrushKey::Preset(p.name.clone()));
     let mut diameter = f64::from(app.session.tools.brush.size);
+    let folders_before = app.ui.brushes_panel.toggled.clone();
     let mut panel =
         BrushesPanel::new(tl!("Brushes"), &rows, Bind::bound(&mut app.ui.brushes_panel), Bind::bound(&mut diameter), f64::from(MAX_BRUSH_SIZE)).import(true);
     if let Some(current) = current {
@@ -161,6 +199,9 @@ pub(crate) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let out = panel.show(ui);
     for event in &out.diameter.events {
         set_size(app, event);
+    }
+    if let Some(folders) = updated_folders(&folders_before, &app.ui.brushes_panel.toggled, &app.session.prefs().brushes_panel_collapsed, &keys) {
+        app.session.prefs.edit(|p| p.brushes_panel_collapsed = folders);
     }
     run_picks(app, out.picks, &keys);
 }

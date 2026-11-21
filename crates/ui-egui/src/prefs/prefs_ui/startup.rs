@@ -34,6 +34,7 @@ pub fn load(app: &mut PhotocraftApp) {
     crate::dock::restore(app);
     crate::color_panel_ui::restore(app);
     crate::brush_picker::restore(app);
+    crate::brush_panel::brushes::restore_folders(app);
     crate::last_brush::restore(app);
     sync_rulers(app);
     crate::tool_memory::restore(app);
@@ -200,6 +201,7 @@ pub(super) fn presets_store(app: &mut PhotocraftApp) {
             Ok(opened) => {
                 app.services.preset_store = None;
                 let warnings = app.session.attach_preset_store(opened);
+                crate::brush_panel::brushes::restore_folders(app);
                 if let Some(w) = warnings.first() {
                     app.ui.status = if warnings.len() == 1 {
                         w.clone()

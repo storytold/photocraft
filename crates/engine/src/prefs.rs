@@ -1605,6 +1605,10 @@ pub struct Preferences {
     /// the footer slider's card scale, saved as the user changes them and restored at launch.
     /// JSON owned by the shell.
     pub brush_picker: Value,
+    /// Closed brush folders in the Brushes panel, including their group and folder path.
+    pub brushes_panel_collapsed: Value,
+    /// Closed brush folders in the Brush Preset picker, independent of the panel.
+    pub brush_picker_collapsed: Value,
     /// The brush the tool was last using (settings and tip references, never the full bitmaps;
     /// shaped by `brush_cmds::remembered_brush`), restored at launch so the tool starts where it
     /// was left. Written only when `ToolState::brush_rev` moves.
