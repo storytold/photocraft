@@ -188,14 +188,18 @@ fn photo_app() -> Box<PhotocraftApp> {
     app.session
         .edit("paint", |doc, active| {
             let s = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            let channels = s.channels();
+            let mut pixels = Vec::with_capacity((w * h) as usize * channels);
             for y in 0..h {
                 for x in 0..w {
                     let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
                     let disc = (((x - 150) * (x - 150) + (y - 70) * (y - 70)) < 45 * 45) as i32 as f32;
                     let stripes = ((x + y) / 11 % 2) as f32;
-                    s.write_pixel(x, y, &[u * 0.8 + disc * 0.2, 0.25 + 0.5 * stripes * (1.0 - disc), v * (1.0 - disc) + disc * 0.9, 1.0]);
+                    let pixel = [u * 0.8 + disc * 0.2, 0.25 + 0.5 * stripes * (1.0 - disc), v * (1.0 - disc) + disc * 0.9, 1.0];
+                    pixels.extend_from_slice(&pixel[..channels]);
                 }
             }
+            s.write_region(Rect::new(0, 0, w, h), &pixels);
             Ok(())
         })
         .unwrap();
