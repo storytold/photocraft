@@ -9,12 +9,12 @@ use super::check;
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
-/// The members of the active tool when it is one of the navigation tools.
-pub(super) fn members(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    match app.ui.tool {
+/// The members of the shown `tool` when it is one of the navigation tools.
+pub(super) fn members(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
+    match tool {
         Tool::Move => move_members(app, ui),
         Tool::Eyedropper => crate::eyedropper_ui::options(app, ui),
-        Tool::Zoom | Tool::RotateView | Tool::Hand => view_members(app, ui),
+        Tool::Zoom | Tool::RotateView | Tool::Hand => view_members(app, ui, tool),
         _ => {}
     }
 }
@@ -46,8 +46,7 @@ fn navigation_options(app: &PhotocraftApp) -> NavigationOptions {
 /// Zoom, Rotate View and Hand on the framework's `NavigateBar`. The bar edits a copy of the active document's view,
 /// which goes back to the document when a field changed it. Its 100 %, Fit Screen and Fill Screen buttons are view
 /// commands the canvas runs.
-fn view_members(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let tool = app.ui.tool;
+fn view_members(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
     let mut options = navigation_options(app);
     let before = options;
     if tool == Tool::Hand {

@@ -178,8 +178,8 @@ fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         _ => {}
     }
     let _ = paint::members(app, ui, tool) || selection::members(app, ui, tool);
-    fill::members(app, ui);
-    navigate::members(app, ui);
+    fill::members(app, ui, tool);
+    navigate::members(app, ui, tool);
 }
 
 /// The Home button and the tool's icon with its Reset Tool and Reset All Tools menu.

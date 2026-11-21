@@ -26,7 +26,14 @@ pub fn sample_color(app: &mut PhotocraftApp, at: [f64; 2], size: SampleSize, sou
 /// What the Eyedropper picks at document point `at`: the targeted raster mask's value when the mask
 /// source applies, else the colour (grey unless the paint target is pixels).
 pub fn pick(app: &mut PhotocraftApp, at: [f64; 2], size: SampleSize, source: SampleSource) -> Option<[f32; 3]> {
-    if let Some((surface, canvas)) = eyedropper_mask_source(app, source) {
+    let eyedropper = app.ui.tool == Tool::Eyedropper;
+    pick_for(app, at, size, source, eyedropper)
+}
+
+/// [`pick`] for a pick that is the Eyedropper's (`eyedropper`) whatever tool is selected, as Fill's pick is.
+/// Only the Eyedropper's pick reads a targeted mask.
+pub fn pick_for(app: &mut PhotocraftApp, at: [f64; 2], size: SampleSize, source: SampleSource, eyedropper: bool) -> Option<[f32; 3]> {
+    if let Some((surface, canvas)) = eyedropper.then(|| eyedropper_mask_source(app, source)).flatten() {
         return sample_layer_mask(surface, canvas, at, size.pixels());
     }
     sample_color(app, at, size, source)
@@ -52,7 +59,7 @@ pub fn composite_color(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<[f32; 
 fn eyedropper_mask_source(app: &PhotocraftApp, source: SampleSource) -> Option<(&photocraft_raster::Surface, photocraft_geom::Rect)> {
     use photocraft_engine::{channel_cmds::ChannelTarget, mask_view_cmds};
 
-    if app.ui.tool != Tool::Eyedropper || app.ui.vector_mask_target || !matches!(source, SampleSource::Current | SampleSource::CurrentAndBelow) {
+    if app.ui.vector_mask_target || !matches!(source, SampleSource::Current | SampleSource::CurrentAndBelow) {
         return None;
     }
     let st = app.session.active()?;

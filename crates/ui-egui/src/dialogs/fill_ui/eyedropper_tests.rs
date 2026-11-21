@@ -109,6 +109,48 @@ fn the_pick_follows_the_eyedroppers_sample_size() {
     cancel(&mut app, id).unwrap();
 }
 
+/// With a layer mask targeted and Sample: Current Layer, Fill's pick reads the mask as the Eyedropper tool does,
+/// though the Brush stays selected: the revealed (white) mask, not the red pixels' grey.
+#[test]
+fn the_pick_reads_a_targeted_mask_with_the_brush_selected() {
+    let mut app = app();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    assert!(app.ui.mask_target, "the new mask is targeted");
+    app.ui.tool_options.eyedropper.source = craft::color_ui::ui::SampleSource::Current;
+    let id = open(&mut app);
+    click(&mut app, [5.5, 10.5], Modifiers::NONE);
+    assert!(near(foreground(&app), [1.0, 1.0, 1.0]), "the pick takes the mask's white: {:?}", foreground(&app));
+    assert_eq!(app.ui.tool, Tool::Brush, "the selected tool doesn't change");
+    cancel(&mut app, id).unwrap();
+}
+
+/// While Fill is open the options bar shows the Eyedropper's members, not the selected Move tool's.
+#[test]
+fn the_options_bar_shows_the_eyedroppers_members_while_fill_is_open() {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = app();
+    crate::tool_memory::select(&mut app, Tool::Move);
+    app.sync_views();
+    let id = open(&mut app);
+    let mut h = Harness::builder().with_size(egui::vec2(1600.0, 400.0)).with_context(app.ctx().clone()).build_ui_state(
+        |ui, app: &mut Box<PhotocraftApp>| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            crate::panels::options_bar(app, ui);
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::studio());
+    h.run_steps(4);
+    assert!(h.query_by_label("Sample Size:").is_some(), "the Eyedropper's Sample Size shows");
+    assert!(h.query_by_label("Auto-Select:").is_none(), "the Move tool's Auto-Select doesn't show");
+    let mut app = h.into_state();
+    cancel(&mut app, id).unwrap();
+}
+
 /// After Cancel the tool that was current shows again, and the picked colour stays.
 #[test]
 fn cancel_shows_the_previous_tool_again() {

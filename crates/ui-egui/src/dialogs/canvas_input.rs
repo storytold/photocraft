@@ -198,7 +198,8 @@ pub(crate) fn pick_fill_foreground(app: &mut PhotocraftApp, at: [f64; 2], mods: 
         return false;
     }
     let options = app.ui.tool_options.eyedropper;
-    if let Some([r, g, b]) = crate::canvas::sampling::pick(app, at, options.size, options.source)
+    // The Eyedropper's pick, whatever tool is selected: a targeted mask gives its value, as with the tool itself.
+    if let Some([r, g, b]) = crate::canvas::sampling::pick_for(app, at, options.size, options.source, true)
         && let Err(e) = app.run("tools.setColors", serde_json::json!({ "foreground": [r, g, b, 1.0] }))
     {
         crate::notices::error(app, e);

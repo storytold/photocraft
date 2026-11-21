@@ -61,8 +61,8 @@ pub(crate) fn mode_select<'a>(mode: Bind<'a, PaintMode>, entries: &'a [Entry<Pai
 }
 
 /// The Paint Bucket's members: Fill source, Mode, Opacity, Tolerance, Anti-alias, Contiguous and All Layers.
-pub(super) fn members(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    if app.ui.tool != Tool::PaintBucket {
+pub(super) fn members(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
+    if tool != Tool::PaintBucket {
         return;
     }
     let entries = mode_entries(Tool::PaintBucket, true, false);
