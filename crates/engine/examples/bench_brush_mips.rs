@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // A fresh allocation makes every cold preparation a genuine miss. Copying
                 // samples and materializing the document are outside all measured stages.
                 for trial in 0..8 {
-                    s.tools.brush.tip = original
+                    *s.tools.brush.tip = original
                         .as_ref()
                         .map_or(TipShape::Round, |t| TipShape::Sampled(GrayTile { width: t.width, height: t.height, data: t.data.as_ref().to_vec().into() }));
                     let t = Instant::now();
