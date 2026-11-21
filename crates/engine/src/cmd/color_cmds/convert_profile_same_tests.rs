@@ -49,17 +49,17 @@ fn flatten_with_the_same_profile_runs_as_before() {
     assert_eq!(s.active().unwrap().history.entries().len(), entries + 1);
 }
 
-/// An Indexed document tagged with the destination's profile still converts as before (to RGB):
-/// the same-profile shortcut is only for the modes measured.
+/// An Indexed document tagged with the destination's profile still converts: the same-profile
+/// shortcut is only for the modes measured. It stays Indexed, as any RGB destination keeps it (#14262).
 #[test]
-fn an_indexed_document_with_the_same_profile_converts_as_before() {
+fn an_indexed_document_with_the_same_profile_still_converts() {
     let mut s = tagged();
     s.execute("image.mode.indexedColor", json!({})).unwrap();
     assert_eq!(s.active().unwrap().doc.mode, ColorMode::Indexed);
     s.execute("edit.assignProfile", json!({"profile": "srgb"})).unwrap();
     let r = s.execute("edit.convertToProfile", json!({"profile": "srgb"})).unwrap();
     assert_eq!(r["converted"], true, "{r}");
-    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Rgb);
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Indexed);
 }
 
 /// An embedded profile that can't be read is not taken for the destination's colours: the
