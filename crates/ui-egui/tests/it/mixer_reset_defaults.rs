@@ -148,13 +148,13 @@ fn switching_back_keeps_the_mixers_edited_brush() {
     pick(&mut app, Tool::MixerBrush);
     reset(&mut app);
     scramble(&mut app);
-    let edited = app.session.tools.brush.clone();
+    let edited = (*app.session.tools.brush).clone();
     pick(&mut app, Tool::Brush);
-    let brush = app.session.tools.brush.clone();
+    let brush = (*app.session.tools.brush).clone();
     pick(&mut app, Tool::MixerBrush);
-    assert_eq!(app.session.tools.brush, edited);
+    assert_eq!(*app.session.tools.brush, edited);
     pick(&mut app, Tool::Brush);
-    assert_eq!(app.session.tools.brush, brush);
+    assert_eq!(*app.session.tools.brush, brush);
 }
 
 #[test]
@@ -185,11 +185,11 @@ fn constructors_and_implicit_mixer_commands_keep_global_defaults() {
     assert_eq!((m.load_after_stroke, m.clean_after_stroke, m.sample_all_layers), (true, true, false));
     // A session starts at 10% smoothing (ToolState::default), unlike the raw brush constructor.
     let session_defaults = BrushSettings { smoothing: photocraft_paint::Smoothing { amount: 0.1, ..Default::default() }, ..BrushSettings::default() };
-    assert_eq!(Session::new().tools.brush, session_defaults);
+    assert_eq!(*Session::new().tools.brush, session_defaults);
     let mut implicit = app();
     let mut explicit = app();
     for app in [&mut implicit, &mut explicit] {
-        assert_eq!(app.session.tools.brush, session_defaults);
+        assert_eq!(*app.session.tools.brush, session_defaults);
         app.run("layer.new.layer", json!({})).unwrap();
         app.run("edit.fill", json!({"color": "#8090a0"})).unwrap();
     }
@@ -209,7 +209,7 @@ fn constructors_and_implicit_mixer_commands_keep_global_defaults() {
             assert_eq!(a.pixel(x, y), b.pixel(x, y), "implicit mixer defaults at {x},{y}");
         }
     }
-    assert_eq!(implicit.session.tools.brush, session_defaults);
+    assert_eq!(*implicit.session.tools.brush, session_defaults);
 }
 
 #[test]
@@ -218,8 +218,8 @@ fn first_use_without_reset_keeps_existing_inheritance() {
     let mut app = app();
     pick(&mut app, Tool::Blur);
     scramble(&mut app);
-    let old = app.session.tools.brush.clone();
+    let old = (*app.session.tools.brush).clone();
     pick(&mut app, Tool::MixerBrush);
     let expected = BrushSettings { mode: BlendMode::Normal, smoothing: photocraft_paint::Smoothing { amount: 0.1, ..Default::default() }, ..old };
-    assert_eq!(app.session.tools.brush, expected);
+    assert_eq!(*app.session.tools.brush, expected);
 }
