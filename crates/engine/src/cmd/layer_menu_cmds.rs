@@ -525,7 +525,7 @@ fn blending_options(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "layer.layerStyle.blendingOptions";
     let id = layer_param(s, p)?;
     let blend = match p.get("blend").and_then(Value::as_str) {
-        Some(b) => Some(crate::commands::blend_from_str(b).ok_or_else(|| bad(CMD, format!("unknown blend mode `{b}`")))?),
+        Some(b) => Some(crate::commands::parse_blend(b).ok_or_else(|| bad(CMD, format!("unknown blend mode `{b}`")))?),
         None => None,
     };
     let opacity = p.get("opacity").and_then(Value::as_f64).map(|v| (v as f32 / 100.0).clamp(0.0, 1.0));
@@ -1027,6 +1027,16 @@ macro_rules! spec {
     };
 }
 
+/// `layer.exportAs`' params: its `resample` offers the methods of [`crate::export_preset_cmds::RESAMPLE`], in its order.
+fn export_as_params() -> &'static str {
+    let methods: Vec<&str> = crate::export_preset_cmds::RESAMPLE.iter().map(|(key, _)| *key).collect();
+    crate::vector_cmds::leak(format!(
+        r##"{{"layer":id?,"path":text,"scale":1..1000=100,"resample":"{}"="{}"}} (format from the path's extension; the document is not resampled)"##,
+        methods.join("|"),
+        crate::export_preset_cmds::DEFAULT_RESAMPLE
+    ))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         spec!("layer.layerMask.apply", "Apply", ["Layer", "Layer Mask"], r##"{"layer":id?}"##, has_raster_with_mask, apply_mask),
@@ -1113,14 +1123,16 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.quickExportAsPng",
             true
         )),
-        spec!(
-            "layer.exportAs",
-            "Export As…",
-            ["Layer"],
-            r##"{"layer":id?,"path":text,"scale":1..1000=100,"resample":"bicubicAutomatic|bicubic|bicubicSmoother|bicubicSharper|bilinear|nearest"="bicubicAutomatic"} (format from the path's extension; the document is not resampled)"##,
-            has_layer,
-            |s, p| export_layer(s, p, "layer.exportAs", false)
-        ),
+        CommandSpec {
+            id: "layer.exportAs",
+            label: "Export As…",
+            menu: &["Layer"],
+            shortcut: None,
+            params: export_as_params(),
+            enabled: has_layer,
+            run: |s, p| export_layer(s, p, "layer.exportAs", false),
+            journal: true,
+        },
     ]
 }
 

@@ -25,9 +25,10 @@ mod custom_shape_layer_name_tests;
 /// Group listing Edit › Define Custom Shape results (`EditState::custom_shapes`).
 pub const CUSTOM_GROUP: &str = "Custom Shapes";
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct ShapePreset {
     pub name: String,
+    #[plain_data(assume = "a document path: plain geometry")]
     pub path: Path,
     /// An imported library's opaque identity; old and locally drawn presets need none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
