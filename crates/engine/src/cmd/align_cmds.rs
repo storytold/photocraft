@@ -52,6 +52,19 @@ fn pinned(doc: &Document, id: LayerId) -> bool {
     l.all || l.pixels || (l.position && !doc.is_background(id))
 }
 
+/// Whether only the position lock keeps layer `id` from moving (no lock all, no pixel lock).
+fn position_locked_only(doc: &Document, id: LayerId) -> bool {
+    let l = doc.effective_locks(id);
+    l.position && !l.all && !l.pixels
+}
+
+/// The reference when the selection holds the Background (#14199): it stays put and the other layers align to it,
+/// a position-locked layer among them included. A layer with lock all or a pixel lock still wins (not measured).
+fn background_reference(doc: &Document, ids: &[LayerId]) -> Option<LayerId> {
+    let bg = ids.iter().copied().find(|id| doc.is_background(*id))?;
+    ids.iter().filter(|id| pinned(doc, **id)).all(|id| position_locked_only(doc, *id)).then_some(bg)
+}
+
 fn two_layers(s: &Session) -> std::result::Result<(), String> {
     s.active().ok_or("no document open")?;
     if selected_pixel_layers(s).len() < 2 { Err("select two or more pixel layers in the Layers panel".into()) } else { Ok(()) }
@@ -71,9 +84,13 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
     let reference = match p.get("reference").and_then(Value::as_u64) {
         Some(r) if ids.contains(&LayerId(r)) => LayerId(r),
         Some(r) => return Err(bad(cmd, format!("reference {r} is not a selected pixel layer"))),
-        // As in Photoshop, a locked layer stays put: it becomes the reference (#7080).
-        None => ids.iter().copied().find(|id| pinned(&doc, *id)).unwrap_or(ids[0]),
+        // As in Photoshop, a selected Background is the reference (#14199); else a locked layer stays put and becomes
+        // the reference (#7080).
+        None => background_reference(&doc, &ids).or_else(|| ids.iter().copied().find(|id| pinned(&doc, *id))).unwrap_or(ids[0]),
     };
+    // Whether `background_reference` chose it: a Background that is the reference some other way (named by the caller,
+    // or taken as the first locked layer because it is locked all) keeps today's refusal to move a locked layer.
+    let auto_background = p.get("reference").and_then(Value::as_u64).is_none() && background_reference(&doc, &ids) == Some(reference);
     let ref_idx = ids.iter().position(|i| *i == reference).unwrap_or(0);
     let area = doc.bounds();
     let surfs: Vec<&Surface> = ids.iter().map(|id| doc.layer(*id).and_then(|l| l.surface()).ok_or(EngineError::NoLayer(*id))).collect::<Result<_>>()?;
@@ -109,7 +126,10 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
     if moves.is_empty() {
         return Err(EngineError::Other("Auto-Align couldn't find enough matching detail between the layers".into()));
     }
-    if let Some(l) = moves.iter().find(|&&i| pinned(&doc, ids[i])).and_then(|&i| doc.layer(ids[i])) {
+    // Onto a Background chosen automatically, a layer held only by its position lock moves too (#14199); an explicit
+    // `reference` that would move a locked layer is still refused (CodeRabbit on #16073).
+    let movable = |id: LayerId| !pinned(&doc, id) || (auto_background && position_locked_only(&doc, id));
+    if let Some(l) = moves.iter().find(|&&i| !movable(ids[i])).and_then(|&i| doc.layer(ids[i])) {
         return Err(EngineError::Other(format!("Auto-Align can't move the locked layer \"{}\"", l.name)));
     }
     let warped: Vec<(LayerId, Surface, Option<Surface>)> = moves
@@ -399,3 +419,6 @@ mod tests;
 
 #[cfg(test)]
 mod auto_blend_background_tests;
+
+#[cfg(test)]
+mod auto_align_reference_tests;
