@@ -15,7 +15,7 @@ use photocraft_geom::{Affine, Rect};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, color_param, int, int_i32};
+use crate::commands::{CommandSpec, color_param, int, int_i32, parse_hex};
 use crate::file_cmds::{SaveOpts, encode, f64_param, join, native_doc, sanitize, save_doc, stem, str_param, write_file};
 use crate::{EngineError, Result, Session};
 
@@ -888,6 +888,109 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"files": files}))
 }
 
+/// Artboards to PDF's Include Artboard Name and its Name Options (#13654). The params, their
+/// defaults and the border rule are those of the same option in Artboards to Files (#13637).
+struct PdfName {
+    style: photocraft_doc::text::CharStyle,
+    /// The Canvas Extension colour, sRGB with alpha.
+    extension: [f32; 4],
+}
+
+/// Photoshop's largest type size, in points.
+const PDF_NAME_MAX_PT: f64 = 1296.0;
+
+/// The name border on each side: a twentieth of width plus height, rounded, which gives exactly
+/// the measured 18 px for 200 x 150, 20 for 200 x 200 and 60 for 800 x 400.
+fn pdf_name_border(w: u32, h: u32) -> u32 {
+    ((f64::from(w) + f64::from(h)) / 20.0).round() as u32
+}
+
+impl PdfName {
+    /// The Name Options in `p`, or `None` with `includeName` off. A size that is not a positive
+    /// number fails the export before anything is written.
+    fn from_params(p: &Value, cmd: &str) -> Result<Option<Self>> {
+        if p.get("includeName").and_then(Value::as_bool) != Some(true) {
+            return Ok(None);
+        }
+        let size = match p.get("fontSize") {
+            None | Some(Value::Null) => Some(12.0),
+            // The dialog's Size is a text field.
+            Some(Value::String(t)) => t.trim().parse::<f64>().ok(),
+            Some(v) => v.as_f64(),
+        }
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .ok_or_else(|| bad(cmd, "`fontSize` must be a positive number of points"))?;
+        let name = |key: &str, default: &str| p.get(key).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()).unwrap_or(default).to_owned();
+        let white = [1.0; 4];
+        let unknown = || bad(cmd, "`extension` must be \"white\", \"black\", \"other\", \"#rrggbb\" or [r, g, b]");
+        let extension = match p.get("extension") {
+            None | Some(Value::Null) => white,
+            Some(Value::String(v)) => match v.to_ascii_lowercase().as_str() {
+                "white" => white,
+                "black" => [0.0, 0.0, 0.0, 1.0],
+                "other" => color_param(cmd, p, "extensionColor", white)?,
+                _ => parse_hex(v).ok_or_else(unknown)?,
+            },
+            Some(Value::Array(a)) if (3..=4).contains(&a.len()) && a.iter().all(Value::is_number) => color_param(cmd, p, "extension", white)?,
+            Some(_) => return Err(unknown()),
+        };
+        let text = color_param(cmd, p, "textColor", [0.0, 0.0, 0.0, 1.0])?.map(|c| c.clamp(0.0, 1.0));
+        let mut style = photocraft_doc::text::CharStyle::default();
+        crate::type_cmds::apply_char_props(
+            &mut style,
+            &json!({"font": name("font", "Arial"), "fontStyle": name("fontStyle", "Regular"), "size": size.min(PDF_NAME_MAX_PT), "color": text}),
+        );
+        Ok(Some(Self { style, extension: extension.map(|c| c.clamp(0.0, 1.0)) }))
+    }
+
+    /// `page` (one flattened board) grown by [`pdf_name_border`] on all four sides in the Canvas
+    /// Extension colour, with the board's name in the top border: its ink starts at the board's
+    /// left edge and is centred in the border's height.
+    fn frame(&self, page: &Document, dpi: f32, cmd: &str) -> Result<Document> {
+        let b = pdf_name_border(page.size.width, page.size.height);
+        let grow = |len: u32| b.checked_mul(2).and_then(|d| len.checked_add(d)).and_then(|n| Some((n, i32::try_from(n).ok()?)));
+        let (Some((nw, nwi)), Some((nh, nhi)), Ok(bi)) = (grow(page.size.width), grow(page.size.height), i32::try_from(b)) else {
+            return Err(bad(cmd, format!("artboard `{}` is too large for a name border", page.name)));
+        };
+        let board = page.layers.first().and_then(Layer::surface).ok_or_else(|| bad(cmd, "the flattened page has no pixels"))?;
+        let px = board.try_read_region(page.bounds()).map_err(|e| bad(cmd, e.to_string()))?;
+        let fmt = page.pixel_format();
+        let ext = photocraft_raster::from_rgba(&fmt, self.extension);
+        let mut out = Document::new(&page.name, Size::new(nw, nh), ColorMode::Rgb, SampleType::U8);
+        let mut paper = Surface::new(fmt);
+        paper.fill_rect(out.bounds(), &ext);
+        out.layers.push(Layer::new("Canvas Extension", LayerContent::Raster(paper)));
+        out.layers.extend(self.name_layer(&page.name, Rect::new(0, 0, nwi, bi), dpi, fmt));
+        let mut over = Surface::new(fmt);
+        over.fill_rect(Rect::new(0, bi, nwi, nhi), &ext);
+        over.write_region(page.bounds().translate(bi, bi), &px);
+        out.layers.push(Layer::new("Board", LayerContent::Raster(over)));
+        Ok(out)
+    }
+
+    /// The name drawn by the type engine, as pixels cut to the top border `top` (a name taller or
+    /// wider than it never reaches the board or the other borders, whatever the extension's alpha),
+    /// or `None` when it draws no ink.
+    fn name_layer(&self, name: &str, top: Rect, dpi: f32, fmt: PixelFormat) -> Option<Layer> {
+        let border = top.height();
+        let mut t = photocraft_doc::TextLayer { text: name.to_owned(), ..Default::default() };
+        t.runs = vec![photocraft_doc::text::TextRun { len: t.text.len(), style: self.style.clone() }];
+        t.sync_summary();
+        let layout = photocraft_text::shared().lock().unwrap_or_else(std::sync::PoisonError::into_inner).layout(&t, dpi);
+        let [x0, y0, _, y1] = photocraft_text::render::ink_bounds(&layout)?;
+        let (dx, dy) = ((f64::from(border) - x0).round(), (f64::from(border) / 2.0 - (y0 + y1) / 2.0).round());
+        if !dx.is_finite() || !dy.is_finite() {
+            return None;
+        }
+        t.transform = Affine::translate(dx, dy);
+        crate::type_cmds::refresh_at(dpi, fmt, &mut t);
+        let drawn = t.cache?;
+        let mut cut = Surface::new(fmt);
+        cut.write_region(top, &drawn.read_region(top));
+        Some(Layer::new(name, LayerContent::Raster(cut)))
+    }
+}
+
 /// A minimal PDF with one page per JPEG image: (width px, height px, dpi, JPEG bytes).
 /// Pages are sized so the image prints at its resolution.
 pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
@@ -938,6 +1041,7 @@ pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
 fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToPdf";
     let path = str_param(p, "path", cmd)?.to_string();
+    let name = PdfName::from_params(p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
     let quality = f64_param(p, "quality").or(Some(10.0));
@@ -952,8 +1056,12 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
         let vals: Vec<f32> = buf.px.iter().flat_map(|px| photocraft_raster::from_rgba(&fmt, *px)).collect();
         surf.write_region(one.bounds(), &vals);
         flat.layers.push(Layer::new("Background", LayerContent::Raster(surf)));
+        let flat = match &name {
+            Some(o) => o.frame(&flat, doc.resolution_dpi, cmd)?,
+            None => flat,
+        };
         let (jpeg, _) = encode(&flat, "page.jpg", quality)?;
-        pages.push((one.size.width, one.size.height, doc.resolution_dpi, jpeg));
+        pages.push((flat.size.width, flat.size.height, doc.resolution_dpi, jpeg));
     }
     if pages.is_empty() {
         return Err(bad(cmd, "no matching artboards"));
@@ -1029,7 +1137,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToPdf",
             "Artboards to PDF…",
             &["File", "Export"],
-            r##"{"path":str (.pdf),"artboards":[id]?,"quality":0..12=10} → {path, pages} (one raster page per board, bottom artboard of the Layers panel first)"##,
+            r##"{"path":str (.pdf),"artboards":[id]?,"quality":0..12=10,"includeName":bool=false (Include Artboard Name: the page grows by a border of (w + h) / 20 px on each side, the name in the top one, drawn into the page image),"font":family="Arial","fontStyle":"Regular|Italic|Bold|Bold Italic|Black"="Regular","fontSize":pt|numeric str=12 (else an error),"extension":"white|black|other"|"#rrggbb"|[r,g,b]="white" (Canvas Extension; "other" takes "extensionColor":[r,g,b]),"textColor":"#rrggbb"|[r,g,b]=black} → {path, pages} (one raster page per board, bottom artboard of the Layers panel first)"##,
             export_artboards,
             artboards_to_pdf
         ),
@@ -1060,6 +1168,10 @@ mod overlapping_areas_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/pdf_page_order_tests.rs"]
 mod pdf_page_order_tests;
+
+#[cfg(test)]
+#[path = "artboard_cmds/pdf_include_name_tests.rs"]
+mod pdf_include_name_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/tests.rs"]
 mod tests;

@@ -4,7 +4,7 @@
 use super::*;
 
 /// The measured document, and the ids of Red, Blue and Empty Board (bottom to top).
-fn session() -> (Session, [u64; 3]) {
+pub(super) fn session() -> (Session, [u64; 3]) {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 800, "height": 400, "depth": 8, "resolution": 72})).unwrap();
     let mut board = |rect: [i64; 4], name: &str| {
