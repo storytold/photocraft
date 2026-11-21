@@ -592,6 +592,23 @@ fn a_command_refused_on_a_hidden_layer_leaves_the_piece_floating() {
     assert_still_floating(&s, id, steps, "Brush on a hidden layer");
 }
 
+/// The Patch tool's refusals (a locked layer) come before the piece drops, as the hidden-layer one does (CodeRabbit on
+/// #16178).
+#[test]
+fn a_patch_refused_on_a_locked_layer_leaves_the_piece_floating() {
+    let (mut s, id) = session();
+    s.edit("lock", |doc, _| {
+        doc.layer_mut(id).unwrap().locks.set("pixels", true);
+        Ok(())
+    })
+    .unwrap();
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("select.float", json!({"dx": 15, "dy": 0})).unwrap();
+    let refused = s.execute("paint.patch", json!({"offset": [0, 5]}));
+    assert!(refused.unwrap_err().to_string().contains("the layer is locked"));
+    assert_still_floating(&s, id, steps, "Patch on a locked layer");
+}
+
 #[test]
 fn a_command_refused_for_the_colour_mode_leaves_the_piece_floating() {
     let mut s = Session::new();

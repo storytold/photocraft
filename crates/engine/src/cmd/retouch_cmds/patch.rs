@@ -158,6 +158,57 @@ struct Plan {
     offset: (i32, i32),
 }
 
+/// The reference's alerts for a Patch it refuses (#12120); a hidden target is [`crate::hidden_target::PATCH_HIDDEN`].
+pub const EMPTY_AREA: &str = "Could not use the patch tool because the selected area is empty.";
+pub const LOCKED: &str = "Could not use the patch tool because the layer is locked.";
+pub const INDEXED: &str = "Could not use the patch tool because it does not work with Indexed Color images (convert image to RGB Color mode to edit).";
+
+/// The Patch refusals measured in the reference (#12120), before anything changes: an Indexed Color image, a layer
+/// with Lock All or Lock Image Pixels, and a layer with no pixels where the patch would repair. They concern the
+/// layer's own pixels: a mask or channel target keeps today's checks (not measured). Content-Aware fills an empty
+/// area, as the reference does, so the empty check is the normal patch's only.
+fn refuse(s: &Session, p: &Value, id: Option<LayerId>, repaired: Rect) -> Result<()> {
+    let Some(st) = s.active() else { return Ok(()) };
+    // Only the layer's own pixels: a mask or channel target keeps today's checks, an Indexed Color image included
+    // (CodeRabbit on #16178).
+    if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
+        return Ok(());
+    }
+    if st.doc.mode == photocraft_color::ColorMode::Indexed {
+        return Err(EngineError::Other(INDEXED.into()));
+    }
+    let Some(layer) = id.and_then(|id| st.doc.layer(id)) else { return Ok(()) };
+    let locks = st.doc.effective_locks(layer.id);
+    if locks.all || locks.pixels {
+        return Err(EngineError::Other(LOCKED.into()));
+    }
+    if flag(p, "contentAware", false) {
+        return Ok(());
+    }
+    let Some(surf) = layer.surface() else { return Ok(()) };
+    let Some(a) = photocraft_paint::retouch::alpha_index(&surf.format()) else { return Ok(()) };
+    let area = repaired.intersect(&surf.content_bounds());
+    let n = surf.channels();
+    let empty = area.is_empty() || surf.read_region(area).chunks_exact(n).all(|px| px.get(a).is_none_or(|v| *v <= 0.0));
+    if empty { Err(EngineError::Other(EMPTY_AREA.into())) } else { Ok(()) }
+}
+
+/// The refusals of [`refuse`] that need no geometry, for `Session::admit`: checked before a floating selection drops,
+/// so a refused Patch leaves the piece floating and changes nothing (CodeRabbit on #16178). The empty-area check
+/// stays in [`plan`]: what the area holds can depend on the piece that drops first.
+pub(crate) fn admit_refusal(s: &Session, p: &Value) -> Option<&'static str> {
+    let st = s.active()?;
+    if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
+        return None;
+    }
+    if st.doc.mode == photocraft_color::ColorMode::Indexed {
+        return Some(INDEXED);
+    }
+    let id = target_layer(s, p).ok().flatten()?;
+    let locks = st.doc.effective_locks(id);
+    (locks.all || locks.pixels).then_some(LOCKED)
+}
+
 fn plan(s: &Session, p: &Value) -> Result<Plan> {
     let mode = match string(p, "mode", "source") {
         "source" => PatchMode::Source,
@@ -188,6 +239,7 @@ fn plan(s: &Session, p: &Value) -> Result<Plan> {
         PatchMode::Source => ((0, 0), (dx, dy)),
         PatchMode::Destination => ((dx, dy), (-dx, -dy)),
     };
+    refuse(s, p, id, area.translate(dst_shift.0, dst_shift.1))?;
     Ok(Plan { id, canvas, area, dst_shift, src_shift, destination: mode == PatchMode::Destination, offset: (dx, dy) })
 }
 
@@ -358,3 +410,7 @@ fn patch_content_aware(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 #[path = "patch_destination_selection_tests.rs"]
 mod patch_destination_selection_tests;
+
+#[cfg(test)]
+#[path = "patch_refusal_tests.rs"]
+mod patch_refusal_tests;
