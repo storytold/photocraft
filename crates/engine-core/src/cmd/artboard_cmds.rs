@@ -1359,8 +1359,12 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => true,
         Some(v) => v.as_bool().ok_or_else(|| bad(cmd, "`includeIcc` must be true or false"))?,
     };
-    // Only a profile whose header says RGB can describe the RGB page images (#13653); any other is left out.
-    let icc = doc.icc_profile.as_deref().map(Vec::as_slice).filter(|icc| include_icc && icc.len() >= 128 && icc.get(16..20) == Some(b"RGB "));
+    // Only a readable RGB profile can describe the RGB page images (#13653); any other is left out.
+    let icc = doc
+        .icc_profile
+        .as_deref()
+        .map(Vec::as_slice)
+        .filter(|icc| include_icc && craft_cms::Profile::parse(icc).is_ok_and(|p| p.color_space == craft_cms::ColorSpace::Rgb));
     let background = p.get("includeBackground").and_then(Value::as_bool).unwrap_or(true);
     // Reverse Page Order (#13644): the default page order the other way round.
     let reverse = match p.get("reversePageOrder") {
