@@ -706,7 +706,7 @@ fn bevel_maps_do_not_depend_on_the_threads() {
     let mut patchy = aa_disc(51, 51, 18.0);
     let patchy_width = patchy.w;
     for (i, v) in patchy.v.iter_mut().enumerate() {
-        if (i % patchy_width / 7 + i / patchy_width / 9) % 5 == 0 {
+        if (i % patchy_width / 7 + i / patchy_width / 9).is_multiple_of(5) {
             *v *= 0.6;
         }
     }
