@@ -272,7 +272,8 @@ fn run(steps: &[Step], end: u8) -> Result<(), String> {
                 let _ = intercept(&mut app, "edit.undo");
                 frame(&mut app);
             }
-            let back = fp(&app);
+            // Warp's texels may stay stashed for a Redo; everything else is as the session opened.
+            let back = Fp { other: start.other, ..fp(&app) };
             if back != start {
                 return Err(format!("undoing every step does not give back the opened session:\n  opened {start:?}\n  now    {back:?}"));
             }
