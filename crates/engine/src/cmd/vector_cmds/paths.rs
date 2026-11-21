@@ -133,6 +133,21 @@ pub(super) fn path_set(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub(super) fn path_delete(s: &mut Session, p: &Value) -> Result<Value> {
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
+    // `"name": "layer"` with a `layer`: that layer's vector mask (#13291). A shape layer's own
+    // path is never deleted here. Without a `layer`, "layer" is a saved path's name as ever.
+    if name.as_deref() == Some("layer")
+        && let Some(layer) = p.get("layer")
+    {
+        if !layer.is_u64() {
+            return Err(bad("path.delete", "`layer` must be a layer id"));
+        }
+        let id = layer_id(s, p)?;
+        s.edit("Delete Path", |doc, _| {
+            let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+            l.vector_mask.take().map(|_| ()).ok_or_else(|| EngineError::Other("layer has no vector mask".into()))
+        })?;
+        return Ok(Value::Null);
+    }
     s.edit("Delete Path", |doc, _| {
         if is_work(name.as_deref()) {
             return doc.work_path.take().map(|_| ()).ok_or_else(|| EngineError::Other("no work path".into()));

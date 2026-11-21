@@ -262,8 +262,9 @@ pub(crate) fn delete_key_edits_path(app: &PhotocraftApp) -> Option<(&'static str
     match target_path(app)?.0 {
         PathRef::Work => Some(("path.delete", json!({"name": "work"}))),
         PathRef::Saved(i) => Some(("path.delete", json!({"name": st.doc.paths.get(i)?.name}))),
-        // As the Paths panel's trash does with a vector mask's row.
-        PathRef::Layer(id) if targeted_vector_mask_id(app) == Some(id) => Some(("layer.vectorMask.delete", json!({"layer": id}))),
+        // One "Delete Path" step; the Paths panel's trash keeps `layer.vectorMask.delete` (#13291).
+        PathRef::Layer(id) if targeted_vector_mask_id(app) == Some(id) => Some(("path.delete", json!({"name": "layer", "layer": id}))),
+        // A shape layer's own path: not measured in the reference yet (#13291).
         _ => None,
     }
 }
