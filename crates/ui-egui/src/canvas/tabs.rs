@@ -84,10 +84,7 @@ pub(super) fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, out: DocumentT
     for event in out.events {
         match event {
             DocumentTabsEvent::Selected(tab) | DocumentTabsEvent::Picked(tab) | DocumentTabsEvent::Activated(tab) => show_tab(app, tab),
-            DocumentTabsEvent::CloseRequested(DocTab::Doc(id)) => {
-                // The guarded close: a document with unsaved changes gets the save prompt.
-                let _ = crate::menus::invoke(app, ctx, "file.close", json!({"document": id.0}));
-            }
+            DocumentTabsEvent::CloseRequested(DocTab::Doc(id)) => close_document(app, ctx, id),
             DocumentTabsEvent::CloseRequested(DocTab::Opening(job)) => {
                 let _ = crate::jobs_ui::cancel(app, job);
             }
@@ -117,6 +114,13 @@ pub(super) fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, out: DocumentT
         }
     }
     menu
+}
+
+/// The guarded close shared by the tab strip and a tiled document's title.
+pub(super) fn close_document(app: &mut PhotocraftApp, ctx: &egui::Context, id: DocId) {
+    if let Some(index) = document_index(app, id) {
+        let _ = crate::menus::invoke(app, ctx, "file.close", json!({"document": index}));
+    }
 }
 
 /// A chosen tab: a document tab shows that document, an opening tab its progress.
