@@ -772,9 +772,11 @@ fn transfer_effects(s: &mut Session, p: &Value) -> Result<Value> {
     let payload = match index {
         Some(i) => {
             let e = src.effects.items.get(i).cloned().ok_or_else(|| bad(CMD, format!("the layer has no effect {i}")))?;
-            Effects { enabled: true, items: vec![e], psd_raw: None, reference: None }
+            Effects { enabled: true, items: vec![e], psd_raw: None, reference: None, move_phase: None }
         }
-        None => Effects { psd_raw: None, ..src.effects.clone() },
+        // #14960: `psd_raw` and the move phase belong to the layer, not to the style, and never
+        // travel with a dragged fx row: the target keeps the phase its own Move commands recorded.
+        None => Effects { psd_raw: None, move_phase: None, ..src.effects.clone() },
     };
     if payload.items.is_empty() {
         return Err(bad(CMD, "the layer has no layer effects"));
@@ -793,7 +795,9 @@ fn transfer_effects(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
         } else {
+            let own_phase = dst.effects.move_phase;
             dst.effects = payload;
+            dst.effects.move_phase = own_phase;
         }
         if !copy {
             let src = doc.layer_mut(from).ok_or(EngineError::NoLayer(from))?;

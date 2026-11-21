@@ -1029,7 +1029,9 @@ pub fn specs() -> Vec<CommandSpec> {
             let d = s.active().ok_or(EngineError::NoDocument)?;
             let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
             let style = crate::CopiedStyle {
-                effects: l.effects.clone(),
+                // #14960: the move phase is this layer's own move history, not part of its style,
+                // so the clipboard never carries one (Paste Layer Style keeps the target's own).
+                effects: photocraft_doc::Effects { move_phase: None, ..l.effects.clone() },
                 blend: l.blend,
                 fill: l.fill_opacity,
                 advanced: l.advanced,
@@ -1091,7 +1093,13 @@ pub fn specs() -> Vec<CommandSpec> {
                     for id in ids {
                         background_to_layer(doc, id);
                         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+                        // #14960: the pasted style keeps the target's own move phase, the sum of
+                        // this layer's Move commands: a style copied from a moved layer must not
+                        // start this layer's overlay grid somewhere else, and one copied from a
+                        // layer that never moved must not take this layer's grid back.
+                        let own_phase = l.effects.move_phase;
                         l.effects = fx.clone();
+                        l.effects.move_phase = own_phase;
                         // Pass Through is a group's mode: a group's style pastes onto other layers as
                         // Normal, as a merged group's Pass Through becomes Normal.
                         l.blend = if style.blend == photocraft_color::BlendMode::PassThrough && !l.is_group() {

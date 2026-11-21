@@ -220,6 +220,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             items: l.effects.items.clone(),
             psd_raw: opt_blob(&l.effects.psd_raw, sink),
             reference: l.effects.reference,
+            move_phase: l.effects.move_phase,
         },
         label: l.label,
         content,
@@ -300,7 +301,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> Result<DocM> {
 }
 
 fn effects_m(e: &Effects, sink: &mut dyn Sink) -> EffectsM {
-    EffectsM { enabled: e.enabled, items: e.items.clone(), psd_raw: opt_blob(&e.psd_raw, sink), reference: e.reference }
+    EffectsM { enabled: e.enabled, items: e.items.clone(), psd_raw: opt_blob(&e.psd_raw, sink), reference: e.reference, move_phase: e.move_phase }
 }
 
 fn comp_m(c: &LayerComp, sink: &mut dyn Sink) -> LayerCompM {
@@ -439,6 +440,7 @@ impl Loader<'_> {
                         items: a.effects.items.clone(),
                         psd_raw: self.opt_blob(&a.effects.psd_raw)?,
                         reference: a.effects.reference,
+                        move_phase: a.effects.move_phase,
                     },
                 }),
                 None => None,
@@ -598,6 +600,7 @@ impl Loader<'_> {
                 items: m.effects.items.clone(),
                 psd_raw: self.opt_blob(&m.effects.psd_raw)?,
                 reference: m.effects.reference,
+                move_phase: m.effects.move_phase,
             },
             label: m.label,
             content,

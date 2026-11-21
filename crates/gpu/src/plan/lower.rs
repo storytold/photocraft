@@ -19,7 +19,9 @@ pub(super) struct Placement {
     pub(super) inv_scale: f64,
 }
 
-/// `Placement::anchored`: linked patterns tile from `anchor` (the effects reference point).
+/// `Placement::anchored`: linked patterns tile from `anchor` (the effects reference point, else the
+/// caller's default). A Pattern Overlay passes the reference point or the document origin (#14960);
+/// the other pattern paints pass the layer's top-left.
 pub(super) fn placement(anchor: (f64, f64), link: bool, phase: (f32, f32), scale: f32, angle: f32) -> Placement {
     let base = if link { anchor } else { (0.0, 0.0) };
     let origin = (base.0 + f64::from(phase.0), base.1 + f64::from(phase.1));
