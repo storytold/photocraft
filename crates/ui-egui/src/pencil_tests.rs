@@ -416,6 +416,10 @@ fn history_stroke_pixels(mode: &str, pressed: &serde_json::Value, switched: Opti
     tool_event(&mut app, ToolEvent::Up { x: pts[4].0, y: pts[4].1 }, Modifiers::NONE);
     let (id, p) = last(&app);
     assert_eq!(id, "paint.historyBrush", "{mode}: {p}");
+    // The mode's own flags: the pixel comparisons can't see one go, as both strokes would lose it.
+    for flag in ["pencil", "block"] {
+        assert_eq!(p.get(flag) == Some(&json!(true)), mode == flag, "{mode}: {flag} in {p}");
+    }
     let st = app.session.active().unwrap();
     layer(&app).surface().unwrap().read_region(st.doc.bounds())
 }
@@ -434,15 +438,15 @@ fn a_tool_key_mid_stroke_paints_what_the_stroke_paints_without_it() {
         ("no dynamics, then size jitter", round.clone(), json!({"shapeDynamics": {"enabled": true, "size": {"jitter": 1.0}}})),
         ("no smoothing, then 90 %", round.clone(), json!({"smoothing": {"enabled": true, "amount": 0.9}})),
     ];
-    for mode in ["", "brush", "pencil", "block"] {
-        for (what, pressed, switched) in &cases {
-            let plain = history_stroke_pixels(mode, pressed, None);
-            assert!(history_stroke_pixels(mode, pressed, Some(switched)) == plain, "{mode} {what}: the switch changed the stroke");
-            // The switched-to brush paints differently, so the comparison means something; Block
-            // mode keeps only the brush's smoothing.
-            if mode != "block" || what.contains("smoothing") {
-                assert!(history_stroke_pixels(mode, switched, None) != plain, "{mode} {what}: both brushes paint alike");
-            }
-        }
+    // Each choice, not every mode with every case (#16041): the brush is captured once, at the
+    // press, whatever the mode, so History Brush takes every case and each Erase to History mode
+    // one, for its own flags: Brush and Pencil with the sampled tip, Block with smoothing (the only
+    // brush setting Block keeps).
+    let runs = cases.iter().map(|c| ("", c)).chain([("brush", &cases[2]), ("pencil", &cases[2]), ("block", &cases[4])]);
+    for (mode, (what, pressed, switched)) in runs {
+        let plain = history_stroke_pixels(mode, pressed, None);
+        assert!(history_stroke_pixels(mode, pressed, Some(switched)) == plain, "{mode} {what}: the switch changed the stroke");
+        // The switched-to brush paints differently, so the comparison means something.
+        assert!(history_stroke_pixels(mode, switched, None) != plain, "{mode} {what}: both brushes paint alike");
     }
 }
