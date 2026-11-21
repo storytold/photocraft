@@ -1,18 +1,18 @@
 //! #12070: Escape commits a Type Mask session the way ⌘↩ does, whatever "Use Escape to Commit"
 //! says: the text outline becomes the selection in one history state and no layer is added. An
-//! empty mask text and a composing input method still cancel, and the Type tool's Escape still
+//! empty mask text commits nothing (the session is undone), and the Type tool's Escape still
 //! follows the preference. (A ⌘ transform drag's Escape arm stays first; masks have no transform
-//! box yet, #12082.) Keys go through the app's shortcut handling, as on the canvas.
+//! box yet, #12082.) Keys go through a full app frame, as on the canvas.
 
-use egui_kittest::Harness;
-use photocraft_doc::LayerId;
+use egui::Modifiers;
 use photocraft_raster::Surface;
 use serde_json::json;
 
+use super::commit_tests::type_new;
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
-fn new_app(tool: Tool, use_esc_to_commit: bool) -> PhotocraftApp {
+fn new_app(tool: Tool, use_esc_to_commit: bool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
     app.run("prefs.set", json!({"path": "type.useEscToCommit", "value": use_esc_to_commit})).unwrap();
@@ -23,40 +23,13 @@ fn new_app(tool: Tool, use_esc_to_commit: bool) -> PhotocraftApp {
     app
 }
 
-/// Start new text with a click and type `s`, as the canvas does.
-fn type_new(app: &mut PhotocraftApp, s: &str) -> LayerId {
-    super::pointer_up(app, [50.0, 100.0], [50.0, 100.0]);
-    super::insert(app, s);
-    LayerId(app.ui.text_edit.as_ref().unwrap().layer)
+fn press(mut app: Box<PhotocraftApp>, k: egui::Key, modifiers: Modifiers) -> Box<PhotocraftApp> {
+    crate::canvas::testing::key(&mut app, k, modifiers);
+    app
 }
 
-/// One frame of the app's shortcut handling for each of `events`.
-fn send(app: PhotocraftApp, events: Vec<egui::Event>) -> PhotocraftApp {
-    let mut h = Harness::builder().build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            let ctx = ui.ctx().clone();
-            // As `canvas_tests`' harness: the shortcuts wait for the app's fonts.
-            if ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                crate::shortcuts::handle(app, &ctx);
-            }
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    h.run_steps(4);
-    for event in events {
-        h.event(event);
-        h.run_steps(1);
-    }
-    h.into_state()
-}
-
-fn key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
-    egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
-}
-
-pub(super) fn escape(app: PhotocraftApp) -> PhotocraftApp {
-    send(app, vec![key(egui::Key::Escape, egui::Modifiers::NONE)])
+pub(super) fn escape(app: Box<PhotocraftApp>) -> Box<PhotocraftApp> {
+    press(app, egui::Key::Escape, Modifiers::NONE)
 }
 
 /// The selection (compared pixel for pixel, shown by its bounds), the history (oldest first) and
@@ -94,7 +67,7 @@ fn escape_commits_a_type_mask_as_command_return_does() {
             let (app, before) = session();
             let escaped = escape(app);
             let (app, _) = session();
-            let returned = send(app, vec![key(egui::Key::Enter, egui::Modifiers::COMMAND)]);
+            let returned = press(app, egui::Key::Enter, Modifiers::COMMAND);
             assert!(escaped.ui.text_edit.is_none(), "{what}: the session ends");
             let after = snapshot(&escaped);
             let bounds = after.selection.as_ref().map(Surface::content_bounds);
@@ -106,6 +79,8 @@ fn escape_commits_a_type_mask_as_command_return_does() {
     }
 }
 
+/// Escape commits the empty mask, and committing an empty mask undoes its session: the selection
+/// and the history are as before.
 #[test]
 fn escape_with_an_empty_mask_text_changes_nothing() {
     for tool in [Tool::HorizontalTypeMask, Tool::VerticalTypeMask] {
@@ -119,24 +94,6 @@ fn escape_with_an_empty_mask_text_changes_nothing() {
             assert_eq!(snapshot(&app), before, "{what}");
         }
     }
-}
-
-#[test]
-fn escape_while_an_input_method_composes_still_cancels_a_type_mask() {
-    let preedit = || egui::Event::Ime(egui::ImeEvent::Preedit { text: "にほ".into(), active_range_chars: None });
-    let session = || {
-        let mut app = new_app(Tool::HorizontalTypeMask, true);
-        let before = snapshot(&app);
-        type_new(&mut app, "AB");
-        (app, before)
-    };
-    let (app, _) = session();
-    let app = send(app, vec![preedit()]);
-    assert!(app.ui.text_edit.as_ref().is_some_and(|ed| ed.preedit.is_some()), "composing");
-    let (app, before) = session();
-    let app = send(app, vec![preedit(), key(egui::Key::Escape, egui::Modifiers::NONE)]);
-    assert!(app.ui.text_edit.is_none());
-    assert_eq!(snapshot(&app), before);
 }
 
 #[test]

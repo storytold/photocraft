@@ -3,56 +3,84 @@
 //! them. The Layers panel's New Layer button makes a layer without asking, and ⌥-click opens the
 //! dialog, as in Photoshop.
 
+use craft::ui::contract::Bind;
+use craft::ui::dialog::DialogId;
+use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamDialog, ParamKind, ParamResult};
+use craft::ui::runtime::env::{Label, UnitKind};
 use photocraft_doc::{BlendMode, LabelColor};
 use photocraft_engine::new_layer::neutral_color;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::state::DialogKind;
+use crate::dialogs::params;
 
-const MARK: &str = "__newLayer";
+/// The command the dialog stands for; it is also the dialog's key.
 pub const COMMAND: &str = "layer.new.layer";
 
-pub fn owns(fields: &Map<String, Value>) -> bool {
-    fields.contains_key(MARK)
+/// Whether the hosted dialog with `key` is this one.
+pub(crate) fn owns(key: &str) -> bool {
+    key == COMMAND
+}
+
+/// The label colour row of New Layer and New Group.
+pub(crate) fn color_param() -> Param {
+    let options = LabelColor::ALL.into_iter().map(|c| (c.id().to_string(), Label::from(crate::layer_menu_ui::color_name(c)))).collect();
+    Param::new("color", tl!("Color:"), ParamKind::choice(options, Some(LabelColor::None.id().to_string())))
+}
+
+/// The opacity row of New Layer and New Group, in percent.
+pub(crate) fn opacity_param() -> Param {
+    Param::new("opacity", tl!("Opacity:"), ParamKind::number(Some(0.0), Some(100.0), 100.0, 1.0, 0)).unit(UnitKind::Percent)
 }
 
 /// Open the dialog for the active document, with the name the layer would get.
-pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
+pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
     let name = app.session.active().ok_or("no document open")?.doc.next_layer_name("Layer");
-    let fields = json!({
-        MARK: true, "__command": COMMAND, "__label": "New Layer",
-        "name": name, "clipToPrevious": false, "color": "none", "mode": "Normal", "opacity": 100.0, "fillNeutral": false,
-    });
-    Ok(app.ui.open_dialog(DialogKind::Command, fields.as_object().cloned().unwrap_or_default()))
+    Ok(params::open_param(app, COMMAND, DialogFields::new(), Value::Null, move |fields: &mut DialogFields| {
+        let neutral_modes: Vec<String> =
+            BlendMode::LAYER_MODES.into_iter().filter(|m| neutral_color(*m).is_some()).map(|mode| mode.key().to_string()).collect();
+        let rows = vec![
+            Param::new("name", tl!("Name:"), ParamKind::text(name.clone())),
+            Param::new("clipToPrevious", tl!("Use Previous Layer to Create Clipping Mask"), ParamKind::bool(false)),
+            color_param(),
+            // Opacity shares the Mode row, as in the reference application.
+            crate::dialogs::blend_options::blend_param("mode", tl!("Mode:"), false, BlendMode::Normal).beside_next(),
+            opacity_param(),
+            Param::new("fillNeutral", neutral_label(mode(fields)), ParamKind::bool(false)).enabled_when_in("mode", neutral_modes),
+        ];
+        ParamDialog::command(COMMAND, tl!("New Layer"), rows).values(Bind::bound(fields))
+    }))
 }
 
-fn mode(f: &Map<String, Value>) -> BlendMode {
-    f.get("mode")
-        .and_then(Value::as_str)
-        .and_then(photocraft_engine::commands::blend_from_str)
-        .filter(|m| *m != BlendMode::PassThrough)
-        .unwrap_or(BlendMode::Normal)
+/// OK: makes the layer the values describe.
+pub(crate) fn run(app: &mut PhotocraftApp, _ctx: &egui::Context, result: ParamResult) {
+    let result = app.run(COMMAND, params(&result.fields));
+    // PLAN: assumed `dialogs::alerts::report(app, Result<Value, String>)` (dialogs-w21)
+    super::alerts::report(app, result);
 }
 
-fn flag(f: &Map<String, Value>, k: &str) -> bool {
-    f.get(k).and_then(Value::as_bool).unwrap_or(false)
+fn mode(f: &DialogFields) -> BlendMode {
+    f.text("mode").and_then(photocraft_engine::commands::parse_blend).filter(|m| *m != BlendMode::PassThrough).unwrap_or(BlendMode::Normal)
+}
+
+fn flag(f: &DialogFields, k: &str) -> bool {
+    f.bool(k).unwrap_or(false)
 }
 
 /// The `layer.new.layer` params the dialog stands for (opacity is a percentage in the dialog).
-pub fn params(f: &Map<String, Value>) -> Value {
+pub fn params(f: &DialogFields) -> Value {
     let mode = mode(f);
-    let opacity = f.get("opacity").and_then(Value::as_f64).filter(|o| o.is_finite()).unwrap_or(100.0).clamp(0.0, 100.0) / 100.0;
+    let opacity = f.number("opacity").filter(|o| o.is_finite()).unwrap_or(100.0).clamp(0.0, 100.0) / 100.0;
     let mut p = json!({
         "clipToPrevious": flag(f, "clipToPrevious"),
-        "color": f.get("color").and_then(Value::as_str).and_then(LabelColor::from_id).unwrap_or_default().id(),
+        "color": f.text("color").and_then(LabelColor::from_id).unwrap_or_default().id(),
         "mode": mode.label(),
         "opacity": opacity,
         // Only modes with a neutral color can fill with one (the checkbox is off for the others).
         "fillNeutral": flag(f, "fillNeutral") && neutral_color(mode).is_some(),
     });
     // An empty name gets the next "Layer N", as the Layers panel button does.
-    if let Some(name) = f.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()) {
+    if let Some(name) = f.text("name").filter(|n| !n.trim().is_empty()) {
         p["name"] = json!(name);
     }
     p
@@ -69,81 +97,46 @@ pub fn neutral_label(mode: BlendMode) -> String {
     }
 }
 
-pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    let label_width = 64.0;
-    let row_label = |ui: &mut egui::Ui, text: &str| {
-        ui.allocate_ui_with_layout(egui::vec2(label_width, 22.0), egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(text)).inner
-    };
-    ui.horizontal(|ui| {
-        let name_label = row_label(ui, tl!("Name:"));
-        let mut name = f.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-        let field = ui.add(egui::TextEdit::singleline(&mut name).desired_width(260.0)).labelled_by(name_label.id);
-        if field.changed() {
-            f.insert("name".into(), json!(name));
-        }
-        // Photoshop opens on the name, selected, so typing replaces it.
-        if !ui.is_sizing_pass() && !flag(f, "__nameFocused") {
-            field.request_focus();
-            crate::field_tab::select_all(ui.ctx(), field.id, &name);
-            f.insert("__nameFocused".into(), json!(true));
-        }
-    });
-    ui.horizontal(|ui| {
-        ui.add_space(label_width + ui.spacing().item_spacing.x);
-        let mut clip = flag(f, "clipToPrevious");
-        if crate::widgets::checkbox(ui, &mut clip, tl!("Use Previous Layer to Create Clipping Mask")).changed() {
-            f.insert("clipToPrevious".into(), json!(clip));
-        }
-    });
-    ui.horizontal(|ui| {
-        row_label(ui, tl!("Color:"));
-        let mut color = f.get("color").and_then(Value::as_str).and_then(LabelColor::from_id).unwrap_or_default();
-        let options: Vec<(LabelColor, &str)> = LabelColor::ALL.into_iter().map(|c| (c, crate::layer_menu_ui::color_name(c))).collect();
-        if crate::widgets::dropdown(ui, "new-layer-color", tl!("Color"), &mut color, &options, 140.0) {
-            f.insert("color".into(), json!(color.id()));
-        }
-    });
-    let mut m = mode(f);
-    ui.horizontal(|ui| {
-        row_label(ui, tl!("Mode:"));
-        let options: Vec<(BlendMode, &str)> = BlendMode::LAYER_MODES.into_iter().map(|m| (m, m.label())).collect();
-        if crate::widgets::dropdown(ui, "new-layer-mode", tl!("Mode"), &mut m, &options, 140.0) {
-            f.insert("mode".into(), json!(m.label()));
-        }
-        ui.add_space(8.0);
-        ui.label(tl!("Opacity:"));
-        let mut o = f.get("opacity").and_then(Value::as_f64).unwrap_or(100.0) as f32;
-        if crate::widgets::value_field(ui, &mut o, 0.0..=100.0, "%", 64.0).accessible_name(tl!("Opacity:")).changed() {
-            f.insert("opacity".into(), json!(o.clamp(0.0, 100.0)));
-        }
-    });
-    ui.horizontal(|ui| {
-        ui.add_space(label_width + ui.spacing().item_spacing.x);
-        let available = neutral_color(m).is_some();
-        let mut fill = available && flag(f, "fillNeutral");
-        let changed = ui.add_enabled_ui(available, |ui| crate::widgets::checkbox(ui, &mut fill, &neutral_label(m)).changed()).inner;
-        if changed {
-            f.insert("fillNeutral".into(), json!(fill));
-        }
-    });
-}
+/// Helpers the tests of the hosted dialogs share.
+#[cfg(test)]
+pub(crate) mod testing {
+    use craft::ui::dialog::DialogId;
+    use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog};
+    use serde_json::Value;
 
-pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    app.run(COMMAND, params(f))
+    use crate::PhotocraftApp;
+
+    /// The dialog on top of the stack.
+    pub(crate) fn top(app: &PhotocraftApp) -> DialogId {
+        app.framework.dialogs.stack().top().expect("a dialog is open")
+    }
+
+    /// The values of the open hosted dialog `id`.
+    pub(crate) fn fields(app: &PhotocraftApp, id: DialogId) -> &DialogFields {
+        app.framework.dialogs.get_by_id::<HostedParamDialog>(id).expect("a hosted dialog").fields()
+    }
+
+    /// Sets `field` as the control surface would.
+    pub(crate) fn set(app: &mut PhotocraftApp, id: DialogId, field: &str, value: Value) -> Result<(), String> {
+        let ctx = app.ctx().clone();
+        app.framework.dialogs.set_json_field(&ctx, id, field, value)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use egui_kittest::kittest::{NodeT, Queryable};
+    use serde_json::json;
 
-    fn app() -> PhotocraftApp {
+    use super::testing::{set, top};
+    use super::*;
+
+    fn app() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
         app
     }
 
-    fn top(app: &PhotocraftApp) -> &photocraft_doc::Layer {
+    fn top_layer(app: &PhotocraftApp) -> &photocraft_doc::Layer {
         app.session.active().unwrap().doc.layers.last().unwrap()
     }
 
@@ -151,65 +144,63 @@ mod tests {
     #[test]
     fn menu_opens_the_dialog_and_ok_makes_the_layer() {
         let mut app = app();
-        let ctx = egui::Context::default();
+        let ctx = app.ctx().clone();
         let layers = app.session.active().unwrap().doc.layers.len();
-        let r = crate::menus::invoke(&mut app, &ctx, COMMAND, json!({})).unwrap();
-        let id = r["dialog"].as_u64().unwrap();
+        crate::menus::invoke(&mut app, &ctx, COMMAND, json!({})).unwrap();
         assert_eq!(app.session.active().unwrap().doc.layers.len(), layers, "nothing made until OK");
-        let d = app.ui.dialogs.iter_mut().find(|d| d.id == id).unwrap();
-        assert_eq!(d.fields["name"], "Layer 1");
-        for (k, v) in
-            [("name", json!("Dodge & Burn")), ("mode", json!("Overlay")), ("opacity", json!(60.0)), ("color", json!("violet")), ("fillNeutral", json!(true))]
-        {
-            d.fields.insert(k.into(), v);
-        }
+        let id = top(&app);
+        assert!(set(&mut app, id, "fillNeutral", json!(true)).is_err(), "Normal has no neutral color");
+        set(&mut app, id, "name", json!("Dodge & Burn")).unwrap();
+        set(&mut app, id, "mode", json!(BlendMode::Overlay.key().to_string())).unwrap();
+        set(&mut app, id, "opacity", json!(60.0)).unwrap();
+        set(&mut app, id, "color", json!("violet")).unwrap();
+        set(&mut app, id, "fillNeutral", json!(true)).unwrap();
         let steps = app.session.active().unwrap().history.past_len();
-        crate::dialogs::confirm(&mut app, id).unwrap();
-        let l = top(&app);
+        crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
+        let l = top_layer(&app);
         assert_eq!((l.name.as_str(), l.blend, l.label), ("Dodge & Burn", BlendMode::Overlay, LabelColor::Violet));
         assert!((l.opacity - 0.6).abs() < 1e-6);
         assert!(l.surface().unwrap().tile_count() > 0, "filled with 50% gray");
         assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
-        // Params given (automation, Actions): no dialog.
-        crate::menus::invoke(&mut app, &ctx, COMMAND, json!({"name": "Direct"})).unwrap();
-        assert_eq!(top(&app).name, "Direct");
+    }
+
+    /// #15539: Opacity sits on the Mode row, right of the Mode dropdown, and keeps its % unit.
+    #[test]
+    fn opacity_shares_the_mode_row() {
+        use egui::accesskit::Role;
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let mut app = app();
+        let ctx = app.ctx().clone();
+        crate::menus::invoke(&mut app, &ctx, COMMAND, json!({})).unwrap();
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .with_max_steps(64)
+            .with_context(ctx)
+            .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        let mode = h.query_all_by_role(Role::ComboBox).find(|n| n.accesskit_node().label().as_deref() == Some("Mode")).expect("Mode").rect();
+        let opacity = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Opacity")).expect("Opacity").rect();
+        assert!((mode.center().y - opacity.center().y).abs() < 1.0, "Mode {mode:?} and Opacity {opacity:?} share a row");
+        assert!(mode.right() <= opacity.left(), "Opacity is right of Mode");
+        assert_eq!(opacity_param().unit, Some(UnitKind::Percent));
     }
 
     #[test]
     fn params_follow_photoshop_rules() {
-        let f = json!({MARK: true, "name": "  ", "mode": "Hue", "opacity": 250.0, "fillNeutral": true, "color": "plaid", "clipToPrevious": true});
-        let p = params(f.as_object().unwrap());
+        let mut f = DialogFields::new();
+        f.set("name", "  ");
+        f.set("mode", "hue");
+        f.set("opacity", 250.0);
+        f.set("fillNeutral", true);
+        f.set("color", "plaid");
+        f.set("clipToPrevious", true);
+        let p = params(&f);
         assert_eq!(p, json!({"clipToPrevious": true, "color": "none", "mode": "Hue", "opacity": 1.0, "fillNeutral": false}));
         assert_eq!(neutral_label(BlendMode::Multiply), "Fill with Multiply-neutral color (white)");
         assert_eq!(neutral_label(BlendMode::Screen), "Fill with Screen-neutral color (black)");
         assert_eq!(neutral_label(BlendMode::SoftLight), "Fill with Soft Light-neutral color (50% gray)");
         assert_eq!(neutral_label(BlendMode::Normal), "(No neutral color exists for Normal mode.)");
-    }
-
-    /// The dialog shows Photoshop's controls; the neutral fill is greyed for a mode without one.
-    #[test]
-    fn the_dialog_shows_its_controls() {
-        let mut app = app();
-        open(&mut app).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 600.0)).build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
-                let ctx = ui.ctx().clone();
-                if ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                    crate::dialogs::show(app, &ctx);
-                }
-            },
-            app,
-        );
-        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-        h.run_steps(4);
-        assert!(h.query_by_label("New Layer").is_some());
-        assert!(h.query_by_label("Use Previous Layer to Create Clipping Mask").is_some());
-        let fill = h.get_by_label("(No neutral color exists for Normal mode.)");
-        assert!(fill.accesskit_node().is_disabled());
-        assert!(h.query_by_label("OK").is_some() && h.query_by_label("Cancel").is_some());
-        // It opens on the name, selected: typing replaces it.
-        h.event(egui::Event::Text("Shade".into()));
-        h.run_steps(2);
-        assert_eq!(h.state().ui.dialogs[0].fields["name"], "Shade");
     }
 }

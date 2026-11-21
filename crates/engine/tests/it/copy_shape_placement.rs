@@ -20,7 +20,7 @@ fn copying_shapes_to_smaller_documents_preserves_requested_center() {
                             ids.push(s.active().unwrap().active_layer.unwrap());
                         }
                         if grouped {
-                            s.active_mut().unwrap().selected_layers = ids.clone();
+                            *s.active_mut().unwrap().selection_mut() = ids.clone();
                             s.execute("layer.groupLayers", json!({})).unwrap();
                         }
                         if missing_cache {

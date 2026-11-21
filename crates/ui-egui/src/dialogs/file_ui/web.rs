@@ -1,239 +1,281 @@
-use super::{Arc, DialogKind, Map, PhotocraftApp, Tokens, Value, WebSettings, b, check, dropdown_str, json, n, number, params, s, web_cmds, web_preview};
+//! Save for Web on the framework's `HostedSaveForWeb`: the dialog keeps the settings and asks for
+//! pictures; this file encodes them (`web_cmds`), answers the colour and path requests, and runs
+//! the engine's `file.export.saveForWebLegacy` at OK.
 
-const WEB_FORMATS: [(&str, &str); 6] = [("gif", "GIF"), ("png8", "PNG-8"), ("png24", "PNG-24"), ("jpeg", "JPEG"), ("webp", "WebP"), ("wbmp", "WBMP")];
+use std::sync::Arc;
+
+use craft::behavior::PixelSize;
+use craft::ui::dialog::{DialogId, DialogResult, StackDialog};
+use craft::ui::patterns::form_dialogs::{
+    Animation, ColorTable, Dither, HostedSaveForWeb, Resample, SaveForWebOptions, SaveForWebResult, WantedVariant, WebFormat, WebMetadata, WebPreset, WebSlice,
+    WebSlices, WebVariant,
+};
+use craft::ui::runtime::env::Label;
+use egui::load::SizedTexture;
+use photocraft_engine::web_cmds::{self, WebSettings};
+use serde_json::{Value, json};
+
+use super::{PhotocraftApp, web_preview};
+
+/// The engine's name of each format; the one table `options_of` and `params_of` share.
+const WEB_FORMATS: [(WebFormat, &str); 6] = [
+    (WebFormat::Gif, "gif"),
+    (WebFormat::Png8, "png8"),
+    (WebFormat::Png24, "png24"),
+    (WebFormat::Jpeg, "jpeg"),
+    (WebFormat::WebP, "webp"),
+    (WebFormat::Wbmp, "wbmp"),
+];
+const PALETTES: [(ColorTable, &str); 5] = [
+    (ColorTable::Perceptual, "perceptual"),
+    (ColorTable::Selective, "selective"),
+    (ColorTable::Adaptive, "adaptive"),
+    (ColorTable::Restrictive, "restrictive"),
+    (ColorTable::Exact, "exact"),
+];
+const DITHERS: [(Dither, &str); 4] = [(Dither::None, "none"), (Dither::Diffusion, "diffusion"), (Dither::Pattern, "pattern"), (Dither::Noise, "noise")];
+const METADATA: [(WebMetadata, &str); 4] =
+    [(WebMetadata::None, "none"), (WebMetadata::Copyright, "copyright"), (WebMetadata::CopyrightAndContact, "copyrightAndContact"), (WebMetadata::All, "all")];
+/// The five methods Photoshop's Save for Web lists; the dialog offers no others.
+const RESAMPLES: [(Resample, &str); 5] = [
+    (Resample::NearestNeighbor, "nearest"),
+    (Resample::Bilinear, "bilinear"),
+    (Resample::Bicubic, "bicubic"),
+    (Resample::BicubicSmoother, "bicubicSmoother"),
+    (Resample::BicubicSharper, "bicubicSharper"),
+];
 
 pub(super) const WEB_COMMAND: &str = "file.export.saveForWebLegacy";
 
-/// Save for Web's preview tabs: the `__view` field's values and their labels.
-const WEB_VIEWS: [(&str, &str); 4] = [("original", "Original"), ("optimized", "Optimized"), ("2up", "2-Up"), ("4up", "4-Up")];
-
-pub fn open_web(app: &mut PhotocraftApp) -> u64 {
-    let mut f = Map::new();
-    f.insert("__web".into(), json!(true));
-    f.insert("__command".into(), json!(WEB_COMMAND));
-    f.insert("__label".into(), json!("Save for Web (Legacy)"));
-    // The preview tab chosen last time, 2-Up at first (#9174).
-    let view = app.ui.web_view.as_deref().filter(|v| WEB_VIEWS.iter().any(|(k, _)| k == v)).unwrap_or("2up");
-    f.insert("__view".into(), json!(view));
-    // Remember encoding choices, but each document starts at its own full size. This session's
-    // last export lives in `file_menu`; the last one before a restart comes from the
-    // preferences' remembered dialog settings (`web_cmds::remember_web_settings`).
-    let last = app
-        .session
-        .file_menu
-        .last_web
-        .clone()
-        .or_else(|| app.session.prefs().dialogs.get(WEB_COMMAND).cloned())
-        .unwrap_or_else(|| json!({"format": "jpeg", "quality": 60}));
-    if let Value::Object(m) = last {
-        for (k, v) in m {
-            if !matches!(k.as_str(), "path" | "dir" | "folder" | "width" | "height" | "percent" | "colorTable" | "colorTableEdits" | "numbers") {
-                f.insert(k, v);
-            }
-        }
-    }
-    for (k, v) in [
-        ("format", json!("jpeg")),
-        ("quality", json!(60)),
-        ("lossless", json!(false)),
-        ("palette", json!("selective")),
-        ("colors", json!(128)),
-        ("dither", json!("diffusion")),
-        ("ditherAmount", json!(88)),
-        ("transparency", json!(true)),
-        ("matte", json!("#ffffff")),
-        ("interlaced", json!(false)),
-        ("progressive", json!(false)),
-        ("optimized", json!(true)),
-        ("embedIcc", json!(false)),
-        ("convertToSrgb", json!(true)),
-        ("metadata", json!("copyright")),
-        ("percent", json!(100.0)),
-        ("resample", json!("bicubic")),
-        ("webSnap", json!(0)),
-    ] {
-        f.entry(k.to_string()).or_insert(v);
-    }
-    app.ui.open_dialog(DialogKind::Command, f)
+fn name_of<T: Copy + PartialEq>(table: &[(T, &'static str)], value: T) -> &'static str {
+    table.iter().find(|(v, _)| *v == value).map_or(table[0].1, |(_, n)| n)
 }
 
-/// Settings variants shown in 4-Up (current, then two smaller alternatives).
-pub(super) fn variants(p: &Value) -> Vec<Value> {
-    let mut out = vec![p.clone()];
-    let fmt = p["format"].as_str().unwrap_or("jpeg");
-    for k in [2.0, 4.0] {
-        let mut v = p.clone();
-        if let Some(m) = v.as_object_mut() {
-            m.remove("colorTable");
-            m.remove("colorTableEdits");
-        }
-        if fmt == "jpeg" || (fmt == "webp" && !p["lossless"].as_bool().unwrap_or(false)) {
-            v["quality"] = json!((p["quality"].as_f64().unwrap_or(60.0) / k).round().max(1.0));
-        } else if fmt == "gif" || fmt == "png8" {
-            v["colors"] = json!((p["colors"].as_f64().unwrap_or(128.0) / k).round().max(2.0));
-        } else {
-            v["format"] = json!(if k == 2.0 { "png8" } else { "gif" });
-            v["colors"] = json!(256 / k as u32);
-        }
-        out.push(v);
-    }
-    out
+fn by_name<T: Copy>(table: &[(T, &str)], name: &str) -> Option<T> {
+    table.iter().find(|(_, n)| *n == name).map(|(v, _)| *v)
 }
 
-/// The flattened preview image: pixels, width, height, full-size / proxy pixel ratio.
-pub(super) type WebProxy = (Arc<Vec<[f32; 4]>>, u32, u32, f64, egui::Vec2);
-
-pub(super) type WebCache = (String, Arc<egui::TextureHandle>, Option<(usize, Option<usize>, &'static str)>);
-
-/// Renders one preview pane: the original (`None`) or an optimised variant.
-fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<&Value>, f: &mut Map<String, Value>, pane: usize, frame: Option<usize>) {
-    let t = Tokens::get(ui.ctx());
-    let Some(st) = app.session.active() else { return };
-    let doc = st.doc.clone();
-    let rev = st.revision;
-    // A bounded proxy; navigation never recomposites or re-encodes it.
-    let base = p.cloned().unwrap_or_else(|| json!({}));
-    let size_sig = format!("{}|{}|{}|{}|{}", base["percent"], base["width"], base["height"], base["resample"], base["convertToSrgb"]);
-    let wkey = egui::Id::unique(("web-proxy", doc.id.0, pane));
-    let proxy_sig = format!("{rev}|{frame:?}|{size_sig}");
-    let cached_proxy: Option<(String, WebProxy)> = ui.data(|d| d.get_temp(wkey));
-    let proxy = cached_proxy.filter(|(sig, _)| sig == &proxy_sig).map(|(_, proxy)| proxy);
-    let (px, w, h, ratio, source_size) = match proxy {
-        Some(v) => v,
-        None => {
-            let (fw, fh) = match web_preview::dimensions(&doc, &base) {
-                Ok(size) => size,
-                Err(error) => {
-                    ui.label(error);
-                    return;
-                }
-            };
-            let k = (2048.0 / fw.max(fh)).min(1.0);
-            let st = WebSettings::from_params(&base, "preview").unwrap_or_default();
-            let Ok(doc) = web_frame_document(&doc, frame) else { return };
-            let resample = web_preview::proxy_resample(&base, k);
-            let Ok((wd, _, _)) =
-                web_cmds::web_document(&doc, &json!({"width": (fw * k).round().max(1.0), "height": (fh * k).round().max(1.0), "resample": resample}), &st)
-            else {
-                return;
-            };
-            let buf = photocraft_compose::flatten(&wd);
-            let v = (
-                Arc::new(buf.into_px()),
-                wd.size.width,
-                wd.size.height,
-                (fw * fh) / (f64::from(wd.size.width) * f64::from(wd.size.height)).max(1.0),
-                egui::vec2(fw as f32, fh as f32),
-            );
-            ui.data_mut(|d| d.insert_temp(wkey, (proxy_sig, v.clone())));
-            v
-        }
-    };
-    let sig = format!("{}|{rev}|{frame:?}|{size_sig}|{}", doc.id.0, p.map(|v| v.to_string()).unwrap_or_else(|| "original".into()));
-    let key = egui::Id::unique(("web-pane", doc.id.0, pane));
-    let cached: Option<WebCache> = ui.data(|d| d.get_temp(key));
-    let (tex, info) = match cached.filter(|c| c.0 == sig) {
-        Some((_, tex, info)) => (tex, info),
-        None => {
-            let (rgba, info) = match p {
-                None => (px.iter().flat_map(|q| q.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect::<Vec<u8>>(), None),
-                Some(p) => match web_preview::optimized(ui, key, &format!("{}|{rev}|{frame:?}|{size_sig}", doc.id.0), p, &px, w, h) {
-                    Ok((preview, bytes, colors, ext)) => (preview, Some(((bytes as f64 * ratio) as usize, colors, ext))),
-                    // The error shows on the row above the panes; a label here sat beside the pane
-                    // and widened the dialog (#8830).
-                    Err(_) => (vec![0; (w * h * 4) as usize], None),
-                },
-            };
-            let img = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
-            let tex = Arc::new(ui.ctx().load_texture("web-pane", img, egui::TextureOptions::LINEAR));
-            ui.data_mut(|d| d.insert_temp(key, (sig, tex.clone(), info)));
-            (tex, info)
-        }
-    };
-    ui.vertical(|ui| {
-        ui.set_width(size.x);
-        let (r, response) = ui.allocate_exact_size((size - egui::vec2(0.0, 42.0)).max(egui::vec2(1.0, 1.0)), egui::Sense::click_and_drag());
-        let response = response.on_hover_cursor(egui::CursorIcon::Grab);
-        if let Some(rects) = f.get_mut("__previewRects").and_then(Value::as_array_mut) {
-            rects.push(json!([r.left(), r.top(), r.right(), r.bottom()]));
-        }
-        // Photoshop's panes are grey around the image; only the image shows transparency (#2362).
-        ui.painter().rect_filled(r, 0.0, t.canvas);
-        let image = web_preview::paint(ui, r, &response, &tex, source_size, f);
-        web_preview::slices(ui, r, image, &response, &doc, crate::tools::slice_ui::slice_color(app), f);
-        ui.painter().rect_stroke(r, 0.0, egui::Stroke::new(1.0, t.separator), egui::StrokeKind::Inside);
-        let (l1, l2) = match (p, info) {
-            (None, _) => ("Original".to_string(), format!("{}  ·  {} × {} px", doc.name, doc.size.width, doc.size.height)),
-            (Some(_), Some((bytes, colors, ext))) => {
-                // Photoshop's download estimate at 56.6 Kbps.
-                let secs = (bytes as f64 * 8.0 / 56_600.0).ceil();
-                (
-                    format!("{}  {}", ext.to_uppercase(), crate::sizing::human_bytes(bytes as f64)),
-                    format!("{secs} sec @ 56.6 Kbps{}", colors.map(|c| format!("  ·  {c} colors")).unwrap_or_default()),
-                )
-            }
-            (Some(_), None) => ("—".into(), String::new()),
-        };
-        let l1 = if ratio > 1.001 { format!("{l1}  ·  Proxy preview") } else { l1 };
-        ui.add(egui::Label::new(egui::RichText::new(l1).color(t.text).size(11.5)).truncate());
-        ui.add(egui::Label::new(egui::RichText::new(l2).color(t.text_dim).size(11.0)).truncate());
-    });
+fn hex(rgb: [u8; 3]) -> String {
+    format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])
 }
 
-/// Advance a preview clock by whole elapsed frames, retaining fractional time.
-/// The caller resets `last` on Play so paused wall time never advances the preview.
-pub(super) fn advance_preview(frame: usize, duration: usize, fps: f32, last: f64, now: f64) -> (usize, f64) {
-    let duration = duration.max(1);
-    let frame = frame.min(duration - 1);
-    if !now.is_finite() {
-        return (frame, last);
-    }
-    if !last.is_finite() || now < last {
-        return (frame, now);
-    }
-    let fps = if fps.is_finite() && fps > 0.0 { f64::from(fps) } else { 30.0 };
-    let elapsed_frames = (now - last) * fps;
-    if !elapsed_frames.is_finite() {
-        return (frame, now);
-    }
-    let steps = elapsed_frames.floor();
-    if steps < 1.0 {
-        return (frame, last);
-    }
-    let delta = (steps % duration as f64) as usize % duration;
-    let remaining = duration - frame;
-    let next = if delta >= remaining { delta - remaining } else { frame + delta };
-    (next, now - (elapsed_frames - steps) / fps)
-}
-
-fn web_playback(ui: &mut egui::Ui, f: &mut Map<String, Value>, doc: &photocraft_doc::Document) -> Option<usize> {
-    let mut timeline = doc.timeline.clone()?;
-    timeline.clamp();
-    if timeline.duration < 2 {
+fn parse_hex(text: &str) -> Option<[u8; 3]> {
+    let digits = text.trim().strip_prefix('#').unwrap_or(text.trim());
+    if digits.len() != 6 || !digits.is_ascii() {
         return None;
     }
-    let now = ui.input(|i| i.time);
-    let mut frame = f.get("__web_frame").and_then(Value::as_u64).and_then(|v| usize::try_from(v).ok()).unwrap_or(timeline.current).min(timeline.duration - 1);
-    let mut last = n(f, "__web_time", now);
-    let mut playing = b(f, "__web_playing", false);
-    if playing {
-        (frame, last) = advance_preview(frame, timeline.duration, timeline.fps, last, now);
+    let channel = |i: usize| u8::from_str_radix(&digits[i..i + 2], 16).ok();
+    Some([channel(0)?, channel(2)?, channel(4)?])
+}
+
+/// The dialog's options for engine parameters: remembered ones, a preset's, or the last export's. Keys the
+/// parameters lack keep the dialog's defaults.
+pub(super) fn options_of(p: &Value) -> SaveForWebOptions {
+    let mut o = SaveForWebOptions::default();
+    let text = |k: &str| p.get(k).and_then(Value::as_str);
+    let num = |k: &str| p.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
+    let flag = |k: &str| p.get(k).and_then(Value::as_bool);
+    if let Some(v) = text("format").and_then(|n| by_name(&WEB_FORMATS, n)) {
+        o.format = v;
     }
-    ui.horizontal(|ui| {
-        if crate::icons::button(ui, if playing { "pause" } else { "play" }, 22.0, playing, if playing { tl!("Pause") } else { tl!("Play") }).clicked() {
-            playing = !playing;
-            last = now;
+    if let Some(v) = num("quality") {
+        o.quality = v.round().clamp(0.0, 100.0) as u8;
+    }
+    if let Some(v) = text("palette").and_then(|n| by_name(&PALETTES, n)) {
+        o.color_table = v;
+    }
+    if let Some(v) = num("colors") {
+        o.colors = v.round().clamp(2.0, 256.0) as u16;
+    }
+    if let Some(v) = text("dither").and_then(|n| by_name(&DITHERS, n)) {
+        o.dither = v;
+    }
+    if let Some(v) = num("ditherAmount") {
+        o.dither_amount = v.round().clamp(0.0, 100.0) as u8;
+    }
+    if let Some(v) = num("webSnap") {
+        o.web_snap = v.round().clamp(0.0, 100.0) as u8;
+    }
+    o.transparency = flag("transparency").unwrap_or(o.transparency);
+    o.interlaced = flag("interlaced").unwrap_or(o.interlaced);
+    o.progressive = flag("progressive").unwrap_or(o.progressive);
+    o.optimized = flag("optimized").unwrap_or(o.optimized);
+    o.lossless = flag("lossless").unwrap_or(o.lossless);
+    o.embed_profile = flag("embedIcc").unwrap_or(o.embed_profile);
+    o.convert_srgb = flag("convertToSrgb").unwrap_or(o.convert_srgb);
+    o.html = flag("html").unwrap_or(o.html);
+    if let Some(m) = text("matte").and_then(parse_hex) {
+        o.matte = m;
+    }
+    if let Some(v) = text("metadata").and_then(|n| by_name(&METADATA, n)) {
+        o.metadata = v;
+    }
+    if let Some(v) = num("percent").filter(|v| *v > 0.0) {
+        o.percent = v;
+    }
+    if let Some(v) = text("resample").and_then(|n| by_name(&RESAMPLES, n)) {
+        o.resample = v;
+    }
+    if let Some(edits) = p.get("colorTableEdits").and_then(Value::as_object) {
+        o.palette_edits = edits.iter().filter_map(|(k, v)| Some((k.parse().ok()?, parse_hex(v.as_str()?)?))).collect();
+    }
+    o.slices = match text("slices") {
+        Some("user") => WebSlices::User,
+        Some("selected") => {
+            let numbers =
+                p.get("numbers").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).filter_map(|n| u32::try_from(n).ok()).collect());
+            WebSlices::Selected(numbers.unwrap_or_default())
         }
-        ui.label(format!("{} / {}", frame + 1, timeline.duration));
+        _ => WebSlices::All,
+    };
+    o
+}
+
+/// The engine parameters of `o`. An exact size typed in the dialog (`o.size`, with Constrain Proportions on or off) is
+/// sent as `width` and `height`, which replace `percent`. A document with slices adds the slice choice, its numbers and
+/// `html`.
+pub(super) fn params_of(o: &SaveForWebOptions, has_slices: bool) -> Value {
+    let mut p = json!({
+        "format": name_of(&WEB_FORMATS, o.format),
+        "quality": o.quality,
+        "lossless": o.lossless,
+        "palette": name_of(&PALETTES, o.color_table),
+        "colors": o.colors,
+        "dither": name_of(&DITHERS, o.dither),
+        "ditherAmount": o.dither_amount,
+        "transparency": o.transparency,
+        "matte": hex(o.matte),
+        "interlaced": o.interlaced,
+        "progressive": o.progressive,
+        "optimized": o.optimized,
+        "embedIcc": o.embed_profile,
+        "convertToSrgb": o.convert_srgb,
+        "metadata": name_of(&METADATA, o.metadata),
+        "percent": o.percent,
+        "resample": name_of(&RESAMPLES, o.resample),
+        "webSnap": o.web_snap,
     });
-    f.insert("__web_frame".into(), json!(frame));
-    f.insert("__web_time".into(), json!(last));
-    f.insert("__web_playing".into(), json!(playing));
-    if playing {
-        let remaining = (1.0 / f64::from(timeline.fps) - (now - last)).clamp(0.0, 1.0);
-        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(remaining));
+    if let Some(size) = o.size {
+        if let Some(map) = p.as_object_mut() {
+            map.remove("percent");
+        }
+        p["width"] = json!(size.width);
+        p["height"] = json!(size.height);
     }
-    Some(frame)
+    if !o.palette_edits.is_empty() {
+        p["colorTableEdits"] = Value::Object(o.palette_edits.iter().map(|(i, c)| (i.to_string(), json!(hex(*c)))).collect());
+    }
+    if has_slices {
+        p["html"] = json!(o.html);
+        match &o.slices {
+            WebSlices::User => p["slices"] = json!("user"),
+            WebSlices::Selected(numbers) => {
+                let mut numbers = numbers.clone();
+                numbers.sort_unstable();
+                numbers.dedup();
+                p["slices"] = json!("selected");
+                p["numbers"] = json!(numbers);
+            }
+            _ => p["slices"] = json!("all"),
+        }
+    }
+    p
+}
+
+/// The export parameters: `params_of`, refusing Selected Slices with nothing selected.
+pub(super) fn web_params(o: &SaveForWebOptions, has_slices: bool) -> Result<Value, String> {
+    if has_slices && matches!(&o.slices, WebSlices::Selected(numbers) if numbers.is_empty()) {
+        return Err(tl!("No slices are selected. Click a slice in the preview to select it.").to_string());
+    }
+    Ok(params_of(o, has_slices))
+}
+
+/// The key of pane `index`'s indexed-encode cache and textures for document `doc_id`.
+pub(super) fn pane_key(doc_id: u64, index: usize) -> egui::Id {
+    egui::Id::unique(("web-pane", doc_id, index))
+}
+
+/// Keeps the picture alive for the context (a texture handle frees it on drop) and names it for the dialog.
+fn texture(ctx: &egui::Context, key: egui::Id, image: egui::ColorImage, shown: egui::Vec2) -> SizedTexture {
+    let handle = Arc::new(ctx.load_texture("web-pane", image, egui::TextureOptions::LINEAR));
+    let sized = SizedTexture::new(handle.id(), shown);
+    ctx.data_mut(|d| d.insert_temp(key, handle));
+    sized
+}
+
+/// The Original pane's picture: the flattened document, reduced to at most 2048 px on its long side.
+fn original_texture(ctx: &egui::Context, doc: &photocraft_doc::Document) -> SizedTexture {
+    let (w, h) = (f64::from(doc.size.width).max(1.0), f64::from(doc.size.height).max(1.0));
+    let k = (2048.0 / w.max(h)).min(1.0);
+    let params = json!({});
+    let resample = web_preview::proxy_resample(&params, k);
+    let size = json!({"width": (w * k).round().max(1.0), "height": (h * k).round().max(1.0), "resample": resample});
+    let settings = WebSettings::default();
+    let image = web_cmds::web_document(doc, &size, &settings)
+        .map(|(proxy, _, _)| {
+            let (pw, ph) = (proxy.size.width as usize, proxy.size.height as usize);
+            let rgba: Vec<u8> =
+                photocraft_compose::flatten(&proxy).into_px().iter().flat_map(|q| q.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect();
+            egui::ColorImage::from_rgba_unmultiplied([pw, ph], &rgba)
+        })
+        .unwrap_or_else(|_| egui::ColorImage::from_rgba_unmultiplied([1, 1], &[0; 4]));
+    texture(ctx, egui::Id::unique(("web-original", doc.id.0)), image, egui::vec2(w as f32, h as f32))
+}
+
+/// Opens Save for Web for the active document, seeded from the engine's last export (the one copy of what is
+/// remembered: it writes `Preferences.dialogs` on every run, scripted ones included). Each document starts at its
+/// own full size.
+///
+/// `None` without a document.
+pub fn open_web(app: &mut PhotocraftApp) -> Option<DialogId> {
+    let ctx = app.ctx().clone();
+    let doc = app.session.active()?.doc.clone();
+    let mut seed = app.session.prefs().dialogs.get(WEB_COMMAND).cloned().unwrap_or_else(|| json!({}));
+    if let Some(m) = seed.as_object_mut() {
+        for key in ["path", "dir", "folder", "width", "height", "percent", "colorTable", "colorTableEdits", "numbers"] {
+            m.remove(key);
+        }
+        if m.get("slices").and_then(Value::as_str) == Some("selected") {
+            m.remove("slices");
+        }
+    }
+    let presets = web_cmds::PRESETS
+        .iter()
+        .filter_map(|name| web_cmds::preset_settings(name).map(|st| WebPreset::new(name.to_string(), options_of(&st.to_params()))))
+        .collect();
+    let slices = if doc.slices.is_empty() {
+        Vec::new()
+    } else {
+        photocraft_doc::slices::resolve(&doc)
+            .iter()
+            .map(|r| {
+                WebSlice::new(
+                    r.number as u32,
+                    egui::Rect::from_min_max(egui::pos2(r.rect.x0 as f32, r.rect.y0 as f32), egui::pos2(r.rect.x1 as f32, r.rect.y1 as f32)),
+                )
+            })
+            .collect()
+    };
+    let mut dialog = HostedSaveForWeb::new(doc.name.clone(), PixelSize::new(doc.size.width, doc.size.height), original_texture(&ctx, &doc))
+        .options(options_of(&seed))
+        .presets(presets)
+        .slices(slices)
+        .slice_warning(slice_warning(&doc));
+    if let Some(t) = doc.timeline.as_ref().filter(|t| t.duration >= 2) {
+        dialog = dialog.animation(Animation::new(t.duration as u32, t.fps));
+    }
+    Some(app.framework.dialogs.open(dialog))
+}
+
+/// The notice under the preview captions when the document has more slices than are resolved (`overflow_warning`):
+/// how many were ignored past the first [`photocraft_doc::slices::MAX_RESOLVED_SLICES`]. `None` otherwise.
+pub(super) fn slice_warning(doc: &photocraft_doc::Document) -> Option<Label> {
+    photocraft_doc::slices::overflow_warning(doc)?;
+    let max = photocraft_doc::slices::MAX_RESOLVED_SLICES;
+    let ignored = doc.slices.list.len().saturating_sub(max).to_string();
+    let text =
+        crate::i18n::fmt(tl!("{count} stored slices past the first {max} were ignored"), &[("count", ignored.as_str()), ("max", max.to_string().as_str())]);
+    Some(Label::from(text))
 }
 
 /// Seek a preview copy, preserving any edits to the source's currently displayed frame.
@@ -245,366 +287,182 @@ pub(super) fn web_frame_document(doc: &photocraft_doc::Document, frame: Option<u
     Ok((*preview.active().ok_or(photocraft_engine::EngineError::NoDocument)?.doc).clone())
 }
 
-/// Lay out the preview and settings without letting their content resize the dialog.
-pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    let t = Tokens::get(ui.ctx());
-    let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return };
-    ui.horizontal(|ui| {
-        let mut view = s(f, "__view", "2up");
-        for (k, l) in WEB_VIEWS {
-            if ui.selectable_label(view == k, tl!(l)).clicked() {
-                view = k.into();
-                // The next Save for Web opens on this tab, as Photoshop's does.
-                app.ui.web_view = Some(view.clone());
-            }
-        }
-        f.insert("__view".into(), json!(view));
-    });
-    ui.add_space(4.0);
-    let frame = web_playback(ui, f, &doc);
-    web_preview::controls(ui, f);
-    if let Err(error) = web_preview::prepare_table(app, f) {
-        ui.colored_label(t.text_dim, error);
+/// The picture of one wanted pane: the options' encode of the document's `frame`, reduced to a proxy of at most
+/// 2048 px, with the size and palette the dialog shows.
+fn encode(ctx: &egui::Context, app: &PhotocraftApp, wanted: &WantedVariant, frame: Option<usize>) -> WebVariant {
+    let (index, revision) = (wanted.index, wanted.request.revision);
+    let fail = |message: String| WebVariant::failed(index, revision, message);
+    let Some(st) = app.session.active() else { return fail("no document".into()) };
+    let (doc, rev) = (st.doc.clone(), st.revision);
+    let p = params_of(&wanted.request.options, false);
+    let (fw, fh) = match web_preview::dimensions(&doc, &p) {
+        Ok(size) => size,
+        Err(error) => return fail(error),
+    };
+    let k = (2048.0 / fw.max(fh)).min(1.0);
+    let signature = format!("{}|{rev}|{frame:?}", doc.id.0);
+    let source = |settings: &WebSettings| {
+        let doc = web_frame_document(&doc, frame).map_err(|e| e.to_string())?;
+        let size = json!({"width": (fw * k).round().max(1.0), "height": (fh * k).round().max(1.0), "resample": web_preview::proxy_resample(&p, k)});
+        let (proxy, _, _) = web_cmds::web_document(&doc, &size, settings).map_err(|e| e.to_string())?;
+        let (w, h) = (proxy.size.width, proxy.size.height);
+        Ok((photocraft_compose::flatten(&proxy).into_px(), w, h))
+    };
+    let encoded = match web_preview::optimized(ctx, pane_key(doc.id.0, index), &signature, &p, source) {
+        Ok(encoded) => encoded,
+        Err(message) => return fail(message),
+    };
+    let (w, h) = (encoded.width.max(1), encoded.height.max(1));
+    let ratio = (fw * fh) / (f64::from(w) * f64::from(h)).max(1.0);
+    let image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &encoded.rgba);
+    let picture = texture(ctx, egui::Id::unique(("web-texture", doc.id.0, index)), image, egui::vec2(fw as f32, fh as f32));
+    let mut variant = WebVariant::new(index, revision, picture, (encoded.bytes as f64 * ratio) as u64).proxy(ratio > 1.001);
+    if let Some(colors) = encoded.colors {
+        variant = variant.colors(colors as u16);
     }
-    let p = params(f);
-    f.insert("__previewRects".into(), json!([]));
-    // Whole physical pixels, rounded down: the dialog grows to fit its contents, so a preview a
-    // fraction of a pixel too wide at a fractional scale widened it on every repaint (#10675).
-    let ppp = ui.ctx().pixels_per_point();
-    let floor = |v: f32| (v * ppp).floor() / ppp;
-    let area = egui::vec2(floor((ui.available_width() - 270.0 - ui.spacing().item_spacing.x).max(260.0)), floor((ui.available_height() - 48.0).max(180.0)));
-    let (half_w, half_h) = (floor(area.x / 2.0 - 4.0), floor(area.y / 2.0 - 4.0));
-    ui.horizontal_top(|ui| {
-        // Previews grow with the dialog; settings retain their compact width.
-        ui.vertical(|ui| {
-            ui.set_width(area.x);
-            match s(f, "__view", "2up").as_str() {
-                "original" => web_pane(app, ui, area, None, f, 0, frame),
-                "optimized" => web_pane(app, ui, area, Some(&p), f, 1, frame),
-                "2up" => {
-                    ui.horizontal(|ui| {
-                        web_pane(app, ui, egui::vec2(half_w, area.y), None, f, 0, frame);
-                        web_pane(app, ui, egui::vec2(half_w, area.y), Some(&p), f, 1, frame);
-                    });
-                }
-                _ => {
-                    let v = variants(&p);
-                    let cell = egui::vec2(half_w, half_h);
-                    ui.horizontal(|ui| {
-                        web_pane(app, ui, cell, None, f, 0, frame);
-                        web_pane(app, ui, cell, Some(&v[0]), f, 1, frame);
-                    });
-                    ui.horizontal(|ui| {
-                        web_pane(app, ui, cell, Some(&v[1]), f, 2, frame);
-                        web_pane(app, ui, cell, Some(&v[2]), f, 3, frame);
-                    });
-                }
-            }
-        });
-        ui.add_space(10.0);
-        // Settings scroll independently on smaller windows.
-        ui.vertical(|ui| {
-            ui.set_width(250.0);
-            egui::ScrollArea::both().auto_shrink([false, true]).id_salt("web-settings").max_height(area.y).show(ui, |ui| {
-                ui.label(egui::RichText::new(tl!("Preset")).color(t.text_dim));
-                let mut preset = s(f, "__preset", "");
-                let mut opts: Vec<(String, &str)> = vec![("".into(), "[Unnamed]")];
-                opts.extend(web_cmds::PRESETS.iter().map(|p| (p.to_string(), *p)));
-                if crate::widgets::dropdown(ui, "web-preset", tl!("Preset"), &mut preset, &opts, 230.0) && !preset.is_empty() {
-                    if let Some(Value::Object(m)) = web_cmds::preset_settings(&preset).map(|st| st.to_params()) {
-                        f.extend(m);
-                    }
-                    f.insert("__preset".into(), json!(preset));
-                }
-                ui.add_space(4.0);
-                dropdown_str(ui, "web-format", tl!("Format"), f, "format", &WEB_FORMATS, 230.0);
-                ui.add_space(4.0);
-                let fmt = s(f, "format", "jpeg");
-                match fmt.as_str() {
-                    "gif" | "png8" => {
-                        dropdown_str(
-                            ui,
-                            "web-palette",
-                            tl!("Color Table"),
-                            f,
-                            "palette",
-                            &[
-                                ("perceptual", tl!("Perceptual")),
-                                ("selective", tl!("Selective")),
-                                ("adaptive", tl!("Adaptive")),
-                                ("restrictive", tl!("Restrictive (Web)")),
-                                ("exact", tl!("Exact")),
-                            ],
-                            150.0,
-                        );
-                        number(ui, f, "colors", tl!("Colors"), 2.0..=256.0, "", 128.0);
-                        dropdown_str(
-                            ui,
-                            "web-dither",
-                            tl!("Dither"),
-                            f,
-                            "dither",
-                            &[("none", tl!("No Dither")), ("diffusion", tl!("Diffusion")), ("pattern", tl!("Pattern")), ("noise", tl!("Noise"))],
-                            150.0,
-                        );
-                        number(ui, f, "ditherAmount", tl!("Dither"), 0.0..=100.0, "%", 88.0);
-                        check(ui, f, "transparency", tl!("Transparency"), true);
-                        check(ui, f, "interlaced", tl!("Interlaced"), false);
-                        number(ui, f, "webSnap", tl!("Web Snap"), 0.0..=100.0, "%", 0.0);
-                    }
-                    "jpeg" => {
-                        number(ui, f, "quality", tl!("Quality"), 0.0..=100.0, "", 60.0);
-                        check(ui, f, "progressive", tl!("Progressive"), false);
-                        check(ui, f, "optimized", tl!("Optimized"), true);
-                        check(ui, f, "embedIcc", tl!("Embed Color Profile"), false);
-                    }
-                    "webp" => {
-                        check(ui, f, "lossless", tl!("Lossless"), false);
-                        if !b(f, "lossless", false) {
-                            number(ui, f, "quality", tl!("Quality"), 0.0..=100.0, "", 60.0);
-                        }
-                        check(ui, f, "transparency", tl!("Transparency"), true);
-                        check(ui, f, "embedIcc", tl!("Embed Color Profile"), false);
-                    }
-                    "wbmp" => {
-                        dropdown_str(
-                            ui,
-                            "web-dither",
-                            tl!("Dither"),
-                            f,
-                            "dither",
-                            &[("none", tl!("No Dither")), ("diffusion", tl!("Diffusion")), ("pattern", tl!("Pattern"))],
-                            150.0,
-                        );
-                    }
-                    _ => {
-                        check(ui, f, "transparency", tl!("Transparency"), true);
-                        check(ui, f, "interlaced", tl!("Interlaced"), false);
-                    }
-                }
-                if !matches!(fmt.as_str(), "png24" | "webp") || !b(f, "transparency", true) {
-                    ui.horizontal(|ui| matte_field(ui, f));
-                }
-                ui.add_space(6.0);
-                check(ui, f, "convertToSrgb", tl!("Convert to sRGB"), true);
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(tl!("Metadata")).color(t.text_dim));
-                    dropdown_str(
-                        ui,
-                        "web-meta",
-                        tl!("Metadata"),
-                        f,
-                        "metadata",
-                        &[
-                            ("none", tl!("None")),
-                            ("copyright", tl!("Copyright")),
-                            ("copyrightAndContact", tl!("Copyright and Contact Info")),
-                            ("all", tl!("All")),
-                        ],
-                        160.0,
-                    );
-                });
-                if matches!(fmt.as_str(), "gif" | "png8") {
-                    web_preview::table(ui, f);
-                }
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new(tl!("Image Size")).font(crate::theme::semibold(12.0)).color(t.text));
-                web_size(ui, f, &doc);
-                let nslices = photocraft_doc::slices::resolve(&doc).len();
-                if !doc.slices.is_empty() {
-                    ui.add_space(6.0);
-                    ui.label(egui::RichText::new(crate::i18n::trn(crate::i18n::current(), nslices as u64, "{n} slice", "{n} slices")).color(t.text_dim));
-                    check(ui, f, "html", tl!("Save HTML and Images"), true);
-                    dropdown_str(
-                        ui,
-                        "web-slices",
-                        tl!("Slices"),
-                        f,
-                        "slices",
-                        &[("all", tl!("All Slices")), ("user", tl!("All User Slices")), ("selected", tl!("Selected Slices"))],
-                        150.0,
-                    );
-                }
-            });
-        });
-    });
+    if wanted.request.options.format.indexed() {
+        variant = variant.palette(encoded.palette);
+    }
+    variant
 }
 
-/// Save for Web's Matte: `#rrggbb` or `none`. While it has focus the field shows exactly what is
-/// typed and only a whole colour reaches the settings, so the previews never see a partial one
-/// such as `#1111` mid-type (#8830); what is not a colour snaps back when focus leaves.
-/// Both sides ask `Memory::has_focus`, which ignores whether the OS window is focused: egui keeps
-/// focus on the field while the user alt-tabs away, and `Response::has_focus` would drop the typed
-/// text for those frames and restore the saved colour when the window comes back.
-/// Focus is asked twice, because the two sides ask different questions. The state *before* `ui.add`
-/// decides what this frame shows - that is the frame the user is looking at. The state *after*
-/// `ui.add` decides whether typed text goes into the cache: egui can move focus into the field
-/// during the add itself, and a middle-click paste on an unfocused field inserts the pasted text and
-/// then calls `Memory::request_focus` inside the add (pinned egui fork, text_edit/builder.rs:933-974;
-/// `Memory::request_focus` is effective the same frame, memory/mod.rs:945-950), so caching against
-/// the pre-add state would drop that paste and restore the saved colour the next frame.
-fn matte_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    let t = Tokens::get(ui.ctx());
-    let label = ui.label(egui::RichText::new(tl!("Matte")).color(t.text_dim));
-    let id = ui.make_persistent_id("web-matte");
-    let was_focused = ui.memory(|m| m.has_focus(id));
-    let typed = if was_focused { ui.data(|d| d.get_temp::<String>(id)) } else { None };
-    let mut text = typed.unwrap_or_else(|| s(f, "matte", "#ffffff"));
-    let resp = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(80.0)).labelled_by(label.id);
-    if ui.memory(|m| m.has_focus(id)) {
-        ui.data_mut(|d| d.insert_temp(id, text.clone()));
-    } else {
-        ui.data_mut(|d| d.remove::<String>(id));
-    }
-    if !resp.changed() {
+fn has_slices(app: &PhotocraftApp) -> bool {
+    app.session.active().is_some_and(|st| !st.doc.slices.is_empty())
+}
+
+fn report(app: &mut PhotocraftApp, error: String) {
+    app.ui.status = error;
+    app.ui.status_error = true;
+}
+
+/// The extension the engine writes `options`' format with.
+fn engine_ext(options: &SaveForWebOptions) -> String {
+    WebSettings::from_params(&params_of(options, false), WEB_COMMAND).map_or_else(|_| options.format.extension().to_string(), |st| st.format.ext().to_string())
+}
+
+/// Answers what the open Save for Web dialog asked for since the last call: the panes to encode, the colour
+/// pick (the matte and the colour-table cells), the save path, and OK. Each request is taken once, so a second
+/// pass in the same frame finds nothing left.
+pub(super) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if let Some(result) = app.framework.dialogs.take::<HostedSaveForWeb>() {
+        if let DialogResult::Ok(result) = result {
+            finish(app, ctx, result);
+        }
         return;
     }
-    let matte = crate::color_picker_ui::parse_hex(&text)
-        .map(crate::color_picker_ui::hex)
-        .or_else(|| text.trim().eq_ignore_ascii_case("none").then(|| "none".to_string()));
-    if let Some(matte) = matte {
-        f.insert("matte".into(), json!(matte));
+    let Some(dialog) = app.framework.dialogs.get_mut::<HostedSaveForWeb>() else { return };
+    let id = dialog.id();
+    let wanted = dialog.wanted_variants();
+    let (color, path, frame) = (dialog.pick_color(), dialog.pick_path(), dialog.frame());
+    let current = dialog.current().clone();
+    if let Some(request) = color {
+        crate::color_picker_ui::open_for_request(app, id, request);
     }
-}
-
-/// A size row in a two-column grid: the label, then a field showing `shown`. Returns the typed
-/// value when it changed, compared with the value the widget was given so a field that only
-/// clamps does not count as an edit.
-fn size_field(ui: &mut egui::Ui, label: &str, shown: f64, range: std::ops::RangeInclusive<f32>, unit: &str, decimals: u32) -> Option<f64> {
-    let t = Tokens::get(ui.ctx());
-    let passed = (shown as f32).clamp(*range.start(), *range.end());
-    let mut v = passed;
-    ui.label(egui::RichText::new(label).color(t.text_dim));
-    crate::widgets::value_field_prec(ui, &mut v, range, unit, 90.0, decimals).accessible_name(tl!(&label));
-    ui.end_row();
-    (v != passed).then_some(f64::from(v))
-}
-
-/// Image Size, as in Photoshop's Save for Web: Width and Height linked in proportion (on at
-/// each opening), Percent and the resampling method. A side edit sets exact pixels and drops
-/// `percent`, which the engine would otherwise apply first; a Percent edit sets both sides.
-fn web_size(ui: &mut egui::Ui, f: &mut Map<String, Value>, doc: &photocraft_doc::Document) {
-    use crate::export_dialog::{MAX_PX, resize_from_scale, resize_from_side};
-    let (w0, h0) = (f64::from(doc.size.width).max(1.0), f64::from(doc.size.height).max(1.0));
-    let (w, h) = web_preview::dimensions(doc, &params(f)).unwrap_or((w0, h0));
-    let lock = b(f, "__constrain", true);
-    let pct = n(f, "percent", w / w0 * 100.0);
-    let write = |f: &mut Map<String, Value>, width: f64, height: f64| {
-        f.insert("width".into(), json!(width));
-        f.insert("height".into(), json!(height));
-    };
-    let max = MAX_PX as f32;
-    let (width, height, percent) = egui::Grid::new("web-size")
-        .num_columns(2)
-        .show(ui, |ui| {
-            (
-                size_field(ui, tl!("Width"), w, 1.0..=max, "px", 0),
-                size_field(ui, tl!("Height"), h, 1.0..=max, "px", 0),
-                size_field(ui, tl!("Percent"), pct, 1.0..=1000.0, "%", 2),
-            )
-        })
-        .inner;
-    let side = match (width, height) {
-        (Some(v), _) => resize_from_side(w0, h0, v.round(), h, lock, true).ok(),
-        (_, Some(v)) => resize_from_side(w0, h0, w, v.round(), lock, false).ok(),
-        _ => None,
-    };
-    if let Some(size) = side {
-        f.remove("percent");
-        write(f, size.width, size.height);
-    } else if let Some(v) = percent
-        && let Ok(size) = resize_from_scale(w0, h0, v)
+    if let Some((key, color)) = crate::color_picker_ui::answer_for(app, id)
+        && let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedSaveForWeb>(id)
     {
-        f.insert("percent".into(), json!(size.scale));
-        write(f, size.width, size.height);
+        dialog.answer_color(key, color);
     }
-    let mut linked = lock;
-    if crate::widgets::checkbox(ui, &mut linked, tl!("Constrain proportions")).changed() {
-        f.insert("__constrain".into(), json!(linked));
-        // Linked again, the height follows the width in the document's proportions.
-        if linked && let Ok(size) = resize_from_side(w0, h0, w, h, true, true) {
-            f.remove("percent");
-            write(f, size.width, size.height);
+    if let Some(request) = path {
+        pick_save(app, id, request.key, &current);
+    }
+    if wanted.is_empty() {
+        return;
+    }
+    let animated = app.session.active().is_some_and(|st| st.doc.timeline.as_ref().is_some_and(|t| t.duration >= 2));
+    let variants: Vec<WebVariant> = wanted.iter().map(|w| encode(ctx, app, w, animated.then_some(frame as usize))).collect();
+    if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedSaveForWeb>(id) {
+        for variant in variants {
+            dialog.set_variant(variant);
         }
     }
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tl!("Resample")).color(Tokens::get(ui.ctx()).text_dim));
-        // Photoshop's Save for Web list, in its order.
-        dropdown_str(
-            ui,
-            "web-resample",
-            tl!("Resample"),
-            f,
-            "resample",
-            &[
-                ("nearest", tl!("Nearest Neighbor (hard edges)")),
-                ("bilinear", tl!("Bilinear")),
-                ("bicubic", tl!("Bicubic (smooth gradients)")),
-                ("bicubicSmoother", tl!("Bicubic Smoother (enlargement)")),
-                ("bicubicSharper", tl!("Bicubic Sharper (reduction)")),
-            ],
-            170.0,
-        );
-    });
 }
 
-pub(super) fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    // Check while the control/input policy is still installed, before an asynchronous picker
-    // can outlive the request. A browser download uses the interactive platform writer.
-    let authorize = |p: &Value| -> Result<(), String> {
-        if let Some(authorize) = app.session.authorize.or(if app.automation_input { app.services.automation_authorize } else { None }) {
-            authorize(WEB_COMMAND, p).map_err(|e| e.to_string())?;
+/// Save… was pressed: the export policy judges the parameters (with the generated palette) before any picker
+/// opens, then the save picker answers the dialog's path request `key`.
+fn pick_save(app: &mut PhotocraftApp, id: DialogId, key: String, current: &SaveForWebOptions) {
+    let slices = has_slices(app);
+    let checked = web_params(current, slices).and_then(|p| checked_params(app, &p));
+    let refuse = |app: &mut PhotocraftApp, error: String| {
+        if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedSaveForWeb>(id) {
+            dialog.cancel_requests();
         }
-        if app.automation_input
-            && let Some(authorize) = app.services.automation_command.as_ref()
-        {
-            authorize(WEB_COMMAND, p)?;
-        }
-        Ok(())
+        report(app, error);
     };
-    let has_slices = app.session.active().is_some_and(|st| !st.doc.slices.is_empty());
-    let mut p = web_params(f, has_slices)?;
-    authorize(&p)?;
-    // Confirmation may follow a field edit without an intervening frame (Enter or automation).
-    let mut fields = f.clone();
-    web_preview::prepare_table(app, &mut fields)?;
-    let prepared = web_params(&fields, has_slices)?;
-    if prepared != p {
-        // The policy must also approve the actual palette-bearing export parameters.
-        authorize(&prepared)?;
-        p = prepared;
+    if let Err(error) = checked {
+        return refuse(app, error);
     }
-    // A null or empty destination is none: the picker asks for one.
-    if let Some(fields) = p.as_object_mut() {
-        fields.retain(|key, value| !(matches!(key.as_str(), "path" | "dir" | "folder") && (value.is_null() || value.as_str() == Some(""))));
-    }
-    if p.get("path").is_some() || p.get("dir").is_some() || p.get("folder").is_some() {
-        return save_for_web(app, p);
-    }
-    let doc = app.session.active().ok_or("no document")?.doc.clone();
-    let html = b(f, "html", true);
-    let st = WebSettings::from_params(&p, "file.export.saveForWebLegacy").map_err(|e| e.to_string())?;
+    let Some(doc) = app.session.active().map(|st| st.doc.clone()) else { return refuse(app, "no document".into()) };
     let base = photocraft_doc::slices::base_name(&doc);
-    let suggested = if has_slices && html { format!("{base}.html") } else { format!("{base}.{}", st.format.ext()) };
-    app.pick_export(&suggested, move |app, path| {
-        app.refocus(doc.id)?;
-        if has_slices {
-            let dir = path.rfind(['/', '\\']).map(|i| path[..i].to_string()).unwrap_or_else(|| ".".into());
-            p["dir"] = json!(dir);
-            p["html"] = json!(html);
-        } else if let Some(folder) = kept_name_folder(&path, &base, st.format.ext())
-            // A save that renamed the document meanwhile: the engine would name the file after
-            // the new name, not the one picked.
-            && app.session.active().is_some_and(|state| photocraft_doc::slices::base_name(&state.doc) == base)
-        {
-            // The suggested name kept: only the folder, so a recorded action saves each
-            // document under its own name, as in Photoshop (#5305).
-            p["folder"] = json!(folder);
-        } else {
-            p["path"] = json!(path);
+    let suggested = if slices && current.html { format!("{base}.html") } else { format!("{base}.{}", engine_ext(current)) };
+    let doc_id = doc.id;
+    // PLAN: `pick_export` has no cancel hook, so a cancelled picker leaves Save… waiting until `cancel_requests`; the owner of file_dialog.rs adds the hook.
+    let asked = app.pick_export(&suggested, move |app, path| {
+        app.refocus(doc_id)?;
+        if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedSaveForWeb>(id) {
+            dialog.answer_path(key, std::path::PathBuf::from(path));
         }
-        save_for_web(app, p)
-    })
+        Ok(Value::Null)
+    });
+    if let Err(error) = asked {
+        refuse(app, error);
+    }
+}
+
+/// OK: the export runs with the confirmed options and the picked path; the settings are remembered once it succeeded.
+fn finish(app: &mut PhotocraftApp, ctx: &egui::Context, result: SaveForWebResult) {
+    let slices = has_slices(app);
+    let outcome = web_params(&result.options, slices).and_then(|mut p| {
+        let path = result.path.to_string_lossy().into_owned();
+        if slices {
+            p["dir"] = json!(result.path.parent().map(|d| d.to_string_lossy().into_owned()).filter(|d| !d.is_empty()).unwrap_or_else(|| ".".into()));
+        } else {
+            // The suggested name kept: only the folder, so a recorded action saves each document under its own
+            // name, as in Photoshop (#5305). A document renamed since the picker opened no longer matches the
+            // picked name, so the whole path is used.
+            let base = app.session.active().map(|st| photocraft_doc::slices::base_name(&st.doc)).ok_or("no document")?;
+            match kept_name_folder(&path, &base, &engine_ext(&result.options)) {
+                Some(folder) => p["folder"] = json!(folder),
+                None => p["path"] = json!(path),
+            }
+        }
+        web_confirm(app, &p)
+    });
+    match outcome {
+        Ok(_) => result.remember(ctx),
+        Err(error) => report(app, error),
+    }
+}
+
+/// Whether the export policy lets `p` through. Checked while the control/input policy is still installed,
+/// before an asynchronous picker can outlive the request.
+fn authorize_web(app: &PhotocraftApp, p: &Value) -> Result<(), String> {
+    if let Some(authorize) = app.session.authorize.or(if app.automation_input { app.services.automation_authorize } else { None }) {
+        authorize(WEB_COMMAND, p).map_err(|e| e.to_string())?;
+    }
+    if app.automation_input
+        && let Some(authorize) = app.services.automation_command.as_ref()
+    {
+        authorize(WEB_COMMAND, p)?;
+    }
+    Ok(())
+}
+
+/// `p` with its generated palette, after the policy approved both the request and the palette-bearing parameters.
+fn checked_params(app: &PhotocraftApp, p: &Value) -> Result<Value, String> {
+    authorize_web(app, p)?;
+    let mut prepared = p.clone();
+    web_preview::prepare_table(app, &mut prepared)?;
+    if prepared != *p {
+        authorize_web(app, &prepared)?;
+    }
+    Ok(prepared)
+}
+
+/// Runs Save for Web with the final parameters `p`, which say where to write.
+pub(super) fn web_confirm(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
+    let p = checked_params(app, p)?;
+    save_for_web(app, p)
 }
 
 /// The folder of `path` when its file is the one Save for Web suggests and writes from a folder
@@ -614,20 +472,6 @@ fn kept_name_folder(path: &str, base: &str, ext: &str) -> Option<String> {
     let portable = photocraft_engine::file_cmds::portable_device_name(base.to_string()) == base;
     let kept = portable && file.file_stem().is_some_and(|s| s.to_string_lossy() == base) && file.extension().is_some_and(|e| e.to_string_lossy() == ext);
     kept.then(|| file.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default())
-}
-
-/// The export parameters: the fields, plus the numbers of the slices selected in the preview
-/// when the document's slices are exported as Selected Slices.
-pub(super) fn web_params(f: &Map<String, Value>, has_slices: bool) -> Result<Value, String> {
-    let mut p = params(f);
-    if has_slices && s(f, "slices", "all") == "selected" {
-        let numbers = web_preview::selected_slices(f);
-        if numbers.is_empty() {
-            return Err(tl!("No slices are selected. Click a slice in the preview to select it.").to_string());
-        }
-        p["numbers"] = json!(numbers);
-    }
-    Ok(p)
 }
 
 /// Runs Save for Web with `p`, which says where to write.
@@ -643,6 +487,10 @@ fn save_for_web(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
     app.sync_views();
     app.ui.status =
         crate::i18n::trn(crate::i18n::current(), r["files"].as_array().map_or(0, Vec::len) as u64, "Saved for Web: {n} file", "Saved for Web: {n} files");
+    // Warnings (such as ignored slices) go in the status line: the dialog closes on success.
+    if let Some(w) = r["warnings"].as_array().filter(|w| !w.is_empty()) {
+        app.ui.status = format!("{} ({})", app.ui.status, w.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("; "));
+    }
     app.ui.status_error = false;
     Ok(r)
 }

@@ -1,12 +1,11 @@
 use super::EffectMaps;
 use super::batch::tile_grid;
 use super::consts::{ACC_FORMAT, CHUNK, CHUNK_UNIFORM, FX_BUDGET, MAX_PATTERN_TEXTURE_BYTES, OP_UNIFORM, PAGE, PATTERN_BUDGET, RESIDENT_BUDGET};
-use super::kit::{Kit, SHADER, build_jobs, tex_entry, uniform_entry, vertex_shader};
+use super::kit::{Kit, tex_entry, uniform_entry};
 use super::paging::{cell_rect, field_reaches, first_error, grid_rects};
+use super::pipelines::{NO_EFFECT_MAPS, Pipelines};
 use super::textures::{FxEntry, Resident, Tex, TexKind};
-use super::{
-    Compositor, DeviceHealth, DocId, Document, Fault, HashMap, Kernel, LayerContent, Plan, Rect, Role, TILE_SIZE, Unsupported, fx, plan, prefix, timing,
-};
+use super::{Compositor, DeviceHealth, DocId, Document, Fault, HashMap, LayerContent, Plan, Rect, Role, TILE_SIZE, Unsupported, fx, plan, prefix, timing};
 
 /// Classification of a synchronous compositor pipeline build failure.
 ///
@@ -56,115 +55,86 @@ impl Compositor {
         if feats.allowed_usages.contains(wgpu::TextureUsages::RENDER_ATTACHMENT) { wgpu::TextureFormat::Rgba32Float } else { wgpu::TextureFormat::Rgba16Float }
     }
 
-    /// [`Compositor::new_with_format`], but a shader or pipeline the driver can't build (e.g. a
-    /// D3D12 shader-compiler failure) is an `Err` instead of a panic, so the caller can fall back
-    /// to the CPU compositor. Where errors only arrive asynchronously (WebGPU), creation is assumed
-    /// to have worked.
+    /// [`Compositor::new_with_format`], but a shader the driver can't take is an `Err` instead of
+    /// a panic. Pipelines are built by the first draw that needs each one; one the driver can't
+    /// build (e.g. a D3D12 shader-compiler failure) makes that render [`Unsupported`], so the
+    /// caller falls back to the CPU compositor. Where errors only arrive asynchronously (WebGPU),
+    /// creation is assumed to have worked.
     pub fn try_new_with_format(device: &wgpu::Device, acc_format: wgpu::TextureFormat) -> Result<Self, Unsupported> {
-        match first_error(device, || Self::build(device, acc_format, false)) {
-            ((comp, None), None) => Ok(comp),
-            ((_, Some(e)), _) | (_, Some(e)) => Err(Unsupported(format!("couldn't build the compositor's pipelines: {e}"))),
+        match first_error(device, || Self::build(device, acc_format)) {
+            (comp, None) => Ok(comp),
+            (_, Some(e)) => Err(Unsupported(format!("couldn't create the compositor: {e}"))),
         }
     }
 
-    /// Build pipelines using a dedicated Rayon pool instead of the process-wide pool.
+    /// [`Compositor::try_new_with_format`] that also builds every pipeline now, on a dedicated
+    /// Rayon pool of `threads` instead of the process-wide pool, so a failing one is an `Err`
+    /// here rather than on a later draw.
     ///
-    /// This keeps shader compilation from occupying workers needed by CPU compositing.
-    /// If the pool cannot be created, pipeline enumeration runs sequentially on the calling
-    /// thread. The outer and per-pipeline wgpu error scopes are kept on their respective
-    /// build threads.
+    /// The dedicated pool keeps shader compilation from occupying workers needed by CPU
+    /// compositing. If the pool cannot be created, the pipelines are built one after another on
+    /// the calling thread.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn try_new_with_format_threads(device: &wgpu::Device, acc_format: wgpu::TextureFormat, threads: usize) -> Result<Self, Unsupported> {
         Self::try_new_with_format_threads_classified(device, acc_format, threads).map_err(|e| Unsupported(e.message))
     }
 
     /// [`Compositor::try_new_with_format`], but the failure is classified for callers that cache
-    /// deterministic failures across launches, and the pipelines are built on the calling thread.
+    /// deterministic failures across launches, and every pipeline is built on the calling thread.
     ///
     /// The GL backend needs the calling thread: its device takes one context lock around every
     /// call, and a pipeline build holds that lock while the driver compiles the shader (seconds on
     /// some drivers), so a build on another thread would race the caller's own device calls and
     /// abort the process.
     pub fn try_new_with_format_classified(device: &wgpu::Device, acc_format: wgpu::TextureFormat) -> Result<Self, BuildFailure> {
-        match first_error(device, || Self::build(device, acc_format, true)) {
-            ((comp, None), None) => Ok(comp),
-            ((_, Some(e)), None) => {
-                let kind = classify_build_diagnostic(&e.to_string());
-                Err(BuildFailure { kind, message: format!("couldn't build the compositor's pipelines: {e}") })
-            }
-            (_, Some(e)) => {
-                Err(BuildFailure { kind: BuildFailureKind::TransientOrUnknown, message: format!("couldn't build the compositor's pipelines: {e}") })
-            }
+        let comp = Self::try_new_with_format(device, acc_format).map_err(|e| BuildFailure { kind: BuildFailureKind::TransientOrUnknown, message: e.0 })?;
+        match comp.kit.pipelines.build_all(device, true) {
+            None => Ok(comp),
+            Some(e) => Err(BuildFailure { kind: classify_build_diagnostic(&e), message: format!("couldn't build the compositor's pipelines: {e}") }),
         }
     }
 
-    /// Build the compositor pipelines with an explicit failure classification for callers
-    /// that cache deterministic failures across launches. Only recognized shader compiler
+    /// [`Compositor::try_new_with_format_threads`] with an explicit failure classification for
+    /// callers that cache deterministic failures across launches. Only recognized shader compiler
     /// diagnostics are marked deterministic; all other wgpu errors are transient or unknown.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn try_new_with_format_threads_classified(device: &wgpu::Device, acc_format: wgpu::TextureFormat, threads: usize) -> Result<Self, BuildFailure> {
-        let pool = rayon::ThreadPoolBuilder::new().num_threads(threads.max(1)).thread_name(|index| format!("photocraft-gpu-build-{index}")).build();
-        let built = match pool {
-            Ok(pool) => pool.install(|| first_error(device, || Self::build(device, acc_format, false))),
-            Err(e) => {
-                log::warn!("GPU compositor: couldn't create dedicated build pool; building sequentially: {e}");
-                first_error(device, || Self::build(device, acc_format, true))
+        let comp = Self::try_new_with_format(device, acc_format).map_err(|e| BuildFailure { kind: BuildFailureKind::TransientOrUnknown, message: e.0 })?;
+        let pipelines = &comp.kit.pipelines;
+        // On GL the device's calls may not overlap: a build on the pool would race the drawing
+        // thread's calls and abort the process, so GL builds on this thread instead (#7331).
+        let error = if parallel_pipelines(device.adapter_info().backend) {
+            match rayon::ThreadPoolBuilder::new().num_threads(threads.max(1)).thread_name(|index| format!("photocraft-gpu-build-{index}")).build() {
+                Ok(pool) => pool.install(|| pipelines.build_all(device, false)),
+                Err(e) => {
+                    log::warn!("GPU compositor: couldn't create dedicated build pool; building sequentially: {e}");
+                    pipelines.build_all(device, true)
+                }
             }
+        } else {
+            pipelines.build_all(device, true)
         };
-        match built {
-            ((comp, None), None) => Ok(comp),
-            ((_, Some(e)), None) => {
-                let kind = classify_build_diagnostic(&e.to_string());
-                Err(BuildFailure { kind, message: format!("couldn't build the compositor's pipelines: {e}") })
-            }
-            (_, Some(e)) => {
-                Err(BuildFailure { kind: BuildFailureKind::TransientOrUnknown, message: format!("couldn't build the compositor's pipelines: {e}") })
-            }
+        match error {
+            None => Ok(comp),
+            Some(e) => Err(BuildFailure { kind: classify_build_diagnostic(&e), message: format!("couldn't build the compositor's pipelines: {e}") }),
         }
     }
 
     /// Create a compositor whose accumulation/render-target format is `acc_format`. Pass
     /// `Rgba16Float` on adapters that can't render to `Rgba32Float` (e.g. some Intel Vulkan drivers),
-    /// which otherwise panics at render-pipeline creation. See `Compositor::preferred_acc_format`.
+    /// which otherwise fails at render-pipeline creation. See `Compositor::preferred_acc_format`.
+    /// Pipelines are built on first use (see [`Compositor::try_new_with_format`]).
     pub fn new_with_format(device: &wgpu::Device, acc_format: wgpu::TextureFormat) -> Self {
-        let (comp, error) = Self::build(device, acc_format, false);
-        if let Some(e) = error {
-            log::error!("GPU compositor: couldn't build its pipelines: {e}");
-        }
-        comp
+        Self::build(device, acc_format)
     }
 
-    /// The compositor and the first error raised building its (non-map) pipelines. They are
-    /// built in parallel, each inside its own error scope on the thread that builds it (wgpu's
-    /// scopes are per thread): on DX12, FXC compiles one shader at a time and the ~30 pipelines
-    /// took about 8 s on one core (#6419).
+    /// The compositor's shaders, layouts and pipeline table ([`Pipelines`]); no pipeline yet.
     ///
-    /// No shader is used by two threads at once (#9173): wgpu-hal's D3D12 backend caches each
-    /// compiled shader and hands every pipeline a reference to it, but FXC's blobs count
-    /// references without atomics (gfx-rs/wgpu#10547), so threads sharing one could free it
-    /// while the cache still held it, and dropping the device then aborted the process. So each
-    /// job has its own vertex entry point and fragment shaders ([`build_jobs`]), and builds of
-    /// several compositors take turns.
-    ///
-    /// Not on GL: wgpu-hal's GL device puts every call behind one context lock that panics after
-    /// a second ("Could not lock adapter context. This is most-likely a deadlock"), and that panic
-    /// while another thread drops a pipeline aborts the process, so GL builds them on one thread
-    /// ([`parallel_pipelines`]); `sequential` is forced on GL within this build.
-    fn build(device: &wgpu::Device, acc_format: wgpu::TextureFormat, sequential: bool) -> (Self, Option<wgpu::Error>) {
-        static BUILDING: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _building = BUILDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        // The pipelines are created one after another on a backend whose device calls must not
-        // overlap ([`device_calls`]), so a build holds the device's calls while the driver
-        // compiles the shader: the app's uploads and draws (on the drawing thread) and the Camera
-        // Raw develop (on its worker) wait for it instead of tripping the context lock's
-        // one-second timeout, which panics and aborts the process.
+    /// The device's calls are serialized while the shaders are created where they must not
+    /// overlap ([`device_calls`]): the app's draws and the Camera Raw develop then wait for this
+    /// build instead of tripping the GL context lock's one-second timeout (#7331).
+    fn build(device: &wgpu::Device, acc_format: wgpu::TextureFormat) -> Self {
         let _calls = crate::device_calls::device_calls(device.adapter_info().backend);
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pc_compose"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
-        let jobs = build_jobs(acc_format);
-        let vertex = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("pc_compose_vertex"),
-            source: wgpu::ShaderSource::Wgsl(vertex_shader(&jobs).into()),
-        });
         let bgl0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("pc_compose_uniforms"),
             entries: &[uniform_entry(0, CHUNK_UNIFORM), uniform_entry(1, OP_UNIFORM)],
@@ -173,98 +143,22 @@ impl Compositor {
             label: Some("pc_compose_textures"),
             entries: &(0..8).map(tex_entry).collect::<Vec<_>>(),
         });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("pc_compose"),
-            bind_group_layouts: &[Some(&bgl0), Some(&bgl1)],
-            immediate_size: 0,
-        });
-        // `None` only for kernels without a fragment entry point, which are never drawn.
-        let pipeline = |k: Kernel, format: wgpu::TextureFormat, vs: &str| {
-            let entry = k.entry()?;
-            Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(entry),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState { module: &vertex, entry_point: Some(vs), buffers: &[], compilation_options: Default::default() },
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &module,
-                    entry_point: Some(entry),
-                    targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
-                    compilation_options: Default::default(),
-                }),
-                multiview_mask: None,
-                cache: None,
-            }))
-        };
-        // Effect maps render to R32Float / R16Float, which some adapters (e.g. GL without float
-        // render targets) can't: then layer effects use the CPU compositor and the rest stays here.
-        // On the GL backend the float effect-map targets aren't built at all instead of relying on
-        // a pipeline failure: the GL adapters we can test (Intel HD 4600) accept the targets but
-        // composite garbage through them, so effect documents use the CPU there and the rest stays
-        // on the GPU. The GL backend builds pipelines one thread at a time ([`parallel_pipelines`]).
+        // The GL float effect-map targets composite garbage on the adapters we can test
+        // (Intel HD 4600), so leave those pipelines out entirely: effect documents use the CPU
+        // compositor there, the rest of the canvas stays on the GPU (#7331).
         let gl = device.adapter_info().backend == wgpu::Backend::Gl;
-        let build_one = |job: super::kit::BuildJob| {
-            job.keys
-                .into_iter()
-                .filter(|key| !gl || !key.0.is_map())
-                .map(|key| {
-                    let (built, error) = first_error(device, || pipeline(key.0, key.1, &job.vertex));
-                    (key, built, error)
-                })
-                .collect::<Vec<_>>()
-        };
-        // `sequential` is upstream's background-thread build switch; GL is forced through it too,
-        // because wgpu-hal's GL device panics after a second on a contended context lock.
-        let built: Vec<_> = if sequential || !parallel_pipelines(device.adapter_info().backend) {
-            jobs.into_iter().map(build_one).collect()
-        } else {
-            fx::par_map(jobs, build_one)
-        };
-        let built = built.into_iter().flatten();
-        let (mut pipelines, mut maps) = (HashMap::new(), Vec::new());
-        let (mut error, mut map_error) = (None, None);
-        for (key, built, e) in built {
-            let map = key.0.is_map();
-            // A failed map pipeline turns all effect maps off below. A failed non-map pipeline
-            // keeps its (invalid) handle: draws look pipelines up by key, so dropping it would
-            // turn a validation error into a missing-key panic on the first draw.
-            if let Some(e) = e {
-                if map {
-                    map_error.get_or_insert(e);
-                    continue;
-                }
-                error.get_or_insert(e);
-            }
-            let Some(p) = built else { continue };
-            if map {
-                maps.push((key, p));
-            } else {
-                pipelines.insert(key, p);
-            }
-        }
-        if gl {
-            log::info!("GPU compositor: layer effects use the CPU compositor on the GL backend");
-        } else if let Some(e) = &map_error {
-            log::info!("GPU compositor: no effect-map pipelines ({e}); layer effects use the CPU");
-        } else {
-            pipelines.extend(maps);
-        }
+        let pipelines = std::sync::Arc::new(Pipelines::new(device, acc_format, &bgl0, &bgl1, gl));
         let dummy = Tex::new(device, "pc_compose_dummy", 1, 1, wgpu::TextureFormat::Rgba8Unorm, wgpu::TextureUsages::TEXTURE_BINDING).view;
         let kit = Kit { pipelines, bgl0, bgl1, dummy };
-        // Why the effect maps are missing: on GL they are never built (their float targets
-        // composite garbage there), elsewhere they failed to build because the adapter has no
-        // float render targets. The reason reaches the user as the CPU fallback's message.
-        let effect_maps = if gl {
-            EffectMaps::GlBackend
-        } else if map_error.is_some() {
-            EffectMaps::NoFloatTargets
-        } else {
-            EffectMaps::Built
-        };
-        let comp = Self::from_kit(kit, device.limits().max_texture_dimension_2d, acc_format, effect_maps);
-        (comp, error)
+        let effect_maps = if gl { EffectMaps::GlBackend } else { EffectMaps::Built };
+        Self::from_kit(kit, device.limits().max_texture_dimension_2d, acc_format, effect_maps)
+    }
+
+    /// Test hook: how many of the compositor's pipelines have been built so far (shared with its
+    /// siblings), and how many it has.
+    #[doc(hidden)]
+    pub fn pipeline_counts(&self) -> (usize, usize) {
+        self.kit.pipelines.counts()
     }
 
     /// Create an independent compositor on the same device, reusing compiled pipelines.
@@ -511,10 +405,14 @@ impl Compositor {
     /// Effect maps must fit in textures (per page cell when the region exceeds the limit), and
     /// patterns in one texture.
     pub(crate) fn check_fx(&self, doc: &Document, p: &Plan<'_>) -> Result<(), Unsupported> {
-        if !p.fx.is_empty()
-            && let Some(reason) = self.effect_maps.unavailable_reason()
-        {
-            return Err(Unsupported(reason.into()));
+        if !p.fx.is_empty() {
+            if let Some(reason) = self.effect_maps.unavailable_reason() {
+                return Err(Unsupported(reason.into()));
+            }
+            // The pipelines may have failed to build after the compositor was created.
+            if !self.kit.pipelines.effect_maps() {
+                return Err(Unsupported(NO_EFFECT_MAPS.into()));
+            }
         }
         for f in &p.fx {
             if self.fx_paged(f.region) {
