@@ -734,17 +734,8 @@ fn light_to_apply(style: &LayerStyle, initial: Option<f64>) -> Option<f64> {
     light_angle
 }
 
-/// Runs the style's commands through `run`: blending options, then the whole effect list in one
-/// `layer.layerStyle.replace` (instances keep their order; their snapshots carry what the dialog
-/// doesn't model). `light` is the document's global light angle when the dialog opened.
-// The typed draft cannot hold a malformed parameter group, so there is nothing to validate.
-pub(crate) fn apply(
-    style: &LayerStyle,
-    layer: LayerId,
-    light: Option<f64>,
-    mut run: impl FnMut(&str, Value) -> Result<Value, String>,
-) -> Result<Value, String> {
-    run("layer.layerStyle.blendingOptions", blending_json(&style.blending, layer))?;
+/// Applies blending, the ordered effect snapshots, and any shared light change in one edit.
+pub(crate) fn apply(style: &LayerStyle, layer: LayerId, light: Option<f64>, run: impl FnOnce(&str, Value) -> Result<Value, String>) -> Result<Value, String> {
     let entries: Vec<Value> = style
         .effects
         .iter()
@@ -754,12 +745,11 @@ pub(crate) fn apply(
             effect_entry(fx_of(&e.params).as_ref(), e.kind.key(), params, light)
         })
         .collect();
-    run("layer.layerStyle.replace", json!({"layer": layer.0, "effects": entries}))?;
-    // An effect lit by the global light follows the document's light angle, so the Angle slider
-    // drives that shared angle rather than the per-effect angle the compositor ignores.
+    let mut params = json!({"layer": layer.0, "blendingOptions": blending_json(&style.blending, layer), "effects": entries});
     if let Some(angle) = light_to_apply(style, light) {
-        run("layer.layerStyle.globalLight", json!({"angle": angle}))?;
+        params["globalLight"] = json!({"angle": angle});
     }
+    run("layer.layerStyle.replace", params)?;
     Ok(Value::Null)
 }
 
@@ -1023,5 +1013,7 @@ pub(crate) fn gradient_layer_bounds(session: &Session, layer: LayerId) -> Option
     (w > 0.0 && h > 0.0).then_some([w, h])
 }
 
+#[cfg(test)]
+mod ok_history_tests;
 #[cfg(test)]
 mod tests;
