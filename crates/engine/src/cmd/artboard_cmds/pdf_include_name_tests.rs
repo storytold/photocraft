@@ -158,6 +158,23 @@ fn a_name_taller_than_the_border_stays_in_it() {
     }
 }
 
+/// With a transparent Canvas Extension nothing covers the name, so only its cut to the top border
+/// keeps it out of the other borders: the side and bottom borders don't change with its colour.
+#[test]
+fn a_name_stays_in_the_top_border_over_a_transparent_extension() {
+    let mut s = measured();
+    let with = |s: &mut Session, text: &str| {
+        page_images(&export(s, json!({"includeName": true, "fontSize": "200", "extension": "#00000000", "textColor": text}))).remove(0)
+    };
+    let (red, green) = (with(&mut s, "#ff0000"), with(&mut s, "#00ff00"));
+    // Rows from 16 px below the top border, past JPEG's colour blocks along it.
+    let (w, h, b) = (236, 186, 18);
+    let sides = (b + 16..h).flat_map(|y| (0..b).chain(w - b..w).map(move |x| (x, y)));
+    for (x, y) in sides.chain((h - b..h).flat_map(|y| (0..w).map(move |x| (x, y)))) {
+        assert!(close(red.get(x, y), green.get(x, y), 0.1), "at {x},{y}: {:?} vs {:?}", red.get(x, y), green.get(x, y));
+    }
+}
+
 #[test]
 fn without_the_option_the_pdf_is_todays() {
     let mut s = measured();
@@ -179,6 +196,8 @@ fn bad_name_options_fail_and_write_nothing() {
         json!({"fontSize": true}),
         json!({"extension": "purple"}),
         json!({"extension": 3}),
+        json!({"extension": [0.5]}),
+        json!({"extension": [0.1, "x", 0.2]}),
     ] {
         let mut p = bad.clone();
         p["includeName"] = json!(true);

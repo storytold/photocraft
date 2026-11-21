@@ -931,7 +931,7 @@ impl PdfName {
                 "other" => color_param(cmd, p, "extensionColor", white)?,
                 _ => parse_hex(v).ok_or_else(unknown)?,
             },
-            Some(Value::Array(_)) => color_param(cmd, p, "extension", white)?,
+            Some(Value::Array(a)) if (3..=4).contains(&a.len()) && a.iter().all(Value::is_number) => color_param(cmd, p, "extension", white)?,
             Some(_) => return Err(unknown()),
         };
         let text = color_param(cmd, p, "textColor", [0.0, 0.0, 0.0, 1.0])?.map(|c| c.clamp(0.0, 1.0));
@@ -960,9 +960,7 @@ impl PdfName {
         let mut paper = Surface::new(fmt);
         paper.fill_rect(out.bounds(), &ext);
         out.layers.push(Layer::new("Canvas Extension", LayerContent::Raster(paper)));
-        out.layers.extend(self.name_layer(&page.name, bi, dpi, fmt));
-        // Everything but the top border goes over the name, so a name taller than that border
-        // never reaches the board or the other borders.
+        out.layers.extend(self.name_layer(&page.name, Rect::new(0, 0, nwi, bi), dpi, fmt));
         let mut over = Surface::new(fmt);
         over.fill_rect(Rect::new(0, bi, nwi, nhi), &ext);
         over.write_region(page.bounds().translate(bi, bi), &px);
@@ -970,8 +968,11 @@ impl PdfName {
         Ok(out)
     }
 
-    /// The name drawn by the type engine, as pixels, or `None` when it draws no ink.
-    fn name_layer(&self, name: &str, border: i32, dpi: f32, fmt: PixelFormat) -> Option<Layer> {
+    /// The name drawn by the type engine, as pixels cut to the top border `top` (a name taller or
+    /// wider than it never reaches the board or the other borders, whatever the extension's alpha),
+    /// or `None` when it draws no ink.
+    fn name_layer(&self, name: &str, top: Rect, dpi: f32, fmt: PixelFormat) -> Option<Layer> {
+        let border = top.height();
         let mut t = photocraft_doc::TextLayer { text: name.to_owned(), ..Default::default() };
         t.runs = vec![photocraft_doc::text::TextRun { len: t.text.len(), style: self.style.clone() }];
         t.sync_summary();
@@ -983,7 +984,10 @@ impl PdfName {
         }
         t.transform = Affine::translate(dx, dy);
         crate::type_cmds::refresh_at(dpi, fmt, &mut t);
-        t.cache.map(|s| Layer::new(name, LayerContent::Raster(s)))
+        let drawn = t.cache?;
+        let mut cut = Surface::new(fmt);
+        cut.write_region(top, &drawn.read_region(top));
+        Some(Layer::new(name, LayerContent::Raster(cut)))
     }
 }
 
