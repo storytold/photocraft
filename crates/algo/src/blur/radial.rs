@@ -119,7 +119,7 @@ impl Plan {
         if !self.valid || ctl.cancelled() || src.ch == 0 {
             return None;
         }
-        let source = Source::new(src)?;
+        let source = Source::new(src, ctx.bounds)?;
         let len = sample_len(out, src.ch)?;
         let mut result = Vec::new();
         result.try_reserve_exact(len).ok()?;
@@ -224,18 +224,27 @@ fn sample_len(rect: Rect, channels: usize) -> Option<usize> {
 struct Source<'a> {
     image: &'a Image,
     width: usize,
+    /// The filter's frame: reads past it repeat its edge pixels (#10542).
+    frame: Rect,
 }
 
 impl<'a> Source<'a> {
-    fn new(image: &'a Image) -> Option<Self> {
+    fn new(image: &'a Image, frame: Rect) -> Option<Self> {
         if image.ch == 0 || sample_len(image.rect, image.ch)? != image.data.len() {
             return None;
         }
-        Some(Self { image, width: image.rect.width() as usize })
+        Some(Self { image, width: image.rect.width() as usize, frame })
     }
 
     #[inline]
     fn pixel(&self, x: i64, y: i64) -> Option<&'a [f32]> {
+        // As `Image::get_edge` with `Edge::Repeat`: a tap past the frame reads its nearest edge
+        // pixel, so a Spin arc leaving the canvas doesn't pull in transparency.
+        let f = self.frame;
+        if f.is_empty() {
+            return None;
+        }
+        let (x, y) = (x.clamp(i64::from(f.x0), i64::from(f.x1) - 1), y.clamp(i64::from(f.y0), i64::from(f.y1) - 1));
         let b = self.image.rect;
         if x < i64::from(b.x0) || x >= i64::from(b.x1) || y < i64::from(b.y0) || y >= i64::from(b.y1) {
             return None;

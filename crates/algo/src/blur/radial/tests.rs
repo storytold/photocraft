@@ -168,7 +168,7 @@ fn direct_preserves_upstream_quality_ceilings_and_discrete_samples() {
             assert_eq!(plan.max_intervals, limit);
             assert_eq!(plan.table(10000.0, 0.0).expect("capped table").len(), limit + 1);
             let actual = plan.filter(&source, out, &ctx, &Interrupt::NONE).expect("direct output");
-            let expected = super::super::average_samples(&source, out, &ctx, |x, y, samples| {
+            let expected = super::super::average_samples(&source, out, &ctx, (crate::image::Edge::Repeat, ctx.bounds), |x, y, samples| {
                 let (dx, dy) = (x - 500.0, y - 500.0);
                 let extent = match method {
                     RadialMethod::Spin => 100.0f32.to_radians(),
