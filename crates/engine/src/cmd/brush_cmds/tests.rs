@@ -1575,6 +1575,7 @@ fn strokes_that_keep_their_coverage_do_not_warn() {
 #[test]
 fn a_light_first_point_is_judged_by_its_own_dab_diameter() {
     let mut s = session(400, 400);
+    s.execute("tools.setBrush", json!({"brush": {"pressureSize": true}})).unwrap();
     let r = s.execute("paint.stroke", json!({"points": [[100, 200, 0.2], [150, 200, 0.2]], "size": 150, "spacing": 5, "color": "#ff0000"})).unwrap();
     assert_eq!(r["pitch"].as_f64(), Some(150.0), "{r}");
     let warnings = stroke_warnings(&r);
