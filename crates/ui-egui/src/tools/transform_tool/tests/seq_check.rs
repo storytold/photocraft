@@ -383,7 +383,11 @@ fn run_caught(steps: &[Step], end: u8) -> Result<(), String> {
 
 /// The fewest steps (removing one at a time while it still fails the same way's first line).
 fn shrink(mut steps: Vec<Step>, end: u8, err: &str) -> (Vec<Step>, String) {
-    let key = |e: &str| e.split(':').skip(1).collect::<Vec<_>>().join(":").lines().next().unwrap_or("").to_string();
+    // The kind of failure: its first line after the step, without numbers (they change as steps go).
+    let key = |e: &str| {
+        let line = e.split(':').skip(1).collect::<Vec<_>>().join(":").lines().next().unwrap_or("").to_string();
+        line.chars().filter(|c| !c.is_ascii_digit() && *c != '.' && *c != '-').collect::<String>()
+    };
     let want = key(err);
     let mut last = err.to_string();
     loop {
@@ -419,13 +423,15 @@ fn seq_check() {
     let env = |k: &str, d: u64| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
     let (seeds, len, seed0) = (env("SEQ_SEEDS", 300), env("SEQ_LEN", 14) as usize, env("SEQ_SEED0", 1));
     let mut failures = std::collections::BTreeMap::<String, (u64, Vec<Step>, u8, String)>::new();
-    for seed in seed0..seed0 + seeds {
+    let only: Vec<u64> = std::env::var("SEQ_ONLY").ok().map(|v| v.split(',').filter_map(|x| x.trim().parse().ok()).collect()).unwrap_or_default();
+    let all: Vec<u64> = if only.is_empty() { (seed0..seed0 + seeds).collect() } else { only };
+    for seed in all {
         let mut r = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
         let steps: Vec<Step> = (0..len).map(|_| random_step(&mut r)).collect();
         let end = (seed % 8) as u8;
         if let Err(e) = run_caught(&steps, end) {
             let (steps, e) = shrink(steps, end, &e);
-            let kind = e.split(':').skip(1).collect::<Vec<_>>().join(":").lines().next().unwrap_or("").trim().to_string();
+            let kind = e.split(':').skip(1).collect::<Vec<_>>().join(":").lines().next().unwrap_or("").trim().chars().filter(|c| !c.is_ascii_digit() && *c != '.' && *c != '-').collect::<String>();
             failures.entry(kind).or_insert((seed, steps, end, e));
         }
     }
