@@ -832,32 +832,33 @@ fn assert_opaque_reference(actual: &Surface, expected: &Surface, rect: Rect) {
 fn clone_no_alpha_sources_clip_preview_live_and_commit_at_all_canvas_corners() {
     for depth in [8, 16, 32] {
         for mode in ["rgb", "gray", "cmyk", "lab"] {
-            for target_alpha in [false, true] {
-                for external in [false, true] {
-                    for wrap in [false, true] {
-                        for at in [[0, 0], [63, 0], [0, 63], [63, 63]] {
-                            let color = if at[0] == at[1] { [0.0, 0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0, 1.0] };
+            for external in [false, true] {
+                for wrap in [false, true] {
+                    for at in [[0, 0], [63, 0], [0, 63], [63, 63]] {
+                        // Both destination formats compare with the same alpha-bearing scene.
+                        let color = if at[0] == at[1] { [0.0, 0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0, 1.0] };
+                        let map = Mapping { source: (at[0] as f64, at[1] as f64), anchor: (32.0, 32.0), m: [1.0, 0.0, 0.0, 1.0], document: None };
+                        let roi = Rect::new(24, 24, 40, 40);
+                        let (mut reference, expected) = no_alpha_scene(depth, mode, true, true, external, at, color);
+                        let wanted = clone_preview_periodic(&reference, roi, &map, "current", wrap).unwrap();
+                        let p = json!({"points": [[32,32]], "size": 12, "hardness": 100, "opacity": 50, "flow": 40, "wrap": wrap});
+                        reference.execute("paint.cloneStamp", p.clone()).unwrap();
+                        let expected_surf = reference.active().unwrap().doc.layer(expected).unwrap().surface().unwrap();
+                        for target_alpha in [false, true] {
                             let (mut actual, target) = no_alpha_scene(depth, mode, false, target_alpha, external, at, color);
-                            let (mut reference, expected) = no_alpha_scene(depth, mode, true, true, external, at, color);
                             let initial = actual.active().unwrap().doc.layer(target).unwrap().surface().unwrap().clone();
                             let fmt = initial.format();
-                            let map = Mapping { source: (at[0] as f64, at[1] as f64), anchor: (32.0, 32.0), m: [1.0, 0.0, 0.0, 1.0], document: None };
-                            let roi = Rect::new(24, 24, 40, 40);
                             let shown = clone_preview_periodic(&actual, roi, &map, "current", wrap).unwrap();
-                            let wanted = clone_preview_periodic(&reference, roi, &map, "current", wrap).unwrap();
                             for (i, (a, e)) in shown.px.iter().zip(&wanted.px).enumerate() {
                                 assert_eq!(a, e, "preview {i}: {depth}/{mode}/{target_alpha}/{external}/{wrap}/{at:?}");
                             }
-                            let p = json!({"points": [[32,32]], "size": 12, "hardness": 100, "opacity": 50, "flow": 40, "wrap": wrap});
-                            reference.execute("paint.cloneStamp", p.clone()).unwrap();
-                            let expected_surf = reference.active().unwrap().doc.layer(expected).unwrap().surface().unwrap();
                             let live = LiveRetouch::begin(&actual, "paint.cloneStamp", &p).unwrap();
                             assert_opaque_reference(live.doc.layer(target).unwrap().surface().unwrap(), expected_surf, roi);
                             actual.offer_live_retouch(live).unwrap();
                             assert_eq!(actual.execute("paint.cloneStamp", p.clone()).unwrap()["fromLive"], true);
                             assert_opaque_reference(actual.active().unwrap().doc.layer(target).unwrap().surface().unwrap(), expected_surf, roi);
                             assert!(actual.undo());
-                            actual.execute("paint.cloneStamp", p).unwrap();
+                            actual.execute("paint.cloneStamp", p.clone()).unwrap();
                             let surf = actual.active().unwrap().doc.layer(target).unwrap().surface().unwrap();
                             assert_eq!(surf.format(), fmt, "cloning must retain the destination's native format");
                             assert_opaque_reference(surf, expected_surf, roi);
