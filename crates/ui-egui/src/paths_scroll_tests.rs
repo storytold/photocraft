@@ -3,22 +3,36 @@
 use egui::vec2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
+use photocraft_doc::{DocId, Document};
+use photocraft_engine::Session;
 use serde_json::json;
 
 use crate::PhotocraftApp;
 
-fn harness(paths: usize, size: egui::Vec2, ppp: f32) -> Harness<'static, Box<PhotocraftApp>> {
+fn paths_document() -> Document {
+    let mut session = Session::new();
+    session.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
+    for i in 0..30 {
+        let x = (i % 8) * 40;
+        session.execute("select.rect", json!({"x": x, "y": 20, "width": 30, "height": 30})).unwrap();
+        session.execute("select.toWorkPath", json!({"tolerance": 2})).unwrap();
+        session.execute("path.rename", json!({"name": "work", "to": format!("Path {}", i + 1)})).unwrap();
+    }
+    session.active().unwrap().doc.as_ref().clone()
+}
+
+fn harness(doc: &Document, size: egui::Vec2, ppp: f32) -> Harness<'static, Box<PhotocraftApp>> {
+    let mut doc = doc.clone();
+    doc.id = DocId::fresh();
+    let mut session = Session::new();
+    session.add_document(doc, None);
     let mut h = Harness::builder().with_size(size).with_pixels_per_point(ppp).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
-        app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
-        for i in 0..paths {
-            let x = (i % 8) as i32 * 40;
-            app.run("select.rect", json!({"x": x, "y": 20, "width": 30, "height": 30})).unwrap();
-            app.run("select.toWorkPath", json!({"tolerance": 2})).unwrap();
-            app.run("path.rename", json!({"name": "work", "to": format!("Path {}", i + 1)})).unwrap();
-        }
-
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), session, crate::Services::default());
+        app.sync_views();
+        // Keep the canvas state that running Select Rectangle and Make Work Path in the app sets.
+        app.ui.view.extras = true;
+        app.ui.selected_path = Some("work".into());
         crate::panel_docking::show_panel(&mut app, "paths", Some(true)).unwrap();
         app
     });
@@ -37,9 +51,10 @@ fn row(h: &Harness<'_, Box<PhotocraftApp>>, name: &str) -> Option<egui::Rect> {
 /// physical pixel, took part of the wheel and moved the footer about a pixel down and back up.
 #[test]
 fn scrolling_the_paths_list_does_not_move_the_footer() {
+    let doc = paths_document();
     // Heights that moved it at 125 % (two bands of window heights), and ones that never did.
     for (ppp, height) in [(1.25, 520.0), (1.25, 900.0), (1.25, 960.0), (1.0, 900.0), (1.5, 900.0)] {
-        let mut h = harness(30, vec2(1440.0, height), ppp);
+        let mut h = harness(&doc, vec2(1440.0, height), ppp);
         let footer = |h: &Harness<'_, Box<PhotocraftApp>>| h.query_by_label("Delete current path").map(|r| r.rect().min.y);
         let rest = footer(&h).unwrap_or_else(|| panic!("the footer shows at {ppp}x, {height} high"));
         let first_row = row(&h, "Path 1").unwrap();
