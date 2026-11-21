@@ -62,17 +62,14 @@ fn grey(v: i64) -> [i64; 3] {
 #[test]
 fn at_100_percent_the_test_document_reads_the_measured_table() {
     // Sample Size: stripes x 351, stripes x 352 (y 150), grey x 139 (y 400), red left edge x 100 (y 150).
-    // The reference application's table, except grey x 139 up to 51 by 51: that box is exactly
-    // half 100 and half 105, a mean of 102.5, which the reference reads 102 and PhotoCraft's shared
-    // `average` rounds to 103 (half up, as every Sample Size average does today). The box is right
-    // (101 by 101, whose mean is no tie, reads 122 in both).
-    const TIE: i64 = 103;
+    // The grey boundary averages to 102.5 up to 51 by 51, while the 3 by 3 stripe sample
+    // averages to 127.5. The measured results round both to the even level (#12562).
     let measured: [(u32, [[i64; 3]; 4]); 6] = [
-        (3, [grey(128), grey(128), grey(TIE), [229, 86, 86]]),
-        (5, [grey(128), grey(85), grey(TIE), [232, 105, 105]]),
-        (11, [grey(170), grey(149), grey(TIE), [235, 124, 124]]),
-        (31, [grey(175), grey(175), grey(TIE), [236, 135, 135]]),
-        (51, [grey(186), grey(181), grey(TIE), [237, 138, 138]]),
+        (3, [grey(128), grey(128), grey(102), [229, 86, 86]]),
+        (5, [grey(128), grey(85), grey(102), [232, 105, 105]]),
+        (11, [grey(170), grey(149), grey(102), [235, 124, 124]]),
+        (31, [grey(175), grey(175), grey(102), [236, 135, 135]]),
+        (51, [grey(186), grey(181), grey(102), [237, 138, 138]]),
         (101, [grey(189), grey(186), grey(122), [237, 140, 140]]),
     ];
     let mut s = test_document();
