@@ -22,6 +22,7 @@ use craft::ui::dialog::{DialogId, StackDialog as _};
 use craft::ui::patterns::form_dialogs::HostedParamDialog;
 
 use crate::PhotocraftApp;
+use crate::state::Tool;
 
 /// A pick a hosted dialog (or the Properties panel) arms on the canvas.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -34,6 +35,9 @@ pub(crate) enum DialogPick {
     Color,
     /// A parameter dialog's eyedropper toggle.
     ParamDropper,
+    /// Edit › Fill open: a click on the image picks the Foreground colour with the Eyedropper, which the toolbar and the
+    /// options bar show as current meanwhile ([`shown_tool`], #14654).
+    FillForeground,
     /// Color Range's sampling.
     ColorRange,
     /// A drag on the image moves the selected shadow's angle and distance.
@@ -83,12 +87,23 @@ pub(crate) fn armed(app: &PhotocraftApp) -> Option<DialogPick> {
             return Some(DialogPick::ParamDropper);
         }
     }
+    // Fill is the top dialog: the Eyedropper it made current picks the Foreground colour.
+    if dialogs.get_by_id::<HostedParamDialog>(top).and_then(|dialog| dialog.key()).is_some_and(super::fill_ui::owns) {
+        return Some(DialogPick::FillForeground);
+    }
     // PLAN: `pattern_fill_ui::drag_target(app)` takes the hosted dialog (dialogs-w60), not the base's field map.
     // The phase drag belongs to the Pattern Fill dialog while it is the top: a dialog opened above it takes the canvas.
     if dialogs.get_by_id::<PatternFillDialog>(top).is_some() && super::pattern_fill_ui::drag_target(app).is_some() {
         return Some(DialogPick::PatternPhase);
     }
     super::filter_preview_ui::locator(app).is_some().then_some(DialogPick::Locator)
+}
+
+/// The tool the toolbar and the options bar show as current: the Eyedropper while Fill is open, since a click on the
+/// image then picks the Foreground colour with it (#14654); otherwise the selected tool. The selected tool itself stays
+/// as it is, so work in progress with it (a path being drawn with the Pen, a lasso outline) is not ended by Fill.
+pub(crate) fn shown_tool(app: &PhotocraftApp) -> Tool {
+    if armed(app) == Some(DialogPick::FillForeground) { Tool::Eyedropper } else { app.ui.tool }
 }
 
 /// Records that the dialog `dialog` asked for a screen sample under the request `key`: the next presses on the image
@@ -175,6 +190,22 @@ pub(crate) fn pick_dropper(app: &mut PhotocraftApp, at: [f64; 2], mods: Mods) ->
     true
 }
 
+/// A press at `at` with Fill open: the Foreground colour becomes what the Eyedropper picks there, with its Sample Size
+/// and Sample. An Alt press is not taken (the reference application's Alt-click there was not measured), and a point
+/// off the image or over transparency changes nothing but is still the dialog's press.
+pub(crate) fn pick_fill_foreground(app: &mut PhotocraftApp, at: [f64; 2], mods: Mods) -> bool {
+    if mods.alt {
+        return false;
+    }
+    let options = app.ui.tool_options.eyedropper;
+    if let Some([r, g, b]) = crate::canvas::sampling::pick(app, at, options.size, options.source)
+        && let Err(e) = app.run("tools.setColors", serde_json::json!({ "foreground": [r, g, b, 1.0] }))
+    {
+        crate::notices::error(app, e);
+    }
+    true
+}
+
 /// A press at `at` with Color Range open: samples the image under the dialog's sample tool and `mods`. `false` when
 /// the select takes no samples or the point is off the document.
 pub(crate) fn pick_color_range(app: &mut PhotocraftApp, at: [f64; 2], mods: Mods) -> bool {
@@ -233,7 +264,7 @@ fn held(app: &PhotocraftApp) -> Mods {
 pub(crate) fn cursor(app: &PhotocraftApp, pick: DialogPick) -> Cursor {
     let pipette = |badge| Cursor::Painted(PaintedCursor::tool(IconId::new("eyedropper"), PIPETTE_HOTSPOT, badge));
     match pick {
-        DialogPick::TonePicker(_) | DialogPick::Color | DialogPick::ParamDropper => pipette(None),
+        DialogPick::TonePicker(_) | DialogPick::Color | DialogPick::ParamDropper | DialogPick::FillForeground => pipette(None),
         DialogPick::ColorRange => {
             let badge = app.framework.dialogs.get::<HostedColorRange>().and_then(|dialog| dialog.tool().with_mods(held(app)).badge());
             pipette(badge)

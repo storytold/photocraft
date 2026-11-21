@@ -252,7 +252,7 @@ pub(crate) fn measure(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32
 fn measure_now(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32 {
     let slots = app.toolbar_slots.get(&app.session.prefs);
     let remembered = last_used(&slots, &app.ui.group_tools);
-    let current = app.ui.tool;
+    let current = crate::dialogs::canvas_input::shown_tool(app);
     let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
     rail(&slots, &current, &remembered, opens, editing).measure_rail(ui, width, |ui, at| footer(app, ui, at)).y
 }
@@ -267,7 +267,8 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let slots = app.toolbar_slots.get(&app.session.prefs);
     let remembered = last_used(&slots, &app.ui.group_tools);
-    let current = app.ui.tool;
+    // While Fill is open the Eyedropper shows as current (`canvas_input::shown_tool`); the selected tool stays.
+    let current = crate::dialogs::canvas_input::shown_tool(app);
     let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
     let out = rail(&slots, &current, &remembered, opens, editing).show_rail(ui, |ui, at| footer(app, ui, at));
 

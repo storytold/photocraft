@@ -153,3 +153,6 @@ pub(crate) fn run(app: &mut PhotocraftApp, ctx: &egui::Context, result: ParamRes
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod eyedropper_tests;
