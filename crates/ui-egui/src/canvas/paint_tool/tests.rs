@@ -542,3 +542,29 @@ fn painting_a_group_is_refused_at_the_press_with_a_message() {
     tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 10.0 }, M);
     assert_ne!(mask_at(&app, 15), before, "the stroke painted the group's mask");
 }
+
+/// Soft Edge is its own Paint Bucket option, off by default: Anti-alias alone does not send it, and
+/// turning it on reaches the command (and survives in the saved tool options).
+#[test]
+fn paint_bucket_soft_edge_is_a_separate_option_off_by_default() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 40, "height": 40, "background": "white"})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.ui.tool = Tool::PaintBucket;
+    assert!(app.ui.tool_options.anti_alias && !app.ui.tool_options.bucket_soft_edge);
+    let click = |app: &mut PhotocraftApp| {
+        tool_event(app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, M);
+        tool_event(app, ToolEvent::Up { x: 20.0, y: 20.0 }, M);
+    };
+    click(&mut app);
+    let p = &app.session.journal.last().unwrap().1;
+    assert_eq!((p["antiAlias"].as_bool(), p["softEdge"].as_bool()), (Some(true), Some(false)));
+    app.ui.tool_options.bucket_soft_edge = true;
+    click(&mut app);
+    assert_eq!(app.session.journal.last().unwrap().1["softEdge"], true);
+    // Options saved before the option existed load with it off.
+    let mut saved = serde_json::to_value(&app.ui.tool_options).unwrap();
+    saved.as_object_mut().unwrap().remove("bucket_soft_edge");
+    let old: crate::state::ToolOptions = serde_json::from_value(saved).unwrap();
+    assert!(!old.bucket_soft_edge);
+}

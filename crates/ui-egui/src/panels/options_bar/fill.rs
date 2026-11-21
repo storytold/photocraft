@@ -1,6 +1,7 @@
 //! The Paint Bucket's members of the options bar, and the Mode list of the Paint Bucket and the stamp tools.
 
-use craft::ui::contract::{Bind, Entry, Show as _};
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
 use craft::ui::patterns::blend_keys::{BlendKeyEntry, blend_entries};
 use craft::ui::pickers::Select;
 use photocraft_doc::BlendMode;
@@ -60,7 +61,7 @@ pub(crate) fn mode_select<'a>(mode: Bind<'a, PaintMode>, entries: &'a [Entry<Pai
     Select::new(tl!("Mode").to_owned(), mode, entries)
 }
 
-/// The Paint Bucket's members: Fill source, Mode, Opacity, Tolerance, Anti-alias, Contiguous and All Layers.
+/// The Paint Bucket's members: Fill source, Mode, Opacity, Tolerance, Anti-alias, Soft Edge, Contiguous and All Layers.
 pub(super) fn members(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if app.ui.tool != Tool::PaintBucket {
         return;
@@ -86,6 +87,11 @@ pub(super) fn members(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         o.tolerance = *tolerance;
     }
     check(ui, tl!("Anti-alias"), &mut o.anti_alias);
+    // A PhotoCraft addition, off by default: Anti-alias keeps Photoshop's meaning.
+    Checkbox::new(Bind::bound(&mut o.bucket_soft_edge))
+        .label(tl!("Soft Edge").to_owned())
+        .tooltip(tl!("Also fill the soft pixels along a line, so no light halo is left next to it").to_owned())
+        .show(ui);
     check(ui, tl!("Contiguous"), &mut o.contiguous);
     check(ui, tl!("All Layers"), &mut o.sample_all.paint_bucket);
 }

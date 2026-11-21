@@ -57,7 +57,7 @@ fn surface(img: &[[u8; 4]], area: Rect) -> Surface {
 fn fill(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tol: f32, contiguous: bool) -> Vec<[u8; 4]> {
     let mut s = surface(img, area);
     let green = |_, _| [0.0, 1.0, 0.0, 1.0];
-    assert!(bucket_fill_inks(&mut s, area, seed, tol, contiguous, false, 1.0, None, false, green, None, FillMode::Blend(BlendMode::Normal)));
+    assert!(bucket_fill_inks(&mut s, area, seed, tol, contiguous, false, false, 1.0, None, false, green, None, FillMode::Blend(BlendMode::Normal)));
     rgba8_image(&s, area)
 }
 
