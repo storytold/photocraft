@@ -11,8 +11,8 @@ use std::sync::Arc;
 use craft_psd::PsdFile;
 use photocraft_color::{Color, ColorMode, SampleType};
 use photocraft_doc::{
-    Document, Fill, Knot, Layer, LayerContent, LineCap, LineJoin, LiveShape, NamedPath, Path, PathOp, ShapeLayer, ShapeStroke, Size, StrokeAlign, Subpath,
-    VectorMask,
+    Document, Fill, GradientStyle, Knot, Layer, LayerContent, LineCap, LineJoin, LiveShape, NamedPath, Path, PathOp, Pattern, ShapeLayer, ShapeStroke, Size,
+    StrokeAlign, Subpath, VectorMask,
 };
 use photocraft_geom::{Point, Rect};
 use photocraft_io::*;
@@ -214,6 +214,138 @@ fn shape_layer_typed_roundtrip() {
             l.psd_blocks.iter().filter(|(k, _)| matches!(k, b"vmsk" | b"vsms" | b"vstk" | b"vogk" | b"vscg" | b"SoCo")).cloned().collect::<Vec<_>>()
         };
         assert_eq!(keys(&c.layers[i]), keys(&b.layers[i]), "layer {i}");
+    }
+}
+
+/// The pixels the unstroked shape `layer` renders over the 256-px canvas. `render_shape` leaves a
+/// pattern fill transparent (it has no pattern table), so a pattern is laid out from `d`'s
+/// patterns by the compositor's fill-layer renderer and clipped to the shape's coverage.
+fn shape_pixels(d: &Document, layer: &Layer) -> photocraft_raster::Surface {
+    let (fmt, canvas) = (photocraft_color::PixelFormat::RGBA8, Rect::new(0, 0, 256, 256));
+    let LayerContent::Shape(sh) = &layer.content else { panic!("not a shape") };
+    assert!(sh.stroke.is_none(), "shape_pixels renders the fill only");
+    let Some(f @ Fill::Pattern { .. }) = &sh.fill else { return photocraft_vector::render_shape(sh, fmt, canvas) };
+    let coverage = photocraft_vector::render_shape(&ShapeLayer { fill: Some(Fill::Solid(Color::WHITE)), ..sh.clone() }, fmt, canvas);
+    let paint = photocraft_compose::render_fill_content(layer, f, canvas, &d.patterns);
+    assert_eq!(paint.rect, canvas);
+    let mut data = Vec::with_capacity(paint.px.len() * 4);
+    for (i, p) in paint.px.iter().enumerate() {
+        let (x, y) = ((i % 256) as i32, (i / 256) as i32);
+        data.extend_from_slice(&[p[0], p[1], p[2], p[3] * coverage.pixel(x, y)[3]]);
+    }
+    let mut out = photocraft_raster::Surface::new(fmt);
+    out.write_region(canvas, &data);
+    out
+}
+
+/// Saves `d` with a "Shape" layer whose fill `fill` lives in a kept `vscg` block, as PSD and
+/// as PSB, first unedited and then with the fill changed to `edited` (a fill of the same type).
+/// Each save must keep the fill in `vscg` alone, with no `SoCo`/`GdFl`/`PtFl` next to it, and
+/// reopen as a shape with the fill it was saved with (#1281).
+fn assert_vscg_fill_is_not_doubled(mut d: Document, fill: Fill, edited: Fill) {
+    let fill_keys = |bytes: &[u8]| -> Vec<[u8; 4]> {
+        let f = craft_psd::PsdFile::from_bytes(bytes).unwrap();
+        let l = f.layers().iter().find(|l| l.name() == "Shape").expect("shape record");
+        l.blocks.iter().map(|b| b.key).filter(|k| matches!(k, b"vscg" | b"SoCo" | b"GdFl" | b"PtFl")).collect()
+    };
+    let sh = ShapeLayer { path: path(), fill: Some(fill.clone()), ..Default::default() };
+    let mut layer = shape_layer(sh);
+    layer.psd_blocks.push((*b"vscg", std::sync::Arc::new(photocraft_io::vector_map::vscg_bytes(&fill))));
+    let at = d.layers.len();
+    d.layers.push(layer);
+    for (step, want) in [("unedited", fill), ("edited", edited)] {
+        // The edited step changes the model only: the kept `vscg` still holds the old fill and
+        // must be rewritten.
+        let LayerContent::Shape(s) = &mut d.layers[at].content else { panic!("not a shape") };
+        s.fill = Some(want.clone());
+        // Re-render the layer pixels too, as an edit does, so the save carries the new fill's
+        // pixels. Sample a point inside the path, outside its subtracted triangle: every fixture
+        // fill is opaque there, so a blank sample would make the pixel check below vacuous.
+        let fresh = shape_pixels(&d, &d.layers[at]);
+        let expected = fresh.pixel(60, 80);
+        assert!(expected.get(3).is_some_and(|a| *a > 0.0), "{step}: the rendered fill is blank: {expected:?}");
+        let LayerContent::Shape(s) = &mut d.layers[at].content else { panic!("not a shape") };
+        s.cache = Some(fresh);
+        for psb in [false, true] {
+            let name = if psb { "x.psb" } else { "x.psd" };
+            let out = export(&d, name, &ExportOptions { force_psb: psb, ..Default::default() }).unwrap();
+            assert_eq!(out.bytes.get(4..6), Some(&[0, u8::from(psb) + 1][..]), "{name}: version");
+            assert_eq!(fill_keys(&out.bytes), vec![*b"vscg"], "{name}: {step}");
+            let back = import(name, &out.bytes).unwrap().document;
+            let LayerContent::Shape(s) = &back.layers[at].content else { panic!("{name}: {step}: not a shape") };
+            assert_eq!(s.fill.as_ref(), Some(&want), "{name}: {step}");
+            // The saved layer pixels are the rendering of the fill that was saved.
+            assert_eq!(s.cache.as_ref().expect("stored pixels").pixel(60, 80), expected, "{name}: {step}: pixels");
+        }
+    }
+}
+
+/// #1281: a solid-colour shape whose fill lives in `vscg`, as in every shape Photoshop writes,
+/// saves that fill in `vscg` alone (also after the fill is edited), never with an added `SoCo`
+/// next to it.
+#[test]
+fn vscg_shape_fill_is_not_doubled_by_a_fill_block() {
+    assert_vscg_fill_is_not_doubled(doc(), Fill::Solid(Color::rgb(1.0, 0.0, 0.0)), Fill::Solid(Color::rgb(0.0, 0.0, 1.0)));
+}
+
+/// #1281: a gradient shape whose fill lives in `vscg` saves it there alone, never with an added
+/// `GdFl`, and reopens with the same gradient, also after the gradient is edited.
+#[test]
+fn vscg_gradient_shape_fill_is_not_doubled_by_a_fill_block() {
+    let (red, blue, green) = (Color::rgb(1.0, 0.0, 0.0), Color::rgb(0.0, 0.0, 1.0), Color::rgb(0.0, 1.0, 0.0));
+    let fill = Fill::gradient(vec![(0.0, red), (1.0, blue)], 45.0, 0.5, GradientStyle::Radial, true);
+    let edited = Fill::gradient(vec![(0.0, green), (0.25, red), (1.0, blue)], 30.0, 1.0, GradientStyle::Linear, false);
+    assert_vscg_fill_is_not_doubled(doc(), fill, edited);
+}
+
+/// #1281: a pattern shape whose fill lives in `vscg` saves it there alone, never with an added
+/// `PtFl`, and reopens with the same pattern reference, scale and placement, also after they
+/// are edited.
+#[test]
+fn vscg_pattern_shape_fill_is_not_doubled_by_a_fill_block() {
+    let mut surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
+    surface.fill_rect(Rect::new(0, 0, 4, 4), &[0.2, 0.4, 0.9, 1.0]);
+    let id = "059289fb-0000-4000-8000-000000001281".to_string();
+    let mut d = doc();
+    d.patterns.push(Pattern { id: id.clone(), name: "Blue".into(), width: 4, height: 4, surface });
+    let fill = Fill::Pattern { name: "Blue".into(), scale: 0.5, id: id.clone(), angle: 30.0, link: true, phase: (2.0, 3.0) };
+    let edited = Fill::Pattern { name: "Blue".into(), scale: 2.0, id, angle: 0.0, link: false, phase: (0.0, 0.0) };
+    assert_vscg_fill_is_not_doubled(d, fill, edited);
+}
+
+/// #1281: a shape saved by an earlier PhotoCraft keeps its fill in `vscg` and also in a standalone
+/// `SoCo`/`GdFl` block. After the fill is edited, PSD and PSB saves hold the edited fill in
+/// `vscg` alone: the standalone block, which would still hold the old fill, is dropped.
+#[test]
+fn vscg_shape_drops_a_stale_standalone_fill_block() {
+    let (red, blue, green) = (Color::rgb(1.0, 0.0, 0.0), Color::rgb(0.0, 0.0, 1.0), Color::rgb(0.0, 1.0, 0.0));
+    let gradient = Fill::gradient(vec![(0.0, red), (1.0, blue)], 45.0, 0.5, GradientStyle::Radial, true);
+    for (fill, edited) in [(Fill::Solid(red), Fill::Solid(blue)), (gradient, Fill::Solid(green))] {
+        let mut d = doc();
+        let mut layer = shape_layer(ShapeLayer { path: path(), fill: Some(fill.clone()), ..Default::default() });
+        layer.psd_blocks.push((*b"vscg", std::sync::Arc::new(photocraft_io::vector_map::vscg_bytes(&fill))));
+        let (key, mut stale) = photocraft_io::blocks::write_fill(&fill);
+        stale.resize(stale.len().next_multiple_of(4), 0);
+        layer.psd_blocks.push((key, std::sync::Arc::new(stale)));
+        let at = d.layers.len();
+        d.layers.push(layer);
+        let LayerContent::Shape(s) = &mut d.layers[at].content else { panic!("not a shape") };
+        s.fill = Some(edited.clone());
+        let fresh = shape_pixels(&d, &d.layers[at]);
+        let LayerContent::Shape(s) = &mut d.layers[at].content else { panic!("not a shape") };
+        s.cache = Some(fresh);
+        for psb in [false, true] {
+            let name = if psb { "x.psb" } else { "x.psd" };
+            let out = export(&d, name, &ExportOptions { force_psb: psb, ..Default::default() }).unwrap();
+            let f = craft_psd::PsdFile::from_bytes(&out.bytes).unwrap();
+            let l = f.layers().iter().find(|l| l.name() == "Shape").expect("shape record");
+            let fills: Vec<_> = l.blocks.iter().filter(|b| matches!(&b.key, b"vscg" | b"SoCo" | b"GdFl" | b"PtFl")).collect();
+            assert_eq!(fills.iter().map(|b| b.key).collect::<Vec<_>>(), vec![*b"vscg"], "{name}: {key:?}");
+            assert_eq!(photocraft_io::vector_map::fill_from_vscg(&fills[0].data).as_ref(), Some(&edited), "{name}: vscg");
+            let back = import(name, &out.bytes).unwrap().document;
+            let LayerContent::Shape(s) = &back.layers[at].content else { panic!("{name}: not a shape") };
+            assert_eq!(s.fill.as_ref(), Some(&edited), "{name}");
+        }
     }
 }
 
