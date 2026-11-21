@@ -1,6 +1,7 @@
 //! A Window › New Window document window under an open dialog: its canvas is as inert as the main
 //! window's, so a tool drag there adds no History step (the dialog's Cancel would not undo it).
 
+use craft::ui::canvas::ToolHost;
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, pos2, vec2};
 use egui_kittest::Harness;
 use serde_json::json;
@@ -8,6 +9,7 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::state::{Tool, View};
 
+use super::document_display::CanvasHost;
 use super::document_windows::extra_windows;
 
 fn app_with_a_layer() -> Box<PhotocraftApp> {
@@ -67,8 +69,10 @@ fn button(pos: Pos2, pressed: bool) -> Event {
 }
 
 /// Drags across the middle of the document window's canvas.
-fn drag_in_document_window(h: &mut Harness<'static, (Box<PhotocraftApp>, bool)>) {
-    let start = window_rect().center();
+fn drag_in_document_window(h: &mut Harness<'static, (Box<PhotocraftApp>, bool)>, takes_drag: bool) {
+    let window = h.state().0.ui.document_windows.floating[0].0.id;
+    let canvas = CanvasHost { idx: 0, window: Some(window) }.canvas_id();
+    let start = ToolHost::shown_space(&h.ctx, canvas).expect("the document window shows its canvas").view.rect.center();
     h.event(Event::PointerMoved(start));
     h.run_steps(2);
     h.event(button(start, true));
@@ -79,8 +83,20 @@ fn drag_in_document_window(h: &mut Harness<'static, (Box<PhotocraftApp>, bool)>)
         h.event(Event::PointerMoved(at));
         h.run_steps(1);
     }
+    assert_eq!(ToolHost::in_gesture(&h.ctx, canvas), takes_drag, "the document window's capture while the button is held");
     h.event(button(at, false));
     h.run_steps(2);
+    assert!(!ToolHost::in_gesture(&h.ctx, canvas), "the release leaves no active gesture");
+}
+
+#[test]
+fn a_move_drag_in_a_document_window_adds_a_history_step_without_a_dialog() {
+    let app = app_with_a_layer();
+    let mut expected = history(&app);
+    expected.push("Move".into());
+    let mut h = harness(app);
+    drag_in_document_window(&mut h, true);
+    assert_eq!(history(&h.state().0), expected);
 }
 
 #[test]
@@ -91,7 +107,7 @@ fn a_document_window_canvas_takes_no_tool_drag_under_a_dialog() {
     let before = history(&app);
     let revision = app.session.active().unwrap().revision;
     let mut h = harness(app);
-    drag_in_document_window(&mut h);
+    drag_in_document_window(&mut h, false);
     let app = &h.state().0;
     assert!(app.dialog_open(), "the dialog is still open");
     assert_eq!(history(app), before, "no History step under the dialog");
