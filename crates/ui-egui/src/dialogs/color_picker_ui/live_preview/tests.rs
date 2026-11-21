@@ -147,6 +147,14 @@ fn fill_undo_ignores_cancelled_previews_and_reverts_one_accepted_colour() {
     let original = h.state().session.active().unwrap().doc.clone();
     let steps = past(h.state());
     assert!(steps > 0, "the underlying document has an edit to undo");
+
+    let opening_fill = crate::fill_ui::open(h.state_mut());
+    crate::shortcut_dispatch::tests::tap(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+    assert_eq!(past(h.state()), steps, "Undo before Fill's first draw cannot step document history");
+    assert_eq!(h.state().session.active().unwrap().doc, original, "opening Fill protects the document immediately");
+    crate::dialogs::testing::cancel(h.state_mut(), opening_fill).unwrap();
+    h.run_steps(3);
+
     let FillPicker { fill, picker, key } = fill_with_picker(h.state_mut());
     h.run_steps(4);
     let before = values(h.state(), fill);
@@ -176,9 +184,15 @@ fn fill_undo_ignores_cancelled_previews_and_reverts_one_accepted_colour() {
     crate::dialogs::testing::confirm(h.state_mut(), picker).unwrap();
     h.run_steps(4);
     assert_eq!(held_color(h.state(), fill, &key).as_deref(), Some("#336699"), "the picker has answered the Fill row");
+    let accepted = values(h.state(), fill);
     undo(&mut h);
     assert_eq!(values(h.state(), fill), before, "one Undo takes the row straight back to the opening colour");
     assert_eq!(past(h.state()), steps, "dialog Undo never steps document history");
+    assert_eq!(h.state().session.active().unwrap().doc, original, "the document is unchanged");
+
+    crate::shortcut_dispatch::tests::tap(&mut h, egui::Key::Z, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT);
+    assert_eq!(values(h.state(), fill), accepted, "one Redo restores the accepted colour");
+    assert_eq!(past(h.state()), steps, "dialog Redo never steps document history");
     assert_eq!(h.state().session.active().unwrap().doc, original, "the document is unchanged");
 }
 
