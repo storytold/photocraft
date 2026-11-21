@@ -58,7 +58,6 @@ impl B {
             let mut s = stage(Kernel::MGlow, Some(d), Some(In::Shape), [0.0, g.size + 1.0, 0.0, 0.0], 1);
             s.p1[0] = 1.0;
             s.p1[1] = fx::PRECISE_INNER_GLOW_ALPHA_OFFSET;
-            s.lut = fx::glow_paint_lut(g, inner).map(Arc::new);
             s.out = Some(0);
             self.stages.push(s);
             return 1;
