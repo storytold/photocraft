@@ -17,8 +17,9 @@ use rustc_hash::FxHashMap;
 use craft::color_ui::ui::SwatchesCommand;
 use craft::keymap::{Binding, Chord, CommandDef, CommandKind, Overrides, Scope};
 use craft::layers::ui::panel::LayersPanelCommands;
-use craft::ui::canvas::{MomentaryCommands, PickStep, ViewCommands, tool_pick};
+use craft::ui::canvas::{MomentaryCommands, OpacityDigit, PickStep, ViewCommands, tool_pick};
 use craft::ui::docking::WorkspaceCommands;
+use craft::ui::patterns::blend_keys::{BlendShortcut, BlendStep};
 use craft::ui::rails::{LastUsed, RailTool};
 use craft::ui::runtime::commands::{AppCatalog, ChromeCommand, CommandRef, CommandSet, EditCommands, FirePhase, FireSource, Fired};
 use craft::ui::runtime::frame::ChromeToggle;
@@ -571,6 +572,25 @@ pub(crate) fn record_chrome_toggles(ctx: &egui::Context, toggles: &[(egui::Viewp
     }
 }
 
+/// Whether a canvas warp uses the active document.
+pub(crate) fn warp_on_active_document(app: &PhotocraftApp) -> bool {
+    if !app.distort.active() {
+        return false;
+    }
+    let document = app.session.active().map(|state| state.doc.id);
+    app.distort.puppet.as_ref().is_some_and(|warp| Some(warp.document) == document)
+        || app.distort.perspective.as_ref().is_some_and(|warp| Some(warp.document) == document)
+}
+
+/// The keys that would change opacity or blend mode behind a warp preview.
+pub(crate) fn is_opacity_or_blend_key(fired: &Fired) -> bool {
+    fired.source == FireSource::Key
+        && fired.phase != FirePhase::Release
+        && (OpacityDigit::from_ref(&fired.command).is_some()
+            || BlendStep::from_ref(&fired.command).is_some()
+            || BlendShortcut::from_ref(&fired.command).is_some())
+}
+
 /// Runs the commands the runtime's keys and surfaces fired, in the order they fired. The caller passes the
 /// commands of its own pass only (`shortcuts::handle` takes them from the framework state), so a second pass in
 /// one frame applies no command twice.
@@ -603,7 +623,10 @@ pub(crate) fn run_fired(app: &mut PhotocraftApp, ctx: &egui::Context, fired: &[F
             crate::hold_keys::erase_key(app, f.phase);
             continue;
         }
-        // PLAN: `opacity_keys::fired` and `blend_keys::fired` are top-w25's tp.PT14 rows, assumed.
+        // A warp may have opened since the runtime collected this command.
+        if warp_on_active_document(app) && is_opacity_or_blend_key(f) {
+            continue;
+        }
         if crate::opacity_keys::fired(app, f) || crate::blend_keys::fired(app, f) {
             continue;
         }
