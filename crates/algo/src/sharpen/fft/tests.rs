@@ -125,14 +125,20 @@ fn positive_threshold_dispatch_retains_exact_pixel_decisions() {
 #[test]
 fn fft_handles_maximum_radius_and_hdr_alpha_channel_pairs() {
     let area = Rect::new(0, 0, 1, 1);
+    let value = 0.5;
+    let radius = 1000.0;
+    let amount = 500.0;
     let mut s = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
-    s.fill_rect(area, &[0.5]);
-    let ctx = Ctx { bounds: area, mode: ColorMode::Grayscale, alpha: false };
-    let src = Image::read_clamped(&s, area.inflate(3001), area);
-    let pixels = reference::unsharp(&src, area, &ctx, 500.0, 1000.0, 0.0);
+    s.fill_rect(area, &[value]);
+
+    // The clamped one-pixel source is constant in each pass. Keep the frozen f32 tap order.
+    let kernel = reference::gaussian_kernel(radius);
+    let pass = |sample: f32| kernel.iter().fold(0.0, |sum, &weight| sum + sample * weight);
+    let blurred = pass(pass(value));
+    let pixels = [value + (amount / 100.0) * (value - blurred)];
     let mut expected = s.clone();
     expected.write_region(area, &pixels);
-    compare(&expected, &run(&s, area, 500.0, 1000.0, None, Some(area), &Interrupt::NONE).unwrap(), area);
+    compare(&expected, &run(&s, area, amount, radius, None, Some(area), &Interrupt::NONE).unwrap(), area);
 
     let area = Rect::new(-2, 3, 11, 14);
     let mut s = Surface::new(PixelFormat::RGBA32F);
