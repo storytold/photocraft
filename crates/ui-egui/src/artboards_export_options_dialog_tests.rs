@@ -85,7 +85,7 @@ fn tmp() -> (tempfile::TempDir, String) {
 fn export_options_is_unticked_below_file_type_and_sends_nothing() {
     let mut h = harness();
     let (_t, dir) = tmp();
-    let dialog = open(&mut h, &dir, "png");
+    let dialog = open(&mut h, &dir, "png24");
     assert!(!ticked(&h, "Export Options"));
     assert!(!shown(&h, "Include ICC Profile") && !shown(&h, "Options"), "the Options section is hidden");
     assert_eq!(sent(&h, dialog), json!({}), "no option reaches the command");
@@ -98,15 +98,17 @@ fn export_options_is_unticked_below_file_type_and_sends_nothing() {
 fn each_file_type_shows_its_options_with_the_reference_defaults() {
     let mut h = harness();
     let (_t, dir) = tmp();
-    let dialog = open(&mut h, &dir, "png");
+    let dialog = open(&mut h, &dir, "png24");
     tick_export_options(&mut h);
     assert!(shown(&h, "Options"));
     let cases = [
         ("psd", vec!["Maximize Compatibility", "Preserve Artboard"], json!({"maximizeCompatibility": true, "preserveArtboard": true, "iccProfile": true})),
         ("bmp", vec!["16bit", "24bit", "32bit"], json!({"bmpBits": 24, "iccProfile": true})),
         ("jpg", vec!["Quality"], json!({"quality": 8.0, "iccProfile": true})),
+        // Targa is on the File Type list (#13635).
+        ("tga", vec!["16bit", "24bit", "32bit"], json!({"tgaBits": 24, "iccProfile": true})),
         ("tiff", vec!["Image Compression", "Quality"], json!({"tiffCompression": "none", "iccProfile": true})),
-        ("png", vec!["Transparency", "Interlaced"], json!({"transparency": true, "pngInterlaced": false, "iccProfile": true})),
+        ("png24", vec!["Transparency", "Interlaced"], json!({"transparency": true, "pngInterlaced": false, "iccProfile": true})),
     ];
     for (format, labels, defaults) in cases {
         set(&mut h, dialog, "format", json!(format));
@@ -124,7 +126,7 @@ fn each_file_type_shows_its_options_with_the_reference_defaults() {
     click(&mut h, Role::RadioButton, "32bit");
     assert_eq!(sent(&h, dialog)["bmpBits"], json!(32));
     // Each type keeps its own settings.
-    set(&mut h, dialog, "format", json!("png"));
+    set(&mut h, dialog, "format", json!("png24"));
     assert_eq!(sent(&h, dialog), json!({"transparency": true, "pngInterlaced": false, "iccProfile": true}));
     set(&mut h, dialog, "format", json!("bmp"));
     assert_eq!(sent(&h, dialog)["bmpBits"], json!(32));
@@ -170,7 +172,7 @@ fn the_quality_keeps_fractions_and_refuses_values_past_its_range() {
 fn the_options_reach_the_written_file() {
     let mut h = harness();
     let (t, dir) = tmp();
-    let dialog = open(&mut h, &dir, "png");
+    let dialog = open(&mut h, &dir, "png24");
     tick_export_options(&mut h);
     click(&mut h, Role::CheckBox, "Interlaced");
     click(&mut h, Role::CheckBox, "Transparency");
@@ -184,12 +186,12 @@ fn the_options_reach_the_written_file() {
 fn options_are_remembered_after_a_successful_run_only() {
     let mut h = harness();
     let (_t, dir) = tmp();
-    let dialog = open(&mut h, &dir, "png");
+    let dialog = open(&mut h, &dir, "png24");
     tick_export_options(&mut h);
     click(&mut h, Role::CheckBox, "Interlaced");
     crate::dialogs::testing::confirm(h.state_mut(), dialog).unwrap();
     h.run_steps(3);
-    let dialog = open(&mut h, &dir, "png");
+    let dialog = open(&mut h, &dir, "png24");
     assert!(ticked(&h, "Export Options") && ticked(&h, "Interlaced"), "remembered after the run");
     // A run that fails (16-bit BMP is refused) is not remembered.
     set(&mut h, dialog, "format", json!("bmp"));
@@ -201,7 +203,7 @@ fn options_are_remembered_after_a_successful_run_only() {
     assert!(h.state().framework.dialogs.open_dialogs().iter().all(|d| d.id != dialog), "OK closed the form");
     let dialog = open(&mut h, &dir, "bmp");
     assert_eq!(sent(&h, dialog), json!({"bmpBits": 24, "iccProfile": true}), "the last successful run's settings");
-    set(&mut h, dialog, "format", json!("png"));
+    set(&mut h, dialog, "format", json!("png24"));
     assert!(ticked(&h, "Interlaced"));
 }
 

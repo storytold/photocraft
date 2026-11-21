@@ -1026,6 +1026,8 @@ mod artboards_export_options_dialog_tests;
 #[cfg(test)]
 mod artboards_overlap_dialog_tests;
 #[cfg(test)]
+mod artboards_to_files_types_tests;
+#[cfg(test)]
 mod browse_field_tests;
 #[cfg(test)]
 mod export_quality_tests;
