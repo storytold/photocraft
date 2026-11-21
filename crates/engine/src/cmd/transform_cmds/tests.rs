@@ -1036,3 +1036,24 @@ fn step_name_transform_path_is_the_only_name_taken() {
     }
     assert_eq!(s.active().unwrap().history.past_len(), steps, "a refused name changes nothing");
 }
+
+/// A Perspective that squeezes the top edge toward a point commits the trapezoid (or triangle) the box shows. The
+/// commit's pre-reduction used to take the scale at the centre and round its frame outward past the map's horizon:
+/// a top 10 px wide spilled to x -65..358, and 2 px or less left a 2 × 1 px layer.
+#[test]
+fn a_perspective_squeezed_toward_a_point_commits_the_box() {
+    for half in [30.0, 5.0, 1.0, 0.25, 0.03] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.edit("paint", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(60, 90, 240, 210), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("edit.transform", json!({"rect": [60, 90, 240, 210], "quad": [[150.0 - half, 90], [150.0 + half, 90], [240, 210], [60, 210]]})).unwrap();
+        let b = active_bounds(&s);
+        assert!(b.x0 >= 59 && b.x1 <= 241 && b.y0 >= 89 && b.y1 <= 211, "half {half}: {b:?}");
+        assert!(b.x0 <= 61 && b.x1 >= 239 && b.y0 <= 92 && b.y1 >= 209, "half {half}: {b:?}");
+    }
+}

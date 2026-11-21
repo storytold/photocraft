@@ -433,7 +433,21 @@ fn warp(
         Some((c, inv)) => inv.apply((c.x0 as f64 + c.x1 as f64) / 2.0, (c.y0 as f64 + c.y1 as f64) / 2.0),
         None => ((f64::from(src_rect.x0) + f64::from(src_rect.x1)) / 2.0, (f64::from(src_rect.y0) + f64::from(src_rect.y1)) / 2.0),
     };
-    let scale = h.local_scale(cx, cy);
+    // Without a clip, a projective map's scale varies across the source: reduce only as far as its least reduced part
+    // (the corners and the centre) allows, so a strong perspective keeps its near side sharp and the reduced frame
+    // stays clear of the map's horizon (rounded outward, it reached past it, and the result wrapped round infinity
+    // or vanished). An affine map has one scale, so this changes nothing there.
+    let scale = match clip {
+        Some(_) => h.local_scale(cx, cy),
+        None => {
+            let r = src_rect;
+            [(cx, cy), (r.x0 as f64, r.y0 as f64), (r.x1 as f64, r.y0 as f64), (r.x1 as f64, r.y1 as f64), (r.x0 as f64, r.y1 as f64)]
+                .map(|(x, y)| h.local_scale(x, y))
+                .into_iter()
+                .filter(|s| s.is_finite())
+                .fold(0.0, f64::max)
+        }
+    };
     let reduced;
     // Photoshop reduces with its Bicubic widened by 1 / scale (as Image Size does), so the source is
     // brought down by the whole local scale first and the warp samples it at about 1:1; a plain
