@@ -6,6 +6,11 @@ use photocraft_geom::Rect;
 use crate::Ctx;
 use crate::fxutil::{MAXC, rgba, set_rgba, xy};
 use crate::image::Image;
+use crate::{RELIGHT_MAX_LIGHTS, RelightLight};
+
+mod lights;
+#[cfg(test)]
+mod lights_tests;
 
 /// Softness maps onto this σ range; the halo is derived from the σ actually used.
 pub(crate) const SIGMA_MIN: f32 = 2.0;
@@ -16,7 +21,7 @@ const STEP_MAX: f32 = 32.0;
 const MAX_LUMA_PIXELS: usize = 8_000_000;
 
 /// Dialog units (degrees / 0–100), matching the command params.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Params {
     pub angle: f32,
     pub elevation: f32,
@@ -24,6 +29,17 @@ pub(crate) struct Params {
     pub ambient: f32,
     pub warmth: f32,
     pub softness: f32,
+    /// Non-empty replaces the single lamp (see [`FilterParams::Relight`](crate::FilterParams::Relight)).
+    pub lights: Vec<RelightLight>,
+}
+
+/// True when Relight leaves pixels unchanged: legacy intensity 0 / non-finite, or (with `lights`)
+/// every light has no usable intensity.
+pub(crate) fn is_identity(intensity: f32, lights: &[RelightLight]) -> bool {
+    if lights.is_empty() {
+        return !intensity.is_finite() || intensity == 0.0;
+    }
+    lights.iter().take(RELIGHT_MAX_LIGHTS).all(|l| !l.intensity.is_finite() || l.intensity <= 0.0)
 }
 
 /// Blur σ from softness and the reference bounds, clamped to `[SIGMA_MIN, SIGMA_MAX]`.
@@ -159,16 +175,16 @@ fn relight_with_luma_budget(src: &Image, out: Rect, ctx: &Ctx, p: Params, max_lu
     if out.is_empty() || n == 0 {
         return src.crop(out);
     }
-    if !p.intensity.is_finite() || p.intensity == 0.0 {
+    if is_identity(p.intensity, &p.lights) {
         return src.crop(out);
     }
     let sig = sigma(p.softness, ctx.bounds);
     let step = step_for_sigma(sig);
     let reach = read_radius(sig);
     if let Some(band_h) = luma_band_rows(out, reach, max_luma_pixels) {
-        return relight_bands(src, out, ctx, p, sig, step, band_h);
+        return relight_bands(src, out, ctx, &p, sig, step, band_h);
     }
-    relight_rect(src, out, ctx, p, sig, step)
+    relight_rect(src, out, ctx, &p, sig, step)
 }
 
 /// Horizontal strip height so the inflated luma field stays within [`MAX_LUMA_PIXELS`].
@@ -192,7 +208,7 @@ fn luma_band_rows(out: Rect, reach: i32, max_luma_pixels: usize) -> Option<i32> 
     if inner >= out.height() as i32 { None } else { Some(inner.max(1)) }
 }
 
-fn relight_bands(src: &Image, out: Rect, ctx: &Ctx, p: Params, sig: f32, step: i32, band_h: i32) -> Vec<f32> {
+fn relight_bands(src: &Image, out: Rect, ctx: &Ctx, p: &Params, sig: f32, step: i32, band_h: i32) -> Vec<f32> {
     let n = src.ch;
     let mut res = src.crop(out);
     let mut y = out.y0;
@@ -231,7 +247,7 @@ fn copy_band(dst: &mut [f32], dst_rect: Rect, src: &[f32], src_rect: Rect, n: us
     }
 }
 
-fn relight_rect(src: &Image, out: Rect, ctx: &Ctx, p: Params, sig: f32, step: i32) -> Vec<f32> {
+fn relight_rect(src: &Image, out: Rect, ctx: &Ctx, p: &Params, sig: f32, step: i32) -> Vec<f32> {
     let n = src.ch;
     let mut res = src.crop(out);
     // Finite differences at the shading scale (`σ`), not 1 px: a 1 px step vanishes on
@@ -264,10 +280,7 @@ fn relight_rect(src: &Image, out: Rect, ctx: &Ctx, p: Params, sig: f32, step: i3
         }
     }
     let sbuf = blur_channel(&ybuf, yw, yh, sig);
-    let ldir = light_dir(p.angle, p.elevation);
-    let lcol = light_color(p.warmth);
-    let amb = (if p.ambient.is_finite() { p.ambient } else { 0.0 }).clamp(0.0, 100.0) / 100.0;
-    let inten = p.intensity.clamp(0.0, 100.0) / 100.0;
+    let rig = lights::Rig::new(p, ctx.bounds);
     for (i, px) in res.chunks_exact_mut(n).enumerate() {
         let (x, y) = xy(out, i);
         if !finite_all(px) {
@@ -285,14 +298,7 @@ fn relight_rect(src: &Image, out: Rect, ctx: &Ctx, p: Params, sig: f32, step: i3
         let nx = (sample_y(&sbuf, yw, yh, y_rect, x - step, y) - sample_y(&sbuf, yw, yh, y_rect, x + step, y)) * SCALE;
         let ny = (sample_y(&sbuf, yw, yh, y_rect, x, y - step) - sample_y(&sbuf, yw, yh, y_rect, x, y + step)) * SCALE;
         let nrm = norm3([nx, ny, 1.0]);
-        let ndl = (nrm[0] * ldir[0] + nrm[1] * ldir[1] + nrm[2] * ldir[2]).max(0.0);
-        let shade = amb + inten * ndl;
-        let mut out_c = c;
-        for (k, lc) in lcol.iter().enumerate() {
-            let Some(ch) = c.get(k).copied() else { continue };
-            let Some(slot) = out_c.get_mut(k) else { continue };
-            *slot = (ch / s0) * shade * *lc;
-        }
+        let out_c = rig.relit(c, s0, nrm, x, y);
         if !finite_all(&out_c) {
             continue;
         }
@@ -322,11 +328,11 @@ mod tests {
     }
 
     fn params(intensity: f32, angle: f32, warmth: f32, softness: f32) -> FilterParams {
-        FilterParams::Relight { angle, elevation: 40.0, intensity, ambient: 55.0, warmth, softness }
+        FilterParams::Relight { angle, elevation: 40.0, intensity, ambient: 55.0, warmth, softness, lights: vec![] }
     }
 
     fn relight_p(angle: f32, elevation: f32, intensity: f32, ambient: f32, warmth: f32, softness: f32) -> FilterParams {
-        FilterParams::Relight { angle, elevation, intensity, ambient, warmth, softness }
+        FilterParams::Relight { angle, elevation, intensity, ambient, warmth, softness, lights: vec![] }
     }
 
     fn run(s: &Surface, p: &FilterParams, bounds: Rect) -> Surface {
@@ -554,7 +560,7 @@ mod tests {
             })
             .collect();
         s.write_interleaved(bounds, &bytes);
-        let p = Params { angle: 180.0, elevation: 30.0, intensity: 90.0, ambient: 12.0, warmth: 0.0, softness: 25.0 };
+        let p = Params { angle: 180.0, elevation: 30.0, intensity: 90.0, ambient: 12.0, warmth: 0.0, softness: 25.0, lights: vec![] };
         let reach = read_radius(sigma(p.softness, bounds));
         assert!(luma_band_rows(bounds, reach, 20_000).is_some());
         let src = Image::read_clamped(&s, bounds.inflate(reach), bounds);
