@@ -282,7 +282,7 @@ fn corrupt_layer_size(app: &mut PhotocraftApp, id: LayerId, bad: f32) {
             r.style.size_pt = bad;
         }
     }
-    st.doc = std::sync::Arc::new(doc);
+    *st.doc_mut() = std::sync::Arc::new(doc);
     st.revision += 1;
 }
 
