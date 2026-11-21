@@ -45,6 +45,8 @@ pub fn tool_name(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
         Tool::Brush => Some(tl!("brush tool")),
         Tool::Sharpen => Some(tl!("sharpen tool")),
         Tool::Sponge => Some(tl!("sponge tool")),
+        // The Dodge tool (#12685).
+        Tool::Dodge => Some(tl!("dodge tool")),
         Tool::Smudge => Some(tl!("smudge tool")),
         Tool::ArtHistoryBrush => Some(tl!("art history brush")),
         Tool::Gradient if app.ui.tool_options.gradient_classic => Some(tl!("gradient tool")),
@@ -85,7 +87,8 @@ pub fn alert(app: &PhotocraftApp, tool: Tool, hidden: bool) -> Option<String> {
     Some(crate::i18n::fmt(tl!(template), &[("tool", name)]))
 }
 
-/// [`GROUP`] or [`LOCKED`] when `tool` can't paint the active layer's pixels.
+/// [`GROUP`] or [`LOCKED`] when `tool` can't paint the active layer's pixels. The Dodge tool counts Lock Image Pixels
+/// as locked too (#12685).
 fn layer_refusal(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     let st = app.session.active()?;
     let layer = st.active_layer.and_then(|id| st.doc.layer(id))?;
@@ -93,7 +96,7 @@ fn layer_refusal(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
         None
     } else if layer.is_group() {
         Some(GROUP)
-    } else if locked(st.doc.effective_locks(layer.id), tool) {
+    } else if locked(st.doc.effective_locks(layer.id), tool) || (tool == Tool::Dodge && st.doc.effective_locks(layer.id).pixels) {
         Some(LOCKED)
     } else {
         None
@@ -114,6 +117,10 @@ pub(super) mod brush_refusal_alert_tests;
 #[cfg(test)]
 #[path = "../retouch_mode_refusal_alert_tests.rs"]
 mod retouch_mode_refusal_alert_tests;
+
+#[cfg(test)]
+#[path = "../dodge_refusal_alert_tests.rs"]
+mod dodge_refusal_alert_tests;
 
 #[cfg(test)]
 #[path = "../smudge_refusal_alert_tests.rs"]
