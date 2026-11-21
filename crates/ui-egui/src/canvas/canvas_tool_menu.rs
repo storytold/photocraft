@@ -996,10 +996,26 @@ pub fn path_menu(tool: Tool) -> bool {
     matches!(tool, Tool::Pen | Tool::PathSelection | Tool::DirectSelection) || point_menu(tool)
 }
 
-/// The anchor tools whose path menu also heads with the entry for the point under the right-click
-/// (#12771, #12744, #12710).
+/// The tools whose path menu also heads with the entry for the point under the right-click: the anchor tools
+/// (#12771, #12744, #12710), and the Freeform and Curvature Pens, which open the Pen's path menu (#12837, #12753).
 fn point_menu(tool: Tool) -> bool {
-    matches!(tool, Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint)
+    matches!(tool, Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint | Tool::FreeformPen | Tool::CurvaturePen)
+}
+
+/// The path part under screen point `at` for a Freeform Pen right-click (#12837). That tool draws no path overlay, so
+/// its right-click brings no part along: the part is looked up as the overlay's press would take it, so the menu gets
+/// the same point entry as the anchor tools'.
+fn freeform_pen_hit(app: &PhotocraftApp, tool: Tool, at: Pos2) -> Option<(PathRef, BezierHit)> {
+    use craft::draw::ui::{BezierOverlay, BezierTool, HandlesShown};
+    if tool != Tool::FreeformPen {
+        return None;
+    }
+    let view = crate::canvas::document_display::active_view(app)?;
+    let (paths, _) = crate::direct_select::edit_paths(app, BezierTool::Direct);
+    let selection = crate::direct_select::selection(app, BezierTool::Direct);
+    let reach = craft::ui::runtime::env::Env::root_hit_reach(app.ctx());
+    let hit = BezierOverlay::hit_test(&paths, &selection, HandlesShown::Selected, &view, at, reach)?;
+    Some((PathRef::from_key(hit.path())?, hit))
 }
 
 /// The Add Anchor Point tool's right-click on anchor `knot` of `target` selects it, as measured
@@ -1518,6 +1534,7 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, kind: MenuKind, at: Pos2, doc: 
             if shape_tool_menu(tool) && !shape_menu_measured(app) {
                 return false;
             }
+            let point = point.or_else(|| freeform_pen_hit(app, tool, at));
             capture(app, &mut menu, doc, point);
             // The Eyedropper reads the colour now, under the right-click: all layers, with the Sample
             // Size, whatever its Sample setting (#11747). Picking a row later copies this colour.
@@ -1875,6 +1892,12 @@ mod delete_anchor_menu_tests;
 
 #[cfg(test)]
 mod convert_point_menu_tests;
+#[cfg(test)]
+#[path = "canvas_tool_menu/curvature_pen_menu_tests.rs"]
+mod curvature_pen_menu_tests;
+#[cfg(test)]
+#[path = "canvas_tool_menu/freeform_pen_menu_tests.rs"]
+mod freeform_pen_menu_tests;
 
 #[cfg(test)]
 mod object_selection_menu_tests;
