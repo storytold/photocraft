@@ -280,7 +280,13 @@ pub fn floating(st: &DocState) -> Option<&Floating> {
 /// progress); `None` when nothing floats.
 pub fn displayed(st: &DocState, extra: (i32, i32)) -> Option<Document> {
     let f = floating(st)?;
-    f.parts.moved(&st.doc, f.offset.0 + extra.0, f.offset.1 + extra.1).ok()
+    let (dx, dy) = (f.offset.0.saturating_add(extra.0), f.offset.1.saturating_add(extra.1));
+    if (dx, dy) == (0, 0) {
+        // A drop at the origin keeps the original pixels. Re-compositing the piece would
+        // change translucent pixels, most visibly when a copy overlaps its source.
+        return Some((*st.doc).clone());
+    }
+    f.parts.moved(&st.doc, dx, dy).ok()
 }
 
 fn int_param(p: &Value, key: &str) -> i32 {
