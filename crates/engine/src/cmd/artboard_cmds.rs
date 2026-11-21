@@ -16,7 +16,7 @@ use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, color_param, int, int_i32};
-use crate::file_cmds::{SaveOpts, encode, f64_param, join, native_doc, sanitize, stem, str_param, write_file};
+use crate::file_cmds::{encode, f64_param, join, native_doc, sanitize, stem, str_param, write_file};
 use crate::{EngineError, Result, Session};
 
 /// Artboard size presets (name, width, height) in pixels, Photoshop's common devices and pages.
@@ -890,7 +890,7 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToFiles";
     let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?.to_string();
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
-    let save = SaveOpts::from_params(s, p, cmd)?;
+    let (save, board) = export_options::parse(s, p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
     let overlapping = match p.get("content") {
@@ -921,7 +921,7 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
             let path = join(&dir, &format!("{}.pdf", sanitize(&name)));
             guard.check()?;
             write_file(&path, &raster_pdf(&pages))?;
-            return Ok(json!({"files": [path]}));
+            return Ok(json!({"files": [path], "warnings": []}));
         }
         FileType::Png8 => None,
         FileType::Png24 => Some("png".to_string()),
@@ -931,18 +931,26 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let names: Vec<&str> = boards.iter().map(|one| one.name.as_str()).collect();
     let stems = artboard_file_stems(&prefix, &names, HYPHENATED_FORMATS.contains(&extension));
     let mut files = Vec::new();
-    for (one, name) in boards.iter().zip(stems) {
+    let mut warnings = Vec::new();
+    for (mut one, name) in boards.into_iter().zip(stems) {
+        // Export Options of the file type (#13636): PNG-8 and PNG-24 take PNG's.
+        board.apply(&mut one, extension);
         let path = join(&dir, &format!("{name}.{extension}"));
-        let bytes = match &ext {
-            Some(_) if truecolour && one.mode != ColorMode::Rgb => encode(&rgb_copy(one)?, &path, save)?.0,
-            Some(_) => encode(one, &path, save)?.0,
-            None => png8(one, cmd)?,
+        let (bytes, warned) = match &ext {
+            Some(_) if truecolour && one.mode != ColorMode::Rgb => encode(&rgb_copy(&one)?, &path, save)?,
+            Some(_) => encode(&one, &path, save)?,
+            // The PNG-8 writer does not interlace; say so, as the palette PNG path of a save does.
+            None if save.png_interlaced == Some(true) => {
+                (png8(&one, cmd)?, vec!["written without interlacing: the PNG-8 exporter does not interlace".to_owned()])
+            }
+            None => (png8(&one, cmd)?, Vec::new()),
         };
         guard.check()?;
         write_file(&path, &bytes)?;
+        warnings.extend(warned.into_iter().map(|w| format!("{name}.{extension}: {w}")));
         files.push(path);
     }
-    Ok(json!({"files": files}))
+    Ok(json!({"files": files, "warnings": warnings}))
 }
 
 /// The scratch state an artboard export starts from. Building the boards copies their pixels
@@ -1057,6 +1065,11 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
     let quality = f64_param(p, "quality").or(Some(10.0));
+    // Reverse Page Order (#13644): the default page order the other way round.
+    let reverse = match p.get("reversePageOrder") {
+        None | Some(Value::Null) => false,
+        Some(v) => v.as_bool().ok_or_else(|| bad(cmd, "`reversePageOrder` must be true or false"))?,
+    };
     let guard = ScratchGuard::new(&doc)?;
     let mut pages = Vec::new();
     // Pages go bottom artboard of the Layers panel first, as in the reference application (#13643);
@@ -1067,6 +1080,9 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if pages.is_empty() {
         return Err(bad(cmd, "no matching artboards"));
+    }
+    if reverse {
+        pages.reverse();
     }
     guard.check()?;
     write_file(&path, &raster_pdf(&pages))?;
@@ -1132,7 +1148,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToFiles",
             "Artboards to Files…",
             &["File", "Export"],
-            r##"{"dir":folder,"format":"png|png24|png8|jpg|bmp|tga|tiff|psd|pdf|…"="png" (png24 = truecolour .png, png8 = indexed .png, tga = Targa; pdf = one multi-page <prefix>.pdf, bottom artboard first, pages at 72 ppi),"prefix":str=document name ("" = none),"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's file also shows the visible boards above it where they overlap it, each as a plain group with a \"Background for <board>\" layer; artboard: Artboard Content Only),"artboards":[id]? (default all),"quality":0..12?} → {files} (one "<prefix><artboard name>.<extension>" per board, no separator or index added: spaces become "-" in PNG, JPEG, BMP, Targa and TIFF and stay in PSD and other formats, characters a file name can't hold become "_", and a name an earlier board already took, ignoring case, gets "-2", "-3"…)"##,
+            r##"{"dir":folder,"format":"png|png24|png8|jpg|bmp|tga|tiff|psd|pdf|…"="png" (png24 = truecolour .png, png8 = indexed .png, tga = Targa; pdf = one multi-page <prefix>.pdf, bottom artboard first, pages at 72 ppi),"prefix":str=document name ("" = none),"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's file also shows the visible boards above it where they overlap it, each as a plain group with a \"Background for <board>\" layer; artboard: Artboard Content Only),"artboards":[id]? (default all),"quality":0..12? (JPEG, and the PDF pages),"iccProfile":bool=true,"bmpBits":24|32? (16 unsupported),"tgaBits":24|32?,"tiffCompression":"none|lzw|zip"="none" ("jpeg" unsupported),"pngInterlaced":bool=false (PNG, PNG-24),"transparency":bool=true (PNG, PNG-8, PNG-24; false: over white, no alpha),"maximizeCompatibility":bool? (PSD),"preserveArtboard":bool=true (PSD; false: a plain group)} → {files, warnings} (warnings: what a file could not hold, each "<file name>: <warning>"; one "<prefix><artboard name>.<extension>" per board, no separator or index added: spaces become "-" in PNG, JPEG, BMP, Targa and TIFF and stay in PSD and other formats, characters a file name can't hold become "_", and a name an earlier board already took, ignoring case, gets "-2", "-3"…)"##,
             export_artboards,
             artboards_to_files
         ),
@@ -1140,13 +1156,19 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToPdf",
             "Artboards to PDF…",
             &["File", "Export"],
-            r##"{"path":str (.pdf),"artboards":[id]?,"quality":0..12=10} → {path, pages} (one raster page per board, bottom artboard of the Layers panel first)"##,
+            r##"{"path":str (.pdf),"artboards":[id]?,"quality":0..12=10,"reversePageOrder":bool=false (the default page order the other way round)} → {path, pages} (one raster page per board, bottom artboard of the Layers panel first)"##,
             export_artboards,
             artboards_to_pdf
         ),
     ]
 }
 
+#[path = "artboard_cmds/export_options.rs"]
+mod export_options;
+
+#[cfg(test)]
+#[path = "artboard_cmds/export_options_tests.rs"]
+mod export_options_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/file_names_tests.rs"]
 mod file_names_tests;
@@ -1174,6 +1196,9 @@ mod overlapping_areas_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/pdf_page_order_tests.rs"]
 mod pdf_page_order_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/pdf_reverse_page_order_tests.rs"]
+mod pdf_reverse_page_order_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/tests.rs"]
 mod tests;

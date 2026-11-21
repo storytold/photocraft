@@ -1024,9 +1024,13 @@ mod polygon_lasso_tests;
 mod window_frame_tests;
 
 #[cfg(test)]
+mod artboards_export_options_dialog_tests;
+#[cfg(test)]
 mod artboards_overlap_dialog_tests;
 #[cfg(test)]
 mod artboards_to_files_types_tests;
+#[cfg(test)]
+mod artboards_to_pdf_reverse_tests;
 #[cfg(test)]
 mod browse_field_tests;
 #[cfg(test)]
