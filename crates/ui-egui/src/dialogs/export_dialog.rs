@@ -851,9 +851,15 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
 fn drive(app: &mut PhotocraftApp, ctx: &egui::Context, open: &mut ExportOpen) -> bool {
     match app.framework.dialogs.take::<HostedExportAs>() {
         Some(DialogResult::Ok(result)) => {
-            if let Err(error) = finish(app, ctx, open, result) {
-                app.ui.status = error;
-                app.ui.status_error = true;
+            // A played Export As step with its dialog on (#15945): its file is judged as the step
+            // writing there, however it was chosen, and once written the action continues.
+            let path = result.path.to_string_lossy().into_owned();
+            match crate::actions::save_dialog::admit(app, &path).and_then(|()| finish(app, ctx, open, result)) {
+                Ok(_) => crate::actions::save_dialog::exported(app),
+                Err(error) => {
+                    app.ui.status = error;
+                    app.ui.status_error = true;
+                }
             }
             return false;
         }

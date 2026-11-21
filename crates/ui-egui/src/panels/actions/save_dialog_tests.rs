@@ -22,12 +22,20 @@ type Written = Rc<RefCell<Vec<String>>>;
 /// writer records the paths it wrote, and whose one action `Save` is `step` with its dialog on,
 /// then a new layer named `after`.
 fn setup(step: (&str, Value)) -> (Box<PhotocraftApp>, Arc<ScriptedFiles>, Written) {
+    setup_writing(step, true)
+}
+
+/// [`setup`] with a writer that fails every write unless `writes`.
+fn setup_writing(step: (&str, Value), writes: bool) -> (Box<PhotocraftApp>, Arc<ScriptedFiles>, Written) {
     let files = Arc::new(ScriptedFiles::held());
     let written: Written = Default::default();
     let w = written.clone();
     let services = crate::Services {
         export: Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"out".to_vec(), Vec::new())))),
         write: Some(Box::new(move |path: &str, _: &[u8]| {
+            if !writes {
+                return Err("the disk is full".to_string());
+            }
             w.borrow_mut().push(path.to_string());
             Ok(())
         })),
@@ -179,4 +187,66 @@ fn agents_and_a_step_with_its_dialog_off_save_without_asking() {
     assert!(v.get("paused").is_none(), "{v}");
     assert!(files.requests().is_empty());
     assert_eq!(*written.borrow(), ["/out/played.psd"]);
+}
+
+/// A gate that keeps writes out of `/outside`.
+fn deny_outside(_id: &str, p: &Value) -> photocraft_engine::Result<()> {
+    match p.get("path").and_then(Value::as_str) {
+        Some(path) if path.starts_with("/outside") => Err(photocraft_engine::EngineError::Other("writes outside the allowed folder are denied".into())),
+        _ => Ok(()),
+    }
+}
+
+#[test]
+fn the_file_chosen_in_the_dialog_is_judged_by_the_playbacks_gate() {
+    for step in [("file.saveAs", json!({"path": "/out/played.psd"})), ("file.saveACopy", json!({"path": "/out/copy.psd"}))] {
+        let (mut app, files, written) = setup(step.clone());
+        app.session.authorize = Some(deny_outside);
+        play(&mut app);
+        answer(&mut app, &files, chose("/outside/chosen.psd"));
+        assert!(written.borrow().is_empty(), "{}: the gate refuses the chosen file, so nothing is written", step.0);
+        assert!(!after_ran(&app), "{}: the action ends at the refused save", step.0);
+        assert!(app.ui.status_error && app.ui.status.contains("denied"), "{}: the denial stays in the status bar: {}", step.0, app.ui.status);
+        assert!(app.paused_playbacks.paused.is_empty() && app.paused_playbacks.save.is_none());
+    }
+}
+
+#[test]
+fn a_failed_write_keeps_its_error_and_stops_the_action() {
+    let (mut app, files, _written) = setup_writing(("file.saveAs", json!({"path": "/out/played.psd"})), false);
+    app.background_jobs = true;
+    play(&mut app);
+    assert!(!app.background_jobs, "the dialog's save is written in the frame it is answered, as the silent replay writes");
+    answer(&mut app, &files, chose("/out/chosen.psd"));
+    assert!(!after_ran(&app), "a save that failed doesn't continue the action");
+    assert!(app.ui.status_error && app.ui.status.contains("the disk is full"), "the write's error stays: {}", app.ui.status);
+    assert!(app.background_jobs, "background jobs are back on once the dialogs closed");
+    assert!(app.paused_playbacks.paused.is_empty() && app.paused_playbacks.save.is_none());
+}
+
+#[test]
+fn an_export_that_wrote_its_files_continues_without_a_journaled_step() {
+    // Several Scale All sizes journal no step: Export As marks the export itself.
+    let (mut app, _files, _written) = setup((crate::export_dialog::COMMAND, json!({"path": "/out/web.jpg", "format": "jpg"})));
+    play(&mut app);
+    save_dialog::exported(&mut app);
+    let ctx = app.ctx().clone();
+    let id = app.export_open.as_ref().map(|o| o.dialog).expect("Export As is open");
+    app.framework.dialogs.cancel_by_id(&ctx, id);
+    crate::export_dialog::take(&mut app, &ctx);
+    save_dialog::tick(&mut app);
+    assert!(after_ran(&app), "the action goes on after the export: {}", app.ui.status);
+}
+
+#[test]
+fn a_save_finished_on_another_active_document_ends_the_action() {
+    let (mut app, files, written) = setup(("file.saveACopy", json!({"path": "/out/copy.psd"})));
+    play(&mut app);
+    // Another document comes to the front while the dialog is open.
+    app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
+    answer(&mut app, &files, chose("/out/copy.psd"));
+    assert_eq!(*written.borrow(), ["/out/copy.psd"], "the copy is of the document the step played on");
+    assert!(!after_ran(&app), "the rest doesn't play on the other document");
+    assert!(app.ui.status_error && app.ui.status.contains("active document changed"), "{}", app.ui.status);
+    assert!(app.paused_playbacks.paused.is_empty() && app.paused_playbacks.save.is_none());
 }

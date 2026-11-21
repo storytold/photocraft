@@ -753,15 +753,21 @@ pub(super) fn suggested_copy_name(doc_name: &str, has_file: bool, copy_suffix: &
 fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
     let st = app.session.active().ok_or("no document")?;
     let suggested = suggested_copy_name(&st.doc.name, st.path.is_some(), app.session.prefs().file_handling.copy_suffix());
-    save_a_copy_from(app, &suggested)
+    save_a_copy_from(app, &suggested, |_, _| Ok(()))
 }
 
 /// [`save_a_copy`] with the dialog opening on `suggested`: a played Save a Copy step with its
-/// dialog on suggests the file it recorded (#15945).
-pub(crate) fn save_a_copy_from(app: &mut PhotocraftApp, suggested: &str) -> Result<Value, String> {
+/// dialog on suggests the file it recorded (#15945). `ready` gets the chosen file before anything
+/// is written, and its error writes nothing.
+pub(crate) fn save_a_copy_from(
+    app: &mut PhotocraftApp,
+    suggested: &str,
+    ready: impl FnOnce(&mut PhotocraftApp, &str) -> Result<(), String> + 'static,
+) -> Result<Value, String> {
     let doc = app.session.active().ok_or("no document")?.doc.clone();
     // The copy is of the document as it was when asked.
     app.pick_save(suggested, move |app, path| {
+        ready(app, &path)?;
         // An RGB Targa asks for its bits per pixel first, a DDS texture for its compression, a
         // JPEG for its JPEG Options and a TIFF for its TIFF Options; the copy is written from the
         // prompt.
