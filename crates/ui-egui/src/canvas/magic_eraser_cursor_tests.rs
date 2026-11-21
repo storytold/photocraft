@@ -27,7 +27,8 @@ fn the_standard_cursor_is_the_magic_eraser_icon_with_its_tip_at_the_lower_left()
         panic!("an icon cursor, not the crosshair");
     };
     assert_eq!(icon, crate::icons::tool_icon(Tool::MagicEraser), "the toolbar's own icon");
-    assert!(hotspot.x < 12.0 && hotspot.y > 12.0, "the hotspot sits at the lower left of the 24-unit box: {hotspot:?}");
+    // The eraser end of the glyph, at the lower left of its 24-unit box: pinned by value so a moved constant fails.
+    assert_eq!(hotspot, egui::vec2(4.6, 18.4), "the eraser tip");
     assert!(badge.is_none());
     assert_eq!(cursor_with(&mut h, Modifiers::SHIFT), cursor_with(&mut h, Modifiers::NONE), "Shift keeps it");
 }
