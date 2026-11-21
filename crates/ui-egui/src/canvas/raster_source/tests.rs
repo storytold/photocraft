@@ -349,7 +349,8 @@ fn a_size_changing_preview_lies_centred_on_the_document() {
     let mut app = app_with(64, 32, "white");
     app.background_jobs = false;
     app.run("channel.new", json!({"name": "Alpha", "fill": "black"})).unwrap();
-    let id = crate::filter_dialog::open(&mut app, "image.rotation.arbitrary").unwrap();
+    // Rotate Canvas has no Preview of its own (#14462); the canvas still places a size-changing one.
+    let id = crate::filter_dialog::open_previewing(&mut app, "image.rotation.arbitrary").unwrap();
     let ctx = app.ctx().clone();
     app.framework.dialogs.set_json_field(&ctx, id, "angle", json!(90.0)).unwrap();
     // The Preview box is on from the dialog's first drawn pass.
