@@ -84,14 +84,26 @@ fn fp(app: &PhotocraftApp) -> Fp {
     }
 }
 
-/// A smart object placed at 1.5 × 1.25 of its contents, so its contents' texels and its box's differ in size.
-fn subject() -> (Box<PhotocraftApp>, egui::Context, LayerId) {
+/// The walk's subject, by `kind`: 0 a smart object placed at 1.5 × 1.25 of its contents (its contents' texels and its
+/// box's differ in size), 1 one turned by 0.5 rad, 2 one with a stored warp (a pull applied first).
+fn subject(kind: u8) -> (Box<PhotocraftApp>, egui::Context, LayerId) {
     let mut app = app_with_square(96, photocraft_geom::Rect::new(16, 16, 48, 40));
     let ctx = app.ctx().clone();
     app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     let id = app.session.active().unwrap().active_layer.unwrap();
     begin(&mut app, &ctx).unwrap();
-    scale_box(&mut app, 1.5, 1.25);
+    match kind {
+        0 => scale_box(&mut app, 1.5, 1.25),
+        1 => turn_box(&mut app, 0.5),
+        _ => {
+            begin_warp(&mut app, &ctx).unwrap();
+            settle(&mut app);
+            let mut to = warp_mesh(&app);
+            to.points[6] += Vec2::new(4.0, -3.0);
+            pull_mesh(&mut app, 1, to);
+            settle(&mut app);
+        }
+    }
     commit(&mut app);
     land_jobs(&mut app);
     assert!(app.ui.transform.is_none(), "{}", app.ui.status);
@@ -235,7 +247,7 @@ fn close(a: &Option<Vec<[f64; 2]>>, b: &Option<Vec<[f64; 2]>>) -> bool {
 
 /// One walk; `Err` names the first invariant broken.
 fn run(steps: &[Step], end: u8) -> Result<(), String> {
-    let (mut app, ctx, id) = subject();
+    let (mut app, ctx, id) = subject(end / 2);
     let before = app.session.active().unwrap().doc.layer(id).unwrap().content.clone();
     begin(&mut app, &ctx).map_err(|e| format!("begin: {e}"))?;
     frame(&mut app);
@@ -263,7 +275,7 @@ fn run(steps: &[Step], end: u8) -> Result<(), String> {
             }
         }
     }
-    match end {
+    match end % 2 {
         0 => {
             for _ in 0..200 {
                 if open(&app).session.is_untouched() {
@@ -278,7 +290,7 @@ fn run(steps: &[Step], end: u8) -> Result<(), String> {
                 return Err(format!("undoing every step does not give back the opened session:\n  opened {start:?}\n  now    {back:?}"));
             }
             let got = ending(&mut app, &ctx, id)?;
-            let (mut fresh, fctx, fid) = subject();
+            let (mut fresh, fctx, fid) = subject(end / 2);
             begin(&mut fresh, &fctx).map_err(|e| format!("begin: {e}"))?;
             frame(&mut fresh);
             let want = ending(&mut fresh, &fctx, fid)?;
@@ -339,7 +351,7 @@ fn seq_check() {
     for seed in seed0..seed0 + seeds {
         let mut r = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
         let steps: Vec<Step> = (0..len).map(|_| random_step(&mut r)).collect();
-        let end = (seed % 2) as u8;
+        let end = (seed % 6) as u8;
         if let Err(e) = run_caught(&steps, end) {
             let (steps, e) = shrink(steps, end, &e);
             let kind = e.split(':').skip(1).collect::<Vec<_>>().join(":").lines().next().unwrap_or("").trim().to_string();
@@ -347,7 +359,7 @@ fn seq_check() {
         }
     }
     for (kind, (seed, steps, end, e)) in &failures {
-        eprintln!("\n=== {kind}\n  seed {seed}, end {}\n  steps {steps:?}\n  {e}", if *end == 0 { "undo-all + Warp" } else { "Cancel" });
+        eprintln!("\n=== {kind}\n  seed {seed}, subject {}, end {}\n  steps {steps:?}\n  {e}", end / 2, if end % 2 == 0 { "undo-all + Warp" } else { "Cancel" });
     }
     assert!(failures.is_empty(), "{} kinds of failure", failures.len());
 }
