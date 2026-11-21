@@ -67,7 +67,8 @@ impl Default for FreeformPenTool {
         Self {
             admit: Admit::Open,
             refused: false,
-            draft: OutlineDraft::new(DraftKind::Mixed, DraftReach::new(0.0, 0.0)).locking_shift_drags(),
+            // ⇧ leaves the freehand trace as drawn, as the reference's Freeform Pen does (#12832).
+            draft: OutlineDraft::new(DraftKind::Mixed, DraftReach::new(0.0, 0.0)),
             owner: None,
             target: None,
             closed: None,
