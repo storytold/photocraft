@@ -94,6 +94,9 @@ impl PhotocraftApp {
             frame: 0,
             notices_live: notices::Live::default(),
             low_memory: crate::memory_warning::Watch::default(),
+            #[cfg(test)]
+            system_ready_override: None,
+            splash: None,
             last_canvas_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             last_canvas_layer: egui::LayerId::background(),
             ppp: 1.0,
@@ -248,6 +251,11 @@ impl PhotocraftApp {
         // File › Scripts › Script Events Manager: "Start Application".
         photocraft_engine::automate_cmds::fire_event(&mut app.session, "startApplication");
         Box::new(app)
+    }
+
+    /// Enables the startup splash screen overlay for application launches.
+    pub fn enable_splash(&mut self) {
+        self.splash = Some(crate::splash::SplashState::new());
     }
 
     /// The window's egui context: the one every pass of the app runs on. SAVED-tier reads and

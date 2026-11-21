@@ -107,6 +107,7 @@ pub fn start() {
                     let mut initial = Some(load_initial_preferences(&presets, database.is_some() && !session.actions.list.actions().is_empty()));
                     services.load_prefs = Some(Box::new(move || initial.take().unwrap_or_else(stored_preferences)));
                     let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), session, services);
+                    app.enable_splash();
                     if !preset_warnings.is_empty() {
                         photocraft_ui_egui::notices::post(
                             &mut app,

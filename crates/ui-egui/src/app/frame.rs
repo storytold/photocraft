@@ -38,6 +38,74 @@ impl PhotocraftApp {
         }
         self.last_frame_start_ms = gpu_canvas::now_ms();
     }
+
+    /// Returns whether the system is fully initialized (text engine available).
+    pub fn system_ready(&self) -> bool {
+        #[cfg(test)]
+        if let Some(r) = self.system_ready_override {
+            return r;
+        }
+        photocraft_text::try_shared().is_some()
+    }
+
+    /// Returns whether automation input or screenshot captures are in flight and bypass splash gating.
+    pub(crate) fn splash_automation_active(&self, ctx: &egui::Context) -> bool {
+        let host = WindowHost::of(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        let captures_pending = self.captures_pending();
+        #[cfg(target_arch = "wasm32")]
+        let captures_pending = false;
+        !host.injected_idle() || host.injected_pass() || captures_pending
+    }
+
+    /// Returns whether the startup splash is still active (including during its initial appearance delay).
+    pub(crate) fn splash_active(&self, ctx: &egui::Context, now: f64) -> bool {
+        !self.system_ready() && self.ui.notices.is_empty() && !self.splash_automation_active(ctx) && self.splash.as_ref().is_some_and(|s| s.is_active(now))
+    }
+
+    /// Returns whether application shortcuts are suppressed by an actively rendered splash screen.
+    ///
+    /// Shortcuts remain available during the initial appearance delay (when [`crate::splash::SplashState::time_until_appearance`]
+    /// is `Some`), when notices are posted, or when system initialization has completed (`system_ready`).
+    pub fn splash_shortcuts_blocked(&self, ctx: &egui::Context, now: f64) -> bool {
+        !self.system_ready() && self.ui.notices.is_empty() && !self.splash_automation_active(ctx) && self.splash.as_ref().is_some_and(|s| s.should_render(now))
+    }
+
+    /// Updates and renders the startup splash screen if active, returning `true` when the splash
+    /// drew this pass in place of the main workspace body.
+    fn run_splash_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
+        let now = ctx.input(|i| i.time);
+        if self.splash_automation_active(ctx)
+            && let Some(s) = &mut self.splash
+        {
+            s.dismiss();
+            ctx.request_repaint();
+        }
+        let system_ready = self.system_ready();
+        if let Some(splash) = &mut self.splash {
+            splash.ensure_started(now);
+            // Closes immediately when ready and never waits for an artificial timer.
+            // Whenever notices arrive (e.g. preset warnings or failed jobs), dismiss immediately so failures are never hidden.
+            let has_failures_or_notices = !self.ui.notices.is_empty();
+            if has_failures_or_notices || system_ready || !splash.is_active(now) {
+                splash.dismiss();
+                self.splash = None;
+                ctx.request_repaint();
+            } else if splash.should_render(now) {
+                splash.show(ctx, ui);
+                if splash.dismissed {
+                    self.splash = None;
+                    ctx.request_repaint();
+                }
+                return true;
+            } else if let Some(remaining) = splash.time_until_appearance(now) {
+                // Request repaint when appear delay expires so the splash appears on time
+                // without requiring external user input.
+                ctx.request_repaint_after(remaining);
+            }
+        }
+        false
+    }
 }
 
 impl PhotocraftApp {
@@ -106,7 +174,7 @@ impl PhotocraftApp {
             play();
         }
         // Background jobs: apply finished ones, keep frames coming, Esc cancels (before the
-        // shortcuts see Esc).
+        // shortcuts see Esc). Shortcuts are suppressed while the splash is rendered.
         if !screen_picker::tick(self, ctx) {
             jobs_ui::tick(self, ctx);
             #[cfg(not(target_arch = "wasm32"))]
@@ -114,7 +182,15 @@ impl PhotocraftApp {
             // `fired` and `delivered` come only from the runtime's last pass, so a hidden logic
             // tick finds them taken.
             crate::shortcut_dispatch::record_view_commands(self);
-            shortcuts::handle(self, ctx);
+            if self.splash_shortcuts_blocked(ctx, now) {
+                for f in std::mem::take(&mut self.framework.fired) {
+                    if f.target.is_none() && f.command.id == "tools.temporary.erase" && f.phase == craft::ui::runtime::commands::FirePhase::Release {
+                        crate::hold_keys::erase_key(self, f.phase);
+                    }
+                }
+            } else {
+                shortcuts::handle(self, ctx);
+            }
         }
         let arrived: Vec<(String, Vec<u8>)> =
             self.services.inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
@@ -162,7 +238,11 @@ impl PhotocraftApp {
         // A software adapter or CPU mode chosen at startup is every document's reason.
         crate::render_path::frame(self);
         // Every frame that started its stage record closes it, whichever way `ui_body` returns.
-        self.ui_body(ui);
+        if self.run_splash_ui(ui, &ctx) {
+            self.automation_input = false;
+        } else {
+            self.ui_body(ui);
+        }
         // What an injected step changed is the target of the rest of its request: only a change
         // between passes withdraws queued input (`withdraw_stale_input`).
         #[cfg(not(target_arch = "wasm32"))]

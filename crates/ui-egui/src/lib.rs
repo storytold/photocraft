@@ -56,6 +56,7 @@ pub mod panels;
 pub mod preset_files_ui;
 pub mod proxy;
 pub mod render_path;
+pub mod splash;
 pub mod state;
 pub mod texel_guard;
 pub mod theme;
@@ -406,6 +407,10 @@ pub struct PhotocraftApp {
     pub(crate) notices_live: notices::Live,
     /// The low-memory warning's schedule and state (`memory_warning`).
     pub(crate) low_memory: memory_warning::Watch,
+    #[cfg(test)]
+    pub(crate) system_ready_override: Option<bool>,
+    /// Startup splash screen showing loading progress before workspace is presented.
+    pub splash: Option<splash::SplashState>,
     /// Screen rect of the main canvas last frame (for overlays and the navigator).
     pub last_canvas_rect: egui::Rect,
     /// The egui layer the main canvas was drawn on last frame: preset drops target it.

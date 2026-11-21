@@ -342,6 +342,11 @@ sync_github_name = true
 real_name = "Serikov Roman"
 sync_github_name = false
 
+[people.sbjwin]
+real_name = "Baekjin Sung"
+display_name = "Baekjin"
+sync_github_name = false
+
 [people.tomgardenart]
 display_name = "Nostella"
 sync_github_name = false

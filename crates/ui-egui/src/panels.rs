@@ -21,7 +21,7 @@ pub mod apply_data_set_ui;
 pub(crate) mod blend_preview;
 #[cfg(test)]
 mod blend_rows_tests;
-pub(super) mod brand;
+pub(crate) mod brand;
 pub mod brush_panel;
 pub mod brush_preview;
 pub mod brush_sections;
