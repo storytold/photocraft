@@ -285,6 +285,10 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
         .into_iter()
         // Optional parameters the generic dialog can't express keep their defaults.
         .filter(|p| {
+            // The desktop Auto-Blend dialog leaves the byte budget to the engine.
+            if command == "edit.autoBlendLayers" && p.key == "memoryBudget" {
+                return false;
+            }
             !(matches!(
                 command,
                 "edit.fade" | "edit.findAndReplaceText" | "edit.defineBrushPreset" | "edit.defineCustomShape" | "edit.autoAlignLayers" | "edit.autoBlendLayers"
