@@ -38,6 +38,13 @@ fn ok_is_greyed_without_a_source_file_or_with_no_profile() {
     // A folder in Folder mode is a source too.
     set(&mut h, id, "input", json!({"files": [], "folder": dir.path().to_string_lossy(), "useFolder": true}));
     assert!(ok_enabled(&h), "a folder");
+    let empty = tempfile::tempdir().unwrap();
+    std::fs::write(empty.path().join("notes.txt"), "not an image").unwrap();
+    set(&mut h, id, "input", json!({"files": [], "folder": empty.path().to_string_lossy(), "useFolder": true}));
+    assert!(!ok_enabled(&h), "a folder without images");
+    let refused = crate::dialogs::testing::confirm(h.state_mut(), id);
+    h.run_steps(3);
+    assert!(refused.is_err() && is_open(&h, id), "confirm refuses it too: {refused:?}");
 }
 
 #[test]
