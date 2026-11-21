@@ -403,6 +403,7 @@ pub(crate) const PROMPTS: &[PromptRow] = &[
     crate::analysis::note_alerts::answer,
     delete_layer_prompt::answer,
     mask_trash_prompt::answer,
+    mask_replace_prompt::answer,
     disk_change_prompt::answer,
     rasterize_prompt::answer,
     live_shape_prompt::answer,
@@ -733,6 +734,7 @@ pub mod layer_style;
 pub(crate) mod lens_batch_ui;
 pub mod liquify_ui;
 pub mod live_shape_prompt;
+pub(crate) mod mask_replace_prompt;
 pub mod mask_trash_prompt;
 pub mod merge_channels_ui;
 pub mod new_doc_ui;

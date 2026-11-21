@@ -546,8 +546,10 @@ impl LayerTree for PhotoLayers {
     }
 
     fn accepts_mask_drop(&self, from: &LayerId, part: LayerPart, to: &LayerId) -> bool {
-        // The engine moves layer masks only.
-        part == LayerPart::LayerMask && from != to && self.layer(to).is_some_and(|l| l.mask.is_none())
+        let alt = craft::ui::runtime::pointer::frame(self.app.ctx()).mods.alt;
+        part == LayerPart::LayerMask
+            && from != to
+            && self.layer(to).is_some_and(|l| l.mask.is_none() || (alt && crate::dialogs::mask_replace_prompt::can_replace(l)))
     }
 
     fn label_colors_in_menu(&self, target: &MenuTarget<LayerId>) -> bool {
