@@ -170,10 +170,15 @@ fn assert_same(a: &ImportResult, b: &ImportResult, what: &str) {
 /// Both paths agree on `bytes`, and the stream is the one that took it.
 fn assert_streams(bytes: &[u8], what: &str) {
     let want = whole(bytes).unwrap();
-    // The stream took it (the palette and file encoding are added by `import_flat`), and the
-    // document that comes out is the whole-image one.
-    assert!(streamed(bytes).unwrap().is_some(), "{what}: did not stream");
-    assert_same(&forced(bytes).unwrap(), &want, what);
+    let progress = std::sync::Mutex::new(Vec::new());
+    let report = |fraction| progress.lock().unwrap().push(fraction);
+    let got = import_flat_impl("t", bytes, &Interrupt::new(&|| false, &report), Some(0)).unwrap();
+    let progress = progress.into_inner().unwrap();
+    // Row groups report progress between the stream's start and the whole decoder's 0.6.
+    // A stream that falls back can report rows too, so also check for the whole-decode step.
+    let streamed_rows = progress.iter().any(|&fraction| fraction > 0.02 && fraction < 0.6);
+    assert!(streamed_rows && !progress.contains(&0.6), "{what}: did not finish streaming: {progress:?}");
+    assert_same(&got, &want, what);
 }
 
 const SIZES: [(u32, u32); 5] = [(1, 1), (1, 300), (255, 3), (257, 257), (513, 520)];
