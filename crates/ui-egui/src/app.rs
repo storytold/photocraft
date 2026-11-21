@@ -73,6 +73,7 @@ impl PhotocraftApp {
             toolbar_slots: Default::default(),
             layers_tree: None,
             dock_model: Default::default(),
+            preset_art: Default::default(),
             move_preview: None,
             move_hover: None,
             move_distance: None,

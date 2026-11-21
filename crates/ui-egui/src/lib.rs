@@ -362,6 +362,8 @@ pub struct PhotocraftApp {
     pub(crate) layers_tree: Option<craft::ui::contract::Tracked<panels::layers_tree::PhotoLayers>>,
     /// The dock's spec model and kept panels (`panel_docking::DockModel`).
     pub(crate) dock_model: panels::panel_docking::DockModel,
+    /// The patterns and styles the preset views draw from, held while unchanged (`preset_browser::PresetArt`).
+    pub(crate) preset_art: panels::preset_browser::PresetArt,
     /// Move tool drag shown live (`move_ui`).
     pub(crate) move_preview: Option<move_ui::MovePreview>,
     /// Move tool › Show Highlight on Rollover: the last hover answer (`move_hover`).
