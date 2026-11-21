@@ -149,6 +149,21 @@ fn bad_target_options_leave_the_document_as_it_was() {
     }
 }
 
+/// With non-linear history the Grayscale step moves the redo states onto the undo side: a failed
+/// target still makes the state before the run current, with those states and the step redoable.
+#[test]
+fn bad_target_options_with_non_linear_history_go_back_to_the_state_before_the_run() {
+    let mut s = measured(8);
+    s.active_mut().unwrap().history.non_linear = true;
+    assert!(s.undo() && s.undo());
+    let before = (history(&s), shape(&s), doc(&s).selection.is_some());
+    let redo: Vec<String> = s.active().unwrap().history.redo_labels().map(str::to_owned).collect();
+    assert!(s.execute(CMD, json!({"to": "bitmap", "method": "zigzag"})).is_err());
+    assert_eq!((history(&s), shape(&s), doc(&s).selection.is_some()), before);
+    let now: Vec<&str> = s.active().unwrap().history.redo_labels().collect();
+    assert_eq!(now, [redo.iter().map(String::as_str).collect::<Vec<_>>(), vec!["Mode Change"]].concat());
+}
+
 /// Routes Photoshop was not measured on are refused, not guessed; an unticked source still
 /// leaves the document without an error.
 #[test]

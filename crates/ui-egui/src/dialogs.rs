@@ -243,8 +243,11 @@ pub(crate) mod params {
             let answer = if crate::actions::is_editor(app, id) {
                 // An editor of Record Again or of a paused menu step: its answer is judged as the step requires, with the
                 // values OK runs.
-                let params = crate::filter_dialog::command_params(&result.key, &result.fields);
-                crate::actions::check_editor(app, id, &result.key, &params).map_err(Label::from)
+                match conditional_mode_change_dialog::editor_answer(app, &result.key, &result.fields) {
+                    Some(params) => crate::actions::check_editor(app, id, conditional_mode_change_dialog::COMMAND, &params),
+                    None => crate::actions::check_editor(app, id, &result.key, &crate::filter_dialog::command_params(&result.key, &result.fields)),
+                }
+                .map_err(Label::from)
             } else {
                 match family_for(&result.key).and_then(|family| family.check) {
                     Some(check) => check(app, &result),

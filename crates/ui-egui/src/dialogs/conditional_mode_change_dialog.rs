@@ -162,15 +162,35 @@ pub(crate) fn owns_target(key: &str) -> bool {
 /// The `ParamFamily::run` of the target modes' dialogs: one opened from this dialog runs the command with its options;
 /// one opened from Image › Mode runs its own command.
 pub(crate) fn run_target(app: &mut PhotocraftApp, ctx: &egui::Context, mut result: ParamResult) {
-    let Some(Value::Object(pending)) = crate::dialogs::params::captured(app, &result.key).get(PENDING).cloned() else {
+    let Some(fields) = pending_fields(app, &result.key, &result.fields) else {
         return crate::filter_dialog::run(app, ctx, result);
     };
-    for (key, value) in pending {
-        result.fields.set(key, FieldValue::Json(value));
-    }
-    if let Err(error) = crate::filter_dialog::run_command(app, ctx, COMMAND, result) {
+    result.fields = fields;
+    // A Record Again editor's step is this command, not the target mode's.
+    let outcome = if crate::actions::record_again::owns_dialog(app, result.id) {
+        let params = crate::filter_dialog::command_params(COMMAND, &result.fields);
+        crate::actions::record_again::confirm(app, result.id, COMMAND, params)
+    } else {
+        crate::filter_dialog::run_command(app, ctx, COMMAND, result)
+    };
+    if let Err(error) = outcome {
         crate::notices::error(app, error);
     }
+}
+
+/// What the OK of a target mode's dialog opened from this one answers for a step that judges it: this command's params.
+pub(crate) fn editor_answer(app: &PhotocraftApp, key: &str, fields: &DialogFields) -> Option<Value> {
+    pending_fields(app, key, fields).map(|fields| crate::filter_dialog::command_params(COMMAND, &fields))
+}
+
+/// The target mode's dialog `key`'s `fields` with this dialog's `from` and `to`, when this dialog opened it.
+fn pending_fields(app: &PhotocraftApp, key: &str, fields: &DialogFields) -> Option<DialogFields> {
+    let Some(Value::Object(pending)) = crate::dialogs::params::captured(app, key).get(PENDING).cloned() else { return None };
+    let mut fields = fields.clone();
+    for (key, value) in pending {
+        fields.set(key, FieldValue::Json(value));
+    }
+    Some(fields)
 }
 
 #[cfg(test)]

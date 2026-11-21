@@ -114,28 +114,38 @@ pub(super) fn conditional_mode_change(s: &mut Session, p: &Value) -> Result<Valu
         options.remove(key);
     }
     let journal = s.journal.len();
+    let start = history_mark(s);
     let target = if to == "indexed" { "image.mode.indexedColor".to_string() } else { format!("image.mode.{to}") };
     for (done, id) in steps.iter().enumerate() {
         if let Err(e) = s.execute(id, json!({})) {
-            take_back(s, done, journal);
+            take_back(s, done, start, journal);
             return Err(e);
         }
     }
     if let Err(e) = s.execute(&target, Value::Object(options)) {
         // As cancelling part-way in Photoshop: the state before the run is current again, the
         // steps already taken stay as redo states.
-        take_back(s, steps.len(), journal);
+        take_back(s, steps.len(), start, journal);
         return Err(e);
     }
     Ok(json!({"changed": true, "mode": to}))
 }
 
-/// Undo the `n` steps a failed run took and drop them from the journal, so a recording action
-/// does not get them (a failed command is never journaled itself).
-fn take_back(s: &mut Session, n: usize, journal: usize) {
-    for _ in 0..n {
-        // Each of these steps recorded a state just now, so there is one to undo.
-        s.undo();
+/// The current history state's id and the number of redo states, before a run.
+fn history_mark(s: &Session) -> (Option<u64>, usize) {
+    s.active().map_or((None, 0), |st| (st.history.row_id(st.history.past_len()), st.history.redo_labels().count()))
+}
+
+/// Undo back to the state `start` was current at, and drop the steps a failed run took from the
+/// journal, so a recording action does not get them (a failed command is never journaled itself).
+fn take_back(s: &mut Session, n: usize, (start, redo): (Option<u64>, usize), journal: usize) {
+    // In non-linear history the first step also moved the `redo` states onto the undo side, so the
+    // state before the run is up to that many undos further back than the `n` steps.
+    for _ in 0..n + redo {
+        let current = s.active().and_then(|st| st.history.row_id(st.history.past_len()));
+        if current == start || !s.undo() {
+            break;
+        }
     }
     s.journal.truncate(journal);
 }
