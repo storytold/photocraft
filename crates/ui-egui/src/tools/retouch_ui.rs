@@ -24,6 +24,11 @@ pub(crate) fn alt_flipped(tool: Tool, alt: bool) -> Tool {
 /// `points` and `target`): shared by the live preview and the commit. `None` when no source
 /// point is set yet.
 pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
+    clone_params_for(app, app.ui.tool)
+}
+
+// A release can arrive after a tool switch; only Aligned follows the stroke's press tool (#12100).
+fn clone_params_for(app: &PhotocraftApp, aligned_tool: Tool) -> Option<Value> {
     // Refused there (`healing_refused`): no live preview either.
     if healing_in_indexed(app, app.ui.tool) {
         return None;
@@ -33,7 +38,8 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     let mode = crate::blend_keys::brush_tool_mode(app.ui.tool, app.session.tools.brush.mode);
     // View › Pattern Preview: both tools carry a stroke on across the canvas edges (#8883).
     let sample = if clone_stamp_indexed(app) { "current" } else { o.clone_sample.as_str() };
-    let mut p = json!({"aligned": o.clone_aligned, "sampleLayer": sample, "mode": mode.label(), "wrap": app.ui.view.pattern_preview});
+    let aligned = if aligned_tool == Tool::Healing { o.healing_aligned } else { o.clone_aligned };
+    let mut p = json!({"aligned": aligned, "sampleLayer": sample, "mode": mode.label(), "wrap": app.ui.view.pattern_preview});
     if app.ui.tool == Tool::CloneStamp {
         p["opacity"] = json!(app.session.tools.brush.opacity * 100.0);
         p["flow"] = json!(app.session.tools.brush.flow * 100.0);
@@ -220,7 +226,7 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
             if healing_refused(app, tool) {
                 return true;
             }
-            let Some(p) = clone_params(app) else {
+            let Some(p) = clone_params_for(app, tool) else {
                 if clone_stamp_without_source(app, tool) {
                     return true;
                 }
@@ -275,7 +281,8 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
     match result {
         Ok(r) if matches!(tool, Tool::Healing | Tool::CloneStamp) => {
             // Aligned: keep the offset for later strokes; non-aligned: every stroke restarts at the source.
-            app.ui.clone_offset = r.get("offset").and_then(|v| serde_json::from_value(v.clone()).ok()).filter(|_| o.clone_aligned);
+            let aligned = if tool == Tool::Healing { o.healing_aligned } else { o.clone_aligned };
+            app.ui.clone_offset = r.get("offset").and_then(|v| serde_json::from_value(v.clone()).ok()).filter(|_| aligned);
         }
         Ok(r) if tool == Tool::PatternStamp => {
             app.ui.pattern_stamp_phase = r.get("phase").and_then(|v| serde_json::from_value(v.clone()).ok()).filter(|_| o.pattern_stamp_aligned);
@@ -725,3 +732,7 @@ mod clone_stamp_no_source_alert_tests;
 #[cfg(test)]
 #[path = "remove_options_bar_labels_tests.rs"]
 mod remove_options_bar_labels_tests;
+
+#[cfg(test)]
+#[path = "../healing_aligned_default_tests.rs"]
+mod healing_aligned_default_tests;

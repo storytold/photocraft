@@ -143,8 +143,10 @@ pub(super) fn spot_healing(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option
 pub(super) fn clone(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
     let source_unset = app.session.presets.clone.active().source.is_none();
     let indexed = crate::retouch_ui::clone_stamp_indexed(app);
+    let tool = app.ui.tool;
     let o = &mut app.ui.tool_options;
-    check(ui, tl!("Aligned"), &mut o.clone_aligned, true, None);
+    let aligned = if tool == crate::state::Tool::Healing { &mut o.healing_aligned } else { &mut o.clone_aligned };
+    check(ui, tl!("Aligned"), aligned, true, None);
     let samples = string_entries(&[("current", tl!("Current Layer")), ("currentAndBelow", tl!("Current & Below")), ("all", tl!("All Layers"))]);
     let mut greyed = "current".to_owned();
     let sample = if indexed { &mut greyed } else { &mut o.clone_sample };
