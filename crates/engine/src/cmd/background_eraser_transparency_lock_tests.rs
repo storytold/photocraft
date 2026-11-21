@@ -32,7 +32,8 @@ fn click() -> Value {
 
 #[test]
 fn a_click_on_a_transparency_locked_layer_erases_as_on_an_unlocked_one() {
-    for depth in [8, 16, 32] {
+    // A 32-bit document refuses the tool outright (#11912).
+    for depth in [8, 16] {
         let mut free = session(depth);
         free.execute("paint.backgroundEraser", click()).unwrap();
         let want = alphas(&free);
@@ -77,7 +78,8 @@ fn with_a_colour_channel_target_the_preview_matches_the_commit_on_a_locked_layer
     // changes alpha. The commit mixes back without the lock, so the preview must too: at 32 bits
     // a lock-keeping mix rounds partly transparent pixels differently. The stroke crosses the
     // band's edge and a half-transparent strip, at half opacity, so every mix case is under the tip.
-    for depth in [8, 16, 32] {
+    // A 32-bit document refuses the tool outright (#11912).
+    for depth in [8, 16] {
         let mut s = session(depth);
         s.execute("select.rect", json!({"x": 0, "y": 4, "width": 64, "height": 6, "antiAlias": false})).unwrap();
         s.execute("edit.fill", json!({"color": "#3a7fd0", "opacity": 37})).unwrap();

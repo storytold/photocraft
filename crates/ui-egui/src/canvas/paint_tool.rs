@@ -470,6 +470,10 @@ impl CanvasTool for PaintTool<'_> {
             if tool == Tool::MixerBrush && mixer_target_locked(app) {
                 return Cursor::System(CursorIcon::NotAllowed);
             }
+            // The Background Eraser can't work in Indexed Color: a no-entry sign, and a press does nothing (#11912).
+            if crate::eraser_ui::background_eraser_blocked(app, tool) {
+                return Cursor::System(CursorIcon::NotAllowed);
+            }
             // The Paint Bucket and the Magic Eraser act on a click: their own pointers, no brush tip.
             if let Some(cursor) = click_tool_cursor(tool, cx.precise()) {
                 return cursor;
