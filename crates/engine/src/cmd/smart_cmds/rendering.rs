@@ -496,6 +496,7 @@ pub(crate) fn render_with_warnings_using(sm: &SmartObject, sources: &mut Warning
         // Keep the same source snapshot for fallback, including authorized linked reads.
         return render_in_with_source(doc, sm, &JobCtx::new(), Some((name, bytes))).map(|surface| (surface, Vec::new()));
     }
+    photocraft_io::linked::check_historical_xcf_digest(sm.historical_xcf_link_digest, &bytes).map_err(EngineError::HistoricalXcfLinkChanged)?;
     let name_key = *blake3::hash(name.as_bytes()).as_bytes();
     if !unapplied_filters(sm).is_empty() {
         return Err(other("the smart object has unsupported visible filters"));

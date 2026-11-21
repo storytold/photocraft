@@ -18,6 +18,8 @@ For desktop control `app.open`, use `historicalXcfSampleOrder`. Both parameters 
 `"little-endian"` or `"big-endian"`.
 In the desktop Batch and Image Processor dialogs, use **Historical XCF Sample Order** for
 folder inputs. Choose **Unspecified** to leave files that require a choice as per-file errors.
+When Batch runs with `overrideOpen`, an order in the recorded Open step takes precedence.
+Open steps without an order use the Batch choice.
 
 ## Decoder ownership
 

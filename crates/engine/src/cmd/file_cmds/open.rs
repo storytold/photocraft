@@ -6,18 +6,26 @@ pub(crate) struct BatchOpen {
     pub path: String,
     pub sources: Vec<photocraft_doc::DocId>,
     pub raw_ppi: f64,
+    pub historical_xcf_sample_order: Option<photocraft_io::HistoricalXcfSampleOrder>,
     /// A recorded Open read a source that must not be replaced (Affinity, Krita, XCF, PDN).
     pub read_only: bool,
 }
 
-/// Replace only the file choice before either authorization gate; malformed params stay invalid.
+/// Bind the file and any unspecified XCF sample order before either authorization gate.
 pub(crate) fn batch_open_params(s: &Session, id: &str, params: &Value) -> Option<Value> {
     let binding = s.batch_open.as_ref()?;
     if !matches!(id, "file.openAs" | "file.openExrParts") || !(params.is_object() || params.is_null()) {
         return None;
     }
     let mut effective = if params.is_null() { super::json!({}) } else { params.clone() };
-    effective.as_object_mut()?.insert("path".into(), Value::String(binding.path.clone()));
+    let fields = effective.as_object_mut()?;
+    fields.insert("path".into(), Value::String(binding.path.clone()));
+    if id == "file.openAs"
+        && let Some(order) = binding.historical_xcf_sample_order
+        && matches!(fields.get("historicalXcfSampleOrder"), None | Some(Value::Null))
+    {
+        fields.insert("historicalXcfSampleOrder".into(), json!(order));
+    }
     Some(effective)
 }
 

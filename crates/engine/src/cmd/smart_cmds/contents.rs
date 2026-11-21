@@ -238,7 +238,7 @@ fn replace_contents_bytes_with_order(
 pub fn contents_of(doc: &Document, id: LayerId) -> Result<(String, Arc<Vec<u8>>)> {
     let object = smart(doc, id)?;
     let (name, bytes) = source_bytes(&doc.metadata, &object.source).ok_or_else(|| other("the smart object's contents are unavailable"))?;
-    photocraft_io::linked::check_historical_xcf_digest(object.historical_xcf_link_digest, &bytes).map_err(other)?;
+    photocraft_io::linked::check_historical_xcf_digest(object.historical_xcf_link_digest, &bytes).map_err(EngineError::HistoricalXcfLinkChanged)?;
     Ok((name, bytes))
 }
 

@@ -1080,7 +1080,8 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     scratch.batch_open_notices = Some(Vec::new());
                 }
                 if override_open {
-                    scratch.batch_open = Some(super::open::BatchOpen { path: path.to_string(), sources: Vec::new(), raw_ppi, read_only: false });
+                    scratch.batch_open =
+                        Some(super::open::BatchOpen { path: path.to_string(), sources: Vec::new(), raw_ppi, historical_xcf_sample_order, read_only: false });
                 } else {
                     let bytes = read_file(path)?;
                     if quiet_profiles || quiet_raw {

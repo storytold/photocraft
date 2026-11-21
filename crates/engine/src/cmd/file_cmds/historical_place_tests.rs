@@ -259,3 +259,34 @@ fn folder_batch_and_image_processor_use_explicit_historical_xcf_order() {
         assert!(std::path::Path::new(written).is_file(), "{result:?}");
     }
 }
+
+#[test]
+fn batch_override_open_inherits_the_batch_order_and_keeps_a_recorded_choice() {
+    let folder = tempfile::tempdir().unwrap();
+    let source = folder.path().join("big.xcf");
+    std::fs::write(&source, fixture::historical_pixel(false)).unwrap();
+    let mut s = session();
+    for (name, batch_order, recorded_order) in [
+        ("inherits-missing", "big-endian", None),
+        ("inherits-null", "big-endian", Some(Value::Null)),
+        ("keeps-recorded", "little-endian", Some(json!("big-endian"))),
+    ] {
+        let mut open = json!({"path":"recorded.xcf"});
+        if let Some(order) = recorded_order {
+            open["historicalXcfSampleOrder"] = order;
+        }
+        let result = s
+            .execute(
+                "file.automate.batch",
+                json!({"input":[source],"output":folder.path().join(name),"format":"png","overrideOpen":true,
+                    "historicalXcfSampleOrder":batch_order,"steps":[["file.openAs",open]]}),
+            )
+            .unwrap();
+        assert_eq!(result["errors"], json!([]), "{name}: {result}");
+        let written = result["files"][0].as_str().unwrap();
+        let png = std::fs::read(written).unwrap();
+        let doc = photocraft_io::import(written, &png).unwrap().document;
+        let pixel = doc.layers[0].surface().unwrap().pixel(0, 0);
+        assert_eq!(pixel, [0x1234 as f32 / 65535., 0x4567 as f32 / 65535., 0x89ab as f32 / 65535., 1.], "{name}");
+    }
+}

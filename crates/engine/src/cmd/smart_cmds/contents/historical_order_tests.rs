@@ -316,13 +316,31 @@ fn changed_historical_links_refuse_decode_and_storage_commands_atomically() {
     let error = s.execute("layer.smartObjects.exportContents", json!({"layer":id.0,"path":original_format})).unwrap_err();
     assert!(error.to_string().contains("relink and choose"));
     assert!(!original_format.exists());
-    assert!(contents_of(&s.active().unwrap().doc, id).is_err(), "the desktop export uses this same reader");
+    assert!(matches!(contents_of(&s.active().unwrap().doc, id), Err(EngineError::HistoricalXcfLinkChanged(_))));
     std::fs::write(&source, &approved).unwrap();
+    assert_eq!(contents_of(&s.active().unwrap().doc, id).unwrap().1.as_slice(), approved);
     s.execute("layer.smartObjects.embedAllLinked", json!({})).unwrap();
     let object = object(&s, id);
     assert_eq!(object.historical_xcf_sample_order, Some(HistoricalXcfSampleOrder::LittleEndian));
     assert!(object.historical_xcf_link_digest.is_none());
     assert!(matches!(&object.source, SmartSource::Embedded { bytes, .. } if bytes.as_slice() == approved));
+}
+
+#[test]
+fn warning_render_refuses_svg_that_replaced_an_approved_historical_xcf_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("historical.xcf");
+    std::fs::write(&path, fixture::historical_pixel(true)).unwrap();
+    let mut s = session();
+    let layer = s.execute("file.placeLinked", json!({"path":path,"historicalXcfSampleOrder":"little-endian"})).unwrap();
+    let id = LayerId(layer["layer"].as_u64().unwrap());
+    let doc = s.active().unwrap().doc();
+    let object = object(&s, id);
+    assert!(crate::smart_cmds::render_with_warnings(doc, object).unwrap().0.is_some());
+
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="red"/></svg>"#;
+    std::fs::write(&path, svg).unwrap();
+    assert!(matches!(crate::smart_cmds::render_with_warnings(doc, object), Err(EngineError::HistoricalXcfLinkChanged(_))));
 }
 
 #[test]
