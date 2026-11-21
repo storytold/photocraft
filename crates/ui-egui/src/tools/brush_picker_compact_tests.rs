@@ -94,3 +94,20 @@ fn disabled_brush_field_does_not_open_or_edit() {
         assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
     }
 }
+
+#[test]
+fn changing_tools_refreshes_the_open_fields_compact_rows() {
+    let mut h = field(Tool::BackgroundEraser, true);
+    let history = h.state().session.active().unwrap().history.past_len();
+    open_field(&mut h);
+    assert!(h.query_by_label("Tolerance:").is_some());
+    h.state_mut().ui.tool = Tool::Brush;
+    h.run_steps(4);
+    assert!(h.query_by_label("Tolerance:").is_none(), "the old tool's custom rows are not cached into Brush");
+    assert!(h.query_by_label("Brush Preset Options").is_some());
+    h.state_mut().ui.tool = Tool::BackgroundEraser;
+    h.run_steps(4);
+    assert!(h.query_by_label("Tolerance:").is_some(), "the memoized field observes the new tool's row inputs");
+    assert!(h.query_by_label("Brush Preset Options").is_none());
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+}
