@@ -420,7 +420,6 @@ fn bitmap_mode_refusal(s: &Session, id: &str, params: &Value) -> Option<&'static
 mod bitmap_mode_tests {
     use serde_json::json;
 
-
     /// #10484: Photoshop 2025 on a Bitmap document refuses Gaussian Blur, Add Noise, Levels and
     /// Brightness/Contrast, and runs Invert. They all ran.
     #[test]

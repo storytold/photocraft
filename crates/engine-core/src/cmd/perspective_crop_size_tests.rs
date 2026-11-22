@@ -4,7 +4,6 @@
 use photocraft_algo::transform::{convex_quad, quad_free_size};
 use serde_json::{Value, json};
 
-
 const SKEWED: [[f64; 2]; 4] = [[100.0, 50.0], [700.0, 80.0], [760.0, 450.0], [40.0, 420.0]];
 const PAST_CANVAS: [[f64; 2]; 4] = [[100.0, 50.0], [872.0, 50.0], [872.0, 550.0], [100.0, 450.0]];
 const RECTANGLE: [[f64; 2]; 4] = [[100.0, 50.0], [700.0, 50.0], [700.0, 450.0], [100.0, 450.0]];

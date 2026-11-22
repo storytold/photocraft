@@ -6608,6 +6608,34 @@ dependencies = [
 name = "photocraft-engine"
 version = "0.23.1"
 dependencies = [
+ "blake3",
+ "craft-affinity",
+ "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=e953d47a378776dea207899b10baf969fc8cbe53)",
+ "craft-develop-model",
+ "craft-image-codecs",
+ "craft-psd",
+ "exr",
+ "photocraft-algo",
+ "photocraft-color",
+ "photocraft-compose",
+ "photocraft-doc",
+ "photocraft-engine-core",
+ "photocraft-format",
+ "photocraft-geom",
+ "photocraft-io",
+ "photocraft-paint",
+ "photocraft-raster",
+ "photocraft-text",
+ "photocraft-vector",
+ "rayon",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "photocraft-engine-core"
+version = "0.23.1"
+dependencies = [
  "base64 0.22.1",
  "blake3",
  "chrono",

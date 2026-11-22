@@ -96,7 +96,6 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests {
     use serde_json::json;
 
-
     #[test]
     fn detect_faces_reports_no_faces_on_a_plain_image_and_validates_params() {
         let mut s = crate::session();

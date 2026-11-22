@@ -40,19 +40,36 @@ pub struct Install {
 
 /// Install `install` for this process. Installing the same tables again (the same names in the
 /// same order) does nothing. Different tables are refused with [`EngineError::InstallConflict`],
-/// and from then on every command fails with it and the registry lists nothing.
+/// and from then on every command fails with it and the registry readers ([`command_specs`], [`find`]) panic with it.
 pub fn install(install: Install) -> Result<()> {
     INSTALLED.install(install)
 }
 
-/// Every installed command, in registry order (none before an install).
+/// Every installed command, in registry order.
+///
+/// # Panics
+/// Before an install, or after a conflicting one.
 pub fn command_specs() -> &'static [CommandSpec] {
-    INSTALLED.registry().map_or(&[][..], |r| r.specs.as_slice())
+    installed().specs.as_slice()
 }
 
 /// The installed command `id`, if any.
+///
+/// # Panics
+/// Before an install, or after a conflicting one.
 pub fn find(id: &str) -> Option<&'static CommandSpec> {
-    INSTALLED.registry().ok()?.get(id)
+    installed().get(id)
+}
+
+/// The process's registry, for the readers that have no error to report: reading commands before
+/// any install is a bug in the caller, and an empty list would let a loop over the commands check
+/// nothing.
+#[allow(clippy::panic, reason = "the readers' signatures have no error; the message names the install the caller missed")]
+fn installed() -> &'static Registry {
+    match INSTALLED.registry() {
+        Ok(registry) => registry,
+        Err(e) => panic!("{e}"),
+    }
 }
 
 /// The installed command `id`, for running it: [`EngineError::NotInstalled`] before an install,

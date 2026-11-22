@@ -174,6 +174,7 @@ pub use cmd::web_cmds;
 pub use cmd::wia_cmds;
 pub use doc_state::{CopiedStyle, DocState, DocStateInputs, PRECHECKED, ToolState, selected_in};
 pub use error::{EngineError, Result};
+pub use install::{install, session};
 pub use session::move_item;
 use session::restore_target;
 pub(crate) use session::{carry_visibility, fix_selection, visibility_changes};

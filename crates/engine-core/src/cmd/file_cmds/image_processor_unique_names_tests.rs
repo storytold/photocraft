@@ -7,7 +7,6 @@ use std::{
 
 use serde_json::{Value, json};
 
-
 const COMMAND: &str = "file.scripts.imageProcessor";
 const PIXELS: &[u8] = b"P6\n2 1\n255\n\xff\0\0\0\xff\0";
 
