@@ -18,6 +18,7 @@ use craft::ui::pickers::Select;
 use craft::ui::runtime::env::Label;
 use craft::ui::style::TypeRole;
 use craft::ui::text::NumberField;
+use photocraft_algo::sun::{self, Frame};
 use photocraft_doc::DocId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -30,18 +31,33 @@ fn label(text: &str) -> Label {
     Label::from(text.to_string())
 }
 
-/// The axis conventions: the command's `frame` value, its name and where the image centre faces.
-const FRAMES: [(&str, &str, &str); 3] = [
-    ("yUpLeftHanded", "Y up, left-handed", "+Y is up, the image centre faces +Z and its right +X."),
-    ("yUpRightHanded", "Y up, right-handed", "+Y is up, the image centre faces −Z and its right +X."),
-    ("zUpRightHanded", "Z up, right-handed", "+Z is up, the image centre faces +Y and its right +X."),
-];
+/// The axis conventions: the command's `frame` value and its name.
+const FRAMES: [(&str, &str); 3] = [("yUpLeftHanded", "Y up, left-handed"), ("yUpRightHanded", "Y up, right-handed"), ("zUpRightHanded", "Z up, right-handed")];
+
+/// The ways the image centre can face, as turns to the right of the frame's own facing in degrees
+/// (the command's `heading` before a sky rotation).
+const FACINGS: [i32; 4] = [0, 90, 180, -90];
+
+fn frame_of(key: &str) -> Frame {
+    serde_json::from_value(json!(key)).unwrap_or(Frame::YUpLeftHanded)
+}
+
+/// The axis the image centre faces in `frame` when turned `facing` degrees, such as "+X".
+fn facing_axis(frame: Frame, facing: i32) -> String {
+    let d = frame.from_sphere(sun::turn([0.0, 0.0, 1.0], f64::from(facing)));
+    let (i, v) = d.iter().enumerate().fold((0, 0.0f64), |best, (i, v)| if v.abs() > best.1.abs() { (i, *v) } else { best });
+    format!("{}{}", if v < 0.0 { "−" } else { "+" }, ["X", "Y", "Z"][i])
+}
 
 /// The options the dialog runs the command with.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct SunOptions {
     frame: String,
-    heading: Option<f64>,
+    /// One of [`FACINGS`].
+    facing: i32,
+    /// The sky's own rotation about the up axis, turning the way a skybox material's Rotation does
+    /// (the opposite way to `heading`).
+    rotation: Option<f64>,
     exposure: Option<f64>,
     /// Where the user put the sun, in document pixels; `None` finds it.
     #[serde(default)]
@@ -50,13 +66,14 @@ pub(crate) struct SunOptions {
 
 impl Default for SunOptions {
     fn default() -> Self {
-        SunOptions { frame: FRAMES[0].0.to_string(), heading: Some(0.0), exposure: Some(1.0), at: None }
+        SunOptions { frame: FRAMES[0].0.to_string(), facing: 0, rotation: Some(0.0), exposure: Some(1.0), at: None }
     }
 }
 
 impl SunOptions {
     fn params(&self) -> Value {
-        json!({"frame": self.frame, "heading": self.heading.unwrap_or(0.0), "exposure": self.exposure.unwrap_or(1.0).max(0.0), "at": self.at})
+        let heading = f64::from(self.facing) - self.rotation.unwrap_or(0.0);
+        json!({"frame": self.frame, "heading": heading, "exposure": self.exposure.unwrap_or(1.0).max(0.0), "at": self.at})
     }
 }
 
@@ -128,19 +145,29 @@ fn body(ui: &mut egui::Ui, options: &mut SunOptions, result: &Result<Value, Stri
     Text::new(label(tl!("Wrong spot? Click or drag on the sun in the image."))).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
     Text::new(label(&format!("{}: {:.2}°   {}: {:.2}°", tl!("Azimuth"), number(&r["azimuth"]), tl!("Elevation"), number(&r["elevation"])))).show(ui);
 
-    let entries: Vec<Entry<String>> = FRAMES.iter().map(|(key, name, _)| Entry::new((*key).to_string(), label(tl!(name)))).collect();
+    let entries: Vec<Entry<String>> = FRAMES.iter().map(|(key, name)| Entry::new((*key).to_string(), label(tl!(name)))).collect();
     if let Some(frame) = Select::new(label(tl!("Axes")), Bind::given(options.frame.clone()), &entries).show(ui).value() {
         options.frame.clone_from(frame);
     }
-    if let Some((_, _, about)) = FRAMES.iter().find(|(key, _, _)| *key == options.frame) {
-        Text::new(label(tl!(about))).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
-    }
+    let frame = frame_of(&options.frame);
+    let facings: Vec<Entry<i32>> = FACINGS.iter().map(|&f| Entry::new(f, label(&facing_axis(frame, f)))).collect();
+    ui.horizontal(|ui| {
+        Text::new(label(tl!("Image centre faces"))).show(ui);
+        let picked = Select::new(label(tl!("Image centre faces")), Bind::given(options.facing), &facings)
+            .tooltip(label(tl!("Which way the middle of the image faces in your 3D scene. In Unity it is +X for the Panoramic skybox material and +Z for a cubemap Unity imports from this image.")))
+            .show(ui)
+            .value()
+            .copied();
+        if let Some(facing) = picked {
+            options.facing = facing;
+        }
+    });
     ui.horizontal(|ui| {
         Text::new(label(tl!("Sky rotation"))).show(ui);
-        NumberField::new(label(tl!("Sky rotation")), Bind::bound(&mut options.heading))
+        NumberField::new(label(tl!("Sky rotation")), Bind::bound(&mut options.rotation))
             .range(-360.0..=360.0)
             .unit("°")
-            .tooltip(label(tl!("Turn this many degrees to the right if your sky is shown turned, so the image centre faces somewhere else. In Unity: 0 for a cubemap imported from this image, 90 for the Panoramic skybox, plus the skybox material's Rotation.")))
+            .tooltip(label(tl!("The Rotation of your skybox material, if it has one; 0 if the sky isn't turned.")))
             .show(ui);
     });
     readout(ui, format!("{}: {}", tl!("Direction to the sun"), triple(&r["direction"], 4)), tl!("Copy direction"), None, triple(&r["direction"], 7), copied);
@@ -229,7 +256,8 @@ impl StackDialog for FindSunDialog {
         Some(json!({
             "__command": COMMAND,
             "frame": self.options.frame,
-            "heading": self.options.heading,
+            "facing": self.options.facing,
+            "rotation": self.options.rotation,
             "exposure": self.options.exposure,
             "at": self.options.at,
             "result": self.result.as_ref().ok(),
@@ -240,11 +268,15 @@ impl StackDialog for FindSunDialog {
     fn set_json_field(&mut self, ctx: &egui::Context, field: &str, value: Value) -> Result<(), String> {
         match field {
             "frame" => {
-                let frame = value.as_str().filter(|f| FRAMES.iter().any(|(key, _, _)| key == f));
-                let keys: Vec<&str> = FRAMES.iter().map(|(key, _, _)| *key).collect();
+                let frame = value.as_str().filter(|f| FRAMES.iter().any(|(key, _)| key == f));
+                let keys: Vec<&str> = FRAMES.iter().map(|(key, _)| *key).collect();
                 self.options.frame = frame.ok_or_else(|| format!("field `frame` takes one of {keys:?}, got {value}"))?.to_string();
             }
-            "heading" => self.options.heading = Some(value.as_f64().ok_or_else(|| format!("field `heading` takes degrees, got {value}"))?),
+            "facing" => {
+                let facing = value.as_i64().and_then(|f| i32::try_from(f).ok()).filter(|f| FACINGS.contains(f));
+                self.options.facing = facing.ok_or_else(|| format!("field `facing` takes one of {FACINGS:?} degrees, got {value}"))?;
+            }
+            "rotation" => self.options.rotation = Some(value.as_f64().ok_or_else(|| format!("field `rotation` takes degrees, got {value}"))?),
             "exposure" => {
                 self.options.exposure = Some(value.as_f64().filter(|e| *e >= 0.0).ok_or_else(|| format!("field `exposure` takes a number ≥ 0, got {value}"))?);
             }
