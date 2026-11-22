@@ -399,7 +399,7 @@ pub(crate) fn escape(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         && app.framework.dialogs.stack().top().is_none()
         && !crate::prefs_ui::shortcuts_open(app)
         && !egui::Popup::is_any_open(ctx)
-        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        && crate::window_keys::take_escape(ctx)
     {
         if warning_open(app) {
             let _ = answer(app, WarningChoice::Cancel, false);

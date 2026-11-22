@@ -223,8 +223,8 @@ fn warning_escape_cancels_the_search_and_enter_uses_skip() {
     let hidden = blocked_layer(&mut app, "Hidden", true);
     let mut h = egui_kittest::Harness::builder().with_size(vec2(960.0, 660.0)).build_ui_state(
         |ui, app| {
-            escape(app, ui.ctx());
             super::show(app, ui.ctx());
+            escape(app, ui.ctx());
         },
         app,
     );
