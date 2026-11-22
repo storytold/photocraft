@@ -1,5 +1,5 @@
 use super::{
-    BlendMode, Document, EngineError, FadeSource, FadeTarget, Rect, Result, Session, Surface, Value, bad, blend_from_str, f32_or, from_rgba_into, json, str_or,
+    BlendMode, Document, EngineError, FadeSource, FadeTarget, Rect, Result, Session, Surface, Value, bad, f32_or, from_rgba_into, json, parse_blend, str_or,
     surface_of, surface_of_mut, to_rgba,
 };
 
@@ -103,7 +103,7 @@ fn fade_job(s: &Session, p: &Value) -> Result<FadeJob> {
     let cmd = "edit.fade";
     let src = s.edit_state.fade.clone().ok_or_else(|| bad(cmd, "nothing to fade"))?;
     let opacity = f32_or(p, "opacity", 100.0).clamp(0.0, 100.0) / 100.0;
-    let mode = blend_from_str(str_or(p, "mode", "normal")).ok_or_else(|| bad(cmd, "unknown blend mode"))?;
+    let mode = parse_blend(str_or(p, "mode", "normal")).ok_or_else(|| bad(cmd, "unknown blend mode"))?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let prev = before_state(st, &src).ok_or_else(|| bad(cmd, "no previous state"))?;
     let before = surface_of(&prev, src.target).cloned().ok_or_else(|| EngineError::Other("the layer or channel did not exist before this step".into()))?;

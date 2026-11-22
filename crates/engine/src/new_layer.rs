@@ -74,7 +74,7 @@ pub(crate) fn parse(p: &Value) -> Result<NewLayer> {
         None | Some(Value::Null) => BlendMode::Normal,
         Some(v) => {
             let name = v.as_str().ok_or_else(|| bad("`mode` must be a blend mode name"))?;
-            crate::commands::blend_from_str(name).filter(|m| *m != BlendMode::PassThrough).ok_or_else(|| bad(format!("unknown layer blend mode `{name}`")))?
+            crate::commands::parse_blend(name).filter(|m| *m != BlendMode::PassThrough).ok_or_else(|| bad(format!("unknown layer blend mode `{name}`")))?
         }
     };
     let opacity = match p.get("opacity") {

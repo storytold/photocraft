@@ -467,13 +467,77 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                 }
             };
             let names = |p: &[u8]| p.iter().map(|c| ['R', 'G', 'B'][usize::from(*c).min(2)]).collect::<String>();
-            if bayer && fused {
+            if bayer && fused && matches!(opts.demosaic, Demosaic::Bilinear | Demosaic::Ahd) {
+                let p = cfa.phase(c.x, c.y);
+                pattern = Some(names(&p));
+                let method = match opts.demosaic {
+                    Demosaic::Bilinear => craft_develop::sensor::Method::Bilinear,
+                    Demosaic::Ahd | Demosaic::Mhc => craft_develop::sensor::Method::Ahd,
+                };
+                let mut o = vec![0u16; w * h * 3];
+                par::chunks_mut(&mut o, band * w * 3, |b, chunk| {
+                    let y0 = b * band;
+                    let rows = chunk.len() / (w * 3);
+                    let y_start = y0.saturating_sub(PAD);
+                    let y_end = (y0 + rows + PAD).min(h);
+                    let sh = y_end - y_start;
+                    let mut strip = vec![0.0f32; w * sh];
+                    for (r, row) in strip.chunks_exact_mut(w).enumerate() {
+                        fill_row(y_start + r, row);
+                    }
+                    let norm = craft_develop::sensor::Normalized {
+                        width: w,
+                        height: sh,
+                        cpp: 1,
+                        data: strip,
+                        cfa: Some(craft_develop::sensor::Cfa { width: 2, height: 2, pattern: p.to_vec(), origin_x: 0, origin_y: y_start % 2 }),
+                    };
+                    let dem = craft_develop::sensor::demosaic(&norm, method);
+                    let top_pad = y0 - y_start;
+                    let dem_f32: Vec<f32> = dem.data[top_pad * w..(top_pad + rows) * w].iter().flat_map(|px| *px).collect();
+                    encode_plain(&dem_f32, chunk);
+                });
+                fused_out = Some(o);
+            } else if bayer && fused {
                 // No padded plane either: every band normalizes its own rows.
                 let p = cfa.phase(c.x, c.y);
                 pattern = Some(names(&p));
                 let mut o = vec![0u16; w * h * 3];
                 demosaic_fused(w, h, p, opts.demosaic, &to_xyz, jobs, &fill_row, &mut o, &encode_plain);
                 fused_out = Some(o);
+            } else if matches!(opts.demosaic, Demosaic::Bilinear | Demosaic::Ahd) {
+                let (cfa_w, cfa_h, cfa_pat) = if bayer {
+                    let p = cfa.phase(c.x, c.y);
+                    pattern = Some(names(&p));
+                    (2, 2, p.to_vec())
+                } else {
+                    let pat = Pattern::of(cfa, c.x, c.y);
+                    pattern = Some(pat.colors.chunks(pat.w.max(1)).map(names).collect::<Vec<_>>().join("/"));
+                    (pat.w, pat.h, pat.colors)
+                };
+                let mut norm_data = vec![0.0f32; w * h];
+                par::chunks_mut(&mut norm_data, band * w, |b, chunk| {
+                    for (r, row) in chunk.chunks_exact_mut(w).enumerate() {
+                        fill_row(b * band + r, row);
+                    }
+                });
+                let norm = craft_develop::sensor::Normalized {
+                    width: w,
+                    height: h,
+                    cpp: 1,
+                    data: norm_data,
+                    cfa: Some(craft_develop::sensor::Cfa { width: cfa_w, height: cfa_h, pattern: cfa_pat, origin_x: 0, origin_y: 0 }),
+                };
+                let method = if !bayer {
+                    craft_develop::sensor::Method::Bilinear
+                } else {
+                    match opts.demosaic {
+                        Demosaic::Bilinear => craft_develop::sensor::Method::Bilinear,
+                        Demosaic::Ahd | Demosaic::Mhc => craft_develop::sensor::Method::Ahd,
+                    }
+                };
+                let dem = craft_develop::sensor::demosaic(&norm, method);
+                rgb = dem.data.into_iter().flatten().collect();
             } else {
                 let mut plane = Padded::new(w, h);
                 let stride = plane.stride;
@@ -909,10 +973,18 @@ mod tests {
 
     fn assert_fused_matches_full(s: &Sensor, opts: &DevelopOptions, what: &str) {
         let full = develop(s, opts, false).unwrap();
+        let (ow, oh) = (full.width as usize, full.height as usize);
         for threads in [1, 3, 16] {
             let fused = with_threads(threads, || develop(s, opts, true).unwrap());
             assert_eq!((full.width, full.height), (fused.width, fused.height), "{what} {threads}");
-            assert!(full.rgb == fused.rgb, "{what} {threads} threads: fused output differs");
+            // Full-frame uses `craft_develop::sensor::demosaic` (`reflect` borders) while `fused`
+            // uses `PAD` replicate borders; compare interior pixels where both border modes agree.
+            for y in PAD..oh.saturating_sub(PAD) {
+                for x in PAD..ow.saturating_sub(PAD) {
+                    let i = (y * ow + x) * 3;
+                    assert_eq!(full.rgb[i..i + 3], fused.rgb[i..i + 3], "{what} {threads} threads at ({x},{y}): fused output differs");
+                }
+            }
         }
     }
 

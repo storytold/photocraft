@@ -276,7 +276,7 @@ pub fn locked_for_transform(doc: &Document, id: LayerId) -> bool {
 /// Background stays among them, so such a box refuses as locked (#11101, [`background_among`]).
 /// With one layer selected, that layer; the active layer when nothing else is.
 pub fn selection_targets(st: &crate::DocState) -> Vec<LayerId> {
-    targets_of(&st.doc, &st.selected_layers(), st.active_layer)
+    targets_of(&st.doc, st.selected_layers(), st.active_layer)
 }
 
 /// [`selection_targets`] for the layers `selected`, `active` the active one: what an `edit.transform`
