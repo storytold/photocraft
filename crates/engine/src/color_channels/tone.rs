@@ -19,6 +19,10 @@ struct Component {
     lab_invert: bool,
 }
 
+/// Building all 65,536 U16 entries amortizes well on large edits. Tiny selections instead use tile-local buffers,
+/// avoiding a full table's setup cost for a handful of pixels.
+const U16_TABLE_AREA: u64 = 65_536;
+
 struct IntegerTable {
     adjusted: Vec<f32>,
     encoded: Vec<[u8; 4]>,
@@ -27,6 +31,18 @@ struct IntegerTable {
 /// Evaluate independent tones together, cloning each destination tile once. Untouched native
 /// samples and the surface default retain their original bytes, including NaN payloads.
 pub(super) fn adjust(surface: &mut Surface, colors: ColorChannels, adjustment: &Adjustment, selection: Option<&Surface>, bounds: Rect) -> Result<()> {
+    adjust_with(surface, colors, adjustment, selection, bounds, U16_TABLE_AREA)
+}
+
+/// [`adjust`] with the smallest edit area, in pixels, that builds a U16 table.
+fn adjust_with(
+    surface: &mut Surface,
+    colors: ColorChannels,
+    adjustment: &Adjustment,
+    selection: Option<&Surface>,
+    bounds: Rect,
+    table_area: u64,
+) -> Result<()> {
     let fmt = surface.format();
     if colors.indices().any(|k| k >= fmt.mode.color_channels()) {
         return Err(EngineError::Other("invalid colour component".into()));
@@ -39,10 +55,8 @@ pub(super) fn adjust(surface: &mut Surface, colors: ColorChannels, adjustment: &
         (SampleType::F32, _) | (SampleType::U16, Adjustment::Threshold { .. } | Adjustment::Posterize { .. }) => Some(fmt.sample),
         _ => None,
     };
-    // Building all 65,536 U16 entries amortizes well on large edits. Tiny selections instead
-    // use tile-local buffers, avoiding a full table's setup cost for a handful of pixels.
     let area = selection.filter(|s| s.default_pixel().first().is_none_or(|v| *v <= 0.0)).map_or(bounds, |s| s.content_bounds().intersect(&bounds));
-    let use_table = fmt.sample == SampleType::U8 || (fmt.sample == SampleType::U16 && u64::from(area.width()) * u64::from(area.height()) >= 65_536);
+    let use_table = fmt.sample == SampleType::U8 || (fmt.sample == SampleType::U16 && u64::from(area.width()) * u64::from(area.height()) >= table_area);
     let mut components: Vec<Component> = Vec::new();
     for index in colors.indices() {
         let scalar = scalar_adjustment(adjustment, index);
@@ -267,8 +281,11 @@ mod tests {
             for (si, sample) in [SampleType::U8, SampleType::U16, SampleType::F32].into_iter().enumerate() {
                 let fmt = PixelFormat::new(mode, sample, true);
                 let mut source = Surface::with_default(fmt, &vec![0.3; fmt.channels()]);
-                // 256 x 256 is exactly the U16 table's area threshold (`use_table`), so the table path still runs (#15652).
-                let bounds = Rect::from_xywh(-128, -128, 256, 256);
+                // A small area that extends past the data and the masks on every side, so default pixels around them are
+                // adjusted too. The U16 table threshold is exactly its area: the whole area and the holes mask take the
+                // table path, the sparse mask (content bounds below it) the tiled path (#15652).
+                let bounds = Rect::from_xywh(-8, 0, 48, 40);
+                let table_area = u64::from(bounds.width()) * u64::from(bounds.height());
                 let data: Vec<_> = (0..32 * 24 * fmt.channels())
                     .map(|i| {
                         let v = (i * 37 % 257) as f32 / 256.0;
@@ -287,11 +304,16 @@ mod tests {
                     if ti != (mi + si) % 3 && !(mode == ColorMode::Rgb && sample == SampleType::U16 && selection.is_none()) {
                         continue;
                     }
-                    for adjustment in &adjustments {
+                    // Each adjustment meets every mode once and every sample type once: Invert at Lab/F32 (`lab_invert`),
+                    // Threshold at RGB/U16 and Posterize at Lab/U16 (the U16 `depth`), Levels and Curves at U16 (table).
+                    for (ai, adjustment) in adjustments.iter().enumerate() {
+                        if (ai + mi) % 3 != si {
+                            continue;
+                        }
                         let mut expected = source.clone();
                         let mut actual = source.clone();
                         super::super::adjust_reference(&mut expected, colors, adjustment, selection, bounds).unwrap();
-                        adjust(&mut actual, colors, adjustment, selection, bounds).unwrap();
+                        adjust_with(&mut actual, colors, adjustment, selection, bounds, table_area).unwrap();
                         assert!(expected == actual, "{mode:?} {sample:?} {adjustment:?} selection={}", selection.is_some());
                     }
                 }

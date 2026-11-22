@@ -205,7 +205,7 @@ impl<'a> RuleFacts<'a> {
                 active_index: s.active_index(),
                 active: s.active_tracked(),
                 all: all_revisions(s.documents()),
-                scratch: photocraft_raster::spill::read_error_generation(),
+                scratch: crate::scratch_reads::generation(),
                 jobs: (s.has_jobs(), s.active_job().map(|job| job.id.0)),
                 smart_child: active.is_some_and(|d| s.smart_links.iter().any(|link| link.child == d.doc.id)),
                 fade: s.edit_state.fade.as_ref().map(|fade| (fade.doc, fade.revision)),
