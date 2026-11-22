@@ -240,7 +240,7 @@ fn commit_from_ui(app: &mut PhotocraftApp) {
 
 /// Control channel: `edit.perspectiveWarp {"ui": {...}}` while the mode is active. Every field is read and the
 /// result checked on a copy of the session before the session changes, so a refused request changes nothing. The
-/// fields apply in the order planes, mode, straighten, then commit.
+/// fields apply in the order planes, mode, straighten, linkEdges, then commit.
 pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
     let field = |key: &str| ui.get(key).filter(|v| !v.is_null());
     let flag = |key: &str| -> Result<bool, String> { field(key).map_or(Ok(false), |v| v.as_bool().ok_or_else(|| format!("{key}: true|false"))) };
@@ -289,11 +289,9 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
         return Ok(json!({"cancelled": true}));
     }
     let mut trial = current(app)?.warp.clone();
-    if let Some(mut planes) = planes {
-        // A replacement made in Warp holds its linked corners together, as entering Warp does.
-        if trial.mode() == PlaneMode::Warp {
-            photocraft_algo::perspective::unify(&mut planes);
-        }
+    if let Some(planes) = planes {
+        // Keep the original sources: PerspectiveMap groups and averages them once. Pre-unifying here can
+        // move one component's mean within linking distance of an unrelated component on the next map build.
         // The session ends a corner drag it holds indices of (#952) and bumps its generation.
         trial.replace(from_algo(&planes));
         check(trial.planes())?;
@@ -443,6 +441,46 @@ mod tests {
     }
 
     #[test]
+    fn warp_replacement_preserves_original_components_for_preview_and_commit() {
+        let mut app = perspective_app();
+        control(&mut app, &json!({"planes": one_plane(), "mode": "warp"})).unwrap();
+        let square = |x, y| AlgoPlane::identity([[x, y], [x + 100.0, y], [x + 100.0, y + 100.0], [x, y + 100.0]]);
+        let mut original = vec![square(0.0, 0.0), square(0.5, 0.5), square(-0.01, 0.51)];
+        original[2].dst = original[2].src.map(|[x, y]| [x, y + 10.0]);
+        let groups = photocraft_algo::perspective::linked_corners(&original);
+        assert_eq!(groups.len(), 8, "the third square is separate from the first pair");
+        let past = past_len(&app);
+        let reply = control(&mut app, &json!({"planes": original})).unwrap();
+        assert_eq!(reply["planes"], json!(original), "the control reply retains the original constraints");
+        let stored = to_algo(warp_of(&app).planes());
+        assert_eq!(stored, original, "replacement must not pre-unify source components");
+        assert_eq!(photocraft_algo::perspective::linked_corners(&stored), groups);
+        let map = PerspectiveMap::new(&stored).unwrap();
+        // These are the exact stored handles of the separate plane, with no normalization in the assertion.
+        for (src, dst) in stored[2].src.iter().zip(&stored[2].dst) {
+            let (x, y) = map.map(src[0], src[1]);
+            assert!((x - dst[0]).hypot(y - dst[1]) < 1e-9, "stored handle {src:?} -> {dst:?}, map returned ({x}, {y})");
+        }
+        // The first pair shares mean handles. Do not feed these normalized sources back into the map.
+        let mut normalized = original.clone();
+        photocraft_algo::perspective::unify(&mut normalized);
+        for plane in &normalized {
+            for (src, dst) in plane.src.iter().zip(&plane.dst) {
+                let (x, y) = map.map(src[0], src[1]);
+                assert!((x - dst[0]).hypot(y - dst[1]) < 1e-9, "original component handle {src:?} -> {dst:?}");
+            }
+        }
+        assert_eq!(to_algo(warp_of(&app).result().unwrap()), original, "commit receives the same sources as the preview");
+        assert_eq!(past_len(&app), past, "replacing the preview does not change the document history");
+        assert!(app.distort.perspective.as_mut().unwrap().warp.undo());
+        assert!(app.distort.perspective.as_mut().unwrap().warp.redo());
+        assert_eq!(to_algo(warp_of(&app).planes()), original, "session history retains the original components");
+        assert_eq!(commit(&mut app).unwrap()["committed"], true);
+        assert!(app.distort.perspective.is_none());
+        assert_eq!(past_len(&app), past + 1, "the replacement commits as one document step");
+    }
+
+    #[test]
     fn planes_that_map_onto_themselves_commit_nothing() {
         let mut app = perspective_app();
         control(&mut app, &json!({"planes": TWO_PLANES()})).unwrap();
@@ -506,7 +544,11 @@ mod tests {
         let mut linked: Vec<AlgoPlane> = serde_json::from_value(TWO_PLANES()).unwrap();
         linked[1].src[0] = [100.4, 20.0];
         linked[1].src[3] = [100.4, 100.0];
-        linked[1].dst = [[300.0, 20.0], [180.0, 20.0], [180.0, 100.0], [100.4, 100.0]];
+        linked[1].dst = [[-100.0, 20.0], [-20.0, 20.0], [180.4, 100.0], [100.4, 100.0]];
+        for plane in &linked {
+            assert!(PerspectiveMap::new(std::slice::from_ref(plane)).is_some(), "each input is convex before linking");
+        }
+        assert!(PerspectiveMap::new(&linked).is_none(), "averaging the linked targets makes the destination invalid");
         assert!(control(&mut app, &json!({"planes": linked, "mode": "warp"})).is_err());
         assert_eq!(planes_of(&app), planes);
         assert_eq!(warp_of(&app).generation(), generation);

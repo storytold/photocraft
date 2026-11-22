@@ -40,6 +40,13 @@ impl Plane {
 
 const LINK_EPS: f64 = 0.5;
 
+/// Base radius (source document pixels) of the Gaussian falloff outside a plane's quad; local
+/// enough to preserve interiors. Widened per map only when a gap between disjoint planes would
+/// otherwise fold (see `PerspectiveMap::gap_safe_radius`).
+const BLEND_RADIUS: f64 = 12.0;
+/// Gap-check sample positions (fractions of the gap) closer than this are the same sample.
+const GAP_SAMPLE_MERGE: f64 = 1.0e-9;
+
 /// Unit square corners in plane order.
 const UNIT: [[f64; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
 
@@ -143,33 +150,61 @@ fn unify_groups(planes: &mut [Plane], groups: &[Vec<(usize, usize)>]) {
 /// Match a complete edge on opposite sides of the same source boundary. Reject edges
 /// belonging to overlapping planes facing the same way: they are not adjacent surfaces.
 /// The two corner indices on `b` correspond to a[k] and a[k+1], respectively.
+///
+/// The predicate is symmetric in `(a, k)` and `(b, m)`: both centroids are tested against the
+/// proposed edge of `a` AND against the matched edge of `b`, and must lie strictly on opposite
+/// sides of each. When both endpoint pairings fit the tolerance (short edges), the one with the
+/// smaller total endpoint error wins; an exact tie keeps the straight pairing.
 fn matched_adjacent_edge(a: &Plane, k: usize, b: &Plane, m: usize, tolerance: f64) -> Option<(usize, usize)> {
-    let (ak, an, bm, bn) = (k, (k + 1) % 4, m, (m + 1) % 4);
-    let (p, q) = (a.src[ak], a.src[an]);
-    let ca = a.src.iter().fold([0.0; 2], |sum, p| [sum[0] + p[0] * 0.25, sum[1] + p[1] * 0.25]);
-    let cb = b.src.iter().fold([0.0; 2], |sum, p| [sum[0] + p[0] * 0.25, sum[1] + p[1] * 0.25]);
-    let side = |c: [f64; 2]| (q[0] - p[0]) * (c[1] - p[1]) - (q[1] - p[1]) * (c[0] - p[0]);
-    if side(ca) * side(cb) >= 0.0 {
+    let (bm, bn) = (m, (m + 1) % 4);
+    let (p, q) = (a.src[k], a.src[(k + 1) % 4]);
+    let (r, s) = (b.src[bm], b.src[bn]);
+    let centroid = |q: &[[f64; 2]; 4]| q.iter().fold([0.0; 2], |sum, p| [sum[0] + p[0] * 0.25, sum[1] + p[1] * 0.25]);
+    let (ca, cb) = (centroid(&a.src), centroid(&b.src));
+    let side = |p: [f64; 2], q: [f64; 2], c: [f64; 2]| (q[0] - p[0]) * (c[1] - p[1]) - (q[1] - p[1]) * (c[0] - p[0]);
+    let opposite = |p: [f64; 2], q: [f64; 2]| side(p, q, ca) * side(p, q, cb) < 0.0;
+    if !opposite(p, q) || !opposite(r, s) {
         return None;
     }
-    let near = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]) <= tolerance;
-    if near(p, b.src[bm]) && near(q, b.src[bn]) {
-        Some((bm, bn))
-    } else if near(p, b.src[bn]) && near(q, b.src[bm]) {
-        Some((bn, bm))
-    } else {
-        None
+    let dist = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
+    let (straight, crossed) = ((dist(p, r), dist(q, s)), (dist(p, s), dist(q, r)));
+    let fits = |e: (f64, f64)| e.0 <= tolerance && e.1 <= tolerance;
+    match (fits(straight), fits(crossed)) {
+        (true, true) if crossed.0 + crossed.1 < straight.0 + straight.1 => Some((bn, bm)),
+        (true, _) => Some((bm, bn)),
+        (false, true) => Some((bn, bm)),
+        (false, false) => None,
     }
 }
 
-/// Number of true shared edges (as opposed to two unrelated overlapping planes).
+/// Per-corner ids of the original immutable corner components (see [`linked_corners`]).
+fn corner_components(planes: &[Plane], groups: &[Vec<(usize, usize)>]) -> Vec<[usize; 4]> {
+    let mut component = vec![[0; 4]; planes.len()];
+    for (id, group) in groups.iter().enumerate() {
+        for &(p, c) in group {
+            component[p][c] = id;
+        }
+    }
+    component
+}
+
+/// Number of true shared edges (as opposed to two unrelated overlapping planes). An edge is
+/// shared exactly when `PerspectiveMap::new` would treat it so: both end corners belong to the
+/// same original corner components (the per-axis `LINK_EPS` groups) and the unified edges face
+/// each other.
 pub fn linked_edge_count(planes: &[Plane]) -> usize {
+    let groups = linked_corners(planes);
+    let component = corner_components(planes, &groups);
+    let mut unified = planes.to_vec();
+    unify_groups(&mut unified, &groups);
     let mut count = 0;
-    for (i, a) in planes.iter().enumerate() {
-        for b in planes.iter().skip(i + 1) {
+    for i in 0..unified.len() {
+        for j in (i + 1)..unified.len() {
             for k in 0..4 {
+                let (a, b) = (component[i][k], component[i][(k + 1) % 4]);
                 for m in 0..4 {
-                    if matched_adjacent_edge(a, k, b, m, LINK_EPS).is_some() {
+                    let (c, d) = (component[j][m], component[j][(m + 1) % 4]);
+                    if ((a == c && b == d) || (a == d && b == c)) && matched_adjacent_edge(&unified[i], k, &unified[j], m, 0.0).is_some() {
                         count += 1;
                     }
                 }
@@ -349,7 +384,28 @@ impl PlaneMap {
         let bounded = safe + safe * (1.0 - (-(norm - safe) / safe).exp());
         Some(direction.map(|v| (v / length) * bounded))
     }
+
+    /// Squared horizon strain `ρ²` of continuing this plane `distance` beyond the source
+    /// boundary point `boundary`, with `ρ = distance·|∇w| / |w(boundary)|` for the local
+    /// homogeneous weight `w`. `ρ ≥ 1` means the first-order continuation reaches the plane's
+    /// horizon, where it says nothing about the surface. Exactly 0 for affine planes (and for
+    /// points inside the quad), so shared affine maps keep their full influence; for slightly
+    /// projective planes it is ~0 and grows smoothly with the distance. Used as a log-weight
+    /// penalty in [`PerspectiveMap::blend`], so it limits the INFLUENCE of an off-plane
+    /// extrapolation without changing its value (the far-field fallback stays exact).
+    fn extension_strain(&self, boundary: [f64; 2], distance: f64) -> f64 {
+        let m = &self.local.0;
+        if m[6] == 0.0 && m[7] == 0.0 {
+            return 0.0;
+        }
+        let w = m[6] * boundary[0] + m[7] * boundary[1] + m[8];
+        let rho = distance * m[6].hypot(m[7]) / w.abs();
+        if rho.is_nan() { f64::INFINITY } else { rho * rho }
+    }
 }
+
+/// A source corner and the destination handle it must hit.
+type AnchorPair = ([f64; 2], [f64; 2]);
 
 /// A source corner whose destination handle must be hit exactly: `delta` is the miss of the
 /// plain blend there, added back with a compact bump (see [`PerspectiveMap::map`]).
@@ -364,6 +420,9 @@ pub struct PerspectiveMap {
     planes: Vec<PlaneMap>,
     /// One anchor per distinct (source, destination) corner pair; empty for a lone plane.
     anchors: Vec<Anchor>,
+    /// Gaussian falloff radius of the multi-plane blend: [`BLEND_RADIUS`], widened only when
+    /// needed to keep gaps between disjoint planes fold-free.
+    radius: f64,
 }
 
 /// Straighten modes (Photoshop's Warp-mode buttons).
@@ -423,12 +482,7 @@ impl PerspectiveMap {
         }
         let mut planes = planes.to_vec();
         let groups = linked_corners(&planes);
-        let mut component = vec![[0; 4]; planes.len()];
-        for (id, group) in groups.iter().enumerate() {
-            for &(p, c) in group {
-                component[p][c] = id;
-            }
-        }
+        let component = corner_components(&planes, &groups);
         unify_groups(&mut planes, &groups);
         if planes.iter().any(|p| !valid_quad(&p.src) || !valid_quad(&p.dst)) {
             return None;
@@ -462,39 +516,49 @@ impl PerspectiveMap {
             let local = dst.mul(&src_inv);
             maps.push(PlaneMap { src_inv, dst, quad: p.src, shared, edge_ratio: edge_ratios, local });
         }
-        let mut map = PerspectiveMap { planes: maps, anchors: Vec::new() };
+        let mut map = PerspectiveMap { planes: maps, anchors: Vec::new(), radius: BLEND_RADIUS };
         if planes.len() > 1 {
             // Distinct original components can have coincident means. One source cannot
             // satisfy two different destinations; reject that conflict instead of silently
             // averaging constraints. Compatible coincident constraints need just one bump.
-            let mut anchors: Vec<([f64; 2], [f64; 2])> = Vec::new();
+            let mut pairs: Vec<AnchorPair> = Vec::new();
             for p in &planes {
                 for k in 0..4 {
-                    if let Some((_, target)) = anchors.iter().find(|(src, _)| *src == p.src[k]) {
+                    if let Some((_, target)) = pairs.iter().find(|(src, _)| *src == p.src[k]) {
                         if *target != p.dst[k] {
                             return None;
                         }
                     } else {
-                        anchors.push((p.src[k], p.dst[k]));
+                        pairs.push((p.src[k], p.dst[k]));
                     }
                 }
             }
-            for &(src, target) in &anchors {
-                // Disjoint open supports: no other anchor contributes at this handle,
-                // and the compact C¹ bump is zero with zero slope at its support boundary.
-                let radius = anchors
-                    .iter()
-                    .filter(|(other, _)| *other != src)
-                    .fold(LINK_EPS, |radius, (other, _)| radius.min(0.5 * (src[0] - other[0]).hypot(src[1] - other[1])));
-                let base = map.blend(src[0], src[1])?;
-                let delta = [target[0] - base.0, target[1] - base.1];
-                if radius <= 0.0 || delta.iter().any(|v| !v.is_finite()) {
-                    return None;
-                }
-                map.anchors.push(Anchor { src, delta, radius });
-            }
+            // The gap search judges the full map (blend, corner boost and anchors), so the
+            // radius it settles on is the one the anchor residuals are finally measured on.
+            map.radius = map.gap_safe_radius(&planes, &pairs)?;
+            map.anchors = map.build_anchors(&pairs)?;
         }
         Some(map)
+    }
+
+    /// One anchor per distinct (source, destination) pair, measured on the current blend radius.
+    fn build_anchors(&self, pairs: &[AnchorPair]) -> Option<Vec<Anchor>> {
+        let mut anchors = Vec::with_capacity(pairs.len());
+        for &(src, target) in pairs {
+            // Disjoint open supports: no other anchor contributes at this handle,
+            // and the compact C¹ bump is zero with zero slope at its support boundary.
+            let radius = pairs
+                .iter()
+                .filter(|(other, _)| *other != src)
+                .fold(LINK_EPS, |radius, (other, _)| radius.min(0.5 * (src[0] - other[0]).hypot(src[1] - other[1])));
+            let base = self.blend(src[0], src[1])?;
+            let delta = [target[0] - base.0, target[1] - base.1];
+            if radius <= 0.0 || delta.iter().any(|v| !v.is_finite()) {
+                return None;
+            }
+            anchors.push(Anchor { src, delta, radius });
+        }
+        Some(anchors)
     }
 
     /// Value of plane `i`'s local map at a point `p` OUTSIDE its source quad. The projective map is
@@ -615,6 +679,11 @@ impl PerspectiveMap {
         // region is not flattened (δ = 0 there), and the result is exactly `target` at `c`.
         // Each support stops before any other anchor, even if original component means
         // drift close together. This keeps all handle constraints exact without a flat core.
+        self.with_anchors(x, y, out)
+    }
+
+    /// Adds the anchor corrections at `(x, y)` to the plain blend value `out`.
+    fn with_anchors(&self, x: f64, y: f64, out: (f64, f64)) -> (f64, f64) {
         let (mut sum_x, mut sum_y) = (0.0, 0.0);
         for a in &self.anchors {
             let distance = (a.src[0] - x).hypot(a.src[1] - y);
@@ -633,21 +702,24 @@ impl PerspectiveMap {
         out
     }
 
-    /// The smooth multi-plane blend without the corner-anchor correction.
+    /// The smooth multi-plane blend without the corner-anchor correction. Within `R₀` of a
+    /// plane's corners its weight is multiplied by `R₀²/d²` (the near-corner boost), which is
+    /// independent of the Gaussian radius; the gap-safety search therefore judges this exact
+    /// blend, boost included.
     fn blend(&self, x: f64, y: f64) -> Option<(f64, f64)> {
-        const BLEND_RADIUS: f64 = 12.0; // source document pixels; local enough to preserve interiors
         let (mut best_log, mut weight_sum, mut sum_x, mut sum_y) = (f64::NEG_INFINITY, 0.0, 0.0, 0.0);
         for (i, pm) in self.planes.iter().enumerate() {
             let (u, v) = pm.src_inv.apply(x, y);
             let inside = u.is_finite() && v.is_finite() && (0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v);
-            let (projected, distance) = if inside {
-                (self.map_plane(i, u, v), 0.0)
+            let (projected, distance, strain) = if inside {
+                (self.map_plane(i, u, v), 0.0, 0.0)
             } else {
                 // Never extrapolate a projective map beyond its source quad:
                 // its horizon may run directly through another valid plane.
-                // Extend the finite boundary value to first order instead.
+                // Extend the finite boundary value to first order instead, and
+                // discount its influence by how close that continuation is to the horizon.
                 let (boundary, distance) = nearest_on_quad(&pm.quad, [x, y]);
-                (self.extend_outside(i, [x, y], boundary), distance)
+                (self.extend_outside(i, [x, y], boundary), distance, pm.extension_strain(boundary, distance))
             };
             let Some((ox, oy)) = projected else { continue };
             // Anchor weights grow towards each source corner, so the blended
@@ -658,7 +730,7 @@ impl PerspectiveMap {
             // its unified destination, never whichever plane happens to be first.
             let finite_corner_dist2 = corner_dist2.max(1.0e-18);
             let corner_boost = if corner_dist2 < BLEND_RADIUS * BLEND_RADIUS { (BLEND_RADIUS * BLEND_RADIUS / finite_corner_dist2).ln() } else { 0.0 };
-            let log_weight = -0.5 * (distance / BLEND_RADIUS).powi(2) + corner_boost;
+            let log_weight = -0.5 * (distance / self.radius).powi(2) + corner_boost - strain;
             if !log_weight.is_finite() {
                 continue;
             }
@@ -687,6 +759,203 @@ impl PerspectiveMap {
     /// Whether every plane maps onto itself (identity).
     pub fn is_identity(planes: &[Plane]) -> bool {
         planes.iter().all(|p| p.src.iter().zip(&p.dst).all(|(a, b)| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9))
+    }
+}
+
+/// The closest pair of boundary points `(on a, on b)` of two DISJOINT convex source quads, or
+/// `None` when they overlap or touch (no gap to interpolate across).
+fn quad_gap(a: &[[f64; 2]; 4], b: &[[f64; 2]; 4]) -> Option<([f64; 2], [f64; 2])> {
+    // Separating-axis test on all edge normals; strict, so touching quads are not disjoint.
+    let separated = [a, b].into_iter().any(|poly| {
+        (0..4).any(|k| {
+            let (p, q) = (poly[k], poly[(k + 1) % 4]);
+            let axis = [p[1] - q[1], q[0] - p[0]];
+            let span = |s: &[[f64; 2]; 4]| {
+                s.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), c| {
+                    let d = axis[0] * c[0] + axis[1] * c[1];
+                    (lo.min(d), hi.max(d))
+                })
+            };
+            let ((a_lo, a_hi), (b_lo, b_hi)) = (span(a), span(b));
+            a_hi < b_lo || b_hi < a_lo
+        })
+    });
+    if !separated {
+        return None;
+    }
+    // For disjoint convex polygons the minimum distance is attained at a vertex of one of them.
+    let mut best: Option<([f64; 2], [f64; 2], f64)> = None;
+    for v in a {
+        let (q, d) = nearest_on_quad(b, *v);
+        if best.map_or(true, |s| d < s.2) {
+            best = Some((*v, q, d));
+        }
+    }
+    for v in b {
+        let (q, d) = nearest_on_quad(a, *v);
+        if best.map_or(true, |s| d < s.2) {
+            best = Some((q, *v, d));
+        }
+    }
+    best.filter(|s| s.2 > 1.0e-9).map(|s| (s.0, s.1))
+}
+
+/// A gap between two disjoint planes that the blend must cross without folding: the closest
+/// boundary points `from` (on plane `a`) and `to` (on plane `b`), and the sign `sigma` of the
+/// direction `to − from` both planes preserve locally (−1 for mirrored planes).
+struct Gap {
+    from: [f64; 2],
+    to: [f64; 2],
+    sigma: f64,
+}
+
+enum GapKind {
+    /// Mixed orientations or underivable ends: no consistent direction to protect (unchanged).
+    Unchecked,
+    /// The planes' destinations are in the wrong order along the gap: no global bijection.
+    Overlapping,
+    Ordered(f64),
+}
+
+impl PerspectiveMap {
+    fn gap_kind(&self, i: usize, j: usize, from: [f64; 2], to: [f64; 2]) -> GapKind {
+        let u = [to[0] - from[0], to[1] - from[1]];
+        // ⟨J u, u⟩: the plane's own local stretch along the gap direction.
+        let along =
+            |pm: &PlaneMap, p: [f64; 2]| pm.jacobian(p[0], p[1]).map(|jac| (jac[0] * u[0] + jac[1] * u[1]) * u[0] + (jac[2] * u[0] + jac[3] * u[1]) * u[1]);
+        let (Some(da), Some(db)) = (along(&self.planes[i], from), along(&self.planes[j], to)) else {
+            return GapKind::Unchecked;
+        };
+        if !da.is_finite() || !db.is_finite() || da == 0.0 || db == 0.0 || da.signum() != db.signum() {
+            return GapKind::Unchecked;
+        }
+        let image = |k: usize, p: [f64; 2]| {
+            let (a, b) = self.planes[k].src_inv.apply(p[0], p[1]);
+            self.map_plane(k, a, b)
+        };
+        let (Some(start), Some(end)) = (image(i, from), image(j, to)) else {
+            return GapKind::Unchecked;
+        };
+        let total = (end.0 - start.0) * u[0] + (end.1 - start.1) * u[1];
+        if !total.is_finite() {
+            GapKind::Unchecked
+        } else if total * da.signum() <= 0.0 {
+            GapKind::Overlapping
+        } else {
+            GapKind::Ordered(da.signum())
+        }
+    }
+
+    /// Sorted sample positions `t ∈ [0, 1]` along a gap of length `len` for blend radius `radius`.
+    /// The Gaussian weight ratio of the two planes changes by `len²/R²` over the gap, so the
+    /// transition is `R²/len²` wide in `t`: besides a uniform scan, a dense window of ±8
+    /// transition widths around the mid-gap is sampled so a sharp crossover cannot hide between
+    /// samples. Within `R₀` of either end (the near-corner weight boost) it is sampled finely and
+    /// geometrically. Positions closer than [`GAP_SAMPLE_MERGE`] are one sample: the scans overlap,
+    /// and two points an ulp apart would compare rounding noise instead of the map.
+    fn gap_samples(len: f64, radius: f64) -> Vec<f64> {
+        const UNIFORM: usize = 48;
+        const WINDOW: usize = 96;
+        const END_STEPS: usize = 24;
+        const END_OCTAVES: i32 = 9;
+        let half = (8.0 * radius * radius / (len * len)).min(0.5);
+        let mut ts: Vec<f64> = (0..=UNIFORM).map(|k| k as f64 / UNIFORM as f64).collect();
+        ts.extend((0..=WINDOW).map(|k| 0.5 + (k as f64 / WINDOW as f64 - 0.5) * 2.0 * half));
+        let zone = (BLEND_RADIUS / len).min(0.5);
+        let ends = (0..=END_STEPS).map(|k| zone * k as f64 / END_STEPS as f64).chain((1..=END_OCTAVES).map(|k| zone * 0.5_f64.powi(k)));
+        for t in ends {
+            ts.push(t);
+            ts.push(1.0 - t);
+        }
+        ts.sort_by(f64::total_cmp);
+        ts.dedup_by(|a, b| (*a - *b).abs() < GAP_SAMPLE_MERGE);
+        ts
+    }
+
+    /// Whether the map advances strictly in the planes' own direction along the gap. It judges
+    /// the same blend `map` uses (corner boost and anchor corrections included), at the samples of
+    /// [`Self::gap_samples`] along the closest-pair segment; this is a sampled 1-D check, not a
+    /// proof for the whole 2-D region. A blend that cannot be evaluated (overflow) is not judged.
+    fn gap_is_monotone(&self, g: &Gap) -> bool {
+        let u = [g.to[0] - g.from[0], g.to[1] - g.from[1]];
+        let ts = Self::gap_samples(u[0].hypot(u[1]), self.radius);
+        let mut previous: Option<(f64, f64)> = None;
+        for t in ts {
+            let (x, y) = (g.from[0] + t * u[0], g.from[1] + t * u[1]);
+            let Some(base) = self.blend(x, y) else {
+                return true;
+            };
+            let value = self.with_anchors(x, y, base);
+            if let Some(before) = previous {
+                let step = ((value.0 - before.0) * u[0] + (value.1 - before.1) * u[1]) * g.sigma;
+                if !(step > 0.0) {
+                    return false;
+                }
+            }
+            previous = Some(value);
+        }
+        true
+    }
+
+    /// Installs `radius` (and the anchors measured on it) and judges every gap.
+    fn radius_is_safe(&mut self, radius: f64, pairs: &[AnchorPair], gaps: &[Gap]) -> bool {
+        self.radius = radius;
+        let Some(anchors) = self.build_anchors(pairs) else { return false };
+        self.anchors = anchors;
+        gaps.iter().all(|g| self.gap_is_monotone(g))
+    }
+
+    /// Blend radius that keeps every gap between disjoint planes fold-free. The default radius
+    /// is kept for all valid input where it already is (shared edges, overlaps, mild gaps,
+    /// shared affine maps). When the two sides of a gap differ so much that the Gaussian
+    /// crossover would fold (the displacement jump `Δ` across a gap `g` needs roughly
+    /// `R² ≳ Δ·g/4`), the radius grows continuously, by bisection to the smallest sampled-safe
+    /// value plus a 25% margin: a monotone interpolation is used whenever one exists.
+    /// `None` when none exists — destinations in the wrong order along a gap, or no radius up
+    /// to 8192× the default is monotone at the samples — so such a map is rejected at creation,
+    /// not applied. Widening cannot cure the near-corner boost: a displacement jump much larger
+    /// than the gap-to-boost-radius scale (e.g. −80px over a 100px gap) is therefore rejected.
+    fn gap_safe_radius(&mut self, planes: &[Plane], pairs: &[AnchorPair]) -> Option<f64> {
+        const MAX_DOUBLINGS: usize = 12;
+        const BISECTIONS: usize = 12;
+        const MARGIN: f64 = 1.25;
+        let mut gaps = Vec::new();
+        for i in 0..planes.len() {
+            for j in (i + 1)..planes.len() {
+                let Some((from, to)) = quad_gap(&planes[i].src, &planes[j].src) else { continue };
+                match self.gap_kind(i, j, from, to) {
+                    GapKind::Unchecked => {}
+                    GapKind::Overlapping => return None,
+                    GapKind::Ordered(sigma) => gaps.push(Gap { from, to, sigma }),
+                }
+            }
+        }
+        if gaps.is_empty() || self.radius_is_safe(BLEND_RADIUS, pairs, &gaps) {
+            return Some(BLEND_RADIUS);
+        }
+        let (mut low, mut high) = (BLEND_RADIUS, BLEND_RADIUS * 2.0);
+        let mut found = self.radius_is_safe(high, pairs, &gaps);
+        for _ in 0..MAX_DOUBLINGS {
+            if found {
+                break;
+            }
+            low = high;
+            high *= 2.0;
+            found = self.radius_is_safe(high, pairs, &gaps);
+        }
+        if !found {
+            return None;
+        }
+        for _ in 0..BISECTIONS {
+            let mid = 0.5 * (low + high);
+            if self.radius_is_safe(mid, pairs, &gaps) {
+                high = mid;
+            } else {
+                low = mid;
+            }
+        }
+        let padded = high * MARGIN;
+        Some(if self.radius_is_safe(padded, pairs, &gaps) { padded } else { high })
     }
 }
 
@@ -1304,6 +1573,210 @@ mod tests {
                     assert!((p.0 - 100.0).abs() < 5.0 && (p.1 - y).abs() < 20.0, "y={y}: wild value {p:?}");
                 }
             }
+        }
+    }
+
+    const RECT_TOP: f64 = 0.0;
+    const RECT_BOTTOM: f64 = 100.0;
+    fn column(x0: f64, x1: f64) -> Plane {
+        Plane::identity([[x0, RECT_TOP], [x1, RECT_TOP], [x1, RECT_BOTTOM], [x0, RECT_BOTTOM]])
+    }
+
+    /// #1: the old centroid test used only the first plane's edge, so rectangles x0..10 and x6..9
+    /// (tolerance 4) welded in one plane order and not in the other.
+    #[test]
+    fn adjacency_predicate_is_symmetric_across_plane_order() {
+        let (a, b) = (column(0.0, 10.0), column(6.0, 9.0));
+        assert!(matched_adjacent_edge(&a, 1, &b, 3, 4.0).is_none());
+        assert!(matched_adjacent_edge(&b, 3, &a, 1, 4.0).is_none());
+        for order in [[a.clone(), b.clone()], [b.clone(), a.clone()]] {
+            let mut planes = order.to_vec();
+            assert_eq!(weld_adjacent_edges(&mut planes, 4.0), Ok(0));
+            assert_eq!(planes, order.to_vec(), "same-side overlap must not be welded");
+        }
+        // Control: a true neighbour across the same 4px gap is found from both sides.
+        let neighbour = column(14.0, 24.0);
+        assert_eq!(matched_adjacent_edge(&a, 1, &neighbour, 3, 4.0), Some((0, 3)));
+        assert_eq!(matched_adjacent_edge(&neighbour, 3, &a, 1, 4.0), Some((2, 1)));
+    }
+
+    /// #2: for a ~4px shared edge both endpoint pairings fit a loose tolerance. The crossed one
+    /// used to win on order and collapsed both quads; the smaller endpoint error must win.
+    #[test]
+    fn short_shared_edge_picks_the_pairing_with_minimum_endpoint_error() {
+        let a = Plane::identity([[0.0, 0.0], [50.0, 0.0], [50.0, 4.0], [0.0, 4.0]]);
+        let b = Plane::identity([[50.0, 0.0], [100.0, 0.0], [100.0, 4.0], [50.0, 4.0]]);
+        // b's left edge runs corner 3 → 0, i.e. opposite to a's right edge 1 → 2.
+        assert_eq!(matched_adjacent_edge(&a, 1, &b, 3, 8.0), Some((0, 3)));
+        assert_eq!(matched_adjacent_edge(&b, 3, &a, 1, 8.0), Some((2, 1)));
+        for order in [[a.clone(), b.clone()], [b.clone(), a.clone()]] {
+            let mut planes = order.to_vec();
+            assert_eq!(weld_adjacent_edges(&mut planes, 8.0), Ok(1));
+            assert_eq!(planes, order.to_vec(), "an exactly shared edge is already welded");
+            assert!(PerspectiveMap::new(&planes).is_some());
+        }
+    }
+
+    /// #5: `linked_corners` links per axis, so (0.4, 0.4) apart (Euclidean 0.57) is one corner
+    /// component and the edge between two such corners is a real shared edge.
+    #[test]
+    fn linked_edge_count_uses_the_corner_components_of_the_map() {
+        let a = Plane::identity([[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]]);
+        let b = Plane::identity([[100.4, 0.4], [200.4, 0.4], [200.4, 100.4], [100.4, 100.4]]);
+        for planes in [[a.clone(), b.clone()], [b.clone(), a.clone()]] {
+            let map = PerspectiveMap::new(&planes).unwrap();
+            let shared = map.planes.iter().flat_map(|p| &p.shared).map(Vec::len).sum::<usize>();
+            assert_eq!(shared, 2, "the map sees the edge from both planes");
+            assert_eq!(linked_edge_count(&planes), 1);
+        }
+        // Explicit weld tolerance semantics are untouched: 0.57 is within 1.0 but not within 0.5.
+        let mut tight = [a.clone(), b.clone()];
+        assert_eq!(weld_adjacent_edges(&mut tight, 0.5), Ok(0));
+        let mut loose = [a, b];
+        assert_eq!(weld_adjacent_edges(&mut loose, 1.0), Ok(1));
+    }
+
+    /// #3: the first-order continuation of the projective plane A reaches y≈650 at (−12, 50) and
+    /// used to pull the identity plane B to y≈276. Its influence must vanish with its horizon
+    /// strain, while its value (and the affine-exact paths) stay untouched.
+    #[test]
+    fn projective_extrapolation_cannot_overpower_a_neighbouring_identity_plane() {
+        let a = Plane {
+            src: [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]],
+            dst: [[0.0, 0.0], [100.0 / 101.0, 0.0], [100.0 / 101.0, 100.0 / 101.0], [0.0, 100.0]],
+        };
+        let b = Plane::identity([[-24.0, 0.0], [-0.75, 0.0], [-0.75, 100.0], [-24.0, 100.0]]);
+        for planes in [[a.clone(), b.clone()], [b.clone(), a.clone()]] {
+            let map = PerspectiveMap::new(&planes).unwrap();
+            assert_eq!(map.radius, BLEND_RADIUS, "a mild gap must not widen the blend");
+            for p in [(-12.0, 50.0), (-6.0, 80.0), (-20.0, 10.0), (-4.5, 50.0)] {
+                let got = map.map(p.0, p.1);
+                assert!(close(got, p, 1e-3), "projective A overpowered identity B at {p:?}: {got:?}");
+            }
+            // The strain is zero inside / for affine planes and grows smoothly with distance.
+            let pm = &map.planes[planes.iter().position(|p| *p == a).unwrap()];
+            assert_eq!(pm.extension_strain([0.0, 50.0], 0.0), 0.0);
+            assert!(pm.extension_strain([0.0, 50.0], 1.0) < pm.extension_strain([0.0, 50.0], 2.0));
+            let affine = &map.planes[planes.iter().position(|p| *p == b).unwrap()];
+            assert!(affine.extension_strain([-0.75, 50.0], 30.0) < 1e-20);
+        }
+    }
+
+    fn gap_planes(shift: f64) -> [Plane; 2] {
+        let a = column(0.0, 100.0);
+        let b = column(200.0, 300.0);
+        let dst = b.src.map(|p| [p[0] + shift, p[1]]);
+        [a, Plane { src: b.src, dst }]
+    }
+
+    /// Rows of the full map (blend, corner boost and anchors) across a 100px gap; each must
+    /// advance strictly in x and keep its y. Includes rows through and next to the corners.
+    fn assert_rows_monotone(map: &PerspectiveMap, context: &str) {
+        for y in [0.0, 0.5, 3.0, 50.0, 97.0, 100.0] {
+            let mut previous = f64::NEG_INFINITY;
+            for step in 0..=6800 {
+                let x = -20.0 + 0.05 * f64::from(step);
+                let out = map.map(x, y);
+                assert!(out.0 > previous, "{context}: fold at ({x}, {y}): {previous} then {}", out.0);
+                assert!((out.1 - y).abs() < 1e-6, "{context}: vertical drift at ({x}, {y}): {out:?}");
+                previous = out.0;
+            }
+        }
+    }
+
+    /// #4: with a Gaussian radius of 12 the weight crossover over a 100px gap is ~6px wide, so a
+    /// translation of −20 gave dx/dx = 1 − 20·0.17 < 0 near mid-gap (a fold). A monotone
+    /// interpolation exists (the destinations stay in order), so the blend widens until the
+    /// FULL map — including the near-corner boost, which the first version of the check left out —
+    /// is monotone, on rows through and next to the corners as well as mid-gap.
+    #[test]
+    fn gap_between_disjoint_planes_interpolates_monotonically() {
+        for planes in [gap_planes(-20.0), {
+            let [a, b] = gap_planes(-20.0);
+            [b, a]
+        }] {
+            let map = PerspectiveMap::new(&planes).expect("destinations are in order: a monotone map exists");
+            assert!(map.radius > BLEND_RADIUS, "radius {} was not widened", map.radius);
+            assert_rows_monotone(&map, "shift -20");
+            // Endpoints stay anchored exactly.
+            assert!(close(map.map(100.0, 0.0), (100.0, 0.0), 1e-6));
+            assert!(close(map.map(200.0, 0.0), (180.0, 0.0), 1e-6));
+        }
+    }
+
+    /// #4, near corners: a −80px jump over a 100px gap cannot be interpolated monotonically by this
+    /// blend (the corner boost makes a plane dominate within 12px of its corner whatever the
+    /// radius), although the destinations are in order. Such a map must be rejected rather than
+    /// folded; if it were ever accepted it has to be monotone on every row, corners included.
+    #[test]
+    fn strongly_opposed_gap_is_rejected_or_monotone_near_the_corners() {
+        for planes in [gap_planes(-80.0), {
+            let [a, b] = gap_planes(-80.0);
+            [b, a]
+        }] {
+            if let Some(map) = PerspectiveMap::new(&planes) {
+                assert_rows_monotone(&map, "shift -80");
+            }
+        }
+    }
+
+    /// The gap scans overlap (uniform grid, mid-gap window, end zones). Samples an ulp apart would
+    /// make the monotonicity check compare rounding noise, so no two may be closer than the merge
+    /// distance, whatever the radius; both ends and the mid-gap stay covered.
+    #[test]
+    fn gap_samples_are_distinct_sorted_and_cover_both_ends() {
+        for len in [0.75, 1.0, 100.0, 1.0e4] {
+            for radius in [BLEND_RADIUS, 45.0, 1.0e5] {
+                let ts = PerspectiveMap::gap_samples(len, radius);
+                assert_eq!((ts[0], ts[ts.len() - 1]), (0.0, 1.0), "len {len}, radius {radius}");
+                assert!(ts.windows(2).all(|w| w[1] - w[0] >= GAP_SAMPLE_MERGE), "near-duplicate samples: len {len}, radius {radius}");
+                assert!(ts.iter().any(|t| (t - 0.5).abs() < 1.0e-6), "mid-gap missing: len {len}, radius {radius}");
+                assert!(ts.iter().any(|t| *t > 0.0 && *t * len < 0.05), "no fine sample next to the first corner: len {len}");
+            }
+        }
+    }
+
+    /// Regression for the false rejections: identical maps on both sides of a gap give identical
+    /// values, so the check is only as good as its sample spacing. With a huge radius the mid-gap
+    /// window covers the whole gap and used to duplicate the uniform samples an ulp apart.
+    #[test]
+    fn identical_planes_are_monotone_for_any_radius() {
+        let mut map = PerspectiveMap::new(&gap_planes(0.0)).unwrap();
+        let gap = Gap { from: [100.0, 0.0], to: [200.0, 0.0], sigma: 1.0 };
+        for radius in [BLEND_RADIUS, 45.0, 1.0e3, 1.0e5] {
+            map.radius = radius;
+            assert!(map.gap_is_monotone(&gap), "radius {radius}");
+        }
+    }
+
+    /// #4, no global filter: shared affine maps and mild gaps keep the base radius.
+    #[test]
+    fn mild_or_shared_affine_gaps_keep_the_default_radius() {
+        for shift in [0.0, -5.0, 7.0] {
+            for planes in [gap_planes(shift), {
+                let [a, b] = gap_planes(shift);
+                [b, a]
+            }] {
+                let map = PerspectiveMap::new(&planes).unwrap();
+                assert_eq!(map.radius, BLEND_RADIUS, "shift {shift}");
+                let mut previous = f64::NEG_INFINITY;
+                for step in 0..=300 {
+                    let out = map.map(f64::from(step), 50.0);
+                    assert!(out.0 > previous);
+                    previous = out.0;
+                }
+            }
+        }
+    }
+
+    /// #4: when the destinations themselves overlap (B pushed onto A) no bijection exists; the
+    /// map is rejected at creation instead of silently folding.
+    #[test]
+    fn gap_with_overlapping_destinations_is_rejected() {
+        for shift in [-100.0, -150.0, -400.0] {
+            let [a, b] = gap_planes(shift);
+            assert!(PerspectiveMap::new(&[a.clone(), b.clone()]).is_none(), "shift {shift}");
+            assert!(PerspectiveMap::new(&[b, a]).is_none(), "shift {shift} reversed");
         }
     }
 }

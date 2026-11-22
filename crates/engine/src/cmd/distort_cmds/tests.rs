@@ -291,6 +291,24 @@ fn perspective_rejects_invalid_destination_without_history_or_pixel_changes() {
         assert_eq!(active_surface(&s), before, "rejected warp must preserve pixels");
         assert_eq!(s.active().unwrap().history.past_len(), history, "rejected warp must not create history");
     }
+
+    // Each input is convex; averaging the linked top-left target to x=0 moves it past x=-20.
+    let left = [[20.0, 20.0], [100.0, 20.0], [100.0, 100.0], [20.0, 100.0]];
+    let right = [[100.4, 20.0], [180.4, 20.0], [180.4, 100.0], [100.4, 100.0]];
+    let planes = [
+        photocraft_algo::perspective::Plane::identity(left),
+        photocraft_algo::perspective::Plane { src: right, dst: [[-100.0, 20.0], [-20.0, 20.0], [180.4, 100.0], [100.4, 100.0]] },
+    ];
+    for plane in &planes {
+        assert!(photocraft_algo::perspective::PerspectiveMap::new(std::slice::from_ref(plane)).is_some(), "each unlinked quad is convex and valid");
+    }
+    assert!(photocraft_algo::perspective::PerspectiveMap::new(&planes).is_none(), "linking must reject the averaged destination");
+    let mut s = session(8);
+    let before = active_surface(&s);
+    let history = s.active().unwrap().history.past_len();
+    assert!(s.execute(PERSPECTIVE, json!({"planes": planes})).is_err());
+    assert_eq!(active_surface(&s), before, "rejected linked warp must preserve pixels");
+    assert_eq!(s.active().unwrap().history.past_len(), history, "rejected linked warp must not create history");
 }
 
 #[test]
