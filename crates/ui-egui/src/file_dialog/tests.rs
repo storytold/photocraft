@@ -1440,12 +1440,34 @@ fn save_a_copy_appends_copy_unless_the_preference_says_not_to() {
 fn import_variable_data_sets_menu_asks_for_a_csv_and_imports_it() {
     let (mut app, files, _) = app();
     let ctx = egui::Context::default();
+    let layer = app.session.active().unwrap().doc.layers[0].id.0;
+    app.run("image.variables.define", json!({"defs": [{"name": "headline", "layer": layer, "type": "textReplacement"}]})).unwrap();
     assert_eq!(crate::menus::invoke(&mut app, &ctx, "file.import.variableDataSets", json!({})).unwrap(), json!({"fileDialog": "open"}));
     let asked = last_request(&files);
     assert_eq!((asked.kind, asked.filters), (PickKind::Open, vec![FileFilter::new("Supported Files", &["csv", "txt"])]));
     answer(&files, Picked::Contents(vec![("sets.csv".into(), b"headline\nHello\nWorld\n".to_vec())]));
     app.poll_file_dialog();
     assert_eq!(app.session.active().map(|d| d.doc.variables.data_sets.len()), Some(2));
+}
+
+#[test]
+fn import_variable_data_sets_menu_alerts_on_a_bad_file() {
+    let (mut app, files, _) = app();
+    let ctx = egui::Context::default();
+    let layer = app.session.active().unwrap().doc.layers[0].id.0;
+    app.run("image.variables.define", json!({"defs": [{"name": "headline", "layer": layer, "type": "textReplacement"}]})).unwrap();
+    crate::menus::invoke(&mut app, &ctx, "file.import.variableDataSets", json!({})).unwrap();
+    answer(&files, Picked::Contents(vec![("sets.csv".into(), b"headline,extra\nHello,x\n".to_vec())]));
+    app.poll_file_dialog();
+    assert!(app.session.active().unwrap().doc.variables.data_sets.is_empty());
+    let ids = crate::dialogs::alerts::alerts(&app);
+    assert_eq!(ids.len(), 1);
+    let dialog = app.framework.dialogs.open_dialogs().into_iter().find(|d| d.id == ids[0]).expect("listed");
+    let message = dialog.fields.expect("alert reports its fields")["message"].as_str().expect("message").to_string();
+    assert!(message.starts_with("Could not parse the file contents as a data set."), "{message}");
+    assert!(message.contains("There were too many variable names in the first line of the text file."), "{message}");
+    assert!(!message.contains("invalid parameters"), "{message}");
+    assert_eq!(app.ui.status, message);
 }
 
 /// #10192: the folder an export dialog starts in, as a pure decision.
