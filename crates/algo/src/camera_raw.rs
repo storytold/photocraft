@@ -498,7 +498,7 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &
 
     // 1b. Calibration in linear Rec.2020.
     let cal_m = craft_develop::colorops::calibration_matrix(&ds.calibration);
-    let cal_tint = (ds.calibration.shadow_tint.clamp(-100.0, 100.0) / 100.0) as f32;
+    let cal_tint = (p.shadow_tint.clamp(-100.0, 100.0) / 100.0) as f32;
     if cal_m.is_some() || cal_tint != 0.0 {
         craft_develop::raster::par_rows(&mut img.data, w, |_, row| {
             for c in row.iter_mut() {
@@ -516,21 +516,25 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &
     }
 
     // 3. Spatial planes (Dehaze, Shadows/Highlights, Clarity, Texture) + ToneMap::display_hdr.
-    let need_spatial = ds.light.dehaze != 0.0 || ds.light.shadows != 0.0 || ds.light.highlights != 0.0 || ds.light.clarity != 0.0 || ds.light.texture != 0.0;
+    let need_spatial =
+        ds.effects.dehaze != 0.0 || ds.light.shadows != 0.0 || ds.light.highlights != 0.0 || ds.effects.clarity != 0.0 || ds.effects.texture != 0.0;
     let need_tone = ds.light.contrast != 0.0 || ds.light.whites != 0.0 || ds.light.blacks != 0.0;
     if need_spatial || need_tone {
         let sigmas = craft_develop::local::plane_sigmas(&ds, long, long, craft_develop::local::Quality::Full);
         let log_l = craft_develop::raster::Plane { width: w, height: h, data: img.data.iter().map(|c| craft_develop::local::log_lum(*c)).collect() };
-        let base = (ds.light.shadows != 0.0 || ds.light.highlights != 0.0).then(|| {
+        let base = sigmas.base.map(|sigma| {
             if craft_develop::local::base_keeps_gaps(&ds) {
                 craft_develop::local::detail_free(&log_l, sigmas.base_detail)
             } else {
-                craft_develop::local::tone_base(&log_l, sigmas.base, sigmas.base_detail, false)
+                craft_develop::local::tone_base(&log_l, sigma, sigmas.base_detail, false)
             }
         });
-        let clar = (ds.light.clarity != 0.0).then(|| craft_develop::local::guided_fast(&log_l, sigmas.clarity, craft_develop::local::CLARITY_EPS));
-        let tex = (ds.light.texture != 0.0).then(|| craft_develop::raster::blur::gaussian(&log_l, sigmas.texture));
-        let dark = (ds.light.dehaze != 0.0).then(|| {
+        let clar = (ds.effects.clarity != 0.0)
+            .then_some(sigmas.clarity)
+            .flatten()
+            .map(|s| craft_develop::local::guided_fast(&log_l, s, craft_develop::local::CLARITY_EPS));
+        let tex = (ds.effects.texture != 0.0).then_some(sigmas.texture).flatten().map(|s| craft_develop::raster::blur::gaussian(&log_l, s));
+        let dark = (ds.effects.dehaze != 0.0).then(|| {
             let d = craft_develop::raster::Plane { width: w, height: h, data: img.data.iter().map(|c| craft_develop::local::dark_of(*c)).collect() };
             let air = craft_develop::local::airlight(&d);
             (d, air)
@@ -540,9 +544,9 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &
 
         let sh = (ds.light.shadows / 100.0) as f32;
         let hi = (ds.light.highlights / 100.0) as f32;
-        let cl = (ds.light.clarity / 100.0) as f32 * 0.45;
-        let tx = (ds.light.texture / 100.0) as f32 * 0.55;
-        let dh = (ds.light.dehaze / 100.0) as f32;
+        let cl = (ds.effects.clarity / 100.0) as f32 * 0.45;
+        let tx = (ds.effects.texture / 100.0) as f32 * 0.55;
+        let dh = (ds.effects.dehaze / 100.0) as f32;
 
         craft_develop::raster::par_rows(&mut img.data, w, |y, row| {
             for (x, c) in row.iter_mut().enumerate() {
@@ -617,7 +621,7 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &
     // 6. Convert linear Rec.2020 -> linear sRGB -> display-encoded, then apply parametric +
     //    point tone curves (preserving `#16373` legacy f32 knot normalization/dedup via `curve_lut`).
     let has_par = !(p.curve_highlights == 0.0 && p.curve_lights == 0.0 && p.curve_darks == 0.0 && p.curve_shadows == 0.0);
-    let par_lut = has_par.then(|| craft_develop::curve::ParametricCurve::new(&ds.tone_curve).to_lut());
+    let par_lut = has_par.then(|| craft_develop::curve::ParametricCurve::new(&ds.curve).to_lut());
     let pts = |c: &Vec<[f32; 2]>| (!is_linear(c)).then(|| curve_lut(c, 1024));
     let (master, cr, cg, cb) = (pts(&p.point_curve), pts(&p.point_curve_red), pts(&p.point_curve_green), pts(&p.point_curve_blue));
 
@@ -625,7 +629,7 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &
         let lin_srgb = mul3(&REC2020_TO_SRGB, *c);
         let mut e = [enc.encode(lin_srgb[0]), enc.encode(lin_srgb[1]), enc.encode(lin_srgb[2])];
         if let Some(lut) = &par_lut {
-            e = e.map(|v| lut.at(v));
+            e = e.map(|v| lut.eval(v));
         }
         if let Some(lut) = &master {
             e = e.map(|v| lut_eval(lut, v));

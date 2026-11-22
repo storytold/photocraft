@@ -1285,9 +1285,13 @@ fn adjusted_crop_and_omitted_gain_table_notices_survive_development() {
 /// into unclipped linear Rec.709/D65 against `craft_develop::sensor` at the same stage.
 #[test]
 fn raw_open_matches_craft_develop_in_unclipped_linear_rec709_d65() {
-    use craft_develop::sensor::{
-        Cfa as SharedCfa, ColorData as SharedColorData, Method as SharedMethod, Normalized as SharedNormalized, color as shared_color,
-        demosaic as shared_demosaic,
+    use craft_develop::sensor::{Cfa as SharedCfa, Method as SharedMethod, Normalized as SharedNormalized, demosaic as shared_demosaic};
+
+    // ProPhoto RGB (ROMM, D50) -> Bradford D50->D65 -> linear Rec.709/D65.
+    const PROPHOTO_TO_REC709_D65: [[f64; 3]; 3] =
+        [[2.034_366_8, -0.727_642_7, -0.306_724_1], [-0.228_827_2, 1.231_751_6, -0.002_924_4], [-0.008_565_5, -0.153_287_2, 1.161_852_7]];
+    let apply3 = |m: &[[f64; 3]; 3], v: [f64; 3]| -> [f64; 3] {
+        [m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2], m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2], m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2]]
     };
 
     let (w, h) = (32, 32);
@@ -1298,13 +1302,6 @@ fn raw_open_matches_craft_develop_in_unclipped_linear_rec709_d65() {
     let dev = develop_sensor(&s, &DevelopOptions { orient: false, ..Default::default() }).unwrap();
     assert_eq!((dev.width as usize, dev.height as usize), (w, h));
 
-    // PhotoCraft `develop_sensor` outputs ProPhoto RGB (D50, gamma 1.8) u16; decode to linear
-    // ProPhoto, then convert D50 -> D65 -> linear Rec.709/D65.
-    let prophoto_to_xyz_d50 = color::rgb_to_xyz(color::ROMM, color::D50_XY);
-    let xyz_d50_to_d65 = color::bradford(color::xy_to_xyz(color::D50_XY), color::xy_to_xyz(color::D65_XY));
-    let xyz_d65_to_rec709 = color::invert(&color::rgb_to_xyz(color::REC709, color::D65_XY)).unwrap();
-    let prophoto_to_rec709_d65 = color::mul(&xyz_d65_to_rec709, &color::mul(&xyz_d50_to_d65, &prophoto_to_xyz_d50));
-
     // Shared `craft_develop::sensor` path in linear Rec.709/D65 on the same normalized sensor.
     let norm = SharedNormalized {
         width: w,
@@ -1313,13 +1310,7 @@ fn raw_open_matches_craft_develop_in_unclipped_linear_rec709_d65() {
         data: samples.iter().map(|&v| f32::from(v) / 65535.0).collect(),
         cfa: Some(SharedCfa { width: 2, height: 2, pattern: vec![0, 1, 1, 2], origin_x: 0, origin_y: 0 }),
     };
-    let mut cdata = SharedColorData::default();
-    cdata.illuminant = [21, 0];
-    cdata.color_matrix[0] = Some(shared_color::Mat3::IDENTITY);
-    let d65 = shared_color::Xy::new(0.3127, 0.3290);
     let cam_rgb = shared_demosaic(&norm, SharedMethod::Ahd);
-    let cam_to_d50 = shared_color::camera_to_xyz_d50(&cdata, d65);
-    let cam_to_rec709_d65 = color::mul(&xyz_d65_to_rec709, &color::mul(&xyz_d50_to_d65, &cam_to_d50.0));
 
     // Compare interior pixels (avoiding Bayer border effects) in linear Rec.709/D65.
     for y in 4..(h - 4) {
@@ -1330,10 +1321,10 @@ fn raw_open_matches_craft_develop_in_unclipped_linear_rec709_d65() {
                 (f64::from(dev.rgb[idx + 1]) / 65535.0).powf(1.8),
                 (f64::from(dev.rgb[idx + 2]) / 65535.0).powf(1.8),
             ];
-            let pc_rec709 = color::apply(&prophoto_to_rec709_d65, pp_lin);
+            let pc_rec709 = apply3(&PROPHOTO_TO_REC709_D65, pp_lin);
 
-            let p = cam_rgb.pixel(x, y);
-            let shared_rec709 = color::apply(&cam_to_rec709_d65, [f64::from(p[0]), f64::from(p[1]), f64::from(p[2])]);
+            let p = cam_rgb.get(x, y);
+            let shared_rec709 = [f64::from(p[0]), f64::from(p[1]), f64::from(p[2])];
 
             for c in 0..3 {
                 assert!(
