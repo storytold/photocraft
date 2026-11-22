@@ -435,6 +435,10 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let has_clear = transparency && px.iter().any(|q| q[3] < 0.5);
         let mut pal = quantize::build_palette(&px, kind, if has_clear { colors.saturating_sub(1).max(2) } else { colors }, forced).map_err(|e| bad(CMD, e))?;
+        // Exact must reserve one palette slot for clear pixels.
+        if kind == PaletteKind::Exact && has_clear && pal.len() >= 256 {
+            return Err(bad(CMD, "Exact with transparency needs 255 or fewer opaque palette colours plus one transparent entry"));
+        }
         let transparent = if has_clear && pal.len() < 256 {
             pal.push([255, 255, 255]);
             Some(pal.len() - 1)

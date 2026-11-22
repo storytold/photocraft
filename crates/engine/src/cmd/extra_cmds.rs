@@ -1037,7 +1037,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 excluded_channels: l.excluded_channels,
                 mode: d.doc.mode,
             };
-            s.style_clipboard = Some(style);
+            *s.style_clipboard = Some(style);
             Ok(Value::Null)
         }),
         spec!(
@@ -1070,7 +1070,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         return Err(EngineError::Other("none of the selected layers can take this layer style change".into()));
                     }
                 }
-                let style = s.style_clipboard.clone().ok_or(EngineError::Other("no layer style has been copied".into()))?;
+                let style = s.style_clipboard.as_ref().cloned().ok_or(EngineError::Other("no layer style has been copied".into()))?;
                 let mut fx = style.effects;
                 s.edit("Paste Layer Style", |doc, _| {
                     // A style copied from a document in another mode takes this one's colours.

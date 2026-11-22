@@ -2,7 +2,8 @@
 //! `tools.select.<tool>` (saved shortcuts, `.kys` files, protocol calls), and the rail's slots built from them.
 
 use craft::ui::contract::CommandSet;
-use craft::ui::rails::{RailTool, SlotId, ToolSlot};
+use craft::ui::contract::Tracked;
+use craft::ui::rails::{LastUsed, RailTool, SlotId, ToolSlot};
 use photocraft_engine::prefs::ToolbarCustomization;
 
 use super::toolbar::layout_sections;
@@ -342,11 +343,16 @@ pub(crate) fn slots(toolbar: &ToolbarCustomization) -> Vec<ToolSlot<Tool>> {
 /// with the toolbar layout): the toolbar, its measure and the dock's grid read them several times a frame.
 ///
 /// [`PrefsStore::catalog_rev`]: photocraft_engine::prefs::PrefsStore::catalog_rev
+///
+/// It also holds the rail's remembered tools, written only when they change, so the rail's key stays while they do.
 #[derive(Default)]
-pub(crate) struct ToolbarSlots(std::cell::RefCell<Option<(u64, RailSlots)>>);
+pub(crate) struct ToolbarSlots(std::cell::RefCell<Option<(u64, RailSlots)>>, std::cell::RefCell<Option<Remembered>>);
 
 /// The rail's slots, shared by the readers of one catalog revision.
-type RailSlots = std::sync::Arc<[ToolSlot<Tool>]>;
+pub(crate) type RailSlots = std::sync::Arc<Tracked<Vec<ToolSlot<Tool>>>>;
+
+/// The tool each slot showed last, as the rail reads it.
+pub(crate) type Remembered = std::sync::Arc<Tracked<LastUsed<Tool>>>;
 
 impl ToolbarSlots {
     /// The slots of `prefs`' toolbar layout.
@@ -355,10 +361,19 @@ impl ToolbarSlots {
         match &*held {
             Some((rev, slots)) if *rev == prefs.catalog_rev() => slots.clone(),
             _ => {
-                let built: RailSlots = slots(&prefs.get().toolbar).into();
+                let built: RailSlots = std::sync::Arc::new(Tracked::new(slots(&prefs.get().toolbar)));
                 *held = Some((prefs.catalog_rev(), built.clone()));
                 built
             }
+        }
+    }
+
+    /// `now` as the rail reads it: the held value while it is equal, a new one when it changed.
+    pub(crate) fn remembered(&self, now: LastUsed<Tool>) -> Remembered {
+        let mut held = self.1.borrow_mut();
+        match &*held {
+            Some(kept) if ***kept == now => kept.clone(),
+            _ => held.insert(std::sync::Arc::new(Tracked::new(now))).clone(),
         }
     }
 }

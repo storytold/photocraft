@@ -155,7 +155,7 @@ fn add_abr_presets(s: &mut Session, p: &Value, group: String, imp: photocraft_io
     // in Photoshop, unless `replace` asks to drop that group's own presets first: the group name
     // is only the file name, and the library is outside document history (#10640).
     let group = if p.get("replace").and_then(Value::as_bool).unwrap_or(false) {
-        std::sync::Arc::make_mut(&mut s.tools.presets).retain(|x| x.builtin || x.group != group);
+        std::sync::Arc::make_mut(&mut *s.tools.presets).retain(|x| x.builtin || x.group != group);
         group
     } else {
         // One pass over the library, not one per numbered candidate.
@@ -168,7 +168,7 @@ fn add_abr_presets(s: &mut Session, p: &Value, group: String, imp: photocraft_io
         preset.group.clone_from(&group);
         preset.name = taken.unique(&preset.name);
         names.push(preset.name.clone());
-        std::sync::Arc::make_mut(&mut s.tools.presets).push(preset);
+        std::sync::Arc::make_mut(&mut *s.tools.presets).push(preset);
     }
     s.brush_presets_changed();
     if p.get("select").and_then(Value::as_bool).unwrap_or(false)
@@ -180,7 +180,7 @@ fn add_abr_presets(s: &mut Session, p: &Value, group: String, imp: photocraft_io
         // 1 % but paint nothing (#11812).
         b.opacity = b.opacity.max(0.01);
         s.load_brush_tips(&mut b).map_err(|e| bad("brush.presets.importAbr", e))?;
-        s.tools.brush = b;
+        *s.tools.brush = b;
         s.tools.brush_changed();
     }
     // Distinct folder paths the file brought (its Photoshop folders, nested inside `group`).
@@ -262,7 +262,7 @@ fn import_image(s: &mut Session, p: &Value) -> Result<Value> {
     let (v, w, h) = image_paint(&doc, cmd)?;
     let (brush, tw, th) = crate::brush_cmds::sampled_brush(cmd, &v, w, h)?;
     let name = UniqueNames::new(s.tools.presets.iter().map(|x| x.name.as_str())).unique(&name);
-    std::sync::Arc::make_mut(&mut s.tools.presets).push(photocraft_paint::BrushPreset {
+    std::sync::Arc::make_mut(&mut *s.tools.presets).push(photocraft_paint::BrushPreset {
         name: name.clone(),
         brush: brush.clone(),
         builtin: false,
@@ -272,7 +272,7 @@ fn import_image(s: &mut Session, p: &Value) -> Result<Value> {
     });
     s.brush_presets_changed();
     if p.get("select").and_then(Value::as_bool).unwrap_or(true) {
-        s.tools.brush = brush;
+        *s.tools.brush = brush;
         s.tools.current_preset = Some(name.clone());
         s.tools.brush_changed();
     }
@@ -509,7 +509,7 @@ mod tests {
         assert_eq!(r["imported"], json!(["Hard Round 2", "9 px Round"]));
         assert_eq!(s.tools.presets.len(), before + 2);
         assert!(s.tools.presets.iter().filter(|p| p.group == "Legacy").all(|p| !p.builtin));
-        assert!(matches!(s.tools.brush.tip, photocraft_paint::TipShape::Sampled(_)));
+        assert!(matches!(*s.tools.brush.tip, photocraft_paint::TipShape::Sampled(_)));
         // Re-import with `replace` replaces the group.
         s.execute("brush.presets.importAbr", json!({"data": data, "group": "Legacy", "replace": true})).unwrap();
         assert_eq!(s.tools.presets.len(), before + 2);
@@ -541,7 +541,7 @@ mod tests {
         // The user's own brush moved into the group.
         let mut own = s.tools.presets.iter().find(|p| p.group == "Kit").unwrap().clone();
         own.name = "My Ink".into();
-        std::sync::Arc::make_mut(&mut s.tools.presets).push(own);
+        std::sync::Arc::make_mut(&mut *s.tools.presets).push(own);
         let r = s.execute("brush.presets.importAbr", json!({"data": data, "group": "Kit"})).unwrap();
         assert_eq!(r["group"], "Kit (2)");
         let in_group = |s: &Session, g: &str| s.tools.presets.iter().filter(|p| p.group == g).count();
@@ -758,11 +758,11 @@ mod tests {
         let r = s.execute("brush.presets.importImage", json!({"data": data, "fileName": "Stamp.png"})).unwrap();
         assert_eq!(r, json!({"name": "Stamp", "width": 10, "height": 6}), "cropped to the dark block");
         let pr = s.tools.presets.iter().find(|p| p.name == "Stamp").unwrap();
-        let TipShape::Sampled(tip) = &pr.brush.tip else { panic!("sampled tip expected") };
+        let TipShape::Sampled(tip) = &*pr.brush.tip else { panic!("sampled tip expected") };
         assert_eq!((tip.width, tip.height), (10, 6));
         assert!((pr.brush.size - 10.0).abs() < 1e-6);
         assert_eq!(s.tools.current_preset.as_deref(), Some("Stamp"), "the imported brush is current");
-        assert!(matches!(s.tools.brush.tip, TipShape::Sampled(_)));
+        assert!(matches!(*s.tools.brush.tip, TipShape::Sampled(_)));
         // A second import keeps the first: a new name, and `select: false` leaves the brush alone.
         let r = s.execute("brush.presets.importImage", json!({"data": data, "fileName": "Stamp.png", "select": false})).unwrap();
         assert_eq!(r["name"], "Stamp 2");

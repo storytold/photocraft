@@ -1199,6 +1199,34 @@ fn automation_save_passes_dds_options_without_asking() {
 }
 
 #[test]
+fn an_automation_open_without_a_location_is_not_listed_in_open_recent() {
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_doc::Document;
+    use photocraft_geom::Size;
+
+    let services = crate::Services {
+        import: Some(Box::new(|name: &str, _b: &[u8], _opts: &photocraft_io::ImportOptions| {
+            Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new()))
+        })),
+        automation_read: Some(Box::new(|path: &str| {
+            Ok(crate::AutomationReadResult {
+                name: path.rsplit('/').next().unwrap_or(path).to_string(),
+                bytes: b"x".to_vec(),
+                save_path: Some(path.to_string()),
+            })
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let ctx = app.ctx().clone();
+    let r = call(&mut app, &ctx, "app.open", json!({"path": "shots/gk_25.png"}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("shots/gk_25.png"), "the save-back target stays the root-relative path");
+    // A root-relative path names no file for Open Recent or Home, so nothing is listed.
+    assert!(app.ui.recent_files.is_empty(), "{:?}", app.ui.recent_files);
+}
+
+#[test]
 fn automation_open_and_save_use_the_roots_and_reply_with_warnings() {
     use photocraft_color::{ColorMode, SampleType};
     use photocraft_doc::Document;
@@ -1234,6 +1262,7 @@ fn automation_open_and_save_use_the_roots_and_reply_with_warnings() {
                 save_path: Some(path.to_string()),
             })
         })),
+        automation_locate: Some(Box::new(|path: &str| Some(format!("/work/{path}")))),
         automation_write: Some(Box::new(move |path: &str, _b: &[u8]| {
             w.borrow_mut().push(path.to_string());
             Ok(())
@@ -1245,7 +1274,8 @@ fn automation_open_and_save_use_the_roots_and_reply_with_warnings() {
     assert_eq!(r["result"]["warnings"], json!(["Adjustment layer flattened"]), "{r}");
     assert_eq!(r["result"]["name"], "warn.psd");
     assert_eq!(app.session.active().unwrap().path.as_deref(), Some("in/warn.psd"));
-    assert_eq!(app.ui.recent_files, vec!["in/warn.psd".to_string()]);
+    // Open Recent lists where the file is, not the root-relative request path, which names nothing outside automation.
+    assert_eq!(*app.ui.recent_files, vec!["/work/in/warn.psd".to_string()]);
     let r = call(&mut app, &ctx, "app.save", json!({"path": "out.png"}));
     assert_eq!(r["result"], json!({"path": "out.png", "warnings": ["Layers were flattened"]}), "{r}");
     assert_eq!(*written.borrow(), vec!["out.png".to_string()]);
@@ -1457,6 +1487,7 @@ fn app_open_opens_a_directory_pcraft_and_falls_back_for_the_zip_form() {
                 Err(format!("no such path: {path}"))
             }
         })),
+        automation_locate: Some(Box::new(|path: &str| Some(format!("/work/{path}")))),
         ..Default::default()
     };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
@@ -1465,7 +1496,7 @@ fn app_open_opens_a_directory_pcraft_and_falls_back_for_the_zip_form() {
     let r = call(&mut app, &ctx, "app.open", json!({"path": "native.pcraft"}));
     assert_eq!(r["result"], json!({"path": "native.pcraft", "name": "native.pcraft", "warnings": []}), "{r}");
     assert_eq!(app.session.active().unwrap().doc.name, "Native");
-    assert_eq!(app.ui.recent_files, vec!["native.pcraft".to_string()], "the open is recorded in recent files");
+    assert_eq!(*app.ui.recent_files, vec!["/work/native.pcraft".to_string()], "the open is recorded in recent files, where it is on disk");
     assert_eq!(app.session.active().unwrap().path, None, "no save-back target: the automation writer replaces files, never directories");
     let r = call(&mut app, &ctx, "app.save", json!({}));
     assert!(r["error"].as_str().unwrap().contains("pass `path`"), "an in-place save is refused up front: {r}");
@@ -2120,6 +2151,7 @@ fn automation_library_open_requires_explicit_save_as_before_implicit_save() {
                 save_path: path.starts_with("work/").then(|| path.to_owned()),
             })
         })),
+        automation_locate: Some(Box::new(|path: &str| Some(format!("/roots/{path}")))),
         automation_write: Some(Box::new(move |path: &str, _: &[u8]| {
             if path == "failed.psd" {
                 return Err("test write failure".into());
@@ -2135,7 +2167,7 @@ fn automation_library_open_requires_explicit_save_as_before_implicit_save() {
     let opened = call(&mut app, &ctx, "app.open", json!({"path": "library/same.psd"}));
     assert_eq!(opened["ok"], true, "{opened}");
     assert_eq!(app.session.active().unwrap().path, None);
-    assert_eq!(app.ui.recent_files, vec!["library/same.psd"]);
+    assert_eq!(*app.ui.recent_files, vec!["/roots/library/same.psd"]);
     app.run("layer.new.layer", json!({"name": "edit"})).unwrap();
     assert!(app.session.active().unwrap().is_dirty());
     let refused = call(&mut app, &ctx, "app.save", json!({}));

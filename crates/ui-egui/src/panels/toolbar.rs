@@ -1,7 +1,7 @@
 use super::{PhotocraftApp, Tool, json, vec2};
 use craft::behavior::overlay::Side;
 use craft::color_ui::ui::{PairWell, SwatchPair, Well};
-use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _, clicked};
+use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _, Tracked, clicked};
 use craft::ui::layout::RowAlign;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::rails::{
@@ -168,7 +168,13 @@ fn quick_mask_button(app: &PhotocraftApp, ui: &mut egui::Ui) {
 const FLYOUTS_OPEN: Side = Side::End;
 
 /// The rail over `slots`, its flyouts and drawer opening on `opens`.
-fn rail<'a>(slots: &'a [ToolSlot<Tool>], current: &'a Tool, remembered: &'a LastUsed<Tool>, opens: Side, editing: bool) -> ToolRail<'a, Tool> {
+fn rail<'a>(
+    slots: &'a Tracked<Vec<ToolSlot<Tool>>>,
+    current: &'a Tool,
+    remembered: &'a Tracked<LastUsed<Tool>>,
+    opens: Side,
+    editing: bool,
+) -> ToolRail<'a, Tool> {
     let rail = ToolRail::new(Label::Empty, slots, current, remembered).opens(opens).edit_toolbar(tl!("Edit Toolbar…").to_string());
     // The drawer's open flag is the one source of "editing".
     if editing { rail.editing() } else { rail }
@@ -200,7 +206,7 @@ fn footer(app: &mut PhotocraftApp, ui: &mut egui::Ui, rail: RailFooter) {
 struct MeasureKey {
     width: u32,
     room: [u32; 2],
-    slots: std::sync::Arc<[ToolSlot<Tool>]>,
+    slots: super::tool_commands::RailSlots,
     opens: Side,
     editing: bool,
     pixels_per_point: u32,
@@ -251,7 +257,7 @@ pub(crate) fn measure(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32
 /// [`measure`] without the kept height: a measuring run of the rail.
 fn measure_now(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32 {
     let slots = app.toolbar_slots.get(&app.session.prefs);
-    let remembered = last_used(&slots, &app.ui.group_tools);
+    let remembered = app.toolbar_slots.remembered(last_used(&slots, &app.ui.group_tools));
     let current = app.ui.tool;
     let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
     rail(&slots, &current, &remembered, opens, editing).measure_rail(ui, width, |ui, at| footer(app, ui, at)).y
@@ -266,7 +272,7 @@ fn measure_now(app: &mut PhotocraftApp, ui: &egui::Ui, width: f32) -> f32 {
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let slots = app.toolbar_slots.get(&app.session.prefs);
-    let remembered = last_used(&slots, &app.ui.group_tools);
+    let remembered = app.toolbar_slots.remembered(last_used(&slots, &app.ui.group_tools));
     let current = app.ui.tool;
     let (opens, editing) = (FLYOUTS_OPEN, app.ui.toolbar_drawer);
     let out = rail(&slots, &current, &remembered, opens, editing).show_rail(ui, |ui, at| footer(app, ui, at));

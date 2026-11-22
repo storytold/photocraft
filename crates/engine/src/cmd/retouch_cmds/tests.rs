@@ -649,7 +649,7 @@ fn protect_detail_sharpens_with_every_stamp_of_a_count_but_not_with_airbrush_rep
     // dab builder sees it (size jitter only shrinks, so a later stamp may also fall inside).
     let seed = (0..256)
         .find(|&seed| {
-            let mut b = session(8, 8, 8, "rgb").tools.brush.clone();
+            let mut b = (*session(8, 8, 8, "rgb").tools.brush).clone();
             b.size = 40.0;
             count(&mut b);
             b.seed = seed;
@@ -2392,9 +2392,9 @@ fn live_dab_batches_match_the_accumulating_renderer() {
         let id = s.active().unwrap().active_layer.unwrap();
         let pre = s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().clone();
         for case in ["soft", "hard", "sampled", "dynamics", "smoothing", "smoothing_catch_up"] {
-            s.tools.brush = BrushSettings::default();
+            *s.tools.brush = BrushSettings::default();
             match case {
-                "sampled" => s.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(9, 7, |x, y| ((x * 3 + y) % 11) as f32 / 10.0)),
+                "sampled" => s.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(9, 7, |x, y| ((x * 3 + y) % 11) as f32 / 10.0)).into(),
                 "dynamics" => {
                     let b = &mut s.tools.brush;
                     b.scattering.enabled = true;

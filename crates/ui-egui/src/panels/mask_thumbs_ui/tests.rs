@@ -368,7 +368,7 @@ fn a_new_adjustment_or_fill_layer_shows_its_settings_until_the_mask_thumbnail_is
 
 /// The group (by its place in the docking layout) that holds panel `id` is minimized.
 fn group_minimized(app: &PhotocraftApp, id: &str) -> bool {
-    let layout = &app.ui.docking.layout;
+    let layout = &app.ui.docking.layout();
     let place = layout.place(&id.into()).expect("the panel is docked");
     layout.group(&place).expect("its group").minimized
 }

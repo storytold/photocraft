@@ -40,6 +40,16 @@ fn seven_methods_in_the_reference_order_with_bicubic_automatic_the_default() {
     assert_eq!(labels, ["Bicubic", "Bicubic Automatic", "Bicubic Sharper", "Bicubic Smoother", "Bilinear", "Nearest Neighbor", "Preserve Details"]);
     assert_eq!(DEFAULT_RESAMPLE, "bicubicAutomatic");
     assert_eq!(resample_method(&Map::new(), None).unwrap(), "bicubicAutomatic");
+    // The dialog lists the methods in the engine's order, Automatic included.
+    let offered: Vec<String> = RESAMPLE_CHOICES
+        .iter()
+        .map(|resample| {
+            let mut options = ExportOptions::default();
+            options.resample = *resample;
+            settings_from(&options, PixelSize::new(12, 8))["resample"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    assert_eq!(offered, keys);
 }
 
 #[test]

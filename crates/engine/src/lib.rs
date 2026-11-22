@@ -45,7 +45,7 @@ pub mod select_mask_edits;
 pub mod shell_commands;
 pub mod shortcut_sets;
 pub mod snap;
-pub use variables_cmds::{DATA_SET_LAYER_LOCKED, data_set_preview, export_data_sets_with, import_data_sets_text};
+pub use variables_cmds::{DATA_SET_FILE_MISSING, DATA_SET_LAYER_LOCKED, data_set_preview, export_data_sets_with, import_data_sets_text};
 pub use video_cmds::render_video_with;
 
 use std::sync::Arc;
@@ -202,7 +202,10 @@ pub(crate) fn active_layer_of(s: &Session) -> std::result::Result<&photocraft_do
 
 #[derive(Default)]
 pub struct Session {
-    docs: Vec<DocState>,
+    /// The open documents, each in a `Tracked`: views key on its revision, which every write moves.
+    docs: Vec<craft_tracked::Tracked<DocState>>,
+    /// Each open document's native save cache, shared with its save workers; dropped when the document closes.
+    pcraft_caches: std::collections::HashMap<photocraft_doc::DocId, photocraft_io::PcraftExportCache>,
     documents_generation: u64,
     /// Override Open belongs only to one Batch scratch session, never to caller preferences.
     pub(crate) batch_open: Option<file_cmds::BatchOpen>,
@@ -241,10 +244,10 @@ pub struct Session {
     #[cfg(test)]
     batch_history_observer: Option<fn(&Session)>,
     /// Pixels copied with Edit › Copy / Cut (shared by all documents, like Photoshop).
-    pub clipboard: Option<edit_cmds::Clip>,
+    pub clipboard: craft_tracked::Tracked<Option<edit_cmds::Clip>>,
     /// Layer › Layer Style › Copy Layer Style: the effects and the Blending Options
     /// ([`CopiedStyle`]: blend mode, fill opacity, Advanced Blending, Blend If, channels).
-    pub style_clipboard: Option<CopiedStyle>,
+    pub style_clipboard: craft_tracked::Tracked<Option<CopiedStyle>>,
     /// Shape path context menu: copied vector fill and stroke styles.
     pub path_fill_clipboard: Option<photocraft_doc::Fill>,
     pub path_stroke_clipboard: Option<photocraft_doc::ShapeStroke>,
@@ -270,7 +273,7 @@ pub struct Session {
     /// Image › Analysis: Measurement Log and Select Data Points (see `analysis_cmds`).
     pub analysis: analysis_cmds::AnalysisState,
     /// Window › Gradients, Patterns (groups), Styles, Shapes, Tool Presets and Clone Source.
-    pub presets: presets::PresetState,
+    pub presets: craft_tracked::Tracked<presets::PresetState>,
     /// File menu state: Lock Slices, Image Assets, last Print / Save for Web settings, script
     /// event log (see `automate_cmds`).
     pub file_menu: automate_cmds::FileMenuState,
@@ -313,8 +316,8 @@ pub struct Session {
     /// The stamps being taken on a worker thread ([`Session::start_link_scan`]).
     pub link_scan: Option<link_watch::LinkScan>,
     /// Each open document's linked smart objects' files that were not there when last looked at
-    /// ([`Session::missing_links`]).
-    link_missing: std::collections::HashSet<(u64, String)>,
+    /// ([`Session::missing_links`]). Written only when the set changes, so its revision says when the list did.
+    link_missing: craft_tracked::Tracked<std::collections::HashSet<(u64, String)>>,
     /// Select Subject's last result, reused while the pixels are unchanged (#2865).
     subject_cache: smartselect_cmds::SubjectCache,
     /// Object Selection's Object Finder results (#4087), shared by the hover preview and the

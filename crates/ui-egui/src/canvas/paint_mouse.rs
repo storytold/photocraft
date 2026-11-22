@@ -32,9 +32,9 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
     }
     // The live brush is the outgoing tool's, so save it there before the new one takes over: any
     // edit it made since it was last active is in it, so its copy never goes stale.
-    let current = app.session.tools.brush.clone();
+    let current = (*app.session.tools.brush).clone();
     save_brush(app, app.ui.brush_tool, current.clone());
-    app.session.tools.brush = match app.ui.tool_brushes.iter().find(|(t, _)| *t == tool) {
+    *app.session.tools.brush = match app.ui.tool_brushes.iter().find(|(t, _)| *t == tool) {
         Some((_, b)) => {
             // A brush remembered from the previous run holds its stored tips as references:
             // load their full bitmaps (a missing one keeps painting with its preview).

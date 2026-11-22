@@ -7,6 +7,7 @@ mod cache_units;
 mod cargo_env;
 mod corpus;
 mod corpus_pins;
+#[cfg(feature = "framework-checks")]
 mod i18n_report;
 mod ico;
 mod layers;
@@ -95,7 +96,7 @@ fn main() -> ExitCode {
         Some("test-corpus") => corpus::test_cmd(&rest),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("parity") => cmd_parity(),
-        Some("i18n-report") => i18n_report::run(&root()),
+        Some("i18n-report") => cmd_i18n_report(),
         Some("perf") => perf::run(&root(), &rest),
         Some("scorecard") => scorecard::run(&root(), &rest),
         Some("version") => version::run(&root(), &rest),
@@ -151,12 +152,36 @@ pub fn target_dir() -> Result<PathBuf, String> {
 
 /// Two egui revisions in one build give two incompatible `Ui` types, so the workspace's egui
 /// `[patch]` must name the revision the craft framework is built with.
+#[cfg(feature = "framework-checks")]
 fn cmd_egui_fork() -> Result<(), String> {
     let path = root().join("Cargo.lock");
     let lock = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     craft::egui_fork::check_lockfile(&lock)?;
     println!("OK: every egui package comes from {} at {}.", craft::egui_fork::GIT, craft::egui_fork::REV);
     Ok(())
+}
+
+#[cfg(feature = "framework-checks")]
+fn cmd_i18n_report() -> Result<(), String> {
+    i18n_report::run(&root())
+}
+
+// An explicitly minimal xtask can still run either check when asked for it.
+#[cfg(not(feature = "framework-checks"))]
+fn run_framework_check(name: &str) -> Result<(), String> {
+    let mut c = cargo();
+    c.args(["run", "--locked", "-p", "xtask", "--features", "framework-checks", "--", name]);
+    run(c, name)
+}
+
+#[cfg(not(feature = "framework-checks"))]
+fn cmd_egui_fork() -> Result<(), String> {
+    run_framework_check("egui-fork")
+}
+
+#[cfg(not(feature = "framework-checks"))]
+fn cmd_i18n_report() -> Result<(), String> {
+    run_framework_check("i18n-report")
 }
 
 fn cmd_layers() -> Result<(), String> {
@@ -364,7 +389,7 @@ fn step_doctest(o: &CiOptions) -> Result<(), String> {
 
 fn step_i18n(_: &CiOptions) -> Result<(), String> {
     // Lists missing translations for the log; a missing string shows in English, so it never fails CI.
-    if let Err(e) = i18n_report::run(&root()) {
+    if let Err(e) = cmd_i18n_report() {
         eprintln!("warning: i18n report failed: {e}");
     }
     Ok(())

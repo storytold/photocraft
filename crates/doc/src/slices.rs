@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::{Document, LayerId};
 
 /// Where a slice comes from (PSD `ESliceOrigin`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub enum SliceOrigin {
     /// Fills the canvas around user and layer slices; regenerated, never edited.
@@ -50,7 +50,7 @@ impl SliceOrigin {
 }
 
 /// Slice Options › Slice Type.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub enum SliceKind {
     /// Exported as an image file.
@@ -96,7 +96,7 @@ impl SliceKind {
 }
 
 /// One slice and its Slice Options.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Slice {
     /// Stable id (PSD `sliceID`), unique within the document.
@@ -126,7 +126,7 @@ pub struct Slice {
 }
 
 /// The document's slices (PSD resource 1050).
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Slices {
     /// Group name (PSD: the base name, usually the document name).
@@ -154,7 +154,7 @@ impl Slices {
 
 /// A slice as shown and exported: user/layer slices plus generated auto slices, numbered the way
 /// Photoshop numbers them (top-to-bottom, left-to-right, from 1).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct ResolvedSlice {
     /// 1-based display number.
     pub number: usize,
