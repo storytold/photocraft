@@ -511,7 +511,7 @@ fn first_pull(smart: bool, corner_x: f64, pull_to: [f64; 2], cols: &[f64]) -> Op
                         let px = img.get_pixel(p.x.floor() as u32, y);
                         px[2] > 200 && px[0] < 60 && px[1] < 60
                     })
-                    .map(|y| f64::from(y))
+                    .map(f64::from)
             })
             .collect()
     };

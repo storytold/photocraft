@@ -288,8 +288,11 @@ fn check_now(app: &PhotocraftApp, open_texels: [usize; 2]) -> Result<(), String>
     Ok(())
 }
 
+/// What a walk ends with: the stored warp's points and bounds, and the placement.
+type Ending = (Option<Vec<[f64; 2]>>, Option<[f64; 4]>, [f64; 6]);
+
 /// The fixed ending every walk is compared on: Warp, one pull, apply. The stored warp and placement.
-fn ending(app: &mut PhotocraftApp, ctx: &egui::Context, id: LayerId) -> Result<(Option<Vec<[f64; 2]>>, Option<[f64; 4]>, [f64; 6]), String> {
+fn ending(app: &mut PhotocraftApp, ctx: &egui::Context, id: LayerId) -> Result<Ending, String> {
     begin_warp(app, ctx).map_err(|e| format!("begin_warp: {e}"))?;
     frame(app);
     let mut to = warp_mesh(app);
