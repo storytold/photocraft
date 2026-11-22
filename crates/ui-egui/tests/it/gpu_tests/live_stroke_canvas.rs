@@ -104,11 +104,12 @@ thread_local! {
 /// 10 s for the GPU. Windows CI renders on WARP, a software rasterizer, where a frame can take longer
 /// while other GPU tests run, and the submitted frame keeps running after the timeout. After a timeout
 /// this waits up to 120 s for the device to finish all submitted work, then renders the frame once more
-/// with nothing else queued. A render that times out again fails the test.
-fn rendered<T>(h: &mut Harness, render: fn(&mut Harness) -> Result<T, String>) -> T {
+/// with nothing else queued. A render that times out again fails the test. Any other render error fails
+/// the test at once, without a second render.
+fn rendered<H, T>(h: &mut H, render: fn(&mut H) -> Result<T, String>) -> T {
     match render(h) {
         Ok(image) => image,
-        Err(err) => {
+        Err(err) if is_gpu_wait_timeout(&err) => {
             DEVICE.with_borrow(|device| {
                 if let Some(device) = device
                     && let Err(wait) = device.poll(eframe::wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(120)) })
@@ -118,7 +119,35 @@ fn rendered<T>(h: &mut Harness, render: fn(&mut Harness) -> Result<T, String>) -
             });
             render(h).unwrap_or_else(|again| panic!("render: {err}; again with the device idle: {again}"))
         }
+        Err(err) => panic!("render: {err}"),
     }
+}
+
+/// Whether `err` is the error egui_kittest's wgpu renderer returns when its GPU wait times out: it
+/// formats the `wgpu::PollError` as `PollError: {err}`.
+fn is_gpu_wait_timeout(err: &str) -> bool {
+    err == format!("PollError: {}", eframe::wgpu::PollError::Timeout)
+}
+
+/// `rendered` renders again only after a GPU wait timeout. No GPU is needed: the render is a counter,
+/// and with no harness built on this thread there is no device to wait for.
+#[test]
+fn rendered_retries_only_a_gpu_wait_timeout() {
+    fn timeout_then_ok(calls: &mut u32) -> Result<u32, String> {
+        *calls += 1;
+        if *calls == 1 { Err(format!("PollError: {}", eframe::wgpu::PollError::Timeout)) } else { Ok(*calls) }
+    }
+    fn other_error_then_ok(calls: &mut u32) -> Result<u32, String> {
+        *calls += 1;
+        if *calls == 1 { Err(format!("PollError: {}", eframe::wgpu::PollError::WrongSubmissionIndex(2, 1))) } else { Ok(*calls) }
+    }
+    let mut calls = 0;
+    assert_eq!(rendered(&mut calls, timeout_then_ok), 2, "a timeout renders once more");
+    let mut calls = 0;
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rendered(&mut calls, other_error_then_ok)));
+    assert!(failed.is_err(), "another render error fails the test");
+    assert_eq!(calls, 1, "another render error is not rendered again");
+    assert!(!is_gpu_wait_timeout("PollError: wgpu device lost"));
 }
 
 /// Runs a control call and the frame that shows it; returns that (call + frame) time in ms.
