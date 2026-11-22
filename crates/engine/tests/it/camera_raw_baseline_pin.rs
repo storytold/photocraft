@@ -168,7 +168,13 @@ fn camera_raw_migration_preserves_exposure_presence_after_native_reopen() {
     for (params, expected) in [(json!({"encodingGamma": 1.8}), -0.75), (json!({"encodingGamma": 1.8, "exposure": 0.0}), 0.0)] {
         let source = SmartSource::Embedded { file_name: "generated.pcraft".into(), bytes: embedded.clone() };
         let mut smart = SmartObject::new(source, Affine::IDENTITY, None);
-        smart.smart_filters.push(SmartFilter { command: "filter.cameraRaw".into(), params: params.clone(), blend: BlendMode::Normal, opacity: 1.0, visible: true });
+        smart.smart_filters.push(SmartFilter {
+            command: "filter.cameraRaw".into(),
+            params: params.clone(),
+            blend: BlendMode::Normal,
+            opacity: 1.0,
+            visible: true,
+        });
         let mut doc = Document::new("Saved Camera Raw exposure", size, ColorMode::Rgb, SampleType::U16);
         doc.layers.push(Layer::new("Stored filter", LayerContent::Smart(smart)));
 
