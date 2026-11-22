@@ -1541,9 +1541,13 @@ mod pdf_overlapping_areas_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/pdf_page_order_tests.rs"]
 mod pdf_page_order_tests;
+
 #[cfg(test)]
 #[path = "artboard_cmds/pdf_reverse_page_order_tests.rs"]
 mod pdf_reverse_page_order_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/pdf_zip_encoding_tests.rs"]
+mod pdf_zip_encoding_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/tests.rs"]
 mod tests;
