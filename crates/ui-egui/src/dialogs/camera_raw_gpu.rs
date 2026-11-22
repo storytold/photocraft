@@ -257,6 +257,42 @@ mod tests {
         (frame.backend, frame.px, cpu)
     }
 
+    /// The open session's proxy pixel count, which every develop of it returns.
+    fn proxy_pixels(app: &PhotocraftApp) -> usize {
+        let (w, h) = app.raw.as_ref().expect("session").source.proxy_base().size;
+        w * h
+    }
+
+    /// The largest channel difference between a GPU and a CPU develop. Both must hold all
+    /// `pixels` (a nonzero count) and only finite channels first: `zip` stops at the shorter
+    /// buffer and `f32::max` drops a NaN, so either would pass unchecked.
+    fn off_by(pixels: usize, gpu: &[[f32; 4]], cpu: &[[f32; 4]], what: &str) -> f32 {
+        assert!(pixels > 0, "{what}: the proxy has no pixels");
+        assert_eq!((gpu.len(), cpu.len()), (pixels, pixels), "{what}: GPU and CPU pixel counts");
+        for (side, px) in [("GPU", gpu), ("CPU", cpu)] {
+            assert!(px.iter().flatten().all(|c| c.is_finite()), "{what}: a non-finite {side} channel");
+        }
+        gpu.iter().zip(cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max)
+    }
+
+    #[test]
+    #[should_panic(expected = "GPU and CPU pixel counts")]
+    fn off_by_refuses_a_short_develop() {
+        off_by(2, &[[0.0; 4]], &[[0.0; 4]; 2], "short");
+    }
+
+    #[test]
+    #[should_panic(expected = "the proxy has no pixels")]
+    fn off_by_refuses_an_empty_proxy() {
+        off_by(0, &[], &[], "empty");
+    }
+
+    #[test]
+    #[should_panic(expected = "a non-finite GPU channel")]
+    fn off_by_refuses_a_non_finite_channel() {
+        off_by(1, &[[f32::NAN, 0.0, 0.0, 1.0]], &[[0.0, 0.0, 0.0, 1.0]], "nan");
+    }
+
     #[test]
     fn the_pass_is_built_when_camera_raw_first_opens_not_with_the_canvas() {
         let _gpu = photocraft_testkit::gpu_lock();
@@ -282,6 +318,7 @@ mod tests {
                 eprintln!("skipping: the device can't run the RAW Develop pass");
                 return;
             }
+            let pixels = proxy_pixels(&app);
             let per_pixel = cr! {
                 temperature: 20.0,
                 exposure: 0.4,
@@ -296,14 +333,14 @@ mod tests {
             };
             let (backend, gpu, cpu) = developed(&app, per_pixel.clone());
             assert_eq!(backend, "gpu", "{depth}-bit");
-            let worst = gpu.iter().zip(&cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
+            let worst = off_by(pixels, &gpu, &cpu, &format!("{depth}-bit"));
             assert!(worst <= TOL, "{depth}-bit: off by {worst}");
             // PLAN: the old `describe["developBackend"] == "gpu"` check read the dialog's own render; a `Job` can only be run by the host (no public runner), so the helper runs the job's body and the session's reported backend is not asserted here.
             // Shadows and Highlights develop on the GPU too, Whites and Blacks measured after them.
             let toned = cr!(per_pixel.clone() => shadows: 40.0, highlights: -35.0);
             let (backend, gpu, cpu) = developed(&app, toned.clone());
             assert_eq!(backend, "gpu", "{depth}-bit, Shadows and Highlights");
-            let worst = gpu.iter().zip(&cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
+            let worst = off_by(pixels, &gpu, &cpu, &format!("{depth}-bit, Shadows and Highlights"));
             assert!(worst <= TOL, "{depth}-bit, Shadows and Highlights: off by {worst}");
             // So do Dehaze, Clarity and Texture, with Whites and Blacks measured after them.
             for spatial in [
@@ -313,7 +350,7 @@ mod tests {
             ] {
                 let (backend, gpu, cpu) = developed(&app, spatial.clone());
                 assert_eq!(backend, "gpu", "{depth}-bit, {spatial:?}");
-                let worst = gpu.iter().zip(&cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
+                let worst = off_by(pixels, &gpu, &cpu, &format!("{depth}-bit, {spatial:?}"));
                 assert!(worst <= TOL, "{depth}-bit, {spatial:?}: off by {worst}");
             }
             // And Detail: sharpening and noise reduction, alone (Whites and Blacks measured on
@@ -325,7 +362,7 @@ mod tests {
             ] {
                 let (backend, gpu, cpu) = developed(&app, detail.clone());
                 assert_eq!(backend, "gpu", "{depth}-bit, {detail:?}");
-                let worst = gpu.iter().zip(&cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
+                let worst = off_by(pixels, &gpu, &cpu, &format!("{depth}-bit, {detail:?}"));
                 assert!(worst <= TOL, "{depth}-bit, {detail:?}: off by {worst}");
             }
             // Calibration develops the whole frame on the CPU (#5128).
