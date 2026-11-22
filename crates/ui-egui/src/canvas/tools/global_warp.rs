@@ -37,6 +37,14 @@ fn keys_of(mods: Mods) -> Keys {
     Keys { ctrl: mods.cmd || mods.ctrl, shift: mods.shift }
 }
 
+/// A hidden overlay must not delete an invisible guide or pass Delete to the layer tool.
+fn guarded_delete(overlay_visible: bool, remove: impl FnOnce() -> bool) -> bool {
+    if !overlay_visible {
+        return true;
+    }
+    remove()
+}
+
 /// The pointer's document point and the hit distance in document units.
 fn at(pointer: &ToolPointer, cx: &ToolContext<'_>) -> Option<([f64; 2], f64)> {
     let view = cx.space()?.view;
@@ -118,7 +126,7 @@ impl CanvasTool for GlobalWarpTool<'_> {
                 self.scope.with_app(session::cancel);
                 true
             }
-            ToolKey::Delete { .. } => self.scope.with_app(session::delete_selected),
+            ToolKey::Delete { .. } => guarded_delete(self.preview_visible(), || self.scope.with_app(session::delete_selected)),
             // An arrow key would move the layer under the guides and make the session stale.
             ToolKey::Nudge { .. } => true,
             _ => false,
@@ -152,6 +160,22 @@ impl CanvasTool for GlobalWarpTool<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hidden_overlay_consumes_delete_without_mutating_guides() {
+        use std::cell::Cell;
+        let calls = Cell::new(0);
+        assert!(guarded_delete(false, || {
+            calls.set(calls.get() + 1);
+            true
+        }));
+        assert_eq!(calls.get(), 0, "invisible guide was deleted");
+        assert!(guarded_delete(true, || {
+            calls.set(calls.get() + 1);
+            true
+        }));
+        assert_eq!(calls.get(), 1, "visible guide was not deleted");
+        assert!(!guarded_delete(true, || false), "preserve the old no-selection result");
+    }
 
     /// Ctrl (⌘ where the host reports Ctrl as ⌘) is the image-axis lock; Shift alone is the guide-axis lock.
     #[test]
