@@ -185,7 +185,7 @@ fn exhausted_style_ids_return_errors_without_history_changes() {
     let mut doc = (*s.active().unwrap().doc).clone();
     doc.text_styles.character.push(CharacterStyleDef { id: u32::MAX, name: "Max".into(), ..Default::default() });
     doc.text_styles.paragraph.push(ParagraphStyleDef { id: u32::MAX, name: "Max".into(), ..Default::default() });
-    s.active_mut().unwrap().doc = std::sync::Arc::new(doc);
+    *s.active_mut().unwrap().doc_mut() = std::sync::Arc::new(doc);
     let past = s.active().unwrap().history.past_len();
     let revision = s.active().unwrap().revision;
 

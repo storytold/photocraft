@@ -15,7 +15,7 @@ const MAX: usize = 16;
 ///
 /// Fixed-size and `Copy`, so a brush evaluates it per dab without allocating. In JSON it is its
 /// list of points, `[[0,0],[0.5,0.2],[1,1]]`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct ResponseCurve {
     n: u8,
     xs: [f32; MAX],

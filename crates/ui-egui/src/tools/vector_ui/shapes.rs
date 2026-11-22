@@ -1,9 +1,29 @@
+use craft::behavior::CanvasView;
+use craft::behavior::kurbo::{Point, Rect};
+use craft::draw::geometry::shape::ShapeGeometry;
+use craft::draw::ui::shape_drag::{BoxConstraints, ShapeKind};
+use craft::keymap::Mods;
+
 use super::options::{draws_path, solid_paint};
-use super::overlay::path_lines;
-use super::{Affine, Color32, PhotocraftApp, Tokens, Tool, ToolOptions, Value, ViewXform, json, paint_param};
+use super::{Color32, PhotocraftApp, Tool, Value, json, paint_param};
+use crate::state::ToolOptions;
 
 pub fn is_shape_tool(t: Tool) -> bool {
     matches!(t, Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::Line | Tool::CustomShape)
+}
+
+/// The framework's shape kind of a Shape tool. The Rectangle tool is `Rectangle` whatever its corner
+/// radius: `create_geometry` rounds from the geometry's radii.
+pub fn kind_of(tool: Tool) -> ShapeKind {
+    match tool {
+        Tool::EllipseShape => ShapeKind::Ellipse,
+        Tool::Triangle => ShapeKind::Triangle,
+        Tool::Polygon => ShapeKind::Polygon,
+        Tool::Star => ShapeKind::Star,
+        Tool::Line => ShapeKind::Line,
+        Tool::CustomShape => ShapeKind::Custom,
+        _ => ShapeKind::Rectangle,
+    }
 }
 
 fn rgb32(c: [f32; 4]) -> Color32 {
@@ -42,7 +62,7 @@ pub(super) fn open_pen_stroke_param(app: &PhotocraftApp) -> Value {
 
 /// The paint the next shape's fill (`stroke` false) or stroke takes: the options bar's gradient,
 /// else the foreground / background colour.
-fn tool_paint(app: &PhotocraftApp, stroke: bool) -> photocraft_doc::Fill {
+pub(super) fn tool_paint(app: &PhotocraftApp, stroke: bool) -> photocraft_doc::Fill {
     let (gradient, color) = tool_paint_source(app, stroke);
     gradient.clone().unwrap_or_else(|| solid_paint(color))
 }
@@ -94,124 +114,126 @@ pub(super) fn align_line_edges(a: [f64; 2], b: [f64; 2], weight: f64, keep_angle
     Some((a, b, weight))
 }
 
-/// Geometry of a Shape-tool drag as `shape.create` params, without fill and stroke (None when too
-/// small): ⇧ constrains proportions, ⌥ draws from the centre. Custom shapes give their box as a `rect`.
-pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<Value> {
-    Some(if tool == Tool::Line {
-        let (mut dx, mut dy) = (end[0] - start[0], end[1] - start[1]);
-        // Too short a drag draws nothing. Measured before ⇧ shortens a diagonal, so a short
-        // fractional drag still reaches `align_line_edges`, which rounds it to whole pixels.
-        if dx.hypot(dy) < 1.0 {
-            return None;
-        }
-        if mods.shift {
-            // Snap to a multiple of 45°, as Photoshop does (#13243): a horizontal or vertical
-            // line keeps the drag's distance along its axis, a diagonal one the shorter of the two
-            // distances on both axes. A drag within 30° of an axis snaps to it: Photoshop flattens
-            // a 26.6° drag and keeps a 39.8° one diagonal; the exact boundary is not measured.
-            // An axis line is at least a pixel long: a drag of a pixel or more can keep as little
-            // as 0.87 px along its axis, and `align_line_edges` could round both ends together.
-            let tan30 = std::f64::consts::FRAC_PI_6.tan();
-            (dx, dy) = if dy.abs() < dx.abs() * tan30 {
-                (dx.abs().max(1.0).copysign(dx), 0.0)
-            } else if dx.abs() < dy.abs() * tan30 {
-                (0.0, dy.abs().max(1.0).copysign(dy))
-            } else {
-                let m = dx.abs().min(dy.abs());
-                (m.copysign(dx), m.copysign(dy))
-            };
-        }
-        let (from, to, weight) = align_line_edges(start, [start[0] + dx, start[1] + dy], f64::from(o.line_weight.max(1.0)), mods.shift)?;
-        json!({"kind": "line", "from": from, "to": to, "weight": weight,
-            "arrowStart": o.arrow_start, "arrowEnd": o.arrow_end,
-            "arrowWidth": o.arrow_width, "arrowLength": o.arrow_length,
-            // Settings saved with the old 0..100 range draw at the nearest value (#13258).
-            "arrowConcavity": if o.arrow_concavity.is_finite() { o.arrow_concavity.round().clamp(-50.0, 50.0) } else { 0.0 }})
-    } else {
-        let [x0, y0, w, h] = drag_box(o, tool, start, end, mods);
-        let rect = [x0.min(x0 + w), y0.min(y0 + h), w.abs(), h.abs()];
-        // Align Edges (#13370) is the Triangle tool's option, and only in Shape mode, where its
-        // checkbox is enabled. The other shape tools, and a greyed checkbox, still snap.
-        let keep_fraction = tool == Tool::Triangle && o.shape_mode == "shape" && !o.align_edges;
-        let rect = if keep_fraction { rect } else { rect.map(f64::round) };
-        if rect[2] < 1.0 || rect[3] < 1.0 {
-            return None;
-        }
-        match tool {
-            Tool::Rectangle if o.corner_radius > 0.0 => json!({"kind": "roundedRect", "rect": rect, "radii": vec![o.corner_radius; 4]}),
-            Tool::Rectangle | Tool::CustomShape => json!({"kind": "rect", "rect": rect}),
-            Tool::EllipseShape => json!({"kind": "ellipse", "rect": rect}),
-            // Shift: the equilateral triangle in the circle of the constrained square, as before the
-            // plain drag filled its box (#13350), sent as its tight box. Which side sizes the square
-            // is #13351's.
-            Tool::Triangle if mods.shift => {
-                let r = rect[2] / 2.0;
-                let half_base = r * 3f64.sqrt() / 2.0;
-                json!({"kind": "triangle", "rect": [rect[0] + r - half_base, rect[1], 2.0 * half_base, 1.5 * r]})
+/// A box on whole pixels (position and size rounded on their own) unless `whole` is off, `None`
+/// under 1 px a side. The one rounding rule of every box shape, so the preview and the commit draw
+/// the same path.
+fn whole_box(rect: &Rect, whole: bool) -> Option<Rect> {
+    let r = rect.abs();
+    let (x0, y0, w, h) = if whole { (r.x0.round(), r.y0.round(), r.width().round(), r.height().round()) } else { (r.x0, r.y0, r.width(), r.height()) };
+    (w >= 1.0 && h >= 1.0).then(|| Rect::new(x0, y0, x0 + w, y0 + h))
+}
+
+/// Whether a drag of `kind` lands on whole pixels. Align Edges (#13370) is the Triangle tool's
+/// option, and only in Shape mode, where its checkbox is enabled; the other Shape tools, and a
+/// greyed checkbox, still snap.
+pub(super) fn snaps_to_pixels(app: &PhotocraftApp, kind: ShapeKind) -> bool {
+    let o = &app.ui.tool_options;
+    !(kind == ShapeKind::Triangle && o.shape_mode == super::VectorMode::Shape && !o.align_edges)
+}
+
+/// `geometry` as a drag commits it: boxes on whole pixels, a line aligned to pixel edges
+/// ([`align_line_edges`]; `keep_angle` for a ⇧-constrained one). `whole` off keeps a box's
+/// fractions ([`snaps_to_pixels`]). `None` when too small to draw.
+/// The one place the rounding lives: `shape_outline` and `finish_drag` both call it.
+fn snapped(geometry: &ShapeGeometry, keep_angle: bool, whole: bool) -> Option<ShapeGeometry> {
+    Some(match geometry {
+        ShapeGeometry::Rect { rect, radii } => ShapeGeometry::Rect { rect: whole_box(rect, whole)?, radii: *radii },
+        ShapeGeometry::Ellipse { rect } => ShapeGeometry::Ellipse { rect: whole_box(rect, whole)? },
+        ShapeGeometry::Triangle { rect } => ShapeGeometry::Triangle { rect: whole_box(rect, whole)? },
+        ShapeGeometry::Polygon { rect, sides, star_ratio } => ShapeGeometry::Polygon { rect: whole_box(rect, whole)?, sides: *sides, star_ratio: *star_ratio },
+        ShapeGeometry::Custom { rect, keep_proportions } => ShapeGeometry::Custom { rect: whole_box(rect, whole)?, keep_proportions: *keep_proportions },
+        ShapeGeometry::Line { from, to, weight } => {
+            if from.distance(*to) < 1.0 {
+                return None;
             }
-            Tool::Triangle => json!({"kind": "triangle", "rect": rect}),
-            // PhotoCraft's star defaults; the Star Tool's own options are not measured yet (#11377).
-            Tool::Star => json!({"kind": "star", "rect": rect, "sides": 5, "starRatio": 0.5}),
-            _ => json!({"kind": "polygon", "rect": rect, "sides": o.polygon_sides.max(3)}),
+            let (a, b, weight) = align_line_edges([from.x, from.y], [to.x, to.y], weight.max(1.0), keep_angle)?;
+            ShapeGeometry::Line { from: Point::new(a[0], a[1]), to: Point::new(b[0], b[1]), weight }
         }
+        other => other.clone(),
     })
 }
 
-/// The box `[x, y, w, h]` of a Shape-tool drag from `start` to `end`, before it is snapped, with
-/// `w` and `h` signed the way the drag went. ⇧ squares it from the drag's shorter side, as in the
-/// reference application (#13222), and ⌥ draws it from the centre. The Rectangle tool's gear
-/// (#13343) can keep either on, and then ⇧ turns Square off and ⌥ From Center, as in the
-/// reference. Fixed Size puts the gear's W × H with its top-left corner at the release point;
-/// Proportional draws the largest box of the gear's W : H inside the dragged one, from the press
-/// point. A Fixed Size or Proportional field left empty draws as Unconstrained.
-fn drag_box(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> [f64; 4] {
-    let gear = tool == Tool::Rectangle;
-    let constraint = if gear { o.rect_constraint.as_str() } else { "unconstrained" };
-    let from_center = mods.alt != (gear && o.rect_from_center);
-    if constraint == "fixedSize"
-        && let Some((fw, fh)) = positive_pair(o.rect_fixed_width, o.rect_fixed_height)
-    {
-        // From Center with Fixed Size is not measured: the size is centred on the release point.
-        let (x, y) = if from_center { (end[0] - fw / 2.0, end[1] - fh / 2.0) } else { (end[0], end[1]) };
-        return [x, y, fw, fh];
-    }
-    let (mut w, mut h) = (end[0] - start[0], end[1] - start[1]);
-    if mods.shift != (constraint == "square") {
-        let m = w.abs().min(h.abs());
-        (w, h) = (m * w.signum(), m * h.signum());
-    }
-    if constraint == "proportional"
-        && let Some((rw, rh)) = positive_pair(o.rect_ratio_width, o.rect_ratio_height)
-    {
-        let s = (w.abs() / rw).min(h.abs() / rh);
-        (w, h) = (rw * s * w.signum(), rh * s * h.signum());
-    }
-    if from_center { [start[0] - w, start[1] - h, 2.0 * w, 2.0 * h] } else { [start[0], start[1], w, h] }
+/// The Rectangle tool's gear as the framework's [`BoxConstraints`]: the stored constraint name (serde's names), the
+/// fixed and ratio pairs (a 0 is an empty field) and From Center. The one mapping the tool's drag
+/// (`host::configure`) and the gear in the options bar share.
+pub(super) fn constraints_of(o: &ToolOptions) -> BoxConstraints {
+    let field = |v: f32| (v != 0.0).then_some(f64::from(v));
+    let mut c = BoxConstraints::default();
+    c.constraint = serde_json::from_value(json!(o.rect_constraint)).unwrap_or_default();
+    c.fixed = (field(o.rect_fixed_width), field(o.rect_fixed_height));
+    c.ratio = (field(o.rect_ratio_width), field(o.rect_ratio_height));
+    c.from_center = o.rect_from_center;
+    c
 }
 
-/// `(w, h)` in f64 when both are finite and above zero (gear fields that are not empty).
-fn positive_pair(w: f32, h: f32) -> Option<(f64, f64)> {
-    (w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0).then(|| (f64::from(w), f64::from(h)))
+/// Stores the gear's `constraints` into the options: the inverse of [`constraints_of`].
+pub(super) fn store_constraints(o: &mut ToolOptions, constraints: &BoxConstraints) {
+    let field = |v: Option<f64>| v.map_or(0.0, |v| v as f32);
+    o.rect_constraint = match serde_json::to_value(constraints.constraint) {
+        Ok(Value::String(name)) => name,
+        _ => "unconstrained".into(),
+    };
+    o.rect_fixed_width = field(constraints.fixed.0);
+    o.rect_fixed_height = field(constraints.fixed.1);
+    o.rect_ratio_width = field(constraints.ratio.0);
+    o.rect_ratio_height = field(constraints.ratio.1);
+    o.rect_from_center = constraints.from_center;
 }
 
-/// The box `[x0, y0, x1, y1]` a Shape-tool drag draws (a line's: its ends'), which snaps while
-/// Space repositions it (`snap_ui`). None when too small to draw.
-pub fn shape_bounds(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<[f64; 4]> {
-    let g = shape_geometry(o, tool, start, end, mods)?;
-    if tool == Tool::Line {
-        let a: [f64; 2] = serde_json::from_value(g["from"].clone()).ok()?;
-        let b: [f64; 2] = serde_json::from_value(g["to"].clone()).ok()?;
-        return Some([a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]);
-    }
-    let [x, y, w, h]: [f64; 4] = serde_json::from_value(g["rect"].clone()).ok()?;
-    Some([x, y, x + w, y + h])
+fn box_of(rect: &Rect) -> [f64; 4] {
+    let r = rect.abs();
+    [r.x0, r.y0, r.width(), r.height()]
 }
 
-/// Finish a Shape-tool drag: ⇧ constrains proportions, ⌥ draws from the centre.
-pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
+/// `shape.create` params of `geometry` without fill and stroke: the one builder of the command's
+/// geometry. The arrowheads come from the tool options, which `ShapeGeometry` does not carry.
+fn geometry_params(app: &PhotocraftApp, geometry: &ShapeGeometry, kind: ShapeKind) -> Result<Value, String> {
+    let o = &app.ui.tool_options;
+    Ok(match geometry {
+        ShapeGeometry::Rect { rect, radii } if radii.iter().any(|r| *r > 0.0) => json!({"kind": "roundedRect", "rect": box_of(rect), "radii": radii}),
+        ShapeGeometry::Rect { rect, .. } => json!({"kind": "rect", "rect": box_of(rect)}),
+        ShapeGeometry::Ellipse { rect } => json!({"kind": "ellipse", "rect": box_of(rect)}),
+        // The Triangle tool's triangle fills its box (#13350).
+        ShapeGeometry::Triangle { rect } => json!({"kind": "triangle", "rect": box_of(rect)}),
+        ShapeGeometry::Polygon { rect, sides, star_ratio } => {
+            let mut p = json!({"kind": if kind == ShapeKind::Star { "star" } else { "polygon" }, "rect": box_of(rect), "sides": sides});
+            if kind == ShapeKind::Star || *star_ratio < 1.0 {
+                p["starRatio"] = json!(star_ratio);
+            }
+            p
+        }
+        ShapeGeometry::Line { from, to, weight } => json!({"kind": "line", "from": [from.x, from.y], "to": [to.x, to.y], "weight": weight,
+            "arrowStart": o.arrow_start, "arrowEnd": o.arrow_end,
+            "arrowWidth": o.arrow_width, "arrowLength": o.arrow_length,
+            // Settings saved with the old 0..100 range draw at the nearest value (#13258).
+            "arrowConcavity": if o.arrow_concavity.is_finite() { o.arrow_concavity.round().clamp(-50.0, 50.0) } else { 0.0 }}),
+        // PhotoCraft's drag rules keep `radial_polygons` off, so no tool sends a radial polygon and `shape.create` has no kind for it
+        ShapeGeometry::RadialPolygon { .. } => return Err(tl!("This shape can't be created").into()),
+        ShapeGeometry::Custom { .. } => return Err(tl!("A custom shape is placed from its preset").into()),
+    })
+}
+
+/// `shape.create` params with the options bar's fill and stroke.
+fn create_params(app: &PhotocraftApp, geometry: &ShapeGeometry, kind: ShapeKind) -> Result<Value, String> {
+    let mut p = geometry_params(app, geometry, kind)?;
+    p["fill"] = fill_param(app);
+    p["stroke"] = stroke_param(app);
+    Ok(p)
+}
+
+fn report(app: &mut PhotocraftApp, e: String) {
+    app.ui.status = e;
+    app.ui.status_error = true;
+}
+
+/// Finish a Shape-tool drag with the geometry the framework tool committed (⇧ and ⌥ are already in
+/// it): Path mode adds the outline to the Work Path, Custom Shape places the preset, the others
+/// make a shape layer. A geometry too small to draw changes nothing.
+pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry, mods: Mods) {
+    let Some(geometry) = snapped(geometry, mods.shift, snaps_to_pixels(app, kind)) else { return };
     if draws_path(&app.ui.tool_options) {
         // Path mode: the outline joins the work path (one more subpath), and no layer is made.
-        let Some(outline) = shape_outline(app, tool, start, end, mods) else { return };
+        let Some(outline) = outline_of(app, kind, &geometry) else { return };
         // Appended here rather than with `path.set`'s `op`, which would turn a custom shape's
         // subtracted subpaths (holes) into combined ones; the shape goes in as one component.
         // A new work path takes the outline's fill rule.
@@ -231,23 +253,18 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
             sp.op = path_op_of(op);
         }
         let path = photocraft_engine::vector_cmds::path_json(&path);
-        let r = app.run("path.set", json!({"name": "work", "path": path, "historyName": line_history_name(tool)}));
-        match r {
+        match app.run("path.set", json!({"name": "work", "path": path, "historyName": tool_history_name(kind)})) {
             Ok(_) => app.ui.selected_path = Some("work".into()),
-            Err(e) => {
-                app.ui.status = e;
-                app.ui.status_error = true;
-            }
+            Err(e) => report(app, e),
         }
         return;
     }
-    let Some(mut p) = shape_geometry(&app.ui.tool_options, tool, start, end, mods) else { return };
-    if tool == Tool::CustomShape {
+    if let ShapeGeometry::Custom { rect, keep_proportions } = &geometry {
         // With an operation other than New Layer the shape joins the active shape layer as one
         // component, its holes joined to it as in Path mode.
         if let Some(op) = drag_path_op(app)
             && let Some(id) = super::options::selected_shape(&app.session)
-            && let Some(outline) = shape_outline(app, tool, start, end, mods)
+            && let Some(outline) = outline_of(app, kind, &geometry)
         {
             // `shape.create` gives every component the operation, so a shape of several components
             // that can't be made one (its parts intersect or exclude) would change: refuse it.
@@ -255,26 +272,27 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
                 Some(one) => one,
                 None if outline.subpaths.len() <= 1 => outline,
                 None => {
-                    app.ui.status = tl!("This custom shape can't be added to a shape layer with a path operation: choose New Layer").into();
-                    app.ui.status_error = true;
+                    report(app, tl!("This custom shape can't be added to a shape layer with a path operation: choose New Layer").into());
                     return;
                 }
             };
             let path = photocraft_engine::vector_cmds::path_json(&outline);
             if let Err(e) = app.run("shape.create", json!({"kind": "path", "path": path, "addTo": id.0, "op": op})) {
-                app.ui.status = e;
-                app.ui.status_error = true;
+                report(app, e);
             }
             return;
         }
-        // ⇧ keeps the shape's proportions (the rect is already squared).
-        if let Ok(rect) = serde_json::from_value(p["rect"].take()) {
+        if let Ok(rect) = serde_json::from_value(json!(box_of(rect))) {
             let (fill, stroke) = (fill_param(app), stroke_param(app));
-            crate::preset_panels::finish_custom_shape(app, rect, mods.shift, fill, stroke);
+            crate::preset_panels::finish_custom_shape(app, rect, *keep_proportions, fill, stroke);
         }
         return;
     }
-    p["historyName"] = json!(line_history_name(tool));
+    let mut p = match create_params(app, &geometry, kind) {
+        Ok(p) => p,
+        Err(e) => return report(app, e),
+    };
+    p["historyName"] = json!(tool_history_name(kind));
     // With an operation other than New Layer the drag joins the active shape layer.
     if let Some(op) = drag_path_op(app)
         && let Some(id) = super::options::selected_shape(&app.session)
@@ -282,9 +300,8 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
         p["addTo"] = json!(id.0);
         p["op"] = json!(op);
     }
-    if let Err(e) = create_shape(app, p) {
-        app.ui.status = e;
-        app.ui.status_error = true;
+    if let Err(e) = app.run("shape.create", p) {
+        report(app, e);
     }
 }
 
@@ -304,12 +321,12 @@ fn path_op_of(op: &str) -> photocraft_doc::vector::PathOp {
     }
 }
 
-/// A Line tool drag is one History step named after the tool, as in Photoshop (#13244); the
-/// other Shape tools keep the commands' own names.
-fn line_history_name(tool: Tool) -> Option<&'static str> {
-    match tool {
-        Tool::Line => Some("Line Tool"),
-        Tool::Triangle => Some("Triangle Tool"),
+/// The tool's History label for a new shape layer or a Work Path edit, when defined.
+pub(crate) fn tool_history_name(kind: ShapeKind) -> Option<&'static str> {
+    match kind {
+        ShapeKind::Line => Some("Line Tool"),
+        ShapeKind::Triangle => Some("Triangle Tool"),
+        ShapeKind::Ellipse => Some("Ellipse Tool"),
         _ => None,
     }
 }
@@ -318,12 +335,15 @@ pub(super) fn fill_param(app: &PhotocraftApp) -> Value {
     if app.ui.tool_options.shape_fill { tool_paint_param(app, false) } else { Value::Null }
 }
 
-/// Create a shape layer from `shape.create` geometry with the options bar's fill and stroke: the
-/// end of a drag, and the Create Rectangle / Ellipse / … dialogs (`shape_dialog`).
-pub fn create_shape(app: &mut PhotocraftApp, mut geometry: Value) -> Result<Value, String> {
-    geometry["fill"] = fill_param(app);
-    geometry["stroke"] = stroke_param(app);
-    app.run("shape.create", geometry)
+/// Create a shape layer from `geometry` with the options bar's fill and stroke, as one History
+/// step named `history` (the commands' own name without one): the Create Rectangle / Ellipse / …
+/// dialogs' OK (`shape_dialog`). The geometry is used as given, with no pixel rounding.
+pub fn create_geometry(app: &mut PhotocraftApp, geometry: &ShapeGeometry, kind: ShapeKind, history: Option<&str>) -> Result<Value, String> {
+    let mut p = create_params(app, geometry, kind)?;
+    if let Some(name) = history {
+        p["historyName"] = json!(name);
+    }
+    app.run("shape.create", p)
 }
 
 /// A custom shape as one shape component, the way Photoshop adds it to a path: the subpaths
@@ -368,24 +388,27 @@ fn as_one_component(outline: &photocraft_doc::vector::Path, rule: photocraft_doc
     same.then_some(joined)
 }
 
-/// The outline a Shape-tool drag draws, as a path (a custom shape fitted to the drag's box).
-fn shape_outline(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<photocraft_doc::vector::Path> {
-    let geometry = shape_geometry(&app.ui.tool_options, tool, start, end, mods)?;
-    if tool == Tool::CustomShape {
-        let rect = geometry.get("rect").and_then(|r| serde_json::from_value::<[f64; 4]>(r.clone()).ok())?;
+/// The outline of an already snapped geometry, as a path (a custom shape fitted to its box).
+fn outline_of(app: &PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry) -> Option<photocraft_doc::vector::Path> {
+    if let ShapeGeometry::Custom { rect, keep_proportions } = geometry {
         let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
         let shape = groups.iter().flat_map(|g| &g.items).find(|s| s.name == app.ui.presets_ui.shape())?;
-        Some(photocraft_engine::presets::shapes::fit(&shape.path, rect, mods.shift))
+        Some(photocraft_engine::presets::shapes::fit(&shape.path, box_of(rect), *keep_proportions))
     } else {
-        photocraft_engine::vector_cmds::shape_path(&geometry).ok()
+        photocraft_engine::vector_cmds::shape_path(&geometry_params(app, geometry, kind).ok()?).ok()
     }
+}
+
+/// The outline a Shape-tool drag draws for `geometry`, as the commit makes it.
+fn shape_outline(app: &PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry, keep_angle: bool) -> Option<photocraft_doc::vector::Path> {
+    outline_of(app, kind, &snapped(geometry, keep_angle, snaps_to_pixels(app, kind))?)
 }
 
 /// The preview and command both use the full float tool colours, including transparent paint.
 /// In Path mode only the outline shows, as the drag draws no layer.
-pub(super) fn shape_preview(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<photocraft_doc::ShapeLayer> {
+fn preview_layer(app: &PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry, keep_angle: bool) -> Option<photocraft_doc::ShapeLayer> {
     let o = &app.ui.tool_options;
-    let path = shape_outline(app, tool, start, end, mods)?;
+    let path = shape_outline(app, kind, geometry, keep_angle)?;
     let paint = !draws_path(o);
     Some(photocraft_doc::ShapeLayer {
         path,
@@ -395,50 +418,77 @@ pub(super) fn shape_preview(app: &PhotocraftApp, tool: Tool, start: [f64; 2], en
     })
 }
 
-/// Shape-tool drag preview using the same path and vector stroke geometry as the commit.
-pub fn draw_shape_preview(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
-    let Some(mut shape) = shape_preview(app, tool, start, end, mods) else { return };
-    let path = shape.path.clone();
-    let origin = xf.to_screen(0.0, 0.0);
-    let x = xf.to_screen(1.0, 0.0) - origin;
-    let y = xf.to_screen(0.0, 1.0) - origin;
-    let transform = Affine { m: [x.x as f64, x.y as f64, y.x as f64, y.y as f64, origin.x as f64, origin.y as f64] };
-    shape.path = shape.path.transform(&transform);
+#[cfg(test)]
+/// The shape layer the drag of `geometry` would make, for the drag's preview and its tests.
+pub(super) fn shape_preview(app: &PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry) -> Option<photocraft_doc::ShapeLayer> {
+    preview_layer(app, kind, geometry, false)
+}
+
+/// `path` with every point mapped through `view` to screen points.
+fn path_on_screen(path: &photocraft_doc::vector::Path, view: &CanvasView) -> photocraft_doc::vector::Path {
+    let map = |p: &photocraft_geom::Point| {
+        let s = view.to_screen(Point::new(p.x, p.y));
+        photocraft_geom::Point::new(f64::from(s.x), f64::from(s.y))
+    };
+    let mut out = path.clone();
+    for k in out.subpaths.iter_mut().flat_map(|s| s.knots.iter_mut()) {
+        let (a, i, o) = (map(&k.anchor), map(&k.in_ctrl), map(&k.out_ctrl));
+        (k.anchor, k.in_ctrl, k.out_ctrl) = (a, i, o);
+    }
+    out
+}
+
+/// Paints the fill and stroke of the Shape-tool drag in progress, with the path and the stroke of
+/// the commit. The accent outline over its halo is the framework tool's own paint.
+pub fn show_preview(app: &PhotocraftApp, ui: &egui::Ui, at: egui::Rect, view: &CanvasView) {
+    let Some((kind, geometry)) = super::host::shape_preview(app) else { return };
+    let shift = craft::ui::runtime::pointer::frame(ui.ctx()).mods.shift;
+    let Some(mut shape) = preview_layer(app, kind, geometry, shift) else { return };
+    shape.path = path_on_screen(&shape.path, view);
     if let Some(stroke) = &mut shape.stroke {
-        stroke.width *= xf.zoom;
+        // `view.zoom` is screen points per document unit.
+        stroke.width *= view.zoom as f32;
     }
     // This lightweight screen overlay retains the existing display-colour behaviour; document
     // rendering still goes through its format/profile path when the shape is committed.
-    crate::shape_stroke_ui::paint_shape_preview(painter, &shape);
-    let accent = Tokens::get(painter.ctx()).accent;
-    for (pts, _) in path_lines(&path, &|q| xf.to_screen(q[0] as f32, q[1] as f32)) {
-        // The accent path over a dark halo: visible on any pixels (#172).
-        painter.extend(crate::tool_feedback::contrast_path(pts, true, accent));
+    crate::shape_stroke_ui::paint_shape_preview(&ui.painter().with_clip_rect(at), &shape);
+}
+
+/// A click of a Shape tool: the Create Shape dialog for the clicked kind, none in Path mode.
+pub fn click(app: &mut PhotocraftApp, kind: ShapeKind, at: [f64; 2]) -> Option<craft::ui::dialog::DialogId> {
+    // A Rectangle click inside the active live rectangle leaves it alone (#13340).
+    if draws_path(&app.ui.tool_options) || crate::dialogs::shape_dialog::click_inside_active_rectangle(app, kind, at) {
+        return None;
     }
+    crate::dialogs::shape_dialog::open(app, kind, Point::new(at[0], at[1]))
 }
 
 #[cfg(test)]
 mod triangle_history_ui_tests {
     use super::*;
+    use crate::canvas::testing;
 
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+        app.ui.tool = Tool::Triangle;
         app
     }
 
     #[test]
     fn triangle_drags_record_tool_history_in_shape_and_path_modes() {
-        for mode in ["shape", "path"] {
+        for mode in [super::super::VectorMode::Shape, super::super::VectorMode::Path] {
             let mut app = app();
-            app.ui.tool_options.shape_mode = mode.into();
+            app.ui.tool_options.shape_mode = mode;
             for x in [20.0, 150.0] {
                 let before = app.session.active().unwrap().history.past_len();
-                finish_shape(&mut app, Tool::Triangle, [x, 20.0], [x + 100.0, 100.0], egui::Modifiers::NONE);
+                testing::press(&mut app, [x, 20.0], egui::Modifiers::NONE);
+                testing::move_to(&mut app, [x + 100.0, 100.0], egui::Modifiers::NONE);
+                testing::release(&mut app, [x + 100.0, 100.0], egui::Modifiers::NONE);
                 let st = app.session.active().unwrap();
-                assert_eq!(st.history.past_len(), before + 1, "{mode}");
-                assert_eq!(st.history.undo_label(), Some("Triangle Tool"), "{mode}");
-                if mode == "path" {
+                assert_eq!(st.history.past_len(), before + 1, "{mode:?}");
+                assert_eq!(st.history.undo_label(), Some("Triangle Tool"), "{mode:?}");
+                if mode == super::super::VectorMode::Path {
                     assert_eq!(st.doc.work_path.as_ref().unwrap().subpaths.len(), if x == 20.0 { 1 } else { 2 });
                 } else {
                     assert!(st.doc.layers.iter().any(|l| l.name == "Triangle 1"));
@@ -450,9 +500,9 @@ mod triangle_history_ui_tests {
     #[test]
     fn triangle_dialog_confirmation_records_tool_history() {
         let mut app = app();
-        let id = crate::dialogs::shape_dialog::open(&mut app, Tool::Triangle, [20.0, 20.0]).unwrap();
+        let id = crate::dialogs::shape_dialog::open(&mut app, ShapeKind::Triangle, Point::new(20.0, 20.0)).unwrap();
         let before = app.session.active().unwrap().history.past_len();
-        crate::dialogs::confirm(&mut app, id).unwrap();
+        crate::dialogs::testing::confirm(&mut app, id).unwrap();
         let st = app.session.active().unwrap();
         assert_eq!(st.history.past_len(), before + 1);
         assert_eq!(st.history.undo_label(), Some("Triangle Tool"));

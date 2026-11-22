@@ -2,6 +2,7 @@
 //! class `artboardSection` (`docs/atn.md`, "Recorded through the menus").
 
 use super::*;
+use crate::actions_cmds::ActionStep;
 use photocraft_doc::{Layer, LayerId};
 use photocraft_geom::Rect;
 
@@ -120,7 +121,7 @@ fn recorded_steps_load_and_save_back_unchanged() {
     for (d, id, params) in cases {
         let (mut s, r) = load(vec![make_item(d.clone())]);
         assert_eq!(r["unsupported"], json!([]), "{r}");
-        let (got, p) = &s.actions.list[0].steps[0];
+        let ActionStep { command: got, params: p } = &s.actions.list.actions()[0].steps[0];
         let mut p = p.clone();
         p.as_object_mut().unwrap().remove(SOURCE);
         assert_eq!((got.as_str(), &p), (id, &params));
@@ -197,7 +198,7 @@ fn native_steps_save_the_measured_keys() {
     for (id, p, d) in cases {
         assert_eq!(exported(id, &p).as_ref(), Some(&d), "{id} {p}");
         let (s, _) = load(vec![make_item(d)]);
-        let (got, back) = &s.actions.list[0].steps[0];
+        let ActionStep { command: got, params: back } = &s.actions.list.actions()[0].steps[0];
         assert_eq!(got, id);
         assert!(back.get(SOURCE).is_none(), "{back}");
         assert_eq!(exported(id, back).map(|d| d.to_bytes()), exported(id, &p).map(|d| d.to_bytes()), "{back}");
@@ -271,7 +272,7 @@ fn other_forms_keep_the_photoshop_step() {
     for d in forms {
         let (mut s, r) = load(vec![make_item(d.clone())]);
         assert_eq!(r["unsupported"].as_array().map(Vec::len), Some(1), "{d:?}");
-        assert_eq!(s.actions.list[0].steps[0].0, PHOTOSHOP_STEP, "{d:?}");
+        assert_eq!(s.actions.list.actions()[0].steps[0].command, PHOTOSHOP_STEP, "{d:?}");
         assert_eq!(saved(&mut s)[0].descriptor.as_ref().map(Descriptor::to_bytes), Some(d.to_bytes()));
     }
 }
@@ -281,8 +282,8 @@ fn other_forms_keep_the_photoshop_step() {
 #[test]
 fn changed_or_damaged_steps_save_their_settings() {
     let (s, _) = load(vec![make_item(new_board("Hero", [20.0, 10.0, 70.0, 110.0])), make_item(from_layers("Cards"))]);
-    let steps = &s.actions.list[0].steps;
-    let (mut board, mut cards) = (steps[0].1.clone(), steps[1].1.clone());
+    let steps = &s.actions.list.actions()[0].steps;
+    let (mut board, mut cards) = (steps[0].params.clone(), steps[1].params.clone());
     assert!(board.get(SOURCE).is_some() && cards.get(SOURCE).is_some(), "{board} {cards}");
     board["rect"] = json!([0, 0, 10, 10]);
     cards["name"] = json!("");
