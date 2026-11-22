@@ -1720,7 +1720,7 @@ impl Session {
         // The offer belongs to this one dispatch. Early errors drop it locally, including
         // authorization, validation, floating-selection and admission failures.
         let live_commit = self.live_commit.take();
-        if !commands::layer_style_rejects_background(id) {
+        if !crate::commands::layer_style_rejects_background(id) {
             self.sync_scratch_state();
         }
         // A refused Exact conversion must also undo its automatic floating-selection drop.
@@ -1802,7 +1802,7 @@ impl Session {
         let run_params = self.admit(id, spec, &params)?;
         // Applying a new History budget may prune undo states. A refused Layer Style
         // command must leave those states intact.
-        if commands::layer_style_rejects_background(id) {
+        if crate::commands::layer_style_rejects_background(id) {
             self.sync_scratch_state();
         }
         // This UI-only disclosure preference applies to both `execute` and `start`:
