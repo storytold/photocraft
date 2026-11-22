@@ -1496,17 +1496,21 @@ fn web_palette_keeps_the_transparent_entry_and_a_full_exact_table_cannot() {
     assert_eq!(web.transparent, Some(216));
     assert_eq!(r["transparentIndex"], json!(216));
 
-    // Exact: 255 distinct reds plus one clear black pixel fill the table, so there is no room.
+    // Exact: 255 distinct reds plus one clear black pixel fill the table (the clear pixel's black
+    // is one of the 256 colours), so there is no slot for the auto-appended transparent entry: the
+    // conversion is refused and the document is left as it was, rather than quietly producing an
+    // opaque one (main #15840).
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 16, "height": 16, "background": "transparent"})).unwrap();
     paint(&mut s, |x, y| {
         let i = y * 16 + x;
         if i < 255 { [(i + 1) as f32 / 255.0, 0.0, 0.0, 1.0] } else { [0.0; 4] }
     });
-    let r = s.execute("image.mode.indexedColor", json!({"palette": "exact", "dither": "none"})).unwrap();
-    assert_eq!(r["colors"], json!(256), "the image's 256 colours fill the table");
-    assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, None, "a full table has no slot for the transparent entry");
-    assert_eq!(r["transparentIndex"], Value::Null);
+    let error = s.execute("image.mode.indexedColor", json!({"palette": "exact", "dither": "none"})).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("255") && message.contains("transparent entry"), "{message}");
+    assert_eq!(doc(&s).mode, ColorMode::Rgb, "the document is left as it was");
+    assert!(doc(&s).color_table.is_none());
 }
 
 #[test]
@@ -1561,6 +1565,37 @@ fn color_table_clearing_transparency_leaves_empty_pixels_alone() {
     let surf = d.layers[empty].surface().unwrap();
     assert_eq!(surf.rgba(0, 0), [0.0; 4]);
     assert_eq!(surf.rgba(7, 3), [0.0; 4]);
+}
+
+#[test]
+fn color_table_clearing_a_black_transparency_keeps_empty_layers_empty() {
+    // A black transparent entry (entry 0, common in palette PNG/GIF files): its own clear pixels
+    // are stored as the surface default [0,0,0,0] — the very bytes an empty layer has. Clearing
+    // transparency must restore the entry's own pixels and still leave a second, empty layer
+    // empty, so only the layer that carries the indexed data is re-indexed (#7320 review).
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, _| if x < 4 { [1.0, 0.0, 0.0, 1.0] } else { [0.0; 4] });
+    s.execute("image.mode.indexedColor", json!({"palette": "custom", "paletteColors": ["#000000", "#ff0000"], "dither": "none", "transparent": 0})).unwrap();
+    assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, Some(0), "entry 0 (black) is transparent");
+    // The document's own clear pixels are stored as entry 0's colour with alpha 0.
+    assert_eq!(doc(&s).layers[0].surface().unwrap().rgba(6, 0), [0.0; 4]);
+    // A second, empty layer: its pixels are the surface default [0,0,0,0], the same bytes as the
+    // black transparent entry's own clear pixels.
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let empty = doc(&s).layers.len() - 1;
+    let r = s.execute("image.mode.colorTable", json!({"transparent": null})).unwrap();
+    let d = doc(&s);
+    // The black entry's own clear pixels become opaque black; the opaque red keeps its entry.
+    assert_eq!(d.layers[0].surface().unwrap().rgba(6, 0), [0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(d.layers[0].surface().unwrap().rgba(7, 3), [0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(d.layers[0].surface().unwrap().rgba(0, 0), [1.0, 0.0, 0.0, 1.0]);
+    // The empty layer stays empty: no opaque black materialised.
+    let surf = d.layers[empty].surface().unwrap();
+    assert_eq!(surf.rgba(0, 0), [0.0; 4]);
+    assert_eq!(surf.rgba(7, 3), [0.0; 4]);
+    // Only the indexed layer's 16 clear pixels lost their transparency, not the empty layer's.
+    assert_eq!(r["flattened"].as_u64(), Some(16));
 }
 
 /// An 8×4 doc: columns 0..=3 opaque red, columns 4..=7 clear (16 transparent pixels).

@@ -631,10 +631,15 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
         for l in doc.layers.iter_mut() {
             let id = l.id;
             let Some(surf) = l.surface_mut() else { continue };
-            // Entry 0 = black + transparent encodes as [0,0,0,0] (the surface's default pixel),
-            // which `prune()` drops; include `canvas` whenever `old.transparent` is set so
-            // clearing transparency restores those tiles too.
-            let r = if old.transparent.is_some() { canvas.union(&surf.content_bounds()) } else { surf.content_bounds() };
+            // Only the layer that carries the document's indexed data (the recorded one) has
+            // pixels that are palette entries. On it a clear pixel stored as the old transparent
+            // entry's colour — or as the surface default [0,0,0,0], when that entry is black, which
+            // `prune()` drops — is the entry's own and must be restored, so read the whole canvas.
+            // On any other layer a clear pixel is just clear (an empty layer's default is not an
+            // entry), so only its content is read; reading the canvas there would materialise
+            // opaque black (#7320).
+            let indexed = record == Some(id);
+            let r = if indexed && old.transparent.is_some() { canvas.union(&surf.content_bounds()) } else { surf.content_bounds() };
             if r.is_empty() {
                 continue;
             }
@@ -647,10 +652,11 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
                 let c = photocraft_raster::to_rgba(&fmt, q);
                 let rgb = [c[0], c[1], c[2]];
                 let i = if c[3] <= 0.0 {
-                    // Only the old transparent entry's own pixels (stored as its colour with
-                    // alpha 0) re-index; other clear pixels — e.g. the surface default [0,0,0,0]
-                    // of an empty layer or pruned tiles — are left alone. A black entry matches
-                    // its default-pixel encoding directly, so pruned tiles restore too.
+                    // A clear pixel re-indexes to the old transparent entry only on the layer that
+                    // carries the document's indexed data; elsewhere it stays clear (see above).
+                    if !indexed {
+                        continue;
+                    }
                     let Some(i) = old.transparent.map(usize::from) else { continue };
                     if i >= old.colors.len() || old.rgb(i) != rgb {
                         continue;

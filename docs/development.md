@@ -738,11 +738,13 @@ remain visible during a drag until the new result arrives. This follows Adobe's 
 
 A palette that fills all 256 entries has no slot left for the transparent entry, so the automatic
 transparency handling cannot apply. **System (Mac)** and **System (Windows)** are fixed 256-entry
-tables, and **Exact** fills the table when the image already uses 256 colours: converting with
-Transparency on and one of those therefore produces an opaque Indexed document. The computed
-palettes (Adaptive, Selective, Perceptual, Uniform) are built one colour short when transparency is
-on, and **Web** uses 216 entries, so they keep the transparent entry. Naming an explicit
-`transparent` index still makes that entry transparent with any palette.
+tables, so converting with Transparency on and one of those produces an opaque Indexed document.
+**Exact** fills the table when the image already uses 256 colours: converting with Transparency on
+then is refused (`Exact with transparency needs 255 or fewer opaque palette colours plus one
+transparent entry`), leaving the document unchanged. The computed palettes (Adaptive, Selective,
+Perceptual, Uniform) are built one colour short when transparency is on, and **Web** uses 216
+entries, so they keep the transparent entry. Naming an explicit `transparent` index still makes that
+entry transparent with any palette.
 
 The auto-appended entry goes **last**, as Photoshop appends it. The command's `transparentFirst`
 puts it at index 0 instead and shifts the other entries up one (the table's pixels store RGB, so
