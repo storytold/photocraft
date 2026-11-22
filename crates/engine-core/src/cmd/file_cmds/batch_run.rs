@@ -30,7 +30,7 @@ fn batch_rejects_a_non_path_input_before_writing() {
     std::fs::write(&input, bytes).unwrap();
     for (cmd, format) in [("file.automate.batch", "png"), ("file.scripts.imageProcessor", "jpg")] {
         let output = dir.path().join(format);
-        let mut s = Session::new();
+        let mut s = crate::session();
         let err = s.execute(cmd, json!({"steps": [], "input": [&input, 17], "output": &output, "format": format})).unwrap_err();
         assert!(matches!(&err, EngineError::BadParams { cmd: name, msg } if name == cmd && msg == "input file 2 must be a path string"), "{err}");
         assert!(!output.exists());
