@@ -37,6 +37,7 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     if app.ui.tool == Tool::CloneStamp {
         p["opacity"] = json!(app.session.tools.brush.opacity * 100.0);
         p["flow"] = json!(app.session.tools.brush.flow * 100.0);
+        p["ignoreAdjustments"] = json!(o.clone_ignore_adjustments);
     }
     // The Clone Source panel's active slot (set by ⌥-click) drives the stroke: the engine keeps
     // the aligned pairing and applies the slot's scale/rotation/flip. An empty slot refuses to

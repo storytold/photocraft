@@ -49,6 +49,19 @@ pub(crate) fn composite_region(pre: &Document, id: Option<LayerId>, which: Sampl
     out
 }
 
+/// The Clone Stamp's Ignore adjustment layers (#12606): `pre` with its top-level, unclipped
+/// adjustment layers hidden, so [`composite_region`] samples the pixels under them. Adjustment
+/// layers inside a group or clipped to a layer weren't measured and stay as they are.
+pub(super) fn without_adjustments(pre: &Document) -> Document {
+    let mut doc = pre.clone();
+    for layer in doc.layers.iter_mut() {
+        if matches!(layer.content, photocraft_doc::LayerContent::Adjustment(_)) && !layer.clipped {
+            layer.visible = false;
+        }
+    }
+    doc
+}
+
 /// Pixels to sample at `rect` (document coordinates, already offset to the source position).
 pub(super) fn sample(pre: &Document, id: Option<LayerId>, surf: &Surface, which: SampleLayers, rect: Rect) -> Region {
     match which {

@@ -83,6 +83,9 @@ pub struct ToolOptions {
     pub pattern_stamp_angle: f32,
     /// current | currentAndBelow | all
     pub clone_sample: String,
+    /// Clone Stamp: Ignore adjustment layers, so Current & Below and All Layers sample with the
+    /// adjustment layers hidden (#12606).
+    pub clone_ignore_adjustments: bool,
     /// Spot Healing: contentAware | createTexture | proximityMatch
     pub spot_type: String,
     /// Patch: source (repair the selection) | destination (repair where it is dragged).
@@ -454,6 +457,7 @@ impl Default for ToolOptions {
             pattern_stamp_scale: 100.0,
             pattern_stamp_angle: 0.0,
             clone_sample: "current".into(),
+            clone_ignore_adjustments: false,
             spot_type: "contentAware".into(),
             patch_mode: "source".into(),
             patch_content_aware: false,

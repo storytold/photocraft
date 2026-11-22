@@ -228,7 +228,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Patch => reset!(patch_mode, patch_content_aware, patch_structure, patch_color),
         Tool::ContentAwareMove => reset!(cam_mode, cam_structure, cam_color, cam_transform_on_drop),
         Tool::RedEye => reset!(red_eye_pupil_size, red_eye_darken),
-        Tool::CloneStamp => reset!(clone_aligned, clone_sample),
+        Tool::CloneStamp => reset!(clone_aligned, clone_sample, clone_ignore_adjustments),
         Tool::ArtHistoryBrush => reset!(art_history_style, art_history_area, art_history_tolerance),
         Tool::PatternStamp => reset!(pattern_stamp_aligned, pattern_stamp_impressionist, pattern_stamp_scale, pattern_stamp_angle),
         Tool::Blur | Tool::Sharpen => reset!(strength, protect_detail),
