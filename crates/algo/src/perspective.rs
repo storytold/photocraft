@@ -809,8 +809,8 @@ fn quad_gaps(a: &[[f64; 2]; 4], b: &[[f64; 2]; 4]) -> Vec<([f64; 2], [f64; 2])> 
 }
 
 /// A gap between two disjoint planes that the blend must cross without folding: the closest
-/// boundary points `from` and `to`, and a unit destination direction transported by both
-/// local Jacobians. Rotations and mirrors carry this reference along with the destination.
+/// boundary points `from` and `to`, and their unit destination chord, oriented consistently
+/// with both local Jacobians. Rotations and mirrors carry this reference with the destination.
 struct Gap {
     from: [f64; 2],
     to: [f64; 2],
@@ -851,13 +851,11 @@ impl PerspectiveMap {
         let (Some(da), Some(db)) = (along(&self.planes[i], from), along(&self.planes[j], to)) else {
             return GapKind::Unchecked;
         };
-        // The bisector of the normalized transported directions treats both planes equally,
-        // regardless of scale or order. Opposed directions have no stable common reference.
+        // Opposed transported directions have no stable common reference.
         let sum = [da[0] + db[0], da[1] + db[1]];
         if sum[0].hypot(sum[1]) <= 1.0e-12 {
             return GapKind::Unchecked;
         }
-        let Some(direction) = unit(sum) else { return GapKind::Unchecked };
         let image = |k: usize, p: [f64; 2]| {
             let (a, b) = self.planes[k].src_inv.apply(p[0], p[1]);
             self.map_plane(k, a, b)
@@ -865,10 +863,15 @@ impl PerspectiveMap {
         let (Some(start), Some(end)) = (image(i, from), image(j, to)) else {
             return GapKind::Unchecked;
         };
-        let total = (end.0 - start.0) * direction[0] + (end.1 - start.1) * direction[1];
-        if !total.is_finite() {
-            GapKind::Unchecked
-        } else if total <= 0.0 {
+        let chord = [end.0 - start.0, end.1 - start.1];
+        if chord.iter().any(|v| !v.is_finite()) {
+            return GapKind::Unchecked;
+        }
+        let Some(direction) = unit(chord) else { return GapKind::Overlapping };
+        // A curved gap can backtrack along the endpoint-derivative bisector while advancing
+        // along its chord. Use the chord for sampling, but require BOTH transported derivatives
+        // to agree with its orientation so reversed destinations cannot define their own order.
+        if direction[0] * da[0] + direction[1] * da[1] <= 0.0 || direction[0] * db[0] + direction[1] * db[1] <= 0.0 {
             GapKind::Overlapping
         } else {
             GapKind::Ordered(direction)
@@ -901,7 +904,7 @@ impl PerspectiveMap {
         ts
     }
 
-    /// Whether the map advances strictly in the planes' own direction along the gap. It judges
+    /// Whether the map advances strictly along the oriented destination chord of the gap. It judges
     /// the same blend `map` uses (corner boost and anchor corrections included), at the samples of
     /// [`Self::gap_samples`] along the closest-pair segment; this is a sampled 1-D check, not a
     /// proof for the whole 2-D region. A blend that cannot be evaluated (overflow) is not judged.
