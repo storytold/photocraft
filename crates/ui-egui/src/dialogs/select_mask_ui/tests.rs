@@ -39,19 +39,11 @@ fn fields(app: &mut PhotocraftApp) -> Value {
     ui(app, json!({}))
 }
 
-/// Runs `n` frames of the dialog host with the app's per-frame checks, as the app does: a request starts its preview
-/// job and a stale workspace closes in a frame.
+/// Runs `n` frames of the app (its key route, document area and hosted dialogs, with the app's per-frame checks): the
+/// workspace asks for its preview in its pass, and the framework's job runtime runs only inside the app's frame.
 fn frames(app: &mut PhotocraftApp, n: usize) {
-    let ctx = app.ctx().clone();
     for _ in 0..n {
-        let mut output = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0))), ..Default::default() },
-            |ui| {
-                crate::distort_ui::drop_foreign(app, ui.ctx());
-                crate::dialogs::run(app, ui);
-            },
-        );
-        output.textures_delta.clear();
+        crate::canvas::testing::frame(app);
     }
 }
 
@@ -166,12 +158,16 @@ fn remember_settings() {
     frames(&mut app, 2);
     app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
     open(&mut app).unwrap();
+    // The workspace reads the stored settings in its first pass.
+    frames(&mut app, 1);
     let s = workspace(&app).settings();
     assert_eq!((s.refine.radius, s.view, s.overlay_color), (7.0, MaskViewMode::Overlay, [0, 0, 255]));
     ui(&mut app, json!({"remember": false}));
     ui(&mut app, json!({"commit": true}));
+    frames(&mut app, 2);
     app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
     open(&mut app).unwrap();
+    frames(&mut app, 1);
     let s = workspace(&app).settings();
     assert_eq!((s.refine.radius, s.view), (0.0, MaskViewMode::OnionSkin));
 }

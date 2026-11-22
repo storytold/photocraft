@@ -345,10 +345,9 @@ pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
 /// `select.refineEdge` works on the active layer of the active document, so its edits must not run there.
 pub(crate) fn stale(app: &PhotocraftApp) -> Option<&'static str> {
     let (_, document, opened_on, _) = app.select_mask_target.as_ref()?;
-    let st = app.session.active()?;
-    if st.doc.id != *document {
+    let Some(st) = app.session.active().filter(|st| st.doc.id == *document) else {
         return Some(tl!("Select and Mask was closed: its document is no longer the active one"));
-    }
+    };
     let layer = st.active_layer.filter(|id| st.doc.layer(*id).is_some());
     (layer != Some(*opened_on)).then_some(tl!("Select and Mask was closed: another layer was selected"))
 }

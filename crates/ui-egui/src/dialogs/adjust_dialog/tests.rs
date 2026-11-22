@@ -369,6 +369,7 @@ fn command_click_adds_nothing_without_the_modifier_on_a_full_curve_or_with_an_ey
     let mut app = app_with_image();
     let id = open(&mut app, "image.adjustments.curves").unwrap();
     let before = params(&mut app, id);
+    crate::canvas::testing::clear_of_dialogs(&mut app, [8.0, 8.0]);
     click(&mut app, 8.0, 8.0, egui::Modifiers::NONE);
     assert_eq!(params(&mut app, id), before, "no modifier, no point");
 
@@ -381,6 +382,7 @@ fn command_click_adds_nothing_without_the_modifier_on_a_full_curve_or_with_an_ey
     let mut app = app_with_image();
     let id = open(&mut app, "image.adjustments.curves").unwrap();
     arm(&mut app, id, TonePicker::Black);
+    crate::canvas::testing::clear_of_dialogs(&mut app, [8.0, 8.0]);
     click(&mut app, 8.0, 8.0, egui::Modifiers::COMMAND);
     assert_eq!(channel_points(&mut app, "points").len(), 2, "the armed eyedropper samples instead");
     assert_eq!(channel_points(&mut app, "red")[0], [176.0, 0.0]);
@@ -460,22 +462,30 @@ fn command_click_adds_nothing_in_lab_or_on_a_targeted_mask() {
     }
 }
 
+/// `ui.pointer` drives an armed Curves picker as the mouse does: a hover samples nothing, the press samples and the
+/// release samples nothing more; the picker stays armed.
 #[test]
 fn ui_pointer_drives_an_armed_curves_picker() {
     let mut app = app_with_image();
     let id = open(&mut app, "image.adjustments.curves").unwrap();
     arm(&mut app, id, TonePicker::Black);
     let before = channel_points(&mut app, "red");
-    pointer(&mut app, crate::canvas::ToolEvent::Move { x: 48.0, y: 8.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    let pointer = |app: &mut PhotocraftApp, kind: &str, x: f64, y: f64| {
+        crate::canvas::testing::control(app, "ui.pointer", json!({"events": [{"kind": kind, "x": x, "y": y}]}));
+    };
+    crate::canvas::testing::clear_of_dialogs(&mut app, [8.0, 8.0]);
+    pointer(&mut app, "move", 12.0, 8.0);
     assert_eq!(channel_points(&mut app, "red"), before, "pointer move does not sample");
 
-    pointer(&mut app, crate::canvas::ToolEvent::Down { x: 8.0, y: 8.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    pointer(&mut app, "down", 8.0, 8.0);
     let red = channel_points(&mut app, "red");
     assert!((red[0][0] - 176.0).abs() < 0.6 && red[0][1] == 0.0, "{red:?}");
     assert_ne!(red, before, "pointer down samples");
 
-    pointer(&mut app, crate::canvas::ToolEvent::Up { x: 48.0, y: 8.0 }, egui::Modifiers::NONE);
-    assert_eq!(channel_points(&mut app, "red"), red, "pointer up does not sample again");
+    // Back to the curve before the press: a release that sampled would set it again.
+    set_params(&mut app, id, &json!({"red": before}));
+    pointer(&mut app, "up", 8.0, 8.0);
+    assert_eq!(channel_points(&mut app, "red"), before, "pointer up does not sample again");
     assert!(picker_armed(&app));
 }
 
@@ -703,7 +713,8 @@ fn rabbit_levels_live_mask_preview_matches_commit() {
         set_field(&mut app, id, "gamma", json!(2));
         let before = app.session.active().unwrap().doc.clone();
         let idx = app.session.active_index().unwrap();
-        let (preview, _) = crate::adjust_preview::display_doc(&mut app, idx).expect("the dialog previews on the canvas");
+        crate::canvas::ensure_filter_preview(&mut app, idx, &ctx).expect("the dialog previews on the canvas");
+        let preview = app.filter_preview.as_ref().and_then(|p| p.result.clone()).expect("the CPU proxy preview");
         assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
         ok(&mut app, &ctx, id).unwrap();
         let after = &app.session.active().unwrap().doc;
