@@ -1280,3 +1280,67 @@ fn adjusted_crop_and_omitted_gain_table_notices_survive_development() {
     spec.default_crop_origin_double = None;
     check(&spec, Rect::new(3, 2, 11, 8), false, true);
 }
+
+/// Compare PhotoCraft's `develop_sensor` output converted from encoded ProPhoto RGB (D50, gamma 1.8)
+/// into unclipped linear Rec.709/D65 against `craft_develop::sensor` at the same stage.
+#[test]
+fn raw_open_matches_craft_develop_in_unclipped_linear_rec709_d65() {
+    use craft_develop::sensor::{
+        Cfa as SharedCfa, ColorData as SharedColorData, Method as SharedMethod, Normalized as SharedNormalized, color as shared_color,
+        demosaic as shared_demosaic,
+    };
+
+    let (w, h) = (32, 32);
+    // Mid-tone grey Bayer patch (RGGB) at ~25% of white = 65535.
+    let samples = vec![16384u16; w * h];
+    let spec = DngSpec::cfa(w, h, samples.clone());
+    let s = sensor(&spec.build());
+    let dev = develop_sensor(&s, &DevelopOptions { orient: false, ..Default::default() }).unwrap();
+    assert_eq!((dev.width as usize, dev.height as usize), (w, h));
+
+    // PhotoCraft `develop_sensor` outputs ProPhoto RGB (D50, gamma 1.8) u16; decode to linear
+    // ProPhoto, then convert D50 -> D65 -> linear Rec.709/D65.
+    let prophoto_to_xyz_d50 = shared_color::PROPHOTO.to_xyz();
+    let d50_to_rec709_d65 = shared_color::SRGB.from_xyz().mul(&shared_color::bradford(shared_color::D50, shared_color::D65));
+    let prophoto_to_rec709_d65 = d50_to_rec709_d65.mul(&prophoto_to_xyz_d50);
+
+    // Shared `craft_develop::sensor` path in linear Rec.709/D65 on the same normalized sensor.
+    let norm = SharedNormalized {
+        width: w,
+        height: h,
+        cpp: 1,
+        data: samples.iter().map(|&v| f32::from(v) / 65535.0).collect(),
+        cfa: Some(SharedCfa { width: 2, height: 2, pattern: vec![0, 1, 1, 2], origin_x: 0, origin_y: 0 }),
+    };
+    let mut color = SharedColorData::default();
+    color.illuminant = [21, 0];
+    color.color_matrix[0] = Some(shared_color::Mat3::IDENTITY);
+    let wb = shared_color::wb_multipliers(&color, shared_color::D65);
+    let cam_rgb = shared_demosaic(&norm, &wb, SharedMethod::Ahd);
+    let cam_to_rec709_d65 = d50_to_rec709_d65.mul(&shared_color::camera_to_xyz_d50(&color, shared_color::D65));
+
+    // Compare interior pixels (avoiding Bayer border effects) in linear Rec.709/D65.
+    for y in 4..(h - 4) {
+        for x in 4..(w - 4) {
+            let idx = (y * w + x) * 3;
+            let pp_lin = [
+                (f64::from(dev.data[idx]) / 65535.0).powf(1.8),
+                (f64::from(dev.data[idx + 1]) / 65535.0).powf(1.8),
+                (f64::from(dev.data[idx + 2]) / 65535.0).powf(1.8),
+            ];
+            let pc_rec709 = prophoto_to_rec709_d65.apply(pp_lin);
+
+            let p = cam_rgb.pixel(x, y);
+            let shared_rec709 = cam_to_rec709_d65.apply([f64::from(p[0]), f64::from(p[1]), f64::from(p[2])]);
+
+            for c in 0..3 {
+                assert!(
+                    (pc_rec709[c] - shared_rec709[c]).abs() < 5e-3,
+                    "linear Rec.709/D65 mismatch at ({x},{y}) ch {c}: photocraft={} shared={}",
+                    pc_rec709[c],
+                    shared_rec709[c]
+                );
+            }
+        }
+    }
+}
