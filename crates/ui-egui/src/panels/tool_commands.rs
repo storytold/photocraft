@@ -98,7 +98,7 @@ pub(crate) enum ToolCommand {
     Patch,
     #[command(label = "Content-Aware Move Tool", icon = "arrow-left-right", kind = "tool", group = "J", default = "J", alias = "tools.select.contentAwareMove")]
     ContentAwareMove,
-    #[command(label = "Red Eye Tool", icon = "eye", kind = "tool", group = "J", default = "J", alias = "tools.select.redEye")]
+    #[command(label = "Red Eye Tool", icon = "red-eye", kind = "tool", group = "J", default = "J", alias = "tools.select.redEye")]
     RedEye,
     #[command(label = "Clone Stamp Tool", icon = "stamp", kind = "tool", group = "S", default = "S", alias = "tools.select.cloneStamp")]
     CloneStamp,
