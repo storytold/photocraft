@@ -301,6 +301,13 @@ fn menus_tab<'a>(rows: &'a [Row], draft: &'a mut MenusDraft) -> DialogTab<'a> {
     DialogTab::new("menus", tl!("Menus").to_string(), move |ui| menus_body(ui, rows, &mut *draft))
 }
 
+/// The rows the Menus tab lists: every menu item but separators and the recent files under File › Open Recent.
+/// A recent file's id names its place in the list, not the file, so it is not an item to hide or colour; Clear
+/// Recent File List stays as the submenu's one row (#16433).
+pub(super) fn listed_items(rows: &[Row]) -> Vec<&Row> {
+    rows.iter().filter(|row| row.label != "---" && !row.command.id.starts_with("file.openRecent.")).collect()
+}
+
 /// The Menus tab's body; true when the draft changed. `rows` are the menu items before the
 /// customization, so a hidden item is listed here to be shown again.
 fn menus_body(ui: &mut egui::Ui, rows: &[Row], draft: &mut MenusDraft) -> bool {
@@ -308,7 +315,7 @@ fn menus_body(ui: &mut egui::Ui, rows: &[Row], draft: &mut MenusDraft) -> bool {
     if ui.button(tl!("Show All Menu Items")).clicked() {
         draft.hidden.clear();
     }
-    let items: Vec<&Row> = rows.iter().filter(|row| row.label != "---").collect();
+    let items = listed_items(rows);
     let colors: Vec<Entry<&'static str>> = COLORS.iter().map(|c| Entry::new(*c, *c)).collect();
     let height = ui.spacing().interact_size.y;
     // PLAN: the framework `Table` draws a value in each cell and cannot hold a Checkbox or a Select, so the rows are laid out by hand.
