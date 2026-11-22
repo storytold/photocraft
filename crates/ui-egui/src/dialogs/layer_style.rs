@@ -641,11 +641,18 @@ fn paint_picture(cx: &ContentPainterCx, rect: Rect, key: impl std::hash::Hash + 
     cx.picture(texture, rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), 0.0);
 }
 
+/// The texture store key of the preview swatch: the draft's render hash and the scratch read-error generation, as the
+/// swatch draws over the patterns' pixels, which a tile that fails to read shows as zeros until it reads again
+/// (`crate::scratch_reads`).
+fn swatch_key(draft: &LayerStyleDraft) -> (&'static str, u64, u64) {
+    ("layer-style-swatch", draft.render_hash(), crate::scratch_reads::generation())
+}
+
 /// Paints the preview swatch: the draft's style on a sample square, rebuilt when its render hash changes.
 fn preview_thumb(app: &PhotocraftApp) -> impl Fn(&ContentPainterCx, Rect, &LayerStyleDraft) + Send + Sync + 'static {
     let patterns = app.session.patterns.clone();
     move |cx, rect, draft| {
-        paint_picture(cx, rect, ("layer-style-swatch", draft.render_hash()), || {
+        paint_picture(cx, rect, swatch_key(draft), || {
             let mut scratch = Session::new();
             scratch.patterns = patterns.clone();
             match pending_style(&patterns, &draft.style) {

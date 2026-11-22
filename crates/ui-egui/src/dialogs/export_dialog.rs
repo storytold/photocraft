@@ -203,9 +203,10 @@ pub(crate) struct ExportOpen {
     picking: bool,
     /// The newest preview the dialog asked for that is not fully answered yet.
     work: Option<PreviewWork>,
-    /// The newest request made, with the working profile it was made under: a change of the working
-    /// profile alters the preview of an untagged document without changing the settings.
-    last: Option<(u64, ExportOptions, Option<String>)>,
+    /// The newest request made, with the working profile and the scratch read-error generation it was made under: a
+    /// change of the working profile alters the preview of an untagged document without changing the settings, and a
+    /// tile that fails to read and recovers alters the pixels without a new revision (`crate::scratch_reads`).
+    last: Option<(u64, ExportOptions, Option<String>, u64)>,
 }
 
 /// One preview request being answered: the proxy preview first, then the exact size estimate.
@@ -881,13 +882,14 @@ fn drive(app: &mut PhotocraftApp, ctx: &egui::Context, open: &mut ExportOpen) ->
             dialog.cancel_requests();
         }
     }
-    // The settings did not change but the working profile did: ask again for the same revision.
+    // The settings did not change but the working profile or the scratch read-error generation did: ask again for the
+    // same revision.
     let wanted = wanted.or_else(|| {
-        let (revision, options, hash) = open.last.as_ref()?;
-        (working_profile_hash(app) != *hash).then(|| PreviewRequest::new(*revision, options.clone()))
+        let (revision, options, hash, scratch) = open.last.as_ref()?;
+        (working_profile_hash(app) != *hash || crate::scratch_reads::generation() != *scratch).then(|| PreviewRequest::new(*revision, options.clone()))
     });
     if let Some(request) = wanted {
-        open.last = Some((request.revision, request.options.clone(), working_profile_hash(app)));
+        open.last = Some((request.revision, request.options.clone(), working_profile_hash(app), crate::scratch_reads::generation()));
         open.work = start_preview(app, open, request);
     }
     answer_preview(app, ctx, open);
@@ -940,7 +942,7 @@ fn start_preview(app: &PhotocraftApp, open: &ExportOpen, request: PreviewRequest
     let profile = effective_source_profile(app, &doc);
     let signature = format!("{}:{}", Value::Object(settings.clone()), profile.content_hash());
     let layer = open.layers.first().map(|layer| layer.0);
-    let key = egui::Id::unique(("export-preview", doc.id.0, st.revision, layer));
+    let key = egui::Id::unique(("export-preview", doc.id.0, st.revision, layer, crate::scratch_reads::generation()));
     Some(PreviewWork { revision: request.revision, settings, signature, key, doc, profile, answered: None })
 }
 

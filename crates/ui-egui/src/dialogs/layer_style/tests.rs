@@ -790,3 +790,16 @@ fn an_existing_outer_glow_is_edited_with_its_own_values() {
     let FxPaint::Color(c) = &g.paint else { panic!("{:?}", g.paint) };
     assert_eq!(hex(c), "#ffffbe", "OK kept the colour");
 }
+
+/// The preview swatch draws over the patterns' pixels: a tile that fails to read and recovers keeps the draft's render
+/// hash, and the swatch still keys a new picture, so it does not keep the zeros it read during the error.
+#[test]
+fn the_preview_swatch_follows_a_scratch_read_error_transition() {
+    let mut app = app_with_layer(32);
+    let id = open(&mut app, Some(EffectKind::PatternOverlay.key())).unwrap();
+    let key = swatch_key(draft(&app, id));
+    assert_eq!(swatch_key(draft(&app, id)), key, "nothing changed: the same picture");
+    crate::scratch_reads::tests::simulate_read_error_transition();
+    assert_eq!(draft(&app, id).render_hash(), key.1, "the draft is unchanged");
+    assert_ne!(swatch_key(draft(&app, id)), key, "the swatch draws again");
+}

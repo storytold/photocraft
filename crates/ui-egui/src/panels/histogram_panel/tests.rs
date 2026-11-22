@@ -447,3 +447,21 @@ fn the_tone_histogram_cache_ignores_selection_changes() {
     app.run("select.deselect", json!({})).unwrap();
     assert!(Arc::ptr_eq(&first, &tone::histograms(&mut app, src, ToneSpace::Rgb)), "deselecting keeps it too");
 }
+
+/// A tile that fails to read counts as zeros, and as its pixels again once it reads, without a new revision or
+/// selection: the panel's histogram goes stale and is counted again (`crate::scratch_reads`).
+#[test]
+fn the_panel_recounts_after_a_scratch_read_error_transition() {
+    let mut app = app_with(json!({"width": 64, "height": 48}));
+    settle(&mut app);
+    let counted = app.doc_hist.clone().expect("landed");
+    frame(&mut app);
+    assert_eq!(inspect(&app)["current"], true, "nothing changed: still current");
+    crate::scratch_reads::tests::simulate_read_error_transition();
+    assert_eq!(inspect(&app)["current"], false, "stale after the transition");
+    settle(&mut app);
+    let recounted = app.doc_hist.clone().expect("landed");
+    assert_eq!(recounted.key.revision, counted.key.revision, "no new revision");
+    assert_ne!(recounted.key.source, counted.key.source, "counted again for the new generation");
+    assert_eq!(inspect(&app)["current"], true);
+}
