@@ -1375,6 +1375,9 @@ pub struct FilterPreviewKey {
     pub params: Value,
     pub k: u32,
     pub tool_colors: ([f32; 4], [f32; 4]),
+    /// The scratch read-error generation (`crate::scratch_reads`): a tile that fails to read and recovers changes
+    /// the pixels without a new revision, and a preview computed during the error must not be kept.
+    pub scratch: u64,
 }
 
 #[cfg(test)]

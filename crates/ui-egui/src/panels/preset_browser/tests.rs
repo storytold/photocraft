@@ -172,6 +172,24 @@ fn a_pattern_replaced_under_its_id_keys_a_new_picture() {
     assert_eq!(pattern_key(&first), pattern_key(&first.clone()), "a clone holds the same pixels");
 }
 
+/// A pattern swatch drawn while a pattern tile failed to read shows zeros: once the tile reads again (no new
+/// generation), the swatch keys a new picture, and so do the style thumbnails drawn over the patterns.
+#[test]
+fn pattern_and_style_pictures_follow_a_scratch_read_error_transition() {
+    let mut app = app();
+    let pattern = app.session.patterns.items[0].clone();
+    let (swatch, library) = (pattern_key(&pattern), StyleLibrary::held(&mut app));
+    assert_eq!(pattern_key(&pattern), swatch);
+    assert!(Arc::ptr_eq(&library, &StyleLibrary::held(&mut app)));
+    crate::scratch_reads::tests::simulate_read_error_transition();
+    assert_ne!(pattern_key(&pattern), swatch, "the swatch draws again");
+    let after = StyleLibrary::held(&mut app);
+    assert!(!Arc::ptr_eq(&library, &after), "the style library is taken again");
+    let stamps = |library: &StyleLibrary| library.styles.iter().map(|(stamp, _)| *stamp).collect::<Vec<_>>();
+    assert!(!stamps(&library).is_empty());
+    assert!(stamps(&library).iter().zip(stamps(&after)).all(|(before, now)| *before != now), "every style thumbnail draws again");
+}
+
 /// The flat list of the app's style presets.
 fn styles(app: &PhotocraftApp) -> Vec<StylePreset> {
     app.session.presets.styles.iter().flat_map(|group| group.items.iter().cloned()).collect()
