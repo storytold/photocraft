@@ -853,3 +853,7 @@ fn black_white_auto(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "color_lookup_defaults_tests.rs"]
+mod color_lookup_defaults_tests;
