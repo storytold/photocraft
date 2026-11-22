@@ -164,7 +164,8 @@ fn magic_eraser_fails_gracefully() {
 #[test]
 fn background_eraser_erases_the_sampled_colour_at_every_depth_and_mode() {
     for mode in MODES {
-        for depth in DEPTHS {
+        // A 32-bit document refuses the tool outright (#11912).
+        for depth in DEPTHS.into_iter().filter(|d| *d != 32) {
             let mut s = session(mode, depth);
             let h = history_len(&s);
             // Start on white, drag across the black square: only white goes.

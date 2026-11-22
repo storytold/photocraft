@@ -82,7 +82,8 @@ fn a_click_on_the_background_layer_is_refused_too() {
 
 #[test]
 fn the_composite_erases_as_before() {
-    for depth in [8, 16, 32] {
+    // A 32-bit document refuses the tool outright (#11912).
+    for depth in [8, 16] {
         let mut s = session(depth);
         s.execute("channel.target", json!({"channel": "red"})).unwrap();
         s.execute("channel.target", json!({"channel": "composite"})).unwrap();
