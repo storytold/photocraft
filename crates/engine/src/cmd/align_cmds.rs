@@ -151,6 +151,8 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
         u.union(&b)
     });
     let canvas = doc.bounds();
+    // The layers the aligned box holds: only these move with it.
+    let placed: Vec<LayerId> = ids.iter().zip(&al.placements).filter(|(_, pl)| pl.is_some()).map(|(id, _)| *id).collect();
     let place = placement(canvas, aligned_box, pinned(&doc, reference))?;
     // What the aligned layers move by on top of the canvas origin, which moves everything.
     let extra = match place {
@@ -174,7 +176,7 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         if let Some(p) = place {
-            place_aligned(doc, cmd, &ids, p, (ex, ey))?;
+            place_aligned(doc, cmd, &ids, &placed, p, (ex, ey))?;
         }
         clip_unselected(doc, &ids)
     })?;
@@ -258,10 +260,11 @@ fn placement(canvas: Rect, aligned: Rect, locked: bool) -> Result<Option<Placeme
 }
 
 /// Applies `p` inside Auto-Align's edit: everything moves with the canvas origin (as Canvas Size
-/// moves it), the aligned layers `ids` by `extra` more, the canvas takes its new size, a selected
-/// Background that moved or no longer fills the canvas becomes "Layer 0", and an unselected
-/// Background grows with white, whatever its own colour.
-fn place_aligned(doc: &mut Document, cmd: &str, ids: &[LayerId], p: Placement, extra: (i32, i32)) -> Result<()> {
+/// moves it), the `placed` layers (the selected ones Auto-Align aligned, reference included) by
+/// `extra` more, the canvas takes its new size, a selected (`ids`) Background that moved or no
+/// longer fills the canvas becomes "Layer 0", and an unselected Background grows with white,
+/// whatever its own colour. A selected layer that wasn't placed only follows the canvas origin.
+fn place_aligned(doc: &mut Document, cmd: &str, ids: &[LayerId], placed: &[LayerId], p: Placement, extra: (i32, i32)) -> Result<()> {
     let old = doc.bounds();
     let grew = p.size != (old.width(), old.height());
     if grew {
@@ -272,7 +275,7 @@ fn place_aligned(doc: &mut Document, cmd: &str, ids: &[LayerId], p: Placement, e
     let (ox, oy) = p.origin;
     crate::canvas_geom::keeping_count_points(doc, |doc| crate::image_cmds::translate_doc(doc, cmd, ox, oy))?;
     if extra != (0, 0) {
-        for id in ids {
+        for id in placed {
             let Some(l) = doc.layer_mut(*id) else { continue };
             if let Some(surf) = l.surface_mut() {
                 *surf = translate_surface(surf, extra.0, extra.1);

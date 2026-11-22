@@ -256,3 +256,37 @@ fn mapped_bounds_trims_the_fringe_and_refuses_bad_corners() {
     assert_eq!(mapped_bounds(r, |x, y| (x * 1e12, y)), None);
     assert_eq!(mapped_bounds(Rect::EMPTY, |x, y| (x, y)), None);
 }
+
+/// A selected layer that Auto-Align couldn't place isn't moved with the aligned box: it only
+/// follows the canvas origin, like an unselected layer. Locked, it isn't checked for the lock, so
+/// moving it would move a locked layer.
+#[test]
+fn a_selected_layer_that_was_not_placed_stays_with_the_canvas() {
+    for lock in [false, true] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 400, "height": 300, "depth": 8, "background": "white"})).unwrap();
+        // The aligned box is the reference at 50,40,350,260: no larger than the canvas, so the
+        // canvas keeps its size and only the aligned layers move by -50,-40.
+        let reference = new_layer(&mut s, "Ref");
+        paint(&mut s, reference, Rect::new(50, 40, 350, 260), tex);
+        let shift = new_layer(&mut s, "Shift");
+        paint(&mut s, shift, Rect::new(74, 56, 374, 276), |x, y| tex(x - 24, y - 16));
+        // Flat colour: nothing to match, so it gets no placement.
+        let odd = new_layer(&mut s, "Odd");
+        paint(&mut s, odd, Rect::new(120, 100, 180, 160), |_, _| [0.3, 0.3, 0.3, 1.0]);
+        if lock {
+            s.edit("lock", |doc, _| {
+                doc.layer_mut(odd).unwrap().locks.set("all", true);
+                Ok(())
+            })
+            .unwrap();
+        }
+        select(&mut s, &[reference, shift, odd]);
+        let r = s.execute("edit.autoAlignLayers", json!({"projection": "reposition", "reference": reference.0})).unwrap();
+        assert_eq!(r["failed"], json!([odd.0]), "lock {lock}: {r}");
+        assert_eq!(canvas(&s), (400, 300), "lock {lock}");
+        assert_eq!(bounds(&s, reference), Rect::new(0, 0, 300, 220), "lock {lock}: the aligned box starts at 0,0");
+        assert!(near(bounds(&s, shift), (0, 0, 300, 220), 0), "lock {lock}: {:?}", bounds(&s, shift));
+        assert_eq!(bounds(&s, odd), Rect::new(120, 100, 180, 160), "lock {lock}: the layer that wasn't placed stays put");
+    }
+}
