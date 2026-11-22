@@ -144,10 +144,7 @@ fn the_one_time_move_stores_owned_dialog_values_once_and_leaves_engine_read_keys
     assert!(!table("photocraft.filter.gaussianBlur").unwrap().contains_key("preview"), "a null drops");
     assert!(table("craft_draw.shape.create.ellipse").is_some(), "a routed key lands under its library scope");
     assert!(table("photocraft.shape.create.ellipse").is_none());
-    assert_eq!(
-        table("photocraft.edit.fill").unwrap().get("mode"),
-        Some(&toml::Value::String(crate::panels::layers_tree::blend_key(photocraft_color::BlendMode::ColorBurn)))
-    );
+    assert_eq!(table("photocraft.edit.fill").unwrap().get("mode"), Some(&toml::Value::String(photocraft_color::BlendMode::ColorBurn.key().to_string())));
     let mut left: Vec<&str> = prefs.dialogs.keys().map(String::as_str).collect();
     left.sort_unstable();
     let mut kept = vec!["file.print", "ui.layersPanelOptions", "file.export.saveForWebLegacy", live_shape_prompt::PREF];

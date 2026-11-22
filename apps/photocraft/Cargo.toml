@@ -31,7 +31,7 @@ photocraft-ui-egui = { workspace = true }
 photocraft-tablet = { workspace = true }
 # The framework facade: `craft::host` (Wake, window services), `craft::menu` (the macOS menu bar)
 # and `craft::automation` (the control server, the agent link and the launcher's agents switch).
-craft = { workspace = true, features = ["ui", "menu", "automation-agents"] }
+craft = { workspace = true, features = ["ui", "menu", "automation-agents", "control-agents"] }
 eframe = { workspace = true, features = ["wgpu", "accesskit", "wayland", "x11", "persistence", "clipboard"] }
 egui = { workspace = true }
 serde = { workspace = true }
