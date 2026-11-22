@@ -8,17 +8,30 @@ use std::path::Path;
 /// The `version = "…"` value inside `[workspace.package]`.
 pub fn read(manifest: &str) -> Result<String, String> {
     let (_, line) = find_line(manifest)?;
-    let v = line.split_once('=').map(|(_, v)| v.trim().trim_matches('"').to_string()).unwrap_or_default();
+    let (_, v, _) = version_parts(line)?;
     if v.is_empty() {
         return Err("empty [workspace.package] version".into());
     }
-    Ok(v)
+    Ok(v.to_owned())
+}
+
+/// The canonical double-quoted SemVer form, not general TOML string syntax. Keep the
+/// surrounding text opaque so formatting and comments, including their quotes, survive.
+fn version_parts(line: &str) -> Result<(&str, &str, &str), String> {
+    let bad = || "expected a double-quoted [workspace.package] version".to_string();
+    if !line.split_once('=').is_some_and(|(_, value)| value.trim_start().starts_with('"')) {
+        return Err(bad());
+    }
+    let (prefix, rest) = line.split_once('"').ok_or_else(bad)?;
+    let (value, suffix) = rest.split_once('"').ok_or_else(bad)?;
+    Ok((prefix, value, suffix))
 }
 
 /// `manifest` with the workspace version replaced; everything else is byte-for-byte unchanged.
 pub fn replace(manifest: &str, new: &str) -> Result<String, String> {
     validate(new)?;
-    let (idx, _) = find_line(manifest)?;
+    let (idx, line) = find_line(manifest)?;
+    let (prefix, _, suffix) = version_parts(line)?;
     let mut out = String::with_capacity(manifest.len() + 8);
     for (i, line) in manifest.split_inclusive('\n').enumerate() {
         if i == idx {
@@ -29,7 +42,7 @@ pub fn replace(manifest: &str, new: &str) -> Result<String, String> {
             } else {
                 ""
             };
-            out.push_str(&format!("version = \"{new}\"{eol}"));
+            out.push_str(&format!("{prefix}\"{new}\"{suffix}{eol}"));
         } else {
             out.push_str(line);
         }
@@ -66,7 +79,10 @@ fn find_line(manifest: &str) -> Result<(usize, &str), String> {
     for (i, line) in manifest.lines().enumerate() {
         let t = line.trim();
         if t.starts_with('[') {
-            in_section = t == "[workspace.package]";
+            in_section = t.strip_prefix("[workspace.package]").is_some_and(|rest| {
+                let rest = rest.trim_start();
+                rest.is_empty() || rest.starts_with('#')
+            });
             continue;
         }
         if in_section
@@ -135,6 +151,39 @@ mod tests {
         let crlf = MANIFEST.replace('\n', "\r\n");
         let out = replace(&crlf, "2.0.0").unwrap();
         assert_eq!(out, crlf.replace("\"0.1.0\"", "\"2.0.0\""));
+    }
+
+    #[test]
+    fn reads_the_version_before_an_inline_comment() {
+        let manifest = MANIFEST.replace("version = \"0.1.0\"", "version = \"0.1.0\" # release note with \"quotes\" and #");
+        assert_eq!(read(&manifest).unwrap(), "0.1.0");
+    }
+
+    #[test]
+    fn rejects_unsupported_string_syntax_before_comment_quotes() {
+        let manifest = MANIFEST.replace("version = \"0.1.0\"", "version = '0.1.0' # \"keep\"");
+        assert!(read(&manifest).is_err());
+        assert!(replace(&manifest, "1.2.3").is_err());
+    }
+
+    #[test]
+    fn accepts_a_comment_after_the_workspace_package_header() {
+        let manifest = MANIFEST.replace("[workspace.package]", "[workspace.package] # shared package metadata");
+        assert_eq!(read(&manifest).unwrap(), "0.1.0");
+        assert_eq!(replace(&manifest, "1.2.3").unwrap(), manifest.replace("version = \"0.1.0\"", "version = \"1.2.3\""));
+    }
+
+    #[test]
+    fn preserves_version_line_formatting_comments_and_endings() {
+        for ending in ["\n", "\r\n", ""] {
+            let newline = if ending.is_empty() { "\n" } else { ending };
+            let manifest =
+                format!("[package]{newline}version = \"9.0.0\"{newline}[workspace.package]{newline}\tversion\t=\t\"0.1.0\"\t # keep \"0.1.0\" and #{ending}");
+            let expected = manifest.replacen("\"0.1.0\"", "\"1.2.3-rc.1\"", 1);
+            let updated = replace(&manifest, "1.2.3-rc.1").unwrap();
+            assert_eq!(updated, expected, "ending={ending:?}");
+            assert_eq!(read(&updated).unwrap(), "1.2.3-rc.1");
+        }
     }
 
     #[test]
