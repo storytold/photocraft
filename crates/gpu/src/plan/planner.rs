@@ -1055,7 +1055,17 @@ impl<'a> Planner<'a> {
         }
         for &(_, e) in &rev {
             if let Effect::GradientOverlay { common, gradient, .. } = e {
-                l = self.paint(l, content, Cov::One, &Paint::OverlayGradient(gradient), common.blend, common.opacity, F_GATE, clip, work.gb);
+                l = self.paint(
+                    l,
+                    content,
+                    Cov::One,
+                    &Paint::OverlayGradient(gradient),
+                    common.blend,
+                    common.opacity,
+                    F_GATE,
+                    clip,
+                    photocraft_compose::gradient_overlay_box(gradient, (sb, work.gb)),
+                );
             }
         }
         for &(_, e) in &rev {

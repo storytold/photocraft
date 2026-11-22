@@ -231,7 +231,9 @@ pub(super) fn blends_inside(layer: &Layer) -> bool {
 /// masked, clipped layers applied) plus its effects into `backdrop`.
 pub fn composite_with_effects(layer: &Layer, content: &Buffer, backdrop: &mut Buffer, maps: &FxMaps, layer_bounds: Rect, patterns: &[Pattern]) {
     let prepared = PreparedPatterns::new(patterns, PREPARED_PATTERN_BYTES);
-    composite_with_effects_prepared(layer, content, backdrop, maps, (layer_bounds, layer_bounds), &prepared, None);
+    // The same frames a document render uses ([`crate::effects_frames`]).
+    let frames = (layer_bounds, crate::gradient_overlay_frame_in(layer, layer_bounds));
+    composite_with_effects_prepared(layer, content, backdrop, maps, frames, &prepared, None);
 }
 
 pub(crate) fn composite_with_effects_prepared(
@@ -489,7 +491,7 @@ impl<'a> EffectPass<'a> {
         }
         for (_, e) in self.rev() {
             if let Effect::GradientOverlay { common, gradient, .. } = e {
-                paint_gradient_overlay(lay, &full, gradient, self.gb, big, common.blend, common.opacity)
+                paint_gradient_overlay(lay, &full, gradient, crate::gradient_overlay_box(gradient, (sb, self.gb)), big, common.blend, common.opacity)
             }
         }
         for (_, e) in self.rev() {

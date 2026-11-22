@@ -1456,6 +1456,47 @@ fn gradient_overlay_half_opaque_box_gpu_matches_cpu() {
     }
 }
 
+/// #14910 measured Align with Layer on only: an overlay with Align off keeps the box of every
+/// visible pixel, on the GPU as on the CPU, also next to an aligned overlay on the same layer.
+#[test]
+fn gradient_overlay_not_aligned_keeps_the_layer_box_gpu_matches_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let gradient = |align: bool| Effect::GradientOverlay {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        gradient: Gradient {
+            stops: vec![(0.0, Color::rgb(0.0, 0.0, 0.0)), (1.0, Color::rgb(1.0, 1.0, 1.0))],
+            opacity_stops: Vec::new(),
+            style: GradientStyle::Linear,
+            angle: 0.0,
+            scale: 1.0,
+            reverse: false,
+            align,
+            offset: (0.0, 0.0),
+        },
+        dither: false,
+        interpolation: None,
+    };
+    for (what, items, want) in [
+        ("align off", vec![gradient(false)], [0u8, 26, 50]),
+        ("unaligned on top", vec![gradient(false), gradient(true)], [0, 26, 50]),
+        ("aligned on top", vec![gradient(true), gradient(false)], [0, 128, 249]),
+    ] {
+        let mut doc = Document::new("Gradient overlay box", Size::new(240, 120), ColorMode::Rgb, SampleType::U8);
+        doc.layers.push(Layer::new("Background", LayerContent::Fill(Fill::Solid(Color::WHITE))));
+        let mut layer = Layer::raster("Squares", doc.pixel_format());
+        let s = layer.surface_mut().unwrap();
+        s.fill_rect(Rect::new(20, 40, 60, 80), &[1.0, 128.0 / 255.0, 0.0, 1.0]);
+        s.fill_rect(Rect::new(180, 40, 220, 80), &[1.0, 128.0 / 255.0, 0.0, 0.1]);
+        layer.effects.items = items;
+        doc.layers.push(layer);
+        diff_rect(&mut g, &doc, doc.bounds(), what).unwrap();
+        let row = Rect::new(0, 60, 240, 61);
+        let out = render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, row).unwrap();
+        let got = [20usize, 40, 59].map(|x| (out[x][0] * 255.0).round() as u8);
+        assert!(got.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 2), "{what}: GPU {got:?}, want {want:?}");
+    }
+}
+
 /// An anti-aliased blob (disc plus a soft-edged bar and a hole) with partially transparent parts,
 /// so effects see real edge coverage, concavities and interior alpha.
 /// Small layers composite only over their bounds and are copied back into the backdrop (#125):

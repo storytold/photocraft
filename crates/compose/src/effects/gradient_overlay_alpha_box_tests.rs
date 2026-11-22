@@ -152,3 +152,78 @@ fn painting_that_moves_the_half_opaque_box_lays_the_gradient_out_again() {
     // And the re-laid gradient is the one the new box gives.
     assert_close("after", reds(&after, 60, [20, 40, 59]), [0, 26, 50]);
 }
+
+/// [`overlay`] with Align with Layer off.
+fn unaligned(stops: Vec<(f32, Color)>) -> Effect {
+    let mut e = overlay(stops);
+    if let Effect::GradientOverlay { gradient, .. } = &mut e {
+        gradient.align = false;
+    }
+    e
+}
+
+#[test]
+fn an_overlay_not_aligned_with_the_layer_keeps_the_box_of_every_visible_pixel() {
+    // Only Align with Layer on was measured (#14910); Align off keeps the frame it had, which
+    // spans both squares of document 2 whatever their opacity.
+    let mut d = doc2(SampleType::U8, 10.0);
+    if let Some(l) = d.layers.last_mut() {
+        l.effects.items = vec![unaligned(classic_linear())];
+    }
+    assert_close("align off", reds(&d, 60, [20, 40, 59]), [0, 26, 50]);
+    // Each overlay picks its own box: an unaligned overlay painted above an aligned one keeps the
+    // wide box, and the aligned one below it still uses the half-opaque box.
+    if let Some(l) = d.layers.last_mut() {
+        l.effects.items = vec![unaligned(classic_linear()), overlay(classic_linear())];
+    }
+    assert_close("unaligned on top", reds(&d, 60, [20, 40, 59]), [0, 26, 50]);
+    if let Some(l) = d.layers.last_mut() {
+        l.effects.items = vec![overlay(classic_linear()), unaligned(classic_linear())];
+    }
+    assert_close("aligned on top", reds(&d, 60, [20, 40, 59]), [0, 128, 249]);
+}
+
+#[test]
+fn painting_under_an_overlay_not_aligned_with_the_layer_keeps_its_damage() {
+    // With Align off the half-opaque box plays no part, so moving it repaints only what changed.
+    let mut before = doc2(SampleType::U8, 10.0);
+    if let Some(l) = before.layers.last_mut() {
+        l.effects.items = vec![unaligned(classic_linear())];
+    }
+    let mut after = before.clone();
+    if let Some(s) = after.layers.last_mut().and_then(Layer::surface_mut) {
+        s.fill_rect(Rect::new(180, 40, 220, 80), &[ORANGE[0], ORANGE[1], ORANGE[2], 0.6]);
+    }
+    assert_eq!(relayout_damage(&before, &after), Rect::EMPTY);
+}
+
+#[test]
+fn composite_with_effects_lays_the_overlay_out_like_the_document() {
+    // The public single-layer entry point gives the same box as a document render: document 2 at
+    // N = 10 spans the opaque square only.
+    let d = doc2(SampleType::U8, 10.0);
+    let Some(layer) = d.layers.last() else { panic!("the squares layer") };
+    let rect = d.bounds();
+    let (w, h) = (rect.width() as usize, rect.height() as usize);
+    let mut content = Buffer::filled(rect, [0.0; 4]);
+    for (i, p) in content.px.iter_mut().enumerate() {
+        let (x, y) = ((i % w) as i32, (i / w) as i32);
+        let a = if !(40..80).contains(&y) {
+            0.0
+        } else if (20..60).contains(&x) {
+            1.0
+        } else if (180..220).contains(&x) {
+            0.1
+        } else {
+            0.0
+        };
+        *p = [ORANGE[0], ORANGE[1], ORANGE[2], a];
+    }
+    let shape: Vec<f32> = content.px.iter().map(|p| p[3]).collect();
+    assert_eq!(shape.len(), w * h);
+    let maps = build_maps(layer, shape, rect, &photocraft_doc::GlobalLight::default(), &TextureCtx { rect, patterns: &[], anchor: (20.0, 40.0) });
+    let mut out = Buffer::filled(rect, [1.0; 4]);
+    composite_with_effects(layer, &content, &mut out, &maps, Rect::new(20, 40, 220, 80), &[]);
+    let red = |x: usize| out.px.get(60 * w + x).map_or(0, |p| (p[0] * 255.0).round().clamp(0.0, 255.0) as u8);
+    assert_close("composite_with_effects", [red(20), red(40), red(59)], [0, 128, 249]);
+}

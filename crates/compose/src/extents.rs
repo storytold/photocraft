@@ -185,16 +185,24 @@ pub fn effects_frame(layer: &Layer, canvas: Rect) -> Rect {
 /// `frame`. For an 8-bit pixel layer with an enabled Gradient Overlay it is the bounds of the
 /// pixels at least half opaque (alpha 128 of 255), so faint pixels don't stretch the gradient,
 /// as in the reference application (#14910). Everything else keeps `frame`: other layer kinds,
-/// 16 and 32 bit (not measured), and a layer with no half-opaque pixel at all.
+/// 16 and 32 bit (not measured), a layer with no half-opaque pixel at all, and a layer with no
+/// enabled overlay aligned with it. Only an overlay with Align with Layer on uses this box
+/// ([`gradient_overlay_box`]); one with it off keeps `frame` (not measured).
 pub fn gradient_overlay_frame_in(layer: &Layer, frame: Rect) -> Rect {
     let LayerContent::Raster(s) = &layer.content else { return frame };
     if layer.frame.is_some()
         || advanced::shapeless(layer)
-        || !layer.effects.items.iter().any(|e| e.enabled() && matches!(e, photocraft_doc::Effect::GradientOverlay { .. }))
+        || !layer.effects.items.iter().any(|e| e.enabled() && matches!(e, photocraft_doc::Effect::GradientOverlay { gradient, .. } if gradient.align))
     {
         return frame;
     }
     bounds::half_opaque_bounds(s).filter(|b| !b.is_empty()).unwrap_or(frame)
+}
+
+/// The box one Gradient Overlay spans, given the layer's frames `(frame, aligned)` from
+/// [`effects_frames`]: `aligned` with Align with Layer on, else `frame` as before.
+pub fn gradient_overlay_box(gradient: &photocraft_doc::Gradient, (frame, aligned): (Rect, Rect)) -> Rect {
+    if gradient.align { aligned } else { frame }
 }
 
 /// The frames a layer's effects are laid out in: its [`effects_frame`] (patterns, strokes,
