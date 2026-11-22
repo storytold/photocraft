@@ -4,7 +4,7 @@
 //! just the active layer (Quick Export as PNG, Export As).
 
 use photocraft_algo::selection::Region;
-use photocraft_color::{BlendMode, ColorMode};
+use photocraft_color::{BlendMode, ColorMode, SampleType};
 use photocraft_doc::{BlendIf, BlendRange, Document, Effect, Effects, Knockout, Layer, LayerContent, LayerId, LayerMask, SmartSource, StackMode};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
@@ -952,10 +952,10 @@ pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
     alone.blend = if alone.is_group() { BlendMode::PassThrough } else { BlendMode::Normal };
     alone.clipped = false;
     let mut tmp = doc.clone();
-    tmp.layers = vec![alone].into();
+    tmp.layers = vec![alone.clone()].into();
     tmp.selection = None;
     let area = doc.bounds();
-    let buf = photocraft_compose::render(&tmp, area);
+    let mut buf = photocraft_compose::render(&tmp, area);
     let w = area.width() as usize;
     let mut b = Rect::EMPTY;
     for (i, q) in buf.px.iter().enumerate() {
@@ -966,6 +966,16 @@ pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
     }
     if b.is_empty() {
         return Err(other(EMPTY_LAYER));
+    }
+    // #14990: the area a group's children never painted is empty, and the reference application
+    // stores it as 255,255,255,0 - all of it, including the pixels right against a child's edge,
+    // which no rule read from the flattened pixels can tell apart from a pixel an effect reached.
+    // Inside a leaf's own pixels, grown by the margin its effects reach, the colour that was painted
+    // stays: that is what keeps the fully clear outer corner of a 5 px outside stroke its black
+    // (#14816). Only an RGB document at 8 bits was measured, so a grayscale or CMYK document and a
+    // 16- or 32-bit depth keep the colours they have, as elsewhere in #14816.
+    if alone.is_group() && doc.mode == ColorMode::Rgb && doc.depth == SampleType::U8 {
+        never_painted_to_white(&mut buf.px, w, area, b, &alone);
     }
     let fmt = doc.pixel_format();
     let mut out = Document::new(l.name.clone(), photocraft_doc::Size::new(b.width(), b.height()), doc.mode, doc.depth);
@@ -982,6 +992,45 @@ pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
     surf.write_region(Rect::from_xywh(0, 0, b.width(), b.height()), &rows);
     out.layers.push(Layer::new(l.name.clone(), LayerContent::Raster(surf)));
     Ok(out)
+}
+
+/// The boxes the group's descendants paint, each grown by the margin its own effects reach: inside
+/// one of them a transparent pixel is a hole in the layer or an effect's edge, and keeps the colour
+/// written there. A container's own bounds are its visible children's union, a rectangle that also
+/// covers the empty corners nothing painted, so a group joins the reach only where it paints
+/// something of its own: an enabled layer style, a Frame's stroke, an Artboard's board. Pixels of the
+/// exported bounds outside every box were never painted by anything, and are stored white with a zero
+/// alpha (#14990, #14816 review). The exported group itself follows the same rule (#14968 review):
+/// a root without paint of its own adds nothing, and one with a style grows the reach like any
+/// other group.
+fn never_painted_to_white(px: &mut [[f32; 4]], w: usize, area: Rect, b: Rect, group: &Layer) {
+    let mut reach: Vec<Rect> = Vec::new();
+    let mut stack: Vec<&Layer> = vec![group];
+    while let Some(l) = stack.pop() {
+        let mut paints = true;
+        if let Some(kids) = l.children() {
+            stack.extend(kids.iter().filter(|k| k.visible));
+            paints = photocraft_compose::effects::has_effects(l) || l.frame.is_some() || l.artboard().is_some();
+        }
+        if !paints {
+            continue;
+        }
+        let own = photocraft_compose::layer_bounds(l, area);
+        if own.is_empty() {
+            continue;
+        }
+        let margin = if photocraft_compose::effects::has_effects(l) { photocraft_compose::effects::margin(l) } else { 0 };
+        reach.push(own.inflate(margin));
+    }
+    for y in b.y0..b.y1 {
+        for x in b.x0..b.x1 {
+            let Some(q) = px.get_mut((y - area.y0) as usize * w + (x - area.x0) as usize) else { continue };
+            if q[3] > 0.0 || reach.iter().any(|r| r.contains(x, y)) {
+                continue;
+            }
+            *q = [1.0, 1.0, 1.0, 0.0];
+        }
+    }
 }
 
 fn export_layer(s: &mut Session, p: &Value, cmd: &str, png_only: bool) -> Result<Value> {
@@ -1006,7 +1055,11 @@ fn export_layer(s: &mut Session, p: &Value, cmd: &str, png_only: bool) -> Result
         tmp.execute("image.imageSize", json!({"width": w, "resample": resample}))?;
         ldoc = (*tmp.active().ok_or(EngineError::NoDocument)?.doc).clone();
     }
-    let out = photocraft_io::export(&ldoc, path, &Default::default()).map_err(|e| other(e.to_string()))?;
+    // A layer export always keeps its alpha channel, opaque layer or not, and stores the pixels
+    // nothing painted inside its bounds as white (#14816). File > Export As of the whole document
+    // goes on dropping an opaque composite's alpha.
+    let opts = photocraft_io::ExportOptions { layer_alpha: true, ..Default::default() };
+    let out = photocraft_io::export(&ldoc, path, &opts).map_err(|e| other(e.to_string()))?;
     write_file(path, &out.bytes)?;
     Ok(json!({"path": path, "bytes": out.bytes.len(), "width": ldoc.size.width, "height": ldoc.size.height, "warnings": out.warnings}))
 }

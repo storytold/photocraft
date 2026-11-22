@@ -1455,7 +1455,7 @@ pub fn document_to_image(doc: &Document, warnings: &mut Vec<String>) -> Result<I
 
 /// [`document_to_image`] with an optional custom [`BandRenderer`].
 pub fn document_to_image_with_renderer(doc: &Document, warnings: &mut Vec<String>, renderer: Option<&mut dyn BandRenderer>) -> Result<Image, IoError> {
-    document_to_image_for_with_renderer(doc, warnings, true, false, &Interrupt::NONE, renderer)
+    document_to_image_for_with_renderer(doc, warnings, true, false, false, &Interrupt::NONE, renderer)
 }
 
 /// Reported in the export's own warnings (not through the renderer's diagnostics, which a custom
@@ -1463,11 +1463,23 @@ pub fn document_to_image_with_renderer(doc: &Document, warnings: &mut Vec<String
 const NATIVE_COPY_CPU_NOTICE: &str =
     "custom renderer unsupported: a single-layer export copies the document's own pixels with the CPU path; falling back to CPU";
 
+/// Whether an export keeps the document's alpha channel (#14816): the layer export paths ask for
+/// it, and it is applied only where the reference application was measured — an RGB document at 8
+/// bits. Grayscale and CMYK documents and 16- and 32-bit depths are cases that item leaves
+/// unmeasured, so they keep today's behaviour. Which of a layer's clear pixels read as white is
+/// decided where the layer itself is known (#14990: [`photocraft_engine::layer_menu_cmds::layer_document`]
+/// in the engine), not here: the flat pixels carry no provenance for a pixel whose alpha is zero,
+/// so any rule drawn from them alone guesses (#14816 review, #14990).
+fn keep_layer_alpha(asked: bool, doc: &Document) -> bool {
+    asked && doc.mode == ColorMode::Rgb && doc.depth == SampleType::U8
+}
+
 fn document_to_image_for_with_renderer(
     doc: &Document,
     warnings: &mut Vec<String>,
     cmyk_target: bool,
     lab_target: bool,
+    layer_alpha: bool,
     ctl: &Interrupt<'_>,
     renderer: Option<&mut dyn BandRenderer>,
 ) -> Result<Image, IoError> {
@@ -1476,9 +1488,11 @@ fn document_to_image_for_with_renderer(
         warnings.push(NATIVE_COPY_CPU_NOTICE.into());
     }
     let (w, h) = (doc.size.width, doc.size.height);
+    let keep = keep_layer_alpha(layer_alpha, doc);
     // The single layer's alpha is dropped up front when it is opaque. A composite is rendered
-    // with alpha, dropped afterwards, in place, when every pixel turned out opaque.
-    let alpha = src.native.is_none_or(|s| !opaque_surface(s, doc.bounds()));
+    // with alpha, dropped afterwards, in place, when every pixel turned out opaque. A layer export
+    // keeps it either way (#14816).
+    let alpha = keep || src.native.is_none_or(|s| !opaque_surface(s, doc.bounds()));
     let bytes = src.sample.bytes();
     let mut data = try_buffer((w as usize) * (h as usize), src.layout(alpha).channels() * bytes)?;
     let mut opaque = true;
@@ -1488,7 +1502,7 @@ fn document_to_image_for_with_renderer(
         Ok(())
     })?;
     let mut layout = src.layout(alpha);
-    if src.native.is_none() && opaque {
+    if src.native.is_none() && opaque && !keep {
         drop_alpha(&mut data, layout.color_channels() * bytes, bytes);
         layout = src.layout(false);
     }
@@ -1890,7 +1904,7 @@ pub fn export_flat_with_renderer(
         let mut warnings = Vec::new();
         let cmyk_target = format.caps().layouts.iter().any(|layout| layout.is_cmyk());
         let lab_target = format.caps().layouts.iter().any(|layout| layout.is_lab());
-        match document_to_image_for_with_renderer(doc, &mut warnings, cmyk_target, lab_target, ctl, Some(r)) {
+        match document_to_image_for_with_renderer(doc, &mut warnings, cmyk_target, lab_target, opts.layer_alpha && format.caps().alpha, ctl, Some(r)) {
             Ok(mut img) => {
                 ctl.check().map_err(|_| IoError::Cancelled)?;
                 ctl.progress(composite_share(format));
@@ -1944,7 +1958,7 @@ pub fn export_flat_with_renderer(
     let mut warnings = Vec::new();
     let cmyk_target = format.caps().layouts.iter().any(|layout| layout.is_cmyk());
     let lab_target = format.caps().layouts.iter().any(|layout| layout.is_lab());
-    let mut img = document_to_image_for_with_renderer(doc, &mut warnings, cmyk_target, lab_target, ctl, None)?;
+    let mut img = document_to_image_for_with_renderer(doc, &mut warnings, cmyk_target, lab_target, opts.layer_alpha && format.caps().alpha, ctl, None)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(composite_share(format));
     strip_xmp(&mut img.meta, opts);
@@ -2037,7 +2051,9 @@ fn streams_png(doc: &Document) -> bool {
 /// RGB) can be written as PNG (#8456). The pixels are the ones [`export_flat`] writes for a
 /// smaller document, with these differences: Interlaced is turned off (Adam7 needs the whole
 /// image), and a composite whose bottom layer isn't an opaque pixel layer keeps its alpha even
-/// when every pixel turns out opaque (that is only known once the last row is written).
+/// when every pixel turns out opaque (that is only known once the last row is written). A layer
+/// export (`opts.layer_alpha`, #14816) keeps its alpha either way, and both paths write the same
+/// pixels for the same document (#14990).
 ///
 /// `rows`: rows per band, 0 to size them to the document.
 #[cfg(test)]
@@ -2053,11 +2069,15 @@ pub fn export_png_streamed_with_renderer(
     rows: i32,
     renderer: Option<&mut dyn BandRenderer>,
 ) -> Result<ExportResult, IoError> {
+    // A layer export (#14816) keeps its alpha channel whatever the pixels turn out to be, and
+    // stores its untouched clear pixels as white.
+    let keep = keep_layer_alpha(opts.layer_alpha, doc);
     if let Some(r) = renderer {
-        let opaque = match single_layer(doc) {
-            Some(s) => opaque_surface(s, doc.bounds()),
-            None => opaque_bottom(doc),
-        };
+        let opaque = !keep
+            && match single_layer(doc) {
+                Some(s) => opaque_surface(s, doc.bounds()),
+                None => opaque_bottom(doc),
+            };
         let mut progress = 0.0;
         let first_try = stream_png_with_renderer(doc, opts, ctl, !opaque, rows, &mut progress, Some(&mut *r));
         let attempt = match first_try {
@@ -2100,10 +2120,11 @@ pub fn export_png_streamed_with_renderer(
             Err(e) => return Err(e),
         }
     }
-    let opaque = match single_layer(doc) {
-        Some(s) => opaque_surface(s, doc.bounds()),
-        None => opaque_bottom(doc),
-    };
+    let opaque = !keep
+        && match single_layer(doc) {
+            Some(s) => opaque_surface(s, doc.bounds()),
+            None => opaque_bottom(doc),
+        };
     let mut progress = 0.0;
     match stream_png_with_renderer(doc, opts, ctl, !opaque, rows, &mut progress, None)? {
         Some(r) => Ok(r),
@@ -2876,6 +2897,29 @@ mod streamed_png_tests {
         }
         let r = same_as_whole(&hdr, 37, &ExportOptions::default());
         assert!(r.warnings.iter().any(|w| w.contains("clip")), "{:?}", r.warnings);
+    }
+
+    /// A layer export (#14816) keeps an opaque layer's alpha in both PNG paths, and the streamed
+    /// bands store exactly the pixels the whole-image path does (#14990) - including the white with
+    /// a zero alpha the engine stores for the area a group's children never painted.
+    #[test]
+    fn a_layer_export_streams_the_same_pixels_as_it_buffers() {
+        let opts = ExportOptions { layer_alpha: true, ..Default::default() };
+        let mut opaque = Document::new("opaque layer", Size::new(60, 40), ColorMode::Rgb, SampleType::U8);
+        opaque.layers = vec![layer(&opaque, &[(opaque.bounds(), &[0.1, 0.6, 0.9, 1.0])])].into();
+        let mut cleared = Document::new("group layer", Size::new(60, 40), ColorMode::Rgb, SampleType::U8);
+        cleared.layers = vec![layer(&cleared, &[(Rect::new(0, 0, 20, 40), &[1.0, 1.0, 0.0, 1.0]), (Rect::new(20, 0, 60, 40), &[1.0, 1.0, 1.0, 0.0])])].into();
+        for doc in [&opaque, &cleared] {
+            for rows in [1, 7, 40] {
+                let r = same_as_whole(doc, rows, &opts);
+                assert_eq!(decoded(&r.bytes).layout(), ChannelLayout::Rgba, "{}: written {rows} rows at a time", doc.name);
+            }
+        }
+        let img = decoded(&export_png_streamed(&cleared, &opts, &Interrupt::NONE, 7).unwrap().bytes);
+        let n = img.layout().channels();
+        let at = |x: usize, y: usize| (y * 60 + x) * n;
+        assert_eq!(&img.data()[at(30, 3)..at(30, 3) + n], [255, 255, 255, 0], "the empty area stays white in the streamed file");
+        assert_eq!(&img.data()[at(5, 3)..at(5, 3) + n], [255, 255, 0, 255], "and the child's own pixels are as they were");
     }
 
     /// Without an opaque bottom layer the composite keeps its alpha, even when every pixel is
