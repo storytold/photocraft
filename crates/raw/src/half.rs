@@ -13,45 +13,23 @@
 //! applied (a warning says so), and there is no demosaic interpolation, so it is softer than the
 //! full image by half a pixel of the preview at most.
 
-use crate::color::{self, Mat3};
 use crate::demosaic::Pattern;
-use crate::develop::{DevelopOptions, Developed, GammaLut, RawInfo, Scale, gain_row, orient, resolve_neutral};
+use crate::develop::{DevelopColor, DevelopOptions, Developed, GammaLut, RawInfo, Scale, combined_black_gain, gain_row, orient, validate_sensor};
 use crate::error::{RawError, Result};
+use crate::par;
 use crate::sensor::{Cfa, Sensor};
 use crate::tone::Tone;
-use crate::{RawFormat, par};
 
 /// Develops a reduced-size preview of `s`: half the crop's width and height (floored), or a third
 /// for X-Trans. Fails like [`develop_sensor`](crate::develop_sensor) on a malformed sensor, and
 /// with [`RawError::Unsupported`] for CFAs other than Bayer and 6×6 X-Trans or when the crop is
 /// smaller than one block. `opts.demosaic`, `opts.tone` and the sensor's black point are ignored.
 pub fn develop_half(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
+    validate_sensor(s)?;
     let c = s.crop;
-    let samples = s.width.checked_mul(s.height).and_then(|n| n.checked_mul(s.samples));
-    if c.is_empty()
-        || c.x.checked_add(c.width).is_none_or(|x| x > s.width)
-        || c.y.checked_add(c.height).is_none_or(|y| y > s.height)
-        || samples.is_none_or(|n| s.data.len() < n)
-    {
-        return Err(RawError::malformed("crop lies outside the sensor data"));
-    }
-    if s.samples != 1 && s.samples != 3 {
-        return Err(RawError::unsupported(format!("{} samples per pixel", s.samples)));
-    }
     // Floating-point sample data and polynomial opcodes are linearized by the full develop only.
     if s.float_data.is_some() || !s.polynomials.is_empty() {
         return Err(RawError::unsupported("half-size preview of floating-point or polynomial-mapped sensor data"));
-    }
-    if let Some(cfa) = &s.cfa
-        && (s.samples != 1
-            || cfa.width == 0
-            || cfa.height == 0
-            || cfa.width > 16
-            || cfa.height > 16
-            || cfa.colors.len() != cfa.width * cfa.height
-            || cfa.colors.iter().any(|c| *c > 2))
-    {
-        return Err(RawError::malformed("invalid sensor CFA pattern"));
     }
     // Block edge: 2 for Bayer and LinearRaw, 3 for X-Trans (every 3×3 block holds all colours).
     let bayer = s.cfa.as_ref().is_none_or(Cfa::is_bayer);
@@ -71,50 +49,19 @@ pub fn develop_half(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
     // The preview and its oriented copy (u16 RGB each).
     opts.limits.check(hw as u64, hh as u64, 12)?;
 
-    let mut warnings = s.warnings.clone();
     let sc = Scale::new(s);
-    let neutral = resolve_neutral(s, opts, &sc, &mut warnings)?;
-    let mult = neutral.map(|v| (1.0 / v) as f32);
-
-    // Balanced camera -> XYZ D50, as `develop_sensor` picks it.
-    let mono = s.is_monochrome();
-    let look = opts.camera_look.as_ref().filter(|l| l.is_usable() && !mono);
-    if opts.camera_look.is_some() && look.is_none() && !mono {
-        warnings.push("the supplied camera look is not usable (non-finite or singular); ignored".into());
-    }
-    let to_xyz: Mat3 = match (look, s.color.balanced_to_xyz_d50(neutral)) {
-        (Some(l), _) => {
-            warnings.push(l.note());
-            l.to_xyz
-        }
-        (None, Some(m)) => m,
-        (None, None) => {
-            if s.format != RawFormat::Dng && !mono {
-                warnings.push("no colour calibration for this camera; camera colours are treated as sRGB primaries".into());
-            }
-            color::srgb_to_xyz_d50()
-        }
-    };
-    let gain = 2f64.powf(s.baseline_exposure + opts.exposure.clamp(-10.0, 10.0));
-    let out_m = color::scale(&color::mul(&color::xyz_d50_to_prophoto(), &to_xyz), gain);
-    let out_m: [[f32; 3]; 3] = out_m.map(|r| r.map(|v| v as f32));
-    let grey_gain = gain as f32;
+    let mut colour = DevelopColor::new(s, opts, &sc)?;
+    let mult = colour.mult;
     if opts.tone != Tone::default() || s.black_point != 0.0 {
-        warnings.push("half-size preview: tone sliders and the black point are not applied".into());
+        colour.warnings.push("half-size preview: tone sliders and the black point are not applied".into());
     }
-    let lut = match look {
-        Some(l) => GammaLut::with_tone(l.tone.as_ref()),
-        None => GammaLut::with_curve(&s.tone_curve),
-    };
 
-    let rows = RowScaler::new(s, mult);
+    let rows = RowScaler::new(s, sc, mult);
     // Per block phase (the CFA repeat measured in blocks): the colour of each sample of the block
     // and 1 / the number of samples of each colour.
     let pattern = s.cfa.as_ref().map(|cfa| Pattern::of(cfa, c.x, c.y));
     let phases = pattern.as_ref().map(|p| Phases::new(p, b)).transpose()?;
 
-    // Camera RGB (balanced, 0..1) -> linear ProPhoto.
-    let to_pro = |p: [f32; 3]| if mono { [grey_gain * p[0]; 3] } else { [0, 1, 2].map(|k| out_m[k][0] * p[0] + out_m[k][1] * p[1] + out_m[k][2] * p[2]) };
     let fast = BayerRows::new(s, &rows, bayer && b == 2 && s.gain_maps.is_empty() && rows.periodic);
     let mut out = vec![0u16; hw * hh * 3];
     let band = par::band_rows(hw * 3);
@@ -126,9 +73,11 @@ pub fn develop_half(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
         for (r, orow) in chunk.chunks_exact_mut(hw * 3).enumerate() {
             let j = bi * band + r;
             let y0 = c.y + j * b;
-            if let Some(fast) = &fast {
-                fast.row(y0, hw, &mut |i, p| lin_row[i * 3..i * 3 + 3].copy_from_slice(&to_pro(p)));
-                encode_row(&lut, &mut lin_row, orow);
+            let mut put = |i: usize, p: [f32; 3]| lin_row[i * 3..i * 3 + 3].copy_from_slice(&colour.to_prophoto(&p));
+            if let Some(fast) = &fast
+                && fast.row(y0, hw, &mut put)
+            {
+                encode_row(&colour.lut, &mut lin_row, orow);
                 continue;
             }
             for p in 0..planes {
@@ -140,7 +89,6 @@ pub fn develop_half(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
                     }
                 }
             }
-            let mut put = |i: usize, p: [f32; 3]| lin_row[i * 3..i * 3 + 3].copy_from_slice(&to_pro(p));
             match &phases {
                 Some(ph) if b == 2 => ph.reduce::<2>(j, hw, &lines, n, &mut put),
                 Some(ph) => ph.reduce::<3>(j, hw, &lines, n, &mut put),
@@ -163,7 +111,7 @@ pub fn develop_half(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
                     }
                 }
             }
-            encode_row(&lut, &mut lin_row, orow);
+            encode_row(&colour.lut, &mut lin_row, orow);
         }
     });
 
@@ -190,7 +138,7 @@ pub fn develop_half(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
             orientation: s.orientation,
             baseline_exposure: s.baseline_exposure,
         },
-        warnings,
+        warnings: colour.warnings,
     })
 }
 
@@ -286,16 +234,14 @@ impl<'a> BayerRows<'a> {
     }
 
     /// Emits the `hw` pixels made from data rows `y0` and `y0 + 1`.
-    fn row(&self, y0: usize, hw: usize, put: &mut impl FnMut(usize, [f32; 3])) {
+    fn row(&self, y0: usize, hw: usize, put: &mut impl FnMut(usize, [f32; 3])) -> bool {
         let (s, c) = (self.s, self.s.crop);
-        let bl = &s.black;
         let mut k = [(0f32, 0f32); 4];
         for (pos, kp) in k.iter_mut().enumerate() {
             let (x, y) = (c.x + pos % 2, y0 + pos / 2);
-            let black = bl.at(x.saturating_sub(s.active.x), y.saturating_sub(s.active.y), 0, 1);
-            let range = s.white[0] - black;
-            let gain = self.rows.mult[usize::from(s.cfa.as_ref().map_or(1, |f| f.color(x, y))).min(2)] / range;
-            *kp = if range >= 1.0 && black.is_finite() && gain.is_finite() { (black, gain) } else { (0.0, 0.0) };
+            let channel = usize::from(s.cfa.as_ref().map_or(1, |f| f.color(x, y))).min(2);
+            let Some(scaled) = combined_black_gain(s, x, y, 0, self.rows.mult[channel]) else { return false };
+            *kp = scaled;
         }
         let start = y0 * s.width + c.x;
         let (r0, r1) = (&s.data[start..start + 2 * hw], &s.data[start + s.width..start + s.width + 2 * hw]);
@@ -303,6 +249,7 @@ impl<'a> BayerRows<'a> {
             None => self.blocks(r0, r1, k, hw, f32::from, put),
             Some(l) => self.blocks(r0, r1, k, hw, |raw| f32::from(l.get(usize::from(raw)).or_else(|| l.last()).copied().unwrap_or(raw)), put),
         }
+        true
     }
 
     #[inline(always)]
@@ -328,12 +275,12 @@ struct RowScaler<'a> {
 }
 
 impl<'a> RowScaler<'a> {
-    fn new(s: &'a Sensor, mult: [f32; 3]) -> Self {
+    fn new(s: &'a Sensor, sc: Scale<'a>, mult: [f32; 3]) -> Self {
         let bl = &s.black;
         let width = s.cfa.as_ref().map_or(1, |c| c.width);
         let periodic = bl.delta_h.is_empty() && bl.delta_v.is_empty() && matches!(bl.rows, 1 | 2) && matches!(bl.cols, 1 | 2) && width <= 16;
         let period = if width.is_multiple_of(2) { width.max(2) } else { width * 2 };
-        RowScaler { s, sc: Scale::new(s), mult, periodic, period }
+        RowScaler { s, sc, mult, periodic, period }
     }
 
     /// Fills `out` with the scaled `sample` of data row `y`, columns `x0..x0 + out.len()`;
@@ -341,18 +288,17 @@ impl<'a> RowScaler<'a> {
     fn fill(&self, y: usize, x0: usize, out: &mut [f32], sample: usize, channel: impl Fn(usize, usize) -> usize) {
         let s = self.s;
         let spp = s.samples;
-        if self.periodic {
-            let bl = &s.black;
-            let k: Vec<(f32, f32)> = (0..self.period)
+        let periodic_gains: Option<Vec<_>> = if self.periodic {
+            (0..self.period)
                 .map(|p| {
                     let x = x0 + p;
-                    let black = bl.at(x.saturating_sub(s.active.x), y.saturating_sub(s.active.y), sample, spp);
-                    let range = s.white[sample.min(2)] - black;
-                    let gain = self.mult[channel(x, y).min(2)] / range;
-                    // Unusable levels give 0 instead of NaN (which `clamp` would pass through).
-                    if range >= 1.0 && black.is_finite() && gain.is_finite() { (black, gain) } else { (0.0, 0.0) }
+                    combined_black_gain(s, x, y, sample, self.mult[channel(x, y).min(2)])
                 })
-                .collect();
+                .collect()
+        } else {
+            None
+        };
+        if let Some(k) = periodic_gains {
             let start = (y * s.width + x0) * spp + sample;
             let src = &s.data[start..start + (out.len().saturating_sub(1)) * spp + 1];
             let lin = s.linearization.as_deref();
@@ -385,7 +331,7 @@ impl<'a> RowScaler<'a> {
 mod tests {
     use super::*;
     use crate::sensor::{BlackLevels, Rect};
-    use crate::{ColorInfo, Demosaic, WhiteBalance, develop_sensor};
+    use crate::{ColorInfo, Demosaic, RawFormat, WhiteBalance, develop_sensor};
 
     const BLACK: f32 = 256.0;
     const RANGE: f32 = 4000.0;
@@ -618,6 +564,21 @@ mod tests {
         let mut s = sensor(16, 16, None, 3, |x, y| chart(x, y, 8));
         s.black = BlackLevels { rows: 2, cols: 2, values: vec![f32::NAN, 0.0, 1.0, f32::NAN], delta_h: Vec::new(), delta_v: Vec::new() };
         assert!(develop_half(&s, &opts()).is_ok());
+    }
+
+    #[test]
+    fn a_fractional_white_range_is_used_in_the_preview() {
+        let options = DevelopOptions { demosaic: Demosaic::Bilinear, white_balance: WhiteBalance::Multipliers([1.0; 3]), ..Default::default() };
+        for cfa in [Cfa::bayer("RGGB"), None] {
+            let mut s = sensor(16, 16, cfa, 1, |_, _| [0.0; 3]);
+            s.black = BlackLevels::uniform(255.75);
+            s.white = [256.0; 3];
+            s.data.fill(256);
+            let full = develop_sensor(&s, &options).unwrap();
+            let half = develop_half(&s, &options).unwrap();
+            assert!(full.rgb[..3].iter().all(|&sample| sample > 0));
+            assert!(half.rgb.as_chunks::<3>().0.iter().all(|pixel| pixel == &full.rgb[..3]));
+        }
     }
 
     #[test]

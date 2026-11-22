@@ -106,6 +106,23 @@ fn a_raw_opened_by_path_shows_its_previews_before_the_full_develop() {
 }
 
 #[test]
+fn export_as_refuses_to_save_a_progressive_raw_preview() {
+    let mut app = app_with_a_document();
+    start_open(&mut app, "s.dng", None, OpenSource::Bytes(Arc::new(dng(true))), None, None).unwrap();
+    until_previewed(&mut app);
+    let preview = app.jobs.previews[0].1;
+    assert_eq!(app.session.active().unwrap().doc.id, preview);
+
+    let dialog_error = crate::export_dialog::open(&mut app).expect_err("the preview cannot open Export As");
+    let replay_error = crate::export_dialog::replay(&mut app, &json!({"path": "preview.png", "format": "png"})).unwrap_err();
+    assert!(dialog_error.contains("still running on this document"), "{dialog_error}");
+    assert_eq!(replay_error, dialog_error, "replay applies the same document lock");
+
+    until_opened(&mut app);
+    assert!(crate::export_dialog::open(&mut app).is_ok(), "the full RAW can be exported");
+}
+
+#[test]
 fn closing_the_preview_cancels_the_open_without_leaking_a_lock_or_a_tab() {
     let mut app = app_with_a_document();
     start_open(&mut app, "s.dng", None, OpenSource::Bytes(Arc::new(dng(true))), None, None).unwrap();
