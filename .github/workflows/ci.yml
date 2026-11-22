@@ -93,7 +93,7 @@ jobs:
     if: github.event_name != 'schedule' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci')
     timeout-minutes: 10
     name: select platforms
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-trusted' || 'ubuntu-latest' }}
     outputs:
       windows: ${{ steps.pick.outputs.windows }}
       windows_gpu: ${{ steps.pick.outputs.windows_gpu }}
@@ -167,6 +167,10 @@ jobs:
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
+      os: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && '["artcraft-k8s-trusted"]' || '["ubuntu-24.04"]' }}
+      # On the cluster runners sccache uses the shared cluster cache, which main runs fill for
+      # every app; PR runs on hosted runners can't reach it, so they leave it off.
+      sccache: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       # egui/winit/rfd.
       packages: >-
         libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
@@ -264,7 +268,7 @@ jobs:
     # A cold Windows build takes about an hour, and the watch ends when it does; `watch-minutes`
     # ends it before this limit.
     timeout-minutes: 120
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-trusted' || 'ubuntu-24.04' }}
     permissions:
       actions: write
     steps:
@@ -295,7 +299,7 @@ jobs:
     timeout-minutes: 60
     name: test (without heif)
     # The gate's runner: its cache entry is keyed on the OS.
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-trusted' || 'ubuntu-24.04' }}
     env:
       # The gate sets these; rust-cache hashes CARGO_* and RUST* variables into its key.
       CARGO_INCREMENTAL: 0
@@ -352,7 +356,7 @@ jobs:
     # restore and a download; a missing corpus fails the tests. The cache key changes only when a
     # pin or manifest does, so normally this restores in seconds (fork PRs read the base cache).
     name: corpus tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-trusted' || 'ubuntu-latest' }}
     env:
       # test-corpus builds with --release, but here without the release profile's thin LTO and
       # single codegen unit: they ran LTO over the dependency graph for each of the ~95 corpus test
@@ -393,7 +397,7 @@ jobs:
     # PRs run it only when web-relevant files change (see `platforms`); main always does.
     needs: platforms
     if: needs.platforms.outputs.web == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-trusted' || 'ubuntu-latest' }}
     env:
       # Match release.yml so PR results reflect what would actually ship.
       TRUNK_VERSION: 0.21.14
@@ -458,7 +462,7 @@ jobs:
     name: fuzz (${{ matrix.target.crate }}/${{ matrix.target.name }})
     # Placeholder: manual trigger only until a nightly schedule is enabled.
     if: github.event_name == 'workflow_dispatch' && inputs.fuzz
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-trusted' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -512,7 +516,7 @@ jobs:
 
   color-range-performance:
     if: inputs.color_range == true
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-trusted' || 'ubuntu-latest' }}
     timeout-minutes: 45
     env:
       RAYON_NUM_THREADS: "4"
@@ -545,7 +549,7 @@ jobs:
 
   selection-morphology:
     if: inputs.selection_morphology == true
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-trusted' || 'ubuntu-latest' }}
     timeout-minutes: 45
     env:
       RAYON_NUM_THREADS: "4"
@@ -616,7 +620,7 @@ jobs:
 
   selection-combining:
     if: inputs.selection_combining == true
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-trusted' || 'ubuntu-latest' }}
     timeout-minutes: 30
     env:
       RAYON_NUM_THREADS: "4"
@@ -643,7 +647,7 @@ jobs:
 
   brush-tip:
     if: inputs.brush_tip == true
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-trusted' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     env:
       RAYON_NUM_THREADS: "4"
@@ -687,7 +691,7 @@ jobs:
           path: brush-tip.txt
   dry-mixer:
     if: inputs.dry_mixer == true
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-trusted' || 'ubuntu-latest' }}
     timeout-minutes: 90
     env:
       RAYON_NUM_THREADS: "4"
