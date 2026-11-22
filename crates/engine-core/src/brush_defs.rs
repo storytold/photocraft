@@ -74,3 +74,7 @@ pub fn sampled_brush(cmd: &str, v: &[f32], w: usize, h: usize) -> Result<(BrushS
     let brush = BrushSettings { tip: TipShape::Sampled(tip).into(), size: tw.max(th) as f32, spacing: 0.25, pressure_size: false, ..BrushSettings::default() };
     Ok((brush, tw, th))
 }
+
+#[cfg(test)]
+#[path = "brush_defs_tests.rs"]
+mod brush_defs_tests;

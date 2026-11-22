@@ -1591,3 +1591,6 @@ mod define_brush_color_density_tests;
 
 #[cfg(test)]
 mod filter_mask_stroke_tests;
+
+#[cfg(test)]
+mod define_brush_size_limit_tests;
