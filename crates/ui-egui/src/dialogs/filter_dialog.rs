@@ -683,6 +683,10 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
     if command == "image.adjustments.colorLookup" && map.get("data").and_then(Value::as_str).is_some_and(str::is_empty) {
         map.remove("data");
     }
+    // The Input resolution row is display-only; sending it made dispatch reject the Bitmap command (#15255).
+    if command == "image.mode.bitmap" {
+        map.remove("inputResolution");
+    }
     if command == "image.mode.indexedColor" {
         // The matte colour row belongs to the "custom" choice, which the command takes as the colour itself.
         let color = map.remove(rows::MATTE_COLOR);
