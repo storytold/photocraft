@@ -1,7 +1,8 @@
 use super::manage::gray_document;
 use super::planes::{channel_format, edit_mode, next_alpha_name, plane_surface, read_plane, tone};
 use super::refs::{Blending, bad, doc_index, mask_plane, source, source_spec};
-use super::targeting::{Target, is_channel_target, is_spot_target, target_of, target_surface};
+use super::targeting::{Target, is_channel_target, is_spot_target, target, target_of, target_surface};
+use super::view::ChannelTarget;
 use super::{AlphaChannel, ColorMode, EngineError, Result, SelectionMode, Session, Value, json, sel};
 use photocraft_color::blend::blend_rgb;
 
@@ -162,6 +163,12 @@ pub(super) fn calculations(s: &mut Session, p: &Value) -> Result<Value> {
                 doc.channels.push(AlphaChannel::new(name, plane_surface(&out, area, fmt)));
                 Ok(doc.channels.len() - 1)
             })?;
+            // Like New Channel: the new channel is targeted and shown on its own, so a layer mask
+            // shown on the canvas goes away too.
+            target(s, ChannelTarget::Alpha(i));
+            if let Some(st) = s.active_mut() {
+                st.channel_view.layer_mask = None;
+            }
             Ok(json!({ "channel": i }))
         }
         "newDocument" => {
