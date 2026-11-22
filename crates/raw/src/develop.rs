@@ -1041,6 +1041,35 @@ mod tests {
     }
 
     #[test]
+    fn fused_bayer_ahd_matches_full_frame_across_odd_strip_boundaries() {
+        // Our in-code synthetic sensor is textured; this width yields 109-row bands, so
+        // successive strips include a different source CFA phase. Include the real sensor
+        // edges as well as the internal seams rather than trimming the compared output.
+        let (w, h) = (600, 350);
+        let mut s = test_sensor(w, h, crate::Cfa::bayer("RGGB"), 1);
+        s.color.calibrations.push(color::Calibration {
+            temperature: 6500.0,
+            color_matrix: [[0.61, 0.23, 0.16], [0.18, 0.73, 0.09], [0.07, 0.16, 0.77]],
+            forward_matrix: None,
+            camera_calibration: color::IDENTITY,
+        });
+        s.color.as_shot_neutral = Some([0.57, 1.0, 0.73]);
+        let opts = DevelopOptions { demosaic: Demosaic::Ahd, ..Default::default() };
+        for orientation in [1, 6] {
+            s.orientation = orientation;
+            let full = develop(&s, &opts, false).unwrap();
+            let fused = with_threads(3, || develop_sensor(&s, &opts).unwrap());
+            assert_eq!((fused.width, fused.height), (full.width, full.height));
+            assert_eq!(fused.rgb.len(), full.rgb.len());
+            let ow = full.width as usize;
+            let first_difference = full.rgb.as_chunks::<3>().0.iter().zip(fused.rgb.as_chunks::<3>().0).enumerate().find(|(_, (full, fused))| full != fused);
+            if let Some((p, (full, fused))) = first_difference {
+                panic!("orientation {orientation} at ({}, {}): expected {full:?}, got {fused:?}", p % ow, p / ow);
+            }
+        }
+    }
+
+    #[test]
     fn fused_development_matches_for_every_orientation_and_look() {
         use crate::Cfa;
         for orientation in 1..=8 {
