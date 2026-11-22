@@ -987,6 +987,25 @@ fn command_list_filter_finds_the_raw_commands_by_their_photoshop_name() {
     assert_eq!(label("edit.preferences.rawDefaults"), "RAW Defaults…");
 }
 
+/// `layer.moveTo` was labelled "Reorder Layer" until #11424 renamed it to "Move Layer to Target"
+/// (layer.translate already owns "Move Layer"). The filter still finds it by the former name,
+/// whole or shortened, so muscle memory and old notes keep working.
+#[test]
+fn command_list_filter_finds_layer_move_to_by_its_former_label() {
+    let mut s = Session::new();
+    let list = s.execute("command.list", json!({})).unwrap();
+    let rows = list.as_array().unwrap();
+    let found = |needle: &str| -> Vec<String> {
+        rows.iter().filter(|c| crate::commands::list_entry_matches(c, needle)).map(|c| c["id"].as_str().unwrap().to_string()).collect()
+    };
+    for needle in ["reorder", "Reorder Layer", "REORDER LAYER"] {
+        assert!(found(needle).contains(&"layer.moveTo".to_string()), "{needle}: {:?}", found(needle));
+    }
+    // The label itself is the new one; the keyword is not a label.
+    let label = rows.iter().find(|c| c["id"] == "layer.moveTo").unwrap()["label"].as_str().unwrap().to_string();
+    assert_eq!(label, "Move Layer to Target");
+}
+
 /// Every keyword entry names a real command, so a renamed id can't leave one behind.
 #[test]
 fn search_keywords_name_real_commands() {

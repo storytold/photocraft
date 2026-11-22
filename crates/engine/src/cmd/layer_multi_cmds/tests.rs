@@ -1932,6 +1932,38 @@ fn duplicating_one_linked_layer_keeps_the_copy_in_its_link_group() {
     assert_eq!((link_group(&s, a), link_group(&s, b), link_group(&s, c)), (group, group, None), "the originals keep their links");
 }
 
+/// #11424 review: the `layer.moveTo` params doc says the `target is not a group` error has one
+/// exception — a single layer made its own target through `layer`, without `copy`, returns null
+/// before the group check. Review read `into` as exempt only when `position` is omitted, so this
+/// pins the actual behaviour: an explicit `position: "into"` takes the same early return, because
+/// that return does not look at `position` at all.
+///
+/// The raster case is the one that proves the order: a raster layer is not a group, so if the
+/// `into` group check ever moved above the early return this would start failing with
+/// `target is not a group` instead of returning null. The group case alone cannot show that,
+/// which is why both are here.
+#[test]
+fn an_explicit_into_self_target_returns_null_before_the_group_check() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 20, "height": 20})).unwrap();
+    let group = LayerId(s.execute("layer.new.group", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap());
+    let raster = LayerId(s.execute("layer.new.layer", json!({"name": "R"})).unwrap()["layer"].as_u64().unwrap());
+
+    // `layer` selector, explicit `into`, the layer as its own target: null, not an error.
+    let r = s.execute("layer.moveTo", json!({"layer": group.0, "target": group.0, "position": "into"})).unwrap();
+    assert_eq!(r, Value::Null, "an explicit into self-target is a no-op");
+
+    // The same request on a non-group layer: still null, so the early return really is above
+    // the `into` group check. Without this case, reordering those two would go unnoticed.
+    let r = s.execute("layer.moveTo", json!({"layer": raster.0, "target": raster.0, "position": "into"})).unwrap();
+    assert_eq!(r, Value::Null, "a non-group self-target returns null, not `target is not a group`");
+
+    // The same request through `layers` reaches the descendant check instead, so the doc's
+    // "through `layer`, or through `layers` with an indexed target" is not redundant.
+    let err = s.execute("layer.moveTo", json!({"layers": [group.0], "target": group.0, "position": "into"})).unwrap_err();
+    assert!(format!("{err:?}").contains("cannot be one of the moved layers"), "{err:?}");
+}
+
 /// #11217 review: copy-dragging layers in the panel goes through `apply_move`, which must
 /// relink its copies the way Duplicate does: a lone copy joins its original's link group, a
 /// copied pair is linked to each other under a fresh group, not to the originals.
