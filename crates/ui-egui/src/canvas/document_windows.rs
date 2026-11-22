@@ -6,7 +6,9 @@ use craft::behavior::canvas::zoom::wrapped_canvas;
 use craft::behavior::kurbo::Size;
 use craft::ui::canvas::ToolHost;
 use craft::ui::contract::{ShowContainer as _, SizeLimits};
-use craft::ui::shell::{DocumentWindow, Wrapped};
+use craft::ui::runtime::windows::WindowHost;
+use craft::ui::shell::{DocumentWindow, Title, TitleBar, Wrapped};
+use craft::window::policy::Frame;
 use egui::{Rect, Vec2, vec2};
 use photocraft_doc::DocId;
 
@@ -74,8 +76,15 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let size = app.session.documents()[doc].doc.size;
         let doc_size = Size::new(f64::from(size.width), f64::from(size.height));
         let focused = app.session.active_index() == Some(doc);
+        let bar_title = {
+            let text = crate::canvas::tabs::tab_title_at(app, doc, start.zoom * 100.0);
+            if app.session.documents()[doc].is_dirty() { Title::unsaved(text) } else { Title::new(text) }
+        };
         let mut view = start.clone();
         let inner = DocumentWindow::new(title).first_placed(rect).overlay(|o| o.size_limits(SizeLimits::at_least(MIN_SIZE))).show(ui, |ui, cx| {
+            if window_title_bar(ui, bar_title.clone()) {
+                cx.request_close();
+            }
             // A second run of the body in one pass continues from the first run's view; the wrap rule
             // compares with the view the window started the pass with, so both runs file the same ask.
             let (after, canvas) = document_window_canvas(app, ui, id, doc, view.clone(), focused);
@@ -111,6 +120,19 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     for id in closed {
         close_window(app, id);
     }
+}
+
+/// The title bar of a floating document window with the app-drawn frame (`Frame::Integrated`, the default on Windows
+/// and Linux): the document's title, a move band and the caption buttons. `DocumentWindow` leaves that bar to its
+/// body there (#16415); without it the window could not be moved, minimized, maximized or closed. With the system's
+/// frame the OS draws the bar, and where OS windows are unavailable the fallback layer has its own title row, so
+/// nothing is drawn then. Returns whether the bar's Close was clicked.
+fn window_title_bar(ui: &mut egui::Ui, title: Title) -> bool {
+    let host = WindowHost::of(ui.ctx());
+    if !host.viewports_available() || matches!(host.frame(), Frame::Native) {
+        return false;
+    }
+    TitleBar::new().show_titled(ui, title, |_, _| {}, |_, _| {}).close_requested
 }
 
 /// The canvas of the document window `window` showing document `doc`, drawn in its own viewport.
