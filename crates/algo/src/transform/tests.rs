@@ -366,3 +366,38 @@ fn homography_is_identity() {
     assert!(!Homography([1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]).is_identity());
     assert!(!Homography([1.0, 0.1, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]).is_identity());
 }
+
+#[test]
+fn bicubic_reduction_keeps_source_edge_samples_and_ignores_pixels_outside_the_rect() {
+    let rect = Rect::new(-8, 6, 16, 22);
+    let half = Homography([0.5, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 1.0]);
+    let dst = Rect::new(-4, 3, 8, 11);
+    for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+        for alpha in [1.0, 0.25] {
+            let mut src = Surface::new(fmt);
+            src.fill_rect(rect, &[1.0, 0.0, 0.0, alpha]);
+            let inside = src.rgba(0, 8);
+            let clean = warp_surface(&src, rect, &half, Interp::Bicubic).unwrap();
+            src.fill_rect(Rect::new(rect.x1, rect.y0, rect.x1 + 3, rect.y1), &[0.0, 0.0, 1.0, 1.0]);
+            let with_extra = warp_surface(&src, rect, &half, Interp::Bicubic).unwrap();
+            assert_eq!(with_extra.read_region(dst), clean.read_region(dst), "{fmt:?} {alpha}");
+            for (x, y) in [(dst.x0, dst.y0), (dst.x1 - 1, dst.y1 - 1), (0, 6)] {
+                let pixel = clean.rgba(x, y);
+                assert!(pixel.iter().zip(inside).all(|(got, want)| (*got - want).abs() < 1e-6), "{fmt:?}: {pixel:?} at ({x},{y})");
+            }
+            assert_eq!(clean.rgba(dst.x1, 6)[3], 0.0);
+        }
+    }
+}
+
+#[test]
+fn bicubic_reduction_antialiases_fractional_placement_edges() {
+    let rect = Rect::new(0, 0, 9, 8);
+    let mut src = Surface::new(PixelFormat::RGBA32F);
+    src.fill_rect(rect, &[1.0, 0.0, 0.0, 1.0]);
+    let half = Homography([0.5, 0.0, 0.25, 0.0, 0.5, 0.0, 0.0, 0.0, 1.0]);
+    let out = warp_surface(&src, rect, &half, Interp::Bicubic).unwrap();
+    for (x, expected) in [(0, 0.75), (1, 1.0), (3, 1.0), (4, 0.75), (5, 0.0)] {
+        assert!((out.rgba(x, 2)[3] - expected).abs() < 1e-6, "alpha at x={x}: {:?}", out.rgba(x, 2));
+    }
+}

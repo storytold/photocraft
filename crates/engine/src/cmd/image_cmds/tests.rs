@@ -1289,3 +1289,27 @@ fn trim_and_duplicate_merged_on_too_large_document_fail_gracefully_without_panic
     assert_eq!(doc(&s).bounds(), initial_bounds, "canvas size unchanged after failed duplicate");
     assert_eq!(s.active().unwrap().revision, initial_rev, "revision unchanged after failed duplicate");
 }
+
+#[test]
+fn nearest_resize_keeps_an_opaque_smart_objects_canvas_border() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 2048, "height": 2048, "background": "#8080ff"})).unwrap();
+    s.execute("layer.new.layerFromBackground", json!({})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let alpha = |s: &Session, x, y| doc(s).layers[0].surface().unwrap().rgba(x, y)[3];
+    assert_eq!(alpha(&s, 2047, 1024), 1.0, "the source reaches the right edge");
+    s.execute("image.imageSize", json!({"width": 1024, "height": 1024, "resample": "nearest"})).unwrap();
+    assert_eq!(doc(&s).size, Size::new(1024, 1024));
+    assert!(matches!(doc(&s).layers[0].content, LayerContent::Smart(_)));
+    let samples = [(0, 512), (1023, 512), (512, 0), (512, 1023), (1023, 1023), (512, 512)];
+    for (x, y) in samples {
+        assert_eq!(alpha(&s, x, y), 1.0, "alpha at ({x},{y})");
+    }
+
+    let png = photocraft_io::export(doc(&s), "texture.png", &Default::default()).unwrap();
+    let reopened = photocraft_io::import("texture.png", &png.bytes).unwrap().document;
+    let surface = reopened.layers[0].surface().unwrap();
+    for (x, y) in samples {
+        assert_eq!(surface.rgba(x, y)[3], 1.0, "exported alpha at ({x},{y})");
+    }
+}

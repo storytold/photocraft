@@ -1187,28 +1187,27 @@ fn smart_object_curves_preview_keeps_its_size_on_a_reduced_proxy() {
     let shown = preview_document(&doc, Some(layer), "image.adjustments.curves", &params, k).unwrap();
     let full = preview_document(&doc, Some(layer), "image.adjustments.curves", &params, 1).unwrap();
     let photocraft_doc::LayerContent::Smart(full_sm) = &full.layer(layer).unwrap().content else { panic!("a smart object") };
-    let reference = photocraft_algo::resample::resize_surface(full_sm.cache.as_ref().unwrap(), 0.25, 0.25, photocraft_algo::resample::Resample::Bicubic);
+    let full_surface = full_sm.cache.as_ref().unwrap();
+    let reference = photocraft_algo::resample::resize_surface_in_canvas(
+        full_surface,
+        0.25,
+        0.25,
+        photocraft_algo::resample::Resample::Bicubic,
+        full_surface.content_bounds(),
+    );
     let photocraft_doc::LayerContent::Smart(sm) = &shown.layer(layer).unwrap().content else { panic!("a smart object") };
     assert_eq!(sm.smart_filters.len(), 1, "the preview adds the Curves smart filter");
     assert_eq!(shown.size, crate::proxy::proxy_document(&doc, k).size);
-    // The 16 px square at (16, 16) is a 4 px square at (4, 4) on the proxy, not 16 px at (16, 16).
-    // Bicubic reduction blends the square's boundary with transparency; compare all alpha
-    // values with a reduced full-size result, and require opacity only in the interior.
+    // The 16 px square at (16, 16) covers exactly 4 × 4 pixels at (4, 4) on the proxy.
+    // The reference extends the boundary samples while filtering the pixel-aligned square.
     for y in 0..shown.size.height as i32 {
         for x in 0..shown.size.width as i32 {
             let expected = reference.pixel(x, y).last().copied().unwrap();
             let actual = alpha(&shown, x, y);
             assert!((actual - expected).abs() <= 1.0 / 255.0, "({x}, {y}): alpha {actual}, expected {expected}");
+            let covered = (4..8).contains(&x) && (4..8).contains(&y);
+            assert_eq!(actual, if covered { 1.0 } else { 0.0 }, "square coverage at ({x}, {y})");
         }
-    }
-    for (x, y) in [(5, 5), (5, 6), (6, 6)] {
-        assert!(alpha(&shown, x, y) > 0.99, "({x}, {y}) is inside the reduced square");
-    }
-    for (x, y) in [(4, 4), (7, 7)] {
-        assert!(alpha(&shown, x, y) > 0.5, "({x}, {y}) is a corner of the reduced square");
-    }
-    for (x, y) in [(2, 2), (9, 9), (12, 12), (15, 15)] {
-        assert!(alpha(&shown, x, y) < 0.01, "({x}, {y}) is outside the reduced square");
     }
 }
 
