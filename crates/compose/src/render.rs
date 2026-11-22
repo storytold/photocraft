@@ -380,6 +380,8 @@ pub fn render_layer(layer: &Layer, rect: Rect) -> Buffer {
             tone_luts: prepare_tones(std::slice::from_ref(layer), 0),
             doc: None,
             layer_keys: Default::default(),
+            icc_profile: None,
+            gray: Default::default(),
         },
         advanced::Scope::ROOT,
     );
