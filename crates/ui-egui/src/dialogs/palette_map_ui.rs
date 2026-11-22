@@ -27,19 +27,26 @@ const OWNED_KEYS: [&str; 3] = ["paletteId", "paletteSnapshot", "mapping"];
 pub(crate) struct RowGestures;
 
 /// Draw a menu of `options` (`id`, label) at `width`, keeping the id in `value`. The label is drawn
-/// by the caller; the response reports a selection as changed.
+/// by the caller; the response reports a selection as changed. A popup menu rather than egui's
+/// `ComboBox`: that type is disallowed (its menu can't grow back while open, egui#5225).
 pub(crate) fn dropdown<L: AsRef<str>>(ui: &mut Ui, id_salt: &str, _label: &str, value: &mut String, options: &[(String, L)], width: f32) -> egui::Response {
     let selected = options.iter().find(|(id, _)| id == value).map(|(_, label)| label.as_ref().to_owned()).unwrap_or_else(|| value.clone());
     let before = value.clone();
-    let mut response = egui::ComboBox::from_id_salt(id_salt).width(width).selected_text(selected).show_ui(ui, |ui| {
-        for (id, label) in options {
-            ui.selectable_value(value, id.clone(), label.as_ref());
-        }
-    });
+    let mut response = ui
+        .push_id(id_salt, |ui| {
+            ui.menu_button(selected, |ui| {
+                ui.set_min_width(width);
+                for (id, label) in options {
+                    ui.selectable_value(value, id.clone(), label.as_ref());
+                }
+            })
+        })
+        .inner
+        .response;
     if *value != before {
-        response.response.mark_changed();
+        response.mark_changed();
     }
-    response.response
+    response
 }
 
 /// A label, a slider and its number field on one row. `extra` is kept for the schema rows' trailing
@@ -154,8 +161,10 @@ pub(crate) fn opening_fields(app: &PhotocraftApp, command: &str) -> Map<String, 
 /// Keeps the palette choices with the dialog's last-used values after a successful run.
 pub(crate) fn remember(app: &mut PhotocraftApp, command: &str, fields: &DialogFields) {
     let values = dialog_values(fields);
-    let saved: Vec<(String, Value)> =
-        OWNED_KEYS.iter().filter_map(|key| values.get(*key).filter(|value| valid_palette_widget_value(key, value)).map(|value| ((*key).to_owned(), value.clone()))).collect();
+    let saved: Vec<(String, Value)> = OWNED_KEYS
+        .iter()
+        .filter_map(|key| values.get(*key).filter(|value| valid_palette_widget_value(key, value)).map(|value| ((*key).to_owned(), value.clone())))
+        .collect();
     app.session.edit_prefs(|prefs| {
         let entry = prefs.dialogs.entry(command.to_owned()).or_insert_with(|| json!({}));
         if let Some(object) = entry.as_object_mut() {
@@ -554,17 +563,17 @@ fn draw_method_advanced_controls(ui: &mut Ui, settings: &mut Settings) {
     match settings.method {
         Method::Bayer | Method::ClusteredDot => {
             let mut n = settings.matrix_size.clamp(2, 16) as f32;
-            if slider_row_with(ui, "Matrix", &mut n, 2.0..=16.0, "", None, RowGestures::default()).changed() {
+            if slider_row_with(ui, "Matrix", &mut n, 2.0..=16.0, "", None, RowGestures).changed() {
                 settings.matrix_size =
                     [2, 4, 8, 16].into_iter().min_by_key(|candidate| (i32::from(*candidate as i16) - i32::from(n.round() as i16)).unsigned_abs()).unwrap_or(4);
             }
             let mut scale = settings.scale.clamp(1, 64) as f32;
-            slider_row_with(ui, "Scale", &mut scale, 1.0..=64.0, "px", None, RowGestures::default());
+            slider_row_with(ui, "Scale", &mut scale, 1.0..=64.0, "px", None, RowGestures);
             settings.scale = scale.round().clamp(1.0, 64.0) as u32;
         }
         Method::BlueNoise | Method::WhiteNoise => {
             let mut scale = settings.scale.clamp(1, 64) as f32;
-            slider_row_with(ui, "Scale", &mut scale, 1.0..=64.0, "px", None, RowGestures::default());
+            slider_row_with(ui, "Scale", &mut scale, 1.0..=64.0, "px", None, RowGestures);
             settings.scale = scale.round().clamp(1.0, 64.0) as u32;
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Seed")).color(t.text_dim));
@@ -579,11 +588,11 @@ fn draw_method_advanced_controls(ui: &mut Ui, settings: &mut Settings) {
         }
         Method::Riemersma => {
             let mut history = settings.history as f32;
-            if slider_row_with(ui, "History", &mut history, 1.0..=64.0, "px", None, RowGestures::default()).changed() {
+            if slider_row_with(ui, "History", &mut history, 1.0..=64.0, "px", None, RowGestures).changed() {
                 settings.history = history.round().clamp(1.0, 64.0) as u32;
             }
             let mut decay = settings.decay * 100.0;
-            if slider_row_with(ui, "Decay", &mut decay, 0.0..=100.0, "%", None, RowGestures::default()).changed() {
+            if slider_row_with(ui, "Decay", &mut decay, 0.0..=100.0, "%", None, RowGestures).changed() {
                 settings.decay = (decay / 100.0).clamp(0.0, 1.0);
             }
         }
@@ -751,13 +760,8 @@ fn import_error(app: &mut PhotocraftApp, id: DialogId, error: String) {
 /// Answers the palette browser's Import buttons and threshold-matrix Import requests: a per-frame pass
 /// over the open Palette Map dialogs, as the rows themselves cannot open a file picker.
 pub(crate) fn poll(app: &mut PhotocraftApp) {
-    let ids: Vec<DialogId> = app
-        .framework
-        .dialogs
-        .open_dialogs()
-        .into_iter()
-        .filter_map(|open| (open.key.as_deref() == Some(FILTER_COMMAND)).then_some(open.id))
-        .collect();
+    let ids: Vec<DialogId> =
+        app.framework.dialogs.open_dialogs().into_iter().filter_map(|open| (open.key.as_deref() == Some(FILTER_COMMAND)).then_some(open.id)).collect();
     for id in ids {
         let Some(values) = open_dialog_values(app, id) else { continue };
         if let Some(index) = values.get("__paletteMatrixImport").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()) {

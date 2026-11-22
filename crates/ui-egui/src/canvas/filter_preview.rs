@@ -143,7 +143,12 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
                 // the factor, #10474), it has a frame to show (an empty one would blank a good
                 // preview), and it must not displace a frame that is already exact for the dialog,
                 // which is what a slider dragged out and back would otherwise make the canvas do.
-                Ok(computed) if !palette_map && same_target(app, &finished) && computed.result.is_some() && !app.filter_preview.as_ref().is_some_and(|p| p.key == request) => {
+                Ok(computed)
+                    if !palette_map
+                        && same_target(app, &finished)
+                        && computed.result.is_some()
+                        && !app.filter_preview.as_ref().is_some_and(|p| p.key == request) =>
+                {
                     publish_filter_preview(app, idx, finished, computed.result, computed.ms);
                 }
                 Ok(_) => {}
