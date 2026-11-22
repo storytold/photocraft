@@ -901,3 +901,38 @@ row = "Free Transform drag update, 2 layers on 24 MP: scale through mip levels"
 metric = "max"
 budget_ms = 16
 enforce = true  # #11103: max 43.2 ms before (a mip level built in the frame), 0.09 ms after (2026-11-11)
+
+# ---- #15465: Pen cursor after the shared framework migration ----------------------------------
+
+[[bench]]
+name = "pen_cursor_bench"
+package = "photocraft-ui-egui"
+quick_args = ["--quick"]
+note = "Pen hover through the shared canvas host at 125% pixel density: native image generation and reuse, plus painted fallback; CPU frame without OS cursor upload or GPU presentation"
+
+[[scenario]]
+id = "P92"
+title = "Pen native cursor generation at 125% pixel density"
+issue = 15465
+bench = "pen_cursor_bench"
+row = "Pen native cursor, cold"
+budget_ms = 2.0
+enforce = false  # advisory until measured on the nightly runner
+
+[[scenario]]
+id = "P93"
+title = "Pen native cursor movement at 125% pixel density"
+issue = 15465
+bench = "pen_cursor_bench"
+row = "Pen native cursor, warm"
+budget_ms = 0.25
+enforce = false  # advisory until measured on the nightly runner
+
+[[scenario]]
+id = "P94"
+title = "Pen painted cursor movement at 125% pixel density"
+issue = 15465
+bench = "pen_cursor_bench"
+row = "Pen painted cursor"
+budget_ms = 0.25
+enforce = false  # advisory until measured on the nightly runner

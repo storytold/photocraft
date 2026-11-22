@@ -4,10 +4,15 @@
 use std::cell::RefCell;
 
 use craft::behavior::PressPhase;
+use craft::behavior::dock::Arrangement;
+use craft::ui::bars::{Bar, BarKind};
 use craft::ui::canvas::{SplitAt, SplitViews};
-use craft::ui::contract::{Bind, ShowContainer as _};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft::ui::display::{Elide, Text};
 use craft::ui::docking::Arranged;
 use craft::ui::shell::CanvasPanel;
+use craft::ui::style::StyleCx;
+use craft::ui::tabs::{Tab, TabPartEvent};
 use egui::Rect;
 
 use super::document_display::CanvasHost;
@@ -34,7 +39,7 @@ pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// docked group `i` of `app.ui.document_windows`, showing that group's shown document, in the rect `SplitViews`
 /// places it in with the dividers at `app.ui.split_at`. `None` with no arrangement or fewer than two docked groups:
 /// the single canvas fills the area.
-pub(crate) fn arranged_cells(app: &PhotocraftApp, rect: Rect) -> Option<Vec<(usize, Rect)>> {
+pub(super) fn arranged_panes(app: &PhotocraftApp, rect: Rect) -> Option<Vec<(usize, Rect)>> {
     let windows = &app.ui.document_windows;
     let layout = windows.arrangement?;
     let count = windows.docked.len();
@@ -55,6 +60,46 @@ pub(crate) fn arranged_cells(app: &PhotocraftApp, rect: Rect) -> Option<Vec<(usi
     )
 }
 
+/// The arranged canvases' display and drop areas, inside any title and status bars.
+pub(crate) fn arranged_cells(app: &PhotocraftApp, rect: Rect) -> Option<Vec<(usize, Rect)>> {
+    let mut panes = arranged_panes(app, rect)?;
+    if app.ui.document_windows.arrangement == Some(Arrangement::Tile) {
+        let heights = tile_bar_heights(app);
+        for (_, pane) in &mut panes {
+            *pane = TilePane::new(*pane, heights).canvas;
+        }
+    }
+    Some(panes)
+}
+
+fn tile_bar_heights(app: &PhotocraftApp) -> (f32, f32) {
+    StyleCx::with_root(app.ctx(), |cx| {
+        let size = &cx.tokens.size.bar;
+        let title = if app.session.prefs().workspace.large_tabs { size.title } else { size.tab };
+        (title, size.status)
+    })
+}
+
+/// Tile chrome takes its own rows so it is outside the tools and drop targets of the canvas.
+struct TilePane {
+    title: Rect,
+    canvas: Rect,
+    status: Rect,
+}
+
+impl TilePane {
+    fn new(pane: Rect, (title, status): (f32, f32)) -> Self {
+        // With an exceptionally short pane, preserve a canvas before adding either full-height bar.
+        let top = pane.top() + if pane.height() > title { title } else { 0.0 };
+        let bottom = pane.bottom() - if pane.bottom() - top > status { status } else { 0.0 };
+        Self {
+            title: Rect::from_x_y_ranges(pane.x_range(), pane.top()..=top),
+            canvas: Rect::from_x_y_ranges(pane.x_range(), top..=bottom),
+            status: Rect::from_x_y_ranges(pane.x_range(), bottom..=pane.bottom()),
+        }
+    }
+}
+
 /// Tell the GPU canvas which documents are on screen (the arranged panes or the main canvas's, plus the shown
 /// document of every floating window): they split the display texture budget, and the textures of the others are
 /// freed first. Only a change of that set (or a document's size) re-splits it, so switching between shown documents
@@ -62,7 +107,7 @@ pub(crate) fn arranged_cells(app: &PhotocraftApp, rect: Rect) -> Option<Vec<(usi
 pub(crate) fn publish_shown(app: &PhotocraftApp) {
     let Some(gpu) = &app.gpu else { return };
     let docs = app.session.documents();
-    let mut shown: Vec<usize> = match arranged_cells(app, app.last_canvas_rect) {
+    let mut shown: Vec<usize> = match arranged_panes(app, app.last_canvas_rect) {
         Some(cells) => cells.into_iter().map(|(d, _)| d).collect(),
         None => main_canvas_document(app).into_iter().collect(),
     };
@@ -151,24 +196,67 @@ fn arranged(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: Rect, active: usiz
             group.shown = Some(active_id);
         }
     }
-    let Some(cells) = arranged_cells(app, rect) else { return false };
+    let Some(panes) = arranged_panes(app, rect) else { return false };
+    let heights = (layout == Arrangement::Tile).then(|| tile_bar_heights(app));
     let count = app.ui.document_windows.docked.len();
     let active_pane = app.ui.document_windows.docked.iter().position(|group| group.shown == Some(active_id)).unwrap_or(0);
     let shown: Vec<Option<usize>> = app.ui.document_windows.docked.iter().map(|group| group.shown.and_then(|id| document_index(app, id))).collect();
     // The panes are laid out from the dividers as this pass starts; an edit of them lands after the pass.
     let mut at = app.ui.split_at.clone();
     let out = SplitViews::new(tl!("Documents"), layout, Bind::bound(&mut at)).count(count).active(active_pane).show(ui, |ui, _| {
-        for &(d, cell) in &cells {
+        for &(d, pane) in &panes {
             let view = app.ui.views[d].clone();
-            let (v, _) = canvas_view(app, ui, CanvasHost::main(d), cell, view, d == active);
+            let tile = heights.map(|heights| TilePane::new(pane, heights));
+            let canvas = tile.as_ref().map_or(pane, |tile| tile.canvas);
+            let (v, _) = canvas_view(app, ui, CanvasHost::main(d), canvas, view, d == active);
+            if let Some(tile) = &tile
+                && tile.status.height() > 0.0
+            {
+                let id = app.session.documents()[d].doc.id;
+                let zoom = format!("{}%", super::fmt_zoom(v.zoom * 100.0));
+                Bar::new("", BarKind::Status).id_salt(("tile-status", id)).show_at(ui, tile.status, |ui, _| {
+                    Text::new(zoom.clone()).elide(Elide::End).show(ui);
+                });
+            }
             if d != active {
                 app.ui.views[d] = v;
             }
         }
     });
     app.ui.split_at = at;
-    if let Some(d) = out.output.activated.and_then(|pane| shown.get(pane).copied().flatten()) {
+    let mut selected = out.output.activated.and_then(|pane| shown.get(pane).copied().flatten());
+    let mut closing = Vec::new();
+    if let Some(heights) = heights {
+        // SplitViews places a hit surface above each inactive canvas to handle its first press.
+        // Title controls are siblings above those surfaces so Close works even on an inactive tile.
+        for &(d, pane) in &panes {
+            let title = TilePane::new(pane, heights).title;
+            if title.height() <= 0.0 {
+                continue;
+            }
+            let doc = &app.session.documents()[d];
+            let label = tabs::tab_title_at(app, d, app.ui.views[d].zoom * 100.0);
+            let mut tab = Tab::new(label).id_salt(("tile-title", doc.doc.id)).selected(d == active);
+            if app.session.prefs().workspace.large_tabs {
+                tab = tab.large();
+            }
+            if doc.is_dirty() {
+                tab = tab.modified();
+            }
+            let out = tab.show_at(ui, title);
+            if matches!(out.event, Some(TabPartEvent::Close)) {
+                closing.push(doc.doc.id);
+            } else if out.response.clicked() {
+                selected = Some(d);
+            }
+        }
+    }
+    if let Some(d) = selected {
         app.session.set_active(d);
+    }
+    // A clean document can leave the session immediately, so close only after the pane indices were used.
+    for id in closing {
+        tabs::close_document(app, ui.ctx(), id);
     }
     true
 }

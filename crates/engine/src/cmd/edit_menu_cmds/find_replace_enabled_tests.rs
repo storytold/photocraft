@@ -54,7 +54,7 @@ fn find_replace_empty_document_without_an_active_layer_is_a_noop() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
     let st = s.active_mut().unwrap();
-    Arc::make_mut(&mut st.doc).layers.clear();
+    Arc::make_mut(st.doc_mut()).layers.clear();
     st.active_layer = None;
     st.selected_layers.clear();
     assert!(s.is_enabled(COMMAND));

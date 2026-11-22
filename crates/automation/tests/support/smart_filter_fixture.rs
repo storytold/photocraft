@@ -1,6 +1,6 @@
 //! The smart filter authorization tests' fixture: a workspace with a striped image to place and
-//! maps and LUTs outside it (`#[path]`-included by `it/smart_filter_authorization.rs` and
-//! `smart_filter_stack_cache.rs`).
+//! maps and LUTs outside it (`#[path]`-included once by `it/main.rs`, used by
+//! `smart_filter_authorization` and `smart_filter_stack_cache`).
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 

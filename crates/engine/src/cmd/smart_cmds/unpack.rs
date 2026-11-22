@@ -33,7 +33,7 @@ fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: 
         crate::image_cmds::convert_layers_depth(&mut src.layers, doc.depth);
     }
     let background_id = src.background().map(|l| l.id);
-    let mut layers = std::mem::take(&mut src.layers);
+    let mut layers = std::mem::take(&mut *src.layers);
     for l in &mut layers {
         if Some(l.id) == background_id {
             l.name = "Layer 0".into();

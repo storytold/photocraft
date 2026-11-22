@@ -77,7 +77,7 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
         let mut only = l.clone();
         only.visible = true;
         only.clipped = false;
-        one.layers = vec![only];
+        one.layers = vec![only].into();
         if trim {
             let mut bounds = Rect::EMPTY;
             let _ = photocraft_compose::render_bands(&one, one.bounds(), 0, |band| -> std::result::Result<(), ()> {
@@ -96,8 +96,11 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
             }
         }
 
+        // PNG file names use dashes for spaces (measured); the other formats keep them.
+        let part = |text: &str| if format == "png" { sanitize(text).replace(' ', "-") } else { sanitize(text) };
         // The prefix is optional; only the layer name needs the empty-name fallback.
-        let name = format!("{}_{:04}_{}.{format}", if prefix.is_empty() { String::new() } else { sanitize(&prefix) }, index, sanitize(&l.name));
+        let prefix_part = if prefix.is_empty() { String::new() } else { part(&prefix) };
+        let name = format!("{prefix_part}_{:04}_{}.{format}", index, part(&l.name));
         let (bytes, _warnings) = encode(&one, &name, save)?;
         write(&name, &bytes)?;
         report.files.push(name);
@@ -186,10 +189,181 @@ fn bake_cube_layers(size: usize, title: &str, layers: &[&Layer], depth: photocra
     craft_cms::lutfile::write_cube_export("PhotoCraft", title, n, !matches!(depth, photocraft_color::SampleType::F32), rows)
 }
 
-/// Backwards-compatible helper for exporting all visible top-level adjustments.
-pub fn bake_cube(doc: &Document, size: usize, title: &str) -> String {
+/// How the refusal of a canvas too small for the lattice begins ([`bake_cube`] keeps the adjustment table for it alone).
+const CANVAS_TOO_SMALL: &str = "the canvas is too small";
+
+/// Most renders [`bake_cube_stack`] makes: a canvas far smaller than the lattice needs one pass
+/// per lattice entry sharing a pixel, and the bake refuses rather than run for minutes.
+const MAX_STACK_RENDERS: usize = 1 << 16;
+
+/// Most 256 × 256 tiles one render's lattice surface may hold (64 MiB as F32 RGBA).
+const MAX_LATTICE_TILES: usize = 64;
+
+/// A lattice entry in [`bake_cube_stack`]: its lattice column (`b·n + r`), row (`g`) and the
+/// canvas pixel it is laid on.
+type LatticeEntry = (usize, usize, (usize, usize));
+
+/// The canvas pixel lattice entry (`c`, `g`) is laid on, for an `n`-point table on a `w` × `h` canvas.
+/// 64-bit products: `c * w` overflows `usize` on a 32-bit target (wasm32) for a wide canvas and would
+/// read the wrong pixel. The quotients are below `w` and `h`, so they fit back.
+fn lattice_pos(n: usize, w: usize, h: usize, c: usize, g: usize) -> (usize, usize) {
+    let cols = (n * n) as u64;
+    ((c as u64 * w as u64 / cols) as usize, (g as u64 * h as u64 / n as u64) as usize)
+}
+
+/// How many renders a whole-stack bake needs: a pass renders one entry per canvas pixel, so a pixel
+/// shared by `k` entries is in `k` passes, and a row is rendered once per pass that reaches it, the
+/// most any of its pixels share. Counted from the entries per pixel alone, so a request over the
+/// limit costs no pass allocation.
+fn stack_render_rows(n: usize, w: usize, h: usize) -> usize {
+    let mut shared: std::collections::HashMap<(usize, usize), usize> = std::collections::HashMap::new();
+    for g in 0..n {
+        for c in 0..n * n {
+            *shared.entry(lattice_pos(n, w, h, c, g)).or_insert(0) += 1;
+        }
+    }
+    let mut per_row: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for (&(_, y), &k) in &shared {
+        let m = per_row.entry(y).or_insert(0);
+        *m = (*m).max(k);
+    }
+    per_row.values().sum()
+}
+
+/// A sample written into the lattice surface allocates its whole tile (1 MiB as F32 RGBA), so a pass
+/// whose entries lie in many tiles of a huge canvas (35937 samples at 33 points, one tile each, is 35
+/// GiB) is cut into chunks of at most [`MAX_LATTICE_TILES`] tiles, each rendered on its own. Entries
+/// are in row order, so a chunk is a run of one row.
+fn split_by_tiles(passes: Vec<Vec<LatticeEntry>>) -> Vec<Vec<LatticeEntry>> {
+    let tile = photocraft_geom::TILE_SIZE as usize;
+    let mut chunks: Vec<Vec<LatticeEntry>> = Vec::new();
+    for pass in passes {
+        let mut tiles = std::collections::HashSet::new();
+        let mut current: Vec<LatticeEntry> = Vec::new();
+        for e in pass {
+            let t = (e.2.0 / tile, e.2.1 / tile);
+            if !tiles.contains(&t) && tiles.len() >= MAX_LATTICE_TILES {
+                chunks.push(std::mem::take(&mut current));
+                tiles.clear();
+            }
+            tiles.insert(t);
+            current.push(e);
+        }
+        if !current.is_empty() {
+            chunks.push(current);
+        }
+    }
+    chunks
+}
+
+/// The visible layers above the Background that a whole-stack table bakes (#13742).
+fn stack_layers(doc: &Document) -> Vec<&Layer> {
+    let bg = doc.background().map(|l| l.id);
+    doc.layers.iter().filter(|l| l.visible && Some(l.id) != bg).collect()
+}
+
+/// Bake the document's whole visible stack, as the reference application does (#13742): the
+/// lattice image takes the place of the Background's pixels, laid out over the canvas (lattice
+/// column `b·n + r`, row `g`, stretched to the canvas size; each entry is read at its block's first
+/// pixel), and every visible layer above it is composited over it as the document renders, with
+/// opacity, blend mode, masks and clipping. A canvas smaller than the lattice takes several
+/// passes. Only the rows holding entries are rendered, so a huge canvas stays cheap.
+fn bake_cube_stack(size: usize, title: &str, doc: &Document) -> Result<String> {
+    const CMD: &str = "file.export.colorLookupTables";
+    let n = size;
+    let (w, h) = (doc.size.width as usize, doc.size.height as usize);
+    if w == 0 || h == 0 {
+        return Err(EngineError::BadParams { cmd: CMD.into(), msg: "the canvas is empty".into() });
+    }
+    let cols = n * n;
+    let at = |c: usize, g: usize| lattice_pos(n, w, h, c, g);
+    let too_many =
+        || EngineError::BadParams { cmd: CMD.into(), msg: format!("{CANVAS_TOO_SMALL} for a {n}-point table; use fewer grid points or a larger canvas") };
+    // The work limit is checked from the entries-per-pixel counts, before any pass is allocated.
+    if stack_render_rows(n, w, h) > MAX_STACK_RENDERS {
+        return Err(too_many());
+    }
+    // Entries sharing a canvas pixel go to successive passes.
+    let mut seen = std::collections::HashMap::new();
+    let mut passes: Vec<Vec<LatticeEntry>> = Vec::new();
+    for g in 0..n {
+        for c in 0..cols {
+            let pos = at(c, g);
+            let k = seen.entry(pos).or_insert(0usize);
+            if passes.len() <= *k {
+                passes.push(Vec::new());
+            }
+            passes[*k].push((c, g, pos));
+            *k += 1;
+        }
+    }
+    let passes = split_by_tiles(passes);
+    let rows: usize = passes.iter().map(|p| p.iter().map(|e| e.2.1).collect::<std::collections::BTreeSet<_>>().len()).sum();
+    if rows > MAX_STACK_RENDERS {
+        return Err(too_many());
+    }
+    let step = 1.0 / (n - 1) as f32;
+    let colour = |c: usize, g: usize| [(c % n) as f32 * step, g as f32 * step, (c / n) as f32 * step];
+    // The lattice and the composite in floating point, whatever the document's depth: the
+    // reference's tables of 8-bit documents are exact to their 1/32768 steps (mid grey is 0.5).
+    let depth = photocraft_color::SampleType::F32;
+    let fmt = photocraft_color::PixelFormat::new(ColorMode::Rgb, depth, true);
+    let mut out = vec![[0.0f32; 3]; cols * n];
+    for pass in &passes {
+        let mut surf = Surface::new(fmt);
+        for &(c, g, (x, y)) in pass {
+            let rgb = colour(c, g);
+            // A tile that cannot be allocated is an error of this export, not an abort.
+            surf.try_write_region(
+                Rect::new(x as i32, y as i32, x as i32 + 1, y as i32 + 1),
+                &photocraft_raster::from_rgba(&fmt, [rgb[0], rgb[1], rgb[2], 1.0]),
+            )?;
+        }
+        let mut grid = doc.clone();
+        grid.selection = None;
+        grid.depth = depth;
+        let lattice = Layer::new("Lattice", LayerContent::Raster(surf));
+        match grid.layers.iter().position(|l| Some(l.id) == doc.background().map(|b| b.id)) {
+            Some(i) => {
+                // The lattice takes the Background's place and its identity (locked transparency and position), so a
+                // deep-knockout layer above it still knocks out to the lattice.
+                let mut lattice = lattice;
+                lattice.locks = grid.layers[i].locks;
+                grid.layers[i] = lattice;
+            }
+            None => grid.layers.insert(0, lattice),
+        }
+        let ys: std::collections::BTreeSet<usize> = pass.iter().map(|e| e.2.1).collect();
+        for y in ys {
+            let band = photocraft_compose::render(&grid, Rect::new(0, y as i32, w as i32, y as i32 + 1));
+            for &(c, g, (x, _)) in pass.iter().filter(|e| e.2.1 == y) {
+                let px = band.px[x];
+                out[g * cols + c] = [px[0], px[1], px[2]];
+            }
+        }
+    }
+    // The shared writer owns CUBE syntax and precision; red changes fastest, then green, then blue.
+    let rows = (0..n).flat_map(|b| (0..n).flat_map(move |g| (0..n).map(move |r| (b, g, r)))).map(|(b, g, r)| out[g * cols + b * n + r]);
+    Ok(craft_cms::lutfile::write_cube_export("PhotoCraft", title, n, !matches!(doc.depth, photocraft_color::SampleType::F32), rows))
+}
+
+/// The table `file.export.colorLookupTables` bakes by default: the whole visible stack of an RGB
+/// document (#13742). Other modes, and a canvas too small for the lattice (the bake's own refusal),
+/// keep the earlier table of the visible top-level adjustments; any other error of the stack bake,
+/// an allocation failure included, is returned rather than hidden behind that table.
+pub fn bake_cube(doc: &Document, size: usize, title: &str) -> Result<String> {
+    let size = size.clamp(2, craft_cms::lutfile::MAX_SIZE);
+    if doc.mode == ColorMode::Rgb {
+        match bake_cube_stack(size, title, doc) {
+            Ok(cube) => return Ok(cube),
+            // Only the work-limit refusal (a canvas too small for the lattice) falls back: an empty canvas, an
+            // allocation failure and the rest are the caller's.
+            Err(EngineError::BadParams { msg, .. }) if msg.starts_with(CANVAS_TOO_SMALL) => {}
+            Err(e) => return Err(e),
+        }
+    }
     let layers: Vec<&Layer> = doc.layers.iter().filter(|l| l.visible && matches!(l.content, LayerContent::Adjustment(_))).collect();
-    bake_cube_layers(size.clamp(2, craft_cms::lutfile::MAX_SIZE), title, &layers, doc.depth)
+    Ok(bake_cube_layers(size, title, &layers, doc.depth))
 }
 
 /// Export either the whole visible stack (backward-compatible default), the Layers panel's
@@ -224,14 +398,19 @@ pub(super) fn color_lookup_tables(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Some(out)
     } else if scope == "selected" {
-        Some(d.selected_layers())
+        Some(d.selected_layers().to_vec())
     } else {
         None
     };
-    let layers = lut_layers(&d.doc, explicit.as_deref())?;
-    let count = layers.len();
     let title = p.get("title").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
-    let cube = bake_cube_layers(size as usize, &title, &layers, d.doc.depth);
+    // The default bakes the whole visible stack of an RGB document (#13742); an explicit list or
+    // the selection, and other modes, keep the adjustment-only table.
+    let (cube, count) = if explicit.is_none() && d.doc.mode == ColorMode::Rgb {
+        (bake_cube_stack(size as usize, &title, &d.doc)?, stack_layers(&d.doc).len())
+    } else {
+        let layers = lut_layers(&d.doc, explicit.as_deref())?;
+        (bake_cube_layers(size as usize, &title, &layers, d.doc.depth), layers.len())
+    };
     match p.get("path").and_then(Value::as_str) {
         Some(path) => {
             write_file(path, cube.as_bytes())?;
@@ -249,6 +428,9 @@ pub(super) fn push_unique(v: &mut Vec<f64>, x: f64) {
     }
 }
 
+#[cfg(test)]
+#[path = "export_clut_stack_tests.rs"]
+mod export_clut_stack_tests;
 #[cfg(test)]
 #[path = "layers_to_files_prefix_tests.rs"]
 mod layers_to_files_prefix_tests;
