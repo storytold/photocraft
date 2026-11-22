@@ -19,7 +19,7 @@ photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 craft-cms = { workspace = true }
 # PCTIP codec from craft-libs#1564; isolated pin until the shared revision is adopted workspace-wide.
-craft-pcraft-tip = { package = "craft-pcraft-format", git = "https://github.com/wanikhawar/craft-libs", rev = "e78497c1e35b7c327c44acfd02d7dc5982b8d0af" }
+craft-pcraft-tip = { package = "craft-pcraft-format", git = "https://github.com/wanikhawar/craft-libs", rev = "7eac1b070c387fd577df43d11381baa3ac7cba55" }
 photocraft-raster = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-ops = { workspace = true }
@@ -74,6 +74,7 @@ photocraft-ipp = { workspace = true }
 
 [dev-dependencies]
 craft-affinity = { workspace = true, features = ["synth"] }
+craft-develop-model = { workspace = true }
 photocraft-io = { workspace = true, features = ["testgen"] }
 # Synthetic camera raw files for the open tests.
 photocraft-raw = { workspace = true, features = ["testgen"] }

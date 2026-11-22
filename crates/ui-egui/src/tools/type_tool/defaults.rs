@@ -26,7 +26,7 @@ pub(crate) fn target_text(app: &PhotocraftApp) -> Option<&TextLayer> {
 /// document where the same layer id may name another layer, else the active one.
 pub(super) fn target_doc(app: &PhotocraftApp) -> Option<&photocraft_engine::DocState> {
     match &app.ui.text_edit {
-        Some(ed) => app.session.documents().get(edit_home(app, ed)?),
+        Some(ed) => app.session.documents().get(edit_home(app, ed)?).map(|st| &**st),
         None => app.session.active(),
     }
 }
