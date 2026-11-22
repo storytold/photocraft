@@ -36,7 +36,7 @@ fn synthetic_psd() -> Vec<u8> {
     let mut cached = t.clone();
     cached.shape = TextShape::Box { x: 0.0, y: 15.0, width: 200.0, height: 100.0 };
     t.cache = Some(engine.render(&cached, 72.0, doc.pixel_format()).1.surface);
-    let tysh = photocraft_text::psd::build_tysh(&t, 72.0, None);
+    let tysh = photocraft_text::psd::build_tysh(&t, 72.0, None).unwrap();
     t.psd_raw = Some(Arc::new(photocraft_text::psd::set_text_index(&tysh, 0).unwrap()));
 
     let raw = photocraft_text::psd::build_txt2(&[(0, &t)], None);
