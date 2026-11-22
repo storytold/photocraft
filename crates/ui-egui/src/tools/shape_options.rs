@@ -175,6 +175,71 @@ fn paint_dialog_target<C>(which: ShapePaint, fg: C, bg: C) -> Option<(crate::sha
     }
 }
 
+/// The value a W or H field's event proposes, as [`proposal`] reads the bar's events.
+fn number_proposal(event: &EditEvent<Option<f64>>) -> Option<f64> {
+    match event {
+        EditEvent::Update { value, .. } => *value,
+        EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => *after,
+        EditEvent::Cancel { before: Some(Mixed::Same(value)), .. } => *value,
+        _ => None,
+    }
+}
+
+/// The Line tool's W, link and H fields (#13250; nothing for another tool): the active line's length and thickness in its own
+/// rotated frame, 0 px with no live line. A typed W or H resizes the line along or across itself
+/// (`shape.edit {transform}`, one "Scale Paths" step per gesture); the tool's own Weight and
+/// arrowhead settings for the next line stay as they are. What the link does was not measured: it
+/// shows off and changes nothing.
+fn line_size_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, target: Option<&SelectedShape>) {
+    use craft::ui::contract::{ShowContainer as _, SideLabel};
+    use craft::ui::form::Field;
+    use craft::ui::runtime::env::{Label, UnitKind};
+    use craft::ui::text::NumberField;
+
+    if tool != Tool::Line {
+        return;
+    }
+    let live = target.and_then(|s| s.live.as_ref().map(|l| (s.doc, s.layer, l.clone())));
+    let size = live.as_ref().and_then(|(_, _, l)| photocraft_engine::vector_cmds::line_frame_size(l));
+    let (w, h) = size.unwrap_or((0.0, 0.0));
+    let field = |ui: &mut egui::Ui, key: &str, caption: &str, value: f64| {
+        let caption = Label::from(caption.to_owned());
+        Field::new(caption.clone())
+            .id_salt(key)
+            .side(SideLabel::new().scrub(true))
+            .show(ui, |ui, _| {
+                // Two decimals, as the reference shows a line's length (223.61 px); a whole number shows none.
+                let codec = craft::behavior::NumberCodec::new(Env::of(ui).units().reader(Some(UnitKind::Pixels)), 2);
+                NumberField::new(caption.clone(), Bind::given(Some(value))).unit_kind(UnitKind::Pixels).codec(codec).scrub_by_label().show(ui).edit.events
+            })
+            .inner
+            .unwrap_or_default()
+    };
+    Divider::vertical().show(ui);
+    let w_events = field(ui, "line-w", tl!("W:"), w);
+    let _ = craft::ui::text::link_toggle(Label::from(tl!("Maintain aspect ratio").to_owned()), Bind::given(false)).show(ui);
+    let h_events = field(ui, "line-h", tl!("H:"), h);
+    let (Some((doc, layer, live)), Some((w, h))) = (live, size) else { return };
+    for (axis, events) in [("w", w_events), ("h", h_events)] {
+        for event in &events {
+            let Some(value) = number_proposal(event) else { continue };
+            let (length, thickness) = if axis == "w" { (value, h) } else { (w, value) };
+            // A cleared, zero, negative or non-finite value is not a size: no edit.
+            let Some(m) = photocraft_engine::vector_cmds::line_frame_scale(&live, length, thickness) else { continue };
+            if m == photocraft_geom::Affine::IDENTITY {
+                continue;
+            }
+            let key = crate::history_keys::coalesce(&format!("line-size-{doc:?}-{}-{axis}", layer.0), event);
+            if let Err(e) = app.run("shape.edit", json!({"layer": layer.0, "transform": m.m, "coalesce": key})) {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
+            // The first value applied changes the line: later events of this pass would scale from stale sizes.
+            return;
+        }
+    }
+}
+
 pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, paint: bool) {
     // Path mode edits only the next outline: an active shape layer is not the target.
     let target = if paint { selected_shape(&app.session) } else { None };
@@ -224,6 +289,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
         .chips(|which, chip, chip_ui| decorate_chip(chip, which, &mut library, chip_ui))
         .show(ui);
     let (fill_gradient, stroke_gradient) = (library.gradient(ShapePaint::Fill), library.gradient(ShapePaint::Stroke));
+    line_size_fields(app, ui, tool, target.as_ref());
     if tool == Tool::Triangle {
         Divider::vertical().show(ui);
         // Only a shape layer has pixel edges to align: greyed in Path mode (#13370).
@@ -383,3 +449,7 @@ mod rectangle_radius_target_tests;
 #[cfg(test)]
 #[path = "polygon_sides_alert_tests.rs"]
 mod polygon_sides_alert_tests;
+
+#[cfg(test)]
+#[path = "line_wh_fields_tests.rs"]
+mod line_wh_fields_tests;
