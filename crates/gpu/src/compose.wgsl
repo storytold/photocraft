@@ -270,7 +270,8 @@ fn blend_rgb(mode: i32, cb: vec3<f32>, cs: vec3<f32>) -> vec3<f32> {
 
 // A finite marker outside normal coverage carries zero-coverage associated light.
 const EMISSIVE_ALPHA_BITS: u32 = 0xbf800000u;
-fn emits(a: f32) -> bool { return bitcast<u32>(a) == EMISSIVE_ALPHA_BITS; }
+override EMISSION: bool = false;
+fn emits(a: f32) -> bool { return EMISSION && bitcast<u32>(a) == EMISSIVE_ALPHA_BITS; }
 
 fn mask_pixel(pixel: vec4<f32>, weight: f32) -> vec4<f32> {
     if (emits(pixel.a)) { return vec4(pixel.rgb * weight, pixel.a); }
@@ -976,6 +977,7 @@ fn batch_layer(t: i32, d: vec2<i32>, b: vec4<f32>, geo: vec4<f32>, color: vec4<f
 // batch_layer of a Normal layer outside Lab documents.
 fn batch_layer_normal(t: i32, d: vec2<i32>, b: vec4<f32>, geo: vec4<f32>, color: vec4<f32>, prm: vec4<f32>) -> vec4<f32> {
     let s = batch_texel(t, d, geo, color, prm);
+    if (!emits(s.a) && s.a <= 0.0) { return b; }
     return composite_normal_fill(b, s, prm.x, prm.y);
 }
 
