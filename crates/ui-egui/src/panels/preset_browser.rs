@@ -307,9 +307,10 @@ fn pattern_key(pattern: &photocraft_doc::Pattern) -> PictureKey {
     ("pattern", pattern.id.clone(), pattern.surface.generation())
 }
 
-/// The cached texture of `pattern`'s swatch.
-pub(crate) fn pattern_texture(ctx: &egui::Context, pattern: &photocraft_doc::Pattern) -> egui::TextureId {
-    TextureCache::texture(ctx, pattern_key(pattern), || pattern_image(pattern))
+/// A texture of `pattern`'s swatch that its holder owns: it stays while the handle lives, where a cached texture
+/// lasts only while something asks for it every frame.
+pub(crate) fn pattern_texture_handle(ctx: &egui::Context, pattern: &photocraft_doc::Pattern) -> egui::TextureHandle {
+    ctx.load_texture(format!("photocraft/pattern-swatch/{}", pattern.id), pattern_image(pattern), egui::TextureOptions::LINEAR)
 }
 
 /// The swatch of `pattern`, keyed by its id and named by its display name.
