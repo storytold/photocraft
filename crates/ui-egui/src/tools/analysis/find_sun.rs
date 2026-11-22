@@ -157,9 +157,12 @@ fn body(ui: &mut egui::Ui, options: &mut SunOptions, result: &Result<Value, Stri
     Text::new(label(&format!("{}: {:.2}°   {}: {:.2}°", tl!("Azimuth"), number(&r["azimuth"]), tl!("Elevation"), number(&r["elevation"])))).show(ui);
 
     let entries: Vec<Entry<String>> = FRAMES.iter().map(|(key, name)| Entry::new((*key).to_string(), label(tl!(name)))).collect();
-    if let Some(frame) = Select::new(label(tl!("Axes")), Bind::given(options.frame.clone()), &entries).show(ui).value() {
-        options.frame.clone_from(frame);
-    }
+    ui.horizontal(|ui| {
+        Text::new(label(tl!("Axes"))).show(ui);
+        if let Some(frame) = Select::new(label(tl!("Axes")), Bind::given(options.frame.clone()), &entries).show(ui).value() {
+            options.frame.clone_from(frame);
+        }
+    });
     let frame = frame_of(&options.frame);
     let facings: Vec<Entry<i32>> = FACINGS.iter().map(|&f| Entry::new(f, label(&facing_axis(frame, f)))).collect();
     ui.horizontal(|ui| {
@@ -374,3 +377,7 @@ pub(crate) fn marker(app: &PhotocraftApp) -> Option<[f64; 2]> {
         Some([p[0].as_f64()?, p[1].as_f64()?])
     })
 }
+
+#[cfg(test)]
+#[path = "find_sun_tests.rs"]
+mod tests;
