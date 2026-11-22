@@ -69,7 +69,7 @@ fn a_group_without_sample_all_layers_selects_only_the_brush_disc() {
     // The disc a click on a flat area gives: Background active, which is white everywhere.
     let mut flat = issue_document();
     let d = flat.active_mut().unwrap();
-    d.active_layer = Some(d.doc.layers[0].id);
+    d.set_active_layer(Some(d.doc.layers[0].id));
     assert_eq!(active_kind(&flat), "Pixel");
     click(&mut flat, RED2_CLICK, false);
     let disc = coverage(&flat);

@@ -218,9 +218,9 @@ pub(crate) fn palette_to_color_table(palette: &Palette) -> ColorTable {
     ColorTable { colors: palette.colors.iter().map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect(), transparent: None }
 }
 
-/// Map one complete row-major rectangle through the shared palette kernel.
-pub(crate) fn indexed_render(px: &mut [[f32; 4]], width: usize, palette: &Palette, settings: &Settings, transparent: Option<usize>) -> Result<()> {
-    palette_map::render_pixels(px, width, palette, settings, [0, 0], transparent)
+/// Map a complete row-major rectangle through the shared palette kernel.
+pub(crate) fn indexed_render(px: &mut [[f32; 4]], width: usize, palette: &Palette, settings: &Settings, transparent: Option<usize>) -> Result<Vec<u32>> {
+    palette_map::render(px, width, palette, settings, [0, 0], transparent)
         .map_err(|e| EngineError::BadParams { cmd: INDEXED_ID.to_string(), msg: format!("indexed palette mapping failed: {e}") })
 }
 
