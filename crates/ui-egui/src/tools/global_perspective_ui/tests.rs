@@ -502,7 +502,9 @@ fn native_and_web_drops_refuse_the_edited_document_and_keep_foreign_drops() {
         let history = a.session.active().unwrap().history.entries();
         a.drop_places.push_back((other.id, DropPlace::Bytes("waiting.png".into(), vec![1])));
         let path = std::env::temp_dir().join("photocraft-refused-global-guide-drop.png");
-        let file = OsFile { name: "native.png".into(), path: Some(path), ..Default::default() };
+        let mut file = OsFile::default();
+        file.name = "native.png".into();
+        file.path = Some(path);
         a.open_dropped(&ctx, vec![file], DropTo::Canvas { at: None });
         assert!(a.ui.status_error && a.ui.status.contains("Global Perspective Warp"));
         assert!(a.ui.notices.iter().any(|n| n.title.contains("Global Perspective Warp")));
@@ -543,7 +545,9 @@ fn queued_path_drop_waits_before_starting_a_job_until_the_editor_is_cancelled() 
     let path = std::env::temp_dir().join(format!("photocraft-global-guide-queued-{}.png", std::process::id()));
     let bytes = photocraft_io::export(&source, "place.png", &Default::default()).unwrap().bytes;
     std::fs::write(&path, bytes).unwrap();
-    let file = OsFile { name: "queued.png".into(), path: Some(path.clone()), ..Default::default() };
+    let mut file = OsFile::default();
+    file.name = "queued.png".into();
+    file.path = Some(path.clone());
     a.open_dropped(&ctx, vec![file], DropTo::Canvas { at: None });
     begin(&mut a, &ctx).unwrap();
     let described = session(&a).describe();
