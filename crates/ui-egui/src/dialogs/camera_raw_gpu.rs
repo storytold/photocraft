@@ -1,8 +1,10 @@
 //! Camera Raw's preview develop on the GPU (#6916). When every stage the settings use reads
 //! only its own pixel, the proxy develops in one wgpu pass (`photocraft_gpu::CameraRawDevelop`)
 //! on the canvas's device and is read back for the histogram, scopes and display conversion.
-//! Spatial stages, Rendering Mode CPU, `PHOTOCRAFT_CPU_CAMERA_RAW`, no GPU canvas, a software
-//! adapter, a device fault or a failed develop all keep the CPU develop on the worker.
+//! Dehaze, Highlights and Shadows develop on the GPU too, with their analyses on the CPU
+//! (`CameraRawDevelop::develop_spatial`). Texture, Clarity, Detail, Rendering Mode CPU,
+//! `PHOTOCRAFT_CPU_CAMERA_RAW`, no GPU canvas, a software adapter, a device fault or a failed
+//! develop all keep the CPU develop on the worker.
 //!
 //! The pipeline builds on a thread the first time a dialog opens (DX12's shader compiler takes
 //! about 0.35 s, #6419); frames develop on the CPU until it is ready.
@@ -138,14 +140,17 @@ impl CameraRawGpu {
         CameraRawGpu { device, queue, health, pass, failed: Arc::default(), points: Arc::default() }
     }
 
-    /// Develops `px` (`w × h`) with `p`, or `None` when the CPU must: a spatial stage, the pass
+    /// Develops `px` (`w × h`) with `p`, or `None` when the CPU must: Texture, Clarity or Detail, the pass
     /// still building, a fault, or a GPU error (logged; the dialog then stays on the CPU).
     /// `key` names the pixels when they are the dialog's unchanged proxy ([`source_key`]), so they
     /// upload once. Neutral settings are `None` too: the CPU develop returns them at once, a GPU
     /// round trip would only cost. `inputs` are the develop's seed, pixel scale and encoding gamma.
     pub(crate) fn develop(&self, pixels: ProxyPixels<'_>, p: &CameraRaw, inputs: &DevelopInputs, float: bool) -> Option<Vec<[f32; 4]>> {
         let ProxyPixels { px, key, w, h } = pixels;
-        if photocraft_algo::camera_raw::spatial(p) || p.is_identity() || self.failed.load(Ordering::Relaxed) || !self.health.is_ok() {
+        let spatial = photocraft_algo::camera_raw::spatial(p);
+        // Spatial stages develop on the GPU when they are Dehaze, Highlights and Shadows; Texture,
+        // Clarity and Detail keep the CPU.
+        if (spatial && !photocraft_gpu::spatial_supported(p)) || p.is_identity() || self.failed.load(Ordering::Relaxed) || !self.health.is_ok() {
             return None;
         }
         #[cfg(target_arch = "wasm32")]
@@ -156,6 +161,18 @@ impl CameraRawGpu {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let Some(Some(pass)) = self.pass.get() else { return None };
+            if spatial {
+                let size = [u32::try_from(w).ok()?, u32::try_from(h).ok()?];
+                let mut pass = pass.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                return match pass.develop_spatial(&self.device, &self.queue, Some(&self.health), px, key, size, p, inputs, float) {
+                    Ok(out) => out,
+                    Err(e) => {
+                        log::warn!("{}; RAW Develop develops on the CPU", e.0);
+                        self.failed.store(true, Ordering::Relaxed);
+                        None
+                    }
+                };
+            }
             let points = self.points(px, key, w, h, p, inputs);
             let stages = photocraft_algo::camera_raw::per_pixel(p, inputs, w, h, float, points)?;
             let size = [u32::try_from(w).ok()?, u32::try_from(h).ok()?];
@@ -329,9 +346,20 @@ mod tests {
             let worst = gpu.iter().zip(&cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
             assert!(worst <= TOL, "{depth}-bit: off by {worst}");
             // PLAN: the old `describe["developBackend"] == "gpu"` check read the dialog's own render; a `Job` can only be run by the host (no public runner), so the helper runs the job's body and the session's reported backend is not asserted here.
-            // A spatial stage develops the whole frame on the CPU.
-            let (backend, shown, cpu) = developed(&app, cr!(per_pixel.clone() => shadows: 40.0));
-            assert_eq!((backend, shown == cpu), ("cpu", true), "{depth}-bit");
+            // Dehaze, Highlights and Shadows develop on the GPU too.
+            for spatial in
+                [cr!(per_pixel.clone() => shadows: 40.0, highlights: -35.0), cr!(per_pixel.clone() => dehaze: 25.0), cr!(per_pixel.clone() => dehaze: -25.0)]
+            {
+                let (backend, gpu, cpu) = developed(&app, spatial.clone());
+                assert_eq!(backend, "gpu", "{depth}-bit, {spatial:?}");
+                let worst = gpu.iter().zip(&cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
+                assert!(worst <= 1.0 / 255.0, "{depth}-bit, {spatial:?}: off by {worst}");
+            }
+            // Texture, Clarity and Detail develop the whole frame on the CPU.
+            for cpu_only in [cr!(per_pixel.clone() => clarity: 30.0), cr!(per_pixel.clone() => shadows: 30.0, sharpen_amount: 40.0)] {
+                let (backend, shown, cpu) = developed(&app, cpu_only);
+                assert_eq!((backend, shown == cpu), ("cpu", true), "{depth}-bit");
+            }
             // A device fault: the CPU, from the next frame on.
             app.gpu.as_ref().unwrap().health().mark(photocraft_gpu::Fault::Lost("test".into()));
             let (backend, shown, cpu) = developed(&app, per_pixel);
