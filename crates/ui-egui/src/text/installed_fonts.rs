@@ -46,6 +46,11 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return;
     }
     WAKE.get_or_init(|| ctx.clone());
+    follow_catalog(app);
+}
+
+/// [`tick`]'s work once the catalog runs.
+fn follow_catalog(app: &mut PhotocraftApp) {
     let mut layers = std::mem::take(&mut *PENDING.lock().unwrap_or_else(PoisonError::into_inner));
     let generation = photocraft_text::fonts::catalog().generation();
     if generation != CHECKED.load(Ordering::Relaxed)
@@ -67,3 +72,7 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
         PENDING.lock().unwrap_or_else(PoisonError::into_inner).extend(busy);
     }
 }
+
+#[cfg(test)]
+#[path = "installed_fonts_tests.rs"]
+mod tests;
