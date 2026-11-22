@@ -135,8 +135,8 @@ impl Session {
         commands::find(id).is_some_and(|spec| self.spec_disabled_reason(spec, id, params).is_none())
     }
 
-    /// Why the command can't run now (None = it can): its own precondition, or a background job
-    /// running on the active document.
+    /// Why the command can't run now (None = it can): its own precondition, a background job
+    /// running on the active document, or a filter's hidden target layer (#10476).
     pub fn disabled_reason(&self, id: &str) -> Option<String> {
         self.disabled_reason_with(id, &Value::Null)
     }
@@ -152,7 +152,10 @@ impl Session {
 
     /// [`Self::disabled_reason_with`] for the catalogue entry `spec` of `id`.
     fn spec_disabled_reason(&self, spec: &commands::CommandSpec, id: &str, params: &Value) -> Option<String> {
-        self.precondition(spec, &channel_cmds::inject_target(self, id, params.clone())).err().or_else(|| self.job_conflict(id, spec.journal))
+        self.precondition(spec, &channel_cmds::inject_target(self, id, params.clone()))
+            .err()
+            .or_else(|| self.job_conflict(id, spec.journal))
+            .or_else(|| hidden_target::menu_refusal(self, id, params).map(String::from))
     }
 
     /// The command's own precondition for a call with `params` (their target filled in).
