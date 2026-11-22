@@ -130,3 +130,20 @@ fn degenerate_or_non_finite_input_is_an_empty_path() {
         assert!(p.subpaths.iter().flat_map(anchors).all(|a| a[0].is_finite() && a[1].is_finite()), "{w} {l} {c}");
     }
 }
+
+#[test]
+fn a_head_bent_past_the_unheaded_end_keeps_its_separate_subpaths() {
+    // A 10 px line whose 10 px end head is bent away from its tip by 50%: the head's rear middle
+    // lies at x -3.5, behind the unheaded start. One outline would cut that part of the head off,
+    // so the shaft and the head stay separate subpaths and the head still reaches x -3.5.
+    let p = arrow_line((0.0, 0.0), (10.0, 0.0), 6.0, false, true, 5.0, 10.0, -50.0);
+    assert!(p.subpaths.len() > 1, "end head: separate subpaths, got {:?}", p.subpaths.iter().map(anchors).collect::<Vec<_>>());
+    assert!(p.subpaths.iter().flat_map(|sp| &sp.knots).any(|k| close([k.anchor.x, k.anchor.y], [-3.5, 0.0])), "end head: rear middle at -3.5,0");
+    // The same mirrored: the start head's rear middle lies at x 13.5, past the unheaded end.
+    let p = arrow_line((0.0, 0.0), (10.0, 0.0), 6.0, true, false, 5.0, 10.0, -50.0);
+    assert!(p.subpaths.len() > 1, "start head: separate subpaths, got {:?}", p.subpaths.iter().map(anchors).collect::<Vec<_>>());
+    assert!(p.subpaths.iter().flat_map(|sp| &sp.knots).any(|k| close([k.anchor.x, k.anchor.y], [13.5, 0.0])), "start head: rear middle at 13.5,0");
+    // A head whose bent rear middle stays on the shaft is still one outline.
+    let p = arrow_line((0.0, 0.0), (20.0, 0.0), 6.0, false, true, 5.0, 10.0, -50.0);
+    assert_eq!(p.subpaths.len(), 1, "a head within the shaft is one outline");
+}

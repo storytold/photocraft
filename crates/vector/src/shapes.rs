@@ -252,8 +252,9 @@ pub fn line(a: (f64, f64), b: (f64, f64), weight: f64) -> Path {
 /// The result is one closed outline of corner points, the shaft joined to each head (#13260): the
 /// shaft's start side, the start head (where its rear edge meets the shaft, the outer corner, the
 /// tip, the other outer corner), the shaft's other side and the end head the same way. So a stroke
-/// follows only the outer outline. Heads that together reach past each other along the line keep
-/// the older separate shaft and head subpaths.
+/// follows only the outer outline. Heads that together reach past each other along the line, or a
+/// head bent so far away from its tip that its rear middle lies past the other endpoint, keep the
+/// older separate shaft and head subpaths.
 // The arguments correspond to the stored LiveShape::ArrowLine parameters.
 #[allow(clippy::too_many_arguments)]
 pub fn arrow_line(a: (f64, f64), b: (f64, f64), weight: f64, start: bool, end: bool, width: f64, length: f64, concavity: f64) -> Path {
@@ -294,7 +295,10 @@ pub fn arrow_line(a: (f64, f64), b: (f64, f64), weight: f64, start: bool, end: b
         [tip, side(base, half), rear_middle, side(base, -half)]
     };
     let (start_head, end_head) = (start.then(|| head(a, 1.0)), end.then(|| head(b, -1.0)));
-    let pieces = if reach <= cap {
+    // A head bent away from its tip puts its rear middle `size * (1 - notch)` behind the tip. One
+    // outline only covers the line from `a` to `b`, so it holds only while that middle stays on it.
+    let within = size * (1.0 - notch) <= distance;
+    let pieces = if reach <= cap && within {
         // One outline. Where the shaft meets a head lies on the head's rear edge (or, for a head
         // no wider than the shaft, at its base), so the rear edge's middle and the shaft's end
         // under the head are inside the outline and are no anchors.
@@ -311,8 +315,9 @@ pub fn arrow_line(a: (f64, f64), b: (f64, f64), weight: f64, start: bool, end: b
         }
         vec![Subpath::polygon(&outline)]
     } else {
-        // Heads bent away from their tips that together reach past each other (not measured in
-        // the reference): keep the shaft and each head as separate subpaths.
+        // Heads bent away from their tips that together reach past each other, or a head whose
+        // bent rear middle reaches past the unheaded end (not measured in the reference): keep
+        // the shaft and each head as separate subpaths.
         // A base bent toward the tip leaves a wedge between the shaft's end and the head that the
         // reference fills: the shaft's end follows the bent base to its middle, so it fills the
         // wedge without reaching past the head's flanks. A base bent away lies under the head.
