@@ -251,9 +251,12 @@ fn curve_eval(pts: &[(f32, f32)], x: f32) -> f32 {
 }
 
 /// Local adaptation tone mapping (Durand–Dorsey style base/detail split in log luminance): the
-/// blurred log luminance (radius) is the base layer, compressed toward its mean by `strength`;
-/// detail is boosted; then exposure, gamma, shadow/highlight lift, the toning curve, and
-/// vibrance/saturation. Like Photoshop the result is a flattened, low-dynamic-range image.
+/// blurred log luminance (radius) is the base layer, compressed by `strength` toward its brightest
+/// value, which becomes white, so an ordinary image is stretched to the full range and its dark
+/// tones are lifted (#14723); the detail (log luminance less the base, boosted by `detail`) is
+/// compressed with it, so a darker tone never comes out brighter on a smooth gradient; then
+/// exposure, gamma, shadow/highlight lift, the toning curve, and vibrance/saturation. Like
+/// Photoshop the result is a flattened, low-dynamic-range image.
 pub fn hdr_toning(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning) {
     if px.is_empty() {
         return;
@@ -265,10 +268,11 @@ pub fn hdr_toning(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning) {
     });
     let mut base = logl.clone();
     gauss_blur_n(&mut base, w, h, 1, p.radius.max(1.0) / 2.0);
-    let n = px.iter().filter(|q| q[3] > 0.0).count().max(1) as f64;
-    // Match the checked path: narrow sums lose log-luminance samples on large scenes.
-    let mean = (base.iter().zip(px.iter()).filter(|(_, q)| q[3] > 0.0).map(|(b, _)| f64::from(*b)).sum::<f64>() / n) as f32;
-    let compress = 1.0 / (1.0 + p.strength.max(0.0));
+    // The brightest base of the visible pixels (only visible pixels are toned).
+    let white = base.iter().zip(px.iter()).filter(|(_, q)| q[3] > 0.0).map(|(b, _)| *b).fold(f32::NEG_INFINITY, f32::max);
+    // Fitted to the reference application's samples (#14723): Strength 0.5296 compresses the
+    // base's log range to about 0.39 of its span.
+    let compress = 1.0 / (1.0 + 3.0 * p.strength.max(0.0));
     let detail = 1.0 + p.detail / 100.0;
     let exposure = 2f32.powf(p.exposure);
     let gamma = p.gamma.clamp(0.1, 4.0);
@@ -283,7 +287,7 @@ pub fn hdr_toning(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning) {
             }
             let c = [q[0], q[1], q[2]];
             let l0 = luma(c).max(0.0) + EPS;
-            let new_log = mean + (base[i] - mean) * compress + (logl[i] - base[i]) * detail;
+            let new_log = ((base[i] - white) + (logl[i] - base[i]) * detail) * compress;
             // The contract is "lower = more contrast", i.e. gamma is the divisor of
             // the exponent, matching the crate's other gamma controls (hdr.rs, proof_sim.rs).
             let mut l1 = (new_log.exp() * exposure).max(0.0).powf(1.0 / gamma);
@@ -383,3 +387,6 @@ mod tests {
         assert!(luma([px[2][0], px[2][1], px[2][2]]) > luma([px[38][0], px[38][1], px[38][2]]));
     }
 }
+
+#[cfg(test)]
+mod hdr_toning_range_tests;

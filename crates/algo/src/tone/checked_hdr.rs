@@ -166,19 +166,16 @@ pub fn process_with(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning, ctl:
     })?;
     let mut scratch = zeroes(w.max(h), 0f32, ctl)?;
     blur(&mut base, w, h, &mut scratch, p.radius / 2., ctl)?;
-    // F32 loses successive log-luminance additions on ordinary megapixel images.
-    let mut total = 0f64;
-    let mut visible = 0usize;
+    // The brightest base of the visible pixels becomes white (#14723).
+    let mut white = f32::NEG_INFINITY;
     for (qs, bs) in px.chunks(2048).zip(base.chunks(2048)) {
         check(ctl)?;
         for (q, b) in qs.iter().zip(bs) {
             if q[3] > 0. {
-                total += f64::from(*b);
-                visible += 1;
+                white = white.max(*b);
             }
         }
     }
-    let mean = (total / visible.max(1) as f64) as f32;
     let mut curve = zeroes(p.curve.len(), (0f32, 0f32), ctl)?;
     curve.copy_from_slice(&p.curve);
     // Stable bounded in-place insertion avoids slice::sort's infallible temporary allocation.
@@ -190,7 +187,7 @@ pub fn process_with(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning, ctl:
             j -= 1;
         }
     }
-    let compress = 1. / (1. + p.strength);
+    let compress = 1. / (1. + 3. * p.strength);
     let detail = 1. + p.detail / 100.;
     let exposure = 2f32.powf(p.exposure);
     independent_chunks(px, |start, qs| {
@@ -203,7 +200,7 @@ pub fn process_with(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning, ctl:
             }
             let c = [q[0], q[1], q[2]];
             let l0 = luma(c).max(0.) + 1e-4;
-            let new_log = mean + (*b - mean) * compress + (*l - *b) * detail;
+            let new_log = ((*b - white) + (*l - *b) * detail) * compress;
             let mut l1 = (new_log.exp() * exposure).max(0.).powf(1. / p.gamma);
             l1 += p.shadow / 100. * (1. - l1).powi(3) * 0.5 - p.highlight / 100. * l1.powi(3) * 0.5;
             if !l1.is_finite() {

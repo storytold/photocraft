@@ -1,0 +1,151 @@
+//! #14723: HDR Toning's Local Adaptation stretches an ordinary image to the full range (white
+//! stays white, dark tones are lifted) instead of compressing it towards its mean, and keeps the
+//! order of the tones for every Radius and Strength.
+
+use super::*;
+use crate::hdr::{ToneMethod, tone_map};
+
+/// The reference application's factory Radius and Strength, passed explicitly so the samples
+/// don't depend on the defaults (#14720).
+fn reference(radius: f32, strength: f32) -> HdrToning {
+    HdrToning { radius, strength, ..Default::default() }
+}
+
+const RADIUS: f32 = 7.68;
+const STRENGTH: f32 = 0.5296;
+
+/// A grey 8-bit level as a pixel.
+fn grey(v: u32) -> [f32; 4] {
+    let v = v as f32 / 255.0;
+    [v, v, v, 1.0]
+}
+
+/// The issue's 512 x 256 document: a ramp (rows 0-63, column x is level x/2), eight flat grey
+/// patches (rows 64-127), a 40 | 200 step edge at x 256 (rows 128-191) and eight colour patches
+/// (rows 192-255).
+fn document() -> (Vec<[f32; 4]>, usize, usize) {
+    const COLOURS: [[u32; 3]; 8] = [[60, 20, 20], [20, 60, 20], [40, 40, 90], [120, 60, 30], [200, 60, 60], [60, 200, 60], [220, 200, 120], [230, 180, 200]];
+    let (w, h) = (512, 256);
+    let px = (0..w * h)
+        .map(|i| {
+            let (x, y) = (i % w, i / w);
+            match y {
+                0..64 => grey(x as u32 / 2),
+                64..128 => grey(PATCHES[x / 64]),
+                128..192 => grey(if x < 256 { 40 } else { 200 }),
+                _ => {
+                    let c = COLOURS[x / 64].map(|v| v as f32 / 255.0);
+                    [c[0], c[1], c[2], 1.0]
+                }
+            }
+        })
+        .collect();
+    (px, w, h)
+}
+
+const PATCHES: [u32; 8] = [0, 16, 48, 80, 128, 176, 224, 255];
+
+/// The issue's dark 256 x 64 document: a ramp 0..63 at 4 px per level (rows 0-31) and a 30 | 90
+/// step edge at x 128 (rows 32-63).
+fn dark_document() -> (Vec<[f32; 4]>, usize, usize) {
+    let (w, h) = (256, 64);
+    let px = (0..w * h).map(|i| if i / w < 32 { grey((i % w) as u32 / 4) } else { grey(if i % w < 128 { 30 } else { 90 }) }).collect();
+    (px, w, h)
+}
+
+/// The grey level of pixel `(x, y)`.
+fn level(px: &[[f32; 4]], w: usize, x: usize, y: usize) -> f32 {
+    let q = px[y * w + x];
+    luma([q[0], q[1], q[2]]) * 255.0
+}
+
+fn toned((mut px, w, h): (Vec<[f32; 4]>, usize, usize), p: &HdrToning) -> (Vec<[f32; 4]>, usize) {
+    hdr_toning(&mut px, w, h, p);
+    (px, w)
+}
+
+#[test]
+fn an_ordinary_image_is_stretched_to_white_with_its_dark_tones_lifted() {
+    let (px, w) = toned(document(), &reference(RADIUS, STRENGTH));
+    let patches = [0.0, 93.0, 131.0, 158.0, 191.0, 217.0, 240.0, 253.0];
+    for (i, want) in patches.into_iter().enumerate() {
+        let got = level(&px, w, i * 64 + 32, 96);
+        assert!((got - want).abs() <= 12.0, "grey patch {}: {got:.1}, the reference gives {want}", PATCHES[i]);
+    }
+    for (v, want) in [(15, 91.0), (120, 186.0), (255, 254.0)] {
+        let got = level(&px, w, 2 * v + 1, 32);
+        assert!((got - want).abs() <= 12.0, "ramp {v}: {got:.1}, the reference gives {want}");
+    }
+    assert!(level(&px, w, 511, 32) > 240.0 && level(&px, w, 255 * 2, 96) > 240.0, "white stays white");
+}
+
+#[test]
+fn a_dark_image_is_stretched_to_fill_the_range() {
+    let (px, w) = toned(dark_document(), &reference(RADIUS, STRENGTH));
+    for (v, want) in [(8, 105.0), (56, 203.0)] {
+        let got = level(&px, w, 4 * v + 2, 16);
+        assert!((got - want).abs() <= 15.0, "ramp {v}: {got:.1}, the reference gives {want}");
+    }
+    for (x, v, want) in [(64, 30, 157.0), (192, 90, 253.0)] {
+        let got = level(&px, w, x, 48);
+        assert!((got - want).abs() <= 15.0, "edge {v}: {got:.1}, the reference gives {want}");
+    }
+}
+
+#[test]
+fn a_darker_ramp_level_never_comes_out_brighter() {
+    // The ramp alone, sampled every 15 levels: the blur at a large radius sees nothing else.
+    // The issue's document at its three ramp samples: there the patches below the ramp fall
+    // inside a large blur.
+    let (w, h) = (512, 64);
+    let ramp = (0..w * h).map(|i| grey((i % w) as u32 / 2)).collect::<Vec<_>>();
+    for radius in [1.0, RADIUS, 100.0] {
+        for strength in [0.1, 0.53, 4.0] {
+            let (px, w) = toned((ramp.clone(), w, h), &reference(radius, strength));
+            let samples: Vec<f32> = (1..=17).map(|k| level(&px, w, 2 * 15 * k + 1, 32)).collect();
+            assert!(samples.windows(2).all(|p| p[0] <= p[1]), "ramp, radius {radius}, strength {strength}: levels 15, 30, .. 255 give {samples:?}");
+            let (px, w) = toned(document(), &reference(radius, strength));
+            let samples = [15, 120, 255].map(|v| level(&px, w, 2 * v + 1, 32));
+            assert!(samples[0] <= samples[1] && samples[1] <= samples[2], "document, radius {radius}, strength {strength}: ramp 15/120/255 give {samples:?}");
+            // The reference keeps the flat greys in order even at Radius 100 and Strength 4.
+            let patches: Vec<f32> = (0..8).map(|i| level(&px, w, i * 64 + 32, 96)).collect();
+            assert!(patches.windows(2).all(|p| p[0] <= p[1]), "document, radius {radius}, strength {strength}: grey patches give {patches:?}");
+        }
+    }
+}
+
+#[test]
+fn black_stays_black_and_results_stay_in_range_at_every_depth() {
+    // 8- and 16-bit documents arrive as 0..1; a 32-bit one can hold values far above 1.
+    let (doc, w, h) = document();
+    let bright: Vec<[f32; 4]> = doc.iter().map(|q| [q[0] * 40.0, q[1] * 40.0, q[2] * 40.0, 1.0]).collect();
+    for px in [doc, bright] {
+        let (px, w) = toned((px, w, h), &reference(RADIUS, STRENGTH));
+        assert!(px.iter().all(|q| q[..3].iter().all(|v| (0.0..=1.0).contains(v))), "every channel in 0..1");
+        assert_eq!(level(&px, w, 32, 96), 0.0, "black stays 0");
+    }
+}
+
+/// A 4 x 1 strip of flat 64 x 64 areas with the given linear values, as Merge to HDR Pro hands
+/// its radiance to the tone map.
+fn strip(values: [f32; 4]) -> Vec<[f32; 4]> {
+    (0..256 * 64)
+        .map(|i| {
+            let v = values[i % 256 / 64];
+            [v, v, v, 1.0]
+        })
+        .collect()
+}
+
+#[test]
+fn merge_to_hdr_local_adaptation_reaches_the_reference_from_the_reference_radiance() {
+    // The reference application's own 32-bit merge of #14023's scene (#14021): grey 128, ramp 26,
+    // ramp 246 and the white patch. Its 16-bit Local Adaptation result of that merge (#14023):
+    // 35725, 14858 and 63103.
+    let mut px = strip([0.0531, 0.00074, 1.130, 1.341]);
+    tone_map(&mut px, 256, 64, &ToneMethod::LocalAdaptation(reference(6.0, 0.53)));
+    for (i, name, want) in [(0, "grey 128", 35725.0), (1, "ramp 26", 14858.0), (2, "ramp 246", 63103.0)] {
+        let got = px[32 * 256 + i * 64 + 32][1] * 65535.0;
+        assert!((got - want).abs() <= 0.08 * 65535.0, "{name}: {got:.0}, the reference gives {want}");
+    }
+}
