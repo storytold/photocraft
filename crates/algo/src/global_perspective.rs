@@ -283,7 +283,7 @@ fn majority_fit(active: &[&Guide], bounds: Rect, aspect: f64) -> Result<Homograp
         (fit_rows(&h), fit_rows(&v))
     });
     let candidates = std::iter::once((fit_rows(&horizontal), fit_rows(&vertical)))
-        .chain(horizontal.chunks_exact(2).zip(vertical.chunks_exact(2)).map(|(h, v)| (fit_rows(h), fit_rows(v))))
+        .chain(horizontal.as_chunks::<2>().0.iter().zip(vertical.as_chunks::<2>().0).map(|(h, v)| (fit_rows(h), fit_rows(v))))
         .chain(pairs);
     let (mut best, mut best_count, mut best_error) = (None, 0, f64::INFINITY);
     for (horizontal, vertical) in candidates {
