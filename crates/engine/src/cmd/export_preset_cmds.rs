@@ -41,7 +41,7 @@ fn default_resample() -> String {
     DEFAULT_RESAMPLE.into()
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportPresetSettings {
     pub format: String,
@@ -140,7 +140,7 @@ impl ExportPresetSettings {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct ExportPreset {
     pub name: String,
     pub settings: ExportPresetSettings,

@@ -46,7 +46,7 @@ pub struct FileMenuState {
     /// View › Lock Slices.
     pub slices_locked: bool,
     /// Documents with File › Generate › Image Assets on.
-    pub image_assets: Vec<DocId>,
+    pub image_assets: craft_tracked::Tracked<Vec<DocId>>,
     /// File › Print settings used last (Print One Copy repeats them).
     pub last_print: Option<Value>,
     /// Save for Web settings used last.

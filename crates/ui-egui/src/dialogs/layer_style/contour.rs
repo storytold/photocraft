@@ -60,23 +60,21 @@ pub(super) fn user_contours(app: &PhotocraftApp) -> Vec<Contour> {
 
 /// The engine's interpolation of a contour's points (levels `0..=255` on both axes) as one output
 /// level per input level.
-pub(super) fn sampler() -> impl Fn(&[[f32; 2]]) -> Vec<f32> + Send + Sync + 'static {
-    |points| {
-        let points: Vec<CurvePoint> = points.iter().map(|p| CurvePoint { input: p[0] / LEVELS, output: p[1] / LEVELS }).collect();
-        let lut = photocraft_compose::adjust::contour_curve_lut(&points, &[]);
-        (0..=LEVELS as usize)
-            .map(|level| {
-                let at = (level as f32 / LEVELS * lut.len().saturating_sub(1) as f32).round() as usize;
-                lut.get(at).copied().unwrap_or(0.0) * LEVELS
-            })
-            .collect()
-    }
+pub(super) fn sampler(points: &[[f32; 2]]) -> Vec<f32> {
+    let points: Vec<CurvePoint> = points.iter().map(|p| CurvePoint { input: p[0] / LEVELS, output: p[1] / LEVELS }).collect();
+    let lut = photocraft_compose::adjust::contour_curve_lut(&points, &[]);
+    (0..=LEVELS as usize)
+        .map(|level| {
+            let at = (level as f32 / LEVELS * lut.len().saturating_sub(1) as f32).round() as usize;
+            lut.get(at).copied().unwrap_or(0.0) * LEVELS
+        })
+        .collect()
 }
 
 /// Opens the Contour Editor on `request` as a child of the Layer Style dialog `parent`.
 pub(super) fn open_editor(app: &mut PhotocraftApp, parent: DialogId, request: ContourRequest) {
     let (key, initial) = (request.key.clone(), request.contour.clone());
-    let id = app.framework.dialogs.open_child(ContourEditorDialog::new(request).sampler(sampler()), parent);
+    let id = app.framework.dialogs.open_child(ContourEditorDialog::new(request).sampler(sampler), parent);
     app.layer_style_child = Some((parent, Child::Editor { id, key, initial }));
 }
 

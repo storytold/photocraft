@@ -84,10 +84,7 @@ pub(super) fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, out: DocumentT
     for event in out.events {
         match event {
             DocumentTabsEvent::Selected(tab) | DocumentTabsEvent::Picked(tab) | DocumentTabsEvent::Activated(tab) => show_tab(app, tab),
-            DocumentTabsEvent::CloseRequested(DocTab::Doc(id)) => {
-                // The guarded close: a document with unsaved changes gets the save prompt.
-                let _ = crate::menus::invoke(app, ctx, "file.close", json!({"document": id.0}));
-            }
+            DocumentTabsEvent::CloseRequested(DocTab::Doc(id)) => close_document(app, ctx, id),
             DocumentTabsEvent::CloseRequested(DocTab::Opening(job)) => {
                 let _ = crate::jobs_ui::cancel(app, job);
             }
@@ -117,6 +114,13 @@ pub(super) fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, out: DocumentT
         }
     }
     menu
+}
+
+/// The guarded close shared by the tab strip and a tiled document's title.
+pub(super) fn close_document(app: &mut PhotocraftApp, ctx: &egui::Context, id: DocId) {
+    if let Some(index) = document_index(app, id) {
+        let _ = crate::menus::invoke(app, ctx, "file.close", json!({"document": index}));
+    }
 }
 
 /// A chosen tab: a document tab shows that document, an opening tab its progress.
@@ -172,7 +176,7 @@ fn tab_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, cx: &mut BodyCx<'_>, str
     };
     let count = app.session.documents().len();
     let has_path = app.session.documents()[index].path.is_some();
-    let items = tab_context_items(id, count, has_path);
+    let items = tab_context_items(id, index, count, has_path);
     let mut entries = Vec::with_capacity(items.len() + TAB_MENU_SEPARATORS_AFTER.len());
     for (row, (label, _, _, enabled)) in items.iter().enumerate() {
         entries.push(Entry::new(row, tl!(*label)).enabled(*enabled));
@@ -198,18 +202,19 @@ pub(crate) const TAB_MENU_SEPARATORS_AFTER: [usize; 2] = [4, 6];
 pub(crate) type TabMenuItem = (&'static str, &'static str, serde_json::Value, bool);
 
 /// All tab actions go through the same guarded commands as the menu bar, including the
-/// unsaved-changes prompt. The clicked tab's document `doc` is explicit even when another document is active.
+/// unsaved-changes prompt. The clicked tab's document `doc` (at `index` in the session's list now) is explicit even when
+/// another document is active: the file commands name it by its index, Move to New Window by its id.
 /// Order and separators follow the reference application (#11403); see [`TAB_MENU_SEPARATORS_AFTER`].
-pub(crate) fn tab_context_items(doc: DocId, count: usize, has_path: bool) -> [TabMenuItem; 8] {
+pub(crate) fn tab_context_items(doc: DocId, index: usize, count: usize, has_path: bool) -> [TabMenuItem; 8] {
     [
         ("Consolidate All to Here", "window.arrange.consolidateAllToTabs", json!({}), count > 1),
-        ("Close", "file.close", json!({"document": doc.0}), true),
+        ("Close", "file.close", json!({"document": index}), true),
         ("Close All", "file.closeAll", json!({}), true),
-        ("Close Others", "file.closeOthers", json!({"document": doc.0}), count > 1),
+        ("Close Others", "file.closeOthers", json!({"document": index}), count > 1),
         ("Move to New Window", "window.arrange.floatInWindow", json!({"document": doc.0}), true),
         ("New Document…", "file.new", json!({}), true),
         ("Open Document…", "file.open", json!({}), true),
-        (crate::menus::reveal_label(), "file.revealInFinder", json!({"document": doc.0}), has_path),
+        (crate::menus::reveal_label(), "file.revealInFinder", json!({"document": index}), has_path),
     ]
 }
 

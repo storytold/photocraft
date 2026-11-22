@@ -7,7 +7,7 @@ fn names(s: &Session, g: &str) -> Vec<String> {
 fn with_groups() -> Session {
     let mut s = Session::new();
     for (n, g) in [("A1", "Alpha"), ("A2", "Alpha"), ("A3", "Alpha"), ("B1", "Beta"), ("B2", "Beta")] {
-        std::sync::Arc::make_mut(&mut s.tools.presets).push(BrushPreset {
+        std::sync::Arc::make_mut(&mut *s.tools.presets).push(BrushPreset {
             name: n.into(),
             brush: Default::default(),
             builtin: false,
@@ -84,7 +84,7 @@ fn rename_checks_names() {
 #[test]
 fn bad_params_fail_without_changes() {
     let mut s = with_groups();
-    let before = s.tools.presets.clone();
+    let before = (*s.tools.presets).clone();
     let long = "x".repeat(MAX_NAME + 1);
     for (id, p) in [
         ("brush.presets.move", json!({})),
@@ -108,7 +108,7 @@ fn bad_params_fail_without_changes() {
     ] {
         assert!(s.execute(id, p.clone()).is_err(), "{id} {p}");
     }
-    assert_eq!(s.tools.presets, before);
+    assert_eq!(*s.tools.presets, before);
     // Huge indices clamp to the end.
     s.execute("brush.presets.move", json!({"name": "A1", "index": u64::MAX})).unwrap();
     s.execute("brush.presets.moveGroup", json!({"group": "Alpha", "index": u64::MAX})).unwrap();
@@ -119,7 +119,7 @@ fn with_folders() -> Session {
     let mut s = Session::new();
     for (n, f) in [("S0", &[][..]), ("I1", &["Ink"][..]), ("F1", &["Ink", "Fine"][..]), ("I2", &["Ink"][..]), ("D1", &["Dry"][..])] {
         let folder = f.iter().map(|x| x.to_string()).collect();
-        std::sync::Arc::make_mut(&mut s.tools.presets).push(BrushPreset {
+        std::sync::Arc::make_mut(&mut *s.tools.presets).push(BrushPreset {
             name: n.into(),
             brush: Default::default(),
             builtin: false,
@@ -192,7 +192,7 @@ fn folders_move_rename_and_delete() {
 #[test]
 fn bad_folder_params_fail_without_changes() {
     let mut s = with_folders();
-    let before = s.tools.presets.clone();
+    let before = (*s.tools.presets).clone();
     let long = "x".repeat(MAX_NAME + 1);
     let deep: Vec<&str> = vec!["a"; MAX_FOLDER_DEPTH + 1];
     for (id, p) in [
@@ -213,7 +213,7 @@ fn bad_folder_params_fail_without_changes() {
     ] {
         assert!(s.execute(id, p.clone()).is_err(), "{id} {p}");
     }
-    assert_eq!(s.tools.presets, before);
+    assert_eq!(*s.tools.presets, before);
     s.execute("brush.presets.moveGroup", json!({"group": "Set", "folder": ["Ink", "Fine"], "index": u64::MAX})).unwrap();
 }
 
@@ -226,7 +226,7 @@ fn with_two_groups() -> Session {
     let mut s = with_folders();
     for (n, f) in [("O1", &[][..]), ("B1", &["Box"][..])] {
         let folder = f.iter().map(|x| x.to_string()).collect();
-        std::sync::Arc::make_mut(&mut s.tools.presets).push(BrushPreset {
+        std::sync::Arc::make_mut(&mut *s.tools.presets).push(BrushPreset {
             name: n.into(),
             brush: Default::default(),
             builtin: false,
@@ -266,7 +266,7 @@ fn bad_moves_into_folders_fail_without_changes() {
     let mut s = with_two_groups();
     // A chain 31 deep under Set/Deep.
     let deep: Vec<String> = std::iter::once("Deep".to_string()).chain((0..30).map(|i| format!("d{i}"))).collect();
-    std::sync::Arc::make_mut(&mut s.tools.presets).push(BrushPreset {
+    std::sync::Arc::make_mut(&mut *s.tools.presets).push(BrushPreset {
         name: "Z".into(),
         brush: Default::default(),
         builtin: false,
@@ -274,7 +274,7 @@ fn bad_moves_into_folders_fail_without_changes() {
         folder: deep.clone(),
         captures: Default::default(),
     });
-    std::sync::Arc::make_mut(&mut s.tools.presets).push(BrushPreset {
+    std::sync::Arc::make_mut(&mut *s.tools.presets).push(BrushPreset {
         name: "Y".into(),
         brush: Default::default(),
         builtin: false,
@@ -282,7 +282,7 @@ fn bad_moves_into_folders_fail_without_changes() {
         folder: vec!["Dry".into()],
         captures: Default::default(),
     });
-    let before = s.tools.presets.clone();
+    let before = (*s.tools.presets).clone();
     let deep_json = json!(deep);
     for p in [
         // Into itself or its own descendant.
@@ -309,12 +309,12 @@ fn bad_moves_into_folders_fail_without_changes() {
     ] {
         assert!(s.execute("brush.presets.moveGroup", p.clone()).is_err(), "{p}");
     }
-    assert_eq!(s.tools.presets, before);
+    assert_eq!(*s.tools.presets, before);
     // Ink/Fine into Set itself: a clash with nothing, so it moves up a level.
     s.execute("brush.presets.moveGroup", json!({"group": "Set", "folder": ["Ink", "Fine"], "into": {"group": "Set"}})).unwrap();
     assert_eq!(folder_of(&s, "F1"), ["Fine"]);
     // An ungrouped preset's group can't move.
-    std::sync::Arc::make_mut(&mut s.tools.presets).push(BrushPreset {
+    std::sync::Arc::make_mut(&mut *s.tools.presets).push(BrushPreset {
         name: "U".into(),
         brush: Default::default(),
         builtin: false,

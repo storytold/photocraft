@@ -80,7 +80,9 @@ fn title_bar_pref(prefs: &photocraft_engine::prefs::Preferences) -> TitleBarPref
 }
 
 /// The automation roots: `--automation-read-root` / `--automation-write-root` (or their
-/// variables) win; a direction without one takes Preferences › AI Integrations' folder. A flag's
+/// variables) win; a direction without one takes Preferences › AI Integrations' folder, and with
+/// that empty too the default agent folder `Documents/ArtCraft/Agents/PhotoCraft`, created when
+/// first used (`AgentSettings::folders`). A flag's
 /// root that can't be opened stops the launch (exit status 2) as before. A preference's root that
 /// can't be opened, or isn't an absolute path (it would depend on the folder the app was started
 /// from), is left out, so that direction fails closed, and the warning says why: a folder moved
@@ -91,13 +93,31 @@ fn automation_workspace(
     flags: &photocraft_automation::args::AutomationArgs,
     prefs: &craft::automation::agents::AgentSettings,
 ) -> Result<(photocraft_automation::workspace::AuthorizedWorkspace, Option<String>), photocraft_automation::AutomationError> {
+    automation_workspace_in(flags, prefs, craft::control::agents::default_folder(AGENT_APP_NAME).as_deref())
+}
+
+/// The app's name in its default agent folder, `Documents/ArtCraft/Agents/PhotoCraft`.
+const AGENT_APP_NAME: &str = "PhotoCraft";
+
+/// [`automation_workspace`] with `default` as the default agent folder (tests use a temporary one).
+fn automation_workspace_in(
+    flags: &photocraft_automation::args::AutomationArgs,
+    prefs: &craft::automation::agents::AgentSettings,
+    default: Option<&std::path::Path>,
+) -> Result<(photocraft_automation::workspace::AuthorizedWorkspace, Option<String>), photocraft_automation::AutomationError> {
     let mut workspace = flags.workspace()?;
     let mut warnings = Vec::new();
+    let (read_given, write_given) = (!flags.automation_read_root.is_empty(), flags.automation_write_root.is_some());
+    // The default folder is created only when a direction no flag names has no folder of the
+    // person's own; otherwise it would be made and never used.
+    let needs_default = (!read_given && prefs.read_folder().is_none()) || (!write_given && prefs.write_folder().is_none());
+    let folders = prefs.folders_with(default.filter(|_| needs_default));
     for read in [true, false] {
-        let given = if read { !flags.automation_read_root.is_empty() } else { flags.automation_write_root.is_some() };
-        let Some(root) = (if read { prefs.read_folder() } else { prefs.write_folder() }).filter(|_| !given) else {
+        let given = if read { read_given } else { write_given };
+        let Some(root) = (if read { folders.read.clone() } else { folders.write.clone() }).filter(|_| !given) else {
             continue;
         };
+        let own = if read { prefs.read_folder() } else { prefs.write_folder() }.is_some();
         let opened = if !root.is_absolute() {
             Err(photocraft_automation::AutomationError::BadRequest(format!("`{}` is not an absolute path", root.display())))
         } else if read {
@@ -107,10 +127,11 @@ fn automation_workspace(
         };
         match opened {
             Ok(w) => workspace = w,
-            Err(e) => {
+            Err(e) if own => {
                 let which = if read { "Automation Read Folder" } else { "Automation Write Folder" };
                 warnings.push(format!("Preferences › AI Integrations › {which} is not used: {e}"));
             }
+            Err(e) => warnings.push(format!("The default agent folder {} is not used: {e}", root.display())),
         }
     }
     Ok((workspace, (!warnings.is_empty()).then(|| warnings.join("\n"))))
@@ -1066,10 +1087,50 @@ mod tests {
         let (ws, _) = super::automation_workspace(&flags(None, Some(&flag)), &roots(&flag, &pref)).unwrap();
         assert_eq!(ws.read_with_save_path("b.txt").unwrap().1.as_deref(), Some("b.txt"));
 
-        // Empty preferences grant nothing, as no flags do.
-        let (ws, warning) = super::automation_workspace(&flags(None, None), &craft::automation::agents::AgentSettings::default()).unwrap();
+        // Empty preferences and no default agent folder grant nothing, as no flags do.
+        let (ws, warning) = super::automation_workspace_in(&flags(None, None), &craft::automation::agents::AgentSettings::default(), None).unwrap();
         assert_eq!(warning, None);
         assert!(ws.read("a.txt").is_err() && ws.write("c.txt", b"x").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Empty preferences fall back to the default agent folder, created when first used, for
+    /// both directions (one shared capability); a flag or the person's own folder still wins.
+    #[test]
+    fn empty_folder_preferences_use_the_default_agent_folder() {
+        let dir = temp_dir("automation-roots-default");
+        let default = dir.join("ArtCraft").join("Agents").join("PhotoCraft");
+        let empty = craft::automation::agents::AgentSettings::default();
+
+        let (ws, warning) = super::automation_workspace_in(&flags(None, None), &empty, Some(&default)).unwrap();
+        assert_eq!(warning, None);
+        assert!(default.is_dir(), "the default agent folder is created");
+        ws.write("out.png", b"x").unwrap();
+        assert_eq!(std::fs::read(default.join("out.png")).unwrap(), b"x");
+        assert_eq!(ws.read_with_save_path("out.png").unwrap().1.as_deref(), Some("out.png"), "one folder for both: an implicit save is allowed");
+
+        let flag = dir.join("flag");
+        std::fs::create_dir_all(&flag).unwrap();
+        let (ws, _) = super::automation_workspace_in(&flags(None, Some(&flag)), &empty, Some(&default)).unwrap();
+        assert_eq!((ws.read_folders(), ws.write_folder()), (vec![default.clone()], Some(flag.clone())));
+
+        // A write flag and the person's own read folder leave nothing for the default: not created.
+        let unused = dir.join("unused");
+        let mut own = empty.clone();
+        own.read_root = flag.to_string_lossy().into_owned();
+        let (ws, _) = super::automation_workspace_in(&flags(None, Some(&flag)), &own, Some(&unused)).unwrap();
+        assert_eq!((ws.read_folders(), ws.write_folder()), (vec![flag.clone()], Some(flag.clone())));
+        assert!(!unused.exists(), "an unused default folder is not created");
+
+        let (ws, _) = super::automation_workspace_in(&flags(None, None), &own, Some(&default)).unwrap();
+        assert_eq!((ws.read_folders(), ws.write_folder()), (vec![flag.clone()], Some(default.clone())));
+
+        // A default that can't be made is left out with a warning; the app still starts.
+        let file = dir.join("file");
+        std::fs::write(&file, b"x").unwrap();
+        let (ws, warning) = super::automation_workspace_in(&flags(None, None), &empty, Some(&file.join("PhotoCraft"))).unwrap();
+        assert_eq!(warning, None, "a folder that couldn't be created is no folder at all");
+        assert!(ws.read_folders().is_empty() && ws.write_folder().is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

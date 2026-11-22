@@ -24,7 +24,7 @@ use crate::image_cmds::reidentify_copied_layers;
 use crate::{EngineError, Result, Session};
 
 /// A History panel snapshot: the document as it was when taken, and the layers it targeted.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub struct Snapshot {
     pub id: u64,
     pub name: String,

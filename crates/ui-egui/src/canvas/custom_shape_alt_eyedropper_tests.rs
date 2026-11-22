@@ -3,15 +3,21 @@
 //! only after the drag started still draws from the centre, and with a shape layer active Alt at
 //! the press does not sample.
 
+use craft::draw::ui::VectorMode;
+use craft::keymap::Mods;
 use egui::Modifiers;
+use photocraft_doc::{LayerContent, vector::PathOp};
 use serde_json::json;
 
-use super::*;
+use super::shape_alt_samples;
+use crate::PhotocraftApp;
+use crate::canvas::testing::click;
 use crate::canvas::{ToolEvent, tool_event};
+use crate::state::Tool;
 
 /// 800 × 600, white Background, a red (220,30,30) pixel layer at 100,100 to 300,250 (active),
 /// black foreground, the Custom Shape tool in Shape mode.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
@@ -20,6 +26,7 @@ fn app() -> PhotocraftApp {
     app.run("select.deselect", json!({})).unwrap();
     app.run("tools.setColors", json!({"foreground": "#000000"})).unwrap();
     app.ui.tool = Tool::CustomShape;
+    app.ui.tool_options.shape_mode = VectorMode::Shape;
     app.sync_views();
     app
 }
@@ -57,7 +64,7 @@ fn alt_click_on_the_red_layer_picks_it_as_foreground_and_fill() {
     app.ui.tool_options.shape_fill = false;
     app.ui.tool_options.shape_fill_gradient = Some(photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(0.0, 0.0, 1.0, 1.0)));
     let (before, count) = (steps(&app), layers(&app));
-    drag(&mut app, [200.0, 175.0], [200.0, 175.0], Modifiers::ALT, Modifiers::ALT);
+    click(&mut app, [200.0, 175.0], Modifiers::ALT);
     assert_eq!(foreground(&app), [220, 30, 30], "#DC1E1E");
     assert_eq!(tool_fill(&app), [220, 30, 30], "Fill 220,30,30");
     assert_eq!(layers(&app), count, "no new layer");
@@ -95,7 +102,7 @@ fn alt_pressed_after_the_drag_started_draws_from_the_centre() {
     assert_eq!(foreground(&app), [0, 0, 0], "nothing sampled");
     assert_eq!(layers(&app), count + 1, "a shape layer");
     let st = app.session.active().unwrap();
-    let photocraft_doc::LayerContent::Shape(shape) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("a shape layer") };
+    let LayerContent::Shape(shape) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("a shape layer") };
     // In the 300,250 to 500,350 box round the press, centred on it (a corner drag centres on 450,325).
     let (x0, y0, x1, y1) = shape.path.control_bounds().unwrap();
     assert!(x0 >= 299.5 && y0 >= 249.5 && x1 <= 500.5 && y1 <= 350.5, "{x0},{y0} to {x1},{y1}");
@@ -103,25 +110,31 @@ fn alt_pressed_after_the_drag_started_draws_from_the_centre() {
 }
 
 #[test]
-fn a_shape_layer_active_does_not_sample() {
+fn alt_drag_with_subtract_selected_edits_the_active_shape_without_sampling() {
     let mut app = app();
-    app.run("shape.create", json!({"rect": [500, 400, 100, 100], "fill": "#3270c0", "stroke": null})).unwrap();
+    app.run("shape.create", json!({"rect": [100, 100, 200, 150], "fill": "#3270c0", "stroke": null})).unwrap();
     app.run("tools.setColors", json!({"foreground": "#000000"})).unwrap();
-    assert!(!shape_alt_samples(&mut app, Modifiers::ALT, 200.0, 175.0));
-    tool_event(&mut app, ToolEvent::Down { x: 200.0, y: 175.0, pressure: 1.0 }, Modifiers::ALT);
-    assert!(!app.alt_sampling, "Alt at the press is not the Eyedropper");
-    assert_eq!(foreground(&app), [0, 0, 0]);
+    click(&mut app, [200.0, 175.0], Modifiers::ALT);
+    assert_eq!(foreground(&app), [0, 0, 0], "an active shape prevents sampling");
+    app.ui.tool_options.shape_path_op = "subtract".into();
+    let count = layers(&app);
+    drag(&mut app, [150.0, 125.0], [250.0, 225.0], Modifiers::ALT, Modifiers::ALT);
+    assert_eq!(foreground(&app), [0, 0, 0], "nothing sampled");
+    assert_eq!(layers(&app), count, "the component was added to the active shape layer");
+    let st = app.session.active().unwrap();
+    let LayerContent::Shape(shape) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("a shape layer") };
+    assert!(shape.path.subpaths.iter().any(|subpath| subpath.op == PathOp::Subtract), "Subtract adds a component to the active shape");
 }
 
 #[test]
 fn path_and_pixels_mode_and_ctrl_alt_do_not_sample() {
     let mut app = app();
-    for mode in ["path", "pixels"] {
-        app.ui.tool_options.shape_mode = mode.into();
-        assert!(!shape_alt_samples(&mut app, Modifiers::ALT, 200.0, 175.0), "{mode} mode was not measured");
+    const ALT: Mods = Mods { alt: true, ..Mods::NONE };
+    for mode in [VectorMode::Path, VectorMode::Pixels] {
+        app.ui.tool_options.shape_mode = mode;
+        assert!(!shape_alt_samples(&mut app, ALT, 200.0, 175.0), "{mode:?} mode keeps drawing");
     }
-    app.ui.tool_options.shape_mode = "shape".into();
-    assert!(shape_alt_samples(&mut app, Modifiers::ALT, 200.0, 175.0));
-    assert!(!shape_alt_samples(&mut app, Modifiers { alt: true, ctrl: true, ..Modifiers::NONE }, 200.0, 175.0), "Ctrl+Alt is the brush resize");
-    assert!(!shape_alt_samples(&mut app, Modifiers::NONE, 200.0, 175.0));
+    app.ui.tool_options.shape_mode = VectorMode::Shape;
+    assert!(!shape_alt_samples(&mut app, Mods { ctrl: true, ..ALT }, 200.0, 175.0), "Ctrl+Alt does not sample");
+    assert!(!shape_alt_samples(&mut app, Mods::NONE, 200.0, 175.0));
 }
