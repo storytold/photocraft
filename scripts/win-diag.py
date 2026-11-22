@@ -80,7 +80,6 @@ class BITMAPINFOHEADER(ctypes.Structure):
 
 
 MOUSEEVENTF_MOVE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_ABSOLUTE = 0x1, 0x2, 0x4, 0x8000
-KEYEVENTF_KEYUP, VK_MENU = 0x2, 0x12
 SRCCOPY, CAPTUREBLT = 0x00CC0020, 0x40000000
 SCREEN_W, SCREEN_H = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
 
@@ -96,14 +95,6 @@ def send_mouse(flags, x=0, y=0):
 
 def mouse_to(x, y):
     send_mouse(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, x, y)
-
-
-def tap_alt():
-    for flags in (0, KEYEVENTF_KEYUP):
-        i = INPUT(type=1)
-        i.u.ki.wVk = VK_MENU
-        i.u.ki.dwFlags = flags
-        user32.SendInput(1, ctypes.byref(i), ctypes.sizeof(INPUT))
 
 
 def window_of(pid, timeout):
@@ -140,6 +131,15 @@ def cursor():
     return (p.x, p.y)
 
 
+def drag_full_windows(on=None):
+    """Reads SPI_GETDRAGFULLWINDOWS; with `on`, sets it first (SPI_SETDRAGFULLWINDOWS, broadcast)."""
+    if on is not None:
+        user32.SystemParametersInfoW(0x25, 1 if on else 0, None, 3)
+    v = wt.BOOL(0)
+    ok = user32.SystemParametersInfoW(0x26, 0, ctypes.byref(v), 0)
+    return bool(v.value) if ok else None
+
+
 def place(hwnd, x, y, w, h):
     user32.ShowWindow(hwnd, 9)  # SW_RESTORE
     ok = user32.SetWindowPos(hwnd, 0, x, y, w, h, 0x0004 | 0x0010)  # SWP_NOZORDER | SWP_NOACTIVATE
@@ -149,10 +149,46 @@ def place(hwnd, x, y, w, h):
 
 def focus(hwnd):
     if user32.GetForegroundWindow() != hwnd:
-        tap_alt()
         user32.SetForegroundWindow(hwnd)
         time.sleep(0.5)
     say(f"focus asked: foreground={user32.GetForegroundWindow() == hwnd}")
+
+
+def start_notepad():
+    """Starts Notepad and makes it the foreground window; returns (process, hwnd or None)."""
+    proc = subprocess.Popen(["notepad.exe"])
+    np = None
+    end = time.time() + 10
+    while time.time() < end and not np:
+        np = user32.FindWindowW("Notepad", None) or None
+        time.sleep(0.3)
+    if not np:
+        np = user32.GetForegroundWindow() or None
+    if np:
+        user32.SetForegroundWindow(np)
+    time.sleep(0.7)
+    return proc, np
+
+
+def stop_notepad(proc, np):
+    if np:
+        user32.PostMessageW(np, 0x10, 0, 0)  # WM_CLOSE
+    time.sleep(0.5)
+    subprocess.run(["taskkill", "/F", "/IM", "notepad.exe"], capture_output=True)
+    try:
+        proc.wait(5)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def unfocused(app, name, body):
+    """Runs a case while Notepad, not the app, is the foreground window (#15549)."""
+    proc, np = start_notepad()
+    try:
+        say(f"notepad foreground set: notepad={np} app_not_foreground={user32.GetForegroundWindow() != app.hwnd}")
+        case(app, name, body)
+    finally:
+        stop_notepad(proc, np)
 
 
 def grab(x, y, w, h):
@@ -211,7 +247,22 @@ def black_share(bgra, origin, w, h, window, start):
 
 
 def corner_drags(hwnd, tag):
-    """#15870: drag the bottom-right corner outward, fast and slow, sampling the screen."""
+    """#15870: drag the bottom-right corner outward, fast and slow, sampling the screen, with full-window drag on."""
+    old = drag_full_windows()
+    say(f"dragfull before={old}")
+    now = drag_full_windows(True)
+    say(f"dragfull={now}")
+    if not now:
+        say("dragfull is still off; the drags run anyway")
+    try:
+        _corner_drags(hwnd, tag)
+    finally:
+        if old is not None:
+            drag_full_windows(old)
+        say(f"dragfull restored={drag_full_windows()}")
+
+
+def _corner_drags(hwnd, tag):
     place(hwnd, 40, 30, 640, 460)
     start = rect_of(hwnd)
     probe = grab(start[0], start[1], start[2] - start[0], start[3] - start[1])
@@ -230,7 +281,11 @@ def corner_drags(hwnd, tag):
         def sampler():
             t0 = time.perf_counter()
             while running[0] and len(grabs) < 400:
-                grabs.append((time.perf_counter() - t0, rect_of(hwnd), cursor(), grab(ox, oy, w, h)))
+                t = time.perf_counter() - t0
+                rect = rect_of(hwnd)
+                pos = cursor()
+                image = grab(ox, oy, w, h)
+                grabs.append((t, rect, pos, image, time.perf_counter() - t0 - t))
                 time.sleep(0.004)
 
         mouse_to(cx, cy)
@@ -244,20 +299,23 @@ def corner_drags(hwnd, tag):
             mouse_to(cx + k * step * 0.8, cy + k * step * 0.8)
             time.sleep(0.016)
         time.sleep(0.05)
+        release_pos = cursor()
         send_mouse(MOUSEEVENTF_LEFTUP)
         time.sleep(0.6)
         running[0] = False
         thread.join()
         final = rect_of(hwnd)
+        say(f"resize {tag} {name}: cursor at release={release_pos} final window rect={final}")
         say(f"resize {tag} {name}: start={start} end={final} grabs={len(grabs)} region={ox},{oy} {w}x{h}")
-        for t, window, pos, bgra in grabs:
+        shares = []
+        for k, (t, window, pos, bgra, took) in enumerate(grabs):
             b, total = black_share(bgra, (ox, oy), w, h, window, start)
             share = b / total if total else 0.0
-            say(f"resize {tag} {name} t={t * 1000:.0f}ms window={window} cursor={pos} new_px={total} black_px={b} black_share={share:.3f}")
-        if grabs:
-            picks = sorted({len(grabs) // 4, len(grabs) // 2, max(len(grabs) * 3 // 4, 0)})
-            for k in picks:
-                print_png(f"{tag}-{name}-{k}", grabs[k][3], w, h)
+            shares.append(share)
+            say(f"resize {tag} {name} #{k} t={t * 1000:.0f}ms grab_took={took * 1000:.0f}ms window={window} cursor={pos} new_px={total} black_px={b} black_share={share:.3f}")
+        # The three grabs with the largest black share; ties go to the earliest.
+        for k in sorted(range(len(grabs)), key=lambda k: (-shares[k], k))[:3]:
+            print_png(f"{tag}-{name}-{k}-black{shares[k]:.3f}", grabs[k][3], w, h)
         mouse_to(SCREEN_W // 2, 10)
 
 
@@ -492,7 +550,10 @@ def round_(exe, label, scale, drags=False):
         say(f"{label}: window={ui.get('window')}")
         case(app, "a file.new", lambda: app.call("engine.execute", {"command": "file.new", "params": {"width": 600, "height": 400, "background": "#ffffff"}}))
         time.sleep(1.0)
-        case(app, "b ui.pointer brush stroke", lambda: pointer_stroke(app))
+        if drags and app.hwnd:
+            unfocused(app, "b ui.pointer brush stroke (Notepad in front)", lambda: pointer_stroke(app))
+        else:
+            case(app, "b ui.pointer brush stroke", lambda: pointer_stroke(app))
         case(app, "c ui.pointer stroke, connection closed after the reply", lambda: closed_connection_stroke(app))
 
         def move_drag():
@@ -503,7 +564,10 @@ def round_(exe, label, scale, drags=False):
         case(app, "d ui.pointer move drag", move_drag)
         case(app, "e free transform handle drag", lambda: free_transform(app))
         case(app, "f ui.click/ui.move hold brush stroke", lambda: control_click_stroke(app))
-        case(app, "g type ui.click", lambda: type_click(app))
+        if drags and app.hwnd:
+            unfocused(app, "g type ui.click (Notepad in front)", lambda: type_click(app))
+        else:
+            case(app, "g type ui.click", lambda: type_click(app))
         case(app, "h type ui.pointer", lambda: type_pointer(app))
         if app.hwnd:
             focus(app.hwnd)

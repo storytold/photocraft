@@ -168,6 +168,11 @@ impl PhotocraftApp {
                 );
             }
         }
+        if crate::diag::on()
+            && let Some(line) = crate::diag::resize_pass(&ctx)
+        {
+            diag!("pass {line}");
+        }
         self.hover_layer = None;
         // The contextual task bar reports itself again if this frame draws it (#10890).
         self.ui.task_bar_shown = None;

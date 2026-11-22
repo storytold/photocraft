@@ -48,3 +48,19 @@ pub(crate) fn text_changed(json: &str) -> bool {
     json.clone_into(&mut last);
     true
 }
+
+/// One line for a UI pass whose viewport size differs from the previous pass's (a resize in
+/// progress): milliseconds since the first call and the viewport size in physical pixels. The
+/// viewport size changing between passes is the signal: the app has no other resize flag.
+pub(crate) fn resize_pass(ctx: &egui::Context) -> Option<String> {
+    static START: OnceLock<std::time::Instant> = OnceLock::new();
+    static LAST: std::sync::Mutex<Option<(u32, u32)>> = std::sync::Mutex::new(None);
+    let start = *START.get_or_init(std::time::Instant::now);
+    let ppp = ctx.pixels_per_point();
+    let size = ctx.content_rect().size();
+    let px = ((size.x * ppp).round() as u32, (size.y * ppp).round() as u32);
+    let mut last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let changed = last.is_some_and(|l| l != px);
+    *last = Some(px);
+    changed.then(|| format!("resize t={}ms viewport={}x{}px", start.elapsed().as_millis(), px.0, px.1))
+}

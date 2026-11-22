@@ -236,6 +236,7 @@ fn prompt(app: &PhotocraftApp, reason: &str) -> StandardPrompt {
 pub fn queue_fallback_notice(app: &mut PhotocraftApp, reason: impl Into<String>) {
     let reason = reason.into();
     let prompt = prompt(app, &reason);
+    diag!("prompt queued kind=GpuFallback title={:?}", "Switched to CPU rendering");
     // A prompt of another kind already open keeps the input; `gpu_fallback_notice` stays set for the inspector.
     let _ = app.framework.dialogs.open_unless_open(prompt);
     app.ui.gpu_fallback_notice = Some(reason);

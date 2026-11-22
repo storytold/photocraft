@@ -119,6 +119,7 @@ pub(super) fn open_stop_message(app: &mut PhotocraftApp, message: &str, allow_co
     } else {
         prompt.button(PromptChoice::Proceed, tl!("Stop"))
     };
+    diag!("prompt queued kind=StopMessage title={:?}", "Message");
     // One prompt per paused playback: a called action's Stop opens its own while its callers wait.
     app.framework.dialogs.open(prompt.instance(token).tag(StopTag { token }))
 }

@@ -943,6 +943,7 @@ fn ask_batch_interrupt(app: &mut PhotocraftApp, id: JobId) {
         .button(PromptChoice::Proceed, tl!("Continue").to_owned())
         .button(PromptChoice::Cancel, tl!("Stop").to_owned())
         .tag(BatchJob(id));
+    diag!("prompt queued kind=BatchInterrupt title={:?}", "Batch");
     let _ = app.framework.dialogs.open_unless_open(prompt);
 }
 
