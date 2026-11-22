@@ -153,6 +153,8 @@ pub(crate) struct SourceInit {
     pub(crate) display: Arc<photocraft_engine::display_color::CanvasDisplay>,
     pub(crate) gpu: Option<CameraRawGpu>,
     pub(crate) encoding_gamma: f32,
+    /// The document's primaries for the develop ([`DevelopInputs::document_primaries`]).
+    pub(crate) document_primaries: Option<[[f32; 3]; 3]>,
     pub(crate) lab_transform: Arc<craft::cms::Transform>,
     pub(crate) scope_transform: Arc<craft::cms::Transform>,
     pub(crate) detail: DetailPreview,
@@ -212,8 +214,22 @@ impl PcRawSource {
 
     /// A source over `init`; its pictures are empty until the first develop lands.
     pub(crate) fn new(init: SourceInit) -> Self {
-        let SourceInit { proxy, selection, proxy_size, full_size, block, float, display, gpu, encoding_gamma, lab_transform, scope_transform, detail, ctx } =
-            init;
+        let SourceInit {
+            proxy,
+            selection,
+            proxy_size,
+            full_size,
+            block,
+            float,
+            display,
+            gpu,
+            encoding_gamma,
+            document_primaries,
+            lab_transform,
+            scope_transform,
+            detail,
+            ctx,
+        } = init;
         let size = PixelSize::new(full_size.0 as u32, full_size.1 as u32);
         // Before (Y) is the undeveloped proxy, shown through the document's display.
         let before = SharedPicture::new(size);
@@ -234,7 +250,7 @@ impl PcRawSource {
             display,
             gpu,
             source_key: crate::camera_raw_gpu::source_key(),
-            inputs: DevelopInputs { seed: 0, pixel_scale: (proxy_size.0 as f32 / full_size.0.max(1) as f32).min(1.0), encoding_gamma },
+            inputs: DevelopInputs { seed: 0, pixel_scale: (proxy_size.0 as f32 / full_size.0.max(1) as f32).min(1.0), encoding_gamma, document_primaries },
             lab_transform,
             scope_transform,
             before,
