@@ -1068,3 +1068,314 @@ fn apply_box_clamps_sizes_to_a_finite_minimum_and_maximum() {
     apply_box(&mut t, [0.0, 0.0, -20.0, 0.25]);
     assert_eq!(box_size(&t), (1.0, 1.0));
 }
+
+/// Synthesizes a two-axis variable font (`wght` 100–900, `wdth` 75–100) from the bundled Inter
+/// Regular face for PSD round-trip testing without shipping extra font binaries.
+fn psd_test_font(family: &str, variable: bool) -> Vec<u8> {
+    let source = photocraft_text::fonts::INTER_REGULAR.as_slice();
+    let fixed = |v: f32| ((v * 65536.0).round() as i32).to_be_bytes();
+    let prefix = family.replace(' ', "");
+    let face_ps = format!("{prefix}-{}", if variable { "Regular" } else { "Static" });
+    let black_ps = format!("{prefix}-Black");
+    let names = [
+        (1u16, family),
+        (2, if variable { "Regular" } else { "Static" }),
+        (6, face_ps.as_str()),
+        (16, family),
+        (256, "Weight"),
+        (257, "Width"),
+        (258, "Light Condensed"),
+        (259, "Bold"),
+        (260, black_ps.as_str()),
+        (261, "Heavy"),
+    ];
+    let mut name = Vec::new();
+    let mut strings = Vec::new();
+    for v in [0u16, names.len() as u16, (6 + names.len() * 12) as u16] {
+        name.extend(v.to_be_bytes());
+    }
+    for (id, value) in names {
+        let encoded: Vec<_> = value.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        for n in [3, 1, 0x409, id, encoded.len() as u16, strings.len() as u16] {
+            name.extend(n.to_be_bytes());
+        }
+        strings.extend(encoded);
+    }
+    name.extend(strings);
+
+    let mut fvar = Vec::new();
+    for n in [1u16, 0, 16, 2, 2, 20, 3, 14] {
+        fvar.extend(n.to_be_bytes());
+    }
+    for (tag, min, default, max, name_id) in [(b"wght", 100.0, 400.0, 900.0, 256u16), (b"wdth", 75.0, 100.0, 100.0, 257)] {
+        fvar.extend(tag);
+        for v in [min, default, max] {
+            fvar.extend(fixed(v));
+        }
+        fvar.extend([0, 0]);
+        fvar.extend(name_id.to_be_bytes());
+    }
+    for (subfamily, coords, ps) in [(258u16, [300.0, 75.0], 0xFFFFu16), (259, [700.0, 100.0], 0xFFFF), (261, [900.0, 100.0], 260)] {
+        fvar.extend(subfamily.to_be_bytes());
+        fvar.extend([0, 0]);
+        for v in coords {
+            fvar.extend(fixed(v));
+        }
+        fvar.extend(ps.to_be_bytes());
+    }
+
+    let count = u16::from_be_bytes(source[4..6].try_into().unwrap()) as usize;
+    let mut tables: Vec<([u8; 4], Vec<u8>)> = (0..count)
+        .map(|i| {
+            let r = 12 + i * 16;
+            let at = u32::from_be_bytes(source[r + 8..r + 12].try_into().unwrap()) as usize;
+            let len = u32::from_be_bytes(source[r + 12..r + 16].try_into().unwrap()) as usize;
+            (source[r..r + 4].try_into().unwrap(), source[at..at + len].to_vec())
+        })
+        .filter(|(tag, _)| tag != b"name")
+        .collect();
+    tables.push((*b"name", name));
+    if variable {
+        tables.push((*b"fvar", fvar));
+    }
+    tables.sort_by_key(|(tag, _)| *tag);
+
+    let mut out = source[0..4].to_vec();
+    for n in [tables.len() as u16, 0, 0, 0] {
+        out.extend(n.to_be_bytes());
+    }
+    let mut at = 12 + 16 * tables.len();
+    for (tag, data) in &tables {
+        out.extend(tag);
+        out.extend(0u32.to_be_bytes());
+        out.extend((at as u32).to_be_bytes());
+        out.extend((data.len() as u32).to_be_bytes());
+        at += data.len().next_multiple_of(4);
+    }
+    for (_, data) in &tables {
+        out.extend(data);
+        out.resize(out.len().next_multiple_of(4), 0);
+    }
+    out
+}
+
+/// #6085: variable-font styles (`fontStyle`) and axis slider edits (`variations`) update the run's
+/// PostScript identity instead of leaving `<Family>-Regular`, so saving and reopening a PSD keeps
+/// the selected weight/width instead of reverting to Regular.
+#[test]
+fn variable_font_styles_and_axes_survive_psd_roundtrip() {
+    {
+        let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+        if !eng.fonts.has_family("VarPSD Test") {
+            eng.fonts.register_font_data(psd_test_font("VarPSD Test", true));
+        }
+    }
+    let mut s = session();
+    let id = s.execute("type.create", json!({"text": "Variable", "font": "VarPSD Test", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+    let psd_ps = |s: &Session| {
+        let t = text_layer(s, id);
+        let reopened = photocraft_text::psd::text_layer_from_tysh(t.psd_raw.as_ref().unwrap(), 72.0).unwrap();
+        reopened.char_runs()[0].style.postscript_name.clone()
+    };
+    assert_eq!(psd_ps(&s).as_deref(), Some("VarPSDTest-Regular"));
+
+    // Picking a multi-axis `fvar` named instance applies its non-`wght` axes and TN #5902 PS name.
+    s.execute("type.setStyle", json!({"layer": id, "fontStyle": "Light Condensed"})).unwrap();
+    let run = &text_layer(&s, id).char_runs()[0].style;
+    assert_eq!(run.weight, 300);
+    assert_eq!(run.postscript_name.as_deref(), Some("VarPSDTest-LightCondensed"));
+    assert_eq!(run.variations, vec![FontVariation { axis: "wdth".into(), value: 75.0 }]);
+    assert_eq!(psd_ps(&s).as_deref(), Some("VarPSDTest-LightCondensed"));
+
+    // Picking an instance with an explicit `postScriptNameID` ("Heavy" at wght 900 -> Black) uses
+    // the font's real weight and PostScript name, and resets `wdth` back to the face default.
+    s.execute("type.setStyle", json!({"layer": id, "fontStyle": "Heavy"})).unwrap();
+    let run = &text_layer(&s, id).char_runs()[0].style;
+    assert_eq!(run.weight, 900);
+    assert!(run.variations.is_empty(), "{:?}", run.variations);
+    assert_eq!(psd_ps(&s).as_deref(), Some("VarPSDTest-Black"));
+
+    // Resetting to Regular, then dragging the Weight axis slider (`variations`), must NOT leave
+    // `VarPSDTest-Regular` in the PSD `FontSet`.
+    s.execute("type.setStyle", json!({"layer": id, "fontStyle": "Regular"})).unwrap();
+    assert_eq!(psd_ps(&s).as_deref(), Some("VarPSDTest-Regular"));
+
+    s.execute("type.setStyle", json!({"layer": id, "variations": {"wght": 700}})).unwrap();
+    let run = &text_layer(&s, id).char_runs()[0].style;
+    assert_eq!((run.weight, run.font_style.as_str()), (700, "Bold"));
+    assert_eq!(psd_ps(&s).as_deref(), Some("VarPSDTest-Bold"));
+
+    // Neither weight is a named instance. Reopen complete PSD bytes so the importer and its
+    // installed-font resolution both have a chance to replace the edited coordinates.
+    let reopened = |s: &Session| {
+        let bytes = photocraft_io::export(&s.active().unwrap().doc, "axes.psd", &Default::default()).unwrap().bytes;
+        let doc = photocraft_io::import("axes.psd", &bytes).unwrap().document;
+        let t = doc
+            .layers
+            .iter()
+            .find_map(|l| match &l.content {
+                LayerContent::Text(t) => Some(t),
+                _ => None,
+            })
+            .unwrap();
+        t.char_runs()[0].style.clone()
+    };
+    s.execute("type.setStyle", json!({"layer": id, "variations": {"wght": 650}})).unwrap();
+    let off_step = reopened(&s);
+    assert_eq!(off_step.weight, 650);
+    assert_eq!(off_step.postscript_name.as_deref(), Some("VarPSDTest_650wght"));
+    assert_eq!(off_step.font_family, "VarPSD Test");
+
+    s.execute("type.setStyle", json!({"layer": id, "font": "VarPSDTest-LightCondensed"})).unwrap();
+    s.execute("type.setStyle", json!({"layer": id, "variations": {"wght": 500}})).unwrap();
+    let condensed = reopened(&s);
+    assert_eq!(condensed.weight, 500);
+    assert_eq!(condensed.postscript_name.as_deref(), Some("VarPSDTest_500wght_75wdth"));
+    assert!(condensed.variations.iter().any(|v| v.axis == "wdth" && v.value == 75.0));
+
+    // A PSD can supply only the instance name, without any explicit variations.
+    let mut imported =
+        CharStyle { font_family: "VarPSD Test".into(), weight: 300, postscript_name: Some("VarPSDTest-LightCondensed".into()), ..Default::default() };
+    apply_char_props(&mut imported, &json!({"variations": {"wght": 500}}));
+    assert_eq!(imported.postscript_name, condensed.postscript_name);
+    assert!(imported.variations.iter().any(|v| v.axis == "wdth" && v.value == 75.0));
+
+    // When a command supplies both a coordinate-encoded `postscriptName` and updated `variations`,
+    // `merge_variations` updates `s.variations` while leaving `s.postscript_name` as requested;
+    // PSD export + reopen must preserve the updated axis rather than reverting to `75wdth`.
+    s.execute("type.setStyle", json!({"layer": id, "postscriptName": "VarPSDTest_500wght_75wdth", "variations": {"wdth": 88.0}})).unwrap();
+    let merged = reopened(&s);
+    assert_eq!(merged.weight, 500);
+    assert!(merged.variations.iter().any(|v| v.axis == "wdth" && (v.value - 88.0).abs() < 1e-4), "{:?}", merged.variations);
+}
+
+/// Synthesizes a width-only variable font (`wdth` 75–100, no `wght` axis) at a fixed `OS/2` weight.
+fn width_only_test_font(family: &str, subfamily: &str, ps_suffix: &str, weight_class: u16) -> Vec<u8> {
+    let source = photocraft_text::fonts::INTER_REGULAR.as_slice();
+    let fixed = |v: f32| ((v * 65536.0).round() as i32).to_be_bytes();
+    let prefix = family.replace(' ', "");
+    let face_ps = format!("{prefix}-{ps_suffix}");
+    let cond_sub = format!("{subfamily} Condensed");
+    let names = [(1u16, family), (2, subfamily), (6, face_ps.as_str()), (16, family), (256, "Width"), (257, cond_sub.as_str())];
+    let mut name = Vec::new();
+    let mut strings = Vec::new();
+    for v in [0u16, names.len() as u16, (6 + names.len() * 12) as u16] {
+        name.extend(v.to_be_bytes());
+    }
+    for (id, value) in names {
+        let encoded: Vec<_> = value.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        for n in [3, 1, 0x409, id, encoded.len() as u16, strings.len() as u16] {
+            name.extend(n.to_be_bytes());
+        }
+        strings.extend(encoded);
+    }
+    name.extend(strings);
+
+    let mut fvar = Vec::new();
+    for n in [1u16, 0, 16, 2, 1, 20, 1, 10] {
+        fvar.extend(n.to_be_bytes());
+    }
+    fvar.extend(b"wdth");
+    for v in [75.0, 100.0, 100.0] {
+        fvar.extend(fixed(v));
+    }
+    fvar.extend([0, 0]);
+    fvar.extend(256u16.to_be_bytes());
+    fvar.extend(257u16.to_be_bytes());
+    fvar.extend([0, 0]);
+    fvar.extend(fixed(75.0));
+    fvar.extend(0xFFFFu16.to_be_bytes());
+
+    let count = u16::from_be_bytes(source[4..6].try_into().unwrap()) as usize;
+    let mut tables: Vec<([u8; 4], Vec<u8>)> = (0..count)
+        .map(|i| {
+            let r = 12 + i * 16;
+            let at = u32::from_be_bytes(source[r + 8..r + 12].try_into().unwrap()) as usize;
+            let len = u32::from_be_bytes(source[r + 12..r + 16].try_into().unwrap()) as usize;
+            let tag: [u8; 4] = source[r..r + 4].try_into().unwrap();
+            let mut data = source[at..at + len].to_vec();
+            if &tag == b"OS/2" && data.len() >= 6 {
+                data[4..6].copy_from_slice(&weight_class.to_be_bytes());
+            }
+            (tag, data)
+        })
+        .filter(|(tag, _)| tag != b"name")
+        .collect();
+    tables.push((*b"name", name));
+    tables.push((*b"fvar", fvar));
+    tables.sort_by_key(|(tag, _)| *tag);
+
+    let mut out = source[0..4].to_vec();
+    for n in [tables.len() as u16, 0, 0, 0] {
+        out.extend(n.to_be_bytes());
+    }
+    let mut at = 12 + 16 * tables.len();
+    for (tag, data) in &tables {
+        out.extend(tag);
+        out.extend(0u32.to_be_bytes());
+        out.extend((at as u32).to_be_bytes());
+        out.extend((data.len() as u32).to_be_bytes());
+        at += data.len().next_multiple_of(4);
+    }
+    for (_, data) in &tables {
+        out.extend(data);
+        out.resize(out.len().next_multiple_of(4), 0);
+    }
+    out
+}
+
+#[test]
+fn variable_faces_without_wght_axis_compare_face_weight() {
+    let reg_only = "Width Only Reg Test";
+    let pair = "Width Pair Test";
+    {
+        let mut text = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+        if !text.fonts.has_family(reg_only) {
+            text.fonts.register_font_data(width_only_test_font(reg_only, "Regular", "Regular", 400));
+        }
+        if !text.fonts.has_family(pair) {
+            text.fonts.register_font_data(width_only_test_font(pair, "Regular", "Regular", 400));
+            text.fonts.register_font_data(width_only_test_font(pair, "Bold", "Bold", 700));
+        }
+    }
+
+    // Only a Regular (400) width-variable face is installed: Bold (700) must stay unnamed rather
+    // than adopting `WidthOnlyRegTest-Regular` (or its Condensed named instance) and losing Bold.
+    let mut bold_missing = CharStyle::default();
+    apply_char_props(&mut bold_missing, &json!({"font": reg_only, "weight": 700}));
+    assert_eq!(bold_missing.weight, 700);
+    assert_eq!(bold_missing.postscript_name, None);
+
+    let mut bold_condensed = CharStyle { variations: vec![FontVariation { axis: "wdth".into(), value: 75.0 }], ..Default::default() };
+    apply_char_props(&mut bold_condensed, &json!({"font": reg_only, "weight": 700}));
+    assert_eq!(bold_condensed.postscript_name, None);
+
+    let mut reg = CharStyle::default();
+    apply_char_props(&mut reg, &json!({"font": reg_only, "weight": 400}));
+    assert_eq!(reg.postscript_name.as_deref(), Some("WidthOnlyRegTest-Regular"));
+
+    // When both Regular (400) and Bold (700) width-variable faces exist, Bold selects the Bold face.
+    let mut bold_pair = CharStyle::default();
+    apply_char_props(&mut bold_pair, &json!({"font": pair, "weight": 700}));
+    assert_eq!(bold_pair.postscript_name.as_deref(), Some("WidthPairTest-Bold"));
+}
+
+#[test]
+fn axis_edits_stay_on_the_owning_variable_face_beside_a_static_face() {
+    let family = "Mixed Axis Test";
+    {
+        let mut text = photocraft_text::shared().lock().unwrap();
+        text.fonts.register_font_data(psd_test_font(family, false));
+        text.fonts.register_font_data(psd_test_font(family, true));
+        assert_eq!(text.fonts.faces(family).len(), 2);
+    }
+    let mut style = CharStyle { font_family: family.into(), ..Default::default() };
+    apply_char_props(&mut style, &json!({"fontStyle": "Light Condensed"}));
+    apply_char_props(&mut style, &json!({"variations": {"wght": 400, "wdth": 80}}));
+    let mut text = photocraft_text::shared().lock().unwrap();
+    let ps = style.postscript_name.as_deref().unwrap();
+    let instance = text.fonts.instance_by_postscript(family, ps).expect("edited coordinates identify the variable face");
+    let faces = text.fonts.faces(family);
+    assert_eq!(faces[instance.face_index].postscript_name.as_deref(), Some("MixedAxisTest-Regular"));
+    assert!(instance.axes.contains(&("wdth".into(), 80.0)));
+}

@@ -21,6 +21,10 @@ use photocraft_geom::{Affine, Point};
 use crate::engine_data::{self as ed, Value as E};
 use crate::fonts::guess_from_postscript;
 
+// A real face name can also carry explicit overrides, e.g. when a TN 5902 name
+// would exceed 127 bytes. Keep those coordinates per run, independent of the FontSet index.
+const VARIATION_OVERRIDES: &str = "PhotoCraftVariations";
+
 mod build;
 mod edit;
 mod import;
@@ -184,6 +188,65 @@ mod nonfinite_tests {
         assert_eq!(para_style(&[], &d, 1.0).start_indent_pt, 0.0);
         let d = parse(b"<< /FontSize 24.0 >>").unwrap();
         assert_eq!(char_style(&[], &d, &[], 1.0).size_pt, 24.0);
+    }
+
+    #[test]
+    fn real_face_names_keep_per_run_axes_when_a_custom_name_cannot_be_used() {
+        use photocraft_doc::text::FontVariation;
+        let name = "SplitVariable-Roman".to_string();
+        for width in [72.5, 81.0] {
+            let s = CharStyle {
+                postscript_name: Some(name.clone()),
+                variations: vec![FontVariation { axis: "wdth".into(), value: width }, FontVariation { axis: "wght".into(), value: 512.0 }],
+                weight: 512,
+                ..Default::default()
+            };
+            let encoded = style_sheet_data(&s, 0, 1.0);
+            let back = char_style(&[], &encoded, std::slice::from_ref(&name), 1.0);
+            assert_eq!(back.variations, s.variations);
+            assert_eq!(back.weight, 512);
+            assert_eq!(back.postscript_name, s.postscript_name);
+        }
+    }
+
+    #[test]
+    fn variation_overrides_win_over_stale_custom_postscript_and_follow_font_sheet() {
+        use photocraft_doc::text::FontVariation;
+        let stale_ps = "SplitVariable_512wght_72.5wdth".to_string();
+        let s = CharStyle {
+            postscript_name: Some(stale_ps.clone()),
+            variations: vec![FontVariation { axis: "wdth".into(), value: 81.0 }],
+            weight: 512,
+            ..Default::default()
+        };
+        let encoded = style_sheet_data(&s, 0, 1.0);
+        assert!(encoded.get(VARIATION_OVERRIDES).is_some(), "non-empty variations serialize even when postscript_name parses");
+        let back = char_style(&[], &encoded, std::slice::from_ref(&stale_ps), 1.0);
+        assert_eq!(back.variations, vec![FontVariation { axis: "wght".into(), value: 512.0 }, FontVariation { axis: "wdth".into(), value: 81.0 }]);
+
+        // Inherited `Font` reads `PhotoCraftVariations` from the base sheet that supplied `Font`,
+        // while a run naming a different `Font` does not inherit the base font's overrides.
+        let fonts = vec!["SplitVariable-Roman".to_string(), "OtherFont-Regular".to_string()];
+        let base_sheet = style_sheet_data(
+            &CharStyle {
+                postscript_name: Some(fonts[0].clone()),
+                variations: vec![FontVariation { axis: "wdth".into(), value: 84.0 }, FontVariation { axis: "wght".into(), value: 620.0 }],
+                weight: 620,
+                ..Default::default()
+            },
+            0,
+            1.0,
+        );
+        let inherited_run = parse(b"<< /FontSize 18.0 >>").unwrap();
+        let inherited = char_style(&[Some(&base_sheet)], &inherited_run, &fonts, 1.0);
+        assert_eq!(inherited.postscript_name.as_deref(), Some("SplitVariable-Roman"));
+        assert_eq!(inherited.weight, 620);
+        assert_eq!(inherited.variations, vec![FontVariation { axis: "wdth".into(), value: 84.0 }, FontVariation { axis: "wght".into(), value: 620.0 }]);
+
+        let other_font_run = parse(b"<< /Font 1 /FontSize 18.0 >>").unwrap();
+        let other = char_style(&[Some(&base_sheet)], &other_font_run, &fonts, 1.0);
+        assert_eq!(other.postscript_name.as_deref(), Some("OtherFont-Regular"));
+        assert!(other.variations.is_empty(), "base font overrides must not leak onto a run naming a different font: {:?}", other.variations);
     }
 
     /// #9470: `BaselineDirection` sets vertical type's roman text upright (1, what Photoshop's

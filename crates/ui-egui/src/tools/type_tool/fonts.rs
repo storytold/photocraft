@@ -48,12 +48,25 @@ pub(crate) fn selected_style(style: &photocraft_doc::text::CharStyle) -> String 
     if let Some(ps) = &style.postscript_name
         && let Some(engine) = photocraft_text::try_shared()
     {
-        let faces = engine.lock().unwrap_or_else(|e| e.into_inner()).fonts.faces(&style.font_family);
-        if let Some(face) = faces.into_iter().find(|f| f.postscript_name.as_ref() == Some(ps)) {
+        let mut eng = engine.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(face) = eng.fonts.faces(&style.font_family).into_iter().find(|f| f.postscript_name.as_ref() == Some(ps))
+            && (face.axes.is_empty()
+                || (face.italic == style.italic
+                    && face.weight.round() as u16 == style.weight
+                    && face.axes.iter().all(|(tag, _, def, _)| {
+                        tag == "opsz" || style.variations.iter().find(|v| &v.axis == tag).is_none_or(|v| (v.value - def).abs() <= 0.5)
+                    })))
+        {
             return face.style;
         }
+        if let Some(inst) = eng.fonts.instance_by_postscript(&style.font_family, ps) {
+            return inst.style;
+        }
     }
-    if style.font_style.is_empty() { if style.italic { "Italic".into() } else { "Regular".into() } } else { style.font_style.clone() }
+    if !style.font_style.is_empty() {
+        return style.font_style.clone();
+    }
+    photocraft_text::fonts::fallback_style(f32::from(style.weight), style.italic)
 }
 
 /// Localized style label for the dropdown. The raw string stays the engine's `fontStyle` key;
