@@ -56,6 +56,7 @@ pub mod panels;
 pub mod preset_files_ui;
 pub mod proxy;
 pub mod render_path;
+pub(crate) mod scratch_reads;
 pub mod state;
 pub mod texel_guard;
 pub mod theme;
@@ -973,6 +974,8 @@ mod layer_thumb_bounds_tests;
 mod mask_thumb_refresh_tests;
 #[cfg(test)]
 mod menu_floor_trials;
+#[cfg(test)]
+mod scratch_read_keys_tests;
 
 #[cfg(test)]
 mod new_doc_remember_tests;
