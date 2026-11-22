@@ -243,6 +243,11 @@ pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandSta
     SwatchesMenu::states(&app.session.presets.swatches).into_iter().map(|(command, state)| (CommandRef::from(command), state)).collect()
 }
 
+/// [`command_states`], derived from the presets the swatches live in.
+pub(crate) fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    crate::app::framework::derived_states(app, name, &app.session.presets.revision(), || command_states(app))
+}
+
 /// Runs a fired command of the Swatches menu; false for another set's command.
 pub(crate) fn run_fired(app: &mut PhotocraftApp, ctx: &egui::Context, command: &CommandRef) -> bool {
     let Some(command) = SwatchesCommand::from_ref(command) else { return false };
@@ -414,11 +419,11 @@ mod tests {
         let names: Vec<String> = app.session.presets.swatches.iter().map(|g| g.name.clone()).collect();
         assert!(names.len() >= 2, "the default library has folders: {names:?}");
         let last = names.last().unwrap().clone();
-        let rev = app.session.presets.rev;
+        let rev = app.session.presets.revision();
         apply_edit(&mut app, SwatchEdit::move_group(last.clone(), 0));
         let order: Vec<String> = app.session.presets.swatches.iter().map(|g| g.name.clone()).collect();
         assert_eq!(order[0], last, "the dragged folder moved to the front: {order:?}");
         assert_eq!(order[1], names[0]);
-        assert_ne!(app.session.presets.rev, rev, "the library saves its new order");
+        assert_ne!(app.session.presets.revision(), rev, "the library saves its new order");
     }
 }

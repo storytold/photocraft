@@ -243,7 +243,7 @@ pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: 
         }
         .map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))
     };
-    let apply = move |s: &mut photocraft_engine::Session, (r, wb): (photocraft_io::ImportResult, bool)| replace_raw_document(s, doc_id, r, wb);
+    let apply = move |s: &mut photocraft_engine::CoreSession, (r, wb): (photocraft_io::ImportResult, bool)| replace_raw_document(s, doc_id, r, wb);
     let label = crate::i18n::fmt(tl!("Developing {name}"), &[("name", &raw.name)]);
     let started = if app.background_jobs {
         app.session.start_job(REDEVELOP_JOB, json!({"name": raw.name}), &label, true, work, apply).map_err(|e| e.to_string())?
@@ -279,7 +279,7 @@ pub(super) fn return_on_failure(app: &mut PhotocraftApp, reply: &Value, original
 /// position and with the same path. Returns `{document, docId, previous, warnings, wb}`:
 /// `document` is the tab index at apply time, `docId` is the replacement's stable identity.
 pub(super) fn replace_raw_document(
-    s: &mut photocraft_engine::Session,
+    s: &mut photocraft_engine::CoreSession,
     doc_id: photocraft_doc::DocId,
     mut r: photocraft_io::ImportResult,
     wb: bool,
