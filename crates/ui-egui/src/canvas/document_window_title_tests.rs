@@ -25,9 +25,28 @@ struct Host {
     nodes: HashMap<ViewportId, HashMap<NodeId, Node>>,
     commands: Vec<(ViewportId, egui::ViewportCommand)>,
     time: f64,
+    /// Where the OS has the floating window, once it moved from where it opened.
+    moved: Option<Rect>,
 }
 
 impl Host {
+    /// The floating window's outer rect on the desktop, as the OS reports it.
+    fn window_rect(&self) -> Rect {
+        self.moved.unwrap_or_else(window_rect)
+    }
+
+    /// The window facts of the main window and the floating window `id`, the floating one with the keyboard.
+    fn infos(&self, id: ViewportId) -> egui::ViewportIdMap<egui::ViewportInfo> {
+        let info = |rect: Rect, focused: bool| egui::ViewportInfo {
+            inner_rect: Some(rect),
+            outer_rect: Some(rect),
+            focused: Some(focused),
+            native_pixels_per_point: Some(1.0),
+            ..Default::default()
+        };
+        [(ViewportId::ROOT, info(Rect::from_min_size(Pos2::ZERO, vec2(900.0, 700.0)), false)), (id, info(self.window_rect(), true))].into_iter().collect()
+    }
+
     fn render(host: &RefCell<Self>, ctx: &egui::Context, mut viewport: egui::ImmediateViewport<'_>) {
         let id = viewport.ids.this;
         let size = viewport.builder.inner_size.unwrap_or(window_rect().size());
@@ -36,15 +55,7 @@ impl Host {
             host.time += 1.0 / 60.0;
             (host.events.remove(&id).unwrap_or_default(), host.time)
         };
-        let info = |rect: Rect, focused: bool| egui::ViewportInfo {
-            inner_rect: Some(rect),
-            outer_rect: Some(rect),
-            focused: Some(focused),
-            native_pixels_per_point: Some(1.0),
-            ..Default::default()
-        };
-        let viewports =
-            [(ViewportId::ROOT, info(Rect::from_min_size(Pos2::ZERO, vec2(900.0, 700.0)), false)), (id, info(window_rect(), true))].into_iter().collect();
+        let viewports = host.borrow().infos(id);
         let input = egui::RawInput {
             viewport_id: id,
             viewports,
@@ -61,6 +72,13 @@ impl Host {
             host.nodes.entry(id).or_default().extend(update.nodes);
         }
         let commands = full.viewport_output.get(&id).map(|output| output.commands.clone()).unwrap_or_default();
+        // The OS follows a move the app asks for.
+        for command in &commands {
+            if let egui::ViewportCommand::OuterPosition(pos) = command {
+                let size = host.window_rect().size();
+                host.moved = Some(Rect::from_min_size(*pos, size));
+            }
+        }
         host.commands.extend(commands.into_iter().map(|command| (id, command)));
     }
 }
@@ -129,18 +147,11 @@ fn a_floating_document_window_has_a_title_bar_at_its_top() {
 
 /// Runs `n` frames with the OS windows listed in the main window's input, the floating one with the keyboard, as an
 /// integration reports them.
-fn steps(h: &mut Harness<'static, App>, id: ViewportId, n: usize) {
+fn steps(h: &mut Harness<'static, App>, host: &RefCell<Host>, id: ViewportId, n: usize) {
     for _ in 0..n {
-        let info = |rect: Rect, focused: bool| egui::ViewportInfo {
-            inner_rect: Some(rect),
-            outer_rect: Some(rect),
-            focused: Some(focused),
-            native_pixels_per_point: Some(1.0),
-            ..Default::default()
-        };
+        let infos = host.borrow().infos(id);
         let input = h.input_mut();
-        input.viewports =
-            [(ViewportId::ROOT, info(Rect::from_min_size(Pos2::ZERO, vec2(900.0, 700.0)), false)), (id, info(window_rect(), true))].into_iter().collect();
+        input.viewports = infos;
         input.focused = false;
         h.step();
     }
@@ -154,9 +165,9 @@ fn the_title_bar_close_closes_the_floating_window() {
     let press = |pressed| Event::PointerButton { pos: close, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
     for events in [vec![Event::PointerMoved(close)], vec![press(true)], vec![press(false)]] {
         host.borrow_mut().events.insert(id, events);
-        steps(&mut h, id, 1);
+        steps(&mut h, &host, id, 1);
     }
-    steps(&mut h, id, 2);
+    steps(&mut h, &host, id, 2);
     assert!(h.state().ui.document_windows.floating.is_empty(), "Close in the bar closes the window");
     assert_eq!(h.state().session.documents().len(), 1, "the document is kept, back in the tabs");
 }
@@ -177,9 +188,24 @@ fn dragging_the_title_bar_moves_the_floating_window() {
         vec![press(false, band + vec2(40.0, 0.0))],
     ] {
         host.borrow_mut().events.insert(id, events);
-        steps(&mut h, id, 1);
+        steps(&mut h, &host, id, 1);
     }
     let started = host.borrow().commands.iter().any(|(viewport, command)| *viewport == id && *command == egui::ViewportCommand::StartDrag)
         || h.output().viewport_output.get(&id).is_some_and(|out| out.commands.contains(&egui::ViewportCommand::StartDrag));
     assert!(started, "a drag on the bar's free band moves the window: {:?}", host.borrow().commands);
+}
+
+/// A move of the floating window (the title bar's OS drag, or the OS itself) stays: the app does not put the window
+/// back where it opened.
+#[test]
+fn a_moved_floating_window_stays_where_it_was_moved() {
+    let (mut h, host) = desktop();
+    let id = window(&host);
+    steps(&mut h, &host, id, 2);
+    let moved = window_rect().translate(vec2(150.0, 60.0));
+    host.borrow_mut().moved = Some(moved);
+    steps(&mut h, &host, id, 4);
+    assert_eq!(host.borrow().window_rect(), moved, "the window stays where the OS moved it");
+    let placed = h.state().ui.document_windows.floating.first().map(|(_, rect)| *rect);
+    assert_eq!(placed, Some(moved), "the app keeps the window's new place");
 }

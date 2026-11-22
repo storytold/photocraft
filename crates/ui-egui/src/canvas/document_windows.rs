@@ -4,6 +4,7 @@
 
 use craft::behavior::canvas::zoom::wrapped_canvas;
 use craft::behavior::kurbo::Size;
+use craft::host::target::WindowState;
 use craft::ui::canvas::ToolHost;
 use craft::ui::contract::{ShowContainer as _, SizeLimits};
 use craft::ui::runtime::windows::WindowHost;
@@ -98,6 +99,7 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             view = after;
         });
         let output = inner.output;
+        follow_os_window(app, ui.ctx(), id, output.response.id);
         if output.close_requested.is_some() {
             closed.push(id);
         }
@@ -119,6 +121,27 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     for id in closed {
         close_window(app, id);
+    }
+}
+
+/// Keeps the rect the floating window `window` is placed at (`DocumentWindow::first_placed`, the container `container`)
+/// where its OS window is. The placed rect is the caller's: the framework puts the window back there on every pass, so
+/// without this a move by the title bar or by the OS snapped back at the next pass (#16415). A minimized or maximized
+/// window keeps the normal rect.
+fn follow_os_window(app: &mut PhotocraftApp, ctx: &egui::Context, window: u64, container: egui::Id) {
+    let host = WindowHost::of(ctx);
+    let Some(facts) = host.viewport_of(container).and_then(|viewport| host.facts(viewport)) else { return };
+    if facts.state != WindowState::Normal {
+        return;
+    }
+    let outer = facts.outer.unwrap_or(facts.inner);
+    if !outer.is_finite() || outer.width() <= 0.0 || outer.height() <= 0.0 {
+        return;
+    }
+    if let Some((_, rect)) = app.ui.document_windows.floating.iter_mut().find(|(group, _)| group.id == window)
+        && *rect != outer
+    {
+        *rect = outer;
     }
 }
 
