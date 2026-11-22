@@ -148,12 +148,14 @@ fn exr_uint_channels_keep_their_raw_values() {
     let bytes = write(32, 16, &channels, Compression::Zip16).unwrap();
     let path = std::env::temp_dir().join(format!("photocraft-exr-uint-{}.exr", std::process::id()));
     std::fs::write(&path, &bytes).unwrap();
-    let file = import_file("uint.exr", &path, &ImportOptions::default(), &Interrupt::NONE).unwrap();
-    let memory = import("uint.exr", &bytes).unwrap();
-    for doc in [&file.document, &memory.document] {
-        let values = doc.layers[0].surface().unwrap().read_region(doc.bounds());
-        assert!(values.as_chunks::<2>().0.iter().all(|pixel| *pixel == [800.0, 0.0]));
-    }
+    let file = import_file("uint.exr", &path, &ImportOptions::default(), &Interrupt::NONE);
+    std::fs::remove_file(&path).unwrap();
+    let file = file.unwrap().document;
+    let memory = import("uint.exr", &bytes).unwrap().document;
+    let file_values = file.layers[0].surface().unwrap().read_region(file.bounds());
+    let memory_values = memory.layers[0].surface().unwrap().read_region(memory.bounds());
+    assert!(file_values.as_chunks::<4>().0.iter().all(|pixel| *pixel == [800.0, 800.0, 800.0, 0.0]));
+    assert!(memory_values.as_chunks::<2>().0.iter().all(|pixel| *pixel == [800.0, 0.0]));
 }
 
 #[test]

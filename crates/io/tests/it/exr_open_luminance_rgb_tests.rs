@@ -1,6 +1,6 @@
 //! #14069: an EXR with only luminance or single data channels opens as an RGB 32-bit document
-//! tagged linear sRGB, R = G = B = the file's value (above 1 kept), alpha kept; RGB files are
-//! unchanged.
+//! tagged linear sRGB, with equal RGB channels and preserved alpha and HDR values.
+//! Associated float colours are converted to straight alpha.
 
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::Document;
@@ -104,20 +104,20 @@ fn assert_rgb(route: &str, r: &ImportResult, left: [f32; 4], right: [f32; 4]) {
 fn luminance_exr_opens_as_rgb_through_file_open() {
     assert_rgb("Y File > Open", &open_file("y", &y_only()), [0.7, 0.7, 0.7, 1.0], [0.2, 0.2, 0.2, 1.0]);
     assert_rgb("Z File > Open", &open_file("z", &z_only()), [5.0, 5.0, 5.0, 1.0], [0.25, 0.25, 0.25, 1.0]);
-    assert_rgb("Y+A File > Open", &open_file("ya", &y_a()), [0.7, 0.7, 0.7, 1.0], [0.2, 0.2, 0.2, 0.5]);
+    assert_rgb("Y+A File > Open", &open_file("ya", &y_a()), [0.7, 0.7, 0.7, 1.0], [0.4, 0.4, 0.4, 0.5]);
 }
 
 #[test]
 fn luminance_and_data_exr_open_as_rgb_through_open_exr_parts() {
     assert_rgb("Y parts", &open_parts(&y_only()), [0.7, 0.7, 0.7, 1.0], [0.2, 0.2, 0.2, 1.0]);
     assert_rgb("Z parts", &open_parts(&z_only()), [5.0, 5.0, 5.0, 1.0], [0.25, 0.25, 0.25, 1.0]);
-    assert_rgb("Y+A parts", &open_parts(&y_a()), [0.7, 0.7, 0.7, 1.0], [0.2, 0.2, 0.2, 0.5]);
+    assert_rgb("Y+A parts", &open_parts(&y_a()), [0.7, 0.7, 0.7, 1.0], [0.4, 0.4, 0.4, 0.5]);
 }
 
 #[test]
-fn rgba_exr_opens_as_before() {
+fn rgba_exr_opens_with_straight_alpha() {
     let left = [0.8, 0.4, 0.2, 1.0];
-    let right = [0.1, 0.1, 0.1, 0.5];
+    let right = [0.2, 0.2, 0.2, 0.5];
     assert_rgb("RGBA File > Open", &open_file("rgba", &rgba()), left, right);
     assert_rgb("RGBA parts", &open_parts(&rgba()), left, right);
     assert_rgb("RGBA bytes", &import("f.exr", &rgba()).unwrap(), left, right);
@@ -131,5 +131,5 @@ fn rgba_exr_opens_as_before() {
 fn luminance_exr_opens_as_rgb_through_whole_file_decoder() {
     assert_rgb("Y bytes", &import("f.exr", &y_only()).unwrap(), [0.7, 0.7, 0.7, 1.0], [0.2, 0.2, 0.2, 1.0]);
     assert_rgb("Z bytes", &import("f.exr", &z_only()).unwrap(), [5.0, 5.0, 5.0, 1.0], [0.25, 0.25, 0.25, 1.0]);
-    assert_rgb("Y+A bytes", &import("f.exr", &y_a()).unwrap(), [0.7, 0.7, 0.7, 1.0], [0.2, 0.2, 0.2, 0.5]);
+    assert_rgb("Y+A bytes", &import("f.exr", &y_a()).unwrap(), [0.7, 0.7, 0.7, 1.0], [0.4, 0.4, 0.4, 0.5]);
 }
