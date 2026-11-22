@@ -103,13 +103,18 @@ fn move_controls_allow_a_layer_marquee_from_empty_canvas_outside_the_press_band(
     }
 }
 
+fn rotation_cursor_is_showing(h: &Harness<'_, Box<PhotocraftApp>>) -> bool {
+    use craft::behavior::{Cursor, PaintedCursor};
+    matches!(craft::ui::runtime::cursor::current(&h.ctx), Some(Cursor::Painted(PaintedCursor::Turn { .. })))
+}
+
 #[test]
 fn move_controls_only_offer_rotation_near_the_frame() {
     let (mut h, layers) = move_controls_fixture([60, 60, 120, 6]);
     let far = [250.0, 170.0];
     assert!(!in_press_band(&mut h, far));
     move_pointer(&mut h, false, "move", far);
-    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::None);
+    assert!(!rotation_cursor_is_showing(&h));
     move_pointer(&mut h, false, "down", far);
     move_pointer(&mut h, false, "up", far);
     assert!(h.state().ui.transform.is_none());
@@ -119,7 +124,7 @@ fn move_controls_only_offer_rotation_near_the_frame() {
     let near = [50.0, 50.0];
     assert!(in_press_band(&mut h, near));
     move_pointer(&mut h, false, "move", near);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None);
+    assert!(rotation_cursor_is_showing(&h));
     move_pointer(&mut h, false, "down", near);
     move_pointer(&mut h, false, "move", [42.0, 53.0]);
     move_pointer(&mut h, false, "up", [42.0, 53.0]);
