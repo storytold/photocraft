@@ -656,13 +656,30 @@ fn termination_signals_are_not_graphics_crashes() {
     let start_with = |dir: &Path, ignored: &str, fail_int: bool| -> (Reap, bool) {
         let exe = std::env::current_exe().unwrap();
         let args = ["--exact", "gpu_startup::tests::termination_child", "--nocapture", "--test-threads=1"];
-        let mut command = std::process::Command::new("env");
-        // Start with default dispositions even when the test runner was launched under nohup.
-        command.arg("--default-signal=HUP,INT,TERM");
+        use async_signal::Signal::{Hup, Int, Term};
+        let reset = [("HUP", Hup), ("INT", Int), ("TERM", Term)]
+            .into_iter()
+            .any(|(name, signal)| inherited_ignored(signal) && !ignored.split_ascii_whitespace().any(|ign| ign == name));
+        let mut command = if reset {
+            // A shell cannot undo signals inherited ignored; GNU env can reset them before exec.
+            let mut env = std::process::Command::new("env");
+            env.arg("--default-signal=HUP,INT,TERM");
+            if !ignored.is_empty() {
+                env.arg("sh");
+            }
+            env
+        } else if !ignored.is_empty() {
+            std::process::Command::new("sh")
+        } else {
+            std::process::Command::new(&exe)
+        };
         if !ignored.is_empty() {
-            command.args(["sh", "-c", &format!("trap '' {ignored}; exec \"$0\" \"$@\"")]);
+            command.args(["-c", &format!("trap '' {ignored}; exec \"$0\" \"$@\"")]);
         }
-        command.arg(exe).args(args);
+        if reset || !ignored.is_empty() {
+            command.arg(exe);
+        }
+        command.args(args);
         if fail_int {
             command.env("PHOTOCRAFT_TEST_TERMINATION_FAIL_INT", "1");
         } else {
