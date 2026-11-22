@@ -11,7 +11,7 @@ fn steps(app: &PhotocraftApp, action: usize) -> Vec<String> {
     app.session.actions.list.action(action).unwrap().steps.iter().map(|s| s.command.clone()).collect()
 }
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let first = ["view.zoomOut", "view.fitOnScreen", "view.actualPixels"].map(|id| ActionStep::new(id, json!({}))).to_vec();
     app.session.actions.list.push(Action { name: "First".into(), steps: first, ..Default::default() }).unwrap();

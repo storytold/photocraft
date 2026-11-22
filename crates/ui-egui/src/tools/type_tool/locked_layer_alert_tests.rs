@@ -16,7 +16,7 @@ const OFF_TEXT: (f64, f64) = (300.0, 40.0);
 
 /// A committed type layer reading "Locked text" at `ON_TEXT`, and an empty layer above it that
 /// is active, so the click's activation shows.
-fn locked_text(lock: serde_json::Value) -> (PhotocraftApp, LayerId) {
+fn locked_text(lock: serde_json::Value) -> (Box<PhotocraftApp>, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 400, "height": 200})).unwrap();
     app.sync_views();

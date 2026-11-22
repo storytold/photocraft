@@ -256,7 +256,9 @@ fn mixer_rejects_malformed_load_and_retains_or_reloads_paint() {
     }
     assert!(s.execute("brush.mixer.load", json!({"color":[1e300,0,0,1]})).is_err());
     s.execute("brush.mixer.load", json!({"color":"#ff0000"})).unwrap();
-    s.execute("paint.mixerBrush", json!({"points":[[40,40],[80,40]],"size":10,"loadAfterStroke":false,"cleanAfterStroke":false,"load":10})).unwrap();
+    // The load lasts for a length of stroke (390 px at Load 1 %), so the stroke runs back and forth.
+    let long = json!([[10, 40], [180, 40], [10, 40], [180, 40], [10, 40]]);
+    s.execute("paint.mixerBrush", json!({"points":long,"size":10,"loadAfterStroke":false,"cleanAfterStroke":false,"load":1})).unwrap();
     assert!(s.tools.mixer.amount > 0.0 && s.tools.mixer.amount < 1.0);
     s.execute("paint.mixerBrush", json!({"points":[[40,40],[80,40]],"size":10,"loadAfterStroke":true,"load":10})).unwrap();
     assert_eq!(s.tools.mixer.amount, 1.0);
@@ -310,7 +312,7 @@ fn mixer_prepared_offer_is_dropped_on_every_early_dispatch_failure() {
             1 => s.execute("paint.mixerBrush", json!("invalid params")),
             2 => s.execute("unknown.command", p),
             _ => {
-                s.active_mut().unwrap().active_layer = None;
+                s.active_mut().unwrap().set_active_layer(None);
                 s.execute("paint.mixerBrush", p)
             }
         };
@@ -383,7 +385,7 @@ fn mixer_default_does_not_sample_other_layers() {
 fn mixer_shared_live_commit_keeps_the_journal_compact() {
     let mut s = fixture(PixelFormat::RGBA8);
     s.execute("brush.mixer.sample", json!({"points":[[96,48]],"size":40})).unwrap();
-    s.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(256, 256, |_, _| 1.0));
+    s.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(256, 256, |_, _| 1.0)).into();
     for x in [40.0, 60.0, 80.0] {
         let p = json!({"points":[[x,48]],"size":12,"seed":7,"wet":0,"mix":0});
         let live = LiveMixer::begin(&s, &p).unwrap();

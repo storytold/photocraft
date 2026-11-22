@@ -9,7 +9,7 @@ use crate::PhotocraftApp;
 
 /// The whole app in a 1100 × 600 window whose frame the app draws (the Windows decision), with `setup` run on the
 /// app before the first frame.
-fn integrated_app(setup: impl FnOnce(&mut PhotocraftApp) + 'static) -> Harness<'static, PhotocraftApp> {
+fn integrated_app(setup: impl FnOnce(&mut PhotocraftApp) + 'static) -> Harness<'static, Box<PhotocraftApp>> {
     let mut setup = Some(setup);
     let mut h = Harness::builder().with_size(vec2(1100.0, 600.0)).with_max_steps(64).build_eframe(move |cc| {
         let desktop = Desktop::detect(Backend::X11);
@@ -28,7 +28,7 @@ fn integrated_app(setup: impl FnOnce(&mut PhotocraftApp) + 'static) -> Harness<'
 }
 
 /// The viewport commands the root window got over `steps` frames.
-fn commands(h: &mut Harness<'static, PhotocraftApp>, steps: usize) -> Vec<ViewportCommand> {
+fn commands(h: &mut Harness<'static, Box<PhotocraftApp>>, steps: usize) -> Vec<ViewportCommand> {
     let mut all = Vec::new();
     for _ in 0..steps {
         h.step();
@@ -65,7 +65,7 @@ fn the_close_caption_asks_about_unsaved_work_unless_the_device_is_lost() {
 }
 
 /// The whole app with the menu bar set as given.
-fn whole_app(menu_bar: bool) -> Harness<'static, PhotocraftApp> {
+fn whole_app(menu_bar: bool) -> Harness<'static, Box<PhotocraftApp>> {
     integrated_app(move |app| app.ui.panels.menu_bar = menu_bar)
 }
 
@@ -81,4 +81,17 @@ fn the_menu_bar_follows_its_panel_flag() {
         assert!(h.query_by_label("Color & Swatches").is_none(), "no panel rail is drawn (menu bar {menu_bar})");
         assert!(h.query_all_by_label("Layers").next().is_some(), "the dock itself stays (menu bar {menu_bar})");
     }
+}
+
+/// The top bar holds the brand mark, the menus, the title and the caption buttons, and nothing at its far end, as in
+/// the reference application: no appearance button, no command search and no workspace switcher (#13577). Each of
+/// them stays in a menu: Window › Appearance, Edit › Search and Window › Workspace.
+#[test]
+fn the_top_bar_has_no_appearance_search_or_workspace_controls() {
+    let h = integrated_app(|_| {});
+    assert!(h.query_by_label("File").is_some(), "the menus are drawn");
+    assert!(h.query_by_label("Close").is_some(), "the caption buttons are drawn");
+    assert!(h.query_by_label("Appearance").is_none(), "no appearance button");
+    assert!(h.query_by_label_contains("Search commands").is_none(), "no command search button");
+    assert!(h.query_by_label("Choose a workspace").is_none(), "no workspace switcher");
 }

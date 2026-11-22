@@ -10,6 +10,7 @@ mod clipboard;
 mod commands;
 #[cfg(not(target_arch = "wasm32"))]
 mod control;
+pub(crate) mod doc_queries;
 mod files;
 pub(crate) use files::ensure_memory_to_save;
 mod frame;
@@ -22,13 +23,12 @@ mod view;
 
 pub(crate) use targets::adjustment_layer_active;
 pub(crate) use thumbs::layer_thumb_frame;
-pub use thumbs::surface_fingerprint;
 
 impl PhotocraftApp {
     /// Creates the application state without a window: it makes the one context it runs on,
     /// installs the framework on it ([`Self::setup_context`], the default theme) and keeps it. The
     /// desktop and web apps build theirs with [`Self::with_context`].
-    pub fn new(session: Session, services: Services) -> Self {
+    pub fn new(session: Session, services: Services) -> Box<Self> {
         let ctx = egui::Context::default();
         Self::setup_context(&ctx, theme::AppTheme::default());
         Self::with_context(ctx, session, services)
@@ -39,7 +39,7 @@ impl PhotocraftApp {
     /// [`Self::setup_window`] on `ctx`. The app keeps `ctx` for its whole life. The
     /// session keeps the services' automation policy as the gate actions automation wrote play
     /// under.
-    pub fn with_context(ctx: egui::Context, mut session: Session, services: Services) -> Self {
+    pub fn with_context(ctx: egui::Context, mut session: Session, services: Services) -> Box<Self> {
         // Actions automation wrote keep this gate when the user plays them. Batch and droplets
         // copy steps instead of the action, so they do not keep the gate yet.
         session.automation_gate = session.automation_gate.or(services.automation_authorize);
@@ -68,7 +68,11 @@ impl PhotocraftApp {
             remove_pending: Vec::new(),
             remove_pending_target: None,
             remove_trail: None,
+            texture_serials: Default::default(),
             menu_model: None,
+            toolbar_slots: Default::default(),
+            dock_model: Default::default(),
+            preset_art: Default::default(),
             move_preview: None,
             move_hover: None,
             move_distance: None,
@@ -78,6 +82,7 @@ impl PhotocraftApp {
             reorder_preview_hit: false,
             patch_preview: None,
             cam_preview: None,
+            data_set_preview: Default::default(),
             held_erase: false,
             last_stroke_end: None,
             brush_resize: Default::default(),
@@ -110,6 +115,8 @@ impl PhotocraftApp {
             filter_live: craft::imaging::ui::LivePreview::new(craft::imaging::ui::PreviewLane::Dialog),
             adjust_open: None,
             adjust_session: None,
+            properties_hidden: 0,
+            properties_tracked: false,
             dialog_dropper: None,
             layer_style_child: None,
             color_targets: HashMap::new(),
@@ -216,6 +223,7 @@ impl PhotocraftApp {
             tiff_remembered: Default::default(),
             brush_tip: None,
             snap_cache: Default::default(),
+            doc_queries: Default::default(),
             workspaces: Default::default(),
             // Off until `prefs_ui::load` sets the saved interval.
             autosave: craft::platform::autosave::Autosave::new(None),
@@ -228,6 +236,8 @@ impl PhotocraftApp {
             #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
             live_tokens: theme::live::LiveTokens::from_env(),
         };
+        #[cfg(all(test, not(target_arch = "wasm32")))]
+        photocraft_raster::spill::use_test_volume_space();
         // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
         // The workspace set reads the loaded preferences (and moves the earlier saves into it).
@@ -241,7 +251,7 @@ impl PhotocraftApp {
         kys_import::offer(&mut app);
         // File › Scripts › Script Events Manager: "Start Application".
         photocraft_engine::automate_cmds::fire_event(&mut app.session, "startApplication");
-        app
+        Box::new(app)
     }
 
     /// The window's egui context: the one every pass of the app runs on. SAVED-tier reads and
@@ -309,5 +319,31 @@ impl eframe::App for PhotocraftApp {
     }
 }
 
+/// The boxed app is what the test harness holds: the 85 KiB app lives in one heap allocation, not in
+/// every frame between the test and the harness's first pass.
+impl eframe::App for Box<PhotocraftApp> {
+    fn on_exit(&mut self) {
+        (**self).on_exit();
+    }
+
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        (**self).logic(ctx, frame);
+    }
+
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        (**self).raw_input_hook(ctx, raw_input);
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        (**self).ui(ui, frame);
+    }
+}
+
 #[cfg(test)]
 mod clipboard_tests;
+
+#[cfg(test)]
+mod apply_data_set_alert_tests;
+
+#[cfg(test)]
+mod apply_data_set_missing_file_tests;

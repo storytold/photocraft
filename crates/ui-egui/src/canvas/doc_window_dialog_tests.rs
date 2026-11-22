@@ -10,7 +10,7 @@ use crate::state::{Tool, View};
 
 use super::document_windows::extra_windows;
 
-fn app_with_a_layer() -> PhotocraftApp {
+fn app_with_a_layer() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.background_jobs = false;
     app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
@@ -41,14 +41,14 @@ fn window_rect() -> Rect {
 /// The app with a New Window of its document, drawn by `extra_windows` in the harness's own
 /// context, where the framework dialogs are drawn too: the modal filter is per context. The window's
 /// own view is 1:1 around the document's centre.
-fn harness(mut app: PhotocraftApp) -> Harness<'static, (PhotocraftApp, bool)> {
+fn harness(mut app: Box<PhotocraftApp>) -> Harness<'static, (Box<PhotocraftApp>, bool)> {
     let document = app.session.documents()[0].doc.id;
     let id = app.ui.document_windows.new_window_for(&document, window_rect());
     let size = app.session.active().unwrap().doc.size;
     let view = View { zoom: 1.0, center: [size.width as f32 / 2.0, size.height as f32 / 2.0], pending: Vec::new(), ..app.ui.views[0].clone() };
     app.ui.window_views.insert(id, view);
     let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).with_context(app.ctx().clone()).build_ui_state(
-        |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+        |ui, (app, ready): &mut (Box<PhotocraftApp>, bool)| {
             if *ready {
                 crate::dialogs::run(app, ui);
                 extra_windows(app, ui);
@@ -67,7 +67,7 @@ fn button(pos: Pos2, pressed: bool) -> Event {
 }
 
 /// Drags across the middle of the document window's canvas.
-fn drag_in_document_window(h: &mut Harness<'static, (PhotocraftApp, bool)>) {
+fn drag_in_document_window(h: &mut Harness<'static, (Box<PhotocraftApp>, bool)>) {
     let start = window_rect().center();
     h.event(Event::PointerMoved(start));
     h.run_steps(2);

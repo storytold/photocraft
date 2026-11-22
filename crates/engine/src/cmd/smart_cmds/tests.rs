@@ -5,6 +5,7 @@ mod selection;
 mod source_flatten;
 mod stack_cache;
 mod svg_profile;
+mod svg_stack_completeness;
 
 const DEPTHS: [u64; 3] = [8, 16, 32];
 const W: i32 = 64;
@@ -1126,6 +1127,50 @@ fn convert_to_layers_keeps_a_smart_layer_mask_on_a_group() {
     assert_eq!(max_diff(&flat(&s), &before), 0.0);
 }
 
+/// #9753: a smart object isolates its contents, so a knockout inside it stops at its bottom.
+/// Folded into the parent stack, it would punch through the layers beneath to the Background; a
+/// group keeps the look, as Photoshop's Convert to Layers does. The group takes the smart object's
+/// blend mode and opacity, and without a knockout the one layer still folds as before.
+#[test]
+fn convert_to_layers_keeps_a_knockout_inside_a_group() {
+    let fill = |s: &mut Session, r: Rect, rgba: [f32; 4]| {
+        s.edit("paint", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(r, &rgba);
+            Ok(())
+        })
+        .unwrap();
+    };
+    for knockout in ["none", "shallow", "deep"] {
+        for (blend, mode, opacity) in [("normal", BlendMode::Normal, 1.0), ("multiply", BlendMode::Multiply, 0.6)] {
+            let case = format!("{knockout}, {blend} at {opacity}");
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": W, "height": H})).unwrap();
+            fill(&mut s, Rect::new(0, 0, W, H), [0.0, 0.0, 1.0, 1.0]);
+            s.execute("layer.new.layer", json!({})).unwrap();
+            fill(&mut s, Rect::new(0, 0, W, H), [1.0, 1.0, 0.0, 1.0]);
+            s.execute("layer.new.layer", json!({})).unwrap();
+            fill(&mut s, Rect::new(10, 10, 30, 30), [1.0, 0.0, 0.0, 1.0]);
+            s.execute("layer.layerStyle.blendingOptions", json!({"knockout": knockout, "fillOpacity": 50})).unwrap();
+            let id = convert(&mut s);
+            s.execute("layer.setProps", json!({"layer": id, "blend": blend, "opacity": opacity})).unwrap();
+            let before = flat(&s);
+            let r = convert_to_layers(&mut s);
+            let g = active_layer(&s);
+            assert!(max_diff(&flat(&s), &before) <= 1.0 / 255.0 + 1e-6, "{case}: the look is kept");
+            assert_eq!(g.blend, mode, "{case}");
+            if knockout == "none" {
+                // Fill opacity on the one layer folds into it unchanged, as before #9753.
+                assert_eq!(r["group"], false, "{case}: folds into one layer");
+                assert!((g.opacity - opacity).abs() < 1e-6, "{case}: opacity {}", g.opacity);
+                continue;
+            }
+            assert_eq!(r["group"], true, "{case}: the contents stay isolated");
+            assert!((g.opacity - opacity).abs() < 1e-6, "{case}: the group's opacity {}", g.opacity);
+            assert_eq!(g.children().unwrap()[0].advanced.knockout.name(), knockout, "{case}: the knockout setting survives");
+        }
+    }
+}
+
 #[test]
 fn convert_to_layers_applies_the_placement() {
     let mut s = session(8);
@@ -1621,4 +1666,32 @@ fn set_params_replace_drops_a_shape_blur_radius_it_leaves_out() {
 
     s.execute("layer.smartFilter.setParams", json!({"params": {"shape": "circle"}, "replace": true})).unwrap();
     assert!(params(&s).get("radius").is_none(), "replaced: {}", params(&s));
+}
+
+/// A smart filter re-renders from its params alone, without the document's alpha channels (#7400): Lens Blur refuses an
+/// alpha channel as its depth on a Smart Object, both when it is applied and when a recorded filter's params are edited
+/// (merged or replaced), and the refused edit changes neither the filter nor the history.
+#[test]
+fn lens_blur_smart_filter_refuses_an_alpha_channel_depth_on_edit() {
+    let mut s = session(8);
+    paint(&mut s);
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("select.saveSelection", json!({"name": "Depth"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("filter.convertForSmartFilters", json!({})).unwrap();
+    let channel = json!({"radius": 4, "depthMap": "channel", "depthChannel": 0});
+    let applied = s.execute("filter.blur.lensBlur", channel.clone()).unwrap_err().to_string();
+    assert!(applied.contains("rasterize the layer first"), "{applied}");
+    s.execute("filter.blur.lensBlur", json!({"radius": 4, "depthMap": "transparency"})).unwrap();
+    let recorded = active_smart(&s).smart_filters[0].params.clone();
+    let steps = s.active().unwrap().history.past_len();
+    for replace in [false, true] {
+        let e = s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": channel, "replace": replace})).unwrap_err().to_string();
+        assert!(e.contains("rasterize the layer first"), "replace={replace}: {e}");
+        assert_eq!(active_smart(&s).smart_filters[0].params, recorded, "replace={replace}");
+        assert_eq!(s.active().unwrap().history.past_len(), steps, "replace={replace}");
+    }
+    // Sources that need no channel stay editable.
+    s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": {"depthMap": "none"}})).unwrap();
+    assert_eq!(active_smart(&s).smart_filters[0].params["depthMap"], json!("none"));
 }

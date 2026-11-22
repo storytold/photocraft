@@ -25,7 +25,7 @@ pub const MAX_BYTES: usize = 256 << 20;
 pub const MAX_METADATA: usize = 32 << 20;
 
 /// One named RGBA8 entry; equal colors may intentionally have different indices.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct PaletteEntry {
     pub rgba: [u8; 4],
     pub name: String,
@@ -39,7 +39,7 @@ impl Default for PaletteEntry {
 }
 
 /// Metadata attaches to an object, rather than a transient chunk/layer array offset.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum MetadataTarget {
     Sprite,
     Layer(LayerId),
@@ -50,7 +50,7 @@ pub enum MetadataTarget {
 }
 
 /// An opaque format record retained with its object association.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, craft_ui_macros::PlainData)]
 pub struct SpriteChunk {
     pub kind: u16,
     pub target: MetadataTarget,
@@ -58,7 +58,7 @@ pub struct SpriteChunk {
 }
 
 /// Original layer identity and properties independent of a frame's display projection.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct SpriteLayer {
     pub id: LayerId,
     /// Original flags, including background/reference/prefer-linked properties.
@@ -69,7 +69,7 @@ pub struct SpriteLayer {
 }
 
 /// A frame's image in one layer, including original geometry and optional exact indices.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct SpriteCel {
     /// The complete source rectangle, including transparent borders and off-canvas samples.
     pub rect: Rect,
@@ -86,7 +86,7 @@ pub struct SpriteCel {
 }
 
 /// One timed frame with its own palette, cels and retained object metadata.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct SpriteFrame {
     pub duration_ms: u16,
     pub palette: Arc<Vec<PaletteEntry>>,
@@ -96,7 +96,7 @@ pub struct SpriteFrame {
 }
 
 /// A named inclusive frame range and its playback direction and repeat count.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct SpriteTag {
     pub name: String,
     pub from: usize,
@@ -109,7 +109,7 @@ pub struct SpriteTag {
 }
 
 /// Authoritative animation state; the selected frame projects into ordinary document layers.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub struct Sprite {
     pub frames: Vec<Arc<SpriteFrame>>,
     pub current: usize,

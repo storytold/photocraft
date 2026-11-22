@@ -961,7 +961,7 @@ pub fn install_fonts(ctx: &egui::Context) {
 /// `medium` and `semibold` families, JetBrains Mono for numbers. The framework puts egui's default
 /// faces after them, for symbols Inter lacks, and orders the craft-fonts faces this build embeds
 /// (`cjk_fonts::craft_faces`) by `ui_language`. A web build's served faces and their fetcher come
-/// from `served_fonts::serve`.
+/// from `served_fonts::serve`; runtime-manifest deliveries use its owned fallback cache.
 fn ui_fonts(ctx: &egui::Context, ui_language: &str) -> UiFonts<'static> {
     use craft::ui::fonts::{Emoji, Family, FontRef, I18nScripts, SEMIBOLD};
     let (proportional, monospace, medium, semibold) = (FontRef::proportional(), FontRef::monospace(), FontRef::named("medium"), FontRef::named(SEMIBOLD));
@@ -993,7 +993,8 @@ fn ui_fonts(ctx: &egui::Context, ui_language: &str) -> UiFonts<'static> {
     if let Some(served) = crate::served_fonts::served(ctx) {
         fonts = fonts.served_faces(&served.faces).fetcher(served.fetcher);
     }
-    faces.into_iter().fold(fonts, |fonts, (name, data, families)| fonts.app_face(&name, data, &families))
+    let fonts = faces.into_iter().fold(fonts, |fonts, (name, data, families)| fonts.app_face(&name, data, &families));
+    crate::served_fonts::append_loaded(ctx, fonts, ui_language)
 }
 
 /// Installs the craft runtime on `ctx` with the font stack (see [`install_fonts`]) and the root

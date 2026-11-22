@@ -11,7 +11,7 @@ use crate::PhotocraftApp;
 use crate::state::Tool;
 
 /// An 800 × 600 document at 72 ppi with the Ruler tool active and rulers in pixels.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600, "resolution": 72})).unwrap();
     app.run("prefs.set", json!({"path": "unitsAndRulers.rulers", "value": "pixels"})).unwrap();

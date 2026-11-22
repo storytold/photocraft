@@ -311,12 +311,12 @@ mod tests {
         assert_eq!(app.session.active().unwrap().history.past_len(), 0);
     }
 
-    fn frame(h: &Harness<'static, PhotocraftApp>) -> u64 {
+    fn frame(h: &Harness<'static, Box<PhotocraftApp>>) -> u64 {
         h.state().session.active().unwrap().doc.timeline.as_ref().unwrap().current as u64
     }
 
     /// Starts playback with the Play button, so the clock starts from the playhead's frame.
-    fn play(h: &mut Harness<'static, PhotocraftApp>) {
+    fn play(h: &mut Harness<'static, Box<PhotocraftApp>>) {
         h.get_by_label(TransportWords::default().play_stop.as_str()).click();
         h.run_steps(2);
         assert!(h.state().ui.timeline.playing());

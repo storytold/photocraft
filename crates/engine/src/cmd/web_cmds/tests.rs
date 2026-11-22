@@ -881,7 +881,7 @@ fn image_assets_keep_full_artboards() {
         let board =
             photocraft_doc::Artboard { rect: Rect::new(4, 6, 44, 36), background: photocraft_doc::ArtboardBackground::Transparent, preset: String::new() };
         let group = photocraft_doc::Group { children: vec![logo], expanded: true, artboard: Some(board), frame_stroke: None };
-        doc.layers = vec![Layer::new("board.png", LayerContent::Group(group))];
+        doc.layers = vec![Layer::new("board.png", LayerContent::Group(group))].into();
         Ok(())
     })
     .unwrap();
@@ -920,7 +920,7 @@ fn image_assets_refuse_empty_artboards() {
         };
         let empty = photocraft_doc::Group { children: vec![], expanded: true, artboard: Some(board(0)), frame_stroke: None };
         let off = photocraft_doc::Group { children: vec![outside], expanded: true, artboard: Some(board(24)), frame_stroke: None };
-        doc.layers = vec![Layer::new("empty.png", LayerContent::Group(empty)), Layer::new("off.png", LayerContent::Group(off))];
+        doc.layers = vec![Layer::new("empty.png", LayerContent::Group(empty)), Layer::new("off.png", LayerContent::Group(off))].into();
         Ok(())
     })
     .unwrap();

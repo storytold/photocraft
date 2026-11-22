@@ -37,7 +37,7 @@ fn select_all(app: &mut PhotocraftApp, ids: &[LayerId]) {
 
 /// A 120x120 document with three layers side by side and on top of each other unevenly, the
 /// Move tool current. Returns the app and the layers, bottom to top.
-fn app() -> (PhotocraftApp, [LayerId; 3]) {
+fn app() -> (Box<PhotocraftApp>, [LayerId; 3]) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 120, "height": 120})).unwrap();
     let a = paint(&mut app, Rect::new(0, 0, 10, 10));
@@ -50,9 +50,9 @@ fn app() -> (PhotocraftApp, [LayerId; 3]) {
 
 /// The Move tool's align controls and gear, on the app's own context so command states reach them
 /// as in the running app.
-fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(700.0, 200.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             egui::CentralPanel::default().show(ui, |ui| {
                 ui.horizontal(|ui| crate::align_bar::show(app, ui));
             });
@@ -65,7 +65,7 @@ fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
 }
 
 /// `n` frames, each with the command states published before its input, as the app's frame does.
-fn steps(h: &mut Harness<'static, PhotocraftApp>, n: usize) {
+fn steps(h: &mut Harness<'static, Box<PhotocraftApp>>, n: usize) {
     for _ in 0..n {
         let ctx = h.ctx.clone();
         h.state_mut().framework_before_input(&ctx);
@@ -154,7 +154,7 @@ fn expand_layer_group_on_click_switches_the_opening_of_closed_parent_groups() {
 
 /// A 64x64 document: `inner` painted at (8..24)^2 inside a closed group, the Background-less
 /// group selected, `tool` current and the gear option set to `on`. The reveal has seen the frame.
-fn closed_group_doc(tool: Tool, on: bool) -> (PhotocraftApp, LayerId, LayerId) {
+fn closed_group_doc(tool: Tool, on: bool) -> (Box<PhotocraftApp>, LayerId, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
     let inner = paint(&mut app, Rect::new(8, 8, 24, 24));

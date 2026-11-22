@@ -88,7 +88,7 @@ fn sprite_commands_are_disabled_without_a_sprite_or_with_unsupported_samples() {
     assert_eq!(ordinary.active().unwrap().history.past_len(), 0);
     for depth in [SampleType::U16, SampleType::F32] {
         let mut s = session();
-        Arc::make_mut(&mut s.active_mut().unwrap().doc).depth = depth;
+        Arc::make_mut(s.active_mut().unwrap().doc_mut()).depth = depth;
         for spec in specs() {
             assert!(s.disabled_reason(spec.id).unwrap().contains("8-bit"), "{}", spec.id);
             assert_refused_unchanged(&mut s, spec.id, json!({}));

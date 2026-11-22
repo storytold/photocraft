@@ -6,10 +6,10 @@ use super::*;
 use egui_kittest::kittest::Queryable;
 
 /// The Color tab (Hue Cube) for `app` in a 300 x 200 pt group that it fills.
-fn color_tab(app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {
+fn color_tab(app: Box<PhotocraftApp>) -> egui_kittest::Harness<'static, Box<PhotocraftApp>> {
     // 60 fps steps, so two clicks a frame apart are a double-click.
     let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(vec2(300.0, 200.0)).with_step_dt(1.0 / 60.0).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 crate::panels::color::panel(app, ui);
             }
@@ -22,16 +22,16 @@ fn color_tab(app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp
 }
 
 /// The foreground (0) or background (1) well: the pair's wells are radio buttons.
-fn well<'a>(h: &'a egui_kittest::Harness<'_, PhotocraftApp>, i: usize) -> egui_kittest::Node<'a> {
+fn well<'a>(h: &'a egui_kittest::Harness<'_, Box<PhotocraftApp>>, i: usize) -> egui_kittest::Node<'a> {
     h.query_all_by_role(egui::accesskit::Role::RadioButton).nth(i).expect("a well")
 }
 
 /// The Hue Cube's field.
-fn field(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> Rect {
+fn field(h: &egui_kittest::Harness<'_, Box<PhotocraftApp>>) -> Rect {
     h.get_by_label("Saturation and brightness").rect()
 }
 
-fn click(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, p: egui::Pos2) {
+fn click(h: &mut egui_kittest::Harness<'_, Box<PhotocraftApp>>, p: egui::Pos2) {
     h.hover_at(p);
     h.run_steps(1);
     for pressed in [true, false] {
@@ -40,7 +40,7 @@ fn click(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, p: egui::Pos2) {
     }
 }
 
-fn drag(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, from: egui::Pos2, to: egui::Pos2) {
+fn drag(h: &mut egui_kittest::Harness<'_, Box<PhotocraftApp>>, from: egui::Pos2, to: egui::Pos2) {
     h.hover_at(from);
     h.run_steps(1);
     h.drag_at(from);
@@ -54,7 +54,7 @@ fn drag(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, from: egui::Pos2, to: 
 }
 
 /// A document with one shape layer filled `fill`, selected, the Rectangle tool in hand.
-fn app_with_a_shape(fill: serde_json::Value) -> (PhotocraftApp, photocraft_doc::LayerId) {
+fn app_with_a_shape(fill: serde_json::Value) -> (Box<PhotocraftApp>, photocraft_doc::LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
     let id = photocraft_doc::LayerId(app.run("shape.create", json!({"rect": [8, 8, 40, 30], "fill": fill})).unwrap()["layer"].as_u64().unwrap());
@@ -195,7 +195,7 @@ fn swap_and_default_colors_recolour_selected_type() {
         let anchor = if selected { 6 } else { 11 };
         app.ui.text_edit = Some(crate::state::TextEdit { layer: id.0, document: None, caret: 11, anchor, session: "s".into(), created: false, mask: false });
         let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(vec2(80.0, 120.0)).build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
+            |ui, app: &mut Box<PhotocraftApp>| {
                 let w = ui.available_width();
                 color_chips(app, ui, w)
             },

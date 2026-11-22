@@ -6,7 +6,7 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::menus::menu_rows;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
 }
 

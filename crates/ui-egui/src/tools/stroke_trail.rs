@@ -39,9 +39,10 @@ struct Dabs {
 impl Trail {
     /// An empty trail over a document of `doc` pixels. Big documents are stamped at a reduced
     /// scale (the mask's longest side is 1024 texels).
-    pub fn new(doc: [u32; 2]) -> Self {
+    /// `serials` keeps its texture apart from earlier trails' (the app's [`PhotocraftApp::texture_serials`]).
+    pub fn new(serials: &mut craft::ui::primitives::Serials, doc: [u32; 2]) -> Self {
         let bounds = Rect::new(0.0, 0.0, f64::from(doc[0]), f64::from(doc[1]));
-        Self { mask: CoverageMask::new(bounds, 1024), fed: 0, dabs: None, tone: TrailTone::Light }
+        Self { mask: CoverageMask::new(serials, bounds, 1024), fed: 0, dabs: None, tone: TrailTone::Light }
     }
 
     /// The trail shown as `tone`.
@@ -159,8 +160,8 @@ fn tone_of(tool: Tool) -> TrailTone {
 pub(crate) fn feed(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]]) {
     let Some(st) = app.session.active() else { return };
     let size = [st.doc.size.width, st.doc.size.height];
-    let brush = app.session.tools.brush.clone();
-    let trail = app.trail.get_or_insert_with(|| Trail::new(size).toned(tone_of(tool)));
+    let brush = (*app.session.tools.brush).clone();
+    let trail = app.trail.get_or_insert_with(|| Trail::new(&mut app.texture_serials, size).toned(tone_of(tool)));
     if tool == Tool::QuickSelection {
         trail.feed(points, brush.size);
         return;

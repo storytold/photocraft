@@ -11,7 +11,7 @@ use crate::PhotocraftApp;
 use crate::layers_panel_nodes::{drag, row};
 
 /// `a` with a Drop Shadow and a Color Overlay, and `b` above it without effects.
-fn harness() -> (Harness<'static, PhotocraftApp>, LayerId, LayerId) {
+fn harness() -> (Harness<'static, Box<PhotocraftApp>>, LayerId, LayerId) {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
     let a = s.execute("layer.new.layer", json!({"name": "a"})).unwrap()["layer"].as_u64().unwrap();
@@ -27,7 +27,7 @@ fn harness() -> (Harness<'static, PhotocraftApp>, LayerId, LayerId) {
     (h, LayerId(a), LayerId(b))
 }
 
-fn effects(h: &Harness<'_, PhotocraftApp>, id: LayerId) -> Vec<&'static str> {
+fn effects(h: &Harness<'_, Box<PhotocraftApp>>, id: LayerId) -> Vec<&'static str> {
     h.state().session.active().unwrap().doc.layer(id).unwrap().effects.items.iter().map(photocraft_doc::Effect::label).collect()
 }
 
@@ -47,7 +47,7 @@ fn alt_dragging_an_effect_row_onto_a_layer_copies_it() {
 }
 
 /// The Layers panel footer's Delete button.
-fn trash_button(h: &Harness<'_, PhotocraftApp>) -> Pos2 {
+fn trash_button(h: &Harness<'_, Box<PhotocraftApp>>) -> Pos2 {
     h.query_all_by_role(Role::Button).find(|n| n.accesskit_node().label().as_deref() == Some("Delete layer")).unwrap().rect().center()
 }
 

@@ -460,6 +460,19 @@ pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandSta
         .collect()
 }
 
+/// What [`command_states`] reads: the rules (the active document and its channel view among them) and the mask target.
+#[derive(craft::ui::contract::MemoProps)]
+struct StatesFacts<'a> {
+    rules: crate::menus::facts::RuleFacts<'a>,
+    mask_target: bool,
+}
+
+/// [`command_states`], derived from [`StatesFacts`].
+pub(crate) fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    let facts = StatesFacts { rules: crate::menus::facts::RuleFacts::of(app), mask_target: app.ui.mask_target };
+    crate::app::framework::derived_states(app, name, &facts, || command_states(app))
+}
+
 /// Runs a fired command of the Channels set; false for another set's command.
 pub(crate) fn run_fired(app: &mut PhotocraftApp, ctx: &egui::Context, command: &CommandRef) -> bool {
     let Some(command) = ChannelsCommands::from_ref(command) else { return false };

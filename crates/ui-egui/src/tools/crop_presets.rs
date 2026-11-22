@@ -224,7 +224,7 @@ mod tests {
     use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
     use photocraft_engine::presets::tools::ToolPreset;
 
-    fn app_over(files: &std::sync::Arc<craft::settings::testing::MemoryFiles>) -> PhotocraftApp {
+    fn app_over(files: &std::sync::Arc<craft::settings::testing::MemoryFiles>) -> Box<PhotocraftApp> {
         let mut doc = Document::with_background("crop", Size::new(400, 300), ColorMode::Rgb, SampleType::U8, Color::WHITE);
         doc.resolution_dpi = 72.0;
         let mut s = photocraft_engine::Session::new();
