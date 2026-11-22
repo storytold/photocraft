@@ -6,7 +6,7 @@ use craft::color_ui::ui::gradient::GradientRamp;
 use craft::keymap::CommandRef;
 use craft::theme::Srgba;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, DropZone, MemoProps, PlainData, Props as _, Show as _, Tracked};
+use craft::ui::contract::{Bind, DropZone, MemoProps, PlainData, Props as _, Revision, Show as _, Tracked};
 use craft::ui::list::ThumbAspect;
 use craft::ui::menu::PanelRow;
 use craft::ui::patterns::presets::{
@@ -20,9 +20,12 @@ use craft::ui::runtime::env::Env;
 use craft::ui::tile_grid::TileZoom;
 use egui::{Color32, ColorImage, Pos2, Rect, TextureId, pos2};
 use photocraft_engine::pattern_cmds::PatternLibrary;
+use photocraft_engine::presets::shapes::ShapePreset;
 use photocraft_engine::presets::styles::StylePreset;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::hash::{DefaultHasher, Hash as _, Hasher as _};
+use std::sync::Arc;
 
 use super::preset_panels::{PresetUi, run, tool_presets};
 use crate::PhotocraftApp;
@@ -101,13 +104,85 @@ fn panel_source<T: MemoProps + Send + 'static>(inputs: PanelInputs<T>, thumb: Th
     PresetSource::new(inputs, PresetFns::new(panel_rows).thumb(thumb))
 }
 
-/// A thumbnail held in the framework's texture store: the preset's key and name, and the texture.
+/// What a swatch's picture is drawn from.
+#[derive(Clone)]
+enum Art {
+    Pattern(Arc<photocraft_doc::Pattern>),
+    Shape(Arc<ShapePreset>),
+}
+
+/// A swatch picture's key in the framework's texture store: its kind, the preset's id or name, and the pattern's pixel
+/// generation or the shape's path size.
+type PictureKey = (&'static str, String, u64);
+
+/// A thumbnail in the framework's texture store: the preset's key and name, the picture's key in the store and what
+/// the picture is drawn from. The texture is asked for when the swatch paints, so only the swatches a browser shows
+/// load a picture, and one the store dropped (it holds `TextureCache::CAPACITY` textures) loads again.
 #[derive(Clone, MemoProps)]
 pub(crate) struct Swatch {
     key: String,
     name: String,
-    #[memo_props(hash = "a texture handle: the texture store keeps one picture under it")]
-    texture: TextureId,
+    #[memo_props(hash = "a texture store key: a kind, the preset's id or name and a number for what its picture shows")]
+    picture: PictureKey,
+    #[memo_props(covered_by = "picture", reason = "the picture is drawn from this art, and `picture` names what the drawing shows")]
+    art: Art,
+}
+
+impl Swatch {
+    /// The swatch's texture in `ctx`'s store, drawn on a miss.
+    fn texture(&self, ctx: &egui::Context) -> TextureId {
+        match &self.art {
+            Art::Pattern(pattern) => TextureCache::texture(ctx, self.picture.clone(), || pattern_image(pattern)),
+            Art::Shape(shape) => TextureCache::texture(ctx, self.picture.clone(), || shape_image(shape)),
+        }
+    }
+
+    /// Paints the swatch's picture into `rect`.
+    fn paint(&self, cx: &ContentPainterCx, rect: Rect) {
+        paint_texture(cx, rect, self.texture(cx.painter.ctx()));
+    }
+}
+
+/// The patterns and styles the preset views draw from, held while the library and the presets are unchanged, so a
+/// view's inputs keep their memo keys between passes instead of being copied and keyed anew in each.
+#[derive(Default)]
+pub(crate) struct PresetArt {
+    /// The library's patterns, with the [`patterns_stamp`] they were taken at.
+    patterns: Option<(u64, HeldPatterns)>,
+    /// The style library, with the presets' revision and the [`patterns_stamp`] it was taken at.
+    styles: Option<(StylesStamp, Arc<Tracked<StyleLibrary>>)>,
+}
+
+/// The library's patterns as the preset views share them.
+type HeldPatterns = Arc<[Arc<photocraft_doc::Pattern>]>;
+
+/// What a held style library was taken at: the presets' revision and the [`patterns_stamp`].
+type StylesStamp = (Revision, u64);
+
+/// A number for the library's patterns and their pixels: equal stamps mean the same patterns with the same pixels
+/// (`Surface::generation` names a pixel state, and is shared by clones). It also moves with the scratch read-error
+/// generation: a pattern tile that fails to read draws zeros and its pixels again once it reads, under the same
+/// generation (`crate::scratch_reads`), and the style thumbnails drawn over the patterns follow it through this.
+fn patterns_stamp(library: &PatternLibrary) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    crate::scratch_reads::generation().hash(&mut hasher);
+    for pattern in &library.items {
+        (&pattern.id, &pattern.name, pattern.surface.generation()).hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// The library's patterns as the preset views draw them: the held ones while the library is unchanged.
+fn held_patterns(app: &mut PhotocraftApp) -> HeldPatterns {
+    let stamp = patterns_stamp(&app.session.patterns);
+    if let Some((held, patterns)) = &app.preset_art.patterns
+        && *held == stamp
+    {
+        return Arc::clone(patterns);
+    }
+    let patterns: HeldPatterns = app.session.patterns.items.iter().cloned().map(Arc::new).collect();
+    app.preset_art.patterns = Some((stamp, Arc::clone(&patterns)));
+    patterns
 }
 
 /// The swatch of `key` among `swatches`.
@@ -229,14 +304,21 @@ fn pattern_image(pattern: &photocraft_doc::Pattern) -> ColorImage {
     image
 }
 
-/// The cached texture of `pattern`'s swatch.
-pub(crate) fn pattern_texture(ctx: &egui::Context, pattern: &photocraft_doc::Pattern) -> egui::TextureId {
-    TextureCache::texture(ctx, ("pattern", pattern.id.clone()), || pattern_image(pattern))
+/// The texture store key of `pattern`'s swatch: its id and its pixels, so a pattern replaced under the same id draws
+/// anew, and a swatch drawn while a tile failed to read draws again once it reads (`crate::scratch_reads`).
+fn pattern_key(pattern: &photocraft_doc::Pattern) -> PictureKey {
+    ("pattern", pattern.id.clone(), crate::scratch_reads::with(pattern.surface.generation()))
+}
+
+/// A texture of `pattern`'s swatch that its holder owns: it stays while the handle lives, where a cached texture
+/// lasts only while something asks for it every frame.
+pub(crate) fn pattern_texture_handle(ctx: &egui::Context, pattern: &photocraft_doc::Pattern) -> egui::TextureHandle {
+    ctx.load_texture(format!("photocraft/pattern-swatch/{}", pattern.id), pattern_image(pattern), egui::TextureOptions::LINEAR)
 }
 
 /// The swatch of `pattern`, keyed by its id and named by its display name.
-fn pattern_swatch(ctx: &egui::Context, pattern: &photocraft_doc::Pattern) -> Swatch {
-    Swatch { key: pattern.id.clone(), name: pattern.display_name().to_string(), texture: pattern_texture(ctx, pattern) }
+fn pattern_swatch(pattern: &Arc<photocraft_doc::Pattern>) -> Swatch {
+    Swatch { key: pattern.id.clone(), name: pattern.display_name().to_string(), picture: pattern_key(pattern), art: Art::Pattern(Arc::clone(pattern)) }
 }
 
 /// Paints the whole of `texture` into `rect`.
@@ -249,7 +331,7 @@ fn swatch_thumb(inputs: &PanelInputs<Vec<Swatch>>, cx: &ContentPainterCx, rect: 
     if let PresetKey::Item(key) = info.key
         && let Some(swatch) = swatch_of(&inputs.thumbs, key)
     {
-        paint_texture(cx, rect, swatch.texture);
+        swatch.paint(cx, rect);
     }
 }
 
@@ -303,7 +385,7 @@ pub fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if app.services.preset_store.is_none() {
         photocraft_engine::presets::patterns::sync(&mut app.session);
     }
-    let library = &app.session.patterns.items;
+    let library = held_patterns(app);
     let folders: Vec<Folder> = app
         .session
         .presets
@@ -320,12 +402,8 @@ pub fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         })
         .collect();
     let names = names_of(&folders);
-    let swatches: Vec<Swatch> = folders
-        .iter()
-        .flat_map(|folder| &folder.items)
-        .filter_map(|(id, _)| library.iter().find(|pattern| &pattern.id == id))
-        .map(|pattern| pattern_swatch(ui.ctx(), pattern))
-        .collect();
+    let swatches: Vec<Swatch> =
+        folders.iter().flat_map(|folder| &folder.items).filter_map(|(id, _)| library.iter().find(|pattern| &pattern.id == id)).map(pattern_swatch).collect();
     let source = panel_source(PanelInputs::new(&app.ui.presets_ui, PATTERNS, folders, swatches), swatch_thumb);
     let zone = canvas_zone(app);
     let (events, keys) = show(&mut app.ui.presets_ui, zone, ui, PATTERNS, &source, Look::default());
@@ -344,29 +422,49 @@ pub(crate) fn style_image(session: &photocraft_engine::Session, preset: &photocr
     ColorImage::from_rgba_unmultiplied([S as usize, S as usize], &px)
 }
 
-/// What the style thumbnails draw from: every style and the patterns their effects use, as the app holds them when the
-/// thumbnails' presets are built.
+/// What the style thumbnails draw from: every style with its picture's key, and the patterns their effects use, as the
+/// app holds them when the thumbnails' presets are built.
 #[derive(PlainData)]
 pub(crate) struct StyleLibrary {
+    /// Each style and the number its picture is keyed by in the texture store ([`style_stamp`]).
     #[plain_data(assume = "engine presets: owned values with no interior mutability")]
-    styles: Vec<StylePreset>,
+    styles: Vec<(u64, StylePreset)>,
     #[plain_data(assume = "the engine's pattern library: owned patterns with no interior mutability")]
     patterns: PatternLibrary,
 }
 
+/// The texture store key of `style`'s picture: everything the style holds and the pixels of the patterns its effects
+/// may draw (`patterns`, a [`patterns_stamp`]), so a style or pattern edit under the same name draws anew.
+fn style_stamp(style: &StylePreset, patterns: u64) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    format!("{style:?}").hash(&mut hasher);
+    patterns.hash(&mut hasher);
+    hasher.finish()
+}
+
 impl StyleLibrary {
-    /// The app's styles and patterns now.
-    pub(crate) fn of(session: &photocraft_engine::Session) -> Tracked<Self> {
-        let styles = session.presets.styles.iter().flat_map(|group| group.items.iter().cloned()).collect();
-        Tracked::new(StyleLibrary { styles, patterns: session.patterns.clone() })
+    /// The app's styles and patterns now: the held library while the presets and the patterns are unchanged, so the
+    /// views keyed by it settle.
+    pub(crate) fn held(app: &mut PhotocraftApp) -> Arc<Tracked<Self>> {
+        let patterns = patterns_stamp(&app.session.patterns);
+        let stamp = (app.session.presets.revision(), patterns);
+        if let Some((held, library)) = &app.preset_art.styles
+            && *held == stamp
+        {
+            return Arc::clone(library);
+        }
+        let styles =
+            app.session.presets.styles.iter().flat_map(|group| group.items.iter()).map(|style| (style_stamp(style, patterns), style.clone())).collect();
+        let library = Arc::new(Tracked::new(StyleLibrary { styles, patterns: app.session.patterns.clone() }));
+        app.preset_art.styles = Some((stamp, Arc::clone(&library)));
+        library
     }
 
     /// Paints the thumbnail of the style `name`. A picture is rendered on a texture miss only, under one key for
     /// every place that shows the style, so they share the textures.
     pub(crate) fn paint(&self, cx: &ContentPainterCx, rect: Rect, name: &str) {
-        let Some(style) = self.styles.iter().find(|style| style.name == name) else { return };
-        let key = ("style", style.name.clone(), style.effects.len(), format!("{:?}{:?}", style.blend, style.fill_opacity));
-        picture(cx, rect, key, || {
+        let Some((stamp, style)) = self.styles.iter().find(|(_, style)| style.name == name) else { return };
+        picture(cx, rect, ("style", *stamp), || {
             let mut scratch = photocraft_engine::Session::new();
             scratch.patterns = self.patterns.clone();
             style_image(&scratch, style)
@@ -375,7 +473,7 @@ impl StyleLibrary {
 }
 
 /// A Styles panel thumbnail.
-fn style_thumb(inputs: &PanelInputs<Tracked<StyleLibrary>>, cx: &ContentPainterCx, rect: Rect, info: ThumbInfo<'_, PresetKey>) {
+fn style_thumb(inputs: &PanelInputs<Arc<Tracked<StyleLibrary>>>, cx: &ContentPainterCx, rect: Rect, info: ThumbInfo<'_, PresetKey>) {
     if let PresetKey::Item(name) = info.key {
         inputs.thumbs.paint(cx, rect, name);
     }
@@ -386,7 +484,8 @@ fn style_thumb(inputs: &PanelInputs<Tracked<StyleLibrary>>, cx: &ContentPainterC
 pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let folders = style_folders(app);
     let names = names_of(&folders);
-    let source = panel_source(PanelInputs::new(&app.ui.presets_ui, STYLES, folders, StyleLibrary::of(&app.session)), style_thumb);
+    let library = StyleLibrary::held(app);
+    let source = panel_source(PanelInputs::new(&app.ui.presets_ui, STYLES, folders, library), style_thumb);
     let zone = canvas_zone(app);
     let look = Look { room_height: Some(STYLES_HEIGHT), ..Look::default() };
     let (events, keys) = show(&mut app.ui.presets_ui, zone, ui, STYLES, &source, look);
@@ -443,6 +542,14 @@ pub(crate) fn styles_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandStat
             Some((command, state))
         })
         .collect()
+}
+
+/// [`styles_states`], derived from what it reads: the presets the styles live in, the selected style and the browser's
+/// view.
+pub(crate) fn styles_source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    let view = app.ui.presets_ui.browsers.get(STYLES.id).map_or(PresetView::Grid, |state| state.view);
+    let facts = (app.session.presets.revision(), app.ui.presets_ui.selected.get(STYLES.id), view);
+    crate::app::framework::derived_states(app, name, &facts, || styles_states(app))
 }
 
 /// Runs a Styles panel menu command; `false` when `cmd` is not one of its commands.
@@ -537,17 +644,14 @@ pub(crate) fn shape_image(shape: &photocraft_engine::presets::shapes::ShapePrese
 }
 
 /// The texture cache key of a shape's raster: its name and size of path.
-fn shape_key(shape: &photocraft_engine::presets::shapes::ShapePreset) -> (&'static str, String, usize) {
-    ("shape", shape.name.clone(), shape.path.subpaths.iter().map(|s| s.knots.len()).sum())
-}
-
-fn shape_texture(ctx: &egui::Context, shape: &photocraft_engine::presets::shapes::ShapePreset) -> egui::TextureId {
-    TextureCache::texture(ctx, shape_key(shape), || shape_image(shape))
+fn shape_key(shape: &ShapePreset) -> PictureKey {
+    let knots: usize = shape.path.subpaths.iter().map(|s| s.knots.len()).sum();
+    ("shape", shape.name.clone(), u64::try_from(knots).unwrap_or(u64::MAX))
 }
 
 /// The swatch of `shape`, keyed and named by its name.
-fn shape_swatch(ctx: &egui::Context, shape: &photocraft_engine::presets::shapes::ShapePreset) -> Swatch {
-    Swatch { key: shape.name.clone(), name: shape.name.clone(), texture: shape_texture(ctx, shape) }
+fn shape_swatch(shape: ShapePreset) -> Swatch {
+    Swatch { key: shape.name.clone(), name: shape.name.clone(), picture: shape_key(&shape), art: Art::Shape(Arc::new(shape)) }
 }
 
 /// A Shapes panel thumbnail: the shape's raster, inset from the tile's edge.
@@ -555,7 +659,7 @@ fn shape_thumb(inputs: &PanelInputs<Vec<Swatch>>, cx: &ContentPainterCx, rect: R
     if let PresetKey::Item(key) = info.key
         && let Some(swatch) = swatch_of(&inputs.thumbs, key)
     {
-        paint_texture(cx, rect.shrink(2.0), swatch.texture);
+        swatch.paint(cx, rect.shrink(2.0));
     }
 }
 
@@ -568,7 +672,7 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .map(|group| Folder { name: group.name.clone(), items: group.items.iter().map(|shape| (shape.name.clone(), shape.name.clone())).collect() })
         .collect();
     let names = names_of(&folders);
-    let swatches: Vec<Swatch> = groups.iter().flat_map(|group| &group.items).map(|shape| shape_swatch(ui.ctx(), shape)).collect();
+    let swatches: Vec<Swatch> = groups.into_iter().flat_map(|group| group.items).map(shape_swatch).collect();
     let source = panel_source(PanelInputs::new(&app.ui.presets_ui, SHAPES, folders, swatches), shape_thumb);
     let zone = canvas_zone(app);
     let (events, keys) = show(&mut app.ui.presets_ui, zone, ui, SHAPES, &source, Look::default());
@@ -618,8 +722,8 @@ fn keep_picker_state(presets: &mut PresetUi, id: &str, state: PresetState<String
 pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     const ID: &str = "shapePicker";
     let groups: Vec<(String, Vec<Swatch>)> = photocraft_engine::presets::shapes::all_groups(&app.session)
-        .iter()
-        .map(|group| (group.name.clone(), group.items.iter().map(|shape| shape_swatch(ui.ctx(), shape)).collect()))
+        .into_iter()
+        .map(|group| (group.name, group.items.into_iter().map(shape_swatch).collect()))
         .collect();
     let source = PresetSource::new(groups, PresetFns::new(shape_rows));
     let mut value = Some(app.ui.presets_ui.shape().to_string());
@@ -641,9 +745,9 @@ fn shape_rows(groups: &Vec<(String, Vec<Swatch>)>, _: &Env) -> Vec<PresetRow<Str
     for (group, shapes) in groups {
         rows.push(PresetRow::group(format!("{SHAPE_GROUP}{group}"), group.clone(), 0));
         for shape in shapes {
-            let texture = shape.texture;
+            let swatch = shape.clone();
             rows.push(PresetRow::item(shape.key.clone(), shape.name.clone(), 1).tooltip(shape.name.clone()).preview(ThumbAspect::SQUARE, move |cx, rect| {
-                paint_texture(cx, rect.shrink(2.0), texture);
+                swatch.paint(cx, rect.shrink(2.0));
             }));
         }
     }
@@ -859,8 +963,8 @@ fn after(app: &mut PhotocraftApp, ctx: &egui::Context, panel: PresetPanel, event
 
 /// The library's patterns as swatches, in library order. The pattern picker and the dialogs' pattern lists show these
 /// through [`pattern_source`].
-pub(crate) fn pattern_swatches(app: &PhotocraftApp, ctx: &egui::Context) -> Vec<Swatch> {
-    app.session.patterns.items.iter().map(|pattern| pattern_swatch(ctx, pattern)).collect()
+pub(crate) fn pattern_swatches(app: &mut PhotocraftApp) -> Vec<Swatch> {
+    held_patterns(app).iter().map(pattern_swatch).collect()
 }
 
 /// The presets of `swatches`: one row per pattern, keyed by its id, with its swatch and its name as the tooltip.
@@ -873,10 +977,10 @@ fn swatch_rows(swatches: &[Swatch], _: &Env) -> Vec<PresetRow<String>> {
     swatches
         .iter()
         .map(|swatch| {
-            let texture = swatch.texture;
+            let picture = swatch.clone();
             PresetRow::item(swatch.key.clone(), swatch.name.clone(), 0)
                 .tooltip(swatch.name.clone())
-                .preview(ThumbAspect::SQUARE, move |cx, rect| paint_texture(cx, rect, texture))
+                .preview(ThumbAspect::SQUARE, move |cx, rect| picture.paint(cx, rect))
         })
         .collect()
 }
@@ -885,7 +989,7 @@ fn swatch_rows(swatches: &[Swatch], _: &Env) -> Vec<PresetRow<String>> {
 /// each named in its tooltip. Returns the id of a newly picked pattern.
 pub(crate) fn pattern_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui, selected: &str) -> Option<String> {
     const ID: &str = "patternPicker";
-    let source = pattern_source(pattern_swatches(app, ui.ctx()));
+    let source = pattern_source(pattern_swatches(app));
     let mut value = Some(selected.to_string()).filter(|id| app.session.patterns.items.iter().any(|pattern| &pattern.id == id));
     let before = value.clone();
     let mut state = picker_state(&app.ui.presets_ui, ID);
