@@ -907,3 +907,6 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
