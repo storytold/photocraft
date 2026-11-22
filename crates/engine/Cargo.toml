@@ -74,6 +74,7 @@ photocraft-ipp = { workspace = true }
 
 [dev-dependencies]
 craft-affinity = { workspace = true, features = ["synth"] }
+craft-develop-model = { workspace = true }
 photocraft-io = { workspace = true, features = ["testgen"] }
 # Synthetic camera raw files for the open tests.
 photocraft-raw = { workspace = true, features = ["testgen"] }
