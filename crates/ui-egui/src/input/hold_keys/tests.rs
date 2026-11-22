@@ -720,3 +720,44 @@ fn space_hand_pasteboard_menu_opens_outside_the_image_and_outlives_space() {
     h.run_steps(2);
     assert!(h.state().ui.canvas_tool_menu.is_none(), "another tool selected closes it");
 }
+
+/// A lone Alt tap or F10 puts the keyboard on the menu bar. Space then opens no menu (it used to open File, and a held
+/// Space ran File > New) and is the Hand in the same press: the drag pans, as it always does in the reference
+/// application (#16327).
+#[test]
+fn space_after_an_alt_tap_or_f10_pans_and_opens_no_menu() {
+    for (f10, clicked) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut h = harness(Tool::Brush);
+        let p = screen(&h, 200.0, 150.0);
+        if clicked {
+            // A dab first, so the canvas holds the keyboard when the bar takes it.
+            click(&mut h, 100.0, 80.0, Modifiers::NONE);
+        }
+        h.event(Event::PointerMoved(p));
+        h.run_steps(2);
+        if f10 {
+            key(&mut h, Key::F10, true, Modifiers::NONE);
+            key(&mut h, Key::F10, false, Modifiers::NONE);
+        } else {
+            h.event(Event::ModifiersChanged(Modifiers::ALT));
+            h.run_steps(1);
+            h.event(Event::ModifiersChanged(Modifiers::NONE));
+            h.run_steps(2);
+        }
+        assert!(craft::ui::menu::bar::is_focused(&h.ctx), "f10 {f10}, clicked {clicked}: the keyboard is on the bar");
+        let before = center(&h);
+        key(&mut h, Key::Space, true, Modifiers::NONE);
+        assert!(!craft::ui::menu::bar::is_open(&h.ctx), "f10 {f10}, clicked {clicked}: Space opens no menu");
+        assert!(!craft::ui::menu::bar::is_focused(&h.ctx), "f10 {f10}, clicked {clicked}: Space takes the keyboard off the bar");
+        button(&mut h, p, true, Modifiers::NONE);
+        move_to(&mut h, 250.0, 180.0);
+        let q = screen(&h, 250.0, 180.0);
+        button(&mut h, q, false, Modifiers::NONE);
+        key(&mut h, Key::Space, false, Modifiers::NONE);
+        h.run_steps(2);
+        assert!(!craft::ui::menu::bar::is_open(&h.ctx), "f10 {f10}, clicked {clicked}: no menu after the drag");
+        assert_ne!(center(&h), before, "f10 {f10}, clicked {clicked}: Space and a drag pan the view");
+        assert_eq!(h.state().session.documents().len(), 1, "f10 {f10}, clicked {clicked}: no new document");
+        assert_eq!(h.state().ui.tool, Tool::Brush, "f10 {f10}, clicked {clicked}: the tool comes back");
+    }
+}
