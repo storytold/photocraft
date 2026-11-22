@@ -27,6 +27,14 @@ fn regular_or_missing(path: &Path) -> io::Result<bool> {
 }
 
 impl Session {
+    /// The warning belongs to this window: a busy secondary has no health-record coverage,
+    /// while Stable and a lease-owning Nightly window preserve their existing result.
+    pub fn begin_with_health(root: Option<&Path>, version: &str, commit: Option<&str>) -> io::Result<(Option<Self>, bool)> {
+        let watch = Self::begin(root, version, commit)?;
+        let unavailable = root.is_some() && watch.is_none();
+        Ok((watch, unavailable))
+    }
+
     /// `None` is stable or another owner of this profile. Neither case touches the record.
     /// The supplied root must already be the validated private Nightly profile.
     pub fn begin(root: Option<&Path>, version: &str, commit: Option<&str>) -> io::Result<Option<Self>> {
@@ -98,6 +106,23 @@ mod tests {
         fn drop(&mut self) {
             std::fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+
+    #[test]
+    fn busy_secondary_reports_unavailable_without_replacing_the_owner_record() {
+        let _no_spawns = crate::no_child_spawns();
+        let fixture = Fixture::new();
+        let (stable, warning) = Session::begin_with_health(None, "stable", None).unwrap();
+        assert!(stable.is_none() && !warning);
+        let (first, warning) = Session::begin_with_health(Some(&fixture.0), "nightly", Some("owned-commit")).unwrap();
+        assert!(!warning);
+        let first = first.unwrap();
+        let record = std::fs::read(fixture.0.join(RECORD)).unwrap();
+        let (secondary, warning) = Session::begin_with_health(Some(&fixture.0), "secondary", None).unwrap();
+        assert!(secondary.is_none() && warning, "a secondary window cannot claim recorded exit/crash coverage");
+        assert_eq!(std::fs::read(fixture.0.join(RECORD)).unwrap(), record);
+        first.complete().unwrap();
+        assert!(!fixture.0.join(RECORD).exists());
     }
 
     #[test]

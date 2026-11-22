@@ -447,7 +447,7 @@ fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
         let _ = writeln!(std::io::stdout(), "PhotoCraft {}", build_flavor::version(build_flavor::COMPILED, env!("PHOTOCRAFT_BUILT_VERSION")));
         return None;
     }
-    let early = launch_profile::parse(argv)
+    let early = launch_profile::parse_startup(argv, std::env::var_os("PHOTOCRAFT_GPU_STARTUP_FAILURE").is_some())
         .and_then(|launch| {
             build_flavor::require_profile(build_flavor::COMPILED, &launch.profile)?;
             initialize_nightly_process_identity().map_err(|error| error.to_string())?;
@@ -492,10 +492,10 @@ fn main() -> eframe::Result {
     // The system font scan can take seconds (minutes on some Macs): run it off the UI thread.
     photocraft_ui_egui::type_tool::warm_fonts();
     // `--help` and `--version` print to standard output and exit 0. A usage error (an unknown
-    // option, a missing or bad value, a bad PHOTOCRAFT_CONTROL_PORT: issues #701, #6429, #6431)
+    // option, a missing or bad value, a bad PHOTOCRAFT_CONTROL_PORT for Stable: issues #701, #6429, #6431)
     // names the argument on standard error and exits 2, so a launcher sees the failure. Neither
     // panics when the stream is closed or a pipe (`photocraft --help | head -1`).
-    let launch = launch_args::parse(launch_args::command(), arguments).unwrap_or_else(|e| e.exit());
+    let launch = launch_args::parse(launch_args::command_for_profile(launch_profile::current().is_nightly()), arguments).unwrap_or_else(|e| e.exit());
     let launch_args::FileNames { openable: files, unreadable: unreadable_paths } = launch.file_names();
     let launch_args::LaunchArgs {
         files: _,
@@ -641,12 +641,12 @@ fn main() -> eframe::Result {
     let started_sentinel = sentinel.clone();
     // After primary IPC claim, before entering the window loop. Stable and secondaries do not
     // own a Nightly record. No document names, paths or diagnostic payload is collected.
-    let (nightly_session, session_health_warning) = match nightly_session::Session::begin(
+    let (nightly_session, session_health_warning) = match nightly_session::Session::begin_with_health(
         launch_profile::current().root(),
         photocraft_engine::build_info::VERSION,
         photocraft_engine::build_info::git_sha(),
     ) {
-        Ok(watch) => (watch, false),
+        Ok(state) => state,
         Err(error) => {
             log::warn!("Nightly session health is unavailable: {error}");
             (None, true)

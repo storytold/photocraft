@@ -90,6 +90,22 @@ pub fn parse(args: Vec<OsString>) -> Result<Launch, String> {
     }
 }
 
+/// The existing renderer retry is signalled by its process-local failure marker. Ordinary
+/// Launcher calls still use the strict selector/root protocol; this is not authentication.
+pub fn parse_startup(args: Vec<OsString>, compatibility_retry: bool) -> Result<Launch, String> {
+    if !compatibility_retry || args.first().is_none_or(|arg| arg != "--safe-gpu") {
+        return parse(args);
+    }
+    let mut launch = parse(args[1..].to_vec())?;
+    if launch.profile.is_nightly() {
+        launch.args.insert(0, OsString::from("--safe-gpu"));
+        Ok(launch)
+    } else {
+        // Stable's argument order and parser remain unchanged.
+        parse(args)
+    }
+}
+
 /// Validation finishes before the caller's first startup effect. Stable never calls the nightly
 /// root validator, so its old portable/config resolution stays unchanged.
 pub fn prepare(mut launch: Launch, validate: impl FnOnce(&Path) -> Result<PathBuf, String>) -> Result<Launch, String> {
@@ -117,6 +133,27 @@ mod tests {
     }
     fn nightly() -> Vec<OsString> {
         args(&["--launch-profile", VERSION, "--profile-root", absolute(), "--"])
+    }
+
+    #[test]
+    fn internal_cpu_retry_preserves_the_nightly_root_and_literal_files() {
+        let mut argv = args(&["--safe-gpu"]);
+        argv.extend(nightly());
+        argv.extend(args(&["document with spaces.psd", "--safe-gpu", "--profile-root"]));
+        let launch = parse_startup(argv.clone(), true).unwrap();
+        assert_eq!(launch.profile, Profile::NightlyV1(PathBuf::from(absolute())));
+        assert_eq!(launch.args, args(&["--safe-gpu", "--", "document with spaces.psd", "--safe-gpu", "--profile-root"]));
+        assert!(parse_startup(argv, false).is_err(), "an ordinary invocation must not gain extra protocol flags");
+    }
+
+    #[test]
+    fn retry_cannot_bypass_invalid_profiles_or_change_stable_arguments() {
+        let stable = args(&["--safe-gpu", "--new-instance", "stable.psd"]);
+        assert_eq!(parse_startup(stable.clone(), true).unwrap(), Launch { profile: Profile::Stable, args: stable });
+        let mut duplicate = args(&["--safe-gpu", "--safe-gpu"]);
+        duplicate.extend(nightly());
+        assert!(parse_startup(duplicate, true).is_err());
+        assert!(parse_startup(args(&["--safe-gpu", "--launch-profile", VERSION, "--profile-root", "relative", "--"]), true).is_err());
     }
 
     #[test]

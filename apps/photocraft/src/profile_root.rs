@@ -1,6 +1,8 @@
 //! App-owned nightly profile fences; no stable fallback, migration or process environment changes.
 
 use std::ffi::OsString;
+
+use photocraft_automation::app_dirs::{PORTABLE_DATA_DIR, portable_marker};
 use std::path::{Component, Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,12 +129,27 @@ fn forbidden_roots(platform: Platform, env: &impl Fn(&str) -> Option<OsString>, 
 /// never falls back to the stable Documents folder. The SDK creates it lazily if a default is
 /// actually needed; explicit user-chosen document roots keep their existing semantics.
 pub fn agent_directory(root: &Path) -> Result<PathBuf, String> {
+    private_subdirectory(root, "AgentFiles", "default agent folder")
+}
+
+fn private_subdirectory(root: &Path, name: &str, label: &str) -> Result<PathBuf, String> {
     let chosen = canonical_future(&absolute(root.to_path_buf(), "the nightly profile root")?)?;
-    let agent = canonical_future(&chosen.join("AgentFiles"))?;
-    if agent == chosen || !agent.starts_with(&chosen) {
-        return Err("the nightly default agent folder must stay inside its selected profile".into());
+    let child = canonical_future(&chosen.join(name))?;
+    if child == chosen || !child.starts_with(&chosen) {
+        return Err(format!("the nightly {label} must stay inside its selected profile"));
     }
-    Ok(agent)
+    Ok(child)
+}
+
+/// Recognise the shared portable data namespace in both the supplied and resolved path.
+/// This is not an inventory of arbitrary custom Stable overrides or a Launcher ownership proof.
+fn is_portable_layout(path: &Path, platform: Platform) -> bool {
+    portable_marker(path).is_some()
+        || path.components().any(|component| match component {
+            Component::Normal(name) if platform.ignores_case() => name.to_string_lossy().eq_ignore_ascii_case(PORTABLE_DATA_DIR),
+            Component::Normal(name) => name == PORTABLE_DATA_DIR,
+            _ => false,
+        })
 }
 
 /// The writable hook is the app's existing exclusive probe. Keeping it injected lets filesystem
@@ -165,6 +182,9 @@ fn validate_for(
         return Err("nightly-v1 native packages cannot inherit a Flatpak instance; launch through the native Launcher".into());
     }
     let chosen = canonical_future(root)?;
+    if is_portable_layout(root, platform) || is_portable_layout(&chosen, platform) {
+        return Err("the nightly root must not use a portable PhotoCraft installation or its PhotoCraftData settings folder".into());
+    }
     let exe = absolute(exe.ok_or("cannot establish the installation boundary")?.to_path_buf(), "the executable")?;
     let mut forbidden = forbidden_roots(platform, &env, &exe)?;
     if let Some(agent) = stable_agent {
@@ -177,6 +197,9 @@ fn validate_for(
     }
     // Existing aliases under the profile must not redirect the default agent workspace elsewhere.
     agent_directory(&chosen)?;
+    // Recovery can read, adopt, overwrite and sweep entries. Never let its alias leave this
+    // private profile, including toward a Stable portable directory not in our known roots.
+    private_subdirectory(&chosen, "Recovery", "recovery folder")?;
     let mut create = std::fs::DirBuilder::new();
     create.recursive(true);
     #[cfg(unix)]
@@ -190,6 +213,7 @@ fn validate_for(
         return Err("the nightly profile changed while it was being validated".into());
     }
     agent_directory(&confirmed)?;
+    private_subdirectory(&confirmed, "Recovery", "recovery folder")?;
     writable(&confirmed).map_err(|e| format!("the nightly profile is not writable: {e}"))?;
     Ok(confirmed)
 }
@@ -259,6 +283,85 @@ mod tests {
             // Only the directory successfully created by this fixture is owned for removal.
             std::fs::remove_dir_all(&self.root).unwrap();
         }
+    }
+
+    #[test]
+    fn portable_settings_from_another_install_are_refused_before_any_probe() {
+        let fixture = Fixture::new();
+        let stable_install = fixture.root.join("stable portable install");
+        let stable_data = stable_install.join(photocraft_automation::app_dirs::PORTABLE_DATA_DIR);
+        std::fs::create_dir_all(&stable_data).unwrap();
+        std::fs::write(stable_install.join("portable.txt"), b"owned portable fixture").unwrap();
+        std::fs::write(stable_data.join("settings.json"), b"stable settings must not change").unwrap();
+        for platform in [Platform::Windows, Platform::Linux, Platform::Mac] {
+            for candidate in [&stable_data, &stable_data.join("nested nightly")] {
+                let probed = std::cell::Cell::new(false);
+                let result = validate_for(
+                    platform,
+                    candidate,
+                    |key| fixture.get(key),
+                    Some(&fixture.exe),
+                    None,
+                    |_| {
+                        probed.set(true);
+                        Ok(())
+                    },
+                );
+                assert!(result.is_err(), "a different portable install is not a private Nightly profile");
+                assert!(!probed.get(), "reject portable data before a writable probe");
+                assert!(!stable_data.join("nested nightly").exists());
+                assert_eq!(std::fs::read(stable_data.join("settings.json")).unwrap(), b"stable settings must not change");
+                assert_eq!(std::fs::read_dir(&stable_data).unwrap().count(), 1);
+            }
+        }
+        let private = fixture.root.join("PhotoCraftData-backup-name/nightly");
+        assert!(fixture.check(Platform::Linux, &private).is_ok(), "a merely similar name is not a portable settings component");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_aliases_cannot_redirect_to_stable_missing_or_profile_root_data() {
+        let fixture = Fixture::new();
+        let stable = fixture.home().join(".local/state/photocraft/Recovery");
+        std::fs::create_dir_all(&stable).unwrap();
+        std::fs::write(stable.join("stable-autosave"), b"stable recovery bytes").unwrap();
+        for (index, target) in [stable.clone(), fixture.root.join("missing recovery target")].into_iter().enumerate() {
+            let private = fixture.root.join(format!("nightly-{index}"));
+            std::fs::create_dir(&private).unwrap();
+            std::os::unix::fs::symlink(&target, private.join("Recovery")).unwrap();
+            let probed = std::cell::Cell::new(false);
+            let result = validate_for(
+                Platform::Linux,
+                &private,
+                |key| fixture.get(key),
+                Some(&fixture.exe),
+                None,
+                |_| {
+                    probed.set(true);
+                    Ok(())
+                },
+            );
+            assert!(result.is_err(), "Recovery must not escape the private profile or follow a dangling alias");
+            assert!(!probed.get());
+        }
+        let private = fixture.root.join("nightly-self");
+        std::fs::create_dir(&private).unwrap();
+        std::os::unix::fs::symlink(&private, private.join("Recovery")).unwrap();
+        assert!(fixture.check(Platform::Linux, &private).is_err(), "Recovery cannot treat all profile settings as recovery entries");
+        assert_eq!(std::fs::read(stable.join("stable-autosave")).unwrap(), b"stable recovery bytes");
+        assert_eq!(std::fs::read_dir(stable).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_alias_to_a_private_subfolder_keeps_the_profile_usable() {
+        let fixture = Fixture::new();
+        let private = fixture.root.join("nightly-private");
+        let recovery = private.join("private-recovery");
+        std::fs::create_dir_all(&recovery).unwrap();
+        std::os::unix::fs::symlink(&recovery, private.join("Recovery")).unwrap();
+        assert!(fixture.check(Platform::Linux, &private).is_ok());
+        assert_eq!(std::fs::canonicalize(private.join("Recovery")).unwrap(), recovery);
     }
 
     #[test]
