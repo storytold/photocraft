@@ -142,6 +142,7 @@ fn set_duplication_preserves_metadata_call_targets_and_empty_folder_order() {
 /// Menu insertion keeps descriptor absence and kind; empty descriptors and ambiguous commands differ.
 #[test]
 fn inserted_menu_events_roundtrip_absent_settings_and_stateless_items_execute() {
+    photocraft_engine::install().unwrap();
     assert!(!atn_cmds::menu_item_needs_settings("filter.noise.despeckle"));
     assert!(atn_cmds::menu_item_needs_settings("filter.blur.gaussianBlur"));
     for id in ["image.imageSize", "filter.blur.gaussianBlur", "filter.noise.despeckle"] {
