@@ -468,7 +468,7 @@ fn canvas_turn_refuses_extreme_auxiliary_pixels_without_changing_state() {
                 _ => panic!("unknown pixel storage fixture: {target}"),
             }
             d.layers.push(layer);
-            let mut s = Session::new();
+            let mut s = crate::session();
             s.add_document(d, None);
             let before = s.active().unwrap().doc.clone();
             let history = s.active().unwrap().history.past_len();
@@ -490,7 +490,7 @@ fn canvas_flip_keeps_pixels_whose_half_open_bounds_remain_representable() {
     let mut surface = Surface::new(PixelFormat::RGBA8);
     surface.write_pixel(x, 0, &[1.0; 4]);
     d.layers.push(Layer::new("Pixel", LayerContent::Raster(surface)));
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.add_document(d, None);
     s.execute(command(Turn::FlipHorizontal), json!({})).unwrap();
     assert_eq!(doc(&s).layers[0].surface().unwrap().pixel(i32::MAX - 1, 0), [1.0; 4]);

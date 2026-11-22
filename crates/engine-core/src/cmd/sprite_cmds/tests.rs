@@ -8,7 +8,7 @@ use photocraft_geom::{Rect, Size};
 use photocraft_raster::Surface;
 
 fn add_to_session(doc: Document) -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.add_document(doc, None);
     s
 }
@@ -77,7 +77,7 @@ fn assert_refused_unchanged(s: &mut Session, command: &str, params: Value) {
 /// Sprite-only controls must disable cleanly on ordinary documents and unsupported sample types.
 #[test]
 fn sprite_commands_are_disabled_without_a_sprite_or_with_unsupported_samples() {
-    let mut empty = Session::new();
+    let mut empty = crate::session();
     let mut ordinary = add_to_session(Document::new("Ordinary", Size::new(2, 1), ColorMode::Rgb, SampleType::U8));
     for spec in specs() {
         for s in [&mut empty, &mut ordinary] {
@@ -281,7 +281,7 @@ fn reference_layers_cannot_be_unlocked_into_a_discarded_display_cache_edit() {
 fn tilemap_pixels_require_explicit_rasterization_while_other_edits_preserve_tile_records() {
     let doc = photocraft_io::import("tiles.aseprite", include_bytes!("../../../../io/tests/fixtures/aseprite/tiles.aseprite")).unwrap().document;
     let id = doc.layers[0].id;
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.add_document(doc, None);
     let before = s.active().unwrap().doc.clone();
     let change = |doc: &mut Document, _: &mut Option<LayerId>| {
