@@ -1,6 +1,8 @@
 use super::descriptors::{desc, get_obj, get_ref, jstr};
 use super::events::{event_and_descriptor, event_for};
 use super::fields::Mapped;
+use crate::actions_cmds::ActionStep;
+
 use super::{Action, AtnAction, AtnEvent, AtnFile, AtnItem, D, DEFAULT_SET, Descriptor, PHOTOSHOP_STEP, ReferenceItem, UnicodeString, Value, atn, json};
 
 // ------------------------------------------------------------------ import
@@ -120,7 +122,7 @@ fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Ve
             }
             normalise(&mut s.1);
             let idx = action.steps.len();
-            action.steps.push(s);
+            action.steps.push(s.into());
             if !enabled {
                 action.disabled.insert(idx);
             }
@@ -333,23 +335,16 @@ pub fn parse_function_key(key: &str) -> Option<(u16, bool, bool)> {
     Some((n, shift, command))
 }
 
-/// Resolve export targets once; repeated calls never scan the selected library again.
+/// The exported actions' names, alone and with their sets, so each call is checked once.
 struct ExportTargets<'a> {
-    actions: &'a [&'a Action],
-    ids: std::collections::HashMap<&'a str, Option<usize>>,
-    clipped: std::collections::HashMap<String, usize>,
     names: std::collections::HashSet<&'a str>,
     scopes: std::collections::HashSet<(&'a str, &'a str)>,
 }
 
 impl<'a> ExportTargets<'a> {
-    fn new(actions: &'a [&'a Action]) -> Self {
-        let mut out = Self { actions, ids: Default::default(), clipped: Default::default(), names: Default::default(), scopes: Default::default() };
-        for (index, action) in actions.iter().enumerate() {
-            if let Some(id) = action.action_id.as_deref() {
-                out.ids.entry(id).and_modify(|row| *row = None).or_insert(Some(index));
-            }
-            *out.clipped.entry(clip_name(action.name.trim_end_matches('\0'))).or_default() += 1;
+    fn new(actions: &[&'a Action]) -> Self {
+        let mut out = Self { names: Default::default(), scopes: Default::default() };
+        for &action in actions {
             out.names.insert(&action.name);
             if let Some(set) = action.set.as_deref() {
                 out.scopes.insert((set, &action.name));
@@ -358,32 +353,22 @@ impl<'a> ExportTargets<'a> {
         out
     }
 
-    fn by_id(&self, id: &Value) -> Option<&Action> {
-        let id = id.as_str().filter(|id| crate::actions_cmds::valid_action_id(id))?;
-        let action = self.actions[(*self.ids.get(id)?)?];
-        (self.clipped.get(&clip_name(action.name.trim_end_matches('\0'))) == Some(&1)).then_some(action)
-    }
-
     fn internal(&self, name: &str, scope: Option<&str>) -> bool {
         scope.map_or_else(|| self.names.contains(name), |scope| self.scopes.contains(&(scope, name)))
     }
 }
 
-/// ATN uses names for these calls. Only translate an ID when that name identifies
-/// the same exported row; an absent or ambiguous target is an unsupported step.
+/// ATN calls name their action within a set: a call to an action the file holds names the set the
+/// file is written as, so it still reaches that action when the file loads elsewhere.
 fn export_targeted_items(id: &str, params: &Value, set: &str, targets: &ExportTargets<'_>) -> Option<Vec<AtnItem>> {
-    let fields: &[(&str, &str, &str)] = match id {
-        "actions.play" => &[("actionId", "action", "set")],
-        "actions.conditional" => &[("thenActionId", "then", "thenSet"), ("elseActionId", "else", "elseSet")],
+    let fields: &[(&str, &str)] = match id {
+        "actions.play" => &[("action", "set")],
+        "actions.conditional" => &[("then", "thenSet"), ("else", "elseSet")],
         _ => return export_items(id, params, set),
     };
     let mut params = params.clone();
-    for (key, name, scope) in fields {
-        if let Some(value) = params.get(*key) {
-            let action = targets.by_id(value)?;
-            params[*name] = json!(action.name);
-            params[*scope] = json!(set);
-        } else if let Some(target) = params.get(*name).and_then(Value::as_str) {
+    for (name, scope) in fields {
+        if let Some(target) = params.get(*name).and_then(Value::as_str) {
             let original_scope = params.get(*scope).filter(|value| !value.is_null()).or_else(|| params.get("set")).and_then(Value::as_str);
             if targets.internal(target, original_scope) {
                 params[*scope] = json!(set);
@@ -401,24 +386,15 @@ pub fn export(
     function_keys: &[(String, String)],
     skip_unsupported: bool,
 ) -> std::result::Result<(Vec<u8>, Vec<Skipped>), String> {
-    export_with_keys(set, actions, |_, action| function_keys.iter().find(|(name, _)| name == &action.name).map(|(_, key)| key.as_str()), skip_unsupported)
-}
-
-pub(super) fn export_with_keys<'a>(
-    set: &str,
-    actions: &[&Action],
-    key: impl Fn(usize, &Action) -> Option<&'a str>,
-    skip_unsupported: bool,
-) -> std::result::Result<(Vec<u8>, Vec<Skipped>), String> {
     let targets = ExportTargets::new(actions);
     let mut skipped = Vec::new();
     let mut file = AtnFile { name: UnicodeString::new_nul(set), expanded: true, actions: Vec::new(), warnings: Vec::new(), ..Default::default() };
-    for (index, a) in actions.iter().enumerate() {
+    for a in actions {
         let mut out = AtnAction { name: UnicodeString::new_nul(&a.name), expanded: false, ..Default::default() };
-        if let Some((n, shift, command)) = key(index, a).and_then(parse_function_key) {
+        if let Some((n, shift, command)) = function_keys.iter().find(|(n, _)| n == &a.name).and_then(|(_, key)| parse_function_key(key)) {
             (out.function_key, out.shift, out.command) = (n, shift, command);
         }
-        for (i, (id, params)) in a.steps.iter().enumerate() {
+        for (i, ActionStep { command: id, params }) in a.steps.iter().enumerate() {
             let Some(items) = export_targeted_items(id, params, set, &targets) else {
                 if skip_unsupported {
                     skipped.push(Skipped { action: a.name.clone(), step: i, id: id.clone() });
@@ -445,36 +421,4 @@ pub(super) fn export_with_keys<'a>(
     }
     let bytes = atn::write(&file).map_err(|e| e.to_string())?;
     Ok((bytes, skipped))
-}
-
-// ------------------------------------------------------------------ commands
-
-/// Assigns names not already used, as `name`, `name 2`, `name 3`… A plain linear scan of the
-/// taken list per candidate is cubic when an action file repeats one base name many times, so
-/// membership uses a set and the next suffix to try is cached per base name.
-pub(crate) struct UniqueNames {
-    taken: std::collections::HashSet<String>,
-    next_suffix: std::collections::HashMap<String, u32>,
-}
-
-impl UniqueNames {
-    pub(crate) fn new<I: IntoIterator<Item = String>>(existing: I) -> Self {
-        UniqueNames { taken: existing.into_iter().collect(), next_suffix: std::collections::HashMap::new() }
-    }
-
-    /// Reserves and returns a unique name derived from `name`, recording it as taken.
-    pub(crate) fn claim(&mut self, name: &str) -> String {
-        if self.taken.insert(name.to_string()) {
-            return name.to_string();
-        }
-        let mut i = self.next_suffix.get(name).copied().unwrap_or(2);
-        loop {
-            let candidate = format!("{name} {i}");
-            i += 1;
-            if self.taken.insert(candidate.clone()) {
-                self.next_suffix.insert(name.to_string(), i);
-                return candidate;
-            }
-        }
-    }
 }

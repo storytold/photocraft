@@ -158,7 +158,7 @@ fn sampled_document(doc: &Document, active: Option<LayerId>, which: SampleLayers
             layer.fill_opacity = 1.0;
             layer.blend = photocraft_color::BlendMode::Normal;
             let mut solo = doc.clone();
-            solo.layers = vec![layer];
+            solo.layers = vec![layer].into();
             return Some(Cow::Owned(solo));
         }
         _ => {}

@@ -403,7 +403,8 @@ fn knot(t: f32, k: &[f32; KNOTS]) -> f32 {
     k[i] + (k[i + 1] - k[i]) * (x - i as f32)
 }
 
-/// Applies Shadows and Highlights (−100 … 100) to straight RGBA pixels encoded with `enc`.
+/// Applies Shadows and Highlights (−100 … 100) to straight RGBA pixels encoded with `enc`
+/// (`Encoding::of(DevelopInputs::encoding_gamma)`). The filter is deterministic, so it reads no grain seed.
 pub(crate) fn apply(px: &mut [[f32; 4]], w: usize, h: usize, shadows: f32, highlights: f32, enc: Encoding) {
     let Some(tone) = LocalTone::new(shadows, highlights) else { return };
     if w < 2 || h < 2 {

@@ -158,6 +158,36 @@ fn preset_stop_edits_the_current_gradient() {
     assert!(s.execute("gradient.presets.stop", json!({"action": "midpoint", "index": 0, "location": 0.4})).is_err());
 }
 
+/// `gradient.presets.stop {action: "set"}` is the Gradient Editor's commit: it replaces every stop
+/// of the tool gradient at once, keeps the live foreground/background names and the preset's name,
+/// refuses a one-stop and a 1025-stop list, and leaves the document alone.
+#[test]
+fn the_tool_gradient_takes_a_whole_set_of_stops() {
+    let mut s = session(8);
+    let revision = s.active().unwrap().revision;
+    let name = s.presets.gradient.name.clone();
+    let v = s
+        .execute(
+            "gradient.presets.stop",
+            json!({"action": "set", "stops": [[0.0, "foreground"], [0.25, "#ff0000"], [1.0, "background"]], "transparency": [[0.0, 100.0], [1.0, 20.0]]}),
+        )
+        .unwrap();
+    assert_eq!(v["current"]["name"], json!(name));
+    assert_eq!(v["current"]["stops"], json!([[0.0, "foreground"], [0.25, "#ff0000"], [1.0, "background"]]));
+    assert_eq!(v["current"]["transparency"], json!([[0.0, 100.0], [1.0, 20.0]]));
+    assert_eq!(s.active().unwrap().revision, revision, "a tool gradient edit is no document step");
+    // A shorter list replaces; it does not merge with the old stops.
+    let v = s.execute("gradient.presets.stop", json!({"action": "set", "stops": [[0.0, "#000000"], [1.0, "#ffffff"]], "transparency": []})).unwrap();
+    assert_eq!(v["current"]["stops"].as_array().unwrap().len(), 2, "{v}");
+    assert_eq!(v["current"]["transparency"], json!([]));
+    // Refusals leave the gradient as it was.
+    assert!(s.execute("gradient.presets.stop", json!({"action": "set", "stops": [[0.0, "#000000"]]})).is_err());
+    let many: Vec<Value> = (0..1025).map(|i| json!([i as f64 / 1024.0, "#808080"])).collect();
+    assert!(s.execute("gradient.presets.stop", json!({"action": "set", "stops": many})).is_err());
+    let v = s.execute("gradient.presets.list", json!({})).unwrap();
+    assert_eq!(v["current"]["stops"], json!([[0.0, "#000000"], [1.0, "#ffffff"]]));
+}
+
 /// A many-stop gradient survives editor gymnastics: five adds build a seven-stop ramp, a stop
 /// dragged past its neighbour keeps the list sorted, the paint follows the edited stops, and
 /// trimming back down ends at a plain two-stop gradient.
@@ -403,6 +433,28 @@ fn pattern_groups_select_apply_and_sync() {
     assert!(crate::pattern_cmds::resolve(&s, "Weave").is_none());
 }
 
+/// #16221: syncing groups already in line with the library leaves the presets' revision alone (the Patterns panel
+/// syncs in every pass, and the menus rebuild on that revision); a library change still moves it.
+#[test]
+fn pattern_sync_writes_only_when_the_groups_change() {
+    let mut s = session(8);
+    super::patterns::sync(&mut s);
+    let settled = s.presets.revision();
+    super::patterns::sync(&mut s);
+    assert_eq!(s.presets.revision(), settled, "groups in line with the library are not written");
+    let mut extra = s.patterns.items[0].clone();
+    extra.id = "sync-test-extra".into();
+    s.patterns.items.push(extra);
+    super::patterns::sync(&mut s);
+    assert_ne!(s.presets.revision(), settled, "a new library pattern joins a group");
+    assert!(s.presets.pattern_groups.iter().any(|g| g.items.iter().any(|id| id == "sync-test-extra")));
+    let joined = s.presets.revision();
+    s.patterns.items.retain(|p| p.id != "sync-test-extra");
+    super::patterns::sync(&mut s);
+    assert_ne!(s.presets.revision(), joined, "a deleted pattern leaves its group");
+    assert!(!s.presets.pattern_groups.iter().any(|g| g.items.iter().any(|id| id == "sync-test-extra")));
+}
+
 #[test]
 fn pattern_batch_delete_keeps_the_library_when_one_name_is_missing() {
     let mut s = session(8);
@@ -638,7 +690,7 @@ fn tool_presets_reject_invalid_colors_before_applying_the_brush() {
         let mut s = Session::new();
         s.execute("tools.setColors", json!({"foreground": [0.2, 0.4, 0.6, 0.8]})).unwrap();
         let color = s.tools.foreground;
-        let brush = s.tools.brush.clone();
+        let brush = (*s.tools.brush).clone();
         let brush_rev = s.tools.brush_rev;
         s.execute(
             "tool.presets.new",
@@ -649,7 +701,7 @@ fn tool_presets_reject_invalid_colors_before_applying_the_brush() {
         .unwrap();
         assert!(s.execute("tool.presets.select", json!({"preset": "Invalid"})).is_err(), "{values}");
         assert_eq!(s.tools.foreground, color, "{values}");
-        assert_eq!(s.tools.brush, brush, "{values}");
+        assert_eq!(*s.tools.brush, brush, "{values}");
         assert_eq!(s.tools.brush_rev, brush_rev, "{values}");
     }
 }

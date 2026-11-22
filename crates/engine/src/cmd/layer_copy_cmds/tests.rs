@@ -34,7 +34,7 @@ fn selection_only_copy_preserves_source_and_soft_coverage_across_documents() {
         let (mut s, paint) = two_docs(40, 30, depth);
         s.execute("select.rect", json!({"x": 7, "y": 8, "width": 3, "height": 4})).unwrap();
         s.execute("layer.setProps", json!({"layer": paint.0, "opacity": 0.4})).unwrap();
-        std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).selection.as_mut().unwrap().write_pixel(7, 8, &[0.5]);
+        std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).selection.as_mut().unwrap().write_pixel(7, 8, &[0.5]);
         let before = doc(&s, 0).clone();
         let r = s.execute("layer.copyToDocument", json!({"source": 0, "document": 1, "layers": [paint.0], "selectionOnly": true, "offset": [10, 5]})).unwrap();
         let id = copied(&r);
