@@ -131,9 +131,9 @@ fn bad_params_are_errors_not_panics() {
     ] {
         assert!(from_params(kind, &p, None, ColorMode::Rgb).is_err(), "{kind} {p}");
     }
-    // Out-of-range numbers clamp.
-    let a = from_params("hueSaturation", &json!({"hue": 1e9, "saturation": -1e9}), None, ColorMode::Rgb).unwrap();
-    assert!(matches!(a, Adjustment::HueSaturation { hue: 180.0, saturation: -100.0, .. }));
+    // Out-of-range numbers clamp (Colorize hue/saturation still clamp).
+    let a = from_params("hueSaturation", &json!({"colorize": true, "hue": 1e9, "saturation": 1e9}), None, ColorMode::Rgb).unwrap();
+    assert!(matches!(a, Adjustment::HueSaturation { hue: 360.0, saturation: 100.0, colorize: true, .. }));
     let a = from_params("levels", &json!({"inBlack": 250, "inWhite": 10}), None, ColorMode::Rgb).unwrap();
     assert!(matches!(a, Adjustment::Levels { master, .. } if master.in_white > master.in_black));
 }
