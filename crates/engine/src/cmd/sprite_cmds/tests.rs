@@ -54,7 +54,7 @@ fn single_frame_session() -> Session {
 
 fn in_group(mut doc: Document, all: bool, position: bool) -> Document {
     let children = std::mem::take(&mut doc.layers);
-    let mut group = Layer::group("Parent", children);
+    let mut group = Layer::group("Parent", children.to_vec());
     group.locks.all = all;
     group.locks.position = position;
     doc.sprite.as_mut().unwrap().layers.insert(0, SpriteLayer { id: group.id, flags: 3, opacity: 255, uuid: None });
