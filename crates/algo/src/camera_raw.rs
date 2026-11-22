@@ -315,12 +315,14 @@ fn guided(i: &[f32], p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f
 /// Monotone cubic (Fritsch–Carlson) through `pts` (x ascending, 0..=1), evaluated into a LUT via
 /// [`craft_develop::color::spline::MonotoneCurve`].
 pub fn curve_lut(pts: &[[f32; 2]], n: usize) -> Vec<f32> {
-    let mut p: Vec<(f64, f64)> = pts.iter().map(|q| (f64::from(q[0]) / 255.0, f64::from(q[1]) / 255.0)).collect();
-    p.sort_by(|a, b| a.0.total_cmp(&b.0));
-    p.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-6);
+    // Keep the legacy f32 knot selection; normalizing in f64 can drop a saved knot.
+    let mut p: Vec<[f32; 2]> = pts.iter().map(|q| [q[0] / 255.0, q[1] / 255.0]).collect();
+    p.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    p.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-6);
     if p.len() < 2 || n < 2 {
         return (0..n).map(|k| if n <= 1 { 0.0 } else { k as f32 / (n - 1) as f32 }).collect();
     }
+    let p: Vec<_> = p.into_iter().map(|[x, y]| (f64::from(x), f64::from(y))).collect();
     craft_develop::color::spline::MonotoneCurve::new(&p).to_lut(n).v.into_iter().map(|v| v.clamp(0.0, 1.0)).collect()
 }
 
@@ -1062,6 +1064,15 @@ mod tests {
             assert!(out.iter().all(|q| q[..3].iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))), "{p:?}");
             assert_ne!(out, base);
         }
+    }
+
+    #[test]
+    fn camera_raw_curve_keeps_legacy_close_knots() {
+        // The middle knots survive the original f32 normalization and make a sharp step.
+        let x = 127.5_f32;
+        let close = f32::from_bits(x.to_bits() + 33);
+        let lut = curve_lut(&[[0.0, 0.0], [x, 0.0], [close, 255.0], [255.0, 255.0]], 1024);
+        assert!(lut[256] < 0.01 && lut[767] > 0.99, "expected the legacy step, got {} and {}", lut[256], lut[767]);
     }
 
     #[test]
