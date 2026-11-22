@@ -97,3 +97,53 @@ fn camera_raw_filter_legacy_baseline_pixels() {
     let got = [quantize(active_pixel(&s, 2, 2)), quantize(active_pixel(&s, 8, 8)), quantize(active_pixel(&s, 13, 13))];
     assert_eq!(got, [[19650, 39061, 56622, 65535], [57965, 29220, 10084, 65535], [57965, 29220, 10084, 65535]]);
 }
+
+#[test]
+fn camera_raw_smart_filter_migrates_to_shared_develop_settings() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8, "depth": 16})).unwrap();
+    s.execute("edit.assignProfile", json!({"profile": "prophoto-compat"})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute(
+        "filter.cameraRaw",
+        json!({
+            "temperature": 18.0,
+            "tint": -12.0,
+            "exposure": 0.75,
+            "contrast": 22.0,
+            "highlights": -35.0,
+            "shadows": 40.0,
+            "whites": 15.0,
+            "blacks": -10.0,
+            "texture": 12.0,
+            "clarity": 16.0,
+            "dehaze": 8.0,
+            "vibrance": 20.0,
+            "saturation": -5.0,
+            "curveSplits": [25.0, 50.0, 75.0],
+            "pointCurve": [[0.0, 0.0], [64.0, 52.0], [255.0, 255.0]],
+            "hslHue": [5.0, -10.0, 0.0, 12.0, -4.0, 8.0, 0.0, -3.0],
+            "gradeShadows": {"hue": 210.0, "sat": 25.0, "lum": -5.0},
+            "vignetteAmount": -20.0,
+            "vignetteStyle": "highlightPriority",
+            "shadowTint": -6.0,
+            "calibrationHue": [4.0, -3.0, 2.0]
+        }),
+    )
+    .unwrap();
+
+    let st = s.active().unwrap();
+    let layer = st.active_layer.and_then(|id| st.doc.layer(id)).unwrap();
+    let LayerContent::Smart(so) = &layer.content else {
+        panic!("expected smart object");
+    };
+    assert_eq!(so.smart_filters[0].params["encodingGamma"], json!(1.8));
+    let base = craft_develop_model::DevelopSettings::default();
+    let migrated = photocraft_algo::camera_raw::migrate_to_develop_settings(&base, &so.smart_filters[0].params).unwrap();
+    assert!(migrated.unmapped_fields.is_empty(), "unexpected unmapped fields: {:?}", migrated.unmapped_fields);
+    assert_eq!(migrated.settings.process, base.process);
+    assert_eq!(migrated.settings.light.exposure, 0.75);
+    assert_eq!(migrated.settings.light.contrast, 22.0);
+    assert_eq!(migrated.settings.wb.tint, -12.0);
+    assert_eq!(migrated.settings.vignette.style, craft_develop_model::VignetteStyle::HighlightPriority);
+}
