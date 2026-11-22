@@ -482,7 +482,11 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
     let layer_id = st.active_layer?;
     let layer = st.doc.layer(layer_id)?.clone();
     let (light, mode, doc) = (st.doc.global_light.angle, st.doc.mode, st.doc.id);
-    let user: Map<String, Value> = app.session.presets.layer_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let mut user: Map<String, Value> = app.session.presets.layer_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    if let Some(last) = app.last_satin.as_ref() {
+        user.insert("satin".into(), last.clone());
+    }
+    app.opened_on_satin = select == Some("satin");
     let keys = blend_keys();
     let specs = specs(&keys, &user, light);
     let mut draft = LayerStyleDraft::new(draft_of(&layer, light, mode));
@@ -876,8 +880,17 @@ fn finish(app: &mut PhotocraftApp, doc: photocraft_doc::DocId, layer: LayerId, s
     let Some(light) = app.session.active().filter(|s| s.doc.id == doc).map(|s| f64::from(s.doc.global_light.angle)) else {
         return fail(app, "Layer Style target document changed".into());
     };
+    let satin = |app: &PhotocraftApp| {
+        let layer = app.session.active()?.doc.layer(layer)?;
+        layer.effects.items.iter().find(|effect| matches!(effect, Effect::Satin(_)) && effect.enabled()).map(|effect| values_of(effect, 0.0))
+    };
+    let before = satin(app);
     if let Err(error) = apply(style, layer, Some(light), |id, p| app.run(id, p)) {
         fail(app, error);
+    } else if let Some(after) = satin(app)
+        && (app.opened_on_satin || before.as_ref() != Some(&after))
+    {
+        app.last_satin = Some(after);
     }
 }
 
@@ -1032,3 +1045,27 @@ pub(crate) fn gradient_layer_bounds(session: &Session, layer: LayerId) -> Option
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod satin_last_values_tests {
+    use super::*;
+
+    #[test]
+    fn confirmed_satin_seeds_a_new_layer() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width":32,"height":32})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        let first = open(&mut app, Some("satin")).unwrap();
+        let dialog = app.framework.dialogs.get_mut_by_id::<HostedLayerStyle>(first).unwrap();
+        let effect = dialog.draft_mut().style.effects.iter_mut().find(|effect| effect.kind == EffectKind::Satin).unwrap();
+        effect.params.0.insert("opacity".into(), StyleValue::Number(60.0));
+        crate::dialogs::testing::confirm(&mut app, first).unwrap();
+
+        app.run("layer.new.layer", json!({})).unwrap();
+        let next = open(&mut app, Some("satin")).unwrap();
+        let dialog = app.framework.dialogs.get_by_id::<HostedLayerStyle>(next).unwrap();
+        let style = &dialog.draft().style;
+        let satin = style.instances(EffectKind::Satin).next().and_then(|id| style.effect(id)).unwrap();
+        assert_eq!(style_params_json(&satin.params)["opacity"].as_f64(), Some(60.0));
+    }
+}

@@ -125,6 +125,8 @@ impl PhotocraftApp {
             liquify: None,
             gallery: None,
             vanishing: None,
+            last_satin: None,
+            opened_on_satin: false,
             layer_style_target: None,
             select_mask_target: None,
             guide_layout_doc: None,
