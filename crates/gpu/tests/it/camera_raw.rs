@@ -406,3 +406,107 @@ fn bad_sizes_and_faulted_devices_are_errors() {
     // And the pass still works afterwards.
     assert!(g.dev.develop(&g.device, &g.queue, Some(&DeviceHealth::new()), &px, None, [4, 4], &stages).is_ok());
 }
+
+/// Develops `p` with spatial stages both ways (the GPU's spatial develop and the CPU develop) on
+/// a `w × h` image and returns the largest channel difference.
+fn compare_spatial(g: &mut Gpu, (p, inputs): &Case, depth: Depth, (w, h): (usize, usize)) -> f32 {
+    let float = matches!(depth, Depth::Float);
+    let src = image(w, h, depth);
+    let mut cpu = src.clone();
+    develop(&mut cpu, w, h, p, inputs, float);
+    let out = g
+        .dev
+        .develop_spatial(&g.device, &g.queue, None, &src, None, [w as u32, h as u32], p, inputs, float)
+        .unwrap()
+        .unwrap_or_else(|| panic!("{p:?}: no spatial develop"));
+    assert_eq!(out.len(), cpu.len());
+    let mut worst = (0.0f32, 0usize);
+    let mut over = 0usize;
+    for (i, (a, b)) in out.iter().zip(&cpu).enumerate() {
+        assert!(a.iter().all(|v| v.is_finite()), "{depth:?}: non-finite GPU pixel {i}: {a:?}");
+        assert_eq!(a[3], b[3], "alpha is kept");
+        let d = (0..3).map(|c| (a[c] - b[c]).abs()).fold(0.0f32, f32::max);
+        if d > SPATIAL_TOL {
+            over += 1;
+        }
+        if d > worst.0 {
+            worst = (d, i);
+        }
+    }
+    let (d, i) = worst;
+    eprintln!("  {over} of {} pixels over {SPATIAL_TOL:.1e}; worst {d:.2e} at {i}: GPU {:?} CPU {:?} source {:?}", out.len(), out[i], cpu[i], src[i]);
+    assert!(
+        over * 10_000 <= out.len() && d <= 1.0 / 255.0,
+        "{p:?} {depth:?} {w}×{h}: GPU {:?} vs CPU {:?} at pixel {i}, off by {d}; {over} pixels over",
+        out[i],
+        cpu[i]
+    );
+    d
+}
+
+/// The spatial stages' analyses read reduced copies the GPU made, which differ from the CPU's
+/// in the last bits (f32 sums, the GPU's `pow`); the analyses (sorts, guided filters) carry that
+/// into the result. A pixel near grey can turn that into a hue change the Color Mixer and
+/// Vibrance tables then weigh differently, so a few pixels in ten thousand may go past this,
+/// none by an 8-bit step.
+const SPATIAL_TOL: f32 = 1.0 / 1024.0;
+
+fn check_spatial(name: &str, sets: &[Case]) {
+    let Some(mut g) = gpu() else { return };
+    // Small enough that every reduction is one pixel per pixel, and large enough that each
+    // reduces (Dehaze's copy at most 768, the tones' 384).
+    for size in [(171, 113), (1700, 900)] {
+        for set in sets {
+            for depth in DEPTHS {
+                let d = compare_spatial(&mut g, set, depth, size);
+                eprintln!("{name} {depth:?} {}×{}: max |GPU - CPU| = {d:.2e}", size.0, size.1);
+            }
+        }
+    }
+}
+
+#[test]
+fn dehaze_on_the_gpu() {
+    check_spatial(
+        "dehaze",
+        &[
+            case(cr! { dehaze: 40.0 }, DevelopInputs::default()),
+            case(cr! { dehaze: 100.0, exposure: 0.3 }, DevelopInputs::default()),
+            case(cr! { dehaze: -30.0 }, DevelopInputs::default()),
+            case(cr! { dehaze: -100.0, temperature: 20.0 }, DevelopInputs::default()),
+        ],
+    );
+}
+
+#[test]
+fn highlights_and_shadows_on_the_gpu() {
+    check_spatial(
+        "tone",
+        &[
+            case(cr! { highlights: -60.0 }, DevelopInputs::default()),
+            case(cr! { shadows: 70.0 }, DevelopInputs::default()),
+            case(cr! { highlights: -100.0, shadows: 100.0 }, DevelopInputs::default()),
+            case(cr! { highlights: 50.0, shadows: -40.0, contrast: 30.0 }, DevelopInputs::default()),
+            case(cr! { shadows: 50.0 }, DevelopInputs { encoding_gamma: 1.8, ..Default::default() }),
+        ],
+    );
+}
+
+#[test]
+fn spatial_stages_with_everything_after() {
+    let mut hsl = [0.0; 8];
+    hsl[1] = 35.0;
+    check_spatial(
+        "spatial and after",
+        &[
+            case(
+                cr! { dehaze: 30.0, highlights: -40.0, shadows: 40.0, whites: 30.0, blacks: -20.0, vibrance: 25.0, hsl_sat: hsl, vignette_amount: -30.0 },
+                DevelopInputs::default(),
+            ),
+            case(
+                cr! { shadows: 60.0, whites: -50.0, calibration_sat: [20.0, 0.0, -20.0], grain_amount: 20.0 },
+                DevelopInputs { seed: 9, ..Default::default() },
+            ),
+        ],
+    );
+}

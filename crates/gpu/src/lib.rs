@@ -42,6 +42,7 @@
 
 pub mod bounds;
 mod camera_raw;
+mod camera_raw_spatial;
 mod fx;
 pub mod health;
 pub mod plan;
@@ -59,6 +60,7 @@ use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile};
 
 pub use camera_raw::{CAMERA_RAW_SHADER, CameraRawDevelop};
+pub use camera_raw_spatial::{CAMERA_RAW_SPATIAL_SHADER, spatial_supported};
 pub use health::{DeviceHealth, Fault};
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};

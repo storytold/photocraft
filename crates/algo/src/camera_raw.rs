@@ -61,6 +61,13 @@ impl DevelopInputs {
     pub(crate) fn encoding(&self) -> Encoding {
         Encoding::with_primaries(self.encoding_gamma, self.document_primaries)
     }
+
+    /// The luminance of the document's linear RGB as weights of its channels (the tones are
+    /// measured on it).
+    pub fn luminance_weights(&self) -> [f32; 3] {
+        let enc = self.encoding();
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]].map(|c| enc.luminance(c))
+    }
 }
 
 use crate::photo_util::{hash01, linear_to_srgb, par_rows, srgb_to_linear};
@@ -72,7 +79,7 @@ mod exposure;
 mod hsv_table;
 mod local_detail;
 mod local_detail_tables;
-mod local_tone;
+pub mod local_tone;
 mod per_pixel;
 mod presence;
 mod white_balance;
@@ -720,8 +727,7 @@ pub fn try_develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, input
 /// luminance, so a preview proxy and the full image agree), interpolated between ranks. `map` is
 /// applied to each pixel first. Fully transparent pixels hold no colour and are left out.
 fn tone_points(px: &[[f32; 4]], w: usize, h: usize, enc: Encoding, map: impl Fn([f32; 4]) -> [f32; 4] + Sync) -> contrast::Tones {
-    const FLOOR: f32 = 1.0 / 65536.0;
-    let f = w.max(h).div_ceil(384).max(1);
+    let f = tone_cell(w, h);
     let (sw, sh) = (w.div_ceil(f), h.div_ceil(f));
     // Each band of `f` rows sums into its own row of cells, in the same order as one pass would.
     let bands = crate::photo_util::par_map(sh, |sy| {
@@ -737,8 +743,20 @@ fn tone_points(px: &[[f32; 4]], w: usize, h: usize, enc: Encoding, map: impl Fn(
         }
         sum
     });
-    let mut cells: Vec<f32> =
-        bands.iter().flatten().filter(|s| s.1 > 0).map(|s| ((s.0 / f64::from(s.1)) as f32 + FLOOR).log2()).filter(|v| v.is_finite()).collect();
+    tones_from_cells(bands.iter().flatten().filter(|s| s.1 > 0).map(|s| (s.0 / f64::from(s.1)) as f32))
+}
+
+/// The cell size (pixels across) the tones Contrast and Whites up adapt to are measured in, for
+/// a `w × h` image: at most 384 cells across.
+pub fn tone_cell(w: usize, h: usize) -> usize {
+    w.max(h).div_ceil(384).max(1)
+}
+
+/// The tones (1st, 50th and 99th percentile and mean of the cells' log2 luminance) from each
+/// non-empty cell's mean linear luminance (see [`tone_cell`]).
+pub fn tones_from_cells(means: impl Iterator<Item = f32>) -> contrast::Tones {
+    const FLOOR: f32 = 1.0 / 65536.0;
+    let mut cells: Vec<f32> = means.map(|m| (m + FLOOR).log2()).filter(|v| v.is_finite()).collect();
     if cells.is_empty() {
         return [-16.0, -1.0, 0.0, -1.0];
     }
@@ -771,17 +789,13 @@ fn value_noise(x: f32, y: f32, seed: u64) -> f32 {
 /// photographs at −50 and −100 and scale toward 0 above −50. Mean ΔE76 on each photograph left
 /// out of the fit: −100 6.9, −50 4.3 (the dark-channel model run backwards: 11.2, 5.4).
 fn add_haze(px: &mut [[f32; 4]], w: usize, h: usize, v: f32, enc: Encoding) {
-    const AT_50: [f32; 3] = [0.020, 0.976, -0.432];
-    const AT_100: [f32; 3] = [0.104, 2.145, -1.470];
-    if !v.is_finite() || v >= 0.0 || px.len() != w.saturating_mul(h) || px.is_empty() {
+    let Some(k) = add_haze_weights(v) else { return };
+    if px.len() != w.saturating_mul(h) || px.is_empty() {
         return;
     }
-    let a = (-v).min(100.0);
-    let k: [f32; 3] = if a <= 50.0 { AT_50.map(|x| x * a / 50.0) } else { std::array::from_fn(|i| AT_50[i] + (AT_100[i] - AT_50[i]) * (a - 50.0) / 50.0) };
     // The haze colour from a ≤ 256 px linear copy of the visible pixels (a fully transparent
     // one holds no colour, and one that is not a number would poison the estimate).
-    let s = w.max(h).div_ceil(256).max(1);
-    let (sw, sh) = (w.div_ceil(s), h.div_ceil(s));
+    let (s, sw, sh) = add_haze_reduction(w, h);
     let mut small = vec![0.0f32; sw * sh * 3];
     let mut count = vec![0.0f32; sw * sh];
     for (i, q) in px.iter().enumerate().filter(|(_, q)| q[3] > 0.0 && q[..3].iter().all(|v| v.is_finite())) {
@@ -794,6 +808,44 @@ fn add_haze(px: &mut [[f32; 4]], w: usize, h: usize, v: f32, enc: Encoding) {
         if let Some(n) = count.get_mut(j) {
             *n += 1.0;
         }
+    }
+    let Some(air) = add_haze_air(small, count, sw, sh) else { return };
+    par_rows(px, w, 1, |_, row| {
+        for q in row.iter_mut() {
+            let lin = [0, 1, 2].map(|c| enc.decode(q[c]));
+            let out = add_haze_pixel(lin, k, air);
+            for c in 0..3 {
+                q[c] = enc.encode(out[c]);
+            }
+        }
+    });
+}
+
+/// Negative Dehaze's reduced copy of a `w × h` image: the block size and the copy's size (at
+/// most 256 pixels across).
+pub fn add_haze_reduction(w: usize, h: usize) -> (usize, usize, usize) {
+    let s = w.max(h).div_ceil(256).max(1);
+    (s, w.div_ceil(s), h.div_ceil(s))
+}
+
+/// Negative Dehaze's blend weight as a quadratic in the pixel's luminance, for slider `v`
+/// (below 0); `None` otherwise.
+pub fn add_haze_weights(v: f32) -> Option<[f32; 3]> {
+    const AT_50: [f32; 3] = [0.020, 0.976, -0.432];
+    const AT_100: [f32; 3] = [0.104, 2.145, -1.470];
+    if !v.is_finite() || v >= 0.0 {
+        return None;
+    }
+    let a = (-v).min(100.0);
+    Some(if a <= 50.0 { AT_50.map(|x| x * a / 50.0) } else { std::array::from_fn(|i| AT_50[i] + (AT_100[i] - AT_50[i]) * (a - 50.0) / 50.0) })
+}
+
+/// Negative Dehaze's haze colour (linear) from the reduced copy: `small` holds each block's sum
+/// of linear colour of its visible pixels (RGB per block), `count` how many there were.
+/// `None` when no block holds any colour.
+pub fn add_haze_air(mut small: Vec<f32>, mut count: Vec<f32>, sw: usize, sh: usize) -> Option<[f32; 3]> {
+    if small.len() != sw * sh * 3 || count.len() != sw * sh {
+        return None;
     }
     for (j, n) in count.iter_mut().enumerate() {
         for c in 0..3 {
@@ -815,7 +867,7 @@ fn add_haze(px: &mut [[f32; 4]], w: usize, h: usize, v: f32, enc: Encoding) {
         })
         .collect();
     if dark.is_empty() {
-        return;
+        return None;
     }
     dark.sort_by(|x, y| y.0.total_cmp(&x.0));
     let top = (dark.len() / 1000).max(1);
@@ -825,22 +877,20 @@ fn add_haze(px: &mut [[f32; 4]], w: usize, h: usize, v: f32, enc: Encoding) {
             air[c] += small[j * 3 + c] / top as f32;
         }
     }
-    par_rows(px, w, 1, |_, row| {
-        for q in row.iter_mut() {
-            let lin = [0, 1, 2].map(|c| enc.decode(q[c]));
-            let y = luma(lin).clamp(0.0, 1.0);
-            let wt = (k[0] + k[1] * y + k[2] * y * y).clamp(0.0, 1.0);
-            for c in 0..3 {
-                q[c] = enc.encode(lin[c] * (1.0 - wt) + air[c] * wt);
-            }
-        }
-    });
+    Some(air)
+}
+
+/// Negative Dehaze on one linear pixel: blended toward the haze colour `air` by the weight `k`
+/// gives at its luminance.
+pub fn add_haze_pixel(lin: [f32; 3], k: [f32; 3], air: [f32; 3]) -> [f32; 3] {
+    let y = luma(lin).clamp(0.0, 1.0);
+    let wt = (k[0] + k[1] * y + k[2] * y * y).clamp(0.0, 1.0);
+    std::array::from_fn(|c| lin[c] * (1.0 - wt) + air[c] * wt)
 }
 
 fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, amount: f32) {
     // Transmission on a ≤ 768 px proxy, upsampled.
-    let k = w.max(h).div_ceil(768).max(1);
-    let (sw, sh) = (w.div_ceil(k), h.div_ceil(k));
+    let (k, sw, sh) = dehaze_reduction(w, h);
     let mut small = vec![[0.0f32; 3]; sw * sh];
     let mut cnt = vec![0f32; sw * sh];
     for y in 0..h {
@@ -854,6 +904,47 @@ fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, amount: f32) {
     }
     for (s, c) in small.iter_mut().zip(&cnt) {
         *s = s.map(|v| v / c.max(1.0));
+    }
+    let Some(plan) = dehaze_plan(&small, sw, sh) else { return };
+    let ks = k as f32;
+    par_rows(px, w, 1, |y, row| {
+        for (x, q) in row.iter_mut().enumerate() {
+            let tv = plan.at(x, y, ks);
+            let o = dehaze_pixel([q[0], q[1], q[2]], tv, plan.air, amount);
+            q[..3].copy_from_slice(&o);
+        }
+    });
+}
+
+/// Positive Dehaze's reduced copy of a `w × h` image: the block size and the copy's size (at
+/// most 768 pixels across).
+pub fn dehaze_reduction(w: usize, h: usize) -> (usize, usize, usize) {
+    let k = w.max(h).div_ceil(768).max(1);
+    (k, w.div_ceil(k), h.div_ceil(k))
+}
+
+/// What positive Dehaze computes on the reduced copy: the transmission (`w × h`) and the
+/// atmospheric light.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DehazePlan {
+    pub t: Vec<f32>,
+    pub w: usize,
+    pub h: usize,
+    pub air: [f32; 3],
+}
+
+impl DehazePlan {
+    /// The transmission at full-size pixel `(x, y)` for blocks of `k` pixels.
+    pub fn at(&self, x: usize, y: usize, k: f32) -> f32 {
+        crate::photo_util::bilinear(&self.t, self.w, self.h, 1, 0, (x as f32 + 0.5) / k - 0.5, (y as f32 + 0.5) / k - 0.5).clamp(0.1, 1.0)
+    }
+}
+
+/// Positive Dehaze's transmission and atmospheric light from the reduced copy `small` (each
+/// block's mean colour, clamped to 0 … 1, `sw × sh`). `None` for an empty or short copy.
+pub fn dehaze_plan(small: &[[f32; 3]], sw: usize, sh: usize) -> Option<DehazePlan> {
+    if sw == 0 || sh == 0 || small.len() != sw * sh {
+        return None;
     }
     let r = (sw.max(sh) / 60).max(2);
     // The minimum (or, with `f32::max`, maximum) over each (2r + 1)² window.
@@ -899,17 +990,16 @@ fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, amount: f32) {
     let t_raw: Vec<f32> = opened.iter().map(|d| 1.0 - weight * d).collect();
     let guide: Vec<f32> = small.iter().map(|c| luma(*c)).collect();
     let t = guided(&guide, &t_raw, sw, sh, r * 2, 1e-3);
-    let ks = k as f32;
-    par_rows(px, w, 1, |y, row| {
-        for (x, q) in row.iter_mut().enumerate() {
-            let tv = crate::photo_util::bilinear(&t, sw, sh, 1, 0, (x as f32 + 0.5) / ks - 0.5, (y as f32 + 0.5) / ks - 0.5).clamp(0.1, 1.0);
-            for c in 0..3 {
-                let i = q[c];
-                let j = (i - air[c]) / tv + air[c];
-                q[c] = if amount >= 0.0 { i + (j - i) * amount } else { i + (air[c] - i) * (-amount) * 0.5 * (1.0 - tv * 0.5) };
-            }
-        }
-    });
+    Some(DehazePlan { t, w: sw, h: sh, air })
+}
+
+/// Dehaze at `amount` on one display-encoded pixel `i`, with transmission `tv` and
+/// atmospheric light `air`.
+pub fn dehaze_pixel(i: [f32; 3], tv: f32, air: [f32; 3], amount: f32) -> [f32; 3] {
+    std::array::from_fn(|c| {
+        let j = (i[c] - air[c]) / tv + air[c];
+        if amount >= 0.0 { i[c] + (j - i[c]) * amount } else { i[c] + (air[c] - i[c]) * (-amount) * 0.5 * (1.0 - tv * 0.5) }
+    })
 }
 
 fn detail(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, ps: f32) {

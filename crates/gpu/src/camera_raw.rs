@@ -86,6 +86,8 @@ pub struct CameraRawDevelop {
     target: Option<Image>,
     #[cfg(not(target_arch = "wasm32"))]
     readback: Option<wgpu::Buffer>,
+    /// The spatial stages' passes, built the first time settings need them.
+    spatial: Option<crate::camera_raw_spatial::Spatial>,
 }
 
 impl CameraRawDevelop {
@@ -172,6 +174,7 @@ impl CameraRawDevelop {
             target: None,
             #[cfg(not(target_arch = "wasm32"))]
             readback: None,
+            spatial: None,
         }
     }
 
@@ -189,6 +192,25 @@ impl CameraRawDevelop {
         size: [u32; 2],
         stages: &PerPixel,
     ) -> Result<&wgpu::Texture, Unsupported> {
+        self.upload(device, queue, source, key, size)?;
+        if self.target.as_ref().is_none_or(|t| t.size != size) {
+            self.target = Some(Image::new(device, "pc_camera_raw_target", size, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC));
+        }
+        let (Some(src), Some(target)) = (self.source.as_ref(), self.target.as_ref()) else { return Err(Unsupported("no RAW Develop target".into())) };
+        record_pass(self, device, queue, encoder, &src.view, &target.view, size, stages);
+        Ok(&target.texture)
+    }
+
+    /// Uploads `source` as the pass's source texture, unless the last one had the same `key` and
+    /// size (`None` always uploads).
+    pub(crate) fn upload(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        source: &[[f32; 4]],
+        key: Option<u64>,
+        size: [u32; 2],
+    ) -> Result<(), Unsupported> {
         check_size(device, source, size)?;
         let [w, h] = size;
         let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
@@ -206,46 +228,46 @@ impl CameraRawDevelop {
             );
             src.key = key;
         }
-        queue.write_buffer(&self.params, 0, &params(size, stages));
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &self.luts, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            bytemuck::cast_slice(&tables(stages)),
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(LUT_WIDTH * 4), rows_per_image: Some(LUT_ROWS) },
-            wgpu::Extent3d { width: LUT_WIDTH, height: LUT_ROWS, depth_or_array_layers: 1 },
-        );
-        let target = match self.target.take() {
-            Some(t) if t.size == size => t,
-            _ => Image::new(device, "pc_camera_raw_target", size, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC),
-        };
-        let target = self.target.insert(target);
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("pc_camera_raw"),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.params.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&src.view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.luts_view) },
-            ],
-        });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("pc_camera_raw"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target.view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &group, &[]);
-            pass.draw(0..3, 0..1);
+        Ok(())
+    }
+
+    /// Builds the spatial stages' passes if they aren't yet.
+    pub(crate) fn ensure_spatial(&mut self, device: &wgpu::Device) {
+        if self.spatial.is_none() {
+            self.spatial = Some(crate::camera_raw_spatial::Spatial::new(device));
         }
-        Ok(&target.texture)
+    }
+
+    /// The spatial stages' passes, once built.
+    pub(crate) fn spatial_passes(&self) -> Option<&crate::camera_raw_spatial::Spatial> {
+        self.spatial.as_ref()
+    }
+
+    /// Drops the cached source, so a half-done upload isn't taken for it next time.
+    pub(crate) fn forget_source(&mut self) {
+        self.source = None;
+    }
+
+    /// The uploaded source's view.
+    pub(crate) fn source_view(&self) -> Option<&wgpu::TextureView> {
+        self.source.as_ref().map(|s| &s.view)
+    }
+
+    /// Records the per-pixel pass with `stages` from `input` into `target` (both `size`). The
+    /// settings and tables are written to the queue now, so a pass recorded later in the same
+    /// submission would overwrite them: each submission records one per-pixel pass.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        input: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+        size: [u32; 2],
+        stages: &PerPixel,
+    ) {
+        record_pass(self, device, queue, encoder, input, target, size, stages);
     }
 
     /// Develops `source` and reads the result back (blocking; native only, the web has no
@@ -312,16 +334,7 @@ impl CameraRawDevelop {
         );
         let index = queue.submit([encoder.finish()]);
         buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        match health {
-            Some(hl) => {
-                if !hl.wait(device, Some(index)) {
-                    return Err(Unsupported(hl.fault().map_or_else(|| "GPU device lost".into(), |f| f.to_string())));
-                }
-            }
-            None => {
-                device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None }).map_err(|e| Unsupported(format!("GPU wait failed: {e}")))?;
-            }
-        }
+        wait(device, health, index)?;
         let mut out = Vec::with_capacity(source.len());
         {
             let data = buffer.slice(..).get_mapped_range().map_err(|e| Unsupported(format!("GPU readback failed: {e:?}")))?;
@@ -336,6 +349,69 @@ impl CameraRawDevelop {
         self.readback = Some(buffer);
         Ok(out)
     }
+}
+
+/// The per-pixel pass with `stages` from `input` into `target` (see [`CameraRawDevelop::record`]).
+#[allow(clippy::too_many_arguments)]
+fn record_pass(
+    dev: &CameraRawDevelop,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    input: &wgpu::TextureView,
+    target: &wgpu::TextureView,
+    size: [u32; 2],
+    stages: &PerPixel,
+) {
+    queue.write_buffer(&dev.params, 0, &params(size, stages));
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo { texture: &dev.luts, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        bytemuck::cast_slice(&tables(stages)),
+        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(LUT_WIDTH * 4), rows_per_image: Some(LUT_ROWS) },
+        wgpu::Extent3d { width: LUT_WIDTH, height: LUT_ROWS, depth_or_array_layers: 1 },
+    );
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("pc_camera_raw"),
+        layout: &dev.layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: dev.params.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(input) },
+            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&dev.luts_view) },
+        ],
+    });
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("pc_camera_raw"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: target,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    pass.set_pipeline(&dev.pipeline);
+    pass.set_bind_group(0, &group, &[]);
+    pass.draw(0..3, 0..1);
+}
+
+/// Waits for submission `index`; a lost device (recorded in `health`, when watched) or a failed
+/// wait is an `Err`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn wait(device: &wgpu::Device, health: Option<&crate::DeviceHealth>, index: wgpu::SubmissionIndex) -> Result<(), Unsupported> {
+    match health {
+        Some(hl) => {
+            if !hl.wait(device, Some(index)) {
+                return Err(Unsupported(hl.fault().map_or_else(|| "GPU device lost".into(), |f| f.to_string())));
+            }
+        }
+        None => {
+            device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None }).map_err(|e| Unsupported(format!("GPU wait failed: {e}")))?;
+        }
+    }
+    Ok(())
 }
 
 fn check_size(device: &wgpu::Device, source: &[[f32; 4]], [w, h]: [u32; 2]) -> Result<(), Unsupported> {

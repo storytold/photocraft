@@ -27,47 +27,117 @@ struct Plane {
     v: Vec<f32>,
 }
 
+/// The floor added to the luminance before its log2.
+pub const FLOOR: f32 = 1.0 / 65536.0;
+
+/// The block size the moves are computed at for a `w × h` image: the copy is at most
+/// [`multiscale::SIDE`] pixels across, its pixels the luminance averaged over `f × f` blocks.
+pub fn reduction(w: usize, h: usize) -> usize {
+    w.max(h).div_ceil(multiscale::SIDE).max(1)
+}
+
+/// One slider's move (stops) at full size, as a per-pixel model computed on the reduced copy.
+/// With `exact` the grid is the full image and `b` is the move itself; otherwise the move at
+/// a full-size pixel with log2 luminance `u` is `a·u + b` (each looked up bilinearly at the
+/// pixel's centre mapped onto the grid), kept within ±[`MAX_MOVE`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToneMove {
+    pub w: usize,
+    pub h: usize,
+    pub a: Vec<f32>,
+    pub b: Vec<f32>,
+    pub exact: bool,
+}
+
+/// The largest move (stops) a guided upsampling may make.
+pub const MAX_MOVE: f32 = multiscale::MAX_MOVE;
+
+impl ToneMove {
+    /// The move at full-size pixel `(x, y)` of a `full_w × full_h` image whose log2 luminance
+    /// (plus [`FLOOR`]) there is `u`.
+    pub fn at(&self, x: usize, y: usize, full_w: usize, full_h: usize, u: f32) -> f32 {
+        if self.exact {
+            return self.b.get(y * self.w + x).copied().unwrap_or(0.0);
+        }
+        let (fx, fy) = (self.w as f32 / full_w as f32, self.h as f32 / full_h as f32);
+        let (sx, sy) = ((x as f32 + 0.5) * fx - 0.5, (y as f32 + 0.5) * fy - 0.5);
+        let av = crate::photo_util::bilinear(&self.a, self.w, self.h, 1, 0, sx, sy);
+        let bv = crate::photo_util::bilinear(&self.b, self.w, self.h, 1, 0, sx, sy);
+        // The guide may lie far outside the proxy's tones (float images): keep the guard.
+        (av * u + bv).clamp(-MAX_MOVE, MAX_MOVE)
+    }
+}
+
+/// Highlights' (`highlights`) or Shadows' move at `amount` (−1 … 1) from the reduced copy:
+/// `small` is the linear luminance averaged over `f × f` blocks (`sw × sh`; for Shadows, after
+/// Highlights' move), `f` the block size ([`reduction`]). `None` at 0 or for a short copy.
+pub fn tone_move(small: &[f32], sw: usize, sh: usize, f: usize, amount: f32, highlights: bool) -> Option<ToneMove> {
+    if amount == 0.0 || !amount.is_finite() || sw == 0 || sh == 0 || small.len() != sw * sh {
+        return None;
+    }
+    let plane = Plane { w: sw, h: sh, v: small.iter().map(|y| (y + FLOOR).log2()).collect() };
+    let tables = if highlights { &multiscale::HIGHLIGHTS } else { &multiscale::SHADOWS };
+    let d = multiscale::moves(&plane, amount, tables);
+    if f == 1 {
+        return Some(ToneMove { w: sw, h: sh, a: vec![0.0; sw * sh], b: d, exact: true });
+    }
+    let (a, b) = guided_coefficients(&plane, &d);
+    Some(ToneMove { w: sw, h: sh, a, b, exact: false })
+}
+
+/// The colour exponent of Highlights' (`highlights`) or Shadows' move at `amount` (see the
+/// module notes).
+pub fn colour_exponent(highlights: bool, amount: f32) -> f32 {
+    let c = if highlights { HIGHLIGHTS_COLOUR } else { SHADOWS_COLOUR };
+    if amount > 0.0 { c.0 } else { c.1 }
+}
+
+/// One pixel's colour after Highlights' and Shadows' moves `a` and `b` (stops), with colour
+/// exponents `c_hl` and `c_sh`; `lin` is linear in the document's primaries.
+pub fn tone_pixel(lin: [f32; 3], a: f32, b: f32, c_hl: f32, c_sh: f32) -> [f32; 3] {
+    let gain = (a + b).exp2();
+    let l = luma(lin);
+    let e = c_hl * a + c_sh * b;
+    if e != 0.0 && l > 1e-6 && lin.iter().all(|v| *v >= 0.0) {
+        let beta = (-e).exp2();
+        let o = lin.map(|v| l * (v / l).powf(beta));
+        let lo = luma(o);
+        if lo > 1e-9 { o.map(|v| v * l * gain / lo) } else { lin.map(|v| v * gain) }
+    } else {
+        lin.map(|v| v * gain)
+    }
+}
+
 /// Applies Shadows and Highlights (−100 … 100) to straight RGBA pixels encoded with `enc`:
 /// Highlights first, then Shadows on its result.
 pub(crate) fn apply(px: &mut [[f32; 4]], w: usize, h: usize, shadows: f32, highlights: f32, enc: Encoding) {
     if (shadows == 0.0 && highlights == 0.0) || w < 2 || h < 2 {
         return;
     }
-    const FLOOR: f32 = 1.0 / 65536.0;
     let lum: Vec<f32> = px.iter().map(|q| luma([0, 1, 2].map(|c| enc.decode(q[c]))).max(0.0)).collect();
-    let u = Plane { w, h, v: lum.iter().map(|y| (y + FLOOR).log2()).collect() };
     let (sh, hl) = (shadows.clamp(-100.0, 100.0) / 100.0, highlights.clamp(-100.0, 100.0) / 100.0);
-    let f = w.max(h).div_ceil(multiscale::SIDE).max(1);
-    // One slider's move at full size, from a copy at most SIDE across (luminance box-averaged,
-    // then log) of the full log luminance `full`.
-    let pass = |full: &Plane, lin: &[f32], amount: f32, tables: &multiscale::Tables| {
-        if amount == 0.0 {
-            return vec![0.0; w * h];
-        }
-        let small = if f == 1 { Plane { w, h, v: full.v.clone() } } else { shrink_linear(lin, w, h, f, FLOOR) };
-        let d = multiscale::moves(&small, amount, tables);
-        if f == 1 { d } else { guided_upsample(&small, &d, full) }
+    let f = reduction(w, h);
+    let (sw, shh) = (w.div_ceil(f), h.div_ceil(f));
+    // One slider's move at every full-size pixel, from the copy of `lin` reduced f × f.
+    let full_moves = |lin: &[f32], amount: f32, highlights: bool| -> Vec<f32> {
+        let small = shrink_linear(lin, w, h, f);
+        let Some(m) = tone_move(&small, sw, shh, f, amount, highlights) else { return vec![0.0; w * h] };
+        let mut d = vec![0.0f32; w * h];
+        par_rows(&mut d, w, 1, |y, row| {
+            for (x, o) in row.iter_mut().enumerate() {
+                *o = m.at(x, y, w, h, (lin[y * w + x] + FLOOR).log2());
+            }
+        });
+        d
     };
-    let d_hl = pass(&u, &lum, hl, &multiscale::HIGHLIGHTS);
-    let (after, lum_after) = after_highlights(&lum, &d_hl, w, h, FLOOR);
-    let d_sh = pass(&after, &lum_after, sh, &multiscale::SHADOWS);
-    let colour = |c: (f32, f32), a: f32| if a > 0.0 { c.0 } else { c.1 };
-    let (c_hl, c_sh) = (colour(HIGHLIGHTS_COLOUR, hl), colour(SHADOWS_COLOUR, sh));
+    let d_hl = full_moves(&lum, hl, true);
+    let lum_after = after_highlights(&lum, &d_hl);
+    let d_sh = full_moves(&lum_after, sh, false);
+    let (c_hl, c_sh) = (colour_exponent(true, hl), colour_exponent(false, sh));
     par_rows(px, w, 1, |y, row| {
         for (x, q) in row.iter_mut().enumerate() {
-            let (a, b) = (d_hl[y * w + x], d_sh[y * w + x]);
-            let gain = (a + b).exp2();
             let lin = [0, 1, 2].map(|c| enc.decode(q[c]));
-            let l = luma(lin);
-            let e = c_hl * a + c_sh * b;
-            let out = if e != 0.0 && l > 1e-6 && lin.iter().all(|v| *v >= 0.0) {
-                let beta = (-e).exp2();
-                let o = lin.map(|v| l * (v / l).powf(beta));
-                let lo = luma(o);
-                if lo > 1e-9 { o.map(|v| v * l * gain / lo) } else { lin.map(|v| v * gain) }
-            } else {
-                lin.map(|v| v * gain)
-            };
+            let out = tone_pixel(lin, d_hl[y * w + x], d_sh[y * w + x], c_hl, c_sh);
             for c in 0..3 {
                 q[c] = enc.encode(out[c]);
             }
@@ -75,17 +145,14 @@ pub(crate) fn apply(px: &mut [[f32; 4]], w: usize, h: usize, shadows: f32, highl
     });
 }
 
-/// The luminance after the Highlights move `d_hl` (stops), linear and as the log2 plane (plus
-/// `floor`) the Shadows pass reads at full size. The floor is added after the move, as
-/// [`shrink_linear`] adds it to the reduced copy, so both paths see the same input near black.
-fn after_highlights(lum: &[f32], d_hl: &[f32], w: usize, h: usize, floor: f32) -> (Plane, Vec<f32>) {
-    let lum_after: Vec<f32> = lum.iter().zip(d_hl).map(|(y, d)| y * d.exp2()).collect();
-    let v = lum_after.iter().map(|y| (y + floor).log2()).collect();
-    (Plane { w, h, v }, lum_after)
+/// The linear luminance after the Highlights move `d_hl` (stops), which the Shadows move reads.
+pub fn after_highlights(lum: &[f32], d_hl: &[f32]) -> Vec<f32> {
+    lum.iter().zip(d_hl).map(|(y, d)| y * d.exp2()).collect()
 }
 
-/// The luminance `lum` (`w × h`) averaged over `f × f` blocks, then to log2 (plus `floor`).
-fn shrink_linear(lum: &[f32], w: usize, h: usize, f: usize, floor: f32) -> Plane {
+/// The luminance `lum` (`w × h`) averaged over `f × f` blocks (linear; [`tone_move`] takes the
+/// log2).
+fn shrink_linear(lum: &[f32], w: usize, h: usize, f: usize) -> Vec<f32> {
     let (sw, sh) = (w.div_ceil(f), h.div_ceil(f));
     let mut v = vec![0.0f32; sw * sh];
     par_rows(&mut v, sw, 1, |y, row| {
@@ -98,16 +165,17 @@ fn shrink_linear(lum: &[f32], w: usize, h: usize, f: usize, floor: f32) -> Plane
                     s += f64::from(lum[yy * w + xx]);
                 }
             }
-            *o = ((s / ((x1 - x0) * (y1 - y0)) as f64) as f32 + floor).log2();
+            *o = (s / ((x1 - x0) * (y1 - y0)) as f64) as f32;
         }
     });
-    Plane { w: sw, h: sh, v }
+    v
 }
 
-/// The change `d` computed on `small` brought to the size of `full`, following its edges: a local
-/// linear model of the change against the log luminance (the guided filter of K. He, J. Sun,
-/// *Fast Guided Filter*, 2015), fitted on the small copy and evaluated on the full one.
-fn guided_upsample(small: &Plane, d: &[f32], full: &Plane) -> Vec<f32> {
+/// The guided upsampling's coefficients for the change `d` computed on `small`: a local linear
+/// model of the change against the log luminance (the guided filter of K. He, J. Sun, *Fast
+/// Guided Filter*, 2015), fitted on the small copy and evaluated on the full one
+/// ([`ToneMove::at`]).
+fn guided_coefficients(small: &Plane, d: &[f32]) -> (Vec<f32>, Vec<f32>) {
     let (sw, sh) = (small.w, small.h);
     let r = 2;
     let eps = 0.01;
@@ -117,20 +185,7 @@ fn guided_upsample(small: &Plane, d: &[f32], full: &Plane) -> Vec<f32> {
     let (mu, md, mud, muu) = (mean(&small.v), mean(d), mean(&ud), mean(&uu));
     let a: Vec<f32> = (0..sw * sh).map(|i| (mud[i] - mu[i] * md[i]) / (muu[i] - mu[i] * mu[i] + eps)).collect();
     let b: Vec<f32> = (0..sw * sh).map(|i| md[i] - a[i] * mu[i]).collect();
-    let (ma, mb) = (mean(&a), mean(&b));
-    let (fx, fy) = (sw as f32 / full.w as f32, sh as f32 / full.h as f32);
-    let mut out = vec![0.0f32; full.w * full.h];
-    par_rows(&mut out, full.w, 1, |y, row| {
-        let sy = (y as f32 + 0.5) * fy - 0.5;
-        for (x, o) in row.iter_mut().enumerate() {
-            let sx = (x as f32 + 0.5) * fx - 0.5;
-            let av = crate::photo_util::bilinear(&ma, sw, sh, 1, 0, sx, sy);
-            let bv = crate::photo_util::bilinear(&mb, sw, sh, 1, 0, sx, sy);
-            // The guide may lie far outside the proxy's tones (float images): keep the guard.
-            *o = (av * full.v[y * full.w + x] + bv).clamp(-multiscale::MAX_MOVE, multiscale::MAX_MOVE);
-        }
-    });
-    out
+    (mean(&a), mean(&b))
 }
 
 #[cfg(test)]
@@ -145,25 +200,24 @@ mod tests {
     fn upsampled_moves_keep_the_guard() {
         let small = Plane { w: 4, h: 4, v: (0..16).map(|i| (i % 4) as f32 - 2.0).collect() };
         let d: Vec<f32> = small.v.iter().map(|u| 0.5 * u).collect();
-        let full = Plane { w: 8, h: 8, v: (0..64).map(|i| if i == 27 { 400.0 } else { ((i % 8) / 2) as f32 - 2.0 }).collect() };
-        let out = guided_upsample(&small, &d, &full);
-        assert!(out.iter().all(|m| m.abs() <= multiscale::MAX_MOVE), "{out:?}");
+        let full: Vec<f32> = (0..64).map(|i| if i == 27 { 400.0 } else { ((i % 8) / 2) as f32 - 2.0 }).collect();
+        let (a, b) = guided_coefficients(&small, &d);
+        let m = ToneMove { w: 4, h: 4, a, b, exact: false };
+        let out: Vec<f32> = (0..64).map(|i| m.at(i % 8, i / 8, 8, 8, full[i])).collect();
+        assert!(out.iter().all(|v| v.abs() <= MAX_MOVE), "{out:?}");
         assert!(out[27] > 1.0, "the move still follows the guide: {}", out[27]);
     }
 
     /// Near black the full-size Shadows input and the reduced one (the same pixels, one per
-    /// block) must agree: the floor goes on after the Highlights move in both.
+    /// block) must agree: both are the linear luminance after the Highlights move, and the floor
+    /// goes on in [`tone_move`] for both.
     #[test]
     fn full_size_and_reduced_shadows_inputs_agree_near_black() {
-        const FLOOR: f32 = 1.0 / 65536.0;
         let (w, h) = (4, 2);
         let lum = [0.0, 1e-6, 1e-5, 4e-5, 1e-4, 0.0, 2e-6, 0.3];
         let d_hl = [-2.0, -1.5, 1.0, -3.0, 0.5, 2.0, -0.5, -1.0];
-        let (full, lum_after) = after_highlights(&lum, &d_hl, w, h, FLOOR);
-        let reduced = shrink_linear(&lum_after, w, h, 1, FLOOR);
-        for (a, b) in full.v.iter().zip(&reduced.v) {
-            assert!((a - b).abs() < 1e-5, "{:?} vs {:?}", full.v, reduced.v);
-        }
+        let lum_after = after_highlights(&lum, &d_hl);
+        assert_eq!(shrink_linear(&lum_after, w, h, 1), lum_after);
     }
 
     fn grey(w: usize, h: usize, f: impl Fn(usize, usize) -> f32) -> Vec<[f32; 4]> {
