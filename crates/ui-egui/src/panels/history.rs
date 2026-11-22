@@ -221,14 +221,14 @@ pub(crate) fn apply(app: &mut PhotocraftApp, event: HistoryEvent) {
 pub(crate) fn step_icon(step: &str) -> IconId {
     IconId::new(match step {
         s if s.contains("Brush") || s.contains("Eraser") => "brush",
-        // Applying a patch edits pixels; only the Patch tool's lasso is a selection step.
-        "Patch Selection" => "adjustments",
+        // Applying a patch or a content-aware move edits pixels; only these tools' lassos are selection steps.
+        "Patch Selection" | "Content-Aware Move Selection" => "adjustments",
         // The Layers panel's controls (layer.setProps).
         "Opacity Change" | "Fill Opacity Change" | "Blending Change" => "layers",
         s if s.contains("Layer") => "layers",
         s if s.contains("Select") || s.contains("Marquee") || s.contains("Deselect") || s.contains("Lasso") => "rect_dashed",
-        // The selections the Patch tool draws (select.lasso's historyName).
-        "Patch Tool" => "rect_dashed",
+        // The selections the Patch and Content-Aware Move tools draw (select.lasso's historyName).
+        "Patch Tool" | "Content-Aware Move Tool" => "rect_dashed",
         s if s.contains("Fill") => "paint_bucket",
         // The opening state: "Open" for a file, "New" for a document from File › New (#14029).
         "Open" | "New" => "image",
