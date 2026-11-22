@@ -12,6 +12,7 @@
 use photocraft_color::ColorMode;
 use photocraft_doc::Adjustment;
 use photocraft_doc::adjust::{CURVE_MAP_LEN, CurvePoint, HueRange, LevelsChannel, ToneSpace, curve_map, curve_map_outputs};
+use photocraft_io::gradient_bake::Method;
 use serde_json::{Map, Value, json};
 
 use crate::{EngineError, Result};
@@ -217,20 +218,25 @@ pub fn from_params(kind: &str, p: &Value, base: Option<&Adjustment>, mode: Color
             // Photoshop's gradient (#8351): unchanged, it keeps the stops already baked from it
             // (a Lab document's bake isn't reproduced from sRGB stops); changed, it is baked again.
             // Plain `stops` (or `"source": null`) replace it.
-            let (stops, source) = match (p.get("source"), p.get("stops")) {
+            let (mut stops, source) = match (p.get("source"), p.get("stops")) {
                 (Some(Value::Null), stops) => (stops.filter(|v| !v.is_null()).map_or(Ok(stops0), |v| gradient_stops(&cmd, v))?, None),
                 (Some(v), _) => {
                     let same = source0.as_ref().is_some_and(|s0| source_params(s0) == *v);
                     if same {
                         (stops0, source0)
                     } else {
-                        let src = gradient_source(&cmd, v)?;
-                        (photocraft_io::gradient_bake::bake_source(&src), Some(src))
+                        let mut src = gradient_source(&cmd, v)?;
+                        let baked = photocraft_io::gradient_bake::bake_source(&src);
+                        if expand_single_stop(&mut src.stops) {
+                            src.midpoints.push(0.5);
+                        }
+                        (baked, Some(src))
                     }
                 }
                 (None, None | Some(Value::Null)) => (stops0, source0),
                 (None, Some(v)) => (gradient_stops(&cmd, v)?, None),
             };
+            expand_single_stop(&mut stops);
             Adjustment::GradientMap { stops, reverse: r.boolean("reverse", rev0)?, dither: r.boolean("dither", dither0)?, source }
         }
         "selectiveColor" => crate::adjust_cmds::selective_from_params(p, base.filter(|b| matches!(b, Adjustment::SelectiveColor { .. })))?,
@@ -1181,8 +1187,8 @@ fn levels_obj(c: &LevelsChannel) -> Value {
 
 /// `[[location 0..1, colour], …]` (colour as for `color`), sorted by location.
 fn gradient_stops(cmd: &str, v: &Value) -> Result<Vec<(f32, [f32; 3])>> {
-    let err = || bad(cmd, "`stops` must be an array of 2..=64 [location 0..1, colour] pairs");
-    let a = v.as_array().filter(|a| (2..=64).contains(&a.len())).ok_or_else(err)?;
+    let err = || bad(cmd, "`stops` must be an array of 1..=64 [location 0..1, colour] pairs");
+    let a = v.as_array().filter(|a| (1..=64).contains(&a.len())).ok_or_else(err)?;
     let mut out = Vec::with_capacity(a.len());
     for s in a {
         let (t, c) = match s {
@@ -1198,6 +1204,13 @@ fn gradient_stops(cmd: &str, v: &Value) -> Result<Vec<(f32, [f32; 3])>> {
     Ok(out)
 }
 
+/// Keep a flat ramp editable and writable in formats that require at least two stops.
+fn expand_single_stop(stops: &mut Vec<(f32, [f32; 3])>) -> bool {
+    let [(_, color)] = stops.as_slice() else { return false };
+    *stops = vec![(0.0, *color), (1.0, *color)];
+    true
+}
+
 /// A Gradient Map's Photoshop gradient as params: `{"stops": [[location, "#rrggbb"], …],
 /// "midpoints": [0.05..0.95 per segment], "smoothness": 0..1, "method": name}`.
 pub fn source_params(src: &photocraft_doc::adjust::GradientSource) -> Value {
@@ -1209,8 +1222,8 @@ pub fn source_params(src: &photocraft_doc::adjust::GradientSource) -> Value {
     })
 }
 
-/// [`source_params`] read back, checked: 2..=64 stops (sorted), one midpoint (0.05..0.95) per
-/// segment (default halfway), Smoothness 0..1 (default 0), a known method (default classic).
+/// [`source_params`] read back, checked: 1..=64 stops (sorted), one midpoint (0.05..0.95) per
+/// segment (default halfway), Smoothness 0..1 (default 0), unknown or omitted methods use Classic.
 fn gradient_source(cmd: &str, v: &Value) -> Result<photocraft_doc::adjust::GradientSource> {
     let o = v.as_object().ok_or_else(|| bad(cmd, "`source` must be {stops, midpoints?, smoothness?, method?}"))?;
     let stops = gradient_stops(cmd, o.get("stops").ok_or_else(|| bad(cmd, "`source.stops` is missing"))?)?;
@@ -1228,12 +1241,7 @@ fn gradient_source(cmd: &str, v: &Value) -> Result<photocraft_doc::adjust::Gradi
         None | Some(Value::Null) => 0.0,
         Some(s) => s.as_f64().filter(|s| s.is_finite() && (0.0..=1.0).contains(s)).ok_or_else(|| bad(cmd, "`source.smoothness` must be 0..1"))? as f32,
     };
-    let method = match o.get("method").and_then(Value::as_str) {
-        None => "classic".to_string(),
-        Some(m) => photocraft_io::gradient_bake::Method::from_name(m)
-            .map(|m| m.name().to_string())
-            .ok_or_else(|| bad(cmd, "`source.method` must be classic, perceptual, linear or smooth"))?,
-    };
+    let method = o.get("method").and_then(Value::as_str).and_then(Method::from_name).unwrap_or(Method::Classic).name().to_string();
     Ok(photocraft_doc::adjust::GradientSource { stops, midpoints, smoothness, method })
 }
 
@@ -1249,5 +1257,7 @@ pub fn user_keys(p: &Value) -> Map<String, Value> {
         .unwrap_or_default()
 }
 
+#[cfg(test)]
+mod gradient_map_script_params_tests;
 #[cfg(test)]
 mod tests;

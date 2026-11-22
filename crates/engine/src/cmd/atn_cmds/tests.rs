@@ -7226,3 +7226,31 @@ fn whole_library_conditional_scopes_roundtrip() {
     let params = &s.actions.list.actions()[0].steps[0].params;
     assert_eq!((params["then"].as_str(), params["else"].as_str()), (Some("Target"), Some("Target")), "{params}");
 }
+
+#[test]
+fn a_recorded_one_stop_gradient_map_loads_and_plays() {
+    let color = desc("RGBC").with("Rd  ", D::Double(0.0)).with("Grn ", D::Double(255.0)).with("Bl  ", D::Double(0.0));
+    let stop = desc("Clrt").with("Clr ", D::Descriptor(color)).with("Type", enm("Clry", "UsrS")).with("Lctn", D::Integer(1536)).with("Mdpn", D::Integer(50));
+    let grad = adjustments::gradient_descriptor(vec![D::Descriptor(stop)], "Custom");
+    let direct = desc("null").with("gradientsInterpolationMethod", enm("gradientInterpolationMethodType", "Gcls")).with("Grad", D::Descriptor(grad.clone()));
+    let legacy = desc("GdMp").with("Grad", D::Descriptor(grad));
+    for (event, descriptor) in [("GrMp", direct), ("GdMp", legacy)] {
+        let source = one_action(vec![item(event, "Gradient Map", Some(descriptor.clone()))]);
+        let mut s = Session::new();
+        let loaded = s.execute("actions.load", json!({"data": b64(&atn::write(&source).unwrap())})).unwrap();
+        assert_eq!(loaded["unsupported"], json!([]), "{event}: {loaded}");
+        s.execute("file.new", json!({"width": 4, "height": 4, "background": "white"})).unwrap();
+        let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
+        assert_eq!(played["ran"], 1, "{event}: {played}");
+        let state = s.active().unwrap();
+        let image = state.doc.layers[0].surface().unwrap();
+        assert_eq!(image.pixel(0, 0), [0.0, 1.0, 0.0, 1.0], "{event}");
+        if event == "GrMp" {
+            let saved = s.execute("actions.save", json!({"action": "A"})).unwrap();
+            let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+            let action = atn::parse(&bytes).unwrap();
+            assert_eq!(action.actions[0].items[0].event, source.actions[0].items[0].event);
+            assert_eq!(action.actions[0].items[0].descriptor, Some(descriptor));
+        }
+    }
+}

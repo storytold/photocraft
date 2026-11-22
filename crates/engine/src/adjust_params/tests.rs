@@ -488,7 +488,7 @@ fn hue_range_sliders_stay_ordered() {
 }
 
 /// A colourful 16×16 document (`mode`, `depth`) for command tests.
-fn colourful(mode: &str, depth: u32) -> crate::Session {
+pub(super) fn colourful(mode: &str, depth: u32) -> crate::Session {
     let mut s = crate::Session::new();
     s.execute("file.new", json!({"width": 16, "height": 16, "mode": mode, "depth": depth})).unwrap();
     for (i, c) in ["#c83c28", "#3c8c50", "#2850b4", "#d2b464"].iter().enumerate() {
@@ -499,7 +499,7 @@ fn colourful(mode: &str, depth: u32) -> crate::Session {
     s
 }
 
-fn pixels(s: &crate::Session) -> Vec<Vec<f32>> {
+pub(super) fn pixels(s: &crate::Session) -> Vec<Vec<f32>> {
     let d = s.active().unwrap();
     let bg = d.doc.layers[0].surface().unwrap();
     [(2, 2), (10, 2), (2, 10), (10, 10)].iter().map(|&(x, y)| bg.pixel(x, y)).collect()
@@ -696,11 +696,10 @@ fn gradient_map_source_params() {
     assert!(matches!(from_params("gradientMap", &json!({"dither": true}), Some(&a), ColorMode::Rgb).unwrap(), Adjustment::GradientMap { source: Some(_), .. }));
     // Malformed sources are refused.
     for bad in [
-        json!({"stops": [[0, "#000000"]]}),
+        json!({"stops": []}),
         json!({"stops": [[0, "#000000"], [1, "#ffffff"]], "midpoints": [0.5, 0.5]}),
         json!({"stops": [[0, "#000000"], [1, "#ffffff"]], "midpoints": [2]}),
         json!({"stops": [[0, "#000000"], [1, "#ffffff"]], "smoothness": 7}),
-        json!({"stops": [[0, "#000000"], [1, "#ffffff"]], "method": "wavy"}),
         json!(3),
     ] {
         assert!(from_params("gradientMap", &json!({"source": bad}), None, ColorMode::Rgb).is_err(), "{bad}");

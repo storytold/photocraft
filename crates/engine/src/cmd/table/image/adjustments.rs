@@ -48,7 +48,11 @@ pub fn specs() -> Vec<CommandSpec> {
         ("invert", "Invert", "{}"),
         ("posterize", "Posterize…", r##"{"levels":2..255=4}"##),
         ("threshold", "Threshold…", r##"{"level":1..255=128}"##),
-        ("gradientMap", "Gradient Map…", r##"{"stops":json,"reverse":bool=false,"dither":bool=false} (stops [[location 0..1, "#rrggbb"], …], 2..64)"##),
+        (
+            "gradientMap",
+            "Gradient Map…",
+            r##"{"stops":json,"source":{"stops":json,"midpoints":json?,"smoothness":0..1=0,"method":"classic|perceptual|linear|smooth"="classic"}?,"reverse":bool=false,"dither":bool=false} (1..64 stops [[location 0..1, "#rrggbb"], …]; one stop maps to a uniform color; unknown source methods use Classic)"##,
+        ),
         (
             "selectiveColor",
             "Selective Color…",
