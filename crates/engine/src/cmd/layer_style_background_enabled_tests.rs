@@ -205,7 +205,7 @@ fn background_refusal_defers_pending_history_budget_changes() {
         s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
         assert_ne!(s.scratch_epoch, pending_epoch);
         let cap = s.active().unwrap().history.max_bytes;
-        assert!(cap == 0 || cap == s.prefs().performance.history_budget_bytes());
+        assert_eq!(cap, s.prefs().performance.history_cap_bytes());
         if cap > 0 {
             assert!(s.active().unwrap().history.entries().len() < history.len());
         }
