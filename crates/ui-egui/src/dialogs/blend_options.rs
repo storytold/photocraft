@@ -2,7 +2,7 @@
 //! Layers panel's, so a mode has one key and one shortcut everywhere.
 
 use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamKind};
-use craft::ui::runtime::env::Label;
+use craft::ui::runtime::env::{Label, UnitKind};
 use photocraft_color::BlendMode;
 use serde_json::{Map, Value, json};
 
@@ -25,7 +25,8 @@ pub(crate) fn blending_rows() -> Vec<Param> {
     vec![
         Param::section(tl!("Blending")),
         blend_param("mode", tl!("Mode:"), false, BlendMode::Normal),
-        super::new_layer_ui::opacity_param(),
+        // Whole percents from 1 (New Layer's row starts at 0): a typed 0 is clamped to 1 with the range alert (#14649).
+        Param::new("opacity", tl!("Opacity:"), ParamKind::number(Some(1.0), Some(100.0), 100.0, 1.0, 0)).unit(UnitKind::Percent),
         Param::new("preserveTransparency", tl!("Preserve Transparency"), ParamKind::bool(false)),
     ]
 }

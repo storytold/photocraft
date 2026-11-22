@@ -149,4 +149,7 @@ pub(crate) fn run(app: &mut PhotocraftApp, ctx: &egui::Context, result: ParamRes
 }
 
 #[cfg(test)]
+mod opacity_alert_tests;
+
+#[cfg(test)]
 mod tests;
