@@ -166,7 +166,13 @@ pub fn copy_changed(dst: &mut Surface, before: &Surface, after: &Surface, area: 
     dst.write_region(area, &cur);
 }
 
-/// The image a `"newLayer"` run's clone strokes sample: the visible document.
+/// Whether the clone strokes sample the visible image rather than the target layer: on a new layer, and on an empty
+/// one, which has nothing of its own to sample.
+pub fn samples_visible(new_layer: bool, target: &Surface) -> bool {
+    new_layer || target.content_bounds().is_empty()
+}
+
+/// The image a `"newLayer"` (or empty-layer) run's clone strokes sample: the visible document.
 pub fn visible_image(doc: &Document) -> Surface {
     crate::file_cmds::flattened(doc, doc.pixel_format())
 }
@@ -261,8 +267,9 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
             *active = Some(id);
             id
         };
-        // A new layer clones from the visible image; otherwise from the layer itself.
-        let base: Option<Surface> = new_layer.then(|| visible_image(doc));
+        // A new or an empty layer clones from the visible image; otherwise from the layer itself.
+        let empty = doc.layer(id).and_then(Layer::surface).is_some_and(|s| samples_visible(false, s));
+        let base: Option<Surface> = (new_layer || empty).then(|| visible_image(doc));
         let locks = doc.effective_locks(id);
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         if locks.all || locks.pixels {
@@ -272,7 +279,7 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
         for (plane, src, rect, at, width) in &pastes {
             paste_onto(&sc, surf, *plane, src, *rect, *at, *width)?;
         }
-        // A new layer samples the visible image (merged with what's been pasted) and takes only
+        // A new or an empty layer samples the visible image (merged with what's been pasted) and takes only
         // the pixels the strokes change; otherwise the strokes paint the layer itself.
         let mut work = base.map(|mut w| {
             over(&mut w, surf);

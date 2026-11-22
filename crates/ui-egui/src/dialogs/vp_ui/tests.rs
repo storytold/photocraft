@@ -307,3 +307,36 @@ fn ok_paints_the_layer_the_workspace_was_opened_on() {
         }
     }
 }
+
+/// An empty layer over a photo: the window shows the photo, a stroke clones from it, and OK paints what the preview
+/// showed onto the empty layer.
+#[test]
+fn an_empty_layer_shows_the_image_and_stamps_from_it_like_ok() {
+    let mut app = app_with_layer();
+    app.session
+        .edit("stripe", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(50, 70, 70, 90), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.sync_views();
+    let empty = app.session.active().unwrap().active_layer.unwrap();
+    let mut h = open(app);
+    // The window shows the image below the empty layer, not a transparent layer.
+    let mut px = ColorImage::new([1, 1], vec![Color32::TRANSPARENT]);
+    source(&h).image().read(PixelRect::new(200, 30, 201, 31), 1, &mut px);
+    assert!(px.pixels[0].a() == 255 && px.pixels[0].b() > px.pixels[0].r(), "the photo shows: {:?}", px.pixels[0]);
+    set(&mut h, json!({"planes": [full_plane()]}));
+    set(&mut h, json!({"clone": [{"source": [60, 80], "points": [[120, 80], [126, 80]], "size": 12}]}));
+    let at = [(120, 80), (124, 80), (200, 30)];
+    let preview: Vec<[u8; 4]> = at.iter().map(|&(x, y)| shown(&h, x, y)).collect();
+    assert!(preview[0][0] > 230, "the stroke clones the red stripe from the image below");
+    ok(&mut h);
+    let st = h.state().session.active().unwrap();
+    assert!(st.doc.layer(empty).unwrap().surface().unwrap().rgba(120, 80)[0] > 0.9, "the stroke lands on the empty layer");
+    let done = visible_image(&st.doc);
+    for (&(x, y), p) in at.iter().zip(&preview) {
+        assert!(close(*p, done.rgba(x, y)), "({x}, {y}): {p:?} vs {:?}", done.rgba(x, y));
+    }
+}
