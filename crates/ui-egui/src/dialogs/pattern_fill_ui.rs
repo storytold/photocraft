@@ -44,6 +44,9 @@ pub(crate) struct Session {
     target: Target,
     opened: PatternFillOptions,
     preview: Option<Preview>,
+    /// The swatches' textures. The picker paints them by id and doesn't ask the texture cache again, so the dialog
+    /// owns them until it closes: a cached texture would be freed once the cache is full (#16252).
+    _swatch_textures: Vec<egui::TextureHandle>,
 }
 
 impl Session {
@@ -72,16 +75,19 @@ fn start(app: &mut PhotocraftApp, idx: usize, document: DocId, target: Target, o
     app.pattern_fill.opens += 1;
     let serial = app.pattern_fill.opens;
     let ctx = app.ctx().clone();
+    let swatch_textures: Vec<egui::TextureHandle> =
+        app.session.patterns.items.iter().map(|p| crate::panels::preset_browser::pattern_texture_handle(&ctx, p)).collect();
     let swatches: Vec<PatternSwatch> = app
         .session
         .patterns
         .items
         .iter()
-        .map(|p| PatternSwatch::new(p.id.clone(), p.display_name()).with_picture(crate::panels::preset_browser::pattern_texture(&ctx, p)))
+        .zip(&swatch_textures)
+        .map(|(p, texture)| PatternSwatch::new(p.id.clone(), p.display_name()).with_picture(texture.id()))
         .collect();
     let dialog = PatternFillDialog::new(options.clone(), swatches).canvas(CanvasHost::primary(app, idx).canvas_id());
     let id = app.framework.dialogs.open(dialog);
-    app.pattern_fill.session = Some(Session { serial, document, target, opened: options, preview: None });
+    app.pattern_fill.session = Some(Session { serial, document, target, opened: options, preview: None, _swatch_textures: swatch_textures });
     id
 }
 

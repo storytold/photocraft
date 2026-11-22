@@ -26,14 +26,11 @@ pub struct Clip {
     pub svg: Option<std::sync::Arc<Vec<u8>>>,
     /// Native colour indices for a multi-component clip, in channel order. Singletons are grayscale.
     pub components: Option<Vec<usize>>,
-    #[plain_data(assume = "raster tiles: shared copy-on-write pixels, paged to disk unseen; a shared reference can't change them")]
     pub surface: Surface,
-    #[plain_data(assume = "geometry: plain numbers")]
     pub bounds: Rect,
     /// The copied layer itself, when Copy took a whole layer that Paste should recreate rather
     /// than rasterize (see [`whole_layer`]): a scratch document in the source's colour holding it.
     /// `surface` still holds its pixels, for Paste Into, masks, channels and other apps.
-    #[plain_data(assume = "the scratch document is replaced, never changed in place")]
     pub layers: Option<Box<Document>>,
     /// The source document's resolution (ppi): File › New from the clipboard takes it, as
     /// Photoshop's Clipboard preset does. None for an image from another app.
@@ -44,7 +41,6 @@ pub struct Clip {
     /// The artboard the pixels were copied from (its id and rect at the time), when they came
     /// from one: Paste into another board of the same document keeps their place on the board
     /// ([`board_shift`], #8788). None outside boards, across several, or for a copied board.
-    #[plain_data(assume = "a layer id and its rect: plain numbers")]
     pub board: Option<(LayerId, Rect)>,
 }
 

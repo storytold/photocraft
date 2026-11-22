@@ -131,6 +131,7 @@ mod tests {
             params: json!({"colors": colors}),
             k: 1,
             tool_colors: ([0.0, 0.0, 0.0, 1.0], [1.0; 4]),
+            scratch: 0,
         }
     }
 

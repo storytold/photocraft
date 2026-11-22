@@ -313,6 +313,113 @@ fn a_mask_on_the_board_above_still_hides_its_part() {
     }
 }
 
+/// A drop shadow at `angle` degrees, `distance` px away, hard-edged and black.
+fn shadow(angle: f32, distance: f32) -> photocraft_doc::Effect {
+    use photocraft_doc::effects::{Contour, FxCommon, Shadow};
+    photocraft_doc::Effect::DropShadow(Shadow {
+        common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+        color: Color::rgb(0.0, 0.0, 0.0),
+        angle,
+        use_global_light: false,
+        distance,
+        spread: 0.0,
+        size: 0.0,
+        contour: Contour::Linear,
+        anti_alias: false,
+        noise: 0.0,
+        knocks_out: true,
+    })
+}
+
+/// Exports Red Board as PNG and PSD and checks each file against the document at `points`.
+fn assert_files_match_the_document(s: &mut Session, red: u64, tag: &str, points: &[(i32, i32)]) {
+    let out = Out::new(tag);
+    for format in ["png", "psd"] {
+        let f = export(s, &out, red, json!({"format": format}));
+        for &(x, y) in points {
+            assert_eq!(px(&f, x, y), source_px(s, x, y), "{format} at ({x},{y})");
+        }
+    }
+}
+
+/// The artboard painted its background beneath the board's own effects: a Color Overlay on the
+/// board above tints its layers, not the "Background for" layer the export adds.
+#[test]
+fn a_color_overlay_on_the_board_above_leaves_its_background_alone() {
+    use photocraft_doc::effects::FxCommon;
+    let (mut s, [red, blue, _]) = session(8);
+    s.edit("Overlay", |doc, _| {
+        let overlay =
+            photocraft_doc::Effect::ColorOverlay { common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0), color: Color::rgb(1.0, 0.0, 0.0) };
+        doc.layer_mut(LayerId(blue)).unwrap().effects.items.push(overlay);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(rgb(source_px(&s, 125, 35)), WHITE, "Blue Board's background stays white in the document");
+    assert_eq!(rgb(source_px(&s, 150, 60)), [255, 0, 0], "Blue is overlaid red in the document");
+    assert_files_match_the_document(&mut s, red, "overlay", &[(125, 35), (125, 145), (150, 60), (110, 50)]);
+}
+
+/// The board above's own shadow, cast by the background the export adds, would fall outside
+/// that board; the board clip is decided with the background in place, so it is cut off there.
+#[test]
+fn a_shadow_of_the_added_background_stays_inside_the_board_above() {
+    let (mut s, [red, blue, _]) = session(8);
+    s.edit("Shadow", |doc, _| {
+        // 5 px to the left: Blue's own shadow (125..225) stays inside Blue Board (120..320).
+        doc.layer_mut(LayerId(blue)).unwrap().effects.items.push(shadow(0.0, 5.0));
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(rgb(source_px(&s, 117, 60)), RED, "the artboard clips its shadow in the document");
+    assert_files_match_the_document(&mut s, red, "bg-shadow", &[(115, 60), (117, 60), (119, 60), (125, 60), (110, 50)]);
+}
+
+/// A mask on the board above shapes its effects by default (Layer Mask Hides Effects off): a
+/// masked-out layer casts no shadow, in the file as in the document.
+#[test]
+fn a_masked_out_layer_of_the_board_above_casts_no_shadow() {
+    let (mut s, [red, blue, _]) = session(8);
+    // Transparent, so nothing of Blue Board but its layers and their shadow covers Red Board.
+    s.execute("layer.artboard.set", json!({"layer": blue, "background": "transparent"})).unwrap();
+    // Caster at 210..240 x 180..190 (in Blue Board, outside Red Board) under a mask; unmasked its
+    // shadow, 40 px up and to the left, would fall on 170..200 x 140..150, inside Red Board.
+    paint(&mut s, blue, "Caster", Rect::new(210, 180, 240, 190), [0, 160, 0]);
+    s.edit("Mask", |doc, _| {
+        let board = doc.layer_mut(LayerId(blue)).unwrap();
+        board.effects.items.push(shadow(-45.0, 40.0_f32.hypot(40.0)));
+        let mut mask = photocraft_doc::LayerMask::reveal_all();
+        mask.surface.fill_rect(Rect::new(205, 175, 245, 195), &[0.0]);
+        board.mask = Some(mask);
+        Ok(())
+    })
+    .unwrap();
+    assert!(!s.active().unwrap().doc.layer(LayerId(blue)).unwrap().advanced.layer_mask_hides_effects);
+    assert_eq!(rgb(source_px(&s, 185, 145)), WHITE, "no shadow from the masked-out caster in the document");
+    assert_files_match_the_document(&mut s, red, "mask-shadow", &[(185, 145), (175, 142), (125, 35), (110, 50), (150, 60)]);
+}
+
+/// The board clip is hard, as the artboard's was: a feathered mask on the board above keeps its
+/// feather for itself, but the board edge in the file stays sharp.
+#[test]
+fn the_board_clip_stays_sharp_with_a_feathered_mask() {
+    let (mut s, [red, blue, _]) = session(8);
+    s.execute("layer.artboard.set", json!({"layer": blue, "background": "transparent"})).unwrap();
+    s.edit("Feather", |doc, _| {
+        let board = doc.layer_mut(LayerId(blue)).unwrap();
+        // A canvas-wide fill reaches past the board, so the export clips the board to its rect.
+        let fill = Layer::new("Green", LayerContent::Fill(photocraft_doc::Fill::Solid(Color::rgb(0.0, 1.0, 0.0))));
+        board.children_mut().unwrap().insert(0, fill);
+        board.mask = Some(photocraft_doc::LayerMask { feather: 6.0, ..photocraft_doc::LayerMask::reveal_all() });
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(rgb(source_px(&s, 120, 145)), [0, 255, 0], "inside Blue Board, at its edge");
+    assert_eq!(rgb(source_px(&s, 119, 145)), WHITE, "outside Blue Board, Red Board's background");
+    let points = [(114, 145), (117, 145), (119, 145), (120, 145), (122, 145), (126, 145), (150, 31), (150, 28), (110, 50)];
+    assert_files_match_the_document(&mut s, red, "feather", &points);
+}
+
 /// A Normal board renders its layers on their own before they go over its background, so a
 /// Multiply layer in it does not blend with that background; the export keeps the board as a
 /// group of its own above the background layer instead of stacking its layers on it.

@@ -224,6 +224,11 @@ pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandSta
     ]
 }
 
+/// [`command_states`], derived from the brush.
+pub(crate) fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    crate::app::framework::derived_states(app, name, &app.session.tools.brush, || command_states(app))
+}
+
 /// Runs a fired menu command; false for a command this panel does not own.
 pub(crate) fn run_fired(app: &mut PhotocraftApp, _ctx: &egui::Context, command: &CommandRef) -> bool {
     let Some(command) = BrushSettingsCommand::from_ref(command) else { return false };

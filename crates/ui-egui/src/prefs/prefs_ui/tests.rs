@@ -723,8 +723,34 @@ fn run_cases(cases: Vec<Case>) {
 }
 
 /// A case that only seeds a file and checks what the app loads from it.
-fn loaded(name: &'static str, seed: Value, check: impl Fn(&PhotocraftApp) + 'static) -> Case {
-    Case { name, seed: Some(seed), set: Box::new(|_, _| {}), check: Box::new(move |app, _, _| check(app)) }
+struct Loaded {
+    name: &'static str,
+    seed: Value,
+    check: Box<dyn Fn(&PhotocraftApp)>,
+}
+
+fn loaded(name: &'static str, seed: Value, check: impl Fn(&PhotocraftApp) + 'static) -> Loaded {
+    Loaded { name, seed, check: Box::new(check) }
+}
+
+/// One app per case: what it loads, then what its first tick leaves in the file. A load that reset values writes the
+/// repaired preferences on that tick, so the file must read back cleanly as what the app holds; a repair that drops
+/// other keys fails here without a restarted app.
+fn run_loaded(cases: Vec<Loaded>) {
+    for case in cases {
+        eprintln!("case: {}", case.name);
+        let files = Arc::new(MemoryFiles::new());
+        seed(&files, &case.seed, Some(<prefs::SavedPrefs as Settings>::SCHEMA_VERSION));
+        let mut app = app_on(&files);
+        (case.check)(&app);
+        let ctx = app.ctx().clone();
+        tick(&mut app, &ctx);
+        let (reread, report) = services_on(&files).settings.unwrap();
+        assert!(report.section_errors.is_empty(), "{}: {:?}", case.name, report.section_errors);
+        // Compared as written: the file has no nulls, while the preset libraries hold some in memory.
+        let written = |p: &prefs::SavedPrefs| serde_json::to_value(p).unwrap();
+        assert_eq!(written(reread.get()), written(&app.session.saved_prefs()), "{}", case.name);
+    }
 }
 
 fn restart_cases() -> Vec<Case> {
@@ -982,7 +1008,8 @@ fn remembered_state_survives_a_restart() {
     run_cases(restart_cases());
 }
 
-fn damaged_cases() -> Vec<Case> {
+/// The load-only cases, and the cases that set state in a first app and restart.
+fn damaged_cases() -> (Vec<Loaded>, Vec<Case>) {
     use crate::state::Tool;
     let d = crate::state::ToolOptions::default;
     let mut cases = Vec::new();
@@ -1080,8 +1107,9 @@ fn damaged_cases() -> Vec<Case> {
         assert_eq!(app.session.tools.background, [1.0; 4]);
     }));
     // A tool-colour preset with an invalid channel is refused and leaves the remembered colours alone.
+    let mut restarts = Vec::new();
     for bad_channel in [json!(1e100), json!("red"), json!(true), json!({}), json!([])] {
-        cases.push(Case {
+        restarts.push(Case {
             name: "tool colours after an invalid preset",
             seed: None,
             set: Box::new(move |app, _| {
@@ -1099,12 +1127,14 @@ fn damaged_cases() -> Vec<Case> {
             }),
         });
     }
-    cases
+    (cases, restarts)
 }
 
 #[test]
 fn a_damaged_remembered_value_resets_only_itself() {
-    run_cases(damaged_cases());
+    let (loaded, restarts) = damaged_cases();
+    run_loaded(loaded);
+    run_cases(restarts);
 }
 
 #[test]
