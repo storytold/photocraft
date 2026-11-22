@@ -30,7 +30,10 @@ use document::document_to_psd_sized;
 pub use document::{document_to_psd, document_to_psd_with};
 use document::{document_to_psd_nested, mask_parameters};
 pub(crate) use estimate::{fit_psd_size, psd_version, sign_global_blocks};
-pub(crate) use resources::{global_block, guides_resource, keep_imported_resource, legacy_name, pascal_names_resource, path_resources, unicode_names_resource};
+pub(crate) use resources::{
+    global_block, guides_resource, imported_clipping_flatness_edit, imported_resource_data, keep_imported_resource, legacy_name, pascal_names_resource,
+    path_resources, unicode_names_resource,
+};
 use smart::{LINK_KEYS, SmartOut, Source, contents_uuid, effects_unchanged, embed_source_hash, masked, size_from_layer, smart_keys, upsert};
 
 /// Blocks that define a layer's content as something other than pixels: fill (`SoCo`, `GdFl`,
@@ -609,7 +612,7 @@ impl Ex<'_> {
             None => raw.retain(|(k, _)| k != b"fxrp"),
         }
         // Advanced Blending channel restrictions: written from the field (in place).
-        match crate::blocks::brst_data(l.excluded_channels) {
+        match craft_psd::tagged::channel_restrictions_data(l.excluded_channels) {
             Some(data) => match raw.iter_mut().find(|(k, _)| k == b"brst") {
                 Some(e) => e.1 = data,
                 None => raw.push((*b"brst", data)),

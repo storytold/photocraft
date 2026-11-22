@@ -601,7 +601,7 @@ fn editing_psd_type_shows_our_layout_and_cancel_restores_it() {
     if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
         t.cache = Some(moved.clone());
     }
-    st.doc = std::sync::Arc::new(doc);
+    *st.doc_mut() = std::sync::Arc::new(doc);
     st.revision += 1;
     let steps = app.session.active().unwrap().history.entries().len();
     let mut h = harness(1.0, app);
@@ -1785,7 +1785,7 @@ mod multi_layer_formatting {
         app.run("type.orientation.horizontal", json!({"layer": ids[1].0})).unwrap();
         let checks = |app: &mut PhotocraftApp| -> Vec<String> {
             let ctx = app.ctx().clone();
-            let rows = &crate::menus::model(app, &ctx).rows;
+            let rows = crate::menus::model(app, &ctx).rows();
             for id in ["type.antiAlias.none", "type.antiAlias.crisp", "type.orientation.horizontal", "type.orientation.vertical"] {
                 let it = crate::menus::row(rows, id).unwrap();
                 assert!(it.kind.checked().is_some(), "{id} is a check item");
@@ -1798,7 +1798,7 @@ mod multi_layer_formatting {
         editing(&mut app, ids[0]);
         assert_eq!(checks(&mut app), ["type.antiAlias.none", "type.orientation.vertical"]);
         app.ui.text_edit = None;
-        app.session.active_mut().unwrap().active_layer = Some(ids[1]);
+        app.session.active_mut().unwrap().set_active_layer(Some(ids[1]));
         assert_eq!(checks(&mut app), ["type.antiAlias.crisp", "type.orientation.horizontal"]);
     }
 
@@ -2028,7 +2028,11 @@ fn every_paragraph_box_handle_resizes_the_box_with_snapping_on() {
     let scaled = Affine { m: [1.5, 0.0, 0.0, 0.75, 300.0, 300.0] };
     let rotated = Affine { m: [1.2 * 0.94, 1.2 * 0.342, -1.2 * 0.342, 1.2 * 0.94, 300.0, 300.0] };
     for ppp in [1.0, 2.0] {
-        for zoom in [0.25f32, 0.5, 1.0, 2.0] {
+        // The ends of the range only: the frame's handles and their grab area are screen-space parts of the
+        // framework's `TransformBox::text_frame` (`controls.rs`, `frame_box`) and the snap reach is a screen distance,
+        // so the zoom only scales the view, with no step in between. 25 % and 200 % at 1x and 2x span 12.5 % to
+        // 200 % in points, which holds 50 % and 100 %.
+        for zoom in [0.25f32, 2.0] {
             for (name, tf) in [("plain", None), ("scaled", Some(scaled)), ("rotated", Some(rotated))] {
                 let mut app = new_app();
                 assert!(app.ui.extras.snap, "snapping is on by default");
@@ -2160,7 +2164,7 @@ fn justify_buttons_are_greyed_on_point_text() {
     let justify = ["Justify last left", "Justify last centered", "Justify last right", "Justify all"];
     let area = |app: &mut PhotocraftApp| {
         app.run("type.create", json!({"text": "one two three four five six", "size": 24, "x": 300, "y": 420})).unwrap();
-        std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).work_path =
+        std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).work_path =
             Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(300.0, 300.0), (600.0, 300.0), (600.0, 500.0), (300.0, 500.0)])]));
         app.run("type.fillPath", json!({})).unwrap();
     };
@@ -2377,7 +2381,7 @@ fn an_unselected_work_path_is_not_an_area_target() {
     // Type tool, so a click inside it is plain point text; its outline still takes type on a
     // path, as before area type (#5180).
     let mut app = new_app();
-    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).work_path =
+    std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).work_path =
         Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(300.0, 300.0), (700.0, 300.0), (700.0, 500.0), (300.0, 500.0)])]));
     app.ui.selected_path = None;
     assert!(path_target(&app, 500.0, 400.0).is_none(), "inside a hidden work path");

@@ -4,12 +4,12 @@ use std::sync::Arc;
 
 use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType as CSample};
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{AlphaChannel, Document, Layer, LayerContent};
+use photocraft_doc::{AlphaChannel, ColorIndices, Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_raster::{AllocationError, Interrupt, PruneCursor, RowWriteError, Surface};
 
 use crate::renderer::{BandRenderer, RenderError};
-use crate::{ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
+use crate::{BmpBits, ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
 
 /// Bytes per band when converting or exporting a band of rows at a time.
 const BAND_BYTES: usize = 32 << 20;
@@ -127,6 +127,9 @@ fn import_flat_impl_with_options(
         }
     };
     apply_flat_format(&mut r, bytes, format, img.as_ref())?;
+    if format == Some(Format::Png) {
+        read_png_indices(&mut r, bytes, ctl)?;
+    }
     Ok(r)
 }
 
@@ -238,7 +241,8 @@ impl FlatBuilder {
 
     /// The document, after copying and pruning whatever is left: the one-shot result and the last
     /// step of a stepped one. Like the one-shot import, it records how many images the file holds
-    /// when the decoder read only the first, so Save doesn't write over the rest (#5733).
+    /// when the decoder read only the first, so Save doesn't write over the rest (#5733). A palette
+    /// PNG's indices are left to [`PngIndices`].
     pub(crate) fn finish(mut self, bytes: &[u8], format: Option<Format>) -> Result<ImportResult, IoError> {
         let copied = self.copy_done();
         while !self.copy_done() {
@@ -258,9 +262,135 @@ impl FlatBuilder {
     }
 }
 
+/// Each pixel's palette index in the palette PNG `bytes`, opened as `doc`, read again a band of
+/// rows per [`PngIndices::step`], so Color Table can tell entries of one colour apart (#14342).
+/// No indices, and Color Table falls back to the nearest entry, when the document's one layer
+/// doesn't show each pixel's entry at the file's place for it (an EXIF orientation turned the
+/// pixels, which colours alone can't show when entries repeat, or a colour conversion changed
+/// them), or when the file is interlaced (not read here). One row at a time, into tiles one band
+/// of rows at a time: next to the layer, only the indices themselves (a byte per pixel) and one
+/// band are held. None either when memory can't hold them: the open's own memory check didn't
+/// count them.
+pub(crate) struct PngIndices<B: AsRef<[u8]>> {
+    reader: png::Reader<std::io::Cursor<B>>,
+    table: photocraft_doc::ColorTable,
+    layer: photocraft_doc::LayerId,
+    surface: Surface,
+    map: Surface,
+    band: Vec<u8>,
+    shown: Vec<[u8; 4]>,
+    bits: usize,
+    width: u32,
+    height: i32,
+    y: i32,
+}
+
+impl<B: AsRef<[u8]>> PngIndices<B> {
+    /// Starts reading `bytes` for `doc`'s indices; `None` when they can't be recorded, or needn't
+    /// be.
+    pub(crate) fn new(bytes: B, doc: &Document) -> Option<Self> {
+        let table = doc.color_table.as_ref()?;
+        // Only entries that share a colour need the file. When every entry has its own colour,
+        // each pixel's colour names its entry and Color Table's nearest entry finds it, so the
+        // pass over all the file's rows is skipped.
+        let mut colors = table.colors.clone();
+        colors.sort_unstable();
+        if !colors.windows(2).any(|w| w[0] == w[1]) {
+            return None;
+        }
+        let [layer] = doc.layers.as_slice() else { return None };
+        let surface = layer.surface()?;
+        let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+        decoder.set_transformations(png::Transformations::IDENTITY);
+        decoder.set_ignore_text_chunk(true);
+        let reader = decoder.read_info().ok()?;
+        let info = reader.info();
+        let (w, h, bits) = (info.width, info.height, info.bit_depth as usize);
+        if info.color_type != png::ColorType::Indexed || info.interlaced || !matches!(bits, 1 | 2 | 4 | 8) || (w, h) != (doc.size.width, doc.size.height) {
+            return None;
+        }
+        let width = usize::try_from(w).ok()?;
+        let band_len = width.checked_mul(usize::try_from(TILE_SIZE).ok()?)?;
+        // The index surface's whole tiles, the band, and the row of the layer read beside it.
+        let needed = tile_bytes(w, h, 1).saturating_add(u64::from(w).saturating_mul(TILE_SIZE as u64 + 4));
+        crate::memory::check_fits(w, h, needed, crate::memory::available()).ok()?;
+        let mut band = Vec::new();
+        band.try_reserve_exact(band_len).ok()?;
+        let mut shown = Vec::new();
+        shown.try_reserve_exact(width).ok()?;
+        shown.resize(width, [0u8; 4]);
+        Some(Self {
+            reader,
+            table: table.clone(),
+            layer: layer.id,
+            surface: surface.clone(),
+            map: Surface::new(PixelFormat::GRAY8),
+            band,
+            shown,
+            bits,
+            width: w,
+            height: i32::try_from(h).ok()?,
+            y: 0,
+        })
+    }
+
+    /// Reads the next band of rows into the indices: `Some(true)` once every row is read (then
+    /// [`Self::finish`]), `Some(false)` while rows are left, `None` when no indices can be recorded.
+    pub(crate) fn step(&mut self) -> Option<bool> {
+        let Self { reader, table, surface, map, band, shown, bits, width, height, y, .. } = self;
+        let (bits, w, band_y) = (*bits, *width, *y);
+        while *y < *height && *y - band_y < TILE_SIZE {
+            let row = reader.next_row().ok()??;
+            surface.read_rgba8_into(Rect::from_xywh(0, *y, w, 1), shown);
+            for (x, px) in shown.iter().enumerate() {
+                let bit = x * bits;
+                let byte = *row.data().get(bit / 8)?;
+                let i = (byte >> (8 - bits - bit % 8)) & (0xff >> (8 - bits));
+                let entry = table.colors.get(usize::from(i))?;
+                let ok = if px[3] == 0 { table.transparent == Some(i) } else { px[..3] == entry[..] };
+                if !ok {
+                    return None;
+                }
+                band.push(i);
+            }
+            *y += 1;
+        }
+        map.try_write_interleaved(Rect::from_xywh(0, band_y, w, u32::try_from(*y - band_y).ok()?), band).ok()?;
+        band.clear();
+        Some(*y == *height)
+    }
+
+    /// The indices, once [`Self::step`] has read every row.
+    pub(crate) fn finish(mut self) -> Option<ColorIndices> {
+        // An eXIf after the pixels counts too.
+        self.reader.finish().ok()?;
+        if self.reader.info().exif_metadata.as_deref().is_some_and(|e| codecs::exif_orientation(e) != 1) || self.y != self.height {
+            return None;
+        }
+        Some(ColorIndices { layer: self.layer, pixels: self.surface, indices: self.map })
+    }
+}
+
+/// The indices of a palette PNG opened as `r` (see [`PngIndices`]), read with a cancel check
+/// between bands of rows.
+fn read_png_indices(r: &mut ImportResult, bytes: &[u8], ctl: &Interrupt) -> Result<(), IoError> {
+    let Some(mut read) = PngIndices::new(bytes, &r.document) else { return Ok(()) };
+    loop {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        match read.step() {
+            Some(false) => {}
+            Some(true) => break,
+            None => return Ok(()),
+        }
+    }
+    r.document.color_indices = read.finish();
+    Ok(())
+}
+
 /// What every flat format does to the document of its pixels: the palette mode, the save
 /// settings, a Targa's alpha channel and the profile an untagged image needs. `img` is the
-/// decoded image, when the document was built from one (a streamed PNG has none).
+/// decoded image, when the document was built from one (a streamed PNG has none). A palette
+/// PNG's indices are read after it, by [`PngIndices`], which a stepped import can step.
 pub(crate) fn apply_flat_format(r: &mut ImportResult, bytes: &[u8], format: Option<Format>, img: Option<&Image>) -> Result<(), IoError> {
     // A palette BMP, PNG or GIF opens in Indexed Color mode with its colour table, as in
     // Photoshop (#3802, #4804, #7886). A GIF is always palette-based: the first frame's table.
@@ -1738,12 +1868,12 @@ pub fn export_flat_with_renderer(
     ctl: &photocraft_raster::Interrupt,
     mut renderer: Option<&mut dyn BandRenderer>,
 ) -> Result<ExportResult, IoError> {
-    if let Some(mut r) = export_mode_specific(doc, format, opts)? {
-        // Palette PNG/BMP and Duotone exports render on their own paths before the renderer
+    if let Some(mut r) = export_mode_specific(doc, format, opts, ctl)? {
+        // Palette PNG/BMP/GIF and Duotone exports render on their own paths before the renderer
         // branch: say so, or `--gpu` would silently do nothing for them.
         if let Some(renderer) = &mut renderer {
             let why = match doc.mode {
-                ColorMode::Indexed => "palette (Indexed Color) PNG/BMP export uses the CPU compositor",
+                ColorMode::Indexed => "palette (Indexed Color) PNG/BMP/GIF export uses the CPU compositor",
                 ColorMode::Duotone => "Duotone export uses the CPU compositor",
                 _ => "this export uses the CPU compositor",
             };
@@ -1768,6 +1898,9 @@ pub fn export_flat_with_renderer(
                 let mut img = prepare_flat(img, format, &mut warnings)?;
                 if format == Format::Tga {
                     img = tga_image(doc, img, opts.tga_bits, opts.preserve_alpha, &mut warnings)?;
+                }
+                if format == Format::Bmp {
+                    img = bmp_image(img, opts.bmp_bits, &mut warnings)?;
                 }
                 if format == Format::Dds {
                     img = dds_image(doc, img, &mut warnings)?;
@@ -1818,6 +1951,9 @@ pub fn export_flat_with_renderer(
     let mut img = prepare_flat(img, format, &mut warnings)?;
     if format == Format::Tga {
         img = tga_image(doc, img, opts.tga_bits, opts.preserve_alpha, &mut warnings)?;
+    }
+    if format == Format::Bmp {
+        img = bmp_image(img, opts.bmp_bits, &mut warnings)?;
     }
     if format == Format::Dds {
         img = dds_image(doc, img, &mut warnings)?;
@@ -2123,6 +2259,29 @@ fn tga_image(doc: &Document, img: Image, bits: Option<TgaBits>, preserve_alpha: 
     }
 }
 
+/// The image an RGB BMP of `bits` per pixel holds: 24 composites a transparent image over white,
+/// 32 gives an opaque image an opaque alpha; `None` keeps the image (32 with transparency, else
+/// 24). Grayscale images are written as they are. 16 bits is refused: the encoder has no 16-bit
+/// BMP.
+fn bmp_image(img: Image, bits: Option<BmpBits>, warnings: &mut Vec<String>) -> Result<Image, IoError> {
+    let Some(bits) = bits else { return Ok(img) };
+    if !img.layout().is_rgb() {
+        warnings.push(format!("{}-bit BMP applies to RGB images; the grayscale image is written as it is", bits.bits()));
+        return Ok(img);
+    }
+    match bits {
+        BmpBits::Bits16 => Err(IoError::Unsupported("16-bit BMP is not supported yet; use 24 or 32 bits".into())),
+        BmpBits::Bits24 if img.layout().has_alpha() => {
+            warnings.push("transparency composited over white; a 24-bit BMP has no alpha".into());
+            matte_over_white(&img)
+        }
+        BmpBits::Bits32 if !img.layout().has_alpha() => {
+            map_bands(&img, ChannelLayout::Rgba, img.sample_type(), |vals| vals.as_chunks::<3>().0.iter().flat_map(|&[r, g, b]| [r, g, b, 1.0]).collect())
+        }
+        _ => Ok(img),
+    }
+}
+
 /// The image a DDS texture holds (#8563): as with a 32-bit Targa, the document's alpha channel
 /// becomes the texture's alpha when it has exactly one (spot channels don't count), the colours
 /// composited over white where the layers are transparent; BC1 keeps it as on/off, BC2 and BC3
@@ -2331,19 +2490,51 @@ fn cmyk_image_to_srgb(img: &Image) -> Result<Image, IoError> {
     Ok(Image::from_normalized(w, h, layout, sample, &out)?.with_icc(Some(dst.to_bytes().to_vec())).with_meta(img.meta.clone()))
 }
 
-/// Indexed Color → PNG-8 or an 8-bit BMP with its colour table; Duotone → the inks rendered as RGB.
-fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) -> Result<Option<ExportResult>, IoError> {
+/// The metadata a GIF cannot hold, worded as the generic encoder's fidelity warnings word it.
+/// The indexed route encodes straight from the document instead of through [`encode_image`], so it
+/// has to report what that check would have warned about.
+fn gif_dropped_metadata(doc: &Document, opts: &ExportOptions) -> Vec<String> {
+    let mut w = Vec::new();
+    if !opts.encode.embed_metadata {
+        return w;
+    }
+    if doc.icc_profile.is_some() && opts.encode.embed_icc {
+        w.push("ICC profile not supported; it will be dropped".into());
+    }
+    if doc.metadata.exif.is_some() {
+        w.push("EXIF not supported; it will be dropped".into());
+    }
+    // Export As ▸ Metadata: None already dropped these before the generic encoder got to say so.
+    if opts.xmp != XmpEmbed::None {
+        if doc.metadata.xmp.is_some() {
+            w.push("XMP not supported; it will be dropped".into());
+        }
+        if !doc.metadata.text.is_empty() {
+            w.push("text metadata not supported; it will be dropped".into());
+        }
+    }
+    w.push("resolution (DPI) not supported; it will be dropped".into());
+    w
+}
+
+/// Indexed Color → PNG-8, an 8-bit BMP or a GIF with the document's colour table; Duotone → the
+/// inks rendered as RGB.
+fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<Option<ExportResult>, IoError> {
     match doc.mode {
-        ColorMode::Indexed if matches!(format, Format::Png | Format::Bmp) => {
+        ColorMode::Indexed if matches!(format, Format::Png | Format::Bmp | Format::Gif) => {
             let Some(table) = doc.color_table.as_ref().filter(|t| !t.colors.is_empty() && t.colors.len() <= 256) else { return Ok(None) };
-            // PNG transparency belongs to a palette index, not its RGB value. Keep the
+            // PNG and GIF transparency belongs to a palette index, not its RGB value. Keep the
             // transparent entry out of opaque lookup, even when it duplicates an opaque colour.
-            let png_transparent_index = table.transparent.map(usize::from).filter(|_| format == Format::Png);
+            let transparent_index = table.transparent.map(usize::from).filter(|_| format != Format::Bmp);
             let (opaque_indices, colors): (Vec<u8>, Vec<_>) =
-                table.colors.iter().copied().enumerate().filter(|(i, _)| Some(*i) != png_transparent_index).map(|(i, c)| (i as u8, c)).unzip();
+                table.colors.iter().copied().enumerate().filter(|(i, _)| Some(*i) != transparent_index).map(|(i, c)| (i as u8, c)).unzip();
             let opaque = photocraft_doc::ColorTable { colors, transparent: None };
+            // This route renders and encodes on its own, so it polls `ctl` itself: before the
+            // render, per band and before the encoder (#11861 review).
+            ctl.check().map_err(|_| IoError::Cancelled)?;
             let mut idx = try_buffer(doc.size.area() as usize, 1)?;
             photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> Result<(), IoError> {
+                ctl.check().map_err(|_| IoError::Cancelled)?;
                 for p in &band.px {
                     let i = match table.transparent {
                         Some(t) if p[3] < 0.5 => t,
@@ -2355,6 +2546,7 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
                 }
                 Ok(())
             })?;
+            ctl.check().map_err(|_| IoError::Cancelled)?;
             if format == Format::Bmp {
                 let bytes = codecs::encode_bmp_indexed(doc.size.width, doc.size.height, &idx, &table.colors)?;
                 let mut warnings = vec![format!("written as an 8-bit palette BMP ({} colours)", table.colors.len())];
@@ -2363,10 +2555,28 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
                 }
                 return Ok(Some(ExportResult { bytes, warnings }));
             }
+            if format == Format::Gif {
+                // The whole table in its original order, as the palette PNG and BMP write it: a
+                // GIF colour table holds 2^n entries, and the writer pads the ones past the
+                // document's last entry with black, so no used index moves (#11824). A
+                // transparent index past the last entry needs a slot too: pad through it, or a
+                // transparent pixel fails the export of an API-created table (#11861 review).
+                let mut colors = table.colors.clone();
+                if let Some(t) = table.transparent.filter(|t| usize::from(*t) >= colors.len()) {
+                    colors.resize(usize::from(t) + 1, [0, 0, 0]);
+                }
+                let bytes = codecs::web::encode_gif_indexed(doc.size.width, doc.size.height, &idx, &colors, table.transparent, false)?;
+                let mut warnings = vec![format!("written as a GIF with the document's colour table ({} colours)", table.colors.len())];
+                warnings.extend(gif_dropped_metadata(doc, opts));
+                return Ok(Some(ExportResult { bytes, warnings }));
+            }
             // Same rule as the ordinary PNG encoder: the resolution goes into `pHYs` with the metadata.
             let dpi = opts.encode.embed_metadata.then_some((doc.resolution_dpi, doc.resolution_dpi));
             let bytes = codecs::encode_png_indexed(doc.size.width, doc.size.height, &idx, &table.colors, table.transparent, dpi, opts.encode.png_stereo)?;
             let mut warnings = vec![format!("written as an 8-bit palette PNG ({} colours)", table.colors.len())];
+            if opts.encode.png_interlaced {
+                warnings.push("written without interlacing: the palette PNG exporter does not interlace".into());
+            }
             if opts.encode.embed_metadata && opts.xmp == XmpEmbed::All && !doc.metadata.text.is_empty() {
                 warnings.push("text metadata is not supported by the palette PNG exporter; it will be dropped".into());
             }
@@ -2639,7 +2849,7 @@ mod streamed_png_tests {
         let mut top = layer(&doc, &[(Rect::new(40, 100, 260, 650), &[0.2, 0.7, 0.3, 0.5])]);
         top.opacity = 0.7;
         top.blend = BlendMode::Multiply;
-        doc.layers = vec![bottom, top];
+        doc.layers = vec![bottom, top].into();
         assert!(opaque_bottom(&doc));
         for xmp in [XmpEmbed::All, XmpEmbed::None] {
             let r = same_as_whole(&doc, 256, &ExportOptions { xmp, ..Default::default() });
@@ -2652,14 +2862,14 @@ mod streamed_png_tests {
         // Transparent RGBA, opaque CMYK (written as sRGB through its profile), 16-bit gray and
         // float RGB out of range (written with 16 bits, clipped, with the warning).
         let mut rgba = Document::new("rgba", Size::new(130, 333), ColorMode::Rgb, SampleType::U8);
-        rgba.layers = vec![layer(&rgba, &[(Rect::new(10, 20, 120, 300), &[0.3, 0.6, 0.9, 0.4])])];
+        rgba.layers = vec![layer(&rgba, &[(Rect::new(10, 20, 120, 300), &[0.3, 0.6, 0.9, 0.4])])].into();
         let mut cmyk = Document::new("cmyk", Size::new(97, 211), ColorMode::Cmyk, SampleType::U8);
         cmyk.icc_profile = Some(craft_cms::Builtin::CoatedCmyk.profile().to_bytes());
-        cmyk.layers = vec![layer(&cmyk, &[(cmyk.bounds(), &[0.3, 0.6, 0.1, 0.2, 1.0]), (Rect::new(0, 50, 97, 99), &[0.0, 0.9, 0.9, 0.0, 1.0])])];
+        cmyk.layers = vec![layer(&cmyk, &[(cmyk.bounds(), &[0.3, 0.6, 0.1, 0.2, 1.0]), (Rect::new(0, 50, 97, 99), &[0.0, 0.9, 0.9, 0.0, 1.0])])].into();
         let mut gray = Document::new("gray", Size::new(64, 190), ColorMode::Grayscale, SampleType::U16);
-        gray.layers = vec![layer(&gray, &[(gray.bounds(), &[0.25, 1.0]), (Rect::new(0, 0, 64, 77), &[0.6123, 1.0])])];
+        gray.layers = vec![layer(&gray, &[(gray.bounds(), &[0.25, 1.0]), (Rect::new(0, 0, 64, 77), &[0.6123, 1.0])])].into();
         let mut hdr = Document::new("hdr", Size::new(50, 120), ColorMode::Rgb, SampleType::F32);
-        hdr.layers = vec![layer(&hdr, &[(hdr.bounds(), &[1.5, 0.25, -0.1, 1.0])])];
+        hdr.layers = vec![layer(&hdr, &[(hdr.bounds(), &[1.5, 0.25, -0.1, 1.0])])].into();
         for doc in [&rgba, &cmyk, &gray, &hdr] {
             assert!(single_layer(doc).is_some(), "{}", doc.name);
             same_as_whole(doc, 37, &ExportOptions::default());
@@ -2681,7 +2891,7 @@ mod streamed_png_tests {
             density: 1.0,
             feather: 0.0,
         });
-        doc.layers = vec![bottom, layer(&doc, &[(Rect::new(0, 0, 40, 40), &[1.0, 0.0, 0.0, 1.0])])];
+        doc.layers = vec![bottom, layer(&doc, &[(Rect::new(0, 0, 40, 40), &[1.0, 0.0, 0.0, 1.0])])].into();
         assert!(!opaque_bottom(&doc));
         let whole = decoded(&export_flat(&doc, Format::Png, &ExportOptions::default()).unwrap().bytes);
         let streamed = decoded(&export_png_streamed(&doc, &ExportOptions::default(), &Interrupt::NONE, 256).unwrap().bytes);
@@ -2699,7 +2909,7 @@ mod streamed_png_tests {
         let mut hole = layer(&doc, &[(Rect::new(8, 800, 56, 960), &[1.0, 1.0, 1.0, 1.0])]);
         hole.fill_opacity = 0.0;
         hole.advanced.knockout = photocraft_doc::Knockout::Deep;
-        doc.layers = vec![bottom, hole];
+        doc.layers = vec![bottom, hole].into();
         assert!(opaque_bottom(&doc));
         assert!(stream_png(&doc, &ExportOptions::default(), &Interrupt::NONE, false, 256, &mut 0.0).unwrap().is_none());
         let r = same_as_whole(&doc, 256, &ExportOptions::default());
@@ -2717,7 +2927,7 @@ mod streamed_png_tests {
     #[test]
     fn interlacing_is_turned_off_with_a_warning() {
         let mut doc = Document::new("interlaced", Size::new(40, 30), ColorMode::Rgb, SampleType::U8);
-        doc.layers = vec![layer(&doc, &[(doc.bounds(), &[0.5, 0.5, 0.5, 1.0])])];
+        doc.layers = vec![layer(&doc, &[(doc.bounds(), &[0.5, 0.5, 0.5, 1.0])])].into();
         let mut opts = ExportOptions::default();
         opts.encode.png_interlaced = true;
         let r = export_png_streamed(&doc, &opts, &Interrupt::NONE, 7).unwrap();
@@ -2729,7 +2939,7 @@ mod streamed_png_tests {
     #[test]
     fn a_cancelled_stream_stops_with_cancelled() {
         let mut doc = Document::new("cancel", Size::new(40, 30), ColorMode::Rgb, SampleType::U8);
-        doc.layers = vec![layer(&doc, &[(doc.bounds(), &[0.5, 0.5, 0.5, 1.0])])];
+        doc.layers = vec![layer(&doc, &[(doc.bounds(), &[0.5, 0.5, 0.5, 1.0])])].into();
         let yes = || true;
         let r = export_png_streamed(&doc, &ExportOptions::default(), &Interrupt::cancel_only(&yes), 7);
         assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
@@ -3078,6 +3288,20 @@ mod fused_tile_tests {
         assert!(matches!(r, Err(IoError::Cancelled)));
         let r = import_flat_with("t", broken, &Interrupt::NONE);
         assert!(matches!(&r, Err(e) if !matches!(e, IoError::Cancelled)), "{:?}", r.map(|_| ()));
+    }
+
+    #[test]
+    fn a_cancel_while_a_palette_png_is_read_for_its_indices_fails_the_open() {
+        // Red, white, white: two entries share a colour, so once the pixels are built the open
+        // reads the file again for each pixel's entry (#14342). A cancel raised then still counts.
+        let png = codecs::encode_png_indexed(4, 2, &[0, 1, 2, 2, 0, 1, 2, 2], &[[255, 0, 0], [255, 255, 255], [255, 255, 255]], None, None, None).unwrap();
+        let last = std::sync::Mutex::new(0.0f32);
+        let progress = |f: f32| *last.lock().unwrap() = f;
+        let pixels_built = || *last.lock().unwrap() >= 0.95;
+        let r = import_flat_with("t.png", &png, &Interrupt::new(&pixels_built, &progress));
+        assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
+        let r = import_flat_with("t.png", &png, &Interrupt::NONE).unwrap();
+        assert!(r.document.color_indices.is_some(), "the file was read for its indices");
     }
 
     #[test]

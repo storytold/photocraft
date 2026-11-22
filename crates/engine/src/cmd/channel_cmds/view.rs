@@ -5,7 +5,7 @@ use super::{AlphaChannel, Color, ColorIndicates, ColorMode, DocState, Document, 
 // View state
 
 /// What pixel commands edit (Channels panel click / ⌘2…⌘9).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase", tag = "kind", content = "index")]
 pub enum ChannelTarget {
     /// The layers (all colour channels). In Quick Mask mode this edits the Quick Mask.
@@ -22,7 +22,7 @@ pub enum ChannelTarget {
 }
 
 /// Per-document Channels panel state: the target and the eye toggles. Not part of history.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelView {
     pub target: ChannelTarget,
@@ -98,6 +98,9 @@ pub(crate) fn fix_view(st: &mut DocState) {
     let n = st.doc.channels.len();
     let colors = color_count(&st.doc);
     let quick = st.doc.quick_mask.is_some();
+    let active = st.active_layer.and_then(|id| st.doc.layer(id));
+    let missing_layer_mask = active.is_none_or(|l| l.mask.is_none());
+    let missing_vector_mask = active.is_none_or(|l| l.vector_mask.is_none());
     {
         let v = &mut st.channel_view;
         v.alpha_visible.truncate(n);
@@ -106,10 +109,10 @@ pub(crate) fn fix_view(st: &mut DocState) {
         match v.target {
             ChannelTarget::Alpha(i) if i >= n => v.target = ChannelTarget::Composite,
             ChannelTarget::Color(k) if k >= colors || colors < 2 => v.target = ChannelTarget::Composite,
-            ChannelTarget::LayerMask if st.active_layer.and_then(|id| st.doc.layer(id)).is_none_or(|l| l.mask.is_none()) => {
+            ChannelTarget::LayerMask if missing_layer_mask => {
                 v.target = ChannelTarget::Composite;
             }
-            ChannelTarget::VectorMask if st.active_layer.and_then(|id| st.doc.layer(id)).is_none_or(|l| l.vector_mask.is_none()) => {
+            ChannelTarget::VectorMask if missing_vector_mask => {
                 v.target = ChannelTarget::Composite;
             }
             _ => {}
@@ -135,15 +138,12 @@ pub(crate) fn fix_view(st: &mut DocState) {
     }
 }
 
-/// Bump the revision for a view-only change without dirtying a clean document.
+/// Bump the revision for a view-only change without dirtying a clean document. The channels
+/// shown change the picture, so the whole canvas is drawn again.
 pub(super) fn touch(st: &mut DocState) {
-    let clean = st.saved_revision == st.revision;
-    st.revision += 1;
-    st.view_revision += 1;
-    if clean {
-        st.saved_revision = st.revision;
-    }
+    st.bump_view_revision(!st.is_dirty());
     st.last_damage = None;
+    st.record_damage();
 }
 
 // ---------------------------------------------------------------------------------------------

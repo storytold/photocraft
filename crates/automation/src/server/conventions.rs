@@ -9,7 +9,7 @@ use rmcp::service::RequestContext;
 
 const DOCUMENT: &str = "photocraft://document";
 const COMMANDS: &str = "photocraft://commands";
-const INSTRUCTIONS: &str = "PhotoCraft image editor. Start with doc_new/doc_open, discover ids and parameter docs with command_list, edit with command_run or command_batch (one history step per command). Inspect with doc_inspect and render_preview; doc_save writes native .pcraft or exports by extension. File paths are relative to the read/write roots granted at launch. ui_inspect/ui_screenshot and other ui_* tools require bridge mode. Read photocraft://document and photocraft://commands for live JSON state.";
+const INSTRUCTIONS: &str = "PhotoCraft image editor. Start with doc_new/doc_open, discover ids and parameter docs with command_list, edit with command_run or command_batch (one history step per command). Inspect with doc_inspect and render_preview; doc_save writes native .pcraft or exports by extension. File paths are relative to the read/write roots granted at launch; agent_folders tells where they are. ui_inspect/ui_screenshot and other ui_* tools require bridge mode. Read photocraft://document and photocraft://commands for live JSON state.";
 
 fn annotated(mut tool: Tool) -> Tool {
     let words = tool.name.replace('_', " ");
@@ -17,7 +17,15 @@ fn annotated(mut tool: Tool) -> Tool {
     let title = chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default();
     let read = matches!(
         tool.name.as_ref(),
-        "command_list" | "doc_inspect" | "session_list" | "render_preview" | "doc_render_preview" | "ui_inspect" | "ui_screenshot" | "jobs_list"
+        "agent_folders"
+            | "command_list"
+            | "doc_inspect"
+            | "session_list"
+            | "render_preview"
+            | "doc_render_preview"
+            | "ui_inspect"
+            | "ui_screenshot"
+            | "jobs_list"
     );
     // Changes state without discarding anything: the scoped exports refuse to overwrite a file,
     // and switching the active document edits nothing.

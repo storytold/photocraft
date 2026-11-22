@@ -1424,6 +1424,12 @@ fn printers(s: &mut Session, _: &Value) -> Result<Value> {
 }
 
 fn printer_page(_: &mut Session, p: &Value) -> Result<Value> {
+    page_of_printer(p, printing_disabled())
+}
+
+/// `file.print.page` with printing turned off or not (`disabled`). A test passes `false` to reach the printer route,
+/// which `printing_disabled` never is once a test of the process or CI's `PHOTOCRAFT_NO_PRINT` turned it off.
+fn page_of_printer(p: &Value, disabled: bool) -> Result<Value> {
     // Checked before the printer, so a bad value is the error whether or not a printer answers.
     let landscape = match p.get("orientation").filter(|v| !v.is_null()) {
         None => None,
@@ -1433,8 +1439,13 @@ fn printer_page(_: &mut Session, p: &Value) -> Result<Value> {
             _ => return Err(bad("file.print.page", "orientation is \"portrait\" or \"landscape\"")),
         },
     };
-    let printer = printer_name(p)?;
     let mut settings = printer_settings(p)?;
+    // A driver query is still a call into a printer driver, which can hang (and holds SPOOLER
+    // while it does), so a process that turned printing off asks no driver here either.
+    if disabled {
+        return Err(other("printing is disabled in this process (disable_printing or PHOTOCRAFT_NO_PRINT); file.print.page asks no printer driver"));
+    }
+    let printer = printer_name(p)?;
     if let Some(landscape) = landscape {
         let base = match settings {
             Some(s) => s,
@@ -1451,11 +1462,14 @@ fn printer_page(_: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
-/// Set once by test harnesses (the panic hunt) so no command in the process can reach a printer.
+/// Set once by test harnesses (the panic hunt) so no command in the process can reach a printer
+/// or its driver: `file.print` and `file.printOneCopy` refuse to spool, and `file.print.page`
+/// refuses to ask a driver for its page.
 static PRINTING_DISABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Refuse to spool anything from this process from now on (tests, fuzzing). The
-/// `PHOTOCRAFT_NO_PRINT` environment variable does the same for a whole shell (CI).
+/// Refuse to spool anything, or ask a printer driver for its page, from this process from now on
+/// (tests, fuzzing). The `PHOTOCRAFT_NO_PRINT` environment variable does the same for a whole
+/// shell (CI).
 pub fn disable_printing() {
     PRINTING_DISABLED.store(true, std::sync::atomic::Ordering::Relaxed);
 }
@@ -1506,7 +1520,7 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = std::path::absolute(dir).map_or_else(|_| dir.to_string(), |d| d.to_string_lossy().into_owned());
     let dir = crate::file_cmds::forward_slashes(dir);
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let doc = (*d.doc).clone();
+    let mut doc = (*d.doc).clone();
     let document = d.path.clone();
     let name = stem(&d.path.clone().unwrap_or_else(|| doc.name.clone()));
     // The native format keeps external links; our PSD writer has no `lnkE` (external linked
@@ -1521,6 +1535,8 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     // Copy every linked file once; relink the copy of the document to the copies.
     let mut copied: Vec<(String, String)> = Vec::new();
     let mut relinks: Vec<(photocraft_doc::LayerId, String)> = Vec::new();
+    // (layer, the link's old base name, the base name its copy got), for copies renamed by a clash.
+    let mut renames: Vec<(photocraft_doc::LayerId, String, String)> = Vec::new();
     let mut missing = Vec::new();
     for (_, _, l) in doc.walk() {
         let LayerContent::Smart(so) = &l.content else { continue };
@@ -1576,7 +1592,19 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
         };
+        if file_name(path) != file_name(&target) {
+            renames.push((l.id, stem(path), stem(&target)));
+        }
         relinks.push((l.id, target));
+    }
+    // A layer named after its link's old file name takes the copy's new name (the packaged copy
+    // only; the open document keeps its names).
+    for (id, old, new) in &renames {
+        if let Some(layer) = doc.layer_mut(*id)
+            && let Some(rest) = layer.name.strip_prefix(old.as_str())
+        {
+            layer.name = format!("{new}{rest}");
+        }
     }
     let mut t = Session::new();
     t.add_document(doc, None);
@@ -1651,16 +1679,21 @@ pub fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
             s.push_str("1 XR\n");
             let (x, y) = pt(sp.knots[0].anchor.x, sp.knots[0].anchor.y);
             s.push_str(&format!("{x:.4} {y:.4} m\n"));
-            for seg in sp.segments() {
+            for (i, seg) in sp.segments().into_iter().enumerate() {
                 let [a, c1, c2, b] = seg;
                 let straight = c1 == a && c2 == b;
+                // The operator follows the anchor the segment ends on: lower case for a smooth
+                // one. The closing segment of a closed subpath ends on the first knot.
+                let smooth_end = sp.knots[(i + 1) % sp.knots.len()].smooth;
                 let (bx, by) = pt(b.x, b.y);
                 if straight {
-                    s.push_str(&format!("{bx:.4} {by:.4} L\n"));
+                    let op = if smooth_end { 'l' } else { 'L' };
+                    s.push_str(&format!("{bx:.4} {by:.4} {op}\n"));
                 } else {
+                    let op = if smooth_end { 'c' } else { 'C' };
                     let (x1, y1) = pt(c1.x, c1.y);
                     let (x2, y2) = pt(c2.x, c2.y);
-                    s.push_str(&format!("{x1:.4} {y1:.4} {x2:.4} {y2:.4} {bx:.4} {by:.4} C\n"));
+                    s.push_str(&format!("{x1:.4} {y1:.4} {x2:.4} {y2:.4} {bx:.4} {by:.4} {op}\n"));
                 }
             }
             // Unpainted: `n` closes the path, `N` leaves it open.
@@ -1779,5 +1812,12 @@ mod paths_export_document_bounds_tests;
 mod paths_export_path_blocks_tests;
 
 #[cfg(test)]
+#[path = "print_cmds/paths_export_smooth_operators_tests.rs"]
+mod paths_export_smooth_operators_tests;
+
+#[cfg(test)]
 #[path = "print_cmds/package_clash_name_tests.rs"]
 mod package_clash_name_tests;
+#[cfg(test)]
+#[path = "print_cmds/package_layer_rename_tests.rs"]
+mod package_layer_rename_tests;

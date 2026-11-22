@@ -8,6 +8,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+craft-tracked = { workspace = true, features = ["serde"] }
+craft-ui-macros = { workspace = true }
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 photocraft-raster = { workspace = true }
