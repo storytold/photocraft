@@ -24,13 +24,13 @@ fn vertical(app: &PhotocraftApp) -> Vec<f64> {
 #[test]
 fn the_menu_cache_follows_the_selected_guide() {
     let mut app = app();
-    let none = crate::native_menu::state_hash(&app, None);
+    let none = crate::menus::facts::key(&app);
     crate::guide_select::select(&mut app, true, 0);
-    let one = crate::native_menu::state_hash(&app, None);
+    let one = crate::menus::facts::key(&app);
     assert_ne!(none, one, "selecting a guide changes the menu state");
     assert!(item(&app, "view.clearSelectedGuides").enabled);
     crate::guide_select::clear(&mut app);
-    assert_eq!(crate::native_menu::state_hash(&app, None), none);
+    assert_eq!(crate::menus::facts::key(&app), none);
     assert!(!item(&app, "view.clearSelectedGuides").enabled);
 }
 

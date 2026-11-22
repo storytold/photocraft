@@ -85,3 +85,44 @@ fn the_history_brush_keeps_the_status_bar() {
     assert!(alerts(&app).is_empty(), "{:?}", alerts(&app));
     assert!(!app.ui.status.contains("art history"), "{}", app.ui.status);
 }
+
+/// Targets `layer`'s mask, as a click on the mask thumbnail does.
+fn target_the_mask(app: &mut PhotocraftApp) {
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.session.active_mut().unwrap().channel_view.target = photocraft_engine::channel_cmds::ChannelTarget::LayerMask;
+}
+
+/// The alerts were measured on a layer's pixels only: a hidden layer with its mask targeted keeps
+/// the status bar's text.
+#[test]
+fn a_hidden_layer_with_its_mask_targeted_keeps_the_status_bar() {
+    let mut app = art_history();
+    let id = active(&app);
+    target_the_mask(&mut app);
+    app.run("layer.setProps", json!({"layer": id, "visible": false})).unwrap();
+    let before = steps(&app);
+    stroke(&mut app);
+    assert!(alerts(&app).is_empty(), "{:?}", alerts(&app));
+    assert_eq!(steps(&app), before);
+    assert!(app.ui.status_error && app.ui.status.contains("target layer is hidden"), "{:?}", app.ui.status);
+    assert!(!app.ui.status.contains("art history"), "{}", app.ui.status);
+}
+
+/// A release-time refusal of a mask target stays in the status bar too, here the 32-bit one;
+/// the same refusal on the layer's pixels is an alert.
+#[test]
+fn a_release_time_refusal_of_a_mask_target_keeps_the_status_bar() {
+    const BITS32: &str =
+        "Could not use the art history brush because it does not work with 32 bit per channel images (convert image to 8 or 16 bit per channel to edit).";
+    let mut app = art_history();
+    app.run("image.mode.bits32", json!({})).unwrap();
+    app.run("history.setSource", json!({"state": steps(&app)})).unwrap();
+    refused(&mut app, BITS32);
+    target_the_mask(&mut app);
+    app.run("history.setSource", json!({"state": steps(&app)})).unwrap();
+    let before = steps(&app);
+    stroke(&mut app);
+    assert!(alerts(&app).is_empty(), "{:?}", alerts(&app));
+    assert_eq!(steps(&app), before);
+    assert!(app.ui.status_error && app.ui.status == BITS32, "{:?}", app.ui.status);
+}

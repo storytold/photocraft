@@ -15,8 +15,8 @@ use photocraft_geom::{Affine, Rect};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, color_param, int, int_i32};
-use crate::file_cmds::{SaveOpts, encode, f64_param, join, native_doc, sanitize, save_doc, stem, str_param, write_file};
+use crate::commands::{CommandSpec, color_param, int, int_i32, parse_hex};
+use crate::file_cmds::{encode, f64_param, join, native_doc, sanitize, stem, str_param, write_file};
 use crate::{EngineError, Result, Session};
 
 /// Artboard size presets (name, width, height) in pixels, Photoshop's common devices and pages.
@@ -695,9 +695,13 @@ fn overlapping_boards(doc: &Document, id: LayerId, rect: Rect) -> Vec<Layer> {
             continue;
         }
         let mut board = l.clone();
+        // The board's own shadow or glow is built from all its layers, so they stay whole.
+        let fx = photocraft_compose::effects::has_effects(&board);
         if let LayerContent::Group(g) = &mut board.content {
             g.artboard = None;
-            cut_pixels(&mut g.children, overlap, 0);
+            if !fx {
+                cut_pixels(&mut g.children, overlap, 0);
+            }
         }
         let bg = ab.background.rgba();
         let mut group = if stacks_like_its_layers(&board) {
@@ -778,6 +782,11 @@ fn cut_pixels(layers: &mut [Layer], keep: Rect, depth: usize) {
 /// board that can't be exported fails the export without leaving a partial set behind. With
 /// `overlapping`, each file also holds the boards above that overlap it ([`overlapping_boards`]).
 fn chosen_documents(doc: &Document, p: &Value, overlapping: bool) -> Result<Vec<Document>> {
+    Ok(chosen_board_documents(doc, p, overlapping)?.into_iter().map(|(_, one)| one).collect())
+}
+
+/// [`chosen_documents`], each with the id of the board it was built from.
+fn chosen_board_documents(doc: &Document, p: &Value, overlapping: bool) -> Result<Vec<(LayerId, Document)>> {
     let mut out = Vec::new();
     for id in chosen_artboards(doc, p) {
         let Some(mut one) = artboard_document(doc, id)? else { continue };
@@ -790,9 +799,22 @@ fn chosen_documents(doc: &Document, p: &Value, overlapping: bool) -> Result<Vec<
                 one.layers.push(group);
             }
         }
-        out.push(one);
+        out.push((id, one));
     }
     Ok(out)
+}
+
+/// `"content"`: `"overlapping"` (Include Overlapping Areas, the default) or `"artboard"` (Artboard
+/// Content Only).
+fn overlapping_param(p: &Value, cmd: &str) -> Result<bool> {
+    match p.get("content") {
+        None | Some(Value::Null) => Ok(true),
+        Some(v) => match v.as_str() {
+            Some("overlapping") => Ok(true),
+            Some("artboard") => Ok(false),
+            _ => Err(bad(cmd, format!("`content` must be \"overlapping\" or \"artboard\", not {v}"))),
+        },
+    }
 }
 
 /// The artboards an export covers: `"artboards": [ids]`, else all, top of the Layers panel first.
@@ -804,6 +826,148 @@ fn chosen_artboards(doc: &Document, p: &Value) -> Vec<LayerId> {
             all.into_iter().filter(|id| want.contains(&id.0)).collect()
         }
         _ => all,
+    }
+}
+
+/// Artboards to Files' Include Artboard Name and its Name Options (#13637).
+struct NameBorder {
+    /// `{"font", "fontStyle", "size", "color"}` for [`crate::type_cmds::apply_char_props`].
+    style: Value,
+    /// The Canvas Extension colour, sRGB with alpha.
+    extension: [f32; 4],
+}
+
+/// Photoshop's largest type size, in points.
+const NAME_SIZE_MAX_PT: f64 = 1296.0;
+
+/// The Name Options of `file.export.artboardsToFiles`, or `None` with `includeName` off. A size
+/// that is not a positive number fails the export, as in Photoshop ("the initial bounding
+/// rectangle is empty"), before any file is written.
+fn name_border_param(p: &Value, cmd: &str) -> Result<Option<NameBorder>> {
+    if !p.get("includeName").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok(None);
+    }
+    // The dialog's Size field takes any text, so a numeric string counts as its number.
+    let size = match p.get("fontSize") {
+        None | Some(Value::Null) => Some(12.0),
+        Some(Value::String(t)) => t.trim().parse::<f64>().ok(),
+        Some(v) => v.as_f64(),
+    };
+    let Some(size) = size.filter(|v| v.is_finite() && *v > 0.0) else {
+        return Err(bad(cmd, "the artboard name size must be a positive number of points"));
+    };
+    let font = p.get("font").and_then(Value::as_str).filter(|f| !f.trim().is_empty()).unwrap_or("Arial");
+    let font_style = p.get("fontStyle").and_then(Value::as_str).filter(|f| !f.trim().is_empty()).unwrap_or("Regular");
+    let white = [1.0, 1.0, 1.0, 1.0];
+    let extension = match p.get("extension") {
+        None | Some(Value::Null) => white,
+        Some(Value::String(c)) if c.eq_ignore_ascii_case("white") => white,
+        Some(Value::String(c)) if c.eq_ignore_ascii_case("black") => [0.0, 0.0, 0.0, 1.0],
+        // The dialog's Other...: the colour picked in its swatch.
+        Some(Value::String(c)) if c.eq_ignore_ascii_case("other") => color_param(cmd, p, "extensionColor", white)?,
+        Some(Value::String(c)) => parse_hex(c).ok_or_else(|| bad(cmd, "`extension` must be \"white\", \"black\", \"#rrggbb\" or [r, g, b]"))?,
+        Some(_) => color_param(cmd, p, "extension", white)?,
+    };
+    let text = color_param(cmd, p, "textColor", [0.0, 0.0, 0.0, 1.0])?.map(|c| c.clamp(0.0, 1.0));
+    let style = json!({"font": font, "fontStyle": font_style, "size": size.min(NAME_SIZE_MAX_PT), "color": text});
+    Ok(Some(NameBorder { style, extension: extension.map(|c| c.clamp(0.0, 1.0)) }))
+}
+
+/// The width of the name border on each side: a twentieth of width plus height, rounded. This
+/// gives exactly Photoshop's measured borders: 18 px for 200 x 150, 20 for 200 x 200 and 60 for
+/// 800 x 400.
+fn name_border_width(w: u32, h: u32) -> u32 {
+    ((f64::from(w) + f64::from(h)) / 20.0).round() as u32
+}
+
+/// Include Artboard Name: extends `one` on all four sides by [`name_border_width`], fills the new
+/// border with the Canvas Extension colour (a bottom layer, so the board keeps its own pixels)
+/// and draws the board's name in the top border, its ink left-aligned with the board's left edge
+/// and centred in the border's height.
+fn add_name_border(one: &mut Document, o: &NameBorder, cmd: &str) -> Result<()> {
+    let (w, h) = (one.size.width, one.size.height);
+    let b = name_border_width(w, h);
+    let grown = |len: u32| b.checked_mul(2).and_then(|d| len.checked_add(d)).and_then(|n| i32::try_from(n).ok().map(|i| (n, i)));
+    let (Some((nw, nwi)), Some((nh, nhi)), Ok(bi)) = (grown(w), grown(h), i32::try_from(b)) else {
+        return Err(bad(cmd, format!("artboard `{}` is too large to add a name border", one.name)));
+    };
+    let before = one.clone();
+    for l in &mut one.layers {
+        crate::commands::translate_layer(&before, l, bi, bi);
+        crate::vector_cmds::translate_vectors(&before, l, f64::from(bi), f64::from(bi));
+    }
+    crate::canvas_geom::transform_doc_marks(one, &Affine::translate(f64::from(bi), f64::from(bi)));
+    one.size = Size::new(nw, nh);
+    let fmt = one.pixel_format();
+    let mut ring = Layer::raster("Canvas Extension", fmt);
+    if let Some(surf) = ring.surface_mut() {
+        let px = photocraft_raster::from_rgba(&fmt, o.extension);
+        let (x1, y1) = (nwi - bi, nhi - bi);
+        for r in [Rect::new(0, 0, nwi, bi), Rect::new(0, y1, nwi, nhi), Rect::new(0, bi, bi, y1), Rect::new(x1, bi, nwi, y1)] {
+            if !r.is_empty() {
+                surf.fill_rect(r, &px);
+            }
+        }
+    }
+    one.layers.insert(0, ring);
+    let mut style = photocraft_doc::text::CharStyle::default();
+    crate::type_cmds::apply_char_props(&mut style, &o.style);
+    let mut t = photocraft_doc::TextLayer { text: one.name.clone(), ..Default::default() };
+    t.runs = vec![photocraft_doc::text::TextRun { len: t.text.len(), style }];
+    t.sync_summary();
+    let dpi = one.resolution_dpi;
+    let layout = photocraft_text::shared().lock().unwrap_or_else(std::sync::PoisonError::into_inner).layout(&t, dpi);
+    if let Some([x0, y0, _, y1]) = photocraft_text::render::ink_bounds(&layout) {
+        let (dx, dy) = ((f64::from(bi) - x0).round(), (f64::from(bi) / 2.0 - (y0 + y1) / 2.0).round());
+        if dx.is_finite() && dy.is_finite() {
+            t.transform = Affine::translate(dx, dy);
+            crate::type_cmds::refresh_at(dpi, fmt, &mut t);
+            // Only the top border takes the name: ink of a size taller than the border is cut
+            // there, never drawn over the board (the file is flat, so the type need not stay
+            // editable).
+            if let Some(cache) = &t.cache {
+                let r = cache.content_bounds().intersect(&Rect::new(0, 0, nwi, bi));
+                if !r.is_empty() {
+                    let px = cache.try_read_region(r).map_err(|e| bad(cmd, e.to_string()))?;
+                    let mut clipped = Surface::new(cache.format());
+                    clipped.write_region(r, &px);
+                    one.layers.push(Layer::new(t.text.clone(), LayerContent::Raster(clipped)));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// File types Include Artboard Name leaves as they are: what it does there is not measured.
+fn keeps_layers(format: &str) -> bool {
+    matches!(format, "psd" | "psb" | "pdf" | "pcraft")
+}
+
+/// What an Artboards to Files `format` writes (the dialog's File Type list).
+enum FileType {
+    /// One file per board through the format's encoder, with this extension.
+    Save(String),
+    /// One indexed (palette) PNG per board, as PNG-8.
+    Png8,
+    /// One truecolour PNG per board, as PNG-24: a Grayscale or other non-RGB board becomes RGB.
+    Png24,
+    /// One multi-page PDF, a page per board, bottom artboard first.
+    Pdf,
+}
+
+impl FileType {
+    /// Any other token is an extension for the encoder to pick by. It must be one plain extension:
+    /// `unknown.png` would name `<board>.unknown.png` and write a PNG, and a `/` would leave `dir`.
+    fn of(format: &str, cmd: &str) -> Result<Self> {
+        Ok(match format {
+            "png8" | "png-8" => FileType::Png8,
+            "png24" | "png-24" => FileType::Png24,
+            "targa" => FileType::Save("tga".into()),
+            "pdf" => FileType::Pdf,
+            ext if !ext.is_empty() && ext.bytes().all(|b| b.is_ascii_alphanumeric()) => FileType::Save(ext.into()),
+            other => return Err(bad(cmd, format!("unknown file type `{other}`"))),
+        })
     }
 }
 
@@ -857,40 +1021,156 @@ fn collision_key(stem: &str) -> String {
 }
 
 /// File › Export › Artboards to Files: one `<prefix><artboard name>.<format>` per board, named by
-/// [`artboard_file_stems`] (`abfiles-testRed-Board.png`, `abfiles-testRed Board.psd`).
+/// [`artboard_file_stems`] (`abfiles-testRed-Board.png`, `abfiles-testRed Board.psd`), or for PDF one
+/// `<prefix>.pdf`.
 fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToFiles";
     let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?.to_string();
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
-    let save = SaveOpts::from_params(s, p, cmd)?;
+    let (save, board) = export_options::parse(s, p, cmd)?;
+    let border = name_border_param(p, cmd)?.filter(|_| !keeps_layers(&format));
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
-    let overlapping = match p.get("content") {
-        None | Some(Value::Null) => true,
-        Some(v) => match v.as_str() {
-            Some("overlapping") => true,
-            Some("artboard") => false,
-            _ => return Err(bad(cmd, format!("`content` must be \"overlapping\" or \"artboard\", not {v}"))),
-        },
-    };
+    let overlapping = overlapping_param(p, cmd)?;
     let doc = d.doc.clone();
-    let boards = chosen_documents(&doc, p, overlapping)?;
-    let names: Vec<&str> = boards.iter().map(|one| one.name.as_str()).collect();
-    let mut files = Vec::new();
-    for (one, name) in boards.iter().zip(artboard_file_stems(&prefix, &names, HYPHENATED_FORMATS.contains(&format.as_str()))) {
-        let path = join(&dir, &format!("{name}.{format}"));
-        save_doc(one, &path, save)?;
-        files.push(path);
-    }
-    if files.is_empty() {
+    let guard = ScratchGuard::new(&doc)?;
+    let mut boards = chosen_documents(&doc, p, overlapping)?;
+    if boards.is_empty() {
         return Err(bad(cmd, "no matching artboards"));
     }
-    Ok(json!({"files": files}))
+    if let Some(o) = &border {
+        for one in &mut boards {
+            add_name_border(one, o, cmd)?;
+        }
+    }
+    let file_type = FileType::of(&format, cmd)?;
+    let truecolour = matches!(file_type, FileType::Png24);
+    let ext = match file_type {
+        FileType::Pdf => {
+            // The reference application's Multi-Page Document: the bottom artboard is page 1, and
+            // each page is the board's pixel size at 72 ppi.
+            let mut pages = Vec::new();
+            for one in boards.iter().rev() {
+                pages.push((one.size.width, one.size.height, 72.0, jpeg_page(one, save.quality.or(Some(10.0)), cmd)?));
+            }
+            let name = if prefix.is_empty() { stem(&doc.name) } else { prefix };
+            let path = join(&dir, &format!("{}.pdf", sanitize(&name)));
+            guard.check()?;
+            write_file(&path, &raster_pdf(&pages))?;
+            return Ok(json!({"files": [path], "warnings": []}));
+        }
+        FileType::Png8 => None,
+        FileType::Png24 => Some("png".to_string()),
+        FileType::Save(ext) => Some(ext),
+    };
+    let extension = ext.as_deref().unwrap_or("png");
+    let names: Vec<&str> = boards.iter().map(|one| one.name.as_str()).collect();
+    let stems = artboard_file_stems(&prefix, &names, HYPHENATED_FORMATS.contains(&extension));
+    let mut files = Vec::new();
+    let mut warnings = Vec::new();
+    for (mut one, name) in boards.into_iter().zip(stems) {
+        // Export Options of the file type (#13636): PNG-8 and PNG-24 take PNG's.
+        board.apply(&mut one, extension);
+        let path = join(&dir, &format!("{name}.{extension}"));
+        let (bytes, warned) = match &ext {
+            Some(_) if truecolour && one.mode != ColorMode::Rgb => encode(&rgb_copy(&one)?, &path, save)?,
+            Some(_) => encode(&one, &path, save)?,
+            // The PNG-8 writer does not interlace; say so, as the palette PNG path of a save does.
+            None if save.png_interlaced == Some(true) => {
+                (png8(&one, cmd)?, vec!["written without interlacing: the PNG-8 exporter does not interlace".to_owned()])
+            }
+            None => (png8(&one, cmd)?, Vec::new()),
+        };
+        guard.check()?;
+        write_file(&path, &bytes)?;
+        warnings.extend(warned.into_iter().map(|w| format!("{name}.{extension}: {w}")));
+        files.push(path);
+    }
+    Ok(json!({"files": files, "warnings": warnings}))
+}
+
+/// The scratch state an artboard export starts from. Building the boards copies their pixels
+/// (and the PNG-8 and PDF paths flatten them) before the encoder's own scratch check sees them,
+/// and a tile that fails to read gives placeholder pixels: [`ScratchGuard::check`] refuses them
+/// before a file is written, as the export pipeline does for a document it reads itself.
+struct ScratchGuard<'a> {
+    doc: &'a Document,
+    generation: u64,
+}
+
+impl<'a> ScratchGuard<'a> {
+    fn new(doc: &'a Document) -> Result<Self> {
+        photocraft_compose::discard_unreadable_pixel_caches();
+        doc.scratch_health().map_err(EngineError::Other)?;
+        Ok(Self { doc, generation: photocraft_raster::spill::read_error_generation() })
+    }
+
+    /// An error when a scratch read failed since [`ScratchGuard::new`], or the document's own
+    /// pixels are unreadable.
+    fn check(&self) -> Result<()> {
+        photocraft_raster::spill::check_since(self.generation).and_then(|()| self.doc.scratch_health()).map_err(EngineError::Other)
+    }
+}
+
+/// `one` as an indexed PNG: Generate Assets' PNG-8 (selective palette, no dither, transparency kept).
+fn png8(one: &Document, cmd: &str) -> Result<Vec<u8>> {
+    use crate::web_cmds::{WebFormat, WebMetadata, WebSettings, optimize, web_document};
+    let st = WebSettings {
+        format: WebFormat::Png8,
+        dither: photocraft_algo::quantize::Dither::None,
+        matte: None,
+        metadata: WebMetadata::None,
+        ..WebSettings::default()
+    };
+    crate::file_cmds::check_flattenable(one, cmd)?;
+    let (wdoc, _, _) = web_document(one, &json!({}), &st)?;
+    let buf = photocraft_compose::flatten(&wdoc);
+    Ok(optimize(&buf.px, wdoc.size.width as usize, wdoc.bounds(), &st, None, None, None, wdoc.resolution_dpi, false)?.bytes)
+}
+
+/// `one` converted to RGB (its depth, layers and transparency kept), for a truecolour file.
+fn rgb_copy(one: &Document) -> Result<Document> {
+    use crate::web_cmds::{WebSettings, web_document};
+    Ok(web_document(one, &json!({}), &WebSettings { convert_to_srgb: false, ..WebSettings::default() })?.0)
+}
+
+/// `one` flattened over white as a JPEG, for a PDF page. A board past the compositor's render
+/// limit is refused before it is flattened (the flatten would be empty).
+fn jpeg_page(one: &Document, quality: Option<f64>, cmd: &str) -> Result<Vec<u8>> {
+    Ok(jpeg_page_masked(one, quality, false, cmd)?.0)
+}
+
+/// [`jpeg_page`] and, when `masked`, the page's [`soft_mask`] taken from the composite before it
+/// goes over white.
+fn jpeg_page_masked(one: &Document, quality: Option<f64>, masked: bool, cmd: &str) -> Result<(Vec<u8>, Option<Vec<u8>>)> {
+    crate::file_cmds::check_flattenable(one, cmd)?;
+    let composite = photocraft_compose::flatten(one);
+    let mask = if masked { soft_mask(&composite.px)? } else { None };
+    let buf = composite.over_background([1.0, 1.0, 1.0]);
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
+    let mut flat = Document::new(&one.name, one.size, ColorMode::Rgb, SampleType::U8);
+    let mut surf = Surface::new(fmt);
+    let vals: Vec<f32> = buf.px.iter().flat_map(|px| photocraft_raster::from_rgba(&fmt, *px)).collect();
+    surf.write_region(one.bounds(), &vals);
+    flat.layers.push(Layer::new("Background", LayerContent::Raster(surf)));
+    Ok((encode(&flat, "page.jpg", quality)?.0, mask))
 }
 
 /// A minimal PDF with one page per JPEG image: (width px, height px, dpi, JPEG bytes).
 /// Pages are sized so the image prints at its resolution.
 pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
+    let pages: Vec<PdfPage> = pages.iter().map(|(w, h, dpi, jpeg)| (*w, *h, *dpi, jpeg.clone(), None)).collect();
+    raster_pdf_masked(&pages)
+}
+
+/// One page of [`raster_pdf_masked`]: width px, height px, dpi, JPEG bytes and, when the page
+/// has transparency, its alpha as a Flate-compressed 8-bit DeviceGray image of the same size.
+type PdfPage = (u32, u32, f32, Vec<u8>, Option<Vec<u8>>);
+
+/// [`raster_pdf`] where a page may carry a soft mask (`/SMask`). The mask has `/Matte [1 1 1]`:
+/// the page's colours are already composited over white, so a viewer that honours the mask
+/// recovers the true colours, and one that ignores it shows today's white page.
+fn raster_pdf_masked(pages: &[PdfPage]) -> Vec<u8> {
     let mut out: Vec<u8> = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
     let mut offsets: Vec<usize> = Vec::new();
     let mut obj = |out: &mut Vec<u8>, body: &[u8]| {
@@ -899,14 +1179,24 @@ pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
         out.extend_from_slice(body);
         out.extend_from_slice(b"\nendobj\n");
     };
-    // Objects: 1 catalog, 2 page tree, then per page: page, contents, image.
-    let kids: Vec<String> = (0..pages.len()).map(|i| format!("{} 0 R", 3 + i * 3)).collect();
+    // Objects: 1 catalog, 2 page tree, then per page: page, contents, image and, when the page
+    // has one, its soft mask; numbered in that order.
+    let mut next = 3;
+    let first: Vec<usize> = pages
+        .iter()
+        .map(|page| {
+            let n = next;
+            next += if page.4.is_some() { 4 } else { 3 };
+            n
+        })
+        .collect();
+    let kids: Vec<String> = first.iter().map(|n| format!("{n} 0 R")).collect();
     obj(&mut out, b"<< /Type /Catalog /Pages 2 0 R >>");
     obj(&mut out, format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids.join(" "), pages.len()).as_bytes());
-    for (i, (w, h, dpi, jpeg)) in pages.iter().enumerate() {
+    for ((w, h, dpi, jpeg, mask), n) in pages.iter().zip(first) {
         let k = 72.0 / f64::from(dpi.max(1.0));
         let (pw, ph) = (f64::from(*w) * k, f64::from(*h) * k);
-        let (contents, image) = (4 + i * 3, 5 + i * 3);
+        let (contents, image, smask) = (n + 1, n + 2, n + 3);
         obj(
             &mut out,
             format!(
@@ -916,14 +1206,25 @@ pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
         );
         let stream = format!("q {pw:.3} 0 0 {ph:.3} 0 0 cm /Im0 Do Q");
         obj(&mut out, format!("<< /Length {} >>\nstream\n{stream}\nendstream", stream.len()).as_bytes());
+        let soft = if mask.is_some() { format!(" /SMask {smask} 0 R") } else { String::new() };
         let mut img = format!(
-            "<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {} >>\nstream\n",
+            "<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceRGB /BitsPerComponent 8{soft} /Filter /DCTDecode /Length {} >>\nstream\n",
             jpeg.len()
         )
         .into_bytes();
         img.extend_from_slice(jpeg);
         img.extend_from_slice(b"\nendstream");
         obj(&mut out, &img);
+        if let Some(mask) = mask {
+            let mut m = format!(
+                "<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceGray /BitsPerComponent 8 /Matte [1 1 1] /Filter /FlateDecode /Length {} >>\nstream\n",
+                mask.len()
+            )
+            .into_bytes();
+            m.extend_from_slice(mask);
+            m.extend_from_slice(b"\nendstream");
+            obj(&mut out, &m);
+        }
     }
     let xref = out.len();
     out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len() + 1).as_bytes());
@@ -934,32 +1235,139 @@ pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
-/// File › Export › Artboards to PDF: one page per board (flattened over white, JPEG-encoded).
+/// Leaves out `one`'s board fill for Artboards to PDF's Include Background in Export unticked
+/// (#13648), so what the board's layers don't cover becomes transparent. Only what the reference
+/// application was measured with: a white board with layers in an 8-bit RGB document. Anything
+/// else (an empty board, another fill, other modes and depths) keeps today's opaque page; the
+/// return value says whether the fill was left out.
+fn drop_white_fill(one: &mut Document) -> bool {
+    if one.mode != ColorMode::Rgb || one.depth != SampleType::U8 {
+        return false;
+    }
+    let mut dropped = false;
+    for board in &mut one.layers {
+        if board.children().is_some_and(|layers| !layers.is_empty())
+            && let Some(artboard) = board.artboard_mut()
+            && artboard.background == ArtboardBackground::White
+        {
+            artboard.background = ArtboardBackground::Transparent;
+            dropped = true;
+        }
+    }
+    dropped
+}
+
+/// A page's soft mask: its alpha as 8-bit gray, Flate-compressed. `None` when the page is opaque
+/// everywhere, so a board its layers cover entirely keeps today's page.
+fn soft_mask(px: &[[f32; 4]]) -> Result<Option<Vec<u8>>> {
+    let alpha: Vec<u8> = px.iter().map(|p| (p[3].clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+    if alpha.iter().all(|a| *a == 255) {
+        return Ok(None);
+    }
+    let failed = |e: std::io::Error| EngineError::Other(format!("Artboards to PDF: soft mask: {e}"));
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(6));
+    std::io::Write::write_all(&mut z, &alpha).map_err(failed)?;
+    Ok(Some(z.finish().map_err(failed)?))
+}
+
+/// File › Export › Artboards to PDF: one page per board (flattened over white, JPEG-encoded),
+/// all in one file at `path`, or with `"mode": "perArtboard"` one single-page file per board
+/// named by [`pdf_file_stems`]. Every page is encoded before any file is written.
+/// With `"includeBackground": false` a white board's fill is left out and the page gets a soft
+/// mask, so a viewer shows its own background where the board has no pixels.
 fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToPdf";
-    let path = str_param(p, "path", cmd)?.to_string();
+    let per_artboard = match p.get("mode") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(m)) if m == "multiPage" => false,
+        Some(Value::String(m)) if m == "perArtboard" => true,
+        Some(other) => return Err(bad(cmd, format!("\"mode\" must be \"multiPage\" or \"perArtboard\", not {other}"))),
+    };
+    let path = if per_artboard { p.get("path").and_then(Value::as_str).unwrap_or_default().to_string() } else { str_param(p, "path", cmd)?.to_string() };
+    // Document Per Artboard: the folder and prefix default to those of `path` (the dialog's
+    // `<folder>/<document name>.pdf`), so `<folder>/<document name><artboard name>.pdf`.
+    let dir = match p.get("dir").and_then(Value::as_str).filter(|d| !d.is_empty()) {
+        Some(d) => d.to_string(),
+        None if per_artboard && path.is_empty() => return Err(bad(cmd, "missing \"dir\" or \"path\"")),
+        None => folder_of(&path),
+    };
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
+    let prefix = match p.get("prefix").and_then(Value::as_str) {
+        Some(prefix) => prefix.to_string(),
+        None if path.is_empty() => stem(&doc.name),
+        None => stem(&path),
+    };
     let quality = f64_param(p, "quality").or(Some(10.0));
+    let background = p.get("includeBackground").and_then(Value::as_bool).unwrap_or(true);
+    // Reverse Page Order (#13644): the default page order the other way round.
+    let reverse = match p.get("reversePageOrder") {
+        None | Some(Value::Null) => false,
+        Some(v) => v.as_bool().ok_or_else(|| bad(cmd, "`reversePageOrder` must be true or false"))?,
+    };
+    let overlapping = overlapping_param(p, cmd)?;
+    let guard = ScratchGuard::new(&doc)?;
     let mut pages = Vec::new();
+    let mut names = Vec::new();
     // Pages go bottom artboard of the Layers panel first, as in the reference application (#13643);
-    // `chosen_documents` lists them top first, the order Artboards to Files keeps.
-    for one in chosen_documents(&doc, p, false)?.into_iter().rev() {
-        let buf = photocraft_compose::flatten(&one).over_background([1.0, 1.0, 1.0]);
-        let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
-        let mut flat = Document::new(&one.name, one.size, ColorMode::Rgb, SampleType::U8);
-        let mut surf = Surface::new(fmt);
-        let vals: Vec<f32> = buf.px.iter().flat_map(|px| photocraft_raster::from_rgba(&fmt, *px)).collect();
-        surf.write_region(one.bounds(), &vals);
-        flat.layers.push(Layer::new("Background", LayerContent::Raster(surf)));
-        let (jpeg, _) = encode(&flat, "page.jpg", quality)?;
-        pages.push((one.size.width, one.size.height, doc.resolution_dpi, jpeg));
+    // `chosen_board_documents` lists them top first, the order Artboards to Files keeps.
+    for (id, mut one) in chosen_board_documents(&doc, p, overlapping)?.into_iter().rev() {
+        // A hidden board was not measured and keeps today's opaque page. `artboard_document`
+        // shows the board, so its visibility is read from the source.
+        let visible = doc.layer(id).is_some_and(|l| l.visible);
+        let masked = !background && visible && drop_white_fill(&mut one);
+        let (jpeg, mask) = jpeg_page_masked(&one, quality, masked, cmd)?;
+        pages.push((one.size.width, one.size.height, doc.resolution_dpi, jpeg, mask));
+        names.push(one.name);
     }
     if pages.is_empty() {
         return Err(bad(cmd, "no matching artboards"));
     }
-    write_file(&path, &raster_pdf(&pages))?;
-    Ok(json!({"path": path, "pages": pages.len()}))
+    if reverse {
+        pages.reverse();
+        names.reverse();
+    }
+    guard.check()?;
+    if !per_artboard {
+        write_file(&path, &raster_pdf_masked(&pages))?;
+        return Ok(json!({"path": path, "pages": pages.len(), "files": [path]}));
+    }
+    let mut files = Vec::new();
+    for (page, name) in pages.iter().zip(pdf_file_stems(&prefix, &names)) {
+        let file = join(&dir, &format!("{name}.pdf"));
+        write_file(&file, &raster_pdf_masked(std::slice::from_ref(page)))?;
+        files.push(file);
+    }
+    Ok(json!({"pages": pages.len(), "files": files}))
+}
+
+/// The folder part of `path`: `""` for a bare file name, and the root itself for a file at
+/// the root (`/x.pdf` gives `/`, not the working directory).
+fn folder_of(path: &str) -> String {
+    path.rfind(['/', '\\']).map_or(String::new(), |i| path[..i.max(1)].to_string())
+}
+
+/// Document Per Artboard's file names: `<prefix><artboard name>`, spaces kept and no separator
+/// added, with characters a file name can't hold as `_`. A name an earlier board already took,
+/// ignoring letter case, gets the first `-2`, `-3`… no other board's name takes, so every board
+/// keeps a file of its own on case-insensitive file systems; the first board of a name keeps it.
+fn pdf_file_stems(prefix: &str, names: &[String]) -> Vec<String> {
+    // Upper case of lower case also folds `ß`/`ẞ` and `σ`/`ς`/`Σ` together, as NTFS does.
+    let key = |stem: &str| stem.to_lowercase().to_uppercase();
+    let plain: Vec<String> = names.iter().map(|name| sanitize(&format!("{prefix}{name}"))).collect();
+    let mut taken: HashSet<String> = plain.iter().map(|stem| key(stem)).collect();
+    let mut seen = HashSet::new();
+    plain
+        .into_iter()
+        .map(|stem| {
+            if seen.insert(key(&stem)) {
+                return stem;
+            }
+            // At most 2 x names keys are taken, so one of these many suffixes is always free.
+            let last = u64::try_from(names.len()).unwrap_or(u64::MAX).saturating_mul(2).saturating_add(2);
+            (2..=last).map(|n| format!("{stem}-{n}")).find(|candidate| taken.insert(key(candidate))).unwrap_or(stem)
+        })
+        .collect()
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -1021,7 +1429,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToFiles",
             "Artboards to Files…",
             &["File", "Export"],
-            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name ("" = none),"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's file also shows the visible boards above it where they overlap it, each as a plain group with a \"Background for <board>\" layer; artboard: Artboard Content Only),"artboards":[id]? (default all),"quality":0..12?} → {files} (one "<prefix><artboard name>.<format>" per board, no separator or index added: spaces become "-" in PNG, JPEG, BMP, Targa and TIFF and stay in PSD and other formats, characters a file name can't hold become "_", and a name an earlier board already took, ignoring case, gets "-2", "-3"…)"##,
+            r##"{"dir":folder,"format":"png|png24|png8|jpg|bmp|tga|tiff|psd|pdf|…"="png" (png24 = truecolour .png, png8 = indexed .png, tga = Targa; pdf = one multi-page <prefix>.pdf, bottom artboard first, pages at 72 ppi),"prefix":str=document name ("" = none),"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's file also shows the visible boards above it where they overlap it, each as a plain group with a \"Background for <board>\" layer; artboard: Artboard Content Only),"artboards":[id]? (default all),"quality":0..12? (JPEG, and the PDF pages),"iccProfile":bool=true,"bmpBits":24|32? (16 unsupported),"tgaBits":24|32?,"tiffCompression":"none|lzw|zip"="none" ("jpeg" unsupported),"pngInterlaced":bool=false (PNG, PNG-24),"transparency":bool=true (PNG, PNG-8, PNG-24; false: over white, no alpha),"maximizeCompatibility":bool? (PSD),"preserveArtboard":bool=true (PSD; false: a plain group),"includeName":bool=false (Include Artboard Name: a border of (w + h) / 20 px on each side, the name in the top one; psd and pdf keep their layers),"font":family="Arial","fontStyle":"Regular|Italic|Bold|Bold Italic|Black"="Regular","fontSize":pt|numeric str=12 (else an error),"extension":"white|black|other"|"#rrggbb"|[r,g,b]="white" (Canvas Extension; "other" takes "extensionColor":[r,g,b]),"textColor":"#rrggbb"|[r,g,b]=black} → {files, warnings} (warnings: what a file could not hold, each "<file name>: <warning>"; one "<prefix><artboard name>.<extension>" per board, no separator or index added: spaces become "-" in PNG, JPEG, BMP, Targa and TIFF and stay in PSD and other formats, characters a file name can't hold become "_", and a name an earlier board already took, ignoring case, gets "-2", "-3"…)"##,
             export_artboards,
             artboards_to_files
         ),
@@ -1029,22 +1437,34 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.artboardsToPdf",
             "Artboards to PDF…",
             &["File", "Export"],
-            r##"{"path":str (.pdf),"artboards":[id]?,"quality":0..12=10} → {path, pages} (one raster page per board, bottom artboard of the Layers panel first)"##,
+            r##"{"path":str (.pdf; with "mode":"perArtboard" only gives the defaults of "dir" and "prefix"),"mode":"multiPage|perArtboard"="multiPage" (Multi-Page Document: one file at "path"; Document Per Artboard: one single-page file per board, "<dir>/<prefix><artboard name>.pdf", spaces kept, characters a file name can't hold become "_", a name an earlier board already took, ignoring case, gets "-2", "-3"…),"dir":folder=folder of "path","prefix":str=file name of "path" without ".pdf", else the document name,"content":"overlapping|artboard"="overlapping" (Include Overlapping Areas: a board's page also shows the visible boards above it where they overlap it; artboard: Artboard Content Only),"artboards":[id]?,"quality":0..12=10,"includeBackground":bool=true (false: a white board's fill is left out and the page gets a soft mask, so it is transparent where the board's layers have no pixels; an empty board, other fills and documents other than 8-bit RGB keep it),"reversePageOrder":bool=false (the default page order the other way round)} → {path (multi-page), pages, files} (one raster page per board, bottom artboard of the Layers panel first)"##,
             export_artboards,
             artboards_to_pdf
         ),
     ]
 }
 
+#[path = "artboard_cmds/export_options.rs"]
+mod export_options;
+
+#[cfg(test)]
+#[path = "artboard_cmds/export_options_tests.rs"]
+mod export_options_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/file_names_tests.rs"]
 mod file_names_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/file_types_tests.rs"]
+mod file_types_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/first_board_background_tests.rs"]
 mod first_board_background_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/from_group_reset_props_tests.rs"]
 mod from_group_reset_props_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/include_name_tests.rs"]
+mod include_name_tests;
 
 #[cfg(test)]
 #[path = "artboard_cmds/from_layers_history_name_tests.rs"]
@@ -1058,8 +1478,20 @@ mod from_group_hidden_bounds_tests;
 #[path = "artboard_cmds/overlapping_areas_tests.rs"]
 mod overlapping_areas_tests;
 #[cfg(test)]
+#[path = "artboard_cmds/pdf_document_per_artboard_tests.rs"]
+mod pdf_document_per_artboard_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/pdf_include_background_tests.rs"]
+mod pdf_include_background_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/pdf_overlapping_areas_tests.rs"]
+mod pdf_overlapping_areas_tests;
+#[cfg(test)]
 #[path = "artboard_cmds/pdf_page_order_tests.rs"]
 mod pdf_page_order_tests;
+#[cfg(test)]
+#[path = "artboard_cmds/pdf_reverse_page_order_tests.rs"]
+mod pdf_reverse_page_order_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/tests.rs"]
 mod tests;

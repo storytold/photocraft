@@ -19,10 +19,12 @@ use craft::imaging::layer_style::{
 use craft::imaging::ui::layer_style::{ContourEditorDialog, HostedLayerStyle, LayerStyleAsk};
 use craft::theme::Srgba;
 use craft::ui::contract::Entry;
+use craft::ui::contract::Tracked;
 use craft::ui::dialog::{DialogId, DialogResult};
-use craft::ui::patterns::presets::{PresetRow, ThumbInfo};
+use craft::ui::patterns::presets::{PresetFns, PresetRow, PresetSource, ThumbInfo};
 use craft::ui::primitives::ContentPainterCx;
 use craft::ui::primitives::textures::TextureCache;
+use craft::ui::runtime::env::Env;
 use egui::{ColorImage, Pos2, Rect, pos2};
 use photocraft_doc::effects::{FxPaint, GlowSource, GlowTechnique, StrokePosition};
 use photocraft_doc::{Document, Effect, Layer, LayerId};
@@ -31,6 +33,7 @@ use photocraft_engine::pattern_cmds::PatternLibrary;
 use photocraft_engine::presets::styles::StylePreset;
 use serde_json::{Map, Value, json};
 
+use crate::panels::preset_browser::StyleLibrary;
 use crate::{PhotocraftApp, color_picker_ui};
 
 #[cfg(test)]
@@ -507,10 +510,10 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
         .specs(specs)
         .blend_keys(keys)
         .blend_modes(blend_modes(&layer))
-        .patterns(pattern_list(app))
+        .patterns(PresetSource::new(pattern_list(app), PresetFns::new(|patterns, env| pattern_rows(patterns, env))))
         .user_contours(contour::user_contours(app))
-        .sampler(contour::sampler())
-        .style_presets(style_rows(app), style_thumb(app))
+        .sampler(contour::sampler)
+        .style_presets(style_presets(app))
         .gradient_presets(gradient_presets(app))
         .preview_thumb(preview_thumb(app))
         .canvas(crate::canvas::document_display::CanvasHost::primary(app, idx).canvas_id());
@@ -571,16 +574,21 @@ fn blend_keys() -> HashMap<String, String> {
     photocraft_color::BlendMode::LAYER_MODES.into_iter().map(|m| (m.label().to_string(), m.label().to_string())).collect()
 }
 
-/// The patterns a style can use (document's, then the library's).
-pub fn pattern_list(app: &PhotocraftApp) -> Vec<PresetRow<String>> {
+/// The patterns a style can use (document's, then the library's), as (id, name).
+pub fn pattern_list(app: &PhotocraftApp) -> Vec<(String, String)> {
     let mut seen = HashSet::new();
-    let doc_pats = app.session.active().map(|d| d.doc.patterns.clone()).unwrap_or_default();
+    let doc_pats = app.session.active().map(|d| d.doc.patterns.as_slice()).unwrap_or_default();
     doc_pats
         .iter()
         .chain(app.session.patterns.items.iter())
         .filter(|p| seen.insert(p.id.clone()))
-        .map(|p| PresetRow::item(p.id.clone(), p.display_name(), 0))
+        .map(|p| (p.id.clone(), p.display_name().to_string()))
         .collect()
+}
+
+/// One row per pattern of [`pattern_list`], keyed by its id.
+fn pattern_rows(patterns: &[(String, String)], _: &Env) -> Vec<PresetRow<String>> {
+    patterns.iter().map(|(id, name)| PresetRow::item(id.clone(), name.clone(), 0)).collect()
 }
 
 /// The Gradients panel's presets resolved with the tool colours, for the Gradient field's select.
@@ -598,36 +606,39 @@ fn gradient_presets(app: &PhotocraftApp) -> Vec<(String, GradientStops)> {
         .collect()
 }
 
+/// What the Styles page's presets are built from: each style group's name and its styles' names, and the library the
+/// thumbnails draw from, as the app held them when the dialog opened.
+#[derive(craft::ui::contract::MemoProps)]
+struct StylePresets {
+    groups: Vec<(String, Vec<String>)>,
+    library: std::sync::Arc<Tracked<StyleLibrary>>,
+}
+
+/// The Styles page's presets.
+fn style_presets(app: &mut PhotocraftApp) -> PresetSource<'static, String> {
+    let groups = app.session.presets.styles.iter().map(|group| (group.name.clone(), group.items.iter().map(|st| st.name.clone()).collect())).collect();
+    let inputs = StylePresets { groups, library: StyleLibrary::held(app) };
+    PresetSource::new(inputs, PresetFns::new(style_rows).thumb(style_thumb))
+}
+
 /// The Styles page's rows: each group with its presets, presets keyed by name and groups by `group/<name>`.
-fn style_rows(app: &PhotocraftApp) -> Vec<PresetRow<String>> {
+fn style_rows(inputs: &StylePresets, _: &Env) -> Vec<PresetRow<String>> {
     let mut rows = Vec::new();
-    for group in &app.session.presets.styles {
-        rows.push(PresetRow::group(format!("group/{}", group.name), group.name.clone(), 0).count(group.items.len()));
-        rows.extend(group.items.iter().map(|st| PresetRow::item(st.name.clone(), st.name.clone(), 1)));
+    for (group, styles) in &inputs.groups {
+        rows.push(PresetRow::group(format!("group/{group}"), group.clone(), 0).count(styles.len()));
+        rows.extend(styles.iter().map(|name| PresetRow::item(name.clone(), name.clone(), 1)));
     }
     rows
+}
+
+/// Paints a style preset's thumbnail; the Styles panel shares the textures.
+fn style_thumb(inputs: &StylePresets, cx: &ContentPainterCx, rect: Rect, info: ThumbInfo<'_, String>) {
+    inputs.library.paint(cx, rect, info.key);
 }
 
 fn paint_picture(cx: &ContentPainterCx, rect: Rect, key: impl std::hash::Hash + 'static, image: impl FnOnce() -> ColorImage) {
     let texture = TextureCache::texture(cx.painter.ctx(), key, image);
     cx.picture(texture, rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), 0.0);
-}
-
-/// Paints a style preset's thumbnail. The dialog's painter cannot read the app, so it owns the
-/// presets and patterns; a picture is rendered on a texture miss only, under the key the Styles
-/// panel uses, so both share the textures.
-fn style_thumb(app: &PhotocraftApp) -> impl Fn(&ContentPainterCx, Rect, ThumbInfo<'_, String>) + Send + 'static {
-    let presets: Vec<StylePreset> = app.session.presets.styles.iter().flat_map(|g| g.items.iter().cloned()).collect();
-    let patterns = app.session.patterns.clone();
-    move |cx, rect, info| {
-        let Some(style) = presets.iter().find(|s| &s.name == info.key) else { return };
-        let key = ("style", style.name.clone(), style.effects.len(), format!("{:?}{:?}", style.blend, style.fill_opacity));
-        paint_picture(cx, rect, key, || {
-            let mut scratch = Session::new();
-            scratch.patterns = patterns.clone();
-            crate::panels::preset_browser::style_image(&scratch, style)
-        });
-    }
 }
 
 /// Paints the preview swatch: the draft's style on a sample square, rebuilt when its render hash changes.

@@ -316,9 +316,9 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
                     // absurd tree).
                     b.folder.retain(|f| !f.trim().is_empty());
                     b.folder.truncate(crate::brush_preset_cmds::MAX_FOLDER_DEPTH);
-                    match std::sync::Arc::make_mut(&mut s.tools.presets).iter_mut().find(|x| x.name == b.name) {
+                    match std::sync::Arc::make_mut(&mut *s.tools.presets).iter_mut().find(|x| x.name == b.name) {
                         Some(x) => *x = b,
-                        None => std::sync::Arc::make_mut(&mut s.tools.presets).push(b),
+                        None => std::sync::Arc::make_mut(&mut *s.tools.presets).push(b),
                     }
                     nb += 1;
                 }

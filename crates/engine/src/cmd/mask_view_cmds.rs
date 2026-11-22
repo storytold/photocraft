@@ -24,7 +24,7 @@ pub const ID: &str = "view.layerMask";
 pub const OVERLAY_ID: &str = "layer.toggleMaskOverlay";
 
 /// How a shown layer mask is drawn.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub enum MaskViewMode {
     /// The mask alone, as a grayscale image (⌥-click).
@@ -34,7 +34,7 @@ pub enum MaskViewMode {
 }
 
 /// Which layer's mask is shown, and how.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, craft_ui_macros::PlainData)]
 pub struct LayerMaskView {
     pub layer: LayerId,
     pub mode: MaskViewMode,
@@ -71,9 +71,14 @@ pub fn current(st: &DocState) -> Option<LayerMaskView> {
 /// Drop a mask view that no longer applies (another layer became active, the layer or its mask
 /// was deleted, undo).
 pub(crate) fn fix(st: &mut DocState) {
-    if st.channel_view.layer_mask.is_some() && current(st).is_none() {
+    if stale(st) {
         st.channel_view.layer_mask = None;
     }
+}
+
+/// Whether `st` keeps a layer-mask view that no longer applies ([`fix`] ends it).
+pub(crate) fn stale(st: &DocState) -> bool {
+    st.channel_view.layer_mask.is_some() && current(st).is_none()
 }
 
 fn mode_name(v: Option<LayerMaskView>) -> &'static str {
