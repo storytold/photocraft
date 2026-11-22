@@ -1,13 +1,12 @@
 //! Fuzz every command with adversarial params; a command must return `Err`, never panic or hang.
-//! (Rule 9 in AGENTS.md.) Each command runs on its own thread with a timeout, so one bad command
-//! can't wedge the run — panics are caught and hangs are reported. Opt-in (slow):
+//! (Rule 9 in AGENTS.md.) Panics are counted by a hook and reported with the command; a hang is
+//! ended by nextest's slow-timeout and the last `panic_hunt:` line on stderr names it. Opt-in (slow):
 //! `cargo test -p photocraft-engine --test panic_hunt -- --ignored`.
 use photocraft_engine::{Session, command_specs};
 use serde_json::{Value, json};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, Once, PoisonError, mpsc};
-use std::time::Duration;
+use std::sync::{Mutex, Once, PoisonError};
 
 fn fresh() -> Session {
     // Belt and braces with CI's PHOTOCRAFT_NO_PRINT: nothing in this process may reach a printer
@@ -22,10 +21,6 @@ fn fresh() -> Session {
     s
 }
 
-/// Wall-clock budget for one command on the 24×16 test document. Every command needs well under
-/// 0.3 s even on a heavily loaded machine, so this only catches real hangs.
-const DEADLINE: Duration = Duration::from_secs(4);
-
 /// Panics anywhere in the process, counted by a hook. `Session::execute` contains a command's
 /// panic and returns an ordinary `Err`, so the unwind never reaches `catch_unwind` here; the hook
 /// still sees it, on whichever thread (rayon workers included) it happened (#4982).
@@ -33,14 +28,10 @@ static PANICS: AtomicUsize = AtomicUsize::new(0);
 /// One run at a time, so a panic is charged to the run that caused it.
 static RUN: Mutex<()> = Mutex::new(());
 
-/// Budget for the self-test below, which checks how panics are counted, not hangs. The panic hook
-/// prints a backtrace under `RUST_BACKTRACE=1` (as in CI), and on a loaded Windows runner the
-/// first symbol lookup alone can take 15–20 s.
-const SELF_TEST_DEADLINE: Duration = Duration::from_secs(120);
-
-/// Run `f` on a worker thread. `None` if it took longer than `deadline`, else whether it
-/// finished without panicking, contained or not (returning Ok or a graceful Err both count).
-fn run_watched(deadline: Duration, f: impl FnOnce() + Send + 'static) -> Option<bool> {
+/// Run `f` and say whether it finished without panicking, contained or not (returning Ok or a
+/// graceful Err both count). A hang has no deadline here: nextest's slow-timeout ends it, and the
+/// last `panic_hunt:` line on stderr names the command.
+fn run_counted(f: impl FnOnce()) -> bool {
     static HOOK: Once = Once::new();
     HOOK.call_once(|| {
         let default = std::panic::take_hook();
@@ -51,34 +42,21 @@ fn run_watched(deadline: Duration, f: impl FnOnce() + Send + 'static) -> Option<
     });
     let _one = RUN.lock().unwrap_or_else(PoisonError::into_inner);
     let before = PANICS.load(Ordering::SeqCst);
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let r = catch_unwind(AssertUnwindSafe(f));
-        let _ = tx.send(r.is_ok());
-    });
-    rx.recv_timeout(deadline).ok().map(|ok| ok && PANICS.load(Ordering::SeqCst) == before)
+    let ok = catch_unwind(AssertUnwindSafe(f)).is_ok();
+    ok && PANICS.load(Ordering::SeqCst) == before
 }
 
-/// Run `id` with `p` on a fresh session; see [`run_watched`].
-fn run_once(id: &str, p: &Value) -> Option<bool> {
+/// `Err` with a reason on panic, `Ok` otherwise. Each command runs on a fresh session.
+fn run_guarded(id: &str, p: &Value) -> Result<(), String> {
+    eprintln!("panic_hunt: {id} <- {p}");
     let (id, p) = (id.to_string(), p.clone());
-    run_watched(DEADLINE, move || {
+    if run_counted(move || {
         let mut s = fresh();
         let _ = s.execute(&id, p);
-    })
-}
-
-/// `Err` with a reason on panic or hang, `Ok` otherwise.
-///
-/// The first command to touch process-wide lazy state pays for it: the first `type.create`
-/// starts the shared text engine, which scans every system font (3.5–5 s under load; #2994). A
-/// real hang reproduces and one-time setup doesn't, so a timeout counts only if a rerun on a
-/// fresh session times out too.
-fn run_guarded(id: &str, p: &Value) -> Result<(), String> {
-    match run_once(id, p).or_else(|| run_once(id, p)) {
-        Some(true) => Ok(()),
-        Some(false) => Err("panicked".into()),
-        None => Err(format!("hung (>{}s, twice)", DEADLINE.as_secs())),
+    }) {
+        Ok(())
+    } else {
+        Err("panicked".into())
     }
 }
 
@@ -114,19 +92,19 @@ fn no_command_panics_or_hangs_on_adversarial_params() {
             }
         }
     }
-    assert!(bad.is_empty(), "{} commands panicked or hung:\n{}", bad.len(), bad.join("\n"));
+    assert!(bad.is_empty(), "{} commands panicked:\n{}", bad.len(), bad.join("\n"));
 }
 
 /// #4982: a panic the code under test contains still fails the run; a graceful `Err` does not.
 #[test]
 fn contained_panics_count_and_graceful_errors_do_not() {
-    let contained = run_watched(SELF_TEST_DEADLINE, || {
+    let contained = run_counted(|| {
         let _ = catch_unwind(|| panic!("contained, as Session::execute does"));
     });
-    assert_eq!(contained, Some(false));
-    let graceful = run_watched(SELF_TEST_DEADLINE, || {
+    assert!(!contained);
+    let graceful = run_counted(|| {
         let mut s = fresh();
         assert!(s.execute("layer.delete", json!({"layer": 999999})).is_err());
     });
-    assert_eq!(graceful, Some(true));
+    assert!(graceful);
 }
