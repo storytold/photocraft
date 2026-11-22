@@ -289,9 +289,12 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
     let symmetry = s.active().and_then(|st| st.symmetry.clone());
     let (id, brush, zoom) = stroke_target(s, p, brush)?;
     let cmyk = doc_cmyk_space(s);
+    // An end taper needs the whole stroke: the points are smoothed and tapered here, and the
+    // stroke is rendered again (the live stroke couldn't know where it would end).
+    let (brush, pts, tapered) = photocraft_paint::taper::for_commit(brush, pts, zoom);
     // The live stroke the canvas already rendered for exactly these params: take its pixels
     // instead of rendering the whole stroke again (the hitch at pen-up).
-    let live = s.live_commit.take().filter(|l| l.matches(s, cmd, p, &pts));
+    let live = s.live_commit.take().filter(|l| !tapered && l.matches(s, cmd, p, &pts));
     let from_live = live.is_some();
     let dmg = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
         s.edit(label, |doc, _| {
