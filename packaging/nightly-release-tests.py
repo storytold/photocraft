@@ -192,6 +192,47 @@ class DispatchBoundary(unittest.TestCase):
 
 
 class TrustedSourcePreparation(unittest.TestCase):
+    def test_sonar_classifies_only_the_exact_packaging_fixture_runners(self):
+        source = (ROOT / "sonar-project.properties").read_text()
+        self.assertEqual(re.findall(r"(?m)^sonar.sources=(.*)$", source), ["."])
+        self.assertEqual(re.findall(r"(?m)^sonar.tests=(.*)$", source), ["packaging"])
+        inclusions = re.findall(r"(?m)^sonar.test.inclusions=(.*)$", source)
+        self.assertEqual(len(inclusions), 1)
+        entries = inclusions[0].split(",")
+        expected = {"packaging/nightly-tests.py", "packaging/nightly-archive-tests.py",
+                    "packaging/macos/nightly_plist_tests.py", "packaging/windows/nightly-package-tests.ps1",
+                    "packaging/windows/nightly-signing-tests.ps1", "packaging/nightly-release-tests.py"}
+        self.assertEqual(set(entries), expected, "classify exact fixtures, never production helpers or wildcard scope")
+        self.assertEqual(len(entries), len(expected), "duplicate fixture classification")
+
+    def test_policy_example_keeps_explicit_v2_and_no_actor_authority(self):
+        policy = json.loads((ROOT / "docs/nightly-signing-policy.example.json").read_text())
+        expected = {"schema", "repository", "repository_id", "producer_workflow_id",
+                    "producer_workflow_path", "producer_tooling_revision", "producer_workflow_ref",
+                    "signer_workflow_path", "signer_tooling_revision", "release_branch", "manual_actors",
+                    "automatic_signer_actors", "platform", "max_age_seconds", "candidate_policy",
+                    "unsigned_artifact_name", "max_artifact_bytes", "windows_publisher_subject"}
+        self.assertEqual(set(policy), expected, "no v1 fallback or implicit actor-field migration")
+        self.assertEqual(policy["schema"], "craft-nightly-release-policy/v2")
+        self.assertEqual(policy["manual_actors"], [])
+        self.assertEqual(policy["automatic_signer_actors"], [])
+        for key in ("repository_id", "producer_workflow_id", "producer_tooling_revision",
+                    "producer_workflow_ref", "signer_tooling_revision", "max_age_seconds",
+                    "unsigned_artifact_name", "max_artifact_bytes", "windows_publisher_subject"):
+            with self.subTest(unresolved=key):
+                self.assertIsNone(policy[key], "the example must not invent production authority")
+        installed = ROOT / ".github/nightly-signing-policy.json"
+        self.assertFalse(installed.exists() or installed.is_symlink(), "activation is a separately reviewed change")
+
+    def test_candidate_example_has_exact_v3_fields_without_provider_scope_claim(self):
+        candidate = json.loads((ROOT / "docs/nightly-signing-policy.example.json").read_text())["candidate_policy"]
+        self.assertEqual(set(candidate), {"schema", "epoch", "repository", "branch", "required_workflows", "sonar"})
+        self.assertEqual(candidate["schema"], "craft-nightly-candidate-policy/v3")
+        self.assertIsNone(candidate["required_workflows"])
+        self.assertEqual(set(candidate["sonar"]), {"organization", "project", "app_id", "check_name",
+                         "details_url", "issue_types", "accepted_conditions", "required_conditions", "debt"})
+        self.assertTrue(all(value is None for value in candidate["sonar"].values()), "real identity/debt is unresolved")
+
     def test_every_nightly_job_remains_explicitly_off(self):
         for name in ("nightly.yml", "nightly-dispatch.yml", "nightly-sign.yml"):
             source = (ROOT / ".github/workflows" / name).read_text()

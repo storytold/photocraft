@@ -1,5 +1,5 @@
 {
-  "schema": "craft-nightly-release-policy/v1",
+  "schema": "craft-nightly-release-policy/v2",
   "repository": "storytold/photocraft",
   "repository_id": null,
   "producer_workflow_id": null,
@@ -32,5 +32,6 @@
   },
   "unsigned_artifact_name": null,
   "max_artifact_bytes": null,
-  "windows_publisher_subject": null
+  "windows_publisher_subject": null,
+  "automatic_signer_actors": []
 }

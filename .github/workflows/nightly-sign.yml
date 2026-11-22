@@ -34,9 +34,9 @@ jobs:
       checks: read
       attestations: write
       id-token: write
-    uses: storytold/craft-common-actions/.github/workflows/nightly-release.yml@646d4c0619df19a6e76cb4d669f878e4a1e005d7
+    uses: storytold/craft-common-actions/.github/workflows/nightly-release.yml@4fdc287a589e21c373927287150acbe73fffa34c
     with:
-      tooling-revision: 646d4c0619df19a6e76cb4d669f878e4a1e005d7
+      tooling-revision: 4fdc287a589e21c373927287150acbe73fffa34c
       producer_run_id: ${{ inputs.producer_run_id }}
       producer_run_attempt: ${{ inputs.producer_run_attempt }}
     # No secrets: inherit or raw platform values in this caller. Only the isolated native

@@ -6,7 +6,7 @@ All three jobs remain literally disabled. There is no
 schedule or platform secret grant. The unsigned reusable caller's maximum OIDC/attestation
 permissions are for its isolated attester; its compiler narrows to contents and Actions read
 only, with no OIDC, attestation write, release environment or platform signing secrets.
-Shared tooling is pinned to public preview `646d4c0619df19a6e76cb4d669f878e4a1e005d7`
+Shared tooling is pinned to public preview `4fdc287a589e21c373927287150acbe73fffa34c`
 ([shared draft #330](https://github.com/storytold/craft-common-actions/pull/330)); this is
 reviewed source availability, not provider, queue, native signing or crypto qualification.
 Existing stable workflows are unchanged.
@@ -49,7 +49,7 @@ This is not a hosted no-key test, a native signing result or a working nightly f
 empty debt set, invented workflow ID or guessed publisher subject. The adjacent
 [`nightly-signing-policy.example.json`](nightly-signing-policy.example.json) is intentionally
 invalid (`null` unresolved values), not installable configuration. Install only independently
-read, reviewed real values under schema `craft-nightly-release-policy/v1`:
+read, reviewed real values under explicit schema `craft-nightly-release-policy/v2`:
 
 | Field | Required source of authority |
 |---|---|
@@ -58,25 +58,40 @@ read, reviewed real values under schema `craft-nightly-release-policy/v1`:
 | `producer_tooling_revision`, `producer_workflow_ref` | Approved shared unsigned producer/attester commit and exact reusable path at that commit |
 | `signer_workflow_path`, `signer_tooling_revision` | `.github/workflows/nightly-sign.yml` and reviewed public shared signer commit |
 | `release_branch`, `platform` | `release`, `windows-x86_64` only |
-| `manual_actors` | Empty by default; any authority needs normal release review |
+| `manual_actors` | Empty by default; reviewed manual producer/signer and rerun authority only |
+| `automatic_signer_actors` | Empty by default; separate reviewed automatic-only authority for signer attempt 1 after authenticating a scheduled producer attempt 1; no manual producer or rerun grant |
 | `max_age_seconds`, `max_artifact_bytes`, `unsigned_artifact_name` | Reviewed bounded age/size and fixed unsigned artifact kind/prefix; actual upload/discovery name is that prefix + `-` + authenticated producer run ID + `-` + authenticated producer attempt, never a caller pattern or substitution |
 | `candidate_policy` | Full reviewed `craft-nightly-candidate-policy/v3` with real required workflow/job/check/app IDs, Sonar organization/project/issue types/conditions and exact approved debt fingerprints; provider configuration is trusted as resolved, not a pinned scan inventory |
 | `windows_publisher_subject` | Exact independently reviewed protected policy string used by both signer and fresh credentialless Windows publisher; nonempty, at most 2048 characters, no CR/LF/NUL; verified native subject must match exactly, never an artifact/caller input |
 
-Every `workflow_dispatch`, including the signer's first attempt, requires explicit reviewed
-`manual_actors` authority. Before future automatic dispatch is activated, its bot must be
-reviewed and listed explicitly; there is no implicit bot trust. This preparation does not
-populate or authorize that policy.
+Live admission requires explicit policy v2; historical v1 retains its exact old fields and
+broad manual-list semantics, and is not silently migrated or accepted for live admission. The
+v2 actor lists are separate, bounded and case-normalized; overlaps refuse. An automatic-only
+actor may authorize **only signer attempt 1**, after the validator authenticates a **scheduled
+producer attempt 1**. That list grants no manual producer, producer rerun or signer rerun
+authority. Those requests require the independently reviewed `manual_actors` list.
+
+Before future automatic dispatch is activated, its identity needs explicit review for
+`automatic_signer_actors`; no bot is implicitly trusted or installed here. Never union that
+list into `manual_actors` or the unsigned caller's `manual-actors` input. Both example lists
+and the caller input remain empty; this preparation does not populate or authorize policy.
 
 ### Post-publication recovery limitation
 
-At the pinned `646d4c0619df19a6e76cb4d669f878e4a1e005d7` baseline, a failure after the
-release becomes public (receipt write, ownership upload, runner loss or timeout) leaves the
-recorded attempt unsuccessful; every later nightly refuses until a release manager handles
-reviewed manual reconciliation. Re-running does not repair the failed recorded attempt.
-Authenticated reconciliation must be separately designed and qualified **before activation**;
-no such update is pinned or promised here. Public-state editing/deletion is not newly
-authorized by this procedure.
+The pinned shared revision now prevents a narrowly scoped failure, not general recovery:
+**only after the publisher returns through successful final verification** may an ownership
+receipt I/O failure be reported without failing that already-verified publication. A public
+PATCH callback alone is insufficient. Pending bytes become canonical `ownership.json` only
+after successful write, flush/fsync and close; incomplete receipts supply no canonical
+ownership or pruning authority. The optional ownership upload uses only that canonical
+path, warns if missing and cannot by itself fail the publication job.
+
+This does not repair historical failed attempts or reconcile runner loss, timeouts, uncertain
+publication responses, or failed/incomplete final verification. Those cases remain stopped
+for release-manager reviewed manual handling; re-running does not repair an old recorded
+failure. No general authenticated reconciliation protocol, retry or public-state editing/
+deletion authority is introduced. Manual handling of these remaining cases still needs
+preactivation review and qualification. These are source behaviors, not hosted/crypto proof.
 
 Confirm the shared parser's final exact fields; unknown/missing/null values must refuse.
 Do not derive policy, code/tool paths, trust anchors or ignored debt from a candidate archive.
@@ -136,9 +151,9 @@ were audited by this source change; no secret values were read.
    uninstall preservation, and corrupt/unsigned/wrong-publisher rejection. No Linux/macOS
    coverage follows from Windows. Keep production/native/publication/prune switches off until
    their own acceptance. Nightly assets remain prerelease, `make_latest:false`, with separate
-   nightly tags/reservations. Authenticated interrupted-publication reconciliation remains
-   the [preactivation blocker described above](#post-publication-recovery-limitation), not a
-   capability supplied by this pin.
+   nightly tags/reservations. Historical failures, uncertain/failed final verification and
+   runner loss retain the [manual-handling limits described above](#post-publication-recovery-limitation);
+   receipt-failure prevention does not supply general reconciliation.
 
 Routine updates ride real stable windows, never automatic main-to-release copying. Pause or
 cancel via existing nightly workflow controls without pushing release; urgent repairs need
