@@ -514,6 +514,11 @@ fn write_params(value: &AdjustValue, cx: &ValueCx) -> Value {
         }
         AdjustValue::GradientMap { value } => write_gradient_map(&mut out, value),
         AdjustValue::SelectiveColor { value } => {
+            // The rows carry every range: the single-colour form and `relative` the dialog was opened with would be
+            // read after them (and over them) by the engine.
+            for key in ["colors", "cyan", "magenta", "yellow", "black", "relative"] {
+                out.remove(key);
+            }
             out.insert("method".into(), json!(if value.method == SelectiveMethod::Absolute { "absolute" } else { "relative" }));
             for (key, row) in photocraft_engine::adjust_cmds::RANGES.iter().zip(value.ranges) {
                 out.insert((*key).into(), json!(row));
