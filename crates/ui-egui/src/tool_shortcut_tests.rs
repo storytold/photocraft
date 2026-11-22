@@ -15,8 +15,8 @@ fn space_f_cycles_the_canvas_colour() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 20, "height": 10})).unwrap();
     let mut h = app_harness(app);
-    let color = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.state().session.prefs().interface.canvas_color;
-    let space = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>, pressed| {
+    let color = |h: &egui_kittest::Harness<'_, Box<PhotocraftApp>>| h.state().session.prefs().interface.canvas_color;
+    let space = |h: &mut egui_kittest::Harness<'_, Box<PhotocraftApp>>, pressed| {
         h.event(egui::Event::Key { key: Key::Space, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE });
         h.run_steps(3);
     };

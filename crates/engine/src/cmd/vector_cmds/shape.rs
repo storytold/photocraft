@@ -436,8 +436,7 @@ fn default_name(kind: &str) -> &'static str {
 }
 
 /// Creates a shape layer, or adds path components to the shape identified by `addTo`.
-/// The Freeform Pen or Line Tool history override labels new layers; additions retain the Add
-/// Shape label.
+/// A tool history override labels new layers. Additions use the Add Shape label.
 pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.create";
     let label = super::paths::pen_history_name(p, CMD, "New Shape Layer")?;
@@ -726,7 +725,7 @@ fn combine_targets(s: &Session, p: &Value, narrow: &[&str]) -> Result<Option<Vec
     }
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let sel = d.selected_layers();
-    let ids = crate::layer_multi_cmds::top_level(&d.doc, &sel);
+    let ids = crate::layer_multi_cmds::top_level(&d.doc, sel);
     let ids: Vec<LayerId> = ids.into_iter().filter(|id| d.doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Shape(_)))).collect();
     Ok((ids.len() > 1).then_some(ids))
 }

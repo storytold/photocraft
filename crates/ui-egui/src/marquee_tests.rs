@@ -11,11 +11,11 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
-fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
+fn harness(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     harness_with_step_dt(tool, 0.25)
 }
 
-fn harness_with_step_dt(tool: Tool, step_dt: f32) -> Harness<'static, PhotocraftApp> {
+fn harness_with_step_dt(tool: Tool, step_dt: f32) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.sync_views();
@@ -43,28 +43,28 @@ fn harness_with_step_dt(tool: Tool, step_dt: f32) -> Harness<'static, Photocraft
 }
 
 /// Where the canvas shows document point `(x, y)`, through the view its last pass published.
-fn screen(h: &Harness<'static, PhotocraftApp>, x: f32, y: f32) -> Pos2 {
+fn screen(h: &Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32) -> Pos2 {
     crate::canvas::testing::to_screen(h.state(), [f64::from(x), f64::from(y)])
 }
 
-fn mods(h: &mut Harness<'static, PhotocraftApp>, m: Modifiers) {
+fn mods(h: &mut Harness<'static, Box<PhotocraftApp>>, m: Modifiers) {
     h.event(egui::Event::ModifiersChanged(m));
     h.run_steps(1);
 }
 
-fn button(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, down: bool, m: Modifiers) {
+fn button(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2, down: bool, m: Modifiers) {
     h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: down, modifiers: m });
     h.run_steps(1);
 }
 
 /// Move the pointer to document point `(x, y)` in a few steps.
-fn move_to(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32) {
+fn move_to(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32) {
     let p = screen(h, x, y);
     h.event(egui::Event::PointerMoved(p));
     h.run_steps(2);
 }
 
-fn press_at(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, m: Modifiers) {
+fn press_at(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32, m: Modifiers) {
     let p = screen(h, x, y);
     h.event(egui::Event::PointerMoved(p));
     h.run_steps(1);
@@ -73,13 +73,13 @@ fn press_at(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, m: Modifier
     move_to(h, x + 8.0, y + 6.0);
 }
 
-fn release_at(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, m: Modifiers) {
+fn release_at(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32, m: Modifiers) {
     move_to(h, x, y);
     button(h, screen(h, x, y), false, m);
     h.run_steps(2);
 }
 
-fn selection(h: &Harness<'static, PhotocraftApp>) -> Rect {
+fn selection(h: &Harness<'static, Box<PhotocraftApp>>) -> Rect {
     h.state().session.active().unwrap().doc.selection.as_ref().map_or(Rect::EMPTY, |s| s.content_bounds())
 }
 
@@ -136,7 +136,7 @@ fn object_selection_keeps_the_mode_from_the_mouse_press() {
 }
 
 /// Press at `from` and move to `to` in six ordinary pointer moves, the button still held.
-fn drag_to(h: &mut Harness<'static, PhotocraftApp>, from: [f32; 2], to: [f32; 2]) {
+fn drag_to(h: &mut Harness<'static, Box<PhotocraftApp>>, from: [f32; 2], to: [f32; 2]) {
     move_to(h, from[0], from[1]);
     button(h, screen(h, from[0], from[1]), true, Modifiers::NONE);
     for i in 1..=6 {
@@ -146,7 +146,7 @@ fn drag_to(h: &mut Harness<'static, PhotocraftApp>, from: [f32; 2], to: [f32; 2]
 }
 
 /// An 80×60 transparent document, red over (10..30)², that square selected, Rectangular Marquee.
-fn painted() -> (PhotocraftApp, photocraft_doc::LayerId) {
+fn painted() -> (Box<PhotocraftApp>, photocraft_doc::LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 80, "height": 60, "background": "transparent"})).unwrap();
     app.sync_views();

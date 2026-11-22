@@ -185,6 +185,50 @@ fn inserted_menu_events_roundtrip_absent_settings_and_stateless_items_execute() 
     assert_eq!(loaded.actions[0].steps[0].command, "filter.blur.gaussianBlur");
 }
 
+/// A one-action set as `actions.load` reads it, built without an external action file.
+fn set_bytes(set: &str, action: &str) -> Vec<u8> {
+    use craft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
+    use craft_psd::descriptor::UnicodeString;
+    craft_psd::atn::write(&AtnFile {
+        name: UnicodeString::new_nul(set),
+        actions: vec![AtnAction {
+            name: UnicodeString::new_nul(action),
+            items: vec![AtnItem { event: AtnEvent::Code(*b"Invr"), dictionary: "Invert".into(), ..Default::default() }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    })
+    .unwrap()
+}
+
+/// The action names in the list.
+fn names(s: &Session) -> Vec<String> {
+    s.actions.list.actions().iter().map(|a| a.name.clone()).collect()
+}
+
+/// Load Actions waits for the recording or playback that holds the library, as the reference
+/// application's greyed row says: a load during a take would replace the set the recording writes
+/// into. The refused call changes nothing; the same bytes load after the take ends.
+#[test]
+fn load_actions_waits_for_a_running_recording_or_playback() {
+    let mut s = session();
+    let during = photocraft_paint::tile::b64_encode(&set_bytes("Mid take", "MidLoaded"));
+    s.execute("actions.record", json!({"name":"Rec"})).unwrap();
+    let error = s.execute("actions.load", json!({"data":during.clone()})).unwrap_err().to_string();
+    assert!(error.contains("recording"), "{error}");
+    assert_eq!(names(&s), ["A", "Rec"], "the refused load changes nothing");
+    s.execute("actions.stop", json!({})).unwrap();
+    // A running playback holds it the same way: the step fails instead of editing mid-play.
+    s.actions.list.push(Action::new("Loader", vec![ActionStep::new("actions.load", json!({"data":during}))])).unwrap();
+    let played = s.execute("actions.play", json!({"action":"Loader"})).unwrap();
+    assert!(played["failed"]["error"].as_str().unwrap().contains("playing"), "{played}");
+    assert!(!names(&s).iter().any(|name| name == "MidLoaded"), "nothing loaded during the playback");
+    // Idle again: the same bytes load.
+    let idle_bytes = photocraft_paint::tile::b64_encode(&set_bytes("Incoming", "Loaded"));
+    s.execute("actions.load", json!({"data":idle_bytes})).unwrap();
+    assert!(names(&s).iter().any(|name| name == "Loaded"), "{:?}", names(&s));
+}
+
 /// A full curve is snapshotted independently of later source edits and replays as the work path.
 #[test]
 fn insert_path_captures_cubic_geometry_without_editing_the_document() {

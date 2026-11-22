@@ -1,6 +1,6 @@
 use super::*;
 
-fn paint_app(width: u32, height: u32, fill: Rect) -> PhotocraftApp {
+fn paint_app(width: u32, height: u32, fill: Rect) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.session.execute("file.new", json!({"width": width, "height": height, "depth": 8})).unwrap();
     app.session.execute("layer.new.layer", json!({})).unwrap();
@@ -14,7 +14,7 @@ fn paint_app(width: u32, height: u32, fill: Rect) -> PhotocraftApp {
     app
 }
 
-fn puppet_app() -> PhotocraftApp {
+fn puppet_app() -> Box<PhotocraftApp> {
     let mut app = paint_app(100, 80, Rect::new(20, 30, 80, 50));
     let ctx = app.ctx().clone();
     begin(&mut app, &ctx, "edit.puppetWarp").unwrap();
@@ -105,7 +105,7 @@ fn deleting_the_last_pin_restores_the_rest_mesh_and_an_empty_commit_is_not_an_ed
     assert_eq!(past_len(&app), past);
 }
 
-fn long_puppet(mode: PinMode, density: PinDensity) -> PhotocraftApp {
+fn long_puppet(mode: PinMode, density: PinDensity) -> Box<PhotocraftApp> {
     let mut app = paint_app(1000, 300, Rect::new(40, 180, 960, 220));
     let ctx = app.ctx().clone();
     begin(&mut app, &ctx, "edit.puppetWarp").unwrap();

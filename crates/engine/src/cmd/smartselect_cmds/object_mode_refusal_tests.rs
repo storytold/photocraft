@@ -11,8 +11,8 @@ const INDEXED: &str = "Could not complete your request because the tool does not
 const BITMAP: &str = "Could not complete your request because the tool does not work with Bitmap images. Please convert the image to RGB or another supported mode before using..";
 
 /// A session with one 64 × 64 dark document of `mode` and `depth` with a light square at
-/// 20..44, an object both the rectangle and the point find.
-fn session(mode: ColorMode, depth: SampleType) -> Session {
+/// 20..44, which the Object Selection rectangle and point and a Quick Selection stroke find.
+pub(super) fn session(mode: ColorMode, depth: SampleType) -> Session {
     let mut doc = Document::with_background("t", Size::new(64, 64), mode, depth, Color::rgb(0.1, 0.1, 0.1));
     let bg = doc.layers[0].surface_mut().unwrap();
     let light = photocraft_raster::from_rgba(&bg.format(), [0.9, 0.9, 0.9, 1.0]);
@@ -30,12 +30,12 @@ fn point() -> Value {
     json!({"point": [32, 32]})
 }
 
-fn steps(s: &Session) -> usize {
+pub(super) fn steps(s: &Session) -> usize {
     s.active().unwrap().history.past_len()
 }
 
 /// The selection's coverage over the document, to compare two selections exactly.
-fn selection(s: &Session) -> Option<Vec<f32>> {
+pub(super) fn selection(s: &Session) -> Option<Vec<f32>> {
     s.active().unwrap().doc.selection.as_ref().map(|m| m.read_region(Rect::new(0, 0, 64, 64)))
 }
 

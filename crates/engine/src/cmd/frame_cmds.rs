@@ -141,7 +141,7 @@ fn frame_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
     // in, so the frame fits that layer, not whatever is selected.
     let explicit = crate::commands::explicit_layer(s, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let ids = explicit.map_or_else(|| st.selected_layers(), |id| vec![id]);
+    let ids = explicit.map_or_else(|| st.selected_layers().to_vec(), |id| vec![id]);
     let bounds = ids
         .iter()
         .filter_map(|id| st.doc.layer(*id))
