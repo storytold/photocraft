@@ -333,15 +333,20 @@ fn cpu_on_linux_falls_back_to_vulkan_only_when_gl_cannot_present() {
 }
 
 /// #5191, #1788: a Windows VM offers VMware's SVGA3D over GL (`Other`) and WARP (`Cpu`, DX12).
-/// GL drew a black window; WARP works. GL stays the last resort.
+/// GL drew a black window; WARP works. Only the VMware adapter (vendor 0x15ad) is demoted past
+/// WARP; physical GL adapters (Intel HD, etc.) keep their normal rank and can beat WARP.
 #[test]
-fn windows_auto_prefers_warp_over_gl() {
+fn windows_vmware_gl_loses_to_warp_but_physical_gl_does_not() {
     use wgpu::{Backend as B, DeviceType as T};
     let svga_gl = cand(0x15ad, T::Other, B::Gl);
     let warp = cand(0x1414, T::Cpu, B::Dx12);
+    // VMware SVGA3D GL loses to WARP in auto mode (black-window bug).
     assert_eq!(pick(&[svga_gl, warp], Auto, Os::Windows), Some(1));
-    assert_eq!(pick(&[cand(INTEL, T::IntegratedGpu, B::Gl), warp], Auto, Os::Windows), Some(1));
+    // Physical Intel GL wins over WARP: IntegratedGpu (ty=1) beats Cpu (ty=4).
+    assert_eq!(pick(&[cand(INTEL, T::IntegratedGpu, B::Gl), warp], Auto, Os::Windows), Some(0));
+    // Explicit Gl backend: Intel GL wins (be=0 for the chosen backend).
     assert_eq!(pick(&[cand(INTEL, T::IntegratedGpu, B::Gl), warp], Gl, Os::Windows), Some(0));
+    // Only the VMware adapter: it still wins when nothing else is available.
     assert_eq!(pick(&[svga_gl], Auto, Os::Windows), Some(0));
     // Elsewhere GL keeps its rank.
     assert_eq!(pick(&[svga_gl, warp], Auto, Os::Other), Some(0));
