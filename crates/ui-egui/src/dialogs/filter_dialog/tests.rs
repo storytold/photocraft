@@ -1970,10 +1970,14 @@ fn the_palette_dialogs_offer_set_transparent_and_the_pipette() {
     }
 }
 
-/// The palette grid is operated from the keyboard: the arrows move the focus from cell to cell (the
-/// grid is one Tab stop, not 256). Space opens the Color Picker on the focused entry and marks that
-/// entry as the transparent one while Set Transparent is armed, and every cell is named in the
-/// accessibility tree by its index and its colour, with the table's transparent entry marked.
+/// The palette grid's cells are named in the accessibility tree by their index and colour, with the
+/// table's transparent entry marked, and the grid's own keys act on the cell that holds the keyboard:
+/// the arrows walk the cells (the grid is one focusable slot, not 256), Space opens the Color Picker on
+/// the focused entry and marks that entry as the transparent one while Set Transparent is armed. This
+/// drives that row handler directly: it is what runs once something gives the row the keys, which no
+/// PhotoCraft dialog does today (a hand-painted row is none of the framework's focus stops, and a
+/// dialog's Tab visits text and number fields only), so it covers the handler and the tree rather than
+/// app-side keyboard reach (#7320).
 #[test]
 fn the_palette_cells_take_the_keyboard_and_name_themselves() {
     let mut session = photocraft_engine::Session::new();
@@ -2000,7 +2004,7 @@ fn the_palette_cells_take_the_keyboard_and_name_themselves() {
     assert_eq!(marked, Some(egui::accesskit::Toggled::True), "the transparent entry is marked");
     assert_eq!(harness.get_by_label(&cell(harness.state(), 5)).accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
 
-    // The keyboard moves between the cells: the lead cell takes the Tab stop and the arrows walk it.
+    // The keyboard moves between the cells: the cell that holds the keyboard is the one the arrows walk.
     harness.get_by_label(&cell(harness.state(), 0)).focus();
     harness.run_steps(2);
     assert!(harness.get_by_label(&cell(harness.state(), 0)).is_focused(), "the first cell takes the focus");

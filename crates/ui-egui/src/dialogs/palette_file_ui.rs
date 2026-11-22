@@ -302,21 +302,28 @@ fn srgba([r, g, b]: [u8; 3]) -> Srgba {
 /// The 16×16 table drawn as touching cells: each entry's colour, a dashed slot for one the table
 /// does not have yet, a checkerboard and an X over the transparent entry, and an accent ring around
 /// the entry the palette pipette last highlighted. Returns the grid's response and the cell a click —
-/// or Enter or Space on the focused cell — landed on.
+/// or Space on the cell that holds the keyboard — landed on.
 ///
-/// The cells are keyboard-operable. The grid is one Tab stop and the arrows move the focus inside it
-/// (wrapping at the edges), Home and End go to the ends of the focused row and Command+Home/End to
-/// the table's first and last cell, so Tab does not have to walk 256 slots. Space acts on the focused
-/// cell exactly as a click does: the host opens the Color Picker on that entry, or marks it while Set
-/// Transparent is armed. Every slot is a node in the accessibility tree, named by its index and its
-/// colour, and the entry that carries the table's transparency reports as selected.
+/// Every slot is a node in the accessibility tree, named by its index and its colour, and the entry that
+/// carries the table's transparency reports as selected. A cell that holds the keyboard moves with the
+/// arrows (wrapping at the edges), Home and End go to the ends of its row and Command+Home/End to the
+/// table's first and last cell, and Space acts on it exactly as a click does: the host opens the Color
+/// Picker on that entry, or marks it while Set Transparent is armed.
+///
+/// No cell holds the keyboard in a PhotoCraft dialog, so none of that runs there: a dialog's Tab visits
+/// text and number fields only (`TabReach::Fields`, `docs/ui-dialogs.md`), and a row the host paints is
+/// none of the framework's focus stops, whose keys come from a `KeyUse` a `Param::custom` row cannot
+/// declare. A press in the grid leaves the dialog's own focus where it was (no cell draws the ring) and
+/// the craft key stage keeps Tab, the arrows and Space for itself (Space activates the dialog's OK). The
+/// handlers below are what the row does once something gives it the keys, as the kittest test does; a
+/// real keyboard route needs the framework (#7320).
 fn grid(ui: &mut egui::Ui, colors: &[[u8; 3]], transparent: Option<usize>, highlight: Option<usize>) -> (egui::Response, Option<usize>) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let side = CELL * COLS as f32;
     let (rect, response) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
     let cell_id = |i: usize| ui.scope_id().with(("paletteCell", i));
-    // The cell the keyboard is on: only it takes a Tab stop, so the grid is one control to Tab
-    // through instead of 256 (egui moves tab focus to every focusable widget it is offered).
+    // The cell the keyboard moves from: only the lead cell is focusable (`Sense::CLICK` leaves a slot
+    // unfocusable), so the grid offers egui's own focus navigation one slot to reach instead of 256.
     let lead_key = ui.scope_id().with("paletteLead");
     let focused = ui.ctx().memory(|m| m.focused()).and_then(|id| (0..CELLS).find(|&i| cell_id(i) == id));
     let stepped = focused.and_then(|at| {
@@ -358,7 +365,7 @@ fn grid(ui: &mut egui::Ui, colors: &[[u8; 3]], transparent: Option<usize>, highl
             }
             if i == lead {
                 // The arrows move within the grid: keep egui from moving the focus away with them, as a
-                // slider does for its own arrows, so the grid stays one Tab stop.
+                // slider does for its own arrows.
                 ui.memory_mut(|m| m.set_focus_lock_filter(cell.id, egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() }));
             }
             cell
@@ -399,9 +406,9 @@ fn grid(ui: &mut egui::Ui, colors: &[[u8; 3]], transparent: Option<usize>, highl
         }
     }
     // A click, or Space on the focused cell, acts on that cell: Space is the key a focused egui
-    // control is activated with, and it is consumed so nothing below also reads it. Enter belongs to
-    // the dialog's OK, as it does in Photoshop, and the craft framework routes it there before a row
-    // can see it (a row is not one of the framework's focus stops).
+    // control is activated with, and it is consumed so nothing below also reads it. Enter is left to
+    // the dialog's OK, as in Photoshop's dialogs; neither key reaches a cell in this app (see the
+    // grid's note), and Space with no cell focused activates the dialog's OK.
     let hit = cells.iter().position(egui::Response::clicked).or_else(|| {
         let at = cells.iter().position(egui::Response::has_focus)?;
         let acted = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space));
