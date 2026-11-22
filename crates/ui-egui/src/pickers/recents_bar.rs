@@ -115,7 +115,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut PresetUi, adapter: &mut Browse
             item_index,
             // Recent picks select the engine's active asset, not the browser's independent
             // multi-selection model. Keep the strip visually independent of browser selection.
-            ItemPaintState::Item { selected: false },
+            ItemPaintState::Recent,
         );
         let response = ui.interact(rect, ui.id().with(("recent-picker-item", panel, index)), Sense::click_and_drag());
         let cursor = if response.is_pointer_button_down_on() {
@@ -172,7 +172,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &mut PresetUi, adapter: &mut Browse
             ghost_ui.set_clip_rect(ui.ctx().content_rect());
             ghost_ui.set_opacity(0.5);
             ghost_ui.painter().rect_filled(ghost, 0.0, tokens.card);
-            (adapter.paint_item)(&ghost_ui, ghost.shrink(CARD_INSET), group_index, item_index, ItemPaintState::DragGhost);
+            (adapter.paint_item)(&ghost_ui, ghost.shrink(CARD_INSET), group_index, item_index, ItemPaintState::RecentDragGhost);
             ghost_ui.painter().rect_stroke(ghost, 0.0, Stroke::new(1.0, tokens.card_border), StrokeKind::Inside);
         }
         if options.allow_arranging

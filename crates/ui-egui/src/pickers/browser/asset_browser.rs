@@ -565,7 +565,13 @@ pub(crate) type PaintGroup = dyn FnMut(&egui::Ui, Rect, &GroupView, bool, bool, 
 pub(crate) type PaintListItem<'a> = dyn FnMut(&egui::Ui, Rect, usize, usize, bool) + 'a;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ItemPaintState {
-    Item { selected: bool },
+    Item {
+        selected: bool,
+    },
+    /// Compact history card: consumers with multi-part previews may show only their thumbnail.
+    Recent,
+    /// Floating drag preview originating from the compact history strip.
+    RecentDragGhost,
     DragGhost,
 }
 /// Consumer preview painter for a grid card, list thumbnail, or drag ghost.
@@ -1342,7 +1348,10 @@ pub(crate) fn browser_with_root_sequence(
                                     } else {
                                         None
                                     };
-                                    register_card(&drag_state, node_id, painted.rect, painted.depth, grid.list, row_end);
+                                    let neighbor = |index: usize| (index < grid.item_count).then(|| grid.cell_rect(index));
+                                    let previous = run_i.checked_sub(1).and_then(neighbor);
+                                    let next = neighbor(run_i + 1);
+                                    register_card(&drag_state, node_id, painted.rect, painted.depth, grid.list, browser_parent_clip, previous, next, row_end);
                                 }
                                 let resp = apply_browser_item_gesture(ui, &painted, &browser_ctx, sink, &projection.visible_selection_order, grid.list);
                                 if capabilities.item_drag
@@ -1360,6 +1369,7 @@ pub(crate) fn browser_with_root_sequence(
                                         group_index: painted.item.group_index,
                                         item_index: painted.item.item_index,
                                         display_mode,
+                                        list_layout: grid.list,
                                         selected: painted.selected,
                                     });
                                 }
@@ -1427,7 +1437,7 @@ pub(crate) fn browser_with_root_sequence(
             }
             register_group_indent_drop_targets(ui, &browser_ctx, &projection, &mut drag_state, &expanded_groups);
             register_group_objects(&projection, &drag_state);
-            register_indentation_objects(&projection, &drag_state);
+            register_indentation_objects(&drag_state);
             register_root_objects(ui, &projection.hierarchy, &drag_state, list, Some(browser_parent_clip));
             #[cfg(test)]
             ui.ctx().data_mut(|data| {
@@ -1435,7 +1445,7 @@ pub(crate) fn browser_with_root_sequence(
                     egui::Id::new(("preset-browser-drop-geometry", panel)),
                     BrowserDropGeometrySnapshot {
                         hits: crate::pickers::browser::dragging::test_drop_geometry(&drag_state),
-                        indentation_lanes: drag_state.indent_drop_targets.iter().map(|(name, response)| (name.clone(), response.rect)).collect(),
+                        indentation_lanes: drag_state.indent_drop_targets.iter().map(|(name, _, response)| (name.clone(), response.rect)).collect(),
                         browser_parent_clip,
                     },
                 );

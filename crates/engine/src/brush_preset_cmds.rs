@@ -6,7 +6,8 @@
 //! `.abr` file). The group commands take an optional `folder` path to act on a nested folder
 //! instead of the whole group, and `moveGroup` can move a group or folder `into` another folder
 //! or group, or out to the top level (dragging a folder onto a folder in Photoshop's panel). A
-//! folder exists while a preset is in it (or below it).
+//! folders are normally reconstructed from preset paths; explicitly-created empty groups and
+//! folders are stored in the preset index so they survive a restart too.
 //!
 //! The library order is the panel order: groups appear in order of their first preset, and a
 //! group's folders and presets in order of their first preset too. Every
@@ -110,6 +111,216 @@ pub fn group_order(presets: &[BrushPreset]) -> Vec<String> {
     out
 }
 
+fn session_group_order(s: &Session) -> Vec<String> {
+    let all = group_order(&s.tools.presets);
+    let builtin: Vec<String> = all.iter().filter(|group| s.tools.presets.iter().any(|preset| preset.builtin && preset.group == **group)).cloned().collect();
+    let derived: Vec<String> =
+        all.into_iter().filter(|group| !group.is_empty() && s.tools.presets.iter().any(|preset| !preset.builtin && preset.group == *group)).collect();
+    let complete = derived.iter().all(|group| s.tools.preset_hierarchy.groups.contains(group));
+    let mut out = builtin;
+    out.extend(if complete { s.tools.preset_hierarchy.groups.clone() } else { derived });
+    for group in &s.tools.preset_hierarchy.groups {
+        if !out.contains(group) {
+            out.push(group.clone());
+        }
+    }
+    out
+}
+
+fn session_root_order(s: &Session) -> Vec<crate::BrushPresetRootEntry> {
+    use crate::BrushPresetRootEntry as Root;
+
+    let mut derived = Vec::new();
+    let mut seen_groups = std::collections::BTreeSet::new();
+    for preset in &s.tools.presets {
+        if preset.group.is_empty() && preset.folder.is_empty() {
+            let entry = Root::Preset(preset.name.clone());
+            if !derived.contains(&entry) {
+                derived.push(entry);
+            }
+        } else if !preset.group.is_empty() && seen_groups.insert(preset.group.clone()) {
+            derived.push(Root::Group(preset.group.clone()));
+        }
+    }
+    for group in session_group_order(s) {
+        if seen_groups.insert(group.clone()) {
+            derived.push(Root::Group(group));
+        }
+    }
+
+    let stored: Vec<_> = s
+        .tools
+        .preset_hierarchy
+        .root_order
+        .iter()
+        .filter(|entry| match entry {
+            Root::Group(group) => has_group(s, group),
+            Root::Preset(name) => s.tools.presets.iter().any(|preset| preset.group.is_empty() && preset.folder.is_empty() && preset.name == *name),
+        })
+        .cloned()
+        .collect();
+    if stored.is_empty() {
+        derived
+    } else {
+        let mut out = stored;
+        for entry in derived {
+            if !out.contains(&entry) {
+                out.push(entry);
+            }
+        }
+        out
+    }
+}
+
+fn set_root_order(s: &mut Session, order: Vec<crate::BrushPresetRootEntry>) {
+    s.tools.preset_hierarchy.root_order = order;
+}
+
+fn insert_root_entry(order: &mut Vec<crate::BrushPresetRootEntry>, entry: crate::BrushPresetRootEntry, index: Option<usize>) {
+    order.retain(|candidate| candidate != &entry);
+    let at = index.unwrap_or(order.len()).min(order.len());
+    order.insert(at, entry);
+}
+
+fn root_anchor_index(order: &[crate::BrushPresetRootEntry], start: usize, presets: &[BrushPreset]) -> Option<usize> {
+    order.iter().skip(start).find_map(|entry| match entry {
+        crate::BrushPresetRootEntry::Group(group) => presets.iter().position(|preset| preset.group == *group),
+        crate::BrushPresetRootEntry::Preset(name) => {
+            presets.iter().position(|preset| preset.group.is_empty() && preset.folder.is_empty() && preset.name == *name)
+        }
+    })
+}
+
+fn session_subfolder_order(s: &Session, group: &str, parent: &[String]) -> Vec<String> {
+    let derived: Vec<String> = subfolder_order(&s.tools.presets, group, parent)
+        .into_iter()
+        .filter(|name| s.tools.presets.iter().any(|preset| !preset.builtin && preset.group == group && preset.folder.get(parent.len()) == Some(name)))
+        .collect();
+    let stored: Vec<String> = s
+        .tools
+        .preset_hierarchy
+        .folders
+        .iter()
+        .filter_map(|folder| {
+            (folder.group == group && folder.path.len() == parent.len() + 1 && folder.path.starts_with(parent)).then(|| folder.path.last().cloned()).flatten()
+        })
+        .fold(Vec::new(), |mut out, name| {
+            if !out.contains(&name) {
+                out.push(name);
+            }
+            out
+        });
+    let complete = derived.iter().all(|name| stored.contains(name));
+    let mut out = if complete { stored.clone() } else { derived };
+    for name in stored {
+        if !out.iter().any(|existing| existing == &name) {
+            out.push(name);
+        }
+    }
+    out
+}
+
+fn ensure_group_order_metadata(s: &mut Session) {
+    let derived: Vec<String> = group_order(&s.tools.presets)
+        .into_iter()
+        .filter(|group| !group.is_empty() && s.tools.presets.iter().any(|preset| !preset.builtin && preset.group == *group))
+        .collect();
+    if derived.iter().all(|group| s.tools.preset_hierarchy.groups.contains(group)) {
+        return;
+    }
+    let mut groups = derived;
+    for group in std::mem::take(&mut s.tools.preset_hierarchy.groups) {
+        if !groups.contains(&group) {
+            groups.push(group);
+        }
+    }
+    s.tools.preset_hierarchy.groups = groups;
+}
+
+fn ensure_folder_order_metadata(s: &mut Session, group: &str) {
+    let mut derived = Vec::new();
+    for preset in s.tools.presets.iter().filter(|preset| !preset.builtin && preset.group == group) {
+        for depth in 1..=preset.folder.len().min(MAX_FOLDER_DEPTH) {
+            let folder = crate::BrushPresetFolder { group: group.to_string(), path: preset.folder[..depth].to_vec(), before_item: None };
+            if !derived.contains(&folder) {
+                derived.push(folder);
+            }
+        }
+    }
+    let existing: Vec<_> = s.tools.preset_hierarchy.folders.iter().filter(|folder| folder.group == group).cloned().collect();
+    if derived.iter().all(|folder| existing.contains(folder)) {
+        return;
+    }
+    let mut ordered = derived;
+    for folder in existing {
+        if !ordered.contains(&folder) {
+            ordered.push(folder);
+        }
+    }
+    s.tools.preset_hierarchy.folders.retain(|folder| folder.group != group);
+    s.tools.preset_hierarchy.folders.extend(ordered);
+}
+
+fn has_group(s: &Session, group: &str) -> bool {
+    s.tools.presets.iter().any(|p| p.group == group) || s.tools.preset_hierarchy.groups.iter().any(|g| g == group)
+}
+
+fn group_name_conflicts(s: &Session, current: &str, candidate: &str) -> bool {
+    s.tools.presets.iter().any(|p| p.group.eq_ignore_ascii_case(candidate) && !p.group.eq_ignore_ascii_case(current))
+        || s.tools.preset_hierarchy.groups.iter().any(|g| g.eq_ignore_ascii_case(candidate) && !g.eq_ignore_ascii_case(current))
+}
+
+fn has_folder(s: &Session, group: &str, path: &[String]) -> bool {
+    has_group(s, group)
+        && (path.is_empty()
+            || s.tools.presets.iter().any(|p| in_folder(p, group, path))
+            || s.tools.preset_hierarchy.folders.iter().any(|f| f.group == group && f.path == path))
+}
+
+fn move_hierarchy_prefix(s: &mut Session, old_group: &str, old_path: &[String], new_group: &str, new_path: &[String]) {
+    for folder in &mut s.tools.preset_hierarchy.folders {
+        if folder.group == old_group && folder.path.starts_with(old_path) {
+            let tail = folder.path[old_path.len()..].to_vec();
+            folder.group = new_group.to_string();
+            folder.path = new_path.iter().cloned().chain(tail).collect();
+        }
+    }
+    if old_path.is_empty() && old_group != new_group {
+        s.tools.preset_hierarchy.groups.retain(|group| group != old_group);
+    }
+    if !new_path.is_empty() {
+        for depth in 1..=new_path.len() {
+            let path = new_path[..depth].to_vec();
+            if !s.tools.preset_hierarchy.folders.iter().any(|folder| folder.group == new_group && folder.path == path) {
+                s.tools.preset_hierarchy.folders.push(crate::BrushPresetFolder { group: new_group.to_string(), path, before_item: None });
+            }
+        }
+    }
+}
+
+fn reorder_folder_metadata(s: &mut Session, group: &str, parent: &[String], order: &[String]) {
+    let mut buckets: std::collections::BTreeMap<String, Vec<crate::BrushPresetFolder>> = std::collections::BTreeMap::new();
+    let mut rest = Vec::new();
+    for folder in std::mem::take(&mut s.tools.preset_hierarchy.folders) {
+        if folder.group == group && folder.path.len() > parent.len() && folder.path.starts_with(parent) {
+            if let Some(name) = folder.path.get(parent.len()) {
+                buckets.entry(name.clone()).or_default().push(folder);
+            }
+        } else {
+            rest.push(folder);
+        }
+    }
+    for name in order {
+        if let Some(mut subtree) = buckets.remove(name) {
+            rest.append(&mut subtree);
+        }
+    }
+    for (_, mut subtree) in buckets {
+        rest.append(&mut subtree);
+    }
+    s.tools.preset_hierarchy.folders = rest;
+}
+
 fn position_in_group(presets: &[BrushPreset], i: usize) -> usize {
     presets.get(i).map_or(0, |pr| presets[..i].iter().filter(|x| x.group == pr.group).count())
 }
@@ -129,11 +340,27 @@ pub(crate) fn rename_at(s: &mut Session, i: usize, new: &str, cmd: &str) -> Resu
     if index_of(&s.tools.presets, new).is_some_and(|j| j != i) {
         return Err(bad(cmd, format!("a brush preset named `{new}` already exists")));
     }
-    let pr = s.tools.presets.get_mut(i).ok_or_else(|| bad(cmd, "no such preset"))?;
-    if pr.name != new {
-        let was_current = s.tools.current_preset.as_ref().is_some_and(|c| c.eq_ignore_ascii_case(&pr.name));
-        pr.name = new.to_string();
-        pr.builtin = false;
+    let mut root_order = session_root_order(s);
+    let (old_name, was_current, is_root) = {
+        let preset = s.tools.presets.get(i).ok_or_else(|| bad(cmd, "no such preset"))?;
+        (
+            preset.name.clone(),
+            s.tools.current_preset.as_ref().is_some_and(|current| current.eq_ignore_ascii_case(&preset.name)),
+            preset.group.is_empty() && preset.folder.is_empty(),
+        )
+    };
+    if old_name != new {
+        let preset = s.tools.presets.get_mut(i).ok_or_else(|| bad(cmd, "no such preset"))?;
+        preset.name = new.to_string();
+        preset.builtin = false;
+        if is_root {
+            for entry in &mut root_order {
+                if *entry == crate::BrushPresetRootEntry::Preset(old_name.clone()) {
+                    *entry = crate::BrushPresetRootEntry::Preset(new.to_string());
+                }
+            }
+            set_root_order(s, root_order);
+        }
         if was_current {
             s.tools.current_preset = Some(new.to_string());
             s.tools.brush_changed();
@@ -145,6 +372,7 @@ pub(crate) fn rename_at(s: &mut Session, i: usize, new: &str, cmd: &str) -> Resu
 
 fn move_preset(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "brush.presets.move";
+    let mut root_order = session_root_order(s);
     let i = find(s, p, "name", cmd)?;
     let before = match p.get("before") {
         None | Some(Value::Null) => None,
@@ -160,12 +388,22 @@ fn move_preset(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => None,
         Some(v) => Some(v.as_u64().ok_or_else(|| bad(cmd, "`index` must be a non-negative integer"))?),
     };
+    let root_index = match p.get("rootIndex") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_u64().ok_or_else(|| bad(cmd, "`rootIndex` must be a non-negative integer"))? as usize),
+    };
     let folder = folder_param(p, cmd)?;
     let group = group_param(p, "group", cmd)?;
     let lib = &mut s.tools.presets;
     let (Some(moving), before_pr) = (lib.get(i), before.and_then(|b| lib.get(b))) else {
         return Err(bad(cmd, "no such preset"));
     };
+    let source_was_root = moving.group.is_empty() && moving.folder.is_empty();
+    let source_root_position = root_order.iter().position(|entry| *entry == crate::BrushPresetRootEntry::Preset(moving.name.clone()));
+    let mut root_siblings = root_order.clone();
+    if source_was_root {
+        root_siblings.retain(|entry| *entry != crate::BrushPresetRootEntry::Preset(moving.name.clone()));
+    }
     let target = match (&group, before_pr) {
         (Some(g), _) => g.clone(),
         (None, Some(b)) => b.group.clone(),
@@ -186,6 +424,9 @@ fn move_preset(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad(cmd, "`before` is not in that folder"));
         }
     }
+    if root_index.is_some() && (target != "" || !target_folder.is_empty() || before_pr.is_some()) {
+        return Err(bad(cmd, "`rootIndex` is only valid when moving a preset to the root, without `before`"));
+    }
     let before_name = before_pr.map(|b| b.name.clone());
     let mut pr = lib.remove(i);
     if pr.group != target || pr.folder != target_folder {
@@ -195,26 +436,52 @@ fn move_preset(s: &mut Session, p: &Value) -> Result<Value> {
         pr.builtin = false;
     }
     let members: Vec<usize> = lib.iter().enumerate().filter(|(_, x)| x.group == target).map(|(k, _)| k).collect();
+    let root_flat_pos = root_index.and_then(|index| root_anchor_index(&root_siblings, index, lib));
     // Appended: after the folder's last preset (or the group's, for a new folder).
     let end = lib.iter().rposition(|x| in_folder(x, &target, &target_folder)).or(members.last().copied()).map_or(lib.len(), |k| k + 1);
-    let pos = match (before_name, index) {
+    let pos = match (before_name.clone(), index) {
         (Some(n), _) => index_of(lib, &n).unwrap_or(lib.len()),
+        (None, Some(_)) if root_index.is_some() => root_flat_pos.unwrap_or(lib.len()),
         (None, Some(n)) => match members.get(n.min(usize::MAX as u64) as usize) {
             Some(&k) => k,
             None => members.last().map_or(lib.len(), |k| k + 1),
         },
+        (None, None) if root_index.is_some() => root_flat_pos.unwrap_or(lib.len()),
         (None, None) => end,
     };
     let pos = pos.min(lib.len());
     let name = pr.name.clone();
     lib.insert(pos, pr);
+    if source_was_root {
+        root_order.retain(|entry| *entry != crate::BrushPresetRootEntry::Preset(name.clone()));
+    }
+    if target.is_empty() && target_folder.is_empty() {
+        let insert_at = root_index
+            .or_else(|| {
+                before_name.as_ref().and_then(|before| root_order.iter().position(|entry| *entry == crate::BrushPresetRootEntry::Preset(before.clone())))
+            })
+            .or_else(|| {
+                index.map(|index| {
+                    root_order
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, entry)| matches!(entry, crate::BrushPresetRootEntry::Preset(_)))
+                        .nth(index.min(usize::MAX as u64) as usize)
+                        .map_or(root_order.len(), |(position, _)| position)
+                })
+            });
+        insert_root_entry(&mut root_order, crate::BrushPresetRootEntry::Preset(name.clone()), insert_at);
+    } else if !target.is_empty() && !root_order.contains(&crate::BrushPresetRootEntry::Group(target.clone())) {
+        insert_root_entry(&mut root_order, crate::BrushPresetRootEntry::Group(target.clone()), source_root_position);
+    }
     let at = position_in_group(lib, pos);
+    set_root_order(s, root_order);
     s.brush_presets_changed();
     Ok(json!({ "name": name, "group": target, "folder": target_folder, "index": at }))
 }
 
 fn group_block(s: &Session, g: &str, cmd: &str) -> Result<()> {
-    if s.tools.presets.iter().any(|x| x.group == g) { Ok(()) } else { Err(bad(cmd, format!("no brush preset group named `{g}`"))) }
+    if has_group(s, g) { Ok(()) } else { Err(bad(cmd, format!("no brush preset group named `{g}`"))) }
 }
 
 /// The group and (possibly empty) folder path a group command acts on; both must exist.
@@ -222,7 +489,7 @@ fn target_folder(s: &Session, p: &Value, cmd: &str) -> Result<(String, Vec<Strin
     let g = group_param(p, "group", cmd)?.ok_or_else(|| bad(cmd, "missing `group`"))?;
     group_block(s, &g, cmd)?;
     let f = folder_param(p, cmd)?.unwrap_or_default();
-    if !s.tools.presets.iter().any(|x| in_folder(x, &g, &f)) {
+    if !has_folder(s, &g, &f) {
         return Err(bad(cmd, format!("no folder `{}` in brush preset group `{g}`", f.join("/"))));
     }
     Ok((g, f))
@@ -231,11 +498,12 @@ fn target_folder(s: &Session, p: &Value, cmd: &str) -> Result<(String, Vec<Strin
 /// Move folder `f` (non-empty) of group `g` among its sibling folders, as a block.
 fn move_folder(s: &mut Session, p: &Value, g: String, f: Vec<String>, cmd: &str) -> Result<Value> {
     let Some((leaf, parent)) = f.split_last() else { return Err(bad(cmd, "missing `folder`")) };
-    let siblings = subfolder_order(&s.tools.presets, &g, parent);
+    ensure_folder_order_metadata(s, &g);
+    let siblings = session_subfolder_order(s, &g, parent);
     let before = match p.get("before") {
         None | Some(Value::Null) => None,
-        Some(Value::String(b)) if b == leaf => return Err(bad(cmd, "`before` names the folder being moved")),
-        Some(Value::String(b)) if siblings.contains(b) => Some(b.clone()),
+        Some(Value::String(b)) if b.eq_ignore_ascii_case(leaf) => return Err(bad(cmd, "`before` names the folder being moved")),
+        Some(Value::String(b)) if siblings.iter().any(|name| name.eq_ignore_ascii_case(b)) => Some(b.clone()),
         Some(_) => return Err(bad(cmd, "`before` must name a folder next to the one being moved")),
     };
     let index = match p.get("index") {
@@ -262,8 +530,17 @@ fn move_folder(s: &mut Session, p: &Value, g: String, f: Vec<String>, cmd: &str)
     rest.extend(block);
     rest.extend(tail);
     s.tools.presets = rest;
+    let mut ordered_siblings = siblings.clone();
+    ordered_siblings.retain(|name| name != leaf);
+    let at = before
+        .as_ref()
+        .and_then(|name| ordered_siblings.iter().position(|candidate| candidate == name))
+        .or(index.map(|n| n.min(ordered_siblings.len() as u64) as usize))
+        .unwrap_or(ordered_siblings.len());
+    ordered_siblings.insert(at, leaf.clone());
+    reorder_folder_metadata(s, &g, parent, &ordered_siblings);
     s.brush_presets_changed();
-    let at = subfolder_order(&s.tools.presets, &g, parent).iter().position(|x| x == leaf).unwrap_or(0);
+    let at = session_subfolder_order(s, &g, parent).iter().position(|x| x == leaf).unwrap_or(0);
     Ok(json!({ "group": g, "folder": f, "index": at }))
 }
 
@@ -285,7 +562,7 @@ fn into_param(s: &Session, p: &Value, cmd: &str) -> Result<Option<Dest>> {
     };
     group_block(s, &g, cmd)?;
     let f = folder_param(into, cmd)?.unwrap_or_default();
-    if !s.tools.presets.iter().any(|x| in_folder(x, &g, &f)) {
+    if !has_folder(s, &g, &f) {
         return Err(bad(cmd, format!("no folder `{}` in brush preset group `{g}`", f.join("/"))));
     }
     Ok(Some(Some((g, f))))
@@ -296,6 +573,14 @@ fn into_param(s: &Session, p: &Value, cmd: &str) -> Result<Option<Dest>> {
 /// lands at the end of the destination, or before the sibling folder (group at the top level)
 /// named by `before`.
 fn move_into(s: &mut Session, p: &Value, g: String, f: Vec<String>, dest: Dest, cmd: &str) -> Result<Value> {
+    ensure_group_order_metadata(s);
+    ensure_folder_order_metadata(s, &g);
+    let mut root_order = session_root_order(s);
+    if let Some((destination_group, _)) = &dest {
+        if destination_group != &g {
+            ensure_folder_order_metadata(s, destination_group);
+        }
+    }
     if p.get("index").is_some_and(|v| !v.is_null()) {
         return Err(bad(cmd, "`index` can't be combined with `into` (use `before`)"));
     }
@@ -316,20 +601,28 @@ fn move_into(s: &mut Session, p: &Value, g: String, f: Vec<String>, dest: Dest, 
         Some(Value::String(name)) if !name.trim().is_empty() && name.chars().count() <= MAX_NAME => Some(name.trim().to_string()),
         Some(_) => return Err(bad(cmd, format!("`beforeItem` must be a non-empty preset name of at most {MAX_NAME} characters"))),
     };
+    let root_index = match p.get("rootIndex") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_u64().ok_or_else(|| bad(cmd, "`rootIndex` must be a non-negative integer"))? as usize),
+    };
+    if root_index.is_some() && (dest.is_some() || before.is_some() || before_item.is_some()) {
+        return Err(bad(cmd, "`rootIndex` is only valid when moving a group to the root, without `before` or `beforeItem`"));
+    }
+    let mut root_siblings = root_order.clone();
+    if f.is_empty() {
+        root_siblings.retain(|entry| *entry != crate::BrushPresetRootEntry::Group(g.clone()));
+    }
     if before.is_some() && before_item.is_some() {
         return Err(bad(cmd, "`before` and `beforeItem` cannot be combined"));
-    }
-    if before_item.is_some() && dest.is_none() {
-        return Err(bad(cmd, "`beforeItem` needs an `into` destination"));
     }
     // The destination's own folders and groups, without the one being moved.
     let others: Vec<BrushPreset> = s.tools.presets.iter().filter(|x| !moving(x)).cloned().collect();
     let (new_group, new_prefix, siblings) = match &dest {
         None => {
-            if f.is_empty() {
+            if f.is_empty() && before_item.is_none() {
                 return Err(bad(cmd, "`into`: the group is already at the top level"));
             }
-            (leaf.clone(), Vec::new(), group_order(&others))
+            (leaf.clone(), Vec::new(), session_group_order(s).into_iter().filter(|name| name != &leaf).collect())
         }
         Some((dg, df)) => {
             if *dg == g && df.starts_with(&f) {
@@ -337,10 +630,11 @@ fn move_into(s: &mut Session, p: &Value, g: String, f: Vec<String>, dest: Dest, 
             }
             let mut prefix = df.clone();
             prefix.push(leaf.clone());
-            (dg.clone(), prefix, subfolder_order(&others, dg, df))
+            let moving_from_this_parent = *dg == g && f.len() == df.len() + 1 && f.starts_with(df);
+            (dg.clone(), prefix, session_subfolder_order(s, dg, df).into_iter().filter(|name| !(moving_from_this_parent && name == &leaf)).collect::<Vec<_>>())
         }
     };
-    if siblings.contains(&leaf) {
+    if siblings.iter().any(|name| name.eq_ignore_ascii_case(&leaf)) {
         return Err(bad(cmd, format!("a folder named `{leaf}` already exists there")));
     }
     if let Some(b) = &before
@@ -348,8 +642,9 @@ fn move_into(s: &mut Session, p: &Value, g: String, f: Vec<String>, dest: Dest, 
     {
         return Err(bad(cmd, format!("`before`: no folder named `{b}` there")));
     }
-    if let (Some((dg, df)), Some(anchor)) = (&dest, &before_item) {
-        let matches = others.iter().filter(|x| x.name.eq_ignore_ascii_case(anchor) && x.group == *dg && x.folder == *df).count();
+    if let Some(anchor) = &before_item {
+        let (dg, df) = dest.as_ref().map_or(("", &[][..]), |(group, folder)| (group.as_str(), folder.as_slice()));
+        let matches = others.iter().filter(|x| x.name.eq_ignore_ascii_case(anchor) && x.group == dg && x.folder == df).count();
         if matches != 1 {
             return Err(bad(cmd, format!("`beforeItem`: expected one direct preset named `{anchor}` in the destination folder")));
         }
@@ -366,10 +661,12 @@ fn move_into(s: &mut Session, p: &Value, g: String, f: Vec<String>, dest: Dest, 
         x.folder = new_prefix.iter().cloned().chain(tail).collect();
         x.builtin = false;
     }
+    let root_flat_pos = root_index.and_then(|index| root_anchor_index(&root_siblings, index, &rest));
     let pos = match (&dest, &before, &before_item) {
         (Some((dg, df)), None, Some(anchor)) => rest.iter().position(|x| x.name.eq_ignore_ascii_case(anchor) && x.group == *dg && x.folder == *df),
+        (None, None, Some(anchor)) => rest.iter().position(|x| x.name.eq_ignore_ascii_case(anchor) && x.group.is_empty() && x.folder.is_empty()),
         (None, Some(b), None) => rest.iter().position(|x| x.group == *b),
-        (None, None, None) => None,
+        (None, None, None) => root_flat_pos,
         (Some((dg, df)), Some(b), None) => {
             let sib: Vec<String> = df.iter().cloned().chain(std::iter::once(b.clone())).collect();
             rest.iter().position(|x| in_folder(x, dg, &sib))
@@ -381,22 +678,68 @@ fn move_into(s: &mut Session, p: &Value, g: String, f: Vec<String>, dest: Dest, 
     rest.extend(block);
     rest.extend(tail);
     s.tools.presets = rest;
+    move_hierarchy_prefix(s, &g, &f, &new_group, &new_prefix);
+    if let Some((destination_group, destination_path)) = dest.as_ref() {
+        let inherited_anchor = before.as_ref().and_then(|name| {
+            let mut sibling_path = destination_path.clone();
+            sibling_path.push(name.clone());
+            s.tools
+                .preset_hierarchy
+                .folders
+                .iter()
+                .find(|folder| folder.group == *destination_group && folder.path == sibling_path)
+                .and_then(|folder| folder.before_item.clone())
+        });
+        if let Some(folder) = s.tools.preset_hierarchy.folders.iter_mut().find(|folder| folder.group == *destination_group && folder.path == new_prefix) {
+            folder.before_item = before_item.clone().or(inherited_anchor);
+        }
+        let leaf = new_prefix.last().cloned().unwrap_or_default();
+        let mut order = session_subfolder_order(s, destination_group, destination_path);
+        order.retain(|name| name != &leaf);
+        let at = before.as_ref().and_then(|anchor| order.iter().position(|name| name == anchor)).unwrap_or(order.len());
+        order.insert(at, leaf);
+        reorder_folder_metadata(s, destination_group, destination_path, &order);
+    }
+    if dest.is_none() && !s.tools.preset_hierarchy.groups.contains(&new_group) {
+        s.tools.preset_hierarchy.groups.push(new_group.clone());
+    }
+    if f.is_empty() && g != new_group {
+        s.tools.preset_hierarchy.groups.retain(|name| name != &g);
+        if !new_group.is_empty() && !s.tools.preset_hierarchy.groups.contains(&new_group) {
+            s.tools.preset_hierarchy.groups.push(new_group.clone());
+        }
+    }
+    if f.is_empty() {
+        root_order.retain(|entry| *entry != crate::BrushPresetRootEntry::Group(g.clone()));
+    }
+    if dest.is_none() {
+        let insert_at = root_index
+            .or_else(|| before.as_ref().and_then(|name| root_order.iter().position(|entry| *entry == crate::BrushPresetRootEntry::Group(name.clone()))))
+            .or_else(|| before_item.as_ref().and_then(|name| root_order.iter().position(|entry| *entry == crate::BrushPresetRootEntry::Preset(name.clone()))));
+        insert_root_entry(&mut root_order, crate::BrushPresetRootEntry::Group(new_group.clone()), insert_at);
+    }
+    set_root_order(s, root_order);
     s.brush_presets_changed();
     let folder = new_prefix.get(..new_prefix.len().saturating_sub(1)).unwrap_or_default();
     let at = match &dest {
-        None => group_order(&s.tools.presets).iter().position(|x| *x == new_group),
-        Some(_) => subfolder_order(&s.tools.presets, &new_group, folder).iter().position(|x| *x == leaf),
+        None => session_group_order(s).iter().position(|x| *x == new_group),
+        Some(_) => session_subfolder_order(s, &new_group, folder).iter().position(|x| *x == leaf),
     };
     Ok(json!({ "group": new_group, "folder": new_prefix, "index": at.unwrap_or(0) }))
 }
 
 fn move_group(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "brush.presets.moveGroup";
+    ensure_group_order_metadata(s);
+    let mut root_order = session_root_order(s);
     let (g, f) = target_folder(s, p, cmd)?;
     if let Some(dest) = into_param(s, p, cmd)? {
         return move_into(s, p, g, f, dest, cmd);
     }
     if !f.is_empty() {
+        if p.get("rootIndex").is_some_and(|value| !value.is_null()) {
+            return Err(bad(cmd, "`rootIndex` is only valid for root groups"));
+        }
         return move_folder(s, p, g, f, cmd);
     }
     let before = group_param(p, "before", cmd)?;
@@ -410,19 +753,55 @@ fn move_group(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => None,
         Some(v) => Some(v.as_u64().ok_or_else(|| bad(cmd, "`index` must be a non-negative integer"))?),
     };
+    let root_index = match p.get("rootIndex") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_u64().ok_or_else(|| bad(cmd, "`rootIndex` must be a non-negative integer"))? as usize),
+    };
+    if root_index.is_some() && (before.is_some() || index.is_some()) {
+        return Err(bad(cmd, "`rootIndex` cannot be combined with `before` or `index`"));
+    }
+    let mut root_siblings = root_order.clone();
+    root_siblings.retain(|entry| *entry != crate::BrushPresetRootEntry::Group(g.clone()));
+    let current_order = session_group_order(s);
     let lib = std::mem::take(&mut s.tools.presets);
     let (block, mut rest): (Vec<BrushPreset>, Vec<BrushPreset>) = lib.into_iter().partition(|x| x.group == g);
-    let order = group_order(&rest);
+    let order: Vec<String> = current_order.into_iter().filter(|name| name != &g).collect();
     let first = |name: &str, rest: &[BrushPreset]| rest.iter().position(|x| x.group == name).unwrap_or(rest.len());
+    let root_flat_pos = root_index.and_then(|index| root_anchor_index(&root_siblings, index, &rest));
     let pos = match (&before, index) {
         (Some(b), _) => first(b, &rest),
         (None, Some(n)) => order.get(n.min(usize::MAX as u64) as usize).map_or(rest.len(), |name| first(name, &rest)),
-        (None, None) => rest.len(),
+        (None, None) => root_flat_pos.unwrap_or(rest.len()),
     };
     let tail = rest.split_off(pos.min(rest.len()));
     rest.extend(block);
     rest.extend(tail);
     s.tools.presets = rest;
+    if s.tools.preset_hierarchy.groups.contains(&g) {
+        let mut groups = s.tools.preset_hierarchy.groups.clone();
+        groups.retain(|name| name != &g);
+        let at = before
+            .as_ref()
+            .and_then(|name| groups.iter().position(|candidate| candidate == name))
+            .or(index.map(|n| n.min(groups.len() as u64) as usize))
+            .unwrap_or(groups.len());
+        groups.insert(at, g.clone());
+        s.tools.preset_hierarchy.groups = groups;
+    }
+    let root_at = root_index
+        .or_else(|| before.as_ref().and_then(|name| root_order.iter().position(|entry| *entry == crate::BrushPresetRootEntry::Group(name.clone()))))
+        .or_else(|| {
+            index.map(|index| {
+                root_order
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, entry)| matches!(entry, crate::BrushPresetRootEntry::Group(_)))
+                    .nth(index as usize)
+                    .map_or(root_order.len(), |(position, _)| position)
+            })
+        });
+    insert_root_entry(&mut root_order, crate::BrushPresetRootEntry::Group(g.clone()), root_at);
+    set_root_order(s, root_order);
     s.brush_presets_changed();
     let at = group_order(&s.tools.presets).iter().position(|x| *x == g).unwrap_or(0);
     Ok(json!({ "group": g, "index": at }))
@@ -430,11 +809,13 @@ fn move_group(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn rename_group(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "brush.presets.renameGroup";
+    ensure_group_order_metadata(s);
+    let mut root_order = session_root_order(s);
     let (g, f) = target_folder(s, p, cmd)?;
     let new = text(p, "newName", cmd)?;
     if let Some((leaf, parent)) = f.split_last() {
         if new != *leaf {
-            if subfolder_order(&s.tools.presets, &g, parent).contains(&new) {
+            if session_subfolder_order(s, &g, parent).iter().any(|name| name != leaf && name.eq_ignore_ascii_case(&new)) {
                 return Err(bad(cmd, format!("a folder named `{new}` already exists there")));
             }
             let depth = parent.len();
@@ -444,13 +825,20 @@ fn rename_group(s: &mut Session, p: &Value) -> Result<Value> {
                 }
                 x.builtin = false;
             }
+            for folder in &mut s.tools.preset_hierarchy.folders {
+                if folder.group == g && folder.path.starts_with(&f) {
+                    if let Some(part) = folder.path.get_mut(depth) {
+                        *part = new.clone();
+                    }
+                }
+            }
             s.brush_presets_changed();
         }
         let mut renamed = parent.to_vec();
         renamed.push(new);
         return Ok(json!({ "group": g, "folder": renamed }));
     }
-    if new != g && s.tools.presets.iter().any(|x| x.group == new) {
+    if new != g && group_name_conflicts(s, &g, &new) {
         return Err(bad(cmd, format!("a group named `{new}` already exists")));
     }
     if new != g {
@@ -458,6 +846,20 @@ fn rename_group(s: &mut Session, p: &Value) -> Result<Value> {
             x.group = new.clone();
             x.builtin = false;
         }
+        for folder in &mut s.tools.preset_hierarchy.folders {
+            if folder.group == g {
+                folder.group = new.clone();
+            }
+        }
+        if let Some(group) = s.tools.preset_hierarchy.groups.iter_mut().find(|name| **name == g) {
+            *group = new.clone();
+        }
+        for entry in &mut root_order {
+            if *entry == crate::BrushPresetRootEntry::Group(g.clone()) {
+                *entry = crate::BrushPresetRootEntry::Group(new.clone());
+            }
+        }
+        set_root_order(s, root_order);
         s.brush_presets_changed();
     }
     Ok(json!({ "group": new }))
@@ -466,14 +868,73 @@ fn rename_group(s: &mut Session, p: &Value) -> Result<Value> {
 fn delete_group(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "brush.presets.deleteGroup";
     let (g, f) = target_folder(s, p, cmd)?;
+    let mut root_order = session_root_order(s);
     let before = s.tools.presets.len();
     s.tools.presets.retain(|x| !in_folder(x, &g, &f));
+    if f.is_empty() {
+        s.tools.preset_hierarchy.groups.retain(|name| name != &g);
+        s.tools.preset_hierarchy.folders.retain(|folder| folder.group != g);
+        root_order.retain(|entry| *entry != crate::BrushPresetRootEntry::Group(g.clone()));
+        if !s.tools.presets.iter().any(|preset| !preset.builtin) && s.tools.preset_hierarchy.groups.is_empty() {
+            root_order.clear();
+        }
+        set_root_order(s, root_order);
+    } else {
+        s.tools.preset_hierarchy.folders.retain(|folder| !(folder.group == g && folder.path.starts_with(&f)));
+    }
     if s.tools.current_preset.as_ref().is_some_and(|c| !s.tools.presets.iter().any(|x| x.name.eq_ignore_ascii_case(c))) {
         s.tools.current_preset = None;
         s.tools.brush_changed();
     }
     s.brush_presets_changed();
     Ok(json!({ "deleted": before - s.tools.presets.len(), "count": s.tools.presets.len() }))
+}
+
+fn create_folder(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "brush.presets.createFolder";
+    let group = group_param(p, "group", cmd)?.ok_or_else(|| bad(cmd, "missing `group`"))?;
+    group_block(s, &group, cmd)?;
+    let mut path = folder_param(p, cmd)?.ok_or_else(|| bad(cmd, "missing `folder`"))?;
+    if path.is_empty() {
+        return Err(bad(cmd, "`folder` must name a nested folder"));
+    }
+    let leaf = path.pop().ok_or_else(|| bad(cmd, "missing folder name"))?;
+    if path.len() >= MAX_FOLDER_DEPTH {
+        return Err(bad(cmd, format!("folders can be nested at most {MAX_FOLDER_DEPTH} deep")));
+    }
+    ensure_folder_order_metadata(s, &group);
+    if !has_folder(s, &group, &path) {
+        return Err(bad(cmd, format!("no parent folder `{}` in brush preset group `{group}`", path.join("/"))));
+    }
+    if session_subfolder_order(s, &group, &path).iter().any(|name| name.eq_ignore_ascii_case(&leaf)) {
+        return Err(bad(cmd, format!("a folder named `{leaf}` already exists there")));
+    }
+    path.push(leaf);
+    if !s.tools.preset_hierarchy.groups.contains(&group) {
+        s.tools.preset_hierarchy.groups.push(group.clone());
+    }
+    for depth in 1..=path.len() {
+        let folder = crate::BrushPresetFolder { group: group.clone(), path: path[..depth].to_vec(), before_item: None };
+        if !s.tools.preset_hierarchy.folders.contains(&folder) {
+            s.tools.preset_hierarchy.folders.push(folder);
+        }
+    }
+    s.brush_presets_changed();
+    Ok(json!({ "group": group, "folder": path }))
+}
+
+fn create_group(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "brush.presets.createGroup";
+    let group = text(p, "group", cmd)?;
+    if group_name_conflicts(s, "", &group) {
+        return Err(bad(cmd, format!("a group named `{group}` already exists")));
+    }
+    s.tools.preset_hierarchy.groups.push(group.clone());
+    let mut root_order = session_root_order(s);
+    insert_root_entry(&mut root_order, crate::BrushPresetRootEntry::Group(group.clone()), None);
+    set_root_order(s, root_order);
+    s.brush_presets_changed();
+    Ok(json!({ "group": group }))
 }
 
 macro_rules! spec {
@@ -485,17 +946,19 @@ macro_rules! spec {
 /// Brush preset organisation specs.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        spec!("brush.presets.createGroup", "Create Brush Group", r##"{"group":string} → {group}"##, create_group),
+        spec!("brush.presets.createFolder", "Create Brush Folder", r##"{"group":string,"folder":[name] (full nested path)} → {group, folder}"##, create_folder),
         spec!("brush.presets.rename", "Rename Brush", r##"{"name":string,"newName":string} → {name}"##, rename),
         spec!(
             "brush.presets.move",
             "Move Brush",
-            r##"{"name":string,"group":string?=its group ("" = ungrouped),"folder":[name]? (nested folder names in the group, outermost first; [] = the group itself)=before's folder, else its own if it stays in its group, else [],"before":name? (preset to land before, in that folder) | "index":n? (position in the group)=end of the folder} → {name, group, folder, index}"##,
+            r##"{"name":string,"group":string?=its group ("" = ungrouped),"folder":[name]? (nested folder names in the group, outermost first; [] = the group itself)=before's folder, else its own if it stays in its group, else [],"before":name? (preset to land before, in that folder) | "index":n? (position in the group)=end of the folder, "rootIndex":n? (mixed root sibling position when moving to the root)} → {name, group, folder, index}"##,
             move_preset
         ),
         spec!(
             "brush.presets.moveGroup",
             "Move Brush Group",
-            r##"{"group":string,"folder":[name]? (move this nested folder instead),"into":{"group":string?,"folder":[name]?}? (move it inside that folder of that group, [] = directly in the group; no group = out to the top level as a group of its own; the folder keeps its content),"before":group? (or sibling folder name), "beforeItem":preset? (direct item in the destination folder; mutually exclusive with `before`) | "index":n? (group or sibling folder position, without `into`)=end} → {group, folder?, index}"##,
+            r##"{"group":string,"folder":[name]? (move this nested folder instead),"into":{"group":string?,"folder":[name]?}? (move it inside that folder of that group, [] = directly in the group; no group = out to the top level as a group of its own; the folder keeps its content),"before":group? (or sibling folder name), "beforeItem":preset? (direct item in the destination folder; mutually exclusive with `before`) | "index":n? (group or sibling folder position, without `into`)=end, "rootIndex":n? (mixed root sibling position when moving to the root)} → {group, folder?, index}"##,
             move_group
         ),
         spec!(
@@ -534,6 +997,44 @@ mod tests {
             });
         }
         s
+    }
+
+    #[test]
+    fn empty_groups_and_nested_folders_can_be_created_renamed_moved_and_deleted() {
+        let mut s = Session::new();
+        s.execute("brush.presets.createGroup", json!({"group": "Empty"})).unwrap();
+        s.execute("brush.presets.createFolder", json!({"group": "Empty", "folder": ["Parent"]})).unwrap();
+        s.execute("brush.presets.createFolder", json!({"group": "Empty", "folder": ["Parent", "Child"]})).unwrap();
+        assert_eq!(session_group_order(&s).last().map(String::as_str), Some("Empty"));
+        assert_eq!(session_subfolder_order(&s, "Empty", &[]), ["Parent"]);
+        assert_eq!(session_subfolder_order(&s, "Empty", &["Parent".into()]), ["Child"]);
+
+        s.execute("brush.presets.renameGroup", json!({"group": "Empty", "folder": ["Parent"], "newName": "Renamed"})).unwrap();
+        assert!(has_folder(&s, "Empty", &["Renamed".into(), "Child".into()]));
+        s.execute("brush.presets.createGroup", json!({"group": "Other Empty"})).unwrap();
+        s.execute("brush.presets.moveGroup", json!({"group": "Other Empty", "into": {"group": "Empty", "folder": ["Renamed"]}})).unwrap();
+        assert!(has_folder(&s, "Empty", &["Renamed".into(), "Other Empty".into()]));
+        assert!(!has_group(&s, "Other Empty"));
+        s.execute("brush.presets.moveGroup", json!({"group": "Empty", "folder": ["Renamed"], "into": {"group": "Empty"}})).unwrap();
+        assert!(has_folder(&s, "Empty", &["Renamed".into()]));
+        s.execute("brush.presets.deleteGroup", json!({"group": "Empty", "folder": ["Renamed"]})).unwrap();
+        assert!(s.tools.preset_hierarchy.folders.is_empty());
+        s.execute("brush.presets.renameGroup", json!({"group": "Empty", "newName": "Still Empty"})).unwrap();
+        assert!(has_group(&s, "Still Empty"));
+        s.execute("brush.presets.deleteGroup", json!({"group": "Still Empty"})).unwrap();
+        assert!(s.tools.preset_hierarchy.is_empty());
+    }
+
+    #[test]
+    fn empty_folders_keep_order_relative_to_populated_folders() {
+        let mut s = with_groups();
+        s.tools.presets.iter_mut().find(|preset| preset.name == "A1").unwrap().folder = vec!["Filled".into()];
+        s.execute("brush.presets.createFolder", json!({"group": "Alpha", "folder": ["Empty"]})).unwrap();
+        assert_eq!(session_subfolder_order(&s, "Alpha", &[]), ["Filled", "Empty"]);
+        s.execute("brush.presets.moveGroup", json!({"group": "Alpha", "folder": ["Empty"], "index": 0})).unwrap();
+        assert_eq!(session_subfolder_order(&s, "Alpha", &[]), ["Empty", "Filled"]);
+        s.execute("brush.presets.moveGroup", json!({"group": "Alpha", "folder": ["Empty"], "index": 1})).unwrap();
+        assert_eq!(session_subfolder_order(&s, "Alpha", &[]), ["Filled", "Empty"]);
     }
 
     #[test]
@@ -803,6 +1304,241 @@ mod tests {
             .collect();
         assert_eq!(order, ["A", "Child: Child item", "B", "C"]);
         assert_eq!(folder_of(&s, "Child item"), ["Child"]);
+    }
+
+    #[test]
+    fn moving_an_empty_folder_between_cards_persists_its_card_anchor() {
+        let mut s = Session::new();
+        s.tools.presets.clear();
+        s.tools.preset_hierarchy = crate::BrushPresetHierarchy {
+            groups: vec!["Parent".into(), "Empty".into()],
+            folders: Vec::new(),
+            root_order: vec![crate::BrushPresetRootEntry::Group("Parent".into()), crate::BrushPresetRootEntry::Group("Empty".into())],
+        };
+        for name in ["A", "B"] {
+            s.tools.presets.push(BrushPreset {
+                name: name.into(),
+                brush: Default::default(),
+                builtin: false,
+                group: "Parent".into(),
+                folder: Vec::new(),
+                captures: Default::default(),
+            });
+        }
+
+        s.execute("brush.presets.moveGroup", json!({"group": "Empty", "into": {"group": "Parent"}, "beforeItem": "B"})).unwrap();
+
+        let folder = s.tools.preset_hierarchy.folders.iter().find(|folder| folder.group == "Parent" && folder.path == ["Empty"]).unwrap();
+        assert_eq!(folder.before_item.as_deref(), Some("B"));
+        assert_eq!(s.tools.preset_hierarchy.groups, ["Parent"]);
+    }
+
+    #[test]
+    fn moving_an_empty_folder_before_another_empty_folder_reorders_folder_metadata() {
+        let mut s = Session::new();
+        s.tools.presets.clear();
+        s.tools.preset_hierarchy = crate::BrushPresetHierarchy {
+            groups: vec!["Parent".into(), "First".into(), "Second".into()],
+            folders: vec![crate::BrushPresetFolder { group: "Parent".into(), path: vec!["Second".into()], before_item: Some("Anchor".into()) }],
+            root_order: Vec::new(),
+        };
+        s.tools.presets.push(BrushPreset {
+            name: "Anchor".into(),
+            brush: Default::default(),
+            builtin: false,
+            group: "Parent".into(),
+            folder: Vec::new(),
+            captures: Default::default(),
+        });
+
+        s.execute("brush.presets.moveGroup", json!({"group": "First", "into": {"group": "Parent"}, "before": "Second"})).unwrap();
+
+        assert_eq!(
+            s.tools.preset_hierarchy.folders.iter().filter(|folder| folder.group == "Parent").map(|folder| folder.path[0].as_str()).collect::<Vec<_>>(),
+            ["First", "Second"]
+        );
+        assert_eq!(
+            s.tools.preset_hierarchy.folders.iter().find(|folder| folder.group == "Parent" && folder.path == ["First"]).unwrap().before_item.as_deref(),
+            Some("Anchor")
+        );
+    }
+
+    #[test]
+    fn root_group_can_be_moved_before_an_ungrouped_root_preset() {
+        let mut s = Session::new();
+        s.tools.presets.clear();
+        s.tools.preset_hierarchy = Default::default();
+        for (name, group) in [("Root A", ""), ("Root B", ""), ("Grouped A", "Set"), ("Grouped B", "Set"), ("Root C", "")] {
+            s.tools.presets.push(BrushPreset {
+                name: name.into(),
+                brush: Default::default(),
+                builtin: false,
+                group: group.into(),
+                folder: Vec::new(),
+                captures: Default::default(),
+            });
+        }
+
+        s.execute("brush.presets.moveGroup", json!({"group": "Set", "into": {}, "beforeItem": "Root B"})).unwrap();
+
+        let order: Vec<_> = s.tools.presets.iter().map(|preset| preset.name.as_str()).collect();
+        assert_eq!(order, ["Root A", "Grouped A", "Grouped B", "Root B", "Root C"]);
+        assert_eq!(s.tools.presets.iter().find(|preset| preset.name == "Grouped A").unwrap().group, "Set");
+        assert_eq!(
+            s.tools.preset_hierarchy.root_order,
+            [
+                crate::BrushPresetRootEntry::Preset("Root A".into()),
+                crate::BrushPresetRootEntry::Group("Set".into()),
+                crate::BrushPresetRootEntry::Preset("Root B".into()),
+                crate::BrushPresetRootEntry::Preset("Root C".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_root_group_can_be_inserted_between_root_cards_and_at_the_start() {
+        let mut s = Session::new();
+        s.tools.presets.clear();
+        s.tools.preset_hierarchy = crate::BrushPresetHierarchy {
+            groups: vec!["Empty".into()],
+            folders: Vec::new(),
+            root_order: vec![
+                crate::BrushPresetRootEntry::Preset("Root A".into()),
+                crate::BrushPresetRootEntry::Preset("Root B".into()),
+                crate::BrushPresetRootEntry::Group("Empty".into()),
+            ],
+        };
+        for name in ["Root A", "Root B"] {
+            s.tools.presets.push(BrushPreset {
+                name: name.into(),
+                brush: Default::default(),
+                builtin: false,
+                group: String::new(),
+                folder: Vec::new(),
+                captures: Default::default(),
+            });
+        }
+
+        s.execute("brush.presets.moveGroup", json!({"group": "Empty", "rootIndex": 1})).unwrap();
+        assert_eq!(
+            s.tools.preset_hierarchy.root_order,
+            [
+                crate::BrushPresetRootEntry::Preset("Root A".into()),
+                crate::BrushPresetRootEntry::Group("Empty".into()),
+                crate::BrushPresetRootEntry::Preset("Root B".into()),
+            ]
+        );
+
+        s.execute("brush.presets.moveGroup", json!({"group": "Empty", "rootIndex": 0})).unwrap();
+        assert_eq!(
+            s.tools.preset_hierarchy.root_order,
+            [
+                crate::BrushPresetRootEntry::Group("Empty".into()),
+                crate::BrushPresetRootEntry::Preset("Root A".into()),
+                crate::BrushPresetRootEntry::Preset("Root B".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn root_presets_can_be_moved_to_the_absolute_start_and_end() {
+        let mut s = Session::new();
+        s.tools.presets.clear();
+        s.tools.preset_hierarchy = Default::default();
+        for name in ["Root A", "Root B", "Root C"] {
+            s.tools.presets.push(BrushPreset {
+                name: name.into(),
+                brush: Default::default(),
+                builtin: false,
+                group: String::new(),
+                folder: Vec::new(),
+                captures: Default::default(),
+            });
+        }
+
+        s.execute("brush.presets.move", json!({"name": "Root C", "group": "", "folder": [], "index": 0, "rootIndex": 0})).unwrap();
+        assert_eq!(
+            s.tools.preset_hierarchy.root_order,
+            [
+                crate::BrushPresetRootEntry::Preset("Root C".into()),
+                crate::BrushPresetRootEntry::Preset("Root A".into()),
+                crate::BrushPresetRootEntry::Preset("Root B".into()),
+            ]
+        );
+        s.execute("brush.presets.move", json!({"name": "Root C", "group": "", "folder": [], "index": 2, "rootIndex": 2})).unwrap();
+        assert_eq!(
+            s.tools.preset_hierarchy.root_order,
+            [
+                crate::BrushPresetRootEntry::Preset("Root A".into()),
+                crate::BrushPresetRootEntry::Preset("Root B".into()),
+                crate::BrushPresetRootEntry::Preset("Root C".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn renaming_a_root_preset_keeps_its_mixed_root_order_slot() {
+        let mut s = Session::new();
+        s.tools.presets.clear();
+        s.tools.preset_hierarchy = crate::BrushPresetHierarchy {
+            groups: vec!["Empty".into()],
+            folders: Vec::new(),
+            root_order: vec![
+                crate::BrushPresetRootEntry::Preset("Root A".into()),
+                crate::BrushPresetRootEntry::Group("Empty".into()),
+                crate::BrushPresetRootEntry::Preset("Root B".into()),
+            ],
+        };
+        for name in ["Root A", "Root B"] {
+            s.tools.presets.push(BrushPreset {
+                name: name.into(),
+                brush: Default::default(),
+                builtin: false,
+                group: String::new(),
+                folder: Vec::new(),
+                captures: Default::default(),
+            });
+        }
+
+        s.execute("brush.presets.rename", json!({"name": "Root A", "newName": "Renamed"})).unwrap();
+        assert_eq!(
+            s.tools.preset_hierarchy.root_order,
+            [
+                crate::BrushPresetRootEntry::Preset("Renamed".into()),
+                crate::BrushPresetRootEntry::Group("Empty".into()),
+                crate::BrushPresetRootEntry::Preset("Root B".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn populated_root_group_root_index_move_reorders_the_mixed_sequence_and_preset_block() {
+        let mut s = Session::new();
+        s.tools.presets.clear();
+        s.tools.preset_hierarchy = Default::default();
+        for (name, group) in [("Root A", ""), ("Root B", ""), ("Grouped A", "Set"), ("Grouped B", "Set")] {
+            s.tools.presets.push(BrushPreset {
+                name: name.into(),
+                brush: Default::default(),
+                builtin: false,
+                group: group.into(),
+                folder: Vec::new(),
+                captures: Default::default(),
+            });
+        }
+
+        s.execute("brush.presets.moveGroup", json!({"group": "Set", "rootIndex": 1})).unwrap();
+
+        assert_eq!(
+            s.tools.preset_hierarchy.root_order,
+            [
+                crate::BrushPresetRootEntry::Preset("Root A".into()),
+                crate::BrushPresetRootEntry::Group("Set".into()),
+                crate::BrushPresetRootEntry::Preset("Root B".into()),
+            ]
+        );
+        let names = s.tools.presets.iter().map(|preset| preset.name.as_str()).collect::<Vec<_>>();
+        assert_eq!(names, ["Root A", "Grouped A", "Grouped B", "Root B"]);
     }
 
     #[test]

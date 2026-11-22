@@ -833,7 +833,7 @@ fn item_drag_preview_presses_against_asset_browser_viewport_edge() {
             ui.set_clip_rect(ui.clip_rect().intersect(picker_clip));
             ui.add_space(24.0);
             let mut paint_item = |ui: &egui::Ui, rect: Rect, _: usize, _: usize, state: ItemPaintState| {
-                if matches!(state, ItemPaintState::DragGhost) {
+                if matches!(state, ItemPaintState::Item { .. }) {
                     ghost_rect_ui.set(Some(rect));
                     ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(255, 0, 255));
                 }
@@ -924,7 +924,7 @@ fn item_drag_preview_follows_cursor_with_original_pickup_offset_after_leaving_as
             ui.set_clip_rect(ui.clip_rect().intersect(picker_clip));
             ui.add_space(24.0);
             let mut paint_item = |ui: &egui::Ui, rect: Rect, _: usize, _: usize, state: ItemPaintState| {
-                if matches!(state, ItemPaintState::DragGhost) {
+                if matches!(state, ItemPaintState::Item { .. }) {
                     ghost_rect_ui.set(Some(rect));
                     ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(255, 0, 255));
                 }
@@ -1678,6 +1678,62 @@ fn actual_root_cards_reorder_each_other_without_losing_owner_identity() {
             h.state().0.hierarchy_order[PANEL]
         );
     }
+}
+
+#[test]
+fn empty_group_can_be_dragged_between_root_cards_using_the_shared_card_gap() {
+    let groups = vec![group("A", vec![item("a1", "A card", &[])]), group("B", vec![item("b1", "B card", &[])]), group("Empty", Vec::new())];
+    let mut initial = PresetUi::default();
+    initial.set_hierarchy_order(
+        PANEL,
+        "",
+        vec![
+            HierarchyOrderEntry::RootItem { group: "A".into(), key: "a1".into() },
+            HierarchyOrderEntry::RootItem { group: "B".into(), key: "b1".into() },
+            HierarchyOrderEntry::Group("Empty".into()),
+            HierarchyOrderEntry::Group("A".into()),
+            HierarchyOrderEntry::Group("B".into()),
+        ],
+    );
+    let mut h = harness_with_state(groups, vec2(520.0, 900.0), initial);
+    let source = h.get_by_label("Empty").rect().center();
+    let first = h.get_by_label("A card").rect();
+    let second = h.get_by_label("B card").rect();
+    assert_eq!(first.top(), second.top(), "the root cards share one grid row");
+    let gap_midpoint = pos2((first.right() + second.left()) * 0.5, first.center().y);
+
+    pointer_drag(&mut h, source, gap_midpoint);
+
+    let root = &h.state().0.hierarchy_order[PANEL][""];
+    let first_card = root.iter().position(|entry| *entry == HierarchyOrderEntry::RootItem { group: "A".into(), key: "a1".into() }).unwrap();
+    let empty_group = root.iter().position(|entry| *entry == HierarchyOrderEntry::Group("Empty".into())).unwrap();
+    let second_card = root.iter().position(|entry| *entry == HierarchyOrderEntry::RootItem { group: "B".into(), key: "b1".into() }).unwrap();
+    assert_eq!(empty_group, first_card + 1, "the empty group is inserted immediately after the first card: {root:?}");
+    assert_eq!(second_card, empty_group + 1, "the second card remains immediately after the empty group: {root:?}");
+}
+
+#[test]
+fn empty_group_can_be_dragged_to_the_absolute_start_of_the_root_sequence() {
+    let groups = vec![group("A", vec![item("a1", "A card", &[])]), group("Empty", Vec::new())];
+    let mut initial = PresetUi::default();
+    initial.set_hierarchy_order(
+        PANEL,
+        "",
+        vec![
+            HierarchyOrderEntry::RootItem { group: "A".into(), key: "a1".into() },
+            HierarchyOrderEntry::Group("Empty".into()),
+            HierarchyOrderEntry::Group("A".into()),
+        ],
+    );
+    let mut h = harness_with_state(groups, vec2(520.0, 900.0), initial);
+    let source = h.get_by_label("Empty").rect().center();
+    let first_card = h.get_by_label("A card").rect();
+    let target = pos2(first_card.left() + 2.0, first_card.center().y);
+
+    pointer_drag(&mut h, source, target);
+
+    let root = &h.state().0.hierarchy_order[PANEL][""];
+    assert_eq!(root.first(), Some(&HierarchyOrderEntry::Group("Empty".into())), "the empty group should be the first root sibling: {root:?}");
 }
 
 #[test]
@@ -2589,12 +2645,13 @@ fn horizontal_insertion_markers_are_four_points_thick() {
 }
 
 #[test]
-fn grid_card_before_and_after_hit_areas_meet_at_the_card_center() {
+fn grid_card_sibling_hit_areas_meet_at_the_visual_gap_midpoint() {
     use crate::pickers::browser::dragging::DropArea;
 
     let h = harness(nested_group_tree(), vec2(520.0, 900.0));
     let geometry = test_drop_geometry(&h);
     let card = h.get_by_label("A card 1").rect();
+    let next_card = h.get_by_label("A card 2").rect();
     let card_debug = format!("{:?}", PickerId::item("A", "a1"));
     let (before, after, before_marker, after_marker) = geometry.hits.iter().filter(|(object, _, _, _)| object.contains(&card_debug)).fold(
         (None, None, None, None),
@@ -2610,12 +2667,24 @@ fn grid_card_before_and_after_hit_areas_meet_at_the_card_center() {
     let after_marker = after_marker.expect("card After indicator");
 
     assert_eq!(before.left(), card.left());
-    assert_eq!(before.right(), card.center().x, "the Before area should own the full left half of the card");
+    assert_eq!(before.right(), card.center().x, "the Before area should own the left half of the card");
     assert_eq!(after.left(), card.center().x, "the After area should begin where the Before area ends");
-    assert_eq!(after.right(), card.right());
-    assert_eq!(before_marker.width(), 4.0, "vertical card separators should be four pixels thick");
-    assert_eq!(after_marker.width(), 4.0, "vertical card separators should be four pixels thick");
-    assert_eq!(before_marker.center().x, card.left() - 1.0, "Before indicator should be centered in the 2px gap before the card");
+    let next_before = geometry
+        .hits
+        .iter()
+        .find(|(object, area, _, _)| object.contains(&format!("{:?}", PickerId::item("A", "a2"))) && *area == DropArea::Before)
+        .map(|(_, _, hit, _)| *hit)
+        .expect("next card Before hit area");
+    let midpoint = (card.right() + next_card.left()) * 0.5;
+    assert_eq!(after.right(), midpoint, "the After area should extend halfway into the gap after the card");
+    assert_eq!(next_before.left(), midpoint, "the next card's Before area should begin at the same gap midpoint");
+    assert_eq!(before_marker.width(), 3.0, "vertical card separators should retain their standard thickness");
+    assert_eq!(after_marker.width(), 3.0, "vertical card separators should retain their standard thickness");
+    assert_eq!(
+        before_marker.center().x,
+        (card.left() + 1.0).max(geometry.browser_parent_clip.left() + 2.0),
+        "the leading marker stays fully visible when the first card touches the viewport edge"
+    );
     assert_eq!(after_marker.center().x, card.right() + 1.0, "After indicator should be centered in the 2px gap after the card");
 }
 
@@ -2672,13 +2741,18 @@ fn root_leading_card_uses_its_vertical_leading_marker() {
     let first_card = h.get_by_label("A card 1").rect();
     let group_sibling = h.get_by_label("A").rect();
     assert_eq!(first_card.left(), group_sibling.left(), "root-level cards should align with root group siblings, without an extra indentation");
-    let leading_marker = test_drop_geometry(&h)
+    let geometry = test_drop_geometry(&h);
+    let leading_marker = geometry
         .hits
         .into_iter()
         .find(|(object, area, _, _)| object.starts_with("RootSequence(Some") && *area == DropArea::Before)
         .map(|(_, _, _, marker)| marker)
         .expect("root leading-card marker");
-    assert_eq!(leading_marker.center().x, first_card.left() - 1.0, "root leading marker should be centered in the 2px gap before the card");
+    assert_eq!(
+        leading_marker.center().x,
+        geometry.browser_parent_clip.left() + 2.0,
+        "root leading marker should remain fully visible inside the viewport clip"
+    );
     let source = h.get_by_label("A card 2").rect().center();
     let target = pos2(first_card.center().x, first_card.top() + 0.5);
     h.event(Event::PointerMoved(source));
@@ -2815,7 +2889,11 @@ mod filter_tests {
 
     type CapturedMove = (DropPosition, Option<PickerNodeIdentity>);
 
-    fn nested_group_drop_harness(domain_hierarchy_actions: bool, target_nested_card: bool) -> egui_kittest::Harness<'static, (PresetUi, Vec<CapturedMove>)> {
+    fn nested_group_drop_harness(
+        domain_hierarchy_actions: bool,
+        target_nested_card: bool,
+        target_nested_indentation: bool,
+    ) -> egui_kittest::Harness<'static, (PresetUi, Vec<CapturedMove>)> {
         use egui_kittest::Harness;
 
         let groups = vec![group("A", vec![item("nested-card", "Nested item", &["Nested"])]), group("B", vec![item("root-card", "Root item", &[])])];
@@ -2833,7 +2911,10 @@ mod filter_tests {
                     let receiving_identity = match &intent.position {
                         DropPosition::Before { target } | DropPosition::After { target } => identities.get(target).cloned(),
                         DropPosition::PrependTo { group } => identities.get(group).cloned(),
-                        DropPosition::AppendTo { .. } => None,
+                        DropPosition::AppendTo { container: crate::pickers::browser::path_identity_model::ContainerId::Group(id) } => {
+                            identities.get(id).cloned()
+                        }
+                        DropPosition::AppendTo { container: crate::pickers::browser::path_identity_model::ContainerId::Root } => None,
                     };
                     moves.push((intent.position.clone(), receiving_identity));
                     Ok(())
@@ -2870,8 +2951,20 @@ mod filter_tests {
         h.run_steps(3);
 
         let source = last_group_headers(&h.ctx, "hierarchy-drop-test").into_iter().find(|(name, _)| name == "B").map(|(_, rect)| rect.center()).unwrap();
-        let target = if target_nested_card { h.get_by_label("Nested item").rect() } else { h.get_by_label("Nested").rect() };
-        let target = target.center();
+        let target = if target_nested_indentation {
+            h.ctx
+                .data(|data| data.get_temp::<super::super::BrowserDropGeometrySnapshot>(egui::Id::new(("preset-browser-drop-geometry", "hierarchy-drop-test"))))
+                .unwrap()
+                .indentation_lanes
+                .iter()
+                .find(|(name, _)| name == "A/Nested")
+                .map(|(_, rect)| rect.center())
+                .unwrap()
+        } else if target_nested_card {
+            h.get_by_label("Nested item").rect().center()
+        } else {
+            h.get_by_label("Nested").rect().center()
+        };
         h.event(egui::Event::PointerMoved(source));
         h.run_steps(1);
         h.event(egui::Event::PointerButton { pos: source, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
@@ -2887,7 +2980,7 @@ mod filter_tests {
 
     #[test]
     fn root_group_drop_on_nested_header_resolves_once_in_domain_mode() {
-        let h = nested_group_drop_harness(true, false);
+        let h = nested_group_drop_harness(true, false, false);
         assert_eq!(h.state().1.len(), 1, "the nested header must resolve exactly one canonical destination");
         assert!(matches!(
             &h.state().1[0],
@@ -2898,7 +2991,7 @@ mod filter_tests {
 
     #[test]
     fn unsupported_root_group_drop_on_nested_header_or_card_is_not_reinterpreted_as_root_reorder() {
-        let h = nested_group_drop_harness(false, false);
+        let h = nested_group_drop_harness(false, false, false);
         assert!(h.state().1.is_empty(), "unsupported nested header must not commit or misroute the release");
         assert_eq!(h.state().0.parent_of("hierarchy-drop-test", "B"), None);
         assert!(
@@ -2909,9 +3002,21 @@ mod filter_tests {
 
     #[test]
     fn root_group_drop_on_nested_card_updates_the_unified_sibling_sequence() {
-        let h = nested_group_drop_harness(false, true);
+        let h = nested_group_drop_harness(false, true, false);
         assert!(h.state().1.is_empty(), "a path-aware card boundary requires an adapter commit, not a lossy flat-group fallback");
         assert_eq!(h.state().0.parent_of("hierarchy-drop-test", "B"), None);
+    }
+
+    #[test]
+    fn root_group_drop_on_nested_indentation_lane_appends_into_that_folder() {
+        let h = nested_group_drop_harness(true, false, true);
+        assert_eq!(h.state().1.len(), 1, "the nested indentation lane must resolve exactly one canonical destination");
+        assert!(matches!(
+            &h.state().1[0],
+            (DropPosition::AppendTo { container: crate::pickers::browser::path_identity_model::ContainerId::Group(_) },
+                Some(PickerNodeIdentity::Folder { group, path }))
+                if group == "A" && path == &["Nested".to_string()]
+        ));
     }
 }
 

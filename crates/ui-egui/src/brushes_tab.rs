@@ -63,8 +63,15 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         );
     }
     app.ui.brushes_panel.view = if app.ui.presets_ui.display_mode("brushes").uses_list_layout() { BrushesView::List } else { BrushesView::Grid };
-    let acts =
-        preset_list(ui, &app.session.tools.presets, app.session.tools.current_preset.as_deref(), &mut app.ui.brushes_panel, &mut app.ui.presets_ui, layout);
+    let acts = preset_list(
+        ui,
+        &app.session.tools.presets,
+        &app.session.tools.preset_hierarchy,
+        app.session.tools.current_preset.as_deref(),
+        &mut app.ui.brushes_panel,
+        &mut app.ui.presets_ui,
+        layout,
+    );
     apply(app, acts);
     ui.add_space(4.0);
     widgets::hairline(ui);

@@ -3,12 +3,15 @@
 //! This module is deliberately independent of pointer coordinates and egui geometry. Dragging
 //! resolves a pointer into a sibling/container destination; these helpers interpret the hierarchy.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::BTreeSet;
 
 use crate::pickers::browser::identity::PickerNodeIdentity;
 use crate::pickers::browser::path_identity_model::{ContainerId, DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId};
 
 /// Relationship in a name-keyed parent projection.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GroupRelation {
     Same,
@@ -16,6 +19,7 @@ pub(crate) enum GroupRelation {
     Unrelated,
 }
 
+#[cfg(test)]
 pub(crate) fn group_relation(parents: &BTreeMap<String, String>, candidate: &str, ancestor: &str) -> GroupRelation {
     if candidate == ancestor {
         return GroupRelation::Same;
@@ -32,10 +36,6 @@ pub(crate) fn group_relation(parents: &BTreeMap<String, String>, candidate: &str
         current = parent;
     }
     GroupRelation::Unrelated
-}
-
-pub(crate) fn is_same_or_descendant(parents: &BTreeMap<String, String>, candidate: &str, ancestor: &str) -> bool {
-    group_relation(parents, candidate, ancestor) != GroupRelation::Unrelated
 }
 
 /// Path-qualified structural result used by the Brushes compatibility helper. Browser hit areas

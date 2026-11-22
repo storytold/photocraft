@@ -337,13 +337,14 @@ pub(crate) fn standard_nested_group_context_menu(
 ) {
     match draw_group_context_menu(ui, tl!("Rename Group…"), tl!("Delete Group")) {
         Some(ContextMenuAction::Rename) => {
-            state.renaming = None;
-            state.group_renaming = Some(crate::pickers::state::NestedGroupRenameState {
-                panel: panel.to_owned(),
-                group: group.name.clone(),
-                group_path: group_path.to_vec(),
-                text: group_path.last().cloned().unwrap_or_default(),
-            });
+            let target = super::selection::SelectionTarget::Folder { group: group.name.clone(), path: group_path.to_vec() };
+            let targets = state
+                .browser_selection_snapshot
+                .get(panel)
+                .filter(|selection| selection.targets.contains(&target))
+                .map(|selection| selection.targets.clone())
+                .unwrap_or_else(|| vec![target]);
+            events.push(BrowserAction::BeginRenameSelection { targets });
         }
         Some(ContextMenuAction::Delete) => events.push(BrowserAction::DeleteNestedGroup { group: group.name.clone(), group_path: group_path.to_vec() }),
         None => {}
@@ -359,8 +360,14 @@ pub(crate) fn standard_group_context_menu(ui: &mut egui::Ui, state: &mut PresetU
     } else {
         match draw_group_context_menu(ui, tl!("Rename Group…"), tl!("Delete Group")) {
             Some(ContextMenuAction::Rename) => {
-                state.group_renaming = None;
-                state.renaming = Some((panel.to_string(), format!("group:{}", group.name), group.name.clone()));
+                let target = super::selection::SelectionTarget::Group(group.name.clone());
+                let targets = state
+                    .browser_selection_snapshot
+                    .get(panel)
+                    .filter(|selection| selection.targets.contains(&target))
+                    .map(|selection| selection.targets.clone())
+                    .unwrap_or_else(|| vec![target]);
+                events.push(BrowserAction::BeginRenameSelection { targets });
             }
             Some(ContextMenuAction::Delete) => events.push(BrowserAction::DeleteGroup(group.name.clone())),
             None => {}
@@ -605,6 +612,54 @@ mod tests {
         harness.run_steps(2);
 
         assert_standard_context_menu_template(&harness);
+    }
+
+    #[test]
+    fn brush_group_context_menu_queues_the_shared_rename_dialog_action() {
+        let group = GroupView { name: "Basics".into(), root_only: false, items: Vec::new() };
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let captured = Rc::clone(&events);
+        let mut harness = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui(|ui| {
+            ui.menu_button("Picker", |ui| {
+                super::standard_group_context_menu(ui, &mut PresetUi::default(), "brushes", &group, &mut captured.borrow_mut());
+            });
+        });
+        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(2);
+        harness.get_by_label("Picker").click();
+        harness.run_steps(2);
+        harness.get_by_label("Rename Group…").click();
+        harness.run_steps(2);
+
+        assert!(
+            matches!(events.borrow().as_slice(), [BrowserAction::BeginRenameSelection { targets }] if targets == &[super::super::selection::SelectionTarget::Group("Basics".into())])
+        );
+    }
+
+    #[test]
+    fn brush_group_context_menu_opens_the_shared_rename_dialog_with_the_existing_name() {
+        let group = GroupView { name: "Basics".into(), root_only: false, items: Vec::new() };
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let captured = Rc::clone(&events);
+        let mut state = PresetUi::default();
+        let mut harness = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui(|ui| {
+            ui.menu_button("Picker", |ui| {
+                super::standard_group_context_menu(ui, &mut state, "brushes", &group, &mut captured.borrow_mut());
+            });
+            let mut paint = |_: &egui::Ui, _: egui::Rect, _: usize, _: usize, _: crate::pickers::browser::asset_browser::ItemPaintState| {};
+            super::super::popup_dialogs::show_rename_selection_dialog(ui, "brushes", std::slice::from_ref(&group), &mut captured.borrow_mut(), &mut paint);
+        });
+        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(2);
+        harness.get_by_label("Picker").click();
+        harness.run_steps(2);
+        harness.get_by_label("Rename Group…").click();
+        harness.run_steps(4);
+
+        assert!(harness.query_by_label("Name").is_some(), "the context-menu action opens the shared group editor");
+        harness.get_by_label("OK").click();
+        harness.run_steps(3);
+        assert!(matches!(events.borrow().last(), Some(BrowserAction::RenameGroup(group, name)) if group == "Basics" && name == "Basics"));
     }
 
     #[test]

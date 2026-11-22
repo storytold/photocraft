@@ -87,6 +87,55 @@ pub(crate) fn build_hierarchy_projection(
         Some(())
     }
 
+    fn insert_empty_path(
+        nodes: &mut Vec<HierarchyNode>,
+        parent_path: &[String],
+        path: &[String],
+        identities: &mut std::collections::BTreeMap<PickerId, PickerNodeIdentity>,
+        projection_keys: &PickerProjectionKeys,
+        registry: &mut PickerIdRegistry,
+        group_index: usize,
+        before_item: Option<&str>,
+    ) -> Option<()> {
+        let (name, rest) = path.split_first()?;
+        let full_path: Vec<String> = parent_path.iter().cloned().chain(std::iter::once(name.clone())).collect();
+        let node = ProjectionNodeRef::Folder { group_index, path: full_path.clone() };
+        let id = projection_id(registry, projection_keys, node.clone())?;
+        let identity = projection_keys.reverse(&node)?.clone();
+        let index = nodes.iter().position(|node| node.id() == &id).unwrap_or_else(|| {
+            let insertion = if rest.is_empty() {
+                before_item.and_then(|anchor| {
+                    nodes.iter().position(|node| {
+                        matches!(identities.get(node.id()), Some(PickerNodeIdentity::Item { key, .. } | PickerNodeIdentity::FolderItem { key, .. }) if key == anchor)
+                    })
+                })
+            } else {
+                None
+            }
+            .or_else(|| {
+                let ordered_paths = projection_keys.folder_paths(group_index);
+                let current = ordered_paths.iter().position(|candidate| candidate == &full_path)?;
+                ordered_paths.iter().skip(current + 1).find_map(|candidate| {
+                    if candidate.len() != full_path.len() || !candidate.starts_with(parent_path) {
+                        return None;
+                    }
+                    let sibling = projection_id(registry, projection_keys, ProjectionNodeRef::Folder { group_index, path: candidate.clone() })?;
+                    nodes.iter().position(|node| node.id() == &sibling)
+                })
+            })
+            .unwrap_or(nodes.len());
+            nodes.insert(insertion, HierarchyNode::group(id.clone(), Vec::new()));
+            identities.insert(id.clone(), identity);
+            insertion
+        });
+        if !rest.is_empty() {
+            if let Some(HierarchyNode::Group { children, .. }) = nodes.get_mut(index) {
+                insert_empty_path(children, &full_path, rest, identities, projection_keys, registry, group_index, before_item)?;
+            }
+        }
+        Some(())
+    }
+
     struct ProjectionContext<'a> {
         groups: &'a [GroupView],
         display: &'a [(usize, usize)],
@@ -190,6 +239,22 @@ pub(crate) fn build_hierarchy_projection(
                 }
                 // Root-only entries are never valid in a group's child sequence.
                 HierarchyOrderEntry::RootItem { .. } => {}
+            }
+        }
+        // Explicit structural nodes let adapters preserve empty folders without inventing cards.
+        for path in context.projection_keys.folder_paths(group_index) {
+            let bounded = &path[..path.len().min(crate::pickers::browser::hierarchy::MAX_HIERARCHY_DEPTH)];
+            if !bounded.is_empty() {
+                insert_empty_path(
+                    &mut nodes,
+                    &[],
+                    bounded,
+                    &mut context.identities,
+                    context.projection_keys,
+                    context.registry,
+                    group_index,
+                    context.projection_keys.folder_anchor(group_index, bounded),
+                )?;
             }
         }
         let id = projection_id(context.registry, context.projection_keys, ProjectionNodeRef::Group(group_index))?;

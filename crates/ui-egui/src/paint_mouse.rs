@@ -196,6 +196,7 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui,
                 &mut b,
                 &app.session.tools.presets,
+                &app.session.tools.preset_hierarchy,
                 app.session.tools.current_preset.as_deref(),
                 &mut app.ui.presets_ui,
                 content,

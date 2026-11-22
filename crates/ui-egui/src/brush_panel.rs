@@ -466,7 +466,12 @@ fn brush_menu_leading(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut cr
     } else {
         Vec::new()
     };
-    let confirmed = popup_dialogs::confirm_deletions(ui, panel, &crate::pickers::adapters::brushes::browser_groups(&app.session.tools.presets), requested);
+    let confirmed = popup_dialogs::confirm_deletions(
+        ui,
+        panel,
+        &crate::pickers::adapters::brushes::browser_groups(&app.session.tools.presets, &app.session.tools.preset_hierarchy),
+        requested,
+    );
     if !confirmed.is_empty() {
         let actions = crate::pickers::adapters::brushes::browser_actions_to_actions(&app.session.tools.presets, confirmed, Some(&selection));
         crate::pickers::adapters::brushes::apply(app, actions);

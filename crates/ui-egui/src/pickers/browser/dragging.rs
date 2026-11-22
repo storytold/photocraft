@@ -15,7 +15,7 @@ use crate::pickers::browser::dragging_model::{
 };
 use crate::pickers::browser::groups::ROW_INDENT;
 use crate::pickers::browser::hierarchy_model::commit_hierarchy_move;
-use crate::pickers::browser::hierarchy_utils::{hierarchy_drop_item_destination, hierarchy_move_sources, is_same_or_descendant, plan_hierarchy_item_moves};
+use crate::pickers::browser::hierarchy_utils::{hierarchy_drop_item_destination, hierarchy_move_sources, plan_hierarchy_item_moves};
 use crate::pickers::browser::identity::{PickerNodeIdentity, PickerNodeRole};
 use crate::pickers::browser::path_identity_model::{ContainerId, HierarchyNode, PickerBrowserHierarchy, PickerId};
 
@@ -146,21 +146,47 @@ fn push_boundary(drag: &BrowserDragState, object: DropObject, area: DropArea, hi
 
 /// Register the two edge regions owned by a card. Grid cards split horizontally; list rows split
 /// vertically, so each layout follows its visible insertion axis.
-pub(super) fn register_card(drag: &BrowserDragState, id: PickerId, rect: Rect, depth: usize, list: bool, row_end: Option<Rect>) {
+pub(super) fn register_card(
+    drag: &BrowserDragState,
+    id: PickerId,
+    rect: Rect,
+    depth: usize,
+    list: bool,
+    clip: Rect,
+    previous: Option<Rect>,
+    next: Option<Rect>,
+    row_end: Option<Rect>,
+) {
     let (leading, trailing, leading_marker, trailing_marker) = if list {
+        let top = previous
+            .filter(|neighbor| (neighbor.center().x - rect.center().x).abs() < 0.5)
+            .map_or(rect.top(), |neighbor| (neighbor.bottom() + rect.top()) * 0.5);
+        let bottom = next
+            .filter(|neighbor| (neighbor.center().x - rect.center().x).abs() < 0.5)
+            .map_or(rect.bottom(), |neighbor| (rect.bottom() + neighbor.top()) * 0.5);
         (
-            Rect::from_min_max(rect.min, pos2(rect.right(), rect.center().y)),
-            Rect::from_min_max(pos2(rect.left(), rect.center().y), rect.max),
+            Rect::from_min_max(pos2(rect.left(), top), pos2(rect.right(), rect.center().y)),
+            Rect::from_min_max(pos2(rect.left(), rect.center().y), pos2(rect.right(), bottom)),
             horizontal_marker(rect, rect.top()),
             horizontal_marker(rect, rect.bottom()),
         )
     } else {
+        let left = previous
+            .filter(|neighbor| (neighbor.center().y - rect.center().y).abs() < 0.5)
+            .map_or(rect.left(), |neighbor| (neighbor.right() + rect.left()) * 0.5);
+        let right =
+            next.filter(|neighbor| (neighbor.center().y - rect.center().y).abs() < 0.5).map_or(rect.right(), |neighbor| (rect.right() + neighbor.left()) * 0.5);
         (
-            Rect::from_min_max(rect.min, pos2(rect.center().x, rect.bottom())),
-            Rect::from_min_max(pos2(rect.center().x, rect.top()), rect.max),
-            vertical_marker(rect.left() - 1.0, rect),
-            vertical_marker(rect.right() + 1.0, rect),
+            Rect::from_min_max(pos2(left, rect.top()), pos2(rect.center().x, rect.bottom())),
+            Rect::from_min_max(pos2(rect.center().x, rect.top()), pos2(right, rect.bottom())),
+            vertical_root_marker((rect.left() - 1.0).max(clip.left() + 2.0), rect),
+            vertical_root_marker((rect.right() + 1.0).min(clip.right() - 2.0), rect),
         )
+    };
+    let leading_marker = if !list && previous.is_none_or(|neighbor| (neighbor.center().y - rect.center().y).abs() >= 0.5) {
+        vertical_root_marker((rect.left() + 1.0).max(clip.left() + 2.0), rect)
+    } else {
+        leading_marker
     };
     push(drag, DropObject::Card(id.clone()), DropArea::Before, leading, leading_marker, depth);
     push(drag, DropObject::Card(id.clone()), DropArea::After, trailing, trailing_marker, depth);
@@ -186,42 +212,34 @@ pub(super) fn register_group_objects(projection: &BrowserProjection, drag: &Brow
         } else {
             None
         };
+        let has_visible_descendants = last_descendant.is_some();
         let bottom = last_descendant.map_or(header.bottom(), |rect| rect.bottom());
         // The relocated bottom band belongs to the group, not to whichever child happens to be
         // last or how wide that child is. It spans the full group row beneath the visible subtree;
         // explicit boundary priority arbitrates any overlap with the final card's own After edge.
         let edge = GROUP_EDGE_HEIGHT;
-        let group_end = bottom + if *open { GROUP_BOUNDARY_GAP } else { 0.0 };
-        let (top_hit, bottom_hit) = group_header_edge_hits(*header, group_end, edge, *open);
+        let open_with_descendants = *open && has_visible_descendants;
+        let group_end = bottom + if open_with_descendants { GROUP_BOUNDARY_GAP } else { 0.0 };
+        let (top_hit, bottom_hit) = group_header_edge_hits(*header, group_end, edge, open_with_descendants);
         push_boundary(drag, DropObject::GroupHeader(id.clone()), DropArea::Before, top_hit, horizontal_marker(*header, header.top()), *depth);
         push(drag, DropObject::GroupHeader(id.clone()), DropArea::Into, body, *header, *depth);
         // Keep the visual insertion line in the actual row gap. The larger hit band is
         // intentionally lower so it can meet the trailing hit area of the final child.
-        let marker_y = if *open { group_end + edge * 0.5 - 5.0 } else { bottom };
+        let marker_y = if open_with_descendants { group_end + edge * 0.5 - 5.0 } else { bottom };
         push_boundary(drag, DropObject::GroupHeader(id.clone()), DropArea::After, bottom_hit, horizontal_marker(*header, marker_y), *depth);
     }
 }
 
 /// Turn the already-laid-out indentation lanes into group-append targets.
-pub(super) fn register_indentation_objects(projection: &BrowserProjection, drag: &BrowserDragState) {
-    for (name, response) in &drag.indent_drop_targets {
-        let id = projection
-            .hierarchy_identities
-            .iter()
-            .find_map(|(id, identity)| matches!(identity, PickerNodeIdentity::Group(group) if group == name).then(|| id.clone()));
-        let Some(id) = id else { continue };
+pub(super) fn register_indentation_objects(drag: &BrowserDragState) {
+    for (_name, id, response) in &drag.indent_drop_targets {
         let lane = response.rect;
         // The hit area remains the gutter rect, but its visual indicator follows the group's
         // full-width header row rather than inheriting the narrower hit-area bounds.
-        let marker_bounds = drag.headers.iter().find(|(_, _, header_name)| header_name == name).map(|(_, rect, _)| *rect).unwrap_or(lane);
+        let marker_bounds = drag.canonical_drop.node_bounds.borrow().get(id).copied().unwrap_or(lane);
         let marker = horizontal_marker(marker_bounds, lane.bottom());
-        let mut depth = 0;
-        let mut parent = projection.parents.get(name);
-        while let Some(parent_name) = parent {
-            depth += 1;
-            parent = projection.parents.get(parent_name);
-        }
-        push_with_priority(drag, DropObject::IndentationLane(id), DropArea::Append, lane, marker, depth, DropHitPriority::IndentationLane);
+        let depth = drag.canonical_drop.group_headers.iter().find(|(header_id, _, _, _)| header_id == id).map_or(0, |(_, _, depth, _)| *depth);
+        push_with_priority(drag, DropObject::IndentationLane(id.clone()), DropArea::Append, lane, marker, depth, DropHitPriority::IndentationLane);
     }
 }
 
@@ -234,16 +252,16 @@ pub(super) fn register_root_objects(ui: &mut egui::Ui, hierarchy: &PickerBrowser
         let clip = parent_clip.unwrap_or_else(|| ui.clip_rect());
         let hit = Rect::from_min_max(pos2(clip.left(), clip.top()), pos2(clip.right(), rect.top() + 1.0));
         let marker = if first.is_group() {
-            horizontal_marker(rect, rect.top())
+            horizontal_marker(clip, rect.top().max(clip.top() + 2.0))
         } else if list {
-            horizontal_marker(rect, rect.top())
+            horizontal_marker(rect, rect.top().max(clip.top() + 2.0))
         } else {
-            vertical_marker(rect.left() - 1.0, rect)
+            vertical_root_marker((rect.left() - 1.0).max(clip.left() + 2.0), rect)
         };
-        push(drag, DropObject::RootSequence(Some(first.id().clone())), DropArea::Before, hit, marker, 0);
+        push_boundary(drag, DropObject::RootSequence(Some(first.id().clone())), DropArea::Before, hit, marker, 0);
     } else {
         let clip = parent_clip.unwrap_or_else(|| ui.clip_rect());
-        push(drag, DropObject::RootSequence(None), DropArea::Before, clip, horizontal_marker(clip, clip.top()), 0);
+        push_boundary(drag, DropObject::RootSequence(None), DropArea::Before, clip, horizontal_marker(clip, clip.top() + 2.0), 0);
     }
     let clip = ui.clip_rect();
     let end_height = (clip.bottom() - ui.cursor().top()).max(ROOT_END_MIN_HEIGHT);
@@ -257,18 +275,18 @@ pub(super) fn register_root_objects(ui: &mut egui::Ui, hierarchy: &PickerBrowser
             row.zip(visible_bottom).map(|(row, bottom)| horizontal_marker(row, bottom)).unwrap_or_else(|| horizontal_marker(clip, end_top))
         }
         Some(last) if !last.is_group() && !list => {
-            bounds.get(last.id()).copied().map(|rect| vertical_marker(rect.right() + 1.0, rect)).unwrap_or_else(|| horizontal_marker(clip, end_top))
+            bounds.get(last.id()).copied().map(|rect| vertical_root_marker(rect.right() + 1.0, rect)).unwrap_or_else(|| horizontal_marker(clip, end_top))
         }
         Some(last) if !last.is_group() => {
             bounds.get(last.id()).copied().map(|rect| horizontal_marker(rect, rect.bottom())).unwrap_or_else(|| horizontal_marker(clip, end_top))
         }
         _ => horizontal_marker(clip, end_top),
     };
-    push(drag, DropObject::RootSequence(None), DropArea::Append, hit, marker, 0);
+    push_boundary(drag, DropObject::RootSequence(None), DropArea::Append, hit, marker, 0);
 }
 
-fn vertical_marker(x: f32, rect: Rect) -> Rect {
-    Rect::from_min_max(pos2(x - 2.0, rect.top()), pos2(x + 2.0, rect.bottom()))
+fn vertical_root_marker(x: f32, rect: Rect) -> Rect {
+    Rect::from_min_max(pos2(x - 1.5, rect.top()), pos2(x + 1.5, rect.bottom()))
 }
 
 fn horizontal_marker(bounds: Rect, y: f32) -> Rect {
@@ -398,33 +416,28 @@ pub(super) fn register_group_indent_drop_targets(
     ctx: &BrowserCtx<'_>,
     projection: &BrowserProjection,
     drag_state: &mut BrowserDragState,
-    expanded_groups: &std::collections::BTreeSet<String>,
+    _expanded_groups: &std::collections::BTreeSet<String>,
 ) {
     if ctx.capabilities.group_drag || ctx.capabilities.item_drop {
-        for (_group_index, header, group_name) in &drag_state.headers {
-            if !expanded_groups.contains(group_name) {
+        let bounds = drag_state.canonical_drop.node_bounds.borrow();
+        for (id, header, _depth, open) in &drag_state.canonical_drop.group_headers {
+            if !open {
                 continue;
             }
-            let bottom = drag_state
-                .headers
-                .iter()
-                .filter(|(_, _, name)| name != group_name && is_same_or_descendant(&projection.parents, name, group_name))
-                .map(|(_, rect, _)| rect.bottom())
-                .chain(
-                    drag_state
-                        .group_content_areas
-                        .iter()
-                        .filter(|(name, rect)| rect.is_positive() && is_same_or_descendant(&projection.parents, name, group_name))
-                        .map(|(_, rect)| rect.bottom()),
-                )
-                .max_by(f32::total_cmp);
+            let Some(node) = projection.hierarchy.node(id) else { continue };
+            let bottom = node.children().iter().filter_map(|child| last_visible_rect(child, &bounds)).map(|rect| rect.bottom()).max_by(f32::total_cmp);
             if let Some(bottom) = bottom {
                 // The parent lane owns the gutter across the first child's leading edge as well
                 // as the visible subtree below it, so the top of the lane absorbs that boundary.
                 let column = Rect::from_min_max(pos2(header.left(), header.bottom() - GROUP_EDGE_HEIGHT), pos2(header.left() + ROW_INDENT, bottom));
                 if column.is_positive() {
-                    let response = ui.interact(column, ui.id().with(("group-indent-column", ctx.panel, group_name.as_str())), egui::Sense::hover());
-                    drag_state.indent_drop_targets.push((group_name.clone(), response));
+                    let name = match projection.hierarchy_identities.get(id) {
+                        Some(PickerNodeIdentity::Group(group)) => group.clone(),
+                        Some(PickerNodeIdentity::Folder { group, path }) => format!("{group}/{}", path.join("/")),
+                        _ => continue,
+                    };
+                    let response = ui.interact(column, ui.id().with(("group-indent-column", ctx.panel, name.as_str())), egui::Sense::hover());
+                    drag_state.indent_drop_targets.push((name, id.clone(), response));
                 }
             }
         }
@@ -466,7 +479,7 @@ pub(crate) fn canvas_drop_target(pointer: Pos2, item: Rect, canvas: Rect, browse
 pub(super) struct BrowserDragState {
     pub(super) headers: Vec<(usize, Rect, String)>,
     pub(super) group_content_areas: Vec<(String, Rect)>,
-    pub(super) indent_drop_targets: Vec<(String, egui::Response)>,
+    pub(super) indent_drop_targets: Vec<(String, PickerId, egui::Response)>,
     pub(super) dropped: Option<(String, Pos2)>,
     pub(super) ghosts: BrowserDragGhosts,
     pub(super) canonical_drop: CanonicalDropState,

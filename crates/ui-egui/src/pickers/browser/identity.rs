@@ -68,10 +68,18 @@ struct ProjectionIdentity {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PickerProjectionKeys {
     nodes: BTreeMap<ProjectionNodeRef, ProjectionIdentity>,
+    folder_order: Vec<(usize, Vec<String>)>,
+    folder_anchors: BTreeMap<(usize, Vec<String>), String>,
 }
 
 impl PickerProjectionKeys {
     pub(crate) fn insert(&mut self, node: ProjectionNodeRef, key: PickerIdentityKey, reverse: PickerNodeIdentity) {
+        if let ProjectionNodeRef::Folder { group_index, path } = &node {
+            let entry = (*group_index, path.clone());
+            if !self.folder_order.contains(&entry) {
+                self.folder_order.push(entry);
+            }
+        }
         self.nodes.insert(node, ProjectionIdentity { key, reverse });
     }
 
@@ -85,6 +93,23 @@ impl PickerProjectionKeys {
 
     pub(crate) fn all_keys(&self) -> BTreeSet<PickerIdentityKey> {
         self.nodes.values().map(|identity| identity.key.clone()).collect()
+    }
+
+    pub(crate) fn folder_paths(&self, group_index: usize) -> Vec<Vec<String>> {
+        self.folder_order.iter().filter_map(|(owner, path)| (*owner == group_index).then_some(path.clone())).collect()
+    }
+
+    pub(crate) fn set_folder_anchor(&mut self, group_index: usize, path: Vec<String>, before_item: Option<String>) {
+        let key = (group_index, path);
+        if let Some(before_item) = before_item {
+            self.folder_anchors.insert(key, before_item);
+        } else {
+            self.folder_anchors.remove(&key);
+        }
+    }
+
+    pub(crate) fn folder_anchor(&self, group_index: usize, path: &[String]) -> Option<&str> {
+        self.folder_anchors.get(&(group_index, path.to_vec())).map(String::as_str)
     }
 }
 

@@ -188,7 +188,15 @@ pub(crate) fn paint_candidate(ui: &egui::Ui, candidate: &DropCandidate, color: e
     let painter = ui.ctx().layer_painter(layer).with_clip_rect(clip_rect);
     match &candidate.indicator {
         DropIndicator::InsertionLine { rect } | DropIndicator::RootAppendLine { rect } => {
-            painter.rect_filled(*rect, egui::CornerRadius::ZERO, color);
+            // The leading root-card marker is three logical points wide. Give its fill a
+            // half-point overdraw on either side so rasterization at 1x keeps all four edge
+            // pixels visible instead of clipping half-covered boundary columns.
+            let rect = if (rect.width() - 3.0).abs() < 0.01 {
+                Rect::from_min_max(egui::pos2(rect.left() - 0.5, rect.top()), egui::pos2(rect.right() + 0.5, rect.bottom()))
+            } else {
+                *rect
+            };
+            painter.rect_filled(rect, egui::CornerRadius::ZERO, color);
         }
         DropIndicator::ContainerHighlight { rect } => {
             for border in container_outline_rects(*rect) {

@@ -173,6 +173,9 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         };
         picker_shell(ui, &mut state, &mut adapter, ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new gradient"))), ..Default::default() })
     };
+    if let Some(name) = crate::pickers::browser::popup_dialogs::show_new_gradient_preset_dialog(ui) {
+        create_named_gradient(app, &mut state, &name);
+    }
     app.ui.presets_ui = state;
 
     for event in events {
@@ -292,6 +295,32 @@ pub(crate) fn new_gradient(app: &mut PhotocraftApp, state: &mut crate::pickers::
     }
 }
 
+/// Create a named preset after the panel's New Gradient Preset dialog is accepted.
+fn create_named_gradient(app: &mut PhotocraftApp, state: &mut crate::pickers::state::PresetUi, name: &str) {
+    let selected_group = state.selected_group.get("gradients").cloned().or_else(|| {
+        state
+            .selected
+            .get("gradients")
+            .and_then(|key| app.session.presets.gradients.iter().find(|group| group.items.iter().any(|item| &item.name == key)).map(|group| group.name.clone()))
+    });
+    let destination_group = selected_group
+        .filter(|group| group != ROOT_ITEMS_GROUP)
+        .or_else(|| app.session.presets.gradients.iter().find(|group| group.name != ROOT_ITEMS_GROUP).map(|group| group.name.clone()))
+        .unwrap_or_else(|| ROOT_ITEMS_GROUP.to_owned());
+    let root_level = destination_group == ROOT_ITEMS_GROUP;
+    if let Some(result) = run(app, "gradient.presets.new", json!({"name": name, "group": destination_group})) {
+        let created_name = result.get("name").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned();
+        if !created_name.is_empty() {
+            state.set_selected_item("gradients", &destination_group, &[], &created_name);
+            if root_level {
+                let mut root = state.hierarchy_order.get("gradients").and_then(|orders| orders.get("")).cloned().unwrap_or_default();
+                root.push(HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: created_name.clone() });
+                state.set_hierarchy_order("gradients", "", root);
+            }
+        }
+    }
+}
+
 /// Contribute the Gradients-specific actions to the shared docking header menu.
 pub(crate) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &crate::pickers::state::PresetUi) {
     if crate::menu_keys::menu_item_button(ui, tl!("Append Default Gradients…"), true).clicked() {
@@ -368,7 +397,13 @@ mod tests {
         let root = &h.state().ui.presets_ui.hierarchy_order["gradients"][""];
         assert_eq!(root, &[HierarchyOrderEntry::RootItem { group: ROOT_ITEMS_GROUP.into(), key: library[0].items[0].name.clone() }]);
         assert!(last_group_headers(&h.ctx, "gradients").is_empty(), "the domain backing group must not render as a folder");
-        assert!(h.query_all_by_label("Custom").next().is_some(), "the new gradient card should be visible at root");
+        let card = h.get_by_label("Custom").rect();
+        let image = h.render().expect("render the gradient asset browser");
+        let ppp = h.ctx.pixels_per_point();
+        let sample = |x: f32| image.get_pixel((x * ppp).floor() as u32, (card.center().y * ppp).floor() as u32).0;
+        let left = sample(card.left() + card.width() * 0.25);
+        let right = sample(card.left() + card.width() * 0.75);
+        assert_ne!(left[..3], right[..3], "the gradient card must paint visibly different endpoint colours; card={card:?}");
 
         // The UI mirror remains serde-safe, while durable root membership is stored in the
         // gradient library's reserved owner group rather than depending on this transient state.
@@ -400,8 +435,45 @@ mod tests {
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
         h.run_steps(3);
 
-        assert!(last_group_headers(&h.ctx, "gradients").iter().any(|(name, _)| name == "Presets"));
-        assert!(h.query_all_by_label("User Gradient").next().is_some());
+        let header = last_group_headers(&h.ctx, "gradients").into_iter().find(|(name, _)| name == "Presets").expect("the Presets group header is visible").1;
+        let disclosure = egui::pos2(header.left() + 9.0, header.center().y);
+        h.event(Event::PointerMoved(disclosure));
+        h.event(Event::PointerButton { pos: disclosure, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos: disclosure, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+        let card = h.query_all_by_label("User Gradient").next().expect("the preset card is accessible").rect();
+        let image = h.render().expect("render the grouped gradient preset");
+        let ppp = h.ctx.pixels_per_point();
+        let sample = |x: f32| image.get_pixel((x * ppp).floor() as u32, (card.center().y * ppp).floor() as u32).0;
+        let left = sample(card.left() + card.width() * 0.25);
+        let right = sample(card.left() + card.width() * 0.75);
+        assert_ne!(left[..3], right[..3], "the grouped gradient card must actually paint its gradient");
+    }
+
+    #[test]
+    fn confirming_the_new_gradient_preset_dialog_creates_the_named_preset() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = Harness::builder().with_size(vec2(360.0, 900.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
+                    gradients_panel(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        crate::pickers::browser::popup_dialogs::request_new_gradient_preset(&h.ctx);
+        h.run_steps(3);
+
+        assert!(h.query_by_label("Name").is_some(), "the real gradient panel must display the name dialog");
+        h.get_by_label("OK").click();
+        h.run_steps(4);
+
+        assert!(
+            h.state().session.presets.gradients.iter().any(|group| group.items.iter().any(|item| item.name == "Custom")),
+            "accepting the dialog creates the named gradient preset"
+        );
     }
 
     #[test]

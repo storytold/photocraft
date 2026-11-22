@@ -111,6 +111,9 @@ pub(super) struct ItemDragGhost {
     pub(super) group_index: usize,
     pub(super) item_index: usize,
     pub(super) display_mode: crate::pickers::state::PickerDisplayMode,
+    /// Whether the source was actually rendered as a list row. Custom-sized cards can use a
+    /// list-like display preference while still being painted as full browser cards.
+    pub(super) list_layout: bool,
     pub(super) selected: bool,
 }
 
@@ -155,7 +158,7 @@ impl Painters<'_, '_> {
             crate::pickers::browser::groups::paint_with_opacity(&ghost_ui, ghost_rect, open, &name, depth, Some(count), GROUP_DRAG_GHOST_OPACITY);
         }
         for ghost in ghosts.items {
-            let ItemDragGhost { rect: ghost_rect, group_index, item_index, display_mode: ghost_mode, selected } = ghost;
+            let ItemDragGhost { rect: ghost_rect, group_index, item_index, display_mode: ghost_mode, list_layout, selected } = ghost;
             let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(("preset-drag", panel)));
             let mut ghost_ui = egui::Ui::new(
                 ui.ctx().clone(),
@@ -164,7 +167,7 @@ impl Painters<'_, '_> {
             );
             ghost_ui.set_clip_rect(app_window_clip);
             ghost_ui.set_opacity(GROUP_DRAG_GHOST_OPACITY);
-            if ghost_mode == crate::pickers::state::PickerDisplayMode::TextOnly {
+            if list_layout && ghost_mode == crate::pickers::state::PickerDisplayMode::TextOnly {
                 if let Some(item) = groups.get(group_index).and_then(|group| group.items.get(item_index)) {
                     if selected {
                         ghost_ui.painter().rect_filled(ghost_rect, egui::CornerRadius::ZERO, tokens.row_selected);
@@ -174,13 +177,13 @@ impl Painters<'_, '_> {
                     label_ui.set_clip_rect(label_rect.intersect(app_window_clip));
                     crate::widgets::elided_label(&mut label_ui, &item.name, label_rect.width());
                 }
-            } else if ghost_mode.uses_list_layout() {
+            } else if list_layout {
                 if self.has_list_item() {
                     self.list_item(&ghost_ui, ghost_rect, group_index, item_index, selected);
                 } else if let Some(item) = groups.get(group_index).and_then(|group| group.items.get(item_index)) {
                     let thumb_size = (ghost_rect.height() - 2.0).max(0.0);
                     let thumb_rect = Rect::from_min_size(ghost_rect.min + egui::vec2(1.0, 1.0), egui::vec2(thumb_size, thumb_size));
-                    self.item(&ghost_ui, thumb_rect, group_index, item_index, ItemPaintState::DragGhost);
+                    self.item(&ghost_ui, thumb_rect, group_index, item_index, ItemPaintState::Item { selected });
                     ghost_ui.painter().text(
                         pos2(thumb_rect.right() + 8.0, ghost_rect.center().y),
                         egui::Align2::LEFT_CENTER,
@@ -190,7 +193,7 @@ impl Painters<'_, '_> {
                     );
                 }
             } else {
-                self.item(&ghost_ui, ghost_rect, group_index, item_index, ItemPaintState::DragGhost);
+                self.item(&ghost_ui, ghost_rect, group_index, item_index, ItemPaintState::Item { selected });
             }
             ghost_ui.painter().rect_stroke(ghost_rect, egui::CornerRadius::ZERO, egui::Stroke::new(2.0, tokens.accent), egui::StrokeKind::Middle);
         }

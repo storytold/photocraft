@@ -24,7 +24,7 @@ fn browser_actions_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut 
     let new_preset_enabled = panel != "patterns";
     if crate::menu_keys::menu_item_button(ui, &format!("New {asset} Preset…"), new_preset_enabled).clicked() {
         if panel == "gradients" {
-            crate::pickers::adapters::gradients::new_gradient(app, state);
+            crate::pickers::browser::popup_dialogs::request_new_gradient_preset(ui.ctx());
         } else if panel == "swatches" {
             if app.session.presets.swatches.iter().all(|group| group.items.is_empty()) {
                 crate::pickers::browser::browser_actions::generic_with_state(app, state, panel, prefix, &BrowserAction::New, new_params);
@@ -427,7 +427,7 @@ mod tests {
     }
 
     #[test]
-    fn gradient_menu_creates_a_preset_through_the_domain_aware_browser_action() {
+    fn gradient_menu_opens_the_new_preset_name_dialog_without_creating_a_preset_yet() {
         let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let before = app.session.presets.gradients.iter().map(|group| group.items.len()).sum::<usize>();
         let mut harness = Harness::builder().with_size(vec2(420.0, 360.0)).build_ui_state(
@@ -435,6 +435,7 @@ mod tests {
                 crate::pickers::shell::picker_menu_popup(ui, "Panel menu", egui::Vec2::ZERO, |ui| {
                     super::browser_actions_menu(app, ui, state, "gradients");
                 });
+                let _ = crate::pickers::browser::popup_dialogs::show_new_gradient_preset_dialog(ui);
             },
             (app, PresetUi::default()),
         );
@@ -446,8 +447,10 @@ mod tests {
         harness.run_steps(2);
 
         let after = harness.state().0.session.presets.gradients.iter().map(|group| group.items.len()).sum::<usize>();
-        assert_eq!(after, before + 1);
-        assert!(harness.state().1.item_renaming.is_some(), "the created gradient enters the shared inline rename flow");
+        assert_eq!(after, before, "opening the name dialog must not create a preset before confirmation");
+        assert!(harness.query_by_label("Name").is_some(), "the name field must be visible");
+        assert!(harness.query_by_label("OK").is_some(), "the dialog must expose confirmation");
+        assert!(harness.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.text() == "Gradient Name")));
     }
 
     #[test]

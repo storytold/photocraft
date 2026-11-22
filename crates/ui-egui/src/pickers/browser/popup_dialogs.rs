@@ -4,6 +4,7 @@ use crate::pickers::browser::asset_browser::{BrowserAction, GroupView, ItemPaint
 
 const PENDING: &str = "picker-delete-confirmation";
 const NEW_GROUP: &str = "picker-new-group-dialog";
+const NEW_GRADIENT_PRESET: &str = "picker-new-gradient-preset-dialog";
 const RENAME_GROUP: &str = "picker-rename-group-dialog";
 const RENAME_CARD: &str = "picker-rename-card-dialog";
 const RENAME_HEADERS_AFTER_ITEMS: &str = "picker-rename-headers-after-items";
@@ -13,6 +14,43 @@ const RENAME_QUEUE: &str = "queue";
 /// Queue the shared New Group dialog from a picker panel menu.
 pub(crate) fn request_new_group(ctx: &egui::Context, panel: &str) {
     ctx.data_mut(|data| data.insert_temp(egui::Id::new((NEW_GROUP, panel)), true));
+}
+
+/// Queue the Gradient Preset name dialog from the panel menu.
+pub(crate) fn request_new_gradient_preset(ctx: &egui::Context) {
+    let request_id = egui::Id::new(NEW_GRADIENT_PRESET);
+    ctx.data_mut(|data| {
+        data.insert_temp(request_id, true);
+        data.insert_temp(request_id.with("name"), "Custom".to_owned());
+    });
+}
+
+/// Show the name-only Gradient Preset dialog and return its accepted name.
+/// The gradient editor remains intentionally out of scope.
+pub(crate) fn show_new_gradient_preset_dialog(ui: &mut egui::Ui) -> Option<String> {
+    let ctx = ui.ctx().clone();
+    let request_id = egui::Id::new(NEW_GRADIENT_PRESET);
+    if !ctx.data(|data| data.get_temp::<bool>(request_id).unwrap_or(false)) {
+        return None;
+    }
+    let name_id = request_id.with("name");
+    let mut name = ctx.data(|data| data.get_temp::<String>(name_id)).unwrap_or_else(|| "Custom".to_owned());
+    let mut decision = None;
+    show_group_name_editor(&ctx, request_id, "Gradient Name", &mut name, &mut decision);
+    match decision {
+        Some(true) if !name.trim().is_empty() => {
+            clear_group_name_dialog(&ctx, request_id, name_id);
+            Some(name.trim().to_owned())
+        }
+        Some(false) => {
+            clear_group_name_dialog(&ctx, request_id, name_id);
+            None
+        }
+        _ => {
+            ctx.data_mut(|data| data.insert_temp(name_id, name));
+            None
+        }
+    }
 }
 
 /// Queue one unified selection rename for the shared card/header workflow.

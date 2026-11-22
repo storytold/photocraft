@@ -1,5 +1,6 @@
-﻿//! Domain adapters for the shared asset browser.
+//! Domain adapters for the shared asset browser.
 
+pub(crate) mod brush_engine_adapter;
 pub(crate) mod brush_picker;
 pub(crate) mod brushes;
 pub(crate) mod gradients;

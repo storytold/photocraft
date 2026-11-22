@@ -138,6 +138,7 @@ pub fn body(
     ui: &mut egui::Ui,
     b: &mut BrushSettings,
     presets: &[BrushPreset],
+    hierarchy: &photocraft_engine::BrushPresetHierarchy,
     current: Option<&str>,
     preset_ui: &mut crate::pickers::state::PresetUi,
     size: egui::Vec2,
@@ -206,6 +207,7 @@ pub fn body(
     let actions = crate::pickers::adapters::brushes::picker_browser_with_shell(
         ui,
         presets,
+        hierarchy,
         current,
         preset_ui,
         crate::pickers::shell::ShellOptions {
@@ -291,9 +293,10 @@ mod menu_tests {
             |ui, app: &mut PhotocraftApp| {
                 let mut brush = app.session.tools.brush.clone();
                 let presets = app.session.tools.presets.clone();
+                let hierarchy = app.session.tools.preset_hierarchy.clone();
                 let current = app.session.tools.current_preset.clone();
                 let mut preset_ui = std::mem::take(&mut app.ui.presets_ui);
-                let picks = body(ui, &mut brush, &presets, current.as_deref(), &mut preset_ui, vec2(420.0, 620.0));
+                let picks = body(ui, &mut brush, &presets, &hierarchy, current.as_deref(), &mut preset_ui, vec2(420.0, 620.0));
                 app.ui.presets_ui = preset_ui;
                 apply(app, picks);
             },
