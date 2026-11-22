@@ -1963,6 +1963,7 @@ fn review_smart_plugin_region_keeps_existing_mask_and_other_pixels() {
     s.execute("file.new", json!({"width":128,"height":64,"depth":32,"background":"#804020"})).unwrap();
     s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     let layer = s.active().unwrap().active_layer.unwrap();
+    s.execute("filter.blur.boxBlur", json!({"radius":8})).unwrap();
     s.edit("mask", |doc, _| {
         let photocraft_doc::LayerContent::Smart(sm) = &mut doc.layer_mut(layer).unwrap().content else { panic!("smart object") };
         let mut mask = photocraft_doc::LayerMask::reveal_all();
@@ -1977,7 +1978,15 @@ fn review_smart_plugin_region_keeps_existing_mask_and_other_pixels() {
     for k in [1, 4] {
         let full = preview_document(doc, Some(layer), "plugin.run", &json!({"id":id}), k).unwrap();
         let local = preview_document(doc, Some(layer), "plugin.run", &json!({"id":id,"__previewRegion":[32,16,96,48]}), k).unwrap();
-        let proxy = crate::proxy::proxy_document(doc, k);
+        let mut proxy = crate::proxy::proxy_document(doc, k);
+        let photocraft_doc::LayerContent::Smart(proxy_sm) = &mut proxy.layer_mut(layer).unwrap().content else { panic!("smart") };
+        proxy_sm.smart_filters[0].params["radius"] = json!(8 / k);
+        proxy_sm.filter_mask.as_mut().unwrap().feather = 2.0 / k as f32;
+        for preview in [&full, &local] {
+            let photocraft_doc::LayerContent::Smart(sm) = &preview.layer(layer).unwrap().content else { panic!("smart") };
+            assert_eq!(sm.smart_filters[0].params["radius"].as_f64(), Some(8.0 / f64::from(k)));
+            assert_eq!(sm.filter_mask.as_ref().unwrap().feather, 2.0 / k as f32);
+        }
         let cache = |d: &photocraft_doc::Document| match &d.layer(layer).unwrap().content {
             photocraft_doc::LayerContent::Smart(sm) => sm.cache.as_ref().unwrap().clone(),
             _ => panic!("smart"),

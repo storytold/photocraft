@@ -12,16 +12,16 @@ use egui_kittest::kittest::Queryable;
 const MENU: &str = "plugin.filter.local.skinsmooth.skin-smooth";
 const ID: &str = "local.skinsmooth.skin-smooth";
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("plugin.install", json!({"path":concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/skin-smooth.wasm")})).unwrap();
     app.run("file.new", json!({"width":16,"height":16})).unwrap();
     app
 }
 
-fn harness(size: egui::Vec2, theme: crate::theme::AppTheme) -> egui_kittest::Harness<'static, PhotocraftApp> {
+fn harness(size: egui::Vec2, theme: crate::theme::AppTheme) -> egui_kittest::Harness<'static, Box<PhotocraftApp>> {
     let app = app();
-    let mut h = egui_kittest::Harness::builder().with_size(size).with_context(app.ctx().clone()).build_ui_state(|ui, app| crate::dialogs::run(app, ui), app);
+    let mut h = egui_kittest::Harness::builder().with_size(size).with_context(app.ctx().clone()).build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, theme.clone());
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, MENU, json!({})).unwrap();
@@ -29,7 +29,7 @@ fn harness(size: egui::Vec2, theme: crate::theme::AppTheme) -> egui_kittest::Har
     h
 }
 
-fn choose(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, name: &str) {
+fn choose(h: &mut egui_kittest::Harness<'static, Box<PhotocraftApp>>, name: &str) {
     h.query_all_by_label("Preset").last().unwrap().click();
     h.run_steps(3);
     h.get_by_label(name).click();

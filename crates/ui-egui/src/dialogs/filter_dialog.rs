@@ -1219,21 +1219,22 @@ pub(crate) fn preview_document_for_target(
         };
         let index = usize::try_from(params.get("index")?.as_u64()?).ok()?;
         let photocraft_doc::LayerContent::Smart(sm) = &mut proxy.layer_mut(layer)?.content else { return None };
-        // Proxy_document scales the cache, placement and shared mask (#5766). Editing a filter
-        // re-renders its source: scale every filter's lengths and the mask's feather as well.
         if run_k > 1 {
-            if let Some(mask) = &mut sm.filter_mask {
-                mask.feather /= run_k as f32;
-            }
-            for f in &mut sm.smart_filters {
-                scale_preview_params(&f.command, &mut f.params, run_k);
-            }
+            scale_smart_stack(sm, run_k);
             if command == "layer.smartFilter.setParams" {
                 let f = sm.smart_filters.get(index)?;
                 scale_preview_params(&f.command, p.get_mut("params")?, run_k);
             }
         }
     } else {
+        if command == photocraft_engine::plugin_cmds::RUN
+            && run_k > 1
+            && let Some(layer) = active.or_else(|| proxy.top_layer())
+            && let Some(layer) = proxy.layer_mut(layer)
+            && let photocraft_doc::LayerContent::Smart(sm) = &mut layer.content
+        {
+            scale_smart_stack(sm, run_k);
+        }
         scale_preview_params(command, &mut p, run_k);
     }
     let mut s = photocraft_engine::Session::new();
@@ -1307,6 +1308,16 @@ pub(crate) fn smart_preview_factor(doc: &Document, command: &str, params: &Value
         factor = preview_factor(&f.command, p, factor);
     }
     factor
+}
+
+/// The proxy scales placement and mask pixels. Re-rendering also needs proxy-sized filter lengths and mask feather.
+fn scale_smart_stack(sm: &mut photocraft_doc::SmartObject, k: u32) {
+    if let Some(mask) = &mut sm.filter_mask {
+        mask.feather /= k as f32;
+    }
+    for f in &mut sm.smart_filters {
+        scale_preview_params(&f.command, &mut f.params, k);
+    }
 }
 
 /// Scale the pixel-sized parameters of `command` down by the preview proxy factor `k`, keeping each above its minimum and negative lengths negative.

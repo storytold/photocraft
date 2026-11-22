@@ -20,11 +20,11 @@ fn overlay(app: &mut PhotocraftApp, ctx: &egui::Context, doc: photocraft_doc::Do
     super::overlay(app, ctx, host, doc, r)
 }
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("plugin.install", json!({"path":concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/skin-smooth.wasm")})).unwrap();
     app.run("file.new", json!({"width":32,"height":24,"background":"#b17d62"})).unwrap();
-    Arc::make_mut(&mut app.session.active_mut().unwrap().doc).icc_profile = Some(craft::cms::builtin::Builtin::Srgb.profile().to_bytes());
+    Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).icc_profile = Some(craft::cms::builtin::Builtin::Srgb.profile().to_bytes());
     let ctx = app.ctx().clone();
     crate::menus::invoke(&mut app, &ctx, MENU, json!({})).unwrap();
     assert!(owns(plugin_fields(&app)));
@@ -69,7 +69,7 @@ fn sample_swatch_shows_encoded_source_rgb_without_a_second_gamma_conversion() {
 #[test]
 fn proxy_mask_clips_partial_pixels_to_the_document_edge() {
     let mut app = app();
-    Arc::make_mut(&mut app.session.active_mut().unwrap().doc).size = photocraft_geom::Size::new(2501, 1201);
+    Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).size = photocraft_geom::Size::new(2501, 1201);
     if let Some(view) = app.ui.views.first_mut() {
         view.zoom = 0.25;
     }
@@ -102,7 +102,7 @@ fn control_pointer_review_regression_samples_held_moves() {
     let mut app = app();
     crate::canvas::testing::clear_of_dialogs(&mut app, [2.0, 3.0]);
     let layer = app.session.active().unwrap().active_layer.unwrap();
-    let surface = Arc::make_mut(&mut app.session.active_mut().unwrap().doc).layer_mut(layer).unwrap().surface_mut().unwrap();
+    let surface = Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).layer_mut(layer).unwrap().surface_mut().unwrap();
     let samples = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
     for (x, rgb) in samples.iter().enumerate() {
         surface.write_pixel(x as i32 + 2, 3, &[rgb[0], rgb[1], rgb[2], 1.0]);
@@ -288,7 +288,7 @@ fn mask_matches_selection_alpha_offset_and_filter_weights_at_every_depth() {
     for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let mut app = app();
         let st = app.session.active_mut().unwrap();
-        let doc = Arc::make_mut(&mut st.doc);
+        let doc = Arc::make_mut(st.doc_mut());
         let mut surface = Surface::new(PixelFormat { mode: ColorMode::Rgb, sample, alpha: true });
         let extent = Rect::new(5, 3, 25, 18);
         surface.fill_rect(extent, &[0.7, 0.48, 0.36, 0.5]);
@@ -414,7 +414,7 @@ fn non_srgb_sources_disable_sampling_and_mask() {
     field(&mut app, "__skinTool", json!("sample"));
     let layer = app.session.active().unwrap().active_layer.unwrap();
     for profile in [Some(craft::cms::builtin::Builtin::DisplayP3.profile().to_bytes()), Some(Arc::new(vec![0; 128]))] {
-        Arc::make_mut(&mut app.session.active_mut().unwrap().doc).icc_profile = profile;
+        Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).icc_profile = profile;
         assert!(supported(&app).is_err());
         assert!(!pick(&mut app, [2.0, 3.0], Mods::default()));
         let doc = &app.session.active().unwrap().doc;
@@ -426,7 +426,7 @@ fn non_srgb_sources_disable_sampling_and_mask() {
 #[test]
 fn untagged_skin_sampling_and_mask_follow_the_host_default_profile() {
     let mut app = app();
-    Arc::make_mut(&mut app.session.active_mut().unwrap().doc).icc_profile = None;
+    Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).icc_profile = None;
     field(&mut app, "__skinTool", json!("sample"));
     assert!(supported(&app).is_ok());
     assert!(pick(&mut app, [2.0, 3.0], Mods::default()));
@@ -442,7 +442,7 @@ fn quick_mask_on_a_smart_layer_shows_the_profile_rejection() {
         let mut state = app();
         state.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
         state.run("select.editInQuickMaskMode", json!({"on":true})).unwrap();
-        Arc::make_mut(&mut state.session.active_mut().unwrap().doc).icc_profile = Some(profile);
+        Arc::make_mut(state.session.active_mut().unwrap().doc_mut()).icc_profile = Some(profile);
         let expected = photocraft_engine::plugin_cmds::skin_smooth_color_supported(&state.session.active().unwrap().doc).unwrap_err();
         let mut h = egui_kittest::Harness::builder()
             .with_size(vec2(1100.0, 900.0))
@@ -451,7 +451,7 @@ fn quick_mask_on_a_smart_layer_shows_the_profile_rejection() {
         h.run_steps(6);
         h.get_by_label(expected);
         assert_eq!(h.state().framework.dialogs.stack().ids().count(), 1, "the error is visible before confirmation");
-        Arc::make_mut(&mut h.state_mut().session.active_mut().unwrap().doc).icc_profile = Some(craft::cms::builtin::Builtin::Srgb.profile().to_bytes());
+        Arc::make_mut(h.state_mut().session.active_mut().unwrap().doc_mut()).icc_profile = Some(craft::cms::builtin::Builtin::Srgb.profile().to_bytes());
         h.run_steps(3);
         assert!(h.query_by_label(expected).is_none(), "a corrected profile must clear the error");
         h.get_by_label("Skin sampling and Mask require the RGB composite view, with layer pixels targeted.");
