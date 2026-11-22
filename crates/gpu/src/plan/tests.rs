@@ -432,7 +432,7 @@ fn root_checkpoints_form_after_a_knockout_layer() {
     use photocraft_doc::Knockout;
     let mut d = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
     for (i, knockout) in [Knockout::None, Knockout::Deep, Knockout::Shallow, Knockout::None].into_iter().enumerate() {
-        let mut l = Layer::raster(&format!("l{i}"), d.pixel_format());
+        let mut l = Layer::raster(format!("l{i}"), d.pixel_format());
         l.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 4, 4), &[1.0, 0.0, 0.0, 0.5]);
         l.advanced.knockout = knockout;
         l.opacity = 0.6;

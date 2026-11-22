@@ -37,14 +37,18 @@ fn gpu_app() -> Option<Gpu> {
     Some(Gpu { harness, observer })
 }
 
-/// A document the wgpu compositor leaves to the CPU (knockout on its top layer, which also has
-/// Blend If).
+/// A document the wgpu compositor leaves to the CPU: its top layer has a layer effect with Transparency Shapes
+/// Layer off (the plan falls back whatever the blend mode), and also Blend If.
 fn cpu_only_document(app: &mut PhotocraftApp, w: u32, h: u32) -> DocId {
     app.run("file.new", json!({"width": w, "height": h, "background": "#336699"})).expect("new");
     app.run("layer.new.layer", json!({})).expect("layer");
     app.run("edit.fill", json!({"color": "#cc8844"})).expect("fill");
-    app.run("layer.layerStyle.blendingOptions", json!({"opacity": 60, "knockout": "shallow", "blendIf": {"channel": "gray", "underlying": [0, 10, 245, 255]}}))
-        .expect("blending options");
+    app.run("layer.layerStyle.stroke", json!({"size": 2, "color": "#ff0000", "position": "inside"})).expect("stroke");
+    app.run(
+        "layer.layerStyle.blendingOptions",
+        json!({"opacity": 60, "transparencyShapesLayer": false, "blendIf": {"channel": "gray", "underlying": [0, 10, 245, 255]}}),
+    )
+    .expect("blending options");
     app.session.active().expect("document").doc.id
 }
 
