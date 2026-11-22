@@ -713,6 +713,8 @@ fn main() -> eframe::Result {
             }
             // Where file drags and drops are (winit 0.30 doesn't say).
             app.services.cursor_pos = cursor::service(cc);
+            // The physical primary button: it ends a floating document window's OS move by its title bar (#16415).
+            app.services.primary_down = cursor::primary_down_service();
             // The custom title bar's undecorated window must stay borderless, or its caption and
             // border offset the content and the pointer on some Windows systems (#2246).
             app.services.window_frame = window_frame::service(cc, integrated_frame);

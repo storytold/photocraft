@@ -85,12 +85,14 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         };
         let mut view = start.clone();
         let mut dock = false;
+        let mut bar_rect = None;
         let inner = DocumentWindow::new(title).first_placed(rect).overlay(|o| o.size_limits(SizeLimits::at_least(MIN_SIZE))).show(ui, |ui, cx| {
             if let Some(bar) = window_title_bar(ui, bar_title.clone()) {
                 if bar.close {
                     cx.request_close();
                 }
                 dock |= dropped_on_main(ui, id, bar.rect, dock_target);
+                bar_rect = Some(bar.rect);
             }
             // A second run of the body in one pass continues from the first run's view; the wrap rule
             // compares with the view the window started the pass with, so both runs file the same ask.
@@ -105,6 +107,7 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             view = after;
         });
         let output = inner.output;
+        dock |= os_move_dropped(app, ui.ctx(), id, output.response.id, bar_rect, dock_target);
         if dock {
             docked.push((id, doc));
             continue;
@@ -136,7 +139,44 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     for (id, doc) in docked {
         close_window(app, id);
         app.session.set_active(doc);
+        // The OS window closes in the next pass, the first that no longer shows it; nothing else may ask for one.
+        ui.ctx().request_repaint();
     }
+}
+
+/// Whether an OS move of the floating window `window` (the container `container`) by its title bar (`bar`, in the
+/// window's points) ended this pass with the pointer on the bar over `target`, the main window's tab strip in its
+/// points. Where the platform answers the window's hit test (Windows, the app-drawn frame), the OS runs the move and
+/// the app sees neither the press nor the release: the window moving from one pass to the next starts it, the
+/// physical primary button going up (`Services::primary_down`) ends it, and the OS pointer (`Services::cursor_pos`)
+/// says where (#16415).
+fn os_move_dropped(app: &mut PhotocraftApp, ctx: &egui::Context, window: u64, container: egui::Id, bar: Option<Rect>, target: Option<Rect>) -> bool {
+    let host = WindowHost::of(ctx);
+    let Some(facts) = host.viewport_of(container).and_then(|viewport| host.facts(viewport)) else { return false };
+    let (last_key, moving_key) = (egui::Id::unique(("floating document place", window)), egui::Id::unique(("floating document moving", window)));
+    let previous = ctx.data(|d| d.get_temp::<Rect>(last_key));
+    ctx.data_mut(|d| d.insert_temp(last_key, facts.inner));
+    // A move keeps the size; a resize or a wrap to the zoom is no move.
+    let moved = previous.is_some_and(|before| before.min != facts.inner.min && (before.size() - facts.inner.size()).length() < 0.5);
+    let Some(primary_down) = app.services.primary_down.as_ref() else { return false };
+    let down = primary_down();
+    // The OS may run the whole move between two of the app's passes (Windows draws no frame of the app while it
+    // moves a window), so a move first seen with the button up ends at once.
+    let moving = ctx.data(|d| d.get_temp::<bool>(moving_key).unwrap_or(false)) || moved;
+    if down || !moving {
+        ctx.data_mut(|d| d.insert_temp(moving_key, moving));
+        // Nothing wakes the app when the OS move ends: look again soon while it lasts.
+        if moving {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+        return false;
+    }
+    ctx.data_mut(|d| d.remove_temp::<bool>(moving_key));
+    let (Some(bar), Some(target), Some(main)) = (bar, target, host.facts(egui::ViewportId::ROOT)) else { return false };
+    let Some(pointer) = app.services.cursor_pos.as_mut().and_then(|cursor| cursor(ctx)) else { return false };
+    // The pointer is in the main window's points; the release on the bar is where the move held the window.
+    let on_bar = bar.translate(facts.inner.min.to_vec2()).expand(2.0).contains(main.inner.min + pointer.to_vec2());
+    on_bar && target.contains(pointer)
 }
 
 /// Whether this pass ends a move of the floating window `window` by its title bar (`bar`, in the window's points) with

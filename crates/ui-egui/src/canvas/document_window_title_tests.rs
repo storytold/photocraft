@@ -2,7 +2,7 @@
 //! can be told apart, moved, and closed from it. A stand-in for the window system runs each OS window's pass on the
 //! harness's context with its own input, as eframe does.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -249,4 +249,42 @@ fn a_floating_window_dropped_on_the_main_windows_tabs_docks_again() {
     assert!(h.state().ui.document_windows.floating.is_empty(), "dropped on the tabs the window docks");
     assert_eq!(h.state().session.documents().len(), 1, "the document stays open");
     assert_eq!(h.state().session.active_index(), Some(0), "the docked document is in front");
+}
+
+/// #16415, Windows: the OS runs a title-bar move of the floating window (its hit test answers the caption), so the app
+/// sees no press and no release. The window moving while the physical button is down, then the button going up with the
+/// OS pointer on the bar over the main window's tabs, docks it; the same end with the pointer elsewhere keeps it.
+#[test]
+fn an_os_move_of_the_floating_window_ending_over_the_tabs_docks_it() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let (mut h, host) = desktop();
+    let id = window(&host);
+    let down = Arc::new(AtomicBool::new(false));
+    let pointer = Rc::new(Cell::new(None::<egui::Pos2>));
+    {
+        let (down, pointer) = (Arc::clone(&down), Rc::clone(&pointer));
+        let app = h.state_mut();
+        app.services.primary_down = Some(Box::new(move || down.load(Ordering::SeqCst)));
+        app.services.cursor_pos = Some(Box::new(move |_| pointer.get()));
+    }
+    steps(&mut h, &host, id, 2);
+    let bar = title_bar(&host, id).expect("the bar");
+    let grab = bar.left_center() + vec2(40.0, 0.0);
+    // The OS moves the window with the button held, then the button goes up: off the tabs, nothing docks.
+    let os_move = |h: &mut Harness<'static, App>, to: Rect| {
+        down.store(true, Ordering::SeqCst);
+        host.borrow_mut().moved = Some(to);
+        pointer.set(Some(to.min + grab.to_vec2()));
+        steps(h, &host, id, 2);
+        down.store(false, Ordering::SeqCst);
+        steps(h, &host, id, 2);
+        h.state().ui.document_windows.floating.len()
+    };
+    let away = Rect::from_min_size(pos2(500.0, 400.0), window_rect().size());
+    assert_eq!(os_move(&mut h, away), 1, "an OS move ending off the tabs keeps it floating");
+    let target = h.state().dock_drop_rect.expect("the main window has a place to dock");
+    let over = Rect::from_min_size(target.center() - grab.to_vec2(), window_rect().size());
+    assert_eq!(os_move(&mut h, over), 0, "an OS move ending on the tabs docks it");
+    assert_eq!(h.state().session.documents().len(), 1, "the document stays open");
 }
