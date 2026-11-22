@@ -461,6 +461,10 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests;
 
 #[cfg(test)]
+#[path = "file_cmds/open_as_wrong_format_tests.rs"]
+mod open_as_wrong_format_tests;
+
+#[cfg(test)]
 #[path = "file_cmds/batch_log_format_tests.rs"]
 mod batch_log_format_tests;
 

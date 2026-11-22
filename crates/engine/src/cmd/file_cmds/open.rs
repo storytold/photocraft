@@ -138,6 +138,30 @@ pub(super) fn revert(s: &mut Session) -> Result<Value> {
     Ok(json!({"path": path, "layers": st.doc.layers.len()}))
 }
 
+/// Open As with bytes of another format than the one chosen (#14048): the reference decodes with the chosen format
+/// only and refuses. Checked for flat formats whose signatures tell them apart; the layered formats are already decoded
+/// as chosen by the reader, and formats with weak or shared signatures (Targa, HEIF and AVIF…) keep today's behaviour.
+fn wrong_format(name: &str, as_ext: &str, bytes: &[u8]) -> Option<String> {
+    use photocraft_formats::Format;
+    let label = |f: Format| match f {
+        Format::Png => Some("PNG"),
+        Format::Jpeg => Some("JPEG"),
+        Format::Gif => Some("GIF"),
+        Format::Bmp => Some("BMP"),
+        Format::Tiff => Some("TIFF"),
+        Format::WebP => Some("WebP"),
+        Format::Qoi => Some("QOI"),
+        Format::OpenExr => Some("OpenEXR"),
+        _ => None,
+    };
+    let want = photocraft_formats::from_extension(as_ext)?;
+    let wanted = label(want)?;
+    // A name without an extension: only the bytes' signature counts.
+    let got = photocraft_formats::detect("bytes", bytes)?;
+    label(got)?;
+    (got != want).then(|| format!("Could not open \"{name}\" because it is not a valid {wanted} file."))
+}
+
 /// Open a file's bytes, decoding them as the format `as_ext` (Open As) when given.
 /// EXR/HDR rarely states its colour space, so io tags it with the linear-sRGB default.
 /// With File Handling's ACEScg option on, such an EXR opens as ACEScg instead (AP1,
@@ -189,6 +213,9 @@ pub fn open_bytes_as_with_options(
     approve_high_memory: bool,
 ) -> Result<Value> {
     crate::allocation::checkpoint("importing document")?;
+    if let Some(why) = as_ext.and_then(|ext| wrong_format(&file_name(name), ext, bytes)) {
+        return Err(EngineError::Other(why));
+    }
     let decode_name = match as_ext {
         Some(ext) => format!("{}.{}", stem(name), ext.trim_start_matches('.')),
         None => name.to_string(),
