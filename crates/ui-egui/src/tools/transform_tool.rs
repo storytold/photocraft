@@ -255,6 +255,8 @@ pub(crate) struct Placed {
     pub(crate) start: [[f64; 2]; 4],
     /// The document area the preview's texels cover.
     pub(crate) rect: [f64; 4],
+    /// The box's frame: the placement maps it onto `start`.
+    pub(crate) frame: [f64; 4],
 }
 
 impl OpenPreview {

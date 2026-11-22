@@ -187,6 +187,14 @@ fn jump(a: &[Option<(f64, f64)>], b: &[Option<(f64, f64)>]) -> f64 {
     d.get(d.len() / 2).copied().unwrap_or(0.0)
 }
 
+/// The 90th percentile of the content distance between two frames where both show the object, from the distances of
+/// their pixels in order. The sampled [`jump`] takes the median of 20 points and passes a part of the picture going wrong
+/// (the top rows of a smart object squeezed by Perspective); this catches a tenth of it.
+fn spread(mut d: Vec<f64>) -> f64 {
+    d.sort_by(f64::total_cmp);
+    d.get(d.len() * 9 / 10).copied().unwrap_or(0.0)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Step {
     Warp,
@@ -229,6 +237,11 @@ fn run(gpu: bool, steps: &[Step]) -> Result<Vec<Option<(f64, f64)>>, String> {
 
 /// [`run`] on a named subject.
 fn run_on(gpu: bool, subject: &str, steps: &[Step]) -> Result<Vec<Option<(f64, f64)>>, String> {
+    run_checked(gpu, subject, steps, std::env::var_os("POPS_STRICT").is_some())
+}
+
+/// [`run_on`], with `strict` also comparing the preview and the result at Enter pixel by pixel (see [`spread`]).
+fn run_checked(gpu: bool, subject: &str, steps: &[Step], strict: bool) -> Result<Vec<Option<(f64, f64)>>, String> {
     let Some(mut h) = harness(gpu) else { return Ok(Vec::new()) };
     setup(&mut h, subject);
     // A capture that finds no object proves nothing: the object must show at most sample points before the first step.
@@ -290,6 +303,7 @@ fn run_on(gpu: bool, subject: &str, steps: &[Step]) -> Result<Vec<Option<(f64, f
     let shown = capture(&mut h);
     if mode.is_some() {
         let before = shown.clone();
+        let picture = strict.then(|| h.render().expect("render"));
         h.event(egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
         h.run_steps(8);
         dump(&mut h, "enter");
@@ -297,6 +311,31 @@ fn run_on(gpu: bool, subject: &str, steps: &[Step]) -> Result<Vec<Option<(f64, f
         let j = jump(&before, &after);
         if j > 3.0 {
             return Err(format!("Enter:the result differs from the preview by {j:.1} content px"));
+        }
+        if let Some(picture) = picture {
+            let result = h.render().expect("render");
+            let (w, hh) = (f64::from(OBJ[2] - OBJ[0] - 1), f64::from(OBJ[3] - OBJ[1] - 1));
+            let object = |p: [u8; 4]| ((i64::from(p[2]) - 128).abs() <= 2 && p[3] == 255).then(|| (f64::from(p[0]) / 255.0 * w, f64::from(p[1]) / 255.0 * hh));
+            // Each pixel of the preview against the result's nearest match within one screen pixel: a sub-pixel shift in a
+            // squeezed part spans several content pixels without anything visibly moving.
+            let (pw, ph) = (picture.width(), picture.height());
+            let mut d = Vec::new();
+            for (x, y, p) in picture.enumerate_pixels() {
+                let Some(a) = object(p.0) else { continue };
+                let near = (-1i64..=1)
+                    .flat_map(|dy| (-1i64..=1).map(move |dx| (i64::from(x) + dx, i64::from(y) + dy)))
+                    .filter(|&(x, y)| x >= 0 && y >= 0 && x < i64::from(pw) && y < i64::from(ph))
+                    .filter_map(|(x, y)| object(result.get_pixel(x as u32, y as u32).0))
+                    .map(|b| (a.0 - b.0).hypot(a.1 - b.1))
+                    .fold(f64::INFINITY, f64::min);
+                if near.is_finite() {
+                    d.push(near);
+                }
+            }
+            let j = spread(d);
+            if j > 3.0 {
+                return Err(format!("Enter:a tenth of the picture differs from the preview by over {j:.1} content px"));
+            }
         }
     }
     Ok(shown)
@@ -510,13 +549,15 @@ fn enter_on_an_untouched_warp_after_perspective_applies_what_the_preview_shows()
 /// triangle the preview showed. The commit's pre-reduction took the scale at the centre and rounded its frame outward
 /// past the map's horizon, which left a 2 × 1 px pixel layer (found by the sweep). A warped smart object's preview
 /// carried its control points through the raw map while the render carries them through its capped one, so near the
-/// point the preview showed the middle rows where the result has the top ones.
+/// point the preview showed the middle rows where the result has the top ones. A smart object's preview drew the plain
+/// map where the render caps the convergence, crowding the picture into the point (compared pixel by pixel: the
+/// sampled check passed it).
 #[test]
 fn enter_on_a_perspective_squeezed_to_a_point_applies_what_the_preview_shows() {
     let _gpu = photocraft_testkit::gpu_lock();
     use Step::*;
     let order = [Persp, PerspDrag, PerspDrag];
-    for subject in ["pixel", "warped"] {
-        run_on(false, subject, &order).unwrap_or_else(|e| panic!("{subject} {order:?}: {e}"));
+    for subject in ["pixel", "smart", "warped"] {
+        run_checked(false, subject, &order, true).unwrap_or_else(|e| panic!("{subject} {order:?}: {e}"));
     }
 }

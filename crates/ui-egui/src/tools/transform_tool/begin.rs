@@ -171,7 +171,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
             above: (!frame_only).then_some(above),
             styled: (styled && !frame_only).then(|| StyledPreview::new(format!("transform-{session}-styled"))),
             follow: Some(Follow { revision, hidden: if whole && !frame_only { vec![id] } else { Vec::new() }, selected: selected_now(app) }),
-            placed: opened.map(|(start, _)| super::Placed { start, rect }),
+            placed: opened.map(|(start, frame)| super::Placed { start, rect, frame }),
             ..OpenPreview::new(session, shown, textures, app.ui.tool)
         });
         app.ui.transform = Some(FreeTransform {

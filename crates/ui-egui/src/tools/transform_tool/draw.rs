@@ -25,7 +25,8 @@ use crate::PhotocraftApp;
 use crate::state::{FreeTransform, SessionWarp};
 use crate::transform_fx::LayerStyleSource;
 
-/// Cells per side of the grid a stored warp is drawn with when its control points can't be carried past the horizon.
+/// Cells per side of the grid a map is drawn with when four corners can't give it: a stored warp whose control points
+/// can't be carried past the horizon, or a smart object's capped perspective.
 const EXACT_WARP_CELLS: usize = 64;
 /// The host key of the transformed path outline in its `EditPath`.
 const OUTLINE_KEY: u64 = 1;
@@ -213,12 +214,46 @@ fn show_preview(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &m
             None => None,
         }
     });
+    // A smart object in a perspective that converges past the reference's cap: drawn through the render's capped map
+    // (`photocraft_algo::smart_perspective::capped_map`, as `place_source_projective` draws it), not the plain one, which
+    // crowds the picture into the far end (and, with a corner of a turned object's texture past the horizon, showed
+    // nothing). The texture is the layer's pixels over its frame, or a placed object's over `Placed::rect`. A map that
+    // converges both ways in the contents (a turned object's) is drawn by the render as two capped stages, which this
+    // doesn't follow yet: it keeps the plain map.
+    let capped = (t.session.warp().is_none() && held.is_none() && warped.is_none() && !t.selection && t.path.is_none() && t.layers.is_empty())
+        .then(|| app.session.active().and_then(|st| st.doc.layer(photocraft_doc::LayerId(t.layer))))
+        .flatten()
+        .filter(|layer| matches!(layer.content, photocraft_doc::LayerContent::Smart(_)))
+        .and_then(|_| {
+            use photocraft_algo::transform::Homography;
+            let corners = |r: [f64; 4]| [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]];
+            let (frame, place, texels, start) = match &pv.placed {
+                Some(placed) => (placed.frame, Homography::quad_to_quad(corners(placed.frame), placed.start)?, placed.rect, placed.start),
+                None => (t.rect_array(), Homography::IDENTITY, t.rect_array(), corners(t.rect_array())),
+            };
+            let total = Homography::quad_to_quad(start, t.quad_array())?.mul(&place);
+            let draw = photocraft_algo::smart_perspective::capped_map(&total.0, frame)?;
+            let back = place.inverse()?;
+            let map = move |p: Point| {
+                let (x, y) = back.apply(p.x, p.y);
+                let (x, y) = draw(x, y);
+                Point::new(x, y)
+            };
+            Some((craft::behavior::kurbo::Rect::new(texels[0], texels[1], texels[2], texels[3]), map))
+        });
     let (map, textures) = match (t.session.warp(), &held) {
         (Some(_), _) if let Some(q) = flat => (PreviewMap::quad(q.map(|[x, y]| Point::new(x, y))), &pv.textures),
         (Some(w), _) => (PreviewMap::mesh(&w.mesh, t.session.rect()), &pv.textures),
         (None, Some((mesh, source, texture))) => (PreviewMap::mesh(mesh, *source), texture.unwrap_or(&pv.textures)),
         (None, None) if let Some((Ok(mesh), frame, texture)) = &warped => (PreviewMap::mesh(mesh, *frame), *texture),
         (None, None) if let (Some((_, frame, texture)), Some(map)) = (&warped, &exact) => (PreviewMap::function(*frame, EXACT_WARP_CELLS, map), *texture),
+        (None, None)
+            if let Some((frame, map)) = &capped
+                && source.is_none()
+                && pv.content_aware.is_none() =>
+        {
+            (PreviewMap::function(*frame, EXACT_WARP_CELLS, map), &pv.textures)
+        }
         (None, None) => {
             let live = pv.content_aware.as_ref().filter(|_| source.is_none()).and_then(|live| live.shown(t)).map(|(textures, _)| textures);
             (PreviewMap::quad(texture_quad(t, pv)), live.unwrap_or(&pv.textures))
