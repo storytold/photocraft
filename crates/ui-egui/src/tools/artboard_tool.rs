@@ -287,9 +287,10 @@ pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandSta
     vec![(ArtboardCommand::AddNew.into(), state)]
 }
 
-/// What [`command_states`] reads: whether a document is open, and the placing mode.
-pub(crate) fn command_states_key(app: &PhotocraftApp) -> crate::app::framework::StatesKey {
-    [u64::from(app.session.active().is_some()), u64::from(app.ui.artboard_tool.adding), 0, 0]
+/// [`command_states`], derived from what it reads: whether a document is open, and the placing mode.
+pub(crate) fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    let facts = (app.session.active().is_some(), app.ui.artboard_tool.adding);
+    crate::app::framework::derived_states(app, name, &facts, || command_states(app))
 }
 
 /// Runs a fired Artboard command: Add New Artboard flips the placing mode and adds no board. `ctx` is the shape every

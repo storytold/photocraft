@@ -79,12 +79,12 @@ fn modifiers_and_double_zero_preserve_color_replacement_and_layer_state() {
     press(&mut a, 0, false, 5100.0);
     assert_eq!(a.ui.tool_options.cr_tolerance, 100.0, "unmeasured 00 keeps the first zero's value");
     assert_eq!(layer(&a), before_layer);
-    let brush = a.session.tools.brush.clone();
+    let brush = (*a.session.tools.brush).clone();
     let opacity = a.ui.tool_options.fill_opacity;
     let bg_tolerance = a.ui.tool_options.bg_tolerance;
     a.ui.tool = Tool::ColorReplacement;
     press(&mut a, 3, false, 9000.0);
-    assert_eq!(a.session.tools.brush, brush);
+    assert_eq!(*a.session.tools.brush, brush);
     assert_eq!(a.ui.tool_options.fill_opacity, opacity);
     assert_eq!(a.ui.tool_options.bg_tolerance, bg_tolerance);
 }
@@ -131,7 +131,7 @@ fn real_app_keys_set_tolerance_and_modifiers_leave_all_options_alone() {
         a
     });
     h.run_steps(4);
-    let before = (h.state().ui.tool_options.clone(), h.state().session.tools.brush.clone(), layer(h.state()));
+    let before = (h.state().ui.tool_options.clone(), (*h.state().session.tools.brush).clone(), layer(h.state()));
     let key = |h: &mut Harness<'_, Box<PhotocraftApp>>, modifiers| {
         h.event(Event::ModifiersChanged(modifiers));
         h.event(Event::Key { key: Key::Num5, physical_key: Some(Key::Num5), pressed: true, repeat: false, modifiers });
@@ -140,11 +140,11 @@ fn real_app_keys_set_tolerance_and_modifiers_leave_all_options_alone() {
     };
     for modifiers in [Modifiers::SHIFT, Modifiers::ALT] {
         key(&mut h, modifiers);
-        assert_eq!((h.state().ui.tool_options.clone(), h.state().session.tools.brush.clone(), layer(h.state())), before);
+        assert_eq!((h.state().ui.tool_options.clone(), (*h.state().session.tools.brush).clone(), layer(h.state())), before);
     }
     key(&mut h, Modifiers::NONE);
     assert_eq!(h.state().ui.tool_options.cr_tolerance, 50.0);
-    assert_eq!(h.state().session.tools.brush, before.1);
+    assert_eq!(*h.state().session.tools.brush, before.1);
     assert_eq!(layer(h.state()), before.2);
 }
 
@@ -153,12 +153,12 @@ fn real_app_keys_set_tolerance_and_modifiers_leave_all_options_alone() {
 fn other_tools_keep_their_current_digit_targets() {
     for tool in [Tool::Dodge, Tool::Smudge, Tool::MagicEraser] {
         let mut a = app(tool);
-        let before = (a.session.tools.brush.clone(), layer(&a), a.ui.tool_options.clone());
+        let before = ((*a.session.tools.brush).clone(), layer(&a), a.ui.tool_options.clone());
         let mut expected = before.clone();
         if tool == Tool::MagicEraser {
             expected.2.magic_eraser_opacity = 30.0;
         }
         press(&mut a, 3, false, 0.0);
-        assert_eq!((a.session.tools.brush.clone(), layer(&a), a.ui.tool_options.clone()), expected);
+        assert_eq!(((*a.session.tools.brush).clone(), layer(&a), a.ui.tool_options.clone()), expected);
     }
 }

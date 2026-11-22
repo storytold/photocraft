@@ -81,8 +81,25 @@ pub fn alert(app: &PhotocraftApp, tool: Tool, hidden: bool) -> Option<String> {
         return (!hidden && pixel_layer && layer_refusal(app, tool) == Some(LOCKED)).then(|| tl!(REMOVE_LOCKED).to_string());
     }
     let name = tool_name(app, tool)?;
+    // The Art History Brush's hidden alert was measured on a layer's pixels only (#12638): a
+    // hidden mask or channel target keeps the status bar.
+    if hidden && tool == Tool::ArtHistoryBrush && !pixels_target(&crate::canvas::paint_target(app)) {
+        return None;
+    }
     let template = if hidden { HIDDEN } else { layer_refusal(app, tool)? };
     Some(crate::i18n::fmt(tl!(template), &[("tool", name)]))
+}
+
+/// Whether `target`, a `canvas::paint_target` value, is a layer's pixels as the engine reads it
+/// (`channel_cmds::target_of`): not a layer or filter mask, the Quick Mask or an alpha channel. A
+/// set of colour channels edits the layer's pixels.
+pub(crate) fn pixels_target(target: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    match target {
+        Value::String(s) => !matches!(s.as_str(), "mask" | "filterMask" | "quickMask"),
+        Value::Object(o) => o.get("channel").and_then(Value::as_u64).is_none(),
+        _ => true,
+    }
 }
 
 /// [`GROUP`] or [`LOCKED`] when `tool` can't paint the active layer's pixels.

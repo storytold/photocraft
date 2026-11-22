@@ -114,7 +114,7 @@ pub(super) fn preset_manager(s: &mut Session, p: &Value) -> Result<Value> {
         }
         "delete" => match kind.as_str() {
             "brushes" => {
-                let gone = std::sync::Arc::make_mut(&mut s.tools.presets).remove(i);
+                let gone = std::sync::Arc::make_mut(&mut *s.tools.presets).remove(i);
                 crate::brush_cmds::forget_deleted_preset(s, &gone.name);
             }
             "patterns" => drop(s.patterns.items.remove(i)),
@@ -123,7 +123,7 @@ pub(super) fn preset_manager(s: &mut Session, p: &Value) -> Result<Value> {
         "move" => {
             let to = p.get("to").and_then(Value::as_u64).ok_or_else(|| bad(cmd, "missing `to`"))? as usize;
             match kind.as_str() {
-                "brushes" => crate::move_item(std::sync::Arc::make_mut(&mut s.tools.presets), i, to),
+                "brushes" => crate::move_item(std::sync::Arc::make_mut(&mut *s.tools.presets), i, to),
                 "patterns" => crate::move_item(&mut s.patterns.items, i, to),
                 _ => crate::move_item(&mut s.edit_state.custom_shapes, i, to),
             };
