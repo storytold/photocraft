@@ -165,7 +165,7 @@ fn options_bar_hover_previews_with_the_character_picker_also_shown() {
     h.run();
     h.query_all_by_label("Font family").next().unwrap().type_text("JetBrains Mono");
     h.run();
-    h.get_by_label("JetBrains Mono").hover();
+    h.get_by_role_and_label(Role::TreeItem, "JetBrains Mono").hover();
     h.run();
     assert_eq!(font(&mut h), "JetBrains Mono");
     h.query_all_by_label("Font family").next().unwrap().hover();
@@ -221,14 +221,14 @@ fn hovering_a_font_adds_no_history_step_and_a_pick_adds_one() {
     let before = history_len(h.state());
     let layer = h.state().session.active().unwrap().active_layer.unwrap();
     type_family(&mut h, "JetBrains Mono");
-    h.get_by_label("JetBrains Mono").hover();
+    h.get_by_role_and_label(Role::TreeItem, "JetBrains Mono").hover();
     h.run();
     let (shown, _) = crate::canvas::display_doc(h.state_mut(), 0);
     let photocraft_doc::LayerContent::Text(text) = &shown.layer(layer).unwrap().content else { panic!("type layer") };
     assert_eq!(text.char_runs()[0].style.font_family, "JetBrains Mono", "the canvas previews the hovered family");
     assert_eq!(layer_font(h.state()), "Inter", "hover commits nothing");
     assert_eq!(history_len(h.state()), before, "hover adds no history step");
-    h.get_by_label("JetBrains Mono").click();
+    h.get_by_role_and_label(Role::TreeItem, "JetBrains Mono").click();
     h.run();
     assert_eq!(layer_font(h.state()), "JetBrains Mono");
     assert_eq!(history_len(h.state()), before + 1, "the pick is one history step");
