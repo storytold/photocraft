@@ -687,6 +687,9 @@ pub mod adjust_preview;
 pub mod alerts;
 #[cfg(test)]
 mod arbitrary_ruler_prefill_tests;
+#[cfg(test)]
+mod auto_align_dialog_tests;
+pub(crate) mod auto_align_ui;
 pub(crate) mod bitmap_dialog;
 pub mod blend_options;
 pub mod blur_pins;
