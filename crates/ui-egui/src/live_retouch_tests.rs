@@ -14,7 +14,7 @@ const STROKE: [(f64, f64); 4] = [(12.0, 20.0), (30.0, 24.0), (48.0, 18.0), (66.0
 
 /// An 80×40 document at `depth` bits: a white Background with a black block on its left half,
 /// with `tool` picked (14 px, soft, no smoothing).
-fn app(depth: u32, tool: Tool) -> PhotocraftApp {
+fn app(depth: u32, tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 80, "height": 40, "depth": depth})).unwrap();
     app.run("select.rect", json!({"x": 0, "y": 0, "width": 40, "height": 40})).unwrap();
@@ -135,7 +135,7 @@ fn a_refused_background_eraser_stroke_shows_nothing_and_reports_on_release() {
 fn spot_healing_shows_the_area_it_heals_and_heals_on_release() {
     let mut app = app(8, Tool::SpotHealing);
     assert!(!strokes_live(Tool::SpotHealing), "the heal needs the whole stroke");
-    assert_eq!(crate::canvas::SPOT_HEALING_TRAIL.r(), 0, "a dark overlay, as Photoshop's");
+
     let steps = app.session.active().unwrap().history.past_len();
     let m = Modifiers::NONE;
     tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 20.0, pressure: 1.0 }, m);

@@ -94,10 +94,12 @@ fn change<R>(s: &mut Session, f: impl FnOnce(&mut DocState) -> Result<R>) -> Res
     let r = f(st)?;
     let clean = st.saved_revision == st.revision;
     st.revision += 1;
+    st.record_unknown_damage();
     if clean {
         st.saved_revision = st.revision;
     }
     st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+    st.record_damage();
     Ok(r)
 }
 

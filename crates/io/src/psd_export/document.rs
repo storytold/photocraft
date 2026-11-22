@@ -1,7 +1,10 @@
 use super::PSD_MAX_FILE_SIZE;
 use super::estimate::{MERGED_RENDERED, MERGED_WEIGHT, fit_psd_size, psd_version, sign_global_blocks};
 use super::merged::{cmyk_of, merged_planes, placeholder_planes};
-use super::resources::{global_block, guides_resource, keep_imported_resource, legacy_name, pascal_names_resource, path_resources, unicode_names_resource};
+use super::resources::{
+    global_block, guides_resource, imported_clipping_flatness_edit, imported_resource_data, keep_imported_resource, legacy_name, pascal_names_resource,
+    path_resources, unicode_names_resource,
+};
 use super::smart::{SmartOut, link_group_resource};
 use super::{
     ColorMode, Compression, Document, Ex, GlobalLayerMask, Header, ImageData, ImageResource, Interrupt, LayerContent, LayerInfo, LayerInfoPlacement,
@@ -204,8 +207,14 @@ fn export_supported_document(
     // as Photopea reject it (#3514). Keep the block when the file had one (round-trip its pen
     // positions/extras), a layer is Optical (#1348), or a layer carries stylistic sets / other
     // Txt2-only features (#10308).
-    let txt2 = (previous.is_some() || photocraft_text::psd::needs_txt2(&text_layers))
-        .then(|| photocraft_text::psd::build_txt2_at(&text_layers, previous.as_deref(), ex.dpi));
+    // A restyle that would lose a style's fill colour is refused: the file's own block stays as it
+    // was, and the export says so.
+    let txt2 = (previous.is_some() || photocraft_text::psd::needs_txt2(&text_layers)).then(|| {
+        photocraft_text::psd::build_txt2_at(&text_layers, previous.as_deref(), ex.dpi).unwrap_or_else(|e| {
+            ex.warnings.push(format!("type styles were not updated in the file's text block: {e}"));
+            previous.clone().unwrap_or_default()
+        })
+    });
     for (sig, key, data) in preserved {
         // With no type layers left the opened file's `Txt2` describes text that is gone (fonts and
         // layout caches, often most of the file): Photoshop drops it, and so does the save (#9563).
@@ -237,6 +246,7 @@ fn export_supported_document(
     if let Some(warning) = slices_warning {
         ex.warnings.push(warning);
     }
+    let clipping_flatness = imported_clipping_flatness_edit(doc);
     for (id, name, data) in &doc.metadata.psd_resources {
         // Layer comps: the preserved list while unchanged, else regenerated (or dropped) below.
         if *id == crate::comps_map::LAYER_COMPS && comps_resource.is_some() {
@@ -255,7 +265,7 @@ fn export_supported_document(
         if *id == crate::channel_map::ALPHA_IDENTIFIERS {
             continue;
         }
-        let mut r = ImageResource::new(*id, data.to_vec());
+        let mut r = ImageResource::new(*id, imported_resource_data(*id, data, clipping_flatness));
         r.name = legacy_name(name);
         resources.push(r);
     }

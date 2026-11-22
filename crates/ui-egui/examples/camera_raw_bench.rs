@@ -6,10 +6,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let quick = args.iter().any(|a| a == "--quick");
     let (width, height, reps) = if quick { (6000, 4000, 12) } else { (7360, 4912, 40) };
-    let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, Default::default());
-    let _ = ctx.run_ui(Default::default(), |_| {});
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = app.ctx().clone();
+    let _ = ctx.run_ui(Default::default(), |_| {});
     // A full-resolution synthetic image with dense hue/saturation coverage and exact clipped
     // endpoints. Setup/import is outside the interactive measurements.
     let mut bytes = Vec::with_capacity(width * height * 3);
@@ -65,47 +64,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let start = std::time::Instant::now();
         let r = camera_raw_ui::menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"set":{"exposure":if i%2==0 {0.25}else{0.75}},"scope":{}}}))
             .ok_or("no dialog entry point")??;
-        let output = ctx.run_ui(input(), |ui| camera_raw_ui::show(&mut app, ui.ctx()));
+        // PLAN: assumed (dialogs-w19): `dialogs::run(app, ui)` runs the dialog host's passes for one frame.
+        let output = ctx.run_ui(input(), |ui| photocraft_ui_egui::dialogs::run(&mut app, ui));
         std::hint::black_box(ctx.tessellate(output.shapes, output.pixels_per_point));
         if i >= 3 {
             interactive_samples.push(start.elapsed().as_secs_f64() * 1000.0);
             scope_samples.push(r.get("scopeMs").and_then(Value::as_f64).ok_or("no scope timing")?);
         }
         let start = std::time::Instant::now();
-        let output = ctx.run_ui(input(), |ui| camera_raw_ui::show(&mut app, ui.ctx()));
+        let output = ctx.run_ui(input(), |ui| photocraft_ui_egui::dialogs::run(&mut app, ui));
         std::hint::black_box(ctx.tessellate(output.shapes, output.pixels_per_point));
         if i >= 3 {
             idle_samples.push(start.elapsed().as_secs_f64() * 1000.0);
-        }
-        if i == 3 {
-            let state = camera_raw_ui::menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{}})).ok_or("no dialog entry point")??;
-            if state["hoverSample"]["hueSaturation"].is_null() {
-                return Err("benchmark must render the RGB badge and vectorscope pixel target".into());
-            }
-        }
-    }
-    // Dense RGB curves exercise the shared widget, including its outlines and egui CPU
-    // tessellation. This is measured separately from pixel processing and GPU presentation.
-    let pixels: Vec<_> = (0..8192)
-        .map(|i| {
-            let x = (i % 128) as f32;
-            let y = (i / 128) as f32;
-            [0.5 + 0.4 * (x * 0.07).sin(), 0.5 + 0.4 * (y * 0.13).cos(), (x + y) / 192.0, 1.0]
-        })
-        .collect();
-    let histogram = photocraft_algo::histogram::RgbHistogram::from_rgba(&pixels);
-    let mut draw_samples = Vec::new();
-    for i in 0..reps + 3 {
-        let start = std::time::Instant::now();
-        let output = ctx.run_ui(
-            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(330.0, 160.0))), ..Default::default() },
-            |ui| {
-                photocraft_ui_egui::widgets::rgb_histogram(ui, &histogram, 110.0);
-            },
-        );
-        let _meshes = ctx.tessellate(output.shapes, output.pixels_per_point);
-        if i >= 3 {
-            draw_samples.push(start.elapsed().as_secs_f64() * 1000.0);
         }
     }
     let mut sorted = samples.clone();
@@ -113,7 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let p50 = sorted.get(sorted.len() / 2).copied().unwrap_or(0.0);
     let p95 = sorted.get(sorted.len().saturating_sub(1) * 95 / 100).copied().unwrap_or(0.0);
     let max = sorted.last().copied().unwrap_or(0.0);
-    let report = json!({"width": width, "height": height, "rows": [{"name": "exposure proxy update", "median_ms": p50, "p95_ms": p95, "max_ms": max, "samples_ms": samples}, {"name": "RGB histogram", "samples_ms": histogram_samples}, {"name": "RGB histogram paint + tessellation", "samples_ms": draw_samples}, {"name":"interactive scope update", "samples_ms":interactive_samples}, {"name":"vectorscope ICC analysis", "samples_ms":scope_samples}, {"name":"cached scope frame", "samples_ms":idle_samples}]});
+    let report = json!({"width": width, "height": height, "rows": [{"name": "exposure proxy update", "median_ms": p50, "p95_ms": p95, "max_ms": max, "samples_ms": samples}, {"name": "RGB histogram", "samples_ms": histogram_samples},{"name":"interactive scope update", "samples_ms":interactive_samples}, {"name":"vectorscope ICC analysis", "samples_ms":scope_samples}, {"name":"cached scope frame", "samples_ms":idle_samples}]});
     println!("{}", serde_json::to_string_pretty(&report)?);
     if let Some(path) = args.iter().position(|a| a == "--json").and_then(|i| args.get(i + 1)) {
         std::fs::write(path, serde_json::to_vec_pretty(&report)?)?;

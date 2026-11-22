@@ -8,7 +8,7 @@
 //!
 //! `tools.rotateBrush` turns the tip: Photoshop's ← / → while painting (1°, ⇧ 15°). Arrows mean
 //! other things with other tools, so the shell gives them to it only for the painting tools
-//! (`move_mods::arrow_keys`).
+//! (the tool host's `ToolKey::Nudge` route, `move_mods::arrow_key`).
 
 use serde_json::{Value, json};
 
@@ -49,10 +49,9 @@ pub const UNGROUPED: &str = "My Brushes";
 
 /// Brush preset indices in the Brushes panel's order: groups in order of first appearance (no
 /// group is [`UNGROUPED`]), and in each group its folders where their first preset is, depth first
-/// (as `brushes_tab` draws them). A preset its name can't select (an earlier one has the same name
-/// up to case, and `tools.setBrush` picks that one) is left out afterwards, so stepping never
-/// gets stuck.
-fn panel_order(presets: &[photocraft_paint::BrushPreset]) -> Vec<usize> {
+/// (as the Brushes panel's rows, `brushes::preset_rows`, list them). Every preset is placed; the
+/// panel lists all of them, and [`panel_order`] filters this order for stepping.
+pub fn panel_layout(presets: &[photocraft_paint::BrushPreset]) -> Vec<usize> {
     fn path(p: &photocraft_paint::BrushPreset) -> &[String] {
         p.folder.get(..p.folder.len().min(crate::brush_preset_cmds::MAX_FOLDER_DEPTH)).unwrap_or_default()
     }
@@ -83,8 +82,14 @@ fn panel_order(presets: &[photocraft_paint::BrushPreset]) -> Vec<usize> {
     for (_, items) in &groups {
         flatten(presets, items, 0, &mut out);
     }
-    // Groups and folders are placed by every preset, as the panel places them; only then are the
-    // presets their names can't select left out.
+    out
+}
+
+/// [`panel_layout`] without the presets their name can't select (an earlier one has the same name
+/// up to case, and `tools.setBrush` picks that one), so stepping never gets stuck. Groups and
+/// folders are placed by every preset first, as the panel places them.
+fn panel_order(presets: &[photocraft_paint::BrushPreset]) -> Vec<usize> {
+    let mut out = panel_layout(presets);
     out.retain(|&i| presets.get(i).is_some_and(|p| photocraft_paint::presets::find(presets, &p.name).is_some_and(|q| std::ptr::eq(q, p))));
     out
 }
@@ -251,12 +256,14 @@ mod tests {
         let presets = vec![preset("Foo", "G1", &[], 1.0), preset("foo", "G2", &[], 1.0), preset("Bar", "G3", &[], 1.0), preset("Baz", "G2", &[], 1.0)];
         let names: Vec<&str> = panel_order(&presets).into_iter().map(|i| presets[i].name.as_str()).collect();
         assert_eq!(names, ["Foo", "Baz", "Bar"]);
+        // The panel lists the skipped duplicate; stepping does not.
+        assert_eq!(panel_layout(&presets).len(), panel_order(&presets).len() + 1);
     }
 
     #[test]
     fn previous_and_next_brush_walk_the_presets_and_wrap() {
         let mut s = Session::new();
-        s.tools.presets = vec![preset("One", "", &[], 11.0), preset("Two", "", &[], 22.0), preset("Three", "", &[], 33.0)];
+        *s.tools.presets = std::sync::Arc::new(vec![preset("One", "", &[], 11.0), preset("Two", "", &[], 22.0), preset("Three", "", &[], 33.0)]);
         s.tools.current_preset = None;
         let picked = |s: &Session| (s.tools.current_preset.clone().unwrap_or_default(), s.tools.brush.size);
         s.execute("tools.nextBrush", Value::Null).unwrap();
@@ -277,12 +284,12 @@ mod tests {
             [Some(","), Some("."), Some("Shift+,"), Some("Shift+.")]
         );
         // No presets: an error, and the brush and the current preset stay as they were.
-        s.tools.presets.clear();
-        let (brush, current) = (s.tools.brush.clone(), s.tools.current_preset.clone());
+        std::sync::Arc::make_mut(&mut *s.tools.presets).clear();
+        let (brush, current) = ((*s.tools.brush).clone(), s.tools.current_preset.clone());
         for id in ["tools.previousBrush", "tools.nextBrush", "tools.firstBrush", "tools.lastBrush"] {
             assert!(s.execute(id, Value::Null).is_err(), "{id}");
         }
-        assert_eq!((s.tools.brush.clone(), s.tools.current_preset.clone()), (brush, current));
+        assert_eq!(((*s.tools.brush).clone(), s.tools.current_preset.clone()), (brush, current));
     }
 
     #[test]
