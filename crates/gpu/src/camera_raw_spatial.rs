@@ -78,6 +78,7 @@ impl Tex {
             format: FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::STORAGE_BINDING
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
@@ -292,15 +293,16 @@ fn split(p: &CameraRaw) -> (CameraRaw, CameraRaw) {
     post.dehaze = 0.0;
     post.highlights = 0.0;
     post.shadows = 0.0;
+    post.texture = 0.0;
+    post.clarity = 0.0;
     (pre, post)
 }
 
-/// Whether the spatial develop handles `p`: it has Dehaze, Highlights or Shadows and none of the
-/// stages this path leaves to the CPU (Texture, Clarity, Detail).
+/// Whether the spatial develop handles `p`: it has a spatial stage other than Detail (sharpening,
+/// noise reduction), which stays on the CPU. Texture and Clarity develop on the GPU for opaque
+/// pixels in sRGB's primaries; elsewhere the develop answers `None` and the CPU develops.
 pub fn spatial_supported(p: &CameraRaw) -> bool {
-    (p.dehaze != 0.0 || p.highlights != 0.0 || p.shadows != 0.0)
-        && p.texture == 0.0
-        && p.clarity == 0.0
+    (p.dehaze != 0.0 || p.highlights != 0.0 || p.shadows != 0.0 || p.texture != 0.0 || p.clarity != 0.0)
         && p.sharpen_amount <= 0.0
         && p.noise_luminance <= 0.0
         && p.noise_color <= 0.0
@@ -359,12 +361,21 @@ impl CameraRawDevelop {
         if wu.saturating_mul(hu) != source.len() || wu == 0 || hu == 0 {
             return Ok(None);
         }
+        let detail = p.texture != 0.0 || p.clarity != 0.0;
+        // Texture's and Clarity's GPU passes read opaque pixels in sRGB's primaries (the CPU
+        // blurs alpha-weighted planes elsewhere).
+        if detail && (!inputs.srgb_primaries() || source.iter().any(|q| !(q[3] >= 1.0))) {
+            return Ok(None);
+        }
         let (pre, post) = split(p);
         // Before: the per-pixel stages up to Calibration, unclipped (develop clips only at the end).
         let points = camera_raw::white_black_points(source, wu, hu, &pre, inputs);
         let Some(pre_stages) = camera_raw::per_pixel(&pre, inputs, wu, hu, true, points) else { return Ok(None) };
         self.upload(device, queue, source, key, size)?;
         self.ensure_spatial(device);
+        if detail {
+            self.ensure_detail(device);
+        }
         let Some(spatial) = self.spatial_passes() else { return Ok(None) };
         let mut cur = Tex::new(device, "pc_camera_raw_work_a", size);
         let mut next = Tex::new(device, "pc_camera_raw_work_b", size);
@@ -466,6 +477,12 @@ impl CameraRawDevelop {
                 );
                 std::mem::swap(&mut cur, &mut next);
             }
+        }
+        // Texture, then Clarity on its result.
+        for (texture, v) in [(true, p.texture), (false, p.clarity)] {
+            let (Some(plan), Some(passes)) = (camera_raw::detail_plan(texture, v, wu, hu), self.detail_passes()) else { continue };
+            passes.run(device, &mut encoder, &plan, gamma, &cur.view, &next.view, size);
+            std::mem::swap(&mut cur, &mut next);
         }
         // Whites up adapts to the tones after the spatial stages.
         let mut tones_w = [0.0f32; 4];

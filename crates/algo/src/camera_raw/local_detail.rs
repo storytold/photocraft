@@ -30,7 +30,7 @@ use crate::fxutil::try_gauss_blur_n;
 use crate::photo_util::{linear_to_srgb, par_rows, par_rows2, srgb_to_linear};
 
 /// Knots of `l`: 0, 1/7, … 1.
-pub(super) const KNOTS: usize = 8;
+pub const KNOTS: usize = 8;
 
 /// One slider's model.
 pub(super) struct Model {
@@ -118,6 +118,32 @@ fn filled<T: Clone>(n: usize, v: T) -> Option<Vec<T>> {
 /// and an error says so, so a result without the stage is never taken for a complete one.
 /// The blurs weight each pixel by its alpha, so the colour hidden under transparent pixels takes
 /// no part; a fully opaque image skips the weighting.
+/// Texture's or Clarity's model at a slider value, as a pass outside this module reads it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DetailPlan {
+    /// Each scale's Gaussian as three box radii (three passes along the rows, then three along
+    /// the columns, edges clamped); `None` for a scale too small to blur (its detail is 0).
+    pub radii: Vec<Option<[usize; 3]>>,
+    /// The clamp amplitudes of each feature block.
+    pub amps: Vec<f32>,
+    /// Per channel with colour detail (Texture), or luminance only (Clarity).
+    pub colour: bool,
+    /// The coefficients, [`KNOTS`] per feature block: the base block, then per scale the
+    /// luminance detail's blocks (max, min, one per amplitude), then (Texture) the colour
+    /// detail's.
+    pub coeffs: Vec<f32>,
+}
+
+/// Texture's (`texture`) or Clarity's model at slider `v` (−100 … 100) for a `w × h` image;
+/// `None` at 0.
+pub fn detail_plan(texture: bool, v: f32, w: usize, h: usize) -> Option<DetailPlan> {
+    let model = if texture { &TEXTURE } else { &CLARITY };
+    let coeffs = model.coefficients(v)?;
+    let long = w.max(h) as f32;
+    let radii = model.scales.iter().map(|s| (s * long >= 0.3).then(|| crate::fxutil::gauss_box_radii(s * long))).collect();
+    Some(DetailPlan { radii, amps: model.amps.to_vec(), colour: model.colour, coeffs })
+}
+
 pub(super) fn apply(model: &Model, px: &mut [[f32; 4]], w: usize, h: usize, v: f32, enc: Encoding) -> Result<(), String> {
     apply_within(model, px, w, h, v, enc, usize::MAX)
 }

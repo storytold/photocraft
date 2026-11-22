@@ -88,6 +88,8 @@ pub struct CameraRawDevelop {
     readback: Option<wgpu::Buffer>,
     /// The spatial stages' passes, built the first time settings need them.
     spatial: Option<crate::camera_raw_spatial::Spatial>,
+    /// Texture's and Clarity's compute passes, built the first time settings need them.
+    detail: Option<crate::camera_raw_detail::Detail>,
 }
 
 impl CameraRawDevelop {
@@ -175,6 +177,7 @@ impl CameraRawDevelop {
             #[cfg(not(target_arch = "wasm32"))]
             readback: None,
             spatial: None,
+            detail: None,
         }
     }
 
@@ -241,6 +244,18 @@ impl CameraRawDevelop {
     /// The spatial stages' passes, once built.
     pub(crate) fn spatial_passes(&self) -> Option<&crate::camera_raw_spatial::Spatial> {
         self.spatial.as_ref()
+    }
+
+    /// Builds Texture's and Clarity's passes if they aren't yet.
+    pub(crate) fn ensure_detail(&mut self, device: &wgpu::Device) {
+        if self.detail.is_none() {
+            self.detail = Some(crate::camera_raw_detail::Detail::new(device));
+        }
+    }
+
+    /// Texture's and Clarity's passes, once built.
+    pub(crate) fn detail_passes(&self) -> Option<&crate::camera_raw_detail::Detail> {
+        self.detail.as_ref()
     }
 
     /// Drops the cached source, so a half-done upload isn't taken for it next time.

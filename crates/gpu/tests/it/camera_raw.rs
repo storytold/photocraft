@@ -510,3 +510,17 @@ fn spatial_stages_with_everything_after() {
         ],
     );
 }
+
+#[test]
+fn texture_and_clarity_on_the_gpu() {
+    check_spatial(
+        "detail",
+        &[
+            case(cr! { texture: 60.0 }, DevelopInputs::default()),
+            case(cr! { texture: -100.0 }, DevelopInputs::default()),
+            case(cr! { clarity: 50.0 }, DevelopInputs::default()),
+            case(cr! { clarity: -80.0, exposure: 0.3 }, DevelopInputs::default()),
+            case(cr! { texture: 40.0, clarity: 40.0, shadows: 30.0, dehaze: 20.0, whites: 25.0 }, DevelopInputs::default()),
+        ],
+    );
+}

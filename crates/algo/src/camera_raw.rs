@@ -62,6 +62,11 @@ impl DevelopInputs {
         Encoding::with_primaries(self.encoding_gamma, self.document_primaries)
     }
 
+    /// Whether the document's primaries are sRGB's (the measured models read sRGB's).
+    pub fn srgb_primaries(&self) -> bool {
+        self.encoding().srgb_primaries()
+    }
+
     /// The luminance of the document's linear RGB as weights of its channels (the tones are
     /// measured on it).
     pub fn luminance_weights(&self) -> [f32; 3] {
@@ -85,6 +90,7 @@ mod presence;
 mod white_balance;
 mod whites_blacks;
 
+pub use local_detail::{DetailPlan, KNOTS as DETAIL_KNOTS, detail_plan};
 pub use per_pixel::{
     CURVE_LUT, Calibration, FIX_GRID, Grade, Grain, MIXER_GRID, MIXER_KINDS, PRESENCE_GRID, PRESENCE_KINDS, PerPixel, TONE_STEPS, Vignette, VignetteStyle,
     WhitesBlacks, per_pixel, spatial, white_black_points,
