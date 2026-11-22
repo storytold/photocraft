@@ -231,8 +231,8 @@ impl PhotocraftApp {
         AppShell::new(WindowKey::main())
             .window_title(window_title)
             .screen_mode(Bind::bound(&mut mode))
-            .title_bar_if(menu_bar, |ui, _cx, app| panels::title_bar(app, ui))
-            .options_bar(options_bar && !home, |ui, _cx, app| panels::options_bar(app, ui))
+            .title_bar_if(menu_bar, |ui, _cx, app| panels::region_versions::show_title_bar(app, ui))
+            .options_bar(options_bar && !home, |ui, _cx, app| panels::region_versions::show_options_bar(app, ui))
             .status(status_bar && !home, |ui, _cx, app| panels::status_bar(app, ui))
             .body(|ui, cx, app| {
                 if home {
@@ -247,6 +247,11 @@ impl PhotocraftApp {
             })
             .show(ui, self);
         self.ui.view.screen_mode = mode;
+        // The Properties Reset session starts anew once the panel was not shown (`properties_hidden`).
+        // Home shows no dock, so no Properties panel either.
+        if home || !crate::panel_docking::is_front(self, "properties") {
+            self.properties_hidden = self.properties_hidden.saturating_add(2);
+        }
         // Over the window: the background job and update dialogs before the host runs, then every
         // hosted dialog, then the other OS windows' contents.
         jobs_ui::dialog(self, ui);

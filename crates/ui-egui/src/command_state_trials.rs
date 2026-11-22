@@ -145,3 +145,34 @@ fn the_held_command_states_equal_a_fresh_build_after_each_step() {
     held_is_fresh(&mut h, "a pending crop");
     assert!(crate::crop_ui::pending(h.state()), "the crop is pending");
 }
+
+/// Merge Channels reads every open grayscale document, not only the active one: a change to a background document
+/// moves its state in either direction (#16252).
+#[test]
+fn merge_channels_follows_a_change_to_a_background_document() {
+    let mut h = harness_of(|s| {
+        for _ in 0..3 {
+            s.execute("file.new", json!({"width": 64, "height": 64, "mode": "grayscale"})).unwrap();
+        }
+        s.set_active(0);
+    });
+    let merge = |h: &mut H| {
+        h.run_steps(2);
+        let merge = CommandRef::from(craft::imaging::ui::channels::ChannelsCommands::MergeChannels);
+        h.state().framework.held_states.states.get(&merge).is_some_and(|state| state.is_enabled())
+    };
+    assert!(merge(&mut h), "three grayscale documents of one size can merge");
+    // A change to a background document, as a job or a script makes through `Session::document_mut`.
+    let resize = |h: &mut H, side: u32| {
+        let s = &mut h.state_mut().session;
+        let Some(id) = s.documents().get(2).map(|st| st.doc.id) else { panic!("three documents are open") };
+        let Some(st) = s.document_mut(id) else { panic!("the third document is open") };
+        std::sync::Arc::make_mut(st.doc_mut()).size = photocraft_geom::Size::new(side, side);
+    };
+    resize(&mut h, 32);
+    assert!(!merge(&mut h), "a background document of another size leaves two to merge");
+    held_is_fresh(&mut h, "resizing a background document");
+    resize(&mut h, 64);
+    assert!(merge(&mut h), "and back at the same size, three again");
+    held_is_fresh(&mut h, "resizing it back");
+}

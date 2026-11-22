@@ -664,10 +664,14 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
         }
     }
     // The exports to files take the JPEG quality only for a JPEG (a quality would make a WebP lossy).
-    if matches!(command, "file.export.artboardsToFiles" | "file.export.layersToFiles" | "file.export.layerCompsToFiles")
-        && map.get("format").and_then(Value::as_str) != Some("jpg")
-    {
+    if matches!(command, "file.export.layersToFiles" | "file.export.layerCompsToFiles") && map.get("format").and_then(Value::as_str) != Some("jpg") {
         map.remove("quality");
+    }
+    // Artboards to Files sends its Name Options only while Include Artboard Name is ticked (#13637), and the chosen
+    // file type's Export Options only while that box is ticked (#13636).
+    if command == "file.export.artboardsToFiles" {
+        crate::menus::view_cmds::strip_artboard_name_options(&mut map);
+        crate::menus::view_cmds::nest_artboard_export_options(&mut map);
     }
     // An emptied embedded LUT is no data: a stored empty `data` would be read over the chosen `lut`.
     if command == "image.adjustments.colorLookup" && map.get("data").and_then(Value::as_str).is_some_and(str::is_empty) {
@@ -1371,6 +1375,9 @@ pub struct FilterPreviewKey {
     pub params: Value,
     pub k: u32,
     pub tool_colors: ([f32; 4], [f32; 4]),
+    /// The scratch read-error generation (`crate::scratch_reads`): a tile that fails to read and recovers changes
+    /// the pixels without a new revision, and a preview computed during the error must not be kept.
+    pub scratch: u64,
 }
 
 #[cfg(test)]
