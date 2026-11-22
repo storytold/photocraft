@@ -1,6 +1,6 @@
 use super::manage::gray_document;
 use super::planes::{channel_format, edit_mode, next_alpha_name, plane_surface, read_plane, tone};
-use super::refs::{Blending, bad, doc_index, mask_plane, source, source_spec};
+use super::refs::{Blending, bad, doc_index, layer_coverage, mask_plane, source, source_spec};
 use super::targeting::{Target, is_channel_target, is_spot_target, target_of, target_surface};
 use super::{AlphaChannel, ColorMode, EngineError, Result, SelectionMode, Session, Value, json, sel};
 use photocraft_color::blend::blend_rgb;
@@ -149,9 +149,18 @@ pub(super) fn calculations(s: &mut Session, p: &Value) -> Result<Value> {
     let s1 = source(s, &source_spec(p, "source1", "source1").unwrap_or_else(|| json!({})), cmd, true)?.remove(0);
     let s2 = source(s, &source_spec(p, "source2", "source2").unwrap_or_else(|| json!({})), cmd, true)?.remove(0);
     let mask = mask_plane(s, p, cmd)?;
+    // Where Source 1's layer has no pixel, or its layer mask hides it, Source 2 shows (#14511).
+    let shown = layer_coverage(s, &source_spec(p, "source1", "source1").unwrap_or_else(|| json!({})), cmd)?;
     // Source 1 is blended onto Source 2.
-    let out: Vec<f32> =
-        s2.iter().zip(&s1).enumerate().map(|(i, (&b, &t))| b + (blending.apply(b, t) - b) * opacity * mask.as_ref().map_or(1.0, |m| m[i])).collect();
+    let out: Vec<f32> = s2
+        .iter()
+        .zip(&s1)
+        .enumerate()
+        .map(|(i, (&b, &t))| {
+            let shown = shown.as_ref().map_or(1.0, |c| c.get(i).copied().unwrap_or(1.0));
+            b + (blending.apply(b, t) - b) * opacity * mask.as_ref().map_or(1.0, |m| m[i]) * shown
+        })
+        .collect();
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     match p.get("result").and_then(Value::as_str).unwrap_or("newChannel") {
         "newChannel" => {

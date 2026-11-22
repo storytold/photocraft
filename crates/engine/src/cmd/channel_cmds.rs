@@ -114,6 +114,9 @@ macro_rules! spec {
 }
 
 mod calc;
+#[cfg(test)]
+#[path = "channel_cmds/calculations_layer_transparency_tests.rs"]
+mod calculations_layer_transparency_tests;
 mod manage;
 mod planes;
 mod refs;
