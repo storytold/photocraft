@@ -885,7 +885,9 @@ fn allocate_browser_item_grid(ui: &mut egui::Ui, item_count: usize, layout: Item
     // Area. Anchor those cards to their allocated content origin, not that broader clip, or they
     // are painted and hit-tested outside the popup. Other browsers retain their header-aligned origin.
     let origin_x = if custom_item_size.is_some() { area.left() + 1.0 } else { ui.clip_rect().left() + 1.0 };
-    ItemGrid { area, cell, columns: cols, rows, pad, center_offset, gap, origin_x, column_major: wrap_list, item_count, list }
+    // Wrapped list mode flows down columns, but custom-sized cards (such as brush presets) are
+    // always thumbnail grids and must flow left-to-right before starting the next row.
+    ItemGrid { area, cell, columns: cols, rows, pad, center_offset, gap, origin_x, column_major: list && wrap_list, item_count, list }
 }
 
 /// Paint one item in its selected list/grid presentation without changing its hit target.

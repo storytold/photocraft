@@ -202,6 +202,12 @@ pub enum Action {
     },
     /// Open the existing brush-preset creation dialog.
     NewPreset,
+    /// Append the built-in brush library (a no-op because it is already included).
+    AppendDefault,
+    /// Import brush presets from a supported preset file.
+    Import,
+    /// Export selected brush preset occurrences.
+    ExportSelected(Vec<String>),
     /// Create a group by moving the explicitly selected presets into it.
     CreateGroup {
         group: String,
@@ -903,6 +909,9 @@ pub fn browser_actions_to_actions(
             }
             BrowserAction::DeleteNestedGroup { group, group_path } => Some(Action::DeleteGroup { group: group_key(presets, &group), folder: group_path }),
             BrowserAction::New => Some(Action::NewPreset),
+            BrowserAction::AppendDefault => Some(Action::AppendDefault),
+            BrowserAction::Import => Some(Action::Import),
+            BrowserAction::ExportSelected(keys) => Some(Action::ExportSelected(keys)),
             BrowserAction::CreateGroup(group) => Some(Action::CreateGroup {
                 group,
                 presets: selection
@@ -911,13 +920,7 @@ pub fn browser_actions_to_actions(
                     .filter_map(|(_, key)| preset_by_identity(presets, key).map(|preset| preset.name.clone()))
                     .collect(),
             }),
-            BrowserAction::Drop(_, _)
-            | BrowserAction::NewGroup
-            | BrowserAction::AppendDefault
-            | BrowserAction::Import
-            | BrowserAction::ExportSelected(_)
-            | BrowserAction::ExportAll(_)
-            | BrowserAction::CopyItem { .. } => None,
+            BrowserAction::Drop(_, _) | BrowserAction::NewGroup | BrowserAction::ExportAll(_) | BrowserAction::CopyItem { .. } => None,
         })
         .collect()
 }
@@ -1187,6 +1190,26 @@ pub fn apply(app: &mut PhotocraftApp, acts: Vec<Action>) {
             }
             Action::NewPreset => {
                 crate::brush_preset_dialog::open(app, None);
+            }
+            Action::AppendDefault => {
+                app.ui.status_error = false;
+                app.ui.status = "Built-in brush presets are already included in the library.".into();
+            }
+            Action::Import => {
+                if let Err(error) = crate::preset_files_ui::import_brushes(app)
+                    && error != crate::file_dialog::CANCELLED
+                {
+                    app.ui.status = error;
+                    app.ui.status_error = true;
+                }
+            }
+            Action::ExportSelected(keys) => {
+                if let Err(error) = crate::brush_panel::export_selected_brushes(app, &keys)
+                    && error != crate::file_dialog::CANCELLED
+                {
+                    app.ui.status = error;
+                    app.ui.status_error = true;
+                }
             }
             Action::CreateGroup { group, presets } => {
                 let presets = if presets.is_empty() { app.session.tools.current_preset.iter().cloned().collect::<Vec<_>>() } else { presets };

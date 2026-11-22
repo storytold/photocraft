@@ -187,6 +187,26 @@ fn wrapped_list_uses_fixed_width_column_major_flow_and_shift_selection_order() {
 }
 
 #[test]
+fn custom_sized_cards_flow_horizontally_even_when_list_wrapping_is_enabled() {
+    use crate::pickers::state::PickerDisplayMode as Mode;
+
+    let groups = vec![group("A", vec![item("a1", "Card 1", &[]), item("a2", "Card 2", &[]), item("a3", "Card 3", &[]), item("a4", "Card 4", &[])])];
+    let mut state = PresetUi::default();
+    state.display_modes.insert(PANEL.to_owned(), Mode::SmallList);
+    state.wrap_list.insert(PANEL.to_owned(), true);
+    state.custom_item_sizes.insert(PANEL.to_owned(), vec2(90.0, 64.0));
+    let harness = harness_with_state(groups, vec2(320.0, 520.0), state);
+
+    let first = harness.get_by_label("Card 1").rect();
+    let second = harness.get_by_label("Card 2").rect();
+    let fourth = harness.get_by_label("Card 4").rect();
+    assert!(second.left() > first.left(), "custom-sized cards should advance horizontally within a row");
+    assert_eq!(second.top(), first.top(), "the second card should remain on the first row");
+    assert_eq!(fourth.left(), first.left(), "the fourth card should start the next row once the panel is narrow");
+    assert!(fourth.top() > first.top(), "the fourth card should wrap below the first row");
+}
+
+#[test]
 fn shift_selection_spans_visible_groups_and_cards_but_skips_collapsed_group_contents() {
     let groups = vec![group("A", vec![item("a1", "Hidden card A1", &[]), item("a2", "Hidden card A2", &[])]), group("B", vec![item("b1", "Card B1", &[])])];
     let mut state = PresetUi::default();

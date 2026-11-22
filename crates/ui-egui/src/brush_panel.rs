@@ -480,7 +480,7 @@ fn brush_menu_leading(app: &mut PhotocraftApp, ui: &mut egui::Ui, state: &mut cr
     ui.separator();
 }
 
-fn export_selected_brushes(app: &mut PhotocraftApp, keys: &[String]) -> Result<Value, String> {
+pub(crate) fn export_selected_brushes(app: &mut PhotocraftApp, keys: &[String]) -> Result<Value, String> {
     use photocraft_engine::edit_menu_cmds::{PRESET_FORMAT, PresetFile};
     let mut brushes =
         keys.iter().filter_map(|key| crate::pickers::adapters::brushes::preset_by_identity(&app.session.tools.presets, key).cloned()).collect::<Vec<_>>();

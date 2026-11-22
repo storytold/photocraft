@@ -60,13 +60,14 @@ impl SelectionMenuModel {
         // subsume selected descendants in the actual deletion operation.
         let mixed_selection = has_headers && has_cards;
         let plural = rename_count != 1;
+        let plural_asset = if asset == "Brush" { "Brushes" } else { "" };
         let rename_label = if mixed_selection || !has_headers {
-            format!("Rename {asset}{}…", if plural { "s" } else { "" })
+            format!("Rename {}…", if plural { if plural_asset.is_empty() { format!("{asset}s") } else { plural_asset.to_owned() } } else { asset.to_owned() })
         } else {
             format!("Rename Group{}…", if plural { "s" } else { "" })
         };
         let delete_label = if mixed_selection || !has_headers {
-            format!("Delete {asset}{}…", if plural { "s" } else { "" })
+            format!("Delete {}…", if plural { if plural_asset.is_empty() { format!("{asset}s") } else { plural_asset.to_owned() } } else { asset.to_owned() })
         } else {
             format!("Delete Group{}…", if plural { "s" } else { "" })
         };
@@ -141,6 +142,7 @@ fn picker_context_menu_actions(
         "gradients" => Some((tl!("Gradient"), tl!("Gradients"), true, true, true)),
         "patterns" => Some((tl!("Pattern"), tl!("Patterns"), true, true, true)),
         "swatches" => Some((tl!("Swatch"), tl!("Swatches"), true, true, true)),
+        "brushes" | "brush-picker" => Some((tl!("Brush"), tl!("Brushes"), true, true, true)),
         "styles" => Some((tl!("Style"), tl!("Styles"), true, false, false)),
         "shapes" => Some((tl!("Shape"), tl!("Shapes"), true, false, false)),
         "toolPresets" => Some((tl!("Tool Preset"), tl!("Tool Presets"), false, false, false)),
@@ -311,7 +313,13 @@ pub(crate) fn begin_item_rename(state: &mut PresetUi, panel: &str, targets: &[(S
 /// Standard item-menu policy shared by preset panels and specialised adapters.
 pub(crate) fn standard_item_context_menu(ui: &mut egui::Ui, state: &mut PresetUi, args: ItemContextMenuArgs<'_>, events: &mut Vec<BrowserAction>) {
     let ItemContextMenuArgs { panel, item, group, selected_items, .. } = args;
-    let selection = state.browser_selection_snapshot.get(panel).cloned().unwrap_or_default();
+    let mut selection = state.browser_selection_snapshot.get(panel).cloned().unwrap_or_default();
+    if selection.targets.is_empty() {
+        for (group, item) in item_context_targets(item, group, selected_items) {
+            selection.cards.push((group.clone(), item.key.clone()));
+            selection.targets.push(super::selection::SelectionTarget::Item { group, path: item.group_path, key: item.key });
+        }
+    }
     if let Some(asset) = picker_context_menu_actions(ui, panel, &selection, events) {
         ui.separator();
         picker_creation_actions_menu(ui, panel, asset, std::slice::from_ref(group), &selection, last_selected_swatch_target(state, panel), events);
@@ -353,7 +361,10 @@ pub(crate) fn standard_nested_group_context_menu(
 
 /// Standard group-menu policy shared by preset panels and specialised adapters.
 pub(crate) fn standard_group_context_menu(ui: &mut egui::Ui, state: &mut PresetUi, panel: &str, group: &GroupView, events: &mut Vec<BrowserAction>) {
-    let selection = state.browser_selection_snapshot.get(panel).cloned().unwrap_or_default();
+    let mut selection = state.browser_selection_snapshot.get(panel).cloned().unwrap_or_default();
+    if selection.targets.is_empty() {
+        selection.targets.push(super::selection::SelectionTarget::Group(group.name.clone()));
+    }
     if let Some(asset) = picker_context_menu_actions(ui, panel, &selection, events) {
         ui.separator();
         picker_creation_actions_menu(ui, panel, asset, std::slice::from_ref(group), &selection, last_selected_swatch_target(state, panel), events);
@@ -554,6 +565,8 @@ mod tests {
         let cases = [
             (vec![item("one")], "Rename Gradient\u{2026}", "Delete Gradient\u{2026}"),
             (vec![item("one"), item("two")], "Rename Gradients\u{2026}", "Delete Gradients\u{2026}"),
+            (vec![item("one")], "Rename Brush\u{2026}", "Delete Brush\u{2026}"),
+            (vec![item("one"), item("two")], "Rename Brushes\u{2026}", "Delete Brushes\u{2026}"),
             (vec![group("Basics")], "Rename Group\u{2026}", "Delete Group\u{2026}"),
             (vec![group("Basics"), group("Grays")], "Rename Groups\u{2026}", "Delete Groups\u{2026}"),
             (vec![item("one"), group("Grays")], "Rename Gradients\u{2026}", "Delete Gradients\u{2026}"),
@@ -561,7 +574,8 @@ mod tests {
 
         for (targets, rename, delete) in cases {
             let selection = BrowserSelectionSnapshot { targets, ..Default::default() };
-            let menu = SelectionMenuModel::new("Gradient", &selection);
+            let asset = if rename.contains("Brush") { "Brush" } else { "Gradient" };
+            let menu = SelectionMenuModel::new(asset, &selection);
             assert_eq!(menu.rename_label, rename);
             assert_eq!(menu.delete_label, delete);
         }
@@ -593,6 +607,47 @@ mod tests {
         harness.run_steps(2);
 
         assert_standard_context_menu_template(&harness);
+    }
+
+    #[test]
+    fn brush_item_context_menu_uses_shared_import_export_and_selection_labels() {
+        use super::standard_item_context_menu;
+        use crate::pickers::browser::asset_browser::ItemContextMenuArgs;
+        use crate::pickers::state::PresetUi;
+
+        let item = ItemView { key: "one".into(), name: "One".into(), group_path: Vec::new() };
+        let group = GroupView { name: "Basics".into(), root_only: false, items: vec![item.clone()] };
+        let selected_items = vec![("Basics".into(), item.clone())];
+        let mut harness = Harness::builder().with_size(vec2(520.0, 420.0)).build_ui(|ui| {
+            ui.menu_button("Picker", |ui| {
+                standard_item_context_menu(
+                    ui,
+                    &mut PresetUi::default(),
+                    ItemContextMenuArgs { panel: "brushes", item: &item, group: &group, group_names: &["Basics".into()], selected_items: &selected_items },
+                    &mut Vec::new(),
+                );
+            });
+        });
+        crate::PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ProMedium);
+        harness.run_steps(2);
+        harness.get_by_label("Picker").click();
+        harness.run_steps(2);
+
+        for label in [
+            "Append Default Brushes…",
+            "Import Brushes…",
+            "Export Selected Brushes…",
+            "Rename Brush…",
+            "Delete Brush…",
+            "New Brush Preset…",
+            "New Brush Group…",
+        ] {
+            assert!(harness.query_by_label(label).is_some(), "missing brush context-menu entry: {label}");
+        }
+        assert!(!harness.get_by_label("Append Default Brushes…").accesskit_node().is_disabled());
+        assert!(!harness.get_by_label("Import Brushes…").accesskit_node().is_disabled());
+        assert!(!harness.get_by_label("Export Selected Brushes…").accesskit_node().is_disabled());
+        assert!(!harness.get_by_label("Rename Brush…").accesskit_node().is_disabled());
     }
 
     #[test]

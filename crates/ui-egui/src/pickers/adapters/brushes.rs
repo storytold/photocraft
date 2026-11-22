@@ -230,6 +230,9 @@ pub(crate) fn picker_browser_with_shell(
         )
     };
     apply_inline_rename_actions(preset_ui, PANEL, &browser_actions);
+    if browser_actions.iter().any(|action| matches!(action, BrowserAction::NewGroup)) {
+        crate::pickers::browser::popup_dialogs::request_new_group(ui.ctx(), PANEL);
+    }
     let mut actions = browser_actions_to_actions(presets, browser_actions, preset_ui.browser_selection_snapshot.get(PANEL));
     actions.extend(hierarchy_actions);
     actions
@@ -508,6 +511,9 @@ pub fn preset_list(
             },
         )
     };
+    if browser_actions.iter().any(|action| matches!(action, BrowserAction::NewGroup)) {
+        crate::pickers::browser::popup_dialogs::request_new_group(ui.ctx(), PANEL);
+    }
     apply_inline_rename_actions(preset_ui, PANEL, &browser_actions);
     sync_browser_state_to_brush_state(st, preset_ui, presets, PANEL);
     let mut actions = browser_actions_to_actions(presets, browser_actions, preset_ui.browser_selection_snapshot.get(PANEL));
