@@ -7,9 +7,13 @@
 //! `PerspectiveBar` is the options bar, and `PerspectiveSession` holds the planes, the mode and the session's undo
 //! steps. ↩ / Commit runs `edit.perspectiveWarp` with the planes. The preview is the layer texture on a grid pushed
 //! through the same piecewise-homography map the engine uses.
+//!
+//! Every change of the session, from the canvas, the options bar or the control channel, is made on a copy and kept
+//! only if the engine's map accepts the planes it leads to ([`accept`]); a refusal is an error, never a silent skip.
 
 use std::sync::Arc;
 
+use craft::behavior::EditEvent;
 use craft::behavior::kurbo::{Point, Rect as DocRect};
 use craft::imaging::ui::transform_preview::{PreviewPixels, PreviewTextures};
 use craft::imaging::ui::warp::perspective::{PerspectiveBar, PerspectiveEdit, PerspectiveSession, PerspectiveWarp, Plane, PlaneMode, Straighten};
@@ -74,7 +78,9 @@ impl PerspSession {
     /// The session's state for `ui.inspect` and the control channel.
     pub fn describe(&self) -> Value {
         let mode = if self.warp.mode() == PlaneMode::Warp { "warp" } else { "layout" };
-        json!({"document": self.document.0, "layer": self.layer.0, "mode": mode, "planes": to_algo(self.warp.planes())})
+        let planes = to_algo(self.warp.planes());
+        let linked = photocraft_algo::perspective::linked_edge_count(&planes);
+        json!({"document": self.document.0, "layer": self.layer.0, "mode": mode, "planes": planes, "linkedEdges": linked})
     }
 }
 
@@ -118,38 +124,217 @@ pub fn begin(app: &mut PhotocraftApp, _ctx: &egui::Context, command: &str) -> Re
     Ok(())
 }
 
-/// Commits the session: one `edit.perspectiveWarp` step. No planes, or planes that all map onto themselves, run no
-/// command.
-pub fn commit(app: &mut PhotocraftApp) {
-    let Some(s) = app.distort.perspective.take() else { return };
-    let Some(planes) = s.warp.result() else { return };
-    let _ = app.run(&s.command, json!({"planes": to_algo(planes), "layer": s.layer.0}));
+/// Whether `planes` can be shown and committed: none, or planes the engine's map accepts (finite corners, convex
+/// quads, after linked corners are unified). The engine refuses the rest, so the session never holds them.
+fn check(planes: &[Plane]) -> Result<(), String> {
+    if planes.iter().flat_map(|p| p.source.iter().chain(&p.target)).any(|c| !c.x.is_finite() || !c.y.is_finite()) {
+        return Err(tl!("Perspective Warp: plane corners must be finite").to_string());
+    }
+    if !planes.is_empty() && PerspectiveMap::new(&to_algo(planes)).is_none() {
+        return Err(tl!("Perspective Warp: that would make a plane degenerate or not convex").to_string());
+    }
+    Ok(())
 }
 
-/// Control channel: `edit.perspectiveWarp {"ui": {...}}` while the mode is active.
-pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
-    if ui.get("commit").and_then(Value::as_bool) == Some(true) {
-        commit(app);
-        return Ok(json!({"committed": true}));
+/// Applies `edit` to `session` only if the planes it leads to are valid. The edit runs on a copy, so a refusal leaves
+/// the planes, the mode, the undo steps and the generation as they were. A refused edit the session would silently
+/// skip (a mode or straighten change during a drag, Warp with no planes) is an error too.
+///
+/// A refused `Update` keeps the last accepted planes. A refused final `Commit` still ends the drag, on the last
+/// accepted planes and with its own id, so no drag is left running.
+fn accept(session: &mut PerspectiveSession, edit: PerspectiveEdit) -> Result<(), String> {
+    match &edit {
+        PerspectiveEdit::Mode(_) | PerspectiveEdit::Straighten(_) if session.dragging() => {
+            return Err(tl!("Perspective Warp: finish the corner drag first").to_string());
+        }
+        PerspectiveEdit::Mode(PlaneMode::Warp) if session.planes().is_empty() => {
+            return Err(tl!("Perspective Warp: add a plane before switching to Warp").to_string());
+        }
+        PerspectiveEdit::Straighten(_) if session.planes().is_empty() => {
+            return Err(tl!("Perspective Warp: there are no planes to straighten").to_string());
+        }
+        PerspectiveEdit::Planes(EditEvent::Set { .. }) if session.dragging() => {
+            return Err(tl!("Perspective Warp: finish the corner drag first").to_string());
+        }
+        _ => {}
     }
-    if ui.get("cancel").and_then(Value::as_bool) == Some(true) {
+    let mut trial = session.clone();
+    trial.apply(edit.clone());
+    match check(trial.planes()) {
+        Ok(()) => {
+            *session = trial;
+            Ok(())
+        }
+        Err(why) => {
+            if let PerspectiveEdit::Planes(mut event) = edit
+                && let EditEvent::Commit { after, .. } = &mut event
+                && session.dragging()
+            {
+                *after = session.planes().to_vec();
+                session.apply(PerspectiveEdit::Planes(event));
+            }
+            Err(why)
+        }
+    }
+}
+
+/// The open session, if it belongs to the active document.
+fn current(app: &PhotocraftApp) -> Result<&PerspSession, String> {
+    let s = app.distort.perspective.as_ref().ok_or_else(|| tl!("Perspective Warp is not active").to_string())?;
+    if app.session.active().map(|st| st.doc.id) != Some(s.document) {
+        return Err(tl!("Perspective Warp belongs to another document").to_string());
+    }
+    Ok(s)
+}
+
+/// One edit of the open session, checked as [`accept`] does; the session is left alone when it is refused or belongs
+/// to another document.
+pub(crate) fn session_apply(app: &mut PhotocraftApp, edit: PerspectiveEdit) -> Result<(), String> {
+    current(app)?;
+    match app.distort.perspective.as_mut() {
+        Some(s) => accept(&mut s.warp, edit),
+        None => Err(tl!("Perspective Warp is not active").to_string()),
+    }
+}
+
+/// The edits the canvas or the options bar reported, each through [`session_apply`]; a refusal is shown in the status
+/// bar.
+fn apply_reported(app: &mut PhotocraftApp, edits: Vec<PerspectiveEdit>) {
+    for edit in edits {
+        if let Err(error) = session_apply(app, edit) {
+            crate::dialogs::alerts::report_error(app, error);
+        }
+    }
+}
+
+/// Commits `warp`'s planes as one `edit.perspectiveWarp` step on the document the session belongs to. The planes are
+/// checked before anything else, so an invalid state is never taken for an identity. No planes, or planes that all
+/// map onto themselves, run no command and close the session (`committed: false`). If the engine refuses, the
+/// session and its preview stay open.
+fn commit_planes(app: &mut PhotocraftApp, warp: &PerspectiveSession) -> Result<Value, String> {
+    let s = current(app)?;
+    check(warp.planes())?;
+    let Some(planes) = warp.result() else {
+        let reason = if warp.planes().is_empty() { "noPlanes" } else { "identity" };
+        app.distort.perspective = None;
+        return Ok(json!({"committed": false, "reason": reason}));
+    };
+    let (command, params) = (s.command.clone(), json!({"planes": to_algo(planes), "layer": s.layer.0}));
+    app.run(&command, params)?;
+    app.distort.perspective = None;
+    Ok(json!({"committed": true}))
+}
+
+/// Commits the open session.
+pub fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
+    let warp = current(app)?.warp.clone();
+    commit_planes(app, &warp)
+}
+
+/// Enter or the options bar's commit: the same commit, a refusal shown in the status bar.
+fn commit_from_ui(app: &mut PhotocraftApp) {
+    if let Err(error) = commit(app) {
+        crate::dialogs::alerts::report_error(app, error);
+    }
+}
+
+/// Control channel: `edit.perspectiveWarp {"ui": {...}}` while the mode is active. Every field is read and the
+/// result checked on a copy of the session before the session changes, so a refused request changes nothing. The
+/// fields apply in the order planes, mode, straighten, then commit.
+pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
+    let field = |key: &str| ui.get(key).filter(|v| !v.is_null());
+    let flag = |key: &str| -> Result<bool, String> { field(key).map_or(Ok(false), |v| v.as_bool().ok_or_else(|| format!("{key}: true|false"))) };
+    let (commit_requested, cancel_requested) = (flag("commit")?, flag("cancel")?);
+    let mode = field("mode")
+        .map(|v| match v.as_str() {
+            Some("warp") => Ok(PlaneMode::Warp),
+            Some("layout") => Ok(PlaneMode::Layout),
+            _ => Err("mode: warp|layout".to_string()),
+        })
+        .transpose()?;
+    let planes = field("planes").map(|p| serde_json::from_value::<Vec<AlgoPlane>>(p.clone()).map_err(|e| format!("bad planes: {e}"))).transpose()?;
+    if let Some(planes) = &planes {
+        check(&from_algo(planes))?;
+    }
+    let straighten = field("straighten")
+        .map(|v| v.as_str().and_then(AlgoStraighten::parse).ok_or_else(|| "straighten: horizontal|vertical|auto".to_string()))
+        .transpose()?;
+    // Keep the headless edge-link operation without reintroducing a Link Edges button.
+    // None = omitted; Some(None) = false; Some(Some(tolerance)) = requested.
+    let link_edges: Option<Option<f64>> = field("linkEdges")
+        .map(|value| {
+            let tolerance = match value {
+                Value::Bool(false) => return Ok(None),
+                Value::Bool(true) => 8.0,
+                Value::Object(obj) if obj.len() == 1 => obj.get("tolerance").and_then(Value::as_f64).ok_or("linkEdges tolerance must be a number")?,
+                _ => return Err("linkEdges: true|false|{tolerance:number}"),
+            };
+            if !tolerance.is_finite() || !(0.0..=32.0).contains(&tolerance) {
+                return Err("linkEdges tolerance must be finite and within 0..32 document pixels");
+            }
+            Ok(Some(tolerance))
+        })
+        .transpose()
+        .map_err(str::to_string)?;
+    let edits = mode.is_some() || planes.is_some() || straighten.is_some() || link_edges.is_some();
+    if commit_requested && cancel_requested {
+        return Err("commit and cancel cannot be combined".into());
+    }
+    if cancel_requested {
+        if edits {
+            return Err("cancel cannot be combined with mode, planes, straighten or linkEdges".into());
+        }
+        current(app)?;
         app.distort.perspective = None;
         return Ok(json!({"cancelled": true}));
     }
-    let s = app.distort.perspective.as_mut().ok_or(tl!("Perspective Warp is not active"))?;
-    if let Some(m) = ui.get("mode").and_then(Value::as_str) {
-        s.warp.apply(PerspectiveEdit::Mode(if m == "warp" { PlaneMode::Warp } else { PlaneMode::Layout }));
+    let mut trial = current(app)?.warp.clone();
+    if let Some(mut planes) = planes {
+        // A replacement made in Warp holds its linked corners together, as entering Warp does.
+        if trial.mode() == PlaneMode::Warp {
+            photocraft_algo::perspective::unify(&mut planes);
+        }
+        // The session ends a corner drag it holds indices of (#952) and bumps its generation.
+        trial.replace(from_algo(&planes));
+        check(trial.planes())?;
     }
-    if let Some(p) = ui.get("planes") {
-        let planes: Vec<AlgoPlane> = serde_json::from_value(p.clone()).map_err(|e| format!("bad planes: {e}"))?;
-        // The session ends a corner drag it holds indices of (#952).
-        s.warp.replace(from_algo(&planes));
+    if let Some(mode) = mode {
+        accept(&mut trial, PerspectiveEdit::Mode(mode))?;
     }
-    if let Some(st) = ui.get("straighten").and_then(Value::as_str) {
-        let how = AlgoStraighten::parse(st).ok_or("straighten: horizontal|vertical|auto")?;
-        s.warp.apply(PerspectiveEdit::Straighten(straighten_of(how)));
+    if let Some(how) = straighten {
+        accept(&mut trial, PerspectiveEdit::Straighten(straighten_of(how)))?;
     }
-    Ok(s.describe())
+    let mut welded_edges = None;
+    if let Some(Some(tolerance)) = link_edges {
+        if trial.mode() != PlaneMode::Layout {
+            return Err("linkEdges requires Layout mode".into());
+        }
+        if trial.dragging() {
+            return Err("finish the corner drag before linking edges".into());
+        }
+        let mut planes = to_algo(trial.planes());
+        let welded = photocraft_algo::perspective::weld_adjacent_edges(&mut planes, tolerance).map_err(str::to_string)?;
+        if welded > 0 {
+            check(&from_algo(&planes))?;
+            trial.replace(from_algo(&planes));
+            check(trial.planes())?;
+        }
+        welded_edges = Some(welded);
+    }
+    if commit_requested {
+        let mut result = commit_planes(app, &trial)?;
+        if let Some(welded) = welded_edges {
+            result["weldedEdges"] = json!(welded);
+        }
+        return Ok(result);
+    }
+    let Some(s) = app.distort.perspective.as_mut() else { return Err(tl!("Perspective Warp is not active").to_string()) };
+    s.warp = trial;
+    let mut result = s.describe();
+    if let Some(welded) = welded_edges {
+        result["weldedEdges"] = json!(welded);
+    }
+    Ok(result)
 }
 
 /// The warped pixels and the planes, in the canvas body at `at`. Each pass applies only the edits its own pointer and
@@ -174,13 +359,9 @@ pub fn canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, at: egui::Rect) {
         .clip(size)
         .show_at(ui, at);
     let output = PerspectiveWarp::new("Planes", Bind::given(s.warp.planes().to_vec()), s.warp.mode(), s.warp.generation()).show_at(ui, at);
-    if let Some(s) = app.distort.perspective.as_mut() {
-        for edit in output.edits() {
-            s.warp.apply(edit);
-        }
-    }
+    apply_reported(app, output.edits());
     if output.apply {
-        commit(app);
+        commit_from_ui(app);
     } else if output.discard {
         app.distort.perspective = None;
     }
@@ -195,13 +376,11 @@ pub(crate) fn bar_key(app: &PhotocraftApp) -> Option<(PlaneMode, usize)> {
 /// The options bar: the Layout and Warp tabs, the plane count and Remove Planes or the straighten buttons, commit and
 /// cancel.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let Some(s) = app.distort.perspective.as_mut() else { return };
+    let Some(s) = app.distort.perspective.as_ref() else { return };
     let output = PerspectiveBar::new(&s.warp).show(ui);
-    for edit in output.edits {
-        s.warp.apply(edit);
-    }
+    apply_reported(app, output.edits);
     if output.apply {
-        commit(app);
+        commit_from_ui(app);
     } else if output.discard {
         app.distort.perspective = None;
     }
@@ -209,6 +388,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 #[cfg(test)]
 mod tests {
+    use craft::behavior::{GestureId, Mixed};
+
     use super::*;
 
     fn perspective_app() -> Box<PhotocraftApp> {
@@ -249,17 +430,16 @@ mod tests {
         let mut after = before.clone();
         after[0].target[1] = Point::new(100.0, 5.0);
         after[1].target[0] = Point::new(100.0, 5.0);
-        let s = app.distort.perspective.as_mut().unwrap();
-        s.warp.apply(PerspectiveEdit::replace(&before, after, "Move Corner"));
-        let planes = s.describe()["planes"].clone();
+        session_apply(&mut app, PerspectiveEdit::replace(&before, after, "Move Corner")).unwrap();
+        let planes = app.distort.perspective.as_ref().unwrap().describe()["planes"].clone();
         assert_eq!(planes[0]["dst"][1], json!([100.0, 5.0]));
         assert_eq!(planes[1]["dst"][0], json!([100.0, 5.0]));
         assert_eq!(planes[0]["src"][1], json!([100.0, 20.0]), "warp mode keeps the layout");
         assert_eq!(planes[1]["src"][3], json!([100.0, 100.0]), "corners run clockwise from the top left");
         let past = past_len(&app);
-        commit(&mut app);
+        assert_eq!(commit(&mut app).unwrap()["committed"], true);
         assert!(app.distort.perspective.is_none());
-        assert_eq!(past_len(&app), past + 1);
+        assert_eq!(past_len(&app), past + 1, "one document step");
     }
 
     #[test]
@@ -267,8 +447,247 @@ mod tests {
         let mut app = perspective_app();
         control(&mut app, &json!({"planes": TWO_PLANES()})).unwrap();
         let past = past_len(&app);
-        commit(&mut app);
+        assert_eq!(commit(&mut app).unwrap()["committed"], false);
         assert!(app.distort.perspective.is_none());
         assert_eq!(past_len(&app), past);
+        let mut empty = perspective_app();
+        assert_eq!(control(&mut empty, &json!({"commit": true})).unwrap()["committed"], false, "no planes: nothing committed, and it says so");
+    }
+
+    fn warp_of(app: &PhotocraftApp) -> &PerspectiveSession {
+        &app.distort.perspective.as_ref().unwrap().warp
+    }
+
+    fn planes_of(app: &PhotocraftApp) -> Vec<Plane> {
+        warp_of(app).planes().to_vec()
+    }
+
+    fn one_plane() -> Value {
+        json!([TWO_PLANES()[0].clone()])
+    }
+
+    /// `planes` with the first plane's right corners swapped, in the layout and in the warp: a self-crossing quad.
+    fn bowtie(planes: &[Plane]) -> Vec<Plane> {
+        let mut crossed = planes.to_vec();
+        crossed[0].source.swap(1, 2);
+        crossed[0].target.swap(1, 2);
+        crossed
+    }
+
+    #[test]
+    fn a_refused_proposal_changes_neither_the_session_nor_its_undo_steps() {
+        let mut app = perspective_app();
+        control(&mut app, &json!({"planes": one_plane()})).unwrap();
+        let (planes, generation) = (planes_of(&app), warp_of(&app).generation());
+        let crossed = bowtie(&planes);
+        let error = session_apply(&mut app, PerspectiveEdit::replace(&planes, crossed, "Move Corner")).unwrap_err();
+        assert!(!error.is_empty());
+        assert_eq!(planes_of(&app), planes);
+        assert_eq!(warp_of(&app).generation(), generation);
+        assert!(warp_of(&app).can_undo(), "the accepted plane is still one step");
+        assert!(app.distort.perspective.as_mut().unwrap().warp.undo());
+        assert!(planes_of(&app).is_empty(), "the refused edit left no step behind it");
+        assert!(!warp_of(&app).can_undo());
+    }
+
+    #[test]
+    fn a_refused_straighten_or_mode_is_an_error_and_changes_nothing() {
+        let mut app = perspective_app();
+        assert!(session_apply(&mut app, PerspectiveEdit::Straighten(Straighten::Both)).is_err(), "no planes to straighten");
+        assert!(session_apply(&mut app, PerspectiveEdit::Mode(PlaneMode::Warp)).is_err(), "Warp needs a plane");
+        assert!(control(&mut app, &json!({"mode": "warp"})).is_err());
+        assert!(control(&mut app, &json!({"straighten": "auto"})).is_err());
+        assert_eq!(warp_of(&app).mode(), PlaneMode::Layout);
+        assert!(!warp_of(&app).can_undo());
+        control(&mut app, &json!({"planes": TWO_PLANES()})).unwrap();
+        let (planes, generation) = (planes_of(&app), warp_of(&app).generation());
+        // Corners 0.4 apart in the layout are linked, and linking averages their targets: here that pulls the second
+        // plane's top left past its top right and flips it, so the replacement is refused whole, mode included.
+        let mut linked: Vec<AlgoPlane> = serde_json::from_value(TWO_PLANES()).unwrap();
+        linked[1].src[0] = [100.4, 20.0];
+        linked[1].src[3] = [100.4, 100.0];
+        linked[1].dst = [[300.0, 20.0], [180.0, 20.0], [180.0, 100.0], [100.4, 100.0]];
+        assert!(control(&mut app, &json!({"planes": linked, "mode": "warp"})).is_err());
+        assert_eq!(planes_of(&app), planes);
+        assert_eq!(warp_of(&app).generation(), generation);
+        assert_eq!(warp_of(&app).mode(), PlaneMode::Layout);
+    }
+
+    #[test]
+    fn a_request_applies_all_or_nothing_and_planes_come_before_the_mode() {
+        let mut app = perspective_app();
+        let reply = control(&mut app, &json!({"planes": TWO_PLANES(), "mode": "warp"})).unwrap();
+        assert_eq!(reply["mode"], "warp", "the planes of the same request are in place when Warp is asked for");
+        assert_eq!(planes_of(&app).len(), 2);
+        let (planes, generation, mode) = (planes_of(&app), warp_of(&app).generation(), warp_of(&app).mode());
+        for bad in [
+            json!({"planes": one_plane(), "straighten": "sideways"}),
+            json!({"planes": one_plane(), "mode": "sideways"}),
+            json!({"planes": [{"src": []}], "mode": "layout"}),
+            json!({"planes": one_plane(), "mode": "layout", "commit": true, "cancel": true}),
+            json!({"planes": one_plane(), "cancel": true}),
+        ] {
+            assert!(control(&mut app, &bad).is_err(), "{bad}");
+            assert!(app.distort.perspective.is_some(), "{bad}");
+            assert_eq!(planes_of(&app), planes, "{bad}");
+            assert_eq!(warp_of(&app).generation(), generation, "{bad}");
+            assert_eq!(warp_of(&app).mode(), mode, "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_external_replacement_ends_a_running_drag_and_bumps_the_generation() {
+        let mut app = perspective_app();
+        control(&mut app, &json!({"planes": one_plane(), "mode": "warp"})).unwrap();
+        let before = planes_of(&app);
+        let id = GestureId::new(3);
+        let begin = EditEvent::begin(id, Mixed::Same(before.clone()), "Move Corner".into(), None);
+        session_apply(&mut app, PerspectiveEdit::Planes(begin)).unwrap();
+        assert!(warp_of(&app).dragging());
+        assert!(control(&mut app, &json!({"straighten": "auto"})).is_err(), "straighten waits for the drag");
+        assert!(warp_of(&app).dragging());
+        let generation = warp_of(&app).generation();
+        control(&mut app, &json!({"planes": TWO_PLANES()})).unwrap();
+        assert!(!warp_of(&app).dragging());
+        assert!(warp_of(&app).generation() > generation);
+    }
+
+    #[test]
+    fn a_refused_gesture_step_keeps_the_last_accepted_planes_and_still_ends_the_drag() {
+        let mut app = perspective_app();
+        control(&mut app, &json!({"planes": one_plane(), "mode": "warp"})).unwrap();
+        let before = planes_of(&app);
+        let mut moved = before.clone();
+        moved[0].target[0] = Point::new(10.0, 10.0);
+        let crossed = bowtie(&moved);
+        let id = GestureId::new(7);
+        let step = |app: &mut PhotocraftApp, event: EditEvent<Vec<Plane>>| session_apply(app, PerspectiveEdit::Planes(event));
+        step(&mut app, EditEvent::begin(id, Mixed::Same(before.clone()), "Move Corner".into(), None)).unwrap();
+        step(&mut app, EditEvent::update(id, moved.clone())).unwrap();
+        step(&mut app, EditEvent::update(id, crossed.clone())).unwrap_err();
+        assert_eq!(planes_of(&app), moved, "the refused update keeps the last accepted planes");
+        assert!(warp_of(&app).dragging());
+        step(&mut app, EditEvent::update(id, crossed.clone())).unwrap_err();
+        step(&mut app, EditEvent::commit(id, Mixed::Same(before.clone()), crossed)).unwrap_err();
+        assert!(!warp_of(&app).dragging(), "the release ends the drag even when its planes are refused");
+        assert_eq!(planes_of(&app), moved);
+        let session = &mut app.distort.perspective.as_mut().unwrap().warp;
+        assert!(session.undo(), "the gesture is one undo step");
+        assert_eq!(planes_of(&app), before);
+    }
+
+    #[test]
+    fn a_valid_gesture_is_one_undo_step() {
+        let mut app = perspective_app();
+        control(&mut app, &json!({"planes": one_plane(), "mode": "warp"})).unwrap();
+        let before = planes_of(&app);
+        let mut moved = before.clone();
+        moved[0].target[2] = Point::new(110.0, 90.0);
+        let id = GestureId::new(9);
+        let step = |app: &mut PhotocraftApp, event: EditEvent<Vec<Plane>>| session_apply(app, PerspectiveEdit::Planes(event));
+        step(&mut app, EditEvent::begin(id, Mixed::Same(before.clone()), "Move Corner".into(), None)).unwrap();
+        step(&mut app, EditEvent::update(id, moved.clone())).unwrap();
+        step(&mut app, EditEvent::commit(id, Mixed::Same(before.clone()), moved.clone())).unwrap();
+        assert!(!warp_of(&app).dragging());
+        assert_eq!(planes_of(&app), moved);
+        let session = &mut app.distort.perspective.as_mut().unwrap().warp;
+        assert!(session.undo());
+        assert_eq!(planes_of(&app), before);
+        assert!(app.distort.perspective.as_mut().unwrap().warp.redo());
+        assert_eq!(planes_of(&app), moved);
+    }
+
+    #[test]
+    fn empty_and_identity_commits_explain_the_noop_without_changing_document_history() {
+        let mut app = perspective_app();
+        let before = past_len(&app);
+        let reply = commit(&mut app).unwrap();
+        assert_eq!(reply["committed"], false);
+        assert_eq!(reply["reason"], "noPlanes");
+        assert_eq!(past_len(&app), before);
+        let mut app = perspective_app();
+        let before = past_len(&app);
+        control(&mut app, &json!({"planes": one_plane()})).unwrap();
+        let reply = commit(&mut app).unwrap();
+        assert_eq!(reply["committed"], false);
+        assert_eq!(reply["reason"], "identity");
+        assert_eq!(past_len(&app), before);
+    }
+
+    #[test]
+    fn headless_edge_linking_is_atomic_and_reports_links_without_a_button() {
+        let mut app = perspective_app();
+        let a = json!([[20.0, 20.0], [90.0, 20.0], [90.0, 100.0], [20.0, 100.0]]);
+        let b = json!([[94.0, 20.0], [164.0, 20.0], [164.0, 100.0], [94.0, 100.0]]);
+        let initial = json!([
+            {"src": a.clone(), "dst": a},
+            {"src": b.clone(), "dst": b}
+        ]);
+        let response = control(&mut app, &json!({"planes": initial})).unwrap();
+        assert_eq!(response["linkedEdges"], 0);
+        let before = planes_of(&app);
+        let generation = warp_of(&app).generation();
+        for bad in [
+            json!({"linkEdges": {"tolerance": 33.0}}),
+            json!({"linkEdges": {"tolerance": -1.0}}),
+            json!({"linkEdges": "yes"}),
+            json!({"linkEdges": {"tolerance": "8"}}),
+        ] {
+            assert!(control(&mut app, &bad).is_err(), "{bad}");
+            assert_eq!(planes_of(&app), before);
+            assert_eq!(warp_of(&app).generation(), generation);
+        }
+        assert_eq!(control(&mut app, &json!({"linkEdges": false})).unwrap()["linkedEdges"], 0);
+        let response = control(&mut app, &json!({"linkEdges": {"tolerance": 8.0}})).unwrap();
+        assert_eq!(response["weldedEdges"], 1);
+        assert_eq!(response["linkedEdges"], 1);
+        let planes = planes_of(&app);
+        assert_eq!(planes[0].source[1], planes[1].source[0]);
+        assert_eq!(planes[0].source[2], planes[1].source[3]);
+        assert_eq!(planes[0].target[1], planes[1].target[0]);
+        assert_eq!(planes[0].target[2], planes[1].target[3]);
+        assert!(warp_of(&app).generation() > generation);
+        control(&mut app, &json!({"mode": "warp"})).unwrap();
+        assert!(control(&mut app, &json!({"linkEdges": true})).is_err());
+        assert_eq!(planes_of(&app), planes);
+    }
+
+    #[test]
+    fn another_documents_session_is_neither_edited_nor_committed() {
+        let mut app = perspective_app();
+        control(&mut app, &json!({"planes": TWO_PLANES(), "mode": "warp"})).unwrap();
+        let planes = planes_of(&app);
+        app.session.execute("file.new", json!({"width": 50, "height": 50, "depth": 8})).unwrap();
+        let past = past_len(&app);
+        let document = app.session.active().unwrap().doc.clone();
+        assert!(control(&mut app, &json!({"planes": one_plane()})).is_err());
+        assert!(control(&mut app, &json!({"commit": true})).is_err());
+        assert!(control(&mut app, &json!({"cancel": true})).is_err(), "foreign-document cancel cannot discard another document's session");
+        assert!(session_apply(&mut app, PerspectiveEdit::Mode(PlaneMode::Layout)).is_err());
+        assert!(commit(&mut app).is_err());
+        assert!(app.distort.perspective.is_some(), "the refusal leaves the session to the stale-document check");
+        assert_eq!(planes_of(&app), planes);
+        assert_eq!(past_len(&app), past);
+        assert!(Arc::ptr_eq(&document, &app.session.active().unwrap().doc));
+    }
+
+    #[test]
+    fn a_commit_the_engine_refuses_keeps_the_session_and_its_preview() {
+        let mut app = perspective_app();
+        control(&mut app, &json!({"planes": TWO_PLANES(), "mode": "warp"})).unwrap();
+        let before = planes_of(&app);
+        let mut after = before.clone();
+        after[0].target[0] = Point::new(30.0, 30.0);
+        session_apply(&mut app, PerspectiveEdit::replace(&before, after, "Move Corner")).unwrap();
+        let planes = planes_of(&app);
+        // The layer the session warps is gone: the engine refuses the command.
+        app.session.execute("layer.delete", json!({})).unwrap();
+        let past = past_len(&app);
+        assert!(commit(&mut app).is_err());
+        assert!(control(&mut app, &json!({"commit": true})).is_err());
+        assert!(app.distort.perspective.is_some());
+        assert_eq!(planes_of(&app), planes);
+        assert_eq!(past_len(&app), past);
+        assert!(crate::distort_ui::display_doc(&app, app.session.active_index().unwrap()).is_some(), "the preview stays");
     }
 }

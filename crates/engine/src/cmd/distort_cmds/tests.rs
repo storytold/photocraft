@@ -279,6 +279,21 @@ fn puppet_mesh_follows_the_outline_so_separate_shapes_move_separately() {
 }
 
 #[test]
+fn perspective_rejects_invalid_destination_without_history_or_pixel_changes() {
+    let src = [[10.0, 10.0], [60.0, 10.0], [60.0, 40.0], [10.0, 40.0]];
+    let collapsed = [[4.0, 4.0]; 4];
+    let crossing = [[10.0, 10.0], [60.0, 40.0], [60.0, 10.0], [10.0, 40.0]];
+    for dst in [collapsed, crossing] {
+        let mut s = session(8);
+        let before = active_surface(&s);
+        let history = s.active().unwrap().history.past_len();
+        assert!(s.execute(PERSPECTIVE, json!({"planes": [{"src": src, "dst": dst}]})).is_err());
+        assert_eq!(active_surface(&s), before, "rejected warp must preserve pixels");
+        assert_eq!(s.active().unwrap().history.past_len(), history, "rejected warp must not create history");
+    }
+}
+
+#[test]
 fn perspective_identity_known_homography_and_mask() {
     for depth in [8u64, 16, 32] {
         let mut s = session(depth);

@@ -492,4 +492,39 @@ mod tests {
         app.session.execute("edit.undo", json!({})).unwrap();
         assert_eq!(app.session.active().unwrap().history.past_len(), past - 1);
     }
+
+    /// #5115: a Perspective Warp opened on one document must not take the pointer meant for the document now active.
+    /// The canvas pass and the key pass drop it first, so a press and drag over the canvas draw no plane and edit
+    /// nothing in the active document.
+    #[test]
+    fn foreign_perspective_session_passes_pointer_to_active_document() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = app.ctx().clone();
+        app.session.execute("file.new", json!({"width": 200, "height": 120, "depth": 8})).unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        paint_bar(&mut app);
+        app.sync_views();
+        menu(&mut app, &ctx, "edit.perspectiveWarp", &json!({})).unwrap().unwrap();
+        assert!(app.distort.perspective.is_some());
+        app.session.execute("file.new", json!({"width": 100, "height": 80, "depth": 8})).unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        app.sync_views();
+        let active = app.session.active().unwrap().doc.clone();
+        let past = app.session.active().unwrap().history.past_len();
+
+        let at = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 300.0));
+        let button =
+            |pos: egui::Pos2, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        let (from, to) = (egui::pos2(100.0, 100.0), egui::pos2(260.0, 220.0));
+        for event in [egui::Event::PointerMoved(from), button(from, true), egui::Event::PointerMoved(to), button(to, false)] {
+            let input = egui::RawInput { events: vec![event], ..Default::default() };
+            // Headless tests do not have a GPU renderer: discard uploaded textures explicitly.
+            ctx.run_ui(input, |ui| show_in_canvas(&mut app, ui, at)).textures_delta.clear();
+        }
+        assert!(app.distort.perspective.is_none(), "the foreign session is dropped, not drawn or dragged");
+        assert!(!keys(&mut app, &ctx), "the key pass leaves Enter and Escape to the active document");
+        assert!(display_doc(&app, app.session.active_index().unwrap()).is_none());
+        assert!(Arc::ptr_eq(&active, &app.session.active().unwrap().doc), "the active document is untouched");
+        assert_eq!(app.session.active().unwrap().history.past_len(), past);
+    }
 }
