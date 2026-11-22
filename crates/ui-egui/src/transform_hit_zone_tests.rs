@@ -116,12 +116,12 @@ fn move_controls_only_offer_rotation_near_the_frame() {
     assert_eq!(h.state().session.active().unwrap().selected_layers(), [layers[1]]);
 
     h.state_mut().run("layer.select", json!({"layer": layers[0].0, "mode": "replace"})).unwrap();
-    let near = [90.0, 45.0];
+    let near = [50.0, 50.0];
     assert!(in_press_band(&mut h, near));
     move_pointer(&mut h, false, "move", near);
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::None);
     move_pointer(&mut h, false, "down", near);
-    move_pointer(&mut h, false, "move", [100.0, 38.0]);
-    move_pointer(&mut h, false, "up", [100.0, 38.0]);
+    move_pointer(&mut h, false, "move", [42.0, 53.0]);
+    move_pointer(&mut h, false, "up", [42.0, 53.0]);
     assert!(h.state().ui.transform.is_some(), "the rotation cursor has a matching press action");
 }
