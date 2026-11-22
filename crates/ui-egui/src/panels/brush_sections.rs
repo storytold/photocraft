@@ -363,6 +363,13 @@ impl Pane<'_> {
             self.check(ui, tl!("Flip Y Jitter"), &mut sd.flip_y_jitter);
         });
         self.check(ui, tl!("Brush Projection"), &mut sd.brush_projection);
+        // Not in Photoshop: thin, pointed stroke ends (pressure scaled down near each end, in
+        // document pixels; 0 is off). See `photocraft_paint::taper`.
+        let px = Shown::whole(0.0, 500.0, Some(UnitKind::Pixels));
+        self.field(ui, tl!("Taper Start"), &mut b.taper.start, d.taper.start, px, true);
+        self.field(ui, tl!("Taper End"), &mut b.taper.end, d.taper.end, px, true);
+        // Not in Photoshop: a curve through the pen's points instead of straight segments.
+        self.check(ui, tl!("Smooth Curves"), &mut b.smooth_curves);
     }
 
     fn scattering(&mut self, ui: &mut Ui, b: &mut BrushSettings, d: &BrushSettings) {

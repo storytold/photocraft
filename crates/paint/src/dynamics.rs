@@ -59,7 +59,7 @@ pub(crate) fn grid_cell(v: f64, offset: f64) -> f64 {
 }
 
 #[inline]
-fn lerp_pt(a: &StrokePoint, b: &StrokePoint, f: f64) -> StrokePoint {
+pub(crate) fn lerp_pt(a: &StrokePoint, b: &StrokePoint, f: f64) -> StrokePoint {
     let ff = f as f32;
     StrokePoint {
         x: a.x + (b.x - a.x) * f,
@@ -821,6 +821,11 @@ pub fn apply_pose(b: &BrushSettings, mut p: StrokePoint) -> StrokePoint {
 #[derive(Clone, Debug)]
 pub struct DabGenerator {
     smoother: Smoother,
+    /// Start taper on the smoothed path (the end taper is the commit's: [`crate::taper::for_commit`]).
+    taper: crate::taper::StartTaper,
+    /// Smooth Curves on the input points, before smoothing (smoothing adds dense sub-steps on
+    /// straight lines between input points, which would leave the curve nothing to round).
+    curve: Option<crate::stroke_curve::CurveFit>,
     walker: PathWalker,
     dual_walker: Option<PathWalker>,
     builder: DabBuilder,
@@ -854,6 +859,8 @@ impl DabGenerator {
         }
         Self {
             smoother: Smoother::new(&brush.smoothing, zoom),
+            taper: crate::taper::StartTaper::new(brush.taper.start),
+            curve: brush.smooth_curves.then(crate::stroke_curve::CurveFit::new),
             walker,
             dual_walker: dual_on.then(|| PathWalker::new(None)),
             builder: DabBuilder::new(&brush),
@@ -878,13 +885,34 @@ impl DabGenerator {
         }
     }
 
+    /// Scale the pressure of smoothed points that are still within the start taper.
+    fn taper_points(&mut self, pts: &mut [StrokePoint]) {
+        if !self.taper.active() {
+            return;
+        }
+        for p in pts {
+            *p = self.taper.apply(*p);
+        }
+    }
+
     /// Feed input points; appends the new primary and dual dabs.
     pub fn push(&mut self, pts: &[StrokePoint], dabs: &mut Vec<Dab>, dual: &mut Vec<Dab>) {
         let mut sm = std::mem::take(&mut self.scratch);
         sm.clear();
-        for p in pts {
-            self.smoother.push(*p, &mut sm);
+        if let Some(curve) = self.curve.as_mut() {
+            let mut fitted = Vec::with_capacity(pts.len() * 8);
+            for p in pts {
+                curve.push(*p, &mut fitted);
+            }
+            for p in &fitted {
+                self.smoother.push(*p, &mut sm);
+            }
+        } else {
+            for p in pts {
+                self.smoother.push(*p, &mut sm);
+            }
         }
+        self.taper_points(&mut sm);
         self.walk(&sm, dabs, dual);
         self.scratch = sm;
     }
@@ -892,7 +920,16 @@ impl DabGenerator {
     /// End of stroke.
     pub fn finish(&mut self, dabs: &mut Vec<Dab>, dual: &mut Vec<Dab>) {
         let mut sm = Vec::new();
+        if let Some(curve) = self.curve.as_mut() {
+            // The last segment waits for pen-up.
+            let mut fitted = Vec::new();
+            curve.finish(&mut fitted);
+            for p in &fitted {
+                self.smoother.push(*p, &mut sm);
+            }
+        }
         self.smoother.finish(&mut sm);
+        self.taper_points(&mut sm);
         self.walk(&sm, dabs, dual);
         self.walker.finish(&mut |s| self.builder.build_step(s, dabs));
         if let (Some(w), Some(db)) = (self.dual_walker.as_mut(), self.dual.as_mut()) {
