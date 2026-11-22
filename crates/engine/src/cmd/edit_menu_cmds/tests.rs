@@ -59,10 +59,10 @@ fn fade_blends_last_step_at_all_depths() {
         s.execute("edit.fade", json!({"opacity": 25})).unwrap();
         let v = px(&s, 5, 5);
         assert!((v[0] - 0.75).abs() < 0.01, "depth {depth}: {v:?}");
-        // One history step, labelled after the faded command, and Fade can't repeat.
+        // One history step, labelled after the faded command; fading again would replace it (#13804).
         assert_eq!(s.active().unwrap().history.past_len(), undo_steps + 1);
         assert_eq!(s.active().unwrap().history.undo_label(), Some("Fade Fill"));
-        assert!(!s.is_enabled("edit.fade"));
+        assert!(s.is_enabled("edit.fade"));
         s.undo();
         assert_eq!(px(&s, 5, 5)[0], 0.0);
     }
