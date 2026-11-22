@@ -57,10 +57,14 @@ fn active(app: &PhotocraftApp) -> photocraft_doc::LayerId {
 
 /// A press at `from`, two moves and a release at `to`, as a mouse does it.
 fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) {
-    testing::press(app, from, NONE);
-    testing::move_to(app, [(from[0] + to[0]) / 2.0, (from[1] + to[1]) / 2.0], NONE);
-    testing::move_to(app, to, NONE);
-    testing::release(app, to, NONE);
+    drag_with_modifiers(app, from, to, NONE);
+}
+
+fn drag_with_modifiers(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], mods: Modifiers) {
+    testing::press(app, from, mods);
+    testing::move_to(app, [(from[0] + to[0]) / 2.0, (from[1] + to[1]) / 2.0], mods);
+    testing::move_to(app, to, mods);
+    testing::release(app, to, mods);
 }
 
 /// Live rectangles, bottom first: (20, 20) 60 × 40 radii 15, (110, 20) 70 × 50 radii 15, and (20, 120) 80 × 60
@@ -97,6 +101,25 @@ fn dragging_a_widget_rounds_every_corner_in_one_step() {
 }
 
 #[test]
+fn alt_drag_changes_only_the_grabbed_corner_within_its_radius_limits() {
+    let mut app = app(Tool::PathSelection);
+    let id = active(&app);
+    let n = steps(&app);
+    let alt = Modifiers { alt: true, ..Modifiers::NONE };
+
+    // Drag the bottom-right widget far enough in to reach half the 80 px short side.
+    drag_with_modifiers(&mut app, [140.0, 100.0], [80.0, 40.0], alt);
+    assert_eq!(radii_of(&app, id), [20.0, 20.0, 40.0, 20.0]);
+    assert_eq!(steps(&app), n + 1);
+
+    // Drag the top-right widget out past its corner to take its radius down to zero.
+    drag_with_modifiers(&mut app, [140.0, 60.0], [180.0, 20.0], alt);
+    assert_eq!(radii_of(&app, id), [20.0, 0.0, 40.0, 20.0]);
+    assert_eq!(steps(&app), n + 2);
+    assert_eq!(active(&app), id);
+}
+
+#[test]
 fn one_widget_rounds_every_selected_rectangle_alike_in_one_step() {
     let (mut app, ids) = three(Tool::PathSelection);
     let n = steps(&app);
@@ -118,7 +141,7 @@ fn the_move_tool_shows_and_drags_the_widgets_with_its_transform_controls() {
     app.ui.tool_options.move_show_transform = true;
     testing::frame(&mut app);
     assert_eq!(corner_targets(&app).len(), 2);
-    let before = app.session.active().unwrap().selected_layers();
+    let before = app.session.active().unwrap().selected_layers().to_vec();
     let n = steps(&app);
     drag(&mut app, [125.0, 35.0], [130.0, 40.0]);
     assert_eq!(radii_of(&app, ids[1]), [20.0; 4]);

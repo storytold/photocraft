@@ -121,19 +121,22 @@ fn has_shape(s: &Session) -> std::result::Result<(), String> {
 }
 
 impl crate::DocState {
-    /// Complete a successful document save. File identity is not a history step; callers must
-    /// finish the write first and must not call this for a copy or export.
-    pub fn saved_to(&mut self, path: String) {
+    /// Complete a successful document save ([`crate::Session::saved_to`]); whether the document's name changed.
+    /// File identity is not a history step; callers must finish the write first and must not call this for a
+    /// copy or export.
+    pub(crate) fn saved_to(&mut self, path: String) -> bool {
         let name = file_name(&path);
-        if self.doc.name != name {
-            Arc::make_mut(&mut self.doc).name = name;
+        let renamed = self.doc.name != name;
+        if renamed {
+            Arc::make_mut(self.doc_mut()).name = name;
         }
         // The file now holds just this document, whatever the one it was opened from held.
         if self.doc.file_encoding.source_images.is_some() {
-            Arc::make_mut(&mut self.doc).file_encoding.source_images = None;
+            Arc::make_mut(self.doc_mut()).file_encoding.source_images = None;
         }
         self.path = Some(path);
         self.saved_revision = self.revision;
+        renamed
     }
 }
 

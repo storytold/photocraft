@@ -10,8 +10,8 @@ impl Session {
         if st.doc.layer(id).is_none() {
             return Err(EngineError::NoLayer(id));
         }
-        st.active_layer = Some(id);
-        st.selected_layers = vec![id];
+        st.set_active_layer(Some(id));
+        *st.selection_mut() = vec![id];
         st.layer_anchor = Some(id);
         channel_cmds::fix_view(st);
         st.bump_selection_revision();
@@ -31,8 +31,8 @@ impl Session {
         {
             return Err(EngineError::NoLayer(id));
         }
-        st.active_layer = active;
-        st.selected_layers = selected.to_vec();
+        st.set_active_layer(active);
+        *st.selection_mut() = selected.to_vec();
         st.layer_anchor = anchor.filter(|_| active.is_some());
         fix_selection(st);
         channel_cmds::fix_view(st);
@@ -88,13 +88,15 @@ impl Session {
                 first.doc = doc.clone();
             }
             let clean = st.saved_revision == st.revision;
-            let before = std::mem::replace(&mut st.doc, doc);
+            let before = std::mem::replace(st.doc_mut(), doc);
             st.revision += 1;
+            st.record_unknown_damage();
             if clean {
                 st.saved_revision = st.revision;
             }
             // Only the refreshed layers' caches changed: their changed tiles.
             st.last_damage = layer_multi_cmds::step_damage(&before, &st.doc);
+            st.record_damage();
         }
         busy
     }

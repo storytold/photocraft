@@ -23,6 +23,11 @@ class TestClear(unittest.TestCase):
         ]
         self.assertEqual(clear.rolling_entries(caches), caches[:1])
 
+    def test_entries_created_after_the_run_started_are_kept(self):
+        rolling = lambda created: {'key': 'v2-rust-ab-gate-crates-Linux-x64-1', 'created_at': created}
+        old, same_minute_push = rolling('2026-11-21T03:00:00Z'), rolling('2026-11-22T03:05:00Z')
+        self.assertEqual(clear.created_before([old, same_minute_push], '2026-11-22T03:00:10Z'), [old])
+
 
 if __name__ == '__main__':
     unittest.main()

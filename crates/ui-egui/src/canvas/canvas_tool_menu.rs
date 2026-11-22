@@ -1164,6 +1164,7 @@ fn target_type_layer(app: &mut PhotocraftApp, id: photocraft_doc::LayerId) -> bo
     if st.active_layer == Some(id) {
         true
     } else if selected.contains(&id) {
+        let selected = selected.to_vec();
         photocraft_engine::layer_multi_cmds::set_selection(&mut app.session, selected, Some(id), Some(id)).is_ok()
     } else {
         app.session.select_layer(id).is_ok()
@@ -1177,7 +1178,7 @@ fn target_type_layer(app: &mut PhotocraftApp, id: photocraft_doc::LayerId) -> bo
 fn faux_rows_enabled(app: &PhotocraftApp) -> bool {
     let Some(st) = app.session.active() else { return false };
     let targets: Vec<photocraft_doc::LayerId> =
-        st.selected_layers().into_iter().filter(|id| st.doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Text(_)))).collect();
+        st.selected_layers().iter().copied().filter(|id| st.doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Text(_)))).collect();
     !targets.is_empty() && targets.iter().all(|id| !st.doc.effective_locks(*id).all)
 }
 
