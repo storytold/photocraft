@@ -25,6 +25,8 @@ use crate::PhotocraftApp;
 use crate::state::{FreeTransform, SessionWarp};
 use crate::transform_fx::LayerStyleSource;
 
+/// Cells per side of the grid a stored warp is drawn with when its control points can't be carried past the horizon.
+const EXACT_WARP_CELLS: usize = 64;
 /// The host key of the transformed path outline in its `EditPath`.
 const OUTLINE_KEY: u64 = 1;
 /// Points sampled along a curved or bent segment of the path outline.
@@ -175,8 +177,9 @@ fn show_preview(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &m
         let source = craft::behavior::kurbo::Rect::new(w.bounds[0], w.bounds[1], w.bounds[2], w.bounds[3]);
         (SessionWarp::new(w, false).mesh, source, h.texture.as_ref())
     });
-    // A smart object's stored warp under a projective move of the box: drawn from its carried points, as the render
-    // draws it ([`super::WarpedPreview`]).
+    // A smart object's stored warp under a projective move of the box, drawn as the render draws it
+    // (`photocraft_algo::warp::place_source_projective`, [`super::WarpedPreview`]): its control points carried into the
+    // document through the render's own (capped) map, or, with a point past the horizon, the exact composition.
     let warped = pv.warped.as_ref().filter(|_| t.session.warp().is_none() && held.is_none() && source.is_none()).and_then(|wp| {
         let h = photocraft_algo::transform::Homography::quad_to_quad(wp.start, t.quad_array())?;
         let projective = (h.0[6].abs() + h.0[7].abs()) > 1e-12 * h.0[8].abs().max(1e-300);
@@ -184,16 +187,21 @@ fn show_preview(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &m
             return None;
         }
         let total = h.mul(&photocraft_algo::transform::Homography(wp.place));
-        let mesh = wp.mesh.map_points(|p| {
-            let (x, y) = total.apply(p[0], p[1]);
-            [x, y]
-        });
         let b = wp.bounds;
-        Some((
-            SessionWarp::new(photocraft_geom::warp::Warp::custom(mesh, b), false).mesh,
-            craft::behavior::kurbo::Rect::new(b[0], b[1], b[2], b[3]),
-            &wp.texture,
-        ))
+        let frame = craft::behavior::kurbo::Rect::new(b[0], b[1], b[2], b[3]);
+        let stored = photocraft_geom::warp::Warp::custom(wp.mesh.clone(), b);
+        let drawn = match photocraft_algo::warp::warp_in_document(&stored, &total) {
+            Some(carried) => Ok(SessionWarp::new(carried, false).mesh),
+            None => Err((stored, total)),
+        };
+        Some((drawn, frame, &wp.texture))
+    });
+    let exact = warped.as_ref().and_then(|(drawn, ..)| drawn.as_ref().err()).map(|(w, h)| {
+        move |p: Point| {
+            let (u, v) = w.map(p.x, p.y);
+            let (x, y) = h.apply(u, v);
+            Point::new(x, y)
+        }
     });
     // Warp on a moved smart object, its grid still flat: the box's exact map, as the reference shows it.
     let flat = t.session.warp().and_then(|w| {
@@ -209,7 +217,8 @@ fn show_preview(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &m
         (Some(_), _) if let Some(q) = flat => (PreviewMap::quad(q.map(|[x, y]| Point::new(x, y))), &pv.textures),
         (Some(w), _) => (PreviewMap::mesh(&w.mesh, t.session.rect()), &pv.textures),
         (None, Some((mesh, source, texture))) => (PreviewMap::mesh(mesh, *source), texture.unwrap_or(&pv.textures)),
-        (None, None) if let Some((mesh, frame, texture)) = &warped => (PreviewMap::mesh(mesh, *frame), *texture),
+        (None, None) if let Some((Ok(mesh), frame, texture)) = &warped => (PreviewMap::mesh(mesh, *frame), *texture),
+        (None, None) if let (Some((_, frame, texture)), Some(map)) = (&warped, &exact) => (PreviewMap::function(*frame, EXACT_WARP_CELLS, map), *texture),
         (None, None) => {
             let live = pv.content_aware.as_ref().filter(|_| source.is_none()).and_then(|live| live.shown(t)).map(|(textures, _)| textures);
             (PreviewMap::quad(texture_quad(t, pv)), live.unwrap_or(&pv.textures))

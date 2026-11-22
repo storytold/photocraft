@@ -508,11 +508,15 @@ fn enter_on_an_untouched_warp_after_perspective_applies_what_the_preview_shows()
 
 /// Perspective with the top edge squeezed to a point (the same corner dragged twice), then Enter: the layer is the
 /// triangle the preview showed. The commit's pre-reduction took the scale at the centre and rounded its frame outward
-/// past the map's horizon, which left a 2 × 1 px pixel layer (found by the sweep).
+/// past the map's horizon, which left a 2 × 1 px pixel layer (found by the sweep). A warped smart object's preview
+/// carried its control points through the raw map while the render carries them through its capped one, so near the
+/// point the preview showed the middle rows where the result has the top ones.
 #[test]
 fn enter_on_a_perspective_squeezed_to_a_point_applies_what_the_preview_shows() {
     let _gpu = photocraft_testkit::gpu_lock();
     use Step::*;
     let order = [Persp, PerspDrag, PerspDrag];
-    run_on(false, "pixel", &order).unwrap_or_else(|e| panic!("pixel {order:?}: {e}"));
+    for subject in ["pixel", "warped"] {
+        run_on(false, subject, &order).unwrap_or_else(|e| panic!("{subject} {order:?}: {e}"));
+    }
 }
