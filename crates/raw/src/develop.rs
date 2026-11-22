@@ -475,7 +475,7 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                     Demosaic::Ahd | Demosaic::Mhc => craft_develop::sensor::Method::Ahd,
                 };
                 let mut o = vec![0u16; w * h * 3];
-                par::chunks_mut(&mut o, band * w * 3, |b, chunk| {
+                par::chunks_mut_grouped(&mut o, band * w * 3, jobs, |b, chunk| {
                     let y0 = b * band;
                     let rows = chunk.len() / (w * 3);
                     let y_start = y0.saturating_sub(PAD);
@@ -670,6 +670,31 @@ fn fused_band_bytes(w: usize, h: usize, band_rows: usize, window: bool) -> u64 {
     rgb.saturating_add(window)
 }
 
+// Shared Bayer strip demosaic at the pinned craft-develop revision. Count outer
+// buffers per live strip and the nested AHD tile scratch per active rayon worker.
+fn shared_bayer_peak(w: usize, h: usize, rows: usize, ahd: bool, jobs: usize, workers: usize) -> u64 {
+    let w64 = w as u64;
+    let strip = rows.saturating_add(2 * PAD).min(h);
+    let pixels = w64.saturating_mul(strip as u64);
+    // The normalized strip, shared RGB result and flat RGB interior. Reserving a
+    // gain row and CFA/neighbor tables here also covers the normalization peak.
+    let mut per_band = pixels.saturating_mul(16).saturating_add(w64.saturating_mul((rows as u64).saturating_mul(12).saturating_add(4)));
+    per_band = per_band.saturating_add(4096);
+    let mut tile_scratch = 0u64;
+    if ahd && w >= 4 && strip >= 4 {
+        const TILE: usize = 128;
+        const MARGIN: usize = 6;
+        let tiles = w.div_ceil(TILE).saturating_mul(strip.div_ceil(TILE));
+        // Returned tile pixels and the collecting Vec's three-word tuples.
+        per_band = per_band.saturating_add(pixels.saturating_mul(12)).saturating_add((tiles as u64).saturating_mul(5 * std::mem::size_of::<usize>() as u64));
+        // Mosaic/colour, two greens, two RGB and two Lab candidates and two
+        // homogeneity arrays; also allow the two-byte CFA-period allocation.
+        let per_tile = ((w.min(TILE) + 2 * MARGIN) as u64).saturating_mul((strip.min(TILE) + 2 * MARGIN) as u64).saturating_mul(63).saturating_add(2);
+        tile_scratch = per_tile.saturating_mul(workers.min(jobs.saturating_mul(tiles)) as u64);
+    }
+    per_band.saturating_mul(jobs as u64).saturating_add(tile_scratch)
+}
+
 /// Checks the peak of the two development phases. The CFA and non-Bayer green
 /// planes are freed before the u16 output is allocated; the AHD scratch and the fused band
 /// buffers are bounded by reducing simultaneous bands when needed. The fused path never holds
@@ -711,7 +736,15 @@ fn working_memory(w: usize, h: usize, cfa: bool, bayer: bool, shape: Shape, opts
         // The fused Bayer path has no whole plane: each worker's window is counted with its band.
         let plane = if fused && bayer { 0 } else { plane };
         let mut mosaic = pixels.saturating_mul(frame).saturating_add(plane).saturating_add(table);
-        if bayer && opts.demosaic == Demosaic::Ahd {
+        if bayer && fused && matches!(opts.demosaic, Demosaic::Bilinear | Demosaic::Ahd) {
+            let rows = par::band_rows(w);
+            jobs = jobs.min(h.div_ceil(rows)).max(1);
+            let strip_peak = |jobs| shared_bayer_peak(w, h, rows.min(h), opts.demosaic == Demosaic::Ahd, jobs, workers.max(1));
+            while jobs > 1 && mosaic.saturating_add(strip_peak(jobs)) > limits.max_alloc {
+                jobs -= 1;
+            }
+            mosaic = mosaic.saturating_add(strip_peak(jobs));
+        } else if bayer && opts.demosaic == Demosaic::Ahd {
             mosaic = mosaic.saturating_add(crate::demosaic::AHD_TABLE_BYTES);
             let scratch = crate::demosaic::ahd_scratch(w as u64, h as u64).saturating_add(band_of(crate::demosaic::AHD_BAND, true));
             // At least one band must fit, even when no parallelism is available.
@@ -1102,13 +1135,13 @@ mod tests {
         assert!(working_memory(11648, 8736, true, true, FUSED, &opts, 1).is_ok());
     }
 
-    /// The fused bilinear / MHC, X-Trans and LinearRaw paths run fewer bands at once when the bands
+    /// The fused MHC, X-Trans and LinearRaw paths run fewer bands at once when the bands
     /// of every worker don't fit next to the output, as AHD does. A very wide, short Bayer frame
     /// (262144 x 455: 15 bands of 32 rows, about 147 MB a band with its window) needs 2.92 GB
     /// with all 15 at once against the default 2 GiB, and develops with 9.
     #[test]
     fn fused_bands_at_once_are_capped_by_the_memory_limit() {
-        let opts = DevelopOptions { demosaic: Demosaic::Bilinear, ..Default::default() };
+        let opts = DevelopOptions { demosaic: Demosaic::Mhc, ..Default::default() };
         let table = (GAMMA_STEPS as u64 + 2) * 4;
         let (w, h) = (262144usize, 455usize);
         let band = 32 * 262144 * 12 + (32 + 2 * PAD as u64) * (262144 + 2 * PAD as u64) * 4;
@@ -1129,6 +1162,23 @@ mod tests {
         assert_eq!(working_memory(1000, 2000, true, false, FUSED, &x, 32).unwrap(), 3);
         x.limits.max_alloc = 1000 * 2000 * 6 + 5 * 65 * 1000 * 12;
         assert_eq!(working_memory(1000, 2000, false, true, FUSED, &x, 32).unwrap(), 5);
+    }
+
+    #[test]
+    fn shared_bayer_strips_reduce_jobs_when_only_one_fits() {
+        let (w, h, workers) = (1024usize, 400usize, 4);
+        let rows = par::band_rows(w);
+        let base = (w * h * 6) as u64 + (GAMMA_STEPS as u64 + 2) * 4;
+        let bilinear = shared_bayer_peak(w, h, rows, false, 1, workers);
+        let ahd = shared_bayer_peak(w, h, rows, true, 1, workers);
+        assert!(bilinear < ahd);
+        for (demosaic, band) in [(Demosaic::Bilinear, bilinear), (Demosaic::Ahd, ahd)] {
+            let mut opts = DevelopOptions { demosaic, ..Default::default() };
+            opts.limits.max_alloc = base + band;
+            assert_eq!(working_memory(w, h, true, true, FUSED, &opts, workers).unwrap(), 1);
+            opts.limits.max_alloc -= 1;
+            assert!(working_memory(w, h, true, true, FUSED, &opts, workers).is_err());
+        }
     }
 
     #[test]
