@@ -1504,7 +1504,7 @@ dependencies = [
 [[package]]
 name = "craft-cms"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26#7631ed550ef6b1abcc90a095dd7338e1b2c67c26"
+source = "git+https://github.com/storytold/craft-libs?rev=33a08a70088928e08637331b9ed4b1a9db4a414f#33a08a70088928e08637331b9ed4b1a9db4a414f"
 dependencies = [
  "md-5",
  "rayon",
@@ -1513,7 +1513,7 @@ dependencies = [
 [[package]]
 name = "craft-cms"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=33a08a70088928e08637331b9ed4b1a9db4a414f#33a08a70088928e08637331b9ed4b1a9db4a414f"
+source = "git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26#7631ed550ef6b1abcc90a095dd7338e1b2c67c26"
 dependencies = [
  "md-5",
  "rayon",
@@ -1590,7 +1590,7 @@ dependencies = [
 [[package]]
 name = "craft-crw"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26#7631ed550ef6b1abcc90a095dd7338e1b2c67c26"
+source = "git+https://github.com/storytold/craft-libs?rev=33a08a70088928e08637331b9ed4b1a9db4a414f#33a08a70088928e08637331b9ed4b1a9db4a414f"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -1598,7 +1598,7 @@ dependencies = [
 [[package]]
 name = "craft-crw"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=33a08a70088928e08637331b9ed4b1a9db4a414f#33a08a70088928e08637331b9ed4b1a9db4a414f"
+source = "git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26#7631ed550ef6b1abcc90a095dd7338e1b2c67c26"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -1969,11 +1969,11 @@ dependencies = [
 [[package]]
 name = "craft-metadata"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26#7631ed550ef6b1abcc90a095dd7338e1b2c67c26"
+source = "git+https://github.com/storytold/craft-libs?rev=33a08a70088928e08637331b9ed4b1a9db4a414f#33a08a70088928e08637331b9ed4b1a9db4a414f"
 dependencies = [
  "brotli-decompressor 6.3.2",
  "chrono",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26)",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=33a08a70088928e08637331b9ed4b1a9db4a414f)",
  "quick-xml 0.41.0",
  "serde",
 ]
@@ -1981,11 +1981,11 @@ dependencies = [
 [[package]]
 name = "craft-metadata"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=33a08a70088928e08637331b9ed4b1a9db4a414f#33a08a70088928e08637331b9ed4b1a9db4a414f"
+source = "git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26#7631ed550ef6b1abcc90a095dd7338e1b2c67c26"
 dependencies = [
  "brotli-decompressor 6.3.2",
  "chrono",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=33a08a70088928e08637331b9ed4b1a9db4a414f)",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26)",
  "quick-xml 0.41.0",
  "serde",
 ]
@@ -2149,12 +2149,12 @@ dependencies = [
 [[package]]
 name = "craft-raw"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26#7631ed550ef6b1abcc90a095dd7338e1b2c67c26"
+source = "git+https://github.com/storytold/craft-libs?rev=33a08a70088928e08637331b9ed4b1a9db4a414f#33a08a70088928e08637331b9ed4b1a9db4a414f"
 dependencies = [
  "chrono",
- "craft-crw 0.1.0 (git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26)",
- "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26)",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26)",
+ "craft-crw 0.1.0 (git+https://github.com/storytold/craft-libs?rev=33a08a70088928e08637331b9ed4b1a9db4a414f)",
+ "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=33a08a70088928e08637331b9ed4b1a9db4a414f)",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=33a08a70088928e08637331b9ed4b1a9db4a414f)",
  "jxl-oxide",
  "miniz_oxide 0.9.1",
  "rayon",
@@ -2167,12 +2167,12 @@ dependencies = [
 [[package]]
 name = "craft-raw"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=33a08a70088928e08637331b9ed4b1a9db4a414f#33a08a70088928e08637331b9ed4b1a9db4a414f"
+source = "git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26#7631ed550ef6b1abcc90a095dd7338e1b2c67c26"
 dependencies = [
  "chrono",
- "craft-crw 0.1.0 (git+https://github.com/storytold/craft-libs?rev=33a08a70088928e08637331b9ed4b1a9db4a414f)",
- "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=33a08a70088928e08637331b9ed4b1a9db4a414f)",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=33a08a70088928e08637331b9ed4b1a9db4a414f)",
+ "craft-crw 0.1.0 (git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26)",
+ "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26)",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26)",
  "jxl-oxide",
  "miniz_oxide 0.9.1",
  "rayon",
@@ -2317,7 +2317,7 @@ dependencies = [
 [[package]]
 name = "craft-tiff"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26#7631ed550ef6b1abcc90a095dd7338e1b2c67c26"
+source = "git+https://github.com/storytold/craft-libs?rev=33a08a70088928e08637331b9ed4b1a9db4a414f#33a08a70088928e08637331b9ed4b1a9db4a414f"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -2326,7 +2326,7 @@ dependencies = [
 [[package]]
 name = "craft-tiff"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=33a08a70088928e08637331b9ed4b1a9db4a414f#33a08a70088928e08637331b9ed4b1a9db4a414f"
+source = "git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26#7631ed550ef6b1abcc90a095dd7338e1b2c67c26"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
