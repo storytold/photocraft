@@ -112,7 +112,7 @@ fn quantize(v: f32, depth: SampleType) -> f32 {
 /// The alpha-weighted average of straight-alpha RGBA pixels `px`, taken in the channels of
 /// colour model `mode` at bit depth `depth`: each pixel is converted to `mode`, the colour
 /// channels are averaged weighted by alpha (so transparent pixels don't darken the result), the
-/// mean is rounded to `depth` and converted back to RGBA. Alpha is the mean coverage. Fully
+/// mean is rounded to `depth` (halfway colour levels round to even) and converted back to RGBA. Alpha is the mean coverage. Fully
 /// transparent (or empty) input averages to transparent black.
 ///
 /// CMYK conversions use the CMYK space active on this thread
@@ -120,6 +120,11 @@ fn quantize(v: f32, depth: SampleType) -> f32 {
 pub fn average(px: &[[f32; 4]], mode: ColorMode, depth: SampleType) -> [f32; 4] {
     let fmt = PixelFormat::new(mode, depth, false);
     let n = fmt.channels().min(8);
+    let levels = match depth {
+        SampleType::U8 => 255.0,
+        SampleType::U16 => 65_535.0,
+        SampleType::F32 => 1.0,
+    };
     let mut sum = [0.0f64; 8];
     let mut alpha = 0.0f64;
     let mut native = [0.0f32; 8];
@@ -130,14 +135,27 @@ pub fn average(px: &[[f32; 4]], mode: ColorMode, depth: SampleType) -> [f32; 4] 
         }
         let k = photocraft_raster::from_rgba_into(&fmt, *p, &mut native).min(n);
         for (s, v) in sum.iter_mut().zip(&native[..k]) {
-            *s += f64::from(*v) * f64::from(a);
+            // Recover integer channel levels before taking the mean. Scaling the mean of
+            // normalized f32 samples can put an exact half-level on the wrong side of the tie.
+            let scaled = *v * levels;
+            let scaled = if scaled.is_finite() { f64::from(scaled) } else { f64::from(*v) * f64::from(levels) };
+            *s += scaled * f64::from(a);
         }
         alpha += f64::from(a);
     }
     if px.is_empty() || alpha <= 0.0 {
         return [0.0; 4];
     }
-    let mean: Vec<f32> = sum[..n].iter().map(|s| quantize((s / alpha) as f32, depth)).collect();
+    let mean: Vec<f32> = sum[..n]
+        .iter()
+        .map(|s| {
+            let mean = s / alpha;
+            match depth {
+                SampleType::U8 | SampleType::U16 => quantize(mean.round_ties_even() as f32 / levels, depth),
+                SampleType::F32 => mean as f32,
+            }
+        })
+        .collect();
     let [r, g, b, _] = photocraft_raster::to_rgba(&fmt, &mean);
     [r, g, b, quantize((alpha / px.len() as f64) as f32, depth)]
 }
@@ -356,6 +374,39 @@ mod tests {
         let a32 = average(&px, ColorMode::Rgb, SampleType::F32);
         assert!((a32[0] - 1.1 / 3.0).abs() < 1e-6);
         assert!(a8[0] != a32[0] && a16[0] != a32[0]);
+    }
+
+    #[test]
+    fn integer_average_rounds_native_half_levels_to_even() {
+        for (depth, max) in [(SampleType::U8, 255.0), (SampleType::U16, 65_535.0)] {
+            // These adjacent levels can lose the tie if the unit mean is rounded to f32
+            // before converting back to the document's channel levels.
+            for (lo, want) in [(1.0, 2.0), (128.0, 128.0), (129.0, 130.0)] {
+                let px = [[lo / max, lo / max, lo / max, 1.0], [(lo + 1.0) / max, (lo + 1.0) / max, (lo + 1.0) / max, 1.0]];
+                assert_eq!(average(&px, ColorMode::Rgb, depth), [want / max, want / max, want / max, 1.0], "{depth:?} at {lo}");
+            }
+        }
+    }
+
+    #[test]
+    fn integer_average_rounds_only_the_mean_and_weights_by_alpha() {
+        for (depth, max) in [(SampleType::U8, 255.0), (SampleType::U16, 65_535.0)] {
+            let [r, g, b, a] = average(&[[100.0 / max, 100.0 / max, 100.0 / max, 1.0], [107.0 / max, 107.5 / max, 108.0 / max, 0.5]], ColorMode::Rgb, depth);
+            assert_eq!([r, g, b], [102.0 / max, 102.0 / max, 103.0 / max]);
+            assert_eq!(a, (0.75_f32 * max + 0.5) as u16 as f32 / max);
+        }
+    }
+
+    #[test]
+    fn color_sampler_rounds_a_clipped_average_to_the_even_level() {
+        let mut s = Session::new();
+        let d = doc(2, 3, ColorMode::Rgb, SampleType::U8, |x, _| {
+            let level = if x == 0 { 100.0 } else { 105.0 } / 255.0;
+            [level, level, level, 1.0]
+        });
+        s.add_document(d, None);
+        let result = s.execute("view.colorSamplers.add", json!({"x": 0, "y": 1, "size": 3})).unwrap();
+        assert_eq!(result["point"]["rgb"], json!([102, 102, 102]));
     }
 
     #[test]
