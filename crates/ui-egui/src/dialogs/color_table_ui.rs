@@ -100,8 +100,8 @@ pub fn footer_action(app: &mut PhotocraftApp, _ctx: &egui::Context, id: DialogId
         "load" => {
             let types: [(&str, &[&str]); 3] = [(tl!("Color Table"), &["act"]), (tl!("Swatches"), &["aco"]), (tl!("Palette"), &["pal"])];
             if let Err(e) = app.pick_file_bytes_typed(&types, move |app, name, bytes| {
-                let (colors, transparent) = photocraft_engine::swatch_cmds::color_table_file(&app.session, &name, &bytes)
-                    .map_err(|e| format!("{}: {e}", crate::file_open::display_name(&name)))?;
+                let (colors, transparent) =
+                    photocraft_engine::swatch_cmds::color_table_file(&name, &bytes).map_err(|e| format!("{}: {e}", crate::file_open::display_name(&name)))?;
                 // The dialog may close while the picker is open; then there is nothing to fill.
                 let Some(d) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id) else { return Ok(Value::Null) };
                 d.set_field("table", FieldValue::Text("custom".into()));

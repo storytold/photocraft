@@ -394,10 +394,10 @@ pub const ACT_COLORS: usize = craft_psd::act::COLOR_COUNT;
 
 /// A file chosen with the Color Table dialog's Load… as `#rrggbb` colors plus the transparent
 /// index, told apart by its extension (`name`'s, any case). Swatches (`.aco`) and RIFF palettes
-/// (`.pal`) give their first [`ACT_COLORS`] colors in file order and no transparent index;
-/// swatches in other color models are converted as the Swatches panel shows them. Anything
-/// else is read as an `.act` ([`act_table`]). A file without colors is refused.
-pub fn color_table_file(s: &Session, name: &str, bytes: &[u8]) -> std::result::Result<(Vec<String>, Option<u64>), String> {
+/// (`.pal`) give their first [`ACT_COLORS`] RGB colors in file order and no transparent index;
+/// swatches in other color models are left out, as how they load is not measured. Anything
+/// else is read as an `.act` ([`act_table`]). A file without RGB colors is refused.
+pub fn color_table_file(name: &str, bytes: &[u8]) -> std::result::Result<(Vec<String>, Option<u64>), String> {
     let ext = std::path::Path::new(name).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
     let colors: Vec<String> = match ext.as_deref() {
         Some("aco") => {
@@ -407,28 +407,34 @@ pub fn color_table_file(s: &Session, name: &str, bytes: &[u8]) -> std::result::R
                 return Err("not a swatches (.aco) file".into());
             }
             let (groups, _) = read_swatches(bytes, "table.aco").map_err(|e| e.to_string())?;
-            let conv = SwatchConv::new(s);
-            groups.iter().flat_map(|g| &g.entries).take(ACT_COLORS).map(|e| hex(conv.rgb(&e.color))).collect()
+            let rgb = |e: &SwatchEntry| match e.color {
+                SwatchColor::Rgb(v) => Some(hex(v)),
+                _ => None,
+            };
+            groups.iter().flat_map(|g| &g.entries).filter_map(rgb).take(ACT_COLORS).collect()
         }
         Some("pal") => riff_palette(bytes)?.iter().take(ACT_COLORS).map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}")).collect(),
         _ => return act_table(bytes),
     };
     if colors.is_empty() {
-        return Err("the file holds no colors".into());
+        return Err("the file holds no RGB colors".into());
     }
     Ok((colors, None))
 }
 
 /// The colors of a RIFF palette (`.pal`): a `RIFF` file of form `PAL ` whose `data` chunk holds
 /// a version word, an entry count and four bytes per entry (red, green, blue, flags), all
-/// little-endian. Chunks before `data` are skipped.
+/// little-endian. Chunks before `data` are skipped; only the chunks inside the form's declared
+/// size count.
 fn riff_palette(bytes: &[u8]) -> std::result::Result<Vec<[u8; 3]>, String> {
     let cut_short = || String::from("the palette is cut short");
     if bytes.get(..4) != Some(b"RIFF".as_slice()) || bytes.get(8..12) != Some(b"PAL ".as_slice()) {
         return Err("not a RIFF palette (.pal) file".into());
     }
     let le32 = |b: &[u8]| b.first_chunk::<4>().map(|w| u32::from_le_bytes(*w) as usize);
-    let mut rest = bytes.get(12..).unwrap_or_default();
+    // The form's size counts its `PAL ` type and its chunks.
+    let size = bytes.get(4..8).and_then(le32).ok_or_else(cut_short)?;
+    let mut rest = 8usize.checked_add(size).and_then(|end| bytes.get(12..end)).ok_or_else(cut_short)?;
     while let (Some(id), Some(len)) = (rest.get(..4), rest.get(4..8).and_then(le32)) {
         let body = 8usize.checked_add(len).and_then(|end| rest.get(8..end)).ok_or_else(cut_short)?;
         if id == b"data" {

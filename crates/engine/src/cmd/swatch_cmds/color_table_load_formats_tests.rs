@@ -40,37 +40,45 @@ fn pal(colors: &[[u8; 3]], count: u16) -> Vec<u8> {
 
 #[test]
 fn aco_and_pal_files_load_their_colors_in_file_order() {
-    let s = Session::new();
     let want = colors(3);
     for (name, bytes) in [("swatches.aco", aco(&want)), ("SWATCHES.ACO", aco(&want)), ("palette.pal", pal(&want, 3)), ("Palette.PAL", pal(&want, 3))] {
-        assert_eq!(color_table_file(&s, name, &bytes), Ok((hexes(&want), None)), "{name}");
+        assert_eq!(color_table_file(name, &bytes), Ok((hexes(&want), None)), "{name}");
     }
+    // Bytes after the form don't count.
+    let mut trailing = pal(&want, 3);
+    trailing.extend_from_slice(b"junk after the form");
+    assert_eq!(color_table_file("trailing.pal", &trailing), Ok((hexes(&want), None)));
     // An `.act` still loads as before, transparent index included.
     let mut act = act_bytes(&want, Some(1)).unwrap();
-    assert_eq!(color_table_file(&s, "table.act", &act), act_table(&act));
+    assert_eq!(color_table_file("table.act", &act), act_table(&act));
     act.truncate(10);
-    assert!(color_table_file(&s, "table.act", &act).is_err());
+    assert!(color_table_file("table.act", &act).is_err());
 }
 
 #[test]
 fn colors_past_256_are_dropped() {
-    let s = Session::new();
     let all = colors(300);
     let first = hexes(&all[..ACT_COLORS]);
     for (name, bytes) in [("big.aco", aco(&all)), ("big.pal", pal(&all, 300))] {
-        let (got, transparent) = color_table_file(&s, name, &bytes).unwrap();
+        let (got, transparent) = color_table_file(name, &bytes).unwrap();
         assert_eq!((got, transparent), (first.clone(), None), "{name}");
     }
 }
 
 #[test]
 fn unreadable_or_empty_files_are_refused() {
-    let s = Session::new();
     let three = colors(3);
     let mut no_data = pal(&three, 3);
     let at = no_data.windows(4).position(|w| w == b"data").unwrap();
     no_data[at..at + 4].copy_from_slice(b"junk");
-    let cases: [(&str, Vec<u8>); 9] = [
+    // A form declared as only its `PAL ` type, with the color data after it, outside the form.
+    let mut empty_form = pal(&three, 3);
+    empty_form[4..8].copy_from_slice(&4u32.to_le_bytes());
+    // A form declared one byte longer than the file.
+    let mut past_end = pal(&three, 3);
+    let size = past_end.len() as u32 - 7;
+    past_end[4..8].copy_from_slice(&size.to_le_bytes());
+    let cases: [(&str, Vec<u8>); 11] = [
         ("empty.aco", Vec::new()),
         ("none.aco", vec![0, 1, 0, 0]),
         ("text.aco", b"GIMP Palette\nName: x\n#\n255 0 0 red\n".to_vec()),
@@ -79,9 +87,29 @@ fn unreadable_or_empty_files_are_refused() {
         ("none.pal", pal(&[], 0)),
         ("short.pal", pal(&three[..2], 3)),
         ("nodata.pal", no_data),
+        ("form.pal", empty_form),
+        ("past_end.pal", past_end),
         ("act.pal", act_bytes(&three, None).unwrap()),
     ];
     for (name, bytes) in cases {
-        assert!(color_table_file(&s, name, &bytes).is_err(), "{name} should be refused");
+        assert!(color_table_file(name, &bytes).is_err(), "{name} should be refused");
     }
+}
+
+#[test]
+fn only_rgb_swatches_load() {
+    // How swatches in other color models load is not measured (#14372), so they are left out.
+    let rgb = colors(2);
+    let entries = vec![
+        SwatchEntry::new("cmyk", SwatchColor::Cmyk([0.1, 0.2, 0.3, 0.4])),
+        SwatchEntry::new("first", SwatchColor::Rgb(rgb[0].map(|v| f32::from(v) / 255.0))),
+        SwatchEntry::new("lab", SwatchColor::Lab([50.0, 10.0, -10.0])),
+        SwatchEntry::new("gray", SwatchColor::Gray(0.5)),
+        SwatchEntry::new("second", SwatchColor::Rgb(rgb[1].map(|v| f32::from(v) / 255.0))),
+    ];
+    let mixed = write_swatches(&[SwatchGroup { name: "t".into(), entries: entries.clone() }], SwatchFormat::Aco).unwrap().0;
+    assert_eq!(color_table_file("mixed.aco", &mixed), Ok((hexes(&rgb), None)));
+    let no_rgb: Vec<SwatchEntry> = entries.into_iter().filter(|e| !matches!(e.color, SwatchColor::Rgb(_))).collect();
+    let no_rgb = write_swatches(&[SwatchGroup { name: "t".into(), entries: no_rgb }], SwatchFormat::Aco).unwrap().0;
+    assert!(color_table_file("cmyk.aco", &no_rgb).is_err(), "a file without RGB swatches is refused");
 }
