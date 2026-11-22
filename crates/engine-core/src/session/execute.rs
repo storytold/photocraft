@@ -56,13 +56,11 @@ impl Session {
         self.live_commit = None;
     }
 
-    /// The per-command value checks `dispatch` and `precheck` share, in the order `dispatch` runs them.
+    /// The per-command value checks `dispatch` and `precheck` share: the documented keys, then the
+    /// `check_params` hooks.
     pub(crate) fn validate_params(&self, id: &str, spec: &crate::registry::CommandSpec, params: &Value) -> Result<()> {
-        if id == "file.new" {
-            crate::document_preset_cmds::validate_new_params(self, params)?;
-        }
         crate::param_check::check(spec, params)?;
-        crate::filters::validate_params(id, params)
+        crate::registry::hooks().check_params.iter().try_for_each(|check| check(self, id, params))
     }
 
     /// Check a call without running it: the command exists, its params have the shape
@@ -413,7 +411,7 @@ impl Session {
 /// Image › Adjustments, all but Invert (#10484), filter plug-ins included (`plugin.run`; the
 /// other `plugin.*` commands manage plug-ins). Catalogue queries still answer.
 fn bitmap_mode_refusal(s: &Session, id: &str, params: &Value) -> Option<&'static str> {
-    let edits = (id.starts_with("filter.") || id.starts_with("image.adjustments.") || id == crate::plugin_cmds::RUN)
+    let edits = (id.starts_with("filter.") || id.starts_with("image.adjustments.") || id == "plugin.run")
         && id != "image.adjustments.invert"
         && !id.ends_with(".list")
         // Only the Filter Gallery answers `{"list": true}` with its catalogue; other commands ignore it.

@@ -24,6 +24,7 @@ pub mod filters_ext;
 mod group_options;
 pub mod guide_layout;
 pub mod hidden_target;
+mod hooks;
 pub mod inspect;
 pub mod installed_profiles;
 pub mod jobs;
