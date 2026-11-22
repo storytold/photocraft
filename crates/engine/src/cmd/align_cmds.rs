@@ -23,6 +23,7 @@
 
 use photocraft_algo::panorama::Layout;
 use photocraft_algo::pyramid;
+use photocraft_algo::resample::{crop_surface, translate_surface};
 use photocraft_algo::transform::Interp;
 use photocraft_algo::warp::warp_mesh_gray;
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, LayerMask};
@@ -132,6 +133,34 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
             Ok((ids[i], px, mask))
         })
         .collect::<Result<_>>()?;
+    // The box the aligned layers end in: the warped ones as warped, the reference as it is. A
+    // planar warp's pixels are trimmed to where its content's corners map, so a resampling fringe
+    // (or a near-identity warp of identical layers) doesn't grow the canvas by a pixel.
+    let aligned_box = ids.iter().enumerate().fold(Rect::EMPTY, |u, (i, id)| {
+        let Some(pl) = al.placements[i].as_ref() else { return u };
+        let own = surfs.get(i).map_or(Rect::EMPTY, |s| s.content_bounds());
+        let b = match warped.iter().find(|(w, _, _)| w == id) {
+            Some((_, px, _)) => {
+                let warped = px.content_bounds();
+                let mapped =
+                    plane_matrix(pl, (0.0, 0.0)).and_then(|h| mapped_bounds(own, |x, y| if h.w(x, y) > 1e-9 { h.apply(x, y) } else { (f64::NAN, f64::NAN) }));
+                mapped.map(|m| warped.intersect(&m)).filter(|r| !r.is_empty()).unwrap_or(warped)
+            }
+            None => own,
+        };
+        u.union(&b)
+    });
+    let canvas = doc.bounds();
+    let place = placement(canvas, aligned_box, pinned(&doc, reference))?;
+    // What the aligned layers move by on top of the canvas origin, which moves everything.
+    let extra = match place {
+        Some(p) => (p.shift.0.checked_sub(p.origin.0), p.shift.1.checked_sub(p.origin.1)),
+        None => (Some(0), Some(0)),
+    };
+    let (Some(ex), Some(ey)) = extra else { return Err(EngineError::Other("Auto-Align's placement is out of range".into())) };
+    if let Some(p) = place {
+        s.set_sampler_map(photocraft_geom::Affine::translate(f64::from(p.origin.0), f64::from(p.origin.1)));
+    }
     s.edit("Auto-Align Layers", |doc, _| {
         for (id, px, mask) in &warped {
             // Photoshop turns the Background into a normal layer before moving it.
@@ -144,7 +173,10 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
                 m.surface = ms.clone();
             }
         }
-        Ok(())
+        if let Some(p) = place {
+            place_aligned(doc, cmd, &ids, p, (ex, ey))?;
+        }
+        clip_unselected(doc, &ids)
     })?;
     let model = match al.layout {
         Layout::Reposition => "reposition",
@@ -163,6 +195,134 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(
         json!({"reference": reference.0, "layout": al.layout.name(), "registration": used, "focal": al.focal, "rms": al.rms, "aligned": aligned, "failed": failed}),
     )
+}
+
+/// The pixel box that `r`'s corners cover once mapped by `f`, within 0.05 px; `None` when `r` is
+/// empty or a corner maps to a non-finite or out-of-range point (past a homography's horizon).
+fn mapped_bounds(r: Rect, f: impl Fn(f64, f64) -> (f64, f64)) -> Option<Rect> {
+    if r.is_empty() {
+        return None;
+    }
+    let (x0, y0, x1, y1) = (f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1));
+    let pts = [f(x0, y0), f(x1, y0), f(x0, y1), f(x1, y1)];
+    let (mut lo, mut hi) = ((f64::INFINITY, f64::INFINITY), (f64::NEG_INFINITY, f64::NEG_INFINITY));
+    for (x, y) in pts {
+        if !x.is_finite() || !y.is_finite() {
+            return None;
+        }
+        lo = (lo.0.min(x), lo.1.min(y));
+        hi = (hi.0.max(x), hi.1.max(y));
+    }
+    let limit = f64::from(i32::MAX / 2);
+    let int = |v: f64| (v.is_finite() && v.abs() < limit).then_some(v as i32);
+    Some(Rect::new(int((lo.0 + 0.05).floor())?, int((lo.1 + 0.05).floor())?, int((hi.0 - 0.05).ceil())?, int((hi.1 - 0.05).ceil())?))
+}
+
+/// Where Auto-Align puts its result (#14195), as the reference application does: the box of the
+/// aligned layers moves so its top-left is at 0,0 (`shift`), the canvas grows to the box when the
+/// box is larger (`size`), and the other layers move with the canvas origin (`origin`: what the
+/// canvas grew by on the left and top). A fully locked reference isn't moved: nothing shifts and
+/// the canvas grows right and down only.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Placement {
+    shift: (i32, i32),
+    origin: (i32, i32),
+    size: (u32, u32),
+}
+
+/// The placement of the `aligned` box on `canvas`; `None` when nothing moves and the canvas keeps
+/// its size (or the box is empty). A canvas past the largest a document may have is refused.
+fn placement(canvas: Rect, aligned: Rect, locked: bool) -> Result<Option<Placement>> {
+    if aligned.is_empty() {
+        return Ok(None);
+    }
+    let (cw, ch) = (i64::from(canvas.width()), i64::from(canvas.height()));
+    let (x0, y0, x1, y1) = (i64::from(aligned.x0), i64::from(aligned.y0), i64::from(aligned.x1), i64::from(aligned.y1));
+    let (w, h, shift, origin) = if locked {
+        (cw.max(x1), ch.max(y1), (0, 0), (0, 0))
+    } else {
+        let (w, h) = (cw.max(x1 - x0), ch.max(y1 - y0));
+        (w, h, (-x0, -y0), ((-x0).clamp(0, w - cw), (-y0).clamp(0, h - ch)))
+    };
+    let max = i64::from(crate::document_preset_cmds::MAX_DIMENSION);
+    if w > max || h > max {
+        return Err(EngineError::Other(format!(
+            "Auto-Align would make the canvas {w} x {h} px, past the largest of {max} x {max} px; the document was not changed"
+        )));
+    }
+    let range = || EngineError::Other("Auto-Align's placement is out of range".into());
+    let int = |v: i64| i32::try_from(v).map_err(|_| range());
+    let size = (u32::try_from(w).map_err(|_| range())?, u32::try_from(h).map_err(|_| range())?);
+    let p = Placement { shift: (int(shift.0)?, int(shift.1)?), origin: (int(origin.0)?, int(origin.1)?), size };
+    Ok((p.shift != (0, 0) || size != (canvas.width(), canvas.height())).then_some(p))
+}
+
+/// Applies `p` inside Auto-Align's edit: everything moves with the canvas origin (as Canvas Size
+/// moves it), the aligned layers `ids` by `extra` more, the canvas takes its new size, a selected
+/// Background that moved or no longer fills the canvas becomes "Layer 0", and an unselected
+/// Background grows with white, whatever its own colour.
+fn place_aligned(doc: &mut Document, cmd: &str, ids: &[LayerId], p: Placement, extra: (i32, i32)) -> Result<()> {
+    let old = doc.bounds();
+    let grew = p.size != (old.width(), old.height());
+    if grew {
+        // The white border is dense in the Background; refuse before it is allocated.
+        let bpp = doc.background().and_then(|l| l.surface()).map_or(0, |s| 4 * s.channels() as u64);
+        crate::allocation::check_dense(Rect::from_xywh(0, 0, p.size.0, p.size.1), bpp, "Auto-Align Layers")?;
+    }
+    let (ox, oy) = p.origin;
+    crate::canvas_geom::keeping_count_points(doc, |doc| crate::image_cmds::translate_doc(doc, cmd, ox, oy))?;
+    if extra != (0, 0) {
+        for id in ids {
+            let Some(l) = doc.layer_mut(*id) else { continue };
+            if let Some(surf) = l.surface_mut() {
+                *surf = translate_surface(surf, extra.0, extra.1);
+            }
+            if let Some(m) = &mut l.mask {
+                m.surface = translate_surface(&m.surface, extra.0, extra.1);
+            }
+        }
+    }
+    if let Some(bg) = doc.background().map(|l| l.id).filter(|id| ids.contains(id))
+        && (p.shift != (0, 0) || grew)
+    {
+        crate::extra_cmds::background_to_layer(doc, bg);
+    }
+    doc.size = photocraft_doc::Size::new(p.size.0, p.size.1);
+    if grew {
+        crate::image_cmds::for_each_layer(&mut doc.layers, &mut |l| l.fill_cache = None);
+        crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
+        let canvas = doc.bounds();
+        let was = Rect::from_xywh(ox, oy, old.width(), old.height());
+        if let Some(bg) = doc.background_mut()
+            && let LayerContent::Raster(surf) = &mut bg.content
+        {
+            let white = photocraft_raster::from_rgba(&surf.format(), [1.0; 4]);
+            crate::image_cmds::fill_background_extension(surf, canvas, was, &white);
+        }
+    }
+    Ok(())
+}
+
+/// The unselected pixel layers are clipped to the canvas after aligning, as measured.
+fn clip_unselected(doc: &mut Document, ids: &[LayerId]) -> Result<()> {
+    let canvas = doc.bounds();
+    let mut result = Ok(());
+    crate::image_cmds::for_each_layer(&mut doc.layers, &mut |l| {
+        if result.is_err() || ids.contains(&l.id) {
+            return;
+        }
+        if let LayerContent::Raster(surf) = &mut l.content {
+            let b = surf.content_bounds();
+            if b.is_empty() || b.intersect(&canvas) == b {
+                return;
+            }
+            result = crate::allocation::check_dense(b.intersect(&canvas), 4 * surf.channels() as u64, "Auto-Align Layers");
+            if result.is_ok() {
+                *surf = crop_surface(surf, canvas);
+            }
+        }
+    });
+    result
 }
 
 /// The most memory Auto-Blend's working buffers may take past the canvas: a bound independent
@@ -399,3 +559,7 @@ mod tests;
 
 #[cfg(test)]
 mod auto_blend_background_tests;
+
+#[cfg(test)]
+#[path = "align_cmds/auto_align_canvas_tests.rs"]
+mod auto_align_canvas_tests;

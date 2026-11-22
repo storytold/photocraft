@@ -616,7 +616,7 @@ pub(crate) fn crop_doc(doc: &mut Document, cmd: &str, r: Rect, delete_pixels: bo
 /// canvas, and any gap there) with `px`, under the pixels the Background already holds there:
 /// those a crop with Delete Cropped Pixels off hid show again instead of being painted over (#7086).
 /// Only the added strips are touched, so the cost follows the added area, not the canvas.
-fn fill_background_extension(surf: &mut Surface, canvas: Rect, old: Rect, px: &[f32]) {
+pub(crate) fn fill_background_extension(surf: &mut Surface, canvas: Rect, old: Rect, px: &[f32]) {
     let keep = surf.content_bounds().intersect(&old).intersect(&canvas);
     let strips = if keep.is_empty() {
         vec![canvas]

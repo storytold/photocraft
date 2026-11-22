@@ -48,8 +48,9 @@ fn auto_align_repositions_at_all_depths() {
         assert!(s.is_enabled("edit.autoAlignLayers"));
         let r = s.execute("edit.autoAlignLayers", json!({"projection": "reposition"})).unwrap();
         assert_eq!(r["reference"], a.0);
+        // B lands on A, and the aligned box (A's 20,20) then moves to 0,0 (#14195).
         let bb = s.active().unwrap().doc.layer(b).unwrap().surface().unwrap().content_bounds();
-        assert!((bb.x0 - 20).abs() <= 1 && (bb.y0 - 20).abs() <= 1, "depth {depth}: {bb:?} {r}");
+        assert!(bb.x0.abs() <= 1 && bb.y0.abs() <= 1, "depth {depth}: {bb:?} {r}");
         s.undo();
         let bb = s.active().unwrap().doc.layer(b).unwrap().surface().unwrap().content_bounds();
         assert_eq!((bb.x0, bb.y0), (31, 13));
@@ -175,8 +176,9 @@ fn auto_align_warps_layer_masks_keeping_their_default() {
         assert_eq!(m.value(250, 200), outside, "{projection} reveal={reveal}: {r}");
         assert_eq!(m.value(5, 5), outside, "{projection} reveal={reveal}: {r}");
         if projection == "reposition" {
-            // The square moved with the layer (by about (-11, +7)).
-            assert!((m.value(94, 112) - inside).abs() < 0.01, "{r}");
+            // The square moved with the layer (by about (-11, +7)), then with the aligned box
+            // to 0,0 (by -20, -20, #14195).
+            assert!((m.value(74, 92) - inside).abs() < 0.01, "{r}");
         }
     }
 }
