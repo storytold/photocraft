@@ -56,6 +56,7 @@ pub mod panels;
 pub mod preset_files_ui;
 pub mod proxy;
 pub mod render_path;
+pub(crate) mod scratch_reads;
 pub mod state;
 pub mod texel_guard;
 pub mod theme;
@@ -246,6 +247,7 @@ pub(crate) use services::{opaque_layer, saves_flat_in_place};
 pub use text::cjk_fonts;
 pub use text::direction;
 pub use text::served_fonts;
+pub use tools::adjustment_brush;
 use tools::align_bar;
 pub use tools::analysis;
 pub use tools::artboard_tool;
@@ -972,6 +974,8 @@ mod layer_thumb_bounds_tests;
 mod mask_thumb_refresh_tests;
 #[cfg(test)]
 mod menu_floor_trials;
+#[cfg(test)]
+mod scratch_read_keys_tests;
 
 #[cfg(test)]
 mod new_doc_remember_tests;

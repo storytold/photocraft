@@ -47,14 +47,22 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // first Pattern Stamp stroke multiply (or give Healing a mode its menu doesn't have).
         // The Pattern Stamp also starts at full opacity and flow (#12616): those fields are its own.
         // The Background Eraser, the Healing Brush, the Burn, Dodge and Sponge tools, the Clone
-        // Stamp, the Smudge tool and the Art History Brush start with their own measured tips
+        // Stamp, the Smudge tool, the Adjustment Brush and the Art History Brush start with their own measured tips
         // instead, as the whole brush Reset Tool gives them (#11911, #12099, #12671, #12684,
         // #13029, #12601, #12964, #12631); the Art History Brush's is at full opacity (#10263).
         // The Art History Brush's Angle and pressure toggles are its own bar controls, so they
         // start at 0° and off too, whatever the outgoing brush has (#12629).
         None if matches!(
             tool,
-            Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp | Tool::Smudge | Tool::ArtHistoryBrush
+            Tool::BackgroundEraser
+                | Tool::Healing
+                | Tool::Burn
+                | Tool::Dodge
+                | Tool::Sponge
+                | Tool::CloneStamp
+                | Tool::Smudge
+                | Tool::AdjustmentBrush
+                | Tool::ArtHistoryBrush
         ) =>
         {
             fresh_brush(tool, &current)
@@ -124,6 +132,9 @@ const ART_HISTORY_BRUSH_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
 const REMOVE_TOOL_SIZE: f32 = 19.0;
 /// The Smudge tool's tip after Reset Tool (#12964): a 13 px soft round at 25 % spacing.
 const SMUDGE_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
+/// The Adjustment Brush's starting tip (#12519): a 100 px soft round (hardness 0 %). Its spacing
+/// was not measured, so it stays the default brush's.
+const ADJUSTMENT_BRUSH_TIP: (f32, f32) = (100.0, 0.0);
 
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
@@ -166,6 +177,7 @@ pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings 
             brush.smoothing.amount = 0.0;
         }
         Tool::Remove => brush.size = REMOVE_TOOL_SIZE,
+        Tool::AdjustmentBrush => (brush.size, brush.hardness) = ADJUSTMENT_BRUSH_TIP,
         _ => {}
     }
     session_fields(current, &brush)

@@ -7,9 +7,33 @@ use super::{Arc, Document, EngineError, Result, Session, Value, batch_naming, js
 /// Inputs of a batch command: `"input"` is a folder or an array of files.
 pub(crate) fn batch_inputs(p: &Value, cmd: &str) -> Result<Vec<String>> {
     match p.get("input").or_else(|| p.get("files")) {
-        Some(Value::Array(a)) => Ok(a.iter().filter_map(Value::as_str).map(str::to_string).collect()),
+        Some(Value::Array(a)) => a
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                v.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: format!("input file {} must be a path string", i + 1) })
+            })
+            .collect(),
         Some(Value::String(dir)) => list_images(dir),
         _ => Err(EngineError::BadParams { cmd: cmd.into(), msg: "missing \"input\" (folder or array of files)".into() }),
+    }
+}
+
+#[test]
+fn batch_rejects_a_non_path_input_before_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("source.png");
+    let image = photocraft_codecs::Image::from_u8(4, 4, photocraft_codecs::ChannelLayout::Rgb, vec![255; 48]).unwrap();
+    let bytes = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    std::fs::write(&input, bytes).unwrap();
+    for (cmd, format) in [("file.automate.batch", "png"), ("file.scripts.imageProcessor", "jpg")] {
+        let output = dir.path().join(format);
+        let mut s = Session::new();
+        let err = s.execute(cmd, json!({"steps": [], "input": [&input, 17], "output": &output, "format": format})).unwrap_err();
+        assert!(matches!(&err, EngineError::BadParams { cmd: name, msg } if name == cmd && msg == "input file 2 must be a path string"), "{err}");
+        assert!(!output.exists());
     }
 }
 
