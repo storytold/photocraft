@@ -4,7 +4,8 @@
 signer workflows are dormant `.yml` registrations, not an activated signing pipeline.
 All three jobs remain literally disabled. There is no
 schedule or platform secret grant. The unsigned reusable caller's maximum OIDC/attestation
-permissions are for its isolated attester; its compiler must explicitly narrow to contents-read.
+permissions are for its isolated attester; its compiler narrows to contents and Actions read
+only, with no OIDC, attestation write, release environment or platform signing secrets.
 Shared tooling is pinned to public preview `646d4c0619df19a6e76cb4d669f878e4a1e005d7`
 ([shared draft #330](https://github.com/storytold/craft-common-actions/pull/330)); this is
 reviewed source availability, not provider, queue, native signing or crypto qualification.
@@ -67,16 +68,27 @@ Every `workflow_dispatch`, including the signer's first attempt, requires explic
 reviewed and listed explicitly; there is no implicit bot trust. This preparation does not
 populate or authorize that policy.
 
-At the pinned `646d4c0619df19a6e76cb4d669f878e4a1e005d7` baseline, post-publish recovery
-is **not implemented yet**; it is coming in the next common330 update. This packet does
-not claim that recovery edge case is solved.
+### Post-publication recovery limitation
+
+At the pinned `646d4c0619df19a6e76cb4d669f878e4a1e005d7` baseline, a failure after the
+release becomes public (receipt write, ownership upload, runner loss or timeout) leaves the
+recorded attempt unsuccessful; every later nightly refuses until a release manager handles
+reviewed manual reconciliation. Re-running does not repair the failed recorded attempt.
+Authenticated reconciliation must be separately designed and qualified **before activation**;
+no such update is pinned or promised here. Public-state editing/deletion is not newly
+authorized by this procedure.
 
 Confirm the shared parser's final exact fields; unknown/missing/null values must refuse.
 Do not derive policy, code/tool paths, trust anchors or ignored debt from a candidate archive.
 The reviewed Windows publisher subject and independently pinned signing tools are also
 unresolved; configure them only through the reviewed shared/release contract, not a guessed
-app value or an override from main. No secret names/scopes or protection settings were audited
-by this source change; no secret values were read.
+app value or an override from main. The unchanged stable `release.yml` forwards Windows/Azure
+secret names from caller scope, while the nightly signer forwards none. Before activation,
+verify the existing `release` environment holds the required names and that repository or
+organization scopes do not expose signing copies to main. Environment-only missing values
+must fail closed; repository/org-only values or same-name scope collisions are blockers,
+not permission to copy keys or change settings. No secret names/scopes or protection settings
+were audited by this source change; no secret values were read.
 
 ## Bounded integration and acceptance
 
@@ -85,7 +97,8 @@ by this source change; no secret values were read.
    and while assembling real policy. Future shared pin updates require review of the exact
    public immutable source and interface. Do not claim dormant source as a working pipeline.
    Do not temporarily call old same-run signing or use mutable `@main`/`@release` tooling.
-   Keep compiler permissions contents-read only; isolated unsigned attester may receive only
+   Keep compiler permissions contents and Actions read only, with no OIDC, attestation write,
+   release environment or platform secrets. Only the isolated unsigned attester receives
    its required Actions-read, attestation-write and OIDC, never platform keys. Re-run the
    no-cache static check over **all** trusted jobs/callees, including setup-action cache options.
 2. Register on main through normal review. Promote identical signer/policy/adapter contents
@@ -123,7 +136,9 @@ by this source change; no secret values were read.
    uninstall preservation, and corrupt/unsigned/wrong-publisher rejection. No Linux/macOS
    coverage follows from Windows. Keep production/native/publication/prune switches off until
    their own acceptance. Nightly assets remain prerelease, `make_latest:false`, with separate
-   nightly tags/reservations and authenticated cross-attempt interrupted-publication recovery.
+   nightly tags/reservations. Authenticated interrupted-publication reconciliation remains
+   the [preactivation blocker described above](#post-publication-recovery-limitation), not a
+   capability supplied by this pin.
 
 Routine updates ride real stable windows, never automatic main-to-release copying. Pause or
 cancel via existing nightly workflow controls without pushing release; urgent repairs need
@@ -137,6 +152,19 @@ per-run human approval is introduced by candidate-v3; provider gaps remain block
 synthetic, locally generated event fixtures and a mocked HTTPS opener. It verifies fixed
 routing, refusal before contact and no retry; it does not contact GitHub or prove admission,
 cryptography, native signing, hosted concurrency, or the shared candidate-v3 implementation.
-The same suite enforces the app trusted-workflow no-cache/no-secret preparation boundary.
+The same suite covers all three callers for the no-cache/no-platform-secret boundary,
+requires every nightly job to stay explicitly off (a top-level OR cannot override false),
+and refuses any registered nightly schedule. It also rejects changed root serialization: the fixed PhotoCraft nightly group, `queue: max`,
+and `cancel-in-progress: false` must remain literal. Mutation regressions reject invalid queue
+values, cancellation and request-dependent groups. Packaging lint runs this suite in its
+independent contents-read-only `nightly-source-contract` job, including config-only changes;
+it does not rely on the shared Bash packaging hook to run the guard.
+
+The existing `.github/actionlint.yaml` suppresses only actionlint 1.7.12's anchored exact
+unsupported-queue message for `.github/workflows/nightly-sign.yml`. This operator-requested
+compatibility exception is not a blanket syntax waiver: other files/messages still fail,
+and the mandatory source guard supplies the missing queue-value/serialization checks.
+No tool fork or shared lint change is needed. This same-PR nonprivileged CI hook is the
+narrow correction requested for the dormant source; stable/release execution is unchanged.
 Run through the normal task allocator; report actionlint/PowerShell/native/hosted checks
 separately and never treat a missing runtime as a pass.

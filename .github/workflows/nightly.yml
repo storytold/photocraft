@@ -11,9 +11,12 @@ permissions:
 jobs:
   unsigned:
     # Literal off through source/hosted no-key qualification; no inherited/platform secrets.
-    if: ${{ false }}
-    # Maximum for the reusable workflow. Its compiler must override to contents-read only;
-    # only the separate unsigned attester may receive OIDC/attestation-write.
+    if: >-
+      false && github.repository == 'storytold/photocraft' &&
+      github.ref == 'refs/heads/main' && github.ref_type == 'branch' &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    # Maximum for the reusable workflow. Its compiler narrows to contents/actions read;
+    # no OIDC, attestation write, release environment or platform secrets in compilation.
     permissions:
       contents: read
       actions: read

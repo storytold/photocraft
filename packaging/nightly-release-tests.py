@@ -23,6 +23,54 @@ def inline_scripts(path):
         r"^        run: \|\n((?:          .*\n|\n)+)", path.read_text(), re.MULTILINE)]
 
 
+def assert_nightly_serialization(source):
+    """Fail closed unless this app's plain root concurrency block retains its contract.
+
+    This is a deliberately narrow source guard, not a general YAML parser; actionlint
+    still checks all other syntax. Expressions, aliases and alternate block shapes
+    refuse rather than delegating queue-value validation to the old linter.
+    """
+    lines = source.splitlines()
+    roots = [index for index, line in enumerate(lines) if line.startswith("concurrency:")]
+    if len(roots) != 1 or lines[roots[0]] != "concurrency:":
+        raise ValueError("one plain root concurrency block is required")
+    values = {}
+    for line in lines[roots[0] + 1:]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if not line[0].isspace():
+            break
+        row = re.fullmatch(r"  (group|cancel-in-progress|queue): ([^#]+?)(?: +#.*)?", line)
+        if row is None or row[1] in values:
+            raise ValueError("malformed or duplicate nightly concurrency entry")
+        values[row[1]] = row[2].rstrip()
+    if values != {"group": "photocraft-nightly-release", "cancel-in-progress": "false", "queue": "max"}:
+        raise ValueError("nightly serialization must use its stable group, max queue and no cancellation")
+
+
+def literal_off(condition):
+    expression = " ".join(condition.split())
+    if expression.startswith("${{") and expression.endswith("}}"):
+        expression = expression[3:-2].strip()
+    if expression == "false":
+        return True
+    if not expression.startswith("false && "):
+        return False
+    # A top-level OR could override the leading false; parentheses must balance.
+    expression = re.sub(r"'(?:''|[^'])*'", "''", expression)
+    depth = 0
+    for token in re.findall(r"\(|\)|\|\|", expression):
+        if token == "(":
+            depth += 1
+        elif token == ")":
+            depth -= 1
+            if depth < 0:
+                return False
+        elif depth == 0:
+            return False
+    return depth == 0
+
+
 class Response:
     status = 204
 
@@ -144,10 +192,63 @@ class DispatchBoundary(unittest.TestCase):
 
 
 class TrustedSourcePreparation(unittest.TestCase):
+    def test_every_nightly_job_remains_explicitly_off(self):
+        for name in ("nightly.yml", "nightly-dispatch.yml", "nightly-sign.yml"):
+            source = (ROOT / ".github/workflows" / name).read_text()
+            jobs = source.split("\njobs:\n", 1)[1]
+            headers = re.findall(r"(?m)^  (?![\s#])[^\n]+", jobs)
+            conditions = re.findall(r"(?m)^    if: ([^\n]+)(?:\n((?:      [^\n]*\n)+))?", jobs)
+            with self.subTest(workflow=name):
+                self.assertTrue(headers)
+                self.assertEqual(len(conditions), len(headers), "every job needs a literal-off condition")
+                for scalar, folded in conditions:
+                    self.assertTrue(literal_off(folded if scalar == ">-" else scalar), "nightly activation requires reviewed test update")
+
+    def test_dormancy_guard_rejects_activation_and_top_level_or(self):
+        for condition in ("true", "vars.ENABLE_NIGHTLY", "false || true", "false && true || true",
+                          "false && (true || true", "false && true) || true"):
+            with self.subTest(condition=condition):
+                self.assertFalse(literal_off(condition))
+        self.assertTrue(literal_off("${{ false }}"))
+        self.assertTrue(literal_off("false && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')"))
+
+    def test_no_nightly_schedule_is_registered(self):
+        for name, event in (("nightly.yml", "workflow_dispatch"),
+                            ("nightly-dispatch.yml", "workflow_run"),
+                            ("nightly-sign.yml", "workflow_dispatch")):
+            source = (ROOT / ".github/workflows" / name).read_text()
+            events = source.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
+            triggers = [line for line in events.splitlines() if line.startswith("  ")
+                        and not line.startswith("   ") and line.strip() and not line.lstrip().startswith("#")]
+            with self.subTest(workflow=name):
+                self.assertEqual(triggers, [f"  {event}:"], "schedule/activation needs explicit review")
+
+    def test_signer_serialization_contract_is_enforced(self):
+        assert_nightly_serialization((ROOT / ".github/workflows/nightly-sign.yml").read_text())
+
+    def test_weakened_or_malformed_serialization_is_rejected(self):
+        source = (ROOT / ".github/workflows/nightly-sign.yml").read_text()
+        for old, new in (
+            ("queue: max", "queue: single"),
+            ("queue: max", "queue: invalid"),
+            ("queue: max", "queue: ${{ github.run_id }}"),
+            ("queue: max", "queue:"),
+            ("queue: max", "queue: max\n  queue: single"),
+            ("cancel-in-progress: false", "cancel-in-progress: true"),
+            ("cancel-in-progress: false", "cancel-in-progress: ${{ github.event_name == 'push' }}"),
+            ("cancel-in-progress: false\n", ""),
+            ("group: photocraft-nightly-release", "group: ${{ github.run_id }}"),
+            ("group: photocraft-nightly-release", "group: release-${{ github.ref }}"),
+            ("concurrency:\n", "concurrency: ${{ github.run_id }}\n"),
+            ("concurrency:\n", "  concurrency:\n"),
+        ):
+            with self.subTest(change=new), self.assertRaises(ValueError):
+                assert_nightly_serialization(source.replace(old, new))
+
     def test_no_cache_actions_or_cache_setup_options_in_app_trusted_closure(self):
         # Required R3 static guard for app workflows only; activation must extend
         # this check to every reviewed immutable shared trusted callee.
-        for name in ("nightly-sign.yml", "nightly-dispatch.yml"):
+        for name in ("nightly.yml", "nightly-sign.yml", "nightly-dispatch.yml"):
             source = (ROOT / ".github/workflows" / name).read_text()
             executable = "\n".join(line for line in source.splitlines()
                                    if not line.lstrip().startswith("#"))

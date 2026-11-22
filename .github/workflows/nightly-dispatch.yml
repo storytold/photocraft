@@ -12,7 +12,9 @@ permissions: {}
 jobs:
   dispatch:
     # SOURCE PREPARATION: literal off until immutable shared tooling and policy qualification.
-    if: ${{ false }}
+    if: >-
+      false && github.repository == 'storytold/photocraft' &&
+      github.event_name == 'workflow_run'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
