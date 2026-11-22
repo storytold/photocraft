@@ -2374,3 +2374,18 @@ fn a_perspective_with_a_warp_past_its_box_stores_the_corners_the_reference_store
     }
     assert_eq!(crate::blocks::parse_placed_warp(b"SoLd", &data).as_ref(), Some(&warp));
 }
+
+/// A placed layer whose left side is 0.3 px off vertical reads straightened (the reference draws it so); saved
+/// untouched, its stored corners stay the file's own (each save rewrote them straightened).
+#[test]
+fn an_untouched_placement_read_straightened_keeps_the_files_corners() {
+    let stored = [10.0, 20.0, 110.0, 20.0, 110.0, 70.0, 10.3, 70.0];
+    let template = Descriptor::new("null").with("Trnf", Value::List(stored.iter().map(|v| Value::Double(*v)).collect()));
+    // The placement as read: the left side on x 10.15.
+    let t = Affine { m: [(110.0 - 10.15) / 100.0, 0.0, 0.0, 1.0, 10.15, 20.0] };
+    let spec = PlacedSpec { idnt: "id", placed: "id", transform: t, perspective: None, size: (100.0, 50.0), dpi: 72.0, warp: None, filter_fx: None };
+    assert!(!super::placed::quad_moved(&template, &spec, None), "an untouched placement is not a move");
+    // A real move still is.
+    let moved = PlacedSpec { transform: Affine { m: [1.0, 0.0, 0.0, 1.0, 12.0, 20.0] }, ..spec };
+    assert!(super::placed::quad_moved(&template, &moved, None));
+}

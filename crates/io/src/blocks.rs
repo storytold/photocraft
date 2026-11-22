@@ -886,7 +886,7 @@ pub fn parse_smart_perspective(key: &[u8; 4], data: &[u8]) -> Option<[f64; 9]> {
 /// less than a pixel off an axis put on that axis, at the mean of its two ends: the reference
 /// application draws such a side straight (measured on placements sheared by a fraction of a
 /// pixel, where the slanted side cost a row of pixels along the whole edge).
-fn on_axis(mut q: [[f64; 2]; 4]) -> [[f64; 2]; 4] {
+pub(crate) fn on_axis(mut q: [[f64; 2]; 4]) -> [[f64; 2]; 4] {
     // The left and right sides hold an `x`, the top and bottom ones a `y`.
     for (i, j, ax) in [(0usize, 3usize, 0usize), (1, 2, 0), (0, 1, 1), (3, 2, 1)] {
         let off = (q[i][ax] - q[j][ax]).abs();
