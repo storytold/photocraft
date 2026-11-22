@@ -69,7 +69,7 @@ impl LayerId {
 }
 
 /// Identity of the source contents shared by smart-object instances, independent of their bytes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct SmartContentsId(pub u64);
 
 impl SmartContentsId {
@@ -84,7 +84,7 @@ pub fn ensure_ids_above(max: u64) {
     NEXT_ID.fetch_max(max.saturating_add(1), Ordering::Relaxed);
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct DocId(pub u64);
 
 impl DocId {
@@ -93,7 +93,7 @@ impl DocId {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Locks {
     pub transparency: bool,
     pub pixels: bool,
@@ -141,7 +141,7 @@ impl Locks {
 }
 
 /// Photoshop layer colour labels.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum LabelColor {
     #[default]
     None,
@@ -245,7 +245,7 @@ mod label_color_tests {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct LayerMask {
     /// Grayscale surface; untouched pixels read as `default` (0 = hide, 1 = reveal).
     pub surface: Surface,
@@ -295,7 +295,7 @@ impl LayerMask {
 }
 
 /// Layer styles. Parsed PSD effect data is kept raw until the effects engine lands (M9).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, craft_ui_macros::PlainData)]
 pub struct Effects {
     pub enabled: bool,
     pub items: Vec<Effect>,
@@ -327,7 +327,7 @@ pub fn walks() -> u64 {
     WALKS.with(std::cell::Cell::get)
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct Group {
     pub children: Vec<Layer>,
     pub expanded: bool,
@@ -339,7 +339,7 @@ pub struct Group {
     pub frame_stroke: Option<ShapeStroke>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum Fill {
     Solid(Color),
     /// Gradient between stops at `angle` degrees (`style` geometry, optionally reversed), laid
@@ -444,7 +444,7 @@ impl std::hash::Hash for Fill {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct TextLayer {
     pub text: String,
     pub font_family: String,
@@ -559,13 +559,13 @@ fn normalize_runs<S: Clone>(text: &str, runs: Vec<(usize, S)>, base: S) -> Vec<(
 
 /// A bounded display preview for an embedded native vector, bound to its exact source bytes.
 /// The SVG is display data only; saving the object retains the native source format.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct VectorPreview {
     pub source_hash: [u8; 32],
     pub svg: Arc<Vec<u8>>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct SmartObject {
     /// Ordinary layer duplicates share this identity; independent contents receive a fresh one.
     pub contents_id: SmartContentsId,
@@ -624,16 +624,17 @@ impl SmartObject {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub enum SmartSource {
     Embedded { file_name: String, bytes: Arc<Vec<u8>> },
     Linked { path: String },
 }
 
 /// A filter applied non-destructively: a command id plus its parameters (data, not code).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct SmartFilter {
     pub command: String,
+    #[plain_data(assume = "JSON value: plain data")]
     pub params: serde_json::Value,
     pub blend: BlendMode,
     pub opacity: f32,
@@ -645,7 +646,7 @@ pub struct SmartFilter {
 /// Used by the compositor instead of rendering [`Fill`] itself, but only while
 /// `fill` still equals the layer's current fill (editing the fill invalidates
 /// the cache automatically).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct FillCache {
     /// The fill these pixels were rendered for.
     pub fill: Fill,
@@ -653,7 +654,7 @@ pub struct FillCache {
     pub surface: Surface,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub enum LayerContent {
     Raster(Surface),
     Group(Group),
@@ -686,7 +687,7 @@ impl LayerContent {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct Layer {
     pub id: LayerId,
     pub name: String,
@@ -836,7 +837,7 @@ impl Layer {
 /// Ruler guides in document pixels. f64 like the rest of the view geometry: a guide placed in
 /// ruler units (1 cm at 300 ppi is 118.110236… px) or read from a PSD's 1/32 px positions keeps
 /// its exact place.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Guides {
     pub horizontal: Vec<f64>,
     pub vertical: Vec<f64>,
@@ -849,7 +850,7 @@ pub struct Guides {
 /// One guide's own colour. It is keyed by orientation and position, not by index, so code that
 /// drops or reorders guide positions (crop, artboards, guide layouts) can never move a colour onto
 /// another guide: a guide whose entry no longer matches simply uses the preference colour.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct GuideColor {
     pub vertical: bool,
     pub position: f64,
@@ -879,7 +880,7 @@ impl Guides {
 }
 
 /// Which areas an alpha channel's overlay colour marks (Channel Options › Color Indicates).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub enum ColorIndicates {
     /// Colour shows over black (unselected) pixels: Photoshop's default.
@@ -892,7 +893,7 @@ pub enum ColorIndicates {
 /// An extra (alpha or spot) channel, also used for the temporary Quick Mask channel.
 ///
 /// The surface is grayscale at the document depth; white = selected (1.0), black = masked.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct AlphaChannel {
     pub name: String,
     pub surface: Surface,
@@ -923,7 +924,7 @@ impl AlphaChannel {
 /// A raw PSD global tagged block: (signature, key, data).
 pub type PsdGlobalBlock = ([u8; 4], [u8; 4], Arc<Vec<u8>>);
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, craft_ui_macros::PlainData)]
 pub struct Metadata {
     /// Historical conversion information; never consulted by native rendering or editing.
     /// Shared so document/history clones do not duplicate report entries, strings or retained payloads.
@@ -942,7 +943,7 @@ pub struct Metadata {
     pub psd_global_blocks: Vec<PsdGlobalBlock>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct Document {
     pub id: DocId,
     pub name: String,
@@ -1014,7 +1015,7 @@ pub struct Document {
 /// The encoder settings a document's file was opened or saved with: what File › Save and the
 /// Save As defaults reuse for that format. Empty for a new document or a file without lossy
 /// options. Qualities are on the codecs' 1–100 scale.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 pub struct FileEncoding {
     /// JPEG quality (estimated from the file's quantisation tables on open).
