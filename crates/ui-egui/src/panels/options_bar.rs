@@ -8,7 +8,7 @@ use craft::behavior::{EditEvents, IconId, NumberCodec};
 use craft::ui::bars::{Bar, BarHome, BarKind, BarOutput, BarTool};
 use craft::ui::buttons::ToggleButton;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Entry, MemoProps, MemoView, Outbox, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
 use craft::ui::form::Field;
 use craft::ui::menu::Menu;
@@ -85,6 +85,13 @@ fn ending(app: &PhotocraftApp, tool: Tool) -> Option<Ending> {
         tool if is_type_tool(tool) && app.ui.text_edit.is_some() => pair(End::Type, tl!("Commit any current edits"), tl!("Cancel any current edits")),
         tool => crate::retouch_ui::bar::pending(app, tool).map(|p| Ending { end: End::Retouch, commit: p.commit, cancel: p.cancel }),
     }
+}
+
+/// A key of the bar's commit and cancel cells and of the open outline its hints follow: the canvas opens and ends these
+/// edits (a type session, a crop frame, a removal stroke, a lasso outline) without a command, so the options bar's
+/// content version holds this key.
+pub(crate) fn edit_key(app: &PhotocraftApp) -> (Option<End>, bool) {
+    (ending(app, app.ui.tool).map(|ending| ending.end), app.canvas_tools.selection.outline_open())
 }
 
 /// The options bar of the active tool. It is the same arrangement in every theme.
@@ -181,32 +188,70 @@ fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     navigate::members(app, ui);
 }
 
+/// Every input of the bar's lead: the Home button's state and the active tool.
+#[derive(MemoProps)]
+struct LeadProps<'a> {
+    home_on: bool,
+    home_enabled: bool,
+    tool: Tool,
+    /// The tool picker is greyed while warping, as in the reference.
+    warping: bool,
+    out: Outbox<'a, LeadEvent>,
+}
+
+/// What a run of the bar's lead reports.
+enum LeadEvent {
+    /// Home was toggled.
+    Home,
+    /// A row of the tool icon's menu was picked.
+    Reset(Reset),
+}
+
 /// The Home button and the tool's icon with its Reset Tool and Reset All Tools menu.
 fn lead(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let documents = app.session.documents().len();
     let auto = app.session.prefs().general.auto_show_home_screen;
     let on = app.ui.chrome.shows_home(documents, auto);
-    // With no documents and auto-show on, Home can't be dismissed (there is nothing behind it).
-    let home = BarHome::new(tl!("Home").to_owned(), Bind::given(on)).enabled(documents > 0 || !auto).show(ui);
-    if home.events.value().is_some() {
-        app.ui.chrome.home = if on { None } else { Some(documents) };
+    let mut sent = Vec::new();
+    let props = LeadProps {
+        home_on: on,
+        // With no documents and auto-show on, Home can't be dismissed (there is nothing behind it).
+        home_enabled: documents > 0 || !auto,
+        tool: app.ui.tool,
+        warping: app.ui.transform.as_ref().is_some_and(|t| t.session.warp().is_some()),
+        out: Outbox::new(&mut sent),
+    };
+    let _ = MemoView::new("bar-lead", props, lead_view).show(ui);
+    for event in sent {
+        match event {
+            LeadEvent::Home => app.ui.chrome.home = if on { None } else { Some(documents) },
+            LeadEvent::Reset(reset) => {
+                if let Err(e) = crate::menus::invoke(app, ui.ctx(), reset.command(), json!({})) {
+                    app.ui.status = e;
+                }
+            }
+        }
     }
-    // The tool picker is greyed while warping, as in the reference.
-    let warping = app.ui.transform.as_ref().is_some_and(|t| t.session.warp().is_some());
-    let tool = BarTool::new(icons::tool_icon(app.ui.tool), tl!(app.ui.tool.label()).to_owned()).enabled(!warping).show(ui);
+}
+
+/// The bar lead's view.
+fn lead_view(props: &mut LeadProps<'_>, ui: &mut egui::Ui) {
+    let home = BarHome::new(tl!("Home").to_owned(), Bind::given(props.home_on)).enabled(props.home_enabled).show(ui);
+    if home.events.value().is_some() {
+        props.out.send(LeadEvent::Home);
+    }
+    let tool = BarTool::new(icons::tool_icon(props.tool), tl!(props.tool.label()).to_owned()).enabled(!props.warping).show(ui);
     // Photoshop: right-click the tool icon for Reset Tool / Reset All Tools.
     let rows = [Entry::new(Reset::Tool, tl!("Reset Tool").to_owned()), Entry::new(Reset::All, tl!("Reset All Tools").to_owned())];
-    if let Some(reset) = Menu::context(tl!("Tool").to_owned(), &tool.response).pick(ui, &rows).picked
-        && let Err(e) = crate::menus::invoke(app, ui.ctx(), reset.command(), json!({}))
-    {
-        app.ui.status = e;
+    if let Some(reset) = Menu::context(tl!("Tool").to_owned(), &tool.response).pick(ui, &rows).picked {
+        props.out.send(LeadEvent::Reset(reset));
     }
 }
 
 /// The Mode, Opacity and Flow of the stamp tools, Healing and Art History: the tool's own brush's, kept per tool like its
 /// size. Art History has no Mode (the engine paints Normal) and no Flow.
 fn stamp_members(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
-    let brush = app.session.tools.brush.clone();
+    let brush = (*app.session.tools.brush).clone();
     // An Indexed Color document names the Clone Stamp's and the Pattern Stamp's Normal "Threshold"
     // (#12613, #12887); the other entries weren't measured there.
     let indexed = app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Indexed);
@@ -257,7 +302,7 @@ fn stamp_members(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
             .tooltip(tl!("Always use Pressure for Opacity. When off, Brush Preset controls pressure").to_owned())
             .show(ui);
         if let Some(on) = pressure.value().copied() {
-            let before = app.session.tools.brush.clone();
+            let before = (*app.session.tools.brush).clone();
             let mut after = before.clone();
             after.pressure_opacity = on;
             let key = pressure.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e));
@@ -275,7 +320,7 @@ fn stamp_members(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
 fn edit_brush(app: &mut PhotocraftApp, events: &EditEvents<f32>, set: impl Fn(&mut BrushSettings, f32)) {
     for event in events.iter() {
         let Some(value) = event.landed() else { continue };
-        let before = app.session.tools.brush.clone();
+        let before = (*app.session.tools.brush).clone();
         let mut after = before.clone();
         set(&mut after, *value);
         crate::brush_panel::commit_keyed(app, &before, &after, crate::history_keys::coalesce("brush", event));

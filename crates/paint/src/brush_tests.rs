@@ -118,7 +118,7 @@ fn hard_edge_is_sharp() {
 fn sampled_tip_is_scaled_and_oriented() {
     // Tip: left half painted.
     let tip = GrayTile::from_fn(16, 16, |x, _| if x < 8 { 1.0 } else { 0.0 });
-    let b = BrushSettings { tip: TipShape::Sampled(tip), ..brush() };
+    let b = BrushSettings { tip: TipShape::Sampled(tip).into(), ..brush() };
     let d = Dab::round(Point::new(50.0, 50.0), 20.0, 1.0);
     let r = raster(&b, &d);
     assert!(at(&r, 40, 50) > 0.99 && at(&r, 60, 50) < 0.01);
@@ -1351,7 +1351,7 @@ fn sampled_dabs_are_the_same_in_their_tight_box_with_rows_cut_to_the_tip() {
     // the pixels match scanning the whole square that fits any rotation, which is 0 elsewhere.
     let tip = GrayTile::from_fn(37, 23, |x, y| 0.05 + ((x * 7 + y * 13) % 11) as f32 / 11.0);
     let dual = DualBrush { enabled: true, tip: TipShape::Sampled(GrayTile::from_fn(15, 40, |x, _| 0.1 + (x % 3) as f32 / 3.0)), ..Default::default() };
-    let b = BrushSettings { tip: TipShape::Sampled(tip), dual_brush: dual, ..brush() };
+    let b = BrushSettings { tip: TipShape::Sampled(tip).into(), dual_brush: dual, ..brush() };
     let ctx = BrushContext::new(&b);
     let half_pi = std::f32::consts::FRAC_PI_2;
     for angle in [0.0, 0.3, -1.1, half_pi, half_pi + 1e-6, half_pi - 3e-7, 3.0, std::f32::consts::PI] {
@@ -1955,7 +1955,7 @@ fn general_loop_strokes_render_the_same_in_parallel_and_serially_at_every_depth(
     let tip = GrayTile::from_fn(16, 16, |x, y| if (x + y) % 3 == 0 { 1.0 } else { 0.4 });
     let mut textured = BrushSettings { size: 120.0, hardness: 0.3, ..brush() };
     textured.texture = Texture { enabled: true, pattern: Pattern::Tile(tip.clone()), each_tip: true, ..Default::default() };
-    let strokes = [BrushSettings { size: 120.0, tip: TipShape::Sampled(tip), color: [0.9, 0.2, 0.1, 1.0], ..brush() }, textured];
+    let strokes = [BrushSettings { size: 120.0, tip: TipShape::Sampled(tip).into(), color: [0.9, 0.2, 0.1, 1.0], ..brush() }, textured];
     let full = Rect::new(0, 0, 400, 200);
     let formats = [PixelFormat::RGBA8, PixelFormat::RGBA8.with_sample(SampleType::U16), PixelFormat::RGBA32F];
     struct Restore;

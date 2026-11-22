@@ -72,17 +72,14 @@ fn start(app: &mut PhotocraftApp, idx: usize, document: DocId, target: Target, o
     app.pattern_fill.opens += 1;
     let serial = app.pattern_fill.opens;
     let ctx = app.ctx().clone();
-    let swatches: Vec<PatternSwatch> = app.session.patterns.items.iter().map(|p| PatternSwatch::new(p.id.clone(), p.display_name())).collect();
-    // The painter outlives this call, so it holds the textures made now.
-    let tiles: Vec<(String, egui::TextureId)> =
-        app.session.patterns.items.iter().map(|p| (p.id.clone(), crate::panels::preset_browser::pattern_texture(&ctx, p))).collect();
-    let dialog = PatternFillDialog::new(options.clone(), swatches)
-        .thumbnails(move |cx, rect, swatch| {
-            if let Some((_, texture)) = tiles.iter().find(|(id, _)| *id == swatch.id) {
-                cx.picture(*texture, rect, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), 0.0);
-            }
-        })
-        .canvas(CanvasHost::primary(app, idx).canvas_id());
+    let swatches: Vec<PatternSwatch> = app
+        .session
+        .patterns
+        .items
+        .iter()
+        .map(|p| PatternSwatch::new(p.id.clone(), p.display_name()).with_picture(crate::panels::preset_browser::pattern_texture(&ctx, p)))
+        .collect();
+    let dialog = PatternFillDialog::new(options.clone(), swatches).canvas(CanvasHost::primary(app, idx).canvas_id());
     let id = app.framework.dialogs.open(dialog);
     app.pattern_fill.session = Some(Session { serial, document, target, opened: options, preview: None });
     id
