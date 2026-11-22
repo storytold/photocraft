@@ -5,7 +5,7 @@
 //! through real egui input on the real canvas; the assertions read the cursor the tool asked the
 //! tool host for.
 
-use craft::behavior::{Cursor, PaintedCursor};
+use craft::behavior::{Cursor, CursorIcon, PaintedCursor};
 use craft::keymap::Mods;
 use egui::Modifiers;
 use egui_kittest::Harness;
@@ -83,6 +83,8 @@ fn ctrl_alt_keeps_the_tip() {
     // Move tool, whose ⌥ cursor is the copy cursor (CI on Linux and Windows showed `System(Copy)`).
     if cfg!(target_os = "macos") {
         assert_eq!(chord, plain, "Ctrl+⌥: the tip outline as today");
+    } else {
+        assert_eq!(chord, Some(Cursor::System(CursorIcon::Copy)), "Ctrl+⌥ is ⌘⌥: the Move tool's copy cursor");
     }
 }
 
