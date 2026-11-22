@@ -154,7 +154,18 @@ fn merge_to_hdr_local_adaptation_reaches_the_reference_from_the_reference_radian
 fn a_strong_local_contrast_at_a_low_gamma_stays_finite() {
     // A bright pixel between dark ones with Detail 300 and Gamma 0.1 tones far past f32 before the
     // shadow and highlight curve; the result is still a colour, and the checked replay agrees.
-    let p = HdrToning { radius: 100.0, strength: 0.1, gamma: 0.1, detail: 300.0, saturation: 0.0, ..Default::default() };
+    let p = HdrToning {
+        radius: 100.0,
+        strength: 0.1,
+        gamma: 0.1,
+        exposure: 0.0,
+        detail: 300.0,
+        shadow: 0.0,
+        highlight: 0.0,
+        vibrance: 0.0,
+        saturation: 0.0,
+        curve: Vec::new(),
+    };
     let input = vec![[0.01, 0.01, 0.01, 1.0], [0.9, 0.9, 0.9, 1.0], [0.01, 0.01, 0.01, 1.0]];
     let mut px = input.clone();
     hdr_toning(&mut px, 3, 1, &p);
