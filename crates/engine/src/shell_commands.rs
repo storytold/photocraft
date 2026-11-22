@@ -140,6 +140,7 @@ pub const TOOLS: &[(&str, &str, Option<&str>)] = &[
     ("tools.select.blur", "Blur Tool", None),
     ("tools.select.sharpen", "Sharpen Tool", None),
     ("tools.select.smudge", "Smudge Tool", None),
+    ("tools.select.adjustmentBrush", "Adjustment Brush Tool", None),
     ("tools.select.dodge", "Dodge Tool", Some("O")),
     ("tools.select.burn", "Burn Tool", Some("O")),
     ("tools.select.sponge", "Sponge Tool", Some("O")),
