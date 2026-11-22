@@ -206,7 +206,7 @@ pub struct GradientSource {
     pub midpoints: Vec<f32>,
     /// Photoshop's Smoothness, 0..1.
     pub smoothness: f32,
-    /// `classic`, `perceptual`, `linear` or `smooth`.
+    /// `classic`, `perceptual`, `linear`, `smooth` or `stripes` (a Gradient Map only, #14688).
     pub method: String,
 }
 
