@@ -1,4 +1,8 @@
-use super::{PhotocraftApp, RichText, Tokens, Value, empty, json, theme, widgets};
+use craft::color_ui::ui::{InfoColor, InfoMeasure, InfoPanel, InfoReadings, SamplerReadout};
+use craft::ui::runtime::env::Label;
+
+use super::{PhotocraftApp, Value, json};
+use crate::canvas::document_display::CanvasHost;
 
 /// The active document's pixel under the pointer, if the pointer is over the image.
 pub(crate) fn hover_pixel(app: &PhotocraftApp) -> Option<(i32, i32)> {
@@ -11,7 +15,7 @@ pub(crate) fn hover_pixel(app: &PhotocraftApp) -> Option<(i32, i32)> {
 /// #11751), and cached per pixel, revision, size and zoom.
 pub(crate) fn pointer_sample(app: &mut PhotocraftApp, (x, y): (i32, i32)) -> Option<[f32; 4]> {
     let rev = app.session.active()?.revision;
-    let sample_size = app.ui.tool_options.eyedropper_size;
+    let sample_size = app.ui.tool_options.eyedropper.size.pixels();
     let zoom = app.current_zoom();
     let key = (x, y, rev, sample_size, zoom.to_bits());
     if let Some((k, v)) = app.info_sample
@@ -37,8 +41,9 @@ pub(crate) fn wh_readout(ur: &photocraft_engine::prefs::UnitsAndRulers, dpi: f64
 /// the pointer's and the selection's.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RulerRows {
-    /// "A:" and then "L:" (a plain ruler) or "L1:" and "L2:" (a protractor), with their values.
-    pub(crate) measure: Vec<(&'static str, String)>,
+    /// The angle and length (a plain ruler) or the angle and both arms' lengths (a protractor), as value strings;
+    /// the panel words their names.
+    pub(crate) measure: InfoMeasure,
     /// The start point (a plain ruler) or the second arm's end (a protractor), in document pixels.
     pub(crate) point: [f64; 2],
     /// End minus start, signed and y down, for a plain ruler. A protractor's is not measured, so
@@ -66,122 +71,98 @@ pub(crate) fn ruler_rows(app: &PhotocraftApp) -> Option<RulerRows> {
     };
     let angle = format!("{:.1}°", g("angle")?);
     match r.protractor {
-        None => Some(RulerRows { measure: vec![("A:", angle), ("L:", length(g("l1")?))], point: r.start, size: Some([g("w")?, g("h")?]) }),
-        Some(q) => Some(RulerRows { measure: vec![("A:", angle), ("L1:", length(g("l1")?)), ("L2:", length(g("l2")?))], point: q, size: None }),
+        None => Some(RulerRows { measure: InfoMeasure::line(angle, length(g("l1")?)), point: r.start, size: Some([g("w")?, g("h")?]) }),
+        Some(q) => Some(RulerRows { measure: InfoMeasure::protractor(angle, length(g("l1")?), length(g("l2")?)), point: q, size: None }),
     }
+}
+
+/// The 8-bit value of a channel read 0..1.
+fn byte(v: f32) -> u8 {
+    (v.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+/// What the Info panel shows now: the colour under the pointer (RGB and CMYK), its position, the selection's
+/// or pending crop frame's size (with the Ruler tool, a drawn ruler's point and size), the document size and the Color Sampler `samplers`. A guide being dragged
+/// (#5728) shows its position on its own axis only, even when the pointer is outside the canvas. Without a
+/// document the readings are empty, which the panel shows as its no-document notice.
+pub(crate) fn readings<'a>(app: &mut PhotocraftApp, samplers: &'a [(SamplerReadout, [Label; 2])]) -> InfoReadings<'a> {
+    let Some(st) = app.session.active() else { return InfoReadings::new() };
+    let (size, origin, dpi, idx) = (st.doc.size, st.doc.ruler_origin, f64::from(st.doc.resolution_dpi), app.session.active_index());
+    let cmyk_space = photocraft_compose::cmyk_space(&st.doc);
+    let selection = st.doc.selection.as_ref().map(photocraft_compose::bounds::content_bounds).map(|r| [r.width() as f64, r.height() as f64]);
+    // Positions and sizes in the ruler unit (Preferences › Units & Rulers).
+    let units = app.session.prefs().units_and_rulers.clone();
+    let extent = [f64::from(size.width), f64::from(size.height)];
+    // With the Crop tool, W and H are the pending frame's, as in Photoshop (#3145).
+    // With a drawn ruler and the Ruler tool, X/Y are its point and W/H its size (#11991).
+    let ruler = ruler_rows(app);
+    let wh = ruler.as_ref().and_then(|r| r.size).or(crate::crop_ui::info_size(app)).or(selection);
+    let guide = idx.and_then(|idx| craft::ui::canvas_controls::reading::running(app.ctx(), CanvasHost::primary(app, idx).canvas_id()));
+    let pointer = hover_pixel(app);
+    let rgba = pointer.and_then(|p| pointer_sample(app, p));
+    let color = rgba.map(|c| {
+        // Colour-managed CMYK in percent like Photoshop's readout, through the same conversion as the Color
+        // Picker (#8101) and the Color Sampler readout (`sampler_cmds::device_cmyk`).
+        let cmyk = photocraft_color::convert::with_cmyk_space(cmyk_space.as_ref(), || photocraft_engine::sampler_cmds::device_cmyk(c[0], c[1], c[2]));
+        InfoColor::from_parts([byte(c[0]), byte(c[1]), byte(c[2])], cmyk.map(|v| v.clamp(0, 100) as u8))
+    });
+    // Measured from the rulers' zero point (#2955).
+    let at = |axis: usize, px: f64| Label::from(units.format(px - origin[axis], dpi, extent[axis]));
+    let position = match (&ruler, guide) {
+        (Some(r), _) => Some([at(0, r.point[0]), at(1, r.point[1])]),
+        (None, Some(g)) if g.along == craft::behavior::Axis::Y => Some([at(0, g.position), Label::Empty]),
+        (None, Some(g)) => Some([Label::Empty, at(1, g.position)]),
+        (None, None) => pointer.map(|p| [at(0, f64::from(p.0)), at(1, f64::from(p.1))]),
+    };
+    let extent_labels = wh.map(|s| wh_readout(&units, dpi, extent, s).map(Label::from));
+    InfoReadings::new()
+        .color(color)
+        .position(position)
+        .extent(extent_labels)
+        .measure(ruler.as_ref().map(|r| r.measure.clone()))
+        .document(Some([size.width, size.height]))
+        .samplers(samplers)
+}
+
+/// The first `N` entries of the JSON array `v` as bytes; `None` when one is missing or not a byte.
+fn channels<const N: usize>(v: &Value) -> Option<[u8; N]> {
+    let list = v.as_array()?;
+    let mut out = [0u8; N];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = u8::try_from(list.get(i)?.as_i64()?).ok()?;
+    }
+    Some(out)
+}
+
+/// The Color Sampler points (#1046) as the panel shows them: each with its position in the current ruler
+/// unit and the same RGB/CMYK readout as the pointer (one composite pixel each). A point with no colour
+/// to read is left out.
+pub(crate) fn sampler_rows(app: &mut PhotocraftApp) -> Vec<(SamplerReadout, [Label; 2])> {
+    let readouts = sampler_readouts(app);
+    let Some(st) = app.session.active() else { return Vec::new() };
+    let (size, dpi) = (st.doc.size, f64::from(st.doc.resolution_dpi));
+    let units = &app.session.prefs().units_and_rulers;
+    readouts
+        .iter()
+        .filter_map(|s| {
+            let at = s["position"]
+                .as_array()
+                .map_or((0.0, 0.0), |a| (a.first().and_then(Value::as_f64).unwrap_or(0.0), a.get(1).and_then(Value::as_f64).unwrap_or(0.0)));
+            let (rgb, cmyk) = (channels::<3>(&s["rgb"])?, channels::<4>(&s["cmyk"])?);
+            let number = usize::try_from(s["number"].as_i64().unwrap_or(0)).unwrap_or(0);
+            // The point sits on its pixel's centre (#11725); the row names the pixel, as the pointer row does.
+            let (x, y) = (at.0.floor(), at.1.floor());
+            let labels = [Label::from(units.format(x, dpi, f64::from(size.width))), Label::from(units.format(y, dpi, f64::from(size.height)))];
+            Some((SamplerReadout::from_values(number, [x as i64, y as i64], rgb, cmyk), labels))
+        })
+        .collect()
 }
 
 /// Photoshop's Info panel: colour under the pointer (RGB and CMYK), position, selection size.
 pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    let Some(st) = app.session.active() else {
-        empty(ui, tl!("No document"));
-        return;
-    };
-    let (size, origin) = (st.doc.size, st.doc.ruler_origin);
-    let cmyk_space = photocraft_compose::cmyk_space(&st.doc);
-    // Positions and sizes in the ruler unit (Preferences › Units & Rulers).
-    let units = app.session.prefs().units_and_rulers.clone();
-    let dpi = st.doc.resolution_dpi as f64;
-    let fx = move |px: f64| units.format(px, dpi, size.width as f64);
-    let units_y = app.session.prefs().units_and_rulers.clone();
-    let units_wh = app.session.prefs().units_and_rulers.clone();
-    let fy = move |px: f64| units_y.format(px, dpi, size.height as f64);
-    let sel = st.doc.selection.as_ref().map(photocraft_compose::bounds::content_bounds).map(|r| [r.width() as f64, r.height() as f64]);
-    // With the Crop tool, W and H are the pending frame's, as in Photoshop (#3145).
-    let crop = crate::crop_ui::info_size(app);
-    let ruler = ruler_rows(app);
-    let wh = ruler.as_ref().and_then(|r| r.size).or(crop).or(sel);
-    let pos = hover_pixel(app);
-    // While a guide is dragged (#5728), the Info panel shows its position in one axis only, even
-    // when the pointer is outside the canvas (ruler drags do not update `hover_doc` there).
-    let (guide_x, guide_y) = match app.guide_drag {
-        Some(d) if d.vertical => (Some(d.pos), None),
-        Some(d) => (None, Some(d.pos)),
-        None => (None, None),
-    };
-    let rgba = pos.and_then(|p| pointer_sample(app, p));
-    let mono = theme::mono(11.5);
-    let row = |ui: &mut egui::Ui, k: &str, v: String| {
-        ui.horizontal(|ui| {
-            ui.add_sized([18.0, 16.0], egui::Label::new(RichText::new(k).color(t.text_dim).size(11.5)));
-            ui.label(RichText::new(v).font(mono.clone()).color(t.text));
-        });
-    };
-    ui.columns(2, |cols| {
-        let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i32;
-        let dash = || "—".to_string();
-        row(&mut cols[0], "R:", rgba.map_or_else(dash, |c| q(c[0]).to_string()));
-        row(&mut cols[0], "G:", rgba.map_or_else(dash, |c| q(c[1]).to_string()));
-        row(&mut cols[0], "B:", rgba.map_or_else(dash, |c| q(c[2]).to_string()));
-        // Colour-managed CMYK in percent like Photoshop's readout, through the same conversion as
-        // the Color Picker (#8101) and the Color Sampler readout (`sampler_cmds::device_cmyk`).
-        let cmyk =
-            rgba.map(|c| photocraft_color::convert::with_cmyk_space(cmyk_space.as_ref(), || photocraft_engine::sampler_cmds::device_cmyk(c[0], c[1], c[2])));
-        for (i, k) in ["C:", "M:", "Y:", "K:"].iter().enumerate() {
-            row(&mut cols[1], k, cmyk.map_or_else(dash, |c| format!("{}%", c[i])));
-        }
-    });
-    widgets::hairline(ui);
-    // The Ruler tool's angle and length(s) (#11991).
-    if let Some(r) = &ruler {
-        ui.columns(2, |cols| {
-            for (i, (k, v)) in r.measure.iter().enumerate() {
-                row(&mut cols[usize::from(i > 0)], k, v.clone());
-            }
-        });
-        widgets::hairline(ui);
-    }
-    // With a ruler, X/Y are its point instead of the pointer's (#11991).
-    let (guide_x, guide_y) = match &ruler {
-        Some(r) => (Some(r.point[0]), Some(r.point[1])),
-        None => (guide_x, guide_y),
-    };
-    ui.columns(2, |cols| {
-        let dash = || "—".to_string();
-        // Measured from the rulers' zero point (#2955).
-        row(&mut cols[0], "X:", guide_x.map(|p| fx(p - origin[0])).or_else(|| pos.map(|p| fx(p.0 as f64 - origin[0]))).unwrap_or_else(dash));
-        row(&mut cols[0], "Y:", guide_y.map(|p| fy(p - origin[1])).or_else(|| pos.map(|p| fy(p.1 as f64 - origin[1]))).unwrap_or_else(dash));
-        let [w, h] = wh.map_or_else(|| [dash(), dash()], |s| wh_readout(&units_wh, dpi, [size.width as f64, size.height as f64], s));
-        row(&mut cols[1], "W:", w);
-        row(&mut cols[1], "H:", h);
-    });
-    widgets::hairline(ui);
-    ui.label(
-        RichText::new(crate::i18n::fmt(tl!("Doc: {w} × {h} px"), &[("w", &size.width.to_string()), ("h", &size.height.to_string())]))
-            .color(t.text_dim)
-            .size(11.5),
-    );
-    // Color Sampler points (#1046): each under its number, with its position in the current ruler
-    // unit and the same RGB/CMYK readout as the pointer (one composite pixel each).
-    let samplers = sampler_readouts(app);
-    if !samplers.is_empty() {
-        widgets::hairline(ui);
-        let cell = |ui: &mut egui::Ui, s: String| {
-            ui.label(RichText::new(s).font(mono.clone()).color(t.text));
-        };
-        for s in samplers.iter() {
-            let n = s["number"].as_i64().unwrap_or(0);
-            let at = s["position"]
-                .as_array()
-                .map_or((0.0, 0.0), |a| (a.first().and_then(Value::as_f64).unwrap_or(0.0), a.get(1).and_then(Value::as_f64).unwrap_or(0.0)));
-            let num = |v: &Value, i: usize| v.get(i).and_then(Value::as_i64).map_or_else(|| "—".to_string(), |n| n.to_string());
-            let (rgb, cmyk) = (&s["rgb"], &s["cmyk"]);
-            ui.horizontal(|ui| {
-                ui.add_sized([24.0, 16.0], egui::Label::new(RichText::new(format!("#{n}")).color(t.text_dim).size(11.5)));
-                // The point sits on its pixel's centre (#11725); the row names the pixel, as the pointer row does.
-                cell(ui, format!("X: {}  Y: {}", fx(at.0.floor()), fy(at.1.floor())));
-            });
-            ui.horizontal(|ui| {
-                ui.add_sized([24.0, 16.0], egui::Label::new(RichText::new("").size(11.5)));
-                cell(ui, format!("R:{} G:{} B:{}", num(rgb, 0), num(rgb, 1), num(rgb, 2)));
-            });
-            ui.horizontal(|ui| {
-                ui.add_sized([24.0, 16.0], egui::Label::new(RichText::new("").size(11.5)));
-                cell(ui, format!("C:{}% M:{}% Y:{}% K:{}%", num(cmyk, 0), num(cmyk, 1), num(cmyk, 2), num(cmyk, 3)));
-            });
-        }
-    }
+    let samplers = sampler_rows(app);
+    let readings = readings(app, &samplers);
+    InfoPanel::new(tl!("Info"), &readings).show(ui);
 }
 
 /// The Info panel's Color Sampler readouts and the (document, revision, Sample Size) they were
@@ -194,7 +175,7 @@ pub(crate) type SamplerReadouts = ((photocraft_doc::DocId, u64, u32), std::sync:
 /// They average over the Sample Size shared with the Eyedropper (#11732), which is part of the
 /// key, so changing it re-reads every sampler at once.
 pub(crate) fn sampler_readouts(app: &mut PhotocraftApp) -> std::sync::Arc<Vec<Value>> {
-    let size = app.ui.tool_options.eyedropper_size;
+    let size = app.ui.tool_options.eyedropper.size.pixels();
     let Some(key) = app.session.active().map(|s| (s.doc.id, s.revision, size)) else { return std::sync::Arc::default() };
     if let Some((k, v)) = &app.info_samplers
         && *k == key
@@ -205,6 +186,30 @@ pub(crate) fn sampler_readouts(app: &mut PhotocraftApp) -> std::sync::Arc<Vec<Va
     let v = std::sync::Arc::new(list.as_ref().and_then(|v| v["samplers"].as_array()).cloned().unwrap_or_default());
     app.info_samplers = Some((key, v.clone()));
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Composited once per revision: repeated frames share the readouts; adding a sampler or an
+    /// edit recomputes them (#4528).
+    #[test]
+    fn sampler_readouts_are_reused_until_the_document_changes() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 32, "background": "white"})).unwrap();
+        app.run("view.colorSamplers.add", json!({"x": 4, "y": 4})).unwrap();
+        let a = sampler_readouts(&mut app);
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0]["rgb"], json!([255, 255, 255]));
+        assert!(std::sync::Arc::ptr_eq(&a, &sampler_readouts(&mut app)), "the next frame reuses them");
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        let b = sampler_readouts(&mut app);
+        assert!(!std::sync::Arc::ptr_eq(&a, &b));
+        assert_eq!(b[0]["rgb"], json!([255, 0, 0]), "an edit shows");
+        app.run("view.colorSamplers.add", json!({"x": 8, "y": 8})).unwrap();
+        assert_eq!(sampler_readouts(&mut app).len(), 2, "so does a new sampler");
+    }
 }
 
 #[cfg(test)]

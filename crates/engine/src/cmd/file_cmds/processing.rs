@@ -1,6 +1,6 @@
 use std::cell::Cell;
 
-use super::batch_run::{BatchInput, batch_inputs_tree, process_document_copies, process_tree};
+use super::batch_run::{BatchInput, TreeNaming, batch_inputs_tree, process_document_copies, process_tree};
 use super::open::import_opened;
 use super::paths::{file_name, list_images, read_file, stem, untitled_name};
 use super::save::SaveOpts;
@@ -18,6 +18,9 @@ mod image_processor_formats_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "image_processor_tests.rs"]
 mod image_processor_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "image_processor_unique_names_tests.rs"]
+mod image_processor_unique_names_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "load_stack_name_tests.rs"]
@@ -143,7 +146,7 @@ pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
         require_opened_source(&opened)?;
         result
     } else {
-        let documents = if source == "current" { vec![s.active().ok_or(EngineError::NoDocument)?] } else { s.documents().iter().collect() };
+        let documents = if source == "current" { vec![s.active().ok_or(EngineError::NoDocument)?] } else { s.documents().iter().map(|st| &**st).collect() };
         if documents.is_empty() {
             return Err(EngineError::NoDocument);
         }
@@ -177,7 +180,7 @@ fn process_image_processor_folder(
     opened: &Cell<bool>,
     process: &dyn Fn(&mut Session, &str) -> Result<bool>,
 ) -> Value {
-    process_tree(s, inputs, output, format, save, "", &|scratch, out| {
+    process_tree(s, inputs, output, format, save, TreeNaming::Unique, &|scratch, out| {
         opened.set(true);
         process(scratch, out)
     })
@@ -265,7 +268,7 @@ fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -
         "folder" => ProcessorInputs::Folder(image_processor_folder_inputs(p, output)?),
         "current" => ProcessorInputs::Documents(vec![s.active().ok_or(EngineError::NoDocument)?]),
         _ if s.documents().is_empty() => return Err(EngineError::NoDocument),
-        _ => ProcessorInputs::Documents(s.documents().iter().collect()),
+        _ => ProcessorInputs::Documents(s.documents().iter().map(|st| &**st).collect()),
     };
     run_processor_formats(s, &inputs, output, formats)
 }
@@ -353,9 +356,9 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
         // "Create Smart Object after Loading Layers": the layers go inside one smart object, ready
         // for Layer › Smart Objects › Stack Mode. Like Photoshop, they sit at the top level of the
         // contents, with no wrapper group.
-        let layers = std::mem::take(&mut stack.layers);
+        let layers = std::mem::take(&mut *stack.layers);
         let smart = crate::smart_cmds::layers_to_smart(&stack, &smart_name, layers)?;
-        stack.layers = vec![smart];
+        stack.layers = vec![smart].into();
     }
     let i = s.add_document(stack, None);
     if align {
@@ -363,14 +366,14 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
         s.execute("edit.autoAlignLayers", json!({"projection": "auto"}))?;
         if smart {
             s.edit("Convert to Smart Object", |doc, active| {
-                let layers = std::mem::take(&mut doc.layers);
+                let layers = std::mem::take(&mut *doc.layers);
                 let smart = crate::smart_cmds::layers_to_smart(doc, &smart_name, layers)?;
                 *active = Some(smart.id);
-                doc.layers = vec![smart];
+                doc.layers = vec![smart].into();
                 Ok(())
             })?;
             if let Some(st) = s.active_mut() {
-                st.selected_layers = st.active_layer.into_iter().collect();
+                *st.selection_mut() = st.active_layer.into_iter().collect();
             }
         }
     }
