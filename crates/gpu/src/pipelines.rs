@@ -69,13 +69,7 @@ impl Pipelines {
     /// The pipeline drawing `kernel` into `format`, built now if no draw needed it before. A
     /// pipeline the device can't build is an [`Unsupported`] for every draw that needs it, so
     /// that refresh uses the CPU compositor.
-    pub(crate) fn get(
-        &self,
-        device: &wgpu::Device,
-        kernel: Kernel,
-        format: wgpu::TextureFormat,
-        emission: bool,
-    ) -> Result<&wgpu::RenderPipeline, Unsupported> {
+    pub(crate) fn get(&self, device: &wgpu::Device, kernel: Kernel, format: wgpu::TextureFormat, emission: bool) -> Result<&wgpu::RenderPipeline, Unsupported> {
         let missing = || Unsupported(format!("the compositor has no {kernel:?} pipeline for {format:?}"));
         let k = self.kernels.iter().find(|k| k.kernel == kernel).ok_or_else(missing)?;
         let i = k.formats.iter().position(|&f| f == format).ok_or_else(missing)?;

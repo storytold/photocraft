@@ -415,14 +415,7 @@ impl Compositor {
     }
 
     /// Per-frame resources of `plan`: the tile area of each pass's surfaces, its LUT and pattern.
-    fn frame_res(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        canvas: Rect,
-        plan: &Plan<'_>,
-        emission: bool,
-    ) -> Result<FrameRes, Unsupported> {
+    fn frame_res(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, canvas: Rect, plan: &Plan<'_>, emission: bool) -> Result<FrameRes, Unsupported> {
         let grid = tile_grid(canvas);
         let area = |s: &Surface| s.tile_bounds().intersect(&grid);
         let areas = plan
