@@ -7,8 +7,8 @@ struct Params {
     flags: u32,
     // The document's transfer curve: 0 for sRGB's, else a power-law gamma.
     encoding: f32,
-    // Unused (formerly the white-balance gains).
-    gains: vec4<f32>,
+    // Shadows › Tint (x), −1 … 1.
+    calibration: vec4<f32>,
     // Linear RGB to linear ProPhoto (rows) and back.
     to_prophoto: array<vec4<f32>, 3>,
     from_prophoto: array<vec4<f32>, 3>,
@@ -22,6 +22,9 @@ struct Params {
     grain: vec4<f32>,
     // The two octaves' seeds as (low, high) words.
     seeds: vec4<u32>,
+    // Calibration: the red, green and blue primaries' Hue, then their Saturation (−100 … 100).
+    calibration_hue: vec4<f32>,
+    calibration_sat: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> P: Params;
@@ -54,6 +57,8 @@ const BALANCE_1: u32 = 20u;
 const BALANCE_1_FIX: u32 = 21u;
 const BALANCE_2: u32 = 22u;
 const BALANCE_2_FIX: u32 = 23u;
+const CALIBRATION_PRIMARIES: u32 = 24u;
+const SHADOW_TINT: u32 = 25u;
 
 const WHITES_FIX_ROW: i32 = 9;
 const MIXER_ROW: i32 = 24;
@@ -271,6 +276,72 @@ fn balance_step(row: i32, fix: bool, q: vec3<f32>) -> vec3<f32> {
     return base;
 }
 
+// `calibration_weights`: triangular weights of the primaries around 0°, 120° and 240°.
+fn calibration_weights(hue: f32) -> vec3<f32> {
+    let h = rem_euclid(hue, 360.0);
+    var w = vec3(0.0);
+    let centres = vec3(0.0, 120.0, 240.0);
+    for (var i = 0; i < 3; i++) {
+        let d = min(abs(h - centres[i]), 360.0 - abs(h - centres[i]));
+        w[i] = max(1.0 - d / 120.0, 0.0);
+    }
+    let sum = w.x + w.y + w.z;
+    if sum > 1e-6 {
+        return w / sum;
+    }
+    return vec3(1.0, 0.0, 0.0);
+}
+
+// `calibrate`: the primaries' Hue and Saturation on one linear-light pixel, luminance kept.
+fn calibrate(c: vec3<f32>) -> vec3<f32> {
+    let hsv = rgb_to_hsv(max(c, vec3(0.0)));
+    if hsv.y <= 1e-5 || hsv.z <= 1e-6 {
+        return c;
+    }
+    let w = calibration_weights(hsv.x);
+    var dh = 0.0;
+    var ds = 0.0;
+    for (var i = 0; i < 3; i++) {
+        dh += w[i] * P.calibration_hue[i];
+        ds += w[i] * P.calibration_sat[i];
+    }
+    let out = hsv_to_rgb(hsv.x + dh / 100.0 * 30.0, clamp(hsv.y * (1.0 + ds / 100.0), 0.0, 1.0), hsv.z);
+    let l0 = luma(c);
+    let l1 = luma(out);
+    if l1 > 1e-6 {
+        return out * (l0 / l1);
+    }
+    return out;
+}
+
+// `shadow_tint`: Shadows › Tint (`tint` −1 … 1) on one linear-light pixel, luminance kept.
+fn shadow_tint(c: vec3<f32>, tint: f32) -> vec3<f32> {
+    let l = max(luma(c), 0.0);
+    // powi on the CPU: products, since WGSL's pow is undefined at a zero base.
+    let a = 1.0 - min(sqrt(l / 0.18), 1.0);
+    let b = 1.0 - min(l, 1.0);
+    let weight = a * a * 0.5 + b * b * b * b * 0.5;
+    let k = tint * 0.12 * weight * (l + 0.02);
+    let o = max(vec3(c.x + k, c.y - k, c.z + k), vec3(0.0));
+    let l2 = luma(o);
+    if l2 > 1e-6 {
+        return o * (l / l2);
+    }
+    return o;
+}
+
+// `calibration_pixel`: Calibration in linear light (the sRGB curve), as develop's step 1b.
+fn calibration_pixel(q: vec3<f32>) -> vec3<f32> {
+    var o = vec3(srgb_to_linear(q.x), srgb_to_linear(q.y), srgb_to_linear(q.z));
+    if on(CALIBRATION_PRIMARIES) {
+        o = calibrate(o);
+    }
+    if on(SHADOW_TINT) {
+        o = shadow_tint(o, P.calibration.x);
+    }
+    return vec3(linear_to_srgb(max(o.x, 0.0)), linear_to_srgb(max(o.y, 0.0)), linear_to_srgb(max(o.z, 0.0)));
+}
+
 // `whites_blacks::row_pixel`: row 5 Whites, 6 Blacks, on each channel or the luminance.
 fn white_black_pixel(row: i32, channels: bool, q: vec3<f32>) -> vec3<f32> {
     if channels {
@@ -460,6 +531,10 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     }
     if on(CONTRAST) {
         c = tone_pixel(8, c);
+    }
+    // 1b. Calibration.
+    if on(CALIBRATION_PRIMARIES) || on(SHADOW_TINT) {
+        c = calibration_pixel(c);
     }
     // 3b. Whites and Blacks.
     if on(WHITES) {

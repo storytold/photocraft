@@ -79,8 +79,8 @@ mod white_balance;
 mod whites_blacks;
 
 pub use per_pixel::{
-    CURVE_LUT, FIX_GRID, Grade, Grain, MIXER_GRID, MIXER_KINDS, PRESENCE_GRID, PRESENCE_KINDS, PerPixel, TONE_STEPS, Vignette, VignetteStyle, WhitesBlacks,
-    per_pixel, spatial, white_black_points,
+    CURVE_LUT, Calibration, FIX_GRID, Grade, Grain, MIXER_GRID, MIXER_KINDS, PRESENCE_GRID, PRESENCE_KINDS, PerPixel, TONE_STEPS, Vignette, VignetteStyle,
+    WhitesBlacks, per_pixel, spatial, white_black_points,
 };
 pub use white_balance::BalanceStep;
 pub use whites_blacks::{RowOn, TonePoints, Tones};
@@ -232,7 +232,7 @@ pub fn calibration_weights(hue: f32) -> [f32; 3] {
 /// Hue of the primaries it is made of (±100 is ±30°, positive towards the next primary) and its
 /// saturation scales by their weighted Saturation (−100 greys it); the luminance is kept, so
 /// neutrals are untouched.
-fn calibrate(c: [f32; 3], hue: [f32; 3], sat: [f32; 3]) -> [f32; 3] {
+pub(crate) fn calibrate(c: [f32; 3], hue: [f32; 3], sat: [f32; 3]) -> [f32; 3] {
     let [h, s, v] = rgb_to_hsv(c.map(|x| x.max(0.0)));
     if s <= 1e-5 || v <= 1e-6 {
         return c;
@@ -250,9 +250,20 @@ fn calibrate(c: [f32; 3], hue: [f32; 3], sat: [f32; 3]) -> [f32; 3] {
     if l1 > 1e-6 { out.map(|x| x * l0 / l1) } else { out }
 }
 
+/// The Calibration panel on one straight pixel (sRGB-encoded): the primaries when `primaries`,
+/// then Shadows › Tint (`tint` −1 … 1), in linear light.
+pub(crate) fn calibration_pixel(q: [f32; 4], p: &CameraRaw, primaries: bool, tint: f32) -> [f32; 4] {
+    let c = [srgb_to_linear(q[0]), srgb_to_linear(q[1]), srgb_to_linear(q[2])];
+    let mut o = if primaries { calibrate(c, p.calibration_hue, p.calibration_sat) } else { c };
+    if tint != 0.0 {
+        o = shadow_tint(o, tint);
+    }
+    [linear_to_srgb(o[0].max(0.0)), linear_to_srgb(o[1].max(0.0)), linear_to_srgb(o[2].max(0.0)), q[3]]
+}
+
 /// Shadows › Tint on one linear-light pixel: `tint` −1 (green) … 1 (magenta), weighted by how
 /// dark the pixel is; the luminance is kept.
-fn shadow_tint(c: [f32; 3], tint: f32) -> [f32; 3] {
+pub(crate) fn shadow_tint(c: [f32; 3], tint: f32) -> [f32; 3] {
     let l = luma(c).max(0.0);
     // Linear 0.18 is middle grey: full strength below it, fading out towards white.
     let weight = (1.0 - (l / 0.18).sqrt().min(1.0)).powi(2) * 0.5 + (1.0 - l.min(1.0)).powi(4) * 0.5;
@@ -582,14 +593,7 @@ pub fn try_develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, input
         let tint = p.shadow_tint.clamp(-100.0, 100.0) / 100.0;
         par_rows(px, w, 1, |_, row| {
             for q in row.iter_mut() {
-                let c = [srgb_to_linear(q[0]), srgb_to_linear(q[1]), srgb_to_linear(q[2])];
-                let mut o = if primaries { calibrate(c, p.calibration_hue, p.calibration_sat) } else { c };
-                if tint != 0.0 {
-                    o = shadow_tint(o, tint);
-                }
-                for k in 0..3 {
-                    q[k] = linear_to_srgb(o[k].max(0.0));
-                }
+                *q = calibration_pixel(*q, p, primaries, tint);
             }
         });
     }
@@ -1039,7 +1043,6 @@ mod tests {
     }
 
     /// [`super::white_black_points`] with the default inputs.
-    #[allow(dead_code)]
     fn white_black_points(px: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw) -> Option<TonePoints> {
         super::white_black_points(px, w, h, p, &DevelopInputs::default())
     }
@@ -1332,16 +1335,22 @@ mod tests {
         assert!(v[0][0] < 0.35 && (v[(h / 2) * w + w / 2][0] - 0.5).abs() < 0.01, "{:?}", v[0]);
     }
 
+    /// The per-pixel stages (the dialog's GPU preview) run Calibration: they carry its settings,
+    /// and Whites up's points are measured after it, as develop measures them.
     #[test]
-    fn calibration_keeps_the_develop_off_the_per_pixel_gpu_stages() {
-        // The per-pixel stages (the Camera Raw dialog's GPU preview) don't run Calibration, so
-        // settings with it must fall back to the CPU develop instead of previewing without it.
+    fn calibration_goes_with_the_per_pixel_stages() {
         for p in [cr! { shadow_tint: 40.0 }, cr! { calibration_hue: [0.0, 0.0, 30.0], whites: 20.0 }, cr! { calibration_sat: [-50.0, 0.0, 0.0], exposure: 0.5 }]
         {
             assert!(!spatial(&p));
-            assert!(per_pixel(&p, 2, 2, false, Some([[-8.0, -2.0, 0.0, -3.0]; 2])).is_none(), "{p:?}");
+            let stages = per_pixel(&p, 2, 2, false, Some([[-8.0, -2.0, 0.0, -3.0]; 2])).unwrap_or_else(|| panic!("{p:?}"));
+            assert!(stages.calibration.is_some(), "{p:?}");
         }
-        assert!(per_pixel(&cr! { exposure: 0.5 }, 2, 2, false, None).is_some());
+        assert!(per_pixel(&cr! { exposure: 0.5 }, 2, 2, false, None).is_some_and(|s| s.calibration.is_none()));
+        // A saturated image: the points differ with and without the Calibration it develops with.
+        let px: Vec<[f32; 4]> = (0..64).map(|i| [0.9, 0.2 + i as f32 / 100.0, 0.1, 1.0]).collect();
+        let plain = white_black_points(&px, 8, 8, &cr! { whites: 30.0 });
+        let calibrated = white_black_points(&px, 8, 8, &cr! { whites: 30.0, calibration_sat: [-100.0, -100.0, -100.0] });
+        assert_ne!(plain, calibrated);
     }
 
     #[test]

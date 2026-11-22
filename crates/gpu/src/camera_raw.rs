@@ -21,8 +21,8 @@ use crate::Unsupported;
 pub const CAMERA_RAW_SHADER: &str = include_str!("camera_raw.wgsl");
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
-/// `Params` in the shader: 18 rows of 16 bytes.
-const PARAMS_SIZE: u64 = 18 * 16;
+/// `Params` in the shader: 20 rows of 16 bytes.
+const PARAMS_SIZE: u64 = 20 * 16;
 /// Rows of the table texture: parametric, master, red, green, blue curves; Whites, Blacks;
 /// Exposure, Contrast; then from [`WHITES_FIX_ROW`] Whites down's correction grid, from
 /// [`MIXER_ROW`] the Color Mixer tables, from [`PRESENCE_ROW`] Saturation's and Vibrance's, and
@@ -380,6 +380,9 @@ fn flags(s: &PerPixel) -> u32 {
         s.white_balance.first().is_some_and(fix_fits),
         s.white_balance.get(1).is_some(),
         s.white_balance.get(1).is_some_and(fix_fits),
+        // 24, 25: Calibration's primaries and Shadows › Tint.
+        s.calibration.is_some_and(|c| c.primaries.is_some()),
+        s.calibration.is_some_and(|c| c.tint != 0.0),
     ];
     on.iter().enumerate().fold(0, |f, (bit, on)| if *on { f | 1 << bit } else { f })
 }
@@ -397,8 +400,8 @@ fn params(size: [u32; 2], s: &PerPixel) -> Vec<u8> {
     let mut out: Vec<u8> = Vec::with_capacity(PARAMS_SIZE as usize);
     out.extend([size[0], size[1], flags(s)].iter().flat_map(|v| v.to_le_bytes()).chain(s.encoding.to_le_bytes()));
     let mut f = |v: [f32; 4]| out.extend(v.iter().flat_map(|x| x.to_le_bytes()));
-    // Formerly the white-balance gains; kept so the layout stays.
-    f([1.0, 1.0, 1.0, 0.0]);
+    // Shadows › Tint (formerly the white-balance gains' slot).
+    f([s.calibration.map_or(0.0, |c| c.tint), 0.0, 0.0, 0.0]);
     for m in [s.to_prophoto, s.from_prophoto] {
         for r in m {
             f([r[0], r[1], r[2], 0.0]);
@@ -422,6 +425,10 @@ fn params(size: [u32; 2], s: &PerPixel) -> Vec<u8> {
     let seed = grain.map_or(0, |gr| gr.seed);
     let fine = seed.wrapping_add(7);
     out.extend([seed as u32, (seed >> 32) as u32, fine as u32, (fine >> 32) as u32].iter().flat_map(|v| v.to_le_bytes()));
+    let (hue, sat) = s.calibration.and_then(|c| c.primaries).unwrap_or(([0.0; 3], [0.0; 3]));
+    for v in [hue, sat] {
+        out.extend([v[0], v[1], v[2], 0.0].iter().flat_map(|x| x.to_le_bytes()));
+    }
     out
 }
 

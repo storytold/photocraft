@@ -160,6 +160,8 @@ pub struct PerPixel {
     pub exposure: Option<[f32; TONE_STEPS]>,
     /// Contrast (after Exposure): a curve like Exposure's.
     pub contrast: Option<[f32; TONE_STEPS]>,
+    /// 1b. The Calibration panel (after Contrast), in linear sRGB-curve light.
+    pub calibration: Option<Calibration>,
     /// The document's linear RGB to linear ProPhoto (identity for ProPhoto documents).
     pub to_prophoto: [[f32; 3]; 3],
     /// Linear ProPhoto back to the document's linear RGB.
@@ -220,10 +222,13 @@ pub fn white_black_points(px: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw, in
     };
     let tones_c = if p.contrast != 0.0 { super::tone_points(px, w, h, enc, before) } else { [0.0; 4] };
     let con = (p.contrast != 0.0).then(|| contrast::adaptive_row(p.contrast, Some(tones_c)));
+    // Whites up reads the tones after Calibration too, as develop measures them.
+    let cal = Calibration::of(p);
     let tones_w = if p.whites > 0.0 {
         super::tone_points(px, w, h, enc, |q| {
             let q = before(q);
-            con.as_ref().map_or(q, |row| exposure::pixel(q, row, enc, m.as_ref()))
+            let q = con.as_ref().map_or(q, |row| exposure::pixel(q, row, enc, m.as_ref()));
+            cal.map_or(q, |c| super::calibration_pixel(q, p, c.primaries.is_some(), c.tint))
         })
     } else {
         [0.0; 4]
@@ -231,13 +236,36 @@ pub fn white_black_points(px: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw, in
     Some([tones_c, tones_w])
 }
 
+/// The Calibration panel's settings as the per-pixel pass reads them: the primaries' Hue and
+/// Saturation (−100 … 100; `None` when all are 0) and Shadows › Tint (−1 … 1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Calibration {
+    pub primaries: Option<([f32; 3], [f32; 3])>,
+    pub tint: f32,
+}
+
+impl Calibration {
+    /// `p`'s Calibration panel, `None` at rest.
+    fn of(p: &CameraRaw) -> Option<Self> {
+        if calibration_neutral(p) {
+            return None;
+        }
+        let primaries = p
+            .calibration_hue
+            .iter()
+            .chain(&p.calibration_sat)
+            .any(|v| *v != 0.0)
+            .then(|| (p.calibration_hue.map(|v| v.clamp(-100.0, 100.0)), p.calibration_sat.map(|v| v.clamp(-100.0, 100.0))));
+        Some(Calibration { primaries, tint: p.shadow_tint.clamp(-100.0, 100.0) / 100.0 })
+    }
+}
+
 /// Develop's stages for settings without spatial stages, on a `w × h` image; `points` are the
-/// image's [`white_black_points`]. `None` when `p` needs a spatial stage or Calibration (these
-/// stages don't run it), Contrast or a raised Whites has no `points`, or a measured colour
-/// correction (Whites down, Temperature, Tint) would read a document outside sRGB's primaries. The points themselves
-/// leave Calibration out, so a caller may cache them across Calibration changes.
+/// image's [`white_black_points`]. `None` when `p` needs a spatial stage, Contrast or a raised Whites has no `points`, or a measured colour
+/// correction (Whites down, Temperature, Tint) would read a document outside sRGB's primaries.
+/// Whites up's points are measured after Calibration, so a cache of them keys on it.
 pub fn per_pixel(p: &CameraRaw, inputs: &DevelopInputs, w: usize, h: usize, float: bool, points: Option<TonePoints>) -> Option<PerPixel> {
-    if spatial(p) || !calibration_neutral(p) {
+    if spatial(p) {
         return None;
     }
     let identity = p.is_identity();
@@ -260,6 +288,7 @@ pub fn per_pixel(p: &CameraRaw, inputs: &DevelopInputs, w: usize, h: usize, floa
         white_balance: super::white_balance::steps(p.temperature, p.tint),
         exposure: (p.exposure != 0.0).then(|| exposure::row(p.exposure)),
         contrast: (p.contrast != 0.0).then(|| contrast::adaptive_row(p.contrast, points.map(|t| t[0]))),
+        calibration: Calibration::of(p),
         to_prophoto,
         from_prophoto,
         whites_blacks,

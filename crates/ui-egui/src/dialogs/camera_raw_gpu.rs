@@ -95,13 +95,16 @@ pub(crate) fn source_key() -> u64 {
 }
 
 /// The source key and the settings the black and white points depend on: the ones before
-/// Contrast, Contrast, and whether Whites is raised (the Whites tones are only measured then).
-type PointsKey = (u64, [u32; 5], bool);
+/// Contrast, Contrast, Calibration (Whites up measures after it), and whether Whites is raised
+/// (the Whites tones are only measured then).
+type PointsKey = (u64, [u32; 12], bool);
 
 /// The [`PointsKey`] of `p` on the source `key`.
 #[cfg(not(target_arch = "wasm32"))]
 fn points_key(key: u64, p: &CameraRaw, inputs: &DevelopInputs) -> PointsKey {
-    (key, [p.temperature, p.tint, p.exposure, p.contrast, inputs.encoding_gamma].map(f32::to_bits), p.whites > 0.0)
+    let [h0, h1, h2] = p.calibration_hue;
+    let [s0, s1, s2] = p.calibration_sat;
+    (key, [p.temperature, p.tint, p.exposure, p.contrast, inputs.encoding_gamma, p.shadow_tint, h0, h1, h2, s0, s1, s2].map(f32::to_bits), p.whites > 0.0)
 }
 /// The last [`PointsKey`] and its points.
 type Points = Option<(PointsKey, Option<photocraft_algo::camera_raw::TonePoints>)>;
@@ -230,6 +233,7 @@ mod tests {
         let raised = cr!(contrast.clone() => whites: 30.0);
         assert_ne!(points_key(1, &contrast, &inputs), points_key(1, &raised, &inputs));
         assert_eq!(points_key(1, &raised, &inputs), points_key(1, &cr!(raised.clone() => whites: 60.0), &inputs));
+        assert_ne!(points_key(1, &raised, &inputs), points_key(1, &cr!(raised.clone() => shadow_tint: 20.0), &inputs), "Calibration is measured");
     }
 
     /// The pass evaluates develop's expressions in f32 (see `photocraft-gpu`'s Camera Raw tests).

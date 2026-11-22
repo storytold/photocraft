@@ -208,6 +208,25 @@ fn white_balance() {
 }
 
 #[test]
+fn calibration() {
+    check(
+        "calibration",
+        &[
+            case(cr! { shadow_tint: 60.0 }, DevelopInputs::default()),
+            case(cr! { shadow_tint: -100.0, exposure: -0.5 }, DevelopInputs::default()),
+            case(cr! { calibration_hue: [40.0, -30.0, 70.0] }, DevelopInputs::default()),
+            case(cr! { calibration_sat: [-100.0, 50.0, 100.0] }, DevelopInputs::default()),
+            case(
+                cr! { calibration_hue: [-100.0, 100.0, -50.0], calibration_sat: [30.0, -60.0, 20.0], shadow_tint: 25.0, contrast: 20.0 },
+                DevelopInputs::default(),
+            ),
+            // Whites up measures the tones after Calibration.
+            case(cr! { calibration_sat: [80.0, 80.0, 80.0], whites: 40.0, temperature: 15.0 }, DevelopInputs::default()),
+        ],
+    );
+}
+
+#[test]
 fn contrast_without_texture_or_clarity() {
     check("contrast", &[case(cr! { contrast: 60.0 }, DevelopInputs::default()), case(cr! { contrast: -80.0, exposure: 0.4 }, DevelopInputs::default())]);
 }
