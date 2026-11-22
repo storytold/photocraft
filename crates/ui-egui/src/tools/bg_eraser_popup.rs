@@ -9,9 +9,10 @@
 
 use craft::behavior::IconId;
 use craft::theme::variant::Tone;
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Icon;
 use craft::ui::form::SliderField;
+use craft::ui::layout_components::Row;
 use craft::ui::pickers::Select;
 use craft::ui::primitives::IconSpec;
 use photocraft_engine::BrushSettings;
@@ -72,7 +73,7 @@ pub fn rows(ui: &mut egui::Ui, brush: &mut BrushSettings, tolerance_control: &mu
     if let Some(control) = size {
         set_size_control(brush, &control);
     }
-    ui.horizontal(|ui| {
+    Row::new().show(ui, |ui, _| {
         let picked = Select::new(tl!("Tolerance:"), Bind::given(tolerance_control.clone()), &entries).show(ui).events.committed().cloned();
         if let Some(control) = picked {
             *tolerance_control = control;
