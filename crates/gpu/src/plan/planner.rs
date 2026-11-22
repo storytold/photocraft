@@ -52,6 +52,8 @@ struct EffectState<'a> {
     l: Slot,
     clip: Rect,
     sb: Rect,
+    /// The Gradient Overlay box (`photocraft_compose::gradient_overlay_frame_in`).
+    gb: Rect,
     anchor: (f64, f64),
     outline: bool,
     relative: bool,
@@ -820,6 +822,7 @@ impl<'a> Planner<'a> {
         let canvas = self.cx.canvas;
         let region = bounds::effect_region(layer, canvas);
         let sb = photocraft_compose::paint_bounds(layer).unwrap_or_else(|| bounds::layer_bounds(layer, canvas));
+        let gb = photocraft_compose::gradient_overlay_frame_in(layer, sb);
         let clip = if bounds::transparent_outside(layer) { region } else { canvas };
         // A stroked shape's vector stroke goes above its clipped layers and interior effects
         // (compose::split_parts): the fill and the stroke unmasked, the masks applied after.
@@ -903,6 +906,7 @@ impl<'a> Planner<'a> {
             l: lay_src,
             clip,
             sb,
+            gb,
             anchor,
             outline,
             relative,
@@ -1051,7 +1055,7 @@ impl<'a> Planner<'a> {
         }
         for &(_, e) in &rev {
             if let Effect::GradientOverlay { common, gradient, .. } = e {
-                l = self.paint(l, content, Cov::One, &Paint::OverlayGradient(gradient), common.blend, common.opacity, F_GATE, clip, sb);
+                l = self.paint(l, content, Cov::One, &Paint::OverlayGradient(gradient), common.blend, common.opacity, F_GATE, clip, work.gb);
             }
         }
         for &(_, e) in &rev {

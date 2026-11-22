@@ -181,6 +181,30 @@ pub fn effects_frame(layer: &Layer, canvas: Rect) -> Rect {
     paint_bounds(layer).unwrap_or_else(|| layer_bounds(layer, canvas))
 }
 
+/// The box a Gradient Overlay aligned with the layer spans, given the layer's [`effects_frame`]
+/// `frame`. For an 8-bit pixel layer with an enabled Gradient Overlay it is the bounds of the
+/// pixels at least half opaque (alpha 128 of 255), so faint pixels don't stretch the gradient,
+/// as in the reference application (#14910). Everything else keeps `frame`: other layer kinds,
+/// 16 and 32 bit (not measured), and a layer with no half-opaque pixel at all.
+pub fn gradient_overlay_frame_in(layer: &Layer, frame: Rect) -> Rect {
+    let LayerContent::Raster(s) = &layer.content else { return frame };
+    if layer.frame.is_some()
+        || advanced::shapeless(layer)
+        || !layer.effects.items.iter().any(|e| e.enabled() && matches!(e, photocraft_doc::Effect::GradientOverlay { .. }))
+    {
+        return frame;
+    }
+    bounds::half_opaque_bounds(s).filter(|b| !b.is_empty()).unwrap_or(frame)
+}
+
+/// The frames a layer's effects are laid out in: its [`effects_frame`] (patterns, strokes,
+/// glows) and its Gradient Overlay box ([`gradient_overlay_frame_in`]). Effects that span them
+/// are laid out again when either moves.
+pub fn effects_frames(layer: &Layer, canvas: Rect) -> (Rect, Rect) {
+    let frame = effects_frame(layer, canvas);
+    (frame, gradient_overlay_frame_in(layer, frame))
+}
+
 /// The pixels a change from `a` to `b` repaints beyond those it changed: where a layer whose
 /// effects span its frame ([`effects::spans_frame`]) moved that frame, the layer's whole composite
 /// before and after. Painting on a layer with a Gradient Overlay lays the one gradient out again
@@ -198,7 +222,7 @@ pub fn relayout_damage(a: &Document, b: &Document) -> Rect {
             continue;
         }
         let Some(x) = a.layer(y.id) else { continue };
-        if effects_frame(x, a.bounds()) == effects_frame(y, b.bounds()) {
+        if effects_frames(x, a.bounds()) == effects_frames(y, b.bounds()) {
             continue;
         }
         add(change_bounds(x, a.bounds()).unwrap_or_else(|| a.bounds()));

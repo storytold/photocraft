@@ -266,3 +266,6 @@ mod inner_glow_size_one_tests;
 
 #[cfg(test)]
 mod gradient_overlay_centre_tests;
+
+#[cfg(test)]
+mod gradient_overlay_alpha_box_tests;
