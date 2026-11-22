@@ -137,7 +137,8 @@ pub(crate) fn pins_of(fields: &DialogFields, kind: BlurKind, bounds: [f64; 4]) -
     let mut pins = BlurPins::new(kind, bounds, BlurPin::new(0.5, 0.5, DEFAULT_AMOUNT));
     pins.pins =
         if kind == BlurKind::TiltShift { vec![start_of(fields, kind)] } else { json_pins(fields).iter().take(MAX_PINS).map(|v| pin_of(kind, v)).collect() };
-    pins.selected = fields.int("selected").and_then(|i| usize::try_from(i).ok());
+    // Tilt-Shift has one band. Its position fields can already have defaults when the dialog opens.
+    pins.selected = if kind == BlurKind::TiltShift { Some(0) } else { fields.int("selected").and_then(|i| usize::try_from(i).ok()) };
     pins.clean();
     pins
 }
@@ -193,11 +194,26 @@ pub(crate) fn overlay(app: &mut PhotocraftApp, ui: &mut egui::Ui, at: egui::Rect
     let Some(dialog) = app.framework.dialogs.get_mut::<HostedParamDialog>() else { return };
     let mut pins = pins_of(dialog.fields(), kind, bounds);
     let before = pins.clone();
-    ui.scope_builder(egui::UiBuilder::new().max_rect(at), |ui| {
-        BlurPinsOverlay::new(tl!("Blur Pins"), Bind::bound(&mut pins)).show(ui);
-    });
+    BlurPinsOverlay::new(tl!("Blur Pins"), Bind::bound(&mut pins)).show_at(ui, at);
     if pins != before {
-        write_pins(&pins, |k, v| dialog.set_field(k, v));
+        let mut set = |key, value| dialog.set_field(key, value);
+        write_pins(&pins, &mut set);
+        // The engine takes the whole pin list. The visible Geometry fields describe the selected pin.
+        if kind != BlurKind::TiltShift
+            && let Some(pin) = pins.selected.and_then(|index| pins.pins.get(index))
+        {
+            set("centerX", FieldValue::Number(pin.x));
+            set("centerY", FieldValue::Number(pin.y));
+            if let Some(shape) = pin.iris {
+                for (key, value) in [("radiusX", shape.radius_x), ("radiusY", shape.radius_y), ("angle", shape.angle)] {
+                    set(key, FieldValue::Number(value));
+                }
+                if kind == BlurKind::Iris {
+                    set("roundness", FieldValue::Number(shape.roundness));
+                    set("feather", FieldValue::Number(shape.feather));
+                }
+            }
+        }
     }
 }
 
