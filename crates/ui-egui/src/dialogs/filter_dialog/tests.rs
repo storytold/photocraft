@@ -1921,12 +1921,9 @@ fn lens_blur_refuses_a_depth_channel_after_the_document_changed() {
 
 #[test]
 fn stock_indexed_dialog_can_disable_transparency_with_stale_automation_settings() {
-    use egui_kittest::Harness;
-    use egui_kittest::kittest::Queryable;
-
     const COMMAND: &str = "image.mode.indexedColor";
     for stale_settings in [false, true] {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = new_app();
         app.run("file.new", json!({"width": 2, "height": 1, "depth": 16, "background": "#214bc9"})).unwrap();
         let before = app.session.active().unwrap().doc.layers[0].surface().unwrap().rgba(0, 0);
         if stale_settings {
@@ -1937,8 +1934,7 @@ fn stock_indexed_dialog_can_disable_transparency_with_stale_automation_settings(
                 );
             });
         }
-        let mut harness = Harness::builder().with_size(egui::vec2(900.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), &mut app);
-        PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ALL[0]);
+        let mut harness = harness(app, egui::vec2(900.0, 900.0));
         open(harness.state_mut(), COMMAND).unwrap();
         harness.run_steps(3);
         harness.get_by_label("Transparency").click();
