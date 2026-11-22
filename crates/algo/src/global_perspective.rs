@@ -334,12 +334,13 @@ pub fn solve(guides: &[Guide], bounds: Rect, options: &Options) -> Result<Soluti
             break;
         }
         used = ids;
-        let refined = matrix_from_fits(
-            fit_rows(&rows(&good, bounds, true)).ok_or("horizontal guides are underconstrained")?,
-            fit_rows(&rows(&good, bounds, false)).ok_or("vertical guides are underconstrained")?,
-            bounds,
-            options.aspect,
-        )?;
+        // Weighted refinement is an optional improvement, not a requirement
+        // for keeping the already-validated majority map. Degenerate row fits
+        // or an unsafe projective proposal must leave that map intact.
+        let refined = fit_rows(&rows(&good, bounds, true))
+            .zip(fit_rows(&rows(&good, bounds, false)))
+            .and_then(|(horizontal, vertical)| matrix_from_fits(horizontal, vertical, bounds, options.aspect).ok());
+        let Some(refined) = refined else { break };
         // Confidence weights may pull a valid compromise past an inlier's
         // threshold. Keep the last majority-supported map in that case.
         if active.iter().filter(|g| residual(&refined, g) <= GUIDE_THRESHOLD_DEG).count() <= active.len() / 2 {
@@ -748,6 +749,39 @@ mod tests {
             assert_eq!(solve(&guides, bounds, &options).unwrap().matrix, solution.matrix);
         }
     }
+    #[test]
+    fn unsafe_weighted_proposal_cannot_discard_a_safe_majority() {
+        // Three near-parallel guide quads have a safe common fit. The strongly
+        // weighted third guide used to push refinement beyond the allowed output
+        // extent; a failed proposal must not erase the original valid solution.
+        let bounds = Rect::new(0, 0, 100, 100);
+        let options = Options { fit_canvas: false, ..Options::default() };
+        let build = |id: u64, k: f64, weight: f64| Guide {
+            id,
+            enabled: true,
+            weight,
+            corners: [
+                [40.0 - 10.0 * k, 40.0 - 10.0 * k],
+                [60.0 - 10.0 * k, 40.0 + 10.0 * k],
+                [60.0 + 10.0 * k, 60.0 + 10.0 * k],
+                [40.0 + 10.0 * k, 60.0 - 10.0 * k],
+            ],
+        };
+        let mut guides = vec![build(1, 0.91, 0.05), build(2, 0.91, 0.05), build(3, 0.92, 20.0)];
+        let active: Vec<_> = guides.iter().collect();
+        let safe = majority_fit(&active, bounds, options.aspect).unwrap();
+        let good: Vec<_> = active.iter().copied().filter(|g| residual(&safe, g) <= GUIDE_THRESHOLD_DEG).collect();
+        assert_eq!(good.len(), 3, "a compatible majority exists before weighting");
+        let horizontal = fit_rows(&rows(&good, bounds, true)).unwrap();
+        let vertical = fit_rows(&rows(&good, bounds, false)).unwrap();
+        assert!(matrix_from_fits(horizontal, vertical, bounds, options.aspect).is_err(), "the weighted candidate must be unsafe for this regression");
+        let solution = solve(&guides, bounds, &options).unwrap();
+        assert_eq!(solution.used_guide_ids, vec![1, 2, 3]);
+        assert_eq!(solution.matrix, safe.0, "rejected refinement must keep the safe initial map");
+        guides.reverse();
+        assert_eq!(solve(&guides, bounds, &options).unwrap().matrix, solution.matrix);
+    }
+
     #[test]
     fn nearly_affine_vanishing_points_need_no_division_by_infinity() {
         let (r, mut g) = fixture();
