@@ -1583,6 +1583,20 @@ fn a_light_first_point_is_judged_by_its_own_dab_diameter() {
     assert!(warnings[0].contains("30.0 px") && warnings[0].contains("150.0 px apart") && warnings[0].contains("50.0 px path"), "{r}");
 }
 
+/// #15464: ⌥-click load with Sample All Layers takes the pixels below the adjustment stack, so
+/// the next stroke does not apply the adjustment a second time.
+#[test]
+fn mixer_load_with_sample_all_layers_ignores_adjustment_layers() {
+    let mut s = session(80, 40);
+    s.execute("paint.stroke", json!({"points": [[4, 20], [60, 20]], "size": 6, "color": "#ff0000"})).unwrap();
+    s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
+    s.execute("layer.new.layer", json!({"position": "below"})).unwrap();
+    let r = s.execute("paint.mixerLoad", json!({"x": 30, "y": 20, "sampleAllLayers": true})).unwrap();
+    assert_eq!(r["loaded"], json!(true));
+    let c = r["color"].as_array().unwrap();
+    assert!(c[0].as_f64().unwrap() > 0.9 && c[1].as_f64().unwrap() < 0.1, "the load is unadjusted red: {r}");
+}
+
 #[test]
 fn mixer_load_fills_the_reservoir_from_the_canvas_and_keeps_the_foreground() {
     let mut s = session(80, 40);

@@ -1452,12 +1452,19 @@ fn sample_all_layers_ignores_adjustment_layers() {
         let mut s = session(100, 30, depth, "rgb");
         paint_layer(&mut s, |_, _| [1.0, 0.0, 0.0, 1.0]);
         s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
-        s.execute("layer.new.layer", json!({})).unwrap();
-        let visible = photocraft_compose::render(&s.active().unwrap().doc, Rect::new(50, 15, 51, 16)).px[0];
-        assert!(visible[1] > 0.9 && visible[0] < 0.1, "depth {depth}: the composite is inverted: {visible:?}");
+        // The painted layer is below the adjustment, so a sample holding adjusted pixels would be
+        // inverted a second time by the adjustment when written into it.
+        s.execute("layer.new.layer", json!({"position": "below"})).unwrap();
+        fn composite_at(s: &Session, x: i32, y: i32) -> [f32; 4] {
+            photocraft_compose::render(&s.active().unwrap().doc, Rect::new(x, y, x + 1, y + 1)).px[0]
+        }
+        let inverted = |p: [f32; 4]| p[1] > 0.9 && p[0] < 0.1;
+        assert!(inverted(composite_at(&s, 50, 15)), "depth {depth}: the composite is inverted before the stroke");
         s.execute("paint.blur", json!({"points": [[10, 15], [90, 15]], "size": 16, "hardness": 100, "strength": 100, "sampleAllLayers": true})).unwrap();
         let p = rgba(&s, 50, 15);
         assert!(p[0] > 0.9 && p[1] < 0.1 && p[2] < 0.1, "depth {depth}: the empty layer holds unadjusted red, not the inverted composite: {p:?}");
+        assert!(inverted(composite_at(&s, 50, 15)), "depth {depth}: the composite stays inverted; the adjustment was applied twice");
+        assert!(inverted(composite_at(&s, 50, 3)), "depth {depth}: pixels outside the stroke stayed inverted too");
     }
 }
 
