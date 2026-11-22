@@ -1390,6 +1390,7 @@ pub const DEFAULT_TOOLBAR: &[&[&str]] = &[
     &["Eraser", "BackgroundEraser", "MagicEraser"],
     &["Gradient", "PaintBucket"],
     &["Blur", "Sharpen", "Smudge"],
+    &["AdjustmentBrush"],
     &["Dodge", "Burn", "Sponge"],
     &["Pen", "FreeformPen", "CurvaturePen", "AddAnchorPoint", "DeleteAnchorPoint", "ConvertPoint"],
     &["Type", "VerticalType", "VerticalTypeMask", "HorizontalTypeMask"],

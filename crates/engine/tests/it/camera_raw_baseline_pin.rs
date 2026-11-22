@@ -149,6 +149,50 @@ fn camera_raw_smart_filter_migrates_to_shared_develop_settings() {
 }
 
 #[test]
+fn camera_raw_migration_preserves_exposure_presence_after_native_reopen() {
+    use std::sync::Arc;
+
+    use craft_develop_model::{DevelopSettings, Process};
+    use photocraft_color::{BlendMode, ColorMode, SampleType};
+    use photocraft_doc::{Document, Layer, Size, SmartFilter, SmartObject, SmartSource};
+    use photocraft_geom::Affine;
+
+    // Original synthetic content. Exercise the native serializer, not the PSD importer.
+    let size = Size::new(2, 2);
+    let mut source = Session::new();
+    source.execute("file.new", json!({"width": 2, "height": 2, "depth": 16})).unwrap();
+    let embedded = Arc::new(photocraft_format::save_to_bytes(&source.active().unwrap().doc, &Default::default()).unwrap());
+    let mut base = DevelopSettings { process: Process::V8.version(), ..Default::default() };
+    base.light.exposure = -0.75;
+    base.light.contrast = 12.0;
+    for (params, expected) in [(json!({"encodingGamma": 1.8}), -0.75), (json!({"encodingGamma": 1.8, "exposure": 0.0}), 0.0)] {
+        let source = SmartSource::Embedded { file_name: "generated.pcraft".into(), bytes: embedded.clone() };
+        let mut smart = SmartObject::new(source, Affine::IDENTITY, None);
+        smart.smart_filters.push(SmartFilter {
+            command: "filter.cameraRaw".into(),
+            params: params.clone(),
+            blend: BlendMode::Normal,
+            opacity: 1.0,
+            visible: true,
+        });
+        let mut doc = Document::new("Saved Camera Raw exposure", size, ColorMode::Rgb, SampleType::U16);
+        doc.layers.push(Layer::new("Stored filter", LayerContent::Smart(smart)));
+
+        let saved = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
+        let reopened = photocraft_format::load_from_bytes(&saved).unwrap();
+        let LayerContent::Smart(smart) = &reopened.layers[0].content else { panic!("expected reopened Smart Object") };
+        let [filter] = smart.smart_filters.as_slice() else { panic!("expected one stored Camera Raw filter") };
+        assert_eq!(filter.command, "filter.cameraRaw");
+        assert_eq!(filter.params, params);
+        let migrated = photocraft_algo::camera_raw::migrate_to_develop_settings(&base, &filter.params).unwrap();
+        assert!(migrated.unmapped_fields.is_empty(), "{:?}", migrated.unmapped_fields);
+        assert_eq!(migrated.settings.process, base.process);
+        assert_eq!(migrated.settings.light.exposure, expected);
+        assert_eq!(migrated.settings.light.contrast, base.light.contrast);
+    }
+}
+
+#[test]
 fn reopened_camera_raw_smart_filter_keeps_legacy_close_curve_knots() {
     use std::sync::Arc;
 
