@@ -85,7 +85,7 @@ pub(crate) fn copy(s: &mut Session, p: &Value) -> Result<Option<Value>> {
     if bounds.is_empty() {
         return Err(EngineError::Other("Could not copy: the selected area is empty".into()));
     }
-    s.clipboard =
+    *s.clipboard =
         Some(Clip { svg: None, components: None, surface, bounds, layers: None, resolution: Some(doc.resolution_dpi), source: Some(doc.id), board: None });
     Ok(Some(json!({"bounds": [bounds.x0, bounds.y0, bounds.width(), bounds.height()], "channel": k})))
 }
@@ -94,7 +94,7 @@ pub(crate) fn copy(s: &mut Session, p: &Value) -> Result<Option<Value>> {
 /// places it. The clip's transparency, and `limit` (Paste Into / Outside), let the old values show
 /// through. One history step.
 pub(crate) fn paste(s: &mut Session, p: &Value, k: usize, in_place: bool, limit: Option<&Surface>, label: &str) -> Result<Value> {
-    let clip = s.clipboard.clone().ok_or_else(|| EngineError::Other("the clipboard is empty".into()))?;
+    let clip = s.clipboard.as_ref().cloned().ok_or_else(|| EngineError::Other("the clipboard is empty".into()))?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
     let id = d.active_layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
@@ -190,7 +190,7 @@ pub(crate) fn copy_colors(s: &mut Session, p: &Value, colors: crate::color_chann
         }
         surface.try_write_region(r, &out)?;
     }
-    s.clipboard = Some(Clip {
+    *s.clipboard = Some(Clip {
         svg: None,
         surface,
         bounds: area,
@@ -211,7 +211,7 @@ pub(crate) fn paste_colors(
     limit: Option<&Surface>,
     label: &str,
 ) -> Result<Value> {
-    let clip = s.clipboard.clone().ok_or_else(|| EngineError::Other("the clipboard is empty".into()))?;
+    let clip = s.clipboard.as_ref().cloned().ok_or_else(|| EngineError::Other("the clipboard is empty".into()))?;
     if clip.components.as_ref().is_some_and(|c| c.len() != colors.len()) {
         return Err(EngineError::Other("source and destination must select the same number of colour channels".into()));
     }

@@ -447,8 +447,9 @@ mod tests {
         }
     }
 
-    /// `cargo test -p photocraft-algo --release --lib -- --nocapture cols_timing`
+    /// `cargo test -p photocraft-algo --release --lib -- --ignored --nocapture cols_timing`
     #[test]
+    #[ignore = "timing"]
     fn cols_timing() {
         for (w, h, n, r) in [(324, 324, 2, 9), (1122, 1122, 2, 79), (1122, 786, 2, 79)] {
             // Each pass gets its own copy of the same input: a pass run after the other would

@@ -5,7 +5,7 @@ use photocraft_engine::edit_menu_cmds::FindCursor;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{PhotocraftApp, theme::Tokens, widgets};
+use crate::{PhotocraftApp, theme::Tokens};
 
 pub(crate) const COMMAND: &str = "edit.findAndReplaceText";
 pub(crate) const CONTROL_ID: &str = "findAndReplaceText";
@@ -88,6 +88,7 @@ struct Open {
     selected: Vec<LayerId>,
     anchor: Option<LayerId>,
     cursor: Option<FindCursor>,
+    start: Option<LayerId>,
     canvas_match: Option<CanvasMatch>,
     focus: Option<FocusField>,
 }
@@ -112,6 +113,7 @@ pub(crate) fn open(app: &mut PhotocraftApp) -> Result<Value, String> {
             selected: st.selected_layers.clone(),
             anchor: st.layer_anchor,
             cursor: None,
+            start: None,
             canvas_match: None,
             focus: Some(FocusField::Find),
         });
@@ -164,6 +166,7 @@ fn update_fields(app: &mut PhotocraftApp, fields: Fields) {
             crate::type_tool::commit(app);
         }
         window.cursor = None;
+        window.start = None;
         window.canvas_match = None;
         app.ui.find_replace.open = Some(window);
     }
@@ -197,16 +200,19 @@ fn apply(app: &mut PhotocraftApp, action: Action, from_control: bool) -> Result<
     // a text edit replaces the document snapshot.
     let before = app.session.active().map(|st| st.doc.clone());
     let outside_cursor = std::mem::replace(&mut app.session.edit_state.find_cursor, cursor);
+    let outside_start = std::mem::replace(&mut app.session.edit_state.find_start, window.start);
     let result = app.run(COMMAND, params);
     let unchanged = before.as_ref().zip(app.session.active()).is_some_and(|(before, after)| std::sync::Arc::ptr_eq(before, &after.doc));
     let restore = if unchanged { outside_cursor } else { None };
     let cursor = std::mem::replace(&mut app.session.edit_state.find_cursor, restore);
+    let start = std::mem::replace(&mut app.session.edit_state.find_start, if unchanged { outside_start } else { None });
     let reply = result?;
     let mut window = app.ui.find_replace.open.take().ok_or("Find and Replace Text is closed")?;
     if owns_edit(app, &window) {
         crate::type_tool::commit(app);
     }
     window.cursor = cursor;
+    window.start = start;
     window.canvas_match = show_match(app, &reply["found"]);
     if window.canvas_match.is_some() {
         window.focus = Some(FocusField::Replace);
@@ -255,15 +261,19 @@ fn field(ui: &mut egui::Ui, label: &str, buffer: &mut String, focus: bool) -> eg
     let response = ui.add(egui::TextEdit::singleline(buffer).desired_width(f32::INFINITY)).labelled_by(label.id);
     if focus && !ui.is_sizing_pass() {
         response.request_focus();
-        crate::field_tab::select_all(ui.ctx(), response.id, buffer);
+        if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), response.id) {
+            use egui::text::{CCursor, CCursorRange};
+            state.cursor.set_char_range(Some(CCursorRange::two(CCursor::new(0), CCursor::new(buffer.chars().count()))));
+            egui::TextEdit::store_state(ui.ctx(), response.id, state);
+        }
     }
     response
 }
 
 pub(crate) fn escape(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if app.ui.find_replace.open.is_some()
-        && app.ui.dialogs.is_empty()
-        && app.ui.shell.dialog.is_none()
+        && app.framework.dialogs.stack().top().is_none()
+        && !crate::prefs_ui::shortcuts_open(app)
         && !egui::Popup::is_any_open(ctx)
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
     {
@@ -280,25 +290,21 @@ pub(super) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<egui:
     let focus = window.focus;
     let mut fields = app.ui.find_replace.fields.clone();
     let mut action = None;
-    let mut open = true;
     let mut focused = false;
     let t = Tokens::get(ctx);
-    let mut window = egui::Window::new(tl!(TITLE))
+    let window = egui::Window::new(tl!(TITLE))
         .id(egui::Id::unique(CONTROL_ID))
         .order(egui::Order::Foreground)
         .collapsible(false)
         .resizable(false)
         .default_pos(ctx.content_rect().center() - SIZE / 2.0)
         .frame(egui::Frame::window(&ctx.global_style()).fill(t.card).inner_margin(egui::Margin::same(14)));
-    if super::CLOSE_BOX {
-        window = window.open(&mut open);
-    }
     let response = window.show(ctx, |ui| {
         let width = (ctx.content_rect().width() - 40.0).clamp(260.0, SIZE.x - 28.0);
         ui.set_min_width(width);
         ui.horizontal_top(|ui| {
             let buttons = [tl!("Done"), tl!("Find Next"), tl!("Change"), tl!("Change All"), tl!("Change/Find")];
-            let button_width = widgets::button_width(ui, &buttons).max(96.0);
+            let button_width = buttons.iter().map(|label| label.chars().count() as f32 * 8.0 + 16.0).fold(96.0, f32::max);
             ui.vertical(|ui| {
                 ui.set_width((width - button_width - 22.0).max(155.0));
                 let find = field(ui, tl!("Find What:"), &mut fields.find, matches!(focus, Some(FocusField::Find)));
@@ -312,26 +318,26 @@ pub(super) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<egui:
                 ui.add_space(8.0);
                 ui.horizontal_top(|ui| {
                     ui.vertical(|ui| {
-                        widgets::checkbox(ui, &mut fields.all_layers, tl!("Search All Layers"));
-                        widgets::checkbox(ui, &mut fields.forward, tl!("Forward"));
+                        ui.checkbox(&mut fields.all_layers, tl!("Search All Layers"));
+                        ui.checkbox(&mut fields.forward, tl!("Forward"));
                     });
                     ui.vertical(|ui| {
-                        widgets::checkbox(ui, &mut fields.case_sensitive, tl!("Case Sensitive"));
-                        widgets::checkbox(ui, &mut fields.whole_word, tl!("Whole Word Only"));
+                        ui.checkbox(&mut fields.case_sensitive, tl!("Case Sensitive"));
+                        ui.checkbox(&mut fields.whole_word, tl!("Whole Word Only"));
                         // The matching option is implemented by #14663.
-                        ui.add_enabled_ui(false, |ui| widgets::checkbox(ui, &mut fields.ignore_accents, tl!("Ignore Accents")));
+                        ui.add_enabled_ui(false, |ui| ui.checkbox(&mut fields.ignore_accents, tl!("Ignore Accents")));
                     });
                 });
             });
             ui.add_space(12.0);
             ui.vertical(|ui| {
-                if widgets::primary_button(ui, buttons[0], button_width).clicked() {
+                if ui.add_sized([button_width, 24.0], egui::Button::new(buttons[0])).clicked() {
                     action = Some(Action::Done);
                 }
                 ui.add_space(8.0);
                 for (button, label) in [Action::Find, Action::Change, Action::ChangeAll, Action::ChangeFind].into_iter().zip(buttons.into_iter().skip(1)) {
                     let enabled = !fields.find.is_empty() && (!button.needs_match() || (can_change && app.ui.find_replace.fields.same_search(&fields)));
-                    if ui.add_enabled_ui(enabled, |ui| widgets::secondary_button(ui, label, button_width)).inner.clicked() {
+                    if ui.add_enabled_ui(enabled, |ui| ui.add_sized([button_width, 24.0], egui::Button::new(label))).inner.clicked() {
                         action = Some(button);
                     }
                 }
@@ -342,7 +348,7 @@ pub(super) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<egui:
         window.focus = None;
     }
     update_fields(app, fields);
-    if let Some(action) = if open { action } else { Some(Action::Done) }
+    if let Some(action) = action
         && let Err(error) = apply(app, action, false)
     {
         app.ui.status = error;

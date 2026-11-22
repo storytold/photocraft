@@ -3,7 +3,7 @@ use crate::{Services, state::Tool};
 use photocraft_doc::LayerContent;
 use photocraft_engine::Session;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(Session::new(), Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app
@@ -105,7 +105,7 @@ fn modeless_window_focus_enter_tab_and_escape() {
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
     open(h.state_mut()).unwrap();
     set_field(h.state_mut(), "find", json!("selected on open")).unwrap();
     set_field(h.state_mut(), "replace", json!("old")).unwrap();

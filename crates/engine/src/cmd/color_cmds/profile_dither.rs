@@ -136,8 +136,8 @@ fn dither_tile(s: &Surface, out: &Surface, t: &Transform, bounds: Rect, c: TileC
             *d = f32::from(*s) / 255.0;
         }
         t.eval_fast(&input[..ni], &mut output[..no]).map_err(super::cms_err)?;
-        // The hash can return 1.0; recenter its 65536 bins strictly inside (0, 1).
-        let threshold = (f64::from(photocraft_color::dither_noise(x, y)) * 65535.0 + 0.5) / 65536.0;
+        // Recenter the hash's 65536 bins strictly inside (0, 1).
+        let threshold = (f64::from(photocraft_color::dither_noise(x, y)) * 65536.0 + 0.5) / 65536.0;
         for (d, value) in dp.iter_mut().zip(output).take(no) {
             *d = quantize(value, threshold);
         }

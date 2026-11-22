@@ -1119,7 +1119,7 @@ fn admit(_: &str, _: &Value) -> Result<()> {
 
 /// Whether the action named `name` is marked as written by automation.
 fn marked(s: &Session, name: &str) -> bool {
-    s.actions.list.iter().find(|a| a.name == name).unwrap().automation
+    s.actions.list.actions().iter().find(|a| a.name == name).unwrap().automation
 }
 
 /// A background step a gated client starts during the user's recording marks the recorded action
@@ -1210,7 +1210,7 @@ fn every_job_terminal_path_drops_a_live_commit_stroke() {
             if outcome == 3 {
                 // Simulate replacement outside command dispatch, which itself clears offers.
                 let doc = (*s.active().unwrap().doc).clone();
-                s.active_mut().unwrap().doc = Arc::new(doc);
+                *s.active_mut().unwrap().doc_mut() = Arc::new(doc);
             } else if outcome == 5 {
                 s.docs.clear();
                 s.active = None;

@@ -41,8 +41,9 @@ fn with_timeline(s: &mut Session, f: impl FnOnce(&mut Option<Timeline>)) -> Resu
     crate::video_cmds::sync(&mut doc);
     // Storing and syncing video frames bypasses edit_with: apply the same scratch guard.
     photocraft_raster::spill::check_since(generation).and_then(|()| doc.scratch_health()).map_err(EngineError::Other)?;
-    st.doc = Arc::new(doc);
+    *st.doc_mut() = Arc::new(doc);
     st.revision += 1;
+    st.record_unknown_damage();
     info(s)
 }
 
@@ -282,7 +283,7 @@ mod tests {
                     let st = s.active_mut().unwrap();
                     let mut doc = (*st.doc).clone();
                     doc.timeline = Some(Timeline { fps: f32::NAN, duration, current, work_start: usize::MAX, work_end: 0 });
-                    st.doc = Arc::new(doc);
+                    *st.doc_mut() = Arc::new(doc);
                     let r = s.execute(cmd, json!({})).unwrap_or_else(|e| panic!("{cmd} d={duration} c={current}: {e}"));
                     let t = &r["timeline"];
                     let d = t["duration"].as_u64().unwrap();

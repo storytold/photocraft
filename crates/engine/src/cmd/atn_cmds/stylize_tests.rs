@@ -1,4 +1,5 @@
 use super::*;
+use crate::actions_cmds::ActionStep;
 
 /// The parameterless events use an empty descriptor and accept both event identifiers.
 #[test]
@@ -11,7 +12,7 @@ fn parameterless_stylize_and_pixelate_events_use_both_event_id_forms() {
     ] {
         for event in [AtnEvent::Code(code), AtnEvent::name(name)] {
             let mut s = load_items(vec![AtnItem { event, descriptor: Some(desc("null")), ..Default::default() }]);
-            assert_eq!(s.actions.list[0].steps, vec![(id.into(), json!({}))]);
+            assert_eq!(s.actions.list.actions()[0].steps, vec![ActionStep::new(id, json!({}))]);
             assert_eq!(saved_items(&mut s)[0].descriptor, Some(desc("null")));
             assert!(export_item(id, &json!({"layer": 17}), "Group D").is_none());
             assert!(export_item(id, &json!({"target": "mask"}), "Group D").is_none());
@@ -166,14 +167,14 @@ fn measured_defaults_and_every_changed_value_round_trip_in_order() {
                     item.event = AtnEvent::name(fixture.name);
                 }
                 let mut s = load_items(vec![item]);
-                assert_eq!(s.actions.list[0].steps, vec![(fixture.id.into(), params.clone())], "{} named={named}", fixture.code);
+                assert_eq!(s.actions.list.actions()[0].steps, vec![ActionStep::new(fixture.id, params.clone())], "{} named={named}", fixture.code);
                 let saved = saved_items(&mut s);
                 assert_eq!(saved[0].event, AtnEvent::Code(fixture.code.as_bytes().try_into().unwrap()));
                 assert_eq!(saved[0].descriptor.as_ref(), Some(descriptor), "{} named={named}", fixture.code);
             }
         }
         let mut s = load_items(vec![code_item(fixture.code, desc("null"))]);
-        assert_eq!(s.actions.list[0].steps[0], (fixture.id.into(), fixture.defaults), "{} missing keys", fixture.code);
+        assert_eq!(s.actions.list.actions()[0].steps[0], ActionStep::new(fixture.id, fixture.defaults), "{} missing keys", fixture.code);
         assert_eq!(saved_items(&mut s)[0].descriptor, Some(fixture.default));
     }
 }
@@ -198,8 +199,8 @@ fn numeric_imports_clamp_measured_ranges() {
         for (input, expected) in [(i32::MIN, min), (min - 1, min), (min, min), (max, max), (max + 1, max), (i32::MAX, max)] {
             let value = if code == "Msc " { px(f64::from(input)) } else { D::Integer(input) };
             let mut s = load_items(vec![code_item(code, desc("null").with(key, value))]);
-            assert_ne!(s.actions.list[0].steps[0].0, PHOTOSHOP_STEP, "{code}/{key}");
-            assert_eq!(s.actions.list[0].steps[0].1[param], expected, "{code}/{key}/{input}");
+            assert_ne!(s.actions.list.actions()[0].steps[0].command, PHOTOSHOP_STEP, "{code}/{key}");
+            assert_eq!(s.actions.list.actions()[0].steps[0].params[param], expected, "{code}/{key}/{input}");
             assert!(saved_items(&mut s)[0].descriptor.is_some());
         }
     }
@@ -219,8 +220,8 @@ fn trace_levels_clamp_on_import_and_play_at_the_boundary() {
             let mut item = code_item("TrcC", descriptor);
             item.with_dialog = true;
             let mut imported = load_items(vec![item]);
-            assert_eq!(imported.actions.list[0].steps[0].0, "filter.stylize.traceContour", "{level}/{name}");
-            assert_eq!(imported.actions.list[0].steps[0].1["level"], clamped);
+            assert_eq!(imported.actions.list.actions()[0].steps[0].command, "filter.stylize.traceContour", "{level}/{name}");
+            assert_eq!(imported.actions.list.actions()[0].steps[0].params["level"], clamped);
             let saved = saved_items(&mut imported);
             let expected = desc("null").with("Lvl ", D::Integer(clamped)).with("Edg ", enm("CntE", edge));
             assert_eq!(saved[0].descriptor.as_ref().unwrap().to_bytes(), expected.to_bytes());
@@ -275,7 +276,7 @@ fn enum_values_map_exactly_and_unknown_descriptors_stay_kept() {
     ] {
         for (value, expected) in &values {
             let mut s = load_items(vec![code_item(code, desc("null").with(key, enm(ty, value)))]);
-            assert_eq!(s.actions.list[0].steps[0].1[param], *expected, "{code}/{value}");
+            assert_eq!(s.actions.list.actions()[0].steps[0].params[param], *expected, "{code}/{value}");
             assert_eq!(saved_items(&mut s)[0].descriptor.as_ref().unwrap().get(key), Some(&enm(ty, value)));
         }
         for value in [enm(ty, "????"), enm("Bad!", values[0].0), D::Boolean(true)] {
@@ -285,9 +286,9 @@ fn enum_values_map_exactly_and_unknown_descriptors_stay_kept() {
             item.with_dialog = true;
             item.dialog_options = 2;
             let mut s = load_items(vec![item]);
-            assert_eq!(s.actions.list[0].steps[0].0, PHOTOSHOP_STEP, "{code}/{key}");
-            assert!(s.actions.list[0].disabled.contains(&0));
-            assert!(s.actions.list[0].dialogs.contains(&0));
+            assert_eq!(s.actions.list.actions()[0].steps[0].command, PHOTOSHOP_STEP, "{code}/{key}");
+            assert!(s.actions.list.actions()[0].disabled.contains(&0));
+            assert!(s.actions.list.actions()[0].dialogs.contains(&0));
             let saved = saved_items(&mut s);
             assert_eq!(saved[0].descriptor, Some(descriptor));
             assert!(!saved[0].enabled);
@@ -302,7 +303,7 @@ fn enum_values_map_exactly_and_unknown_descriptors_stay_kept() {
         ("FndE", desc("null").with("unknown", D::Boolean(true))),
     ] {
         let mut s = load_items(vec![code_item(code, descriptor.clone())]);
-        assert_eq!(s.actions.list[0].steps[0].0, PHOTOSHOP_STEP);
+        assert_eq!(s.actions.list.actions()[0].steps[0].command, PHOTOSHOP_STEP);
         assert_eq!(saved_items(&mut s)[0].descriptor, Some(descriptor));
     }
 }
@@ -336,7 +337,7 @@ fn exports_materialize_native_defaults_and_reject_unrepresentable_settings() {
             let mut params = fixture.defaults.clone();
             params[key] = value;
             let mut s = Session::new();
-            s.actions.list.push(Action::new("A", vec![(fixture.id.into(), params)]));
+            s.actions.list.push(Action::new("A", vec![ActionStep::new(fixture.id, params)])).unwrap();
             assert!(s.execute("actions.save", json!({"action":"A"})).is_err(), "{}/{key}", fixture.id);
         }
         let mut params = fixture.defaults.clone();
@@ -372,9 +373,9 @@ fn imported_group_d_playback_matches_direct_commands_across_modes_and_depths() {
         for (depth, mode) in [(8, "rgb"), (16, "rgb"), (32, "rgb"), (8, "gray"), (8, "cmyk"), (16, "lab")] {
             let mut imported = load_items(items.clone());
             imported.execute("actions.setHistory", json!({"singleState": single_state})).unwrap();
-            imported.actions.list[0].disabled.insert(10);
-            imported.actions.list[0].dialogs.insert(0);
-            let steps = imported.actions.list[0].steps.clone();
+            imported.actions.list.set_step(0, 10, false).unwrap();
+            imported.actions.list.set_dialog(0, 0, true).unwrap();
+            let steps = imported.actions.list.actions()[0].steps.clone();
             let mut direct = Session::new();
             for s in [&mut imported, &mut direct] {
                 prepare_pattern(s, depth, mode);
@@ -385,7 +386,7 @@ fn imported_group_d_playback_matches_direct_commands_across_modes_and_depths() {
             let result = imported.execute("actions.play", json!({"action":"A"})).unwrap();
             assert!(result.get("failed").is_none(), "{depth}/{mode}: {result}");
             assert_eq!(result["ran"], 11);
-            for (index, (id, params)) in steps.into_iter().enumerate() {
+            for (index, ActionStep { command: id, params }) in steps.into_iter().enumerate() {
                 if index != 10 {
                     direct.execute(&id, params).unwrap();
                 }
@@ -433,11 +434,11 @@ fn pixels(s: &Session) -> Vec<[f32; 4]> {
 fn native_and_measured_defaults_stay_distinct_through_playback() {
     use photocraft_algo::FilterParams;
     let mosaic = load_items(vec![code_item("Msc ", desc("null"))]);
-    let measured = &mosaic.actions.list[0].steps[0].1;
+    let measured = &mosaic.actions.list.actions()[0].steps[0].params;
     assert!(matches!(crate::filters::params_for("filter.pixelate.mosaic",&json!({})),Some(FilterParams::Mosaic{cell_size}) if cell_size==10.0));
     assert!(matches!(crate::filters::params_for("filter.pixelate.mosaic",measured),Some(FilterParams::Mosaic{cell_size}) if cell_size==2.0));
     let trace = load_items(vec![code_item("TrcC", desc("null"))]);
-    let measured = &trace.actions.list[0].steps[0].1;
+    let measured = &trace.actions.list.actions()[0].steps[0].params;
     assert!(matches!(crate::filters_ext::params_for("filter.stylize.traceContour", &json!({})), Some(FilterParams::TraceContour { upper: false, .. })));
     assert!(matches!(crate::filters_ext::params_for("filter.stylize.traceContour", measured), Some(FilterParams::TraceContour { upper: true, .. })));
     for id in ["filter.pixelate.mosaic", "filter.stylize.traceContour"] {
@@ -465,7 +466,7 @@ fn tiles_and_pointillize_exports_drop_dialog_colours() {
         coloured["background"] = json!("#ffffff");
         assert_eq!(export_item(id, &coloured, "Group D").unwrap().descriptor, plain, "{id}");
         let mut s = Session::new();
-        s.actions.list.push(Action::new("A", vec![(id.into(), coloured)]));
+        s.actions.list.push(Action::new("A", vec![ActionStep::new(id, coloured)])).unwrap();
         assert!(s.execute("actions.save", json!({"action":"A"})).is_ok(), "{id}");
     }
 }
