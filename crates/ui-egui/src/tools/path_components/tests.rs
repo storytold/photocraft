@@ -225,7 +225,7 @@ fn the_pen_carries_on_an_open_shape_path() {
     }
     assert!(pen_commit(&mut app, false));
     let (id, sh) = shape(&app);
-    assert!(sh.fill.is_none() && sh.stroke.is_some(), "an open path is stroked");
+    assert!(sh.fill.is_some() && sh.stroke.is_some(), "an open path is stroked, and filled from the first click (#12909)");
     let count = app.session.active().unwrap().doc.layers.len();
     let steps = history(&app);
     click(&mut app, 120.0, 120.0); // its last anchor: carry on

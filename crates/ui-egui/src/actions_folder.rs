@@ -112,6 +112,16 @@ fn open_location(app: &mut PhotocraftApp, folder: &str) {
     }
 }
 
+/// Installs a scanned Actions folder without reading the filesystem.
+#[cfg(test)]
+pub(crate) fn stage_scan(app: &mut PhotocraftApp, folder: &str, files: Vec<String>) {
+    app.session.prefs.edit(|prefs| prefs.file_handling.actions_folder = folder.to_string());
+    let rt = &mut app.prefs_rt.actions_folder;
+    rt.folder = folder.to_string();
+    rt.available = Some(folder.to_string());
+    rt.files = files;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

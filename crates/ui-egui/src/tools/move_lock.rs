@@ -21,7 +21,7 @@ pub fn pixels_locked(app: &PhotocraftApp) -> bool {
 /// The layers: any of them locked in place refuses the whole move.
 fn layers_locked(app: &PhotocraftApp) -> bool {
     let Some(st) = app.session.active() else { return false };
-    photocraft_engine::layer_multi_cmds::move_targets(&st.doc, &st.selected_layers()).iter().any(|id| {
+    photocraft_engine::layer_multi_cmds::move_targets(&st.doc, st.selected_layers()).iter().any(|id| {
         let locks = st.doc.effective_locks(*id);
         locks.position || locks.all
     })

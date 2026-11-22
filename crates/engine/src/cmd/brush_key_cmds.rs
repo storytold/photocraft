@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn previous_and_next_brush_walk_the_presets_and_wrap() {
         let mut s = Session::new();
-        s.tools.presets = std::sync::Arc::new(vec![preset("One", "", &[], 11.0), preset("Two", "", &[], 22.0), preset("Three", "", &[], 33.0)]);
+        *s.tools.presets = std::sync::Arc::new(vec![preset("One", "", &[], 11.0), preset("Two", "", &[], 22.0), preset("Three", "", &[], 33.0)]);
         s.tools.current_preset = None;
         let picked = |s: &Session| (s.tools.current_preset.clone().unwrap_or_default(), s.tools.brush.size);
         s.execute("tools.nextBrush", Value::Null).unwrap();
@@ -284,12 +284,12 @@ mod tests {
             [Some(","), Some("."), Some("Shift+,"), Some("Shift+.")]
         );
         // No presets: an error, and the brush and the current preset stay as they were.
-        std::sync::Arc::make_mut(&mut s.tools.presets).clear();
-        let (brush, current) = (s.tools.brush.clone(), s.tools.current_preset.clone());
+        std::sync::Arc::make_mut(&mut *s.tools.presets).clear();
+        let (brush, current) = ((*s.tools.brush).clone(), s.tools.current_preset.clone());
         for id in ["tools.previousBrush", "tools.nextBrush", "tools.firstBrush", "tools.lastBrush"] {
             assert!(s.execute(id, Value::Null).is_err(), "{id}");
         }
-        assert_eq!((s.tools.brush.clone(), s.tools.current_preset.clone()), (brush, current));
+        assert_eq!(((*s.tools.brush).clone(), s.tools.current_preset.clone()), (brush, current));
     }
 
     #[test]

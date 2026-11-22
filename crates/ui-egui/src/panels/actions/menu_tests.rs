@@ -123,6 +123,59 @@ fn the_panel_menu_offers_the_hosts_rows_with_the_apps_state() {
     assert!(app.session.active().unwrap().doc.walk().iter().any(|(_, _, layer)| layer.name == "FromSet"), "the set's action ran");
 }
 
+/// Load Actions… keeps its place in the menu but not its availability: the reference application
+/// greys it, beside Clear All, Reset and Replace, while a recording runs. The app's own
+/// `actions.load` refuses a running recording or playback, so the row is grey exactly when it
+/// would refuse, and Save Actions… stays on because the reference does not grey it.
+#[test]
+fn load_actions_row_greys_while_a_recording_or_playback_holds_the_library() {
+    let mut app = app();
+    app.session.actions.list.push(Action::new("A", vec![ActionStep::new("select.all", json!({})), ActionStep::new("select.inverse", json!({}))])).unwrap();
+    // Idle: every library row is on.
+    assert!(enabled(&app, C::Load), "no recording and no playback: the row is on");
+    assert!(enabled(&app, C::Save), "an action to save");
+    // Recording: Load Actions… goes grey with Clear All, Reset and Replace; Save stays on.
+    app.run("actions.record", json!({"name": "Rec"})).unwrap();
+    assert!(!enabled(&app, C::Load), "Load Actions is greyed while recording");
+    for greyed in [C::ClearAll, C::Reset, C::Replace] {
+        assert!(!enabled(&app, greyed), "{greyed:?} is greyed while recording");
+    }
+    assert!(enabled(&app, C::Save), "Save Actions is not greyed while recording");
+    app.run("actions.stop", json!({})).unwrap();
+    assert!(enabled(&app, C::Load), "the row is on again once the recording stops");
+    // A paced playback holds the library the same way, and `actions.load` refuses it the same way.
+    app.run("actions.setPlayback", json!({"performance": "step", "seconds": 1, "singleState": true})).unwrap();
+    play(&mut app, &json!({"action": "A"})).unwrap();
+    assert!(playback::pending(&app));
+    assert!(!enabled(&app, C::Load), "Load Actions waits for a running playback too");
+    assert!(playback::stop(&mut app));
+    assert!(enabled(&app, C::Load), "and is on again when the playback ends");
+}
+
+/// An Actions Folder row loads through `actions.load`, so it greys with Load Actions… while a
+/// recording or a paced playback holds the library.
+#[test]
+fn actions_folder_rows_grey_while_a_recording_or_playback_holds_the_library() {
+    let mut app = app();
+    let path = "/tmp/photocraft-actions/Set.atn";
+    crate::actions_folder::stage_scan(&mut app, "/tmp/photocraft-actions", vec![path.into()]);
+    let folder = |app: &crate::PhotocraftApp| {
+        menu::states(app).into_iter().find(|(command, _)| command.id == "ui.actionsFolder.load").map(|(_, state)| state).expect("a folder row")
+    };
+    assert_eq!(folder(&app), CommandState::new().enabled(true).title("Set.atn"));
+    app.run("actions.record", json!({"name": "Rec"})).unwrap();
+    assert_eq!(folder(&app), CommandState::new().enabled(false).title("Set.atn"), "a folder load would replace the set being recorded");
+    app.run("actions.stop", json!({})).unwrap();
+    assert_eq!(folder(&app), CommandState::new().enabled(true).title("Set.atn"));
+    app.session.actions.list.push(Action::new("A", vec![ActionStep::new("select.all", json!({})), ActionStep::new("select.inverse", json!({}))])).unwrap();
+    app.run("actions.setPlayback", json!({"performance": "step", "seconds": 1, "singleState": true})).unwrap();
+    play(&mut app, &json!({"action": "A"})).unwrap();
+    assert!(playback::pending(&app));
+    assert_eq!(folder(&app), CommandState::new().enabled(false).title("Set.atn"), "a folder load waits for playback too");
+    assert!(playback::stop(&mut app));
+    assert_eq!(folder(&app), CommandState::new().enabled(true).title("Set.atn"));
+}
+
 #[test]
 fn new_set_names_the_first_free_set_and_new_action_records_into_it() {
     let mut app = app();
