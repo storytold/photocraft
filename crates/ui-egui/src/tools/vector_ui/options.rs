@@ -484,8 +484,13 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
         if let Some(key) = history_keys::coalesce(&prefix(edit.field), event) {
             patch["coalesce"] = json!(key);
         }
-        match app.run("shape.edit", patch) {
-            Ok(_) => {
+        let result = if matches!(edit.field, "fill" | "stroke" | "stroke-w" | "style") {
+            crate::shape_options::edit_selected_shapes(app, id, &patch, None)
+        } else {
+            app.run("shape.edit", patch).map(|_| ())
+        };
+        match result {
+            Ok(()) => {
                 applied = true;
                 recent = edit.recent.or(recent);
                 if !matches!(event, EditEvent::Update { .. } | EditEvent::Cancel { .. }) {
