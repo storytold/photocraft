@@ -1,5 +1,5 @@
-//! #12574: `paint.redEye` refuses a hidden target layer, a targeted layer mask, an adjustment layer
-//! and several selected layers (when no `layer` is named) with the reference's alert text, and
+//! #12574: `paint.redEye` refuses a hidden target layer, a mask or channel target, an adjustment
+//! layer and several selected layers (when no `layer` is named) with the reference's alert text, and
 //! leaves the document and History unchanged. A named layer, or one visible pixel layer alone,
 //! still gets its pupil corrected.
 
@@ -43,6 +43,18 @@ fn a_targeted_layer_mask_and_an_adjustment_layer() {
     let (mut s, _) = eye();
     s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
     refused(&mut s, click(), NOT_PIXEL_REFUSAL);
+}
+
+/// The Done-when says "a mask or channel target": an alpha channel and the Quick Mask are refused
+/// too, with no `layer` named, and the document and History stay as they were.
+#[test]
+fn an_alpha_channel_and_the_quick_mask() {
+    let (mut s, _) = eye();
+    s.execute("channel.new", json!({"name": "Sky sel", "fill": "white"})).unwrap();
+    refused(&mut s, json!({"x": 32, "y": 32, "target": {"channel": 0}}), NOT_PIXEL_REFUSAL);
+    let (mut s, _) = eye();
+    s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+    refused(&mut s, json!({"x": 32, "y": 32, "target": "quickMask"}), NOT_PIXEL_REFUSAL);
 }
 
 #[test]

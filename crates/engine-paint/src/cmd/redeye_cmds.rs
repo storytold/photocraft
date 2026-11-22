@@ -244,16 +244,16 @@ fn mode_refusal(s: &Session) -> Result<()> {
     }
 }
 
-/// The layer kinds and selections the tool refuses (#12574): a targeted layer mask, an adjustment
-/// layer, and several selected layers when the call names no layer. Alpha channels, colour sets
-/// and the Quick Mask were not measured and keep working.
+/// The targets and selections the tool refuses (#12574): a layer or filter mask, an alpha channel
+/// or the Quick Mask ("a mask or channel target"), an adjustment layer, and several selected layers
+/// when the call names no layer. A set of colour channels edits the layer's pixels and still works.
 pub(crate) fn target_refusal(s: &Session, p: &Value) -> Result<()> {
     let Some(d) = s.active() else { return Ok(()) };
     let named = p.get("layer").is_some();
     let p = crate::channel_cmds::inject_target(s, "paint.redEye", p.clone());
     let id = if named { crate::commands::layer_param(s, &p).ok() } else { d.active_layer };
     let adjustment = id.and_then(|id| d.doc.layer(id)).is_some_and(|l| matches!(l.content, photocraft_doc::LayerContent::Adjustment(_)));
-    if adjustment || crate::channel_cmds::target_of(&p) == crate::channel_cmds::Target::Mask {
+    if adjustment || !matches!(crate::channel_cmds::target_of(&p), crate::channel_cmds::Target::Pixels) {
         return Err(EngineError::Other(NOT_PIXEL_REFUSAL.into()));
     }
     if !named && d.selected_layers().len() > 1 {
