@@ -12,16 +12,17 @@ use photocraft_color::BlendMode;
 use photocraft_doc::{Document, Group, Knockout, Layer, LayerContent, LayerId, Metadata, SmartObject, SmartSource};
 use serde_json::{Value, json};
 
-use super::{authorize_source, authorized_source_bytes, decode_source, detach_psd, other, placement, shift_layer, smart};
+use super::{authorize_source, authorized_source_bytes, decode_placed_source, detach_psd, other, placement, shift_layer, smart};
 use crate::commands::layer_param;
 use crate::{EngineError, Result, Session};
 
 /// The smart object's contents as layers in `doc`'s colour model, profile and depth, still in
 /// source pixel coordinates. A Background becomes a normal layer (it can't sit above others).
-fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: bool) -> Result<Vec<Layer>> {
+/// `None` for a placed PDF that can't be drawn in its frame.
+fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: bool) -> Result<Option<Vec<Layer>>> {
     let (name, bytes) = authorized_source_bytes(s, "layer.smartObjects.convertToLayers", &doc.metadata, &sm.source)?
         .ok_or_else(|| other("the smart object's contents are unavailable (missing linked file?)"))?;
-    let mut src = decode_source(&name, &bytes)?;
+    let Some(mut src) = decode_placed_source(&name, &bytes, sm)? else { return Ok(None) };
     let mode = doc.pixel_format().mode;
     if src.pixel_format().mode != mode || src.icc_profile != doc.icc_profile {
         crate::color_cmds::convert_document(&mut src, &crate::color_cmds::document_profile(doc), intent, bpc)?;
@@ -41,7 +42,19 @@ fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: 
         }
         embed_nested(&src.metadata, l);
     }
-    Ok(layers)
+    Ok(Some(layers))
+}
+
+/// What a placed PDF that can't be drawn in its frame converts to: the pixels it was saved with,
+/// already at its placement, as a re-render keeps them. With smart filters showing, those pixels
+/// hold the filters' result, which Convert to Layers discards, so it is refused instead.
+fn saved_pixels(sm: &SmartObject) -> Result<Vec<Layer>> {
+    let unavailable = "can't tell how this placed PDF was cropped";
+    if sm.filters_enabled && sm.smart_filters.iter().any(|f| f.visible) {
+        return Err(other(format!("{unavailable}, and its saved pixels include its smart filters; rasterize it instead (Layer › Smart Objects › Rasterize)")));
+    }
+    let px = sm.cache.clone().ok_or_else(|| other(format!("{unavailable}, and it has no saved pixels")))?;
+    Ok(vec![Layer::new("Layer 1", LayerContent::Raster(px))])
 }
 
 /// Nested PSD placed layers find their files in the contents' own global blocks, which stay
@@ -181,8 +194,13 @@ pub(super) fn convert_to_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = &st.doc;
     let so = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let sm = smart(doc, id)?;
-    let mut layers = contents(s, doc, sm, intent, bpc)?;
-    place(s, doc, sm, &mut layers)?;
+    let layers = match contents(s, doc, sm, intent, bpc)? {
+        Some(mut layers) => {
+            place(s, doc, sm, &mut layers)?;
+            layers
+        }
+        None => saved_pixels(sm)?,
+    };
     let discarded = sm.smart_filters.len();
     let out = unpacked(so, layers);
     let (new_id, group) = (out.id, out.is_group());

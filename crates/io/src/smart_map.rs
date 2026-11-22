@@ -68,7 +68,7 @@ pub use import::filter_from_item;
 use import::{GALLERY_EFFECTS, LENSES, MEZZOTINT_TYPES, adjustment_list, known_params};
 use import::{code, from_hex, int, to_hex};
 use placed::enumv;
-pub use placed::{PlacedSpec, plld_bytes, sold_bytes, stored_size};
+pub use placed::{PlacedPdf, PlacedSpec, placed_pdf, plld_bytes, sold_bytes, stored_size};
 #[cfg(test)]
 use placed::{quad_moved, warp_desc};
 
