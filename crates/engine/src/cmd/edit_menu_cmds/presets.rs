@@ -43,8 +43,73 @@ pub(super) fn can_define_shape(s: &Session) -> std::result::Result<(), String> {
     current_path(&d.doc, d.active_layer, None).map(|_| ()).ok_or_else(|| "select a path or shape layer first".into())
 }
 
+/// What Define Custom Shape refuses to store, as in Photoshop (#14295).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShapeRefusal {
+    /// A path with no area (a single anchor, a straight line): an alert says so ([`EMPTY_PATH`]).
+    Empty,
+    /// A path whose every subpath subtracts: nothing happens, with no alert.
+    SubtractOnly,
+}
+
+/// The alert of a Define Custom Shape refused for a path with no area.
+pub const EMPTY_PATH: &str = "Could not define the custom shape because the current path is empty.";
+
+/// Why `path` can't be a custom shape, if it can't.
+fn refusal(path: &Path) -> Option<ShapeRefusal> {
+    if !path.subpaths.is_empty() && path.subpaths.iter().all(|sp| sp.op == photocraft_doc::PathOp::Subtract) {
+        return Some(ShapeRefusal::SubtractOnly);
+    }
+    // Not measured, so they keep today's behaviour and are stored: a closed path of two anchors, and a path whose every
+    // subpath intersects (CodeRabbit on #16238).
+    if path.subpaths.iter().any(|sp| sp.closed && sp.knots.len() == 2)
+        || (!path.subpaths.is_empty() && path.subpaths.iter().all(|sp| sp.op == photocraft_doc::PathOp::Intersect))
+    {
+        return None;
+    }
+    // Every flattened point on one line (or one point): nothing is enclosed. Not the signed area, which cancels for a
+    // self-crossing outline like a bow tie that does cover pixels (CodeRabbit on #16238).
+    let lines = photocraft_vector::flatten_path(path, 0.05);
+    let mut pts: Vec<(f64, f64)> = lines.iter().flat_map(|l| l.pts.iter().copied()).collect();
+    // A curve flattened to one piece keeps only its end points, so the handles that shape each segment count too: a path
+    // whose anchors are on a line but whose handles bulge encloses area (CodeRabbit on #16238).
+    for sp in &path.subpaths {
+        let n = sp.knots.len();
+        let segments = if sp.closed { n } else { n.saturating_sub(1) };
+        for i in 0..segments {
+            let (from, to) = (&sp.knots[i], &sp.knots[(i + 1) % n]);
+            pts.extend([(from.out_ctrl.x, from.out_ctrl.y), (to.in_ctrl.x, to.in_ctrl.y)]);
+        }
+    }
+    let Some(&p0) = pts.first() else { return Some(ShapeRefusal::Empty) };
+    if pts.iter().any(|p| !p.0.is_finite() || !p.1.is_finite()) {
+        return Some(ShapeRefusal::Empty);
+    }
+    let far = pts.iter().copied().max_by(|a, b| ((a.0 - p0.0).hypot(a.1 - p0.1)).total_cmp(&((b.0 - p0.0).hypot(b.1 - p0.1)))).unwrap_or(p0);
+    let len = (far.0 - p0.0).hypot(far.1 - p0.1);
+    let off_line =
+        if len <= 1e-9 { 0.0 } else { pts.iter().map(|p| ((p.0 - p0.0) * (far.1 - p0.1) - (p.1 - p0.1) * (far.0 - p0.0)).abs() / len).fold(0.0, f64::max) };
+    // Collinear to floating-point noise only: a few dozen units in the last place of the largest coordinate, which
+    // grows with the coordinates, not with the length of the line: a thin rectangle has area and is stored, however narrow and however long.
+    let magnitude = pts.iter().fold(0.0_f64, |m, p| m.max(p.0.abs()).max(p.1.abs()));
+    (off_line <= 64.0 * f64::EPSILON * (1.0 + magnitude)).then_some(ShapeRefusal::Empty)
+}
+
+/// What Define Custom Shape would refuse for the path it would use on the active document (the menu
+/// checks this before opening its dialog). `None` when it would store a shape, or has no path.
+pub fn define_custom_shape_refusal(s: &Session) -> Option<ShapeRefusal> {
+    let d = s.active()?;
+    refusal(&current_path(&d.doc, d.active_layer, None)?)
+}
+
 pub(super) fn define_custom_shape(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
+    if let Some(r) = current_path(&st.doc, st.active_layer, p.get("path").and_then(Value::as_str)).as_ref().and_then(refusal) {
+        return Err(match r {
+            ShapeRefusal::Empty => EngineError::Other(EMPTY_PATH.into()),
+            ShapeRefusal::SubtractOnly => bad("edit.defineCustomShape", "the path only subtracts: there is no shape to define"),
+        });
+    }
     let path = current_path(&st.doc, st.active_layer, p.get("path").and_then(Value::as_str)).ok_or_else(|| bad("edit.defineCustomShape", "no such path"))?;
     let name = p
         .get("name")
