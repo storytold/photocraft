@@ -447,7 +447,7 @@ pub(crate) fn constrain_document(before: &Document, after: &mut Document) -> cra
             }
         }
     }
-    let damage = after.bounds();
+    let canvas = after.bounds();
     let paths = layer_paths(after)?;
     for (path, _) in paths {
         let (id, needs_work) = {
@@ -468,6 +468,7 @@ pub(crate) fn constrain_document(before: &Document, after: &mut Document) -> cra
         if let LayerContent::Raster(surface) = &mut layer.content {
             let original = originals.get(&id).copied();
             let table = table.as_ref().ok_or_else(|| indexed_error("indexed document has no color table"))?;
+            let damage = canvas.union(&surface.tile_bounds());
             constrain_surface(surface, original, table, damage)?;
         }
     }
@@ -485,18 +486,56 @@ pub(crate) fn constrain_surface(surface: &mut Surface, original: Option<&Surface
     let original_default = original.map(|surface| PixelBytes::from_slice(surface.default_bytes())).unwrap_or(after_default);
     let default_changed = original.is_some() && original_default != after_default;
     let new_opaque_default = original.is_none() && (!format.alpha || source_alpha(after_default.as_slice(), format, 0) >= 0.5);
+    let original_tiles: Option<HashSet<*const Tile>> = original.map(|surface| surface.tiles().map(|(_, tile)| Arc::as_ptr(tile)).collect());
+    let removed_coordinates: Vec<TileCoord> =
+        if default_changed { Vec::new() } else { original.map(|surface| surface.tiles().map(|(coordinate, _)| *coordinate).collect()).unwrap_or_default() };
+    let coordinates: Vec<TileCoord> = surface.tiles().map(|(coordinate, _)| *coordinate).collect();
+
     if default_changed || new_opaque_default {
         let target = default_target(after_default.as_slice(), format, table)?;
         let encoded = target_bytes(target, format, table);
         if encoded != after_default {
             replace_default(surface, target, format, table);
+            if new_opaque_default {
+                // Tiles on a new layer can still contain the old default; unlike default pixels,
+                // their samples need an explicit rewrite when the default is remapped.
+                let bpp = format.bytes_per_pixel();
+                let mut remapped_solid: Option<Arc<Tile>> = None;
+                for &coordinate in &coordinates {
+                    let Some(tile) = surface.tile(coordinate).cloned() else { continue };
+                    let bytes = tile.bytes();
+                    let mut pixels = bytes.chunks_exact(bpp);
+                    let Some(first) = pixels.next() else { continue };
+                    let uniform = pixels.all(|pixel| pixel == first);
+                    let contains_old_default =
+                        if uniform { first == after_default.as_slice() } else { bytes.chunks_exact(bpp).any(|pixel| pixel == after_default.as_slice()) };
+                    drop(bytes);
+                    if !contains_old_default {
+                        continue;
+                    }
+                    if uniform {
+                        let tile = match &remapped_solid {
+                            Some(tile) => tile.clone(),
+                            None => {
+                                let tile = surface.solid_tile(&target_samples(target, table)[..format.channels()]);
+                                remapped_solid = Some(tile.clone());
+                                tile
+                            }
+                        };
+                        surface.put_tiles(std::iter::once((coordinate, tile)));
+                    } else {
+                        let tile = surface.try_tile_mut(coordinate)?;
+                        let mut bytes = tile.bytes_mut();
+                        for pixel in bytes.chunks_exact_mut(bpp) {
+                            if pixel == after_default.as_slice() {
+                                pixel.copy_from_slice(encoded.as_slice());
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
-    let original_tiles: Option<HashSet<*const Tile>> = original.map(|surface| surface.tiles().map(|(_, tile)| Arc::as_ptr(tile)).collect());
-    let removed_coordinates: Vec<TileCoord> =
-        if default_changed { Vec::new() } else { original.map(|surface| surface.tiles().map(|(coordinate, _)| *coordinate).collect()).unwrap_or_default() };
-
-    let coordinates: Vec<TileCoord> = surface.tiles().map(|(coordinate, _)| *coordinate).collect();
     let mut context = ConstraintContext::new(format, table, damage);
     for coordinate in coordinates {
         let Some(after) = surface.tile(coordinate).cloned() else { continue };
@@ -516,4 +555,46 @@ pub(crate) fn constrain_surface(surface: &mut Surface, original: Option<&Surface
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use photocraft_color::PixelFormat;
+
+    /// Every opaque sample of every explicit tile is a table colour (the Indexed invariant).
+    fn assert_on_table(surface: &Surface, table: &ColorTable) {
+        for (coordinate, _) in surface.tiles() {
+            for y in coordinate.rect().y0..coordinate.rect().y1 {
+                for x in coordinate.rect().x0..coordinate.rect().x1 {
+                    let p = surface.pixel(x, y);
+                    assert_eq!(p[3], 1.0, "alpha must stay opaque at ({x},{y}): {p:?}");
+                    assert!(
+                        table.colors.iter().any(|entry| (0..3).all(|i| (p[i] - f32::from(entry[i]) / 255.0).abs() <= 1.0 / 255.0)),
+                        "off-table pixel at ({x},{y}): {p:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A new opaque layer's explicit tiles may still hold the pre-remap default. When the default
+    /// maps to a table colour, those pixels must follow it: the unchanged-pixel baseline equals
+    /// the old default, so without a rewrite they would keep their off-table bytes.
+    #[test]
+    fn new_layer_tiles_holding_the_old_default_follow_the_remapped_default() {
+        let table = ColorTable { colors: vec![[0, 0, 0], [255, 255, 255]], transparent: None };
+        let red = [0.9, 0.1, 0.1, 1.0];
+        let mut surface = Surface::with_default(PixelFormat::RGBA8, &red);
+        // A uniform tile equal to the default, and a mixed tile with one painted pixel.
+        surface.put_tiles([(TileCoord::new(0, 0), surface.solid_tile(&red))]);
+        surface.put_tiles([(TileCoord::new(1, 0), surface.solid_tile(&red))]);
+        surface.write_region(Rect::from_xywh(TILE_SIZE, 0, 1, 1), &[0.1, 0.9, 0.1, 1.0]);
+
+        let damage = surface.tile_bounds();
+        constrain_surface(&mut surface, None, &table, damage).unwrap();
+
+        assert_on_table(&surface, &table);
+        assert_eq!(surface.default_pixel(), vec![0.0, 0.0, 0.0, 1.0]);
+    }
 }

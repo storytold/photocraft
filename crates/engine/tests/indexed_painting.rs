@@ -352,3 +352,27 @@ fn unchanged_foreign_storage_layers_do_not_veto_non_pixel_edits() {
     assert_eq!(gray_pixels(&s), before, "the refused fill changed the foreign layer");
     assert_eq!(table(&s), fixed);
 }
+
+/// An unlocked indexed layer can paint into its retained tile space beyond the canvas. The
+/// command-level constraint must include those changed pixels, not only the document bounds.
+#[test]
+fn indexed_off_canvas_stroke_pixels_stay_on_the_table() {
+    let mut s = indexed_black_white(40, 16);
+    s.execute("layer.new.layer", json!({"name": "Off-canvas test"})).unwrap();
+    // Establish the tile that spans the canvas edge: the canvas is 40 px wide, tiles are 256.
+    s.execute("paint.stroke", json!({"points": [[36, 8]], "size": 8, "hardness": 1.0, "color": "#000000"})).unwrap();
+    let bounds = surface(&s).tile_bounds();
+    assert!(bounds.x1 > 40, "the retained tile must extend past the canvas: {bounds:?}");
+
+    // This stroke writes new opaque pixels beyond x = 40 on the unlocked, transparent layer.
+    s.execute("paint.stroke", json!({"points": [[36, 8], [46, 8]], "size": 8, "hardness": 1.0, "color": "#808080"})).unwrap();
+    let t = table(&s);
+    let surf = surface(&s);
+    let off_canvas: Vec<_> = (41..49).map(|x| (x, surf.pixel(x, 8))).collect();
+    assert!(off_canvas.iter().any(|(_, p)| p[3] >= 0.5), "stroke should write beyond canvas x=40: {off_canvas:?}");
+    for (x, p) in off_canvas {
+        if p[3] >= 0.5 {
+            assert!(t.colors.contains(&rgb8(&p)), "off-table pixel beyond the canvas at ({x},8): {p:?}");
+        }
+    }
+}

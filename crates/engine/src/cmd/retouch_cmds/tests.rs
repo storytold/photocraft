@@ -2497,7 +2497,9 @@ fn indexed_live_retouch_clone_matches_cold_and_wrapped_palette() {
         on_palette(&live.doc, id, &table);
 
         let mut offered = indexed_gray_levels();
-        let live = LiveRetouch::begin(&offered, "paint.cloneStamp", &first).unwrap();
+        // The offered stroke must match the committing params (all points), or `LiveCommit::matches`
+        // discards it and the assertions below would pass on the cold render.
+        let live = LiveRetouch::begin(&offered, "paint.cloneStamp", &commit).unwrap();
         offered.offer_live_retouch(live).unwrap();
         offered.execute("paint.cloneStamp", commit).unwrap();
         assert_eq!(layer_bytes(&offered), expected, "offered live clone differs from cold output (wrap={wrap})");
