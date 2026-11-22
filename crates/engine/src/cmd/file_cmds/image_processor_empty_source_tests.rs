@@ -185,7 +185,9 @@ fn a_source_removed_between_formats_keeps_the_written_file_and_read_error() {
         }),
     )
     .unwrap();
-    assert_eq!(result["files"], json!([jpeg]));
+    let files = result["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(Path::new(files[0].as_str().unwrap()), jpeg);
     let errors = result["errors"].as_array().unwrap();
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0]["file"], json!(input));
