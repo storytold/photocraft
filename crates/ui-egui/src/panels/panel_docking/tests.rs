@@ -436,12 +436,9 @@ fn ui_set_toolbar_columns_sets_the_toolbar_columns_steps() {
 #[test]
 fn actions_panel_rows_can_scroll_inside_the_panel_popup() {
     use crate::app::framework::BuildApp;
-    use craft::ui::contract::{Props as _, Show as _, ShowContainer as _, Trigger};
+    use craft::ui::contract::{Show as _, ShowContainer as _, Trigger};
     use craft::ui::menu::{Menu, PanelMenu};
-    use egui_kittest::{
-        Harness,
-        kittest::{NodeT, Queryable},
-    };
+    use egui_kittest::{Harness, kittest::Queryable};
 
     let mut h = Harness::builder().with_size(egui::vec2(600.0, 240.0)).build_app(
         |ui, app| {
