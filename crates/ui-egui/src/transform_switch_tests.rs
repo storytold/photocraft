@@ -57,6 +57,21 @@ fn picking_another_tool_in_the_toolbar_applies_the_transform() {
     assert_eq!(red_bounds(&h), photocraft_geom::Rect::new(150, 140, 250, 200), "the move was applied, not cancelled");
 }
 
+/// The same in Warp mode: picking another tool applies the session, warp and all, as the reference does.
+#[test]
+fn picking_another_tool_in_warp_mode_applies_the_transform() {
+    let mut h = app();
+    transform_and_move(&mut h);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "edit.transform.warp", json!({})).unwrap();
+    h.run_steps(4);
+    assert!(h.state().ui.transform.as_ref().is_some_and(|t| t.session.warp().is_some()), "Warp mode is open");
+    pick_another_tool(&h);
+    h.run_steps(4);
+    assert!(h.state().ui.transform.is_none(), "the session closed");
+    assert_eq!(red_bounds(&h), photocraft_geom::Rect::new(150, 140, 250, 200), "the move was applied, not cancelled");
+}
+
 /// The app with the red rectangle on a layer the last step made (Layer via Copy, which deselects in
 /// the same step), as Place Embedded leaves it for the box `begin_placed` opens: cancelling the
 /// place takes that step back.

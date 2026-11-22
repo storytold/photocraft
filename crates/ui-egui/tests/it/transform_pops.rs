@@ -561,3 +561,37 @@ fn enter_on_a_perspective_squeezed_to_a_point_applies_what_the_preview_shows() {
         run_checked(false, subject, &order, true).unwrap_or_else(|e| panic!("{subject} {order:?}: {e}"));
     }
 }
+
+/// A click on the pasteboard ends the session, applied, in the box and in Warp mode alike; a click on the document
+/// away from the box or grid does nothing (the reference: it pulled the warp, then the pasteboard click added Free
+/// Transform to the History). Warp mode used to ignore it, which left no click to get out with.
+#[test]
+fn a_pasteboard_click_applies_the_box_and_warp_mode_alike() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    for warp in [false, true] {
+        for (name, at, closes) in [("the pasteboard", [-60.0, -40.0], true), ("the document away from it", [20.0, 20.0], false)] {
+            let Some(mut h) = harness(false) else { return };
+            setup(&mut h, "smart");
+            control(&mut h, "ui.menu.invoke", json!({"id": "edit.freeTransform"}));
+            if warp {
+                control(&mut h, "ui.menu.invoke", json!({"id": Step::Warp.menu().expect("menu")}));
+                let (from, to) = (screen(&h, 150.5, 150.5), screen(&h, 160.5, 158.5));
+                drag(&mut h, from, to);
+            } else {
+                let (from, to) = (screen(&h, 240.0, 210.0), screen(&h, 260.0, 225.0));
+                drag(&mut h, from, to);
+            }
+            let before = h.state().session.active().map(|st| st.revision);
+            let p = screen(&h, at[0], at[1]);
+            pointer_move(&mut h, p);
+            button(&mut h, p, true);
+            button(&mut h, p, false);
+            h.run_steps(6);
+            let open = h.state().ui.transform.is_some();
+            assert_eq!(open, !closes, "warp {warp}: a click on {name}");
+            if closes {
+                assert_ne!(h.state().session.active().map(|st| st.revision), before, "warp {warp}: the click applied the session");
+            }
+        }
+    }
+}

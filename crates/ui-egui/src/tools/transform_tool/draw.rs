@@ -50,6 +50,9 @@ struct Shown {
     picture: Vec<egui::Shape>,
     /// The command picked in Warp mode's right-click menu ([`warp_menu`]), run after the pass's edits.
     menu_command: Option<&'static str>,
+    /// A click in Warp mode off the grid, in document units: it ends the session where the box's click outside
+    /// would ([`commit::apply_click`]).
+    warp_click: Option<Point>,
 }
 
 /// Shows the open Free Transform in the canvas body at `rect`, and applies what its controls
@@ -71,7 +74,7 @@ pub fn show_in_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Re
         let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview) else { return SessionShown::default() };
         show_session(app, t, pv, ui, rect)
     };
-    let Shown { edits, snapped, apply, discard, mesh, cylinder, busy, picture, menu_command } = shown;
+    let Shown { edits, snapped, apply, discard, mesh, cylinder, busy, picture, menu_command, warp_click } = shown;
     let mut need_warp = false;
     if let Some(t) = app.ui.transform.as_mut() {
         for edit in edits.iter().cloned() {
@@ -93,6 +96,9 @@ pub fn show_in_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Re
         Some(ApplyBy::Key | ApplyBy::DoubleClick) => commit(app),
         Some(ApplyBy::ClickOutside { at, .. }) => commit::apply_click(app, at),
         _ => {}
+    }
+    if let Some(at) = warp_click {
+        commit::apply_click(app, at);
     }
     if discard {
         cancel(app);
@@ -340,6 +346,24 @@ fn show_warp(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, w: &Sessi
         grid = grid.split(split);
     }
     let shown = grid.show_at(ui, rect);
+    // A click off the grid ends the session as a click outside the box does: on the pasteboard or another layer's
+    // pixels it applies, elsewhere nothing (the reference, in Warp mode as in the box). Not a click on a panel or the
+    // task bar over the canvas, nor one on the grid's surface or its points.
+    let click = ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary).then(|| i.pointer.interact_pos()).flatten());
+    if let Some(pos) = click
+        && rect.contains(pos)
+        && ui.ctx().layer_id_at(pos) == Some(ui.layer_id())
+        && shown.mesh.events.iter().next().is_none()
+        && let Some(view) = crate::canvas::active_view(app)
+    {
+        let at = view.to_doc(pos);
+        let reach = 8.0 * unit;
+        let on_grid =
+            warp::grid_surface(&w.mesh, unit, pv.placed_warp.map(|(m, _)| m))(at).is_some() || w.mesh.points.iter().any(|p| (*p - at).hypot() <= reach);
+        if !on_grid {
+            out.warp_click = Some(at);
+        }
+    }
     // A right-click over the grid opens the transform menu in its Warp form, as the reference does (#12493).
     let words = craft::ui::runtime::env::Env::of(ui).words::<TransformMenuWords>();
     let (entries, rows) = warp_menu(app, t, &words);
