@@ -12,9 +12,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::PhotocraftApp;
+use crate::adjust_editors::is_gray;
 use crate::state::Tool;
-use photocraft_doc::{Adjustment, LayerContent, LayerId};
-use photocraft_engine::adjust_params::CurvesEyedropper;
+use craft::imaging::ui::adjust::TonePicker;
+use craft::ui::dialog::DialogId;
+use photocraft_doc::{Adjustment, ColorMode, LayerContent, LayerId};
 
 /// An armed Properties eyedropper: on `layer`, for `point` ("black", "gray" or "white"), armed
 /// while `tool` was the current tool.
@@ -25,21 +27,38 @@ pub struct LayerPicker {
     pub tool: Tool,
 }
 
-const POINTS: [(&str, CurvesEyedropper); 3] = [("black", CurvesEyedropper::Black), ("gray", CurvesEyedropper::NeutralGray), ("white", CurvesEyedropper::White)];
+/// The point name of a picker, as `layer.setAdjustment`'s `eyedropper` param and [`LayerPicker`] have it.
+pub(crate) fn point_name(picker: TonePicker) -> &'static str {
+    match picker {
+        TonePicker::Black => "black",
+        TonePicker::Gray => "gray",
+        _ => "white",
+    }
+}
 
-fn eyedropper(point: &str) -> Option<CurvesEyedropper> {
-    POINTS.iter().find(|(id, _)| *id == point).map(|(_, e)| *e)
+/// The framework picker a [`LayerPicker`] names; `None` for a point name that is none of the three.
+pub fn tone_picker(picker: &LayerPicker) -> Option<TonePicker> {
+    TonePicker::ALL.into_iter().find(|p| point_name(*p) == picker.point)
+}
+
+/// Arms `picker` on `layer` for the current tool, or disarms the picker when it is `layer`'s.
+pub fn arm(app: &mut PhotocraftApp, layer: LayerId, picker: Option<TonePicker>) {
+    match picker {
+        Some(p) => app.ui.layer_picker = Some(LayerPicker { layer: layer.0, point: point_name(p).into(), tool: app.ui.tool }),
+        None if app.ui.layer_picker.as_ref().is_some_and(|armed| armed.layer == layer.0) => app.ui.layer_picker = None,
+        None => {}
+    }
 }
 
 /// The armed picker if it still applies: same tool, the layer still the active Levels or Curves
 /// layer, and the point supported in the document's colour mode.
-pub fn armed(app: &PhotocraftApp) -> Option<(LayerId, &str)> {
+pub fn armed(app: &PhotocraftApp) -> Option<(LayerId, TonePicker)> {
     let picker = app.ui.layer_picker.as_ref()?;
     let st = app.session.active()?;
     let layer = LayerId(picker.layer);
     let tonal = st.doc.layer(layer).is_some_and(|l| matches!(l.content, LayerContent::Adjustment(Adjustment::Levels { .. } | Adjustment::Curves { .. })));
-    let supported = eyedropper(&picker.point).is_some_and(|e| crate::adjust_dialog::picker_supported(st.doc.mode, e));
-    (picker.tool == app.ui.tool && st.active_layer == Some(layer) && tonal && supported).then_some((layer, picker.point.as_str()))
+    let point = tone_picker(picker).filter(|p| p.supported(st.doc.mode == ColorMode::Rgb, is_gray(st.doc.mode)))?;
+    (picker.tool == app.ui.tool && st.active_layer == Some(layer) && tonal).then_some((layer, point))
 }
 
 /// Drops a picker that no longer applies, so returning to its tool or layer doesn't re-arm it.
@@ -58,9 +77,9 @@ pub fn cancel(app: &mut PhotocraftApp) -> bool {
 /// Returns whether a picker was armed (and so owns the click), even if the sample failed (off
 /// the image, transparent): that is reported in the status bar and the picker stays armed.
 pub fn sample_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
-    let Some((layer, point)) = armed(app).map(|(l, p)| (l, p.to_string())) else { return false };
-    let size = app.ui.tool_options.eyedropper_size;
-    let p = json!({"layer": layer.0, "eyedropper": {"point": point, "at": [x, y], "size": size}});
+    let Some((layer, point)) = armed(app) else { return false };
+    let size = app.ui.tool_options.eyedropper.size.pixels();
+    let p = json!({"layer": layer.0, "eyedropper": {"point": point_name(point), "at": [x, y], "size": size}});
     if let Err(err) = app.run("layer.setAdjustment", p) {
         app.ui.status = err;
         app.ui.status_error = true;
@@ -68,102 +87,41 @@ pub fn sample_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
     true
 }
 
-/// The three eyedropper buttons above the Levels or Curves editor of adjustment layer `layer`.
-/// A double-click on one also opens the Color Picker on its target colour ([`open_target_picker`]),
-/// leaving it armed.
-pub fn controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: LayerId) {
-    let Some(mode) = app.session.active().map(|s| s.doc.mode) else { return };
-    let current = armed(app).filter(|(l, _)| *l == layer).map(|(_, p)| p.to_string());
-    let swatches = target_swatches(app);
-    let mut clicked = None;
-    let mut double = None;
-    ui.horizontal(|ui| {
-        // The swatch is the colour the picker maps the sample to, as in the dialog.
-        for (((id, e), label), swatch) in POINTS.iter().zip(labels()).zip(swatches) {
-            let enabled = crate::adjust_dialog::picker_supported(mode, *e);
-            let selected = current.as_deref() == Some(*id);
-            let response = crate::adjust_dialog::picker_button(ui, selected, enabled, label, swatch);
-            if response.double_clicked() {
-                double = Some(*id);
-            } else if response.clicked() {
-                clicked = Some((*id, selected));
-            }
-        }
-    });
-    match clicked {
-        Some((_, true)) => app.ui.layer_picker = None,
-        Some((id, false)) => app.ui.layer_picker = Some(LayerPicker { layer: layer.0, point: id.into(), tool: app.ui.tool }),
-        None => {}
-    }
-    if let Some(id) = double {
-        // The double-click's first click armed it and its second would disarm it: keep it armed.
-        app.ui.layer_picker = Some(LayerPicker { layer: layer.0, point: id.into(), tool: app.ui.tool });
-        open_target_picker(app, id);
+/// The target colour (0..1 RGB levels) that `picker` maps a sample to: the `targetColors` preference (#10091).
+pub fn target_rgb(app: &PhotocraftApp, picker: TonePicker) -> Option<[f32; 3]> {
+    crate::adjust_dialog::eyedropper_of(picker).map(|(e, _)| e.target_in(&app.session))
+}
+
+/// Photoshop's Color Picker title for `picker`'s target.
+fn target_title(picker: TonePicker) -> &'static str {
+    match picker {
+        TonePicker::Black => tl!("Select target shadow color:"),
+        TonePicker::Gray => tl!("Select target midtone color:"),
+        _ => tl!("Select target highlight color:"),
     }
 }
 
-/// The eyedroppers' tooltips, in [`POINTS`] order.
-pub(crate) fn labels() -> [&'static str; 3] {
-    [tl!("Set Black Point"), tl!("Set Neutral Gray Point"), tl!("Set White Point")]
-}
-
-/// The target colour (0..1 RGB levels) that picker `point` ("black", "gray" or "white") maps a
-/// sample to: the `targetColors` preference.
-pub fn target_rgb(app: &PhotocraftApp, point: &str) -> Option<[f32; 3]> {
-    eyedropper(point).map(|e| e.target_in(&app.session))
-}
-
-/// The three targets as the eyedropper buttons' swatches, in [`POINTS`] order.
-pub(crate) fn target_swatches(app: &PhotocraftApp) -> [egui::Color32; 3] {
-    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    POINTS.map(|(_, e)| {
-        let [r, g, b] = e.target_in(&app.session);
-        egui::Color32::from_rgb(q(r), q(g), q(b))
-    })
-}
-
-/// The Color Picker's `__colorPicker` target prefix for an eyedropper's target colour.
-const TARGET_PICKER: &str = "eyedropperTarget.";
-
-/// Photoshop's Color Picker title for picker `point`'s target.
-fn target_title(point: &str) -> Option<&'static str> {
-    match point {
-        "black" => Some(tl!("Select target shadow color:")),
-        "gray" => Some(tl!("Select target midtone color:")),
-        "white" => Some(tl!("Select target highlight color:")),
-        _ => None,
-    }
-}
-
-/// Double-click on a Set Black / Gray / White Point eyedropper (Levels, Curves; dialog or
-/// Properties): opens the Color Picker on that point's target colour. OK stores it in the
+/// Double-click on a Set Black / Gray / White Point eyedropper (Levels, Curves; dialog or Properties): opens the
+/// Color Picker on that point's target colour, over `parent` (the dialog) when it has one. OK stores it in the
 /// `targetColors` preference ([`confirm_target`]); Cancel leaves it as it was.
-pub fn open_target_picker(app: &mut PhotocraftApp, point: &str) -> Option<u64> {
-    let (rgb, title) = (target_rgb(app, point)?, target_title(point)?);
-    Some(crate::color_picker_ui::open_for_target(app, &format!("{TARGET_PICKER}{point}"), title, rgb))
+pub fn open_target_picker(app: &mut PhotocraftApp, picker: TonePicker, parent: Option<DialogId>) -> Option<DialogId> {
+    let rgb = target_rgb(app, picker)?;
+    Some(crate::color_picker_ui::open_for_tone_target(app, picker, target_title(picker), rgb, parent))
 }
 
-/// OK in a target colour's Color Picker (`target` is its `__colorPicker`): one `prefs.set` of
-/// `targetColors.<key>`, so it is kept across restarts. `None` when `target` isn't one.
-pub fn confirm_target(app: &mut PhotocraftApp, target: &str, color: &str) -> Option<Result<serde_json::Value, String>> {
-    let point = target.strip_prefix(TARGET_PICKER)?;
-    let Some(e) = eyedropper(point) else { return Some(Err(format!("no eyedropper `{point}`"))) };
-    Some(app.run("prefs.set", json!({"path": format!("targetColors.{}", e.target_key()), "value": color})))
+/// OK in `picker`'s target Color Picker: one `prefs.set` of `targetColors.<key>`, so it is kept across restarts.
+pub(crate) fn confirm_target(app: &mut PhotocraftApp, picker: TonePicker, color: &str) -> Result<serde_json::Value, String> {
+    let (e, point) = crate::adjust_dialog::eyedropper_of(picker).ok_or_else(|| format!("no eyedropper {picker:?}"))?;
+    app.run("prefs.set", json!({"path": format!("targetColors.{}", e.target_key()), "value": color})).map(|_| json!({"point": point, "color": color}))
 }
 
-/// Set by a modal dialog's body (to "black", "gray" or "white") to open that eyedropper's target
-/// Color Picker over it; the dialog loop opens it ([`open_requested_target`]).
-const REQUEST: &str = "__pickTarget";
-
-/// A modal dialog body asks for the target Color Picker of picker `point`.
-pub(crate) fn request_target(fields: &mut serde_json::Map<String, serde_json::Value>, point: &str) {
-    fields.insert(REQUEST.into(), json!(point));
-}
-
-/// Opens the target Color Picker dialog `id`'s body asked for ([`request_target`]), if any.
-pub fn open_requested_target(app: &mut PhotocraftApp, id: u64) {
-    let Some(d) = app.ui.dialog_mut(id) else { return };
-    if let Some(serde_json::Value::String(point)) = d.fields.remove(REQUEST) {
-        open_target_picker(app, &point);
+/// The picker a double-click on an eyedropper button chose this pass, given the armed picker before (`before`) and
+/// after (`after`) the row ran. The row's buttons are toggles: the double-click's second click undoes its first, so
+/// a toggle in a pass whose primary button was double-clicked is a double-click on the button that toggled: the
+/// newly armed one, or the one just disarmed.
+pub(crate) fn double_clicked(ctx: &egui::Context, before: Option<TonePicker>, after: Option<TonePicker>) -> Option<TonePicker> {
+    if before == after || !ctx.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary)) {
+        return None;
     }
+    after.or(before)
 }

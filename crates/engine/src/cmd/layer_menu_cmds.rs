@@ -525,7 +525,7 @@ fn blending_options(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "layer.layerStyle.blendingOptions";
     let id = layer_param(s, p)?;
     let blend = match p.get("blend").and_then(Value::as_str) {
-        Some(b) => Some(crate::commands::blend_from_str(b).ok_or_else(|| bad(CMD, format!("unknown blend mode `{b}`")))?),
+        Some(b) => Some(crate::commands::parse_blend(b).ok_or_else(|| bad(CMD, format!("unknown blend mode `{b}`")))?),
         None => None,
     };
     let opacity = p.get("opacity").and_then(Value::as_f64).map(|v| (v as f32 / 100.0).clamp(0.0, 1.0));
@@ -723,9 +723,12 @@ fn global_light(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) if v.is_finite() && v.abs() <= f64::from(f32::MAX) => Ok(v as f32),
         Some(_) => Err(bad("layer.layerStyle.globalLight", format!("{key} must be a finite number"))),
     };
-    let angle = f32_param("angle", cur.angle)?;
+    let raw_angle = f32_param("angle", cur.angle)?;
     let altitude = f32_param("altitude", cur.altitude)?.clamp(0.0, 90.0);
-    let angle = (angle + 180.0).rem_euclid(360.0) - 180.0;
+    let mut angle = (raw_angle + 180.0).rem_euclid(360.0) - 180.0;
+    if angle == -180.0 && raw_angle > 0.0 {
+        angle = 180.0;
+    }
     s.edit("Global Light", |doc, _| {
         doc.global_light.angle = angle;
         doc.global_light.altitude = altitude;
@@ -873,7 +876,7 @@ fn create_layer(s: &mut Session, p: &Value) -> Result<Value> {
             let mut tmp = Document::new("fx", doc.size, doc.mode, doc.depth);
             tmp.global_light = light;
             tmp.patterns = doc.patterns.clone();
-            tmp.layers = vec![alone];
+            tmp.layers = vec![alone].into();
             let buf = photocraft_compose::render(&tmp, area);
             let mut surf = Surface::new(fmt);
             let data: Vec<f32> = buf.px.iter().flat_map(|q| photocraft_raster::from_rgba(&fmt, *q)).collect();
@@ -932,6 +935,16 @@ fn content_options(s: &mut Session, _: &Value) -> Result<Value> {
 
 /// The layer rendered alone (visible, its blend mode ignored) and trimmed to its pixels, as a
 /// one-layer document — what Export As does for a layer.
+/// The error [`layer_document`] gives for a layer with nothing on the canvas: an empty pixel
+/// layer, an adjustment layer, a layer entirely off the canvas.
+const EMPTY_LAYER: &str = "the layer is empty";
+
+/// Whether `e` is [`layer_document`]'s error for a layer with nothing on the canvas, which a
+/// several-layer export skips (#14806), rather than a real failure.
+pub fn is_empty_layer(e: &EngineError) -> bool {
+    matches!(e, EngineError::Other(msg) if msg == EMPTY_LAYER)
+}
+
 pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
     let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let mut alone = l.clone();
@@ -939,7 +952,7 @@ pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
     alone.blend = if alone.is_group() { BlendMode::PassThrough } else { BlendMode::Normal };
     alone.clipped = false;
     let mut tmp = doc.clone();
-    tmp.layers = vec![alone];
+    tmp.layers = vec![alone].into();
     tmp.selection = None;
     let area = doc.bounds();
     let buf = photocraft_compose::render(&tmp, area);
@@ -952,7 +965,7 @@ pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
         }
     }
     if b.is_empty() {
-        return Err(other("the layer is empty"));
+        return Err(other(EMPTY_LAYER));
     }
     let fmt = doc.pixel_format();
     let mut out = Document::new(l.name.clone(), photocraft_doc::Size::new(b.width(), b.height()), doc.mode, doc.depth);
@@ -1014,6 +1027,16 @@ macro_rules! spec {
     };
 }
 
+/// `layer.exportAs`' params: its `resample` offers the methods of [`crate::export_preset_cmds::RESAMPLE`], in its order.
+fn export_as_params() -> &'static str {
+    let methods: Vec<&str> = crate::export_preset_cmds::RESAMPLE.iter().map(|(key, _)| *key).collect();
+    crate::vector_cmds::leak(format!(
+        r##"{{"layer":id?,"path":text,"scale":1..1000=100,"resample":"{}"="{}"}} (format from the path's extension; the document is not resampled)"##,
+        methods.join("|"),
+        crate::export_preset_cmds::DEFAULT_RESAMPLE
+    ))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         spec!("layer.layerMask.apply", "Apply", ["Layer", "Layer Mask"], r##"{"layer":id?}"##, has_raster_with_mask, apply_mask),
@@ -1070,7 +1093,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.layerStyle.globalLight",
             "Global Light…",
             ["Layer", "Layer Style"],
-            r##"{"angle":-180..180=120,"altitude":0..90=30}"##,
+            r##"{"angle":-360..360=120,"altitude":0..90=30}"##,
             has_doc,
             global_light
         ),
@@ -1100,14 +1123,16 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.quickExportAsPng",
             true
         )),
-        spec!(
-            "layer.exportAs",
-            "Export As…",
-            ["Layer"],
-            r##"{"layer":id?,"path":text,"scale":1..1000=100,"resample":"bicubicAutomatic|bicubic|bicubicSmoother|bicubicSharper|bilinear|nearest"="bicubicAutomatic"} (format from the path's extension; the document is not resampled)"##,
-            has_layer,
-            |s, p| export_layer(s, p, "layer.exportAs", false)
-        ),
+        CommandSpec {
+            id: "layer.exportAs",
+            label: "Export As…",
+            menu: &["Layer"],
+            shortcut: None,
+            params: export_as_params(),
+            enabled: has_layer,
+            run: |s, p| export_layer(s, p, "layer.exportAs", false),
+            journal: true,
+        },
     ]
 }
 

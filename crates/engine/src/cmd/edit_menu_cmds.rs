@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::channel_cmds::Target;
-use crate::commands::{CommandSpec, blend_from_str, int, layer_param};
+use crate::commands::{CommandSpec, int, layer_param, parse_blend};
 use crate::{EngineError, Result, Session};
 
 // ------------------------------------------------------------------ state
@@ -53,14 +53,30 @@ pub struct CustomShape {
     pub path: Path,
 }
 
+/// Remembered Find and Replace Text match (or collapsed cursor after a replacement) and the
+/// search query it belongs to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FindCursor {
+    pub layer: LayerId,
+    pub start: usize,
+    pub end: usize,
+    pub find: String,
+    pub case_sensitive: bool,
+    pub whole_word: bool,
+    pub forward: bool,
+    pub all_layers: bool,
+}
+
 /// Edit-menu state kept by the session.
 #[derive(Clone, Debug, Default)]
 pub struct EditState {
     pub fade: Option<FadeSource>,
     /// Custom shape library (the vector tools read it).
     pub custom_shapes: Vec<CustomShape>,
-    /// Find and Replace Text position: (layer, byte offset after the current match).
-    pub find_cursor: Option<(LayerId, usize, usize)>,
+    /// Find and Replace Text position and the query it belongs to.
+    pub find_cursor: Option<FindCursor>,
+    /// First layer visited in the current Find Next round (so wrapping stops before it).
+    pub find_start: Option<LayerId>,
 }
 
 /// Commands whose result Edit › Fade can blend back against the previous state.
@@ -300,9 +316,9 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
                     // absurd tree).
                     b.folder.retain(|f| !f.trim().is_empty());
                     b.folder.truncate(crate::brush_preset_cmds::MAX_FOLDER_DEPTH);
-                    match s.tools.presets.iter_mut().find(|x| x.name == b.name) {
+                    match std::sync::Arc::make_mut(&mut *s.tools.presets).iter_mut().find(|x| x.name == b.name) {
                         Some(x) => *x = b,
-                        None => s.tools.presets.push(b),
+                        None => std::sync::Arc::make_mut(&mut *s.tools.presets).push(b),
                     }
                     nb += 1;
                 }
@@ -446,6 +462,10 @@ pub fn custom_shapes(s: &Session) -> &[CustomShape] {
     &s.edit_state.custom_shapes
 }
 
+/// Serialize tests that intentionally purge or seed the global smart caches.
+#[cfg(test)]
+pub(crate) static PURGE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 #[path = "edit_menu_cmds/tests.rs"]
 mod tests;
@@ -453,3 +473,15 @@ mod tests;
 #[cfg(test)]
 #[path = "edit_menu_cmds/fade_visibility_tests.rs"]
 mod fade_visibility_tests;
+
+#[cfg(test)]
+#[path = "edit_menu_cmds/caf_new_layer_name_tests.rs"]
+mod caf_new_layer_name_tests;
+
+#[cfg(test)]
+#[path = "edit_menu_cmds/find_replace_change_tests.rs"]
+mod find_replace_change_tests;
+
+#[cfg(test)]
+#[path = "edit_menu_cmds/find_replace_order_tests.rs"]
+mod find_replace_order_tests;
