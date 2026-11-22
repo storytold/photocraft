@@ -77,7 +77,6 @@ fn set_expanded(s: &mut Session, p: &Value) -> Result<Value> {
             _ => return Err(EngineError::NoLayer(id)),
         }
     };
-    st.note_disclosure_change();
     Ok(json!({"expanded": expanded, "groups": changed}))
 }
 
@@ -121,10 +120,10 @@ mod tests {
         st.saved_revision = st.revision;
         let undo_steps = s.active().unwrap().history.entries().len();
         assert!(expanded(&s, inner) && expanded(&s, outer));
-        let (revision, view) = s.active().map(|st| (st.revision, st.layers_view_revision())).unwrap();
+        let (revision, view) = s.active_tracked().map(|st| (st.revision, st.revision())).unwrap();
         assert_eq!(s.execute(ID, json!({"layer": inner})).unwrap()["expanded"], false);
-        let st = s.active().unwrap();
-        assert!(st.revision == revision && st.layers_view_revision() > view, "the Layers view revision only: the Layers panel's rows follow it");
+        let st = s.active_tracked().unwrap();
+        assert!(st.revision == revision && st.revision() != view, "the tracked revision only: the Layers panel's rows follow it");
         assert!(!expanded(&s, inner) && expanded(&s, outer));
         assert_eq!(s.active().unwrap().history.entries().len(), undo_steps, "no history step");
         assert_eq!(s.active().unwrap().saved_revision, s.active().unwrap().revision, "still clean");

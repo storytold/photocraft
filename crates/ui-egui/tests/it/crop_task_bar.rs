@@ -177,6 +177,44 @@ fn the_bars_preset_dropdown_is_the_options_bars() {
 }
 
 #[test]
+fn the_options_bar_ratio_list_takes_escape_and_enter_before_the_crop() {
+    let mut h = harness();
+    control(&mut h, "ui.set", json!({"panels": {"context_task_bar": false}}));
+    draw_frame(&mut h, [100.0, 50.0], [300.0, 250.0]);
+    assert!(pending(h.state()), "the drawn square crop is pending");
+    let before = frame_rect(&h).expect("the pending frame");
+    let size = |h: &Harness| h.state().session.active().map(|s| (s.doc.size.width, s.doc.size.height));
+    let history = |h: &Harness| h.state().session.active().expect("the crop document").history.past_len();
+    let steps = history(&h);
+    let square = "1 : 1 (Square)";
+
+    // Escape dismisses the list. Enter accepts its first row, the selected free Ratio.
+    // Neither key should reach the pending crop while the list is open (#7386).
+    for key in [egui::Key::Escape, egui::Key::Enter] {
+        assert!(!has(&h, square), "the square row is only in the open list");
+        let at = h.get_by_value("Ratio").rect().center();
+        click_at(&mut h, at);
+        assert!(has(&h, square), "the options bar ratio list opened");
+        h.key_press(key);
+        h.run_steps(12);
+        assert!(!has(&h, square), "{key:?} closed the ratio list");
+        assert!(pending(h.state()), "{key:?} left the crop pending");
+        assert_eq!(frame_rect(&h), Some(before), "{key:?} left the frame alone");
+        assert_eq!(size(&h), Some((400, 300)), "{key:?} did not crop the document");
+    }
+
+    // A closed dropdown still has focus. Click inside the frame to return focus to the canvas.
+    let at = h.state().last_canvas_rect.center();
+    click_at(&mut h, at);
+    assert_eq!(frame_rect(&h), Some(before), "the click only moved focus");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(6);
+    assert_eq!(size(&h), Some((200, 200)), "Enter on the canvas commits the pending crop");
+    assert_eq!(history(&h), steps + 1, "Enter adds one document history step");
+    assert!(!pending(h.state()), "Enter clears the pending Crop session once the document accepts the crop");
+}
+
+#[test]
 fn inspect_reports_a_bar_hidden_before_the_next_draw_as_hidden() {
     let mut h = harness();
     assert!(bar(&h).is_some());
@@ -244,6 +282,7 @@ fn cancel_and_done_only_while_a_crop_is_pending() {
     let at = widget(&h, "Done");
     click_at(&mut h, at);
     assert_eq!(h.state().session.active().map(|s| (s.doc.size.width, s.doc.size.height)), Some((220, 170)), "Done crops");
+    assert!(!pending(h.state()), "Done also clears the pending Crop session");
 }
 
 /// The active document's stored zoom.

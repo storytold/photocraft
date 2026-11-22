@@ -39,7 +39,7 @@ use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
 /// A named folder of presets.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Group<T> {
     pub name: String,
     pub items: Vec<T>,
@@ -67,7 +67,7 @@ impl Named for String {
 }
 
 /// All preset sets plus the panel state the engine needs.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub struct PresetState {
     pub gradients: Vec<Group<gradients::GradientPreset>>,
     /// The Gradient tool's current gradient (Gradients panel selection / gradient picker).
@@ -88,13 +88,13 @@ pub struct PresetState {
     pub clone: clone_source::CloneSources,
     /// The user defaults "Make Default" in the Layer Style dialog saves
     /// (effect kind → param set); "Reset to Default" restores them.
+    #[plain_data(assume = "JSON values: plain data")]
     pub layer_defaults: BTreeMap<String, Value>,
     /// Swatches panel library.
+    #[plain_data(assume = "craft-color-ui swatch groups: plain values and strings")]
     pub swatches: Vec<swatches::SwatchGroup>,
     /// The user contour library of the Layer Style dialog (`layer.layerStyle.contours.*`).
     pub contours: Vec<photocraft_doc::Contour>,
-    /// Bumped on every preset change (UIs key thumbnail caches on it).
-    pub rev: u64,
 }
 
 impl Default for PresetState {
@@ -114,7 +114,6 @@ impl Default for PresetState {
             layer_defaults: BTreeMap::new(),
             swatches: craft::color_ui::palette::default_swatches(),
             contours: Vec::new(),
-            rev: 0,
         }
     }
 }
@@ -204,7 +203,7 @@ impl Session {
             },
             contours: take(&mut m, "contours"),
         };
-        let st = &mut self.presets;
+        let st = &mut *self.presets;
         if let Some(g) = p.gradient {
             st.gradient = g;
         }
@@ -273,13 +272,12 @@ impl Session {
         if let Some(c) = p.contours.filter(Value::is_array) {
             self.presets.contours = crate::contour_lib_cmds::from_json(&c);
         }
-        self.presets.rev += 1;
     }
 
-    /// Record a preset change: bumps the panel revision and marks the preferences document dirty
+    /// Record a preset change: moves the presets' revision and marks the preferences document dirty
     /// so the shell persists it.
     pub(crate) fn presets_changed(&mut self) {
-        self.presets.rev += 1;
+        self.presets.edit(|_| ());
         self.prefs.edit(|_| ());
     }
 }

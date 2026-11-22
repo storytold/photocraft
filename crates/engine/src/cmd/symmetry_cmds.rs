@@ -14,14 +14,14 @@ use crate::{EngineError, Result, Session, commands::CommandSpec};
 const MAX_SEGMENTS: usize = 1024;
 const SAMPLES_PER_CURVE: usize = 12;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct SymmetryAxis {
     pub source: String,
     pub segments: Vec<[[f64; 2]; 2]>,
 }
 
 /// Per-document painting tool state, never stored in the document's paths or pixels.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub enum PaintingSymmetry {
     Path(SymmetryAxis),
     Preset(PresetSymmetry),

@@ -416,9 +416,9 @@ fn collect(r: &mut Redraw, p: Piece) {
 }
 
 /// The active document's redraw as the status bar shows it: "Redrawing" and how much is done.
-pub(crate) fn progress(app: &PhotocraftApp) -> Option<craft::ui::bars::StatusProgress> {
+pub(crate) fn progress(app: &PhotocraftApp) -> Option<crate::panels::status_bar::Progress> {
     let r = app.session.active().and_then(|st| app.redraws.get(&st.doc.id))?;
-    Some(craft::ui::bars::StatusProgress::new(tl!("Redrawing"), Some(r.fraction())))
+    Some(crate::panels::status_bar::Progress { label: tl!("Redrawing").to_owned(), fraction: Some(r.fraction()), cancel: None, refused: None })
 }
 
 /// Stop document `doc`'s redraw (its canvas was redrawn some other way, or is gone).

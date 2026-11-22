@@ -55,7 +55,7 @@ fn engine_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReq
         "jobs.cancel" => jobs_cancel(app, &req.params),
         "ui.menu.list" => {
             // Report the same enablement the native menu shows, so a listed item is invokable.
-            let rows = crate::menus::model(app, ctx).rows.clone();
+            let rows = crate::menus::model(app, ctx).rows().to_vec();
             ok(menu_list(app, &rows))
         }
         "ui.inspect" => ok(inspect(app, ctx)),
@@ -1362,7 +1362,8 @@ fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Reply {
         let warnings = app.open_automation_bytes_with_approval(&name, &bytes, approved)?;
         // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
         if !crate::preset_files_ui::is_preset_file(&name) {
-            app.opened_from(path);
+            let recent = automation_location(app, path);
+            app.opened_from_listed(path, recent.as_deref());
             if let Some(state) = app.session.active_mut()
                 && state.path.is_some()
             {
@@ -1371,6 +1372,13 @@ fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Reply {
         }
         Ok(json!({"path": path, "name": name, "warnings": warnings}))
     }))
+}
+
+/// Where the file an automation open read is on disk, for Open Recent. The request path is
+/// relative to an automation root, so it names nothing when the person reopens it from Open
+/// Recent or Home; without a location the open is not listed there.
+fn automation_location(app: &PhotocraftApp, path: &str) -> Option<String> {
+    app.services.automation_locate.as_ref().and_then(|locate| locate(path))
 }
 
 /// Directory .pcraft (the native on-disk form) loads through a capability-scoped
@@ -1386,7 +1394,9 @@ fn open_pcraft_directory(app: &mut PhotocraftApp, path: &str) -> Option<Reply> {
             app.session.add_document(doc, None);
             // Recent files, but no save-back target: the capability writer
             // replaces files, never directories.
-            app.push_recent(path);
+            if let Some(recent) = automation_location(app, path) {
+                app.push_recent(&recent);
+            }
             app.sync_views();
             app.ui.status = crate::i18n::fmt(tl!("Opened {name}"), &[("name", &name)]);
             app.ui.status_error = false;
