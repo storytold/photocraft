@@ -63,6 +63,8 @@ pub(crate) fn sync_documents(app: &mut PhotocraftApp, ids: &[DocId]) {
 pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let windows: Vec<(u64, Rect)> = app.ui.document_windows.floating.iter().map(|(g, rect)| (g.id, *rect)).collect();
     let mut closed = Vec::new();
+    let mut docked = Vec::new();
+    let dock_target = app.dock_drop_rect;
     for (id, rect) in windows {
         let shown = app.ui.document_windows.floating.iter().find(|(g, _)| g.id == id).and_then(|(g, _)| g.shown.or_else(|| g.documents.first().copied()));
         let Some(doc) = shown.and_then(|d| crate::canvas::tabs::document_index(app, d)) else { continue };
@@ -82,9 +84,13 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if app.session.documents()[doc].is_dirty() { Title::unsaved(text) } else { Title::new(text) }
         };
         let mut view = start.clone();
+        let mut dock = false;
         let inner = DocumentWindow::new(title).first_placed(rect).overlay(|o| o.size_limits(SizeLimits::at_least(MIN_SIZE))).show(ui, |ui, cx| {
-            if window_title_bar(ui, bar_title.clone()) {
-                cx.request_close();
+            if let Some(bar) = window_title_bar(ui, bar_title.clone()) {
+                if bar.close {
+                    cx.request_close();
+                }
+                dock |= dropped_on_main(ui, id, bar.rect, dock_target);
             }
             // A second run of the body in one pass continues from the first run's view; the wrap rule
             // compares with the view the window started the pass with, so both runs file the same ask.
@@ -99,6 +105,10 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             view = after;
         });
         let output = inner.output;
+        if dock {
+            docked.push((id, doc));
+            continue;
+        }
         follow_os_window(app, ui.ctx(), id, output.response.id);
         if output.close_requested.is_some() {
             closed.push(id);
@@ -122,6 +132,36 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     for id in closed {
         close_window(app, id);
     }
+    // A window whose title bar was dropped on the main window's tabs goes back into them, its document in front.
+    for (id, doc) in docked {
+        close_window(app, id);
+        app.session.set_active(doc);
+    }
+}
+
+/// Whether this pass ends a move of the floating window `window` by its title bar (`bar`, in the window's points) with
+/// the pointer over `target`, the main window's tab strip in its points (`PhotocraftApp::dock_drop_rect`): the press on
+/// the bar notes where the window was, and the release, which the runtime adds once the OS move ends, docks when the
+/// window moved and the pointer is over the strip (#16415). A click on the bar, which moves nothing, docks nothing.
+fn dropped_on_main(ui: &egui::Ui, window: u64, bar: Rect, target: Option<Rect>) -> bool {
+    let ctx = ui.ctx();
+    let host = WindowHost::of(ctx);
+    let Some(facts) = host.facts(ctx.viewport_id()) else { return false };
+    let key = egui::Id::unique(("floating document press", window));
+    let (pressed, released, pos) = ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_released(), i.pointer.interact_pos()));
+    if pressed && pos.is_some_and(|p| bar.contains(p)) {
+        ctx.data_mut(|d| d.insert_temp(key, facts.inner.min));
+        return false;
+    }
+    if !released {
+        return false;
+    }
+    let Some(start) = ctx.data_mut(|d| d.remove_temp::<egui::Pos2>(key)) else { return false };
+    let (Some(target), Some(main), Some(pos)) = (target, host.facts(egui::ViewportId::ROOT), pos) else { return false };
+    if start == facts.inner.min {
+        return false;
+    }
+    target.translate(main.inner.min.to_vec2()).contains(facts.inner.min + pos.to_vec2())
 }
 
 /// Keeps the rect the floating window `window` is placed at (`DocumentWindow::first_placed`, the container `container`)
@@ -149,13 +189,22 @@ fn follow_os_window(app: &mut PhotocraftApp, ctx: &egui::Context, window: u64, c
 /// and Linux): the document's title, a move band and the caption buttons. `DocumentWindow` leaves that bar to its
 /// body there (#16415); without it the window could not be moved, minimized, maximized or closed. With the system's
 /// frame the OS draws the bar, and where OS windows are unavailable the fallback layer has its own title row, so
-/// nothing is drawn then. Returns whether the bar's Close was clicked.
-fn window_title_bar(ui: &mut egui::Ui, title: Title) -> bool {
+/// nothing is drawn then. Returns the bar's rect and whether its Close was clicked, or `None` with no bar.
+fn window_title_bar(ui: &mut egui::Ui, title: Title) -> Option<ShownBar> {
     let host = WindowHost::of(ui.ctx());
     if !host.viewports_available() || matches!(host.frame(), Frame::Native) {
-        return false;
+        return None;
     }
-    TitleBar::new().show_titled(ui, title, |_, _| {}, |_, _| {}).close_requested
+    let out = TitleBar::new().show_titled(ui, title, |_, _| {}, |_, _| {});
+    Some(ShownBar { rect: out.response.rect, close: out.close_requested })
+}
+
+/// A floating document window's title bar as this pass showed it.
+struct ShownBar {
+    /// Its rect, in the window's points.
+    rect: Rect,
+    /// Its Close was clicked.
+    close: bool,
 }
 
 /// The canvas of the document window `window` showing document `doc`, drawn in its own viewport.

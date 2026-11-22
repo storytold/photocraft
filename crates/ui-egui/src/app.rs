@@ -99,6 +99,7 @@ impl PhotocraftApp {
             last_canvas_layer: egui::LayerId::background(),
             ppp: 1.0,
             drop_canvas_rect: None,
+            dock_drop_rect: None,
             ctx,
             frame_preview: None,
             drop_places: Default::default(),

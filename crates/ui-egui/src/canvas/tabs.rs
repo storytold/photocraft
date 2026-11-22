@@ -38,6 +38,11 @@ pub(super) fn strip(app: &mut PhotocraftApp, ui: &mut egui::Ui, cx: &mut BodyCx<
     let ctx = ui.ctx().clone();
     let out = tabs(app, ui);
     let response = out.response.clone();
+    // A floating document window's title bar dropped on the strip docks it (`document_windows`); with every document
+    // floating, the whole area keeps taking the drop.
+    if !docked_document_indices(app).is_empty() {
+        app.dock_drop_rect = Some(response.rect);
+    }
     if let Some(menu) = apply(app, &ctx, out) {
         cx.keep::<TabMenu>().0 = Some(menu);
     }

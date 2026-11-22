@@ -209,3 +209,44 @@ fn a_moved_floating_window_stays_where_it_was_moved() {
     let placed = h.state().ui.document_windows.floating.first().map(|(_, rect)| *rect);
     assert_eq!(placed, Some(moved), "the app keeps the window's new place");
 }
+
+/// Presses the floating window's title bar at its middle-left, lets the OS move the window to `to` (outer rect on the
+/// desktop) and releases there, as an OS move by the title bar does (the runtime adds the release when it ends).
+fn move_by_title_bar(h: &mut Harness<'static, App>, host: &RefCell<Host>, id: ViewportId, to: Option<Rect>) {
+    let bar = title_bar(host, id).expect("the floating window has a title bar");
+    let at = bar.left_center() + vec2(40.0, 0.0);
+    let press = |pressed| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    host.borrow_mut().events.insert(id, vec![Event::PointerMoved(at), press(true)]);
+    steps(h, host, id, 1);
+    if let Some(to) = to {
+        host.borrow_mut().moved = Some(to);
+        steps(h, host, id, 1);
+    }
+    host.borrow_mut().events.insert(id, vec![press(false)]);
+    steps(h, host, id, 3);
+}
+
+/// #16415: a floating document window dropped by its title bar on the main window's document tabs goes back into
+/// them; dropped elsewhere it stays where it went, and a click on its bar docks nothing.
+#[test]
+fn a_floating_window_dropped_on_the_main_windows_tabs_docks_again() {
+    let (mut h, host) = desktop();
+    let id = window(&host);
+    steps(&mut h, &host, id, 2);
+    // A click, no move: the window stays.
+    move_by_title_bar(&mut h, &host, id, None);
+    assert_eq!(h.state().ui.document_windows.floating.len(), 1, "a click on the bar docks nothing");
+    // Dropped far off the main window: it stays floating there.
+    let away = Rect::from_min_size(pos2(2000.0, 1200.0), window_rect().size());
+    move_by_title_bar(&mut h, &host, id, Some(away));
+    assert_eq!(h.state().ui.document_windows.floating.len(), 1, "dropped off the main window it keeps floating");
+    // Dropped with the pointer on the main window's tab area: it docks, its document in front.
+    let target = h.state().dock_drop_rect.expect("the main window has a place to dock");
+    let bar = title_bar(&host, id).expect("the bar");
+    let grab = bar.left_center() + vec2(40.0, 0.0);
+    let over = Rect::from_min_size(target.center() - grab.to_vec2(), window_rect().size());
+    move_by_title_bar(&mut h, &host, id, Some(over));
+    assert!(h.state().ui.document_windows.floating.is_empty(), "dropped on the tabs the window docks");
+    assert_eq!(h.state().session.documents().len(), 1, "the document stays open");
+    assert_eq!(h.state().session.active_index(), Some(0), "the docked document is in front");
+}

@@ -425,6 +425,9 @@ pub struct PhotocraftApp {
     /// The document area showing the active document's canvas last frame (not the tabs, the
     /// start screen or an opening file's card): files dropped here are placed as layers.
     pub(crate) drop_canvas_rect: Option<egui::Rect>,
+    /// Where a floating document window's title bar dropped docks its document, in the main window's points, as of
+    /// the last frame: the document tab strip, or the whole document area while no document is docked (#16415).
+    pub(crate) dock_drop_rect: Option<egui::Rect>,
     /// The window's one egui context, for code without one in hand: SAVED-tier reads and writes,
     /// the Frame tool's transforms from pointer events, and the mapping and panels that read the
     /// canvas's zoom ease (`document_display::shown_camera`). Read it through [`Self::ctx`].
