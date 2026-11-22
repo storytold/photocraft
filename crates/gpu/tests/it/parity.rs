@@ -138,6 +138,27 @@ fn hdr_zero_coverage_emission_does_not_obscure_the_backdrop() {
 }
 
 #[test]
+fn compositing_emission_does_not_change_the_next_ordinary_render() {
+    let Some(mut g) = gpu() else { return };
+    let mut ordinary = Document::with_background("Ordinary", Size::new(2, 1), ColorMode::Rgb, SampleType::U8, Color::rgba(0.25, 0.5, 0.75, 1.0));
+    let mut layer = Layer::raster("translucent", PixelFormat::RGBA8);
+    layer.surface_mut().unwrap().fill_rect(ordinary.bounds(), &[1.0, 0.0, 0.0, 0.5]);
+    ordinary.layers.push(layer);
+    check(&mut g, &ordinary, "ordinary before emission");
+
+    let mut hdr = Document::new("Emission", Size::new(2, 1), ColorMode::Rgb, SampleType::F32);
+    let mut light = Layer::raster("light", PixelFormat::RGBA32F);
+    light.surface_mut().unwrap().fill_rect(hdr.bounds(), &[0.5, 0.25, 0.125, photocraft_color::EMISSIVE_ALPHA]);
+    hdr.layers.push(light);
+    for comp in [&mut g.comp, &mut g.paged] {
+        let actual = render_to_vec(comp, &g.device, &g.queue, &hdr, hdr.bounds()).unwrap();
+        assert_eq!(actual[0], [0.5, 0.25, 0.125, photocraft_color::EMISSIVE_ALPHA]);
+    }
+
+    check(&mut g, &ordinary, "ordinary after emission");
+}
+
+#[test]
 fn hdr_emission_survives_group_opacity_masks_and_clipping() {
     let Some(mut g) = gpu() else { return };
     for clipped in [false, true] {
