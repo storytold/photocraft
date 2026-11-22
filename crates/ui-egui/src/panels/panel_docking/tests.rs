@@ -435,6 +435,7 @@ fn ui_set_toolbar_columns_sets_the_toolbar_columns_steps() {
 
 #[test]
 fn actions_panel_rows_can_scroll_inside_the_panel_popup() {
+    use crate::app::framework::BuildApp;
     use craft::ui::contract::{Props as _, Show as _, ShowContainer as _, Trigger};
     use craft::ui::menu::{Menu, PanelMenu};
     use egui_kittest::{
@@ -442,18 +443,15 @@ fn actions_panel_rows_can_scroll_inside_the_panel_popup() {
         kittest::{NodeT, Queryable},
     };
 
-    let mut app = app();
-    PhotocraftApp::setup_context(app.ctx(), Default::default());
-    let ctx = app.ctx().clone();
-    let mut h = Harness::builder().with_context(ctx).with_size(egui::vec2(600.0, 240.0)).build_ui_state(
-        |ui, app: &mut Box<PhotocraftApp>| {
+    let mut h = Harness::builder().with_size(egui::vec2(600.0, 240.0)).build_app(
+        |ui, app| {
             let button = craft::ui::buttons::Button::new("Open Actions menu").show(ui);
             let panel = registry::entry("actions").unwrap();
             Menu::new("Actions menu").opened_by(&button, Trigger::Click).show(ui, |ui, _| {
                 PanelMenu::new((panel.rows)(app), Vec::new()).show(ui);
             });
         },
-        app,
+        app(),
     );
     h.run_steps(3);
     h.get_by_label("Open Actions menu").click();
