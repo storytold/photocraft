@@ -32,7 +32,7 @@ fn straightening_still_applies_a_sub_hundredth_turn() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 40, "height": 30})).unwrap();
     let before = s.active().unwrap().history.past_len();
-    let result = rotate_arbitrary_with(&mut s, &json!({"angle": 0.004}), false).unwrap();
+    let result = rotate_arbitrary_with(&mut s, &json!({"angle": 0.004}), false, false).unwrap();
     assert_eq!(result, json!({"width": 41, "height": 31}));
     assert_eq!(s.active().unwrap().history.past_len(), before + 1);
 }

@@ -203,7 +203,7 @@ fn an_unusual_earlier_selection_keeps_its_format_or_fails_cleanly() {
     let mut old = Surface::new(format);
     old.write_region(earlier, &vec![1.0; (earlier.width() * earlier.height()) as usize]);
     let mut s = session(600, 400);
-    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).selection = Some(old.clone());
+    std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).selection = Some(old.clone());
     let text = json!({"text": "I", "x": 400, "y": 300, "size": 48, "operation": "add"});
 
     // The two glyph buffers are had; the third allocation is the room for combining.

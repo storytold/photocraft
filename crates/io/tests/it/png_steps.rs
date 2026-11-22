@@ -42,6 +42,11 @@ fn assert_same(a: &Document, b: &Document, what: &str) {
     let (mut a, mut b) = (a.clone(), b.clone());
     b.id = a.id;
     assert_eq!(a.layers.len(), b.layers.len(), "{what}");
+    // The indices' layer maps along with the layers, so indices naming no layer still differ.
+    let indices_layer = b.color_indices.as_ref().and_then(|c| b.layers.iter().zip(&a.layers).find(|(y, _)| y.id == c.layer)).map(|(_, x)| x.id);
+    if let (Some(c), Some(id)) = (b.color_indices.as_mut(), indices_layer) {
+        c.layer = id;
+    }
     for (x, y) in a.layers.iter_mut().zip(&mut b.layers) {
         y.id = x.id;
     }
@@ -81,6 +86,22 @@ fn stepped_png_import_keeps_a_palette_as_indexed_colour() {
     let (got, _) = stepped("p.png", &bytes, 0);
     assert!(got.document.color_table.is_some(), "an Indexed Color document");
     assert_stepped_equals_import("p.png", &bytes, "palette");
+}
+
+/// A palette whose entries share a colour is read again for its indices a band of rows per step,
+/// and gives the indices the one-shot import gives (#14342).
+#[test]
+fn a_palette_png_is_read_for_its_indices_a_band_of_rows_per_step() {
+    let (w, h) = (3, photocraft_geom::TILE_SIZE as u32 * 3 + 5);
+    let idx: Vec<u8> = (0..w * h).map(|i| (i % 2) as u8).collect();
+    let shared = photocraft_codecs::encode_png_indexed(w, h, &idx, &[[255; 3], [255; 3]], None, None, None).unwrap();
+    let distinct = photocraft_codecs::encode_png_indexed(w, h, &idx, &[[255; 3], [0; 3]], None, None, None).unwrap();
+    assert!(whole("p.png", &shared).document.color_indices.is_some(), "the one-shot import records them");
+    assert_stepped_equals_import("p.png", &shared, "entries sharing a colour");
+    let (_, with) = stepped_zero_budget("p.png", &shared);
+    let (_, without) = stepped_zero_budget("p.png", &distinct);
+    // Four bands of rows, each a call of its own with an empty budget.
+    assert_eq!(with, without + 4);
 }
 
 #[test]
