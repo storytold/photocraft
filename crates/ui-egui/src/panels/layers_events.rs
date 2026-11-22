@@ -206,7 +206,8 @@ fn map_event(app: &mut PhotocraftApp, ctx: &egui::Context, event: LayersEvent<La
             }
         }
         LayersEvent::Open(change) => {
-            actions.push(("layer.setExpanded".into(), json!({"layer": change.key.0, "expanded": change.open, "all": change.all})));
+            // The framework's `all` (Alt) reaches the group's descendants: the engine's `nested`, not its document-wide `all`.
+            actions.push(("layer.setExpanded".into(), json!({"layer": change.key.0, "expanded": change.open, "nested": change.all})));
         }
         LayersEvent::FxOpen { layer, open, all, .. } => {
             actions.push(("layer.setEffectsExpanded".into(), json!({"layer": layer.0, "expanded": open, "all": all})));
