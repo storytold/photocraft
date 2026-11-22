@@ -487,6 +487,12 @@ pub(crate) fn plane_matrix(pl: &Placement, origin: (f64, f64)) -> Option<Homogra
     })
 }
 
+/// What the blend may spend on bands: the budget less what its fixed buffers use (`fixed_during_bands`) and less the
+/// sources that could not be aligned, which stay allocated as layers of their own while it runs (#14095).
+fn blend_band_budget(budget: usize, fixed_during_bands: usize, unplaced_bytes: usize) -> usize {
+    budget.saturating_sub(fixed_during_bands).saturating_sub(unplaced_bytes)
+}
+
 /// Photomerge's working-memory budget in bytes, from [`budget_from`]: the `memoryBudget` param,
 /// else `PHOTOCRAFT_PHOTOMERGE_BUDGET_MB`, else half of the machine's physical memory.
 fn photomerge_memory_budget(p: &Value) -> usize {
@@ -867,6 +873,43 @@ pub(crate) fn seam_order(warped: &[Surface], reference: usize) -> Vec<usize> {
 
 // ---------- Photomerge ----------
 
+/// What Photomerge tells the user when some or all of the images could not be aligned (#14095), as the reference
+/// application words it. The merge still runs and every source gets a layer; the names are in the result's `failed`.
+pub const PHOTOMERGE_UNALIGNED: &str = "Some images could not be automatically aligned";
+
+/// The gap between two sources in [`unaligned_merge`]'s canvas, in pixels.
+const UNALIGNED_GAP: usize = 10;
+
+/// Photomerge when no image could be aligned (#14095): the reference's unaligned layout. The canvas is as wide as the
+/// sources side by side with a 10 px gap between each two and as tall as the tallest, and every source is a layer of
+/// its own at 0,0, the first on top. The images are not blended: there is no overlap to blend over.
+fn unaligned_merge(srcs: &[Source], fmt: PixelFormat, icc: Option<std::sync::Arc<Vec<u8>>>, doc_name: String, layout: Layout) -> Result<(Document, Value)> {
+    let cw = srcs.iter().map(|s| s.w).sum::<usize>() + UNALIGNED_GAP * srcs.len().saturating_sub(1);
+    let ch = srcs.iter().map(|s| s.h).max().unwrap_or(0);
+    if cw == 0 || ch == 0 || cw > 30_000 || ch > 30_000 || (cw as f64) * (ch as f64) > 6.0e8 {
+        return Err(EngineError::Other(format!("the panorama would be {cw}×{ch} px; try another layout")));
+    }
+    let mut doc = Document::new(doc_name, Size::new(cw as u32, ch as u32), fmt.mode, fmt.sample);
+    doc.icc_profile = icc;
+    // `layers[0]` is the bottom layer, and the first source goes on top.
+    for src in srcs.iter().rev() {
+        doc.layers.push(Layer::new(src.name.clone(), LayerContent::Raster(src.surf.clone())));
+    }
+    let names: Vec<String> = srcs.iter().map(|s| s.name.clone()).collect();
+    let info = json!({
+        "document": Value::Null,
+        "layout": layout.name(),
+        "aligned": false,
+        "placed": [],
+        "failed": names,
+        "warning": PHOTOMERGE_UNALIGNED,
+        "width": cw as u32,
+        "height": ch as u32,
+        "layers": doc.layers.len(),
+    });
+    Ok((doc, info))
+}
+
 fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.photomerge";
     let t0 = Stopwatch::start();
@@ -896,8 +939,10 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
             ctx.progress(0.0, "Photomerge: aligning images");
             let focal35 = focal_param.or_else(|| exif_focal(&srcs));
             let images: Vec<(&Surface, Rect)> = srcs.iter().map(|s| (&s.surf, Rect::new(0, 0, s.w as i32, s.h as i32))).collect();
-            let al = register(&images, layout, None, geometric, focal35)
-                .ok_or_else(|| EngineError::Other("Photomerge couldn't find enough matching detail between the images".into()))?;
+            // No image aligns: the unaligned layout, with the reference's warning (#14095).
+            let Some(al) = register(&images, layout, None, geometric, focal35) else {
+                return unaligned_merge(&srcs, fmt, icc, doc_name, layout);
+            };
             let t_reg = t0.ms() / 1000.0;
             ctx.check()?;
             ctx.progress(0.35, "Photomerge: warping images");
@@ -930,6 +975,9 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
             let warped_sizes: Vec<(usize, usize)> =
                 extents.iter().map(|&(w, h)| ((w.ceil() + 1.0).max(0.0).min(cw) as usize, (h.ceil() + 1.0).max(0.0).min(ch) as usize)).collect();
             let (est_needed, fixed_during_bands) = estimate_photomerge_memory(&sizes, &warped_sizes, cw as usize, ch as usize, cc, bpp, blend, fill);
+            // The sources that could not be aligned stay as layers of their own (#14095), at their own size.
+            let unplaced_bytes: usize = (0..srcs.len()).filter(|i| !placed.contains(i)).map(|i| srcs[i].w * srcs[i].h * bpp).sum();
+            let est_needed = est_needed.saturating_add(unplaced_bytes);
             if est_needed > budget {
                 let mb_est = est_needed / (1 << 20);
                 let mb_budget = budget / (1 << 20);
@@ -937,11 +985,6 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
                     "Photomerge",
                     &format!("estimated memory of {mb_est} MiB exceeds budget of {mb_budget} MiB; use fewer or smaller images, or raise \"memoryBudget\""),
                 ));
-            }
-            for (i, s) in srcs.iter_mut().enumerate() {
-                if al.placements.get(i).is_none_or(Option::is_none) {
-                    s.surf = Surface::new(fmt);
-                }
             }
             let mut warped: Vec<Surface> = Vec::with_capacity(placed.len());
             for (k, (&i, pl)) in placed.iter().zip(&placements).enumerate() {
@@ -958,22 +1001,23 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
             let mut doc = Document::new(doc_name, Size::new(cw as u32, ch as u32), fmt.mode, fmt.sample);
             doc.icc_profile = icc;
             let mut info = json!({});
+            // Every source's layer, by source index.
+            let mut by_source: Vec<(usize, Layer)> = Vec::with_capacity(srcs.len());
             let ref_pos = placed.iter().position(|&i| i == al.reference).unwrap_or(0);
             if blend {
                 let pls: Vec<Placement> = placements.iter().map(|p| (*p).clone()).collect();
                 let order = seam_order(&warped, ref_pos);
                 let geo = vignette.then_some((pls.as_slice(), sizes.as_slice(), offset));
-                let remaining_band_budget = budget.saturating_sub(fixed_during_bands);
+                let remaining_band_budget = blend_band_budget(budget, fixed_during_bands, unplaced_bytes);
                 let check_cancel = || ctx.check();
                 let opt = BlendOptions { seamless: true, gains: true, geometry: geo, budget: Some(remaining_band_budget) };
                 let b = seam_blend(warped, canvas, &order, opt, Some(&check_cancel))?;
-                // `children[0]` is the bottom layer, and the first source goes on top.
-                for (k, (px, mask)) in b.layers.into_iter().enumerate().rev() {
+                for (k, (px, mask)) in b.layers.into_iter().enumerate() {
                     let mut l = Layer::new(srcs[placed[k]].name.clone(), LayerContent::Raster(px));
                     let mut m = LayerMask::hide_all();
                     m.surface = mask;
                     l.mask = Some(m);
-                    doc.layers.push(l);
+                    by_source.push((placed[k], l));
                 }
                 info = json!({"gains": b.gains, "vignette": b.vignette});
                 ctx.check()?;
@@ -983,16 +1027,28 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
                     doc.layers.push(Layer::new("Content-Aware Fill", LayerContent::Raster(filled)));
                 }
             } else {
-                for (k, px) in warped.into_iter().enumerate().rev() {
-                    doc.layers.push(Layer::new(srcs[placed[k]].name.clone(), LayerContent::Raster(px)));
+                for (k, px) in warped.into_iter().enumerate() {
+                    by_source.push((placed[k], Layer::new(srcs[placed[k]].name.clone(), LayerContent::Raster(px))));
                 }
             }
+            // A source that could not be aligned still gets its layer, unwarped at 0,0 (#14095; where the reference
+            // puts it beside aligned ones was not measured).
+            for (i, src) in srcs.iter().enumerate().filter(|(i, _)| !placed.contains(i)) {
+                by_source.push((i, Layer::new(src.name.clone(), LayerContent::Raster(src.surf.clone()))));
+            }
+            // `layers[0]` is the bottom layer, and the first source goes on top; the Content-Aware Fill stays above.
+            by_source.sort_by_key(|(i, _)| std::cmp::Reverse(*i));
+            let fill_layer = (!doc.layers.is_empty()).then(|| doc.layers.remove(0));
+            doc.layers.extend(by_source.into_iter().map(|(_, l)| l));
+            doc.layers.extend(fill_layer);
             let n = doc.layers.len();
             ctx.check()?;
             ctx.progress(1.0, "");
+            let warning = (!failed.is_empty()).then_some(PHOTOMERGE_UNALIGNED);
             Ok((
                 doc,
                 json!({
+                    "warning": warning,
                     "document": Value::Null,
                     "layout": al.layout.name(),
                     "reference": srcs[al.reference].name,
@@ -1415,3 +1471,6 @@ mod tests;
 
 #[cfg(test)]
 mod photomerge_name_tests;
+
+#[cfg(test)]
+mod photomerge_unaligned_tests;

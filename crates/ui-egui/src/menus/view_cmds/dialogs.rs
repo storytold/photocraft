@@ -42,6 +42,15 @@ const FORM_COMMANDS: [&str; 21] = [
     "image.calculations",
 ];
 
+/// What the app does once Photomerge's result is in, from the dialog or a background job (#14095): when some or all
+/// images could not be aligned (the result's `warning`; the names are in `failed`), the user gets the reference's
+/// alert with OK. The merged document is open either way.
+pub(crate) fn photomerge_landed(app: &mut PhotocraftApp, command: &str, result: &Value) {
+    if command == "file.automate.photomerge" && result.get("warning").is_some_and(Value::is_string) {
+        let _ = crate::dialogs::alerts::alert(app, tl!(photocraft_engine::photo_cmds::PHOTOMERGE_UNALIGNED));
+    }
+}
+
 /// Whether `key` is the command id of a form this file opens.
 pub(crate) fn is_form(key: &str) -> bool {
     FORM_COMMANDS.contains(&key)

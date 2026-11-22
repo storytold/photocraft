@@ -671,8 +671,9 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             app.ui.status = crate::i18n::fmt(tl!("Canceled {label}"), &[("label", &e.label)]);
             app.ui.status_error = false;
         }
-        JobOutcome::Done(_) => {
+        JobOutcome::Done(ref result) => {
             app.sync_views();
+            crate::view_cmds::dialogs::photomerge_landed(app, &e.command, result);
             app.ui.status = e.label;
             app.ui.status_error = false;
         }

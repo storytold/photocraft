@@ -1052,6 +1052,7 @@ fn finish(
     let outcome = crate::actions::run_step_dialog(app, result.id, &cmd, params.clone());
     if let Ok(r) = &outcome {
         report_file_errors(app, command, r);
+        crate::view_cmds::dialogs::photomerge_landed(app, &cmd, r);
     }
     // A filter that runs as a background job keeps its preview on screen until the job
     // lands (`canvas::committed_filter_preview`) instead of flashing the unfiltered image.
