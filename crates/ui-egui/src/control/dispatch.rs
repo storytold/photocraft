@@ -1361,7 +1361,7 @@ fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Reply {
         let name = app.open_name(&name);
         let warnings = app.open_automation_bytes_with_approval(&name, &bytes, approved)?;
         // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
-        if !crate::preset_files_ui::is_preset_file(&name) {
+        if !crate::preset_files_ui::is_preset_file(&name) || photocraft_io::aseprite::is_aseprite(&bytes) {
             let recent = automation_location(app, path);
             app.opened_from_listed(path, recent.as_deref());
             if let Some(state) = app.session.active_mut()

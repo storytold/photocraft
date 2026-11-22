@@ -3,6 +3,11 @@ use crate::cmd::{CommandSpec, Result, Session, Value, has_doc};
 /// Image › Image Rotation by a right angle or a flip (pixels, vectors, guides, … all move).
 fn turn(s: &mut Session, label: &str, t: crate::canvas_geom::Turn) -> Result<Value> {
     if let Some(d) = s.active() {
+        if d.doc.sprite.as_ref().is_some_and(|sprite| sprite.has_slices()) {
+            return Err(crate::EngineError::Other("this sprite has retained slice coordinates; remove slices from a copy before turning the canvas".into()));
+        }
+        crate::cmd::check_sprite_canvas_geometry(&d.doc)?;
+        crate::canvas_geom::check_turn_coordinates(&d.doc, t)?;
         let a = t.affine(f64::from(d.doc.size.width), f64::from(d.doc.size.height));
         // Sampler points are pixel indices, not pixel edges: map the pixel's centre, so the point
         // lands on the same pixel `Turn::pixel_map` moves the pixels to (`w - 1 - x`).

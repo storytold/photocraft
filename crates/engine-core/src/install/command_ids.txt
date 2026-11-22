@@ -967,6 +967,17 @@ timeline.nextFrame
 timeline.previousFrame
 timeline.setProps
 timeline.info
+sprite.playback
+sprite.info
+sprite.setDuration
+sprite.setPaletteEntry
+sprite.setCel
+sprite.unlinkCel
+sprite.setTags
+sprite.duplicateFrame
+sprite.deleteFrame
+sprite.detach
+sprite.rasterizeTilemap
 layer.videoLayers.newBlankVideoLayer
 layer.videoLayers.insertBlankFrame
 layer.videoLayers.duplicateFrame

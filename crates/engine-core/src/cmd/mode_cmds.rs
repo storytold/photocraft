@@ -108,6 +108,9 @@ pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: 
     if deg.rem_euclid(360.0).abs() < 1e-9 {
         return Ok(json!({"width": s.active().map(|d| d.doc.size.width), "height": s.active().map(|d| d.doc.size.height)}));
     }
+    if s.active().is_some_and(|d| d.doc.sprite.as_ref().is_some_and(|sp| sp.has_slices())) {
+        return Err(EngineError::Other("this sprite has retained slice coordinates; remove slices from a copy before rotating the canvas".into()));
+    }
     use crate::canvas_geom::{self, Turn};
     let turn = match deg.rem_euclid(360.0) {
         90.0 => Some(Turn::Cw90),
@@ -120,6 +123,8 @@ pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: 
         && let Some(st) = s.active()
         && !st.doc.has_artboards()
     {
+        crate::cmd::check_sprite_canvas_geometry(&st.doc)?;
+        canvas_geom::check_turn_coordinates(&st.doc, turn)?;
         let a = turn.affine(f64::from(st.doc.size.width), f64::from(st.doc.size.height));
         let half = Affine::translate(0.5, 0.5);
         s.set_canvas_map(a, half.then(&a).then(&Affine::translate(-0.5, -0.5)));
@@ -134,6 +139,7 @@ pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: 
         })?;
         return Ok(json!({"width": size.width, "height": size.height}));
     }
+    crate::cmd::check_sprite_canvas_resampling(&s.active().ok_or(EngineError::NoDocument)?.doc)?;
     // The Background stays opaque, whatever the background colour's alpha.
     let bg = [s.tools.background[0], s.tools.background[1], s.tools.background[2], 1.0];
     // Color Sampler points turn with the canvas (the same map the edit applies to the geometry).

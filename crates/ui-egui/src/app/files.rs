@@ -235,15 +235,15 @@ impl PhotocraftApp {
         // masks and layer appearance settings need a layered format even with just one layer.
         let flat = plain_raster(&st.doc).is_some();
         let ext = st.path.as_deref().and_then(|p| std::path::Path::new(p).extension()).map(|e| e.to_string_lossy().to_ascii_lowercase());
-        // An OpenRaster file only when it holds the whole document (#3806): else PSD is offered.
-        let holds_ora = st.path.as_deref().is_some_and(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p));
+        // Offer the current layered format when it can hold the whole document.
+        let holds_document = st.path.as_deref().is_some_and(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p));
         // A JPEG whose lone layer has transparency it can't keep is offered as a PNG, as
         // Photoshop's Save does once pixels are deleted (#2223).
         let transparent_jpeg = ext.as_deref().and_then(photocraft_formats::from_extension) == Some(photocraft_formats::Format::Jpeg)
             && plain_raster(&st.doc).is_some_and(|l| !crate::opaque_layer(&st.doc, l));
         let writable = ext.is_some_and(|e| {
             matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb" | "tif" | "tiff")
-                || (e == "ora" && holds_ora)
+                || (matches!(e.as_str(), "ora" | "aseprite" | "ase") && holds_document)
                 || (flat && photocraft_formats::from_extension(&e).is_some_and(|f| f.capabilities().write == photocraft_formats::Availability::Available))
         });
         let suggested = match &st.path {

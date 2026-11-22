@@ -21,7 +21,7 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 
 pub(crate) fn is_input(p: &Path) -> bool {
     let known = |e: &str| {
-        matches!(e, "pcraft" | "psd" | "psb" | "pdn" | "ora" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub" | "xcf" | "xcfgz")
+        matches!(e, "pcraft" | "psd" | "psb" | "pdn" | "ora" | "aseprite" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub" | "xcf" | "xcfgz")
             || photocraft_codecs::from_extension(e).is_some_and(|f| photocraft_codecs::caps(f).read)
     };
     // Only GIMP's compound suffix is an image; an arbitrary .gz is not a batch input.

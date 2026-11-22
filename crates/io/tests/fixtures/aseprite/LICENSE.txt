@@ -1,0 +1,6 @@
+These original synthetic fixtures are licensed under either of
+
+* Apache License, Version 2.0 (../../../../../LICENSE-APACHE)
+* MIT license (../../../../../LICENSE-MIT)
+
+at your option. Copyright 2026 PhotoCraft contributors.

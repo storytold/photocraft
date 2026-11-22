@@ -2361,3 +2361,27 @@ fn the_unsaved_changes_prompt_is_listed_as_discard_and_answered_by_that_id() {
     crate::canvas::testing::frame(&mut app);
     assert!(app.session.documents().is_empty(), "Don't Save closed the document");
 }
+
+#[test]
+fn app_open_aseprite_alias_opens_an_editable_document_and_remembers_its_source() {
+    let bytes = include_bytes!("../../../io/tests/fixtures/aseprite/layers.aseprite");
+    let services = crate::Services {
+        import: Some(Box::new(|name, bytes, opts| {
+            photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+        })),
+        automation_read: Some(Box::new(move |path| {
+            Ok(crate::AutomationReadResult { name: "sprite.ase".into(), bytes: bytes.to_vec(), save_path: Some(path.into()) })
+        })),
+        automation_locate: Some(Box::new(|path| Some(format!("/work/{path}")))),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let ctx = app.ctx().clone();
+    let r = call(&mut app, &ctx, "app.open", json!({"path":"sprites/sprite.ase"}));
+    assert_eq!(r["ok"], true, "{r}");
+    let st = app.session.active().unwrap();
+    assert!(!st.source_read_only);
+    assert_eq!(st.path.as_deref(), Some("sprites/sprite.ase"));
+    assert_eq!(st.doc.layers.len(), 2);
+    assert_eq!(app.ui.recent_files.first().map(String::as_str), Some("/work/sprites/sprite.ase"));
+}

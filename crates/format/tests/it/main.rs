@@ -12,4 +12,5 @@ mod layer_labels;
 mod roundtrip;
 mod scratch_retry;
 mod smart_contents;
+mod sprite;
 mod triangle_live;

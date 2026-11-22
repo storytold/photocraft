@@ -9,11 +9,12 @@ use craft::timeline::time::{FrameRate, Tick, TimeRange};
 use craft::timeline::ui::TransportWords;
 use craft::timeline::ui::{TransportBar, TransportButton};
 use craft::ui::buttons::{Button, IconButton};
-use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, clicked};
 use craft::ui::display::{Shade, Text};
 use craft::ui::layout::RowAlign;
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::notices::{Notice, NoticeLayout};
+use craft::ui::pickers::Select;
 use craft::ui::runtime::frame::request_repaint_after;
 use craft::ui::style::TypeRole;
 use craft::ui::value_drag::Slider;
@@ -28,19 +29,25 @@ pub struct TimelineUi {
     /// Drives playback; the playhead follows its position while it runs.
     #[serde(skip)]
     clock: PlaybackClock,
+    /// The chosen timed Aseprite animation, or the entire sprite.
+    #[serde(default)]
+    pub(crate) sprite_tag: Option<usize>,
+    /// Wall-clock origin for the engine's variable-duration sprite traversal.
+    #[serde(skip)]
+    sprite_start: Option<f64>,
 }
 
 /// `PlaybackClock` has no equality; two states are equal when both play or both are stopped.
 impl PartialEq for TimelineUi {
     fn eq(&self, other: &Self) -> bool {
-        self.playing() == other.playing()
+        self.playing() == other.playing() && self.sprite_tag == other.sprite_tag
     }
 }
 
 impl TimelineUi {
     /// Whether playback runs.
     pub fn playing(&self) -> bool {
-        self.clock.is_playing()
+        self.sprite_start.is_some() || self.clock.is_playing()
     }
 }
 
@@ -49,6 +56,7 @@ impl TimelineUi {
 pub(crate) fn stop(app: &mut PhotocraftApp) {
     let at = app.session.active().and_then(|d| d.doc.timeline.as_ref()).map_or(Tick(0), |tl| FrameRate::from_f64(f64::from(tl.fps)).tick_of(tl.current as i64));
     app.ui.timeline.clock.halt(at);
+    app.ui.timeline.sprite_start = None;
 }
 
 /// The transport row: Play/Pause, Stop, then the frame steps.
@@ -59,6 +67,11 @@ fn buttons() -> [TransportButton; 4] {
 /// The `timeline` panel body.
 pub(crate) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let now = ui.ctx().input(|i| i.time);
+    app.sync_document_state();
+    if app.session.active().is_some_and(|d| d.doc.sprite.is_some()) {
+        sprite_body(app, ui, now);
+        return;
+    }
     if app.session.active().is_none() {
         app.ui.timeline.clock.stop(now);
         let _ = Notice::new(Tone::Neutral, tl!("Open a document to use the timeline.")).layout(NoticeLayout::Centred).show(ui);
@@ -164,11 +177,139 @@ pub(crate) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// Timed Aseprite frames use the engine's traversal, including tag direction and repeat count.
+fn sprite_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, now: f64) {
+    if let Some(start) = app.ui.timeline.sprite_start {
+        let elapsed = ((now - start).max(0.0) * 1000.0) as u64;
+        match app.run("sprite.playback", json!({"elapsedMs": elapsed, "tag": app.ui.timeline.sprite_tag})) {
+            Ok(result) => {
+                if let Some(frame) = result["frame"].as_u64()
+                    && app.session.active().and_then(|d| d.doc.sprite.as_ref()).is_some_and(|sprite| sprite.current as u64 != frame)
+                {
+                    let _ = app.run("timeline.setFrame", json!({"frame": frame}));
+                }
+                if result["finished"] == true {
+                    app.ui.timeline.sprite_start = None;
+                } else {
+                    ui.ctx().request_repaint();
+                }
+            }
+            Err(_) => app.ui.timeline.sprite_start = None,
+        }
+    }
+
+    let Some(state) = app.session.active() else { return };
+    let Some(sprite) = state.doc.sprite.as_ref() else { return };
+    let document = state.doc.id.0;
+    let frame = sprite.current;
+    let delay = sprite.frame_duration_ms();
+    let count = sprite.frames.len();
+    let elapsed: u64 = sprite.frames.iter().take(frame).map(|f| u64::from(f.duration_ms.max(1))).sum();
+    let tags: Vec<_> = std::iter::once(Entry::new(None, tl!("All").to_owned()))
+        .chain(sprite.tags.iter().enumerate().map(|(i, tag)| Entry::new(Some(i), tag.name.clone())))
+        .collect();
+    let playing = app.ui.timeline.playing();
+    let mut tag = app.ui.timeline.sprite_tag;
+    let mut action = None;
+    let mut toggle = false;
+    let mut pause = false;
+    Row::new().fill_width().align(RowAlign::SpaceBetween).show(ui, |ui, _| {
+        let buttons = buttons();
+        let bar = TransportBar::new(tl!("Transport"), &buttons).playing(playing).editable(false).show(ui);
+        match bar.pressed {
+            Some(TransportButton::PlayStop) => toggle = true,
+            Some(TransportButton::Custom { id, .. }) if id == "stop" => {
+                pause = true;
+                if !playing {
+                    action = Some(("timeline.setFrame", json!({"frame": 0})));
+                }
+            }
+            Some(TransportButton::StepBack) => {
+                pause = true;
+                action = Some(("timeline.previousFrame", json!({})));
+            }
+            Some(TransportButton::StepForward) => {
+                pause = true;
+                action = Some(("timeline.nextFrame", json!({})));
+            }
+            _ => {}
+        }
+        let shown = crate::i18n::fmt(crate::i18n::t("Frame {current} / {total}"), &[("current", &(frame + 1).to_string()), ("total", &count.to_string())]);
+        Text::new(shown).role(TypeRole::Mono).show(ui);
+        Text::new(format!("{:.3}s", elapsed as f64 / 1000.0)).role(TypeRole::Mono).shade(Shade::Muted).show(ui);
+        ui.push_id(("sprite-delay", document, frame), |ui| {
+            let edit = Slider::new(Bind::given(f64::from(delay)), 0.0..=65_535.0).step(1.0).label(tl!("Frame Delay")).show(ui);
+            let id = ui.scope_id().with("delay-gesture");
+            let stamp = ui.ctx().cumulative_pass_nr();
+            if edit.events.began() {
+                ui.data_mut(|d| d.insert_temp(id, stamp));
+                pause = true;
+            }
+            if let Some(value) = edit.value().copied() {
+                let gesture = ui.data_mut(|d| *d.get_temp_mut_or(id, stamp));
+                action = Some((
+                    "sprite.setDuration",
+                    json!({"frame": frame, "durationMs": value.round() as u16, "coalesce": format!("sprite-delay:{document}:{frame}:{gesture}")}),
+                ));
+                pause = true;
+            }
+            if edit.events.committed().is_some() {
+                ui.data_mut(|d| d.remove::<u64>(id));
+            }
+        });
+        if tags.len() > 1 {
+            let selection = Select::new(tl!("Animation"), Bind::given(tag), &tags).show(ui);
+            if let Some(value) = selection.events.committed().copied() {
+                tag = value;
+                pause = true;
+            }
+        }
+    });
+    if count > 1 {
+        let edit = Slider::new(Bind::given(frame as f64), 0.0..=(count - 1) as f64).step(1.0).label(tl!("Playhead")).show(ui);
+        pause |= edit.events.began();
+        if let Some(value) = edit.value().copied() {
+            pause = true;
+            action = Some(("timeline.setFrame", json!({"frame": value.round() as u64})));
+        }
+    }
+    app.ui.timeline.sprite_tag = tag;
+    if pause || (toggle && playing) {
+        app.ui.timeline.sprite_start = None;
+    } else if toggle {
+        app.ui.timeline.sprite_start = Some(if tag.is_some() { now } else { now - elapsed as f64 / 1000.0 });
+        request_repaint_after(ui.ctx(), 0.0);
+    }
+    if let Some((cmd, params)) = action {
+        let _ = app.run(cmd, params);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use egui::vec2;
     use egui_kittest::{Harness, kittest::Queryable};
+
+    #[test]
+    fn aseprite_timeline_uses_frame_delays_and_finishes_finite_tags() {
+        let bytes = include_bytes!("../../../io/tests/fixtures/aseprite/animation.aseprite");
+        let doc = photocraft_io::import("animation.aseprite", bytes).unwrap().document;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.add_document(doc, None);
+        app.sync_views();
+        app.ui.timeline.sprite_start = Some(0.0);
+        let ctx = app.ctx().clone();
+        for (seconds, expected) in [(0.0, 0), (0.016, 0), (0.018, 1), (0.099, 1), (0.101, 2), (0.130, 0)] {
+            crate::testing::run_ui(&ctx, egui::RawInput { time: Some(seconds), ..Default::default() }, |ui| body(&mut app, ui));
+            assert_eq!(app.session.active().unwrap().doc.sprite.as_ref().unwrap().current, expected);
+        }
+        app.ui.timeline.sprite_tag = Some(0);
+        crate::testing::run_ui(&ctx, egui::RawInput { time: Some(0.201), ..Default::default() }, |ui| body(&mut app, ui));
+        assert!(!app.ui.timeline.playing());
+        assert_eq!(app.session.active().unwrap().doc.sprite.as_ref().unwrap().current, 0);
+        assert_eq!(app.session.active().unwrap().history.past_len(), 0);
+    }
 
     fn frame(h: &Harness<'static, Box<PhotocraftApp>>) -> u64 {
         h.state().session.active().unwrap().doc.timeline.as_ref().unwrap().current as u64
