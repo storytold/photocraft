@@ -111,13 +111,16 @@ const FULL_RESOLUTION_PREVIEW: &[&str] = &[
     "edit.contentAwareFill",
 ];
 
-/// Whether `command` with `params` previews at full resolution: [`FULL_RESOLUTION_PREVIEW`], every
-/// Filter Gallery filter (its strokes, grain and textures are sized in pixels; the settings are
-/// abstract levels, not lengths) and the dithered colour-mode conversions (Indexed Color, Bitmap).
+/// Whether `command` with `params` normally needs a full-resolution renderer: [`FULL_RESOLUTION_PREVIEW`],
+/// every Filter Gallery filter (its strokes, grain and textures are sized in pixels; the settings are
+/// abstract levels, not lengths), palette mapping, and the dithered colour-mode conversions. Direct
+/// Palette Map live previews deliberately override this in [`preview_factor`]; Smart Filter replay
+/// keeps the full-resolution stage.
 fn full_resolution_preview(command: &str, params: &Value) -> bool {
     let choice = |key: &str| params.get(key).and_then(Value::as_str);
     FULL_RESOLUTION_PREVIEW.contains(&command)
         || command.starts_with("filter.gallery.")
+        || command == "filter.paletteMap"
         || (command == "image.mode.indexedColor" && choice("dither") != Some("none"))
         || (command == "image.mode.bitmap" && !matches!(choice("method"), Some("threshold" | "threshold50")))
 }
@@ -126,8 +129,12 @@ fn full_resolution_preview(command: &str, params: &Value) -> bool {
 /// `k`: 1 for [`full_resolution_preview`] commands, otherwise the largest factor up to `k` at which
 /// no pixel-sized parameter, divided by it, drops below the command's minimum. A clamped value
 /// would change the feature size: Pointillize's 5 px cells at k = 4 became the 3 px minimum, i.e.
-/// 12 px cells in the preview (#2063).
+/// 12 px cells in the preview (#2063). Palette Map is the exception: its mapping is pixel-bounded by
+/// the canvas request and uses the document's reduced factor at every view zoom.
 pub fn preview_factor(command: &str, params: &Value, k: u32) -> u32 {
+    if command == "filter.paletteMap" {
+        return k.max(1);
+    }
     if k <= 1 || full_resolution_preview(command, params) {
         return 1;
     }
@@ -227,6 +234,12 @@ pub(crate) fn owns(key: &str) -> bool {
     photocraft_engine::commands::find(key).is_some()
 }
 
+/// Adapter-only settings must not alter the stock Indexed Color or Save for Web workflow.
+fn hidden_automation_field(command: &str, key: &str) -> bool {
+    matches!(command, "image.mode.indexedColor" | "file.export.saveForWebLegacy")
+        && matches!(key, "paletteId" | "paletteSnapshot" | "reducePalette" | "mapping" | "transparentIndex")
+}
+
 /// The byte offsets of the `:doc` markers of `spec`: parameters that name an open document.
 fn document_marks(spec: &str) -> Vec<usize> {
     spec.match_indices(":doc").map(|(at, _)| at).filter(|at| !spec[at + 4..].starts_with(|c: char| c.is_alphanumeric())).collect()
@@ -284,6 +297,7 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
     let installed = photocraft_engine::installed_profiles::installed();
     let mut list: Vec<Param> = Param::parse_list(&documents_as_text(spec))
         .into_iter()
+        .filter(|p| !hidden_automation_field(command, &p.key))
         // Optional parameters the generic dialog can't express keep their defaults.
         .filter(|p| {
             !(matches!(
@@ -422,6 +436,12 @@ pub(crate) fn fields(app: &PhotocraftApp, command: &str, params: &[Param]) -> Di
     }
     if command == super::rotate_canvas_ui::COMMAND {
         super::rotate_canvas_ui::open_values(&mut fields);
+    }
+    if command == "filter.paletteMap" {
+        // The palette rows own the palette choice, its snapshot and the mapping: open at the last
+        // used choices that still validate, else the bundled default.
+        let opening = crate::dialogs::palette_map_ui::opening_fields(app, command);
+        overlay(params, &opening, &mut fields);
     }
     fields
 }
@@ -761,7 +781,13 @@ pub(crate) fn check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(),
     validate_match_color_destination(app, &result.key, &destination, &fields).map_err(Label::from)?;
     let params = command_params(&result.key, &result.fields);
     validate_lens_blur_document(app, &result.key, &destination, params.get("depthMap").and_then(Value::as_str)).map_err(Label::from)?;
-    validate_match_color_source_layer(app, &result.key, &fields).map_err(Label::from)
+    validate_match_color_source_layer(app, &result.key, &fields).map_err(Label::from)?;
+    // Palette Map refuses OK while the palette snapshot or mapping settings are invalid, before the
+    // engine is asked to map pixels.
+    if result.key == "filter.paletteMap" && !crate::dialogs::palette_map_ui::can_confirm(&fields) {
+        return Err(Label::from(tl!("The palette or mapping settings are invalid.")));
+    }
+    Ok(())
 }
 
 /// The chosen source must be an open document, and an explicit source layer must be in it: a closed or invalid source
@@ -785,6 +811,8 @@ fn validate_match_color_source_layer(app: &PhotocraftApp, command: &str, fields:
 /// A filter dialog was cancelled: its preview goes, and the playing action it paused ends.
 pub(crate) fn cancel(app: &mut PhotocraftApp, _ctx: &egui::Context, dialog: DialogId) {
     app.filter_preview = None;
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::dialogs::filter_preview_worker::cancel_dialog(app, dialog);
     if let Some(token) = crate::actions::token_of(app, dialog) {
         crate::actions::stopped(app, token);
     }
@@ -1066,6 +1094,11 @@ fn finish(
     }
     if outcome.is_ok() {
         result.remember(ctx);
+        // The palette rows keep their choice, snapshot and mapping under the dialog's remembered
+        // values themselves: the framework's remember saves regular rows only.
+        if command == "filter.paletteMap" {
+            crate::dialogs::palette_map_ui::remember(app, command, &result.fields);
+        }
         // A step dialog of a playing action: the action continues after it.
         if let Some(token) = token {
             crate::actions::resume(app, token)?;
@@ -1204,6 +1237,21 @@ pub(crate) fn preview_document_for_target(
             }
         }
     } else {
+        // Palette Map adds a filter to a Smart Object, so its preview replays the existing stack
+        // on the proxy before adding the new stage. Keep that replay in proxy units too. A mask
+        // or channel target edits that surface directly and must not rescale the smart stack.
+        let pixel_target = params.get("target").is_none_or(|target| match target {
+            Value::String(target) => !matches!(target.as_str(), "mask" | "quickMask"),
+            _ => false,
+        });
+        if command == "filter.paletteMap"
+            && pixel_target
+            && run_k > 1
+            && let Some(layer) = params.get("layer").and_then(Value::as_u64).map(photocraft_doc::LayerId).or(active)
+            && let Some(photocraft_doc::LayerContent::Smart(sm)) = proxy.layer_mut(layer).map(|l| &mut l.content)
+        {
+            scale_smart_filter_params(sm, run_k);
+        }
         scale_preview_params(command, &mut p, run_k);
     }
     let mut s = photocraft_engine::Session::new();
@@ -1236,6 +1284,16 @@ fn is_smart_edit(command: &str) -> bool {
     matches!(command, "layer.smartFilter.setParams" | "layer.smartFilter.blendingOptions")
 }
 
+/// Scale the existing Smart Filter stack when a direct filter is previewed on its object proxy.
+fn scale_smart_filter_params(sm: &mut photocraft_doc::SmartObject, k: u32) {
+    if let Some(mask) = &mut sm.filter_mask {
+        mask.feather /= k as f32;
+    }
+    for f in &mut sm.smart_filters {
+        scale_preview_params(&f.command, &mut f.params, k);
+    }
+}
+
 /// Each stage constrains the proxy factor; an unscalable filter keeps full-resolution preview.
 pub(crate) fn smart_preview_factor(doc: &Document, command: &str, params: &Value, k: u32) -> u32 {
     if !is_smart_edit(command) {
@@ -1243,13 +1301,18 @@ pub(crate) fn smart_preview_factor(doc: &Document, command: &str, params: &Value
     }
     let Some(layer) = params.get("layer").and_then(Value::as_u64).and_then(|id| doc.layer(photocraft_doc::LayerId(id))) else { return 1 };
     let photocraft_doc::LayerContent::Smart(sm) = &layer.content else { return 1 };
-    let mut factor = sm.smart_filters.iter().fold(k, |k, f| preview_factor(&f.command, &f.params, k));
+    // A direct Palette Map preview is safely reduced, but Smart Filter replay still needs the
+    // historical full-resolution stage so editing a stack does not change its established view.
+    let stage_factor = |factor: u32, command: &str, params: &Value| {
+        if command == "filter.paletteMap" { 1 } else { preview_factor(command, params, factor) }
+    };
+    let mut factor = sm.smart_filters.iter().fold(k, |factor, f| stage_factor(factor, &f.command, &f.params));
     if command == "layer.smartFilter.setParams"
         && let Some(index) = params.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok())
         && let Some(f) = sm.smart_filters.get(index)
         && let Some(p) = params.get("params")
     {
-        factor = preview_factor(&f.command, p, factor);
+        factor = stage_factor(factor, &f.command, p);
     }
     factor
 }

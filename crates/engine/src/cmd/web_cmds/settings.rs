@@ -1,5 +1,7 @@
 use super::optimizer::to8;
 use super::{Dither, PaletteKind, Result, Value, bad, json};
+use crate::EngineError;
+use photocraft_algo::palette_map::{Method, Palette, Settings};
 
 // ---------- settings ----------
 
@@ -63,6 +65,13 @@ pub struct WebSettings {
     pub color_table: Option<Vec<[u8; 3]>>,
     /// Replacements applied after quantization, preserving pixel indices.
     pub color_table_edits: std::collections::BTreeMap<usize, [u8; 3]>,
+    /// An explicit, embedded sRGB palette, independent of the installed catalog.
+    pub palette_snapshot: Option<Palette>,
+    pub palette_id: Option<String>,
+    /// Shared renderer settings. When absent, the basic dither fields below apply.
+    pub mapping: Option<Settings>,
+    /// Deliberately reduce an oversized fixed palette to the indexed-format capacity.
+    pub reduce_palette: bool,
     pub dither: Dither,
     /// 0..=1.
     pub dither_amount: f32,
@@ -92,6 +101,10 @@ impl Default for WebSettings {
             colors: 256,
             color_table: None,
             color_table_edits: Default::default(),
+            palette_snapshot: None,
+            palette_id: None,
+            mapping: None,
+            reduce_palette: false,
             dither: Dither::Diffusion,
             dither_amount: 0.88,
             transparency: true,
@@ -133,28 +146,58 @@ impl WebSettings {
         if let Some(f) = s("format") {
             st.format = WebFormat::from_id(f).ok_or_else(|| bad(cmd, format!("unknown format `{f}` (gif|png8|png24|jpeg|wbmp|webp)")))?;
         }
-        if let Some(k) = s("palette") {
-            st.palette = match k {
+        if let Some(value) = p.get("palette").filter(|value| !value.is_null()) {
+            let palette = value.as_str().ok_or_else(|| bad(cmd, "palette must be a string"))?;
+            st.palette = match palette {
                 "restrictive" | "web" => PaletteKind::Web,
-                k => PaletteKind::from_id(k).ok_or_else(|| {
-                    bad(cmd, format!("unknown palette `{k}` (perceptual|selective|adaptive|restrictive|exact|systemMac|systemWindows|uniform)"))
+                palette => PaletteKind::from_id(palette).ok_or_else(|| {
+                    bad(
+                        cmd,
+                        format!("unknown palette `{palette}` (perceptual|selective|adaptive|restrictive|exact|systemMac|systemWindows|uniform|blackWhite)"),
+                    )
                 })?,
             };
         }
-        if let Some(n) = crate::commands::int(p, "colors").filter(|v| *v > 0).map(|v| v as u64) {
-            st.colors = (n as usize).clamp(2, 256);
+        if let Some(colors) = crate::commands::int(p, "colors").filter(|colors| *colors > 0) {
+            st.colors = (colors as usize).clamp(2, 256);
         }
-        if let Some(d) = s("dither") {
+        if let Some(value) = p.get("dither").filter(|value| !value.is_null()) {
+            let d = value.as_str().ok_or_else(|| bad(cmd, "dither must be none|diffusion|pattern|noise or a palette-map method"))?;
             st.dither = match d {
                 "none" | "noDither" => Dither::None,
                 "diffusion" => Dither::Diffusion,
                 "pattern" => Dither::Pattern,
                 "noise" => Dither::Noise,
-                d => return Err(bad(cmd, format!("unknown dither `{d}` (none|diffusion|pattern|noise)"))),
+                d if Method::from_id(d).is_some() => Dither::Diffusion,
+                _ => return Err(bad(cmd, "unknown dither (none|diffusion|pattern|noise or a palette-map method)")),
             };
         }
-        if let Some(a) = p.get("ditherAmount").and_then(Value::as_f64) {
-            st.dither_amount = (a as f32 / 100.0).clamp(0.0, 1.0);
+        if let Some(value) = p.get("ditherAmount").filter(|value| !value.is_null()) {
+            let amount = value.as_f64().filter(|amount| amount.is_finite()).ok_or_else(|| bad(cmd, "ditherAmount must be a finite number from 0 to 100"))?;
+            if !(0.0..=100.0).contains(&amount) {
+                return Err(bad(cmd, "ditherAmount must be a finite number from 0 to 100"));
+            }
+            st.dither_amount = (amount as f32 / 100.0).clamp(0.0, 1.0);
+        }
+        if p.get("mapping").is_some_and(|value| !value.is_null())
+            || p.get("dither").and_then(Value::as_str).is_some_and(|d| !matches!(d, "none" | "noDither" | "diffusion" | "pattern" | "noise"))
+        {
+            st.mapping = Some(crate::palette_cmds::mapping_settings(p, "ditherAmount").map_err(|e| match e {
+                EngineError::BadParams { msg, .. } => bad(cmd, msg),
+                other => other,
+            })?);
+        }
+        if !p.is_null() {
+            st.palette_snapshot = crate::palette_cmds::resolve_palette(p).map_err(|e| match e {
+                EngineError::BadParams { msg, .. } => bad(cmd, msg),
+                other => other,
+            })?;
+        }
+        if let Some(id) = p.get("paletteId").filter(|value| !value.is_null()) {
+            st.palette_id = Some(id.as_str().ok_or_else(|| bad(cmd, "paletteId must be a string"))?.to_string());
+        }
+        if let Some(reduce) = p.get("reducePalette") {
+            st.reduce_palette = reduce.as_bool().ok_or_else(|| bad(cmd, "reducePalette must be a boolean"))?;
         }
         // An on/off option given as anything but true or false is an error, not its default.
         let flag = |k: &str| match p.get(k) {
@@ -235,6 +278,7 @@ impl WebSettings {
             WebFormat::Webp => "webp",
         };
         let palette = match self.palette {
+            PaletteKind::BlackWhite => "blackWhite",
             PaletteKind::Exact => "exact",
             PaletteKind::SystemMac => "systemMac",
             PaletteKind::SystemWindows => "systemWindows",
@@ -266,7 +310,38 @@ impl WebSettings {
             p["colorTableEdits"] =
                 json!(self.color_table_edits.iter().map(|(i, c)| (i.to_string(), rgb_hex(*c))).collect::<std::collections::BTreeMap<_, _>>());
         }
+        if let Some(palette) = &self.palette_snapshot {
+            p["paletteSnapshot"] = json!(palette);
+        }
+        if let Some(id) = &self.palette_id {
+            p["paletteId"] = json!(id);
+        }
+        if let Some(mapping) = &self.mapping {
+            p["mapping"] = json!(mapping);
+        }
+        if self.reduce_palette {
+            p["reducePalette"] = json!(true);
+        }
         p
+    }
+
+    /// Explicit palettes or mapping settings opt into the shared palette-map renderer. Legacy
+    /// Save-for-Web `colorTable`/`colorTableEdits` stay on the stock quantizer path.
+    pub(super) fn uses_custom_mapping(&self) -> bool {
+        self.mapping.is_some() || self.palette_snapshot.is_some() || self.palette_id.is_some()
+    }
+
+    pub(super) fn mapping_settings(&self) -> Settings {
+        self.mapping.clone().unwrap_or_else(|| Settings {
+            method: match self.dither {
+                Dither::None => Method::None,
+                Dither::Diffusion => Method::FloydSteinberg,
+                Dither::Pattern => Method::Bayer,
+                Dither::Noise => Method::WhiteNoise,
+            },
+            amount: self.dither_amount,
+            ..Settings::default()
+        })
     }
 }
 

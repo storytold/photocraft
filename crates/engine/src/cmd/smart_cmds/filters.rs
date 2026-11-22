@@ -4,6 +4,7 @@ use super::{
     BlendMode, Document, EngineError, Layer, LayerContent, LayerId, LayerMask, Result, Session, SmartObject, Surface, Value, bad, json, layer_param, other,
     parse_blend,
 };
+use crate::jobs::JobCtx;
 
 pub(super) fn smart(doc: &Document, id: LayerId) -> Result<&SmartObject> {
     match &doc.layer(id).ok_or(EngineError::NoLayer(id))?.content {
@@ -60,8 +61,17 @@ fn mask_from_selection(sel: &Surface) -> LayerMask {
 /// Appends a smart filter (from a `filter.*` command) and re-renders. A selection becomes the
 /// filter mask, as in Photoshop. Without a renderable source the filter is applied to the cached
 /// pixels (and still recorded).
-pub(crate) fn add_smart_filter(doc: &mut Document, id: LayerId, sf: photocraft_doc::SmartFilter, selection: Option<&Surface>) -> Result<()> {
-    add_smart_filter_in(doc, id, sf, selection, &crate::jobs::JobCtx::new())
+pub(crate) fn add_smart_filter(
+    doc: &mut Document,
+    id: LayerId,
+    sf: photocraft_doc::SmartFilter,
+    selection: Option<&Surface>,
+    ctx: Option<&JobCtx>,
+) -> Result<()> {
+    match ctx {
+        Some(ctx) => add_smart_filter_in(doc, id, sf, selection, ctx),
+        None => add_smart_filter_in(doc, id, sf, selection, &JobCtx::new()),
+    }
 }
 
 /// Append a filter while retaining the job's cancellation context through its re-render.

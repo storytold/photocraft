@@ -439,6 +439,34 @@ fn color_lookup_dialog_lists_and_applies_lut_folder_files() {
     assert!(px[0] < 0.01 && px[1] > 0.99 && px[2] > 0.99, "the picked non-identity LUT was applied: {px:?}");
     assert_eq!(history(&app), 1);
 }
+/// A newly opened Palette Map dialog must install its custom palette default before the
+/// generic schema fields are decoded.  Confirming without touching the controls therefore
+/// maps a real non-palette pixel instead of submitting the parser's integer placeholders.
+#[test]
+fn fresh_palette_map_dialog_maps_a_pixel_on_confirm() {
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.new", json!({"width": 1, "height": 1, "background": "#123456"})).unwrap();
+    let mut app = PhotocraftApp::new(session, crate::Services::default());
+    app.background_jobs = false;
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let before = app.session.active().unwrap().doc.layer(layer).unwrap().surface().unwrap().pixel(0, 0);
+    assert_eq!(
+        photocraft_engine::commands::find("filter.paletteMap").map(|spec| spec.label),
+        Some("Palette Map…"),
+        "the Filter menu names the Palette Map command"
+    );
+    let id = open(&mut app, "filter.paletteMap").expect("Palette Map dialog");
+    assert!(fields_of(&app, id).contains("paletteSnapshot"));
+    let ctx = app.ctx().clone();
+    crate::dialogs::confirm(&mut app, &ctx, id).expect("default Palette Map confirms");
+    let after = app.session.active().unwrap().doc.layer(layer).unwrap().surface().unwrap().pixel(0, 0);
+    assert_ne!(after, before, "the fresh dialog applied a mapping");
+    let cube = &photocraft_algo::palettes::builtin("photocraft-rgb-cube").expect("bundled PhotoCraft RGB cube palette").palette;
+    assert!(
+        cube.colors.iter().any(|color| color.iter().zip(&after).take(3).all(|(a, b)| (a - b).abs() <= 1.0 / 255.0)),
+        "mapped pixel is not in the selected palette: {after:?}"
+    );
+}
 
 /// #7400: Lens Blur's Source lists the document's alpha channels, each choosable even when two
 /// share a name; like the other references it isn't remembered, so a channel source opens as None.
@@ -471,6 +499,7 @@ fn new_filters_have_dialogs_or_run_directly() {
         ("filter.render.lightingEffects", true),
         ("filter.render.relight", true),
         ("filter.other.colorToAlpha", true),
+        ("filter.paletteMap", true),
         ("filter.blur.gaussianBlur", true),
         ("filter.pixelate.facet", false),
         ("filter.pixelate.fragment", false),
@@ -1069,6 +1098,12 @@ fn fixed_size_filters_preview_at_the_scale_they_apply() {
     assert_eq!(preview_factor("image.mode.bitmap", &json!({"method": "threshold"}), 4), 4);
 }
 
+#[test]
+fn palette_map_live_preview_uses_the_document_proxy() {
+    assert_eq!(preview_factor("filter.paletteMap", &json!({}), 4), 4);
+    assert_eq!(preview_factor("filter.paletteMap", &json!({}), 1), 1);
+}
+
 /// #6530: the Content-Aware Fill preview runs at full resolution, for every Sampling choice,
 /// because its patch search finds different matches on a reduced copy.
 #[test]
@@ -1210,6 +1245,46 @@ fn smart_object_curves_preview_keeps_its_size_on_a_reduced_proxy() {
     for (x, y) in [(2, 2), (9, 9), (12, 12), (15, 15)] {
         assert!(alpha(&shown, x, y) < 0.01, "({x}, {y}) is outside the reduced square");
     }
+}
+
+#[test]
+fn palette_map_on_a_reduced_smart_object_replays_scaled_existing_filters() {
+    let mut s = photocraft_engine::Session::new();
+    s.add_document(waves(64), None);
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let layer = s.active().unwrap().active_layer.unwrap();
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 40, "height": 40})).unwrap();
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 8.0})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.edit("set filter mask feather", |doc, _| {
+        let photocraft_doc::LayerContent::Smart(sm) = &mut doc.layer_mut(layer).unwrap().content else { panic!("a smart object") };
+        sm.filter_mask.as_mut().expect("the selection made a filter mask").feather = 6.0;
+        Ok(())
+    })
+    .unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    let params = json!({
+        "paletteId": "photocraft-rgb-cube",
+        "paletteSnapshot": {"name": "saved", "colors": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]},
+        "mapping": {"method": "none"},
+    });
+    let k = 4;
+    let shown = preview_document(&doc, Some(layer), "filter.paletteMap", &params, k).expect("Palette Map preview");
+
+    // Build the independent reference by preparing the proxy exactly as the existing
+    // full-resolution stack would be scaled: 8 px blur → 2 px, and 6 px feather → 1.5 px.
+    let mut reference_input = crate::proxy::proxy_document(&doc, k);
+    let photocraft_doc::LayerContent::Smart(sm) = &mut reference_input.layer_mut(layer).unwrap().content else { panic!("a smart object") };
+    assert_eq!(sm.smart_filters[0].command, "filter.blur.gaussianBlur");
+    sm.smart_filters[0].params["radius"] = json!(2.0);
+    sm.filter_mask.as_mut().expect("the proxy keeps the filter mask").feather = 1.5;
+    let reference = preview_document(&reference_input, Some(layer), "filter.paletteMap", &params, 1).expect("scaled Palette Map reference");
+
+    assert_eq!(shown.size, reference.size, "the reduced preview keeps the Smart Object geometry");
+    let actual = photocraft_compose::flatten(&shown);
+    let expected = photocraft_compose::flatten(&reference);
+    assert_eq!(actual.rect, expected.rect);
+    assert_eq!(actual.px, expected.px, "the preview replays existing filters in proxy units before Palette Map");
 }
 
 /// #2063: a pixel-sized parameter divided by the proxy factor was clamped to the command's
@@ -1411,7 +1486,10 @@ fn image_for<'a>(command: &str, rgb: &'a Document, gray: &'a Document) -> &'a Do
 /// (64 x 64 px): Picture Frame's minimum line widths, and Shadows/Highlights' 0.01 % black and
 /// white clips, which pick single pixels out of 4096 (its radii are checked in
 /// `proxy_previews_scale_only_lengths`).
+/// Palette Map is explicitly labelled approximate: diffusion follows the proxy grid rather
+/// than the full-resolution traversal, so the colour mix can match without matching dot size.
 const APPROXIMATE_AT_PROXY: &[&str] = &[
+    "filter.paletteMap",
     "filter.pixelate.colorHalftone",
     "filter.pixelate.pointillize",
     "filter.stylize.tiles",
@@ -1917,4 +1995,37 @@ fn lens_blur_refuses_a_depth_channel_after_the_document_changed() {
     assert!(ok(&mut app, id), "on the document it opened on, the channel is accepted");
     assert_eq!(app.session.documents()[0].history.past_len(), steps[0] + 1, "Lens Blur ran on the first document");
     assert_eq!(app.session.documents()[1].history.past_len(), steps[1], "the second document is untouched");
+}
+
+#[test]
+fn stock_indexed_dialog_can_disable_transparency_with_stale_automation_settings() {
+    const COMMAND: &str = "image.mode.indexedColor";
+    for stale_settings in [false, true] {
+        let mut app = new_app();
+        app.run("file.new", json!({"width": 2, "height": 1, "depth": 16, "background": "#214bc9"})).unwrap();
+        let before = app.session.active().unwrap().doc.layers[0].surface().unwrap().rgba(0, 0);
+        if stale_settings {
+            app.session.prefs.edit(|prefs| {
+                prefs.dialogs.insert(
+                    COMMAND.into(),
+                    json!({"transparentIndex": 0, "reducePalette": true, "paletteId": "removed-palette", "mapping": {"method": "riemersma"}}),
+                );
+            });
+        }
+        let mut harness = harness(app, egui::vec2(900.0, 900.0));
+        open(harness.state_mut(), COMMAND).unwrap();
+        harness.run_steps(3);
+        harness.get_by_label("Transparency").click();
+        harness.run_steps(2);
+        harness.get_by_label("OK").click();
+        harness.run_steps(3);
+        let doc = &harness.state().session.active().unwrap().doc;
+        assert_eq!(doc.mode, photocraft_color::ColorMode::Indexed, "stale settings: {stale_settings}");
+        assert_eq!(doc.color_table.as_ref().unwrap().transparent, None);
+        let after = doc.layers[0].surface().unwrap().rgba(0, 0);
+        assert_eq!(after[3], 1.0);
+        for (after, before) in after[..3].iter().zip(&before[..3]) {
+            assert!((after - before).abs() <= 1.0 / 255.0, "opaque RGB changed");
+        }
+    }
 }

@@ -45,17 +45,22 @@ fn subject(app: &PhotocraftApp, dialog: &HostedParamDialog) -> Option<Subject> {
 
 /// The filtered proxy the canvas already computed for `id`, when there is one. Matching the dialog keeps a
 /// stacked dialog from showing another's preview; the Preview checkbox decides whether the filtered result
-/// (rather than the original) is shown.
+/// (rather than the original) is shown. Palette Map shows no stale frame: its key must be this dialog's
+/// exact current request (palette, mapping and factor), else the pane keeps the unfiltered proxy.
 fn filtered_preview(
     app: &PhotocraftApp,
     id: DialogId,
     doc: photocraft_doc::DocId,
-    previewed: &str,
+    subject: &Subject,
     previewing: bool,
+    request_k: u32,
 ) -> Option<(FilterPreviewKey, std::sync::Arc<Document>)> {
     let preview = app.filter_preview.as_ref()?;
     let key = &preview.key;
-    (previewing && key.dialog == id && key.doc == doc && key.command == previewed).then(|| preview.result.clone().map(|result| (key.clone(), result))).flatten()
+    let palette_exact = subject.command != "filter.paletteMap" || (key.params == subject.params && key.k == request_k);
+    (previewing && palette_exact && key.dialog == id && key.doc == doc && key.command == subject.previewed)
+        .then(|| preview.result.clone().map(|result| (key.clone(), result)))
+        .flatten()
 }
 
 /// The proxy factor of the picture the dialog shows: the filtered key's when it exists, else the request's.
@@ -63,9 +68,8 @@ fn filtered_preview(
 /// with the view's zoom, and a pane that sized its textures from the uncapped factor built a proxy the canvas never
 /// asked for, then rebuilt it the moment the first result arrived, shifting the pane's mapping for a frame.
 fn picture_factor(app: &PhotocraftApp, id: DialogId, dialog: &HostedParamDialog, doc: &Document, subject: &Subject) -> u32 {
-    filtered_preview(app, id, doc.id, &subject.previewed, dialog.is_previewing())
-        .map(|(key, _)| key.k)
-        .unwrap_or_else(|| crate::canvas::filter_preview_factor(app, doc, &subject.command, &subject.params))
+    let request_k = crate::canvas::filter_preview_factor(app, doc, &subject.command, &subject.params);
+    filtered_preview(app, id, doc.id, subject, dialog.is_previewing(), request_k).map(|(key, _)| key.k).unwrap_or(request_k)
 }
 
 /// Gives every open dialog that has a preview pane its picture: [`HostedParamDialog::set_preview`] each pass.
@@ -89,8 +93,10 @@ fn picture(app: &PhotocraftApp, ctx: &egui::Context, id: DialogId) -> Option<Opt
     let subject = subject(app, dialog)?;
     let Some(st) = app.session.active() else { return Some(None) };
     let (doc_id, revision) = (st.doc.id, st.revision);
-    let filtered = filtered_preview(app, id, doc_id, &subject.previewed, dialog.is_previewing());
-    let base_k = picture_factor(app, id, dialog, &st.doc, &subject);
+    // The factor the canvas asks for right now; a published frame keeps its own (`k` below).
+    let request_k = crate::canvas::filter_preview_factor(app, &st.doc, &subject.command, &subject.params);
+    let filtered = filtered_preview(app, id, doc_id, &subject, dialog.is_previewing(), request_k);
+    let base_k = filtered.as_ref().map(|(key, _)| key.k).unwrap_or(request_k);
 
     let cache_id = egui::Id::unique(("filter-preview-ui", id.value()));
     let mut cache: Cache = ctx.data_mut(|d| std::mem::take(d.get_temp_mut_or_default::<Cache>(cache_id)));

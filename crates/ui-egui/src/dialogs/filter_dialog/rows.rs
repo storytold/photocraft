@@ -36,6 +36,7 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 
 const INDEXED_COLOR: &str = "image.mode.indexedColor";
+const PALETTE_MAP: &str = "filter.paletteMap";
 pub(crate) const LENS_BLUR: &str = "filter.blur.lensBlur";
 const MATCH_COLOR: &str = "image.adjustments.matchColor";
 const COLOR_LOOKUP: &str = "image.adjustments.colorLookup";
@@ -56,6 +57,7 @@ const LUT_ERROR: &str = "lutError";
 pub(crate) fn custom_rows(app: &mut PhotocraftApp, command: &str, params: &mut Vec<Param>) {
     match command {
         INDEXED_COLOR => indexed_color(app, params),
+        PALETTE_MAP => palette_map(params),
         LENS_BLUR => lens_blur(app, params),
         MATCH_COLOR => match_color(app, params),
         COLOR_LOOKUP => color_lookup(app, params),
@@ -81,6 +83,25 @@ fn retype(params: &mut [Param], key: &str, kind: impl FnOnce(&ParamKind) -> Para
     if let Some(p) = row(params, key) {
         p.kind = kind(&p.kind);
     }
+}
+
+// --- Palette Map -----------------------------------------------------------------------------------------------
+
+/// Palette Map's own controls: the palette browser and the mapping settings, as full-width custom rows.
+/// The palette choice, its embedded snapshot and the mapping are what the command takes, so the rows
+/// edit the dialog fields directly (`paletteId`, `paletteSnapshot`, `mapping`).
+fn palette_map(params: &mut Vec<Param>) {
+    params.clear();
+    params.push(
+        Param::custom("palette", Label::from(tl!("Palette")), |ui, fields, _| crate::dialogs::palette_map_ui::palette_row(ui, fields))
+            .full_width()
+            .not_remembered(),
+    );
+    params.push(
+        Param::custom("mapping", Label::from(tl!("Mapping")), |ui, fields, _| crate::dialogs::palette_map_ui::mapping_row(ui, fields))
+            .full_width()
+            .not_remembered(),
+    );
 }
 
 // --- Indexed Color ---------------------------------------------------------------------------------------------

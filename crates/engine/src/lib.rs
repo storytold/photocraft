@@ -34,6 +34,7 @@ pub mod malloc_tuning;
 pub mod memory;
 pub mod memory_gate;
 pub mod new_layer;
+pub mod palette_cmds;
 mod param_check;
 mod pixels;
 pub mod prefs;

@@ -134,6 +134,7 @@ filter.other.minimum
 filter.other.maximum
 filter.other.offset
 filter.lastFilter
+filter.paletteMap
 filter.pixelate.colorHalftone
 filter.pixelate.crystallize
 filter.pixelate.facet

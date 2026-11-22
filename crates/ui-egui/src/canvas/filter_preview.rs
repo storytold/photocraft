@@ -15,7 +15,9 @@ mod tests;
 /// reduced on a large document (Preferences › Performance › Low Resolution Previews), except for
 /// filters whose features don't scale with a proxy (#2063), and never coarser than the active view,
 /// so at 100 % the preview shows every pixel instead of k-pixel blocks (#6326, as adjustment
-/// previews have since #5764). Zoomed out, the proxy keeps previews of large documents fast.
+/// previews have since #5764). Palette Map keeps the document's reduced factor even at 100 %:
+/// its per-pixel mapping does not become less accurate on a proxy, and this bounds interactive
+/// preview work on large canvases. Zoomed out, every other preview keeps its existing cap.
 ///
 /// The in-dialog preview window ([`crate::filter_preview_ui`]) sizes its own textures from this
 /// too, so the canvas and the window never disagree about the factor.
@@ -28,9 +30,10 @@ mod tests;
 /// [`crate::filter_dialog::FilterPreviewKey`] under a finished preview and recompute it inline,
 /// the very stall this avoids.
 pub(crate) fn filter_preview_factor(app: &PhotocraftApp, doc: &Document, cmd: &str, params: &serde_json::Value) -> u32 {
-    // A smart filter edit re-renders the whole stack: every stage constrains the factor.
+    // A smart filter edit re-renders the whole stack: every stage constrains the factor. Direct
+    // Palette Map requests are deliberately the one exception to the view-zoom cap.
     let k = crate::filter_dialog::smart_preview_factor(doc, cmd, params, crate::proxy::preview_factor(doc, crate::proxy::reduced_previews(app)));
-    if cfg!(target_arch = "wasm32") { k } else { crate::proxy::view_factor(k, app.current_zoom(), doc.size.area()) }
+    if cfg!(target_arch = "wasm32") || cmd == "filter.paletteMap" { k } else { crate::proxy::view_factor(k, app.current_zoom(), doc.size.area()) }
 }
 
 /// The open Smart Filter adjustment editor with its Preview box on: its dialog id, the adjustment command, the
@@ -111,13 +114,24 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         scratch: crate::scratch_reads::generation(),
     };
     app.filter_live.begin(session_of(&request), PixelRect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y1));
+    // Palette Map shows no approximate frame while its request changes: the previous mapping is not
+    // an honest preview of the current palette.
+    let palette_map = request.command == "filter.paletteMap";
+    #[cfg(target_arch = "wasm32")]
+    let _ = palette_map;
     let key = request.doc.0 ^ (1u64 << 61);
     // Every filter's preview computes off the UI thread in the desktop app: Gaussian Blur at
     // 1000 px takes long enough to freeze the window. Once the slider settles, a preview still
     // running for an older value is cancelled.
     #[cfg(not(target_arch = "wasm32"))]
     if app.background_jobs {
-        app.filter_preview_worker.supersede(&request, crate::gpu_canvas::now_ms());
+        if palette_map {
+            // Palette Map is pixel-local: a changed mapping must stop the old computation now,
+            // rather than keeping a mid-drag frame that could be mistaken for the current one.
+            app.filter_preview_worker.cancel_stale(&request);
+        } else {
+            app.filter_preview_worker.supersede(&request, crate::gpu_canvas::now_ms());
+        }
         if let Some((finished, computed)) = app.filter_preview_worker.poll() {
             match computed {
                 // The dialog still holds these exact parameters. Publish as before, including an
@@ -129,7 +143,12 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
                 // the factor, #10474), it has a frame to show (an empty one would blank a good
                 // preview), and it must not displace a frame that is already exact for the dialog,
                 // which is what a slider dragged out and back would otherwise make the canvas do.
-                Ok(computed) if same_target(app, &finished) && computed.result.is_some() && !app.filter_preview.as_ref().is_some_and(|p| p.key == request) => {
+                Ok(computed)
+                    if !palette_map
+                        && same_target(app, &finished)
+                        && computed.result.is_some()
+                        && !app.filter_preview.as_ref().is_some_and(|p| p.key == request) =>
+                {
                     publish_filter_preview(app, idx, finished, computed.result, computed.ms);
                 }
                 Ok(_) => {}
@@ -180,9 +199,10 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
         let preview = app.filter_preview.as_ref()?;
-        // Keep the last preview during a drag, but never one from another source or dialog. It is
-        // drawn at its own factor, so a drag that changes the factor keeps it too (#10474).
-        if !same_target(app, &preview.key) {
+        // Palette Map has no safe stale frame: changing its palette or mapping must blank the old
+        // result until the exact request lands. Other filters keep their drag feedback, including
+        // across proxy-factor changes (#10474).
+        if (palette_map && preview.key != request) || (!palette_map && !same_target(app, &preview.key)) {
             return None;
         }
         let result = preview.result.as_ref()?;

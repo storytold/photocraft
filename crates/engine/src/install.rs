@@ -29,6 +29,7 @@ const TABLES: &[Table] = &[
     ("contour_lib_cmds", crate::contour_lib_cmds::specs),
     ("layer_list_cmds", crate::layer_list_cmds::specs),
     ("filters", crate::filters::specs),
+    ("palette_cmds", crate::palette_cmds::specs),
     ("filters_ext", crate::filters_ext::specs),
     ("color_to_alpha_cmds", crate::color_to_alpha_cmds::specs),
     ("gallery_cmds", crate::gallery_cmds::specs),

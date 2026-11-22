@@ -492,6 +492,7 @@ pub fn run(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     crate::type_panels_ui::color_picker::check(app, ui.ctx());
     palette::show(app, ui);
+    palette_map_ui::poll(app);
     crate::filter_dialog::reconcile_match_color(app);
     filter_preview_ui::feed(app, ui.ctx());
     crate::prefs_ui::feed(app);
@@ -743,6 +744,8 @@ pub mod new_guide_ui;
 pub mod new_layer_ui;
 pub mod open_prompt;
 pub mod palette;
+pub mod palette_map_ui;
+mod palette_pattern_ui;
 #[cfg(test)]
 mod paths_export_default_tests;
 #[cfg(test)]
