@@ -733,8 +733,12 @@ pub(super) fn align_from(d: &Descriptor) -> Mapped {
 /// An Auto-Align step: `apply` names the projection (Auto when absent), `radialDistort` is
 /// Geometric Distortion and `vignette` Vignette Removal, both off when absent. PhotoCraft has no
 /// Vignette Removal yet (#14197), so a step that turns it on is unsupported rather than played
-/// without it; an unknown projection or a wrong-typed key is unsupported too.
+/// without it; an unknown projection or a wrong-typed key is unsupported too. The command aligns
+/// the selected layers, so a step that targets any other layers is unsupported.
 fn auto_align_from(d: &Descriptor) -> Mapped {
+    if d.get("null").is_some_and(|t| *t != target_ref("Lyr ")) {
+        return Mapped::Unsupported { harmless: false };
+    }
     let projection = match d.get("apply") {
         None => Some("auto"),
         Some(v) => enumerated(v).and_then(|a| lookup(PROJECTIONS, &a)),

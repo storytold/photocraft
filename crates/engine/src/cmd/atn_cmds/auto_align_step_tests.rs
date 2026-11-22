@@ -92,6 +92,16 @@ fn an_unknown_projection_or_a_wrong_typed_key_is_unsupported() {
     }
 }
 
+/// The command aligns the selected layers: a step that targets a named layer cannot play as
+/// recorded, while one without a target plays on the selection.
+#[test]
+fn a_step_aimed_at_other_layers_is_unsupported() {
+    let named = desc("null").with("null", name_ref("Lyr ", "Sky")).with("Usng", enm("ADSt", "ADSContent")).with("apply", enm("projection", "auto"));
+    assert_eq!(imported(named), None);
+    let untargeted = desc("null").with("Usng", enm("ADSt", "ADSContent")).with("apply", enm("projection", "auto"));
+    assert_eq!(imported(untargeted).map(|(id, _)| id).as_deref(), Some("edit.autoAlignLayers"));
+}
+
 /// Every projection and Geometric Distortion setting records as the `Algn` / `ADSContent` step
 /// and loads back to the same command and params.
 #[test]
