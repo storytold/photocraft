@@ -3,7 +3,7 @@ use crate::canvas::testing::{self, ToolEvent, tool_event};
 use photocraft_engine::Session;
 
 /// Create two distinguishable source colours and an empty layer for real mouse strokes.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(Session::new(), Default::default());
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.run("paint.pencil", json!({"points": [[16,16]], "size": 4, "color": "#ff0000"})).unwrap();

@@ -15,7 +15,7 @@ use crate::panels::panel_docking;
 const TOGGLE: &str = "Toggle Character and Paragraph panels";
 
 /// An app with one selected type layer.
-fn app_with_layer() -> PhotocraftApp {
+fn app_with_layer() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.ui.tool = crate::state::Tool::Type;
     app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
@@ -26,7 +26,7 @@ fn app_with_layer() -> PhotocraftApp {
 }
 
 /// The options bar in a row, once the app's fonts are set up (the first pass has none).
-fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let ctx = app.ctx().clone();
     let mut h = Harness::builder().with_context(ctx).with_size(vec2(1400.0, 200.0)).with_max_steps(16).build_app(
         |ui, app| {
@@ -38,13 +38,13 @@ fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn click(h: &mut Harness<'static, PhotocraftApp>) {
+fn click(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     h.get_by_role_and_label(egui::accesskit::Role::Button, TOGGLE).click();
     h.run();
 }
 
 /// Whether the Character | Paragraph group is shown, and whether Paragraph is its front tab.
-fn group(h: &Harness<'static, PhotocraftApp>) -> (bool, bool) {
+fn group(h: &Harness<'static, Box<PhotocraftApp>>) -> (bool, bool) {
     (panel_docking::is_shown(h.state(), "character"), panel_docking::is_front(h.state(), "paragraph"))
 }
 

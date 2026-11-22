@@ -325,6 +325,12 @@ pub fn default_name(s: &Session) -> String {
 const MAX_DEFINE_EDGE: u32 = 8000;
 
 fn define(s: &mut Session, p: &Value) -> Result<Value> {
+    let sample = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format().sample;
+    define_with_max_pixels(s, p, photocraft_doc::pattern::max_paint_pixels(sample))
+}
+
+/// Define a pattern with a bound on its pixel count.
+fn define_with_max_pixels(s: &mut Session, p: &Value, max_px: u64) -> Result<Value> {
     let cmd = "edit.definePattern";
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = &st.doc;
@@ -345,7 +351,6 @@ fn define(s: &mut Session, p: &Value) -> Result<Value> {
     // A pattern the compositor could not hold would define but paint nothing: 8 bits go to the
     // edge limit, 16-bit documents to 33,554,432 px in all, float to 16,777,216 (4096 × 4096).
     let sample = doc.pixel_format().sample;
-    let max_px = photocraft_doc::pattern::max_paint_pixels(sample);
     if u64::from(r.width()) * u64::from(r.height()) > max_px {
         return Err(bad(cmd, format!("patterns in a {}-bit document are limited to {max_px} px in all", sample.bytes() * 8)));
     }
@@ -762,17 +767,22 @@ mod tests {
         assert!(e.contains("16-bit") && e.contains("33554432"), "{e}");
     }
 
-    /// A pattern of the largest area Define Pattern accepts at 8 bits is paintable: held at 4
-    /// bytes a pixel, 256 MB, as the compositor's cap allows, and it renders.
+    /// A pattern at the area limit is paintable and renders; production permits 8000×8000 at 8 bits.
     #[test]
-    fn an_8000_by_8000_pattern_is_defined_and_paints() {
+    fn a_pattern_at_the_area_limit_is_defined_and_paints() {
         let mut s = Session::new();
-        s.execute("file.new", json!({"width": 8000, "height": 8000, "depth": 8})).unwrap();
+        assert_eq!(MAX_DEFINE_EDGE, 8000);
+        assert!(photocraft_doc::pattern::max_paint_pixels(SampleType::U8) >= 8000 * 8000);
+        assert_eq!(photocraft_doc::pattern::working_bytes_for(8000 * 8000, SampleType::U8), 8000 * 8000 * 4);
+        let (side, max_px) = (80, 80 * 80);
+        s.execute("file.new", json!({"width": side, "height": side, "depth": 8})).unwrap();
         s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
-        s.execute("edit.definePattern", json!({"name": "Largest"})).unwrap();
+        assert!(define_with_max_pixels(&mut s, &json!({"name": "Too large"}), max_px - 1).is_err());
+        define_with_max_pixels(&mut s, &json!({"name": "Largest"}), max_px).unwrap();
         let p = s.patterns.items.iter().find(|p| p.name == "Largest").unwrap();
-        assert_eq!((p.width, p.height), (8000, 8000));
-        assert!(p.is_paintable() && p.working_bytes() == 256_000_000);
+        assert_eq!((p.width, p.height), (side, side));
+        // A small pattern uses the expanded float representation, unlike the largest 8-bit one.
+        assert!(p.is_paintable() && p.working_bytes() == max_px * 16);
         s.execute("file.new", json!({"width": 40, "height": 30, "depth": 8})).unwrap();
         s.execute("layer.newFillLayer.pattern", json!({"pattern": "Largest"})).unwrap();
         let [r, g, b, a] = pixel(&s, 5, 5);

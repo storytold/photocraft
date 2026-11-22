@@ -14,7 +14,7 @@ const COMBOS: [Modifiers; 4] = [Modifiers::NONE, Modifiers::SHIFT, Modifiers::AL
 
 /// A document with a selection away from the text, so Add, Subtract and Intersect would each
 /// leave something other than the text outline.
-pub(super) fn new_app() -> PhotocraftApp {
+pub(super) fn new_app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 400})).unwrap();
     app.run("select.rect", json!({"x": 600, "y": 250, "width": 100, "height": 100})).unwrap();

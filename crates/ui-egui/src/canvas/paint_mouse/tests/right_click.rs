@@ -4,18 +4,18 @@
 use super::*;
 
 /// Neither the Brush Preset picker nor a canvas menu (the mode menu included) is open.
-fn nothing_opened(h: &Harness<'static, PhotocraftApp>) -> bool {
+fn nothing_opened(h: &Harness<'static, Box<PhotocraftApp>>) -> bool {
     picker_at(h).is_none() && h.state().ui.canvas_tool_menu.is_none()
 }
 
 /// One pointer button event in its own frame.
-fn button(h: &mut Harness<'static, PhotocraftApp>, pos: Pos2, button: PointerButton, pressed: bool) {
+fn button(h: &mut Harness<'static, Box<PhotocraftApp>>, pos: Pos2, button: PointerButton, pressed: bool) {
     h.event(egui::Event::PointerButton { pos, button, pressed, modifiers: Modifiers::NONE });
     h.run_steps(1);
 }
 
 /// A pointer move by `by` from `from`, in `steps` frames; returns where it ends.
-fn move_by(h: &mut Harness<'static, PhotocraftApp>, from: Pos2, by: egui::Vec2, steps: usize) -> Pos2 {
+fn move_by(h: &mut Harness<'static, Box<PhotocraftApp>>, from: Pos2, by: egui::Vec2, steps: usize) -> Pos2 {
     for i in 1..=steps {
         h.event(egui::Event::PointerMoved(from + by * (i as f32 / steps as f32)));
         h.run_steps(1);
@@ -24,7 +24,7 @@ fn move_by(h: &mut Harness<'static, PhotocraftApp>, from: Pos2, by: egui::Vec2, 
 }
 
 /// One key going down and up, each in its own frame, with `mods` held.
-fn key(h: &mut Harness<'static, PhotocraftApp>, key: egui::Key, mods: Modifiers) {
+fn key(h: &mut Harness<'static, Box<PhotocraftApp>>, key: egui::Key, mods: Modifiers) {
     for pressed in [true, false] {
         h.event(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: mods });
         h.run_steps(1);

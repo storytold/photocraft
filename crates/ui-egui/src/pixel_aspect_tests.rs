@@ -9,7 +9,7 @@ use crate::PhotocraftApp;
 use crate::canvas::active_view;
 use crate::state::Tool;
 
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 100, "background": "transparent"})).unwrap();
     app.run("tools.setColors", json!({"foreground": "#000000"})).unwrap();
@@ -18,7 +18,7 @@ fn harness() -> Harness<'static, PhotocraftApp> {
     app.run("tools.setBrush", json!({"brush": {"size": 1, "smoothing": {"amount": 0.0}}})).unwrap();
     app.sync_views();
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1200.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -32,13 +32,13 @@ fn harness() -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn menu(h: &mut Harness<'static, PhotocraftApp>, id: &str, params: serde_json::Value) {
+fn menu(h: &mut Harness<'static, Box<PhotocraftApp>>, id: &str, params: serde_json::Value) {
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, id, params).unwrap();
     h.run_steps(3);
 }
 
-fn click(h: &mut Harness<'static, PhotocraftApp>, pos: Pos2) {
+fn click(h: &mut Harness<'static, Box<PhotocraftApp>>, pos: Pos2) {
     h.event(egui::Event::PointerMoved(pos));
     h.run_steps(1);
     for pressed in [true, false] {
@@ -47,7 +47,7 @@ fn click(h: &mut Harness<'static, PhotocraftApp>, pos: Pos2) {
     }
 }
 
-fn alpha(h: &Harness<'static, PhotocraftApp>, x: i32, y: i32) -> f32 {
+fn alpha(h: &Harness<'static, Box<PhotocraftApp>>, x: i32, y: i32) -> f32 {
     let st = h.state().session.active().unwrap();
     st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().rgba(x, y)[3]
 }

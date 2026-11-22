@@ -225,6 +225,8 @@ fn color_balance_from(d: &Descriptor) -> Option<Value> {
             out.insert(param.into(), v);
         }
     }
+    // Absent PrsL stays absent here on purpose: a layer edit merges and must not force the key,
+    // and the event path fills the measured default itself (#14417, see events.rs).
     if let Some(b) = get_bool(d, "PrsL") {
         out.insert("preserveLuminosity".into(), b.into());
     }
@@ -240,12 +242,12 @@ fn color_balance_to(p: &Value) -> Option<Descriptor> {
 }
 
 const BW: &[F] = &[
-    F("Rd  ", "reds", Kind::Long),
-    F("Yllw", "yellows", Kind::Long),
-    F("Grn ", "greens", Kind::Long),
-    F("Cyn ", "cyans", Kind::Long),
-    F("Bl  ", "blues", Kind::Long),
-    F("Mgnt", "magentas", Kind::Long),
+    F("Rd  ", "reds", Kind::ExactLong),
+    F("Yllw", "yellows", Kind::ExactLong),
+    F("Grn ", "greens", Kind::ExactLong),
+    F("Cyn ", "cyans", Kind::ExactLong),
+    F("Bl  ", "blues", Kind::ExactLong),
+    F("Mgnt", "magentas", Kind::ExactLong),
     F("useTint", "tint", Kind::Bool),
     F("tintColor", "tintColor", Kind::Color),
 ];

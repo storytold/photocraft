@@ -74,7 +74,7 @@ fn recolour(app: &mut PhotocraftApp, gesture: Option<String>, any_tool: bool) {
     let Some(st) = app.session.active() else { return };
     let fg = app.session.tools.foreground;
     let (texts, shapes): (Vec<u64>, Vec<(u64, f32)>) = {
-        let selected: Vec<_> = st.selected_layers().into_iter().filter_map(|id| st.doc.layer(id)).collect();
+        let selected: Vec<_> = st.selected_layers().iter().copied().filter_map(|id| st.doc.layer(id)).collect();
         let texts = selected.iter().filter(|l| matches!(l.content, LayerContent::Text(_))).map(|l| l.id.0).collect();
         // A shape keeps its fill's own opacity and takes the float colour as it is (#5568);
         // locked shapes and ones already filled with it are left alone.

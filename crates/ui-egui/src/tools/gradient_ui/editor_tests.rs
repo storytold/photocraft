@@ -12,7 +12,7 @@ use photocraft_doc::Fill;
 
 /// A harness around `gradient_ui::editor::show`. With `layer` a Gradient Fill layer is selected
 /// (three colour stops, three opacity stops), else the same gradient is the tool's current one.
-pub(super) fn editor(layer: bool) -> Harness<'static, PhotocraftApp> {
+pub(super) fn editor(layer: bool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
     let mut params = json!({"stops": [[0, "#ff0000"], [0.5, "#00ff00"], [1, "#0000ff"]], "transparency": [[0, 25], [0.4, 60], [1, 100]]});
@@ -27,13 +27,13 @@ pub(super) fn editor(layer: bool) -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder()
         .with_size(vec2(1000.0, 900.0))
         .with_context(ctx)
-        .build_ui_state(|ui, app: &mut PhotocraftApp| crate::gradient_ui::editor::show(app, ui), app);
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::gradient_ui::editor::show(app, ui), app);
     h.run_steps(4);
     h
 }
 
 /// The gradient of the active layer.
-fn layer_fill(h: &Harness<PhotocraftApp>) -> Fill {
+fn layer_fill(h: &Harness<Box<PhotocraftApp>>) -> Fill {
     let st = h.state().session.active().unwrap();
     match &st.doc.layer(st.active_layer.unwrap()).unwrap().content {
         photocraft_doc::LayerContent::Fill(f @ Fill::Gradient { .. }) => f.clone(),
@@ -41,11 +41,11 @@ fn layer_fill(h: &Harness<PhotocraftApp>) -> Fill {
     }
 }
 
-fn history(h: &Harness<PhotocraftApp>) -> usize {
+fn history(h: &Harness<Box<PhotocraftApp>>) -> usize {
     h.state().session.active().unwrap().history.past_len()
 }
 
-fn click(h: &mut Harness<PhotocraftApp>, pos: Pos2) {
+fn click(h: &mut Harness<Box<PhotocraftApp>>, pos: Pos2) {
     h.event(egui::Event::PointerMoved(pos));
     h.run_steps(1);
     h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
@@ -56,7 +56,7 @@ fn click(h: &mut Harness<PhotocraftApp>, pos: Pos2) {
 
 /// The rect of the first marker whose accessible name or value contains `text`: the bar's markers
 /// are named with their location, and their order is the bar's geometry order, not location order.
-fn marker(h: &Harness<PhotocraftApp>, text: &str) -> Rect {
+fn marker(h: &Harness<Box<PhotocraftApp>>, text: &str) -> Rect {
     h.get_all_by_role(Role::GraphicsObject)
         .find(|n| {
             let n = n.accesskit_node();
@@ -67,14 +67,14 @@ fn marker(h: &Harness<PhotocraftApp>, text: &str) -> Rect {
 }
 
 /// Selects the marker at `text` (a location such as "50%") with a click.
-fn select(h: &mut Harness<PhotocraftApp>, text: &str) {
+fn select(h: &mut Harness<Box<PhotocraftApp>>, text: &str) {
     let at = marker(h, text).center();
     click(h, at);
 }
 
 /// Types `value` into the number field named `name` of the selected marker, and commits it with
 /// Enter when `commit`.
-fn type_number(h: &mut Harness<PhotocraftApp>, name: &str, value: &str, commit: bool) {
+fn type_number(h: &mut Harness<Box<PhotocraftApp>>, name: &str, value: &str, commit: bool) {
     h.get_all_by_role(Role::SpinButton)
         .find(|n| n.accesskit_node().label().as_deref() == Some(name))
         .unwrap_or_else(|| panic!("no number field {name:?}"))
@@ -90,7 +90,7 @@ fn type_number(h: &mut Harness<PhotocraftApp>, name: &str, value: &str, commit: 
 }
 
 /// Adds a colour stop: selects a colour marker, then Insert adds one halfway in its row.
-pub(super) fn add_stop(h: &mut Harness<PhotocraftApp>) {
+pub(super) fn add_stop(h: &mut Harness<Box<PhotocraftApp>>) {
     let at = h
         .get_all_by_role(Role::GraphicsObject)
         .find(|n| n.accesskit_node().label().is_some_and(|l| l.to_lowercase().contains("color")))
@@ -105,7 +105,7 @@ pub(super) fn add_stop(h: &mut Harness<PhotocraftApp>) {
 
 /// Presses on the marker at `text`, drags it `dx` points along the bar in two steps, runs
 /// `during` with the button still down, then releases.
-fn drag_marker(h: &mut Harness<PhotocraftApp>, text: &str, dx: f32, during: impl FnOnce(&mut Harness<PhotocraftApp>)) {
+fn drag_marker(h: &mut Harness<Box<PhotocraftApp>>, text: &str, dx: f32, during: impl FnOnce(&mut Harness<Box<PhotocraftApp>>)) {
     let from = marker(h, text).center();
     let to = from + vec2(dx, 0.0);
     h.event(egui::Event::PointerMoved(from));

@@ -13,7 +13,7 @@ use egui_kittest::{
 };
 use photocraft_doc::ShapeLayer;
 
-fn app(mode: &str, depth: u32) -> PhotocraftApp {
+fn app(mode: &str, depth: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 120, "height": 100, "mode": mode, "depth": depth})).unwrap();
     app.ui.tool = Tool::Rectangle;
@@ -63,11 +63,11 @@ fn draw(app: &mut PhotocraftApp, tool: Tool, from: [f64; 2], to: [f64; 2]) {
     shapes::finish_drag(app, shapes::kind_of(tool), &geometry(tool, from, to), Mods::default());
 }
 
-fn harness(app: PhotocraftApp, properties: bool) -> Harness<'static, PhotocraftApp> {
+fn harness(app: Box<PhotocraftApp>, properties: bool) -> Harness<'static, Box<PhotocraftApp>> {
     // kittest's default step: 0.25 s a frame.
     let ctx = app.ctx().clone();
     let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_step_dt(0.25).with_context(ctx).build_ui_state(
-        move |ui, app: &mut PhotocraftApp| {
+        move |ui, app: &mut Box<PhotocraftApp>| {
             crate::screen_picker::tick(app, ui.ctx());
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -90,7 +90,7 @@ fn harness(app: PhotocraftApp, properties: bool) -> Harness<'static, PhotocraftA
     h
 }
 
-fn stroke_width(h: &mut Harness<'_, PhotocraftApp>, width: &str) {
+fn stroke_width(h: &mut Harness<'_, Box<PhotocraftApp>>, width: &str) {
     h.get_all_by_role(egui::accesskit::Role::SpinButton).next().expect("the stroke width").click();
     h.run();
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
@@ -100,17 +100,17 @@ fn stroke_width(h: &mut Harness<'_, PhotocraftApp>, width: &str) {
 }
 
 /// The Fill or Stroke chip named `label` (a colour well; the popover's kind switch carries the same name).
-fn chip<'h>(h: &'h Harness<'_, PhotocraftApp>, label: &'h str) -> egui_kittest::Node<'h> {
+fn chip<'h>(h: &'h Harness<'_, Box<PhotocraftApp>>, label: &'h str) -> egui_kittest::Node<'h> {
     h.get_by_role_and_label(egui::accesskit::Role::ColorWell, label)
 }
 
 /// The Stroke style button, which opens the Stroke Options popover.
-fn stroke_style_button<'h>(h: &'h Harness<'_, PhotocraftApp>) -> egui_kittest::Node<'h> {
+fn stroke_style_button<'h>(h: &'h Harness<'_, Box<PhotocraftApp>>) -> egui_kittest::Node<'h> {
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Stroke style")
 }
 
 /// Opens the chip `label` and picks its kind button `kind` ("No Color", "Solid", "Gradient").
-fn pick_kind(h: &mut Harness<'_, PhotocraftApp>, label: &str, kind: &str) {
+fn pick_kind(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str, kind: &str) {
     chip(h, label).click();
     h.run_steps(3);
     h.get_by_role_and_label(egui::accesskit::Role::RadioButton, kind).click();
@@ -119,9 +119,9 @@ fn pick_kind(h: &mut Harness<'_, PhotocraftApp>, label: &str, kind: &str) {
 
 /// Clicks the popover's swatch `name`: a list item labelled "<name>, <hex>" in the Swatches list. The list is the Solid
 /// paint's, and a group's rows show once its header is open (the group named by the swatch's first word).
-fn click_swatch(h: &mut Harness<'_, PhotocraftApp>, name: &str) {
+fn click_swatch(h: &mut Harness<'_, Box<PhotocraftApp>>, name: &str) {
     let prefix = format!("{name}, #");
-    let found = |h: &Harness<'_, PhotocraftApp>| {
+    let found = |h: &Harness<'_, Box<PhotocraftApp>>| {
         h.query_all_by_role(egui::accesskit::Role::ListItem).any(|n| n.accesskit_node().label().as_deref().is_some_and(|l| l.starts_with(&prefix)))
     };
     if !found(h) {
@@ -145,7 +145,7 @@ fn click_swatch(h: &mut Harness<'_, PhotocraftApp>, name: &str) {
 
 /// Opens the chip `label`, its Color Picker… button, sets `color` (the colour it opened with when
 /// `None`) and presses OK.
-fn pick_in_full_picker(h: &mut Harness<'_, PhotocraftApp>, label: &str, color: Option<Srgba>) {
+fn pick_in_full_picker(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str, color: Option<Srgba>) {
     chip(h, label).click();
     h.run_steps(3);
     h.get_by_label("Color Picker…").click();
@@ -502,7 +502,7 @@ fn tool_gradient_paints_reach_the_preview_and_the_next_shape() {
 fn stroke_swatch_gradient_tab_sets_the_next_shapes_stroke() {
     let mut h = harness(app("rgb", 8), false);
     pick_kind(&mut h, "Stroke", "Gradient");
-    let stroke_gradient = |h: &Harness<'_, PhotocraftApp>| match h.state().ui.tool_options.shape_stroke_gradient.clone() {
+    let stroke_gradient = |h: &Harness<'_, Box<PhotocraftApp>>| match h.state().ui.tool_options.shape_stroke_gradient.clone() {
         Some(photocraft_doc::Fill::Gradient { stops, style, angle, .. }) => (stops, style, angle),
         other => panic!("a stroke gradient, not {other:?}"),
     };
@@ -551,7 +551,7 @@ fn properties_stroke_swatch_gives_the_selected_shape_a_gradient_stroke() {
     assert_eq!(shape(h.state()).stroke.as_ref().unwrap().paint, solid_paint([1.0, 0.0, 0.0, 1.0]));
 }
 
-fn tool_stroke_gradient(h: &Harness<'_, PhotocraftApp>) -> photocraft_doc::Fill {
+fn tool_stroke_gradient(h: &Harness<'_, Box<PhotocraftApp>>) -> photocraft_doc::Fill {
     h.state().ui.tool_options.shape_stroke_gradient.clone().expect("a stroke gradient")
 }
 

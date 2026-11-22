@@ -13,7 +13,7 @@ use craft::layers::ui::tree::{
     SubRows, ThumbBadge,
 };
 use craft::theme::LabelColor as UiLabel;
-use craft::ui::contract::{Entry, ReorderMove};
+use craft::ui::contract::{Entry, MemoProps, PlainData, ReorderMove, Tracked};
 use craft::ui::list::ThumbSize;
 use craft::ui::patterns::blend_keys::{BlendKeyEntry, blend_entries};
 use craft::ui::primitives::textures::{Revision, ThumbRender, ThumbRequest, ThumbSource, thumb_image};
@@ -25,15 +25,9 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
-/// The key the panel and the filter use for a blend mode: its label folded as the engine's
-/// `blend_from_str` reads it ("normal", "lineardodgeadd").
-pub(crate) fn blend_key(m: BlendMode) -> String {
-    m.label().to_ascii_lowercase().replace([' ', '_', '-', '(', ')'], "")
-}
-
 /// The blend mode a panel key names.
 pub(crate) fn blend_of(key: &str) -> Option<BlendMode> {
-    photocraft_engine::commands::blend_from_str(key)
+    photocraft_engine::commands::parse_blend(key)
 }
 
 /// A document label colour as the framework's (`None` for none), matched by name.
@@ -85,10 +79,105 @@ pub(crate) fn listed_filter(app: &PhotocraftApp) -> Option<crate::smart_ui::Filt
     PhotoLayers::new(app, st, &app.ui.layer_filter, false, picked).selected_filter()
 }
 
-/// The active document's layers as the panel shows them, built each pass.
-pub(crate) struct PhotoLayers<'a> {
-    app: &'a PhotocraftApp,
-    st: &'a DocState,
+/// What the Layers panel's model is built from ([`PhotoLayers::new`]): the document as the session tracks it, whose
+/// revision moves with every change to it, view state included, and the app's answers for its rows.
+#[derive(MemoProps)]
+struct LayersFacts<'a> {
+    doc: &'a Tracked<DocState>,
+    filter: &'a LayerFilter,
+    #[memo_props(hash = "craft-layers part: a fieldless enum")]
+    target: LayerPart,
+    mask_target: bool,
+    vector_mask_target: bool,
+    link_enabled: bool,
+    #[memo_props(hash = "a plain model id")]
+    hovered: Option<LayerId>,
+    working_text: Option<u64>,
+    /// The missing linked files of the open documents (the Smart Object filter).
+    missing: craft::ui::contract::Revision,
+    foreign_drag: bool,
+    picked: Option<crate::smart_ui::FilterDrag>,
+}
+
+/// The id the Layers panel's model is derived under.
+pub(crate) fn model_id() -> egui::Id {
+    egui::Id::unique("photocraft-layers-model")
+}
+
+/// The value the Layers panel's model is derived as: `None` while no document is open.
+pub(crate) type Model = Option<Tracked<PhotoLayers>>;
+
+/// The Layers panel's model of the active document `st`, derived from what it is built from: built again only when
+/// one of [`LayersFacts`] changed. A new build is a new `Tracked`, so the panel's key moves exactly then. It is always
+/// `Some`.
+pub(crate) fn model(
+    app: &PhotocraftApp,
+    st: &Tracked<DocState>,
+    filter: &LayerFilter,
+    foreign_drag: bool,
+    picked: Option<crate::smart_ui::FilterDrag>,
+) -> Arc<Model> {
+    let facts = LayersFacts {
+        doc: st,
+        filter,
+        target: edit_target(app, st),
+        mask_target: app.ui.mask_target,
+        vector_mask_target: app.ui.vector_mask_target,
+        link_enabled: app.session.is_enabled("layer.linkLayers"),
+        hovered: app.canvas_hover_layer,
+        working_text: working_text(app),
+        missing: app.session.missing_links_revision(),
+        foreign_drag,
+        picked,
+    };
+    craft::ui::runtime::derived::derived(app.ctx(), model_id(), &facts, || Some(Tracked::new(PhotoLayers::new(app, st, filter, foreign_drag, picked))))
+}
+
+/// Derives the model as `None` while no document is open: the kept model, which holds the document it showed, is
+/// replaced in the pass that finds the document gone.
+pub(crate) fn no_model(app: &PhotocraftApp) {
+    let _ = craft::ui::runtime::derived::derived(app.ctx(), model_id(), &(), || Model::None);
+}
+
+/// A Type Mask session's working text, which the panel never lists.
+fn working_text(app: &PhotocraftApp) -> Option<u64> {
+    app.ui.text_edit.as_ref().filter(|ed| ed.mask).map(|ed| ed.layer)
+}
+
+/// The part of the active layer edits go to ([`LayerTree::selection`]).
+fn edit_target(app: &PhotocraftApp, st: &DocState) -> LayerPart {
+    let ui = &app.ui;
+    match st.active_layer.and_then(|id| st.doc.layer(id)) {
+        Some(l) if l.frame.is_some() => match crate::frame_tool::target(app, l) {
+            crate::frame_tool::Target::Frame => LayerPart::FrameShape,
+            crate::frame_tool::Target::Content => LayerPart::FrameContent,
+            crate::frame_tool::Target::Both => LayerPart::Pixels,
+        },
+        Some(l) if ui.filter_mask_target == Some(l.id.0) && app.filter_mask_targeted() => LayerPart::FilterMask,
+        Some(l) if ui.vector_mask_target && l.vector_mask.is_some() => LayerPart::VectorMask,
+        Some(l) if ui.mask_target && l.mask.is_some() => LayerPart::LayerMask,
+        _ => LayerPart::Pixels,
+    }
+}
+
+/// The Layers panel's model of the active document: the document, the parts of its state the rows show and what the
+/// app decides for them (the edit target, the hovered layer, the filter's answers). Plain data: the panel holds it in a
+/// `Tracked`, derived from [`LayersFacts`] ([`model`]).
+#[derive(Clone, PlainData)]
+pub(crate) struct PhotoLayers {
+    doc: Arc<Document>,
+    active_layer: Option<LayerId>,
+    selected: Vec<LayerId>,
+    isolated_layers: Vec<LayerId>,
+    fx_collapsed: Vec<LayerId>,
+    #[plain_data(assume = "craft-layers filter: plain values and strings")]
+    filter: LayerFilter,
+    /// The part edits go to ([`LayerTree::selection`]).
+    target: LayerPart,
+    mask_target: bool,
+    vector_mask_target: bool,
+    link_enabled: bool,
+    hovered: Option<LayerId>,
     /// A Type Mask session's working text, which the panel never lists.
     working_text: Option<u64>,
     /// The empty layers, while the filter is Attribute Empty or Not Empty.
@@ -101,32 +190,50 @@ pub(crate) struct PhotoLayers<'a> {
     picked: Option<crate::smart_ui::FilterDrag>,
 }
 
-impl<'a> PhotoLayers<'a> {
-    pub(crate) fn new(app: &'a PhotocraftApp, st: &'a DocState, filter: &LayerFilter, foreign_drag: bool, picked: Option<crate::smart_ui::FilterDrag>) -> Self {
-        let working_text = app.ui.text_edit.as_ref().filter(|ed| ed.mask).map(|ed| ed.layer);
+impl PhotoLayers {
+    pub(crate) fn new(app: &PhotocraftApp, st: &DocState, filter: &LayerFilter, foreign_drag: bool, picked: Option<crate::smart_ui::FilterDrag>) -> Self {
         let empty = match (filter.by, filter.attribute) {
             (FilterBy::Attribute, LayerAttribute::Empty | LayerAttribute::NotEmpty) => crate::layer_filter_ui::attribute::empty_layers(app),
             _ => None,
         };
         let missing = if filter.by == FilterBy::SmartObject { app.session.missing_links() } else { HashSet::new() };
-        Self { app, st, working_text, empty, missing, foreign_drag, picked }
+        let ui = &app.ui;
+        let target = edit_target(app, st);
+        Self {
+            doc: Arc::clone(&st.doc),
+            active_layer: st.active_layer,
+            selected: st.selected_layers().to_vec(),
+            isolated_layers: st.isolated_layers.clone(),
+            fx_collapsed: st.fx_collapsed.clone(),
+            filter: ui.layer_filter.clone(),
+            target,
+            mask_target: ui.mask_target,
+            vector_mask_target: ui.vector_mask_target,
+            link_enabled: app.session.is_enabled("layer.linkLayers"),
+            hovered: app.canvas_hover_layer,
+            working_text: working_text(app),
+            empty,
+            missing,
+            foreign_drag,
+            picked,
+        }
     }
 
     fn doc(&self) -> &Document {
-        &self.st.doc
+        &self.doc
     }
 
     fn layer(&self, id: &LayerId) -> Option<&Layer> {
-        self.st.doc.layer(*id)
+        self.doc.layer(*id)
     }
 
     /// The layers a property edit changes: every selected layer with the active one among them,
     /// the Background left out of a several-layer change (#5856), else the active one.
     pub(crate) fn targets(&self) -> Vec<LayerId> {
-        let Some(active) = self.st.active_layer else { return Vec::new() };
-        let selection = self.st.selected_layers();
+        let Some(active) = self.active_layer else { return Vec::new() };
+        let selection = self.selected.clone();
         if selection.len() > 1 && selection.contains(&active) {
-            selection.into_iter().filter(|id| *id == active || !self.doc().is_background(*id)).collect()
+            selection.iter().copied().filter(|id| *id == active || !self.doc().is_background(*id)).collect()
         } else {
             vec![active]
         }
@@ -139,7 +246,7 @@ impl<'a> PhotoLayers<'a> {
         let layer = LayerId(picked.0);
         let mut at = Some(layer);
         while let Some(id) = at {
-            if !photocraft_engine::select_extra_cmds::isolation_shows(self.doc(), &self.st.isolated_layers, id) {
+            if !photocraft_engine::select_extra_cmds::isolation_shows(self.doc(), &self.isolated_layers, id) {
                 return None;
             }
             at = self.parent(&id);
@@ -147,7 +254,7 @@ impl<'a> PhotoLayers<'a> {
                 return None;
             }
         }
-        let filter = &self.app.ui.layer_filter;
+        let filter = &self.filter;
         (self.effects_open(&layer) && (!filter.active() || self.listed(&layer, filter))).then_some(picked)
     }
 
@@ -169,7 +276,7 @@ pub(crate) fn filter_index(doc: &Document, id: &LayerId, row: usize) -> Option<u
     smart_filter_count(doc, id).checked_sub(1)?.checked_sub(row)
 }
 
-impl LayerTree for PhotoLayers<'_> {
+impl LayerTree for PhotoLayers {
     type Id = LayerId;
 
     fn children(&self, parent: Option<&LayerId>) -> Vec<LayerId> {
@@ -180,18 +287,13 @@ impl LayerTree for PhotoLayers<'_> {
         list.iter()
             .rev()
             .filter(|l| Some(l.id.0) != self.working_text)
-            .filter(|l| photocraft_engine::select_extra_cmds::isolation_shows(self.doc(), &self.st.isolated_layers, l.id))
+            .filter(|l| photocraft_engine::select_extra_cmds::isolation_shows(self.doc(), &self.isolated_layers, l.id))
             .map(|l| l.id)
             .collect()
     }
 
     fn parent(&self, id: &LayerId) -> Option<LayerId> {
-        let mut path = self.doc().path_of(*id)?;
-        path.pop();
-        if path.is_empty() {
-            return None;
-        }
-        self.doc().layer_at(&path).map(|l| l.id)
+        self.doc().layers.index().parent(*id)
     }
 
     fn is_open(&self, id: &LayerId) -> bool {
@@ -199,7 +301,7 @@ impl LayerTree for PhotoLayers<'_> {
     }
 
     fn effects_open(&self, id: &LayerId) -> bool {
-        !self.st.fx_collapsed.contains(id)
+        !self.fx_collapsed.contains(id)
     }
 
     fn info(&self, id: &LayerId) -> LayerInfo {
@@ -222,13 +324,8 @@ impl LayerTree for PhotoLayers<'_> {
         };
         let mut info = LayerInfo::new(l.name.clone(), kind);
         info.visible = l.visible;
-        let mut hidden = !l.visible;
-        let mut at = self.parent(id);
-        while let Some(p) = at {
-            hidden |= self.layer(&p).is_some_and(|g| !g.visible);
-            at = self.parent(&p);
-        }
-        info.dimmed = hidden;
+        let index = doc.layers.index();
+        info.dimmed = !l.visible || std::iter::successors(index.parent(*id), |p| index.parent(*p)).any(|p| self.layer(&p).is_some_and(|g| !g.visible));
         info.label = ui_label(l.label);
         let mut locks = LayerLocks::default();
         locks.transparency = l.locks.transparency;
@@ -241,7 +338,7 @@ impl LayerTree for PhotoLayers<'_> {
         info.renamable = !info.background;
         info.clipped = l.clipped;
         info.linked = l.link_group.is_some();
-        info.blend_key = blend_key(l.blend);
+        info.blend_key = l.blend.key().to_string();
         info.blend_label = (!matches!(l.blend, BlendMode::Normal | BlendMode::PassThrough)).then(|| tl!(l.blend.label()).to_string());
         info.effect_kinds = l.effects.items.iter().filter(|e| e.enabled()).filter_map(effect_kind).collect();
         info.advanced_blending = l.excluded_channels != 0 || l.advanced != Default::default() || !l.blend_if.is_default();
@@ -297,21 +394,7 @@ impl LayerTree for PhotoLayers<'_> {
     }
 
     fn selection(&self) -> LayerSelection<LayerId> {
-        let ui = &self.app.ui;
-        let active = self.st.active_layer;
-        let layer = active.and_then(|id| self.layer(&id));
-        let target = match layer {
-            Some(l) if l.frame.is_some() => match crate::frame_tool::target(self.app, l) {
-                crate::frame_tool::Target::Frame => LayerPart::FrameShape,
-                crate::frame_tool::Target::Content => LayerPart::FrameContent,
-                crate::frame_tool::Target::Both => LayerPart::Pixels,
-            },
-            Some(l) if ui.filter_mask_target == Some(l.id.0) && self.app.filter_mask_targeted() => LayerPart::FilterMask,
-            Some(l) if ui.vector_mask_target && l.vector_mask.is_some() => LayerPart::VectorMask,
-            Some(l) if ui.mask_target && l.mask.is_some() => LayerPart::LayerMask,
-            _ => LayerPart::Pixels,
-        };
-        let mut selection = LayerSelection::new(self.st.selected_layers(), active, target);
+        let mut selection = LayerSelection::new(self.selected.clone(), self.active_layer, self.target);
         selection.sub_row = self.selected_filter().and_then(|(layer, index)| {
             let id = LayerId(layer);
             let row = match index {
@@ -370,8 +453,8 @@ impl LayerTree for PhotoLayers<'_> {
     }
 
     fn properties(&self) -> Option<LayerProperties> {
-        let l = self.st.active_layer.and_then(|id| self.layer(&id))?;
-        let mut p = LayerProperties::new(blend_key(l.blend));
+        let l = self.active_layer.and_then(|id| self.layer(&id))?;
+        let mut p = LayerProperties::new(l.blend.key().to_string());
         // Pass Through is a group's mode: offered only when every target is a group.
         p.group = self.targets().iter().all(|id| self.layer(id).is_some_and(Layer::is_group));
         p.opacity = f64::from(l.opacity) * 100.0;
@@ -382,28 +465,34 @@ impl LayerTree for PhotoLayers<'_> {
     }
 
     fn blend_modes(&self, group: bool, current: &str) -> Vec<Entry<String>> {
-        let current = blend_of(current).unwrap_or(BlendMode::Normal);
-        let modes: Vec<BlendKeyEntry<String>> =
-            super::layers::blend_options(group, current).into_iter().map(|(m, _)| super::blend_entry(blend_key(m), m)).collect();
-        blend_entries(&modes, |e| {
-            let label = blend_of(&e.key).map_or(e.key.as_str(), |m| tl!(m.label()));
-            Label::from(label.to_string())
+        static CACHE: crate::i18n::LangCache<(bool, BlendMode), Vec<Entry<String>>> = crate::i18n::LangCache::new();
+        let current = BlendMode::from_key(current).or_else(|| blend_of(current)).unwrap_or(BlendMode::Normal);
+        let current = if current.has_psd_equivalent() { BlendMode::Normal } else { current };
+        CACHE.get_or_build((group, current), || {
+            let modes: Vec<BlendKeyEntry<BlendMode>> =
+                super::layers::blend_options(group, current).into_iter().map(|(m, _)| super::blend_entry(m, m)).collect();
+            blend_entries(&modes, |mode| Label::from(tl!(mode.key.label()).to_string()))
+                .into_iter()
+                .map(|entry| match entry.value() {
+                    Some(mode) => Entry::new(mode.key().to_string(), entry.label().clone()),
+                    None => Entry::separator(),
+                })
+                .collect()
         })
     }
 
     fn footer(&self) -> LayersFooterState {
-        let ui = &self.app.ui;
-        let active = self.st.active_layer.and_then(|id| self.layer(&id));
-        let delete = if ui.vector_mask_target && active.is_some_and(|l| l.vector_mask.is_some()) {
+        let active = self.active_layer.and_then(|id| self.layer(&id));
+        let delete = if self.vector_mask_target && active.is_some_and(|l| l.vector_mask.is_some()) {
             "Delete Vector Mask"
-        } else if ui.mask_target && active.is_some_and(|l| l.mask.is_some()) {
+        } else if self.mask_target && active.is_some_and(|l| l.mask.is_some()) {
             "Delete Layer Mask"
         } else {
             "Delete layer"
         };
         let mut footer = LayersFooterState::new(tl!(delete).to_string());
         footer.delete_enabled = active.is_some();
-        footer.link_enabled = self.app.session.is_enabled("layer.linkLayers");
+        footer.link_enabled = self.link_enabled;
         footer.mask_label = crate::layer_menu_ui::mask_button_command(active, self.doc().selection.is_some(), false).map(|_| {
             if active.is_some_and(|l| l.mask.is_some()) {
                 tl!("Add vector mask").to_string()
@@ -411,27 +500,25 @@ impl LayerTree for PhotoLayers<'_> {
                 crate::i18n::fmt(tl!("Add a mask  (from the selection; {key} inverts)"), &[("key", &crate::shortcuts::pretty("Alt"))])
             }
         });
-        let mut adjustments: Vec<Entry<String>> = photocraft_engine::command_specs()
-            .iter()
-            .filter(|c| c.id.starts_with("layer.newAdjustmentLayer."))
-            .map(|c| Entry::new(c.id.to_string(), tl!(c.label).trim_end_matches('…').to_string()))
-            .collect();
-        adjustments.push(Entry::separator());
-        adjustments.push(Entry::new("layer.newFillLayer.solidColor".to_string(), tl!("Solid Color…").to_string()));
-        adjustments.push(Entry::new("layer.newFillLayer.gradient".to_string(), tl!("Gradient…").to_string()));
-        adjustments.push(Entry::new("layer.newFillLayer.pattern".to_string(), tl!("Pattern…").to_string()));
+        type FooterMenus = (Vec<Entry<String>>, Vec<Entry<String>>);
+        static MENUS: crate::i18n::LangCache<(), FooterMenus> = crate::i18n::LangCache::new();
+        let (adjustments, styles) = MENUS.get_or_build((), || {
+            let mut adjustments: Vec<Entry<String>> = photocraft_engine::command_specs()
+                .iter()
+                .filter(|c| c.id.starts_with("layer.newAdjustmentLayer."))
+                .map(|c| Entry::new(c.id.to_string(), tl!(c.label).trim_end_matches('…').to_string()))
+                .collect();
+            adjustments.push(Entry::separator());
+            adjustments.push(Entry::new("layer.newFillLayer.solidColor".to_string(), tl!("Solid Color…").to_string()));
+            adjustments.push(Entry::new("layer.newFillLayer.gradient".to_string(), tl!("Gradient…").to_string()));
+            adjustments.push(Entry::new("layer.newFillLayer.pattern".to_string(), tl!("Pattern…").to_string()));
+            let mut styles = vec![Entry::new(String::new(), tl!("Blending Options…").to_string()), Entry::separator()];
+            styles.extend(crate::layer_style::KINDS.iter().map(|&(kind, label)| Entry::new(kind.to_string(), format!("{}…", tl!(label)))));
+            (adjustments, styles)
+        });
         footer.adjustment_menu = adjustments;
-        let session = &self.app.session;
-        let mut styles = vec![
-            Entry::new(String::new(), tl!("Blending Options…").to_string()).enabled(session.is_enabled("layer.layerStyle.blendingOptions")),
-            Entry::separator(),
-        ];
-        styles.extend(
-            crate::layer_style::KINDS.iter().map(|&(kind, label)| {
-                Entry::new(kind.to_string(), format!("{}…", tl!(label))).enabled(session.is_enabled(&format!("layer.layerStyle.{kind}")))
-            }),
-        );
-        footer.style_menu = styles;
+        let style_enabled = active.is_some_and(|layer| !self.doc().is_background(layer.id));
+        footer.style_menu = styles.into_iter().map(|entry| entry.enabled(style_enabled)).collect();
         footer
     }
 
@@ -469,20 +556,7 @@ impl LayerTree for PhotoLayers<'_> {
     }
 
     fn hovered(&self) -> Option<LayerId> {
-        self.app.canvas_hover_layer
-    }
-
-    fn revision(&self) -> Option<u64> {
-        if self.working_text.is_some() {
-            return None;
-        }
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        self.st.revision.hash(&mut h);
-        self.doc().id.0.hash(&mut h);
-        self.st.fx_collapsed.hash(&mut h);
-        self.st.isolated_layers.hash(&mut h);
-        Some(h.finish())
+        self.hovered
     }
 }
 
@@ -502,7 +576,7 @@ enum MenuKind {
     None,
 }
 
-fn menu_kind(tree: &PhotoLayers<'_>, target: &MenuTarget<LayerId>) -> MenuKind {
+fn menu_kind(tree: &PhotoLayers, target: &MenuTarget<LayerId>) -> MenuKind {
     match &target.row {
         None => MenuKind::Empty,
         Some(LayerRowKey::Effects(..)) => MenuKind::Effects,
@@ -543,8 +617,7 @@ pub(crate) const MASK_OPTIONS: &str = "layersPanel:maskOptions";
 
 /// The row menu at `target` as entries: the layer menu (Photoshop's order, trimmed to the kind),
 /// a mask thumbnail's menu, a pixel thumbnail's, an effects row's, or the empty space's.
-pub(crate) fn row_menu(tree: &PhotoLayers<'_>, target: &MenuTarget<LayerId>) -> Vec<Entry<String>> {
-    let app = tree.app;
+pub(crate) fn row_menu(app: &PhotocraftApp, tree: &PhotoLayers, target: &MenuTarget<LayerId>) -> Vec<Entry<String>> {
     let has_selection = tree.doc().selection.is_some();
     let commands = |entries: Vec<crate::layer_menu_ui::Entry>, on_set: bool| -> Vec<Entry<String>> {
         let mut out: Vec<Entry<String>> = Vec::new();
@@ -644,10 +717,6 @@ impl<'a> PhotoThumbs<'a> {
             _ => Some(l),
         }
     }
-
-    fn size_bits(&self) -> u64 {
-        u64::from(self.doc.size.width) << 40 ^ u64::from(self.doc.size.height) << 16
-    }
 }
 
 fn rgba8(c: [f32; 4]) -> [u8; 4] {
@@ -657,25 +726,29 @@ fn rgba8(c: [f32; 4]) -> [u8; 4] {
 impl ThumbSource<LayerThumb<LayerId>> for PhotoThumbs<'_> {
     fn revision(&self, key: &LayerThumb<LayerId>, _request: &ThumbRequest) -> Revision {
         let Some(l) = self.source(key) else { return Revision::new(0) };
-        let clip = u64::from(key.contents == ThumbContents::LayerBounds) << 63;
-        let bits = match key.kind {
+        let clip = key.contents == ThumbContents::LayerBounds;
+        let generation = |s: &photocraft_raster::Surface| s.generation();
+        let shown = match key.kind {
             LayerThumbKind::Pixels | LayerThumbKind::FrameContent => match &l.content {
                 LayerContent::Fill(Fill::Solid(color)) => {
                     let shown = crate::solid_fill_ui::thumbnail_color(self.app, self.doc.id, l.id, *color);
                     Revision::of(&(shown.to_rgba8(), 1u8)).get()
                 }
-                LayerContent::Fill(f) => Revision::of(&format!("{f:?}")).get(),
-                _ => l.surface().map_or(0, crate::app::surface_fingerprint) ^ clip,
+                LayerContent::Fill(f) => Revision::of(f).get(),
+                _ => l.surface().map_or(0, generation),
             },
-            LayerThumbKind::Mask => l.mask.as_ref().map_or(0, |m| crate::app::surface_fingerprint(&m.surface)),
+            LayerThumbKind::Mask => l.mask.as_ref().map_or(0, |m| m.surface.generation()),
             LayerThumbKind::VectorMask => l.vector_mask.as_ref().map_or(0, crate::mask_thumbs_ui::vector_fingerprint),
             LayerThumbKind::SmartFilterMask => match &l.content {
-                LayerContent::Smart(sm) => sm.filter_mask.as_ref().map_or(1, |m| crate::app::surface_fingerprint(&m.surface)),
+                LayerContent::Smart(sm) => sm.filter_mask.as_ref().map_or(1, |m| m.surface.generation()),
                 _ => 0,
             },
             _ => 0,
         };
-        Revision::new(bits ^ self.size_bits())
+        // A tile that fails to read shows zeros, and its pixels again once it reads, without moving its surface's
+        // generation: the scratch read-error generation moves with both (#16252).
+        let scratch = crate::scratch_reads::generation();
+        Revision::of(&(shown, clip, self.doc.size.width, self.doc.size.height, scratch))
     }
 
     fn render(&self, key: &LayerThumb<LayerId>, request: &ThumbRequest) -> ThumbRender {

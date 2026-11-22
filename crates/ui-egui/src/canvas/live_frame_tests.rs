@@ -19,7 +19,7 @@ fn live_brush_texture_includes_this_frames_press_and_moves() {
         app.ui.tool = tool;
         app.sync_views();
         let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(vec2(900.0, 640.0)).build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
+            |ui, app: &mut Box<PhotocraftApp>| {
                 if !ui.ctx().fonts(|fonts| fonts.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     return;
                 }
@@ -35,7 +35,7 @@ fn live_brush_texture_includes_this_frames_press_and_moves() {
         h.input_mut().events.push(egui::Event::PointerMoved(p));
         h.input_mut().events.push(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
         h.run_steps(1);
-        let shown = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>| {
+        let shown = |h: &mut egui_kittest::Harness<'_, Box<PhotocraftApp>>| {
             let app = h.state_mut();
             let live = app.live_stroke.as_ref().expect("painting starts on press");
             let key = live.display_key();

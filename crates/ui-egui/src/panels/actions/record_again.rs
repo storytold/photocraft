@@ -73,7 +73,7 @@ pub(super) fn open(app: &mut PhotocraftApp, action: usize, step: usize) -> Resul
     super::runner::hold_editor_ok(app, dialog);
     held.dialog = dialog;
     app.held_record_again = Some(held);
-    Ok(json!({"dialog": dialog}))
+    Ok(json!({"dialog": dialog.value()}))
 }
 
 /// Guard both actual preview routes before parsing LUT files or evaluating a command.

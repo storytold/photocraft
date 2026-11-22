@@ -371,7 +371,7 @@ mod tests {
 
     /// An app whose settings live in `files` (a scratch location), so a second launch reads what
     /// the first one stored.
-    fn launch(files: &std::sync::Arc<craft::settings::testing::MemoryFiles>) -> PhotocraftApp {
+    fn launch(files: &std::sync::Arc<craft::settings::testing::MemoryFiles>) -> Box<PhotocraftApp> {
         let scratch = std::env::temp_dir().join("photocraft-gpu-status");
         let options = craft::settings::OpenOptions::new(craft::settings::Location::Dir(scratch)).files(files.clone());
         let services = crate::Services { settings: Some(craft::settings::SettingsStore::open_with(options)), ..Default::default() };
@@ -407,82 +407,86 @@ mod tests {
         assert!(launch(&files).session.prefs().performance.use_gpu, "the next launch retries the GPU");
     }
 
-    /// #6564: an out-of-memory error on a device that still works rebuilds the GPU canvas by itself,
-    /// with no notice and the documents untouched, a few times a session; then the CPU renderer
-    /// stays until Retry GPU. Other errors and a loss still fall back at once.
-    #[test]
-    fn out_of_memory_rebuilds_the_gpu_canvas_by_itself() {
-        let _gpu = photocraft_testkit::gpu_lock();
-        let rs = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default()));
-        let Ok(rs) = rs else {
-            eprintln!("skipping: no GPU adapter");
-            return;
-        };
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        app.set_wgpu(rs);
-        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
-        let ctx = app.ctx().clone();
-        let oom = || photocraft_gpu::Fault::Error("Out of Memory".into());
-        for n in 1..=OOM_AUTO_RETRIES {
+    mod gpu_tests {
+        use super::*;
+
+        /// #6564: an out-of-memory error on a device that still works rebuilds the GPU canvas by itself,
+        /// with no notice and the documents untouched, a few times a session; then the CPU renderer
+        /// stays until Retry GPU. Other errors and a loss still fall back at once.
+        #[test]
+        fn out_of_memory_rebuilds_the_gpu_canvas_by_itself() {
+            let _gpu = photocraft_testkit::gpu_lock();
+            let rs = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default()));
+            let Ok(rs) = rs else {
+                eprintln!("skipping: no GPU adapter");
+                return;
+            };
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            app.set_wgpu(rs);
+            app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+            let ctx = app.ctx().clone();
+            let oom = || photocraft_gpu::Fault::Error("Out of Memory".into());
+            for n in 1..=OOM_AUTO_RETRIES {
+                app.gpu_health().unwrap().mark(oom());
+                check(&mut app, &ctx);
+                assert!(app.gpu_active(), "retry {n}: the GPU canvas is back");
+                assert!(app.gpu_health().unwrap().is_ok(), "retry {n}: with a fresh health flag");
+                assert_eq!(app.perf.gpu_info.canvas, "gpu");
+                assert!(app.ui.gpu_fallback_notice.is_none(), "retry {n}: no recovery dialog");
+                assert_eq!(app.session.documents().len(), 1);
+            }
+            // Past the limit the CPU renderer stays and the dialog offers Retry GPU.
             app.gpu_health().unwrap().mark(oom());
             check(&mut app, &ctx);
-            assert!(app.gpu_active(), "retry {n}: the GPU canvas is back");
-            assert!(app.gpu_health().unwrap().is_ok(), "retry {n}: with a fresh health flag");
-            assert_eq!(app.perf.gpu_info.canvas, "gpu");
-            assert!(app.ui.gpu_fallback_notice.is_none(), "retry {n}: no recovery dialog");
-            assert_eq!(app.session.documents().len(), 1);
+            assert!(!app.gpu_active() && app.ui.gpu_fallback_notice.is_some());
+            assert_eq!(app.perf.gpu_info.canvas, "cpu");
+
+            // A validation error is not retried by itself.
+            let rs = egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default());
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            app.set_wgpu(rs);
+            app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+            app.gpu_health().unwrap().mark(photocraft_gpu::Fault::Error("Validation Error".into()));
+            check(&mut app, &ctx);
+            assert!(!app.gpu_active() && app.ui.gpu_fallback_notice.is_some());
         }
-        // Past the limit the CPU renderer stays and the dialog offers Retry GPU.
-        app.gpu_health().unwrap().mark(oom());
-        check(&mut app, &ctx);
-        assert!(!app.gpu_active() && app.ui.gpu_fallback_notice.is_some());
-        assert_eq!(app.perf.gpu_info.canvas, "cpu");
 
-        // A validation error is not retried by itself.
-        let rs = egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default());
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        app.set_wgpu(rs);
-        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
-        app.gpu_health().unwrap().mark(photocraft_gpu::Fault::Error("Validation Error".into()));
-        check(&mut app, &ctx);
-        assert!(!app.gpu_active() && app.ui.gpu_fallback_notice.is_some());
-    }
-
-    /// #6577: after a GPU error on a device that still works (out of memory, validation), Retry
-    /// GPU builds a new GPU canvas at once, without a restart or closing documents. After a loss
-    /// the device can't be used again, so the retry still waits for the next launch.
-    #[test]
-    fn retry_gpu_after_an_error_rebuilds_the_canvas_without_a_restart() {
-        let _gpu = photocraft_testkit::gpu_lock();
-        let rs = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default()));
-        let Ok(rs) = rs else {
-            eprintln!("skipping: no GPU adapter");
-            return;
-        };
-        let mut app = launch(&std::sync::Arc::new(craft::settings::testing::MemoryFiles::new()));
-        app.set_wgpu(rs);
-        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
-        let ctx = app.ctx().clone();
-        // An error on a live device (one not retried by itself, see #6564): Retry GPU rebuilds
-        // the canvas now.
-        app.gpu_health().unwrap().mark(photocraft_gpu::Fault::Error("Validation Error".into()));
-        check(&mut app, &ctx);
-        assert!(!app.gpu_active() && app.ui.gpu_fallback_notice.is_some());
-        assert!(can_retry_now(&app));
-        choose_recovery(&mut app, true).unwrap();
-        assert!(app.gpu_active(), "Retry GPU rebuilt the GPU canvas");
-        assert!(app.gpu_health().unwrap().is_ok(), "with a fresh health flag");
-        assert_eq!(app.perf.gpu_info.canvas, "gpu");
-        assert_eq!((app.perf.gpu_info.lost.as_deref(), app.perf.gpu_fallback.as_deref()), (None, None));
-        assert_eq!(app.ui.status, "GPU acceleration resumed.");
-        assert!(app.ui.gpu_fallback_notice.is_none() && app.ui.notices.is_empty(), "no restart notice");
-        assert_eq!(app.session.documents().len(), 1, "the document stayed open");
-        // A loss: the device can't be reused, so the retry is scheduled for the next launch.
-        app.gpu_health().unwrap().mark(photocraft_gpu::Fault::Lost("simulated".into()));
-        check(&mut app, &ctx);
-        assert!(!can_retry_now(&app));
-        choose_recovery(&mut app, true).unwrap();
-        assert!(!app.gpu_active());
-        assert_eq!(app.ui.notices.len(), 1, "the restart notice");
+        /// #6577: after a GPU error on a device that still works (out of memory, validation), Retry
+        /// GPU builds a new GPU canvas at once, without a restart or closing documents. After a loss
+        /// the device can't be used again, so the retry still waits for the next launch.
+        #[test]
+        fn retry_gpu_after_an_error_rebuilds_the_canvas_without_a_restart() {
+            let _gpu = photocraft_testkit::gpu_lock();
+            let rs = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default()));
+            let Ok(rs) = rs else {
+                eprintln!("skipping: no GPU adapter");
+                return;
+            };
+            let mut app = launch(&std::sync::Arc::new(craft::settings::testing::MemoryFiles::new()));
+            app.set_wgpu(rs);
+            app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+            let ctx = app.ctx().clone();
+            // An error on a live device (one not retried by itself, see #6564): Retry GPU rebuilds
+            // the canvas now.
+            app.gpu_health().unwrap().mark(photocraft_gpu::Fault::Error("Validation Error".into()));
+            check(&mut app, &ctx);
+            assert!(!app.gpu_active() && app.ui.gpu_fallback_notice.is_some());
+            assert!(can_retry_now(&app));
+            choose_recovery(&mut app, true).unwrap();
+            assert!(app.gpu_active(), "Retry GPU rebuilt the GPU canvas");
+            assert!(app.gpu_health().unwrap().is_ok(), "with a fresh health flag");
+            assert_eq!(app.perf.gpu_info.canvas, "gpu");
+            assert_eq!((app.perf.gpu_info.lost.as_deref(), app.perf.gpu_fallback.as_deref()), (None, None));
+            assert_eq!(app.ui.status, "GPU acceleration resumed.");
+            assert!(app.ui.gpu_fallback_notice.is_none() && app.ui.notices.is_empty(), "no restart notice");
+            assert_eq!(app.session.documents().len(), 1, "the document stayed open");
+            // A loss: the device can't be reused, so the retry is scheduled for the next launch.
+            app.gpu_health().unwrap().mark(photocraft_gpu::Fault::Lost("simulated".into()));
+            check(&mut app, &ctx);
+            assert!(!can_retry_now(&app));
+            choose_recovery(&mut app, true).unwrap();
+            assert!(!app.gpu_active());
+            assert_eq!(app.ui.notices.len(), 1, "the restart notice");
+        }
     }
 }

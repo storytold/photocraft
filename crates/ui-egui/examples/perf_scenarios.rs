@@ -1780,12 +1780,12 @@ fn paste_into_frame_scenario(b: &mut Bench, name: &str, w: u32, h: u32) {
     b.px.borrow_mut().clear();
     let mut samples = Vec::new();
     let run = (|| -> Res<()> {
-        let layers = |h: &egui_kittest::Harness<'_, photocraft_ui_egui::PhotocraftApp>| h.state().session.active().map(|d| d.doc.layers.len());
+        let layers = |h: &egui_kittest::Harness<'_, Box<photocraft_ui_egui::PhotocraftApp>>| h.state().session.active().map(|d| d.doc.layers.len());
         let base_layers = layers(&harness);
-        let past = |h: &egui_kittest::Harness<'_, photocraft_ui_egui::PhotocraftApp>| h.state().session.active().map(|d| d.history.past_len());
+        let past = |h: &egui_kittest::Harness<'_, Box<photocraft_ui_egui::PhotocraftApp>>| h.state().session.active().map(|d| d.history.past_len());
         let base_past = past(&harness);
         for i in 0..=b.reps.max(1) {
-            let rev = |h: &egui_kittest::Harness<'_, photocraft_ui_egui::PhotocraftApp>| h.state().session.active().map(|d| d.revision);
+            let rev = |h: &egui_kittest::Harness<'_, Box<photocraft_ui_egui::PhotocraftApp>>| h.state().session.active().map(|d| d.revision);
             // Untimed: Paste Into turns the selection into the pasted layer's
             // mask, so each sample re-creates the same ~5 % selection (the
             // clipboard is not consumed), and shows it for a frame, as the app

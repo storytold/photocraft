@@ -30,7 +30,7 @@ fn started(app: &PhotocraftApp) -> (String, (usize, usize)) {
     (current_text(app, LayerId(ed.layer)).unwrap_or_default(), (ed.anchor, ed.caret))
 }
 
-fn app_with(tool: Tool) -> PhotocraftApp {
+fn app_with(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = new_app();
     app.run("prefs.set", json!({"path": "type.fillNewTypeLayersWithPlaceholder", "value": true})).unwrap();
     app.ui.tool = tool;

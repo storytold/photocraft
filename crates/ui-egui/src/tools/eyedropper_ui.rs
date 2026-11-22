@@ -28,7 +28,7 @@ mod tests {
     }
 
     /// An app with a 40×40 white document whose top-left 3×3 pixels are black.
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 40, "height": 40, "background": "white"})).unwrap();
         app.run("tools.setColors", json!({"foreground": [0.0, 0.0, 0.0, 1.0]})).unwrap();
