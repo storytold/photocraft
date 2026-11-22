@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 /// The binary, without the variables `mcp` and `serve` fall back to: a test that wants one sets it.
 fn bin() -> Command {
-    let mut cmd = Command::new(crate::binary());
+    let mut cmd = crate::command();
     for var in ENV_VARS {
         cmd.env_remove(var);
     }
@@ -515,11 +515,11 @@ fn batch_applies_actions_to_directory() {
     .stdout;
     assert!(out.contains("2 succeeded, 0 failed"), "{out}");
     let clean_log = std::fs::read(&log).unwrap();
-    assert!(clean_log.starts_with(&[0xff, 0xfe]));
+    assert!(clean_log.starts_with(&[0xfe, 0xff]));
     let (pairs, remainder) = clean_log[2..].as_chunks::<2>();
     assert!(remainder.is_empty());
-    let body = String::from_utf16(&pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect::<Vec<_>>()).unwrap();
-    assert_eq!(body, "Batch Start\r\n\r\nBatch End\r\n");
+    let body = String::from_utf16(&pairs.iter().map(|pair| u16::from_be_bytes(*pair)).collect::<Vec<_>>()).unwrap();
+    assert_eq!(body, "Start Batch\r\n\r\nEnd Batch\r\n");
     for n in ["one", "two"] {
         let info = ok(bin().arg("info").arg(outp.join(format!("{n}.pcraft")))).stdout;
         let v: Value = serde_json::from_str(&info).unwrap();
@@ -557,11 +557,11 @@ fn batch_recursive_naming_stop_and_error_log() {
         assert!(output.join(file).is_file(), "{file}: {stdout}");
     }
     let bytes = std::fs::read(log).unwrap();
-    assert!(bytes.starts_with(&[0xff, 0xfe]));
+    assert!(bytes.starts_with(&[0xfe, 0xff]));
     let (pairs, remainder) = bytes[2..].as_chunks::<2>();
     assert!(remainder.is_empty());
-    let errors = String::from_utf16(&pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect::<Vec<_>>()).unwrap();
-    assert!(errors.contains("Batch Start\r\n") && errors.contains("b.png") && errors.ends_with("Batch End\r\n"), "{errors}");
+    let errors = String::from_utf16(&pairs.iter().map(|pair| u16::from_be_bytes(*pair)).collect::<Vec<_>>()).unwrap();
+    assert!(errors.contains("Start Batch\r\n") && errors.contains("b.png") && errors.ends_with("End Batch\r\n"), "{errors}");
 
     let stopped = root.join("stopped");
     let result = run(&stopped, &["--recursive", "--stop-on-error"]);
@@ -713,6 +713,22 @@ fn batch_with(d: &Path, input: &Path, name: &str, actions: &str, extra: &[&str])
     let file = d.join(format!("{name}.json"));
     std::fs::write(&file, actions).unwrap();
     bin().args(["batch", "--actions"]).arg(&file).arg("--in").arg(input).arg("--out").arg(d.join(name)).args(extra).output().unwrap()
+}
+
+#[test]
+fn batch_error_log_cannot_replace_its_actions_file() {
+    let d = tmp("batch-log-actions-collision");
+    let input = d.join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    let actions = r#"[{"command":"image.adjustments.invert"}]"#;
+    let log = input.join("../actions.json");
+
+    let result = batch_with(&d, &input, "actions", actions, &["--error-log", &log.to_string_lossy()]);
+    let error = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success(), "{error}");
+    assert!(error.contains("--error-log") && error.contains("--actions"), "{error}");
+    assert_eq!(std::fs::read(d.join("actions.json")).unwrap(), actions.as_bytes());
+    assert!(!d.join("actions").exists(), "the output folder must not be created");
 }
 
 /// #489: `batch --actions` takes `[id, params]` steps and a droplet's steps, with the same results
@@ -1001,7 +1017,7 @@ fn metadata_none_leaves_out_the_document_xmp() {
     img.meta.dpi = Some((300.0, 300.0));
     img.meta.text = vec![("Comment".into(), "free-form-note".into())];
     // Display P3 rather than sRGB, so no export can pass for keeping it by writing its default.
-    let p3 = photocraft_cms::Builtin::DisplayP3.profile().to_bytes().to_vec();
+    let p3 = craft_cms::Builtin::DisplayP3.profile().to_bytes().to_vec();
     img.icc = Some(p3.clone());
     std::fs::write(&a, photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap()).unwrap();
     let ancestors = |p: &Path| String::from_utf8_lossy(&std::fs::read(p).unwrap()).contains("DocumentAncestors");
@@ -1410,13 +1426,14 @@ fn a_non_unicode_path_is_taken_and_non_unicode_text_is_a_usage_error() {
 /// PhotoCraft can't play are warned about up front.
 #[test]
 fn batch_plays_a_photoshop_actions_file() {
-    use photocraft_engine::actions_cmds::Action;
+    use photocraft_engine::actions_cmds::{Action, ActionStep};
     let d = tmp("atn");
     let input = d.join("in");
     std::fs::create_dir_all(&input).unwrap();
     write_png(&input.join("a.png"), 8, 4, 3);
-    let invert = Action::new("Negative", vec![("image.adjustments.invert".into(), json!({})), ("select.all".into(), json!({}))]);
-    let odd = Action::new("Odd", vec![(photocraft_engine::atn_cmds::PHOTOSHOP_STEP.into(), json!({"event": "syntheticFill", "name": "Generative Fill"}))]);
+    let invert = Action::new("Negative", vec![ActionStep::new("image.adjustments.invert", json!({})), ActionStep::new("select.all", json!({}))]);
+    let odd =
+        Action::new("Odd", vec![ActionStep::new(photocraft_engine::atn_cmds::PHOTOSHOP_STEP, json!({"event": "syntheticFill", "name": "Generative Fill"}))]);
     let (bytes, skipped) = photocraft_engine::atn_cmds::export("Set", &[&invert, &odd], &[], false).unwrap();
     assert!(skipped.is_empty());
     let atn = d.join("Set.atn");
@@ -2028,4 +2045,96 @@ fn info_detail_adds_text_runs_and_antialiasing() {
     assert!(text.get("antialias").is_some(), "{text}");
     assert!(text["runs"].as_array().is_some_and(|r| !r.is_empty()), "{text}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Flags that don't go together are usage errors before anything starts. Adding PhotoCraft to an
+/// MCP client is the ArtCraft Launcher's job, so there is no `mcp install`, and plain `mcp` does
+/// what `--live` did, so there is no `--live` either.
+#[test]
+fn mcp_rejects_mismatched_flags() {
+    for (args, needle) in [
+        (&["mcp", "install"][..], "install"),
+        (&["mcp", "--live"], "--live"),
+        (&["mcp", "--client", "json"], "--client"),
+        (&["mcp", "--headless", "--bridge", "127.0.0.1:1"], "--bridge"),
+        (&["mcp", "--headless", "--control-token-file", "t"], "--control-token-file"),
+        (&["mcp", "--headless", "--when-closed", "launch"], "--when-closed"),
+        (&["mcp", "--when-closed", "sometimes"], "sometimes"),
+        (&["mcp", "--bridge", "127.0.0.1:1", "--when-closed", "error"], "--when-closed"),
+    ] {
+        let o = bin().args(args).stdin(Stdio::null()).output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {err}");
+        assert!(err.contains(needle), "{args:?}: {err}");
+    }
+}
+
+/// One MCP exchange with `photocraft-cli mcp <args>`: initialize, then each tool call; returns the
+/// tool results.
+fn mcp_session(args: &[&str], env: &[(&str, &std::ffi::OsStr)], calls: &[(&str, Value)]) -> Vec<Value> {
+    let mut cmd = bin();
+    cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut send = |v: Value| {
+        writeln!(stdin, "{v}").unwrap();
+        stdin.flush().unwrap();
+    };
+    let mut recv = |id: u64| -> Value {
+        loop {
+            let mut line = String::new();
+            assert!(stdout.read_line(&mut line).unwrap() > 0, "server closed");
+            let v: Value = serde_json::from_str(&line).unwrap();
+            if v["id"] == id {
+                return v;
+            }
+        }
+    };
+    send(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+        "protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}));
+    recv(1);
+    send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
+    let mut out = Vec::new();
+    for (i, (name, arguments)) in calls.iter().enumerate() {
+        let id = 2 + i as u64;
+        send(json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name,"arguments":arguments}}));
+        out.push(recv(id)["result"].clone());
+    }
+    drop(stdin);
+    let _ = child.kill();
+    let _ = child.wait();
+    out
+}
+
+/// Plain `mcp` without the person's consent works headless, as it always did: commands run, UI
+/// tools say they need the open app. `--headless` too, and it doesn't read a PHOTOCRAFT_CONTROL_PORT
+/// exported for another tool (here not even a port).
+#[test]
+fn mcp_without_consent_works_headless() {
+    let dir = tmp("mcp-plain");
+    let empty = tmp("mcp-plain-launcher");
+    // `crate::command()` keeps the machine's launcher and flags out already; this test names its
+    // own settings and an empty launcher folder as well, to say what it relies on.
+    let env = [("PHOTOCRAFT_CONFIG_DIR", dir.as_os_str()), ("CRAFT_MCP_DIR", empty.as_os_str())];
+    let calls = [("command_list", json!({})), ("ui_inspect", json!({}))];
+    let r = mcp_session(&["mcp", "--when-closed", "error"], &env, &calls);
+    assert_ne!(r[0]["isError"], true, "headless commands run: {}", r[0]);
+    assert_eq!(r[1]["isError"], true, "{}", r[1]);
+    assert!(r[1]["content"][0]["text"].as_str().unwrap().contains("bridge"), "{}", r[1]);
+    let mut env = env.to_vec();
+    env.push(("PHOTOCRAFT_CONTROL_PORT", std::ffi::OsStr::new("not-a-port")));
+    let r = mcp_session(&["mcp", "--headless"], &env, &calls[..1]);
+    assert_ne!(r[0]["isError"], true, "{}", r[0]);
+    // Without the `AI-MCP` flag a Control Port saved before the agents switch (which the app
+    // reads as "agents may connect") still leaves plain `mcp` headless: it neither looks for
+    // the app nor applies When PhotoCraft Is Closed ("error" would fail this call).
+    std::fs::write(dir.join("preferences.json"), r#"{"integrations": {"controlPort": 7878}}"#).unwrap();
+    let r = mcp_session(&["mcp", "--when-closed", "error"], &env[..2], &calls[..1]);
+    assert_ne!(r[0]["isError"], true, "without the flag plain mcp stays headless: {}", r[0]);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&empty);
 }

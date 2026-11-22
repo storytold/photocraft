@@ -8,6 +8,8 @@ use super::{Deserialize, Map, Preferences, Serialize, Value};
 pub struct PrefsStore {
     values: Preferences,
     rev: u64,
+    catalog_rev: u64,
+    section_revs: std::collections::BTreeMap<String, u64>,
 }
 
 impl PrefsStore {
@@ -16,8 +18,29 @@ impl PrefsStore {
     }
     /// Change preferences; bumps the revision.
     pub fn edit<R>(&mut self, f: impl FnOnce(&mut Preferences) -> R) -> R {
+        let before = (&self.values.shortcuts, &self.values.alternate_shortcuts, &self.values.toolbar);
+        let before = (before.0.clone(), before.1.clone(), before.2.clone());
+        let sections = self.values.sections.clone();
         self.rev += 1;
-        f(&mut self.values)
+        let result = f(&mut self.values);
+        if (&before.0, &before.1, &before.2) != (&self.values.shortcuts, &self.values.alternate_shortcuts, &self.values.toolbar) {
+            self.catalog_rev = self.catalog_rev.wrapping_add(1);
+        }
+        for key in sections.keys().chain(self.values.sections.keys()).collect::<std::collections::BTreeSet<_>>() {
+            if sections.get(key) != self.values.sections.get(key) {
+                let revision = self.section_revs.entry(key.clone()).or_default();
+                *revision = revision.wrapping_add(1);
+            }
+        }
+        result
+    }
+    /// Revision of catalog-affecting preferences.
+    pub fn catalog_rev(&self) -> u64 {
+        self.catalog_rev
+    }
+    /// Revision of a framework preference section.
+    pub fn section_rev(&self, key: &str) -> u64 {
+        self.section_revs.get(key).copied().unwrap_or_default()
     }
     pub fn rev(&self) -> u64 {
         self.rev
@@ -130,4 +153,41 @@ fn lay_over(
 /// The JSON object at `path` inside `root`.
 fn object_at<'a>(root: &'a mut Value, path: &[String]) -> Option<&'a mut Map<String, Value>> {
     path.iter().try_fold(root, |cur, k| cur.get_mut(k.as_str()))?.as_object_mut()
+}
+
+#[cfg(test)]
+mod revision_tests {
+    use super::PrefsStore;
+    use serde_json::json;
+
+    #[test]
+    fn unrelated_preference_edits_do_not_invalidate_the_catalog() {
+        let mut prefs = PrefsStore::default();
+        let before = prefs.catalog_rev();
+        prefs.edit(|p| p.selected_tool = json!("brush"));
+        assert_eq!(prefs.catalog_rev(), before);
+        prefs.edit(|p| {
+            p.shortcuts.insert("example".into(), "A".into());
+        });
+        assert_eq!(prefs.catalog_rev(), before.wrapping_add(1));
+    }
+
+    #[test]
+    fn section_revisions_change_independently() {
+        let mut prefs = PrefsStore::default();
+        prefs.edit(|p| {
+            p.sections.insert("one".into(), json!({"value": 1}));
+        });
+        let one = prefs.section_rev("one");
+        let two = prefs.section_rev("two");
+        prefs.edit(|p| {
+            p.sections.insert("two".into(), json!({"value": 2}));
+        });
+        assert_eq!(prefs.section_rev("one"), one);
+        assert_eq!(prefs.section_rev("two"), two.wrapping_add(1));
+        prefs.edit(|p| {
+            p.sections.remove("one");
+        });
+        assert_eq!(prefs.section_rev("one"), one.wrapping_add(1));
+    }
 }

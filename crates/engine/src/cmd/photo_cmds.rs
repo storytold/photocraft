@@ -303,12 +303,15 @@ impl Sources {
 fn load_sources(s: &Session, p: &Value, cmd: &str, budget: Option<usize>) -> Result<Loaded> {
     let mut src = Sources::default();
     let mut load = SourceLoad::new(budget);
-    if p.get("useOpenDocuments").and_then(Value::as_bool).unwrap_or(false) {
+    // "Use open documents" merges exactly the open documents; the dialog also sends its prefilled
+    // folder (a string), which is not scanned then (#13580). Explicit file lists still add on top.
+    let open = p.get("useOpenDocuments").and_then(Value::as_bool).unwrap_or(false);
+    if open {
         for d in s.documents() {
             src.add(&mut load, d.doc.name.clone(), &d.doc, 0, cmd)?;
         }
     }
-    let paths: Vec<String> = match p.get("paths").or_else(|| p.get("input")) {
+    let paths: Vec<String> = match p.get("paths").or_else(|| p.get("input")).filter(|v| !(open && v.is_string())) {
         Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
         Some(Value::String(dir)) => list_images(dir)?,
         _ => Vec::new(),
@@ -335,7 +338,8 @@ pub(crate) fn luma_alpha(surf: &Surface, area: Rect, k: usize) -> (usize, usize,
     for y in 0..h {
         let row = surf.read_region(Rect::new(area.x0, area.y0 + y as i32, area.x1, area.y0 + y as i32 + 1));
         for x in 0..w {
-            let p = to_rgba(&fmt, &row[x * n..(x + 1) * n]);
+            let Some(px) = row.get(x * n..(x + 1) * n) else { break };
+            let p = to_rgba(&fmt, px);
             let i = (y / k) * sw + x / k;
             l[i] += (0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]) * p[3] + (1.0 - p[3]) * 0.0;
             a[i] += p[3];
@@ -881,7 +885,7 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "Photomerge needs two or more images"));
     }
     let focal_param = p.get("focalLength").and_then(Value::as_f64).filter(|f| *f > 0.0);
-    let doc_name = format!("Untitled_Panorama{}", s.documents().len() + 1);
+    let doc_name = crate::file_cmds::untitled_name("Untitled_Panorama", |n| s.documents().iter().any(|d| d.doc.name == n) || s.held_open_named(n));
     // A background job when started with `Session::start` (#210): alignment, warping and
     // blending run on a worker, checking for cancellation between stages and images.
     crate::jobs::run(
@@ -963,7 +967,8 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
                 let check_cancel = || ctx.check();
                 let opt = BlendOptions { seamless: true, gains: true, geometry: geo, budget: Some(remaining_band_budget) };
                 let b = seam_blend(warped, canvas, &order, opt, Some(&check_cancel))?;
-                for (k, (px, mask)) in b.layers.into_iter().enumerate() {
+                // `children[0]` is the bottom layer, and the first source goes on top.
+                for (k, (px, mask)) in b.layers.into_iter().enumerate().rev() {
                     let mut l = Layer::new(srcs[placed[k]].name.clone(), LayerContent::Raster(px));
                     let mut m = LayerMask::hide_all();
                     m.surface = mask;
@@ -978,7 +983,7 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
                     doc.layers.push(Layer::new("Content-Aware Fill", LayerContent::Raster(filled)));
                 }
             } else {
-                for (k, px) in warped.into_iter().enumerate() {
+                for (k, px) in warped.into_iter().enumerate().rev() {
                     doc.layers.push(Layer::new(srcs[placed[k]].name.clone(), LayerContent::Raster(px)));
                 }
             }
@@ -1204,7 +1209,7 @@ fn merge_to_hdr(s: &mut Session, p: &Value) -> Result<Value> {
         q[3] = 1.0;
     }
     let mut doc = Document::new(format!("Untitled_HDR{}", s.documents().len() + 1), Size::new(w as u32, h as u32), ColorMode::Rgb, depth);
-    doc.icc_profile = if depth == SampleType::F32 { Some(photocraft_cms::builtin::Builtin::LinearSrgb.profile().to_bytes()) } else { icc };
+    doc.icc_profile = if depth == SampleType::F32 { Some(craft_cms::builtin::Builtin::LinearSrgb.profile().to_bytes()) } else { icc };
     let fmt = doc.pixel_format();
     let n = fmt.channels();
     let mut data = vec![0.0f32; w * h * n];
@@ -1404,4 +1409,9 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 #[cfg(test)]
+mod photomerge_layer_order_tests;
+#[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod photomerge_name_tests;

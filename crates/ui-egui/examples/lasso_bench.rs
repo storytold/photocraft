@@ -19,13 +19,12 @@ use egui::{Event, Modifiers, PointerButton, Pos2};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Layer};
 use photocraft_geom::{Rect, Size};
-use photocraft_ui_egui::canvas::ViewXform;
 use photocraft_ui_egui::state::Tool;
 use photocraft_ui_egui::{PhotocraftApp, Services};
 use rayon::prelude::*;
 use serde_json::json;
 
-type H = egui_kittest::Harness<'static, PhotocraftApp>;
+type H = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
@@ -71,11 +70,8 @@ fn hash(x: i32, y: i32) -> u8 {
 }
 
 fn screen(h: &H, x: f64, y: f64) -> Pos2 {
-    let app = h.state();
-    let idx = app.session.active_index().unwrap_or(0);
-    let v = &app.ui.views[idx];
-    let rect = photocraft_ui_egui::rulers::content_rect(app, app.last_canvas_rect);
-    ViewXform { rect, zoom: v.zoom, center: v.center, flip: app.ui.view.flip_horizontal, rotation: v.rotation, aspect: 1.0 }.to_screen(x as f32, y as f32)
+    let view = photocraft_ui_egui::canvas::active_view(h.state()).expect("an active document view");
+    view.to_screen(craft::behavior::kurbo::Point::new(x, y))
 }
 
 fn stats(name: &str, mut v: Vec<f64>) {
@@ -132,7 +128,7 @@ fn main() {
     let builder = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 1000.0));
     let mut h: H = builder.wgpu_setup(photocraft_ui_egui::gpu_canvas::wgpu_setup()).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Services::default());
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
             app.set_wgpu(rs.clone());
         }
@@ -194,7 +190,7 @@ fn main() {
             times.push(frame(&mut h));
         }
         let has_sel = h.state().session.active().is_some_and(|st| st.doc.selection.is_some());
-        println!("lasso active at the end: {}, selection exists: {has_sel}", photocraft_ui_egui::lasso_ui::active(h.state()));
+        println!("selection exists: {has_sel}");
         let early: Vec<f64> = times.iter().take(moves / 5).copied().collect();
         let late: Vec<f64> = times.iter().skip(moves * 4 / 5).copied().collect();
         let (x1, y1) = at(moves);

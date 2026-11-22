@@ -69,7 +69,7 @@ fn background_from_layer(s: &mut Session, p: &Value) -> Result<Value> {
         only.clipped = false;
         let visible = l.visible;
         let fmt = doc.pixel_format();
-        let rest = std::mem::replace(&mut doc.layers, vec![only]);
+        let rest = std::mem::replace(&mut doc.layers, vec![only].into());
         let pixels = photocraft_compose::flatten_to_surface(doc, fmt, Some([bg[0], bg[1], bg[2]]));
         doc.layers = rest;
         let mut out = Layer::raster("Background", fmt);

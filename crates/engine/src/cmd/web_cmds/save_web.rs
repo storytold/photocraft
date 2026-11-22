@@ -237,12 +237,13 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let bw = wdoc.size.width as usize;
     // An untagged document is treated as sRGB (see [`web_document`]); with Embed Color Profile
     // on, the file says so, as Photoshop's does (#9325).
-    let srgb = (st.embed_icc && wdoc.icc_profile.is_none()).then(|| photocraft_cms::Builtin::Srgb.profile().to_bytes().to_vec());
+    let srgb = (st.embed_icc && wdoc.icc_profile.is_none()).then(|| craft_cms::Builtin::Srgb.profile().to_bytes().to_vec());
     let icc = wdoc.icc_profile.as_deref().map(|v| v.as_slice()).or(srgb.as_deref());
     let xmp = web_xmp(&doc, st.metadata);
     let exif = web_exif(&doc, st.metadata);
     let dpi = wdoc.resolution_dpi;
-    let warnings = web_warnings(&st, exif, dpi);
+    let mut warnings = web_warnings(&st, exif, dpi);
+    warnings.extend(slices::overflow_warning(&doc));
     let all = slices::resolve(&doc);
     let picked = |r: &ResolvedSlice| match &pick {
         SlicePick::Numbers(n) => n.contains(&(r.number as u64)),
@@ -266,7 +267,7 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     if single.is_none() && dir.is_none() && folder.is_none() {
         let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, exif, xmp.as_deref(), dpi, false)?;
         return Ok(
-            json!({"format": o.ext, "bytes": o.bytes.len(), "width": o.width, "height": o.height, "colors": o.colors, "colorTable": o.color_table.iter().map(|c| rgb_hex(*c)).collect::<Vec<_>>(), "transparentIndex": o.transparent_index}),
+            json!({"format": o.ext, "bytes": o.bytes.len(), "width": o.width, "height": o.height, "colors": o.colors, "colorTable": o.color_table.iter().map(|c| rgb_hex(*c)).collect::<Vec<_>>(), "transparentIndex": o.transparent_index, "warnings": warnings}),
         );
     }
     if let Some(folder) = folder {

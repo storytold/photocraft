@@ -7,7 +7,7 @@ use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
-fn app_with(tool: Tool) -> PhotocraftApp {
+fn app_with(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600, "background": "transparent"})).unwrap();
     app.sync_views();
@@ -35,8 +35,9 @@ fn the_patch_tool_lasso_is_named_for_the_tool() {
 /// A Patch tool lasso keeps the selection icon in the History panel.
 #[test]
 fn the_patch_tool_step_has_the_selection_icon() {
-    assert_eq!(crate::panels::history_step_icon("Patch Tool"), crate::panels::history_step_icon("Lasso"));
-    assert_eq!(crate::panels::history_step_icon("Patch Tool"), "square-dashed");
+    let selection = craft::behavior::IconId::new("rect_dashed");
+    assert_eq!(crate::panels::history::step_icon("Patch Tool"), crate::panels::history::step_icon("Lasso"));
+    assert_eq!(crate::panels::history::step_icon("Patch Tool"), selection);
     // Applying the patch edits pixels, so it does not take the selection icon from "Selection".
-    assert_ne!(crate::panels::history_step_icon("Patch Selection"), "square-dashed");
+    assert_ne!(crate::panels::history::step_icon("Patch Selection"), selection);
 }
