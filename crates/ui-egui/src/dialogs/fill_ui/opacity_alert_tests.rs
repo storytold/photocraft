@@ -76,8 +76,9 @@ fn dismiss(h: &mut H, command: &str) {
     h.run_steps(3);
 }
 
-fn titles(h: &H) -> Vec<String> {
-    h.query_all_by_role(Role::Dialog).chain(h.query_all_by_role(Role::AlertDialog)).filter_map(|n| n.accesskit_node().label()).collect()
+/// The names of the open dialog windows, unnamed ones included.
+fn titles(h: &H) -> Vec<Option<String>> {
+    h.query_all_by_role(Role::Dialog).chain(h.query_all_by_role(Role::AlertDialog)).map(|n| n.accesskit_node().label()).collect()
 }
 
 fn check(open: fn(&mut PhotocraftApp), command: &str, title: &str) {
@@ -92,7 +93,8 @@ fn check(open: fn(&mut PhotocraftApp), command: &str, title: &str) {
         }
         let message = alert(&h).unwrap_or_else(|| panic!("{title}: {typed} raises the range alert"));
         assert!(message.contains("integer between 1") && message.contains("100"), "{title}: {message}");
-        assert!(titles(&h).iter().all(|t| t == title), "{title}: the alert is titled after the dialog: {:?}", titles(&h));
+        let windows = titles(&h);
+        assert!(windows.len() == 2 && windows.iter().all(|t| t.as_deref() == Some(title)), "{title}: the dialog and its alert: {windows:?}");
         dismiss(&mut h, command);
     }
     type_and_tab(&mut h, "42");
