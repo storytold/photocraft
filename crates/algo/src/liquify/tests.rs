@@ -359,8 +359,10 @@ fn a_wide_integer_translation_keeps_channels_and_tile_edges_at_every_format() {
             let after = output.read_region(b);
             let tolerance = if depth == SampleType::F32 { 4.0 * f32::EPSILON } else { 0.0 };
             for (original, moved) in before.chunks_exact(w * n).zip(after.chunks_exact(w * n)) {
-                for (x, pixel) in moved.chunks_exact(n).enumerate() {
-                    let offset = x.saturating_sub(1) * n;
+                // Column 0 is pulled from past the bounds, so it is transparent, not column 0 again.
+                assert!(moved[..n].iter().all(|v| *v == 0.0), "{mode:?}/{depth:?}: column 0 is transparent");
+                for (x, pixel) in moved.chunks_exact(n).enumerate().skip(1) {
+                    let offset = (x - 1) * n;
                     for (actual, expected) in pixel.iter().zip(&original[offset..offset + n]) {
                         assert!((actual - expected).abs() <= tolerance, "{mode:?}/{depth:?} at column {x}");
                     }
