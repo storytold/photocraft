@@ -14,6 +14,34 @@ pub(super) fn can_caf(s: &Session) -> std::result::Result<(), String> {
     Ok(())
 }
 
+/// The alert of a Content-Aware Fill on a layer with Lock All (#14251).
+pub(crate) const CAF_LOCKED: &str = "Could not complete the command because the layer is locked.";
+
+/// Edit › Content-Aware Fill's availability, as in Photoshop (#14251): not available on a hidden layer (or one in a
+/// hidden group) or in Indexed Color. With Lock All on a pixel layer it stays available, and running it says the layer
+/// is locked. Otherwise [`can_caf`], which Delete and Fill Selection keeps.
+pub(super) fn can_content_aware_fill(s: &Session) -> std::result::Result<(), String> {
+    let d = s.active().ok_or("no document open")?;
+    if d.doc.mode == photocraft_doc::ColorMode::Indexed {
+        return Err("not available in Indexed Color".into());
+    }
+    if let Some(id) = d.active_layer
+        && let Some(layer) = d.doc.layer(id)
+    {
+        if !d.doc.path_of(id).is_some_and(|path| d.doc.shown_at(&path)) {
+            return Err(format!("the layer \"{}\" is hidden", layer.name));
+        }
+        if d.doc.effective_locks(id).all && matches!(layer.content, photocraft_doc::LayerContent::Raster(_)) {
+            return if d.doc.selection.as_ref().is_none_or(|m| m.content_bounds().is_empty()) {
+                Err("make a selection around what to remove".into())
+            } else {
+                Ok(())
+            };
+        }
+    }
+    can_caf(s)
+}
+
 /// Mask surface (gray) of an alpha channel by index or name.
 pub(crate) fn channel_mask<'a>(doc: &'a Document, v: &Value) -> Option<&'a Surface> {
     match v {
@@ -383,7 +411,17 @@ fn content_aware_fill_as(s: &mut Session, p: &Value, cmd: &'static str, label: &
     use photocraft_algo::content_aware::fill_owned;
     // The workspace names the layer it opened on: after an Apply to a new layer that one is
     // active, but the fill still samples the original.
-    let id = match crate::commands::explicit_layer(s, p)? {
+    let explicit = crate::commands::explicit_layer(s, p)?;
+    // Content-Aware Fill on a layer with Lock All runs into Photoshop's refusal (#14251).
+    if cmd == "edit.contentAwareFill"
+        && let Some(d) = s.active()
+        && let Some(target) = explicit.or(d.active_layer)
+        && d.doc.layer(target).is_some()
+        && d.doc.effective_locks(target).all
+    {
+        return Err(EngineError::Other(CAF_LOCKED.into()));
+    }
+    let id = match explicit {
         Some(layer) => pixel_layer_id(s, layer),
         None => pixel_layer(s),
     }
