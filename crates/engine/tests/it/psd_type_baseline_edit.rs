@@ -138,6 +138,7 @@ fn editing_vertical_metrics_invalidates_the_imported_baseline() {
     }
 }
 
+/// Tracking and kerning change horizontal advances without moving the imported baseline.
 #[test]
 fn spacing_edits_keep_the_imported_baseline_while_changing_width() {
     let imported = photocraft_io::import("baseline.psd", &synthetic_psd()).unwrap().document;
@@ -166,6 +167,7 @@ fn spacing_edits_keep_the_imported_baseline_while_changing_width() {
     }
 }
 
+/// A change to the source font metrics restores the normal first-baseline calculation.
 #[test]
 fn font_metric_edits_stop_using_the_imported_baseline() {
     let imported = photocraft_io::import("baseline.psd", &synthetic_psd()).unwrap().document;
@@ -278,10 +280,15 @@ fn resolution_change_scales_imported_psd_baseline_with_its_box() {
     let after = layer.psd_first_baseline.as_ref().unwrap().offset_px;
     assert!((after - before * 2.0).abs() <= 0.001);
     let TextShape::Box { y, .. } = layer.shape else { panic!("text box") };
-    let layout = photocraft_text::TextEngine::new().layout(layer, 144.0);
+    let doc = &session.active().unwrap().doc;
+    // The resolution change leaves the old cache in place until an edit redraws it.
+    let mut engine = photocraft_text::TextEngine::new();
+    let (layout, rendered) = engine.render(layer, 144.0, doc.pixel_format());
     assert_eq!(layout.lines.len(), 1);
     assert!((layout.lines[0].baseline - y - after).abs() <= 0.001);
-    let saved = photocraft_io::export(&session.active().unwrap().doc, "baseline.psd", &Default::default()).unwrap().bytes;
+    let expected = rendered.surface.content_bounds();
+    assert!(expected.height() > 0);
+    let saved = photocraft_io::export(doc, "baseline.psd", &Default::default()).unwrap().bytes;
     let reopened = photocraft_io::import("baseline.psd", &saved).unwrap().document;
     let LayerContent::Text(reopened) = &reopened.layers[0].content else { panic!("type layer") };
     assert!((reopened.psd_first_baseline.as_ref().unwrap().offset_px - after).abs() <= 0.001);
@@ -290,5 +297,5 @@ fn resolution_change_scales_imported_psd_baseline_with_its_box() {
     assert!((reopened_layout.lines[0].baseline - layout.lines[0].baseline).abs() <= 0.001);
     session.execute("type.edit", json!({"layer": id.0})).unwrap();
     assert_eq!(text(&session, id).text, "Hello");
-    assert!(text(&session, id).cache.as_ref().unwrap().content_bounds().height() > 0);
+    assert_eq!(text(&session, id).cache.as_ref().unwrap().content_bounds(), expected);
 }
