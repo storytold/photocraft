@@ -1249,7 +1249,11 @@ fn pointer(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Reply {
     // instead of growing. Like a modifier flag, it may be top-level or grouped under "modifiers"; it is a held key
     // for the length of the request, and the tool host's momentary tools read it from the held keys.
     let space = p.get("modifiers").unwrap_or(p).get("space").and_then(Value::as_bool).unwrap_or(false);
-    if space {
+    // The sampler modal already passes middle-button panning. Route synthetic Space drags
+    // through that path so a queued key cannot send the press to the sampler.
+    let sampler_pan = space && crate::dialogs::skin_smooth_ui::armed(app);
+    let button = if sampler_pan { PointerButton::Middle } else { button };
+    if space && !sampler_pan {
         ToolHost::inject(ctx, canvas, ToolInput::hold(Key::Space));
     }
     // An injected move carries no button. A navigation move sent during an existing sampler drag
@@ -1264,7 +1268,7 @@ fn pointer(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Reply {
             guarded_sample = false;
         }
     }
-    if space {
+    if space && !sampler_pan {
         ToolHost::inject(ctx, canvas, ToolInput::let_go(Key::Space));
     }
     ctx.request_repaint();
