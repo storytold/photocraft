@@ -236,10 +236,28 @@ pub(crate) fn tab_title_at(app: &PhotocraftApp, i: usize, zoom: f32) -> String {
     } else {
         mode_label(&st.doc).to_string()
     };
+    // "RGB/8*" while the document's profile isn't the working space (#14240); the Assign Profile preview counts.
+    let mark = if !quick_mask && !mask && profile_mismatch(app, st) { "*" } else { "" };
     let layer = active_layer.map(|l| format!("{}, ", l.name)).unwrap_or_default();
     // A save in progress: "name @ 100% (Layer 1, RGB/16) - Saving 45%", as Photoshop does (#3389).
     let saving = crate::jobs_ui::save_progress(app, st.doc.id).map(|s| format!(" - {s}")).unwrap_or_default();
-    format!("{} @ {}% ({layer}{model}/{}){saving}", titled_name(app, st), fmt_zoom(zoom), st.doc.depth.bits())
+    format!("{} @ {}% ({layer}{model}/{}{mark}){saving}", titled_name(app, st), fmt_zoom(zoom), st.doc.depth.bits())
+}
+
+/// Whether the tab marks `st`'s profile as other than the working space: a tagged 8- or 16-bit RGB document whose
+/// profile, or the one the Assign Profile dialog previews on it, differs in colour from the working RGB. Untagged,
+/// 32-bit, CMYK, Gray and other documents keep the tab as it was (not measured, #14240).
+fn profile_mismatch(app: &PhotocraftApp, st: &photocraft_engine::DocState) -> bool {
+    use photocraft_color::{ColorMode, SampleType};
+    if st.doc.mode != ColorMode::Rgb || st.doc.depth == SampleType::F32 {
+        return false;
+    }
+    let previewed = app.filter_preview.as_ref().filter(|p| p.key.doc == st.doc.id && p.key.command == "edit.assignProfile").and_then(|p| p.result.as_ref());
+    let tag = match previewed {
+        Some(proxy) => proxy.icc_profile.as_ref(),
+        None => st.doc.icc_profile.as_ref(),
+    };
+    tag.is_some_and(|tag| app.session.color.differs_from_working(st.doc.mode, tag))
 }
 
 /// The document's name as its tab and window title show it: "© name" when File Info marks it

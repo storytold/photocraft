@@ -234,6 +234,9 @@ pub fn canvas_view(
 mod pattern_drag_tests;
 
 #[cfg(test)]
+mod tab_profile_mismatch_mark_tests;
+
+#[cfg(test)]
 mod tabs_tests;
 
 #[cfg(test)]
