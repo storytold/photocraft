@@ -52,6 +52,8 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
         // The function keys of the actions it replaces go with them.
         let replaced: Vec<String> = s.actions.list.actions().iter().filter(|a| a.set.as_deref() == Some(imp.set.as_str())).map(|a| a.name.clone()).collect();
         crate::actions_cmds::remove_shortcuts(s, replaced.iter().map(String::as_str));
+        // So do the renames the set's earlier load recorded (#11523).
+        s.actions.load_renames.retain(|(set, _), _| set != &imp.set);
     }
     let file = ActionsFile::new(imp.actions, vec![imp.set.clone()]);
     // Play, Conditional, Batch and Create Droplet steps call actions by name: follow the renames in
@@ -66,8 +68,16 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
         } else if by_set && params.get("set").is_some_and(|set| !set.is_null()) {
             return;
         }
+        if id == "actions.play" {
+            // A qualifier the importer kept for a child its own set lacks names this import's
+            // set, which a `set` override renamed.
+            if params.get("set").and_then(Value::as_str) == Some(original_set.as_str()) {
+                params["set"] = json!(imp.set);
+            }
+            bind_play_target(params, renames);
+            return;
+        }
         let keys: &[&str] = match id {
-            "actions.play" => &["action"],
             "actions.conditional" => &["then", "else"],
             "file.automate.batch" | "file.automate.createDroplet" => &["action"],
             _ => &[],
@@ -78,6 +88,19 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     });
+    // This load is what renamed these children, so it is the one place that knows: record each so a
+    // later load can bind a call to the name the child carries now (#11523), and follow it for the
+    // calls already in the library that named a child of this set by the name the file gave it.
+    let mut renamed = std::collections::HashMap::new();
+    for (from, to) in &merged.renames {
+        renamed.entry(from.clone()).or_insert_with(|| to.clone());
+    }
+    for (from, to) in &renamed {
+        s.actions.load_renames.insert((imp.set.clone(), from.clone()), to.clone());
+    }
+    retarget_renamed_calls(&mut s.actions.list, &merged.added, &imp.set, &renamed);
+    let lost_targets = bind_cross_set_calls(&mut s.actions, &merged.added, &imp.warnings);
+    imp.warnings.extend(lost_targets);
     // Actions an automation client loads keep its gate when the user plays them.
     if s.authorize.is_some() {
         for &index in &merged.added {
@@ -105,6 +128,112 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
         "warnings": imp.warnings,
         "encoding": imp.encoding.as_deref().unwrap_or("UTF-8"),
     }))
+}
+
+/// The Play calls qualified with another action set that the load just added (the steps of the
+/// actions at `added`), bound to the child they name, and a warning for each one the session cannot
+/// answer, so it is heard of when the file loads rather than only when playback refuses to guess
+/// (#11523). The two reasons read differently: a set the session has not loaded asks for that set,
+/// while a loaded set without that child asks about the call. A `HashSet` beside the ordered list
+/// keeps the deduplication linear when a big library repeats one lost target; `known` are the
+/// warnings the import already has.
+fn bind_cross_set_calls(actions: &mut crate::actions_cmds::ActionState, added: &[usize], known: &[String]) -> Vec<String> {
+    let mut calls = Vec::new();
+    for &at in added {
+        let Some(a) = actions.list.action(at) else { continue };
+        for (step_at, step) in a.steps.iter().enumerate() {
+            let (Some(child), Some(set)) = (step.params.get("action").and_then(Value::as_str), step.params.get("set").and_then(Value::as_str)) else {
+                continue;
+            };
+            if step.command == "actions.play" && !child.is_empty() && !set.is_empty() {
+                calls.push((at, step_at, a.name.clone(), child.to_owned(), set.to_owned()));
+            }
+        }
+    }
+    let mut seen: std::collections::HashSet<String> = known.iter().cloned().collect();
+    let mut lost_targets = Vec::new();
+    for (at, step_at, caller, child, set) in calls {
+        if crate::actions_cmds::qualified_target(actions.list.actions(), &child, &set).is_some() {
+            continue;
+        }
+        // A child an earlier load renamed is named by what that load recorded, never by a guess
+        // from the spelling of a name.
+        if let Some(loaded) = actions.load_renames.get(&(set.clone(), child.clone())).cloned()
+            && crate::actions_cmds::qualified_target(actions.list.actions(), &loaded, &set).is_some()
+        {
+            set_play_target(&mut actions.list, at, step_at, &loaded);
+            continue;
+        }
+        let holds_set = actions.list.actions().iter().any(|a| a.set.as_deref() == Some(set.as_str())) || actions.list.sets().contains(&set.as_str());
+        let warning = if holds_set {
+            format!("`{caller}` plays `{child}`, which set `{set}` does not hold; playback will report that action rather than guess another set's")
+        } else {
+            format!("`{caller}` plays `{child}` in set `{set}`, which is not loaded; load that set before playing it")
+        };
+        if seen.insert(warning.clone()) {
+            lost_targets.push(warning);
+        }
+    }
+    lost_targets
+}
+
+/// Calls already in the library (every action but the ones at `added`) that name a child of `set`
+/// by the name its file gave it, which this load renamed (`renamed`: file name to loaded name),
+/// follow the rename. A child of that name the set still holds keeps its calls (#11523).
+fn retarget_renamed_calls(list: &mut crate::actions_cmds::ActionList, added: &[usize], set: &str, renamed: &std::collections::HashMap<String, String>) {
+    if renamed.is_empty() {
+        return;
+    }
+    let holds = |list: &crate::actions_cmds::ActionList, name: &str| list.actions().iter().any(|a| a.set.as_deref() == Some(set) && a.name == name);
+    let mut retargeted = Vec::new();
+    for (at, a) in list.actions().iter().enumerate() {
+        if added.contains(&at) {
+            continue;
+        }
+        for (step_at, step) in a.steps.iter().enumerate() {
+            if step.command != "actions.play" || step.params.get("set").and_then(Value::as_str) != Some(set) {
+                continue;
+            }
+            let Some(to) = step.params.get("action").and_then(Value::as_str).filter(|name| !holds(list, name)).and_then(|name| renamed.get(name)) else {
+                continue;
+            };
+            retargeted.push((at, step_at, to.clone()));
+        }
+    }
+    for (at, step_at, to) in retargeted {
+        set_play_target(list, at, step_at, &to);
+    }
+}
+
+/// Point the Play step `step_at` of action `at` at the action named `to`.
+fn set_play_target(list: &mut crate::actions_cmds::ActionList, at: usize, step_at: usize, to: &str) {
+    let Some(mut step) = list.action(at).and_then(|a| a.steps.get(step_at)).cloned() else { return };
+    step.params["action"] = json!(to);
+    // The indices come from the list just read, so the step is there.
+    let _ = list.replace_step(at, step_at, step);
+}
+
+/// An imported Play step that names an action set other than the file's own keeps its target.
+///
+/// Photoshop records a Play Action target as a child name *and* the action set holding it, and
+/// `convert_action` already dropped a qualifier naming the file's own set, so what is left points
+/// across sets and must survive the load: `actions.play` resolves it against that set and its
+/// child, so the action of that name in another set can no longer be played instead (#11523).
+/// [`bind_cross_set_calls`] checks it once the file is in. A call by name alone follows this load's
+/// renames of the child, as it always did (#6806).
+fn bind_play_target(params: &mut Value, renames: &[(String, String)]) {
+    let Some(object) = params.as_object_mut() else { return };
+    match object.get("set") {
+        Some(Value::String(set)) if !set.is_empty() => return,
+        Some(Value::Null) | Some(Value::String(_)) | None => {}
+        Some(_) => {
+            // A qualifier that is not a set name carries no target: keep the plain call.
+            object.remove("set");
+        }
+    }
+    if let Some(to) = object.get("action").and_then(Value::as_str).and_then(|name| renamed_to(renames, name)).cloned() {
+        object.insert("action".into(), Value::String(to));
+    }
 }
 
 pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {

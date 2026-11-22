@@ -1,7 +1,7 @@
 use super::convert::clip_name;
 use super::descriptors::{
-    PT, PX, Target, ang, class, code, color_desc, color_hex, desc, enm, get_bool, get_enum, get_num, get_obj, get_ref, get_text, jbool, jnum, jstr, layer_ref,
-    layer_target, long, name_ref, pct, px, recorded_layer_ref, recorded_layer_target, ref_class, target, target_ref, text, trimmed,
+    PT, PX, Target, action_reference, ang, class, code, color_desc, color_hex, desc, enm, get_bool, get_enum, get_num, get_obj, get_ref, get_text, jbool, jnum,
+    jstr, layer_ref, layer_target, long, name_ref, pct, px, recorded_layer_ref, recorded_layer_target, ref_class, target, target_ref, text, trimmed,
 };
 use super::events::pixel_target;
 use super::fields::{F, Kind, Mapped, fields_to, none, step, steps};
@@ -453,11 +453,18 @@ pub(super) fn apply_comp_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(desc("null").with("null", reference))
 }
 
+/// Import Play Action: the child, plus the action-set qualifier Photoshop records beside it.
+/// The qualifier is kept (`{"action":child, "set":set}`) because dropping it let a same-named
+/// child of another set be played instead of the recorded one (#11523).
 pub(super) fn play_from(d: &Descriptor) -> Mapped {
-    match get_ref(d, "null").map(target) {
-        Some(Target::Name(n)) => step("actions.play", json!({"action": clip_name(&n)})),
-        _ => Mapped::Unsupported { harmless: false },
+    let Some((child, set)) = get_ref(d, "null").and_then(action_reference) else {
+        return Mapped::Unsupported { harmless: false };
+    };
+    let mut p = json!({"action": clip_name(&child)});
+    if let Some(set) = set {
+        p["set"] = json!(clip_name(&set));
     }
+    step("actions.play", p)
 }
 
 pub(super) fn play_to(_: &str, p: &Value) -> Option<Descriptor> {
