@@ -108,7 +108,7 @@ fn a_bad_label_for_a_shape_add_preserves_the_document_and_history() {
     let id = s.execute("shape.create", line(None)).unwrap()["layer"].as_u64().unwrap();
     let n = steps(&s);
     let before = s.active().unwrap().doc.clone();
-    let mut params = line(Some("Ellipse Tool"));
+    let mut params = line(Some("Unknown Tool"));
     params["addTo"] = json!(id);
     assert!(s.execute("shape.create", params).is_err());
     assert_eq!(steps(&s), n);

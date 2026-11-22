@@ -436,7 +436,7 @@ fn default_name(kind: &str) -> &'static str {
 }
 
 /// Creates a shape layer, or adds path components to the shape identified by `addTo`.
-/// A tool's optional History name applies to either edit.
+/// Line Tool additions keep the tool's History name. Other shape additions use Add Shape.
 pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.create";
     let add_to = p.get("addTo").and_then(Value::as_u64);
@@ -456,6 +456,7 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(target) = add_to {
         let op = p.get("op").and_then(Value::as_str).map_or(Some(PathOp::Combine), op_from).ok_or_else(|| bad(CMD, "unknown `op`"))?;
         let id = LayerId(target);
+        let label = if kind == "line" && label == "Line Tool" { label } else { "Add Shape" };
         with_shape(s, id, label, |sh, _| {
             for mut sp in path.subpaths {
                 // A joined subpath (a hole) belongs to the component before it, which takes `op`.
