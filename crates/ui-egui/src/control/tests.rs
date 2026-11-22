@@ -2372,6 +2372,7 @@ fn app_open_aseprite_alias_opens_an_editable_document_and_remembers_its_source()
         automation_read: Some(Box::new(move |path| {
             Ok(crate::AutomationReadResult { name: "sprite.ase".into(), bytes: bytes.to_vec(), save_path: Some(path.into()) })
         })),
+        automation_locate: Some(Box::new(|path| Some(format!("/work/{path}")))),
         ..Default::default()
     };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
@@ -2382,5 +2383,5 @@ fn app_open_aseprite_alias_opens_an_editable_document_and_remembers_its_source()
     assert!(!st.source_read_only);
     assert_eq!(st.path.as_deref(), Some("sprites/sprite.ase"));
     assert_eq!(st.doc.layers.len(), 2);
-    assert_eq!(app.ui.recent_files.first().map(String::as_str), Some("sprites/sprite.ase"));
+    assert_eq!(app.ui.recent_files.first().map(String::as_str), Some("/work/sprites/sprite.ase"));
 }
