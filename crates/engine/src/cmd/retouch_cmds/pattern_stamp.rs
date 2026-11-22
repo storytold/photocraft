@@ -1,8 +1,9 @@
 //! Pattern Stamp: paint with the current pattern through a brush stroke.
 //!
 //! Aligned strokes lock the tile origin in document space. Unaligned strokes derive a new origin
-//! from the tile size and the first point of each stroke. Impressionist jitters each dab's phase
-//! with a seeded RNG so a replay of the same points is identical.
+//! from the tile size and the first point of each stroke. Impressionist paints each dab in one
+//! flat colour: the pattern pixel, as the stroke places it, one pixel up and left of the dab's
+//! centre, as the reference does (#12884). It has no randomness, so a replay is identical.
 //!
 //! `"mode": "behind"` is the painting-only Behind mode, as the Brush's: the pattern goes beneath
 //! the layer's pixels, so it shows only where the layer is transparent (#12879). Behind with
@@ -20,9 +21,6 @@ use serde_json::{Value, json};
 
 use super::{bad, blend_param, damage_json, flag, has_pixel_layer, parse_brush, reject_huge_stroke};
 use crate::{EngineError, Result, Session};
-
-const STREAM_PHASE_X: u64 = 101;
-const STREAM_PHASE_Y: u64 = 102;
 
 /// The reference's alert for a Pattern Stamp stroke in an Indexed Color document (#12887).
 pub const INDEXED_REFUSAL: &str = "Could not fill because the pattern and image have different color modes.";
@@ -64,7 +62,6 @@ pub(super) struct Setup {
     phase: (f32, f32),
     scale: f32,
     angle: f32,
-    seed: u64,
 }
 
 impl Setup {
@@ -94,7 +91,7 @@ impl Setup {
             photocraft_paint::rng::seed_from_bytes(bytes.as_bytes())
         });
         stroke.brush.seed = seed;
-        Ok(Self { stroke, id, mode, behind, aligned, impressionist, pat, tile, phase, scale, angle, seed })
+        Ok(Self { stroke, id, mode, behind, aligned, impressionist, pat, tile, phase, scale, angle })
     }
 
     /// Where the pattern sits (aligned strokes; Impressionist jitters it per dab).
@@ -104,9 +101,8 @@ impl Setup {
 
     /// One Impressionist dab's edit of a working copy in `fmt`.
     fn impressionist_effect(&self, fmt: PixelFormat) -> super::DabEffect {
-        let (tile, phase, scale, angle, seed, mode) = (self.tile.clone(), self.phase, self.scale, self.angle, self.seed, self.mode);
-        let (tw, th) = (self.pat.width as f32 * scale, self.pat.height as f32 * scale);
-        Box::new(move |work, fp| stamp_dab(work, &fmt, &tile, fp, phase, scale, angle, seed, tw, th, mode))
+        let (tile, place, mode) = (self.tile.clone(), self.placement(), self.mode);
+        Box::new(move |work, fp| stamp_dab(work, &fmt, &tile, fp, &place, mode))
     }
 }
 
@@ -308,53 +304,41 @@ fn footprint_cov(fp: &Footprint, x: i32, y: i32) -> f32 {
     fp.cov.get(idx).copied().unwrap_or(0.0)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn stamp_dab(
-    work: &mut Region,
-    fmt: &PixelFormat,
-    tile: &Tile,
-    fp: &Footprint,
-    phase: (f32, f32),
-    scale: f32,
-    angle: f32,
-    seed: u64,
-    tw: f32,
-    th: f32,
-    mode: BlendMode,
-) {
+/// One Impressionist dab: the dab in one flat colour, the pattern pixel `place` puts one pixel up
+/// and left of the dab's centre (#12884). A single-pixel lookup, never a mix, so a centre on a
+/// quadrant edge still gives a pure colour.
+fn stamp_dab(work: &mut Region, fmt: &PixelFormat, tile: &Tile, fp: &Footprint, place: &Placement, mode: BlendMode) {
     let r = fp.rect.intersect(&work.rect);
     if r.is_empty() {
         return;
     }
-    let i = fp.index as u64;
-    let jx = photocraft_paint::rng::rand_signed(seed, i, STREAM_PHASE_X) * tw;
-    let jy = photocraft_paint::rng::rand_signed(seed, i, STREAM_PHASE_Y) * th;
-    let place = placement((phase.0 + jx, phase.1 + jy), scale, angle);
-    let rgba = render(tile, &place, r);
-    let rw = r.width() as usize;
+    let at = |c: f64| (c.floor() as i32).saturating_sub(1);
+    let (sx, sy) = (at(fp.dab.center.x), at(fp.dab.center.y));
+    // The one tile pixel under that point: mapped through the placement, then snapped to a pixel centre, so a scale or
+    // rotation can't blend neighbours or average several taps (CodeRabbit on #16226).
+    let (u, v) = place.map(f64::from(sx) + 0.5, f64::from(sy) + 0.5);
+    let px = tile.sample(u.floor() + 0.5, v.floor() + 0.5);
     let n = work.ch;
     let mut enc = [0.0f32; 8];
+    from_rgba_into(fmt, px, &mut enc);
+    let src = enc;
     for y in r.y0..r.y1 {
         for x in r.x0..r.x1 {
             let k = footprint_cov(fp, x, y);
             if k <= 0.0 {
                 continue;
             }
-            let ox = (x - r.x0) as usize;
-            let oy = (y - r.y0) as usize;
-            let Some(px) = rgba.get(oy.saturating_mul(rw).saturating_add(ox)) else { continue };
-            from_rgba_into(fmt, *px, &mut enc);
             let dst = work.px_mut(x, y);
             if mode == BlendMode::Normal {
-                if let Some(src) = enc.get(..n) {
+                if let Some(src) = src.get(..n) {
                     over_native(fmt, dst, src, k, false);
                 }
             } else {
                 let d = to_rgba(fmt, dst);
-                let o = photocraft_color::blend::composite(mode, d, *px, k);
+                let o = photocraft_color::blend::composite(mode, d, px, k);
                 from_rgba_into(fmt, o, &mut enc);
-                if let Some(src) = enc.get(..n) {
-                    dst.copy_from_slice(src);
+                if let Some(out) = enc.get(..n) {
+                    dst.copy_from_slice(out);
                 }
             }
         }
