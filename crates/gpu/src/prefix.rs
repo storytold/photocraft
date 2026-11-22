@@ -114,7 +114,7 @@ impl Prefix {
         // Keeping every non-layer field makes new document inputs invalidate automatically.
         // Tile data is Arc-shared; shared Tile equality does not scan its pixel bytes.
         let mut context = doc.clone();
-        let layers = std::mem::take(&mut context.layers);
+        let layers = std::mem::take(&mut *context.layers);
         let same_context = self.context.as_ref() == Some(&context);
         // The lowest root layer this render changes since the last one (a layer added or removed
         // at the top changes from there on).

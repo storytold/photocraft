@@ -85,6 +85,25 @@ fn opacity_mode_and_preserve_transparency() {
 }
 
 #[test]
+fn opaque_dissolve_fill_covers_the_largest_noise_sample_at_every_depth() {
+    // (8, 246) hashes to the largest noise sample: it must still be below full coverage.
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 9, "height": 247, "depth": depth, "background": "transparent"})).unwrap();
+        s.execute(CMD, json!({"contents": "white", "mode": "dissolve", "opacity": 0})).unwrap();
+        assert_eq!(px(&s, 8, 246)[3], 0.0, "{depth}-bit zero-opacity fill");
+
+        s.execute(CMD, json!({"contents": "white", "mode": "dissolve", "opacity": 100})).unwrap();
+        assert_eq!(px(&s, 8, 246), [1.0; 4], "{depth}-bit opaque fill at the largest noise sample");
+        assert_eq!(px(&s, 0, 0), [1.0; 4], "{depth}-bit opaque fill at an ordinary sample");
+        assert!(s.undo());
+        assert_eq!(px(&s, 8, 246)[3], 0.0, "{depth}-bit undo");
+        assert!(s.redo());
+        assert_eq!(px(&s, 8, 246), [1.0; 4], "{depth}-bit redo");
+    }
+}
+
+#[test]
 fn preserve_transparency_blends_source_atop_on_semi_transparent_pixels() {
     // White at 50%, then black at 50% keeping alpha: Photoshop gives (127,127,127,128), the
     // colour moved halfway, at every depth and in non-Normal modes too (#5783).
@@ -222,7 +241,7 @@ fn huge_selection(size: (u32, u32), rects: &[Rect]) -> Session {
     let mut s = session();
     s.execute(CMD, json!({"contents": "color", "color": "#336699"})).unwrap();
     let st = s.active_mut().unwrap();
-    let doc = std::sync::Arc::make_mut(&mut st.doc);
+    let doc = std::sync::Arc::make_mut(st.doc_mut());
     doc.size = photocraft_geom::Size::new(size.0, size.1);
     let mut sel = Surface::new(photocraft_color::PixelFormat::GRAY8);
     for r in rects {

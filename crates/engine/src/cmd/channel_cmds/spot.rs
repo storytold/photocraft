@@ -43,7 +43,7 @@ pub(super) fn merge_spot(s: &mut Session, p: &Value) -> Result<Value> {
             sf.prune();
         }
         let id = bg.id;
-        doc.layers = vec![bg];
+        doc.layers = vec![bg].into();
         doc.channels.remove(i);
         *active = Some(id);
         Ok(())
