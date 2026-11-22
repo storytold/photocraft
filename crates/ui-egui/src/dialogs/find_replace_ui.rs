@@ -514,8 +514,12 @@ fn show_warning(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<egui::Re
         ui.add_space(8.0);
         ui.checkbox(&mut pending.dont_show_again, tl!("Don't show again"));
     });
-    if choice.is_none() && warning.is_top_modal && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
-        choice = Some(WarningChoice::Skip);
+    if choice.is_none() && warning.is_top_modal && !warning.any_popup_open {
+        use craft::ui::runtime::keys::{Intent, with_window_intents};
+        let rtl = crate::i18n::current().dir() == crate::i18n::Dir::Rtl;
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) || with_window_intents(ctx, rtl, |intents| intents.take(Intent::Submit)) {
+            choice = Some(WarningChoice::Skip);
+        }
     }
     if let Some(choice) = choice
         && let Err(error) = answer(app, choice, false)
