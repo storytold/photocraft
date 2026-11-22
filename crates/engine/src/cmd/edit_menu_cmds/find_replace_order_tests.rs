@@ -13,7 +13,7 @@ fn make_order_doc() -> (Session, [LayerId; 6], LayerId) {
 
     // Group G1 holding T8, then an empty pixel layer on top.
     let t8 = id_of(s.execute("type.create", json!({"text": "grouped cat", "x": 10, "y": 280, "size": 12})).unwrap());
-    s.execute("layer.new.groupFromLayers", json!({"name": "G1", "layers": [t8.0]})).unwrap();
+    s.execute("layer.new.groupFromLayers", json!({"name": "G1", "layer": t8.0})).unwrap();
     let top_pixel = id_of(s.execute("layer.new.layer", json!({"name": "empty"})).unwrap());
 
     // Verify bottom-to-top walk order of type layers is T1, T2, T5, T6, T7, T8.
