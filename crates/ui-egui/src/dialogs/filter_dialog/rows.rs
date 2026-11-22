@@ -21,13 +21,16 @@ use craft::keymap::Mods;
 use craft::theme::Srgba;
 use craft::ui::buttons::ToggleButton;
 use craft::ui::choice::Swatch;
-use craft::ui::contract::{Bind, Entry, Outcome as _, Props as _, Show as _};
+use craft::ui::contract::{Bind, Entry, Outcome as _, Props as _, Show as _, ShowContainer as _};
 use craft::ui::dialog::{DialogId, StackDialog as _};
+use craft::ui::display::Text;
+use craft::ui::layout_components::Row;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamKind};
 use craft::ui::pickers::Select;
 use craft::ui::primitives::IconSpec;
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::requests::EyedropperRequest;
+use craft::ui::style::TypeRole;
 use photocraft_color::ColorMode;
 use photocraft_doc::Document;
 use photocraft_engine::installed_profiles::InstalledProfile;
@@ -436,20 +439,20 @@ fn droppers_row() -> Param {
             ("add", Label::from(tl!("Add to Sample")), IconSpec::mark(CursorBadge::Add)),
             ("subtract", Label::from(tl!("Subtract from Sample")), IconSpec::mark(CursorBadge::Subtract)),
         ];
-        let response = ui
-            .horizontal(|ui| {
-                for (id, label, icon) in tools {
-                    let toggle = ToggleButton::new(label, Bind::given(armed == id)).icon(icon).icon_only().id_salt(id).show(ui);
+        let response = Row::new()
+            .show(ui, |ui, _| {
+                for (id, label, icon) in &tools {
+                    let toggle = ToggleButton::new(label.clone(), Bind::given(armed == *id)).icon(icon.clone()).icon_only().id_salt(*id).show(ui);
                     match toggle.value().copied() {
                         Some(true) => {
-                            fields.set(SAMPLE_TOOL, id);
+                            fields.set(SAMPLE_TOOL, *id);
                         }
                         Some(false) => fields.set(SAMPLE_TOOL, ""),
                         None => {}
                     }
                 }
             })
-            .response;
+            .output;
         cx.sampling(!fields.text(SAMPLE_TOOL).unwrap_or_default().is_empty());
         response
     })
@@ -483,18 +486,16 @@ fn result_row() -> Param {
         apply_picked_result(fields);
         let rgb = result_color(fields);
         let color = Srgba::from_rgb_array(rgb);
-        let out = ui
-            .horizontal(|ui| {
-                let swatch = Swatch::new(Label::from(tl!("Result")), Mixed::Same(color)).picker(RESULT_PICKED).id_salt("result").show(ui);
-                ui.monospace(color.to_hex());
-                swatch
-            })
-            .inner;
+        let row = Row::new().show(ui, |ui, _| {
+            let swatch = Swatch::new(Label::from(tl!("Result")), Mixed::Same(color)).picker(RESULT_PICKED).id_salt("result").show(ui);
+            Text::new(color.to_hex()).role(TypeRole::Mono).show(ui);
+            swatch.pick_color.is_some()
+        });
         // The row writes nothing itself: the picker opens on the shown Result and answers into `resultPicked`.
-        if out.pick_color.is_some() {
+        if row.inner == Some(true) {
             cx.pick_color(RESULT_PICKED, color);
         }
-        out.response().clone()
+        row.output
     })
 }
 
