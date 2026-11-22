@@ -467,7 +467,38 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                 }
             };
             let names = |p: &[u8]| p.iter().map(|c| ['R', 'G', 'B'][usize::from(*c).min(2)]).collect::<String>();
-            if bayer && fused {
+            if bayer && fused && matches!(opts.demosaic, Demosaic::Bilinear | Demosaic::Ahd) {
+                let p = cfa.phase(c.x, c.y);
+                pattern = Some(names(&p));
+                let method = match opts.demosaic {
+                    Demosaic::Bilinear => craft_develop::sensor::Method::Bilinear,
+                    Demosaic::Ahd | Demosaic::Mhc => craft_develop::sensor::Method::Ahd,
+                };
+                let mut o = vec![0u16; w * h * 3];
+                par::chunks_mut(&mut o, band * w * 3, |b, chunk| {
+                    let y0 = b * band;
+                    let rows = chunk.len() / (w * 3);
+                    let y_start = y0.saturating_sub(PAD);
+                    let y_end = (y0 + rows + PAD).min(h);
+                    let sh = y_end - y_start;
+                    let mut strip = vec![0.0f32; w * sh];
+                    for (r, row) in strip.chunks_exact_mut(w).enumerate() {
+                        fill_row(y_start + r, row);
+                    }
+                    let norm = craft_develop::sensor::Normalized {
+                        width: w,
+                        height: sh,
+                        cpp: 1,
+                        data: strip,
+                        cfa: Some(craft_develop::sensor::Cfa { width: 2, height: 2, pattern: p.to_vec(), origin_x: 0, origin_y: y_start % 2 }),
+                    };
+                    let dem = craft_develop::sensor::demosaic(&norm, method);
+                    let top_pad = y0 - y_start;
+                    let dem_f32: Vec<f32> = dem.data[top_pad * w..(top_pad + rows) * w].iter().flat_map(|px| *px).collect();
+                    encode_plain(&dem_f32, chunk);
+                });
+                fused_out = Some(o);
+            } else if bayer && fused {
                 // No padded plane either: every band normalizes its own rows.
                 let p = cfa.phase(c.x, c.y);
                 pattern = Some(names(&p));

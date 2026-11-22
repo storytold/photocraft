@@ -565,8 +565,15 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &
         let clar = (ds.effects.clarity != 0.0)
             .then_some(sigmas.clarity)
             .flatten()
+            .map(|s| s * ps)
+            .filter(|&s| s >= 0.3)
             .map(|s| craft_develop::local::guided_fast(&log_l, s, craft_develop::local::CLARITY_EPS));
-        let tex = (ds.effects.texture != 0.0).then_some(sigmas.texture).flatten().map(|s| craft_develop::raster::blur::gaussian(&log_l, s));
+        let tex = (ds.effects.texture != 0.0)
+            .then_some(sigmas.texture)
+            .flatten()
+            .map(|s| s * ps)
+            .filter(|&s| s >= 0.3)
+            .map(|s| craft_develop::raster::blur::gaussian(&log_l, s));
         let dark = (ds.effects.dehaze != 0.0).then(|| {
             let d = craft_develop::raster::Plane { width: w, height: h, data: img.data.iter().map(|c| craft_develop::local::dark_of(*c)).collect() };
             let air = craft_develop::local::airlight(&d);
