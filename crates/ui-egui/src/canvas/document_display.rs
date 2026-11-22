@@ -690,7 +690,10 @@ mod tests {
                     view.rect.top()
                 );
             }
-            let room = |length: f32, document: f64| if overscroll { f64::from(length) - document } else { 0.0 };
+            // With Overscroll the track reaches into the pasteboard until 100 screen points of the document (all of a
+            // shorter one) stay in view at the opposite edge (#16328): the document plus, on each side, the visible
+            // length less those points. The scroll room is that less the visible length.
+            let room = |length: f32, document: f64| if overscroll { f64::from(length) + document - 2.0 * document.min(100.0) } else { 0.0 };
             let x_room = room(view.rect.width(), 400.0);
             let y_room = room(view.rect.height(), 300.0);
             assert_eq!(horizontal.accesskit_node().max_numeric_value(), Some(x_room), "horizontal scroll room with Overscroll {overscroll}");

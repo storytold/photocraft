@@ -7,6 +7,7 @@ use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
 use craft::ui::display::{Divider, Text};
+use craft::ui::form::Field;
 use craft::ui::layout_components::Row;
 use craft::ui::runtime::env::{Label, UnitKind};
 use craft::ui::text::NumberField;
@@ -205,9 +206,15 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
     match tool {
         Tool::FreeformPen => {
             Divider::vertical().show(ui);
-            let field =
-                NumberField::new(label(tl!("Curve Fit:")), Bind::given(Some(f64::from(o.curve_fit)))).range(0.5..=10.0).unit_kind(UnitKind::Pixels).show(ui);
-            if let Some(Some(v)) = field.value().copied() {
+            // In a `Field`: a bare control's label only names it, it is not drawn (#16338).
+            let picked = Field::new(label(tl!("Curve Fit:")))
+                .show(ui, |ui, _| {
+                    let field = NumberField::new(label(tl!("Curve Fit:")), Bind::given(Some(f64::from(o.curve_fit))));
+                    field.range(0.5..=10.0).unit_kind(UnitKind::Pixels).show(ui).value().copied()
+                })
+                .inner
+                .flatten();
+            if let Some(Some(v)) = picked {
                 o.curve_fit = v as f32;
             }
             let alt = crate::shortcuts::pretty("Alt");
