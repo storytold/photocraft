@@ -907,7 +907,9 @@ fn mixer_load_pixel(s: &mut Session, p: &Value) -> Result<Value> {
     let (x, y) = (coord("x")?, coord("y")?);
     let size = crate::sample_cmds::size_param(cmd, p)?;
     let which = if flag(p, "sampleAllLayers", s.tools.brush.mixer.sample_all_layers) {
-        crate::sample_cmds::SampleLayers::All
+        // The load is painted into a layer; including adjustments here would apply them twice
+        // (#15464). The eyedropper's `All` keeps its adjusted-composite behaviour.
+        crate::sample_cmds::SampleLayers::AllNoAdjustments
     } else {
         crate::sample_cmds::SampleLayers::Current
     };
