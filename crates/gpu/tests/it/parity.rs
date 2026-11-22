@@ -3167,20 +3167,30 @@ fn documents_larger_than_the_texture_limit() {
     let Some(mut g) = gpu() else { return };
     let mut d = small_big_doc();
     assert!(g.paged.supports(&d).is_ok());
+    // These warm renders check paging stats. Wait for them without reading pixels back again.
+    let paged_stats = |g: &mut Gpu, d: &Document, rect: Rect| {
+        let stats = g.paged.render(&g.device, &g.queue, d, rect.intersect(&d.bounds()), |_, _| {}).expect("warm paged render");
+        if let Some(health) = g.paged.health() {
+            assert!(health.wait(&g.device, None), "warm paged render failed: {:?}", health.fault());
+        } else {
+            g.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).expect("wait for the warm paged render");
+        }
+        stats
+    };
     // Every pass sees page borders, and effect maps and blurs crossing them.
     check(&mut g, &d, "big document");
-    let s = photocraft_gpu::render_to_vec_stats(&mut g.paged, &g.device, &g.queue, &d, d.bounds()).unwrap().1;
+    let s = paged_stats(&mut g, &d, d.bounds());
     assert!(s.cells >= 9 && s.chunks == s.cells, "{s:?}");
     // A viewport off the page grid covers only its cells (3 x 2).
     let view = Rect::new(200, 230, 530, 430);
     diff_rect(&mut g, &d, view, "viewport").unwrap_or_else(|e| panic!("{e}"));
-    let s = photocraft_gpu::render_to_vec_stats(&mut g.paged, &g.device, &g.queue, &d, view).unwrap().1;
+    let s = paged_stats(&mut g, &d, view);
     assert_eq!(s.cells, 6, "{s:?}");
     // A dab across a page corner on the effect layer, and an edit elsewhere.
     d.layers[3].surface_mut().unwrap().fill_rect(Rect::new(240, 240, 270, 270), &[0.1, 0.1, 0.9, 1.0]);
     d.layers[2].surface_mut().unwrap().fill_rect(Rect::new(500, 250, 520, 270), &[0.0, 0.0, 0.0, 0.0]);
     check(&mut g, &d, "after dabs");
-    let s = photocraft_gpu::render_to_vec_stats(&mut g.paged, &g.device, &g.queue, &d, d.bounds()).unwrap().1;
+    let s = paged_stats(&mut g, &d, d.bounds());
     assert_eq!((s.tiles_uploaded, s.fx_shapes), (0, 0), "nothing changed since the last render: {s:?}");
 }
 
