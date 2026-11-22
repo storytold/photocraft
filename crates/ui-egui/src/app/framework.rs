@@ -2,10 +2,9 @@
 //! (craft-libs docs/craft-framework.md 2.2, "Host the runtime from your own eframe `App`"):
 //! installed once with PhotoCraft's fonts, then given PhotoCraft's preferences before each frame.
 //!
-//! eframe's `ui` would also call `embed::before_ui`, which needs craft-ui-shell's `app` feature;
-//! that feature turns on egui's `default_fonts`, which PhotoCraft leaves out (it ships them
-//! deflated). Its two jobs are PhotoCraft's own here: `work_area::fit_window` fits the window to
-//! its monitor, and the Windows window comes from PhotoCraft's title bar code.
+//! eframe's `ui` calls `embed::before_ui` first, which hands the runtime the native window (on
+//! Windows the runtime answers its hit test: resize edges, the title bar's move area, snap
+//! layouts) and fits the window to its monitor once.
 //!
 //! The `craft` facade features PhotoCraft enables for this: `text`, `text-font-picker`,
 //! `font-manager`, `menu`, `timeline` and `print`, plus `dialogs` on native targets.

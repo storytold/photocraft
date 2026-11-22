@@ -1252,6 +1252,29 @@ fn pointer(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Reply {
     if space {
         ToolHost::inject(ctx, canvas, ToolInput::hold(Key::Space));
     }
+    if crate::diag::on() {
+        let space_ppp = ToolHost::shown_space(ctx, canvas).map(|space| space.pixels_per_point);
+        let points: Vec<String> = parsed
+            .events
+            .iter()
+            .map(|step| {
+                let at = view.to_screen(Point::new(step.x, step.y));
+                let kind = match step.kind {
+                    PointerKind::Down => "down",
+                    PointerKind::Move => "move",
+                    PointerKind::Up => "up",
+                };
+                format!("{kind}@{:.1},{:.1}", at.x, at.y)
+            })
+            .collect();
+        diag!(
+            "pointer frame={} canvas={canvas:?} viewport={:?} tool={:?} view={view:?} space_ppp={space_ppp:?} steps=[{}]",
+            ctx.cumulative_frame_nr(),
+            ctx.viewport_id(),
+            app.ui.tool,
+            points.join(" ")
+        );
+    }
     for step in &parsed.events {
         ToolHost::inject(ctx, canvas, tool_input(&view, step, button, mods));
     }
