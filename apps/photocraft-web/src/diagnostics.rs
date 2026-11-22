@@ -39,9 +39,26 @@ pub fn take_panic() -> Option<String> {
 pub fn is_trap(name: &str, message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     name == "RuntimeError"
-        || ["unreachable", "memory access out of bounds", "maximum call stack", "could not allocate memory", "out of memory"]
-            .iter()
-            .any(|m| message.contains(m))
+        // A failed request can call its host "unreachable" without stopping the module.
+        || matches!(
+            message.trim(),
+            "unreachable"
+                | "error: unreachable"
+                | "runtimeerror: unreachable"
+                | "uncaught error: unreachable"
+                | "uncaught runtimeerror: unreachable"
+                | "uncaught (in promise) runtimeerror: unreachable"
+        )
+        || [
+            "unreachable executed",
+            "unreachable code should not be executed",
+            "memory access out of bounds",
+            "maximum call stack",
+            "could not allocate memory",
+            "out of memory",
+        ]
+        .iter()
+        .any(|m| message.contains(m))
 }
 
 /// Trap messages (lowercase, matched ignoring case) that mean an allocation failed:
@@ -109,13 +126,38 @@ mod tests {
     fn only_traps_count() {
         assert!(is_trap("RuntimeError", "unreachable"));
         assert!(is_trap("RuntimeError", ""));
+        assert!(is_trap("RuntimeError", "divide by zero"));
+        for message in [
+            "unreachable",
+            "Error: unreachable",
+            "RuntimeError: unreachable",
+            "Uncaught Error: unreachable",
+            "Uncaught RuntimeError: unreachable",
+            "Uncaught (in promise) RuntimeError: unreachable",
+            "RuntimeError: unreachable executed",
+        ] {
+            assert!(is_trap("", message), "{message}");
+        }
         assert!(is_trap("RangeError", "Maximum call stack size exceeded"));
         assert!(is_trap("RangeError", "WebAssembly.Memory(): could not allocate memory"));
         // Matched ignoring case: Safari's wording, reported without the RuntimeError name.
         assert!(is_trap("Error", "Unreachable code should not be executed"));
+        assert!(is_trap("Error", "Unreachable code should not be executed (evaluating 'module.run()')"));
         assert!(is_trap("Error", "Out of memory"));
         assert!(!is_trap("TypeError", "Failed to fetch"));
         assert!(!is_trap("Error", "ResizeObserver loop completed"));
+        for (name, message) in [
+            ("Error", "server unreachable"),
+            ("TypeError", "Failed to fetch: host unreachable"),
+            ("", "Error: endpoint unreachable"),
+            ("Error", "unreachable resource"),
+            ("Error", "Uncaught Error: server unreachable"),
+            ("Error", "network unreachable"),
+            ("", "server: unreachable"),
+            ("", "NetworkError: unreachable"),
+        ] {
+            assert!(!is_trap(name, message), "unrelated error classified as a trap: {name}: {message}");
+        }
     }
 
     #[test]

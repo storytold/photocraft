@@ -108,6 +108,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         params,
         k,
         tool_colors: (app.session.tools.foreground, app.session.tools.background),
+        scratch: crate::scratch_reads::generation(),
     };
     app.filter_live.begin(session_of(&request), PixelRect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y1));
     let key = request.doc.0 ^ (1u64 << 61);
