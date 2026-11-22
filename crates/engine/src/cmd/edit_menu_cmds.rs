@@ -88,12 +88,12 @@ fn fadeable(id: &str) -> bool {
 }
 
 /// Called after every successful command: remember a fadeable result.
-pub(crate) fn after_command(s: &mut Session, id: &str, params: &Value) {
+pub(crate) fn after_command(s: &mut Session, id: &str, params: &Value, before: &crate::actions_record::Before) {
     if !fadeable(id) {
         keep_after_visibility(s, id, params);
         return;
     }
-    let Some(st) = s.active() else { return };
+    let Some(st) = s.active().filter(|st| before.document_changed(st)) else { return };
     let label = st.history.undo_label().unwrap_or(id).to_string();
     let before = st.history.past_len().checked_sub(1).and_then(|i| st.history.row_id(i));
     let prev = st.history.state(st.history.past_len().wrapping_sub(1));

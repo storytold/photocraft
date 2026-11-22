@@ -215,3 +215,6 @@ mod parse_hex_tests {
         assert_eq!(parse_hex("#0f0f0fff"), Some([g, g, g, 1.0]));
     }
 }
+
+#[cfg(test)]
+mod color_balance_identity_tests;

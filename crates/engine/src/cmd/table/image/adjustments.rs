@@ -132,6 +132,21 @@ pub fn specs() -> Vec<CommandSpec> {
                 } else {
                     adj
                 };
+                // A neutral Color Balance on a pixel layer leaves History and Redo alone.
+                // Action playback and isolated targets keep their ordinary edit path.
+                if matches!(&adj, photocraft_doc::Adjustment::ColorBalance { shadows, midtones, highlights, .. }
+                    if [shadows, midtones, highlights].into_iter().flatten().all(|v| *v == 0.0))
+                    && !crate::actions_cmds::history_policy_in_use(s)
+                    && crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels
+                    && crate::color_channels::target(s, p)?.is_none()
+                {
+                    let id = crate::cmd::layer_param(s, p)?;
+                    let doc = &s.active().ok_or(crate::EngineError::NoDocument)?.doc;
+                    crate::cmd::check_pixels_unlocked(doc, id)?;
+                    if matches!(doc.layer(id).map(|layer| &layer.content), Some(photocraft_doc::LayerContent::Raster(_))) {
+                        return Ok(Value::Null);
+                    }
+                }
                 let label = adj.label().to_string();
                 // A smart object records the adjustment as a smart filter (Photoshop), which
                 // re-runs from the source instead of baking into a copy of the pixels.

@@ -357,7 +357,8 @@ pub(crate) fn add_point(app: &mut PhotocraftApp, at: [f64; 2], every_channel: bo
 /// the reference application's Photo Filter reopens at Warming Filter (85) and 25 % every time,
 /// but with Preserve Luminosity as last confirmed (measured 2026-11-08, #9879). ⌥ still reopens
 /// at all the last settings ([`open_last`]).
-const KEEPS_LAST: &[(&str, &str)] = &[("photoFilter", "preserveLuminosity")];
+const KEEPS_LAST: &[(&str, &str)] = &[("photoFilter", "preserveLuminosity"), ("colorBalance", "preserveLuminosity")];
+const COLOR_BALANCE_PREVIEW: &str = "ui.colorBalancePreview";
 
 /// The saved-tier key of the settings last confirmed in the dialog of `kind`.
 pub fn last_key(kind: &str) -> SaveKey {
@@ -620,6 +621,10 @@ fn open_hosted(app: &mut PhotocraftApp, command: &str, recorded: Value, smart: O
     .held_ok();
     if let Some(idx) = app.session.active_index() {
         dialog = dialog.canvas(crate::canvas::document_display::CanvasHost::primary(app, idx).canvas_id());
+    }
+    if kind == "colorBalance" && smart.is_none() {
+        let preview = app.session.prefs().dialogs.get(COLOR_BALANCE_PREVIEW).and_then(Value::as_bool).unwrap_or(true);
+        dialog = dialog.preview(preview);
     }
     if kind == "curves" {
         dialog = dialog.resizable(true).remember(SaveKey::new("photocraft.adjust.curves"));
@@ -888,6 +893,14 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if let Some(id) = app.adjust_open.as_ref().map(|open| open.id)
         && hosted(app, id).is_some()
     {
+        if app.adjust_open.as_ref().is_some_and(|open| open.kind == "colorBalance" && open.smart_filter.is_none() && open.recorded == json!({}))
+            && let Some(preview) = hosted(app, id).map(HostedAdjustDialog::is_previewing)
+            && preview != app.session.prefs().dialogs.get(COLOR_BALANCE_PREVIEW).and_then(Value::as_bool).unwrap_or(true)
+        {
+            app.session.prefs.edit(|prefs| {
+                prefs.dialogs.insert(COLOR_BALANCE_PREVIEW.into(), json!(preview));
+            });
+        }
         answer_asks(app, id);
         follow_target(app, id);
         answer_held(app, ctx, id);

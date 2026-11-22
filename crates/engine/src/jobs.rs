@@ -2007,7 +2007,7 @@ impl Session {
         {
             st.channel_view.layer_mask = None;
         }
-        crate::edit_menu_cmds::after_command(self, id, &params);
+        crate::edit_menu_cmds::after_command(self, id, &params, before);
         crate::automate_cmds::after_command(self, id);
         self.sync_preset_store();
         if !journal {

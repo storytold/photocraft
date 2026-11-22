@@ -27,6 +27,7 @@ use crate::Session;
 #[derive(Clone, Default)]
 pub(crate) struct Before {
     doc: Option<Arc<Document>>,
+    revision: u64,
     active_layer: Option<LayerId>,
     /// Every selected layer: a `layer` that is one of several stays explicit, because without it
     /// a layer command acts on the whole selection ([`crate::layer_multi_cmds::targets`]).
@@ -36,9 +37,13 @@ pub(crate) struct Before {
 impl Before {
     pub(crate) fn capture(s: &Session) -> Self {
         match s.active() {
-            Some(st) => Self { doc: Some(st.doc.clone()), active_layer: st.active_layer, selected: st.selected_layers().to_vec() },
+            Some(st) => Self { doc: Some(st.doc.clone()), revision: st.revision, active_layer: st.active_layer, selected: st.selected_layers().to_vec() },
             None => Self::default(),
         }
+    }
+
+    pub(crate) fn document_changed(&self, st: &crate::DocState) -> bool {
+        self.doc.as_ref().is_none_or(|doc| doc.id != st.doc.id || self.revision != st.revision)
     }
 }
 
