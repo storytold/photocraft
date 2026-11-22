@@ -1970,6 +1970,74 @@ fn the_palette_dialogs_offer_set_transparent_and_the_pipette() {
     }
 }
 
+/// The palette grid is operated from the keyboard: the arrows move the focus from cell to cell (the
+/// grid is one Tab stop, not 256). Space opens the Color Picker on the focused entry and marks that
+/// entry as the transparent one while Set Transparent is armed, and every cell is named in the
+/// accessibility tree by its index and its colour, with the table's transparent entry marked.
+#[test]
+fn the_palette_cells_take_the_keyboard_and_name_themselves() {
+    let mut session = photocraft_engine::Session::new();
+    // A transparent background: the web conversion then appends its transparent entry (index 216).
+    session.execute("file.new", json!({"width": 4, "height": 4, "depth": 8, "background": "transparent"})).unwrap();
+    session.execute("image.mode.indexedColor", json!({"palette": "web", "dither": "none"})).unwrap();
+    let app = PhotocraftApp::new(session, crate::Services::default());
+    let mut harness = harness(app, egui::vec2(900.0, 1100.0));
+    let id = open(harness.state_mut(), "image.mode.colorTable").unwrap();
+    harness.run_steps(3);
+    // A cell's node is named by its index and the colour the table holds there.
+    let cell = |app: &PhotocraftApp, i: usize| {
+        let colors = crate::dialogs::palette_file_ui::table_rgb(&fields_of(app, id), crate::dialogs::palette_file_ui::COLORS_FIELD).expect("the grid's table");
+        let [r, g, b] = colors[i];
+        format!("{i} #{r:02x}{g:02x}{b:02x}")
+    };
+    let transparent = fields_of(harness.state(), id)
+        .int(crate::dialogs::palette_file_ui::TRANSPARENT)
+        .expect("the web table keeps the transparent entry it appended") as usize;
+    assert_eq!(transparent, 216);
+
+    // The entry that carries transparency says so in its state; a plain entry does not.
+    let marked = harness.get_by_label(&cell(harness.state(), transparent)).accesskit_node().toggled();
+    assert_eq!(marked, Some(egui::accesskit::Toggled::True), "the transparent entry is marked");
+    assert_eq!(harness.get_by_label(&cell(harness.state(), 5)).accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+
+    // The keyboard moves between the cells: the lead cell takes the Tab stop and the arrows walk it.
+    harness.get_by_label(&cell(harness.state(), 0)).focus();
+    harness.run_steps(2);
+    assert!(harness.get_by_label(&cell(harness.state(), 0)).is_focused(), "the first cell takes the focus");
+    harness.key_press(egui::Key::ArrowRight);
+    harness.run_steps(2);
+    assert!(harness.get_by_label(&cell(harness.state(), 1)).is_focused(), "Right moves one cell");
+    harness.key_press(egui::Key::ArrowDown);
+    harness.run_steps(2);
+    assert!(harness.get_by_label(&cell(harness.state(), 17)).is_focused(), "Down moves one row");
+    harness.key_press(egui::Key::End);
+    harness.run_steps(2);
+    assert!(harness.get_by_label(&cell(harness.state(), 31)).is_focused(), "End moves to the row's last cell");
+
+    // Space operates the focused cell: it opens the Color Picker on that entry, whose answer lands in
+    // the table at the entry's index (Enter is the dialog's OK, as in Photoshop).
+    harness.key_press(egui::Key::Space);
+    harness.run_steps(3);
+    let picker = top_dialog(harness.state());
+    assert_ne!(picker, id, "the Color Picker opened over the dialog");
+    set(harness.state_mut(), picker, "color", json!("#123456"));
+    let ctx = harness.ctx.clone();
+    crate::dialogs::confirm(harness.state_mut(), &ctx, picker).expect("OK is enabled");
+    harness.run_steps(3);
+    let colors = crate::dialogs::palette_file_ui::table_rgb(&fields_of(harness.state(), id), crate::dialogs::palette_file_ui::COLORS_FIELD).unwrap();
+    assert_eq!(colors[31], [0x12, 0x34, 0x56], "the pick lands on the entry the focused cell stands for");
+
+    // With Set Transparent armed, the same key marks the focused entry as the transparent one.
+    harness.get_by_label("Set Transparent").click();
+    harness.run_steps(2);
+    harness.get_by_label(&cell(harness.state(), 31)).focus();
+    harness.run_steps(2);
+    harness.key_press(egui::Key::Space);
+    harness.run_steps(2);
+    assert_eq!(fields_of(harness.state(), id).int(crate::dialogs::palette_file_ui::TRANSPARENT), Some(31), "Space marks the focused entry");
+    assert_eq!(harness.get_by_label(&cell(harness.state(), 31)).accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "and the tree says so");
+}
+
 /// The palette pipette: armed from its button, a press on the image highlights the entry the pixel
 /// uses — its colour's entry, or the table's transparent entry over a clear pixel.
 #[test]

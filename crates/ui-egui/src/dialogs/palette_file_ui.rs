@@ -301,21 +301,76 @@ fn srgba([r, g, b]: [u8; 3]) -> Srgba {
 
 /// The 16×16 table drawn as touching cells: each entry's colour, a dashed slot for one the table
 /// does not have yet, a checkerboard and an X over the transparent entry, and an accent ring around
-/// the entry the palette pipette last highlighted. Returns the cell a click landed on.
+/// the entry the palette pipette last highlighted. Returns the grid's response and the cell a click —
+/// or Enter or Space on the focused cell — landed on.
+///
+/// The cells are keyboard-operable. The grid is one Tab stop and the arrows move the focus inside it
+/// (wrapping at the edges), Home and End go to the ends of the focused row and Command+Home/End to
+/// the table's first and last cell, so Tab does not have to walk 256 slots. Space acts on the focused
+/// cell exactly as a click does: the host opens the Color Picker on that entry, or marks it while Set
+/// Transparent is armed. Every slot is a node in the accessibility tree, named by its index and its
+/// colour, and the entry that carries the table's transparency reports as selected.
 fn grid(ui: &mut egui::Ui, colors: &[[u8; 3]], transparent: Option<usize>, highlight: Option<usize>) -> (egui::Response, Option<usize>) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let side = CELL * COLS as f32;
-    let (rect, response) = ui.allocate_exact_size(vec2(side, side), Sense::click());
-    if response.hovered()
-        && let Some(i) = response.hover_pos().and_then(|p| cell_at(rect, p))
-    {
-        let name = colors.get(i).map_or_else(|| format!("{i}"), |[r, g, b]| format!("{i} #{r:02x}{g:02x}{b:02x}"));
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        response.clone().on_hover_text(name);
+    let (rect, response) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
+    let cell_id = |i: usize| ui.scope_id().with(("paletteCell", i));
+    // The cell the keyboard is on: only it takes a Tab stop, so the grid is one control to Tab
+    // through instead of 256 (egui moves tab focus to every focusable widget it is offered).
+    let lead_key = ui.scope_id().with("paletteLead");
+    let focused = ui.ctx().memory(|m| m.focused()).and_then(|id| (0..CELLS).find(|&i| cell_id(i) == id));
+    let stepped = focused.and_then(|at| {
+        let (row, col) = (at / COLS, at % COLS);
+        let ctrl = ui.input(|i| i.modifiers.command);
+        ui.input(|i| {
+            let (first, last) = if ctrl { (0, CELLS - 1) } else { (row * COLS, row * COLS + COLS - 1) };
+            if i.key_pressed(egui::Key::ArrowLeft) {
+                Some(if col == 0 { last } else { at - 1 })
+            } else if i.key_pressed(egui::Key::ArrowRight) {
+                Some(if col + 1 == COLS { first } else { at + 1 })
+            } else if i.key_pressed(egui::Key::ArrowUp) {
+                Some((at + CELLS - COLS) % CELLS)
+            } else if i.key_pressed(egui::Key::ArrowDown) {
+                Some((at + COLS) % CELLS)
+            } else if i.key_pressed(egui::Key::Home) {
+                Some(first)
+            } else if i.key_pressed(egui::Key::End) {
+                Some(last)
+            } else {
+                None
+            }
+        })
+    });
+    let lead = stepped.or(focused).or_else(|| ui.data(|d| d.get_temp::<usize>(lead_key))).unwrap_or(0).min(CELLS - 1);
+    if stepped.is_some() {
+        ui.data_mut(|d| d.insert_temp(lead_key, lead));
+    }
+    // One response per cell: the node a screen reader names, and the control the keyboard acts on.
+    let cells: Vec<egui::Response> = (0..CELLS)
+        .map(|i| {
+            let sense = if i == lead { Sense::click() } else { Sense::CLICK };
+            let cell = ui.interact(cell_rect(rect, i), cell_id(i), sense);
+            let name = colors.get(i).map_or_else(|| format!("{i}"), |[r, g, b]| format!("{i} #{r:02x}{g:02x}{b:02x}"));
+            cell.widget_info(|| egui::WidgetInfo::selected(egui::Role::GridCell, true, transparent == Some(i), name.clone()));
+            if cell.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                cell.clone().on_hover_text(name);
+            }
+            if i == lead {
+                // The arrows move within the grid: keep egui from moving the focus away with them, as a
+                // slider does for its own arrows, so the grid stays one Tab stop.
+                ui.memory_mut(|m| m.set_focus_lock_filter(cell.id, egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() }));
+            }
+            cell
+        })
+        .collect();
+    if stepped.is_some() {
+        // Move the keyboard's focus with the arrows: egui's own focus, so a screen reader follows it.
+        cells[lead].request_focus();
     }
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
-        for i in 0..CELLS {
+        for (i, response) in cells.iter().enumerate() {
             let cell = cell_rect(rect, i).shrink(0.5);
             match colors.get(i) {
                 Some([r, g, b]) => {
@@ -336,9 +391,22 @@ fn grid(ui: &mut egui::Ui, colors: &[[u8; 3]], transparent: Option<usize>, highl
                 // The entry the palette pipette last matched, ringed (over a colour or a checker).
                 painter.rect_stroke(cell.shrink(0.5), 1.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
             }
+            if response.has_focus() {
+                // Where the keyboard is: an inner ring, clear of the pipette's highlight, so the arrows
+                // show the cell Enter or Space will act on.
+                painter.rect_stroke(cell.shrink(1.0), 1.0, Stroke::new(1.5, t.text), StrokeKind::Inside);
+            }
         }
     }
-    let hit = response.clicked().then(|| response.interact_pointer_pos().and_then(|p| cell_at(rect, p))).flatten();
+    // A click, or Space on the focused cell, acts on that cell: Space is the key a focused egui
+    // control is activated with, and it is consumed so nothing below also reads it. Enter belongs to
+    // the dialog's OK, as it does in Photoshop, and the craft framework routes it there before a row
+    // can see it (a row is not one of the framework's focus stops).
+    let hit = cells.iter().position(egui::Response::clicked).or_else(|| {
+        let at = cells.iter().position(egui::Response::has_focus)?;
+        let acted = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space));
+        acted.then_some(at)
+    });
     (response, hit)
 }
 
@@ -348,7 +416,9 @@ fn cell_rect(rect: Rect, i: usize) -> Rect {
     Rect::from_min_size(pos2(rect.left() + col as f32 * CELL, rect.top() + row as f32 * CELL), vec2(CELL, CELL))
 }
 
-/// The cell `p` falls in, if any.
+/// The cell `p` falls in, if any. The grid's cells are widgets of their own now, so nothing in the
+/// dialog maps a pointer position to a cell; this pins the geometry the widgets are laid out by.
+#[cfg(test)]
 fn cell_at(rect: Rect, p: egui::Pos2) -> Option<usize> {
     if !rect.contains(p) {
         return None;
