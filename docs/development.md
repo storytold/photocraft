@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Rust stable (1.95+). Add the web target with `rustup target add wasm32-unknown-unknown`.
+- Rust: `rust-toolchain.toml` names the release CI builds with, and rustup installs it with the web target on first use (`rust-version` in Cargo.toml is the oldest release the sources support, 1.95).
 - macOS, Windows or Linux. On Linux, install the windowing, GL and GTK development packages:
   - Debian/Ubuntu: `sudo apt install libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev`
   - Fedora/RHEL: `sudo dnf install libxkbcommon-devel wayland-devel libX11-devel libXrandr-devel libXi-devel mesa-libGL-devel gtk3-devel`
@@ -45,6 +45,7 @@ cargo run --release -p photocraft -- --control 7878 --control-token-file .privat
 cargo test --workspace                                     # everything
 cargo xtask test                                           # tests (nextest when installed) + doctests
 cargo xtask ci                                             # the CI gate: fmt, clippy, layers, scorecard, tests, panic_hunt, doctests, wasm, i18n report
+cargo xtask ci lint                                        # only the gate's steps that need no test build (its lint leg)
 cargo xtask stats                                          # tests and lines per crate
 cargo xtask parity                                         # Photoshop menu coverage -> docs/parity-checklist.md
 ```
@@ -64,7 +65,7 @@ cargo nextest run --workspace              # parallel across binaries (cargo ins
 cargo test --doc --workspace               # nextest does not run doctests
 ```
 
-[cargo-nextest](https://nexte.st) runs each test in its own process. `.config/nextest.toml` puts the GPU tests (`photocraft-gpu`, and ui-egui's integration and canvas/GPU tests) in a group of at most 4 at a time, because each process opens its own wgpu device and the in-process `gpu_lock()` no longer serializes them. On a 32-thread Windows machine the full workspace went from 297 s (`cargo test`) to about 120 s (#2204). Ignored tests run with `cargo nextest run --run-ignored only`. The longest sweeps (`photocraft-testkit`'s `Sweep`) run a quarter of their cases, a different quarter each UTC day; `PHOTOCRAFT_FULL_SWEEP=1` runs all of them, and `PHOTOCRAFT_SWEEP_PART=<n>` replays the part a failing run printed. CI runs it with `--profile ci` (fail-fast, a 10-minute hang timeout), plus `cargo test --doc` for the doctests (#6117); `PHOTOCRAFT_FULL_SWEEP=1 cargo test --workspace` stays the final check before a PR.
+[cargo-nextest](https://nexte.st) runs each test in its own process. `.config/nextest.toml` puts the GPU tests (`photocraft-gpu`, and every test in a module named `gpu_tests` or `<name>_gpu_tests`: the tests that build a wgpu device) in a group of at most 4 at a time, because each process opens its own wgpu device and the in-process `gpu_lock()` no longer serializes them. Every other test runs on the CPU canvas at full parallelism, so a new test that needs a device goes in such a module. On a 32-thread Windows machine the full workspace went from 297 s (`cargo test`) to about 120 s (#2204). Ignored tests run with `cargo nextest run --run-ignored only`. The longest sweeps (`photocraft-testkit`'s `Sweep`) run a quarter of their cases, a different quarter each UTC day; `PHOTOCRAFT_FULL_SWEEP=1` runs all of them, and `PHOTOCRAFT_SWEEP_PART=<n>` replays the part a failing run printed. CI runs it with `--profile ci` (fail-fast, a 10-minute hang timeout), plus `cargo test --doc` for the doctests (#6117); `PHOTOCRAFT_FULL_SWEEP=1 cargo test --workspace` stays the final check before a PR.
 
 ### Long matrix tests and CI timings
 
@@ -99,7 +100,7 @@ On a native host with a working wgpu adapter, capture the two images into a fres
     set -eu
     shortcut_snapshots="$(mktemp -d)"
     PHOTOCRAFT_SHORTCUT_SNAPSHOTS="$shortcut_snapshots" cargo test -p photocraft-ui-egui --lib \
-        prefs_ui::shortcut_capture_tests::captured_shortcut_gpu_snapshots -- --exact
+        prefs::prefs_ui::shortcut_capture_tests::captured_shortcut_gpu_snapshots -- --exact
     test -s "$shortcut_snapshots/ctrl-k-1x.png"
     test -s "$shortcut_snapshots/ctrl-k-2x.png"
     printf 'Review the shortcut row and conflict message in %s\n' "$shortcut_snapshots"
@@ -113,7 +114,7 @@ the opted-in test; an unset variable leaves the ordinary behavior tests availabl
 After review, remove only the two generated PNGs and their owned temporary directory. The same
 Rust test and variable work on Windows with the native shell's environment-variable syntax.
 
-**GPU tests without a GPU.** Linux CI uses the shared `craft-common-actions` gate with Mesa's Vulkan driver installed. After the regular gate, `python3 scripts/ci-gpu-lavapipe.py` reruns the configured `gpu` group with `WGPU_BACKEND=vulkan` and the lavapipe ICD explicitly selected. It requires Vulkan parity evidence and rejects authored skips, except the documented software-adapter timing exceptions. It reads the filter from `.config/nextest.toml`, so no second filter needs maintaining. To run locally on Linux, install `mesa-vulkan-drivers libvulkan1` and run the same script. Windows uses WARP; this check does not certify Windows skip coverage.
+**GPU tests without a GPU.** Linux CI uses the shared `craft-common-actions` gate with Mesa's Vulkan driver installed. The gate builds the tests once into a nextest archive (`cargo xtask ci archive`) and runs them in shards from it (`cargo xtask ci tests`). One shard runs the configured `gpu` group alone, through `python3 scripts/ci-gpu-lavapipe.py`, with `WGPU_BACKEND=vulkan` and the lavapipe ICD explicitly selected; the other shards split the remaining tests. The script requires Vulkan parity evidence in that shard's output and rejects authored skips, except the documented software-adapter timing exceptions. xtask reads the group's filter from `.config/nextest.toml`, so no second filter needs maintaining. To run locally on Linux, install `mesa-vulkan-drivers libvulkan1`, build an archive and run `python3 scripts/ci-gpu-lavapipe.py <extracted>/target/debug/xtask ci tests --from <extracted> --gpu` as `scripts/ci-test-shard.sh` does. Windows uses WARP; this check does not certify Windows skip coverage.
 
 ## Fonts (craft-fonts)
 
@@ -190,7 +191,7 @@ A file dragged in from the desktop logs two lines at `info` (`file_open.rs`; fil
 |---|---|
 | `PHOTOCRAFT_GPU=1` (or `=0`) | Headless CLI: prefer GPU composition and flat export (0 to disable, empty to unset). Explicit `--gpu`/`--no-gpu` CLI flags override this variable. `file.export.quickExport` composites and encodes inside the engine, which has no renderer, so it always runs on the CPU; `run --gpu` prints a one-time warning when a step uses it |
 | `PHOTOCRAFT_CONTROL_PORT` | Same as `--control <port>`; also the port for `photocraft-cli serve --port` and `mcp --bridge` when the flag is absent. Empty is unset |
-| `PHOTOCRAFT_NO_PRINT` | Set to anything but `0`: `file.print` / `file.printOneCopy` refuse to spool (`dryRun` still works). CI sets it, with `LPDEST=photocraft-no-such-printer` as a second net; set both when running the panic hunt or fuzzers locally |
+| `PHOTOCRAFT_NO_PRINT` | Set to a non-empty value other than `0` (empty counts as unset): `file.print` / `file.printOneCopy` refuse to spool (`dryRun` still works) and `file.print.page` asks no printer driver. CI sets it, with `LPDEST=photocraft-no-such-printer` as a second net; set both when running the panic hunt or fuzzers locally |
 | `RUST_LOG` | Log levels for standard error and the log file (see [Logs](#logs)) |
 | `PHOTOCRAFT_CONTROL_TOKEN` | 64-hex bearer token for control TCP (avoid on shared systems where environment inspection is possible) |
 | `PHOTOCRAFT_CONTROL_TOKEN_FILE` | Read, or create for a server, the control bearer-token file |
@@ -260,7 +261,7 @@ See `docs/control-protocol.md` for every method. Tips:
 - **macOS does not render occluded windows.** `ui.screenshot` raises the window first (`focus: true` by default). Use `ui.focus` before other visual checks.
 - **Capture only our own window.** For native captures (to see the real title bar and traffic lights), capture by window id (`screencapture -l <CGWindowID>`), never a screen region, which can grab other apps.
 - **Pointer gestures:** `ui.pointer` takes events in *document* coordinates and runs them through the same tool state machine as the mouse.
-- **Seeing tile storage:** `ui.set {"tileGrid": true}` overlays the active layer's stored tiles, which shows how sparse a layer is and which tiles share pixels (`ui-egui/src/tile_overlay.rs`).
+- **Seeing tile storage:** `ui.set {"tileGrid": true}` overlays the active layer's stored tiles, which shows how sparse a layer is and which tiles share pixels (`ui-egui/src/canvas/tile_overlay.rs`).
 
 ## Headless CLI
 
@@ -345,6 +346,7 @@ desktop directory `.pcraft` reads use only the granted read capabilities.
 
 Tools:
 
+- `agent_folders` (where the app opens and saves files for agents: `read_folder`, `write_folder`; a headless session with several read roots adds `read_folders`. With the preferences' folders empty this is the default agent folder, `Documents/ArtCraft/Agents/PhotoCraft`. In `--bridge` mode both are `null`, with a note: the app's own launch decides)
 - `session_list`
 - `doc_open`, `doc_new`, `doc_place`, `doc_replace_smart_object`, `doc_export_layers`, `doc_export_data_sets`, `doc_import_data_sets`, `doc_save`, `doc_export`, `doc_inspect`, `doc_render_preview` (returns a PNG image), `doc_select`, `doc_close`
 - `command_list`, `command_run`, `command_batch` (several commands per call)
@@ -1065,12 +1067,18 @@ scripts/fetch-corpus.sh            # the same as cargo xtask corpus --all
   turns it on).
 - With the feature on, a missing corpus is a failure ("run `cargo xtask corpus --all`"), never a
   silent skip, and every floor is enforced.
+- The tests that walk `corpus/psd`, `corpus/psd-tools` and `corpus/photoshop` take each
+  directory's fixed sample (`photocraft-testkit`'s `corpus` module: every colour mode and depth,
+  PSD and PSB, every tagged block key outside the large files, each oracle kind, at small canvas
+  sizes), so each test stays near a second. `PHOTOCRAFT_FULL_SWEEP=1` takes every file, as it
+  takes every case of the testkit sweeps; the Affinity test's sampled rows are marked in its table.
+  A sample file a pin removes fails the test: pick its replacement for the sample.
 - If you touch psd, io, codecs, compose, gpu, text or format, run `cargo xtask test-corpus` before
-  you finish.
-- The CI `corpus` job runs `cargo xtask corpus --all` and then `cargo xtask test-corpus` on every PR
-  and on main. `corpus/` is cached with `actions/cache`, keyed on the hash of `corpus_pins.rs` and
-  the manifests. A download happens only when a pin changes; otherwise the cache restores in seconds
-  and is re-verified (sha256) before the tests run. Fork PRs read the base branch's cache.
+  you finish, and `PHOTOCRAFT_FULL_SWEEP=1 cargo xtask test-corpus` when the change could reach
+  files outside the samples.
+- CI: the Linux gate builds the corpus tests in (`PHOTOCRAFT_CORPUS_TESTS=1`) and each test shard
+  runs `cargo xtask corpus --all` first (pinned, sha256-verified, about 20 MB). Pull requests and
+  main run the samples; the nightly run sets `PHOTOCRAFT_FULL_SWEEP=1` and runs every file.
 
 **Our own corpus: [photocraft-corpus](https://github.com/storytold/photocraft-corpus).**
 
@@ -1134,7 +1142,7 @@ the corpus pin, and review them against `xtask/photoshop-corpus.sha256`.
 
 These checks use PhotoCraft's own importer and inspector; they do **not** prove that
 Photoshop can open the output or interprets it correctly. The report marks those
-stages `not_run`. The ordinary CI corpus job does not yet run this recipe command or
+stages `not_run`. The ordinary CI gate does not yet run this recipe command or
 upload its artifacts; that integration and the Photoshop judge are separate work.
 
 ## Rendering fidelity (PSD oracle)

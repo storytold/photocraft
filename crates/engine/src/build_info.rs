@@ -16,6 +16,9 @@ pub const VERSION: &str = match option_env!("PHOTOCRAFT_OVERRIDE_VERSION") {
     None => env!("CARGO_PKG_VERSION"),
 };
 
+/// The releases page the About and memory-error texts link to.
+pub const RELEASES: &str = "https://github.com/storytold/photocraft/releases";
+
 /// The full git commit this build was made from, when the build environment recorded it.
 pub fn git_sha() -> Option<&'static str> {
     option_env!("PHOTOCRAFT_BUILD_SHA").map(str::trim).filter(|s| !s.is_empty())
