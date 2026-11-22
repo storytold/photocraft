@@ -10,6 +10,7 @@
 // the adapter `run` calls (`crop::pass`, `crop::finish`); the `mod` line is declared here.
 pub(crate) mod crop;
 pub(crate) mod dialog;
+pub(crate) mod global_warp;
 pub(crate) mod move_tool;
 pub(crate) mod retouch;
 pub(crate) mod selection;
@@ -43,6 +44,8 @@ type DynTool<'x> = &'x mut (dyn CanvasTool + 'x);
 enum GesturePick {
     /// The armed pick of the top dialog.
     Dialog,
+    /// The open Global Perspective Warp session's tool.
+    GlobalWarp,
     /// The open Free Transform session's tool.
     Transform,
     /// The open symmetry session's tool.
@@ -479,6 +482,8 @@ pub(crate) struct BodyShown {
     pub(crate) transform_snapped: Vec<SnapLine>,
     /// The open Free Transform's preview, which the body adds to the canvas's picture slot after the document.
     pub(crate) transform_picture: Vec<egui::Shape>,
+    /// The open Global Perspective Warp's preview mesh and guides, for the same slot.
+    pub(crate) global_picture: Vec<egui::Shape>,
 }
 
 /// Borrows a family tool as the host's `dyn`.
@@ -524,9 +529,13 @@ fn with_rig<R>(
         (Some(tool), Some(run)) => Some(crop::pass(tool, run, ctx, crop_shown)),
         _ => None,
     };
-    let command_wanted = stand_ins && !transform_open && takes_command_stand_in(tool);
-    let alt_wanted = stand_ins && !transform_open && super::cursor_policy::alt_eyedropper(tool);
-    let source_wanted = stand_ins && matches!(tool, Tool::CloneStamp | Tool::Healing);
+    // The Global Perspective Warp session owns every canvas of its document while it matches it (a New Window copy too, so
+    // a painting tool never edits the snapshot under the preview); no stand-in of the selected tool (⌘ as Move, ⌥ as
+    // Eyedropper) may take a press from it.
+    let global_open = crate::global_perspective_ui::owns_pointer(app, host.idx);
+    let command_wanted = stand_ins && !transform_open && !global_open && takes_command_stand_in(tool);
+    let alt_wanted = stand_ins && !transform_open && !global_open && super::cursor_policy::alt_eyedropper(tool);
+    let source_wanted = stand_ins && !global_open && matches!(tool, Tool::CloneStamp | Tool::Healing);
 
     let CanvasTools {
         momentary,
@@ -568,19 +577,24 @@ fn with_rig<R>(
                 boxed = Some(picked);
                 true
             });
-        let transform_picked = !dialog_picked && transform.is_some() && may(GesturePick::Transform);
-        let symmetry_picked = !dialog_picked && !transform_picked && symmetry.is_some() && may(GesturePick::Symmetry);
+        let global_picked = !dialog_picked && global_open && may(GesturePick::GlobalWarp);
+        let transform_picked = !dialog_picked && !global_picked && transform.is_some() && may(GesturePick::Transform);
+        let symmetry_picked = !dialog_picked && !global_picked && !transform_picked && symmetry.is_some() && may(GesturePick::Symmetry);
         if !in_gesture {
-            *gesture_pick = match (dialog_picked, transform_picked, symmetry_picked) {
-                (true, _, _) => GesturePick::Dialog,
-                (_, true, _) => GesturePick::Transform,
-                (_, _, true) => GesturePick::Symmetry,
+            *gesture_pick = match (dialog_picked, global_picked, transform_picked, symmetry_picked) {
+                (true, _, _, _) => GesturePick::Dialog,
+                (_, true, _, _) => GesturePick::GlobalWarp,
+                (_, _, true, _) => GesturePick::Transform,
+                (_, _, _, true) => GesturePick::Symmetry,
                 _ => GesturePick::Selected,
             };
         }
         let selected: DynTool<'_> = 'select: {
             if dialog_picked && let Some(picked) = boxed.as_mut() {
                 break 'select dynamic(picked);
+            }
+            if global_picked {
+                break 'select dynamic(boxed.insert(global_warp::tool(&scope)));
             }
             if transform_picked && let Some(t) = transform.as_mut() {
                 break 'select t as &mut dyn CanvasTool;
@@ -638,7 +652,9 @@ fn with_rig<R>(
             alt_t = Some(retouch::source_tool(&scope, state, host));
         }
         let alt_stand_in = alt_t.is_some();
-        let mut pre = Preflight { scope: &scope, inner: selected, tool, dialog: dialog_picked, outline_open, alt_stand_in };
+        // The session's presses are its own, like a dialog's pick: the painting refusals and the quick-pick chord belong to
+        // the selected tool and must not run before it.
+        let mut pre = Preflight { scope: &scope, inner: selected, tool, dialog: dialog_picked || global_picked, outline_open, alt_stand_in };
         let mut tool_host = ToolHost::new().momentary(momentary);
         if let Some(mover) = command_t.as_mut() {
             tool_host = tool_host.stand_in(StandInKey::Command, dynamic(mover));

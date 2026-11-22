@@ -46,6 +46,7 @@ const PLACE_AFTER: &[(&str, &str)] = &[
     ("view.rotateRight", "view.rotateLeft"),
     ("view.resetView", "view.rotateRight"),
     ("filter.other.colorToAlpha", "filter.other.offset"),
+    (photocraft_engine::global_perspective_cmds::COMMAND, "edit.perspectiveWarp"),
 ];
 
 /// The menu rows of one state of the app, built once and kept until a fact they show changes
@@ -198,6 +199,12 @@ pub fn base_rows(app: &PhotocraftApp) -> Vec<Row> {
             row = row.shortcut(chord);
         }
         extra.push(row);
+    }
+    // Edit › Global Perspective Warp: the engine command is headless (no menu of its own); the shell opens its guide
+    // editor. It is PhotoCraft's own, so it stays out of the Photoshop catalogue and its parity count.
+    {
+        let id = photocraft_engine::global_perspective_cmds::COMMAND;
+        extra.push(Row::new(&["Edit"], id, crate::global_perspective_ui::MENU_LABEL).enabled(is_enabled(app, id)));
     }
     for mut e in extra {
         let dup = rows.iter().any(|i| i.command.id == e.command.id || (i.path == e.path && i.label.trim_end_matches('…') == e.label.trim_end_matches('…')));

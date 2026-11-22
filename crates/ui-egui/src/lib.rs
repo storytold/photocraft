@@ -263,6 +263,7 @@ pub use tools::direct_select;
 pub use tools::eraser_ui;
 pub use tools::eyedropper_ui;
 pub use tools::frame_tool;
+pub use tools::global_perspective_ui;
 pub use tools::gradient_ui;
 pub use tools::magnetic_lasso_ui;
 pub use tools::move_box;
