@@ -564,12 +564,20 @@ const TERMINATION: [async_signal::Signal; 3] = [async_signal::Signal::Term, asyn
 /// caught and still counts as a crash.
 ///
 /// The signals are taken over on a thread of their own, for the whole run: once they are, they no
-/// longer end the process by themselves, so that thread has to. Returns whether they were taken
-/// over; when not (the thread or the handler couldn't be set up, or every one of them was inherited
-/// ignored) they keep their default action. A signal the process inherited ignored (`nohup`) is
-/// left ignored.
+/// longer end the process by themselves, so that thread has to. Returns whether any were taken
+/// over. A signal whose registration fails keeps its previous action. A signal the process
+/// inherited ignored (`nohup`) stays ignored.
 #[cfg(target_os = "linux")]
 pub fn release_on_termination(sentinel: SharedSentinel, previous: Option<Marker>) -> bool {
+    release_on_termination_with(sentinel, previous, |signals, signal| signals.add_signals([signal]))
+}
+
+#[cfg(target_os = "linux")]
+fn release_on_termination_with(
+    sentinel: SharedSentinel,
+    previous: Option<Marker>,
+    register: fn(&mut async_signal::Signals, async_signal::Signal) -> std::io::Result<()>,
+) -> bool {
     use futures_lite::StreamExt;
     let (ready, registered) = std::sync::mpsc::channel();
     let spawned = std::thread::Builder::new().name("photocraft-termination".into()).spawn(move || {
@@ -581,14 +589,27 @@ pub fn release_on_termination(sentinel: SharedSentinel, previous: Option<Marker>
             let _ = ready.send(false);
             return;
         }
-        let mut signals = match async_signal::Signals::new(wanted) {
+        let mut signals = match async_signal::Signals::new(std::iter::empty::<async_signal::Signal>()) {
             Ok(signals) => signals,
             Err(error) => {
-                log::warn!("termination signals keep their default action: {error}");
+                log::warn!("couldn't initialize termination handling: {error}");
                 let _ = ready.send(false);
                 return;
             }
         };
+        // Keep successful registrations even if a later one fails. Dropping the stream would
+        // remove their actions without restoring the old signal dispositions.
+        let mut taken = false;
+        for signal in wanted {
+            match register(&mut signals, signal) {
+                Ok(()) => taken = true,
+                Err(error) => log::warn!("couldn't register {signal:?} termination handling; keeping its previous action: {error}"),
+            }
+        }
+        if !taken {
+            let _ = ready.send(false);
+            return;
+        }
         let _ = ready.send(true);
         let signal = loop {
             match async_io::block_on(signals.next()) {
@@ -605,7 +626,7 @@ pub fn release_on_termination(sentinel: SharedSentinel, previous: Option<Marker>
     match spawned {
         Ok(_) => registered.recv().unwrap_or(false),
         Err(error) => {
-            log::warn!("termination signals keep their default action: {error}");
+            log::warn!("couldn't start termination handling: {error}");
             false
         }
     }

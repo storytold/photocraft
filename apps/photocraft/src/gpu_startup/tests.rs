@@ -621,7 +621,16 @@ fn termination_child() {
     s.write(Marker { backend: "auto".into(), adapter: "Mesa Intel(R) Iris(R) Graphics 5100".into(), adapter_backend: "gl".into(), ..Default::default() })
         .unwrap();
     let shared: SharedSentinel = Arc::new(Mutex::new(Some(s)));
-    let taken = release_on_termination(shared, previous.crashed().cloned());
+    let taken = if std::env::var_os("PHOTOCRAFT_TEST_TERMINATION_FAIL_INT").is_some() {
+        release_on_termination_with(shared, previous.crashed().cloned(), |signals, signal| {
+            if signal == async_signal::Signal::Int {
+                return Err(std::io::Error::other("SIGINT registration failed in the test"));
+            }
+            signals.add_signals([signal])
+        })
+    } else {
+        release_on_termination(shared, previous.crashed().cloned())
+    };
     println!("ready taken={taken}");
     std::thread::sleep(std::time::Duration::from_secs(30));
     panic!("not signalled");
@@ -644,18 +653,21 @@ fn termination_signals_are_not_graphics_crashes() {
     }
     // `ignored`: the signals the child starts with ignored, as `nohup` starts it with SIGHUP ignored
     // (kept across `exec`). Returns the child and whether it took the signals over.
-    let start_with = |dir: &Path, ignored: &str| -> (Reap, bool) {
+    let start_with = |dir: &Path, ignored: &str, fail_int: bool| -> (Reap, bool) {
         let exe = std::env::current_exe().unwrap();
         let args = ["--exact", "gpu_startup::tests::termination_child", "--nocapture", "--test-threads=1"];
-        let mut command = if !ignored.is_empty() {
-            let mut c = std::process::Command::new("sh");
-            c.args(["-c", &format!("trap '' {ignored}; exec \"$0\" \"$@\"")]).arg(exe).args(args);
-            c
+        let mut command = std::process::Command::new("env");
+        // Start with default dispositions even when the test runner was launched under nohup.
+        command.arg("--default-signal=HUP,INT,TERM");
+        if !ignored.is_empty() {
+            command.args(["sh", "-c", &format!("trap '' {ignored}; exec \"$0\" \"$@\"")]);
+        }
+        command.arg(exe).args(args);
+        if fail_int {
+            command.env("PHOTOCRAFT_TEST_TERMINATION_FAIL_INT", "1");
         } else {
-            let mut c = std::process::Command::new(exe);
-            c.args(args);
-            c
-        };
+            command.env_remove("PHOTOCRAFT_TEST_TERMINATION_FAIL_INT");
+        }
         let child =
             command.env("PHOTOCRAFT_TEST_TERMINATION_DIR", dir).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().unwrap();
         let mut child = Reap(child);
@@ -668,7 +680,7 @@ fn termination_signals_are_not_graphics_crashes() {
         (child, line.contains("taken=true"))
     };
     let start = |dir: &Path, ignore_hup: bool| -> Reap {
-        let (child, taken) = start_with(dir, if ignore_hup { "HUP" } else { "" });
+        let (child, taken) = start_with(dir, if ignore_hup { "HUP" } else { "" }, false);
         assert!(taken, "the signals are taken over");
         child
     };
@@ -709,7 +721,7 @@ fn termination_signals_are_not_graphics_crashes() {
     // Started with all three ignored, nothing is taken over (reported as such) and none of them
     // ends the process.
     let dir = temp_dir("signal-all-ignored");
-    let (child, taken) = start_with(&dir, "HUP INT TERM");
+    let (child, taken) = start_with(&dir, "HUP INT TERM", false);
     assert!(!taken, "no signal is taken over when all were inherited ignored");
     for signal in ["HUP", "INT", "TERM"] {
         send(&child, signal);
@@ -719,6 +731,25 @@ fn termination_signals_are_not_graphics_crashes() {
     assert!(child.0.try_wait().unwrap().is_none(), "ignored signals stay ignored");
     drop(child);
     let _ = std::fs::remove_dir_all(&dir);
+    // If adding SIGINT fails after SIGTERM was already registered, SIGTERM still cleans up
+    // and SIGINT still has its default disposition.
+    for (signal, number) in [("TERM", 15), ("INT", 2)] {
+        let dir = temp_dir(&format!("signal-partial-{signal}"));
+        let (mut child, taken) = start_with(&dir, "", true);
+        assert!(taken, "the successful registrations are kept");
+        send(&child, signal);
+        let status = child.0.wait().unwrap();
+        let (previous, sentinel) = begin_when_unlocked(&dir);
+        if signal == "TERM" {
+            assert_eq!(status.code(), Some(128 + number));
+            assert_eq!(previous, Previous::Clean);
+        } else {
+            assert_eq!(status.signal(), Some(number));
+            assert!(previous.crashed().is_some());
+        }
+        sentinel.expect("sentinel").finish();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     let dir = temp_dir("signal-KILL");
     assert_eq!(run(&dir, "KILL").signal(), Some(9));
     assert_eq!(begin_when_unlocked(&dir).0.crashed().map(|m| m.adapter_backend.as_str()), Some("gl"), "SIGKILL is still a crash");
