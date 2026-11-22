@@ -20,8 +20,9 @@ enum Step {
     Perspective(f64),
     EnterWarp,
     Pull(usize, f64, f64),
-    /// A drag of the surface at `(s, t)` through the real pull rule, `len` px at `angle`, frame by frame.
-    LongPull(f64, f64, f64, f64),
+    /// A drag of the surface at `(s, t)` through the real pull rule, `len` px at `angle`, frame by frame, repeated as
+    /// often as the last field says, each repeat pressing again where the first pressed (released and pulled again).
+    LongPull(f64, f64, f64, f64, usize),
     HoldWarp,
     LeaveWarp,
     Undo,
@@ -55,12 +56,20 @@ fn random_step(r: &mut Rng) -> Step {
         3 => Step::Corner(r.pick(4), r.range(-5.0, 5.0), r.range(-5.0, 5.0)),
         4 => Step::Perspective(r.range(-5.0, 5.0)),
         5 | 6 => Step::EnterWarp,
-        7 => if r.pick(3) == 0 {
-            Step::LongPull(r.range(0.05, 0.95), r.range(0.05, 0.95), r.range(0.0, std::f64::consts::TAU), r.range(40.0, 400.0))
-        } else {
-            Step::Pull(r.pick(16), r.range(-4.0, 4.0), r.range(-4.0, 4.0))
-        },
-        8 => if r.pick(2) == 0 { Step::HoldWarp } else { Step::LeaveWarp },
+        7 => {
+            if r.pick(3) == 0 {
+                Step::LongPull(r.range(0.05, 0.95), r.range(0.05, 0.95), r.range(0.0, std::f64::consts::TAU), r.range(40.0, 400.0), 1 + r.pick(3))
+            } else {
+                Step::Pull(r.pick(16), r.range(-4.0, 4.0), r.range(-4.0, 4.0))
+            }
+        }
+        8 => {
+            if r.pick(2) == 0 {
+                Step::HoldWarp
+            } else {
+                Step::LeaveWarp
+            }
+        }
         9 => Step::Undo,
         _ => Step::Redo,
     }
@@ -191,59 +200,95 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, step: &Step, gesture: &mu
             pull_mesh(app, *gesture, to);
             true
         }
-        Step::LongPull(s, t, angle, len) => {
+        Step::LongPull(s, t, angle, len, reps) => {
             if !warping(app) {
                 return Ok(false);
             }
-            let start = warp_mesh(app);
-            let placed = app.transform_preview.as_ref().and_then(|pv| pv.placed_warp);
-            let maps = placed.and_then(|(m, _)| {
-                let h = photocraft_algo::transform::Homography(m);
-                Some((h, h.inverse()?))
-            });
-            let gesture = GestureId::new(*gesture);
-            let mut shown = start.points.clone();
-            // How often each point has passed through infinity in this drag: the reference's picture passes the
-            // horizon once and settles; back and forth is the flipping that was the bug.
-            let mut passes = vec![0usize; start.points.len()];
-            let frames = (*len / 10.0).ceil().max(1.0) as usize;
-            for f in 1..=frames {
-                let d = len * f as f64 / frames as f64;
-                let by = [d * angle.cos(), d * angle.sin()];
-                let pulled = match &maps {
-                    Some((to_doc, back)) => super::super::warp::in_contents(&start, super::super::warp::RuleEdit::Surface { s: *s, t: *t, by }, 1.0, to_doc, back),
-                    None => super::super::warp::rule_mesh(&start, super::super::warp::RuleEdit::Surface { s: *s, t: *t, by }, 1.0),
+            // Where the first drag pressed, in the document: each repeat presses there again.
+            let mut press = None;
+            for rep in 0..*reps {
+                let start = warp_mesh(app);
+                let placed = app.transform_preview.as_ref().and_then(|pv| pv.placed_warp);
+                let maps = placed.and_then(|(m, _)| {
+                    let h = photocraft_algo::transform::Homography(m);
+                    Some((h, h.inverse()?))
+                });
+                let flat =
+                    photocraft_geom::warp::BezierMesh { us: start.us.clone(), vs: start.vs.clone(), points: start.points.iter().map(|p| [p.x, p.y]).collect() };
+                let (s, t) = match press {
+                    None => (*s, *t),
+                    Some(p) => match super::super::warp::grid_surface(&start, 1.0, placed.map(|(m, _)| m))(p) {
+                        Some(st) => st,
+                        // Off the picture now: the press pulls nothing.
+                        None => break,
+                    },
                 };
-                let Some(pulled) = pulled else { return Ok(f > 1) };
-                let mut events = EditEvents::new();
-                if f == 1 {
-                    events.push(EditEvent::begin(gesture, Mixed::Same(start.clone()), "Warp".into(), None));
+                if press.is_none() {
+                    let at = flat.eval(s, t);
+                    press = Some(Point::new(at[0], at[1]));
                 }
-                events.push(if f == frames { EditEvent::commit(gesture, Mixed::Same(start.clone()), pulled) } else { EditEvent::update(gesture, pulled) });
-                grid_edit(app, &events, false);
-                // As the canvas does: busy while the pointer is down on the grid, so the drag is one undo step.
-                let now_s = app.nudge_bundle.now;
-                app.ui.transform.as_mut().expect("open").session.settle(now_s, f < frames);
-                super::super::begin::reconcile_held(app);
-                if std::env::var("SEQ_TRACE").is_ok() {
-                    let pv = app.transform_preview.as_ref().expect("a preview");
-                    eprintln!("    frame {f}: base {:?} placed {:?}", pv.drag_placed.map(|(m, _)| [m[6], m[7], m[8]]), pv.placed_warp.map(|(m, _)| [m[6], m[7], m[8]]));
-                }
-                let now = warp_mesh(app).points;
-                let c = now.iter().fold(Point::ZERO, |a, p| Point::new(a.x + p.x / now.len() as f64, a.y + p.y / now.len() as f64));
-                let crossed = |a: f64, b: f64| a * b < 0.0 && a.abs() > 2000.0 && b.abs() > 2000.0;
-                for (i, (p, q)) in now.iter().zip(&shown).enumerate() {
-                    if !(p.x.is_finite() && p.y.is_finite()) {
-                        return Err(format!("frame {f} of the drag: point {i} is not finite"));
+                let bounds = open(app).session.warp().map(|w| w.warp.bounds).unwrap_or_default();
+                let squeezes = app.transform_preview.as_ref().map(|pv| pv.rule_squeezes.clone()).unwrap_or_default();
+                let gesture = GestureId::new(*gesture * 8 + rep as u64);
+                let mut shown = start.points.clone();
+                // How often each point has passed through infinity in this drag: the reference's picture passes the
+                // horizon once and settles; back and forth is the flipping that was the bug.
+                let mut passes = vec![0usize; start.points.len()];
+                let frames = (*len / 10.0).ceil().max(1.0) as usize;
+                for f in 1..=frames {
+                    let d = len * f as f64 / frames as f64;
+                    let by = [d * angle.cos(), d * angle.sin()];
+                    // The proposal as the warp grid makes it: the pull rule, then the placement's give-way.
+                    let pulled = match &maps {
+                        Some((to_doc, back)) => super::super::warp::in_contents(&start, super::super::warp::RuleEdit::Surface { s, t, by }, 1.0, to_doc, back)
+                            .map(|out| super::super::warp::squeeze_proposal(out, to_doc.0, bounds, &squeezes)),
+                        None => super::super::warp::rule_mesh(&start, super::super::warp::RuleEdit::Surface { s, t, by }, 1.0),
+                    };
+                    let Some(pulled) = pulled else { return Ok(f > 1 || rep > 0) };
+                    let mut events = EditEvents::new();
+                    if f == 1 {
+                        events.push(EditEvent::begin(gesture, Mixed::Same(start.clone()), "Warp".into(), None));
                     }
-                    if crossed(p.x - c.x, q.x - c.x) || crossed(p.y - c.y, q.y - c.y) {
-                        passes[i] += 1;
-                        if passes[i] > 1 {
-                            return Err(format!("frame {f} of the drag: point {i} flipped back through infinity: {q:?} -> {p:?}"));
+                    events.push(if f == frames {
+                        EditEvent::commit(gesture, Mixed::Same(start.clone()), pulled.clone())
+                    } else {
+                        EditEvent::update(gesture, pulled.clone())
+                    });
+                    grid_edit(app, &events, false);
+                    // As the canvas does: busy while the pointer is down on the grid, so the drag is one undo step.
+                    let now_s = app.nudge_bundle.now;
+                    app.ui.transform.as_mut().expect("open").session.settle(now_s, f < frames);
+                    super::super::begin::reconcile_held(app);
+                    if std::env::var("SEQ_TRACE").is_ok() {
+                        let pv = app.transform_preview.as_ref().expect("a preview");
+                        eprintln!(
+                            "    pull {rep} frame {f}: base {:?} placed {:?}",
+                            pv.drag_placed.map(|(m, _)| [m[6], m[7], m[8]]),
+                            pv.placed_warp.map(|(m, _)| [m[6], m[7], m[8]])
+                        );
+                    }
+                    let now = warp_mesh(app).points;
+                    // The framework ends a drag whose value the host changed from what the grid proposed: every later
+                    // move of the pointer did nothing (a long pull stuck until the button was released).
+                    if now != pulled.points {
+                        return Err(format!("pull {rep}, frame {f} of the drag: the warp landed other than the grid proposed it"));
+                    }
+                    let c = now.iter().fold(Point::ZERO, |a, p| Point::new(a.x + p.x / now.len() as f64, a.y + p.y / now.len() as f64));
+                    let crossed = |a: f64, b: f64| a * b < 0.0 && a.abs() > 2000.0 && b.abs() > 2000.0;
+                    for (i, (p, q)) in now.iter().zip(&shown).enumerate() {
+                        if !(p.x.is_finite() && p.y.is_finite()) {
+                            return Err(format!("pull {rep}, frame {f} of the drag: point {i} is not finite"));
+                        }
+                        if crossed(p.x - c.x, q.x - c.x) || crossed(p.y - c.y, q.y - c.y) {
+                            passes[i] += 1;
+                            if passes[i] > 1 {
+                                return Err(format!("pull {rep}, frame {f} of the drag: point {i} flipped back through infinity: {q:?} -> {p:?}"));
+                            }
                         }
                     }
+                    shown = now;
                 }
-                shown = now;
+                frame(app);
             }
             true
         }
@@ -393,7 +438,9 @@ fn run(steps: &[Step], end: u8) -> Result<(), String> {
 fn run_caught(steps: &[Step], end: u8) -> Result<(), String> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(steps, end))) {
         Ok(r) => r,
-        Err(p) => Err(format!("panic: {}", p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default())),
+        Err(p) => {
+            Err(format!("panic: {}", p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default()))
+        }
     }
 }
 
@@ -431,11 +478,11 @@ fn shrink(mut steps: Vec<Step>, end: u8, err: &str) -> (Vec<Step>, String) {
 fn seq_trace() {
     let steps = vec![
         Step::EnterWarp,
-        Step::LongPull(0.6616269562899482, 0.4973305551415017, 4.802292692204863, 269.5955745602801),
+        Step::LongPull(0.6616269562899482, 0.4973305551415017, 4.802292692204863, 269.5955745602801, 1),
         Step::HoldWarp,
         Step::Corner(0, -1.182275882846704, 4.621861299596933),
         Step::EnterWarp,
-        Step::LongPull(0.3442365635296523, 0.6643854913256297, 1.4322961589882712, 170.276387293623),
+        Step::LongPull(0.3442365635296523, 0.6643854913256297, 1.4322961589882712, 170.276387293623, 1),
     ];
     eprintln!("{:?}", run_caught(&steps, 4).map_err(|e| e.lines().next().unwrap_or("").to_string()));
 }
@@ -454,12 +501,27 @@ fn seq_check() {
         let end = (seed % 8) as u8;
         if let Err(e) = run_caught(&steps, end) {
             let (steps, e) = shrink(steps, end, &e);
-            let kind = e.split(':').skip(1).collect::<Vec<_>>().join(":").lines().next().unwrap_or("").trim().chars().filter(|c| !c.is_ascii_digit() && *c != '.' && *c != '-').collect::<String>();
+            let kind = e
+                .split(':')
+                .skip(1)
+                .collect::<Vec<_>>()
+                .join(":")
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .chars()
+                .filter(|c| !c.is_ascii_digit() && *c != '.' && *c != '-')
+                .collect::<String>();
             failures.entry(kind).or_insert((seed, steps, end, e));
         }
     }
     for (kind, (seed, steps, end, e)) in &failures {
-        eprintln!("\n=== {kind}\n  seed {seed}, subject {}, end {}\n  steps {steps:?}\n  {e}", end / 2, if end % 2 == 0 { "undo-all + Warp" } else { "Cancel" });
+        eprintln!(
+            "\n=== {kind}\n  seed {seed}, subject {}, end {}\n  steps {steps:?}\n  {e}",
+            end / 2,
+            if end % 2 == 0 { "undo-all + Warp" } else { "Cancel" }
+        );
     }
     assert!(failures.is_empty(), "{} kinds of failure", failures.len());
 }
