@@ -329,7 +329,7 @@ fn edge_ratio(src: &Homography, q: &[[f64; 2]; 4], k: usize) -> f64 {
     let (x, y) = src.apply(mid[0], mid[1]);
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     let l2 = dx * dx + dy * dy;
-    if !(l2 > 0.0) {
+    if l2.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
         return 1.0;
     }
     let s = ((x - a[0]) * dx + (y - a[1]) * dy) / l2;
@@ -920,7 +920,7 @@ impl PerspectiveMap {
             let value = self.with_anchors(x, y, base);
             if let Some(before) = previous {
                 let step = (value.0 - before.0) * g.direction[0] + (value.1 - before.1) * g.direction[1];
-                if !(step > 0.0) {
+                if step.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
                     return false;
                 }
             }
