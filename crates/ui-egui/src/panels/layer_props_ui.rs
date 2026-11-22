@@ -4,16 +4,16 @@
 
 use craft::behavior::geometry::quad::BoxState;
 use craft::behavior::kurbo::{Point, Rect, Size};
-use craft::behavior::{ColumnWidth, EditEvent, EditEvents, Mixed, RulerUnits, Ticks};
+use craft::behavior::{ColumnWidth, EditEvent, EditEvents, IconId, Mixed, RulerUnits, Ticks};
 use craft::draw::ui::{SizeUnit, TransformFields, TransformGroups, TransformRow};
 use craft::ui::bars::AlignBar;
-use craft::ui::buttons::Button;
+use craft::ui::buttons::{Button, IconButton};
 use craft::ui::canvas::RulerText;
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Sizing};
-use craft::ui::layout_components::Grid;
+use craft::ui::layout_components::{Grid, Row};
 use craft::ui::runtime::commands::CommandRef;
 use craft::ui::sections::Section;
-use photocraft_doc::{Layer, LayerContent, LayerId};
+use photocraft_doc::{Layer, LayerContent, LayerId, LiveShape};
 use photocraft_engine::prefs::Unit;
 use serde_json::{Value, json};
 
@@ -77,6 +77,40 @@ fn frame(layer: &Layer, px: photocraft_geom::Rect) -> [f64; 4] {
     path.map_or([f64::from(px.x0), f64::from(px.y0), f64::from(px.x1), f64::from(px.y1)], |c| [c.0, c.1, c.2, c.3])
 }
 
+/// A live line's Transform box (#13265): the box before the transform, `length` x `thickness` at
+/// the top-left `corner` of the box around the line, and the row the fields read, the same box
+/// turned to the line's angle: `from` and `to` ± (thickness / 2)·n, with n the line's normal. So W
+/// reads the length, H the thickness (the weight, or a wider arrowhead's width) and the angle
+/// the line's; X / Y stay the top-left `corner`. `None` for any other layer or a degenerate line.
+pub(crate) fn line_row(layer: &Layer, corner: [f64; 2]) -> Option<(Rect, TransformRow, LiveShape)> {
+    let LayerContent::Shape(sh) = &layer.content else { return None };
+    if sh.path.inverted {
+        return None;
+    }
+    let live = sh.live.as_ref()?;
+    let (from, to) = match live {
+        LiveShape::Line { from, to, .. } | LiveShape::ArrowLine { from, to, .. } => (*from, *to),
+        _ => return None,
+    };
+    let (length, thickness) = photocraft_engine::vector_cmds::line_frame_size(live)?;
+    if !(thickness.is_finite() && thickness > 0.0 && corner.iter().all(|v| v.is_finite())) {
+        return None;
+    }
+    let (ux, uy) = ((to[0] - from[0]) / length, (to[1] - from[1]) / length);
+    let (nx, ny) = (-uy * thickness / 2.0, ux * thickness / 2.0);
+    let quad = [
+        Point::new(from[0] - nx, from[1] - ny),
+        Point::new(to[0] - nx, to[1] - ny),
+        Point::new(to[0] + nx, to[1] + ny),
+        Point::new(from[0] + nx, from[1] + ny),
+    ];
+    if quad.iter().any(|p| !p.is_finite()) {
+        return None;
+    }
+    let rect = Rect::new(corner[0], corner[1], corner[0] + length, corner[1] + thickness);
+    Some((rect, TransformRow::new(BoxState::new(quad, Point::new(corner[0], corner[1])), 0.0), live.clone()))
+}
+
 /// The Units & Rulers unit, the document's resolution and the points per inch: what a length shown in
 /// the rulers' unit needs.
 fn ruler_unit(app: &PhotocraftApp) -> (Unit, f64, f64) {
@@ -112,6 +146,59 @@ fn current_frame(app: &mut PhotocraftApp, id: LayerId) -> Option<[f64; 4]> {
     Some(frame(layer, app.layer_frame_bounds(layer, surface)))
 }
 
+/// The X / Y part of a committed edit: a move of the reference point is one `layer.translate`.
+fn apply_move(app: &mut PhotocraftApp, layer: &Layer, before: &TransformRow, after: &TransformRow) {
+    let (dx, dy) = (after.state.pivot.x - before.state.pivot.x, after.state.pivot.y - before.state.pivot.y);
+    if !dx.is_finite() || !dy.is_finite() {
+        return;
+    }
+    let (dx, dy) = (dx.round() as i32, dy.round() as i32);
+    if dx != 0 || dy != 0 {
+        let params = crate::move_ui::pattern_wrap(app, json!({"layer": layer.id.0, "dx": dx, "dy": dy}));
+        run(app, "layer.translate", params);
+    }
+}
+
+/// The live line of layer `id` as it is now, read again after an edit of the same pass.
+fn current_line(app: &PhotocraftApp, id: LayerId) -> Option<LiveShape> {
+    match &app.session.active()?.doc.layer(id)?.content {
+        LayerContent::Shape(sh) => sh.live.clone(),
+        _ => None,
+    }
+}
+
+/// Applies a live line's committed Transform edits (#13265): W and H resize the line in its own
+/// rotated frame as the Line tool's W / H do (#13250), `shape.edit {transform}` with
+/// [`line_frame_scale`](photocraft_engine::vector_cmds::line_frame_scale), one "Scale Paths" step;
+/// X / Y move it. The angle only shows the line's (typed angles were not measured), and a
+/// mirrored, zero or non-finite size is no edit.
+fn apply_line_transform(app: &mut PhotocraftApp, layer: &Layer, rect: Rect, tol: (f32, f32), events: &EditEvents<TransformRow>) {
+    for event in events.iter() {
+        let (EditEvent::Commit { before: Mixed::Same(before), after, .. } | EditEvent::Set { before: Mixed::Same(before), after, .. }) = event else {
+            continue;
+        };
+        let (bw, bh) = box_size(before);
+        let (aw, ah) = box_size(after);
+        let w_changed = (aw - bw).abs() >= f64::from(tol.0);
+        let h_changed = (ah - bh).abs() >= f64::from(tol.1);
+        let parts = after.state.parts(rect, after.skew_v);
+        let mirrored = !(parts.w > 0.0 && parts.h > 0.0);
+        if (w_changed || h_changed)
+            && !mirrored
+            && let Some(live) = current_line(app, layer.id)
+            && let Some((length, thickness)) = photocraft_engine::vector_cmds::line_frame_size(&live)
+        {
+            let (to_length, to_thickness) = (if w_changed { aw } else { length }, if h_changed { ah } else { thickness });
+            if let Some(m) = photocraft_engine::vector_cmds::line_frame_scale(&live, to_length, to_thickness)
+                && m != photocraft_geom::Affine::IDENTITY
+            {
+                run(app, "shape.edit", json!({"layer": layer.id.0, "transform": m.m}));
+            }
+        }
+        apply_move(app, layer, before, after);
+    }
+}
+
 /// Applies the edits the Transform fields committed in this pass: a W or H change past `tol` is one
 /// `edit.transform`, an X or Y change one `layer.translate`. A commit that left the box where it was
 /// (a click with no change, a value the field rounds back to the shown one) changes nothing.
@@ -139,16 +226,16 @@ fn apply_transform(app: &mut PhotocraftApp, layer: &Layer, linked: bool, tol: (f
                 run(app, "edit.transform", params);
             }
         }
-        let (dx, dy) = ((after.state.pivot.x - before.state.pivot.x).round() as i32, (after.state.pivot.y - before.state.pivot.y).round() as i32);
-        if dx != 0 || dy != 0 {
-            let params = crate::move_ui::pattern_wrap(app, json!({"layer": layer.id.0, "dx": dx, "dy": dy}));
-            run(app, "layer.translate", params);
-        }
+        apply_move(app, layer, before, after);
     }
 }
 
 /// The Transform section: X, Y, W and H with the aspect link, in the Units & Rulers unit. The reference
 /// point is the box's top-left corner, so W and H scale from it and X and Y are its position.
+///
+/// A live line (#13265) shows its own rotated box instead ([`line_row`]): W its length, H its
+/// thickness, the angle, and Flip Horizontal / Flip Vertical buttons. Its W and H are not linked
+/// (the reference keeps the weight when W changes), so the link shows off for it.
 ///
 /// The edits are the ones the fields report in this pass, applied once after the section has shown. A
 /// pass that reruns inside the frame gets no input events, so it applies nothing a second time.
@@ -158,25 +245,64 @@ fn transform_section(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer, 
     let step = |extent: f64| (unit.to_px(0.05, dpi, extent, ppi) - unit.to_px(0.0, dpi, extent, ppi)).abs();
     let tol = (edit_tolerance(layer, step(dw)), edit_tolerance(layer, step(dh)));
     let (x_text, y_text) = (ruler_text(unit, dpi, ppi, dw), ruler_text(unit, dpi, ppi, dh));
+    let line = line_row(layer, [bb[0], bb[1]]);
     // `TransformGroups` is non-exhaustive: start from none and switch the shown groups on.
     let mut groups = TransformGroups::NONE;
     groups.position = true;
     groups.size = true;
-    let rect = Rect::new(bb[0], bb[1], bb[2], bb[3]);
-    let corners = [Point::new(bb[0], bb[1]), Point::new(bb[2], bb[1]), Point::new(bb[2], bb[3]), Point::new(bb[0], bb[3])];
-    let row = TransformRow::new(BoxState::new(corners, corners[0]), 0.0);
+    groups.angle = line.is_some();
+    let (rect, row) = match &line {
+        Some((rect, row, _)) => (*rect, *row),
+        None => {
+            let corners = [Point::new(bb[0], bb[1]), Point::new(bb[2], bb[1]), Point::new(bb[2], bb[3]), Point::new(bb[0], bb[3])];
+            (Rect::new(bb[0], bb[1], bb[2], bb[3]), TransformRow::new(BoxState::new(corners, corners[0]), 0.0))
+        }
+    };
+    let is_line = line.is_some();
+    let mut unlinked = false;
     let shown = Section::new(tl!("Transform")).show(ui, |ui, _| {
-        TransformFields::new(tl!("Transform"), Bind::given(row), rect, Bind::bound(&mut app.ui.properties_linked))
+        let linked = if is_line { Bind::bound(&mut unlinked) } else { Bind::bound(&mut app.ui.properties_linked) };
+        let out = TransformFields::new(tl!("Transform"), Bind::given(row), rect, linked)
             .groups(groups)
             .document(Size::new(dw, dh))
             .units(x_text, y_text)
             .size_unit(SizeUnit::length(x_text, y_text))
-            .show(ui)
+            .show(ui);
+        let flip = if is_line { flip_buttons(ui) } else { None };
+        (out, flip)
     });
-    let Some(out) = shown.inner else { return };
-    // The bound link already holds this pass's toggle; a toggle carries no edit.
-    let linked = app.ui.properties_linked;
-    apply_transform(app, layer, linked, tol, &out.events);
+    let Some((out, flip)) = shown.inner else { return };
+    match line {
+        Some((rect, ..)) => apply_line_transform(app, layer, rect, tol, &out.events),
+        None => {
+            // The bound link already holds this pass's toggle; a toggle carries no edit.
+            let linked = app.ui.properties_linked;
+            apply_transform(app, layer, linked, tol, &out.events);
+        }
+    }
+    if let Some(id) = flip {
+        run(app, id, json!({"layer": layer.id.0}));
+    }
+}
+
+/// A live line's Flip Horizontal and Flip Vertical buttons (#13265); the command id of the one
+/// clicked. The framework has no flip icon: the swap arrows stand in for it.
+fn flip_buttons(ui: &mut egui::Ui) -> Option<&'static str> {
+    Row::new()
+        .show(ui, |ui, _| {
+            let mut clicked = None;
+            for (icon, label, id) in [
+                ("swap_horizontal", tl!("Flip Horizontal"), "edit.transform.flipHorizontal"),
+                ("swap_vertical", tl!("Flip Vertical"), "edit.transform.flipVertical"),
+            ] {
+                if IconButton::new(IconId::new(icon)).label(label).tooltip(label).show(ui).clicked() {
+                    clicked = Some(id);
+                }
+            }
+            clicked
+        })
+        .inner
+        .flatten()
 }
 
 /// Properties body for a non-adjustment layer: Transform, Align and Distribute, the kind's own
@@ -450,3 +576,7 @@ mod tests {
         assert_eq!(edit_tolerance(st.doc.layer(st.active_layer.unwrap()).unwrap(), step_px), 0.5, "a pixel layer keeps half a pixel");
     }
 }
+
+#[cfg(test)]
+#[path = "line_properties_transform_tests.rs"]
+mod line_properties_transform_tests;
