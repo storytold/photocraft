@@ -73,6 +73,11 @@ impl PhotocraftApp {
         captures.any_unissued()
     }
 
+    /// Whether any screenshot capture is pending or waiting to be issued.
+    pub(crate) fn captures_pending(&self) -> bool {
+        self.control.as_ref().is_some_and(|channel| channel.captures.any_pending() || channel.captures.any_unissued())
+    }
+
     /// Reply to finished screenshots; a PNG with a path goes through the automation write
     /// authority.
     fn finish_captures(&mut self, channel: &mut ControlChannel, finished: Vec<craft::automation::screenshot::Finished>) {

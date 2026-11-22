@@ -1044,6 +1044,299 @@ fn background_open_warns_about_missing_fonts() {
     assert!(app.ui.notices.last().is_some_and(|n| n.title.contains("poster.psd") && n.lines == want), "{:?}", app.ui.notices);
 }
 
+/// Verifies that jobs UI does not cancel active background jobs upon Escape keypress while splash is active.
+#[test]
+fn splash_active_blocks_escape_job_cancellation() {
+    let mut h = app_harness();
+    let gate = Arc::new(AtomicBool::new(false));
+    let job = slow_job(h.state_mut(), &gate);
+    assert!(h.state().session.job(job).is_some());
+
+    let now = h.ctx.input(|i| i.time);
+    let mut splash = crate::splash::SplashState::new();
+    splash.start_time = now;
+    h.state_mut().splash = Some(splash);
+    h.state_mut().system_ready_override = Some(false);
+
+    // Press Escape key via Context input
+    let ctx = h.ctx.clone();
+    ctx.input_mut(|i| {
+        i.events.push(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE })
+    });
+
+    // Run tick; jobs_ui should NOT cancel the job while splash is active
+    super::tick(h.state_mut(), &ctx);
+    assert!(h.state().session.job(job).is_some(), "job must not be cancelled while splash is active");
+
+    // Clean up
+    gate.store(true, Ordering::Relaxed);
+    let _ = h.state_mut().session.cancel_job(job);
+}
+
+/// Verifies that jobs UI allows cancelling active jobs via Escape when injected input is pending even if splash exists.
+#[test]
+fn splash_injected_input_allows_escape_job_cancellation() {
+    let mut h = app_harness();
+    let gate = Arc::new(AtomicBool::new(false));
+    let job = slow_job(h.state_mut(), &gate);
+    assert!(h.state().session.job(job).is_some());
+
+    let ctx = h.ctx.clone();
+    let now = ctx.input(|i| i.time);
+    let mut splash = crate::splash::SplashState::new();
+    splash.start_time = now;
+    h.state_mut().splash = Some(splash);
+    h.state_mut().system_ready_override = Some(false);
+
+    // Queue injected input on the window host
+    let host = craft::ui::runtime::windows::WindowHost::of(&ctx);
+    host.inject_move(egui::ViewportId::ROOT, egui::Pos2::new(10.0, 10.0), craft::keymap::Mods::NONE, 0.0);
+    assert!(!host.injected_idle());
+
+    // Press Escape key via Context input
+    ctx.input_mut(|i| {
+        i.events.push(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE })
+    });
+
+    // Run tick; jobs_ui SHOULD cancel the job because injected input is pending (splash_active is false)
+    super::tick(h.state_mut(), &ctx);
+    assert!(h.state().session.job(job).is_none(), "job must be cancelled when injected input is pending");
+
+    // Clean up
+    host.cancel_injected();
+    gate.store(true, Ordering::Relaxed);
+}
+
+/// Verifies that splash dismisses immediately when failure notices arrive so errors are never hidden.
+#[test]
+fn splash_dismisses_when_notices_arrive_to_not_hide_failures() {
+    let mut h = app_harness();
+    let now = h.ctx.input(|i| i.time);
+    let mut splash = crate::splash::SplashState::new();
+    splash.start_time = now;
+    h.state_mut().splash = Some(splash);
+    h.state_mut().system_ready_override = Some(false);
+
+    // If a notice arrives (e.g. web preset loading failure), the splash must not hide it
+    crate::notices::post(h.state_mut(), String::from("Preset warning"), vec!["Failed to load brush".into()], craft::theme::variant::Tone::Bad, None);
+    assert!(!h.state().ui.notices.is_empty());
+
+    // Step frame: frame logic checks for notices and dismisses splash immediately
+    h.step();
+    assert!(h.state().splash.is_none(), "splash must be dismissed so failure notices are not hidden");
+}
+
+/// Verifies that splash dismisses immediately when injected input or a screenshot capture request is pending.
+#[test]
+fn splash_dismisses_on_injected_input_or_pending_captures() {
+    let mut h = app_harness();
+    let now = h.ctx.input(|i| i.time);
+    let mut splash = crate::splash::SplashState::new();
+    splash.start_time = now;
+    h.state_mut().splash = Some(splash);
+    h.state_mut().system_ready_override = Some(false);
+
+    // If injected input is queued, splash dismisses immediately
+    let host = craft::ui::runtime::windows::WindowHost::of(&h.ctx);
+    host.inject_move(egui::ViewportId::ROOT, egui::Pos2::new(10.0, 10.0), craft::keymap::Mods::NONE, 0.0);
+    h.step();
+    assert!(h.state().splash.is_none(), "splash must dismiss when injected input is pending");
+    host.cancel_injected();
+
+    // If a capture request is pending, splash also dismisses immediately
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut splash2 = crate::splash::SplashState::new();
+        splash2.start_time = h.ctx.input(|i| i.time);
+        h.state_mut().splash = Some(splash2);
+        let (_req_tx, req_rx) = std::sync::mpsc::channel();
+        let mut channel = craft::automation::control::ControlChannel::new(req_rx);
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut request = craft::automation::screenshot::ScreenshotRequest::new(1, egui::ViewportId::ROOT, tx);
+        request.document = h.state().document_identity();
+        channel.captures.admit(request, craft::ui::runtime::motion::now()).unwrap();
+        h.state_mut().control = Some(channel);
+        assert!(h.state().captures_pending());
+        h.step();
+        assert!(h.state().splash.is_none(), "splash must dismiss when capture is pending");
+    }
+}
+
+/// Verifies that shortcuts remain available during splash appearance delay and are suppressed when splash renders.
+#[test]
+fn splash_shortcuts_gate_allows_shortcuts_during_appear_delay_and_suppresses_when_rendered() {
+    let mut h = app_harness();
+    let ctx = h.ctx.clone();
+    let now = ctx.input(|i| i.time);
+
+    // No splash: shortcuts not blocked
+    assert!(!h.state().splash_shortcuts_blocked(&ctx, now));
+
+    // 1. Splash is started but within appearance delay (< SPLASH_APPEAR_DELAY).
+    // time_until_appearance is Some, should_render is false.
+    let mut splash = crate::splash::SplashState::new();
+    splash.start_time = now;
+    assert!(splash.time_until_appearance(now).is_some());
+    assert!(!splash.should_render(now));
+    h.state_mut().splash = Some(splash);
+    h.state_mut().system_ready_override = Some(false);
+
+    // Shortcuts remain unblocked during appearance delay
+    assert!(!h.state().splash_shortcuts_blocked(&ctx, now), "shortcuts must remain available during appearance delay when splash is not visible");
+
+    // 2. Splash past appearance delay while system is not ready: actually rendering on screen.
+    // should_render is true, time_until_appearance is None.
+    assert!(!h.state().system_ready());
+    let rendered_now = now + crate::splash::SPLASH_APPEAR_DELAY + 0.1;
+    let mut splash_rendered = crate::splash::SplashState::new();
+    splash_rendered.start_time = now;
+    assert!(splash_rendered.time_until_appearance(rendered_now).is_none());
+    assert!(splash_rendered.should_render(rendered_now));
+    h.state_mut().splash = Some(splash_rendered);
+
+    // Shortcuts are suppressed while splash renders before system is ready
+    assert!(h.state().splash_shortcuts_blocked(&ctx, rendered_now), "shortcuts must be suppressed on frames where splash is rendered");
+
+    // 3. Injected input bypasses splash suppression for automated testing
+    let host = craft::ui::runtime::windows::WindowHost::of(&ctx);
+    host.inject_move(egui::ViewportId::ROOT, egui::Pos2::new(10.0, 10.0), craft::keymap::Mods::NONE, 0.0);
+    assert!(!h.state().splash_shortcuts_blocked(&ctx, rendered_now), "shortcuts must not be blocked when injected input is active");
+    host.cancel_injected();
+
+    // 4. Once splash is dismissed, shortcuts are unblocked immediately
+    if let Some(s) = h.state_mut().splash.as_mut() {
+        s.dismiss();
+    }
+    assert!(!h.state().splash_shortcuts_blocked(&ctx, rendered_now), "shortcuts must be unblocked once splash is dismissed");
+
+    // 5. Notices posted (e.g. during jobs_ui::tick) unblock shortcuts since splash will be dismissed
+    let mut splash_active = crate::splash::SplashState::new();
+    splash_active.start_time = now;
+    h.state_mut().splash = Some(splash_active);
+    crate::notices::post(h.state_mut(), String::from("Notice"), vec!["Warning".into()], craft::theme::variant::Tone::Neutral, None);
+    assert!(!h.state().ui.notices.is_empty());
+    assert!(!h.state().splash_shortcuts_blocked(&ctx, rendered_now), "shortcuts must not be blocked when notices are present");
+    h.state_mut().ui.notices.clear();
+
+    // 6. System readiness unblocks shortcuts matching splash dismissal in ui_frame
+    h.state_mut().system_ready_override = Some(true);
+    assert!(h.state().system_ready());
+    assert!(!h.state().splash_shortcuts_blocked(&ctx, rendered_now), "shortcuts must be unblocked once system is ready");
+}
+
+/// Frame-level integration test: verifies that when a background job completes with an error
+/// (posting a notice) during `jobs_ui::tick` while the splash screen is visible past its appearance delay,
+/// the splash is dismissed immediately so failure notices are never hidden and shortcuts work right after.
+#[test]
+fn splash_shortcuts_unblocked_when_job_fails_with_notice_during_tick() {
+    let mut h = app_harness();
+    let ctx = h.ctx.clone();
+    let now = ctx.input(|i| i.time);
+
+    // Initial state: tool is Move.
+    h.state_mut().ui.tool = crate::Tool::Move;
+    assert_eq!(h.state().ui.tool, crate::Tool::Move);
+
+    // Configure splash past appearance delay while system readiness is pending (e.g. font scan in flight).
+    let mut splash = crate::splash::SplashState::new();
+    splash.start_time = now - crate::splash::SPLASH_APPEAR_DELAY - 0.1;
+    h.state_mut().splash = Some(splash);
+    h.state_mut().system_ready_override = Some(false);
+
+    // Verify initial condition: shortcuts are blocked while splash renders without notices.
+    assert!(h.state().splash_shortcuts_blocked(&ctx, now), "shortcuts must be blocked while splash renders past appear delay");
+
+    // Phase 1: Verify control behavior - a key press is suppressed while splash is visible without notices.
+    h.key_press(egui::Key::B);
+    h.run_steps(2);
+    assert_eq!(h.state().ui.tool, crate::Tool::Move, "tool shortcut must not run while splash is visible without notices");
+
+    // Restore splash for Phase 2: background job completes with an error during tick.
+    let now2 = ctx.input(|i| i.time);
+    let mut splash2 = crate::splash::SplashState::new();
+    splash2.start_time = now2 - crate::splash::SPLASH_APPEAR_DELAY - 0.1;
+    h.state_mut().splash = Some(splash2);
+
+    let r = h
+        .state_mut()
+        .session
+        .start_job(
+            "test.failing_job",
+            json!({}),
+            "Failing Filter",
+            false,
+            |_ctx| Err(photocraft_engine::EngineError::Other("simulated worker failure".into())),
+            |_s, ()| Ok(json!({})),
+        )
+        .unwrap();
+    let Started::Job(id) = r else {
+        panic!("expected background job");
+    };
+
+    // Wait for the failed job to finish; wait_job records the failure event for tick to drain.
+    assert!(h.state_mut().session.wait_job(id).is_err());
+
+    // Step frame: jobs_ui::tick posts the failure notice, unblocking splash gating and dismissing splash in ui_frame.
+    h.step();
+    assert!(h.state().splash.is_none(), "splash must be dismissed in ui_frame when notices arrive");
+    assert!(!h.state().ui.notices.is_empty() || !crate::notices::shown(h.state(), &ctx).is_empty(), "failed background job must post a notice");
+
+    // Subsequent key press ('B' for Brush tool) executes normally.
+    h.key_press(egui::Key::B);
+    h.run_steps(2);
+    assert_eq!(h.state().ui.tool, crate::Tool::Brush, "shortcuts::handle must execute once splash dismisses on notice");
+}
+
+/// Regression test: holding the erase key (`~`) across the splash appearance boundary and releasing it
+/// on a splash-blocked frame must still clear `held_erase` rather than leaving it stuck after dismissal.
+#[test]
+fn splash_preserves_erase_key_release_across_boundary() {
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(8).with_step_dt(1.0 / 60.0).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 320, "height": 240})).unwrap();
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), s, crate::Services::default());
+        app.ui.tool = crate::Tool::Brush;
+        app
+    });
+    h.run_steps(4);
+
+    let ctx = h.ctx.clone();
+    let start = ctx.input(|i| i.time);
+    let mut splash = crate::splash::SplashState::new();
+    splash.start_time = start;
+    h.state_mut().splash = Some(splash);
+    h.state_mut().system_ready_override = Some(false);
+    assert!(!h.state().splash_shortcuts_blocked(&ctx, start), "shortcuts must be allowed during appear delay");
+
+    // Press and hold `~` before the splash appears.
+    h.event(egui::Event::Key { key: egui::Key::Backtick, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(2);
+    assert!(h.state().held_erase, "held_erase must be true after pressing erase key before splash renders");
+
+    // Advance past SPLASH_APPEAR_DELAY while holding `~`.
+    for _ in 0..16 {
+        if h.state().splash_shortcuts_blocked(&ctx, ctx.input(|i| i.time)) {
+            break;
+        }
+        h.step();
+    }
+    assert!(h.state().splash_shortcuts_blocked(&ctx, ctx.input(|i| i.time)), "splash must block shortcuts after appear delay");
+    assert!(h.state().held_erase, "held_erase must stay true across the splash boundary while held");
+
+    // Release `~` on a splash-blocked frame.
+    h.event(egui::Event::Key { key: egui::Key::Backtick, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(2);
+    assert!(h.state().splash.is_some(), "releasing the erase key must not dismiss the splash");
+    assert!(h.state().splash_shortcuts_blocked(&ctx, ctx.input(|i| i.time)), "splash must remain shortcut-blocked");
+
+    // Dismiss the splash and verify held_erase is false.
+    h.state_mut().system_ready_override = Some(true);
+    h.run_steps(2);
+    assert!(h.state().splash.is_none(), "splash must dismiss once system is ready");
+    assert!(!h.state().held_erase, "held_erase must be false after splash dismissal");
+}
+
 fn identity_app() -> Box<PhotocraftApp> {
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
@@ -1207,4 +1500,131 @@ fn asynchronous_place_completion_displays_result_warnings() {
     // A frame placement bypasses transform startup but must still display its warnings.
     super::finish_place(&mut app, &egui::Context::default(), place, photocraft_engine::jobs::JobOutcome::Done(json!({"frame":1,"warnings":[warning]})));
     assert!(app.ui.notices.iter().any(|notice| notice.lines.iter().any(|line| line == warning)));
+}
+
+/// Verifies the splash screen's AccessKit accessibility tree while active (indeterminate progress
+/// indicator, expected labels, and workspace controls hidden) and confirms clean restoration after dismissal.
+#[test]
+fn splash_accessibility_tree_exposes_indeterminate_progress_and_hides_workspace() {
+    use egui::accesskit::Role;
+
+    let mut h = app_harness();
+    let now = h.ctx.input(|i| i.time);
+    let mut splash = crate::splash::SplashState::new();
+    splash.start_time = now - crate::splash::SPLASH_APPEAR_DELAY - 0.1;
+    h.state_mut().splash = Some(splash);
+    h.state_mut().system_ready_override = Some(false);
+    h.run_steps(2);
+
+    // Indeterminate progress indicator must expose the status label without a fabricated numeric value.
+    let progress_nodes: Vec<_> = h.query_all_by_role(Role::ProgressIndicator).collect();
+    assert_eq!(progress_nodes.len(), 1, "expected exactly one splash ProgressIndicator node");
+    let progress_acc = progress_nodes[0].accesskit_node();
+    assert_eq!(progress_acc.label().as_deref(), Some("Loading workspace & font assets…"));
+    assert_eq!(progress_acc.numeric_value(), None, "indeterminate splash progress must not expose a fabricated numeric value");
+
+    // Expected splash copy must be present in the accessibility tree.
+    let expected_tagline = format!("v{}  ·  Open Source Native Image Editor", env!("CARGO_PKG_VERSION"));
+    let labels: Vec<String> = h
+        .query_all_by_role(Role::Label)
+        .filter_map(|n| {
+            let acc = n.accesskit_node();
+            acc.label().or_else(|| acc.value().map(|v| v.to_string()))
+        })
+        .collect();
+    for required in ["PhotoCraft", expected_tagline.as_str(), "Loading workspace & font assets…", "Click anywhere to skip"] {
+        assert!(labels.iter().any(|l| l == required), "missing splash accessibility label {required:?} in {labels:?}");
+        assert!(h.query_by_role_and_label(Role::Label, required).is_some(), "kittest role+label query did not find {required:?}");
+    }
+
+    // Main workspace menus/controls must not be exposed while splash replaces the workspace body.
+    assert!(h.query_by_label("File").is_none(), "workspace File menu must not appear while splash is active");
+
+    // Once system readiness completes, splash disappears from the tree and workspace menus return.
+    h.state_mut().system_ready_override = Some(true);
+    h.run_steps(3);
+    assert!(h.state().splash.is_none(), "splash must dismiss once system is ready");
+    assert_eq!(h.query_all_by_role(Role::ProgressIndicator).count(), 0, "splash progress must leave tree on dismissal");
+    assert!(h.query_by_label("Click anywhere to skip").is_none(), "skip hint must leave tree on dismissal");
+    assert!(h.query_by_label("File").is_some(), "workspace File menu must return after splash dismissal");
+}
+
+/// Verifies that splash layout and typography scale cleanly across DPI factors, `UiFontSize`
+/// settings, themes, and tight logical viewports without clipping or overlapping nodes.
+#[test]
+fn splash_visual_scaling_fits_within_viewport_and_card_across_dpi_and_font_sizes() {
+    use egui::accesskit::Role;
+
+    struct ScaleCase {
+        name: &'static str,
+        size: egui::Vec2,
+        native_ppp: f32,
+        ui_scale: &'static str,
+        ui_font_size: &'static str,
+        theme: &'static str,
+    }
+
+    let cases = [
+        ScaleCase { name: "100% Small Pro", size: vec2(1440.0, 900.0), native_ppp: 1.0, ui_scale: "auto", ui_font_size: "small", theme: "pro" },
+        ScaleCase { name: "150% Small Pro", size: vec2(1440.0, 900.0), native_ppp: 1.5, ui_scale: "auto", ui_font_size: "small", theme: "pro" },
+        ScaleCase { name: "200% Small Pro", size: vec2(1440.0, 900.0), native_ppp: 2.0, ui_scale: "auto", ui_font_size: "small", theme: "pro" },
+        ScaleCase { name: "100% Large StudioLight", size: vec2(1440.0, 900.0), native_ppp: 1.0, ui_scale: "100", ui_font_size: "large", theme: "studioLight" },
+        ScaleCase { name: "200% Large Pro", size: vec2(1440.0, 900.0), native_ppp: 2.0, ui_scale: "200", ui_font_size: "large", theme: "pro" },
+        ScaleCase { name: "Compact 640x360 @200%", size: vec2(640.0, 360.0), native_ppp: 2.0, ui_scale: "auto", ui_font_size: "small", theme: "pro" },
+        ScaleCase { name: "Narrow 500x300 Medium", size: vec2(500.0, 300.0), native_ppp: 1.5, ui_scale: "auto", ui_font_size: "medium", theme: "studio" },
+    ];
+
+    for case in cases {
+        let mut h = Harness::builder().with_size(case.size).with_pixels_per_point(case.native_ppp).with_max_steps(8).build_eframe(|cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            let s = photocraft_engine::Session::new();
+            PhotocraftApp::with_context(cc.egui_ctx.clone(), s, crate::Services::default())
+        });
+        h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(case.native_ppp);
+        h.state_mut()
+            .run(
+                "prefs.set",
+                json!({"values": {
+                    "interface.uiScale": case.ui_scale,
+                    "interface.uiFontSize": case.ui_font_size,
+                    "interface.theme": case.theme,
+                }}),
+            )
+            .unwrap();
+        h.run_steps(4);
+
+        let now = h.ctx.input(|i| i.time);
+        let mut splash = crate::splash::SplashState::new();
+        splash.start_time = now - crate::splash::SPLASH_APPEAR_DELAY - 0.1;
+        h.state_mut().splash = Some(splash);
+        h.state_mut().system_ready_override = Some(false);
+        h.run_steps(3);
+
+        let screen_rect = h.ctx.content_rect();
+        let card_rect = h.state().splash.as_ref().and_then(|s| s.last_card_rect).expect("splash card rect recorded");
+        assert!(screen_rect.expand(1.0).contains_rect(card_rect), "{}: card_rect {card_rect:?} escaped screen_rect {screen_rect:?}", case.name);
+
+        let mut vertical_rects = Vec::new();
+        for node in h.query_all_by_role(Role::Label).chain(h.query_all_by_role(Role::ProgressIndicator)) {
+            let r = node.rect();
+            let acc = node.accesskit_node();
+            let label = acc.label().or_else(|| acc.value().map(|v| v.to_string()));
+            assert!(r.is_finite() && r.width() > 0.0 && r.height() > 0.0, "{}: invalid rect {r:?}", case.name);
+            assert!(card_rect.expand(2.0).contains_rect(r), "{}: node {:?} rect {r:?} overflowed card_rect {card_rect:?}", case.name, label);
+            vertical_rects.push((r.min.y, r.max.y, label));
+        }
+        assert!(vertical_rects.len() >= 5, "{}: expected at least 5 splash content nodes, got {}", case.name, vertical_rects.len());
+        vertical_rects.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for pair in vertical_rects.windows(2) {
+            assert!(
+                pair[0].1 <= pair[1].0 + 1.0,
+                "{}: overlapping splash nodes {:?} (max_y={}) and {:?} (min_y={})",
+                case.name,
+                pair[0].2,
+                pair[0].1,
+                pair[1].2,
+                pair[1].0
+            );
+        }
+    }
 }

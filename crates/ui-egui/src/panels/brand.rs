@@ -29,6 +29,16 @@ pub(crate) fn mark() -> Picture<'static> {
     Picture::new("", KEY, &decode)
 }
 
+/// Paints the brand mark fitted into `rect`, reusing the cached texture.
+pub(crate) fn paint_mark(ui: &egui::Ui, rect: egui::Rect) {
+    use craft::ui::primitives::{Revision, TextureStore, TextureStoreOptions, fit_rect};
+    let store = TextureStore::<u64>::in_context(ui.ctx(), "brand", TextureStoreOptions::thumbnails());
+    let texture = store.get_or_put(ui.ctx(), KEY, Revision::default(), decode);
+    let target = fit_rect(rect, texture.size_vec2());
+    let whole = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0));
+    ui.painter().image(texture.id, target, whole, egui::Color32::WHITE);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

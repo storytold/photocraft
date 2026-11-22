@@ -584,6 +584,7 @@ fn main() -> eframe::Result {
             // the first (R71); the app then runs on that context.
             PhotocraftApp::setup_window(&cc.egui_ctx, Default::default(), decision);
             let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), session, services);
+            app.enable_splash();
             app.open_suite(&cc.egui_ctx);
             app.min_frame_ms = uncapped.then_some(1000.0 / 240.0);
             // Only the title bar's free gap drags the window, never the menus (mac_window.rs).
