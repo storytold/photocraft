@@ -312,52 +312,32 @@ fn guided(i: &[f32], p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f
     (0..w * h).map(|k| ma[k] * i[k] + mb[k]).collect()
 }
 
-/// Monotone cubic (Fritsch–Carlson) through `pts` (x ascending, 0..=1), evaluated into a LUT.
+/// Monotone cubic (Fritsch–Carlson) through `pts` (x ascending, 0..=1), evaluated into a LUT via
+/// [`craft_develop::color::spline::MonotoneCurve`].
 pub fn curve_lut(pts: &[[f32; 2]], n: usize) -> Vec<f32> {
-    let mut p: Vec<[f32; 2]> = pts.iter().map(|q| [q[0] / 255.0, q[1] / 255.0]).collect();
-    p.sort_by(|a, b| a[0].total_cmp(&b[0]));
-    p.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-6);
-    if p.len() < 2 {
-        return (0..n).map(|k| k as f32 / (n - 1) as f32).collect();
+    let mut p: Vec<(f64, f64)> = pts.iter().map(|q| (f64::from(q[0]) / 255.0, f64::from(q[1]) / 255.0)).collect();
+    p.sort_by(|a, b| a.0.total_cmp(&b.0));
+    p.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-6);
+    if p.len() < 2 || n < 2 {
+        return (0..n).map(|k| if n <= 1 { 0.0 } else { k as f32 / (n - 1) as f32 }).collect();
     }
-    let m = p.len();
-    let d: Vec<f32> = (0..m - 1).map(|k| (p[k + 1][1] - p[k][1]) / (p[k + 1][0] - p[k][0]).max(1e-6)).collect();
-    let mut t = vec![0.0f32; m];
-    t[0] = d[0];
-    t[m - 1] = d[m - 2];
-    for k in 1..m - 1 {
-        t[k] = if d[k - 1] * d[k] <= 0.0 { 0.0 } else { (d[k - 1] + d[k]) / 2.0 };
-    }
-    for k in 0..m - 1 {
-        if d[k] == 0.0 {
-            t[k] = 0.0;
-            t[k + 1] = 0.0;
-            continue;
-        }
-        let (a, b) = (t[k] / d[k], t[k + 1] / d[k]);
-        let s = a * a + b * b;
-        if s > 9.0 {
-            let tau = 3.0 / s.sqrt();
-            t[k] = tau * a * d[k];
-            t[k + 1] = tau * b * d[k];
-        }
-    }
-    (0..n)
-        .map(|i| {
-            let x = i as f32 / (n - 1) as f32;
-            if x <= p[0][0] {
-                return p[0][1];
-            }
-            if x >= p[m - 1][0] {
-                return p[m - 1][1];
-            }
-            let k = p.windows(2).position(|wv| x <= wv[1][0]).unwrap_or(m - 2);
-            let hh = p[k + 1][0] - p[k][0];
-            let s = (x - p[k][0]) / hh;
-            let (h00, h10, h01, h11) = (2.0 * s * s * s - 3.0 * s * s + 1.0, s * s * s - 2.0 * s * s + s, -2.0 * s * s * s + 3.0 * s * s, s * s * s - s * s);
-            (h00 * p[k][1] + h10 * hh * t[k] + h01 * p[k + 1][1] + h11 * hh * t[k + 1]).clamp(0.0, 1.0)
-        })
-        .collect()
+    craft_develop::color::spline::MonotoneCurve::new(&p).to_lut(n).v.into_iter().map(|v| v.clamp(0.0, 1.0)).collect()
+}
+
+/// Migrate a PhotoCraft Camera Raw / `filter.cameraRaw` settings object to shared
+/// [`craft_develop_model::DevelopSettings`], stripping PhotoCraft-only transport keys
+/// (`layer`, `encodingGamma`, `__cameraRawPsd`) before delegating to
+/// [`craft_develop_model::migration::migrate_camera_raw`].
+pub fn migrate_to_develop_settings(
+    base: &craft_develop_model::DevelopSettings,
+    fields: &serde_json::Value,
+) -> Result<craft_develop_model::migration::Migration, craft_develop_model::migration::MigrationError> {
+    let Some(obj) = fields.as_object() else {
+        return craft_develop_model::migration::migrate_camera_raw(base, fields);
+    };
+    let cleaned: serde_json::Map<String, serde_json::Value> =
+        obj.iter().filter(|(k, _)| !matches!(k.as_str(), "layer" | "encodingGamma" | "__cameraRawPsd")).map(|(k, v)| (k.clone(), v.clone())).collect();
+    craft_develop_model::migration::migrate_camera_raw(base, &serde_json::Value::Object(cleaned))
 }
 
 fn lut_eval(lut: &[f32], v: f32) -> f32 {
