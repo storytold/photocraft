@@ -9,7 +9,7 @@
 
 use craft::theme::variant::Tone;
 use craft::ui::buttons::Button;
-use craft::ui::contract::{Bind, CanvasGesture, Entry, Props as _, Sampler as _, Show as _};
+use craft::ui::contract::{Bind, CanvasGesture, Entry, Props as _, Sampler as _, SaveKey, Show as _};
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft::ui::display::{Shade, Text};
 use craft::ui::notices::{Notice, NoticeLayout};
@@ -66,7 +66,9 @@ pub(crate) struct SunOptions {
 
 impl Default for SunOptions {
     fn default() -> Self {
-        SunOptions { frame: FRAMES[0].0.to_string(), facing: 0, rotation: Some(0.0), exposure: Some(1.0), at: None }
+        // +X: the usual way to show a 2:1 image as a sky, a panoramic sky material, puts its middle
+        // there in a Y-up, left-handed scene.
+        SunOptions { frame: FRAMES[0].0.to_string(), facing: 90, rotation: Some(0.0), exposure: Some(1.0), at: None }
     }
 }
 
@@ -88,7 +90,16 @@ pub(crate) struct FindSunDialog {
     copied: Option<String>,
     /// The active document's canvas, which takes a press through the dialog's modal layer to put the sun.
     canvas: Option<egui::Id>,
+    /// Where the dialog first opens: the bottom right of the canvas, over the lower half of a 2:1 image
+    /// (the ground), so it rarely covers the sun. A place the user moved it to comes first.
+    first_place: egui::Pos2,
 }
+
+/// The dialog's saved placement.
+const PLACE: SaveKey = SaveKey::new("photocraft.findSun");
+
+/// The size the dialog is about, for placing it before it has been drawn.
+const ABOUT_SIZE: egui::Vec2 = egui::vec2(460.0, 460.0);
 
 fn number(v: &Value) -> f64 {
     v.as_f64().unwrap_or(0.0)
@@ -230,10 +241,13 @@ impl StackDialog for FindSunDialog {
     }
 
     fn show(&mut self, ui: &mut egui::Ui, _stack: &DialogStack) -> Option<DialogResult<()>> {
-        let FindSunDialog { options, result, copied, canvas, .. } = self;
-        let canvas = *canvas;
-        let shown =
-            FormDialog::new(label(tl!("Find Sun")), Bind::bound(options)).ok_label(label(tl!("Done"))).alt_resets(false).show(ui, |ui, form, options| {
+        let FindSunDialog { options, result, copied, canvas, first_place, .. } = self;
+        let (canvas, first_place) = (*canvas, *first_place);
+        let shown = FormDialog::new(label(tl!("Find Sun")), Bind::bound(options))
+            .ok_label(label(tl!("Done")))
+            .alt_resets(false)
+            .shaped(move |dialog| dialog.first_place(first_place).remember(PLACE))
+            .show(ui, |ui, form, options| {
                 if let Some(canvas) = canvas {
                     form.pass_canvas_gesture(canvas, CanvasGesture::PRIMARY);
                     form.keep_view_open(canvas);
@@ -304,7 +318,10 @@ pub(crate) fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
     let result = app.run(COMMAND, options.params());
     let computed = app.session.active().map(|st| (options.clone(), st.doc.id, st.revision));
     let canvas = app.session.active_index().map(|idx| crate::canvas::document_display::CanvasHost::primary(app, idx).canvas_id());
-    Ok(app.framework.dialogs.open(FindSunDialog { options, result, computed, copied: None, canvas }))
+    let area = app.last_canvas_rect;
+    let margin = egui::vec2(16.0, 16.0);
+    let first_place = (area.max - ABOUT_SIZE - margin).max(area.min + margin);
+    Ok(app.framework.dialogs.open(FindSunDialog { options, result, computed, copied: None, canvas, first_place }))
 }
 
 /// The dialog's result pump (a `TAKERS` row): puts a Copy button's text on the clipboard, and
