@@ -102,26 +102,23 @@ fn exact(a: &[f32], b: &[f32], what: &str) {
 
 #[test]
 fn offset_fast_path_matches_the_per_channel_oracle() {
-    let mut layouts: Vec<(ColorMode, usize, bool)> = vec![
-        (ColorMode::Rgb, 3, false),
-        (ColorMode::Rgb, 4, true),
-        (ColorMode::Grayscale, 1, false),
-        (ColorMode::Grayscale, 2, true),
-        (ColorMode::Cmyk, 4, false),
-        (ColorMode::Cmyk, 5, true),
-        (ColorMode::Lab, 4, true),
-    ];
-    layouts.extend((1..=MAXC).flat_map(|n| [(ColorMode::Multichannel, n, false), (ColorMode::Multichannel, n, true)]));
+    // The fast path dispatches on the channel count and alpha (`smart_blur`'s `smart_rows` arms, generic code past
+    // five); the colour mode reaches it only through the native white and black, which the oracle computes the same
+    // way. So every count with and without alpha covers every arm, whatever the mode is called (#15652).
+    let layouts: Vec<(ColorMode, usize, bool)> = (1..=MAXC).flat_map(|n| [(ColorMode::Multichannel, n, false), (ColorMode::Multichannel, n, true)]).collect();
     let win = Rect::new(-7, -4, 33, 30);
     for (mode, n, alpha) in layouts {
         let src = image(win, n, alpha);
         let ctx = Ctx { bounds: win, mode, alpha };
-        for radius in [0.1f32, 1.0, 3.0, 12.0, 17.5] {
+        // Centre only, unit stride, and a coarse stride for both qualities. At 13 the inner
+        // rectangle still has pixels, so coarse offsets exercise the fast path too.
+        for radius in [0.1f32, 3.0, 13.0] {
             let ri = f32::ceil(radius) as i32;
             // The usual tile (the window less the halo), the whole window, and one sticking out of it.
             let inner = Rect::new(win.x0 + ri, win.y0 + ri, win.x1 - ri, win.y1 - ri);
             for out in [inner, win, Rect::new(-12, -9, 10, 8), Rect::EMPTY] {
-                for quality in [BlurQuality::Low, BlurQuality::Medium, BlurQuality::High] {
+                // Quality selects the offset stride; both paths are compared to the oracle.
+                for quality in [BlurQuality::Low, BlurQuality::High] {
                     for sm in [SmartBlurMode::Normal, SmartBlurMode::EdgeOnly, SmartBlurMode::OverlayEdge] {
                         for threshold in [8.0, 60.0] {
                             let what = format!("{mode:?} n={n} alpha={alpha} r={radius} {out:?} {quality:?} {sm:?} t={threshold}");

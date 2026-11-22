@@ -362,6 +362,20 @@ fn out_of_range_slice_ids_are_rejected_not_wrapped() {
 }
 
 #[test]
+fn divide_by_size_cuts_parts_that_long_and_the_last_takes_the_rest() {
+    let mut s = session(8);
+    let id = s.execute("slice.new", json!({"rect": [0, 0, 100, 90]})).unwrap()["slice"].as_u64().unwrap();
+    // A count and a size on one axis is refused and changes nothing.
+    let (before, past) = (doc(&s).slices.clone(), s.active().unwrap().history.past_len());
+    assert!(s.execute("slice.divide", json!({"slice": id, "vertical": 2, "verticalSize": 30})).is_err());
+    assert_eq!((&doc(&s).slices, s.active().unwrap().history.past_len()), (&before, past));
+    let r = s.execute("slice.divide", json!({"slice": id, "verticalSize": 30})).unwrap();
+    assert_eq!(r["count"], 4);
+    let edges: Vec<(i32, i32)> = doc(&s).slices.list.iter().map(|sl| (sl.rect.x0, sl.rect.x1)).collect();
+    assert_eq!(edges, [(0, 30), (30, 60), (60, 90), (90, 100)]);
+}
+
+#[test]
 fn divide_refuses_more_parts_than_one_division_makes() {
     // #1020: 1000 x 1000 was accepted (a million slices), and resolving the list is quadratic in
     // the slice count.
