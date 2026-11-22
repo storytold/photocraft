@@ -137,10 +137,18 @@ fn sparse_large_selection_samples_only_its_clipped_window() {
 #[test]
 fn cropped_range_matches_full_canvas_combinations_with_soft_holes_and_clipped_masks() {
     let canvas = Rect::new(0, 0, 64, 48);
-    for case in 0..6 {
-        for selection_mode in ["replace", "add", "subtract", "intersect"] {
-            for preset in ["sampledColors", "reds", "greens", "blues", "highlights", "midtones", "shadows", "skinTones"] {
-                for invert in [false, true] {
+    for preset in ["sampledColors", "reds", "greens", "blues", "highlights", "midtones", "shadows", "skinTones"] {
+        for invert in [false, true] {
+            let params = json!({"select": preset, "points": [[40, 15]], "fuzziness": 40, "invert": invert});
+            // Each selection case starts with the same pixels. Reuse only the unselected full-canvas mask.
+            let full_mask = {
+                let mut full = fixture(SampleType::U16, true);
+                assert!(full.active().unwrap().doc.selection.is_none());
+                full.execute("select.colorRange", params.clone()).unwrap();
+                sel::mask_from_surface(full.active().unwrap().doc.selection.as_ref(), canvas)
+            };
+            for case in 0..6 {
+                for selection_mode in ["replace", "add", "subtract", "intersect"] {
                     let mut s = fixture(SampleType::U16, true);
                     let mut selection = match case {
                         0 => Surface::new(PixelFormat::GRAY8),
@@ -160,13 +168,7 @@ fn cropped_range_matches_full_canvas_combinations_with_soft_holes_and_clipped_ma
                     let mut prior = s.active().unwrap().doc.as_ref().clone();
                     prior.selection = original;
                     let before = sel::mask_from_surface(prior.selection.as_ref(), canvas);
-                    let mut unselected = prior.clone();
-                    unselected.selection = None;
-                    let mut full = Session::new();
-                    full.add_document(unselected, None);
-                    let params = json!({"select": preset, "points": [[40, 15]], "fuzziness": 40, "invert": invert});
-                    full.execute("select.colorRange", params.clone()).unwrap();
-                    let mut mask = sel::mask_from_surface(full.active().unwrap().doc.selection.as_ref(), canvas);
+                    let mut mask = full_mask.clone();
                     let m = SelectionMode::parse(selection_mode);
                     scope_color_range(&mut mask, &prior, canvas, m);
                     let expected = sel::combine(prior.selection.as_ref(), &mask, canvas, m);
@@ -175,7 +177,7 @@ fn cropped_range_matches_full_canvas_combinations_with_soft_holes_and_clipped_ma
                         Ok(())
                     })
                     .unwrap();
-                    let mut params = params;
+                    let mut params = params.clone();
                     params["mode"] = json!(selection_mode);
                     s.execute("select.colorRange", params).unwrap();
                     let actual = sel::mask_from_surface(s.active().unwrap().doc.selection.as_ref(), canvas);
