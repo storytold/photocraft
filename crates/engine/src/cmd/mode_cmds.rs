@@ -14,7 +14,7 @@ use photocraft_algo::transform::{Homography, Interp};
 
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::adjust::CurvePoint;
-use photocraft_doc::{ColorTable, Document, Duotone, DuotoneInk, Layer, LayerContent, LayerId, Size};
+use photocraft_doc::{ColorIndices, ColorTable, Document, Duotone, DuotoneInk, Layer, LayerContent, LayerId, Size};
 use photocraft_geom::{Affine, Rect};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -40,13 +40,23 @@ fn str_or<'a>(p: &'a Value, key: &str, default: &'a str) -> &'a str {
 
 type Enabled = std::result::Result<(), String>;
 
-fn has_doc(s: &Session) -> Enabled {
-    s.active().map(|_| ()).ok_or_else(|| "no document open".into())
-}
-
 fn mode_is(s: &Session, modes: &[ColorMode], what: &str) -> Enabled {
     let d = s.active().ok_or("no document open")?;
     if modes.contains(&d.doc.mode) { Ok(()) } else { Err(format!("{what} (the document is {:?})", d.doc.mode)) }
+}
+
+/// #14509, measured: in a Bitmap document only Arbitrary is greyed in the Image Rotation
+/// submenu - 180, the two 90 turns and both flips stay available - and a scripted call answers
+/// this sentence with the document unchanged. The Crop tool's straighten shares
+/// [`rotate_arbitrary_with`] but was not measured in Bitmap, so only this spec's gate names it.
+const BITMAP_ROTATE_REFUSAL: &str = "Could not complete the command because it does not work with Bitmap images (convert image to Grayscale mode to edit).";
+
+fn rotate_arbitrary_enabled(s: &Session) -> Enabled {
+    let d = s.active().ok_or("no document open")?;
+    if d.doc.mode == ColorMode::Bitmap {
+        return Err(BITMAP_ROTATE_REFUSAL.into());
+    }
+    Ok(())
 }
 
 // ---------- Image Rotation › Arbitrary ----------
@@ -61,14 +71,27 @@ pub fn rotated_size(size: Size, deg: f64) -> Size {
 }
 
 pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
-    rotate_arbitrary_with(s, p, true)
+    // #14465: with no `interpolation` param the resampling comes from Preferences ›
+    // General › Image Interpolation; the preference's own names feed `Interp::parse`, so
+    // Nearest Neighbor and Bilinear act as the `nearest`/`bilinear` params do and the
+    // *not measured* variants (Bicubic Automatic/Sharper/Smoother, Preserve Details)
+    // resample as Bicubic, as today. The param stays for scripts and actions (#7630).
+    // The direct callers keep the old default through `rotate_arbitrary_with`: the Crop
+    // tool's rotated crop and Straighten pass no param and still rotate Bicubic.
+    let mut p = p.as_object().cloned().unwrap_or_default();
+    if p.get("interpolation").and_then(Value::as_str).is_none() {
+        p.insert("interpolation".into(), json!(s.prefs().general.image_interpolation.name()));
+    }
+    rotate_arbitrary_with(s, &Value::Object(p), true, true)
 }
 
 /// [`rotate_arbitrary`]; `image_rotation` is true on the Image Rotation path and decides two
 /// things there: count points stay where they were (#11762) and the selection is dropped, in the
 /// same history step, so one undo brings it back (#14507). The Crop tool's straighten turn and the
 /// Ruler's Straighten pass false: they move count points with the image and warp the selection.
-pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: bool) -> Result<Value> {
+/// `keep_guides` turns the guides with the canvas (#14508, measured for Image Rotation > Arbitrary)
+/// instead of dropping them, as the turned Crop and the Straighten still do (not measured there).
+pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: bool, keep_guides: bool) -> Result<Value> {
     const CMD: &str = "image.rotation.arbitrary";
     // At full precision: an f32 angle can grow the canvas 1 px past what `rotated_size` gives callers.
     let angle = p.get("angle").and_then(Value::as_f64).unwrap_or(0.0);
@@ -82,6 +105,32 @@ pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: 
     };
     if deg.rem_euclid(360.0).abs() < 1e-9 {
         return Ok(json!({"width": s.active().map(|d| d.doc.size.width), "height": s.active().map(|d| d.doc.size.height)}));
+    }
+    use crate::canvas_geom::{self, Turn};
+    let turn = match deg.rem_euclid(360.0) {
+        90.0 => Some(Turn::Cw90),
+        180.0 => Some(Turn::Rotate180),
+        270.0 => Some(Turn::Ccw90),
+        _ => None,
+    };
+    if image_rotation
+        && let Some(turn) = turn
+        && let Some(st) = s.active()
+        && !st.doc.has_artboards()
+    {
+        let a = turn.affine(f64::from(st.doc.size.width), f64::from(st.doc.size.height));
+        let half = Affine::translate(0.5, 0.5);
+        s.set_canvas_map(a, half.then(&a).then(&Affine::translate(-0.5, -0.5)));
+        let size = s.edit("Rotate Canvas", |doc, _| {
+            // Clear the selection before the exact turn so it is dropped in the same history step.
+            doc.selection = None;
+            canvas_geom::keeping_count_points(doc, |doc| canvas_geom::turn_canvas(doc, turn));
+            if !keep_guides {
+                doc.guides = Default::default();
+            }
+            Ok(doc.size)
+        })?;
+        return Ok(json!({"width": size.width, "height": size.height}));
     }
     // The Background stays opaque, whatever the background colour's alpha.
     let bg = [s.tools.background[0], s.tools.background[1], s.tools.background[2], 1.0];
@@ -138,6 +187,7 @@ pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: 
             // What Free Transform leaves alone: unlinked vector masks, gradient angles, artboards…
             crate::canvas_geom::transform_layer_geometry(l, &a, false, dpi);
         }
+        let guides_before = doc.guides.clone();
         if image_rotation {
             crate::canvas_geom::keeping_count_points(doc, |doc| crate::canvas_geom::transform_doc_marks(doc, &a));
         } else {
@@ -154,7 +204,31 @@ pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: 
         // Type, shapes and smart objects re-render from their new geometry; type in a missing
         // font keeps its turned pixels.
         crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All);
-        doc.guides = Default::default();
+        // #14508: the turn keeps its guides. A right angle goes through transform_doc_marks
+        // above, which swaps orientation and position exactly as the reference measures
+        // (90° clockwise: a vertical guide at x=100 becomes a horizontal one at y=100). Any
+        // other angle follows the measured rule: each guide's edge point (the vertical guide's
+        // point on the top edge, the horizontal one's on the left) turns about the old centre
+        // while the UNROUNDED turned bounding box sits flush at the new canvas's origin - on a
+        // 400x300 canvas turned 30° that lands x=100 at 236.60 and y=50 at 43.30, both within
+        // 0.15 px of the reference's 236.49 and 43.19 (the exact rule is not settled, so no
+        // further refinement is guessed). The content itself is centred in the ROUNDED canvas,
+        // so on a non-right angle the guides hug the unrounded geometry, up to a pixel off the
+        // painted edge - as measured. Guide COLOURS for a turned canvas were not measured and
+        // stay cleared as today; guides that end up off the new canvas follow the same rule
+        // continued, they are kept. The turned Crop and Straighten pass keep_guides=false: not
+        // measured there, so they drop guides exactly as they do today.
+        if !keep_guides {
+            doc.guides = Default::default();
+        } else if sn.abs() > 1e-9 && cs.abs() > 1e-9 {
+            let (ow, oh) = (f64::from(old.width), f64::from(old.height));
+            let gw = ow * cs.abs() + oh * sn.abs();
+            let gh = ow * sn.abs() + oh * cs.abs();
+            let txf = gw / 2.0 - (cs * cx - sn * cy);
+            let tyf = gh / 2.0 - (sn * cx + cs * cy);
+            doc.guides.vertical = guides_before.vertical.iter().map(|x| cs * *x + txf).collect();
+            doc.guides.horizontal = guides_before.horizontal.iter().map(|y| cs * *y + tyf).collect();
+        }
         Ok(new)
     })?;
     Ok(json!({"width": size.width, "height": size.height}))
@@ -239,13 +313,14 @@ fn single_layer_surface(doc: &mut Document, active: &mut Option<LayerId>, mode: 
         *surf = pixels;
     }
     *active = Some(l.id);
-    doc.layers = vec![l];
+    doc.layers = vec![l].into();
     for ch in doc.channels.iter_mut() {
         let f = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
         ch.surface = ch.surface.convert(PixelFormat { alpha: ch.surface.format().alpha, ..f });
     }
     doc.quick_mask = None;
     doc.color_table = None;
+    doc.color_indices = None;
     doc.duotone = None;
 }
 
@@ -456,9 +531,13 @@ fn indexed_color(s: &mut Session, raw: &Value) -> Result<Value> {
         }
         let source_profile = crate::color_cmds::document_profile(doc);
         let srgb = Builtin::Srgb.profile();
-        let advanced_cms = advanced && source_profile.color_space == ColorSpace::Rgb && !source_profile.same_bytes(srgb);
+        // Advanced palette-map comparisons are encoded sRGB. A grayscale document's pixels are
+        // gray-profile samples, so they reach that comparison through the compositor's RGB view
+        // of the profile (`composite_profile`), not as if gray samples were sRGB.
+        let comparison_profile = crate::color_cmds::composite_profile(doc);
+        let advanced_cms = advanced && !comparison_profile.same_bytes(srgb);
         if advanced_cms {
-            let transform = craft_cms::transform::cached(&source_profile, srgb, mapping_options)
+            let transform = craft_cms::transform::cached(&comparison_profile, srgb, mapping_options)
                 .map_err(|e| bad(CMD, format!("could not convert advanced Indexed mapping to sRGB: {e}")))?;
             let mut converted = [0.0f32; 16];
             for pixel in &mut px {
@@ -491,12 +570,19 @@ fn indexed_color(s: &mut Session, raw: &Value) -> Result<Value> {
             let kind = kind.ok_or_else(|| bad(CMD, "generated palette kind is missing"))?;
             let forced = forced.ok_or_else(|| bad(CMD, "generated forced-colour mode is missing"))?;
             let pal = quantize::build_palette(&px, kind, requested, forced).map_err(|e| bad(CMD, e))?;
+            // Exact must reserve one palette slot for clear pixels: a built 256-entry opaque
+            // palette plus a transparent entry is one too many. Reject it here, before any
+            // reduction below can silently drop a colour and commit what Exact cannot represent.
+            // The rule is stock-only; advanced callers supply their own mapping.
+            if !advanced && kind == PaletteKind::Exact && has_clear && pal.len() >= 256 {
+                return Err(bad(CMD, "Exact with transparency needs 255 or fewer opaque palette colours plus one transparent entry"));
+            }
             let mut generated = Palette { name: str_or(p, "palette", "selective").to_string(), colors: pal.into_iter().map(|c| c.map(|v| f32::from(v) / 255.0)).collect() };
             // The quantizer requires two samples, but a two-entry Indexed image with a
             // transparency slot has capacity for exactly one opaque colour. Reduce that
             // generated result algorithmically instead of silently exceeding `colors`; the
             // explicit BlackWhite preset is the intentional two-opaque-entry exception.
-            if !generated_black_white && has_clear && colors == 2 {
+            if !generated_black_white && (advanced || kind != PaletteKind::Exact) && has_clear && colors == 2 {
                 generated = crate::palette_cmds::reduce_palette(&generated, 1).map_err(|e| match e {
                     EngineError::BadParams { msg, .. } => bad(CMD, msg),
                     other => other,
@@ -525,7 +611,9 @@ fn indexed_color(s: &mut Session, raw: &Value) -> Result<Value> {
             });
         if needs_transparency {
             let room = if custom_palette.is_some() { 255 } else { colors.saturating_sub(1).max(1) };
-            if !generated_black_white && palette.colors.len() > room {
+            // Stock Exact never reduces: it either fits beside the transparency entry or the
+            // 256-entry rule above rejected it. Fixed palettes keep their explicit reduction.
+            if !generated_black_white && (advanced || kind != Some(PaletteKind::Exact)) && palette.colors.len() > room {
                 if custom_palette.is_some() && !reduce {
                     return Err(bad(CMD, format!("the fixed palette has {} opaque entries but Indexed Color allows {room} with a transparency slot; enable reducePalette for deliberate reduction", palette.colors.len())));
                 }
@@ -536,7 +624,24 @@ fn indexed_color(s: &mut Session, raw: &Value) -> Result<Value> {
             }
         }
         // Replayable snapshots contain the final opaque palette, never our reserved alpha slot.
-        let snapshot = palette.clone();
+        let mut snapshot = palette.clone();
+        // Snapshots are a palette-map input, so they are encoded sRGB. Stock palettes are built
+        // in the document's encoded RGB coordinates; convert only this copy, leaving the document
+        // colour table and indexed pixel output in the document profile. Untagged and sRGB
+        // documents are already sRGB.
+        if !advanced && doc.icc_profile.is_some() && source_profile.color_space == ColorSpace::Rgb && !source_profile.same_bytes(srgb) {
+            let transform = craft_cms::transform::cached(&source_profile, srgb, mapping_options)
+                .map_err(|e| bad(CMD, format!("could not convert Indexed palette snapshot to sRGB: {e}")))?;
+            let mut converted = [0.0f32; 16];
+            for color in &mut snapshot.colors {
+                transform
+                    .eval(&color[..], &mut converted)
+                    .map_err(|e| bad(CMD, format!("could not convert Indexed palette snapshot to sRGB: {e}")))?;
+                // A snapshot is a palette-map input: keep entries in the 0..=1 range that replay
+                // validation requires.
+                color.copy_from_slice(&[converted[0].clamp(0.0, 1.0), converted[1].clamp(0.0, 1.0), converted[2].clamp(0.0, 1.0)]);
+            }
+        }
         if needs_transparency {
             transparent = if advanced {
                 crate::palette_cmds::append_transparency(&mut palette)
@@ -547,17 +652,23 @@ fn indexed_color(s: &mut Session, raw: &Value) -> Result<Value> {
                 None
             };
         }
-        if advanced {
+        let indices: Vec<u8> = if advanced {
             crate::palette_cmds::alpha_for_indexed(&mut mapping, transparent);
             let w = doc.size.width as usize;
-            crate::palette_cmds::indexed_render(&mut px, w, &palette, &mapping, transparent)?;
+            crate::palette_cmds::indexed_render(&mut px, w, &palette, &mapping, transparent)?.into_iter().map(|index| index as u8).collect()
         } else {
             let dither = stock_dither.ok_or_else(|| bad(CMD, "stock dither mode is missing"))?;
             let amount = stock_amount.unwrap_or(0.75);
             let pal: Vec<[u8; 3]> = palette.colors.iter().map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect();
-            quantize::quantize(&mut px, doc.size.width as usize, &pal, dither, amount, transparent);
-        }
+            // The appended transparency entry is a reserved slot, not an opaque colour: an opaque
+            // pixel must match the opaque entries only. Clear pixels still take `transparent`.
+            let opaque = transparent.map_or(pal.len(), |index| index.min(pal.len()));
+            quantize::quantize(&mut px, doc.size.width as usize, &pal[..opaque], dither, amount, transparent)
+        };
         if advanced_cms {
+            // The Indexed output returns to the document's own profile. A gray profile has one
+            // output channel; the expanded Indexed pixels replicate that gray into RGB.
+            let gray_output = source_profile.color_space == ColorSpace::Gray;
             let transform = craft_cms::transform::cached(srgb, &source_profile, mapping_options)
                 .map_err(|e| bad(CMD, format!("could not convert advanced Indexed mapping to document RGB: {e}")))?;
             let mut converted = [0.0f32; 16];
@@ -565,13 +676,23 @@ fn indexed_color(s: &mut Session, raw: &Value) -> Result<Value> {
                 transform
                     .eval(&pixel[..3], &mut converted)
                     .map_err(|e| bad(CMD, format!("could not convert advanced Indexed mapping to document RGB: {e}")))?;
-                pixel[..3].copy_from_slice(&converted[..3]);
+                if gray_output {
+                    let gray = converted[0];
+                    pixel[..3].copy_from_slice(&[gray; 3]);
+                } else {
+                    pixel[..3].copy_from_slice(&converted[..3]);
+                }
             }
             for color in &mut palette.colors {
                 transform
                     .eval(&color[..], &mut converted)
                     .map_err(|e| bad(CMD, format!("could not convert advanced Indexed palette to document RGB: {e}")))?;
-                color.copy_from_slice(&converted[..3]);
+                if gray_output {
+                    let gray = converted[0];
+                    color.copy_from_slice(&[gray; 3]);
+                } else {
+                    color.copy_from_slice(&converted[..3]);
+                }
             }
         }
         single_layer(doc, active, ColorMode::Indexed, &px, if transparent.is_some() { "Index" } else { "Background" }, transparent.is_none());
@@ -579,6 +700,8 @@ fn indexed_color(s: &mut Session, raw: &Value) -> Result<Value> {
         let mut table = crate::palette_cmds::palette_to_color_table(&palette);
         table.transparent = transparent.map(|index| index as u8);
         doc.color_table = Some(table);
+        let bounds = doc.bounds();
+        doc.color_indices = doc.layers.first().and_then(|l| ColorIndices::new(l.id, l.surface()?, bounds, &indices));
         Ok((palette.colors.len(), transparent, snapshot))
     })?;
     Ok(json!({"colors": pal_len, "transparentIndex": transparent, "paletteSnapshot": palette_snapshot}))
@@ -674,7 +797,15 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
     let out = report(&table);
     s.edit("Color Table", |doc, _| {
         let old = cur.clone();
-        for surf in doc.layers.iter_mut().filter_map(Layer::surface_mut) {
+        // A pixel keeps its index where it is known, so entries of one colour keep their own
+        // pixels; elsewhere it takes the nearest entry (#14342). The indices written here are
+        // known afterwards, for the recorded layer (Indexed documents have one).
+        let known = doc.color_indices.take();
+        let has_pixels = |id: LayerId| doc.layers.iter().any(|l| l.id == id && l.surface().is_some());
+        let record = known.as_ref().map(|k| k.layer).filter(|&id| has_pixels(id)).or_else(|| doc.layers.iter().find(|l| l.surface().is_some()).map(|l| l.id));
+        for l in doc.layers.iter_mut() {
+            let id = l.id;
+            let Some(surf) = l.surface_mut() else { continue };
             let r = surf.content_bounds();
             if r.is_empty() {
                 continue;
@@ -682,7 +813,9 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
             let fmt = surf.format();
             let n = fmt.channels();
             let mut data = surf.read_region(r);
-            for q in data.chunks_exact_mut(n) {
+            let indices = known.as_ref().and_then(|k| k.known(id, surf, r)).unwrap_or_default();
+            let mut written = vec![0u8; if record == Some(id) { data.len() / n } else { 0 }];
+            for (k, q) in data.chunks_exact_mut(n).enumerate() {
                 let c = photocraft_raster::to_rgba(&fmt, q);
                 let rgb = [c[0], c[1], c[2]];
                 let i = if c[3] <= 0.0 {
@@ -692,8 +825,13 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
                     }
                     i
                 } else {
-                    old.nearest(rgb)
+                    // A known index past the table stays: its pixel shows black until the table
+                    // grows back over it.
+                    indices.get(k).map_or_else(|| old.nearest(rgb), |&i| usize::from(i))
                 };
+                if let Some(w) = written.get_mut(k) {
+                    *w = i as u8;
+                }
                 let alpha = if table.transparent == Some(i as u8) {
                     0.0
                 } else if c[3] <= 0.0 {
@@ -701,13 +839,17 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
                 } else {
                     c[3]
                 };
-                let nc = if i < table.colors.len() { table.rgb(i) } else { table.rgb(table.nearest([c[0], c[1], c[2]])) };
+                // An index past a shrunk table has no colour: black, as in Photoshop (#14342).
+                let nc = table.rgb(i);
                 let mut enc = [0.0f32; 8];
                 let m = photocraft_raster::from_rgba_into(&fmt, [nc[0], nc[1], nc[2], alpha], &mut enc);
                 q.copy_from_slice(&enc[..m]);
             }
             surf.write_region(r, &data);
             surf.prune();
+            if record == Some(id) {
+                doc.color_indices = ColorIndices::new(id, surf, r, &written);
+            }
         }
         doc.color_table = Some(table.clone());
         Ok(())
@@ -809,6 +951,11 @@ fn custom_pattern_map(s: &Session, cmd: &str, p: &Value) -> Result<(Vec<f32>, us
 }
 
 fn bitmap(s: &mut Session, p: &Value) -> Result<Value> {
+    bitmap_in_bands(s, p, 0)
+}
+
+/// Convert with the requested compositor band height (zero chooses its normal budget).
+fn bitmap_in_bands(s: &mut Session, p: &Value, band_rows: i32) -> Result<Value> {
     const CMD: &str = "image.mode.bitmap";
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let input = f64::from(d.doc.resolution_dpi.max(1.0));
@@ -883,7 +1030,7 @@ fn bitmap(s: &mut Session, p: &Value) -> Result<Value> {
         let n = fmt.channels();
         let mut out = Surface::new(fmt);
         let (mut gray, mut data) = (Vec::new(), Vec::new());
-        let _ = photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> std::result::Result<(), std::convert::Infallible> {
+        let _ = photocraft_compose::render_bands(doc, doc.bounds(), band_rows, |band| -> std::result::Result<(), std::convert::Infallible> {
             gray.clear();
             gray.extend(band.px.iter().map(|q| {
                 // Over white, as the flattened image.
@@ -984,8 +1131,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.rotation.arbitrary",
             "Arbitrary…",
             ["Image", "Image Rotation"],
-            r##"{"angle":-359.99..359.99=0,"direction":"cw|ccw"="cw","interpolation":"bicubic|bilinear|nearest"="bicubic"}"##,
-            has_doc,
+            r##"{"angle":-359.99..359.99=0,"direction":"cw|ccw"="cw","interpolation":"bicubic|bilinear|nearest" (absent: Preferences › General › Image Interpolation; its not-measured variants resample as bicubic)}"##,
+            rotate_arbitrary_enabled,
             rotate_arbitrary
         ),
         spec!(
@@ -1042,7 +1189,123 @@ pub fn display_document(doc: &Document) -> Option<Document> {
 }
 
 #[cfg(test)]
+#[path = "rotate_canvas_right_angle_tests.rs"]
+mod rotate_canvas_right_angle_tests;
+#[cfg(test)]
 #[path = "rotate_canvas_selection_tests.rs"]
 mod rotate_canvas_selection_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod color_table_index_tests;
+#[cfg(test)]
+#[path = "rotate_canvas_interpolation_pref_tests.rs"]
+mod rotate_canvas_interpolation_pref_tests;
+
+/// Stock Indexed Color regressions kept beside the conversion they guard.
+#[cfg(test)]
+mod stock_indexed_regressions {
+    use super::*;
+
+    fn paint(s: &mut Session, f: impl Fn(i32) -> [f32; 4]) {
+        s.edit("setup", |doc, active| {
+            let b = doc.bounds();
+            let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            let fmt = surf.format();
+            let mut data = Vec::new();
+            for y in b.y0..b.y1 {
+                for x in b.x0..b.x1 {
+                    data.extend(photocraft_raster::from_rgba(&fmt, f(x)));
+                }
+            }
+            surf.write_region(b, &data);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    fn doc(s: &Session) -> &Document {
+        &s.active().unwrap().doc
+    }
+
+    #[test]
+    fn stock_black_white_keeps_opaque_white_out_of_the_transparency_slot() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 3, "height": 1, "background": "transparent"})).unwrap();
+        paint(&mut s, |x| match x {
+            0 => [0.0, 0.0, 0.0, 1.0],
+            1 => [1.0, 1.0, 1.0, 1.0],
+            _ => [0.0; 4],
+        });
+        let result = s.execute("image.mode.indexedColor", json!({"palette": "blackWhite", "colors": 2, "forced": "blackWhite", "dither": "none"})).unwrap();
+        assert_eq!(result["colors"], 3);
+        assert_eq!(result["transparentIndex"], 2);
+        let d = doc(&s);
+        let table = d.color_table.as_ref().unwrap();
+        assert_eq!(table.transparent, Some(2));
+        assert_eq!(d.layers[0].surface().unwrap().rgba(0, 0), [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(d.layers[0].surface().unwrap().rgba(1, 0), [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(d.layers[0].surface().unwrap().rgba(2, 0)[3], 0.0);
+        let indices = d.color_indices.as_ref().unwrap().indices.to_interleaved(d.bounds());
+        assert_eq!(indices, vec![0, 1, 2], "opaque white must use the opaque white entry, not the transparency slot");
+    }
+
+    #[test]
+    fn stock_opaque_near_white_does_not_take_the_synthetic_transparency_slot() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 1, "background": "transparent"})).unwrap();
+        paint(&mut s, |x| match x {
+            0 => [0.0, 0.0, 0.0, 1.0],
+            1 => [0.5, 0.5, 0.5, 1.0],
+            2 => [250.0 / 255.0, 250.0 / 255.0, 250.0 / 255.0, 1.0],
+            _ => [0.0; 4],
+        });
+        s.execute("image.mode.indexedColor", json!({"palette": "uniform", "colors": 3, "forced": "none", "dither": "none"})).unwrap();
+        let d = doc(&s);
+        let transparent = d.color_table.as_ref().unwrap().transparent.expect("transparency slot") as u8;
+        let indices = d.color_indices.as_ref().unwrap().indices.to_interleaved(d.bounds());
+        assert_ne!(indices[2], transparent, "an opaque near-white must match an opaque palette entry");
+        assert_eq!(indices[3], transparent, "a clear pixel still takes the transparency slot");
+    }
+
+    #[test]
+    fn stock_tagged_rgb_palette_snapshot_is_encoded_srgb() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 1, "height": 1, "depth": 8, "mode": "rgb", "profile": "display-p3", "background": "transparent"})).unwrap();
+        let p3 = craft_cms::Builtin::DisplayP3.profile();
+        let mut encoded = [0.0f32; 16];
+        craft_cms::Transform::new(craft_cms::Builtin::Srgb.profile(), p3, craft_cms::Intent::RelativeColorimetric, true)
+            .unwrap()
+            .eval(&[1.0, 0.0, 0.0], &mut encoded)
+            .unwrap();
+        paint(&mut s, |_| [encoded[0], encoded[1], encoded[2], 1.0]);
+        let result = s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none", "transparency": false})).unwrap();
+        // The document colour table stays in Display P3 (the pixels' own encoding)…
+        assert_eq!(doc(&s).color_table.as_ref().unwrap().colors.as_slice(), &[[234, 51, 35]]);
+        // …while the replayable snapshot, a palette-map input, is encoded sRGB.
+        let snapshot = result["paletteSnapshot"]["colors"][0].as_array().unwrap();
+        let rgb = [snapshot[0].as_f64().unwrap(), snapshot[1].as_f64().unwrap(), snapshot[2].as_f64().unwrap()];
+        assert!((rgb[0] - 1.0).abs() < 0.01 && rgb[1].abs() < 0.01 && rgb[2].abs() < 0.01, "snapshot must be encoded sRGB: {rgb:?}");
+    }
+
+    #[test]
+    fn advanced_mapping_on_grayscale_stays_gray() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 2, "height": 1, "mode": "grayscale", "background": "transparent"})).unwrap();
+        paint(&mut s, |x| if x == 0 { [0.5, 0.5, 0.5, 1.0] } else { [0.0; 4] });
+        // A deliberately non-gray palette: the Indexed output transform must return it to the
+        // grayscale document's profile, so neither the table nor the pixels stay coloured.
+        s.execute(
+            "image.mode.indexedColor",
+            json!({"paletteSnapshot": {"name": "rgb", "colors": [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]}, "mapping": {"method": "none"}, "transparency": true}),
+        )
+        .unwrap();
+        let d = doc(&s);
+        for color in &d.color_table.as_ref().unwrap().colors {
+            assert!(color[0] == color[1] && color[1] == color[2], "Indexed table must stay gray: {color:?}");
+        }
+        let pixel = d.layers[0].surface().unwrap().rgba(0, 0);
+        assert!(pixel[0] == pixel[1] && pixel[1] == pixel[2], "Indexed pixels must stay gray: {pixel:?}");
+    }
+}

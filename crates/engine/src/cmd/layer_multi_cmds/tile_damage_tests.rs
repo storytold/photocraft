@@ -529,13 +529,14 @@ fn a_failed_compound_reports_no_change() {
 fn select_then_edit_in_one_command_is_bounded() {
     let mut s = session(1024, 768);
     let id = layer_with(&mut s, &[(Rect::new(0, 0, 1024, 768), [0.2, 0.4, 0.6, 1.0])]);
+    use crate::actions_cmds::ActionStep;
     let steps = vec![
-        ("layer.select".to_string(), json!({"layer": id.0})),
-        ("select.rect".to_string(), json!({"x": 300, "y": 300, "width": 50, "height": 40})),
-        ("edit.fill".to_string(), json!({"color": "#ff0000"})),
-        ("select.deselect".to_string(), json!({})),
+        ActionStep::new("layer.select", json!({"layer": id.0})),
+        ActionStep::new("select.rect", json!({"x": 300, "y": 300, "width": 50, "height": 40})),
+        ActionStep::new("edit.fill", json!({"color": "#ff0000"})),
+        ActionStep::new("select.deselect", json!({})),
     ];
-    s.actions.list.push(crate::actions_cmds::Action::new("A", steps));
+    s.actions.list.push(crate::actions_cmds::Action::new("A", steps)).unwrap();
     let (_, d) = command_damage(&mut s, "actions.play", json!({"action": "A"}));
     assert!(d.contains(300, 300) && d.contains(349, 339), "{d:?}");
     assert!(u64::from(d.width()) * u64::from(d.height()) * 4 < 1024 * 768, "the filled tiles, not the canvas: {d:?}");

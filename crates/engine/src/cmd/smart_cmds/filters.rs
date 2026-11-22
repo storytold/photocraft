@@ -1,8 +1,8 @@
 use super::rendering::{refresh_or_fail, refresh_or_fail_in};
 use super::source::source_bytes;
 use super::{
-    BlendMode, Document, EngineError, Layer, LayerContent, LayerId, LayerMask, Result, Session, SmartObject, Surface, Value, bad, blend_from_str, json,
-    layer_param, other,
+    BlendMode, Document, EngineError, Layer, LayerContent, LayerId, LayerMask, Result, Session, SmartObject, Surface, Value, bad, json, layer_param, other,
+    parse_blend,
 };
 use crate::jobs::JobCtx;
 
@@ -239,6 +239,10 @@ pub(super) fn set_filter_params(s: &mut Session, p: &Value) -> Result<Value> {
                 f.params = photocraft_io::smart_map::displace_without_map(&f.params);
             }
         }
+        // As applying it does: the re-render can't read the document's alpha channels.
+        if f.command == "filter.blur.lensBlur" && f.params.get("depthMap").and_then(Value::as_str) == Some("channel") {
+            return Err(EngineError::Other(crate::filters::LENS_BLUR_CHANNEL_ON_SMART.into()));
+        }
         // Authorize the underlying command with the complete merged params, including paths
         // already stored in the document, before committing the edit or starting a worker.
         if let Some(gate) = authorize {
@@ -251,7 +255,7 @@ pub(super) fn set_filter_params(s: &mut Session, p: &Value) -> Result<Value> {
 pub(super) fn blending_options(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "layer.smartFilter.blendingOptions";
     let blend = match p.get("blend").and_then(Value::as_str) {
-        Some(b) => Some(blend_from_str(b).filter(|m| *m != BlendMode::PassThrough).ok_or_else(|| bad(CMD, format!("unknown blend mode `{b}`")))?),
+        Some(b) => Some(parse_blend(b).filter(|m| *m != BlendMode::PassThrough).ok_or_else(|| bad(CMD, format!("unknown blend mode `{b}`")))?),
         None => None,
     };
     let opacity = p.get("opacity").and_then(Value::as_f64).map(|o| if o > 1.0 { o / 100.0 } else { o } as f32);

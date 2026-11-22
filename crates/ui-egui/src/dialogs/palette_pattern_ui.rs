@@ -7,6 +7,10 @@
 use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 
+use craft::behavior::IconId;
+use craft::ui::buttons::IconButton;
+use craft::ui::contract::{Props as _, Show as _};
+use craft::ui::runtime::env::Label;
 use egui::{Color32, CornerRadius, Sense, TextureHandle, Ui, pos2, vec2};
 use photocraft_algo::palette_map::{Method, Palette, Pattern, PatternKind, Settings, render_pixels};
 use serde_json::{Map, Value, json};
@@ -326,8 +330,8 @@ fn draw_pattern_row(ui: &mut Ui, fields: &mut Map<String, Value>, patterns: &mut
     }
 
     let text_left = thumb_rect.right() + 8.0;
-    let title_galley = crate::tab_strip::elided(ui, &title, title_font, t.text, (rect.right() - text_left - 6.0).max(20.0));
-    let detail_galley = crate::tab_strip::elided(ui, &summary, detail_font, t.text_dim, (rect.right() - text_left - 6.0).max(20.0));
+    let title_galley = super::palette_map_ui::elided_galley(ui, &title, title_font, t.text, (rect.right() - text_left - 6.0).max(20.0));
+    let detail_galley = super::palette_map_ui::elided_galley(ui, &summary, detail_font, t.text_dim, (rect.right() - text_left - 6.0).max(20.0));
     let text_top = rect.top() + (rect.height() - text_height) * 0.5;
     ui.painter().galley(pos2(text_left, text_top), title_galley, t.text);
     ui.painter().galley(pos2(text_left, text_top + title_height + 3.0), detail_galley, t.text_dim);
@@ -383,11 +387,11 @@ fn draw_pattern_list(ui: &mut Ui, fields: &mut Map<String, Value>, patterns: &mu
 fn draw_pattern_actions(ui: &mut Ui, selected: usize, patterns_len: usize) -> Option<ListAction> {
     let mut action = None;
     ui.horizontal_wrapped(|ui| {
-        let up = ui.add_enabled_ui(selected > 0, |ui| crate::icons::button(ui, "chevron-up", 24.0, false, tl!("Move up"))).inner;
+        let up = IconButton::new(IconId::new("chevron_up")).label(Label::from(tl!("Move up"))).enabled(selected > 0).show(ui);
         if up.clicked() {
             action = Some(ListAction::MoveUp);
         }
-        let down = ui.add_enabled_ui(selected + 1 < patterns_len, |ui| crate::icons::button(ui, "chevron-down", 24.0, false, tl!("Move down"))).inner;
+        let down = IconButton::new(IconId::new("chevron_down")).label(Label::from(tl!("Move down"))).enabled(selected + 1 < patterns_len).show(ui);
         if down.clicked() {
             action = Some(ListAction::MoveDown);
         }
@@ -453,7 +457,7 @@ fn draw_pattern_editor(ui: &mut Ui, fields: &mut Map<String, Value>, patterns: &
     let options = KINDS.iter().map(|(id, label)| ((*id).to_owned(), *label)).collect::<Vec<_>>();
     ui.horizontal_wrapped(|ui| {
         ui.label(egui::RichText::new(tl!("Pattern")).color(t.text_dim));
-        let _ = crate::widgets::dropdown(ui, "palette-pattern-kind", tl!("Pattern"), &mut kind, &options, 160.0);
+        let _ = super::palette_map_ui::dropdown(ui, "palette-pattern-kind", tl!("Pattern"), &mut kind, &options, 160.0);
     });
     let kind_changed = pattern_kind_from_id(&kind) != old_kind;
     if kind_changed {
@@ -462,13 +466,13 @@ fn draw_pattern_editor(ui: &mut Ui, fields: &mut Map<String, Value>, patterns: &
 
     let amount_before = pattern.amount;
     let mut amount = if amount_before.is_finite() { amount_before * 100.0 } else { 0.0 };
-    if crate::widgets::slider_row(ui, "Strength", &mut amount, 0.0..=100.0, "%", None).changed() {
+    if super::palette_map_ui::slider_row(ui, "Strength", &mut amount, 0.0..=100.0, "%", None).changed() {
         pattern.amount = (amount / 100.0).clamp(0.0, 1.0);
     }
 
     let scale_before = pattern.scale;
     let mut scale = scale_before.clamp(1, 64) as f32;
-    if crate::widgets::slider_row(ui, "Scale", &mut scale, 1.0..=64.0, "px", None).changed() {
+    if super::palette_map_ui::slider_row(ui, "Scale", &mut scale, 1.0..=64.0, "px", None).changed() {
         pattern.scale = scale.round().clamp(1.0, 64.0) as u32;
     }
 
@@ -487,7 +491,7 @@ fn draw_pattern_editor(ui: &mut Ui, fields: &mut Map<String, Value>, patterns: &
         });
         ui.horizontal_wrapped(|ui| {
             ui.label(egui::RichText::new(tl!("Matrix")).color(t.text_dim));
-            if crate::widgets::dropdown(ui, "palette-pattern-matrix-size", tl!("Matrix"), &mut matrix_size, &matrix_options, 110.0)
+            if super::palette_map_ui::dropdown(ui, "palette-pattern-matrix-size", tl!("Matrix"), &mut matrix_size, &matrix_options, 110.0).changed()
                 && let Ok(next) = matrix_size.parse::<u32>()
             {
                 matrix_size_changed = next != old_matrix_size;
@@ -538,7 +542,7 @@ fn draw_pattern_editor(ui: &mut Ui, fields: &mut Map<String, Value>, patterns: &
                     for cell in 0..expected {
                         let Some(value) = pattern.matrix.get_mut(cell) else { continue };
                         let mut next = *value;
-                        if crate::widgets::value_field(ui, &mut next, 0.0..=1.0, "", 42.0).changed() {
+                        if super::palette_map_ui::value_field(ui, &mut next, 0.0..=1.0, "", 42.0).changed() {
                             *value = next;
                         }
                         if (cell + 1) % side == 0 {

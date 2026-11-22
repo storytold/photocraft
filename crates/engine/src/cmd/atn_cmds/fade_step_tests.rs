@@ -18,7 +18,10 @@ fn fade_file(descriptor: Descriptor) -> Vec<u8> {
 fn imported(descriptor: Descriptor) -> (String, f64, String) {
     let loaded = import(&fade_file(descriptor)).unwrap();
     assert!(loaded.unsupported.is_empty());
-    let (id, params) = &loaded.actions[0].steps[0];
+    let (id, params) = {
+        let step = &loaded.actions[0].steps[0];
+        (&step.command, &step.params)
+    };
     (id.clone(), params["opacity"].as_f64().unwrap(), params["mode"].as_str().unwrap().to_owned())
 }
 

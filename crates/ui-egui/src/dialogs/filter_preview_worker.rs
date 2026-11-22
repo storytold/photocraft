@@ -112,7 +112,7 @@ impl Worker {
 }
 
 /// Cancel a worker owned by `dialog` as soon as the dialog's Cancel action closes it.
-pub(crate) fn cancel_dialog(app: &mut crate::PhotocraftApp, dialog: u64) {
+pub(crate) fn cancel_dialog(app: &mut crate::PhotocraftApp, dialog: craft::ui::dialog::DialogId) {
     if app.filter_preview_worker.running.as_ref().is_some_and(|r| r.key.dialog == dialog)
         && let Some(r) = &app.filter_preview_worker.running
     {
@@ -122,21 +122,15 @@ pub(crate) fn cancel_dialog(app: &mut crate::PhotocraftApp, dialog: u64) {
 
 /// Stop and release previews of closed dialogs even when their canvas is no longer being drawn.
 pub(crate) fn discard_closed(app: &mut crate::PhotocraftApp) {
-    // A second open filter dialog must not keep the first dialog's worker alive. Conversely, a
-    // committed preview has no open dialog by design and must remain until its edit job lands.
-    let tracked_dialog = app
-        .filter_preview_worker
-        .running
-        .as_ref()
-        .map(|r| r.key.dialog)
-        .or_else(|| app.filter_preview.as_ref().filter(|p| !p.committing).map(|p| p.key.dialog));
-    let visible = tracked_dialog.is_some_and(|dialog| {
-        app.ui.dialogs.iter().any(|d| {
-            d.id == dialog
-                && d.fields.contains_key("__filter")
-                && d.fields.get("__preview").and_then(serde_json::Value::as_bool) == Some(true)
-                && d.fields.get("__smartFilter").is_none_or(|target| crate::smart_filter_dialog::validate_target(app, target).is_ok())
-        })
+    use craft::ui::dialog::StackDialog as _;
+    use craft::ui::patterns::form_dialogs::HostedParamDialog;
+    // An open parameter dialog with its Preview box on keeps the preview alive; a smart filter edit also needs
+    // its target, read from the value the open captured.
+    let visible = app.framework.dialogs.stack().ids().any(|id| {
+        let Some(dialog) = app.framework.dialogs.get_by_id::<HostedParamDialog>(id) else { return false };
+        let Some(key) = dialog.key() else { return false };
+        let captured = crate::dialogs::params::captured(app, key);
+        dialog.is_previewing() && (!crate::smart_filter_dialog::is_target(&captured) || crate::smart_filter_dialog::validate_target(app, &captured).is_ok())
     });
     if !visible {
         if let Some(r) = &app.filter_preview_worker.running {
@@ -159,13 +153,15 @@ mod tests {
             doc: photocraft_doc::DocId(1),
             revision,
             sources: Vec::new(),
-            dialog,
+            dialog: craft::ui::dialog::DialogId::unique(dialog),
+            open: 0,
             active: None,
             target: Default::default(),
             command: "image.mode.indexedColor".into(),
             params: json!({"colors": colors}),
             k: 1,
             tool_colors: ([0.0, 0.0, 0.0, 1.0], [1.0; 4]),
+            scratch: 0,
         }
     }
 

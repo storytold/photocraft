@@ -8,6 +8,9 @@ use egui::{Color32, CornerRadius, Sense, Ui, vec2};
 use photocraft_algo::palette_map::{AlphaMode, Distance, Method, Palette, Settings};
 use serde_json::{Map, Value, json};
 
+use craft::ui::dialog::DialogId;
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog};
+
 use crate::PhotocraftApp;
 use crate::theme::Tokens;
 
@@ -16,9 +19,167 @@ const IMPORT_REQUEST: &str = "__paletteImport";
 const SEARCH_FIELD: &str = "__paletteSearch";
 pub(crate) const CUSTOM_ID: &str = "custom";
 
+/// The values the palette controls own: palette choice, embedded snapshot and mapping settings.
+const OWNED_KEYS: [&str; 3] = ["paletteId", "paletteSnapshot", "mapping"];
+
+/// Wheel gestures a slider row may take; the palette rows take none (the wheel scrolls their pane).
+#[derive(Clone, Copy, Default)]
+pub(crate) struct RowGestures;
+
+/// Draw a menu of `options` (`id`, label) at `width`, keeping the id in `value`. The label is drawn
+/// by the caller; the response reports a selection as changed.
+pub(crate) fn dropdown<L: AsRef<str>>(ui: &mut Ui, id_salt: &str, _label: &str, value: &mut String, options: &[(String, L)], width: f32) -> egui::Response {
+    let selected = options.iter().find(|(id, _)| id == value).map(|(_, label)| label.as_ref().to_owned()).unwrap_or_else(|| value.clone());
+    let before = value.clone();
+    let mut response = egui::ComboBox::from_id_salt(id_salt).width(width).selected_text(selected).show_ui(ui, |ui| {
+        for (id, label) in options {
+            ui.selectable_value(value, id.clone(), label.as_ref());
+        }
+    });
+    if *value != before {
+        response.response.mark_changed();
+    }
+    response.response
+}
+
+/// A label, a slider and its number field on one row. `extra` is kept for the schema rows' trailing
+/// control; the palette rows pass `None`.
+pub(crate) fn slider_row(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, unit: &str, extra: Option<f32>) -> egui::Response {
+    slider_row_with(ui, label, value, range, unit, extra, RowGestures)
+}
+
+/// [`slider_row`] with the row's gestures (the palette rows take none).
+pub(crate) fn slider_row_with(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    unit: &str,
+    _extra: Option<f32>,
+    _gestures: RowGestures,
+) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let mut changed = false;
+    let mut response = ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(crate::i18n::t(label)).color(t.text_dim));
+        changed |= ui.add(egui::Slider::new(value, range.clone()).show_value(false)).changed();
+        let mut shown = *value;
+        let drag = egui::DragValue::new(&mut shown).range(range).speed(0.01).suffix(unit);
+        if ui.add_sized(vec2(58.0, ui.spacing().interact_size.y), drag).changed() {
+            *value = shown;
+            changed = true;
+        }
+    });
+    if changed {
+        response.response.mark_changed();
+    }
+    response.response
+}
+
+/// A fixed-width number field, as the threshold matrix cells are.
+pub(crate) fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, unit: &str, width: f32) -> egui::Response {
+    let drag = egui::DragValue::new(value).range(range).speed(0.01).suffix(unit);
+    ui.add_sized(vec2(width, ui.spacing().interact_size.y), drag)
+}
+
+/// The dialog's values as the plain JSON map the palette controls edit.
+fn dialog_values(fields: &DialogFields) -> Map<String, Value> {
+    match serde_json::to_value(fields) {
+        Ok(Value::Object(map)) => map,
+        _ => Map::new(),
+    }
+}
+
+/// Writes the values the palette controls own back into `fields`, keeping the others untouched.
+fn write_owned(fields: &mut DialogFields, values: &Map<String, Value>) {
+    for key in OWNED_KEYS {
+        match values.get(key) {
+            Some(Value::String(text)) => fields.set(key, FieldValue::Text(text.clone())),
+            Some(value) => fields.set(key, FieldValue::Json(value.clone())),
+            None => {
+                fields.remove(key);
+            }
+        }
+    }
+}
+
+/// Writes the controls' transient keys (search text, an import request, its error or name) back.
+fn write_internal(fields: &mut DialogFields, values: &Map<String, Value>) {
+    for (key, value) in values.iter().filter(|(key, _)| key.starts_with("__")) {
+        fields.set(key.clone(), FieldValue::Json(value.clone()));
+    }
+}
+
+/// Draws the palette browser into a custom dialog row, keeping its values in `fields`.
+pub(crate) fn palette_row(ui: &mut Ui, fields: &mut DialogFields) -> egui::Response {
+    let mut values = dialog_values(fields);
+    palette_controls(ui, &mut values);
+    write_owned(fields, &values);
+    write_internal(fields, &values);
+    ui.response()
+}
+
+/// Draws the mapping settings into a custom dialog row, keeping its values in `fields`.
+pub(crate) fn mapping_row(ui: &mut Ui, fields: &mut DialogFields) -> egui::Response {
+    let mut values = dialog_values(fields);
+    mapping_controls(ui, &mut values);
+    write_owned(fields, &values);
+    write_internal(fields, &values);
+    ui.response()
+}
+
+/// The palette fields a Palette Map dialog opens with: the last used, remembered choices when they
+/// still validate, else the bundled default palette.
+pub(crate) fn opening_fields(app: &PhotocraftApp, command: &str) -> Map<String, Value> {
+    let mut values = Map::new();
+    if let Some(Value::Object(saved)) = app.session.prefs().dialogs.get(command) {
+        for key in OWNED_KEYS {
+            if let Some(value) = saved.get(key).filter(|value| valid_palette_widget_value(key, value)) {
+                values.insert(key.into(), value.clone());
+            }
+        }
+    }
+    if !fixed_palette_selected(&values) {
+        values.remove("paletteId");
+        values.remove("paletteSnapshot");
+    }
+    // A custom selection without its snapshot is no palette: fall back to the bundled default.
+    if values.get("paletteId").and_then(Value::as_str) == Some(CUSTOM_ID) && values.get("paletteSnapshot").is_none() {
+        values.remove("paletteId");
+    }
+    ensure_filter_default(&mut values);
+    values
+}
+
+/// Keeps the palette choices with the dialog's last-used values after a successful run.
+pub(crate) fn remember(app: &mut PhotocraftApp, command: &str, fields: &DialogFields) {
+    let values = dialog_values(fields);
+    let saved: Vec<(String, Value)> =
+        OWNED_KEYS.iter().filter_map(|key| values.get(*key).filter(|value| valid_palette_widget_value(key, value)).map(|value| ((*key).to_owned(), value.clone()))).collect();
+    app.session.edit_prefs(|prefs| {
+        let entry = prefs.dialogs.entry(command.to_owned()).or_insert_with(|| json!({}));
+        if let Some(object) = entry.as_object_mut() {
+            for (key, value) in saved {
+                object.insert(key, value);
+            }
+        }
+    });
+}
+
 /// Whether `command` uses the Palette Map controls.
 pub fn owns_command(command: &str) -> bool {
     command == FILTER_COMMAND
+}
+
+/// Whether a remembered value still fits its key: a non-empty palette id, a valid embedded palette,
+/// or mapping settings the engine accepts.
+fn valid_palette_widget_value(key: &str, value: &Value) -> bool {
+    match key {
+        "paletteId" => value.as_str().is_some_and(|id| !id.is_empty()),
+        "paletteSnapshot" => serde_json::from_value::<Palette>(value.clone()).is_ok_and(|palette| palette.validate().is_ok()),
+        "mapping" => parse_mapping(value).is_ok(),
+        _ => false,
+    }
 }
 
 fn snapshot(fields: &Map<String, Value>) -> Option<Palette> {
@@ -82,6 +243,14 @@ pub fn ensure_filter_default(fields: &mut Map<String, Value>) {
     }
 }
 
+/// `text` on one line, cut with an ellipsis past `width`, laid out at `font` in `color`.
+pub(crate) fn elided_galley(ui: &Ui, text: &str, font: egui::FontId, color: Color32, width: f32) -> std::sync::Arc<egui::Galley> {
+    let format = egui::TextFormat { font_id: font, color, ..Default::default() };
+    let mut job = egui::text::LayoutJob::single_section(text.to_owned(), format);
+    job.wrap = egui::text::TextWrapping { max_width: width.max(1.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+    ui.painter().layout_job(job)
+}
+
 fn palette_card(ui: &mut Ui, fields: &mut Map<String, Value>, b: &photocraft_algo::palettes::BuiltinPalette, width: f32) {
     let t = Tokens::get(ui.ctx());
     let selected = selected_builtin(fields, b);
@@ -120,7 +289,7 @@ fn palette_card(ui: &mut Ui, fields: &mut Map<String, Value>, b: &photocraft_alg
         ui.painter().add(egui::Shape::mesh(mesh));
     }
     let name_font = egui::TextStyle::Body.resolve(ui.style());
-    let name_galley = crate::tab_strip::elided(ui, &b.palette.name, name_font, t.text, rect.width() - 14.0);
+    let name_galley = elided_galley(ui, &b.palette.name, name_font, t.text, rect.width() - 14.0);
     ui.painter().galley(rect.left_top() + vec2(6.0, 27.0), name_galley, t.text);
     if selected {
         ui.painter().text(rect.right_top() - vec2(7.0, -5.0), egui::Align2::RIGHT_TOP, "✓", egui::FontId::proportional(13.0), t.accent);
@@ -369,13 +538,13 @@ fn draw_method_controls(ui: &mut Ui, settings: &mut Settings) {
     let opts = method_options().map(|(id, label)| (id.to_owned(), label));
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("Algorithm")).color(t.text_dim));
-        let _ = crate::widgets::dropdown(ui, "palette-map-method", tl!("Algorithm"), &mut method, &opts, 180.0);
+        let _ = dropdown(ui, "palette-map-method", tl!("Algorithm"), &mut method, &opts, 180.0);
     });
     if let Some(next) = Method::from_id(&method) {
         settings.method = next;
     }
     let mut amount = settings.amount * 100.0;
-    if crate::widgets::slider_row(ui, "Strength", &mut amount, 0.0..=100.0, "%", None).changed() {
+    if slider_row(ui, "Strength", &mut amount, 0.0..=100.0, "%", None).changed() {
         settings.amount = (amount / 100.0).clamp(0.0, 1.0);
     }
 }
@@ -385,17 +554,17 @@ fn draw_method_advanced_controls(ui: &mut Ui, settings: &mut Settings) {
     match settings.method {
         Method::Bayer | Method::ClusteredDot => {
             let mut n = settings.matrix_size.clamp(2, 16) as f32;
-            if crate::widgets::slider_row_with(ui, "Matrix", &mut n, 2.0..=16.0, "", None, crate::widgets::RowGestures::default()).changed() {
+            if slider_row_with(ui, "Matrix", &mut n, 2.0..=16.0, "", None, RowGestures::default()).changed() {
                 settings.matrix_size =
                     [2, 4, 8, 16].into_iter().min_by_key(|candidate| (i32::from(*candidate as i16) - i32::from(n.round() as i16)).unsigned_abs()).unwrap_or(4);
             }
             let mut scale = settings.scale.clamp(1, 64) as f32;
-            crate::widgets::slider_row_with(ui, "Scale", &mut scale, 1.0..=64.0, "px", None, crate::widgets::RowGestures::default());
+            slider_row_with(ui, "Scale", &mut scale, 1.0..=64.0, "px", None, RowGestures::default());
             settings.scale = scale.round().clamp(1.0, 64.0) as u32;
         }
         Method::BlueNoise | Method::WhiteNoise => {
             let mut scale = settings.scale.clamp(1, 64) as f32;
-            crate::widgets::slider_row_with(ui, "Scale", &mut scale, 1.0..=64.0, "px", None, crate::widgets::RowGestures::default());
+            slider_row_with(ui, "Scale", &mut scale, 1.0..=64.0, "px", None, RowGestures::default());
             settings.scale = scale.round().clamp(1.0, 64.0) as u32;
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Seed")).color(t.text_dim));
@@ -410,11 +579,11 @@ fn draw_method_advanced_controls(ui: &mut Ui, settings: &mut Settings) {
         }
         Method::Riemersma => {
             let mut history = settings.history as f32;
-            if crate::widgets::slider_row_with(ui, "History", &mut history, 1.0..=64.0, "px", None, crate::widgets::RowGestures::default()).changed() {
+            if slider_row_with(ui, "History", &mut history, 1.0..=64.0, "px", None, RowGestures::default()).changed() {
                 settings.history = history.round().clamp(1.0, 64.0) as u32;
             }
             let mut decay = settings.decay * 100.0;
-            if crate::widgets::slider_row_with(ui, "Decay", &mut decay, 0.0..=100.0, "%", None, crate::widgets::RowGestures::default()).changed() {
+            if slider_row_with(ui, "Decay", &mut decay, 0.0..=100.0, "%", None, RowGestures::default()).changed() {
                 settings.decay = (decay / 100.0).clamp(0.0, 1.0);
             }
         }
@@ -428,7 +597,7 @@ fn draw_method_advanced_controls(ui: &mut Ui, settings: &mut Settings) {
     .to_owned();
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("Distance")).color(t.text_dim));
-        crate::widgets::dropdown(ui, "palette-map-distance", tl!("Distance"), &mut distance, &[("rgb".into(), "RGB"), ("lab".into(), "Lab")], 120.0);
+        dropdown(ui, "palette-map-distance", tl!("Distance"), &mut distance, &[("rgb".into(), "RGB"), ("lab".into(), "Lab")], 120.0);
     });
     settings.distance = if distance == "lab" { Distance::Lab } else { Distance::Rgb };
 }
@@ -443,7 +612,7 @@ fn draw_alpha_controls(ui: &mut Ui, settings: &mut Settings) {
     .to_owned();
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("Transparency")).color(t.text_dim));
-        crate::widgets::dropdown(
+        dropdown(
             ui,
             "palette-map-alpha",
             tl!("Transparency"),
@@ -460,7 +629,7 @@ fn draw_alpha_controls(ui: &mut Ui, settings: &mut Settings) {
 }
 
 pub(crate) fn mapping_controls(ui: &mut Ui, fields: &mut Map<String, Value>) {
-    crate::field_wheel::without(ui, |ui| {
+    ui.scope(|ui| {
         let t = Tokens::get(ui.ctx());
         if let Some(value) = fields.get("mapping")
             && let Err(error) = parse_mapping(value)
@@ -486,7 +655,7 @@ pub(crate) fn mapping_controls(ui: &mut Ui, fields: &mut Map<String, Value>) {
 }
 
 pub(crate) fn palette_controls(ui: &mut Ui, fields: &mut Map<String, Value>) {
-    crate::field_wheel::without(ui, |ui| {
+    ui.scope(|ui| {
         browser(ui, fields);
         validation(ui, fields);
     });
@@ -551,46 +720,105 @@ fn parse_matrix(bytes: &[u8]) -> Result<(Vec<f32>, u32), String> {
     Ok((values, side as u32))
 }
 
-/// Start a native/web file picker for the import button's request.  The callback writes directly to
-/// the dialog fields, preserving order, duplicates, names, and entries above 256.
-pub fn handle_import(app: &mut PhotocraftApp, dialog_id: u64, fields: &mut Map<String, Value>) {
-    if let Some(index) = fields.remove("__paletteMatrixImport").and_then(|v| v.as_u64()).and_then(|n| usize::try_from(n).ok()) {
-        let result = app.pick_file_bytes_filtered(&["txt", "csv"], move |app, name, bytes| {
-            let (matrix, side) = parse_matrix(&bytes).map_err(|error| format!("{}: {error}", crate::file_open::display_name(&name)))?;
-            let dialog = app.ui.dialog_mut(dialog_id).ok_or_else(|| tl!("palette dialog was closed").to_string())?;
-            let mut settings = dialog.fields.get("mapping").map(parse_mapping).transpose()?.unwrap_or_default();
-            let Some(pattern) = settings.patterns.get_mut(index) else { return Err(tl!("threshold ingredient no longer exists").into()) };
-            pattern.matrix_size = side;
-            pattern.matrix = matrix;
-            dialog.fields.insert("mapping".into(), serde_json::to_value(settings).map_err(|error| error.to_string())?);
-            dialog.fields.remove("__paletteImportError");
-            dialog.fields.insert("__paletteMatrixImportName".into(), Value::String(name));
-            Ok(Value::Null)
-        });
-        if let Err(error) = result {
-            fields.insert("__paletteImportError".into(), Value::String(error.clone()));
-            app.ui.status = error;
-            app.ui.status_error = true;
+/// One Palette Map dialog's values as the JSON map its controls edit.
+fn open_dialog_values(app: &PhotocraftApp, id: DialogId) -> Option<Map<String, Value>> {
+    app.framework.dialogs.get_by_id::<HostedParamDialog>(id).map(|dialog| dialog_values(dialog.fields()))
+}
+
+/// Writes the palette values back into the open dialog `id`; a dialog closed under the picker is left alone.
+fn write_dialog_values(app: &mut PhotocraftApp, id: DialogId, values: &Map<String, Value>) {
+    let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id) else { return };
+    for key in OWNED_KEYS {
+        match values.get(key) {
+            Some(Value::String(text)) => dialog.set_field(key, FieldValue::Text(text.clone())),
+            Some(value) => dialog.set_field(key, FieldValue::Json(value.clone())),
+            None => dialog.clear_field(key),
         }
-        return;
     }
-    let Some(kind) = fields.remove(IMPORT_REQUEST).and_then(|v| v.as_str().map(str::to_owned)) else { return };
+}
+
+/// Reports a failed import under the palette browser and in the status bar.
+fn import_error(app: &mut PhotocraftApp, id: DialogId, error: String) {
+    if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id) {
+        dialog.set_field("__paletteImportError", FieldValue::Text(error.clone()));
+        dialog.clear_field(IMPORT_REQUEST);
+        dialog.clear_field("__paletteMatrixImport");
+    }
+    app.ui.status = error;
+    app.ui.status_error = true;
+}
+
+/// Answers the palette browser's Import buttons and threshold-matrix Import requests: a per-frame pass
+/// over the open Palette Map dialogs, as the rows themselves cannot open a file picker.
+pub(crate) fn poll(app: &mut PhotocraftApp) {
+    let ids: Vec<DialogId> = app
+        .framework
+        .dialogs
+        .open_dialogs()
+        .into_iter()
+        .filter_map(|open| (open.key.as_deref() == Some(FILTER_COMMAND)).then_some(open.id))
+        .collect();
+    for id in ids {
+        let Some(values) = open_dialog_values(app, id) else { continue };
+        if let Some(index) = values.get("__paletteMatrixImport").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()) {
+            start_matrix_import(app, id, index);
+        } else if let Some(kind) = values.get(IMPORT_REQUEST).and_then(Value::as_str) {
+            start_palette_import(app, id, kind.to_owned());
+        }
+    }
+}
+
+/// A palette import (`.gpl` or `.act`) replaces the dialog's embedded snapshot.
+fn start_palette_import(app: &mut PhotocraftApp, id: DialogId, kind: String) {
+    if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id) {
+        dialog.clear_field(IMPORT_REQUEST);
+    }
     let extension = if kind == "act" { "act" } else { "gpl" };
     let result = app.pick_file_bytes_filtered(&[extension], move |app, name, bytes| {
         let palette = if kind == "act" { photocraft_algo::palettes::parse_act(&bytes) } else { photocraft_algo::palettes::parse_gpl(&bytes) }
             .map_err(|error| format!("{}: {error}", crate::file_open::display_name(&name)))?;
         palette.validate().map_err(|error| format!("{}: {error}", crate::file_open::display_name(&name)))?;
-        let dialog = app.ui.dialog_mut(dialog_id).ok_or_else(|| tl!("palette dialog was closed").to_string())?;
-        set_snapshot(&mut dialog.fields, &palette, CUSTOM_ID);
-        dialog.fields.remove("__paletteImportError");
-        dialog.fields.insert(SEARCH_FIELD.into(), Value::String(String::new()));
-        dialog.fields.insert("__paletteImportName".into(), Value::String(name));
+        let mut values = open_dialog_values(app, id).ok_or_else(|| tl!("palette dialog was closed").to_string())?;
+        set_snapshot(&mut values, &palette, CUSTOM_ID);
+        values.insert(SEARCH_FIELD.into(), Value::String(String::new()));
+        write_dialog_values(app, id, &values);
+        if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id) {
+            dialog.clear_field("__paletteImportError");
+            dialog.set_field("__paletteImportName", FieldValue::Text(name));
+        }
         Ok(json!({"palette": palette.name, "entries": palette.colors.len()}))
     });
-    if let Err(error) = result {
-        fields.insert("__paletteImportError".into(), Value::String(error.clone()));
-        app.ui.status = error;
-        app.ui.status_error = true;
+    if let Err(error) = result
+        && error != crate::file_dialog::CANCELLED
+    {
+        import_error(app, id, error);
+    }
+}
+
+/// A threshold matrix import fills the selected threshold ingredient's matrix.
+fn start_matrix_import(app: &mut PhotocraftApp, id: DialogId, index: usize) {
+    if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id) {
+        dialog.clear_field("__paletteMatrixImport");
+    }
+    let result = app.pick_file_bytes_filtered(&["txt", "csv"], move |app, name, bytes| {
+        let (matrix, side) = parse_matrix(&bytes).map_err(|error| format!("{}: {error}", crate::file_open::display_name(&name)))?;
+        let mut values = open_dialog_values(app, id).ok_or_else(|| tl!("palette dialog was closed").to_string())?;
+        let mut settings = values.get("mapping").map(parse_mapping).transpose()?.unwrap_or_default();
+        let Some(pattern) = settings.patterns.get_mut(index) else { return Err(tl!("threshold ingredient no longer exists").into()) };
+        pattern.matrix_size = side;
+        pattern.matrix = matrix;
+        values.insert("mapping".into(), serde_json::to_value(settings).map_err(|error| error.to_string())?);
+        write_dialog_values(app, id, &values);
+        if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id) {
+            dialog.clear_field("__paletteImportError");
+            dialog.set_field("__paletteMatrixImportName", FieldValue::Text(name));
+        }
+        Ok(Value::Null)
+    });
+    if let Err(error) = result
+        && error != crate::file_dialog::CANCELLED
+    {
+        import_error(app, id, error);
     }
 }
 
@@ -614,12 +842,11 @@ mod tests {
     #[test]
     fn invalid_matrix_import_preserves_a_confirmable_recipe() {
         use photocraft_algo::palette_map::{Pattern, PatternKind};
-        let services = crate::Services {
-            file_dialog: Some(Box::new(|_, _, reply| {
-                reply.send(Some(crate::FileDialogAnswer::Contents("invalid.csv".into(), b"-0.01, 0; 0.5, 1".to_vec())));
-            })),
-            ..Default::default()
-        };
+        let files = std::sync::Arc::new(craft::host::ScriptedFiles::answering([craft::host::Picked::Contents(vec![(
+            "invalid.csv".into(),
+            b"-0.01, 0; 0.5, 1".to_vec(),
+        )])]));
+        let services = crate::Services { files: Some(files), ..Default::default() };
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
         app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
         let revision = app.session.active().unwrap().revision;
@@ -628,18 +855,15 @@ mod tests {
             ..Settings::default()
         };
         let recipe = serde_json::to_value(settings).unwrap();
-        let mut fields = Map::new();
-        fields.insert("__command".into(), json!(FILTER_COMMAND));
-        fields.insert("mapping".into(), recipe.clone());
-        let id = app.ui.open_dialog(crate::state::DialogKind::Command, fields.clone());
-        fields.insert("__paletteMatrixImport".into(), json!(0));
-        handle_import(&mut app, id, &mut fields);
-        let ctx = egui::Context::default();
-        app.poll_file_dialog(&ctx, None);
-        app.poll_file_dialog(&ctx, None);
-        let fields = &app.ui.dialog_mut(id).unwrap().fields;
+        let id = crate::filter_dialog::open(&mut app, FILTER_COMMAND).expect("Palette Map dialog");
+        let dialog = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id).expect("the palette dialog");
+        dialog.set_field("mapping", FieldValue::Json(recipe.clone()));
+        dialog.set_field("__paletteMatrixImport", FieldValue::Json(json!(0)));
+        poll(&mut app);
+        app.poll_file_dialog();
+        let fields = app.framework.dialogs.get_by_id::<HostedParamDialog>(id).map(|dialog| dialog_values(dialog.fields())).unwrap_or_default();
         assert_eq!(fields.get("mapping"), Some(&recipe));
-        assert!(can_confirm(fields));
+        assert!(can_confirm(&fields));
         assert!(app.ui.status_error);
         assert_eq!(app.session.active().unwrap().revision, revision);
     }
@@ -680,54 +904,40 @@ mod tests {
     }
 
     #[test]
-    fn mapping_wheel_scrolls_the_pane_instead_of_changing_values() {
-        use egui::accesskit::Role;
-        use egui_kittest::{Harness, kittest::Queryable};
-
-        for target in ["algorithm", "strength field", "focused strength field", "strength track"] {
-            let settings = Settings { amount: 0.5, ..Settings::default() };
-            let mut fields = Map::new();
-            write_mapping(&mut fields, &settings);
-            let mut h = Harness::builder().with_size(vec2(400.0, 180.0)).build_ui_state(
-                |ui, (fields, offset): &mut (Map<String, Value>, f32)| {
-                    crate::field_wheel::begin_frame(ui.ctx());
-                    let pane = egui::ScrollArea::vertical().id_salt("mapping-wheel-pane").max_height(150.0).show(ui, |ui| {
-                        let mut settings = mapping(fields);
-                        crate::field_wheel::without(ui, |ui| draw_method_controls(ui, &mut settings));
-                        write_mapping(fields, &settings);
-                        ui.add_space(400.0);
-                    });
-                    *offset = pane.state.clamped_offset().y;
-                },
-                (fields, 0.0),
+    fn remembered_palette_values_must_still_validate() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        // A stale snapshot, a malformed mapping and a custom id without a snapshot are all dropped.
+        app.session.edit_prefs(|prefs| {
+            prefs.dialogs.insert(
+                FILTER_COMMAND.into(),
+                json!({
+                    "paletteId": "custom",
+                    "paletteSnapshot": {"name": "broken", "colors": []},
+                    "mapping": {"method": "bogus"},
+                }),
             );
-            h.run_steps(3);
-            if target == "focused strength field" {
-                h.get_by_role(Role::SpinButton).click();
-                h.run_steps(2);
-            }
-            let recipe = crate::filter_dialog::params_of(&h.state().0);
-            let at = match target {
-                "algorithm" => h.get_by_role(Role::ComboBox).rect().center(),
-                "strength track" => {
-                    let track = h.get_by_role(Role::Slider).rect();
-                    track.center()
-                }
-                _ => h.get_by_role(Role::SpinButton).rect().center(),
-            };
-            h.hover_at(at);
-            h.run_steps(2);
-            h.event(egui::Event::MouseWheel {
-                source: egui::MouseWheelSource::Unknown,
-                unit: egui::MouseWheelUnit::Line,
-                delta: vec2(0.0, -1.0),
-                phase: egui::TouchPhase::Move,
-                modifiers: egui::Modifiers::NONE,
-            });
-            h.run_steps(6);
-            assert_eq!(crate::filter_dialog::params_of(&h.state().0), recipe, "wheel over {target} must not change conversion");
-            assert!(h.state().1 > 0.0, "wheel over {target} must still scroll overflowing settings");
-        }
+        });
+        let opening = opening_fields(&app, FILTER_COMMAND);
+        let bundled = photocraft_algo::palettes::builtin("photocraft-rgb-cube").expect("bundled default");
+        assert_eq!(opening.get("paletteId").and_then(Value::as_str), Some(bundled.id), "an invalid snapshot falls back to the default");
+        assert!(opening.get("mapping").is_none(), "a malformed mapping is not restored");
+        let expected = serde_json::to_value(&bundled.palette).expect("the default palette serializes");
+        assert_eq!(opening.get("paletteSnapshot"), Some(&expected));
+
+        // A valid remembered choice is kept.
+        app.session.edit_prefs(|prefs| {
+            prefs.dialogs.insert(
+                FILTER_COMMAND.into(),
+                json!({
+                    "paletteId": "custom",
+                    "paletteSnapshot": {"name": "two", "colors": [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]},
+                    "mapping": {"method": "bayer", "matrixSize": 4, "amount": 0.5},
+                }),
+            );
+        });
+        let opening = opening_fields(&app, FILTER_COMMAND);
+        assert_eq!(opening.get("paletteId").and_then(Value::as_str), Some(CUSTOM_ID));
+        assert_eq!(opening.get("mapping").and_then(|m| m.get("method")).and_then(Value::as_str), Some("bayer"));
     }
 
     #[test]
@@ -735,14 +945,13 @@ mod tests {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 8, "height": 8, "background": "#223344"})).unwrap();
         let revision = app.session.active().map(|state| state.revision);
-        let mut fields = Map::new();
-        fields.insert("__command".into(), json!(FILTER_COMMAND));
-        let id = app.ui.open_dialog(crate::state::DialogKind::Command, fields);
+        let id = crate::filter_dialog::open(&mut app, FILTER_COMMAND).expect("Palette Map dialog");
         let palette = Palette { name: "draft".into(), colors: vec![[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]] };
-        let draft = app.ui.dialogs.iter_mut().find(|dialog| dialog.id == id).expect("palette dialog");
-        set_snapshot(&mut draft.fields, &palette, CUSTOM_ID);
-        crate::dialogs::cancel(&mut app, id).unwrap();
+        let mut values = open_dialog_values(&app, id).expect("palette dialog");
+        set_snapshot(&mut values, &palette, CUSTOM_ID);
+        write_dialog_values(&mut app, id, &values);
+        crate::dialogs::cancel(&mut app, &egui::Context::default(), id).unwrap();
         assert_eq!(app.session.active().map(|state| state.revision), revision);
-        assert!(!app.ui.dialogs.iter().any(|dialog| dialog.id == id));
+        assert!(app.framework.dialogs.get_by_id::<HostedParamDialog>(id).is_none());
     }
 }

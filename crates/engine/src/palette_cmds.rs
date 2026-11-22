@@ -601,8 +601,8 @@ pub(crate) fn apply_to_surface(
 
 /// Indexed Color uses the same float/CMS kernel as Palette Map while retaining its expanded RGB
 /// storage and ColorTable index plane for existing import/export adapters.
-pub(crate) fn indexed_render(px: &mut [[f32; 4]], width: usize, palette: &Palette, settings: &Settings, transparent: Option<usize>) -> Result<()> {
-    palette_map::render_pixels(px, width, palette, settings, [0, 0], transparent).map_err(|e| bad(INDEXED_ID, format!("indexed palette mapping failed: {e}")))
+pub(crate) fn indexed_render(px: &mut [[f32; 4]], width: usize, palette: &Palette, settings: &Settings, transparent: Option<usize>) -> Result<Vec<u32>> {
+    palette_map::render(px, width, palette, settings, [0, 0], transparent).map_err(|e| bad(INDEXED_ID, format!("indexed palette mapping failed: {e}")))
 }
 
 fn enabled(s: &Session) -> std::result::Result<(), String> {

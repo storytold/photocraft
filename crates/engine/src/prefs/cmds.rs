@@ -136,9 +136,6 @@ fn toolbar(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(h) = ids("hidden") {
             pr.toolbar.hidden = h;
         }
-        if let Some(o) = ids("order") {
-            pr.toolbar.order = o;
-        }
         if toolbar.is_some() || extras.is_some() {
             let current = pr.toolbar.layout();
             // Tools a new extras list names leave the current toolbar for it.
@@ -240,7 +237,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Toolbar…",
             ["Edit"],
             None,
-            r##"{"toolbar":[["<tool>",…],…]?,"extras":[["<tool>",…],…]?,"hidden":["<tool>",…]?,"order":["<tool>",…]?,"reset":bool=false}"##,
+            r##"{"toolbar":[["<tool>",…],…]?,"extras":[["<tool>",…],…]?,"hidden":["<tool>",…]?,"reset":bool=false}"##,
             toolbar,
             true
         ),
