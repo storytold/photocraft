@@ -409,14 +409,19 @@ fn bad_sizes_and_faulted_devices_are_errors() {
 
 /// Develops `p` with spatial stages both ways (the GPU's spatial develop and the CPU develop) on
 /// a `w × h` image and returns the largest channel difference.
-fn compare_spatial(g: &mut Gpu, (p, inputs): &Case, depth: Depth, (w, h): (usize, usize)) -> f32 {
+fn compare_spatial(g: &mut Gpu, case: &Case, depth: Depth, (w, h): (usize, usize)) -> f32 {
+    compare_spatial_image(g, case, depth, &image(w, h, depth), (w, h), None)
+}
+
+/// [`compare_spatial`] on `src` (`w × h`), uploaded under `key`.
+fn compare_spatial_image(g: &mut Gpu, (p, inputs): &Case, depth: Depth, src: &[[f32; 4]], (w, h): (usize, usize), key: Option<u64>) -> f32 {
     let float = matches!(depth, Depth::Float);
-    let src = image(w, h, depth);
+    let src = src.to_vec();
     let mut cpu = src.clone();
     develop(&mut cpu, w, h, p, inputs, float);
     let out = g
         .dev
-        .develop_spatial(&g.device, &g.queue, None, &src, None, [w as u32, h as u32], p, inputs, float)
+        .develop_spatial(&g.device, &g.queue, None, &src, key, [w as u32, h as u32], p, inputs, float)
         .unwrap()
         .unwrap_or_else(|| panic!("{p:?}: no spatial develop"));
     assert_eq!(out.len(), cpu.len());
@@ -523,6 +528,72 @@ fn texture_and_clarity_on_the_gpu() {
             case(cr! { texture: 40.0, clarity: 40.0, shadows: 30.0, dehaze: 20.0, whites: 25.0 }, DevelopInputs::default()),
         ],
     );
+}
+
+/// The spatial stages on frames down to one pixel, odd sizes and a flat frame, as the CPU
+/// develops them (a frame under 2 pixels on a side skips Shadows and Highlights there too).
+#[test]
+fn spatial_stages_on_tiny_odd_and_flat_frames() {
+    let Some(mut g) = gpu() else { return };
+    let sets = [
+        case(cr! { shadows: 60.0, highlights: -40.0, whites: 20.0 }, DevelopInputs::default()),
+        case(cr! { dehaze: 45.0, clarity: 50.0, texture: 60.0, whites: 20.0, blacks: -20.0 }, DevelopInputs::default()),
+        case(cr! { dehaze: -45.0, shadows: 30.0 }, DevelopInputs::default()),
+    ];
+    for set in &sets {
+        for size in [(1, 1), (2, 2), (40, 2), (3, 3), (5, 3), (37, 23), (300, 7)] {
+            for depth in DEPTHS {
+                let d = compare_spatial(&mut g, set, depth, size);
+                eprintln!("tiny/odd {size:?} {depth:?}: max |GPU - CPU| = {d:.2e}");
+            }
+        }
+        // A flat frame: no range to filter, no haze to find, no detail to raise.
+        let flat = vec![[0.4, 0.35, 0.3, 1.0]; 64 * 48];
+        for depth in DEPTHS {
+            compare_spatial_image(&mut g, set, depth, &flat, (64, 48), None);
+        }
+    }
+    // Texture's blur on a small frame can be too narrow to change anything; the stage still runs.
+    for depth in DEPTHS {
+        compare_spatial(&mut g, &case(cr! { texture: 80.0, contrast: 10.0 }, DevelopInputs::default()), depth, (64, 48));
+    }
+}
+
+/// #9273: a sky beside a dark tower clears on the GPU as on the CPU (the dark channel is opened
+/// the same way, since the CPU analyses the GPU's reduced copy). The scene of algo's
+/// `dehaze_leaves_no_halo_beside_dark_objects`: a clear sky and a dark tower hazed with
+/// `I = J·t + A·(1 − t)`.
+#[test]
+fn dehaze_opens_the_dark_channel_like_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let (w, h) = (600usize, 400usize);
+    let tower = |x: usize, y: usize| (250..350).contains(&x) && y >= 120;
+    let (t, air) = (0.55f32, [0.9f32, 0.9, 0.9]);
+    let src: Vec<[f32; 4]> = (0..w * h)
+        .map(|i| {
+            let (x, y) = (i % w, i / w);
+            let j = if tower(x, y) { [0.06, 0.06, 0.07] } else { [0.35 + 0.1 * y as f32 / h as f32, 0.5, 0.8] };
+            let c: [f32; 3] = std::array::from_fn(|k| j[k] * t + air[k] * (1.0 - t));
+            [c[0], c[1], c[2], 1.0]
+        })
+        .collect();
+    for dehaze in [100.0, 60.0, -40.0] {
+        for depth in DEPTHS {
+            let d = compare_spatial_image(&mut g, &case(cr! { dehaze: dehaze }, DevelopInputs::default()), depth, &src, (w, h), None);
+            eprintln!("dehaze {dehaze} on the tower {depth:?}: max |GPU - CPU| = {d:.2e}");
+        }
+    }
+}
+
+/// The cached source (same key) is developed again when the white balance changes: the reduced
+/// copies are made from the pass's result each time, not kept with the source.
+#[test]
+fn dehaze_follows_the_white_balance_on_a_cached_source() {
+    let Some(mut g) = gpu() else { return };
+    let src = image(858, 572, Depth::Eight);
+    for temperature in [25.0, -40.0, -40.0, 0.0] {
+        compare_spatial_image(&mut g, &case(cr! { dehaze: 50.0, temperature: temperature }, DevelopInputs::default()), Depth::Eight, &src, (858, 572), Some(3));
+    }
 }
 
 /// `cargo test -p photocraft-gpu --release --test it -- --ignored --nocapture spatial_timing`
