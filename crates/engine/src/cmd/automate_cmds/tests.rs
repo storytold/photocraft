@@ -668,6 +668,18 @@ fn contact_sheet_places_thumbnails_with_captions() {
 }
 
 #[test]
+fn contact_sheet_refuses_an_unknown_unit_instead_of_reading_it_as_inches() {
+    let dir = tmp("contact-units");
+    images(&dir, 1, 8, 4);
+    for units in [json!("centimeters"), json!("points"), json!(5)] {
+        let mut s = Session::new();
+        let err = s.execute("file.automate.contactSheetII", json!({"input": dir, "units": units, "width": 2, "height": 2, "caption": false})).unwrap_err();
+        assert!(err.to_string().contains("units"), "{units}: {err}");
+        assert!(s.documents().is_empty(), "{units}: no sheet is made");
+    }
+}
+
+#[test]
 fn a_failed_step_inside_a_called_action_fails_scripts_and_batch() {
     use crate::actions_cmds::Action;
     let dir = tmp("nested-failure");
