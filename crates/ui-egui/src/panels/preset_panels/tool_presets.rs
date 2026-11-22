@@ -6,13 +6,6 @@ use super::run;
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
-/// The engine's id of `t` (the tool's name with a lower-case first letter).
-pub(crate) fn tool_id(t: Tool) -> String {
-    let s = format!("{t:?}");
-    let mut c = s.chars();
-    c.next().map(|f| f.to_ascii_lowercase().to_string() + c.as_str()).unwrap_or_default()
-}
-
 /// Apply a tool preset: the engine sets the brush/colour, the shell switches tool and options.
 pub fn select(app: &mut PhotocraftApp, name: &str) {
     // PLAN: assumes `ToolOptions::crop` is `Clone + PartialEq` (tools-w45).
@@ -68,7 +61,7 @@ pub(crate) fn new_params(app: &PhotocraftApp, tool: Tool) -> Value {
     {
         own.insert("sample_all".into(), json!({ k: v }));
     }
-    json!({"name": tool.label(), "tool": tool_id(tool), "options": {"toolOptions": own}})
+    json!({"name": tool.label(), "tool": tool.id(), "options": {"toolOptions": own}})
 }
 
 #[cfg(test)]
@@ -92,9 +85,9 @@ mod tests {
         select(&mut app, "Soft Eraser 60 px");
         assert_eq!(app.ui.tool, Tool::Eraser);
         assert_eq!(app.session.tools.brush.size, 60.0);
-        assert_eq!(tool_id(Tool::CloneStamp), "cloneStamp");
-        assert_eq!(tool_id(Tool::PatternStamp), "patternStamp");
-        assert_eq!(Tool::from_name(&tool_id(Tool::CustomShape)), Some(Tool::CustomShape));
+        assert_eq!(Tool::CloneStamp.id(), "cloneStamp");
+        assert_eq!(Tool::PatternStamp.id(), "patternStamp");
+        assert_eq!(Tool::from_name(Tool::CustomShape.id()), Some(Tool::CustomShape));
     }
 
     /// A crop preset picked in Tool Presets fits the frame to its ratio at once, as the options
