@@ -3026,3 +3026,97 @@ fn a_long_pulled_warp_under_a_perspective_shows_its_grid_as_the_reference_draws_
         assert!((p.x - want[0]).abs() <= 4.0 && (p.y - want[1]).abs() <= 4.0, "point {i}: {p:?}, the reference drew it at {want:?}");
     }
 }
+
+/// A preset style picked in the Warp options bar is the preset the engine and a PSD make (`Warp::preset`): Arc is an
+/// envelope. The bar built it without, so the same Arc rendered differently from the command's and was saved so.
+#[test]
+fn a_style_picked_in_the_options_bar_is_the_presets_own() {
+    let mut app = warping_square();
+    super::options_bar::warp_edit(&mut app, craft::imaging::ui::warp::WarpFieldsEdit::Style("warpArc".into()));
+    let w = &session_warp(&app).warp;
+    assert_eq!(w.style, photocraft_geom::warp::WarpStyle::Arc, "{w:?}");
+    let want = photocraft_geom::warp::Warp::preset(w.style, w.bend, w.bounds);
+    assert_eq!(w.envelope, want.envelope, "the bar's Arc is the engine's Arc");
+    assert!(w.envelope);
+}
+
+/// Free Transform on a turned smart object, Warp, and Enter without a pull: nothing changes and no step is added (the
+/// flat grid was dropped after the "box unmoved" check, and an identity transform ran as an edit).
+#[test]
+fn enter_on_an_untouched_warp_of_a_turned_smart_object_adds_no_step() {
+    let (mut app, ctx, id) = turned_smart_object(0.5);
+    let before = placement_of(&app, id);
+    begin(&mut app, &ctx).unwrap();
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    let steps = app.session.active().unwrap().history.past_len();
+    commit(&mut app);
+    land_jobs(&mut app);
+    assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps, "no step");
+    assert_eq!(placement_of(&app, id), before);
+}
+
+/// Transform Selection, Warp, a pull, then a box mode (the warp held, the preview showing it): Enter applies the held
+/// warp to the selection. It was taken and dropped, and the selection stayed as it was.
+#[test]
+fn a_warp_held_on_a_selection_is_applied() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.sync_views();
+    app.session.execute("select.rect", json!({"x": 8, "y": 8, "width": 32, "height": 32})).unwrap();
+    let ctx = app.ctx().clone();
+    crate::menus::invoke(&mut app, &ctx, "select.transformSelection", json!({})).unwrap();
+    assert!(open(&app).selection);
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    assert!(open(&app).selection, "still the selection's session");
+    let mut to = warp_mesh(&app);
+    // The bottom edge down by 12 px.
+    for i in [12usize, 13, 14, 15] {
+        to.points[i] += Vec2::new(0.0, 12.0);
+    }
+    pull_mesh(&mut app, 2, to);
+    settle(&mut app);
+    hold_warp(&mut app);
+    settle(&mut app);
+    let mask = |app: &PhotocraftApp| app.session.active().unwrap().doc.selection.as_ref().map(|s| s.content_bounds());
+    let before = mask(&app);
+    commit(&mut app);
+    land_jobs(&mut app);
+    assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+    let after = mask(&app).expect("a selection");
+    assert!(after.y1 > before.expect("a selection").y1, "the pull moved the outline: {before:?} -> {after:?}");
+}
+
+/// Warp, a pull, a box mode (the warp held), Undo back into Warp, and Enter before any pass draws: the hold is settled
+/// first, so the warp is stored as it is after an ordinary pass (the stale hold was committed as a document warp).
+#[test]
+fn enter_right_after_an_undo_back_into_warp_commits_what_a_pass_would() {
+    fn run(redraw: bool) -> (Option<photocraft_geom::warp::Warp>, [f64; 6]) {
+        let (mut app, ctx, id) = turned_smart_object(0.5);
+        begin(&mut app, &ctx).unwrap();
+        begin_warp(&mut app, &ctx).unwrap();
+        settle(&mut app);
+        let mut to = warp_mesh(&app);
+        to.points[5] += Vec2::new(4.0, 3.0);
+        pull_mesh(&mut app, 2, to);
+        settle(&mut app);
+        hold_warp(&mut app);
+        settle(&mut app);
+        let _ = intercept(&mut app, "edit.undo");
+        if redraw {
+            super::begin::reconcile_held(&mut app);
+        }
+        commit(&mut app);
+        land_jobs(&mut app);
+        assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+        let LayerContent::Smart(sm) = &app.session.active().unwrap().doc.layer(id).unwrap().content else { panic!("a smart object") };
+        (sm.warp.clone(), placement_of(&app, id))
+    }
+    let (now, then) = (run(false), run(true));
+    assert_eq!(now.0, then.0, "the warp");
+    for (a, b) in now.1.iter().zip(then.1) {
+        assert!((a - b).abs() < 1e-9, "{:?} vs {:?}", now.1, then.1);
+    }
+}

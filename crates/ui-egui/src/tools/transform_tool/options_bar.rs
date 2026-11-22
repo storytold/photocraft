@@ -161,7 +161,7 @@ fn cylinder_default(b: [f64; 4]) -> Option<Warp> {
 
 /// Applies one edit of the warp group to the session's warp. Each edit reads the warp as the
 /// edits before it left it.
-fn warp_edit(app: &mut PhotocraftApp, edit: WarpFieldsEdit) {
+pub(super) fn warp_edit(app: &mut PhotocraftApp, edit: WarpFieldsEdit) {
     let Some(w) = app.ui.transform.as_ref().and_then(|t| t.session.warp()).map(|w| w.warp.clone()) else { return };
     let b = w.bounds;
     let preset = w.style.is_preset();
@@ -187,7 +187,8 @@ fn warp_edit(app: &mut PhotocraftApp, edit: WarpFieldsEdit) {
                 WarpStyle::None => Warp::custom(BezierMesh::identity(b, 1, 1), b),
                 // A box too thin for a cylinder keeps its shape.
                 WarpStyle::Cylinder => cylinder_default(b).unwrap_or_else(|| Warp::custom(w.to_mesh(1, 1), b)),
-                s => Warp { style: s, bend: if preset { w.bend } else { 50.0 }, ..Warp::none(b) },
+                // As the engine and a PSD build a preset (`Warp::preset`): the bend styles are envelopes.
+                s => Warp::preset(s, if preset { w.bend } else { 50.0 }, b),
             })
         }
         // The orientation and the fields act on a preset style only.

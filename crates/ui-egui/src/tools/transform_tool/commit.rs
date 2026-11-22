@@ -17,6 +17,9 @@ pub fn commit(app: &mut PhotocraftApp) {
     if committing(app).is_some() {
         return;
     }
+    // The held warp and the contents' map as the session's mode says, as a pass's drawing would leave them: an Undo
+    // back into Warp mode followed by Enter before any pass (the control channel) committed a stale hold.
+    super::begin::reconcile_held(app);
     let document = app.transform_preview.as_ref().map(|pv| pv.doc.id);
     if document.is_some_and(|id| app.session.active().is_none_or(|st| st.doc.id != id)) {
         cancel(app);
@@ -47,12 +50,27 @@ pub fn commit(app: &mut PhotocraftApp) {
     // A warp held under a box mode: it is applied as the box has moved it, moved or not.
     if let Some(held) = preview.as_mut().and_then(|pv| pv.held.take())
         && result.as_ref().is_none_or(|r| r.warp.is_none())
-        && !t.selection
-        && t.path.is_none()
     {
         let quad = result.as_ref().map_or_else(|| t.quad_array(), |r| r.state.quad.map(|p| [p.x, p.y]));
         let interpolation = result.as_ref().map_or_else(|| t.session.interpolation(), |r| r.interpolation).id();
         let (warp, placed) = held.given_way(quad);
+        // On a selection or a path the held warp is applied as the box moved it, as the preview showed it (it was
+        // taken and dropped, and only the box applied).
+        if t.selection {
+            let p = json!({"rect": warp.bounds, "warp": warp, "interpolation": interpolation});
+            if let Err(e) = app.run("select.transformSelection", p) {
+                keep_open(app, t, preview, e);
+            }
+            return;
+        }
+        if let Some(target) = &t.path {
+            let mut p = target.clone();
+            p["warp"] = json!(warp);
+            if let Err(e) = app.run("path.transform", p) {
+                keep_open(app, t, preview, e);
+            }
+            return;
+        }
         let r = match placed {
             Some((to_doc, moved)) => match photocraft_algo::transform::Homography(to_doc).inverse() {
                 Some(back) => {
@@ -93,6 +111,11 @@ pub fn commit(app: &mut PhotocraftApp) {
     // The same on a pixel layer: a flat grid in a box in perspective applies the box's exact map, as the preview shows.
     let warp = warp
         .filter(|w| !plain_warp || placed_warp.is_some() || t.selection || t.path.is_some() || super::warp::flat_projective_in_box(w, rect, quad).is_none());
+    // A flat grid dropped above, on a box still at its placement: nothing changes, no step (an identity transform
+    // ran as an edit and added an empty step).
+    if warp.is_none() && start == Some(quad) {
+        return;
+    }
     if t.selection {
         let mut p = json!({"rect": rect, "interpolation": interpolation});
         match &warp {
